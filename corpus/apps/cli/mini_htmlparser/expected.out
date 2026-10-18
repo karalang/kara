@@ -1,0 +1,929 @@
+== events | @edge.html | 1 | 0
+  1:0 decl "doctype html"
+  1:15 data "\n"
+  2:0 start p class="a" id="b" hidden data-x="1 > 0" data-y="Two"
+  2:53 data "Mixed & attrs"
+  2:69 end p
+  2:73 data "\n"
+  3:0 comment ""
+  3:7 data "\n"
+  4:0 comment ""
+  4:5 data "abrupt\n"
+  5:0 comment ""
+  5:6 data "abrupt too\n"
+  6:0 comment " ends with bang "
+  6:24 data "\n"
+  7:0 comment " has -- inside "
+  7:22 data "\n"
+  8:0 comment "not a doctype"
+  8:16 data "\n"
+  9:0 unknown_decl "CDATA[x < y"
+  9:17 data "\n"
+  10:0 pi "php echo \"hi\"; ?"
+  10:19 data "\n"
+  11:0 comment " "
+  11:4 data "\n"
+  12:3 data "\n"
+  13:0 comment "3"
+  13:4 data "\n"
+  14:0 startend br
+  14:5 startend br
+  14:11 startend img src="a.png"
+  14:29 data "\n"
+  15:0 start a href="x/"
+  15:11 data "bare slash"
+  15:21 end a
+  15:25 data "\n"
+  16:0 start div class="Up"
+  16:16 data "Upper"
+  16:21 end div
+  16:27 data "\n"
+  17:0 start i
+  17:3 data "&x ¬it; ∉ € � � � AB &bogus;"
+  17:75 end i
+  17:79 data "\n"
+  18:0 start b title="&ampx &notit; &copy=3 <>"
+  18:43 data "attr refs"
+  18:52 end b
+  18:56 data "\n"
+  19:0 start script
+  19:8 data "if (x </scriptx> y) {}"
+  19:30 end script
+  19:40 data "\n"
+  20:0 start textarea name="t"
+  20:17 data "a <b>bold</b> & "
+  20:37 end textarea
+  20:48 data "\n"
+  21:0 data "<"
+  21:1 data " not a tag\n&# and &#x and & alone\n"
+  23:0 start span
+  23:6 data "last\n"
+  end 25:0
+== events | @form.html | 1 | 0
+  1:0 start form action="/search" method="get"
+  1:34 data "\n"
+  2:0 start label for="q"
+  2:13 data "Search"
+  2:19 end label
+  2:27 data "\n"
+  3:0 start input type="text" name="q" value="\"exact phrase\"" autofocus
+  3:71 data "\n"
+  4:0 start select name="sort"
+  4:20 start option value="new" selected
+  4:47 data "Newest"
+  4:53 start option value="old"
+  4:71 data "Oldest"
+  4:77 end select
+  4:86 data "\n"
+  5:0 start input type="checkbox" name="safe" checked disabled
+  5:48 data "\n"
+  6:0 start button type="submit" onclick="go('/search?q=1&page=2')"
+  6:61 data "Go"
+  6:63 end button
+  6:72 data "\n"
+  7:0 end form
+  7:7 data "\n"
+  8:0 start title
+  8:7 data "Search & find"
+  8:24 end title
+  8:32 data "\n"
+  end 9:0
+== events | @plain.html | 1 | 0
+  1:0 start p
+  1:3 data "Before"
+  1:9 end p
+  1:13 data "\n"
+  2:0 start plaintext
+  2:11 data "\n<b>after plaintext everything is text</b> &amp; </plaintext>\n"
+  end 4:0
+== events | @unicode.html | 1 | 0
+  1:0 start h1 id="intro"
+  1:15 data "Grüße aus Köln 🍺"
+  1:31 end h1
+  1:36 data "\n"
+  2:0 start p
+  2:3 data "Zwei Zeilen:\nä ö ü — und "
+  3:12 start b
+  3:15 data "ß"
+  3:16 end b
+  3:20 data "."
+  3:21 end p
+  3:25 data "\n"
+  4:0 start h2 id="mehr"
+  4:14 data "Mehr → Info"
+  4:30 end h2
+  4:35 data "\n"
+  5:0 start p
+  5:3 data "日本語のテキスト & "
+  5:18 start a href="/ja/"
+  5:33 data "リンク"
+  5:36 end a
+  5:40 end p
+  5:44 data "\n"
+  end 6:0
+== events | @edge.html | 0 | 0
+  1:0 decl "doctype html"
+  1:15 data "\n"
+  2:0 start p class="a" id="b" hidden data-x="1 > 0" data-y="Two"
+  2:53 data "Mixed "
+  2:59 entityref amp
+  2:63 data " attrs"
+  2:69 end p
+  2:73 data "\n"
+  3:0 comment ""
+  3:7 data "\n"
+  4:0 comment ""
+  4:5 data "abrupt\n"
+  5:0 comment ""
+  5:6 data "abrupt too\n"
+  6:0 comment " ends with bang "
+  6:24 data "\n"
+  7:0 comment " has -- inside "
+  7:22 data "\n"
+  8:0 comment "not a doctype"
+  8:16 data "\n"
+  9:0 unknown_decl "CDATA[x < y"
+  9:17 data "\n"
+  10:0 pi "php echo \"hi\"; ?"
+  10:19 data "\n"
+  11:0 comment " "
+  11:4 data "\n"
+  12:3 data "\n"
+  13:0 comment "3"
+  13:4 data "\n"
+  14:0 startend br
+  14:5 startend br
+  14:11 startend img src="a.png"
+  14:29 data "\n"
+  15:0 start a href="x/"
+  15:11 data "bare slash"
+  15:21 end a
+  15:25 data "\n"
+  16:0 start div class="Up"
+  16:16 data "Upper"
+  16:21 end div
+  16:27 data "\n"
+  17:0 start i
+  17:3 entityref ampx
+  17:8 data " "
+  17:9 entityref notit
+  17:16 data " "
+  17:17 entityref notin
+  17:24 data " "
+  17:25 charref 128
+  17:31 data " "
+  17:32 charref 0
+  17:36 data " "
+  17:37 charref x110000
+  17:47 data " "
+  17:48 charref xD800
+  17:56 data " "
+  17:57 charref 65
+  17:61 charref x42
+  17:67 data " "
+  17:68 entityref bogus
+  17:75 end i
+  17:79 data "\n"
+  18:0 start b title="&ampx &notit; &copy=3 <>"
+  18:43 data "attr refs"
+  18:52 end b
+  18:56 data "\n"
+  19:0 start script
+  19:8 data "if (x </scriptx> y) {}"
+  19:30 end script
+  19:40 data "\n"
+  20:0 start textarea name="t"
+  20:17 data "a <b>bold</b> "
+  20:31 entityref amp
+  20:36 data " "
+  20:37 end textarea
+  20:48 data "\n"
+  21:0 data "<"
+  21:1 data " not a tag\n"
+  22:0 data "&#"
+  22:2 data " and "
+  22:7 data "&#"
+  22:9 data "x and "
+  22:15 data "&"
+  22:16 data " alone\n"
+  23:0 start span
+  23:6 data "last\n"
+  end 25:0
+== events | @edge.html | 1 | 7
+  1:0 decl "doctype html"
+  1:15 data "\n"
+  2:0 start p class="a" id="b" hidden data-x="" \"1
+  2:38 data " 0"
+  2:40 data "\" DATA-"
+  2:47 data "Y=Two>M"
+  2:54 data "ixed & attr"
+  2:68 data "s"
+  2:69 end p
+  2:73 data "\n"
+  3:0 comment ""
+  3:7 data "\n"
+  4:0 comment ""
+  4:5 data "ab"
+  4:7 data "rupt\n"
+  5:0 comment ""
+  5:6 data "abr"
+  5:9 data "upt too"
+  5:16 data "\n"
+  6:0 comment " ends with bang "
+  6:24 data "\n"
+  7:0 comment " has -- inside "
+  7:22 data "\n"
+  8:0 comment "not a doctype"
+  8:16 data "\n"
+  9:0 unknown_decl "CDATA[x < y"
+  9:17 data "\n"
+  10:0 pi "php echo \"hi\"; ?"
+  10:19 data "\n"
+  11:0 comment " "
+  11:4 data "\n"
+  12:3 data "\n"
+  13:0 comment "3"
+  13:4 data "\n"
+  14:0 startend br
+  14:5 startend br
+  14:11 startend img src="a.png"
+  14:29 data "\n"
+  15:0 start a href="x/"
+  15:11 data "ba"
+  15:13 data "re slas"
+  15:20 data "h"
+  15:21 end a
+  15:25 data "\n"
+  16:0 start div class="Up"
+  16:16 data "Upper"
+  16:21 end div
+  16:27 data "\n"
+  17:0 start i
+  17:3 data "&x ¬it; ∉ € � � � "
+  17:57 data "AB &bogus;"
+  17:75 end i
+  17:79 data "\n"
+  18:0 start b title="&ampx &notit; &copy=3 <>"
+  18:43 data "attr refs"
+  18:52 end b
+  18:56 data "\n"
+  19:0 start script
+  19:8 data "if (x </scriptx> y) {}"
+  19:30 end script
+  19:40 data "\n"
+  20:0 start textarea name="t"
+  20:17 data "a <b>bold</b> & "
+  20:37 end textarea
+  20:48 data "\n"
+  21:0 data "<"
+  21:1 data " not a tag\n&# and "
+  22:7 data "&#x and"
+  22:14 data " & alon"
+  22:21 data "e\n"
+  23:0 start span
+  23:6 data "last\n"
+  end 25:0
+== events | @edge.html | 0 | 1
+  1:0 decl "doctype html"
+  1:15 data "\n"
+  2:0 start p class="a" id="b" hidden data-x="1 > 0" data-y="Two"
+  2:53 data "Mixed "
+  2:59 entityref amp
+  2:63 data " "
+  2:64 data "a"
+  2:65 data "t"
+  2:66 data "t"
+  2:67 data "r"
+  2:68 data "s"
+  2:69 end p
+  2:73 data "\n"
+  3:0 comment ""
+  3:7 data "\n"
+  4:0 comment ""
+  4:5 data "abr"
+  4:8 data "u"
+  4:9 data "p"
+  4:10 data "t"
+  4:11 data "\n"
+  5:0 comment ""
+  5:6 data "ab"
+  5:8 data "r"
+  5:9 data "u"
+  5:10 data "p"
+  5:11 data "t"
+  5:12 data " "
+  5:13 data "t"
+  5:14 data "o"
+  5:15 data "o"
+  5:16 data "\n"
+  6:0 comment " ends with bang "
+  6:24 data "\n"
+  7:0 comment " has -- inside "
+  7:22 data "\n"
+  8:0 comment "not a doctype"
+  8:16 data "\n"
+  9:0 unknown_decl "CDATA[x < y"
+  9:17 data "\n"
+  10:0 pi "php echo \"hi\"; ?"
+  10:19 data "\n"
+  11:0 comment " "
+  11:4 data "\n"
+  12:3 data "\n"
+  13:0 comment "3"
+  13:4 data "\n"
+  14:0 startend br
+  14:5 startend br
+  14:11 startend img src="a.png"
+  14:29 data "\n"
+  15:0 start a href="x/"
+  15:11 data "b"
+  15:12 data "a"
+  15:13 data "r"
+  15:14 data "e"
+  15:15 data " "
+  15:16 data "s"
+  15:17 data "l"
+  15:18 data "a"
+  15:19 data "s"
+  15:20 data "h"
+  15:21 end a
+  15:25 data "\n"
+  16:0 start div class="Up"
+  16:16 data "U"
+  16:17 data "p"
+  16:18 data "p"
+  16:19 data "e"
+  16:20 data "r"
+  16:21 end div
+  16:27 data "\n"
+  17:0 start i
+  17:3 entityref ampx
+  17:8 data " "
+  17:9 entityref notit
+  17:16 data " "
+  17:17 entityref notin
+  17:24 data " "
+  17:25 charref 128
+  17:31 data " "
+  17:32 charref 0
+  17:36 data " "
+  17:37 charref x110000
+  17:47 data " "
+  17:48 charref xD800
+  17:56 data " "
+  17:57 charref 65
+  17:61 charref x42
+  17:67 data " "
+  17:68 entityref bogus
+  17:75 end i
+  17:79 data "\n"
+  18:0 start b title="&ampx &notit; &copy=3 <>"
+  18:43 data "attr refs"
+  18:52 end b
+  18:56 data "\n"
+  19:0 start script
+  19:8 data "if (x </scriptx> y) {}"
+  19:30 end script
+  19:40 data "\n"
+  20:0 start textarea name="t"
+  20:17 data "a <b>bold</b> "
+  20:31 entityref amp
+  20:36 data " "
+  20:37 end textarea
+  20:48 data "\n"
+  21:0 data "<"
+  21:1 data " n"
+  21:3 data "o"
+  21:4 data "t"
+  21:5 data " "
+  21:6 data "a"
+  21:7 data " "
+  21:8 data "t"
+  21:9 data "a"
+  21:10 data "g"
+  21:11 data "\n"
+  22:0 data "&#"
+  22:2 data " a"
+  22:4 data "n"
+  22:5 data "d"
+  22:6 data " "
+  22:7 data "&#"
+  22:9 data "x "
+  22:11 data "a"
+  22:12 data "n"
+  22:13 data "d"
+  22:14 data " "
+  22:15 data "&"
+  22:16 data " "
+  22:17 data "a"
+  22:18 data "l"
+  22:19 data "o"
+  22:20 data "n"
+  22:21 data "e"
+  22:22 data "\n"
+  23:0 start span
+  23:6 data "la"
+  23:8 data "s"
+  23:9 data "t"
+  23:10 data "\n"
+  end 25:0
+== events | @unicode.html | 1 | 5
+  1:0 start h1 id="intro"
+  1:15 data "Grüße"
+  1:20 data " aus "
+  1:25 data "Köln "
+  1:30 data "🍺"
+  1:31 end h1
+  1:36 data "\n"
+  2:0 start p
+  2:3 data "Zwei "
+  2:8 data "Zeile"
+  2:13 data "n:\nä "
+  3:2 data "ö ü —"
+  3:7 data " und "
+  3:12 start b
+  3:15 data "ß"
+  3:16 end b
+  3:20 data "."
+  3:21 end p
+  3:25 data "\n"
+  4:0 start h2 id="mehr"
+  4:14 data "Me"
+  4:16 data "hr → "
+  4:26 data "Info"
+  4:30 end h2
+  4:35 data "\n"
+  5:0 start p
+  5:3 data "日本"
+  5:5 data "語のテキス"
+  5:10 data "ト & "
+  5:18 start a href="/ja/"
+  5:33 data "リン"
+  5:35 data "ク"
+  5:36 end a
+  5:40 end p
+  5:44 data "\n"
+  end 6:0
+== events | @blog.html | 1 | 64
+  1:0 decl "DOCTYPE html"
+  1:15 data "\n"
+  2:0 start html lang="en"
+  2:16 data "\n"
+  3:0 start head
+  3:6 data "\n  "
+  4:2 start meta charset="utf-8"
+  4:24 data "\n  "
+  5:2 start title
+  5:9 data "Café notes — Week 12 & more"
+  5:53 end title
+  5:61 data "\n "
+  6:1 data " "
+  6:2 start meta name="description" content="What we roasted, brewed & broke this week."
+  6:84 data "\n  "
+  7:2 start link rel="stylesheet" href="/css/site.css?v=3&theme=dark"
+  7:65 data "\n  "
+  8:2 start link rel="alternate" type="application/rss+xml" href="/feed.xml"
+  8:68 data "\n  "
+  9:2 start style
+  9:9 data "\n    body > p { margin: 0 }  /* a > in CSS is not a tag */\n  "
+  11:2 end style
+  11:10 data "\n  "
+  12:2 start script
+  12:10 data "\n    if (a < b && c > d) { document.write(\"</div>\"); }\n    var s = '<p>not a tag</p>';\n  "
+  15:2 end script
+  15:11 data "\n"
+  16:0 end head
+  16:7 data "\n"
+  17:0 start body
+  17:6 data "\n"
+  18:0 start nav
+  18:5 start a href="/"
+  18:17 data "Home"
+  18:21 end a
+  18:25 data " | "
+  18:28 start a href="/archive/" title="All posts"
+  18:66 data "Archive"
+  18:73 end a
+  18:77 data " | "
+  18:80 start a href="/about"
+  18:95 data "About"
+  18:100 end a
+  18:104 end nav
+  18:110 data "\n"
+  19:0 comment " main article starts here "
+  19:33 data "\n"
+  20:0 start article
+  20:9 data "\n"
+  21:0 start h1 id="week-12"
+  21:17 data "Week 12: the new grinder"
+  21:41 end h1
+  21:46 data "\n"
+  22:0 start p
+  22:3 data "We finally re"
+  22:16 data "placed the old burr grinder… and the espresso is "
+  22:71 start em
+  22:75 data "much"
+  22:79 end em
+  22:84 data " better.\nPrices went up 5 % (sorry). See "
+  23:37 start a href="https://example.com/grind?size=fine&unit=um"
+  23:95 data "the\ngrind chart"
+  24:11 end a
+  24:15 data "."
+  24:16 end p
+  24:20 data "\n"
+  25:0 start h2 id="beans"
+  25:15 data "Beans"
+  25:20 end h2
+  25:25 data "\n"
+  26:0 start ul
+  26:4 data "\n  "
+  27:2 start li
+  27:6 data "Ethiopia Guji – "
+  27:28 data "18 g in, 36 g out"
+  27:55 end li
+  27:60 data "\n  "
+  28:2 start li
+  28:6 data "Colombia Huila <sold o"
+  28:31 data "ut>"
+  28:37 end li
+  28:42 data "\n"
+  29:0 end ul
+  29:5 data "\n"
+  30:0 start img src="/img/grinder.jpg" alt="The new grinder \"Mk II\"" width="640" height="480"
+  30:89 data "\n"
+  31:0 start h2 id="recipes"
+  31:17 data "Rec"
+  31:20 data "ipes"
+  31:24 end h2
+  31:29 data "\n"
+  32:0 start h3 id="v60"
+  32:13 data "V60"
+  32:16 end h3
+  32:21 data "\n"
+  33:0 start pre
+  33:5 start code
+  33:11 data "15 g coffee\n250 g wat"
+  34:9 data "er at 94°C"
+  34:23 end code
+  34:30 end pre
+  34:36 data "\n"
+  35:0 start p
+  35:3 data "Questions? "
+  35:14 start a href="mailto:hello@example.com"
+  35:49 data "Write to us"
+  35:60 end a
+  35:64 data "."
+  35:65 startend br
+  35:70 data "\nOr ring the bell."
+  36:17 end p
+  36:21 data "\n"
+  37:0 end article
+  37:10 data "\n"
+  38:0 start footer
+  38:8 start p
+  38:11 data "© 2026 Café Example · "
+  38:52 start a href="/privacy"
+  38:71 data "Privacy"
+  38:78 end a
+  38:82 end p
+  38:86 end footer
+  38:95 data "\n"
+  39:0 end body
+  39:7 data "\n"
+  40:0 end html
+  40:7 data "\n"
+  end 41:0
+== events | <a href=\"x\">link</a> | 1 | 0
+  1:0 start a href="x"
+  1:12 data "link"
+  1:16 end a
+  end 1:20
+== events | <a href=\"x\">link</a> | 0 | 0
+  1:0 start a href="x"
+  1:12 data "link"
+  1:16 end a
+  end 1:20
+== events | a &amp b &amp; c &#x26; d | 1 | 0
+  1:0 data "a & b & c & d"
+  end 1:25
+== events | a &amp b &amp; c &#x26; d | 0 | 0
+  1:0 data "a "
+  1:2 entityref amp
+  1:6 data " b "
+  1:9 entityref amp
+  1:14 data " c "
+  1:17 charref x26
+  1:23 data " d"
+  end 1:25
+== events | &amp | 1 | 0
+  1:0 data "&"
+  end 1:4
+== events | &amp | 0 | 0
+  1:0 entityref amp
+  end 1:4
+== events | &am | 1 | 0
+  1:0 data "&am"
+  end 1:3
+== events | &am | 0 | 0
+  1:0 entityref am
+  end 1:3
+== events | x &#38 | 1 | 0
+  1:0 data "x &"
+  end 1:6
+== events | x &#38 | 0 | 0
+  1:0 data "x "
+  1:2 charref 38
+  end 1:6
+== events | x &# | 1 | 0
+  1:0 data "x &#"
+  end 1:4
+== events | x &# | 0 | 0
+  1:0 data "x "
+  1:2 data "&#"
+  end 1:4
+== events | <b | 1 | 0
+  end 1:2
+== events | <b | 0 | 0
+  end 1:2
+== events | <b class='x | 1 | 0
+  end 1:11
+== events | <b class='x | 0 | 0
+  end 1:11
+== events | </b | 1 | 0
+  end 1:3
+== events | </b | 0 | 0
+  end 1:3
+== events | <!-- open | 1 | 0
+  1:0 comment " open"
+  end 1:9
+== events | <!-- open | 0 | 0
+  1:0 comment " open"
+  end 1:9
+== events | <!-- open -- | 1 | 0
+  1:0 comment " open "
+  end 1:12
+== events | <!-- open -- | 0 | 0
+  1:0 comment " open "
+  end 1:12
+== events | <!doctype html | 1 | 0
+  1:0 decl "doctype html"
+  end 1:14
+== events | <!doctype html | 0 | 0
+  1:0 decl "doctype html"
+  end 1:14
+== events | <?pi | 1 | 0
+  1:0 pi "pi"
+  end 1:4
+== events | <?pi | 0 | 0
+  1:0 pi "pi"
+  end 1:4
+== events | <![CDATA[open | 1 | 0
+  1:0 unknown_decl "CDATA[open"
+  end 1:13
+== events | <![CDATA[open | 0 | 0
+  1:0 unknown_decl "CDATA[open"
+  end 1:13
+== events | <!bogus | 1 | 0
+  1:0 comment "bogus"
+  end 1:7
+== events | <!bogus | 0 | 0
+  1:0 comment "bogus"
+  end 1:7
+== events | </ bogus | 1 | 0
+  1:0 comment " bogus"
+  end 1:8
+== events | </ bogus | 0 | 0
+  1:0 comment " bogus"
+  end 1:8
+== events | < | 1 | 0
+  1:0 data "<"
+  end 1:1
+== events | < | 0 | 0
+  1:0 data "<"
+  end 1:1
+== events | a< | 1 | 0
+  1:0 data "a"
+  1:1 data "<"
+  end 1:2
+== events | a< | 0 | 0
+  1:0 data "a"
+  1:1 data "<"
+  end 1:2
+== events | <script>x</script | 1 | 0
+  1:0 start script
+  1:8 data "x</script"
+  end 1:17
+== events | <script>x</script | 0 | 0
+  1:0 start script
+  1:8 data "x</script"
+  end 1:17
+== events | <title>t &amp; u | 1 | 0
+  1:0 start title
+  1:7 data "t & u"
+  end 1:16
+== events | <title>t &amp; u | 0 | 0
+  1:0 start title
+  1:7 data "t "
+  1:9 entityref amp
+  1:14 data " u"
+  end 1:16
+== events | <p>line1\\nline2<br>\\n<i>three</i> | 1 | 0
+  1:0 start p
+  1:3 data "line1\nline2"
+  2:5 start br
+  2:9 data "\n"
+  3:0 start i
+  3:3 data "three"
+  3:8 end i
+  end 3:12
+== events | <p>line1\\nline2<br>\\n<i>three</i> | 0 | 0
+  1:0 start p
+  1:3 data "line1\nline2"
+  2:5 start br
+  2:9 data "\n"
+  3:0 start i
+  3:3 data "three"
+  3:8 end i
+  end 3:12
+== unescape | fish &amp; chips
+  fish & chips
+== unescape | &lt;tag&gt;
+  <tag>
+== unescape | &ampx &amp;x
+  &x &x
+== unescape | &notit; &notin; &not
+  ¬it; ∉ ¬
+== unescape | &#65;&#x42;&#X43;
+  ABC
+== unescape | &#0; &#13; &#128; &#150; &#159;
+  � \r € – Ÿ
+== unescape | &#x110000; &#xD800; &#xFFFE; &#1;
+  � �  
+== unescape | &#99999999999999999999;
+  �
+== unescape | &bogus; & &; &#; &#x;
+  &bogus; & &; &#; &#x;
+== unescape | &AMP; &Amp; &QUOT;
+  & &Amp; \"
+== unescape | &centerdot; &cent &centx
+  · ¢ ¢x
+== unescape | &ThickSpace; &NotEqualTilde; &fjlig;
+     ≂̸ fj
+== unescape | &eacutex &Eacute;
+  éx É
+== unescape | no refs at all
+  no refs at all
+== unescape | &&amp;&&
+  &&&&
+== escape | <a href=\"x\">'hi' & bye</a> | 1
+  &lt;a href=&quot;x&quot;&gt;&#x27;hi&#x27; &amp; bye&lt;/a&gt;
+== escape | <a href=\"x\">'hi' & bye</a> | 0
+  &lt;a href=\"x\"&gt;'hi' &amp; bye&lt;/a&gt;
+== escape | &amp; already | 1
+  &amp;amp; already
+== escape | plain | 1
+  plain
+== links | @blog.html
+  link href /css/site.css?v=3&theme=dark
+  link href /feed.xml
+  a href /
+  a href /archive/
+  a href /about
+  a href https://example.com/grind?size=fine&unit=um
+  img src /img/grinder.jpg
+  a href mailto:hello@example.com
+  a href /privacy
+  title: Café notes — Week 12 & more
+  description: What we roasted, brewed & broke this week.
+== links | @edge.html
+  img src a.png
+  a href x/
+  title: (none)
+  description: (none)
+== links | @form.html
+  form action /search
+  title: Search & find
+  description: (none)
+== links | @comment.html
+  a href javascript:alert(1)
+  a href https://good.example/page?a=1&b=2
+  img src x
+  iframe src https://evil.example/
+  title: (none)
+  description: (none)
+== text | @blog.html
+  | Home | Archive | About
+  | Week 12: the new grinder
+  | We finally replaced the old burr grinder… and the espresso is much better. Prices went up 5 % (sorry). See the grind chart.
+  | Beans
+  | Ethiopia Guji – 18 g in, 36 g out
+  | Colombia Huila <sold out>
+  | Recipes
+  | V60
+  | 15 g coffee
+  | 250 g water at 94°C
+  | Questions? Write to us.
+  | Or ring the bell.
+  | © 2026 Café Example · Privacy
+== text | @comment.html
+  | Thanks for the great post!
+  | Check this and that.
+  | one
+  | two
+  | café <3 a < b
+  | Bye
+== text | @unicode.html
+  | Grüße aus Köln 🍺
+  | Zwei Zeilen: ä ö ü — und ß.
+  | Mehr → Info
+  | 日本語のテキスト & リンク
+== text | @plain.html
+  | Before
+  | <b>after plaintext everything is text</b> &amp; </plaintext>
+== toc | @blog.html
+  Week 12: the new grinder (#week-12)
+    Beans (#beans)
+    Recipes (#recipes)
+      V60 (#v60)
+== toc | @unicode.html
+  Grüße aus Köln 🍺 (#intro)
+    Mehr → Info (#mehr)
+== toc | @edge.html
+  (no headings)
+== sanitize | @comment.html
+  | <p>Thanks for the <b>great</b> post!</p>
+  | 
+  | <p>Check <a rel=\"nofollow\">this</a> and
+  | <a href=\"https://good.example/page?a=1&amp;b=2\" title=\"Good &quot;site&quot;\" rel=\"nofollow\">that</a>.</p>
+  | 
+  | 
+  | <ul><li>one<li>two</ul>
+  | <i>café &lt;3</i> <code>a &lt; b</code>
+  | 
+  | <p>Bye</p>
+  | 
+  removed 4 tags, 5 attributes
+== sanitize | @blog.html
+  | 
+  | 
+  | 
+  |   
+  |   
+  |   
+  |   
+  |   
+  |   
+  |   
+  | 
+  | 
+  | <a href=\"/\" rel=\"nofollow\">Home</a> | <a href=\"/archive/\" title=\"All posts\" rel=\"nofollow\">Archive</a> | <a href=\"/about\" rel=\"nofollow\">About</a>
+  | 
+  | 
+  | <h1>Week 12: the new grinder</h1>
+  | <p>We finally replaced the old burr grinder… and the espresso is <em>much</em> better.
+  | Prices went up 5 % (sorry). See <a href=\"https://example.com/grind?size=fine&amp;unit=um\" rel=\"nofollow\">the
+  | grind chart</a>.</p>
+  | <h2>Beans</h2>
+  | <ul>
+  |   <li>Ethiopia Guji – 18 g in, 36 g out</li>
+  |   <li>Colombia Huila &lt;sold out&gt;</li>
+  | </ul>
+  | 
+  | <h2>Recipes</h2>
+  | <h3>V60</h3>
+  | <pre><code>15 g coffee
+  | 250 g water at 94°C</code></pre>
+  | <p>Questions? <a href=\"mailto:hello@example.com\" rel=\"nofollow\">Write to us</a>.<br>
+  | Or ring the bell.</p>
+  | 
+  | <p>© 2026 Café Example · <a href=\"/privacy\" rel=\"nofollow\">Privacy</a></p>
+  | 
+  | 
+  | 
+  removed 14 tags, 17 attributes
+== sanitize | @edge.html
+  | 
+  | <p>Mixed &amp; attrs</p>
+  | 
+  | abrupt
+  | abrupt too
+  | 
+  | 
+  | 
+  | 
+  | 
+  | 
+  | 
+  | 
+  | <br><br>
+  | <a href=\"x/\" rel=\"nofollow\">bare slash</a>
+  | Upper
+  | <i>&amp;x ¬it; ∉ € � � � AB &amp;bogus;</i>
+  | <b>attr refs</b>
+  | 
+  | a &lt;b&gt;bold&lt;/b&gt; &amp; 
+  | &lt; not a tag
+  | &amp;# and &amp;#x and &amp; alone
+  | last
+  | 
+  removed 5 tags, 9 attributes

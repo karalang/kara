@@ -1,0 +1,4069 @@
+// mini_htmlparser: Python 3.13's html.parser.HTMLParser and html.escape /
+// html.unescape, ported from html/parser.py and html/__init__.py, with a
+// link extractor, a text extractor, a table of contents and a sanitizer
+// built on the parser's events.
+
+// ---------------------------------------------------------------- chars
+
+fn is_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{c}'
+}
+
+fn is_alpha(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_hex(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn is_alnum(c: char) -> bool {
+    is_alpha(c) or is_digit(c)
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' {
+        match char.try_from(c as i64 + 32) {
+            Ok(l) => l,
+            Err(_) => c,
+        }
+    } else {
+        c
+    }
+}
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+// raw[i..] starts with s.
+fn at(raw: ref Vec[char], i: i64, s: ref String) -> bool {
+    let mut k = i;
+    for c in s.chars() {
+        if k >= raw.len() or raw[k] != c {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+// raw[i..] starts with s, ignoring ASCII case.
+fn at_nocase(raw: ref Vec[char], i: i64, s: ref String) -> bool {
+    let mut k = i;
+    for c in s.chars() {
+        if k >= raw.len() or ascii_lower(raw[k]) != ascii_lower(c) {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn find_char(raw: ref Vec[char], c: char, from: i64) -> i64 {
+    let mut k = from;
+    while k < raw.len() {
+        if raw[k] == c {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn find_str(raw: ref Vec[char], s: ref String, from: i64) -> i64 {
+    let mut k = from;
+    while k < raw.len() {
+        if at(raw, k, s) {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+// ---------------------------------------------------------------- html.escape / html.unescape
+
+fn escape(s: ref String, quote: bool) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '&' {
+            out.push_str("&amp;");
+        } else if c == '<' {
+            out.push_str("&lt;");
+        } else if c == '>' {
+            out.push_str("&gt;");
+        } else if quote and c == '"' {
+            out.push_str("&quot;");
+        } else if quote and c == '\'' {
+            out.push_str("&#x27;");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// The numeric-character-reference-end-state table of html/__init__.py.
+fn invalid_charref(num: i64) -> Option[i64] {
+    if num == 0 {
+        return Some(0xfffd);
+    }
+    if num == 0x0d {
+        return Some(0x0d);
+    }
+    if num < 0x80 or num > 0x9f {
+        return None;
+    }
+    let table: Vec[i64] = vec![
+        0x20ac, 0x81, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+        0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8d, 0x017d, 0x8f,
+        0x90, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+        0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x9d, 0x017e, 0x0178,
+    ];
+    Some(table[num - 0x80])
+}
+
+fn invalid_codepoint(num: i64) -> bool {
+    if (num >= 0x1 and num <= 0x8) or num == 0xb or (num >= 0xe and num <= 0x1f) {
+        return true;
+    }
+    if (num >= 0x7f and num <= 0x9f) or (num >= 0xfdd0 and num <= 0xfdef) {
+        return true;
+    }
+    num % 0x10000 >= 0xfffe and num <= 0x10ffff
+}
+
+fn push_code(out: mut ref String, num: i64) {
+    match char.try_from(num) {
+        Ok(c) => out.push(c),
+        Err(_) => out.push('\u{fffd}'),
+    }
+}
+
+fn numeric_ref(num: i64, out: mut ref String) {
+    match invalid_charref(num) {
+        Some(v) => {
+            push_code(out, v);
+            return;
+        }
+        None => {}
+    }
+    if (num >= 0xd800 and num <= 0xdfff) or num > 0x10ffff {
+        out.push('\u{fffd}');
+        return;
+    }
+    if invalid_codepoint(num) {
+        return;
+    }
+    push_code(out, num);
+}
+
+// The digits raw[lo..hi] in base 10 or 16, held at 0x110000 once past
+// the last code point, as int() then the range check would decide.
+fn ref_number(raw: ref Vec[char], lo: i64, hi: i64, base: i64) -> i64 {
+    let mut n = 0;
+    let mut k = lo;
+    while k < hi {
+        let c = raw[k];
+        let d = if is_digit(c) {
+            c as i64 - '0' as i64
+        } else {
+            ascii_lower(c) as i64 - 'a' as i64 + 10
+        };
+        n = n * base + d;
+        if n > 0x10ffff {
+            n = 0x110000;
+        }
+        k += 1;
+    }
+    n
+}
+
+// A named reference's text, the name possibly ending in ';'.
+fn named_ref(name: ref Vec[char], ents: ref Map[String, String], out: mut ref String) {
+    let whole = text(name, 0, name.len());
+    match ents.get(whole.clone()) {
+        Some(v) => {
+            out.push_str(v);
+            return;
+        }
+        None => {}
+    }
+    // The longest name the standard allows as a prefix.
+    let mut x = name.len() - 1;
+    while x > 1 {
+        match ents.get(text(name, 0, x)) {
+            Some(v) => {
+                out.push_str(v);
+                out.push_str(text(name, x, name.len()));
+                return;
+            }
+            None => {}
+        }
+        x -= 1;
+    }
+    out.push('&');
+    out.push_str(whole);
+}
+
+fn named_class(c: char) -> bool {
+    not (c == '\t' or c == '\n' or c == '\u{c}' or c == ' ' or c == '<' or c == '&' or c == '#' or c == ';')
+}
+
+// html.unescape over raw[lo..hi].
+fn unescape_chars(raw: ref Vec[char], lo: i64, hi: i64, ents: ref Map[String, String]) -> String {
+    let mut out = String.new();
+    let mut p = lo;
+    while p < hi {
+        if raw[p] != '&' {
+            out.push(raw[p]);
+            p += 1;
+            continue;
+        }
+        if p + 1 < hi and raw[p + 1] == '#' {
+            if p + 2 < hi and is_digit(raw[p + 2]) {
+                let mut q = p + 2;
+                while q < hi and is_digit(raw[q]) {
+                    q += 1;
+                }
+                numeric_ref(ref_number(raw, p + 2, q, 10), out);
+                if q < hi and raw[q] == ';' {
+                    q += 1;
+                }
+                p = q;
+            } else if p + 3 < hi and (raw[p + 2] == 'x' or raw[p + 2] == 'X') and is_hex(raw[p + 3]) {
+                let mut q = p + 3;
+                while q < hi and is_hex(raw[q]) {
+                    q += 1;
+                }
+                numeric_ref(ref_number(raw, p + 3, q, 16), out);
+                if q < hi and raw[q] == ';' {
+                    q += 1;
+                }
+                p = q;
+            } else {
+                out.push('&');
+                p += 1;
+            }
+            continue;
+        }
+        let mut q = p + 1;
+        while q < hi and q - (p + 1) < 32 and named_class(raw[q]) {
+            q += 1;
+        }
+        if q == p + 1 {
+            out.push('&');
+            p += 1;
+            continue;
+        }
+        if q < hi and raw[q] == ';' {
+            q += 1;
+        }
+        let name: Vec[char] = raw[p + 1..q].iter().collect();
+        named_ref(name, ents, out);
+        p = q;
+    }
+    out
+}
+
+fn unescape(s: ref String, ents: ref Map[String, String]) -> String {
+    let raw = to_chars(s);
+    unescape_chars(raw, 0, raw.len(), ents)
+}
+
+// _unescape_attrvalue: numeric references always, named ones only when
+// the whole name is in the table and no '=' follows.
+fn unescape_attr(s: ref String, ents: ref Map[String, String]) -> String {
+    let raw = to_chars(s);
+    let n = raw.len();
+    let mut out = String.new();
+    let mut p = 0;
+    while p < n {
+        if raw[p] != '&' {
+            out.push(raw[p]);
+            p += 1;
+            continue;
+        }
+        let mut q = p + 1;
+        let mut numeric = false;
+        if q < n and raw[q] == '#' {
+            if q + 1 < n and is_digit(raw[q + 1]) {
+                q += 1;
+                while q < n and is_digit(raw[q]) {
+                    q += 1;
+                }
+                numeric = true;
+            } else if q + 2 < n and (raw[q + 1] == 'x' or raw[q + 1] == 'X') and is_hex(raw[q + 2]) {
+                q += 2;
+                while q < n and is_hex(raw[q]) {
+                    q += 1;
+                }
+                numeric = true;
+            } else {
+                out.push('&');
+                p += 1;
+                continue;
+            }
+        } else if q < n and is_alpha(raw[q]) {
+            while q < n and is_alnum(raw[q]) {
+                q += 1;
+            }
+        } else {
+            out.push('&');
+            p += 1;
+            continue;
+        }
+        let mut eq = false;
+        if q < n and (raw[q] == ';' or raw[q] == '=') {
+            eq = raw[q] == '=';
+            q += 1;
+        }
+        let r = text(raw, p, q);
+        if numeric {
+            out.push_str(unescape_chars(raw, p, q, ents));
+        } else if not eq and ents.contains_key(text(raw, p + 1, q)) {
+            out.push_str(unescape_chars(raw, p, q, ents));
+        } else {
+            out.push_str(r);
+        }
+        p = q;
+    }
+    out
+}
+
+// ---------------------------------------------------------------- the tokenizer's patterns
+
+// The end of locatetagend's match at p (a tag name's first letter).
+fn locate_tag_end(raw: ref Vec[char], p: i64) -> i64 {
+    let n = raw.len();
+    let mut k = p + 1;
+    while k < n and not (is_space(raw[k]) or raw[k] == '/' or raw[k] == '>') {
+        k += 1;
+    }
+    while k < n and (is_space(raw[k]) or raw[k] == '/') {
+        k += 1;
+    }
+    loop {
+        if k >= n or not after_attr_gap(raw[k - 1]) {
+            break;
+        }
+        let c = raw[k];
+        if is_space(c) or c == '/' or c == '>' {
+            break;
+        }
+        k = attr_name_end(raw, k);
+        match value_indicator(raw, k) {
+            Some(v) => k = v.2,
+            None => {}
+        }
+        while k < n and (is_space(raw[k]) or raw[k] == '/') {
+            k += 1;
+        }
+    }
+    if k < n and raw[k] == '>' {
+        k += 1;
+    }
+    k
+}
+
+// The lookbehind before an attribute name: ['"\t\n\r\f /].
+fn after_attr_gap(c: char) -> bool {
+    c == '\'' or c == '"' or is_space(c) or c == '/'
+}
+
+fn attr_name_end(raw: ref Vec[char], k: i64) -> i64 {
+    let n = raw.len();
+    let mut e = k + 1;
+    while e < n and not (is_space(raw[e]) or raw[e] == '/' or raw[e] == '=' or raw[e] == '>') {
+        e += 1;
+    }
+    e
+}
+
+// A value at b: 'x', "x" or a bare run; None when a quote opens and never
+// closes.
+fn value_at(raw: ref Vec[char], b: i64) -> Option[i64] {
+    let n = raw.len();
+    if b < n and (raw[b] == '\'' or raw[b] == '"') {
+        let q = find_char(raw, raw[b], b + 1);
+        if q < 0 {
+            return None;
+        }
+        return Some(q + 1);
+    }
+    let mut e = b;
+    while e < n and not (raw[e] == '>' or is_space(raw[e])) {
+        e += 1;
+    }
+    Some(e)
+}
+
+// `[\t\n\r\f ]*=[\t\n\r\f ]*` and a value after an attribute name ending
+// at k: (value start, value end, match end), backtracking the way re does
+// when a quote never closes.
+fn value_indicator(raw: ref Vec[char], k: i64) -> Option[(i64, i64, i64)] {
+    let n = raw.len();
+    let mut a = k;
+    while a < n and is_space(raw[a]) {
+        a += 1;
+    }
+    if a >= n or raw[a] != '=' {
+        return None;
+    }
+    let mut b = a + 1;
+    while b < n and is_space(raw[b]) {
+        b += 1;
+    }
+    match value_at(raw, b) {
+        Some(e) => Some((b, e, e)),
+        None => {
+            if b > a + 1 {
+                // One space fewer, and the value is the empty bare run.
+                Some((b - 1, b - 1, b - 1))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+struct Attr {
+    name: String,
+    value: Option[String],
+}
+
+// ---------------------------------------------------------------- events
+
+enum Event {
+    Start(String, Vec[Attr]),
+    StartEnd(String, Vec[Attr]),
+    End(String),
+    Data(String),
+    Comment(String),
+    Decl(String),
+    Pi(String),
+    UnknownDecl(String),
+    CharRef(String),
+    EntityRef(String),
+}
+
+struct Ev {
+    line: i64,
+    col: i64,
+    ev: Event,
+}
+
+// ---------------------------------------------------------------- HTMLParser
+
+struct HtmlParser {
+    convert_charrefs: bool,
+    raw: Vec[char],
+    lineno: i64,
+    offset: i64,
+    lasttag: String,
+    cdata_elem: String,
+    escapable: bool,
+    support_cdata: bool,
+    pending: Vec[char],
+    pending_len: i64,
+    parse_threshold: i64,
+    starttag_text: Option[String],
+    events: Vec[Ev],
+}
+
+fn is_cdata_content(tag: ref String) -> bool {
+    tag == "script" or tag == "style" or tag == "xmp" or tag == "iframe" or tag == "noembed" or tag == "noframes"
+}
+
+impl HtmlParser {
+    fn new(convert_charrefs: bool) -> HtmlParser {
+        HtmlParser {
+            convert_charrefs: convert_charrefs,
+            raw: Vec.new(),
+            lineno: 1,
+            offset: 0,
+            lasttag: "???".to_string(),
+            cdata_elem: String.new(),
+            escapable: true,
+            support_cdata: true,
+            pending: Vec.new(),
+            pending_len: 0,
+            parse_threshold: 1,
+            starttag_text: None,
+            events: Vec.new(),
+        }
+    }
+
+    fn emit(mut ref self, ev: own Event) {
+        self.events.push(Ev { line: self.lineno, col: self.offset, ev: ev });
+    }
+
+    fn feed(mut ref self, data: ref Vec[char], ents: ref Map[String, String]) {
+        self.pending_len += data.len();
+        if self.pending_len < self.parse_threshold {
+            for c in data.iter() {
+                self.pending.push(*c);
+            }
+            return;
+        }
+        for c in self.pending.iter() {
+            self.raw.push(*c);
+        }
+        for c in data.iter() {
+            self.raw.push(*c);
+        }
+        self.pending.clear();
+        self.pending_len = 0;
+        let n = self.raw.len();
+        self.goahead(false, ents);
+        if self.raw.len() < n {
+            self.parse_threshold = 1;
+        } else {
+            self.parse_threshold = self.raw.len();
+        }
+    }
+
+    fn close(mut ref self, ents: ref Map[String, String]) {
+        if self.pending.len() > 0 {
+            for c in self.pending.iter() {
+                self.raw.push(*c);
+            }
+            self.pending.clear();
+            self.pending_len = 0;
+        }
+        self.goahead(true, ents);
+    }
+
+    fn getpos(ref self) -> (i64, i64) {
+        (self.lineno, self.offset)
+    }
+
+    fn updatepos(mut ref self, i: i64, j: i64) -> i64 {
+        if i >= j {
+            return j;
+        }
+        let mut nlines = 0;
+        let mut last = -1;
+        let mut k = i;
+        while k < j {
+            if self.raw[k] == '\n' {
+                nlines += 1;
+                last = k;
+            }
+            k += 1;
+        }
+        if nlines > 0 {
+            self.lineno += nlines;
+            self.offset = j - (last + 1);
+        } else {
+            self.offset += j - i;
+        }
+        j
+    }
+
+    fn set_cdata_mode(mut ref self, elem: ref String, escapable: bool) {
+        self.cdata_elem = elem.to_lowercase();
+        self.escapable = escapable;
+    }
+
+    fn clear_cdata_mode(mut ref self) {
+        self.cdata_elem = String.new();
+        self.escapable = true;
+    }
+
+    // self.interesting.search(rawdata, i): the start of the match, or -1.
+    fn interesting(ref self, i: i64) -> i64 {
+        let n = self.raw.len();
+        if self.cdata_elem == "plaintext" {
+            return n;
+        }
+        let mut p = i;
+        while p < n {
+            let c = self.raw[p];
+            if self.cdata_elem == "" {
+                if c == '<' or c == '&' {
+                    return p;
+                }
+            } else {
+                if self.escapable and not self.convert_charrefs and c == '&' {
+                    return p;
+                }
+                if c == '<' and p + 1 < n and self.raw[p + 1] == '/' and at_nocase(self.raw, p + 2, self.cdata_elem) {
+                    let after = p + 2 + self.cdata_elem.chars().count();
+                    if after < n and (is_space(self.raw[after]) or self.raw[after] == '/' or self.raw[after] == '>') {
+                        return p;
+                    }
+                }
+            }
+            p += 1;
+        }
+        -1
+    }
+
+    fn data(mut ref self, lo: i64, hi: i64, ents: ref Map[String, String]) {
+        let s = if self.convert_charrefs and self.escapable {
+            unescape_chars(self.raw, lo, hi, ents)
+        } else {
+            text(self.raw, lo, hi)
+        };
+        self.emit(Event.Data(s));
+    }
+
+    fn goahead(mut ref self, end: bool, ents: ref Map[String, String]) {
+        let n = self.raw.len();
+        let mut i = 0;
+        while i < n {
+            let mut j = n;
+            if self.convert_charrefs and self.cdata_elem == "" {
+                let lt = find_char(self.raw, '<', i);
+                if lt < 0 {
+                    // A reference may be cut in half at the end of the buffer.
+                    let lo = if i > n - 34 { i } else { n - 34 };
+                    let mut amppos = -1;
+                    let mut k = n - 1;
+                    while k >= lo {
+                        if self.raw[k] == '&' {
+                            amppos = k;
+                            break;
+                        }
+                        k -= 1;
+                    }
+                    if amppos >= 0 {
+                        let mut ended = false;
+                        let mut q = amppos;
+                        while q < n {
+                            let c = self.raw[q];
+                            if is_space(c) or c == ';' {
+                                ended = true;
+                                break;
+                            }
+                            q += 1;
+                        }
+                        if not ended {
+                            break;
+                        }
+                    }
+                    j = n;
+                } else {
+                    j = lt;
+                }
+            } else {
+                let m = self.interesting(i);
+                if m >= 0 {
+                    j = m;
+                } else {
+                    if self.cdata_elem != "" {
+                        break;
+                    }
+                    j = n;
+                }
+            }
+            if i < j {
+                self.data(i, j, ents);
+            }
+            i = self.updatepos(i, j);
+            if i == n {
+                break;
+            }
+            if self.raw[i] == '<' {
+                let mut k = 0;
+                if i + 1 < n and is_alpha(self.raw[i + 1]) {
+                    k = self.parse_starttag(i, ents);
+                } else if at(self.raw, i, "</") {
+                    k = self.parse_endtag(i);
+                } else if at(self.raw, i, "<!--") {
+                    k = self.parse_comment(i);
+                } else if at(self.raw, i, "<?") {
+                    k = self.parse_pi(i);
+                } else if at(self.raw, i, "<!") {
+                    k = self.parse_html_declaration(i);
+                } else if i + 1 < n or end {
+                    self.emit(Event.Data("<".to_string()));
+                    k = i + 1;
+                } else {
+                    break;
+                }
+                if k < 0 {
+                    if not end {
+                        break;
+                    }
+                    self.flush_unterminated(i);
+                    k = n;
+                }
+                i = self.updatepos(i, k);
+            } else if at(self.raw, i, "&#") {
+                match self.match_charref(i) {
+                    Some((name, e)) => {
+                        self.emit(Event.CharRef(name));
+                        let mut k = e;
+                        if self.raw[k - 1] != ';' {
+                            k -= 1;
+                        }
+                        i = self.updatepos(i, k);
+                        continue;
+                    }
+                    None => {}
+                }
+                let incomplete = i + 2 < n and (is_digit(self.raw[i + 2])
+                    or (i + 3 < n and (self.raw[i + 2] == 'x' or self.raw[i + 2] == 'X') and is_hex(self.raw[i + 3])));
+                if incomplete {
+                    if end {
+                        let name = text(self.raw, i + 2, n);
+                        self.emit(Event.CharRef(name));
+                        i = self.updatepos(i, n);
+                    }
+                    break;
+                } else if i + 3 < n {
+                    self.emit(Event.Data("&#".to_string()));
+                    i = self.updatepos(i, i + 2);
+                } else {
+                    break;
+                }
+            } else if self.raw[i] == '&' {
+                match self.match_entityref(i) {
+                    Some((name, e)) => {
+                        self.emit(Event.EntityRef(name));
+                        let mut k = e;
+                        if self.raw[k - 1] != ';' {
+                            k -= 1;
+                        }
+                        i = self.updatepos(i, k);
+                        continue;
+                    }
+                    None => {}
+                }
+                let incomplete = i + 1 < n and (is_alpha(self.raw[i + 1]) or self.raw[i + 1] == '#');
+                if incomplete {
+                    if end {
+                        let name = text(self.raw, i + 1, n);
+                        self.emit(Event.EntityRef(name));
+                        i = self.updatepos(i, n);
+                    }
+                    break;
+                } else if i + 1 < n {
+                    self.emit(Event.Data("&".to_string()));
+                    i = self.updatepos(i, i + 1);
+                } else {
+                    break;
+                }
+            } else {
+                panic("interesting.search() lied");
+            }
+        }
+        if end and i < n {
+            self.data(i, n, ents);
+            i = self.updatepos(i, n);
+        }
+        self.raw = self.raw[i..].iter().collect();
+    }
+
+    // What goahead does at EOF with a construct that never ended.
+    fn flush_unterminated(mut ref self, i: i64) {
+        let n = self.raw.len();
+        if i + 1 < n and is_alpha(self.raw[i + 1]) {
+            return;
+        }
+        if at(self.raw, i, "</") {
+            if i + 2 == n {
+                self.emit(Event.Data("</".to_string()));
+            } else if i + 2 < n and is_alpha(self.raw[i + 2]) {
+                return;
+            } else {
+                let s = text(self.raw, i + 2, n);
+                self.emit(Event.Comment(s));
+            }
+        } else if at(self.raw, i, "<!--") {
+            let mut j = n;
+            let suffixes: Vec[String] = vec!["--!".to_string(), "--".to_string(), "-".to_string()];
+            for suffix in suffixes.iter() {
+                let len = suffix.chars().count();
+                if n - (i + 4) >= len and at(self.raw, n - len, suffix) {
+                    j -= len;
+                    break;
+                }
+            }
+            let s = text(self.raw, i + 4, j);
+            self.emit(Event.Comment(s));
+        } else if at(self.raw, i, "<![CDATA[") and self.support_cdata {
+            let s = text(self.raw, i + 3, n);
+            self.emit(Event.UnknownDecl(s));
+        } else if at_nocase(self.raw, i, "<!doctype") {
+            let s = text(self.raw, i + 2, n);
+            self.emit(Event.Decl(s));
+        } else if at(self.raw, i, "<!") {
+            let s = text(self.raw, i + 2, n);
+            self.emit(Event.Comment(s));
+        } else if at(self.raw, i, "<?") {
+            let s = text(self.raw, i + 2, n);
+            self.emit(Event.Pi(s));
+        } else {
+            panic("we should not get here!");
+        }
+    }
+
+    // charref: &#(?:[0-9]+|[xX][0-9a-fA-F]+)[^0-9a-fA-F] at i.
+    fn match_charref(ref self, i: i64) -> Option[(String, i64)] {
+        let n = self.raw.len();
+        let mut q = i + 2;
+        if q < n and is_digit(self.raw[q]) {
+            while q < n and is_digit(self.raw[q]) {
+                q += 1;
+            }
+        } else if q + 1 < n and (self.raw[q] == 'x' or self.raw[q] == 'X') and is_hex(self.raw[q + 1]) {
+            q += 1;
+            while q < n and is_hex(self.raw[q]) {
+                q += 1;
+            }
+        } else {
+            return None;
+        }
+        if q >= n or is_hex(self.raw[q]) {
+            return None;
+        }
+        Some((text(self.raw, i + 2, q), q + 1))
+    }
+
+    // entityref: &([a-zA-Z][-.a-zA-Z0-9]*)[^a-zA-Z0-9] at i, giving back
+    // name characters when the buffer ends inside the name.
+    fn match_entityref(ref self, i: i64) -> Option[(String, i64)] {
+        let n = self.raw.len();
+        if i + 1 >= n or not is_alpha(self.raw[i + 1]) {
+            return None;
+        }
+        let mut e = i + 2;
+        while e < n and (is_alnum(self.raw[e]) or self.raw[e] == '-' or self.raw[e] == '.') {
+            e += 1;
+        }
+        if e < n {
+            return Some((text(self.raw, i + 1, e), e + 1));
+        }
+        let mut b = e - 1;
+        while b > i + 1 {
+            if not is_alnum(self.raw[b]) {
+                return Some((text(self.raw, i + 1, b), b + 1));
+            }
+            b -= 1;
+        }
+        None
+    }
+
+    fn parse_html_declaration(mut ref self, i: i64) -> i64 {
+        if at(self.raw, i, "<!--") {
+            return self.parse_comment(i);
+        } else if at(self.raw, i, "<![CDATA[") and self.support_cdata {
+            let j = find_str(self.raw, "]]>", i + 9);
+            if j < 0 {
+                return -1;
+            }
+            let s = text(self.raw, i + 3, j);
+            self.emit(Event.UnknownDecl(s));
+            return j + 3;
+        } else if at_nocase(self.raw, i, "<!doctype") {
+            let gtpos = find_char(self.raw, '>', i + 9);
+            if gtpos < 0 {
+                return -1;
+            }
+            let s = text(self.raw, i + 2, gtpos);
+            self.emit(Event.Decl(s));
+            return gtpos + 1;
+        }
+        self.parse_bogus_comment(i)
+    }
+
+    fn parse_comment(mut ref self, i: i64) -> i64 {
+        let n = self.raw.len();
+        let mut start = -1;
+        let mut stop = -1;
+        // An empty comment is closed by the first ">" or "->".
+        if i + 4 < n and self.raw[i + 4] == '>' {
+            start = i + 4;
+            stop = i + 5;
+        } else if i + 5 < n and self.raw[i + 4] == '-' and self.raw[i + 5] == '>' {
+            start = i + 4;
+            stop = i + 6;
+        } else {
+            let mut p = i + 4;
+            while p + 2 < n {
+                if self.raw[p] == '-' and self.raw[p + 1] == '-' {
+                    if self.raw[p + 2] == '>' {
+                        start = p;
+                        stop = p + 3;
+                        break;
+                    }
+                    if p + 3 < n and self.raw[p + 2] == '!' and self.raw[p + 3] == '>' {
+                        start = p;
+                        stop = p + 4;
+                        break;
+                    }
+                }
+                p += 1;
+            }
+            if start < 0 {
+                return -1;
+            }
+        }
+        let s = text(self.raw, i + 4, start);
+        self.emit(Event.Comment(s));
+        stop
+    }
+
+    fn parse_bogus_comment(mut ref self, i: i64) -> i64 {
+        let pos = find_char(self.raw, '>', i + 2);
+        if pos < 0 {
+            return -1;
+        }
+        let s = text(self.raw, i + 2, pos);
+        self.emit(Event.Comment(s));
+        pos + 1
+    }
+
+    fn parse_pi(mut ref self, i: i64) -> i64 {
+        let j = find_char(self.raw, '>', i + 2);
+        if j < 0 {
+            return -1;
+        }
+        let s = text(self.raw, i + 2, j);
+        self.emit(Event.Pi(s));
+        j + 1
+    }
+
+    fn parse_starttag(mut ref self, i: i64, ents: ref Map[String, String]) -> i64 {
+        self.starttag_text = None;
+        let endpos = locate_tag_end(self.raw, i + 1);
+        if self.raw[endpos - 1] != '>' {
+            return -1;
+        }
+        self.starttag_text = Some(text(self.raw, i, endpos));
+        let n = self.raw.len();
+
+        // tagfind_tolerant
+        let mut k = i + 2;
+        while k < n and not (is_space(self.raw[k]) or self.raw[k] == '/' or self.raw[k] == '>') {
+            k += 1;
+        }
+        let tag = text(self.raw, i + 1, k).to_lowercase();
+        k = skip_attr_gap(self.raw, k);
+        self.lasttag = tag.clone();
+
+        let mut attrs: Vec[Attr] = Vec.new();
+        while k < endpos {
+            // attrfind_tolerant
+            if not after_attr_gap(self.raw[k - 1]) {
+                break;
+            }
+            let c = self.raw[k];
+            if is_space(c) or c == '/' or c == '>' {
+                break;
+            }
+            let ne = attr_name_end(self.raw, k);
+            let name = text(self.raw, k, ne).to_lowercase();
+            let mut value: Option[String] = None;
+            let mut m = ne;
+            match value_indicator(self.raw, ne) {
+                Some((vs, ve, e)) => {
+                    let mut v = text(self.raw, vs, ve);
+                    if ve - vs >= 2 and (self.raw[vs] == '\'' or self.raw[vs] == '"') and self.raw[ve - 1] == self.raw[vs] {
+                        v = text(self.raw, vs + 1, ve - 1);
+                    }
+                    if v.len() > 0 {
+                        v = unescape_attr(v, ents);
+                    }
+                    value = Some(v);
+                    m = e;
+                }
+                None => {}
+            }
+            attrs.push(Attr { name: name, value: value });
+            k = skip_attr_gap(self.raw, m);
+        }
+
+        let tail = text(self.raw, k, endpos);
+        let end = tail.trim();
+        if end != ">" and end != "/>" {
+            let s = text(self.raw, i, endpos);
+            self.emit(Event.Data(s));
+            return endpos;
+        }
+        if end == "/>" {
+            self.emit(Event.StartEnd(tag, attrs));
+        } else {
+            self.emit(Event.Start(tag.clone(), attrs));
+            if is_cdata_content(tag) or tag == "plaintext" {
+                self.set_cdata_mode(tag, false);
+            } else if tag == "textarea" or tag == "title" {
+                self.set_cdata_mode(tag, true);
+            }
+        }
+        endpos
+    }
+
+    fn parse_endtag(mut ref self, i: i64) -> i64 {
+        let n = self.raw.len();
+        if find_char(self.raw, '>', i + 2) < 0 {
+            return -1;
+        }
+        if not (i + 2 < n and is_alpha(self.raw[i + 2])) {
+            if self.raw[i + 2] == '>' {
+                // "</>" is ignored.
+                return i + 3;
+            }
+            return self.parse_bogus_comment(i);
+        }
+        let j = locate_tag_end(self.raw, i + 2);
+        if self.raw[j - 1] != '>' {
+            return -1;
+        }
+        let mut k = i + 3;
+        while k < n and not (is_space(self.raw[k]) or self.raw[k] == '/' or self.raw[k] == '>') {
+            k += 1;
+        }
+        let tag = text(self.raw, i + 2, k).to_lowercase();
+        self.emit(Event.End(tag));
+        self.clear_cdata_mode();
+        j
+    }
+}
+
+// (?:[\t\n\r\f ]|/(?!>))*
+fn skip_attr_gap(raw: ref Vec[char], from: i64) -> i64 {
+    let n = raw.len();
+    let mut k = from;
+    while k < n {
+        if is_space(raw[k]) {
+            k += 1;
+        } else if raw[k] == '/' and not (k + 1 < n and raw[k + 1] == '>') {
+            k += 1;
+        } else {
+            break;
+        }
+    }
+    k
+}
+
+fn parse_all(src: ref String, convert: bool, chunk: i64, ents: ref Map[String, String]) -> HtmlParser {
+    let mut p = HtmlParser.new(convert);
+    let chars = to_chars(src);
+    if chunk == 0 {
+        p.feed(chars, ents);
+    } else {
+        let mut k = 0;
+        while k < chars.len() {
+            let hi = if k + chunk < chars.len() { k + chunk } else { chars.len() };
+            let piece: Vec[char] = chars[k..hi].iter().collect();
+            p.feed(piece, ents);
+            k = hi;
+        }
+    }
+    p.close(ents);
+    p
+}
+
+// ---------------------------------------------------------------- printing
+
+fn esc(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if o < 32 or (o >= 0x7f and o <= 0x9f) {
+            let hex: Vec[char] = "0123456789abcdef".chars().collect();
+            out.push_str("\\x");
+            out.push(hex[o / 16]);
+            out.push(hex[o % 16]);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn attr_text(attrs: ref Vec[Attr]) -> String {
+    let mut s = String.new();
+    for a in attrs.iter() {
+        match a.value {
+            Some(v) => {
+                let t = f" {esc(a.name)}=\"{esc(v)}\"";
+                s.push_str(t);
+            }
+            None => {
+                s.push(' ');
+                s.push_str(esc(a.name));
+            }
+        }
+    }
+    s
+}
+
+fn event_text(ev: ref Event) -> String {
+    match ev {
+        Event.Start(tag, attrs) => f"start {tag}{attr_text(attrs)}",
+        Event.StartEnd(tag, attrs) => f"startend {tag}{attr_text(attrs)}",
+        Event.End(tag) => f"end {tag}",
+        Event.Data(s) => f"data \"{esc(s)}\"",
+        Event.Comment(s) => f"comment \"{esc(s)}\"",
+        Event.Decl(s) => f"decl \"{esc(s)}\"",
+        Event.Pi(s) => f"pi \"{esc(s)}\"",
+        Event.UnknownDecl(s) => f"unknown_decl \"{esc(s)}\"",
+        Event.CharRef(s) => f"charref {esc(s)}",
+        Event.EntityRef(s) => f"entityref {esc(s)}",
+    }
+}
+
+// ---------------------------------------------------------------- programs
+
+fn link_attr(tag: ref String) -> String {
+    if tag == "a" or tag == "link" {
+        "href".to_string()
+    } else if tag == "img" or tag == "script" or tag == "iframe" {
+        "src".to_string()
+    } else if tag == "form" {
+        "action".to_string()
+    } else {
+        String.new()
+    }
+}
+
+fn links(p: ref HtmlParser, out: mut ref String) {
+    let mut title: Option[String] = None;
+    let mut in_title = false;
+    let mut description: Option[String] = None;
+    for e in p.events.iter() {
+        match e.ev {
+            Event.Start(tag, attrs) => {
+                link_starttag(tag, attrs, out, mut title, mut in_title, mut description);
+            }
+            Event.StartEnd(tag, attrs) => {
+                link_starttag(tag, attrs, out, mut title, mut in_title, mut description);
+            }
+            Event.End(tag) => {
+                if tag == "title" {
+                    in_title = false;
+                }
+            }
+            Event.Data(s) => {
+                if in_title {
+                    match title {
+                        Some(t) => title = Some(f"{t}{s}"),
+                        None => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let t = match title {
+        Some(t) => esc(t),
+        None => "(none)".to_string(),
+    };
+    out.push_str(f"  title: {t}\n");
+    let d = match description {
+        Some(d) => esc(d),
+        None => "(none)".to_string(),
+    };
+    out.push_str(f"  description: {d}\n");
+}
+
+fn link_starttag(tag: ref String, attrs: ref Vec[Attr], out: mut ref String, title: mut ref Option[String], in_title: mut ref bool, description: mut ref Option[String]) {
+    let want = link_attr(tag);
+    for a in attrs.iter() {
+        if a.name == want {
+            match a.value {
+                Some(v) => out.push_str(f"  {esc(f"{tag} {a.name} {v}")}\n"),
+                None => {}
+            }
+        }
+    }
+    if tag == "title" {
+        *in_title = true;
+        *title = Some(String.new());
+    }
+    if tag == "meta" {
+        // dict(attrs): the last of a repeated name wins.
+        let mut name: Option[String] = None;
+        let mut content: Option[String] = None;
+        let mut has_content = false;
+        for a in attrs.iter() {
+            if a.name == "name" {
+                name = a.value.clone();
+            }
+            if a.name == "content" {
+                content = a.value.clone();
+                has_content = true;
+            }
+        }
+        let is_desc = match name {
+            Some(n) => n == "description",
+            None => false,
+        };
+        if is_desc and has_content {
+            match content {
+                Some(c) => *description = Some(c),
+                None => {}
+            }
+        }
+    }
+}
+
+fn collapse(s: ref String) -> String {
+    let mut out = String.new();
+    let mut space = false;
+    for c in s.chars() {
+        if is_space(c) {
+            space = true;
+        } else {
+            if space {
+                out.push(' ');
+            }
+            space = false;
+            out.push(c);
+        }
+    }
+    if space {
+        out.push(' ');
+    }
+    out
+}
+
+fn strip_ws(s: ref String) -> String {
+    let chars = to_chars(s);
+    let mut lo = 0;
+    let mut hi = chars.len();
+    while lo < hi and is_space(chars[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_space(chars[hi - 1]) {
+        hi -= 1;
+    }
+    text(chars, lo, hi)
+}
+
+fn is_block(tag: ref String) -> bool {
+    let blocks: Vec[String] = vec![
+        "p".to_string(), "h1".to_string(), "h2".to_string(), "h3".to_string(), "h4".to_string(),
+        "h5".to_string(), "h6".to_string(), "li".to_string(), "pre".to_string(), "br".to_string(),
+        "div".to_string(), "tr".to_string(), "article".to_string(), "nav".to_string(),
+        "footer".to_string(), "ul".to_string(), "ol".to_string(), "section".to_string(),
+        "header".to_string(), "form".to_string(), "label".to_string(), "select".to_string(),
+        "option".to_string(), "textarea".to_string(), "plaintext".to_string(),
+    ];
+    blocks.contains(tag)
+}
+
+fn is_skipped(tag: ref String) -> bool {
+    tag == "script" or tag == "style" or tag == "title"
+}
+
+struct TextState {
+    parts: String,
+    skip: i64,
+    pre: i64,
+}
+
+impl TextState {
+    fn start(mut ref self, tag: ref String) {
+        if is_skipped(tag) {
+            self.skip += 1;
+        }
+        if tag == "pre" {
+            self.pre += 1;
+        }
+        if is_block(tag) {
+            self.parts.push('\n');
+        }
+    }
+
+    fn end(mut ref self, tag: ref String) {
+        if is_skipped(tag) and self.skip > 0 {
+            self.skip -= 1;
+        }
+        if tag == "pre" and self.pre > 0 {
+            self.pre -= 1;
+        }
+        if is_block(tag) {
+            self.parts.push('\n');
+        }
+    }
+}
+
+fn text_of(p: ref HtmlParser, out: mut ref String) {
+    let mut st = TextState { parts: String.new(), skip: 0, pre: 0 };
+    for e in p.events.iter() {
+        match e.ev {
+            Event.Start(tag, _) => st.start(tag),
+            Event.StartEnd(tag, _) => {
+                st.start(tag);
+                st.end(tag);
+            }
+            Event.End(tag) => st.end(tag),
+            Event.Data(s) => {
+                if st.skip == 0 {
+                    if st.pre > 0 {
+                        st.parts.push_str(s);
+                    } else {
+                        st.parts.push_str(collapse(s));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for line in st.parts.split("\n") {
+        let l = strip_ws(line);
+        if l.len() > 0 {
+            out.push_str(f"  | {esc(l)}\n");
+        }
+    }
+}
+
+struct Heading {
+    level: i64,
+    id: Option[String],
+    text: String,
+}
+
+fn heading_level(tag: ref String) -> i64 {
+    if tag == "h1" {
+        1
+    } else if tag == "h2" {
+        2
+    } else if tag == "h3" {
+        3
+    } else {
+        0
+    }
+}
+
+fn toc_start(tag: ref String, attrs: ref Vec[Attr], cur: mut ref Option[Heading]) {
+    let level = heading_level(tag);
+    if level > 0 {
+        let mut id: Option[String] = None;
+        for a in attrs.iter() {
+            if a.name == "id" {
+                id = a.value.clone();
+            }
+        }
+        *cur = Some(Heading { level: level, id: id, text: String.new() });
+    }
+}
+
+fn toc_end(tag: ref String, cur: mut ref Option[Heading], items: mut ref Vec[Heading]) {
+    let done = match cur {
+        Some(h) => heading_level(tag) == h.level,
+        None => false,
+    };
+    if done {
+        match cur.take() {
+            Some(h) => items.push(h),
+            None => {}
+        }
+    }
+}
+
+fn toc(p: ref HtmlParser, out: mut ref String) {
+    let mut cur: Option[Heading] = None;
+    let mut items: Vec[Heading] = Vec.new();
+    for e in p.events.iter() {
+        match e.ev {
+            Event.Start(tag, attrs) => toc_start(tag, attrs, mut cur),
+            Event.StartEnd(tag, attrs) => {
+                toc_start(tag, attrs, mut cur);
+                toc_end(tag, mut cur, mut items);
+            }
+            Event.End(tag) => toc_end(tag, mut cur, mut items),
+            Event.Data(s) => {
+                match cur {
+                    Some(h) => h.text.push_str(s),
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    if items.len() == 0 {
+        out.push_str("  (no headings)\n");
+    }
+    for h in items.iter() {
+        let mut line = "  ".to_string();
+        let mut k = 1;
+        while k < h.level {
+            line.push_str("  ");
+            k += 1;
+        }
+        line.push_str(esc(strip_ws(collapse(h.text))));
+        match h.id {
+            Some(id) => line.push_str(esc(f" (#{id})")),
+            None => {}
+        }
+        out.push_str(f"{line}\n");
+    }
+}
+
+// Which attributes a sanitized tag keeps, or None when the tag goes.
+fn allowed_attrs(tag: ref String) -> Option[Vec[String]] {
+    if tag == "a" {
+        return Some(vec!["href".to_string(), "title".to_string()]);
+    }
+    let bare: Vec[String] = vec![
+        "b".to_string(), "i".to_string(), "em".to_string(), "strong".to_string(),
+        "p".to_string(), "ul".to_string(), "li".to_string(), "code".to_string(),
+        "pre".to_string(), "br".to_string(), "h1".to_string(), "h2".to_string(), "h3".to_string(),
+    ];
+    if bare.contains(tag) {
+        Some(Vec.new())
+    } else {
+        None
+    }
+}
+
+fn dropped_with_content(tag: ref String) -> bool {
+    tag == "script" or tag == "style" or tag == "iframe" or tag == "title"
+}
+
+struct Sanitizer {
+    out: String,
+    drop: i64,
+    removed_tags: i64,
+    removed_attrs: i64,
+}
+
+impl Sanitizer {
+    fn start(mut ref self, tag: ref String, attrs: ref Vec[Attr], closed: bool) {
+        if dropped_with_content(tag) {
+            if not closed {
+                self.drop += 1;
+            }
+            self.removed_tags += 1;
+            return;
+        }
+        if self.drop > 0 {
+            return;
+        }
+        let keep = match allowed_attrs(tag) {
+            Some(k) => k,
+            None => {
+                self.removed_tags += 1;
+                self.removed_attrs += attrs.len();
+                return;
+            }
+        };
+        let mut s = f"<{tag}";
+        for a in attrs.iter() {
+            let v = match a.value {
+                Some(v) => v.clone(),
+                None => {
+                    self.removed_attrs += 1;
+                    continue;
+                }
+            };
+            if not keep.contains(a.name) {
+                self.removed_attrs += 1;
+                continue;
+            }
+            if a.name == "href" and strip_ws(v).to_lowercase().starts_with("javascript:") {
+                self.removed_attrs += 1;
+                continue;
+            }
+            s.push_str(f" {a.name}=\"{escape(v, true)}\"");
+        }
+        if tag == "a" {
+            s.push_str(" rel=\"nofollow\"");
+        }
+        s.push('>');
+        self.out.push_str(s);
+        if closed and tag != "br" {
+            self.out.push_str(f"</{tag}>");
+        }
+    }
+
+    fn end(mut ref self, tag: ref String) {
+        if dropped_with_content(tag) {
+            if self.drop > 0 {
+                self.drop -= 1;
+            }
+            return;
+        }
+        if self.drop > 0 {
+            return;
+        }
+        match allowed_attrs(tag) {
+            Some(_) => {
+                if tag != "br" {
+                    self.out.push_str(f"</{tag}>");
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+fn sanitize(p: ref HtmlParser, out: mut ref String) {
+    let mut s = Sanitizer { out: String.new(), drop: 0, removed_tags: 0, removed_attrs: 0 };
+    for e in p.events.iter() {
+        match e.ev {
+            Event.Start(tag, attrs) => s.start(tag, attrs, false),
+            Event.StartEnd(tag, attrs) => s.start(tag, attrs, true),
+            Event.End(tag) => s.end(tag),
+            Event.Data(d) => {
+                if s.drop == 0 {
+                    s.out.push_str(escape(d, false));
+                }
+            }
+            _ => {}
+        }
+    }
+    for line in s.out.split("\n") {
+        out.push_str(f"  | {esc(line)}\n");
+    }
+    out.push_str(f"  removed {s.removed_tags} tags, {s.removed_attrs} attributes\n");
+}
+
+// ---------------------------------------------------------------- jobs
+
+fn source(arg: ref String) -> Result[String, String] {
+    if arg.starts_with("@") {
+        let path = f"data/pages/{arg[1..].to_string()}";
+        return match fs.read_to_string(path.clone()) {
+            Ok(s) => Ok(s),
+            Err(e) => Err(f"cannot read {path}: {e}"),
+        };
+    }
+    Ok(arg.replace("\\n", "\n"))
+}
+
+fn run(f: ref Vec[String], ents: ref Map[String, String], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    if kind == "events" {
+        let src = source(f[1])?;
+        let chunk = match i64.parse(f[3].clone()) {
+            Some(n) => n,
+            None => return Err(f"bad chunk {f[3]}"),
+        };
+        let p = parse_all(src, f[2] == "1", chunk, ents);
+        for e in p.events.iter() {
+            out.push_str(f"  {e.line}:{e.col} {event_text(e.ev)}\n");
+        }
+        let (line, col) = p.getpos();
+        out.push_str(f"  end {line}:{col}\n");
+    } else if kind == "unescape" {
+        out.push_str(f"  {esc(unescape(f[1], ents))}\n");
+    } else if kind == "escape" {
+        out.push_str(f"  {esc(escape(f[1], f[2] == "1"))}\n");
+    } else {
+        let src = source(f[1])?;
+        let p = parse_all(src, true, 0, ents);
+        if kind == "links" {
+            links(p, out);
+        } else if kind == "text" {
+            text_of(p, out);
+        } else if kind == "toc" {
+            toc(p, out);
+        } else if kind == "sanitize" {
+            sanitize(p, out);
+        } else {
+            return Err(f"unknown job {kind}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    for (path, contents) in data_files() {
+        let parts = path.split("/");
+        let mut dir = "data".to_string();
+        let mut k = 0;
+        while k + 1 < parts.len() {
+            dir = f"{dir}/{parts[k]}";
+            k += 1;
+        }
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            eprintln(f"cannot create {dir}: {e}");
+            return;
+        }
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let ents = html5_entities();
+    for job in jobs.lines() {
+        let f = job.split("\t");
+        let mut out = String.new();
+        println(f"== {esc(f.join(" | "))}");
+        match run(f, ents, mut out) {
+            Ok(()) => print(out),
+            Err(e) => {
+                print(out);
+                println(f"  error: {e}");
+            }
+        }
+    }
+}
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("<!DOCTYPE html>\n");
+    t.push_str("<html lang=\"en\">\n");
+    t.push_str("<head>\n");
+    t.push_str("  <meta charset=\"utf-8\">\n");
+    t.push_str("  <title>Caf&eacute; notes &mdash; Week 12 &amp; more</title>\n");
+    t.push_str("  <meta name=\"description\" content=\"What we roasted, brewed &amp; broke this week.\">\n");
+    t.push_str("  <link rel=\"stylesheet\" href=\"/css/site.css?v=3&amp;theme=dark\">\n");
+    t.push_str("  <link rel=\"alternate\" type=\"application/rss+xml\" href=\"/feed.xml\">\n");
+    t.push_str("  <style>\n");
+    t.push_str("    body > p { margin: 0 }  /* a > in CSS is not a tag */\n");
+    t.push_str("  </style>\n");
+    t.push_str("  <script>\n");
+    t.push_str("    if (a < b && c > d) { document.write(\"</div>\"); }\n");
+    t.push_str("    var s = '<p>not a tag</p>';\n");
+    t.push_str("  </script>\n");
+    t.push_str("</head>\n");
+    t.push_str("<body>\n");
+    t.push_str("<nav><a href=\"/\">Home</a> | <a href=\"/archive/\" title=\"All posts\">Archive</a> | <a href=/about>About</a></nav>\n");
+    t.push_str("<!-- main article starts here -->\n");
+    t.push_str("<article>\n");
+    t.push_str("<h1 id=\"week-12\">Week 12: the new grinder</h1>\n");
+    t.push_str("<p>We finally replaced the old burr grinder&#8230; and the espresso is <em>much</em> better.\n");
+    t.push_str("Prices went up 5&nbsp;% (sorry). See <a href=\"https://example.com/grind?size=fine&amp;unit=um\">the\n");
+    t.push_str("grind chart</a>.</p>\n");
+    t.push_str("<h2 id=\"beans\">Beans</h2>\n");
+    t.push_str("<ul>\n");
+    t.push_str("  <li>Ethiopia Guji &ndash; 18&nbsp;g in, 36&nbsp;g out</li>\n");
+    t.push_str("  <li>Colombia Huila &lt;sold out&gt;</li>\n");
+    t.push_str("</ul>\n");
+    t.push_str("<img src=\"/img/grinder.jpg\" alt=\"The new grinder &quot;Mk II&quot;\" width=640 height=480>\n");
+    t.push_str("<h2 id=\"recipes\">Recipes</h2>\n");
+    t.push_str("<h3 id=\"v60\">V60</h3>\n");
+    t.push_str("<pre><code>15 g coffee\n");
+    t.push_str("250 g water at 94&deg;C</code></pre>\n");
+    t.push_str("<p>Questions? <a href=\"mailto:hello@example.com\">Write to us</a>.<br/>\n");
+    t.push_str("Or ring the bell.</p>\n");
+    t.push_str("</article>\n");
+    t.push_str("<footer><p>&copy; 2026 Caf&eacute; Example &middot; <a href=\"/privacy\">Privacy</a></p></footer>\n");
+    t.push_str("</body>\n");
+    t.push_str("</html>\n");
+    v.push(("pages/blog.html".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<p>Thanks for the <b>great</b> post!</p>\n");
+    t.push_str("<script>alert('xss')</script>\n");
+    t.push_str("<p onclick=\"steal()\">Check <a href=\"javascript:alert(1)\">this</a> and\n");
+    t.push_str("<a href=\"https://good.example/page?a=1&amp;b=2\" title=\"Good &quot;site&quot;\" target=_blank>that</a>.</p>\n");
+    t.push_str("<img src=x onerror=alert(2)>\n");
+    t.push_str("<style>body{display:none}</style>\n");
+    t.push_str("<ul><li>one<li>two</ul>\n");
+    t.push_str("<i>caf&eacute; &lt;3</i> <code>a < b</code>\n");
+    t.push_str("<iframe src=\"https://evil.example/\"></iframe>\n");
+    t.push_str("<p>Bye</p>\n");
+    v.push(("pages/comment.html".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<!doctype html>\n");
+    t.push_str("<p class=a id='b' hidden data-x = \"1 > 0\" DATA-Y=Two>Mixed &amp attrs</p>\n");
+    t.push_str("<!---->\n");
+    t.push_str("<!-->abrupt\n");
+    t.push_str("<!--->abrupt too\n");
+    t.push_str("<!-- ends with bang --!>\n");
+    t.push_str("<!-- has -- inside -->\n");
+    t.push_str("<!not a doctype>\n");
+    t.push_str("<![CDATA[x < y]]>\n");
+    t.push_str("<?php echo \"hi\"; ?>\n");
+    t.push_str("</ >\n");
+    t.push_str("</>\n");
+    t.push_str("</3>\n");
+    t.push_str("<br/><br /><img src=\"a.png\"/>\n");
+    t.push_str("<a href=x/>bare slash</a>\n");
+    t.push_str("<DIV CLASS=\"Up\">Upper</DIV>\n");
+    t.push_str("<i>&ampx &notit; &notin; &#128; &#0; &#x110000; &#xD800; &#65&#x42; &bogus;</i>\n");
+    t.push_str("<b title=\"&ampx &notit; &copy=3 &lt;&#62;\">attr refs</b>\n");
+    t.push_str("<script>if (x </scriptx> y) {}</script >\n");
+    t.push_str("<textarea name=t>a <b>bold</b> &amp; </textarea>\n");
+    t.push_str("< not a tag\n");
+    t.push_str("&# and &#x and & alone\n");
+    t.push_str("<span>last\n");
+    t.push_str("<a b='unclosed>text here\n");
+    v.push(("pages/edge.html".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<form action=\"/search\" method=get>\n");
+    t.push_str("<label for=q>Search</label>\n");
+    t.push_str("<input type=\"text\" name=\"q\" value=\"&quot;exact phrase&quot;\" autofocus>\n");
+    t.push_str("<select name=\"sort\"><option value=new selected>Newest<option value=old>Oldest</select>\n");
+    t.push_str("<input type=checkbox name=safe checked disabled>\n");
+    t.push_str("<button type=\"submit\" onclick=\"go('/search?q=1&amp;page=2')\">Go</button>\n");
+    t.push_str("</form>\n");
+    t.push_str("<title>Search &amp; find</title>\n");
+    v.push(("pages/form.html".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<p>Before</p>\n");
+    t.push_str("<plaintext>\n");
+    t.push_str("<b>after plaintext everything is text</b> &amp; </plaintext>\n");
+    v.push(("pages/plain.html".to_string(), t));
+    let mut t = String.new();
+    t.push_str("<h1 id=\"intro\">Grüße aus Köln 🍺</h1>\n");
+    t.push_str("<p>Zwei Zeilen:\n");
+    t.push_str("ä ö ü — und <b>ß</b>.</p>\n");
+    t.push_str("<h2 id=\"mehr\">Mehr &rarr; Info</h2>\n");
+    t.push_str("<p>日本語のテキスト &amp; <a href=\"/ja/\">リンク</a></p>\n");
+    v.push(("pages/unicode.html".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("events\t@edge.html\t1\t0\n");
+    s.push_str("events\t@form.html\t1\t0\n");
+    s.push_str("events\t@plain.html\t1\t0\n");
+    s.push_str("events\t@unicode.html\t1\t0\n");
+    s.push_str("events\t@edge.html\t0\t0\n");
+    s.push_str("events\t@edge.html\t1\t7\n");
+    s.push_str("events\t@edge.html\t0\t1\n");
+    s.push_str("events\t@unicode.html\t1\t5\n");
+    s.push_str("events\t@blog.html\t1\t64\n");
+    s.push_str("events\t<a href=\"x\">link</a>\t1\t0\n");
+    s.push_str("events\t<a href=\"x\">link</a>\t0\t0\n");
+    s.push_str("events\ta &amp b &amp; c &#x26; d\t1\t0\n");
+    s.push_str("events\ta &amp b &amp; c &#x26; d\t0\t0\n");
+    s.push_str("events\t&amp\t1\t0\n");
+    s.push_str("events\t&amp\t0\t0\n");
+    s.push_str("events\t&am\t1\t0\n");
+    s.push_str("events\t&am\t0\t0\n");
+    s.push_str("events\tx &#38\t1\t0\n");
+    s.push_str("events\tx &#38\t0\t0\n");
+    s.push_str("events\tx &#\t1\t0\n");
+    s.push_str("events\tx &#\t0\t0\n");
+    s.push_str("events\t<b\t1\t0\n");
+    s.push_str("events\t<b\t0\t0\n");
+    s.push_str("events\t<b class='x\t1\t0\n");
+    s.push_str("events\t<b class='x\t0\t0\n");
+    s.push_str("events\t</b\t1\t0\n");
+    s.push_str("events\t</b\t0\t0\n");
+    s.push_str("events\t<!-- open\t1\t0\n");
+    s.push_str("events\t<!-- open\t0\t0\n");
+    s.push_str("events\t<!-- open --\t1\t0\n");
+    s.push_str("events\t<!-- open --\t0\t0\n");
+    s.push_str("events\t<!doctype html\t1\t0\n");
+    s.push_str("events\t<!doctype html\t0\t0\n");
+    s.push_str("events\t<?pi\t1\t0\n");
+    s.push_str("events\t<?pi\t0\t0\n");
+    s.push_str("events\t<![CDATA[open\t1\t0\n");
+    s.push_str("events\t<![CDATA[open\t0\t0\n");
+    s.push_str("events\t<!bogus\t1\t0\n");
+    s.push_str("events\t<!bogus\t0\t0\n");
+    s.push_str("events\t</ bogus\t1\t0\n");
+    s.push_str("events\t</ bogus\t0\t0\n");
+    s.push_str("events\t<\t1\t0\n");
+    s.push_str("events\t<\t0\t0\n");
+    s.push_str("events\ta<\t1\t0\n");
+    s.push_str("events\ta<\t0\t0\n");
+    s.push_str("events\t<script>x</script\t1\t0\n");
+    s.push_str("events\t<script>x</script\t0\t0\n");
+    s.push_str("events\t<title>t &amp; u\t1\t0\n");
+    s.push_str("events\t<title>t &amp; u\t0\t0\n");
+    s.push_str("events\t<p>line1\\nline2<br>\\n<i>three</i>\t1\t0\n");
+    s.push_str("events\t<p>line1\\nline2<br>\\n<i>three</i>\t0\t0\n");
+    s.push_str("unescape\tfish &amp; chips\n");
+    s.push_str("unescape\t&lt;tag&gt;\n");
+    s.push_str("unescape\t&ampx &amp;x\n");
+    s.push_str("unescape\t&notit; &notin; &not\n");
+    s.push_str("unescape\t&#65;&#x42;&#X43;\n");
+    s.push_str("unescape\t&#0; &#13; &#128; &#150; &#159;\n");
+    s.push_str("unescape\t&#x110000; &#xD800; &#xFFFE; &#1;\n");
+    s.push_str("unescape\t&#99999999999999999999;\n");
+    s.push_str("unescape\t&bogus; & &; &#; &#x;\n");
+    s.push_str("unescape\t&AMP; &Amp; &QUOT;\n");
+    s.push_str("unescape\t&centerdot; &cent &centx\n");
+    s.push_str("unescape\t&ThickSpace; &NotEqualTilde; &fjlig;\n");
+    s.push_str("unescape\t&eacutex &Eacute;\n");
+    s.push_str("unescape\tno refs at all\n");
+    s.push_str("unescape\t&&amp;&&\n");
+    s.push_str("escape\t<a href=\"x\">'hi' & bye</a>\t1\n");
+    s.push_str("escape\t<a href=\"x\">'hi' & bye</a>\t0\n");
+    s.push_str("escape\t&amp; already\t1\n");
+    s.push_str("escape\tplain\t1\n");
+    s.push_str("links\t@blog.html\n");
+    s.push_str("links\t@edge.html\n");
+    s.push_str("links\t@form.html\n");
+    s.push_str("links\t@comment.html\n");
+    s.push_str("text\t@blog.html\n");
+    s.push_str("text\t@comment.html\n");
+    s.push_str("text\t@unicode.html\n");
+    s.push_str("text\t@plain.html\n");
+    s.push_str("toc\t@blog.html\n");
+    s.push_str("toc\t@unicode.html\n");
+    s.push_str("toc\t@edge.html\n");
+    s.push_str("sanitize\t@comment.html\n");
+    s.push_str("sanitize\t@blog.html\n");
+    s.push_str("sanitize\t@edge.html\n");
+    s
+}
+
+// html.entities.html5: each name (with or without its ';') and its text.
+fn html5_entities() -> Map[String, String] {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("AElig".to_string(), "\u{c6}".to_string());
+    m.insert("AElig;".to_string(), "\u{c6}".to_string());
+    m.insert("AMP".to_string(), "&".to_string());
+    m.insert("AMP;".to_string(), "&".to_string());
+    m.insert("Aacute".to_string(), "\u{c1}".to_string());
+    m.insert("Aacute;".to_string(), "\u{c1}".to_string());
+    m.insert("Abreve;".to_string(), "\u{102}".to_string());
+    m.insert("Acirc".to_string(), "\u{c2}".to_string());
+    m.insert("Acirc;".to_string(), "\u{c2}".to_string());
+    m.insert("Acy;".to_string(), "\u{410}".to_string());
+    m.insert("Afr;".to_string(), "\u{1d504}".to_string());
+    m.insert("Agrave".to_string(), "\u{c0}".to_string());
+    m.insert("Agrave;".to_string(), "\u{c0}".to_string());
+    m.insert("Alpha;".to_string(), "\u{391}".to_string());
+    m.insert("Amacr;".to_string(), "\u{100}".to_string());
+    m.insert("And;".to_string(), "\u{2a53}".to_string());
+    m.insert("Aogon;".to_string(), "\u{104}".to_string());
+    m.insert("Aopf;".to_string(), "\u{1d538}".to_string());
+    m.insert("ApplyFunction;".to_string(), "\u{2061}".to_string());
+    m.insert("Aring".to_string(), "\u{c5}".to_string());
+    m.insert("Aring;".to_string(), "\u{c5}".to_string());
+    m.insert("Ascr;".to_string(), "\u{1d49c}".to_string());
+    m.insert("Assign;".to_string(), "\u{2254}".to_string());
+    m.insert("Atilde".to_string(), "\u{c3}".to_string());
+    m.insert("Atilde;".to_string(), "\u{c3}".to_string());
+    m.insert("Auml".to_string(), "\u{c4}".to_string());
+    m.insert("Auml;".to_string(), "\u{c4}".to_string());
+    m.insert("Backslash;".to_string(), "\u{2216}".to_string());
+    m.insert("Barv;".to_string(), "\u{2ae7}".to_string());
+    m.insert("Barwed;".to_string(), "\u{2306}".to_string());
+    m.insert("Bcy;".to_string(), "\u{411}".to_string());
+    m.insert("Because;".to_string(), "\u{2235}".to_string());
+    m.insert("Bernoullis;".to_string(), "\u{212c}".to_string());
+    m.insert("Beta;".to_string(), "\u{392}".to_string());
+    m.insert("Bfr;".to_string(), "\u{1d505}".to_string());
+    m.insert("Bopf;".to_string(), "\u{1d539}".to_string());
+    m.insert("Breve;".to_string(), "\u{2d8}".to_string());
+    m.insert("Bscr;".to_string(), "\u{212c}".to_string());
+    m.insert("Bumpeq;".to_string(), "\u{224e}".to_string());
+    m.insert("CHcy;".to_string(), "\u{427}".to_string());
+    m.insert("COPY".to_string(), "\u{a9}".to_string());
+    m.insert("COPY;".to_string(), "\u{a9}".to_string());
+    m.insert("Cacute;".to_string(), "\u{106}".to_string());
+    m.insert("Cap;".to_string(), "\u{22d2}".to_string());
+    m.insert("CapitalDifferentialD;".to_string(), "\u{2145}".to_string());
+    m.insert("Cayleys;".to_string(), "\u{212d}".to_string());
+    m.insert("Ccaron;".to_string(), "\u{10c}".to_string());
+    m.insert("Ccedil".to_string(), "\u{c7}".to_string());
+    m.insert("Ccedil;".to_string(), "\u{c7}".to_string());
+    m.insert("Ccirc;".to_string(), "\u{108}".to_string());
+    m.insert("Cconint;".to_string(), "\u{2230}".to_string());
+    m.insert("Cdot;".to_string(), "\u{10a}".to_string());
+    m.insert("Cedilla;".to_string(), "\u{b8}".to_string());
+    m.insert("CenterDot;".to_string(), "\u{b7}".to_string());
+    m.insert("Cfr;".to_string(), "\u{212d}".to_string());
+    m.insert("Chi;".to_string(), "\u{3a7}".to_string());
+    m.insert("CircleDot;".to_string(), "\u{2299}".to_string());
+    m.insert("CircleMinus;".to_string(), "\u{2296}".to_string());
+    m.insert("CirclePlus;".to_string(), "\u{2295}".to_string());
+    m.insert("CircleTimes;".to_string(), "\u{2297}".to_string());
+    m.insert("ClockwiseContourIntegral;".to_string(), "\u{2232}".to_string());
+    m.insert("CloseCurlyDoubleQuote;".to_string(), "\u{201d}".to_string());
+    m.insert("CloseCurlyQuote;".to_string(), "\u{2019}".to_string());
+    m.insert("Colon;".to_string(), "\u{2237}".to_string());
+    m.insert("Colone;".to_string(), "\u{2a74}".to_string());
+    m.insert("Congruent;".to_string(), "\u{2261}".to_string());
+    m.insert("Conint;".to_string(), "\u{222f}".to_string());
+    m.insert("ContourIntegral;".to_string(), "\u{222e}".to_string());
+    m.insert("Copf;".to_string(), "\u{2102}".to_string());
+    m.insert("Coproduct;".to_string(), "\u{2210}".to_string());
+    m.insert("CounterClockwiseContourIntegral;".to_string(), "\u{2233}".to_string());
+    m.insert("Cross;".to_string(), "\u{2a2f}".to_string());
+    m.insert("Cscr;".to_string(), "\u{1d49e}".to_string());
+    m.insert("Cup;".to_string(), "\u{22d3}".to_string());
+    m.insert("CupCap;".to_string(), "\u{224d}".to_string());
+    m.insert("DD;".to_string(), "\u{2145}".to_string());
+    m.insert("DDotrahd;".to_string(), "\u{2911}".to_string());
+    m.insert("DJcy;".to_string(), "\u{402}".to_string());
+    m.insert("DScy;".to_string(), "\u{405}".to_string());
+    m.insert("DZcy;".to_string(), "\u{40f}".to_string());
+    m.insert("Dagger;".to_string(), "\u{2021}".to_string());
+    m.insert("Darr;".to_string(), "\u{21a1}".to_string());
+    m.insert("Dashv;".to_string(), "\u{2ae4}".to_string());
+    m.insert("Dcaron;".to_string(), "\u{10e}".to_string());
+    m.insert("Dcy;".to_string(), "\u{414}".to_string());
+    m.insert("Del;".to_string(), "\u{2207}".to_string());
+    m.insert("Delta;".to_string(), "\u{394}".to_string());
+    m.insert("Dfr;".to_string(), "\u{1d507}".to_string());
+    m.insert("DiacriticalAcute;".to_string(), "\u{b4}".to_string());
+    m.insert("DiacriticalDot;".to_string(), "\u{2d9}".to_string());
+    m.insert("DiacriticalDoubleAcute;".to_string(), "\u{2dd}".to_string());
+    m.insert("DiacriticalGrave;".to_string(), "`".to_string());
+    m.insert("DiacriticalTilde;".to_string(), "\u{2dc}".to_string());
+    m.insert("Diamond;".to_string(), "\u{22c4}".to_string());
+    m.insert("DifferentialD;".to_string(), "\u{2146}".to_string());
+    m.insert("Dopf;".to_string(), "\u{1d53b}".to_string());
+    m.insert("Dot;".to_string(), "\u{a8}".to_string());
+    m.insert("DotDot;".to_string(), "\u{20dc}".to_string());
+    m.insert("DotEqual;".to_string(), "\u{2250}".to_string());
+    m.insert("DoubleContourIntegral;".to_string(), "\u{222f}".to_string());
+    m.insert("DoubleDot;".to_string(), "\u{a8}".to_string());
+    m.insert("DoubleDownArrow;".to_string(), "\u{21d3}".to_string());
+    m.insert("DoubleLeftArrow;".to_string(), "\u{21d0}".to_string());
+    m.insert("DoubleLeftRightArrow;".to_string(), "\u{21d4}".to_string());
+    m.insert("DoubleLeftTee;".to_string(), "\u{2ae4}".to_string());
+    m.insert("DoubleLongLeftArrow;".to_string(), "\u{27f8}".to_string());
+    m.insert("DoubleLongLeftRightArrow;".to_string(), "\u{27fa}".to_string());
+    m.insert("DoubleLongRightArrow;".to_string(), "\u{27f9}".to_string());
+    m.insert("DoubleRightArrow;".to_string(), "\u{21d2}".to_string());
+    m.insert("DoubleRightTee;".to_string(), "\u{22a8}".to_string());
+    m.insert("DoubleUpArrow;".to_string(), "\u{21d1}".to_string());
+    m.insert("DoubleUpDownArrow;".to_string(), "\u{21d5}".to_string());
+    m.insert("DoubleVerticalBar;".to_string(), "\u{2225}".to_string());
+    m.insert("DownArrow;".to_string(), "\u{2193}".to_string());
+    m.insert("DownArrowBar;".to_string(), "\u{2913}".to_string());
+    m.insert("DownArrowUpArrow;".to_string(), "\u{21f5}".to_string());
+    m.insert("DownBreve;".to_string(), "\u{311}".to_string());
+    m.insert("DownLeftRightVector;".to_string(), "\u{2950}".to_string());
+    m.insert("DownLeftTeeVector;".to_string(), "\u{295e}".to_string());
+    m.insert("DownLeftVector;".to_string(), "\u{21bd}".to_string());
+    m.insert("DownLeftVectorBar;".to_string(), "\u{2956}".to_string());
+    m.insert("DownRightTeeVector;".to_string(), "\u{295f}".to_string());
+    m.insert("DownRightVector;".to_string(), "\u{21c1}".to_string());
+    m.insert("DownRightVectorBar;".to_string(), "\u{2957}".to_string());
+    m.insert("DownTee;".to_string(), "\u{22a4}".to_string());
+    m.insert("DownTeeArrow;".to_string(), "\u{21a7}".to_string());
+    m.insert("Downarrow;".to_string(), "\u{21d3}".to_string());
+    m.insert("Dscr;".to_string(), "\u{1d49f}".to_string());
+    m.insert("Dstrok;".to_string(), "\u{110}".to_string());
+    m.insert("ENG;".to_string(), "\u{14a}".to_string());
+    m.insert("ETH".to_string(), "\u{d0}".to_string());
+    m.insert("ETH;".to_string(), "\u{d0}".to_string());
+    m.insert("Eacute".to_string(), "\u{c9}".to_string());
+    m.insert("Eacute;".to_string(), "\u{c9}".to_string());
+    m.insert("Ecaron;".to_string(), "\u{11a}".to_string());
+    m.insert("Ecirc".to_string(), "\u{ca}".to_string());
+    m.insert("Ecirc;".to_string(), "\u{ca}".to_string());
+    m.insert("Ecy;".to_string(), "\u{42d}".to_string());
+    m.insert("Edot;".to_string(), "\u{116}".to_string());
+    m.insert("Efr;".to_string(), "\u{1d508}".to_string());
+    m.insert("Egrave".to_string(), "\u{c8}".to_string());
+    m.insert("Egrave;".to_string(), "\u{c8}".to_string());
+    m.insert("Element;".to_string(), "\u{2208}".to_string());
+    m.insert("Emacr;".to_string(), "\u{112}".to_string());
+    m.insert("EmptySmallSquare;".to_string(), "\u{25fb}".to_string());
+    m.insert("EmptyVerySmallSquare;".to_string(), "\u{25ab}".to_string());
+    m.insert("Eogon;".to_string(), "\u{118}".to_string());
+    m.insert("Eopf;".to_string(), "\u{1d53c}".to_string());
+    m.insert("Epsilon;".to_string(), "\u{395}".to_string());
+    m.insert("Equal;".to_string(), "\u{2a75}".to_string());
+    m.insert("EqualTilde;".to_string(), "\u{2242}".to_string());
+    m.insert("Equilibrium;".to_string(), "\u{21cc}".to_string());
+    m.insert("Escr;".to_string(), "\u{2130}".to_string());
+    m.insert("Esim;".to_string(), "\u{2a73}".to_string());
+    m.insert("Eta;".to_string(), "\u{397}".to_string());
+    m.insert("Euml".to_string(), "\u{cb}".to_string());
+    m.insert("Euml;".to_string(), "\u{cb}".to_string());
+    m.insert("Exists;".to_string(), "\u{2203}".to_string());
+    m.insert("ExponentialE;".to_string(), "\u{2147}".to_string());
+    m.insert("Fcy;".to_string(), "\u{424}".to_string());
+    m.insert("Ffr;".to_string(), "\u{1d509}".to_string());
+    m.insert("FilledSmallSquare;".to_string(), "\u{25fc}".to_string());
+    m.insert("FilledVerySmallSquare;".to_string(), "\u{25aa}".to_string());
+    m.insert("Fopf;".to_string(), "\u{1d53d}".to_string());
+    m.insert("ForAll;".to_string(), "\u{2200}".to_string());
+    m.insert("Fouriertrf;".to_string(), "\u{2131}".to_string());
+    m.insert("Fscr;".to_string(), "\u{2131}".to_string());
+    m.insert("GJcy;".to_string(), "\u{403}".to_string());
+    m.insert("GT".to_string(), ">".to_string());
+    m.insert("GT;".to_string(), ">".to_string());
+    m.insert("Gamma;".to_string(), "\u{393}".to_string());
+    m.insert("Gammad;".to_string(), "\u{3dc}".to_string());
+    m.insert("Gbreve;".to_string(), "\u{11e}".to_string());
+    m.insert("Gcedil;".to_string(), "\u{122}".to_string());
+    m.insert("Gcirc;".to_string(), "\u{11c}".to_string());
+    m.insert("Gcy;".to_string(), "\u{413}".to_string());
+    m.insert("Gdot;".to_string(), "\u{120}".to_string());
+    m.insert("Gfr;".to_string(), "\u{1d50a}".to_string());
+    m.insert("Gg;".to_string(), "\u{22d9}".to_string());
+    m.insert("Gopf;".to_string(), "\u{1d53e}".to_string());
+    m.insert("GreaterEqual;".to_string(), "\u{2265}".to_string());
+    m.insert("GreaterEqualLess;".to_string(), "\u{22db}".to_string());
+    m.insert("GreaterFullEqual;".to_string(), "\u{2267}".to_string());
+    m.insert("GreaterGreater;".to_string(), "\u{2aa2}".to_string());
+    m.insert("GreaterLess;".to_string(), "\u{2277}".to_string());
+    m.insert("GreaterSlantEqual;".to_string(), "\u{2a7e}".to_string());
+    m.insert("GreaterTilde;".to_string(), "\u{2273}".to_string());
+    m.insert("Gscr;".to_string(), "\u{1d4a2}".to_string());
+    m.insert("Gt;".to_string(), "\u{226b}".to_string());
+    m.insert("HARDcy;".to_string(), "\u{42a}".to_string());
+    m.insert("Hacek;".to_string(), "\u{2c7}".to_string());
+    m.insert("Hat;".to_string(), "^".to_string());
+    m.insert("Hcirc;".to_string(), "\u{124}".to_string());
+    m.insert("Hfr;".to_string(), "\u{210c}".to_string());
+    m.insert("HilbertSpace;".to_string(), "\u{210b}".to_string());
+    m.insert("Hopf;".to_string(), "\u{210d}".to_string());
+    m.insert("HorizontalLine;".to_string(), "\u{2500}".to_string());
+    m.insert("Hscr;".to_string(), "\u{210b}".to_string());
+    m.insert("Hstrok;".to_string(), "\u{126}".to_string());
+    m.insert("HumpDownHump;".to_string(), "\u{224e}".to_string());
+    m.insert("HumpEqual;".to_string(), "\u{224f}".to_string());
+    m.insert("IEcy;".to_string(), "\u{415}".to_string());
+    m.insert("IJlig;".to_string(), "\u{132}".to_string());
+    m.insert("IOcy;".to_string(), "\u{401}".to_string());
+    m.insert("Iacute".to_string(), "\u{cd}".to_string());
+    m.insert("Iacute;".to_string(), "\u{cd}".to_string());
+    m.insert("Icirc".to_string(), "\u{ce}".to_string());
+    m.insert("Icirc;".to_string(), "\u{ce}".to_string());
+    m.insert("Icy;".to_string(), "\u{418}".to_string());
+    m.insert("Idot;".to_string(), "\u{130}".to_string());
+    m.insert("Ifr;".to_string(), "\u{2111}".to_string());
+    m.insert("Igrave".to_string(), "\u{cc}".to_string());
+    m.insert("Igrave;".to_string(), "\u{cc}".to_string());
+    m.insert("Im;".to_string(), "\u{2111}".to_string());
+    m.insert("Imacr;".to_string(), "\u{12a}".to_string());
+    m.insert("ImaginaryI;".to_string(), "\u{2148}".to_string());
+    m.insert("Implies;".to_string(), "\u{21d2}".to_string());
+    m.insert("Int;".to_string(), "\u{222c}".to_string());
+    m.insert("Integral;".to_string(), "\u{222b}".to_string());
+    m.insert("Intersection;".to_string(), "\u{22c2}".to_string());
+    m.insert("InvisibleComma;".to_string(), "\u{2063}".to_string());
+    m.insert("InvisibleTimes;".to_string(), "\u{2062}".to_string());
+    m.insert("Iogon;".to_string(), "\u{12e}".to_string());
+    m.insert("Iopf;".to_string(), "\u{1d540}".to_string());
+    m.insert("Iota;".to_string(), "\u{399}".to_string());
+    m.insert("Iscr;".to_string(), "\u{2110}".to_string());
+    m.insert("Itilde;".to_string(), "\u{128}".to_string());
+    m.insert("Iukcy;".to_string(), "\u{406}".to_string());
+    m.insert("Iuml".to_string(), "\u{cf}".to_string());
+    m.insert("Iuml;".to_string(), "\u{cf}".to_string());
+    m.insert("Jcirc;".to_string(), "\u{134}".to_string());
+    m.insert("Jcy;".to_string(), "\u{419}".to_string());
+    m.insert("Jfr;".to_string(), "\u{1d50d}".to_string());
+    m.insert("Jopf;".to_string(), "\u{1d541}".to_string());
+    m.insert("Jscr;".to_string(), "\u{1d4a5}".to_string());
+    m.insert("Jsercy;".to_string(), "\u{408}".to_string());
+    m.insert("Jukcy;".to_string(), "\u{404}".to_string());
+    m.insert("KHcy;".to_string(), "\u{425}".to_string());
+    m.insert("KJcy;".to_string(), "\u{40c}".to_string());
+    m.insert("Kappa;".to_string(), "\u{39a}".to_string());
+    m.insert("Kcedil;".to_string(), "\u{136}".to_string());
+    m.insert("Kcy;".to_string(), "\u{41a}".to_string());
+    m.insert("Kfr;".to_string(), "\u{1d50e}".to_string());
+    m.insert("Kopf;".to_string(), "\u{1d542}".to_string());
+    m.insert("Kscr;".to_string(), "\u{1d4a6}".to_string());
+    m.insert("LJcy;".to_string(), "\u{409}".to_string());
+    m.insert("LT".to_string(), "<".to_string());
+    m.insert("LT;".to_string(), "<".to_string());
+    m.insert("Lacute;".to_string(), "\u{139}".to_string());
+    m.insert("Lambda;".to_string(), "\u{39b}".to_string());
+    m.insert("Lang;".to_string(), "\u{27ea}".to_string());
+    m.insert("Laplacetrf;".to_string(), "\u{2112}".to_string());
+    m.insert("Larr;".to_string(), "\u{219e}".to_string());
+    m.insert("Lcaron;".to_string(), "\u{13d}".to_string());
+    m.insert("Lcedil;".to_string(), "\u{13b}".to_string());
+    m.insert("Lcy;".to_string(), "\u{41b}".to_string());
+    m.insert("LeftAngleBracket;".to_string(), "\u{27e8}".to_string());
+    m.insert("LeftArrow;".to_string(), "\u{2190}".to_string());
+    m.insert("LeftArrowBar;".to_string(), "\u{21e4}".to_string());
+    m.insert("LeftArrowRightArrow;".to_string(), "\u{21c6}".to_string());
+    m.insert("LeftCeiling;".to_string(), "\u{2308}".to_string());
+    m.insert("LeftDoubleBracket;".to_string(), "\u{27e6}".to_string());
+    m.insert("LeftDownTeeVector;".to_string(), "\u{2961}".to_string());
+    m.insert("LeftDownVector;".to_string(), "\u{21c3}".to_string());
+    m.insert("LeftDownVectorBar;".to_string(), "\u{2959}".to_string());
+    m.insert("LeftFloor;".to_string(), "\u{230a}".to_string());
+    m.insert("LeftRightArrow;".to_string(), "\u{2194}".to_string());
+    m.insert("LeftRightVector;".to_string(), "\u{294e}".to_string());
+    m.insert("LeftTee;".to_string(), "\u{22a3}".to_string());
+    m.insert("LeftTeeArrow;".to_string(), "\u{21a4}".to_string());
+    m.insert("LeftTeeVector;".to_string(), "\u{295a}".to_string());
+    m.insert("LeftTriangle;".to_string(), "\u{22b2}".to_string());
+    m.insert("LeftTriangleBar;".to_string(), "\u{29cf}".to_string());
+    m.insert("LeftTriangleEqual;".to_string(), "\u{22b4}".to_string());
+    m.insert("LeftUpDownVector;".to_string(), "\u{2951}".to_string());
+    m.insert("LeftUpTeeVector;".to_string(), "\u{2960}".to_string());
+    m.insert("LeftUpVector;".to_string(), "\u{21bf}".to_string());
+    m.insert("LeftUpVectorBar;".to_string(), "\u{2958}".to_string());
+    m.insert("LeftVector;".to_string(), "\u{21bc}".to_string());
+    m.insert("LeftVectorBar;".to_string(), "\u{2952}".to_string());
+    m.insert("Leftarrow;".to_string(), "\u{21d0}".to_string());
+    m.insert("Leftrightarrow;".to_string(), "\u{21d4}".to_string());
+    m.insert("LessEqualGreater;".to_string(), "\u{22da}".to_string());
+    m.insert("LessFullEqual;".to_string(), "\u{2266}".to_string());
+    m.insert("LessGreater;".to_string(), "\u{2276}".to_string());
+    m.insert("LessLess;".to_string(), "\u{2aa1}".to_string());
+    m.insert("LessSlantEqual;".to_string(), "\u{2a7d}".to_string());
+    m.insert("LessTilde;".to_string(), "\u{2272}".to_string());
+    m.insert("Lfr;".to_string(), "\u{1d50f}".to_string());
+    m.insert("Ll;".to_string(), "\u{22d8}".to_string());
+    m.insert("Lleftarrow;".to_string(), "\u{21da}".to_string());
+    m.insert("Lmidot;".to_string(), "\u{13f}".to_string());
+    m.insert("LongLeftArrow;".to_string(), "\u{27f5}".to_string());
+    m.insert("LongLeftRightArrow;".to_string(), "\u{27f7}".to_string());
+    m.insert("LongRightArrow;".to_string(), "\u{27f6}".to_string());
+    m.insert("Longleftarrow;".to_string(), "\u{27f8}".to_string());
+    m.insert("Longleftrightarrow;".to_string(), "\u{27fa}".to_string());
+    m.insert("Longrightarrow;".to_string(), "\u{27f9}".to_string());
+    m.insert("Lopf;".to_string(), "\u{1d543}".to_string());
+    m.insert("LowerLeftArrow;".to_string(), "\u{2199}".to_string());
+    m.insert("LowerRightArrow;".to_string(), "\u{2198}".to_string());
+    m.insert("Lscr;".to_string(), "\u{2112}".to_string());
+    m.insert("Lsh;".to_string(), "\u{21b0}".to_string());
+    m.insert("Lstrok;".to_string(), "\u{141}".to_string());
+    m.insert("Lt;".to_string(), "\u{226a}".to_string());
+    m.insert("Map;".to_string(), "\u{2905}".to_string());
+    m.insert("Mcy;".to_string(), "\u{41c}".to_string());
+    m.insert("MediumSpace;".to_string(), "\u{205f}".to_string());
+    m.insert("Mellintrf;".to_string(), "\u{2133}".to_string());
+    m.insert("Mfr;".to_string(), "\u{1d510}".to_string());
+    m.insert("MinusPlus;".to_string(), "\u{2213}".to_string());
+    m.insert("Mopf;".to_string(), "\u{1d544}".to_string());
+    m.insert("Mscr;".to_string(), "\u{2133}".to_string());
+    m.insert("Mu;".to_string(), "\u{39c}".to_string());
+    m.insert("NJcy;".to_string(), "\u{40a}".to_string());
+    m.insert("Nacute;".to_string(), "\u{143}".to_string());
+    m.insert("Ncaron;".to_string(), "\u{147}".to_string());
+    m.insert("Ncedil;".to_string(), "\u{145}".to_string());
+    m.insert("Ncy;".to_string(), "\u{41d}".to_string());
+    m.insert("NegativeMediumSpace;".to_string(), "\u{200b}".to_string());
+    m.insert("NegativeThickSpace;".to_string(), "\u{200b}".to_string());
+    m.insert("NegativeThinSpace;".to_string(), "\u{200b}".to_string());
+    m.insert("NegativeVeryThinSpace;".to_string(), "\u{200b}".to_string());
+    m.insert("NestedGreaterGreater;".to_string(), "\u{226b}".to_string());
+    m.insert("NestedLessLess;".to_string(), "\u{226a}".to_string());
+    m.insert("NewLine;".to_string(), "\u{a}".to_string());
+    m.insert("Nfr;".to_string(), "\u{1d511}".to_string());
+    m.insert("NoBreak;".to_string(), "\u{2060}".to_string());
+    m.insert("NonBreakingSpace;".to_string(), "\u{a0}".to_string());
+    m.insert("Nopf;".to_string(), "\u{2115}".to_string());
+    m.insert("Not;".to_string(), "\u{2aec}".to_string());
+    m.insert("NotCongruent;".to_string(), "\u{2262}".to_string());
+    m.insert("NotCupCap;".to_string(), "\u{226d}".to_string());
+    m.insert("NotDoubleVerticalBar;".to_string(), "\u{2226}".to_string());
+    m.insert("NotElement;".to_string(), "\u{2209}".to_string());
+    m.insert("NotEqual;".to_string(), "\u{2260}".to_string());
+    m.insert("NotEqualTilde;".to_string(), "\u{2242}\u{338}".to_string());
+    m.insert("NotExists;".to_string(), "\u{2204}".to_string());
+    m.insert("NotGreater;".to_string(), "\u{226f}".to_string());
+    m.insert("NotGreaterEqual;".to_string(), "\u{2271}".to_string());
+    m.insert("NotGreaterFullEqual;".to_string(), "\u{2267}\u{338}".to_string());
+    m.insert("NotGreaterGreater;".to_string(), "\u{226b}\u{338}".to_string());
+    m.insert("NotGreaterLess;".to_string(), "\u{2279}".to_string());
+    m.insert("NotGreaterSlantEqual;".to_string(), "\u{2a7e}\u{338}".to_string());
+    m.insert("NotGreaterTilde;".to_string(), "\u{2275}".to_string());
+    m.insert("NotHumpDownHump;".to_string(), "\u{224e}\u{338}".to_string());
+    m.insert("NotHumpEqual;".to_string(), "\u{224f}\u{338}".to_string());
+    m.insert("NotLeftTriangle;".to_string(), "\u{22ea}".to_string());
+    m.insert("NotLeftTriangleBar;".to_string(), "\u{29cf}\u{338}".to_string());
+    m.insert("NotLeftTriangleEqual;".to_string(), "\u{22ec}".to_string());
+    m.insert("NotLess;".to_string(), "\u{226e}".to_string());
+    m.insert("NotLessEqual;".to_string(), "\u{2270}".to_string());
+    m.insert("NotLessGreater;".to_string(), "\u{2278}".to_string());
+    m.insert("NotLessLess;".to_string(), "\u{226a}\u{338}".to_string());
+    m.insert("NotLessSlantEqual;".to_string(), "\u{2a7d}\u{338}".to_string());
+    m.insert("NotLessTilde;".to_string(), "\u{2274}".to_string());
+    m.insert("NotNestedGreaterGreater;".to_string(), "\u{2aa2}\u{338}".to_string());
+    m.insert("NotNestedLessLess;".to_string(), "\u{2aa1}\u{338}".to_string());
+    m.insert("NotPrecedes;".to_string(), "\u{2280}".to_string());
+    m.insert("NotPrecedesEqual;".to_string(), "\u{2aaf}\u{338}".to_string());
+    m.insert("NotPrecedesSlantEqual;".to_string(), "\u{22e0}".to_string());
+    m.insert("NotReverseElement;".to_string(), "\u{220c}".to_string());
+    m.insert("NotRightTriangle;".to_string(), "\u{22eb}".to_string());
+    m.insert("NotRightTriangleBar;".to_string(), "\u{29d0}\u{338}".to_string());
+    m.insert("NotRightTriangleEqual;".to_string(), "\u{22ed}".to_string());
+    m.insert("NotSquareSubset;".to_string(), "\u{228f}\u{338}".to_string());
+    m.insert("NotSquareSubsetEqual;".to_string(), "\u{22e2}".to_string());
+    m.insert("NotSquareSuperset;".to_string(), "\u{2290}\u{338}".to_string());
+    m.insert("NotSquareSupersetEqual;".to_string(), "\u{22e3}".to_string());
+    m.insert("NotSubset;".to_string(), "\u{2282}\u{20d2}".to_string());
+    m.insert("NotSubsetEqual;".to_string(), "\u{2288}".to_string());
+    m.insert("NotSucceeds;".to_string(), "\u{2281}".to_string());
+    m.insert("NotSucceedsEqual;".to_string(), "\u{2ab0}\u{338}".to_string());
+    m.insert("NotSucceedsSlantEqual;".to_string(), "\u{22e1}".to_string());
+    m.insert("NotSucceedsTilde;".to_string(), "\u{227f}\u{338}".to_string());
+    m.insert("NotSuperset;".to_string(), "\u{2283}\u{20d2}".to_string());
+    m.insert("NotSupersetEqual;".to_string(), "\u{2289}".to_string());
+    m.insert("NotTilde;".to_string(), "\u{2241}".to_string());
+    m.insert("NotTildeEqual;".to_string(), "\u{2244}".to_string());
+    m.insert("NotTildeFullEqual;".to_string(), "\u{2247}".to_string());
+    m.insert("NotTildeTilde;".to_string(), "\u{2249}".to_string());
+    m.insert("NotVerticalBar;".to_string(), "\u{2224}".to_string());
+    m.insert("Nscr;".to_string(), "\u{1d4a9}".to_string());
+    m.insert("Ntilde".to_string(), "\u{d1}".to_string());
+    m.insert("Ntilde;".to_string(), "\u{d1}".to_string());
+    m.insert("Nu;".to_string(), "\u{39d}".to_string());
+    m.insert("OElig;".to_string(), "\u{152}".to_string());
+    m.insert("Oacute".to_string(), "\u{d3}".to_string());
+    m.insert("Oacute;".to_string(), "\u{d3}".to_string());
+    m.insert("Ocirc".to_string(), "\u{d4}".to_string());
+    m.insert("Ocirc;".to_string(), "\u{d4}".to_string());
+    m.insert("Ocy;".to_string(), "\u{41e}".to_string());
+    m.insert("Odblac;".to_string(), "\u{150}".to_string());
+    m.insert("Ofr;".to_string(), "\u{1d512}".to_string());
+    m.insert("Ograve".to_string(), "\u{d2}".to_string());
+    m.insert("Ograve;".to_string(), "\u{d2}".to_string());
+    m.insert("Omacr;".to_string(), "\u{14c}".to_string());
+    m.insert("Omega;".to_string(), "\u{3a9}".to_string());
+    m.insert("Omicron;".to_string(), "\u{39f}".to_string());
+    m.insert("Oopf;".to_string(), "\u{1d546}".to_string());
+    m.insert("OpenCurlyDoubleQuote;".to_string(), "\u{201c}".to_string());
+    m.insert("OpenCurlyQuote;".to_string(), "\u{2018}".to_string());
+    m.insert("Or;".to_string(), "\u{2a54}".to_string());
+    m.insert("Oscr;".to_string(), "\u{1d4aa}".to_string());
+    m.insert("Oslash".to_string(), "\u{d8}".to_string());
+    m.insert("Oslash;".to_string(), "\u{d8}".to_string());
+    m.insert("Otilde".to_string(), "\u{d5}".to_string());
+    m.insert("Otilde;".to_string(), "\u{d5}".to_string());
+    m.insert("Otimes;".to_string(), "\u{2a37}".to_string());
+    m.insert("Ouml".to_string(), "\u{d6}".to_string());
+    m.insert("Ouml;".to_string(), "\u{d6}".to_string());
+    m.insert("OverBar;".to_string(), "\u{203e}".to_string());
+    m.insert("OverBrace;".to_string(), "\u{23de}".to_string());
+    m.insert("OverBracket;".to_string(), "\u{23b4}".to_string());
+    m.insert("OverParenthesis;".to_string(), "\u{23dc}".to_string());
+    m.insert("PartialD;".to_string(), "\u{2202}".to_string());
+    m.insert("Pcy;".to_string(), "\u{41f}".to_string());
+    m.insert("Pfr;".to_string(), "\u{1d513}".to_string());
+    m.insert("Phi;".to_string(), "\u{3a6}".to_string());
+    m.insert("Pi;".to_string(), "\u{3a0}".to_string());
+    m.insert("PlusMinus;".to_string(), "\u{b1}".to_string());
+    m.insert("Poincareplane;".to_string(), "\u{210c}".to_string());
+    m.insert("Popf;".to_string(), "\u{2119}".to_string());
+    m.insert("Pr;".to_string(), "\u{2abb}".to_string());
+    m.insert("Precedes;".to_string(), "\u{227a}".to_string());
+    m.insert("PrecedesEqual;".to_string(), "\u{2aaf}".to_string());
+    m.insert("PrecedesSlantEqual;".to_string(), "\u{227c}".to_string());
+    m.insert("PrecedesTilde;".to_string(), "\u{227e}".to_string());
+    m.insert("Prime;".to_string(), "\u{2033}".to_string());
+    m.insert("Product;".to_string(), "\u{220f}".to_string());
+    m.insert("Proportion;".to_string(), "\u{2237}".to_string());
+    m.insert("Proportional;".to_string(), "\u{221d}".to_string());
+    m.insert("Pscr;".to_string(), "\u{1d4ab}".to_string());
+    m.insert("Psi;".to_string(), "\u{3a8}".to_string());
+    m.insert("QUOT".to_string(), "\u{22}".to_string());
+    m.insert("QUOT;".to_string(), "\u{22}".to_string());
+    m.insert("Qfr;".to_string(), "\u{1d514}".to_string());
+    m.insert("Qopf;".to_string(), "\u{211a}".to_string());
+    m.insert("Qscr;".to_string(), "\u{1d4ac}".to_string());
+    m.insert("RBarr;".to_string(), "\u{2910}".to_string());
+    m.insert("REG".to_string(), "\u{ae}".to_string());
+    m.insert("REG;".to_string(), "\u{ae}".to_string());
+    m.insert("Racute;".to_string(), "\u{154}".to_string());
+    m.insert("Rang;".to_string(), "\u{27eb}".to_string());
+    m.insert("Rarr;".to_string(), "\u{21a0}".to_string());
+    m.insert("Rarrtl;".to_string(), "\u{2916}".to_string());
+    m.insert("Rcaron;".to_string(), "\u{158}".to_string());
+    m.insert("Rcedil;".to_string(), "\u{156}".to_string());
+    m.insert("Rcy;".to_string(), "\u{420}".to_string());
+    m.insert("Re;".to_string(), "\u{211c}".to_string());
+    m.insert("ReverseElement;".to_string(), "\u{220b}".to_string());
+    m.insert("ReverseEquilibrium;".to_string(), "\u{21cb}".to_string());
+    m.insert("ReverseUpEquilibrium;".to_string(), "\u{296f}".to_string());
+    m.insert("Rfr;".to_string(), "\u{211c}".to_string());
+    m.insert("Rho;".to_string(), "\u{3a1}".to_string());
+    m.insert("RightAngleBracket;".to_string(), "\u{27e9}".to_string());
+    m.insert("RightArrow;".to_string(), "\u{2192}".to_string());
+    m.insert("RightArrowBar;".to_string(), "\u{21e5}".to_string());
+    m.insert("RightArrowLeftArrow;".to_string(), "\u{21c4}".to_string());
+    m.insert("RightCeiling;".to_string(), "\u{2309}".to_string());
+    m.insert("RightDoubleBracket;".to_string(), "\u{27e7}".to_string());
+    m.insert("RightDownTeeVector;".to_string(), "\u{295d}".to_string());
+    m.insert("RightDownVector;".to_string(), "\u{21c2}".to_string());
+    m.insert("RightDownVectorBar;".to_string(), "\u{2955}".to_string());
+    m.insert("RightFloor;".to_string(), "\u{230b}".to_string());
+    m.insert("RightTee;".to_string(), "\u{22a2}".to_string());
+    m.insert("RightTeeArrow;".to_string(), "\u{21a6}".to_string());
+    m.insert("RightTeeVector;".to_string(), "\u{295b}".to_string());
+    m.insert("RightTriangle;".to_string(), "\u{22b3}".to_string());
+    m.insert("RightTriangleBar;".to_string(), "\u{29d0}".to_string());
+    m.insert("RightTriangleEqual;".to_string(), "\u{22b5}".to_string());
+    m.insert("RightUpDownVector;".to_string(), "\u{294f}".to_string());
+    m.insert("RightUpTeeVector;".to_string(), "\u{295c}".to_string());
+    m.insert("RightUpVector;".to_string(), "\u{21be}".to_string());
+    m.insert("RightUpVectorBar;".to_string(), "\u{2954}".to_string());
+    m.insert("RightVector;".to_string(), "\u{21c0}".to_string());
+    m.insert("RightVectorBar;".to_string(), "\u{2953}".to_string());
+    m.insert("Rightarrow;".to_string(), "\u{21d2}".to_string());
+    m.insert("Ropf;".to_string(), "\u{211d}".to_string());
+    m.insert("RoundImplies;".to_string(), "\u{2970}".to_string());
+    m.insert("Rrightarrow;".to_string(), "\u{21db}".to_string());
+    m.insert("Rscr;".to_string(), "\u{211b}".to_string());
+    m.insert("Rsh;".to_string(), "\u{21b1}".to_string());
+    m.insert("RuleDelayed;".to_string(), "\u{29f4}".to_string());
+    m.insert("SHCHcy;".to_string(), "\u{429}".to_string());
+    m.insert("SHcy;".to_string(), "\u{428}".to_string());
+    m.insert("SOFTcy;".to_string(), "\u{42c}".to_string());
+    m.insert("Sacute;".to_string(), "\u{15a}".to_string());
+    m.insert("Sc;".to_string(), "\u{2abc}".to_string());
+    m.insert("Scaron;".to_string(), "\u{160}".to_string());
+    m.insert("Scedil;".to_string(), "\u{15e}".to_string());
+    m.insert("Scirc;".to_string(), "\u{15c}".to_string());
+    m.insert("Scy;".to_string(), "\u{421}".to_string());
+    m.insert("Sfr;".to_string(), "\u{1d516}".to_string());
+    m.insert("ShortDownArrow;".to_string(), "\u{2193}".to_string());
+    m.insert("ShortLeftArrow;".to_string(), "\u{2190}".to_string());
+    m.insert("ShortRightArrow;".to_string(), "\u{2192}".to_string());
+    m.insert("ShortUpArrow;".to_string(), "\u{2191}".to_string());
+    m.insert("Sigma;".to_string(), "\u{3a3}".to_string());
+    m.insert("SmallCircle;".to_string(), "\u{2218}".to_string());
+    m.insert("Sopf;".to_string(), "\u{1d54a}".to_string());
+    m.insert("Sqrt;".to_string(), "\u{221a}".to_string());
+    m.insert("Square;".to_string(), "\u{25a1}".to_string());
+    m.insert("SquareIntersection;".to_string(), "\u{2293}".to_string());
+    m.insert("SquareSubset;".to_string(), "\u{228f}".to_string());
+    m.insert("SquareSubsetEqual;".to_string(), "\u{2291}".to_string());
+    m.insert("SquareSuperset;".to_string(), "\u{2290}".to_string());
+    m.insert("SquareSupersetEqual;".to_string(), "\u{2292}".to_string());
+    m.insert("SquareUnion;".to_string(), "\u{2294}".to_string());
+    m.insert("Sscr;".to_string(), "\u{1d4ae}".to_string());
+    m.insert("Star;".to_string(), "\u{22c6}".to_string());
+    m.insert("Sub;".to_string(), "\u{22d0}".to_string());
+    m.insert("Subset;".to_string(), "\u{22d0}".to_string());
+    m.insert("SubsetEqual;".to_string(), "\u{2286}".to_string());
+    m.insert("Succeeds;".to_string(), "\u{227b}".to_string());
+    m.insert("SucceedsEqual;".to_string(), "\u{2ab0}".to_string());
+    m.insert("SucceedsSlantEqual;".to_string(), "\u{227d}".to_string());
+    m.insert("SucceedsTilde;".to_string(), "\u{227f}".to_string());
+    m.insert("SuchThat;".to_string(), "\u{220b}".to_string());
+    m.insert("Sum;".to_string(), "\u{2211}".to_string());
+    m.insert("Sup;".to_string(), "\u{22d1}".to_string());
+    m.insert("Superset;".to_string(), "\u{2283}".to_string());
+    m.insert("SupersetEqual;".to_string(), "\u{2287}".to_string());
+    m.insert("Supset;".to_string(), "\u{22d1}".to_string());
+    m.insert("THORN".to_string(), "\u{de}".to_string());
+    m.insert("THORN;".to_string(), "\u{de}".to_string());
+    m.insert("TRADE;".to_string(), "\u{2122}".to_string());
+    m.insert("TSHcy;".to_string(), "\u{40b}".to_string());
+    m.insert("TScy;".to_string(), "\u{426}".to_string());
+    m.insert("Tab;".to_string(), "\u{9}".to_string());
+    m.insert("Tau;".to_string(), "\u{3a4}".to_string());
+    m.insert("Tcaron;".to_string(), "\u{164}".to_string());
+    m.insert("Tcedil;".to_string(), "\u{162}".to_string());
+    m.insert("Tcy;".to_string(), "\u{422}".to_string());
+    m.insert("Tfr;".to_string(), "\u{1d517}".to_string());
+    m.insert("Therefore;".to_string(), "\u{2234}".to_string());
+    m.insert("Theta;".to_string(), "\u{398}".to_string());
+    m.insert("ThickSpace;".to_string(), "\u{205f}\u{200a}".to_string());
+    m.insert("ThinSpace;".to_string(), "\u{2009}".to_string());
+    m.insert("Tilde;".to_string(), "\u{223c}".to_string());
+    m.insert("TildeEqual;".to_string(), "\u{2243}".to_string());
+    m.insert("TildeFullEqual;".to_string(), "\u{2245}".to_string());
+    m.insert("TildeTilde;".to_string(), "\u{2248}".to_string());
+    m.insert("Topf;".to_string(), "\u{1d54b}".to_string());
+    m.insert("TripleDot;".to_string(), "\u{20db}".to_string());
+    m.insert("Tscr;".to_string(), "\u{1d4af}".to_string());
+    m.insert("Tstrok;".to_string(), "\u{166}".to_string());
+    m.insert("Uacute".to_string(), "\u{da}".to_string());
+    m.insert("Uacute;".to_string(), "\u{da}".to_string());
+    m.insert("Uarr;".to_string(), "\u{219f}".to_string());
+    m.insert("Uarrocir;".to_string(), "\u{2949}".to_string());
+    m.insert("Ubrcy;".to_string(), "\u{40e}".to_string());
+    m.insert("Ubreve;".to_string(), "\u{16c}".to_string());
+    m.insert("Ucirc".to_string(), "\u{db}".to_string());
+    m.insert("Ucirc;".to_string(), "\u{db}".to_string());
+    m.insert("Ucy;".to_string(), "\u{423}".to_string());
+    m.insert("Udblac;".to_string(), "\u{170}".to_string());
+    m.insert("Ufr;".to_string(), "\u{1d518}".to_string());
+    m.insert("Ugrave".to_string(), "\u{d9}".to_string());
+    m.insert("Ugrave;".to_string(), "\u{d9}".to_string());
+    m.insert("Umacr;".to_string(), "\u{16a}".to_string());
+    m.insert("UnderBar;".to_string(), "_".to_string());
+    m.insert("UnderBrace;".to_string(), "\u{23df}".to_string());
+    m.insert("UnderBracket;".to_string(), "\u{23b5}".to_string());
+    m.insert("UnderParenthesis;".to_string(), "\u{23dd}".to_string());
+    m.insert("Union;".to_string(), "\u{22c3}".to_string());
+    m.insert("UnionPlus;".to_string(), "\u{228e}".to_string());
+    m.insert("Uogon;".to_string(), "\u{172}".to_string());
+    m.insert("Uopf;".to_string(), "\u{1d54c}".to_string());
+    m.insert("UpArrow;".to_string(), "\u{2191}".to_string());
+    m.insert("UpArrowBar;".to_string(), "\u{2912}".to_string());
+    m.insert("UpArrowDownArrow;".to_string(), "\u{21c5}".to_string());
+    m.insert("UpDownArrow;".to_string(), "\u{2195}".to_string());
+    m.insert("UpEquilibrium;".to_string(), "\u{296e}".to_string());
+    m.insert("UpTee;".to_string(), "\u{22a5}".to_string());
+    m.insert("UpTeeArrow;".to_string(), "\u{21a5}".to_string());
+    m.insert("Uparrow;".to_string(), "\u{21d1}".to_string());
+    m.insert("Updownarrow;".to_string(), "\u{21d5}".to_string());
+    m.insert("UpperLeftArrow;".to_string(), "\u{2196}".to_string());
+    m.insert("UpperRightArrow;".to_string(), "\u{2197}".to_string());
+    m.insert("Upsi;".to_string(), "\u{3d2}".to_string());
+    m.insert("Upsilon;".to_string(), "\u{3a5}".to_string());
+    m.insert("Uring;".to_string(), "\u{16e}".to_string());
+    m.insert("Uscr;".to_string(), "\u{1d4b0}".to_string());
+    m.insert("Utilde;".to_string(), "\u{168}".to_string());
+    m.insert("Uuml".to_string(), "\u{dc}".to_string());
+    m.insert("Uuml;".to_string(), "\u{dc}".to_string());
+    m.insert("VDash;".to_string(), "\u{22ab}".to_string());
+    m.insert("Vbar;".to_string(), "\u{2aeb}".to_string());
+    m.insert("Vcy;".to_string(), "\u{412}".to_string());
+    m.insert("Vdash;".to_string(), "\u{22a9}".to_string());
+    m.insert("Vdashl;".to_string(), "\u{2ae6}".to_string());
+    m.insert("Vee;".to_string(), "\u{22c1}".to_string());
+    m.insert("Verbar;".to_string(), "\u{2016}".to_string());
+    m.insert("Vert;".to_string(), "\u{2016}".to_string());
+    m.insert("VerticalBar;".to_string(), "\u{2223}".to_string());
+    m.insert("VerticalLine;".to_string(), "|".to_string());
+    m.insert("VerticalSeparator;".to_string(), "\u{2758}".to_string());
+    m.insert("VerticalTilde;".to_string(), "\u{2240}".to_string());
+    m.insert("VeryThinSpace;".to_string(), "\u{200a}".to_string());
+    m.insert("Vfr;".to_string(), "\u{1d519}".to_string());
+    m.insert("Vopf;".to_string(), "\u{1d54d}".to_string());
+    m.insert("Vscr;".to_string(), "\u{1d4b1}".to_string());
+    m.insert("Vvdash;".to_string(), "\u{22aa}".to_string());
+    m.insert("Wcirc;".to_string(), "\u{174}".to_string());
+    m.insert("Wedge;".to_string(), "\u{22c0}".to_string());
+    m.insert("Wfr;".to_string(), "\u{1d51a}".to_string());
+    m.insert("Wopf;".to_string(), "\u{1d54e}".to_string());
+    m.insert("Wscr;".to_string(), "\u{1d4b2}".to_string());
+    m.insert("Xfr;".to_string(), "\u{1d51b}".to_string());
+    m.insert("Xi;".to_string(), "\u{39e}".to_string());
+    m.insert("Xopf;".to_string(), "\u{1d54f}".to_string());
+    m.insert("Xscr;".to_string(), "\u{1d4b3}".to_string());
+    m.insert("YAcy;".to_string(), "\u{42f}".to_string());
+    m.insert("YIcy;".to_string(), "\u{407}".to_string());
+    m.insert("YUcy;".to_string(), "\u{42e}".to_string());
+    m.insert("Yacute".to_string(), "\u{dd}".to_string());
+    m.insert("Yacute;".to_string(), "\u{dd}".to_string());
+    m.insert("Ycirc;".to_string(), "\u{176}".to_string());
+    m.insert("Ycy;".to_string(), "\u{42b}".to_string());
+    m.insert("Yfr;".to_string(), "\u{1d51c}".to_string());
+    m.insert("Yopf;".to_string(), "\u{1d550}".to_string());
+    m.insert("Yscr;".to_string(), "\u{1d4b4}".to_string());
+    m.insert("Yuml;".to_string(), "\u{178}".to_string());
+    m.insert("ZHcy;".to_string(), "\u{416}".to_string());
+    m.insert("Zacute;".to_string(), "\u{179}".to_string());
+    m.insert("Zcaron;".to_string(), "\u{17d}".to_string());
+    m.insert("Zcy;".to_string(), "\u{417}".to_string());
+    m.insert("Zdot;".to_string(), "\u{17b}".to_string());
+    m.insert("ZeroWidthSpace;".to_string(), "\u{200b}".to_string());
+    m.insert("Zeta;".to_string(), "\u{396}".to_string());
+    m.insert("Zfr;".to_string(), "\u{2128}".to_string());
+    m.insert("Zopf;".to_string(), "\u{2124}".to_string());
+    m.insert("Zscr;".to_string(), "\u{1d4b5}".to_string());
+    m.insert("aacute".to_string(), "\u{e1}".to_string());
+    m.insert("aacute;".to_string(), "\u{e1}".to_string());
+    m.insert("abreve;".to_string(), "\u{103}".to_string());
+    m.insert("ac;".to_string(), "\u{223e}".to_string());
+    m.insert("acE;".to_string(), "\u{223e}\u{333}".to_string());
+    m.insert("acd;".to_string(), "\u{223f}".to_string());
+    m.insert("acirc".to_string(), "\u{e2}".to_string());
+    m.insert("acirc;".to_string(), "\u{e2}".to_string());
+    m.insert("acute".to_string(), "\u{b4}".to_string());
+    m.insert("acute;".to_string(), "\u{b4}".to_string());
+    m.insert("acy;".to_string(), "\u{430}".to_string());
+    m.insert("aelig".to_string(), "\u{e6}".to_string());
+    m.insert("aelig;".to_string(), "\u{e6}".to_string());
+    m.insert("af;".to_string(), "\u{2061}".to_string());
+    m.insert("afr;".to_string(), "\u{1d51e}".to_string());
+    m.insert("agrave".to_string(), "\u{e0}".to_string());
+    m.insert("agrave;".to_string(), "\u{e0}".to_string());
+    m.insert("alefsym;".to_string(), "\u{2135}".to_string());
+    m.insert("aleph;".to_string(), "\u{2135}".to_string());
+    m.insert("alpha;".to_string(), "\u{3b1}".to_string());
+    m.insert("amacr;".to_string(), "\u{101}".to_string());
+    m.insert("amalg;".to_string(), "\u{2a3f}".to_string());
+    m.insert("amp".to_string(), "&".to_string());
+    m.insert("amp;".to_string(), "&".to_string());
+    m.insert("and;".to_string(), "\u{2227}".to_string());
+    m.insert("andand;".to_string(), "\u{2a55}".to_string());
+    m.insert("andd;".to_string(), "\u{2a5c}".to_string());
+    m.insert("andslope;".to_string(), "\u{2a58}".to_string());
+    m.insert("andv;".to_string(), "\u{2a5a}".to_string());
+    m.insert("ang;".to_string(), "\u{2220}".to_string());
+    m.insert("ange;".to_string(), "\u{29a4}".to_string());
+    m.insert("angle;".to_string(), "\u{2220}".to_string());
+    m.insert("angmsd;".to_string(), "\u{2221}".to_string());
+    m.insert("angmsdaa;".to_string(), "\u{29a8}".to_string());
+    m.insert("angmsdab;".to_string(), "\u{29a9}".to_string());
+    m.insert("angmsdac;".to_string(), "\u{29aa}".to_string());
+    m.insert("angmsdad;".to_string(), "\u{29ab}".to_string());
+    m.insert("angmsdae;".to_string(), "\u{29ac}".to_string());
+    m.insert("angmsdaf;".to_string(), "\u{29ad}".to_string());
+    m.insert("angmsdag;".to_string(), "\u{29ae}".to_string());
+    m.insert("angmsdah;".to_string(), "\u{29af}".to_string());
+    m.insert("angrt;".to_string(), "\u{221f}".to_string());
+    m.insert("angrtvb;".to_string(), "\u{22be}".to_string());
+    m.insert("angrtvbd;".to_string(), "\u{299d}".to_string());
+    m.insert("angsph;".to_string(), "\u{2222}".to_string());
+    m.insert("angst;".to_string(), "\u{c5}".to_string());
+    m.insert("angzarr;".to_string(), "\u{237c}".to_string());
+    m.insert("aogon;".to_string(), "\u{105}".to_string());
+    m.insert("aopf;".to_string(), "\u{1d552}".to_string());
+    m.insert("ap;".to_string(), "\u{2248}".to_string());
+    m.insert("apE;".to_string(), "\u{2a70}".to_string());
+    m.insert("apacir;".to_string(), "\u{2a6f}".to_string());
+    m.insert("ape;".to_string(), "\u{224a}".to_string());
+    m.insert("apid;".to_string(), "\u{224b}".to_string());
+    m.insert("apos;".to_string(), "'".to_string());
+    m.insert("approx;".to_string(), "\u{2248}".to_string());
+    m.insert("approxeq;".to_string(), "\u{224a}".to_string());
+    m.insert("aring".to_string(), "\u{e5}".to_string());
+    m.insert("aring;".to_string(), "\u{e5}".to_string());
+    m.insert("ascr;".to_string(), "\u{1d4b6}".to_string());
+    m.insert("ast;".to_string(), "*".to_string());
+    m.insert("asymp;".to_string(), "\u{2248}".to_string());
+    m.insert("asympeq;".to_string(), "\u{224d}".to_string());
+    m.insert("atilde".to_string(), "\u{e3}".to_string());
+    m.insert("atilde;".to_string(), "\u{e3}".to_string());
+    m.insert("auml".to_string(), "\u{e4}".to_string());
+    m.insert("auml;".to_string(), "\u{e4}".to_string());
+    m.insert("awconint;".to_string(), "\u{2233}".to_string());
+    m.insert("awint;".to_string(), "\u{2a11}".to_string());
+    m.insert("bNot;".to_string(), "\u{2aed}".to_string());
+    m.insert("backcong;".to_string(), "\u{224c}".to_string());
+    m.insert("backepsilon;".to_string(), "\u{3f6}".to_string());
+    m.insert("backprime;".to_string(), "\u{2035}".to_string());
+    m.insert("backsim;".to_string(), "\u{223d}".to_string());
+    m.insert("backsimeq;".to_string(), "\u{22cd}".to_string());
+    m.insert("barvee;".to_string(), "\u{22bd}".to_string());
+    m.insert("barwed;".to_string(), "\u{2305}".to_string());
+    m.insert("barwedge;".to_string(), "\u{2305}".to_string());
+    m.insert("bbrk;".to_string(), "\u{23b5}".to_string());
+    m.insert("bbrktbrk;".to_string(), "\u{23b6}".to_string());
+    m.insert("bcong;".to_string(), "\u{224c}".to_string());
+    m.insert("bcy;".to_string(), "\u{431}".to_string());
+    m.insert("bdquo;".to_string(), "\u{201e}".to_string());
+    m.insert("becaus;".to_string(), "\u{2235}".to_string());
+    m.insert("because;".to_string(), "\u{2235}".to_string());
+    m.insert("bemptyv;".to_string(), "\u{29b0}".to_string());
+    m.insert("bepsi;".to_string(), "\u{3f6}".to_string());
+    m.insert("bernou;".to_string(), "\u{212c}".to_string());
+    m.insert("beta;".to_string(), "\u{3b2}".to_string());
+    m.insert("beth;".to_string(), "\u{2136}".to_string());
+    m.insert("between;".to_string(), "\u{226c}".to_string());
+    m.insert("bfr;".to_string(), "\u{1d51f}".to_string());
+    m.insert("bigcap;".to_string(), "\u{22c2}".to_string());
+    m.insert("bigcirc;".to_string(), "\u{25ef}".to_string());
+    m.insert("bigcup;".to_string(), "\u{22c3}".to_string());
+    m.insert("bigodot;".to_string(), "\u{2a00}".to_string());
+    m.insert("bigoplus;".to_string(), "\u{2a01}".to_string());
+    m.insert("bigotimes;".to_string(), "\u{2a02}".to_string());
+    m.insert("bigsqcup;".to_string(), "\u{2a06}".to_string());
+    m.insert("bigstar;".to_string(), "\u{2605}".to_string());
+    m.insert("bigtriangledown;".to_string(), "\u{25bd}".to_string());
+    m.insert("bigtriangleup;".to_string(), "\u{25b3}".to_string());
+    m.insert("biguplus;".to_string(), "\u{2a04}".to_string());
+    m.insert("bigvee;".to_string(), "\u{22c1}".to_string());
+    m.insert("bigwedge;".to_string(), "\u{22c0}".to_string());
+    m.insert("bkarow;".to_string(), "\u{290d}".to_string());
+    m.insert("blacklozenge;".to_string(), "\u{29eb}".to_string());
+    m.insert("blacksquare;".to_string(), "\u{25aa}".to_string());
+    m.insert("blacktriangle;".to_string(), "\u{25b4}".to_string());
+    m.insert("blacktriangledown;".to_string(), "\u{25be}".to_string());
+    m.insert("blacktriangleleft;".to_string(), "\u{25c2}".to_string());
+    m.insert("blacktriangleright;".to_string(), "\u{25b8}".to_string());
+    m.insert("blank;".to_string(), "\u{2423}".to_string());
+    m.insert("blk12;".to_string(), "\u{2592}".to_string());
+    m.insert("blk14;".to_string(), "\u{2591}".to_string());
+    m.insert("blk34;".to_string(), "\u{2593}".to_string());
+    m.insert("block;".to_string(), "\u{2588}".to_string());
+    m.insert("bne;".to_string(), "=\u{20e5}".to_string());
+    m.insert("bnequiv;".to_string(), "\u{2261}\u{20e5}".to_string());
+    m.insert("bnot;".to_string(), "\u{2310}".to_string());
+    m.insert("bopf;".to_string(), "\u{1d553}".to_string());
+    m.insert("bot;".to_string(), "\u{22a5}".to_string());
+    m.insert("bottom;".to_string(), "\u{22a5}".to_string());
+    m.insert("bowtie;".to_string(), "\u{22c8}".to_string());
+    m.insert("boxDL;".to_string(), "\u{2557}".to_string());
+    m.insert("boxDR;".to_string(), "\u{2554}".to_string());
+    m.insert("boxDl;".to_string(), "\u{2556}".to_string());
+    m.insert("boxDr;".to_string(), "\u{2553}".to_string());
+    m.insert("boxH;".to_string(), "\u{2550}".to_string());
+    m.insert("boxHD;".to_string(), "\u{2566}".to_string());
+    m.insert("boxHU;".to_string(), "\u{2569}".to_string());
+    m.insert("boxHd;".to_string(), "\u{2564}".to_string());
+    m.insert("boxHu;".to_string(), "\u{2567}".to_string());
+    m.insert("boxUL;".to_string(), "\u{255d}".to_string());
+    m.insert("boxUR;".to_string(), "\u{255a}".to_string());
+    m.insert("boxUl;".to_string(), "\u{255c}".to_string());
+    m.insert("boxUr;".to_string(), "\u{2559}".to_string());
+    m.insert("boxV;".to_string(), "\u{2551}".to_string());
+    m.insert("boxVH;".to_string(), "\u{256c}".to_string());
+    m.insert("boxVL;".to_string(), "\u{2563}".to_string());
+    m.insert("boxVR;".to_string(), "\u{2560}".to_string());
+    m.insert("boxVh;".to_string(), "\u{256b}".to_string());
+    m.insert("boxVl;".to_string(), "\u{2562}".to_string());
+    m.insert("boxVr;".to_string(), "\u{255f}".to_string());
+    m.insert("boxbox;".to_string(), "\u{29c9}".to_string());
+    m.insert("boxdL;".to_string(), "\u{2555}".to_string());
+    m.insert("boxdR;".to_string(), "\u{2552}".to_string());
+    m.insert("boxdl;".to_string(), "\u{2510}".to_string());
+    m.insert("boxdr;".to_string(), "\u{250c}".to_string());
+    m.insert("boxh;".to_string(), "\u{2500}".to_string());
+    m.insert("boxhD;".to_string(), "\u{2565}".to_string());
+    m.insert("boxhU;".to_string(), "\u{2568}".to_string());
+    m.insert("boxhd;".to_string(), "\u{252c}".to_string());
+    m.insert("boxhu;".to_string(), "\u{2534}".to_string());
+    m.insert("boxminus;".to_string(), "\u{229f}".to_string());
+    m.insert("boxplus;".to_string(), "\u{229e}".to_string());
+    m.insert("boxtimes;".to_string(), "\u{22a0}".to_string());
+    m.insert("boxuL;".to_string(), "\u{255b}".to_string());
+    m.insert("boxuR;".to_string(), "\u{2558}".to_string());
+    m.insert("boxul;".to_string(), "\u{2518}".to_string());
+    m.insert("boxur;".to_string(), "\u{2514}".to_string());
+    m.insert("boxv;".to_string(), "\u{2502}".to_string());
+    m.insert("boxvH;".to_string(), "\u{256a}".to_string());
+    m.insert("boxvL;".to_string(), "\u{2561}".to_string());
+    m.insert("boxvR;".to_string(), "\u{255e}".to_string());
+    m.insert("boxvh;".to_string(), "\u{253c}".to_string());
+    m.insert("boxvl;".to_string(), "\u{2524}".to_string());
+    m.insert("boxvr;".to_string(), "\u{251c}".to_string());
+    m.insert("bprime;".to_string(), "\u{2035}".to_string());
+    m.insert("breve;".to_string(), "\u{2d8}".to_string());
+    m.insert("brvbar".to_string(), "\u{a6}".to_string());
+    m.insert("brvbar;".to_string(), "\u{a6}".to_string());
+    m.insert("bscr;".to_string(), "\u{1d4b7}".to_string());
+    m.insert("bsemi;".to_string(), "\u{204f}".to_string());
+    m.insert("bsim;".to_string(), "\u{223d}".to_string());
+    m.insert("bsime;".to_string(), "\u{22cd}".to_string());
+    m.insert("bsol;".to_string(), "\u{5c}".to_string());
+    m.insert("bsolb;".to_string(), "\u{29c5}".to_string());
+    m.insert("bsolhsub;".to_string(), "\u{27c8}".to_string());
+    m.insert("bull;".to_string(), "\u{2022}".to_string());
+    m.insert("bullet;".to_string(), "\u{2022}".to_string());
+    m.insert("bump;".to_string(), "\u{224e}".to_string());
+    m.insert("bumpE;".to_string(), "\u{2aae}".to_string());
+    m.insert("bumpe;".to_string(), "\u{224f}".to_string());
+    m.insert("bumpeq;".to_string(), "\u{224f}".to_string());
+    m.insert("cacute;".to_string(), "\u{107}".to_string());
+    m.insert("cap;".to_string(), "\u{2229}".to_string());
+    m.insert("capand;".to_string(), "\u{2a44}".to_string());
+    m.insert("capbrcup;".to_string(), "\u{2a49}".to_string());
+    m.insert("capcap;".to_string(), "\u{2a4b}".to_string());
+    m.insert("capcup;".to_string(), "\u{2a47}".to_string());
+    m.insert("capdot;".to_string(), "\u{2a40}".to_string());
+    m.insert("caps;".to_string(), "\u{2229}\u{fe00}".to_string());
+    m.insert("caret;".to_string(), "\u{2041}".to_string());
+    m.insert("caron;".to_string(), "\u{2c7}".to_string());
+    m.insert("ccaps;".to_string(), "\u{2a4d}".to_string());
+    m.insert("ccaron;".to_string(), "\u{10d}".to_string());
+    m.insert("ccedil".to_string(), "\u{e7}".to_string());
+    m.insert("ccedil;".to_string(), "\u{e7}".to_string());
+    m.insert("ccirc;".to_string(), "\u{109}".to_string());
+    m.insert("ccups;".to_string(), "\u{2a4c}".to_string());
+    m.insert("ccupssm;".to_string(), "\u{2a50}".to_string());
+    m.insert("cdot;".to_string(), "\u{10b}".to_string());
+    m.insert("cedil".to_string(), "\u{b8}".to_string());
+    m.insert("cedil;".to_string(), "\u{b8}".to_string());
+    m.insert("cemptyv;".to_string(), "\u{29b2}".to_string());
+    m.insert("cent".to_string(), "\u{a2}".to_string());
+    m.insert("cent;".to_string(), "\u{a2}".to_string());
+    m.insert("centerdot;".to_string(), "\u{b7}".to_string());
+    m.insert("cfr;".to_string(), "\u{1d520}".to_string());
+    m.insert("chcy;".to_string(), "\u{447}".to_string());
+    m.insert("check;".to_string(), "\u{2713}".to_string());
+    m.insert("checkmark;".to_string(), "\u{2713}".to_string());
+    m.insert("chi;".to_string(), "\u{3c7}".to_string());
+    m.insert("cir;".to_string(), "\u{25cb}".to_string());
+    m.insert("cirE;".to_string(), "\u{29c3}".to_string());
+    m.insert("circ;".to_string(), "\u{2c6}".to_string());
+    m.insert("circeq;".to_string(), "\u{2257}".to_string());
+    m.insert("circlearrowleft;".to_string(), "\u{21ba}".to_string());
+    m.insert("circlearrowright;".to_string(), "\u{21bb}".to_string());
+    m.insert("circledR;".to_string(), "\u{ae}".to_string());
+    m.insert("circledS;".to_string(), "\u{24c8}".to_string());
+    m.insert("circledast;".to_string(), "\u{229b}".to_string());
+    m.insert("circledcirc;".to_string(), "\u{229a}".to_string());
+    m.insert("circleddash;".to_string(), "\u{229d}".to_string());
+    m.insert("cire;".to_string(), "\u{2257}".to_string());
+    m.insert("cirfnint;".to_string(), "\u{2a10}".to_string());
+    m.insert("cirmid;".to_string(), "\u{2aef}".to_string());
+    m.insert("cirscir;".to_string(), "\u{29c2}".to_string());
+    m.insert("clubs;".to_string(), "\u{2663}".to_string());
+    m.insert("clubsuit;".to_string(), "\u{2663}".to_string());
+    m.insert("colon;".to_string(), ":".to_string());
+    m.insert("colone;".to_string(), "\u{2254}".to_string());
+    m.insert("coloneq;".to_string(), "\u{2254}".to_string());
+    m.insert("comma;".to_string(), ",".to_string());
+    m.insert("commat;".to_string(), "@".to_string());
+    m.insert("comp;".to_string(), "\u{2201}".to_string());
+    m.insert("compfn;".to_string(), "\u{2218}".to_string());
+    m.insert("complement;".to_string(), "\u{2201}".to_string());
+    m.insert("complexes;".to_string(), "\u{2102}".to_string());
+    m.insert("cong;".to_string(), "\u{2245}".to_string());
+    m.insert("congdot;".to_string(), "\u{2a6d}".to_string());
+    m.insert("conint;".to_string(), "\u{222e}".to_string());
+    m.insert("copf;".to_string(), "\u{1d554}".to_string());
+    m.insert("coprod;".to_string(), "\u{2210}".to_string());
+    m.insert("copy".to_string(), "\u{a9}".to_string());
+    m.insert("copy;".to_string(), "\u{a9}".to_string());
+    m.insert("copysr;".to_string(), "\u{2117}".to_string());
+    m.insert("crarr;".to_string(), "\u{21b5}".to_string());
+    m.insert("cross;".to_string(), "\u{2717}".to_string());
+    m.insert("cscr;".to_string(), "\u{1d4b8}".to_string());
+    m.insert("csub;".to_string(), "\u{2acf}".to_string());
+    m.insert("csube;".to_string(), "\u{2ad1}".to_string());
+    m.insert("csup;".to_string(), "\u{2ad0}".to_string());
+    m.insert("csupe;".to_string(), "\u{2ad2}".to_string());
+    m.insert("ctdot;".to_string(), "\u{22ef}".to_string());
+    m.insert("cudarrl;".to_string(), "\u{2938}".to_string());
+    m.insert("cudarrr;".to_string(), "\u{2935}".to_string());
+    m.insert("cuepr;".to_string(), "\u{22de}".to_string());
+    m.insert("cuesc;".to_string(), "\u{22df}".to_string());
+    m.insert("cularr;".to_string(), "\u{21b6}".to_string());
+    m.insert("cularrp;".to_string(), "\u{293d}".to_string());
+    m.insert("cup;".to_string(), "\u{222a}".to_string());
+    m.insert("cupbrcap;".to_string(), "\u{2a48}".to_string());
+    m.insert("cupcap;".to_string(), "\u{2a46}".to_string());
+    m.insert("cupcup;".to_string(), "\u{2a4a}".to_string());
+    m.insert("cupdot;".to_string(), "\u{228d}".to_string());
+    m.insert("cupor;".to_string(), "\u{2a45}".to_string());
+    m.insert("cups;".to_string(), "\u{222a}\u{fe00}".to_string());
+    m.insert("curarr;".to_string(), "\u{21b7}".to_string());
+    m.insert("curarrm;".to_string(), "\u{293c}".to_string());
+    m.insert("curlyeqprec;".to_string(), "\u{22de}".to_string());
+    m.insert("curlyeqsucc;".to_string(), "\u{22df}".to_string());
+    m.insert("curlyvee;".to_string(), "\u{22ce}".to_string());
+    m.insert("curlywedge;".to_string(), "\u{22cf}".to_string());
+    m.insert("curren".to_string(), "\u{a4}".to_string());
+    m.insert("curren;".to_string(), "\u{a4}".to_string());
+    m.insert("curvearrowleft;".to_string(), "\u{21b6}".to_string());
+    m.insert("curvearrowright;".to_string(), "\u{21b7}".to_string());
+    m.insert("cuvee;".to_string(), "\u{22ce}".to_string());
+    m.insert("cuwed;".to_string(), "\u{22cf}".to_string());
+    m.insert("cwconint;".to_string(), "\u{2232}".to_string());
+    m.insert("cwint;".to_string(), "\u{2231}".to_string());
+    m.insert("cylcty;".to_string(), "\u{232d}".to_string());
+    m.insert("dArr;".to_string(), "\u{21d3}".to_string());
+    m.insert("dHar;".to_string(), "\u{2965}".to_string());
+    m.insert("dagger;".to_string(), "\u{2020}".to_string());
+    m.insert("daleth;".to_string(), "\u{2138}".to_string());
+    m.insert("darr;".to_string(), "\u{2193}".to_string());
+    m.insert("dash;".to_string(), "\u{2010}".to_string());
+    m.insert("dashv;".to_string(), "\u{22a3}".to_string());
+    m.insert("dbkarow;".to_string(), "\u{290f}".to_string());
+    m.insert("dblac;".to_string(), "\u{2dd}".to_string());
+    m.insert("dcaron;".to_string(), "\u{10f}".to_string());
+    m.insert("dcy;".to_string(), "\u{434}".to_string());
+    m.insert("dd;".to_string(), "\u{2146}".to_string());
+    m.insert("ddagger;".to_string(), "\u{2021}".to_string());
+    m.insert("ddarr;".to_string(), "\u{21ca}".to_string());
+    m.insert("ddotseq;".to_string(), "\u{2a77}".to_string());
+    m.insert("deg".to_string(), "\u{b0}".to_string());
+    m.insert("deg;".to_string(), "\u{b0}".to_string());
+    m.insert("delta;".to_string(), "\u{3b4}".to_string());
+    m.insert("demptyv;".to_string(), "\u{29b1}".to_string());
+    m.insert("dfisht;".to_string(), "\u{297f}".to_string());
+    m.insert("dfr;".to_string(), "\u{1d521}".to_string());
+    m.insert("dharl;".to_string(), "\u{21c3}".to_string());
+    m.insert("dharr;".to_string(), "\u{21c2}".to_string());
+    m.insert("diam;".to_string(), "\u{22c4}".to_string());
+    m.insert("diamond;".to_string(), "\u{22c4}".to_string());
+    m.insert("diamondsuit;".to_string(), "\u{2666}".to_string());
+    m.insert("diams;".to_string(), "\u{2666}".to_string());
+    m.insert("die;".to_string(), "\u{a8}".to_string());
+    m.insert("digamma;".to_string(), "\u{3dd}".to_string());
+    m.insert("disin;".to_string(), "\u{22f2}".to_string());
+    m.insert("div;".to_string(), "\u{f7}".to_string());
+    m.insert("divide".to_string(), "\u{f7}".to_string());
+    m.insert("divide;".to_string(), "\u{f7}".to_string());
+    m.insert("divideontimes;".to_string(), "\u{22c7}".to_string());
+    m.insert("divonx;".to_string(), "\u{22c7}".to_string());
+    m.insert("djcy;".to_string(), "\u{452}".to_string());
+    m.insert("dlcorn;".to_string(), "\u{231e}".to_string());
+    m.insert("dlcrop;".to_string(), "\u{230d}".to_string());
+    m.insert("dollar;".to_string(), "$".to_string());
+    m.insert("dopf;".to_string(), "\u{1d555}".to_string());
+    m.insert("dot;".to_string(), "\u{2d9}".to_string());
+    m.insert("doteq;".to_string(), "\u{2250}".to_string());
+    m.insert("doteqdot;".to_string(), "\u{2251}".to_string());
+    m.insert("dotminus;".to_string(), "\u{2238}".to_string());
+    m.insert("dotplus;".to_string(), "\u{2214}".to_string());
+    m.insert("dotsquare;".to_string(), "\u{22a1}".to_string());
+    m.insert("doublebarwedge;".to_string(), "\u{2306}".to_string());
+    m.insert("downarrow;".to_string(), "\u{2193}".to_string());
+    m.insert("downdownarrows;".to_string(), "\u{21ca}".to_string());
+    m.insert("downharpoonleft;".to_string(), "\u{21c3}".to_string());
+    m.insert("downharpoonright;".to_string(), "\u{21c2}".to_string());
+    m.insert("drbkarow;".to_string(), "\u{2910}".to_string());
+    m.insert("drcorn;".to_string(), "\u{231f}".to_string());
+    m.insert("drcrop;".to_string(), "\u{230c}".to_string());
+    m.insert("dscr;".to_string(), "\u{1d4b9}".to_string());
+    m.insert("dscy;".to_string(), "\u{455}".to_string());
+    m.insert("dsol;".to_string(), "\u{29f6}".to_string());
+    m.insert("dstrok;".to_string(), "\u{111}".to_string());
+    m.insert("dtdot;".to_string(), "\u{22f1}".to_string());
+    m.insert("dtri;".to_string(), "\u{25bf}".to_string());
+    m.insert("dtrif;".to_string(), "\u{25be}".to_string());
+    m.insert("duarr;".to_string(), "\u{21f5}".to_string());
+    m.insert("duhar;".to_string(), "\u{296f}".to_string());
+    m.insert("dwangle;".to_string(), "\u{29a6}".to_string());
+    m.insert("dzcy;".to_string(), "\u{45f}".to_string());
+    m.insert("dzigrarr;".to_string(), "\u{27ff}".to_string());
+    m.insert("eDDot;".to_string(), "\u{2a77}".to_string());
+    m.insert("eDot;".to_string(), "\u{2251}".to_string());
+    m.insert("eacute".to_string(), "\u{e9}".to_string());
+    m.insert("eacute;".to_string(), "\u{e9}".to_string());
+    m.insert("easter;".to_string(), "\u{2a6e}".to_string());
+    m.insert("ecaron;".to_string(), "\u{11b}".to_string());
+    m.insert("ecir;".to_string(), "\u{2256}".to_string());
+    m.insert("ecirc".to_string(), "\u{ea}".to_string());
+    m.insert("ecirc;".to_string(), "\u{ea}".to_string());
+    m.insert("ecolon;".to_string(), "\u{2255}".to_string());
+    m.insert("ecy;".to_string(), "\u{44d}".to_string());
+    m.insert("edot;".to_string(), "\u{117}".to_string());
+    m.insert("ee;".to_string(), "\u{2147}".to_string());
+    m.insert("efDot;".to_string(), "\u{2252}".to_string());
+    m.insert("efr;".to_string(), "\u{1d522}".to_string());
+    m.insert("eg;".to_string(), "\u{2a9a}".to_string());
+    m.insert("egrave".to_string(), "\u{e8}".to_string());
+    m.insert("egrave;".to_string(), "\u{e8}".to_string());
+    m.insert("egs;".to_string(), "\u{2a96}".to_string());
+    m.insert("egsdot;".to_string(), "\u{2a98}".to_string());
+    m.insert("el;".to_string(), "\u{2a99}".to_string());
+    m.insert("elinters;".to_string(), "\u{23e7}".to_string());
+    m.insert("ell;".to_string(), "\u{2113}".to_string());
+    m.insert("els;".to_string(), "\u{2a95}".to_string());
+    m.insert("elsdot;".to_string(), "\u{2a97}".to_string());
+    m.insert("emacr;".to_string(), "\u{113}".to_string());
+    m.insert("empty;".to_string(), "\u{2205}".to_string());
+    m.insert("emptyset;".to_string(), "\u{2205}".to_string());
+    m.insert("emptyv;".to_string(), "\u{2205}".to_string());
+    m.insert("emsp13;".to_string(), "\u{2004}".to_string());
+    m.insert("emsp14;".to_string(), "\u{2005}".to_string());
+    m.insert("emsp;".to_string(), "\u{2003}".to_string());
+    m.insert("eng;".to_string(), "\u{14b}".to_string());
+    m.insert("ensp;".to_string(), "\u{2002}".to_string());
+    m.insert("eogon;".to_string(), "\u{119}".to_string());
+    m.insert("eopf;".to_string(), "\u{1d556}".to_string());
+    m.insert("epar;".to_string(), "\u{22d5}".to_string());
+    m.insert("eparsl;".to_string(), "\u{29e3}".to_string());
+    m.insert("eplus;".to_string(), "\u{2a71}".to_string());
+    m.insert("epsi;".to_string(), "\u{3b5}".to_string());
+    m.insert("epsilon;".to_string(), "\u{3b5}".to_string());
+    m.insert("epsiv;".to_string(), "\u{3f5}".to_string());
+    m.insert("eqcirc;".to_string(), "\u{2256}".to_string());
+    m.insert("eqcolon;".to_string(), "\u{2255}".to_string());
+    m.insert("eqsim;".to_string(), "\u{2242}".to_string());
+    m.insert("eqslantgtr;".to_string(), "\u{2a96}".to_string());
+    m.insert("eqslantless;".to_string(), "\u{2a95}".to_string());
+    m.insert("equals;".to_string(), "=".to_string());
+    m.insert("equest;".to_string(), "\u{225f}".to_string());
+    m.insert("equiv;".to_string(), "\u{2261}".to_string());
+    m.insert("equivDD;".to_string(), "\u{2a78}".to_string());
+    m.insert("eqvparsl;".to_string(), "\u{29e5}".to_string());
+    m.insert("erDot;".to_string(), "\u{2253}".to_string());
+    m.insert("erarr;".to_string(), "\u{2971}".to_string());
+    m.insert("escr;".to_string(), "\u{212f}".to_string());
+    m.insert("esdot;".to_string(), "\u{2250}".to_string());
+    m.insert("esim;".to_string(), "\u{2242}".to_string());
+    m.insert("eta;".to_string(), "\u{3b7}".to_string());
+    m.insert("eth".to_string(), "\u{f0}".to_string());
+    m.insert("eth;".to_string(), "\u{f0}".to_string());
+    m.insert("euml".to_string(), "\u{eb}".to_string());
+    m.insert("euml;".to_string(), "\u{eb}".to_string());
+    m.insert("euro;".to_string(), "\u{20ac}".to_string());
+    m.insert("excl;".to_string(), "!".to_string());
+    m.insert("exist;".to_string(), "\u{2203}".to_string());
+    m.insert("expectation;".to_string(), "\u{2130}".to_string());
+    m.insert("exponentiale;".to_string(), "\u{2147}".to_string());
+    m.insert("fallingdotseq;".to_string(), "\u{2252}".to_string());
+    m.insert("fcy;".to_string(), "\u{444}".to_string());
+    m.insert("female;".to_string(), "\u{2640}".to_string());
+    m.insert("ffilig;".to_string(), "\u{fb03}".to_string());
+    m.insert("fflig;".to_string(), "\u{fb00}".to_string());
+    m.insert("ffllig;".to_string(), "\u{fb04}".to_string());
+    m.insert("ffr;".to_string(), "\u{1d523}".to_string());
+    m.insert("filig;".to_string(), "\u{fb01}".to_string());
+    m.insert("fjlig;".to_string(), "fj".to_string());
+    m.insert("flat;".to_string(), "\u{266d}".to_string());
+    m.insert("fllig;".to_string(), "\u{fb02}".to_string());
+    m.insert("fltns;".to_string(), "\u{25b1}".to_string());
+    m.insert("fnof;".to_string(), "\u{192}".to_string());
+    m.insert("fopf;".to_string(), "\u{1d557}".to_string());
+    m.insert("forall;".to_string(), "\u{2200}".to_string());
+    m.insert("fork;".to_string(), "\u{22d4}".to_string());
+    m.insert("forkv;".to_string(), "\u{2ad9}".to_string());
+    m.insert("fpartint;".to_string(), "\u{2a0d}".to_string());
+    m.insert("frac12".to_string(), "\u{bd}".to_string());
+    m.insert("frac12;".to_string(), "\u{bd}".to_string());
+    m.insert("frac13;".to_string(), "\u{2153}".to_string());
+    m.insert("frac14".to_string(), "\u{bc}".to_string());
+    m.insert("frac14;".to_string(), "\u{bc}".to_string());
+    m.insert("frac15;".to_string(), "\u{2155}".to_string());
+    m.insert("frac16;".to_string(), "\u{2159}".to_string());
+    m.insert("frac18;".to_string(), "\u{215b}".to_string());
+    m.insert("frac23;".to_string(), "\u{2154}".to_string());
+    m.insert("frac25;".to_string(), "\u{2156}".to_string());
+    m.insert("frac34".to_string(), "\u{be}".to_string());
+    m.insert("frac34;".to_string(), "\u{be}".to_string());
+    m.insert("frac35;".to_string(), "\u{2157}".to_string());
+    m.insert("frac38;".to_string(), "\u{215c}".to_string());
+    m.insert("frac45;".to_string(), "\u{2158}".to_string());
+    m.insert("frac56;".to_string(), "\u{215a}".to_string());
+    m.insert("frac58;".to_string(), "\u{215d}".to_string());
+    m.insert("frac78;".to_string(), "\u{215e}".to_string());
+    m.insert("frasl;".to_string(), "\u{2044}".to_string());
+    m.insert("frown;".to_string(), "\u{2322}".to_string());
+    m.insert("fscr;".to_string(), "\u{1d4bb}".to_string());
+    m.insert("gE;".to_string(), "\u{2267}".to_string());
+    m.insert("gEl;".to_string(), "\u{2a8c}".to_string());
+    m.insert("gacute;".to_string(), "\u{1f5}".to_string());
+    m.insert("gamma;".to_string(), "\u{3b3}".to_string());
+    m.insert("gammad;".to_string(), "\u{3dd}".to_string());
+    m.insert("gap;".to_string(), "\u{2a86}".to_string());
+    m.insert("gbreve;".to_string(), "\u{11f}".to_string());
+    m.insert("gcirc;".to_string(), "\u{11d}".to_string());
+    m.insert("gcy;".to_string(), "\u{433}".to_string());
+    m.insert("gdot;".to_string(), "\u{121}".to_string());
+    m.insert("ge;".to_string(), "\u{2265}".to_string());
+    m.insert("gel;".to_string(), "\u{22db}".to_string());
+    m.insert("geq;".to_string(), "\u{2265}".to_string());
+    m.insert("geqq;".to_string(), "\u{2267}".to_string());
+    m.insert("geqslant;".to_string(), "\u{2a7e}".to_string());
+    m.insert("ges;".to_string(), "\u{2a7e}".to_string());
+    m.insert("gescc;".to_string(), "\u{2aa9}".to_string());
+    m.insert("gesdot;".to_string(), "\u{2a80}".to_string());
+    m.insert("gesdoto;".to_string(), "\u{2a82}".to_string());
+    m.insert("gesdotol;".to_string(), "\u{2a84}".to_string());
+    m.insert("gesl;".to_string(), "\u{22db}\u{fe00}".to_string());
+    m.insert("gesles;".to_string(), "\u{2a94}".to_string());
+    m.insert("gfr;".to_string(), "\u{1d524}".to_string());
+    m.insert("gg;".to_string(), "\u{226b}".to_string());
+    m.insert("ggg;".to_string(), "\u{22d9}".to_string());
+    m.insert("gimel;".to_string(), "\u{2137}".to_string());
+    m.insert("gjcy;".to_string(), "\u{453}".to_string());
+    m.insert("gl;".to_string(), "\u{2277}".to_string());
+    m.insert("glE;".to_string(), "\u{2a92}".to_string());
+    m.insert("gla;".to_string(), "\u{2aa5}".to_string());
+    m.insert("glj;".to_string(), "\u{2aa4}".to_string());
+    m.insert("gnE;".to_string(), "\u{2269}".to_string());
+    m.insert("gnap;".to_string(), "\u{2a8a}".to_string());
+    m.insert("gnapprox;".to_string(), "\u{2a8a}".to_string());
+    m.insert("gne;".to_string(), "\u{2a88}".to_string());
+    m.insert("gneq;".to_string(), "\u{2a88}".to_string());
+    m.insert("gneqq;".to_string(), "\u{2269}".to_string());
+    m.insert("gnsim;".to_string(), "\u{22e7}".to_string());
+    m.insert("gopf;".to_string(), "\u{1d558}".to_string());
+    m.insert("grave;".to_string(), "`".to_string());
+    m.insert("gscr;".to_string(), "\u{210a}".to_string());
+    m.insert("gsim;".to_string(), "\u{2273}".to_string());
+    m.insert("gsime;".to_string(), "\u{2a8e}".to_string());
+    m.insert("gsiml;".to_string(), "\u{2a90}".to_string());
+    m.insert("gt".to_string(), ">".to_string());
+    m.insert("gt;".to_string(), ">".to_string());
+    m.insert("gtcc;".to_string(), "\u{2aa7}".to_string());
+    m.insert("gtcir;".to_string(), "\u{2a7a}".to_string());
+    m.insert("gtdot;".to_string(), "\u{22d7}".to_string());
+    m.insert("gtlPar;".to_string(), "\u{2995}".to_string());
+    m.insert("gtquest;".to_string(), "\u{2a7c}".to_string());
+    m.insert("gtrapprox;".to_string(), "\u{2a86}".to_string());
+    m.insert("gtrarr;".to_string(), "\u{2978}".to_string());
+    m.insert("gtrdot;".to_string(), "\u{22d7}".to_string());
+    m.insert("gtreqless;".to_string(), "\u{22db}".to_string());
+    m.insert("gtreqqless;".to_string(), "\u{2a8c}".to_string());
+    m.insert("gtrless;".to_string(), "\u{2277}".to_string());
+    m.insert("gtrsim;".to_string(), "\u{2273}".to_string());
+    m.insert("gvertneqq;".to_string(), "\u{2269}\u{fe00}".to_string());
+    m.insert("gvnE;".to_string(), "\u{2269}\u{fe00}".to_string());
+    m.insert("hArr;".to_string(), "\u{21d4}".to_string());
+    m.insert("hairsp;".to_string(), "\u{200a}".to_string());
+    m.insert("half;".to_string(), "\u{bd}".to_string());
+    m.insert("hamilt;".to_string(), "\u{210b}".to_string());
+    m.insert("hardcy;".to_string(), "\u{44a}".to_string());
+    m.insert("harr;".to_string(), "\u{2194}".to_string());
+    m.insert("harrcir;".to_string(), "\u{2948}".to_string());
+    m.insert("harrw;".to_string(), "\u{21ad}".to_string());
+    m.insert("hbar;".to_string(), "\u{210f}".to_string());
+    m.insert("hcirc;".to_string(), "\u{125}".to_string());
+    m.insert("hearts;".to_string(), "\u{2665}".to_string());
+    m.insert("heartsuit;".to_string(), "\u{2665}".to_string());
+    m.insert("hellip;".to_string(), "\u{2026}".to_string());
+    m.insert("hercon;".to_string(), "\u{22b9}".to_string());
+    m.insert("hfr;".to_string(), "\u{1d525}".to_string());
+    m.insert("hksearow;".to_string(), "\u{2925}".to_string());
+    m.insert("hkswarow;".to_string(), "\u{2926}".to_string());
+    m.insert("hoarr;".to_string(), "\u{21ff}".to_string());
+    m.insert("homtht;".to_string(), "\u{223b}".to_string());
+    m.insert("hookleftarrow;".to_string(), "\u{21a9}".to_string());
+    m.insert("hookrightarrow;".to_string(), "\u{21aa}".to_string());
+    m.insert("hopf;".to_string(), "\u{1d559}".to_string());
+    m.insert("horbar;".to_string(), "\u{2015}".to_string());
+    m.insert("hscr;".to_string(), "\u{1d4bd}".to_string());
+    m.insert("hslash;".to_string(), "\u{210f}".to_string());
+    m.insert("hstrok;".to_string(), "\u{127}".to_string());
+    m.insert("hybull;".to_string(), "\u{2043}".to_string());
+    m.insert("hyphen;".to_string(), "\u{2010}".to_string());
+    m.insert("iacute".to_string(), "\u{ed}".to_string());
+    m.insert("iacute;".to_string(), "\u{ed}".to_string());
+    m.insert("ic;".to_string(), "\u{2063}".to_string());
+    m.insert("icirc".to_string(), "\u{ee}".to_string());
+    m.insert("icirc;".to_string(), "\u{ee}".to_string());
+    m.insert("icy;".to_string(), "\u{438}".to_string());
+    m.insert("iecy;".to_string(), "\u{435}".to_string());
+    m.insert("iexcl".to_string(), "\u{a1}".to_string());
+    m.insert("iexcl;".to_string(), "\u{a1}".to_string());
+    m.insert("iff;".to_string(), "\u{21d4}".to_string());
+    m.insert("ifr;".to_string(), "\u{1d526}".to_string());
+    m.insert("igrave".to_string(), "\u{ec}".to_string());
+    m.insert("igrave;".to_string(), "\u{ec}".to_string());
+    m.insert("ii;".to_string(), "\u{2148}".to_string());
+    m.insert("iiiint;".to_string(), "\u{2a0c}".to_string());
+    m.insert("iiint;".to_string(), "\u{222d}".to_string());
+    m.insert("iinfin;".to_string(), "\u{29dc}".to_string());
+    m.insert("iiota;".to_string(), "\u{2129}".to_string());
+    m.insert("ijlig;".to_string(), "\u{133}".to_string());
+    m.insert("imacr;".to_string(), "\u{12b}".to_string());
+    m.insert("image;".to_string(), "\u{2111}".to_string());
+    m.insert("imagline;".to_string(), "\u{2110}".to_string());
+    m.insert("imagpart;".to_string(), "\u{2111}".to_string());
+    m.insert("imath;".to_string(), "\u{131}".to_string());
+    m.insert("imof;".to_string(), "\u{22b7}".to_string());
+    m.insert("imped;".to_string(), "\u{1b5}".to_string());
+    m.insert("in;".to_string(), "\u{2208}".to_string());
+    m.insert("incare;".to_string(), "\u{2105}".to_string());
+    m.insert("infin;".to_string(), "\u{221e}".to_string());
+    m.insert("infintie;".to_string(), "\u{29dd}".to_string());
+    m.insert("inodot;".to_string(), "\u{131}".to_string());
+    m.insert("int;".to_string(), "\u{222b}".to_string());
+    m.insert("intcal;".to_string(), "\u{22ba}".to_string());
+    m.insert("integers;".to_string(), "\u{2124}".to_string());
+    m.insert("intercal;".to_string(), "\u{22ba}".to_string());
+    m.insert("intlarhk;".to_string(), "\u{2a17}".to_string());
+    m.insert("intprod;".to_string(), "\u{2a3c}".to_string());
+    m.insert("iocy;".to_string(), "\u{451}".to_string());
+    m.insert("iogon;".to_string(), "\u{12f}".to_string());
+    m.insert("iopf;".to_string(), "\u{1d55a}".to_string());
+    m.insert("iota;".to_string(), "\u{3b9}".to_string());
+    m.insert("iprod;".to_string(), "\u{2a3c}".to_string());
+    m.insert("iquest".to_string(), "\u{bf}".to_string());
+    m.insert("iquest;".to_string(), "\u{bf}".to_string());
+    m.insert("iscr;".to_string(), "\u{1d4be}".to_string());
+    m.insert("isin;".to_string(), "\u{2208}".to_string());
+    m.insert("isinE;".to_string(), "\u{22f9}".to_string());
+    m.insert("isindot;".to_string(), "\u{22f5}".to_string());
+    m.insert("isins;".to_string(), "\u{22f4}".to_string());
+    m.insert("isinsv;".to_string(), "\u{22f3}".to_string());
+    m.insert("isinv;".to_string(), "\u{2208}".to_string());
+    m.insert("it;".to_string(), "\u{2062}".to_string());
+    m.insert("itilde;".to_string(), "\u{129}".to_string());
+    m.insert("iukcy;".to_string(), "\u{456}".to_string());
+    m.insert("iuml".to_string(), "\u{ef}".to_string());
+    m.insert("iuml;".to_string(), "\u{ef}".to_string());
+    m.insert("jcirc;".to_string(), "\u{135}".to_string());
+    m.insert("jcy;".to_string(), "\u{439}".to_string());
+    m.insert("jfr;".to_string(), "\u{1d527}".to_string());
+    m.insert("jmath;".to_string(), "\u{237}".to_string());
+    m.insert("jopf;".to_string(), "\u{1d55b}".to_string());
+    m.insert("jscr;".to_string(), "\u{1d4bf}".to_string());
+    m.insert("jsercy;".to_string(), "\u{458}".to_string());
+    m.insert("jukcy;".to_string(), "\u{454}".to_string());
+    m.insert("kappa;".to_string(), "\u{3ba}".to_string());
+    m.insert("kappav;".to_string(), "\u{3f0}".to_string());
+    m.insert("kcedil;".to_string(), "\u{137}".to_string());
+    m.insert("kcy;".to_string(), "\u{43a}".to_string());
+    m.insert("kfr;".to_string(), "\u{1d528}".to_string());
+    m.insert("kgreen;".to_string(), "\u{138}".to_string());
+    m.insert("khcy;".to_string(), "\u{445}".to_string());
+    m.insert("kjcy;".to_string(), "\u{45c}".to_string());
+    m.insert("kopf;".to_string(), "\u{1d55c}".to_string());
+    m.insert("kscr;".to_string(), "\u{1d4c0}".to_string());
+    m.insert("lAarr;".to_string(), "\u{21da}".to_string());
+    m.insert("lArr;".to_string(), "\u{21d0}".to_string());
+    m.insert("lAtail;".to_string(), "\u{291b}".to_string());
+    m.insert("lBarr;".to_string(), "\u{290e}".to_string());
+    m.insert("lE;".to_string(), "\u{2266}".to_string());
+    m.insert("lEg;".to_string(), "\u{2a8b}".to_string());
+    m.insert("lHar;".to_string(), "\u{2962}".to_string());
+    m.insert("lacute;".to_string(), "\u{13a}".to_string());
+    m.insert("laemptyv;".to_string(), "\u{29b4}".to_string());
+    m.insert("lagran;".to_string(), "\u{2112}".to_string());
+    m.insert("lambda;".to_string(), "\u{3bb}".to_string());
+    m.insert("lang;".to_string(), "\u{27e8}".to_string());
+    m.insert("langd;".to_string(), "\u{2991}".to_string());
+    m.insert("langle;".to_string(), "\u{27e8}".to_string());
+    m.insert("lap;".to_string(), "\u{2a85}".to_string());
+    m.insert("laquo".to_string(), "\u{ab}".to_string());
+    m.insert("laquo;".to_string(), "\u{ab}".to_string());
+    m.insert("larr;".to_string(), "\u{2190}".to_string());
+    m.insert("larrb;".to_string(), "\u{21e4}".to_string());
+    m.insert("larrbfs;".to_string(), "\u{291f}".to_string());
+    m.insert("larrfs;".to_string(), "\u{291d}".to_string());
+    m.insert("larrhk;".to_string(), "\u{21a9}".to_string());
+    m.insert("larrlp;".to_string(), "\u{21ab}".to_string());
+    m.insert("larrpl;".to_string(), "\u{2939}".to_string());
+    m.insert("larrsim;".to_string(), "\u{2973}".to_string());
+    m.insert("larrtl;".to_string(), "\u{21a2}".to_string());
+    m.insert("lat;".to_string(), "\u{2aab}".to_string());
+    m.insert("latail;".to_string(), "\u{2919}".to_string());
+    m.insert("late;".to_string(), "\u{2aad}".to_string());
+    m.insert("lates;".to_string(), "\u{2aad}\u{fe00}".to_string());
+    m.insert("lbarr;".to_string(), "\u{290c}".to_string());
+    m.insert("lbbrk;".to_string(), "\u{2772}".to_string());
+    m.insert("lbrace;".to_string(), "{".to_string());
+    m.insert("lbrack;".to_string(), "[".to_string());
+    m.insert("lbrke;".to_string(), "\u{298b}".to_string());
+    m.insert("lbrksld;".to_string(), "\u{298f}".to_string());
+    m.insert("lbrkslu;".to_string(), "\u{298d}".to_string());
+    m.insert("lcaron;".to_string(), "\u{13e}".to_string());
+    m.insert("lcedil;".to_string(), "\u{13c}".to_string());
+    m.insert("lceil;".to_string(), "\u{2308}".to_string());
+    m.insert("lcub;".to_string(), "{".to_string());
+    m.insert("lcy;".to_string(), "\u{43b}".to_string());
+    m.insert("ldca;".to_string(), "\u{2936}".to_string());
+    m.insert("ldquo;".to_string(), "\u{201c}".to_string());
+    m.insert("ldquor;".to_string(), "\u{201e}".to_string());
+    m.insert("ldrdhar;".to_string(), "\u{2967}".to_string());
+    m.insert("ldrushar;".to_string(), "\u{294b}".to_string());
+    m.insert("ldsh;".to_string(), "\u{21b2}".to_string());
+    m.insert("le;".to_string(), "\u{2264}".to_string());
+    m.insert("leftarrow;".to_string(), "\u{2190}".to_string());
+    m.insert("leftarrowtail;".to_string(), "\u{21a2}".to_string());
+    m.insert("leftharpoondown;".to_string(), "\u{21bd}".to_string());
+    m.insert("leftharpoonup;".to_string(), "\u{21bc}".to_string());
+    m.insert("leftleftarrows;".to_string(), "\u{21c7}".to_string());
+    m.insert("leftrightarrow;".to_string(), "\u{2194}".to_string());
+    m.insert("leftrightarrows;".to_string(), "\u{21c6}".to_string());
+    m.insert("leftrightharpoons;".to_string(), "\u{21cb}".to_string());
+    m.insert("leftrightsquigarrow;".to_string(), "\u{21ad}".to_string());
+    m.insert("leftthreetimes;".to_string(), "\u{22cb}".to_string());
+    m.insert("leg;".to_string(), "\u{22da}".to_string());
+    m.insert("leq;".to_string(), "\u{2264}".to_string());
+    m.insert("leqq;".to_string(), "\u{2266}".to_string());
+    m.insert("leqslant;".to_string(), "\u{2a7d}".to_string());
+    m.insert("les;".to_string(), "\u{2a7d}".to_string());
+    m.insert("lescc;".to_string(), "\u{2aa8}".to_string());
+    m.insert("lesdot;".to_string(), "\u{2a7f}".to_string());
+    m.insert("lesdoto;".to_string(), "\u{2a81}".to_string());
+    m.insert("lesdotor;".to_string(), "\u{2a83}".to_string());
+    m.insert("lesg;".to_string(), "\u{22da}\u{fe00}".to_string());
+    m.insert("lesges;".to_string(), "\u{2a93}".to_string());
+    m.insert("lessapprox;".to_string(), "\u{2a85}".to_string());
+    m.insert("lessdot;".to_string(), "\u{22d6}".to_string());
+    m.insert("lesseqgtr;".to_string(), "\u{22da}".to_string());
+    m.insert("lesseqqgtr;".to_string(), "\u{2a8b}".to_string());
+    m.insert("lessgtr;".to_string(), "\u{2276}".to_string());
+    m.insert("lesssim;".to_string(), "\u{2272}".to_string());
+    m.insert("lfisht;".to_string(), "\u{297c}".to_string());
+    m.insert("lfloor;".to_string(), "\u{230a}".to_string());
+    m.insert("lfr;".to_string(), "\u{1d529}".to_string());
+    m.insert("lg;".to_string(), "\u{2276}".to_string());
+    m.insert("lgE;".to_string(), "\u{2a91}".to_string());
+    m.insert("lhard;".to_string(), "\u{21bd}".to_string());
+    m.insert("lharu;".to_string(), "\u{21bc}".to_string());
+    m.insert("lharul;".to_string(), "\u{296a}".to_string());
+    m.insert("lhblk;".to_string(), "\u{2584}".to_string());
+    m.insert("ljcy;".to_string(), "\u{459}".to_string());
+    m.insert("ll;".to_string(), "\u{226a}".to_string());
+    m.insert("llarr;".to_string(), "\u{21c7}".to_string());
+    m.insert("llcorner;".to_string(), "\u{231e}".to_string());
+    m.insert("llhard;".to_string(), "\u{296b}".to_string());
+    m.insert("lltri;".to_string(), "\u{25fa}".to_string());
+    m.insert("lmidot;".to_string(), "\u{140}".to_string());
+    m.insert("lmoust;".to_string(), "\u{23b0}".to_string());
+    m.insert("lmoustache;".to_string(), "\u{23b0}".to_string());
+    m.insert("lnE;".to_string(), "\u{2268}".to_string());
+    m.insert("lnap;".to_string(), "\u{2a89}".to_string());
+    m.insert("lnapprox;".to_string(), "\u{2a89}".to_string());
+    m.insert("lne;".to_string(), "\u{2a87}".to_string());
+    m.insert("lneq;".to_string(), "\u{2a87}".to_string());
+    m.insert("lneqq;".to_string(), "\u{2268}".to_string());
+    m.insert("lnsim;".to_string(), "\u{22e6}".to_string());
+    m.insert("loang;".to_string(), "\u{27ec}".to_string());
+    m.insert("loarr;".to_string(), "\u{21fd}".to_string());
+    m.insert("lobrk;".to_string(), "\u{27e6}".to_string());
+    m.insert("longleftarrow;".to_string(), "\u{27f5}".to_string());
+    m.insert("longleftrightarrow;".to_string(), "\u{27f7}".to_string());
+    m.insert("longmapsto;".to_string(), "\u{27fc}".to_string());
+    m.insert("longrightarrow;".to_string(), "\u{27f6}".to_string());
+    m.insert("looparrowleft;".to_string(), "\u{21ab}".to_string());
+    m.insert("looparrowright;".to_string(), "\u{21ac}".to_string());
+    m.insert("lopar;".to_string(), "\u{2985}".to_string());
+    m.insert("lopf;".to_string(), "\u{1d55d}".to_string());
+    m.insert("loplus;".to_string(), "\u{2a2d}".to_string());
+    m.insert("lotimes;".to_string(), "\u{2a34}".to_string());
+    m.insert("lowast;".to_string(), "\u{2217}".to_string());
+    m.insert("lowbar;".to_string(), "_".to_string());
+    m.insert("loz;".to_string(), "\u{25ca}".to_string());
+    m.insert("lozenge;".to_string(), "\u{25ca}".to_string());
+    m.insert("lozf;".to_string(), "\u{29eb}".to_string());
+    m.insert("lpar;".to_string(), "(".to_string());
+    m.insert("lparlt;".to_string(), "\u{2993}".to_string());
+    m.insert("lrarr;".to_string(), "\u{21c6}".to_string());
+    m.insert("lrcorner;".to_string(), "\u{231f}".to_string());
+    m.insert("lrhar;".to_string(), "\u{21cb}".to_string());
+    m.insert("lrhard;".to_string(), "\u{296d}".to_string());
+    m.insert("lrm;".to_string(), "\u{200e}".to_string());
+    m.insert("lrtri;".to_string(), "\u{22bf}".to_string());
+    m.insert("lsaquo;".to_string(), "\u{2039}".to_string());
+    m.insert("lscr;".to_string(), "\u{1d4c1}".to_string());
+    m.insert("lsh;".to_string(), "\u{21b0}".to_string());
+    m.insert("lsim;".to_string(), "\u{2272}".to_string());
+    m.insert("lsime;".to_string(), "\u{2a8d}".to_string());
+    m.insert("lsimg;".to_string(), "\u{2a8f}".to_string());
+    m.insert("lsqb;".to_string(), "[".to_string());
+    m.insert("lsquo;".to_string(), "\u{2018}".to_string());
+    m.insert("lsquor;".to_string(), "\u{201a}".to_string());
+    m.insert("lstrok;".to_string(), "\u{142}".to_string());
+    m.insert("lt".to_string(), "<".to_string());
+    m.insert("lt;".to_string(), "<".to_string());
+    m.insert("ltcc;".to_string(), "\u{2aa6}".to_string());
+    m.insert("ltcir;".to_string(), "\u{2a79}".to_string());
+    m.insert("ltdot;".to_string(), "\u{22d6}".to_string());
+    m.insert("lthree;".to_string(), "\u{22cb}".to_string());
+    m.insert("ltimes;".to_string(), "\u{22c9}".to_string());
+    m.insert("ltlarr;".to_string(), "\u{2976}".to_string());
+    m.insert("ltquest;".to_string(), "\u{2a7b}".to_string());
+    m.insert("ltrPar;".to_string(), "\u{2996}".to_string());
+    m.insert("ltri;".to_string(), "\u{25c3}".to_string());
+    m.insert("ltrie;".to_string(), "\u{22b4}".to_string());
+    m.insert("ltrif;".to_string(), "\u{25c2}".to_string());
+    m.insert("lurdshar;".to_string(), "\u{294a}".to_string());
+    m.insert("luruhar;".to_string(), "\u{2966}".to_string());
+    m.insert("lvertneqq;".to_string(), "\u{2268}\u{fe00}".to_string());
+    m.insert("lvnE;".to_string(), "\u{2268}\u{fe00}".to_string());
+    m.insert("mDDot;".to_string(), "\u{223a}".to_string());
+    m.insert("macr".to_string(), "\u{af}".to_string());
+    m.insert("macr;".to_string(), "\u{af}".to_string());
+    m.insert("male;".to_string(), "\u{2642}".to_string());
+    m.insert("malt;".to_string(), "\u{2720}".to_string());
+    m.insert("maltese;".to_string(), "\u{2720}".to_string());
+    m.insert("map;".to_string(), "\u{21a6}".to_string());
+    m.insert("mapsto;".to_string(), "\u{21a6}".to_string());
+    m.insert("mapstodown;".to_string(), "\u{21a7}".to_string());
+    m.insert("mapstoleft;".to_string(), "\u{21a4}".to_string());
+    m.insert("mapstoup;".to_string(), "\u{21a5}".to_string());
+    m.insert("marker;".to_string(), "\u{25ae}".to_string());
+    m.insert("mcomma;".to_string(), "\u{2a29}".to_string());
+    m.insert("mcy;".to_string(), "\u{43c}".to_string());
+    m.insert("mdash;".to_string(), "\u{2014}".to_string());
+    m.insert("measuredangle;".to_string(), "\u{2221}".to_string());
+    m.insert("mfr;".to_string(), "\u{1d52a}".to_string());
+    m.insert("mho;".to_string(), "\u{2127}".to_string());
+    m.insert("micro".to_string(), "\u{b5}".to_string());
+    m.insert("micro;".to_string(), "\u{b5}".to_string());
+    m.insert("mid;".to_string(), "\u{2223}".to_string());
+    m.insert("midast;".to_string(), "*".to_string());
+    m.insert("midcir;".to_string(), "\u{2af0}".to_string());
+    m.insert("middot".to_string(), "\u{b7}".to_string());
+    m.insert("middot;".to_string(), "\u{b7}".to_string());
+    m.insert("minus;".to_string(), "\u{2212}".to_string());
+    m.insert("minusb;".to_string(), "\u{229f}".to_string());
+    m.insert("minusd;".to_string(), "\u{2238}".to_string());
+    m.insert("minusdu;".to_string(), "\u{2a2a}".to_string());
+    m.insert("mlcp;".to_string(), "\u{2adb}".to_string());
+    m.insert("mldr;".to_string(), "\u{2026}".to_string());
+    m.insert("mnplus;".to_string(), "\u{2213}".to_string());
+    m.insert("models;".to_string(), "\u{22a7}".to_string());
+    m.insert("mopf;".to_string(), "\u{1d55e}".to_string());
+    m.insert("mp;".to_string(), "\u{2213}".to_string());
+    m.insert("mscr;".to_string(), "\u{1d4c2}".to_string());
+    m.insert("mstpos;".to_string(), "\u{223e}".to_string());
+    m.insert("mu;".to_string(), "\u{3bc}".to_string());
+    m.insert("multimap;".to_string(), "\u{22b8}".to_string());
+    m.insert("mumap;".to_string(), "\u{22b8}".to_string());
+    m.insert("nGg;".to_string(), "\u{22d9}\u{338}".to_string());
+    m.insert("nGt;".to_string(), "\u{226b}\u{20d2}".to_string());
+    m.insert("nGtv;".to_string(), "\u{226b}\u{338}".to_string());
+    m.insert("nLeftarrow;".to_string(), "\u{21cd}".to_string());
+    m.insert("nLeftrightarrow;".to_string(), "\u{21ce}".to_string());
+    m.insert("nLl;".to_string(), "\u{22d8}\u{338}".to_string());
+    m.insert("nLt;".to_string(), "\u{226a}\u{20d2}".to_string());
+    m.insert("nLtv;".to_string(), "\u{226a}\u{338}".to_string());
+    m.insert("nRightarrow;".to_string(), "\u{21cf}".to_string());
+    m.insert("nVDash;".to_string(), "\u{22af}".to_string());
+    m.insert("nVdash;".to_string(), "\u{22ae}".to_string());
+    m.insert("nabla;".to_string(), "\u{2207}".to_string());
+    m.insert("nacute;".to_string(), "\u{144}".to_string());
+    m.insert("nang;".to_string(), "\u{2220}\u{20d2}".to_string());
+    m.insert("nap;".to_string(), "\u{2249}".to_string());
+    m.insert("napE;".to_string(), "\u{2a70}\u{338}".to_string());
+    m.insert("napid;".to_string(), "\u{224b}\u{338}".to_string());
+    m.insert("napos;".to_string(), "\u{149}".to_string());
+    m.insert("napprox;".to_string(), "\u{2249}".to_string());
+    m.insert("natur;".to_string(), "\u{266e}".to_string());
+    m.insert("natural;".to_string(), "\u{266e}".to_string());
+    m.insert("naturals;".to_string(), "\u{2115}".to_string());
+    m.insert("nbsp".to_string(), "\u{a0}".to_string());
+    m.insert("nbsp;".to_string(), "\u{a0}".to_string());
+    m.insert("nbump;".to_string(), "\u{224e}\u{338}".to_string());
+    m.insert("nbumpe;".to_string(), "\u{224f}\u{338}".to_string());
+    m.insert("ncap;".to_string(), "\u{2a43}".to_string());
+    m.insert("ncaron;".to_string(), "\u{148}".to_string());
+    m.insert("ncedil;".to_string(), "\u{146}".to_string());
+    m.insert("ncong;".to_string(), "\u{2247}".to_string());
+    m.insert("ncongdot;".to_string(), "\u{2a6d}\u{338}".to_string());
+    m.insert("ncup;".to_string(), "\u{2a42}".to_string());
+    m.insert("ncy;".to_string(), "\u{43d}".to_string());
+    m.insert("ndash;".to_string(), "\u{2013}".to_string());
+    m.insert("ne;".to_string(), "\u{2260}".to_string());
+    m.insert("neArr;".to_string(), "\u{21d7}".to_string());
+    m.insert("nearhk;".to_string(), "\u{2924}".to_string());
+    m.insert("nearr;".to_string(), "\u{2197}".to_string());
+    m.insert("nearrow;".to_string(), "\u{2197}".to_string());
+    m.insert("nedot;".to_string(), "\u{2250}\u{338}".to_string());
+    m.insert("nequiv;".to_string(), "\u{2262}".to_string());
+    m.insert("nesear;".to_string(), "\u{2928}".to_string());
+    m.insert("nesim;".to_string(), "\u{2242}\u{338}".to_string());
+    m.insert("nexist;".to_string(), "\u{2204}".to_string());
+    m.insert("nexists;".to_string(), "\u{2204}".to_string());
+    m.insert("nfr;".to_string(), "\u{1d52b}".to_string());
+    m.insert("ngE;".to_string(), "\u{2267}\u{338}".to_string());
+    m.insert("nge;".to_string(), "\u{2271}".to_string());
+    m.insert("ngeq;".to_string(), "\u{2271}".to_string());
+    m.insert("ngeqq;".to_string(), "\u{2267}\u{338}".to_string());
+    m.insert("ngeqslant;".to_string(), "\u{2a7e}\u{338}".to_string());
+    m.insert("nges;".to_string(), "\u{2a7e}\u{338}".to_string());
+    m.insert("ngsim;".to_string(), "\u{2275}".to_string());
+    m.insert("ngt;".to_string(), "\u{226f}".to_string());
+    m.insert("ngtr;".to_string(), "\u{226f}".to_string());
+    m.insert("nhArr;".to_string(), "\u{21ce}".to_string());
+    m.insert("nharr;".to_string(), "\u{21ae}".to_string());
+    m.insert("nhpar;".to_string(), "\u{2af2}".to_string());
+    m.insert("ni;".to_string(), "\u{220b}".to_string());
+    m.insert("nis;".to_string(), "\u{22fc}".to_string());
+    m.insert("nisd;".to_string(), "\u{22fa}".to_string());
+    m.insert("niv;".to_string(), "\u{220b}".to_string());
+    m.insert("njcy;".to_string(), "\u{45a}".to_string());
+    m.insert("nlArr;".to_string(), "\u{21cd}".to_string());
+    m.insert("nlE;".to_string(), "\u{2266}\u{338}".to_string());
+    m.insert("nlarr;".to_string(), "\u{219a}".to_string());
+    m.insert("nldr;".to_string(), "\u{2025}".to_string());
+    m.insert("nle;".to_string(), "\u{2270}".to_string());
+    m.insert("nleftarrow;".to_string(), "\u{219a}".to_string());
+    m.insert("nleftrightarrow;".to_string(), "\u{21ae}".to_string());
+    m.insert("nleq;".to_string(), "\u{2270}".to_string());
+    m.insert("nleqq;".to_string(), "\u{2266}\u{338}".to_string());
+    m.insert("nleqslant;".to_string(), "\u{2a7d}\u{338}".to_string());
+    m.insert("nles;".to_string(), "\u{2a7d}\u{338}".to_string());
+    m.insert("nless;".to_string(), "\u{226e}".to_string());
+    m.insert("nlsim;".to_string(), "\u{2274}".to_string());
+    m.insert("nlt;".to_string(), "\u{226e}".to_string());
+    m.insert("nltri;".to_string(), "\u{22ea}".to_string());
+    m.insert("nltrie;".to_string(), "\u{22ec}".to_string());
+    m.insert("nmid;".to_string(), "\u{2224}".to_string());
+    m.insert("nopf;".to_string(), "\u{1d55f}".to_string());
+    m.insert("not".to_string(), "\u{ac}".to_string());
+    m.insert("not;".to_string(), "\u{ac}".to_string());
+    m.insert("notin;".to_string(), "\u{2209}".to_string());
+    m.insert("notinE;".to_string(), "\u{22f9}\u{338}".to_string());
+    m.insert("notindot;".to_string(), "\u{22f5}\u{338}".to_string());
+    m.insert("notinva;".to_string(), "\u{2209}".to_string());
+    m.insert("notinvb;".to_string(), "\u{22f7}".to_string());
+    m.insert("notinvc;".to_string(), "\u{22f6}".to_string());
+    m.insert("notni;".to_string(), "\u{220c}".to_string());
+    m.insert("notniva;".to_string(), "\u{220c}".to_string());
+    m.insert("notnivb;".to_string(), "\u{22fe}".to_string());
+    m.insert("notnivc;".to_string(), "\u{22fd}".to_string());
+    m.insert("npar;".to_string(), "\u{2226}".to_string());
+    m.insert("nparallel;".to_string(), "\u{2226}".to_string());
+    m.insert("nparsl;".to_string(), "\u{2afd}\u{20e5}".to_string());
+    m.insert("npart;".to_string(), "\u{2202}\u{338}".to_string());
+    m.insert("npolint;".to_string(), "\u{2a14}".to_string());
+    m.insert("npr;".to_string(), "\u{2280}".to_string());
+    m.insert("nprcue;".to_string(), "\u{22e0}".to_string());
+    m.insert("npre;".to_string(), "\u{2aaf}\u{338}".to_string());
+    m.insert("nprec;".to_string(), "\u{2280}".to_string());
+    m.insert("npreceq;".to_string(), "\u{2aaf}\u{338}".to_string());
+    m.insert("nrArr;".to_string(), "\u{21cf}".to_string());
+    m.insert("nrarr;".to_string(), "\u{219b}".to_string());
+    m.insert("nrarrc;".to_string(), "\u{2933}\u{338}".to_string());
+    m.insert("nrarrw;".to_string(), "\u{219d}\u{338}".to_string());
+    m.insert("nrightarrow;".to_string(), "\u{219b}".to_string());
+    m.insert("nrtri;".to_string(), "\u{22eb}".to_string());
+    m.insert("nrtrie;".to_string(), "\u{22ed}".to_string());
+    m.insert("nsc;".to_string(), "\u{2281}".to_string());
+    m.insert("nsccue;".to_string(), "\u{22e1}".to_string());
+    m.insert("nsce;".to_string(), "\u{2ab0}\u{338}".to_string());
+    m.insert("nscr;".to_string(), "\u{1d4c3}".to_string());
+    m.insert("nshortmid;".to_string(), "\u{2224}".to_string());
+    m.insert("nshortparallel;".to_string(), "\u{2226}".to_string());
+    m.insert("nsim;".to_string(), "\u{2241}".to_string());
+    m.insert("nsime;".to_string(), "\u{2244}".to_string());
+    m.insert("nsimeq;".to_string(), "\u{2244}".to_string());
+    m.insert("nsmid;".to_string(), "\u{2224}".to_string());
+    m.insert("nspar;".to_string(), "\u{2226}".to_string());
+    m.insert("nsqsube;".to_string(), "\u{22e2}".to_string());
+    m.insert("nsqsupe;".to_string(), "\u{22e3}".to_string());
+    m.insert("nsub;".to_string(), "\u{2284}".to_string());
+    m.insert("nsubE;".to_string(), "\u{2ac5}\u{338}".to_string());
+    m.insert("nsube;".to_string(), "\u{2288}".to_string());
+    m.insert("nsubset;".to_string(), "\u{2282}\u{20d2}".to_string());
+    m.insert("nsubseteq;".to_string(), "\u{2288}".to_string());
+    m.insert("nsubseteqq;".to_string(), "\u{2ac5}\u{338}".to_string());
+    m.insert("nsucc;".to_string(), "\u{2281}".to_string());
+    m.insert("nsucceq;".to_string(), "\u{2ab0}\u{338}".to_string());
+    m.insert("nsup;".to_string(), "\u{2285}".to_string());
+    m.insert("nsupE;".to_string(), "\u{2ac6}\u{338}".to_string());
+    m.insert("nsupe;".to_string(), "\u{2289}".to_string());
+    m.insert("nsupset;".to_string(), "\u{2283}\u{20d2}".to_string());
+    m.insert("nsupseteq;".to_string(), "\u{2289}".to_string());
+    m.insert("nsupseteqq;".to_string(), "\u{2ac6}\u{338}".to_string());
+    m.insert("ntgl;".to_string(), "\u{2279}".to_string());
+    m.insert("ntilde".to_string(), "\u{f1}".to_string());
+    m.insert("ntilde;".to_string(), "\u{f1}".to_string());
+    m.insert("ntlg;".to_string(), "\u{2278}".to_string());
+    m.insert("ntriangleleft;".to_string(), "\u{22ea}".to_string());
+    m.insert("ntrianglelefteq;".to_string(), "\u{22ec}".to_string());
+    m.insert("ntriangleright;".to_string(), "\u{22eb}".to_string());
+    m.insert("ntrianglerighteq;".to_string(), "\u{22ed}".to_string());
+    m.insert("nu;".to_string(), "\u{3bd}".to_string());
+    m.insert("num;".to_string(), "#".to_string());
+    m.insert("numero;".to_string(), "\u{2116}".to_string());
+    m.insert("numsp;".to_string(), "\u{2007}".to_string());
+    m.insert("nvDash;".to_string(), "\u{22ad}".to_string());
+    m.insert("nvHarr;".to_string(), "\u{2904}".to_string());
+    m.insert("nvap;".to_string(), "\u{224d}\u{20d2}".to_string());
+    m.insert("nvdash;".to_string(), "\u{22ac}".to_string());
+    m.insert("nvge;".to_string(), "\u{2265}\u{20d2}".to_string());
+    m.insert("nvgt;".to_string(), ">\u{20d2}".to_string());
+    m.insert("nvinfin;".to_string(), "\u{29de}".to_string());
+    m.insert("nvlArr;".to_string(), "\u{2902}".to_string());
+    m.insert("nvle;".to_string(), "\u{2264}\u{20d2}".to_string());
+    m.insert("nvlt;".to_string(), "<\u{20d2}".to_string());
+    m.insert("nvltrie;".to_string(), "\u{22b4}\u{20d2}".to_string());
+    m.insert("nvrArr;".to_string(), "\u{2903}".to_string());
+    m.insert("nvrtrie;".to_string(), "\u{22b5}\u{20d2}".to_string());
+    m.insert("nvsim;".to_string(), "\u{223c}\u{20d2}".to_string());
+    m.insert("nwArr;".to_string(), "\u{21d6}".to_string());
+    m.insert("nwarhk;".to_string(), "\u{2923}".to_string());
+    m.insert("nwarr;".to_string(), "\u{2196}".to_string());
+    m.insert("nwarrow;".to_string(), "\u{2196}".to_string());
+    m.insert("nwnear;".to_string(), "\u{2927}".to_string());
+    m.insert("oS;".to_string(), "\u{24c8}".to_string());
+    m.insert("oacute".to_string(), "\u{f3}".to_string());
+    m.insert("oacute;".to_string(), "\u{f3}".to_string());
+    m.insert("oast;".to_string(), "\u{229b}".to_string());
+    m.insert("ocir;".to_string(), "\u{229a}".to_string());
+    m.insert("ocirc".to_string(), "\u{f4}".to_string());
+    m.insert("ocirc;".to_string(), "\u{f4}".to_string());
+    m.insert("ocy;".to_string(), "\u{43e}".to_string());
+    m.insert("odash;".to_string(), "\u{229d}".to_string());
+    m.insert("odblac;".to_string(), "\u{151}".to_string());
+    m.insert("odiv;".to_string(), "\u{2a38}".to_string());
+    m.insert("odot;".to_string(), "\u{2299}".to_string());
+    m.insert("odsold;".to_string(), "\u{29bc}".to_string());
+    m.insert("oelig;".to_string(), "\u{153}".to_string());
+    m.insert("ofcir;".to_string(), "\u{29bf}".to_string());
+    m.insert("ofr;".to_string(), "\u{1d52c}".to_string());
+    m.insert("ogon;".to_string(), "\u{2db}".to_string());
+    m.insert("ograve".to_string(), "\u{f2}".to_string());
+    m.insert("ograve;".to_string(), "\u{f2}".to_string());
+    m.insert("ogt;".to_string(), "\u{29c1}".to_string());
+    m.insert("ohbar;".to_string(), "\u{29b5}".to_string());
+    m.insert("ohm;".to_string(), "\u{3a9}".to_string());
+    m.insert("oint;".to_string(), "\u{222e}".to_string());
+    m.insert("olarr;".to_string(), "\u{21ba}".to_string());
+    m.insert("olcir;".to_string(), "\u{29be}".to_string());
+    m.insert("olcross;".to_string(), "\u{29bb}".to_string());
+    m.insert("oline;".to_string(), "\u{203e}".to_string());
+    m.insert("olt;".to_string(), "\u{29c0}".to_string());
+    m.insert("omacr;".to_string(), "\u{14d}".to_string());
+    m.insert("omega;".to_string(), "\u{3c9}".to_string());
+    m.insert("omicron;".to_string(), "\u{3bf}".to_string());
+    m.insert("omid;".to_string(), "\u{29b6}".to_string());
+    m.insert("ominus;".to_string(), "\u{2296}".to_string());
+    m.insert("oopf;".to_string(), "\u{1d560}".to_string());
+    m.insert("opar;".to_string(), "\u{29b7}".to_string());
+    m.insert("operp;".to_string(), "\u{29b9}".to_string());
+    m.insert("oplus;".to_string(), "\u{2295}".to_string());
+    m.insert("or;".to_string(), "\u{2228}".to_string());
+    m.insert("orarr;".to_string(), "\u{21bb}".to_string());
+    m.insert("ord;".to_string(), "\u{2a5d}".to_string());
+    m.insert("order;".to_string(), "\u{2134}".to_string());
+    m.insert("orderof;".to_string(), "\u{2134}".to_string());
+    m.insert("ordf".to_string(), "\u{aa}".to_string());
+    m.insert("ordf;".to_string(), "\u{aa}".to_string());
+    m.insert("ordm".to_string(), "\u{ba}".to_string());
+    m.insert("ordm;".to_string(), "\u{ba}".to_string());
+    m.insert("origof;".to_string(), "\u{22b6}".to_string());
+    m.insert("oror;".to_string(), "\u{2a56}".to_string());
+    m.insert("orslope;".to_string(), "\u{2a57}".to_string());
+    m.insert("orv;".to_string(), "\u{2a5b}".to_string());
+    m.insert("oscr;".to_string(), "\u{2134}".to_string());
+    m.insert("oslash".to_string(), "\u{f8}".to_string());
+    m.insert("oslash;".to_string(), "\u{f8}".to_string());
+    m.insert("osol;".to_string(), "\u{2298}".to_string());
+    m.insert("otilde".to_string(), "\u{f5}".to_string());
+    m.insert("otilde;".to_string(), "\u{f5}".to_string());
+    m.insert("otimes;".to_string(), "\u{2297}".to_string());
+    m.insert("otimesas;".to_string(), "\u{2a36}".to_string());
+    m.insert("ouml".to_string(), "\u{f6}".to_string());
+    m.insert("ouml;".to_string(), "\u{f6}".to_string());
+    m.insert("ovbar;".to_string(), "\u{233d}".to_string());
+    m.insert("par;".to_string(), "\u{2225}".to_string());
+    m.insert("para".to_string(), "\u{b6}".to_string());
+    m.insert("para;".to_string(), "\u{b6}".to_string());
+    m.insert("parallel;".to_string(), "\u{2225}".to_string());
+    m.insert("parsim;".to_string(), "\u{2af3}".to_string());
+    m.insert("parsl;".to_string(), "\u{2afd}".to_string());
+    m.insert("part;".to_string(), "\u{2202}".to_string());
+    m.insert("pcy;".to_string(), "\u{43f}".to_string());
+    m.insert("percnt;".to_string(), "%".to_string());
+    m.insert("period;".to_string(), ".".to_string());
+    m.insert("permil;".to_string(), "\u{2030}".to_string());
+    m.insert("perp;".to_string(), "\u{22a5}".to_string());
+    m.insert("pertenk;".to_string(), "\u{2031}".to_string());
+    m.insert("pfr;".to_string(), "\u{1d52d}".to_string());
+    m.insert("phi;".to_string(), "\u{3c6}".to_string());
+    m.insert("phiv;".to_string(), "\u{3d5}".to_string());
+    m.insert("phmmat;".to_string(), "\u{2133}".to_string());
+    m.insert("phone;".to_string(), "\u{260e}".to_string());
+    m.insert("pi;".to_string(), "\u{3c0}".to_string());
+    m.insert("pitchfork;".to_string(), "\u{22d4}".to_string());
+    m.insert("piv;".to_string(), "\u{3d6}".to_string());
+    m.insert("planck;".to_string(), "\u{210f}".to_string());
+    m.insert("planckh;".to_string(), "\u{210e}".to_string());
+    m.insert("plankv;".to_string(), "\u{210f}".to_string());
+    m.insert("plus;".to_string(), "+".to_string());
+    m.insert("plusacir;".to_string(), "\u{2a23}".to_string());
+    m.insert("plusb;".to_string(), "\u{229e}".to_string());
+    m.insert("pluscir;".to_string(), "\u{2a22}".to_string());
+    m.insert("plusdo;".to_string(), "\u{2214}".to_string());
+    m.insert("plusdu;".to_string(), "\u{2a25}".to_string());
+    m.insert("pluse;".to_string(), "\u{2a72}".to_string());
+    m.insert("plusmn".to_string(), "\u{b1}".to_string());
+    m.insert("plusmn;".to_string(), "\u{b1}".to_string());
+    m.insert("plussim;".to_string(), "\u{2a26}".to_string());
+    m.insert("plustwo;".to_string(), "\u{2a27}".to_string());
+    m.insert("pm;".to_string(), "\u{b1}".to_string());
+    m.insert("pointint;".to_string(), "\u{2a15}".to_string());
+    m.insert("popf;".to_string(), "\u{1d561}".to_string());
+    m.insert("pound".to_string(), "\u{a3}".to_string());
+    m.insert("pound;".to_string(), "\u{a3}".to_string());
+    m.insert("pr;".to_string(), "\u{227a}".to_string());
+    m.insert("prE;".to_string(), "\u{2ab3}".to_string());
+    m.insert("prap;".to_string(), "\u{2ab7}".to_string());
+    m.insert("prcue;".to_string(), "\u{227c}".to_string());
+    m.insert("pre;".to_string(), "\u{2aaf}".to_string());
+    m.insert("prec;".to_string(), "\u{227a}".to_string());
+    m.insert("precapprox;".to_string(), "\u{2ab7}".to_string());
+    m.insert("preccurlyeq;".to_string(), "\u{227c}".to_string());
+    m.insert("preceq;".to_string(), "\u{2aaf}".to_string());
+    m.insert("precnapprox;".to_string(), "\u{2ab9}".to_string());
+    m.insert("precneqq;".to_string(), "\u{2ab5}".to_string());
+    m.insert("precnsim;".to_string(), "\u{22e8}".to_string());
+    m.insert("precsim;".to_string(), "\u{227e}".to_string());
+    m.insert("prime;".to_string(), "\u{2032}".to_string());
+    m.insert("primes;".to_string(), "\u{2119}".to_string());
+    m.insert("prnE;".to_string(), "\u{2ab5}".to_string());
+    m.insert("prnap;".to_string(), "\u{2ab9}".to_string());
+    m.insert("prnsim;".to_string(), "\u{22e8}".to_string());
+    m.insert("prod;".to_string(), "\u{220f}".to_string());
+    m.insert("profalar;".to_string(), "\u{232e}".to_string());
+    m.insert("profline;".to_string(), "\u{2312}".to_string());
+    m.insert("profsurf;".to_string(), "\u{2313}".to_string());
+    m.insert("prop;".to_string(), "\u{221d}".to_string());
+    m.insert("propto;".to_string(), "\u{221d}".to_string());
+    m.insert("prsim;".to_string(), "\u{227e}".to_string());
+    m.insert("prurel;".to_string(), "\u{22b0}".to_string());
+    m.insert("pscr;".to_string(), "\u{1d4c5}".to_string());
+    m.insert("psi;".to_string(), "\u{3c8}".to_string());
+    m.insert("puncsp;".to_string(), "\u{2008}".to_string());
+    m.insert("qfr;".to_string(), "\u{1d52e}".to_string());
+    m.insert("qint;".to_string(), "\u{2a0c}".to_string());
+    m.insert("qopf;".to_string(), "\u{1d562}".to_string());
+    m.insert("qprime;".to_string(), "\u{2057}".to_string());
+    m.insert("qscr;".to_string(), "\u{1d4c6}".to_string());
+    m.insert("quaternions;".to_string(), "\u{210d}".to_string());
+    m.insert("quatint;".to_string(), "\u{2a16}".to_string());
+    m.insert("quest;".to_string(), "?".to_string());
+    m.insert("questeq;".to_string(), "\u{225f}".to_string());
+    m.insert("quot".to_string(), "\u{22}".to_string());
+    m.insert("quot;".to_string(), "\u{22}".to_string());
+    m.insert("rAarr;".to_string(), "\u{21db}".to_string());
+    m.insert("rArr;".to_string(), "\u{21d2}".to_string());
+    m.insert("rAtail;".to_string(), "\u{291c}".to_string());
+    m.insert("rBarr;".to_string(), "\u{290f}".to_string());
+    m.insert("rHar;".to_string(), "\u{2964}".to_string());
+    m.insert("race;".to_string(), "\u{223d}\u{331}".to_string());
+    m.insert("racute;".to_string(), "\u{155}".to_string());
+    m.insert("radic;".to_string(), "\u{221a}".to_string());
+    m.insert("raemptyv;".to_string(), "\u{29b3}".to_string());
+    m.insert("rang;".to_string(), "\u{27e9}".to_string());
+    m.insert("rangd;".to_string(), "\u{2992}".to_string());
+    m.insert("range;".to_string(), "\u{29a5}".to_string());
+    m.insert("rangle;".to_string(), "\u{27e9}".to_string());
+    m.insert("raquo".to_string(), "\u{bb}".to_string());
+    m.insert("raquo;".to_string(), "\u{bb}".to_string());
+    m.insert("rarr;".to_string(), "\u{2192}".to_string());
+    m.insert("rarrap;".to_string(), "\u{2975}".to_string());
+    m.insert("rarrb;".to_string(), "\u{21e5}".to_string());
+    m.insert("rarrbfs;".to_string(), "\u{2920}".to_string());
+    m.insert("rarrc;".to_string(), "\u{2933}".to_string());
+    m.insert("rarrfs;".to_string(), "\u{291e}".to_string());
+    m.insert("rarrhk;".to_string(), "\u{21aa}".to_string());
+    m.insert("rarrlp;".to_string(), "\u{21ac}".to_string());
+    m.insert("rarrpl;".to_string(), "\u{2945}".to_string());
+    m.insert("rarrsim;".to_string(), "\u{2974}".to_string());
+    m.insert("rarrtl;".to_string(), "\u{21a3}".to_string());
+    m.insert("rarrw;".to_string(), "\u{219d}".to_string());
+    m.insert("ratail;".to_string(), "\u{291a}".to_string());
+    m.insert("ratio;".to_string(), "\u{2236}".to_string());
+    m.insert("rationals;".to_string(), "\u{211a}".to_string());
+    m.insert("rbarr;".to_string(), "\u{290d}".to_string());
+    m.insert("rbbrk;".to_string(), "\u{2773}".to_string());
+    m.insert("rbrace;".to_string(), "}".to_string());
+    m.insert("rbrack;".to_string(), "]".to_string());
+    m.insert("rbrke;".to_string(), "\u{298c}".to_string());
+    m.insert("rbrksld;".to_string(), "\u{298e}".to_string());
+    m.insert("rbrkslu;".to_string(), "\u{2990}".to_string());
+    m.insert("rcaron;".to_string(), "\u{159}".to_string());
+    m.insert("rcedil;".to_string(), "\u{157}".to_string());
+    m.insert("rceil;".to_string(), "\u{2309}".to_string());
+    m.insert("rcub;".to_string(), "}".to_string());
+    m.insert("rcy;".to_string(), "\u{440}".to_string());
+    m.insert("rdca;".to_string(), "\u{2937}".to_string());
+    m.insert("rdldhar;".to_string(), "\u{2969}".to_string());
+    m.insert("rdquo;".to_string(), "\u{201d}".to_string());
+    m.insert("rdquor;".to_string(), "\u{201d}".to_string());
+    m.insert("rdsh;".to_string(), "\u{21b3}".to_string());
+    m.insert("real;".to_string(), "\u{211c}".to_string());
+    m.insert("realine;".to_string(), "\u{211b}".to_string());
+    m.insert("realpart;".to_string(), "\u{211c}".to_string());
+    m.insert("reals;".to_string(), "\u{211d}".to_string());
+    m.insert("rect;".to_string(), "\u{25ad}".to_string());
+    m.insert("reg".to_string(), "\u{ae}".to_string());
+    m.insert("reg;".to_string(), "\u{ae}".to_string());
+    m.insert("rfisht;".to_string(), "\u{297d}".to_string());
+    m.insert("rfloor;".to_string(), "\u{230b}".to_string());
+    m.insert("rfr;".to_string(), "\u{1d52f}".to_string());
+    m.insert("rhard;".to_string(), "\u{21c1}".to_string());
+    m.insert("rharu;".to_string(), "\u{21c0}".to_string());
+    m.insert("rharul;".to_string(), "\u{296c}".to_string());
+    m.insert("rho;".to_string(), "\u{3c1}".to_string());
+    m.insert("rhov;".to_string(), "\u{3f1}".to_string());
+    m.insert("rightarrow;".to_string(), "\u{2192}".to_string());
+    m.insert("rightarrowtail;".to_string(), "\u{21a3}".to_string());
+    m.insert("rightharpoondown;".to_string(), "\u{21c1}".to_string());
+    m.insert("rightharpoonup;".to_string(), "\u{21c0}".to_string());
+    m.insert("rightleftarrows;".to_string(), "\u{21c4}".to_string());
+    m.insert("rightleftharpoons;".to_string(), "\u{21cc}".to_string());
+    m.insert("rightrightarrows;".to_string(), "\u{21c9}".to_string());
+    m.insert("rightsquigarrow;".to_string(), "\u{219d}".to_string());
+    m.insert("rightthreetimes;".to_string(), "\u{22cc}".to_string());
+    m.insert("ring;".to_string(), "\u{2da}".to_string());
+    m.insert("risingdotseq;".to_string(), "\u{2253}".to_string());
+    m.insert("rlarr;".to_string(), "\u{21c4}".to_string());
+    m.insert("rlhar;".to_string(), "\u{21cc}".to_string());
+    m.insert("rlm;".to_string(), "\u{200f}".to_string());
+    m.insert("rmoust;".to_string(), "\u{23b1}".to_string());
+    m.insert("rmoustache;".to_string(), "\u{23b1}".to_string());
+    m.insert("rnmid;".to_string(), "\u{2aee}".to_string());
+    m.insert("roang;".to_string(), "\u{27ed}".to_string());
+    m.insert("roarr;".to_string(), "\u{21fe}".to_string());
+    m.insert("robrk;".to_string(), "\u{27e7}".to_string());
+    m.insert("ropar;".to_string(), "\u{2986}".to_string());
+    m.insert("ropf;".to_string(), "\u{1d563}".to_string());
+    m.insert("roplus;".to_string(), "\u{2a2e}".to_string());
+    m.insert("rotimes;".to_string(), "\u{2a35}".to_string());
+    m.insert("rpar;".to_string(), ")".to_string());
+    m.insert("rpargt;".to_string(), "\u{2994}".to_string());
+    m.insert("rppolint;".to_string(), "\u{2a12}".to_string());
+    m.insert("rrarr;".to_string(), "\u{21c9}".to_string());
+    m.insert("rsaquo;".to_string(), "\u{203a}".to_string());
+    m.insert("rscr;".to_string(), "\u{1d4c7}".to_string());
+    m.insert("rsh;".to_string(), "\u{21b1}".to_string());
+    m.insert("rsqb;".to_string(), "]".to_string());
+    m.insert("rsquo;".to_string(), "\u{2019}".to_string());
+    m.insert("rsquor;".to_string(), "\u{2019}".to_string());
+    m.insert("rthree;".to_string(), "\u{22cc}".to_string());
+    m.insert("rtimes;".to_string(), "\u{22ca}".to_string());
+    m.insert("rtri;".to_string(), "\u{25b9}".to_string());
+    m.insert("rtrie;".to_string(), "\u{22b5}".to_string());
+    m.insert("rtrif;".to_string(), "\u{25b8}".to_string());
+    m.insert("rtriltri;".to_string(), "\u{29ce}".to_string());
+    m.insert("ruluhar;".to_string(), "\u{2968}".to_string());
+    m.insert("rx;".to_string(), "\u{211e}".to_string());
+    m.insert("sacute;".to_string(), "\u{15b}".to_string());
+    m.insert("sbquo;".to_string(), "\u{201a}".to_string());
+    m.insert("sc;".to_string(), "\u{227b}".to_string());
+    m.insert("scE;".to_string(), "\u{2ab4}".to_string());
+    m.insert("scap;".to_string(), "\u{2ab8}".to_string());
+    m.insert("scaron;".to_string(), "\u{161}".to_string());
+    m.insert("sccue;".to_string(), "\u{227d}".to_string());
+    m.insert("sce;".to_string(), "\u{2ab0}".to_string());
+    m.insert("scedil;".to_string(), "\u{15f}".to_string());
+    m.insert("scirc;".to_string(), "\u{15d}".to_string());
+    m.insert("scnE;".to_string(), "\u{2ab6}".to_string());
+    m.insert("scnap;".to_string(), "\u{2aba}".to_string());
+    m.insert("scnsim;".to_string(), "\u{22e9}".to_string());
+    m.insert("scpolint;".to_string(), "\u{2a13}".to_string());
+    m.insert("scsim;".to_string(), "\u{227f}".to_string());
+    m.insert("scy;".to_string(), "\u{441}".to_string());
+    m.insert("sdot;".to_string(), "\u{22c5}".to_string());
+    m.insert("sdotb;".to_string(), "\u{22a1}".to_string());
+    m.insert("sdote;".to_string(), "\u{2a66}".to_string());
+    m.insert("seArr;".to_string(), "\u{21d8}".to_string());
+    m.insert("searhk;".to_string(), "\u{2925}".to_string());
+    m.insert("searr;".to_string(), "\u{2198}".to_string());
+    m.insert("searrow;".to_string(), "\u{2198}".to_string());
+    m.insert("sect".to_string(), "\u{a7}".to_string());
+    m.insert("sect;".to_string(), "\u{a7}".to_string());
+    m.insert("semi;".to_string(), ";".to_string());
+    m.insert("seswar;".to_string(), "\u{2929}".to_string());
+    m.insert("setminus;".to_string(), "\u{2216}".to_string());
+    m.insert("setmn;".to_string(), "\u{2216}".to_string());
+    m.insert("sext;".to_string(), "\u{2736}".to_string());
+    m.insert("sfr;".to_string(), "\u{1d530}".to_string());
+    m.insert("sfrown;".to_string(), "\u{2322}".to_string());
+    m.insert("sharp;".to_string(), "\u{266f}".to_string());
+    m.insert("shchcy;".to_string(), "\u{449}".to_string());
+    m.insert("shcy;".to_string(), "\u{448}".to_string());
+    m.insert("shortmid;".to_string(), "\u{2223}".to_string());
+    m.insert("shortparallel;".to_string(), "\u{2225}".to_string());
+    m.insert("shy".to_string(), "\u{ad}".to_string());
+    m.insert("shy;".to_string(), "\u{ad}".to_string());
+    m.insert("sigma;".to_string(), "\u{3c3}".to_string());
+    m.insert("sigmaf;".to_string(), "\u{3c2}".to_string());
+    m.insert("sigmav;".to_string(), "\u{3c2}".to_string());
+    m.insert("sim;".to_string(), "\u{223c}".to_string());
+    m.insert("simdot;".to_string(), "\u{2a6a}".to_string());
+    m.insert("sime;".to_string(), "\u{2243}".to_string());
+    m.insert("simeq;".to_string(), "\u{2243}".to_string());
+    m.insert("simg;".to_string(), "\u{2a9e}".to_string());
+    m.insert("simgE;".to_string(), "\u{2aa0}".to_string());
+    m.insert("siml;".to_string(), "\u{2a9d}".to_string());
+    m.insert("simlE;".to_string(), "\u{2a9f}".to_string());
+    m.insert("simne;".to_string(), "\u{2246}".to_string());
+    m.insert("simplus;".to_string(), "\u{2a24}".to_string());
+    m.insert("simrarr;".to_string(), "\u{2972}".to_string());
+    m.insert("slarr;".to_string(), "\u{2190}".to_string());
+    m.insert("smallsetminus;".to_string(), "\u{2216}".to_string());
+    m.insert("smashp;".to_string(), "\u{2a33}".to_string());
+    m.insert("smeparsl;".to_string(), "\u{29e4}".to_string());
+    m.insert("smid;".to_string(), "\u{2223}".to_string());
+    m.insert("smile;".to_string(), "\u{2323}".to_string());
+    m.insert("smt;".to_string(), "\u{2aaa}".to_string());
+    m.insert("smte;".to_string(), "\u{2aac}".to_string());
+    m.insert("smtes;".to_string(), "\u{2aac}\u{fe00}".to_string());
+    m.insert("softcy;".to_string(), "\u{44c}".to_string());
+    m.insert("sol;".to_string(), "/".to_string());
+    m.insert("solb;".to_string(), "\u{29c4}".to_string());
+    m.insert("solbar;".to_string(), "\u{233f}".to_string());
+    m.insert("sopf;".to_string(), "\u{1d564}".to_string());
+    m.insert("spades;".to_string(), "\u{2660}".to_string());
+    m.insert("spadesuit;".to_string(), "\u{2660}".to_string());
+    m.insert("spar;".to_string(), "\u{2225}".to_string());
+    m.insert("sqcap;".to_string(), "\u{2293}".to_string());
+    m.insert("sqcaps;".to_string(), "\u{2293}\u{fe00}".to_string());
+    m.insert("sqcup;".to_string(), "\u{2294}".to_string());
+    m.insert("sqcups;".to_string(), "\u{2294}\u{fe00}".to_string());
+    m.insert("sqsub;".to_string(), "\u{228f}".to_string());
+    m.insert("sqsube;".to_string(), "\u{2291}".to_string());
+    m.insert("sqsubset;".to_string(), "\u{228f}".to_string());
+    m.insert("sqsubseteq;".to_string(), "\u{2291}".to_string());
+    m.insert("sqsup;".to_string(), "\u{2290}".to_string());
+    m.insert("sqsupe;".to_string(), "\u{2292}".to_string());
+    m.insert("sqsupset;".to_string(), "\u{2290}".to_string());
+    m.insert("sqsupseteq;".to_string(), "\u{2292}".to_string());
+    m.insert("squ;".to_string(), "\u{25a1}".to_string());
+    m.insert("square;".to_string(), "\u{25a1}".to_string());
+    m.insert("squarf;".to_string(), "\u{25aa}".to_string());
+    m.insert("squf;".to_string(), "\u{25aa}".to_string());
+    m.insert("srarr;".to_string(), "\u{2192}".to_string());
+    m.insert("sscr;".to_string(), "\u{1d4c8}".to_string());
+    m.insert("ssetmn;".to_string(), "\u{2216}".to_string());
+    m.insert("ssmile;".to_string(), "\u{2323}".to_string());
+    m.insert("sstarf;".to_string(), "\u{22c6}".to_string());
+    m.insert("star;".to_string(), "\u{2606}".to_string());
+    m.insert("starf;".to_string(), "\u{2605}".to_string());
+    m.insert("straightepsilon;".to_string(), "\u{3f5}".to_string());
+    m.insert("straightphi;".to_string(), "\u{3d5}".to_string());
+    m.insert("strns;".to_string(), "\u{af}".to_string());
+    m.insert("sub;".to_string(), "\u{2282}".to_string());
+    m.insert("subE;".to_string(), "\u{2ac5}".to_string());
+    m.insert("subdot;".to_string(), "\u{2abd}".to_string());
+    m.insert("sube;".to_string(), "\u{2286}".to_string());
+    m.insert("subedot;".to_string(), "\u{2ac3}".to_string());
+    m.insert("submult;".to_string(), "\u{2ac1}".to_string());
+    m.insert("subnE;".to_string(), "\u{2acb}".to_string());
+    m.insert("subne;".to_string(), "\u{228a}".to_string());
+    m.insert("subplus;".to_string(), "\u{2abf}".to_string());
+    m.insert("subrarr;".to_string(), "\u{2979}".to_string());
+    m.insert("subset;".to_string(), "\u{2282}".to_string());
+    m.insert("subseteq;".to_string(), "\u{2286}".to_string());
+    m.insert("subseteqq;".to_string(), "\u{2ac5}".to_string());
+    m.insert("subsetneq;".to_string(), "\u{228a}".to_string());
+    m.insert("subsetneqq;".to_string(), "\u{2acb}".to_string());
+    m.insert("subsim;".to_string(), "\u{2ac7}".to_string());
+    m.insert("subsub;".to_string(), "\u{2ad5}".to_string());
+    m.insert("subsup;".to_string(), "\u{2ad3}".to_string());
+    m.insert("succ;".to_string(), "\u{227b}".to_string());
+    m.insert("succapprox;".to_string(), "\u{2ab8}".to_string());
+    m.insert("succcurlyeq;".to_string(), "\u{227d}".to_string());
+    m.insert("succeq;".to_string(), "\u{2ab0}".to_string());
+    m.insert("succnapprox;".to_string(), "\u{2aba}".to_string());
+    m.insert("succneqq;".to_string(), "\u{2ab6}".to_string());
+    m.insert("succnsim;".to_string(), "\u{22e9}".to_string());
+    m.insert("succsim;".to_string(), "\u{227f}".to_string());
+    m.insert("sum;".to_string(), "\u{2211}".to_string());
+    m.insert("sung;".to_string(), "\u{266a}".to_string());
+    m.insert("sup1".to_string(), "\u{b9}".to_string());
+    m.insert("sup1;".to_string(), "\u{b9}".to_string());
+    m.insert("sup2".to_string(), "\u{b2}".to_string());
+    m.insert("sup2;".to_string(), "\u{b2}".to_string());
+    m.insert("sup3".to_string(), "\u{b3}".to_string());
+    m.insert("sup3;".to_string(), "\u{b3}".to_string());
+    m.insert("sup;".to_string(), "\u{2283}".to_string());
+    m.insert("supE;".to_string(), "\u{2ac6}".to_string());
+    m.insert("supdot;".to_string(), "\u{2abe}".to_string());
+    m.insert("supdsub;".to_string(), "\u{2ad8}".to_string());
+    m.insert("supe;".to_string(), "\u{2287}".to_string());
+    m.insert("supedot;".to_string(), "\u{2ac4}".to_string());
+    m.insert("suphsol;".to_string(), "\u{27c9}".to_string());
+    m.insert("suphsub;".to_string(), "\u{2ad7}".to_string());
+    m.insert("suplarr;".to_string(), "\u{297b}".to_string());
+    m.insert("supmult;".to_string(), "\u{2ac2}".to_string());
+    m.insert("supnE;".to_string(), "\u{2acc}".to_string());
+    m.insert("supne;".to_string(), "\u{228b}".to_string());
+    m.insert("supplus;".to_string(), "\u{2ac0}".to_string());
+    m.insert("supset;".to_string(), "\u{2283}".to_string());
+    m.insert("supseteq;".to_string(), "\u{2287}".to_string());
+    m.insert("supseteqq;".to_string(), "\u{2ac6}".to_string());
+    m.insert("supsetneq;".to_string(), "\u{228b}".to_string());
+    m.insert("supsetneqq;".to_string(), "\u{2acc}".to_string());
+    m.insert("supsim;".to_string(), "\u{2ac8}".to_string());
+    m.insert("supsub;".to_string(), "\u{2ad4}".to_string());
+    m.insert("supsup;".to_string(), "\u{2ad6}".to_string());
+    m.insert("swArr;".to_string(), "\u{21d9}".to_string());
+    m.insert("swarhk;".to_string(), "\u{2926}".to_string());
+    m.insert("swarr;".to_string(), "\u{2199}".to_string());
+    m.insert("swarrow;".to_string(), "\u{2199}".to_string());
+    m.insert("swnwar;".to_string(), "\u{292a}".to_string());
+    m.insert("szlig".to_string(), "\u{df}".to_string());
+    m.insert("szlig;".to_string(), "\u{df}".to_string());
+    m.insert("target;".to_string(), "\u{2316}".to_string());
+    m.insert("tau;".to_string(), "\u{3c4}".to_string());
+    m.insert("tbrk;".to_string(), "\u{23b4}".to_string());
+    m.insert("tcaron;".to_string(), "\u{165}".to_string());
+    m.insert("tcedil;".to_string(), "\u{163}".to_string());
+    m.insert("tcy;".to_string(), "\u{442}".to_string());
+    m.insert("tdot;".to_string(), "\u{20db}".to_string());
+    m.insert("telrec;".to_string(), "\u{2315}".to_string());
+    m.insert("tfr;".to_string(), "\u{1d531}".to_string());
+    m.insert("there4;".to_string(), "\u{2234}".to_string());
+    m.insert("therefore;".to_string(), "\u{2234}".to_string());
+    m.insert("theta;".to_string(), "\u{3b8}".to_string());
+    m.insert("thetasym;".to_string(), "\u{3d1}".to_string());
+    m.insert("thetav;".to_string(), "\u{3d1}".to_string());
+    m.insert("thickapprox;".to_string(), "\u{2248}".to_string());
+    m.insert("thicksim;".to_string(), "\u{223c}".to_string());
+    m.insert("thinsp;".to_string(), "\u{2009}".to_string());
+    m.insert("thkap;".to_string(), "\u{2248}".to_string());
+    m.insert("thksim;".to_string(), "\u{223c}".to_string());
+    m.insert("thorn".to_string(), "\u{fe}".to_string());
+    m.insert("thorn;".to_string(), "\u{fe}".to_string());
+    m.insert("tilde;".to_string(), "\u{2dc}".to_string());
+    m.insert("times".to_string(), "\u{d7}".to_string());
+    m.insert("times;".to_string(), "\u{d7}".to_string());
+    m.insert("timesb;".to_string(), "\u{22a0}".to_string());
+    m.insert("timesbar;".to_string(), "\u{2a31}".to_string());
+    m.insert("timesd;".to_string(), "\u{2a30}".to_string());
+    m.insert("tint;".to_string(), "\u{222d}".to_string());
+    m.insert("toea;".to_string(), "\u{2928}".to_string());
+    m.insert("top;".to_string(), "\u{22a4}".to_string());
+    m.insert("topbot;".to_string(), "\u{2336}".to_string());
+    m.insert("topcir;".to_string(), "\u{2af1}".to_string());
+    m.insert("topf;".to_string(), "\u{1d565}".to_string());
+    m.insert("topfork;".to_string(), "\u{2ada}".to_string());
+    m.insert("tosa;".to_string(), "\u{2929}".to_string());
+    m.insert("tprime;".to_string(), "\u{2034}".to_string());
+    m.insert("trade;".to_string(), "\u{2122}".to_string());
+    m.insert("triangle;".to_string(), "\u{25b5}".to_string());
+    m.insert("triangledown;".to_string(), "\u{25bf}".to_string());
+    m.insert("triangleleft;".to_string(), "\u{25c3}".to_string());
+    m.insert("trianglelefteq;".to_string(), "\u{22b4}".to_string());
+    m.insert("triangleq;".to_string(), "\u{225c}".to_string());
+    m.insert("triangleright;".to_string(), "\u{25b9}".to_string());
+    m.insert("trianglerighteq;".to_string(), "\u{22b5}".to_string());
+    m.insert("tridot;".to_string(), "\u{25ec}".to_string());
+    m.insert("trie;".to_string(), "\u{225c}".to_string());
+    m.insert("triminus;".to_string(), "\u{2a3a}".to_string());
+    m.insert("triplus;".to_string(), "\u{2a39}".to_string());
+    m.insert("trisb;".to_string(), "\u{29cd}".to_string());
+    m.insert("tritime;".to_string(), "\u{2a3b}".to_string());
+    m.insert("trpezium;".to_string(), "\u{23e2}".to_string());
+    m.insert("tscr;".to_string(), "\u{1d4c9}".to_string());
+    m.insert("tscy;".to_string(), "\u{446}".to_string());
+    m.insert("tshcy;".to_string(), "\u{45b}".to_string());
+    m.insert("tstrok;".to_string(), "\u{167}".to_string());
+    m.insert("twixt;".to_string(), "\u{226c}".to_string());
+    m.insert("twoheadleftarrow;".to_string(), "\u{219e}".to_string());
+    m.insert("twoheadrightarrow;".to_string(), "\u{21a0}".to_string());
+    m.insert("uArr;".to_string(), "\u{21d1}".to_string());
+    m.insert("uHar;".to_string(), "\u{2963}".to_string());
+    m.insert("uacute".to_string(), "\u{fa}".to_string());
+    m.insert("uacute;".to_string(), "\u{fa}".to_string());
+    m.insert("uarr;".to_string(), "\u{2191}".to_string());
+    m.insert("ubrcy;".to_string(), "\u{45e}".to_string());
+    m.insert("ubreve;".to_string(), "\u{16d}".to_string());
+    m.insert("ucirc".to_string(), "\u{fb}".to_string());
+    m.insert("ucirc;".to_string(), "\u{fb}".to_string());
+    m.insert("ucy;".to_string(), "\u{443}".to_string());
+    m.insert("udarr;".to_string(), "\u{21c5}".to_string());
+    m.insert("udblac;".to_string(), "\u{171}".to_string());
+    m.insert("udhar;".to_string(), "\u{296e}".to_string());
+    m.insert("ufisht;".to_string(), "\u{297e}".to_string());
+    m.insert("ufr;".to_string(), "\u{1d532}".to_string());
+    m.insert("ugrave".to_string(), "\u{f9}".to_string());
+    m.insert("ugrave;".to_string(), "\u{f9}".to_string());
+    m.insert("uharl;".to_string(), "\u{21bf}".to_string());
+    m.insert("uharr;".to_string(), "\u{21be}".to_string());
+    m.insert("uhblk;".to_string(), "\u{2580}".to_string());
+    m.insert("ulcorn;".to_string(), "\u{231c}".to_string());
+    m.insert("ulcorner;".to_string(), "\u{231c}".to_string());
+    m.insert("ulcrop;".to_string(), "\u{230f}".to_string());
+    m.insert("ultri;".to_string(), "\u{25f8}".to_string());
+    m.insert("umacr;".to_string(), "\u{16b}".to_string());
+    m.insert("uml".to_string(), "\u{a8}".to_string());
+    m.insert("uml;".to_string(), "\u{a8}".to_string());
+    m.insert("uogon;".to_string(), "\u{173}".to_string());
+    m.insert("uopf;".to_string(), "\u{1d566}".to_string());
+    m.insert("uparrow;".to_string(), "\u{2191}".to_string());
+    m.insert("updownarrow;".to_string(), "\u{2195}".to_string());
+    m.insert("upharpoonleft;".to_string(), "\u{21bf}".to_string());
+    m.insert("upharpoonright;".to_string(), "\u{21be}".to_string());
+    m.insert("uplus;".to_string(), "\u{228e}".to_string());
+    m.insert("upsi;".to_string(), "\u{3c5}".to_string());
+    m.insert("upsih;".to_string(), "\u{3d2}".to_string());
+    m.insert("upsilon;".to_string(), "\u{3c5}".to_string());
+    m.insert("upuparrows;".to_string(), "\u{21c8}".to_string());
+    m.insert("urcorn;".to_string(), "\u{231d}".to_string());
+    m.insert("urcorner;".to_string(), "\u{231d}".to_string());
+    m.insert("urcrop;".to_string(), "\u{230e}".to_string());
+    m.insert("uring;".to_string(), "\u{16f}".to_string());
+    m.insert("urtri;".to_string(), "\u{25f9}".to_string());
+    m.insert("uscr;".to_string(), "\u{1d4ca}".to_string());
+    m.insert("utdot;".to_string(), "\u{22f0}".to_string());
+    m.insert("utilde;".to_string(), "\u{169}".to_string());
+    m.insert("utri;".to_string(), "\u{25b5}".to_string());
+    m.insert("utrif;".to_string(), "\u{25b4}".to_string());
+    m.insert("uuarr;".to_string(), "\u{21c8}".to_string());
+    m.insert("uuml".to_string(), "\u{fc}".to_string());
+    m.insert("uuml;".to_string(), "\u{fc}".to_string());
+    m.insert("uwangle;".to_string(), "\u{29a7}".to_string());
+    m.insert("vArr;".to_string(), "\u{21d5}".to_string());
+    m.insert("vBar;".to_string(), "\u{2ae8}".to_string());
+    m.insert("vBarv;".to_string(), "\u{2ae9}".to_string());
+    m.insert("vDash;".to_string(), "\u{22a8}".to_string());
+    m.insert("vangrt;".to_string(), "\u{299c}".to_string());
+    m.insert("varepsilon;".to_string(), "\u{3f5}".to_string());
+    m.insert("varkappa;".to_string(), "\u{3f0}".to_string());
+    m.insert("varnothing;".to_string(), "\u{2205}".to_string());
+    m.insert("varphi;".to_string(), "\u{3d5}".to_string());
+    m.insert("varpi;".to_string(), "\u{3d6}".to_string());
+    m.insert("varpropto;".to_string(), "\u{221d}".to_string());
+    m.insert("varr;".to_string(), "\u{2195}".to_string());
+    m.insert("varrho;".to_string(), "\u{3f1}".to_string());
+    m.insert("varsigma;".to_string(), "\u{3c2}".to_string());
+    m.insert("varsubsetneq;".to_string(), "\u{228a}\u{fe00}".to_string());
+    m.insert("varsubsetneqq;".to_string(), "\u{2acb}\u{fe00}".to_string());
+    m.insert("varsupsetneq;".to_string(), "\u{228b}\u{fe00}".to_string());
+    m.insert("varsupsetneqq;".to_string(), "\u{2acc}\u{fe00}".to_string());
+    m.insert("vartheta;".to_string(), "\u{3d1}".to_string());
+    m.insert("vartriangleleft;".to_string(), "\u{22b2}".to_string());
+    m.insert("vartriangleright;".to_string(), "\u{22b3}".to_string());
+    m.insert("vcy;".to_string(), "\u{432}".to_string());
+    m.insert("vdash;".to_string(), "\u{22a2}".to_string());
+    m.insert("vee;".to_string(), "\u{2228}".to_string());
+    m.insert("veebar;".to_string(), "\u{22bb}".to_string());
+    m.insert("veeeq;".to_string(), "\u{225a}".to_string());
+    m.insert("vellip;".to_string(), "\u{22ee}".to_string());
+    m.insert("verbar;".to_string(), "|".to_string());
+    m.insert("vert;".to_string(), "|".to_string());
+    m.insert("vfr;".to_string(), "\u{1d533}".to_string());
+    m.insert("vltri;".to_string(), "\u{22b2}".to_string());
+    m.insert("vnsub;".to_string(), "\u{2282}\u{20d2}".to_string());
+    m.insert("vnsup;".to_string(), "\u{2283}\u{20d2}".to_string());
+    m.insert("vopf;".to_string(), "\u{1d567}".to_string());
+    m.insert("vprop;".to_string(), "\u{221d}".to_string());
+    m.insert("vrtri;".to_string(), "\u{22b3}".to_string());
+    m.insert("vscr;".to_string(), "\u{1d4cb}".to_string());
+    m.insert("vsubnE;".to_string(), "\u{2acb}\u{fe00}".to_string());
+    m.insert("vsubne;".to_string(), "\u{228a}\u{fe00}".to_string());
+    m.insert("vsupnE;".to_string(), "\u{2acc}\u{fe00}".to_string());
+    m.insert("vsupne;".to_string(), "\u{228b}\u{fe00}".to_string());
+    m.insert("vzigzag;".to_string(), "\u{299a}".to_string());
+    m.insert("wcirc;".to_string(), "\u{175}".to_string());
+    m.insert("wedbar;".to_string(), "\u{2a5f}".to_string());
+    m.insert("wedge;".to_string(), "\u{2227}".to_string());
+    m.insert("wedgeq;".to_string(), "\u{2259}".to_string());
+    m.insert("weierp;".to_string(), "\u{2118}".to_string());
+    m.insert("wfr;".to_string(), "\u{1d534}".to_string());
+    m.insert("wopf;".to_string(), "\u{1d568}".to_string());
+    m.insert("wp;".to_string(), "\u{2118}".to_string());
+    m.insert("wr;".to_string(), "\u{2240}".to_string());
+    m.insert("wreath;".to_string(), "\u{2240}".to_string());
+    m.insert("wscr;".to_string(), "\u{1d4cc}".to_string());
+    m.insert("xcap;".to_string(), "\u{22c2}".to_string());
+    m.insert("xcirc;".to_string(), "\u{25ef}".to_string());
+    m.insert("xcup;".to_string(), "\u{22c3}".to_string());
+    m.insert("xdtri;".to_string(), "\u{25bd}".to_string());
+    m.insert("xfr;".to_string(), "\u{1d535}".to_string());
+    m.insert("xhArr;".to_string(), "\u{27fa}".to_string());
+    m.insert("xharr;".to_string(), "\u{27f7}".to_string());
+    m.insert("xi;".to_string(), "\u{3be}".to_string());
+    m.insert("xlArr;".to_string(), "\u{27f8}".to_string());
+    m.insert("xlarr;".to_string(), "\u{27f5}".to_string());
+    m.insert("xmap;".to_string(), "\u{27fc}".to_string());
+    m.insert("xnis;".to_string(), "\u{22fb}".to_string());
+    m.insert("xodot;".to_string(), "\u{2a00}".to_string());
+    m.insert("xopf;".to_string(), "\u{1d569}".to_string());
+    m.insert("xoplus;".to_string(), "\u{2a01}".to_string());
+    m.insert("xotime;".to_string(), "\u{2a02}".to_string());
+    m.insert("xrArr;".to_string(), "\u{27f9}".to_string());
+    m.insert("xrarr;".to_string(), "\u{27f6}".to_string());
+    m.insert("xscr;".to_string(), "\u{1d4cd}".to_string());
+    m.insert("xsqcup;".to_string(), "\u{2a06}".to_string());
+    m.insert("xuplus;".to_string(), "\u{2a04}".to_string());
+    m.insert("xutri;".to_string(), "\u{25b3}".to_string());
+    m.insert("xvee;".to_string(), "\u{22c1}".to_string());
+    m.insert("xwedge;".to_string(), "\u{22c0}".to_string());
+    m.insert("yacute".to_string(), "\u{fd}".to_string());
+    m.insert("yacute;".to_string(), "\u{fd}".to_string());
+    m.insert("yacy;".to_string(), "\u{44f}".to_string());
+    m.insert("ycirc;".to_string(), "\u{177}".to_string());
+    m.insert("ycy;".to_string(), "\u{44b}".to_string());
+    m.insert("yen".to_string(), "\u{a5}".to_string());
+    m.insert("yen;".to_string(), "\u{a5}".to_string());
+    m.insert("yfr;".to_string(), "\u{1d536}".to_string());
+    m.insert("yicy;".to_string(), "\u{457}".to_string());
+    m.insert("yopf;".to_string(), "\u{1d56a}".to_string());
+    m.insert("yscr;".to_string(), "\u{1d4ce}".to_string());
+    m.insert("yucy;".to_string(), "\u{44e}".to_string());
+    m.insert("yuml".to_string(), "\u{ff}".to_string());
+    m.insert("yuml;".to_string(), "\u{ff}".to_string());
+    m.insert("zacute;".to_string(), "\u{17a}".to_string());
+    m.insert("zcaron;".to_string(), "\u{17e}".to_string());
+    m.insert("zcy;".to_string(), "\u{437}".to_string());
+    m.insert("zdot;".to_string(), "\u{17c}".to_string());
+    m.insert("zeetrf;".to_string(), "\u{2128}".to_string());
+    m.insert("zeta;".to_string(), "\u{3b6}".to_string());
+    m.insert("zfr;".to_string(), "\u{1d537}".to_string());
+    m.insert("zhcy;".to_string(), "\u{436}".to_string());
+    m.insert("zigrarr;".to_string(), "\u{21dd}".to_string());
+    m.insert("zopf;".to_string(), "\u{1d56b}".to_string());
+    m.insert("zscr;".to_string(), "\u{1d4cf}".to_string());
+    m.insert("zwj;".to_string(), "\u{200d}".to_string());
+    m.insert("zwnj;".to_string(), "\u{200c}".to_string());
+    m
+}

@@ -98,10 +98,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 276 |
 | codegen-gap | 270 |
-| false-positive | 218 |
+| false-positive | 219 |
 | other | 173 |
-| perf | 171 |
-| diagnostics | 164 |
+| perf | 172 |
+| diagnostics | 165 |
 | crash | 122 |
 | soundness | 111 |
 | use-after-free | 91 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2931 |
+| codegen | 2932 |
 | interp | 948 |
-| typecheck | 457 |
+| typecheck | 458 |
 | other | 115 |
-| ownership | 110 |
+| ownership | 111 |
 | runtime | 76 |
 | cli | 76 |
 | parser | 69 |
@@ -214,6 +214,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-24 | 2026-10-18 | interp+codegen | high | On the MIR compiled backends a bare `None` passed for an `Option[T]` parameter, where `T` is fixed by another argument, is lowered with the wrong type: `fold_from(VecIter {..}, |a: i64, b: i64| a + b, None)` for `fn fold_from[I: Iterator[Item = T], T](it: own I, f: Fn(own T, own T) -> T, start: own Option[T]) -> Option[T]` prints `()` instead of 6 on `__mir-llvm-run` and `karac build --mir`, and `__mir-llvm-asan` reports a stack-buffer-overflow; `__mir-run`, `karac build` and `run --interp` print 6 | — |
 | B-2026-10-18-25 | 2026-10-18 | parser | medium | design.md's remedy for postfix on a block-like expression in statement position does not parse: `(if c { a } else { b }).len()` as a function's tail, design.md § Statements' own example, and `(match d { .. }).to_string()` both fail "Expected expression, found Dot", the same error as without the parentheses; bound in a `let` the parenthesized form works | — |
 | B-2026-10-18-26 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces `check(n).map_err(text)?` with a NAMED function stops with "'?' cannot propagate error 'F' as 'String': target is not a named type": `map_err[F]`'s `F` is not taken from the function's return type; check, `run --interp` and legacy build pass, and a closure `.map_err(|e| text(e))?` or a typed `let r: Result[i64, String] = ...` works | — |
+| B-2026-10-18-27 | 2026-10-18 | typecheck | medium | check refuses `Some(ref t) => title = Some(f"{t}{s}")`, an assignment to the matched place whose only use of `t` is in the value being stored; mir-interp and mir-llvm run it | — |
+| B-2026-10-18-28 | 2026-10-18 | ownership | low | `karac fix` rewrites `Some(h) => h.text.push_str(w)` (a match on an owned Option in a loop) to `Some(ref h)`, which check then refuses because the arm writes through `h`; the fix should write `mut ref h` | — |
+| B-2026-10-18-29 | 2026-10-18 | codegen | medium | `karac __mir-llvm-asan` build time grows with the square of a function's length: a 2231-statement table function takes 168 s against 16 s on mir-llvm, past the corpus's 60 s limit | — |
 
 ### Relocated
 
