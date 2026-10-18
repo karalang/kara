@@ -1,0 +1,551 @@
+// LeetCode #708: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random rings.
+
+// ---- arena (★) arm ---------------------------------------------------
+
+struct RingArena {
+    mut vals: Vec[i64],
+    mut next: Vec[i64],
+}
+
+// Whether `x` fits between `a` and the value after it, `b`.
+fn fits_arena(a: i64, b: i64, x: i64) -> bool {
+    if a <= b {
+        a <= x and x <= b
+    } else {
+        x >= a or x <= b
+    }
+}
+
+impl RingArena {
+    fn new() -> RingArena {
+        RingArena { vals: Vec.new(), next: Vec.new() }
+    }
+
+    // The LeetCode function: `head` is the given node, `None` for an
+    // empty list, and the result is the node to hand back.
+    fn insert(mut ref self, head: Option[i64], insert_val: i64) -> i64 {
+        let id = self.vals.len();
+        self.vals.push(insert_val);
+        let head = match head {
+            Some(h) => h,
+            None => {
+                self.next.push(id);
+                return id;
+            }
+        };
+        let mut prev = head;
+        loop {
+            let curr = self.next[prev];
+            if fits_arena(self.vals[prev], self.vals[curr], insert_val) {
+                break;
+            }
+            prev = curr;
+            if prev == head {
+                break;
+            }
+        }
+        self.next.push(self.next[prev]);
+        self.next[prev] = id;
+        head
+    }
+}
+
+// The list the harness drives: the arena and the given node.
+struct CircularListArena {
+    mut ring: RingArena,
+    mut head: Option[i64],
+}
+
+impl CircularListArena {
+    // A ring of `vals` in order, the first the given node.
+    fn from_values(vals: Vec[i64]) -> CircularListArena {
+        let n = vals.len();
+        let mut ring = RingArena.new();
+        for i in 0..n {
+            ring.vals.push(vals[i]);
+            ring.next.push((i + 1) % n);
+        }
+        CircularListArena { ring: ring, head: if n == 0 { None } else { Some(0) } }
+    }
+
+    fn insert(mut ref self, insert_val: i64) {
+        self.head = Some(self.ring.insert(self.head, insert_val));
+    }
+
+    // The values once round, from the given node.
+    fn values(self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        if let Some(head) = self.head {
+            let mut at = head;
+            loop {
+                out.push(self.ring.vals[at]);
+                at = self.ring.next[at];
+                if at == head {
+                    break;
+                }
+            }
+        }
+        out
+    }
+}
+
+// ---- shared arm ------------------------------------------------------
+
+shared struct NodeShared {
+    val: i64,
+    mut next: Option[NodeShared],
+}
+
+// Whether `x` fits between `a` and the value after it, `b`.
+fn fits_shared(a: i64, b: i64, x: i64) -> bool {
+    if a <= b {
+        a <= x and x <= b
+    } else {
+        x >= a or x <= b
+    }
+}
+
+// The LeetCode function: the node to hand back, a new one-node ring
+// when `head` is `None`.
+fn insert_shared(head: Option[NodeShared], insert_val: i64) -> NodeShared {
+    let head = match head {
+        Some(h) => h,
+        None => {
+            let node = NodeShared { val: insert_val, next: None };
+            node.next = Some(node);
+            return node;
+        }
+    };
+    let mut prev = head;
+    loop {
+        let curr = prev.next.expect("a ring has no end");
+        if fits_shared(prev.val, curr.val, insert_val) {
+            break;
+        }
+        prev = curr;
+        if prev.ref_eq(head) {
+            break;
+        }
+    }
+    prev.next = Some(NodeShared { val: insert_val, next: prev.next });
+    head
+}
+
+// The list the harness drives: the given node.
+struct CircularListShared {
+    mut head: Option[NodeShared],
+}
+
+impl Drop for CircularListShared {
+    // Cuts the ring after the given node, so the nodes free in a chain.
+    fn drop(mut ref self) {
+        if let Some(head) = self.head {
+            head.next = None;
+        }
+    }
+}
+
+impl CircularListShared {
+    // A ring of `vals` in order, the first the given node.
+    fn from_values(vals: Vec[i64]) -> CircularListShared {
+        if vals.is_empty() {
+            return CircularListShared { head: None };
+        }
+        let head = NodeShared { val: vals[0], next: None };
+        let mut last = head;
+        for i in 1..vals.len() {
+            let node = NodeShared { val: vals[i], next: None };
+            last.next = Some(node);
+            last = node;
+        }
+        last.next = Some(head);
+        CircularListShared { head: Some(head) }
+    }
+
+    fn insert(mut ref self, insert_val: i64) {
+        self.head = Some(insert_shared(self.head, insert_val));
+    }
+
+    // The values once round, from the given node.
+    fn values(self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        if let Some(head) = self.head {
+            let mut at = head;
+            loop {
+                out.push(at.val);
+                at = at.next.expect("a ring has no end");
+                if at.ref_eq(head) {
+                    break;
+                }
+            }
+        }
+        out
+    }
+}
+
+// ---- recursive arm ---------------------------------------------------
+
+shared struct NodeRec {
+    val: i64,
+    mut next: Option[NodeRec],
+}
+
+// Whether `x` fits between `a` and the value after it, `b`.
+fn fits_rec(a: i64, b: i64, x: i64) -> bool {
+    if a <= b {
+        a <= x and x <= b
+    } else {
+        x >= a or x <= b
+    }
+}
+
+// The node to insert after, walking on from `prev`.
+fn gap_rec(prev: NodeRec, head: NodeRec, x: i64) -> NodeRec {
+    let curr = prev.next.expect("a ring has no end");
+    if fits_rec(prev.val, curr.val, x) {
+        prev
+    } else if curr.ref_eq(head) {
+        head
+    } else {
+        gap_rec(curr, head, x)
+    }
+}
+
+// The LeetCode function: the node to hand back, a new one-node ring
+// when `head` is `None`.
+fn insert_rec(head: Option[NodeRec], insert_val: i64) -> NodeRec {
+    let head = match head {
+        Some(h) => h,
+        None => {
+            let node = NodeRec { val: insert_val, next: None };
+            node.next = Some(node);
+            return node;
+        }
+    };
+    let prev = gap_rec(head, head, insert_val);
+    prev.next = Some(NodeRec { val: insert_val, next: prev.next });
+    head
+}
+
+// The list the harness drives: the given node.
+struct CircularListRec {
+    mut head: Option[NodeRec],
+}
+
+impl Drop for CircularListRec {
+    // Cuts the ring after the given node, so the nodes free in a chain.
+    fn drop(mut ref self) {
+        if let Some(head) = self.head {
+            head.next = None;
+        }
+    }
+}
+
+impl CircularListRec {
+    // A ring of `vals` in order, the first the given node.
+    fn from_values(vals: Vec[i64]) -> CircularListRec {
+        if vals.is_empty() {
+            return CircularListRec { head: None };
+        }
+        let head = NodeRec { val: vals[0], next: None };
+        let mut last = head;
+        for i in 1..vals.len() {
+            let node = NodeRec { val: vals[i], next: None };
+            last.next = Some(node);
+            last = node;
+        }
+        last.next = Some(head);
+        CircularListRec { head: Some(head) }
+    }
+
+    fn insert(mut ref self, insert_val: i64) {
+        self.head = Some(insert_rec(self.head, insert_val));
+    }
+
+    // The values once round, from the given node.
+    fn values(self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        if let Some(head) = self.head {
+            let mut at = head;
+            loop {
+                out.push(at.val);
+                at = at.next.expect("a ring has no end");
+                if at.ref_eq(head) {
+                    break;
+                }
+            }
+        }
+        out
+    }
+}
+
+// ---- vec arm ---------------------------------------------------------
+
+fn fits_vec(a: i64, b: i64, x: i64) -> bool {
+    if a <= b {
+        a <= x and x <= b
+    } else {
+        x >= a or x <= b
+    }
+}
+
+// The LeetCode function on the ring as a `Vec`; an empty `Vec` is an
+// empty list.
+fn insert_vec(ring: mut ref Vec[i64], insert_val: i64) {
+    let n = ring.len();
+    if n == 0 {
+        ring.push(insert_val);
+        return;
+    }
+    let mut i = 0;
+    loop {
+        if fits_vec(ring[i], ring[(i + 1) % n], insert_val) {
+            break;
+        }
+        i += 1;
+        if i == n {
+            i = 0;
+            break;
+        }
+    }
+    ring.insert(i + 1, insert_val);
+}
+
+// The list the harness drives.
+struct CircularListVec {
+    mut ring: Vec[i64],
+}
+
+impl CircularListVec {
+    // A ring of `vals` in order, the first the given node.
+    fn from_values(vals: own Vec[i64]) -> CircularListVec {
+        CircularListVec { ring: vals }
+    }
+
+    fn insert(mut ref self, insert_val: i64) {
+        insert_vec(mut self.ring, insert_val);
+    }
+
+    // The values once round, from the given node.
+    fn values(self) -> Vec[i64] {
+        self.ring.clone()
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+// The ring of `vals`, read from the given node, after each insert of `xs`.
+fn run(which: i64, vals: Vec[i64], xs: Vec[i64]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    if which == 0 {
+        let mut list = CircularListArena.from_values(vals.clone());
+        for x in xs.iter() {
+            list.insert(*x);
+            out.push(list.values());
+        }
+    } else if which == 1 {
+        let mut list = CircularListShared.from_values(vals.clone());
+        for x in xs.iter() {
+            list.insert(*x);
+            out.push(list.values());
+        }
+    } else if which == 2 {
+        let mut list = CircularListRec.from_values(vals.clone());
+        for x in xs.iter() {
+            list.insert(*x);
+            out.push(list.values());
+        }
+    } else {
+        let mut list = CircularListVec.from_values(vals.clone());
+        for x in xs.iter() {
+            list.insert(*x);
+            out.push(list.values());
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// How many times the ring goes down, going once round.
+fn descents(ring: Vec[i64]) -> i64 {
+    let n = ring.len();
+    let mut count = 0;
+    for i in 0..n {
+        if ring[i] > ring[(i + 1) % n] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// The definition: each value goes into the first gap, counting from the
+// given node, that leaves the ring going down at most once. Also how
+// many went into the last gap, just before the given node.
+fn definition(vals: Vec[i64], xs: Vec[i64]) -> (Vec[Vec[i64]], i64) {
+    let mut ring = vals.clone();
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut ends = 0;
+    for x in xs.iter() {
+        if ring.is_empty() {
+            ring.push(*x);
+        } else {
+            for i in 0..ring.len() {
+                let mut candidate: Vec[i64] = Vec.new();
+                for j in 0..i + 1 {
+                    candidate.push(ring[j]);
+                }
+                candidate.push(*x);
+                for j in i + 1..ring.len() {
+                    candidate.push(ring[j]);
+                }
+                if descents(candidate.clone()) <= 1 {
+                    if i > 0 and i == ring.len() - 1 {
+                        ends += 1;
+                    }
+                    ring = candidate;
+                    break;
+                }
+            }
+        }
+        out.push(ring.clone());
+    }
+    (out, ends)
+}
+
+// Whether `after` is `before` with `x` added at some position past the
+// first, or `[x]` when `before` is empty, and goes down at most once.
+fn valid(before: Vec[i64], after: Vec[i64], x: i64) -> bool {
+    if after.len() != before.len() + 1 or descents(after.clone()) > 1 {
+        return false;
+    }
+    if before.is_empty() {
+        return after[0] == x;
+    }
+    for j in 1..after.len() {
+        if after[j] != x {
+            continue;
+        }
+        let mut same = true;
+        for i in 0..before.len() {
+            let k = if i < j { i } else { i + 1 };
+            if after[k] != before[i] {
+                same = false;
+                break;
+            }
+        }
+        if same {
+            return true;
+        }
+    }
+    false
+}
+
+fn main() {
+    let mut seed = 7080;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut ends = 0;
+    let cases = 2000;
+    for _ in 0..cases {
+        // A sorted ring of 0 to 30 values from a span of 3 or of 1,000,
+        // read from a random node, and 1 to 6 values to insert, from 2
+        // below the span to 2 above it.
+        let n = next_random(mut seed) % 31;
+        let span = if next_random(mut seed) % 2 == 0 { 3 } else { 1000 };
+        let mut sorted: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            sorted.push(-5 + next_random(mut seed) % (span + 1));
+        }
+        sorted.sort();
+        let start = if n == 0 { 0 } else { next_random(mut seed) % n };
+        let mut vals: Vec[i64] = Vec.new();
+        for i in 0..n {
+            vals.push(sorted[(start + i) % n]);
+        }
+        let k = 1 + next_random(mut seed) % 6;
+        let mut xs: Vec[i64] = Vec.new();
+        for _ in 0..k {
+            xs.push(-7 + next_random(mut seed) % (span + 5));
+        }
+        let (want, end_count) = definition(vals.clone(), xs.clone());
+        ends += end_count;
+        // The same ring and values, each 1,000 higher.
+        let mut up_vals: Vec[i64] = Vec.new();
+        for v in vals.iter() {
+            up_vals.push(*v + 1000);
+        }
+        let mut up_xs: Vec[i64] = Vec.new();
+        for x in xs.iter() {
+            up_xs.push(*x + 1000);
+        }
+        for which in 0..arms {
+            let got = run(which, vals.clone(), xs.clone());
+            // P1: the definition's ring after every insert.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every value 1,000 higher, every ring 1,000 higher.
+            checks += 1;
+            let up = run(which, up_vals.clone(), up_xs.clone());
+            let mut off = up.len() != got.len();
+            if not off {
+                for s in 0..got.len() {
+                    if up[s].len() != got[s].len() {
+                        off = true;
+                    } else {
+                        for i in 0..got[s].len() {
+                            if up[s][i] != got[s][i] + 1000 {
+                                off = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if off {
+                fails[1] += 1;
+            }
+            // P3: each ring is the one before with the value added after
+            // the given node somewhere, and goes down at most once.
+            checks += 1;
+            let mut before = vals.clone();
+            let mut off = false;
+            for s in 0..k {
+                if not valid(before.clone(), got[s].clone(), xs[s]) {
+                    off = true;
+                }
+                before = got[s].clone();
+            }
+            if off {
+                fails[2] += 1;
+            }
+            // P4: the given node's own value goes in right after it.
+            if n > 0 {
+                checks += 1;
+                let mut same: Vec[i64] = [vals[0]];
+                for v in vals.iter() {
+                    same.push(*v);
+                }
+                if run(which, vals.clone(), [vals[0]])[0] != same {
+                    fails[3] += 1;
+                }
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} rings ({ends} inserts before the given node), {arms} arms, {checks} checks, {total} failures");
+}

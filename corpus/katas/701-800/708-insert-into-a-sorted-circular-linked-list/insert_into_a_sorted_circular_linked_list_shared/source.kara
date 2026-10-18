@@ -1,0 +1,185 @@
+// LeetCode #708: Insert into a Sorted Circular Linked List -- nodes.
+//
+// The problem's own shape: counted `shared` nodes, the last linking
+// back to the first. The walk is the ★ arm's, from the given node to
+// the first gap the value fits, comparing nodes by identity to know it
+// is back round. Every link is strong, so the ring is a cycle of
+// counted handles, which is never freed on its own; the list that
+// holds it cuts one link when it is dropped, and the rest then free in
+// a chain. O(n).
+
+shared struct Node {
+    val: i64,
+    mut next: Option[Node],
+}
+
+// Whether `x` fits between `a` and the value after it, `b`.
+fn fits(a: i64, b: i64, x: i64) -> bool {
+    if a <= b {
+        a <= x and x <= b
+    } else {
+        x >= a or x <= b
+    }
+}
+
+// The LeetCode function: the node to hand back, a new one-node ring
+// when `head` is `None`.
+fn insert(head: Option[Node], insert_val: i64) -> Node {
+    let head = match head {
+        Some(h) => h,
+        None => {
+            let node = Node { val: insert_val, next: None };
+            node.next = Some(node);
+            return node;
+        }
+    };
+    let mut prev = head;
+    loop {
+        let curr = prev.next.expect("a ring has no end");
+        if fits(prev.val, curr.val, insert_val) {
+            break;
+        }
+        prev = curr;
+        if prev.ref_eq(head) {
+            break;
+        }
+    }
+    prev.next = Some(Node { val: insert_val, next: prev.next });
+    head
+}
+
+// The list the harness drives: the given node.
+struct CircularList {
+    mut head: Option[Node],
+}
+
+impl Drop for CircularList {
+    // Cuts the ring after the given node, so the nodes free in a chain.
+    fn drop(mut ref self) {
+        if let Some(head) = self.head {
+            head.next = None;
+        }
+    }
+}
+
+impl CircularList {
+    // A ring of `vals` in order, the first the given node.
+    fn from_values(vals: Vec[i64]) -> CircularList {
+        if vals.is_empty() {
+            return CircularList { head: None };
+        }
+        let head = Node { val: vals[0], next: None };
+        let mut last = head;
+        for i in 1..vals.len() {
+            let node = Node { val: vals[i], next: None };
+            last.next = Some(node);
+            last = node;
+        }
+        last.next = Some(head);
+        CircularList { head: Some(head) }
+    }
+
+    fn insert(mut ref self, insert_val: i64) {
+        self.head = Some(insert(self.head, insert_val));
+    }
+
+    // The values once round, from the given node.
+    fn values(self) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        if let Some(head) = self.head {
+            let mut at = head;
+            loop {
+                out.push(at.val);
+                at = at.next.expect("a ring has no end");
+                if at.ref_eq(head) {
+                    break;
+                }
+            }
+        }
+        out
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(vals: Vec[i64], inserts: Vec[i64]) {
+    let mut list = CircularList.from_values(vals.clone());
+    for x in inserts.iter() {
+        list.insert(*x);
+    }
+    println(f"{vals} insert {inserts}: {list.values()}");
+}
+
+// A sorted ring of `n` values from `lo` up to `lo + span`, read from a
+// random node.
+fn random_ring(n: i64, lo: i64, span: i64, seed: mut ref i64) -> Vec[i64] {
+    let mut vals: Vec[i64] = Vec.new();
+    for _ in 0..n {
+        vals.push(lo + next_random(mut seed) % (span + 1));
+    }
+    vals.sort();
+    let start = if n == 0 { 0 } else { next_random(mut seed) % n };
+    let mut ring: Vec[i64] = Vec.new();
+    for i in 0..n {
+        ring.push(vals[(start + i) % n]);
+    }
+    ring
+}
+
+fn checksum(vals: Vec[i64]) -> i64 {
+    let mut sum = 0;
+    for v in vals.iter() {
+        sum = (sum * 31 + *v + 1000001) % 1000000007;
+    }
+    sum
+}
+
+fn main() {
+    // The LeetCode examples.
+    show([3, 4, 1], [2]);
+    show([], [1]);
+    show([1], [0]);
+    // Beyond either end, onto the drop; equal to the first, the last
+    // and a middle value; every value equal; a long run of inserts.
+    show([3, 5, 1], [6, 0, 3, 5, 1]);
+    show([1, 1, 3], [1, 3, 2]);
+    show([3, 3, 3], [3, 5, 1]);
+    show([7], [7, 7, 6, 8]);
+    show([-1000000, 1000000], [0, -1000000, 1000000]);
+    // The problem's most, 50,000 nodes would take n^2 steps to build
+    // one at a time; 2,000 values inserted into an empty list, twice.
+    let mut seed: i64 = 708;
+    for _ in 0..2 {
+        let mut list = CircularList.from_values(Vec.new());
+        for _ in 0..2000 {
+            list.insert(next_random(mut seed) % 2000001 - 1000000);
+        }
+        let vals = list.values();
+        println(f"2000 inserted: first {vals[0]}, checksum {checksum(vals)}");
+    }
+    // 50,000 values from the given node round, then 50 inserts.
+    let mut list = CircularList.from_values(random_ring(50000, -1000000, 2000000, mut seed));
+    for _ in 0..50 {
+        list.insert(next_random(mut seed) % 2000001 - 1000000);
+    }
+    println(f"50000 nodes and 50 inserted: checksum {checksum(list.values())}");
+    // 300 random rings of 0 to 30 values from a narrow or a wide range,
+    // each with 1 to 5 inserts.
+    let mut sum = 0;
+    for _ in 0..300 {
+        let n = next_random(mut seed) % 31;
+        let span = if next_random(mut seed) % 2 == 0 { 5 } else { 1000 };
+        let mut list = CircularList.from_values(random_ring(n, -3, span, mut seed));
+        let k = 1 + next_random(mut seed) % 5;
+        for _ in 0..k {
+            list.insert(next_random(mut seed) % (span + 7) - 6);
+        }
+        sum = (sum * 31 + checksum(list.values())) % 1000000007;
+    }
+    println(f"300 random rings: checksum {sum}");
+}

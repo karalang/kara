@@ -1,0 +1,101 @@
+// LeetCode #708: Insert into a Sorted Circular Linked List -- an arena.
+//
+// A circular list closes a cycle, and a cycle of counted handles is
+// never freed, so the nodes live in an arena instead: values and next
+// links in two `Vec`s, a node named by its index. The walk starts at
+// the given node and stops at the first gap the value fits: between a
+// smaller and a larger value, or across the drop from the largest to
+// the smallest when the value is beyond either end. If it comes back
+// round, every value is equal and any gap fits; it takes the one after
+// the given node. O(n).
+
+struct Ring {
+    mut vals: Vec[i64],
+    mut next: Vec[i64],
+}
+
+// Whether `x` fits between `a` and the value after it, `b`.
+fn fits(a: i64, b: i64, x: i64) -> bool {
+    if a <= b {
+        a <= x and x <= b
+    } else {
+        x >= a or x <= b
+    }
+}
+
+impl Ring {
+    fn new() -> Ring {
+        Ring { vals: Vec.new(), next: Vec.new() }
+    }
+
+    // The LeetCode function: `head` is the given node, `None` for an
+    // empty list, and the result is the node to hand back.
+    fn insert(mut ref self, head: Option[i64], insert_val: i64) -> i64 {
+        let id = self.vals.len();
+        self.vals.push(insert_val);
+        let head = match head {
+            Some(h) => h,
+            None => {
+                self.next.push(id);
+                return id;
+            }
+        };
+        let mut prev = head;
+        loop {
+            let curr = self.next[prev];
+            if fits(self.vals[prev], self.vals[curr], insert_val) {
+                break;
+            }
+            prev = curr;
+            if prev == head {
+                break;
+            }
+        }
+        self.next.push(self.next[prev]);
+        self.next[prev] = id;
+        head
+    }
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 708;
+    let mut checksum = 0;
+    for _ in 0..5 {
+        for _ in 0..10 {
+            // 20,000 sorted values, linked round from a random node.
+            let n = 20000;
+            let mut sorted: Vec[i64] = Vec.new();
+            for _ in 0..n {
+                sorted.push((next_random(mut seed) * 32768 + next_random(mut seed)) % 2000001 - 1000000);
+            }
+            sorted.sort();
+            let start = next_random(mut seed) % n;
+            let mut ring = Ring.new();
+            for i in 0..n {
+                ring.vals.push(sorted[(start + i) % n]);
+                ring.next.push((i + 1) % n);
+            }
+            let mut head = 0;
+            for _ in 0..1000 {
+                let x = (next_random(mut seed) * 32768 + next_random(mut seed)) % 2000001 - 1000000;
+                head = ring.insert(Some(head), x);
+            }
+            let mut at = head;
+            loop {
+                checksum = (checksum * 31 + ring.vals[at] + 1000001) % 1000000007;
+                at = ring.next[at];
+                if at == head {
+                    break;
+                }
+            }
+        }
+    }
+    println(f"5 rounds of 10 rings of 20000 values, 1000 inserts each: checksum {checksum}");
+}

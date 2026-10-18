@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/708-insert-into-a-sorted-circular-linked-list/bench/insert_into_a_sorted_circular_linked_list.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "fe20f8fdb"
+extracted_src = "a5f51c29"
+model_rev = "583cfb0d"
+model_src = "a5f51c29"
