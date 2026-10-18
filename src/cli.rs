@@ -1541,7 +1541,14 @@ impl Pipeline {
         // receiver once `rewrite_path_call_to_method_call` runs, so a
         // pre-lower placement under-fired on exactly the shape that widening
         // introduced: check clean, build refused.
-        if let (true, Some(typed)) = (self.codegen_bound, self.typed.as_mut()) {
+        //
+        // B-2026-10-14-70 — the deferral is the LEGACY backend's: every v2
+        // (MIR) surface runs a chained field receiver, and the lint's advice
+        // (`let tmp = self.env;`) is a move out of `self` the v2 core rules
+        // refuse. So a strict-core check, which answers for v2, skips it.
+        if let (true, false, Some(typed)) =
+            (self.codegen_bound, self.strict_core, self.typed.as_mut())
+        {
             let (extra, deny) = crate::chained_receiver_lint::check_chained_field_receivers(
                 &self.parsed.program,
                 &self.lint_overrides,

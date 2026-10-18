@@ -769,10 +769,9 @@ fn a_move_out_of_a_drop_type_is_an_error_no_attribute_lowers() {
          }\n",
         "which has a `Drop` body",
     );
-    // The fixed form, `w.inner.s.clone()`, trips the legacy backend's
-    // `chained_field_receiver` deferral, so this case checks the rejection
-    // only; the direct case above covers the `.clone()` fix.
-    rejected(
+    // The fixed form is `w.inner.s.clone()`, a chained field receiver, which
+    // the v2 check accepts since B-2026-10-14-70.
+    rejected_then_fixed(
         "drop-field-path",
         "struct P { s: String }\n\
          struct W { inner: P }\n\
@@ -5141,6 +5140,38 @@ const MAGIC: Array[i64, 3] = [1, 2, 3];
 fn main() {
     let a: Array[i64, 3] = [4, 5, 6];
     println(f"{a.to_vec().len()} {MAGIC.to_vec() == vec![1, 2, 3]}");
+}
+"#,
+    );
+}
+
+#[test]
+fn check_chained_field_receiver() {
+    // B-2026-10-14-70: `self.env.to.push(..)` and `v.a.nodes[i].kind` were
+    // refused with the legacy backend's `chained_field_receiver` deferral,
+    // though every v2 surface runs them.
+    accepted(
+        "chained-field-receiver",
+        r#"
+struct Env { to: Vec[String] }
+struct S { env: Env }
+impl S {
+    fn add(mut ref self, a: Str) -> i64 {
+        self.env.to.push(a.to_string());
+        self.env.to.len()
+    }
+}
+struct Node { kind: i64, kids: Vec[i64] }
+struct Arena { nodes: Vec[Node] }
+struct V { a: Arena }
+fn kind_of(v: ref V, i: usize) -> i64 {
+    v.a.nodes[i].kind + v.a.nodes[i].kids.len() as i64
+}
+fn main() {
+    let mut s = S { env: Env { to: Vec.new() } };
+    println(f"{s.add("x")} {s.add("y")}");
+    let v = V { a: Arena { nodes: vec![Node { kind: 7, kids: vec![1, 2] }] } };
+    println(f"{kind_of(v, 0)}");
 }
 "#,
     );

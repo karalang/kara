@@ -1107,6 +1107,13 @@ fn test_run_rejects_provider_escape() {
 /// must keep WORKING — the gate is about codegen, and taking away a working
 /// execution path to warn about one that was never used would be a worse
 /// trade than the silence it replaced.
+///
+/// B-2026-10-14-70 — `karac check` now answers for the v2 (MIR) backends,
+/// which all run a chained field receiver, so the strict check no longer
+/// reports the legacy deferral. The lint still guards the LEGACY build, so
+/// the three lint surfaces are measured on `karac build` (on the default leg
+/// that is the check fallback under legacy's rules; on `--features llvm` the
+/// lint runs before codegen), and `check` itself is pinned clean.
 #[test]
 fn test_chained_field_receiver_surfaces_at_check_time() {
     let tmp = std::env::temp_dir().join(format!(
@@ -1131,12 +1138,25 @@ fn main() {
 "#;
     std::fs::write(&path, src).unwrap();
     let file = path.to_str().unwrap();
+    let exe = tmp.join("chained_out");
+    let exe = exe.to_str().unwrap();
 
-    // 1. Text check REPORTS it, where it used to say "All checks passed."
+    // 0. B-2026-10-14-70: the v2 check is clean; every MIR surface runs this.
     let out = karac_bin().args(["check", file]).output().unwrap();
     assert!(
+        out.status.success(),
+        "the v2 check must accept a chained field receiver; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // 1. The legacy build REPORTS it, by the lint's message and remedy.
+    let out = karac_bin()
+        .args(["build", file, "-o", exe])
+        .output()
+        .unwrap();
+    assert!(
         !out.status.success(),
-        "check must fail on a program `build` refuses; stderr={}",
+        "the legacy build must refuse the shape; stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1151,7 +1171,7 @@ fn main() {
 
     // 2. JSON carries it with the lint name, which is what the Mend loop reads.
     let out = karac_bin()
-        .args(["check", file, "--output=json"])
+        .args(["build", file, "-o", exe, "--output=json"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1165,12 +1185,14 @@ fn main() {
     );
 
     // 3. `-A` opts out — for a program that only ever runs under `--interp`.
+    //    Codegen itself still refuses the shape on the `llvm` leg, so what is
+    //    measured is that the LINT's diagnostic is gone.
     let out = karac_bin()
-        .args(["check", file, "-A", "chained_field_receiver"])
+        .args(["build", file, "-o", exe, "-A", "chained_field_receiver"])
         .output()
         .unwrap();
     assert!(
-        out.status.success(),
+        !String::from_utf8_lossy(&out.stderr).contains("error[chained_field_receiver]"),
         "-A chained_field_receiver must suppress; stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );
@@ -1196,7 +1218,8 @@ fn main() {
 /// (bare, in a call arg, and in a tail), a `for` range bound, and an index
 /// chain inside an f-string. Every one is refused by `karac build`, so every
 /// one must fail `karac check`. Plus two negative controls that build today
-/// and must stay clean.
+/// and must stay clean. Measured on the legacy `karac build` since
+/// B-2026-10-14-70: the v2 check no longer reports the legacy deferral.
 #[test]
 fn test_chained_field_receiver_walks_all_expression_positions() {
     let tmp = std::env::temp_dir().join(format!(
@@ -1208,6 +1231,8 @@ fn test_chained_field_receiver_walks_all_expression_positions() {
             .unwrap_or(0),
     ));
     std::fs::create_dir_all(&tmp).unwrap();
+    let exe = tmp.join("pos_out");
+    let exe = exe.to_str().unwrap();
     let preamble = r#"
 struct Doc { lines: Vec[String] }
 struct Ed { doc: Doc }
@@ -1244,7 +1269,7 @@ fn takeu(n: usize) -> usize { return n; }
         )
         .unwrap();
         let out = karac_bin()
-            .args(["check", path.to_str().unwrap()])
+            .args(["build", path.to_str().unwrap(), "-o", exe])
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1264,7 +1289,7 @@ fn takeu(n: usize) -> usize { return n; }
     )
     .unwrap();
     let out = karac_bin()
-        .args(["check", path.to_str().unwrap()])
+        .args(["build", path.to_str().unwrap(), "-o", exe])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1287,7 +1312,7 @@ fn takeu(n: usize) -> usize { return n; }
         let path = tmp.join(format!("neg_{label}.kara"));
         std::fs::write(&path, format!("{preamble}\nfn main() {{\n    {body}\n}}\n")).unwrap();
         let out = karac_bin()
-            .args(["check", path.to_str().unwrap()])
+            .args(["build", path.to_str().unwrap(), "-o", exe])
             .output()
             .unwrap();
         assert!(
@@ -1831,7 +1856,8 @@ fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
 /// lowered AST — so running the lint pre-lower under-fired on exactly the
 /// shape the B-2026-08-17-21 widening introduced: `check` clean, `build`
 /// refused. Moving it post-lower restores parity; this pins the shape whose
-/// diagnostic that move recovered.
+/// diagnostic that move recovered. Measured on the legacy `karac build`
+/// since B-2026-10-14-70: the v2 check no longer reports the legacy deferral.
 #[test]
 fn test_chained_field_receiver_sees_lowered_uppercase_path() {
     let tmp = std::env::temp_dir().join(format!(
@@ -1856,8 +1882,13 @@ fn main() {
 "#;
     std::fs::write(&path, src).unwrap();
     let file = path.to_str().unwrap();
+    let exe = tmp.join("chained_const_out");
+    let exe = exe.to_str().unwrap();
 
-    let out = karac_bin().args(["check", file]).output().unwrap();
+    let out = karac_bin()
+        .args(["build", file, "-o", exe])
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !out.status.success(),
@@ -1881,7 +1912,7 @@ fn main() {
     )
     .unwrap();
     let out = karac_bin()
-        .args(["check", ok_path.to_str().unwrap()])
+        .args(["build", ok_path.to_str().unwrap(), "-o", exe])
         .output()
         .unwrap();
     assert!(
