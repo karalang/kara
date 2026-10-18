@@ -11968,6 +11968,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                     return Ok(());
                 }
             }
+            // `char.try_from(x)` of a borrowed integer reads the value
+            // (B-2026-10-18-33).
+            if let ("char", "try_from", [a]) = (owner, method, args) {
+                let t = self.expr_ty(&a.value)?;
+                if let HK::Ref(inner) = self.tys().tcx().kind(t) {
+                    let op = self.owned_operand(&a.value, inner)?;
+                    self.call_native("char.try_from", vec![op], dest);
+                    return Ok(());
+                }
+            }
             // `i64.parse(s)`, `f64.parse(s)`: a library function of a
             // primitive type, named after it. Copy arguments go by value,
             // the rest by reference.

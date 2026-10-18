@@ -366,6 +366,14 @@ impl<'a> super::TypeChecker<'a> {
                         return Some(Type::Error);
                     }
                     let arg_ty = self.infer_expr(&args[0].value);
+                    // A borrowed integer (`x` of `for x in v.iter()`) reads as
+                    // its value (B-2026-10-18-33).
+                    let arg_ty = match arg_ty {
+                        Type::Ref(inner) if matches!(*inner, Type::Int(_) | Type::UInt(_)) => {
+                            *inner
+                        }
+                        t => t,
+                    };
                     if !matches!(arg_ty, Type::Int(_) | Type::UInt(_) | Type::Error) {
                         self.type_error(
                             format!(

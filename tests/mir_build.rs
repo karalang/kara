@@ -4393,3 +4393,39 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_char_try_from_reads_a_borrowed_integer() {
+    // B-2026-10-18-33: `char.try_from(x)` with `x` a `ref i64` from
+    // `for x in v.iter()` was refused ("expects an integer codepoint, got
+    // `ref i64`"); it reads the value, as the other integer uses of `x` do.
+    let src = r#"
+fn main() {
+    let b: Vec[i64] = vec![104, 105, 55296];
+    let mut s = String.new();
+    for x in b.iter() {
+        match char.try_from(x) {
+            Ok(c) => s.push(c),
+            Err(n) => s.push_str(f"<{n}>"),
+        }
+    }
+    let u: Vec[u32] = vec![79, 75];
+    for y in u.iter() {
+        s.push(char.try_from(y).unwrap());
+    }
+    let w: Vec[u8] = vec![33];
+    for z in w.iter() {
+        s.push(char.try_from(z).unwrap());
+    }
+    println(s);
+}
+"#;
+    let want = "hi<55296>OK!\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
