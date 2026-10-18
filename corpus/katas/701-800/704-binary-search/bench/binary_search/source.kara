@@ -1,0 +1,56 @@
+// LeetCode #704 bench: the ★ arm (binary_search.kara) on many searches.
+//
+// 100 arrays of 10,000 increasing values from -9,999, each 1 or 2 above
+// the one before, built once; then in each of 5 rounds every array is
+// searched for every number from -9,999 to 9,999, and the indices found
+// are folded into a checksum.
+
+fn search(nums: Vec[i64], target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = nums.len() - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            return mid;
+        }
+        if nums[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    -1
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed: i64 = 704;
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..100 {
+        let mut nums: Vec[i64] = Vec.new();
+        let mut v = -9999;
+        for _ in 0..10000 {
+            nums.push(v);
+            v += 1 + next_random(mut seed) % 2;
+        }
+        arrays.push(nums);
+    }
+    let mut found = 0;
+    let mut checksum = 0;
+    for _ in 0..5 {
+        for nums in arrays.iter() {
+            for target in -9999..10000 {
+                let at = search(nums, target);
+                if at >= 0 {
+                    found += 1;
+                }
+                checksum = (checksum * 31 + at + 1) % 1000000007;
+            }
+        }
+    }
+    println(f"5 rounds of 100 arrays of 10000: {found} found, checksum {checksum}");
+}

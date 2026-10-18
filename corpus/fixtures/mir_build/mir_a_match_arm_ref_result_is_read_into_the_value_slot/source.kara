@@ -1,0 +1,12 @@
+
+fn main() {
+    let mut a: Map[char, i64] = Map.new();
+    let mut b: Map[char, i64] = Map.new();
+    b.insert('x', 2);
+    a.insert('y', 5);
+    let numb = match a.get('x') {
+        Some(n) => *n,
+        None => b.get('x').unwrap_or(0),
+    };
+    println(f"{numb - 1}");
+}

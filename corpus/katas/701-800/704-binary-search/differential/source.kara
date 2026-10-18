@@ -1,0 +1,182 @@
+// LeetCode #704: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random arrays.
+
+// ---- star arm -------------------------------------------------------
+
+fn search_star(nums: Vec[i64], target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = nums.len() - 1;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        if nums[mid] == target {
+            return mid;
+        }
+        if nums[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    -1
+}
+
+// ---- lower-bound arm ------------------------------------------------
+
+fn search_lower(nums: Vec[i64], target: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = nums.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if nums[mid] < target {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if lo < nums.len() and nums[lo] == target {
+        lo
+    } else {
+        -1
+    }
+}
+
+// ---- recursive arm --------------------------------------------------
+
+fn within_rec(nums: Vec[i64], target: i64, lo: i64, hi: i64) -> i64 {
+    if lo > hi {
+        return -1;
+    }
+    let mid = lo + (hi - lo) / 2;
+    if nums[mid] == target {
+        mid
+    } else if nums[mid] < target {
+        within_rec(nums, target, mid + 1, hi)
+    } else {
+        within_rec(nums, target, lo, mid - 1)
+    }
+}
+
+fn search_recursive(nums: Vec[i64], target: i64) -> i64 {
+    within_rec(nums, target, 0, nums.len() - 1)
+}
+
+// ---- stdlib arm -----------------------------------------------------
+
+fn search_stdlib(nums: Vec[i64], target: i64) -> i64 {
+    match nums.binary_search(target) {
+        Some(i) => i,
+        None => -1,
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, nums: Vec[i64], target: i64) -> i64 {
+    if which == 0 {
+        search_star(nums, target)
+    } else if which == 1 {
+        search_lower(nums, target)
+    } else if which == 2 {
+        search_recursive(nums, target)
+    } else {
+        search_stdlib(nums, target)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: look at every value in turn, without the order, and
+// answer the index of the one equal to `target`.
+fn definition(nums: Vec[i64], target: i64) -> i64 {
+    for i in 0..nums.len() {
+        if nums[i] == target {
+            return i;
+        }
+    }
+    -1
+}
+
+fn main() {
+    let mut seed = 7040;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut hits = 0;
+    let cases = 3000;
+    for c in 0..cases {
+        // 1 to 40 values, and one case in ten up to 1,000, increasing
+        // from -60 by 1 to a random 1 to 4; a target that is one of
+        // them half of the time, otherwise anything from -62 to the
+        // last value + 2.
+        let most = if c % 10 == 0 { 1000 } else { 40 };
+        let n = 1 + next_random(mut seed) % most;
+        let gap = 1 + next_random(mut seed) % 4;
+        let mut nums: Vec[i64] = Vec.new();
+        let mut v = -60;
+        for _ in 0..n {
+            nums.push(v);
+            v += 1 + next_random(mut seed) % gap;
+        }
+        let top = nums[n - 1];
+        let mut target = next_random(mut seed) % (top + 65) - 62;
+        if next_random(mut seed) % 2 == 0 {
+            target = nums[next_random(mut seed) % n];
+        }
+        let mut shifted: Vec[i64] = Vec.new();
+        let mut flipped: Vec[i64] = Vec.new();
+        for i in 0..n {
+            shifted.push(nums[i] + 5000);
+            flipped.push(-nums[n - 1 - i]);
+        }
+        let want = definition(nums, target);
+        if want >= 0 {
+            hits += 1;
+        }
+        for which in 0..arms {
+            let got = answer(which, nums, target);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: every value and the target 5,000 higher, the same
+            // answer.
+            checks += 1;
+            if answer(which, shifted, target + 5000) != got {
+                fails[1] += 1;
+            }
+            // P3: the values negated and reversed and the target negated,
+            // the answer counted from the other end.
+            checks += 1;
+            let back = answer(which, flipped, -target);
+            let mirrored = if got < 0 { -1 } else { n - 1 - got };
+            if back != mirrored {
+                fails[2] += 1;
+            }
+            // P4: every value searched for finds its own index.
+            checks += 1;
+            let mut lost = false;
+            for i in 0..n {
+                if not lost and answer(which, nums, nums[i]) != i {
+                    lost = true;
+                }
+            }
+            if lost {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} arrays ({hits} with the target), {arms} arms, {checks} checks, {total} failures");
+}

@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/704-binary-search/bench/binary_search.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["bench"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "9297cca25"
+extracted_src = "f0da3bec"
+model_rev = "583cfb0d"
+model_src = "f0da3bec"
