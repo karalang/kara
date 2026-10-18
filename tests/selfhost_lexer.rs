@@ -409,6 +409,22 @@ const CORPUS: &[&str] = &[
     // `Unknown escape sequence…` — one per body lexer, each with its own
     // wording, and each quoting the offending codepoint (so a port that emits
     // the bare sentence no longer agrees).
+    // B-2026-10-18-8 — `\xHH` in text literals: ASCII, a UTF-8 sequence
+    // spelled byte by byte, and each way the bytes fail to be UTF-8 (a lone
+    // high byte, a short sequence, overlong, surrogate, past U+10FFFF), plus a
+    // bad digit inside a sequence.
+    r#""A\x42C""#,
+    r#"f"\x41{x}\x7A""#,
+    r#"'\x41'"#,
+    r#""caf\xC3\xA9""#,
+    r#"'\xE2\x82\xAC'"#,
+    r#""\xFF""#,
+    r#""\xC3x""#,
+    r#""\xE0\x80\x80""#,
+    r#""\xED\xA0\x80""#,
+    r#""\xF4\x90\x80\x80""#,
+    r#""\xC3\xZ1""#,
+    r#""\x4""#,
     r#""\q""#,
     r#"'\q'"#,
     r#"b'\q'"#,

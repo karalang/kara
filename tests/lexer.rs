@@ -559,6 +559,42 @@ fn test_char_literal_unterminated() {
     assert_eq!(tokens_only("'a")[0], Token::Label("a".to_string()));
 }
 
+/// `\xHH` in text literals (design.md § Literals, B-2026-10-18-8): an ASCII
+/// byte is that character, and bytes from `\x80` up must spell valid UTF-8.
+#[test]
+fn text_literals_take_hex_byte_escapes() {
+    assert_eq!(
+        tokens_only(r#""A\x42C""#)[0],
+        Token::StringLiteral("ABC".to_string())
+    );
+    assert_eq!(
+        tokens_only(r#""caf\xC3\xA9""#)[0],
+        Token::StringLiteral("café".to_string())
+    );
+    assert_eq!(tokens_only(r"'\x41'")[0], Token::CharLiteral('A'));
+    assert_eq!(tokens_only(r"'\xE2\x82\xAC'")[0], Token::CharLiteral('€'));
+    match &tokens_only(r#"f"\x41{x}""#)[0] {
+        Token::InterpolatedStringLiteral(parts) => assert!(
+            matches!(&parts[0], InterpolationPart::Text(t) if t == "A"),
+            "{parts:?}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    for bad in [
+        r#""\xFF""#,
+        r#""\xC3x""#,
+        r#""\xE0\x80\x80""#,
+        r#""\xED\xA0\x80""#,
+        r#""\xF4\x90\x80\x80""#,
+    ] {
+        assert!(
+            matches!(&tokens_only(bad)[0], Token::Error(m) if m.contains("is not valid UTF-8")),
+            "{bad}: {:?}",
+            tokens_only(bad)[0]
+        );
+    }
+}
+
 #[test]
 fn test_char_literal_unknown_escape() {
     let tokens = tokens_only("'\\q'");

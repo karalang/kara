@@ -691,6 +691,13 @@ impl Lexer {
                 } else if e == b'{' or e == b'}' {
                     self.advance();
                     return self.make_spanned(Token.Error(brace_escape_msg(e)));
+                } else if e == b'x' {
+                    self.advance();
+                    let esc = self.text_hex_escape();
+                    if not esc.ok {
+                        return self.make_spanned(Token.Error(esc.msg));
+                    }
+                    value.push(esc.c);
                 } else if e == b'u' {
                     self.advance();
                     let u_brace = self.current;
@@ -821,6 +828,10 @@ impl Lexer {
         if e == b'{' or e == b'}' {
             self.advance();
             return escape_err(brace_escape_msg(e));
+        }
+        if e == b'x' {
+            self.advance();
+            return self.text_hex_escape();
         }
         if e != b'u' {
             let bad = self.consume_codepoint();
@@ -1039,6 +1050,12 @@ impl Lexer {
                 ch = '\'';
             } else if e == b'0' {
                 ch = '\0';
+            } else if e == b'x' {
+                let esc = self.text_hex_escape();
+                if not esc.ok {
+                    return self.make_spanned(Token.Error(esc.msg));
+                }
+                ch = esc.c;
             } else if e == b'u' {
                 let u_brace = self.current;
                 let cp = self.scan_unicode_escape();
@@ -1182,6 +1199,72 @@ impl Lexer {
         m.push(byte_as_char(self.peek()));
         m.push_str("`");
         m
+    }
+
+    // `\xHH` in a text literal (a string, an f-string or a `char`), the `\x`
+    // consumed; mirrors `src/lexer.rs::text_hex_escape` (B-2026-10-18-8). A
+    // text literal must be valid UTF-8, so a byte from `\x80` up starts a
+    // sequence the following `\xHH` escapes complete: `"\xC3\xA9"` is `é`.
+    // The seed checks the bytes with `from_utf8`; the scalar's range checks
+    // here reject the same overlong, surrogate and too-large sequences.
+    fn text_hex_escape(mut ref self) -> Escaped {
+        let lead = self.scan_hex_byte_escape();
+        if lead < 0 {
+            return escape_err(self.hex_escape_error_msg());
+        }
+        if lead < 0x80 {
+            return escape_ok(byte_as_char(byte_of(lead)));
+        }
+        let mut len = 0;
+        let mut cp = 0;
+        if lead >= 0xC2 and lead <= 0xDF {
+            len = 2;
+            cp = lead - 0xC0;
+        } else if lead >= 0xE0 and lead <= 0xEF {
+            len = 3;
+            cp = lead - 0xE0;
+        } else if lead >= 0xF0 and lead <= 0xF4 {
+            len = 4;
+            cp = lead - 0xF0;
+        }
+        let mut shown = hex_escape_text(lead);
+        let mut n = 1;
+        let mut valid = len > 0;
+        while n < len and self.peek() == b'\\' and self.peek_at(1) == b'x' {
+            self.advance();
+            self.advance();
+            let v = self.scan_hex_byte_escape();
+            if v < 0 {
+                return escape_err(self.hex_escape_error_msg());
+            }
+            shown.push_str(hex_escape_text(v));
+            if v < 0x80 or v > 0xBF {
+                valid = false;
+            }
+            cp = cp * 64 + (v - 0x80);
+            n = n + 1;
+        }
+        if n < len {
+            valid = false;
+        }
+        if len == 3 and (cp < 0x800 or (cp >= 0xD800 and cp <= 0xDFFF)) {
+            valid = false;
+        }
+        if len == 4 and (cp < 0x10000 or cp > 0x10FFFF) {
+            valid = false;
+        }
+        if valid {
+            match char.try_from(cp) {
+                Ok(c) => return escape_ok(c),
+                Err(_) => {}
+            }
+        }
+        let mut m = "`".to_string();
+        m.push_str(shown);
+        m.push_str("` is not valid UTF-8, and a text literal must be; write raw bytes in a byte string (`b\"");
+        m.push_str(shown);
+        m.push_str("\"`)");
+        escape_err(m)
     }
 
     // `b'A'` byte char literal. The leading `b'` is consumed. One ASCII byte or
@@ -1994,6 +2077,15 @@ fn hex_val(c: u8) -> i64 {
     } else {
         -1
     }
+}
+
+// `\xHH` with the byte in upper-case hex, as the seed's `{b:02X}` quotes it.
+fn hex_escape_text(v: i64) -> String {
+    let digits = "0123456789ABCDEF";
+    let mut t = "\\x".to_string();
+    t.push_str(digits.substring(v / 16, v / 16 + 1));
+    t.push_str(digits.substring(v % 16, v % 16 + 1));
+    t
 }
 
 fn byte_of(v: i64) -> u8 {

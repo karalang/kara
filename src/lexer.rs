@@ -832,6 +832,35 @@ impl<'a> Lexer<'a> {
         u8::from_str_radix(hex, 16).map_err(|_| "\\xHH escape: hex digit parse failed".to_string())
     }
 
+    /// `\xHH` in a text literal (a string, an f-string or a `char`), the
+    /// `\x` consumed (design.md § Literals, B-2026-10-18-8). The literal
+    /// must be valid UTF-8, so a byte from `\x80` up starts a sequence the
+    /// following `\xHH` escapes complete: `"\xC3\xA9"` is `é`.
+    fn text_hex_escape(&mut self) -> Result<char, String> {
+        let lead = self.parse_hex_byte_escape()?;
+        let len = match lead {
+            0x00..=0x7F => return Ok(lead as char),
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => 0,
+        };
+        let mut bytes = vec![lead];
+        while bytes.len() < len && self.peek() == b'\\' && self.peek_at(1) == b'x' {
+            self.advance();
+            self.advance();
+            bytes.push(self.parse_hex_byte_escape()?);
+        }
+        let shown: String = bytes.iter().map(|b| format!("\\x{b:02X}")).collect();
+        match std::str::from_utf8(&bytes) {
+            Ok(t) if bytes.len() == len => Ok(t.chars().next().unwrap_or('\0')),
+            _ => Err(format!(
+                "`{shown}` is not valid UTF-8, and a text literal must be; \
+                 write raw bytes in a byte string (`b\"{shown}\"`)"
+            )),
+        }
+    }
+
     fn string(&mut self) -> SpannedToken {
         let mut value = String::new();
         while self.peek() != b'"' && !self.is_at_end() {
@@ -858,7 +887,8 @@ impl<'a> Lexer<'a> {
     }
 
     /// One escape sequence in a string body; the cursor is ON the `\`.
-    /// `\n \t \r \\ \" \0 \u{..}`, shared by `"..."`, `"""` and `f"..."`.
+    /// `\n \t \r \\ \" \0 \u{..} \xHH`, shared by `"..."`, `"""` and
+    /// `f"..."`.
     fn string_escape(&mut self) -> Result<char, String> {
         self.advance(); // consume backslash
         if self.is_at_end() {
@@ -874,6 +904,10 @@ impl<'a> Lexer<'a> {
             b'u' => {
                 self.advance();
                 return self.parse_unicode_escape();
+            }
+            b'x' => {
+                self.advance();
+                return self.text_hex_escape();
             }
             b'{' | b'}' => {
                 let b = self.advance() as char;
@@ -988,6 +1022,13 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     // Unicode escape: \u{XXXX}
                     match self.parse_unicode_escape() {
+                        Ok(c) => c,
+                        Err(msg) => return self.make_spanned(Token::Error(msg)),
+                    }
+                }
+                b'x' => {
+                    self.advance();
+                    match self.text_hex_escape() {
                         Ok(c) => c,
                         Err(msg) => return self.make_spanned(Token::Error(msg)),
                     }
