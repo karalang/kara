@@ -3500,3 +3500,68 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_generic_function_passed_as_a_value_takes_its_instance_from_the_slot() {
+    // B-2026-10-18-12: `count(v, never)` with `fn never[T](x: T) -> bool`
+    // was refused with "a generic function as a value is not lowered yet".
+    // The slot's `Fn` type (the callee's parameter, or a `let`
+    // annotation) fixes the item's instance, and a call through the value
+    // runs that instance.
+    let src = r#"
+fn never[T](x: T) -> bool {
+    false
+}
+fn count[T](v: ref Vec[T], keep: Fn(T) -> bool) -> i64 {
+    let mut n: i64 = 0;
+    for x in v.iter() {
+        if not keep(x) {
+            n += 1;
+        }
+    }
+    n
+}
+fn main0() {
+    let v: Vec[char] = vec!['a', 'b'];
+    println(f"{count(v, never)}");
+}
+fn len_of[T](v: ref Vec[T]) -> i64 { v.len() as i64 }
+fn same[T](x: own T) -> T { x }
+fn is_big(x: i64) -> bool { x > 10 }
+fn apply(f: Fn(ref Vec[i64]) -> i64, v: Vec[i64]) -> i64 { f(v) }
+fn twice(f: Fn(i64) -> i64, x: i64) -> i64 { f(f(x)) }
+fn main1() {
+    let g: Fn(i64) -> bool = is_big;
+    let k: Fn(char) -> char = same;
+    println(f"{apply(len_of, vec![1, 2, 3])} {twice(same, 4)} {g(11)} {k('z')}");
+}
+fn keep_all[T](x: ref T) -> bool { true }
+fn count_kept[T](v: ref Vec[T], keep: Fn(ref T) -> bool) -> i64 {
+    let mut n: i64 = 0;
+    for x in v.iter() {
+        if keep(x) { n += 1; }
+    }
+    n
+}
+fn wrap[T: Clone](x: ref T) -> Vec[T] { vec![x.clone(), x.clone()] }
+fn main2() {
+    let v: Vec[String] = vec!["a".to_string(), "bb".to_string()];
+    let w: Fn(ref String) -> Vec[String] = wrap;
+    let s = "q".to_string();
+    println(f"{count_kept(v, keep_all)} {w(s).len()} {s}");
+}
+fn main() {
+    main0();
+    main1();
+    main2();
+}
+"#;
+    let want = "2\n3 4 true z\n2 2 q\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

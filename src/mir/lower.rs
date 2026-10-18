@@ -5388,7 +5388,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                         Ok(())
                     }
                     None if self.lcx.fns.contains_key(&d) => {
-                        let (op, _) = self.fn_item_value(e.span, d)?;
+                        let want = self.place_type(&dest);
+                        let (op, _) = self.fn_item_value(e, d, Some(want))?;
                         self.assign(dest, Rvalue::Use(op));
                         Ok(())
                     }
@@ -10587,7 +10588,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut fn_tys: Vec<Option<Ty>> = Vec::new();
         for (a, p) in args.iter().zip(&f.params) {
             if self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p) {
-                let (op, t) = self.fn_arg(&a.value)?;
+                let want = self.generic_fn_param_want(&a.value, p, &inst_args)?;
+                let (op, t) = self.fn_arg(&a.value, want)?;
                 ops.push(PendingRecv::Ready(op));
                 fn_tys.push(Some(t));
                 continue;
@@ -12602,7 +12604,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // item itself, and the instance is specialised to it, as
                     // for a free function's call.
                     if self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p) {
-                        let (op, t) = self.fn_arg(&a.value)?;
+                        let want = self.generic_fn_param_want(&a.value, p, &inst_args)?;
+                        let (op, t) = self.fn_arg(&a.value, want)?;
                         rest.push(PendingRecv::Ready(op));
                         fn_tys.push(Some(t));
                         continue;
@@ -12842,30 +12845,152 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// A function item as a value: a constant of its `FnDef` type.
-    fn fn_item_value(&mut self, span: Span, d: DefId) -> R<(Operand, Ty)> {
-        let generic = self.lcx.fns.get(&d).is_some_and(|i| {
-            i.f.generic_params
-                .as_ref()
-                .is_some_and(|g| !g.params.is_empty())
+    fn fn_item_value(&mut self, e: &Expr, d: DefId, want: Option<Ty>) -> R<(Operand, Ty)> {
+        let n_generic = self.lcx.fns.get(&d).map_or(0, |i| {
+            i.f.generic_params.as_ref().map_or(0, |g| g.params.len())
         });
-        if generic {
-            return self.unsupported(span, "a generic function as a value");
-        }
-        let name = self.lcx.instance(d, Vec::new());
+        let args = if n_generic == 0 {
+            Vec::new()
+        } else {
+            match self.fn_item_value_args(e, d, n_generic, want)? {
+                Some(args) => args,
+                None => return self.unsupported(e.span, "a generic function as a value"),
+            }
+        };
+        let name = self.lcx.instance(d, args.clone());
         let t = {
             let tcx = self.tys().tcx();
-            let none = tcx.intern_list(&[]);
-            tcx.intern(HK::FnDef { def: d, args: none })
+            let list = tcx.intern_list(&args);
+            tcx.intern(HK::FnDef { def: d, args: list })
         };
         let op = Operand::Const(Const {
             ty: t,
-            kind: ConstKind::FnDef(InstanceId {
-                def: d,
-                args: Vec::new(),
-                name,
-            }),
+            kind: ConstKind::FnDef(InstanceId { def: d, args, name }),
         });
         Ok((op, t))
+    }
+
+    /// The type the parameter `p` of a callee in instance `inst_args` gives
+    /// the argument `a`, when `a` names a generic function item, which
+    /// takes its own instance from it.
+    fn generic_fn_param_want(
+        &mut self,
+        a: &Expr,
+        p: &'a ast::Param,
+        inst_args: &[Ty],
+    ) -> R<Option<Ty>> {
+        let generic_item = match &a.kind {
+            ExprKind::Identifier(_) | ExprKind::Path { .. } => match self.lcx.res.get(&a.id) {
+                Some(Res::Def(d)) => self.lcx.fns.get(d).is_some_and(|i| {
+                    i.f.generic_params
+                        .as_ref()
+                        .is_some_and(|g| !g.params.is_empty())
+                }),
+                _ => false,
+            },
+            _ => false,
+        };
+        if !generic_item {
+            return Ok(None);
+        }
+        let t = self.callee_param_ty(p, inst_args)?;
+        Ok(Some(t))
+    }
+
+    /// The generic arguments of the function item `d`, used as a value at
+    /// `e`, read off the `Fn` type the use site gives it: `count(v, never)`
+    /// with a `keep: Fn(char) -> bool` parameter names `never[char]`
+    /// (B-2026-10-18-12). `None` when a parameter is left unsolved.
+    fn fn_item_value_args(
+        &mut self,
+        e: &Expr,
+        d: DefId,
+        n: usize,
+        want: Option<Ty>,
+    ) -> R<Option<Vec<Ty>>> {
+        // The slot's type when there is one: the checker records the
+        // item's own type, whose parameters are unsolved.
+        let want = match want {
+            Some(t) => t,
+            None => self.expr_ty(e)?,
+        };
+        let HK::Fn { params, .. } = self.tys().tcx().kind(want) else {
+            return Ok(None);
+        };
+        let wants = self.tys().tcx().list(params);
+        let f = self.lcx.fns[&d].f;
+        if wants.len() != f.params.len() {
+            return Ok(None);
+        }
+        let mut out: Vec<Option<Ty>> = vec![None; n];
+        for (p, &w) in f.params.iter().zip(&wants) {
+            let Some(&g) = self.lcx.node_types.get(&p.pattern.id) else {
+                return Ok(None);
+            };
+            // In the builder's own form (`Vec` an intrinsic), parameters kept.
+            let Ok(g) = self.lcx.convert(g) else {
+                return Ok(None);
+            };
+            self.solve_params(g, w, &mut out);
+        }
+        Ok(out.into_iter().collect())
+    }
+
+    /// Bind each generic parameter in `g` (a declared type) to the part of
+    /// the concrete type `c` in its position. A borrowed `c` against an
+    /// unborrowed `g` is matched through the borrow.
+    fn solve_params(&self, g: Ty, c: Ty, out: &mut [Option<Ty>]) {
+        let tcx = self.tys().tcx();
+        match (tcx.kind(g), tcx.kind(c)) {
+            (HK::Param(p), _) => {
+                if let Some(slot) = out.get_mut(p.index as usize) {
+                    slot.get_or_insert(c);
+                }
+            }
+            (HK::Ref(a), HK::Ref(b)) | (HK::MutRef(a), HK::MutRef(b)) => {
+                self.solve_params(a, b, out)
+            }
+            (k, HK::Ref(b) | HK::MutRef(b)) if !matches!(k, HK::Ref(_) | HK::MutRef(_)) => {
+                self.solve_params(g, b, out)
+            }
+            (HK::Adt { def: a, args: x }, HK::Adt { def: b, args: y }) if a == b => {
+                let (x, y) = (tcx.list(x), tcx.list(y));
+                for (&gx, &cy) in x.iter().zip(&y) {
+                    self.solve_params(gx, cy, out);
+                }
+            }
+            (HK::Intrinsic { kind: a, args: x }, HK::Intrinsic { kind: b, args: y }) if a == b => {
+                let (x, y) = (tcx.list(x), tcx.list(y));
+                for (&gx, &cy) in x.iter().zip(&y) {
+                    self.solve_params(gx, cy, out);
+                }
+            }
+            (HK::Tuple(x), HK::Tuple(y)) => {
+                let (x, y) = (tcx.list(x), tcx.list(y));
+                for (&gx, &cy) in x.iter().zip(&y) {
+                    self.solve_params(gx, cy, out);
+                }
+            }
+            (HK::Slice { elem: a, .. }, HK::Slice { elem: b, .. })
+            | (HK::Array { elem: a, .. }, HK::Array { elem: b, .. }) => {
+                self.solve_params(a, b, out)
+            }
+            (
+                HK::Fn {
+                    params: x, ret: r1, ..
+                },
+                HK::Fn {
+                    params: y, ret: r2, ..
+                },
+            ) => {
+                let (x, y) = (tcx.list(x), tcx.list(y));
+                for (&gx, &cy) in x.iter().zip(&y) {
+                    self.solve_params(gx, cy, out);
+                }
+                self.solve_params(r1, r2, out);
+            }
+            _ => {}
+        }
     }
 
     /// A function-typed value: a closure literal, a function item, or a
@@ -12875,7 +13000,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::Closure { .. } => self.closure_value(e),
             ExprKind::Identifier(_) | ExprKind::Path { .. } => {
                 if let Some(Res::Def(d)) = self.lcx.res.get(&e.id) {
-                    return self.fn_item_value(e.span, *d);
+                    return self.fn_item_value(e, *d, None);
                 }
                 let p = self.expr_place(e, false)?;
                 let t = self.place_type(&p);
@@ -13506,16 +13631,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             _ => ct,
         };
         let (func, mut ops, param_tys) = match self.tys().tcx().kind(peeled) {
-            HK::FnDef { def, .. } => {
+            HK::FnDef { def, args: fargs } => {
                 let Some(f) = self.lcx.fns.get(&def).map(|i| i.f) else {
                     return self.unsupported(e.span, "a call to this function value");
                 };
+                // A generic item's value carries its instance
+                // (B-2026-10-18-12).
+                let fargs = self.tys().tcx().list(fargs);
                 let mut pts = Vec::new();
                 for p in &f.params {
-                    pts.push(self.callee_param_ty(p, &[])?);
+                    pts.push(self.callee_param_ty(p, &fargs)?);
                 }
-                let name = self.lcx.instance(def, Vec::new());
-                (self.fn_operand(&name, def, Vec::new()), Vec::new(), pts)
+                let name = self.lcx.instance(def, fargs.clone());
+                (self.fn_operand(&name, def, fargs), Vec::new(), pts)
             }
             HK::Closure { def, .. } => {
                 let p = self.expr_place(callee, false)?;
@@ -13600,7 +13728,7 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// the way its body takes its environment (moved when called once), or
     /// the function item as a constant. The parameter then has the type
     /// returned here in that instance of the callee.
-    fn fn_arg(&mut self, a: &'a Expr) -> R<(Operand, Ty)> {
+    fn fn_arg(&mut self, a: &'a Expr, want: Option<Ty>) -> R<(Operand, Ty)> {
         let (op, t) = match &a.kind {
             ExprKind::Closure { .. } => {
                 let (op, t) = self.closure_value(a)?;
@@ -13613,7 +13741,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let Some(Res::Def(d)) = self.lcx.res.get(&a.id) else {
                     unreachable!()
                 };
-                return self.fn_item_value(a.span, *d);
+                return self.fn_item_value(a, *d, want);
             }
             _ => {
                 let p = self.expr_place(a, false)?;
