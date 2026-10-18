@@ -7413,3 +7413,21 @@ fn an_assignment_through_a_read_only_slice_is_refused() {
         "fn bump(xs: mut Slice[i64]) { xs[0] = xs[0] + 1; }\nfn main() {\n    let mut v: Vec[i64] = [1, 2, 3];\n    bump(mut v[0..2]);\n    let mut t = String.from(\"hello\").bytes().to_vec();\n    t[4] = 97;\n    println(f\"{v} {String.from_utf8(t).unwrap()}\");\n}\n",
     );
 }
+
+/// B-2026-10-15-71: an `if` or `match` lent to a `ref T` parameter is a
+/// temporary, so an arm that is a field of a borrowed struct moves out of
+/// the borrow, as the same `if` in a `let` does; `ref two.a` lends it.
+#[test]
+fn an_if_of_borrowed_fields_lent_to_a_ref_param_is_refused() {
+    let src = "struct P {\n    v: Vec[i64],\n}\nstruct Two {\n    a: P,\n    b: P,\n}\nfn total(p: ref P) -> i64 {\n    let mut t: i64 = 0;\n    for x in p.v {\n        t += x;\n    }\n    t\n}\nfn pick_total(two: ref Two, first: bool) -> i64 {\n    total(if first { two.a } else { two.b })\n}\nfn main() {\n    let two = Two { a: P { v: vec![1, 2] }, b: P { v: vec![10, 20] } };\n    println(f\"{pick_total(two, true)} {pick_total(two, false)}\");\n}\n";
+    rejected(
+        "if-of-borrowed-fields-lent",
+        src,
+        "cannot move a non-`Copy` value out of a borrowed place",
+    );
+    accepted(
+        "if-of-borrowed-fields-lent-by-ref",
+        &src.replace("{ two.a }", "{ ref two.a }")
+            .replace("{ two.b }", "{ ref two.b }"),
+    );
+}

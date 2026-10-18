@@ -3134,6 +3134,8 @@ impl<'a> super::TypeChecker<'a> {
                     if self.cli_lint_overrides.strict_core {
                         self.warn_borrow_projection_copy_at(&arg.value, param_ty, false);
                     }
+                } else if self.cli_lint_overrides.strict_core {
+                    self.warn_lent_branch_tails(&arg.value, param_ty);
                 }
                 // B-2026-09-03-20 — the same value position for the own-`Drop`
                 // partial-move rule. The borrow gate above is now inside that
@@ -3581,6 +3583,8 @@ impl<'a> super::TypeChecker<'a> {
                         )
                     {
                         self.warn_borrow_projection_copy_at(&arg.value, &resolved, false);
+                    } else if self.cli_lint_overrides.strict_core {
+                        self.warn_lent_branch_tails(&arg.value, &resolved);
                     }
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, arg_ty);

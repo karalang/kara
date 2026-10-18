@@ -6423,6 +6423,64 @@ impl<'a> super::TypeChecker<'a> {
         self.warn_borrow_projection_copy(scrutinee, ty);
     }
 
+    /// v2 core §3.7: an `if`, `match` or block lent to a `ref T` parameter
+    /// is a temporary built by value, so a tail that is a projection of a
+    /// borrowed place (`f(if c { b.x } else { b.y })`) moves out of the
+    /// borrow exactly as the same `if` in a `let` does. A place argument is
+    /// borrowed and never reaches here (B-2026-10-15-71).
+    pub(super) fn warn_lent_branch_tails(&mut self, arg: &Expr, param: &Type) {
+        let Type::Ref(inner) = param else {
+            return;
+        };
+        fn tails<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+            match &e.kind {
+                ExprKind::Block(b) => {
+                    if let Some(t) = b.final_expr.as_deref() {
+                        tails(t, out);
+                    }
+                }
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                }
+                | ExprKind::IfLet {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    if let Some(t) = then_block.final_expr.as_deref() {
+                        tails(t, out);
+                    }
+                    if let Some(t) = else_branch.as_deref() {
+                        tails(t, out);
+                    }
+                }
+                ExprKind::Match { arms, .. } => {
+                    for a in arms {
+                        tails(&a.body, out);
+                    }
+                }
+                _ => out.push(e),
+            }
+        }
+        if !matches!(
+            arg.kind,
+            ExprKind::Block(_)
+                | ExprKind::If { .. }
+                | ExprKind::IfLet { .. }
+                | ExprKind::Match { .. }
+        ) {
+            return;
+        }
+        let mut out = Vec::new();
+        tails(arg, &mut out);
+        let inner = inner.as_ref().clone();
+        for t in out {
+            self.warn_borrow_projection_copy_at(t, &inner, false);
+        }
+    }
+
     pub(super) fn warn_borrow_projection_copy(&mut self, value: &Expr, ty: &Type) {
         self.warn_borrow_projection_copy_at(value, ty, true);
     }
