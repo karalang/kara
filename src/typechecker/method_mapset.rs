@@ -178,7 +178,19 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         // `Client` / `Response` / `HttpError` / `RequestBuilder` method dispatch.
+        // A server program declares its own `struct Response` (the handler's
+        // return value), so a method the HTTP response does not have is the
+        // program's own, found through its `impl` (B-2026-10-18-10).
         if let Type::Named { name, .. } = obj_ty_for_named {
+            if name == "Response"
+                && !matches!(method, "status" | "body" | "bytes" | "header" | "headers")
+                && !self
+                    .env
+                    .find_methods_with_args("Response", &[], method)
+                    .is_empty()
+            {
+                return None;
+            }
             if matches!(
                 name.as_str(),
                 "Client" | "Response" | "HttpError" | "RequestBuilder"

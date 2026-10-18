@@ -15009,7 +15009,18 @@ pub fn library_source(src: &str) -> (String, usize) {
 
 /// Library types the compiler itself spells: a range literal is a `Range`,
 /// a failed file operation an `IoError`.
-const TYPES_THE_COMPILER_SPELLS: &[&str] = &["Range", "RangeInclusive", "IoError"];
+const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
+    "Range",
+    "RangeInclusive",
+    "IoError",
+    // The HTTP client types, whose methods the typechecker dispatches by
+    // name (B-2026-10-18-10). Not `Response`: a server program declares its
+    // own `struct Response` to build what its handler returns, so that name
+    // stays, and the typechecker finds its own methods instead.
+    "Client",
+    "HttpError",
+    "RequestBuilder",
+];
 
 /// `src` with each of its own top-level types named like one the compiler
 /// spells ([`TYPES_THE_COMPILER_SPELLS`]) renamed apart, and the renames as

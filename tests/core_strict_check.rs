@@ -4678,6 +4678,89 @@ fn main() {
     );
 }
 
+/// B-2026-10-18-10: a program's own `Client`, `Response`, `HttpError` or
+/// `RequestBuilder` is its own type, so its methods are found; an error
+/// names it as written.
+#[test]
+fn check_a_user_type_named_like_the_http_client_is_its_own() {
+    accepted(
+        "user-http-names",
+        r#"
+struct Client { out: String }
+impl Client {
+    fn error(mut ref self, msg: Str) { self.out.push_str(msg); }
+    fn warn(mut ref self, msg: Str) { self.error(msg); }
+}
+struct Response { code: i64 }
+impl Response {
+    fn status(self) -> i64 { self.code }
+    fn summary(self) -> String { f"{self.status()} ok" }
+}
+enum HttpError { Timeout, Refused(i64) }
+impl HttpError {
+    fn describe(self) -> String {
+        match self {
+            HttpError.Timeout => "timeout".to_string(),
+            HttpError.Refused(p) => f"refused {p}",
+        }
+    }
+}
+struct RequestBuilder { parts: Vec[String] }
+impl RequestBuilder {
+    fn header(own self, h: Str) -> RequestBuilder {
+        let mut parts = self.parts;
+        parts.push(h.to_string());
+        RequestBuilder { parts: parts }
+    }
+    fn send(self) -> Result[Response, HttpError] {
+        if self.parts.len() > 1 { Ok(Response { code: 200 }) } else { Err(HttpError.Refused(80)) }
+    }
+}
+fn main() {
+    let mut c = Client { out: String.new() };
+    c.warn("x");
+    println(c.out);
+    for n in [2, 1] {
+        let mut r = RequestBuilder { parts: Vec.new() };
+        for i in 0..n {
+            r = r.header(f"h{i}");
+        }
+        match r.send() {
+            Ok(resp) => println(resp.summary()),
+            Err(e) => println(e.describe()),
+        }
+    }
+    println(HttpError.Timeout.describe());
+}
+"#,
+    );
+    let (dir, path) = fixture(
+        "user-http-names-err",
+        r#"
+struct Client { out: String }
+impl Client {
+    fn error(mut ref self, msg: Str) { self.out.push_str(msg); }
+}
+fn main() {
+    let mut c = Client { out: String.new() };
+    c.error("x");
+    let bad: i64 = c;
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "user-http-names-err: check must reject: {err}"
+    );
+    assert!(
+        err.contains("expected 'i64', found 'Client'") && err.contains("1 error(s)"),
+        "user-http-names-err: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// B-2026-10-15-41: a program's own `Range` (or `IoError`) is its own type,
 /// and range literals keep the library's; an error names it as written.
 #[test]

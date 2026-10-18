@@ -2514,6 +2514,76 @@ fn main() {
     assert!(err.contains("found 'Range'"), "{err}");
 }
 
+/// B-2026-10-18-10: a program's own `Client`, `Response`, `HttpError` or
+/// `RequestBuilder` is its own type, not the library's HTTP client, so its
+/// methods are found, inside its own `impl` too.
+#[test]
+fn mir_a_user_type_named_like_the_http_client_is_its_own() {
+    let src = r#"
+struct Client { out: String }
+impl Client {
+    fn error(mut ref self, msg: Str) { self.out.push_str(msg); }
+    fn warn(mut ref self, msg: Str) { self.error(msg); }
+}
+struct Response { code: i64 }
+impl Response {
+    fn status(self) -> i64 { self.code }
+    fn summary(self) -> String { f"{self.status()} ok" }
+}
+enum HttpError { Timeout, Refused(i64) }
+impl HttpError {
+    fn describe(self) -> String {
+        match self {
+            HttpError.Timeout => "timeout".to_string(),
+            HttpError.Refused(p) => f"refused {p}",
+        }
+    }
+}
+struct RequestBuilder { parts: Vec[String] }
+impl RequestBuilder {
+    fn header(own self, h: Str) -> RequestBuilder {
+        let mut parts = self.parts;
+        parts.push(h.to_string());
+        RequestBuilder { parts: parts }
+    }
+    fn send(self) -> Result[Response, HttpError] {
+        if self.parts.len() > 1 { Ok(Response { code: 200 }) } else { Err(HttpError.Refused(80)) }
+    }
+}
+fn main() {
+    let mut c = Client { out: String.new() };
+    c.warn("x");
+    println(c.out);
+    for n in [2, 1] {
+        let mut r = RequestBuilder { parts: Vec.new() };
+        for i in 0..n {
+            r = r.header(f"h{i}");
+        }
+        match r.send() {
+            Ok(resp) => println(resp.summary()),
+            Err(e) => println(e.describe()),
+        }
+    }
+    println(HttpError.Timeout.describe());
+}
+"#;
+    let want = "x\n200 ok\nrefused 80\ntimeout\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    // An error names the program's type by its own name.
+    let err = karac::mir::lower::build_source(
+        &src.replace("    println(c.out);", "    let bad: i64 = c;"),
+    )
+    .err()
+    .expect("refused");
+    assert!(err.contains("found 'Client'"), "{err}");
+}
+
 /// B-2026-10-14-67: `join` and `concat` take any element with a `Display`
 /// form, on a `Vec` and on a slice of one.
 #[test]
