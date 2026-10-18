@@ -66,3 +66,7 @@ and `Section.len` in place of `self.defaults.vals[i]` and
 All three MIR surfaces run the original.
 
 Written 2026-10-15 by the real-world apps thread; karac at 35fcd8197c.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `mini_ini.kara` is now exactly what `karac fix` makes of `mini_ini.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

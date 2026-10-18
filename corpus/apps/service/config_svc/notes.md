@@ -52,3 +52,7 @@ PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
 ## Library migration, 2026-10-18
 
 Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `config_svc.kara` is now exactly what `karac fix` makes of `config_svc.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

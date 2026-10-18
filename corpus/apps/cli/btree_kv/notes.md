@@ -60,3 +60,7 @@ An earlier workaround for B-2026-10-14-70 (accessor methods in place of
 `s.tree.pages.len()`) was dropped after the fix in 0bacd9912b.
 
 Written 2026-10-15 by the real-world apps thread; karac at fee58fc7e2.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `btree_kv.kara` is now exactly what `karac fix` makes of `btree_kv.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

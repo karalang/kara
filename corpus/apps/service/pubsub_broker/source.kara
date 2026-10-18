@@ -150,13 +150,13 @@ impl Subscriber {
 
     // Appends to the mailbox; when full, the oldest message is evicted and
     // handed back so the broker can log it.
-    fn deliver(mut ref self, msg: own Message) -> Option[Message] {
+    fn deliver(mut ref self, msg: Message) -> Option[Message] {
         let mut evicted: Option[Message] = None;
         if self.mailbox.len() >= self.capacity {
             evicted = self.mailbox.pop_front();
             self.dropped += 1;
         }
-        self.mailbox.push_back(msg);
+        self.mailbox.push_back(msg.clone());
         self.accepted += 1;
         evicted
     }
@@ -194,7 +194,7 @@ impl Broker {
         }
     }
 
-    fn hand_to(mut ref self, idx: i64, msg: own Message, log: mut ref Vec[String]) {
+    fn hand_to(mut ref self, idx: i64, msg: Message, log: mut ref Vec[String]) {
         self.deliveries += 1;
         if let Some(old) = self.clients[idx].deliver(msg) {
             self.evictions += 1;
@@ -211,7 +211,7 @@ impl Broker {
         Ok([line])
     }
 
-    fn subscribe(mut ref self, name: String, pattern: own String) -> Result[Vec[String], BrokerError] {
+    fn subscribe(mut ref self, name: String, pattern: String) -> Result[Vec[String], BrokerError] {
         validate_pattern(pattern)?;
         let idx = self.lookup(name)?;
         let mut log: Vec[String] = Vec.new();
@@ -227,7 +227,7 @@ impl Broker {
         }
         topics.sort();
         log.push(f"{name} subscribed to {pattern} ({topics.len()} retained)");
-        self.clients[idx].patterns.push(pattern);
+        self.clients[idx].patterns.push(pattern.clone());
         for t in topics.iter() {
             let replay = self.retained[t].copy_as(true);
             self.hand_to(idx, replay, log);
@@ -235,7 +235,7 @@ impl Broker {
         Ok(log)
     }
 
-    fn unsubscribe(mut ref self, name: own String, pattern: String) -> Result[Vec[String], BrokerError] {
+    fn unsubscribe(mut ref self, name: own String, pattern: own String) -> Result[Vec[String], BrokerError] {
         let idx = self.lookup(name)?;
         match self.clients[idx].patterns.iter().position(|p| p == pattern) {
             Some(pos) => {

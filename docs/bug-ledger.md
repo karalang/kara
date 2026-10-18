@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 279 |
-| codegen-gap | 271 |
-| false-positive | 227 |
+| codegen-gap | 272 |
+| false-positive | 229 |
 | other | 175 |
 | perf | 173 |
 | diagnostics | 167 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2936 |
-| interp | 951 |
-| typecheck | 470 |
+| codegen | 2938 |
+| interp | 953 |
+| typecheck | 471 |
 | other | 115 |
 | ownership | 113 |
 | runtime | 78 |
@@ -196,6 +196,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-36 | 2026-10-18 | ownership | medium | `karac check` accepts walking a lazy `split` iterator inside an outer loop (`for g in given` where `given = a.split(",")` is moved on the first outer pass); MIR's move check refuses it, while legacy `karac run` re-walks it and prints `x` and `y` | — |
 | B-2026-10-18-37 | 2026-10-18 | interp+codegen | medium | On MIR, `Ok(s.split_whitespace().map(|p| p.to_string()).collect())` as the tail of a `Result[Vec[String], String]` fn does not lower (`UnsolvedParam("C")`); check passes | — |
 | B-2026-10-18-38 | 2026-10-18 | typecheck | medium | A string literal passed to a view parameter is treated as a temporary: `fn tail(line: Str) -> Str { line }` then `let g = tail("abc");` is refused with 'a reference to a temporary outlives its statement (core-semantics.md §5.5)', though a literal is static text (§5.1) | — |
+| B-2026-10-18-39 | 2026-10-18 | typecheck | low | `Map.get_mut(k)` with a `Str` key on a `Map[String, V]` is refused ("expected 'ref String', found 'Str'"), though `get`, `remove` and `contains_key` take a `Str` there | — |
+| B-2026-10-18-40 | 2026-10-18 | interp+codegen | medium | On MIR, `let mut out = s; out = " " + out;` with `s` a bare (borrowed) `String` param builds invalid MIR ("assigning String to _3 of type ref String"); check passes | — |
+| B-2026-10-18-41 | 2026-10-18 | interp+codegen | medium | On MIR, `match it.value { V.List(q) => q.push(..) }` with `it` from `m.get_mut(k).unwrap()` is refused by the borrow checker ("mutable borrow of (*_16) through a shared reference [E0517]"); check passes | — |
 
 ### Relocated
 

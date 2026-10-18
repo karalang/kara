@@ -247,8 +247,8 @@ impl Parser {
                 out.push(Directive { name: name, args: args, line: line, block: inner });
             } else if name == "include" and not in_types {
                 let inc = load(f"{self.base_dir}/{args[0]}".as_str())?;
-                for d in inc.into_iter() {
-                    out.push(d);
+                for d in inc {
+                    out.push(d.clone());
                 }
             } else {
                 out.push(Directive { name: name, args: args, line: line, block: Vec.new() });
@@ -693,12 +693,12 @@ fn done(status: i64) -> Done {
     Done { status: status, text: None, location: None, path: None }
 }
 
-fn done_text(status: i64, text: own String) -> Done {
-    Done { status: status, text: Some(text), location: None, path: None }
+fn done_text(status: i64, text: String) -> Done {
+    Done { status: status, text: Some(text.clone()), location: None, path: None }
 }
 
-fn done_redirect(status: i64, url: own String) -> Done {
-    Done { status: status, text: None, location: Some(url), path: None }
+fn done_redirect(status: i64, url: String) -> Done {
+    Done { status: status, text: None, location: Some(url.clone()), path: None }
 }
 
 // "last", "break" or "" when the directives run out; Err for a return
@@ -1383,7 +1383,7 @@ fn write_data() -> Result[(), String] {
 fn run() -> Result[(), String] {
     write_data()?;
     for b in ["data/broken1.conf", "data/broken2.conf", "data/broken3.conf"] {
-        let _ = check(b);
+        check(b);
     }
     let tree = match check("data/nginx.conf") {
         Some(t) => t,

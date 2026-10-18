@@ -37,3 +37,7 @@ Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
 `File.open` and `File.create` take the `Str` path and the counts are no
 longer cast to `i64`. Each of these is the original line again, and the
 app still matches on all four MIR surfaces.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `log_rotate.kara` is now exactly what `karac fix` makes of `log_rotate.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

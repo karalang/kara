@@ -324,7 +324,7 @@ fn valid_char(cp: i64) -> bool {
     cp != 0xFFFE and cp != 0xFFFF and cp <= 0x10FFFF
 }
 
-struct XmlParser {
+struct Parser {
     b: Vec[u8],
     i: i64,
     els: Vec[El],
@@ -339,7 +339,7 @@ struct XmlParser {
     ent_values: Vec[String],
 }
 
-impl XmlParser {
+impl Parser {
     fn at(ref self, s: Str) -> bool {
         let t = to_bytes(s);
         if self.i + t.len() > self.b.len() {
@@ -954,7 +954,7 @@ fn parse_xml(text: Str) -> Result[Tree, String] {
             b.push(raw[k]);
         }
     }
-    let mut p = XmlParser { b: b, i: 0, els: Vec.new(), stack: Vec.new(), raw: Vec.new(), marks: Vec.new(), ns_prefix: Vec.new(), ns_uri: Vec.new(), ent_names: Vec.new(), ent_values: Vec.new() };
+    let mut p = Parser { b: b, i: 0, els: Vec.new(), stack: Vec.new(), raw: Vec.new(), marks: Vec.new(), ns_prefix: Vec.new(), ns_uri: Vec.new(), ent_names: Vec.new(), ent_values: Vec.new() };
     match p.document() {
         Ok(_) => Ok(Tree { els: p.els }),
         Err(e) => {

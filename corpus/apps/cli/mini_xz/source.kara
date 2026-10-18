@@ -1670,7 +1670,7 @@ fn read_input(path: Str) -> Option[Vec[u8]] {
 }
 
 fn message(e: Str) -> String {
-    match e.to_string() {
+    match e {
         "eof" => "Unexpected end of input".to_string(),
         "data" => "Compressed data is corrupt".to_string(),
         "format" => "File format not recognized".to_string(),

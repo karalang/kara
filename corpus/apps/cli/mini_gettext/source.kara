@@ -2205,7 +2205,7 @@ fn run() -> Result[(), String] {
     compile_all()?;
     println("== catalogs");
     for name in sorted_names("data/locale")? {
-        let _ = show_catalog(f"data/locale/{name}/LC_MESSAGES/shop.mo");
+        show_catalog(f"data/locale/{name}/LC_MESSAGES/shop.mo");
     }
     show_ui()?;
     show_plurals()?;

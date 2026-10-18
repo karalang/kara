@@ -319,7 +319,7 @@ fn py_str_repr(s: Str) -> String {
 
 // ------------------------------------------------------------ marks and errors
 
-#[derive(Copy, Clone)]
+#[derive(Copy)]
 struct Mark {
     index: i64,
     line: i64,
@@ -340,7 +340,7 @@ struct YamlError {
     pmark: Mark,
 }
 
-fn yerr(context: Str, cmark: Mark, problem: Str, pmark: Mark) -> YamlError {
+fn yerr(context: Str, cmark: own Mark, problem: Str, pmark: own Mark) -> YamlError {
     YamlError { context: context.to_string(), cmark: cmark, problem: problem.to_string(), pmark: pmark }
 }
 
@@ -439,7 +439,7 @@ struct Token {
     end: Mark,
 }
 
-fn token(kind: i64, start: Mark, end: Mark) -> Token {
+fn token(kind: i64, start: own Mark, end: own Mark) -> Token {
     Token { kind: kind, value: String.new(), plain: false, style: 0, start: start, end: end }
 }
 
@@ -1349,7 +1349,7 @@ struct Event {
     end: Mark,
 }
 
-fn event(kind: i64, start: Mark, end: Mark) -> Event {
+fn event(kind: i64, start: own Mark, end: own Mark) -> Event {
     Event { kind: kind, anchor: String.new(), value: String.new(), plain: false, start: start, end: end }
 }
 
@@ -1884,13 +1884,13 @@ impl Loader {
             }
             return Ok(n);
         }
-        let is_seq = e.kind == E_SEQ_START;
+        let seq = e.kind == E_SEQ_START;
         self.p.get_event()?;
-        let n = self.add(YNode { kind: if is_seq { K_SEQ } else { K_MAP }, tag: if is_seq { TAG_SEQ } else { TAG_MAP }, value: String.new(), items: Vec.new(), start: e.start });
+        let n = self.add(YNode { kind: if seq { K_SEQ } else { K_MAP }, tag: if seq { TAG_SEQ } else { TAG_MAP }, value: String.new(), items: Vec.new(), start: e.start });
         if e.anchor.len() > 0 {
             self.set_anchor(e.anchor, n);
         }
-        let end_kind = if is_seq { E_SEQ_END } else { E_MAP_END };
+        let end_kind = if seq { E_SEQ_END } else { E_MAP_END };
         let mut items: Vec[i64] = Vec.new();
         while self.p.peek_kind()? != end_kind {
             items.push(self.compose_node()?);
@@ -3291,10 +3291,10 @@ fn report_playbook(plays: ref V) {
 
 fn run() -> Result[(), String] {
     write_data()?;
-    let files: Array[Str, 12] = ["deploy.yaml", "compose.yaml", "ci.yml", "site.yml", "edge.yaml", "multi.yaml", "tab.yaml", "quote.yaml", "indent.yaml", "alias.yaml", "flow.yaml", "dash.yaml"];
+    let files = ["deploy.yaml", "compose.yaml", "ci.yml", "site.yml", "edge.yaml", "multi.yaml", "tab.yaml", "quote.yaml", "indent.yaml", "alias.yaml", "flow.yaml", "dash.yaml"];
     let mut loaded: Vec[Vec[V]] = Vec.new();
     for i in 0..files.len() {
-        let f = files[i];
+        let f = files[i].clone();
         println(f"== {f}");
         let path = f"data/{f}";
         let text = match fs.read_to_string(path.clone()) {

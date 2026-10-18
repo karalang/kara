@@ -22,3 +22,7 @@ Not worked around: B-2026-10-12-23, so the entry FAILS (refused by
 `karac check`) on every mir backend. Without check, `__mir-run`,
 `__mir-llvm-run`, `__mir-llvm-asan` and `karac build --mir` print
 `expected.out` exactly (measured).
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `flag_eval.kara` is now exactly what `karac fix` makes of `flag_eval.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

@@ -87,3 +87,7 @@ Reverted 2026-10-15, karac at 3385ce51b1: B-2026-10-15-68 is fixed, so
 the timer sort is the natural `sort_by(|a, b|
 a.partial_cmp(b).unwrap())` again, and the app still matches on all four
 MIR surfaces.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `mini_statsd.kara` is now exactly what `karac fix` makes of `mini_statsd.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

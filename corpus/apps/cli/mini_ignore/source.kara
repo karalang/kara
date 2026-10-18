@@ -1726,7 +1726,7 @@ fn read(path: Str) -> Result[String, String] {
 // (path, is_dir), in directory order.
 fn walk(dir: Str, out: mut ref Vec[String], dirs: mut ref Vec[bool]) -> Result[(), String] {
     let full = if dir.len() > 0 { f"{ROOT}/{dir}" } else { ROOT.to_string() };
-    let names = match fs.read_dir(full.clone()) {
+    let names = match fs.read_dir(full) {
         Ok(v) => v,
         Err(e) => return Err(f"cannot list {full}: {e}"),
     };

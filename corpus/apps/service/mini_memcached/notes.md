@@ -81,3 +81,7 @@ surfaces.
 ## Library migration, 2026-10-18
 
 Thread A's a0ca700228 and acd593fc77 changed the library to match docs/library: a number's `parse` returns `Result[T, ParseError]`, and `split`, `lines`, `split_whitespace` and `trim` give `Str` views (`split` and `lines` are now lazy iterators). Arguments forwarded to a `mut ref` parameter are now marked too. `karac fix` made the edits. The app matches expected.out on all four MIR backends again (karac at a4b0967495).
+
+## Workarounds dropped, 2026-10-18
+
+`U64_MAX` is the literal again (B-2026-10-18-2 is fixed), `joined` is moved without a clone (B-2026-10-15-20), and `set_exptime` uses `get_mut` (B-2026-10-12-3). `get_mut` still needs `key.to_string()`, because it takes no `Str` key (B-2026-10-18-39). It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

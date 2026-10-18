@@ -30,3 +30,7 @@ Compiler gaps, worked around and listed in the source header:
   read before the write.
 
 PASSES on mir-interp, mir-llvm, mir-llvm-asan and mir-build.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `site_gen.kara` is now exactly what `karac fix` makes of `site_gen.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

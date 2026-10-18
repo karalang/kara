@@ -70,3 +70,7 @@ The hashes use `rounds=1000` (crypt's minimum) where they can, and only
 one hash uses the default 5000 rounds: mir-interp, in the corpus's debug
 build, takes about 2.6 ms per SHA round here, and the whole run has 60
 seconds. It takes 43 seconds as it stands.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `mini_shadow.kara` is now exactly what `karac fix` makes of `mini_shadow.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

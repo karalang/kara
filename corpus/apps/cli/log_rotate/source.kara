@@ -1,12 +1,6 @@
 // A log writer with size-based rotation, and a reader that scans every
 // rotated segment line by line, tails the live file by seeking from its end,
 // and writes a CSV summary it reads back.
-//
-// Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-12-6   i64.parse returns Option, not Result[i64, ParseError]
-//   B-2026-10-12-7   lines() / split() are eager Vec[String]
-//   B-2026-10-14-45  BufReader is not implemented on v2: scan() reads the
-//                    whole segment with fs.read_to_string instead
 
 struct Rotator {
     base: String,
@@ -81,9 +75,9 @@ fn parse_line(line: Str) -> Option[LogEntry] {
     if cuts.len() < 3 {
         return None;
     }
-    let ts = match i64.parse(line[0..cuts[0]]).ok() {
-        Some(t) => t,
-        None => return None,
+    let ts = match i64.parse(line[0..cuts[0]]) {
+        Ok(t) => t,
+        Err(_) => return None,
     };
     Some(LogEntry {
         ts: ts,
@@ -104,9 +98,11 @@ struct Summary {
 }
 
 fn scan(path: Str, sum: mut ref Summary) -> Result[i64, IoError] {
-    let text = fs.read_to_string(path.to_string())?;
+    let f = File.open(path)?;
+    let reader = BufReader.new(f);
     let mut n = 0;
-    for l in text.lines() {
+    for line in reader.lines() {
+        let l = line?;
         n += 1;
         match parse_line(l) {
             Some(e) => {
@@ -165,10 +161,10 @@ fn tail_line(path: Str) -> Result[String, IoError] {
 }
 
 fn make_line(i: i64) -> String {
-    let levels: Array[Str, 6] = ["INFO", "INFO", "WARN", "INFO", "ERROR", "DEBUG"];
-    let comps: Array[Str, 4] = ["http", "db", "cache", "auth"];
-    let level = levels[i % 6];
-    let comp = comps[(i * 7) % 4];
+    let levels = ["INFO", "INFO", "WARN", "INFO", "ERROR", "DEBUG"];
+    let comps = ["http", "db", "cache", "auth"];
+    let level = levels[i % 6].clone();
+    let comp = comps[(i * 7) % 4].clone();
     let ts = 1700000000 + i * 3;
     if i % 9 == 4 {
         f"{ts} {level} {comp} query done took={(i * 37) % 250}ms rows={i % 13}"

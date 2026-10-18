@@ -15,12 +15,6 @@
 // The output matches the Python mirror byte for byte, and
 // check_tomllib.py renders tomllib's own parse of the three documents
 // with the mirror's renderer and finds the same leaves.
-//
-// Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-15-20  check refuses reading a loop-body binding in an
-//                    early-return branch before a later method-call move,
-//                    so `cont` is cloned and the duplicate-key message
-//                    re-reads the key
 
 enum TVal {
     Text(String),
@@ -753,9 +747,7 @@ impl TomlParser {
             }
             let last = k[k.len() - 1].clone();
             if self.doc.find(parent, last) >= 0 {
-                // B-2026-10-15-20: reading `last` here, before the move below,
-                // is refused by check, so the message reads the key again
-                return Err(self.err(f"duplicate key {show_key(k[k.len() - 1])}"));
+                return Err(self.err(f"duplicate key {show_key(last)}"));
             }
             let composite = is_composite(v);
             self.doc.set(parent, last, v);
@@ -1087,8 +1079,7 @@ fn parse(src: Str) -> Result[Doc, String] {
                 if p.flags.is_set(cont, EXPLICIT) {
                     return Err(p.err(f"cannot redefine table {dotted(cont)} with a dotted key"));
                 }
-                // B-2026-10-15-20: check refuses moving `cont` after the read above
-                p.flags.pending.push(cont.clone());
+                p.flags.pending.push(cont);
             }
             let full = joined(header, k);
             let parent_path = prefix(full, full.len() - 1);

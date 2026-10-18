@@ -704,10 +704,10 @@ fn op(name: ref String) -> Fn(own i64, own i64) -> i64 {
 fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
     let kind = f[0].clone();
     if kind == "count" {
-        let v: Vec[i64] = to_vec(islice(count(num(f[1]), num(f[2])), 0, Some(num(f[3])), 1));
+        let v = to_vec(islice(count(num(f[1]), num(f[2])), 0, Some(num(f[3])), 1));
         out.push_str(f"  {list_repr(v)}\n");
     } else if kind == "cycle" {
-        let v: Vec[i64] = to_vec(islice(cycle(iter_of(ints(f[1]))), 0, Some(num(f[2])), 1));
+        let v = to_vec(islice(cycle(iter_of(ints(f[1]))), 0, Some(num(f[2])), 1));
         out.push_str(f"  {list_repr(v)}\n");
     } else if kind == "repeat" {
         let v = to_vec(repeat(num(f[1]), Some(num(f[2]))));
@@ -717,18 +717,18 @@ fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
         let v = to_vec(accumulate(iter_of(ints(f[1])), op(f[2]), init));
         out.push_str(f"  {list_repr(v)}\n");
     } else if kind == "batched" {
-        let v: Vec[Vec[i64]] = to_vec(batched(iter_of(ints(f[1])), num(f[2])));
+        let v = to_vec(batched(iter_of(ints(f[1])), num(f[2])));
         out.push_str(f"  {tuples_repr(v)}\n");
     } else if kind == "chain" {
         let mut its: Vec[VecIter[i64]] = Vec.new();
-        for l in lists(f[1]).into_iter() {
-            its.push(iter_of(l));
+        for l in lists(f[1]) {
+            its.push(iter_of(l.clone()));
         }
-        let v: Vec[i64] = to_vec(chain(its));
+        let v = to_vec(chain(its));
         out.push_str(f"  {list_repr(v)}\n");
     } else if kind == "compress" {
         let sel: Vec[bool] = ints(f[2]).iter().map(|x| *x != 0).collect();
-        let v: Vec[i64] = to_vec(compress(iter_of(ints(f[1])), iter_of(sel)));
+        let v = to_vec(compress(iter_of(ints(f[1])), iter_of(sel)));
         out.push_str(f"  {list_repr(v)}\n");
     } else if kind == "dropwhile" or kind == "takewhile" {
         let lim = num(f[2]);
@@ -748,10 +748,10 @@ fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
         out.push_str(f"  [{parts.join(", ")}]\n");
     } else if kind == "islice" {
         let stop: Option[i64] = if f[3] == "-" { None } else { Some(num(f[3])) };
-        let v: Vec[i64] = to_vec(islice(iter_of(ints(f[1])), num(f[2]), stop, num(f[4])));
+        let v = to_vec(islice(iter_of(ints(f[1])), num(f[2]), stop, num(f[4])));
         out.push_str(f"  {list_repr(v)}\n");
     } else if kind == "pairwise" {
-        let v: Vec[(i64, i64)] = to_vec(pairwise(iter_of(ints(f[1]))));
+        let v = to_vec(pairwise(iter_of(ints(f[1]))));
         out.push_str(f"  {pairs_repr(v)}\n");
     } else if kind == "zip_longest" {
         let v = to_vec(zip_longest(iter_of(ints(f[1])), iter_of(ints(f[2])), num(f[3])));
@@ -863,20 +863,16 @@ fn report(path: ref String, out: mut ref String) -> Result[(), String] {
         }
         months.push((m, units));
     }
-    let no_start: Option[i64] = None;
     let totals: Vec[i64] = months.iter().map(|p| p.1).collect();
-    let runs: Vec[((String, i64), i64)] = to_vec(zip(iter_of(months.clone()), accumulate(iter_of(totals), |a: i64, b: i64| a + b, no_start)));
-    for (p, run) in runs.into_iter() {
+    for (p, run) in zip(iter_of(months.clone()), accumulate(iter_of(totals), |a: i64, b: i64| a + b, None)) {
         out.push_str(f"    {p.0} {p.1} running {run}\n");
     }
-    let steps: Vec[((String, i64), (String, i64))] = to_vec(pairwise(iter_of(months)));
-    for (a, b) in steps.into_iter() {
+    for (a, b) in pairwise(iter_of(months)) {
         out.push_str(f"    {a.0} -> {b.0}: {signed(b.1 - a.1)}\n");
     }
 
     out.push_str("  pages:\n");
-    let pages: Vec[(i64, Vec[Row])] = to_vec(enumerate(batched(iter_of(rows.clone()), 4), 1));
-    for (i, page) in pages.into_iter() {
+    for (i, page) in enumerate(batched(iter_of(rows.clone()), 4), 1) {
         let names: Vec[String] = page.iter().map(|r| r.product.clone()).collect();
         out.push_str(f"    page {i}: {names.join(" ")}\n");
     }
@@ -914,21 +910,19 @@ fn report(path: ref String, out: mut ref String) -> Result[(), String] {
     out.push_str(f"  skus: {skus.join(" ")}\n");
 
     let revs: Vec[i64] = rows.iter().map(|r| revenue(r)).collect();
-    let spend: Zip[VecIter[Row], Accumulate[VecIter[i64], i64], Row, i64] = zip(iter_of(rows.clone()), accumulate(iter_of(revs), |a: i64, b: i64| a + b, no_start));
+    let spend = zip(iter_of(rows.clone()), accumulate(iter_of(revs), |a: i64, b: i64| a + b, None));
     let kept = to_vec(take_while(|p: ref (Row, i64)| p.1 <= 600, spend));
     let spent = if kept.is_empty() { 0 } else { kept[kept.len() - 1].1 };
     out.push_str(f"  budget 600: {kept.len()} rows, spent {spent}\n");
 
     out.push_str("  tickets:\n");
     let agents: Vec[String] = vec!["ana".to_string(), "ben".to_string(), "cy".to_string()];
-    let tickets: Vec[((i64, Row), String)] = to_vec(zip(enumerate(islice(iter_of(rows.clone()), 0, Some(7), 1), 1), cycle(iter_of(agents))));
-    for (t, agent) in tickets.into_iter() {
+    for (t, agent) in zip(enumerate(islice(iter_of(rows.clone()), 0, Some(7), 1), 1), cycle(iter_of(agents))) {
         out.push_str(f"    ticket {t.0} {t.1.product} -> {agent}\n");
     }
 
     let flags: Vec[bool] = rows.iter().map(|r| r.promo).collect();
-    let promoted: Vec[Row] = to_vec(compress(iter_of(rows.clone()), iter_of(flags)));
-    let promo: Vec[String] = promoted.iter().map(|r| r.product.clone()).collect();
+    let promo: Vec[String] = to_vec(compress(iter_of(rows.clone()), iter_of(flags))).iter().map(|r| r.product.clone()).collect();
     out.push_str(f"  promo: {promo.join(" ")}\n");
 
     let north: Vec[i64] = rows.iter().filter(|r| r.region == "north").map(|r| r.units).collect();
@@ -937,8 +931,7 @@ fn report(path: ref String, out: mut ref String) -> Result[(), String] {
     out.push_str(f"  north vs south: {pairs_repr(vs)}\n");
 
     out.push_str("  big orders:\n");
-    let big: Vec[(i64, Row)] = to_vec(zip(count(1, 1), filter_false(|r: ref Row| r.units < 5, iter_of(rows.clone()))));
-    for (n, r) in big.into_iter() {
+    for (n, r) in zip(count(1, 1), filter_false(|r: ref Row| r.units < 5, iter_of(rows.clone()))) {
         out.push_str(f"    {n}. {r.month} {r.region} {r.product} {r.units}\n");
     }
 

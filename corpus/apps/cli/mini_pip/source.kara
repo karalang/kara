@@ -633,8 +633,6 @@ impl PartialOrd for Ver {
     }
 }
 
-impl Eq for Ver {}
-
 impl PartialEq for Ver {
     fn eq(ref self, other: ref Ver) -> bool {
         ver_cmp(self, other) == 0
@@ -2045,7 +2043,7 @@ fn eval_marker(m: ref MNode, env: ref Env) -> Result[bool, String] {
             let mut any = false;
             let mut all = true;
             for i in 0..items.len() {
-                match ref items[i] {
+                match items[i] {
                     MNode.Word(w) => {
                         if w == "or" {
                             any = any or all;
@@ -2257,13 +2255,13 @@ impl Requirement {
 // ------------------------------------------------------------ JSON
 
 #[derive(Clone)]
-enum JVal {
+enum Json {
     Null,
     Bool(bool),
     Num(String),
     Text(String),
-    Arr(Vec[JVal]),
-    Obj(Vec[String], Vec[JVal]),
+    Arr(Vec[Json]),
+    Obj(Vec[String], Vec[Json]),
 }
 
 struct JsonReader {
@@ -2357,22 +2355,22 @@ impl JsonReader {
         Ok(from_bytes(out))
     }
 
-    fn value(mut ref self) -> Result[JVal, String] {
+    fn value(mut ref self) -> Result[Json, String] {
         self.skip();
         if self.pos >= self.b.len() {
             return Err(self.fail("unexpected end"));
         }
         let c = self.b[self.pos];
         if c == b'"' {
-            return Ok(JVal.Text(self.string()?));
+            return Ok(Json.Text(self.string()?));
         }
         if c == b'[' {
             self.pos += 1;
-            let mut items: Vec[JVal] = Vec.new();
+            let mut items: Vec[Json] = Vec.new();
             self.skip();
             if self.pos < self.b.len() and self.b[self.pos] == b']' {
                 self.pos += 1;
-                return Ok(JVal.Arr(items));
+                return Ok(Json.Arr(items));
             }
             loop {
                 items.push(self.value()?);
@@ -2382,17 +2380,17 @@ impl JsonReader {
                     continue;
                 }
                 self.eat(b']')?;
-                return Ok(JVal.Arr(items));
+                return Ok(Json.Arr(items));
             }
         }
         if c == b'{' {
             self.pos += 1;
             let mut keys: Vec[String] = Vec.new();
-            let mut values: Vec[JVal] = Vec.new();
+            let mut values: Vec[Json] = Vec.new();
             self.skip();
             if self.pos < self.b.len() and self.b[self.pos] == b'}' {
                 self.pos += 1;
-                return Ok(JVal.Obj(keys, values));
+                return Ok(Json.Obj(keys, values));
             }
             loop {
                 self.skip();
@@ -2405,7 +2403,7 @@ impl JsonReader {
                     continue;
                 }
                 self.eat(b'}')?;
-                return Ok(JVal.Obj(keys, values));
+                return Ok(Json.Obj(keys, values));
             }
         }
         let st = self.pos;
@@ -2414,18 +2412,18 @@ impl JsonReader {
         }
         let word = byte_str(self.b, st, self.pos);
         if word == "true" {
-            return Ok(JVal.Bool(true));
+            return Ok(Json.Bool(true));
         }
         if word == "false" {
-            return Ok(JVal.Bool(false));
+            return Ok(Json.Bool(false));
         }
         if word == "null" {
-            return Ok(JVal.Null);
+            return Ok(Json.Null);
         }
         if word.len() == 0 {
             return Err(self.fail("unexpected character"));
         }
-        Ok(JVal.Num(word))
+        Ok(Json.Num(word))
     }
 }
 
@@ -2447,7 +2445,7 @@ fn push_utf8(out: mut ref Vec[u8], cp: i64) {
     }
 }
 
-fn parse_json(text: Str) -> Result[JVal, String] {
+fn parse_json(text: Str) -> Result[Json, String] {
     let mut r = JsonReader { b: to_bytes(text), pos: 0 };
     let v = r.value()?;
     r.skip();
@@ -2457,9 +2455,9 @@ fn parse_json(text: Str) -> Result[JVal, String] {
     Ok(v)
 }
 
-fn field(j: ref JVal, key: Str) -> Option[JVal] {
+fn field(j: ref Json, key: Str) -> Option[Json] {
     match j {
-        JVal.Obj(keys, values) => {
+        Json.Obj(keys, values) => {
             for i in 0..keys.len() {
                 if keys[i] == key {
                     return Some(values[i].clone());
@@ -2471,10 +2469,10 @@ fn field(j: ref JVal, key: Str) -> Option[JVal] {
     }
 }
 
-fn text_of(j: ref JVal) -> String {
+fn text_of(j: ref Json) -> String {
     match j {
-        JVal.Text(s) => s.clone(),
-        JVal.Num(s) => s.clone(),
+        Json.Text(s) => s.clone(),
+        Json.Num(s) => s.clone(),
         _ => String.new(),
     }
 }
@@ -2504,11 +2502,11 @@ fn read_index(text: Str) -> Result[Vec[Project], String] {
     };
     let mut out: Vec[Project] = Vec.new();
     match projects {
-        JVal.Obj(names, rel_lists) => {
+        Json.Obj(names, rel_lists) => {
             for p in 0..names.len() {
                 let mut releases: Vec[Release] = Vec.new();
                 match rel_lists[p] {
-                    JVal.Arr(rels) => {
+                    Json.Arr(rels) => {
                         for r in 0..rels.len() {
                             releases.push(read_release(rels[r])?);
                         }
@@ -2523,13 +2521,13 @@ fn read_index(text: Str) -> Result[Vec[Project], String] {
     Ok(out)
 }
 
-fn read_release(j: ref JVal) -> Result[Release, String] {
+fn read_release(j: ref Json) -> Result[Release, String] {
     let version = match field(j, "version") {
         Some(v) => text_of(v),
         None => return Err("index.json: a release has no version".to_string()),
     };
     let mut deps: Vec[Requirement] = Vec.new();
-    if let Some(JVal.Arr(list)) = field(j, "requires_dist") {
+    if let Some(Json.Arr(list)) = field(j, "requires_dist") {
         for i in 0..list.len() {
             let text = text_of(list[i]);
             match parse_requirement(text) {
@@ -2540,12 +2538,12 @@ fn read_release(j: ref JVal) -> Result[Release, String] {
     }
     let mut has_python = false;
     let mut python = empty_set();
-    if let Some(JVal.Text(py)) = field(j, "requires_python") {
+    if let Some(Json.Text(py)) = field(j, "requires_python") {
         has_python = true;
         python = parse_spec_set(py)?;
     }
     let yanked = match field(j, "yanked") {
-        Some(JVal.Bool(b)) => b,
+        Some(Json.Bool(b)) => b,
         _ => false,
     };
     Ok(Release { version: version, deps: deps, has_python: has_python, python: python, yanked: yanked })

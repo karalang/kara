@@ -85,3 +85,7 @@ After that, the output matched `expected.out` on `__mir-run`,
 `__mir-llvm-run` and `__mir-llvm-asan` on the first run.
 
 Written 2026-10-15 by the real-world apps thread; karac at eb605b2e5b.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `mini_readelf.kara` is now exactly what `karac fix` makes of `mini_readelf.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

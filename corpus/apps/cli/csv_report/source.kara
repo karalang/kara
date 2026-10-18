@@ -368,7 +368,7 @@ fn validate_upload(name: ref String, text: ref String) {
 
 fn main() -> Result[(), IoError] {
     let path = "sales.csv";
-    fs.write(path.clone(), embedded_csv())?;
+    fs.write(path, embedded_csv())?;
     let text = fs.read_to_string(path)?;
 
     let (sales, rejected) = match load_sales(text) {

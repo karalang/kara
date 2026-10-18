@@ -13,3 +13,7 @@ ignored diagnostics: 4 (`karac check` prints 3 `error[borrow_projection_copy]` f
 
 legacy after v2 edits (measured by the kata thread, not the drafting agent):
 - `karac fix` added `LOG_PATH.clone()` at L365 because `const LOG_PATH: String` used twice is reported as a use-after-move (E0500, a false positive: a const is not a moved binding). Legacy `karac build` then refuses the program: `codegen failed: 365:14: Vec/String method 'clone' is not yet supported in codegen`. `--interp` matches the mirror, so the entry is recorded on legacy-interp. Legacy is frozen, so this is a note, not a ledger row.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `rate_limiter.kara` is now exactly what `karac fix` makes of `rate_limiter.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

@@ -23,13 +23,6 @@
 // within their separators, uniform leaf depth, a leaf chain in tree order,
 // and the key count. The database file's CRC at each commit matches the
 // Python mirror's byte for byte.
-//
-// Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-15-28  no read-write open or set_len in the library, so a
-//                    commit rewrites the whole file and the crash test
-//                    tears the WAL by rewriting it shorter
-//   B-2026-10-14-68  `[DB, WAL, "kv.db.tmp"]` types the literal as String
-//                    against the Str consts, so the array is annotated
 
 const PAGE: i64 = 256;
 const DB: Str = "kv.db";
@@ -666,8 +659,7 @@ fn run_ops(s: mut ref Store, model: mut ref Map[String, String], rng: mut ref Rn
 }
 
 fn scenario() -> Result[(), String] {
-    let stale: Array[Str, 3] = [DB, WAL, "kv.db.tmp"];
-    for p in stale.iter() {
+    for p in [DB, WAL, "kv.db.tmp"].iter() {
         if fs.exists(*p) {
             fs.remove_file(*p).map_err(|_| "cannot clean up".to_string())?;
         }
@@ -743,7 +735,7 @@ fn scenario() -> Result[(), String] {
     write_file("bad-magic.db", bad_magic).map_err(|_| "write failed".to_string())?;
     write_file("short.db", short).map_err(|_| "write failed".to_string())?;
     for p in ["bad-magic.db", "short.db"].iter() {
-        let data = read_file(p).map_err(|_| "read failed".to_string())?;
+        let data = read_file(*p).map_err(|_| "read failed".to_string())?;
         match load(data) {
             Ok(_) => println(f"  {p}: loaded?"),
             Err(e) => println(f"  {p}: {e}"),

@@ -18,10 +18,6 @@
 // The server and its client run in one thread: the client connects, writes
 // a batch of requests and shuts down its write side; the server reads to
 // end of input and answers each request in order.
-//
-// Workaround for a v2 gap, to revert once its row is fixed:
-//   B-2026-10-14-53  check reports a String passed to env.var as moved:
-//                    env.var(var.clone())
 
 const ADDR: Str = "127.0.0.1:47736";
 const FILE: Str = "config.json";
@@ -631,7 +627,7 @@ fn env_layer(schema: ref Jv, at: Str, prefix: Str, layer: mut ref Jv, ptrs: mut 
         return;
     }
     let var = prefix.replacen("__", "_", 1);
-    match env.var(var.clone()) {
+    match env.var(var) {
         Ok(raw) => match env_value(ty, raw) {
             Ok(v) => {
                 let path = parse_pointer(at).unwrap_or(Vec.new());

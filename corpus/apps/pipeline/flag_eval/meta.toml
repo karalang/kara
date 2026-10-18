@@ -10,6 +10,6 @@ backends = ["mir-interp", "mir-llvm", "mir-llvm-asan", "mir-build"]
 env = {}
 bucket = "mir-gap:borrow check"
 classified_with = "3385ce51b"
-extracted_src = "5f0e286a"
+extracted_src = "c6db5cc8"
 fixed_by_classify = true
 fixed_src = "ac8059ce"

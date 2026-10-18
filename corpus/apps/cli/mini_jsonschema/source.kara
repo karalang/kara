@@ -672,17 +672,16 @@ fn scan_number(d: ref Dec, a: mut ref Store, i: i64) -> Option[(i64, i64)] {
     let text = from_bytes(tb);
     if is_float {
         let mut n = new_node(K_FLOAT);
-        // `f64.parse` returns an Option on v2, not the spec's Result (B-2026-10-12-6)
-        n.f = match f64.parse(text).ok() {
-            Some(x) => x,
-            None => 0.0,
+        n.f = match f64.parse(text) {
+            Ok(x) => x,
+            Err(_) => 0.0,
         };
         return Some((add(mut a, n), j));
     }
     let mut n = new_node(K_INT);
-    n.i = match i64.parse(text).ok() {
-        Some(x) => x,
-        None => 0,
+    n.i = match i64.parse(text) {
+        Ok(x) => x,
+        Err(_) => 0,
     };
     Some((add(mut a, n), j))
 }

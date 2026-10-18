@@ -15,3 +15,7 @@ workarounds:
 (Not a workaround: I first wrote `match kind.as_str()` out of Rust habit and got `no method 'as_str' on type 'String'`. The spec never mentions `as_str`, and `match kind { "knight" => ... }` works.)
 
 ignored diagnostics: 0 (`karac check source.orig.kara` prints no `error[` lines and says "All checks passed."; `karac build` prints 1 `warning[borrow_projection_copy]` at L295)
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `entity_system.kara` is now exactly what `karac fix` makes of `entity_system.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

@@ -18,3 +18,7 @@ workarounds:
 6. Miscompile (wrong output, no build error). `for t in tags { tag_values.push(JsonValue.Str(t)); }` over a `SortedSet[String]` printed garbage tag strings under `karac build`. A standalone repro aborts with `free(): double free detected in tcache 2`. `for t in tags.into_iter()` behaves the same way. The interpreter was correct. Workaround: `for t in tags.iter() { tag_values.push(JsonValue.Str(t.clone())); }` (L333). The `.clone()` is there because the by-value walk miscompiles, not to satisfy a diagnostic.
 
 ignored diagnostics: 0 (`karac check source.orig.kara` prints no `error[` lines; it prints only one effect note about mutual recursion and "All checks passed.". An earlier draft drew one warning[borrow_projection_copy] on the SortedSet loop, which went away with workaround 6.)
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `schema_transform.kara` is now exactly what `karac fix` makes of `schema_transform.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

@@ -341,7 +341,7 @@ impl Sheet {
     }
 }
 
-fn report_err(step: String, r: own Result[(), SheetError]) {
+fn report_err(step: String, r: Result[(), SheetError]) {
     match r {
         Ok(()) => {}
         Err(e) => println(f"{step} failed: {e}"),
@@ -349,7 +349,7 @@ fn report_err(step: String, r: own Result[(), SheetError]) {
 }
 
 fn apply(sheet: mut ref Sheet, name: String, formula: own Formula) {
-    match sheet.set(name.clone(), formula) {
+    match sheet.set(name, formula) {
         Ok(_) => {}
         Err(e) => println(f"set {name} rejected: {e}"),
     }

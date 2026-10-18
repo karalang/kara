@@ -18,9 +18,6 @@
 // Today is 2026-10-15. expected.out is the output of mini_shadow.py,
 // the same program in Python, which real.py checks against the real
 // pwck, chage, passwd, openssl and crypt().
-//
-// Workarounds: none. mini_shadow.orig.kara is the first draft; the
-// one change from it renames a local called `final`, a reserved word.
 
 const TODAY: i64 = 20741;
 
@@ -675,11 +672,11 @@ fn md5_crypt(password: Str, salt_text: Str, magic: Str) -> String {
     if salt.len() > 8 {
         salt = head(salt, 8);
     }
-    let mut fin = md5(cat(cat(pw, salt), pw));
+    let mut r#final = md5(cat(cat(pw, salt), pw));
     let mut ctx = cat(cat(pw, to_bytes(magic)), salt);
     let mut i = pw.len();
     while i > 0 {
-        ctx = cat(ctx, head(fin, if i < 16 { i } else { 16 }));
+        ctx = cat(ctx, head(r#final, if i < 16 { i } else { 16 }));
         i -= 16;
     }
     i = pw.len();
@@ -691,13 +688,13 @@ fn md5_crypt(password: Str, salt_text: Str, magic: Str) -> String {
         }
         i = i >> 1;
     }
-    fin = md5(ctx);
+    r#final = md5(ctx);
     for r in 0..1000 {
         let mut c: Vec[u8] = Vec.new();
         if r & 1 != 0 {
             append(mut c, pw);
         } else {
-            append(mut c, fin);
+            append(mut c, r#final);
         }
         if r % 3 != 0 {
             append(mut c, salt);
@@ -706,13 +703,13 @@ fn md5_crypt(password: Str, salt_text: Str, magic: Str) -> String {
             append(mut c, pw);
         }
         if r & 1 != 0 {
-            append(mut c, fin);
+            append(mut c, r#final);
         } else {
             append(mut c, pw);
         }
-        fin = md5(c);
+        r#final = md5(c);
     }
-    let f = fin;
+    let f = r#final;
     let mut out = f"{magic}{from_bytes(salt)}$";
     b64_24(mut out, f[0], f[6], f[12], 4);
     b64_24(mut out, f[1], f[7], f[13], 4);

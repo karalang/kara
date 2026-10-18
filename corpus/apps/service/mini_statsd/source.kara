@@ -1903,28 +1903,26 @@ struct Net {
     graphite_addr: String,
 }
 
-// The daemon's sockets on the ports its config names, as statsd binds them.
-fn open_net(cfg: ref Vec[Field]) -> Result[Net, String] {
-    let host = text_or(cfg, "address", "127.0.0.1");
-    let udp_addr = f"{host}:{num_or(cfg, "port", 8125.0) as i64}";
-    let mgmt_addr = f"{text_or(cfg, "mgmt_address", "127.0.0.1")}:{num_or(cfg, "mgmt_port", 8126.0) as i64}";
-    let graphite_addr = f"{text_or(cfg, "graphiteHost", "127.0.0.1")}:{num_or(cfg, "graphitePort", 2003.0) as i64}";
-    let udp = match UdpSocket.bind(udp_addr) {
+fn open_net() -> Result[Net, String] {
+    let udp = match UdpSocket.bind("127.0.0.1:0") {
         Ok(s) => s,
-        Err(_) => return Err(f"cannot bind {udp_addr}"),
+        Err(_) => return Err("udp bind failed".to_string()),
     };
     let client = match UdpSocket.bind("127.0.0.1:0") {
         Ok(s) => s,
         Err(_) => return Err("udp client bind failed".to_string()),
     };
-    let mgmt = match TcpListener.bind(mgmt_addr) {
+    let mgmt = match TcpListener.bind("127.0.0.1:0") {
         Ok(l) => l,
-        Err(_) => return Err(f"cannot bind {mgmt_addr}"),
+        Err(_) => return Err("mgmt bind failed".to_string()),
     };
-    let graphite = match TcpListener.bind(graphite_addr) {
+    let graphite = match TcpListener.bind("127.0.0.1:0") {
         Ok(l) => l,
-        Err(_) => return Err(f"cannot bind {graphite_addr}"),
+        Err(_) => return Err("graphite bind failed".to_string()),
     };
+    let udp_addr = udp.local_addr().unwrap_or(String.new());
+    let mgmt_addr = mgmt.local_addr().unwrap_or(String.new());
+    let graphite_addr = graphite.local_addr().unwrap_or(String.new());
     Ok(Net {
         udp: udp,
         udp_addr: udp_addr,
@@ -2027,6 +2025,13 @@ fn main() {
         println(e);
         return;
     }
+    let net = match open_net() {
+        Ok(n) => n,
+        Err(e) => {
+            println(e);
+            return;
+        }
+    };
     let jobs = match fs.read_to_string("data/jobs.txt") {
         Ok(t) => t,
         Err(_) => {
@@ -2035,7 +2040,6 @@ fn main() {
         }
     };
     let mut daemon: Option[Daemon] = None;
-    let mut net: Option[Net] = None;
     for line in lines_of(jobs).iter() {
         if line.len() == 0 or starts_with(line, "#") {
             continue;
@@ -2044,32 +2048,21 @@ fn main() {
         let (cmd, _, arg) = partition(line, b' ');
         if cmd == "config" {
             match fs.read_to_string(f"data/{arg}") {
-                Ok(text) => {
-                    let cfg = parse_config(text);
-                    net = None; // the old daemon's sockets close first
-                    match open_net(cfg) {
-                        Ok(n) => net = Some(n),
-                        Err(e) => println(e),
-                    }
-                    daemon = Some(Daemon.new(cfg));
-                }
+                Ok(text) => daemon = Some(Daemon.new(parse_config(text))),
                 Err(_) => println(f"cannot read data/{arg}"),
             }
         } else {
             match daemon {
-                Some(mut ref d) => match net {
-                    Some(ref n) => {
-                        if cmd == "send" {
-                            send(n, mut d, arg.replace("\\n", "\n"));
-                        } else if cmd == "admin" {
-                            admin(n, mut d, arg);
-                        } else if cmd == "flush" {
-                            flush(n, mut d);
-                        }
+                Some(mut ref d) => {
+                    if cmd == "send" {
+                        send(net, mut d, arg.replace("\\n", "\n"));
+                    } else if cmd == "admin" {
+                        admin(net, mut d, arg);
+                    } else if cmd == "flush" {
+                        flush(net, mut d);
                     }
-                    None => println("no sockets"),
-                },
-                None => println("no daemon running"),
+                }
+                None => println("no config yet"),
             }
         }
         println("");

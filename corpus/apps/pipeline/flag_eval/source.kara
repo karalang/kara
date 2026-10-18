@@ -6,13 +6,6 @@
 //
 // Rollout buckets are a stable FNV-1a hash of "flag:user", so a user stays
 // in or out of a percentage rollout across runs and machines.
-//
-// Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-12-6   i64.parse returns Option, not Result[i64, ParseError]
-//   B-2026-10-12-7   lines() is an eager Vec[String]
-//   B-2026-10-14-44  fs.read_to_string / fs.write take ref String, not Str
-// Not worked around (no other spelling): B-2026-10-12-23, `karac check`
-// does not know DeserializeError.
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag: "op")]
@@ -94,9 +87,9 @@ fn check_rule(rule: ref Rule, attrs: ref SortedMap[String, String]) -> Option[St
             None => Some(f"no {attr}"),
         },
         Rule.AtLeast { attr, min } => match attrs.get(attr) {
-            Some(v) => match i64.parse(v).ok() {
-                Some(n) => if n >= *min { None } else { Some(f"{attr}={n} < {min}") },
-                None => Some(f"{attr} not a number"),
+            Some(v) => match i64.parse(v) {
+                Ok(n) => if n >= *min { None } else { Some(f"{attr}={n} < {min}") },
+                Err(_) => Some(f"{attr} not a number"),
             },
             None => Some(f"no {attr}"),
         },
@@ -138,7 +131,7 @@ fn evaluate(cfg: ref Config, req: ref EvalRequest) -> Decision {
 }
 
 fn load_config(path: Str) -> Result[Config, String] {
-    let text = match fs.read_to_string(path.to_string()) {
+    let text = match fs.read_to_string(path) {
         Ok(t) => t,
         Err(_) => return Err(f"cannot read {path}"),
     };
@@ -195,7 +188,7 @@ fn run(cfg: ref Config, input: Str, out_path: Str) -> Result[Vec[Decision], Stri
             Err(_) => println(f"  line {line_no}: skipped, not a request"),
         }
     }
-    match fs.write(out_path.to_string(), out) {
+    match fs.write(out_path, out) {
         Ok(_) => Ok(decisions),
         Err(_) => Err(f"cannot write {out_path}"),
     }
@@ -228,7 +221,7 @@ fn main() {
         Err(_) => println("cannot write requests"),
     }
     let input = fs.read_to_string("requests.jsonl").unwrap_or(String.new());
-    match fs.write("flags.json", CONFIG_V1.to_string()) {
+    match fs.write("flags.json", CONFIG_V1) {
         Ok(_) => {}
         Err(_) => println("cannot write config"),
     }
@@ -257,7 +250,7 @@ fn main() {
         Ok(_) => println("bad config accepted?"),
         Err(e) => println(f"reload refused: {e}, keeping v{v1.version}"),
     }
-    match fs.write("flags.json", CONFIG_V2.to_string()) {
+    match fs.write("flags.json", CONFIG_V2) {
         Ok(_) => {}
         Err(_) => println("cannot write config"),
     }
@@ -291,6 +284,6 @@ fn main() {
         i += 1;
     }
     let back = fs.read_to_string("decisions.v2.jsonl").unwrap_or(String.new());
-    let lines: Vec[String] = back.lines().map(|p| p.to_string()).collect();
+    let lines: Vec[String] = back.lines().map(|l| l.to_string()).collect();
     println(f"decisions.v2.jsonl: {lines.len()} lines, first {lines[0]}");
 }

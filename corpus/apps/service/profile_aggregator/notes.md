@@ -20,3 +20,7 @@ workarounds:
 - (Not a compiler bug, recorded for completeness: `let backend = parts[0];` on a `Vec[String]` is a hard `error[typecheck]` E_INDEX_MOVE_NON_COPY that blocks the build. Changed to `parts[0].clone()` as the diagnostic suggests. Also `!x` is a parse error in Kāra, so I used `not x`, and file-scope `const` became `let`. Both are spec-conformance fixes.)
 
 ignored diagnostics: 4 (all `error[borrow_projection_copy]`: moving `name`/`email`/`tier` out of a bare `for` tuple element in AccountsBackend.new at L114, and `picked.push(item)` from a bare `for` over `candidates` at L249; `karac build` shows the last as a warning and builds)
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `profile_aggregator.kara` is now exactly what `karac fix` makes of `profile_aggregator.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

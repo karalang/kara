@@ -14,3 +14,7 @@ workarounds:
 - L297 `current = t.region.clone();` in `print_report`: the natural spec form `current = t.region;` (design.md: moving out of a borrowed `for` element is an implicit copy, with only a warning) builds, but the binary aborts with `double free or corruption (fasttop)` (exit 134) once `print_report` returns. The interpreter is correct. The compiled code apparently does not perform the implicit copy, so `current` and the Vec element free the same buffer. This is a crash, not just a diagnostic, so I added `.clone()`. Both crash workarounds were needed: the binary still aborted with only one of them applied.
 
 ignored diagnostics: 3 (`karac check` prints 3 `error[` lines: two `error[borrow_projection_copy]` at L216 for `MonthTotal.new(sale.region, sale.month)`, and one `error[ownership]` at L372 for `path` reused after `fs.write`. All were left as written, and the build succeeds.)
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `csv_report.kara` is now exactly what `karac fix` makes of `csv_report.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

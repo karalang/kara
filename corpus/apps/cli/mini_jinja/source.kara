@@ -26,8 +26,7 @@
 // data, made by render.py.
 //
 // Workarounds for compiler gaps, each marked where it is applied:
-// B-2026-10-15-38 (numbers parsed from a local, not from `t.text`) and
-// B-2026-10-15-20 (a filter or test name cloned into its node).
+// (filled in once the program is checked)
 
 // ------------------------------------------------------------ bytes and strings
 
@@ -880,18 +879,14 @@ fn lex(src: Str) -> Result[Vec[Token], String] {
                         i += 1;
                     }
                 }
-                // parsed from the local, not from `t.text`: `karac check`
-                // takes `f64.parse(t.text)` as a move of the field (B-2026-10-15-38)
                 let text = replace_all(byte_str(b, st, i), "_", "");
                 if float {
-                    let x = f64.parse(text).unwrap_or(0.0);
                     let mut t = tok(K_FLOAT, text, line);
-                    t.fval = x;
+                    t.fval = f64.parse(t.text).unwrap_or(0.0);
                     out.push(t);
                 } else {
-                    let v = i64.parse(text).unwrap_or(0);
                     let mut t = tok(K_INT, text, line);
-                    t.ival = v;
+                    t.ival = i64.parse(t.text).unwrap_or(0);
                     out.push(t);
                 }
                 continue;
@@ -1714,9 +1709,7 @@ impl Parser {
                     kwn = n;
                     kwv = v;
                 }
-                // a clone: `karac check` takes the read of `name` above as a use
-                // after this move on the next iteration (B-2026-10-15-20)
-                e = ast.add_expr(Expr.Filter(e, name.clone(), args, kwn, kwv), line);
+                e = ast.add_expr(Expr.Filter(e, name, args, kwn, kwv), line);
             } else if self.skip_name("is") {
                 let negated = self.skip_name("not");
                 let name = self.name()?;
@@ -1729,7 +1722,7 @@ impl Parser {
                     let (a, _, _) = self.call_args(ast)?;
                     args = a;
                 }
-                e = ast.add_expr(Expr.Test(e, name.clone(), negated, args), line);
+                e = ast.add_expr(Expr.Test(e, name, negated, args), line);
             } else if self.is_op("(") {
                 e = self.call(ast, e)?;
             } else {
@@ -3473,9 +3466,8 @@ fn apply_filter(ast: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Vec
         let mut vals = items_of(v)?;
         let mut keys: Vec[Val] = Vec.new();
         for i in 0..vals.len() {
-            let at = ref attribute;
-            let k = match at {
-                Some(a) => attr_path(vals[i], to_str(a))?,
+            let k = match attribute {
+                Some(ref a) => attr_path(vals[i], to_str(a))?,
                 None => vals[i].clone(),
             };
             keys.push(sort_key(k, case_sensitive));
@@ -3506,9 +3498,8 @@ fn apply_filter(ast: ref Ast, r: mut ref R, name: Str, v: own Val, args: own Vec
         let mut total = arg_or(args, kwn, kwv, 1, "start", Val.Int(0));
         let items = items_of(v)?;
         for i in 0..items.len() {
-            let at = ref attribute;
-            let x = match at {
-                Some(a) => attr_path(items[i], to_str(a))?,
+            let x = match attribute {
+                Some(ref a) => attr_path(items[i], to_str(a))?,
                 None => items[i].clone(),
             };
             total = binop("+", total, x)?;

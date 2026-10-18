@@ -534,7 +534,7 @@ struct Elf {
     has_dyn: bool,
     dyn_error: bool,
     dyn_off: i64,
-    dyns: Vec[(i64, i64)],
+    r#dyn: Vec[(i64, i64)],
 }
 
 fn read_elf(name: Str, data: own Vec[u8]) -> Elf {
@@ -554,7 +554,7 @@ fn read_elf(name: Str, data: own Vec[u8]) -> Elf {
         has_dyn: false,
         dyn_error: false,
         dyn_off: 0,
-        dyns: Vec.new(),
+        r#dyn: Vec.new(),
     };
     let b = ref e.b;
     e.phoff = le(b, 0x20, 8);
@@ -609,7 +609,7 @@ fn read_elf(name: Str, data: own Vec[u8]) -> Elf {
             for i in 0..p.fs / 16 {
                 let t = le(b, p.off + 16 * i, 8);
                 let v = le(b, p.off + 16 * i + 8, 8);
-                e.dyns.push((t, v));
+                e.dyn.push((t, v));
                 if t == DT_NULL {
                     break;
                 }
@@ -652,7 +652,7 @@ fn name_of(e: ref Elf, k: i64) -> String {
 }
 
 fn dyn_tag(e: ref Elf, tag: i64) -> Option[i64] {
-    for (t, v) in e.dyns {
+    for (t, v) in e.dyn {
         if *t == tag {
             return Some(*v);
         }
@@ -661,7 +661,7 @@ fn dyn_tag(e: ref Elf, tag: i64) -> Option[i64] {
 }
 
 fn is_pie(e: ref Elf) -> bool {
-    for (t, v) in e.dyns {
+    for (t, v) in e.dyn {
         if *t == DT_FLAGS_1 {
             return (*v & 0x08000000) != 0;
         }
@@ -1019,11 +1019,11 @@ fn dynamic_section(out: mut ref String, e: ref Elf) {
         out.push_str("\nThere is no dynamic section in this file.\n");
         return;
     }
-    let n = e.dyns.len();
+    let n = e.dyn.len();
     out.push_str(f"\nDynamic section at offset 0x{e.dyn_off:x} contains {n} {plural(n, "entry", "entries")}:\n");
     out.push_str("  Tag        Type                         Name/Value\n");
     let st = dyn_strtab(e);
-    for (t, v) in e.dyns {
+    for (t, v) in e.dyn {
         let name = dyn_type_name(*t);
         out.push_str(f" 0x{*t:016x} ({name}){rjust(" ", 19 - name.len())}{dyn_value(e, st, *t, *v)}\n");
     }
@@ -2250,7 +2250,7 @@ fn ldcheck(out: mut ref String, f: Str) {
     }
     let st = dyn_strtab(e).unwrap_or(0);
     let mut needed: Vec[String] = Vec.new();
-    for (t, v) in e.dyns {
+    for (t, v) in e.dyn {
         if *t == DT_NEEDED {
             needed.push(cstr(e, st + *v));
         }

@@ -883,6 +883,7 @@ struct Rx {
     groups: i64,
 }
 
+#[derive(Clone)]
 struct Prog {
     code: Vec[Ins],
     groups: i64,
@@ -1578,7 +1579,7 @@ fn new_ver(rx: ref Rxs, version: Str, loose: bool) -> Result[Ver, String] {
     if version.len() > MAX_LENGTH {
         return Err(f"version is longer than {MAX_LENGTH} characters");
     }
-    let m = match search(if loose { ref rx.loose } else { ref rx.full }, strip(version)) {
+    let m = match search(if loose { rx.loose.clone() } else { rx.full.clone() }, strip(version)) {
         Some(m) => m,
         None => return Err(f"Invalid Version: {version}"),
     };
@@ -1789,7 +1790,7 @@ fn inc_ver(rx: ref Rxs, v: mut ref Ver, release: Str, ident: ref Option[String],
         }
         if has_id {
             let dash = f"-{id}";
-            let ok = match search(if v.loose { ref rx.pre_l } else { ref rx.pre }, dash) {
+            let ok = match search(if v.loose { rx.pre_l.clone() } else { rx.pre.clone() }, dash) {
                 Some(m) => grp_s(m, 1) == id,
                 None => false,
             };
@@ -1915,7 +1916,7 @@ struct Comparator {
 
 fn new_comp(rx: ref Rxs, text: Str, loose: bool) -> Result[Comparator, String] {
     let comp = collapse_ws(text);
-    let m = match search(if loose { ref rx.comp_l } else { ref rx.comp }, comp) {
+    let m = match search(if loose { rx.comp_l.clone() } else { rx.comp.clone() }, comp) {
         Some(m) => m,
         None => return Err(f"Invalid comparator: {comp}"),
     };
@@ -2228,14 +2229,14 @@ fn sub_all(prog: ref Prog, s: Str, mode: i64) -> String {
 }
 
 fn replace_caret(rx: ref Rxs, comp: Str, loose: bool, incpre: bool) -> String {
-    match search(if loose { ref rx.caret_l } else { ref rx.caret }, comp) {
+    match search(if loose { rx.caret_l.clone() } else { rx.caret.clone() }, comp) {
         Some(m) => splice(m, caret_rep(m, incpre)),
         None => comp.to_string(),
     }
 }
 
 fn replace_tilde(rx: ref Rxs, comp: Str, loose: bool) -> String {
-    match search(if loose { ref rx.tilde_l } else { ref rx.tilde }, comp) {
+    match search(if loose { rx.tilde_l.clone() } else { rx.tilde.clone() }, comp) {
         Some(m) => splice(m, tilde_rep(m)),
         None => comp.to_string(),
     }
@@ -2243,7 +2244,7 @@ fn replace_tilde(rx: ref Rxs, comp: Str, loose: bool) -> String {
 
 fn replace_xrange(rx: ref Rxs, text: Str, loose: bool, incpre: bool) -> String {
     let comp = strip(text);
-    match search(if loose { ref rx.xrange_l } else { ref rx.xrange }, comp) {
+    match search(if loose { rx.xrange_l.clone() } else { rx.xrange.clone() }, comp) {
         Some(m) => splice(m, xrange_rep(m, incpre)),
         None => comp,
     }
@@ -2271,7 +2272,7 @@ fn parse_comparator(rx: ref Rxs, comp: Str, loose: bool, incpre: bool) -> String
 
 fn parse_range(rx: ref Rxs, text: Str, loose: bool, incpre: bool) -> Result[Vec[Comparator], String] {
     let mut r = text.to_string();
-    if let Some(m) = search(if loose { ref rx.hyphen_l } else { ref rx.hyphen }, r) {
+    if let Some(m) = search(if loose { rx.hyphen_l.clone() } else { rx.hyphen.clone() }, r) {
         r = splice(m, hyphen_rep(m, incpre));
     }
     r = sub_all(rx.comp_trim, r, 0);
@@ -2284,7 +2285,7 @@ fn parse_range(rx: ref Rxs, text: Str, loose: bool, incpre: bool) -> Result[Vec[
     let mut list: Vec[String] = Vec.new();
     for c in split_js_ws(join(parts, " ")) {
         let t = strip(c);
-        let g = match search(if incpre { ref rx.gte0_pre } else { ref rx.gte0 }, t) {
+        let g = match search(if incpre { rx.gte0_pre.clone() } else { rx.gte0.clone() }, t) {
             Some(m) => splice(m, ""),
             None => t,
         };

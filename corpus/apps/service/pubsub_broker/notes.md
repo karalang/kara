@@ -10,3 +10,7 @@ workarounds:
 - L154 (`Subscriber.deliver`): `let mut evicted = None;`, later assigned from `self.mailbox.pop_front()`, failed with `error[typecheck]: cannot infer type parameter 'T'; add a type annotation`. Fixed by annotating it as `Option[Message]`.
 - (language rule, not a compiler bug) A field named `seq` is a parse error because `seq` is a reserved keyword (`seq { ... }` expression form). Renamed it to `id`.
 ignored diagnostics: 1 (`error[ownership]` at L240: 'pattern' moved inside a loop, from the `position(|p| p == pattern)` closure in `unsubscribe`). The build also printed a `perf[rc-fallback]` note on the same spot and a `warning[prelude_shadow]` for `enum Command`. Neither is counted as `error[`.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `pubsub_broker.kara` is now exactly what `karac fix` makes of `pubsub_broker.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

@@ -897,7 +897,7 @@ fn compress_block(w: mut ref BitWriter, b: ref Block) {
     let n = blk.len();
     let ptr = bwt_sort(blk);
     let orig = position(ptr, 0);
-    put_byte_list(mut w, BLOCK_MAGIC.as_slice().to_vec());
+    put_byte_list(mut w, BLOCK_MAGIC.to_vec());
     put_bits(mut w, 32, b.crc);
     put_bits(mut w, 1, 0);
     put_bits(mut w, 24, orig);
@@ -1122,7 +1122,7 @@ fn compress(t: ref Vec[i64], data: ref Vec[u8], level: i64) -> Vec[u8] {
         comb = combine(comb, b.crc);
         compress_block(mut w, b);
     }
-    put_byte_list(mut w, END_MAGIC.as_slice().to_vec());
+    put_byte_list(mut w, END_MAGIC.to_vec());
     put_bits(mut w, 32, comb);
     finish_bits(mut w);
     w.buf
@@ -1273,7 +1273,7 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
     let mut blockno: i64 = 0;
     loop {
         let magic = read_magic(mut r)?;
-        if magic == END_MAGIC.as_slice().to_vec() {
+        if magic == END_MAGIC.to_vec() {
             let stored = get_bits(mut r, 32)?;
             if stored != comb {
                 return data_err();
@@ -1281,7 +1281,7 @@ fn decode_stream(t: ref Vec[i64], r: mut ref BitReader, verbose: i64, sink: mut 
             drop_partial(mut r);
             return Ok(());
         }
-        if magic != BLOCK_MAGIC.as_slice().to_vec() {
+        if magic != BLOCK_MAGIC.to_vec() {
             return data_err();
         }
         blockno += 1;

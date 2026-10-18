@@ -314,8 +314,8 @@ impl Section {
         if i < 0 {
             return false;
         }
-        let _ = self.keys.remove(i);
-        let _ = self.vals.remove(i);
+        self.keys.remove(i);
+        self.vals.remove(i);
         true
     }
 }

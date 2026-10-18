@@ -36,11 +36,11 @@ impl Display for TodoError {
 }
 
 impl From[IoError] for TodoError {
-    fn from(e: own IoError) -> TodoError {
+    fn from(e: IoError) -> TodoError {
         let msg = match e {
             IoError.NotFound => "file not found",
             IoError.PermissionDenied => "permission denied",
-            IoError.Other(m) => m,
+            IoError.Other(m) => m.clone(),
             _ => "unexpected i/o error",
         };
         TodoError.Io(msg)
@@ -237,7 +237,7 @@ impl Store {
                 if parts[3] != "-" { todo.tags = parts[3].split(",").map(|p| p.to_string()).collect(); }
                 store.items.push(todo);
             } else {
-                return Err(TodoError.Corrupt(lineno, line.clone()));
+                return Err(TodoError.Corrupt(lineno, line.to_string()));
             }
         }
         Ok(store)
@@ -267,13 +267,13 @@ impl Store {
         out
     }
 
-    fn apply(mut ref self, cmd: own Command) -> Result[String, TodoError] {
+    fn apply(mut ref self, cmd: Command) -> Result[String, TodoError] {
         match cmd {
             Command.Add(title) => {
                 let id = self.next_id;
                 self.next_id += 1;
                 let msg = f"added #{id}: {title}";
-                self.items.push(Todo.new(id, title));
+                self.items.push(Todo.new(id, title.clone()));
                 Ok(msg)
             }
             Command.Done(id) => {
@@ -285,14 +285,14 @@ impl Store {
             Command.Edit(id, title) => {
                 let idx = self.index_of(id)?;
                 let msg = f"renamed #{id}: '{self.items[idx].title}' -> '{title}'";
-                self.items[idx].title = title;
+                self.items[idx].title = title.clone();
                 Ok(msg)
             }
             Command.Tag(id, tag) => {
                 let idx = self.index_of(id)?;
-                if self.items[idx].has_tag(tag) { return Err(TodoError.DuplicateTag(id, tag)); }
+                if self.items[idx].has_tag(tag) { return Err(TodoError.DuplicateTag(id, tag.clone())); }
                 let msg = f"tagged #{id} with '{tag}'";
-                self.items[idx].tags.push(tag);
+                self.items[idx].tags.push(tag.clone());
                 Ok(msg)
             }
             Command.List(filter) => Ok(self.list(filter)),
@@ -333,7 +333,7 @@ fn undo_last() -> Result[String, TodoError] {
 
 fn run_line(line: ref String) -> Result[String, TodoError] {
     let cmd = parse_command(line)?;
-    let cmd = match cmd { Command.Undo => return undo_last(), other => other };
+    if let Command.Undo = cmd { return undo_last(); }
     let mut store = load_store()?;
     let before = store.serialize();
     let mutating = cmd.mutates();

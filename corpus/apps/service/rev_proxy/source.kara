@@ -13,15 +13,6 @@
 // connects to the chosen origin and writes the rewritten request, the
 // origin accepts and answers, and the replies flow back. The kernel buffers
 // each step. One origin is closed halfway through; two are never started.
-//
-// Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-14-44  TcpListener.bind / TcpStream.connect take String
-//   B-2026-10-12-6   i64.parse returns Option
-//   B-2026-10-12-7   split() is an eager Vec[String]
-//   B-2026-10-15-13  `match p { mut ref x => .. }` is refused on every MIR
-//   B-2026-10-15-14  and check refuses `let x: mut ref T = p`, so the chosen
-//                    pool is passed to try_pool as `mut proxy.pools[pi]` and
-//                    each upstream is re-indexed at every write
 
 struct Header { name: String, value: String }
 
@@ -375,13 +366,15 @@ fn forward(proxy: mut ref Proxy, origins: mut ref Vec[Origin], req: ref Message,
     let prefix = proxy.routes[ri].prefix.clone();
     let strip = proxy.routes[ri].strip;
     let pi = proxy.routes[ri].pool;
-    for m in proxy.pools[pi].members.iter_mut() {
+    let pool = mut ref proxy.pools[pi];
+    for m in pool.members.iter_mut() {
         if m.down_for > 0 {
             m.down_for -= 1;
         }
     }
     let upstream_path = if strip {
-        path[prefix.len() - 1..path.len()].to_string()
+        let p = path[prefix.len() - 1..path.len()].to_string();
+        p
     } else {
         path.to_string()
     };
@@ -390,11 +383,7 @@ fn forward(proxy: mut ref Proxy, origins: mut ref Vec[Origin], req: ref Message,
     headers.push(Header { name: "X-Forwarded-Prefix".to_string(), value: prefix[0..prefix.len() - 1].to_string() });
     headers.push(Header { name: "Via".to_string(), value: "1.1 kproxy".to_string() });
     let outgoing = render(f"{method} {upstream_path} HTTP/1.1", headers, req.body);
-    try_pool(mut proxy.pools[pi], mut origins, outgoing, method)
-}
 
-// Tries the pool's upstreams in round-robin order until one answers.
-fn try_pool(pool: mut ref Cluster, origins: mut ref Vec[Origin], outgoing: Str, method: Str) -> (String, String, i64) {
     let mut tried: Vec[bool] = Vec.new();
     for _ in pool.members.iter() {
         tried.push(false);
@@ -408,47 +397,47 @@ fn try_pool(pool: mut ref Cluster, origins: mut ref Vec[Origin], outgoing: Str, 
         };
         tried[idx] = true;
         tries += 1;
-        let name = pool.members[idx].name.clone();
-        let conn = match TcpStream.connect(pool.members[idx].addr.clone()) {
+        let up = mut ref pool.members[idx];
+        let conn = match TcpStream.connect(up.addr.clone()) {
             Ok(c) => c,
             Err(_) => {
-                pool.members[idx].refused += 1;
-                pool.members[idx].down_for = COOLDOWN;
-                println(f"  [pool {pool.name}] {name} refused, out for {COOLDOWN}");
+                up.refused += 1;
+                up.down_for = COOLDOWN;
+                println(f"  [pool {pool.name}] {up.name} refused, out for {COOLDOWN}");
                 continue;
             }
         };
         let sent = conn.write_all(outgoing.bytes()).is_ok() and conn.shutdown_write().is_ok();
         if not sent {
-            println(f"  [pool {pool.name}] {name} write failed");
+            println(f"  [pool {pool.name}] {up.name} write failed");
             continue;
         }
-        serve_origin(mut origins, name);
+        serve_origin(mut origins, up.name);
         let raw = match read_all(conn) {
             Ok(r) => r,
             Err(e) => {
-                println(f"  [pool {pool.name}] {name}: {e}");
+                println(f"  [pool {pool.name}] {up.name}: {e}");
                 continue;
             }
         };
         let resp = match parse_message(raw) {
             Ok(r) => r,
             Err(e) => {
-                last_reply = Some((simple(502, f"bad upstream reply: {e}"), name));
+                last_reply = Some((simple(502, f"bad upstream reply: {e}"), up.name.clone()));
                 break;
             }
         };
-        pool.members[idx].served += 1;
+        up.served += 1;
         let mut out_headers = end_to_end(resp);
         out_headers.push(Header { name: "Via".to_string(), value: "1.1 kproxy".to_string() });
-        out_headers.push(Header { name: "X-Upstream".to_string(), value: name.clone() });
+        out_headers.push(Header { name: "X-Upstream".to_string(), value: up.name.clone() });
         let reply = render(resp.start, out_headers, resp.body);
         if status_of(resp.start) == 503 and method == "GET" {
-            println(f"  [pool {pool.name}] {name} answered 503, retrying GET");
-            last_reply = Some((reply, name));
+            println(f"  [pool {pool.name}] {up.name} answered 503, retrying GET");
+            last_reply = Some((reply, up.name.clone()));
             continue;
         }
-        return (reply, name, tries);
+        return (reply, up.name.clone(), tries);
     }
     match last_reply {
         Some((r, name)) => (r, name, tries),

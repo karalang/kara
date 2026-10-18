@@ -3,13 +3,6 @@
 // code, bold, emphasis, links, escaping), builds an index page with a table
 // of contents, and checks every internal link points at a page it wrote.
 // Settings come from the environment: SITE_TITLE and SITE_BASE.
-//
-// Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-14-44  fs.write takes ref String, so a `Str` page is copied
-//   B-2026-10-14-52  `PAGES.iter()` on a const array yields nothing on the
-//                    compiled backends, so main iterates a local copy
-//   B-2026-10-14-53  `karac check` counts fs.write's content as moved, so
-//                    the page size is read before the write
 
 struct Page { slug: String, title: String, html: String, headings: Vec[(i64, String, String)], links: Vec[String] }
 
@@ -229,14 +222,13 @@ fn main() {
     };
     let base = env.var("SITE_BASE").unwrap_or("/".to_string());
     let mut pages: Vec[Page] = Vec.new();
-    let sources = PAGES;
-    for (slug, md) in sources.iter() {
-        match fs.write(f"{slug}.md", md.to_string()) {
+    for (slug, md) in PAGES.iter() {
+        match fs.write(f"{slug}.md", md) {
             Ok(_) => {}
             Err(_) => println(f"cannot write {slug}.md"),
         }
     }
-    for (slug, _) in sources.iter() {
+    for (slug, _) in PAGES.iter() {
         let md = match fs.read_to_string(f"{slug}.md") {
             Ok(t) => t,
             Err(_) => {
@@ -246,9 +238,8 @@ fn main() {
         };
         let page = render(slug, md);
         let out = wrap(site, base, page);
-        let size = out.len();
         match fs.write(f"{slug}.html", out) {
-            Ok(_) => println(f"{slug}.html: {size} bytes, {page.headings.len()} headings, {page.links.len()} links"),
+            Ok(_) => println(f"{slug}.html: {out.len()} bytes, {page.headings.len()} headings, {page.links.len()} links"),
             Err(_) => println(f"cannot write {slug}.html"),
         }
         pages.push(page);

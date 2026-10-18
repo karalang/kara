@@ -43,3 +43,7 @@ Reverted 2026-10-15, karac at aec4d15cc0: B-2026-10-14-44 is fixed, so
 `status` is a `Str` again. B-2026-10-12-23 is fixed too, so the note
 about `DeserializeError` is gone from the header. Each of these is the
 original line again, and the app still matches on all four MIR surfaces.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `kv_http.kara` is now exactly what `karac fix` makes of `kv_http.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).

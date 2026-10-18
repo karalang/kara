@@ -18,13 +18,11 @@
 // server fed the same bytes.
 //
 // Workarounds for v2 gaps, each to revert once its row is fixed:
-//   B-2026-10-18-2   a const literal above i64::MAX panics check: U64_MAX is
-//                    spelled (1 << 64) - 1
+//   B-2026-10-18-39  Map.get_mut takes no Str key, though get does:
+//                    get_mut(key.to_string())
 //   B-2026-10-18-3   check refuses a method's own argument moved in two
 //                    exclusive branches in a loop: link(new.clone()) at
 //                    every site, the first included
-//   B-2026-10-15-20  joined, built in an if and then moved: joined.clone()
-//   B-2026-10-12-3   Map has no get_mut: contains_key, then items[key]
 
 const START: i64 = 1760000000;
 const PROCESS_STARTED: i64 = START - 2;
@@ -79,8 +77,7 @@ fn parse_num(s: Str, lo: i128, hi: i128) -> Option[i128] {
     Some(v)
 }
 
-// (1 << 64) - 1: a bare literal above i64::MAX panics check (B-2026-10-18-2).
-const U64_MAX: i128 = (1 << 64) - 1;
+const U64_MAX: i128 = 18446744073709551615;
 const I32_MIN: i128 = -2147483648;
 const I32_MAX: i128 = 2147483647;
 const U32_MAX: i128 = 4294967295;
@@ -236,9 +233,8 @@ impl Cache {
     }
 
     fn set_exptime(mut ref self, key: Str, exptime: i64) {
-        // Map has no get_mut (B-2026-10-12-3).
-        if self.items.contains_key(key) {
-            self.items[key.to_string()].exptime = exptime;
+        if let Some(it) = self.items.get_mut(key.to_string()) {
+            it.exptime = exptime;
         }
     }
 }
@@ -366,7 +362,7 @@ fn serve(cache: mut ref Cache, data: ref Vec[u8], c: mut ref Conn) -> i64 {
                             joined.extend_from_slice(value.as_slice());
                             joined.extend_from_slice(o.data.as_slice());
                         }
-                        cache.link(new_item(key.as_str(), o.flags, o.exptime, joined.clone(), cache.now));
+                        cache.link(new_item(key.as_str(), o.flags, o.exptime, joined, cache.now));
                         c.answer(noreply, "STORED");
                     }
                 }

@@ -7,13 +7,6 @@
 // torn last line, recovery drops it, loads the snapshot, seeks to the
 // offset, replays the tail, and checks the result against a full replay.
 // Command ids make retries idempotent.
-//
-// Workarounds for compiler gaps (revert when the row is fixed):
-//   B-2026-10-14-65  a closure with an early `return Err(..)` builds invalid
-//                    MIR: the amount parser is a top-level fn, not a closure
-//   B-2026-10-14-67  join needs String elements: the words stay Vec[String]
-//   B-2026-10-12-6   parse returns Option
-//   B-2026-10-12-7   split / split_whitespace are eager Vec[String]
 
 const LOG: Str = "events.log";
 const SNAP: Str = "snapshot.txt";
@@ -82,9 +75,9 @@ fn encode(e: ref Event) -> String {
 }
 
 fn int_field(s: Str, what: Str) -> Result[i64, String] {
-    match i64.parse(s).ok() {
-        Some(n) => Ok(n),
-        None => Err(f"bad {what} '{s}'"),
+    match i64.parse(s) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(f"bad {what} '{s}'"),
     }
 }
 
@@ -98,10 +91,10 @@ fn decode(line: Str) -> Result[Event, String] {
         return Err(f"short record '{line}'");
     }
     let seq = int_field(f[0], "seq")?;
-    let want: Fn(i64) -> Result[(), String] = |n: i64| {
+    let want = |n: i64| {
         if f.len() == n { Ok(()) } else { Err(f"{f[3]} wants {n} fields, got {f.len()}") }
     };
-    let kind = match f[3] {
+    let kind = match f[3].as_str() {
         "Opened" => {
             want(5)?;
             Kind.Opened(f[4].clone())
@@ -126,7 +119,7 @@ fn decode(line: Str) -> Result[Event, String] {
             want(4)?;
             Kind.Closed
         }
-        _ => return Err(f"unknown event kind '{f[3]}'"),
+        other => return Err(f"unknown event kind '{other}'"),
     };
     Ok(Event { seq: seq, cmd: f[1].clone(), account: f[2].clone(), kind: kind })
 }
@@ -192,24 +185,6 @@ fn replay[A: Aggregate](events: ref Vec[Event], account: Str) -> A {
     a
 }
 
-fn amount(w: ref Vec[String], i: i64) -> Result[i64, String] {
-    if w.len() <= i {
-        return Err("missing amount".to_string());
-    }
-    let parts: Vec[Str] = w[i].split(".").collect();
-    let cents = match parts.len() {
-        1 => int_field(parts[0], "amount")? * 100,
-        2 => {
-            if parts[1].len() != 2 {
-                return Err(f"bad amount '{w[i]}'");
-            }
-            int_field(parts[0], "amount")? * 100 + int_field(parts[1], "amount")?
-        }
-        _ => return Err(f"bad amount '{w[i]}'"),
-    };
-    if cents <= 0 { Err("amount must be positive".to_string()) } else { Ok(cents) }
-}
-
 fn money(cents: i64) -> String {
     let sign = if cents < 0 { "-" } else { "" };
     let n = if cents < 0 { -cents } else { cents };
@@ -266,17 +241,32 @@ impl Store {
 
     // Validates one command and records its events; Err says why not.
     fn handle(mut ref self, line: Str) -> Result[String, String] {
-        let w: Vec[String] = line.split_whitespace().map(|p| p.to_string()).collect();
+        let w: Vec[Str] = line.split_whitespace().collect();
         if w.len() < 3 {
             return Err("want: <id> <verb> <account> ...".to_string());
         }
-        let cmd = ref w[0];
-        let verb = ref w[1];
-        let acct = ref w[2];
+        let (cmd, verb, acct) = (w[0], w[1], w[2]);
         if self.seen.contains(cmd) {
             return Ok(f"duplicate command {cmd} ignored");
         }
-        let msg = match verb.clone() {
+        let amount = |i: i64| {
+            if w.len() <= i {
+                return Err("missing amount".to_string());
+            }
+            let parts: Vec[Str] = w[i].split(".").collect();
+            let cents = match parts.len() {
+                1 => int_field(parts[0], "amount")? * 100,
+                2 => {
+                    if parts[1].len() != 2 {
+                        return Err(f"bad amount '{w[i]}'");
+                    }
+                    int_field(parts[0], "amount")? * 100 + int_field(parts[1], "amount")?
+                }
+                _ => return Err(f"bad amount '{w[i]}'"),
+            };
+            if cents <= 0 { Err("amount must be positive".to_string()) } else { Ok(cents) }
+        };
+        let msg = match verb {
             "open" => {
                 if self.account(acct).exists {
                     return Err(f"account {acct} already exists");
@@ -287,13 +277,13 @@ impl Store {
             }
             "deposit" => {
                 self.live(acct)?;
-                let n = amount(w, 3)?;
+                let n = amount(3)?;
                 self.record(cmd, acct, Kind.Deposited(n));
                 f"{acct} +{money(n)}"
             }
             "withdraw" => {
                 let a = self.live(acct)?;
-                let n = amount(w, 3)?;
+                let n = amount(3)?;
                 if n > a.balance {
                     return Err(f"insufficient funds in {acct}: balance {money(a.balance)}, wanted {money(n)}");
                 }
@@ -304,13 +294,13 @@ impl Store {
                 if w.len() < 5 {
                     return Err("want: <id> transfer <from> <to> <amount>".to_string());
                 }
-                let to = ref w[3];
+                let to = w[3];
                 let a = self.live(acct)?;
                 self.live(to)?;
                 if to == acct {
                     return Err("cannot transfer to the same account".to_string());
                 }
-                let n = amount(w, 4)?;
+                let n = amount(4)?;
                 if n > a.balance {
                     return Err(f"insufficient funds in {acct}: balance {money(a.balance)}, wanted {money(n)}");
                 }
@@ -393,15 +383,10 @@ fn repair(path: Str) -> Result[i64, IoError] {
     if text.is_empty() or text.ends_with("\n") {
         return Ok(0);
     }
-    let bytes = text.bytes();
-    let mut keep = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 10u8 {
-            keep = i + 1;
-        }
-        i += 1;
-    }
+    let keep = match text.rfind("\n") {
+        Some(i) => i + 1,
+        None => 0,
+    };
     let torn = text.len() - keep;
     fs.write(path, text[0..keep])?;
     Ok(torn)

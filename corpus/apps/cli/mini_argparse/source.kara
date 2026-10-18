@@ -635,7 +635,7 @@ struct Group {
 }
 
 #[derive(Clone)]
-struct ExclusiveGroup {
+struct Mutex {
     required: bool,
     actions: Vec[i64],
 }
@@ -652,7 +652,7 @@ struct Parser {
     opt_names: Vec[String],
     opt_actions: Vec[i64],
     groups: Vec[Group],
-    mutexes: Vec[ExclusiveGroup],
+    mutexes: Vec[Mutex],
     // set_defaults
     def_keys: Vec[String],
     def_vals: Vec[Value],
@@ -765,7 +765,7 @@ impl Parser {
     }
 
     fn add_mutex(mut ref self, required: bool) -> i64 {
-        self.mutexes.push(ExclusiveGroup { required: required, actions: Vec.new() });
+        self.mutexes.push(Mutex { required: required, actions: Vec.new() });
         self.mutexes.len() - 1
     }
 
@@ -809,7 +809,7 @@ impl Parser {
     }
 
     // add_subparsers
-    fn add_subparsers(mut ref self, dest: Str, title: Option[String], metavar: own Option[String], required: bool) -> i64 {
+    fn add_subparsers(mut ref self, dest: Str, title: Option[String], metavar: Option[String], required: bool) -> i64 {
         let group = match title {
             Some(t) => self.add_group(t, None),
             None => 0,
@@ -821,12 +821,12 @@ impl Parser {
         a.required = required;
         a.has_choices = true;
         if let Some(m) = metavar {
-            a.metavar = [m];
+            a.metavar = [m.clone()];
         }
         self.add_action(a, group, -1)
     }
 
-    fn register_sub(mut ref self, name: Str, aliases: ref Vec[String], help: own Option[String], parser: i64) {
+    fn register_sub(mut ref self, name: Str, aliases: ref Vec[String], help: Option[String], parser: i64) {
         self.sub_names.push(name.to_string());
         self.sub_parsers.push(parser);
         for i in 0..aliases.len() {
@@ -847,7 +847,7 @@ impl Parser {
             let mut p = act(Vec.new(), STORE);
             p.dest = name.to_string();
             p.metavar = [metavar];
-            p.help = Some(h);
+            p.help = Some(h.clone());
             self.pseudo.push(p);
         }
     }
@@ -897,7 +897,7 @@ impl Cli {
         self.parsers.len() - 1
     }
 
-    fn add_parser(mut ref self, parent: i64, name: Str, aliases: ref Vec[String], help: own Option[String], description: own Option[String]) -> i64 {
+    fn add_parser(mut ref self, parent: i64, name: Str, aliases: ref Vec[String], help: Option[String], description: own Option[String]) -> i64 {
         let prog = f"{self.parsers[parent].sub_prefix} {name}";
         let idx = self.new_parser(prog, description, None, false);
         self.parsers[parent].register_sub(name, aliases, help, idx);
@@ -2090,7 +2090,7 @@ impl Parser {
         let n = a.nargs;
         if args.len() == 0 and n == OPTIONAL {
             let v = if a.option_strings.len() > 0 { a.konst.clone() } else { a.default.clone() };
-            if let Value.Str(s) = v.clone() {
+            if let Value.Str(s) = v {
                 let got = self.get_value(a, s)?;
                 self.check_value(a, got)?;
                 return Ok(got);

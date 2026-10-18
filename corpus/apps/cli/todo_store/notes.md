@@ -21,3 +21,7 @@ ignored diagnostics: 3 (2 x error[borrow_projection_copy] on moving a `for` elem
 
 legacy after v2 edits (measured by the kata thread, not the drafting agent):
 - source.kara aborts under legacy `karac build` with `free(): double free detected` before printing anything; `--interp` matches the mirror. The cause is the hand edit at L336, `let cmd = match cmd { Command.Undo => return undo_last(), other => other };`, which rebinds an owned enum through a catch-all arm. Applied alone to the draft, it reproduces the abort; the two `.clone()` edits do not. Legacy is frozen, so this is a note, not a ledger row.
+
+## Back to the original, 2026-10-18
+
+The rows behind the edits above are fixed, so `todo_store.kara` is now exactly what `karac fix` makes of `todo_store.orig.kara`. It matches expected.out on all four MIR backends (karac at 4ea06e27b9).
