@@ -1391,7 +1391,15 @@ impl<'a> super::TypeChecker<'a> {
             // design.md § `Default`: `T.default()` on a scalar, `String` or a
             // standard collection is its zero or empty value
             // (B-2026-10-13-27). A library impl of `default` won above.
-            if member == "default" {
+            // A standard collection's or `String`'s `new`, named as a value
+            // (`or_insert_with(Vec.new)`, design.md § Standard Data
+            // Structures), is the same empty constructor (B-2026-10-06-118).
+            let empty_ctor = member == "new"
+                && matches!(
+                    type_name.as_str(),
+                    "Vec" | "VecDeque" | "Set" | "SortedSet" | "Map" | "SortedMap" | "String"
+                );
+            if member == "default" || empty_ctor {
                 if let Some(t) = self.builtin_default_type(type_name) {
                     return Type::Function {
                         params: Vec::new(),

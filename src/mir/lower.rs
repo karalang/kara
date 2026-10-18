@@ -5387,7 +5387,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.build_variant(t, idx, Vec::new(), dest);
                         Ok(())
                     }
-                    None if self.lcx.fns.contains_key(&d) => {
+                    None if self.lcx.lowered_def(d).is_some() => {
                         let want = self.place_type(&dest);
                         let (op, _) = self.fn_item_value(e, d, Some(want))?;
                         self.assign(dest, Rvalue::Use(op));
@@ -5408,6 +5408,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                         None => self.unsupported(e.span, "this path"),
                     },
                 }
+            }
+            Some(Res::Builtin(_)) if self.builtin_fn_def(e).is_some() => {
+                let d = self.builtin_fn_def(e).expect("checked");
+                let want = self.place_type(&dest);
+                let (op, _) = self.fn_item_value(e, d, Some(want))?;
+                self.assign(dest, Rvalue::Use(op));
+                Ok(())
             }
             Some(Res::Builtin(path)) => {
                 let path = path.clone();
@@ -13070,6 +13077,24 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// The library function a compiler-provided path names as a value:
+    /// `Vec.new`, `String.new` and the other empty constructors are the
+    /// type's `default`, as is `String.default` (B-2026-10-06-118).
+    fn builtin_fn_def(&self, e: &Expr) -> Option<DefId> {
+        let Some(Res::Builtin(path)) = self.lcx.res.get(&e.id) else {
+            return None;
+        };
+        let (ty, "new" | "default") = path.rsplit_once('.')? else {
+            return None;
+        };
+        let defs = &self.lcx.defs;
+        let cands = match defs.lookup(0, ty) {
+            Some(t) => defs.methods.get(&t)?.get("default")?,
+            None => defs.builtin_methods.get(ty)?.get("default")?,
+        };
+        cands.iter().copied().find(|&m| !defs.is_trait_method(m))
+    }
+
     /// A function-typed value: a closure literal, a function item, or a
     /// local holding one (moved, or copied when it is `Copy`).
     fn fn_value(&mut self, e: &'a Expr) -> R<(Operand, Ty)> {
@@ -13078,6 +13103,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::Identifier(_) | ExprKind::Path { .. } => {
                 if let Some(Res::Def(d)) = self.lcx.res.get(&e.id) {
                     return self.fn_item_value(e, *d, None);
+                }
+                if let Some(d) = self.builtin_fn_def(e) {
+                    return self.fn_item_value(e, d, None);
                 }
                 let p = self.expr_place(e, false)?;
                 let t = self.place_type(&p);

@@ -626,6 +626,12 @@ impl StringSlice {
 }
 
 impl String {
+    /// The empty string: what `T: Default` calls, and what `String.new`
+    /// names as a function value (`or_insert_with(String.new)`).
+    fn default() -> String {
+        String.new()
+    }
+
     /// `split` of the text as a `Str`: each piece is a view into `self`.
     fn split(ref self, sep: Str) -> StrSplit {
         self.as_str().split(sep)

@@ -6021,3 +6021,50 @@ fn a_vec_of_ordered_elements_is_ordered() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_collection_constructor_is_a_function_value() {
+    // B-2026-10-06-118: design.md § Standard Data Structures writes
+    // `entry(key).or_insert_with(Vec.new)`; the empty constructors of the
+    // collections and `String` name a function, as a user type's `new` does.
+    let src = "fn main() {\n\
+         \x20   let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+         \x20   m.entry(1).or_insert_with(Vec.new).push(3);\n\
+         \x20   m.entry(1).or_insert_with(Vec.new).push(4);\n\
+         \x20   let mut w: Map[i64, String] = Map.new();\n\
+         \x20   w.entry(2).or_insert_with(String.new).push_str(\"a\");\n\
+         \x20   let mut g: Map[i64, Set[i64]] = Map.new();\n\
+         \x20   g.entry(5).or_insert_with(Set.new).insert(9);\n\
+         \x20   let mut q: Map[i64, SortedMap[i64, i64]] = Map.new();\n\
+         \x20   q.entry(1).or_insert_with(SortedMap.new).insert(4, 5);\n\
+         \x20   let f = Vec.new;\n\
+         \x20   let mut v: Vec[i64] = f();\n\
+         \x20   v.push(1);\n\
+         \x20   let h = String.default;\n\
+         \x20   let mut s: String = h();\n\
+         \x20   s.push_str(\"z\");\n\
+         \x20   println(f\"{m[1]} {w[2]} {g[5].len()} {q[1][4]} {v} {s}\");\n\
+         }\n";
+    let (dir, path) = fixture("ctor-value", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "[3, 4] a 1 5 [1] z\n",
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
