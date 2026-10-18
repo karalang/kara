@@ -1,0 +1,1657 @@
+// mini_vault: an encrypted secrets store for a deployment's keys and
+// passwords, in the style of `ansible-vault` or a `pass` store, with every
+// primitive written here from its specification:
+// - SHA-256 (FIPS 180-4), HMAC (RFC 2104), PBKDF2 (RFC 8018) and HKDF
+//   (RFC 5869);
+// - AES-128/192/256 (FIPS 197) in ECB, CBC and CTR modes, AES-GCM
+//   (SP 800-38D) with any nonce length, and ChaCha20-Poly1305 (RFC 8439);
+// - Fernet tokens and key rotation with MultiFernet;
+// - a vault file whose entries are each sealed with AES-GCM under a key
+//   derived from a passphrase, with put, get, delete and rekey.
+//
+// The jobs are in data/jobs.tsv. expected.out is the output of oracle.py,
+// which runs them with Python's `cryptography` library.
+
+// ------------------------------------------------------------ bytes
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' {
+        c - b'a' + 10
+    } else if c >= b'A' {
+        c - b'A' + 10
+    } else {
+        c - b'0'
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(f"{x:02x}");
+    }
+    s
+}
+
+fn slice(b: ref Vec[u8], from: i64, to: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    v
+}
+
+fn concat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut v = a.clone();
+    for x in b {
+        v.push(x);
+    }
+    v
+}
+
+// Compares in time that depends only on the lengths, as a MAC check must.
+fn same_bytes(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff = diff | (a[i] ^ b[i]);
+    }
+    diff == 0
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn le32(b: ref Vec[u8], i: i64) -> u32 {
+    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_le32(out: mut ref Vec[u8], x: u32) {
+    for k in 0..4 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+fn push_le64(out: mut ref Vec[u8], x: u64) {
+    for k in 0..8 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+    }
+}
+
+// ------------------------------------------------------------ SHA-256
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+fn sha_init() -> Vec[u32] {
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+        h.push(x);
+    }
+    h
+}
+
+// Runs the compression function on the 64 bytes of m at `at`.
+fn sha_compress(h: mut ref Vec[u32], w: mut ref Vec[u32], m: ref Vec[u8], at: i64) {
+    for t in 0..16 {
+        w[t] = be32(m, at + 4 * t);
+    }
+    for t in 16..64 {
+        let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+        let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+        w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+    }
+    let mut a = h[0];
+    let mut b = h[1];
+    let mut c = h[2];
+    let mut d = h[3];
+    let mut e = h[4];
+    let mut f = h[5];
+    let mut g = h[6];
+    let mut hh = h[7];
+    for t in 0..64 {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ ((e ^ 0xFFFFFFFFu32) & g);
+        let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        hh = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    h[0] = h[0].wrapping_add(a);
+    h[1] = h[1].wrapping_add(b);
+    h[2] = h[2].wrapping_add(c);
+    h[3] = h[3].wrapping_add(d);
+    h[4] = h[4].wrapping_add(e);
+    h[5] = h[5].wrapping_add(f);
+    h[6] = h[6].wrapping_add(g);
+    h[7] = h[7].wrapping_add(hh);
+}
+
+fn new_schedule() -> Vec[u32] {
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    w
+}
+
+// Finishes a hash whose state has already taken `done` bytes (a whole
+// number of blocks) with the rest of the message.
+fn sha_finish(state: ref Vec[u32], done: i64, msg: ref Vec[u8]) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = ((done + msg.len()) * 8) as u64;
+    m.push(0x80);
+    while m.len() % 64 != 56 {
+        m.push(0);
+    }
+    push_be64(mut m, bits);
+    let mut h = state.clone();
+    let mut w = new_schedule();
+    let mut at: i64 = 0;
+    while at < m.len() {
+        sha_compress(mut h, mut w, m, at);
+        at += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+fn sha256(msg: ref Vec[u8]) -> Vec[u8] {
+    sha_finish(sha_init(), 0, msg)
+}
+
+// ------------------------------------------------------------ HMAC and KDFs
+
+// HMAC-SHA256 with the key's two padded blocks already hashed, so that
+// PBKDF2's thousands of HMACs cost two compressions each.
+struct Hmac {
+    inner: Vec[u32],
+    outer: Vec[u32],
+}
+
+fn hmac_key(key: ref Vec[u8]) -> Hmac {
+    let mut k = if key.len() > 64 { sha256(key) } else { key.clone() };
+    while k.len() < 64 {
+        k.push(0);
+    }
+    let mut ipad: Vec[u8] = Vec.new();
+    let mut opad: Vec[u8] = Vec.new();
+    for x in k {
+        ipad.push(x ^ 0x36);
+        opad.push(x ^ 0x5c);
+    }
+    let mut w = new_schedule();
+    let mut inner = sha_init();
+    sha_compress(mut inner, mut w, ipad, 0);
+    let mut outer = sha_init();
+    sha_compress(mut outer, mut w, opad, 0);
+    Hmac { inner: inner, outer: outer }
+}
+
+fn hmac_with(h: ref Hmac, msg: ref Vec[u8]) -> Vec[u8] {
+    let ih = sha_finish(h.inner, 64, msg);
+    sha_finish(h.outer, 64, ih)
+}
+
+fn hmac(key: ref Vec[u8], msg: ref Vec[u8]) -> Vec[u8] {
+    hmac_with(hmac_key(key), msg)
+}
+
+fn pbkdf2(pw: ref Vec[u8], salt: ref Vec[u8], iters: i64, len: i64) -> Vec[u8] {
+    let h = hmac_key(pw);
+    let mut out: Vec[u8] = Vec.new();
+    let mut block: u32 = 1;
+    while out.len() < len {
+        let mut s = salt.clone();
+        push_be32(mut s, block);
+        let mut u = hmac_with(h, s);
+        let mut t = u.clone();
+        for _ in 1..iters {
+            u = hmac_with(h, u);
+            for i in 0..32 {
+                t[i] = t[i] ^ u[i];
+            }
+        }
+        for x in t {
+            if out.len() < len {
+                out.push(x);
+            }
+        }
+        block += 1u32;
+    }
+    out
+}
+
+fn hkdf(ikm: ref Vec[u8], salt: ref Vec[u8], info: ref Vec[u8], len: i64) -> Vec[u8] {
+    let s = if salt.is_empty() { slice(zeros(32), 0, 32) } else { salt.clone() };
+    let prk = hmac_key(hmac(s, ikm));
+    let mut out: Vec[u8] = Vec.new();
+    let mut t: Vec[u8] = Vec.new();
+    let mut i: u8 = 1;
+    while out.len() < len {
+        let mut m = concat(t, info);
+        m.push(i);
+        t = hmac_with(prk, m);
+        for x in t {
+            if out.len() < len {
+                out.push(x);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn zeros(n: i64) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for _ in 0..n {
+        v.push(0);
+    }
+    v
+}
+
+// ------------------------------------------------------------ AES
+
+const SBOX: Array[u8, 256] = [
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
+];
+
+const INV_SBOX: Array[u8, 256] = [
+    0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
+    0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
+    0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
+    0x08, 0x2e, 0xa1, 0x66, 0x28, 0xd9, 0x24, 0xb2, 0x76, 0x5b, 0xa2, 0x49, 0x6d, 0x8b, 0xd1, 0x25,
+    0x72, 0xf8, 0xf6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xd4, 0xa4, 0x5c, 0xcc, 0x5d, 0x65, 0xb6, 0x92,
+    0x6c, 0x70, 0x48, 0x50, 0xfd, 0xed, 0xb9, 0xda, 0x5e, 0x15, 0x46, 0x57, 0xa7, 0x8d, 0x9d, 0x84,
+    0x90, 0xd8, 0xab, 0x00, 0x8c, 0xbc, 0xd3, 0x0a, 0xf7, 0xe4, 0x58, 0x05, 0xb8, 0xb3, 0x45, 0x06,
+    0xd0, 0x2c, 0x1e, 0x8f, 0xca, 0x3f, 0x0f, 0x02, 0xc1, 0xaf, 0xbd, 0x03, 0x01, 0x13, 0x8a, 0x6b,
+    0x3a, 0x91, 0x11, 0x41, 0x4f, 0x67, 0xdc, 0xea, 0x97, 0xf2, 0xcf, 0xce, 0xf0, 0xb4, 0xe6, 0x73,
+    0x96, 0xac, 0x74, 0x22, 0xe7, 0xad, 0x35, 0x85, 0xe2, 0xf9, 0x37, 0xe8, 0x1c, 0x75, 0xdf, 0x6e,
+    0x47, 0xf1, 0x1a, 0x71, 0x1d, 0x29, 0xc5, 0x89, 0x6f, 0xb7, 0x62, 0x0e, 0xaa, 0x18, 0xbe, 0x1b,
+    0xfc, 0x56, 0x3e, 0x4b, 0xc6, 0xd2, 0x79, 0x20, 0x9a, 0xdb, 0xc0, 0xfe, 0x78, 0xcd, 0x5a, 0xf4,
+    0x1f, 0xdd, 0xa8, 0x33, 0x88, 0x07, 0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xec, 0x5f,
+    0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef,
+    0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
+    0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d,
+];
+
+// An expanded AES key: the round keys, 16 bytes each, and the rounds.
+struct Aes {
+    rk: Vec[u8],
+    rounds: i64,
+}
+
+fn aes_new(key: ref Vec[u8]) -> Result[Aes, String] {
+    let nk = key.len() / 4;
+    if key.len() != 16 and key.len() != 24 and key.len() != 32 {
+        return Err(f"ValueError: Invalid key size ({key.len() * 8}) for AES.");
+    }
+    let rounds = nk + 6;
+    let mut rk = key.clone();
+    let mut rcon: u8 = 1;
+    let mut i = nk;
+    while i < 4 * (rounds + 1) {
+        let mut t: Vec[u8] = slice(rk, 4 * (i - 1), 4 * i);
+        if i % nk == 0 {
+            let t0 = t[0];
+            t[0] = SBOX[t[1] as i64] ^ rcon;
+            t[1] = SBOX[t[2] as i64];
+            t[2] = SBOX[t[3] as i64];
+            t[3] = SBOX[t0 as i64];
+            rcon = xtime(rcon);
+        } else if nk > 6 and i % nk == 4 {
+            for k in 0..4 {
+                t[k] = SBOX[t[k] as i64];
+            }
+        }
+        for k in 0..4 {
+            let b = rk[4 * (i - nk) + k] ^ t[k];
+            rk.push(b);
+        }
+        i += 1;
+    }
+    Ok(Aes { rk: rk, rounds: rounds })
+}
+
+fn xtime(x: u8) -> u8 {
+    let s = ((x as i64) << 1) & 0xFF;
+    (if x >= 0x80 { s ^ 0x1b } else { s }) as u8
+}
+
+fn gmul(a: u8, b: u8) -> u8 {
+    let mut x = a;
+    let mut y = b;
+    let mut p: u8 = 0;
+    while y != 0 {
+        if (y & 1) != 0 {
+            p = p ^ x;
+        }
+        x = xtime(x);
+        y = y >> 1;
+    }
+    p
+}
+
+fn add_round_key(s: mut ref Vec[u8], a: ref Aes, round: i64) {
+    for k in 0..16 {
+        s[k] = s[k] ^ a.rk[16 * round + k];
+    }
+}
+
+// The state is column-major: byte 4c+r is row r of column c.
+fn aes_encrypt(a: ref Aes, block: ref Vec[u8], at: i64) -> Vec[u8] {
+    let mut s = slice(block, at, at + 16);
+    add_round_key(mut s, a, 0);
+    for round in 1..a.rounds + 1 {
+        let mut t: Vec[u8] = zeros(16);
+        for c in 0..4 {
+            for r in 0..4 {
+                t[4 * c + r] = SBOX[s[4 * ((c + r) % 4) + r] as i64];
+            }
+        }
+        if round < a.rounds {
+            for c in 0..4 {
+                let a0 = t[4 * c];
+                let a1 = t[4 * c + 1];
+                let a2 = t[4 * c + 2];
+                let a3 = t[4 * c + 3];
+                t[4 * c] = xtime(a0) ^ (xtime(a1) ^ a1) ^ a2 ^ a3;
+                t[4 * c + 1] = a0 ^ xtime(a1) ^ (xtime(a2) ^ a2) ^ a3;
+                t[4 * c + 2] = a0 ^ a1 ^ xtime(a2) ^ (xtime(a3) ^ a3);
+                t[4 * c + 3] = (xtime(a0) ^ a0) ^ a1 ^ a2 ^ xtime(a3);
+            }
+        }
+        s = t;
+        add_round_key(mut s, a, round);
+    }
+    s
+}
+
+fn aes_decrypt(a: ref Aes, block: ref Vec[u8], at: i64) -> Vec[u8] {
+    let mut s = slice(block, at, at + 16);
+    add_round_key(mut s, a, a.rounds);
+    let mut round = a.rounds - 1;
+    while round >= 0 {
+        let mut t: Vec[u8] = zeros(16);
+        for c in 0..4 {
+            for r in 0..4 {
+                t[4 * ((c + r) % 4) + r] = INV_SBOX[s[4 * c + r] as i64];
+            }
+        }
+        add_round_key(mut t, a, round);
+        if round > 0 {
+            for c in 0..4 {
+                let a0 = t[4 * c];
+                let a1 = t[4 * c + 1];
+                let a2 = t[4 * c + 2];
+                let a3 = t[4 * c + 3];
+                t[4 * c] = gmul(a0, 14) ^ gmul(a1, 11) ^ gmul(a2, 13) ^ gmul(a3, 9);
+                t[4 * c + 1] = gmul(a0, 9) ^ gmul(a1, 14) ^ gmul(a2, 11) ^ gmul(a3, 13);
+                t[4 * c + 2] = gmul(a0, 13) ^ gmul(a1, 9) ^ gmul(a2, 14) ^ gmul(a3, 11);
+                t[4 * c + 3] = gmul(a0, 11) ^ gmul(a1, 13) ^ gmul(a2, 9) ^ gmul(a3, 14);
+            }
+        }
+        s = t;
+        round -= 1;
+    }
+    s
+}
+
+// ------------------------------------------------------------ block modes
+
+const NOT_BLOCKS: Str = "ValueError: The length of the provided data is not a multiple of the block length.";
+
+fn ecb_encrypt(a: ref Aes, data: ref Vec[u8]) -> Result[Vec[u8], String] {
+    if data.len() % 16 != 0 {
+        return Err(NOT_BLOCKS.to_string());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut at: i64 = 0;
+    while at < data.len() {
+        for x in aes_encrypt(a, data, at) {
+            out.push(x);
+        }
+        at += 16;
+    }
+    Ok(out)
+}
+
+fn cbc_encrypt(a: ref Aes, iv: ref Vec[u8], data: ref Vec[u8]) -> Result[Vec[u8], String] {
+    if iv.len() != 16 {
+        return Err(f"ValueError: Invalid IV size ({iv.len()}) for CBC.");
+    }
+    if data.len() % 16 != 0 {
+        return Err(NOT_BLOCKS.to_string());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut prev = iv.clone();
+    let mut at: i64 = 0;
+    while at < data.len() {
+        let mut x: Vec[u8] = Vec.new();
+        for k in 0..16 {
+            x.push(data[at + k] ^ prev[k]);
+        }
+        prev = aes_encrypt(a, x, 0);
+        for b in prev {
+            out.push(b);
+        }
+        at += 16;
+    }
+    Ok(out)
+}
+
+fn cbc_decrypt(a: ref Aes, iv: ref Vec[u8], data: ref Vec[u8]) -> Result[Vec[u8], String] {
+    if iv.len() != 16 {
+        return Err(f"ValueError: Invalid IV size ({iv.len()}) for CBC.");
+    }
+    if data.len() % 16 != 0 {
+        return Err(NOT_BLOCKS.to_string());
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut at: i64 = 0;
+    while at < data.len() {
+        let p = aes_decrypt(a, data, at);
+        for k in 0..16 {
+            let prev = if at == 0 { iv[k] } else { data[at - 16 + k] };
+            out.push(p[k] ^ prev);
+        }
+        at += 16;
+    }
+    Ok(out)
+}
+
+// Adds one to the big-endian counter in the last `width` bytes of block.
+fn increment(block: mut ref Vec[u8], width: i64) {
+    let mut k: i64 = 15;
+    while k >= 16 - width {
+        if block[k] == 0xff {
+            block[k] = 0;
+            k -= 1;
+        } else {
+            block[k] = block[k] + 1;
+            return;
+        }
+    }
+}
+
+// CTR mode from the counter block `ctr`, carrying through `width` bytes:
+// all 16 for CTR mode, the last 4 for GCM.
+fn ctr_xor(a: ref Aes, ctr: ref Vec[u8], width: i64, data: ref Vec[u8]) -> Vec[u8] {
+    let mut c = ctr.clone();
+    let mut out: Vec[u8] = Vec.new();
+    let mut at: i64 = 0;
+    while at < data.len() {
+        let ks = aes_encrypt(a, c, 0);
+        let mut k: i64 = 0;
+        while k < 16 and at + k < data.len() {
+            out.push(data[at + k] ^ ks[k]);
+            k += 1;
+        }
+        increment(mut c, width);
+        at += 16;
+    }
+    out
+}
+
+fn ctr_crypt(a: ref Aes, nonce: ref Vec[u8], data: ref Vec[u8]) -> Result[Vec[u8], String] {
+    if nonce.len() != 16 {
+        return Err(f"ValueError: Invalid nonce size ({nonce.len()}) for CTR.");
+    }
+    Ok(ctr_xor(a, nonce, 16, data))
+}
+
+// ------------------------------------------------------------ AES-GCM
+
+// GF(2^128) multiplication in GCM's bit order, on two 64-bit halves.
+fn gf_mul(xh: u64, xl: u64, yh: u64, yl: u64) -> (u64, u64) {
+    let mut zh: u64 = 0;
+    let mut zl: u64 = 0;
+    let mut vh = yh;
+    let mut vl = yl;
+    for i in 0..128 {
+        let bit = if i < 64 { (xh >> ((63 - i) as u64)) & 1u64 } else { (xl >> ((127 - i) as u64)) & 1u64 };
+        if bit == 1u64 {
+            zh = zh ^ vh;
+            zl = zl ^ vl;
+        }
+        let lsb = vl & 1u64;
+        vl = (vl >> 1u64) | ((vh & 1u64) << 63u64);
+        vh = vh >> 1u64;
+        if lsb == 1u64 {
+            vh = vh ^ 0xE100000000000000u64;
+        }
+    }
+    (zh, zl)
+}
+
+fn be64_at(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8u64) | (b[i + k] as u64);
+    }
+    v
+}
+
+struct Ghash {
+    hh: u64,
+    hl: u64,
+    yh: u64,
+    yl: u64,
+}
+
+// Absorbs data zero-padded to whole blocks.
+fn ghash_update(g: mut ref Ghash, data: ref Vec[u8]) {
+    let mut at: i64 = 0;
+    while at < data.len() {
+        let mut blk: Vec[u8] = Vec.new();
+        for k in 0..16 {
+            blk.push(if at + k < data.len() { data[at + k] } else { 0 });
+        }
+        let (zh, zl) = gf_mul(g.yh ^ be64_at(blk, 0), g.yl ^ be64_at(blk, 8), g.hh, g.hl);
+        g.yh = zh;
+        g.yl = zl;
+        at += 16;
+    }
+}
+
+fn ghash(hkey: ref Vec[u8], aad: ref Vec[u8], ct: ref Vec[u8]) -> Vec[u8] {
+    let mut g = Ghash { hh: be64_at(hkey, 0), hl: be64_at(hkey, 8), yh: 0u64, yl: 0u64 };
+    ghash_update(mut g, aad);
+    ghash_update(mut g, ct);
+    let mut lens: Vec[u8] = Vec.new();
+    push_be64(mut lens, (aad.len() * 8) as u64);
+    push_be64(mut lens, (ct.len() * 8) as u64);
+    ghash_update(mut g, lens);
+    let mut out: Vec[u8] = Vec.new();
+    push_be64(mut out, g.yh);
+    push_be64(mut out, g.yl);
+    out
+}
+
+fn gcm_key(key: ref Vec[u8]) -> Result[Aes, String] {
+    if key.len() != 16 and key.len() != 24 and key.len() != 32 {
+        return Err("ValueError: AESGCM key must be 128, 192, or 256 bits.".to_string());
+    }
+    aes_new(key)
+}
+
+// The pre-counter block J0 and the tag of (aad, ct).
+fn gcm_tag(a: ref Aes, nonce: ref Vec[u8], aad: ref Vec[u8], ct: ref Vec[u8]) -> (Vec[u8], Vec[u8]) {
+    let hkey = aes_encrypt(a, zeros(16), 0);
+    let j0 = if nonce.len() == 12 {
+        let mut j = nonce.clone();
+        for x in [0u8, 0u8, 0u8, 1u8] {
+            j.push(x);
+        }
+        j
+    } else {
+        ghash(hkey, Vec.new(), nonce)
+    };
+    let s = ghash(hkey, aad, ct);
+    let ek = aes_encrypt(a, j0, 0);
+    let mut tag: Vec[u8] = Vec.new();
+    for k in 0..16 {
+        tag.push(s[k] ^ ek[k]);
+    }
+    (j0, tag)
+}
+
+fn gcm_nonce(nonce: ref Vec[u8]) -> Result[(), String] {
+    if nonce.len() < 8 or nonce.len() > 128 {
+        return Err("ValueError: Nonce must be between 8 and 128 bytes".to_string());
+    }
+    Ok(())
+}
+
+fn gcm_seal(key: ref Vec[u8], nonce: ref Vec[u8], aad: ref Vec[u8], pt: ref Vec[u8]) -> Result[Vec[u8], String] {
+    let a = gcm_key(key)?;
+    gcm_nonce(nonce)?;
+    let (j0, _) = gcm_tag(a, nonce, Vec.new(), Vec.new());
+    let mut ctr = j0.clone();
+    increment(mut ctr, 4);
+    let ct = ctr_xor(a, ctr, 4, pt);
+    let (_, tag) = gcm_tag(a, nonce, aad, ct);
+    Ok(concat(ct, tag))
+}
+
+fn gcm_open(key: ref Vec[u8], nonce: ref Vec[u8], aad: ref Vec[u8], data: ref Vec[u8]) -> Result[Vec[u8], String] {
+    let a = gcm_key(key)?;
+    gcm_nonce(nonce)?;
+    if data.len() < 16 {
+        return Err("InvalidTag".to_string());
+    }
+    let ct = slice(data, 0, data.len() - 16);
+    let (j0, tag) = gcm_tag(a, nonce, aad, ct);
+    if not same_bytes(tag, slice(data, data.len() - 16, data.len())) {
+        return Err("InvalidTag".to_string());
+    }
+    let mut ctr = j0.clone();
+    increment(mut ctr, 4);
+    Ok(ctr_xor(a, ctr, 4, ct))
+}
+
+// ------------------------------------------------------------ ChaCha20-Poly1305
+
+fn quarter(s: mut ref Vec[u32], a: i64, b: i64, c: i64, d: i64) {
+    s[a] = s[a].wrapping_add(s[b]);
+    s[d] = (s[d] ^ s[a]).rotate_left(16);
+    s[c] = s[c].wrapping_add(s[d]);
+    s[b] = (s[b] ^ s[c]).rotate_left(12);
+    s[a] = s[a].wrapping_add(s[b]);
+    s[d] = (s[d] ^ s[a]).rotate_left(8);
+    s[c] = s[c].wrapping_add(s[d]);
+    s[b] = (s[b] ^ s[c]).rotate_left(7);
+}
+
+fn chacha_block(key: ref Vec[u8], counter: u32, nonce: ref Vec[u8]) -> Vec[u8] {
+    let mut init: Vec[u32] = Vec.new();
+    for x in [0x61707865u32, 0x3320646eu32, 0x79622d32u32, 0x6b206574u32] {
+        init.push(x);
+    }
+    for k in 0..8 {
+        init.push(le32(key, 4 * k));
+    }
+    init.push(counter);
+    for k in 0..3 {
+        init.push(le32(nonce, 4 * k));
+    }
+    let mut s = init.clone();
+    for _ in 0..10 {
+        quarter(mut s, 0, 4, 8, 12);
+        quarter(mut s, 1, 5, 9, 13);
+        quarter(mut s, 2, 6, 10, 14);
+        quarter(mut s, 3, 7, 11, 15);
+        quarter(mut s, 0, 5, 10, 15);
+        quarter(mut s, 1, 6, 11, 12);
+        quarter(mut s, 2, 7, 8, 13);
+        quarter(mut s, 3, 4, 9, 14);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for k in 0..16 {
+        push_le32(mut out, s[k].wrapping_add(init[k]));
+    }
+    out
+}
+
+fn chacha_xor(key: ref Vec[u8], counter: u32, nonce: ref Vec[u8], data: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut n = counter;
+    let mut at: i64 = 0;
+    while at < data.len() {
+        let ks = chacha_block(key, n, nonce);
+        let mut k: i64 = 0;
+        while k < 64 and at + k < data.len() {
+            out.push(data[at + k] ^ ks[k]);
+            k += 1;
+        }
+        n = n.wrapping_add(1u32);
+        at += 64;
+    }
+    out
+}
+
+fn le32i(b: ref Vec[u8], i: i64) -> i64 {
+    le32(b, i) as i64
+}
+
+// Poly1305 in five 26-bit limbs, as poly1305-donna does it.
+fn poly1305(key: ref Vec[u8], msg: ref Vec[u8]) -> Vec[u8] {
+    let mask: i64 = 0x3ffffff;
+    let r0 = le32i(key, 0) & 0x3ffffff;
+    let r1 = (le32i(key, 3) >> 2) & 0x3ffff03;
+    let r2 = (le32i(key, 6) >> 4) & 0x3ffc0ff;
+    let r3 = (le32i(key, 9) >> 6) & 0x3f03fff;
+    let r4 = (le32i(key, 12) >> 8) & 0x00fffff;
+    let s1 = r1 * 5;
+    let s2 = r2 * 5;
+    let s3 = r3 * 5;
+    let s4 = r4 * 5;
+    let mut h0: i64 = 0;
+    let mut h1: i64 = 0;
+    let mut h2: i64 = 0;
+    let mut h3: i64 = 0;
+    let mut h4: i64 = 0;
+    let mut at: i64 = 0;
+    while at < msg.len() {
+        let mut m: Vec[u8] = Vec.new();
+        let mut k: i64 = 0;
+        while k < 16 and at + k < msg.len() {
+            m.push(msg[at + k]);
+            k += 1;
+        }
+        let hibit: i64 = if m.len() == 16 { 1 << 24 } else { 0 };
+        if m.len() < 16 {
+            m.push(1);
+            while m.len() < 16 {
+                m.push(0);
+            }
+        }
+        h0 += le32i(m, 0) & mask;
+        h1 += (le32i(m, 3) >> 2) & mask;
+        h2 += (le32i(m, 6) >> 4) & mask;
+        h3 += (le32i(m, 9) >> 6) & mask;
+        h4 += (le32i(m, 12) >> 8) | hibit;
+        let d0 = h0 * r0 + h1 * s4 + h2 * s3 + h3 * s2 + h4 * s1;
+        let mut d1 = h0 * r1 + h1 * r0 + h2 * s4 + h3 * s3 + h4 * s2;
+        let mut d2 = h0 * r2 + h1 * r1 + h2 * r0 + h3 * s4 + h4 * s3;
+        let mut d3 = h0 * r3 + h1 * r2 + h2 * r1 + h3 * r0 + h4 * s4;
+        let mut d4 = h0 * r4 + h1 * r3 + h2 * r2 + h3 * r1 + h4 * r0;
+        let mut c = d0 >> 26;
+        h0 = d0 & mask;
+        d1 += c;
+        c = d1 >> 26;
+        h1 = d1 & mask;
+        d2 += c;
+        c = d2 >> 26;
+        h2 = d2 & mask;
+        d3 += c;
+        c = d3 >> 26;
+        h3 = d3 & mask;
+        d4 += c;
+        c = d4 >> 26;
+        h4 = d4 & mask;
+        h0 += c * 5;
+        c = h0 >> 26;
+        h0 = h0 & mask;
+        h1 += c;
+        at += 16;
+    }
+    let mut c = h1 >> 26;
+    h1 = h1 & mask;
+    h2 += c;
+    c = h2 >> 26;
+    h2 = h2 & mask;
+    h3 += c;
+    c = h3 >> 26;
+    h3 = h3 & mask;
+    h4 += c;
+    c = h4 >> 26;
+    h4 = h4 & mask;
+    h0 += c * 5;
+    c = h0 >> 26;
+    h0 = h0 & mask;
+    h1 += c;
+    // h - p, kept when it does not go negative.
+    let mut g0 = h0 + 5;
+    c = g0 >> 26;
+    g0 = g0 & mask;
+    let mut g1 = h1 + c;
+    c = g1 >> 26;
+    g1 = g1 & mask;
+    let mut g2 = h2 + c;
+    c = g2 >> 26;
+    g2 = g2 & mask;
+    let mut g3 = h3 + c;
+    c = g3 >> 26;
+    g3 = g3 & mask;
+    let g4 = h4 + c - (1 << 26);
+    if g4 >= 0 {
+        h0 = g0;
+        h1 = g1;
+        h2 = g2;
+        h3 = g3;
+        h4 = g4;
+    }
+    let m32: i64 = 0xffffffff;
+    let w0 = (h0 | (h1 << 26)) & m32;
+    let w1 = ((h1 >> 6) | (h2 << 20)) & m32;
+    let w2 = ((h2 >> 12) | (h3 << 14)) & m32;
+    let w3 = ((h3 >> 18) | (h4 << 8)) & m32;
+    let mut out: Vec[u8] = Vec.new();
+    let mut f = w0 + le32i(key, 16);
+    push_le32(mut out, (f & m32) as u32);
+    f = w1 + le32i(key, 20) + (f >> 32);
+    push_le32(mut out, (f & m32) as u32);
+    f = w2 + le32i(key, 24) + (f >> 32);
+    push_le32(mut out, (f & m32) as u32);
+    f = w3 + le32i(key, 28) + (f >> 32);
+    push_le32(mut out, (f & m32) as u32);
+    out
+}
+
+fn pad16(v: mut ref Vec[u8]) {
+    while v.len() % 16 != 0 {
+        v.push(0);
+    }
+}
+
+fn chacha_tag(key: ref Vec[u8], nonce: ref Vec[u8], aad: ref Vec[u8], ct: ref Vec[u8]) -> Vec[u8] {
+    let otk = slice(chacha_block(key, 0u32, nonce), 0, 32);
+    let mut m = aad.clone();
+    pad16(mut m);
+    for x in ct {
+        m.push(x);
+    }
+    pad16(mut m);
+    push_le64(mut m, aad.len() as u64);
+    push_le64(mut m, ct.len() as u64);
+    poly1305(otk, m)
+}
+
+fn chacha_check(key: ref Vec[u8], nonce: ref Vec[u8]) -> Result[(), String] {
+    if key.len() != 32 {
+        return Err("ValueError: ChaCha20Poly1305 key must be 32 bytes.".to_string());
+    }
+    if nonce.len() != 12 {
+        return Err("ValueError: Nonce must be 12 bytes".to_string());
+    }
+    Ok(())
+}
+
+fn chacha_seal(key: ref Vec[u8], nonce: ref Vec[u8], aad: ref Vec[u8], pt: ref Vec[u8]) -> Result[Vec[u8], String] {
+    chacha_check(key, nonce)?;
+    let ct = chacha_xor(key, 1u32, nonce, pt);
+    let tag = chacha_tag(key, nonce, aad, ct);
+    Ok(concat(ct, tag))
+}
+
+fn chacha_open(key: ref Vec[u8], nonce: ref Vec[u8], aad: ref Vec[u8], data: ref Vec[u8]) -> Result[Vec[u8], String] {
+    chacha_check(key, nonce)?;
+    if data.len() < 16 {
+        return Err("InvalidTag".to_string());
+    }
+    let ct = slice(data, 0, data.len() - 16);
+    if not same_bytes(chacha_tag(key, nonce, aad, ct), slice(data, data.len() - 16, data.len())) {
+        return Err("InvalidTag".to_string());
+    }
+    Ok(chacha_xor(key, 1u32, nonce, ct))
+}
+
+// ------------------------------------------------------------ base64
+
+const URLSAFE: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+fn b64_encode_urlsafe(b: ref Vec[u8]) -> String {
+    let alpha = to_bytes(URLSAFE);
+    let mut out = String.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let n = b.len() - i;
+        let x0 = b[i] as i64;
+        let x1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let x2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let v = (x0 << 16) | (x1 << 8) | x2;
+        out.push(alpha[(v >> 18) & 63] as char);
+        out.push(alpha[(v >> 12) & 63] as char);
+        out.push(if n > 1 { alpha[(v >> 6) & 63] as char } else { '=' });
+        out.push(if n > 2 { alpha[v & 63] as char } else { '=' });
+        i += 3;
+    }
+    out
+}
+
+// A base64 digit of either alphabet, as urlsafe_b64decode reads them.
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' or c == b'-' {
+        62
+    } else if c == b'/' or c == b'_' {
+        63
+    } else {
+        -1
+    }
+}
+
+// Python's base64.urlsafe_b64decode, which is binascii's lenient decoder:
+// characters outside the alphabet are skipped, and enough `=` after at
+// least two digits of a group ends the input.
+fn b64_decode_loose(s: ref String) -> Option[Vec[u8]] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad: i64 = 0;
+    let mut left: i64 = 0;
+    let mut pads: i64 = 0;
+    for c in s.bytes() {
+        if c == b'=' {
+            if quad >= 2 {
+                pads += 1;
+                if quad + pads >= 4 {
+                    return Some(out);
+                }
+            }
+            continue;
+        }
+        let v = b64_value(c);
+        if v < 0 {
+            continue;
+        }
+        pads = 0;
+        if quad == 0 {
+            left = v;
+            quad = 1;
+        } else if quad == 1 {
+            out.push(((left << 2) | (v >> 4)) as u8);
+            left = v & 0x0f;
+            quad = 2;
+        } else if quad == 2 {
+            out.push(((left << 4) | (v >> 2)) as u8);
+            left = v & 3;
+            quad = 3;
+        } else {
+            out.push(((left << 6) | v) as u8);
+            quad = 0;
+        }
+    }
+    if quad != 0 {
+        return None;
+    }
+    Some(out)
+}
+
+// ------------------------------------------------------------ Fernet
+
+// A Fernet key: a signing key and an encryption key of 16 bytes each.
+struct Fernet {
+    sign: Hmac,
+    enc: Aes,
+}
+
+fn fernet_new(key: ref String) -> Result[Fernet, String] {
+    let bad = "ValueError: Fernet key must be 32 url-safe base64-encoded bytes.".to_string();
+    let k = match b64_decode_loose(key) {
+        Some(k) => k,
+        None => return Err(bad),
+    };
+    if k.len() != 32 {
+        return Err(bad);
+    }
+    let enc = aes_new(slice(k, 16, 32))?;
+    Ok(Fernet { sign: hmac_key(slice(k, 0, 16)), enc: enc })
+}
+
+fn fernet_seal(f: ref Fernet, now: i64, iv: ref Vec[u8], pt: ref Vec[u8]) -> Result[String, String] {
+    let mut padded = pt.clone();
+    let n = 16 - pt.len() % 16;
+    for _ in 0..n {
+        padded.push(n as u8);
+    }
+    let ct = cbc_encrypt(f.enc, iv, padded)?;
+    let mut data: Vec[u8] = Vec.new();
+    data.push(0x80);
+    push_be64(mut data, now as u64);
+    for x in iv {
+        data.push(x);
+    }
+    for x in ct {
+        data.push(x);
+    }
+    let mac = hmac_with(f.sign, data);
+    Ok(b64_encode_urlsafe(concat(data, mac)))
+}
+
+fn fernet_open(f: ref Fernet, token: ref String, ttl: i128, now: i128) -> Result[Vec[u8], String] {
+    let bad: Result[Vec[u8], String] = Err("InvalidToken".to_string());
+    let data = match b64_decode_loose(token) {
+        Some(d) => d,
+        None => return bad,
+    };
+    if data.is_empty() or data[0] != 0x80 or data.len() < 9 {
+        return bad;
+    }
+    let mut ts: i128 = 0;
+    for k in 1..9 {
+        ts = ts * 256 + (data[k] as i128);
+    }
+    if ts + ttl < now or now + 60 < ts {
+        return bad;
+    }
+    let split = if data.len() >= 32 { data.len() - 32 } else { 0 };
+    let mac = hmac_with(f.sign, slice(data, 0, split));
+    if not same_bytes(mac, slice(data, split, data.len())) {
+        return bad;
+    }
+    let iv = slice(data, 9, 25);
+    let ct = slice(data, 25, split);
+    let padded = cbc_decrypt(f.enc, iv, ct)?;
+    if padded.is_empty() {
+        return bad;
+    }
+    let n = padded[padded.len() - 1] as i64;
+    if n == 0 or n > 16 {
+        return bad;
+    }
+    for k in padded.len() - n..padded.len() {
+        if padded[k] as i64 != n {
+            return bad;
+        }
+    }
+    Ok(slice(padded, 0, padded.len() - n))
+}
+
+fn cbc_or_token(r: own Result[Vec[u8], String]) -> Result[Vec[u8], String] {
+    match r {
+        Ok(v) => Ok(v),
+        Err(e) => if e == NOT_BLOCKS { Err("InvalidToken".to_string()) } else { Err(e) },
+    }
+}
+
+// ------------------------------------------------------------ the vault
+
+// A vault file: the KDF's parameters, a check value sealed under the key
+// (so that a wrong passphrase is told apart from a damaged entry), and the
+// entries in name order, each sealed with its name as associated data.
+struct Secret {
+    name: String,
+    nonce: Vec[u8],
+    ct: Vec[u8],
+}
+
+struct Vault {
+    path: String,
+    iters: i64,
+    salt: Vec[u8],
+    check_nonce: Vec[u8],
+    check_ct: Vec[u8],
+    entries: Vec[Secret],
+}
+
+fn not_found(path: ref String) -> String {
+    f"FileNotFoundError: [Errno 2] No such file or directory: '{path}'"
+}
+
+fn vault_err(msg: String) -> String {
+    f"VaultError: {msg}"
+}
+
+fn to_int(s: ref String) -> i64 {
+    i64.parse(s.clone()).unwrap_or(0)
+}
+
+fn vault_load(name: ref String) -> Result[Vault, String] {
+    let path = f"data/{name}";
+    let text = match fs.read_to_string(path.clone()) {
+        Ok(t) => t,
+        Err(_) => return Err(not_found(path)),
+    };
+    let lines: Vec[String] = text.split("\n").map(|p| p.to_string()).collect();
+    if lines.len() < 4 or lines[0] != "kvault 1" {
+        return Err(vault_err("not a vault file".to_string()));
+    }
+    let kdf: Vec[String] = lines[1].split(" ").map(|p| p.to_string()).collect();
+    let check: Vec[String] = lines[2].split(" ").map(|p| p.to_string()).collect();
+    let mut entries: Vec[Secret] = Vec.new();
+    for i in 3..lines.len() - 1 {
+        let p: Vec[String] = lines[i].split(" ").map(|p| p.to_string()).collect();
+        entries.push(Secret { name: p[1].clone(), nonce: unhex(p[2]), ct: unhex(p[3]) });
+    }
+    Ok(Vault {
+        path: path,
+        iters: to_int(kdf[2]),
+        salt: unhex(kdf[3]),
+        check_nonce: unhex(check[1]),
+        check_ct: unhex(check[2]),
+        entries: entries,
+    })
+}
+
+fn vault_save(v: ref Vault) -> Result[(), String] {
+    let mut out = String.new();
+    out.push_str("kvault 1\n");
+    out.push_str(f"kdf pbkdf2-sha256 {v.iters} {hex_of(v.salt)}\n");
+    out.push_str(f"check {hex_of(v.check_nonce)} {hex_of(v.check_ct)}\n");
+    for e in v.entries {
+        out.push_str(f"entry {e.name} {hex_of(e.nonce)} {hex_of(e.ct)}\n");
+    }
+    match fs.write(v.path.clone(), out) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(f"OSError: {e}"),
+    }
+}
+
+fn vault_kdf(pw: ref Vec[u8], salt: ref Vec[u8], iters: i64) -> Vec[u8] {
+    pbkdf2(pw, salt, iters, 32)
+}
+
+const CHECK_TEXT: Str = "kvault-check";
+
+fn vault_unlock(v: ref Vault, pw: ref Vec[u8]) -> Result[Vec[u8], String] {
+    let key = vault_kdf(pw, v.salt, v.iters);
+    match gcm_open(key, v.check_nonce, to_bytes("check"), v.check_ct) {
+        Ok(_) => Ok(key),
+        Err(_) => Err(vault_err("wrong passphrase".to_string())),
+    }
+}
+
+fn find_entry(v: ref Vault, name: ref String) -> i64 {
+    for i in 0..v.entries.len() {
+        if v.entries[i].name == name {
+            return i;
+        }
+    }
+    -1
+}
+
+fn open_entry(key: ref Vec[u8], e: ref Secret) -> Result[Vec[u8], String] {
+    match gcm_open(key, e.nonce, to_bytes(e.name), e.ct) {
+        Ok(p) => Ok(p),
+        Err(_) => Err(vault_err(f"entry {e.name} is corrupt")),
+    }
+}
+
+// The nonces a rekey uses: the first 12 bytes of HMAC(seed, i).
+fn entry_nonce(seed: ref Vec[u8], i: i64) -> Vec[u8] {
+    slice(hmac(seed, to_bytes(f"{i}")), 0, 12)
+}
+
+fn vault_job(f: ref Vec[String]) -> Result[String, String] {
+    let kind = f[0].clone();
+    if kind == "vault-init" {
+        let pw = arg(f[2])?;
+        let salt = arg(f[3])?;
+        let iters = to_int(f[4]);
+        let nonce = arg(f[5])?;
+        let key = vault_kdf(pw, salt, iters);
+        let ct = gcm_seal(key, nonce, to_bytes("check"), to_bytes(CHECK_TEXT))?;
+        let v = Vault { path: f"data/{f[1]}", iters: iters, salt: salt, check_nonce: nonce, check_ct: ct, entries: Vec.new() };
+        vault_save(v)?;
+        return Ok(f"  created {f[1]}, {iters} iterations");
+    }
+    let mut v = vault_load(f[1])?;
+    if kind == "vault-list" {
+        if v.entries.is_empty() {
+            return Ok("  (no entries)".to_string());
+        }
+        let names: Vec[String] = v.entries.iter().map(|e| f"  {e.name}").collect();
+        return Ok(names.join("\n"));
+    }
+    if kind == "vault-cat" {
+        let text = match fs.read_to_string(v.path.clone()) {
+            Ok(t) => t,
+            Err(_) => return Err(not_found(v.path)),
+        };
+        let lines: Vec[String] = text.lines().map(|l| f"  {l}").collect();
+        return Ok(lines.join("\n"));
+    }
+    if kind == "vault-flip" {
+        let i = find_entry(v, f[2]);
+        if i < 0 {
+            return Err(vault_err(f"no entry {f[2]}"));
+        }
+        let at = to_int(f[3]);
+        v.entries[i].ct[at] = v.entries[i].ct[at] ^ 1;
+        vault_save(v)?;
+        return Ok(f"  flipped a bit of {f[2]}");
+    }
+    let key = vault_unlock(v, arg(f[2])?)?;
+    if kind == "vault-put" {
+        let name = f[3].clone();
+        let value = arg(f[4])?;
+        let nonce = arg(f[5])?;
+        let ct = gcm_seal(key, nonce, to_bytes(name), value)?;
+        let i = find_entry(v, name);
+        if i >= 0 {
+            v.entries[i].nonce = nonce;
+            v.entries[i].ct = ct;
+            vault_save(v)?;
+            return Ok(f"  replaced {name} ({value.len()} bytes)");
+        }
+        let mut at: i64 = 0;
+        while at < v.entries.len() and v.entries[at].name < name {
+            at += 1;
+        }
+        v.entries.insert(at, Secret { name: name.clone(), nonce: nonce, ct: ct });
+        vault_save(v)?;
+        return Ok(f"  added {name} ({value.len()} bytes)");
+    }
+    if kind == "vault-get" {
+        let i = find_entry(v, f[3]);
+        if i < 0 {
+            return Err(vault_err(f"no entry {f[3]}"));
+        }
+        return Ok(shown(open_entry(key, v.entries[i])?));
+    }
+    if kind == "vault-del" {
+        let i = find_entry(v, f[3]);
+        if i < 0 {
+            return Err(vault_err(f"no entry {f[3]}"));
+        }
+        let _ = v.entries.remove(i);
+        vault_save(v)?;
+        return Ok(f"  deleted {f[3]}");
+    }
+    if kind == "vault-rekey" {
+        let new_pw = arg(f[3])?;
+        let salt = arg(f[4])?;
+        let iters = to_int(f[5]);
+        let seed = arg(f[6])?;
+        let mut plain: Vec[Vec[u8]] = Vec.new();
+        for e in v.entries {
+            plain.push(open_entry(key, e)?);
+        }
+        let nkey = vault_kdf(new_pw, salt, iters);
+        let n0 = entry_nonce(seed, 0);
+        v.check_ct = gcm_seal(nkey, n0, to_bytes("check"), to_bytes(CHECK_TEXT))?;
+        v.check_nonce = n0;
+        v.salt = salt;
+        v.iters = iters;
+        for i in 0..v.entries.len() {
+            let n = entry_nonce(seed, i + 1);
+            v.entries[i].ct = gcm_seal(nkey, n, to_bytes(v.entries[i].name), plain[i])?;
+            v.entries[i].nonce = n;
+        }
+        vault_save(v)?;
+        return Ok(f"  rekeyed {plain.len()} entries, {iters} iterations");
+    }
+    Err(f"ValueError: {kind}")
+}
+
+// ------------------------------------------------------------ jobs
+
+// A job's byte argument: x:<hex>, t:<text> with \n and \t escaped,
+// f:<file in data/>, or - for nothing.
+fn arg(s: ref String) -> Result[Vec[u8], String] {
+    if s == "-" {
+        return Ok(Vec.new());
+    }
+    let b = s.bytes();
+    let rest = slice(b.to_vec(), 2, b.len());
+    if s.starts_with("x:") {
+        return Ok(unhex(String.from_utf8(rest).unwrap_or("".to_string())));
+    }
+    if s.starts_with("t:") {
+        let mut out: Vec[u8] = Vec.new();
+        let mut i: i64 = 0;
+        while i < rest.len() {
+            if rest[i] == b'\\' and i + 1 < rest.len() and rest[i + 1] == b'n' {
+                out.push(b'\n');
+                i += 2;
+            } else {
+                out.push(rest[i]);
+                i += 1;
+            }
+        }
+        let mut out2: Vec[u8] = Vec.new();
+        i = 0;
+        while i < out.len() {
+            if out[i] == b'\\' and i + 1 < out.len() and out[i + 1] == b't' {
+                out2.push(b'\t');
+                i += 2;
+            } else {
+                out2.push(out[i]);
+                i += 1;
+            }
+        }
+        return Ok(out2);
+    }
+    if s.starts_with("f:") {
+        let path = f"data/{String.from_utf8(rest).unwrap_or("".to_string())}";
+        return match fs.read_bytes(path.clone()) {
+            Ok(b) => Ok(b),
+            Err(_) => Err(not_found(path)),
+        };
+    }
+    Err(f"ValueError: bad argument {s}")
+}
+
+fn hexlines(b: ref Vec[u8]) -> String {
+    if b.is_empty() {
+        return "  (0 bytes)".to_string();
+    }
+    let mut lines: Vec[String] = Vec.new();
+    let mut at: i64 = 0;
+    while at < b.len() {
+        let end = if at + 32 < b.len() { at + 32 } else { b.len() };
+        lines.push(f"  {hex_of(slice(b, at, end))}");
+        at += 32;
+    }
+    lines.join("\n")
+}
+
+// Printable UTF-8 as its lines, anything else as hex.
+fn shown(b: ref Vec[u8]) -> String {
+    for x in b {
+        if x < 0x20 and x != b'\n' {
+            return hexlines(b);
+        }
+    }
+    match String.from_utf8(b.clone()) {
+        Ok(s) => {
+            let lines: Vec[String] = s.split("\n").map(|l| f"  | {l}").collect();
+            lines.join("\n")
+        }
+        Err(_) => hexlines(b),
+    }
+}
+
+fn run(f: ref Vec[String]) -> Result[String, String] {
+    let kind = f[0].clone();
+    if kind.starts_with("vault-") {
+        return vault_job(f);
+    }
+    if kind == "pbkdf2" {
+        return Ok(hexlines(pbkdf2(arg(f[1])?, arg(f[2])?, to_int(f[3]), to_int(f[4]))));
+    }
+    if kind == "hkdf" {
+        return Ok(hexlines(hkdf(arg(f[1])?, arg(f[2])?, arg(f[3])?, to_int(f[4]))));
+    }
+    if kind == "fernet-seal" {
+        let fk = fernet_new(f[1])?;
+        return Ok(f"  {fernet_seal(fk, to_int(f[2]), arg(f[3])?, arg(f[4])?)?}");
+    }
+    if kind == "fernet-open" {
+        let fk = fernet_new(f[1])?;
+        let p = cbc_or_token(fernet_open(fk, f[2], to_int(f[3]) as i128, to_int(f[4]) as i128))?;
+        return Ok(shown(p));
+    }
+    if kind == "fernet-multi" {
+        let mut keys: Vec[Fernet] = Vec.new();
+        for k in f[1].split(",") {
+            keys.push(fernet_new(k.to_string())?);
+        }
+        for fk in keys {
+            if let Ok(p) = cbc_or_token(fernet_open(fk, f[2], to_int(f[3]) as i128, to_int(f[4]) as i128)) {
+                return Ok(shown(p));
+            }
+        }
+        return Err("InvalidToken".to_string());
+    }
+    let mut a: Vec[Vec[u8]] = Vec.new();
+    for i in 1..f.len() {
+        a.push(arg(f[i])?);
+    }
+    if kind == "sha256" {
+        return Ok(f"  {hex_of(sha256(a[0]))}");
+    }
+    if kind == "hmac" {
+        return Ok(f"  {hex_of(hmac(a[0], a[1]))}");
+    }
+    if kind == "aes-ecb" {
+        let k = aes_new(a[0])?;
+        return Ok(hexlines(ecb_encrypt(k, a[1])?));
+    }
+    if kind == "aes-cbc" {
+        let k = aes_new(a[0])?;
+        return Ok(hexlines(cbc_encrypt(k, a[1], a[2])?));
+    }
+    if kind == "aes-ctr" {
+        let k = aes_new(a[0])?;
+        return Ok(hexlines(ctr_crypt(k, a[1], a[2])?));
+    }
+    if kind == "gcm-seal" {
+        return Ok(hexlines(gcm_seal(a[0], a[1], a[2], a[3])?));
+    }
+    if kind == "gcm-open" {
+        return Ok(shown(gcm_open(a[0], a[1], a[2], a[3])?));
+    }
+    if kind == "chacha-seal" {
+        return Ok(hexlines(chacha_seal(a[0], a[1], a[2], a[3])?));
+    }
+    if kind == "chacha-open" {
+        return Ok(shown(chacha_open(a[0], a[1], a[2], a[3])?));
+    }
+    Err(f"ValueError: {kind}")
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    for job in jobs.lines() {
+        let f: Vec[String] = job.split("\t").map(|p| p.to_string()).collect();
+        println(f"== {f.join(" ")}");
+        match run(f) {
+            Ok(out) => println(out),
+            Err(e) => println(f"  {e}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ data
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# production settings for the billing service\n");
+    t.push_str("DATABASE_URL=postgres://billing:s3cr3t@db.internal:5432/billing\n");
+    t.push_str("STRIPE_KEY=demo-stripe-key-0000-not-real\n");
+    t.push_str("SESSION_SECRET=9f1c2a7e4b3d8f60a5e2c1b7d9f3a4e6\n");
+    t.push_str("SMTP_PASSWORD=correct horse battery staple\n");
+    t.push_str("FEATURE_FLAGS=new-checkout,dark-mode\n");
+    v.push(DataFile { path: "app.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("sha256\t-\n");
+    t.push_str("sha256\tx:616263\n");
+    t.push_str("sha256\tx:6162636462636465636465666465666765666768666768696768696a68696a6b696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071\n");
+    t.push_str("sha256\tx:61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161\n");
+    t.push_str("sha256\tx:6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161\n");
+    t.push_str("sha256\tx:616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161\n");
+    t.push_str("sha256\tx:61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161\n");
+    t.push_str("sha256\tx:6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161\n");
+    t.push_str("sha256\tx:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff\n");
+    t.push_str("sha256\tf:app.env\n");
+    t.push_str("sha256\tt:The quick brown fox jumps over the lazy dog\n");
+    t.push_str("hmac\tx:0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b\tx:4869205468657265\n");
+    t.push_str("hmac\tx:4a656665\tx:7768617420646f2079612077616e7420666f72206e6f7468696e673f\n");
+    t.push_str("hmac\tx:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tx:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n");
+    t.push_str("hmac\tx:0102030405060708090a0b0c0d0e0f10111213141516171819\tx:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n");
+    t.push_str("hmac\tx:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tx:54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374\n");
+    t.push_str("hmac\tx:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tx:5468697320697320612074657374207573696e672061206c6172676572207468616e20626c6f636b2d73697a65206b657920616e642061206c6172676572207468616e20626c6f636b2d73697a6520646174612e20546865206b6579206e6565647320746f20626520686173686564206265666f7265206265696e6720757365642062792074686520484d414320616c676f726974686d2e\n");
+    t.push_str("hmac\tx:01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101\tx:65786163746c79206f6e6520626c6f636b206f66206b6579\n");
+    t.push_str("hmac\t-\t-\n");
+    t.push_str("pbkdf2\tx:70617373776f7264\tx:73616c74\t1\t32\n");
+    t.push_str("pbkdf2\tx:70617373776f7264\tx:73616c74\t2\t32\n");
+    t.push_str("pbkdf2\tx:70617373776f7264\tx:73616c74\t64\t32\n");
+    t.push_str("pbkdf2\tx:70617373776f726450415353574f524470617373776f7264\tx:73616c7453414c5473616c7453414c5473616c7453414c5473616c7453414c5473616c74\t25\t40\n");
+    t.push_str("pbkdf2\tx:7061737300776f7264\tx:7361006c74\t30\t16\n");
+    t.push_str("pbkdf2\tx:68756e74657232\t-\t3\t64\n");
+    t.push_str("pbkdf2\tx:78787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878\tx:706570706572\t10\t100\n");
+    t.push_str("hkdf\tx:0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b\tx:000102030405060708090a0b0c\tx:f0f1f2f3f4f5f6f7f8f9\t42\n");
+    t.push_str("hkdf\tx:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f\tx:606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf\tx:b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff\t82\n");
+    t.push_str("hkdf\tx:0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b\t-\t-\t42\n");
+    t.push_str("hkdf\tt:session secret\tt:billing\tt:cookie-signing-key\t32\n");
+    t.push_str("aes-ecb\tx:000102030405060708090a0b0c0d0e0f\tx:00112233445566778899aabbccddeeff\n");
+    t.push_str("aes-ecb\tx:000102030405060708090a0b0c0d0e0f1011121314151617\tx:00112233445566778899aabbccddeeff\n");
+    t.push_str("aes-ecb\tx:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\tx:00112233445566778899aabbccddeeff\n");
+    t.push_str("aes-ecb\tx:00000000000000000000\tx:00112233445566778899aabbccddeeff\n");
+    t.push_str("aes-ecb\tx:00000000000000000000000000000000\tx:73686f7274\n");
+    t.push_str("aes-cbc\tx:2b7e151628aed2a6abf7158809cf4f3c\tx:000102030405060708090a0b0c0d0e0f\tx:6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710\n");
+    t.push_str("aes-cbc\tx:603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\tx:000102030405060708090a0b0c0d0e0f\tx:6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710\n");
+    t.push_str("aes-cbc\tx:2b7e151628aed2a6abf7158809cf4f3c\tx:0001020304050607\tx:6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710\n");
+    t.push_str("aes-ctr\tx:2b7e151628aed2a6abf7158809cf4f3c\tx:f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff\tx:6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710\n");
+    t.push_str("aes-ctr\tx:603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4\tx:f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff\tx:6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a3\n");
+    t.push_str("aes-ctr\tx:2b7e151628aed2a6abf7158809cf4f3c\tx:ffffffffffffffffffffffffffffffff\tx:6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411\n");
+    t.push_str("gcm-seal\tx:00000000000000000000000000000000\tx:000000000000000000000000\t-\t-\n");
+    t.push_str("gcm-seal\tx:00000000000000000000000000000000\tx:000000000000000000000000\t-\tx:00000000000000000000000000000000\n");
+    t.push_str("gcm-seal\tx:feffe9928665731c6d6a8f9467308308\tx:cafebabefacedbaddecaf888\t-\tx:d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39b16aedf5aa0de657ba637b391aafd255\n");
+    t.push_str("gcm-seal\tx:feffe9928665731c6d6a8f9467308308\tx:cafebabefacedbaddecaf888\tx:feedfacedeadbeeffeedfacedeadbeefabaddad2\tx:d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39\n");
+    t.push_str("gcm-seal\tx:feffe9928665731c6d6a8f9467308308\tx:cafebabefacedbad\tx:feedfacedeadbeeffeedfacedeadbeefabaddad2\tx:d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39\n");
+    t.push_str("gcm-seal\tx:feffe9928665731c6d6a8f9467308308\tx:9313225df88406e555909c5aff5269aa6a7a9538534f7da1e4c303d2a318a728c3c0c95156809539fcf0e2429a6b525416aedbf5a0de6a57a637b39b\tx:feedfacedeadbeeffeedfacedeadbeefabaddad2\tx:d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39\n");
+    t.push_str("gcm-seal\tx:feffe9928665731c6d6a8f9467308308feffe9928665731c6d6a8f9467308308\tx:cafebabefacedbaddecaf888\tx:feedfacedeadbeeffeedfacedeadbeefabaddad2\tx:d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39\n");
+    t.push_str("gcm-seal\tx:feffe9928665731c6d6a8f94feffe9928665731c6d6a8f94\tx:cafebabefacedbaddecaf888\tt:header\tt:twenty-four byte key\n");
+    t.push_str("gcm-seal\tx:feffe9928665731c6d6a8f9467308308\tx:cafebabefacedbaddecaf888\tt:only authenticated\t-\n");
+    t.push_str("gcm-seal\tx:00000000000000000000000000000000\tx:00000000000000\t-\tt:x\n");
+    t.push_str("gcm-seal\tx:0000000000000000000000000000000000000000\tx:000000000000000000000000\t-\tt:x\n");
+    t.push_str("gcm-open\tx:6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283\tx:000102030405060708090a0b\tt:app.env\tx:bc8b483ed229b48ae97af1a6b6e9edc69d7e53f75e23b64ab5329d6336cc2389dc5aa5ba4a0a71aff0a7898e73e5020980019df031a63657c6f23fdead1a6897ad67c8e546a20e2ea48ae8c10e9a01aeb74c34874ae087f5b60873466764c7bcd9b70d0ceda3eb0c998e5a0e52878810b7cacbed30f9c310fdc7f5219b26453fe2d8a5c1b808452f94cbcd12d8979f89e19c88a7cc2a2d1671b8aa021064f10164b58b61a48bec9556353a40de27bbfcf7bf326b36c7f186d50667d68f4ad3aac462c53519f110169024645040a59d11fc714bbe2f2d559ef144e0cb76e74cbe6bb3efe2ad6f7f6e8ff4c265a2600075c3703a5902778c18f81f69d59e09f85b333e66fa4b89cf670d0d306858424fb798cc6d7bbfc3b60a4ea8974c33e74c7d5286ff978f572f\n");
+    t.push_str("gcm-open\tx:6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283\tx:000102030405060708090a0b\tt:app.env2\tx:bc8b483ed229b48ae97af1a6b6e9edc69d7e53f75e23b64ab5329d6336cc2389dc5aa5ba4a0a71aff0a7898e73e5020980019df031a63657c6f23fdead1a6897ad67c8e546a20e2ea48ae8c10e9a01aeb74c34874ae087f5b60873466764c7bcd9b70d0ceda3eb0c998e5a0e52878810b7cacbed30f9c310fdc7f5219b26453fe2d8a5c1b808452f94cbcd12d8979f89e19c88a7cc2a2d1671b8aa021064f10164b58b61a48bec9556353a40de27bbfcf7bf326b36c7f186d50667d68f4ad3aac462c53519f110169024645040a59d11fc714bbe2f2d559ef144e0cb76e74cbe6bb3efe2ad6f7f6e8ff4c265a2600075c3703a5902778c18f81f69d59e09f85b333e66fa4b89cf670d0d306858424fb798cc6d7bbfc3b60a4ea8974c33e74c7d5286ff978f572f\n");
+    t.push_str("gcm-open\tx:6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283\tx:000102030405060708090a0b\tt:app.env\tx:bc8b483ed209b48ae97af1a6b6e9edc69d7e53f75e23b64ab5329d6336cc2389dc5aa5ba4a0a71aff0a7898e73e5020980019df031a63657c6f23fdead1a6897ad67c8e546a20e2ea48ae8c10e9a01aeb74c34874ae087f5b60873466764c7bcd9b70d0ceda3eb0c998e5a0e52878810b7cacbed30f9c310fdc7f5219b26453fe2d8a5c1b808452f94cbcd12d8979f89e19c88a7cc2a2d1671b8aa021064f10164b58b61a48bec9556353a40de27bbfcf7bf326b36c7f186d50667d68f4ad3aac462c53519f110169024645040a59d11fc714bbe2f2d559ef144e0cb76e74cbe6bb3efe2ad6f7f6e8ff4c265a2600075c3703a5902778c18f81f69d59e09f85b333e66fa4b89cf670d0d306858424fb798cc6d7bbfc3b60a4ea8974c33e74c7d5286ff978f572f\n");
+    t.push_str("gcm-open\tx:6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283\tx:000102030405060708090a0b\tt:app.env\tx:bc8b483ed229b48ae97af1a6b6e9edc69d7e53f75e23b64ab5329d6336cc2389dc5aa5ba4a0a71aff0a7898e73e5020980019df031a63657c6f23fdead1a6897ad67c8e546a20e2ea48ae8c10e9a01aeb74c34874ae087f5b60873466764c7bcd9b70d0ceda3eb0c998e5a0e52878810b7cacbed30f9c310fdc7f5219b26453fe2d8a5c1b808452f94cbcd12d8979f89e19c88a7cc2a2d1671b8aa021064f10164b58b61a48bec9556353a40de27bbfcf7bf326b36c7f186d50667d68f4ad3aac462c53519f110169024645040a59d11fc714bbe2f2d559ef144e0cb76e74cbe6bb3efe2ad6f7f6e8ff4c265a2600075c3703a5902778c18f81f69d59e09f85b333e66fa4b89cf670d0d306858424fb798cc6d7bbfc3b60a4ea8974c33e74c7d5286ff978f572e\n");
+    t.push_str("gcm-open\tx:6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283\tx:000102030405060708090a0b\tt:app.env\tx:bc8b483ed229b48ae97a\n");
+    t.push_str("gcm-open\tx:6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283\tx:0102030405060708090a0b0c\tt:app.env\tx:bc8b483ed229b48ae97af1a6b6e9edc69d7e53f75e23b64ab5329d6336cc2389dc5aa5ba4a0a71aff0a7898e73e5020980019df031a63657c6f23fdead1a6897ad67c8e546a20e2ea48ae8c10e9a01aeb74c34874ae087f5b60873466764c7bcd9b70d0ceda3eb0c998e5a0e52878810b7cacbed30f9c310fdc7f5219b26453fe2d8a5c1b808452f94cbcd12d8979f89e19c88a7cc2a2d1671b8aa021064f10164b58b61a48bec9556353a40de27bbfcf7bf326b36c7f186d50667d68f4ad3aac462c53519f110169024645040a59d11fc714bbe2f2d559ef144e0cb76e74cbe6bb3efe2ad6f7f6e8ff4c265a2600075c3703a5902778c18f81f69d59e09f85b333e66fa4b89cf670d0d306858424fb798cc6d7bbfc3b60a4ea8974c33e74c7d5286ff978f572f\n");
+    t.push_str("gcm-open\tx:6465666768696a6b6c6d6e6f70717273\tx:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b\t-\tx:59d36b76b8dd8a143fb67b2b31570ade531a4ee959c2ef1884acb86758784de071ab7eb40e3c693b0d8cdfc24369281278c56e8befa06206b2fdea3291af6e32a98d4bb2fbf23b8d13c767cfbc3dda1c30f5a924d9d5674bf00412c44e87a312c7066bd6aa7693c4d81b69e75eb19b3d9331e0f7119725f941d27f89d0\n");
+    t.push_str("chacha-seal\tx:808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f\tx:070000004041424344454647\tx:50515253c0c1c2c3c4c5c6c7\tx:4c616469657320616e642047656e746c656d656e206f662074686520636c617373206f66202739393a204966204920636f756c64206f6666657220796f75206f6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73637265656e20776f756c642062652069742e\n");
+    t.push_str("chacha-seal\tx:0000000000000000000000000000000000000000000000000000000000000000\tx:000000000000000000000000\t-\t-\n");
+    t.push_str("chacha-seal\tx:0000000000000000000000000000000000000000000000000000000000000000\tx:000000000000000000000000\t-\tx:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\n");
+    t.push_str("chacha-seal\tx:808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f\tx:070000004041424344454647\tt:notes.txt\tf:notes.txt\n");
+    t.push_str("chacha-seal\tx:00000000000000000000000000000000\tx:070000004041424344454647\t-\tt:x\n");
+    t.push_str("chacha-seal\tx:808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f\tx:0700000040414243\t-\tt:x\n");
+    t.push_str("chacha-open\tx:808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f\tx:070000004041424344454647\tx:50515253c0c1c2c3c4c5c6c7\tx:d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691\n");
+    t.push_str("chacha-open\tx:808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f\tx:070000004041424344454647\tx:50515253c0c1c2c3c4c5c6c7\tx:531a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691\n");
+    t.push_str("chacha-open\tx:808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f\tx:070000004041424344454647\t-\tx:d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b61161ae10b594f09e26a7e902ecbd0600691\n");
+    t.push_str("chacha-open\tx:808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f\tx:070000004041424344454647\t-\tx:6085c93f689321c86cc28f8e4b96e856d191068a037c39a000d955\n");
+    t.push_str("fernet-seal\tcw_0x689RpI-jtRR7oE8h_eQsKImvJapLeSbXpwF4e4=\t499162800\tx:000102030405060708090a0b0c0d0e0f\tt:hello\n");
+    t.push_str("fernet-seal\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\t1700000000\tx:101112131415161718191a1b1c1d1e1f\tf:app.env\n");
+    t.push_str("fernet-seal\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\t1700000000\tx:00000000000000000000000000000000\t-\n");
+    t.push_str("fernet-seal\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\t1700000000\tx:00000000000000000000000000000000\tx:7369787465656e206279746573212121\n");
+    t.push_str("fernet-seal\tnot-a-key\t0\tx:00000000000000000000000000000000\tt:x\n");
+    t.push_str("fernet-seal\tAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\t0\tx:00000000000000000000000000000000\tt:x\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000030\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000060\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000061\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t3600\t1699999941\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t3600\t1699999939\n");
+    t.push_str("fernet-open\tcw_0x689RpI-jtRR7oE8h_eQsKImvJapLeSbXpwF4e4=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000000\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ\t60\t1700000000\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQl!!JicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000000\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBAAAA==\t60\t1700000000\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgQAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000000\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAA\t60\t0\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\t\t60\t0\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAA=\t60\t0\n");
+    t.push_str("fernet-open\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAAAAAAAAAAAAAAAAAAAAAAPy2Y8nWYTu1tV1GNJs2nyi355murp1NcJWqJSdH-CpXunKLPi3enolMPx-1yw_K8g==\t60\t1700000000\n");
+    t.push_str("fernet-multi\tB62nNnQOshM0Rp3iAEhC3bt0o7B5BCYUpLPAL1NDxyU=,AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000000\n");
+    t.push_str("fernet-multi\tB62nNnQOshM0Rp3iAEhC3bt0o7B5BCYUpLPAL1NDxyU=\tgAAAAABlU_EAICEiIyQlJicoKSorLC0uL4zpOM6sAvj166xzIIdchhIHOvEWbm0USmJOeuNEfBt_UXmeOkyeeTxlZx0u2Qq6ERu7xsx2Gn7RenGMPKdd0QTnhiWMdDR1zzXDxyWd_Wfo-D0bevEah7jV0SXal3apozCQB4ZsW3JYOhbP-7fRiPRAg8Yrhil5keYX5f-KlvnDbgs_4_MTgtbuG8ZmdBHaYQ==\t60\t1700000000\n");
+    t.push_str("vault-init\tteam.vault\tt:correct horse battery staple\tx:7661756c742073616c742030303031\t16\tx:000102030405060708090a0b\n");
+    t.push_str("vault-list\tteam.vault\n");
+    t.push_str("vault-put\tteam.vault\tt:correct horse battery staple\tstripe\tt:demo-stripe-key-0000-not-real\tx:0102030405060708090a0b0c\n");
+    t.push_str("vault-put\tteam.vault\tt:correct horse battery staple\tdb\tt:postgres://billing:s3cr3t@db.internal:5432/billing\tx:02030405060708090a0b0c0d\n");
+    t.push_str("vault-put\tteam.vault\tt:correct horse battery staple\tenv\tf:app.env\tx:030405060708090a0b0c0d0e\n");
+    t.push_str("vault-put\tteam.vault\tt:Correct horse battery staple\tsmtp\tt:x\tx:000000000000000000000000\n");
+    t.push_str("vault-list\tteam.vault\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\tdb\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\tenv\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\tmissing\n");
+    t.push_str("vault-get\tteam.vault\tt:wrong\tdb\n");
+    t.push_str("vault-put\tteam.vault\tt:correct horse battery staple\tdb\tt:postgres://billing:n3w-s3cr3t@db2.internal/billing\tx:0405060708090a0b0c0d0e0f\n");
+    t.push_str("vault-put\tteam.vault\tt:correct horse battery staple\tnotes\tf:notes.txt\tx:05060708090a0b0c0d0e0f10\n");
+    t.push_str("vault-put\tteam.vault\tt:correct horse battery staple\thsm-pin\tx:000102faff\tx:060708090a0b0c0d0e0f1011\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\tdb\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\tnotes\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\thsm-pin\n");
+    t.push_str("vault-cat\tteam.vault\n");
+    t.push_str("vault-flip\tteam.vault\tstripe\t3\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\tstripe\n");
+    t.push_str("vault-rekey\tteam.vault\tt:correct horse battery staple\tt:new passphrase\tx:73616c742030303032\t12\tt:seed\n");
+    t.push_str("vault-flip\tteam.vault\tstripe\t3\n");
+    t.push_str("vault-rekey\tteam.vault\tt:correct horse battery staple\tt:new passphrase\tx:73616c742030303032\t12\tt:seed\n");
+    t.push_str("vault-del\tteam.vault\tt:new passphrase\tstripe\n");
+    t.push_str("vault-get\tteam.vault\tt:correct horse battery staple\tdb\n");
+    t.push_str("vault-rekey\tteam.vault\tt:correct horse battery staple\tt:new passphrase\tx:73616c742030303032\t12\tt:seed\n");
+    t.push_str("vault-del\tteam.vault\tt:new passphrase\tstripe\n");
+    t.push_str("vault-rekey\tteam.vault\tt:new passphrase\tt:third\tx:73616c742030303033\t10\tt:seed 3\n");
+    t.push_str("vault-list\tteam.vault\n");
+    t.push_str("vault-get\tteam.vault\tt:third\thsm-pin\n");
+    t.push_str("vault-cat\tteam.vault\n");
+    t.push_str("vault-list\tmissing.vault\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Rotate the Stripe key on 1 March.\n");
+    t.push_str("On-call: Grace (week 9), Linus (week 10).\n");
+    t.push_str("Übergabe: Schlüssel im Tresor.\n");
+    v.push(DataFile { path: "notes.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("kvault 1\n");
+    t.push_str("kdf pbkdf2-sha256 10 73616c742030303033\n");
+    t.push_str("check 8fc8844d620c1276a7fbfc37 af024caf2a99c7e269acf62baedc5ca36352820ea41e99433c0e44ec\n");
+    t.push_str("entry db a95c91e10ddb3a2ef727eeed 48f9dcd716def9eb8f91f316790a4951f3da2f00fd770b684be0acc1791e05ff3c1d3240caecb8387b568349108e0d381827a1fcae7b1dbebff195e42284a6c7a78d\n");
+    t.push_str("entry env ed4e676989670915784183cb 10689281b3c33bd63037b64f934caab50e6025816d24178c756dd6ac1c451e5943e645649ebf0115546aff4c59d0744c9adb0b47cb5e006fe6177ebd2ffc82abb064e8849fe572bf882aaef65a4e14952c5bc0e145a7f03465388d941c26422c50d6eda0e1310c8674e60b593cde6b15373f6b5f804e87ef03238ce39e0c1b1f01719e1648e39659e71a28c7a4be98e1feadeae0919504e920005e9ad11f3b87818f02630174dee32265fe18e015d40b26dfabe9036f8276d15e9a54caf215931c0e6bdcfc78843186c5a1a9292178542400ead0d36483e793a34d5b78fc36d8248cbd104e3a48036e23c62107d26a002087daa1db289b04fb25b1bb6db8f033bbcc20d867668ce9b90e670b901e472b132a74f359bd9cd4153215dc295301c28c08e7711469ed\n");
+    t.push_str("entry hsm-pin b17e83bdbbbb24fca33222a9 3137d4829894c2c671e4fb9af69fb9b99389bed26d\n");
+    t.push_str("entry notes 868b3ac60ab3536108c54558 b5a95a7d6fe38755beac09697ce04b6fd8ce1d6d33284a786a3d3bc25a7881aa08df53dcd4e1bea17beb9434efe80db51078469a0ab08e9acad3744c5ecae8820ba0b9aa823901f72eb7f034ad9ac0cee1877d3fa64de5671f3c767709bc4c06d0c2692bf99191eee1149fe8d84a04bd5426b1ce1b77528d7389744a51\n");
+    v.push(DataFile { path: "team.vault".to_string(), hex: false, body: t });
+}
