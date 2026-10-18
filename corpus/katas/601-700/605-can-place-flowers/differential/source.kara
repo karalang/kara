@@ -134,7 +134,7 @@ fn most(flowerbed: Vec[i64]) -> i64 {
 fn random_bed(size: i64, seed: mut ref i64) -> Vec[i64] {
     let mut bed: Vec[i64] = Vec.new();
     for i in 0..size {
-        if step(seed) % 3 == 0 and (i == 0 or bed[i - 1] == 0) {
+        if step(mut seed) % 3 == 0 and (i == 0 or bed[i - 1] == 0) {
             bed.push(1);
         } else {
             bed.push(0);

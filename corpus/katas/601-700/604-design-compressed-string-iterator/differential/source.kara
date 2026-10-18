@@ -411,8 +411,8 @@ fn random_text(runs: i64, most: i64, seed: mut ref i64) -> (String, i64) {
     let mut text = String.new();
     let mut total = 0;
     for _ in 0..runs {
-        text.push(letters[step(seed) % 3]);
-        let count = 1 + step(seed) % most;
+        text.push(letters[step(mut seed) % 3]);
+        let count = 1 + step(mut seed) % most;
         text.push_str(f"{count}");
         total += count;
     }
@@ -422,7 +422,7 @@ fn random_text(runs: i64, most: i64, seed: mut ref i64) -> (String, i64) {
 fn random_calls(size: i64, seed: mut ref i64) -> String {
     let mut calls = String.new();
     for _ in 0..size {
-        calls.push(if step(seed) % 3 == 0 { 'h' } else { 'n' });
+        calls.push(if step(mut seed) % 3 == 0 { 'h' } else { 'n' });
     }
     calls
 }

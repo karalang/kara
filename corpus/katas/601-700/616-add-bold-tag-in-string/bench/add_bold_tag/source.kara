@@ -34,7 +34,7 @@ fn step(seed: mut ref i64) -> i64 {
 fn random_text(size: i64, seed: mut ref i64) -> String {
     let mut t = String.new();
     for _ in 0..size {
-        t.push(((97 + step(seed) % 4) as u8) as char);
+        t.push(((97 + step(mut seed) % 4) as u8) as char);
     }
     t
 }

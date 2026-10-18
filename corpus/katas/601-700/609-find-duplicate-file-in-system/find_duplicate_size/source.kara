@@ -76,9 +76,9 @@ fn random_system(dirs: i64, most: i64, kinds: i64, seed: mut ref i64) -> Vec[Str
     let mut pool: Vec[String] = Vec.new();
     for _ in 0..kinds {
         let mut c = String.new();
-        let size = 1 + step(seed) % 6;
+        let size = 1 + step(mut seed) % 6;
         for _ in 0..size {
-            c.push(((97 + step(seed) % 3) as u8) as char);
+            c.push(((97 + step(mut seed) % 3) as u8) as char);
         }
         pool.push(c);
     }
@@ -86,10 +86,10 @@ fn random_system(dirs: i64, most: i64, kinds: i64, seed: mut ref i64) -> Vec[Str
     let mut counter = 0;
     for d in 0..dirs {
         let mut line = if d == 0 { "root".to_string() } else { f"root/d{d}" };
-        let files = 1 + step(seed) % most;
+        let files = 1 + step(mut seed) % most;
         for _ in 0..files {
             counter += 1;
-            line.push_str(f" f{counter}.txt({pool[step(seed) % kinds]})");
+            line.push_str(f" f{counter}.txt({pool[step(mut seed) % kinds]})");
         }
         paths.push(line);
     }

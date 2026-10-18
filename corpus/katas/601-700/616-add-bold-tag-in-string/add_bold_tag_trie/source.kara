@@ -72,7 +72,7 @@ fn show(s: Str, words: Vec[String]) {
 fn random_text(size: i64, kinds: i64, seed: mut ref i64) -> String {
     let mut t = String.new();
     for _ in 0..size {
-        t.push(((97 + step(seed) % kinds) as u8) as char);
+        t.push(((97 + step(mut seed) % kinds) as u8) as char);
     }
     t
 }

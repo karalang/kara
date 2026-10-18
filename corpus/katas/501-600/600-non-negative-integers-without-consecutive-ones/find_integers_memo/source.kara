@@ -20,7 +20,7 @@ fn count_from(bits: Vec[i64], at: i64, last_one: bool, tight: bool, memo: mut re
         if b == 1 and last_one {
             continue;
         }
-        total += count_from(bits, at + 1, b == 1, tight and b == top, memo);
+        total += count_from(bits, at + 1, b == 1, tight and b == top, mut memo);
     }
     if not tight {
         memo[at][last] = total;

@@ -162,7 +162,7 @@ fn pick(pool: Vec[String], size: i64, seed: mut ref i64) -> Vec[String] {
     }
     let mut out: Vec[String] = Vec.new();
     for k in 0..size {
-        let j = k + step(seed) % (pool.len() - k);
+        let j = k + step(mut seed) % (pool.len() - k);
         order.swap(k, j);
         out.push(pool[order[k]].clone());
     }

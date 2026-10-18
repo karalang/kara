@@ -11,13 +11,13 @@ fn write(node: TreeNode, out: mut ref String) {
     if node.left.is_some() or node.right.is_some() {
         out.push('(');
         if let Some(l) = node.left {
-            write(l, out);
+            write(l, mut out);
         }
         out.push(')');
     }
     if let Some(r) = node.right {
         out.push('(');
-        write(r, out);
+        write(r, mut out);
         out.push(')');
     }
 }
