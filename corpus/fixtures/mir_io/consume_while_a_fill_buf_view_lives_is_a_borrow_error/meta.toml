@@ -1,0 +1,17 @@
+source = "tests/mir_io.rs::consume_while_a_fill_buf_view_lives_is_a_borrow_error"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["io:fs"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a:refused"
+classified_with = "79a6c2eb9"
+extracted_src = "2078cbe1"
+model_rev = "583cfb0d"
+model_src = "2078cbe1"

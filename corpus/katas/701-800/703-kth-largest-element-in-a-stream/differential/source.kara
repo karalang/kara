@@ -1,0 +1,313 @@
+// LeetCode #703: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random streams.
+
+// ---- star arm -------------------------------------------------------
+
+struct KthStar {
+    k: i64,
+    mut top: PriorityQueue[i64],
+}
+
+impl KthStar {
+    fn new(k: i64, nums: Vec[i64]) -> KthStar {
+        let mut s = KthStar { k: k, top: PriorityQueue.new() };
+        for x in nums.iter() {
+            s.add(*x);
+        }
+        s
+    }
+
+    fn add(mut ref self, val: i64) -> i64 {
+        self.top.push(val);
+        if self.top.len() > self.k {
+            self.top.pop();
+        }
+        self.top.peek().unwrap()
+    }
+}
+
+// ---- heap arm -------------------------------------------------------
+
+struct KthHeap {
+    k: i64,
+    mut heap: Vec[i64],
+}
+
+impl KthHeap {
+    fn new(k: i64, nums: Vec[i64]) -> KthHeap {
+        let mut s = KthHeap { k: k, heap: Vec.new() };
+        for x in nums.iter() {
+            s.add(*x);
+        }
+        s
+    }
+
+    fn add(mut ref self, val: i64) -> i64 {
+        if self.heap.len() < self.k {
+            self.heap.push(val);
+            let mut i = self.heap.len() - 1;
+            while i > 0 {
+                let parent = (i - 1) / 2;
+                if self.heap[parent] <= self.heap[i] {
+                    break;
+                }
+                let t = self.heap[parent];
+                self.heap[parent] = self.heap[i];
+                self.heap[i] = t;
+                i = parent;
+            }
+        } else if val > self.heap[0] {
+            self.heap[0] = val;
+            let n = self.heap.len();
+            let mut i = 0;
+            loop {
+                let left = 2 * i + 1;
+                let right = left + 1;
+                let mut least = i;
+                if left < n and self.heap[left] < self.heap[least] {
+                    least = left;
+                }
+                if right < n and self.heap[right] < self.heap[least] {
+                    least = right;
+                }
+                if least == i {
+                    break;
+                }
+                let t = self.heap[least];
+                self.heap[least] = self.heap[i];
+                self.heap[i] = t;
+                i = least;
+            }
+        }
+        self.heap[0]
+    }
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+struct KthSorted {
+    k: i64,
+    mut desc: Vec[i64],
+}
+
+impl KthSorted {
+    fn new(k: i64, nums: Vec[i64]) -> KthSorted {
+        let mut s = KthSorted { k: k, desc: Vec.new() };
+        for x in nums.iter() {
+            s.add(*x);
+        }
+        s
+    }
+
+    fn add(mut ref self, val: i64) -> i64 {
+        let mut lo = 0;
+        let mut hi = self.desc.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.desc[mid] > val {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        self.desc.insert(lo, val);
+        if self.desc.len() > self.k {
+            self.desc.pop();
+        }
+        self.desc[self.desc.len() - 1]
+    }
+}
+
+// ---- multiset arm ---------------------------------------------------
+
+struct KthMultiset {
+    k: i64,
+    mut counts: SortedMap[i64, i64],
+    mut held: i64,
+}
+
+impl KthMultiset {
+    fn new(k: i64, nums: Vec[i64]) -> KthMultiset {
+        let mut s = KthMultiset { k: k, counts: SortedMap.new(), held: 0 };
+        for x in nums.iter() {
+            s.add(*x);
+        }
+        s
+    }
+
+    fn add(mut ref self, val: i64) -> i64 {
+        let n = self.counts.get(val) ?? 0;
+        self.counts.insert(val, n + 1);
+        self.held += 1;
+        if self.held > self.k {
+            let (first, count) = self.counts.iter().next().unwrap();
+            let least = *first;
+            let c = *count;
+            if c == 1 {
+                self.counts.remove(least);
+            } else {
+                self.counts.insert(least, c - 1);
+            }
+            self.held -= 1;
+        }
+        let (first, _) = self.counts.iter().next().unwrap();
+        *first
+    }
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answers(which: i64, k: i64, nums: Vec[i64], adds: Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if which == 0 {
+        let mut s = KthStar.new(k, nums);
+        for v in adds.iter() {
+            out.push(s.add(*v));
+        }
+    } else if which == 1 {
+        let mut s = KthHeap.new(k, nums);
+        for v in adds.iter() {
+            out.push(s.add(*v));
+        }
+    } else if which == 2 {
+        let mut s = KthSorted.new(k, nums);
+        for v in adds.iter() {
+            out.push(s.add(*v));
+        }
+    } else {
+        let mut s = KthMultiset.new(k, nums);
+        for v in adds.iter() {
+            out.push(s.add(*v));
+        }
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: after each add, every value seen so far sorted from
+// largest down, and the one at place k.
+fn definition(k: i64, nums: Vec[i64], adds: Vec[i64]) -> Vec[i64] {
+    let mut seen = nums.clone();
+    let mut out: Vec[i64] = Vec.new();
+    for v in adds.iter() {
+        seen.push(*v);
+        let mut desc = seen.clone();
+        desc.sort();
+        desc.reverse();
+        out.push(desc[k - 1]);
+    }
+    out
+}
+
+fn main() {
+    let mut seed = 7030;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut repeats = 0;
+    let cases = 3000;
+    for _ in 0..cases {
+        // k from 1 to 8; k - 1 to k + 11 values and 1 to 15 adds, all
+        // from a range of a random 1 to 30 numbers around zero; and a
+        // shift from -50 to 50.
+        let k = 1 + next_random(mut seed) % 8;
+        let n = k - 1 + next_random(mut seed) % 13;
+        let m = 1 + next_random(mut seed) % 15;
+        let width = 1 + next_random(mut seed) % 30;
+        let shift = next_random(mut seed) % 101 - 50;
+        let mut nums: Vec[i64] = Vec.new();
+        let mut shifted_nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            let v = next_random(mut seed) % width - width / 2;
+            nums.push(v);
+            shifted_nums.push(v + shift);
+        }
+        let mut adds: Vec[i64] = Vec.new();
+        let mut shifted_adds: Vec[i64] = Vec.new();
+        for _ in 0..m {
+            let v = next_random(mut seed) % width - width / 2;
+            adds.push(v);
+            shifted_adds.push(v + shift);
+        }
+        if width < n + m {
+            repeats += 1;
+        }
+        let want = definition(k, nums, adds);
+        for which in 0..arms {
+            let got = answers(which, k, nums, adds);
+            // P1: the definition's answers.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: an answer never falls from one add to the next.
+            checks += 1;
+            let mut falls = false;
+            for i in 1..got.len() {
+                if got[i] < got[i - 1] {
+                    falls = true;
+                }
+            }
+            if falls or got.len() != m {
+                fails[1] += 1;
+            }
+            // P3: after each add, fewer than k values seen are above the
+            // answer and at least k are at or above it.
+            checks += 1;
+            let mut wrong = false;
+            for i in 0..got.len() {
+                let mut above = 0;
+                let mut at_least = 0;
+                for v in nums.iter() {
+                    if *v > got[i] {
+                        above += 1;
+                    }
+                    if *v >= got[i] {
+                        at_least += 1;
+                    }
+                }
+                for j in 0..i + 1 {
+                    if adds[j] > got[i] {
+                        above += 1;
+                    }
+                    if adds[j] >= got[i] {
+                        at_least += 1;
+                    }
+                }
+                if above >= k or at_least < k {
+                    wrong = true;
+                }
+            }
+            if wrong {
+                fails[2] += 1;
+            }
+            // P4: every value shifted by the same amount shifts every
+            // answer by it.
+            checks += 1;
+            let moved = answers(which, k, shifted_nums, shifted_adds);
+            let mut off = moved.len() != got.len();
+            for i in 0..got.len() {
+                if not off and moved[i] != got[i] + shift {
+                    off = true;
+                }
+            }
+            if off {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} streams ({repeats} with values bound to repeat), {arms} arms, {checks} checks, {total} failures");
+}

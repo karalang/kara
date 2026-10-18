@@ -1,0 +1,7 @@
+
+fn main() {
+    let mut r = BufReader.new(File.open("x.txt").unwrap());
+    let b = r.fill_buf().unwrap();
+    r.consume(1);
+    println(f"{b.len()}");
+}
