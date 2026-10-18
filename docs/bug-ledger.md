@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 275 |
+| missing-feature | 276 |
 | codegen-gap | 267 |
 | false-positive | 212 |
 | other | 173 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2926 |
 | interp | 943 |
-| typecheck | 451 |
+| typecheck | 452 |
 | other | 115 |
 | ownership | 110 |
 | runtime | 76 |
@@ -209,6 +209,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-12 | 2026-10-18 | interp+codegen | medium | A generic function passed as a value, `count(v, never)` with `fn never[T](x: T) -> bool`, is refused by every MIR surface with "a generic function as a value is not lowered yet" (src/mir/lower.rs fn_item_value), while `karac check` passes and `karac run --interp` runs it | — |
 | B-2026-10-18-13 | 2026-10-18 | interp+codegen | high | A match whose arms are `Some(n) => *n` and `None => b.get(k).unwrap_or(0)` keeps the second arm a `ref i64` on the MIR surfaces: `karac check` passes, `__mir-run` stops with "Sub on Ref(Addr ..) and Int(1)" when the result is used, and `__mir-llvm-run` prints an address (94122422154631) instead of 1; annotating the binding `: i64` does not help | — |
 | B-2026-10-18-14 | 2026-10-18 | ownership | low | A range view in a `for` header, `for x in v[1..].iter() { .. }`, stays borrowed after the loop ends, so `karac check` refuses a later `v.push(..)` or `v.remove(..)` with "cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"; `for x in v.iter()` passes and every MIR surface runs both | — |
+| B-2026-10-18-15 | 2026-10-18 | typecheck | medium | `#[derive(PartialEq, Eq, PartialOrd, Ord)]` on a generic struct, `struct Dec[K] { k: K, order: i64 }`, gives no `Ord` impl, even for a concrete `Dec[String]`: `karac check` refuses `Dec[String]` for a `T: Ord` bound, `<` and `Vec.sort()`, though design.md § Derive says a derived impl is bounded by what its fields need; writing the four impls by hand with `impl[K: Ord]` works | — |
 
 ### Relocated
 

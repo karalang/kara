@@ -1,0 +1,967 @@
+// mini_heapq: Python 3.13's heapq and bisect as generic functions, and
+// sched's scheduler on top of them, run against four kinds of program:
+// heap traces, top-k and k-way merges over web-server logs, latency
+// buckets, a shortest-route finder over a road map, and an event
+// scheduler with repeating, chained and cancelling events.
+//
+// The heap functions port heapq.py's algorithms exactly (the C module
+// uses the same ones), so ties come out in the same places as Python's.
+
+// ------------------------------------------------------------ heapq
+
+// _siftdown: the item at pos moves up towards startpos.
+fn siftdown[T: Ord](heap: mut ref Vec[T], startpos: i64, pos: i64) {
+    let mut pos = pos;
+    while pos > startpos {
+        let parent = (pos - 1) / 2;
+        if heap[pos] < heap[parent] {
+            heap.swap(pos, parent);
+            pos = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+// _siftup: the item at pos sinks to a leaf along the smaller children,
+// then sifts back up.
+fn siftup[T: Ord](heap: mut ref Vec[T], pos: i64) {
+    let endpos = heap.len();
+    let startpos = pos;
+    let mut pos = pos;
+    let mut child = 2 * pos + 1;
+    while child < endpos {
+        let right = child + 1;
+        if right < endpos and not (heap[child] < heap[right]) {
+            child = right;
+        }
+        heap.swap(pos, child);
+        pos = child;
+        child = 2 * pos + 1;
+    }
+    siftdown(heap, startpos, pos);
+}
+
+fn heappush[T: Ord](heap: mut ref Vec[T], item: own T) {
+    heap.push(item);
+    let last = heap.len() - 1;
+    siftdown(heap, 0, last);
+}
+
+fn heappop[T: Ord](heap: mut ref Vec[T]) -> Option[T] {
+    let n = heap.len();
+    if n == 0 {
+        return None;
+    }
+    heap.swap(0, n - 1);
+    let top = heap.pop();
+    if not heap.is_empty() {
+        siftup(heap, 0);
+    }
+    top
+}
+
+fn heapreplace[T: Ord](heap: mut ref Vec[T], item: own T) -> Option[T] {
+    if heap.is_empty() {
+        return None;
+    }
+    heap.push(item);
+    let last = heap.len() - 1;
+    heap.swap(0, last);
+    let top = heap.pop();
+    siftup(heap, 0);
+    top
+}
+
+fn heappushpop[T: Ord](heap: mut ref Vec[T], item: own T) -> T {
+    if heap.is_empty() or not (heap[0] < item) {
+        return item;
+    }
+    heap.push(item);
+    let last = heap.len() - 1;
+    heap.swap(0, last);
+    let top = heap.pop().unwrap();
+    siftup(heap, 0);
+    top
+}
+
+fn heapify[T: Ord](x: mut ref Vec[T]) {
+    let n = x.len();
+    let mut i = n / 2;
+    while i > 0 {
+        i -= 1;
+        siftup(x, i);
+    }
+}
+
+// The max-heap twins, _siftdown_max and _siftup_max, for nsmallest.
+fn siftdown_max[T: Ord](heap: mut ref Vec[T], startpos: i64, pos: i64) {
+    let mut pos = pos;
+    while pos > startpos {
+        let parent = (pos - 1) / 2;
+        if heap[parent] < heap[pos] {
+            heap.swap(pos, parent);
+            pos = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+fn siftup_max[T: Ord](heap: mut ref Vec[T], pos: i64) {
+    let endpos = heap.len();
+    let startpos = pos;
+    let mut pos = pos;
+    let mut child = 2 * pos + 1;
+    while child < endpos {
+        let right = child + 1;
+        if right < endpos and not (heap[right] < heap[child]) {
+            child = right;
+        }
+        heap.swap(pos, child);
+        pos = child;
+        child = 2 * pos + 1;
+    }
+    siftdown_max(heap, startpos, pos);
+}
+
+fn heapify_max[T: Ord](x: mut ref Vec[T]) {
+    let mut i = x.len() / 2;
+    while i > 0 {
+        i -= 1;
+        siftup_max(x, i);
+    }
+}
+
+fn heapreplace_max[T: Ord](heap: mut ref Vec[T], item: own T) {
+    heap.push(item);
+    let last = heap.len() - 1;
+    heap.swap(0, last);
+    let _ = heap.pop();
+    siftup_max(heap, 0);
+}
+
+// A decorated element, (key, order, index): order is unique, so the
+// index never decides a comparison.
+#[derive(Clone)]
+struct Dec[K] {
+    k: K,
+    order: i64,
+    idx: i64,
+}
+
+// B-2026-10-18-15: `#[derive(PartialEq, Eq, PartialOrd, Ord)]` on a
+// generic struct is refused, so Dec orders itself by hand, as the tuple
+// (k, order, idx) would.
+impl[K: Ord] PartialEq for Dec[K] {
+    fn eq(ref self, other: ref Dec[K]) -> bool {
+        self.k == other.k and self.order == other.order and self.idx == other.idx
+    }
+}
+
+impl[K: Ord] Eq for Dec[K] {}
+
+impl[K: Ord] PartialOrd for Dec[K] {
+    fn partial_cmp(ref self, other: ref Dec[K]) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl[K: Ord] Ord for Dec[K] {
+    fn cmp(ref self, other: ref Dec[K]) -> Ordering {
+        if self.k < other.k {
+            Ordering.Less
+        } else if other.k < self.k {
+            Ordering.Greater
+        } else if self.order != other.order {
+            if self.order < other.order { Ordering.Less } else { Ordering.Greater }
+        } else if self.idx != other.idx {
+            if self.idx < other.idx { Ordering.Less } else { Ordering.Greater }
+        } else {
+            Ordering.Equal
+        }
+    }
+}
+
+// sorted(items, key=key) or with reverse=True: a stable insertion sort
+// of the indices.
+fn sorted_indices[T, K: Ord](items: ref Vec[T], key: Fn(T) -> K, reverse: bool) -> Vec[i64] {
+    let keys: Vec[K] = items.iter().map(|x| key(x)).collect();
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..items.len() {
+        let mut j = idx.len();
+        while j > 0 {
+            let before = if reverse { keys[idx[j - 1]] < keys[i] } else { keys[i] < keys[idx[j - 1]] };
+            if not before {
+                break;
+            }
+            j -= 1;
+        }
+        idx.insert(j, i);
+    }
+    idx
+}
+
+fn pick[T: Clone](items: ref Vec[T], idx: ref Vec[i64], n: i64) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    for i in 0..idx.len() {
+        if i >= n {
+            break;
+        }
+        out.push(items[idx[i]].clone());
+    }
+    out
+}
+
+// heapq.nlargest(n, items, key=key)
+fn nlargest[T: Clone, K: Ord + Clone](n: i64, items: ref Vec[T], key: Fn(T) -> K) -> Vec[T] {
+    if n == 1 {
+        // max(items, key=key): the first of the largest.
+        if items.is_empty() {
+            return Vec.new();
+        }
+        let mut best = 0;
+        let mut best_key = key(items[0]);
+        for i in 1..items.len() {
+            let k = key(items[i]);
+            if k > best_key {
+                best = i;
+                best_key = k;
+            }
+        }
+        return vec![items[best].clone()];
+    }
+    if n >= items.len() {
+        return pick(items, sorted_indices(items, key, true), n);
+    }
+    if n <= 0 {
+        return Vec.new();
+    }
+    let mut result: Vec[Dec[K]] = Vec.new();
+    for i in 0..n {
+        result.push(Dec { k: key(items[i]), order: -i, idx: i });
+    }
+    heapify(mut result);
+    let mut top = result[0].k.clone();
+    let mut order = -n;
+    for i in n..items.len() {
+        let k = key(items[i]);
+        if top < k {
+            let _ = heapreplace(mut result, Dec { k: k, order: order, idx: i });
+            top = result[0].k.clone();
+            order -= 1;
+        }
+    }
+    result.sort();
+    result.reverse();
+    result.iter().map(|d| items[d.idx].clone()).collect()
+}
+
+// heapq.nsmallest(n, items, key=key)
+fn nsmallest[T: Clone, K: Ord + Clone](n: i64, items: ref Vec[T], key: Fn(T) -> K) -> Vec[T] {
+    if n == 1 {
+        // min(items, key=key): the first of the smallest.
+        if items.is_empty() {
+            return Vec.new();
+        }
+        let mut best = 0;
+        let mut best_key = key(items[0]);
+        for i in 1..items.len() {
+            let k = key(items[i]);
+            if k < best_key {
+                best = i;
+                best_key = k;
+            }
+        }
+        return vec![items[best].clone()];
+    }
+    if n >= items.len() {
+        return pick(items, sorted_indices(items, key, false), n);
+    }
+    if n <= 0 {
+        return Vec.new();
+    }
+    let mut result: Vec[Dec[K]] = Vec.new();
+    for i in 0..n {
+        result.push(Dec { k: key(items[i]), order: i, idx: i });
+    }
+    heapify_max(mut result);
+    let mut top = result[0].k.clone();
+    let mut order = n;
+    for i in n..items.len() {
+        let k = key(items[i]);
+        if k < top {
+            heapreplace_max(mut result, Dec { k: k, order: order, idx: i });
+            top = result[0].k.clone();
+            order += 1;
+        }
+    }
+    result.sort();
+    result.iter().map(|d| items[d.idx].clone()).collect()
+}
+
+// heapq.merge(*lists, key=key): each heap entry is (key, list, position).
+fn merge[T: Clone, K: Ord + Clone](lists: ref Vec[Vec[T]], key: Fn(T) -> K) -> Vec[T] {
+    let mut out: Vec[T] = Vec.new();
+    let mut h: Vec[Dec[K]] = Vec.new();
+    for order in 0..lists.len() {
+        if not lists[order].is_empty() {
+            h.push(Dec { k: key(lists[order][0]), order: order, idx: 0 });
+        }
+    }
+    heapify(mut h);
+    while h.len() > 1 {
+        loop {
+            let order = h[0].order;
+            let pos = h[0].idx;
+            out.push(lists[order][pos].clone());
+            if pos + 1 >= lists[order].len() {
+                let _ = heappop(mut h);
+                break;
+            }
+            let _ = heapreplace(mut h, Dec { k: key(lists[order][pos + 1]), order: order, idx: pos + 1 });
+        }
+    }
+    if h.len() == 1 {
+        let order = h[0].order;
+        for pos in h[0].idx..lists[order].len() {
+            out.push(lists[order][pos].clone());
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ bisect
+
+fn bisect_left[T: Ord](a: ref Vec[T], x: ref T) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if a[mid] < *x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn bisect_right[T: Ord](a: ref Vec[T], x: ref T) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if *x < a[mid] {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn insort[T: Ord](a: mut ref Vec[T], x: own T) {
+    let i = bisect_right(a, x);
+    a.insert(i, x);
+}
+
+// ------------------------------------------------------------ logs
+
+#[derive(Clone)]
+struct Rec {
+    line: String,
+    time: String,
+    host: String,
+    method: String,
+    path: String,
+    status: i64,
+    bytes: i64,
+    ms: i64,
+}
+
+fn num(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn parse_rec(line: ref String) -> Rec {
+    let p: Vec[String] = line.split(" ");
+    Rec {
+        line: line.clone(),
+        time: p[0].clone(),
+        host: p[1].clone(),
+        method: p[2].clone(),
+        path: p[3].clone(),
+        status: num(p[4]),
+        bytes: num(p[5]),
+        ms: num(p[6]),
+    }
+}
+
+fn read_log(name: ref String) -> Result[Vec[Rec], String] {
+    let text = match fs.read_to_string(f"data/logs/{name}") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {name}: {e}"),
+    };
+    let mut recs: Vec[Rec] = Vec.new();
+    for line in text.lines() {
+        recs.push(parse_rec(line.to_string()));
+    }
+    Ok(recs)
+}
+
+// Every log, in file-name order.
+fn all_logs() -> Result[Vec[Rec], String] {
+    let mut names = match fs.read_dir("data/logs".to_string()) {
+        Ok(n) => n,
+        Err(e) => return Err(f"cannot list data/logs: {e}"),
+    };
+    names.sort();
+    let mut out: Vec[Rec] = Vec.new();
+    for name in names.iter() {
+        for r in read_log(name)?.into_iter() {
+            out.push(r);
+        }
+    }
+    Ok(out)
+}
+
+fn ints(field: ref String) -> Vec[i64] {
+    if field.is_empty() or field == "-" {
+        return Vec.new();
+    }
+    field.split(",").iter().map(|x| num(x)).collect()
+}
+
+fn show(xs: ref Vec[i64]) -> String {
+    let parts: Vec[String] = xs.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn lines_of(recs: ref Vec[Rec], out: mut ref String) {
+    for r in recs.iter() {
+        out.push_str(f"  {r.line}\n");
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn heap_job(init: ref String, ops: ref String, out: mut ref String) {
+    let mut h = ints(init);
+    heapify(mut h);
+    out.push_str(f"  heapify -> {show(h)}\n");
+    for op in ops.split("|") {
+        let parts: Vec[String] = op.split(" ");
+        let cmd = parts[0].clone();
+        if cmd == "push" {
+            heappush(mut h, num(parts[1]));
+            out.push_str(f"  {op} -> {show(h)}\n");
+        } else if cmd == "pop" {
+            match heappop(mut h) {
+                Some(x) => out.push_str(f"  {op} = {x} -> {show(h)}\n"),
+                None => out.push_str(f"  {op}: IndexError: index out of range\n"),
+            }
+        } else if cmd == "pushpop" {
+            let x = heappushpop(mut h, num(parts[1]));
+            out.push_str(f"  {op} = {x} -> {show(h)}\n");
+        } else if cmd == "replace" {
+            match heapreplace(mut h, num(parts[1])) {
+                Some(x) => out.push_str(f"  {op} = {x} -> {show(h)}\n"),
+                None => out.push_str(f"  {op}: IndexError: index out of range\n"),
+            }
+        }
+    }
+}
+
+fn top_job(largest: bool, n: i64, key: ref String, data: ref String, out: mut ref String) -> Result[(), String] {
+    if data != "@logs" {
+        let xs = ints(data);
+        let r = if largest { nlargest(n, xs, |x| *x) } else { nsmallest(n, xs, |x| *x) };
+        out.push_str(f"  {show(r)}\n");
+        return Ok(());
+    }
+    let recs = all_logs()?;
+    let r = if key == "bytes" {
+        if largest { nlargest(n, recs, |r| r.bytes) } else { nsmallest(n, recs, |r| r.bytes) }
+    } else if key == "ms" {
+        if largest { nlargest(n, recs, |r| r.ms) } else { nsmallest(n, recs, |r| r.ms) }
+    } else if key == "status" {
+        if largest { nlargest(n, recs, |r| r.status) } else { nsmallest(n, recs, |r| r.status) }
+    } else if key == "path" {
+        if largest { nlargest(n, recs, |r| r.path.clone()) } else { nsmallest(n, recs, |r| r.path.clone()) }
+    } else {
+        return Err(f"unknown key {key}");
+    };
+    lines_of(r, mut out);
+    Ok(())
+}
+
+fn merge_job(key: ref String, spec: ref String, out: mut ref String) -> Result[(), String] {
+    let groups: Vec[String] = spec.split(";");
+    if not groups.iter().any(|g| g.ends_with(".log")) {
+        let lists: Vec[Vec[i64]] = groups.iter().map(|g| ints(g)).collect();
+        out.push_str(f"  {show(merge(lists, |x| *x))}\n");
+        return Ok(());
+    }
+    let mut logs: Vec[Vec[Rec]] = Vec.new();
+    for g in groups.iter() {
+        logs.push(read_log(g)?);
+    }
+    let merged = if key == "time" {
+        merge(logs, |r| r.time.clone())
+    } else if key == "host" {
+        merge(logs, |r| r.host.clone())
+    } else {
+        merge(logs, |r| r.line.clone())
+    };
+    lines_of(merged, mut out);
+    Ok(())
+}
+
+fn buckets_job(bounds: ref Vec[i64], out: mut ref String) -> Result[(), String] {
+    let recs = all_logs()?;
+    let mut counts: Vec[i64] = vec![0; bounds.len() + 1];
+    let mut sum = 0;
+    for r in recs.iter() {
+        counts[bisect_left(bounds, r.ms)] += 1;
+        sum += r.ms;
+    }
+    let mut total = 0;
+    for i in 0..bounds.len() {
+        total += counts[i];
+        out.push_str(f"  le={bounds[i]} {total}\n");
+    }
+    total += counts[bounds.len()];
+    out.push_str(f"  le=+Inf {total}\n");
+    out.push_str(f"  sum={sum} count={recs.len()}\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ routes
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Reach {
+    dist: i64,
+    town: String,
+}
+
+fn read_roads() -> Result[Map[String, Vec[(String, i64)]], String] {
+    let text = match fs.read_to_string("data/roads.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read roads.tsv: {e}"),
+    };
+    let mut adj: Map[String, Vec[(String, i64)]] = Map.new();
+    for line in text.lines() {
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        let p: Vec[String] = line.split("\t");
+        let w = num(p[2]);
+        adj.entry(p[0].clone()).or_insert(Vec.new()).push((p[1].clone(), w));
+        adj.entry(p[1].clone()).or_insert(Vec.new()).push((p[0].clone(), w));
+    }
+    Ok(adj)
+}
+
+// Dijkstra over a heap of (distance, town), as a Python program would
+// write it with heapq.
+fn route_job(src: ref String, dst: ref String, out: mut ref String) -> Result[(), String] {
+    let adj = read_roads()?;
+    let mut dist: Map[String, i64] = Map.new();
+    let mut prev: Map[String, String] = Map.new();
+    let mut seen: Set[String] = Set.new();
+    let mut h: Vec[Reach] = Vec.new();
+    dist.insert(src.clone(), 0);
+    h.push(Reach { dist: 0, town: src.clone() });
+    while let Some(Reach { dist: d, town: u }) = heappop(mut h) {
+        if seen.contains(u) {
+            continue;
+        }
+        seen.insert(u.clone());
+        if u == *dst {
+            break;
+        }
+        if let Some(edges) = adj.get(u) {
+            for (v, w) in edges.iter() {
+                let nd = d + *w;
+                let better = match dist.get(v) {
+                    None => true,
+                    Some(old) => nd < *old,
+                };
+                if better {
+                    dist.insert(v.clone(), nd);
+                    prev.insert(v.clone(), u.clone());
+                    heappush(mut h, Reach { dist: nd, town: v.clone() });
+                }
+            }
+        }
+    }
+    if not seen.contains(dst) {
+        out.push_str(f"  no route ({seen.len()} towns settled)\n");
+        return Ok(());
+    }
+    let mut path: Vec[String] = vec![dst.clone()];
+    while path[path.len() - 1] != *src {
+        let step = match prev.get(path[path.len() - 1]) {
+            Some(p) => p.clone(),
+            None => break,
+        };
+        path.push(step);
+    }
+    path.reverse();
+    let total = match dist.get(dst) {
+        Some(d) => *d,
+        None => 0,
+    };
+    out.push_str(f"  {total} min: {path.join(" -> ")}\n");
+    out.push_str(f"  ({seen.len()} towns settled)\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ sched
+
+// sched.Event without its action: (time, priority, sequence) orders it,
+// and the sequence names its action.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Event {
+    time: i64,
+    priority: i64,
+    sequence: i64,
+}
+
+#[derive(Clone)]
+enum Action {
+    Once(String),
+    // name, this run, runs in all, interval
+    Repeat(String, i64, i64, i64),
+    // name, the event it enters, its delay
+    Later(String, String, i64),
+    // name, the event it cancels
+    Cancel(String, String),
+}
+
+// sched.scheduler with a virtual clock for timefunc and delayfunc.
+struct Scheduler {
+    queue: Vec[Event],
+    actions: Vec[Action],
+    clock: i64,
+}
+
+impl Scheduler {
+    fn new() -> Scheduler {
+        Scheduler { queue: Vec.new(), actions: Vec.new(), clock: 0 }
+    }
+
+    fn enterabs(mut ref self, time: i64, priority: i64, action: own Action) -> Event {
+        let ev = Event { time: time, priority: priority, sequence: self.actions.len() };
+        self.actions.push(action);
+        heappush(mut self.queue, ev);
+        ev
+    }
+
+    fn enter(mut ref self, delay: i64, priority: i64, action: own Action) -> Event {
+        let time = self.clock + delay;
+        self.enterabs(time, priority, action)
+    }
+
+    // list.remove(event), then heapify; Python raises ValueError when
+    // the event is not queued.
+    fn cancel(mut ref self, ev: Event) -> bool {
+        for i in 0..self.queue.len() {
+            if self.queue[i] == ev {
+                self.queue.remove(i);
+                heapify(mut self.queue);
+                return true;
+            }
+        }
+        false
+    }
+
+    // The queue property: the events in the order they will run.
+    fn sorted_queue(ref self) -> Vec[Event] {
+        let mut events = self.queue.clone();
+        let mut out: Vec[Event] = Vec.new();
+        while let Some(e) = heappop(mut events) {
+            out.push(e);
+        }
+        out
+    }
+}
+
+fn sched_job(file: ref String, out: mut ref String) -> Result[(), String] {
+    let text = match fs.read_to_string(f"data/{file}") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {file}: {e}"),
+    };
+    let mut s = Scheduler.new();
+    let mut events: Map[String, Event] = Map.new();
+    let mut names: Map[i64, String] = Map.new();
+    for line in text.lines() {
+        if line.is_empty() or line.starts_with("#") {
+            continue;
+        }
+        let p: Vec[String] = line.split("\t");
+        let (t, pri, kind, name) = (num(p[0]), num(p[1]), p[2].clone(), p[3].clone());
+        let action = if kind == "once" {
+            Action.Once(name.clone())
+        } else if kind == "repeat" {
+            Action.Repeat(name.clone(), 1, num(p[4]), num(p[5]))
+        } else if kind == "later" {
+            Action.Later(name.clone(), p[4].clone(), num(p[5]))
+        } else {
+            Action.Cancel(name.clone(), p[4].clone())
+        };
+        let ev = s.enterabs(t, pri, action);
+        events.insert(name.clone(), ev);
+        names.insert(ev.sequence, name);
+    }
+    let mut q: Vec[String] = Vec.new();
+    for e in s.sorted_queue().iter() {
+        let name = match names.get(e.sequence) {
+            Some(n) => n.clone(),
+            None => "?".to_string(),
+        };
+        q.push(f"{name}@{e.time}/{e.priority}");
+    }
+    out.push_str(f"  queue: {q.join(" ")}\n");
+    // scheduler.run()
+    let mut ran = 0;
+    while not s.queue.is_empty() {
+        let first = s.queue[0];
+        if first.time > s.clock {
+            s.clock += first.time - s.clock;
+            continue;
+        }
+        let _ = heappop(mut s.queue);
+        ran += 1;
+        let now = s.clock;
+        match s.actions[first.sequence].clone() {
+            Action.Once(name) => out.push_str(f"  t={now} {name}\n"),
+            Action.Repeat(name, k, n, every) => {
+                out.push_str(f"  t={now} {name} ({k}/{n})\n");
+                if k < n {
+                    let ev = s.enter(every, first.priority, Action.Repeat(name.clone(), k + 1, n, every));
+                    events.insert(name, ev);
+                }
+            }
+            Action.Later(name, target, delay) => {
+                out.push_str(f"  t={now} {name} -> enter {target} at {now + delay}\n");
+                let ev = s.enter(delay, first.priority, Action.Once(target.clone()));
+                events.insert(target, ev);
+            }
+            Action.Cancel(name, target) => {
+                let done = match events.get(target) {
+                    Some(ev) => s.cancel(*ev),
+                    None => false,
+                };
+                if done {
+                    out.push_str(f"  t={now} {name}: cancelled {target}\n");
+                } else {
+                    out.push_str(f"  t={now} {name}: {target} is not queued\n");
+                }
+            }
+        }
+    }
+    out.push_str(f"  done at t={s.clock}, {ran} events run\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    if kind == "heap" {
+        heap_job(f[1], f[2], mut out);
+    } else if kind == "nlargest" or kind == "nsmallest" {
+        top_job(kind == "nlargest", num(f[1]), f[2], f[3], mut out)?;
+    } else if kind == "merge" {
+        merge_job(f[1], f[2], mut out)?;
+    } else if kind == "bisect" {
+        let a = ints(f[2]);
+        let x = num(f[3]);
+        let i = if f[1] == "left" { bisect_left(a, x) } else { bisect_right(a, x) };
+        out.push_str(f"  {i}\n");
+    } else if kind == "insort" {
+        let mut a = ints(f[1]);
+        for x in ints(f[2]).iter() {
+            insort(mut a, *x);
+            out.push_str(f"  insort {x} -> {show(a)}\n");
+        }
+    } else if kind == "grade" {
+        // The bisect docs' grade(): breakpoints 60, 70, 80 and 90.
+        let breakpoints: Vec[i64] = vec![60, 70, 80, 90];
+        let grades: Vec[char] = "FDCBA".chars().collect();
+        let letters: Vec[String] = ints(f[1]).iter().map(|s| grades[bisect_right(breakpoints, *s)].to_string()).collect();
+        out.push_str(f"  {letters.join(" ")}\n");
+    } else if kind == "buckets" {
+        buckets_job(ints(f[1]), mut out)?;
+    } else if kind == "route" {
+        route_job(f[1], f[2], mut out)?;
+    } else if kind == "sched" {
+        sched_job(f[1][1..].to_string(), mut out)?;
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data/logs".to_string()) {
+        eprintln(f"cannot create data/logs: {e}");
+        return;
+    }
+    for (path, contents) in data_files() {
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        if let Err(e) = run(f, mut out) {
+            out.push_str(f"error: {e}\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    v.push(("logs/empty.log".to_string(), t));
+    let mut t = String.new();
+    t.push_str("09:00:01 web1 GET /index.html 200 5120 12\n");
+    t.push_str("09:00:03 web1 GET /app.js 200 88211 40\n");
+    t.push_str("09:00:03 web1 GET /style.css 200 9100 8\n");
+    t.push_str("09:00:07 web1 POST /api/login 401 310 95\n");
+    t.push_str("09:00:12 web1 GET /api/items 200 20480 130\n");
+    t.push_str("09:00:15 web1 GET /missing 404 210 3\n");
+    t.push_str("09:00:21 web1 GET /api/items?page=2 200 20480 128\n");
+    v.push(("logs/web1.log".to_string(), t));
+    let mut t = String.new();
+    t.push_str("09:00:00 web2 GET /health 200 2 1\n");
+    t.push_str("09:00:03 web2 GET /index.html 200 5120 15\n");
+    t.push_str("09:00:05 web2 POST /api/login 200 512 210\n");
+    t.push_str("09:00:12 web2 GET /api/report 500 1024 2900\n");
+    t.push_str("09:00:12 web2 GET /health 200 2 1\n");
+    t.push_str("09:00:30 web2 GET /download/big.iso 200 734003200 15400\n");
+    v.push(("logs/web2.log".to_string(), t));
+    let mut t = String.new();
+    t.push_str("09:00:02 web3 GET /favicon.ico 304 0 2\n");
+    t.push_str("09:00:03 web3 GET /app.js 200 88211 44\n");
+    t.push_str("09:00:09 web3 PUT /api/items/7 204 0 77\n");
+    t.push_str("09:00:21 web3 DELETE /api/items/9 403 120 6\n");
+    v.push(("logs/web3.log".to_string(), t));
+    let mut t = String.new();
+    t.push_str("# from\tto\tminutes (roads run both ways)\n");
+    t.push_str("Aston\tBrook\t7\n");
+    t.push_str("Aston\tCarlow\t9\n");
+    t.push_str("Aston\tFenwick\t14\n");
+    t.push_str("Brook\tCarlow\t10\n");
+    t.push_str("Brook\tDunmore\t15\n");
+    t.push_str("Carlow\tDunmore\t11\n");
+    t.push_str("Carlow\tFenwick\t2\n");
+    t.push_str("Dunmore\tEly\t6\n");
+    t.push_str("Ely\tFenwick\t9\n");
+    t.push_str("Fenwick\tGlen\t12\n");
+    t.push_str("Ely\tGlen\t8\n");
+    t.push_str("Glen\tHarrow\t5\n");
+    t.push_str("Harrow\tIvy\t4\n");
+    t.push_str("Glen\tIvy\t9\n");
+    t.push_str("Ivy\tJura\t3\n");
+    t.push_str("Harrow\tJura\t7\n");
+    t.push_str("Kells\tLisle\t2\n");
+    t.push_str("Jura\tMallow\t6\n");
+    t.push_str("Ivy\tMallow\t9\n");
+    t.push_str("Mallow\tNore\t1\n");
+    t.push_str("Jura\tNore\t7\n");
+    v.push(("roads.tsv".to_string(), t));
+    let mut t = String.new();
+    t.push_str("# time\tpriority\tkind\tname\t[args]\n");
+    t.push_str("#   once: run once\n");
+    t.push_str("#   repeat N EVERY: run, then enter itself again EVERY later, N runs in all\n");
+    t.push_str("#   later NAME DELAY: run, then enter NAME DELAY later (sched.enter)\n");
+    t.push_str("#   cancel NAME: run, then cancel the queued event NAME\n");
+    t.push_str("0\t2\tonce\tboot\n");
+    t.push_str("5\t1\trepeat\theartbeat\t4\t10\n");
+    t.push_str("5\t0\tonce\tmigrate\n");
+    t.push_str("12\t1\tonce\tbackup\n");
+    t.push_str("12\t1\tonce\trotate\n");
+    t.push_str("12\t0\tonce\tflush\n");
+    t.push_str("30\t5\tonce\treport\n");
+    t.push_str("25\t3\tcancel\tstop-report\treport\n");
+    t.push_str("40\t1\tlater\tcompact\tcleanup\t7\n");
+    t.push_str("26\t1\tcancel\tcancel-ghost\tghost\n");
+    t.push_str("44\t9\tonce\tlate\n");
+    v.push(("sched.txt".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("heap\t5,3,8,1,9,2\tpush 4|pop|pop|pushpop 0|pushpop 10|replace 6|push 1|push 1|pop|pop|pop\n");
+    s.push_str("heap\t-\tpop|replace 3|push 7|push 2|push 9|push 2|pop|pushpop 2|pop|pop|pop|pop\n");
+    s.push_str("heap\t9,8,7,6,5,4,3,2,1,0\tpop|pop|replace 11|push -1|pop\n");
+    s.push_str("heap\t4,4,4,1,1\tpop|pop|pop|pop|pop|pop\n");
+    s.push_str("nlargest\t3\t-\t5,1,9,3,9,7,2\n");
+    s.push_str("nlargest\t1\t-\t5,1,9,3,9,7,2\n");
+    s.push_str("nlargest\t0\t-\t5,1,9\n");
+    s.push_str("nlargest\t10\t-\t5,1,9\n");
+    s.push_str("nlargest\t-2\t-\t5,1,9\n");
+    s.push_str("nlargest\t1\t-\t\n");
+    s.push_str("nsmallest\t3\t-\t5,1,9,3,1,7,2\n");
+    s.push_str("nsmallest\t1\t-\t5,1,9,3,1,7,2\n");
+    s.push_str("nsmallest\t9\t-\t5,1,9\n");
+    s.push_str("nlargest\t3\tbytes\t@logs\n");
+    s.push_str("nlargest\t4\tms\t@logs\n");
+    s.push_str("nlargest\t2\tpath\t@logs\n");
+    s.push_str("nsmallest\t3\tms\t@logs\n");
+    s.push_str("nsmallest\t4\tstatus\t@logs\n");
+    s.push_str("nlargest\t20\tms\t@logs\n");
+    s.push_str("nsmallest\t1\tbytes\t@logs\n");
+    s.push_str("merge\t-\t1,3,5,7;0,2,4,8;5,10,15,20;;25\n");
+    s.push_str("merge\t-\t;;\n");
+    s.push_str("merge\t-\t2,2;1,2;2\n");
+    s.push_str("merge\ttime\tweb1.log;web2.log;web3.log;empty.log\n");
+    s.push_str("merge\thost\tweb2.log;web1.log\n");
+    s.push_str("merge\t-\tweb3.log;web1.log\n");
+    s.push_str("bisect\tleft\t1,2,4,4,4,8\t4\n");
+    s.push_str("bisect\tright\t1,2,4,4,4,8\t4\n");
+    s.push_str("bisect\tleft\t1,2,4,4,4,8\t0\n");
+    s.push_str("bisect\tright\t1,2,4,4,4,8\t9\n");
+    s.push_str("bisect\tleft\t-\t3\n");
+    s.push_str("insort\t-\t5,1,4,1,5,9,2,6,5,3\n");
+    s.push_str("insort\t10,20,30\t25,5,35,20\n");
+    s.push_str("grade\t33,99,77,70,89,90,100,59,60\n");
+    s.push_str("buckets\t5,10,50,100,500,1000,5000\t@logs\n");
+    s.push_str("buckets\t1\t@logs\n");
+    s.push_str("route\tAston\tNore\n");
+    s.push_str("route\tAston\tGlen\n");
+    s.push_str("route\tNore\tAston\n");
+    s.push_str("route\tCarlow\tCarlow\n");
+    s.push_str("route\tBrook\tIvy\n");
+    s.push_str("route\tAston\tLisle\n");
+    s.push_str("route\tKells\tLisle\n");
+    s.push_str("route\tAston\tAtlantis\n");
+    s.push_str("sched\t@sched.txt\n");
+    s
+}

@@ -1,0 +1,232 @@
+== heap | 5,3,8,1,9,2 | push 4|pop|pop|pushpop 0|pushpop 10|replace 6|push 1|push 1|pop|pop|pop
+  heapify -> [1, 3, 2, 5, 9, 8]
+  push 4 -> [1, 3, 2, 5, 9, 8, 4]
+  pop = 1 -> [2, 3, 4, 5, 9, 8]
+  pop = 2 -> [3, 5, 4, 8, 9]
+  pushpop 0 = 0 -> [3, 5, 4, 8, 9]
+  pushpop 10 = 3 -> [4, 5, 10, 8, 9]
+  replace 6 = 4 -> [5, 6, 10, 8, 9]
+  push 1 -> [1, 6, 5, 8, 9, 10]
+  push 1 -> [1, 6, 1, 8, 9, 10, 5]
+  pop = 1 -> [1, 6, 5, 8, 9, 10]
+  pop = 1 -> [5, 6, 10, 8, 9]
+  pop = 5 -> [6, 8, 10, 9]
+== heap | - | pop|replace 3|push 7|push 2|push 9|push 2|pop|pushpop 2|pop|pop|pop|pop
+  heapify -> []
+  pop: IndexError: index out of range
+  replace 3: IndexError: index out of range
+  push 7 -> [7]
+  push 2 -> [2, 7]
+  push 9 -> [2, 7, 9]
+  push 2 -> [2, 2, 9, 7]
+  pop = 2 -> [2, 7, 9]
+  pushpop 2 = 2 -> [2, 7, 9]
+  pop = 2 -> [7, 9]
+  pop = 7 -> [9]
+  pop = 9 -> []
+  pop: IndexError: index out of range
+== heap | 9,8,7,6,5,4,3,2,1,0 | pop|pop|replace 11|push -1|pop
+  heapify -> [0, 1, 3, 2, 5, 4, 7, 9, 6, 8]
+  pop = 0 -> [1, 2, 3, 6, 5, 4, 7, 9, 8]
+  pop = 1 -> [2, 5, 3, 6, 8, 4, 7, 9]
+  replace 11 = 2 -> [3, 5, 4, 6, 8, 11, 7, 9]
+  push -1 -> [-1, 3, 4, 5, 8, 11, 7, 9, 6]
+  pop = -1 -> [3, 5, 4, 6, 8, 11, 7, 9]
+== heap | 4,4,4,1,1 | pop|pop|pop|pop|pop|pop
+  heapify -> [1, 1, 4, 4, 4]
+  pop = 1 -> [1, 4, 4, 4]
+  pop = 1 -> [4, 4, 4]
+  pop = 4 -> [4, 4]
+  pop = 4 -> [4]
+  pop = 4 -> []
+  pop: IndexError: index out of range
+== nlargest | 3 | - | 5,1,9,3,9,7,2
+  [9, 9, 7]
+== nlargest | 1 | - | 5,1,9,3,9,7,2
+  [9]
+== nlargest | 0 | - | 5,1,9
+  []
+== nlargest | 10 | - | 5,1,9
+  [9, 5, 1]
+== nlargest | -2 | - | 5,1,9
+  []
+== nlargest | 1 | - | 
+  []
+== nsmallest | 3 | - | 5,1,9,3,1,7,2
+  [1, 1, 2]
+== nsmallest | 1 | - | 5,1,9,3,1,7,2
+  [1]
+== nsmallest | 9 | - | 5,1,9
+  [1, 5, 9]
+== nlargest | 3 | bytes | @logs
+  09:00:30 web2 GET /download/big.iso 200 734003200 15400
+  09:00:03 web1 GET /app.js 200 88211 40
+  09:00:03 web3 GET /app.js 200 88211 44
+== nlargest | 4 | ms | @logs
+  09:00:30 web2 GET /download/big.iso 200 734003200 15400
+  09:00:12 web2 GET /api/report 500 1024 2900
+  09:00:05 web2 POST /api/login 200 512 210
+  09:00:12 web1 GET /api/items 200 20480 130
+== nlargest | 2 | path | @logs
+  09:00:03 web1 GET /style.css 200 9100 8
+  09:00:15 web1 GET /missing 404 210 3
+== nsmallest | 3 | ms | @logs
+  09:00:00 web2 GET /health 200 2 1
+  09:00:12 web2 GET /health 200 2 1
+  09:00:02 web3 GET /favicon.ico 304 0 2
+== nsmallest | 4 | status | @logs
+  09:00:01 web1 GET /index.html 200 5120 12
+  09:00:03 web1 GET /app.js 200 88211 40
+  09:00:03 web1 GET /style.css 200 9100 8
+  09:00:12 web1 GET /api/items 200 20480 130
+== nlargest | 20 | ms | @logs
+  09:00:30 web2 GET /download/big.iso 200 734003200 15400
+  09:00:12 web2 GET /api/report 500 1024 2900
+  09:00:05 web2 POST /api/login 200 512 210
+  09:00:12 web1 GET /api/items 200 20480 130
+  09:00:21 web1 GET /api/items?page=2 200 20480 128
+  09:00:07 web1 POST /api/login 401 310 95
+  09:00:09 web3 PUT /api/items/7 204 0 77
+  09:00:03 web3 GET /app.js 200 88211 44
+  09:00:03 web1 GET /app.js 200 88211 40
+  09:00:03 web2 GET /index.html 200 5120 15
+  09:00:01 web1 GET /index.html 200 5120 12
+  09:00:03 web1 GET /style.css 200 9100 8
+  09:00:21 web3 DELETE /api/items/9 403 120 6
+  09:00:15 web1 GET /missing 404 210 3
+  09:00:02 web3 GET /favicon.ico 304 0 2
+  09:00:00 web2 GET /health 200 2 1
+  09:00:12 web2 GET /health 200 2 1
+== nsmallest | 1 | bytes | @logs
+  09:00:02 web3 GET /favicon.ico 304 0 2
+== merge | - | 1,3,5,7;0,2,4,8;5,10,15,20;;25
+  [0, 1, 2, 3, 4, 5, 5, 7, 8, 10, 15, 20, 25]
+== merge | - | ;;
+  []
+== merge | - | 2,2;1,2;2
+  [1, 2, 2, 2, 2]
+== merge | time | web1.log;web2.log;web3.log;empty.log
+  09:00:00 web2 GET /health 200 2 1
+  09:00:01 web1 GET /index.html 200 5120 12
+  09:00:02 web3 GET /favicon.ico 304 0 2
+  09:00:03 web1 GET /app.js 200 88211 40
+  09:00:03 web1 GET /style.css 200 9100 8
+  09:00:03 web2 GET /index.html 200 5120 15
+  09:00:03 web3 GET /app.js 200 88211 44
+  09:00:05 web2 POST /api/login 200 512 210
+  09:00:07 web1 POST /api/login 401 310 95
+  09:00:09 web3 PUT /api/items/7 204 0 77
+  09:00:12 web1 GET /api/items 200 20480 130
+  09:00:12 web2 GET /api/report 500 1024 2900
+  09:00:12 web2 GET /health 200 2 1
+  09:00:15 web1 GET /missing 404 210 3
+  09:00:21 web1 GET /api/items?page=2 200 20480 128
+  09:00:21 web3 DELETE /api/items/9 403 120 6
+  09:00:30 web2 GET /download/big.iso 200 734003200 15400
+== merge | host | web2.log;web1.log
+  09:00:01 web1 GET /index.html 200 5120 12
+  09:00:03 web1 GET /app.js 200 88211 40
+  09:00:03 web1 GET /style.css 200 9100 8
+  09:00:07 web1 POST /api/login 401 310 95
+  09:00:12 web1 GET /api/items 200 20480 130
+  09:00:15 web1 GET /missing 404 210 3
+  09:00:21 web1 GET /api/items?page=2 200 20480 128
+  09:00:00 web2 GET /health 200 2 1
+  09:00:03 web2 GET /index.html 200 5120 15
+  09:00:05 web2 POST /api/login 200 512 210
+  09:00:12 web2 GET /api/report 500 1024 2900
+  09:00:12 web2 GET /health 200 2 1
+  09:00:30 web2 GET /download/big.iso 200 734003200 15400
+== merge | - | web3.log;web1.log
+  09:00:01 web1 GET /index.html 200 5120 12
+  09:00:02 web3 GET /favicon.ico 304 0 2
+  09:00:03 web1 GET /app.js 200 88211 40
+  09:00:03 web1 GET /style.css 200 9100 8
+  09:00:03 web3 GET /app.js 200 88211 44
+  09:00:07 web1 POST /api/login 401 310 95
+  09:00:09 web3 PUT /api/items/7 204 0 77
+  09:00:12 web1 GET /api/items 200 20480 130
+  09:00:15 web1 GET /missing 404 210 3
+  09:00:21 web1 GET /api/items?page=2 200 20480 128
+  09:00:21 web3 DELETE /api/items/9 403 120 6
+== bisect | left | 1,2,4,4,4,8 | 4
+  2
+== bisect | right | 1,2,4,4,4,8 | 4
+  5
+== bisect | left | 1,2,4,4,4,8 | 0
+  0
+== bisect | right | 1,2,4,4,4,8 | 9
+  6
+== bisect | left | - | 3
+  0
+== insort | - | 5,1,4,1,5,9,2,6,5,3
+  insort 5 -> [5]
+  insort 1 -> [1, 5]
+  insort 4 -> [1, 4, 5]
+  insort 1 -> [1, 1, 4, 5]
+  insort 5 -> [1, 1, 4, 5, 5]
+  insort 9 -> [1, 1, 4, 5, 5, 9]
+  insort 2 -> [1, 1, 2, 4, 5, 5, 9]
+  insort 6 -> [1, 1, 2, 4, 5, 5, 6, 9]
+  insort 5 -> [1, 1, 2, 4, 5, 5, 5, 6, 9]
+  insort 3 -> [1, 1, 2, 3, 4, 5, 5, 5, 6, 9]
+== insort | 10,20,30 | 25,5,35,20
+  insort 25 -> [10, 20, 25, 30]
+  insort 5 -> [5, 10, 20, 25, 30]
+  insort 35 -> [5, 10, 20, 25, 30, 35]
+  insort 20 -> [5, 10, 20, 20, 25, 30, 35]
+== grade | 33,99,77,70,89,90,100,59,60
+  F A C C B A A F D
+== buckets | 5,10,50,100,500,1000,5000 | @logs
+  le=5 4
+  le=10 6
+  le=50 10
+  le=100 12
+  le=500 15
+  le=1000 15
+  le=5000 16
+  le=+Inf 17
+  sum=19072 count=17
+== buckets | 1 | @logs
+  le=1 2
+  le=+Inf 17
+  sum=19072 count=17
+== route | Aston | Nore
+  42 min: Aston -> Carlow -> Fenwick -> Glen -> Harrow -> Jura -> Nore
+  (12 towns settled)
+== route | Aston | Glen
+  23 min: Aston -> Carlow -> Fenwick -> Glen
+  (7 towns settled)
+== route | Nore | Aston
+  42 min: Nore -> Mallow -> Ivy -> Glen -> Fenwick -> Carlow -> Aston
+  (11 towns settled)
+== route | Carlow | Carlow
+  0 min: Carlow
+  (1 towns settled)
+== route | Brook | Ivy
+  33 min: Brook -> Carlow -> Fenwick -> Glen -> Ivy
+  (9 towns settled)
+== route | Aston | Lisle
+  no route (12 towns settled)
+== route | Kells | Lisle
+  2 min: Kells -> Lisle
+  (2 towns settled)
+== route | Aston | Atlantis
+  no route (12 towns settled)
+== sched | @sched.txt
+  queue: boot@0/2 migrate@5/0 heartbeat@5/1 flush@12/0 backup@12/1 rotate@12/1 stop-report@25/3 cancel-ghost@26/1 report@30/5 compact@40/1 late@44/9
+  t=0 boot
+  t=5 migrate
+  t=5 heartbeat (1/4)
+  t=12 flush
+  t=12 backup
+  t=12 rotate
+  t=15 heartbeat (2/4)
+  t=25 heartbeat (3/4)
+  t=25 stop-report: cancelled report
+  t=26 cancel-ghost: ghost is not queued
+  t=35 heartbeat (4/4)
+  t=40 compact -> enter cleanup at 47
+  t=44 late
+  t=47 cleanup
+  done at t=47, 14 events run
