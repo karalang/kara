@@ -10884,13 +10884,16 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         // A `String` passed for a `Str` parameter is viewed, not moved
         // (core semantics §5.2).
-        if matches!(self.tys().tcx().kind(pt), HK::StaticStr)
-            && matches!(self.strip_ty(at), HK::Str)
-        {
-            // A literal is a view of static text, with nothing to allocate.
+        if matches!(self.tys().tcx().kind(pt), HK::StaticStr) {
+            // A literal is a view of static text, with nothing to allocate,
+            // whether check typed it `String` or, from the parameter, `Str`.
             if let ExprKind::StringLit(s) = &a.kind {
                 return Ok(self.static_str(s));
             }
+        }
+        if matches!(self.tys().tcx().kind(pt), HK::StaticStr)
+            && matches!(self.strip_ty(at), HK::Str)
+        {
             let recv = self.recv_ref(a, false)?;
             let v = self.temp(pt);
             self.call_native("String.as_str", vec![recv], Place::local(v));
