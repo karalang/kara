@@ -149,19 +149,15 @@ impl<'a> super::OwnershipChecker<'a> {
                 return matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef);
             }
         }
-        if let ExprKind::MethodCall { object, method, .. } = &method_call.kind {
-            // `fs.write(p, c)`: an ambient resource call is typed through its
-            // alias and records no callee key; its modes are the resource's
-            // own declaration (B-2026-10-14-53). A local named `fs` would have
-            // recorded a key above.
-            if let ExprKind::Identifier(alias) = &object.kind {
-                if let Some(m) = crate::ownership::ambient_resource_for_alias(alias)
-                    .and_then(|r| self.method_param_modes.get(&format!("{r}.{method}")))
-                    .and_then(|modes| modes.get(arg_index))
-                {
-                    return matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef);
-                }
-            }
+        // `fs.write(p, c)`; a local named `fs` would have recorded a key above.
+        if let Some(b) = crate::ownership::ambient_arg_is_borrow(
+            &self.method_param_modes,
+            method_call,
+            arg_index,
+        ) {
+            return b;
+        }
+        if let ExprKind::MethodCall { method, .. } = &method_call.kind {
             return crate::ownership::arg_is_borrow_by_method_name(
                 &self.method_param_modes,
                 method,
@@ -815,6 +811,15 @@ impl<'a> super::OwnershipChecker<'a> {
     /// while overlapping ancestor / equal-path access is restricted.
     /// Each borrow is scope-stamped with the current scope depth so the
     /// drain at block-exit retires it when the holding scope ends.
+    /// Ends the capture borrows of the closure literal at `closure_span`.
+    pub(crate) fn release_closure_capture_borrows(&mut self, closure_span: &Span) {
+        let key = SpanKey::from_span(closure_span);
+        self.closure_capture_borrows.retain(|_, captures| {
+            captures.retain(|c| SpanKey::from_span(&c.closure_span) != key);
+            !captures.is_empty()
+        });
+    }
+
     pub(crate) fn push_closure_capture_borrows(
         &mut self,
         closure_span: &Span,

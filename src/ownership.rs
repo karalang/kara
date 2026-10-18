@@ -102,6 +102,35 @@ impl std::fmt::Display for OwnershipMode {
 /// conservative `false` — and because this call's own method is always present
 /// in the string-keyed map, the fallback can never turn a genuine move into a
 /// borrow; it only rescues the unambiguous all-borrow case.
+/// Methods that call their closure argument during the call and keep no
+/// reference to it: terminal iterator walks and in-place sorts. A lazy
+/// adaptor (`map`, `filter`) is absent, since the iterator it returns holds
+/// the closure.
+pub(crate) fn method_runs_closure_without_keeping_it(method: &str) -> bool {
+    matches!(
+        method,
+        "any"
+            | "all"
+            | "position"
+            | "rposition"
+            | "find"
+            | "find_map"
+            | "for_each"
+            | "fold"
+            | "reduce"
+            | "count_where"
+            | "min_by"
+            | "max_by"
+            | "min_by_key"
+            | "max_by_key"
+            | "sort_by"
+            | "sort_by_key"
+            | "retain"
+            | "is_some_and"
+            | "is_ok_and"
+    )
+}
+
 /// The lowercase aliases of the ambient resources (design.md § I/O):
 /// `fs.write(p, c)` calls `FileSystem.write`. Mirrors the typechecker's
 /// identifier-receiver dispatch and codegen's `ambient_resource_for_alias`.
@@ -121,6 +150,29 @@ pub(crate) fn ambient_resource_for_alias(alias: &str) -> Option<&'static str> {
         .iter()
         .find(|(a, _)| *a == alias)
         .map(|(_, r)| *r)
+}
+
+/// Whether argument `arg_index` of an ambient resource call (`fs.write(p,
+/// c)`) is a borrow, from the resource's own declaration. Such a call is
+/// typed through its alias and records no callee key, and a name lookup is
+/// ambiguous (`ChildStdin.write` owns its argument). `None` when the call is
+/// not one (B-2026-10-14-53).
+pub(crate) fn ambient_arg_is_borrow(
+    method_param_modes: &FxHashMap<String, Vec<OwnershipMode>>,
+    method_call: &Expr,
+    arg_index: usize,
+) -> Option<bool> {
+    let ExprKind::MethodCall { object, method, .. } = &method_call.kind else {
+        return None;
+    };
+    let ExprKind::Identifier(alias) = &object.kind else {
+        return None;
+    };
+    let resource = ambient_resource_for_alias(alias)?;
+    let mode = method_param_modes
+        .get(&format!("{resource}.{method}"))?
+        .get(arg_index)?;
+    Some(matches!(mode, OwnershipMode::Ref | OwnershipMode::MutRef))
 }
 
 pub(crate) fn arg_is_borrow_by_method_name(

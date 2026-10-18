@@ -605,7 +605,7 @@ impl<'a> super::TypeChecker<'a> {
     /// Type a collection literal's later element against its first one's
     /// type where only check mode can type it as written: `("two", "cd")`
     /// after `("one", AB)` with `AB: Str` (B-2026-10-14-68).
-    fn infer_later_elem(&mut self, elem: &Expr, first_ty: &Type) -> Type {
+    pub(super) fn infer_later_elem(&mut self, elem: &Expr, first_ty: &Type) -> Type {
         if Self::literal_needs_array_slot(elem, first_ty) {
             self.check_expr(elem, first_ty)
         } else {
@@ -9031,15 +9031,7 @@ impl<'a> super::TypeChecker<'a> {
                         args: vec![Type::Error],
                     }
                 } else {
-                    let first_ty = self.infer_expr(&elements[0]);
-                    for elem in &elements[1..] {
-                        // A later element takes the first one's type where
-                        // only check mode can type it as written: `("two",
-                        // "cd")` after `("one", AB)` with `AB: Str`
-                        // (B-2026-10-14-68).
-                        let elem_ty = self.infer_later_elem(elem, &first_ty);
-                        self.check_assignable(&first_ty, &elem_ty, elem.span);
-                    }
+                    let first_ty = self.infer_collection_elements(elements);
                     Type::Named {
                         name: "Vec".to_string(),
                         args: vec![first_ty],
@@ -9071,33 +9063,21 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 match type_name.as_str() {
                     "Array" => {
-                        let first_ty = self.infer_expr(&items[0]);
-                        for item in &items[1..] {
-                            let ty = self.infer_later_elem(item, &first_ty);
-                            self.check_assignable(&first_ty, &ty, item.span);
-                        }
+                        let first_ty = self.infer_collection_elements(items);
                         Type::Array {
                             element: Box::new(first_ty),
                             size: ConstArg::Literal(items.len() as i64),
                         }
                     }
                     "Vec" => {
-                        let first_ty = self.infer_expr(&items[0]);
-                        for item in &items[1..] {
-                            let ty = self.infer_later_elem(item, &first_ty);
-                            self.check_assignable(&first_ty, &ty, item.span);
-                        }
+                        let first_ty = self.infer_collection_elements(items);
                         Type::Named {
                             name: "Vec".to_string(),
                             args: vec![first_ty],
                         }
                     }
                     "Set" => {
-                        let first_ty = self.infer_expr(&items[0]);
-                        for item in &items[1..] {
-                            let ty = self.infer_later_elem(item, &first_ty);
-                            self.check_assignable(&first_ty, &ty, item.span);
-                        }
+                        let first_ty = self.infer_collection_elements(items);
                         Type::Named {
                             name: "Set".to_string(),
                             args: vec![first_ty],

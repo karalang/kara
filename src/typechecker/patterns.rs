@@ -416,6 +416,14 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn reject_consuming_arm_binding_out_of_index(&mut self, scrut_ty: &Type, arm: &MatchArm) {
+        // v2 core §4.6 (B-2026-10-15-7): over a borrowed place every
+        // non-`Copy` binding is a `ref`, decided by the pattern and never by
+        // how the arm uses it, and a move of one is the core's own
+        // "it borrows its value" error. This use classifier counted `==` and
+        // format holes as consumption.
+        if self.cli_lint_overrides.strict_core {
+            return;
+        }
         // The scrutinee's clone-ability, because `v[i].clone()` is the fix-it
         // being offered -- the binding's own type is not what the programmer
         // would write `.clone()` on.
@@ -3875,6 +3883,28 @@ impl<'a> super::TypeChecker<'a> {
             }
             *t = want.clone();
         }
+    }
+
+    /// The element type of a non-empty collection literal: every element
+    /// is assignable to the first, after string literals beside a `Str`
+    /// view take the view (`vec![("one", AB), ("two", "cd")]` with `AB: Str`,
+    /// B-2026-10-14-68).
+    pub(super) fn infer_collection_elements(&mut self, elements: &[Expr]) -> Type {
+        let mut tys: Vec<Type> = vec![self.infer_expr(&elements[0])];
+        for e in &elements[1..] {
+            // A later element takes the first one's type where only check
+            // mode can type it as written: `("two", "cd")` after `("one",
+            // AB)` with `AB: Str` (B-2026-10-14-68).
+            let t = self.infer_later_elem(e, &tys[0]);
+            tys.push(t);
+        }
+        let bodies: Vec<Option<&Expr>> = elements.iter().map(Some).collect();
+        self.view_string_literal_branches(&bodies, &mut tys);
+        let first_ty = tys[0].clone();
+        for (elem, ty) in elements[1..].iter().zip(&tys[1..]) {
+            self.check_assignable(&first_ty, ty, elem.span);
+        }
+        first_ty
     }
 
     fn retype_literal_slots(&mut self, expr: &Expr, ty: &Type, want: &Type) {

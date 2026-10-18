@@ -1846,6 +1846,12 @@ impl<'a> UseClassifier<'a> {
                 return matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef);
             }
         }
+        // `fs.write(p, c)`, as the ownership twin does (B-2026-10-14-53).
+        if let Some(b) =
+            crate::ownership::ambient_arg_is_borrow(self.method_param_modes, method_call, arg_index)
+        {
+            return b;
+        }
         if let ExprKind::MethodCall { method, .. } = &method_call.kind {
             return crate::ownership::arg_is_borrow_by_method_name(
                 self.method_param_modes,

@@ -6658,3 +6658,71 @@ fn app_rows_of_2026_10_14() {
          }\n",
     );
 }
+
+/// The app rows of 2026-10-15 and the widened 10-14 ones.
+#[test]
+fn app_rows_of_2026_10_15() {
+    // B-2026-10-14-53, widened: `fs.write`'s path and `env.var`'s name
+    // borrow too.
+    accepted(
+        "ambient-path-borrows",
+        "fn main() {\n\
+             let name = \"HOME\".to_string();\n\
+             let v = env.var(name);\n\
+             let path = \"x.txt\".to_string();\n\
+             let r = fs.write(path, \"abc\".to_string());\n\
+             println(f\"{name} {path} {r.is_ok()} {v.is_ok()}\");\n\
+         }\n",
+    );
+    // B-2026-10-14-68, widened: a literal beside a `Str` const in `vec!`.
+    accepted(
+        "vec-literal-beside-str-const",
+        "const AB: Str = \"ab\";\n\
+         fn main() {\n\
+             let files = vec![(\"one\", AB), (\"two\", \"cd\")];\n\
+             println(f\"{files.len()} {files[1].1}\");\n\
+         }\n",
+    );
+    // B-2026-10-15-7: a `match v[i]` arm binding is a `ref`; reading it
+    // with `==` or in a format hole is no move, and moving it still is.
+    accepted(
+        "index-match-arm-reads",
+        "enum Tok { Sym(String), End }\n\
+         fn is_sym(toks: ref Vec[Tok], s: Str) -> bool {\n\
+             match toks[0] { Tok.Sym(t) => t == s, _ => false }\n\
+         }\n\
+         fn main() {\n\
+             let v = vec![Tok.Sym(\"ab\".to_string())];\n\
+             match v[0] { Tok.Sym(t) => println(f\"local {t}\"), Tok.End => {} }\n\
+             println(f\"{is_sym(v, \"ab\")} {v.len()}\");\n\
+         }\n",
+    );
+    rejected(
+        "index-match-arm-moves",
+        "enum Tok { Sym(String), End }\n\
+         fn take(s: own String) -> i64 { s.len() }\n\
+         fn main() {\n\
+             let v = vec![Tok.Sym(\"ab\".to_string())];\n\
+             let n = match v[0] { Tok.Sym(t) => take(t), Tok.End => 0 };\n\
+             println(f\"{n} {v.len()}\");\n\
+         }\n",
+        "cannot move 't'",
+    );
+    // B-2026-10-15-12: a closure run by `any` stops borrowing its captures
+    // when `any` returns.
+    accepted(
+        "closure-arg-borrow-ends",
+        "struct D { name: String, n: i64 }\n\
+         fn main() {\n\
+             let skip: Vec[String] = vec![\"b\".to_string()];\n\
+             let all = vec![D { name: \"a\".to_string(), n: 1 }, D { name: \"b\".to_string(), n: 2 }];\n\
+             let mut kept: Vec[D] = Vec.new();\n\
+             for d in all.into_iter() {\n\
+                 let redo = skip.iter().any(|s| s == d.name);\n\
+                 if redo { continue; }\n\
+                 kept.push(d);\n\
+             }\n\
+             println(f\"{kept.len()}\");\n\
+         }\n",
+    );
+}

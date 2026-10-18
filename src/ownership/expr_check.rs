@@ -816,6 +816,17 @@ impl<'a> super::OwnershipChecker<'a> {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);
                     }
                 }
+                // B-2026-10-15-12: a closure
+                // literal handed to a method that runs it and keeps nothing
+                // (`any`, `position`, `fold`, ..) is gone when the call
+                // returns, so its captures stop borrowing there.
+                if crate::ownership::method_runs_closure_without_keeping_it(method) {
+                    for arg in args {
+                        if matches!(arg.value.kind, ExprKind::Closure { .. }) {
+                            self.release_closure_capture_borrows(&arg.value.span);
+                        }
+                    }
+                }
                 // Slice 2 — drop the receiver-side ref borrow + any call-
                 // arg-coerced slice borrows added during the args walk.
                 // The `.as_slice` / `.as_slice_mut` slice creation push
