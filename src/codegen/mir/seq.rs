@@ -367,6 +367,10 @@ impl<'ctx> Cx<'ctx, '_> {
                     .i32_type()
                     .const_int(u64::from(method == "index_range"), false);
                 let d = self.place_ptr(dest)?;
+                if method == "index_range" && self.str_cut(dty) == "str_view" {
+                    self.str_view_inline(d, p, n, lo, hi)?;
+                    return Ok(Some(()));
+                }
                 let r = self.rt_int(
                     self.str_cut(dty),
                     &[
@@ -669,6 +673,99 @@ impl<'ctx> Cx<'ctx, '_> {
             _ => return Ok(None),
         }
         Ok(Some(()))
+    }
+
+    /// `s[lo..hi]` as a view `{ptr, len}` at `d`. A range inside the text
+    /// whose ends both fall on char boundaries is cut inline; any other
+    /// range goes to `karac_mir_str_view`, which sets the panic message
+    /// and aborts (B-2026-10-18-34).
+    fn str_view_inline(
+        &mut self,
+        d: PointerValue<'ctx>,
+        p: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        lo: IntValue<'ctx>,
+        hi: IntValue<'ctx>,
+    ) -> R<()> {
+        let i8t = self.llcx.i8_type();
+        let f = self.cur_fn()?;
+        let lo_in = self.llcx.append_basic_block(f, "cut.lo");
+        let lo_byte = self.llcx.append_basic_block(f, "cut.lo.byte");
+        let hi_in = self.llcx.append_basic_block(f, "cut.hi");
+        let hi_byte = self.llcx.append_basic_block(f, "cut.hi.byte");
+        let fast = self.llcx.append_basic_block(f, "cut.view");
+        let slow = self.llcx.append_basic_block(f, "cut.slow");
+        let join = self.llcx.append_basic_block(f, "cut.done");
+        // 0 <= lo <= hi <= n, as unsigned compares: a negative end is huge.
+        let a = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, lo, hi, "")
+            .map_err(e)?;
+        let b = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, hi, n, "")
+            .map_err(e)?;
+        let inside = self.builder.build_and(a, b, "").map_err(e)?;
+        self.builder
+            .build_conditional_branch(inside, lo_in, slow)
+            .map_err(e)?;
+        // An end at n is a boundary; one before it is unless its byte
+        // continues a char (0b10xx_xxxx).
+        for (at, here, byte, next) in [(lo, lo_in, lo_byte, hi_in), (hi, hi_in, hi_byte, fast)] {
+            self.builder.position_at_end(here);
+            let before = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, at, n, "")
+                .map_err(e)?;
+            self.builder
+                .build_conditional_branch(before, byte, next)
+                .map_err(e)?;
+            self.builder.position_at_end(byte);
+            // SAFETY of the read: at < n.
+            let q = unsafe { self.builder.build_in_bounds_gep(i8t, p, &[at], "") }.map_err(e)?;
+            let v = self
+                .builder
+                .build_load(i8t, q, "")
+                .map_err(e)?
+                .into_int_value();
+            let top = self
+                .builder
+                .build_and(v, i8t.const_int(0xC0, false), "")
+                .map_err(e)?;
+            let starts = self
+                .builder
+                .build_int_compare(IntPredicate::NE, top, i8t.const_int(0x80, false), "")
+                .map_err(e)?;
+            self.builder
+                .build_conditional_branch(starts, next, slow)
+                .map_err(e)?;
+        }
+        self.builder.position_at_end(fast);
+        // SAFETY of the pointer: lo <= n.
+        let start = unsafe { self.builder.build_in_bounds_gep(i8t, p, &[lo], "") }.map_err(e)?;
+        let len = self.builder.build_int_sub(hi, lo, "").map_err(e)?;
+        self.builder.build_store(d, start).map_err(e)?;
+        let dl = self.offset(d, 8)?;
+        self.builder.build_store(dl, len).map_err(e)?;
+        self.builder.build_unconditional_branch(join).map_err(e)?;
+        self.builder.position_at_end(slow);
+        let mode = self.llcx.i32_type().const_int(1, false);
+        let r = self.rt_int(
+            "str_view",
+            &[
+                d.into(),
+                p.into(),
+                n.into(),
+                lo.into(),
+                hi.into(),
+                mode.into(),
+            ],
+            8,
+        )?;
+        self.abort_on(r, "index out of bounds")?;
+        self.builder.build_unconditional_branch(join).map_err(e)?;
+        self.builder.position_at_end(join);
+        Ok(())
     }
 
     /// The runtime cut of a text whose result has type `dty`: a `str`

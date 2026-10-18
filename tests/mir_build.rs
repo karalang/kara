@@ -4292,3 +4292,68 @@ fn main() {
         }
     }
 }
+
+/// `T.parse` reads one to 18 digits inline and hands every other text to
+/// the runtime (B-2026-10-18-34): both paths, at three widths, give the
+/// MIR interpreter's answers.
+#[test]
+fn mir_build_parse_agrees_with_the_interpreter() {
+    let src = r#"
+fn show(o: Option[i64]) -> String {
+    match o {
+        Some(v) => f"{v}",
+        None => "none".to_string(),
+    }
+}
+fn show8(o: Option[i8]) -> String {
+    match o {
+        Some(v) => f"{v}",
+        None => "none".to_string(),
+    }
+}
+fn showu8(o: Option[u8]) -> String {
+    match o {
+        Some(v) => f"{v}",
+        None => "none".to_string(),
+    }
+}
+fn main() {
+    let cases = ["0", "12", "-12", "+7", " 12", "12\n", "", "-", "1a", "999999999999999999", "9223372036854775807", "9223372036854775808", "-9223372036854775808", "127", "128", "255", "256", "-0", "007"];
+    for c in cases {
+        println(f"[{c}] {show(i64.parse(c).ok())} {show8(i8.parse(c).ok())} {showu8(u8.parse(c).ok())}");
+    }
+}
+"#;
+    let want = karac::mir::lower::run_source(src).expect("interp").output;
+    assert!(want.contains("[255] 255 none 255\n"), "{want}");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// `s[lo..hi]` as a view is cut inline when both ends are char
+/// boundaries (B-2026-10-18-34): ASCII, multi-byte, empty and end cuts
+/// give the MIR interpreter's answers.
+#[test]
+fn mir_build_str_view_cuts_agree_with_the_interpreter() {
+    let src = r#"
+fn cut(t: Str, lo: i64, hi: i64) -> Str {
+    t[lo..hi]
+}
+fn main() {
+    let s = "héllo wörld";
+    let e = "";
+    println(f"[{cut(s, 0, 1)}] [{cut(s, 0, 3)}] [{cut(s, 3, 7)}] [{cut(s, 13, 13)}] [{cut(s, 0, 13)}] [{cut(e, 0, 0)}] [{cut(s, 5, 5)}]");
+    println(f"[{s[1..3]}] [{s[8..12]}]");
+}
+"#;
+    let want = karac::mir::lower::run_source(src).expect("interp").output;
+    assert_eq!(want, "[h] [hé] [llo ] [] [héllo wörld] [] []\n[é] [örl]\n");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

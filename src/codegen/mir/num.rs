@@ -512,6 +512,119 @@ impl<'ctx> Cx<'ctx, '_> {
 
     /// `T.parse(s)` / `T.from_str_radix(s, r)` into an `Option[T]`, for an
     /// integer of at most 64 bits or an `f64`.
+    /// `T.parse(s)` for an integer `T` of at most 64 bits: 1 with the
+    /// number at `slot`, else 0. One to 18 ASCII digits are read inline,
+    /// since they cannot overflow an i64 and need only `T`'s range check;
+    /// any other text (a sign, whitespace, junk, more digits) goes to
+    /// `karac_mir_parse_int`, which gives the same verdict on these
+    /// (B-2026-10-18-34).
+    fn parse_decimal(
+        &mut self,
+        s: inkwell::values::PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        it: IntTy,
+        slot: inkwell::values::PointerValue<'ctx>,
+    ) -> R<IntValue<'ctx>> {
+        let i8t = self.llcx.i8_type();
+        let i64t = self.llcx.i64_type();
+        let f = self.cur_fn()?;
+        let head = self.llcx.append_basic_block(f, "dec");
+        let body = self.llcx.append_basic_block(f, "dec.digit");
+        let fast = self.llcx.append_basic_block(f, "dec.done");
+        let slow = self.llcx.append_basic_block(f, "dec.slow");
+        let join = self.llcx.append_basic_block(f, "dec.join");
+        // 1 <= n <= 18, as one unsigned compare of n - 1 < 18.
+        let n1 = self.builder.build_int_sub(n, self.i64(1), "").map_err(e)?;
+        let short = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, n1, self.i64(18), "")
+            .map_err(e)?;
+        let pre = self.builder.get_insert_block().ok_or("no insert block")?;
+        self.builder
+            .build_conditional_branch(short, head, slow)
+            .map_err(e)?;
+        self.builder.position_at_end(head);
+        let i = self.builder.build_phi(i64t, "i").map_err(e)?;
+        let acc = self.builder.build_phi(i64t, "acc").map_err(e)?;
+        i.add_incoming(&[(&self.i64(0), pre)]);
+        acc.add_incoming(&[(&self.i64(0), pre)]);
+        let iv = i.as_basic_value().into_int_value();
+        let av = acc.as_basic_value().into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, n, "")
+            .map_err(e)?;
+        self.builder
+            .build_conditional_branch(more, body, fast)
+            .map_err(e)?;
+        self.builder.position_at_end(body);
+        // SAFETY of the read: i < n, the slice's length.
+        let at = unsafe { self.builder.build_in_bounds_gep(i8t, s, &[iv], "") }.map_err(e)?;
+        let b = self
+            .builder
+            .build_load(i8t, at, "")
+            .map_err(e)?
+            .into_int_value();
+        let b = self.builder.build_int_z_extend(b, i64t, "").map_err(e)?;
+        let d = self.builder.build_int_sub(b, self.i64(48), "").map_err(e)?;
+        let digit = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, d, self.i64(10), "")
+            .map_err(e)?;
+        let ten = self
+            .builder
+            .build_int_mul(av, self.i64(10), "")
+            .map_err(e)?;
+        let next_acc = self.builder.build_int_add(ten, d, "").map_err(e)?;
+        let next_i = self.builder.build_int_add(iv, self.i64(1), "").map_err(e)?;
+        i.add_incoming(&[(&next_i, body)]);
+        acc.add_incoming(&[(&next_acc, body)]);
+        self.builder
+            .build_conditional_branch(digit, head, slow)
+            .map_err(e)?;
+        // All digits: the value is non-negative and below 10^18.
+        self.builder.position_at_end(fast);
+        let fits = match (it.bits(), it.signed()) {
+            (64, _) => i8t.const_int(1, false),
+            (bits, signed) => {
+                let max = if signed {
+                    (1u64 << (bits - 1)) - 1
+                } else {
+                    (1u64 << bits) - 1
+                };
+                let ok = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULE, av, self.i64(max), "")
+                    .map_err(e)?;
+                self.builder.build_int_z_extend(ok, i8t, "").map_err(e)?
+            }
+        };
+        self.builder.build_store(slot, av).map_err(e)?;
+        let fast_end = self.builder.get_insert_block().ok_or("no insert block")?;
+        self.builder.build_unconditional_branch(join).map_err(e)?;
+        self.builder.position_at_end(slow);
+        let bits = self.llcx.i32_type().const_int(u64::from(it.bits()), false);
+        let sg = i8t.const_int(u64::from(it.signed()), false);
+        let ten = self.i64(10);
+        let got = self.rt_u8(
+            "parse_int",
+            &[
+                s.into(),
+                n.into(),
+                ten.into(),
+                bits.into(),
+                sg.into(),
+                slot.into(),
+            ],
+        )?;
+        let slow_end = self.builder.get_insert_block().ok_or("no insert block")?;
+        self.builder.build_unconditional_branch(join).map_err(e)?;
+        self.builder.position_at_end(join);
+        let r = self.builder.build_phi(i8t, "parsed.ok").map_err(e)?;
+        r.add_incoming(&[(&fits, fast_end), (&got, slow_end)]);
+        Ok(r.as_basic_value().into_int_value())
+    }
+
     fn parse_num(
         &mut self,
         base: &str,
@@ -537,6 +650,9 @@ impl<'ctx> Cx<'ctx, '_> {
         let got = match self.tys.kind(pt) {
             TyKind::Float(FloatTy::F64) if base == "f64" && method == "parse" => {
                 self.rt_u8("parse_f64", &[s.into(), n.into(), slot.into()])?
+            }
+            TyKind::Int(it) if it.bits() <= 64 && method == "parse" => {
+                self.parse_decimal(s, n, it, slot)?
             }
             TyKind::Int(it) if it.bits() <= 64 => {
                 let radix = match args {
