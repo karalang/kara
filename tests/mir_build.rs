@@ -4109,3 +4109,28 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-15-60: an `Array[T, N]` takes `Slice[T]`'s `to_vec`, for a
+/// const table, a local and a non-`Copy` element.
+#[test]
+fn mir_array_to_vec_copies_the_elements() {
+    const SRC: &str = r#"const TBL: Array[u8, 3] = [1, 2, 3];
+
+fn main() {
+    let a: Array[i64, 3] = [4, 5, 6];
+    let mut v = a.to_vec();
+    v.push(7);
+    let s: Array[String, 2] = ["x".to_string(), "yz".to_string()];
+    let t = s.to_vec();
+    println(f"{v} {TBL.to_vec()} {a[0]} {t} {s[1]}");
+}
+"#;
+    let want = "[4, 5, 6, 7] [1, 2, 3] 4 [x, yz] yz\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
