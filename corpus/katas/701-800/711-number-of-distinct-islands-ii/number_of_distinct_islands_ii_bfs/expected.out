@@ -1,0 +1,14 @@
+example 1: 1
+example 2: 1
+one cell: 1
+all water: 0
+all land: 1
+L turned four ways: 1
+L and its mirror: 1
+S and Z: 1
+bar across and down: 1
+plus and another pentomino: 2
+checkerboard: 1
+50 by 50, 45% land: 65
+50 by 50, 60% land: 25
+300 random grids: 859 distinct islands, checksum 113701058

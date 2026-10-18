@@ -1,0 +1,148 @@
+// LeetCode #711: Number of Distinct Islands II -- canonical forms
+// counted by sorting.
+//
+// No hash set: each island's cells come from a depth-first search with
+// an explicit stack, its canonical form is built as in the ★ arm (the
+// smallest of its eight symmetries, sorted and moved to the origin),
+// and the forms are sorted at the end and the runs of equal ones
+// counted. O(R * C * log(R * C)) for an R by C grid.
+
+fn canonical(cells: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut best: Vec[i64] = Vec.new();
+    for k in 0..8 {
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        for (r, c) in cells.iter() {
+            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let x = if k % 2 == 1 { -a } else { a };
+            let y = if k % 4 >= 2 { -b } else { b };
+            moved.push((x, y));
+        }
+        moved.sort();
+        let (r0, c0) = moved[0];
+        let mut flat: Vec[i64] = Vec.new();
+        for (r, c) in moved.iter() {
+            flat.push(*r - r0);
+            flat.push(*c - c0);
+        }
+        if k == 0 or flat < best {
+            best = flat;
+        }
+    }
+    best
+}
+
+fn num_distinct_islands2(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..rows * cols {
+        seen.push(false);
+    }
+    let mut forms: Vec[Vec[i64]] = Vec.new();
+    for start in 0..rows * cols {
+        if grid[start / cols][start % cols] == 0 or seen[start] {
+            continue;
+        }
+        let mut cells: Vec[(i64, i64)] = Vec.new();
+        let mut stack: Vec[i64] = [start];
+        seen[start] = true;
+        while let Some(at) = stack.pop() {
+            let r = at / cols;
+            let c = at % cols;
+            cells.push((r, c));
+            if r > 0 and grid[r - 1][c] == 1 and not seen[at - cols] {
+                seen[at - cols] = true;
+                stack.push(at - cols);
+            }
+            if r + 1 < rows and grid[r + 1][c] == 1 and not seen[at + cols] {
+                seen[at + cols] = true;
+                stack.push(at + cols);
+            }
+            if c > 0 and grid[r][c - 1] == 1 and not seen[at - 1] {
+                seen[at - 1] = true;
+                stack.push(at - 1);
+            }
+            if c + 1 < cols and grid[r][c + 1] == 1 and not seen[at + 1] {
+                seen[at + 1] = true;
+                stack.push(at + 1);
+            }
+        }
+        forms.push(canonical(cells));
+    }
+    forms.sort();
+    let mut count = 0;
+    for i in 0..forms.len() {
+        if i == 0 or forms[i] != forms[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn grid_of(rows: Vec[String]) -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    for row in rows.iter() {
+        let mut r: Vec[i64] = Vec.new();
+        for ch in row.chars() {
+            r.push(if ch == '1' { 1 } else { 0 });
+        }
+        g.push(r);
+    }
+    g
+}
+
+// An R by C grid with each cell land with chance pct in 100.
+fn random_grid(rows: i64, cols: i64, pct: i64, seed: mut ref i64)
+        -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..rows {
+        let mut r: Vec[i64] = Vec.new();
+        for _ in 0..cols {
+            r.push(if next_random(mut seed) % 100 < pct { 1 } else { 0 });
+        }
+        g.push(r);
+    }
+    g
+}
+
+fn show(name: String, rows: Vec[String]) {
+    println(f"{name}: {num_distinct_islands2(grid_of(rows))}");
+}
+
+fn main() {
+    show("example 1", ["11000", "10000", "00001", "00011"]);
+    show("example 2", ["11000", "11000", "00011", "00011"]);
+    show("one cell", ["1"]);
+    show("all water", ["000", "000"]);
+    show("all land", ["111", "111"]);
+    show("L turned four ways", ["1100011", "1000001", "0000000",
+                                 "1000001", "1100011"]);
+    show("L and its mirror", ["110011", "100001"]);
+    show("S and Z", ["0110011000", "1100001100"]);
+    show("bar across and down", ["11101", "00001", "00001"]);
+    show("plus and another pentomino", ["0100100", "1110111", "0100010"]);
+    show("checkerboard", ["10101", "01010", "10101", "01010"]);
+    let mut seed: i64 = 711;
+    let big = random_grid(50, 50, 45, mut seed);
+    println(f"50 by 50, 45% land: {num_distinct_islands2(big)}");
+    let dense = random_grid(50, 50, 60, mut seed);
+    println(f"50 by 50, 60% land: {num_distinct_islands2(dense)}");
+    let mut sum = 0;
+    let mut total = 0;
+    for _ in 0..300 {
+        let rows = 1 + next_random(mut seed) % 12;
+        let cols = 1 + next_random(mut seed) % 12;
+        let pct = 20 + next_random(mut seed) % 50;
+        let n = num_distinct_islands2(random_grid(rows, cols, pct, mut seed));
+        total += n;
+        sum = (sum * 131 + n) % 1000000007;
+    }
+    println(f"300 random grids: {total} distinct islands, checksum {sum}");
+}

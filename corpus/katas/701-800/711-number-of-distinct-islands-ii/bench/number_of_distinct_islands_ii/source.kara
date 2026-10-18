@@ -1,0 +1,113 @@
+// LeetCode #711: Number of Distinct Islands II -- canonical forms
+// counted by sorting.
+//
+// The sorted arm, which needs no hash set, so it is the same algorithm
+// in all five languages: each island's cells by depth-first search
+// with an explicit stack; its canonical form the smallest of its eight
+// symmetries, sorted and moved to the origin; the forms sorted and the
+// runs of equal ones counted.
+
+fn canonical(cells: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut best: Vec[i64] = Vec.new();
+    for k in 0..8 {
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        for (r, c) in cells.iter() {
+            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let x = if k % 2 == 1 { -a } else { a };
+            let y = if k % 4 >= 2 { -b } else { b };
+            moved.push((x, y));
+        }
+        moved.sort();
+        let (r0, c0) = moved[0];
+        let mut flat: Vec[i64] = Vec.new();
+        for (r, c) in moved.iter() {
+            flat.push(*r - r0);
+            flat.push(*c - c0);
+        }
+        if k == 0 or flat < best {
+            best = flat;
+        }
+    }
+    best
+}
+
+fn num_distinct_islands2(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..rows * cols {
+        seen.push(false);
+    }
+    let mut forms: Vec[Vec[i64]] = Vec.new();
+    for start in 0..rows * cols {
+        if grid[start / cols][start % cols] == 0 or seen[start] {
+            continue;
+        }
+        let mut cells: Vec[(i64, i64)] = Vec.new();
+        let mut stack: Vec[i64] = [start];
+        seen[start] = true;
+        while let Some(at) = stack.pop() {
+            let r = at / cols;
+            let c = at % cols;
+            cells.push((r, c));
+            if r > 0 and grid[r - 1][c] == 1 and not seen[at - cols] {
+                seen[at - cols] = true;
+                stack.push(at - cols);
+            }
+            if r + 1 < rows and grid[r + 1][c] == 1 and not seen[at + cols] {
+                seen[at + cols] = true;
+                stack.push(at + cols);
+            }
+            if c > 0 and grid[r][c - 1] == 1 and not seen[at - 1] {
+                seen[at - 1] = true;
+                stack.push(at - 1);
+            }
+            if c + 1 < cols and grid[r][c + 1] == 1 and not seen[at + 1] {
+                seen[at + 1] = true;
+                stack.push(at + 1);
+            }
+        }
+        forms.push(canonical(cells));
+    }
+    forms.sort();
+    let mut count = 0;
+    for i in 0..forms.len() {
+        if i == 0 or forms[i] != forms[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 100 random 50 by 50 grids, 30% to 69% land, made once.
+    let mut seed: i64 = 711;
+    let mut grids: Vec[Vec[Vec[i64]]] = Vec.new();
+    for g in 0..100 {
+        let pct = 30 + g * 2 / 5;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..50 {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..50 {
+                row.push(if next_random(mut seed) % 100 < pct { 1 } else { 0 });
+            }
+            grid.push(row);
+        }
+        grids.push(grid);
+    }
+    // Each counted ten times, every count summed.
+    let mut sum = 0;
+    for _ in 0..10 {
+        for grid in grids.iter() {
+            sum += num_distinct_islands2(grid);
+        }
+    }
+    println(f"10 rounds of 100 grids of 50 by 50: {sum} distinct islands");
+}

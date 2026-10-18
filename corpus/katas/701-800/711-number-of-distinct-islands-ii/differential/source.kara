@@ -1,0 +1,520 @@
+// LeetCode #711: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random grids.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn collect_star(grid: Vec[Vec[i64]], seen: mut ref Vec[Vec[bool]], r: i64,
+           c: i64, cells: mut ref Vec[(i64, i64)]) {
+    if r < 0 or c < 0 or r >= grid.len() or c >= grid[0].len() {
+        return;
+    }
+    if grid[r][c] == 0 or seen[r][c] {
+        return;
+    }
+    seen[r][c] = true;
+    cells.push((r, c));
+    collect_star(grid, mut seen, r + 1, c, mut cells);
+    collect_star(grid, mut seen, r - 1, c, mut cells);
+    collect_star(grid, mut seen, r, c + 1, mut cells);
+    collect_star(grid, mut seen, r, c - 1, mut cells);
+}
+
+fn canonical_star(cells: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut best: Vec[i64] = Vec.new();
+    for k in 0..8 {
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        for (r, c) in cells.iter() {
+            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let x = if k % 2 == 1 { -a } else { a };
+            let y = if k % 4 >= 2 { -b } else { b };
+            moved.push((x, y));
+        }
+        moved.sort();
+        let (r0, c0) = moved[0];
+        let mut flat: Vec[i64] = Vec.new();
+        for (r, c) in moved.iter() {
+            flat.push(*r - r0);
+            flat.push(*c - c0);
+        }
+        if k == 0 or flat < best {
+            best = flat;
+        }
+    }
+    best
+}
+
+fn num_distinct_islands2_star(grid: Vec[Vec[i64]]) -> i64 {
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for row in grid.iter() {
+        let mut s: Vec[bool] = Vec.new();
+        for _ in 0..row.len() {
+            s.push(false);
+        }
+        seen.push(s);
+    }
+    let mut shapes: Set[Vec[i64]] = Set.new();
+    for r in 0..grid.len() {
+        for c in 0..grid[0].len() {
+            if grid[r][c] == 1 and not seen[r][c] {
+                let mut cells: Vec[(i64, i64)] = Vec.new();
+                collect_star(grid, mut seen, r, c, mut cells);
+                shapes.insert(canonical_star(cells));
+            }
+        }
+    }
+    shapes.len()
+}
+
+// ---- bfs arm --------------------------------------------------------
+
+fn key_of_bfs(cells: Vec[(i64, i64)]) -> String {
+    let mut best = String.new();
+    for k in 0..8 {
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        for (r, c) in cells.iter() {
+            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let x = if k % 2 == 1 { -a } else { a };
+            let y = if k % 4 >= 2 { -b } else { b };
+            moved.push((x, y));
+        }
+        moved.sort();
+        let (r0, c0) = moved[0];
+        let mut key = String.new();
+        for (r, c) in moved.iter() {
+            key = key + f"{*r - r0},{*c - c0};";
+        }
+        if k == 0 or key < best {
+            best = key;
+        }
+    }
+    best
+}
+
+fn num_distinct_islands2_bfs(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for _ in 0..rows {
+        let mut s: Vec[bool] = Vec.new();
+        for _ in 0..cols {
+            s.push(false);
+        }
+        seen.push(s);
+    }
+    let steps = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut keys: Set[String] = Set.new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid[r][c] == 0 or seen[r][c] {
+                continue;
+            }
+            let mut cells: Vec[(i64, i64)] = Vec.new();
+            let mut queue: VecDeque[(i64, i64)] = VecDeque.new();
+            seen[r][c] = true;
+            queue.push_back((r, c));
+            while let Some((cr, cc)) = queue.pop_front() {
+                cells.push((cr, cc));
+                for (dr, dc) in steps.iter() {
+                    let nr = cr + *dr;
+                    let nc = cc + *dc;
+                    if nr >= 0 and nc >= 0 and nr < rows and nc < cols
+                            and grid[nr][nc] == 1 and not seen[nr][nc] {
+                        seen[nr][nc] = true;
+                        queue.push_back((nr, nc));
+                    }
+                }
+            }
+            keys.insert(key_of_bfs(cells));
+        }
+    }
+    keys.len()
+}
+
+// ---- sorted arm -----------------------------------------------------
+
+fn canonical_sorted(cells: Vec[(i64, i64)]) -> Vec[i64] {
+    let mut best: Vec[i64] = Vec.new();
+    for k in 0..8 {
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        for (r, c) in cells.iter() {
+            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let x = if k % 2 == 1 { -a } else { a };
+            let y = if k % 4 >= 2 { -b } else { b };
+            moved.push((x, y));
+        }
+        moved.sort();
+        let (r0, c0) = moved[0];
+        let mut flat: Vec[i64] = Vec.new();
+        for (r, c) in moved.iter() {
+            flat.push(*r - r0);
+            flat.push(*c - c0);
+        }
+        if k == 0 or flat < best {
+            best = flat;
+        }
+    }
+    best
+}
+
+fn num_distinct_islands2_sorted(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut seen: Vec[bool] = Vec.new();
+    for _ in 0..rows * cols {
+        seen.push(false);
+    }
+    let mut forms: Vec[Vec[i64]] = Vec.new();
+    for start in 0..rows * cols {
+        if grid[start / cols][start % cols] == 0 or seen[start] {
+            continue;
+        }
+        let mut cells: Vec[(i64, i64)] = Vec.new();
+        let mut stack: Vec[i64] = [start];
+        seen[start] = true;
+        while let Some(at) = stack.pop() {
+            let r = at / cols;
+            let c = at % cols;
+            cells.push((r, c));
+            if r > 0 and grid[r - 1][c] == 1 and not seen[at - cols] {
+                seen[at - cols] = true;
+                stack.push(at - cols);
+            }
+            if r + 1 < rows and grid[r + 1][c] == 1 and not seen[at + cols] {
+                seen[at + cols] = true;
+                stack.push(at + cols);
+            }
+            if c > 0 and grid[r][c - 1] == 1 and not seen[at - 1] {
+                seen[at - 1] = true;
+                stack.push(at - 1);
+            }
+            if c + 1 < cols and grid[r][c + 1] == 1 and not seen[at + 1] {
+                seen[at + 1] = true;
+                stack.push(at + 1);
+            }
+        }
+        forms.push(canonical_sorted(cells));
+    }
+    forms.sort();
+    let mut count = 0;
+    for i in 0..forms.len() {
+        if i == 0 or forms[i] != forms[i - 1] {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---- pairwise arm ---------------------------------------------------
+
+fn grow_pairwise(grid: Vec[Vec[i64]], seen: mut ref Vec[Vec[bool]], r: i64,
+        c: i64, cells: mut ref Vec[(i64, i64)]) {
+    if r < 0 or c < 0 or r >= grid.len() or c >= grid[0].len() {
+        return;
+    }
+    if grid[r][c] == 0 or seen[r][c] {
+        return;
+    }
+    seen[r][c] = true;
+    cells.push((r, c));
+    grow_pairwise(grid, mut seen, r, c - 1, mut cells);
+    grow_pairwise(grid, mut seen, r, c + 1, mut cells);
+    grow_pairwise(grid, mut seen, r - 1, c, mut cells);
+    grow_pairwise(grid, mut seen, r + 1, c, mut cells);
+}
+
+// The cells sorted, with the first at the origin.
+fn normalized_pairwise(cells: Vec[(i64, i64)]) -> Vec[(i64, i64)] {
+    let mut v = cells.clone();
+    v.sort();
+    let (r0, c0) = v[0];
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    for (r, c) in v.iter() {
+        out.push((*r - r0, *c - c0));
+    }
+    out
+}
+
+fn same_shape_pairwise(cells: Vec[(i64, i64)], kept: Vec[(i64, i64)]) -> bool {
+    if cells.len() != kept.len() {
+        return false;
+    }
+    for k in 0..8 {
+        let mut moved: Vec[(i64, i64)] = Vec.new();
+        for (r, c) in cells.iter() {
+            let (a, b) = if k < 4 { (*r, *c) } else { (*c, *r) };
+            let x = if k % 2 == 1 { -a } else { a };
+            let y = if k % 4 >= 2 { -b } else { b };
+            moved.push((x, y));
+        }
+        if normalized_pairwise(moved) == kept {
+            return true;
+        }
+    }
+    false
+}
+
+fn num_distinct_islands2_pairwise(grid: Vec[Vec[i64]]) -> i64 {
+    let mut seen: Vec[Vec[bool]] = Vec.new();
+    for row in grid.iter() {
+        let mut s: Vec[bool] = Vec.new();
+        for _ in 0..row.len() {
+            s.push(false);
+        }
+        seen.push(s);
+    }
+    let mut kept: Vec[Vec[(i64, i64)]] = Vec.new();
+    for r in 0..grid.len() {
+        for c in 0..grid[0].len() {
+            if grid[r][c] == 1 and not seen[r][c] {
+                let mut cells: Vec[(i64, i64)] = Vec.new();
+                grow_pairwise(grid, mut seen, r, c, mut cells);
+                let mut found = false;
+                for k in kept.iter() {
+                    if not found and same_shape_pairwise(cells, k) {
+                        found = true;
+                    }
+                }
+                if not found {
+                    kept.push(normalized_pairwise(cells));
+                }
+            }
+        }
+    }
+    kept.len()
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn count(which: i64, grid: Vec[Vec[i64]]) -> i64 {
+    if which == 0 {
+        num_distinct_islands2_star(grid)
+    } else if which == 1 {
+        num_distinct_islands2_bfs(grid)
+    } else if which == 2 {
+        num_distinct_islands2_sorted(grid)
+    } else {
+        num_distinct_islands2_pairwise(grid)
+    }
+}
+
+// A picture of land as rows of booleans.
+fn quarter_turn(p: Vec[Vec[bool]]) -> Vec[Vec[bool]] {
+    let mut out: Vec[Vec[bool]] = Vec.new();
+    for c in 0..p[0].len() {
+        let mut row: Vec[bool] = Vec.new();
+        for r in 0..p.len() {
+            row.push(p[p.len() - 1 - r][c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn mirror(p: Vec[Vec[bool]]) -> Vec[Vec[bool]] {
+    let mut out: Vec[Vec[bool]] = Vec.new();
+    for row in p.iter() {
+        let mut m: Vec[bool] = Vec.new();
+        for c in 0..row.len() {
+            m.push(row[row.len() - 1 - c]);
+        }
+        out.push(m);
+    }
+    out
+}
+
+// The definition. Label the land by repeated relaxation: every land
+// cell starts with its own number and takes the smallest of its land
+// neighbours' until nothing changes. Draw each island in its bounding
+// box; two islands are the same shape if one of the eight pictures
+// got by turning and mirroring one box equals the other box. Count
+// the classes.
+fn definition(grid: Vec[Vec[i64]]) -> i64 {
+    let rows = grid.len();
+    let cols = grid[0].len();
+    let mut label: Vec[Vec[i64]] = Vec.new();
+    for r in 0..rows {
+        let mut row: Vec[i64] = Vec.new();
+        for c in 0..cols {
+            row.push(if grid[r][c] == 1 { r * cols + c } else { -1 });
+        }
+        label.push(row);
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for r in 0..rows {
+            for c in 0..cols {
+                if label[r][c] < 0 {
+                    continue;
+                }
+                let mut low = label[r][c];
+                if r > 0 and label[r - 1][c] >= 0 and label[r - 1][c] < low {
+                    low = label[r - 1][c];
+                }
+                if r + 1 < rows and label[r + 1][c] >= 0
+                        and label[r + 1][c] < low {
+                    low = label[r + 1][c];
+                }
+                if c > 0 and label[r][c - 1] >= 0 and label[r][c - 1] < low {
+                    low = label[r][c - 1];
+                }
+                if c + 1 < cols and label[r][c + 1] >= 0
+                        and label[r][c + 1] < low {
+                    low = label[r][c + 1];
+                }
+                if low < label[r][c] {
+                    label[r][c] = low;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut kept: Vec[Vec[Vec[bool]]] = Vec.new();
+    for id in 0..rows * cols {
+        let mut top = rows;
+        let mut bottom = -1;
+        let mut left = cols;
+        let mut right = -1;
+        for r in 0..rows {
+            for c in 0..cols {
+                if label[r][c] == id {
+                    if r < top { top = r; }
+                    if r > bottom { bottom = r; }
+                    if c < left { left = c; }
+                    if c > right { right = c; }
+                }
+            }
+        }
+        if bottom < 0 {
+            continue;
+        }
+        let mut pic: Vec[Vec[bool]] = Vec.new();
+        for r in top..bottom + 1 {
+            let mut row: Vec[bool] = Vec.new();
+            for c in left..right + 1 {
+                row.push(label[r][c] == id);
+            }
+            pic.push(row);
+        }
+        let mut found = false;
+        for k in kept.iter() {
+            let mut p = pic.clone();
+            for turn in 0..8 {
+                if turn == 4 {
+                    p = mirror(p);
+                }
+                if p == *k {
+                    found = true;
+                }
+                p = quarter_turn(p);
+            }
+        }
+        if not found {
+            kept.push(pic);
+        }
+    }
+    kept.len()
+}
+
+fn turned(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for c in 0..grid[0].len() {
+        let mut row: Vec[i64] = Vec.new();
+        for r in 0..grid.len() {
+            row.push(grid[grid.len() - 1 - r][c]);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn mirrored(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for row in grid.iter() {
+        let mut m: Vec[i64] = Vec.new();
+        for c in 0..row.len() {
+            m.push(row[row.len() - 1 - c]);
+        }
+        out.push(m);
+    }
+    out
+}
+
+// The grid, a column of water, then the grid mirrored.
+fn beside_mirror(grid: Vec[Vec[i64]]) -> Vec[Vec[i64]] {
+    let m = mirrored(grid);
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for r in 0..grid.len() {
+        let mut row = grid[r].clone();
+        row.push(0);
+        for x in m[r].iter() {
+            row.push(*x);
+        }
+        out.push(row);
+    }
+    out
+}
+
+fn main() {
+    let mut seed = 7110;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut islands = 0;
+    let cases = 2000;
+    for _ in 0..cases {
+        let rows = 1 + next_random(mut seed) % 10;
+        let cols = 1 + next_random(mut seed) % 10;
+        let pct = 15 + next_random(mut seed) % 60;
+        let mut grid: Vec[Vec[i64]] = Vec.new();
+        for _ in 0..rows {
+            let mut row: Vec[i64] = Vec.new();
+            for _ in 0..cols {
+                row.push(if next_random(mut seed) % 100 < pct { 1 } else { 0 });
+            }
+            grid.push(row);
+        }
+        let want = definition(grid);
+        islands += want;
+        let t = turned(grid);
+        let m = mirrored(grid);
+        let b = beside_mirror(grid);
+        for which in 0..arms {
+            let got = count(which, grid);
+            // P1: the definition's count.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: a quarter turn of the whole grid keeps the count.
+            checks += 1;
+            if count(which, t) != got {
+                fails[1] += 1;
+            }
+            // P3: mirroring the whole grid keeps the count.
+            checks += 1;
+            if count(which, m) != got {
+                fails[2] += 1;
+            }
+            // P4: the grid beside its own mirror keeps the count.
+            checks += 1;
+            if count(which, b) != got {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut total = 0;
+    for i in 0..4 {
+        if fails[i] > 0 {
+            println(f"P{i + 1}: {fails[i]} failures");
+        }
+        total += fails[i];
+    }
+    println(f"{cases} grids ({islands} distinct islands), {arms} arms, {checks} checks, {total} failures");
+}
