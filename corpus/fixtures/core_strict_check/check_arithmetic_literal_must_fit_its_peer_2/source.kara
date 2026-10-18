@@ -1,0 +1,5 @@
+
+fn k(y: u8) -> u8 {
+    y * 1000
+}
+fn main() { println(f"{k(1)}"); }

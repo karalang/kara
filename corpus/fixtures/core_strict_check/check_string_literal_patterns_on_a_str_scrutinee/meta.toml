@@ -1,0 +1,17 @@
+source = "tests/core_strict_check.rs::check_string_literal_patterns_on_a_str_scrutinee"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = []
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "1f6ab7d3d"
+extracted_src = "6df8efdc"
+model_rev = "583cfb0d"
+model_src = "6df8efdc"

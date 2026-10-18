@@ -15,4 +15,8 @@ fn main() {
     v.sort_by(|p, q| p.partial_cmp(q).unwrap());
     let x: f32 = 1.5;
     println(f"{v[0]} {v[1]} {v[2]} {x.partial_cmp(1.5) == Some(Ordering.Equal)}");
+    let i: i64 = -3;
+    let u: u64 = 18446744073709551615u64;
+    let w: i128 = -1i128;
+    println(f"{i.partial_cmp(2) == Some(Ordering.Less)} {u.partial_cmp(1u64) == Some(Ordering.Greater)} {w.rotate_left(7)} {e.rotate_left(130)}");
 }

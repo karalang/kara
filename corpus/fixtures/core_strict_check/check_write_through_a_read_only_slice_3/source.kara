@@ -1,0 +1,10 @@
+
+struct P { x: i64 }
+fn set(ps: Slice[P]) {
+    ps[0].x = 5;
+}
+fn main() {
+    let mut ps: Vec[P] = vec![P { x: 1 }];
+    set(ps[0..1]);
+    println(f"{ps[0].x}");
+}

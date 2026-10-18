@@ -1,0 +1,7 @@
+example 1: ["i", "love"]
+example 2: ["the", "is", "sunny", "day"]
+one word: ["kara"]
+every word once: ["a", "aa", "ab", "abc", "b", "ba"]
+equal counts: ["ap", "app", "apple"]
+500 short words, top 10: ["b", "c", "a", "bc", "ab", "aa", "cc", "ac", "bb", "cb"]
+300 random problems: 85118 letters in the answers, checksum 699329382

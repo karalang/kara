@@ -1,0 +1,131 @@
+// LeetCode #692: Top K Frequent Words -- sorted runs, then k picks.
+//
+// No hashing: a sorted copy of the words puts equal words side by side,
+// so one pass gives each distinct word and its count, already in
+// alphabetical order. Then k rounds each pick the word with the most
+// occurrences not yet taken; scanning in alphabetical order and taking
+// only a strictly larger count makes the first of equal counts win.
+// O(n log n + k d) time, O(n) space.
+
+fn top_k_frequent(words: Vec[String], k: i64) -> Vec[String] {
+    let mut sorted = words.clone();
+    sorted.sort();
+    let mut distinct: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let mut j = i;
+        while j < sorted.len() and sorted[j] == sorted[i] {
+            j += 1;
+        }
+        distinct.push(sorted[i].clone());
+        counts.push(j - i);
+        i = j;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..k {
+        let mut pick = -1;
+        for d in 0..distinct.len() {
+            if counts[d] > 0 and (pick < 0 or counts[d] > counts[pick]) {
+                pick = d;
+            }
+        }
+        out.push(distinct[pick].clone());
+        counts[pick] = 0;
+    }
+    out
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(words: ref Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in words.iter() {
+        out.push(w.to_string());
+    }
+    out
+}
+
+fn show(words: ref Vec[String]) -> String {
+    let mut s = "[".to_string();
+    for i in 0..words.len() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(f"\"{words[i]}\"");
+    }
+    s.push_str("]");
+    s
+}
+
+// A random word of 1 to `longest` letters from the first `alphabet` letters.
+fn random_word(longest: i64, alphabet: i64, seed: mut ref i64) -> String {
+    let len = 1 + next_random(mut seed) % longest;
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((b'a' + (next_random(mut seed) % alphabet) as u8) as char);
+    }
+    w
+}
+
+fn distinct(words: ref Vec[String]) -> i64 {
+    let mut s = words.clone();
+    s.sort();
+    let mut d = 0;
+    for i in 0..s.len() {
+        if i == 0 or s[i] != s[i - 1] {
+            d += 1;
+        }
+    }
+    d
+}
+
+fn main() {
+    // The two LeetCode examples.
+    let ex1 = strings(vec!["i", "love", "leetcode", "i", "love", "coding"]);
+    println(f"example 1: {show(top_k_frequent(ex1, 2))}");
+    let ex2 = strings(vec!["the", "day", "is", "sunny", "the", "the", "the", "sunny", "is", "is"]);
+    println(f"example 2: {show(top_k_frequent(ex2, 4))}");
+    // One word; every word once, so all of them in alphabetical order,
+    // a prefix before the longer word; equal counts among prefixes.
+    println(f"one word: {show(top_k_frequent(strings(vec!["kara"]), 1))}");
+    let once = strings(vec!["ba", "b", "ab", "aa", "a", "abc"]);
+    println(f"every word once: {show(top_k_frequent(once, 6))}");
+    let prefixes = strings(vec!["apple", "app", "ap", "app", "apple", "ap", "a"]);
+    println(f"equal counts: {show(top_k_frequent(prefixes, 3))}");
+    // 500 words of up to 3 letters from 3 letters, the top 10.
+    let mut seed = 692;
+    let mut many: Vec[String] = Vec.new();
+    for _ in 0..500 {
+        many.push(random_word(3, 3, mut seed));
+    }
+    println(f"500 short words, top 10: {show(top_k_frequent(many, 10))}");
+    // 300 random problems: up to 500 words of up to 10 letters from an
+    // alphabet of 1 to 26 letters, k from 1 to the number of distinct
+    // words, with a checksum over the answers.
+    let mut checksum = 0;
+    let mut letters = 0;
+    for _ in 0..300 {
+        let n = 1 + next_random(mut seed) % 500;
+        let alphabet = 1 + next_random(mut seed) % 26;
+        let longest = 1 + next_random(mut seed) % 10;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..n {
+            words.push(random_word(longest, alphabet, mut seed));
+        }
+        let k = 1 + next_random(mut seed) % distinct(words);
+        for w in top_k_frequent(words, k).iter() {
+            for b in w.bytes().iter() {
+                checksum = (checksum * 31 + *b as i64) % 1000000007;
+                letters += 1;
+            }
+            checksum = (checksum * 31 + 1) % 1000000007;
+        }
+    }
+    println(f"300 random problems: {letters} letters in the answers, checksum {checksum}");
+}

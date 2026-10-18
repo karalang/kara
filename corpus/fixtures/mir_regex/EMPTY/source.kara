@@ -1,0 +1,10 @@
+fn main() {
+    match Regex.compile("a*") {
+        Ok(re) => { for m in re.find_all("baaab") { println(f"e {m.start}..{m.end}"); } }
+        Err(_) => println("bad"),
+    }
+    match Regex.compile("") {
+        Ok(re) => { for m in re.find_all("aé") { println(f"z {m.start}..{m.end}"); } println(re.replace_all("aé", "-")); }
+        Err(_) => println("bad"),
+    }
+}

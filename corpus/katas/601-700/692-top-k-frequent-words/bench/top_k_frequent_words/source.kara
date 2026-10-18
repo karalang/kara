@@ -1,0 +1,71 @@
+// LeetCode #692: Top K Frequent Words -- bench program for the select arm.
+//
+// 100 lists of 500 words, each word 1 to 4 letters from the first 6, are
+// built once; then in each of 60 rounds every list is asked for its top
+// 10 with the sorted-runs arm, and the answers go into a checksum.
+
+fn top_k_frequent(words: Vec[String], k: i64) -> Vec[String] {
+    let mut sorted = words.clone();
+    sorted.sort();
+    let mut distinct: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let mut j = i;
+        while j < sorted.len() and sorted[j] == sorted[i] {
+            j += 1;
+        }
+        distinct.push(sorted[i].clone());
+        counts.push(j - i);
+        i = j;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..k {
+        let mut pick = -1;
+        for d in 0..distinct.len() {
+            if counts[d] > 0 and (pick < 0 or counts[d] > counts[pick]) {
+                pick = d;
+            }
+        }
+        out.push(distinct[pick].clone());
+        counts[pick] = 0;
+    }
+    out
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    let mut seed = 692;
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    for _ in 0..100 {
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..500 {
+            let len = 1 + next_random(mut seed) % 4;
+            let mut w = String.new();
+            for _ in 0..len {
+                w.push((b'a' + (next_random(mut seed) % 6) as u8) as char);
+            }
+            words.push(w);
+        }
+        lists.push(words);
+    }
+    let rounds = 60;
+    let mut checksum = 0;
+    let mut answers = 0;
+    for _ in 0..rounds {
+        for words in lists.iter() {
+            for w in top_k_frequent(words, 10).iter() {
+                for b in w.bytes().iter() {
+                    checksum = (checksum * 31 + *b as i64) % 1000000007;
+                }
+                checksum = (checksum * 31 + 1) % 1000000007;
+                answers += 1;
+            }
+        }
+    }
+    println(f"{rounds} rounds of 100 lists of 500 words: {answers} words answered, checksum {checksum}");
+}

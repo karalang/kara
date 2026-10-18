@@ -1,0 +1,308 @@
+// LeetCode #692: differential -- the four arms against the definition.
+//
+// Copies of the four arms, held to four properties on random problems.
+
+// ---- star arm ----------------------------------------------------------
+
+fn top_k_frequent_star(words: Vec[String], k: i64) -> Vec[String] {
+    let mut counts: Map[String, i64] = Map.new();
+    for w in words.iter() {
+        let n = match counts.get(w) {
+            Some(c) => *c,
+            None => 0,
+        };
+        counts.insert(w.clone(), n + 1);
+    }
+    let mut ranked: Vec[(String, i64)] = Vec.new();
+    for (w, c) in counts.iter() {
+        ranked.push((w.clone(), *c));
+    }
+    ranked.sort_by(|a, b| if a.1 != b.1 { b.1.cmp(a.1) } else { a.0.cmp(b.0) });
+    let mut out: Vec[String] = Vec.new();
+    for i in 0..k {
+        out.push(ranked[i].0.clone());
+    }
+    out
+}
+
+// ---- heap arm ----------------------------------------------------------
+
+struct Weakest { count: i64, word: String }
+
+impl PartialEq for Weakest {
+    fn eq(ref self, other: ref Weakest) -> bool {
+        self.count == other.count and self.word == other.word
+    }
+}
+
+impl Eq for Weakest {}
+
+impl PartialOrd for Weakest {
+    fn partial_cmp(ref self, other: ref Weakest) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Weakest {
+    // Fewer is weaker; on a tie the word later in the alphabet is weaker.
+    fn cmp(ref self, other: ref Weakest) -> Ordering {
+        if self.count != other.count {
+            self.count.cmp(other.count)
+        } else {
+            other.word.cmp(self.word)
+        }
+    }
+}
+
+fn top_k_frequent_heap(words: Vec[String], k: i64) -> Vec[String] {
+    let mut counts: Map[String, i64] = Map.new();
+    for w in words.iter() {
+        let n = match counts.get(w) {
+            Some(c) => *c,
+            None => 0,
+        };
+        counts.insert(w.clone(), n + 1);
+    }
+    let mut best: PriorityQueue[Weakest] = PriorityQueue.new();
+    for (w, c) in counts.iter() {
+        best.push(Weakest { count: *c, word: w.clone() });
+        if best.len() > k {
+            let _ = best.pop();
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    while best.len() > 0 {
+        match best.pop() {
+            Some(e) => out.push(e.word),
+            None => {}
+        }
+    }
+    out.reverse();
+    out
+}
+
+// ---- buckets arm -------------------------------------------------------
+
+fn top_k_frequent_buckets(words: Vec[String], k: i64) -> Vec[String] {
+    let n = words.len();
+    let mut counts: Map[String, i64] = Map.new();
+    for w in words.iter() {
+        let c = match counts.get(w) {
+            Some(c) => *c,
+            None => 0,
+        };
+        counts.insert(w.clone(), c + 1);
+    }
+    let mut buckets: Vec[Vec[String]] = Vec.new();
+    for _ in 0..n + 1 {
+        buckets.push(Vec.new());
+    }
+    for (w, c) in counts.iter() {
+        buckets[*c].push(w.clone());
+    }
+    let mut out: Vec[String] = Vec.new();
+    let mut c = n;
+    while out.len() < k {
+        buckets[c].sort();
+        for w in buckets[c].iter() {
+            if out.len() < k {
+                out.push(w.clone());
+            }
+        }
+        c -= 1;
+    }
+    out
+}
+
+// ---- select arm --------------------------------------------------------
+
+fn top_k_frequent_select(words: Vec[String], k: i64) -> Vec[String] {
+    let mut sorted = words.clone();
+    sorted.sort();
+    let mut distinct: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let mut j = i;
+        while j < sorted.len() and sorted[j] == sorted[i] {
+            j += 1;
+        }
+        distinct.push(sorted[i].clone());
+        counts.push(j - i);
+        i = j;
+    }
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..k {
+        let mut pick = -1;
+        for d in 0..distinct.len() {
+            if counts[d] > 0 and (pick < 0 or counts[d] > counts[pick]) {
+                pick = d;
+            }
+        }
+        out.push(distinct[pick].clone());
+        counts[pick] = 0;
+    }
+    out
+}
+
+// ---- the definition and the properties ------------------------------------
+
+fn answer(which: i64, words: Vec[String], k: i64) -> Vec[String] {
+    if which == 0 {
+        top_k_frequent_star(words, k)
+    } else if which == 1 {
+        top_k_frequent_heap(words, k)
+    } else if which == 2 {
+        top_k_frequent_buckets(words, k)
+    } else {
+        top_k_frequent_select(words, k)
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// The definition: count each distinct word by a scan of the whole list;
+// a word's place in the answer is the number of words that beat it,
+// with more occurrences or as many and earlier in the alphabet; the
+// words whose place is below k, each at its place.
+fn definition(words: Vec[String], k: i64) -> Vec[String] {
+    let mut seen: Vec[String] = Vec.new();
+    let mut count: Vec[i64] = Vec.new();
+    for w in words.iter() {
+        let mut found = false;
+        for s in seen.iter() {
+            if s == w {
+                found = true;
+            }
+        }
+        if not found {
+            let mut c = 0;
+            for v in words.iter() {
+                if v == w {
+                    c += 1;
+                }
+            }
+            seen.push(w.clone());
+            count.push(c);
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for _ in 0..k {
+        out.push(String.new());
+    }
+    for i in 0..seen.len() {
+        let mut place = 0;
+        for j in 0..seen.len() {
+            if count[j] > count[i] or (count[j] == count[i] and seen[j] < seen[i]) {
+                place += 1;
+            }
+        }
+        if place < k {
+            out[place] = seen[i].clone();
+        }
+    }
+    out
+}
+
+// Every letter moved one on in the alphabet.
+fn shifted(w: ref String) -> String {
+    let mut s = String.new();
+    for b in w.bytes().iter() {
+        s.push((*b + 1) as char);
+    }
+    s
+}
+
+fn main() {
+    let mut seed = 6920;
+    let arms = 4;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let cases = 1000;
+    for _ in 0..cases {
+        let n = 1 + next_random(mut seed) % 40;
+        let alphabet = 1 + next_random(mut seed) % 5;
+        let longest = 1 + next_random(mut seed) % 4;
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let len = 1 + next_random(mut seed) % longest;
+            let mut w = String.new();
+            for _ in 0..len {
+                w.push((b'a' + (next_random(mut seed) % alphabet) as u8) as char);
+            }
+            words.push(w);
+        }
+        let mut sorted = words.clone();
+        sorted.sort();
+        let mut d = 0;
+        for i in 0..n {
+            if i == 0 or sorted[i] != sorted[i - 1] {
+                d += 1;
+            }
+        }
+        let k = 1 + next_random(mut seed) % d;
+        // The same words in another order, and with every letter moved on.
+        let mut shuffled = words.clone();
+        for i in 0..n {
+            let j = i + next_random(mut seed) % (n - i);
+            let t = shuffled[i].clone();
+            shuffled[i] = shuffled[j].clone();
+            shuffled[j] = t;
+        }
+        let mut moved: Vec[String] = Vec.new();
+        for w in words.iter() {
+            moved.push(shifted(w));
+        }
+        let want = definition(words, k);
+        for which in 0..arms {
+            let got = answer(which, words, k);
+            // P1: the definition's answer.
+            checks += 1;
+            if got != want {
+                fails[0] += 1;
+            }
+            // P2: the words in another order answer the same.
+            checks += 1;
+            if answer(which, shuffled, k) != got {
+                fails[1] += 1;
+            }
+            // P3: the answer for k is the start of the answer for k + 1.
+            checks += 1;
+            if k < d {
+                let longer = answer(which, words, k + 1);
+                let mut prefix = longer.len() == k + 1;
+                for i in 0..k {
+                    if prefix and longer[i] != got[i] {
+                        prefix = false;
+                    }
+                }
+                if not prefix {
+                    fails[2] += 1;
+                }
+            } else if got.len() != d {
+                fails[2] += 1;
+            }
+            // P4: every letter moved on moves every letter of the answer on.
+            checks += 1;
+            let mut want_moved: Vec[String] = Vec.new();
+            for w in got.iter() {
+                want_moved.push(shifted(w));
+            }
+            if answer(which, moved, k) != want_moved {
+                fails[3] += 1;
+            }
+        }
+    }
+    let mut report = String.new();
+    let mut total = 0;
+    for p in 0..4 {
+        if fails[p] > 0 {
+            report.push_str(f"P{p + 1}: {fails[p]} failures | ");
+        }
+        total += fails[p];
+    }
+    println(f"{report}{cases} problems, {arms} arms, {checks} checks, {total} failures");
+}

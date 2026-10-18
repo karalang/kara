@@ -1,0 +1,58 @@
+fn main() {
+    match Regex.compile("err(or)?:\\s+(\\w+)") {
+        Ok(re) => {
+            println(f"{re.is_match("x error:  disk")}");
+            match re.find("x error:  disk") {
+                Some(m) => println(f"{m.start} {m.end} {m.text}"),
+                None => println("none"),
+            }
+            println(re.replace_all("err: a, error: b", "E"));
+            println(re.replace("err: a, error: b", "[$2]"));
+            for m in re.find_all("err: a, error: b, nope") {
+                println(f"all {m.start}..{m.end} {m.text}");
+            }
+            match re.captures("x error:  disk") {
+                Some(c) => {
+                    println(f"len {c.len()}");
+                    match c.get(1) { Some(m) => println(f"g1 {m.text}"), None => println("g1 none") }
+                    match c.get(2) { Some(m) => println(f"g2 {m.text} {m.start}"), None => println("g2 none") }
+                    match c.get(9) { Some(_) => println("g9 some"), None => println("g9 none") }
+                }
+                None => println("no caps"),
+            }
+        }
+        Err(e) => println(f"bad {e.message}"),
+    }
+    match Regex.compile("(?P<y>\\d{4})-(?P<m>\\d\\d)") {
+        Ok(re) => {
+            for c in re.captures_all("2024-01 and 1999-12") {
+                match (c.name("y"), c.name("m"), c.name("zz")) {
+                    (Some(y), Some(m), None) => println(f"{y.text}/{m.text}"),
+                    _ => println("?"),
+                }
+            }
+            println(re.replace_all("2024-01", "${m}.${y} $$"));
+        }
+        Err(e) => println(f"bad {e.message}"),
+    }
+    match Regex.compile("a*") {
+        Ok(re) => {
+            for m in re.find_all("baaab") { println(f"e {m.start}..{m.end}"); }
+            for p in re.split("baaab") { println(f"p [{p}]"); }
+        }
+        Err(_) => println("bad"),
+    }
+    match Regex.compile(",\\s*") {
+        Ok(re) => { for p in re.split("a, b,c,") { println(f"s [{p}]"); } }
+        Err(_) => println("bad"),
+    }
+    match Regex.compile("(unclosed") {
+        Ok(_) => println("ok?"),
+        Err(e) => println(e.message),
+    }
+    println(Regex.escape("a.b*c"));
+    match Regex.compile("é|x") {
+        Ok(re) => { for m in re.find_all("aéx") { println(f"u {m.start}..{m.end} {m.text}"); } }
+        Err(_) => println("bad"),
+    }
+}

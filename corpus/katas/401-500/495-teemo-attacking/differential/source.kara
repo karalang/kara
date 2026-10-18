@@ -52,7 +52,7 @@ fn find_poisoned_duration_fold(time_series: Vec[i64], duration: i64) -> i64 {
 // ---- zip: teemo_attacking_zip.kara
 
 fn find_poisoned_duration_zip(time_series: Vec[i64], duration: i64) -> i64 {
-    let gaps: i64 = time_series.iter().zip(time_series.iter().skip(1)).map(|(a, b)| (b - a).min(duration)).sum();
+    let gaps: i64 = time_series.iter().zip(time_series.iter().skip(1)).map(|(a, b)| (*b - *a).min(duration)).sum();
     gaps + duration
 }
 

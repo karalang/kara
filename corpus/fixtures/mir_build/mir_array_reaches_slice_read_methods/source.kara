@@ -1,0 +1,14 @@
+
+const MAGIC: Array[i64, 3] = [1, 2, 3];
+fn main() {
+    let a: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let v = a.to_vec();
+    let header: Vec[i64] = vec![1, 2, 3];
+    println(f"{v.len()} {header == MAGIC.to_vec()} {a.binary_search(4)}");
+    let s: Array[String, 2] = ["x".to_string(), "y".to_string()];
+    let t = s.to_vec();
+    println(f"{t} {s[1]}");
+    for w in a.windows(2) { print(f"{w[0] + w[1]} "); }
+    for c in a.chunks(2) { print(f"{c.len()} "); }
+    println("");
+}

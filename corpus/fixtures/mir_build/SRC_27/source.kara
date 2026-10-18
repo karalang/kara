@@ -1,15 +1,20 @@
 
-enum V { T(String), L(Vec[String]) }
-struct It { v: V, n: i64 }
-fn first(v: ref Vec[It]) -> ref It { ref v[0] }
+struct A { ok: bool, s: String }
+
+fn mk(n: i64) -> A { A { ok: n > 1, s: "x".to_string() } }
+
 fn main() {
-    let mut m: Map[String, It] = Map.new();
-    m.insert("b".to_string(), It { v: V.L(vec!["p".to_string(), "q".to_string()]), n: 4 });
-    let t = match m.get("b").unwrap().v { V.T(_) => 1, V.L(q) => q.len() };
-    let xs: Vec[It] = vec![It { v: V.T("qq".to_string()), n: 1 }];
-    let u = match first(xs).v { V.T(s) => s.len(), V.L(q) => q.len() };
-    let o: Option[ref It] = Some(first(xs));
-    let w = match o.unwrap().v { V.T(_) => 1, V.L(_) => 2 };
-    if let V.T(s) = first(xs).v { println(s); }
-    println(f"{t} {u} {w} {xs.len()} {m.len()}");
+    if mk(2).ok {
+        println("yes");
+    }
+    if mk(0).ok {
+        println("no");
+    } else {
+        println("else");
+    }
+    let mut i = 0;
+    while mk(3 - i).ok {
+        i += 1;
+    }
+    println(f"end {i}");
 }

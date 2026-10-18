@@ -1,0 +1,6 @@
+
+const MAGIC: Array[i64, 3] = [1, 2, 3];
+fn main() {
+    let a: Array[i64, 3] = [4, 5, 6];
+    println(f"{a.to_vec().len()} {MAGIC.to_vec() == vec![1, 2, 3]}");
+}

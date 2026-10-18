@@ -1,0 +1,29 @@
+
+fn size(name: String) -> i64 {
+    match name.as_str() {
+        "Year" => 4,
+        "Month" => 7,
+        _ => 19,
+    }
+}
+fn size2(name: Str) -> i64 {
+    match name {
+        "Year" => 4,
+        "Month" => 7,
+        _ => 19,
+    }
+}
+fn kind(v: Vec[String], i: i64) -> String {
+    let r = match v[i].as_str() {
+        "a" | "b" => "early",
+        "z" => "late",
+        _ => "other",
+    };
+    r.to_string()
+}
+fn main() {
+    println(f"{size(String.from("Year"))} {size(String.from("Month"))} {size(String.from("Day"))}");
+    println(f"{size2("Year")} {size2("Month")} {size2("Day")}");
+    let v: Vec[String] = vec![String.from("a"), String.from("z"), String.from("q")];
+    println(f"{kind(v, 0)} {kind(v, 1)} {kind(v, 2)}");
+}

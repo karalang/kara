@@ -1,0 +1,9 @@
+
+fn h(y: u8) -> u8 {
+    255 - y
+}
+fn main() {
+    let c: u8 = 7;
+    let big = c < 300;
+    println(f"{h(1)} {c * 30} {big}");
+}

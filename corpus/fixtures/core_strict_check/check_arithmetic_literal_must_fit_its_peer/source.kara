@@ -1,0 +1,5 @@
+
+fn h(y: u8) -> u8 {
+    300 + y
+}
+fn main() { println(f"{h(1)}"); }

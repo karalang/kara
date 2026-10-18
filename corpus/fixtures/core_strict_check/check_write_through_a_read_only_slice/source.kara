@@ -1,0 +1,7 @@
+
+fn main() {
+    let b = String.from("hello");
+    let mut t = b.bytes();
+    t[4] = 97;
+    println(f"{b} {String.from_utf8(t).unwrap()}");
+}

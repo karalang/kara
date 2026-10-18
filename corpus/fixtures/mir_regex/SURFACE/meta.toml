@@ -1,0 +1,15 @@
+source = "tests/mir_regex.rs::SURFACE"
+dedup_of = []
+expect = "skip"
+exit = 1
+tags = ["deferred:regex"]
+class = "d"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "d"
+classified_with = "1f6ab7d3d"
+extracted_src = "8b3f5b40"

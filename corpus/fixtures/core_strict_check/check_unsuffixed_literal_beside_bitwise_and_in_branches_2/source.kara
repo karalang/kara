@@ -1,0 +1,5 @@
+
+fn f(a: u128, b: i64) -> u128 {
+    a & b
+}
+fn main() { println(f"{f(12, 4)}"); }

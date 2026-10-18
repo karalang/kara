@@ -1,0 +1,169 @@
+// LeetCode #691: Stickers to Spell Word -- depth first with a bound.
+//
+// The letters still needed are a count per letter. A depth-first search
+// takes the first letter still needed, tries each sticker that holds it,
+// and goes on with what remains; the best answer found so far bounds the
+// search, so a branch that has used as many stickers as the best is cut.
+// Stickers that another sticker contains letter for letter are dropped
+// first, since the larger one is never worse. Exponential in the worst
+// case, but the bound and the first-letter rule keep it small here.
+
+fn min_stickers(stickers: Vec[String], target: String) -> i64 {
+    let mut need: Vec[i64] = vec![0; 26];
+    for b in target.bytes().iter() {
+        need[*b as i64 - 97] += 1;
+    }
+    let mut all: Vec[Vec[i64]] = Vec.new();
+    for s in stickers.iter() {
+        let mut c: Vec[i64] = vec![0; 26];
+        for b in s.bytes().iter() {
+            let k = *b as i64 - 97;
+            if need[k] > 0 {
+                c[k] += 1;
+            }
+        }
+        all.push(c);
+    }
+    // Keep a sticker unless another one holds at least as many of every
+    // letter (of two equal stickers, the first is kept).
+    let mut kept: Vec[Vec[i64]] = Vec.new();
+    for i in 0..all.len() {
+        let mut covered = false;
+        for j in 0..all.len() {
+            if i != j and contains(all[j], all[i]) and (j < i or not contains(all[i], all[j])) {
+                covered = true;
+                break;
+            }
+        }
+        if not covered {
+            kept.push(all[i].clone());
+        }
+    }
+    let mut best = -1;
+    search(kept, mut need, 0, mut best);
+    best
+}
+
+// Does `big` hold at least as many of every letter as `small`?
+fn contains(big: ref Vec[i64], small: ref Vec[i64]) -> bool {
+    for k in 0..26 {
+        if big[k] < small[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn search(stickers: ref Vec[Vec[i64]], need: mut ref Vec[i64], used: i64, best: mut ref i64) {
+    if *best >= 0 and used >= *best {
+        return;
+    }
+    let mut first = -1;
+    for k in 0..26 {
+        if need[k] > 0 {
+            first = k;
+            break;
+        }
+    }
+    if first < 0 {
+        *best = used;
+        return;
+    }
+    for c in stickers.iter() {
+        if c[first] == 0 {
+            continue;
+        }
+        let saved = need.clone();
+        for k in 0..26 {
+            need[k] = if need[k] > c[k] { need[k] - c[k] } else { 0 };
+        }
+        search(stickers, need, used + 1, best);
+        for k in 0..26 {
+            need[k] = saved[k];
+        }
+    }
+}
+
+// ---- harness ---------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn strings(words: ref Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in words.iter() {
+        out.push(w.to_string());
+    }
+    out
+}
+
+// A random word of `len` letters from the first `alphabet` letters.
+fn random_word(len: i64, alphabet: i64, seed: mut ref i64) -> String {
+    let mut w = String.new();
+    for _ in 0..len {
+        w.push((b'a' + (next_random(mut seed) % alphabet) as u8) as char);
+    }
+    w
+}
+
+fn main() {
+    // The two LeetCode examples.
+    let ex1 = min_stickers(strings(vec!["with", "example", "science"]), "thehat".to_string());
+    let ex2 = min_stickers(strings(vec!["notice", "possible"]), "basicbasic".to_string());
+    println(f"example 1: {ex1}");
+    println(f"example 2: {ex2}");
+    // The target is a sticker; a letter no sticker has; one letter
+    // repeated, from a sticker of two and from stickers of one and five.
+    let itself = min_stickers(strings(vec!["target"]), "target".to_string());
+    let missing = min_stickers(strings(vec!["abc", "def"]), "abz".to_string());
+    println(f"the target itself: {itself}");
+    println(f"a missing letter: {missing}");
+    let fifteen = "aaaaaaaaaaaaaaa".to_string();
+    let from_two = min_stickers(strings(vec!["aa"]), fifteen.clone());
+    let from_one_five = min_stickers(strings(vec!["a", "aaaaa"]), fifteen);
+    println(f"15 a's: from aa {from_two}, from a and aaaaa {from_one_five}");
+    // 15 different letters from 26 stickers of one letter each, and from
+    // the same 26 plus one sticker holding the whole target.
+    let mut singles: Vec[String] = Vec.new();
+    for k in 0..26 {
+        singles.push(((b'a' + k as u8) as char).to_string());
+    }
+    let pangram = "thequickbrownfx".to_string();
+    let one_each = min_stickers(singles.clone(), pangram.clone());
+    singles.push("xfnworbkciuqeht".to_string());
+    println(f"15 different letters: from 26 singles {one_each}, with the whole word added {min_stickers(singles, pangram)}");
+
+    // The largest case: 50 stickers of 10 letters and a target of 15,
+    // all from the first 12 letters.
+    let mut seed = 691;
+    let mut big: Vec[String] = Vec.new();
+    for _ in 0..50 {
+        big.push(random_word(10, 12, mut seed));
+    }
+    let big_target = random_word(15, 12, mut seed);
+    println(f"50 stickers of 10, a target of 15: {min_stickers(big, big_target)}");
+
+    // 300 random problems: up to 30 stickers of 1 to 10 letters and a
+    // target of 1 to 12 letters, from an alphabet of 2 to 26 letters,
+    // with a checksum.
+    let mut checksum = 0;
+    let mut impossible = 0;
+    for _ in 0..300 {
+        let alphabet = 2 + next_random(mut seed) % 25;
+        let n = 1 + next_random(mut seed) % 30;
+        let mut stickers: Vec[String] = Vec.new();
+        for _ in 0..n {
+            let len = 1 + next_random(mut seed) % 10;
+            stickers.push(random_word(len, alphabet, mut seed));
+        }
+        let target = random_word(1 + next_random(mut seed) % 12, alphabet, mut seed);
+        let r = min_stickers(stickers, target);
+        if r < 0 {
+            impossible += 1;
+        }
+        checksum = (checksum * 31 + r + 2) % 1000000007;
+    }
+    println(f"300 random problems: {impossible} impossible, checksum {checksum}");
+}

@@ -4,7 +4,7 @@
 // sum the capped gaps; the last attack adds the full duration.
 
 fn find_poisoned_duration(time_series: Vec[i64], duration: i64) -> i64 {
-    let gaps: i64 = time_series.iter().zip(time_series.iter().skip(1)).map(|(a, b)| (b - a).min(duration)).sum();
+    let gaps: i64 = time_series.iter().zip(time_series.iter().skip(1)).map(|(a, b)| (*b - *a).min(duration)).sum();
     gaps + duration
 }
 

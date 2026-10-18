@@ -1,17 +1,13 @@
-
-fn first[T: Clone](s: Slice[T]) -> T { s[0].clone() }
-fn count[T](s: Slice[T]) -> i64 { s.len() }
-fn bump[T](s: mut Slice[T], v: own T) { s[0] = v; }
-
+fn f(o: mut ref Option[i64]) -> i64 { o ?? 5 }
 fn main() {
-    let vi: Vec[i64] = [10, 20, 30];
-    println(first(vi));
-    println(count(vi));
-    let vs: Vec[String] = ["a".to_string(), "b".to_string()];
-    println(first(vs));
-    let a: Array[f64, 2] = [1.5, 2.5];
-    println(first(a));
-    let mut w: Vec[i64] = [1, 2];
-    bump(mut w, 7);
-    println(w[0]);
+    let values: Vec[Option[i64]] = vec![Some(3), None, Some(4)];
+    let mut sum = 0;
+    for v in values.iter() { sum += v ?? 0; }
+    let r = ref values[0];
+    sum += r ?? 0;
+    let rs: Vec[Result[i64, i64]] = vec![Ok(7), Err(1)];
+    for x in rs.iter() { sum += x ?? 100; }
+    let mut o: Option[i64] = None;
+    sum += f(mut o);
+    println(f"{sum}");
 }

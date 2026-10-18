@@ -1,0 +1,7 @@
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let mut s = v[0..2];
+    s[1] += 4;
+    println(f"{v}");
+}

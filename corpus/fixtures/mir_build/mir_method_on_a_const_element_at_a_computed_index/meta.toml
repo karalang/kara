@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::mir_method_on_a_const_element_at_a_computed_index"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "1f6ab7d3d"
+extracted_src = "99509539"
+model_rev = "583cfb0d"
+model_src = "99509539"

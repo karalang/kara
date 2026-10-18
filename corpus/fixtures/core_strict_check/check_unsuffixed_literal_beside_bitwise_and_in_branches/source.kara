@@ -1,0 +1,14 @@
+
+fn f(c: bool, y: u128) -> u128 {
+    let x = if c { 0 } else { y };
+    let w = match y { 0 => 1, _ => x };
+    w
+}
+fn main() {
+    let c: u8 = 20;
+    let d: u8 = 0xC0 ^ c;
+    let x: u8 = 0x80 | (c & 0x3F);
+    let mut out: Vec[u8] = Vec.new();
+    out.push(0xC0 | (c >> 6));
+    println(f"{d} {x} {out[0]} {f(true, 5)}");
+}

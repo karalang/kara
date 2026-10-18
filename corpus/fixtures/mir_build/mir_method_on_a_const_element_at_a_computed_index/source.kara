@@ -1,0 +1,13 @@
+
+const NM: Array[String, 2] = ["ab", "cde"];
+const NUMS: Array[i64, 2] = [-3, 4];
+const NAMES: Array[Str, 2] = ["x", "yz"];
+fn main() {
+    let i = 1;
+    let k: i32 = 0;
+    println(f"{NM[i].clone()} {NM[i + 0].len()} {NM[i].len()} {NM[1].clone()}");
+    println(f"{NUMS[i - 1].abs()} {NUMS[i] + 1}");
+    println(f"{NAMES[k as i64].to_string()} {NAMES[i].len()}");
+    let v: Vec[i64] = Vec[i64].new();
+    println(f"{v.len()}");
+}
