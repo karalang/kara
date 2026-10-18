@@ -1,0 +1,94 @@
+// LeetCode #713: Subarray Product Less Than K -- logarithms and binary
+// search.
+//
+// A product below k is a sum of logarithms below ln k. Take prefix
+// sums of the logarithms, which never fall since every number is at
+// least 1; for each start, binary search for the last end whose sum
+// from the start is below ln k, less a small margin so that a product
+// exactly k, whose sum rounds to about ln k, is not counted. The
+// margin, 1e-9, is far below the gap between ln k and ln(k - 1), more
+// than 1e-7 for k up to 10^6. O(n log n).
+
+fn num_subarray_product_less_than_k(nums: Vec[i64], k: i64) -> i64 {
+    if k <= 1 {
+        return 0;
+    }
+    let limit = (k as f64).ln() - 1e-9;
+    let mut prefix: Vec[f64] = [0.0];
+    for x in nums.iter() {
+        let last = prefix[prefix.len() - 1];
+        prefix.push(last + (*x as f64).ln());
+    }
+    let n = nums.len();
+    let mut count = 0;
+    for start in 0..n {
+        // The first end, start < end <= n + 1, whose sum reaches limit.
+        let mut lo = start + 1;
+        let mut hi = n + 1;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if prefix[mid] - prefix[start] < limit {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        count += lo - 1 - start;
+    }
+    count
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64], k: i64) {
+    println(f"{nums}, k = {k} -> {num_subarray_product_less_than_k(nums, k)}");
+}
+
+fn main() {
+    show([10, 5, 2, 6], 100);
+    show([1, 2, 3], 0);
+    show([1, 1, 1], 1);
+    show([1, 1, 1], 2);
+    show([5], 5);
+    show([5], 6);
+    show([2, 5, 10], 10);
+    show([1000, 1000, 1000], 1000000);
+    show([1000, 999, 1], 1000000);
+    show([3, 3, 3, 3], 81);
+    show([3, 3, 3, 3], 82);
+    let mut seed: i64 = 713;
+    let mut ones: Vec[i64] = Vec.new();
+    for _ in 0..3000 {
+        ones.push(1);
+    }
+    println(f"3000 ones, k = 2: {num_subarray_product_less_than_k(ones, 2)}");
+    let mut small: Vec[i64] = Vec.new();
+    for _ in 0..30000 {
+        small.push(1 + next_random(mut seed) % 3);
+    }
+    let a = num_subarray_product_less_than_k(small, 1000000);
+    println(f"30000 of 1 to 3, k = 1000000: {a}");
+    let mut wide: Vec[i64] = Vec.new();
+    for _ in 0..30000 {
+        wide.push(1 + next_random(mut seed) % 1000);
+    }
+    let b = num_subarray_product_less_than_k(wide, 1000000);
+    println(f"30000 of 1 to 1000, k = 1000000: {b}");
+    let mut sum = 0;
+    for _ in 0..500 {
+        let n = 1 + next_random(mut seed) % 30;
+        let top = 1 + next_random(mut seed) % 20;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(1 + next_random(mut seed) % top);
+        }
+        let k = next_random(mut seed) % 2000;
+        sum = (sum * 131 + num_subarray_product_less_than_k(nums, k)) % 1000000007;
+    }
+    println(f"500 random arrays: checksum {sum}");
+}

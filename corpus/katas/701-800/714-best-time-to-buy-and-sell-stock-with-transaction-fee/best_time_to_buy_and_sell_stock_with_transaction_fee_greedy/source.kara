@@ -1,0 +1,80 @@
+// LeetCode #714: Best Time to Buy and Sell Stock with Transaction Fee
+// -- a greedy buy price.
+//
+// Keep the price of the share being held, fee included. A lower price
+// plus fee is a better buy, so take it instead. A higher price is a
+// sale for the difference; record it, and treat the share as bought
+// back at that price with no new fee, so a sale that turns out early is
+// extended for free if the price keeps rising. O(n) time, O(1) space.
+
+fn max_profit(prices: Vec[i64], fee: i64) -> i64 {
+    let mut buy = prices[0] + fee;
+    let mut profit = 0;
+    for i in 1..prices.len() {
+        if prices[i] + fee < buy {
+            buy = prices[i] + fee;
+        } else if prices[i] > buy {
+            profit += prices[i] - buy;
+            buy = prices[i];
+        }
+    }
+    profit
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(prices: Vec[i64], fee: i64) {
+    println(f"{prices}, fee {fee} -> {max_profit(prices, fee)}");
+}
+
+fn main() {
+    show([1, 3, 2, 8, 4, 9], 2);
+    show([1, 3, 7, 5, 10, 3], 3);
+    show([5], 0);
+    show([5, 4, 3, 2, 1], 0);
+    show([1, 2, 3, 4, 5], 0);
+    show([1, 2, 3, 4, 5], 4);
+    show([1, 2, 3, 4, 5], 3);
+    show([1, 5, 1, 5, 1, 5], 0);
+    show([1, 5, 1, 5, 1, 5], 3);
+    show([1, 5, 1, 5, 1, 5], 4);
+    show([2, 1, 4, 4, 2, 3, 2, 5, 1, 2], 1);
+    let mut seed: i64 = 714;
+    let mut walk: Vec[i64] = Vec.new();
+    let mut price = 25000;
+    for _ in 0..50000 {
+        price += next_random(mut seed) % 201 - 100;
+        if price < 1 {
+            price = 1;
+        }
+        if price > 49999 {
+            price = 49999;
+        }
+        walk.push(price);
+    }
+    println(f"50000-day walk, fee 0: {max_profit(walk, 0)}");
+    println(f"50000-day walk, fee 50: {max_profit(walk, 50)}");
+    println(f"50000-day walk, fee 49999: {max_profit(walk, 49999)}");
+    let mut noise: Vec[i64] = Vec.new();
+    for _ in 0..50000 {
+        noise.push(1 + next_random(mut seed) % 49999);
+    }
+    println(f"50000 random prices, fee 1000: {max_profit(noise, 1000)}");
+    let mut sum = 0;
+    for _ in 0..500 {
+        let n = 1 + next_random(mut seed) % 30;
+        let top = 1 + next_random(mut seed) % 50;
+        let mut prices: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            prices.push(1 + next_random(mut seed) % top);
+        }
+        let fee = next_random(mut seed) % 20;
+        sum = (sum * 131 + max_profit(prices, fee)) % 1000000007;
+    }
+    println(f"500 random price lists: checksum {sum}");
+}

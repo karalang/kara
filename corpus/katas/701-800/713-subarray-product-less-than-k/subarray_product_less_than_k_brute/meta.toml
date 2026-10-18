@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/701-800/713-subarray-product-less-than-k/subarray_product_less_than_k_brute.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = []
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "9ddda04ad"
+extracted_src = "e3b7a73e"
+model_rev = "583cfb0d"
+model_src = "e3b7a73e"

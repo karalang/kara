@@ -1,0 +1,53 @@
+// LeetCode #713: Subarray Product Less Than K -- a sliding window.
+//
+// Extend the window to the right; while its product is k or more, drop
+// numbers from the left; count the right - left + 1 subarrays ending at
+// `right`. O(n).
+
+fn num_subarray_product_less_than_k(nums: Vec[i64], k: i64) -> i64 {
+    if k <= 1 {
+        return 0;
+    }
+    let mut product = 1;
+    let mut left = 0;
+    let mut count = 0;
+    for right in 0..nums.len() {
+        product *= nums[right];
+        while product >= k {
+            product /= nums[left];
+            left += 1;
+        }
+        count += right - left + 1;
+    }
+    count
+}
+
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 10 arrays of 30,000 numbers, from 1 to 2 up to 1 to 1000, made
+    // once.
+    let mut seed: i64 = 713;
+    let tops = [2, 3, 5, 10, 20, 50, 100, 200, 500, 1000];
+    let mut arrays: Vec[Vec[i64]] = Vec.new();
+    for t in tops.iter() {
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..30000 {
+            nums.push(1 + next_random(mut seed) % *t);
+        }
+        arrays.push(nums);
+    }
+    // Each counted for k = 10^6 in 200 rounds, every count summed.
+    let mut sum = 0;
+    for _ in 0..200 {
+        for nums in arrays.iter() {
+            sum += num_subarray_product_less_than_k(nums, 1000000);
+        }
+    }
+    println(f"200 rounds of 10 arrays of 30000, k = 1000000: sum {sum}");
+}

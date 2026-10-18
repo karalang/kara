@@ -1,0 +1,61 @@
+// LeetCode #714: Best Time to Buy and Sell Stock with Transaction Fee
+// -- two running states.
+//
+// After each day there are two best positions: `cash`, holding no
+// share, and `hold`, holding one. Today's cash is yesterday's, or
+// yesterday's hold sold at today's price less the fee; today's hold is
+// yesterday's, or today's cash spent on a share. Updating hold from the
+// new cash is safe, since buying back on the day of a sale only pays a
+// fee. O(n) time, O(1) space.
+
+fn max_profit(prices: Vec[i64], fee: i64) -> i64 {
+    let mut cash = 0;
+    let mut hold = -prices[0];
+    for i in 1..prices.len() {
+        let sold = hold + prices[i] - fee;
+        if sold > cash {
+            cash = sold;
+        }
+        let bought = cash - prices[i];
+        if bought > hold {
+            hold = bought;
+        }
+    }
+    cash
+}
+// ---- benchmark ------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 10 random walks of 100,000 days, steps of up to 10 to up to 100,
+    // made once.
+    let mut seed: i64 = 714;
+    let mut walks: Vec[Vec[i64]] = Vec.new();
+    for w in 1..11 {
+        let step = 10 * w;
+        let mut prices: Vec[i64] = Vec.new();
+        let mut price = 50000;
+        for _ in 0..100000 {
+            price += next_random(mut seed) % (2 * step + 1) - step;
+            if price < 1 {
+                price = 1;
+            }
+            prices.push(price);
+        }
+        walks.push(prices);
+    }
+    // Each traded in 300 rounds at a fee that changes every round,
+    // every profit summed.
+    let mut sum = 0;
+    for round in 0..300 {
+        let fee = 3 * round;
+        for prices in walks.iter() {
+            sum += max_profit(prices, fee);
+        }
+    }
+    println(f"300 rounds of 10 walks of 100000 days: sum {sum}");
+}
