@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 270 |
 | false-positive | 226 |
 | other | 175 |
-| perf | 172 |
+| perf | 173 |
 | diagnostics | 166 |
 | crash | 122 |
 | soundness | 113 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2934 |
+| codegen | 2935 |
 | interp | 950 |
 | typecheck | 468 |
 | other | 115 |
@@ -145,7 +145,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-13-18 | 2026-10-13 | codegen+runtime | medium | `Vec.sort_by_key` and `sort_by` on the MIR compiled backend run about 3.5-4x slower than Rust's `sort_by_key`: `karac_mir_sort_ctx` (runtime/src/mir.rs) is a bottom-up merge sort that calls the comparison through a function pointer for every comparison, and the emitted comparison calls the key closure, not inlined, for each side. Sorting 1M indices by an i64 key 10 times takes 2.74-2.78 s on `karac build --mir` and 0.65-0.77 s on `rustc -O`; in kata 502's bench the sort is 63% of all instructions | — |
 | B-2026-10-13-31 | 2026-10-13 | codegen+runtime | medium | Walking a `Str`'s `chars()` on the MIR compiled backend costs about 3.6 ns a char against 1.0 for its `bytes()` and 0.9 for Rust's `chars()`, and a char predicate such as `is_ascii_uppercase` is a runtime call that finds the method by comparing names: kata 520's bench (`word.chars().filter(|c| c.is_ascii_uppercase()).count()`) runs 2.0 to 2.2 s under `karac build --mir` against 0.20 to 0.25 s for `rustc -O` | — |
 | B-2026-10-13-32 | 2026-10-13 | typecheck | low | The MIR front end accepts `*c` on a `filter` closure's `char` parameter over `chars()`, which `karac check` refuses ("unary '*' requires 'ref T' ... found 'char'") as docs/library/iterators.md's `fn filter[F: MutFn(Self.Item) -> bool]` says it should: `w.chars().filter(|c| *c == 'Q').count()` prints 2 under `karac __mir-run` and builds under `karac build --mir` | — |
-| B-2026-10-13-34 | 2026-10-13 | codegen+runtime | medium | `i64.parse` on the MIR compiled backend costs about 30 ns for a 2-byte slice, because `karac_mir_parse_int` copies the text into a fresh heap `String`, trims it and parses an `i128` on every call: kata 539's bench spends 1.3 to 1.4 s of its 1.90 s in 42M parses, against 0.51 s for the whole Rust mirror | — |
 | B-2026-10-13-36 | 2026-10-13 | codegen+runtime | medium | `VecDeque` `push_back` / `pop_front` on the MIR compiled backend are out-of-line runtime calls (`karac_mir_deque_push` / `_pop`) that wrap with integer `%` and copy the element with a sized `memcpy` call: kata 542's breadth-first search bench runs 0.41 s, 0.28 s with a `Vec` and head index in place of the deque, 0.19 s in Rust with `VecDeque` | — |
 | B-2026-10-14-9 | 2026-10-14 | codegen | medium | Matching a borrowed `shared enum` on the MIR compiled backend retains every handle the pattern binds and releases each at the arm's end, so a read-only tree walk pays a count up and an out-of-line `drop.shared` call per child: kata 558's `count` over 210M quad-tree nodes runs 1.49 to 1.62 s on `karac build --mir` against 0.98 to 1.04 s for Rust's `count(&Quad)`, and 1.31 s for the same Rust with each child's `Rc` cloned | — |
 | B-2026-10-14-29 | 2026-10-14 | interp+codegen | medium | The MIR borrow checker keeps a `Vec[(ref Node, i64)]` borrowed for as long as a `ref Node` copied out of one of its elements is live: `let (a, n) = v[0]; v.pop(); a.val` is refused on both MIR backends ("mutable borrow of _2 while it is borrowed", E0516), though core-semantics §1.1 makes the tuple `Copy` and the copied reference keeps the origin of the node, not of the vector; the same read out of a `Vec[ref Node]` runs, and `karac check` passes both | — |
@@ -193,6 +192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
 | B-2026-10-18-32 | 2026-10-18 | typecheck | low | `no method 'clone' on type 'Value'` on a user enum or struct without `#[derive(Clone)]` gives no hint that the derive is missing, and `karac fix` offers nothing | — |
 | B-2026-10-18-33 | 2026-10-18 | interp+codegen | medium | On MIR, `char.try_from(x)` with `x` a `ref i64` from `for x in v.iter()` is refused ("char.try_from expects an integer codepoint, got `ref i64`"); check passes and `karac run` prints the right text | — |
+| B-2026-10-18-34 | 2026-10-18 | codegen | low | After B-2026-10-13-34, `i64.parse(t[0..2])` on the MIR compiled backend still makes two out-of-line runtime calls per parse (`karac_mir_str_view`, then `karac_mir_parse_int`), so kata 539's bench runs 1.25 s against 0.44 s for the same program with the digits read by byte arithmetic, and 0.51 s for the Rust mirror | — |
 
 ### Relocated
 
@@ -4017,6 +4017,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-13-29 | ownership | high | The MIR borrow checker does not see a `Str` view of a `String` as a borrow: `let v = owned.as_str(); owned.push_str(..); println(v)` runs on `__mir-r… | 4aafb22aa4 |
 | B-2026-10-13-30 | codegen+runtime | medium | `String.push(c)` on the MIR compiled backend is an out-of-line runtime call per char (`karac_mir_string_push_char` -> `karac_mir_string_push_str` ->… | 16cbe03472 |
 | B-2026-10-13-33 | ownership | medium | The MIR borrow checker refuses a write to a `mut` field of a shared value reached by indexing a borrowed `Vec` (`nodes[i].val = v` with `nodes` a `re… | 554093e8e5 |
+| B-2026-10-13-34 | codegen+runtime | medium | `i64.parse` on the MIR compiled backend costs about 30 ns for a 2-byte slice, because `karac_mir_parse_int` copies the text into a fresh heap `String… | b09cd37112 |
 | B-2026-10-13-35 | codegen+runtime | medium | Collecting chars into a `String` on the MIR compiled backend (`chars.iter().collect()` from a `Vec[char]`) costs about 6 ns a char, a runtime call ch… | 16cbe03472 |
 | B-2026-10-14-1 | typecheck | medium | `v[n.val] = x` is refused with "shared struct field 'Node.val' is not declared mut" when the INDEX reads a non-`mut` field of a `shared struct`: the… | 56b330ae8b |
 | B-2026-10-14-2 | typecheck | medium | `s.push(c)`, `s.find(c)` and `s.split(c)` with `c` a `ref char` from `Vec[char].iter()` pass `karac check` but are refused by the MIR pipeline's type… | 4979cb27c2 |
