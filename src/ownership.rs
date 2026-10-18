@@ -1805,6 +1805,19 @@ impl<'a> OwnershipChecker<'a> {
         if !arg.mut_marker || self.place_writes_through_shared(&arg.value) {
             return;
         }
+        // A marked argument that is itself a `mut ref` / `mut Slice` (`h.1`
+        // of a `split_at_mut` pair) forwards that borrow: v1 marks it too
+        // (B-2026-10-14-25), and the write lands in its referent, not in the
+        // binding that holds the handle.
+        if self.expr_is_shared_handle(&arg.value)
+            || self
+                .typecheck_result
+                .expr_types
+                .get(&SpanKey::from_span(&arg.value.span))
+                .is_some_and(|t| matches!(t, Type::Slice { mutable: true, .. }))
+        {
+            return;
+        }
         let Some(root) = Self::root_identifier(&arg.value) else {
             return;
         };

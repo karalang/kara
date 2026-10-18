@@ -2757,38 +2757,33 @@ impl<'a> super::TypeChecker<'a> {
 
         let forwarded = self.is_arg_forwarded(&arg.value, arg_ty);
 
-        // v1 spec, design.md § Call-site `mut` markers: an argument to a
-        // `mut ref` / `mut Slice` parameter is marked "whatever the
-        // argument's root", a field of a `mut ref` binding included, so on
-        // the v2 front ends a marked forward is the spelling, not an error
-        // (B-2026-10-14-25). An unmarked forward is still accepted there
-        // until the corpus is migrated to the marker.
-        let v2 = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
-        if arg.mut_marker && forwarded && v2 {
-            return;
-        }
-
+        // v1 (design.md § Call-site `mut` markers): every argument to a
+        // mutating parameter is marked, whatever its root, so a marker on a
+        // forwarded `mut ref` is the spelling, not a redundancy
+        // (B-2026-10-14-25). No backend reads the marker (each lowers the
+        // argument by the parameter's mode), so every pipeline takes it.
         if arg.mut_marker && forwarded {
-            // The argument is already a mut-ref (either by type or by
-            // place-root) — marking it is redundant and, in the nested
-            // mut-ref-return case, actively wrong.
-            self.emit_marker_deletion(
-                arg,
-                "this argument is already a mut-ref; drop the `mut` marker. \
-                 The mutation surface was announced at the callee or enclosing \
-                 scope's signature."
-                    .to_string(),
-            );
             return;
         }
 
-        if !arg.mut_marker && !forwarded {
-            let message = format!(
-                "parameter expects `{}`; call with fresh binding requires \
-                 a `mut` marker at this argument to permit the mutation. \
-                 Write `mut <expr>`.",
-                type_display(param_ty)
-            );
+        // The v1 rule is checked where the core rules are: `karac check`
+        // and `karac fix` (strict), whose fix-it adds the marker.
+        if !arg.mut_marker && (!forwarded || self.cli_lint_overrides.strict_core) {
+            let message = if forwarded {
+                format!(
+                    "parameter expects `{}`; every argument to a mutating parameter \
+                     is marked, a `mut ref` binding's included (design.md § Call-site \
+                     `mut` markers). Write `mut <expr>`.",
+                    type_display(param_ty)
+                )
+            } else {
+                format!(
+                    "parameter expects `{}`; call with fresh binding requires \
+                     a `mut` marker at this argument to permit the mutation. \
+                     Write `mut <expr>`.",
+                    type_display(param_ty)
+                )
+            };
             // B-2026-08-17-30 — this diagnostic names its own repair in
             // imperative form ("Write `mut <expr>`.") and used to ship without
             // an edit, so `karac fix` answered "no fixable diagnostics" to a

@@ -7640,9 +7640,8 @@ fn missing_mut_marker_carries_an_insertion_fix_it() {
 #[test]
 fn invalid_mut_marker_keeps_its_deletion_fix_it() {
     let errors = typecheck_errors(
-        "fn bump(n: mut ref i64) { n = n.wrapping_add(1); }\n\
-         fn outer(c: mut ref i64) { bump(mut c); }\n\
-         fn main() { let mut c = 0; bump(mut c); println(c); }",
+        "fn show(n: i64) { println(n); }\n\
+         fn main() { let mut c = 0; show(mut c); println(c); }",
     );
     let err = errors
         .iter()
@@ -12598,21 +12597,15 @@ fn test_mut_slice_sub_range_of_a_mut_slice_forwards_without_a_marker() {
 }
 
 #[test]
-fn test_mut_slice_sub_range_of_a_mut_slice_rejects_a_redundant_marker() {
-    // The inverse of the test above, and the reason arm (A) was narrowed
-    // rather than deleted: a forwarded sub-range that DOES carry a marker is
-    // still told to drop it.
-    let errors = typecheck_errors(
+fn test_mut_slice_sub_range_of_a_mut_slice_takes_the_marker() {
+    // The inverse of the test above: a forwarded sub-range may carry the
+    // marker too, since v1 marks every argument to a mutating parameter
+    // whatever its root (design.md § Call-site `mut` markers,
+    // B-2026-10-14-25).
+    typecheck_ok(
         "fn sort_in_place(xs: mut Slice[i64]) { }
          fn caller(s: mut Slice[i64]) { sort_in_place(mut s[0..2]); }
          fn main() { }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("already a mut-ref")),
-        "expected the redundant-marker diagnostic, got {:?}",
-        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
 
@@ -13070,22 +13063,12 @@ fn test_call_site_forwarded_mut_slice_no_marker() {
 }
 
 #[test]
-fn test_call_site_forwarded_mut_slice_marker_rejected() {
-    // Marking a forwarded mut-slice is wrong — it's already a mut-ref.
-    let errors = typecheck_errors(
+fn test_call_site_forwarded_mut_slice_marker_accepted() {
+    // v1 marks a forwarded mut-slice as well (B-2026-10-14-25).
+    typecheck_ok(
         "fn inner(xs: mut Slice[i64]) { }
          fn outer(ys: mut Slice[i64]) { inner(mut ys); }
          fn main() { }",
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == TypeErrorKind::InvalidMutMarker),
-        "expected InvalidMutMarker on forwarded mut-slice, got: {:?}",
-        errors
-            .iter()
-            .map(|e| (&e.kind, &e.message))
-            .collect::<Vec<_>>()
     );
 }
 
@@ -42642,14 +42625,12 @@ fn borrowed_payload_accepts_the_correct_closure_param_spellings() {
 // different channel, which is why the earlier fix did not reach them and why a
 // parser-side test would not have caught it.
 
-/// The shape the reporting program hit, at all four of its sites.
-///
-/// The edit spans `mut` PLUS the following whitespace, for the reason the
-/// parser-side test states: deleting the token alone leaves `f(f,  carry)`,
-/// and fix output that needs a formatting pass afterwards is a fix people stop
-/// trusting.
 #[test]
-fn already_mut_ref_arg_carries_a_machine_applicable_deletion() {
+fn forwarded_mut_ref_arg_takes_the_marker() {
+    // The shape that was told "this argument is already a mut-ref; drop the
+    // `mut` marker": v1 marks a forwarded `mut ref` too (design.md § Call-site
+    // `mut` markers, B-2026-10-14-25), so it is accepted marked and unmarked
+    // alike outside `karac check`.
     let src = "fn fill_carry(f: mut ref i64, carry: mut ref i64, n: i64) -> bool {\n\
                carry = carry + n;\n\
                true\n\
@@ -42658,22 +42639,7 @@ fn already_mut_ref_arg_carries_a_machine_applicable_deletion() {
                if not fill_carry(f, mut carry, 2880) { return false; }\n\
                true\n\
                }";
-    let errors = typecheck_errors(src);
-    let err = errors
-        .iter()
-        .find(|e| e.message.contains("already a mut-ref"))
-        .unwrap_or_else(|| panic!("expected the mut-marker diagnostic, got: {errors:?}"));
-    let fix = err
-        .fix_it
-        .as_ref()
-        .expect("the diagnostic must ship an edit; without one `karac fix` skips it");
-    assert_eq!(fix.replacement, "", "the fix is a deletion");
-    assert_eq!(
-        &src[fix.span.offset..fix.span.offset + fix.span.length],
-        "mut ",
-        "the edit must cover the marker AND its trailing space, so the result is \
-         `fill_carry(f, carry, 2880)` and not `fill_carry(f,  carry, 2880)`"
-    );
+    typecheck_ok(src);
 }
 
 /// The LABELED argument, which is why the marker's span is recorded on
@@ -42688,18 +42654,17 @@ fn already_mut_ref_arg_carries_a_machine_applicable_deletion() {
 /// instead of pinning it — this test asserts the labeled form now gets a
 /// correct edit, not that it gets none.
 #[test]
-fn already_mut_ref_labeled_arg_deletes_only_the_marker() {
-    let src = "fn fill(f: mut ref i64, carry: mut ref i64) -> bool {\n\
-               carry = carry + 1i64;\n\
-               true\n\
+fn illegal_mut_marker_on_a_labeled_arg_deletes_only_the_marker() {
+    let src = "fn fill(f: i64, carry: i64) -> bool {\n\
+               f + carry > 0\n\
                }\n\
-               fn outer(f: mut ref i64, carry: mut ref i64) -> bool {\n\
+               fn outer(f: i64, carry: i64) -> bool {\n\
                fill(f, carry: mut carry)\n\
                }";
     let errors = typecheck_errors(src);
     let err = errors
         .iter()
-        .find(|e| e.message.contains("already a mut-ref"))
+        .find(|e| e.message.contains("is not legal here"))
         .unwrap_or_else(|| panic!("expected the mut-marker diagnostic, got: {errors:?}"));
     let fix = err
         .fix_it

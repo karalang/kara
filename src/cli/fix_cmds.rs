@@ -251,6 +251,16 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         }
     }
 
+    // Call-site marker migration (design.md § Call-site `mut` markers,
+    // B-2026-10-14-25): with `KARAC_MARKER_MIGRATE` set, `karac fix` writes
+    // only the `mut` markers the v1 rule adds, so the rewrite is one
+    // reviewable change.
+    if std::env::var_os("KARAC_MARKER_MIGRATE").is_some() {
+        fixes
+            .edits
+            .retain(|(_, e)| e.length == 0 && e.replacement == "mut ");
+    }
+
     if fixes.edits.is_empty() {
         println!("(no fixable diagnostics in {filename})");
         return;

@@ -4019,7 +4019,7 @@ fn a_capture_lent_through_a_closure_local_is_read() {
 /// B-2026-10-14-25: design.md § Call-site `mut` markers marks an argument
 /// to a `mut ref` / `mut Slice` parameter "whatever the argument's root",
 /// so a field of a `mut ref` binding and a forwarded `mut ref` parameter
-/// take the marker. An unmarked forward is still accepted.
+/// take the marker; `karac check` requires it on every such argument.
 #[test]
 fn a_marked_forward_of_a_mut_ref_is_accepted() {
     accepted(
@@ -4035,7 +4035,7 @@ fn a_marked_forward_of_a_mut_ref_is_accepted() {
          }\n\
          fn twice(n: mut ref i64) {\n\
              bump(mut n);\n\
-             bump(n);\n\
+             bump(mut n);\n\
          }\n\
          fn refresh(s: mut ref Session) {\n\
              sort_in_place(mut s.scores);\n\
@@ -6218,4 +6218,81 @@ fn iterator_terminals_lend_their_items_and_flatten_needs_iterators() {
     let out = karac().arg("__mir-run").arg(&path).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "[1, 2, 3]\n");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn every_argument_to_a_mutating_parameter_is_marked() {
+    // B-2026-10-14-25: design.md § Call-site `mut` markers marks every
+    // argument to a `mut ref T` / `mut Slice[T]` parameter, whatever its
+    // root. The spec's own example, a field of a `mut ref` binding, and a
+    // forwarded `mut ref` parameter are accepted marked and run on both MIR
+    // backends; `h.1` of a `split_at_mut` pair held by a plain `let` is a
+    // borrow it forwards, so it needs no `let mut`.
+    let src = "struct Session {\n\
+         \x20   scores: Vec[i64],\n\
+         }\n\
+         fn sort_in_place(xs: mut Slice[i64]) {\n\
+         \x20   xs.sort();\n\
+         }\n\
+         fn bump(n: mut ref i64) {\n\
+         \x20   *n += 1;\n\
+         }\n\
+         fn twice(n: mut ref i64) {\n\
+         \x20   bump(mut n);\n\
+         \x20   bump(mut n);\n\
+         }\n\
+         fn refresh(s: mut ref Session) {\n\
+         \x20   sort_in_place(mut s.scores);\n\
+         }\n\
+         fn main() {\n\
+         \x20   let mut s = Session { scores: vec![3, 1, 2] };\n\
+         \x20   refresh(mut s);\n\
+         \x20   let mut k = 1;\n\
+         \x20   twice(mut k);\n\
+         \x20   let mut b = vec![9, 8, 3, 1, 2];\n\
+         \x20   let mut bs = b.as_slice_mut();\n\
+         \x20   let h = bs.split_at_mut(2);\n\
+         \x20   sort_in_place(mut h.1);\n\
+         \x20   println(f\"{s.scores} {k} {b}\");\n\
+         }\n";
+    let (dir, path) = fixture("mut-marker-forwarded", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "[1, 2, 3] 3 [9, 8, 1, 2, 3]\n",
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    // A missing marker on a forwarded `mut ref` is an error with a fix-it
+    // that adds it.
+    rejected_then_fixed_by(
+        "mut-marker-missing",
+        "fn bump(n: mut ref i64) {\n\
+             *n += 1;\n\
+         }\n\
+         fn twice(n: mut ref i64) {\n\
+             bump(n);\n\
+         }\n\
+         fn main() {\n\
+             let mut k = 1;\n\
+             twice(mut k);\n\
+             println(f\"{k}\");\n\
+         }\n",
+        "every argument to a mutating parameter is marked",
+        "bump(mut n);",
+    );
 }
