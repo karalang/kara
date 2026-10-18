@@ -1,0 +1,282 @@
+== format | plain text | s:ab | i:-42 | s:Zoë
+  plain text
+== format | {{literal}} braces }}{{ | s:ab | i:-42 | s:Zoë
+  {literal} braces }{
+== format | a{}b{}c | s:ab | i:-42 | s:Zoë
+  aabb-42c
+== format | {0}{1}{0} | s:ab | i:-42 | s:Zoë
+  ab-42ab
+== format | {0} {} | s:ab | i:-42 | s:Zoë
+  ValueError: cannot switch from manual field specification to automatic field numbering
+== format | {} {0} | s:ab | i:-42 | s:Zoë
+  ValueError: cannot switch from automatic field numbering to manual field specification
+== format | { | s:ab | i:-42 | s:Zoë
+  ValueError: Single '{' encountered in format string
+== format | } | s:ab | i:-42 | s:Zoë
+  ValueError: Single '}' encountered in format string
+== format | x{0 | s:ab | i:-42 | s:Zoë
+  ValueError: expected '}' before end of string
+== format | {0! | s:ab | i:-42 | s:Zoë
+  ValueError: end of string while looking for conversion specifier
+== format | {0!x} | s:ab | i:-42 | s:Zoë
+  ValueError: Unknown conversion specifier x
+== format | {0!r | s:ab | i:-42 | s:Zoë
+  ValueError: unmatched '{' in format spec
+== format | {0!rx} | s:ab | i:-42 | s:Zoë
+  ValueError: expected ':' after conversion specifier
+== format | {0:{1} | s:ab | i:-42 | s:Zoë
+  ValueError: unmatched '{' in format spec
+== format | {:{:{}}} | s:ab | i:-42 | s:Zoë
+  ValueError: Max string recursion exceeded
+== format | {2} | s:ab | i:-42 | s:Zoë
+  Zoë
+== format | {missing} | s:ab | i:-42 | s:Zoë
+  KeyError: 'missing'
+== format | {0[} | s:ab | i:-42 | s:Zoë
+  ValueError: expected '}' before end of string
+== format | {0.} | s:ab | i:-42 | s:Zoë
+  ValueError: Empty attribute in format string
+== format | {0[0]x} | s:ab | i:-42 | s:Zoë
+  ValueError: Only '.' or '[' may follow ']' in format field specifier
+== format | {name[0]x} | s:ab | i:-42 | s:Zoë
+  ValueError: Only '.' or '[' may follow ']' in format field specifier
+== format | {0}|{1}|{2} | s:ab | i:-42 | s:Zoë
+  ab|-42|Zoë
+== format | {name!r} {name!s} {city!a} {city!r} | s:ab | i:-42 | s:Zoë
+  'Ada Lovelace' Ada Lovelace 'Z\\xfcrich' 'Zürich'
+== format | {quote!r} | s:ab | i:-42 | s:Zoë
+  'it\\'s "fine"\\n\\ttab'
+== format | {quote!a} | s:ab | i:-42 | s:Zoë
+  'it\\'s "fine"\\n\\ttab'
+== format | {empty!r}< | s:ab | i:-42 | s:Zoë
+  ''<
+== format | {u} | s:ab | i:-42 | s:Zoë
+  ada <ada@example.com>
+== format | {u!r} | s:ab | i:-42 | s:Zoë
+  User('ada', 7)
+== format | {u.name} #{u.id} <{u.email}> | s:ab | i:-42 | s:Zoë
+  ada #7 <ada@example.com>
+== format | {u.tags[1]} | s:ab | i:-42 | s:Zoë
+  ops
+== format | {u.tags} | s:ab | i:-42 | s:Zoë
+  ['admin', 'ops']
+== format | {u.missing} | s:ab | i:-42 | s:Zoë
+  AttributeError: 'User' object has no attribute 'missing'
+== format | {cfg[host]}:{cfg[port]} | s:ab | i:-42 | s:Zoë
+  db1:5432
+== format | {cfg[users][0]} | s:ab | i:-42 | s:Zoë
+  ada
+== format | {cfg[1]} | s:ab | i:-42 | s:Zoë
+  KeyError: 1
+== format | {cfg[2]} | s:ab | i:-42 | s:Zoë
+  KeyError: 2
+== format | {nums} | s:ab | i:-42 | s:Zoë
+  [3, 1, 4, 1, 5]
+== format | {nums[4]} | s:ab | i:-42 | s:Zoë
+  5
+== format | {nums[9]} | s:ab | i:-42 | s:Zoë
+  IndexError: list index out of range
+== format | {nums[x]} | s:ab | i:-42 | s:Zoë
+  TypeError: list indices must be integers or slices, not str
+== format | {u.tags[-1]} | s:ab | i:-42 | s:Zoë
+  TypeError: list indices must be integers or slices, not str
+== format | {nums:>9} | s:ab | i:-42 | s:Zoë
+  TypeError: unsupported format string passed to list.__format__
+== format | {u:>9} | s:ab | i:-42 | s:Zoë
+  TypeError: unsupported format string passed to User.__format__
+== format | {0.real} | s:ab | i:-42 | s:Zoë
+  AttributeError: 'str' object has no attribute 'real'
+== format | [{name:20}] | s:ab | i:-42 | s:Zoë
+  [Ada Lovelace        ]
+== format | [{name:>20}] | s:ab | i:-42 | s:Zoë
+  [        Ada Lovelace]
+== format | [{name:^20}] | s:ab | i:-42 | s:Zoë
+  [    Ada Lovelace    ]
+== format | [{name:*^21}] | s:ab | i:-42 | s:Zoë
+  [****Ada Lovelace*****]
+== format | [{name:.3}] | s:ab | i:-42 | s:Zoë
+  [Ada]
+== format | [{name:>10.4}] | s:ab | i:-42 | s:Zoë
+  [      Ada ]
+== format | [{city:~^9}] | s:ab | i:-42 | s:Zoë
+  [~Zürich~~]
+== format | [{empty:-^4}] | s:ab | i:-42 | s:Zoë
+  [----]
+== format | [{name:{w}.{p}}] | s:ab | i:-42 | s:Zoë
+  [Ada         ]
+== format | [{name:{fill}{align}{w}}] | s:ab | i:-42 | s:Zoë
+  [Ada Lovelace]
+== format | [{1:05}] | s:ab | i:-42 | s:Zoë
+  [-0042]
+== format | [{1:0>5}] | s:ab | i:-42 | s:Zoë
+  [00-42]
+== format | {name:+} | s:ab | i:-42 | s:Zoë
+  ValueError: Sign not allowed in string format specifier
+== format | {name:,} | s:ab | i:-42 | s:Zoë
+  ValueError: Cannot specify ',' with 's'.
+== format | {name:#} | s:ab | i:-42 | s:Zoë
+  ValueError: Alternate form (#) not allowed in string format specifier
+== format | {name:=10} | s:ab | i:-42 | s:Zoë
+  ValueError: '=' alignment not allowed in string format specifier
+== format | {name:z} | s:ab | i:-42 | s:Zoë
+  ValueError: Negative zero coercion (z) not allowed in string format specifier
+== format | {name:d} | s:ab | i:-42 | s:Zoë
+  ValueError: Unknown format code 'd' for object of type 'str'
+== format | {name:.} | s:ab | i:-42 | s:Zoë
+  ValueError: Format specifier missing precision
+== format | {name:10.} | s:ab | i:-42 | s:Zoë
+  ValueError: Format specifier missing precision
+== format | {name:s} | s:ab | i:-42 | s:Zoë
+  Ada Lovelace
+== format | {name:ss} | s:ab | i:-42 | s:Zoë
+  ValueError: Invalid format specifier 'ss' for object of type 'str'
+== format | [{n}] [{n:,}] [{n:_}] [{n:15,}] [{n:<15_}] | s:ab | i:-42 | s:Zoë
+  [1234567] [1,234,567] [1_234_567] [      1,234,567] [1_234_567      ]
+== format | [{neg:+}] [{n:+}] [{n: }] [{neg: }] | s:ab | i:-42 | s:Zoë
+  [-42] [+1234567] [ 1234567] [-42]
+== format | [{neg:=8}] [{neg:08}] [{n:012,}] [{neg:0=+10,}] | s:ab | i:-42 | s:Zoë
+  [-     42] [-0000042] [0,001,234,567] [-0,000,042]
+== format | [{n:b}] [{n:#b}] [{n:_b}] | s:ab | i:-42 | s:Zoë
+  [100101101011010000111] [0b100101101011010000111] [1_0010_1101_0110_1000_0111]
+== format | [{n:o}] [{n:#o}] [{n:x}] [{n:#X}] [{n:#_x}] [{neg:#x}] | s:ab | i:-42 | s:Zoë
+  [4553207] [0o4553207] [12d687] [0X12D687] [0x12_d687] [-0x2a]
+== format | [{n:d}] [{n:n}] [{zero:#x}] | s:ab | i:-42 | s:Zoë
+  [1234567] [1234567] [0x0]
+== format | [{ch:c}] [{emoji:c}] | s:ab | i:-42 | s:Zoë
+  [é] [😀]
+== format | {65:c} | s:ab | i:-42 | s:Zoë
+  IndexError: Replacement index 65 out of range for positional args tuple
+== format | {0:c} | s:ab | i:-42 | s:Zoë
+  ValueError: Unknown format code 'c' for object of type 'str'
+== format | {1:c} | s:ab | i:-42 | s:Zoë
+  OverflowError: %c arg not in range(0x110000)
+== format | [{ch:^5c}] | s:ab | i:-42 | s:Zoë
+  [  é  ]
+== format | {n:,c} | s:ab | i:-42 | s:Zoë
+  ValueError: Cannot specify ',' with 'c'.
+== format | {n:+c} | s:ab | i:-42 | s:Zoë
+  ValueError: Sign not allowed with integer format specifier 'c'
+== format | {n:#c} | s:ab | i:-42 | s:Zoë
+  ValueError: Alternate form (#) not allowed with integer format specifier 'c'
+== format | {n:.2} | s:ab | i:-42 | s:Zoë
+  ValueError: Precision not allowed in integer format specifier
+== format | {n:.2d} | s:ab | i:-42 | s:Zoë
+  ValueError: Precision not allowed in integer format specifier
+== format | {n:,_} | s:ab | i:-42 | s:Zoë
+  ValueError: Cannot specify both ',' and '_'.
+== format | {n:,x} | s:ab | i:-42 | s:Zoë
+  ValueError: Cannot specify ',' with 'x'.
+== format | {n:,b} | s:ab | i:-42 | s:Zoë
+  ValueError: Cannot specify ',' with 'b'.
+== format | {n:_d} | s:ab | i:-42 | s:Zoë
+  1_234_567
+== format | {n:z} | s:ab | i:-42 | s:Zoë
+  ValueError: Negative zero coercion (z) not allowed in integer format specifier
+== format | {n:q} | s:ab | i:-42 | s:Zoë
+  ValueError: Unknown format code 'q' for object of type 'int'
+== format | {n:xx} | s:ab | i:-42 | s:Zoë
+  ValueError: Invalid format specifier 'xx' for object of type 'int'
+== format | {n:10000000000000000000} | s:ab | i:-42 | s:Zoë
+  ValueError: Too many decimal digits in format string
+== format | {n:  } | s:ab | i:-42 | s:Zoë
+  ValueError: Unknown format code '\x20' for object of type 'int'
+== format | [{big:,}] | s:ab | i:-42 | s:Zoë
+  [12,345,678,901,234,567]
+== format | [{big:#x}] | s:ab | i:-42 | s:Zoë
+  [0x2bdc545d6b4b87]
+== format | [{n:{w},}] | s:ab | i:-42 | s:Zoë
+  [   1,234,567]
+== format | {0:{1}} | s:ab | i:-42 | s:Zoë
+  ValueError: Sign not allowed in string format specifier
+== format | [{n:f}] [{n:.2f}] [{neg:.0f}] [{n:#.0f}] [{n:,.2f}] | s:ab | i:-42 | s:Zoë
+  [1234567.000000] [1234567.00] [-42] [1234567.] [1,234,567.00]
+== format | [{n:e}] [{n:.2e}] [{n:E}] [{zero:e}] | s:ab | i:-42 | s:Zoë
+  [1.234567e+06] [1.23e+06] [1.234567E+06] [0.000000e+00]
+== format | [{n:.0e}] [{n:#.0e}] [{neg:.3e}] | s:ab | i:-42 | s:Zoë
+  [1e+06] [1.e+06] [-4.200e+01]
+== format | [{n:%}] [{neg:.1%}] [{zero:%}] [{n:,.0%}] | s:ab | i:-42 | s:Zoë
+  [123456700.000000%] [-4200.0%] [0.000000%] [123,456,700%]
+== format | [{n:g}] [{n:.3g}] [{n:G}] [{neg:#g}] [{zero:g}] [{zero:#.3g}] [{p:.10g}] | s:ab | i:-42 | s:Zoë
+  [1.23457e+06] [1.23e+06] [1.23457E+06] [-42.0000] [0] [0.00] [3]
+== format | [{n:.10g}] [{r125:.2g}] [{r135:.2g}] [{r6:.6g}] [{r7:.6g}] [{r7:.7g}] | s:ab | i:-42 | s:Zoë
+  [1234567] [1.2e+02] [1.4e+02] [999999] [1e+07] [9999995]
+== format | [{n:>14.3e}] [{neg:010.1f}] [{n:_.2f}] | s:ab | i:-42 | s:Zoë
+  [     1.235e+06] [-0000042.0] [1_234_567.00]
+== template | $who likes $what | who=tim | what=kung pao
+  valid True ids who,what
+  tim likes kung pao
+  safe tim likes kung pao
+== template | ${who}s and $$5 and $$$who | who=Ada
+  valid True ids who
+  Adas and $5 and $Ada
+  safe Adas and $5 and $Ada
+== template | $who $missing | who=tim
+  valid True ids who,missing
+  KeyError: 'missing'
+  safe tim $missing
+== template | cost: $ 5 | who=tim
+  valid False ids 
+  ValueError: Invalid placeholder in string: line 1, col 7
+  safe cost: $ 5
+== template | tail $ | 
+  valid False ids 
+  ValueError: Invalid placeholder in string: line 1, col 6
+  safe tail $
+== template | ${unclosed | unclosed=x
+  valid False ids 
+  ValueError: Invalid placeholder in string: line 1, col 1
+  safe ${unclosed
+== template | $9lives | 
+  valid False ids 
+  ValueError: Invalid placeholder in string: line 1, col 1
+  safe $9lives
+== template | $_ok ${_ok} $Ok | _ok=1 | Ok=2
+  valid True ids _ok,Ok
+  1 1 2
+  safe 1 1 2
+== template | line one\\nline $two $ | two=2
+  valid False ids two
+  ValueError: Invalid placeholder in string: line 2, col 11
+  safe line one\nline 2 $
+== template | café $naïve | naïve=x
+  valid True ids na
+  KeyError: 'na'
+  safe café $naïve
+== invoice | @items.csv | @layout.tsv | 19
+  |                 INVOICE 10427                  
+  |SKU    Item                    Qty        Total
+  |------------------------------------------------
+  |A-100  Espresso beans 1 kg       2        49.00
+  |B-220  Burr grinder              1       189.00
+  |C-031  Paper filters (100)      12        47.40
+  |D-007  Descaler                  3        38.25
+  |E-555  Milk jug 600 ml           1        21.99
+  |------------------------------------------------
+  |                               Net        290.45
+  |                           VAT 19%         55.19
+  |                         Total EUR        345.64
+  |Items: 5, units: 19, VAT 19% included
+== invoice | @items.csv | @layout.tsv | 0
+  |                 INVOICE 10427                  
+  |SKU    Item                    Qty        Total
+  |------------------------------------------------
+  |A-100  Espresso beans 1 kg       2        49.00
+  |B-220  Burr grinder              1       189.00
+  |C-031  Paper filters (100)      12        47.40
+  |D-007  Descaler                  3        38.25
+  |E-555  Milk jug 600 ml           1        21.99
+  |------------------------------------------------
+  |                               Net        345.64
+  |                            VAT 0%          0.00
+  |                         Total EUR        345.64
+  |Items: 5, units: 19, VAT 0% included
+== mail | @mail.tmpl | customer=Ada Lovelace | order=10427 | method=card | city=London | shop=Bean There
+  |Hello Ada Lovelace,
+  |
+  |Thanks for order #10427. Your total is $345.64, paid by card.
+  |5 items ship to London on Mon 20 Oct.
+  |
+  |-- Bean There
+  |
+== mail | @bad.tmpl | customer=Ada Lovelace
+  ValueError: Invalid placeholder in string: line 2, col 17

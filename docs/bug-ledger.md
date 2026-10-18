@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 220 |
 | other | 174 |
 | perf | 172 |
-| diagnostics | 165 |
+| diagnostics | 166 |
 | crash | 122 |
 | soundness | 111 |
 | use-after-free | 91 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2933 |
 | interp | 949 |
-| typecheck | 458 |
+| typecheck | 459 |
 | other | 115 |
 | ownership | 111 |
 | runtime | 77 |
@@ -212,6 +212,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-27 | 2026-10-18 | typecheck | medium | check refuses `Some(ref t) => title = Some(f"{t}{s}")`, an assignment to the matched place whose only use of `t` is in the value being stored; mir-interp and mir-llvm run it | — |
 | B-2026-10-18-28 | 2026-10-18 | ownership | low | `karac fix` rewrites `Some(h) => h.text.push_str(w)` (a match on an owned Option in a loop) to `Some(ref h)`, which check then refuses because the arm writes through `h`; the fix should write `mut ref h` | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
+| B-2026-10-18-32 | 2026-10-18 | typecheck | low | `no method 'clone' on type 'Value'` on a user enum or struct without `#[derive(Clone)]` gives no hint that the derive is missing, and `karac fix` offers nothing | — |
 
 ### Relocated
 

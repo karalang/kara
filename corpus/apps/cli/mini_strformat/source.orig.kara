@@ -1,0 +1,1714 @@
+// mini_strformat: Python 3.13's str.format and string.Template. The format
+// string parser is Objects/stringlib/unicode_format.h, the format-spec
+// mini-language is Python/formatter_unicode.c (for str, int, and int through
+// the float presentation types), and Template is Lib/string.py. An invoice
+// and a mail merge are built on top of them.
+
+// ---------------------------------------------------------------- chars
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ident_start(c: char) -> bool {
+    c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_ident(c: char) -> bool {
+    is_ident_start(c) or is_digit(c)
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn repeat(c: char, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(c);
+        k += 1;
+    }
+    s
+}
+
+// n >= 0 in the given base, with lower- or upper-case letters.
+fn to_base(n: i64, base: i64, upper: bool) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        let d = m % base;
+        if d < 10 {
+            rev.push(chr(48 + d));
+        } else if upper {
+            rev.push(chr(55 + d));
+        } else {
+            rev.push(chr(87 + d));
+        }
+        m = m / base;
+    }
+    let mut s = String.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 {
+        s.push(rev[k]);
+        k -= 1;
+    }
+    s
+}
+
+// Lower-case hex, zero-padded to at least width digits.
+fn hex(n: i64, width: i64) -> String {
+    let h = to_base(n, 16, false);
+    let n_digits = char_count(h);
+    if n_digits >= width {
+        h
+    } else {
+        f"{repeat('0', width - n_digits)}{h}"
+    }
+}
+
+// The output escaping of oracle.py's esc().
+fn esc(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if o < 32 or o == 0x7f {
+            out.push_str("\\x");
+            out.push_str(hex(o, 2));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn unesc(s: ref String) -> String {
+    s.replace("\\t", "\t").replace("\\n", "\n")
+}
+
+// s split at the first sep: (before, after); after is empty without one.
+fn partition(s: ref String, sep: char) -> (String, String) {
+    let mut a = String.new();
+    let mut b = String.new();
+    let mut seen = false;
+    for c in s.chars() {
+        if seen {
+            b.push(c);
+        } else if c == sep {
+            seen = true;
+        } else {
+            a.push(c);
+        }
+    }
+    (a, b)
+}
+
+// ---------------------------------------------------------------- values
+
+struct User {
+    name: String,
+    id: i64,
+    email: String,
+    tags: Vec[String],
+}
+
+enum Value {
+    Int(i64),
+    Str(String),
+    List(Vec[Value]),
+    Dict(Vec[(Value, Value)]),
+    Obj(User),
+}
+
+struct PyError {
+    kind: String,
+    msg: String,
+}
+
+fn py_error(kind: ref String, msg: ref String) -> PyError {
+    PyError { kind: kind.clone(), msg: msg.clone() }
+}
+
+fn value_error(msg: ref String) -> PyError {
+    py_error("ValueError", msg)
+}
+
+fn type_error(msg: ref String) -> PyError {
+    py_error("TypeError", msg)
+}
+
+fn type_name(v: ref Value) -> String {
+    match v {
+        Value.Int(_) => "int".to_string(),
+        Value.Str(_) => "str".to_string(),
+        Value.List(_) => "list".to_string(),
+        Value.Dict(_) => "dict".to_string(),
+        Value.Obj(_) => "User".to_string(),
+    }
+}
+
+fn same_key(a: ref Value, b: ref Value) -> bool {
+    match (a, b) {
+        (Value.Int(x), Value.Int(y)) => x == y,
+        (Value.Str(x), Value.Str(y)) => x == y,
+        _ => false,
+    }
+}
+
+// Not printable in str.isprintable()'s sense, among the code points this
+// program meets: the C0 and C1 controls, DEL, NBSP and the soft hyphen.
+fn unprintable(o: i64) -> bool {
+    o < 32 or (o >= 0x7f and o <= 0xa0) or o == 0xad
+}
+
+// repr() of a str, or ascii() with every non-ASCII code point escaped.
+fn str_repr(s: ref String, ascii: bool) -> String {
+    let mut single = false;
+    let mut double = false;
+    for c in s.chars() {
+        if c == '\'' {
+            single = true;
+        } else if c == '"' {
+            double = true;
+        }
+    }
+    let quote = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if o < 0x7f and not unprintable(o) {
+            out.push(c);
+        } else if ascii or unprintable(o) {
+            if o < 0x100 {
+                out.push_str("\\x");
+                out.push_str(hex(o, 2));
+            } else if o < 0x10000 {
+                out.push_str("\\u");
+                out.push_str(hex(o, 4));
+            } else {
+                out.push_str("\\U");
+                out.push_str(hex(o, 8));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn repr(v: ref Value, ascii: bool) -> String {
+    match v {
+        Value.Int(n) => n.to_string(),
+        Value.Str(s) => str_repr(s, ascii),
+        Value.List(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(repr(x, ascii));
+            }
+            f"[{parts.join(", ")}]"
+        }
+        Value.Dict(pairs) => {
+            let mut parts: Vec[String] = Vec.new();
+            for (k, x) in pairs.iter() {
+                parts.push(f"{repr(k, ascii)}: {repr(x, ascii)}");
+            }
+            "{" + parts.join(", ") + "}"
+        }
+        Value.Obj(u) => f"User({str_repr(u.name, ascii)}, {u.id})",
+    }
+}
+
+fn to_str(v: ref Value) -> String {
+    match v {
+        Value.Int(n) => n.to_string(),
+        Value.Str(s) => s.clone(),
+        Value.Obj(u) => f"{u.name} <{u.email}>",
+        _ => repr(v, false),
+    }
+}
+
+// ---------------------------------------------------------------- the format spec
+
+struct Spec {
+    fill: char,
+    align: char,
+    sign: char,
+    no_neg_0: bool,
+    alternate: bool,
+    width: i64,
+    // 0 none, 1 ',' every 3, 2 '_' every 3, 3 '_' every 4
+    sep: i64,
+    precision: i64,
+    kind: char,
+}
+
+fn is_align(c: char) -> bool {
+    c == '<' or c == '>' or c == '=' or c == '^'
+}
+
+// A presentation type in an error message: 'c', or '\xNN' outside the
+// printable ASCII range.
+fn code_text(c: char) -> String {
+    let o = c as i64;
+    if o > 32 and o < 128 {
+        f"'{c}'"
+    } else {
+        f"'\\x{to_base(o, 16, false)}'"
+    }
+}
+
+fn unknown_code(c: char, tname: ref String) -> PyError {
+    value_error(f"Unknown format code {code_text(c)} for object of type '{tname}'")
+}
+
+fn both_seps() -> PyError {
+    value_error("Cannot specify both ',' and '_'.")
+}
+
+// The digits at sp[pos..]: (value, digit count, position after them).
+fn spec_integer(sp: ref Vec[char], pos: i64) -> Result[(i64, i64, i64), PyError] {
+    let mut acc = 0;
+    let mut n = 0;
+    let mut p = pos;
+    while p < sp.len() and is_digit(sp[p]) {
+        let d = sp[p] as i64 - 48;
+        if acc > (9223372036854775807 - d) / 10 {
+            return Err(value_error("Too many decimal digits in format string"));
+        }
+        acc = acc * 10 + d;
+        n += 1;
+        p += 1;
+    }
+    Ok((acc, n, p))
+}
+
+// parse_internal_render_format_spec.
+fn parse_spec(sp: ref Vec[char], tname: ref String, default_type: char, default_align: char) -> Result[Spec, PyError] {
+    let mut f = Spec {
+        fill: ' ',
+        align: default_align,
+        sign: '\u{0}',
+        no_neg_0: false,
+        alternate: false,
+        width: -1,
+        sep: 0,
+        precision: -1,
+        kind: default_type,
+    };
+    let end = sp.len();
+    let mut pos = 0;
+    let mut fill_given = false;
+    let mut align_given = false;
+    if end - pos >= 2 and is_align(sp[pos + 1]) {
+        f.align = sp[pos + 1];
+        f.fill = sp[pos];
+        fill_given = true;
+        align_given = true;
+        pos += 2;
+    } else if end - pos >= 1 and is_align(sp[pos]) {
+        f.align = sp[pos];
+        align_given = true;
+        pos += 1;
+    }
+    if pos < end and (sp[pos] == ' ' or sp[pos] == '+' or sp[pos] == '-') {
+        f.sign = sp[pos];
+        pos += 1;
+    }
+    if pos < end and sp[pos] == 'z' {
+        f.no_neg_0 = true;
+        pos += 1;
+    }
+    if pos < end and sp[pos] == '#' {
+        f.alternate = true;
+        pos += 1;
+    }
+    if not fill_given and pos < end and sp[pos] == '0' {
+        f.fill = '0';
+        if not align_given and default_align == '>' {
+            f.align = '=';
+        }
+        pos += 1;
+    }
+    let (width, width_digits, after_width) = spec_integer(sp, pos)?;
+    pos = after_width;
+    if width_digits > 0 {
+        f.width = width;
+    }
+    if pos < end and sp[pos] == ',' {
+        f.sep = 1;
+        pos += 1;
+    }
+    if pos < end and sp[pos] == '_' {
+        if f.sep != 0 {
+            return Err(both_seps());
+        }
+        f.sep = 2;
+        pos += 1;
+    }
+    if pos < end and sp[pos] == ',' and f.sep == 2 {
+        return Err(both_seps());
+    }
+    if pos < end and sp[pos] == '.' {
+        pos += 1;
+        let (precision, precision_digits, after_precision) = spec_integer(sp, pos)?;
+        pos = after_precision;
+        if precision_digits == 0 {
+            return Err(value_error("Format specifier missing precision"));
+        }
+        f.precision = precision;
+    }
+    if end - pos > 1 {
+        return Err(value_error(f"Invalid format specifier '{text(sp, 0, end)}' for object of type '{tname}'"));
+    }
+    if end - pos == 1 {
+        f.kind = sp[pos];
+    }
+    if f.sep != 0 {
+        let t = f.kind;
+        let grouped = t == 'd' or t == 'e' or t == 'f' or t == 'g' or t == 'E' or t == 'G' or t == '%' or t == 'F';
+        let radix = t == 'b' or t == 'o' or t == 'x' or t == 'X';
+        if radix and f.sep == 2 {
+            f.sep = 3;
+        } else if not grouped {
+            let which = if f.sep == 1 { "," } else { "_" };
+            return Err(value_error(f"Cannot specify '{which}' with {code_text(t)}."));
+        }
+    }
+    Ok(f)
+}
+
+// body padded to width (body is n code points long).
+fn pad(body: ref String, n: i64, width: i64, align: char, fill: char) -> String {
+    let total = if width > n { width } else { n };
+    let left = if align == '>' {
+        total - n
+    } else if align == '^' {
+        (total - n) / 2
+    } else {
+        0
+    };
+    f"{repeat(fill, left)}{body}{repeat(fill, total - n - left)}"
+}
+
+// _PyUnicode_InsertThousandsGrouping: digits in groups of g, zero-filled
+// out to min_width (which counts the separators).
+fn group_digits(d: ref String, min_width: i64, g: i64, sep: char) -> String {
+    let cs = to_chars(d);
+    let mut remaining = cs.len();
+    let mut pos = cs.len();
+    let mut m = min_width;
+    let mut groups: Vec[String] = Vec.new();
+    let mut done = false;
+    while not done {
+        let mut l = remaining;
+        if m > l {
+            l = m;
+        }
+        if l < 1 {
+            l = 1;
+        }
+        if l > g {
+            l = g;
+        }
+        let n_zeros = if l > remaining { l - remaining } else { 0 };
+        let n_chars = if remaining < l { remaining } else { l };
+        groups.push(f"{repeat('0', n_zeros)}{text(cs, pos - n_chars, pos)}");
+        pos -= n_chars;
+        remaining -= n_chars;
+        m -= l;
+        if remaining <= 0 and m <= 0 {
+            done = true;
+        } else {
+            m -= 1;
+        }
+    }
+    let mut out = String.new();
+    let mut k = groups.len() - 1;
+    while k >= 0 {
+        out.push_str(groups[k]);
+        if k > 0 {
+            out.push(sep);
+        }
+        k -= 1;
+    }
+    out
+}
+
+// calc_number_spec + fill_number: sign, prefix, digits (grouped here) and
+// the remainder (a fraction, exponent or '%'), padded per the spec.
+fn fill_number(sign: ref String, prefix: ref String, digits: ref String, remainder: ref String, f: ref Spec) -> String {
+    let n_sign = char_count(sign);
+    let n_prefix = char_count(prefix);
+    let n_rem = char_count(remainder);
+    let grouped = if f.sep == 0 {
+        digits.clone()
+    } else {
+        let min_width = if f.fill == '0' and f.align == '=' {
+            f.width - n_sign - n_prefix - n_rem
+        } else {
+            0
+        };
+        let sep = if f.sep == 1 { ',' } else { '_' };
+        let g = if f.sep == 3 { 4 } else { 3 };
+        group_digits(digits, min_width, g, sep)
+    };
+    let n = n_sign + n_prefix + char_count(grouped) + n_rem;
+    let padding = if f.width > n { f.width - n } else { 0 };
+    if f.align == '=' {
+        f"{sign}{prefix}{repeat(f.fill, padding)}{grouped}{remainder}"
+    } else {
+        pad(f"{sign}{prefix}{grouped}{remainder}", n, f.width, f.align, f.fill)
+    }
+}
+
+fn sign_text(negative: bool, f: ref Spec) -> String {
+    if negative {
+        "-".to_string()
+    } else if f.sign == '+' {
+        "+".to_string()
+    } else if f.sign == ' ' {
+        " ".to_string()
+    } else {
+        String.new()
+    }
+}
+
+// ---------------------------------------------------------------- str, int, float
+
+// format_string_internal.
+fn format_str(s: ref String, sp: ref Vec[char]) -> Result[String, PyError] {
+    let f = parse_spec(sp, "str", 's', '<')?;
+    if f.kind != 's' {
+        return Err(unknown_code(f.kind, "str"));
+    }
+    if f.sign == ' ' {
+        return Err(value_error("Space not allowed in string format specifier"));
+    }
+    if f.sign != '\u{0}' {
+        return Err(value_error("Sign not allowed in string format specifier"));
+    }
+    if f.no_neg_0 {
+        return Err(value_error("Negative zero coercion (z) not allowed in string format specifier"));
+    }
+    if f.alternate {
+        return Err(value_error("Alternate form (#) not allowed in string format specifier"));
+    }
+    if f.align == '=' {
+        return Err(value_error("'=' alignment not allowed in string format specifier"));
+    }
+    let cs = to_chars(s);
+    let mut n = cs.len();
+    if f.precision >= 0 and n > f.precision {
+        n = f.precision;
+    }
+    Ok(pad(text(cs, 0, n), n, f.width, f.align, f.fill))
+}
+
+// format_long_internal, or format_float_internal for the float types.
+fn format_int(v: i64, sp: ref Vec[char]) -> Result[String, PyError] {
+    let f = parse_spec(sp, "int", 'd', '>')?;
+    let t = f.kind;
+    if t == 'e' or t == 'E' or t == 'f' or t == 'F' or t == 'g' or t == 'G' or t == '%' {
+        return Ok(format_float(v, f));
+    }
+    if not (t == 'b' or t == 'c' or t == 'd' or t == 'o' or t == 'x' or t == 'X' or t == 'n') {
+        return Err(unknown_code(t, "int"));
+    }
+    if f.precision != -1 {
+        return Err(value_error("Precision not allowed in integer format specifier"));
+    }
+    if f.no_neg_0 {
+        return Err(value_error("Negative zero coercion (z) not allowed in integer format specifier"));
+    }
+    if t == 'c' {
+        if f.sign != '\u{0}' {
+            return Err(value_error("Sign not allowed with integer format specifier 'c'"));
+        }
+        if f.alternate {
+            return Err(value_error("Alternate form (#) not allowed with integer format specifier 'c'"));
+        }
+        if v < 0 or v > 0x10ffff {
+            return Err(py_error("OverflowError", "%c arg not in range(0x110000)"));
+        }
+        let mut one = String.new();
+        one.push(chr(v));
+        return Ok(fill_number("", "", "", one, f));
+    }
+    let base = if t == 'b' {
+        2
+    } else if t == 'o' {
+        8
+    } else if t == 'x' or t == 'X' {
+        16
+    } else {
+        10
+    };
+    let prefix = if not f.alternate or base == 10 {
+        String.new()
+    } else if t == 'b' {
+        "0b".to_string()
+    } else if t == 'o' {
+        "0o".to_string()
+    } else if t == 'x' {
+        "0x".to_string()
+    } else {
+        "0X".to_string()
+    };
+    let a = if v < 0 { -v } else { v };
+    let digits = to_base(a, base, t == 'X');
+    Ok(fill_number(sign_text(v < 0, f), prefix, digits, "", f))
+}
+
+// a rounded half-to-even to n significant digits: (exactly n digits, the
+// decimal exponent of the first).
+fn round_sig(a: i64, n: i64) -> (Vec[char], i64) {
+    if a == 0 {
+        return (to_chars(repeat('0', n)), 0);
+    }
+    let s = to_chars(a.to_string());
+    let len = s.len();
+    let mut e = len - 1;
+    if len <= n {
+        let mut d = s.clone();
+        let mut k = len;
+        while k < n {
+            d.push('0');
+            k += 1;
+        }
+        return (d, e);
+    }
+    let mut keep: Vec[char] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        keep.push(s[k]);
+        k += 1;
+    }
+    let mut rest_nonzero = false;
+    k = n + 1;
+    while k < len {
+        if s[k] != '0' {
+            rest_nonzero = true;
+        }
+        k += 1;
+    }
+    let first = s[n];
+    let up = if first > '5' {
+        true
+    } else if first < '5' {
+        false
+    } else if rest_nonzero {
+        true
+    } else {
+        (keep[n - 1] as i64 - 48) % 2 == 1
+    };
+    if up {
+        let mut j = n - 1;
+        let mut carry = true;
+        while carry and j >= 0 {
+            if keep[j] == '9' {
+                keep[j] = '0';
+                j -= 1;
+            } else {
+                keep[j] = chr(keep[j] as i64 + 1);
+                carry = false;
+            }
+        }
+        if carry {
+            keep[0] = '1';
+            e += 1;
+        }
+    }
+    (keep, e)
+}
+
+fn exp_text(e: i64, upper: bool) -> String {
+    let mark = if upper { 'E' } else { 'e' };
+    let sign = if e < 0 { '-' } else { '+' };
+    let a = if e < 0 { -e } else { e };
+    if a < 10 {
+        f"{mark}{sign}0{a}"
+    } else {
+        f"{mark}{sign}{a}"
+    }
+}
+
+// PyOS_double_to_string of a non-negative integer (exactly representable).
+fn float_text(a: i64, t: char, precision: i64, alt: bool) -> String {
+    if t == 'f' or t == 'F' {
+        let mut s = a.to_string();
+        if precision > 0 {
+            s.push('.');
+            s.push_str(repeat('0', precision));
+        } else if alt {
+            s.push('.');
+        }
+        return s;
+    }
+    if t == 'e' or t == 'E' {
+        let (d, e) = round_sig(a, precision + 1);
+        let mut s = String.new();
+        s.push(d[0]);
+        if precision > 0 or alt {
+            s.push('.');
+        }
+        s.push_str(text(d, 1, d.len()));
+        s.push_str(exp_text(e, t == 'E'));
+        return s;
+    }
+    let p = if precision == 0 { 1 } else { precision };
+    let (d, e) = round_sig(a, p);
+    let mut n = d.len();
+    if not alt {
+        while n > 1 and d[n - 1] == '0' {
+            n -= 1;
+        }
+    }
+    let decpt = e + 1;
+    let mut s = String.new();
+    if decpt <= -4 or decpt > p {
+        s.push(d[0]);
+        if n > 1 or alt {
+            s.push('.');
+        }
+        s.push_str(text(d, 1, n));
+        s.push_str(exp_text(e, t == 'G'));
+    } else if decpt >= n {
+        s.push_str(text(d, 0, n));
+        s.push_str(repeat('0', decpt - n));
+        if alt {
+            s.push('.');
+        }
+    } else {
+        s.push_str(text(d, 0, decpt));
+        s.push('.');
+        s.push_str(text(d, decpt, n));
+    }
+    s
+}
+
+// format_float_internal on float(v).
+fn format_float(v: i64, f: ref Spec) -> String {
+    let mut t = f.kind;
+    let mut a = if v < 0 { -v } else { v };
+    let mut pct = false;
+    if t == '%' {
+        t = 'f';
+        a = a * 100;
+        pct = true;
+    }
+    let precision = if f.precision < 0 { 6 } else { f.precision };
+    let num = to_chars(float_text(a, t, precision, f.alternate));
+    let mut k = 0;
+    while k < num.len() and is_digit(num[k]) {
+        k += 1;
+    }
+    let mut rem = text(num, k, num.len());
+    if pct {
+        rem.push('%');
+    }
+    fill_number(sign_text(v < 0, f), "", text(num, 0, k), rem, f)
+}
+
+// ---------------------------------------------------------------- fields
+
+struct AutoNumber {
+    // 0 not yet decided, 1 automatic, 2 manual
+    state: i64,
+    next: i64,
+}
+
+// get_integer over a field name part: -1 when it is empty or not all digits.
+fn name_integer(name: ref Vec[char], lo: i64, hi: i64) -> Result[i64, PyError] {
+    if lo >= hi {
+        return Ok(-1);
+    }
+    let mut acc = 0;
+    let mut k = lo;
+    while k < hi {
+        if not is_digit(name[k]) {
+            return Ok(-1);
+        }
+        let d = name[k] as i64 - 48;
+        if acc > (9223372036854775807 - d) / 10 {
+            return Err(value_error("Too many decimal digits in format string"));
+        }
+        acc = acc * 10 + d;
+        k += 1;
+    }
+    Ok(acc)
+}
+
+fn get_attr(obj: ref Value, name: ref String) -> Result[Value, PyError] {
+    match obj {
+        Value.Obj(u) => {
+            if name == "name" {
+                return Ok(Value.Str(u.name.clone()));
+            }
+            if name == "id" {
+                return Ok(Value.Int(u.id));
+            }
+            if name == "email" {
+                return Ok(Value.Str(u.email.clone()));
+            }
+            if name == "tags" {
+                let mut tags: Vec[Value] = Vec.new();
+                for t in u.tags.iter() {
+                    tags.push(Value.Str(t.clone()));
+                }
+                return Ok(Value.List(tags));
+            }
+        }
+        Value.Int(n) => {
+            if name == "real" or name == "numerator" {
+                return Ok(Value.Int(n));
+            }
+            if name == "imag" {
+                return Ok(Value.Int(0));
+            }
+            if name == "denominator" {
+                return Ok(Value.Int(1));
+            }
+        }
+        _ => {}
+    }
+    Err(py_error("AttributeError", f"'{type_name(obj)}' object has no attribute '{name}'"))
+}
+
+// obj[key] with a key that is not an integer.
+fn get_item_str(obj: ref Value, key: ref String) -> Result[Value, PyError] {
+    match obj {
+        Value.Dict(pairs) => {
+            let want = Value.Str(key.clone());
+            for (k, x) in pairs.iter() {
+                if same_key(k, want) {
+                    return Ok(x.clone());
+                }
+            }
+            Err(py_error("KeyError", str_repr(key, false)))
+        }
+        Value.List(_) => Err(type_error("list indices must be integers or slices, not str")),
+        Value.Str(_) => Err(type_error("string indices must be integers, not 'str'")),
+        _ => Err(type_error(f"'{type_name(obj)}' object is not subscriptable")),
+    }
+}
+
+// obj[idx]: a sequence index for list and str, a key for dict.
+fn get_item_idx(obj: ref Value, idx: i64) -> Result[Value, PyError] {
+    match obj {
+        Value.List(items) => {
+            if idx >= items.len() {
+                return Err(py_error("IndexError", "list index out of range"));
+            }
+            Ok(items[idx].clone())
+        }
+        Value.Str(s) => {
+            let cs = to_chars(s);
+            if idx >= cs.len() {
+                return Err(py_error("IndexError", "string index out of range"));
+            }
+            Ok(Value.Str(text(cs, idx, idx + 1)))
+        }
+        Value.Dict(pairs) => {
+            let want = Value.Int(idx);
+            for (k, x) in pairs.iter() {
+                if same_key(k, want) {
+                    return Ok(x.clone());
+                }
+            }
+            Err(py_error("KeyError", idx.to_string()))
+        }
+        _ => Err(type_error(f"'{type_name(obj)}' object is not subscriptable")),
+    }
+}
+
+// field_name_split, then get_field_object's walk over the rest of the name.
+fn get_field(name: ref Vec[char], lo: i64, hi: i64, args: ref Vec[Value], kw: ref Map[String, Value], auto: mut ref AutoNumber) -> Result[Value, PyError] {
+    let mut i = lo;
+    while i < hi and name[i] != '[' and name[i] != '.' {
+        i += 1;
+    }
+    let mut idx = name_integer(name, lo, i)?;
+    let empty = i == lo;
+    let numeric = empty or idx != -1;
+    if auto.state == 0 and numeric {
+        auto.state = if empty { 1 } else { 2 };
+    }
+    if numeric {
+        if auto.state == 2 and empty {
+            return Err(value_error("cannot switch from manual field specification to automatic field numbering"));
+        }
+        if auto.state == 1 and not empty {
+            return Err(value_error("cannot switch from automatic field numbering to manual field specification"));
+        }
+    }
+    if empty {
+        idx = auto.next;
+        auto.next += 1;
+    }
+    let mut obj = if idx == -1 {
+        let key = text(name, lo, i);
+        match kw.get(key.clone()) {
+            Some(v) => v.clone(),
+            None => return Err(py_error("KeyError", str_repr(key, false))),
+        }
+    } else {
+        if idx >= args.len() {
+            return Err(py_error("IndexError", f"Replacement index {idx} out of range for positional args tuple"));
+        }
+        args[idx].clone()
+    };
+    let mut p = i;
+    while p < hi {
+        let c = name[p];
+        p += 1;
+        if c == '.' {
+            let start = p;
+            while p < hi and name[p] != '.' and name[p] != '[' {
+                p += 1;
+            }
+            if p == start {
+                return Err(value_error("Empty attribute in format string"));
+            }
+            let next = get_attr(obj, text(name, start, p))?;
+            obj = next;
+        } else if c == '[' {
+            let start = p;
+            while p < hi and name[p] != ']' {
+                p += 1;
+            }
+            if p >= hi {
+                return Err(value_error("Missing ']' in format string"));
+            }
+            let end = p;
+            p += 1;
+            let k = name_integer(name, start, end)?;
+            if end == start {
+                return Err(value_error("Empty attribute in format string"));
+            }
+            let next = if k == -1 {
+                get_item_str(obj, text(name, start, end))?
+            } else {
+                get_item_idx(obj, k)?
+            };
+            obj = next;
+        } else {
+            return Err(value_error("Only '.' or '[' may follow ']' in format field specifier"));
+        }
+    }
+    Ok(obj)
+}
+
+fn convert(obj: ref Value, c: char) -> Result[Value, PyError] {
+    if c == 'r' {
+        return Ok(Value.Str(repr(obj, false)));
+    }
+    if c == 's' {
+        return Ok(Value.Str(to_str(obj)));
+    }
+    if c == 'a' {
+        return Ok(Value.Str(repr(obj, true)));
+    }
+    let o = c as i64;
+    if o > 32 and o < 127 {
+        Err(value_error(f"Unknown conversion specifier {c}"))
+    } else {
+        Err(value_error(f"Unknown conversion specifier \\x{to_base(o, 16, false)}"))
+    }
+}
+
+// render_field: format(obj, spec).
+fn render(obj: ref Value, sp: ref Vec[char]) -> Result[String, PyError] {
+    if sp.len() == 0 {
+        return Ok(to_str(obj));
+    }
+    match obj {
+        Value.Int(n) => format_int(n, sp),
+        Value.Str(s) => format_str(s, sp),
+        _ => Err(type_error(f"unsupported format string passed to {type_name(obj)}.__format__")),
+    }
+}
+
+// ---------------------------------------------------------------- str.format
+
+struct Field {
+    name_lo: i64,
+    name_hi: i64,
+    conv: char,
+    spec_lo: i64,
+    spec_hi: i64,
+    expand: bool,
+    next: i64,
+}
+
+// parse_field: fmt[start..] follows a '{'.
+fn parse_field(fmt: ref Vec[char], start: i64, hi: i64) -> Result[Field, PyError] {
+    let mut s = start;
+    let mut c = '\u{0}';
+    let mut stop = false;
+    while s < hi and not stop {
+        c = fmt[s];
+        s += 1;
+        if c == '{' {
+            return Err(value_error("unexpected '{' in field name"));
+        }
+        if c == '[' {
+            while s < hi and fmt[s] != ']' {
+                s += 1;
+            }
+        } else if c == '}' or c == ':' or c == '!' {
+            stop = true;
+        }
+    }
+    let mut f = Field { name_lo: start, name_hi: s - 1, conv: '\u{0}', spec_lo: s, spec_hi: s, expand: false, next: s };
+    if c == '!' or c == ':' {
+        if c == '!' {
+            if s >= hi {
+                return Err(value_error("end of string while looking for conversion specifier"));
+            }
+            f.conv = fmt[s];
+            s += 1;
+            if s < hi {
+                let c2 = fmt[s];
+                s += 1;
+                if c2 == '}' {
+                    f.spec_lo = s;
+                    f.spec_hi = s;
+                    f.next = s;
+                    return Ok(f);
+                }
+                if c2 != ':' {
+                    return Err(value_error("expected ':' after conversion specifier"));
+                }
+            }
+        }
+        f.spec_lo = s;
+        let mut count = 1;
+        while s < hi {
+            let c3 = fmt[s];
+            s += 1;
+            if c3 == '{' {
+                f.expand = true;
+                count += 1;
+            } else if c3 == '}' {
+                count -= 1;
+                if count == 0 {
+                    f.spec_hi = s - 1;
+                    f.next = s;
+                    return Ok(f);
+                }
+            }
+        }
+        return Err(value_error("unmatched '{' in format spec"));
+    }
+    if c != '}' {
+        return Err(value_error("expected '}' before end of string"));
+    }
+    Ok(f)
+}
+
+// build_string / do_markup over fmt[lo..hi].
+fn vformat(fmt: ref Vec[char], lo: i64, hi: i64, args: ref Vec[Value], kw: ref Map[String, Value], depth: i64, auto: mut ref AutoNumber) -> Result[String, PyError] {
+    if depth <= 0 {
+        return Err(value_error("Max string recursion exceeded"));
+    }
+    let mut out = String.new();
+    let mut s = lo;
+    while s < hi {
+        let start = s;
+        let mut c = '\u{0}';
+        let mut markup = false;
+        while s < hi and not markup {
+            c = fmt[s];
+            s += 1;
+            if c == '{' or c == '}' {
+                markup = true;
+            }
+        }
+        let at_end = s >= hi;
+        let mut len = s - start;
+        if c == '}' and (at_end or fmt[s] != '}') {
+            return Err(value_error("Single '}' encountered in format string"));
+        }
+        if at_end and c == '{' {
+            return Err(value_error("Single '{' encountered in format string"));
+        }
+        if not at_end {
+            if c == fmt[s] {
+                s += 1;
+                markup = false;
+            } else {
+                len -= 1;
+            }
+        }
+        out.push_str(text(fmt, start, start + len));
+        if markup {
+            let field = parse_field(fmt, s, hi)?;
+            s = field.next;
+            let found = get_field(fmt, field.name_lo, field.name_hi, args, kw, auto)?;
+            let obj = if field.conv != '\u{0}' { convert(found, field.conv)? } else { found };
+            let spec = if field.expand {
+                to_chars(vformat(fmt, field.spec_lo, field.spec_hi, args, kw, depth - 1, auto)?)
+            } else {
+                let mut v: Vec[char] = Vec.new();
+                let mut k = field.spec_lo;
+                while k < field.spec_hi {
+                    v.push(fmt[k]);
+                    k += 1;
+                }
+                v
+            };
+            out.push_str(render(obj, spec)?);
+        }
+    }
+    Ok(out)
+}
+
+fn format(fmt: ref String, args: ref Vec[Value], kw: ref Map[String, Value]) -> Result[String, PyError] {
+    let cs = to_chars(fmt);
+    let mut auto = AutoNumber { state: 0, next: 0 };
+    vformat(cs, 0, cs.len(), args, kw, 2, mut auto)
+}
+
+fn error_text(e: ref PyError) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ---------------------------------------------------------------- string.Template
+
+// One match of Template.pattern: the '$' at start, the text up to end, and
+// which group matched: 0 escaped, 1 named, 2 braced, 3 invalid.
+struct TMatch {
+    start: i64,
+    end: i64,
+    group: i64,
+    name: String,
+}
+
+fn template_matches(t: ref Vec[char]) -> Vec[TMatch] {
+    let mut v: Vec[TMatch] = Vec.new();
+    let n = t.len();
+    let mut i = 0;
+    while i < n {
+        if t[i] != '$' {
+            i += 1;
+            continue;
+        }
+        let j = i + 1;
+        if j < n and t[j] == '$' {
+            v.push(TMatch { start: i, end: j + 1, group: 0, name: String.new() });
+            i = j + 1;
+        } else if j < n and is_ident_start(t[j]) {
+            let mut k = j;
+            while k < n and is_ident(t[k]) {
+                k += 1;
+            }
+            v.push(TMatch { start: i, end: k, group: 1, name: text(t, j, k) });
+            i = k;
+        } else {
+            let mut braced = false;
+            if j + 1 < n and t[j] == '{' and is_ident_start(t[j + 1]) {
+                let mut k = j + 1;
+                while k < n and is_ident(t[k]) {
+                    k += 1;
+                }
+                if k < n and t[k] == '}' {
+                    v.push(TMatch { start: i, end: k + 1, group: 2, name: text(t, j + 1, k) });
+                    i = k + 1;
+                    braced = true;
+                }
+            }
+            if not braced {
+                v.push(TMatch { start: i, end: j, group: 3, name: String.new() });
+                i = j;
+            }
+        }
+    }
+    v
+}
+
+fn is_line_break(c: char) -> bool {
+    let o = c as i64;
+    c == '\n' or c == '\r' or o == 0x0b or o == 0x0c or (o >= 0x1c and o <= 0x1e) or o == 0x85 or o == 0x2028 or o == 0x2029
+}
+
+// Template._invalid: the line and column of the invalid group at i.
+fn invalid_placeholder(t: ref Vec[char], i: i64) -> PyError {
+    let mut line = 1;
+    let mut line_start = 0;
+    let mut k = 0;
+    while k < i {
+        if t[k] == '\r' and k + 1 < i and t[k + 1] == '\n' {
+            k += 2;
+            line += 1;
+            line_start = k;
+        } else if is_line_break(t[k]) {
+            k += 1;
+            line += 1;
+            line_start = k;
+        } else {
+            k += 1;
+        }
+    }
+    value_error(f"Invalid placeholder in string: line {line}, col {i - line_start}")
+}
+
+fn substitute(tmpl: ref String, d: ref Map[String, String]) -> Result[String, PyError] {
+    let t = to_chars(tmpl);
+    let mut out = String.new();
+    let mut last = 0;
+    for m in template_matches(t).iter() {
+        out.push_str(text(t, last, m.start));
+        if m.group == 0 {
+            out.push('$');
+        } else if m.group == 3 {
+            return Err(invalid_placeholder(t, m.start + 1));
+        } else {
+            match d.get(m.name.clone()) {
+                Some(x) => out.push_str(x),
+                None => return Err(py_error("KeyError", str_repr(m.name, false))),
+            }
+        }
+        last = m.end;
+    }
+    out.push_str(text(t, last, t.len()));
+    Ok(out)
+}
+
+fn safe_substitute(tmpl: ref String, d: ref Map[String, String]) -> String {
+    let t = to_chars(tmpl);
+    let mut out = String.new();
+    let mut last = 0;
+    for m in template_matches(t).iter() {
+        out.push_str(text(t, last, m.start));
+        if m.group == 0 {
+            out.push('$');
+        } else if m.group == 3 {
+            out.push('$');
+        } else {
+            match d.get(m.name.clone()) {
+                Some(x) => out.push_str(x),
+                None => out.push_str(text(t, m.start, m.end)),
+            }
+        }
+        last = m.end;
+    }
+    out.push_str(text(t, last, t.len()));
+    out
+}
+
+fn get_identifiers(tmpl: ref String) -> Vec[String] {
+    let t = to_chars(tmpl);
+    let mut ids: Vec[String] = Vec.new();
+    for m in template_matches(t).iter() {
+        if m.group == 1 or m.group == 2 {
+            let mut seen = false;
+            for x in ids.iter() {
+                if x == m.name {
+                    seen = true;
+                }
+            }
+            if not seen {
+                ids.push(m.name.clone());
+            }
+        }
+    }
+    ids
+}
+
+fn is_valid(tmpl: ref String) -> bool {
+    for m in template_matches(to_chars(tmpl)).iter() {
+        if m.group == 3 {
+            return false;
+        }
+    }
+    true
+}
+
+// ---------------------------------------------------------------- the values and jobs
+
+fn str_list(xs: ref Vec[String]) -> Value {
+    let mut v: Vec[Value] = Vec.new();
+    for x in xs.iter() {
+        v.push(Value.Str(x.clone()));
+    }
+    Value.List(v)
+}
+
+fn s(x: ref String) -> Value {
+    Value.Str(x.clone())
+}
+
+// env.py's keywords().
+fn keywords() -> Map[String, Value] {
+    let mut kw: Map[String, Value] = Map.new();
+    kw.insert("name".to_string(), s("Ada Lovelace"));
+    kw.insert("city".to_string(), s("Zürich"));
+    kw.insert("quote".to_string(), s("it's \"fine\"\n\ttab"));
+    kw.insert("empty".to_string(), s(""));
+    kw.insert("n".to_string(), Value.Int(1234567));
+    kw.insert("neg".to_string(), Value.Int(-42));
+    kw.insert("zero".to_string(), Value.Int(0));
+    kw.insert("w".to_string(), Value.Int(12));
+    kw.insert("p".to_string(), Value.Int(3));
+    kw.insert("ch".to_string(), Value.Int(233));
+    kw.insert("emoji".to_string(), Value.Int(128512));
+    kw.insert("big".to_string(), Value.Int(12345678901234567));
+    let tags = vec!["admin".to_string(), "ops".to_string()];
+    let u = User { name: "ada".to_string(), id: 7, email: "ada@example.com".to_string(), tags: tags };
+    kw.insert("u".to_string(), Value.Obj(u));
+    let users = vec!["ada".to_string(), "bob".to_string()];
+    let cfg = vec![
+        (s("host"), s("db1")),
+        (s("port"), Value.Int(5432)),
+        (s("users"), str_list(users)),
+        (s("1"), s("one")),
+    ];
+    kw.insert("cfg".to_string(), Value.Dict(cfg));
+    let nums = vec![Value.Int(3), Value.Int(1), Value.Int(4), Value.Int(1), Value.Int(5)];
+    kw.insert("nums".to_string(), Value.List(nums));
+    kw.insert("fill".to_string(), s("*"));
+    kw.insert("align".to_string(), s("^"));
+    kw.insert("r125".to_string(), Value.Int(125));
+    kw.insert("r135".to_string(), Value.Int(135));
+    kw.insert("r6".to_string(), Value.Int(999999));
+    kw.insert("r7".to_string(), Value.Int(9999995));
+    kw
+}
+
+fn parse_int(x: ref String) -> Result[i64, String] {
+    match i64.parse(x.clone()) {
+        Some(n) => Ok(n),
+        None => Err(f"not an integer: {x}"),
+    }
+}
+
+fn positional(fields: ref Vec[String], from: i64) -> Result[Vec[Value], String] {
+    let mut args: Vec[Value] = Vec.new();
+    let mut k = from;
+    while k < fields.len() {
+        let (kind, rest) = partition(fields[k], ':');
+        if kind == "i" {
+            args.push(Value.Int(parse_int(rest)?));
+        } else {
+            args.push(Value.Str(rest));
+        }
+        k += 1;
+    }
+    Ok(args)
+}
+
+fn pairs(fields: ref Vec[String], from: i64) -> Map[String, String] {
+    let mut d: Map[String, String] = Map.new();
+    let mut k = from;
+    while k < fields.len() {
+        let (key, v) = partition(fields[k], '=');
+        d.insert(key, v);
+        k += 1;
+    }
+    d
+}
+
+fn read(arg: ref String) -> Result[String, String] {
+    let path = f"data/{text(to_chars(arg), 1, char_count(arg))}";
+    match fs.read_to_string(path.clone()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn fmt_or_err(fmt: ref String, args: ref Vec[Value], kw: ref Map[String, Value]) -> Result[String, String] {
+    match format(fmt, args, kw) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(error_text(e)),
+    }
+}
+
+fn money(cents: i64) -> Result[String, String] {
+    let args = vec![Value.Int(cents / 100), Value.Int(cents % 100)];
+    let kw: Map[String, Value] = Map.new();
+    fmt_or_err("{:,}.{:02}", args, kw)
+}
+
+struct Item {
+    sku: String,
+    item: String,
+    qty: i64,
+    cents: i64,
+}
+
+// csv.DictReader over the items file (no quoted fields in it).
+fn read_items() -> Result[Vec[Item], String] {
+    let raw = read("@items.csv")?;
+    let mut items: Vec[Item] = Vec.new();
+    let mut first = true;
+    for line in raw.lines() {
+        if first {
+            first = false;
+        } else {
+            let f = line.split(",");
+            items.push(Item { sku: f[0].clone(), item: f[1].clone(), qty: parse_int(f[2])?, cents: parse_int(f[3])? });
+        }
+    }
+    Ok(items)
+}
+
+fn kw_of(pairs: ref Vec[(String, Value)]) -> Map[String, Value] {
+    let mut kw: Map[String, Value] = Map.new();
+    for (k, v) in pairs.iter() {
+        kw.insert(k.clone(), v.clone());
+    }
+    kw
+}
+
+fn invoice(layout_arg: ref String, vat_pct: i64, out: mut ref String) -> Result[(), String] {
+    let items = read_items()?;
+    let mut layout: Map[String, String] = Map.new();
+    for line in read(layout_arg)?.lines() {
+        let (k, v) = partition(line.to_string(), '\t');
+        layout.insert(k, v);
+    }
+    let lay = |k: ref String| -> String {
+        match layout.get(k.clone()) {
+            Some(v) => v.clone(),
+            None => String.new(),
+        }
+    };
+    let none: Vec[Value] = Vec.new();
+    let no_kw: Map[String, Value] = Map.new();
+    let mut lines: Vec[String] = Vec.new();
+    lines.push(fmt_or_err(lay("header"), none, kw_of(vec![("title".to_string(), s("INVOICE 10427"))]))?);
+    lines.push(fmt_or_err(lay("cols"), vec![s("SKU"), s("Item"), s("Qty"), s("Total")], no_kw)?);
+    lines.push(fmt_or_err(lay("rule"), vec![s("")], no_kw)?);
+    let mut total = 0;
+    let mut units = 0;
+    for it in items.iter() {
+        let line_cents = it.qty * it.cents;
+        total += line_cents;
+        units += it.qty;
+        let kw = kw_of(vec![
+            ("sku".to_string(), s(it.sku)),
+            ("item".to_string(), s(it.item)),
+            ("qty".to_string(), Value.Int(it.qty)),
+            ("total".to_string(), Value.Str(money(line_cents)?)),
+        ]);
+        lines.push(fmt_or_err(lay("row"), none, kw)?);
+    }
+    lines.push(fmt_or_err(lay("rule"), vec![s("")], no_kw)?);
+    let vat = (vat_pct * total * 2 / (100 + vat_pct) + 1) / 2;
+    let sums = vec![
+        ("Net".to_string(), total - vat),
+        (f"VAT {vat_pct}%", vat),
+        ("Total EUR".to_string(), total),
+    ];
+    for (label, amount) in sums.iter() {
+        let kw = kw_of(vec![("label".to_string(), s(label)), ("amount".to_string(), Value.Str(money(amount)?))]);
+        lines.push(fmt_or_err(lay("sum"), none, kw)?);
+    }
+    let foot = kw_of(vec![
+        ("count".to_string(), Value.Int(items.len())),
+        ("units".to_string(), Value.Int(units)),
+        ("vat_pct".to_string(), Value.Int(vat_pct)),
+    ]);
+    lines.push(fmt_or_err(lay("foot"), none, foot)?);
+    for line in lines.iter() {
+        out.push_str(f"  |{esc(line)}\n");
+    }
+    Ok(())
+}
+
+fn mail(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let mut d = pairs(f, 2);
+    let items = read_items()?;
+    let mut cents = 0;
+    for it in items.iter() {
+        cents += it.qty * it.cents;
+    }
+    d.insert("total".to_string(), money(cents)?);
+    d.insert("count".to_string(), items.len().to_string());
+    d.insert("day".to_string(), "Mon 20 Oct".to_string());
+    match substitute(read(f[1])?, d) {
+        Ok(t) => {
+            for line in t.split("\n") {
+                out.push_str(f"  |{esc(line)}\n");
+            }
+        }
+        Err(e) => out.push_str(f"  {error_text(e)}\n"),
+    }
+    Ok(())
+}
+
+fn run(f: ref Vec[String], kw: ref Map[String, Value], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    if kind == "format" {
+        let args = positional(f, 2)?;
+        match format(unesc(f[1]), args, kw) {
+            Ok(t) => out.push_str(f"  {esc(t)}\n"),
+            Err(e) => out.push_str(f"  {error_text(e)}\n"),
+        }
+    } else if kind == "template" {
+        let tmpl = unesc(f[1]);
+        let d = if f.len() > 2 and not f[2].is_empty() { pairs(f, 2) } else { Map.new() };
+        let valid = if is_valid(tmpl) { "True" } else { "False" };
+        out.push_str(f"  valid {valid} ids {get_identifiers(tmpl).join(",")}\n");
+        match substitute(tmpl, d) {
+            Ok(t) => out.push_str(f"  {esc(t)}\n"),
+            Err(e) => out.push_str(f"  {error_text(e)}\n"),
+        }
+        out.push_str(f"  safe {esc(safe_substitute(tmpl, d))}\n");
+    } else if kind == "invoice" {
+        invoice(f[2], parse_int(f[3])?, out)?;
+    } else if kind == "mail" {
+        mail(f, out)?;
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+fn main() {
+    for (path, contents) in data_files() {
+        let parts = path.split("/");
+        let mut dir = "data".to_string();
+        let mut k = 0;
+        while k + 1 < parts.len() {
+            dir = f"{dir}/{parts[k]}";
+            k += 1;
+        }
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            eprintln(f"cannot create {dir}: {e}");
+            return;
+        }
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let kw = keywords();
+    for job in jobs.lines() {
+        let f = job.split("\t");
+        let mut parts: Vec[String] = Vec.new();
+        for x in f.iter() {
+            parts.push(esc(x));
+        }
+        println(f"== {parts.join(" | ")}");
+        let mut out = String.new();
+        match run(f, kw, mut out) {
+            Ok(()) => print(out),
+            Err(e) => {
+                print(out);
+                println(f"  error: {e}");
+            }
+        }
+    }
+}
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("Dear $customer,\n");
+    t.push_str("your balance is $ 12.\n");
+    v.push(("bad.tmpl".to_string(), t));
+    let mut t = String.new();
+    t.push_str("sku,item,qty,cents\n");
+    t.push_str("A-100,Espresso beans 1 kg,2,2450\n");
+    t.push_str("B-220,Burr grinder,1,18900\n");
+    t.push_str("C-031,Paper filters (100),12,395\n");
+    t.push_str("D-007,Descaler,3,1275\n");
+    t.push_str("E-555,Milk jug 600 ml,1,2199\n");
+    v.push(("items.csv".to_string(), t));
+    let mut t = String.new();
+    t.push_str("header\t{title:^48}\n");
+    t.push_str("cols\t{:<6} {:<22} {:>4} {:>12}\n");
+    t.push_str("row\t{sku:<6} {item:<22.22} {qty:>4} {total:>12}\n");
+    t.push_str("rule\t{:-^48}\n");
+    t.push_str("sum\t{label:>34} {amount:>13}\n");
+    t.push_str("foot\tItems: {count}, units: {units:,}, VAT {vat_pct}% included\n");
+    v.push(("layout.tsv".to_string(), t));
+    let mut t = String.new();
+    t.push_str("Hello $customer,\n");
+    t.push_str("\n");
+    t.push_str("Thanks for order #${order}. Your total is $$${total}, paid by $method.\n");
+    t.push_str("${count} items ship to $city on ${day}.\n");
+    t.push_str("\n");
+    t.push_str("-- $shop\n");
+    v.push(("mail.tmpl".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("format\tplain text\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{{literal}} braces }}{{\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\ta{}b{}c\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0}{1}{0}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0} {}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{} {0}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\tx{0\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0!\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0!x}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0!r\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0!rx}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0:{1}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{:{:{}}}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{2}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{missing}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0[}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0.}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0[0]x}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name[0]x}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0}|{1}|{2}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name!r} {name!s} {city!a} {city!r}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{quote!r}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{quote!a}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{empty!r}<\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u!r}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u.name} #{u.id} <{u.email}>\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u.tags[1]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u.tags}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u.missing}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{cfg[host]}:{cfg[port]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{cfg[users][0]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{cfg[1]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{cfg[2]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{nums}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{nums[4]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{nums[9]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{nums[x]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u.tags[-1]}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{nums:>9}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{u:>9}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0.real}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:20}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:>20}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:^20}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:*^21}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:.3}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:>10.4}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{city:~^9}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{empty:-^4}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:{w}.{p}}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{name:{fill}{align}{w}}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{1:05}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{1:0>5}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:+}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:,}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:#}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:=10}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:z}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:d}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:.}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:10.}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:s}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{name:ss}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n}] [{n:,}] [{n:_}] [{n:15,}] [{n:<15_}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{neg:+}] [{n:+}] [{n: }] [{neg: }]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{neg:=8}] [{neg:08}] [{n:012,}] [{neg:0=+10,}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:b}] [{n:#b}] [{n:_b}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:o}] [{n:#o}] [{n:x}] [{n:#X}] [{n:#_x}] [{neg:#x}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:d}] [{n:n}] [{zero:#x}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{ch:c}] [{emoji:c}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{65:c}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0:c}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{1:c}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{ch:^5c}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:,c}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:+c}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:#c}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:.2}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:.2d}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:,_}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:,x}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:,b}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:_d}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:z}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:q}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:xx}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:10000000000000000000}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{n:  }\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{big:,}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{big:#x}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:{w},}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t{0:{1}}\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:f}] [{n:.2f}] [{neg:.0f}] [{n:#.0f}] [{n:,.2f}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:e}] [{n:.2e}] [{n:E}] [{zero:e}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:.0e}] [{n:#.0e}] [{neg:.3e}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:%}] [{neg:.1%}] [{zero:%}] [{n:,.0%}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:g}] [{n:.3g}] [{n:G}] [{neg:#g}] [{zero:g}] [{zero:#.3g}] [{p:.10g}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:.10g}] [{r125:.2g}] [{r135:.2g}] [{r6:.6g}] [{r7:.6g}] [{r7:.7g}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("format\t[{n:>14.3e}] [{neg:010.1f}] [{n:_.2f}]\ts:ab\ti:-42\ts:Zoë\n");
+    s.push_str("template\t$who likes $what\twho=tim\twhat=kung pao\n");
+    s.push_str("template\t${who}s and $$5 and $$$who\twho=Ada\n");
+    s.push_str("template\t$who $missing\twho=tim\n");
+    s.push_str("template\tcost: $ 5\twho=tim\n");
+    s.push_str("template\ttail $\t\n");
+    s.push_str("template\t${unclosed\tunclosed=x\n");
+    s.push_str("template\t$9lives\t\n");
+    s.push_str("template\t$_ok ${_ok} $Ok\t_ok=1\tOk=2\n");
+    s.push_str("template\tline one\\nline $two $\ttwo=2\n");
+    s.push_str("template\tcafé $naïve\tnaïve=x\n");
+    s.push_str("invoice\t@items.csv\t@layout.tsv\t19\n");
+    s.push_str("invoice\t@items.csv\t@layout.tsv\t0\n");
+    s.push_str("mail\t@mail.tmpl\tcustomer=Ada Lovelace\torder=10427\tmethod=card\tcity=London\tshop=Bean There\n");
+    s.push_str("mail\t@bad.tmpl\tcustomer=Ada Lovelace\n");
+    s
+}
