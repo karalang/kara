@@ -2237,7 +2237,8 @@ pub(super) fn cmd_check(
         OutputMode::Jsonl => {
             let mut pipeline = Pipeline::new(filename, &source)
                 .with_lint_overrides(lint_overrides)
-                .strict_core();
+                .strict_core()
+                .with_library();
             run_pipeline_jsonl(&mut pipeline);
             if pipeline.total_errors() > 0 {
                 process::exit(1);
@@ -2339,7 +2340,8 @@ pub(super) fn cmd_check_profiles(
     for (idx, profile) in profiles.iter().enumerate() {
         let mut pipeline = Pipeline::new(filename, source)
             .with_lint_overrides(lint_overrides.clone())
-            .strict_core();
+            .strict_core()
+            .with_library();
         pipeline.profile = *profile;
 
         match output {
@@ -2883,7 +2885,8 @@ pub(super) fn cmd_check_targets(
             );
             let mut pipeline = Pipeline::new(filename, source)
                 .with_lint_overrides(lint_overrides.clone())
-                .strict_core();
+                .strict_core()
+                .with_library();
             run_pipeline_jsonl(&mut pipeline);
             let total = pipeline.total_errors();
             if total > 0 {
@@ -2927,7 +2930,8 @@ pub(super) fn cmd_check_targets(
             .expect("target names validated at parse/manifest load");
         let mut pipeline = Pipeline::new(filename, source)
             .with_lint_overrides(lint_overrides.clone())
-            .strict_core();
+            .strict_core()
+            .with_library();
         pipeline.run_all_checks();
         let total = pipeline.total_errors();
         if total > 0 {

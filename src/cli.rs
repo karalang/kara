@@ -1127,21 +1127,24 @@ impl Pipeline {
 
     /// Check the program with the Kāra library appended, as the build does,
     /// so a library-only feature (`#[derive(Serialize)]`, `Json`) checks as
-    /// it builds (B-2026-10-12-23). Opt-in with `KARAC_CHECK_LIBRARY=1`
-    /// while it is measured, except for a program using `std.process` or
-    /// `std.net`.
+    /// it builds (B-2026-10-12-23). `KARAC_CHECK_LIBRARY=0` checks the
+    /// program alone, against the checker's built-in library signatures,
+    /// except a program using `std.process` or `std.net`, whose v2 surface
+    /// is in the library rather than the baked legacy module (B-2026-10-15-6,
+    /// B-2026-10-15-18), or serde, which only the library defines.
     fn with_library(mut self) -> Self {
         let Some(src) = self.source.clone() else {
             return self;
         };
-        // A program using `std.process` or `std.net` is always checked this
-        // way: its v2 surface is in the library, not the baked legacy module
-        // (B-2026-10-15-6, B-2026-10-15-18). So is one using serde, which
-        // only the library defines (B-2026-10-12-23).
-        if std::env::var("KARAC_CHECK_LIBRARY").as_deref() != Ok("1")
+        if std::env::var("KARAC_CHECK_LIBRARY").as_deref() == Ok("0")
             && !crate::mir::lower::uses_v2_library_module(&src)
             && !uses_serde(&src)
         {
+            return self;
+        }
+        // A program that does not parse on its own is reported as it is: an
+        // unterminated string or comment would run on into the library text.
+        if !self.parsed.errors.is_empty() {
             return self;
         }
         let (text, user_len) = crate::mir::lower::library_source(&src);
@@ -1228,9 +1231,8 @@ impl Pipeline {
         if let Some(v) = self.simd_errors.as_mut() {
             v.retain(|e| user(&e.span));
         }
-        if let Some(v) = self.comptime_errors.as_mut() {
-            v.retain(|e| user(&e.span));
-        }
+        // A `comptime` error is kept wherever it points: a derive body in the
+        // library raises it about the user's type.
     }
 
     /// Report the v2 core rules as errors — see `strict_core`. Call after

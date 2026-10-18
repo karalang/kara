@@ -2795,6 +2795,7 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     // resolve phase
     emit_jsonl_event("phase_start", "\"phase\":\"resolve\"");
     pipeline.resolve();
+    pipeline.drop_library_diagnostics();
     let resolve_errors = pipeline.resolved.as_ref().map_or(0, |r| r.errors.len());
     emit_jsonl_event(
         "phase_complete",
@@ -2828,6 +2829,7 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     // typecheck phase
     emit_jsonl_event("phase_start", "\"phase\":\"typecheck\"");
     pipeline.typecheck();
+    pipeline.drop_library_diagnostics();
     pipeline.lower();
     let type_errors = pipeline.typed.as_ref().map_or(0, |t| t.errors.len());
     emit_jsonl_event(
@@ -2841,6 +2843,7 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     // effect phase
     emit_jsonl_event("phase_start", "\"phase\":\"effect\"");
     pipeline.effectcheck();
+    pipeline.drop_library_diagnostics();
     let (effect_errors, effect_notes) = pipeline.effects.as_ref().map_or((0, 0), |e| {
         // Both halves ride the one note predicate (B-2026-08-21-2), so the
         // JSONL `phase_complete` counts cannot disagree with the text
@@ -2868,6 +2871,7 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     // ownership phase
     emit_jsonl_event("phase_start", "\"phase\":\"ownership\"");
     pipeline.ownershipcheck();
+    pipeline.drop_library_diagnostics();
     let ownership_errors = pipeline.ownership.as_ref().map_or(0, |o| o.errors.len());
     emit_jsonl_event(
         "phase_complete",
@@ -2880,6 +2884,7 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     // provider escape phase
     emit_jsonl_event("phase_start", "\"phase\":\"provider_escape\"");
     pipeline.provider_escape_check();
+    pipeline.drop_library_diagnostics();
     let escape_errors = pipeline.provider_escape.as_ref().map_or(0, |e| e.len());
     emit_jsonl_event(
         "phase_complete",
@@ -2892,6 +2897,7 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     // RAII-across-yield phase (phase 6 line 31 slice 1)
     emit_jsonl_event("phase_start", "\"phase\":\"raii_check\"");
     pipeline.raii_check();
+    pipeline.drop_library_diagnostics();
     let raii_errors = pipeline.raii_errors.as_ref().map_or(0, |r| r.len());
     emit_jsonl_event(
         "phase_complete",
@@ -2904,6 +2910,7 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     // `#[require_simd]` guarantee phase (phase-7-codegen.md line 308 slice 5a)
     emit_jsonl_event("phase_start", "\"phase\":\"simd_check\"");
     pipeline.simd_check();
+    pipeline.drop_library_diagnostics();
     let simd_errors = pipeline.simd_errors.as_ref().map_or(0, |s| s.len());
     emit_jsonl_event(
         "phase_complete",

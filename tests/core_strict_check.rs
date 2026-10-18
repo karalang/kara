@@ -1209,7 +1209,7 @@ fn destructuring_a_borrowed_place_or_iterating_refs_binds_references() {
              let v: Vec[(Vec[i64], i64)] = [([1], 1)];\n\
              for pair in v.iter() { match pair { (a, j) => println(take(a)) } }\n\
          }\n",
-        "it borrows its value",
+        "a borrowed value cannot be moved out of what it borrows",
     );
     // A `Map.get` payload bound in one arm, an owned value in the other.
     rejected_then_fixed(
@@ -1829,7 +1829,8 @@ fn an_enum_payload_may_be_an_enum() {
 }
 
 /// v2 core: `Map.get` returns `Option[ref V]`, so `*c` reads through the
-/// payload binding. A non-`Copy` value is read in place instead.
+/// payload binding. A format argument only reads, so `*c` of a non-`Copy`
+/// value is read in place too, as the MIR backends run it.
 #[test]
 fn deref_reads_through_a_map_payload() {
     accepted(
@@ -1843,7 +1844,7 @@ fn deref_reads_through_a_map_payload() {
              }\n\
          }\n",
     );
-    rejected_then_fixed_by(
+    accepted(
         "map-get-deref-string",
         "fn main() {\n\
              let mut m: Map[String, String] = Map.new();\n\
@@ -1853,8 +1854,6 @@ fn deref_reads_through_a_map_payload() {
                  None => {},\n\
              }\n\
          }\n",
-        "out of a borrow with `*`",
-        "println(f\"{c}\")",
     );
 }
 
@@ -2082,7 +2081,7 @@ fn map_get_cloned_checks_and_derives_clone() {
              let o: Option[P] = m.get(\"k\").cloned();\n\
              println(o.is_some());\n\
          }\n",
-        "`Option.cloned` needs a payload with `.clone()`",
+        "`P` does not implement `Clone`",
         "#[derive(Clone)]\nstruct P",
         1,
     );

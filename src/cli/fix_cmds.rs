@@ -106,8 +106,6 @@ pub(super) fn cmd_debug(input: &str, output: OutputMode) {
 /// `karac check` and must be acted on by hand.
 pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
     let source = read_source(filename);
-    // A program using `std.process` is checked against the v2 library, so
-    // the fixes for its old surface (`Stdio.Piped`) are found (B-2026-10-15-6).
     let mut pipeline = Pipeline::new(filename, &source)
         .strict_core()
         .with_library();

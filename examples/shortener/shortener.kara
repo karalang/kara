@@ -128,7 +128,7 @@ fn handle(req: Request) -> Response {
             };
             HITS.insert(code, seen + 1);
             let mut h: Vec[(String, String)] = Vec.new();
-            h.push(("location", target));
+            h.push(("location", target.clone()));
             Response { status: 302, body: "", headers: h }
         }
         None => text(404, "{\"error\":\"no such code\"}"),
