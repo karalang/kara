@@ -2263,6 +2263,56 @@ fn a_loop_over_a_ref_local_borrows_what_it_points_into() {
     );
 }
 
+/// §5.6, two-phase: an assignment's right side and a call's arguments run
+/// before the write, so a borrow last used there does not conflict with it.
+#[test]
+fn a_borrow_last_used_by_the_writing_statement_itself_is_accepted() {
+    accepted(
+        "two-phase-assign",
+        "struct S { x: i64 }\n\
+         fn main() {\n\
+             let mut bs: Vec[S] = Vec.new();\n\
+             bs.push(S { x: 1 });\n\
+             let b = ref bs[0];\n\
+             bs[0] = S { x: b.x + 1 };\n\
+             println(bs[0].x);\n\
+         }\n",
+    );
+    accepted(
+        "two-phase-method-arg",
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let b = ref v[0];\n\
+             v.push(*b + 1);\n\
+             println(v.len());\n\
+         }\n",
+    );
+    rejected_with(
+        "two-phase-assign-used-after",
+        "struct S { x: i64 }\n\
+         fn main() {\n\
+             let mut bs: Vec[S] = Vec.new();\n\
+             bs.push(S { x: 1 });\n\
+             let b = ref bs[0];\n\
+             bs[0] = S { x: b.x + 1 };\n\
+             println(b.x);\n\
+         }\n",
+        "while `ref b` borrows `bs[..]`",
+    );
+    rejected_with(
+        "two-phase-method-arg-used-after",
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(1);\n\
+             let b = ref v[0];\n\
+             v.push(*b + 1);\n\
+             println(*b);\n\
+         }\n",
+        "while `ref b` borrows `v[..]`",
+    );
+}
+
 /// §3.7: a `ref` binding's value whose type runs a `Drop` body cannot move
 /// out; a type with no `.clone()` gets `#[derive(Clone)]`, then `.clone()`.
 #[test]
@@ -6431,5 +6481,33 @@ fn append_is_written_as_extend() {
          }\n",
         "there is no `Vec.try_append`",
         "d.try_extend(y)?;",
+    );
+    rejected_then_fixed_by(
+        "append-call-arg",
+        "fn seven() -> Vec[i64] { vec![7] }\n\
+         fn main() {\n\
+             let mut d: Vec[i64] = vec![1];\n\
+             d.append(seven());\n\
+             println(f\"{d}\");\n\
+         }\n",
+        "there is no `Vec.append`",
+        "d.extend(seven());",
+    );
+}
+
+/// A library iterator has no `.iter()`: `karac fix` drops the call.
+#[test]
+fn iter_on_an_iterator_is_dropped() {
+    rejected_then_fixed_by(
+        "iter-on-split",
+        "fn main() {\n\
+             let mut n = 0;\n\
+             for w in \"a b c\".split(\" \").iter() {\n\
+                 n += w.len();\n\
+             }\n\
+             println(n);\n\
+         }\n",
+        "which is already an iterator",
+        "for w in \"a b c\".split(\" \") {",
     );
 }

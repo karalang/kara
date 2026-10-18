@@ -5504,6 +5504,25 @@ impl<'a> super::TypeChecker<'a> {
         );
         let recv_end = object.span.offset + object.span.length;
         let end = close.offset + close.length;
+        // An owned source of any shape keeps its text: only `.append(` is
+        // rewritten, up to the argument.
+        if !arg.mut_marker && arg.label.is_none() && arg.value.span.offset > recv_end {
+            self.type_error_with_fix_it(
+                message,
+                arg.value.span,
+                TypeErrorKind::NoMethodFound,
+                super::FixIt {
+                    span: Span {
+                        offset: recv_end,
+                        length: arg.value.span.offset - recv_end,
+                        line: object.span.line,
+                        column: object.span.column + object.span.length,
+                    },
+                    replacement: format!(".{try_}extend("),
+                },
+            );
+            return;
+        }
         let place = append_place_text(&arg.value).filter(|_| arg.label.is_none() && end > recv_end);
         match place {
             Some(t) => {

@@ -620,6 +620,15 @@ impl Walk<'_, '_> {
     /// it, a place inside it, or a place it is inside, through the same
     /// binding.
     fn check_borrowed_write(&mut self, place: &Expr, at: Span, verb: &str) {
+        self.check_borrowed_write_after(place, at, at.offset, verb);
+    }
+
+    /// [`Self::check_borrowed_write`] for a write that happens once the code
+    /// up to `after` has run: an assignment's right side and a call's
+    /// arguments are evaluated before the place is written, so a `ref`
+    /// binding last used there no longer borrows it (two-phase, as for every
+    /// `mut ref` argument; B-2026-10-15-2).
+    fn check_borrowed_write_after(&mut self, place: &Expr, at: Span, after: usize, verb: &str) {
         if self.borrowed.is_empty() {
             return;
         }
@@ -631,7 +640,7 @@ impl Walk<'_, '_> {
             b.binding.as_ref().is_none_or(|h| {
                 h.uses
                     .iter()
-                    .any(|(u, p)| *u > at.offset && !exclusive(p, branches))
+                    .any(|(u, p)| *u >= after && !exclusive(p, branches))
             }) && b.root == root
                 && b.path
                     .iter()
@@ -724,7 +733,8 @@ impl Walk<'_, '_> {
                 self.expr(value);
                 self.expr(target);
                 self.check_assign(target);
-                self.check_borrowed_write(target, target.span, "assign");
+                let after = value.span.offset + value.span.length;
+                self.check_borrowed_write_after(target, target.span, after, "assign");
                 self.note_capture_write(target);
                 // A rebound root names another value from here on.
                 if let ExprKind::Identifier(n) = &target.kind {
@@ -762,7 +772,13 @@ impl Walk<'_, '_> {
                 };
                 self.check_through(object, e.span, &action);
                 let verb = format!("call `.{method}` (a method that writes its receiver) on");
-                self.check_borrowed_write(object, e.span, &verb);
+                let after = match &e.kind {
+                    ExprKind::MethodCall {
+                        args_close_span, ..
+                    } if args_close_span.offset > e.span.offset => args_close_span.offset,
+                    _ => e.span.offset + 1,
+                };
+                self.check_borrowed_write_after(object, e.span, after, &verb);
                 self.note_capture_write(object);
             }
             ExprKind::Call { callee, args } => {

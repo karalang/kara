@@ -1384,6 +1384,35 @@ impl<'a> super::TypeChecker<'a> {
                             return Type::Error;
                         }
                     }
+                    // `.iter()` on an iterator (`s.split(",").iter()`, a
+                    // `SortedMap.range`): it already is one, so drop the hop.
+                    if matches!(method, "iter" | "into_iter")
+                        && args.is_empty()
+                        && self.library_iter_item_type(receiver_for_lookup).is_some()
+                    {
+                        let from = object.span.offset + object.span.length;
+                        let to = span.offset + span.length;
+                        if to > from {
+                            self.type_error_with_fix_it(
+                                format!(
+                                    "no method '{method}' on type '{type_name}', which is \
+                                     already an iterator: drop `.{method}()`"
+                                ),
+                                *span,
+                                TypeErrorKind::NoMethodFound,
+                                FixIt {
+                                    span: Span {
+                                        line: object.span.line,
+                                        column: object.span.column,
+                                        offset: from,
+                                        length: to - from,
+                                    },
+                                    replacement: String::new(),
+                                },
+                            );
+                            return Type::Error;
+                        }
+                    }
                     let mut msg = format!("no method '{}' on type '{}'", method, type_name);
                     // Iterator adaptors/terminals (`map`/`filter`/`collect`/…)
                     // are not methods on a `Vec`/`VecDeque` directly — they live
