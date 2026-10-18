@@ -93,17 +93,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 738 |
-| run-vs-build | 610 |
+| run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 281 |
+| missing-feature | 279 |
 | codegen-gap | 270 |
-| false-positive | 232 |
-| other | 176 |
+| false-positive | 226 |
+| other | 175 |
 | perf | 172 |
 | diagnostics | 166 |
 | crash | 122 |
-| soundness | 114 |
+| soundness | 113 |
 | use-after-free | 91 |
 
 ### By surface
@@ -112,14 +112,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2934 |
 | interp | 950 |
-| typecheck | 477 |
+| typecheck | 468 |
 | other | 115 |
 | ownership | 112 |
-| cli | 79 |
 | runtime | 78 |
+| cli | 78 |
 | parser | 69 |
 | autopar | 59 |
-| resolver | 49 |
+| resolver | 45 |
 | effect | 32 |
 | lexer | 12 |
 ## Current state
@@ -150,6 +150,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-12-33 | 2026-10-12 | typecheck | low | `karac check` refuses `s = cs.iter().collect();` into an existing `String` (also `w.name = ...` and `v.push(cs.iter().collect())` with `v: Vec[String]`), with "expected 'String', found 'Vec[char]'": `collect` takes its target type from a `let` annotation or a return type, but not from an assignment target or an argument, and defaults to `Vec` | — |
 | B-2026-10-13-1 | 2026-10-13 | typecheck | low | `Map.keys()` / `values()` and `SortedMap.keys()` / `values()` return an eager `Vec` on every front end, where docs/library/collections.md gives `fn keys(self) -> impl Iterator[Item = ref K]`: `m.keys().next()` and `m.keys().count()` are refused ("no method 'next' on type 'Vec': iterator adaptors/terminals require an explicit `.iter()`"), and taking the smallest key of a `SortedMap` copies every key | — |
 | B-2026-10-13-6 | 2026-10-13 | typecheck+interp+codegen | low | The remainder of B-2026-10-06-74, two halves: (1) `karac check` refuses `*k` on an item taken from an iterator first bound to a name (`let mut it = w.iter(); let Some(k) = it.next() ...; *k`, for a `Vec[i64]` and a `VecDeque[i64]`) while both MIR backends run it, though `w.iter().next()` unbound now passes; (2) SPEC QUESTION: docs/library/iterators.md gives `find` / `filter` / `position` / `take_while` / `skip_while` / `partition` a bare `Self.Item` predicate, so `(1..n).find(|j| w[*j] ...)` is an error (`j` is an `i64` copy; check refuses it), but runtime/stdlib/source/iter.kara declares them `MutFn(ref Self.Item)`, so both MIR backends accept `*j`; Thread A reads the doc as right and the MIR acceptance as leniency, and the two documents need to agree | — |
+| B-2026-10-13-11 | 2026-10-13 | typecheck | low | `PriorityQueue.peek` is typed `Option[T]` by value instead of the spec's `Option[ref T]`, so the spec's own `*pq.peek().unwrap()` and `Some(x) => *x` are refused by `karac check` (both MIR backends accept them since 28c51bf033) ("unary '*' requires 'ref T' ... found 'i64'"), and `let s = pq.peek().unwrap()` on a `PriorityQueue[String]` is accepted as an owned `String` | — |
 | B-2026-10-13-15 | 2026-10-13 | codegen | low | `karac build --mir` runs kata 495's bench 3.6x slower than C, Rust and legacy `karac build` (0.36-0.44 s against 0.07-0.12 s): the x86 code for the hot loop takes a data-dependent BRANCH for `(a - b).min(duration)` where rustc emits a cmov, and mispredicts it about 28 million times | — |
 | B-2026-10-13-18 | 2026-10-13 | codegen+runtime | medium | `Vec.sort_by_key` and `sort_by` on the MIR compiled backend run about 3.5-4x slower than Rust's `sort_by_key`: `karac_mir_sort_ctx` (runtime/src/mir.rs) is a bottom-up merge sort that calls the comparison through a function pointer for every comparison, and the emitted comparison calls the key closure, not inlined, for each side. Sorting 1M indices by an i64 key 10 times takes 2.74-2.78 s on `karac build --mir` and 0.65-0.77 s on `rustc -O`; in kata 502's bench the sort is 63% of all instructions | — |
 | B-2026-10-13-24 | 2026-10-13 | typecheck+interp | low | `Vec.append` and `Vec.extend_from_slice` are accepted by `karac check` and run on both v2 backends, but docs/library/collections.md says "There is no `append`" and has no `extend_from_slice` row: either the spec or the implementation is wrong | — |
@@ -192,18 +193,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-70 | 2026-10-15 | ownership | medium | `karac check` accepts `match (a, b) { (Some(mut ref d), Some(ref s)) => .. }` inside a loop, although building the tuple moves `a` and `b` into it on every iteration (core-semantics.md §4.6, a temporary scrutinee): every v2 surface then refuses the program in the MIR move check (`use of _1, which may have been moved or never initialized`), so check passes a program nothing can run | — |
 | B-2026-10-15-71 | 2026-10-15 | ownership | medium | `karac check` accepts `f(if c { b.x } else { b.y })`, an `if` whose arms are fields of a borrowed struct, as the argument to a `ref` parameter, but refuses the same `if` in a `let` (borrow_projection_copy); every v2 surface refuses the argument form as a move out of a borrowed place, so check passes a program nothing can run | — |
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
-| B-2026-10-15-29 | 2026-10-15 | resolver | medium | A top-level type declared AFTER an enum that has a variant of the same name is refused as "'Heading' is already defined in this scope" by `karac check`, `__mir-run` and `__mir-llvm-run`, while the same program with the type declared BEFORE the enum is accepted and runs; so the common `enum Shape { Circle(Circle), .. }` shape works or fails depending on declaration order | — |
-| B-2026-10-15-63 | 2026-10-15 | cli+typecheck | high | `karac check` passes a program with a `#[derive]` even when it has library-mode errors (the derive re-typecheck in `Pipeline::lower` used the legacy builtins and its result replaced the library-mode one) | — |
-| B-2026-10-15-64 | 2026-10-15 | typecheck | medium | `karac check` reports a §5.6 conflict for `bs[i] = S { x: b.x }` (and `v.push(*b)`) where `b = ref bs[i]` is last used by that statement, though the right side and arguments run before the write | — |
-| B-2026-10-15-65 | 2026-10-15 | typecheck | medium | A string literal branch beside a `Str` view branch is refused: `match line.find(" ") { Some(i) => line[i + 1..line.len()].trim(), None => "" }` reports "match arms have incompatible types: 'StringSlice' and 'String'" (and the same for if/else and inside tuples) | — |
-| B-2026-10-15-66 | 2026-10-15 | typecheck | medium | `m[name]` on a `String`-keyed map refuses a `Str` key ("expected 'String', found 'Str'") though `get` / `contains_key` take one under "views at lookup" (decision 2026-10-11), so `node.children[name]` over `path.split("/")` fails `karac check` | — |
-| B-2026-10-15-57 | 2026-10-15 | typecheck | medium | `opt ?? ""` with `opt: Option[Str]` is refused by `karac check` and every MIR surface with "expected 'StringSlice', found 'String'": the string literal after `??` is typed `String`, though design.md § String literals makes a literal a `Str` wherever a `Str` is expected, and the fallback of an `Option[Str]` is one | — |
-| B-2026-10-15-58 | 2026-10-15 | resolver | medium | `import std.path.*;` (a wildcard import of any gated library module) binds nothing in a single file: every use is "undefined name", on `karac check` and every MIR surface, though design.md § Wildcards makes it bring in every item a single-item import could bind | — |
-| B-2026-10-15-59 | 2026-10-15 | resolver | medium | `import std.path;` followed by `path.parent(p)` passes `karac check` and then fails every backend ("a type that failed to check is not lowered yet" on MIR, an internal "resolved but has no binding" error on the interpreter); FIXED AS AN ERROR, a deliberate divergence: design.md § Imports makes `import db.connection;` bind the module, and a gated module has no module value in a single file yet, so the import is now refused with the two forms that work | — |
-| B-2026-10-15-60 | 2026-10-15 | resolver+typecheck | low | A gated library module cannot be imported as a module in a single file: `import std.path;` then `path.parent(p)` (design.md § Imports, `import db.connection;` binds `connection`) is refused; the items must be imported by name or with `.*` | — |
-| B-2026-10-15-61 | 2026-10-15 | typecheck | low | A bare repeat literal `[0u8; 32]` with no expected type is a `Vec[u8]` on `karac check` and every MIR surface, but design.md § Collection literals says "the repeat form `[v; n]` always builds an `Array`, and `n` must be a constant" and that `let v: Vec[i64] = [0; 8];` is an error; `fn f() -> Array[u8, 4] { let mut out = [0u8; 4]; out[0] = 1u8; out }` is refused with "expected 'Array[u8, 4]', found 'Vec[u8]'" | — |
-| B-2026-10-15-62 | 2026-10-15 | typecheck | low | A type error inside a gated library module's item (`std.path`, `std.encoding`) is not reported by `karac check`, which passes, while the MIR surfaces report it and stop: with `let bad: i64 = "s";` added to `std.path.is_absolute`, `import std.path.{is_absolute};` is "All checks passed." and `__mir-run` is "typecheck: 13:20: expected 'i64', found 'String'" (a line of path.kara, printed as if it were the user's) | — |
-| B-2026-10-15-56 | 2026-10-15 | typecheck | low | A struct update whose base is a BINDING of another struct type is accepted by `karac check` and every MIR surface: with `struct D { a: i64, c: bool }` and `struct E { a: i64, c: bool }`, `let o = other(); let d = D { a: 5, ..o };` (o: E) passes and copies `o.c`, though design.md:1288 says the base "must have the same struct type" | — |
 | B-2026-10-15-108 | 2026-10-15 | cli+typecheck | high | `karac check` passes a program with a `#[derive]` even when it has library-mode errors (the derive re-typecheck in `Pipeline::lower` used the legacy builtins and its result replaced the library-mode one) | — |
 | B-2026-10-15-109 | 2026-10-15 | typecheck | medium | `karac check` reports a §5.6 conflict for `bs[i] = S { x: b.x }` (and `v.push(*b)`) where `b = ref bs[i]` is last used by that statement, though the right side and arguments run before the write | — |
 | B-2026-10-15-110 | 2026-10-15 | typecheck | medium | A string literal branch beside a `Str` view branch is refused: `match line.find(" ") { Some(i) => line[i + 1..line.len()].trim(), None => "" }` reports "match arms have incompatible types: 'StringSlice' and 'String'" (and the same for if/else and inside tuples) | — |
@@ -4032,7 +4021,6 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-13-8 | parser | medium | A primitive's associated constant right before a block is misparsed as a module-qualified struct literal's path: `if need == i64.MAX { . | 3ac940fe84 |
 | B-2026-10-13-9 | interp+codegen | medium | f64 Display does not follow the v1 spec's rendering on any backend: `println(1.0)` prints `1`, `println([1.0, 2.5])` prints `[1, 2.5]`, `println(1e16… | 1fcd413b13 |
 | B-2026-10-13-10 | interp+codegen | medium | On the MIR backends `let s: String = text.chars().collect();` (chars collected into a `String` with no adaptor between) is refused with "collecting c… | 5a562a4b64 |
-| B-2026-10-13-11 | typecheck | low | `PriorityQueue.peek` is typed `Option[T]` by value instead of the spec's `Option[ref T]`, so the spec's own `*pq.peek().unwrap()` and `Some(x) => *x`… | 28c51bf033 |
 | B-2026-10-13-12 | typecheck | low | `char.is_ascii_lowercase()`, `is_ascii_uppercase()` and `is_ascii_alphanumeric()` are refused by `karac check`, the legacy interpreter and both MIR b… | 68f0f9d257 |
 | B-2026-10-13-13 | interp+codegen | low | On both MIR backends a string slice `s[a..b]` that runs past the end, or cuts a code point, stops with `runtime error: explicit panic`, the report a… | 552971e048 |
 | B-2026-10-13-14 | interp+codegen | medium | The MIR builder refuses `for x in c.into_iter()` over a `Set`, `VecDeque`, `Map` or `SortedMap` whose elements are not `Copy` -- `for s in found.into… | 4e8c04ce62 |
