@@ -7507,8 +7507,11 @@ fn rows_the_library_check_settles() {
 
 /// The library surface the spec gives: `values()` is an iterator of
 /// `ref V` (B-2026-10-13-1), `split` yields `Str` views (B-2026-10-12-7),
-/// and `Map.get_mut` exists (B-2026-10-12-3).
+/// `Map.get_mut` exists (B-2026-10-12-3), and `PriorityQueue.peek` lends
+/// (B-2026-10-13-11).
 #[test]
 fn the_spec_library_surface_checks() {
     accepted("values-max-split-views-get-mut", "fn main() {\n    let mut counts: Map[i64, i64] = Map.new();\n    counts.insert(1, 3);\n    counts.insert(2, 7);\n    let best = *counts.values().max().unwrap();\n    let line = \"a,b,c\";\n    let parts: Vec[Str] = line.split(\",\").collect();\n    let mut m: Map[i64, Vec[i64]] = Map.new(); m.insert(3, vec![1]);\n    match m.get_mut(3) { Some(list) => list.push(2), None => {} }\n    println(f\"{best} {parts.len()} {m[3].len()}\");\n}\n");
+    // B-2026-10-13-11: `peek` lends the smallest element, `Option[ref T]`.
+    accepted("priority-queue-peek-lends", "fn main() {\n    let mut pq: PriorityQueue[i64] = PriorityQueue.new();\n    pq.push(3);\n    pq.push(7);\n    let top = *pq.peek().unwrap();\n    match pq.peek() { Some(x) => println(f\"{*x} {top}\"), None => {} }\n}\n");
 }
