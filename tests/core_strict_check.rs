@@ -5821,3 +5821,80 @@ fn splitters_are_lazy_iterators_of_str_views() {
         "shout(w.to_string())",
     );
 }
+
+#[test]
+fn hand_written_clone_and_default_impls_run() {
+    // B-2026-10-06-112: `impl Clone` / `impl Default` resolve like any trait
+    // impl, and a hand `clone` is the one every clone reaches, including the
+    // clones of a `Vec`, `Option`, `Map` or derived struct that holds the type.
+    let src = "struct Counter { n: i64, label: String }\n\
+         impl Clone for Counter {\n\
+         \x20   fn clone(ref self) -> Counter { Counter { n: self.n + 100, label: f\"{self.label}'\" } }\n\
+         }\n\
+         impl Default for Counter {\n\
+         \x20   fn default() -> Counter { Counter { n: 7, label: \"d\".to_string() } }\n\
+         }\n\
+         #[derive(Clone)]\n\
+         struct Holder { c: Counter, k: i64 }\n\
+         enum Side { L, R }\n\
+         impl Clone for Side { fn clone(ref self) -> Side { match self { Side.L => Side.R, Side.R => Side.L } } }\n\
+         fn dup[T: Clone](x: ref T) -> T { x.clone() }\n\
+         fn main() {\n\
+         \x20   let c = Counter { n: 1, label: \"c\".to_string() };\n\
+         \x20   let d = c.clone();\n\
+         \x20   let g = dup(c);\n\
+         \x20   let z = Counter.default();\n\
+         \x20   println(f\"{d.n} {d.label} {g.n} {z.n} {z.label}\");\n\
+         \x20   let v = vec![Counter { n: 2, label: \"v\".to_string() }];\n\
+         \x20   let w = v.clone();\n\
+         \x20   let h = Holder { c: Counter { n: 3, label: \"h\".to_string() }, k: 1 };\n\
+         \x20   let h2 = h.clone();\n\
+         \x20   let o = Some(Counter { n: 4, label: \"o\".to_string() });\n\
+         \x20   let o2 = o.clone();\n\
+         \x20   let mut m: Map[i64, Counter] = Map.new();\n\
+         \x20   m.insert(1, Counter { n: 5, label: \"m\".to_string() });\n\
+         \x20   let m2 = m.clone();\n\
+         \x20   println(f\"{w[0].n} {w[0].label} {h2.c.n} {h2.c.label} {o2.unwrap().n} {m2[1].n}\");\n\
+         \x20   match Side.L.clone() { Side.L => println(\"left\"), Side.R => println(\"right\") }\n\
+         }\n";
+    let (dir, path) = fixture("hand-clone", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = "101 c' 101 7 d\n102 v' 103 h' 104 105\nright\n";
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    // `Copy` comes only from the derive, which checks the fields.
+    rejected(
+        "hand-copy",
+        "struct P { x: i64 }\n\
+         impl Copy for P {}\n\
+         fn main() { let p = P { x: 1 }; println(f\"{p.x}\"); }\n",
+        "a manual `impl Copy for P` is not allowed",
+    );
+    // A derive beside a hand impl of the same trait is a duplicate.
+    rejected(
+        "derive-and-hand-clone",
+        "#[derive(Clone)]\n\
+         struct P { x: i64 }\n\
+         impl Clone for P { fn clone(ref self) -> P { P { x: self.x } } }\n\
+         fn main() { let p = P { x: 1 }; println(f\"{p.clone().x}\"); }\n",
+        "both derives `Clone`",
+    );
+}

@@ -3613,6 +3613,47 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// design.md § Derive: "A derive and a manual impl of the same trait on
+    /// one type is the ordinary duplicate-impl error. Remove one; the
+    /// compiler does not prefer either" (B-2026-10-06-112).
+    fn reject_impl_beside_derive(&mut self, imp: &ImplBlock, type_name: &str) {
+        let Some(trait_name) = imp.trait_name.as_ref().and_then(|p| p.segments.last()) else {
+            return;
+        };
+        let from_library = imp.items.iter().any(|i| match i {
+            ImplItem::Method(f) => f.stdlib_origin,
+            ImplItem::AssocType(_) => false,
+        });
+        // Only the derives the compiler synthesizes in place. A comptime-backed
+        // derive (`Serialize`, `Deserialize`, ...) expands into an ordinary
+        // impl block, which arrives here looking hand-written.
+        if from_library || !matches!(trait_name.as_str(), "Clone" | "Default") {
+            return;
+        }
+        let derived = self
+            .env
+            .structs
+            .get(type_name)
+            .map(|s| s.derived_traits.contains(trait_name.as_str()))
+            .or_else(|| {
+                self.env
+                    .enums
+                    .get(type_name)
+                    .map(|e| e.derived_traits.contains(trait_name.as_str()))
+            })
+            .unwrap_or(false);
+        if derived {
+            self.type_error(
+                format!(
+                    "`{type_name}` both derives `{trait_name}` and implements it by hand: \
+                     keep one, the derive or this impl"
+                ),
+                imp.trait_name.as_ref().map(|p| p.span).unwrap_or(imp.span),
+                TypeErrorKind::ConflictingImpl,
+            );
+        }
+    }
+
     fn check_impl_block_inner(&mut self, imp: &ImplBlock) {
         // Variance markers are legal only on stdlib struct/enum
         // declarations (design.md § Variance) — never on impl blocks.
@@ -3634,6 +3675,7 @@ impl<'a> super::TypeChecker<'a> {
         if self.cli_lint_overrides.strict_core && imp.trait_name.is_none() {
             self.check_core_shared_receivers(imp, &type_name);
         }
+        self.reject_impl_beside_derive(imp, &type_name);
         // Validate inline bounds and where clause on the impl block itself
         let gp = Self::generic_param_names(&imp.generic_params);
 

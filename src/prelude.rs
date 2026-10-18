@@ -465,6 +465,11 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     // an explicit import. Signature validation lives in
     // `typechecker/env_build.rs` (`E_DROP_SIGNATURE_INVALID`).
     "Drop",
+    // B-2026-10-06-112 — `Clone` and `Default` are ordinary traits a user
+    // type implements by hand as well as by derive (design.md § Copy,
+    // Clone and Drop; the standard library's `Default`).
+    "Clone",
+    "Default",
     "Index",
     "IndexMut",
     "Display",

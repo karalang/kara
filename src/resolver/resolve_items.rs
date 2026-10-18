@@ -491,7 +491,28 @@ impl<'a> super::Resolver<'a> {
 
         // Resolve trait name
         if let Some(ref trait_path) = imp.trait_name {
-            self.resolve_path_expr(trait_path);
+            // design.md § Copy: "`#[derive(Copy)]` is the only way to make a
+            // user type `Copy`. A manual `impl Copy` is not allowed, so the
+            // field check always runs" (B-2026-10-06-112).
+            if trait_path.segments.len() == 1 && trait_path.segments[0] == "Copy" {
+                let target = self.type_expr_name(&imp.target_type).unwrap_or_default();
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "a manual `impl Copy for {target}` is not allowed: `Copy` comes only \
+                         from `#[derive(Copy, Clone)]` on the type, which checks that every \
+                         field is `Copy`"
+                    ),
+                    span: trait_path.span,
+                    kind: ResolveErrorKind::OperatorTraitImplRestricted,
+                    suggestion: Some(format!(
+                        "remove the impl and write `#[derive(Copy, Clone)]` above `{target}`"
+                    )),
+                    replacement: None,
+                    stub_hint: None,
+                });
+            } else {
+                self.resolve_path_expr(trait_path);
+            }
             self.check_operator_trait_restriction(trait_path, &imp.target_type);
             self.check_into_trait_restriction(trait_path);
         }

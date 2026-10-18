@@ -6731,6 +6731,15 @@ impl<'a> Interp<'a> {
         self.program.bodies.contains_key(&name).then_some(name)
     }
 
+    /// The lowered body of `ty`'s user `Clone.clone`, if it has one.
+    fn user_clone(&self, ty: Ty) -> Option<String> {
+        if !matches!(self.tys.kind(ty), TyKind::Adt(_)) {
+            return None;
+        }
+        let name = format!("{}.clone", self.tys.adt_name(ty));
+        self.program.bodies.contains_key(&name).then_some(name)
+    }
+
     /// The lowered body of `ty`'s user `Ord.cmp`, if it has one. Lowering
     /// queues it for the elements of a sort and the keys of a keyed sort.
     fn user_cmp(&self, ty: Ty) -> Option<String> {
@@ -6938,6 +6947,19 @@ impl<'a> Interp<'a> {
                 }
                 let name = self.tys.display(ty);
                 Ok(self.alloc_box(&name, Value::Agg(out)))
+            }
+            // A user `Clone` body, at any depth (a `Vec` of a type with
+            // one): lowering queued it (B-2026-10-06-112).
+            (TyKind::Adt(_), Value::Agg(_) | Value::Variant(..))
+                if self.user_clone(ty).is_some() =>
+            {
+                let name = self.user_clone(ty).unwrap_or_default();
+                let (refs, scratch) = self.by_ref(&[v])?;
+                let r = self.call(&name, refs);
+                for slot in scratch {
+                    self.free_slot(AllocId(slot as u32));
+                }
+                r
             }
             // A struct or enum with no user `Clone` body: field by field,
             // as `#[derive(Clone)]` does, whether or not it has a `Drop`

@@ -6449,6 +6449,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.assign(dest, Rvalue::Aggregate(AggregateKind::Array(elem), ops));
             return;
         }
+        self.queue_nested_clones(t);
         let r = self.ref_to(p, t);
         let name = format!("{}.clone", self.tys().display(t));
         self.call_native(&name, vec![r], dest);
@@ -6856,6 +6857,45 @@ impl<'l, 'a> Bx<'l, 'a> {
                 HK::Intrinsic { args, .. } => work.extend(tcx.list(args)),
                 HK::Adt { args, .. } | HK::Shared { args, .. } => {
                     if let Some((d, args)) = self.user_impl_method(t, "Display", "to_string") {
+                        self.lcx.instance(d, args);
+                        continue;
+                    }
+                    let tcx = self.tys().tcx();
+                    work.extend(tcx.list(args));
+                    if let Some((adt, _)) = tcx.adt_of(t) {
+                        for (k, v) in adt.variants.iter().enumerate() {
+                            let variant = adt.is_enum.then_some(k as u32);
+                            for i in 0..v.fields.len() {
+                                work.extend(tcx.field_ty(t, variant, i as u32));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Queue the user `Clone` body of every type a cloned `t` contains (a
+    /// `Vec[P]`, an `Option[P]`, a field of type `P`), which the clone glue
+    /// and the interpreter call for it (B-2026-10-06-112). A type with its
+    /// own `Clone` is cloned by that body alone, so its parts are not
+    /// visited.
+    fn queue_nested_clones(&mut self, t: Ty) {
+        let mut seen = FxHashSet::default();
+        let mut work = vec![t];
+        while let Some(t) = work.pop() {
+            if !seen.insert(t) {
+                continue;
+            }
+            let tcx = self.tys().tcx();
+            match tcx.kind(t) {
+                HK::Ref(x) | HK::MutRef(x) => work.push(x),
+                HK::Tuple(l) => work.extend(tcx.list(l)),
+                HK::Array { elem, .. } | HK::Slice { elem, .. } => work.push(elem),
+                HK::Intrinsic { args, .. } => work.extend(tcx.list(args)),
+                HK::Adt { args, .. } => {
+                    if let Some((d, args)) = self.user_impl_method(t, "Clone", "clone") {
                         self.lcx.instance(d, args);
                         continue;
                     }
@@ -11979,6 +12019,10 @@ impl<'l, 'a> Bx<'l, 'a> {
                 let (rp, _) = self.strip_refs(rp);
                 return self.cmp_places(e.span, lp, rp, lt, dest);
             }
+        }
+        if method == "clone" && args.is_empty() {
+            let rt = self.expr_ty(object)?;
+            self.queue_nested_clones(rt);
         }
         let array_recv = method == "clone" && {
             let rt = self.expr_ty(object)?;
