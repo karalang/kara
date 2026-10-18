@@ -5974,3 +5974,50 @@ fn a_hand_written_ord_orders_searches_and_sorted_containers() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_vec_of_ordered_elements_is_ordered() {
+    // B-2026-10-06-92: design.md gives `impl[T: Ord] Ord for Vec[T]`, so a
+    // `Vec` is a sorted-table key, compares with `<` and `cmp`, and has a
+    // `max`, lexicographically, as `sort` already ordered it.
+    let src = "fn bigger[T: Ord](a: own T, b: own T) -> T { if a > b { a } else { b } }\n\
+         fn main() {\n\
+         \x20   let mut m: SortedMap[Vec[i64], i64] = SortedMap.new();\n\
+         \x20   m.insert(vec![2, 1], 5);\n\
+         \x20   m.insert(vec![1, 9], 3);\n\
+         \x20   m.insert(vec![1], 7);\n\
+         \x20   for (k, v) in m.iter() { println(f\"{k} {v}\"); }\n\
+         \x20   let mut s: SortedSet[Vec[String]] = SortedSet.new();\n\
+         \x20   s.insert(vec![\"b\".to_string()]);\n\
+         \x20   s.insert(vec![\"a\".to_string(), \"z\".to_string()]);\n\
+         \x20   for k in s.iter() { println(f\"{k}\"); }\n\
+         \x20   let a: Vec[i64] = vec![1, 2];\n\
+         \x20   let b: Vec[i64] = vec![1, 3];\n\
+         \x20   println(f\"{a < b} {a >= b} {a.cmp(b) == Ordering.Less}\");\n\
+         \x20   let vv = vec![vec![1, 9], vec![2], vec![1, 9, 0]];\n\
+         \x20   println(f\"{vv.iter().max().unwrap()} {bigger(vec![1, 2], vec![1, 2, 0])}\");\n\
+         }\n";
+    let (dir, path) = fixture("vec-ord", src);
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    assert!(
+        out.status.success(),
+        "check must accept: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = "[1] 7\n[1, 9] 3\n[2, 1] 5\n[a, z]\n[b]\ntrue false true\n[2] [1, 2, 0]\n";
+    let runners: &[&str] = if cfg!(feature = "llvm") {
+        &["__mir-run", "__mir-llvm-run"]
+    } else {
+        &["__mir-run"]
+    };
+    for runner in runners {
+        let out = karac().arg(runner).arg(&path).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "{runner}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
