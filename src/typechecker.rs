@@ -2932,6 +2932,11 @@ pub struct TypeChecker<'a> {
     /// in recording order (a whole after its parts). See
     /// `refine_node_types_from_wholes`.
     pub(super) node_type_links: Vec<(crate::ids::NodeId, crate::ids::NodeId, PartOf)>,
+    /// `(arg, slot)`: a call passed as an argument whose own type still names
+    /// a parameter nothing at that call decided (`Bag.new()` as `Bag[T]`),
+    /// with the parameter type it was passed for. See
+    /// `resolved_node_tables` (B-2026-10-18-18).
+    pub(super) node_type_slots: Vec<(crate::ids::NodeId, Type)>,
     pub(super) node_method_callees: FxHashMap<crate::ids::NodeId, String>,
     pub(super) node_call_callees: FxHashMap<crate::ids::NodeId, crate::ids::NodeId>,
     /// The call expression `infer_expr` is inside, with its span, so
@@ -3336,6 +3341,7 @@ impl<'a> TypeChecker<'a> {
             current_generic_frame: 0,
             node_call_subs: FxHashMap::default(),
             node_type_links: Vec::new(),
+            node_type_slots: Vec::new(),
             fn_return_types: FxHashMap::default(),
             fn_self_types: FxHashMap::default(),
             current_impl_span: None,
@@ -6474,6 +6480,27 @@ impl<'a> TypeChecker<'a> {
             .collect();
         let links = std::mem::take(&mut self.node_type_links);
         refine_node_types_from_wholes(&mut node_types, &links, &self.node_generic_frames);
+        // A call argument typed with a parameter its own call left undecided
+        // takes the slot it was passed for, so the callee's arguments can be
+        // read off it below: `bags.push(Bag.new())` is a `Bag[i64]`.
+        for (id, slot) in std::mem::take(&mut self.node_type_slots) {
+            let slot = resolve(&slot);
+            let Some((ty, frame)) = node_types.get_mut(&id) else {
+                continue;
+            };
+            let scope = self
+                .node_generic_frames
+                .get(*frame as usize)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if names_foreign_param(ty, scope)
+                && !names_foreign_param(&slot, scope)
+                && !exprs::contains_type_var(&slot)
+                && same_named_head(ty, &slot)
+            {
+                *ty = slot;
+            }
+        }
         let mut node_call_subs: FxHashMap<_, FxHashMap<String, Type>> = node_call_subs
             .into_iter()
             .map(|(id, frame)| {
@@ -6716,6 +6743,15 @@ fn names_foreign_param(ty: &Type, scope: &[String]) -> bool {
         }
         _ => false,
     }
+}
+
+/// Both are the same named type with the same number of arguments.
+fn same_named_head(a: &Type, b: &Type) -> bool {
+    matches!(
+        (a, b),
+        (Type::Named { name: x, args: xs }, Type::Named { name: y, args: ys })
+            if x == y && xs.len() == ys.len()
+    )
 }
 
 /// Bind the generic parameters `pattern` names (outside `scope`) to the

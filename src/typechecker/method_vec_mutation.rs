@@ -166,6 +166,7 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-08-08-2 — a `frozen` parameter reads as `ref T`; the
                 // ownership pass decides whether this store is legal.
                 let arg_ty = self.deref_frozen_param_arg(&args[0].value, arg_ty, &elem);
+                self.note_arg_slot(&args[0].value, &arg_ty, &elem);
                 // B-2026-08-14-1 — reject an implicit NARROWING into the
                 // element slot. This gate is a hand-written slot check rather
                 // than a `check_expr` (see the `weak` comment above for why),
@@ -336,6 +337,7 @@ impl<'a> super::TypeChecker<'a> {
                     &no_const_names,
                 );
                 self.check_assignable(&resolved_elem, &resolved_arg, args[1].value.span);
+                self.note_arg_slot(&args[1].value, &resolved_arg, &resolved_elem);
                 // Ctor-shaped value arg: re-record resolved (B-2026-08-02-12,
                 // see the push arm).
                 self.rerecord_resolved_ctor_arg(&args[1].value, &resolved_arg);

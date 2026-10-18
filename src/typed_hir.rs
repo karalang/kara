@@ -369,7 +369,41 @@ pub fn build(tc: &TypeCheckResult, defs: &dyn HirDefs) -> TypedHir {
         // arguments that hold none of it (`g(None)` for `g[T](x: Option[T])`).
         let free = matches!(callee, Callee::Def(d) if defs.is_free_fn(d));
         let unit = (free && node_types.contains_key(&id)).then(|| tcx.unit());
-        match place_substs(tc.node_call_subs.get(&id), &callee, defs, unit, |t| {
+        // A parameter the call left undecided that its declared return names
+        // is the call's own type's: `Bag.new()` inside `impl[T] Bag[T]`, typed
+        // `Bag[T]` in the caller's `T` (B-2026-10-18-18).
+        let solved = tc.node_call_subs.get(&id);
+        let filled = match (
+            &callee,
+            tc.node_call_callees
+                .get(&id)
+                .and_then(|c| tc.node_types.get(c)),
+            tc.node_types.get(&id),
+        ) {
+            (Callee::Def(d), Some((Type::Function { return_type, .. }, _)), Some((call_ty, _))) => {
+                let missing: Vec<String> = defs
+                    .generics(*d)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|n| solved.is_none_or(|s| !s.contains_key(n)))
+                    .collect();
+                let mut bound = std::collections::HashMap::new();
+                if !missing.is_empty() {
+                    crate::typechecker::bind_params(return_type, call_ty, &[], &mut bound);
+                }
+                let found: Vec<(String, Type)> = missing
+                    .into_iter()
+                    .filter_map(|n| bound.remove(&n).map(|t| (n, t)))
+                    .collect();
+                (!found.is_empty()).then(|| {
+                    let mut m = solved.cloned().unwrap_or_default();
+                    m.extend(found);
+                    m
+                })
+            }
+            _ => None,
+        };
+        match place_substs(filled.as_ref().or(solved), &callee, defs, unit, |t| {
             lower(t, frame)
         }) {
             Ok(tys) => {

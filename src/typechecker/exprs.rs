@@ -3302,6 +3302,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !(is_str_view(&resolved) && is_string_place_type(arg_ty)) {
                         self.check_assignable(&resolved, arg_ty, arg.value.span);
                     }
+                    self.note_arg_slot(&arg.value, arg_ty, &resolved);
                     // B-2026-08-08-9 — a slot the EXPECTATION bound still owes
                     // the narrowing check. `check_assignable` is permissive
                     // between integer types, which is right when the slot was
@@ -4153,9 +4154,26 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
-    /// Unify each `where I.Assoc = X` of a generic call with what `I`'s
-    /// solution says its `Assoc` is, so the call's metavariables in `X` are
-    /// solved from it.
+    /// A call passed as an argument whose own type still names a parameter
+    /// nothing at that call decided (`Bag.new()` as `Bag[T]`) is recorded with
+    /// the slot it was passed for; typed HIR reads the call's type arguments
+    /// off that slot (B-2026-10-18-18). The MIR pipeline only.
+    pub(super) fn note_arg_slot(&mut self, arg: &Expr, arg_ty: &Type, slot: &Type) {
+        if !self.library_methods_from_source
+            || arg.id.is_dummy()
+            || !matches!(
+                arg.kind,
+                ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+            )
+        {
+            return;
+        }
+        let in_scope = self.enclosing_bounds.keys().map(String::as_str).collect();
+        if super::inference::find_unbound_type_param(arg_ty, &in_scope).is_some() {
+            self.node_type_slots.push((arg.id, slot.clone()));
+        }
+    }
+
     /// A bare unit variant of a generic enum whose parameters nothing has
     /// decided: `None`, typed as `Option[T]` with the enum's own `T`.
     fn is_undecided_unit_variant(&self, arg: &Expr, ty: &Type) -> bool {
@@ -4175,6 +4193,9 @@ impl<'a> super::TypeChecker<'a> {
             })
     }
 
+    /// Unify each `where I.Assoc = X` of a generic call with what `I`'s
+    /// solution says its `Assoc` is, so the call's metavariables in `X` are
+    /// solved from it.
     fn solve_from_assoc_type_eqs(
         &mut self,
         where_clause: Option<&WhereClause>,

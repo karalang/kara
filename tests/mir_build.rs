@@ -3734,3 +3734,45 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_generic_types_associated_fn_takes_its_args_from_the_slot() {
+    // B-2026-10-18-18: `Bag.new()` whose type arguments come only from where
+    // it goes (`bags.push(Bag.new())`, `bags.insert(0, Bag.new())`, a
+    // generic call's argument, or `let mut b = Bag.new()` inside
+    // `impl[T] Bag[T]`) stopped with "a call with no resolved callee".
+    let src = r#"
+struct Bag[T] { items: Vec[T] }
+impl[T: Clone] Bag[T] {
+    fn new() -> Bag[T] { Bag { items: Vec.new() } }
+    fn with(x: own T) -> Bag[T] {
+        let mut b = Bag.new();
+        b.items.push(x);
+        b
+    }
+}
+fn fill[U](x: own U, b: own Bag[U]) -> Bag[U] {
+    let mut b = b;
+    b.items.push(x);
+    b
+}
+fn main() {
+    let b = Bag.with(5);
+    let mut bags: Vec[Bag[i64]] = Vec.new();
+    bags.push(Bag.new());
+    bags.insert(0, Bag.new());
+    let mut m: Map[String, Bag[i64]] = Map.new();
+    m.insert("a".to_string(), Bag.new());
+    let c = fill("s".to_string(), Bag.new());
+    println(f"{b.items.len()} {bags.len()} {m.len()} {c.items[0]}");
+}
+"#;
+    let want = "1 2 1 s\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
