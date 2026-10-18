@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 738 |
+| miscompile | 739 |
 | run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2946 |
-| interp | 960 |
+| codegen | 2947 |
+| interp | 961 |
 | typecheck | 475 |
 | other | 115 |
 | ownership | 113 |
@@ -178,6 +178,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-50 | 2026-10-18 | interp+codegen | medium | On MIR, a `Str` copied out of a local `Vec[Str]` (`w = parts[0]` after `let parts: Vec[Str] = s.split(",").collect()`) stays borrowed from the Vec, so using `w` after `parts` dies is refused by the borrow checker (E0516, or E0509 when returned); `karac check` passes | — |
 | B-2026-10-18-51 | 2026-10-18 | codegen | medium | The MIR pre-size pass (`src/mir/presize.rs`) reserves room only for a `while i < n` counting loop, not a `for` loop: `let mut v: Vec[i64] = Vec.new(); for _ in 0..26 { v.push(0); }` allocates four times (4, 8, 16, 32 elements) under `karac build --mir` where the `while` spelling and legacy `karac build` allocate once (26), so kata 748's bench, which builds a 26-slot count this way per word, is 3.3x legacy | — |
 | B-2026-10-18-52 | 2026-10-18 | codegen | medium | A bare list literal used only to be walked or read, `for step in [1, 9] { .. }` or `let steps = [1, 9]; steps[0] + steps[1]`, heap-allocates a `Vec` every time it is evaluated under `karac build --mir`, where legacy `karac build` keeps it on the stack (B-2026-10-02-70's fix): 1,000,008 allocations against 9 for a million evaluations, so kata 752's bench, which walks `[1, 9]` four times per visited lock setting, is 2.5x legacy | — |
+| B-2026-10-18-53 | 2026-10-18 | interp+codegen | high | `opt ?? ""` with `opt: Option[ref String]` (a `Map[String, String].get(k)`) takes the literal fallback as the reference itself rather than a reference to it: when `opt` is `None`, the first read of the result crashes on every MIR surface, `deref of non-reference Box` under `__mir-run` and a SEGV at address 0x8 under `build --mir` and `__mir-llvm-asan`; `karac check` passes it and suggests exactly this spelling for the empty default, and `.unwrap_or("")` is right | — |
 
 ### Relocated
 
