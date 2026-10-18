@@ -7482,3 +7482,19 @@ fn a_struct_update_binding_base_of_another_type_is_refused() {
         "struct D { a: i64, c: bool }\nfn show(base: ref D) -> D { D { a: 7, ..base } }\nfn main() {\n    let o = D { a: 1, c: true };\n    let d = D { a: 5, ..o };\n    let e = show(d);\n    println(f\"{d.a} {d.c} {e.a}\");\n}\n",
     );
 }
+
+/// Rows the library-backed check settles: `Map.get` is `Option[ref V]`
+/// (B-2026-10-12-22 refused, B-2026-10-13-28 accepted), `collect` reads an
+/// assignment's target (B-2026-10-12-33), and a closure passed to `any`
+/// releases its captures when the call returns (B-2026-10-15-12).
+#[test]
+fn rows_the_library_check_settles() {
+    rejected(
+        "map-get-against-an-owned-option",
+        "fn main() {\n    let mut m: Map[u8, i64] = Map.new();\n    m.insert(1, 5);\n    let n: i64 = 5;\n    println(f\"{m.get(1) == Some(n)}\");\n}\n",
+        "cannot compare 'Option[ref i64]' and 'Option[i64]'",
+    );
+    accepted("collect-into-an-assigned-string", "struct W { name: String }\nfn main() {\n    let cs: Vec[char] = \"abc\".chars().collect();\n    let mut s = String.new();\n    s = cs.iter().collect();\n    let mut w = W { name: String.new() };\n    w.name = cs.iter().collect();\n    println(f\"{s} {w.name}\");\n}\n");
+    accepted("map-get-kept-in-a-tuple-local", "fn main() {\n    let mut m: Map[String, i64] = Map.new();\n    m.insert(String.from(\"a\"), 1);\n    let t = (m.get(\"a\"), 5);\n    match t {\n        (Some(i), k) => println(f\"{*i + k}\"),\n        _ => println(\"none\"),\n    }\n}\n");
+    accepted("any-closure-then-move-the-element", "struct D { name: String, n: i64 }\nfn main() {\n    let skip: Vec[String] = vec![\"b\".to_string()];\n    let all = vec![D { name: \"a\".to_string(), n: 1 }, D { name: \"b\".to_string(), n: 2 }];\n    let mut kept: Vec[D] = Vec.new();\n    for d in all.into_iter() {\n        let redo = skip.iter().any(|s| s == d.name);\n        if redo {\n            continue;\n        }\n        kept.push(d);\n    }\n    println(f\"{kept.len()} {kept[0].name}\");\n}\n");
+}
