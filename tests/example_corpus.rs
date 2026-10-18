@@ -114,10 +114,6 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
          cause as fathom/mandelbrot.kara).",
     ),
     (
-        "leetcode/course_schedule.kara",
-        "typecheck: no method 'get_mut' on type 'Map'.",
-    ),
-    (
         "leetcode/lru_cache.kara",
         "typecheck: implicit i64 -> u64 coercion would narrow or change sign.",
     ),

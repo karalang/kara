@@ -756,7 +756,13 @@ fn design_md_string_table_names_only_methods_that_exist() {
 /// extending it, so these arrive with the new pipeline's standard library, not
 /// as legacy fixes. Each entry is checked to be STILL absent by the test below,
 /// so it has to leave this list the day the compiler gains the method.
-const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[];
+const SPEC_AHEAD_STRING_METHODS: &[(&str, &str)] = &[
+    // B-2026-10-15-15: in the Kāra library the v2 check and MIR read.
+    ("rfind", "the last match's byte offset"),
+    ("split_once", "a `(Str, Str)` around the first match"),
+    ("rsplit_once", "a `(Str, Str)` around the last match"),
+    ("splitn", "at most n `Str` pieces"),
+];
 
 #[test]
 fn spec_ahead_string_methods_are_still_absent() {

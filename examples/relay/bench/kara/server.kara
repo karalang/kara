@@ -77,25 +77,27 @@ fn bind_addr() -> String {
 
 // Extract a `Content-Length` value from a header block under the given spelling
 // (`needle` must end in `:`), or -1 if that spelling is absent. The value is
-// the first whitespace-separated numeric token after the marker on its line —
-// tolerating the leading space in `Content-Length: 2` without needing a
-// `trim`.
+// the first run of digits after the marker on its line, which tolerates the
+// leading space in `Content-Length: 2` without a `trim`. It reads the digits
+// itself rather than through `split` and `parse`, whose types differ between
+// the frozen legacy pipeline this file's smoke test builds on (`Vec[String]`,
+// `Option`) and the library's (`Str` views, `Result`).
 fn clen_for(headers: ref String, needle: String) -> i64 {
     let mlen = needle.len();
     match headers.find(needle) {
         Some(pos) => {
             let rest = headers.substring(pos + mlen, headers.len());
-            let lines: Vec[Str] = rest.split("\r\n").collect();
-            if lines.len() < 1 { return -1; }
-            let toks: Vec[Str] = lines[0].split(" ").collect();
-            let mut i: i64 = 0;
-            while i < toks.len() {
-                match i64.parse(toks[i]).ok() {
-                    Some(v) => { return v; }
-                    None => {}
+            let mut v: i64 = 0;
+            let mut seen = false;
+            for c in rest.chars() {
+                if c >= '0' and c <= '9' {
+                    v = v * 10 + (c as i64 - '0' as i64);
+                    seen = true;
+                } else if seen or c == '\r' or c == '\n' {
+                    break;
                 }
-                i = i + 1;
             }
+            if seen { return v; }
             return -1;
         }
         None => { return -1; }
