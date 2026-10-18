@@ -1,0 +1,186 @@
+== new | 3/4
+  Fraction(3, 4) = 3/4
+== new | -35/4
+  Fraction(-35, 4) = -35/4
+== new | 10/-8
+  ValueError: Invalid literal for Fraction: '10/-8'
+== new | 314
+  Fraction(314, 1) = 314
+== new | 3.1415
+  Fraction(6283, 2000) = 6283/2000
+== new | -47e-2
+  Fraction(-47, 100) = -47/100
+== new | 1.5E3
+  Fraction(1500, 1) = 1500
+== new |   7/14  
+  Fraction(1, 2) = 1/2
+== new | 1_000/3
+  Fraction(1000, 3) = 1000/3
+== new | .5
+  Fraction(1, 2) = 1/2
+== new | 2.
+  Fraction(2, 1) = 2
+== new | +0.125
+  Fraction(1, 8) = 1/8
+== new | 1/0
+  ZeroDivisionError: Fraction(1, 0)
+== new | abc
+  ValueError: Invalid literal for Fraction: 'abc'
+== new | 1/
+  ValueError: Invalid literal for Fraction: '1/'
+== new | 1 / 2
+  Fraction(1, 2) = 1/2
+== new | /2
+  ValueError: Invalid literal for Fraction: '/2'
+== new | 1e
+  ValueError: Invalid literal for Fraction: '1e'
+== new | -0
+  Fraction(0, 1) = 0
+== pair | 10 | -8
+  Fraction(-5, 4) = -5/4
+== pair | 0 | 5
+  Fraction(0, 1) = 0
+== pair | -6 | -4
+  Fraction(3, 2) = 3/2
+== pair | 3 | 0
+  ZeroDivisionError: Fraction(3, 0)
+== op | 1/2 | + | 1/3
+  Fraction(5, 6) = 5/6
+== op | 1/2 | - | 5/6
+  Fraction(-1, 3) = -1/3
+== op | 3/4 | * | 2/9
+  Fraction(1, 6) = 1/6
+== op | 3/4 | / | 9/8
+  Fraction(2, 3) = 2/3
+== op | 7/2 | // | 2/3
+  5
+== op | -7/2 | // | 2/3
+  -6
+== op | 7/2 | % | 2/3
+  Fraction(1, 6) = 1/6
+== op | -7/2 | % | 2/3
+  Fraction(1, 2) = 1/2
+== op | 7/2 | divmod | -2/3
+  (-6, Fraction(-1, 2))
+== op | 2/3 | ** | 3
+  Fraction(8, 27) = 8/27
+== op | 2/3 | ** | -2
+  Fraction(9, 4) = 9/4
+== op | -2/3 | ** | -3
+  Fraction(-27, 8) = -27/8
+== op | 0 | ** | -1
+  ZeroDivisionError: Fraction(1, 0)
+== op | 5 | / | 0
+  ZeroDivisionError: Fraction(1, 0)
+== op | 1/3 | < | 1/2
+  True
+== op | 2/4 | == | 1/2
+  True
+== op | -1/3 | >= | -1/2
+  True
+== op | 5/7 | != | 5/7
+  False
+== limit | 3.141592653589793 | 10
+  Fraction(22, 7) = 22/7
+== limit | 3.141592653589793 | 100
+  Fraction(311, 99) = 311/99
+== limit | 3.141592653589793 | 1000000
+  Fraction(3126535, 995207) = 3126535/995207
+== limit | 4321/8765 | 10000
+  Fraction(4321, 8765) = 4321/8765
+== limit | 1/2 | 1
+  Fraction(0, 1) = 0
+== limit | 3/2 | 1
+  Fraction(1, 1) = 1
+== limit | -1.414213562 | 50
+  Fraction(-41, 29) = -41/29
+== limit | 1/3 | 0
+  ValueError: max_denominator should be at least 1
+== round | 7/2 | -
+  4
+== round | 5/2 | -
+  2
+== round | -5/2 | -
+  -2
+== round | 2/3 | 2
+  Fraction(67, 100)
+== round | 1234567/1000 | -2
+  Fraction(1200, 1)
+== round | 1/8 | 2
+  Fraction(3, 25)
+== round | -1/8 | 2
+  Fraction(-3, 25)
+== ints | 7/2
+  floor 3 ceil 4 trunc 3 int 3 integer False ratio (7, 2)
+== ints | -7/2
+  floor -4 ceil -3 trunc -3 int -3 integer False ratio (-7, 2)
+== ints | 4
+  floor 4 ceil 4 trunc 4 int 4 integer True ratio (4, 1)
+== ints | -1/3
+  floor -1 ceil 0 trunc 0 int 0 integer False ratio (-1, 3)
+== format | 3/4 | 
+  [3/4]
+== format | 3/4 | >10
+  [       3/4]
+== format | -3/4 | *<10
+  [-3/4******]
+== format | 3/4 | ^9
+  [   3/4   ]
+== format | -3/4 | =+10
+  [-      3/4]
+== format | 4 | #
+  [4/1]
+== format | 1234567/10 | ,
+  [1,234,567/10]
+== format | -1234567 | _
+  [-1_234_567]
+== format | 3/4 | +
+  [+3/4]
+== format | 3/4 | .2f
+  [0.75]
+== format | 2/3 | .4f
+  [0.6667]
+== format | -1/8 | .2f
+  [-0.12]
+== format | 5/2 | .0f
+  [2]
+== format | 1/2 | q
+  ValueError: Invalid format specifier 'q' for object of type 'Fraction'
+== recipe | @recipe.tsv | 2
+       3 cup flour
+       7 tsp baking powder
+     1/2 tsp salt
+       2 tbsp sugar
+   2 1/2 cup milk
+       2 egg
+       6 tbsp butter, melted
+== recipe | @recipe.tsv | 1/2
+     3/4 cup flour
+   1 3/4 tsp baking powder
+     1/8 tsp salt
+     1/2 tbsp sugar
+     5/8 cup milk
+     1/2 egg
+   1 1/2 tbsp butter, melted
+== recipe | @recipe.tsv | 2/3
+       1 cup flour
+   2 1/3 tsp baking powder
+     1/6 tsp salt
+     2/3 tbsp sugar
+     5/6 cup milk
+     2/3 egg
+       2 tbsp butter, melted
+== bill | @bill.tsv | 18
+  ana  exact    196883/75  pays 26.25
+  ben  exact    175348/75  pays 23.38
+  cy   exact   408221/150  pays 27.21
+  dee  exact     31093/15  pays 20.73
+  total 82.69 + 18% = 97.57
+== convert | 12 | in | mm
+  12 in = 1524/5 mm ~ 304.8000
+== convert | 100 | mm | in
+  100 mm = 500/127 in ~ 3.9370
+== convert | 1/3 | cup | ml
+  1/3 cup = 157725491/2000000 ml ~ 78.8627
+== convert | 5 | mi | km
+  5 mi = 25146/3125 km ~ 8.0467

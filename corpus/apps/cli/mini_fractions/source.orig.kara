@@ -1,0 +1,964 @@
+// mini_fractions: Python 3.13's `fractions.Fraction`, ported from
+// fractions.py over i64, and three programs that need exact arithmetic:
+// scaling a recipe, splitting a restaurant bill to the cent, and
+// converting units.
+//
+// The run writes a recipe and a bill into data/, then runs
+// data/jobs.tsv. Each job prints `== ` and its fields joined by ` | `,
+// then its output.
+
+// ------------------------------------------------------------ integers
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = if a < 0 { -a } else { a };
+    let mut y = if b < 0 { -b } else { b };
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+// Python's // and %, which round toward minus infinity.
+fn floordiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if a % b != 0 and ((a < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+fn floormod(a: i64, b: i64) -> i64 {
+    a - floordiv(a, b) * b
+}
+
+fn pow10(n: i64) -> i64 {
+    let mut p = 1;
+    for _ in 0..n {
+        p *= 10;
+    }
+    p
+}
+
+fn ipow(base: i64, exp: i64) -> i64 {
+    let mut r = 1;
+    for _ in 0..exp {
+        r *= base;
+    }
+    r
+}
+
+// ------------------------------------------------------------ Fraction
+
+enum FracError {
+    Value(String),
+    ZeroDivision(String),
+}
+
+impl FracError {
+    fn text(ref self) -> String {
+        match self {
+            FracError.Value(m) => f"ValueError: {m}",
+            FracError.ZeroDivision(m) => f"ZeroDivisionError: {m}",
+        }
+    }
+}
+
+// Always in lowest terms with a positive denominator, so equal values
+// have equal fields.
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct Fraction {
+    n: i64,
+    d: i64,
+}
+
+impl Fraction {
+    // Fraction(numerator, denominator): reduces and moves the sign up.
+    fn new(n: i64, d: i64) -> Result[Fraction, FracError] {
+        if d == 0 {
+            return Err(FracError.ZeroDivision(f"Fraction({n}, 0)"));
+        }
+        let mut g = gcd(n, d);
+        if d < 0 {
+            g = -g;
+        }
+        Ok(Fraction { n: n / g, d: d / g })
+    }
+
+    fn int(n: i64) -> Fraction {
+        Fraction { n: n, d: 1 }
+    }
+
+    // For values already in lowest terms.
+    fn coprime(n: i64, d: i64) -> Fraction {
+        Fraction { n: n, d: d }
+    }
+
+    fn repr(self) -> String {
+        f"Fraction({self.n}, {self.d})"
+    }
+
+    fn is_integer(self) -> bool {
+        self.d == 1
+    }
+
+    fn floor(self) -> i64 {
+        floordiv(self.n, self.d)
+    }
+
+    fn ceil(self) -> i64 {
+        -floordiv(-self.n, self.d)
+    }
+
+    fn trunc(self) -> i64 {
+        if self.n < 0 { -floordiv(-self.n, self.d) } else { floordiv(self.n, self.d) }
+    }
+
+    // round(x): to the nearest integer, halves to even.
+    fn round(self) -> i64 {
+        let fl = floordiv(self.n, self.d);
+        let rem = floormod(self.n, self.d);
+        if rem * 2 < self.d {
+            fl
+        } else if rem * 2 > self.d {
+            fl + 1
+        } else if fl % 2 == 0 {
+            fl
+        } else {
+            fl + 1
+        }
+    }
+
+    // round(x, ndigits).
+    fn round_to(self, ndigits: i64) -> Fraction {
+        let shift = pow10(if ndigits < 0 { -ndigits } else { ndigits });
+        if ndigits > 0 {
+            let r = (self * Fraction.int(shift)).round();
+            match Fraction.new(r, shift) {
+                Ok(f) => f,
+                Err(_) => self,
+            }
+        } else {
+            let r = (self / Fraction.int(shift)).round();
+            Fraction.int(r * shift)
+        }
+    }
+
+    fn checked_div(self, b: Fraction) -> Result[Fraction, FracError] {
+        if b.n == 0 {
+            return Err(FracError.ZeroDivision(f"Fraction({b.d}, 0)"));
+        }
+        Ok(self / b)
+    }
+
+    fn floordiv(self, b: Fraction) -> i64 {
+        floordiv(self.n * b.d, self.d * b.n)
+    }
+
+    fn divmod(self, b: Fraction) -> (i64, Fraction) {
+        let x = self.n * b.d;
+        let y = self.d * b.n;
+        let m = match Fraction.new(floormod(x, y), self.d * b.d) {
+            Ok(f) => f,
+            Err(_) => Fraction.int(0),
+        };
+        (floordiv(x, y), m)
+    }
+
+    fn pow(self, power: i64) -> Result[Fraction, FracError] {
+        if power >= 0 {
+            Ok(Fraction.coprime(ipow(self.n, power), ipow(self.d, power)))
+        } else if self.n > 0 {
+            Ok(Fraction.coprime(ipow(self.d, -power), ipow(self.n, -power)))
+        } else if self.n == 0 {
+            Err(FracError.ZeroDivision(f"Fraction({ipow(self.d, -power)}, 0)"))
+        } else {
+            Ok(Fraction.coprime(ipow(-self.d, -power), ipow(-self.n, -power)))
+        }
+    }
+
+    // The closest fraction with a denominator at most max_d, from the
+    // continued-fraction convergents and the best semiconvergent.
+    fn limit_denominator(self, max_d: i64) -> Result[Fraction, FracError] {
+        if max_d < 1 {
+            return Err(FracError.Value("max_denominator should be at least 1".to_string()));
+        }
+        if self.d <= max_d {
+            return Ok(self);
+        }
+        let mut p0 = 0;
+        let mut q0 = 1;
+        let mut p1 = 1;
+        let mut q1 = 0;
+        let mut n = self.n;
+        let mut d = self.d;
+        loop {
+            let a = floordiv(n, d);
+            let q2 = q0 + a * q1;
+            if q2 > max_d {
+                break;
+            }
+            let np1 = p0 + a * p1;
+            p0 = p1;
+            q0 = q1;
+            p1 = np1;
+            q1 = q2;
+            let nd = n - a * d;
+            n = d;
+            d = nd;
+        }
+        let k = floordiv(max_d - q0, q1);
+        if 2 * d * (q0 + k * q1) <= self.d {
+            Ok(Fraction.coprime(p1, q1))
+        } else {
+            Ok(Fraction.coprime(p0 + k * p1, q0 + k * q1))
+        }
+    }
+}
+
+impl Display for Fraction {
+    fn to_string(ref self) -> String {
+        if self.d == 1 {
+            f"{self.n}"
+        } else {
+            f"{self.n}/{self.d}"
+        }
+    }
+}
+
+impl Add for Fraction {
+    type Output = Fraction;
+    fn add(own self, rhs: own Fraction) -> Fraction {
+        let g = gcd(self.d, rhs.d);
+        if g == 1 {
+            return Fraction.coprime(self.n * rhs.d + self.d * rhs.n, self.d * rhs.d);
+        }
+        let s = self.d / g;
+        let t = self.n * (rhs.d / g) + rhs.n * s;
+        let g2 = gcd(t, g);
+        if g2 == 1 {
+            return Fraction.coprime(t, s * rhs.d);
+        }
+        Fraction.coprime(t / g2, s * (rhs.d / g2))
+    }
+}
+
+impl Sub for Fraction {
+    type Output = Fraction;
+    fn sub(own self, rhs: own Fraction) -> Fraction {
+        self + (-rhs)
+    }
+}
+
+impl Mul for Fraction {
+    type Output = Fraction;
+    fn mul(own self, rhs: own Fraction) -> Fraction {
+        let mut na = self.n;
+        let mut da = self.d;
+        let mut nb = rhs.n;
+        let mut db = rhs.d;
+        let g1 = gcd(na, db);
+        if g1 > 1 {
+            na = na / g1;
+            db = db / g1;
+        }
+        let g2 = gcd(nb, da);
+        if g2 > 1 {
+            nb = nb / g2;
+            da = da / g2;
+        }
+        Fraction.coprime(na * nb, db * da)
+    }
+}
+
+// Division by a zero fraction panics, as integer division does; the job
+// runner goes through checked_div.
+impl Div for Fraction {
+    type Output = Fraction;
+    fn div(own self, rhs: own Fraction) -> Fraction {
+        let mut na = self.n;
+        let mut da = self.d;
+        let mut nb = rhs.n;
+        let mut db = rhs.d;
+        let g1 = gcd(na, nb);
+        if g1 > 1 {
+            na = na / g1;
+            nb = nb / g1;
+        }
+        let g2 = gcd(db, da);
+        if g2 > 1 {
+            da = da / g2;
+            db = db / g2;
+        }
+        let mut n = na * db;
+        let mut d = nb * da;
+        if d < 0 {
+            n = -n;
+            d = -d;
+        }
+        Fraction.coprime(n, d)
+    }
+}
+
+impl Rem for Fraction {
+    type Output = Fraction;
+    fn rem(own self, rhs: own Fraction) -> Fraction {
+        self.divmod(rhs).1
+    }
+}
+
+impl Neg for Fraction {
+    type Output = Fraction;
+    fn neg(own self) -> Fraction {
+        Fraction.coprime(-self.n, self.d)
+    }
+}
+
+impl PartialOrd for Fraction {
+    fn partial_cmp(ref self, other: ref Fraction) -> Option[Ordering] {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Fraction {
+    fn cmp(ref self, other: ref Fraction) -> Ordering {
+        (self.n * other.d).cmp(other.n * self.d)
+    }
+}
+
+// ------------------------------------------------------------ parsing
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// Reads `\d+(_\d+)*` from chars[i..]; returns the digits without
+// underscores and the index after them, or None when there is no digit.
+fn digits(chars: ref Vec[char], i: i64) -> Option[(String, i64)] {
+    let mut j = i;
+    let mut out = String.new();
+    if j >= chars.len() or not is_digit(chars[j]) {
+        return None;
+    }
+    while j < chars.len() {
+        if is_digit(chars[j]) {
+            out.push(chars[j]);
+            j += 1;
+        } else if chars[j] == '_' and j + 1 < chars.len() and is_digit(chars[j + 1]) and not out.is_empty() {
+            j += 1;
+        } else {
+            break;
+        }
+    }
+    Some((out, j))
+}
+
+fn skip_spaces(chars: ref Vec[char], i: i64) -> i64 {
+    let mut j = i;
+    while j < chars.len() and chars[j].is_whitespace() {
+        j += 1;
+    }
+    j
+}
+
+fn to_i64(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+// Fraction('3/4'), Fraction('-1.25e2'), Fraction(' 7 / 14 '): the
+// grammar of fractions.py's _RATIONAL_FORMAT.
+fn parse_fraction(text: ref String) -> Result[Fraction, FracError] {
+    let bad = FracError.Value(f"Invalid literal for Fraction: '{text}'");
+    let chars: Vec[char] = text.chars().collect();
+    let mut i = skip_spaces(chars, 0);
+    let mut negative = false;
+    if i < chars.len() and (chars[i] == '+' or chars[i] == '-') {
+        negative = chars[i] == '-';
+        i += 1;
+    }
+    // A digit, or a point followed by one, must come next.
+    let starts = i < chars.len() and (is_digit(chars[i]) or (chars[i] == '.' and i + 1 < chars.len() and is_digit(chars[i + 1])));
+    if not starts {
+        return Err(bad);
+    }
+    let mut num = 0;
+    match digits(chars, i) {
+        Some((s, j)) => {
+            num = to_i64(s);
+            i = j;
+        }
+        None => {}
+    }
+    let mut den = 1;
+    let after = skip_spaces(chars, i);
+    if after < chars.len() and chars[after] == '/' {
+        match digits(chars, skip_spaces(chars, after + 1)) {
+            Some((s, j)) => {
+                den = to_i64(s);
+                i = j;
+            }
+            None => return Err(bad),
+        }
+    } else {
+        if i < chars.len() and chars[i] == '.' {
+            i += 1;
+            match digits(chars, i) {
+                Some((s, j)) => {
+                    let scale = pow10(s.len());
+                    num = num * scale + to_i64(s);
+                    den *= scale;
+                    i = j;
+                }
+                None => {}
+            }
+        }
+        if i < chars.len() and (chars[i] == 'e' or chars[i] == 'E') {
+            i += 1;
+            let mut eneg = false;
+            if i < chars.len() and (chars[i] == '+' or chars[i] == '-') {
+                eneg = chars[i] == '-';
+                i += 1;
+            }
+            match digits(chars, i) {
+                Some((s, j)) => {
+                    let e = to_i64(s);
+                    if eneg {
+                        den *= pow10(e);
+                    } else {
+                        num *= pow10(e);
+                    }
+                    i = j;
+                }
+                None => return Err(bad),
+            }
+        }
+    }
+    if skip_spaces(chars, i) != chars.len() {
+        return Err(bad);
+    }
+    if negative {
+        num = -num;
+    }
+    Fraction.new(num, den)
+}
+
+// "1 1/2" as a cook writes it: the parts added up.
+fn parse_mixed(s: ref String) -> Result[Fraction, FracError] {
+    let mut total = Fraction.int(0);
+    for part in s.split(" ") {
+        total = total + parse_fraction(part)?;
+    }
+    Ok(total)
+}
+
+// ------------------------------------------------------------ formatting
+
+// 1234567 -> 1,234,567 with sep.
+fn group(n: i64, sep: ref String) -> String {
+    let s = f"{n}";
+    if sep.is_empty() {
+        return s;
+    }
+    let chars: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    for i in 0..chars.len() {
+        if i > 0 and (chars.len() - i) % 3 == 0 {
+            out.push_str(sep);
+        }
+        out.push(chars[i]);
+    }
+    out
+}
+
+fn repeat_char(c: char, n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(c);
+    }
+    s
+}
+
+// format(x, spec) for the general form `[[fill]align][sign][#][width][,_]`
+// and the fixed-point form `[sign].Nf`.
+fn format_fraction(x: Fraction, spec: ref String) -> Result[String, FracError] {
+    let bad = FracError.Value(f"Invalid format specifier '{spec}' for object of type 'Fraction'");
+    let chars: Vec[char] = spec.chars().collect();
+    let mut i = 0;
+    let mut fill = ' ';
+    let mut align = '>';
+    let is_align = |c: char| c == '<' or c == '>' or c == '=' or c == '^';
+    if chars.len() >= 2 and is_align(chars[1]) {
+        fill = chars[0];
+        align = chars[1];
+        i = 2;
+    } else if chars.len() >= 1 and is_align(chars[0]) {
+        align = chars[0];
+        i = 1;
+    }
+    let mut pos_sign = String.new();
+    if i < chars.len() and (chars[i] == '+' or chars[i] == '-' or chars[i] == ' ') {
+        if chars[i] != '-' {
+            pos_sign.push(chars[i]);
+        }
+        i += 1;
+    }
+    // The fixed-point form.
+    if i < chars.len() and chars[i] == '.' {
+        let rest: String = chars[i + 1..].iter().collect();
+        if not rest.ends_with("f") or i != 0 and i != 1 {
+            return Err(bad);
+        }
+        let prec = to_i64(rest[0..rest.len() - 1].to_string());
+        return Ok(fixed(x, prec, pos_sign));
+    }
+    let mut alt = false;
+    if i < chars.len() and chars[i] == '#' {
+        alt = true;
+        i += 1;
+    }
+    let mut width = 0;
+    if i < chars.len() and is_digit(chars[i]) {
+        if chars[i] == '0' and i + 1 < chars.len() and is_digit(chars[i + 1]) {
+            return Err(bad);
+        }
+        while i < chars.len() and is_digit(chars[i]) {
+            width = width * 10 + (chars[i] as i64 - '0' as i64);
+            i += 1;
+        }
+    }
+    let mut sep = String.new();
+    if i < chars.len() and (chars[i] == ',' or chars[i] == '_') {
+        sep.push(chars[i]);
+        i += 1;
+    }
+    if i != chars.len() {
+        return Err(bad);
+    }
+    let a = if x.n < 0 { -x.n } else { x.n };
+    let body = if x.d > 1 or alt { f"{group(a, sep)}/{group(x.d, sep)}" } else { group(a, sep) };
+    let sign = if x.n < 0 { "-".to_string() } else { pos_sign };
+    let pad = width - sign.len() - body.chars().count();
+    let padding = if pad > 0 { repeat_char(fill, pad) } else { String.new() };
+    let out = if align == '>' {
+        f"{padding}{sign}{body}"
+    } else if align == '<' {
+        f"{sign}{body}{padding}"
+    } else if align == '^' {
+        let half = padding.chars().count() / 2;
+        let left: String = padding.chars().take(half).collect();
+        let right: String = padding.chars().skip(half).collect();
+        f"{left}{sign}{body}{right}"
+    } else {
+        f"{sign}{padding}{body}"
+    };
+    Ok(out)
+}
+
+// x to prec places, the last one rounded half to even.
+fn fixed(x: Fraction, prec: i64, pos_sign: String) -> String {
+    let neg = x.n < 0;
+    let a = Fraction.coprime(if neg { -x.n } else { x.n }, x.d);
+    let q = (a * Fraction.int(pow10(prec))).round();
+    let mut digits = f"{q}";
+    while digits.len() < prec + 1 {
+        digits = f"0{digits}";
+    }
+    let sign = if neg { "-".to_string() } else { pos_sign };
+    if prec == 0 {
+        return f"{sign}{digits}";
+    }
+    let cut = digits.len() - prec;
+    f"{sign}{digits[0..cut]}.{digits[cut..]}"
+}
+
+// A cook's quantity: 2, 3/4 or 1 1/2.
+fn mixed(q: Fraction) -> String {
+    let whole = q.floor();
+    let rest = q - Fraction.int(whole);
+    if rest.n == 0 {
+        f"{whole}"
+    } else if whole == 0 {
+        rest.to_string()
+    } else {
+        f"{whole} {rest}"
+    }
+}
+
+fn pad_left(s: ref String, width: i64) -> String {
+    let n = s.chars().count();
+    if n >= width { s.clone() } else { f"{repeat_char(' ', width - n)}{s}" }
+}
+
+fn pad_right(s: ref String, width: i64) -> String {
+    let n = s.chars().count();
+    if n >= width { s.clone() } else { f"{s}{repeat_char(' ', width - n)}" }
+}
+
+// ------------------------------------------------------------ programs
+
+fn read_data(path: ref String) -> Result[String, String] {
+    let name = path[1..].to_string();
+    match fs.read_to_string(f"data/{name}") {
+        Ok(s) => Ok(s),
+        Err(e) => Err(f"cannot read {name}: {e}"),
+    }
+}
+
+fn recipe(path: ref String, factor: Fraction, out: mut ref String) -> Result[(), String] {
+    let text = read_data(path)?;
+    for line in text.lines() {
+        let f: Vec[String] = line.split("\t");
+        let q = parse_mixed(f[0]).map_err(|e| e.text())?;
+        let unit = if f[1] == "-" { String.new() } else { f"{f[1]} " };
+        out.push_str(f"  {pad_left(mixed(q * factor), 6)} {unit}{f[2]}\n");
+    }
+    Ok(())
+}
+
+fn cents(c: i64) -> String {
+    let r = c % 100;
+    let pad = if r < 10 { "0" } else { "" };
+    f"{c / 100}.{pad}{r}"
+}
+
+// Each shared item is split evenly between the people who had it, the
+// tip is added, and the exact shares are rounded to cents so they add up
+// to the rounded total: everyone gets the floor, and the cents left over
+// go to the largest remainders (ties by name).
+fn bill(path: ref String, tip_pct: i64, out: mut ref String) -> Result[(), String] {
+    let text = read_data(path)?;
+    let mut owed: SortedMap[String, Fraction] = SortedMap.new();
+    let mut total = 0;
+    for line in text.lines() {
+        let f: Vec[String] = line.split("\t");
+        let c = to_i64(f[1]);
+        total += c;
+        let people: Vec[String] = f[2].split(",");
+        let share = Fraction.new(c, people.len()).map_err(|e| e.text())?;
+        for p in people.iter() {
+            let before = match owed.get(p) {
+                Some(v) => *v,
+                None => Fraction.int(0),
+            };
+            owed.insert(p.clone(), before + share);
+        }
+    }
+    let rate = Fraction.int(1) + Fraction.new(tip_pct, 100).map_err(|e| e.text())?;
+    let grand = Fraction.int(total) * rate;
+    let mut names: Vec[String] = Vec.new();
+    let mut exact: Vec[Fraction] = Vec.new();
+    let mut pays: Vec[i64] = Vec.new();
+    let mut floors = 0;
+    for (p, v) in owed.iter() {
+        let e = *v * rate;
+        names.push(p.clone());
+        exact.push(e);
+        pays.push(e.floor());
+        floors += e.floor();
+    }
+    let left = (grand + Fraction.coprime(1, 2)).floor() - floors;
+    // Largest remainder first, then by name (already in name order, and
+    // the sort is stable).
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..names.len() {
+        let rem = exact[i] - Fraction.int(pays[i]);
+        let mut at = order.len();
+        while at > 0 and exact[order[at - 1]] - Fraction.int(pays[order[at - 1]]) < rem {
+            at -= 1;
+        }
+        order.insert(at, i);
+    }
+    for k in 0..left {
+        pays[order[k]] += 1;
+    }
+    let mut sum = 0;
+    for i in 0..names.len() {
+        sum += pays[i];
+        out.push_str(f"  {pad_right(names[i], 4)} exact {pad_left(exact[i].to_string(), 12)}  pays {cents(pays[i])}\n");
+    }
+    out.push_str(f"  total {cents(total)} + {tip_pct}% = {cents(sum)}\n");
+    Ok(())
+}
+
+// Exact factors to a base unit per dimension: millimetres, millilitres.
+fn unit_factor(u: ref String) -> Result[Fraction, String] {
+    let s = if u == "in" {
+        "25.4"
+    } else if u == "mm" or u == "ml" {
+        "1"
+    } else if u == "mi" {
+        "1609344"
+    } else if u == "km" {
+        "1000000"
+    } else if u == "cup" {
+        "236.5882365"
+    } else if u == "tbsp" {
+        "14.78676478125"
+    } else if u == "tsp" {
+        "4.92892159375"
+    } else {
+        return Err(f"unknown unit {u}");
+    };
+    parse_fraction(s.to_string()).map_err(|e| e.text())
+}
+
+fn convert(amount: ref String, from: ref String, to: ref String, out: mut ref String) -> Result[(), String] {
+    let a = parse_fraction(amount).map_err(|e| e.text())?;
+    let x = a * unit_factor(from)? / unit_factor(to)?;
+    out.push_str(f"  {amount} {from} = {x} {to} ~ {fixed(x, 4, String.new())}\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ jobs
+
+fn frac(s: ref String) -> Result[Fraction, String] {
+    parse_fraction(s).map_err(|e| e.text())
+}
+
+fn show(x: Fraction) -> String {
+    f"{x.repr()} = {x}"
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn op(f: ref Vec[String]) -> Result[String, String] {
+    let a = frac(f[1])?;
+    let b = frac(f[3])?;
+    let o = f[2].clone();
+    let r = if o == "+" {
+        show(a + b)
+    } else if o == "-" {
+        show(a - b)
+    } else if o == "*" {
+        show(a * b)
+    } else if o == "/" {
+        match a.checked_div(b) {
+            Ok(q) => show(q),
+            Err(e) => e.text(),
+        }
+    } else if o == "//" {
+        f"{a.floordiv(b)}"
+    } else if o == "%" {
+        show(a % b)
+    } else if o == "divmod" {
+        let (q, m) = a.divmod(b);
+        f"({q}, {m.repr()})"
+    } else if o == "**" {
+        match a.pow(b.n) {
+            Ok(p) => show(p),
+            Err(e) => e.text(),
+        }
+    } else if o == "<" {
+        py_bool(a < b)
+    } else if o == "==" {
+        py_bool(a == b)
+    } else if o == ">=" {
+        py_bool(a >= b)
+    } else if o == "!=" {
+        py_bool(a != b)
+    } else {
+        return Err(f"unknown operator {o}");
+    };
+    Ok(r)
+}
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    if kind == "new" {
+        match parse_fraction(f[1]) {
+            Ok(x) => out.push_str(f"  {show(x)}\n"),
+            Err(e) => out.push_str(f"  {e.text()}\n"),
+        }
+    } else if kind == "pair" {
+        match Fraction.new(to_i64(f[1]), to_i64(f[2])) {
+            Ok(x) => out.push_str(f"  {show(x)}\n"),
+            Err(e) => out.push_str(f"  {e.text()}\n"),
+        }
+    } else if kind == "op" {
+        out.push_str(f"  {op(f)?}\n");
+    } else if kind == "limit" {
+        match frac(f[1])?.limit_denominator(to_i64(f[2])) {
+            Ok(x) => out.push_str(f"  {show(x)}\n"),
+            Err(e) => out.push_str(f"  {e.text()}\n"),
+        }
+    } else if kind == "round" {
+        let x = frac(f[1])?;
+        if f[2] == "-" {
+            out.push_str(f"  {x.round()}\n");
+        } else {
+            out.push_str(f"  {x.round_to(to_i64(f[2])).repr()}\n");
+        }
+    } else if kind == "ints" {
+        let x = frac(f[1])?;
+        out.push_str(f"  floor {x.floor()} ceil {x.ceil()} trunc {x.trunc()} int {x.trunc()} integer {py_bool(x.is_integer())} ratio ({x.n}, {x.d})\n");
+    } else if kind == "format" {
+        let x = frac(f[1])?;
+        let spec = if f.len() > 2 { f[2].clone() } else { String.new() };
+        match format_fraction(x, spec) {
+            Ok(s) => out.push_str(f"  [{s}]\n"),
+            Err(e) => out.push_str(f"  {e.text()}\n"),
+        }
+    } else if kind == "recipe" {
+        recipe(f[1], frac(f[2])?, mut out)?;
+    } else if kind == "bill" {
+        bill(f[1], to_i64(f[2]), mut out)?;
+    } else if kind == "convert" {
+        convert(f[1], f[2], f[3], mut out)?;
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    for (path, contents) in data_files() {
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        if let Err(e) = run(f, mut out) {
+            out.push_str(f"error: {e}\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("pizza\t2399\tana,ben,cy\n");
+    t.push_str("salad\t1150\tana,dee\n");
+    t.push_str("wine\t3400\tana,ben,cy,dee\n");
+    t.push_str("soda\t325\tcy\n");
+    t.push_str("dessert\t995\tben,cy,dee\n");
+    v.push(("bill.tsv".to_string(), t));
+    let mut t = String.new();
+    t.push_str("1 1/2\tcup\tflour\n");
+    t.push_str("3 1/2\ttsp\tbaking powder\n");
+    t.push_str("1/4\ttsp\tsalt\n");
+    t.push_str("1\ttbsp\tsugar\n");
+    t.push_str("1 1/4\tcup\tmilk\n");
+    t.push_str("1\t-\tegg\n");
+    t.push_str("3\ttbsp\tbutter, melted\n");
+    v.push(("recipe.tsv".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("new\t3/4\n");
+    s.push_str("new\t-35/4\n");
+    s.push_str("new\t10/-8\n");
+    s.push_str("new\t314\n");
+    s.push_str("new\t3.1415\n");
+    s.push_str("new\t-47e-2\n");
+    s.push_str("new\t1.5E3\n");
+    s.push_str("new\t  7/14  \n");
+    s.push_str("new\t1_000/3\n");
+    s.push_str("new\t.5\n");
+    s.push_str("new\t2.\n");
+    s.push_str("new\t+0.125\n");
+    s.push_str("new\t1/0\n");
+    s.push_str("new\tabc\n");
+    s.push_str("new\t1/\n");
+    s.push_str("new\t1 / 2\n");
+    s.push_str("new\t/2\n");
+    s.push_str("new\t1e\n");
+    s.push_str("new\t-0\n");
+    s.push_str("pair\t10\t-8\n");
+    s.push_str("pair\t0\t5\n");
+    s.push_str("pair\t-6\t-4\n");
+    s.push_str("pair\t3\t0\n");
+    s.push_str("op\t1/2\t+\t1/3\n");
+    s.push_str("op\t1/2\t-\t5/6\n");
+    s.push_str("op\t3/4\t*\t2/9\n");
+    s.push_str("op\t3/4\t/\t9/8\n");
+    s.push_str("op\t7/2\t//\t2/3\n");
+    s.push_str("op\t-7/2\t//\t2/3\n");
+    s.push_str("op\t7/2\t%\t2/3\n");
+    s.push_str("op\t-7/2\t%\t2/3\n");
+    s.push_str("op\t7/2\tdivmod\t-2/3\n");
+    s.push_str("op\t2/3\t**\t3\n");
+    s.push_str("op\t2/3\t**\t-2\n");
+    s.push_str("op\t-2/3\t**\t-3\n");
+    s.push_str("op\t0\t**\t-1\n");
+    s.push_str("op\t5\t/\t0\n");
+    s.push_str("op\t1/3\t<\t1/2\n");
+    s.push_str("op\t2/4\t==\t1/2\n");
+    s.push_str("op\t-1/3\t>=\t-1/2\n");
+    s.push_str("op\t5/7\t!=\t5/7\n");
+    s.push_str("limit\t3.141592653589793\t10\n");
+    s.push_str("limit\t3.141592653589793\t100\n");
+    s.push_str("limit\t3.141592653589793\t1000000\n");
+    s.push_str("limit\t4321/8765\t10000\n");
+    s.push_str("limit\t1/2\t1\n");
+    s.push_str("limit\t3/2\t1\n");
+    s.push_str("limit\t-1.414213562\t50\n");
+    s.push_str("limit\t1/3\t0\n");
+    s.push_str("round\t7/2\t-\n");
+    s.push_str("round\t5/2\t-\n");
+    s.push_str("round\t-5/2\t-\n");
+    s.push_str("round\t2/3\t2\n");
+    s.push_str("round\t1234567/1000\t-2\n");
+    s.push_str("round\t1/8\t2\n");
+    s.push_str("round\t-1/8\t2\n");
+    s.push_str("ints\t7/2\n");
+    s.push_str("ints\t-7/2\n");
+    s.push_str("ints\t4\n");
+    s.push_str("ints\t-1/3\n");
+    s.push_str("format\t3/4\t\n");
+    s.push_str("format\t3/4\t>10\n");
+    s.push_str("format\t-3/4\t*<10\n");
+    s.push_str("format\t3/4\t^9\n");
+    s.push_str("format\t-3/4\t=+10\n");
+    s.push_str("format\t4\t#\n");
+    s.push_str("format\t1234567/10\t,\n");
+    s.push_str("format\t-1234567\t_\n");
+    s.push_str("format\t3/4\t+\n");
+    s.push_str("format\t3/4\t.2f\n");
+    s.push_str("format\t2/3\t.4f\n");
+    s.push_str("format\t-1/8\t.2f\n");
+    s.push_str("format\t5/2\t.0f\n");
+    s.push_str("format\t1/2\tq\n");
+    s.push_str("recipe\t@recipe.tsv\t2\n");
+    s.push_str("recipe\t@recipe.tsv\t1/2\n");
+    s.push_str("recipe\t@recipe.tsv\t2/3\n");
+    s.push_str("bill\t@bill.tsv\t18\n");
+    s.push_str("convert\t12\tin\tmm\n");
+    s.push_str("convert\t100\tmm\tin\n");
+    s.push_str("convert\t1/3\tcup\tml\n");
+    s.push_str("convert\t5\tmi\tkm\n");
+    s
+}
