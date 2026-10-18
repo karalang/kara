@@ -1,0 +1,1579 @@
+// mini_difflib: Python 3.13's difflib, ported from Lib/difflib.py: the
+// SequenceMatcher (with its junk and autojunk heuristics), get_close_matches,
+// the Differ behind ndiff with its intraline `?` hints, restore, and the
+// unified and context diff formats.
+//
+// It runs data/jobs.tsv, one job per line with tab-separated fields, over
+// text files written into data/: two versions of an nginx config, of a
+// Python module, of a page of notes, and of a 260-line access log long
+// enough for autojunk to drop its commonest lines. Each job prints `== `
+// and its fields joined by ` | `, then its output.
+
+use std.collections.{Map, Set};
+
+// ------------------------------------------------------------ SequenceMatcher
+
+#[derive(Clone)]
+struct Match {
+    a: i64,
+    b: i64,
+    size: i64,
+}
+
+#[derive(Clone)]
+struct Opcode {
+    tag: String,
+    i1: i64,
+    i2: i64,
+    j1: i64,
+    j2: i64,
+}
+
+struct Matcher[T] {
+    a: Vec[T],
+    b: Vec[T],
+    b2j: Map[T, Vec[i64]],
+    bjunk: Set[T],
+    bpopular: Set[T],
+    autojunk: bool,
+}
+
+fn no_junk[T](x: ref T) -> bool {
+    false
+}
+
+impl[T: Eq + Hash + Clone] Matcher[T] {
+    // __chain_b: where each element of b occurs, less the junk elements and,
+    // when b has 200 or more elements, the popular ones (more than 1% + 1).
+    fn new(a: Vec[T], b: Vec[T], isjunk: fn(ref T) -> bool, autojunk: bool) -> Matcher[T] {
+        let mut b2j: Map[T, Vec[i64]] = Map.new();
+        for i in 0..b.len() {
+            let elt = b[i].clone();
+            if !b2j.contains_key(elt) {
+                b2j.insert(elt.clone(), Vec.new());
+            }
+            b2j.get_mut(elt).unwrap().push(i);
+        }
+        let mut junk: Set[T] = Set.new();
+        for elt in b2j.keys() {
+            if isjunk(elt) {
+                junk.insert(elt.clone());
+            }
+        }
+        for elt in junk.iter() {
+            b2j.remove(elt);
+        }
+        let mut popular: Set[T] = Set.new();
+        let n = b.len();
+        if autojunk and n >= 200 {
+            let ntest = n / 100 + 1;
+            for (elt, idxs) in b2j.iter() {
+                if idxs.len() > ntest {
+                    popular.insert(elt.clone());
+                }
+            }
+            for elt in popular.iter() {
+                b2j.remove(elt);
+            }
+        }
+        Matcher { a: a, b: b, b2j: b2j, bjunk: junk, bpopular: popular, autojunk: autojunk }
+    }
+
+    fn find_longest_match(self: ref Self, alo: i64, ahi: i64, blo: i64, bhi: i64) -> Match {
+        let mut besti = alo;
+        let mut bestj = blo;
+        let mut bestsize: i64 = 0;
+        let mut j2len: Map[i64, i64] = Map.new();
+        for i in alo..ahi {
+            let mut newj2len: Map[i64, i64] = Map.new();
+            if let Some(js) = self.b2j.get(self.a[i]) {
+                for j in js.iter() {
+                    let j = *j;
+                    if j < blo {
+                        continue;
+                    }
+                    if j >= bhi {
+                        break;
+                    }
+                    let k = j2len.get(j - 1).unwrap_or(0) + 1;
+                    newj2len.insert(j, k);
+                    if k > bestsize {
+                        besti = i - k + 1;
+                        bestj = j - k + 1;
+                        bestsize = k;
+                    }
+                }
+            }
+            j2len = newj2len;
+        }
+        // Extend the match with non-junk equal elements on each side, then
+        // with junk ones, so a run of junk next to a match joins it.
+        while besti > alo and bestj > blo and !self.bjunk.contains(self.b[bestj - 1])
+            and self.a[besti - 1] == self.b[bestj - 1] {
+            besti -= 1;
+            bestj -= 1;
+            bestsize += 1;
+        }
+        while besti + bestsize < ahi and bestj + bestsize < bhi
+            and !self.bjunk.contains(self.b[bestj + bestsize])
+            and self.a[besti + bestsize] == self.b[bestj + bestsize] {
+            bestsize += 1;
+        }
+        while besti > alo and bestj > blo and self.bjunk.contains(self.b[bestj - 1])
+            and self.a[besti - 1] == self.b[bestj - 1] {
+            besti -= 1;
+            bestj -= 1;
+            bestsize += 1;
+        }
+        while besti + bestsize < ahi and bestj + bestsize < bhi
+            and self.bjunk.contains(self.b[bestj + bestsize])
+            and self.a[besti + bestsize] == self.b[bestj + bestsize] {
+            bestsize += 1;
+        }
+        Match { a: besti, b: bestj, size: bestsize }
+    }
+
+    fn matching_blocks(self: ref Self) -> Vec[Match] {
+        let la = self.a.len();
+        let lb = self.b.len();
+        let mut queue: Vec[(i64, i64, i64, i64)] = vec![(0, la, 0, lb)];
+        let mut blocks: Vec[Match] = Vec.new();
+        while let Some((alo, ahi, blo, bhi)) = queue.pop() {
+            let m = self.find_longest_match(alo, ahi, blo, bhi);
+            if m.size > 0 {
+                if alo < m.a and blo < m.b {
+                    queue.push((alo, m.a, blo, m.b));
+                }
+                if m.a + m.size < ahi and m.b + m.size < bhi {
+                    queue.push((m.a + m.size, ahi, m.b + m.size, bhi));
+                }
+                blocks.push(m);
+            }
+        }
+        blocks.sort_by(|x, y| (x.a, x.b, x.size).cmp((y.a, y.b, y.size)));
+        // Join blocks that touch.
+        let mut out: Vec[Match] = Vec.new();
+        let mut cur = Match { a: 0, b: 0, size: 0 };
+        for m in blocks.iter() {
+            if cur.a + cur.size == m.a and cur.b + cur.size == m.b {
+                cur.size += m.size;
+            } else {
+                if cur.size > 0 {
+                    out.push(cur.clone());
+                }
+                cur = m.clone();
+            }
+        }
+        if cur.size > 0 {
+            out.push(cur);
+        }
+        out.push(Match { a: la, b: lb, size: 0 });
+        out
+    }
+
+    fn opcodes(self: ref Self) -> Vec[Opcode] {
+        let mut i: i64 = 0;
+        let mut j: i64 = 0;
+        let mut out: Vec[Opcode] = Vec.new();
+        for m in self.matching_blocks() {
+            let tag = if i < m.a and j < m.b {
+                "replace"
+            } else if i < m.a {
+                "delete"
+            } else if j < m.b {
+                "insert"
+            } else {
+                ""
+            };
+            if tag != "" {
+                out.push(Opcode { tag: tag.to_string(), i1: i, i2: m.a, j1: j, j2: m.b });
+            }
+            i = m.a + m.size;
+            j = m.b + m.size;
+            if m.size > 0 {
+                out.push(Opcode { tag: "equal".to_string(), i1: m.a, i2: i, j1: m.b, j2: j });
+            }
+        }
+        out
+    }
+
+    // get_grouped_opcodes: hunks with up to n lines of context each side.
+    fn grouped_opcodes(self: ref Self, n: i64) -> Vec[Vec[Opcode]] {
+        let mut codes = self.opcodes();
+        if codes.is_empty() {
+            codes.push(Opcode { tag: "equal".to_string(), i1: 0, i2: 1, j1: 0, j2: 1 });
+        }
+        if codes[0].tag == "equal" {
+            let c = codes[0].clone();
+            codes[0] = Opcode { tag: c.tag, i1: max(c.i1, c.i2 - n), i2: c.i2, j1: max(c.j1, c.j2 - n), j2: c.j2 };
+        }
+        let last = codes.len() - 1;
+        if codes[last].tag == "equal" {
+            let c = codes[last].clone();
+            codes[last] = Opcode { tag: c.tag, i1: c.i1, i2: min(c.i2, c.i1 + n), j1: c.j1, j2: min(c.j2, c.j1 + n) };
+        }
+        let nn = n + n;
+        let mut groups: Vec[Vec[Opcode]] = Vec.new();
+        let mut group: Vec[Opcode] = Vec.new();
+        for c in codes {
+            let mut i1 = c.i1;
+            let mut j1 = c.j1;
+            if c.tag == "equal" and c.i2 - c.i1 > nn {
+                group.push(Opcode { tag: c.tag.clone(), i1: c.i1, i2: min(c.i2, c.i1 + n), j1: c.j1, j2: min(c.j2, c.j1 + n) });
+                groups.push(group);
+                group = Vec.new();
+                i1 = max(c.i1, c.i2 - n);
+                j1 = max(c.j1, c.j2 - n);
+            }
+            group.push(Opcode { tag: c.tag, i1: i1, i2: c.i2, j1: j1, j2: c.j2 });
+        }
+        if !group.is_empty() and !(group.len() == 1 and group[0].tag == "equal") {
+            groups.push(group);
+        }
+        groups
+    }
+
+    fn ratio(self: ref Self) -> f64 {
+        let mut matches: i64 = 0;
+        for m in self.matching_blocks() {
+            matches += m.size;
+        }
+        calculate_ratio(matches, self.a.len() + self.b.len())
+    }
+
+    fn quick_ratio(self: ref Self) -> f64 {
+        let mut fullbcount: Map[T, i64] = Map.new();
+        for elt in self.b.iter() {
+            let n = fullbcount.get(elt).unwrap_or(0);
+            fullbcount.insert(elt.clone(), n + 1);
+        }
+        let mut avail: Map[T, i64] = Map.new();
+        let mut matches: i64 = 0;
+        for elt in self.a.iter() {
+            let numb = match avail.get(elt) {
+                Some(n) => *n,
+                None => fullbcount.get(elt).unwrap_or(0),
+            };
+            avail.insert(elt.clone(), numb - 1);
+            if numb > 0 {
+                matches += 1;
+            }
+        }
+        calculate_ratio(matches, self.a.len() + self.b.len())
+    }
+
+    fn real_quick_ratio(self: ref Self) -> f64 {
+        let la = self.a.len();
+        let lb = self.b.len();
+        calculate_ratio(min(la, lb), la + lb)
+    }
+}
+
+fn calculate_ratio(matches: i64, length: i64) -> f64 {
+    if length > 0 {
+        2.0 * matches as f64 / length as f64
+    } else {
+        1.0
+    }
+}
+
+// ------------------------------------------------------------ helpers
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn from_chars(c: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    for i in lo..hi {
+        s.push(c[i]);
+    }
+    s
+}
+
+// Python's repr of a str: single quotes unless it holds a single quote and
+// no double quote.
+fn py_repr(s: ref String) -> String {
+    let q = if s.contains("'") and !s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn pad_left(s: String, width: i64) -> String {
+    let n = s.chars().count();
+    if n >= width {
+        return s;
+    }
+    let mut out = String.new();
+    for _ in 0..(width - n) {
+        out.push(' ');
+    }
+    out.push_str(s.as_str());
+    out
+}
+
+fn pad_right(s: String, width: i64) -> String {
+    let mut out = s.clone();
+    let n = s.chars().count();
+    for _ in n..width {
+        out.push(' ');
+    }
+    out
+}
+
+fn is_char_junk(c: ref char) -> bool {
+    *c == ' ' or *c == '\t'
+}
+
+fn is_space_char(c: ref char) -> bool {
+    *c == ' '
+}
+
+// IS_LINE_JUNK: `\s*(?:#\s*)?$` matches the line, that is a line that is
+// blank, or blank but for one `#`.
+fn is_line_junk(line: ref String) -> bool {
+    let t = line.trim();
+    t.is_empty() or t == "#"
+}
+
+fn split_lines(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in text.chars() {
+        cur.push(c);
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn opcode_lines(m: ref Matcher[char]) -> String {
+    let mut out = String.new();
+    for op in m.opcodes() {
+        let ra = py_repr(from_chars(m.a, op.i1, op.i2));
+        let rb = py_repr(from_chars(m.b, op.j1, op.j2));
+        out.push_str(f"{pad_right(op.tag.clone(), 7)} a[{op.i1}:{op.i2}] --> b[{op.j1}:{op.j2}] {pad_left(ra, 8)} --> {rb}\n");
+    }
+    out
+}
+
+fn show_match(m: ref Match) -> String {
+    f"Match(a={m.a}, b={m.b}, size={m.size})"
+}
+
+// ------------------------------------------------------------ get_close_matches
+
+fn close_matches(word: ref String, possibilities: ref Vec[String], n: i64, cutoff: f64) -> Result[Vec[String], String] {
+    if !(n > 0) {
+        return Err(f"n must be > 0: {n}");
+    }
+    if !(0.0 <= cutoff and cutoff <= 1.0) {
+        return Err(f"cutoff must be in [0.0, 1.0]: {cutoff}");
+    }
+    let mut result: Vec[(f64, String)] = Vec.new();
+    for x in possibilities.iter() {
+        let s = Matcher.new(chars(x), chars(word), no_junk, true);
+        if s.real_quick_ratio() >= cutoff and s.quick_ratio() >= cutoff and s.ratio() >= cutoff {
+            result.push((s.ratio(), x.clone()));
+        }
+    }
+    // heapq.nlargest on (score, word) pairs.
+    result.sort_by(|p, q| {
+        if p.0 != q.0 {
+            if p.0 > q.0 { Ordering.Less } else { Ordering.Greater }
+        } else {
+            q.1.cmp(p.1)
+        }
+    });
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..min(n, result.len()) {
+        out.push(result[k].1.clone());
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ Differ
+
+fn dump(out: mut ref Vec[String], tag: Str, x: ref Vec[String], lo: i64, hi: i64) {
+    for i in lo..hi {
+        out.push(f"{tag} {x[i]}");
+    }
+}
+
+fn plain_replace(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i64, b: ref Vec[String], blo: i64, bhi: i64) {
+    if bhi - blo < ahi - alo {
+        dump(out, "+", b, blo, bhi);
+        dump(out, "-", a, alo, ahi);
+    } else {
+        dump(out, "-", a, alo, ahi);
+        dump(out, "+", b, blo, bhi);
+    }
+}
+
+// _keep_original_ws: a tag under a whitespace character of the line, where
+// the tag is a space, becomes that character, so tabs stay tabs.
+fn keep_original_ws(s: ref String, tags: ref String) -> String {
+    let sc: Vec[char] = s.chars().collect();
+    let tc: Vec[char] = tags.chars().collect();
+    let mut out = String.new();
+    for k in 0..min(sc.len(), tc.len()) {
+        if tc[k] == ' ' and sc[k].is_whitespace() {
+            out.push(sc[k]);
+        } else {
+            out.push(tc[k]);
+        }
+    }
+    out
+}
+
+fn qformat(out: mut ref Vec[String], aline: ref String, bline: ref String, atags: ref String, btags: ref String) {
+    let at = keep_original_ws(aline, atags).trim_end().to_string();
+    let bt = keep_original_ws(bline, btags).trim_end().to_string();
+    out.push(f"- {aline}");
+    if !at.is_empty() {
+        out.push(f"? {at}\n");
+    }
+    out.push(f"+ {bline}");
+    if !bt.is_empty() {
+        out.push(f"? {bt}\n");
+    }
+}
+
+fn repeat(c: char, n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(c);
+    }
+    s
+}
+
+fn fancy_replace(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i64, b: ref Vec[String], blo: i64, bhi: i64) {
+    let mut best_ratio: f64 = 0.74;
+    let cutoff: f64 = 0.75;
+    let mut best_i: i64 = 0;
+    let mut best_j: i64 = 0;
+    let mut eqi: Option[(i64, i64)] = None;
+    for j in blo..bhi {
+        let bj = chars(b[j]);
+        for i in alo..ahi {
+            if a[i] == b[j] {
+                if eqi.is_none() {
+                    eqi = Some((i, j));
+                }
+                continue;
+            }
+            let cruncher = Matcher.new(chars(a[i]), bj.clone(), is_char_junk, true);
+            if cruncher.real_quick_ratio() > best_ratio and cruncher.quick_ratio() > best_ratio
+                and cruncher.ratio() > best_ratio {
+                best_ratio = cruncher.ratio();
+                best_i = i;
+                best_j = j;
+            }
+        }
+    }
+    let mut identical = false;
+    if best_ratio < cutoff {
+        match eqi {
+            None => {
+                plain_replace(out, a, alo, ahi, b, blo, bhi);
+                return;
+            }
+            Some((i, j)) => {
+                best_i = i;
+                best_j = j;
+                identical = true;
+            }
+        }
+    }
+    fancy_helper(out, a, alo, best_i, b, blo, best_j);
+    let aelt = a[best_i].clone();
+    let belt = b[best_j].clone();
+    if !identical {
+        let mut atags = String.new();
+        let mut btags = String.new();
+        let cruncher = Matcher.new(chars(aelt), chars(belt), is_char_junk, true);
+        for op in cruncher.opcodes() {
+            let la = op.i2 - op.i1;
+            let lb = op.j2 - op.j1;
+            if op.tag == "replace" {
+                atags.push_str(repeat('^', la));
+                btags.push_str(repeat('^', lb));
+            } else if op.tag == "delete" {
+                atags.push_str(repeat('-', la));
+            } else if op.tag == "insert" {
+                btags.push_str(repeat('+', lb));
+            } else {
+                atags.push_str(repeat(' ', la));
+                btags.push_str(repeat(' ', lb));
+            }
+        }
+        qformat(out, aelt, belt, atags, btags);
+    } else {
+        out.push(f"  {aelt}");
+    }
+    fancy_helper(out, a, best_i + 1, ahi, b, best_j + 1, bhi);
+}
+
+fn fancy_helper(out: mut ref Vec[String], a: ref Vec[String], alo: i64, ahi: i64, b: ref Vec[String], blo: i64, bhi: i64) {
+    if alo < ahi {
+        if blo < bhi {
+            fancy_replace(out, a, alo, ahi, b, blo, bhi);
+        } else {
+            dump(out, "-", a, alo, ahi);
+        }
+    } else if blo < bhi {
+        dump(out, "+", b, blo, bhi);
+    }
+}
+
+fn ndiff(a: ref Vec[String], b: ref Vec[String], linejunk: fn(ref String) -> bool) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let cruncher = Matcher.new(a.clone(), b.clone(), linejunk, true);
+    for op in cruncher.opcodes() {
+        if op.tag == "replace" {
+            fancy_replace(out, a, op.i1, op.i2, b, op.j1, op.j2);
+        } else if op.tag == "delete" {
+            dump(out, "-", a, op.i1, op.i2);
+        } else if op.tag == "insert" {
+            dump(out, "+", b, op.j1, op.j2);
+        } else {
+            dump(out, " ", a, op.i1, op.i2);
+        }
+    }
+    out
+}
+
+fn restore(delta: ref Vec[String], which: i64) -> Vec[String] {
+    let tag = if which == 1 { "- " } else { "+ " };
+    let mut out: Vec[String] = Vec.new();
+    for line in delta.iter() {
+        if line.starts_with("  ") or line.starts_with(tag) {
+            out.push(line[2..].to_string());
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ unified and context
+
+const FROM_DATE: Str = "2024-02-29 13:45:10";
+const TO_DATE: Str = "2024-03-01 09:00:00";
+
+fn range_unified(start: i64, stop: i64) -> String {
+    let mut beginning = start + 1;
+    let length = stop - start;
+    if length == 1 {
+        return f"{beginning}";
+    }
+    if length == 0 {
+        beginning -= 1;
+    }
+    f"{beginning},{length}"
+}
+
+fn range_context(start: i64, stop: i64) -> String {
+    let mut beginning = start + 1;
+    let length = stop - start;
+    if length == 0 {
+        beginning -= 1;
+    }
+    if length <= 1 {
+        return f"{beginning}";
+    }
+    f"{beginning},{beginning + length - 1}"
+}
+
+fn unified_diff(a: ref Vec[String], b: ref Vec[String], fromfile: ref String, tofile: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let m = Matcher.new(a.clone(), b.clone(), no_junk, true);
+    let mut started = false;
+    for group in m.grouped_opcodes(n) {
+        if !started {
+            started = true;
+            out.push_str(f"--- {fromfile}\t{FROM_DATE}\n");
+            out.push_str(f"+++ {tofile}\t{TO_DATE}\n");
+        }
+        let first = group[0].clone();
+        let last = group[group.len() - 1].clone();
+        out.push_str(f"@@ -{range_unified(first.i1, last.i2)} +{range_unified(first.j1, last.j2)} @@\n");
+        for op in group.iter() {
+            if op.tag == "equal" {
+                for line in a[op.i1..op.i2].iter() {
+                    out.push_str(f" {line}");
+                }
+                continue;
+            }
+            if op.tag == "replace" or op.tag == "delete" {
+                for line in a[op.i1..op.i2].iter() {
+                    out.push_str(f"-{line}");
+                }
+            }
+            if op.tag == "replace" or op.tag == "insert" {
+                for line in b[op.j1..op.j2].iter() {
+                    out.push_str(f"+{line}");
+                }
+            }
+        }
+    }
+    out
+}
+
+fn context_prefix(tag: ref String) -> Str {
+    match tag.as_str() {
+        "insert" => "+ ",
+        "delete" => "- ",
+        "replace" => "! ",
+        _ => "  ",
+    }
+}
+
+fn context_diff(a: ref Vec[String], b: ref Vec[String], fromfile: ref String, tofile: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let m = Matcher.new(a.clone(), b.clone(), no_junk, true);
+    let mut started = false;
+    for group in m.grouped_opcodes(n) {
+        if !started {
+            started = true;
+            out.push_str(f"*** {fromfile}\t{FROM_DATE}\n");
+            out.push_str(f"--- {tofile}\t{TO_DATE}\n");
+        }
+        let first = group[0].clone();
+        let last = group[group.len() - 1].clone();
+        out.push_str("***************\n");
+        out.push_str(f"*** {range_context(first.i1, last.i2)} ****\n");
+        if group.iter().any(|op| op.tag == "replace" or op.tag == "delete") {
+            for op in group.iter() {
+                if op.tag != "insert" {
+                    for line in a[op.i1..op.i2].iter() {
+                        out.push_str(f"{context_prefix(op.tag)}{line}");
+                    }
+                }
+            }
+        }
+        out.push_str(f"--- {range_context(first.j1, last.j2)} ----\n");
+        if group.iter().any(|op| op.tag == "replace" or op.tag == "insert") {
+            for op in group.iter() {
+                if op.tag != "delete" {
+                    for line in b[op.j1..op.j2].iter() {
+                        out.push_str(f"{context_prefix(op.tag)}{line}");
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn read_lines(name: ref String) -> Result[Vec[String], String] {
+    match fs.read_to_string(f"data/{name}") {
+        Ok(text) => Ok(split_lines(text)),
+        Err(_) => Err(f"FileNotFoundError: [Errno 2] No such file or directory: {py_repr(name)}\n"),
+    }
+}
+
+fn run(f: ref Vec[String]) -> Result[String, String] {
+    let cmd = f[0].as_str();
+    if cmd == "opcodes" {
+        return Ok(opcode_lines(Matcher.new(chars(f[1]), chars(f[2]), no_junk, true)));
+    }
+    if cmd == "blocks" {
+        let m = Matcher.new(chars(f[1]), chars(f[2]), no_junk, true);
+        let mut out = String.new();
+        for b in m.matching_blocks() {
+            out.push_str(f"{show_match(b)}\n");
+        }
+        return Ok(out);
+    }
+    if cmd == "ratios" {
+        let m = Matcher.new(chars(f[1]), chars(f[2]), no_junk, true);
+        return Ok(f"{m.ratio()} {m.quick_ratio()} {m.real_quick_ratio()}\n");
+    }
+    if cmd == "junk" {
+        let m = Matcher.new(chars(f[1]), chars(f[2]), is_space_char, true);
+        return Ok(f"{m.ratio()}\n{opcode_lines(m)}");
+    }
+    if cmd == "longest" {
+        let a = chars(f[1]);
+        let b = chars(f[2]);
+        let m1 = Matcher.new(a.clone(), b.clone(), no_junk, true);
+        let m2 = Matcher.new(a.clone(), b.clone(), is_space_char, true);
+        let x = m1.find_longest_match(0, a.len(), 0, b.len());
+        let y = m2.find_longest_match(0, a.len(), 0, b.len());
+        return Ok(f"{show_match(x)}\n{show_match(y)}\n");
+    }
+    if cmd == "close" {
+        let mut words: Vec[String] = Vec.new();
+        for w in read_lines("words.txt".to_string())? {
+            words.push(w.trim_end_matches("\n").to_string());
+        }
+        let n = i64.parse(f[2]).unwrap();
+        let cutoff = f64.parse(f[3]).unwrap();
+        return match close_matches(f[1], words, n, cutoff) {
+            Ok(v) => {
+                let parts: Vec[String] = v.iter().map(|w| py_repr(w)).collect();
+                Ok(f"[{parts.join(", ")}]\n")
+            }
+            Err(e) => Ok(f"ValueError: {e}\n"),
+        };
+    }
+    if cmd == "unified" or cmd == "context" {
+        let a = read_lines(f[1])?;
+        let b = read_lines(f[2])?;
+        let n = i64.parse(f[3]).unwrap();
+        if cmd == "unified" {
+            return Ok(unified_diff(a, b, f[1], f[2], n));
+        }
+        return Ok(context_diff(a, b, f[1], f[2], n));
+    }
+    if cmd == "ndiff" or cmd == "ndiff_linejunk" {
+        let a = read_lines(f[1])?;
+        let b = read_lines(f[2])?;
+        let d = if cmd == "ndiff" { ndiff(a, b, no_junk) } else { ndiff(a, b, is_line_junk) };
+        return Ok(d.join(""));
+    }
+    if cmd == "restore" {
+        let a = read_lines(f[1])?;
+        let b = read_lines(f[2])?;
+        let d = ndiff(a, b, no_junk);
+        return Ok(restore(d, i64.parse(f[3]).unwrap()).join(""));
+    }
+    if cmd == "line_ratio" {
+        let a = read_lines(f[1])?;
+        let b = read_lines(f[2])?;
+        let m = Matcher.new(a, b, no_junk, f[3] == "true");
+        return Ok(f"ratio {m.ratio()}, {m.bpopular.len()} popular, {m.matching_blocks().len() - 1} blocks, {m.opcodes().len()} opcodes\n");
+    }
+    Err(f"unknown job {cmd}\n")
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    for (name, text) in data_files() {
+        if let Err(e) = fs.write(f"data/{name}", text) {
+            eprintln(f"cannot write data/{name}: {e}");
+            return;
+        }
+    }
+    let jobs = match read_lines("jobs.tsv".to_string()) {
+        Ok(j) => j,
+        Err(e) => {
+            eprint(e);
+            return;
+        }
+    };
+    let mut out = String.new();
+    for job in jobs.iter() {
+        let fields: Vec[String] = job.trim_end_matches("\n").split("\t");
+        out.push_str(f"== {fields.join(" | ")}\n");
+        let text = match run(fields) {
+            Ok(t) => t,
+            Err(t) => t,
+        };
+        out.push_str(text.as_str());
+        if !text.is_empty() and !text.ends_with("\n") {
+            out.push_str("\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// Each input file's name under data/, and its text.
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut s = String.new();
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/4 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/7 200\n");
+    s.push_str("GET /api/item/37 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/2 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/23 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/27 304\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/23 304\n");
+    s.push_str("GET /api/item/28 304\n");
+    s.push_str("GET /api/item/4 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/26 200\n");
+    s.push_str("GET /api/item/4 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/4 200\n");
+    s.push_str("GET /api/item/30 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/36 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/1 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/31 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/25 404\n");
+    s.push_str("GET /api/item/31 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/22 404\n");
+    s.push_str("GET /api/item/9 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/32 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/35 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/28 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/6 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/39 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/22 304\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/30 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/16 404\n");
+    s.push_str("GET /api/item/10 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/23 200\n");
+    s.push_str("GET /api/item/1 304\n");
+    s.push_str("POST /api/item 201\n");
+    s.push_str("GET /api/item/5 304\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/22 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/21 200\n");
+    s.push_str("GET /api/item/12 200\n");
+    s.push_str("GET /api/item/14 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/22 404\n");
+    s.push_str("GET /api/item/22 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/39 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/5 200\n");
+    s.push_str("GET /api/item/12 404\n");
+    s.push_str("GET /api/item/27 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/25 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/10 200\n");
+    s.push_str("GET /api/item/1 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/39 404\n");
+    s.push_str("GET /api/item/22 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/6 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/13 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/22 404\n");
+    s.push_str("GET /api/item/33 404\n");
+    s.push_str("GET /api/item/7 500\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/35 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/6 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/32 404\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/4 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/38 200\n");
+    s.push_str("GET /api/item/28 404\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/16 200\n");
+    s.push_str("GET /api/item/8 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/7 200\n");
+    s.push_str("GET /api/item/23 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/6 404\n");
+    s.push_str("GET /api/item/10 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/1 304\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 503\n");
+    s.push_str("GET /health 503\n");
+    s.push_str("GET /api/item/32 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/14 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 304\n");
+    s.push_str("GET /api/item/27 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 404\n");
+    s.push_str("GET /api/item/17 200\n");
+    s.push_str("GET /api/item/16 200\n");
+    s.push_str("GET /api/item/14 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/26 304\n");
+    s.push_str("GET /api/item/2 200\n");
+    s.push_str("GET /api/item/10 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/18 404\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/35 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/27 404\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/32 304\n");
+    s.push_str("GET /api/item/14 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/8 404\n");
+    s.push_str("GET /api/item/3 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/16 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/32 304\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/2 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    v.push(("access.log".to_string(), s));
+    let mut s = String.new();
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/4 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/7 200\n");
+    s.push_str("GET /api/item/37 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/2 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/23 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/27 304\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/23 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/5 304\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/28 304\n");
+    s.push_str("GET /api/item/4 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/26 200\n");
+    s.push_str("GET /api/item/4 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/4 200\n");
+    s.push_str("GET /api/item/30 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/36 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/1 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/31 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/25 404\n");
+    s.push_str("GET /api/item/31 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/22 404\n");
+    s.push_str("GET /api/item/9 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/32 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/35 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/28 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/6 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/39 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/22 304\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/30 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/16 404\n");
+    s.push_str("GET /api/item/10 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/23 200\n");
+    s.push_str("GET /api/item/1 304\n");
+    s.push_str("GET /api/item/5 304\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/22 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/21 200\n");
+    s.push_str("GET /api/item/12 200\n");
+    s.push_str("GET /api/item/14 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/22 404\n");
+    s.push_str("GET /api/item/22 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/39 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/5 200\n");
+    s.push_str("GET /api/item/12 404\n");
+    s.push_str("GET /api/item/27 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/25 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/10 200\n");
+    s.push_str("GET /api/item/1 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/39 404\n");
+    s.push_str("GET /api/item/22 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/6 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/13 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/22 404\n");
+    s.push_str("GET /api/item/33 404\n");
+    s.push_str("GET /api/item/32 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/35 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/6 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/32 404\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/4 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/38 200\n");
+    s.push_str("GET /api/item/28 404\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/16 200\n");
+    s.push_str("GET /api/item/8 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/7 200\n");
+    s.push_str("GET /api/item/23 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/6 404\n");
+    s.push_str("GET /api/item/10 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/1 304\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/32 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/14 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 304\n");
+    s.push_str("GET /api/item/27 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/11 404\n");
+    s.push_str("GET /api/item/17 200\n");
+    s.push_str("GET /api/item/16 200\n");
+    s.push_str("GET /api/item/14 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/26 304\n");
+    s.push_str("GET /api/item/2 200\n");
+    s.push_str("GET /api/item/10 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/18 404\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/35 200\n");
+    s.push_str("\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/27 404\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/32 304\n");
+    s.push_str("GET /api/item/14 304\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/8 404\n");
+    s.push_str("GET /api/item/3 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/16 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /api/item/32 304\n");
+    s.push_str("\n");
+    s.push_str("GET /api/item/2 404\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    s.push_str("GET /health 200\n");
+    v.push(("access.log.orig".to_string(), s));
+    let mut s = String.new();
+    s.push_str("import time\n");
+    s.push_str("from collections import OrderedDict\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("class Cache:\n");
+    s.push_str("    \"\"\"A cache whose entries expire, holding at most max_size entries.\"\"\"\n");
+    s.push_str("\n");
+    s.push_str("    def __init__(self, ttl, max_size=128):\n");
+    s.push_str("        self.ttl = ttl\n");
+    s.push_str("        self.max_size = max_size\n");
+    s.push_str("        self.data = OrderedDict()\n");
+    s.push_str("\n");
+    s.push_str("    def get(self, key, default=None):\n");
+    s.push_str("        if key not in self.data:\n");
+    s.push_str("            return default\n");
+    s.push_str("        value, stamp = self.data[key]\n");
+    s.push_str("        if time.monotonic() - stamp > self.ttl:\n");
+    s.push_str("            del self.data[key]\n");
+    s.push_str("            return default\n");
+    s.push_str("        self.data.move_to_end(key)\n");
+    s.push_str("        return value\n");
+    s.push_str("\n");
+    s.push_str("    def put(self, key, value):\n");
+    s.push_str("        self.data[key] = (value, time.monotonic())\n");
+    s.push_str("        self.data.move_to_end(key)\n");
+    s.push_str("        while len(self.data) > self.max_size:\n");
+    s.push_str("            self.data.popitem(last=False)\n");
+    s.push_str("\n");
+    s.push_str("    def __len__(self):\n");
+    s.push_str("        return len(self.data)\n");
+    v.push(("cache.py".to_string(), s));
+    let mut s = String.new();
+    s.push_str("import time\n");
+    s.push_str("\n");
+    s.push_str("\n");
+    s.push_str("class Cache:\n");
+    s.push_str("    \"\"\"A cache whose entries expire.\"\"\"\n");
+    s.push_str("\n");
+    s.push_str("    def __init__(self, ttl):\n");
+    s.push_str("        self.ttl = ttl\n");
+    s.push_str("        self.data = {}\n");
+    s.push_str("\n");
+    s.push_str("    def get(self, key):\n");
+    s.push_str("        if key not in self.data:\n");
+    s.push_str("            return None\n");
+    s.push_str("        value, stamp = self.data[key]\n");
+    s.push_str("        if time.time() - stamp > self.ttl:\n");
+    s.push_str("            del self.data[key]\n");
+    s.push_str("            return None\n");
+    s.push_str("        return value\n");
+    s.push_str("\n");
+    s.push_str("    def put(self, key, value):\n");
+    s.push_str("        self.data[key] = (value, time.time())\n");
+    s.push_str("\n");
+    s.push_str("    def size(self):\n");
+    s.push_str("        return len(self.data)\n");
+    v.push(("cache.py.orig".to_string(), s));
+    let mut s = String.new();
+    v.push(("empty.txt".to_string(), s));
+    let mut s = String.new();
+    s.push_str("opcodes\tqabxcd\tabycdf\n");
+    s.push_str("opcodes\tabcd\tbcde\n");
+    s.push_str("opcodes\t\tabc\n");
+    s.push_str("opcodes\tabc\t\n");
+    s.push_str("opcodes\tabc\tabc\n");
+    s.push_str("blocks\tabxcd\tabcd\n");
+    s.push_str("blocks\tqabxcd\tabycdf\n");
+    s.push_str("ratios\tabcd\tbcde\n");
+    s.push_str("ratios\tqabxcd\tabycdf\n");
+    s.push_str("ratios\taaaa\taa\n");
+    s.push_str("ratios\t\t\n");
+    s.push_str("ratios\tkitten\tsitting\n");
+    s.push_str("ratios\tprivate Thread currentThread;\tprivate volatile Thread currentThread;\n");
+    s.push_str("junk\tprivate Thread currentThread;\tprivate volatile Thread currentThread;\n");
+    s.push_str("junk\t a b c \tabc\n");
+    s.push_str("longest\t abcd\tabcd abcd\n");
+    s.push_str("longest\tabcd\tefgh\n");
+    s.push_str("close\tappel\t3\t0.6\n");
+    s.push_str("close\twheel\t3\t0.6\n");
+    s.push_str("close\twheel\t2\t0.8\n");
+    s.push_str("close\tpythn\t5\t0.6\n");
+    s.push_str("close\tlamda\t3\t0.6\n");
+    s.push_str("close\timprt\t1\t0.6\n");
+    s.push_str("close\tretrun\t3\t0.5\n");
+    s.push_str("close\tcontinew\t4\t0.6\n");
+    s.push_str("close\tzzz\t3\t0.6\n");
+    s.push_str("close\tapple\t3\t1.0\n");
+    s.push_str("close\tapple\t0\t0.6\n");
+    s.push_str("close\tapple\t3\t1.5\n");
+    s.push_str("unified\tnginx.conf.orig\tnginx.conf\t3\n");
+    s.push_str("unified\tnginx.conf.orig\tnginx.conf\t1\n");
+    s.push_str("unified\tnginx.conf.orig\tnginx.conf\t0\n");
+    s.push_str("unified\tcache.py.orig\tcache.py\t3\n");
+    s.push_str("unified\tnotes.txt.orig\tnotes.txt\t2\n");
+    s.push_str("unified\tempty.txt\tsame.txt\t3\n");
+    s.push_str("unified\tsame.txt\tempty.txt\t3\n");
+    s.push_str("unified\tsame.txt\tsame2.txt\t3\n");
+    s.push_str("unified\taccess.log.orig\taccess.log\t3\n");
+    s.push_str("context\tnginx.conf.orig\tnginx.conf\t3\n");
+    s.push_str("context\tcache.py.orig\tcache.py\t2\n");
+    s.push_str("context\tnotes.txt.orig\tnotes.txt\t1\n");
+    s.push_str("context\tempty.txt\tsame.txt\t3\n");
+    s.push_str("context\taccess.log.orig\taccess.log\t1\n");
+    s.push_str("ndiff\tnotes.txt.orig\tnotes.txt\n");
+    s.push_str("ndiff\tnginx.conf.orig\tnginx.conf\n");
+    s.push_str("ndiff\tcache.py.orig\tcache.py\n");
+    s.push_str("ndiff_linejunk\tcache.py.orig\tcache.py\n");
+    s.push_str("ndiff\tempty.txt\tsame.txt\n");
+    s.push_str("restore\tnotes.txt.orig\tnotes.txt\t1\n");
+    s.push_str("restore\tnotes.txt.orig\tnotes.txt\t2\n");
+    s.push_str("restore\tcache.py.orig\tcache.py\t2\n");
+    s.push_str("restore\tcache.py.orig\tcache.py\t3\n");
+    s.push_str("line_ratio\taccess.log.orig\taccess.log\ttrue\n");
+    s.push_str("line_ratio\taccess.log.orig\taccess.log\tfalse\n");
+    s.push_str("line_ratio\tnginx.conf.orig\tnginx.conf\ttrue\n");
+    s.push_str("unified\tnginx.conf.orig\tmissing.conf\t3\n");
+    v.push(("jobs.tsv".to_string(), s));
+    let mut s = String.new();
+    s.push_str("user www-data;\n");
+    s.push_str("worker_processes 4;\n");
+    s.push_str("pid /run/nginx.pid;\n");
+    s.push_str("include /etc/nginx/modules-enabled/*.conf;\n");
+    s.push_str("\n");
+    s.push_str("events {\n");
+    s.push_str("    worker_connections 1024;\n");
+    s.push_str("    multi_accept on;\n");
+    s.push_str("}\n");
+    s.push_str("\n");
+    s.push_str("http {\n");
+    s.push_str("    sendfile on;\n");
+    s.push_str("    tcp_nopush on;\n");
+    s.push_str("    types_hash_max_size 2048;\n");
+    s.push_str("    server_tokens off;\n");
+    s.push_str("\n");
+    s.push_str("    include /etc/nginx/mime.types;\n");
+    s.push_str("    default_type application/octet-stream;\n");
+    s.push_str("\n");
+    s.push_str("    ssl_protocols TLSv1.2 TLSv1.3;\n");
+    s.push_str("    ssl_prefer_server_ciphers on;\n");
+    s.push_str("\n");
+    s.push_str("    access_log /var/log/nginx/access.log;\n");
+    s.push_str("    error_log /var/log/nginx/error.log;\n");
+    s.push_str("\n");
+    s.push_str("    gzip on;\n");
+    s.push_str("    gzip_types text/plain text/css application/json;\n");
+    s.push_str("\n");
+    s.push_str("    include /etc/nginx/conf.d/*.conf;\n");
+    s.push_str("    include /etc/nginx/sites-enabled/*;\n");
+    s.push_str("}\n");
+    v.push(("nginx.conf".to_string(), s));
+    let mut s = String.new();
+    s.push_str("user www-data;\n");
+    s.push_str("worker_processes auto;\n");
+    s.push_str("pid /run/nginx.pid;\n");
+    s.push_str("\n");
+    s.push_str("events {\n");
+    s.push_str("    worker_connections 768;\n");
+    s.push_str("    # multi_accept on;\n");
+    s.push_str("}\n");
+    s.push_str("\n");
+    s.push_str("http {\n");
+    s.push_str("    sendfile on;\n");
+    s.push_str("    tcp_nopush on;\n");
+    s.push_str("    types_hash_max_size 2048;\n");
+    s.push_str("\n");
+    s.push_str("    include /etc/nginx/mime.types;\n");
+    s.push_str("    default_type application/octet-stream;\n");
+    s.push_str("\n");
+    s.push_str("    ssl_protocols TLSv1 TLSv1.1 TLSv1.2;\n");
+    s.push_str("    ssl_prefer_server_ciphers on;\n");
+    s.push_str("\n");
+    s.push_str("    access_log /var/log/nginx/access.log;\n");
+    s.push_str("    error_log /var/log/nginx/error.log;\n");
+    s.push_str("\n");
+    s.push_str("    gzip on;\n");
+    s.push_str("\n");
+    s.push_str("    include /etc/nginx/conf.d/*.conf;\n");
+    s.push_str("    include /etc/nginx/sites-enabled/*;\n");
+    s.push_str("}\n");
+    v.push(("nginx.conf.orig".to_string(), s));
+    let mut s = String.new();
+    s.push_str("The quick brown cat jumps over the lazy dog!\n");
+    s.push_str("Python's difflib compares sequences of hashable items.\n");
+    s.push_str("\tTabs and double  spaces are character junk to ndiff.\n");
+    s.push_str("This line stays the same.\n");
+    s.push_str("The cafe opens at ten in the morning.\n");
+    s.push_str("Remember to water the plant on Thursday.\n");
+    s.push_str("one two four five six\n");
+    s.push_str("A new last line.");
+    v.push(("notes.txt".to_string(), s));
+    let mut s = String.new();
+    s.push_str("The quick brown fox jumps over the lazy dog.\n");
+    s.push_str("Python's difflib compares sequences of any hashable items.\n");
+    s.push_str("\tTabs and  double spaces are character junk to ndiff.\n");
+    s.push_str("This line stays the same.\n");
+    s.push_str("The café opens at nine in the morning.\n");
+    s.push_str("Remember to water the plants on Tuesday.\n");
+    s.push_str("one two three four five\n");
+    v.push(("notes.txt.orig".to_string(), s));
+    let mut s = String.new();
+    s.push_str("alpha\n");
+    s.push_str("beta\n");
+    v.push(("same.txt".to_string(), s));
+    let mut s = String.new();
+    s.push_str("alpha\n");
+    s.push_str("beta\n");
+    v.push(("same2.txt".to_string(), s));
+    let mut s = String.new();
+    s.push_str("apple\n");
+    s.push_str("ape\n");
+    s.push_str("peach\n");
+    s.push_str("puppy\n");
+    s.push_str("apply\n");
+    s.push_str("ample\n");
+    s.push_str("maple\n");
+    s.push_str("happy\n");
+    s.push_str("appeal\n");
+    s.push_str("applet\n");
+    s.push_str("python\n");
+    s.push_str("pythonic\n");
+    s.push_str("typhoon\n");
+    s.push_str("pyramid\n");
+    s.push_str("lambda\n");
+    s.push_str("lambada\n");
+    s.push_str("lamb\n");
+    s.push_str("label\n");
+    s.push_str("import\n");
+    s.push_str("important\n");
+    s.push_str("impart\n");
+    s.push_str("export\n");
+    s.push_str("imports\n");
+    s.push_str("return\n");
+    s.push_str("retry\n");
+    s.push_str("rerun\n");
+    s.push_str("ruin\n");
+    s.push_str("turn\n");
+    s.push_str("while\n");
+    s.push_str("whale\n");
+    s.push_str("wheel\n");
+    s.push_str("wheat\n");
+    s.push_str("white\n");
+    s.push_str("continue\n");
+    s.push_str("contain\n");
+    s.push_str("continent\n");
+    v.push(("words.txt".to_string(), s));
+    v
+}
