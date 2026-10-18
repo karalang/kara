@@ -24,7 +24,7 @@ impl[T] Option[T] {
         }
     }
 
-    fn is_some_and(ref self, pred: own OnceFn(ref T) -> bool) -> bool {
+    fn is_some_and(ref self, pred: own OnceFn(T) -> bool) -> bool {
         match self {
             Some(x) => pred(x),
             None => false,
@@ -117,7 +117,7 @@ impl[T] Option[T] {
         }
     }
 
-    fn filter(own self, pred: own OnceFn(ref T) -> bool) -> Option[T] {
+    fn filter(own self, pred: own OnceFn(T) -> bool) -> Option[T] {
         match self {
             Some(x) => if pred(x) { Some(x) } else { None },
             None => None,
