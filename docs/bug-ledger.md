@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 275 |
 | codegen-gap | 265 |
-| false-positive | 210 |
+| false-positive | 211 |
 | other | 173 |
 | perf | 171 |
 | diagnostics | 164 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2923 |
 | interp | 941 |
-| typecheck | 450 |
+| typecheck | 451 |
 | other | 115 |
 | ownership | 109 |
 | runtime | 76 |
@@ -204,6 +204,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-7 | 2026-10-18 | ownership | medium | `karac check` refuses `for p in 0..4 { let a = p + 1; let b = p + 2; }` with "value 'p' moved here, used again here" when an earlier binding named `p`, already out of scope, was a `Vec[i64]`: the range loop's `p` is treated as non-Copy; with no earlier `p`, or with `let p = 3` in place of the loop, it passes | — |
 | B-2026-10-18-8 | 2026-10-18 | lexer | low | The lexer rejects the `\xHH` escape in string, f-string and char literals (`"A\x42C"` is `error[parse]: Unknown escape sequence: \x`), although design.md § Literals lists `\xHH` (a hex byte) among the escapes of text literals | — |
 | B-2026-10-18-9 | 2026-10-18 | codegen+runtime | medium | `Vec.binary_search` on the MIR compiled backend is O(n) per call, not O(log n): `karac_mir_bsearch` (runtime/src/mir.rs) builds a fresh `Vec<usize>` of the indices 0..n on every call and binary-searches that; kata 699's bench spends 64% of its instructions there and runs 2.6x slower than legacy | — |
+| B-2026-10-18-10 | 2026-10-18 | typecheck | medium | A program's own struct named `Client`, `Response`, `HttpError` or `RequestBuilder` has none of its methods found: `karac check` and every MIR surface say "no method 'm' on type 'Client'" for each call, even inside its own `impl`, because the typechecker sends every method call on a type of that name to the library's HTTP arms; the prelude_shadow warning on the declaration says the declaration is legal | — |
 
 ### Relocated
 

@@ -1,0 +1,3492 @@
+// mini_pkgconfig: pkgconf 1.8.1, the pkg-config that Ubuntu 24.04 ships,
+// over a tree of .pc files: the system's own (copied from a real Ubuntu
+// install) and a project's, a build tree's and some broken ones. The run
+// writes the files into `data/` and a `jobs.tsv` of pkg-config command
+// lines (tab-separated arguments, leading NAME=value arguments being
+// environment variables), then runs each one in `data/` with
+// PKG_CONFIG_LIBDIR=pc and prints the `$ ...` line, the command's
+// stdout, its stderr and `[exit N]` when it fails.
+//
+// The program is a port of pkgconf's own code: the line reader and
+// parser, variables, dependency lists, the search path and the package
+// cache, the graph walk with its conflict checks, the fragment lists
+// with their merge rules, and the command line.
+//
+// expected.out is pkgconf 1.8.1's output on the same files, made by
+// oracle.py.
+//
+// Workarounds:
+// - B-2026-10-18-10: a struct named `Client` has none of its methods
+//   found, because `karac check` dispatches that name to the library's
+//   HTTP client; the client struct is `PkgClient`.
+// - B-2026-10-14-70: `karac check` refuses chained field receivers such
+//   as `self.c.out`, so what main() was asked for lives in `PkgClient`
+//   itself rather than in a `Run` struct holding one.
+// - B-2026-10-15-15: there is no `rfind`; `last_index` finds the last
+//   slash or dot.
+
+// ------------------------------------------------------------ bytes
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    from_bytes(v)
+}
+
+fn push_bytes(v: mut ref Vec[u8], s: Str) {
+    let b = s.bytes();
+    for i in 0..b.len() {
+        v.push(b[i]);
+    }
+}
+
+// The byte at `i`, or 0 past the end, as a C string reads.
+fn at(b: ref Vec[u8], i: i64) -> u8 {
+    if i < b.len() { b[i] } else { 0 }
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_alpha(c) or is_digit(c)
+}
+
+// C's isspace().
+fn is_space(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == 11 or c == 12 or c == b'\r'
+}
+
+fn lower(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+// strcasecmp(a, b) == 0
+fn same_ignoring_case(a: Str, b: Str) -> bool {
+    let x = a.bytes();
+    let y = b.bytes();
+    if x.len() != y.len() {
+        return false;
+    }
+    for i in 0..x.len() {
+        if lower(x[i]) != lower(y[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// strcmp() over two byte ranges.
+fn cmp_range(a: ref Vec[u8], a0: i64, a1: i64, b: ref Vec[u8], b0: i64, b1: i64) -> i64 {
+    let mut i = a0;
+    let mut j = b0;
+    while i < a1 and j < b1 {
+        if a[i] != b[j] {
+            return if a[i] < b[j] { -1 } else { 1 };
+        }
+        i += 1;
+        j += 1;
+    }
+    if i < a1 {
+        1
+    } else if j < b1 {
+        -1
+    } else {
+        0
+    }
+}
+
+// The lines of a text, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let b = to_bytes(text);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == b'\n' {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    if st < b.len() {
+        out.push(byte_str(b, st, b.len()));
+    }
+    out
+}
+
+// Collapses each run of slashes to one (pkgconf's normpath()).
+fn squeeze_slashes(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == b'/' and i > 0 and b[i - 1] == b'/' {
+            continue;
+        }
+        out.push(b[i]);
+    }
+    from_bytes(out)
+}
+
+// A path as a variable's value: spaces escaped.
+fn path_to_value(path: Str) -> String {
+    let b = to_bytes(path);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == b' ' {
+            out.push(b'\\');
+        }
+        out.push(b[i]);
+    }
+    from_bytes(out)
+}
+
+// The index of the last `c` in `s`.
+fn last_index(s: Str, c: u8) -> Option[i64] {
+    let b = s.bytes();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return Some(i);
+        }
+        i -= 1;
+    }
+    None
+}
+
+// Everything before the last slash, or the whole path.
+fn parent_dir(path: Str) -> String {
+    match last_index(path, b'/') {
+        Some(i) => path[..i].to_string(),
+        None => path.to_string(),
+    }
+}
+
+// ------------------------------------------------------------ versions
+
+// pkgconf_compare_version(): rpm's comparison, alternating runs of digits
+// and of letters, where `~` sorts before everything, even the end.
+fn compare_version(a: Option[String], b: Option[String]) -> i64 {
+    let x = match a {
+        Some(s) => s,
+        None => return -1,
+    };
+    let y = match b {
+        Some(s) => s,
+        None => return 1,
+    };
+    if same_ignoring_case(x, y) {
+        return 0;
+    }
+    let one = to_bytes(x);
+    let two = to_bytes(y);
+    let mut i: i64 = 0;
+    let mut j: i64 = 0;
+    while i < one.len() or j < two.len() {
+        while i < one.len() and not is_alnum(one[i]) and one[i] != b'~' {
+            i += 1;
+        }
+        while j < two.len() and not is_alnum(two[j]) and two[j] != b'~' {
+            j += 1;
+        }
+        let c1 = at(one, i);
+        let c2 = at(two, j);
+        if c1 == b'~' or c2 == b'~' {
+            if c1 != b'~' {
+                return 1;
+            }
+            if c2 != b'~' {
+                return -1;
+            }
+            i += 1;
+            j += 1;
+            continue;
+        }
+        if c1 == 0 or c2 == 0 {
+            break;
+        }
+        let mut e1 = i;
+        let mut e2 = j;
+        let isnum = is_digit(c1);
+        if isnum {
+            while e1 < one.len() and is_digit(one[e1]) {
+                e1 += 1;
+            }
+            while e2 < two.len() and is_digit(two[e2]) {
+                e2 += 1;
+            }
+        } else {
+            while e1 < one.len() and is_alpha(one[e1]) {
+                e1 += 1;
+            }
+            while e2 < two.len() and is_alpha(two[e2]) {
+                e2 += 1;
+            }
+        }
+        if i == e1 {
+            return -1;
+        }
+        if j == e2 {
+            return if isnum { 1 } else { -1 };
+        }
+        let mut s1 = i;
+        let mut s2 = j;
+        if isnum {
+            while s1 < e1 and one[s1] == b'0' {
+                s1 += 1;
+            }
+            while s2 < e2 and two[s2] == b'0' {
+                s2 += 1;
+            }
+            if e1 - s1 > e2 - s2 {
+                return 1;
+            }
+            if e2 - s2 > e1 - s1 {
+                return -1;
+            }
+        }
+        let r = cmp_range(one, s1, e1, two, s2, e2);
+        if r != 0 {
+            return r;
+        }
+        i = e1;
+        j = e2;
+    }
+    if i >= one.len() and j >= two.len() {
+        return 0;
+    }
+    if i >= one.len() {
+        return -1;
+    }
+    1
+}
+
+// ------------------------------------------------------------ comparators
+
+enum Cmp {
+    Ne,
+    Any,
+    Lt,
+    Le,
+    Eq,
+    Gt,
+    Ge,
+}
+
+fn cmp_name(c: Cmp) -> String {
+    match c {
+        Cmp.Ne => "!=".to_string(),
+        Cmp.Any => "(any)".to_string(),
+        Cmp.Lt => "<".to_string(),
+        Cmp.Le => "<=".to_string(),
+        Cmp.Eq => "=".to_string(),
+        Cmp.Gt => ">".to_string(),
+        Cmp.Ge => ">=".to_string(),
+    }
+}
+
+fn cmp_lookup(name: Str) -> Cmp {
+    if name == "!=" {
+        Cmp.Ne
+    } else if name == "<" {
+        Cmp.Lt
+    } else if name == "<=" {
+        Cmp.Le
+    } else if name == "=" {
+        Cmp.Eq
+    } else if name == ">" {
+        Cmp.Gt
+    } else if name == ">=" {
+        Cmp.Ge
+    } else {
+        Cmp.Any
+    }
+}
+
+// Whether version `a` satisfies `cmp b`.
+fn satisfies(c: Cmp, a: Option[String], b: Option[String]) -> bool {
+    match c {
+        Cmp.Any => true,
+        Cmp.Lt => compare_version(a, b) < 0,
+        Cmp.Gt => compare_version(a, b) > 0,
+        Cmp.Le => compare_version(a, b) <= 0,
+        Cmp.Ge => compare_version(a, b) >= 0,
+        Cmp.Eq => compare_version(a, b) == 0,
+        Cmp.Ne => compare_version(a, b) != 0,
+    }
+}
+
+// The comparisons pkgconf runs to decide whether a package's
+// `Provides: name cmp version` answers a `Requires: name cmp version`.
+// 0 means no check, 1 one that always fails; otherwise the code names
+// the comparison (2 <, 3 >, 4 <=, 5 >=, 6 =, 7 !=).
+fn rule_check(dep: Cmp, prov: Cmp) -> i64 {
+    match dep {
+        Cmp.Any => match prov {
+            Cmp.Any => 1,
+            _ => 0,
+        },
+        Cmp.Eq => match prov {
+            Cmp.Any => 1,
+            Cmp.Lt => 2,
+            Cmp.Gt => 3,
+            Cmp.Le => 4,
+            Cmp.Ge => 5,
+            Cmp.Eq => 6,
+            Cmp.Ne => 7,
+        },
+        Cmp.Ne => match prov {
+            Cmp.Any => 1,
+            Cmp.Lt => 5,
+            Cmp.Gt => 4,
+            Cmp.Le => 3,
+            Cmp.Ge => 2,
+            Cmp.Eq => 7,
+            Cmp.Ne => 6,
+        },
+        _ => match prov {
+            Cmp.Any => 1,
+            Cmp.Lt => 2,
+            Cmp.Gt => 3,
+            Cmp.Le => 4,
+            Cmp.Ge => 5,
+            _ => 0,
+        },
+    }
+}
+
+fn dep_check(dep: Cmp, prov: Cmp) -> i64 {
+    match dep {
+        Cmp.Any => match prov {
+            Cmp.Any => 1,
+            _ => 0,
+        },
+        Cmp.Lt => match prov {
+            Cmp.Gt => 2,
+            Cmp.Ge => 2,
+            Cmp.Eq => 2,
+            Cmp.Ne => 5,
+            _ => 0,
+        },
+        Cmp.Gt => match prov {
+            Cmp.Lt => 3,
+            Cmp.Le => 3,
+            Cmp.Eq => 3,
+            Cmp.Ne => 4,
+            _ => 0,
+        },
+        Cmp.Le => match prov {
+            Cmp.Gt => 4,
+            Cmp.Ge => 4,
+            Cmp.Eq => 4,
+            Cmp.Ne => 3,
+            _ => 0,
+        },
+        Cmp.Ge => match prov {
+            Cmp.Lt => 5,
+            Cmp.Le => 5,
+            Cmp.Eq => 5,
+            Cmp.Ne => 2,
+            _ => 0,
+        },
+        _ => match prov {
+            Cmp.Any => 1,
+            _ => 0,
+        },
+    }
+}
+
+fn run_check(code: i64, a: Option[String], b: Option[String]) -> bool {
+    if code == 0 {
+        return true;
+    }
+    if code == 1 {
+        return false;
+    }
+    let r = compare_version(a, b);
+    if code == 2 {
+        r < 0
+    } else if code == 3 {
+        r > 0
+    } else if code == 4 {
+        r <= 0
+    } else if code == 5 {
+        r >= 0
+    } else if code == 6 {
+        r == 0
+    } else {
+        r != 0
+    }
+}
+
+// ------------------------------------------------------------ dependencies
+
+// The `Requires.internal` colouring.
+const DEP_INTERNAL: i64 = 1;
+
+#[derive(Clone)]
+struct Dep {
+    package: String,
+    version: Option[String],
+    cmp: Cmp,
+    flags: i64,
+    matched: Option[i64],
+}
+
+fn dep_string(d: ref Dep) -> String {
+    match d.version {
+        Some(v) => f"{d.package} {cmp_name(d.cmp)} {v}",
+        None => d.package.clone(),
+    }
+}
+
+// Adds a dependency, unless the list already has one on the same
+// package coloured differently: then the uncoloured one wins.
+fn add_dep(list: mut ref Vec[Dep], dep: own Dep) {
+    for k in 0..list.len() {
+        if list[k].package == dep.package and list[k].flags != dep.flags {
+            if dep.flags != 0 and list[k].flags == 0 {
+                return;
+            }
+            if list[k].flags != 0 and dep.flags == 0 {
+                list.remove(k);
+            }
+            break;
+        }
+    }
+    list.push(dep);
+}
+
+fn new_dep(package: Str, version: own Option[String], cmp: own Cmp, flags: i64) -> Dep {
+    Dep { package: package.to_string(), version: version, cmp: cmp, flags: flags, matched: None }
+}
+
+fn is_separator(c: u8) -> bool {
+    c == b',' or is_space(c)
+}
+
+fn is_operator(c: u8) -> bool {
+    c == b'<' or c == b'>' or c == b'!' or c == b'='
+}
+
+enum DepState {
+    Outside,
+    Name,
+    BeforeOperator,
+    Operator,
+    AfterOperator,
+    Version,
+}
+
+// pkgconf_dependency_parse_str(): `a, b >= 1.0 c` and so on.
+fn parse_deps(list: mut ref Vec[Dep], depends: Str, flags: i64) {
+    let mut buf = to_bytes(depends);
+    buf.push(b' ');
+    let n = buf.len();
+    let mut state = DepState.Outside;
+    let mut cmp = Cmp.Any;
+    let mut cmpname: Vec[u8] = Vec.new();
+    let mut start: i64 = 0;
+    let mut ptr: i64 = 0;
+    let mut vstart: i64 = 0;
+    let mut pkg_at: i64 = 0;
+    let mut pkg_len: i64 = 0;
+    while ptr < n {
+        let c = buf[ptr];
+        match state {
+            DepState.Outside => {
+                if not is_separator(c) {
+                    state = DepState.Name;
+                }
+            }
+            DepState.Name => {
+                if is_space(c) {
+                    let mut s = ptr;
+                    while s < n and is_space(buf[s]) {
+                        s += 1;
+                    }
+                    let sc = at(buf, s);
+                    if sc != 0 and is_operator(sc) {
+                        state = DepState.BeforeOperator;
+                    } else {
+                        state = DepState.Outside;
+                    }
+                } else if is_separator(c) {
+                    state = DepState.Outside;
+                } else if at(buf, ptr + 1) == 0 {
+                    ptr += 1;
+                    state = DepState.Outside;
+                }
+                let in_name = match state {
+                    DepState.Name => true,
+                    _ => false,
+                };
+                if not in_name and start != ptr {
+                    let mut it = start;
+                    while it < n and is_separator(buf[it]) {
+                        it += 1;
+                    }
+                    pkg_at = it;
+                    pkg_len = ptr - it;
+                    start = ptr;
+                }
+                let outside = match state {
+                    DepState.Outside => true,
+                    _ => false,
+                };
+                if outside {
+                    add_dep(list, new_dep(byte_str(buf, pkg_at, pkg_at + pkg_len), None, cmp, flags));
+                    cmp = Cmp.Any;
+                    pkg_len = 0;
+                }
+            }
+            DepState.BeforeOperator => {
+                if is_operator(c) {
+                    state = DepState.Operator;
+                    cmpname.push(c);
+                }
+            }
+            DepState.Operator => {
+                if not is_operator(c) {
+                    state = DepState.AfterOperator;
+                    cmp = cmp_lookup(from_bytes(cmpname.clone()));
+                } else {
+                    cmpname.push(c);
+                }
+            }
+            DepState.AfterOperator => {
+                if not is_space(c) {
+                    vstart = ptr;
+                    state = DepState.Version;
+                }
+            }
+            DepState.Version => {
+                if is_separator(c) or at(buf, ptr + 1) == 0 {
+                    let version = byte_str(buf, vstart, ptr);
+                    state = DepState.Outside;
+                    add_dep(list, new_dep(byte_str(buf, pkg_at, pkg_at + pkg_len), Some(version), cmp, flags));
+                    cmp = Cmp.Any;
+                    cmpname = Vec.new();
+                    pkg_len = 0;
+                    start = ptr;
+                }
+            }
+        }
+        ptr += 1;
+    }
+}
+
+// ------------------------------------------------------------ variables
+
+#[derive(Clone)]
+struct Tuple {
+    key: String,
+    value: String,
+}
+
+// Strips the quote a value starts with, wherever it appears, and its
+// backslash escapes.
+fn dequote(value: Str) -> String {
+    let b = to_bytes(value);
+    let mut out: Vec[u8] = Vec.new();
+    let mut quote: u8 = 0;
+    if b.len() > 0 and (b[0] == b'\'' or b[0] == b'"') {
+        quote = b[0];
+    }
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'\\' and quote != 0 and at(b, i + 1) == quote {
+            i += 1;
+            out.push(b[i]);
+        } else if quote == 0 or b[i] != quote {
+            out.push(b[i]);
+        }
+        i += 1;
+    }
+    from_bytes(out)
+}
+
+fn find_tuple(list: ref Vec[Tuple], key: Str) -> Option[String] {
+    for i in 0..list.len() {
+        if list[i].key == key {
+            return Some(list[i].value.clone());
+        }
+    }
+    None
+}
+
+// Replaces any tuple with the same key, and puts the new one first.
+fn put_tuple(list: mut ref Vec[Tuple], key: Str, value: own String) {
+    for i in 0..list.len() {
+        if list[i].key == key {
+            list.remove(i);
+            break;
+        }
+    }
+    list.insert(0, Tuple { key: key.to_string(), value: value });
+}
+
+// ------------------------------------------------------------ fragments
+
+#[derive(Clone)]
+struct Frag {
+    kind: u8,
+    data: String,
+    merged: bool,
+}
+
+const UNMERGEABLE: Array[Str, 16] = ["-framework", "-isystem", "-idirafter", "-pthread", "-Wa,", "-Wl,", "-Wp,", "-trigraphs", "-pedantic", "-ansi", "-std=", "-stdlib=", "-include", "-nostdinc", "-nostdlibinc", "-nobuiltininc"];
+
+// A flag that takes its argument as the next word, or that is never
+// deduplicated.
+fn is_unmergeable(s: Str) -> bool {
+    if not s.starts_with("-") {
+        return true;
+    }
+    for i in 0..16 {
+        if s.starts_with(UNMERGEABLE[i]) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_special(s: Str) -> bool {
+    if not s.starts_with("-") {
+        return true;
+    }
+    if s.starts_with("-lib:") {
+        return true;
+    }
+    is_unmergeable(s)
+}
+
+fn munge(s: Str) -> String {
+    if s.starts_with("/") {
+        squeeze_slashes(s)
+    } else {
+        s.to_string()
+    }
+}
+
+// pkgconf_fragment_add(): `-Ifoo` becomes type I and `foo`; a word
+// after `-framework` or `-isystem` joins it.
+fn add_fragment(list: mut ref Vec[Frag], s: Str) {
+    if s.len() == 0 {
+        return;
+    }
+    let b = to_bytes(s);
+    if b.len() > 1 and not is_special(s) {
+        list.push(Frag { kind: b[1], data: munge(s[2..]), merged: false });
+        return;
+    }
+    let n = list.len();
+    if n > 0 and list[n - 1].kind == 0 and is_unmergeable(list[n - 1].data) {
+        let mut parent = list.remove(n - 1);
+        parent.data = f"{parent.data} {munge(s)}";
+        parent.merged = true;
+        copy_fragment(list, parent, false);
+        return;
+    }
+    list.push(Frag { kind: 0, data: s.to_string(), merged: false });
+}
+
+fn lookup_fragment(list: ref Vec[Frag], base: ref Frag) -> Option[i64] {
+    let mut i = list.len() - 1;
+    while i >= 0 {
+        if list[i].kind == base.kind and list[i].data == base.data {
+            return Some(i);
+        }
+        i -= 1;
+    }
+    None
+}
+
+fn can_merge_back(base: ref Frag, is_private: bool) -> bool {
+    if base.kind == b'l' {
+        return not is_private;
+    }
+    not (base.kind == b'F' or base.kind == b'L' or base.kind == b'I')
+}
+
+fn should_merge(list: ref Vec[Frag], i: i64) -> bool {
+    if i == 0 {
+        return true;
+    }
+    let parent = list[i - 1].kind;
+    if parent == b'l' or parent == b'L' or parent == b'I' {
+        return true;
+    }
+    list[i].kind == 0 or parent == list[i].kind
+}
+
+// pkgconf_fragment_copy(): appends a fragment, dropping an earlier copy
+// of it or this one, by pkgconf's rules.
+fn copy_fragment(list: mut ref Vec[Frag], base: ref Frag, is_private: bool) {
+    let mut existing: Option[i64] = None;
+    if can_merge_back(base, is_private) and not is_private and is_unmergeable(base.data) {
+        existing = lookup_fragment(list, base);
+    }
+    match existing {
+        Some(i) => {
+            if should_merge(list, i) {
+                list.remove(i);
+            }
+        }
+        None => {
+            if not is_private and not can_merge_back(base, is_private) and lookup_fragment(list, base).is_some() {
+                return;
+            }
+        }
+    }
+    list.push(base.clone());
+}
+
+fn needs_escape(c: u8, merged: bool) -> bool {
+    let low: u8 = if merged { b'!' } else { b' ' };
+    c < b' ' or (c >= low and c < b'$') or (c > b'$' and c < b'(') or (c > b')' and c < b'+') or (c > b':' and c < b'=') or (c > b'=' and c < b'@') or (c > b'Z' and c < b'\\') or c == b'\\' or (c > b'\\' and c < b'^') or c == b'`' or (c > b'z' and c < b'~') or c > b'~'
+}
+
+fn render(list: ref Vec[Frag]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..list.len() {
+        let f = list[i].clone();
+        if f.kind != 0 {
+            out.push(b'-');
+            out.push(f.kind);
+        }
+        let d = to_bytes(f.data);
+        for k in 0..d.len() {
+            if needs_escape(d[k], f.merged) {
+                out.push(b'\\');
+            }
+            out.push(d[k]);
+        }
+        out.push(b' ');
+    }
+    from_bytes(out)
+}
+
+// pkgconf_argv_split(): words, with quotes and backslashes as a POSIX
+// shell reads them; None when a quote or an escape is left open.
+fn argv_split(src: Str) -> Option[Vec[String]] {
+    let b = to_bytes(src);
+    let mut args: Vec[String] = Vec.new();
+    let mut cur: Vec[u8] = Vec.new();
+    let mut quote: u8 = 0;
+    let mut escaped = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if escaped {
+            if quote == b'"' {
+                if not (c == b'$' or c == b'`' or c == b'"' or c == b'\\') {
+                    cur.push(b'\\');
+                }
+                cur.push(c);
+            } else {
+                cur.push(c);
+            }
+            escaped = false;
+        } else if quote != 0 {
+            if c == quote {
+                quote = 0;
+            } else if c == b'\\' and quote != b'\'' {
+                escaped = true;
+            } else {
+                cur.push(c);
+            }
+        } else if is_space(c) {
+            args.push(from_bytes(cur));
+            cur = Vec.new();
+        } else if c == b'\\' {
+            escaped = true;
+        } else if c == b'"' or c == b'\'' {
+            quote = c;
+        } else {
+            cur.push(c);
+        }
+    }
+    if escaped or quote != 0 {
+        return None;
+    }
+    if cur.len() > 0 {
+        args.push(from_bytes(cur));
+    }
+    Some(args)
+}
+
+// ------------------------------------------------------------ packages
+
+enum DepList {
+    Required,
+    Private,
+    Conflicts,
+    Provides,
+}
+
+struct Pkg {
+    id: String,
+    filename: Option[String],
+    realname: Option[String],
+    description: Option[String],
+    version: Option[String],
+    pc_filedir: String,
+    vars: Vec[Tuple],
+    required: Vec[Dep],
+    requires_private: Vec[Dep],
+    conflicts: Vec[Dep],
+    provides: Vec[Dep],
+    cflags: Vec[Frag],
+    cflags_private: Vec[Frag],
+    libs: Vec[Frag],
+    libs_private: Vec[Frag],
+    uninstalled: bool,
+    seen: bool,
+    is_virtual: bool,
+}
+
+fn new_pkg(id: Str) -> Pkg {
+    Pkg {
+        id: id.to_string(),
+        filename: None,
+        realname: None,
+        description: None,
+        version: None,
+        pc_filedir: String.new(),
+        vars: Vec.new(),
+        required: Vec.new(),
+        requires_private: Vec.new(),
+        conflicts: Vec.new(),
+        provides: Vec.new(),
+        cflags: Vec.new(),
+        cflags_private: Vec.new(),
+        libs: Vec.new(),
+        libs_private: Vec.new(),
+        uninstalled: false,
+        seen: false,
+        is_virtual: false,
+    }
+}
+
+impl Pkg {
+    fn dep_count(ref self, w: DepList) -> i64 {
+        match w {
+            DepList.Required => self.required.len(),
+            DepList.Private => self.requires_private.len(),
+            DepList.Conflicts => self.conflicts.len(),
+            DepList.Provides => self.provides.len(),
+        }
+    }
+
+    fn dep_at(ref self, w: DepList, k: i64) -> Dep {
+        match w {
+            DepList.Required => self.required[k].clone(),
+            DepList.Private => self.requires_private[k].clone(),
+            DepList.Conflicts => self.conflicts[k].clone(),
+            DepList.Provides => self.provides[k].clone(),
+        }
+    }
+
+    fn set_match(mut ref self, w: DepList, k: i64, m: i64) {
+        match w {
+            DepList.Required => self.required[k].matched = Some(m),
+            DepList.Private => self.requires_private[k].matched = Some(m),
+            DepList.Conflicts => self.conflicts[k].matched = Some(m),
+            DepList.Provides => self.provides[k].matched = Some(m),
+        }
+    }
+}
+
+// Where pkgconf would read a .pc file from: under data/.
+fn read_file(path: Str) -> Option[String] {
+    match fs.read_to_string(f"data/{path}") {
+        Ok(t) => Some(t),
+        Err(_) => None,
+    }
+}
+
+fn is_dir(path: Str) -> bool {
+    match fs.metadata(f"data/{path}") {
+        Ok(m) => m.is_dir,
+        Err(_) => false,
+    }
+}
+
+fn list_dir(path: Str) -> Vec[String] {
+    let mut names = match fs.read_dir(f"data/{path}") {
+        Ok(v) => v,
+        Err(_) => Vec.new(),
+    };
+    names.sort();
+    names
+}
+
+// pkgconf_fgetline(): one logical line from `pos`, with `\` joining
+// lines (and eating the next line's leading blanks) and `#` starting a
+// comment.
+fn read_line(b: ref Vec[u8], pos: mut ref i64) -> Option[Vec[u8]] {
+    let mut s: Vec[u8] = Vec.new();
+    let mut quoted = false;
+    let mut got = false;
+    while *pos < b.len() {
+        let c = b[*pos];
+        *pos += 1;
+        got = true;
+        if c == b'\\' and not quoted {
+            quoted = true;
+            continue;
+        }
+        if c == b'#' {
+            if not quoted {
+                while *pos < b.len() and b[*pos] != b'\n' {
+                    *pos += 1;
+                }
+                if *pos < b.len() {
+                    *pos += 1;
+                    s.push(b'\n');
+                }
+                break;
+            }
+            s.push(c);
+            quoted = false;
+            continue;
+        }
+        if c == b'\n' {
+            if quoted {
+                while *pos < b.len() and (b[*pos] == b'\t' or b[*pos] == b' ') {
+                    *pos += 1;
+                }
+                quoted = false;
+                continue;
+            }
+            s.push(c);
+            break;
+        }
+        if c == b'\r' {
+            s.push(b'\n');
+            if *pos < b.len() and b[*pos] == b'\n' {
+                *pos += 1;
+                if quoted {
+                    quoted = false;
+                    continue;
+                }
+                break;
+            }
+            if quoted {
+                quoted = false;
+                continue;
+            }
+            break;
+        }
+        if quoted {
+            s.push(b'\\');
+            quoted = false;
+        }
+        s.push(c);
+    }
+    if not got {
+        return None;
+    }
+    let n = s.len();
+    if n > 0 and s[n - 1] == b'\n' {
+        s.pop();
+        let m = s.len();
+        if m > 0 and s[m - 1] == b'\r' {
+            s.pop();
+        }
+    }
+    Some(s)
+}
+
+// The directory a relocatable package's prefix is: two levels above a
+// .pc file that sits in a `pkgconfig` directory.
+fn determine_prefix(filename: Str) -> Option[String] {
+    let dir = match last_index(filename, b'/') {
+        Some(i) => filename[..i].to_string(),
+        None => filename.to_string(),
+    };
+    let i = match last_index(dir, b'/') {
+        Some(i) => i,
+        None => return None,
+    };
+    if dir[i + 1..] != "pkgconfig" {
+        return None;
+    }
+    let up = dir[..i].to_string();
+    let k = match last_index(up, b'/') {
+        Some(k) => k,
+        None => return None,
+    };
+    Some(up[..k].to_string())
+}
+
+// ------------------------------------------------------------ the client
+
+// PkgClient flags.
+const F_SEARCH_PRIVATE: i64 = 1;
+const F_MERGE_PRIVATE: i64 = 2;
+const F_ITER_PRIVATE: i64 = 4;
+const F_SKIP_ROOT_VIRTUAL: i64 = 8;
+const F_SKIP_CONFLICTS: i64 = 16;
+const F_SIMPLIFY_ERRORS: i64 = 32;
+const F_NO_UNINSTALLED: i64 = 64;
+const F_REDEFINE_PREFIX: i64 = 128;
+const F_DONT_FILTER_INTERNAL: i64 = 256;
+const F_SKIP_PROVIDES: i64 = 512;
+
+// Graph errors.
+const E_NOT_FOUND: i64 = 1;
+const E_VERSION: i64 = 2;
+const E_CONFLICT: i64 = 4;
+const E_BREAK: i64 = 8;
+
+const DEFAULT_PATH: Str = "/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig";
+const SYSTEM_LIBDIRS: Str = "/lib:/lib/i386-linux-gnu:/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnux32:/lib32:/libx32:/usr/lib:/usr/lib/i386-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnux32:/usr/lib32:/usr/libx32";
+const SYSTEM_INCLUDEDIRS: Str = "/usr/include";
+const PKGCONF_VERSION: Str = "1.8.1";
+
+// What a graph walk does at each package.
+enum Visit {
+    Verify,
+    Cflags,
+    CflagsPrivate,
+    Libs,
+    Digraph,
+    Uninstalled,
+}
+
+struct PkgClient {
+    pkgs: Vec[Pkg],
+    cache: Vec[i64],
+    builtins: Vec[i64],
+    dirs: Vec[String],
+    globals: Vec[Tuple],
+    filter_libdirs: Vec[String],
+    filter_includedirs: Vec[String],
+    flags: i64,
+    out: String,
+    err: String,
+    // Where errors go: 0 nowhere, 1 stdout, 2 stderr.
+    errors_to: i64,
+    warnings: bool,
+    sent_notice: bool,
+    collected: Vec[Frag],
+    found_uninstalled: bool,
+    // What main() was asked for.
+    want: i64,
+    fragment_filter: Option[String],
+    maxdepth: i64,
+    queue: Vec[String],
+}
+
+fn split_path(s: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in s.split(":") {
+        if p.len() > 0 {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+fn builtin_pkg(name: Str) -> Pkg {
+    let mut p = new_pkg(name);
+    p.realname = Some(name.to_string());
+    p.description = Some(f"virtual package defining {name} API version supported");
+    p.version = Some(PKGCONF_VERSION.to_string());
+    p.vars.push(Tuple { key: "pc_path".to_string(), value: DEFAULT_PATH.to_string() });
+    p.vars.push(Tuple { key: "pc_system_includedirs".to_string(), value: SYSTEM_INCLUDEDIRS.to_string() });
+    p.vars.push(Tuple { key: "pc_system_libdirs".to_string(), value: SYSTEM_LIBDIRS.to_string() });
+    p
+}
+
+fn new_client() -> PkgClient {
+    let mut c = PkgClient {
+        pkgs: Vec.new(),
+        cache: Vec.new(),
+        builtins: Vec.new(),
+        dirs: Vec.new(),
+        globals: Vec.new(),
+        filter_libdirs: split_path(SYSTEM_LIBDIRS),
+        filter_includedirs: split_path(SYSTEM_INCLUDEDIRS),
+        flags: 0,
+        out: String.new(),
+        err: String.new(),
+        errors_to: 2,
+        warnings: false,
+        sent_notice: false,
+        collected: Vec.new(),
+        found_uninstalled: false,
+        want: 0,
+        fragment_filter: None,
+        maxdepth: 2000,
+        queue: Vec.new(),
+    };
+    c.pkgs.push(builtin_pkg("pkg-config"));
+    c.pkgs.push(builtin_pkg("pkgconf"));
+    c.builtins.push(0);
+    c.builtins.push(1);
+    c
+}
+
+impl PkgClient {
+    fn error(mut ref self, msg: Str) {
+        if self.errors_to == 1 {
+            self.out.push_str(msg);
+        } else if self.errors_to == 2 {
+            self.err.push_str(msg);
+        }
+    }
+
+    fn warn(mut ref self, msg: Str) {
+        if self.warnings {
+            self.error(msg);
+        }
+    }
+
+    fn find_global(ref self, key: Str) -> Option[String] {
+        find_tuple(self.globals, key)
+    }
+
+    fn add_global(mut ref self, key: Str, value: Str) {
+        put_tuple(mut self.globals, key, dequote(value));
+    }
+
+    fn find_var(ref self, vars: ref Vec[Tuple], key: Str) -> Option[String] {
+        match self.find_global(key) {
+            Some(v) => Some(v),
+            None => find_tuple(vars, key),
+        }
+    }
+
+    // pkgconf_tuple_parse(): expands `${name}`, globals first; an
+    // unknown name expands to nothing and `$name` stays as written.
+    fn expand(ref self, vars: ref Vec[Tuple], value: Str) -> String {
+        let b = to_bytes(value);
+        let mut out: Vec[u8] = Vec.new();
+        let mut i: i64 = 0;
+        while i < b.len() {
+            if b[i] != b'$' or at(b, i + 1) != b'{' {
+                out.push(b[i]);
+                i += 1;
+                continue;
+            }
+            let mut k = i + 2;
+            while k < b.len() and b[k] != b'}' {
+                k += 1;
+            }
+            let name = byte_str(b, i + 2, k);
+            match self.find_global(name) {
+                Some(v) => push_bytes(mut out, v),
+                None => match find_tuple(vars, name) {
+                    Some(v) => push_bytes(mut out, self.expand(vars, v)),
+                    None => {}
+                },
+            }
+            i = k + 1;
+        }
+        from_bytes(out)
+    }
+
+    fn add_var(ref self, vars: mut ref Vec[Tuple], key: Str, value: Str, parse: bool) {
+        let v = dequote(value);
+        let stored = if parse { self.expand(vars, v) } else { v };
+        put_tuple(vars, key, stored);
+    }
+
+    // ---------------------------------------------------------- parsing
+
+    fn keyword(mut ref self, pkg: mut ref Pkg, lineno: i64, key: Str, value: Str) {
+        if same_ignoring_case(key, "Name") {
+            pkg.realname = Some(self.expand(pkg.vars, value));
+        } else if same_ignoring_case(key, "Description") {
+            pkg.description = Some(self.expand(pkg.vars, value));
+        } else if same_ignoring_case(key, "Version") {
+            let v = self.expand(pkg.vars, value);
+            let b = to_bytes(v);
+            let mut cut = b.len();
+            for i in 0..b.len() {
+                if b[i] == b' ' or b[i] == b'\t' {
+                    cut = i;
+                    break;
+                }
+            }
+            if cut < b.len() {
+                let short = byte_str(b, 0, cut);
+                let file = pkg.filename.clone().unwrap_or(String.new());
+                self.warn(f"{file}:{lineno}: warning: malformed version field with whitespace, trimming to [{short}]\n");
+                pkg.version = Some(short);
+            } else {
+                pkg.version = Some(v);
+            }
+        } else if same_ignoring_case(key, "Requires") {
+            let d = self.expand(pkg.vars, value);
+            parse_deps(pkg.required, d, 0);
+        } else if same_ignoring_case(key, "Requires.private") {
+            let d = self.expand(pkg.vars, value);
+            parse_deps(pkg.requires_private, d, 0);
+        } else if same_ignoring_case(key, "Requires.internal") {
+            let d = self.expand(pkg.vars, value);
+            parse_deps(pkg.requires_private, d, DEP_INTERNAL);
+        } else if same_ignoring_case(key, "Conflicts") {
+            let d = self.expand(pkg.vars, value);
+            parse_deps(pkg.conflicts, d, 0);
+        } else if same_ignoring_case(key, "Provides") {
+            let d = self.expand(pkg.vars, value);
+            parse_deps(pkg.provides, d, 0);
+        } else if same_ignoring_case(key, "Cflags") or same_ignoring_case(key, "Cflags.private") or same_ignoring_case(key, "Libs") or same_ignoring_case(key, "Libs.private") {
+            let expanded = self.expand(pkg.vars, value);
+            match argv_split(expanded) {
+                Some(args) => {
+                    for a in args {
+                        if same_ignoring_case(key, "Cflags") {
+                            add_fragment(pkg.cflags, a);
+                        } else if same_ignoring_case(key, "Cflags.private") {
+                            add_fragment(pkg.cflags_private, a);
+                        } else if same_ignoring_case(key, "Libs") {
+                            add_fragment(pkg.libs, a);
+                        } else {
+                            add_fragment(pkg.libs_private, a);
+                        }
+                    }
+                }
+                None => {
+                    let file = pkg.filename.clone().unwrap_or(String.new());
+                    self.warn(f"{file}:{lineno}: warning: unable to parse field '{key}' into an argument vector, value [{value}]\n");
+                }
+            }
+        }
+    }
+
+    fn variable(mut ref self, pkg: mut ref Pkg, key: Str, value: Str) {
+        if key != "prefix" or self.flags & F_REDEFINE_PREFIX == 0 {
+            self.add_var(pkg.vars, key, value, true);
+            return;
+        }
+        let file = pkg.filename.clone().unwrap_or(String.new());
+        match determine_prefix(file) {
+            Some(rel) => {
+                self.add_var(pkg.vars, "orig_prefix", squeeze_slashes(value), true);
+                self.add_global(key, path_to_value(rel));
+            }
+            None => self.add_var(pkg.vars, key, value, true),
+        }
+    }
+
+    // pkgconf_parser_parse(): `key: value` and `key=value` lines.
+    fn parse_line(mut ref self, pkg: mut ref Pkg, lineno: i64, line: ref Vec[u8]) {
+        let file = pkg.filename.clone().unwrap_or(String.new());
+        let n = line.len();
+        let mut p: i64 = 0;
+        let mut warned_key = false;
+        while p < n and is_space(line[p]) {
+            p += 1;
+        }
+        if p < n and p != 0 {
+            self.warn(f"{file}:{lineno}: warning: whitespace encountered while parsing key section\n");
+            warned_key = true;
+        }
+        let key_at = p;
+        while p < n and (is_alnum(line[p]) or line[p] == b'_' or line[p] == b'.') {
+            p += 1;
+        }
+        if not is_alpha(at(line, key_at)) and not is_digit(at(line, p)) {
+            return;
+        }
+        let key = byte_str(line, key_at, p);
+        while p < n and is_space(line[p]) {
+            if not warned_key {
+                self.warn(f"{file}:{lineno}: warning: whitespace encountered while parsing key section\n");
+                warned_key = true;
+            }
+            p += 1;
+        }
+        let op = at(line, p);
+        if p < n {
+            p += 1;
+        }
+        while p < n and is_space(line[p]) {
+            p += 1;
+        }
+        let vstart = p;
+        let mut end = n;
+        let mut warned_value = false;
+        while end - 1 > vstart and is_space(line[end - 1]) {
+            if not warned_value and op == b'=' {
+                self.warn(f"{file}:{lineno}: warning: trailing whitespace encountered while parsing value section\n");
+                warned_value = true;
+            }
+            end -= 1;
+        }
+        let value = byte_str(line, vstart, end);
+        if op == b':' {
+            self.keyword(pkg, lineno, key, value);
+        } else if op == b'=' {
+            self.variable(pkg, key, value);
+        }
+    }
+
+    // pkgconf_pkg_new_from_file()
+    fn parse_pkg(mut ref self, filename: Str, text: Str) -> Option[Pkg] {
+        let dir = parent_dir(filename);
+        let base = match last_index(filename, b'/') {
+            Some(i) => filename[i + 1..].to_string(),
+            None => filename.to_string(),
+        };
+        let id = match last_index(base, b'.') {
+            Some(i) => base[..i].to_string(),
+            None => base.clone(),
+        };
+        let mut pkg = new_pkg(id);
+        pkg.filename = Some(filename.to_string());
+        pkg.pc_filedir = dir.clone();
+        self.add_var(pkg.vars, "pcfiledir", path_to_value(dir), true);
+        let b = to_bytes(text);
+        let mut pos: i64 = 0;
+        let mut lineno: i64 = 0;
+        loop {
+            let line = match read_line(b, mut pos) {
+                Some(l) => l,
+                None => break,
+            };
+            lineno += 1;
+            self.parse_line(pkg, lineno, line);
+        }
+        let mut valid = true;
+        if pkg.realname.is_none() {
+            self.warn(f"{filename}: warning: file does not declare a `Name' field\n");
+            valid = false;
+        }
+        if pkg.description.is_none() {
+            self.warn(f"{filename}: warning: file does not declare a `Description' field\n");
+            valid = false;
+        }
+        if pkg.version.is_none() {
+            self.warn(f"{filename}: warning: file does not declare a `Version' field\n");
+            valid = false;
+        }
+        if not valid {
+            self.warn(f"{filename}: warning: skipping invalid file\n");
+            return None;
+        }
+        let me = new_dep(pkg.id, pkg.version.clone(), Cmp.Eq, 0);
+        add_dep(mut pkg.provides, me);
+        Some(pkg)
+    }
+
+    // ---------------------------------------------------------- finding
+
+    fn add_pkg(mut ref self, pkg: own Pkg) -> i64 {
+        self.pkgs.push(pkg);
+        self.pkgs.len() - 1
+    }
+
+    fn add_dir(mut ref self, dir: Str) {
+        let path = squeeze_slashes(dir);
+        if not is_dir(path) {
+            return;
+        }
+        for i in 0..self.dirs.len() {
+            if self.dirs[i] == path {
+                return;
+            }
+        }
+        self.dirs.push(path);
+    }
+
+    fn try_path(mut ref self, dir: Str, name: Str) -> Option[i64] {
+        let uninst = f"{dir}/{name}-uninstalled.pc";
+        if self.flags & F_NO_UNINSTALLED == 0 {
+            if let Some(text) = read_file(uninst) {
+                return match self.parse_pkg(uninst, text) {
+                    Some(p) => {
+                        let mut q = p;
+                        q.uninstalled = true;
+                        Some(self.add_pkg(q))
+                    }
+                    None => None,
+                };
+            }
+        }
+        let path = f"{dir}/{name}.pc";
+        match read_file(path) {
+            Some(text) => match self.parse_pkg(path, text) {
+                Some(p) => Some(self.add_pkg(p)),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    // pkgconf_pkg_find(): a .pc file named outright, a builtin, the
+    // cache, then each search directory in turn.
+    fn find(mut ref self, name: Str) -> Option[i64] {
+        if name.ends_with(".pc") {
+            if let Some(text) = read_file(name) {
+                if let Some(p) = self.parse_pkg(name, text) {
+                    let dir = p.pc_filedir.clone();
+                    let i = self.add_pkg(p);
+                    self.add_dir(dir);
+                    return Some(i);
+                }
+            }
+        }
+        for b in 0..self.builtins.len() {
+            let i = self.builtins[b];
+            if same_ignoring_case(self.pkgs[i].id, name) {
+                return Some(i);
+            }
+        }
+        for c in 0..self.cache.len() {
+            let i = self.cache[c];
+            if self.pkgs[i].id == name {
+                return Some(i);
+            }
+        }
+        let dirs = self.dirs.clone();
+        for d in 0..dirs.len() {
+            if let Some(i) = self.try_path(dirs[d], name) {
+                self.cache.insert(0, i);
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    // A package elsewhere that `Provides:` what the dependency asks for.
+    fn scan_providers(mut ref self, dep: ref Dep) -> Option[i64] {
+        let dirs = self.dirs.clone();
+        for d in 0..dirs.len() {
+            let names = list_dir(dirs[d]);
+            for k in 0..names.len() {
+                if not names[k].ends_with(".pc") {
+                    continue;
+                }
+                let path = f"{dirs[d]}/{names[k]}";
+                let text = match read_file(path) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let pkg = match self.parse_pkg(path, text) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let mut ok = false;
+                for v in 0..pkg.provides.len() {
+                    let prov = pkg.provides[v].clone();
+                    if prov.package == dep.package {
+                        ok = run_check(dep_check(dep.cmp, prov.cmp), prov.version.clone(), dep.version.clone()) and run_check(rule_check(dep.cmp, prov.cmp), dep.version.clone(), prov.version.clone());
+                        break;
+                    }
+                }
+                if ok {
+                    return Some(self.add_pkg(pkg));
+                }
+            }
+        }
+        None
+    }
+
+    // pkgconf_pkg_verify_dependency(): the package that answers dependency
+    // `k` of list `w` of package `p`, and what is wrong with it.
+    fn verify_dep(mut ref self, p: i64, w: DepList, k: i64) -> (Option[i64], i64) {
+        let dep = self.pkgs[p].dep_at(w, k);
+        if let Some(m) = dep.matched {
+            return (Some(m), 0);
+        }
+        let found = self.find(dep.package);
+        let pkg = match found {
+            Some(i) => i,
+            None => {
+                if self.flags & F_SKIP_PROVIDES != 0 {
+                    return (None, E_NOT_FOUND);
+                }
+                return match self.scan_providers(dep) {
+                    Some(i) => {
+                        self.pkgs[p].set_match(w, k, i);
+                        (Some(i), 0)
+                    }
+                    None => (None, E_NOT_FOUND),
+                };
+            }
+        };
+        if not satisfies(dep.cmp, self.pkgs[pkg].version.clone(), dep.version.clone()) {
+            return (Some(pkg), E_VERSION);
+        }
+        self.pkgs[p].set_match(w, k, pkg);
+        (Some(pkg), 0)
+    }
+
+    fn report(mut ref self, parent: i64, pkg: Option[i64], dep: ref Dep, eflags: i64) {
+        if eflags & E_NOT_FOUND != 0 {
+            if self.flags & F_SIMPLIFY_ERRORS == 0 and not self.sent_notice {
+                self.error(f"Package {dep.package} was not found in the pkg-config search path.\n");
+                self.error(f"Perhaps you should add the directory containing `{dep.package}.pc'\n");
+                self.error("to the PKG_CONFIG_PATH environment variable\n");
+                self.sent_notice = true;
+            }
+            let parent_id = self.pkgs[parent].id.clone();
+            self.error(f"Package '{dep.package}', required by '{parent_id}', not found\n");
+        } else if eflags & E_VERSION != 0 {
+            let v = dep.version.clone().unwrap_or("(null)".to_string());
+            self.error(f"Package dependency requirement '{dep.package} {cmp_name(dep.cmp)} {v}' could not be satisfied.\n");
+            if let Some(i) = pkg {
+                let have = self.pkgs[i].version.clone().unwrap_or("(null)".to_string());
+                self.error(f"Package '{dep.package}' has version '{have}', required version is '{cmp_name(dep.cmp)} {v}'\n");
+            }
+        }
+    }
+
+    // ---------------------------------------------------------- walking
+
+    fn visit(mut ref self, p: i64, mode: Visit) {
+        match mode {
+            Visit.Verify => {}
+            Visit.Cflags => {
+                for k in 0..self.pkgs[p].cflags.len() {
+                    copy_fragment(mut self.collected, self.pkgs[p].cflags[k], false);
+                }
+            }
+            Visit.CflagsPrivate => {
+                for k in 0..self.pkgs[p].cflags_private.len() {
+                    copy_fragment(mut self.collected, self.pkgs[p].cflags_private[k], true);
+                }
+            }
+            Visit.Libs => {
+                let is_private = self.flags & F_ITER_PRIVATE != 0;
+                for k in 0..self.pkgs[p].libs.len() {
+                    copy_fragment(mut self.collected, self.pkgs[p].libs[k], is_private);
+                }
+                if self.flags & F_MERGE_PRIVATE != 0 {
+                    for k in 0..self.pkgs[p].libs_private.len() {
+                        copy_fragment(mut self.collected, self.pkgs[p].libs_private[k], true);
+                    }
+                }
+            }
+            Visit.Digraph => {
+                let id = self.pkgs[p].id.clone();
+                self.out.push_str(f"\"{id}\" [fontname=Sans fontsize=8]\n");
+                for k in 0..self.pkgs[p].required.len() {
+                    let dep = self.pkgs[p].required[k].package.clone();
+                    self.out.push_str(f"\"{dep}\" -- \"{id}\" [fontname=Sans fontsize=8]\n");
+                }
+            }
+            Visit.Uninstalled => {
+                if self.pkgs[p].uninstalled {
+                    self.found_uninstalled = true;
+                }
+            }
+        }
+    }
+
+    fn walk_list(mut ref self, parent: i64, w: DepList, mode: Visit, depth: i64, skip: i64) -> i64 {
+        let mut eflags: i64 = 0;
+        let n = self.pkgs[parent].dep_count(w);
+        for k in 0..n {
+            let dep = self.pkgs[parent].dep_at(w, k);
+            if dep.package.len() == 0 {
+                continue;
+            }
+            let (found, local) = self.verify_dep(parent, w, k);
+            eflags = eflags | local;
+            if local != 0 {
+                self.report(parent, found, dep, local);
+                continue;
+            }
+            let pkg = match found {
+                Some(i) => i,
+                None => continue,
+            };
+            if self.pkgs[pkg].seen {
+                continue;
+            }
+            if skip != 0 and dep.flags & skip == skip {
+                continue;
+            }
+            self.pkgs[pkg].seen = true;
+            eflags = eflags | self.traverse(pkg, mode, depth - 1, skip);
+            self.pkgs[pkg].seen = false;
+        }
+        eflags
+    }
+
+    // A `Conflicts:` rule only fires against the package's own `Requires:`.
+    fn walk_conflicts(mut ref self, root: i64) -> i64 {
+        let nconf = self.pkgs[root].conflicts.len();
+        for ci in 0..nconf {
+            let rule = self.pkgs[root].conflicts[ci].clone();
+            if rule.package.len() == 0 {
+                continue;
+            }
+            let nreq = self.pkgs[root].required.len();
+            for ri in 0..nreq {
+                let req = self.pkgs[root].required[ri].package.clone();
+                if req.len() == 0 or req != rule.package {
+                    continue;
+                }
+                let (found, e) = self.verify_dep(root, DepList.Conflicts, ci);
+                if e == 0 {
+                    let i = found.unwrap_or(0);
+                    let version = self.pkgs[i].version.clone().unwrap_or("(null)".to_string());
+                    let theirs = self.pkgs[i].realname.clone().unwrap_or("(null)".to_string());
+                    let ours = self.pkgs[root].realname.clone().unwrap_or("(null)".to_string());
+                    let tail = match rule.version {
+                        Some(v) => f" {v}",
+                        None => String.new(),
+                    };
+                    self.error(f"Version '{version}' of '{theirs}' conflicts with '{ours}' due to satisfying conflict rule '{rule.package} {cmp_name(rule.cmp)}{tail}'.\n");
+                    if self.flags & F_SIMPLIFY_ERRORS == 0 {
+                        self.error("It may be possible to ignore this conflict and continue, try the\n");
+                        self.error("PKG_CONFIG_IGNORE_CONFLICTS environment variable.\n");
+                    }
+                    return E_CONFLICT;
+                }
+            }
+        }
+        0
+    }
+
+    // pkgconf_pkg_traverse(): the package first, then its conflicts, its
+    // `Requires:` and, when private dependencies are searched, its
+    // `Requires.private:`.
+    fn traverse(mut ref self, root: i64, mode: Visit, maxdepth: i64, skip: i64) -> i64 {
+        if maxdepth == 0 {
+            return 0;
+        }
+        if not self.pkgs[root].is_virtual or self.flags & F_SKIP_ROOT_VIRTUAL == 0 {
+            self.visit(root, mode);
+        }
+        if self.flags & F_SKIP_CONFLICTS == 0 {
+            let e = self.walk_conflicts(root);
+            if e != 0 {
+                return e;
+            }
+        }
+        let e = self.walk_list(root, DepList.Required, mode, maxdepth, skip);
+        if e != 0 {
+            return e;
+        }
+        if self.flags & F_SEARCH_PRIVATE != 0 {
+            self.flags = self.flags | F_ITER_PRIVATE;
+            let e2 = self.walk_list(root, DepList.Private, mode, maxdepth, skip);
+            self.flags = self.flags & ~F_ITER_PRIVATE;
+            if e2 != 0 {
+                return e2;
+            }
+        }
+        0
+    }
+
+    fn cflags(mut ref self, root: i64, maxdepth: i64) -> (Vec[Frag], i64) {
+        let skip = if self.flags & F_DONT_FILTER_INTERNAL == 0 { DEP_INTERNAL } else { 0 };
+        self.collected = Vec.new();
+        let mut e = self.traverse(root, Visit.Cflags, maxdepth, skip);
+        if e == 0 and self.flags & F_MERGE_PRIVATE != 0 {
+            e = self.traverse(root, Visit.CflagsPrivate, maxdepth, skip);
+        }
+        let frags = self.collected.clone();
+        self.collected = Vec.new();
+        let mut out: Vec[Frag] = Vec.new();
+        if e != 0 {
+            return (out, e);
+        }
+        for i in 0..frags.len() {
+            copy_fragment(mut out, frags[i], true);
+        }
+        (out, 0)
+    }
+
+    fn libs(mut ref self, root: i64, maxdepth: i64) -> (Vec[Frag], i64) {
+        self.collected = Vec.new();
+        let e = self.traverse(root, Visit.Libs, maxdepth, 0);
+        let frags = self.collected.clone();
+        self.collected = Vec.new();
+        if e != 0 {
+            return (Vec.new(), e);
+        }
+        (frags, 0)
+    }
+
+    fn has_system_dir(ref self, f: ref Frag) -> bool {
+        let dirs = if f.kind == b'L' {
+            self.filter_libdirs.clone()
+        } else if f.kind == b'I' {
+            self.filter_includedirs.clone()
+        } else {
+            return false;
+        };
+        let path = squeeze_slashes(f.data);
+        for i in 0..dirs.len() {
+            if dirs[i] == path {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+// ------------------------------------------------------------ the command
+
+// pkg-config's --flags.
+const P_CFLAGS_ONLY_I: i64 = 1 << 2;
+const P_CFLAGS_ONLY_OTHER: i64 = 1 << 3;
+const P_CFLAGS: i64 = P_CFLAGS_ONLY_I | P_CFLAGS_ONLY_OTHER;
+const P_LIBS_ONLY_LDPATH: i64 = 1 << 5;
+const P_LIBS_ONLY_LIBNAME: i64 = 1 << 6;
+const P_LIBS_ONLY_OTHER: i64 = 1 << 7;
+const P_LIBS: i64 = P_LIBS_ONLY_LDPATH | P_LIBS_ONLY_LIBNAME | P_LIBS_ONLY_OTHER;
+const P_MODVERSION: i64 = 1 << 8;
+const P_REQUIRES: i64 = 1 << 9;
+const P_REQUIRES_PRIVATE: i64 = 1 << 10;
+const P_VARIABLES: i64 = 1 << 11;
+const P_DIGRAPH: i64 = 1 << 12;
+const P_KEEP_SYSTEM_CFLAGS: i64 = 1 << 13;
+const P_KEEP_SYSTEM_LIBS: i64 = 1 << 14;
+const P_VERSION: i64 = 1 << 15;
+const P_ABOUT: i64 = 1 << 16;
+const P_ENV_ONLY: i64 = 1 << 17;
+const P_ERRORS_ON_STDOUT: i64 = 1 << 18;
+const P_SILENCE_ERRORS: i64 = 1 << 19;
+const P_IGNORE_CONFLICTS: i64 = 1 << 20;
+const P_STATIC: i64 = 1 << 21;
+const P_NO_UNINSTALLED: i64 = 1 << 22;
+const P_UNINSTALLED: i64 = 1 << 23;
+const P_LIST: i64 = 1 << 24;
+const P_PRINT_ERRORS: i64 = 1 << 26;
+const P_SIMULATE: i64 = 1 << 27;
+const P_NO_CACHE: i64 = 1 << 28;
+const P_PROVIDES: i64 = 1 << 29;
+const P_VALIDATE: i64 = 1 << 30;
+const P_LIST_PACKAGE_NAMES: i64 = 1 << 31;
+const P_NO_PROVIDES: i64 = 1 << 32;
+const P_PURE: i64 = 1 << 33;
+const P_PATH: i64 = 1 << 34;
+const P_DEFINE_PREFIX: i64 = 1 << 35;
+const P_DONT_DEFINE_PREFIX: i64 = 1 << 36;
+const P_DONT_RELOCATE_PATHS: i64 = 1 << 37;
+const P_DEBUG: i64 = 1 << 38;
+const P_SHORT_ERRORS: i64 = 1 << 39;
+const P_EXISTS: i64 = 1 << 40;
+const P_INTERNAL_CFLAGS: i64 = 1 << 42;
+const P_SHARED: i64 = 1 << 44;
+
+// A long option: its name, whether it takes a value, and either the
+// flags it sets or (with a value) the code main() switches on.
+#[derive(Clone)]
+struct LongOpt {
+    name: String,
+    takes_value: bool,
+    bits: i64,
+    code: i64,
+}
+
+fn flag_opt(name: Str, bits: i64) -> LongOpt {
+    LongOpt { name: name.to_string(), takes_value: false, bits: bits, code: 0 }
+}
+
+fn value_opt(name: Str, code: i64) -> LongOpt {
+    LongOpt { name: name.to_string(), takes_value: true, bits: 0, code: code }
+}
+
+fn long_options() -> Vec[LongOpt] {
+    let mut v: Vec[LongOpt] = Vec.new();
+    v.push(flag_opt("version", P_VERSION | P_PRINT_ERRORS));
+    v.push(flag_opt("about", P_ABOUT | P_PRINT_ERRORS));
+    v.push(value_opt("atleast-version", 2));
+    v.push(value_opt("atleast-pkgconfig-version", 3));
+    v.push(flag_opt("libs", P_LIBS | P_PRINT_ERRORS));
+    v.push(flag_opt("cflags", P_CFLAGS | P_PRINT_ERRORS));
+    v.push(flag_opt("modversion", P_MODVERSION | P_PRINT_ERRORS));
+    v.push(value_opt("variable", 7));
+    v.push(flag_opt("exists", P_EXISTS));
+    v.push(flag_opt("print-errors", P_PRINT_ERRORS));
+    v.push(flag_opt("short-errors", P_SHORT_ERRORS));
+    v.push(value_opt("maximum-traverse-depth", 11));
+    v.push(flag_opt("static", P_STATIC));
+    v.push(flag_opt("shared", P_SHARED));
+    v.push(flag_opt("pure", P_PURE));
+    v.push(flag_opt("print-requires", P_REQUIRES));
+    v.push(flag_opt("print-variables", P_VARIABLES | P_PRINT_ERRORS));
+    v.push(flag_opt("digraph", P_DIGRAPH));
+    v.push(flag_opt("env-only", P_ENV_ONLY));
+    v.push(flag_opt("print-requires-private", P_REQUIRES_PRIVATE));
+    v.push(flag_opt("cflags-only-I", P_CFLAGS_ONLY_I | P_PRINT_ERRORS));
+    v.push(flag_opt("cflags-only-other", P_CFLAGS_ONLY_OTHER | P_PRINT_ERRORS));
+    v.push(flag_opt("libs-only-L", P_LIBS_ONLY_LDPATH | P_PRINT_ERRORS));
+    v.push(flag_opt("libs-only-l", P_LIBS_ONLY_LIBNAME | P_PRINT_ERRORS));
+    v.push(flag_opt("libs-only-other", P_LIBS_ONLY_OTHER | P_PRINT_ERRORS));
+    v.push(flag_opt("uninstalled", P_UNINSTALLED));
+    v.push(flag_opt("no-uninstalled", P_NO_UNINSTALLED));
+    v.push(flag_opt("keep-system-cflags", P_KEEP_SYSTEM_CFLAGS));
+    v.push(flag_opt("keep-system-libs", P_KEEP_SYSTEM_LIBS));
+    v.push(value_opt("define-variable", 27));
+    v.push(value_opt("exact-version", 28));
+    v.push(value_opt("max-version", 29));
+    v.push(flag_opt("ignore-conflicts", P_IGNORE_CONFLICTS));
+    v.push(flag_opt("errors-to-stdout", P_ERRORS_ON_STDOUT));
+    v.push(flag_opt("silence-errors", P_SILENCE_ERRORS));
+    v.push(flag_opt("list-all", P_LIST | P_PRINT_ERRORS));
+    v.push(flag_opt("list-package-names", P_LIST_PACKAGE_NAMES | P_PRINT_ERRORS));
+    v.push(flag_opt("simulate", P_SIMULATE));
+    v.push(flag_opt("no-cache", P_NO_CACHE));
+    v.push(flag_opt("print-provides", P_PROVIDES));
+    v.push(flag_opt("no-provides", P_NO_PROVIDES));
+    v.push(flag_opt("debug", P_DEBUG | P_PRINT_ERRORS));
+    v.push(flag_opt("validate", P_VALIDATE | P_PRINT_ERRORS | P_ERRORS_ON_STDOUT));
+    v.push(value_opt("log-file", 40));
+    v.push(flag_opt("path", P_PATH));
+    v.push(value_opt("with-path", 42));
+    v.push(value_opt("prefix-variable", 43));
+    v.push(flag_opt("define-prefix", P_DEFINE_PREFIX));
+    v.push(value_opt("relocate", 45));
+    v.push(flag_opt("dont-define-prefix", P_DONT_DEFINE_PREFIX));
+    v.push(flag_opt("dont-relocate-paths", P_DONT_RELOCATE_PATHS));
+    v.push(value_opt("env", 48));
+    v.push(flag_opt("msvc-syntax", 1 << 41));
+    v.push(value_opt("fragment-filter", 50));
+    v.push(flag_opt("internal-cflags", P_INTERNAL_CFLAGS));
+    v.push(flag_opt("dump-personality", 1 << 43));
+    v.push(value_opt("personality", 53));
+    v
+}
+
+// What one command printed, and its exit status.
+struct Io {
+    out: String,
+    err: String,
+    status: i64,
+}
+
+fn getenv(env: ref Vec[(String, String)], name: Str) -> Option[String] {
+    for i in 0..env.len() {
+        let (k, v) = env[i].clone();
+        if k == name {
+            return Some(v);
+        }
+    }
+    None
+}
+
+// The rest of main(), once the options are read.
+impl PkgClient {
+    // pkgconf_queue_apply() and pkgconf_queue_validate(): a virtual
+    // package requiring everything asked for, checked, then handed to
+    // `then`.
+    fn world(mut ref self) -> Option[i64] {
+        let mut w = new_pkg("virtual:world");
+        w.realname = Some("virtual world package".to_string());
+        w.is_virtual = true;
+        for i in 0..self.queue.len() {
+            let d = self.expand(w.vars, self.queue[i]);
+            parse_deps(mut w.required, d, 0);
+        }
+        if w.required.len() == 0 {
+            return None;
+        }
+        let i = self.add_pkg(w);
+        let depth = if self.maxdepth == 0 { -1 } else { self.maxdepth };
+        if self.traverse(i, Visit.Verify, depth, 0) != 0 {
+            return None;
+        }
+        Some(i)
+    }
+
+    fn depth(ref self) -> i64 {
+        if self.maxdepth == 0 { -1 } else { self.maxdepth }
+    }
+
+    // The packages the world matched, in the order asked for.
+    fn roots(ref self, w: i64) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        let world = self.pkgs[w].required.clone();
+        for k in 0..world.len() {
+            if let Some(m) = world[k].matched {
+                out.push(m);
+            }
+        }
+        out
+    }
+
+    fn keep_cflag(ref self, f: ref Frag) -> bool {
+        if self.want & P_KEEP_SYSTEM_CFLAGS == 0 and self.has_system_dir(f) {
+            return false;
+        }
+        if let Some(filter) = self.fragment_filter {
+            if f.kind == 0 or not filter.bytes().contains(f.kind) {
+                return false;
+            }
+        }
+        let got = if f.kind == b'I' { P_CFLAGS_ONLY_I } else { P_CFLAGS_ONLY_OTHER };
+        self.want & got != 0
+    }
+
+    fn keep_lib(ref self, f: ref Frag) -> bool {
+        if self.want & P_KEEP_SYSTEM_LIBS == 0 and self.has_system_dir(f) {
+            return false;
+        }
+        if let Some(filter) = self.fragment_filter {
+            if f.kind == 0 or not filter.bytes().contains(f.kind) {
+                return false;
+            }
+        }
+        let got = if f.kind == b'L' {
+            P_LIBS_ONLY_LDPATH
+        } else if f.kind == b'l' {
+            P_LIBS_ONLY_LIBNAME
+        } else {
+            P_LIBS_ONLY_OTHER
+        };
+        self.want & got != 0
+    }
+
+    // The rendered flags, or None when the walk failed.
+    fn flags_text(mut ref self, w: i64, libs: bool) -> Option[String] {
+        let depth = self.depth();
+        let (list, e) = if libs { self.libs(w, depth) } else { self.cflags(w, depth) };
+        if e != 0 {
+            return None;
+        }
+        let mut kept: Vec[Frag] = Vec.new();
+        for i in 0..list.len() {
+            let keep = if libs { self.keep_lib(list[i]) } else { self.keep_cflag(list[i]) };
+            if keep {
+                copy_fragment(mut kept, list[i], true);
+            }
+        }
+        Some(render(kept))
+    }
+
+    fn print_deps(mut ref self, deps: ref Vec[Dep]) {
+        for i in 0..deps.len() {
+            let line = dep_string(deps[i]);
+            self.out.push_str(f"{line}\n");
+        }
+    }
+
+    // Runs the queue through each action pkg-config was asked for; the
+    // exit status.
+    fn actions(mut ref self, env_prefix: Option[String], variable: Option[String], want_client: i64) -> i64 {
+        if self.world().is_none() {
+            return 1;
+        }
+        if self.want & P_VALIDATE != 0 {
+            return 0;
+        }
+        if self.want & P_UNINSTALLED != 0 {
+            self.found_uninstalled = false;
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            let depth = self.depth();
+            self.traverse(w, Visit.Uninstalled, depth, 0);
+            return if self.found_uninstalled { 0 } else { 1 };
+        }
+        if let Some(prefix) = env_prefix {
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            for ch in prefix.bytes() {
+                if not is_alnum(ch) {
+                    return 1;
+                }
+            }
+            match self.flags_text(w, false) {
+                Some(t) => {
+                    if t.len() > 0 {
+                        self.out.push_str(f"{prefix}_CFLAGS='{t}'\n");
+                    }
+                }
+                None => return 1,
+            }
+            match self.flags_text(w, true) {
+                Some(t) => {
+                    if t.len() > 0 {
+                        self.out.push_str(f"{prefix}_LIBS='{t}'\n");
+                    }
+                }
+                None => return 1,
+            }
+            self.want = 0;
+        }
+        if self.want & P_PROVIDES != 0 {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            let roots = self.roots(w);
+            for r in roots {
+                let deps = self.pkgs[r].provides.clone();
+                self.print_deps(deps);
+            }
+        }
+        if self.want & P_DIGRAPH != 0 {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            self.out.push_str("graph deptree {\n");
+            self.out.push_str("edge [color=blue len=7.5 fontname=Sans fontsize=8]\n");
+            self.out.push_str("node [fontname=Sans fontsize=8]\n");
+            let depth = self.depth();
+            if self.traverse(w, Visit.Digraph, depth, 0) != 0 {
+                return 1;
+            }
+            self.out.push_str("}\n");
+        }
+        if self.want & P_MODVERSION != 0 {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            for r in self.roots(w) {
+                if let Some(v) = self.pkgs[r].version.clone() {
+                    self.out.push_str(f"{v}\n");
+                }
+            }
+        }
+        if self.want & P_PATH != 0 {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            self.flags = want_client | F_SKIP_ROOT_VIRTUAL;
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            for r in self.roots(w) {
+                if let Some(f) = self.pkgs[r].filename.clone() {
+                    self.out.push_str(f"{f}\n");
+                }
+            }
+        }
+        if self.want & P_VARIABLES != 0 {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            for r in self.roots(w) {
+                let vars = self.pkgs[r].vars.clone();
+                for t in vars {
+                    self.out.push_str(f"{t.key}\n");
+                }
+            }
+        }
+        if let Some(name) = variable {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            self.flags = want_client | F_SKIP_ROOT_VIRTUAL;
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            let roots = self.roots(w);
+            for i in 0..roots.len() {
+                if i > 0 {
+                    self.out.push_str(" ");
+                }
+                let vars = self.pkgs[roots[i]].vars.clone();
+                if let Some(v) = self.find_var(vars, name) {
+                    self.out.push_str(v);
+                }
+            }
+            self.out.push_str("\n");
+        }
+        if self.want & P_REQUIRES != 0 {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            for r in self.roots(w) {
+                let deps = self.pkgs[r].required.clone();
+                self.print_deps(deps);
+            }
+        }
+        if self.want & P_REQUIRES_PRIVATE != 0 {
+            self.want = self.want & ~(P_CFLAGS | P_LIBS);
+            self.flags = want_client | F_SEARCH_PRIVATE;
+            let w = match self.world() {
+                Some(w) => w,
+                None => return 1,
+            };
+            for r in self.roots(w) {
+                let deps = self.pkgs[r].requires_private.clone();
+                self.print_deps(deps);
+            }
+            self.flags = want_client;
+        }
+        if self.want & P_CFLAGS != 0 {
+            self.flags = want_client | F_SEARCH_PRIVATE;
+            let text = match self.world() {
+                Some(w) => self.flags_text(w, false),
+                None => None,
+            };
+            match text {
+                Some(t) => self.out.push_str(t),
+                None => {
+                    self.out.push_str("\n");
+                    return 1;
+                }
+            }
+            self.flags = want_client;
+        }
+        if self.want & P_LIBS != 0 {
+            let text = match self.world() {
+                Some(w) => self.flags_text(w, true),
+                None => None,
+            };
+            match text {
+                Some(t) => self.out.push_str(t),
+                None => {
+                    self.out.push_str("\n");
+                    return 1;
+                }
+            }
+        }
+        if self.want & (P_CFLAGS | P_LIBS) != 0 {
+            self.out.push_str("\n");
+        }
+        0
+    }
+}
+
+fn io_of(c: ref PkgClient, status: i64) -> Io {
+    Io { out: c.out.clone(), err: c.err.clone(), status: status }
+}
+
+// One pkg-config command line, run in data/ with `env` as its
+// environment.
+fn pkg_config(env: ref Vec[(String, String)], argv: ref Vec[String]) -> Io {
+    let opts = long_options();
+    let mut c = new_client();
+    let mut want: i64 = 0;
+    let mut operands: Vec[String] = Vec.new();
+    let mut required_pkgconfig_version: Option[String] = None;
+    let mut required_version: Option[String] = None;
+    let mut exact_version: Option[String] = None;
+    let mut max_version: Option[String] = None;
+    let mut variable: Option[String] = None;
+    let mut env_prefix: Option[String] = None;
+    let mut fragment_filter: Option[String] = None;
+    let mut with_path: Vec[String] = Vec.new();
+    let mut maxdepth: i64 = 2000;
+    let mut i: i64 = 0;
+    while i < argv.len() {
+        let a = argv[i].clone();
+        i += 1;
+        if a == "--" {
+            while i < argv.len() {
+                operands.push(argv[i].clone());
+                i += 1;
+            }
+            break;
+        }
+        if not a.starts_with("-") or a == "-" {
+            operands.push(a);
+            continue;
+        }
+        // getopt_long_only(): one dash or two, and any unique prefix.
+        let body = if a.starts_with("--") { a[2..].to_string() } else { a[1..].to_string() };
+        let (name, value) = match body.find("=") {
+            Some(k) => (body[..k].to_string(), Some(body[k + 1..].to_string())),
+            None => (body.clone(), None),
+        };
+        let mut found: i64 = -1;
+        let mut ambiguous = false;
+        for k in 0..opts.len() {
+            if not opts[k].name.starts_with(name) {
+                continue;
+            }
+            if opts[k].name.len() == name.len() {
+                found = k;
+                ambiguous = false;
+                break;
+            }
+            if found == -1 {
+                found = k;
+            } else {
+                ambiguous = true;
+            }
+        }
+        if ambiguous {
+            c.err.push_str(f"pkgconf: ambiguous option -- {name}\n");
+            return io_of(c, 1);
+        }
+        if found == -1 {
+            c.err.push_str(f"pkgconf: unknown option -- {body}\n");
+            return io_of(c, 1);
+        }
+        let o = opts[found].clone();
+        if not o.takes_value {
+            if value.is_some() {
+                c.err.push_str(f"pkgconf: option doesn't take an argument -- {name}\n");
+                return io_of(c, 1);
+            }
+            want = want | o.bits;
+            continue;
+        }
+        let arg = match value {
+            Some(v) => v,
+            None => {
+                if i >= argv.len() {
+                    c.err.push_str(f"pkgconf: option requires an argument -- {body}\n");
+                    return io_of(c, 1);
+                }
+                i += 1;
+                argv[i - 1].clone()
+            }
+        };
+        if o.code == 2 {
+            required_version = Some(arg);
+        } else if o.code == 3 {
+            required_pkgconfig_version = Some(arg);
+        } else if o.code == 7 {
+            variable = Some(arg);
+        } else if o.code == 11 {
+            maxdepth = i64.parse(arg).unwrap_or(0);
+        } else if o.code == 27 {
+            if let Some(k) = arg.find("=") {
+                c.add_global(arg[..k], arg[k + 1..]);
+            }
+        } else if o.code == 28 {
+            exact_version = Some(arg);
+        } else if o.code == 29 {
+            max_version = Some(arg);
+        } else if o.code == 42 {
+            with_path.push(arg);
+        } else if o.code == 48 {
+            env_prefix = Some(arg);
+        } else if o.code == 50 {
+            fragment_filter = Some(arg);
+        }
+    }
+    c.add_global("pc_sysrootdir", "/");
+    c.add_global("pc_top_builddir", "$(top_builddir)");
+
+    if want & P_PRINT_ERRORS == 0 {
+        want = want | P_SILENCE_ERRORS;
+    }
+    if want & P_VALIDATE != 0 or want & P_DEBUG != 0 {
+        c.warnings = true;
+    }
+    if want & P_VERSION != 0 {
+        c.out.push_str(f"{PKGCONF_VERSION}\n");
+        return io_of(c, 0);
+    }
+    let mut flags: i64 = 0;
+    if want & P_SHORT_ERRORS != 0 {
+        flags = flags | F_SIMPLIFY_ERRORS;
+    }
+    if want & P_ERRORS_ON_STDOUT != 0 {
+        c.errors_to = 1;
+    }
+    if want & P_SILENCE_ERRORS != 0 {
+        c.errors_to = 0;
+    }
+    if want & P_IGNORE_CONFLICTS != 0 or getenv(env, "PKG_CONFIG_IGNORE_CONFLICTS").is_some() {
+        flags = flags | F_SKIP_CONFLICTS;
+    }
+    if want & P_STATIC != 0 {
+        flags = flags | F_SEARCH_PRIVATE | F_MERGE_PRIVATE;
+    }
+    if want & P_EXISTS != 0 {
+        flags = flags | F_SEARCH_PRIVATE;
+    }
+    if want & P_SHARED != 0 {
+        flags = flags & ~(F_SEARCH_PRIVATE | F_MERGE_PRIVATE);
+    }
+    if want & P_PURE != 0 or getenv(env, "PKG_CONFIG_PURE_DEPGRAPH").is_some() {
+        flags = flags & ~F_MERGE_PRIVATE;
+    }
+    if want & P_DEFINE_PREFIX != 0 {
+        flags = flags | F_REDEFINE_PREFIX;
+    }
+    if want & P_NO_UNINSTALLED != 0 or getenv(env, "PKG_CONFIG_DISABLE_UNINSTALLED").is_some() {
+        flags = flags | F_NO_UNINSTALLED;
+    }
+    if want & P_NO_PROVIDES != 0 {
+        flags = flags | F_SKIP_PROVIDES;
+    }
+    if want & P_DONT_DEFINE_PREFIX != 0 or getenv(env, "PKG_CONFIG_DONT_DEFINE_PREFIX").is_some() {
+        flags = flags & ~F_REDEFINE_PREFIX;
+    }
+    if want & P_INTERNAL_CFLAGS != 0 {
+        flags = flags | F_DONT_FILTER_INTERNAL;
+    }
+    if getenv(env, "PKG_CONFIG_ALLOW_SYSTEM_CFLAGS").is_some() {
+        want = want | P_KEEP_SYSTEM_CFLAGS;
+    }
+    if getenv(env, "PKG_CONFIG_ALLOW_SYSTEM_LIBS").is_some() {
+        want = want | P_KEEP_SYSTEM_LIBS;
+    }
+    c.flags = flags;
+
+    // The search path: PKG_CONFIG_PATH, then PKG_CONFIG_LIBDIR or (only
+    // when that is unset) --with-path and the built-in path.
+    if let Some(p) = getenv(env, "PKG_CONFIG_PATH") {
+        for d in split_path(p) {
+            c.add_dir(d);
+        }
+    }
+    match getenv(env, "PKG_CONFIG_LIBDIR") {
+        Some(p) => {
+            for d in split_path(p) {
+                c.add_dir(d);
+            }
+        }
+        None => {
+            for d in with_path {
+                c.add_dir(d);
+            }
+            for d in split_path(DEFAULT_PATH) {
+                c.add_dir(d);
+            }
+        }
+    }
+
+    if let Some(v) = required_pkgconfig_version {
+        let ok = compare_version(Some(PKGCONF_VERSION.to_string()), Some(v)) >= 0;
+        return io_of(c, if ok { 0 } else { 1 });
+    }
+    if want & P_LIST != 0 or want & P_LIST_PACKAGE_NAMES != 0 {
+        let mut lines: Vec[String] = Vec.new();
+        let dirs = c.dirs.clone();
+        for d in dirs {
+            for name in list_dir(d) {
+                if not name.ends_with(".pc") {
+                    continue;
+                }
+                let path = f"{d}/{name}";
+                let text = match read_file(path) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                if let Some(p) = c.parse_pkg(path, text) {
+                    if want & P_LIST != 0 {
+                        let realname = p.realname.clone().unwrap_or(String.new());
+                        let description = p.description.clone().unwrap_or(String.new());
+                        lines.push(f"{p.id:<30} {realname} - {description}\n");
+                    } else {
+                        lines.push(f"{p.id}\n");
+                    }
+                }
+            }
+        }
+        lines.sort();
+        for l in lines {
+            c.out.push_str(l);
+        }
+        return io_of(c, 0);
+    }
+
+    // --atleast-version, --exact-version and --max-version look at the
+    // first package named that exists.
+    let mut check: i64 = 0;
+    let mut wanted = String.new();
+    if let Some(v) = required_version {
+        check = 1;
+        wanted = v;
+    } else if let Some(v) = exact_version {
+        check = 2;
+        wanted = v;
+    } else if let Some(v) = max_version {
+        check = 3;
+        wanted = v;
+    }
+    if check != 0 {
+        let mut deps: Vec[Dep] = Vec.new();
+        for o in operands {
+            parse_deps(mut deps, o, 0);
+        }
+        for d in deps {
+            let p = match c.find(d.package) {
+                Some(p) => p,
+                None => {
+                    if want & P_PRINT_ERRORS != 0 {
+                        c.error(f"Package '{d.package}' was not found\n");
+                    }
+                    return io_of(c, 1);
+                }
+            };
+            let r = compare_version(c.pkgs[p].version.clone(), Some(wanted.clone()));
+            if (check == 1 and r >= 0) or (check == 2 and r == 0) or (check == 3 and r <= 0) {
+                return io_of(c, 0);
+            }
+        }
+        return io_of(c, 1);
+    }
+
+    // The queue: a name followed by an operator takes the two words
+    // after it as its version rule.
+    let mut queue: Vec[String] = Vec.new();
+    let mut k: i64 = 0;
+    while k < operands.len() {
+        let package = operands[k].trim_start().to_string();
+        if package.len() == 0 {
+            k += 1;
+            continue;
+        }
+        if k + 1 < operands.len() and operands[k + 1].len() > 0 and is_operator(operands[k + 1].bytes()[0]) {
+            let version = if k + 2 < operands.len() { operands[k + 2].clone() } else { "(null)".to_string() };
+            queue.push(f"{package} {operands[k + 1]} {version}");
+            k += 3;
+        } else {
+            queue.push(package);
+            k += 1;
+        }
+    }
+    if queue.len() == 0 {
+        c.err.push_str("Please specify at least one package name on the command line.\n");
+        return io_of(c, 1);
+    }
+    c.want = want;
+    c.fragment_filter = fragment_filter;
+    c.maxdepth = maxdepth;
+    c.queue = queue;
+    let status = c.actions(env_prefix, variable, flags);
+    io_of(c, status)
+}
+
+// ------------------------------------------------------------ the data
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("Name: Bad Quote\n");
+    s.push_str("Description: An unterminated quote in Cflags\n");
+    s.push_str("Version: 1\n");
+    s.push_str("Cflags: -DNAME=\"unterminated -I/opt/bq\n");
+    s.push_str("Libs: -lbq\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("Name: cycle-a\n");
+    s.push_str("Description: Half of a dependency cycle\n");
+    s.push_str("Version: 1\n");
+    s.push_str("Requires: cycle-b\n");
+    s.push_str("Libs: -lcycle-a\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("Name: cycle-b\n");
+    s.push_str("Description: The other half\n");
+    s.push_str("Version: 1\n");
+    s.push_str("Requires: cycle-a\n");
+    s.push_str("Libs: -lcycle-b\n");
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("Name: No Version\n");
+    s.push_str("Description: Forgot its Version field\n");
+    s.push_str("Libs: -lnoversion\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/spaced  \n");
+    s.push_str(" Name: Spaced\n");
+    s.push_str("Description: Whitespace in odd places\n");
+    s.push_str("Libs.private: -lm\t\n");
+    s.push_str("Version: 1.2 beta\n");
+    s.push_str("Libs: -L${prefix}/lib -lspaced\n");
+    s
+}
+
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/home/dev/acme/build\n");
+    s.push_str("libdir=${prefix}/src\n");
+    s.push_str("includedir=/home/dev/acme/include\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Core\n");
+    s.push_str("Description: Acme application core, from the build tree\n");
+    s.push_str("Version: 2.5.0-dev\n");
+    s.push_str("Requires: zlib >= 1.2.11\n");
+    s.push_str("Libs: -L${libdir} -lacme-core\n");
+    s.push_str("Cflags: -I${includedir} -I${prefix}/generated\n");
+    s
+}
+
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/srv/acme-staging\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Core\n");
+    s.push_str("Description: A staged install that the uninstalled file shadows\n");
+    s.push_str("Version: 2.4.9\n");
+    s.push_str("Libs: -L${prefix}/lib -lacme-core\n");
+    s
+}
+
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("libdir=${prefix}/lib\n");
+    s.push_str("plugindir=${libdir}/acme/plugins\n");
+    s.push_str("here=${pcfiledir}\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Plugins\n");
+    s.push_str("Description: The plugin SDK, relocatable with its prefix\n");
+    s.push_str("Version: 2.4.1\n");
+    s.push_str("Requires: acme-core\n");
+    s.push_str("Libs: -L${libdir} -lacme-plugins\n");
+    s.push_str("Cflags: -I${prefix}/include/acme-2/plugins -DPLUGIN_DIR=\\\"${plugindir}\\\"\n");
+    s
+}
+
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("\n");
+    s.push_str("Name: acme-cli\n");
+    s.push_str("Description: Acme's command-line tool, as a dependency for plugins\n");
+    s.push_str("Version: 2.4.1\n");
+    s.push_str("Requires: acme-core > 2, acme-core < 3\n");
+    s.push_str("Requires.internal: acme-net\n");
+    s
+}
+
+fn file_9() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Compat\n");
+    s.push_str("Description: Bridges the old API, but not to a version below 2\n");
+    s.push_str("Version: 2.4.1\n");
+    s.push_str("Requires: acme-legacy, acme-core\n");
+    s.push_str("Conflicts: acme-legacy < 2\n");
+    s.push_str("Libs: -L${prefix}/lib -lacme-compat\n");
+    s
+}
+
+fn file_10() -> String {
+    let mut s = String.new();
+    s.push_str("# Acme's core library, installed under /opt/acme.\n");
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${exec_prefix}/lib\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("plugindir=${libdir}/acme/plugins\n");
+    s.push_str("greeting=\"hello from acme\"\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Core\n");
+    s.push_str("Description: Acme application core\n");
+    s.push_str("URL: https://acme.example/core\n");
+    s.push_str("Version: 2.4.1\n");
+    s.push_str("Requires: zlib >= 1.2.11\n");
+    s.push_str("Requires.private: libssl >= 3.0, libcrypto\n");
+    s.push_str("Libs: -L${libdir} -lacme-core\n");
+    s.push_str("Libs.private: -lm -ldl\n");
+    s.push_str("Cflags: -I${includedir}/acme-2 -DACME_API=2 -DACME_GREETING=\\\"${greeting}\\\"\n");
+    s
+}
+
+fn file_11() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("libdir=${prefix}/lib\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme GUI\n");
+    s.push_str("Description: Acme widgets over pixman and fontconfig\n");
+    s.push_str("Version: 2.5.0~beta1\n");
+    s.push_str("Requires: acme-net, pixman-1 >= 0.40\n");
+    s.push_str("Requires.private: fontconfig, libpng16\n");
+    s.push_str("Conflicts: acme-legacy < 2\n");
+    s.push_str("Libs: -L${libdir} -lacme-gui\n");
+    s.push_str("Cflags: -I${includedir}/acme-2/gui -isystem ${includedir}/acme-2/compat\n");
+    s
+}
+
+fn file_12() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Image\n");
+    s.push_str("Description: Image loading for Acme\n");
+    s.push_str("Version: 2.4.1\n");
+    s.push_str("Requires: libjpeg >= 8, libpng16\n");
+    s.push_str("Libs: -L${prefix}/lib -lacme-image\n");
+    s.push_str("Cflags: -I${prefix}/include/acme-2\n");
+    s
+}
+
+fn file_13() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme-legacy\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Legacy\n");
+    s.push_str("Description: The old Acme API\n");
+    s.push_str("Version: 1.9.3\n");
+    s.push_str("Libs: -L${prefix}/lib -lacme\n");
+    s.push_str("Cflags: -I${prefix}/include\n");
+    s
+}
+
+fn file_14() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("libdir=${prefix}/lib\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Net\n");
+    s.push_str("Description: Acme networking layer\n");
+    s.push_str("Version: 2.4.1\n");
+    s.push_str("Requires: acme-core = 2.4.1, glib-2.0 >= 2.70\n");
+    s.push_str("Requires.private: gio-2.0\n");
+    s.push_str("Libs: -L${libdir} -lacme-net -Wl,--as-needed\n");
+    s.push_str("Libs.private: -lresolv -pthread\n");
+    s.push_str("Cflags: -I${includedir}/acme-2 -pthread\n");
+    s
+}
+
+fn file_15() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Old Client\n");
+    s.push_str("Description: Wants a GLib that does not exist yet\n");
+    s.push_str("Version: 0.9\n");
+    s.push_str("Requires: glib-2.0 >= 3.0\n");
+    s.push_str("Libs: -lacme-old\n");
+    s
+}
+
+fn file_16() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/opt/acme\n");
+    s.push_str("\n");
+    s.push_str("Name: Acme Tools\n");
+    s.push_str("Description: Missing a dependency\n");
+    s.push_str("Version: 2.4.1\n");
+    s.push_str("Requires: acme-core, libfrobnicate >= 1.0\n");
+    s.push_str("Libs: -lacme-tools\n");
+    s
+}
+
+fn file_17() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=/usr\n");
+    s.push_str("libdir=/usr/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=/usr/include\n");
+    s.push_str("\n");
+    s.push_str("Name: blkid\n");
+    s.push_str("Description: Block device id library\n");
+    s.push_str("Version: 2.39.3\n");
+    s.push_str("Cflags: -I${includedir}/blkid\n");
+    s.push_str("Libs: -L${libdir} -lblkid\n");
+    s
+}
+
+fn file_18() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: expat\n");
+    s.push_str("Version: 2.6.1\n");
+    s.push_str("Description: expat XML parser\n");
+    s.push_str("URL: https://libexpat.github.io/\n");
+    s.push_str("Libs: -L${libdir} -lexpat\n");
+    s.push_str("Libs.private: -lm\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s.push_str("Cflags.private: -DXML_STATIC\n");
+    s
+}
+
+fn file_19() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("sysconfdir=/etc\n");
+    s.push_str("localstatedir=/var\n");
+    s.push_str("PACKAGE=fontconfig\n");
+    s.push_str("confdir=${sysconfdir}/fonts\n");
+    s.push_str("cachedir=${localstatedir}/cache/${PACKAGE}\n");
+    s.push_str("\n");
+    s.push_str("Name: Fontconfig\n");
+    s.push_str("Description: Font configuration and customization library\n");
+    s.push_str("Version: 2.15.0\n");
+    s.push_str("Requires:  freetype2 >= 21.0.15\n");
+    s.push_str("Requires.private:  expat\n");
+    s.push_str("Libs: -L${libdir} -lfontconfig\n");
+    s.push_str("Libs.private:  \n");
+    s.push_str("Cflags: -I${includedir}  \n");
+    s
+}
+
+fn file_20() -> String {
+    let mut s = String.new();
+    s.push_str("Name: Frameworks\n");
+    s.push_str("Description: macOS-style framework flags\n");
+    s.push_str("Version: 3\n");
+    s.push_str("Libs: -framework CoreFoundation -lobjc -framework Security -framework CoreFoundation -Wl,-rpath,/opt/fw/lib\n");
+    s.push_str("Cflags: -F/opt/fw -fobjc-arc -std=c11\n");
+    s
+}
+
+fn file_21() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=/usr\n");
+    s.push_str("libdir=/usr/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=/usr/include\n");
+    s.push_str("\n");
+    s.push_str("Name: FreeType 2\n");
+    s.push_str("URL: https://freetype.org\n");
+    s.push_str("Description: A free, high-quality, and portable font engine.\n");
+    s.push_str("Version: 26.1.20\n");
+    s.push_str("Requires: \n");
+    s.push_str("Requires.private: zlib, libpng, libbrotlidec\n");
+    s.push_str("Libs: -L/usr/lib/x86_64-linux-gnu -lfreetype\n");
+    s.push_str("Libs.private: -lbz2\n");
+    s.push_str("Cflags: -I${includedir}/freetype2\n");
+    s
+}
+
+fn file_22() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("bindir=${prefix}/bin\n");
+    s.push_str("datadir=${prefix}/share\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("\n");
+    s.push_str("schemasdir=${datadir}/glib-2.0/schemas\n");
+    s.push_str("dtdsdir=${datadir}/glib-2.0/dtds\n");
+    s.push_str("giomoduledir=${libdir}/gio/modules\n");
+    s.push_str("gio=${bindir}/gio\n");
+    s.push_str("gio_querymodules=${libdir}/glib-2.0/gio-querymodules\n");
+    s.push_str("glib_compile_schemas=${libdir}/glib-2.0/glib-compile-schemas\n");
+    s.push_str("glib_compile_resources=${bindir}/glib-compile-resources\n");
+    s.push_str("gdbus=${bindir}/gdbus\n");
+    s.push_str("gdbus_codegen=${bindir}/gdbus-codegen\n");
+    s.push_str("gresource=${bindir}/gresource\n");
+    s.push_str("gsettings=${bindir}/gsettings\n");
+    s.push_str("\n");
+    s.push_str("Name: GIO\n");
+    s.push_str("Description: glib I/O library\n");
+    s.push_str("Version: 2.80.0\n");
+    s.push_str("Requires: glib-2.0, gobject-2.0\n");
+    s.push_str("Requires.private: gmodule-no-export-2.0, zlib, mount >= 2.23, libselinux >= 2.2\n");
+    s.push_str("Libs: -L${libdir} -lgio-2.0\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_23() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("bindir=${prefix}/bin\n");
+    s.push_str("datadir=${prefix}/share\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("\n");
+    s.push_str("glib_genmarshal=${bindir}/glib-genmarshal\n");
+    s.push_str("gobject_query=${bindir}/gobject-query\n");
+    s.push_str("glib_mkenums=${bindir}/glib-mkenums\n");
+    s.push_str("glib_valgrind_suppressions=${datadir}/glib-2.0/valgrind/glib.supp\n");
+    s.push_str("\n");
+    s.push_str("Name: GLib\n");
+    s.push_str("Description: C Utility Library\n");
+    s.push_str("Version: 2.80.0\n");
+    s.push_str("Requires.private: libpcre2-8 >= 10.32\n");
+    s.push_str("Libs: -L${libdir} -lglib-2.0\n");
+    s.push_str("Libs.private: -lm -pthread\n");
+    s.push_str("Cflags: -I${includedir}/glib-2.0 -I${libdir}/glib-2.0/include\n");
+    s
+}
+
+fn file_24() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("\n");
+    s.push_str("gmodule_supported=true\n");
+    s.push_str("\n");
+    s.push_str("Name: GModule\n");
+    s.push_str("Description: Dynamic module loader for GLib\n");
+    s.push_str("Version: 2.80.0\n");
+    s.push_str("Requires: glib-2.0\n");
+    s.push_str("Libs: -L${libdir} -lgmodule-2.0 -pthread\n");
+    s.push_str("Cflags: -I${includedir} -pthread\n");
+    s
+}
+
+fn file_25() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("\n");
+    s.push_str("Name: GObject\n");
+    s.push_str("Description: GLib Type, Object, Parameter and Signal Library\n");
+    s.push_str("Version: 2.80.0\n");
+    s.push_str("Requires: glib-2.0\n");
+    s.push_str("Requires.private: libffi >=  3.0.0\n");
+    s.push_str("Libs: -L${libdir} -lgobject-2.0\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_26() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: libjpeg-turbo\n");
+    s.push_str("Description: A SIMD-accelerated JPEG codec that provides the libjpeg API\n");
+    s.push_str("Version: 2.1.5\n");
+    s.push_str("Provides: libjpeg = 8.2.2\n");
+    s.push_str("Libs: -L${libdir} -ljpeg\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_27() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=/usr\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: libbrotlicommon\n");
+    s.push_str("URL: https://github.com/google/brotli\n");
+    s.push_str("Description: Brotli common dictionary library\n");
+    s.push_str("Version: 1.1.0\n");
+    s.push_str("Libs: -L${libdir} -lbrotlicommon\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_28() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=/usr\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: libbrotlidec\n");
+    s.push_str("URL: https://github.com/google/brotli\n");
+    s.push_str("Description: Brotli decoder library\n");
+    s.push_str("Version: 1.1.0\n");
+    s.push_str("Libs: -L${libdir} -lbrotlidec\n");
+    s.push_str("Requires.private: libbrotlicommon >= 1.1.0\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_29() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${exec_prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("enginesdir=${libdir}/engines-3\n");
+    s.push_str("modulesdir=${libdir}/ossl-modules\n");
+    s.push_str("\n");
+    s.push_str("Name: OpenSSL-libcrypto\n");
+    s.push_str("Description: OpenSSL cryptography library\n");
+    s.push_str("Version: 3.0.13\n");
+    s.push_str("Libs: -L${libdir} -lcrypto\n");
+    s.push_str("Libs.private: -ldl -pthread \n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_30() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${exec_prefix}/lib\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: libffi\n");
+    s.push_str("Description: Library supporting Foreign Function Interfaces\n");
+    s.push_str("Version: 3.4.6\n");
+    s.push_str("Libs: -lffi\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_31() -> String {
+    let mut s = String.new();
+    s.push_str("#\n");
+    s.push_str("# Author: Lasse Collin\n");
+    s.push_str("#\n");
+    s.push_str("# This file has been put into the public domain.\n");
+    s.push_str("# You can do whatever you want with this file.\n");
+    s.push_str("#\n");
+    s.push_str("\n");
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=/usr\n");
+    s.push_str("libdir=/usr/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=/usr/include\n");
+    s.push_str("\n");
+    s.push_str("Name: liblzma\n");
+    s.push_str("Description: General purpose data compression library\n");
+    s.push_str("URL: https://tukaani.org/xz/\n");
+    s.push_str("Version: 5.4.5\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s.push_str("Cflags.private: -DLZMA_API_STATIC\n");
+    s.push_str("Libs: -L${libdir} -llzma\n");
+    s.push_str("Libs.private: -pthread -lpthread\n");
+    s
+}
+
+fn file_32() -> String {
+    let mut s = String.new();
+    s.push_str("# Package Information for pkg-config\n");
+    s.push_str("\n");
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: libpcre2-8\n");
+    s.push_str("Description: PCRE2 - Perl compatible regular expressions C library (2nd API) with 8 bit character support\n");
+    s.push_str("Version: 10.42\n");
+    s.push_str("Libs: -L${libdir} -lpcre2-8\n");
+    s.push_str("Libs.private:  \n");
+    s.push_str("Cflags: -I${includedir} \n");
+    s
+}
+
+fn file_33() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include/libpng16\n");
+    s.push_str("\n");
+    s.push_str("Name: libpng\n");
+    s.push_str("Description: Loads and saves PNG files\n");
+    s.push_str("Version: 1.6.43\n");
+    s.push_str("Requires.private: zlib\n");
+    s.push_str("Libs: -L${libdir} -lpng16\n");
+    s.push_str("Libs.private: -lm -lz -lm \n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_34() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include/libpng16\n");
+    s.push_str("\n");
+    s.push_str("Name: libpng\n");
+    s.push_str("Description: Loads and saves PNG files\n");
+    s.push_str("Version: 1.6.43\n");
+    s.push_str("Requires.private: zlib\n");
+    s.push_str("Libs: -L${libdir} -lpng16\n");
+    s.push_str("Libs.private: -lm -lz -lm \n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_35() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=/usr/lib\n");
+    s.push_str("includedir=/usr/include\n");
+    s.push_str("\n");
+    s.push_str("Name: libselinux\n");
+    s.push_str("Description: SELinux utility library\n");
+    s.push_str("Version: 3.5\n");
+    s.push_str("URL: http://userspace.selinuxproject.org/\n");
+    s.push_str("Requires.private: libsepol libpcre2-8\n");
+    s.push_str("Libs: -L${libdir} -lselinux\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_36() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=/usr/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=/usr/include\n");
+    s.push_str("\n");
+    s.push_str("Name: libsepol\n");
+    s.push_str("Description: SELinux policy library\n");
+    s.push_str("Version: 3.5\n");
+    s.push_str("URL: http://userspace.selinuxproject.org/\n");
+    s.push_str("Libs: -L${libdir} -lsepol\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_37() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${exec_prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: OpenSSL-libssl\n");
+    s.push_str("Description: Secure Sockets Layer and cryptography libraries\n");
+    s.push_str("Version: 3.0.13\n");
+    s.push_str("Requires.private: libcrypto\n");
+    s.push_str("Libs: -L${libdir} -lssl\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_38() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("modules=1\n");
+    s.push_str("\n");
+    s.push_str("Name: libXML\n");
+    s.push_str("Version: 2.9.14\n");
+    s.push_str("Description: libXML library version2.\n");
+    s.push_str("Requires:\n");
+    s.push_str("Libs: -L${libdir} -lxml2\n");
+    s.push_str("Libs.private: -licui18n -licuuc -licudata   -lz  -llzma   -lm  \n");
+    s.push_str("Cflags: -I${includedir}/libxml2 \n");
+    s
+}
+
+fn file_39() -> String {
+    let mut s = String.new();
+    s.push_str("# SPDX-License-Identifier: LGPL-2.1-or-later\n");
+    s.push_str("#\n");
+    s.push_str("# This file is part of libmount from util-linux project.\n");
+    s.push_str("#\n");
+    s.push_str("# Copyright (C) 2008-2018 Karel Zak <kzak@redhat.com>\n");
+    s.push_str("#\n");
+    s.push_str("# libmount is free software; you can redistribute it and/or modify it\n");
+    s.push_str("# under the terms of the GNU Lesser General Public License as published by\n");
+    s.push_str("# the Free Software Foundation; either version 2.1 of the License, or\n");
+    s.push_str("# (at your option) any later version.\n");
+    s.push_str("#\n");
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=/usr\n");
+    s.push_str("libdir=/usr/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=/usr/include\n");
+    s.push_str("\n");
+    s.push_str("Name: mount\n");
+    s.push_str("Description: mount library\n");
+    s.push_str("Version: 2.39.3\n");
+    s.push_str("Requires.private: blkid libselinux \n");
+    s.push_str("Cflags: -I${includedir}/libmount\n");
+    s.push_str("Libs: -L${libdir} -lmount\n");
+    s.push_str("Libs.private: -ldl\n");
+    s
+}
+
+fn file_40() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${exec_prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: OpenSSL\n");
+    s.push_str("Description: Secure Sockets Layer and cryptography libraries and tools\n");
+    s.push_str("Version: 3.0.13\n");
+    s.push_str("Requires: libssl libcrypto\n");
+    s
+}
+
+fn file_41() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: Pixman\n");
+    s.push_str("Description: The pixman library (version 1)\n");
+    s.push_str("Version: 0.42.2\n");
+    s.push_str("Cflags: -I${includedir}/pixman-1\n");
+    s.push_str("Libs: -L${libdir} -lpixman-1\n");
+    s.push_str("\n");
+    s
+}
+
+fn file_42() -> String {
+    let mut s = String.new();
+    s.push_str("# A file written by hand, with the shapes pkgconf has to cope with.\n");
+    s.push_str("prefix = /opt/quirks\n");
+    s.push_str("libdir=${prefix}/lib\n");
+    s.push_str("long_flags=-DONE=1 \\\n");
+    s.push_str("    -DTWO=2\n");
+    s.push_str("quoted='single quoted value'\n");
+    s.push_str("literal=$prefix and ${undefined} and ${prefix}\n");
+    s.push_str("\n");
+    s.push_str("Name: Quirks\n");
+    s.push_str("Description: Odd but legal syntax\n");
+    s.push_str("Version: 1.0.0-rc.2\n");
+    s.push_str("libs: -L${libdir} -lquirks -lquirks -L${libdir}\n");
+    s.push_str("CFLAGS: ${long_flags} \"-DPATH=\\\"/opt/quirks dir\\\"\" -I${prefix}/include -I/usr/include\n");
+    s
+}
+
+fn file_43() -> String {
+    let mut s = String.new();
+    s.push_str("# Package Information for pkg-config\n");
+    s.push_str("\n");
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: SQLite\n");
+    s.push_str("Description: SQL database engine\n");
+    s.push_str("Version: 3.45.1\n");
+    s.push_str("Libs: -L${libdir} -lsqlite3\n");
+    s.push_str("Libs.private: -lm -lz \n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_44() -> String {
+    let mut s = String.new();
+    s.push_str("prefix=/usr\n");
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib/x86_64-linux-gnu\n");
+    s.push_str("sharedlibdir=${libdir}\n");
+    s.push_str("includedir=${prefix}/include\n");
+    s.push_str("\n");
+    s.push_str("Name: zlib\n");
+    s.push_str("Description: zlib compression library\n");
+    s.push_str("Version: 1.3\n");
+    s.push_str("\n");
+    s.push_str("Requires:\n");
+    s.push_str("Libs: -L${libdir} -L${sharedlibdir} -lz\n");
+    s.push_str("Cflags: -I${includedir}\n");
+    s
+}
+
+fn file_45() -> String {
+    let mut s = String.new();
+    s.push_str("--modversion\tzlib\n");
+    s.push_str("--modversion\tglib-2.0\tgio-2.0\tacme-core\n");
+    s.push_str("--exists\tacme-net\n");
+    s.push_str("--exists\tglib-2.0\t>=\t2.70\n");
+    s.push_str("--exists\tglib-2.0 > 2.80.0\n");
+    s.push_str("--exists\t--print-errors\tglib-2.0\t>\t2.80.0\n");
+    s.push_str("--exists\t--print-errors\tno-such-lib\n");
+    s.push_str("--exists\t--short-errors\t--print-errors\tno-such-lib\n");
+    s.push_str("--atleast-version=2.4\tacme-core\n");
+    s.push_str("--atleast-version=3\tacme-core\n");
+    s.push_str("--exact-version=2.4.1\tacme-core\n");
+    s.push_str("--max-version=2.4.0\tacme-core\n");
+    s.push_str("--atleast-version=1\tno-such-lib\n");
+    s.push_str("--modversion\tacme-gui\n");
+    s.push_str("--exists\tacme-gui > 2.5.0\n");
+    s.push_str("--exists\tacme-gui >= 2.5.0~alpha\n");
+    s.push_str("--exists\tlibpng16 >= 1.6.43\tsqlite3 < 3.45.1.1\topenssl != 1.1.1\n");
+    s.push_str("--exists\t--print-errors\tacme-old\n");
+    s.push_str("--modversion\t--print-errors\tacme-tools\n");
+    s.push_str("--atleast-pkgconfig-version=1.6\n");
+    s.push_str("--version\n");
+    s.push_str("--cflags\tzlib\n");
+    s.push_str("--libs\tzlib\n");
+    s.push_str("--cflags\t--libs\tacme-core\n");
+    s.push_str("--libs\tglib-2.0\n");
+    s.push_str("--libs\t--static\tglib-2.0\n");
+    s.push_str("--libs\tgio-2.0\n");
+    s.push_str("--libs\t--static\tgio-2.0\n");
+    s.push_str("--cflags\tgio-2.0\n");
+    s.push_str("--cflags\t--static\texpat\n");
+    s.push_str("--cflags\tacme-net\n");
+    s.push_str("--libs\tacme-net\n");
+    s.push_str("--libs\t--static\tacme-net\n");
+    s.push_str("--libs\t--static\t--pure\tacme-net\n");
+    s.push_str("--cflags\t--libs\tacme-gui\n");
+    s.push_str("--libs\t--static\tacme-gui\n");
+    s.push_str("--libs\tacme-gui\tacme-net\tacme-core\n");
+    s.push_str("--libs\tacme-core\tzlib\tacme-core\n");
+    s.push_str("--cflags\t--keep-system-cflags\tzlib\tlibpng16\n");
+    s.push_str("--libs\t--keep-system-libs\tlibpng16\n");
+    s.push_str("PKG_CONFIG_ALLOW_SYSTEM_LIBS=1\t--libs\tlibxml-2.0\n");
+    s.push_str("--libs\t--static\tlibxml-2.0\n");
+    s.push_str("--libs\t--static\tfreetype2\n");
+    s.push_str("--cflags\tfreetype2\n");
+    s.push_str("--libs-only-l\t--static\tacme-net\n");
+    s.push_str("--libs-only-L\tacme-gui\n");
+    s.push_str("--libs-only-other\t--static\tacme-net\n");
+    s.push_str("--cflags-only-I\tacme-gui\n");
+    s.push_str("--cflags-only-other\tacme-net\tacme-core\n");
+    s.push_str("--libs\t--cflags\tquirks\n");
+    s.push_str("--libs\tframeworks\n");
+    s.push_str("--cflags\tframeworks\n");
+    s.push_str("--libs\topenssl\n");
+    s.push_str("--libs\t--static\topenssl\n");
+    s.push_str("--libs\t--maximum-traverse-depth=1\tacme-net\n");
+    s.push_str("--cflags\t--fragment-filter=I\tacme-gui\n");
+    s.push_str("--libs\tacme-cli\n");
+    s.push_str("--cflags\tacme-cli\n");
+    s.push_str("--cflags\t--internal-cflags\tacme-cli\n");
+    s.push_str("--libs\tacme-image\n");
+    s.push_str("--cflags\t--libs\tfontconfig\n");
+    s.push_str("--env=ACME\tacme-core\n");
+    s.push_str("--env=ACME\t--cflags\t--libs\tacme-core\n");
+    s.push_str("--variable=prefix\tacme-core\n");
+    s.push_str("--variable=libdir\tacme-core\tzlib\tglib-2.0\n");
+    s.push_str("--variable=greeting\tacme-core\n");
+    s.push_str("--variable=plugindir\tacme-core\n");
+    s.push_str("--variable=pcfiledir\tzlib\n");
+    s.push_str("--variable=nothere\tzlib\n");
+    s.push_str("--define-variable=prefix=/srv/acme\t--variable=plugindir\tacme-core\n");
+    s.push_str("--define-variable=prefix=/srv/acme\t--cflags\t--libs\tacme-core\n");
+    s.push_str("--variable=literal\tquirks\n");
+    s.push_str("--variable=long_flags\tquirks\n");
+    s.push_str("--variable=quoted\tquirks\n");
+    s.push_str("--print-variables\tacme-core\n");
+    s.push_str("--print-variables\tzlib\n");
+    s.push_str("--variable=pc_path\tpkg-config\n");
+    s.push_str("--modversion\tpkg-config\n");
+    s.push_str("--print-requires\tacme-gui\n");
+    s.push_str("--print-requires-private\tacme-gui\n");
+    s.push_str("--print-requires\tacme-cli\n");
+    s.push_str("--print-requires-private\tgio-2.0\n");
+    s.push_str("--print-provides\tjpeg-turbo\n");
+    s.push_str("--print-provides\tacme-core\n");
+    s.push_str("--path\tacme-core\tzlib\n");
+    s.push_str("--digraph\tacme-net\n");
+    s.push_str("--list-all\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--list-package-names\n");
+    s.push_str("--with-path=opt/acme/lib/pkgconfig\t--modversion\tacme-plugins\n");
+    s.push_str("PKG_CONFIG_PATH=opt/acme/lib/pkgconfig\t--cflags\t--libs\tacme-plugins\n");
+    s.push_str("PKG_CONFIG_PATH=opt/acme/lib/pkgconfig\t--define-prefix\t--cflags\t--libs\tacme-plugins\n");
+    s.push_str("PKG_CONFIG_PATH=opt/acme/lib/pkgconfig\t--define-prefix\t--variable=plugindir\tacme-plugins\n");
+    s.push_str("PKG_CONFIG_PATH=opt/acme/lib/pkgconfig\t--variable=here\tacme-plugins\n");
+    s.push_str("PKG_CONFIG_PATH=opt/acme/lib/pkgconfig\t--path\tacme-plugins\n");
+    s.push_str("PKG_CONFIG_PATH=build\t--modversion\tacme-core\n");
+    s.push_str("PKG_CONFIG_PATH=build\t--cflags\t--libs\tacme-core\n");
+    s.push_str("PKG_CONFIG_PATH=build\t--uninstalled\tacme-core\n");
+    s.push_str("PKG_CONFIG_PATH=build\t--uninstalled\tzlib\n");
+    s.push_str("PKG_CONFIG_PATH=build\t--no-uninstalled\t--modversion\tacme-core\n");
+    s.push_str("PKG_CONFIG_PATH=build:opt/acme/lib/pkgconfig\t--libs\tacme-plugins\n");
+    s.push_str("PKG_CONFIG_LIBDIR=\t--modversion\tzlib\n");
+    s.push_str("pc/zlib.pc\t--libs\n");
+    s.push_str("--cflags\tacme-tools\n");
+    s.push_str("--libs\tacme-old\n");
+    s.push_str("--libs\t--errors-to-stdout\tacme-old\n");
+    s.push_str("--cflags\t--short-errors\tacme-tools\n");
+    s.push_str("--libs\t--silence-errors\tacme-tools\n");
+    s.push_str("--exists\t--print-errors\tacme-gui\tacme-legacy\n");
+    s.push_str("--libs\tacme-legacy\tacme-gui\n");
+    s.push_str("--libs\t--ignore-conflicts\tacme-legacy\tacme-gui\n");
+    s.push_str("--exists\t--print-errors\tacme-compat\n");
+    s.push_str("--libs\t--ignore-conflicts\tacme-compat\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--modversion\tnoversion\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--validate\tspaced\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--modversion\t--libs\tspaced\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--libs\tcycle-a\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--print-requires\tcycle-b\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--cflags\t--libs\tbadquote\n");
+    s.push_str("PKG_CONFIG_PATH=broken\t--validate\tbadquote\n");
+    s.push_str("--libs\n");
+    s.push_str("--cflags\t--libs\t\n");
+    s.push_str("--frobnicate\tzlib\n");
+    s.push_str("--modv\tzlib\n");
+    s.push_str("--variable\n");
+    s
+}
+
+// Each input file's path under data/, and its text.
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("broken/badquote.pc".to_string(), file_0()));
+    v.push(("broken/cycle-a.pc".to_string(), file_1()));
+    v.push(("broken/cycle-b.pc".to_string(), file_2()));
+    v.push(("broken/noversion.pc".to_string(), file_3()));
+    v.push(("broken/spaced.pc".to_string(), file_4()));
+    v.push(("build/acme-core-uninstalled.pc".to_string(), file_5()));
+    v.push(("build/acme-core.pc".to_string(), file_6()));
+    v.push(("opt/acme/lib/pkgconfig/acme-plugins.pc".to_string(), file_7()));
+    v.push(("pc/acme-cli.pc".to_string(), file_8()));
+    v.push(("pc/acme-compat.pc".to_string(), file_9()));
+    v.push(("pc/acme-core.pc".to_string(), file_10()));
+    v.push(("pc/acme-gui.pc".to_string(), file_11()));
+    v.push(("pc/acme-image.pc".to_string(), file_12()));
+    v.push(("pc/acme-legacy.pc".to_string(), file_13()));
+    v.push(("pc/acme-net.pc".to_string(), file_14()));
+    v.push(("pc/acme-old.pc".to_string(), file_15()));
+    v.push(("pc/acme-tools.pc".to_string(), file_16()));
+    v.push(("pc/blkid.pc".to_string(), file_17()));
+    v.push(("pc/expat.pc".to_string(), file_18()));
+    v.push(("pc/fontconfig.pc".to_string(), file_19()));
+    v.push(("pc/frameworks.pc".to_string(), file_20()));
+    v.push(("pc/freetype2.pc".to_string(), file_21()));
+    v.push(("pc/gio-2.0.pc".to_string(), file_22()));
+    v.push(("pc/glib-2.0.pc".to_string(), file_23()));
+    v.push(("pc/gmodule-no-export-2.0.pc".to_string(), file_24()));
+    v.push(("pc/gobject-2.0.pc".to_string(), file_25()));
+    v.push(("pc/jpeg-turbo.pc".to_string(), file_26()));
+    v.push(("pc/libbrotlicommon.pc".to_string(), file_27()));
+    v.push(("pc/libbrotlidec.pc".to_string(), file_28()));
+    v.push(("pc/libcrypto.pc".to_string(), file_29()));
+    v.push(("pc/libffi.pc".to_string(), file_30()));
+    v.push(("pc/liblzma.pc".to_string(), file_31()));
+    v.push(("pc/libpcre2-8.pc".to_string(), file_32()));
+    v.push(("pc/libpng.pc".to_string(), file_33()));
+    v.push(("pc/libpng16.pc".to_string(), file_34()));
+    v.push(("pc/libselinux.pc".to_string(), file_35()));
+    v.push(("pc/libsepol.pc".to_string(), file_36()));
+    v.push(("pc/libssl.pc".to_string(), file_37()));
+    v.push(("pc/libxml-2.0.pc".to_string(), file_38()));
+    v.push(("pc/mount.pc".to_string(), file_39()));
+    v.push(("pc/openssl.pc".to_string(), file_40()));
+    v.push(("pc/pixman-1.pc".to_string(), file_41()));
+    v.push(("pc/quirks.pc".to_string(), file_42()));
+    v.push(("pc/sqlite3.pc".to_string(), file_43()));
+    v.push(("pc/zlib.pc".to_string(), file_44()));
+    v.push(("../jobs.tsv".to_string(), file_45()));
+    v
+}
+
+// ------------------------------------------------------------ the run
+
+fn write_data() -> Result[(), String] {
+    let files = data_files();
+    for i in 0..files.len() {
+        let (name, text) = files[i].clone();
+        let path = f"data/{name}";
+        let dir = parent_dir(path);
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn is_env_assignment(a: Str) -> bool {
+    let b = a.bytes();
+    let mut i: i64 = 0;
+    while i < b.len() and ((b[i] >= b'A' and b[i] <= b'Z') or b[i] == b'_') {
+        i += 1;
+    }
+    i > 0 and i < b.len() and b[i] == b'='
+}
+
+// An argument as a shell would need it written.
+fn quote(a: Str) -> String {
+    let b = a.bytes();
+    let mut plain = b.len() > 0;
+    for i in 0..b.len() {
+        let c = b[i];
+        let ok = is_alnum(c) or c == b'_' or c == b'.' or c == b'/' or c == b'=' or c == b'+' or c == b':' or c == b',' or c == b'%' or c == b'@' or c == b'-';
+        if not ok {
+            plain = false;
+        }
+    }
+    if plain {
+        return a.to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    out.push(b'\'');
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            push_bytes(mut out, "'\\''");
+        } else {
+            out.push(b[i]);
+        }
+    }
+    out.push(b'\'');
+    from_bytes(out)
+}
+
+// Prints text, marking a missing final newline.
+fn show(text: Str) {
+    print(text);
+    if text.len() > 0 and not text.ends_with("\n") {
+        println("[no newline at end]");
+    }
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let jobs = match fs.read_to_string("jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read jobs.tsv: {e}"),
+    };
+    for line in lines_of(jobs) {
+        let mut args: Vec[String] = Vec.new();
+        for a in line.split("\t") {
+            args.push(a.to_string());
+        }
+        let mut env: Vec[(String, String)] = Vec.new();
+        env.push(("PKG_CONFIG_LIBDIR".to_string(), "pc".to_string()));
+        let mut shown: Vec[String] = Vec.new();
+        let mut first: i64 = 0;
+        while first < args.len() and is_env_assignment(args[first]) {
+            let a = args[first].clone();
+            let k = a.find("=").unwrap_or(0);
+            let name = a[..k].to_string();
+            let value = a[k + 1..].to_string();
+            for e in 0..env.len() {
+                if env[e].0 == name {
+                    env.remove(e);
+                    break;
+                }
+            }
+            env.push((name, value));
+            shown.push(quote(a));
+            first += 1;
+        }
+        shown.push("pkg-config".to_string());
+        let mut argv: Vec[String] = Vec.new();
+        for k in first..args.len() {
+            shown.push(quote(args[k]));
+            argv.push(args[k].clone());
+        }
+        let command = shown.join(" ");
+        println(f"$ {command}");
+        let res = pkg_config(env, argv);
+        show(res.out);
+        show(res.err);
+        if res.status != 0 {
+            println(f"[exit {res.status}]");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"mini_pkgconfig: {e}");
+    }
+}

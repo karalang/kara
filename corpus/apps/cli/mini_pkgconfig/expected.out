@@ -1,0 +1,391 @@
+$ pkg-config --modversion zlib
+1.3
+$ pkg-config --modversion glib-2.0 gio-2.0 acme-core
+2.80.0
+2.80.0
+2.4.1
+$ pkg-config --exists acme-net
+$ pkg-config --exists glib-2.0 '>=' 2.70
+$ pkg-config --exists 'glib-2.0 > 2.80.0'
+[exit 1]
+$ pkg-config --exists --print-errors glib-2.0 '>' 2.80.0
+Package dependency requirement 'glib-2.0 > 2.80.0' could not be satisfied.
+Package 'glib-2.0' has version '2.80.0', required version is '> 2.80.0'
+[exit 1]
+$ pkg-config --exists --print-errors no-such-lib
+Package no-such-lib was not found in the pkg-config search path.
+Perhaps you should add the directory containing `no-such-lib.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'no-such-lib', required by 'virtual:world', not found
+[exit 1]
+$ pkg-config --exists --short-errors --print-errors no-such-lib
+Package 'no-such-lib', required by 'virtual:world', not found
+[exit 1]
+$ pkg-config --atleast-version=2.4 acme-core
+$ pkg-config --atleast-version=3 acme-core
+[exit 1]
+$ pkg-config --exact-version=2.4.1 acme-core
+$ pkg-config --max-version=2.4.0 acme-core
+[exit 1]
+$ pkg-config --atleast-version=1 no-such-lib
+[exit 1]
+$ pkg-config --modversion acme-gui
+2.5.0~beta1
+$ pkg-config --exists 'acme-gui > 2.5.0'
+[exit 1]
+$ pkg-config --exists 'acme-gui >= 2.5.0~alpha'
+$ pkg-config --exists 'libpng16 >= 1.6.43' 'sqlite3 < 3.45.1.1' 'openssl != 1.1.1'
+$ pkg-config --exists --print-errors acme-old
+Package dependency requirement 'glib-2.0 >= 3.0' could not be satisfied.
+Package 'glib-2.0' has version '2.80.0', required version is '>= 3.0'
+[exit 1]
+$ pkg-config --modversion --print-errors acme-tools
+Package libfrobnicate was not found in the pkg-config search path.
+Perhaps you should add the directory containing `libfrobnicate.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'libfrobnicate', required by 'acme-tools', not found
+[exit 1]
+$ pkg-config --atleast-pkgconfig-version=1.6
+$ pkg-config --version
+1.8.1
+$ pkg-config --cflags zlib
+
+$ pkg-config --libs zlib
+-lz 
+$ pkg-config --cflags --libs acme-core
+-I/opt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" -L/opt/acme/lib -lacme-core -lz 
+$ pkg-config --libs glib-2.0
+-lglib-2.0 
+$ pkg-config --libs --static glib-2.0
+-lglib-2.0 -lm -pthread -lpcre2-8 
+$ pkg-config --libs gio-2.0
+-lgio-2.0 -lgobject-2.0 -lglib-2.0 
+$ pkg-config --libs --static gio-2.0
+-lgio-2.0 -lm -pthread -lpcre2-8 -lgobject-2.0 -lglib-2.0 -lm -pthread -lpcre2-8 -lffi -lgmodule-2.0 -pthread -lglib-2.0 -lm -pthread -lz -lmount -ldl -lblkid -lsepol -lselinux -lsepol -lpcre2-8 
+$ pkg-config --cflags gio-2.0
+-I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -pthread -I/usr/include/libmount -I/usr/include/blkid 
+$ pkg-config --cflags --static expat
+-DXML_STATIC 
+$ pkg-config --cflags acme-net
+-I/opt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -pthread -I/usr/include/libmount -I/usr/include/blkid 
+$ pkg-config --libs acme-net
+-L/opt/acme/lib -lacme-net -Wl,--as-needed -lacme-core -lz -lglib-2.0 
+$ pkg-config --libs --static acme-net
+-L/opt/acme/lib -lacme-net -Wl,--as-needed -lresolv -pthread -lacme-core -lm -ldl -lssl -ldl -pthread -lcrypto -ldl -pthread -lglib-2.0 -lm -pthread -lpcre2-8 -lgio-2.0 -lm -pthread -lpcre2-8 -lgobject-2.0 -lglib-2.0 -lm -pthread -lpcre2-8 -lffi -lgmodule-2.0 -pthread -lglib-2.0 -lm -pthread -lz -lmount -ldl -lblkid -lsepol -lselinux -lsepol -lpcre2-8 
+$ pkg-config --libs --static --pure acme-net
+-L/opt/acme/lib -lacme-net -Wl,--as-needed -lacme-core -lssl -lcrypto -lglib-2.0 -lpcre2-8 -lgio-2.0 -lpcre2-8 -lgobject-2.0 -lglib-2.0 -lpcre2-8 -lffi -lgmodule-2.0 -pthread -lglib-2.0 -lz -lmount -lblkid -lsepol -lselinux -lsepol -lpcre2-8 
+$ pkg-config --cflags --libs acme-gui
+-I/opt/acme/include/acme-2/gui -isystem /opt/acme/include/acme-2/compat -I/opt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -pthread -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 -L/opt/acme/lib -lacme-gui -lacme-net -Wl,--as-needed -lacme-core -lz -lglib-2.0 -lpixman-1 
+$ pkg-config --libs --static acme-gui
+-L/opt/acme/lib -lacme-gui -lacme-net -Wl,--as-needed -lresolv -pthread -lacme-core -lm -ldl -lssl -ldl -pthread -lcrypto -ldl -pthread -lglib-2.0 -lm -pthread -lpcre2-8 -lgio-2.0 -lm -pthread -lpcre2-8 -lgobject-2.0 -lglib-2.0 -lm -pthread -lpcre2-8 -lffi -lgmodule-2.0 -pthread -lglib-2.0 -lm -pthread -lz -lmount -ldl -lblkid -lsepol -lselinux -lsepol -lpcre2-8 -lpixman-1 -lfontconfig -lfreetype -lbz2 -lz -lm -lz -lm -lz -lbrotlidec -lbrotlicommon -lexpat -lm -lpng16 -lm -lz -lm -lz 
+$ pkg-config --libs acme-gui acme-net acme-core
+-L/opt/acme/lib -lacme-gui -lpixman-1 -lacme-net -Wl,--as-needed -lacme-core -lglib-2.0 -lacme-core -lz 
+$ pkg-config --libs acme-core zlib acme-core
+-L/opt/acme/lib -lacme-core -lz 
+$ pkg-config --cflags --keep-system-cflags zlib libpng16
+-I/usr/include -I/usr/include/libpng16 
+$ pkg-config --libs --keep-system-libs libpng16
+-L/usr/lib/x86_64-linux-gnu -lpng16 
+$ PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 pkg-config --libs libxml-2.0
+-L/usr/lib/x86_64-linux-gnu -lxml2 
+$ pkg-config --libs --static libxml-2.0
+-lxml2 -licui18n -licuuc -licudata -lz -llzma -lm 
+$ pkg-config --libs --static freetype2
+-lfreetype -lbz2 -lz -lpng16 -lm -lz -lm -lz -lbrotlidec -lbrotlicommon 
+$ pkg-config --cflags freetype2
+-I/usr/include/freetype2 -I/usr/include/libpng16 
+$ pkg-config --libs-only-l --static acme-net
+-lacme-net -lresolv -lacme-core -lm -ldl -lssl -ldl -lcrypto -ldl -lglib-2.0 -lm -lpcre2-8 -lgio-2.0 -lm -lpcre2-8 -lgobject-2.0 -lglib-2.0 -lm -lpcre2-8 -lffi -lgmodule-2.0 -lglib-2.0 -lm -lz -lmount -ldl -lblkid -lsepol -lselinux -lsepol -lpcre2-8 
+$ pkg-config --libs-only-L acme-gui
+-L/opt/acme/lib 
+$ pkg-config --libs-only-other --static acme-net
+-Wl,--as-needed -pthread -pthread -pthread -pthread -pthread -pthread -pthread -pthread 
+$ pkg-config --cflags-only-I acme-gui
+-I/opt/acme/include/acme-2/gui -I/opt/acme/include/acme-2 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 
+$ pkg-config --cflags-only-other acme-net acme-core
+-pthread -DACME_API=2 -DACME_GREETING=\"hello from acme\" 
+$ pkg-config --libs --cflags quirks
+-DONE=1 -DTWO=2 -DPATH=\"/opt/quirks\ dir\" -I/opt/quirks/include -L/opt/quirks/lib -lquirks 
+$ pkg-config --libs frameworks
+-framework CoreFoundation -lobjc -framework Security -framework CoreFoundation -Wl,-rpath,/opt/fw/lib 
+$ pkg-config --cflags frameworks
+-F/opt/fw -fobjc-arc -std=c11 
+$ pkg-config --libs openssl
+-lssl -lcrypto 
+$ pkg-config --libs --static openssl
+-lssl -ldl -pthread -lcrypto -ldl -pthread 
+$ pkg-config --libs --maximum-traverse-depth=1 acme-net
+
+$ pkg-config --cflags --fragment-filter=I acme-gui
+-I/opt/acme/include/acme-2/gui -I/opt/acme/include/acme-2 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/pixman-1 -I/usr/include/freetype2 -I/usr/include/libpng16 
+$ pkg-config --libs acme-cli
+-L/opt/acme/lib -lacme-core -lz 
+$ pkg-config --cflags acme-cli
+-I/opt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" 
+$ pkg-config --cflags --internal-cflags acme-cli
+-I/opt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -pthread -I/usr/include/libmount -I/usr/include/blkid 
+$ pkg-config --libs acme-image
+-L/opt/acme/lib -lacme-image -ljpeg -lpng16 
+$ pkg-config --cflags --libs fontconfig
+-I/usr/include/freetype2 -I/usr/include/libpng16 -lfontconfig -lfreetype 
+$ pkg-config --env=ACME acme-core
+$ pkg-config --env=ACME --cflags --libs acme-core
+ACME_CFLAGS='-I/opt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" '
+ACME_LIBS='-L/opt/acme/lib -lacme-core -lz '
+$ pkg-config --variable=prefix acme-core
+/opt/acme
+$ pkg-config --variable=libdir acme-core zlib glib-2.0
+/opt/acme/lib /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+$ pkg-config --variable=greeting acme-core
+hello from acme
+$ pkg-config --variable=plugindir acme-core
+/opt/acme/lib/acme/plugins
+$ pkg-config --variable=pcfiledir zlib
+pc
+$ pkg-config --variable=nothere zlib
+
+$ pkg-config --define-variable=prefix=/srv/acme --variable=plugindir acme-core
+/srv/acme/lib/acme/plugins
+$ pkg-config --define-variable=prefix=/srv/acme --cflags --libs acme-core
+-I/srv/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" -I/srv/acme/include -L/srv/acme/lib -lacme-core -L/srv/acme/lib/x86_64-linux-gnu -lz 
+$ pkg-config --variable=literal quirks
+$prefix and  and /opt/quirks
+$ pkg-config --variable=long_flags quirks
+-DONE=1 -DTWO=2
+$ pkg-config --variable=quoted quirks
+single quoted value
+$ pkg-config --print-variables acme-core
+greeting
+plugindir
+includedir
+libdir
+exec_prefix
+prefix
+pcfiledir
+$ pkg-config --print-variables zlib
+includedir
+sharedlibdir
+libdir
+exec_prefix
+prefix
+pcfiledir
+$ pkg-config --variable=pc_path pkg-config
+/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/share/pkgconfig
+$ pkg-config --modversion pkg-config
+1.8.1
+$ pkg-config --print-requires acme-gui
+acme-net
+pixman-1 >= 0.40
+$ pkg-config --print-requires-private acme-gui
+fontconfig
+libpng16
+$ pkg-config --print-requires acme-cli
+acme-core > 2
+acme-core < 3
+$ pkg-config --print-requires-private gio-2.0
+gmodule-no-export-2.0
+zlib
+mount >= 2.23
+libselinux >= 2.2
+$ pkg-config --print-provides jpeg-turbo
+libjpeg = 8.2.2
+jpeg-turbo = 2.1.5
+$ pkg-config --print-provides acme-core
+acme-core = 2.4.1
+$ pkg-config --path acme-core zlib
+pc/acme-core.pc
+pc/zlib.pc
+$ pkg-config --digraph acme-net
+graph deptree {
+edge [color=blue len=7.5 fontname=Sans fontsize=8]
+node [fontname=Sans fontsize=8]
+"virtual:world" [fontname=Sans fontsize=8]
+"acme-net" -- "virtual:world" [fontname=Sans fontsize=8]
+"acme-net" [fontname=Sans fontsize=8]
+"acme-core" -- "acme-net" [fontname=Sans fontsize=8]
+"glib-2.0" -- "acme-net" [fontname=Sans fontsize=8]
+"acme-core" [fontname=Sans fontsize=8]
+"zlib" -- "acme-core" [fontname=Sans fontsize=8]
+"zlib" [fontname=Sans fontsize=8]
+"glib-2.0" [fontname=Sans fontsize=8]
+}
+$ pkg-config --list-all
+acme-cli                       acme-cli - Acme's command-line tool, as a dependency for plugins
+acme-compat                    Acme Compat - Bridges the old API, but not to a version below 2
+acme-core                      Acme Core - Acme application core
+acme-gui                       Acme GUI - Acme widgets over pixman and fontconfig
+acme-image                     Acme Image - Image loading for Acme
+acme-legacy                    Acme Legacy - The old Acme API
+acme-net                       Acme Net - Acme networking layer
+acme-old                       Acme Old Client - Wants a GLib that does not exist yet
+acme-tools                     Acme Tools - Missing a dependency
+blkid                          blkid - Block device id library
+expat                          expat - expat XML parser
+fontconfig                     Fontconfig - Font configuration and customization library
+frameworks                     Frameworks - macOS-style framework flags
+freetype2                      FreeType 2 - A free, high-quality, and portable font engine.
+gio-2.0                        GIO - glib I/O library
+glib-2.0                       GLib - C Utility Library
+gmodule-no-export-2.0          GModule - Dynamic module loader for GLib
+gobject-2.0                    GObject - GLib Type, Object, Parameter and Signal Library
+jpeg-turbo                     libjpeg-turbo - A SIMD-accelerated JPEG codec that provides the libjpeg API
+libbrotlicommon                libbrotlicommon - Brotli common dictionary library
+libbrotlidec                   libbrotlidec - Brotli decoder library
+libcrypto                      OpenSSL-libcrypto - OpenSSL cryptography library
+libffi                         libffi - Library supporting Foreign Function Interfaces
+liblzma                        liblzma - General purpose data compression library
+libpcre2-8                     libpcre2-8 - PCRE2 - Perl compatible regular expressions C library (2nd API) with 8 bit character support
+libpng                         libpng - Loads and saves PNG files
+libpng16                       libpng - Loads and saves PNG files
+libselinux                     libselinux - SELinux utility library
+libsepol                       libsepol - SELinux policy library
+libssl                         OpenSSL-libssl - Secure Sockets Layer and cryptography libraries
+libxml-2.0                     libXML - libXML library version2.
+mount                          mount - mount library
+openssl                        OpenSSL - Secure Sockets Layer and cryptography libraries and tools
+pixman-1                       Pixman - The pixman library (version 1)
+quirks                         Quirks - Odd but legal syntax
+sqlite3                        SQLite - SQL database engine
+zlib                           zlib - zlib compression library
+$ PKG_CONFIG_PATH=broken pkg-config --list-package-names
+acme-cli
+acme-compat
+acme-core
+acme-gui
+acme-image
+acme-legacy
+acme-net
+acme-old
+acme-tools
+badquote
+blkid
+cycle-a
+cycle-b
+expat
+fontconfig
+frameworks
+freetype2
+gio-2.0
+glib-2.0
+gmodule-no-export-2.0
+gobject-2.0
+jpeg-turbo
+libbrotlicommon
+libbrotlidec
+libcrypto
+libffi
+liblzma
+libpcre2-8
+libpng
+libpng16
+libselinux
+libsepol
+libssl
+libxml-2.0
+mount
+openssl
+pixman-1
+quirks
+spaced
+sqlite3
+zlib
+$ pkg-config --with-path=opt/acme/lib/pkgconfig --modversion acme-plugins
+Package acme-plugins was not found in the pkg-config search path.
+Perhaps you should add the directory containing `acme-plugins.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'acme-plugins', required by 'virtual:world', not found
+[exit 1]
+$ PKG_CONFIG_PATH=opt/acme/lib/pkgconfig pkg-config --cflags --libs acme-plugins
+-I/opt/acme/include/acme-2/plugins -DPLUGIN_DIR=\"/opt/acme/lib/acme/plugins\" -I/opt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" -L/opt/acme/lib -lacme-plugins -lacme-core -lz 
+$ PKG_CONFIG_PATH=opt/acme/lib/pkgconfig pkg-config --define-prefix --cflags --libs acme-plugins
+-Iopt/acme/include/acme-2/plugins -DPLUGIN_DIR=\"opt/acme/lib/acme/plugins\" -Iopt/acme/include/acme-2 -DACME_API=2 -DACME_GREETING=\"hello from acme\" -Iopt/acme/include -Lopt/acme/lib -lacme-plugins -lacme-core -Lopt/acme/lib/x86_64-linux-gnu -lz 
+$ PKG_CONFIG_PATH=opt/acme/lib/pkgconfig pkg-config --define-prefix --variable=plugindir acme-plugins
+opt/acme/lib/acme/plugins
+$ PKG_CONFIG_PATH=opt/acme/lib/pkgconfig pkg-config --variable=here acme-plugins
+opt/acme/lib/pkgconfig
+$ PKG_CONFIG_PATH=opt/acme/lib/pkgconfig pkg-config --path acme-plugins
+opt/acme/lib/pkgconfig/acme-plugins.pc
+$ PKG_CONFIG_PATH=build pkg-config --modversion acme-core
+2.5.0-dev
+$ PKG_CONFIG_PATH=build pkg-config --cflags --libs acme-core
+-I/home/dev/acme/include -I/home/dev/acme/build/generated -L/home/dev/acme/build/src -lacme-core -lz 
+$ PKG_CONFIG_PATH=build pkg-config --uninstalled acme-core
+$ PKG_CONFIG_PATH=build pkg-config --uninstalled zlib
+[exit 1]
+$ PKG_CONFIG_PATH=build pkg-config --no-uninstalled --modversion acme-core
+2.4.9
+$ PKG_CONFIG_PATH=build:opt/acme/lib/pkgconfig pkg-config --libs acme-plugins
+-L/opt/acme/lib -lacme-plugins -L/home/dev/acme/build/src -lacme-core -lz 
+$ PKG_CONFIG_LIBDIR= pkg-config --modversion zlib
+Package zlib was not found in the pkg-config search path.
+Perhaps you should add the directory containing `zlib.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'zlib', required by 'virtual:world', not found
+[exit 1]
+$ pkg-config pc/zlib.pc --libs
+-lz 
+$ pkg-config --cflags acme-tools
+Package libfrobnicate was not found in the pkg-config search path.
+Perhaps you should add the directory containing `libfrobnicate.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'libfrobnicate', required by 'acme-tools', not found
+[exit 1]
+$ pkg-config --libs acme-old
+Package dependency requirement 'glib-2.0 >= 3.0' could not be satisfied.
+Package 'glib-2.0' has version '2.80.0', required version is '>= 3.0'
+[exit 1]
+$ pkg-config --libs --errors-to-stdout acme-old
+Package dependency requirement 'glib-2.0 >= 3.0' could not be satisfied.
+Package 'glib-2.0' has version '2.80.0', required version is '>= 3.0'
+[exit 1]
+$ pkg-config --cflags --short-errors acme-tools
+Package 'libfrobnicate', required by 'acme-tools', not found
+[exit 1]
+$ pkg-config --libs --silence-errors acme-tools
+[exit 1]
+$ pkg-config --exists --print-errors acme-gui acme-legacy
+$ pkg-config --libs acme-legacy acme-gui
+-L/opt/acme-legacy/lib -lacme -L/opt/acme/lib -lacme-gui -lacme-net -Wl,--as-needed -lacme-core -lz -lglib-2.0 -lpixman-1 
+$ pkg-config --libs --ignore-conflicts acme-legacy acme-gui
+-L/opt/acme-legacy/lib -lacme -L/opt/acme/lib -lacme-gui -lacme-net -Wl,--as-needed -lacme-core -lz -lglib-2.0 -lpixman-1 
+$ pkg-config --exists --print-errors acme-compat
+Version '1.9.3' of 'Acme Legacy' conflicts with 'Acme Compat' due to satisfying conflict rule 'acme-legacy < 2'.
+It may be possible to ignore this conflict and continue, try the
+PKG_CONFIG_IGNORE_CONFLICTS environment variable.
+[exit 1]
+$ pkg-config --libs --ignore-conflicts acme-compat
+-L/opt/acme/lib -lacme-compat -L/opt/acme-legacy/lib -lacme -lacme-core -lz 
+$ PKG_CONFIG_PATH=broken pkg-config --modversion noversion
+Package noversion was not found in the pkg-config search path.
+Perhaps you should add the directory containing `noversion.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'noversion', required by 'virtual:world', not found
+[exit 1]
+$ PKG_CONFIG_PATH=broken pkg-config --validate spaced
+broken/spaced.pc:1: warning: trailing whitespace encountered while parsing value section
+broken/spaced.pc:2: warning: whitespace encountered while parsing key section
+broken/spaced.pc:5: warning: malformed version field with whitespace, trimming to [1.2]
+$ PKG_CONFIG_PATH=broken pkg-config --modversion --libs spaced
+1.2
+$ PKG_CONFIG_PATH=broken pkg-config --libs cycle-a
+-lcycle-a -lcycle-b 
+$ PKG_CONFIG_PATH=broken pkg-config --print-requires cycle-b
+cycle-a
+$ PKG_CONFIG_PATH=broken pkg-config --cflags --libs badquote
+-lbq 
+$ PKG_CONFIG_PATH=broken pkg-config --validate badquote
+broken/badquote.pc:4: warning: unable to parse field 'Cflags' into an argument vector, value [-DNAME="unterminated -I/opt/bq]
+$ pkg-config --libs
+Please specify at least one package name on the command line.
+[exit 1]
+$ pkg-config --cflags --libs ''
+Please specify at least one package name on the command line.
+[exit 1]
+$ pkg-config --frobnicate zlib
+pkgconf: unknown option -- frobnicate
+[exit 1]
+$ pkg-config --modv zlib
+1.3
+$ pkg-config --variable
+pkgconf: option requires an argument -- variable
+[exit 1]
