@@ -4588,3 +4588,43 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_programs_own_field_and_variant_leave_reflection_alone() {
+    // B-2026-10-18-45: a program declaring its own `struct Field` that also
+    // pulls in protobuf (`derive(Message)`, or just the word `Message`)
+    // failed with "no field 'ty' on struct 'Field'": the library's schema
+    // walk over `T.fields()` read the program's `Field` for the reflection
+    // record. The program's `Field` and `Variant` are renamed apart.
+    let src = r#"
+struct Field { name: String, number: i64 }
+enum Variant { A, B(i64) }
+fn show(v: Variant) -> String {
+    match v {
+        Variant.A => "a".to_string(),
+        Variant.B(n) => f"b{n}",
+    }
+}
+
+#[derive(Message)]
+struct Person {
+    name: String,
+    age: i64,
+}
+
+fn main() {
+    let fs: Vec[Field] = vec![Field { name: "name".to_string(), number: 1 }];
+    let p = Person { name: "Ada".to_string(), age: 36 };
+    let q = Person.decode(p.encode());
+    println(f"{q.name} {q.age} {fs[0].name} {fs[0].number} {show(Variant.B(2))}");
+}
+"#;
+    let want = "Ada 36 name 1 b2\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -15339,6 +15339,11 @@ const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
     "Client",
     "HttpError",
     "RequestBuilder",
+    // The reflection records `T.fields()` and `T.variants()` return, which
+    // library code (protobuf's schema walk) reads by field
+    // (B-2026-10-18-45).
+    "Field",
+    "Variant",
 ];
 
 /// `src` with each of its own top-level types named like one the compiler
@@ -15369,7 +15374,7 @@ pub fn rename_compiler_name_shadows(src: &str) -> (String, Vec<(String, String)>
     if declared.is_empty() {
         return (src.to_string(), Vec::new());
     }
-    let tokens = crate::tokenize(src);
+    let idents = identifiers_with_offsets(src, 0);
     let mut renames = Vec::new();
     let mut out = src.as_bytes().to_vec();
     for name in declared {
@@ -15377,29 +15382,42 @@ pub fn rename_compiler_name_shadows(src: &str) -> (String, Vec<(String, String)>
         // does not already use.
         let Some(new) = (1..name.len()).find_map(|k| {
             let cand = format!("{}{}", &name[..name.len() - k], "_".repeat(k));
-            (!tokens.iter().any(|t| {
-                matches!(&t.token, crate::token::Token::Identifier { name: n, .. } if *n == cand)
-            }))
-            .then_some(cand)
+            (!idents.iter().any(|(n, _)| *n == cand)).then_some(cand)
         }) else {
             continue;
         };
-        for t in &tokens {
-            if let crate::token::Token::Identifier {
-                name: n,
-                raw: false,
-            } = &t.token
-            {
-                let at = t.span.offset;
-                if n == name && src.get(at..at + name.len()) == Some(name) {
-                    out[at..at + name.len()].copy_from_slice(new.as_bytes());
-                }
+        for (n, at) in &idents {
+            if n == name && src.get(*at..*at + name.len()) == Some(name) {
+                out[*at..*at + name.len()].copy_from_slice(new.as_bytes());
             }
         }
         renames.push((new, name.to_string()));
     }
     let text = String::from_utf8(out).unwrap_or_else(|_| src.to_string());
     (text, renames)
+}
+
+/// Every non-raw identifier of `src` with its absolute offset, including
+/// those inside an f-string's `{..}` holes (`f"{Variant.B(2)}"`), which the
+/// lexer keeps as one token (B-2026-10-18-45).
+fn identifiers_with_offsets(src: &str, base: usize) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    for t in crate::tokenize(src) {
+        match &t.token {
+            crate::token::Token::Identifier { name, raw: false } => {
+                out.push((name.clone(), base + t.span.offset));
+            }
+            crate::token::Token::InterpolatedStringLiteral(parts) => {
+                for part in parts {
+                    if let crate::token::InterpolationPart::Expr { raw, offset, .. } = part {
+                        out.extend(identifiers_with_offsets(raw, base + *offset));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Library items the compiler names (`Iterator`, `Ordering`, the serde
