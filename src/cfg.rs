@@ -263,6 +263,10 @@ pub struct Cfg {
     /// A use recorded in one of these can occur at the closure's unknown future
     /// invocation, so the terminal-return RC suppression excludes it.
     pub closure_body_blocks: FxHashSet<BlockId>,
+    /// The continuation of each container-store sink block: the call's
+    /// `after_call` sibling, where control really goes once the owned
+    /// argument is stored (B-2026-10-15-20).
+    pub sink_continuations: FxHashMap<BlockId, BlockId>,
 }
 
 impl Cfg {
@@ -325,6 +329,7 @@ pub fn build_cfg_with_classification<'a>(
         entry,
         exit,
         closure_body_blocks: builder.closure_body_blocks,
+        sink_continuations: builder.sink_continuations,
     }
 }
 
@@ -464,6 +469,7 @@ struct CfgBuilder<'a> {
     /// lowerings; every block minted while it is non-zero is recorded.
     closure_body_blocks: FxHashSet<BlockId>,
     closure_depth: usize,
+    sink_continuations: FxHashMap<BlockId, BlockId>,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -477,6 +483,7 @@ impl<'a> CfgBuilder<'a> {
             seen_names: FxHashSet::default(),
             closure_body_blocks: FxHashSet::default(),
             closure_depth: 0,
+            sink_continuations: FxHashMap::default(),
         }
     }
 
@@ -1047,6 +1054,7 @@ impl<'a> CfgBuilder<'a> {
                     let after_call = self.new_block();
                     self.add_edge(c, sink_block);
                     self.add_edge(c, after_call);
+                    self.sink_continuations.insert(sink_block, after_call);
                     for sink_arg in sink_arg_exprs {
                         self.lower_expr(sink_arg, sink_block, exit, loops);
                     }

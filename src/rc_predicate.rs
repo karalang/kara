@@ -238,9 +238,17 @@ fn reassign_kills_by_reachability(
     // If U is not forward-reachable from C even with every block present
     // (mutually-exclusive branches — the genuine two-arm RC shape), the
     // reassigns are irrelevant and we must not suppress.
+    // A container-store sink is a dead end by construction, so the value it
+    // took is followed from the call's continuation instead: within one loop
+    // iteration a use BEFORE the store is reached only through the next
+    // iteration's `let`, which kills it (B-2026-10-15-20).
+    let start = match cfg.sink_continuations.get(&cb) {
+        Some(&k) => vec![k],
+        None => cfg.block(cb).successors.clone(),
+    };
     let reach = |blocked: &FxHashSet<BlockId>| -> bool {
         let mut seen: FxHashSet<BlockId> = FxHashSet::default();
-        let mut stack: Vec<BlockId> = cfg.block(cb).successors.clone();
+        let mut stack: Vec<BlockId> = start.clone();
         while let Some(n) = stack.pop() {
             if n == ub {
                 return true;

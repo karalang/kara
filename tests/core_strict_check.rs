@@ -6725,4 +6725,47 @@ fn app_rows_of_2026_10_15() {
              println(f\"{kept.len()}\");\n\
          }\n",
     );
+    // B-2026-10-15-20: a loop-local `let mut` written in an `if` and then
+    // stored is declared afresh each iteration, so nothing is reused; a
+    // binding declared outside the loop, or read after the store, still is.
+    let body = |decl_in: bool, after: &str| {
+        format!(
+            "struct It {{ n: i64 }}\n\
+             struct S {{ v: Vec[It] }}\n\
+             impl S {{ fn take(mut ref self, x: own It) {{ self.v.push(x); }} }}\n\
+             fn main() {{\n\
+                 let mut s = S {{ v: Vec.new() }};\n\
+                 let ks = vec![1, 2, 3];\n\
+                 {outer}\n\
+                 for k in ks.iter() {{\n\
+                     {inner}\n\
+                     if k > 1 {{ i.n -= 1; }}\n\
+                     s.take(i);\n\
+                     {after}\n\
+                 }}\n\
+                 println(f\"{{s.v.len()}}\");\n\
+             }}\n",
+            outer = if decl_in {
+                ""
+            } else {
+                "let mut i = It { n: 0 };"
+            },
+            inner = if decl_in {
+                "let mut i = It { n: k };"
+            } else {
+                ""
+            },
+        )
+    };
+    accepted("loop-local-written-then-stored", &body(true, ""));
+    rejected(
+        "outer-written-then-stored",
+        &body(false, ""),
+        "is moved inside a loop",
+    );
+    rejected(
+        "loop-local-read-after-store",
+        &body(true, "println(f\"{i.n}\");"),
+        "moved into a container",
+    );
 }
