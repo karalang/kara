@@ -297,6 +297,39 @@ fn main() {
     );
 }
 
+/// A task body that recurses through its pauses: each call's frame holds
+/// the frame of the call it makes, boxed on the compiled backend, and the
+/// two tasks still interleave at their pauses.
+#[test]
+fn mir_tasks_run_a_recursive_coroutine() {
+    let src = r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn count(n: i64, label: Str) -> i64 {
+    let r = R { id: n };
+    sleep_ms(5);
+    if n == 0 { return 0; }
+    let a = count(n - 1, label);
+    println(f"{label} {n} {r.id}");
+    a + n
+}
+fn main() {
+    let group = TaskGroup.new();
+    let x = group.spawn(|| count(3, "x"));
+    let y = group.spawn(|| count(2, "y"));
+    println(f"sum {x.join() + y.join()}");
+}
+"#;
+    let out = stdout_on_both("recursive", src);
+    let count = |l: &str| out.lines().filter(|x| *x == l).count();
+    assert_eq!(count("drop 0"), 2, "{out}");
+    assert_eq!(count("drop 3"), 1, "{out}");
+    let y_done = out.find("y 2 2").expect("y finishes");
+    let x_done = out.find("x 3 3").expect("x finishes");
+    assert!(y_done < x_done, "the shorter task finishes first: {out}");
+    assert!(out.ends_with("sum 9\n"), "{out}");
+}
+
 /// `TaskGroup.new(limit: n)` lets at most `n` of its tasks run at once
 /// (B-2026-10-15-30): with a limit of 1, each spawn waits for the task
 /// before it, so the pauses run one after another.

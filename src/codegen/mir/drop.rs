@@ -945,10 +945,20 @@ impl<'ctx> Cx<'ctx, '_> {
     /// A fresh box for a value of `fty`, its pointer stored at `slot`.
     pub(super) fn new_box(&mut self, slot: PointerValue<'ctx>, fty: Ty) -> R<PointerValue<'ctx>> {
         let n = self.layout(fty)?.size.max(1);
-        let malloc = self.libc_fn("malloc");
-        let b = self
-            .builder
-            .build_call(malloc, &[self.i64(n).into()], "box")
+        // A recursive coroutine's callee frame is started field by field,
+        // so the box starts zeroed: state 0, and its own callee box empty.
+        let frame = matches!(self.tys.kind(fty), TyKind::Adt(a)
+            if crate::mir::coroutine::is_frame(&self.tys.adt(a).name));
+        let b = if frame {
+            let calloc = self.libc_fn("calloc");
+            self.builder
+                .build_call(calloc, &[self.i64(1).into(), self.i64(n).into()], "box")
+        } else {
+            let malloc = self.libc_fn("malloc");
+            self.builder
+                .build_call(malloc, &[self.i64(n).into()], "box")
+        };
+        let b = b
             .map_err(|e| e.to_string())?
             .try_as_basic_value()
             .basic()

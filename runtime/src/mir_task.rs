@@ -352,11 +352,17 @@ pub(crate) fn take_slept() -> bool {
 }
 
 /// `__ready` of a socket call: whether `fd` is readable now (`write` 0)
-/// or writable, asked without blocking.
+/// or writable, asked without blocking. A socket with a read timeout is
+/// ready at once: its blocking read keeps the timeout itself, where
+/// waiting on readiness alone would never time out.
 #[no_mangle]
 pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     let events: i16 = if write != 0 { 4 } else { 1 }; // POLLOUT, POLLIN
     if EXEC.with(|e| e.borrow().cur.is_none()) {
+        return 1;
+    }
+    #[cfg(unix)]
+    if write == 0 && read_timeout_set(fd as i32) {
         return 1;
     }
     #[cfg(unix)]
@@ -373,6 +379,16 @@ pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     #[cfg(not(unix))]
     let ready = true;
     note(ready, Wait::Fd(fd as i32, events))
+}
+
+/// Whether the socket `fd` has a read timeout (`SO_RCVTIMEO`).
+#[cfg(unix)]
+fn read_timeout_set(fd: i32) -> bool {
+    use std::os::fd::FromRawFd;
+    // SAFETY: `fd` is an open socket the program owns; the stream made
+    // over it is never dropped, so the descriptor stays open.
+    let s = std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(fd) });
+    matches!(s.read_timeout(), Ok(Some(_)))
 }
 
 #[cfg(test)]

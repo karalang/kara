@@ -11,7 +11,7 @@ use crate::ids::{DefId, NodeId};
 
 use super::borrowck::liveness;
 use super::syntax::*;
-use super::ty::{AdtDef, IntTy, Ty, TyInterner, TyKind, VariantDef};
+use super::ty::{AdtDef, AdtId, IntTy, Ty, TyInterner, TyKind, VariantDef};
 
 /// The executor's test native: `Pending` on its first resume and `Ready(())`
 /// on the next.
@@ -603,9 +603,8 @@ pub fn layout(body: &Body, coroutines: &BTreeSet<String>) -> CoroutineLayout {
     }
 }
 
-/// Coroutines that reach themselves through suspending calls. Their frame
-/// would contain itself, so the transform refuses them until a measurement
-/// says services need it (then the callee frame at the back edge is boxed).
+/// Coroutines that reach themselves through suspending calls, whose frame
+/// therefore contains itself (the compiled backends box that callee frame).
 /// Each cycle is named once, by its members in order.
 pub fn recursive_cycles<'a>(
     bodies: impl IntoIterator<Item = &'a Body>,
@@ -772,12 +771,6 @@ pub fn transform(
     let mut set = coroutines(&bodies);
     set.extend(task_names.iter().cloned());
     let bodies = bodies.as_slice();
-    if let Some(cycle) = recursive_cycles(bodies, &set).first() {
-        return Err(format!(
-            "recursive coroutines are not supported yet: {}",
-            cycle.join(", ")
-        ));
-    }
     // A spawned closure is made as a value, but its one caller is its task
     // body.
     let spawned: BTreeSet<String> = bodies
@@ -811,28 +804,31 @@ pub fn transform(
         .collect();
     let layouts: BTreeMap<&str, CoroutineLayout> =
         by_name.iter().map(|(&n, b)| (n, layout(b, &set))).collect();
-    // A frame holds its callees' frames, so make the callees' types first.
-    let mut order: Vec<&str> = Vec::new();
-    fn visit<'a>(
-        n: &'a str,
-        layouts: &BTreeMap<&'a str, CoroutineLayout>,
-        order: &mut Vec<&'a str>,
-    ) {
-        if order.contains(&n) {
-            return;
-        }
-        for p in &layouts[n].points {
-            if let Some((&c, _)) = layouts.get_key_value(p.callee.as_str()) {
-                visit(c, layouts, order);
-            }
-        }
-        order.push(n);
-    }
-    for &n in layouts.keys() {
-        visit(n, &layouts, &mut order);
-    }
-    let u32t = tys.int(IntTy::U32);
+    // A frame holds its callees' frames, so every frame type is named
+    // before any is defined: a recursive coroutine's frame holds its own
+    // type, which the compiled backends box (`layout::boxed_field`) and the
+    // interpreter makes when the call starts it.
+    let order: Vec<&str> = layouts.keys().copied().collect();
+    // The `Poll` types first: they take fresh DefIds too, which must not
+    // be the ones the frames are named by before they are defined.
     let mut polls = BTreeMap::new();
+    let poll_tys: BTreeMap<&str, Ty> = order
+        .iter()
+        .map(|&n| (n, poll_of(tys, &mut polls, by_name[n].return_ty())))
+        .collect();
+    let mut next_def = fresh_def(tys).0;
+    let frame_tys: BTreeMap<&str, (DefId, Ty)> = order
+        .iter()
+        .map(|&n| {
+            let def = DefId(next_def);
+            next_def += 1;
+            while tys.tcx().adt_def(DefId(next_def)).is_some() {
+                next_def += 1;
+            }
+            (n, (def, tys.intern(TyKind::Adt(AdtId(def.0)))))
+        })
+        .collect();
+    let u32t = tys.int(IntTy::U32);
     let mut frames: BTreeMap<String, FrameInfo> = BTreeMap::new();
     for &n in &order {
         let body = by_name[n];
@@ -847,13 +843,14 @@ pub fn transform(
         }
         let mut subs = BTreeMap::new();
         for (k, p) in lay.points.iter().enumerate() {
-            if let Some(f) = frames.get(&p.callee) {
+            if let Some(&(_, t)) = frame_tys.get(p.callee.as_str()) {
                 subs.insert(k, fields_def.len() as u32);
-                fields_def.push((format!("sub{k}"), f.ty));
+                fields_def.push((format!("sub{k}"), t));
             }
         }
-        let id = tys.add_adt(AdtDef {
-            def: fresh_def(tys),
+        let (def, ty) = frame_tys[n];
+        tys.add_adt(AdtDef {
+            def,
             name: frame_name(n),
             is_enum: false,
             variants: vec![VariantDef {
@@ -867,10 +864,10 @@ pub fn transform(
         frames.insert(
             n.to_string(),
             FrameInfo {
-                ty: tys.intern(TyKind::Adt(id)),
+                ty,
                 fields,
                 subs,
-                poll: poll_of(tys, &mut polls, body.return_ty()),
+                poll: poll_tys[n],
                 returned: lay.points.len() as u32 + 1,
             },
         );
@@ -1289,17 +1286,27 @@ impl<'a> Resume<'a> {
                                     source_info: t.source_info,
                                 },
                             });
+                            // A returned callee owns nothing, so a boxed
+                            // (recursive) callee frame is freed until the
+                            // next call makes it again.
+                            let free = Statement {
+                                kind: StatementKind::FreeBox(sub.clone()),
+                                source_info: self.info(),
+                            };
                             extra.push(BasicBlockData {
-                                statements: vec![self.assign(
-                                    dest,
-                                    Rvalue::Use(Operand::Move(Place {
-                                        local: r,
-                                        projection: vec![
-                                            ProjElem::Downcast(VariantIdx(0)),
-                                            ProjElem::Field(FieldIdx(0), callee_body_ret),
-                                        ],
-                                    })),
-                                )],
+                                statements: vec![
+                                    self.assign(
+                                        dest,
+                                        Rvalue::Use(Operand::Move(Place {
+                                            local: r,
+                                            projection: vec![
+                                                ProjElem::Downcast(VariantIdx(0)),
+                                                ProjElem::Field(FieldIdx(0), callee_body_ret),
+                                            ],
+                                        })),
+                                    ),
+                                    free,
+                                ],
                                 terminator: Terminator {
                                     kind: TerminatorKind::Goto { target: b(*next) },
                                     source_info: t.source_info,
@@ -1604,6 +1611,14 @@ fn drop_frame(
                     r.blocks.push(block(&r, vec![], kind));
                 }
                 Release::Callee(callee, sub, ty) => {
+                    // Then the callee's frame box, when it is boxed.
+                    let free = Statement {
+                        kind: StatementKind::FreeBox(sub.clone()),
+                        source_info: r.info(),
+                    };
+                    r.blocks
+                        .push(block(&r, vec![free], TerminatorKind::Goto { target: next }));
+                    let next = BasicBlock(r.blocks.len() as u32 - 1);
                     let t = r.temp(tys.intern(TyKind::MutRef(ty)));
                     let u = r.temp(unit);
                     let kind = TerminatorKind::Call {
@@ -1882,8 +1897,10 @@ fn main() -> () {
         );
     }
 
+    /// A recursive coroutine's frame holds a frame of its own type, which
+    /// the compiled backends keep in a box.
     #[test]
-    fn transform_refuses_recursive_coroutines() {
+    fn transform_gives_a_recursive_coroutine_a_frame_of_its_own_type() {
         let src = "
 fn a() -> () suspends {
     let mut _0: ();
@@ -1896,8 +1913,11 @@ fn a() -> () suspends {
 }
 ";
         let m = parse_module(src).unwrap();
-        let e = transform(&m.bodies, &m.tys).unwrap_err();
-        assert!(e.contains("recursive coroutines"), "{e}");
+        let (_, frames) = transform(&m.bodies, &m.tys).unwrap();
+        let a = &frames["a"];
+        let sub = a.subs[&0];
+        assert_eq!(m.tys.field_ty(a.ty, None, sub), Some(a.ty));
+        assert!(crate::mir::layout::boxed_field(&m.tys, a.ty, None, sub));
     }
 
     /// A value with a Drop body held across a yield is dropped once, after

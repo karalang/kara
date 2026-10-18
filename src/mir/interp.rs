@@ -378,7 +378,7 @@ pub struct RunResult {
     pub events: Vec<Event>,
     pub outcome: Outcome,
     /// How many times the executor resumed a task root that was pending
-    /// (`KARAC_MIR_COROUTINES=1`); 0 otherwise.
+    /// (unless `KARAC_MIR_COROUTINES=0`); 0 otherwise.
     pub resumes: u64,
 }
 
@@ -492,10 +492,12 @@ enum Tasks {
     CancelAfter(u64),
 }
 
-/// Whether `KARAC_MIR_COROUTINES=1` asks for coroutines to run as state
-/// machines, on both backends.
+/// Whether coroutines run as state machines, on both backends: so they do
+/// unless `KARAC_MIR_COROUTINES=0`, which runs their suspending calls
+/// synchronously and every spawned task to completion at its spawn
+/// (B-2026-10-14-49).
 pub fn coroutines_flag() -> bool {
-    std::env::var("KARAC_MIR_COROUTINES").is_ok_and(|v| v == "1")
+    std::env::var("KARAC_MIR_COROUTINES").map_or(true, |v| v != "0")
 }
 
 /// `program` with each coroutine replaced by its `resume` and `drop_frame`
@@ -511,7 +513,7 @@ pub fn with_coroutines(program: &Program, tys: &TyInterner) -> Result<Program, S
     Ok(p)
 }
 
-/// `KARAC_MIR_COROUTINES=1` runs coroutines under the executor.
+/// Coroutines run under the executor unless `KARAC_MIR_COROUTINES=0`.
 fn tasks_flag() -> Tasks {
     if coroutines_flag() {
         Tasks::Run
@@ -9877,13 +9879,23 @@ impl<'a> Interp<'a> {
 
     /// A coroutine frame of type `ty`, before its first resume: state 0,
     /// every local uninitialized, and each callee frame shaped the same way
-    /// so the resume body can start it field by field.
+    /// so the resume body can start it field by field. A recursive
+    /// coroutine's frame holds its own type: that callee frame is left
+    /// uninitialized, and the write of its state that starts it makes it.
     fn fresh_frame(&self, ty: Ty) -> Value {
+        self.fresh_frame_in(ty, &mut Vec::new())
+    }
+
+    fn fresh_frame_in(&self, ty: Ty, open: &mut Vec<Ty>) -> Value {
+        if open.contains(&ty) {
+            return Value::Uninit;
+        }
         match self.tys.kind(ty) {
             TyKind::Adt(a) if coroutine::is_frame(&self.tys.adt(a).name) => {
+                open.push(ty);
                 let adt = self.tys.adt(a);
                 let fields = &adt.variants[0].fields;
-                Value::Agg(
+                let v = Value::Agg(
                     fields
                         .iter()
                         .enumerate()
@@ -9891,11 +9903,13 @@ impl<'a> Interp<'a> {
                             if i == 0 {
                                 Value::Int(0)
                             } else {
-                                self.fresh_frame(*t)
+                                self.fresh_frame_in(*t, open)
                             }
                         })
                         .collect(),
-                )
+                );
+                open.pop();
+                v
             }
             _ => Value::Uninit,
         }
@@ -9958,7 +9972,7 @@ impl<'a> Interp<'a> {
             })
     }
 
-    /// Runs coroutine `entry` as a task root (`KARAC_MIR_COROUTINES=1`): the
+    /// Runs coroutine `entry` as a task root (unless `KARAC_MIR_COROUTINES=0`): the
     /// executor owns its frame and resumes it until it is `Ready`.
     fn run_task(&mut self, entry: &str, args: Vec<Value>) -> R<Value> {
         let resume = coroutine::resume_name(entry);
@@ -10228,6 +10242,11 @@ impl<'a> Interp<'a> {
                 let Some(s) = self.sockets.streams.get(fd) else {
                     return Ok(true);
                 };
+                // A read with a timeout keeps the timeout itself; waiting on
+                // readiness alone would never time out.
+                if matches!(s.read_timeout(), Ok(Some(_))) {
+                    return Ok(true);
+                }
                 let _ = s.set_nonblocking(true);
                 let got = s.peek(&mut [0u8; 1]);
                 let _ = s.set_nonblocking(false);

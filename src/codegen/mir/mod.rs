@@ -77,8 +77,8 @@ pub fn fn_symbol(name: &str) -> String {
 }
 
 /// Compiles the elaborated `program` into a module named `name`, with a C
-/// `main` that runs the Kāra `main` when the program has one. Under
-/// `KARAC_MIR_COROUTINES=1` each coroutine is compiled as its state
+/// `main` that runs the Kāra `main` when the program has one. Unless
+/// `KARAC_MIR_COROUTINES=0`, each coroutine is compiled as its state
 /// machine, and a coroutine `main` runs as the task root.
 pub fn compile_mir<'ctx>(
     llcx: &'ctx Context,
@@ -241,7 +241,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
     }
 
-    /// `free` (and `malloc`), declared once.
+    /// `free` (and `malloc`, `calloc`), declared once.
     pub fn libc_fn(&self, name: &str) -> FunctionValue<'ctx> {
         if let Some(f) = self.module.get_function(name) {
             return f;
@@ -249,6 +249,10 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         let p = self.ptr_ty();
         let ty = match name {
             "malloc" => p.fn_type(&[self.llcx.i64_type().into()], false),
+            "calloc" => {
+                let i64t = self.llcx.i64_type();
+                p.fn_type(&[i64t.into(), i64t.into()], false)
+            }
             _ => self.llcx.void_type().fn_type(&[p.into()], false),
         };
         self.module.add_function(name, ty, Some(Linkage::External))
