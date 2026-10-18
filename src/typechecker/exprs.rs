@@ -3164,9 +3164,29 @@ impl<'a> super::TypeChecker<'a> {
         // is silent here — pass 2's `check_assignable` produces the
         // user-facing diagnostic, and unify already records partial
         // structural matches.
-        for ((sub_param_ty, arg_ty_opt), formal) in
-            sub_params.iter().zip(arg_tys.iter()).zip(params.iter())
+        // A bare unit variant of a generic enum (`None`) is typed with the
+        // enum's own parameters (`Option[T]`), which say nothing about the
+        // slot: unified, they bound the callee's `T` to the enum's `T`, and
+        // an argument or bound that solved it later could not
+        // (B-2026-10-18-24). It still gets pass 2's check.
+        let undecided_variant: Vec<bool> = args
+            .iter()
+            .zip(arg_tys.iter())
+            .map(|(arg, t)| {
+                self.library_methods_from_source
+                    && t.as_ref()
+                        .is_some_and(|t| self.is_undecided_unit_variant(&arg.value, t))
+            })
+            .collect();
+        for (((sub_param_ty, arg_ty_opt), formal), undecided) in sub_params
+            .iter()
+            .zip(arg_tys.iter())
+            .zip(params.iter())
+            .zip(undecided_variant)
         {
+            if undecided {
+                continue;
+            }
             if let Some(arg_ty) = arg_ty_opt {
                 unify_types(
                     sub_param_ty,
@@ -4136,6 +4156,25 @@ impl<'a> super::TypeChecker<'a> {
     /// Unify each `where I.Assoc = X` of a generic call with what `I`'s
     /// solution says its `Assoc` is, so the call's metavariables in `X` are
     /// solved from it.
+    /// A bare unit variant of a generic enum whose parameters nothing has
+    /// decided: `None`, typed as `Option[T]` with the enum's own `T`.
+    fn is_undecided_unit_variant(&self, arg: &Expr, ty: &Type) -> bool {
+        if !matches!(arg.kind, ExprKind::Identifier(_) | ExprKind::Path { .. }) {
+            return false;
+        }
+        let Type::Named { name, args } = ty else {
+            return false;
+        };
+        let Some(info) = self.env.enums.get(name) else {
+            return false;
+        };
+        !args.is_empty()
+            && args.len() == info.generic_params.len()
+            && args.iter().zip(&info.generic_params).all(|(a, p)| {
+                matches!(a, Type::TypeParam(n) if n == p && !self.enclosing_bounds.contains_key(n))
+            })
+    }
+
     fn solve_from_assoc_type_eqs(
         &mut self,
         where_clause: Option<&WhereClause>,

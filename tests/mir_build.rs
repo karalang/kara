@@ -3565,3 +3565,102 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_bare_none_argument_leaves_the_callee_param_to_the_other_arguments() {
+    // B-2026-10-18-24: `fold_from(it, f, None)` with `start: own Option[T]`
+    // and `T` fixed by `I: Iterator[Item = T]` instanced `fold_from` at
+    // `T = ()`: the bare `None` typed as `Option[T]` with Option's own `T`
+    // bound the callee's `T` to it before the bound could solve it, and the
+    // compiled lanes printed `()` (asan: stack-buffer-overflow).
+    let src = r#"
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+fn fold_from[I: Iterator[Item = T], T](it: own I, f: Fn(own T, own T) -> T, start: own Option[T]) -> Option[T] {
+    let mut it = it;
+    let mut acc = start;
+    while let Some(x) = it.next() {
+        acc = match acc {
+            None => Some(x),
+            Some(a) => Some(f(a, x)),
+        };
+    }
+    acc
+}
+
+fn main0() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    match fold_from(VecIter { items: v, pos: 0 }, |a: i64, b: i64| a + b, None) {
+        Some(t) => println(f"{t}"),
+        None => println("none"),
+    }
+}
+
+enum Slot[T] {
+    Empty,
+    Full(T),
+}
+
+fn first[T](a: own Option[T], b: own Option[T]) -> Option[T] {
+    match a {
+        Some(x) => Some(x),
+        None => b,
+    }
+}
+
+fn pick[T](d: own T, s: own Slot[T]) -> T {
+    match s {
+        Slot.Full(x) => x,
+        Slot.Empty => d,
+    }
+}
+
+fn count[T](o: own Option[T]) -> i64 {
+    match o {
+        Some(_) => 1,
+        None => 0,
+    }
+}
+
+fn main1() {
+    match first(None, Some("b".to_string())) {
+        Some(s) => println(s),
+        None => println("none"),
+    }
+    match first(Some(2.5), None) {
+        Some(s) => println(f"{s}"),
+        None => println("none"),
+    }
+    println(f"{pick(7, Slot.Empty)}");
+    println(pick("d".to_string(), Slot.Empty));
+    println(f"{count(None)}");
+}
+
+fn main() {
+    main0();
+    main1();
+}
+"#;
+    let want = "6\nb\n2.5\n7\nd\n0\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
