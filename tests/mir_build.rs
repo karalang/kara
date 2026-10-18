@@ -4756,3 +4756,68 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_field_reached_through_a_mut_ref_binds_its_payload_mutably() {
+    // B-2026-10-18-41: `match it.value { V.List(q) => q.push(..) }` with
+    // `it` a `mut ref` was refused by the borrow checker ("mutable borrow
+    // of (*_16) through a shared reference"): the field was matched
+    // through a shared reborrow. A place reached only through `mut ref`s
+    // is now reborrowed mutably, so `q` is a `mut ref`, while a `Copy`
+    // payload (`Count(n)`) still copies and the arm may overwrite the
+    // field it came from.
+    let src = r#"
+enum Value { Text(String), List(Vec[String]) }
+struct Item { value: Value }
+enum St { Idle, Count(i64), Named(String) }
+struct M { state: St, tag: String }
+
+fn add(it: mut ref Item) {
+    match it.value {
+        Value.List(q) => q.push("x".to_string()),
+        Value.Text(_) => {}
+    }
+}
+
+fn step(m: mut ref M) {
+    match m.state {
+        St.Idle => m.state = St.Count(1),
+        St.Count(n) => {
+            m.state = St.Named(f"c{n}");
+            println(f"was {n}");
+        }
+        St.Named(s) => {
+            s.push_str("!");
+            println(f"{s} {m.tag}");
+        }
+    }
+}
+
+fn main() {
+    let mut items: Map[String, Item] = Map.new();
+    items.insert("k".to_string(), Item { value: Value.List(Vec.new()) });
+    let it = items.get_mut("k".to_string()).unwrap();
+    match it.value {
+        Value.List(q) => q.push("x".to_string()),
+        Value.Text(_) => {}
+    }
+    add(mut items.get_mut("k".to_string()).unwrap());
+    match items.get("k".to_string()).unwrap().value {
+        Value.List(q) => println(f"{q.len()}"),
+        Value.Text(_) => {}
+    }
+    let mut m = M { state: St.Idle, tag: "t".to_string() };
+    step(mut m);
+    step(mut m);
+    step(mut m);
+}
+"#;
+    let want = "2\nwas 1\nc1! t\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

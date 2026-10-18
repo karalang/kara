@@ -1733,6 +1733,10 @@ struct Bx<'l, 'a> {
     /// they copied: a `ref` to the binding views that place instead, so it
     /// outlives the binding's arm.
     copy_views: FxHashMap<Local, Place>,
+    /// Scrutinees reborrowed mutably because they are reached only through
+    /// `mut ref`s, with no `mut ref` binding asking for it: their `Copy`
+    /// parts bind by copy (B-2026-10-18-41).
+    writable_reborrows: FxHashSet<Local>,
     /// The closure being lowered is a library sort's key function.
     closure_key: bool,
     /// The closure being lowered is a task handed to `TaskGroup.spawn`,
@@ -1787,6 +1791,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_count: 0,
             closure_ref_params: false,
             copy_views: FxHashMap::default(),
+            writable_reborrows: FxHashSet::default(),
             closure_key: false,
             closure_task: false,
             closure_escapes: false,
@@ -8782,7 +8787,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             // A place reached through a reference or handle (`self.label`
             // in a `ref self` method, `v[i]`) is a `ref` scrutinee too
             // (core semantics §4.6): matched through a shared reborrow, so
-            // its bindings are `ref`s even under a `mut ref`.
+            // its bindings are `ref`s. A field reached only through
+            // `mut ref`s (`it.value` with `it: mut ref Item`) is writable,
+            // so it is reborrowed mutably and a non-`Copy` part binds a
+            // `mut ref`, as matching on `it` itself does (B-2026-10-18-41).
             _ if place.projection.iter().any(|p| {
                 matches!(
                     p,
@@ -8790,8 +8798,13 @@ impl<'l, 'a> Bx<'l, 'a> {
                 )
             }) =>
             {
+                let writable = !mutable && self.only_through_mut_refs(&place);
+                let mutable = mutable || writable;
                 let rt = self.tys().tcx().reference(st, mutable);
                 let r = self.temp(rt);
+                if writable {
+                    self.writable_reborrows.insert(r);
+                }
                 let kind = if mutable {
                     BorrowKind::Mut
                 } else {
@@ -9750,6 +9763,22 @@ impl<'l, 'a> Bx<'l, 'a> {
     }
 
     /// Does `place` reach its target through a `mut ref`?
+    /// Whether `place` is reached through no index and only through
+    /// `mut ref` dereferences, so it may be written (B-2026-10-18-41).
+    fn only_through_mut_refs(&self, place: &Place) -> bool {
+        (0..place.projection.len()).all(|k| match place.projection[k] {
+            ProjElem::Index(_) | ProjElem::ConstIndex(_) => false,
+            ProjElem::Deref => {
+                let base = Place {
+                    local: place.local,
+                    projection: place.projection[..k].to_vec(),
+                };
+                matches!(self.tys().tcx().kind(self.place_type(&base)), HK::MutRef(_))
+            }
+            _ => true,
+        })
+    }
+
     fn through_mut_ref(&self, place: &Place) -> bool {
         (0..place.projection.len()).any(|k| {
             matches!(place.projection[k], ProjElem::Deref) && {
@@ -9775,7 +9804,10 @@ impl<'l, 'a> Bx<'l, 'a> {
         // `Copy` parts included (`Some(n) => set_to(n, 42)` writes the
         // payload); through a `ref`, a `Copy` part is copied, which reads
         // the same.
-        let mutable = by_ref && self.through_mut_ref(&place);
+        // A `Copy` part of a field reached through a `mut ref` (`Some(n)`
+        // over `it.v`) copies, as the checker types it (B-2026-10-18-41).
+        let copied = self.is_copy(t) && self.writable_reborrows.contains(&place.local);
+        let mutable = by_ref && self.through_mut_ref(&place) && !copied;
         // A binding that covers a whole handle (or handle aggregate) copies
         // it even from a `ref` scrutinee (core semantics §4.6, §6.1).
         let handle = self.is_handle(t) || self.is_handle_aggregate(t);
@@ -9802,7 +9834,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // A `shared` handle binds a counted copy (§6.1).
                 self.count_copy(place, t, Place::local(l));
             } else {
-                if by_ref && place.projection.contains(&ProjElem::Deref) {
+                // A copy out of a writable place stays a copy: the arm may
+                // write that place while the binding is still read.
+                if by_ref
+                    && place.projection.contains(&ProjElem::Deref)
+                    && !self.through_mut_ref(&place)
+                {
                     self.copy_views.insert(l, place.clone());
                 }
                 let op = self.use_place(place, t);
