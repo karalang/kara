@@ -1,0 +1,1049 @@
+// mini_collections: Python 3.13's collections module as generic Kāra
+// types: an insertion-ordered Dict (dict and OrderedDict), Counter,
+// deque, ChainMap, and functools.lru_cache's policy, with Python's reprs.
+// The jobs drive each type through a script of operations, and a few
+// small programs use them: grouping an access log, `tail -n`, and a
+// cache over a request trace.
+
+// ------------------------------------------------------------ repr
+
+// repr() as Python prints it.
+trait PyRepr {
+    fn py_repr(ref self) -> String;
+}
+
+impl PyRepr for i64 {
+    fn py_repr(ref self) -> String {
+        f"{self}"
+    }
+}
+
+// B-2026-10-18-17: `karac check` refuses `*self` on a `ref self`
+// receiver, so the receiver is read as a plain bool.
+impl PyRepr for bool {
+    fn py_repr(ref self) -> String {
+        if self { "True".to_string() } else { "False".to_string() }
+    }
+}
+
+// str.__repr__: single quotes unless the text has a ' and no ".
+impl PyRepr for String {
+    fn py_repr(ref self) -> String {
+        let quote = if self.contains("'") and not self.contains("\"") { '"' } else { '\'' };
+        let mut out = String.new();
+        out.push(quote);
+        for c in self.chars() {
+            if c == quote or c == '\\' {
+                out.push('\\');
+                out.push(c);
+            } else if c == '\n' {
+                out.push_str("\\n");
+            } else if c == '\t' {
+                out.push_str("\\t");
+            } else if c == '\r' {
+                out.push_str("\\r");
+            } else {
+                out.push(c);
+            }
+        }
+        out.push(quote);
+        out
+    }
+}
+
+// A ChainMap value: the scripts set numbers and strings.
+#[derive(Clone, PartialEq)]
+enum Value {
+    Int(i64),
+    Text(String),
+}
+
+impl PyRepr for Value {
+    fn py_repr(ref self) -> String {
+        match self {
+            Value.Int(n) => n.py_repr(),
+            Value.Text(s) => s.py_repr(),
+        }
+    }
+}
+
+fn list_repr[T: PyRepr](items: ref Vec[T]) -> String {
+    let parts: Vec[String] = items.iter().map(|x| x.py_repr()).collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn pair_repr[K: PyRepr, V: PyRepr](k: ref K, v: ref V) -> String {
+    f"({k.py_repr()}, {v.py_repr()})"
+}
+
+// ------------------------------------------------------------ Dict
+
+// A dict keeps its keys in insertion order; Map does not, so the entries
+// live in a Vec (a removed entry leaves None until the next compaction)
+// and the Map indexes it.
+struct Dict[K, V] {
+    slots: Vec[Option[(K, V)]],
+    index: Map[K, i64],
+}
+
+impl[K: Hash + Eq + Clone, V: Clone] Dict[K, V] {
+    fn new() -> Dict[K, V] {
+        Dict { slots: Vec.new(), index: Map.new() }
+    }
+
+    fn len(ref self) -> i64 {
+        self.index.len()
+    }
+
+    fn is_empty(ref self) -> bool {
+        self.index.len() == 0
+    }
+
+    fn contains(ref self, k: ref K) -> bool {
+        self.index.contains_key(k)
+    }
+
+    fn get(ref self, k: ref K) -> Option[V] {
+        match self.index.get(k) {
+            Some(i) => match self.slots[*i] {
+                Some((_, v)) => Some(v.clone()),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    // d[k] = v: a new key goes at the end, an old one keeps its place.
+    fn set(mut ref self, k: own K, v: own V) {
+        match self.index.get(k) {
+            Some(i) => {
+                let at = *i;
+                self.slots[at] = Some((k, v));
+            }
+            None => {
+                self.index.insert(k.clone(), self.slots.len());
+                self.slots.push(Some((k, v)));
+            }
+        }
+    }
+
+    fn remove(mut ref self, k: ref K) -> Option[V] {
+        let at = match self.index.get(k) {
+            Some(i) => *i,
+            None => return None,
+        };
+        self.index.remove(k);
+        let old = self.slots[at].clone();
+        self.slots[at] = None;
+        if self.slots.len() > 8 and self.index.len() * 2 < self.slots.len() {
+            self.compact();
+        }
+        match old {
+            Some((_, v)) => Some(v),
+            None => None,
+        }
+    }
+
+    fn compact(mut ref self) {
+        let items = self.items();
+        self.slots = Vec.new();
+        self.index = Map.new();
+        for (k, v) in items.into_iter() {
+            self.set(k, v);
+        }
+    }
+
+    fn items(ref self) -> Vec[(K, V)] {
+        let mut out: Vec[(K, V)] = Vec.new();
+        for s in self.slots.iter() {
+            if let Some((k, v)) = s {
+                out.push((k.clone(), v.clone()));
+            }
+        }
+        out
+    }
+
+    fn keys(ref self) -> Vec[K] {
+        self.items().into_iter().map(|(k, _)| k).collect()
+    }
+
+    // OrderedDict.move_to_end
+    fn move_to_end(mut ref self, k: ref K, last: bool) -> bool {
+        let v = match self.remove(k) {
+            Some(v) => v,
+            None => return false,
+        };
+        if last {
+            self.set(k.clone(), v);
+        } else {
+            let rest = self.items();
+            self.slots = Vec.new();
+            self.index = Map.new();
+            self.set(k.clone(), v);
+            for (k2, v2) in rest.into_iter() {
+                self.set(k2, v2);
+            }
+        }
+        true
+    }
+
+    // OrderedDict.popitem
+    fn popitem(mut ref self, last: bool) -> Option[(K, V)] {
+        let items = self.items();
+        if items.is_empty() {
+            return None;
+        }
+        let (k, v) = if last { items[items.len() - 1].clone() } else { items[0].clone() };
+        let _ = self.remove(k);
+        Some((k, v))
+    }
+}
+
+fn dict_body[K: Hash + Eq + Clone + PyRepr, V: Clone + PyRepr](d: ref Dict[K, V]) -> String {
+    let parts: Vec[String] = d.items().iter().map(|(k, v)| f"{k.py_repr()}: {v.py_repr()}").collect();
+    f"{{{parts.join(", ")}}}"
+}
+
+// ------------------------------------------------------------ Counter
+
+struct Counter[K] {
+    d: Dict[K, i64],
+}
+
+impl[K: Hash + Eq + Clone + PyRepr] Counter[K] {
+    fn new() -> Counter[K] {
+        Counter { d: Dict.new() }
+    }
+
+    fn of(items: ref Vec[K]) -> Counter[K] {
+        // B-2026-10-18-18: `Counter.new()` needs its type written out on
+        // the MIR surfaces, here and below.
+        let mut c: Counter[K] = Counter.new();
+        c.update(items);
+        c
+    }
+
+    // c[k]: a missing key counts 0.
+    fn count(ref self, k: ref K) -> i64 {
+        match self.d.get(k) {
+            Some(n) => n,
+            None => 0,
+        }
+    }
+
+    fn update(mut ref self, items: ref Vec[K]) {
+        for k in items.iter() {
+            let n = self.count(k);
+            self.d.set(k.clone(), n + 1);
+        }
+    }
+
+    fn subtract(mut ref self, items: ref Vec[K]) {
+        for k in items.iter() {
+            let n = self.count(k);
+            self.d.set(k.clone(), n - 1);
+        }
+    }
+
+    fn total(ref self) -> i64 {
+        let mut t = 0;
+        for (_, n) in self.d.items().iter() {
+            t += *n;
+        }
+        t
+    }
+
+    // most_common(n): by count, largest first, ties in insertion order.
+    fn most_common(ref self, n: Option[i64]) -> Vec[(K, i64)] {
+        let mut sorted: Vec[(K, i64)] = Vec.new();
+        for (k, c) in self.d.items().into_iter() {
+            let mut j = sorted.len();
+            while j > 0 and sorted[j - 1].1 < c {
+                j -= 1;
+            }
+            sorted.insert(j, (k, c));
+        }
+        match n {
+            None => sorted,
+            Some(n) => {
+                let mut out: Vec[(K, i64)] = Vec.new();
+                for i in 0..sorted.len() {
+                    if i >= n {
+                        break;
+                    }
+                    out.push(sorted[i].clone());
+                }
+                out
+            }
+        }
+    }
+
+    fn elements(ref self) -> Vec[K] {
+        let mut out: Vec[K] = Vec.new();
+        for (k, n) in self.d.items().iter() {
+            for _ in 0..*n {
+                out.push(k.clone());
+            }
+        }
+        out
+    }
+
+    fn repr(ref self) -> String {
+        if self.d.is_empty() {
+            return "Counter()".to_string();
+        }
+        let parts: Vec[String] = self.most_common(None).iter().map(|(k, n)| f"{k.py_repr()}: {n}").collect();
+        f"Counter({{{parts.join(", ")}}})"
+    }
+
+    // +c and -c
+    fn signed(ref self, negate: bool) -> Counter[K] {
+        let mut r: Counter[K] = Counter.new();
+        for (k, n) in self.d.items().into_iter() {
+            // B-2026-10-18-3 and B-2026-10-15-20: a move in each of two
+            // exclusive branches of a loop is refused, and so is a clone in
+            // one with a move in the other, so both branches clone.
+            if not negate and n > 0 {
+                r.d.set(k.clone(), n);
+            } else if negate and n < 0 {
+                r.d.set(k.clone(), 0 - n);
+            }
+        }
+        r
+    }
+
+    fn add(ref self, other: ref Counter[K]) -> Counter[K] {
+        let mut r: Counter[K] = Counter.new();
+        for (k, n) in self.d.items().into_iter() {
+            let m = n + other.count(k);
+            if m > 0 {
+                r.d.set(k, m);
+            }
+        }
+        for (k, n) in other.d.items().into_iter() {
+            if not self.d.contains(k) and n > 0 {
+                r.d.set(k, n);
+            }
+        }
+        r
+    }
+
+    fn sub(ref self, other: ref Counter[K]) -> Counter[K] {
+        let mut r: Counter[K] = Counter.new();
+        for (k, n) in self.d.items().into_iter() {
+            let m = n - other.count(k);
+            if m > 0 {
+                r.d.set(k, m);
+            }
+        }
+        for (k, n) in other.d.items().into_iter() {
+            if not self.d.contains(k) and n < 0 {
+                r.d.set(k, 0 - n);
+            }
+        }
+        r
+    }
+
+    fn union(ref self, other: ref Counter[K]) -> Counter[K] {
+        let mut r: Counter[K] = Counter.new();
+        for (k, n) in self.d.items().into_iter() {
+            let o = other.count(k);
+            let m = if n < o { o } else { n };
+            if m > 0 {
+                r.d.set(k, m);
+            }
+        }
+        for (k, n) in other.d.items().into_iter() {
+            if not self.d.contains(k) and n > 0 {
+                r.d.set(k, n);
+            }
+        }
+        r
+    }
+
+    fn intersect(ref self, other: ref Counter[K]) -> Counter[K] {
+        let mut r: Counter[K] = Counter.new();
+        for (k, n) in self.d.items().into_iter() {
+            let o = other.count(k);
+            let m = if n < o { n } else { o };
+            if m > 0 {
+                r.d.set(k, m);
+            }
+        }
+        r
+    }
+
+    // The rich comparisons: every key of either counter, missing ones 0.
+    fn all_keys_satisfy(ref self, other: ref Counter[K], op: Fn(i64, i64) -> bool) -> bool {
+        for k in self.d.keys().iter() {
+            if not op(self.count(k), other.count(k)) {
+                return false;
+            }
+        }
+        for k in other.d.keys().iter() {
+            if not op(self.count(k), other.count(k)) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn most_repr(v: ref Vec[(String, i64)]) -> String {
+    let parts: Vec[String] = v.iter().map(|(k, n)| pair_repr(k, n)).collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn word_list(args: ref Vec[String]) -> Result[Vec[String], String] {
+    if args.len() == 1 and args[0].starts_with("@") {
+        let text = read_data(args[0])?;
+        return Ok(text.split_whitespace());
+    }
+    Ok(args.clone())
+}
+
+fn counter_job(ops: ref String, out: mut ref String) -> Result[(), String] {
+    let mut c: Counter[String] = Counter.new();
+    for op in ops.split("|") {
+        let p: Vec[String] = op.split(" ");
+        let cmd = p[0].clone();
+        let args: Vec[String] = p[1..].iter().filter(|a| not a.is_empty()).map(|a| a.clone()).collect();
+        if cmd == "new" {
+            c = Counter.of(word_list(args)?);
+            out.push_str(f"  {op} -> {c.repr()}\n");
+        } else if cmd == "repr" {
+            out.push_str(f"  {c.repr()}\n");
+        } else if cmd == "most" {
+            let n = if args.is_empty() { None } else { Some(num(args[0])) };
+            out.push_str(f"  {op} = {most_repr(c.most_common(n))}\n");
+        } else if cmd == "total" {
+            out.push_str(f"  total = {c.total()}\n");
+        } else if cmd == "get" {
+            out.push_str(f"  {op} = {c.count(args[0])}\n");
+        } else if cmd == "elements" {
+            out.push_str(f"  elements = {list_repr(c.elements())}\n");
+        } else if cmd == "update" {
+            c.update(args);
+            out.push_str(f"  {op} -> {c.repr()}\n");
+        } else if cmd == "subtract" {
+            c.subtract(args);
+            out.push_str(f"  {op} -> {c.repr()}\n");
+        } else if cmd == "del" {
+            let _ = c.d.remove(args[0]);
+            out.push_str(f"  {op} -> {c.repr()}\n");
+        } else if cmd == "pos" {
+            out.push_str(f"  +c = {c.signed(false).repr()}\n");
+        } else if cmd == "neg" {
+            out.push_str(f"  -c = {c.signed(true).repr()}\n");
+        } else {
+            let other = Counter.of(args);
+            let r = if cmd == "add" {
+                c.add(other).repr()
+            } else if cmd == "sub" {
+                c.sub(other).repr()
+            } else if cmd == "and" {
+                c.intersect(other).repr()
+            } else if cmd == "or" {
+                c.union(other).repr()
+            } else if cmd == "le" {
+                c.all_keys_satisfy(other, |a, b| a <= b).py_repr()
+            } else if cmd == "ge" {
+                c.all_keys_satisfy(other, |a, b| a >= b).py_repr()
+            } else if cmd == "eq" {
+                c.all_keys_satisfy(other, |a, b| a == b).py_repr()
+            } else if cmd == "ne" {
+                (not c.all_keys_satisfy(other, |a, b| a == b)).py_repr()
+            } else {
+                return Err(f"unknown counter op {cmd}");
+            };
+            out.push_str(f"  {op} = {r}\n");
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ deque
+
+struct Deque[T] {
+    items: Vec[T],
+    maxlen: Option[i64],
+}
+
+impl[T: Clone + PartialEq + PyRepr] Deque[T] {
+    fn new(maxlen: Option[i64]) -> Deque[T] {
+        Deque { items: Vec.new(), maxlen: maxlen }
+    }
+
+    fn full(ref self) -> bool {
+        match self.maxlen {
+            Some(m) => self.items.len() >= m,
+            None => false,
+        }
+    }
+
+    fn append(mut ref self, x: own T) {
+        if self.maxlen == Some(0) {
+            return;
+        }
+        if self.full() {
+            self.items.remove(0);
+        }
+        self.items.push(x);
+    }
+
+    fn appendleft(mut ref self, x: own T) {
+        if self.maxlen == Some(0) {
+            return;
+        }
+        if self.full() {
+            let _ = self.items.pop();
+        }
+        self.items.insert(0, x);
+    }
+
+    fn pop(mut ref self) -> Result[T, String] {
+        match self.items.pop() {
+            Some(x) => Ok(x),
+            None => Err("IndexError: pop from an empty deque".to_string()),
+        }
+    }
+
+    fn popleft(mut ref self) -> Result[T, String] {
+        if self.items.is_empty() {
+            return Err("IndexError: pop from an empty deque".to_string());
+        }
+        Ok(self.items.remove(0))
+    }
+
+    fn slot(ref self, i: i64) -> Result[i64, String] {
+        let n = self.items.len();
+        let j = if i < 0 { i + n } else { i };
+        if j < 0 or j >= n {
+            return Err("IndexError: deque index out of range".to_string());
+        }
+        Ok(j)
+    }
+
+    // rotate(n): n steps to the right; a negative n goes left.
+    fn rotate(mut ref self, n: i64) {
+        let len = self.items.len();
+        if len <= 1 {
+            return;
+        }
+        let k = ((n % len) + len) % len;
+        if k == 0 {
+            return;
+        }
+        let mut rotated: Vec[T] = self.items[len - k..].to_vec();
+        for x in self.items[0..len - k].iter() {
+            rotated.push(x.clone());
+        }
+        self.items = rotated;
+    }
+
+    fn index(ref self, x: ref T) -> Option[i64] {
+        for i in 0..self.items.len() {
+            if self.items[i] == *x {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    // insert(i, x), with list.insert's clamping of i.
+    fn insert(mut ref self, i: i64, x: own T) -> Result[(), String] {
+        if self.full() or self.maxlen == Some(0) {
+            return Err("IndexError: deque already at its maximum size".to_string());
+        }
+        let n = self.items.len();
+        let mut j = if i < 0 { i + n } else { i };
+        if j < 0 {
+            j = 0;
+        }
+        if j > n {
+            j = n;
+        }
+        self.items.insert(j, x);
+        Ok(())
+    }
+
+    fn repr(ref self) -> String {
+        match self.maxlen {
+            Some(m) => f"deque({list_repr(self.items)}, maxlen={m})",
+            None => f"deque({list_repr(self.items)})",
+        }
+    }
+}
+
+fn deque_op(d: mut ref Deque[i64], cmd: ref String, a: ref Vec[i64]) -> Result[Option[String], String] {
+    if cmd == "append" {
+        d.append(a[0]);
+    } else if cmd == "appendleft" {
+        d.appendleft(a[0]);
+    } else if cmd == "extend" {
+        for x in a.iter() {
+            d.append(*x);
+        }
+    } else if cmd == "extendleft" {
+        for x in a.iter() {
+            d.appendleft(*x);
+        }
+    } else if cmd == "pop" {
+        return Ok(Some(d.pop()?.py_repr()));
+    } else if cmd == "popleft" {
+        return Ok(Some(d.popleft()?.py_repr()));
+    } else if cmd == "len" {
+        return Ok(Some(f"{d.items.len()}"));
+    } else if cmd == "get" {
+        let j = d.slot(a[0])?;
+        return Ok(Some(d.items[j].py_repr()));
+    } else if cmd == "set" {
+        let j = d.slot(a[0])?;
+        d.items[j] = a[1];
+    } else if cmd == "rotate" {
+        d.rotate(a[0]);
+    } else if cmd == "count" {
+        let n = d.items.iter().filter(|x| *x == a[0]).count();
+        return Ok(Some(f"{n}"));
+    } else if cmd == "index" {
+        return match d.index(a[0]) {
+            Some(i) => Ok(Some(f"{i}")),
+            None => Err(f"ValueError: {a[0]} is not in deque"),
+        };
+    } else if cmd == "remove" {
+        match d.index(a[0]) {
+            Some(i) => {
+                d.items.remove(i);
+            }
+            None => return Err(f"ValueError: {a[0]} is not in deque"),
+        }
+    } else if cmd == "reverse" {
+        d.items.reverse();
+    } else if cmd == "insert" {
+        d.insert(a[0], a[1])?;
+    } else if cmd == "clear" {
+        d.items = Vec.new();
+    } else if cmd == "maxlen" {
+        return Ok(Some(match d.maxlen {
+            Some(m) => f"{m}",
+            None => "None".to_string(),
+        }));
+    } else {
+        return Err(f"unknown deque op {cmd}");
+    }
+    Ok(None)
+}
+
+fn deque_job(maxlen: ref String, ops: ref String, out: mut ref String) {
+    let mut d: Deque[i64] = Deque.new(if maxlen == "-" { None } else { Some(num(maxlen)) });
+    for op in ops.split("|") {
+        let p: Vec[String] = op.split(" ");
+        let a: Vec[i64] = p[1..].iter().map(|x| num(x)).collect();
+        match deque_op(mut d, p[0], a) {
+            Ok(None) => out.push_str(f"  {op} -> {d.repr()}\n"),
+            Ok(Some(r)) => out.push_str(f"  {op} = {r} -> {d.repr()}\n"),
+            Err(e) => out.push_str(f"  {op}: {e}\n"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ OrderedDict
+
+fn odict_repr(d: ref Dict[String, i64]) -> String {
+    if d.is_empty() {
+        return "OrderedDict()".to_string();
+    }
+    f"OrderedDict({dict_body(d)})"
+}
+
+fn odict_op(d: mut ref Dict[String, i64], cmd: ref String, a: ref Vec[String]) -> Result[Option[String], String] {
+    if cmd == "set" {
+        d.set(a[0].clone(), num(a[1]));
+    } else if cmd == "repr" {
+    } else if cmd == "get" {
+        return match d.get(a[0]) {
+            Some(v) => Ok(Some(v.py_repr())),
+            None => Err(f"KeyError: {a[0].py_repr()}"),
+        };
+    } else if cmd == "del" {
+        if d.remove(a[0]).is_none() {
+            return Err(f"KeyError: {a[0].py_repr()}");
+        }
+    } else if cmd == "move" {
+        if not d.move_to_end(a[0], a[1] == "last") {
+            return Err(f"KeyError: {a[0].py_repr()}");
+        }
+    } else if cmd == "popitem" {
+        return match d.popitem(a[0] == "last") {
+            Some((k, v)) => Ok(Some(pair_repr(k, v))),
+            None => Err("KeyError: 'dictionary is empty'".to_string()),
+        };
+    } else if cmd == "keys" {
+        return Ok(Some(list_repr(d.keys())));
+    } else {
+        return Err(f"unknown odict op {cmd}");
+    }
+    Ok(None)
+}
+
+fn odict_job(ops: ref String, out: mut ref String) {
+    let mut d: Dict[String, i64] = Dict.new();
+    for op in ops.split("|") {
+        let p: Vec[String] = op.split(" ");
+        let a: Vec[String] = p[1..].to_vec();
+        match odict_op(mut d, p[0], a) {
+            Ok(None) => out.push_str(f"  {op} -> {odict_repr(d)}\n"),
+            Ok(Some(r)) => out.push_str(f"  {op} = {r} -> {odict_repr(d)}\n"),
+            Err(e) => out.push_str(f"  {op}: {e}\n"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ lru_cache
+
+// functools.lru_cache's bounded policy: a hit moves the key to the
+// newest end; a miss on a full cache evicts the oldest first.
+struct Lru[K, V] {
+    cache: Dict[K, V],
+    maxsize: i64,
+    hits: i64,
+    misses: i64,
+    evicted: Vec[K],
+}
+
+impl[K: Hash + Eq + Clone, V: Clone] Lru[K, V] {
+    fn new(maxsize: i64) -> Lru[K, V] {
+        Lru { cache: Dict.new(), maxsize: maxsize, hits: 0, misses: 0, evicted: Vec.new() }
+    }
+
+    // Returns the value and whether it was a hit.
+    fn call(mut ref self, k: ref K, load: Fn(K) -> V) -> (V, bool) {
+        if let Some(v) = self.cache.get(k) {
+            self.hits += 1;
+            let _ = self.cache.move_to_end(k, true);
+            return (v, true);
+        }
+        self.misses += 1;
+        let v = load(k);
+        if self.maxsize <= 0 {
+            return (v, false);
+        }
+        if self.cache.len() >= self.maxsize {
+            if let Some((old, _)) = self.cache.popitem(false) {
+                self.evicted.push(old);
+            }
+        }
+        self.cache.set(k.clone(), v.clone());
+        (v, false)
+    }
+}
+
+fn lru_job(maxsize: i64, file: ref String, out: mut ref String) -> Result[(), String] {
+    let keys = read_data(file)?.split_whitespace();
+    let mut lru: Lru[String, String] = Lru.new(maxsize);
+    let mut marks: Vec[String] = Vec.new();
+    for k in keys.iter() {
+        let (_, hit) = lru.call(k, |s| s.to_uppercase());
+        marks.push(f"{k}{if hit { "+" } else { "-" }}");
+    }
+    out.push_str(f"  {marks.join(" ")}\n");
+    out.push_str(f"  CacheInfo(hits={lru.hits}, misses={lru.misses}, maxsize={maxsize}, currsize={lru.cache.len()})\n");
+    let evicted = if lru.evicted.is_empty() { "-".to_string() } else { lru.evicted.join(" ") };
+    out.push_str(f"  evicted: {evicted}\n");
+    let cached = lru.cache.keys();
+    let order = if cached.is_empty() { "-".to_string() } else { cached.join(" ") };
+    out.push_str(f"  cached, oldest first: {order}\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ ChainMap
+
+struct ChainMap[K, V] {
+    maps: Vec[Dict[K, V]],
+}
+
+impl[K: Hash + Eq + Clone + PyRepr, V: Clone + PyRepr] ChainMap[K, V] {
+    fn get(ref self, k: ref K) -> Option[V] {
+        for m in self.maps.iter() {
+            if let Some(v) = m.get(k) {
+                return Some(v);
+            }
+        }
+        None
+    }
+
+    // iter(ChainMap): the last map's keys first, then each earlier map's
+    // new ones.
+    fn keys(ref self) -> Vec[K] {
+        let mut seen: Dict[K, bool] = Dict.new();
+        let mut i = self.maps.len();
+        while i > 0 {
+            i -= 1;
+            for k in self.maps[i].keys().into_iter() {
+                seen.set(k, true);
+            }
+        }
+        seen.keys()
+    }
+
+    fn first_remove(mut ref self, k: ref K) -> Result[V, String] {
+        match self.maps[0].remove(k) {
+            Some(v) => Ok(v),
+            None => Err(f"KeyError: \"Key not found in the first mapping: {k.py_repr()}\""),
+        }
+    }
+
+    fn repr(ref self) -> String {
+        let parts: Vec[String] = self.maps.iter().map(|m| dict_body(m)).collect();
+        f"ChainMap({parts.join(", ")})"
+    }
+}
+
+fn value_of(s: ref String) -> Value {
+    match i64.parse(s.clone()) {
+        Some(n) => Value.Int(n),
+        None => Value.Text(s.clone()),
+    }
+}
+
+fn parse_map(spec: ref String) -> Dict[String, Value] {
+    let mut d: Dict[String, Value] = Dict.new();
+    if spec == "-" {
+        return d;
+    }
+    for part in spec.split(",") {
+        let kv: Vec[String] = part.split("=");
+        d.set(kv[0].clone(), value_of(kv[1]));
+    }
+    d
+}
+
+fn chain_op(cm: mut ref ChainMap[String, Value], cmd: ref String, a: ref Vec[String]) -> Result[Option[String], String] {
+    if cmd == "get" {
+        return match cm.get(a[0]) {
+            Some(v) => Ok(Some(v.py_repr())),
+            None => Err(f"KeyError: {a[0].py_repr()}"),
+        };
+    } else if cmd == "in" {
+        return Ok(Some(cm.get(a[0]).is_some().py_repr()));
+    } else if cmd == "len" {
+        return Ok(Some(f"{cm.keys().len()}"));
+    } else if cmd == "keys" {
+        return Ok(Some(list_repr(cm.keys())));
+    } else if cmd == "repr" {
+    } else if cmd == "set" {
+        cm.maps[0].set(a[0].clone(), value_of(a[1]));
+    } else if cmd == "del" {
+        let _ = cm.first_remove(a[0])?;
+    } else if cmd == "pop" {
+        return Ok(Some(cm.first_remove(a[0])?.py_repr()));
+    } else if cmd == "child" {
+        // B-2026-10-18-18: the new map needs its type written out.
+        let fresh: Dict[String, Value] = Dict.new();
+        cm.maps.insert(0, fresh);
+    } else if cmd == "parents" {
+        cm.maps.remove(0);
+        if cm.maps.is_empty() {
+            let fresh: Dict[String, Value] = Dict.new();
+            cm.maps.push(fresh);
+        }
+    } else {
+        return Err(f"unknown chain op {cmd}");
+    }
+    Ok(None)
+}
+
+fn chain_job(specs: ref Vec[String], ops: ref String, out: mut ref String) {
+    let mut cm: ChainMap[String, Value] = ChainMap { maps: specs.iter().map(|s| parse_map(s)).collect() };
+    for op in ops.split("|") {
+        let p: Vec[String] = op.split(" ");
+        let a: Vec[String] = p[1..].to_vec();
+        match chain_op(mut cm, p[0], a) {
+            Ok(None) => out.push_str(f"  {op} -> {cm.repr()}\n"),
+            Ok(Some(r)) => out.push_str(f"  {op} = {r} -> {cm.repr()}\n"),
+            Err(e) => out.push_str(f"  {op}: {e}\n"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+fn read_data(field: ref String) -> Result[String, String] {
+    let name = field[1..].to_string();
+    match fs.read_to_string(f"data/{name}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {name}: {e}"),
+    }
+}
+
+// defaultdict(list) of paths by status, and the busiest clients.
+fn group_job(file: ref String, out: mut ref String) -> Result[(), String] {
+    let text = read_data(file)?;
+    let mut by_status: Dict[String, Vec[String]] = Dict.new();
+    let mut ips: Vec[String] = Vec.new();
+    for line in text.lines() {
+        let p: Vec[String] = line.split(" ");
+        let mut paths = match by_status.get(p[3]) {
+            Some(v) => v,
+            None => Vec.new(),
+        };
+        paths.push(p[2].clone());
+        by_status.set(p[3].clone(), paths);
+        ips.push(p[0].clone());
+    }
+    for (status, paths) in by_status.items().iter() {
+        out.push_str(f"  {status}: {list_repr(paths)}\n");
+    }
+    out.push_str(f"  {most_repr(Counter.of(ips).most_common(Some(3)))}\n");
+    Ok(())
+}
+
+// tail -n: a deque with maxlen n keeps the last n lines.
+fn tail_job(n: i64, file: ref String, out: mut ref String) -> Result[(), String] {
+    let text = read_data(file)?;
+    let mut d: Deque[String] = Deque.new(Some(n));
+    for line in text.lines() {
+        d.append(line.to_string());
+    }
+    for line in d.items.iter() {
+        out.push_str(f"  {line}\n");
+    }
+    out.push_str(f"({d.items.len()} lines)\n");
+    Ok(())
+}
+
+fn num(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    if kind == "counter" {
+        counter_job(f[1], mut out)?;
+    } else if kind == "deque" {
+        deque_job(f[1], f[2], mut out);
+    } else if kind == "odict" {
+        odict_job(f[1], mut out);
+    } else if kind == "lru" {
+        lru_job(num(f[1]), f[2], mut out)?;
+    } else if kind == "chain" {
+        let specs: Vec[String] = f[1..f.len() - 1].to_vec();
+        chain_job(specs, f[f.len() - 1], mut out);
+    } else if kind == "group" {
+        group_job(f[1], mut out)?;
+    } else if kind == "tail" {
+        tail_job(num(f[1]), f[2], mut out)?;
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    for (path, contents) in data_files() {
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        if let Err(e) = run(f, mut out) {
+            out.push_str(f"error: {e}\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("10.0.0.1 GET /index.html 200\n");
+    t.push_str("10.0.0.2 GET /app.js 200\n");
+    t.push_str("10.0.0.1 GET /api/items 200\n");
+    t.push_str("10.0.0.3 POST /api/login 401\n");
+    t.push_str("10.0.0.2 GET /missing 404\n");
+    t.push_str("10.0.0.1 GET /api/items 500\n");
+    t.push_str("10.0.0.4 GET /index.html 200\n");
+    t.push_str("10.0.0.3 POST /api/login 200\n");
+    t.push_str("10.0.0.2 GET /old 301\n");
+    t.push_str("10.0.0.5 GET /missing 404\n");
+    t.push_str("10.0.0.1 GET /api/report 500\n");
+    t.push_str("10.0.0.4 GET /app.js 304\n");
+    v.push(("access.log".to_string(), t));
+    let mut t = String.new();
+    t.push_str("the quick brown fox jumps over the lazy dog the dog sleeps\n");
+    t.push_str("a fox is quick and a dog is lazy but the fox is not a dog\n");
+    t.push_str("over and over the fox jumps and the dog sleeps\n");
+    v.push(("page.txt".to_string(), t));
+    let mut t = String.new();
+    t.push_str("a\n");
+    t.push_str("b\n");
+    t.push_str("c\n");
+    t.push_str("a\n");
+    t.push_str("d\n");
+    t.push_str("b\n");
+    t.push_str("e\n");
+    t.push_str("a\n");
+    t.push_str("f\n");
+    t.push_str("a\n");
+    t.push_str("c\n");
+    t.push_str("g\n");
+    t.push_str("b\n");
+    t.push_str("a\n");
+    t.push_str("h\n");
+    t.push_str("c\n");
+    t.push_str("a\n");
+    t.push_str("b\n");
+    v.push(("trace.txt".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("counter\tnew a b c a b a|repr|most 2|most|most 0|total|get a|get z|elements|update a z z|repr|subtract a a a a|repr|most 2|del z|repr|pos|neg\n");
+    s.push_str("counter\tnew @page.txt|most 5|total|get fox|add fox fox cat|sub the the the the the the the the|and fox dog cat|or fox fox fox fox fox|le the|ge the|eq the|ne the\n");
+    s.push_str("counter\tnew|repr|most 3|total|pos|update x|subtract x y|repr|pos|neg|elements|le|eq\n");
+    s.push_str("counter\tnew b a b a|repr|most|update a|most|subtract b|most\n");
+    s.push_str("deque\t-\tappend 1|append 2|appendleft 0|extend 3 4|extendleft 9 8|len|get 0|get -1|get 3|set 1 7|rotate 2|rotate -3|count 4|index 4|index 99|remove 4|remove 99|reverse|pop|popleft|insert 2 5|clear|pop|popleft|get 0\n");
+    s.push_str("deque\t3\tappend 1|append 2|append 3|append 4|appendleft 0|extend 5 6 7 8|extendleft 1 2|insert 1 9|pop|insert 1 9|rotate 1|maxlen|len|clear|maxlen\n");
+    s.push_str("deque\t0\tappend 1|appendleft 2|extend 3 4|len|insert 0 1|pop\n");
+    s.push_str("deque\t1\tappend 1|append 2|rotate 5|appendleft 3|pop|pop\n");
+    s.push_str("deque\t-\textend 1 2 3 4 5|rotate 7|rotate -12|rotate 0|reverse|index 5|count 9|set 9 1|get -6|get -5\n");
+    s.push_str("odict\tset a 1|set b 2|set c 3|repr|set a 10|repr|move a last|repr|move c first|repr|get b|get z|del b|repr|del b|keys|popitem last|popitem first|repr|popitem last|popitem first|repr|set z 26|move z first|move q last|repr\n");
+    s.push_str("lru\t3\t@trace.txt\n");
+    s.push_str("lru\t1\t@trace.txt\n");
+    s.push_str("lru\t8\t@trace.txt\n");
+    s.push_str("lru\t0\t@trace.txt\n");
+    s.push_str("chain\tverbose=1,port=8080\tport=9000,host=example.org\thost=localhost,port=80,debug=0\tget port|get host|get debug|get user|in verbose|in user|len|keys|repr|set debug 1|keys|repr|del host|del port|keys|repr|pop verbose|pop verbose|child|set port 1|repr|parents|get port|len\n");
+    s.push_str("chain\t-\t-\tget x|len|keys|set x 1|repr|del x|del x|repr\n");
+    s.push_str("group\t@access.log\n");
+    s.push_str("tail\t3\t@access.log\n");
+    s.push_str("tail\t1\t@access.log\n");
+    s.push_str("tail\t20\t@access.log\n");
+    s.push_str("tail\t0\t@access.log\n");
+    s
+}

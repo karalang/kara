@@ -97,8 +97,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 276 |
-| codegen-gap | 267 |
-| false-positive | 213 |
+| codegen-gap | 268 |
+| false-positive | 214 |
 | other | 173 |
 | perf | 171 |
 | diagnostics | 164 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2926 |
-| interp | 943 |
-| typecheck | 453 |
+| codegen | 2927 |
+| interp | 944 |
+| typecheck | 454 |
 | other | 115 |
 | ownership | 110 |
 | runtime | 76 |
@@ -208,6 +208,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-14 | 2026-10-18 | ownership | low | A range view in a `for` header, `for x in v[1..].iter() { .. }`, stays borrowed after the loop ends, so `karac check` refuses a later `v.push(..)` or `v.remove(..)` with "cannot be borrowed as `mut ref T` because it is also borrowed as `Slice[T]`"; `for x in v.iter()` passes and every MIR surface runs both | — |
 | B-2026-10-18-15 | 2026-10-18 | typecheck | medium | `#[derive(PartialEq, Eq, PartialOrd, Ord)]` on a generic struct, `struct Dec[K] { k: K, order: i64 }`, gives no `Ord` impl, even for a concrete `Dec[String]`: `karac check` refuses `Dec[String]` for a `T: Ord` bound, `<` and `Vec.sort()`, though design.md § Derive says a derived impl is bounded by what its fields need; writing the four impls by hand with `impl[K: Ord]` works | — |
 | B-2026-10-18-16 | 2026-10-18 | typecheck | low | `warning[must_use]` fires on `q.pop();` for a `PriorityQueue`, though its `Option` result is the removed element, the same displaced-value shape as `Vec.pop` and `VecDeque.pop_front`, which design.md § must_use exempts; the exemption's list names the standard containers one by one and does not name `PriorityQueue` | — |
+| B-2026-10-18-17 | 2026-10-18 | typecheck | low | `karac check` refuses `*self` on a `ref self` receiver (`impl Twice for i64 { fn twice(ref self) -> i64 { *self * 2 } }`, and the same for `bool` and a Copy struct) with "unary '*' requires 'ref T' .. found 'i64'", while both MIR surfaces run it; check types the receiver as `Self`, not `ref Self` | — |
+| B-2026-10-18-18 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces, a user generic type's associated function whose type arguments come only from later use is not lowered: `let mut b = Bag.new(); b.items.push(x);` inside `impl[T] Bag[T]`, or `bags.push(Bag.new())` with `bags: Vec[Bag[i64]]`, stop with "a call with no resolved callee is not lowered yet"; check passes, and writing the type on the binding works | — |
 
 ### Relocated
 

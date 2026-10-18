@@ -1,0 +1,234 @@
+== counter | new a b c a b a|repr|most 2|most|most 0|total|get a|get z|elements|update a z z|repr|subtract a a a a|repr|most 2|del z|repr|pos|neg
+  new a b c a b a -> Counter({'a': 3, 'b': 2, 'c': 1})
+  Counter({'a': 3, 'b': 2, 'c': 1})
+  most 2 = [('a', 3), ('b', 2)]
+  most = [('a', 3), ('b', 2), ('c', 1)]
+  most 0 = []
+  total = 6
+  get a = 3
+  get z = 0
+  elements = ['a', 'a', 'a', 'b', 'b', 'c']
+  update a z z -> Counter({'a': 4, 'b': 2, 'z': 2, 'c': 1})
+  Counter({'a': 4, 'b': 2, 'z': 2, 'c': 1})
+  subtract a a a a -> Counter({'b': 2, 'z': 2, 'c': 1, 'a': 0})
+  Counter({'b': 2, 'z': 2, 'c': 1, 'a': 0})
+  most 2 = [('b', 2), ('z', 2)]
+  del z -> Counter({'b': 2, 'c': 1, 'a': 0})
+  Counter({'b': 2, 'c': 1, 'a': 0})
+  +c = Counter({'b': 2, 'c': 1})
+  -c = Counter()
+== counter | new @page.txt|most 5|total|get fox|add fox fox cat|sub the the the the the the the the|and fox dog cat|or fox fox fox fox fox|le the|ge the|eq the|ne the
+  new @page.txt -> Counter({'the': 6, 'dog': 5, 'fox': 4, 'over': 3, 'a': 3, 'is': 3, 'and': 3, 'quick': 2, 'jumps': 2, 'lazy': 2, 'sleeps': 2, 'brown': 1, 'but': 1, 'not': 1})
+  most 5 = [('the', 6), ('dog', 5), ('fox', 4), ('over', 3), ('a', 3)]
+  total = 38
+  get fox = 4
+  add fox fox cat = Counter({'the': 6, 'fox': 6, 'dog': 5, 'over': 3, 'a': 3, 'is': 3, 'and': 3, 'quick': 2, 'jumps': 2, 'lazy': 2, 'sleeps': 2, 'brown': 1, 'but': 1, 'not': 1, 'cat': 1})
+  sub the the the the the the the the = Counter({'dog': 5, 'fox': 4, 'over': 3, 'a': 3, 'is': 3, 'and': 3, 'quick': 2, 'jumps': 2, 'lazy': 2, 'sleeps': 2, 'brown': 1, 'but': 1, 'not': 1})
+  and fox dog cat = Counter({'fox': 1, 'dog': 1})
+  or fox fox fox fox fox = Counter({'the': 6, 'fox': 5, 'dog': 5, 'over': 3, 'a': 3, 'is': 3, 'and': 3, 'quick': 2, 'jumps': 2, 'lazy': 2, 'sleeps': 2, 'brown': 1, 'but': 1, 'not': 1})
+  le the = False
+  ge the = True
+  eq the = False
+  ne the = True
+== counter | new|repr|most 3|total|pos|update x|subtract x y|repr|pos|neg|elements|le|eq
+  new -> Counter()
+  Counter()
+  most 3 = []
+  total = 0
+  +c = Counter()
+  update x -> Counter({'x': 1})
+  subtract x y -> Counter({'x': 0, 'y': -1})
+  Counter({'x': 0, 'y': -1})
+  +c = Counter()
+  -c = Counter({'y': 1})
+  elements = []
+  le = True
+  eq = False
+== counter | new b a b a|repr|most|update a|most|subtract b|most
+  new b a b a -> Counter({'b': 2, 'a': 2})
+  Counter({'b': 2, 'a': 2})
+  most = [('b', 2), ('a', 2)]
+  update a -> Counter({'a': 3, 'b': 2})
+  most = [('a', 3), ('b', 2)]
+  subtract b -> Counter({'a': 3, 'b': 1})
+  most = [('a', 3), ('b', 1)]
+== deque | - | append 1|append 2|appendleft 0|extend 3 4|extendleft 9 8|len|get 0|get -1|get 3|set 1 7|rotate 2|rotate -3|count 4|index 4|index 99|remove 4|remove 99|reverse|pop|popleft|insert 2 5|clear|pop|popleft|get 0
+  append 1 -> deque([1])
+  append 2 -> deque([1, 2])
+  appendleft 0 -> deque([0, 1, 2])
+  extend 3 4 -> deque([0, 1, 2, 3, 4])
+  extendleft 9 8 -> deque([8, 9, 0, 1, 2, 3, 4])
+  len = 7 -> deque([8, 9, 0, 1, 2, 3, 4])
+  get 0 = 8 -> deque([8, 9, 0, 1, 2, 3, 4])
+  get -1 = 4 -> deque([8, 9, 0, 1, 2, 3, 4])
+  get 3 = 1 -> deque([8, 9, 0, 1, 2, 3, 4])
+  set 1 7 -> deque([8, 7, 0, 1, 2, 3, 4])
+  rotate 2 -> deque([3, 4, 8, 7, 0, 1, 2])
+  rotate -3 -> deque([7, 0, 1, 2, 3, 4, 8])
+  count 4 = 1 -> deque([7, 0, 1, 2, 3, 4, 8])
+  index 4 = 5 -> deque([7, 0, 1, 2, 3, 4, 8])
+  index 99: ValueError: 99 is not in deque
+  remove 4 -> deque([7, 0, 1, 2, 3, 8])
+  remove 99: ValueError: 99 is not in deque
+  reverse -> deque([8, 3, 2, 1, 0, 7])
+  pop = 7 -> deque([8, 3, 2, 1, 0])
+  popleft = 8 -> deque([3, 2, 1, 0])
+  insert 2 5 -> deque([3, 2, 5, 1, 0])
+  clear -> deque([])
+  pop: IndexError: pop from an empty deque
+  popleft: IndexError: pop from an empty deque
+  get 0: IndexError: deque index out of range
+== deque | 3 | append 1|append 2|append 3|append 4|appendleft 0|extend 5 6 7 8|extendleft 1 2|insert 1 9|pop|insert 1 9|rotate 1|maxlen|len|clear|maxlen
+  append 1 -> deque([1], maxlen=3)
+  append 2 -> deque([1, 2], maxlen=3)
+  append 3 -> deque([1, 2, 3], maxlen=3)
+  append 4 -> deque([2, 3, 4], maxlen=3)
+  appendleft 0 -> deque([0, 2, 3], maxlen=3)
+  extend 5 6 7 8 -> deque([6, 7, 8], maxlen=3)
+  extendleft 1 2 -> deque([2, 1, 6], maxlen=3)
+  insert 1 9: IndexError: deque already at its maximum size
+  pop = 6 -> deque([2, 1], maxlen=3)
+  insert 1 9 -> deque([2, 9, 1], maxlen=3)
+  rotate 1 -> deque([1, 2, 9], maxlen=3)
+  maxlen = 3 -> deque([1, 2, 9], maxlen=3)
+  len = 3 -> deque([1, 2, 9], maxlen=3)
+  clear -> deque([], maxlen=3)
+  maxlen = 3 -> deque([], maxlen=3)
+== deque | 0 | append 1|appendleft 2|extend 3 4|len|insert 0 1|pop
+  append 1 -> deque([], maxlen=0)
+  appendleft 2 -> deque([], maxlen=0)
+  extend 3 4 -> deque([], maxlen=0)
+  len = 0 -> deque([], maxlen=0)
+  insert 0 1: IndexError: deque already at its maximum size
+  pop: IndexError: pop from an empty deque
+== deque | 1 | append 1|append 2|rotate 5|appendleft 3|pop|pop
+  append 1 -> deque([1], maxlen=1)
+  append 2 -> deque([2], maxlen=1)
+  rotate 5 -> deque([2], maxlen=1)
+  appendleft 3 -> deque([3], maxlen=1)
+  pop = 3 -> deque([], maxlen=1)
+  pop: IndexError: pop from an empty deque
+== deque | - | extend 1 2 3 4 5|rotate 7|rotate -12|rotate 0|reverse|index 5|count 9|set 9 1|get -6|get -5
+  extend 1 2 3 4 5 -> deque([1, 2, 3, 4, 5])
+  rotate 7 -> deque([4, 5, 1, 2, 3])
+  rotate -12 -> deque([1, 2, 3, 4, 5])
+  rotate 0 -> deque([1, 2, 3, 4, 5])
+  reverse -> deque([5, 4, 3, 2, 1])
+  index 5 = 0 -> deque([5, 4, 3, 2, 1])
+  count 9 = 0 -> deque([5, 4, 3, 2, 1])
+  set 9 1: IndexError: deque index out of range
+  get -6: IndexError: deque index out of range
+  get -5 = 5 -> deque([5, 4, 3, 2, 1])
+== odict | set a 1|set b 2|set c 3|repr|set a 10|repr|move a last|repr|move c first|repr|get b|get z|del b|repr|del b|keys|popitem last|popitem first|repr|popitem last|popitem first|repr|set z 26|move z first|move q last|repr
+  set a 1 -> OrderedDict({'a': 1})
+  set b 2 -> OrderedDict({'a': 1, 'b': 2})
+  set c 3 -> OrderedDict({'a': 1, 'b': 2, 'c': 3})
+  repr -> OrderedDict({'a': 1, 'b': 2, 'c': 3})
+  set a 10 -> OrderedDict({'a': 10, 'b': 2, 'c': 3})
+  repr -> OrderedDict({'a': 10, 'b': 2, 'c': 3})
+  move a last -> OrderedDict({'b': 2, 'c': 3, 'a': 10})
+  repr -> OrderedDict({'b': 2, 'c': 3, 'a': 10})
+  move c first -> OrderedDict({'c': 3, 'b': 2, 'a': 10})
+  repr -> OrderedDict({'c': 3, 'b': 2, 'a': 10})
+  get b = 2 -> OrderedDict({'c': 3, 'b': 2, 'a': 10})
+  get z: KeyError: 'z'
+  del b -> OrderedDict({'c': 3, 'a': 10})
+  repr -> OrderedDict({'c': 3, 'a': 10})
+  del b: KeyError: 'b'
+  keys = ['c', 'a'] -> OrderedDict({'c': 3, 'a': 10})
+  popitem last = ('a', 10) -> OrderedDict({'c': 3})
+  popitem first = ('c', 3) -> OrderedDict()
+  repr -> OrderedDict()
+  popitem last: KeyError: 'dictionary is empty'
+  popitem first: KeyError: 'dictionary is empty'
+  repr -> OrderedDict()
+  set z 26 -> OrderedDict({'z': 26})
+  move z first -> OrderedDict({'z': 26})
+  move q last: KeyError: 'q'
+  repr -> OrderedDict({'z': 26})
+== lru | 3 | @trace.txt
+  a- b- c- a+ d- b- e- a- f- a+ c- g- b- a- h- c- a+ b-
+  CacheInfo(hits=3, misses=15, maxsize=3, currsize=3)
+  evicted: b c a d b e f a c g b h
+  cached, oldest first: c a b
+== lru | 1 | @trace.txt
+  a- b- c- a- d- b- e- a- f- a- c- g- b- a- h- c- a- b-
+  CacheInfo(hits=0, misses=18, maxsize=1, currsize=1)
+  evicted: a b c a d b e a f a c g b a h c a
+  cached, oldest first: b
+== lru | 8 | @trace.txt
+  a- b- c- a+ d- b+ e- a+ f- a+ c+ g- b+ a+ h- c+ a+ b+
+  CacheInfo(hits=10, misses=8, maxsize=8, currsize=8)
+  evicted: -
+  cached, oldest first: d e f g h c a b
+== lru | 0 | @trace.txt
+  a- b- c- a- d- b- e- a- f- a- c- g- b- a- h- c- a- b-
+  CacheInfo(hits=0, misses=18, maxsize=0, currsize=0)
+  evicted: -
+  cached, oldest first: -
+== chain | verbose=1,port=8080 | port=9000,host=example.org | host=localhost,port=80,debug=0 | get port|get host|get debug|get user|in verbose|in user|len|keys|repr|set debug 1|keys|repr|del host|del port|keys|repr|pop verbose|pop verbose|child|set port 1|repr|parents|get port|len
+  get port = 8080 -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  get host = 'example.org' -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  get debug = 0 -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  get user: KeyError: 'user'
+  in verbose = True -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  in user = False -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  len = 4 -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  keys = ['host', 'port', 'debug', 'verbose'] -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  repr -> ChainMap({'verbose': 1, 'port': 8080}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  set debug 1 -> ChainMap({'verbose': 1, 'port': 8080, 'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  keys = ['host', 'port', 'debug', 'verbose'] -> ChainMap({'verbose': 1, 'port': 8080, 'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  repr -> ChainMap({'verbose': 1, 'port': 8080, 'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  del host: KeyError: "Key not found in the first mapping: 'host'"
+  del port -> ChainMap({'verbose': 1, 'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  keys = ['host', 'port', 'debug', 'verbose'] -> ChainMap({'verbose': 1, 'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  repr -> ChainMap({'verbose': 1, 'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  pop verbose = 1 -> ChainMap({'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  pop verbose: KeyError: "Key not found in the first mapping: 'verbose'"
+  child -> ChainMap({}, {'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  set port 1 -> ChainMap({'port': 1}, {'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  repr -> ChainMap({'port': 1}, {'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  parents -> ChainMap({'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  get port = 9000 -> ChainMap({'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+  len = 3 -> ChainMap({'debug': 1}, {'port': 9000, 'host': 'example.org'}, {'host': 'localhost', 'port': 80, 'debug': 0})
+== chain | - | - | get x|len|keys|set x 1|repr|del x|del x|repr
+  get x: KeyError: 'x'
+  len = 0 -> ChainMap({}, {})
+  keys = [] -> ChainMap({}, {})
+  set x 1 -> ChainMap({'x': 1}, {})
+  repr -> ChainMap({'x': 1}, {})
+  del x -> ChainMap({}, {})
+  del x: KeyError: "Key not found in the first mapping: 'x'"
+  repr -> ChainMap({}, {})
+== group | @access.log
+  200: ['/index.html', '/app.js', '/api/items', '/index.html', '/api/login']
+  401: ['/api/login']
+  404: ['/missing', '/missing']
+  500: ['/api/items', '/api/report']
+  301: ['/old']
+  304: ['/app.js']
+  [('10.0.0.1', 4), ('10.0.0.2', 3), ('10.0.0.3', 2)]
+== tail | 3 | @access.log
+  10.0.0.5 GET /missing 404
+  10.0.0.1 GET /api/report 500
+  10.0.0.4 GET /app.js 304
+(3 lines)
+== tail | 1 | @access.log
+  10.0.0.4 GET /app.js 304
+(1 lines)
+== tail | 20 | @access.log
+  10.0.0.1 GET /index.html 200
+  10.0.0.2 GET /app.js 200
+  10.0.0.1 GET /api/items 200
+  10.0.0.3 POST /api/login 401
+  10.0.0.2 GET /missing 404
+  10.0.0.1 GET /api/items 500
+  10.0.0.4 GET /index.html 200
+  10.0.0.3 POST /api/login 200
+  10.0.0.2 GET /old 301
+  10.0.0.5 GET /missing 404
+  10.0.0.1 GET /api/report 500
+  10.0.0.4 GET /app.js 304
+(12 lines)
+== tail | 0 | @access.log
+(0 lines)
