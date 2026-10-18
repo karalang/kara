@@ -149,6 +149,13 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => false,
                 };
+                // B-2026-10-18-42 — an `if` or `match` whose every value is an
+                // unsuffixed number takes the element's type, as a bare
+                // literal does: each literal is checked against it.
+                let number_branches =
+                    matches!(&arg.kind, ExprKind::If { .. } | ExprKind::Match { .. })
+                        && matches!(&elem, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+                        && only_number_literals(arg);
                 // B-2026-10-14-10 — a tuple literal into a slot with a `ref`
                 // element (`Vec[(ref Node, i64)]`) is checked against it, so
                 // a place element is lent rather than copied.
@@ -163,6 +170,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_expr(&args[0].value, &slot)
                 } else if open_value && super::exprs::expectation_is_concrete(&elem) {
                     self.check_expr(&args[0].value, &elem)
+                } else if number_branches {
+                    self.check_expr(&args[0].value, &elem);
+                    elem.clone()
                 } else {
                     self.infer_expr(&args[0].value)
                 };
@@ -643,5 +653,29 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => None,
         }
+    }
+}
+
+/// Whether every value `e` can end with is an unsuffixed number literal: the
+/// literal itself, or an `if`/`else` chain, `match` or block made of them.
+fn only_number_literals(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Integer(_, None) | ExprKind::Float(_, None) => true,
+        ExprKind::Block(b) => b.final_expr.as_deref().is_some_and(only_number_literals),
+        ExprKind::If {
+            then_block,
+            else_branch: Some(else_expr),
+            ..
+        } => {
+            then_block
+                .final_expr
+                .as_deref()
+                .is_some_and(only_number_literals)
+                && only_number_literals(else_expr)
+        }
+        ExprKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|a| only_number_literals(&a.body))
+        }
+        _ => false,
     }
 }

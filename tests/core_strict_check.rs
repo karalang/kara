@@ -8168,3 +8168,37 @@ fn fix_migrates_parse_result_and_lazy_split_shapes() {
         ".filter(|p| p.len() > 0).map(|p| p.to_string()).collect()",
     );
 }
+
+/// B-2026-10-18-42: an `if` or `match` whose every value is an unsuffixed
+/// number takes `Vec.push`'s element type, as a bare literal does.
+#[test]
+fn literal_branches_pushed_take_the_element_type() {
+    accepted_and_runs(
+        "push-literal-branches",
+        r#"fn main() {
+    let c = false;
+    let k = 2;
+    let mut v: Vec[u8] = Vec.new();
+    v.push(if c { 9 } else { 8 });
+    v.push(match k {
+        1 => 4,
+        _ => 5,
+    });
+    v.push(if c { 9 } else if k == 2 { 7 } else { 8 });
+    println(f"{v[0]} {v[1]} {v[2]}");
+}
+"#,
+        "8 5 7\n",
+    );
+    rejected(
+        "push-literal-branch-out-of-range",
+        r#"fn main() {
+    let c = true;
+    let mut v: Vec[u8] = Vec.new();
+    v.push(if c { 300 } else { 8 });
+    println(f"{v.len()}");
+}
+"#,
+        "integer literal 300 out of range for 'u8'",
+    );
+}
