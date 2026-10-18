@@ -1,0 +1,162 @@
+== count | 10 | 3 | 5
+  [10, 13, 16, 19, 22]
+== count | -2 | -5 | 4
+  [-2, -7, -12, -17]
+== count | 7 | 0 | 3
+  [7, 7, 7]
+== cycle | 1,2,3 | 8
+  [1, 2, 3, 1, 2, 3, 1, 2]
+== cycle | - | 5
+  []
+== cycle | 4 | 3
+  [4, 4, 4]
+== repeat | 9 | 4
+  [9, 9, 9, 9]
+== repeat | 9 | 0
+  []
+== accumulate | 1,2,3,4,5 | add | -
+  [1, 3, 6, 10, 15]
+== accumulate | 1,2,3,4,5 | mul | -
+  [1, 2, 6, 24, 120]
+== accumulate | 3,1,4,1,5,9,2,6 | max | -
+  [3, 3, 4, 4, 5, 9, 9, 9]
+== accumulate | 3,1,4,1,5,9,2,6 | min | -
+  [3, 1, 1, 1, 1, 1, 1, 1]
+== accumulate | 1,2,3 | add | 100
+  [100, 101, 103, 106]
+== accumulate | - | add | -
+  []
+== accumulate | - | add | 7
+  [7]
+== batched | 1,2,3,4,5,6,7 | 3
+  [(1, 2, 3), (4, 5, 6), (7,)]
+== batched | 1,2,3 | 3
+  [(1, 2, 3)]
+== batched | 1,2,3 | 5
+  [(1, 2, 3)]
+== batched | - | 2
+  []
+== chain | 1,2;3;;4,5,6
+  [1, 2, 3, 4, 5, 6]
+== chain | ;;
+  []
+== compress | 1,2,3,4,5,6 | 1,0,1,0,1,1
+  [1, 3, 5, 6]
+== compress | 1,2,3 | 1,1,1,1,1
+  [1, 2, 3]
+== compress | 1,2,3,4 | 0,1
+  [2]
+== dropwhile | 1,4,6,4,1 | 5
+  [6, 4, 1]
+== takewhile | 1,4,6,4,1 | 5
+  [1, 4]
+== dropwhile | 7,8 | 5
+  [7, 8]
+== takewhile | 7,8 | 5
+  []
+== filterfalse | 1,2,3,4,5,6,7 | odd
+  [2, 4, 6]
+== groupby | 1,1,2,3,3,3,1,1 | same
+  [(1, [1, 1]), (2, [2]), (3, [3, 3, 3]), (1, [1, 1])]
+== groupby | 1,3,5,2,4,7,9,8 | parity
+  [(1, [1, 3, 5]), (0, [2, 4]), (1, [7, 9]), (0, [8])]
+== groupby | - | same
+  []
+== islice | 0,1,2,3,4,5,6,7,8,9 | 2 | 8 | 2
+  [2, 4, 6]
+== islice | 0,1,2,3,4,5,6,7,8,9 | 0 | - | 3
+  [0, 3, 6, 9]
+== islice | 0,1,2,3,4,5,6,7,8,9 | 7 | 3 | 1
+  []
+== islice | 0,1,2,3,4,5,6,7,8,9 | 5 | 50 | 1
+  [5, 6, 7, 8, 9]
+== islice | 0,1,2 | 0 | 0 | 1
+  []
+== pairwise | 1,2,4,7,11
+  [(1, 2), (2, 4), (4, 7), (7, 11)]
+== pairwise | 5
+  []
+== pairwise | -
+  []
+== zip_longest | 1,2,3,4 | 10,20 | 0
+  [(1, 10), (2, 20), (3, 0), (4, 0)]
+== zip_longest | - | 10,20 | -1
+  [(-1, 10), (-1, 20)]
+== product | 1,2;3,4 | 1
+  [(1, 3), (1, 4), (2, 3), (2, 4)]
+== product | 0,1 | 3
+  [(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1), (1, 0, 0), (1, 0, 1), (1, 1, 0), (1, 1, 1)]
+== product | 1,2;-;3 | 1
+  []
+== product | - | 0
+  [()]
+== permutations | 1,2,3 | -
+  [(1, 2, 3), (1, 3, 2), (2, 1, 3), (2, 3, 1), (3, 1, 2), (3, 2, 1)]
+== permutations | 1,2,3,4 | 2
+  [(1, 2), (1, 3), (1, 4), (2, 1), (2, 3), (2, 4), (3, 1), (3, 2), (3, 4), (4, 1), (4, 2), (4, 3)]
+== permutations | 1,2,3 | 0
+  [()]
+== permutations | 1,2 | 3
+  []
+== combinations | 1,2,3,4,5 | 3
+  [(1, 2, 3), (1, 2, 4), (1, 2, 5), (1, 3, 4), (1, 3, 5), (1, 4, 5), (2, 3, 4), (2, 3, 5), (2, 4, 5), (3, 4, 5)]
+== combinations | 1,2,3 | 0
+  [()]
+== combinations | 1,2 | 3
+  []
+== combinations | 3,1,2 | 2
+  [(3, 1), (3, 2), (1, 2)]
+== cwr | 1,2,3 | 2
+  [(1, 1), (1, 2), (1, 3), (2, 2), (2, 3), (3, 3)]
+== cwr | 1,2 | 3
+  [(1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2)]
+== cwr | - | 2
+  []
+== cwr | - | 0
+  [()]
+== report | @sales.csv
+  by region:
+    east: 3 rows, 17 units, revenue 792
+    north: 5 rows, 41 units, revenue 1524
+    south: 4 rows, 23 units, revenue 905
+    west: 1 rows, 8 units, revenue 624
+  by month:
+    2026-01 24 running 24
+    2026-02 23 running 47
+    2026-03 27 running 74
+    2026-04 15 running 89
+    2026-01 -> 2026-02: -1
+    2026-02 -> 2026-03: +4
+    2026-03 -> 2026-04: -12
+  pages:
+    page 1: kettle kettle toaster kettle
+    page 2: blender toaster kettle blender
+    page 3: toaster kettle blender blender
+    page 4: toaster
+  bundles:
+    blender + kettle = 110
+    blender + toaster = 125
+    kettle + toaster = 75
+  skus: S-red S-blue M-red M-blue L-red L-blue
+  budget 600: 2 rows, spent 570
+  tickets:
+    ticket 1 kettle -> ana
+    ticket 2 kettle -> ben
+    ticket 3 toaster -> cy
+    ticket 4 kettle -> ana
+    ticket 5 blender -> ben
+    ticket 6 toaster -> cy
+    ticket 7 kettle -> ana
+  promo: kettle kettle blender kettle toaster
+  north vs south: [(12, 7), (5, 11), (3, 4), (15, 1), (6, 0)]
+  big orders:
+    1. 2026-01 north kettle 12
+    2. 2026-01 south kettle 7
+    3. 2026-01 north toaster 5
+    4. 2026-02 east kettle 9
+    5. 2026-02 south toaster 11
+    6. 2026-03 east blender 6
+    7. 2026-03 north kettle 15
+    8. 2026-04 west blender 8
+    9. 2026-04 north toaster 6
+  from march: 7 rows

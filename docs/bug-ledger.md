@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 737 |
+| miscompile | 738 |
 | run-vs-build | 606 |
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 276 |
-| codegen-gap | 268 |
-| false-positive | 214 |
+| codegen-gap | 269 |
+| false-positive | 217 |
 | other | 173 |
 | perf | 171 |
 | diagnostics | 164 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2928 |
-| interp | 945 |
-| typecheck | 454 |
+| codegen | 2930 |
+| interp | 947 |
+| typecheck | 457 |
 | other | 115 |
 | ownership | 110 |
 | runtime | 76 |
@@ -207,6 +207,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-16 | 2026-10-18 | typecheck | low | `warning[must_use]` fires on `q.pop();` for a `PriorityQueue`, though its `Option` result is the removed element, the same displaced-value shape as `Vec.pop` and `VecDeque.pop_front`, which design.md § must_use exempts; the exemption's list names the standard containers one by one and does not name `PriorityQueue` | — |
 | B-2026-10-18-17 | 2026-10-18 | typecheck | low | `karac check` refuses `*self` on a `ref self` receiver (`impl Twice for i64 { fn twice(ref self) -> i64 { *self * 2 } }`, and the same for `bool` and a Copy struct) with "unary '*' requires 'ref T' .. found 'i64'", while both MIR surfaces run it; check types the receiver as `Self`, not `ref Self` | — |
 | B-2026-10-18-18 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces, a user generic type's associated function whose type arguments come only from later use is not lowered: `let mut b = Bag.new(); b.items.push(x);` inside `impl[T] Bag[T]`, or `bags.push(Bag.new())` with `bags: Vec[Bag[i64]]`, stop with "a call with no resolved callee is not lowered yet"; check passes, and writing the type on the binding works | — |
+| B-2026-10-18-20 | 2026-10-18 | typecheck | medium | `karac check` cannot infer `T` in `fn skip1[I: Iterator[Item = T], T](it: own I) -> Skip1[I, T]` from the iterator passed in: `for x in skip1(VecIter { items: v, pos: 0 }) { println(f"{x + 1}") }` fails "type 'T' does not implement trait Add" (and `to_vec(...)` of it "cannot infer type parameter 'T'"), while both MIR surfaces run it and print 3, 4; typing the binding works | — |
+| B-2026-10-18-21 | 2026-10-18 | typecheck | medium | `karac check` matches an impl's type parameters to the struct's by POSITION, not by name: `impl[T: Clone, I: Iterator] Iterator for Tagged[I, T]` (struct declared `Tagged[I, T]`) refuses `t.next()` with "trait bound `T: Clone` is not satisfied; `VecIter[i64]` does not implement `Clone`", binding `T` to the struct's first argument; listing the impl parameters as `impl[I: Iterator, T: Clone]` passes | — |
+| B-2026-10-18-22 | 2026-10-18 | typecheck | medium | `karac check` does not match an `I.Item` projection against the concrete type it stands for: `let mut out: Vec[I.Item] = Vec.new(); ...; out` in `fn to_vec[I: Iterator](it: own I) -> Vec[I.Item]` fails "expected 'Vec[I.Item]', found 'Vec[Item]'", and `MapIt { it: VecIter {..}, f: |x: i64| x * 10 }` for a field `f: Fn(own I.Item) -> I.Item` fails "expected 'Fn(I.Item) -> I.Item', found 'Fn(i64) -> i64'" | — |
+| B-2026-10-18-23 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces a generic struct with an `I.Item` field is not lowered when a generic function builds it: `fn last[I: Iterator](it: own I) -> Last[I] { Last { it: it, prev: None } }` for `struct Last[I: Iterator] { it: I, prev: Option[I.Item] }`, called as `last(VecIter {..})`, stops with "an associated type of `I` is not lowered yet"; check passes, and a struct literal written in `main` works | — |
+| B-2026-10-18-24 | 2026-10-18 | interp+codegen | high | On the MIR compiled backends a bare `None` passed for an `Option[T]` parameter, where `T` is fixed by another argument, is lowered with the wrong type: `fold_from(VecIter {..}, |a: i64, b: i64| a + b, None)` for `fn fold_from[I: Iterator[Item = T], T](it: own I, f: Fn(own T, own T) -> T, start: own Option[T]) -> Option[T]` prints `()` instead of 6 on `__mir-llvm-run` and `karac build --mir`, and `__mir-llvm-asan` reports a stack-buffer-overflow; `__mir-run`, `karac build` and `run --interp` print 6 | — |
 
 ### Relocated
 

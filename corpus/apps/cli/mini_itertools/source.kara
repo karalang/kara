@@ -1,0 +1,1071 @@
+// mini_itertools: Python's itertools as lazy Kara iterators, run over a
+// job list and a small sales report.
+//
+// Every adapter is a struct implementing `Iterator`, so they compose the
+// way the Python ones do: `islice(cycle(...), n)`, `zip(count(1),
+// filterfalse(...))`. Each one pulls from its source only when asked.
+
+// ------------------------------------------------------------ sources
+
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+fn iter_of[T](items: own Vec[T]) -> VecIter[T] {
+    VecIter { items: items, pos: 0 }
+}
+
+// count(start, step): start, start+step, ... forever.
+struct Count {
+    n: i64,
+    step: i64,
+}
+
+impl Iterator for Count {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        let x = self.n;
+        self.n += self.step;
+        Some(x)
+    }
+}
+
+fn count(start: i64, step: i64) -> Count {
+    Count { n: start, step: step }
+}
+
+// repeat(x, times): x again and again; forever when times is None.
+struct Repeat[T] {
+    x: T,
+    left: Option[i64],
+}
+
+impl[T: Clone] Iterator for Repeat[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        match self.left {
+            Some(0) => None,
+            Some(n) => {
+                self.left = Some(n - 1);
+                Some(self.x.clone())
+            }
+            None => Some(self.x.clone()),
+        }
+    }
+}
+
+fn repeat[T](x: own T, times: Option[i64]) -> Repeat[T] {
+    Repeat { x: x, left: times }
+}
+
+// ------------------------------------------------------------ adapters
+
+// cycle(it): it, then what it gave, over and over.
+struct Cycle[I, T] {
+    it: I,
+    saved: Vec[T],
+    pos: i64,
+    exhausted: bool,
+}
+
+impl[I: Iterator[Item = T], T: Clone] Iterator for Cycle[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if not self.exhausted {
+            match self.it.next() {
+                Some(x) => {
+                    self.saved.push(x.clone());
+                    return Some(x);
+                }
+                None => self.exhausted = true,
+            }
+        }
+        if self.saved.is_empty() {
+            return None;
+        }
+        let x = self.saved[self.pos].clone();
+        self.pos = (self.pos + 1) % self.saved.len();
+        Some(x)
+    }
+}
+
+fn cycle[I: Iterator[Item = T], T](it: own I) -> Cycle[I, T] {
+    Cycle { it: it, saved: Vec.new(), pos: 0, exhausted: false }
+}
+
+// accumulate(it, f, initial): running totals under f.
+struct Accumulate[I, T] {
+    it: I,
+    f: Fn(own T, own T) -> T,
+    total: Option[T],
+    emit_initial: bool,
+}
+
+impl[I: Iterator[Item = T], T: Clone] Iterator for Accumulate[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.emit_initial {
+            self.emit_initial = false;
+            return self.total.clone();
+        }
+        let x = self.it.next()?;
+        let t = match self.total.clone() {
+            None => x,
+            Some(t) => (self.f)(t, x),
+        };
+        self.total = Some(t.clone());
+        Some(t)
+    }
+}
+
+fn accumulate[I: Iterator[Item = T], T](it: own I, f: escaping Fn(own T, own T) -> T, initial: own Option[T]) -> Accumulate[I, T] {
+    let emit = initial.is_some();
+    Accumulate { it: it, f: f, total: initial, emit_initial: emit }
+}
+
+// batched(it, n): tuples of n, the last one possibly shorter.
+struct Batched[I, T] {
+    it: I,
+    n: i64,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for Batched[I, T] {
+    type Item = Vec[T];
+    fn next(mut ref self) -> Option[Vec[T]] {
+        let mut batch: Vec[T] = Vec.new();
+        while batch.len() < self.n {
+            match self.it.next() {
+                Some(x) => batch.push(x),
+                None => break,
+            }
+        }
+        if batch.is_empty() {
+            None
+        } else {
+            Some(batch)
+        }
+    }
+}
+
+fn batched[I: Iterator[Item = T], T](it: own I, n: i64) -> Batched[I, T] {
+    Batched { it: it, n: n }
+}
+
+// chain(a, b, ...): each iterator in turn.
+struct Chain[I, T] {
+    its: Vec[I],
+    k: i64,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for Chain[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        while self.k < self.its.len() {
+            match self.its[self.k].next() {
+                Some(x) => return Some(x),
+                None => self.k += 1,
+            }
+        }
+        None
+    }
+}
+
+fn chain[I: Iterator[Item = T], T](its: own Vec[I]) -> Chain[I, T] {
+    Chain { its: its, k: 0 }
+}
+
+// compress(data, selectors): the items whose selector is true; stops when
+// either side runs out.
+struct Compress[I, S, T] {
+    data: I,
+    sel: S,
+}
+
+impl[I: Iterator[Item = T], S: Iterator[Item = bool], T] Iterator for Compress[I, S, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        loop {
+            let x = self.data.next()?;
+            let keep = self.sel.next()?;
+            if keep {
+                return Some(x);
+            }
+        }
+    }
+}
+
+fn compress[I: Iterator[Item = T], S: Iterator[Item = bool], T](data: own I, sel: own S) -> Compress[I, S, T] {
+    Compress { data: data, sel: sel }
+}
+
+// dropwhile(pred, it): skip while pred holds, then everything.
+struct DropWhile[I, T] {
+    it: I,
+    pred: Fn(ref T) -> bool,
+    dropping: bool,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for DropWhile[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        while self.dropping {
+            let x = self.it.next()?;
+            if not (self.pred)(x) {
+                self.dropping = false;
+                return Some(x);
+            }
+        }
+        self.it.next()
+    }
+}
+
+fn drop_while[I: Iterator[Item = T], T](pred: escaping Fn(ref T) -> bool, it: own I) -> DropWhile[I, T] {
+    DropWhile { it: it, pred: pred, dropping: true }
+}
+
+// takewhile(pred, it): items while pred holds, then nothing.
+struct TakeWhile[I, T] {
+    it: I,
+    pred: Fn(ref T) -> bool,
+    done: bool,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for TakeWhile[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.done {
+            return None;
+        }
+        let x = self.it.next()?;
+        if (self.pred)(x) {
+            Some(x)
+        } else {
+            self.done = true;
+            None
+        }
+    }
+}
+
+fn take_while[I: Iterator[Item = T], T](pred: escaping Fn(ref T) -> bool, it: own I) -> TakeWhile[I, T] {
+    TakeWhile { it: it, pred: pred, done: false }
+}
+
+// filterfalse(pred, it): the items pred rejects.
+struct FilterFalse[I, T] {
+    it: I,
+    pred: Fn(ref T) -> bool,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for FilterFalse[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        loop {
+            let x = self.it.next()?;
+            if not (self.pred)(x) {
+                return Some(x);
+            }
+        }
+    }
+}
+
+fn filter_false[I: Iterator[Item = T], T](pred: escaping Fn(ref T) -> bool, it: own I) -> FilterFalse[I, T] {
+    FilterFalse { it: it, pred: pred }
+}
+
+// groupby(it, key): runs of consecutive items with an equal key.
+struct GroupBy[I, T, K] {
+    it: I,
+    key: Fn(ref T) -> K,
+    pending: Option[T],
+}
+
+impl[I: Iterator[Item = T], T, K: Eq] Iterator for GroupBy[I, T, K] {
+    type Item = (K, Vec[T]);
+    fn next(mut ref self) -> Option[(K, Vec[T])] {
+        let first = match self.pending.take() {
+            Some(x) => x,
+            None => self.it.next()?,
+        };
+        let k = (self.key)(first);
+        let mut group: Vec[T] = Vec.new();
+        group.push(first);
+        loop {
+            match self.it.next() {
+                Some(x) => {
+                    if (self.key)(x) == k {
+                        group.push(x);
+                    } else {
+                        self.pending = Some(x);
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        Some((k, group))
+    }
+}
+
+fn group_by[I: Iterator[Item = T], T, K](it: own I, key: escaping Fn(ref T) -> K) -> GroupBy[I, T, K] {
+    GroupBy { it: it, key: key, pending: None }
+}
+
+// islice(it, start, stop, step): items at start, start+step, ... below stop.
+struct ISlice[I, T] {
+    it: I,
+    want: i64,
+    stop: Option[i64],
+    step: i64,
+    seen: i64,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for ISlice[I, T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if let Some(stop) = self.stop {
+            if self.want >= stop {
+                return None;
+            }
+        }
+        loop {
+            let x = self.it.next()?;
+            self.seen += 1;
+            if self.seen - 1 == self.want {
+                self.want += self.step;
+                return Some(x);
+            }
+        }
+    }
+}
+
+fn islice[I: Iterator[Item = T], T](it: own I, start: i64, stop: Option[i64], step: i64) -> ISlice[I, T] {
+    ISlice { it: it, want: start, stop: stop, step: step, seen: 0 }
+}
+
+// pairwise(it): overlapping pairs (a, b), (b, c), ...
+struct Pairwise[I, T] {
+    it: I,
+    prev: Option[T],
+}
+
+impl[I: Iterator[Item = T], T: Clone] Iterator for Pairwise[I, T] {
+    type Item = (T, T);
+    fn next(mut ref self) -> Option[(T, T)] {
+        if self.prev.is_none() {
+            self.prev = self.it.next();
+        }
+        let a = self.prev.take()?;
+        let b = self.it.next()?;
+        self.prev = Some(b.clone());
+        Some((a, b))
+    }
+}
+
+fn pairwise[I: Iterator[Item = T], T](it: own I) -> Pairwise[I, T] {
+    Pairwise { it: it, prev: None }
+}
+
+// zip(a, b): pairs until either side runs out.
+struct Zip[A, B, X, Y] {
+    a: A,
+    b: B,
+}
+
+impl[A: Iterator[Item = X], B: Iterator[Item = Y], X, Y] Iterator for Zip[A, B, X, Y] {
+    type Item = (X, Y);
+    fn next(mut ref self) -> Option[(X, Y)] {
+        let x = self.a.next()?;
+        let y = self.b.next()?;
+        Some((x, y))
+    }
+}
+
+fn zip[A: Iterator[Item = X], B: Iterator[Item = Y], X, Y](a: own A, b: own B) -> Zip[A, B, X, Y] {
+    Zip { a: a, b: b }
+}
+
+// zip_longest(a, b, fill): pairs until both run out, padding with fill.
+struct ZipLongest[A, B, T] {
+    a: A,
+    b: B,
+    fill: T,
+}
+
+impl[A: Iterator[Item = T], B: Iterator[Item = T], T: Clone] Iterator for ZipLongest[A, B, T] {
+    type Item = (T, T);
+    fn next(mut ref self) -> Option[(T, T)] {
+        let x = self.a.next();
+        let y = self.b.next();
+        if x.is_none() and y.is_none() {
+            return None;
+        }
+        let x = match x {
+            Some(v) => v,
+            None => self.fill.clone(),
+        };
+        let y = match y {
+            Some(v) => v,
+            None => self.fill.clone(),
+        };
+        Some((x, y))
+    }
+}
+
+fn zip_longest[A: Iterator[Item = T], B: Iterator[Item = T], T](a: own A, b: own B, fill: own T) -> ZipLongest[A, B, T] {
+    ZipLongest { a: a, b: b, fill: fill }
+}
+
+// enumerate(it, start): (start, x0), (start+1, x1), ...
+struct Enumerate[I, T] {
+    it: I,
+    n: i64,
+}
+
+impl[I: Iterator[Item = T], T] Iterator for Enumerate[I, T] {
+    type Item = (i64, T);
+    fn next(mut ref self) -> Option[(i64, T)] {
+        let x = self.it.next()?;
+        self.n += 1;
+        Some((self.n - 1, x))
+    }
+}
+
+fn enumerate[I: Iterator[Item = T], T](it: own I, start: i64) -> Enumerate[I, T] {
+    Enumerate { it: it, n: start }
+}
+
+// ------------------------------------------------------------ combinatorics
+
+// product(pools): every tuple taking one item from each pool, an odometer
+// over the pools' indices.
+struct Product[T] {
+    pools: Vec[Vec[T]],
+    idx: Vec[i64],
+    done: bool,
+}
+
+impl[T: Clone] Iterator for Product[T] {
+    type Item = Vec[T];
+    fn next(mut ref self) -> Option[Vec[T]] {
+        if self.done {
+            return None;
+        }
+        let mut out: Vec[T] = Vec.new();
+        for i in 0..self.pools.len() {
+            out.push(self.pools[i][self.idx[i]].clone());
+        }
+        let mut i = self.pools.len() - 1;
+        while i >= 0 {
+            self.idx[i] += 1;
+            if self.idx[i] < self.pools[i].len() {
+                break;
+            }
+            self.idx[i] = 0;
+            i -= 1;
+        }
+        if i < 0 {
+            self.done = true;
+        }
+        Some(out)
+    }
+}
+
+fn product[T](pools: own Vec[Vec[T]], times: i64) -> Product[T] {
+    let mut all: Vec[Vec[T]] = Vec.new();
+    for _ in 0..times {
+        for p in pools.iter() {
+            all.push(p.clone());
+        }
+    }
+    let mut done = false;
+    let mut idx: Vec[i64] = Vec.new();
+    for p in all.iter() {
+        if p.is_empty() {
+            done = true;
+        }
+        idx.push(0);
+    }
+    Product { pools: all, idx: idx, done: done }
+}
+
+// permutations(pool, r): r-length orderings, in the order of the recipe in
+// Python's docs (an index list plus a countdown per position).
+struct Permutations[T] {
+    pool: Vec[T],
+    r: i64,
+    idx: Vec[i64],
+    cycles: Vec[i64],
+    first: bool,
+    done: bool,
+}
+
+impl[T: Clone] Permutations[T] {
+    fn current(ref self) -> Vec[T] {
+        let mut out: Vec[T] = Vec.new();
+        for i in 0..self.r {
+            out.push(self.pool[self.idx[i]].clone());
+        }
+        out
+    }
+}
+
+impl[T: Clone] Iterator for Permutations[T] {
+    type Item = Vec[T];
+    fn next(mut ref self) -> Option[Vec[T]] {
+        if self.done {
+            return None;
+        }
+        if self.first {
+            self.first = false;
+            return Some(self.current());
+        }
+        let n = self.pool.len();
+        let mut i = self.r - 1;
+        while i >= 0 {
+            self.cycles[i] -= 1;
+            if self.cycles[i] == 0 {
+                let x = self.idx.remove(i);
+                self.idx.push(x);
+                self.cycles[i] = n - i;
+            } else {
+                let j = self.cycles[i];
+                self.idx.swap(i, n - j);
+                return Some(self.current());
+            }
+            i -= 1;
+        }
+        self.done = true;
+        None
+    }
+}
+
+fn permutations[T](pool: own Vec[T], r: Option[i64]) -> Permutations[T] {
+    let n = pool.len();
+    let r = match r {
+        Some(r) => r,
+        None => n,
+    };
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..n {
+        idx.push(i);
+    }
+    let mut cycles: Vec[i64] = Vec.new();
+    for i in 0..r {
+        cycles.push(n - i);
+    }
+    Permutations { pool: pool, r: r, idx: idx, cycles: cycles, first: true, done: r > n }
+}
+
+// combinations(pool, r) and combinations_with_replacement(pool, r): sorted
+// index tuples, again after the recipes in Python's docs.
+struct Combinations[T] {
+    pool: Vec[T],
+    r: i64,
+    idx: Vec[i64],
+    replace: bool,
+    first: bool,
+    done: bool,
+}
+
+impl[T: Clone] Iterator for Combinations[T] {
+    type Item = Vec[T];
+    fn next(mut ref self) -> Option[Vec[T]] {
+        if self.done {
+            return None;
+        }
+        if not self.first {
+            let n = self.pool.len();
+            let mut i = self.r - 1;
+            while i >= 0 {
+                let top = if self.replace { n - 1 } else { i + n - self.r };
+                if self.idx[i] != top {
+                    break;
+                }
+                i -= 1;
+            }
+            if i < 0 {
+                self.done = true;
+                return None;
+            }
+            self.idx[i] += 1;
+            for j in i + 1..self.r {
+                self.idx[j] = if self.replace { self.idx[i] } else { self.idx[j - 1] + 1 };
+            }
+        }
+        self.first = false;
+        let mut out: Vec[T] = Vec.new();
+        for i in 0..self.r {
+            out.push(self.pool[self.idx[i]].clone());
+        }
+        Some(out)
+    }
+}
+
+fn combinations[T](pool: own Vec[T], r: i64, replace: bool) -> Combinations[T] {
+    let n = pool.len();
+    let mut idx: Vec[i64] = Vec.new();
+    for i in 0..r {
+        idx.push(if replace { 0 } else { i });
+    }
+    let done = if replace { n == 0 and r > 0 } else { r > n };
+    Combinations { pool: pool, r: r, idx: idx, replace: replace, first: true, done: done }
+}
+
+// ------------------------------------------------------------ helpers
+
+fn to_vec[I: Iterator](it: own I) -> Vec[I.Item] {
+    let mut it = it;
+    let mut out = Vec.new();
+    while let Some(x) = it.next() {
+        out.push(x);
+    }
+    out
+}
+
+fn ints(field: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if field == "" or field == "-" {
+        return out;
+    }
+    for part in field.split(",") {
+        match i64.parse(part.clone()) {
+            Some(n) => out.push(n),
+            None => {}
+        }
+    }
+    out
+}
+
+fn lists(field: ref String) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    for part in field.split(";") {
+        out.push(ints(part));
+    }
+    out
+}
+
+fn num(field: ref String) -> i64 {
+    match i64.parse(field.clone()) {
+        Some(n) => n,
+        None => 0,
+    }
+}
+
+// Python's repr for a list of ints, and for a tuple of them.
+fn list_repr(v: ref Vec[i64]) -> String {
+    let parts: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn tuple_repr(v: ref Vec[i64]) -> String {
+    if v.len() == 1 {
+        return f"({v[0]},)";
+    }
+    let parts: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"({parts.join(", ")})"
+}
+
+fn tuples_repr(v: ref Vec[Vec[i64]]) -> String {
+    let parts: Vec[String] = v.iter().map(|t| tuple_repr(t)).collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn pairs_repr(v: ref Vec[(i64, i64)]) -> String {
+    let parts: Vec[String] = v.iter().map(|p| f"({p.0}, {p.1})").collect();
+    f"[{parts.join(", ")}]"
+}
+
+fn op(name: ref String) -> Fn(own i64, own i64) -> i64 {
+    if name == "mul" {
+        |a: i64, b: i64| a * b
+    } else if name == "max" {
+        |a: i64, b: i64| if b > a { b } else { a }
+    } else if name == "min" {
+        |a: i64, b: i64| if b < a { b } else { a }
+    } else {
+        |a: i64, b: i64| a + b
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn run(f: ref Vec[String], out: mut ref String) -> Result[(), String] {
+    let kind = f[0].clone();
+    if kind == "count" {
+        let v: Vec[i64] = to_vec(islice(count(num(f[1]), num(f[2])), 0, Some(num(f[3])), 1));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "cycle" {
+        let v: Vec[i64] = to_vec(islice(cycle(iter_of(ints(f[1]))), 0, Some(num(f[2])), 1));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "repeat" {
+        let v = to_vec(repeat(num(f[1]), Some(num(f[2]))));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "accumulate" {
+        let init: Option[i64] = if f[3] == "-" { None } else { Some(num(f[3])) };
+        let v = to_vec(accumulate(iter_of(ints(f[1])), op(f[2]), init));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "batched" {
+        let v: Vec[Vec[i64]] = to_vec(batched(iter_of(ints(f[1])), num(f[2])));
+        out.push_str(f"  {tuples_repr(v)}\n");
+    } else if kind == "chain" {
+        let mut its: Vec[VecIter[i64]] = Vec.new();
+        for l in lists(f[1]).into_iter() {
+            its.push(iter_of(l));
+        }
+        let v: Vec[i64] = to_vec(chain(its));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "compress" {
+        let sel: Vec[bool] = ints(f[2]).iter().map(|x| *x != 0).collect();
+        let v: Vec[i64] = to_vec(compress(iter_of(ints(f[1])), iter_of(sel)));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "dropwhile" or kind == "takewhile" {
+        let lim = num(f[2]);
+        let v = if kind == "dropwhile" {
+            to_vec(drop_while(|x: ref i64| *x < lim, iter_of(ints(f[1]))))
+        } else {
+            to_vec(take_while(|x: ref i64| *x < lim, iter_of(ints(f[1]))))
+        };
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "filterfalse" {
+        let v = to_vec(filter_false(|x: ref i64| *x % 2 == 1, iter_of(ints(f[1]))));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "groupby" {
+        let parity = f[2] == "parity";
+        let groups = to_vec(group_by(iter_of(ints(f[1])), |x: ref i64| if parity { *x % 2 } else { *x }));
+        let parts: Vec[String] = groups.iter().map(|g| f"({g.0}, {list_repr(g.1)})").collect();
+        out.push_str(f"  [{parts.join(", ")}]\n");
+    } else if kind == "islice" {
+        let stop: Option[i64] = if f[3] == "-" { None } else { Some(num(f[3])) };
+        let v: Vec[i64] = to_vec(islice(iter_of(ints(f[1])), num(f[2]), stop, num(f[4])));
+        out.push_str(f"  {list_repr(v)}\n");
+    } else if kind == "pairwise" {
+        let v: Vec[(i64, i64)] = to_vec(pairwise(iter_of(ints(f[1]))));
+        out.push_str(f"  {pairs_repr(v)}\n");
+    } else if kind == "zip_longest" {
+        let v = to_vec(zip_longest(iter_of(ints(f[1])), iter_of(ints(f[2])), num(f[3])));
+        out.push_str(f"  {pairs_repr(v)}\n");
+    } else if kind == "product" {
+        let v = to_vec(product(lists(f[1]), num(f[2])));
+        out.push_str(f"  {tuples_repr(v)}\n");
+    } else if kind == "permutations" {
+        let r: Option[i64] = if f[2] == "-" { None } else { Some(num(f[2])) };
+        let v = to_vec(permutations(ints(f[1]), r));
+        out.push_str(f"  {tuples_repr(v)}\n");
+    } else if kind == "combinations" or kind == "cwr" {
+        let v = to_vec(combinations(ints(f[1]), num(f[2]), kind == "cwr"));
+        out.push_str(f"  {tuples_repr(v)}\n");
+    } else if kind == "report" {
+        report(f[1], mut out)?;
+    } else {
+        return Err(f"unknown job {kind}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ report
+
+#[derive(Clone)]
+struct Row {
+    month: String,
+    region: String,
+    product: String,
+    units: i64,
+    price: i64,
+    promo: bool,
+}
+
+fn revenue(r: ref Row) -> i64 {
+    r.units * r.price
+}
+
+fn load(path: ref String) -> Result[Vec[Row], String] {
+    let name = path[1..].to_string();
+    let text = match fs.read_to_string(f"data/{name}") {
+        Ok(s) => s,
+        Err(e) => return Err(f"cannot read {name}: {e}"),
+    };
+    let mut rows: Vec[Row] = Vec.new();
+    let mut first = true;
+    for line in text.lines() {
+        if first {
+            first = false;
+            continue;
+        }
+        let c: Vec[String] = line.split(",");
+        if c.len() != 6 {
+            return Err(f"bad row: {line}");
+        }
+        rows.push(Row {
+            month: c[0].clone(),
+            region: c[1].clone(),
+            product: c[2].clone(),
+            units: num(c[3]),
+            price: num(c[4]),
+            promo: c[5] == "1",
+        });
+    }
+    Ok(rows)
+}
+
+// A stable insertion sort by region, like Python's sorted(key=...).
+fn sorted_by_region(rows: ref Vec[Row]) -> Vec[Row] {
+    let mut out: Vec[Row] = Vec.new();
+    for r in rows.iter() {
+        let mut at = out.len();
+        while at > 0 and out[at - 1].region > r.region {
+            at -= 1;
+        }
+        out.insert(at, r.clone());
+    }
+    out
+}
+
+fn signed(n: i64) -> String {
+    if n >= 0 {
+        f"+{n}"
+    } else {
+        f"{n}"
+    }
+}
+
+fn report(path: ref String, out: mut ref String) -> Result[(), String] {
+    let rows = load(path)?;
+
+    out.push_str("  by region:\n");
+    for (region, g) in group_by(iter_of(sorted_by_region(rows)), |r: ref Row| r.region.clone()) {
+        let mut units = 0;
+        let mut rev = 0;
+        for r in g.iter() {
+            units += r.units;
+            rev += revenue(r);
+        }
+        out.push_str(f"    {region}: {g.len()} rows, {units} units, revenue {rev}\n");
+    }
+
+    out.push_str("  by month:\n");
+    let mut months: Vec[(String, i64)] = Vec.new();
+    for (m, g) in group_by(iter_of(rows.clone()), |r: ref Row| r.month.clone()) {
+        let mut units = 0;
+        for r in g.iter() {
+            units += r.units;
+        }
+        months.push((m, units));
+    }
+    let no_start: Option[i64] = None;
+    let totals: Vec[i64] = months.iter().map(|p| p.1).collect();
+    let runs: Vec[((String, i64), i64)] = to_vec(zip(iter_of(months.clone()), accumulate(iter_of(totals), |a: i64, b: i64| a + b, no_start)));
+    for (p, run) in runs.into_iter() {
+        out.push_str(f"    {p.0} {p.1} running {run}\n");
+    }
+    let steps: Vec[((String, i64), (String, i64))] = to_vec(pairwise(iter_of(months)));
+    for (a, b) in steps.into_iter() {
+        out.push_str(f"    {a.0} -> {b.0}: {signed(b.1 - a.1)}\n");
+    }
+
+    out.push_str("  pages:\n");
+    let pages: Vec[(i64, Vec[Row])] = to_vec(enumerate(batched(iter_of(rows.clone()), 4), 1));
+    for (i, page) in pages.into_iter() {
+        let names: Vec[String] = page.iter().map(|r| r.product.clone()).collect();
+        out.push_str(f"    page {i}: {names.join(" ")}\n");
+    }
+
+    out.push_str("  bundles:\n");
+    let mut price: SortedMap[String, i64] = SortedMap.new();
+    for r in rows.iter() {
+        let best = match price.get(r.product) {
+            Some(p) => if *p > r.price { *p } else { r.price },
+            None => r.price,
+        };
+        price.insert(r.product.clone(), best);
+    }
+    let mut names: Vec[String] = Vec.new();
+    for (name, _) in price.iter() {
+        names.push(name.clone());
+    }
+    for pair in combinations(names, 2, false) {
+        let a = pair[0].clone();
+        let b = pair[1].clone();
+        let pa = match price.get(a) {
+            Some(p) => *p,
+            None => 0,
+        };
+        let pb = match price.get(b) {
+            Some(p) => *p,
+            None => 0,
+        };
+        out.push_str(f"    {a} + {b} = {pa + pb}\n");
+    }
+
+    let sizes: Vec[String] = vec!["S".to_string(), "M".to_string(), "L".to_string()];
+    let colours: Vec[String] = vec!["red".to_string(), "blue".to_string()];
+    let skus: Vec[String] = to_vec(product(vec![sizes, colours], 1)).iter().map(|s| s.join("-")).collect();
+    out.push_str(f"  skus: {skus.join(" ")}\n");
+
+    let revs: Vec[i64] = rows.iter().map(|r| revenue(r)).collect();
+    let spend: Zip[VecIter[Row], Accumulate[VecIter[i64], i64], Row, i64] = zip(iter_of(rows.clone()), accumulate(iter_of(revs), |a: i64, b: i64| a + b, no_start));
+    let kept = to_vec(take_while(|p: ref (Row, i64)| p.1 <= 600, spend));
+    let spent = if kept.is_empty() { 0 } else { kept[kept.len() - 1].1 };
+    out.push_str(f"  budget 600: {kept.len()} rows, spent {spent}\n");
+
+    out.push_str("  tickets:\n");
+    let agents: Vec[String] = vec!["ana".to_string(), "ben".to_string(), "cy".to_string()];
+    let tickets: Vec[((i64, Row), String)] = to_vec(zip(enumerate(islice(iter_of(rows.clone()), 0, Some(7), 1), 1), cycle(iter_of(agents))));
+    for (t, agent) in tickets.into_iter() {
+        out.push_str(f"    ticket {t.0} {t.1.product} -> {agent}\n");
+    }
+
+    let flags: Vec[bool] = rows.iter().map(|r| r.promo).collect();
+    let promoted: Vec[Row] = to_vec(compress(iter_of(rows.clone()), iter_of(flags)));
+    let promo: Vec[String] = promoted.iter().map(|r| r.product.clone()).collect();
+    out.push_str(f"  promo: {promo.join(" ")}\n");
+
+    let north: Vec[i64] = rows.iter().filter(|r| r.region == "north").map(|r| r.units).collect();
+    let south: Vec[i64] = rows.iter().filter(|r| r.region == "south").map(|r| r.units).collect();
+    let vs = to_vec(zip_longest(iter_of(north), iter_of(south), 0));
+    out.push_str(f"  north vs south: {pairs_repr(vs)}\n");
+
+    out.push_str("  big orders:\n");
+    let big: Vec[(i64, Row)] = to_vec(zip(count(1, 1), filter_false(|r: ref Row| r.units < 5, iter_of(rows.clone()))));
+    for (n, r) in big.into_iter() {
+        out.push_str(f"    {n}. {r.month} {r.region} {r.product} {r.units}\n");
+    }
+
+    let march = to_vec(drop_while(|r: ref Row| r.month < "2026-03".to_string(), iter_of(rows)));
+    out.push_str(f"  from march: {march.len()} rows\n");
+    Ok(())
+}
+
+// ------------------------------------------------------------ main
+
+fn main() {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        eprintln(f"cannot create data: {e}");
+        return;
+    }
+    for (path, contents) in data_files() {
+        if let Err(e) = fs.write(f"data/{path}", contents) {
+            eprintln(f"cannot write {path}: {e}");
+            return;
+        }
+    }
+    if let Err(e) = fs.write("data/jobs.tsv".to_string(), jobs_text()) {
+        eprintln(f"cannot write jobs.tsv: {e}");
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln(f"cannot read jobs.tsv: {e}");
+            return;
+        }
+    };
+    let mut out = String.new();
+    for line in jobs.lines() {
+        let f: Vec[String] = line.split("\t");
+        out.push_str(f"== {f.join(" | ")}\n");
+        if let Err(e) = run(f, mut out) {
+            out.push_str(f"error: {e}\n");
+        }
+    }
+    print(out);
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, as (path, contents).
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    let mut t = String.new();
+    t.push_str("month,region,product,units,price,promo\n");
+    t.push_str("2026-01,north,kettle,12,30,0\n");
+    t.push_str("2026-01,south,kettle,7,30,1\n");
+    t.push_str("2026-01,north,toaster,5,45,0\n");
+    t.push_str("2026-02,east,kettle,9,28,1\n");
+    t.push_str("2026-02,north,blender,3,80,0\n");
+    t.push_str("2026-02,south,toaster,11,45,0\n");
+    t.push_str("2026-03,south,kettle,4,30,0\n");
+    t.push_str("2026-03,east,blender,6,75,1\n");
+    t.push_str("2026-03,east,toaster,2,45,0\n");
+    t.push_str("2026-03,north,kettle,15,29,1\n");
+    t.push_str("2026-04,west,blender,8,78,0\n");
+    t.push_str("2026-04,south,blender,1,80,0\n");
+    t.push_str("2026-04,north,toaster,6,44,1\n");
+    v.push(("sales.csv".to_string(), t));
+    v
+}
+
+fn jobs_text() -> String {
+    let mut s = String.new();
+    s.push_str("count\t10\t3\t5\n");
+    s.push_str("count\t-2\t-5\t4\n");
+    s.push_str("count\t7\t0\t3\n");
+    s.push_str("cycle\t1,2,3\t8\n");
+    s.push_str("cycle\t-\t5\n");
+    s.push_str("cycle\t4\t3\n");
+    s.push_str("repeat\t9\t4\n");
+    s.push_str("repeat\t9\t0\n");
+    s.push_str("accumulate\t1,2,3,4,5\tadd\t-\n");
+    s.push_str("accumulate\t1,2,3,4,5\tmul\t-\n");
+    s.push_str("accumulate\t3,1,4,1,5,9,2,6\tmax\t-\n");
+    s.push_str("accumulate\t3,1,4,1,5,9,2,6\tmin\t-\n");
+    s.push_str("accumulate\t1,2,3\tadd\t100\n");
+    s.push_str("accumulate\t-\tadd\t-\n");
+    s.push_str("accumulate\t-\tadd\t7\n");
+    s.push_str("batched\t1,2,3,4,5,6,7\t3\n");
+    s.push_str("batched\t1,2,3\t3\n");
+    s.push_str("batched\t1,2,3\t5\n");
+    s.push_str("batched\t-\t2\n");
+    s.push_str("chain\t1,2;3;;4,5,6\n");
+    s.push_str("chain\t;;\n");
+    s.push_str("compress\t1,2,3,4,5,6\t1,0,1,0,1,1\n");
+    s.push_str("compress\t1,2,3\t1,1,1,1,1\n");
+    s.push_str("compress\t1,2,3,4\t0,1\n");
+    s.push_str("dropwhile\t1,4,6,4,1\t5\n");
+    s.push_str("takewhile\t1,4,6,4,1\t5\n");
+    s.push_str("dropwhile\t7,8\t5\n");
+    s.push_str("takewhile\t7,8\t5\n");
+    s.push_str("filterfalse\t1,2,3,4,5,6,7\todd\n");
+    s.push_str("groupby\t1,1,2,3,3,3,1,1\tsame\n");
+    s.push_str("groupby\t1,3,5,2,4,7,9,8\tparity\n");
+    s.push_str("groupby\t-\tsame\n");
+    s.push_str("islice\t0,1,2,3,4,5,6,7,8,9\t2\t8\t2\n");
+    s.push_str("islice\t0,1,2,3,4,5,6,7,8,9\t0\t-\t3\n");
+    s.push_str("islice\t0,1,2,3,4,5,6,7,8,9\t7\t3\t1\n");
+    s.push_str("islice\t0,1,2,3,4,5,6,7,8,9\t5\t50\t1\n");
+    s.push_str("islice\t0,1,2\t0\t0\t1\n");
+    s.push_str("pairwise\t1,2,4,7,11\n");
+    s.push_str("pairwise\t5\n");
+    s.push_str("pairwise\t-\n");
+    s.push_str("zip_longest\t1,2,3,4\t10,20\t0\n");
+    s.push_str("zip_longest\t-\t10,20\t-1\n");
+    s.push_str("product\t1,2;3,4\t1\n");
+    s.push_str("product\t0,1\t3\n");
+    s.push_str("product\t1,2;-;3\t1\n");
+    s.push_str("product\t-\t0\n");
+    s.push_str("permutations\t1,2,3\t-\n");
+    s.push_str("permutations\t1,2,3,4\t2\n");
+    s.push_str("permutations\t1,2,3\t0\n");
+    s.push_str("permutations\t1,2\t3\n");
+    s.push_str("combinations\t1,2,3,4,5\t3\n");
+    s.push_str("combinations\t1,2,3\t0\n");
+    s.push_str("combinations\t1,2\t3\n");
+    s.push_str("combinations\t3,1,2\t2\n");
+    s.push_str("cwr\t1,2,3\t2\n");
+    s.push_str("cwr\t1,2\t3\n");
+    s.push_str("cwr\t-\t2\n");
+    s.push_str("cwr\t-\t0\n");
+    s.push_str("report\t@sales.csv\n");
+    s
+}
