@@ -3843,7 +3843,7 @@ impl<'a> super::TypeChecker<'a> {
     /// design.md § String literals: a string literal is a `Str` wherever a
     /// `Str` is expected, and a branch beside one that yields a `Str` view is
     /// such a place: `match .. { Some(i) => s[i..].trim(), None => "" }`
-    /// (B-2026-10-15-54). When the branch types differ only in slots where one
+    /// (B-2026-10-15-65). When the branch types differ only in slots where one
     /// branch has a view and the others a literal, the literals are retyped
     /// to the view and every branch takes the joined type. `None` marks a
     /// branch with no expression to retype.
