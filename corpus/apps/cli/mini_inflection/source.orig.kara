@@ -1,0 +1,4982 @@
+// mini_inflection: inflection 0.5.1, the port of Rails' inflector that
+// Python ORMs, API frameworks and code generators use to turn a model
+// name into a table name, a column into a label and a title into a URL
+// slug. The port covers pluralize and singularize with the rule tables,
+// the irregular words and the uncountables (and the rules, irregulars
+// and uncountables an application adds at startup, with the re errors a
+// bad rule raises when it is reached); camelize, underscore, dasherize,
+// tableize, humanize, titleize, parameterize, transliterate, ordinal and
+// ordinalize, with Python's int() for the number; and a scaffold
+// generator that derives a model's table, route, controller, labels and
+// associations the way Rails does.
+//
+// inflection is built on re, so this carries mini_re's regular
+// expression engine (Python 3.13's parser and an sre-style backtracking
+// matcher) and calls it the way inflection does: search, then sub with a
+// template or a function. str.lower, upper, title and capitalize (full
+// case mappings, title case, the final sigma) and NFKD come from
+// data/unicode.txt, which mk.py writes from Python's unicodedata for the
+// characters the jobs reach. expected.out is the output of oracle.py,
+// which runs the jobs through inflection itself.
+
+// ------------------------------------------------------------ errors
+
+struct ReErr {
+    kind: String,
+    msg: String,
+    pos: i64,
+}
+
+fn re_error(msg: own String, pos: i64) -> ReErr {
+    ReErr { kind: "error".to_string(), msg: msg, pos: pos }
+}
+
+fn other_error(kind: Str, msg: own String) -> ReErr {
+    ReErr { kind: kind.to_string(), msg: msg, pos: -1 }
+}
+
+fn err_text(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        if e.pos >= 0 {
+            return f"error: {e.msg} at position {e.pos}";
+        }
+        return f"error: {e.msg}";
+    }
+    f"{e.kind}: {e.msg}"
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+// ------------------------------------------------------- parsed form
+
+// The categories of \d \D \s \S \w \W.
+fn cat_digit() -> i64 { 0 }
+fn cat_not_digit() -> i64 { 1 }
+fn cat_space() -> i64 { 2 }
+fn cat_not_space() -> i64 { 3 }
+fn cat_word() -> i64 { 4 }
+fn cat_not_word() -> i64 { 5 }
+
+// The positions ^ $ \A \Z \b \B and the forms the compiler turns them
+// into under MULTILINE.
+fn at_beginning() -> i64 { 0 }
+fn at_beginning_line() -> i64 { 1 }
+fn at_beginning_string() -> i64 { 2 }
+fn at_end() -> i64 { 3 }
+fn at_end_line() -> i64 { 4 }
+fn at_end_string() -> i64 { 5 }
+fn at_boundary() -> i64 { 6 }
+fn at_non_boundary() -> i64 { 7 }
+
+#[derive(Clone)]
+enum Item {
+    Lit(i64),
+    Range(i64, i64),
+    Cat(i64),
+}
+
+enum Node {
+    Lit(i64),
+    NotLit(i64),
+    Any,
+    In(Vec[Item], bool),
+    At(i64),
+    Branch(Vec[Vec[Node]]),
+    // group (0: none), flags turned on, flags turned off, contents
+    Group(i64, i64, i64, Vec[Node]),
+    // 0 greedy, 1 lazy, 2 possessive; min; max; the item repeated
+    Repeat(i64, i64, i64, Vec[Node]),
+    Atomic(Vec[Node]),
+    // direction (1 ahead, -1 behind), negative, contents
+    Assert(i64, bool, Vec[Node]),
+    GroupRef(i64),
+    // group, yes branch, no branch
+    Exists(i64, Vec[Node], Vec[Node]),
+    Failure,
+}
+
+fn is_repeat(n: ref Node) -> bool {
+    match n {
+        Node.Repeat(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+fn is_at(n: ref Node) -> bool {
+    match n {
+        Node.At(_) => true,
+        _ => false,
+    }
+}
+
+fn flag_i() -> i64 { 2 }
+fn flag_l() -> i64 { 4 }
+fn flag_m() -> i64 { 8 }
+fn flag_s() -> i64 { 16 }
+fn flag_u() -> i64 { 32 }
+fn flag_x() -> i64 { 64 }
+fn flag_a() -> i64 { 256 }
+fn type_flags() -> i64 { 4 | 32 | 256 }
+fn maxrepeat() -> i64 { 4294967295 }
+fn maxgroups() -> i64 { 1073741823 }
+fn maxwidth() -> i64 { 1 << 62 }
+
+fn flag_value(c: i64) -> i64 {
+    match c {
+        105 => 2,
+        76 => 4,
+        109 => 8,
+        115 => 16,
+        120 => 64,
+        97 => 256,
+        117 => 32,
+        _ => 0,
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// One token: nothing at the end of the pattern (n 0), a character (n 1),
+// or a backslash and the character after it (n 2).
+#[derive(Copy, Clone)]
+struct T {
+    n: i64,
+    a: i64,
+    b: i64,
+}
+
+fn tok_none() -> T {
+    T { n: 0, a: 0, b: 0 }
+}
+
+fn tok_is(t: T, c: i64) -> bool {
+    t.n == 1 and t.a == c
+}
+
+fn tok_text(t: T) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    if t.n >= 1 {
+        v.push(t.a);
+    }
+    if t.n == 2 {
+        v.push(t.b);
+    }
+    v
+}
+
+fn is_ascii_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_oct(c: i64) -> bool {
+    c >= 48 and c <= 55
+}
+
+fn is_dec(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn digits_value(s: ref Vec[i64], start: i64, base: i64) -> i64 {
+    let mut v = 0;
+    let mut i = start;
+    while i < s.len() {
+        let c = s[i];
+        let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 };
+        v = v * base + d;
+        i += 1;
+    }
+    v
+}
+
+// str.isidentifier, near enough: a letter or underscore, then letters,
+// digits and underscores.
+fn is_identifier(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < name.len() {
+        let c = name[i];
+        let ok = if c == 95 {
+            true
+        } else if i == 0 {
+            match as_char(c) {
+                Some(ch) => ch.is_alphabetic(),
+                None => false,
+            }
+        } else {
+            is_word(c, false)
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_ascii_decimal(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    for c in name {
+        if not is_dec(c) {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tokenizer {
+    s: Vec[i64],
+    index: i64,
+    next: T,
+}
+
+impl Tokenizer {
+    fn advance(mut ref self) -> Result[(), ReErr] {
+        let index = self.index;
+        if index >= self.s.len() {
+            self.next = tok_none();
+            return Ok(());
+        }
+        let c = self.s[index];
+        if c == 92 {
+            if index + 1 >= self.s.len() {
+                return Err(re_error("bad escape (end of pattern)".to_string(), self.s.len() - 1));
+            }
+            self.next = T { n: 2, a: 92, b: self.s[index + 1] };
+            self.index = index + 2;
+        } else {
+            self.next = T { n: 1, a: c, b: 0 };
+            self.index = index + 1;
+        }
+        Ok(())
+    }
+
+    fn get(mut ref self) -> Result[T, ReErr] {
+        let t = self.next;
+        self.advance()?;
+        Ok(t)
+    }
+
+    fn take(mut ref self, c: i64) -> Result[bool, ReErr] {
+        if tok_is(self.next, c) {
+            self.advance()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn tell(ref self) -> i64 {
+        self.index - self.next.n
+    }
+
+    fn seek(mut ref self, index: i64) -> Result[(), ReErr] {
+        self.index = index;
+        self.advance()
+    }
+
+    fn error(ref self, msg: own String, offset: i64) -> ReErr {
+        re_error(msg, self.tell() - offset)
+    }
+
+    // getwhile: up to n characters of a kind (0 octal, 1 decimal, 2 hex).
+    fn getwhile(mut ref self, n: i64, kind: i64, out: mut ref Vec[i64]) -> Result[(), ReErr] {
+        let mut k = 0;
+        while k < n {
+            let t = self.next;
+            if t.n != 1 {
+                break;
+            }
+            let ok = if kind == 0 { is_oct(t.a) } else if kind == 1 { is_dec(t.a) } else { is_hex(t.a) };
+            if not ok {
+                break;
+            }
+            out.push(t.a);
+            self.advance()?;
+            k += 1;
+        }
+        Ok(())
+    }
+
+    fn getuntil(mut ref self, terminator: i64, name: Str) -> Result[Vec[i64], ReErr] {
+        let mut result: Vec[i64] = Vec.new();
+        loop {
+            let c = self.next;
+            self.advance()?;
+            if c.n == 0 {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 0));
+                }
+                let term = to_string(vec_of(terminator));
+                return Err(self.error(f"missing {term}, unterminated name", result.len()));
+            }
+            if tok_is(c, terminator) {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 1));
+                }
+                break;
+            }
+            push_all(mut result, tok_text(c));
+        }
+        Ok(result)
+    }
+
+    fn checkgroupname(ref self, name: ref Vec[i64], offset: i64) -> Result[(), ReErr] {
+        if not is_identifier(name) {
+            return Err(self.error(f"bad character in group name {repr_of(name)}", name.len() + offset));
+        }
+        Ok(())
+    }
+}
+
+fn vec_of(c: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(c);
+    v
+}
+
+fn new_tokenizer(s: ref Vec[i64]) -> Result[Tokenizer, ReErr] {
+    let mut t = Tokenizer { s: s.clone(), index: 0, next: tok_none() };
+    t.advance()?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ parser
+
+#[derive(Clone)]
+struct Width {
+    lo: i64,
+    hi: i64,
+}
+
+struct ParseState {
+    flags: i64,
+    names: Vec[(Vec[i64], i64)],
+    // per group: whether it is closed, and its width
+    closed: Vec[bool],
+    widths: Vec[Width],
+    lookbehind_groups: i64,
+    // conditional references by number, in order: (group, position)
+    refpos: Vec[(i64, i64)],
+}
+
+impl ParseState {
+    fn groups(ref self) -> i64 {
+        self.closed.len()
+    }
+
+    fn group_of(ref self, name: ref Vec[i64]) -> i64 {
+        for (n, g) in self.names.iter() {
+            if same(n, name) {
+                return *g;
+            }
+        }
+        -1
+    }
+
+    fn checkgroup(ref self, gid: i64) -> bool {
+        gid < self.groups() and self.closed[gid]
+    }
+
+    fn checklookbehindgroup(ref self, gid: i64, src: ref Tokenizer) -> Result[(), ReErr] {
+        if self.lookbehind_groups >= 0 {
+            if not self.checkgroup(gid) {
+                return Err(src.error("cannot refer to an open group".to_string(), 0));
+            }
+            if gid >= self.lookbehind_groups {
+                return Err(src.error("cannot refer to group defined in the same lookbehind subpattern".to_string(), 0));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn add_width(a: i64, b: i64) -> i64 {
+    if a >= maxwidth() - b { maxwidth() } else { a + b }
+}
+
+fn mul_width(a: i64, n: i64) -> i64 {
+    if a == 0 or n == 0 {
+        0
+    } else if a >= maxwidth() / n {
+        maxwidth()
+    } else {
+        a * n
+    }
+}
+
+// SubPattern.getwidth.
+fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
+    let mut lo = 0;
+    let mut hi = 0;
+    for n in p.iter() {
+        match n {
+            Node.Branch(items) => {
+                let mut i = maxwidth();
+                let mut j = 0;
+                for item in items.iter() {
+                    let w = width_of(widths, item);
+                    if w.lo < i {
+                        i = w.lo;
+                    }
+                    if w.hi > j {
+                        j = w.hi;
+                    }
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Atomic(body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Group(_, _, _, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Repeat(_, min, max, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, mul_width(w.lo, *min));
+                if *max == maxrepeat() and w.hi > 0 {
+                    hi = maxwidth();
+                } else {
+                    hi = add_width(hi, mul_width(w.hi, *max));
+                }
+            }
+            Node.GroupRef(g) => {
+                let w = ref widths[*g];
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Exists(_, yes, no) => {
+                let wy = width_of(widths, yes);
+                let mut i = wy.lo;
+                let mut j = wy.hi;
+                if no.len() > 0 {
+                    let wn = width_of(widths, no);
+                    if wn.lo < i {
+                        i = wn.lo;
+                    }
+                    if wn.hi > j {
+                        j = wn.hi;
+                    }
+                } else {
+                    i = 0;
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Lit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.NotLit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.Any => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.In(_, _) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            _ => {}
+        }
+    }
+    Width { lo: lo, hi: hi }
+}
+
+fn category_of(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        100 => 0,
+        68 => 1,
+        115 => 2,
+        83 => 3,
+        119 => 4,
+        87 => 5,
+        _ => -1,
+    }
+}
+
+fn escape_value(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        97 => 7,
+        98 => 8,
+        102 => 12,
+        110 => 10,
+        114 => 13,
+        116 => 9,
+        118 => 11,
+        92 => 92,
+        _ => -1,
+    }
+}
+
+// \x, \u and \U: the escape text so far, and the code point.
+fn hex_escape(src: mut ref Tokenizer, t: T, esc: mut ref Vec[i64]) -> Result[i64, ReErr] {
+    let n = if t.b == 120 { 2 } else if t.b == 117 { 4 } else { 8 };
+    src.getwhile(n, 2, mut esc)?;
+    if esc.len() != n + 2 {
+        return Err(src.error(f"incomplete escape {to_string(esc)}", esc.len()));
+    }
+    let c = digits_value(esc, 2, 16);
+    if c > 0x10FFFF {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(c)
+}
+
+// _class_escape: an escape inside [...], a literal or a category.
+fn class_escape(src: mut ref Tokenizer, t: T) -> Result[Item, ReErr] {
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Item.Lit(e));
+    }
+    let cat = category_of(t);
+    if cat >= 0 {
+        return Ok(Item.Cat(cat));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Item.Lit(v));
+    }
+    if is_oct(c) {
+        src.getwhile(2, 0, mut esc)?;
+        let v = digits_value(esc, 1, 8);
+        if v > 0o377 {
+            return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+        }
+        return Ok(Item.Lit(v));
+    }
+    if is_dec(c) or is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Item.Lit(c))
+}
+
+// _escape: an escape outside a set.
+fn escape(src: mut ref Tokenizer, t: T, st: ref ParseState) -> Result[Node, ReErr] {
+    let cat = category_of(t);
+    if cat >= 0 {
+        let mut items: Vec[Item] = Vec.new();
+        items.push(Item.Cat(cat));
+        return Ok(Node.In(items, false));
+    }
+    match t.b {
+        65 => return Ok(Node.At(at_beginning_string())),
+        98 => return Ok(Node.At(at_boundary())),
+        66 => return Ok(Node.At(at_non_boundary())),
+        90 => return Ok(Node.At(at_end_string())),
+        _ => {}
+    }
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Node.Lit(e));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Node.Lit(v));
+    }
+    if c == 48 {
+        src.getwhile(2, 0, mut esc)?;
+        return Ok(Node.Lit(digits_value(esc, 1, 8)));
+    }
+    if is_dec(c) {
+        // an octal escape or a group reference
+        let nt = src.next;
+        if nt.n == 1 and is_dec(nt.a) {
+            esc.push(nt.a);
+            src.advance()?;
+            let nt2 = src.next;
+            if is_oct(esc[1]) and is_oct(esc[2]) and nt2.n == 1 and is_oct(nt2.a) {
+                esc.push(nt2.a);
+                src.advance()?;
+                let v = digits_value(esc, 1, 8);
+                if v > 0o377 {
+                    return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+                }
+                return Ok(Node.Lit(v));
+            }
+        }
+        let group = digits_value(esc, 1, 10);
+        if group < st.groups() {
+            if not st.checkgroup(group) {
+                return Err(src.error("cannot refer to an open group".to_string(), esc.len()));
+            }
+            st.checklookbehindgroup(group, src)?;
+            return Ok(Node.GroupRef(group));
+        }
+        return Err(src.error(f"invalid group reference {group}", esc.len() - 1));
+    }
+    if is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Node.Lit(c))
+}
+
+fn parse_sub(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64) -> Result[Vec[Node], ReErr] {
+    let mut items: Vec[Vec[Node]] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let first = nested == 0 and items.len() == 0;
+        let item = parse_seq(mut src, mut st, verbose, nested + 1, first)?;
+        items.push(item);
+        if not src.take(124)? {
+            break;
+        }
+        if nested == 0 {
+            verbose = (st.flags & flag_x()) != 0;
+        }
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().unwrap());
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node.Branch(items));
+    Ok(out)
+}
+
+// _parse_flags: None (as Err-free Ok(None)) for global flags, else the
+// flags turned on and off.
+fn parse_flags(src: mut ref Tokenizer, st: mut ref ParseState, first_char: T) -> Result[Option[(i64, i64)], ReErr] {
+    let mut ch = first_char;
+    let mut add = 0;
+    let mut del = 0;
+    if not tok_is(ch, 45) {
+        loop {
+            let flag = flag_value(ch.a);
+            if ch.a == 76 {
+                return Err(src.error("bad inline flags: cannot use 'L' flag with a str pattern".to_string(), 0));
+            }
+            add = add | flag;
+            if (flag & type_flags()) != 0 and (add & type_flags()) != flag {
+                return Err(src.error("bad inline flags: flags 'a', 'u' and 'L' are incompatible".to_string(), 0));
+            }
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing -, : or )".to_string(), 0));
+            }
+            if tok_is(ch, 41) or tok_is(ch, 45) or tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing -, : or )" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if tok_is(ch, 41) {
+        st.flags = st.flags | add;
+        return Ok(None);
+    }
+    if tok_is(ch, 45) {
+        ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("missing flag".to_string(), 0));
+        }
+        if ch.n != 1 or flag_value(ch.a) == 0 {
+            let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing flag" };
+            return Err(src.error(msg.to_string(), ch.n));
+        }
+        loop {
+            let flag = flag_value(ch.a);
+            if (flag & type_flags()) != 0 {
+                return Err(src.error("bad inline flags: cannot turn off flags 'a', 'u' and 'L'".to_string(), 0));
+            }
+            del = del | flag;
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing :".to_string(), 0));
+            }
+            if tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing :" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if (add & del) != 0 {
+        return Err(src.error("bad inline flags: flag turned on and off".to_string(), 1));
+    }
+    Ok(Some((add, del)))
+}
+
+fn is_alpha(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr] {
+    let here = src.tell() - 1;
+    let mut set: Vec[Item] = Vec.new();
+    let negate = src.take(94)?;
+    loop {
+        let this = src.get()?;
+        if this.n == 0 {
+            return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+        }
+        if tok_is(this, 93) and set.len() > 0 {
+            break;
+        }
+        let code1 = if this.n == 2 { class_escape(mut src, this)? } else { Item.Lit(this.a) };
+        if src.take(45)? {
+            let that = src.get()?;
+            if that.n == 0 {
+                return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+            }
+            if tok_is(that, 93) {
+                set.push(code1);
+                set.push(Item.Lit(45));
+                break;
+            }
+            let code2 = if that.n == 2 { class_escape(mut src, that)? } else { Item.Lit(that.a) };
+            let text = f"{to_string(tok_text(this))}-{to_string(tok_text(that))}";
+            let offset = this.n + 1 + that.n;
+            let lo = match code1 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            let hi = match code2 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            if lo < 0 or hi < 0 or hi < lo {
+                return Err(src.error(f"bad character range {text}", offset));
+            }
+            set.push(Item.Range(lo, hi));
+        } else {
+            set.push(code1);
+        }
+    }
+    if set.len() == 1 {
+        let only = ref set[0];
+        if let Item.Lit(c) = only {
+            if negate {
+                out.push(Node.NotLit(*c));
+            } else {
+                out.push(Node.Lit(*c));
+            }
+            return Ok(());
+        }
+    }
+    out.push(Node.In(set, negate));
+    Ok(())
+}
+
+// The quantifier just read (its first character is `this`), applied to
+// the last item. Returns false when `{` turned out to be a literal.
+fn parse_repeat(src: mut ref Tokenizer, this: T, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let here = src.tell();
+    let mut min = 0;
+    let mut max = maxrepeat();
+    if tok_is(this, 63) {
+        max = 1;
+    } else if tok_is(this, 43) {
+        min = 1;
+    } else if tok_is(this, 123) {
+        if tok_is(src.next, 125) {
+            out.push(Node.Lit(123));
+            return Ok(false);
+        }
+        let mut lo: Vec[i64] = Vec.new();
+        let mut hi: Vec[i64] = Vec.new();
+        while src.next.n == 1 and is_dec(src.next.a) {
+            lo.push(src.get()?.a);
+        }
+        if src.take(44)? {
+            while src.next.n == 1 and is_dec(src.next.a) {
+                hi.push(src.get()?.a);
+            }
+        } else {
+            hi = lo.clone();
+        }
+        if not src.take(125)? {
+            out.push(Node.Lit(123));
+            src.seek(here)?;
+            return Ok(false);
+        }
+        if lo.len() > 0 {
+            if lo.len() > 10 or digits_value(lo, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            min = digits_value(lo, 0, 10);
+        }
+        if hi.len() > 0 {
+            if hi.len() > 10 or digits_value(hi, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            max = digits_value(hi, 0, 10);
+            if max < min {
+                return Err(src.error("min repeat greater than max repeat".to_string(), src.tell() - here));
+            }
+        }
+    }
+    if out.len() == 0 or is_at(out[out.len() - 1]) {
+        return Err(src.error("nothing to repeat".to_string(), src.tell() - here + 1));
+    }
+    if is_repeat(out[out.len() - 1]) {
+        return Err(src.error("multiple repeat".to_string(), src.tell() - here + 1));
+    }
+    let last = out.pop().unwrap();
+    let mut body: Vec[Node] = Vec.new();
+    match last {
+        Node.Group(0, 0, 0, p) => body = p,
+        other => body.push(other),
+    }
+    let kind = if src.take(63)? { 1 } else if src.take(43)? { 2 } else { 0 };
+    out.push(Node.Repeat(kind, min, max, body));
+    Ok(true)
+}
+
+fn parse_seq(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64, first: bool) -> Result[Vec[Node], ReErr] {
+    let mut out: Vec[Node] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let this = src.next;
+        if this.n == 0 or tok_is(this, 124) or tok_is(this, 41) {
+            break;
+        }
+        src.advance()?;
+        if verbose {
+            if this.n == 1 and (this.a == 32 or (this.a >= 9 and this.a <= 13)) {
+                continue;
+            }
+            if tok_is(this, 35) {
+                loop {
+                    let t = src.get()?;
+                    if t.n == 0 or tok_is(t, 10) {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        if this.n == 2 {
+            let node = escape(mut src, this, st)?;
+            out.push(node);
+            continue;
+        }
+        let c = this.a;
+        if c == 91 {
+            parse_set(mut src, mut out)?;
+        } else if c == 42 or c == 43 or c == 63 or c == 123 {
+            parse_repeat(mut src, this, mut out)?;
+        } else if c == 46 {
+            out.push(Node.Any);
+        } else if c == 94 {
+            out.push(Node.At(at_beginning()));
+        } else if c == 36 {
+            out.push(Node.At(at_end()));
+        } else if c == 40 {
+            if parse_group(mut src, mut st, mut verbose, nested, first, mut out)? {
+                continue;
+            }
+        } else {
+            out.push(Node.Lit(c));
+        }
+    }
+    Ok(out)
+}
+
+// `(` and what follows. Returns true for a construct that adds nothing
+// (a comment, global flags).
+fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref bool, nested: i64, first: bool, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let start = src.tell() - 1;
+    let mut capture = true;
+    let mut atomic = false;
+    let mut name: Vec[i64] = Vec.new();
+    let mut named = false;
+    let mut add = 0;
+    let mut del = 0;
+    if src.take(63)? {
+        let ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("unexpected end of pattern".to_string(), 0));
+        }
+        if tok_is(ch, 80) {
+            if src.take(60)? {
+                name = src.getuntil(62, "group name")?;
+                src.checkgroupname(name, 1)?;
+                named = true;
+            } else if src.take(61)? {
+                let ref_name = src.getuntil(41, "group name")?;
+                src.checkgroupname(ref_name, 1)?;
+                let gid = st.group_of(ref_name);
+                if gid < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(ref_name)}", ref_name.len() + 1));
+                }
+                if not st.checkgroup(gid) {
+                    return Err(src.error("cannot refer to an open group".to_string(), ref_name.len() + 1));
+                }
+                st.checklookbehindgroup(gid, src)?;
+                out.push(Node.GroupRef(gid));
+                return Ok(true);
+            } else {
+                let c2 = src.get()?;
+                if c2.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                return Err(src.error(f"unknown extension ?P{to_string(tok_text(c2))}", c2.n + 2));
+            }
+        } else if tok_is(ch, 58) {
+            capture = false;
+        } else if tok_is(ch, 35) {
+            loop {
+                if src.next.n == 0 {
+                    return Err(src.error("missing ), unterminated comment".to_string(), src.tell() - start));
+                }
+                if tok_is(src.get()?, 41) {
+                    break;
+                }
+            }
+            return Ok(true);
+        } else if tok_is(ch, 61) or tok_is(ch, 33) or tok_is(ch, 60) {
+            let mut kind = ch;
+            let mut dir = 1;
+            let mut outer_lookbehind = 0;
+            if tok_is(ch, 60) {
+                kind = src.get()?;
+                if kind.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                if not (tok_is(kind, 61) or tok_is(kind, 33)) {
+                    return Err(src.error(f"unknown extension ?<{to_string(tok_text(kind))}", kind.n + 2));
+                }
+                dir = -1;
+                outer_lookbehind = st.lookbehind_groups;
+                if outer_lookbehind < 0 {
+                    st.lookbehind_groups = st.groups();
+                }
+            }
+            let p = parse_sub(mut src, mut st, *verbose, nested + 1)?;
+            if dir < 0 and outer_lookbehind < 0 {
+                st.lookbehind_groups = -1;
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            if tok_is(kind, 61) {
+                out.push(Node.Assert(dir, false, p));
+            } else if p.len() > 0 {
+                out.push(Node.Assert(dir, true, p));
+            } else {
+                out.push(Node.Failure);
+            }
+            return Ok(true);
+        } else if tok_is(ch, 40) {
+            let condname = src.getuntil(41, "group name")?;
+            let mut condgroup = 0;
+            if not is_ascii_decimal(condname) {
+                src.checkgroupname(condname, 1)?;
+                condgroup = st.group_of(condname);
+                if condgroup < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(condname)}", condname.len() + 1));
+                }
+            } else {
+                if condname.len() > 10 {
+                    return Err(src.error(f"invalid group reference {to_string(condname)}", condname.len() + 1));
+                }
+                condgroup = digits_value(condname, 0, 10);
+                if condgroup == 0 {
+                    return Err(src.error("bad group number".to_string(), condname.len() + 1));
+                }
+                if condgroup >= maxgroups() {
+                    return Err(src.error(f"invalid group reference {condgroup}", condname.len() + 1));
+                }
+                let mut seen = false;
+                for (g, _) in st.refpos.iter() {
+                    if *g == condgroup {
+                        seen = true;
+                    }
+                }
+                if not seen {
+                    st.refpos.push((condgroup, src.tell() - condname.len() - 1));
+                }
+            }
+            st.checklookbehindgroup(condgroup, src)?;
+            let yes = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+            let mut no: Vec[Node] = Vec.new();
+            if src.take(124)? {
+                no = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+                if tok_is(src.next, 124) {
+                    return Err(src.error("conditional backref with more than two branches".to_string(), 0));
+                }
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            out.push(Node.Exists(condgroup, yes, no));
+            return Ok(true);
+        } else if tok_is(ch, 62) {
+            capture = false;
+            atomic = true;
+        } else if (ch.n == 1 and flag_value(ch.a) != 0) or tok_is(ch, 45) {
+            match parse_flags(mut src, mut st, ch)? {
+                None => {
+                    if not first or out.len() > 0 {
+                        return Err(src.error("global flags not at the start of the expression".to_string(), src.tell() - start));
+                    }
+                    *verbose = (st.flags & flag_x()) != 0;
+                    return Ok(true);
+                }
+                Some((a, d)) => {
+                    add = a;
+                    del = d;
+                    capture = false;
+                }
+            }
+        } else {
+            return Err(src.error(f"unknown extension ?{to_string(tok_text(ch))}", ch.n + 1));
+        }
+    }
+    let mut group = 0;
+    if capture {
+        group = st.groups();
+        st.closed.push(false);
+        st.widths.push(Width { lo: 0, hi: 0 });
+        if named {
+            let was = st.group_of(name);
+            if was >= 0 {
+                return Err(src.error(f"redefinition of group name {repr_of(name)} as group {group}; was group {was}", name.len() + 1));
+            }
+            st.names.push((name.clone(), group));
+        }
+    }
+    let sub_verbose = (*verbose or (add & flag_x()) != 0) and (del & flag_x()) == 0;
+    let p = parse_sub(mut src, mut st, sub_verbose, nested + 1)?;
+    if not src.take(41)? {
+        return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+    }
+    if group > 0 {
+        let w = width_of(st.widths, p);
+        st.widths[group] = w;
+        st.closed[group] = true;
+    }
+    if atomic {
+        out.push(Node.Atomic(p));
+    } else {
+        out.push(Node.Group(group, add, del, p));
+    }
+    Ok(false)
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    flags: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+    widths: Vec[Width],
+}
+
+fn parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
+    let mut src = new_tokenizer(pattern)?;
+    let mut st = ParseState {
+        flags: flags,
+        names: Vec.new(),
+        closed: Vec.new(),
+        widths: Vec.new(),
+        lookbehind_groups: -1,
+        refpos: Vec.new(),
+    };
+    // group 0 is the whole match
+    st.closed.push(true);
+    st.widths.push(Width { lo: 0, hi: 0 });
+    let nodes = parse_sub(mut src, mut st, (flags & flag_x()) != 0, 0)?;
+    if (st.flags & flag_a()) != 0 and (st.flags & flag_u()) != 0 {
+        return Err(other_error("ValueError", "ASCII and UNICODE flags are incompatible".to_string()));
+    }
+    if src.next.n != 0 {
+        return Err(src.error("unbalanced parenthesis".to_string(), 0));
+    }
+    for (g, pos) in st.refpos.iter() {
+        if *g >= st.groups() {
+            return Err(re_error(f"invalid group reference {*g}", *pos));
+        }
+    }
+    let groups = st.groups() - 1;
+    Ok(Parsed { nodes: nodes, flags: st.flags, groups: groups, names: st.names, widths: st.widths })
+}
+
+// ---------------------------------------------------------- compiler
+
+enum Op {
+    // character (lowered when case-insensitive), case-insensitive, ASCII
+    Lit(i64, bool, bool),
+    NotLit(i64, bool, bool),
+    Any,
+    AnyAll,
+    // set, case-insensitive, ASCII-only categories
+    In(i64, bool, bool),
+    // anchor kind, ASCII-only word boundary
+    At(i64, bool),
+    Mark(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    // repeat register, the Until it starts at
+    RepInit(i64, i64),
+    // register, min, max, greedy, body, exit
+    Until(i64, i64, i64, bool, i64, i64),
+    Ref(i64, bool, bool),
+    // lookbehind width (-1 for lookahead), negative, sub-program, next
+    Look(i64, bool, i64, i64),
+    Atomic(i64, i64),
+    Exists(i64, i64),
+    Fail,
+    Succeed,
+    Match,
+}
+
+struct Program {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+}
+
+struct CharSet {
+    items: Vec[Item],
+    negate: bool,
+}
+
+fn combine(flags: i64, add: i64, del: i64) -> i64 {
+    let mut f = flags;
+    if (add & type_flags()) != 0 {
+        f = f & (0x7FFFFFFF ^ type_flags());
+    }
+    (f | add) & (0x7FFFFFFF ^ del)
+}
+
+struct Compiler {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+}
+
+impl Compiler {
+    fn emit(mut ref self, op: own Op) -> i64 {
+        self.ops.push(op);
+        self.ops.len() - 1
+    }
+
+    fn here(ref self) -> i64 {
+        self.ops.len()
+    }
+
+    fn compile(mut ref self, p: ref Parsed, nodes: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let icase = (flags & flag_i()) != 0;
+        let ascii = (flags & flag_a()) != 0;
+        for n in nodes.iter() {
+            match n {
+                Node.Lit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.Lit(v, icase, ascii));
+                }
+                Node.NotLit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.NotLit(v, icase, ascii));
+                }
+                Node.Any => {
+                    if (flags & flag_s()) != 0 {
+                        self.emit(Op.AnyAll);
+                    } else {
+                        self.emit(Op.Any);
+                    }
+                }
+                Node.In(items, negate) => {
+                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    let idx = self.sets.len() - 1;
+                    self.emit(Op.In(idx, icase, ascii));
+                }
+                Node.At(kind) => {
+                    let mut k = *kind;
+                    if (flags & flag_m()) != 0 {
+                        if k == at_beginning() {
+                            k = at_beginning_line();
+                        } else if k == at_end() {
+                            k = at_end_line();
+                        }
+                    }
+                    self.emit(Op.At(k, ascii));
+                }
+                Node.Branch(items) => {
+                    let mut ends: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < items.len() {
+                        if i + 1 < items.len() {
+                            let split = self.emit(Op.Fail);
+                            self.compile(p, items[i], flags)?;
+                            ends.push(self.emit(Op.Fail));
+                            let next = self.here();
+                            self.ops[split] = Op.Split(split + 1, next);
+                        } else {
+                            self.compile(p, items[i], flags)?;
+                        }
+                        i += 1;
+                    }
+                    let end = self.here();
+                    for at in ends {
+                        self.ops[at] = Op.Jmp(end);
+                    }
+                }
+                Node.Group(g, add, off, body) => {
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g));
+                    }
+                    self.compile(p, body, combine(flags, *add, *off))?;
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g + 1));
+                    }
+                }
+                Node.Repeat(kind, min, max, body) => {
+                    if *kind == 2 {
+                        let at = self.emit(Op.Fail);
+                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.emit(Op.Succeed);
+                        let next = self.here();
+                        self.ops[at] = Op.Atomic(at + 1, next);
+                    } else {
+                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                    }
+                }
+                Node.Atomic(body) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Atomic(at + 1, next);
+                }
+                Node.Assert(dir, negative, body) => {
+                    let mut width = -1;
+                    if *dir < 0 {
+                        let w = width_of(p.widths, body);
+                        if w.lo != w.hi {
+                            return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
+                        }
+                        width = w.lo;
+                    }
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                }
+                Node.GroupRef(g) => {
+                    self.emit(Op.Ref(*g, icase, ascii));
+                }
+                Node.Exists(g, yes, no) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, yes, flags)?;
+                    if no.len() > 0 {
+                        let jump = self.emit(Op.Fail);
+                        let no_pc = self.here();
+                        self.compile(p, no, flags)?;
+                        let end = self.here();
+                        self.ops[jump] = Op.Jmp(end);
+                        self.ops[at] = Op.Exists(*g, no_pc);
+                    } else {
+                        let end = self.here();
+                        self.ops[at] = Op.Exists(*g, end);
+                    }
+                }
+                Node.Failure => {
+                    self.emit(Op.Fail);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_repeat(mut ref self, p: ref Parsed, min: i64, max: i64, greedy: bool, body: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let r = self.repeats;
+        self.repeats += 1;
+        let init = self.emit(Op.Fail);
+        self.compile(p, body, flags)?;
+        let until = self.emit(Op.Fail);
+        self.ops[init] = Op.RepInit(r, until);
+        self.ops[until] = Op.Until(r, min, max, greedy, init + 1, until + 1);
+        Ok(())
+    }
+}
+
+fn compile(pattern: ref Vec[i64], flags: i64) -> Result[Program, ReErr] {
+    let p = parse(pattern, flags)?;
+    let mut c = Compiler { ops: Vec.new(), sets: Vec.new(), repeats: 0 };
+    c.compile(p, p.nodes, p.flags)?;
+    c.emit(Op.Match);
+    Ok(Program { ops: c.ops, sets: c.sets, repeats: c.repeats, groups: p.groups, names: p.names })
+}
+
+// ----------------------------------------------------------- matcher
+
+struct Undo {
+    kind: i64,
+    idx: i64,
+    old: i64,
+}
+
+struct Choice {
+    pc: i64,
+    pos: i64,
+    trail: i64,
+    // 0: resume at pc; 1: a lazy repeat's Until, after its tail failed
+    mode: i64,
+}
+
+struct Matcher {
+    s: Vec[i64],
+    marks: Vec[i64],
+    counts: Vec[i64],
+    lasts: Vec[i64],
+    lastindex: i64,
+    trail: Vec[Undo],
+    start: i64,
+    must_advance: bool,
+    match_all: bool,
+}
+
+impl Matcher {
+    fn set_mark(mut ref self, slot: i64, v: i64) {
+        self.trail.push(Undo { kind: 0, idx: slot, old: self.marks[slot] });
+        self.marks[slot] = v;
+    }
+
+    fn set_count(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 1, idx: r, old: self.counts[r] });
+        self.counts[r] = v;
+    }
+
+    fn set_last(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 2, idx: r, old: self.lasts[r] });
+        self.lasts[r] = v;
+    }
+
+    fn set_lastindex(mut ref self, v: i64) {
+        self.trail.push(Undo { kind: 3, idx: 0, old: self.lastindex });
+        self.lastindex = v;
+    }
+
+    fn undo_to(mut ref self, len: i64) {
+        while self.trail.len() > len {
+            let u = self.trail.pop().unwrap();
+            if u.kind == 0 {
+                self.marks[u.idx] = u.old;
+            } else if u.kind == 1 {
+                self.counts[u.idx] = u.old;
+            } else if u.kind == 2 {
+                self.lasts[u.idx] = u.old;
+            } else {
+                self.lastindex = u.old;
+            }
+        }
+    }
+
+    // A group that has both marks, the end not before the start.
+    fn group_span(ref self, g: i64) -> (i64, i64) {
+        let a = self.marks[2 * g];
+        let b = self.marks[2 * g + 1];
+        if a < 0 or b < 0 or b < a {
+            return (-1, -1);
+        }
+        (a, b)
+    }
+
+    fn at(ref self, kind: i64, ascii: bool, pos: i64) -> bool {
+        let n = self.s.len();
+        if kind == 0 or kind == 2 {
+            return pos == 0;
+        }
+        if kind == 1 {
+            return pos == 0 or self.s[pos - 1] == 10;
+        }
+        if kind == 3 {
+            return pos == n or (pos == n - 1 and self.s[pos] == 10);
+        }
+        if kind == 4 {
+            return pos == n or self.s[pos] == 10;
+        }
+        if kind == 5 {
+            return pos == n;
+        }
+        if n == 0 {
+            return false;
+        }
+        let before = pos > 0 and is_word(self.s[pos - 1], ascii);
+        let after = pos < n and is_word(self.s[pos], ascii);
+        if kind == 6 { before != after } else { before == after }
+    }
+
+    // Runs the program from pc at pos, backtracking through its own
+    // choices only. Returns where it succeeded, or -1.
+    fn run(mut ref self, prog: ref Program, pc0: i64, pos0: i64, top: bool) -> i64 {
+        let base = self.trail.len();
+        let mut choices: Vec[Choice] = Vec.new();
+        let mut pc = pc0;
+        let mut pos = pos0;
+        let mut mode = 0;
+        loop {
+            let mut ok = true;
+            let op = ref prog.ops[pc];
+            if mode == 1 {
+                // a lazy repeat whose tail failed: try one more item
+                mode = 0;
+                ok = false;
+                if let Op.Until(r, _, max, _, body, _) = op {
+                    let count = self.counts[*r] + 1;
+                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
+                        self.set_count(*r, count);
+                        self.set_last(*r, pos);
+                        pc = *body;
+                        ok = true;
+                    }
+                }
+                if ok {
+                    continue;
+                }
+            } else {
+                match op {
+                    Op.Lit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.NotLit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Any => {
+                        if pos < self.s.len() and self.s[pos] != 10 {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.AnyAll => {
+                        if pos < self.s.len() {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.In(set, icase, ascii) => {
+                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.At(kind, ascii) => {
+                        if self.at(*kind, *ascii, pos) {
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Mark(slot) => {
+                        self.set_mark(*slot, pos);
+                        if (*slot & 1) == 1 {
+                            self.set_lastindex(*slot / 2);
+                        }
+                        pc += 1;
+                    }
+                    Op.Split(a, b) => {
+                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = *a;
+                    }
+                    Op.Jmp(a) => pc = *a,
+                    Op.RepInit(r, until) => {
+                        self.set_count(*r, -1);
+                        self.set_last(*r, -1);
+                        pc = *until;
+                    }
+                    Op.Until(r, min, max, greedy, body, exit) => {
+                        let count = self.counts[*r] + 1;
+                        if count < *min {
+                            self.set_count(*r, count);
+                            pc = *body;
+                        } else if *greedy {
+                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
+                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(*r, count);
+                                self.set_last(*r, pos);
+                                pc = *body;
+                            } else {
+                                pc = *exit;
+                            }
+                        } else {
+                            choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
+                            pc = *exit;
+                        }
+                    }
+                    Op.Ref(g, icase, ascii) => {
+                        let (a, b) = self.group_span(*g);
+                        if a < 0 {
+                            ok = false;
+                        } else {
+                            let len = b - a;
+                            if pos + len > self.s.len() {
+                                ok = false;
+                            } else {
+                                let mut k = 0;
+                                while k < len {
+                                    let x = self.s[a + k];
+                                    let y = self.s[pos + k];
+                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    if not eq {
+                                        ok = false;
+                                        break;
+                                    }
+                                    k += 1;
+                                }
+                                if ok {
+                                    pos += len;
+                                    pc += 1;
+                                }
+                            }
+                        }
+                    }
+                    Op.Look(width, negative, sub, next) => {
+                        let mark = self.trail.len();
+                        let from = if *width < 0 { pos } else { pos - *width };
+                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
+                        if *negative {
+                            self.undo_to(mark);
+                            if found {
+                                ok = false;
+                            } else {
+                                pc = *next;
+                            }
+                        } else if found {
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Atomic(sub, next) => {
+                        let end = self.run(prog, *sub, pos, false);
+                        if end >= 0 {
+                            pos = end;
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Exists(g, no) => {
+                        let (a, _) = self.group_span(*g);
+                        if a >= 0 {
+                            pc += 1;
+                        } else {
+                            pc = *no;
+                        }
+                    }
+                    Op.Fail => ok = false,
+                    Op.Succeed => return pos,
+                    Op.Match => {
+                        if top and ((self.match_all and pos != self.s.len()) or (self.must_advance and pos == self.start)) {
+                            ok = false;
+                        } else {
+                            return pos;
+                        }
+                    }
+                }
+            }
+            if not ok {
+                match choices.pop() {
+                    Some(ch) => {
+                        self.undo_to(ch.trail);
+                        pc = ch.pc;
+                        pos = ch.pos;
+                        mode = ch.mode;
+                    }
+                    None => {
+                        self.undo_to(base);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
+    for item in set.items.iter() {
+        let hit = match item {
+            Item.Lit(l) => c == *l,
+            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Cat(k) => {
+                let kind = *k;
+                if kind == 0 {
+                    if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
+                } else if kind == 1 {
+                    if ascii { not (c >= 48 and c <= 57) } else { not is_decimal(c) }
+                } else if kind == 2 {
+                    is_space(c, ascii)
+                } else if kind == 3 {
+                    not is_space(c, ascii)
+                } else if kind == 4 {
+                    is_word(c, ascii)
+                } else {
+                    not is_word(c, ascii)
+                }
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    false
+}
+
+// Under IGNORECASE sre lowercases the set when it compiles it and tests
+// the lowercased character; a character is in the lowered set if it, or
+// its uppercase, is in the set and lowers to it.
+fn in_set(set: ref CharSet, c: i64, icase: bool, ascii: bool) -> bool {
+    let mut hit = false;
+    if icase {
+        let lo = lower(c, ascii);
+        if lower(lo, ascii) == lo and in_items(set, lo, ascii) {
+            hit = true;
+        }
+        let up = upper(lo, ascii);
+        if not hit and lower(up, ascii) == lo and in_items(set, up, ascii) {
+            hit = true;
+        }
+    } else {
+        hit = in_items(set, c, ascii);
+    }
+    hit != set.negate
+}
+
+// ------------------------------------------------------- the module
+
+struct Found {
+    start: i64,
+    end: i64,
+    // group spans, (-1, -1) when a group did not take part
+    spans: Vec[(i64, i64)],
+    lastindex: i64,
+}
+
+fn new_matcher(prog: ref Program, s: ref Vec[i64]) -> Matcher {
+    let mut marks: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 * (prog.groups + 1) {
+        marks.push(-1);
+        k += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut lasts: Vec[i64] = Vec.new();
+    k = 0;
+    while k < prog.repeats {
+        counts.push(-1);
+        lasts.push(-1);
+        k += 1;
+    }
+    Matcher {
+        s: s.clone(),
+        marks: marks,
+        counts: counts,
+        lasts: lasts,
+        lastindex: -1,
+        trail: Vec.new(),
+        start: 0,
+        must_advance: false,
+        match_all: false,
+    }
+}
+
+// sre_search from `from` (or one attempt there for match and
+// fullmatch: mode 1 and 2).
+fn find(m: mut ref Matcher, prog: ref Program, from: i64, must_advance: bool, mode: i64) -> Option[Found] {
+    let mut start = from;
+    while start <= m.s.len() {
+        let mut k = 0;
+        while k < m.marks.len() {
+            m.marks[k] = -1;
+            k += 1;
+        }
+        m.lastindex = -1;
+        m.trail.clear();
+        m.start = start;
+        m.must_advance = must_advance and start == from;
+        m.match_all = mode == 2;
+        let end = m.run(prog, 0, start, true);
+        if end >= 0 {
+            let mut spans: Vec[(i64, i64)] = Vec.new();
+            let mut g = 1;
+            while g <= prog.groups {
+                spans.push(m.group_span(g));
+                g += 1;
+            }
+            return Some(Found { start: start, end: end, spans: spans, lastindex: m.lastindex });
+        }
+        if mode != 0 {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+
+// All the matches finditer gives: each search starts where the last
+// match ended, and must move on past an empty one.
+fn all_matches(prog: ref Program, s: ref Vec[i64], limit: i64) -> Vec[Found] {
+    let mut m = new_matcher(prog, s);
+    let mut out: Vec[Found] = Vec.new();
+    let mut pos = 0;
+    let mut must_advance = false;
+    while pos <= s.len() and (limit == 0 or out.len() < limit) {
+        match find(mut m, prog, pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn group_text(s: ref Vec[i64], span: (i64, i64), out: mut ref Vec[i64]) {
+    let (a, b) = span;
+    if a < 0 {
+        push_ascii(mut out, "None");
+    } else {
+        str_repr(slice(s, a, b), mut out);
+    }
+}
+
+fn span_text(span: (i64, i64)) -> String {
+    let (a, b) = span;
+    f"({a}, {b})"
+}
+
+fn show_match(prog: ref Program, s: ref Vec[i64], found: ref Option[Found], out: mut ref Vec[i64]) {
+    let m = match found {
+        Some(m) => m,
+        None => {
+            push_ascii(mut out, "  None\n");
+            return;
+        }
+    };
+    push_ascii(mut out, f"  span={span_text((m.start, m.end))} match=");
+    str_repr(slice(s, m.start, m.end), mut out);
+    out.push(10);
+    if prog.groups > 0 {
+        push_ascii(mut out, "  groups=(");
+        let mut g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            group_text(s, m.spans[g], mut out);
+            g += 1;
+        }
+        if m.spans.len() == 1 {
+            push_ascii(mut out, ",");
+        }
+        push_ascii(mut out, ")\n  spans=[");
+        g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            push_ascii(mut out, span_text(m.spans[g]));
+            g += 1;
+        }
+        push_ascii(mut out, "]\n");
+    }
+    if prog.names.len() > 0 {
+        push_ascii(mut out, "  named=");
+        group_dict(prog, s, m, mut out);
+        out.push(10);
+    }
+}
+
+fn group_dict(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    out.push(123);
+    let mut k = 0;
+    while k < prog.names.len() {
+        if k > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (name, g) = ref prog.names[k];
+        str_repr(name, mut out);
+        push_ascii(mut out, ": ");
+        group_text(s, m.spans[g - 1], mut out);
+        k += 1;
+    }
+    out.push(125);
+}
+
+// findall's item: the match, the one group, or a tuple of the groups,
+// with '' for a group that did not take part.
+fn findall_item(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    if prog.groups == 0 {
+        str_repr(slice(s, m.start, m.end), mut out);
+        return;
+    }
+    if prog.groups > 1 {
+        out.push(40);
+    }
+    let mut g = 0;
+    while g < m.spans.len() {
+        if g > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (a, b) = m.spans[g];
+        if a < 0 {
+            push_ascii(mut out, "''");
+        } else {
+            str_repr(slice(s, a, b), mut out);
+        }
+        g += 1;
+    }
+    if prog.groups > 1 {
+        out.push(41);
+    }
+}
+
+// A replacement template: literal text and group numbers.
+enum Piece {
+    Text(Vec[i64]),
+    Group(i64),
+}
+
+// _parser.parse_template.
+fn parse_template(repl: ref Vec[i64], prog: ref Program) -> Result[Vec[Piece], ReErr] {
+    let mut s = new_tokenizer(repl)?;
+    let mut pieces: Vec[Piece] = Vec.new();
+    let mut literal: Vec[i64] = Vec.new();
+    loop {
+        let this = s.get()?;
+        if this.n == 0 {
+            break;
+        }
+        if this.n == 1 {
+            literal.push(this.a);
+            continue;
+        }
+        let c = this.b;
+        let mut index = -1;
+        let mut offset = 0;
+        if c == 103 {
+            if not s.take(60)? {
+                return Err(s.error("missing <".to_string(), 0));
+            }
+            let name = s.getuntil(62, "group name")?;
+            if not is_ascii_decimal(name) {
+                s.checkgroupname(name, 1)?;
+                let mut found = -1;
+                for (n, g) in prog.names.iter() {
+                    if same(n, name) {
+                        found = *g;
+                    }
+                }
+                if found < 0 {
+                    return Err(other_error("IndexError", f"unknown group name {repr_of(name)}"));
+                }
+                index = found;
+            } else {
+                if name.len() > 10 or digits_value(name, 0, 10) >= maxgroups() {
+                    return Err(s.error(f"invalid group reference {to_string(name)}", name.len() + 1));
+                }
+                index = digits_value(name, 0, 10);
+            }
+            offset = name.len() + 1;
+        } else if c == 48 {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_oct(s.next.a) {
+                text.push(s.get()?.a);
+                if s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                }
+            }
+            literal.push(digits_value(text, 1, 8) & 0xFF);
+            continue;
+        } else if is_dec(c) {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_dec(s.next.a) {
+                text.push(s.get()?.a);
+                if is_oct(c) and is_oct(text[2]) and s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                    let v = digits_value(text, 1, 8);
+                    if v > 0o377 {
+                        return Err(s.error(f"octal escape value {to_string(text)} outside of range 0-0o377", text.len()));
+                    }
+                    literal.push(v);
+                    continue;
+                }
+            }
+            index = digits_value(text, 1, 10);
+            offset = text.len() - 1;
+        } else {
+            let e = escape_value(this);
+            if e >= 0 {
+                literal.push(e);
+            } else if is_ascii_letter(c) {
+                return Err(s.error(f"bad escape {to_string(tok_text(this))}", 2));
+            } else {
+                literal.push(92);
+                literal.push(c);
+            }
+            continue;
+        }
+        if index > prog.groups {
+            return Err(s.error(f"invalid group reference {index}", offset));
+        }
+        pieces.push(Piece.Text(literal));
+        literal = Vec.new();
+        pieces.push(Piece.Group(index));
+    }
+    pieces.push(Piece.Text(literal));
+    Ok(pieces)
+}
+
+fn expand(pieces: ref Vec[Piece], s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    for piece in pieces.iter() {
+        match piece {
+            Piece.Text(t) => push_all(mut out, t),
+            Piece.Group(g) => {
+                let (a, b) = if *g == 0 { (m.start, m.end) } else { m.spans[*g - 1] };
+                if a >= 0 {
+                    push_all(mut out, slice(s, a, b));
+                }
+            }
+        }
+    }
+}
+
+
+// --------------------------------------------------- Unicode strings
+
+struct UInfo {
+    lower: Vec[i64],
+    upper: Vec[i64],
+    title: Vec[i64],
+    cased: bool,
+    ignorable: bool,
+    ccc: i64,
+    nfkd: Vec[i64],
+}
+
+struct Uni {
+    info: Map[i64, UInfo],
+}
+
+fn hex_value(s: Str) -> i64 {
+    let mut v = 0;
+    for b in s.bytes() {
+        let c = b as i64;
+        v = v * 16 + (if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 });
+    }
+    v
+}
+
+fn copy_err(e: ref ReErr) -> ReErr {
+    ReErr { kind: e.kind.clone(), msg: e.msg.clone(), pos: e.pos }
+}
+
+fn hex_seq(s: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for part in s.split(" ") {
+        if part.len() > 0 {
+            out.push(hex_value(part));
+        }
+    }
+    out
+}
+
+fn load_uni() -> Result[Uni, String] {
+    let text = match fs.read_to_string("data/unicode.txt") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/unicode.txt: {e}"),
+    };
+    let mut info: Map[i64, UInfo] = Map.new();
+    for line in text.lines() {
+        if line.starts_with("#") or line.len() == 0 {
+            continue;
+        }
+        let f: Vec[Str] = line.split(";").collect();
+        let cp = hex_value(f[0]);
+        info.insert(cp, UInfo {
+            lower: hex_seq(f[1]),
+            upper: hex_seq(f[2]),
+            title: hex_seq(f[3]),
+            cased: f[4].contains("c"),
+            ignorable: f[4].contains("i"),
+            ccc: i64.parse(f[5]).unwrap_or(0),
+            nfkd: hex_seq(f[6]),
+        });
+    }
+    Ok(Uni { info: info })
+}
+
+impl Uni {
+    fn cased(self, c: i64) -> bool {
+        match self.info.get(c) {
+            Some(u) => u.cased,
+            None => false,
+        }
+    }
+
+    fn ignorable(self, c: i64) -> bool {
+        match self.info.get(c) {
+            Some(u) => u.ignorable,
+            None => false,
+        }
+    }
+
+    fn ccc(self, c: i64) -> i64 {
+        match self.info.get(c) {
+            Some(u) => u.ccc,
+            None => 0,
+        }
+    }
+
+    // kind 0 lower, 1 upper, 2 title, 3 NFKD.
+    fn map_char(self, c: i64, kind: i64, out: mut ref Vec[i64]) {
+        match self.info.get(c) {
+            Some(u) => {
+                let m = if kind == 0 { u.lower.clone() } else if kind == 1 { u.upper.clone() } else if kind == 2 { u.title.clone() } else { u.nfkd.clone() };
+                push_all(mut out, m);
+            }
+            None => out.push(c),
+        }
+    }
+
+    // lower_ucs4: the lowercase of s[i], with GREEK CAPITAL LETTER SIGMA
+    // final when a cased letter comes before it and none after it
+    // (skipping case-ignorable characters both ways).
+    fn lower_at(self, s: ref Vec[i64], i: i64, out: mut ref Vec[i64]) {
+        let c = s[i];
+        if c != 0x3A3 {
+            self.map_char(c, 0, mut out);
+            return;
+        }
+        let mut j = i - 1;
+        while j >= 0 and self.ignorable(s[j]) {
+            j -= 1;
+        }
+        let mut final_sigma = j >= 0 and self.cased(s[j]);
+        if final_sigma and i + 1 < s.len() {
+            let mut k = i + 1;
+            while k < s.len() and self.ignorable(s[k]) {
+                k += 1;
+            }
+            final_sigma = k == s.len() or not self.cased(s[k]);
+        }
+        out.push(if final_sigma { 0x3C2 } else { 0x3C3 });
+    }
+
+    fn lower(self, s: ref Vec[i64]) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for i in 0..s.len() {
+            self.lower_at(s, i, mut out);
+        }
+        out
+    }
+
+    fn upper(self, s: ref Vec[i64]) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for c in s {
+            self.map_char(c, 1, mut out);
+        }
+        out
+    }
+
+    // str.title: title case after an uncased character, lowercase after a
+    // cased one.
+    fn title(self, s: ref Vec[i64]) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        let mut previous_is_cased = false;
+        for i in 0..s.len() {
+            if previous_is_cased {
+                self.lower_at(s, i, mut out);
+            } else {
+                self.map_char(s[i], 2, mut out);
+            }
+            previous_is_cased = self.cased(s[i]);
+        }
+        out
+    }
+
+    fn capitalize(self, s: ref Vec[i64]) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for i in 0..s.len() {
+            if i == 0 {
+                self.map_char(s[i], 2, mut out);
+            } else {
+                self.lower_at(s, i, mut out);
+            }
+        }
+        out
+    }
+
+    // unicodedata.normalize('NFKD', s): each character's full
+    // decomposition, then the marks put in canonical order.
+    fn nfkd(self, s: ref Vec[i64]) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for c in s {
+            self.map_char(c, 3, mut out);
+        }
+        let mut i = 1;
+        while i < out.len() {
+            let cc = self.ccc(out[i]);
+            if cc != 0 {
+                let mut j = i;
+                while j > 0 and self.ccc(out[j - 1]) > cc {
+                    let t = out[j - 1];
+                    out[j - 1] = out[j];
+                    out[j] = t;
+                    j -= 1;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+}
+
+fn replace_char(s: ref Vec[i64], from: i64, to: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s {
+        out.push(if c == from { to } else { c });
+    }
+    out
+}
+
+fn cp(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+// ------------------------------------------------------- re, as used
+
+// What a sub replaces each match with: a template, or one of the
+// lambdas inflection passes.
+enum Repl {
+    Template(Vec[Piece]),
+    Upper1,
+    Lower1,
+    Upper0,
+    Capitalize1,
+}
+
+fn group_of(s: ref Vec[i64], m: ref Found, g: i64) -> Vec[i64] {
+    let (a, b) = if g == 0 { (m.start, m.end) } else { m.spans[g - 1] };
+    if a < 0 {
+        return Vec.new();
+    }
+    slice(s, a, b)
+}
+
+fn sub_all(prog: ref Program, repl: ref Repl, s: ref Vec[i64], uni: ref Uni) -> Vec[i64] {
+    let ms = all_matches(prog, s, 0);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    for m in ms.iter() {
+        push_all(mut out, slice(s, i, m.start));
+        match repl {
+            Repl.Template(pieces) => expand(pieces, s, m, mut out),
+            Repl.Upper1 => push_all(mut out, uni.upper(group_of(s, m, 1))),
+            Repl.Lower1 => push_all(mut out, uni.lower(group_of(s, m, 1))),
+            Repl.Upper0 => push_all(mut out, uni.upper(group_of(s, m, 0))),
+            Repl.Capitalize1 => push_all(mut out, uni.capitalize(group_of(s, m, 1))),
+        }
+        i = m.end;
+    }
+    push_all(mut out, slice(s, i, s.len()));
+    out
+}
+
+// re.sub(pattern, template, s).
+fn sub_template(prog: ref Program, repl: ref Vec[i64], s: ref Vec[i64], uni: ref Uni) -> Result[Vec[i64], ReErr] {
+    let pieces = parse_template(repl, prog)?;
+    Ok(sub_all(prog, Repl.Template(pieces), s, uni))
+}
+
+fn searches(prog: ref Program, s: ref Vec[i64]) -> bool {
+    let mut m = new_matcher(prog, s);
+    find(mut m, prog, 0, false, 0).is_some()
+}
+
+// re.escape: the characters that mean something in a pattern get a
+// backslash.
+fn re_escape(s: ref Vec[i64]) -> Vec[i64] {
+    let special = cp("()[]{}?*+-|^$\\.&~# \t\n\r\u{b}\u{c}");
+    let mut out: Vec[i64] = Vec.new();
+    for c in s {
+        if special.contains(c) {
+            out.push(92);
+        }
+        out.push(c);
+    }
+    out
+}
+
+// --------------------------------------------------------- inflector
+
+struct Rule {
+    prog: Result[Program, ReErr],
+    repl: Vec[i64],
+}
+
+fn rule(pattern: ref Vec[i64], repl: ref Vec[i64]) -> Rule {
+    Rule { prog: compile(pattern, 0), repl: repl.clone() }
+}
+
+fn rule_s(pattern: Str, repl: Str) -> Rule {
+    rule(cp(pattern), cp(repl))
+}
+
+struct Fixed {
+    camel: Program,
+    id_suffix: Program,
+    alnum_run: Program,
+    first_word: Program,
+    upper_run: Program,
+    lower_upper: Program,
+    title_word: Program,
+    non_slug: Program,
+}
+
+fn fixed_prog(p: Str) -> Result[Program, String] {
+    match compile(cp(p), 0) {
+        Ok(prog) => Ok(prog),
+        Err(e) => Err(f"cannot compile {p}: {err_text(e)}"),
+    }
+}
+
+fn new_fixed() -> Result[Fixed, String] {
+    Ok(Fixed {
+        camel: fixed_prog("(?:^|_)(.)")?,
+        id_suffix: fixed_prog("_id$")?,
+        alnum_run: fixed_prog("(?i)([a-z\\d]*)")?,
+        first_word: fixed_prog("^\\w")?,
+        upper_run: fixed_prog("([A-Z]+)([A-Z][a-z])")?,
+        lower_upper: fixed_prog("([a-z\\d])([A-Z])")?,
+        title_word: fixed_prog("\\b('?\\w)")?,
+        non_slug: fixed_prog("(?i)[^a-z0-9\\-_]+")?,
+    })
+}
+
+struct Inflector {
+    plurals: Vec[Rule],
+    singulars: Vec[Rule],
+    uncountables: Vec[Vec[i64]],
+    // `(?i)\b(word)\Z` for each uncountable, as singularize searches.
+    unc_progs: Vec[Result[Program, ReErr]],
+    fixed: Fixed,
+    uni: Uni,
+}
+
+fn default_plurals() -> Vec[Rule] {
+    let mut v: Vec[Rule] = Vec.new();
+    v.push(rule_s("(?i)(quiz)$", "\\1zes"));
+    v.push(rule_s("(?i)^(oxen)$", "\\1"));
+    v.push(rule_s("(?i)^(ox)$", "\\1en"));
+    v.push(rule_s("(?i)(m|l)ice$", "\\1ice"));
+    v.push(rule_s("(?i)(m|l)ouse$", "\\1ice"));
+    v.push(rule_s("(?i)(passer)s?by$", "\\1sby"));
+    v.push(rule_s("(?i)(matr|vert|ind)(?:ix|ex)$", "\\1ices"));
+    v.push(rule_s("(?i)(x|ch|ss|sh)$", "\\1es"));
+    v.push(rule_s("(?i)([^aeiouy]|qu)y$", "\\1ies"));
+    v.push(rule_s("(?i)(hive)$", "\\1s"));
+    v.push(rule_s("(?i)([lr])f$", "\\1ves"));
+    v.push(rule_s("(?i)([^f])fe$", "\\1ves"));
+    v.push(rule_s("(?i)sis$", "ses"));
+    v.push(rule_s("(?i)([ti])a$", "\\1a"));
+    v.push(rule_s("(?i)([ti])um$", "\\1a"));
+    v.push(rule_s("(?i)(buffal|potat|tomat)o$", "\\1oes"));
+    v.push(rule_s("(?i)(bu)s$", "\\1ses"));
+    v.push(rule_s("(?i)(alias|status)$", "\\1es"));
+    v.push(rule_s("(?i)(octop|vir)i$", "\\1i"));
+    v.push(rule_s("(?i)(octop|vir)us$", "\\1i"));
+    v.push(rule_s("(?i)^(ax|test)is$", "\\1es"));
+    v.push(rule_s("(?i)s$", "s"));
+    v.push(rule_s("$", "s"));
+    v
+}
+
+fn default_singulars() -> Vec[Rule] {
+    let mut v: Vec[Rule] = Vec.new();
+    v.push(rule_s("(?i)(database)s$", "\\1"));
+    v.push(rule_s("(?i)(quiz)zes$", "\\1"));
+    v.push(rule_s("(?i)(matr)ices$", "\\1ix"));
+    v.push(rule_s("(?i)(vert|ind)ices$", "\\1ex"));
+    v.push(rule_s("(?i)(passer)sby$", "\\1by"));
+    v.push(rule_s("(?i)^(ox)en", "\\1"));
+    v.push(rule_s("(?i)(alias|status)(es)?$", "\\1"));
+    v.push(rule_s("(?i)(octop|vir)(us|i)$", "\\1us"));
+    v.push(rule_s("(?i)^(a)x[ie]s$", "\\1xis"));
+    v.push(rule_s("(?i)(cris|test)(is|es)$", "\\1is"));
+    v.push(rule_s("(?i)(shoe)s$", "\\1"));
+    v.push(rule_s("(?i)(o)es$", "\\1"));
+    v.push(rule_s("(?i)(bus)(es)?$", "\\1"));
+    v.push(rule_s("(?i)(m|l)ice$", "\\1ouse"));
+    v.push(rule_s("(?i)(x|ch|ss|sh)es$", "\\1"));
+    v.push(rule_s("(?i)(m)ovies$", "\\1ovie"));
+    v.push(rule_s("(?i)(s)eries$", "\\1eries"));
+    v.push(rule_s("(?i)([^aeiouy]|qu)ies$", "\\1y"));
+    v.push(rule_s("(?i)([lr])ves$", "\\1f"));
+    v.push(rule_s("(?i)(tive)s$", "\\1"));
+    v.push(rule_s("(?i)(hive)s$", "\\1"));
+    v.push(rule_s("(?i)([^f])ves$", "\\1fe"));
+    v.push(rule_s("(?i)(t)he(sis|ses)$", "\\1hesis"));
+    v.push(rule_s("(?i)(s)ynop(sis|ses)$", "\\1ynopsis"));
+    v.push(rule_s("(?i)(p)rogno(sis|ses)$", "\\1rognosis"));
+    v.push(rule_s("(?i)(p)arenthe(sis|ses)$", "\\1arenthesis"));
+    v.push(rule_s("(?i)(d)iagno(sis|ses)$", "\\1iagnosis"));
+    v.push(rule_s("(?i)(b)a(sis|ses)$", "\\1asis"));
+    v.push(rule_s("(?i)(a)naly(sis|ses)$", "\\1nalysis"));
+    v.push(rule_s("(?i)([ti])a$", "\\1um"));
+    v.push(rule_s("(?i)(n)ews$", "\\1ews"));
+    v.push(rule_s("(?i)(ss)$", "\\1"));
+    v.push(rule_s("(?i)s$", ""));
+    v
+}
+
+fn new_inflector(uni: own Uni) -> Result[Inflector, String] {
+    let mut inf = Inflector {
+        plurals: default_plurals(),
+        singulars: default_singulars(),
+        uncountables: Vec.new(),
+        unc_progs: Vec.new(),
+        fixed: new_fixed()?,
+        uni: uni,
+    };
+    for w in ["equipment", "fish", "information", "jeans", "money", "rice", "series", "sheep", "species"] {
+        inf.add_uncountable(cp(w));
+    }
+    inf.irregular(cp("person"), cp("people"));
+    inf.irregular(cp("man"), cp("men"));
+    inf.irregular(cp("human"), cp("humans"));
+    inf.irregular(cp("child"), cp("children"));
+    inf.irregular(cp("sex"), cp("sexes"));
+    inf.irregular(cp("move"), cp("moves"));
+    inf.irregular(cp("cow"), cp("kine"));
+    inf.irregular(cp("zombie"), cp("zombies"));
+    Ok(inf)
+}
+
+fn cat(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    push_all(mut out, b);
+    out
+}
+
+fn tail(s: ref Vec[i64]) -> Vec[i64] {
+    slice(s, 1, s.len())
+}
+
+fn head(s: ref Vec[i64]) -> Vec[i64] {
+    slice(s, 0, 1)
+}
+
+impl Inflector {
+    fn add_uncountable(mut ref self, w: ref Vec[i64]) {
+        for u in self.uncountables.iter() {
+            if same(u, w) {
+                return;
+            }
+        }
+        self.uncountables.push(w.clone());
+        let pattern = cat(cat(cp("(?i)\\b("), w), cp(")\\Z"));
+        self.unc_progs.push(compile(pattern, 0));
+    }
+
+    // caseinsensitive(): each character as [cC].
+    fn caseinsensitive(self, s: ref Vec[i64]) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for c in s {
+            out.push(91);
+            out.push(c);
+            push_all(mut out, self.uni.upper(vec_of(c)));
+            out.push(93);
+        }
+        out
+    }
+
+    // _irregular: rules for both forms, ahead of every other rule.
+    fn irregular(mut ref self, singular: ref Vec[i64], plural: ref Vec[i64]) {
+        let s0 = head(singular);
+        let p0 = head(plural);
+        let s1 = tail(singular);
+        let p1 = tail(plural);
+        if same(self.uni.upper(s0), self.uni.upper(p0)) {
+            let dollar = cp("$");
+            let r1 = cat(cat(cat(cat(cp("(?i)("), s0), cp(")")), s1), dollar);
+            let r2 = cat(cat(cat(cat(cp("(?i)("), p0), cp(")")), p1), dollar);
+            self.plurals.insert(0, rule(r1, cat(cp("\\1"), p1)));
+            self.plurals.insert(0, rule(r2, cat(cp("\\1"), p1)));
+            self.singulars.insert(0, rule(r2, cat(cp("\\1"), s1)));
+        } else {
+            let dollar = cp("$");
+            let su = self.uni.upper(s0);
+            let sl = self.uni.lower(s0);
+            let pu = self.uni.upper(p0);
+            let pl = self.uni.lower(p0);
+            let si = self.caseinsensitive(s1);
+            let pi = self.caseinsensitive(p1);
+            self.plurals.insert(0, rule(cat(cat(su, si), dollar), cat(pu, p1)));
+            self.plurals.insert(0, rule(cat(cat(sl, si), dollar), cat(pl, p1)));
+            self.plurals.insert(0, rule(cat(cat(pu, pi), dollar), cat(pu, p1)));
+            self.plurals.insert(0, rule(cat(cat(pl, pi), dollar), cat(pl, p1)));
+            self.singulars.insert(0, rule(cat(cat(pu, pi), dollar), cat(su, s1)));
+            self.singulars.insert(0, rule(cat(cat(pl, pi), dollar), cat(sl, s1)));
+        }
+    }
+
+    // The first rule whose pattern is found decides; a rule that does not
+    // compile raises when it is reached.
+    fn apply(self, plural: bool, word: ref Vec[i64]) -> Result[Vec[i64], ReErr] {
+        let rules = if plural { ref self.plurals } else { ref self.singulars };
+        for r in rules.iter() {
+            let prog = match ref r.prog {
+                Ok(p) => p,
+                Err(e) => return Err(copy_err(e)),
+            };
+            if searches(prog, word) {
+                return sub_template(prog, r.repl, word, self.uni);
+            }
+        }
+        Ok(word.clone())
+    }
+
+    fn pluralize(self, word: ref Vec[i64]) -> Result[Vec[i64], ReErr] {
+        if word.len() == 0 {
+            return Ok(word.clone());
+        }
+        let low = self.uni.lower(word);
+        for u in self.uncountables.iter() {
+            if same(u, low) {
+                return Ok(word.clone());
+            }
+        }
+        self.apply(true, word)
+    }
+
+    fn singularize(self, word: ref Vec[i64]) -> Result[Vec[i64], ReErr] {
+        for p in self.unc_progs.iter() {
+            let prog = match p {
+                Ok(p) => p,
+                Err(e) => return Err(copy_err(e)),
+            };
+            if searches(prog, word) {
+                return Ok(word.clone());
+            }
+        }
+        self.apply(false, word)
+    }
+
+    fn camelize(self, s: ref Vec[i64], upper_first: bool) -> Result[Vec[i64], ReErr] {
+        if upper_first {
+            return Ok(sub_all(self.fixed.camel, Repl.Upper1, s, self.uni));
+        }
+        if s.len() == 0 {
+            return Err(other_error("IndexError", "string index out of range".to_string()));
+        }
+        let mut out = self.uni.lower(head(s));
+        let rest = self.camelize(s, true)?;
+        push_all(mut out, tail(rest));
+        Ok(out)
+    }
+
+    fn humanize(self, word: ref Vec[i64]) -> Vec[i64] {
+        let mut w = sub_all(self.fixed.id_suffix, Repl.Template(Vec.new()), word, self.uni);
+        w = replace_char(w, 95, 32);
+        w = sub_all(self.fixed.alnum_run, Repl.Lower1, w, self.uni);
+        sub_all(self.fixed.first_word, Repl.Upper0, w, self.uni)
+    }
+
+    fn underscore(self, word: ref Vec[i64]) -> Vec[i64] {
+        let mut pieces: Vec[Piece] = Vec.new();
+        pieces.push(Piece.Group(1));
+        pieces.push(Piece.Text(vec_of(95)));
+        pieces.push(Piece.Group(2));
+        let repl = Repl.Template(pieces);
+        let mut w = sub_all(self.fixed.upper_run, repl, word, self.uni);
+        w = sub_all(self.fixed.lower_upper, repl, w, self.uni);
+        w = replace_char(w, 45, 95);
+        self.uni.lower(w)
+    }
+
+    fn titleize(self, word: ref Vec[i64]) -> Vec[i64] {
+        let t = self.uni.title(self.humanize(self.underscore(word)));
+        sub_all(self.fixed.title_word, Repl.Capitalize1, t, self.uni)
+    }
+
+    fn tableize(self, word: ref Vec[i64]) -> Result[Vec[i64], ReErr] {
+        self.pluralize(self.underscore(word))
+    }
+
+    fn transliterate(self, s: ref Vec[i64]) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        for c in self.uni.nfkd(s) {
+            if c < 128 {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    fn parameterize(self, s: ref Vec[i64], sep: ref Vec[i64]) -> Result[Vec[i64], ReErr] {
+        let mut w = self.transliterate(s);
+        w = sub_template(self.fixed.non_slug, sep, w, self.uni)?;
+        if sep.len() > 0 {
+            let re_sep = re_escape(sep);
+            let run = compile(cat(re_sep, cp("{2,}")), 0)?;
+            w = sub_template(run, sep, w, self.uni)?;
+            let ends = cat(cat(cat(cat(cp("(?i)^"), re_sep), cp("|")), re_sep), cp("$"));
+            let edge = compile(ends, 0)?;
+            w = sub_template(edge, Vec.new(), w, self.uni)?;
+        }
+        Ok(self.uni.lower(w))
+    }
+}
+
+// -------------------------------------------------------- ordinals
+
+// The value of a Unicode decimal digit, or -1.
+fn decimal_value(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    if c < 0x80 {
+        return -1;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return c - s;
+        }
+    }
+    -1
+}
+
+// What int() of a str makes of it, as abs(n) % 100: surrounding
+// whitespace, a sign, decimal digits from any script with single
+// underscores between them. None when int() raises ValueError.
+fn int_mod100(s: ref Vec[i64]) -> Option[i64] {
+    let mut a = 0;
+    let mut b = s.len();
+    while a < b and is_space(s[a], false) {
+        a += 1;
+    }
+    while b > a and is_space(s[b - 1], false) {
+        b -= 1;
+    }
+    if a < b and (s[a] == 43 or s[a] == 45) {
+        a += 1;
+    }
+    if a == b {
+        return None;
+    }
+    let mut v = 0;
+    let mut prev_digit = false;
+    for i in a..b {
+        let c = s[i];
+        if c == 95 {
+            if not prev_digit or i + 1 == b {
+                return None;
+            }
+            prev_digit = false;
+            continue;
+        }
+        let d = decimal_value(c);
+        if d < 0 {
+            return None;
+        }
+        v = (v * 10 + d) % 100;
+        prev_digit = true;
+    }
+    Some(v)
+}
+
+// An ordinal's argument as the job gives it: i:, f:, b: or s:, and the
+// text format() writes for it.
+struct Num {
+    kind: i64,
+    text: Vec[i64],
+}
+
+fn parse_num(a: ref Vec[i64]) -> Num {
+    let k = a[0];
+    Num { kind: k, text: slice(a, 2, a.len()) }
+}
+
+fn ordinal(n: ref Num) -> Result[String, ReErr] {
+    let v = if n.kind == 105 {
+        let mut t = n.text.clone();
+        if t[0] == 45 {
+            t = tail(t);
+        }
+        int_mod100(t).unwrap_or(0)
+    } else if n.kind == 98 {
+        if same(n.text, cp("True")) { 1 } else { 0 }
+    } else if n.kind == 102 {
+        let x = f64.parse(to_string(n.text)).unwrap_or(0.0);
+        let r = x.abs() % 100.0;
+        r as i64
+    } else {
+        match int_mod100(n.text) {
+            Some(v) => v,
+            None => return Err(other_error("ValueError", f"invalid literal for int() with base 10: {repr_of(n.text)}")),
+        }
+    };
+    if v == 11 or v == 12 or v == 13 {
+        return Ok("th".to_string());
+    }
+    let r = v % 10;
+    Ok((if r == 1 { "st" } else if r == 2 { "nd" } else if r == 3 { "rd" } else { "th" }).to_string())
+}
+
+// ---------------------------------------------------------- scaffold
+
+fn ends_with(s: ref Vec[i64], suffix: Str) -> bool {
+    let t = cp(suffix);
+    s.len() >= t.len() and same(slice(s, s.len() - t.len(), s.len()), t)
+}
+
+fn scaffold(inf: ref Inflector, spec: ref Vec[i64], out: mut ref Vec[String]) -> Result[(), ReErr] {
+    let text = to_string(spec);
+    let parts: Vec[Str] = text.split(" ").collect();
+    let name = cp(parts[0]);
+    let table = inf.tableize(name)?;
+    let n = parts[0];
+    out.push(f"model {n}");
+    out.push(f"table {to_string(table)}");
+    out.push(f"singular {to_string(inf.underscore(name))}");
+    out.push(f"route /{to_string(replace_char(table, 95, 45))}");
+    out.push(f"controller {to_string(inf.camelize(table, true)?)}Controller");
+    out.push(f"human {to_string(inf.humanize(inf.underscore(name)))}");
+    out.push(f"heading {to_string(inf.titleize(inf.pluralize(name)?))}");
+    for k in 1..parts.len() {
+        let ft: Vec[Str] = parts[k].split(":").collect();
+        let col = cp(ft[0]);
+        let mut line = f"column {ft[0]} {ft[1]} label={repr_of(inf.humanize(col))} header={repr_of(inf.titleize(col))}";
+        if ends_with(col, "_ids") {
+            let assoc = inf.pluralize(slice(col, 0, col.len() - 4))?;
+            let class = inf.camelize(inf.singularize(assoc)?, true)?;
+            line.push_str(f" has_many={to_string(assoc)} class={to_string(class)}");
+        } else if ends_with(col, "_id") {
+            let assoc = slice(col, 0, col.len() - 3);
+            let class = inf.camelize(assoc, true)?;
+            line.push_str(f" belongs_to={to_string(assoc)} class={to_string(class)} inverse={to_string(table)}");
+        }
+        out.push(line);
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------- jobs
+
+fn unesc(s: Str) -> Vec[i64] {
+    let c = cp(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == 92 and i + 1 < c.len() {
+            let n = c[i + 1];
+            out.push(if n == 116 { 9 } else if n == 110 { 10 } else { n });
+            i += 2;
+        } else {
+            out.push(c[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn arg(args: ref Vec[Vec[i64]], k: i64) -> Vec[i64] {
+    if k < args.len() { args[k].clone() } else { Vec.new() }
+}
+
+fn run_op(inf: mut ref Inflector, op: ref String, args: ref Vec[Vec[i64]], out: mut ref Vec[String]) -> Result[Option[Vec[i64]], ReErr] {
+    let a = arg(args, 0);
+    if op == "pluralize" {
+        return Ok(Some(inf.pluralize(a)?));
+    }
+    if op == "singularize" {
+        return Ok(Some(inf.singularize(a)?));
+    }
+    if op == "roundtrip" {
+        let x = inf.singularize(inf.pluralize(a)?)?;
+        let y = inf.pluralize(inf.singularize(a)?)?;
+        let mut t = cp("(");
+        str_repr(x, mut t);
+        push_ascii(mut t, ", ");
+        str_repr(y, mut t);
+        push_ascii(mut t, ")");
+        out.push(f"   {to_string(t)}");
+        return Ok(None);
+    }
+    if op == "camelize" {
+        if args.len() == 1 {
+            return Ok(Some(inf.camelize(a, true)?));
+        }
+        if same(args[1], cp("lower")) {
+            return Ok(Some(inf.camelize(a, false)?));
+        }
+        return Ok(Some(inf.camelize(inf.underscore(a), true)?));
+    }
+    if op == "underscore" {
+        return Ok(Some(inf.underscore(a)));
+    }
+    if op == "dasherize" {
+        return Ok(Some(replace_char(a, 95, 45)));
+    }
+    if op == "tableize" {
+        return Ok(Some(inf.tableize(a)?));
+    }
+    if op == "humanize" {
+        return Ok(Some(inf.humanize(a)));
+    }
+    if op == "titleize" {
+        return Ok(Some(inf.titleize(a)));
+    }
+    if op == "capitalize" {
+        return Ok(Some(inf.uni.capitalize(a)));
+    }
+    if op == "transliterate" {
+        return Ok(Some(inf.transliterate(a)));
+    }
+    if op == "parameterize" {
+        let sep = if args.len() > 1 { args[1].clone() } else { cp("-") };
+        return Ok(Some(inf.parameterize(a, sep)?));
+    }
+    if op == "ordinal" {
+        return Ok(Some(cp(ordinal(parse_num(a))?)));
+    }
+    if op == "ordinalize" {
+        let n = parse_num(a);
+        let suffix = ordinal(n)?;
+        let mut t = n.text.clone();
+        push_all(mut t, cp(suffix));
+        return Ok(Some(t));
+    }
+    if op == "irregular" {
+        inf.irregular(a, arg(args, 1));
+        out.push("   ok".to_string());
+        return Ok(None);
+    }
+    if op == "uncountable" {
+        inf.add_uncountable(a);
+        out.push("   ok".to_string());
+        return Ok(None);
+    }
+    if op == "plural" or op == "singular" {
+        let r = rule(a, arg(args, 1));
+        if op == "plural" {
+            inf.plurals.insert(0, r);
+        } else {
+            inf.singulars.insert(0, r);
+        }
+        out.push("   ok".to_string());
+        return Ok(None);
+    }
+    if op == "scaffold" {
+        let mut lines: Vec[String] = Vec.new();
+        scaffold(inf, a, mut lines)?;
+        for l in lines {
+            out.push(f"   {l}");
+        }
+        return Ok(None);
+    }
+    Err(other_error("SystemExit", f"unknown op {op}"))
+}
+
+fn show_err(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        let at = if e.pos >= 0 { f" at position {e.pos}" } else { "".to_string() };
+        return f"   error: re.error: {e.msg}{at}";
+    }
+    f"   error: {e.kind}: {e.msg}"
+}
+
+fn run() -> Result[(), String] {
+    let text = match fs.read_to_string("data/jobs.tsv") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.tsv: {e}"),
+    };
+    let mut inf = new_inflector(load_uni()?)?;
+    let mut out: Vec[String] = Vec.new();
+    for line in text.lines() {
+        if line.starts_with("== ") {
+            out.push(line.to_string());
+            continue;
+        }
+        let fields: Vec[Str] = line.split("\t").collect();
+        let op = fields[0].to_string();
+        if op == "reset" {
+            out.push("-- reset".to_string());
+            inf = new_inflector(load_uni()?)?;
+            continue;
+        }
+        let mut args: Vec[Vec[i64]] = Vec.new();
+        let mut head_line = f"-- {op}";
+        for k in 1..fields.len() {
+            let v = unesc(fields[k]);
+            head_line.push_str(f" {repr_of(v)}");
+            args.push(v);
+        }
+        out.push(head_line);
+        match run_op(mut inf, op, args, mut out) {
+            Ok(Some(r)) => out.push(f"   {repr_of(r)}"),
+            Ok(None) => {}
+            Err(e) => out.push(show_err(e)),
+        }
+        if out.len() > 512 {
+            for l in out.iter() {
+                println(l);
+            }
+            out.clear();
+        }
+    }
+    for l in out.iter() {
+        println(l);
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("== rails_pairs\n");
+    t.push_str("pluralize\tsearch\n");
+    t.push_str("pluralize\tSearch\n");
+    t.push_str("pluralize\tSEARCH\n");
+    t.push_str("singularize\tsearches\n");
+    t.push_str("pluralize\tsearches\n");
+    t.push_str("singularize\tsearch\n");
+    t.push_str("pluralize\tswitch\n");
+    t.push_str("singularize\tswitches\n");
+    t.push_str("singularize\tSwitches\n");
+    t.push_str("pluralize\tfix\n");
+    t.push_str("pluralize\tFix\n");
+    t.push_str("singularize\tfixes\n");
+    t.push_str("singularize\tFIXES\n");
+    t.push_str("pluralize\tfixes\n");
+    t.push_str("singularize\tfix\n");
+    t.push_str("pluralize\tbox\n");
+    t.push_str("singularize\tboxes\n");
+    t.push_str("singularize\tBoxes\n");
+    t.push_str("pluralize\tprocess\n");
+    t.push_str("pluralize\tProcess\n");
+    t.push_str("pluralize\tPROCESS\n");
+    t.push_str("singularize\tprocesses\n");
+    t.push_str("pluralize\tprocesses\n");
+    t.push_str("singularize\tprocess\n");
+    t.push_str("pluralize\taddress\n");
+    t.push_str("singularize\taddresses\n");
+    t.push_str("singularize\tAddresses\n");
+    t.push_str("pluralize\tcase\n");
+    t.push_str("pluralize\tCase\n");
+    t.push_str("singularize\tcases\n");
+    t.push_str("singularize\tCASES\n");
+    t.push_str("pluralize\tcases\n");
+    t.push_str("singularize\tcase\n");
+    t.push_str("pluralize\tstack\n");
+    t.push_str("singularize\tstacks\n");
+    t.push_str("singularize\tStacks\n");
+    t.push_str("pluralize\twish\n");
+    t.push_str("pluralize\tWish\n");
+    t.push_str("pluralize\tWISH\n");
+    t.push_str("singularize\twishes\n");
+    t.push_str("pluralize\twishes\n");
+    t.push_str("singularize\twish\n");
+    t.push_str("pluralize\tfish\n");
+    t.push_str("singularize\tfish\n");
+    t.push_str("singularize\tFish\n");
+    t.push_str("pluralize\tjeans\n");
+    t.push_str("pluralize\tJeans\n");
+    t.push_str("singularize\tjeans\n");
+    t.push_str("singularize\tJEANS\n");
+    t.push_str("pluralize\tjeans\n");
+    t.push_str("singularize\tjeans\n");
+    t.push_str("pluralize\tfunky jeans\n");
+    t.push_str("singularize\tfunky jeans\n");
+    t.push_str("singularize\tFunky jeans\n");
+    t.push_str("pluralize\tmy money\n");
+    t.push_str("pluralize\tMy money\n");
+    t.push_str("pluralize\tMY MONEY\n");
+    t.push_str("singularize\tmy money\n");
+    t.push_str("pluralize\tmy money\n");
+    t.push_str("singularize\tmy money\n");
+    t.push_str("pluralize\tcategory\n");
+    t.push_str("singularize\tcategories\n");
+    t.push_str("singularize\tCategories\n");
+    t.push_str("pluralize\tquery\n");
+    t.push_str("pluralize\tQuery\n");
+    t.push_str("singularize\tqueries\n");
+    t.push_str("singularize\tQUERIES\n");
+    t.push_str("pluralize\tqueries\n");
+    t.push_str("singularize\tquery\n");
+    t.push_str("pluralize\tability\n");
+    t.push_str("singularize\tabilities\n");
+    t.push_str("singularize\tAbilities\n");
+    t.push_str("pluralize\tagency\n");
+    t.push_str("pluralize\tAgency\n");
+    t.push_str("pluralize\tAGENCY\n");
+    t.push_str("singularize\tagencies\n");
+    t.push_str("pluralize\tagencies\n");
+    t.push_str("singularize\tagency\n");
+    t.push_str("pluralize\tmovie\n");
+    t.push_str("singularize\tmovies\n");
+    t.push_str("singularize\tMovies\n");
+    t.push_str("pluralize\tarchive\n");
+    t.push_str("pluralize\tArchive\n");
+    t.push_str("singularize\tarchives\n");
+    t.push_str("singularize\tARCHIVES\n");
+    t.push_str("pluralize\tarchives\n");
+    t.push_str("singularize\tarchive\n");
+    t.push_str("pluralize\tindex\n");
+    t.push_str("singularize\tindices\n");
+    t.push_str("singularize\tIndices\n");
+    t.push_str("pluralize\twife\n");
+    t.push_str("pluralize\tWife\n");
+    t.push_str("pluralize\tWIFE\n");
+    t.push_str("singularize\twives\n");
+    t.push_str("pluralize\twives\n");
+    t.push_str("singularize\twife\n");
+    t.push_str("pluralize\tsafe\n");
+    t.push_str("singularize\tsaves\n");
+    t.push_str("singularize\tSaves\n");
+    t.push_str("pluralize\thalf\n");
+    t.push_str("pluralize\tHalf\n");
+    t.push_str("singularize\thalves\n");
+    t.push_str("singularize\tHALVES\n");
+    t.push_str("pluralize\thalves\n");
+    t.push_str("singularize\thalf\n");
+    t.push_str("pluralize\tmove\n");
+    t.push_str("singularize\tmoves\n");
+    t.push_str("singularize\tMoves\n");
+    t.push_str("pluralize\tsalesperson\n");
+    t.push_str("pluralize\tSalesperson\n");
+    t.push_str("pluralize\tSALESPERSON\n");
+    t.push_str("singularize\tsalespeople\n");
+    t.push_str("pluralize\tsalespeople\n");
+    t.push_str("singularize\tsalesperson\n");
+    t.push_str("pluralize\tperson\n");
+    t.push_str("singularize\tpeople\n");
+    t.push_str("singularize\tPeople\n");
+    t.push_str("pluralize\tspokesman\n");
+    t.push_str("pluralize\tSpokesman\n");
+    t.push_str("singularize\tspokesmen\n");
+    t.push_str("singularize\tSPOKESMEN\n");
+    t.push_str("pluralize\tspokesmen\n");
+    t.push_str("singularize\tspokesman\n");
+    t.push_str("pluralize\tman\n");
+    t.push_str("singularize\tmen\n");
+    t.push_str("singularize\tMen\n");
+    t.push_str("pluralize\twoman\n");
+    t.push_str("pluralize\tWoman\n");
+    t.push_str("pluralize\tWOMAN\n");
+    t.push_str("singularize\twomen\n");
+    t.push_str("pluralize\twomen\n");
+    t.push_str("singularize\twoman\n");
+    t.push_str("pluralize\tbasis\n");
+    t.push_str("singularize\tbases\n");
+    t.push_str("singularize\tBases\n");
+    t.push_str("pluralize\tdiagnosis\n");
+    t.push_str("pluralize\tDiagnosis\n");
+    t.push_str("singularize\tdiagnoses\n");
+    t.push_str("singularize\tDIAGNOSES\n");
+    t.push_str("pluralize\tdiagnoses\n");
+    t.push_str("singularize\tdiagnosis\n");
+    t.push_str("pluralize\tdiagnosis_a\n");
+    t.push_str("singularize\tdiagnosis_as\n");
+    t.push_str("singularize\tDiagnosis_as\n");
+    t.push_str("pluralize\tdatum\n");
+    t.push_str("pluralize\tDatum\n");
+    t.push_str("pluralize\tDATUM\n");
+    t.push_str("singularize\tdata\n");
+    t.push_str("pluralize\tdata\n");
+    t.push_str("singularize\tdatum\n");
+    t.push_str("pluralize\tmedium\n");
+    t.push_str("singularize\tmedia\n");
+    t.push_str("singularize\tMedia\n");
+    t.push_str("pluralize\tstadium\n");
+    t.push_str("pluralize\tStadium\n");
+    t.push_str("singularize\tstadia\n");
+    t.push_str("singularize\tSTADIA\n");
+    t.push_str("pluralize\tstadia\n");
+    t.push_str("singularize\tstadium\n");
+    t.push_str("pluralize\tanalysis\n");
+    t.push_str("singularize\tanalyses\n");
+    t.push_str("singularize\tAnalyses\n");
+    t.push_str("pluralize\tnode_child\n");
+    t.push_str("pluralize\tNode_child\n");
+    t.push_str("pluralize\tNODE_CHILD\n");
+    t.push_str("singularize\tnode_children\n");
+    t.push_str("pluralize\tnode_children\n");
+    t.push_str("singularize\tnode_child\n");
+    t.push_str("pluralize\tchild\n");
+    t.push_str("singularize\tchildren\n");
+    t.push_str("singularize\tChildren\n");
+    t.push_str("pluralize\texperience\n");
+    t.push_str("pluralize\tExperience\n");
+    t.push_str("singularize\texperiences\n");
+    t.push_str("singularize\tEXPERIENCES\n");
+    t.push_str("pluralize\texperiences\n");
+    t.push_str("singularize\texperience\n");
+    t.push_str("pluralize\tday\n");
+    t.push_str("singularize\tdays\n");
+    t.push_str("singularize\tDays\n");
+    t.push_str("pluralize\tcomment\n");
+    t.push_str("pluralize\tComment\n");
+    t.push_str("pluralize\tCOMMENT\n");
+    t.push_str("singularize\tcomments\n");
+    t.push_str("pluralize\tcomments\n");
+    t.push_str("singularize\tcomment\n");
+    t.push_str("pluralize\tfoobar\n");
+    t.push_str("singularize\tfoobars\n");
+    t.push_str("singularize\tFoobars\n");
+    t.push_str("pluralize\tnewsletter\n");
+    t.push_str("pluralize\tNewsletter\n");
+    t.push_str("singularize\tnewsletters\n");
+    t.push_str("singularize\tNEWSLETTERS\n");
+    t.push_str("pluralize\tnewsletters\n");
+    t.push_str("singularize\tnewsletter\n");
+    t.push_str("pluralize\told_news\n");
+    t.push_str("singularize\told_news\n");
+    t.push_str("singularize\tOld_news\n");
+    t.push_str("pluralize\tnews\n");
+    t.push_str("pluralize\tNews\n");
+    t.push_str("pluralize\tNEWS\n");
+    t.push_str("singularize\tnews\n");
+    t.push_str("pluralize\tnews\n");
+    t.push_str("singularize\tnews\n");
+    t.push_str("pluralize\tseries\n");
+    t.push_str("singularize\tseries\n");
+    t.push_str("singularize\tSeries\n");
+    t.push_str("pluralize\tspecies\n");
+    t.push_str("pluralize\tSpecies\n");
+    t.push_str("singularize\tspecies\n");
+    t.push_str("singularize\tSPECIES\n");
+    t.push_str("pluralize\tspecies\n");
+    t.push_str("singularize\tspecies\n");
+    t.push_str("pluralize\tquiz\n");
+    t.push_str("singularize\tquizzes\n");
+    t.push_str("singularize\tQuizzes\n");
+    t.push_str("pluralize\tperspective\n");
+    t.push_str("pluralize\tPerspective\n");
+    t.push_str("pluralize\tPERSPECTIVE\n");
+    t.push_str("singularize\tperspectives\n");
+    t.push_str("pluralize\tperspectives\n");
+    t.push_str("singularize\tperspective\n");
+    t.push_str("pluralize\tox\n");
+    t.push_str("singularize\toxen\n");
+    t.push_str("singularize\tOxen\n");
+    t.push_str("pluralize\tpasserby\n");
+    t.push_str("pluralize\tPasserby\n");
+    t.push_str("singularize\tpassersby\n");
+    t.push_str("singularize\tPASSERSBY\n");
+    t.push_str("pluralize\tpassersby\n");
+    t.push_str("singularize\tpasserby\n");
+    t.push_str("pluralize\tphoto\n");
+    t.push_str("singularize\tphotos\n");
+    t.push_str("singularize\tPhotos\n");
+    t.push_str("pluralize\tbuffalo\n");
+    t.push_str("pluralize\tBuffalo\n");
+    t.push_str("pluralize\tBUFFALO\n");
+    t.push_str("singularize\tbuffaloes\n");
+    t.push_str("pluralize\tbuffaloes\n");
+    t.push_str("singularize\tbuffalo\n");
+    t.push_str("pluralize\ttomato\n");
+    t.push_str("singularize\ttomatoes\n");
+    t.push_str("singularize\tTomatoes\n");
+    t.push_str("pluralize\tpotato\n");
+    t.push_str("pluralize\tPotato\n");
+    t.push_str("singularize\tpotatoes\n");
+    t.push_str("singularize\tPOTATOES\n");
+    t.push_str("pluralize\tpotatoes\n");
+    t.push_str("singularize\tpotato\n");
+    t.push_str("pluralize\tdwarf\n");
+    t.push_str("singularize\tdwarves\n");
+    t.push_str("singularize\tDwarves\n");
+    t.push_str("pluralize\telf\n");
+    t.push_str("pluralize\tElf\n");
+    t.push_str("pluralize\tELF\n");
+    t.push_str("singularize\telves\n");
+    t.push_str("pluralize\telves\n");
+    t.push_str("singularize\telf\n");
+    t.push_str("pluralize\tinformation\n");
+    t.push_str("singularize\tinformation\n");
+    t.push_str("singularize\tInformation\n");
+    t.push_str("pluralize\tequipment\n");
+    t.push_str("pluralize\tEquipment\n");
+    t.push_str("singularize\tequipment\n");
+    t.push_str("singularize\tEQUIPMENT\n");
+    t.push_str("pluralize\tequipment\n");
+    t.push_str("singularize\tequipment\n");
+    t.push_str("pluralize\tcriterion\n");
+    t.push_str("singularize\tcriteria\n");
+    t.push_str("singularize\tCriteria\n");
+    t.push_str("pluralize\tfoot\n");
+    t.push_str("pluralize\tFoot\n");
+    t.push_str("pluralize\tFOOT\n");
+    t.push_str("singularize\tfeet\n");
+    t.push_str("pluralize\tfeet\n");
+    t.push_str("singularize\tfoot\n");
+    t.push_str("pluralize\tgoose\n");
+    t.push_str("singularize\tgeese\n");
+    t.push_str("singularize\tGeese\n");
+    t.push_str("pluralize\tcrisis\n");
+    t.push_str("pluralize\tCrisis\n");
+    t.push_str("singularize\tcrises\n");
+    t.push_str("singularize\tCRISES\n");
+    t.push_str("pluralize\tcrises\n");
+    t.push_str("singularize\tcrisis\n");
+    t.push_str("pluralize\ttestis\n");
+    t.push_str("singularize\ttestes\n");
+    t.push_str("singularize\tTestes\n");
+    t.push_str("pluralize\tmouse\n");
+    t.push_str("pluralize\tMouse\n");
+    t.push_str("pluralize\tMOUSE\n");
+    t.push_str("singularize\tmice\n");
+    t.push_str("pluralize\tmice\n");
+    t.push_str("singularize\tmouse\n");
+    t.push_str("pluralize\tlouse\n");
+    t.push_str("singularize\tlice\n");
+    t.push_str("singularize\tLice\n");
+    t.push_str("pluralize\thouse\n");
+    t.push_str("pluralize\tHouse\n");
+    t.push_str("singularize\thouses\n");
+    t.push_str("singularize\tHOUSES\n");
+    t.push_str("pluralize\thouses\n");
+    t.push_str("singularize\thouse\n");
+    t.push_str("pluralize\toctopus\n");
+    t.push_str("singularize\toctopi\n");
+    t.push_str("singularize\tOctopi\n");
+    t.push_str("pluralize\tvirus\n");
+    t.push_str("pluralize\tVirus\n");
+    t.push_str("pluralize\tVIRUS\n");
+    t.push_str("singularize\tviri\n");
+    t.push_str("pluralize\tviri\n");
+    t.push_str("singularize\tvirus\n");
+    t.push_str("pluralize\talias\n");
+    t.push_str("singularize\taliases\n");
+    t.push_str("singularize\tAliases\n");
+    t.push_str("pluralize\tstatus\n");
+    t.push_str("pluralize\tStatus\n");
+    t.push_str("singularize\tstatuses\n");
+    t.push_str("singularize\tSTATUSES\n");
+    t.push_str("pluralize\tstatuses\n");
+    t.push_str("singularize\tstatus\n");
+    t.push_str("pluralize\tbus\n");
+    t.push_str("singularize\tbuses\n");
+    t.push_str("singularize\tBuses\n");
+    t.push_str("pluralize\taxis\n");
+    t.push_str("pluralize\tAxis\n");
+    t.push_str("pluralize\tAXIS\n");
+    t.push_str("singularize\taxes\n");
+    t.push_str("pluralize\taxes\n");
+    t.push_str("singularize\taxis\n");
+    t.push_str("pluralize\tvertex\n");
+    t.push_str("singularize\tvertices\n");
+    t.push_str("singularize\tVertices\n");
+    t.push_str("pluralize\tmatrix\n");
+    t.push_str("pluralize\tMatrix\n");
+    t.push_str("singularize\tmatrices\n");
+    t.push_str("singularize\tMATRICES\n");
+    t.push_str("pluralize\tmatrices\n");
+    t.push_str("singularize\tmatrix\n");
+    t.push_str("pluralize\tshoe\n");
+    t.push_str("singularize\tshoes\n");
+    t.push_str("singularize\tShoes\n");
+    t.push_str("pluralize\thorse\n");
+    t.push_str("pluralize\tHorse\n");
+    t.push_str("pluralize\tHORSE\n");
+    t.push_str("singularize\thorses\n");
+    t.push_str("pluralize\thorses\n");
+    t.push_str("singularize\thorse\n");
+    t.push_str("pluralize\tprize\n");
+    t.push_str("singularize\tprizes\n");
+    t.push_str("singularize\tPrizes\n");
+    t.push_str("pluralize\tedge\n");
+    t.push_str("pluralize\tEdge\n");
+    t.push_str("singularize\tedges\n");
+    t.push_str("singularize\tEDGES\n");
+    t.push_str("pluralize\tedges\n");
+    t.push_str("singularize\tedge\n");
+    t.push_str("pluralize\tcow\n");
+    t.push_str("singularize\tkine\n");
+    t.push_str("singularize\tKine\n");
+    t.push_str("pluralize\tdatabase\n");
+    t.push_str("pluralize\tDatabase\n");
+    t.push_str("pluralize\tDATABASE\n");
+    t.push_str("singularize\tdatabases\n");
+    t.push_str("pluralize\tdatabases\n");
+    t.push_str("singularize\tdatabase\n");
+    t.push_str("pluralize\thuman\n");
+    t.push_str("singularize\thumans\n");
+    t.push_str("singularize\tHumans\n");
+    t.push_str("pluralize\tzombie\n");
+    t.push_str("pluralize\tZombie\n");
+    t.push_str("singularize\tzombies\n");
+    t.push_str("singularize\tZOMBIES\n");
+    t.push_str("pluralize\tzombies\n");
+    t.push_str("singularize\tzombie\n");
+    t.push_str("pluralize\thive\n");
+    t.push_str("singularize\thives\n");
+    t.push_str("singularize\tHives\n");
+    t.push_str("pluralize\tthesis\n");
+    t.push_str("pluralize\tThesis\n");
+    t.push_str("pluralize\tTHESIS\n");
+    t.push_str("singularize\ttheses\n");
+    t.push_str("pluralize\ttheses\n");
+    t.push_str("singularize\tthesis\n");
+    t.push_str("pluralize\tsynopsis\n");
+    t.push_str("singularize\tsynopses\n");
+    t.push_str("singularize\tSynopses\n");
+    t.push_str("pluralize\tprognosis\n");
+    t.push_str("pluralize\tPrognosis\n");
+    t.push_str("singularize\tprognoses\n");
+    t.push_str("singularize\tPROGNOSES\n");
+    t.push_str("pluralize\tprognoses\n");
+    t.push_str("singularize\tprognosis\n");
+    t.push_str("pluralize\tparenthesis\n");
+    t.push_str("singularize\tparentheses\n");
+    t.push_str("singularize\tParentheses\n");
+    t.push_str("pluralize\tsex\n");
+    t.push_str("pluralize\tSex\n");
+    t.push_str("pluralize\tSEX\n");
+    t.push_str("singularize\tsexes\n");
+    t.push_str("pluralize\tsexes\n");
+    t.push_str("singularize\tsex\n");
+    t.push_str("pluralize\ttive\n");
+    t.push_str("singularize\ttives\n");
+    t.push_str("singularize\tTives\n");
+    t.push_str("== nouns\n");
+    t.push_str("pluralize\taccount\n");
+    t.push_str("singularize\taccount\n");
+    t.push_str("roundtrip\taccount\n");
+    t.push_str("pluralize\tagenda\n");
+    t.push_str("pluralize\talumnus\n");
+    t.push_str("singularize\talumnus\n");
+    t.push_str("pluralize\tanswer\n");
+    t.push_str("roundtrip\tanswer\n");
+    t.push_str("pluralize\tapple\n");
+    t.push_str("singularize\tapple\n");
+    t.push_str("pluralize\tarticle\n");
+    t.push_str("pluralize\taudit\n");
+    t.push_str("singularize\taudit\n");
+    t.push_str("roundtrip\taudit\n");
+    t.push_str("pluralize\tavatar\n");
+    t.push_str("pluralize\tbalance\n");
+    t.push_str("singularize\tbalance\n");
+    t.push_str("pluralize\tbattery\n");
+    t.push_str("roundtrip\tbattery\n");
+    t.push_str("pluralize\tbench\n");
+    t.push_str("singularize\tbench\n");
+    t.push_str("pluralize\tbird\n");
+    t.push_str("pluralize\tblog\n");
+    t.push_str("singularize\tblog\n");
+    t.push_str("roundtrip\tblog\n");
+    t.push_str("pluralize\tbonus\n");
+    t.push_str("pluralize\tbranch\n");
+    t.push_str("singularize\tbranch\n");
+    t.push_str("pluralize\tbudget\n");
+    t.push_str("roundtrip\tbudget\n");
+    t.push_str("pluralize\tbuzz\n");
+    t.push_str("singularize\tbuzz\n");
+    t.push_str("pluralize\tcactus\n");
+    t.push_str("pluralize\tcalendar\n");
+    t.push_str("singularize\tcalendar\n");
+    t.push_str("roundtrip\tcalendar\n");
+    t.push_str("pluralize\tcandy\n");
+    t.push_str("pluralize\tcatalog\n");
+    t.push_str("singularize\tcatalog\n");
+    t.push_str("pluralize\tchapter\n");
+    t.push_str("roundtrip\tchapter\n");
+    t.push_str("pluralize\tchassis\n");
+    t.push_str("singularize\tchassis\n");
+    t.push_str("pluralize\tchurch\n");
+    t.push_str("pluralize\tclass\n");
+    t.push_str("singularize\tclass\n");
+    t.push_str("roundtrip\tclass\n");
+    t.push_str("pluralize\tclock\n");
+    t.push_str("pluralize\tcoach\n");
+    t.push_str("singularize\tcoach\n");
+    t.push_str("pluralize\tcolumn\n");
+    t.push_str("roundtrip\tcolumn\n");
+    t.push_str("pluralize\tcontact\n");
+    t.push_str("singularize\tcontact\n");
+    t.push_str("pluralize\tcountry\n");
+    t.push_str("pluralize\tcourse\n");
+    t.push_str("singularize\tcourse\n");
+    t.push_str("roundtrip\tcourse\n");
+    t.push_str("pluralize\tcredit\n");
+    t.push_str("pluralize\tcurriculum\n");
+    t.push_str("singularize\tcurriculum\n");
+    t.push_str("pluralize\tcycle\n");
+    t.push_str("roundtrip\tcycle\n");
+    t.push_str("pluralize\tdeal\n");
+    t.push_str("singularize\tdeal\n");
+    t.push_str("pluralize\tdelivery\n");
+    t.push_str("pluralize\tdesk\n");
+    t.push_str("singularize\tdesk\n");
+    t.push_str("roundtrip\tdesk\n");
+    t.push_str("pluralize\tdiary\n");
+    t.push_str("pluralize\tdomain\n");
+    t.push_str("singularize\tdomain\n");
+    t.push_str("pluralize\tdress\n");
+    t.push_str("roundtrip\tdress\n");
+    t.push_str("pluralize\temail\n");
+    t.push_str("singularize\temail\n");
+    t.push_str("pluralize\tentry\n");
+    t.push_str("pluralize\testimate\n");
+    t.push_str("singularize\testimate\n");
+    t.push_str("roundtrip\testimate\n");
+    t.push_str("pluralize\texam\n");
+    t.push_str("pluralize\tfax\n");
+    t.push_str("singularize\tfax\n");
+    t.push_str("pluralize\tferry\n");
+    t.push_str("roundtrip\tferry\n");
+    t.push_str("pluralize\tfile\n");
+    t.push_str("singularize\tfile\n");
+    t.push_str("pluralize\tfly\n");
+    t.push_str("pluralize\tfolder\n");
+    t.push_str("singularize\tfolder\n");
+    t.push_str("roundtrip\tfolder\n");
+    t.push_str("pluralize\tfungus\n");
+    t.push_str("pluralize\tgas\n");
+    t.push_str("singularize\tgas\n");
+    t.push_str("pluralize\tglass\n");
+    t.push_str("roundtrip\tglass\n");
+    t.push_str("pluralize\tgoal\n");
+    t.push_str("singularize\tgoal\n");
+    t.push_str("pluralize\tgroup\n");
+    t.push_str("pluralize\thash\n");
+    t.push_str("singularize\thash\n");
+    t.push_str("roundtrip\thash\n");
+    t.push_str("pluralize\thoax\n");
+    t.push_str("pluralize\tholiday\n");
+    t.push_str("singularize\tholiday\n");
+    t.push_str("pluralize\thypothesis\n");
+    t.push_str("roundtrip\thypothesis\n");
+    t.push_str("pluralize\tindex\n");
+    t.push_str("singularize\tindex\n");
+    t.push_str("pluralize\tinvoice\n");
+    t.push_str("pluralize\titem\n");
+    t.push_str("singularize\titem\n");
+    t.push_str("roundtrip\titem\n");
+    t.push_str("pluralize\tjourney\n");
+    t.push_str("pluralize\tkiss\n");
+    t.push_str("singularize\tkiss\n");
+    t.push_str("pluralize\tlady\n");
+    t.push_str("roundtrip\tlady\n");
+    t.push_str("pluralize\tleaf\n");
+    t.push_str("singularize\tleaf\n");
+    t.push_str("pluralize\tlibrary\n");
+    t.push_str("pluralize\tline\n");
+    t.push_str("singularize\tline\n");
+    t.push_str("roundtrip\tline\n");
+    t.push_str("pluralize\tlobby\n");
+    t.push_str("pluralize\tloss\n");
+    t.push_str("singularize\tloss\n");
+    t.push_str("pluralize\tmatch\n");
+    t.push_str("roundtrip\tmatch\n");
+    t.push_str("pluralize\tmemo\n");
+    t.push_str("singularize\tmemo\n");
+    t.push_str("pluralize\tmess\n");
+    t.push_str("pluralize\tminute\n");
+    t.push_str("singularize\tminute\n");
+    t.push_str("roundtrip\tminute\n");
+    t.push_str("pluralize\tmosquito\n");
+    t.push_str("pluralize\tnucleus\n");
+    t.push_str("singularize\tnucleus\n");
+    t.push_str("pluralize\torder\n");
+    t.push_str("roundtrip\torder\n");
+    t.push_str("pluralize\towner\n");
+    t.push_str("singularize\towner\n");
+    t.push_str("pluralize\tpatch\n");
+    t.push_str("pluralize\tpenny\n");
+    t.push_str("singularize\tpenny\n");
+    t.push_str("roundtrip\tpenny\n");
+    t.push_str("pluralize\tpiano\n");
+    t.push_str("pluralize\tportfolio\n");
+    t.push_str("singularize\tportfolio\n");
+    t.push_str("pluralize\tpreference\n");
+    t.push_str("roundtrip\tpreference\n");
+    t.push_str("pluralize\tpuppy\n");
+    t.push_str("singularize\tpuppy\n");
+    t.push_str("pluralize\tray\n");
+    t.push_str("pluralize\treport\n");
+    t.push_str("singularize\treport\n");
+    t.push_str("roundtrip\treport\n");
+    t.push_str("pluralize\tsandwich\n");
+    t.push_str("pluralize\tschema\n");
+    t.push_str("singularize\tschema\n");
+    t.push_str("pluralize\tself\n");
+    t.push_str("roundtrip\tself\n");
+    t.push_str("pluralize\tshelf\n");
+    t.push_str("singularize\tshelf\n");
+    t.push_str("pluralize\tspy\n");
+    t.push_str("pluralize\tstudio\n");
+    t.push_str("singularize\tstudio\n");
+    t.push_str("roundtrip\tstudio\n");
+    t.push_str("pluralize\tstudio\n");
+    t.push_str("pluralize\tsurvey\n");
+    t.push_str("singularize\tsurvey\n");
+    t.push_str("pluralize\ttax\n");
+    t.push_str("roundtrip\ttax\n");
+    t.push_str("pluralize\ttax_rate\n");
+    t.push_str("singularize\ttax_rate\n");
+    t.push_str("pluralize\ttooth\n");
+    t.push_str("pluralize\ttoy\n");
+    t.push_str("singularize\ttoy\n");
+    t.push_str("roundtrip\ttoy\n");
+    t.push_str("pluralize\ttrophy\n");
+    t.push_str("pluralize\tvalley\n");
+    t.push_str("singularize\tvalley\n");
+    t.push_str("pluralize\tvideo\n");
+    t.push_str("roundtrip\tvideo\n");
+    t.push_str("pluralize\twaltz\n");
+    t.push_str("singularize\twaltz\n");
+    t.push_str("pluralize\twebhook\n");
+    t.push_str("pluralize\twolf\n");
+    t.push_str("singularize\twolf\n");
+    t.push_str("roundtrip\twolf\n");
+    t.push_str("pluralize\tyes\n");
+    t.push_str("== identifiers\n");
+    t.push_str("camelize\tDeviceType\n");
+    t.push_str("camelize\tDeviceType\tlower\n");
+    t.push_str("underscore\tDeviceType\n");
+    t.push_str("dasherize\tDeviceType\n");
+    t.push_str("tableize\tDeviceType\n");
+    t.push_str("camelize\tDeviceType\tunder\n");
+    t.push_str("camelize\tdevice_type\n");
+    t.push_str("camelize\tdevice_type\tlower\n");
+    t.push_str("underscore\tdevice_type\n");
+    t.push_str("dasherize\tdevice_type\n");
+    t.push_str("tableize\tdevice_type\n");
+    t.push_str("camelize\tdevice_type\tunder\n");
+    t.push_str("camelize\tIOError\n");
+    t.push_str("camelize\tIOError\tlower\n");
+    t.push_str("underscore\tIOError\n");
+    t.push_str("dasherize\tIOError\n");
+    t.push_str("tableize\tIOError\n");
+    t.push_str("camelize\tIOError\tunder\n");
+    t.push_str("camelize\tHTTPServerError\n");
+    t.push_str("camelize\tHTTPServerError\tlower\n");
+    t.push_str("underscore\tHTTPServerError\n");
+    t.push_str("dasherize\tHTTPServerError\n");
+    t.push_str("tableize\tHTTPServerError\n");
+    t.push_str("camelize\tHTTPServerError\tunder\n");
+    t.push_str("camelize\thtml5Parser\n");
+    t.push_str("camelize\thtml5Parser\tlower\n");
+    t.push_str("underscore\thtml5Parser\n");
+    t.push_str("dasherize\thtml5Parser\n");
+    t.push_str("tableize\thtml5Parser\n");
+    t.push_str("camelize\thtml5Parser\tunder\n");
+    t.push_str("camelize\tSSLError\n");
+    t.push_str("camelize\tSSLError\tlower\n");
+    t.push_str("underscore\tSSLError\n");
+    t.push_str("dasherize\tSSLError\n");
+    t.push_str("tableize\tSSLError\n");
+    t.push_str("camelize\tSSLError\tunder\n");
+    t.push_str("camelize\tArea51Controller\n");
+    t.push_str("camelize\tArea51Controller\tlower\n");
+    t.push_str("underscore\tArea51Controller\n");
+    t.push_str("dasherize\tArea51Controller\n");
+    t.push_str("tableize\tArea51Controller\n");
+    t.push_str("camelize\tArea51Controller\tunder\n");
+    t.push_str("camelize\tapi_v2_key\n");
+    t.push_str("camelize\tapi_v2_key\tlower\n");
+    t.push_str("underscore\tapi_v2_key\n");
+    t.push_str("dasherize\tapi_v2_key\n");
+    t.push_str("tableize\tapi_v2_key\n");
+    t.push_str("camelize\tapi_v2_key\tunder\n");
+    t.push_str("camelize\tspecial-guest\n");
+    t.push_str("camelize\tspecial-guest\tlower\n");
+    t.push_str("underscore\tspecial-guest\n");
+    t.push_str("dasherize\tspecial-guest\n");
+    t.push_str("tableize\tspecial-guest\n");
+    t.push_str("camelize\tspecial-guest\tunder\n");
+    t.push_str("camelize\tProduct\n");
+    t.push_str("camelize\tProduct\tlower\n");
+    t.push_str("underscore\tProduct\n");
+    t.push_str("dasherize\tProduct\n");
+    t.push_str("tableize\tProduct\n");
+    t.push_str("camelize\tProduct\tunder\n");
+    t.push_str("camelize\tSpecialGuest\n");
+    t.push_str("camelize\tSpecialGuest\tlower\n");
+    t.push_str("underscore\tSpecialGuest\n");
+    t.push_str("dasherize\tSpecialGuest\n");
+    t.push_str("tableize\tSpecialGuest\n");
+    t.push_str("camelize\tSpecialGuest\tunder\n");
+    t.push_str("camelize\tApplicationController\n");
+    t.push_str("camelize\tApplicationController\tlower\n");
+    t.push_str("underscore\tApplicationController\n");
+    t.push_str("dasherize\tApplicationController\n");
+    t.push_str("tableize\tApplicationController\n");
+    t.push_str("camelize\tApplicationController\tunder\n");
+    t.push_str("camelize\tArea51Controller\n");
+    t.push_str("camelize\tArea51Controller\tlower\n");
+    t.push_str("underscore\tArea51Controller\n");
+    t.push_str("dasherize\tArea51Controller\n");
+    t.push_str("tableize\tArea51Controller\n");
+    t.push_str("camelize\tArea51Controller\tunder\n");
+    t.push_str("camelize\tAWSS3Bucket\n");
+    t.push_str("camelize\tAWSS3Bucket\tlower\n");
+    t.push_str("underscore\tAWSS3Bucket\n");
+    t.push_str("dasherize\tAWSS3Bucket\n");
+    t.push_str("tableize\tAWSS3Bucket\n");
+    t.push_str("camelize\tAWSS3Bucket\tunder\n");
+    t.push_str("camelize\tgetHTTPResponseCode\n");
+    t.push_str("camelize\tgetHTTPResponseCode\tlower\n");
+    t.push_str("underscore\tgetHTTPResponseCode\n");
+    t.push_str("dasherize\tgetHTTPResponseCode\n");
+    t.push_str("tableize\tgetHTTPResponseCode\n");
+    t.push_str("camelize\tgetHTTPResponseCode\tunder\n");
+    t.push_str("camelize\tXMLHttpRequest\n");
+    t.push_str("camelize\tXMLHttpRequest\tlower\n");
+    t.push_str("underscore\tXMLHttpRequest\n");
+    t.push_str("dasherize\tXMLHttpRequest\n");
+    t.push_str("tableize\tXMLHttpRequest\n");
+    t.push_str("camelize\tXMLHttpRequest\tunder\n");
+    t.push_str("camelize\talready_snake\n");
+    t.push_str("camelize\talready_snake\tlower\n");
+    t.push_str("underscore\talready_snake\n");
+    t.push_str("dasherize\talready_snake\n");
+    t.push_str("tableize\talready_snake\n");
+    t.push_str("camelize\talready_snake\tunder\n");
+    t.push_str("camelize\t__dunder__\n");
+    t.push_str("camelize\t__dunder__\tlower\n");
+    t.push_str("underscore\t__dunder__\n");
+    t.push_str("dasherize\t__dunder__\n");
+    t.push_str("tableize\t__dunder__\n");
+    t.push_str("camelize\t__dunder__\tunder\n");
+    t.push_str("camelize\t_private_thing\n");
+    t.push_str("camelize\t_private_thing\tlower\n");
+    t.push_str("underscore\t_private_thing\n");
+    t.push_str("dasherize\t_private_thing\n");
+    t.push_str("tableize\t_private_thing\n");
+    t.push_str("camelize\t_private_thing\tunder\n");
+    t.push_str("camelize\ttrailing_\n");
+    t.push_str("camelize\ttrailing_\tlower\n");
+    t.push_str("underscore\ttrailing_\n");
+    t.push_str("dasherize\ttrailing_\n");
+    t.push_str("tableize\ttrailing_\n");
+    t.push_str("camelize\ttrailing_\tunder\n");
+    t.push_str("camelize\ta\n");
+    t.push_str("camelize\ta\tlower\n");
+    t.push_str("underscore\ta\n");
+    t.push_str("dasherize\ta\n");
+    t.push_str("tableize\ta\n");
+    t.push_str("camelize\ta\tunder\n");
+    t.push_str("camelize\tA\n");
+    t.push_str("camelize\tA\tlower\n");
+    t.push_str("underscore\tA\n");
+    t.push_str("dasherize\tA\n");
+    t.push_str("tableize\tA\n");
+    t.push_str("camelize\tA\tunder\n");
+    t.push_str("camelize\t\n");
+    t.push_str("camelize\t\tlower\n");
+    t.push_str("underscore\t\n");
+    t.push_str("dasherize\t\n");
+    t.push_str("tableize\t\n");
+    t.push_str("camelize\t\tunder\n");
+    t.push_str("camelize\tABC\n");
+    t.push_str("camelize\tABC\tlower\n");
+    t.push_str("underscore\tABC\n");
+    t.push_str("dasherize\tABC\n");
+    t.push_str("tableize\tABC\n");
+    t.push_str("camelize\tABC\tunder\n");
+    t.push_str("camelize\taB\n");
+    t.push_str("camelize\taB\tlower\n");
+    t.push_str("underscore\taB\n");
+    t.push_str("dasherize\taB\n");
+    t.push_str("tableize\taB\n");
+    t.push_str("camelize\taB\tunder\n");
+    t.push_str("camelize\tAb\n");
+    t.push_str("camelize\tAb\tlower\n");
+    t.push_str("underscore\tAb\n");
+    t.push_str("dasherize\tAb\n");
+    t.push_str("tableize\tAb\n");
+    t.push_str("camelize\tAb\tunder\n");
+    t.push_str("camelize\ta1B2c3\n");
+    t.push_str("camelize\ta1B2c3\tlower\n");
+    t.push_str("underscore\ta1B2c3\n");
+    t.push_str("dasherize\ta1B2c3\n");
+    t.push_str("tableize\ta1B2c3\n");
+    t.push_str("camelize\ta1B2c3\tunder\n");
+    t.push_str("camelize\tcamelCase_with_snake\n");
+    t.push_str("camelize\tcamelCase_with_snake\tlower\n");
+    t.push_str("underscore\tcamelCase_with_snake\n");
+    t.push_str("dasherize\tcamelCase_with_snake\n");
+    t.push_str("tableize\tcamelCase_with_snake\n");
+    t.push_str("camelize\tcamelCase_with_snake\tunder\n");
+    t.push_str("camelize\tKebab-Case-Name\n");
+    t.push_str("camelize\tKebab-Case-Name\tlower\n");
+    t.push_str("underscore\tKebab-Case-Name\n");
+    t.push_str("dasherize\tKebab-Case-Name\n");
+    t.push_str("tableize\tKebab-Case-Name\n");
+    t.push_str("camelize\tKebab-Case-Name\tunder\n");
+    t.push_str("camelize\twith spaces here\n");
+    t.push_str("camelize\twith spaces here\tlower\n");
+    t.push_str("underscore\twith spaces here\n");
+    t.push_str("dasherize\twith spaces here\n");
+    t.push_str("tableize\twith spaces here\n");
+    t.push_str("camelize\twith spaces here\tunder\n");
+    t.push_str("camelize\tÉcoleNormale\n");
+    t.push_str("camelize\tÉcoleNormale\tlower\n");
+    t.push_str("underscore\tÉcoleNormale\n");
+    t.push_str("dasherize\tÉcoleNormale\n");
+    t.push_str("tableize\tÉcoleNormale\n");
+    t.push_str("camelize\tÉcoleNormale\tunder\n");
+    t.push_str("camelize\tÜberCool\n");
+    t.push_str("camelize\tÜberCool\tlower\n");
+    t.push_str("underscore\tÜberCool\n");
+    t.push_str("dasherize\tÜberCool\n");
+    t.push_str("tableize\tÜberCool\n");
+    t.push_str("camelize\tÜberCool\tunder\n");
+    t.push_str("camelize\tstraße_name\n");
+    t.push_str("camelize\tstraße_name\tlower\n");
+    t.push_str("underscore\tstraße_name\n");
+    t.push_str("dasherize\tstraße_name\n");
+    t.push_str("tableize\tstraße_name\n");
+    t.push_str("camelize\tstraße_name\tunder\n");
+    t.push_str("camelize\tόνομα_χρήστη\n");
+    t.push_str("camelize\tόνομα_χρήστη\tlower\n");
+    t.push_str("underscore\tόνομα_χρήστη\n");
+    t.push_str("dasherize\tόνομα_χρήστη\n");
+    t.push_str("tableize\tόνομα_χρήστη\n");
+    t.push_str("camelize\tόνομα_χρήστη\tunder\n");
+    t.push_str("camelize\tﬁle_name\n");
+    t.push_str("camelize\tﬁle_name\tlower\n");
+    t.push_str("underscore\tﬁle_name\n");
+    t.push_str("dasherize\tﬁle_name\n");
+    t.push_str("tableize\tﬁle_name\n");
+    t.push_str("camelize\tﬁle_name\tunder\n");
+    t.push_str("camelize\tǆungla_veliki\n");
+    t.push_str("camelize\tǆungla_veliki\tlower\n");
+    t.push_str("underscore\tǆungla_veliki\n");
+    t.push_str("dasherize\tǆungla_veliki\n");
+    t.push_str("tableize\tǆungla_veliki\n");
+    t.push_str("camelize\tǆungla_veliki\tunder\n");
+    t.push_str("camelize\t名前_type\n");
+    t.push_str("camelize\t名前_type\tlower\n");
+    t.push_str("underscore\t名前_type\n");
+    t.push_str("dasherize\t名前_type\n");
+    t.push_str("tableize\t名前_type\n");
+    t.push_str("camelize\t名前_type\tunder\n");
+    t.push_str("camelize\tx_y_z\n");
+    t.push_str("camelize\tx_y_z\tlower\n");
+    t.push_str("underscore\tx_y_z\n");
+    t.push_str("dasherize\tx_y_z\n");
+    t.push_str("tableize\tx_y_z\n");
+    t.push_str("camelize\tx_y_z\tunder\n");
+    t.push_str("camelize\tuser\\tname\n");
+    t.push_str("camelize\tuser\\tname\tlower\n");
+    t.push_str("underscore\tuser\\tname\n");
+    t.push_str("dasherize\tuser\\tname\n");
+    t.push_str("tableize\tuser\\tname\n");
+    t.push_str("camelize\tuser\\tname\tunder\n");
+    t.push_str("camelize\tline\\nbreak_here\n");
+    t.push_str("camelize\tline\\nbreak_here\tlower\n");
+    t.push_str("underscore\tline\\nbreak_here\n");
+    t.push_str("dasherize\tline\\nbreak_here\n");
+    t.push_str("tableize\tline\\nbreak_here\n");
+    t.push_str("camelize\tline\\nbreak_here\tunder\n");
+    t.push_str("camelize\tOK2Go\n");
+    t.push_str("camelize\tOK2Go\tlower\n");
+    t.push_str("underscore\tOK2Go\n");
+    t.push_str("dasherize\tOK2Go\n");
+    t.push_str("tableize\tOK2Go\n");
+    t.push_str("camelize\tOK2Go\tunder\n");
+    t.push_str("camelize\tv2API\n");
+    t.push_str("camelize\tv2API\tlower\n");
+    t.push_str("underscore\tv2API\n");
+    t.push_str("dasherize\tv2API\n");
+    t.push_str("tableize\tv2API\n");
+    t.push_str("camelize\tv2API\tunder\n");
+    t.push_str("== labels\n");
+    t.push_str("humanize\temployee_salary\n");
+    t.push_str("titleize\temployee_salary\n");
+    t.push_str("capitalize\temployee_salary\n");
+    t.push_str("humanize\tauthor_id\n");
+    t.push_str("titleize\tauthor_id\n");
+    t.push_str("capitalize\tauthor_id\n");
+    t.push_str("humanize\t_id\n");
+    t.push_str("titleize\t_id\n");
+    t.push_str("capitalize\t_id\n");
+    t.push_str("humanize\tid\n");
+    t.push_str("titleize\tid\n");
+    t.push_str("capitalize\tid\n");
+    t.push_str("humanize\tfirst_name_id_id\n");
+    t.push_str("titleize\tfirst_name_id_id\n");
+    t.push_str("capitalize\tfirst_name_id_id\n");
+    t.push_str("humanize\tx-men: the last stand\n");
+    t.push_str("titleize\tx-men: the last stand\n");
+    t.push_str("capitalize\tx-men: the last stand\n");
+    t.push_str("humanize\tTheManWithoutAPast\n");
+    t.push_str("titleize\tTheManWithoutAPast\n");
+    t.push_str("capitalize\tTheManWithoutAPast\n");
+    t.push_str("humanize\traiders_of_the_lost_ark\n");
+    t.push_str("titleize\traiders_of_the_lost_ark\n");
+    t.push_str("capitalize\traiders_of_the_lost_ark\n");
+    t.push_str("humanize\tman from the boondocks\n");
+    t.push_str("titleize\tman from the boondocks\n");
+    t.push_str("capitalize\tman from the boondocks\n");
+    t.push_str("humanize\to'brien's dog\n");
+    t.push_str("titleize\to'brien's dog\n");
+    t.push_str("capitalize\to'brien's dog\n");
+    t.push_str("humanize\tit's 'quoted' text\n");
+    t.push_str("titleize\tit's 'quoted' text\n");
+    t.push_str("capitalize\tit's 'quoted' text\n");
+    t.push_str("humanize\tΟΔΥΣΣΕΥΣ ΚΑΙ ΚΑΛΥΨΩ\n");
+    t.push_str("titleize\tΟΔΥΣΣΕΥΣ ΚΑΙ ΚΑΛΥΨΩ\n");
+    t.push_str("capitalize\tΟΔΥΣΣΕΥΣ ΚΑΙ ΚΑΛΥΨΩ\n");
+    t.push_str("humanize\tΣΑΣ\n");
+    t.push_str("titleize\tΣΑΣ\n");
+    t.push_str("capitalize\tΣΑΣ\n");
+    t.push_str("humanize\tΣ\n");
+    t.push_str("titleize\tΣ\n");
+    t.push_str("capitalize\tΣ\n");
+    t.push_str("humanize\tΌΣΟΣ_ΣΟΦΟΣ\n");
+    t.push_str("titleize\tΌΣΟΣ_ΣΟΦΟΣ\n");
+    t.push_str("capitalize\tΌΣΟΣ_ΣΟΦΟΣ\n");
+    t.push_str("humanize\tstraße_café\n");
+    t.push_str("titleize\tstraße_café\n");
+    t.push_str("capitalize\tstraße_café\n");
+    t.push_str("humanize\télan vital\n");
+    t.push_str("titleize\télan vital\n");
+    t.push_str("capitalize\télan vital\n");
+    t.push_str("humanize\tǆungla veliki\n");
+    t.push_str("titleize\tǆungla veliki\n");
+    t.push_str("capitalize\tǆungla veliki\n");
+    t.push_str("humanize\tﬁnal ﬂow\n");
+    t.push_str("titleize\tﬁnal ﬂow\n");
+    t.push_str("capitalize\tﬁnal ﬂow\n");
+    t.push_str("humanize\t1st_place_winner\n");
+    t.push_str("titleize\t1st_place_winner\n");
+    t.push_str("capitalize\t1st_place_winner\n");
+    t.push_str("humanize\thello\\tworld\n");
+    t.push_str("titleize\thello\\tworld\n");
+    t.push_str("capitalize\thello\\tworld\n");
+    t.push_str("humanize\t  leading_space\n");
+    t.push_str("titleize\t  leading_space\n");
+    t.push_str("capitalize\t  leading_space\n");
+    t.push_str("humanize\tUPPER_CASE_COLUMN\n");
+    t.push_str("titleize\tUPPER_CASE_COLUMN\n");
+    t.push_str("capitalize\tUPPER_CASE_COLUMN\n");
+    t.push_str("humanize\tmixedCase_column\n");
+    t.push_str("titleize\tmixedCase_column\n");
+    t.push_str("capitalize\tmixedCase_column\n");
+    t.push_str("humanize\thtml_body_html\n");
+    t.push_str("titleize\thtml_body_html\n");
+    t.push_str("capitalize\thtml_body_html\n");
+    t.push_str("humanize\tuser_ids\n");
+    t.push_str("titleize\tuser_ids\n");
+    t.push_str("capitalize\tuser_ids\n");
+    t.push_str("humanize\tx_id\n");
+    t.push_str("titleize\tx_id\n");
+    t.push_str("capitalize\tx_id\n");
+    t.push_str("humanize\tID\n");
+    t.push_str("titleize\tID\n");
+    t.push_str("capitalize\tID\n");
+    t.push_str("humanize\tthe_ünïcödé_title\n");
+    t.push_str("titleize\tthe_ünïcödé_title\n");
+    t.push_str("capitalize\tthe_ünïcödé_title\n");
+    t.push_str("humanize\tçà et là\n");
+    t.push_str("titleize\tçà et là\n");
+    t.push_str("capitalize\tçà et là\n");
+    t.push_str("humanize\tǈudevit\n");
+    t.push_str("titleize\tǈudevit\n");
+    t.push_str("capitalize\tǈudevit\n");
+    t.push_str("humanize\tﬀ_ligature\n");
+    t.push_str("titleize\tﬀ_ligature\n");
+    t.push_str("capitalize\tﬀ_ligature\n");
+    t.push_str("humanize\tÿ_end\n");
+    t.push_str("titleize\tÿ_end\n");
+    t.push_str("capitalize\tÿ_end\n");
+    t.push_str("humanize\tŉ_apostrophe\n");
+    t.push_str("titleize\tŉ_apostrophe\n");
+    t.push_str("capitalize\tŉ_apostrophe\n");
+    t.push_str("humanize\ta.b_c\n");
+    t.push_str("titleize\ta.b_c\n");
+    t.push_str("capitalize\ta.b_c\n");
+    t.push_str("humanize\tüber-straße\n");
+    t.push_str("titleize\tüber-straße\n");
+    t.push_str("capitalize\tüber-straße\n");
+    t.push_str("humanize\tname:with:colons\n");
+    t.push_str("titleize\tname:with:colons\n");
+    t.push_str("capitalize\tname:with:colons\n");
+    t.push_str("humanize\tΣΑΣ:ΣΑΣ\n");
+    t.push_str("titleize\tΣΑΣ:ΣΑΣ\n");
+    t.push_str("capitalize\tΣΑΣ:ΣΑΣ\n");
+    t.push_str("humanize\tΑΣ.Σ\n");
+    t.push_str("titleize\tΑΣ.Σ\n");
+    t.push_str("capitalize\tΑΣ.Σ\n");
+    t.push_str("== slugs\n");
+    t.push_str("transliterate\tDonald E. Knuth\n");
+    t.push_str("parameterize\tDonald E. Knuth\n");
+    t.push_str("parameterize\tDonald E. Knuth\t_\n");
+    t.push_str("parameterize\tDonald E. Knuth\t\n");
+    t.push_str("parameterize\tDonald E. Knuth\t.\n");
+    t.push_str("parameterize\tDonald E. Knuth\t--\n");
+    t.push_str("parameterize\tDonald E. Knuth\t+\n");
+    t.push_str("parameterize\tDonald E. Knuth\t*\n");
+    t.push_str("transliterate\tÆrøskøbing\n");
+    t.push_str("parameterize\tÆrøskøbing\n");
+    t.push_str("parameterize\tÆrøskøbing\t_\n");
+    t.push_str("parameterize\tÆrøskøbing\t\n");
+    t.push_str("parameterize\tÆrøskøbing\t.\n");
+    t.push_str("parameterize\tÆrøskøbing\t--\n");
+    t.push_str("parameterize\tÆrøskøbing\t+\n");
+    t.push_str("parameterize\tÆrøskøbing\t*\n");
+    t.push_str("transliterate\tCrème brûlée — the recipe\n");
+    t.push_str("parameterize\tCrème brûlée — the recipe\n");
+    t.push_str("parameterize\tCrème brûlée — the recipe\t_\n");
+    t.push_str("parameterize\tCrème brûlée — the recipe\t\n");
+    t.push_str("parameterize\tCrème brûlée — the recipe\t.\n");
+    t.push_str("parameterize\tCrème brûlée — the recipe\t--\n");
+    t.push_str("parameterize\tCrème brûlée — the recipe\t+\n");
+    t.push_str("parameterize\tCrème brûlée — the recipe\t*\n");
+    t.push_str("transliterate\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\n");
+    t.push_str("parameterize\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\n");
+    t.push_str("parameterize\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\t_\n");
+    t.push_str("parameterize\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\t\n");
+    t.push_str("parameterize\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\t.\n");
+    t.push_str("parameterize\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\t--\n");
+    t.push_str("parameterize\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\t+\n");
+    t.push_str("parameterize\tＦｕｌｌｗｉｄｔｈ ＡＢＣ\t*\n");
+    t.push_str("transliterate\t№ 5 ½ price\n");
+    t.push_str("parameterize\t№ 5 ½ price\n");
+    t.push_str("parameterize\t№ 5 ½ price\t_\n");
+    t.push_str("parameterize\t№ 5 ½ price\t\n");
+    t.push_str("parameterize\t№ 5 ½ price\t.\n");
+    t.push_str("parameterize\t№ 5 ½ price\t--\n");
+    t.push_str("parameterize\t№ 5 ½ price\t+\n");
+    t.push_str("parameterize\t№ 5 ½ price\t*\n");
+    t.push_str("transliterate\t東京 Tokyo 2024\n");
+    t.push_str("parameterize\t東京 Tokyo 2024\n");
+    t.push_str("parameterize\t東京 Tokyo 2024\t_\n");
+    t.push_str("parameterize\t東京 Tokyo 2024\t\n");
+    t.push_str("parameterize\t東京 Tokyo 2024\t.\n");
+    t.push_str("parameterize\t東京 Tokyo 2024\t--\n");
+    t.push_str("parameterize\t東京 Tokyo 2024\t+\n");
+    t.push_str("parameterize\t東京 Tokyo 2024\t*\n");
+    t.push_str("transliterate\t---already--sluggy---\n");
+    t.push_str("parameterize\t---already--sluggy---\n");
+    t.push_str("parameterize\t---already--sluggy---\t_\n");
+    t.push_str("parameterize\t---already--sluggy---\t\n");
+    t.push_str("parameterize\t---already--sluggy---\t.\n");
+    t.push_str("parameterize\t---already--sluggy---\t--\n");
+    t.push_str("parameterize\t---already--sluggy---\t+\n");
+    t.push_str("parameterize\t---already--sluggy---\t*\n");
+    t.push_str("transliterate\tHello, World!\n");
+    t.push_str("parameterize\tHello, World!\n");
+    t.push_str("parameterize\tHello, World!\t_\n");
+    t.push_str("parameterize\tHello, World!\t\n");
+    t.push_str("parameterize\tHello, World!\t.\n");
+    t.push_str("parameterize\tHello, World!\t--\n");
+    t.push_str("parameterize\tHello, World!\t+\n");
+    t.push_str("parameterize\tHello, World!\t*\n");
+    t.push_str("transliterate\t  spaces  everywhere  \n");
+    t.push_str("parameterize\t  spaces  everywhere  \n");
+    t.push_str("parameterize\t  spaces  everywhere  \t_\n");
+    t.push_str("parameterize\t  spaces  everywhere  \t\n");
+    t.push_str("parameterize\t  spaces  everywhere  \t.\n");
+    t.push_str("parameterize\t  spaces  everywhere  \t--\n");
+    t.push_str("parameterize\t  spaces  everywhere  \t+\n");
+    t.push_str("parameterize\t  spaces  everywhere  \t*\n");
+    t.push_str("transliterate\tC++ & C# in 2024?\n");
+    t.push_str("parameterize\tC++ & C# in 2024?\n");
+    t.push_str("parameterize\tC++ & C# in 2024?\t_\n");
+    t.push_str("parameterize\tC++ & C# in 2024?\t\n");
+    t.push_str("parameterize\tC++ & C# in 2024?\t.\n");
+    t.push_str("parameterize\tC++ & C# in 2024?\t--\n");
+    t.push_str("parameterize\tC++ & C# in 2024?\t+\n");
+    t.push_str("parameterize\tC++ & C# in 2024?\t*\n");
+    t.push_str("transliterate\tÜnïcödé Strassen in München\n");
+    t.push_str("parameterize\tÜnïcödé Strassen in München\n");
+    t.push_str("parameterize\tÜnïcödé Strassen in München\t_\n");
+    t.push_str("parameterize\tÜnïcödé Strassen in München\t\n");
+    t.push_str("parameterize\tÜnïcödé Strassen in München\t.\n");
+    t.push_str("parameterize\tÜnïcödé Strassen in München\t--\n");
+    t.push_str("parameterize\tÜnïcödé Strassen in München\t+\n");
+    t.push_str("parameterize\tÜnïcödé Strassen in München\t*\n");
+    t.push_str("transliterate\tﬁrst ﬂoor ﬀ\n");
+    t.push_str("parameterize\tﬁrst ﬂoor ﬀ\n");
+    t.push_str("parameterize\tﬁrst ﬂoor ﬀ\t_\n");
+    t.push_str("parameterize\tﬁrst ﬂoor ﬀ\t\n");
+    t.push_str("parameterize\tﬁrst ﬂoor ﬀ\t.\n");
+    t.push_str("parameterize\tﬁrst ﬂoor ﬀ\t--\n");
+    t.push_str("parameterize\tﬁrst ﬂoor ﬀ\t+\n");
+    t.push_str("parameterize\tﬁrst ﬂoor ﬀ\t*\n");
+    t.push_str("transliterate\tⅫ Roman Numerals Ⅳ\n");
+    t.push_str("parameterize\tⅫ Roman Numerals Ⅳ\n");
+    t.push_str("parameterize\tⅫ Roman Numerals Ⅳ\t_\n");
+    t.push_str("parameterize\tⅫ Roman Numerals Ⅳ\t\n");
+    t.push_str("parameterize\tⅫ Roman Numerals Ⅳ\t.\n");
+    t.push_str("parameterize\tⅫ Roman Numerals Ⅳ\t--\n");
+    t.push_str("parameterize\tⅫ Roman Numerals Ⅳ\t+\n");
+    t.push_str("parameterize\tⅫ Roman Numerals Ⅳ\t*\n");
+    t.push_str("transliterate\tx² + y² = z²\n");
+    t.push_str("parameterize\tx² + y² = z²\n");
+    t.push_str("parameterize\tx² + y² = z²\t_\n");
+    t.push_str("parameterize\tx² + y² = z²\t\n");
+    t.push_str("parameterize\tx² + y² = z²\t.\n");
+    t.push_str("parameterize\tx² + y² = z²\t--\n");
+    t.push_str("parameterize\tx² + y² = z²\t+\n");
+    t.push_str("parameterize\tx² + y² = z²\t*\n");
+    t.push_str("transliterate\tcafé_au_lait-recipe\n");
+    t.push_str("parameterize\tcafé_au_lait-recipe\n");
+    t.push_str("parameterize\tcafé_au_lait-recipe\t_\n");
+    t.push_str("parameterize\tcafé_au_lait-recipe\t\n");
+    t.push_str("parameterize\tcafé_au_lait-recipe\t.\n");
+    t.push_str("parameterize\tcafé_au_lait-recipe\t--\n");
+    t.push_str("parameterize\tcafé_au_lait-recipe\t+\n");
+    t.push_str("parameterize\tcafé_au_lait-recipe\t*\n");
+    t.push_str("transliterate\tÅngström and Ørsted\n");
+    t.push_str("parameterize\tÅngström and Ørsted\n");
+    t.push_str("parameterize\tÅngström and Ørsted\t_\n");
+    t.push_str("parameterize\tÅngström and Ørsted\t\n");
+    t.push_str("parameterize\tÅngström and Ørsted\t.\n");
+    t.push_str("parameterize\tÅngström and Ørsted\t--\n");
+    t.push_str("parameterize\tÅngström and Ørsted\t+\n");
+    t.push_str("parameterize\tÅngström and Ørsted\t*\n");
+    t.push_str("transliterate\tŁódź\n");
+    t.push_str("parameterize\tŁódź\n");
+    t.push_str("parameterize\tŁódź\t_\n");
+    t.push_str("parameterize\tŁódź\t\n");
+    t.push_str("parameterize\tŁódź\t.\n");
+    t.push_str("parameterize\tŁódź\t--\n");
+    t.push_str("parameterize\tŁódź\t+\n");
+    t.push_str("parameterize\tŁódź\t*\n");
+    t.push_str("transliterate\tǄemal\n");
+    t.push_str("parameterize\tǄemal\n");
+    t.push_str("parameterize\tǄemal\t_\n");
+    t.push_str("parameterize\tǄemal\t\n");
+    t.push_str("parameterize\tǄemal\t.\n");
+    t.push_str("parameterize\tǄemal\t--\n");
+    t.push_str("parameterize\tǄemal\t+\n");
+    t.push_str("parameterize\tǄemal\t*\n");
+    t.push_str("transliterate\ttrailing.dot.\n");
+    t.push_str("parameterize\ttrailing.dot.\n");
+    t.push_str("parameterize\ttrailing.dot.\t_\n");
+    t.push_str("parameterize\ttrailing.dot.\t\n");
+    t.push_str("parameterize\ttrailing.dot.\t.\n");
+    t.push_str("parameterize\ttrailing.dot.\t--\n");
+    t.push_str("parameterize\ttrailing.dot.\t+\n");
+    t.push_str("parameterize\ttrailing.dot.\t*\n");
+    t.push_str("transliterate\ta--b__c\n");
+    t.push_str("parameterize\ta--b__c\n");
+    t.push_str("parameterize\ta--b__c\t_\n");
+    t.push_str("parameterize\ta--b__c\t\n");
+    t.push_str("parameterize\ta--b__c\t.\n");
+    t.push_str("parameterize\ta--b__c\t--\n");
+    t.push_str("parameterize\ta--b__c\t+\n");
+    t.push_str("parameterize\ta--b__c\t*\n");
+    t.push_str("transliterate\t\n");
+    t.push_str("parameterize\t\n");
+    t.push_str("parameterize\t\t_\n");
+    t.push_str("parameterize\t\t\n");
+    t.push_str("parameterize\t\t.\n");
+    t.push_str("parameterize\t\t--\n");
+    t.push_str("parameterize\t\t+\n");
+    t.push_str("parameterize\t\t*\n");
+    t.push_str("transliterate\t-\n");
+    t.push_str("parameterize\t-\n");
+    t.push_str("parameterize\t-\t_\n");
+    t.push_str("parameterize\t-\t\n");
+    t.push_str("parameterize\t-\t.\n");
+    t.push_str("parameterize\t-\t--\n");
+    t.push_str("parameterize\t-\t+\n");
+    t.push_str("parameterize\t-\t*\n");
+    t.push_str("transliterate\tÀÁÂÃÄÅ\n");
+    t.push_str("parameterize\tÀÁÂÃÄÅ\n");
+    t.push_str("parameterize\tÀÁÂÃÄÅ\t_\n");
+    t.push_str("parameterize\tÀÁÂÃÄÅ\t\n");
+    t.push_str("parameterize\tÀÁÂÃÄÅ\t.\n");
+    t.push_str("parameterize\tÀÁÂÃÄÅ\t--\n");
+    t.push_str("parameterize\tÀÁÂÃÄÅ\t+\n");
+    t.push_str("parameterize\tÀÁÂÃÄÅ\t*\n");
+    t.push_str("transliterate\tŉ\n");
+    t.push_str("parameterize\tŉ\n");
+    t.push_str("parameterize\tŉ\t_\n");
+    t.push_str("parameterize\tŉ\t\n");
+    t.push_str("parameterize\tŉ\t.\n");
+    t.push_str("parameterize\tŉ\t--\n");
+    t.push_str("parameterize\tŉ\t+\n");
+    t.push_str("parameterize\tŉ\t*\n");
+    t.push_str("transliterate\tĿl\n");
+    t.push_str("parameterize\tĿl\n");
+    t.push_str("parameterize\tĿl\t_\n");
+    t.push_str("parameterize\tĿl\t\n");
+    t.push_str("parameterize\tĿl\t.\n");
+    t.push_str("parameterize\tĿl\t--\n");
+    t.push_str("parameterize\tĿl\t+\n");
+    t.push_str("parameterize\tĿl\t*\n");
+    t.push_str("transliterate\tﬆop\n");
+    t.push_str("parameterize\tﬆop\n");
+    t.push_str("parameterize\tﬆop\t_\n");
+    t.push_str("parameterize\tﬆop\t\n");
+    t.push_str("parameterize\tﬆop\t.\n");
+    t.push_str("parameterize\tﬆop\t--\n");
+    t.push_str("parameterize\tﬆop\t+\n");
+    t.push_str("parameterize\tﬆop\t*\n");
+    t.push_str("transliterate\tẞig\n");
+    t.push_str("parameterize\tẞig\n");
+    t.push_str("parameterize\tẞig\t_\n");
+    t.push_str("parameterize\tẞig\t\n");
+    t.push_str("parameterize\tẞig\t.\n");
+    t.push_str("parameterize\tẞig\t--\n");
+    t.push_str("parameterize\tẞig\t+\n");
+    t.push_str("parameterize\tẞig\t*\n");
+    t.push_str("== ordinals\n");
+    t.push_str("ordinal\ti:0\n");
+    t.push_str("ordinalize\ti:0\n");
+    t.push_str("ordinal\ti:1\n");
+    t.push_str("ordinalize\ti:1\n");
+    t.push_str("ordinal\ti:2\n");
+    t.push_str("ordinalize\ti:2\n");
+    t.push_str("ordinal\ti:3\n");
+    t.push_str("ordinalize\ti:3\n");
+    t.push_str("ordinal\ti:4\n");
+    t.push_str("ordinalize\ti:4\n");
+    t.push_str("ordinal\ti:10\n");
+    t.push_str("ordinalize\ti:10\n");
+    t.push_str("ordinal\ti:11\n");
+    t.push_str("ordinalize\ti:11\n");
+    t.push_str("ordinal\ti:12\n");
+    t.push_str("ordinalize\ti:12\n");
+    t.push_str("ordinal\ti:13\n");
+    t.push_str("ordinalize\ti:13\n");
+    t.push_str("ordinal\ti:14\n");
+    t.push_str("ordinalize\ti:14\n");
+    t.push_str("ordinal\ti:21\n");
+    t.push_str("ordinalize\ti:21\n");
+    t.push_str("ordinal\ti:22\n");
+    t.push_str("ordinalize\ti:22\n");
+    t.push_str("ordinal\ti:23\n");
+    t.push_str("ordinalize\ti:23\n");
+    t.push_str("ordinal\ti:101\n");
+    t.push_str("ordinalize\ti:101\n");
+    t.push_str("ordinal\ti:102\n");
+    t.push_str("ordinalize\ti:102\n");
+    t.push_str("ordinal\ti:103\n");
+    t.push_str("ordinalize\ti:103\n");
+    t.push_str("ordinal\ti:111\n");
+    t.push_str("ordinalize\ti:111\n");
+    t.push_str("ordinal\ti:112\n");
+    t.push_str("ordinalize\ti:112\n");
+    t.push_str("ordinal\ti:113\n");
+    t.push_str("ordinalize\ti:113\n");
+    t.push_str("ordinal\ti:1002\n");
+    t.push_str("ordinalize\ti:1002\n");
+    t.push_str("ordinal\ti:1003\n");
+    t.push_str("ordinalize\ti:1003\n");
+    t.push_str("ordinal\ti:-1\n");
+    t.push_str("ordinalize\ti:-1\n");
+    t.push_str("ordinal\ti:-2\n");
+    t.push_str("ordinalize\ti:-2\n");
+    t.push_str("ordinal\ti:-11\n");
+    t.push_str("ordinalize\ti:-11\n");
+    t.push_str("ordinal\ti:-12\n");
+    t.push_str("ordinalize\ti:-12\n");
+    t.push_str("ordinal\ti:-13\n");
+    t.push_str("ordinalize\ti:-13\n");
+    t.push_str("ordinal\ti:-21\n");
+    t.push_str("ordinalize\ti:-21\n");
+    t.push_str("ordinal\ti:-1021\n");
+    t.push_str("ordinalize\ti:-1021\n");
+    t.push_str("ordinal\ti:1000000\n");
+    t.push_str("ordinalize\ti:1000000\n");
+    t.push_str("ordinal\ti:1000000000000000000\n");
+    t.push_str("ordinalize\ti:1000000000000000000\n");
+    t.push_str("ordinal\ti:-1000000000000000000\n");
+    t.push_str("ordinalize\ti:-1000000000000000000\n");
+    t.push_str("ordinal\ti:9223372036854775807\n");
+    t.push_str("ordinalize\ti:9223372036854775807\n");
+    t.push_str("ordinal\ti:123456789012345678901234567890\n");
+    t.push_str("ordinalize\ti:123456789012345678901234567890\n");
+    t.push_str("ordinal\ti:234994\n");
+    t.push_str("ordinalize\ti:234994\n");
+    t.push_str("ordinal\ti:-323174\n");
+    t.push_str("ordinalize\ti:-323174\n");
+    t.push_str("ordinal\ti:517035\n");
+    t.push_str("ordinalize\ti:517035\n");
+    t.push_str("ordinal\ti:998800\n");
+    t.push_str("ordinalize\ti:998800\n");
+    t.push_str("ordinal\ti:-747738\n");
+    t.push_str("ordinalize\ti:-747738\n");
+    t.push_str("ordinal\ti:-555518\n");
+    t.push_str("ordinalize\ti:-555518\n");
+    t.push_str("ordinal\ti:-14183\n");
+    t.push_str("ordinalize\ti:-14183\n");
+    t.push_str("ordinal\ti:130955\n");
+    t.push_str("ordinalize\ti:130955\n");
+    t.push_str("ordinal\ti:-386326\n");
+    t.push_str("ordinalize\ti:-386326\n");
+    t.push_str("ordinal\ti:-440458\n");
+    t.push_str("ordinalize\ti:-440458\n");
+    t.push_str("ordinal\ti:502679\n");
+    t.push_str("ordinalize\ti:502679\n");
+    t.push_str("ordinal\ti:-941932\n");
+    t.push_str("ordinalize\ti:-941932\n");
+    t.push_str("ordinal\ti:-268642\n");
+    t.push_str("ordinalize\ti:-268642\n");
+    t.push_str("ordinal\ti:-711048\n");
+    t.push_str("ordinalize\ti:-711048\n");
+    t.push_str("ordinal\ti:-988382\n");
+    t.push_str("ordinalize\ti:-988382\n");
+    t.push_str("ordinal\ti:522133\n");
+    t.push_str("ordinalize\ti:522133\n");
+    t.push_str("ordinal\ti:143610\n");
+    t.push_str("ordinalize\ti:143610\n");
+    t.push_str("ordinal\ti:-383280\n");
+    t.push_str("ordinalize\ti:-383280\n");
+    t.push_str("ordinal\ti:-76822\n");
+    t.push_str("ordinalize\ti:-76822\n");
+    t.push_str("ordinal\ti:348037\n");
+    t.push_str("ordinalize\ti:348037\n");
+    t.push_str("ordinal\ti:999116\n");
+    t.push_str("ordinalize\ti:999116\n");
+    t.push_str("ordinal\ti:-430945\n");
+    t.push_str("ordinalize\ti:-430945\n");
+    t.push_str("ordinal\ti:167324\n");
+    t.push_str("ordinalize\ti:167324\n");
+    t.push_str("ordinal\ti:-337692\n");
+    t.push_str("ordinalize\ti:-337692\n");
+    t.push_str("ordinal\ti:-838186\n");
+    t.push_str("ordinalize\ti:-838186\n");
+    t.push_str("ordinal\ti:-834694\n");
+    t.push_str("ordinalize\ti:-834694\n");
+    t.push_str("ordinal\ti:-192688\n");
+    t.push_str("ordinalize\ti:-192688\n");
+    t.push_str("ordinal\ti:348369\n");
+    t.push_str("ordinalize\ti:348369\n");
+    t.push_str("ordinal\ti:-468426\n");
+    t.push_str("ordinalize\ti:-468426\n");
+    t.push_str("ordinal\ti:-518246\n");
+    t.push_str("ordinalize\ti:-518246\n");
+    t.push_str("ordinal\ts:42\n");
+    t.push_str("ordinalize\ts:42\n");
+    t.push_str("ordinal\ts: 7 \n");
+    t.push_str("ordinalize\ts: 7 \n");
+    t.push_str("ordinal\ts:-11\n");
+    t.push_str("ordinalize\ts:-11\n");
+    t.push_str("ordinal\ts:+3\n");
+    t.push_str("ordinalize\ts:+3\n");
+    t.push_str("ordinal\ts:1_000_002\n");
+    t.push_str("ordinalize\ts:1_000_002\n");
+    t.push_str("ordinal\ts:١٢\n");
+    t.push_str("ordinalize\ts:١٢\n");
+    t.push_str("ordinal\ts:٣\n");
+    t.push_str("ordinalize\ts:٣\n");
+    t.push_str("ordinal\ts:abc\n");
+    t.push_str("ordinalize\ts:abc\n");
+    t.push_str("ordinal\ts:\n");
+    t.push_str("ordinalize\ts:\n");
+    t.push_str("ordinal\ts:1__0\n");
+    t.push_str("ordinalize\ts:1__0\n");
+    t.push_str("ordinal\ts:_1\n");
+    t.push_str("ordinalize\ts:_1\n");
+    t.push_str("ordinal\ts:12.5\n");
+    t.push_str("ordinalize\ts:12.5\n");
+    t.push_str("ordinal\ts:0x10\n");
+    t.push_str("ordinalize\ts:0x10\n");
+    t.push_str("ordinal\ts: 1 \n");
+    t.push_str("ordinalize\ts: 1 \n");
+    t.push_str("ordinal\ts:99999999999999999999999993\n");
+    t.push_str("ordinalize\ts:99999999999999999999999993\n");
+    t.push_str("ordinal\tb:True\n");
+    t.push_str("ordinalize\tb:True\n");
+    t.push_str("ordinal\tb:False\n");
+    t.push_str("ordinalize\tb:False\n");
+    t.push_str("ordinal\tf:2.7\n");
+    t.push_str("ordinalize\tf:2.7\n");
+    t.push_str("ordinal\tf:-11.0\n");
+    t.push_str("ordinalize\tf:-11.0\n");
+    t.push_str("ordinal\tf:3.9\n");
+    t.push_str("ordinalize\tf:3.9\n");
+    t.push_str("ordinal\tf:0.5\n");
+    t.push_str("ordinalize\tf:0.5\n");
+    t.push_str("ordinal\tf:1e+22\n");
+    t.push_str("ordinalize\tf:1e+22\n");
+    t.push_str("ordinal\tf:-0.0\n");
+    t.push_str("ordinalize\tf:-0.0\n");
+    t.push_str("== configure\n");
+    t.push_str("pluralize\toctopus\n");
+    t.push_str("pluralize\tOctopus\n");
+    t.push_str("irregular\toctopus\toctopodes\n");
+    t.push_str("pluralize\toctopus\n");
+    t.push_str("pluralize\tOctopus\n");
+    t.push_str("singularize\toctopodes\n");
+    t.push_str("singularize\tOCTOPODES\n");
+    t.push_str("pluralize\tCamelOctopus\n");
+    t.push_str("irregular\tgoose\tgeese\n");
+    t.push_str("pluralize\tgoose\n");
+    t.push_str("singularize\tgeese\n");
+    t.push_str("pluralize\tmongoose\n");
+    t.push_str("irregular\tPerson\tLeute\n");
+    t.push_str("pluralize\tperson\n");
+    t.push_str("pluralize\tPerson\n");
+    t.push_str("singularize\tLeute\n");
+    t.push_str("singularize\tleute\n");
+    t.push_str("pluralize\tSalesPerson\n");
+    t.push_str("uncountable\tpolice\n");
+    t.push_str("pluralize\tpolice\n");
+    t.push_str("singularize\tpolice\n");
+    t.push_str("singularize\tPolice\n");
+    t.push_str("singularize\tthe_police\n");
+    t.push_str("singularize\tnopolice\n");
+    t.push_str("pluralize\tPolice\n");
+    t.push_str("plural\t(?i)(ax)is$\t\\\\1es\n");
+    t.push_str("pluralize\ttaxis\n");
+    t.push_str("plural\t(?i)(quiz)$\t\\\\1zes_\\\\g<1>\n");
+    t.push_str("pluralize\tquiz\n");
+    t.push_str("singular\t(?i)(kn|w|l)ives$\t\\\\1ife\n");
+    t.push_str("singularize\tknives\n");
+    t.push_str("singularize\tlives\n");
+    t.push_str("singular\t(?i)(cact|fung)i$\t\\\\1us\n");
+    t.push_str("singularize\tcacti\n");
+    t.push_str("singularize\tfungi\n");
+    t.push_str("plural\t(?i)(cact|fung)us$\t\\\\1i\n");
+    t.push_str("pluralize\tcactus\n");
+    t.push_str("pluralize\tfungus\n");
+    t.push_str("roundtrip\tcactus\n");
+    t.push_str("plural\t(?i)(bad\t\\\\1\n");
+    t.push_str("pluralize\tdog\n");
+    t.push_str("pluralize\t\n");
+    t.push_str("reset\n");
+    t.push_str("plural\t(?i)x$\t\\\\2\n");
+    t.push_str("pluralize\tfox\n");
+    t.push_str("pluralize\tcat\n");
+    t.push_str("reset\n");
+    t.push_str("plural\t^(dat)um$\t\\\\g<name>\n");
+    t.push_str("pluralize\tdatum\n");
+    t.push_str("reset\n");
+    t.push_str("singular\t(?i)(?P<stem>c)hildren$\t\\\\g<stem>hild\n");
+    t.push_str("singularize\tchildren\n");
+    t.push_str("singularize\tChildren\n");
+    t.push_str("singular\t(?i)a{2,}rgh$\targh\n");
+    t.push_str("singularize\taaaargh\n");
+    t.push_str("singularize\taargh\n");
+    t.push_str("singular\t(?i)[z-a]$\t\n");
+    t.push_str("singularize\tdogs\n");
+    t.push_str("reset\n");
+    t.push_str("irregular\tchild\tkids\n");
+    t.push_str("pluralize\tchild\n");
+    t.push_str("singularize\tkids\n");
+    t.push_str("pluralize\tChild\n");
+    t.push_str("singularize\tKids\n");
+    t.push_str("reset\n");
+    t.push_str("pluralize\toctopus\n");
+    t.push_str("pluralize\tgoose\n");
+    t.push_str("== scaffold\n");
+    t.push_str("scaffold\tBlogPost title:string body:text author_id:integer published_at:datetime\n");
+    t.push_str("scaffold\tPerson first_name:string last_name:string company_id:integer\n");
+    t.push_str("scaffold\tCategory name:string parent_id:integer position:integer\n");
+    t.push_str("scaffold\tOrderLineItem order_id:integer product_id:integer unit_price_cents:integer\n");
+    t.push_str("scaffold\tHTTPRequestLog status:integer remote_ip:string user_agent:string\n");
+    t.push_str("scaffold\tAddress street:string city:string postal_code:string country_code:string\n");
+    t.push_str("scaffold\tMouse wheel_count:integer dpi:integer\n");
+    t.push_str("scaffold\tAnalysis dataset_id:integer criteria:json\n");
+    t.push_str("scaffold\tChild guardian_id:integer birthday:date\n");
+    t.push_str("scaffold\tOctopus arm_count:integer habitat:string\n");
+    t.push_str("scaffold\tDatum value:float source_id:integer\n");
+    t.push_str("scaffold\tStatus code:string label:string\n");
+    t.push_str("scaffold\tAdminUser email:string role_ids:json\n");
+    t.push_str("scaffold\tOx name:string yoke_id:integer\n");
+    t.push_str("scaffold\tMedium kind:string\n");
+    t.push_str("== edges\n");
+    t.push_str("pluralize\t\n");
+    t.push_str("pluralize\t \n");
+    t.push_str("pluralize\t_\n");
+    t.push_str("pluralize\t-\n");
+    t.push_str("pluralize\ts\n");
+    t.push_str("pluralize\tS\n");
+    t.push_str("pluralize\tss\n");
+    t.push_str("pluralize\ty\n");
+    t.push_str("pluralize\ties\n");
+    t.push_str("pluralize\t_id_\n");
+    t.push_str("pluralize\t12345\n");
+    t.push_str("pluralize\t!!!\n");
+    t.push_str("singularize\t\n");
+    t.push_str("singularize\t \n");
+    t.push_str("singularize\t_\n");
+    t.push_str("singularize\t-\n");
+    t.push_str("singularize\ts\n");
+    t.push_str("singularize\tS\n");
+    t.push_str("singularize\tss\n");
+    t.push_str("singularize\ty\n");
+    t.push_str("singularize\ties\n");
+    t.push_str("singularize\t_id_\n");
+    t.push_str("singularize\t12345\n");
+    t.push_str("singularize\t!!!\n");
+    t.push_str("underscore\t\n");
+    t.push_str("underscore\t \n");
+    t.push_str("underscore\t_\n");
+    t.push_str("underscore\t-\n");
+    t.push_str("underscore\ts\n");
+    t.push_str("underscore\tS\n");
+    t.push_str("underscore\tss\n");
+    t.push_str("underscore\ty\n");
+    t.push_str("underscore\ties\n");
+    t.push_str("underscore\t_id_\n");
+    t.push_str("underscore\t12345\n");
+    t.push_str("underscore\t!!!\n");
+    t.push_str("humanize\t\n");
+    t.push_str("humanize\t \n");
+    t.push_str("humanize\t_\n");
+    t.push_str("humanize\t-\n");
+    t.push_str("humanize\ts\n");
+    t.push_str("humanize\tS\n");
+    t.push_str("humanize\tss\n");
+    t.push_str("humanize\ty\n");
+    t.push_str("humanize\ties\n");
+    t.push_str("humanize\t_id_\n");
+    t.push_str("humanize\t12345\n");
+    t.push_str("humanize\t!!!\n");
+    t.push_str("titleize\t\n");
+    t.push_str("titleize\t \n");
+    t.push_str("titleize\t_\n");
+    t.push_str("titleize\t-\n");
+    t.push_str("titleize\ts\n");
+    t.push_str("titleize\tS\n");
+    t.push_str("titleize\tss\n");
+    t.push_str("titleize\ty\n");
+    t.push_str("titleize\ties\n");
+    t.push_str("titleize\t_id_\n");
+    t.push_str("titleize\t12345\n");
+    t.push_str("titleize\t!!!\n");
+    t.push_str("tableize\t\n");
+    t.push_str("tableize\t \n");
+    t.push_str("tableize\t_\n");
+    t.push_str("tableize\t-\n");
+    t.push_str("tableize\ts\n");
+    t.push_str("tableize\tS\n");
+    t.push_str("tableize\tss\n");
+    t.push_str("tableize\ty\n");
+    t.push_str("tableize\ties\n");
+    t.push_str("tableize\t_id_\n");
+    t.push_str("tableize\t12345\n");
+    t.push_str("tableize\t!!!\n");
+    t.push_str("parameterize\t\n");
+    t.push_str("parameterize\t \n");
+    t.push_str("parameterize\t_\n");
+    t.push_str("parameterize\t-\n");
+    t.push_str("parameterize\ts\n");
+    t.push_str("parameterize\tS\n");
+    t.push_str("parameterize\tss\n");
+    t.push_str("parameterize\ty\n");
+    t.push_str("parameterize\ties\n");
+    t.push_str("parameterize\t_id_\n");
+    t.push_str("parameterize\t12345\n");
+    t.push_str("parameterize\t!!!\n");
+    t.push_str("dasherize\t\n");
+    t.push_str("dasherize\t \n");
+    t.push_str("dasherize\t_\n");
+    t.push_str("dasherize\t-\n");
+    t.push_str("dasherize\ts\n");
+    t.push_str("dasherize\tS\n");
+    t.push_str("dasherize\tss\n");
+    t.push_str("dasherize\ty\n");
+    t.push_str("dasherize\ties\n");
+    t.push_str("dasherize\t_id_\n");
+    t.push_str("dasherize\t12345\n");
+    t.push_str("dasherize\t!!!\n");
+    t.push_str("transliterate\t\n");
+    t.push_str("transliterate\t \n");
+    t.push_str("transliterate\t_\n");
+    t.push_str("transliterate\t-\n");
+    t.push_str("transliterate\ts\n");
+    t.push_str("transliterate\tS\n");
+    t.push_str("transliterate\tss\n");
+    t.push_str("transliterate\ty\n");
+    t.push_str("transliterate\ties\n");
+    t.push_str("transliterate\t_id_\n");
+    t.push_str("transliterate\t12345\n");
+    t.push_str("transliterate\t!!!\n");
+    t.push_str("camelize\t\tlower\n");
+    t.push_str("camelize\t\n");
+    t.push_str("camelize\t_\tlower\n");
+    t.push_str("camelize\t__x\tlower\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# cp;lower;upper;title;flags;ccc;nfkd (flags: c cased, i case-ignorable)\n");
+    t.push_str("9;9;9;9;;0;9\n");
+    t.push_str("a;a;a;a;;0;a\n");
+    t.push_str("20;20;20;20;;0;20\n");
+    t.push_str("21;21;21;21;;0;21\n");
+    t.push_str("22;22;22;22;;0;22\n");
+    t.push_str("23;23;23;23;;0;23\n");
+    t.push_str("24;24;24;24;;0;24\n");
+    t.push_str("25;25;25;25;;0;25\n");
+    t.push_str("26;26;26;26;;0;26\n");
+    t.push_str("27;27;27;27;i;0;27\n");
+    t.push_str("28;28;28;28;;0;28\n");
+    t.push_str("29;29;29;29;;0;29\n");
+    t.push_str("2a;2a;2a;2a;;0;2a\n");
+    t.push_str("2b;2b;2b;2b;;0;2b\n");
+    t.push_str("2c;2c;2c;2c;;0;2c\n");
+    t.push_str("2d;2d;2d;2d;;0;2d\n");
+    t.push_str("2e;2e;2e;2e;i;0;2e\n");
+    t.push_str("2f;2f;2f;2f;;0;2f\n");
+    t.push_str("30;30;30;30;;0;30\n");
+    t.push_str("31;31;31;31;;0;31\n");
+    t.push_str("32;32;32;32;;0;32\n");
+    t.push_str("33;33;33;33;;0;33\n");
+    t.push_str("34;34;34;34;;0;34\n");
+    t.push_str("35;35;35;35;;0;35\n");
+    t.push_str("36;36;36;36;;0;36\n");
+    t.push_str("37;37;37;37;;0;37\n");
+    t.push_str("38;38;38;38;;0;38\n");
+    t.push_str("39;39;39;39;;0;39\n");
+    t.push_str("3a;3a;3a;3a;i;0;3a\n");
+    t.push_str("3b;3b;3b;3b;;0;3b\n");
+    t.push_str("3c;3c;3c;3c;;0;3c\n");
+    t.push_str("3d;3d;3d;3d;;0;3d\n");
+    t.push_str("3e;3e;3e;3e;;0;3e\n");
+    t.push_str("3f;3f;3f;3f;;0;3f\n");
+    t.push_str("40;40;40;40;;0;40\n");
+    t.push_str("41;61;41;41;c;0;41\n");
+    t.push_str("42;62;42;42;c;0;42\n");
+    t.push_str("43;63;43;43;c;0;43\n");
+    t.push_str("44;64;44;44;c;0;44\n");
+    t.push_str("45;65;45;45;c;0;45\n");
+    t.push_str("46;66;46;46;c;0;46\n");
+    t.push_str("47;67;47;47;c;0;47\n");
+    t.push_str("48;68;48;48;c;0;48\n");
+    t.push_str("49;69;49;49;c;0;49\n");
+    t.push_str("4a;6a;4a;4a;c;0;4a\n");
+    t.push_str("4b;6b;4b;4b;c;0;4b\n");
+    t.push_str("4c;6c;4c;4c;c;0;4c\n");
+    t.push_str("4d;6d;4d;4d;c;0;4d\n");
+    t.push_str("4e;6e;4e;4e;c;0;4e\n");
+    t.push_str("4f;6f;4f;4f;c;0;4f\n");
+    t.push_str("50;70;50;50;c;0;50\n");
+    t.push_str("51;71;51;51;c;0;51\n");
+    t.push_str("52;72;52;52;c;0;52\n");
+    t.push_str("53;73;53;53;c;0;53\n");
+    t.push_str("54;74;54;54;c;0;54\n");
+    t.push_str("55;75;55;55;c;0;55\n");
+    t.push_str("56;76;56;56;c;0;56\n");
+    t.push_str("57;77;57;57;c;0;57\n");
+    t.push_str("58;78;58;58;c;0;58\n");
+    t.push_str("59;79;59;59;c;0;59\n");
+    t.push_str("5a;7a;5a;5a;c;0;5a\n");
+    t.push_str("5b;5b;5b;5b;;0;5b\n");
+    t.push_str("5c;5c;5c;5c;;0;5c\n");
+    t.push_str("5d;5d;5d;5d;;0;5d\n");
+    t.push_str("5e;5e;5e;5e;i;0;5e\n");
+    t.push_str("5f;5f;5f;5f;;0;5f\n");
+    t.push_str("60;60;60;60;i;0;60\n");
+    t.push_str("61;61;41;41;c;0;61\n");
+    t.push_str("62;62;42;42;c;0;62\n");
+    t.push_str("63;63;43;43;c;0;63\n");
+    t.push_str("64;64;44;44;c;0;64\n");
+    t.push_str("65;65;45;45;c;0;65\n");
+    t.push_str("66;66;46;46;c;0;66\n");
+    t.push_str("67;67;47;47;c;0;67\n");
+    t.push_str("68;68;48;48;c;0;68\n");
+    t.push_str("69;69;49;49;c;0;69\n");
+    t.push_str("6a;6a;4a;4a;c;0;6a\n");
+    t.push_str("6b;6b;4b;4b;c;0;6b\n");
+    t.push_str("6c;6c;4c;4c;c;0;6c\n");
+    t.push_str("6d;6d;4d;4d;c;0;6d\n");
+    t.push_str("6e;6e;4e;4e;c;0;6e\n");
+    t.push_str("6f;6f;4f;4f;c;0;6f\n");
+    t.push_str("70;70;50;50;c;0;70\n");
+    t.push_str("71;71;51;51;c;0;71\n");
+    t.push_str("72;72;52;52;c;0;72\n");
+    t.push_str("73;73;53;53;c;0;73\n");
+    t.push_str("74;74;54;54;c;0;74\n");
+    t.push_str("75;75;55;55;c;0;75\n");
+    t.push_str("76;76;56;56;c;0;76\n");
+    t.push_str("77;77;57;57;c;0;77\n");
+    t.push_str("78;78;58;58;c;0;78\n");
+    t.push_str("79;79;59;59;c;0;79\n");
+    t.push_str("7a;7a;5a;5a;c;0;7a\n");
+    t.push_str("7b;7b;7b;7b;;0;7b\n");
+    t.push_str("7c;7c;7c;7c;;0;7c\n");
+    t.push_str("7d;7d;7d;7d;;0;7d\n");
+    t.push_str("7e;7e;7e;7e;;0;7e\n");
+    t.push_str("b2;b2;b2;b2;;0;32\n");
+    t.push_str("b7;b7;b7;b7;i;0;b7\n");
+    t.push_str("bd;bd;bd;bd;;0;31 2044 32\n");
+    t.push_str("c0;e0;c0;c0;c;0;41 300\n");
+    t.push_str("c1;e1;c1;c1;c;0;41 301\n");
+    t.push_str("c2;e2;c2;c2;c;0;41 302\n");
+    t.push_str("c3;e3;c3;c3;c;0;41 303\n");
+    t.push_str("c4;e4;c4;c4;c;0;41 308\n");
+    t.push_str("c5;e5;c5;c5;c;0;41 30a\n");
+    t.push_str("c6;e6;c6;c6;c;0;c6\n");
+    t.push_str("c7;e7;c7;c7;c;0;43 327\n");
+    t.push_str("c8;e8;c8;c8;c;0;45 300\n");
+    t.push_str("c9;e9;c9;c9;c;0;45 301\n");
+    t.push_str("cf;ef;cf;cf;c;0;49 308\n");
+    t.push_str("d3;f3;d3;d3;c;0;4f 301\n");
+    t.push_str("d6;f6;d6;d6;c;0;4f 308\n");
+    t.push_str("d8;f8;d8;d8;c;0;d8\n");
+    t.push_str("db;fb;db;db;c;0;55 302\n");
+    t.push_str("dc;fc;dc;dc;c;0;55 308\n");
+    t.push_str("df;df;53 53;53 73;c;0;df\n");
+    t.push_str("e0;e0;c0;c0;c;0;61 300\n");
+    t.push_str("e1;e1;c1;c1;c;0;61 301\n");
+    t.push_str("e2;e2;c2;c2;c;0;61 302\n");
+    t.push_str("e3;e3;c3;c3;c;0;61 303\n");
+    t.push_str("e4;e4;c4;c4;c;0;61 308\n");
+    t.push_str("e5;e5;c5;c5;c;0;61 30a\n");
+    t.push_str("e6;e6;c6;c6;c;0;e6\n");
+    t.push_str("e7;e7;c7;c7;c;0;63 327\n");
+    t.push_str("e8;e8;c8;c8;c;0;65 300\n");
+    t.push_str("e9;e9;c9;c9;c;0;65 301\n");
+    t.push_str("ef;ef;cf;cf;c;0;69 308\n");
+    t.push_str("f3;f3;d3;d3;c;0;6f 301\n");
+    t.push_str("f6;f6;d6;d6;c;0;6f 308\n");
+    t.push_str("f8;f8;d8;d8;c;0;f8\n");
+    t.push_str("fb;fb;db;db;c;0;75 302\n");
+    t.push_str("fc;fc;dc;dc;c;0;75 308\n");
+    t.push_str("ff;ff;178;178;c;0;79 308\n");
+    t.push_str("13f;140;13f;13f;c;0;4c b7\n");
+    t.push_str("140;140;13f;13f;c;0;6c b7\n");
+    t.push_str("141;142;141;141;c;0;141\n");
+    t.push_str("142;142;141;141;c;0;142\n");
+    t.push_str("149;149;2bc 4e;2bc 4e;c;0;2bc 6e\n");
+    t.push_str("178;ff;178;178;c;0;59 308\n");
+    t.push_str("179;17a;179;179;c;0;5a 301\n");
+    t.push_str("17a;17a;179;179;c;0;7a 301\n");
+    t.push_str("1c4;1c6;1c4;1c5;c;0;44 5a 30c\n");
+    t.push_str("1c5;1c6;1c4;1c5;c;0;44 7a 30c\n");
+    t.push_str("1c6;1c6;1c4;1c5;c;0;64 7a 30c\n");
+    t.push_str("1c7;1c9;1c7;1c8;c;0;4c 4a\n");
+    t.push_str("1c8;1c9;1c7;1c8;c;0;4c 6a\n");
+    t.push_str("1c9;1c9;1c7;1c8;c;0;6c 6a\n");
+    t.push_str("2bc;2bc;2bc;2bc;i;0;2bc\n");
+    t.push_str("300;300;300;300;i;230;300\n");
+    t.push_str("301;301;301;301;i;230;301\n");
+    t.push_str("302;302;302;302;i;230;302\n");
+    t.push_str("303;303;303;303;i;230;303\n");
+    t.push_str("308;308;308;308;i;230;308\n");
+    t.push_str("30a;30a;30a;30a;i;230;30a\n");
+    t.push_str("30c;30c;30c;30c;i;230;30c\n");
+    t.push_str("327;327;327;327;i;202;327\n");
+    t.push_str("389;3ae;389;389;c;0;397 301\n");
+    t.push_str("38c;3cc;38c;38c;c;0;39f 301\n");
+    t.push_str("391;3b1;391;391;c;0;391\n");
+    t.push_str("394;3b4;394;394;c;0;394\n");
+    t.push_str("395;3b5;395;395;c;0;395\n");
+    t.push_str("397;3b7;397;397;c;0;397\n");
+    t.push_str("399;3b9;399;399;c;0;399\n");
+    t.push_str("39a;3ba;39a;39a;c;0;39a\n");
+    t.push_str("39b;3bb;39b;39b;c;0;39b\n");
+    t.push_str("39c;3bc;39c;39c;c;0;39c\n");
+    t.push_str("39d;3bd;39d;39d;c;0;39d\n");
+    t.push_str("39f;3bf;39f;39f;c;0;39f\n");
+    t.push_str("3a1;3c1;3a1;3a1;c;0;3a1\n");
+    t.push_str("3a3;3c3;3a3;3a3;c;0;3a3\n");
+    t.push_str("3a4;3c4;3a4;3a4;c;0;3a4\n");
+    t.push_str("3a5;3c5;3a5;3a5;c;0;3a5\n");
+    t.push_str("3a6;3c6;3a6;3a6;c;0;3a6\n");
+    t.push_str("3a7;3c7;3a7;3a7;c;0;3a7\n");
+    t.push_str("3a8;3c8;3a8;3a8;c;0;3a8\n");
+    t.push_str("3a9;3c9;3a9;3a9;c;0;3a9\n");
+    t.push_str("3ae;3ae;389;389;c;0;3b7 301\n");
+    t.push_str("3b1;3b1;391;391;c;0;3b1\n");
+    t.push_str("3b4;3b4;394;394;c;0;3b4\n");
+    t.push_str("3b5;3b5;395;395;c;0;3b5\n");
+    t.push_str("3b7;3b7;397;397;c;0;3b7\n");
+    t.push_str("3b9;3b9;399;399;c;0;3b9\n");
+    t.push_str("3ba;3ba;39a;39a;c;0;3ba\n");
+    t.push_str("3bb;3bb;39b;39b;c;0;3bb\n");
+    t.push_str("3bc;3bc;39c;39c;c;0;3bc\n");
+    t.push_str("3bd;3bd;39d;39d;c;0;3bd\n");
+    t.push_str("3bf;3bf;39f;39f;c;0;3bf\n");
+    t.push_str("3c1;3c1;3a1;3a1;c;0;3c1\n");
+    t.push_str("3c2;3c2;3a3;3a3;c;0;3c2\n");
+    t.push_str("3c3;3c3;3a3;3a3;c;0;3c3\n");
+    t.push_str("3c4;3c4;3a4;3a4;c;0;3c4\n");
+    t.push_str("3c5;3c5;3a5;3a5;c;0;3c5\n");
+    t.push_str("3c6;3c6;3a6;3a6;c;0;3c6\n");
+    t.push_str("3c7;3c7;3a7;3a7;c;0;3c7\n");
+    t.push_str("3c8;3c8;3a8;3a8;c;0;3c8\n");
+    t.push_str("3c9;3c9;3a9;3a9;c;0;3c9\n");
+    t.push_str("3cc;3cc;38c;38c;c;0;3bf 301\n");
+    t.push_str("661;661;661;661;;0;661\n");
+    t.push_str("662;662;662;662;;0;662\n");
+    t.push_str("663;663;663;663;;0;663\n");
+    t.push_str("1e9e;df;1e9e;1e9e;c;0;1e9e\n");
+    t.push_str("2003;2003;2003;2003;;0;20\n");
+    t.push_str("2014;2014;2014;2014;;0;2014\n");
+    t.push_str("2044;2044;2044;2044;;0;2044\n");
+    t.push_str("2116;2116;2116;2116;;0;4e 6f\n");
+    t.push_str("2163;2173;2163;2163;c;0;49 56\n");
+    t.push_str("216b;217b;216b;216b;c;0;58 49 49\n");
+    t.push_str("2173;2173;2163;2163;c;0;69 76\n");
+    t.push_str("217b;217b;216b;216b;c;0;78 69 69\n");
+    t.push_str("4eac;4eac;4eac;4eac;;0;4eac\n");
+    t.push_str("524d;524d;524d;524d;;0;524d\n");
+    t.push_str("540d;540d;540d;540d;;0;540d\n");
+    t.push_str("6771;6771;6771;6771;;0;6771\n");
+    t.push_str("fb00;fb00;46 46;46 66;c;0;66 66\n");
+    t.push_str("fb01;fb01;46 49;46 69;c;0;66 69\n");
+    t.push_str("fb02;fb02;46 4c;46 6c;c;0;66 6c\n");
+    t.push_str("fb06;fb06;53 54;53 74;c;0;73 74\n");
+    t.push_str("ff21;ff41;ff21;ff21;c;0;41\n");
+    t.push_str("ff22;ff42;ff22;ff22;c;0;42\n");
+    t.push_str("ff23;ff43;ff23;ff23;c;0;43\n");
+    t.push_str("ff24;ff44;ff24;ff24;c;0;44\n");
+    t.push_str("ff26;ff46;ff26;ff26;c;0;46\n");
+    t.push_str("ff28;ff48;ff28;ff28;c;0;48\n");
+    t.push_str("ff29;ff49;ff29;ff29;c;0;49\n");
+    t.push_str("ff2c;ff4c;ff2c;ff2c;c;0;4c\n");
+    t.push_str("ff34;ff54;ff34;ff34;c;0;54\n");
+    t.push_str("ff35;ff55;ff35;ff35;c;0;55\n");
+    t.push_str("ff37;ff57;ff37;ff37;c;0;57\n");
+    t.push_str("ff41;ff41;ff21;ff21;c;0;61\n");
+    t.push_str("ff42;ff42;ff22;ff22;c;0;62\n");
+    t.push_str("ff43;ff43;ff23;ff23;c;0;63\n");
+    t.push_str("ff44;ff44;ff24;ff24;c;0;64\n");
+    t.push_str("ff46;ff46;ff26;ff26;c;0;66\n");
+    t.push_str("ff48;ff48;ff28;ff28;c;0;68\n");
+    t.push_str("ff49;ff49;ff29;ff29;c;0;69\n");
+    t.push_str("ff4c;ff4c;ff2c;ff2c;c;0;6c\n");
+    t.push_str("ff54;ff54;ff34;ff34;c;0;74\n");
+    t.push_str("ff55;ff55;ff35;ff35;c;0;75\n");
+    t.push_str("ff57;ff57;ff37;ff37;c;0;77\n");
+    v.push(DataFile { path: "unicode.txt".to_string(), hex: false, body: t });
+}
