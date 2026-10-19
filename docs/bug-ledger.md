@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 282 |
-| codegen-gap | 274 |
+| codegen-gap | 275 |
 | false-positive | 241 |
 | perf | 177 |
 | other | 175 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2950 |
-| interp | 967 |
-| typecheck | 491 |
+| interp | 968 |
+| typecheck | 492 |
 | ownership | 116 |
 | other | 115 |
 | cli | 79 |
@@ -166,6 +166,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-22 | 2026-10-19 | interp | medium | MIR interpreter orders u128 values as signed in sort, sort_by_key, tuple sort and SortedSet, so values with the top bit set come first; `<` and `>` are right | — |
 | B-2026-10-19-23 | 2026-10-19 | codegen+interp | high | A `Mutex` does not exclude across a suspension: four tasks each running `lock m x { let v = x; sleep(Duration.ms(2)); x = v + 1; }` leave `m` at 1, not 4, on `__mir-run` and `__mir-llvm-run`; `lock` takes no lock at all (MIR lowers it to `Mutex.get_mut`, which only hands back the cell's address), and exclusion holds today only because tasks run one at a time and switch only at a suspension | — |
 | B-2026-10-19-24 | 2026-10-19 | typecheck+interp | low | An `own` parameter, or a local made by an `if`/`match`, stored by value into a local bound to a borrow (`let mut out = s; out = t;`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR) | — |
+| B-2026-10-19-25 | 2026-10-19 | typecheck+interp | medium | On MIR, a bare `collect()` as the tail of one branch of an un-annotated `let x = if .. { .. } else { .. }` does not lower (`UnsolvedParam("C")`) when the target type comes only from the OTHER branch; `karac check` passes | — |
 
 ### Relocated
 
