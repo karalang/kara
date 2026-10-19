@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 282 |
 | codegen-gap | 274 |
 | false-positive | 241 |
-| perf | 175 |
+| perf | 176 |
 | other | 175 |
 | diagnostics | 172 |
 | crash | 124 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2948 |
+| codegen | 2949 |
 | interp | 964 |
 | typecheck | 489 |
 | ownership | 116 |
@@ -171,6 +171,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
 | B-2026-10-19-18 | 2026-10-19 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program (E0516) | — |
 | B-2026-10-19-19 | 2026-10-19 | typecheck | low | "a reference to a temporary outlives its statement" has no `karac fix` edit for `let n = s.substring(..).trim();` or `m.get(k).unwrap_or(Vec.new())`, though the `unwrap_or(String.new())` shape gets one (B-2026-10-15-16) | — |
+| B-2026-10-19-20 | 2026-10-19 | codegen | medium | `karac build --mir` runs katas 85 (maximal rectangle) and 752 (open the lock) about 2x and 1.5x slower since 4e2ceaae49 (push grows through a copy of the Vec header), although callgrind counts FEWER instructions and the same simulated mispredicts | — |
 
 ### Relocated
 
