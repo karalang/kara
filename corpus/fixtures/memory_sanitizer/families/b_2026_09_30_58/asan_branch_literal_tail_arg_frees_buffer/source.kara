@@ -9,7 +9,7 @@ fn run(c: bool) {
     let d = vl(if c { let t = mk(10); t } else { mk(20) });
     let f = |x: Vec[i64]| x[0];
     let e = f(if c { [30] } else { Vec[31, 32] });
-    let g = vl(if c { [1; 4] } else { [-2] });
+    let g = vl(if c { Vec.filled(4, 1) } else { [-2] });
     let h = (if c { [n * 2] } else { [8, 9] }).len();
     let mut s = 0;
     for x in (if c { [1] } else { [2, 3] }) { s = s + x; }

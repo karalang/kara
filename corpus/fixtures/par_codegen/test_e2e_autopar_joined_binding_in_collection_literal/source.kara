@@ -22,7 +22,7 @@ fn map_lit() -> i64 {
 fn repeat_lit() -> i64 {
     let a: i64 = mk(7i64).len();
     let b: Vec[i64] = mk(8i64);
-    let c: Vec[i64] = [a; 3];
+    let c: Vec[i64] = Vec.filled(3, a);
     return c.len() + b.len();
 }
 fn nested_five() -> i64 {

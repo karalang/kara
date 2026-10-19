@@ -48,7 +48,7 @@ fn main() {
     println(total([10, 20, 30]));
     println(total_ref([10, 20, 30]));
     println(total_slice([10, 20, 30]));
-    println(total([7; 3]));
+    println(total(Vec.filled(3, 7)));
     let m = make();
     println(m[2]);
     let h = Holder { v: [1, 2, 3] };

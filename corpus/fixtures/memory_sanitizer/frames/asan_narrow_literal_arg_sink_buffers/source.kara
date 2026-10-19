@@ -41,7 +41,7 @@ fn main() {
     let a = by_val([10, 20, 30]);
     let b = by_ref([10, 20, 30]);
     let c = by_slice([10, 20, 30]);
-    let d = by_val([7; 3]);
+    let d = by_val(Vec.filled(3, 7));
     let acc = Acc { base: 0 };
     let e = acc.tally([1, 2, 3]);
     println(a + b + c + d + e);
