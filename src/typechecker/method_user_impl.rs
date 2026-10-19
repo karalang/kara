@@ -757,7 +757,7 @@ impl<'a> super::TypeChecker<'a> {
             candidates
                 .into_iter()
                 .next()
-                .map(|(imp, sig)| (imp.clone(), sig.clone()))
+                .map(|(imp, sig)| (imp.clone_without_methods(), sig.clone()))
         };
 
         match method_pick {

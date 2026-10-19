@@ -970,8 +970,19 @@ pub(super) fn substitute_existential_assoc_bindings(
 /// the variant name collides with the primitive type name. See the
 /// comment block at the variant-fallback site.
 pub(super) fn is_prelude_type_or_module_name(name: &str) -> bool {
-    crate::prelude::PRELUDE_PRIMITIVES.contains(&name)
-        || crate::prelude::PRELUDE_TYPES.contains(&name)
+    // A set rather than a scan of the two lists: the typechecker asks this
+    // for nearly every identifier and type name it meets.
+    static NAMES: std::sync::OnceLock<rustc_hash::FxHashSet<&'static str>> =
+        std::sync::OnceLock::new();
+    NAMES
+        .get_or_init(|| {
+            crate::prelude::PRELUDE_PRIMITIVES
+                .iter()
+                .chain(crate::prelude::PRELUDE_TYPES)
+                .copied()
+                .collect()
+        })
+        .contains(name)
 }
 
 pub(super) fn is_numeric(ty: &Type) -> bool {

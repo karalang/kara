@@ -181,6 +181,27 @@ pub struct ImplInfo {
     pub target_span: Option<crate::token::Span>,
 }
 
+impl ImplInfo {
+    /// A copy without the method table, for a caller that has already picked
+    /// the method: a library impl (`Vec`'s) has hundreds of methods, and
+    /// copying them on every method call was a tenth of a
+    /// `karac build --mir`.
+    pub fn clone_without_methods(&self) -> ImplInfo {
+        ImplInfo {
+            target_type: self.target_type.clone(),
+            do_not_recommend: self.do_not_recommend,
+            target_args: self.target_args.clone(),
+            trait_name: self.trait_name.clone(),
+            trait_args: self.trait_args.clone(),
+            target_generic_args: self.target_generic_args.clone(),
+            methods: HashMap::new(),
+            generic_params: self.generic_params.clone(),
+            where_clause: self.where_clause.clone(),
+            target_span: self.target_span,
+        }
+    }
+}
+
 /// Structurally bind an impl's type params by matching its target args (`decl`,
 /// e.g. `Column[T]` → `[TypeParam("T")]`) against a concrete receiver's args
 /// (`actual`, e.g. `[f64]`), recursing through compound forms. First binding

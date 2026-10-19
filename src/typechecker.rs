@@ -3197,6 +3197,11 @@ pub struct TypeChecker<'a> {
     /// through that impl, ahead of the hard-coded arms (redesign A2; set by
     /// the MIR pipeline, which appends the library's Kāra source).
     pub(super) library_methods_from_source: bool,
+    /// Methods the MIR pipeline left out of the appended library because the
+    /// program cannot reach them (`mir::library_prune`), by rendered impl
+    /// target: they still count as restated, so a baked impl the full
+    /// library replaces stays replaced.
+    pub(super) pruned_library_methods: std::collections::HashMap<String, HashSet<String>>,
     /// The spans of the `recv` calls typed `Option[T]` on the MIR pipeline
     /// (B-2026-10-15-11): an error at one of them gets a `.unwrap()` fix.
     pub(super) option_recv_spans: FxHashSet<SpanKey>,
@@ -3504,6 +3509,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             library_methods_from_source: false,
+            pruned_library_methods: std::collections::HashMap::new(),
             option_recv_spans: FxHashSet::default(),
             iter_lets: FxHashMap::default(),
             iter_let_uses: FxHashMap::default(),
@@ -3561,6 +3567,15 @@ impl<'a> TypeChecker<'a> {
     /// Type a call of a library type's method through the source `impl`
     /// that declares it, when there is one, rather than through the
     /// hard-coded arms. See [`crate::prelude::LIBRARY_SOURCES`].
+    /// See [`Self::pruned_library_methods`].
+    pub fn with_pruned_library_methods(
+        mut self,
+        pruned: std::collections::HashMap<String, HashSet<String>>,
+    ) -> Self {
+        self.pruned_library_methods = pruned;
+        self
+    }
+
     pub fn library_methods_from_source(mut self) -> Self {
         self.library_methods_from_source = true;
         self.env.partial_eq_impl_dispatches = true;

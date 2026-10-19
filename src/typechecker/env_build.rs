@@ -938,6 +938,11 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            for (target, names) in &self.pruned_library_methods {
+                m.entry(target.clone())
+                    .or_default()
+                    .extend(names.iter().map(String::as_str));
+            }
             m
         } else {
             HashMap::new()

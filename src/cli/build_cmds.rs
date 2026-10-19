@@ -4257,15 +4257,6 @@ pub(super) fn cmd_build_mir(
         let src = std::fs::read_to_string(filename)
             .unwrap_or_else(|e| fail(format!("error: {filename}: {e}")));
         crate::mir::interp::set_source_name(filename);
-        let ir = crate::mir::lower::build_source(&src)
-            .and_then(|l| {
-                // Conflicting `par` branches and invalid MIR are refused,
-                // as on every MIR backend.
-                crate::mir::lower::compiled_check(&l)?;
-                crate::codegen::mir::compile_mir_ir(&l.program, &l.tys)
-                    .map_err(|e| format!("llvm: {e}"))
-            })
-            .unwrap_or_else(|e| fail(format!("error[mir]: {e}")));
         let opt = match std::env::var("KARAC_MIR_OPT") {
             Ok(v) => v
                 .parse::<u8>()
@@ -4282,8 +4273,30 @@ pub(super) fn cmd_build_mir(
             .map(str::to_string)
             .unwrap_or_else(|| stem.to_string());
         let obj = std::env::temp_dir().join(format!("karac_mir_{}_{stem}.o", process::id()));
-        let built = crate::codegen::mir_aot::compile_object(&ir, &obj, opt)
-            .and_then(|()| crate::codegen::link_executable(&obj.to_string_lossy(), &exe_path));
+        // `KARAC_MIR_LL=<path>` keeps a copy of the IR, as `__mir-llvm-run` does.
+        let keep_ll = std::env::var_os("KARAC_MIR_LL").map(std::path::PathBuf::from);
+        let lowered = crate::mir::lower::build_source(&src)
+            .and_then(|l| {
+                // Conflicting `par` branches and invalid MIR are refused,
+                // as on every MIR backend.
+                crate::mir::lower::compiled_check(&l)?;
+                Ok(l)
+            })
+            .unwrap_or_else(|e| fail(format!("error[mir]: {e}")));
+        let built = crate::codegen::mir_aot::compile_program_object(
+            &lowered.program,
+            &lowered.tys,
+            &obj,
+            opt,
+            keep_ll.as_deref(),
+        )
+        .map_err(|e| format!("llvm: {e}"))
+        .and_then(|()| {
+            let mut t = std::time::Instant::now();
+            let r = crate::codegen::link_executable(&obj.to_string_lossy(), &exe_path);
+            crate::mir::lower::phase_time("link", &mut t);
+            r
+        });
         let _ = std::fs::remove_file(&obj);
         if let Err(e) = built {
             fail(format!("error[mir]: {e}"));

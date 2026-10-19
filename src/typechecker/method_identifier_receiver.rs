@@ -877,7 +877,7 @@ impl<'a> super::TypeChecker<'a> {
                     .env
                     .find_methods_with_args(&type_name, &target_args, method)
                     .into_iter()
-                    .map(|(imp, sig)| (imp.clone(), sig.clone()))
+                    .map(|(imp, sig)| (imp.clone_without_methods(), sig.clone()))
                     .collect();
                 // Slice 5C of the method-resolution CR — see
                 // `phase-4-interpreter.md` § method-resolution sub-item 5C.

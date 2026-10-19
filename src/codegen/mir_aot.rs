@@ -1,8 +1,8 @@
 //! An ahead-of-time build of the MIR backend's IR (redesign M2).
 //!
-//! [`compile_object`] takes the textual IR that
-//! [`super::mir::compile_mir_ir`] produces and writes a native object; the
-//! caller links it with [`super::link_executable`], which picks the runtime
+//! [`compile_program_object`] compiles a MIR program to a native object
+//! ([`compile_object`] does the same from the textual IR that
+//! [`super::mir::compile_mir_ir`] produces); the caller links it with [`super::link_executable`], which picks the runtime
 //! archive the object needs. This is what `karac build --mir` runs.
 //!
 //! The IR defines the C `main` itself, so the object links as a program
@@ -30,6 +30,37 @@ pub fn compile_object(ir: &str, obj: &Path, opt: u8) -> Result<(), String> {
     let module = llcx
         .create_module_from_ir(buf)
         .map_err(|e| format!("parse IR: {}", e.to_string()))?;
+    compile_module(&llcx, &module, obj, opt)
+}
+
+/// Compile `program` straight to a native object at `obj`, as
+/// [`compile_object`] does with its IR, without printing the IR and parsing
+/// it back (a large program's IR is megabytes). `keep_ll`, when given, is
+/// where a copy of the IR is written (`KARAC_MIR_LL`).
+pub fn compile_program_object(
+    program: &crate::mir::interp::Program,
+    tys: &crate::mir::TyInterner,
+    obj: &Path,
+    opt: u8,
+    keep_ll: Option<&Path>,
+) -> Result<(), String> {
+    let mut t = std::time::Instant::now();
+    let llcx = Context::create();
+    let module = super::mir::compile_mir(&llcx, "main", program, tys)?;
+    crate::mir::lower::phase_time("compile_mir", &mut t);
+    if let Some(path) = keep_ll {
+        let _ = std::fs::write(path, module.print_to_string().to_string());
+    }
+    compile_module(&llcx, &module, obj, opt)
+}
+
+fn compile_module<'ctx>(
+    llcx: &'ctx Context,
+    module: &Module<'ctx>,
+    obj: &Path,
+    opt: u8,
+) -> Result<(), String> {
+    let mut t = std::time::Instant::now();
     let tm = super::create_target_machine()?;
     module.set_triple(&tm.get_triple());
     module.set_data_layout(&tm.get_target_data().get_data_layout());
@@ -38,8 +69,8 @@ pub fn compile_object(ir: &str, obj: &Path, opt: u8) -> Result<(), String> {
     // emits it; the MIR backend does not (the JIT runner fills it in at run
     // time), so a program gets an empty one.
     let i32t = llcx.i32_type();
-    empty_global(&module, "KARAC_SPAWN_SITES_ENABLED", llcx.i8_type().into());
-    empty_global(&module, "KARAC_SPAWN_SITES_LEN", i32t.into());
+    empty_global(module, "KARAC_SPAWN_SITES_ENABLED", llcx.i8_type().into());
+    empty_global(module, "KARAC_SPAWN_SITES_LEN", i32t.into());
     // `{ i32 id, ptr file_cstr, i32 line, i32 col, i32 worker_count, i32 reserved }`
     let ptr = llcx.ptr_type(AddressSpace::default());
     let entry = llcx.struct_type(
@@ -53,7 +84,7 @@ pub fn compile_object(ir: &str, obj: &Path, opt: u8) -> Result<(), String> {
         ],
         false,
     );
-    empty_global(&module, "KARAC_SPAWN_SITES", entry.into());
+    empty_global(module, "KARAC_SPAWN_SITES", entry.into());
 
     if opt > 0 {
         let mut passes = format!("default<O{}>", opt.min(3));
@@ -69,8 +100,12 @@ pub fn compile_object(ir: &str, obj: &Path, opt: u8) -> Result<(), String> {
             .run_passes(&passes, &tm, PassBuilderOptions::create())
             .map_err(|e| format!("{passes}: {}", e.to_string()))?;
     }
-    tm.write_to_file(&module, FileType::Object, obj)
-        .map_err(|e| format!("write {}: {}", obj.display(), e.to_string()))
+    crate::mir::lower::phase_time("opt passes", &mut t);
+    let r = tm
+        .write_to_file(module, FileType::Object, obj)
+        .map_err(|e| format!("write {}: {}", obj.display(), e.to_string()));
+    crate::mir::lower::phase_time("object emission", &mut t);
+    r
 }
 
 /// Define `name` as a zero constant of `ty`, unless the module already has it.

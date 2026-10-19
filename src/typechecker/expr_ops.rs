@@ -748,19 +748,29 @@ impl<'a> super::TypeChecker<'a> {
         // decided that collision alphabetically, which is deterministic but
         // wrong — and wrong in a way the old coin flip hid, since it got the
         // user's enum half the time.
-        let mut enum_names: Vec<&String> = self.env.enums.keys().collect();
-        enum_names.sort_unstable_by_key(|n| {
-            // Prelude-visible by NAME as well as by the `stdlib_origin` flag:
-            // `IoError` and its siblings are listed in `PRELUDE_TYPES` but do
-            // not carry the flag, and keying on the flag alone let the seeded
-            // `IoError.Other` beat a user's `MyIoErr.Other` alphabetically —
-            // deterministic, and the wrong side of the very preference codegen
-            // documents.
-            (
-                self.env.enums[*n].defining_stdlib_origin || is_prelude_type_or_module_name(n),
-                (*n).clone(),
-            )
-        });
+        //
+        // Only the enums declaring a variant called `name` can answer, so the
+        // rest are left out before the sort: this fallback runs for every
+        // identifier that is not a local, function or constant (each type
+        // name in `Vec.new()`), and sorting every enum each time was a
+        // quarter of a `karac build --mir`'s instructions.
+        let mut enum_names: Vec<&String> = self
+            .env
+            .enums
+            .iter()
+            .filter(|(_, info)| info.variants.iter().any(|(v, _)| v == name))
+            .map(|(n, _)| n)
+            .collect();
+        // Prelude-visible by NAME as well as by the `stdlib_origin` flag:
+        // `IoError` and its siblings are listed in `PRELUDE_TYPES` but do
+        // not carry the flag, and keying on the flag alone let the seeded
+        // `IoError.Other` beat a user's `MyIoErr.Other` alphabetically —
+        // deterministic, and the wrong side of the very preference codegen
+        // documents.
+        let tier = |n: &String| {
+            self.env.enums[n].defining_stdlib_origin || is_prelude_type_or_module_name(n)
+        };
+        enum_names.sort_unstable_by(|a, b| (tier(a), a.as_str()).cmp(&(tier(b), b.as_str())));
         // The built-in owner of a colliding constructor name goes first, so a
         // user enum can never retroactively hijack a bare `None` / `Some` /
         // `Ok` / `Err`. This is the same call the Slice F rule above already

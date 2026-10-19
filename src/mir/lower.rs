@@ -16060,13 +16060,35 @@ fn result_borrows(
 
 /// [`build_source`] up to the MIR checks: the program with the library,
 /// parsed, checked and lowered, with §3.7's forbidden moves refused.
+/// `KARAC_MIR_TIME=1` prints each build phase's wall time to stderr.
+pub fn phase_time(label: &str, t: &mut std::time::Instant) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("KARAC_MIR_TIME").as_deref() == Ok("1")) {
+        eprintln!(
+            "[mir-time] {label:<24} {:8.1} ms",
+            t.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    *t = std::time::Instant::now();
+}
+
 fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
+    let mut t = std::time::Instant::now();
     let (src, user_len) = library_source(src);
+    phase_time("library_source", &mut t);
     let parsed = crate::parse(&src);
+    phase_time("parse", &mut t);
     if !parsed.errors.is_empty() {
         return Err(format!("parse: {:?}", parsed.errors[0]));
     }
     let mut program = parsed.program;
+    let pruned = if super::library_prune::enabled() {
+        let p = super::library_prune::prune(&mut program, &src, user_len);
+        phase_time("library_prune", &mut t);
+        p
+    } else {
+        Default::default()
+    };
     mark_library_builtins(&mut program, user_len);
     // `f()?.x` is `(f()?).x` (B-2026-10-14-50).
     crate::question_chain::postfix_question(&mut program);
@@ -16080,7 +16102,9 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
     if d5_params() {
         crate::d5_params::borrow_bare_params(&mut program);
     }
+    phase_time("prepare", &mut t);
     let r = crate::resolve_v2(&program);
+    phase_time("resolve", &mut t);
     // Lint-backed resolve diagnostics (`float_in_serialized_type`, the
     // layout lints) are warnings, not errors, so they do not stop the build.
     if let Some(err) = r
@@ -16091,7 +16115,8 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
         return Err(format!("resolve: {err:?}"));
     }
     let mut r = r;
-    let mut tc = crate::typecheck_with_library_source(&program, &r);
+    let mut tc = crate::typecheck_with_pruned_library_source(&program, &r, pruned.clone());
+    phase_time("typecheck", &mut t);
     if !tc.errors.is_empty() {
         return Err(typecheck_error(&tc.errors[0]));
     }
@@ -16112,15 +16137,19 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
         {
             return Err(format!("resolve: {err:?}"));
         }
-        tc = crate::typecheck_with_library_source(&program, &r);
+        tc = crate::typecheck_with_pruned_library_source(&program, &r, pruned.clone());
         if !tc.errors.is_empty() {
             return Err(typecheck_error(&tc.errors[0]));
         }
     }
+    phase_time("comptime", &mut t);
     let defs = ProgramDefs::build_for_program(&program);
     let res = crate::node_res::node_res(&r, &defs, 0, None);
+    phase_time("defs+node_res", &mut t);
     let hir = crate::typed_hir::build(&tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
+    phase_time("typed_hir", &mut t);
     let own = crate::ownershipcheck(&program, &tc);
+    phase_time("ownershipcheck", &mut t);
     let mut lowered = lower_program_with_library(
         &program,
         &src,
@@ -16133,6 +16162,7 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
         &own.closure_captures,
     );
     lowered.program.user_source_len = Some(user_len);
+    phase_time("mir_builder", &mut t);
     if !lowered.errors.is_empty() {
         return Err(format!("build: {}", lowered.errors.join("; ")));
     }
@@ -16174,6 +16204,7 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
 /// The rest of [`build_source`]: each body's move and borrow checks, drop
 /// elaboration and the passes after it.
 fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
+    let mut t = std::time::Instant::now();
     // `KARAC_MIR_DUMP=built` or `=elaborated` prints every body to stderr.
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
@@ -16226,6 +16257,10 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
         }
     }
+    phase_time(
+        &format!("finish_build ({} bodies)", lowered.program.bodies.len()),
+        &mut t,
+    );
     Ok(lowered)
 }
 

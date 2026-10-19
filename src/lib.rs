@@ -342,6 +342,20 @@ pub fn typecheck_with_library_source(
     checker.check()
 }
 
+/// [`typecheck_with_library_source`] for a program whose library
+/// `mir::library_prune` cut down: `pruned` names the inherent methods left
+/// out, by rendered impl target.
+pub fn typecheck_with_pruned_library_source(
+    program: &Program,
+    resolve_result: &ResolveResult,
+    pruned: std::collections::HashMap<String, std::collections::HashSet<String>>,
+) -> TypeCheckResult {
+    TypeChecker::new(program, resolve_result)
+        .library_methods_from_source()
+        .with_pruned_library_methods(pruned)
+        .check()
+}
+
 /// Type-check a baked stdlib module compiled as its own program
 /// (`codegen::lower_stdlib_source`). Identical to [`typecheck`] except the
 /// always-injected-stdlib collision-skip (#34) is disabled — a stdlib module's
