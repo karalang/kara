@@ -1,0 +1,4791 @@
+// mini_isodate: isodate 0.7.2, the ISO 8601 parser and formatter that
+// many Python libraries use for dates, times and durations. The port
+// follows isodate's code: the date patterns for every year width
+// (complete, week, ordinal, month, year and century dates, with expanded
+// years), the time patterns with decimal fractions on the hour, minute
+// or second and the time zone designators, datetimes, the duration
+// parser with its alternative format, the Duration class with its
+// calendar arithmetic, and isodate's own strftime.
+//
+// Underneath are the parts of Python it uses: datetime's date, time,
+// datetime and timedelta (the timedelta constructor as CPython's C code
+// computes it from floats), the Decimals isodate makes, and the
+// regular-expression engine of mini_re. A subscription renewal report
+// and an incident report sit on top. expected.out is the output of
+// oracle.py, which runs the same jobs through isodate itself.
+
+// ------------------------------------------------------------ helpers
+
+// A Python exception: its class name and message.
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: ref String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg.clone() }
+}
+
+fn value_error(msg: ref String) -> PyErr {
+    py_err("ValueError", msg)
+}
+
+fn iso_error(msg: ref String) -> PyErr {
+    py_err("ISO8601Error", msg)
+}
+
+fn attr_error(type_name: Str, attr: Str) -> PyErr {
+    py_err("AttributeError", f"'{type_name}' object has no attribute '{attr}'")
+}
+
+fn py_err_text(e: ref PyErr) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+fn cps(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn py_repr(s: ref String) -> String {
+    repr_of(cps(s))
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn py_mod(a: i64, b: i64) -> i64 {
+    a - floor_div(a, b) * b
+}
+
+fn iabs(a: i64) -> i64 {
+    if a < 0 { 0 - a } else { a }
+}
+
+// "%0Nd" % n: zero-padded to n characters, the sign among them.
+fn zpad(n: i64, w: i64) -> String {
+    let mut s = f"{iabs(n)}";
+    let room = if n < 0 { w - 1 } else { w };
+    while (s.len() as i64) < room {
+        s = "0".to_string() + s;
+    }
+    if n < 0 { "-".to_string() + s } else { s }
+}
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text_of(cs: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(cs[k]);
+        k += 1;
+    }
+    s
+}
+
+fn is_digit_char(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// int(s) of a run of ASCII digits, as the regexes guarantee.
+fn digits_int(s: ref String) -> i64 {
+    let mut v = 0;
+    for c in s.chars() {
+        v = v * 10 + (c as i64 - 48);
+    }
+    v
+}
+
+// s.replace(",", ".")
+fn comma_to_point(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(if c == ',' { '.' } else { c });
+    }
+    out
+}
+
+// ------------------------------------------------------------ re, as used
+
+// A compiled pattern and its group names.
+struct Pattern {
+    prog: Program,
+}
+
+fn regex(pattern: ref String) -> Pattern {
+    match compile(cps(pattern), 0) {
+        Ok(p) => Pattern { prog: p },
+        Err(e) => {
+            eprintln(f"bad pattern {pattern}: {e.msg}");
+            Pattern { prog: compile(cps("x".to_string()), 0).unwrap() }
+        }
+    }
+}
+
+// What match.groupdict() gives: each named group's text, or None.
+struct Groups {
+    names: Vec[String],
+    values: Vec[Option[String]],
+}
+
+impl Groups {
+    fn has(ref self, name: Str) -> bool {
+        for n in self.names {
+            if n == name {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn get(ref self, name: Str) -> Option[String] {
+        for k in 0..self.names.len() {
+            if self.names[k] == name {
+                return self.values[k].clone();
+            }
+        }
+        None
+    }
+}
+
+// pattern.match(s).groupdict(), or None when it does not match.
+fn match_groups(re: ref Pattern, s: ref String) -> Option[Groups] {
+    let text = cps(s);
+    let mut m = new_matcher(re.prog, text);
+    let found = match find(mut m, re.prog, 0, false, 1) {
+        Some(f) => f,
+        None => return None,
+    };
+    let mut names: Vec[String] = Vec.new();
+    let mut values: Vec[Option[String]] = Vec.new();
+    for (name, g) in re.prog.names {
+        names.push(to_string(name));
+        let (a, b) = found.spans[g - 1];
+        if a < 0 {
+            values.push(None);
+        } else {
+            values.push(Some(to_string(slice(text, a, b))));
+        }
+    }
+    Some(Groups { names: names, values: values })
+}
+
+// ------------------------------------------------------------ errors
+
+struct ReErr {
+    kind: String,
+    msg: String,
+    pos: i64,
+}
+
+fn re_error(msg: own String, pos: i64) -> ReErr {
+    ReErr { kind: "error".to_string(), msg: msg, pos: pos }
+}
+
+fn other_error(kind: Str, msg: own String) -> ReErr {
+    ReErr { kind: kind.to_string(), msg: msg, pos: -1 }
+}
+
+fn err_text(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        if e.pos >= 0 {
+            return f"error: {e.msg} at position {e.pos}";
+        }
+        return f"error: {e.msg}";
+    }
+    f"{e.kind}: {e.msg}"
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+// ------------------------------------------------------- parsed form
+
+// The categories of \d \D \s \S \w \W.
+fn cat_digit() -> i64 { 0 }
+fn cat_not_digit() -> i64 { 1 }
+fn cat_space() -> i64 { 2 }
+fn cat_not_space() -> i64 { 3 }
+fn cat_word() -> i64 { 4 }
+fn cat_not_word() -> i64 { 5 }
+
+// The positions ^ $ \A \Z \b \B and the forms the compiler turns them
+// into under MULTILINE.
+fn at_beginning() -> i64 { 0 }
+fn at_beginning_line() -> i64 { 1 }
+fn at_beginning_string() -> i64 { 2 }
+fn at_end() -> i64 { 3 }
+fn at_end_line() -> i64 { 4 }
+fn at_end_string() -> i64 { 5 }
+fn at_boundary() -> i64 { 6 }
+fn at_non_boundary() -> i64 { 7 }
+
+#[derive(Clone)]
+enum Item {
+    Lit(i64),
+    Range(i64, i64),
+    Cat(i64),
+}
+
+enum Node {
+    Lit(i64),
+    NotLit(i64),
+    Any,
+    In(Vec[Item], bool),
+    At(i64),
+    Branch(Vec[Vec[Node]]),
+    // group (0: none), flags turned on, flags turned off, contents
+    Group(i64, i64, i64, Vec[Node]),
+    // 0 greedy, 1 lazy, 2 possessive; min; max; the item repeated
+    Repeat(i64, i64, i64, Vec[Node]),
+    Atomic(Vec[Node]),
+    // direction (1 ahead, -1 behind), negative, contents
+    Assert(i64, bool, Vec[Node]),
+    GroupRef(i64),
+    // group, yes branch, no branch
+    Exists(i64, Vec[Node], Vec[Node]),
+    Failure,
+}
+
+fn is_repeat(n: ref Node) -> bool {
+    match n {
+        Node.Repeat(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+fn is_at(n: ref Node) -> bool {
+    match n {
+        Node.At(_) => true,
+        _ => false,
+    }
+}
+
+fn flag_i() -> i64 { 2 }
+fn flag_l() -> i64 { 4 }
+fn flag_m() -> i64 { 8 }
+fn flag_s() -> i64 { 16 }
+fn flag_u() -> i64 { 32 }
+fn flag_x() -> i64 { 64 }
+fn flag_a() -> i64 { 256 }
+fn type_flags() -> i64 { 4 | 32 | 256 }
+fn maxrepeat() -> i64 { 4294967295 }
+fn maxgroups() -> i64 { 1073741823 }
+fn maxwidth() -> i64 { 1 << 62 }
+
+fn flag_value(c: i64) -> i64 {
+    match c {
+        105 => 2,
+        76 => 4,
+        109 => 8,
+        115 => 16,
+        120 => 64,
+        97 => 256,
+        117 => 32,
+        _ => 0,
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// One token: nothing at the end of the pattern (n 0), a character (n 1),
+// or a backslash and the character after it (n 2).
+#[derive(Copy, Clone)]
+struct T {
+    n: i64,
+    a: i64,
+    b: i64,
+}
+
+fn tok_none() -> T {
+    T { n: 0, a: 0, b: 0 }
+}
+
+fn tok_is(t: T, c: i64) -> bool {
+    t.n == 1 and t.a == c
+}
+
+fn tok_text(t: T) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    if t.n >= 1 {
+        v.push(t.a);
+    }
+    if t.n == 2 {
+        v.push(t.b);
+    }
+    v
+}
+
+fn is_ascii_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_oct(c: i64) -> bool {
+    c >= 48 and c <= 55
+}
+
+fn is_dec(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn digits_value(s: ref Vec[i64], start: i64, base: i64) -> i64 {
+    let mut v = 0;
+    let mut i = start;
+    while i < s.len() {
+        let c = s[i];
+        let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 };
+        v = v * base + d;
+        i += 1;
+    }
+    v
+}
+
+// str.isidentifier, near enough: a letter or underscore, then letters,
+// digits and underscores.
+fn is_identifier(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < name.len() {
+        let c = name[i];
+        let ok = if c == 95 {
+            true
+        } else if i == 0 {
+            match as_char(c) {
+                Some(ch) => ch.is_alphabetic(),
+                None => false,
+            }
+        } else {
+            is_word(c, false)
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_ascii_decimal(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    for c in name {
+        if not is_dec(c) {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tokenizer {
+    s: Vec[i64],
+    index: i64,
+    next: T,
+}
+
+impl Tokenizer {
+    fn advance(mut ref self) -> Result[(), ReErr] {
+        let index = self.index;
+        if index >= self.s.len() {
+            self.next = tok_none();
+            return Ok(());
+        }
+        let c = self.s[index];
+        if c == 92 {
+            if index + 1 >= self.s.len() {
+                return Err(re_error("bad escape (end of pattern)".to_string(), self.s.len() - 1));
+            }
+            self.next = T { n: 2, a: 92, b: self.s[index + 1] };
+            self.index = index + 2;
+        } else {
+            self.next = T { n: 1, a: c, b: 0 };
+            self.index = index + 1;
+        }
+        Ok(())
+    }
+
+    fn get(mut ref self) -> Result[T, ReErr] {
+        let t = self.next;
+        self.advance()?;
+        Ok(t)
+    }
+
+    fn take(mut ref self, c: i64) -> Result[bool, ReErr] {
+        if tok_is(self.next, c) {
+            self.advance()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn tell(ref self) -> i64 {
+        self.index - self.next.n
+    }
+
+    fn seek(mut ref self, index: i64) -> Result[(), ReErr] {
+        self.index = index;
+        self.advance()
+    }
+
+    fn error(ref self, msg: own String, offset: i64) -> ReErr {
+        re_error(msg, self.tell() - offset)
+    }
+
+    // getwhile: up to n characters of a kind (0 octal, 1 decimal, 2 hex).
+    fn getwhile(mut ref self, n: i64, kind: i64, out: mut ref Vec[i64]) -> Result[(), ReErr] {
+        let mut k = 0;
+        while k < n {
+            let t = self.next;
+            if t.n != 1 {
+                break;
+            }
+            let ok = if kind == 0 { is_oct(t.a) } else if kind == 1 { is_dec(t.a) } else { is_hex(t.a) };
+            if not ok {
+                break;
+            }
+            out.push(t.a);
+            self.advance()?;
+            k += 1;
+        }
+        Ok(())
+    }
+
+    fn getuntil(mut ref self, terminator: i64, name: Str) -> Result[Vec[i64], ReErr] {
+        let mut result: Vec[i64] = Vec.new();
+        loop {
+            let c = self.next;
+            self.advance()?;
+            if c.n == 0 {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 0));
+                }
+                let term = to_string(vec_of(terminator));
+                return Err(self.error(f"missing {term}, unterminated name", result.len()));
+            }
+            if tok_is(c, terminator) {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 1));
+                }
+                break;
+            }
+            push_all(mut result, tok_text(c));
+        }
+        Ok(result)
+    }
+
+    fn checkgroupname(ref self, name: ref Vec[i64], offset: i64) -> Result[(), ReErr] {
+        if not is_identifier(name) {
+            return Err(self.error(f"bad character in group name {repr_of(name)}", name.len() + offset));
+        }
+        Ok(())
+    }
+}
+
+fn vec_of(c: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(c);
+    v
+}
+
+fn new_tokenizer(s: ref Vec[i64]) -> Result[Tokenizer, ReErr] {
+    let mut t = Tokenizer { s: s.clone(), index: 0, next: tok_none() };
+    t.advance()?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ parser
+
+#[derive(Clone)]
+struct Width {
+    lo: i64,
+    hi: i64,
+}
+
+struct ParseState {
+    flags: i64,
+    names: Vec[(Vec[i64], i64)],
+    // per group: whether it is closed, and its width
+    closed: Vec[bool],
+    widths: Vec[Width],
+    lookbehind_groups: i64,
+    // conditional references by number, in order: (group, position)
+    refpos: Vec[(i64, i64)],
+}
+
+impl ParseState {
+    fn groups(ref self) -> i64 {
+        self.closed.len()
+    }
+
+    fn group_of(ref self, name: ref Vec[i64]) -> i64 {
+        for (n, g) in self.names.iter() {
+            if same(n, name) {
+                return *g;
+            }
+        }
+        -1
+    }
+
+    fn checkgroup(ref self, gid: i64) -> bool {
+        gid < self.groups() and self.closed[gid]
+    }
+
+    fn checklookbehindgroup(ref self, gid: i64, src: ref Tokenizer) -> Result[(), ReErr] {
+        if self.lookbehind_groups >= 0 {
+            if not self.checkgroup(gid) {
+                return Err(src.error("cannot refer to an open group".to_string(), 0));
+            }
+            if gid >= self.lookbehind_groups {
+                return Err(src.error("cannot refer to group defined in the same lookbehind subpattern".to_string(), 0));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn add_width(a: i64, b: i64) -> i64 {
+    if a >= maxwidth() - b { maxwidth() } else { a + b }
+}
+
+fn mul_width(a: i64, n: i64) -> i64 {
+    if a == 0 or n == 0 {
+        0
+    } else if a >= maxwidth() / n {
+        maxwidth()
+    } else {
+        a * n
+    }
+}
+
+// SubPattern.getwidth.
+fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
+    let mut lo = 0;
+    let mut hi = 0;
+    for n in p.iter() {
+        match n {
+            Node.Branch(items) => {
+                let mut i = maxwidth();
+                let mut j = 0;
+                for item in items.iter() {
+                    let w = width_of(widths, item);
+                    if w.lo < i {
+                        i = w.lo;
+                    }
+                    if w.hi > j {
+                        j = w.hi;
+                    }
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Atomic(body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Group(_, _, _, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Repeat(_, min, max, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, mul_width(w.lo, *min));
+                if *max == maxrepeat() and w.hi > 0 {
+                    hi = maxwidth();
+                } else {
+                    hi = add_width(hi, mul_width(w.hi, *max));
+                }
+            }
+            Node.GroupRef(g) => {
+                let w = ref widths[*g];
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Exists(_, yes, no) => {
+                let wy = width_of(widths, yes);
+                let mut i = wy.lo;
+                let mut j = wy.hi;
+                if no.len() > 0 {
+                    let wn = width_of(widths, no);
+                    if wn.lo < i {
+                        i = wn.lo;
+                    }
+                    if wn.hi > j {
+                        j = wn.hi;
+                    }
+                } else {
+                    i = 0;
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Lit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.NotLit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.Any => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.In(_, _) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            _ => {}
+        }
+    }
+    Width { lo: lo, hi: hi }
+}
+
+fn category_of(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        100 => 0,
+        68 => 1,
+        115 => 2,
+        83 => 3,
+        119 => 4,
+        87 => 5,
+        _ => -1,
+    }
+}
+
+fn escape_value(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        97 => 7,
+        98 => 8,
+        102 => 12,
+        110 => 10,
+        114 => 13,
+        116 => 9,
+        118 => 11,
+        92 => 92,
+        _ => -1,
+    }
+}
+
+// \x, \u and \U: the escape text so far, and the code point.
+fn hex_escape(src: mut ref Tokenizer, t: T, esc: mut ref Vec[i64]) -> Result[i64, ReErr] {
+    let n = if t.b == 120 { 2 } else if t.b == 117 { 4 } else { 8 };
+    src.getwhile(n, 2, mut esc)?;
+    if esc.len() != n + 2 {
+        return Err(src.error(f"incomplete escape {to_string(esc)}", esc.len()));
+    }
+    let c = digits_value(esc, 2, 16);
+    if c > 0x10FFFF {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(c)
+}
+
+// _class_escape: an escape inside [...], a literal or a category.
+fn class_escape(src: mut ref Tokenizer, t: T) -> Result[Item, ReErr] {
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Item.Lit(e));
+    }
+    let cat = category_of(t);
+    if cat >= 0 {
+        return Ok(Item.Cat(cat));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Item.Lit(v));
+    }
+    if is_oct(c) {
+        src.getwhile(2, 0, mut esc)?;
+        let v = digits_value(esc, 1, 8);
+        if v > 0o377 {
+            return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+        }
+        return Ok(Item.Lit(v));
+    }
+    if is_dec(c) or is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Item.Lit(c))
+}
+
+// _escape: an escape outside a set.
+fn escape(src: mut ref Tokenizer, t: T, st: ref ParseState) -> Result[Node, ReErr] {
+    let cat = category_of(t);
+    if cat >= 0 {
+        let mut items: Vec[Item] = Vec.new();
+        items.push(Item.Cat(cat));
+        return Ok(Node.In(items, false));
+    }
+    match t.b {
+        65 => return Ok(Node.At(at_beginning_string())),
+        98 => return Ok(Node.At(at_boundary())),
+        66 => return Ok(Node.At(at_non_boundary())),
+        90 => return Ok(Node.At(at_end_string())),
+        _ => {}
+    }
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Node.Lit(e));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Node.Lit(v));
+    }
+    if c == 48 {
+        src.getwhile(2, 0, mut esc)?;
+        return Ok(Node.Lit(digits_value(esc, 1, 8)));
+    }
+    if is_dec(c) {
+        // an octal escape or a group reference
+        let nt = src.next;
+        if nt.n == 1 and is_dec(nt.a) {
+            esc.push(nt.a);
+            src.advance()?;
+            let nt2 = src.next;
+            if is_oct(esc[1]) and is_oct(esc[2]) and nt2.n == 1 and is_oct(nt2.a) {
+                esc.push(nt2.a);
+                src.advance()?;
+                let v = digits_value(esc, 1, 8);
+                if v > 0o377 {
+                    return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+                }
+                return Ok(Node.Lit(v));
+            }
+        }
+        let group = digits_value(esc, 1, 10);
+        if group < st.groups() {
+            if not st.checkgroup(group) {
+                return Err(src.error("cannot refer to an open group".to_string(), esc.len()));
+            }
+            st.checklookbehindgroup(group, src)?;
+            return Ok(Node.GroupRef(group));
+        }
+        return Err(src.error(f"invalid group reference {group}", esc.len() - 1));
+    }
+    if is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Node.Lit(c))
+}
+
+fn parse_sub(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64) -> Result[Vec[Node], ReErr] {
+    let mut items: Vec[Vec[Node]] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let first = nested == 0 and items.len() == 0;
+        let item = parse_seq(mut src, mut st, verbose, nested + 1, first)?;
+        items.push(item);
+        if not src.take(124)? {
+            break;
+        }
+        if nested == 0 {
+            verbose = (st.flags & flag_x()) != 0;
+        }
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().unwrap());
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node.Branch(items));
+    Ok(out)
+}
+
+// _parse_flags: None (as Err-free Ok(None)) for global flags, else the
+// flags turned on and off.
+fn parse_flags(src: mut ref Tokenizer, st: mut ref ParseState, first_char: T) -> Result[Option[(i64, i64)], ReErr] {
+    let mut ch = first_char;
+    let mut add = 0;
+    let mut del = 0;
+    if not tok_is(ch, 45) {
+        loop {
+            let flag = flag_value(ch.a);
+            if ch.a == 76 {
+                return Err(src.error("bad inline flags: cannot use 'L' flag with a str pattern".to_string(), 0));
+            }
+            add = add | flag;
+            if (flag & type_flags()) != 0 and (add & type_flags()) != flag {
+                return Err(src.error("bad inline flags: flags 'a', 'u' and 'L' are incompatible".to_string(), 0));
+            }
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing -, : or )".to_string(), 0));
+            }
+            if tok_is(ch, 41) or tok_is(ch, 45) or tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing -, : or )" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if tok_is(ch, 41) {
+        st.flags = st.flags | add;
+        return Ok(None);
+    }
+    if tok_is(ch, 45) {
+        ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("missing flag".to_string(), 0));
+        }
+        if ch.n != 1 or flag_value(ch.a) == 0 {
+            let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing flag" };
+            return Err(src.error(msg.to_string(), ch.n));
+        }
+        loop {
+            let flag = flag_value(ch.a);
+            if (flag & type_flags()) != 0 {
+                return Err(src.error("bad inline flags: cannot turn off flags 'a', 'u' and 'L'".to_string(), 0));
+            }
+            del = del | flag;
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing :".to_string(), 0));
+            }
+            if tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing :" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if (add & del) != 0 {
+        return Err(src.error("bad inline flags: flag turned on and off".to_string(), 1));
+    }
+    Ok(Some((add, del)))
+}
+
+fn is_alpha(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr] {
+    let here = src.tell() - 1;
+    let mut set: Vec[Item] = Vec.new();
+    let negate = src.take(94)?;
+    loop {
+        let this = src.get()?;
+        if this.n == 0 {
+            return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+        }
+        if tok_is(this, 93) and set.len() > 0 {
+            break;
+        }
+        let code1 = if this.n == 2 { class_escape(mut src, this)? } else { Item.Lit(this.a) };
+        if src.take(45)? {
+            let that = src.get()?;
+            if that.n == 0 {
+                return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+            }
+            if tok_is(that, 93) {
+                set.push(code1);
+                set.push(Item.Lit(45));
+                break;
+            }
+            let code2 = if that.n == 2 { class_escape(mut src, that)? } else { Item.Lit(that.a) };
+            let text = f"{to_string(tok_text(this))}-{to_string(tok_text(that))}";
+            let offset = this.n + 1 + that.n;
+            let lo = match code1 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            let hi = match code2 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            if lo < 0 or hi < 0 or hi < lo {
+                return Err(src.error(f"bad character range {text}", offset));
+            }
+            set.push(Item.Range(lo, hi));
+        } else {
+            set.push(code1);
+        }
+    }
+    if set.len() == 1 {
+        let only = ref set[0];
+        if let Item.Lit(c) = only {
+            if negate {
+                out.push(Node.NotLit(*c));
+            } else {
+                out.push(Node.Lit(*c));
+            }
+            return Ok(());
+        }
+    }
+    out.push(Node.In(set, negate));
+    Ok(())
+}
+
+// The quantifier just read (its first character is `this`), applied to
+// the last item. Returns false when `{` turned out to be a literal.
+fn parse_repeat(src: mut ref Tokenizer, this: T, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let here = src.tell();
+    let mut min = 0;
+    let mut max = maxrepeat();
+    if tok_is(this, 63) {
+        max = 1;
+    } else if tok_is(this, 43) {
+        min = 1;
+    } else if tok_is(this, 123) {
+        if tok_is(src.next, 125) {
+            out.push(Node.Lit(123));
+            return Ok(false);
+        }
+        let mut lo: Vec[i64] = Vec.new();
+        let mut hi: Vec[i64] = Vec.new();
+        while src.next.n == 1 and is_dec(src.next.a) {
+            lo.push(src.get()?.a);
+        }
+        if src.take(44)? {
+            while src.next.n == 1 and is_dec(src.next.a) {
+                hi.push(src.get()?.a);
+            }
+        } else {
+            hi = lo.clone();
+        }
+        if not src.take(125)? {
+            out.push(Node.Lit(123));
+            src.seek(here)?;
+            return Ok(false);
+        }
+        if lo.len() > 0 {
+            if lo.len() > 10 or digits_value(lo, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            min = digits_value(lo, 0, 10);
+        }
+        if hi.len() > 0 {
+            if hi.len() > 10 or digits_value(hi, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            max = digits_value(hi, 0, 10);
+            if max < min {
+                return Err(src.error("min repeat greater than max repeat".to_string(), src.tell() - here));
+            }
+        }
+    }
+    if out.len() == 0 or is_at(out[out.len() - 1]) {
+        return Err(src.error("nothing to repeat".to_string(), src.tell() - here + 1));
+    }
+    if is_repeat(out[out.len() - 1]) {
+        return Err(src.error("multiple repeat".to_string(), src.tell() - here + 1));
+    }
+    let last = out.pop().unwrap();
+    let mut body: Vec[Node] = Vec.new();
+    match last {
+        Node.Group(0, 0, 0, p) => body = p,
+        other => body.push(other),
+    }
+    let kind = if src.take(63)? { 1 } else if src.take(43)? { 2 } else { 0 };
+    out.push(Node.Repeat(kind, min, max, body));
+    Ok(true)
+}
+
+fn parse_seq(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64, first: bool) -> Result[Vec[Node], ReErr] {
+    let mut out: Vec[Node] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let this = src.next;
+        if this.n == 0 or tok_is(this, 124) or tok_is(this, 41) {
+            break;
+        }
+        src.advance()?;
+        if verbose {
+            if this.n == 1 and (this.a == 32 or (this.a >= 9 and this.a <= 13)) {
+                continue;
+            }
+            if tok_is(this, 35) {
+                loop {
+                    let t = src.get()?;
+                    if t.n == 0 or tok_is(t, 10) {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        if this.n == 2 {
+            let node = escape(mut src, this, st)?;
+            out.push(node);
+            continue;
+        }
+        let c = this.a;
+        if c == 91 {
+            parse_set(mut src, mut out)?;
+        } else if c == 42 or c == 43 or c == 63 or c == 123 {
+            parse_repeat(mut src, this, mut out)?;
+        } else if c == 46 {
+            out.push(Node.Any);
+        } else if c == 94 {
+            out.push(Node.At(at_beginning()));
+        } else if c == 36 {
+            out.push(Node.At(at_end()));
+        } else if c == 40 {
+            if parse_group(mut src, mut st, mut verbose, nested, first, mut out)? {
+                continue;
+            }
+        } else {
+            out.push(Node.Lit(c));
+        }
+    }
+    Ok(out)
+}
+
+// `(` and what follows. Returns true for a construct that adds nothing
+// (a comment, global flags).
+fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref bool, nested: i64, first: bool, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let start = src.tell() - 1;
+    let mut capture = true;
+    let mut atomic = false;
+    let mut name: Vec[i64] = Vec.new();
+    let mut named = false;
+    let mut add = 0;
+    let mut del = 0;
+    if src.take(63)? {
+        let ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("unexpected end of pattern".to_string(), 0));
+        }
+        if tok_is(ch, 80) {
+            if src.take(60)? {
+                name = src.getuntil(62, "group name")?;
+                src.checkgroupname(name, 1)?;
+                named = true;
+            } else if src.take(61)? {
+                let ref_name = src.getuntil(41, "group name")?;
+                src.checkgroupname(ref_name, 1)?;
+                let gid = st.group_of(ref_name);
+                if gid < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(ref_name)}", ref_name.len() + 1));
+                }
+                if not st.checkgroup(gid) {
+                    return Err(src.error("cannot refer to an open group".to_string(), ref_name.len() + 1));
+                }
+                st.checklookbehindgroup(gid, src)?;
+                out.push(Node.GroupRef(gid));
+                return Ok(true);
+            } else {
+                let c2 = src.get()?;
+                if c2.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                return Err(src.error(f"unknown extension ?P{to_string(tok_text(c2))}", c2.n + 2));
+            }
+        } else if tok_is(ch, 58) {
+            capture = false;
+        } else if tok_is(ch, 35) {
+            loop {
+                if src.next.n == 0 {
+                    return Err(src.error("missing ), unterminated comment".to_string(), src.tell() - start));
+                }
+                if tok_is(src.get()?, 41) {
+                    break;
+                }
+            }
+            return Ok(true);
+        } else if tok_is(ch, 61) or tok_is(ch, 33) or tok_is(ch, 60) {
+            let mut kind = ch;
+            let mut dir = 1;
+            let mut outer_lookbehind = 0;
+            if tok_is(ch, 60) {
+                kind = src.get()?;
+                if kind.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                if not (tok_is(kind, 61) or tok_is(kind, 33)) {
+                    return Err(src.error(f"unknown extension ?<{to_string(tok_text(kind))}", kind.n + 2));
+                }
+                dir = -1;
+                outer_lookbehind = st.lookbehind_groups;
+                if outer_lookbehind < 0 {
+                    st.lookbehind_groups = st.groups();
+                }
+            }
+            let p = parse_sub(mut src, mut st, *verbose, nested + 1)?;
+            if dir < 0 and outer_lookbehind < 0 {
+                st.lookbehind_groups = -1;
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            if tok_is(kind, 61) {
+                out.push(Node.Assert(dir, false, p));
+            } else if p.len() > 0 {
+                out.push(Node.Assert(dir, true, p));
+            } else {
+                out.push(Node.Failure);
+            }
+            return Ok(true);
+        } else if tok_is(ch, 40) {
+            let condname = src.getuntil(41, "group name")?;
+            let mut condgroup = 0;
+            if not is_ascii_decimal(condname) {
+                src.checkgroupname(condname, 1)?;
+                condgroup = st.group_of(condname);
+                if condgroup < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(condname)}", condname.len() + 1));
+                }
+            } else {
+                if condname.len() > 10 {
+                    return Err(src.error(f"invalid group reference {to_string(condname)}", condname.len() + 1));
+                }
+                condgroup = digits_value(condname, 0, 10);
+                if condgroup == 0 {
+                    return Err(src.error("bad group number".to_string(), condname.len() + 1));
+                }
+                if condgroup >= maxgroups() {
+                    return Err(src.error(f"invalid group reference {condgroup}", condname.len() + 1));
+                }
+                let mut seen = false;
+                for (g, _) in st.refpos.iter() {
+                    if *g == condgroup {
+                        seen = true;
+                    }
+                }
+                if not seen {
+                    st.refpos.push((condgroup, src.tell() - condname.len() - 1));
+                }
+            }
+            st.checklookbehindgroup(condgroup, src)?;
+            let yes = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+            let mut no: Vec[Node] = Vec.new();
+            if src.take(124)? {
+                no = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+                if tok_is(src.next, 124) {
+                    return Err(src.error("conditional backref with more than two branches".to_string(), 0));
+                }
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            out.push(Node.Exists(condgroup, yes, no));
+            return Ok(true);
+        } else if tok_is(ch, 62) {
+            capture = false;
+            atomic = true;
+        } else if (ch.n == 1 and flag_value(ch.a) != 0) or tok_is(ch, 45) {
+            match parse_flags(mut src, mut st, ch)? {
+                None => {
+                    if not first or out.len() > 0 {
+                        return Err(src.error("global flags not at the start of the expression".to_string(), src.tell() - start));
+                    }
+                    *verbose = (st.flags & flag_x()) != 0;
+                    return Ok(true);
+                }
+                Some((a, d)) => {
+                    add = a;
+                    del = d;
+                    capture = false;
+                }
+            }
+        } else {
+            return Err(src.error(f"unknown extension ?{to_string(tok_text(ch))}", ch.n + 1));
+        }
+    }
+    let mut group = 0;
+    if capture {
+        group = st.groups();
+        st.closed.push(false);
+        st.widths.push(Width { lo: 0, hi: 0 });
+        if named {
+            let was = st.group_of(name);
+            if was >= 0 {
+                return Err(src.error(f"redefinition of group name {repr_of(name)} as group {group}; was group {was}", name.len() + 1));
+            }
+            st.names.push((name.clone(), group));
+        }
+    }
+    let sub_verbose = (*verbose or (add & flag_x()) != 0) and (del & flag_x()) == 0;
+    let p = parse_sub(mut src, mut st, sub_verbose, nested + 1)?;
+    if not src.take(41)? {
+        return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+    }
+    if group > 0 {
+        let w = width_of(st.widths, p);
+        st.widths[group] = w;
+        st.closed[group] = true;
+    }
+    if atomic {
+        out.push(Node.Atomic(p));
+    } else {
+        out.push(Node.Group(group, add, del, p));
+    }
+    Ok(false)
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    flags: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+    widths: Vec[Width],
+}
+
+fn parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
+    let mut src = new_tokenizer(pattern)?;
+    let mut st = ParseState {
+        flags: flags,
+        names: Vec.new(),
+        closed: Vec.new(),
+        widths: Vec.new(),
+        lookbehind_groups: -1,
+        refpos: Vec.new(),
+    };
+    // group 0 is the whole match
+    st.closed.push(true);
+    st.widths.push(Width { lo: 0, hi: 0 });
+    let nodes = parse_sub(mut src, mut st, (flags & flag_x()) != 0, 0)?;
+    if (st.flags & flag_a()) != 0 and (st.flags & flag_u()) != 0 {
+        return Err(other_error("ValueError", "ASCII and UNICODE flags are incompatible".to_string()));
+    }
+    if src.next.n != 0 {
+        return Err(src.error("unbalanced parenthesis".to_string(), 0));
+    }
+    for (g, pos) in st.refpos.iter() {
+        if *g >= st.groups() {
+            return Err(re_error(f"invalid group reference {*g}", *pos));
+        }
+    }
+    let groups = st.groups() - 1;
+    Ok(Parsed { nodes: nodes, flags: st.flags, groups: groups, names: st.names, widths: st.widths })
+}
+
+// ---------------------------------------------------------- compiler
+
+enum Op {
+    // character (lowered when case-insensitive), case-insensitive, ASCII
+    Lit(i64, bool, bool),
+    NotLit(i64, bool, bool),
+    Any,
+    AnyAll,
+    // set, case-insensitive, ASCII-only categories
+    In(i64, bool, bool),
+    // anchor kind, ASCII-only word boundary
+    At(i64, bool),
+    Mark(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    // repeat register, the Until it starts at
+    RepInit(i64, i64),
+    // register, min, max, greedy, body, exit
+    Until(i64, i64, i64, bool, i64, i64),
+    Ref(i64, bool, bool),
+    // lookbehind width (-1 for lookahead), negative, sub-program, next
+    Look(i64, bool, i64, i64),
+    Atomic(i64, i64),
+    Exists(i64, i64),
+    Fail,
+    Succeed,
+    Match,
+}
+
+struct Program {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+}
+
+struct CharSet {
+    items: Vec[Item],
+    negate: bool,
+}
+
+fn combine(flags: i64, add: i64, del: i64) -> i64 {
+    let mut f = flags;
+    if (add & type_flags()) != 0 {
+        f = f & (0x7FFFFFFF ^ type_flags());
+    }
+    (f | add) & (0x7FFFFFFF ^ del)
+}
+
+struct Compiler {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+}
+
+impl Compiler {
+    fn emit(mut ref self, op: own Op) -> i64 {
+        self.ops.push(op);
+        self.ops.len() - 1
+    }
+
+    fn here(ref self) -> i64 {
+        self.ops.len()
+    }
+
+    fn compile(mut ref self, p: ref Parsed, nodes: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let icase = (flags & flag_i()) != 0;
+        let ascii = (flags & flag_a()) != 0;
+        for n in nodes.iter() {
+            match n {
+                Node.Lit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.Lit(v, icase, ascii));
+                }
+                Node.NotLit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.NotLit(v, icase, ascii));
+                }
+                Node.Any => {
+                    if (flags & flag_s()) != 0 {
+                        self.emit(Op.AnyAll);
+                    } else {
+                        self.emit(Op.Any);
+                    }
+                }
+                Node.In(items, negate) => {
+                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    let idx = self.sets.len() - 1;
+                    self.emit(Op.In(idx, icase, ascii));
+                }
+                Node.At(kind) => {
+                    let mut k = *kind;
+                    if (flags & flag_m()) != 0 {
+                        if k == at_beginning() {
+                            k = at_beginning_line();
+                        } else if k == at_end() {
+                            k = at_end_line();
+                        }
+                    }
+                    self.emit(Op.At(k, ascii));
+                }
+                Node.Branch(items) => {
+                    let mut ends: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < items.len() {
+                        if i + 1 < items.len() {
+                            let split = self.emit(Op.Fail);
+                            self.compile(p, items[i], flags)?;
+                            ends.push(self.emit(Op.Fail));
+                            let next = self.here();
+                            self.ops[split] = Op.Split(split + 1, next);
+                        } else {
+                            self.compile(p, items[i], flags)?;
+                        }
+                        i += 1;
+                    }
+                    let end = self.here();
+                    for at in ends {
+                        self.ops[at] = Op.Jmp(end);
+                    }
+                }
+                Node.Group(g, add, off, body) => {
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g));
+                    }
+                    self.compile(p, body, combine(flags, *add, *off))?;
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g + 1));
+                    }
+                }
+                Node.Repeat(kind, min, max, body) => {
+                    if *kind == 2 {
+                        let at = self.emit(Op.Fail);
+                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.emit(Op.Succeed);
+                        let next = self.here();
+                        self.ops[at] = Op.Atomic(at + 1, next);
+                    } else {
+                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                    }
+                }
+                Node.Atomic(body) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Atomic(at + 1, next);
+                }
+                Node.Assert(dir, negative, body) => {
+                    let mut width = -1;
+                    if *dir < 0 {
+                        let w = width_of(p.widths, body);
+                        if w.lo != w.hi {
+                            return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
+                        }
+                        width = w.lo;
+                    }
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                }
+                Node.GroupRef(g) => {
+                    self.emit(Op.Ref(*g, icase, ascii));
+                }
+                Node.Exists(g, yes, no) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, yes, flags)?;
+                    if no.len() > 0 {
+                        let jump = self.emit(Op.Fail);
+                        let no_pc = self.here();
+                        self.compile(p, no, flags)?;
+                        let end = self.here();
+                        self.ops[jump] = Op.Jmp(end);
+                        self.ops[at] = Op.Exists(*g, no_pc);
+                    } else {
+                        let end = self.here();
+                        self.ops[at] = Op.Exists(*g, end);
+                    }
+                }
+                Node.Failure => {
+                    self.emit(Op.Fail);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_repeat(mut ref self, p: ref Parsed, min: i64, max: i64, greedy: bool, body: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let r = self.repeats;
+        self.repeats += 1;
+        let init = self.emit(Op.Fail);
+        self.compile(p, body, flags)?;
+        let until = self.emit(Op.Fail);
+        self.ops[init] = Op.RepInit(r, until);
+        self.ops[until] = Op.Until(r, min, max, greedy, init + 1, until + 1);
+        Ok(())
+    }
+}
+
+fn compile(pattern: ref Vec[i64], flags: i64) -> Result[Program, ReErr] {
+    let p = parse(pattern, flags)?;
+    let mut c = Compiler { ops: Vec.new(), sets: Vec.new(), repeats: 0 };
+    c.compile(p, p.nodes, p.flags)?;
+    c.emit(Op.Match);
+    Ok(Program { ops: c.ops, sets: c.sets, repeats: c.repeats, groups: p.groups, names: p.names })
+}
+
+// ----------------------------------------------------------- matcher
+
+struct Undo {
+    kind: i64,
+    idx: i64,
+    old: i64,
+}
+
+struct Choice {
+    pc: i64,
+    pos: i64,
+    trail: i64,
+    // 0: resume at pc; 1: a lazy repeat's Until, after its tail failed
+    mode: i64,
+}
+
+struct Matcher {
+    s: Vec[i64],
+    marks: Vec[i64],
+    counts: Vec[i64],
+    lasts: Vec[i64],
+    lastindex: i64,
+    trail: Vec[Undo],
+    start: i64,
+    must_advance: bool,
+    match_all: bool,
+}
+
+impl Matcher {
+    fn set_mark(mut ref self, slot: i64, v: i64) {
+        self.trail.push(Undo { kind: 0, idx: slot, old: self.marks[slot] });
+        self.marks[slot] = v;
+    }
+
+    fn set_count(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 1, idx: r, old: self.counts[r] });
+        self.counts[r] = v;
+    }
+
+    fn set_last(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 2, idx: r, old: self.lasts[r] });
+        self.lasts[r] = v;
+    }
+
+    fn set_lastindex(mut ref self, v: i64) {
+        self.trail.push(Undo { kind: 3, idx: 0, old: self.lastindex });
+        self.lastindex = v;
+    }
+
+    fn undo_to(mut ref self, len: i64) {
+        while self.trail.len() > len {
+            let u = self.trail.pop().unwrap();
+            if u.kind == 0 {
+                self.marks[u.idx] = u.old;
+            } else if u.kind == 1 {
+                self.counts[u.idx] = u.old;
+            } else if u.kind == 2 {
+                self.lasts[u.idx] = u.old;
+            } else {
+                self.lastindex = u.old;
+            }
+        }
+    }
+
+    // A group that has both marks, the end not before the start.
+    fn group_span(ref self, g: i64) -> (i64, i64) {
+        let a = self.marks[2 * g];
+        let b = self.marks[2 * g + 1];
+        if a < 0 or b < 0 or b < a {
+            return (-1, -1);
+        }
+        (a, b)
+    }
+
+    fn at(ref self, kind: i64, ascii: bool, pos: i64) -> bool {
+        let n = self.s.len();
+        if kind == 0 or kind == 2 {
+            return pos == 0;
+        }
+        if kind == 1 {
+            return pos == 0 or self.s[pos - 1] == 10;
+        }
+        if kind == 3 {
+            return pos == n or (pos == n - 1 and self.s[pos] == 10);
+        }
+        if kind == 4 {
+            return pos == n or self.s[pos] == 10;
+        }
+        if kind == 5 {
+            return pos == n;
+        }
+        if n == 0 {
+            return false;
+        }
+        let before = pos > 0 and is_word(self.s[pos - 1], ascii);
+        let after = pos < n and is_word(self.s[pos], ascii);
+        if kind == 6 { before != after } else { before == after }
+    }
+
+    // Runs the program from pc at pos, backtracking through its own
+    // choices only. Returns where it succeeded, or -1.
+    fn run(mut ref self, prog: ref Program, pc0: i64, pos0: i64, top: bool) -> i64 {
+        let base = self.trail.len();
+        let mut choices: Vec[Choice] = Vec.new();
+        let mut pc = pc0;
+        let mut pos = pos0;
+        let mut mode = 0;
+        loop {
+            let mut ok = true;
+            let op = ref prog.ops[pc];
+            if mode == 1 {
+                // a lazy repeat whose tail failed: try one more item
+                mode = 0;
+                ok = false;
+                if let Op.Until(r, _, max, _, body, _) = op {
+                    let count = self.counts[*r] + 1;
+                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
+                        self.set_count(*r, count);
+                        self.set_last(*r, pos);
+                        pc = *body;
+                        ok = true;
+                    }
+                }
+                if ok {
+                    continue;
+                }
+            } else {
+                match op {
+                    Op.Lit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.NotLit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Any => {
+                        if pos < self.s.len() and self.s[pos] != 10 {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.AnyAll => {
+                        if pos < self.s.len() {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.In(set, icase, ascii) => {
+                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.At(kind, ascii) => {
+                        if self.at(*kind, *ascii, pos) {
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Mark(slot) => {
+                        self.set_mark(*slot, pos);
+                        if (*slot & 1) == 1 {
+                            self.set_lastindex(*slot / 2);
+                        }
+                        pc += 1;
+                    }
+                    Op.Split(a, b) => {
+                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = *a;
+                    }
+                    Op.Jmp(a) => pc = *a,
+                    Op.RepInit(r, until) => {
+                        self.set_count(*r, -1);
+                        self.set_last(*r, -1);
+                        pc = *until;
+                    }
+                    Op.Until(r, min, max, greedy, body, exit) => {
+                        let count = self.counts[*r] + 1;
+                        if count < *min {
+                            self.set_count(*r, count);
+                            pc = *body;
+                        } else if *greedy {
+                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
+                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(*r, count);
+                                self.set_last(*r, pos);
+                                pc = *body;
+                            } else {
+                                pc = *exit;
+                            }
+                        } else {
+                            choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
+                            pc = *exit;
+                        }
+                    }
+                    Op.Ref(g, icase, ascii) => {
+                        let (a, b) = self.group_span(*g);
+                        if a < 0 {
+                            ok = false;
+                        } else {
+                            let len = b - a;
+                            if pos + len > self.s.len() {
+                                ok = false;
+                            } else {
+                                let mut k = 0;
+                                while k < len {
+                                    let x = self.s[a + k];
+                                    let y = self.s[pos + k];
+                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    if not eq {
+                                        ok = false;
+                                        break;
+                                    }
+                                    k += 1;
+                                }
+                                if ok {
+                                    pos += len;
+                                    pc += 1;
+                                }
+                            }
+                        }
+                    }
+                    Op.Look(width, negative, sub, next) => {
+                        let mark = self.trail.len();
+                        let from = if *width < 0 { pos } else { pos - *width };
+                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
+                        if *negative {
+                            self.undo_to(mark);
+                            if found {
+                                ok = false;
+                            } else {
+                                pc = *next;
+                            }
+                        } else if found {
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Atomic(sub, next) => {
+                        let end = self.run(prog, *sub, pos, false);
+                        if end >= 0 {
+                            pos = end;
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Exists(g, no) => {
+                        let (a, _) = self.group_span(*g);
+                        if a >= 0 {
+                            pc += 1;
+                        } else {
+                            pc = *no;
+                        }
+                    }
+                    Op.Fail => ok = false,
+                    Op.Succeed => return pos,
+                    Op.Match => {
+                        if top and ((self.match_all and pos != self.s.len()) or (self.must_advance and pos == self.start)) {
+                            ok = false;
+                        } else {
+                            return pos;
+                        }
+                    }
+                }
+            }
+            if not ok {
+                match choices.pop() {
+                    Some(ch) => {
+                        self.undo_to(ch.trail);
+                        pc = ch.pc;
+                        pos = ch.pos;
+                        mode = ch.mode;
+                    }
+                    None => {
+                        self.undo_to(base);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
+    for item in set.items.iter() {
+        let hit = match item {
+            Item.Lit(l) => c == *l,
+            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Cat(k) => {
+                let kind = *k;
+                if kind == 0 {
+                    if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
+                } else if kind == 1 {
+                    if ascii { not (c >= 48 and c <= 57) } else { not is_decimal(c) }
+                } else if kind == 2 {
+                    is_space(c, ascii)
+                } else if kind == 3 {
+                    not is_space(c, ascii)
+                } else if kind == 4 {
+                    is_word(c, ascii)
+                } else {
+                    not is_word(c, ascii)
+                }
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    false
+}
+
+// Under IGNORECASE sre lowercases the set when it compiles it and tests
+// the lowercased character; a character is in the lowered set if it, or
+// its uppercase, is in the set and lowers to it.
+fn in_set(set: ref CharSet, c: i64, icase: bool, ascii: bool) -> bool {
+    let mut hit = false;
+    if icase {
+        let lo = lower(c, ascii);
+        if lower(lo, ascii) == lo and in_items(set, lo, ascii) {
+            hit = true;
+        }
+        let up = upper(lo, ascii);
+        if not hit and lower(up, ascii) == lo and in_items(set, up, ascii) {
+            hit = true;
+        }
+    } else {
+        hit = in_items(set, c, ascii);
+    }
+    hit != set.negate
+}
+
+// ------------------------------------------------------- the module
+
+struct Found {
+    start: i64,
+    end: i64,
+    // group spans, (-1, -1) when a group did not take part
+    spans: Vec[(i64, i64)],
+    lastindex: i64,
+}
+
+fn new_matcher(prog: ref Program, s: ref Vec[i64]) -> Matcher {
+    let mut marks: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 * (prog.groups + 1) {
+        marks.push(-1);
+        k += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut lasts: Vec[i64] = Vec.new();
+    k = 0;
+    while k < prog.repeats {
+        counts.push(-1);
+        lasts.push(-1);
+        k += 1;
+    }
+    Matcher {
+        s: s.clone(),
+        marks: marks,
+        counts: counts,
+        lasts: lasts,
+        lastindex: -1,
+        trail: Vec.new(),
+        start: 0,
+        must_advance: false,
+        match_all: false,
+    }
+}
+
+// sre_search from `from` (or one attempt there for match and
+// fullmatch: mode 1 and 2).
+fn find(m: mut ref Matcher, prog: ref Program, from: i64, must_advance: bool, mode: i64) -> Option[Found] {
+    let mut start = from;
+    while start <= m.s.len() {
+        let mut k = 0;
+        while k < m.marks.len() {
+            m.marks[k] = -1;
+            k += 1;
+        }
+        m.lastindex = -1;
+        m.trail.clear();
+        m.start = start;
+        m.must_advance = must_advance and start == from;
+        m.match_all = mode == 2;
+        let end = m.run(prog, 0, start, true);
+        if end >= 0 {
+            let mut spans: Vec[(i64, i64)] = Vec.new();
+            let mut g = 1;
+            while g <= prog.groups {
+                spans.push(m.group_span(g));
+                g += 1;
+            }
+            return Some(Found { start: start, end: end, spans: spans, lastindex: m.lastindex });
+        }
+        if mode != 0 {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+
+// All the matches finditer gives: each search starts where the last
+// match ended, and must move on past an empty one.
+fn all_matches(prog: ref Program, s: ref Vec[i64], limit: i64) -> Vec[Found] {
+    let mut m = new_matcher(prog, s);
+    let mut out: Vec[Found] = Vec.new();
+    let mut pos = 0;
+    let mut must_advance = false;
+    while pos <= s.len() and (limit == 0 or out.len() < limit) {
+        match find(mut m, prog, pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn group_text(s: ref Vec[i64], span: (i64, i64), out: mut ref Vec[i64]) {
+    let (a, b) = span;
+    if a < 0 {
+        push_ascii(mut out, "None");
+    } else {
+        str_repr(slice(s, a, b), mut out);
+    }
+}
+
+fn span_text(span: (i64, i64)) -> String {
+    let (a, b) = span;
+    f"({a}, {b})"
+}
+
+fn show_match(prog: ref Program, s: ref Vec[i64], found: ref Option[Found], out: mut ref Vec[i64]) {
+    let m = match found {
+        Some(m) => m,
+        None => {
+            push_ascii(mut out, "  None\n");
+            return;
+        }
+    };
+    push_ascii(mut out, f"  span={span_text((m.start, m.end))} match=");
+    str_repr(slice(s, m.start, m.end), mut out);
+    out.push(10);
+    if prog.groups > 0 {
+        push_ascii(mut out, "  groups=(");
+        let mut g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            group_text(s, m.spans[g], mut out);
+            g += 1;
+        }
+        if m.spans.len() == 1 {
+            push_ascii(mut out, ",");
+        }
+        push_ascii(mut out, ")\n  spans=[");
+        g = 0;
+        while g < m.spans.len() {
+            if g > 0 {
+                push_ascii(mut out, ", ");
+            }
+            push_ascii(mut out, span_text(m.spans[g]));
+            g += 1;
+        }
+        push_ascii(mut out, "]\n");
+    }
+    if prog.names.len() > 0 {
+        push_ascii(mut out, "  named=");
+        group_dict(prog, s, m, mut out);
+        out.push(10);
+    }
+}
+
+fn group_dict(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    out.push(123);
+    let mut k = 0;
+    while k < prog.names.len() {
+        if k > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (name, g) = ref prog.names[k];
+        str_repr(name, mut out);
+        push_ascii(mut out, ": ");
+        group_text(s, m.spans[g - 1], mut out);
+        k += 1;
+    }
+    out.push(125);
+}
+
+// findall's item: the match, the one group, or a tuple of the groups,
+// with '' for a group that did not take part.
+fn findall_item(prog: ref Program, s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    if prog.groups == 0 {
+        str_repr(slice(s, m.start, m.end), mut out);
+        return;
+    }
+    if prog.groups > 1 {
+        out.push(40);
+    }
+    let mut g = 0;
+    while g < m.spans.len() {
+        if g > 0 {
+            push_ascii(mut out, ", ");
+        }
+        let (a, b) = m.spans[g];
+        if a < 0 {
+            push_ascii(mut out, "''");
+        } else {
+            str_repr(slice(s, a, b), mut out);
+        }
+        g += 1;
+    }
+    if prog.groups > 1 {
+        out.push(41);
+    }
+}
+
+// A replacement template: literal text and group numbers.
+enum Piece {
+    Text(Vec[i64]),
+    Group(i64),
+}
+
+// _parser.parse_template.
+fn parse_template(repl: ref Vec[i64], prog: ref Program) -> Result[Vec[Piece], ReErr] {
+    let mut s = new_tokenizer(repl)?;
+    let mut pieces: Vec[Piece] = Vec.new();
+    let mut literal: Vec[i64] = Vec.new();
+    loop {
+        let this = s.get()?;
+        if this.n == 0 {
+            break;
+        }
+        if this.n == 1 {
+            literal.push(this.a);
+            continue;
+        }
+        let c = this.b;
+        let mut index = -1;
+        let mut offset = 0;
+        if c == 103 {
+            if not s.take(60)? {
+                return Err(s.error("missing <".to_string(), 0));
+            }
+            let name = s.getuntil(62, "group name")?;
+            if not is_ascii_decimal(name) {
+                s.checkgroupname(name, 1)?;
+                let mut found = -1;
+                for (n, g) in prog.names.iter() {
+                    if same(n, name) {
+                        found = *g;
+                    }
+                }
+                if found < 0 {
+                    return Err(other_error("IndexError", f"unknown group name {repr_of(name)}"));
+                }
+                index = found;
+            } else {
+                if name.len() > 10 or digits_value(name, 0, 10) >= maxgroups() {
+                    return Err(s.error(f"invalid group reference {to_string(name)}", name.len() + 1));
+                }
+                index = digits_value(name, 0, 10);
+            }
+            offset = name.len() + 1;
+        } else if c == 48 {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_oct(s.next.a) {
+                text.push(s.get()?.a);
+                if s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                }
+            }
+            literal.push(digits_value(text, 1, 8) & 0xFF);
+            continue;
+        } else if is_dec(c) {
+            let mut text = tok_text(this);
+            if s.next.n == 1 and is_dec(s.next.a) {
+                text.push(s.get()?.a);
+                if is_oct(c) and is_oct(text[2]) and s.next.n == 1 and is_oct(s.next.a) {
+                    text.push(s.get()?.a);
+                    let v = digits_value(text, 1, 8);
+                    if v > 0o377 {
+                        return Err(s.error(f"octal escape value {to_string(text)} outside of range 0-0o377", text.len()));
+                    }
+                    literal.push(v);
+                    continue;
+                }
+            }
+            index = digits_value(text, 1, 10);
+            offset = text.len() - 1;
+        } else {
+            let e = escape_value(this);
+            if e >= 0 {
+                literal.push(e);
+            } else if is_ascii_letter(c) {
+                return Err(s.error(f"bad escape {to_string(tok_text(this))}", 2));
+            } else {
+                literal.push(92);
+                literal.push(c);
+            }
+            continue;
+        }
+        if index > prog.groups {
+            return Err(s.error(f"invalid group reference {index}", offset));
+        }
+        pieces.push(Piece.Text(literal));
+        literal = Vec.new();
+        pieces.push(Piece.Group(index));
+    }
+    pieces.push(Piece.Text(literal));
+    Ok(pieces)
+}
+
+fn expand(pieces: ref Vec[Piece], s: ref Vec[i64], m: ref Found, out: mut ref Vec[i64]) {
+    for piece in pieces.iter() {
+        match piece {
+            Piece.Text(t) => push_all(mut out, t),
+            Piece.Group(g) => {
+                let (a, b) = if *g == 0 { (m.start, m.end) } else { m.spans[*g - 1] };
+                if a >= 0 {
+                    push_all(mut out, slice(s, a, b));
+                }
+            }
+        }
+    }
+}
+
+
+// ------------------------------------------------------------ decimal.Decimal
+
+// The Decimals isodate makes: coef * 10**exp with exp <= 0, the exponent
+// kept as the text gave it ("1.50" stays 1.50).
+#[derive(Clone)]
+struct Dec {
+    coef: i64,
+    exp: i64,
+}
+
+fn pow10(n: i64) -> i64 {
+    let mut v = 1;
+    for _k in 0..n {
+        v = v * 10;
+    }
+    v
+}
+
+fn dec_int(n: i64) -> Dec {
+    Dec { coef: n, exp: 0 }
+}
+
+// Decimal(text) for digits with an optional point and fraction.
+fn dec_parse(s: ref String) -> Dec {
+    let mut coef = 0;
+    let mut exp = 0;
+    let mut point = false;
+    for c in s.chars() {
+        if c == '.' {
+            point = true;
+        } else {
+            coef = coef * 10 + (c as i64 - 48);
+            if point {
+                exp -= 1;
+            }
+        }
+    }
+    Dec { coef: coef, exp: exp }
+}
+
+// a and b with the smaller exponent, the way Decimal adds.
+fn dec_align(a: ref Dec, b: ref Dec) -> (i64, i64, i64) {
+    let e = if a.exp < b.exp { a.exp } else { b.exp };
+    (a.coef * pow10(a.exp - e), b.coef * pow10(b.exp - e), e)
+}
+
+fn dec_add(a: ref Dec, b: ref Dec) -> Dec {
+    let (x, y, e) = dec_align(a, b);
+    Dec { coef: x + y, exp: e }
+}
+
+fn dec_sub(a: ref Dec, b: ref Dec) -> Dec {
+    let (x, y, e) = dec_align(a, b);
+    Dec { coef: x - y, exp: e }
+}
+
+fn dec_mul_int(a: ref Dec, n: i64) -> Dec {
+    Dec { coef: a.coef * n, exp: a.exp }
+}
+
+fn dec_neg(a: ref Dec) -> Dec {
+    Dec { coef: 0 - a.coef, exp: a.exp }
+}
+
+fn dec_abs(a: ref Dec) -> Dec {
+    Dec { coef: iabs(a.coef), exp: a.exp }
+}
+
+fn dec_sign(a: ref Dec) -> i64 {
+    if a.coef > 0 { 1 } else if a.coef < 0 { -1 } else { 0 }
+}
+
+fn dec_eq(a: ref Dec, b: ref Dec) -> bool {
+    let (x, y, _e) = dec_align(a, b);
+    x == y
+}
+
+// int(d): toward zero.
+fn dec_trunc(a: ref Dec) -> i64 {
+    a.coef / pow10(0 - a.exp)
+}
+
+fn dec_is_integral(a: ref Dec) -> bool {
+    a.coef % pow10(0 - a.exp) == 0
+}
+
+// The fraction a - int(a), with a's exponent.
+fn dec_frac(a: ref Dec) -> Dec {
+    Dec { coef: a.coef % pow10(0 - a.exp), exp: a.exp }
+}
+
+// str(d), Decimal's to-scientific-string.
+fn dec_str(a: ref Dec) -> String {
+    let ds = f"{iabs(a.coef)}";
+    let cs = chars_of(ds);
+    let n = cs.len() as i64;
+    let sign = if a.coef < 0 { "-" } else { "" };
+    let adjusted = a.exp + n - 1;
+    if a.exp <= 0 and adjusted >= -6 {
+        if a.exp == 0 {
+            return f"{sign}{ds}";
+        }
+        let point = n + a.exp;
+        if point > 0 {
+            return f"{sign}{text_of(cs, 0, point)}.{text_of(cs, point, n)}";
+        }
+        let mut z = String.new();
+        for _k in 0..(0 - point) {
+            z.push('0');
+        }
+        return f"{sign}0.{z}{ds}";
+    }
+    let mut out = f"{sign}{cs[0]}";
+    if n > 1 {
+        out.push('.');
+        out.push_str(text_of(cs, 1, n));
+    }
+    let e_sign = if adjusted >= 0 { "+" } else { "" };
+    f"{out}E{e_sign}{adjusted}"
+}
+
+// ------------------------------------------------------------ datetime.timedelta
+
+#[derive(Clone)]
+struct Td {
+    days: i64,
+    secs: i64,
+    us: i64,
+}
+
+// A constructor argument: absent, an int or a float.
+enum Num {
+    Absent,
+    I(i64),
+    F(f64),
+}
+
+fn td_zero() -> Td {
+    Td { days: 0, secs: 0, us: 0 }
+}
+
+// microseconds_to_delta for a day/second/microsecond triple, with the
+// range check.
+fn td_norm(days: i64, secs: i64, us: i64) -> Result[Td, PyErr] {
+    let s = secs + floor_div(us, 1000000);
+    let u = py_mod(us, 1000000);
+    let d = days + floor_div(s, 86400);
+    let s2 = py_mod(s, 86400);
+    if iabs(d) > 999999999 {
+        return Err(py_err("OverflowError", f"days={d}; must have magnitude <= 999999999"));
+    }
+    Ok(Td { days: d, secs: s2, us: u })
+}
+
+// _datetimemodule.c's accum(): the integer part exactly, the fraction
+// through a double, its leftover microseconds kept for the end.
+fn accum(sofar: i64, num: ref Num, factor: i64, leftover: mut ref f64) -> i64 {
+    match num {
+        Num.Absent => sofar,
+        Num.I(n) => sofar + *n * factor,
+        Num.F(x) => {
+            let ip = x.trunc();
+            let fp = *x - ip;
+            let sum = sofar + (ip as i64) * factor;
+            if fp == 0.0 {
+                return sum;
+            }
+            let dnum = (factor as f64) * fp;
+            let ip2 = dnum.trunc();
+            *leftover += dnum - ip2;
+            sum + ip2 as i64
+        }
+    }
+}
+
+// timedelta(days, seconds, microseconds, milliseconds, minutes, hours,
+// weeks), as the C constructor computes it.
+fn td_new(days: Num, seconds: Num, microseconds: Num, milliseconds: Num, minutes: Num, hours: Num, weeks: Num) -> Result[Td, PyErr] {
+    let mut leftover: f64 = 0.0;
+    let mut x: i64 = 0;
+    x = accum(x, microseconds, 1, mut leftover);
+    x = accum(x, milliseconds, 1000, mut leftover);
+    x = accum(x, seconds, 1000000, mut leftover);
+    x = accum(x, minutes, 60000000, mut leftover);
+    x = accum(x, hours, 3600000000, mut leftover);
+    x = accum(x, days, 86400000000, mut leftover);
+    x = accum(x, weeks, 604800000000, mut leftover);
+    if leftover != 0.0 {
+        let mut whole = leftover.round();
+        if (whole - leftover).abs() == 0.5 {
+            let odd = (x & 1) as f64;
+            whole = 2.0 * ((leftover + odd) * 0.5).round() - odd;
+        }
+        x += whole as i64;
+    }
+    td_norm(floor_div(x, 86400000000), 0, py_mod(x, 86400000000))
+}
+
+fn td_days(d: i64) -> Td {
+    Td { days: d, secs: 0, us: 0 }
+}
+
+fn td_add(a: ref Td, b: ref Td) -> Result[Td, PyErr] {
+    td_norm(a.days + b.days, a.secs + b.secs, a.us + b.us)
+}
+
+fn td_neg(a: ref Td) -> Result[Td, PyErr] {
+    td_norm(0 - a.days, 0 - a.secs, 0 - a.us)
+}
+
+fn td_sub(a: ref Td, b: ref Td) -> Result[Td, PyErr] {
+    td_add(a, td_neg(b)?)
+}
+
+fn td_mul(a: ref Td, n: i64) -> Result[Td, PyErr] {
+    td_norm(a.days * n, a.secs * n, a.us * n)
+}
+
+fn td_cmp(a: ref Td, b: ref Td) -> i64 {
+    if a.days != b.days {
+        return if a.days < b.days { -1 } else { 1 };
+    }
+    if a.secs != b.secs {
+        return if a.secs < b.secs { -1 } else { 1 };
+    }
+    if a.us != b.us {
+        return if a.us < b.us { -1 } else { 1 };
+    }
+    0
+}
+
+fn td_is_zero(a: ref Td) -> bool {
+    a.days == 0 and a.secs == 0 and a.us == 0
+}
+
+fn td_str(a: ref Td) -> String {
+    let mm = a.secs / 60;
+    let ss = a.secs % 60;
+    let hh = mm / 60;
+    let mut s = f"{hh}:{zpad(mm % 60, 2)}:{zpad(ss, 2)}";
+    if a.days != 0 {
+        let plural = if iabs(a.days) != 1 { "s" } else { "" };
+        s = f"{a.days} day{plural}, {s}";
+    }
+    if a.us != 0 {
+        s = f"{s}.{zpad(a.us, 6)}";
+    }
+    s
+}
+
+fn td_repr(a: ref Td) -> String {
+    let mut args: Vec[String] = Vec.new();
+    if a.days != 0 {
+        args.push(f"days={a.days}");
+    }
+    if a.secs != 0 {
+        args.push(f"seconds={a.secs}");
+    }
+    if a.us != 0 {
+        args.push(f"microseconds={a.us}");
+    }
+    if args.len() == 0 {
+        args.push("0".to_string());
+    }
+    let mut out = "datetime.timedelta(".to_string();
+    for k in 0..args.len() {
+        if k > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(args[k]);
+    }
+    out.push(')');
+    out
+}
+
+// ------------------------------------------------------------ date, time, datetime
+
+const DAYS_IN_MONTH: Array[i64, 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+const DAYS_BEFORE_MONTH: Array[i64, 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+const MAX_ORDINAL: i64 = 3652059;
+
+fn is_leap(y: i64) -> bool {
+    y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    if m == 2 and is_leap(y) { 29 } else { DAYS_IN_MONTH[m] }
+}
+
+fn days_before_year(y: i64) -> i64 {
+    let p = y - 1;
+    p * 365 + floor_div(p, 4) - floor_div(p, 100) + floor_div(p, 400)
+}
+
+// date.toordinal(): 0001-01-01 is day 1.
+fn to_ordinal(y: i64, m: i64, d: i64) -> i64 {
+    let mut n = days_before_year(y) + DAYS_BEFORE_MONTH[m] + d;
+    if m > 2 and is_leap(y) {
+        n += 1;
+    }
+    n
+}
+
+// date.fromordinal(n), as CPython's ord_to_ymd computes it.
+fn from_ordinal(ord: i64) -> (i64, i64, i64) {
+    let mut n = ord - 1;
+    let n400 = n / 146097;
+    n = n % 146097;
+    let n100 = n / 36524;
+    n = n % 36524;
+    let n4 = n / 1461;
+    n = n % 1461;
+    let n1 = n / 365;
+    n = n % 365;
+    let year = n400 * 400 + n100 * 100 + n4 * 4 + n1 + 1;
+    if n1 == 4 or n100 == 4 {
+        return (year - 1, 12, 31);
+    }
+    let leap = n1 == 3 and (n4 != 24 or n100 == 3);
+    let mut month = (n + 50) / 32;
+    let mut before = DAYS_BEFORE_MONTH[month];
+    if month > 2 and leap {
+        before += 1;
+    }
+    if before > n {
+        month -= 1;
+        before -= days_in_month(year, month);
+    }
+    (year, month, n - before + 1)
+}
+
+// The tzinfo objects isodate makes: none, its UTC, and FixedOffset with
+// its offset in seconds and its name.
+#[derive(Clone)]
+enum Tz {
+    Naive,
+    Utc,
+    Fixed(i64, String),
+}
+
+fn tz_offset(tz: ref Tz) -> Option[i64] {
+    match tz {
+        Tz.Naive => None,
+        Tz.Utc => Some(0),
+        Tz.Fixed(off, _n) => Some(*off),
+    }
+}
+
+fn tz_desc(tz: ref Tz) -> String {
+    match tz {
+        Tz.Naive => "naive".to_string(),
+        Tz.Utc => "UTC".to_string(),
+        Tz.Fixed(off, name) => f"<FixedOffset {py_repr(name)}> {off}",
+    }
+}
+
+// A date (kind 0), time (kind 1) or datetime (kind 2).
+#[derive(Clone)]
+struct Pt {
+    kind: i64,
+    y: i64,
+    mo: i64,
+    d: i64,
+    h: i64,
+    mi: i64,
+    s: i64,
+    us: i64,
+    tz: Tz,
+}
+
+fn type_name(p: ref Pt) -> Str {
+    if p.kind == 0 { "datetime.date" } else if p.kind == 1 { "datetime.time" } else { "datetime.datetime" }
+}
+
+fn check_date(y: i64, mo: i64, d: i64) -> Result[(), PyErr] {
+    if y < 1 or y > 9999 {
+        return Err(value_error(f"year {y} is out of range"));
+    }
+    if mo < 1 or mo > 12 {
+        return Err(value_error("month must be in 1..12".to_string()));
+    }
+    if d < 1 or d > days_in_month(y, mo) {
+        return Err(value_error("day is out of range for month".to_string()));
+    }
+    Ok(())
+}
+
+fn check_time(h: i64, mi: i64, s: i64, us: i64) -> Result[(), PyErr] {
+    if h < 0 or h > 23 {
+        return Err(value_error("hour must be in 0..23".to_string()));
+    }
+    if mi < 0 or mi > 59 {
+        return Err(value_error("minute must be in 0..59".to_string()));
+    }
+    if s < 0 or s > 59 {
+        return Err(value_error("second must be in 0..59".to_string()));
+    }
+    if us < 0 or us > 999999 {
+        return Err(value_error("microsecond must be in 0..999999".to_string()));
+    }
+    Ok(())
+}
+
+fn make_date(y: i64, mo: i64, d: i64) -> Result[Pt, PyErr] {
+    check_date(y, mo, d)?;
+    Ok(Pt { kind: 0, y: y, mo: mo, d: d, h: 0, mi: 0, s: 0, us: 0, tz: Tz.Naive })
+}
+
+fn make_time(h: i64, mi: i64, s: i64, us: i64, tz: own Tz) -> Result[Pt, PyErr] {
+    check_time(h, mi, s, us)?;
+    Ok(Pt { kind: 1, y: 1, mo: 1, d: 1, h: h, mi: mi, s: s, us: us, tz: tz })
+}
+
+// datetime.combine(date, time)
+fn dt_combine(dpart: ref Pt, tpart: ref Pt) -> Pt {
+    Pt { kind: 2, y: dpart.y, mo: dpart.mo, d: dpart.d, h: tpart.h, mi: tpart.mi, s: tpart.s, us: tpart.us, tz: tpart.tz.clone() }
+}
+
+fn ordinal(p: ref Pt) -> i64 {
+    to_ordinal(p.y, p.mo, p.d)
+}
+
+fn isoweekday(p: ref Pt) -> i64 {
+    py_mod(ordinal(p) + 6, 7) + 1
+}
+
+fn isoweek1monday(year: i64) -> i64 {
+    let firstday = to_ordinal(year, 1, 1);
+    let firstweekday = py_mod(firstday + 6, 7);
+    let mut week1monday = firstday - firstweekday;
+    if firstweekday > 3 {
+        week1monday += 7;
+    }
+    week1monday
+}
+
+// date.isocalendar(): (year, week, weekday)
+fn isocalendar(p: ref Pt) -> (i64, i64, i64) {
+    let mut year = p.y;
+    let mut week1monday = isoweek1monday(year);
+    let today = ordinal(p);
+    let mut week = floor_div(today - week1monday, 7);
+    let mut day = py_mod(today - week1monday, 7);
+    if week < 0 {
+        year -= 1;
+        week1monday = isoweek1monday(year);
+        week = floor_div(today - week1monday, 7);
+        day = py_mod(today - week1monday, 7);
+    } else if week >= 52 {
+        if today >= isoweek1monday(year + 1) {
+            year += 1;
+            week = 0;
+        }
+    }
+    (year, week + 1, day + 1)
+}
+
+// d.replace(year=, month=, day=)
+fn replace_date(p: ref Pt, y: i64, mo: i64, d: i64) -> Result[Pt, PyErr] {
+    check_date(y, mo, d)?;
+    let mut out = p.clone();
+    out.y = y;
+    out.mo = mo;
+    out.d = d;
+    Ok(out)
+}
+
+// date + timedelta (the days only) or datetime + timedelta.
+fn pt_add(p: ref Pt, t: ref Td) -> Result[Pt, PyErr] {
+    let mut out = p.clone();
+    if p.kind == 0 {
+        let ord = ordinal(p) + t.days;
+        if ord < 1 or ord > MAX_ORDINAL {
+            return Err(py_err("OverflowError", "date value out of range"));
+        }
+        let (y, mo, d) = from_ordinal(ord);
+        out.y = y;
+        out.mo = mo;
+        out.d = d;
+        return Ok(out);
+    }
+    let mut us = p.us + t.us;
+    let mut secs = p.h * 3600 + p.mi * 60 + p.s + t.secs + floor_div(us, 1000000);
+    us = py_mod(us, 1000000);
+    let ord = ordinal(p) + t.days + floor_div(secs, 86400);
+    secs = py_mod(secs, 86400);
+    if ord < 1 or ord > MAX_ORDINAL {
+        return Err(py_err("OverflowError", "date value out of range"));
+    }
+    let (y, mo, d) = from_ordinal(ord);
+    out.y = y;
+    out.mo = mo;
+    out.d = d;
+    out.h = secs / 3600;
+    out.mi = (secs / 60) % 60;
+    out.s = secs % 60;
+    out.us = us;
+    Ok(out)
+}
+
+// date - timedelta takes off the days only, as C's add_date_timedelta
+// does with negate set.
+fn pt_sub_td(p: ref Pt, t: ref Td) -> Result[Pt, PyErr] {
+    if p.kind == 0 {
+        return pt_add(p, td_days(0 - t.days));
+    }
+    pt_add(p, td_neg(t)?)
+}
+
+// date - date, or datetime - datetime with their UTC offsets.
+fn pt_diff(a: ref Pt, b: ref Pt) -> Result[Td, PyErr] {
+    if a.kind == 0 {
+        return td_norm(ordinal(a) - ordinal(b), 0, 0);
+    }
+    let mut adjust = 0;
+    match (tz_offset(a.tz), tz_offset(b.tz)) {
+        (None, None) => {}
+        (Some(x), Some(y)) => {
+            adjust = y - x;
+        }
+        _ => return Err(py_err("TypeError", "can't subtract offset-naive and offset-aware datetimes")),
+    }
+    let secs = (a.h * 3600 + a.mi * 60 + a.s) - (b.h * 3600 + b.mi * 60 + b.s) + adjust;
+    td_norm(ordinal(a) - ordinal(b), secs, a.us - b.us)
+}
+
+fn pt_show(p: ref Pt) -> String {
+    let date = f"{zpad(p.y, 4)}-{zpad(p.mo, 2)}-{zpad(p.d, 2)}";
+    let time = f"{zpad(p.h, 2)}:{zpad(p.mi, 2)}:{zpad(p.s, 2)}.{zpad(p.us, 6)}";
+    if p.kind == 0 {
+        f"date {date}"
+    } else if p.kind == 1 {
+        f"time {time} {tz_desc(p.tz)}"
+    } else {
+        f"datetime {date} {time} {tz_desc(p.tz)}"
+    }
+}
+
+// ------------------------------------------------------------ isodate
+
+// What the parsers return and the arithmetic works on.
+#[derive(Clone)]
+enum Value {
+    P(Pt),
+    D(Td),
+    U(Duration),
+}
+
+#[derive(Clone)]
+struct Duration {
+    years: Dec,
+    months: Dec,
+    td: Td,
+}
+
+struct DateRes {
+    yd: i64,
+    expanded: bool,
+    res: Vec[Pattern],
+}
+
+// The compiled patterns, built once each as isodate caches them.
+struct Iso {
+    dates: Vec[DateRes],
+    times: Vec[Pattern],
+    tz: Pattern,
+    period: Pattern,
+}
+
+fn tz_regex() -> String {
+    "(?P<tzname>(Z|(?P<tzsign>[+-])(?P<tzhour>[0-9]{2})(:?(?P<tzmin>[0-9]{2}))?)?)".to_string()
+}
+
+fn new_iso() -> Iso {
+    let tzr = tz_regex();
+    let mut times: Vec[Pattern] = Vec.new();
+    let bodies = [
+        "T?(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2}([,.][0-9]+)?)",
+        "T?(?P<hour>[0-9]{2})(?P<minute>[0-9]{2})(?P<second>[0-9]{2}([,.][0-9]+)?)",
+        "T?(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}([,.][0-9]+)?)",
+        "T?(?P<hour>[0-9]{2})(?P<minute>[0-9]{2}([,.][0-9]+)?)",
+        "T?(?P<hour>[0-9]{2}([,.][0-9]+)?)",
+    ];
+    for b in bodies {
+        times.push(regex(f"\\A{b}{tzr}\\Z"));
+    }
+    let period = regex(f"^(?P<sign>[+-])?P(?!\\b)(?P<years>[0-9]+([,.][0-9]+)?Y)?(?P<months>[0-9]+([,.][0-9]+)?M)?(?P<weeks>[0-9]+([,.][0-9]+)?W)?(?P<days>[0-9]+([,.][0-9]+)?D)?((?P<separator>T)(?P<hours>[0-9]+([,.][0-9]+)?H)?(?P<minutes>[0-9]+([,.][0-9]+)?M)?(?P<seconds>[0-9]+([,.][0-9]+)?S)?)?$");
+    Iso { dates: Vec.new(), times: times, tz: regex(tzr), period: period }
+}
+
+// build_date_regexps
+fn date_patterns(yd: i64, expanded: bool) -> Vec[Pattern] {
+    let sign = if expanded { 1 } else { 0 };
+    let pre = f"(?P<sign>[+-]){{{sign}}}(?P<year>[0-9]{{{yd}}})";
+    let bodies = [
+        f"{pre}-(?P<month>[0-9]{{2}})-(?P<day>[0-9]{{2}})",
+        f"{pre}(?P<month>[0-9]{{2}})(?P<day>[0-9]{{2}})",
+        f"{pre}-W(?P<week>[0-9]{{2}})-(?P<day>[0-9]{{1}})",
+        f"{pre}W(?P<week>[0-9]{{2}})(?P<day>[0-9]{{1}})",
+        f"{pre}-(?P<day>[0-9]{{3}})",
+        f"{pre}(?P<day>[0-9]{{3}})",
+        f"{pre}-W(?P<week>[0-9]{{2}})",
+        f"{pre}W(?P<week>[0-9]{{2}})",
+        f"{pre}-(?P<month>[0-9]{{2}})",
+        f"{pre}(?P<month>[0-9]{{2}})",
+        pre.clone(),
+        f"(?P<sign>[+-]){{{sign}}}(?P<century>[0-9]{{{yd - 2}}})",
+    ];
+    let mut out: Vec[Pattern] = Vec.new();
+    for b in bodies {
+        out.push(regex(f"\\A{b}\\Z"));
+    }
+    out
+}
+
+impl Iso {
+    fn date_index(mut ref self, yd: i64, expanded: bool) -> i64 {
+        for k in 0..self.dates.len() {
+            if self.dates[k].yd == yd and self.dates[k].expanded == expanded {
+                return k;
+            }
+        }
+        self.dates.push(DateRes { yd: yd, expanded: expanded, res: date_patterns(yd, expanded) });
+        self.dates.len() - 1
+    }
+}
+
+fn group_int(g: ref Groups, name: Str) -> i64 {
+    match g.get(name) {
+        Some(t) => digits_int(t),
+        None => 0,
+    }
+}
+
+// parse_date(datestring, yeardigits, expanded, defaultmonth, defaultday)
+fn parse_date(iso: mut ref Iso, s: ref String, yd: i64, expanded0: bool, dm: i64, dd: i64) -> Result[Pt, PyErr] {
+    let expanded = if yd != 4 { true } else { expanded0 };
+    let k = iso.date_index(yd, expanded);
+    for re in iso.dates[k].res {
+        let g = match match_groups(re, s) {
+            Some(g) => g,
+            None => continue,
+        };
+        let sign = if g.get("sign") == Some("-".to_string()) { -1 } else { 1 };
+        if g.has("century") {
+            return make_date(sign * (group_int(g, "century") * 100 + 1), dm, dd);
+        }
+        if not g.has("month") {
+            let ret = make_date(sign * group_int(g, "year"), 1, 1)?;
+            if g.has("week") {
+                let (_y, w, wd) = isocalendar(ret);
+                let days = if g.has("day") { group_int(g, "day") } else { 1 };
+                let weeks = group_int(g, "week") - (if w == 1 { 1 } else { 0 });
+                let t = td_new(Num.I(0 - wd + days), Num.Absent, Num.Absent, Num.Absent, Num.Absent, Num.Absent, Num.I(weeks))?;
+                return pt_add(ret, t);
+            }
+            if g.has("day") {
+                return pt_add(ret, td_days(group_int(g, "day") - 1));
+            }
+            return replace_date(ret, ret.y, dm, dd);
+        }
+        let day = if g.get("day").is_none() { dd } else { group_int(g, "day") };
+        let month0 = group_int(g, "month");
+        let month = if month0 == 0 { dm } else { month0 };
+        return make_date(sign * group_int(g, "year"), month, day);
+    }
+    Err(iso_error(f"Unrecognised ISO 8601 date format: {py_repr(s)}"))
+}
+
+// build_tzinfo(tzname, tzsign, tzhour, tzmin)
+fn build_tz(g: ref Groups) -> Tz {
+    let name = match g.get("tzname") {
+        Some(n) => n,
+        None => return Tz.Naive,
+    };
+    if name == "" {
+        return Tz.Naive;
+    }
+    if name == "Z" {
+        return Tz.Utc;
+    }
+    let sign = if g.get("tzsign") == Some("-".to_string()) { -1 } else { 1 };
+    let off = sign * group_int(g, "tzhour") * 3600 + sign * group_int(g, "tzmin") * 60;
+    Tz.Fixed(off, name)
+}
+
+fn parse_tzinfo(iso: ref Iso, s: ref String) -> Result[Tz, PyErr] {
+    match match_groups(iso.tz, s) {
+        Some(g) => Ok(build_tz(g)),
+        None => Err(iso_error(f"{s} not a valid time zone info")),
+    }
+}
+
+// Decimal.quantize(Decimal(".000001"), rounding=ROUND_FLOOR) for x >= 0.
+fn quantize_us(x: ref Dec) -> Dec {
+    if x.exp < -6 {
+        Dec { coef: x.coef / pow10(-6 - x.exp), exp: -6 }
+    } else {
+        Dec { coef: x.coef * pow10(x.exp + 6), exp: -6 }
+    }
+}
+
+// Decimal.to_integral(): to the nearest integer, ties to even.
+fn dec_round(x: ref Dec) -> i64 {
+    let p = pow10(0 - x.exp);
+    let q = x.coef / p;
+    let r = x.coef % p;
+    if r * 2 > p or (r * 2 == p and q % 2 == 1) { q + 1 } else { q }
+}
+
+// parse_time(timestring)
+fn parse_time(iso: ref Iso, s: ref String) -> Result[Pt, PyErr] {
+    for re in iso.times {
+        let g0 = match match_groups(re, s) {
+            Some(g) => g,
+            None => continue,
+        };
+        let mut values: Vec[Option[String]] = Vec.new();
+        for v in g0.values {
+            values.push(match v {
+                Some(t) => Some(comma_to_point(t)),
+                None => None,
+            });
+        }
+        let g = Groups { names: g0.names.clone(), values: values };
+        let tz = build_tz(g);
+        if g.has("second") {
+            let second = quantize_us(dec_parse(g.get("second").unwrap()));
+            let us = dec_frac(second).coef;
+            return make_time(group_int(g, "hour"), group_int(g, "minute"), dec_trunc(second), us, tz);
+        }
+        if g.has("minute") {
+            let minute = dec_parse(g.get("minute").unwrap());
+            let second = quantize_us(dec_mul_int(dec_frac(minute), 60));
+            let us = dec_frac(second).coef;
+            return make_time(group_int(g, "hour"), dec_trunc(minute), dec_trunc(second), us, tz);
+        }
+        let hour = dec_parse(g.get("hour").unwrap());
+        let minute = dec_mul_int(dec_frac(hour), 60);
+        let second = dec_mul_int(dec_frac(minute), 60);
+        let us = dec_round(dec_mul_int(dec_frac(second), 1000000));
+        return make_time(dec_trunc(hour), dec_trunc(minute), dec_trunc(second), us, tz);
+    }
+    Err(iso_error(f"Unrecognised ISO 8601 time format: {py_repr(s)}"))
+}
+
+// parse_datetime(datetimestring)
+fn parse_datetime(iso: mut ref Iso, s: ref String) -> Result[Pt, PyErr] {
+    let parts: Vec[String] = s.split("T").map(|p| p.to_string()).collect();
+    if parts.len() != 2 {
+        return Err(iso_error(f"ISO 8601 time designator 'T' missing. Unable to parse datetime string {py_repr(s)}"));
+    }
+    let d = parse_date(mut iso, parts[0], 4, false, 1, 1)?;
+    let t = parse_time(iso, parts[1])?;
+    Ok(dt_combine(d, t))
+}
+
+fn dur_new(years: own Dec, months: own Dec, td: own Td) -> Duration {
+    Duration { years: years, months: months, td: td }
+}
+
+fn dur_zero() -> Duration {
+    dur_new(dec_int(0), dec_int(0), td_zero())
+}
+
+fn group_float(g: ref Groups, name: Str) -> f64 {
+    let t = match g.get(name) {
+        Some(t) => t,
+        None => return 0.0,
+    };
+    let cs = chars_of(t);
+    let text = comma_to_point(text_of(cs, 0, cs.len() - 1));
+    match f64.parse(text) {
+        Ok(x) => x,
+        Err(_) => 0.0,
+    }
+}
+
+fn group_dec(g: ref Groups, name: Str) -> Dec {
+    let t = match g.get(name) {
+        Some(t) => t,
+        None => return dec_int(0),
+    };
+    let cs = chars_of(t);
+    dec_parse(comma_to_point(text_of(cs, 0, cs.len() - 1)))
+}
+
+// parse_duration(datestring, as_timedelta_if_possible)
+fn parse_duration(iso: mut ref Iso, s: ref String, as_td: bool) -> Result[Value, PyErr] {
+    let g = match match_groups(iso.period, s) {
+        Some(g) => g,
+        None => {
+            if s.starts_with("P") {
+                let cs = chars_of(s);
+                let durdt = parse_datetime(mut iso, text_of(cs, 1, cs.len()))?;
+                let t = td_new(Num.I(durdt.d), Num.I(durdt.s), Num.I(durdt.us), Num.I(0), Num.I(durdt.mi), Num.I(durdt.h), Num.I(0))?;
+                return Ok(Value.U(dur_new(dec_int(durdt.y), dec_int(durdt.mo), t)));
+            }
+            return Err(iso_error(f"Unable to parse duration string {py_repr(s)}"));
+        }
+    };
+    let years = group_dec(g, "years");
+    let months = group_dec(g, "months");
+    let days = group_float(g, "days");
+    let hours = group_float(g, "hours");
+    let minutes = group_float(g, "minutes");
+    let seconds = group_float(g, "seconds");
+    let weeks = group_float(g, "weeks");
+    let negative = g.get("sign") == Some("-".to_string());
+    if as_td and dec_sign(years) == 0 and dec_sign(months) == 0 {
+        let t = td_new(Num.F(days), Num.F(seconds), Num.Absent, Num.Absent, Num.F(minutes), Num.F(hours), Num.F(weeks))?;
+        if negative {
+            return Ok(Value.D(td_sub(td_zero(), t)?));
+        }
+        return Ok(Value.D(t));
+    }
+    let t = td_new(Num.F(days), Num.F(seconds), Num.I(0), Num.I(0), Num.F(minutes), Num.F(hours), Num.F(weeks))?;
+    let d = dur_new(years, months, t);
+    if negative {
+        return Ok(Value.U(dur_sub(dur_zero(), d)?));
+    }
+    Ok(Value.U(d))
+}
+
+fn dur_repr(d: ref Duration) -> String {
+    f"isodate.duration.Duration({d.td.days}, {d.td.secs}, {d.td.us}, years={dec_trunc(d.years)}, months={dec_trunc(d.months)})"
+}
+
+fn dur_str(d: ref Duration) -> String {
+    let mut out = String.new();
+    if dec_sign(d.years) != 0 {
+        out.push_str(f"{dec_trunc(d.years)} years, ");
+    }
+    if dec_sign(d.months) != 0 {
+        let one = dec_sign(dec_sub(d.months, dec_int(1))) <= 0;
+        let unit = if one { "month" } else { "months" };
+        out.push_str(f"{dec_trunc(d.months)} {unit}, ");
+    }
+    out.push_str(td_str(d.td));
+    out
+}
+
+fn dur_add(a: ref Duration, b: ref Duration) -> Result[Duration, PyErr] {
+    Ok(dur_new(dec_add(a.years, b.years), dec_add(a.months, b.months), td_add(a.td, b.td)?))
+}
+
+fn dur_sub(a: ref Duration, b: ref Duration) -> Result[Duration, PyErr] {
+    Ok(dur_new(dec_sub(a.years, b.years), dec_sub(a.months, b.months), td_sub(a.td, b.td)?))
+}
+
+fn dur_neg(a: ref Duration) -> Result[Duration, PyErr] {
+    Ok(dur_new(dec_neg(a.years), dec_neg(a.months), td_neg(a.td)?))
+}
+
+fn dur_mul(a: ref Duration, n: i64) -> Result[Duration, PyErr] {
+    Ok(dur_new(dec_mul_int(a.years, n), dec_mul_int(a.months, n), td_mul(a.td, n)?))
+}
+
+fn check_whole(d: ref Duration) -> Result[(), PyErr] {
+    if not (dec_is_integral(d.years) and dec_is_integral(d.months)) {
+        return Err(value_error("fractional years or months not supported for date calculations".to_string()));
+    }
+    Ok(())
+}
+
+// max_days_in_month(year, month)
+fn max_days(year: i64, month: i64) -> i64 {
+    if month == 1 or month == 3 or month == 5 or month == 7 or month == 8 or month == 10 or month == 12 {
+        return 31;
+    }
+    if month == 4 or month == 6 or month == 9 or month == 11 {
+        return 30;
+    }
+    if year % 400 == 0 or (year % 100 != 0 and year % 4 == 0) {
+        return 29;
+    }
+    28
+}
+
+// Duration + date or datetime, and date or datetime - Duration (sign -1).
+fn dur_shift(d: ref Duration, p: ref Pt, sign: i64) -> Result[Pt, PyErr] {
+    check_whole(d)?;
+    let newmonth0 = p.mo + sign * dec_trunc(d.months);
+    // fquotmod(newmonth, 1, 13)
+    let carry = floor_div(newmonth0 - 1, 12);
+    let newmonth = newmonth0 - 1 - carry * 12 + 1;
+    let newyear = p.y + sign * dec_trunc(d.years) + carry;
+    let maxdays = max_days(newyear, newmonth);
+    let newday = if p.d > maxdays { maxdays } else { p.d };
+    let newdt = replace_date(p, newyear, newmonth, newday)?;
+    if sign > 0 { pt_add(newdt, d.td) } else { pt_sub_td(newdt, d.td) }
+}
+
+// totimedelta(start=, end=)
+fn totimedelta(d: ref Duration, start: Option[Pt], end: Option[Pt]) -> Result[Td, PyErr] {
+    match (start, end) {
+        (None, None) => Err(value_error("start or end required".to_string())),
+        (Some(_), Some(_)) => Err(value_error("only start or end allowed".to_string())),
+        (Some(s), None) => pt_diff(dur_shift(d, s, 1)?, s),
+        (None, Some(e)) => pt_diff(e, dur_shift(d, e, -1)?),
+    }
+}
+
+// ------------------------------------------------------------ strftime
+
+fn value_type(v: ref Value) -> Str {
+    match v {
+        Value.P(p) => type_name(p),
+        Value.D(_) => "datetime.timedelta",
+        Value.U(_) => "Duration",
+    }
+}
+
+// tz_isoformat(dt, format)
+fn tz_isoformat(p: ref Pt, code: char) -> Result[String, PyErr] {
+    if p.kind == 0 {
+        return Err(attr_error("datetime.date", "tzinfo"));
+    }
+    let secs0 = match tz_offset(p.tz) {
+        Some(s) => s,
+        None => return Ok(String.new()),
+    };
+    if secs0 == 0 {
+        return Ok("Z".to_string());
+    }
+    let sign = if secs0 < 0 { "-" } else { "+" };
+    let secs = iabs(secs0);
+    let minutes = secs / 60;
+    let hours = minutes / 60;
+    let mins = minutes % 60;
+    if hours > 99 {
+        return Err(py_err("OverflowError", "can not handle differences > 99 hours"));
+    }
+    if code == 'Z' {
+        Ok(f"{sign}{zpad(hours, 2)}:{zpad(mins, 2)}")
+    } else if code == 'z' {
+        Ok(f"{sign}{zpad(hours, 2)}{zpad(mins, 2)}")
+    } else {
+        Ok(f"{sign}{zpad(hours, 2)}")
+    }
+}
+
+fn need_date(p: ref Pt, attr: Str) -> Result[(), PyErr] {
+    if p.kind == 1 {
+        return Err(attr_error("datetime.time", attr));
+    }
+    Ok(())
+}
+
+fn need_time(p: ref Pt, attr: Str) -> Result[(), PyErr] {
+    if p.kind == 0 {
+        return Err(attr_error("datetime.date", attr));
+    }
+    Ok(())
+}
+
+fn year_plus(yd: i64) -> Str {
+    if yd != 4 { "+" } else { "" }
+}
+
+// _strfdt: the codes date, time and datetime objects take.
+fn strf_dt(p: ref Pt, fmt: ref String, yd: i64) -> Result[String, PyErr] {
+    let cs = chars_of(fmt);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c != '%' or i + 1 >= cs.len() {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let code = cs[i + 1];
+        if code == 'd' {
+            need_date(p, "day")?;
+            out.push_str(zpad(p.d, 2));
+        } else if code == 'f' {
+            need_time(p, "microsecond")?;
+            out.push_str(zpad(p.us, 6));
+        } else if code == 'H' {
+            need_time(p, "hour")?;
+            out.push_str(zpad(p.h, 2));
+        } else if code == 'j' {
+            need_date(p, "toordinal")?;
+            out.push_str(zpad(ordinal(p) - to_ordinal(p.y, 1, 1) + 1, 3));
+        } else if code == 'm' {
+            need_date(p, "month")?;
+            out.push_str(zpad(p.mo, 2));
+        } else if code == 'M' {
+            need_time(p, "minute")?;
+            out.push_str(zpad(p.mi, 2));
+        } else if code == 'S' {
+            need_time(p, "second")?;
+            out.push_str(zpad(p.s, 2));
+        } else if code == 'w' {
+            need_date(p, "isoweekday")?;
+            out.push_str(f"{isoweekday(p)}");
+        } else if code == 'W' {
+            need_date(p, "isocalendar")?;
+            let (_y, w, _d) = isocalendar(p);
+            out.push_str(zpad(w, 2));
+        } else if code == 'Y' {
+            need_date(p, "year")?;
+            out.push_str(f"{year_plus(yd)}{zpad(p.y, yd)}");
+        } else if code == 'C' {
+            need_date(p, "year")?;
+            out.push_str(f"{year_plus(yd)}{zpad(p.y / 100, yd - 2)}");
+        } else if code == 'z' or code == 'Z' or code == 'h' {
+            out.push_str(tz_isoformat(p, code)?);
+        } else if code == '%' {
+            out.push('%');
+        } else {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        i += 2;
+    }
+    Ok(out)
+}
+
+// The years and months of a Duration; a timedelta has neither.
+fn dur_years(v: ref Value, attr: Str) -> Result[Dec, PyErr] {
+    match v {
+        Value.U(d) => Ok(if attr == "years" { d.years.clone() } else { d.months.clone() }),
+        _ => Err(attr_error("datetime.timedelta", attr)),
+    }
+}
+
+fn delta_of(v: ref Value) -> Td {
+    match v {
+        Value.U(d) => d.td.clone(),
+        Value.D(t) => t.clone(),
+        Value.P(_) => td_zero(),
+    }
+}
+
+// The %P code: the duration's ISO 8601 parts.
+fn strf_period(v: ref Value) -> String {
+    let mut ret = String.new();
+    if let Value.U(d) = v {
+        if dec_sign(d.years) != 0 {
+            ret.push_str(f"{dec_str(dec_abs(d.years))}Y");
+        }
+        if dec_sign(d.months) != 0 {
+            ret.push_str(f"{dec_str(dec_abs(d.months))}M");
+        }
+    }
+    let t = delta_of(v);
+    // abs((days * 86400 + seconds) * 1000000 + microseconds), in parts
+    let mut total_s = t.days * 86400 + t.secs;
+    let mut us = t.us;
+    if total_s < 0 {
+        total_s = 0 - total_s;
+        if us > 0 {
+            total_s -= 1;
+            us = 1000000 - us;
+        }
+    }
+    let seconds = total_s % 60;
+    let minutes = (total_s / 60) % 60;
+    let hours = (total_s / 3600) % 24;
+    let days = total_s / 86400;
+    if days != 0 {
+        ret.push_str(f"{days}D");
+    }
+    if hours != 0 or minutes != 0 or seconds != 0 or us != 0 {
+        ret.push('T');
+        if hours != 0 {
+            ret.push_str(f"{hours}H");
+        }
+        if minutes != 0 {
+            ret.push_str(f"{minutes}M");
+        }
+        if seconds != 0 or us != 0 {
+            if us != 0 {
+                let mut s = f"{seconds}.{zpad(us, 6)}";
+                while s.ends_with("0") {
+                    let _ = s.pop();
+                }
+                ret.push_str(s);
+            } else {
+                ret.push_str(f"{seconds}");
+            }
+            ret.push('S');
+        }
+    }
+    if ret.len() == 0 { "0D".to_string() } else { ret }
+}
+
+// _strfduration: the codes timedelta and Duration objects take.
+fn strf_duration(v: ref Value, fmt: ref String, yd: i64) -> Result[String, PyErr] {
+    let t = delta_of(v);
+    let cs = chars_of(fmt);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if c != '%' or i + 1 >= cs.len() {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let code = cs[i + 1];
+        if code == 'd' {
+            out.push_str(zpad(t.days, 2));
+        } else if code == 'f' {
+            out.push_str(zpad(t.us, 6));
+        } else if code == 'H' {
+            out.push_str(zpad(t.secs / 3600, 2));
+        } else if code == 'm' {
+            out.push_str(zpad(dec_trunc(dur_years(v, "months")?), 2));
+        } else if code == 'M' {
+            out.push_str(zpad((t.secs / 60) % 60, 2));
+        } else if code == 'S' {
+            out.push_str(zpad(t.secs % 60, 2));
+        } else if code == 'W' {
+            out.push_str(zpad(iabs(t.days) / 7, 2));
+        } else if code == 'Y' {
+            out.push_str(f"{year_plus(yd)}{zpad(dec_trunc(dur_years(v, "years")?), yd)}");
+        } else if code == 'C' {
+            let y = dur_years(v, "years")?;
+            out.push_str(f"{year_plus(yd)}{zpad(dec_trunc(Dec { coef: y.coef, exp: y.exp - 2 }), yd - 2)}");
+        } else if code == '%' {
+            out.push('%');
+        } else if code == 'P' {
+            out.push_str(strf_period(v));
+        } else if code == 'p' {
+            out.push_str(f"{iabs(floor_div(t.days, 7))}W");
+        } else {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn strftime(v: ref Value, fmt: ref String, yd: i64) -> Result[String, PyErr] {
+    match v {
+        Value.P(p) => strf_dt(p, fmt, yd),
+        _ => strf_duration(v, fmt, yd),
+    }
+}
+
+// duration_isoformat(tduration, format)
+fn duration_isoformat(v: ref Value, fmt: ref String) -> Result[String, PyErr] {
+    let neg = match v {
+        Value.U(d) => dec_sign(d.years) < 0 or dec_sign(d.months) < 0 or td_cmp(d.td, td_zero()) < 0,
+        Value.D(t) => td_cmp(t, td_zero()) < 0,
+        Value.P(_) => false,
+    };
+    let body = strftime(v, fmt, 4)?;
+    Ok(if neg { f"-{body}" } else { body })
+}
+
+fn default_dur_fmt() -> String {
+    "P%P".to_string()
+}
+
+// ------------------------------------------------------------ the operators
+
+fn show(v: ref Value) -> String {
+    match v {
+        Value.P(p) => pt_show(p),
+        Value.D(t) => f"{td_repr(t)} = {td_str(t)}",
+        Value.U(d) => f"{dur_repr(d)} = {dur_str(d)}",
+    }
+}
+
+fn binop_error(op: Str, a: ref Value, b: ref Value) -> PyErr {
+    py_err("TypeError", f"unsupported operand type(s) for {op}: '{value_type(a)}' and '{value_type(b)}'")
+}
+
+// Duration.__add__ with something that is not a Duration.
+fn dur_add_other(d: ref Duration, other: ref Value) -> Result[Value, PyErr] {
+    check_whole(d)?;
+    match other {
+        Value.P(p) => {
+            if p.kind == 1 {
+                return Err(py_err("TypeError", "unsupported operand type(s) for +: 'datetime.timedelta' and 'datetime.time'"));
+            }
+            Ok(Value.P(dur_shift(d, p, 1)?))
+        }
+        Value.D(t) => Ok(Value.U(dur_new(d.years.clone(), d.months.clone(), td_add(d.td, t)?))),
+        Value.U(_) => Err(binop_error("+", Value.U(d.clone()), other)),
+    }
+}
+
+fn add_values(a: ref Value, b: ref Value) -> Result[Value, PyErr] {
+    match (a, b) {
+        (Value.U(x), Value.U(y)) => Ok(Value.U(dur_add(x, y)?)),
+        (Value.U(x), _) => dur_add_other(x, b),
+        (_, Value.U(y)) => dur_add_other(y, a),
+        (Value.P(p), Value.D(t)) => Ok(Value.P(pt_add(p, t)?)),
+        (Value.D(t), Value.P(p)) => Ok(Value.P(pt_add(p, t)?)),
+        (Value.D(x), Value.D(y)) => Ok(Value.D(td_add(x, y)?)),
+        _ => Err(binop_error("+", a, b)),
+    }
+}
+
+fn sub_values(a: ref Value, b: ref Value) -> Result[Value, PyErr] {
+    match (a, b) {
+        (Value.U(x), Value.U(y)) => Ok(Value.U(dur_sub(x, y)?)),
+        (Value.U(x), Value.D(t)) => Ok(Value.U(dur_new(x.years.clone(), x.months.clone(), td_sub(x.td, t)?))),
+        (Value.D(t), Value.U(y)) => Ok(Value.U(dur_sub(dur_new(dec_int(0), dec_int(0), t.clone()), y)?)),
+        (Value.P(p), Value.U(y)) => {
+            if p.kind == 1 {
+                return Err(binop_error("-", a, b));
+            }
+            Ok(Value.P(dur_shift(y, p, -1)?))
+        }
+        (Value.P(p), Value.D(t)) => Ok(Value.P(pt_sub_td(p, t)?)),
+        (Value.P(p), Value.P(q)) => Ok(Value.D(pt_diff(p, q)?)),
+        (Value.D(x), Value.D(y)) => Ok(Value.D(td_sub(x, y)?)),
+        _ => Err(binop_error("-", a, b)),
+    }
+}
+
+fn mul_value(a: ref Value, n: i64) -> Result[Value, PyErr] {
+    match a {
+        Value.U(d) => Ok(Value.U(dur_mul(d, n)?)),
+        Value.D(t) => Ok(Value.D(td_mul(t, n)?)),
+        Value.P(_) => Err(py_err("TypeError", f"unsupported operand type(s) for *: '{value_type(a)}' and 'int'")),
+    }
+}
+
+// a == b
+fn eq_values(a: ref Value, b: ref Value) -> bool {
+    match (a, b) {
+        (Value.U(x), Value.U(y)) => {
+            let mx = dec_add(dec_mul_int(x.years, 12), x.months);
+            let my = dec_add(dec_mul_int(y.years, 12), y.months);
+            dec_eq(mx, my) and td_cmp(x.td, y.td) == 0
+        }
+        (Value.U(x), Value.D(t)) => dec_sign(x.years) == 0 and dec_sign(x.months) == 0 and td_cmp(x.td, t) == 0,
+        (Value.D(t), Value.U(x)) => dec_sign(x.years) == 0 and dec_sign(x.months) == 0 and td_cmp(x.td, t) == 0,
+        (Value.D(x), Value.D(y)) => td_cmp(x, y) == 0,
+        _ => false,
+    }
+}
+
+// ------------------------------------------------------------ the reports
+
+fn fmt_point(p: ref Pt) -> Result[String, PyErr] {
+    if p.kind == 2 {
+        strf_dt(p, "%Y-%m-%dT%H:%M:%S%Z".to_string(), 4)
+    } else {
+        strf_dt(p, "%Y-%m-%d".to_string(), 4)
+    }
+}
+
+fn fmt_value(v: ref Value) -> Result[String, PyErr] {
+    match v {
+        Value.P(p) => fmt_point(p),
+        _ => Ok(show(v)),
+    }
+}
+
+fn str_value(v: ref Value) -> String {
+    match v {
+        Value.D(t) => td_str(t),
+        Value.U(d) => dur_str(d),
+        Value.P(p) => pt_show(p),
+    }
+}
+
+fn read_rows(path: ref String) -> Result[Vec[Vec[String]], String] {
+    let text = match fs.read_to_string(path.clone()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    for line in text.lines() {
+        if line.starts_with("#") {
+            continue;
+        }
+        rows.push(line.split("\t").map(|p| p.to_string()).collect());
+    }
+    Ok(rows)
+}
+
+fn subscription(iso: mut ref Iso, row: ref Vec[String]) -> Result[(), PyErr] {
+    let starts = row[1].clone();
+    let start = if starts.contains("T") {
+        Value.P(parse_datetime(mut iso, starts)?)
+    } else {
+        Value.P(parse_date(mut iso, starts, 4, false, 1, 1)?)
+    };
+    let period = parse_duration(mut iso, row[2], true)?;
+    let grace = parse_duration(mut iso, row[4], true)?;
+    let dfmt = default_dur_fmt();
+    println(f"     starts {fmt_value(start)?}, every {duration_isoformat(period, dfmt)?} ({str_value(period)}), grace {duration_isoformat(grace, dfmt)?}");
+    let count = digits_int(row[3]);
+    let mut cur = start.clone();
+    for k in 1..(count + 1) {
+        cur = add_values(cur, period)?;
+        let due = add_values(cur, grace)?;
+        let mut line = f"     renewal {k}: {fmt_value(cur)?}, due by {fmt_value(due)?}";
+        let mult = add_values(start, mul_value(period, k)?)?;
+        if not same_point(mult, cur) {
+            line.push_str(f" (period x {k} from the start gives {fmt_value(mult)?})");
+        }
+        println(line);
+    }
+    let covered = sub_values(cur, start)?;
+    println(f"     covered {duration_isoformat(covered, dfmt)?} ({str_value(covered)})");
+    Ok(())
+}
+
+// mult != cur, for two dates or two datetimes
+fn same_point(a: ref Value, b: ref Value) -> bool {
+    match (a, b) {
+        (Value.P(p), Value.P(q)) => {
+            if p.kind == 2 {
+                match pt_diff(p, q) {
+                    Ok(t) => td_is_zero(t),
+                    Err(_) => false,
+                }
+            } else {
+                p.y == q.y and p.mo == q.mo and p.d == q.d
+            }
+        }
+        _ => false,
+    }
+}
+
+fn subscriptions(iso: mut ref Iso, path: ref String) -> Result[(), String] {
+    for row in read_rows(path)? {
+        println(f"   {row[0]}: {row[5]}");
+        if let Err(e) = subscription(mut iso, row) {
+            println(f"     {py_err_text(e)}");
+        }
+    }
+    Ok(())
+}
+
+struct Total {
+    service: String,
+    n: i64,
+    down: Td,
+    over: i64,
+    longest: Td,
+}
+
+fn incident(iso: mut ref Iso, row: ref Vec[String]) -> Result[(Td, Td), PyErr] {
+    let a = parse_datetime(mut iso, row[1])?;
+    let b = parse_datetime(mut iso, row[2])?;
+    let budget = match parse_duration(mut iso, row[3], true)? {
+        Value.D(t) => t,
+        Value.U(d) => d.td.clone(),
+        Value.P(_) => td_zero(),
+    };
+    let dur = pt_diff(b, a)?;
+    Ok((dur, budget))
+}
+
+fn incidents(iso: mut ref Iso, path: ref String) -> Result[(), String] {
+    let mut totals: Vec[Total] = Vec.new();
+    let dfmt = default_dur_fmt();
+    for row in read_rows(path)? {
+        let (dur, budget) = match incident(mut iso, row) {
+            Ok(r) => r,
+            Err(e) => {
+                println(f"   {row[0]}: {row[4]}: {py_err_text(e)}");
+                continue;
+            }
+        };
+        let within = td_cmp(dur, budget) <= 0;
+        let verdict = if within {
+            "within budget".to_string()
+        } else {
+            let over = td_sub(dur, budget).map_err(|e| py_err_text(e))?;
+            f"over by {duration_isoformat(Value.D(over), dfmt).map_err(|e| py_err_text(e))?}"
+        };
+        let down = duration_isoformat(Value.D(dur.clone()), dfmt).map_err(|e| py_err_text(e))?;
+        let bud = duration_isoformat(Value.D(budget.clone()), dfmt).map_err(|e| py_err_text(e))?;
+        println(f"   {row[0]}: {row[4]}: down {down} ({td_str(dur)}), budget {bud}, {verdict}");
+        let mut found = -1;
+        for k in 0..totals.len() {
+            if totals[k].service == row[0] {
+                found = k;
+            }
+        }
+        if found < 0 {
+            totals.push(Total { service: row[0].clone(), n: 0, down: td_zero(), over: 0, longest: dur.clone() });
+            found = totals.len() - 1;
+        }
+        add_incident(mut totals[found], dur, within)?;
+    }
+    totals.sort_by(|a, b| a.service.cmp(b.service));
+    for t in totals {
+        let down = duration_isoformat(Value.D(t.down.clone()), dfmt).map_err(|e| py_err_text(e))?;
+        let longest = duration_isoformat(Value.D(t.longest.clone()), dfmt).map_err(|e| py_err_text(e))?;
+        println(f"   {t.service}: {t.n} incidents, {down} down, {t.over} over budget, longest {longest}");
+    }
+    Ok(())
+}
+
+fn add_incident(t: mut ref Total, dur: ref Td, within: bool) -> Result[(), String] {
+    t.n += 1;
+    t.down = td_add(t.down, dur).map_err(|e| py_err_text(e))?;
+    if not within {
+        t.over += 1;
+    }
+    if td_cmp(dur, t.longest) > 0 {
+        t.longest = dur.clone();
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ jobs
+
+fn unesc(s: ref String) -> String {
+    let cs = chars_of(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '\\' and i + 1 < cs.len() {
+            let n = cs[i + 1];
+            out.push(if n == 't' { '\t' } else if n == 'n' { '\n' } else { '\\' });
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// "d:", "t:", "dt:", "p:" or "P:" and an ISO string.
+fn value_of(iso: mut ref Iso, a: ref String) -> Result[Value, PyErr] {
+    let cs = chars_of(a);
+    let mut k = 0;
+    while cs[k] != ':' {
+        k += 1;
+    }
+    let kind = text_of(cs, 0, k);
+    let text = text_of(cs, k + 1, cs.len());
+    if kind == "d" {
+        Ok(Value.P(parse_date(mut iso, text, 4, false, 1, 1)?))
+    } else if kind == "t" {
+        Ok(Value.P(parse_time(iso, text)?))
+    } else if kind == "dt" {
+        Ok(Value.P(parse_datetime(mut iso, text)?))
+    } else if kind == "p" {
+        parse_duration(mut iso, text, true)
+    } else {
+        parse_duration(mut iso, text, false)
+    }
+}
+
+fn int_arg(args: ref Vec[String], k: i64, default: i64) -> i64 {
+    if k < args.len() {
+        let t = args[k].clone();
+        if t.starts_with("-") {
+            let cs = chars_of(t);
+            0 - digits_int(text_of(cs, 1, cs.len()))
+        } else {
+            digits_int(t)
+        }
+    } else {
+        default
+    }
+}
+
+fn eval_op(iso: mut ref Iso, op: ref String, args: ref Vec[String]) -> Result[String, PyErr] {
+    if op == "date" {
+        let ex = args.len() > 2 and args[2] == "1";
+        Ok(pt_show(parse_date(mut iso, args[0], int_arg(args, 1, 4), ex, int_arg(args, 3, 1), int_arg(args, 4, 1))?))
+    } else if op == "date_fmt" {
+        let yd = int_arg(args, 2, 4);
+        strf_dt(parse_date(mut iso, args[0], 4, false, 1, 1)?, args[1], yd)
+    } else if op == "time" {
+        Ok(pt_show(parse_time(iso, args[0])?))
+    } else if op == "time_fmt" {
+        strf_dt(parse_time(iso, args[0])?, args[1], 4)
+    } else if op == "tz" {
+        Ok(tz_desc(parse_tzinfo(iso, args[0])?))
+    } else if op == "datetime" {
+        Ok(pt_show(parse_datetime(mut iso, args[0])?))
+    } else if op == "datetime_fmt" {
+        strf_dt(parse_datetime(mut iso, args[0])?, args[1], 4)
+    } else if op == "duration" {
+        Ok(show(parse_duration(mut iso, args[0], args.len() == 1)?))
+    } else if op == "duration_fmt" {
+        duration_isoformat(parse_duration(mut iso, args[0], args.len() == 2)?, args[1])
+    } else if op == "add" {
+        let a = value_of(mut iso, args[0])?;
+        let b = value_of(mut iso, args[1])?;
+        Ok(show(add_values(a, b)?))
+    } else if op == "sub" {
+        let a = value_of(mut iso, args[0])?;
+        let b = value_of(mut iso, args[1])?;
+        Ok(show(sub_values(a, b)?))
+    } else if op == "mul" {
+        Ok(show(mul_value(value_of(mut iso, args[0])?, int_arg(args, 1, 0))?))
+    } else if op == "neg" {
+        match value_of(mut iso, args[0])? {
+            Value.U(d) => Ok(show(Value.U(dur_neg(d)?))),
+            Value.D(t) => Ok(show(Value.D(td_neg(t)?))),
+            Value.P(_) => Err(py_err("TypeError", "bad operand type for unary -")),
+        }
+    } else if op == "eq" {
+        let a = value_of(mut iso, args[0])?;
+        let b = value_of(mut iso, args[1])?;
+        let e = eq_values(a, b);
+        let t = if e { "True False" } else { "False True" };
+        Ok(t.to_string())
+    } else if op == "totd" {
+        let d = match value_of(mut iso, args[0])? {
+            Value.U(d) => d,
+            _ => dur_zero(),
+        };
+        let x = match value_of(mut iso, args[2])? {
+            Value.P(p) => p,
+            _ => make_date(1, 1, 1)?,
+        };
+        let w = args[1].clone();
+        let t = if w == "start" {
+            totimedelta(d, Some(x), None)?
+        } else if w == "end" {
+            totimedelta(d, None, Some(x))?
+        } else if w == "both" {
+            totimedelta(d, Some(x.clone()), Some(x))?
+        } else {
+            totimedelta(d, None, None)?
+        };
+        Ok(show(Value.D(t)))
+    } else {
+        Err(py_err("SystemExit", f"unknown op {op}"))
+    }
+}
+
+fn run_op(iso: mut ref Iso, fields: ref Vec[String]) -> Result[(), String] {
+    let op = fields[0].clone();
+    let mut args: Vec[String] = Vec.new();
+    for k in 1..fields.len() {
+        args.push(fields[k].clone());
+    }
+    let mut head = f"-- {op}";
+    for a in args {
+        head.push(' ');
+        head.push_str(py_repr(a));
+    }
+    println(head);
+    if op == "subscriptions" {
+        return subscriptions(mut iso, f"data/{args[0]}");
+    }
+    if op == "incidents" {
+        return incidents(mut iso, f"data/{args[0]}");
+    }
+    match eval_op(mut iso, op, args) {
+        Ok(r) => println(f"   {r}"),
+        Err(e) => println(f"   {py_err_text(e)}"),
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    let mut iso = new_iso();
+    let jobs = match fs.read_to_string("data/jobs.tsv") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.tsv: {e}"),
+    };
+    for line in jobs.lines() {
+        if line.starts_with("== ") {
+            println(line);
+            continue;
+        }
+        let mut fields: Vec[String] = Vec.new();
+        for f in line.split("\t") {
+            fields.push(unesc(f.to_string()));
+        }
+        run_op(mut iso, fields)?;
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# service\tstarted\tresolved\tbudget\tnote\n");
+    t.push_str("api\t2024-03-10T01:59:30-05:00\t2024-03-10T03:01:15-04:00\tPT45M\tacross the DST change, written with offsets\n");
+    t.push_str("api\t2024-03-12T14:00:00Z\t2024-03-12T14:07:30.250Z\tPT45M\tshort blip\n");
+    t.push_str("api\t20240315T220000+0100\t20240316T003000+0100\tPT45M\tbasic format\n");
+    t.push_str("db\t2024-03-01T23:50:00+00:00\t2024-03-02T00:20:00+00:00\tPT1H\tacross midnight\n");
+    t.push_str("db\t2024-W10-3T08:00:00Z\t2024-W10-3T09:15:00Z\tPT1H\tweek dates\n");
+    t.push_str("db\t2024-068T10:00:00Z\t2024-068T10:42:00.5Z\tPT1H\tordinal dates\n");
+    t.push_str("web\t2024-03-05T10:00\t2024-03-05T10:30\tPT20M\tlocal times\n");
+    t.push_str("web\t2024-03-05T10:00Z\t2024-03-05T10:30\tPT20M\tnaive and aware\n");
+    t.push_str("web\t2024-03-07T09:00:00+02:00\t2024-03-07T08:59:00+01:00\tPT20M\tresolved in another zone\n");
+    t.push_str("web\t2024-03-08T12:00:00Z\t2024-03-08T11:00:00Z\tPT20M\tresolved before it started\n");
+    t.push_str("queue\t2024-03-20T06:00:00.123456Z\t2024-03-21T07:30:00.654321Z\tP1D\tlong outage\n");
+    t.push_str("queue\t2024-03-22T06:00Z\tnot-a-time\tP1D\tbad resolved time\n");
+    t.push_str("queue\t2024-03-23T06:00Z\t2024-03-23T07:00Z\tPT1X\tbad budget\n");
+    v.push(DataFile { path: "incidents.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("== dates\n");
+    t.push_str("date\t2024-02-29\n");
+    t.push_str("date\t20240229\n");
+    t.push_str("date\t2023-02-29\n");
+    t.push_str("date\t2024-13-01\n");
+    t.push_str("date\t2024-00-10\n");
+    t.push_str("date\t1985-W15-5\n");
+    t.push_str("date\t1985W155\n");
+    t.push_str("date\t2009-W01-1\n");
+    t.push_str("date\t2009-W53-7\n");
+    t.push_str("date\t2010-W01\n");
+    t.push_str("date\t2010W01\n");
+    t.push_str("date\t2008-W52-0\n");
+    t.push_str("date\t2004-W53-9\n");
+    t.push_str("date\t1985-102\n");
+    t.push_str("date\t1985102\n");
+    t.push_str("date\t2024-366\n");
+    t.push_str("date\t2023-366\n");
+    t.push_str("date\t1985-04\n");
+    t.push_str("date\t198504\n");
+    t.push_str("date\t1985\n");
+    t.push_str("date\t19\n");
+    t.push_str("date\t20\n");
+    t.push_str("date\t2000-02\n");
+    t.push_str("date\t0000-01-01\n");
+    t.push_str("date\t0001-01-01\n");
+    t.push_str("date\t9999-12-31\n");
+    t.push_str("date\t10000\n");
+    t.push_str("date\t+1985-04-12\n");
+    t.push_str("date\t1985-4-12\n");
+    t.push_str("date\t1985-04-12 \n");
+    t.push_str("date\t 1985-04-12\n");
+    t.push_str("date\t1985-04-12\\n\n");
+    t.push_str("date\t\n");
+    t.push_str("date\tabcd\n");
+    t.push_str("date\t2024-02-30\n");
+    t.push_str("date\t2024-W60-1\n");
+    t.push_str("date\t2024-000\n");
+    t.push_str("date\t+001985-04-12\t6\t1\n");
+    t.push_str("date\t+0019850412\t6\t1\n");
+    t.push_str("date\t-001985-04-12\t6\t1\n");
+    t.push_str("date\t+1985-04-12\t4\t1\n");
+    t.push_str("date\t-1985-04-12\t4\t1\n");
+    t.push_str("date\t1985-04-12\t4\t1\n");
+    t.push_str("date\t+001985-W15-5\t6\t1\n");
+    t.push_str("date\t+001985102\t6\t1\n");
+    t.push_str("date\t+0019\t6\t1\n");
+    t.push_str("date\t+19\t4\t1\n");
+    t.push_str("date\t+001985\t6\t1\n");
+    t.push_str("date\t+012345-06-07\t6\t0\n");
+    t.push_str("date\t+12345-06-07\t5\t0\n");
+    t.push_str("date\t+0000-01-01\t4\t1\n");
+    t.push_str("date\t1985\t4\t0\t6\t15\n");
+    t.push_str("date\t19\t4\t0\t12\t31\n");
+    t.push_str("date\t1985-04\t4\t0\t1\t30\n");
+    t.push_str("date\t2023\t4\t0\t2\t29\n");
+    t.push_str("date\t1985-04\t4\t0\t4\t31\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y-%m-%d\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y%m%d\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y-W%W-%w\n");
+    t.push_str("date_fmt\t2024-02-29\t%YW%W%w\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y-%j\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y%j\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y-W%W\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y-%m\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y\n");
+    t.push_str("date_fmt\t2024-02-29\t%C\n");
+    t.push_str("date_fmt\t2024-02-29\t%d.%m.%Y %%\n");
+    t.push_str("date_fmt\t2024-02-29\t%H\n");
+    t.push_str("date_fmt\t2024-02-29\t%Y-%m-%d\t6\n");
+    t.push_str("date_fmt\t2024-02-29\t%C\t6\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y-%m-%d\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y%m%d\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y-W%W-%w\n");
+    t.push_str("date_fmt\t1985-04-12\t%YW%W%w\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y-%j\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y%j\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y-W%W\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y-%m\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y\n");
+    t.push_str("date_fmt\t1985-04-12\t%C\n");
+    t.push_str("date_fmt\t1985-04-12\t%d.%m.%Y %%\n");
+    t.push_str("date_fmt\t1985-04-12\t%H\n");
+    t.push_str("date_fmt\t1985-04-12\t%Y-%m-%d\t6\n");
+    t.push_str("date_fmt\t1985-04-12\t%C\t6\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y-%m-%d\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y%m%d\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y-W%W-%w\n");
+    t.push_str("date_fmt\t2009-12-31\t%YW%W%w\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y-%j\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y%j\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y-W%W\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y-%m\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y\n");
+    t.push_str("date_fmt\t2009-12-31\t%C\n");
+    t.push_str("date_fmt\t2009-12-31\t%d.%m.%Y %%\n");
+    t.push_str("date_fmt\t2009-12-31\t%H\n");
+    t.push_str("date_fmt\t2009-12-31\t%Y-%m-%d\t6\n");
+    t.push_str("date_fmt\t2009-12-31\t%C\t6\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y-%m-%d\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y%m%d\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y-W%W-%w\n");
+    t.push_str("date_fmt\t2010-01-03\t%YW%W%w\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y-%j\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y%j\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y-W%W\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y-%m\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y\n");
+    t.push_str("date_fmt\t2010-01-03\t%C\n");
+    t.push_str("date_fmt\t2010-01-03\t%d.%m.%Y %%\n");
+    t.push_str("date_fmt\t2010-01-03\t%H\n");
+    t.push_str("date_fmt\t2010-01-03\t%Y-%m-%d\t6\n");
+    t.push_str("date_fmt\t2010-01-03\t%C\t6\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y-%m-%d\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y%m%d\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y-W%W-%w\n");
+    t.push_str("date_fmt\t0001-01-01\t%YW%W%w\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y-%j\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y%j\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y-W%W\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y-%m\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y\n");
+    t.push_str("date_fmt\t0001-01-01\t%C\n");
+    t.push_str("date_fmt\t0001-01-01\t%d.%m.%Y %%\n");
+    t.push_str("date_fmt\t0001-01-01\t%H\n");
+    t.push_str("date_fmt\t0001-01-01\t%Y-%m-%d\t6\n");
+    t.push_str("date_fmt\t0001-01-01\t%C\t6\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y-%m-%d\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y%m%d\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y-W%W-%w\n");
+    t.push_str("date_fmt\t2008-12-29\t%YW%W%w\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y-%j\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y%j\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y-W%W\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y-%m\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y\n");
+    t.push_str("date_fmt\t2008-12-29\t%C\n");
+    t.push_str("date_fmt\t2008-12-29\t%d.%m.%Y %%\n");
+    t.push_str("date_fmt\t2008-12-29\t%H\n");
+    t.push_str("date_fmt\t2008-12-29\t%Y-%m-%d\t6\n");
+    t.push_str("date_fmt\t2008-12-29\t%C\t6\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y-%m-%d\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y%m%d\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y-W%W-%w\n");
+    t.push_str("date_fmt\t1999-01-01\t%YW%W%w\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y-%j\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y%j\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y-W%W\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y-%m\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y\n");
+    t.push_str("date_fmt\t1999-01-01\t%C\n");
+    t.push_str("date_fmt\t1999-01-01\t%d.%m.%Y %%\n");
+    t.push_str("date_fmt\t1999-01-01\t%H\n");
+    t.push_str("date_fmt\t1999-01-01\t%Y-%m-%d\t6\n");
+    t.push_str("date_fmt\t1999-01-01\t%C\t6\n");
+    t.push_str("== times\n");
+    t.push_str("time\t23:20:50\n");
+    t.push_str("time\t232050\n");
+    t.push_str("time\t23:20\n");
+    t.push_str("time\t2320\n");
+    t.push_str("time\t23\n");
+    t.push_str("time\t23:20:50.5\n");
+    t.push_str("time\t23:20:50,5\n");
+    t.push_str("time\t232050.5\n");
+    t.push_str("time\t23:20.5\n");
+    t.push_str("time\t2320,8\n");
+    t.push_str("time\t23.3\n");
+    t.push_str("time\t23,3\n");
+    t.push_str("time\t12.33333333\n");
+    t.push_str("time\t00:00:00.1234567\n");
+    t.push_str("time\t15:27:46.123456789\n");
+    t.push_str("time\t10:00:00.000001\n");
+    t.push_str("time\t11:59:59.9999999\n");
+    t.push_str("time\tT23:20:50\n");
+    t.push_str("time\tT2320\n");
+    t.push_str("time\t23:20:50Z\n");
+    t.push_str("time\t23:20:50+01:00\n");
+    t.push_str("time\t232050+0100\n");
+    t.push_str("time\t23:20:50-05\n");
+    t.push_str("time\t23:20:50-05:30\n");
+    t.push_str("time\t23:20:50+00:00\n");
+    t.push_str("time\t23:20:50-00:00\n");
+    t.push_str("time\t152746+0100\n");
+    t.push_str("time\t23:20:50.5+01:00\n");
+    t.push_str("time\t23:20.25-0800\n");
+    t.push_str("time\t24:00:00\n");
+    t.push_str("time\t23:60:00\n");
+    t.push_str("time\t23:59:60\n");
+    t.push_str("time\t25\n");
+    t.push_str("time\t1:2:3\n");
+    t.push_str("time\t23:20:50 \n");
+    t.push_str("time\t23:20:50+1\n");
+    t.push_str("time\t23:20:50+01:\n");
+    t.push_str("time\t23:20:50+99:00\n");
+    t.push_str("time\t23:20:50z\n");
+    t.push_str("time\t\n");
+    t.push_str("time\tT\n");
+    t.push_str("time\t07:15.123456789012\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H:%M:%S\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H%M%S\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H:%M\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H%M\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H:%M:%S%Z\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H%M%S%z\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H%h\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%H:%M:%S.%f\n");
+    t.push_str("time_fmt\t23:20:50.5+01:00\t%Y\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H:%M:%S\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H%M%S\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H:%M\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H%M\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H:%M:%S%Z\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H%M%S%z\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H%h\n");
+    t.push_str("time_fmt\t08:05:09Z\t%H:%M:%S.%f\n");
+    t.push_str("time_fmt\t08:05:09Z\t%Y\n");
+    t.push_str("time_fmt\t12:00\t%H:%M:%S\n");
+    t.push_str("time_fmt\t12:00\t%H%M%S\n");
+    t.push_str("time_fmt\t12:00\t%H:%M\n");
+    t.push_str("time_fmt\t12:00\t%H%M\n");
+    t.push_str("time_fmt\t12:00\t%H\n");
+    t.push_str("time_fmt\t12:00\t%H:%M:%S%Z\n");
+    t.push_str("time_fmt\t12:00\t%H%M%S%z\n");
+    t.push_str("time_fmt\t12:00\t%H%h\n");
+    t.push_str("time_fmt\t12:00\t%H:%M:%S.%f\n");
+    t.push_str("time_fmt\t12:00\t%Y\n");
+    t.push_str("time_fmt\t152746-0530\t%H:%M:%S\n");
+    t.push_str("time_fmt\t152746-0530\t%H%M%S\n");
+    t.push_str("time_fmt\t152746-0530\t%H:%M\n");
+    t.push_str("time_fmt\t152746-0530\t%H%M\n");
+    t.push_str("time_fmt\t152746-0530\t%H\n");
+    t.push_str("time_fmt\t152746-0530\t%H:%M:%S%Z\n");
+    t.push_str("time_fmt\t152746-0530\t%H%M%S%z\n");
+    t.push_str("time_fmt\t152746-0530\t%H%h\n");
+    t.push_str("time_fmt\t152746-0530\t%H:%M:%S.%f\n");
+    t.push_str("time_fmt\t152746-0530\t%Y\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H:%M:%S\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H%M%S\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H:%M\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H%M\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H:%M:%S%Z\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H%M%S%z\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H%h\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%H:%M:%S.%f\n");
+    t.push_str("time_fmt\t00:00:00.000123\t%Y\n");
+    t.push_str("== zones\n");
+    t.push_str("tz\tZ\n");
+    t.push_str("tz\t+01:00\n");
+    t.push_str("tz\t+0100\n");
+    t.push_str("tz\t+01\n");
+    t.push_str("tz\t-05:30\n");
+    t.push_str("tz\t-0530\n");
+    t.push_str("tz\t-00:30\n");
+    t.push_str("tz\t+00:00\n");
+    t.push_str("tz\t-00\n");
+    t.push_str("tz\t\n");
+    t.push_str("tz\t+1\n");
+    t.push_str("tz\tx\n");
+    t.push_str("tz\t+01:00x\n");
+    t.push_str("tz\tz\n");
+    t.push_str("tz\t+14:00\n");
+    t.push_str("== datetimes\n");
+    t.push_str("datetime\t1985-04-12T10:15:30\n");
+    t.push_str("datetime\t19850412T101530\n");
+    t.push_str("datetime\t1985-04-12T10:15:30Z\n");
+    t.push_str("datetime\t1985-04-12T10:15:30+04:00\n");
+    t.push_str("datetime\t1985-W15-5T10:15\n");
+    t.push_str("datetime\t1985102T23:50:30\n");
+    t.push_str("datetime\t1985-04T10:15\n");
+    t.push_str("datetime\t1985-04-12T10:15:30.5+01:00\n");
+    t.push_str("datetime\t2012-10-30T08:55:22.7-05:00\n");
+    t.push_str("datetime\t1985-04-12\n");
+    t.push_str("datetime\t1985-04-12T\n");
+    t.push_str("datetime\tT10:15:30\n");
+    t.push_str("datetime\t1985-04-12T10:15:30T\n");
+    t.push_str("datetime\t1985-04-12 10:15:30\n");
+    t.push_str("datetime\t2024-02-30T10:00\n");
+    t.push_str("datetime\t2024-02-29T24:00\n");
+    t.push_str("datetime\t2014-11-02T01:30:00-04:00\n");
+    t.push_str("datetime\t1997-07-16T19:20+01:00\n");
+    t.push_str("datetime\t1997-07-16t19:20\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%Y-%m-%dT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%Y%m%dT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%Y-%jT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%Y%jT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%Y-W%W-%wT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%YW%W%wT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%Y-%m-%dT%H:%M:%S.%f%h\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30Z\t%d/%m/%Y %H:%M\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%Y-%m-%dT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%Y%m%dT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%Y-%jT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%Y%jT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%Y-W%W-%wT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%YW%W%wT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%Y-%m-%dT%H:%M:%S.%f%h\n");
+    t.push_str("datetime_fmt\t2012-10-30T08:55:22.7-05:00\t%d/%m/%Y %H:%M\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%Y-%m-%dT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%Y%m%dT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%Y-%jT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%Y%jT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%Y-W%W-%wT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%YW%W%wT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%Y-%m-%dT%H:%M:%S.%f%h\n");
+    t.push_str("datetime_fmt\t2009-12-31T23:59:59+05:45\t%d/%m/%Y %H:%M\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%Y-%m-%dT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%Y%m%dT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%Y-%jT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%Y%jT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%Y-W%W-%wT%H:%M:%S%Z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%YW%W%wT%H%M%S%z\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%Y-%m-%dT%H:%M:%S.%f%h\n");
+    t.push_str("datetime_fmt\t1985-04-12T10:15:30\t%d/%m/%Y %H:%M\n");
+    t.push_str("== durations\n");
+    t.push_str("duration\tP18Y9M4DT11H9M8S\n");
+    t.push_str("duration\tP18Y9M4DT11H9M8S\tno\n");
+    t.push_str("duration\tP2W\n");
+    t.push_str("duration\tP2W\tno\n");
+    t.push_str("duration\tP3Y6M4DT12H30M5S\n");
+    t.push_str("duration\tP3Y6M4DT12H30M5S\tno\n");
+    t.push_str("duration\tP23DT23H\n");
+    t.push_str("duration\tP23DT23H\tno\n");
+    t.push_str("duration\tP4Y\n");
+    t.push_str("duration\tP4Y\tno\n");
+    t.push_str("duration\tPT36H\n");
+    t.push_str("duration\tPT36H\tno\n");
+    t.push_str("duration\tP1DT12H\n");
+    t.push_str("duration\tP1DT12H\tno\n");
+    t.push_str("duration\tPT0.5S\n");
+    t.push_str("duration\tPT0.5S\tno\n");
+    t.push_str("duration\tPT0,5S\n");
+    t.push_str("duration\tPT0,5S\tno\n");
+    t.push_str("duration\tP0.5Y\n");
+    t.push_str("duration\tP0.5Y\tno\n");
+    t.push_str("duration\tP0,5Y\n");
+    t.push_str("duration\tP0,5Y\tno\n");
+    t.push_str("duration\tP1.5M\n");
+    t.push_str("duration\tP1.5M\tno\n");
+    t.push_str("duration\tP0.5W\n");
+    t.push_str("duration\tP0.5W\tno\n");
+    t.push_str("duration\tP1.5D\n");
+    t.push_str("duration\tP1.5D\tno\n");
+    t.push_str("duration\tPT1.5H\n");
+    t.push_str("duration\tPT1.5H\tno\n");
+    t.push_str("duration\tPT1.5M\n");
+    t.push_str("duration\tPT1.5M\tno\n");
+    t.push_str("duration\tP1M\n");
+    t.push_str("duration\tP1M\tno\n");
+    t.push_str("duration\t-P1M\n");
+    t.push_str("duration\t-P1M\tno\n");
+    t.push_str("duration\t-P2W\n");
+    t.push_str("duration\t-P2W\tno\n");
+    t.push_str("duration\t-PT1S\n");
+    t.push_str("duration\t-PT1S\tno\n");
+    t.push_str("duration\t+P1D\n");
+    t.push_str("duration\t+P1D\tno\n");
+    t.push_str("duration\tP0D\n");
+    t.push_str("duration\tP0D\tno\n");
+    t.push_str("duration\tPT0S\n");
+    t.push_str("duration\tPT0S\tno\n");
+    t.push_str("duration\tP0Y\n");
+    t.push_str("duration\tP0Y\tno\n");
+    t.push_str("duration\tP\n");
+    t.push_str("duration\tP\tno\n");
+    t.push_str("duration\tPT\n");
+    t.push_str("duration\tPT\tno\n");
+    t.push_str("duration\tP1\n");
+    t.push_str("duration\tP1\tno\n");
+    t.push_str("duration\t1Y\n");
+    t.push_str("duration\t1Y\tno\n");
+    t.push_str("duration\tP1Y2\n");
+    t.push_str("duration\tP1Y2\tno\n");
+    t.push_str("duration\tP1D2H\n");
+    t.push_str("duration\tP1D2H\tno\n");
+    t.push_str("duration\tP1DT\n");
+    t.push_str("duration\tP1DT\tno\n");
+    t.push_str("duration\tPT1H2\n");
+    t.push_str("duration\tPT1H2\tno\n");
+    t.push_str("duration\tP1W2D\n");
+    t.push_str("duration\tP1W2D\tno\n");
+    t.push_str("duration\tPT1000000S\n");
+    t.push_str("duration\tPT1000000S\tno\n");
+    t.push_str("duration\tP10000D\n");
+    t.push_str("duration\tP10000D\tno\n");
+    t.push_str("duration\tPT0.0000001S\n");
+    t.push_str("duration\tPT0.0000001S\tno\n");
+    t.push_str("duration\tPT0.0000005S\n");
+    t.push_str("duration\tPT0.0000005S\tno\n");
+    t.push_str("duration\tPT0.0000015S\n");
+    t.push_str("duration\tPT0.0000015S\tno\n");
+    t.push_str("duration\tPT1.0000005S\n");
+    t.push_str("duration\tPT1.0000005S\tno\n");
+    t.push_str("duration\tP0.000001D\n");
+    t.push_str("duration\tP0.000001D\tno\n");
+    t.push_str("duration\tPT0.1H\n");
+    t.push_str("duration\tPT0.1H\tno\n");
+    t.push_str("duration\tP1.333333333333333D\n");
+    t.push_str("duration\tP1.333333333333333D\tno\n");
+    t.push_str("duration\tP0.00001Y\n");
+    t.push_str("duration\tP0.00001Y\tno\n");
+    t.push_str("duration\tP0.0000001Y\n");
+    t.push_str("duration\tP0.0000001Y\tno\n");
+    t.push_str("duration\tP1.50Y\n");
+    t.push_str("duration\tP1.50Y\tno\n");
+    t.push_str("duration\tP007Y0010M\n");
+    t.push_str("duration\tP007Y0010M\tno\n");
+    t.push_str("duration\tP0.0M\n");
+    t.push_str("duration\tP0.0M\tno\n");
+    t.push_str("duration\t-P0.0Y\n");
+    t.push_str("duration\t-P0.0Y\tno\n");
+    t.push_str("duration\tP1YT\n");
+    t.push_str("duration\tP1YT\tno\n");
+    t.push_str("duration\tP1y\n");
+    t.push_str("duration\tP1y\tno\n");
+    t.push_str("duration\tP0003-02-01T04:05:06\n");
+    t.push_str("duration\tP0003-02-01T04:05:06\tno\n");
+    t.push_str("duration\tP00030201T040506\n");
+    t.push_str("duration\tP00030201T040506\tno\n");
+    t.push_str("duration\tP0000-00-01T00:00:00\n");
+    t.push_str("duration\tP0000-00-01T00:00:00\tno\n");
+    t.push_str("duration\tP0003-032T04:05:06\n");
+    t.push_str("duration\tP0003-032T04:05:06\tno\n");
+    t.push_str("duration\tP0001-01-01T00:00:00.5\n");
+    t.push_str("duration\tP0001-01-01T00:00:00.5\tno\n");
+    t.push_str("duration\tP0002-02-30T00:00\n");
+    t.push_str("duration\tP0002-02-30T00:00\tno\n");
+    t.push_str("duration\tP0018-09-04T11:09:08\n");
+    t.push_str("duration\tP0018-09-04T11:09:08\tno\n");
+    t.push_str("duration\tP1985-W15-5T10:15\n");
+    t.push_str("duration\tP1985-W15-5T10:15\tno\n");
+    t.push_str("duration\tPfoo\n");
+    t.push_str("duration\tPfoo\tno\n");
+    t.push_str("duration\t\n");
+    t.push_str("duration\t\tno\n");
+    t.push_str("duration\tPT36H1D\n");
+    t.push_str("duration\tPT36H1D\tno\n");
+    t.push_str("duration\tP1DT-1H\n");
+    t.push_str("duration\tP1DT-1H\tno\n");
+    t.push_str("duration\tp1d\n");
+    t.push_str("duration\tp1d\tno\n");
+    t.push_str("duration\tP1D \n");
+    t.push_str("duration\tP1D \tno\n");
+    t.push_str("duration\tP1.D\n");
+    t.push_str("duration\tP1.D\tno\n");
+    t.push_str("duration\tP.5D\n");
+    t.push_str("duration\tP.5D\tno\n");
+    t.push_str("duration\tP1e3D\n");
+    t.push_str("duration\tP1e3D\tno\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%P\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%P\tno\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%p\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%p\tno\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\t%W %%\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\t%W %%\tno\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\t%C\n");
+    t.push_str("duration_fmt\tP3Y6M4DT12H30M5S\t%C\tno\n");
+    t.push_str("duration_fmt\tPT36H\tP%P\n");
+    t.push_str("duration_fmt\tPT36H\tP%P\tno\n");
+    t.push_str("duration_fmt\tPT36H\tP%p\n");
+    t.push_str("duration_fmt\tPT36H\tP%p\tno\n");
+    t.push_str("duration_fmt\tPT36H\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tPT36H\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tPT36H\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tPT36H\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tPT36H\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tPT36H\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tPT36H\t%W %%\n");
+    t.push_str("duration_fmt\tPT36H\t%W %%\tno\n");
+    t.push_str("duration_fmt\tPT36H\t%C\n");
+    t.push_str("duration_fmt\tPT36H\t%C\tno\n");
+    t.push_str("duration_fmt\t-P1M\tP%P\n");
+    t.push_str("duration_fmt\t-P1M\tP%P\tno\n");
+    t.push_str("duration_fmt\t-P1M\tP%p\n");
+    t.push_str("duration_fmt\t-P1M\tP%p\tno\n");
+    t.push_str("duration_fmt\t-P1M\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\t-P1M\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\t-P1M\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\t-P1M\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\t-P1M\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\t-P1M\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\t-P1M\t%W %%\n");
+    t.push_str("duration_fmt\t-P1M\t%W %%\tno\n");
+    t.push_str("duration_fmt\t-P1M\t%C\n");
+    t.push_str("duration_fmt\t-P1M\t%C\tno\n");
+    t.push_str("duration_fmt\tP2W\tP%P\n");
+    t.push_str("duration_fmt\tP2W\tP%P\tno\n");
+    t.push_str("duration_fmt\tP2W\tP%p\n");
+    t.push_str("duration_fmt\tP2W\tP%p\tno\n");
+    t.push_str("duration_fmt\tP2W\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tP2W\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tP2W\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tP2W\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tP2W\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tP2W\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tP2W\t%W %%\n");
+    t.push_str("duration_fmt\tP2W\t%W %%\tno\n");
+    t.push_str("duration_fmt\tP2W\t%C\n");
+    t.push_str("duration_fmt\tP2W\t%C\tno\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%P\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%P\tno\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%p\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%p\tno\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\t-PT1.5S\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\t-PT1.5S\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\t-PT1.5S\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\t-PT1.5S\t%W %%\n");
+    t.push_str("duration_fmt\t-PT1.5S\t%W %%\tno\n");
+    t.push_str("duration_fmt\t-PT1.5S\t%C\n");
+    t.push_str("duration_fmt\t-PT1.5S\t%C\tno\n");
+    t.push_str("duration_fmt\tP0D\tP%P\n");
+    t.push_str("duration_fmt\tP0D\tP%P\tno\n");
+    t.push_str("duration_fmt\tP0D\tP%p\n");
+    t.push_str("duration_fmt\tP0D\tP%p\tno\n");
+    t.push_str("duration_fmt\tP0D\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tP0D\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tP0D\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tP0D\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tP0D\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tP0D\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tP0D\t%W %%\n");
+    t.push_str("duration_fmt\tP0D\t%W %%\tno\n");
+    t.push_str("duration_fmt\tP0D\t%C\n");
+    t.push_str("duration_fmt\tP0D\t%C\tno\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%P\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%P\tno\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%p\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%p\tno\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tPT0.000001S\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tPT0.000001S\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tPT0.000001S\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tPT0.000001S\t%W %%\n");
+    t.push_str("duration_fmt\tPT0.000001S\t%W %%\tno\n");
+    t.push_str("duration_fmt\tPT0.000001S\t%C\n");
+    t.push_str("duration_fmt\tPT0.000001S\t%C\tno\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%P\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%P\tno\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%p\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%p\tno\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tP1.5Y\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tP1.5Y\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tP1.5Y\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tP1.5Y\t%W %%\n");
+    t.push_str("duration_fmt\tP1.5Y\t%W %%\tno\n");
+    t.push_str("duration_fmt\tP1.5Y\t%C\n");
+    t.push_str("duration_fmt\tP1.5Y\t%C\tno\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%P\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%P\tno\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%p\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%p\tno\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\t%W %%\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\t%W %%\tno\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\t%C\n");
+    t.push_str("duration_fmt\t-P1Y1DT1S\t%C\tno\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%P\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%P\tno\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%p\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%p\tno\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tP0.0000001Y\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tP0.0000001Y\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tP0.0000001Y\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tP0.0000001Y\t%W %%\n");
+    t.push_str("duration_fmt\tP0.0000001Y\t%W %%\tno\n");
+    t.push_str("duration_fmt\tP0.0000001Y\t%C\n");
+    t.push_str("duration_fmt\tP0.0000001Y\t%C\tno\n");
+    t.push_str("duration_fmt\tP400D\tP%P\n");
+    t.push_str("duration_fmt\tP400D\tP%P\tno\n");
+    t.push_str("duration_fmt\tP400D\tP%p\n");
+    t.push_str("duration_fmt\tP400D\tP%p\tno\n");
+    t.push_str("duration_fmt\tP400D\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\tP400D\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\tP400D\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\tP400D\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\tP400D\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\tP400D\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\tP400D\t%W %%\n");
+    t.push_str("duration_fmt\tP400D\t%W %%\tno\n");
+    t.push_str("duration_fmt\tP400D\t%C\n");
+    t.push_str("duration_fmt\tP400D\t%C\tno\n");
+    t.push_str("duration_fmt\t-P10D\tP%P\n");
+    t.push_str("duration_fmt\t-P10D\tP%P\tno\n");
+    t.push_str("duration_fmt\t-P10D\tP%p\n");
+    t.push_str("duration_fmt\t-P10D\tP%p\tno\n");
+    t.push_str("duration_fmt\t-P10D\tP%Y-%m-%dT%H:%M:%S\n");
+    t.push_str("duration_fmt\t-P10D\tP%Y-%m-%dT%H:%M:%S\tno\n");
+    t.push_str("duration_fmt\t-P10D\tP%Y%m%dT%H%M%S\n");
+    t.push_str("duration_fmt\t-P10D\tP%Y%m%dT%H%M%S\tno\n");
+    t.push_str("duration_fmt\t-P10D\t%d %H %M %S %f\n");
+    t.push_str("duration_fmt\t-P10D\t%d %H %M %S %f\tno\n");
+    t.push_str("duration_fmt\t-P10D\t%W %%\n");
+    t.push_str("duration_fmt\t-P10D\t%W %%\tno\n");
+    t.push_str("duration_fmt\t-P10D\t%C\n");
+    t.push_str("duration_fmt\t-P10D\t%C\tno\n");
+    t.push_str("== arithmetic\n");
+    t.push_str("add\tP:P1M\td:2024-01-31\n");
+    t.push_str("add\td:2024-01-31\tP:P1M\n");
+    t.push_str("add\tP:P1M\td:2023-01-31\n");
+    t.push_str("add\td:2023-01-31\tP:P1M\n");
+    t.push_str("add\tP:P1Y\td:2024-02-29\n");
+    t.push_str("add\td:2024-02-29\tP:P1Y\n");
+    t.push_str("add\tP:P1Y1M\tdt:2024-01-31T10:00:00Z\n");
+    t.push_str("add\tdt:2024-01-31T10:00:00Z\tP:P1Y1M\n");
+    t.push_str("add\tP:P13M\td:2024-12-15\n");
+    t.push_str("add\td:2024-12-15\tP:P13M\n");
+    t.push_str("add\tP:-P1M\td:2024-03-31\n");
+    t.push_str("add\td:2024-03-31\tP:-P1M\n");
+    t.push_str("add\tP:P1MT12H\td:2024-01-31\n");
+    t.push_str("add\td:2024-01-31\tP:P1MT12H\n");
+    t.push_str("add\tP:P1MT12H\tdt:2024-01-31T18:00\n");
+    t.push_str("add\tdt:2024-01-31T18:00\tP:P1MT12H\n");
+    t.push_str("add\tP:P0.5M\td:2024-01-01\n");
+    t.push_str("add\td:2024-01-01\tP:P0.5M\n");
+    t.push_str("add\tP:P1.0M\td:2024-01-31\n");
+    t.push_str("add\td:2024-01-31\tP:P1.0M\n");
+    t.push_str("add\tP:PT36H\td:2024-01-01\n");
+    t.push_str("add\td:2024-01-01\tP:PT36H\n");
+    t.push_str("add\tP:PT36H\tdt:2024-01-01T00:00+05:30\n");
+    t.push_str("add\tdt:2024-01-01T00:00+05:30\tP:PT36H\n");
+    t.push_str("add\tP:P1M\tP:P1D\n");
+    t.push_str("add\tP:P1D\tP:P1M\n");
+    t.push_str("add\tP:P1M\tp:PT1H\n");
+    t.push_str("add\tp:PT1H\tP:P1M\n");
+    t.push_str("add\tP:P9000Y\td:2024-01-01\n");
+    t.push_str("add\td:2024-01-01\tP:P9000Y\n");
+    t.push_str("add\tP:-P2025Y\td:2024-01-01\n");
+    t.push_str("add\td:2024-01-01\tP:-P2025Y\n");
+    t.push_str("add\tP:P2Y\td:9998-06-01\n");
+    t.push_str("add\td:9998-06-01\tP:P2Y\n");
+    t.push_str("add\tP:P1D\td:9999-12-31\n");
+    t.push_str("add\td:9999-12-31\tP:P1D\n");
+    t.push_str("add\tP:P100Y\tdt:1999-12-31T23:59:59.5\n");
+    t.push_str("add\tdt:1999-12-31T23:59:59.5\tP:P100Y\n");
+    t.push_str("sub\td:2024-03-31\tP:P1M\n");
+    t.push_str("sub\td:2024-03-31\tP:P1Y1M\n");
+    t.push_str("sub\td:2024-01-15\tP:P1M\n");
+    t.push_str("sub\tdt:2024-03-31T12:00\tP:P1MT12H\n");
+    t.push_str("sub\td:2024-03-01\tP:PT1H\n");
+    t.push_str("sub\td:2024-03-01\tP:P1D\n");
+    t.push_str("sub\tp:PT1H\tP:P1M\n");
+    t.push_str("sub\tP:P1Y\tP:P1M\n");
+    t.push_str("sub\td:2024-01-31\tP:P0.5M\n");
+    t.push_str("sub\td:0001-03-01\tP:P1Y\n");
+    t.push_str("sub\tP:P1M\td:2024-01-01\n");
+    t.push_str("mul\tP:P1M\t3\n");
+    t.push_str("mul\tP:P1Y2M3DT4H\t2\n");
+    t.push_str("mul\tP:P1.5Y\t2\n");
+    t.push_str("mul\tP:-P1M\t4\n");
+    t.push_str("mul\tP:P1M\t0\n");
+    t.push_str("mul\tP:PT1S\t-3\n");
+    t.push_str("neg\tP:P1Y2M\n");
+    t.push_str("neg\tP:-P1M\n");
+    t.push_str("neg\tP:PT1H\n");
+    t.push_str("neg\tP:P1.5Y\n");
+    t.push_str("eq\tP:P1Y\tP:P12M\n");
+    t.push_str("eq\tP:P1Y\tP:P365D\n");
+    t.push_str("eq\tP:P1D\tp:PT24H\n");
+    t.push_str("eq\tP:P0Y\tp:P1D\n");
+    t.push_str("eq\tP:P0YT1D\tp:P1D\n");
+    t.push_str("eq\tP:P1M\tP:P1M\n");
+    t.push_str("eq\tP:P1.5Y\tP:P18M\n");
+    t.push_str("eq\tP:P2W\tP:P14D\n");
+    t.push_str("totd\tP:P1M\tstart\td:2024-01-31\n");
+    t.push_str("totd\tP:P1M\tstart\td:2024-02-01\n");
+    t.push_str("totd\tP:P1M\tend\td:2024-03-31\n");
+    t.push_str("totd\tP:P1Y\tstart\tdt:2024-02-29T00:00\n");
+    t.push_str("totd\tP:P1Y\tend\td:2025-02-28\n");
+    t.push_str("totd\tP:P1M\tnone\td:2024-01-01\n");
+    t.push_str("totd\tP:P1M\tboth\td:2024-01-01\n");
+    t.push_str("totd\tP:P0.5Y\tstart\td:2024-01-01\n");
+    t.push_str("add\tP:-P3Y0M36D\td:2005-11-06\n");
+    t.push_str("add\tP:P2Y7M14D\td:1998-11-16\n");
+    t.push_str("add\tP:P1Y11M18D\td:2012-04-25\n");
+    t.push_str("add\tP:-P2Y6M2D\td:2016-05-16\n");
+    t.push_str("add\tP:P2Y8M0D\td:2009-03-08\n");
+    t.push_str("add\tP:-P3Y3M25D\td:2005-07-02\n");
+    t.push_str("add\tP:P1Y12M26D\td:1991-09-23\n");
+    t.push_str("add\tP:P3Y2M12D\td:2016-11-28\n");
+    t.push_str("add\tP:P1Y9M23D\td:2001-08-19\n");
+    t.push_str("add\tP:-P2Y7M26D\td:2023-05-26\n");
+    t.push_str("add\tP:P3Y0M22D\td:2021-11-24\n");
+    t.push_str("add\tP:P1Y7M10D\td:1991-09-19\n");
+    t.push_str("add\tP:-P1Y12M19D\td:2008-02-17\n");
+    t.push_str("add\tP:P1Y7M11D\td:2010-07-23\n");
+    t.push_str("add\tP:-P1Y10M8D\td:2015-07-26\n");
+    t.push_str("add\tP:P3Y11M37D\td:2012-12-16\n");
+    t.push_str("add\tP:-P1Y12M21D\td:2024-10-24\n");
+    t.push_str("add\tP:P2Y6M36D\td:2029-04-07\n");
+    t.push_str("add\tP:-P3Y8M24D\td:2011-09-20\n");
+    t.push_str("add\tP:-P2Y12M5D\td:1991-10-06\n");
+    t.push_str("add\tP:P3Y0M6D\td:2000-05-15\n");
+    t.push_str("add\tP:-P1Y6M14D\td:2007-06-01\n");
+    t.push_str("add\tP:P3Y13M1D\td:2002-09-07\n");
+    t.push_str("add\tP:-P1Y6M29D\td:2028-04-14\n");
+    t.push_str("add\tP:P2Y11M2D\td:1990-09-12\n");
+    t.push_str("add\tP:P1Y11M0D\td:2012-10-19\n");
+    t.push_str("add\tP:P1Y13M14D\td:2027-07-01\n");
+    t.push_str("add\tP:-P2Y4M30D\td:1990-03-05\n");
+    t.push_str("add\tP:P2Y3M37D\td:1994-12-09\n");
+    t.push_str("add\tP:P1Y3M21D\td:2008-03-20\n");
+    t.push_str("== subscriptions\n");
+    t.push_str("subscriptions\tsubscriptions.tsv\n");
+    t.push_str("== incidents\n");
+    t.push_str("incidents\tincidents.tsv\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# id\tstarts\tperiod\trenewals\tgrace\tplan\n");
+    t.push_str("acme-pro\t2024-01-31\tP1M\t6\tP3D\tmonthly, billed on the last day the month allows\n");
+    t.push_str("globex\t2023-11-30T09:00:00Z\tP1M\t4\tPT36H\tmonthly from a datetime\n");
+    t.push_str("initech\t2024-02-29\tP1Y\t5\tP14D\tyearly from a leap day\n");
+    t.push_str("hooli\t2024-03-15T12:00:00+05:30\tP3M\t5\tP1W\tquarterly\n");
+    t.push_str("umbrella\t2024-01-01\tP2W\t6\tP2D\tfortnightly\n");
+    t.push_str("stark\t2024-05-31\tP1M15D\t4\tP0D\ta month and a half\n");
+    t.push_str("wayne\t2024-08-31\tP6M\t3\tPT12H\thalf-yearly\n");
+    t.push_str("tyrell\t2024-01-15\tP1.5M\t2\tP1D\tfractional months are refused\n");
+    t.push_str("cyberdyne\t2024-12-31T23:30:00-08:00\tP1MT1H\t3\tPT30M\tmonthly plus an hour\n");
+    t.push_str("soylent\t2024-06-30\tP1Y2M\t3\tP0D\tfourteen months\n");
+    t.push_str("oscorp\t2025-01-31\tPT720H\t3\tP1D\tthirty days, as hours\n");
+    t.push_str("nakatomi\t2024-04-31\tP1M\t2\tP1D\tbad start\n");
+    v.push(DataFile { path: "subscriptions.tsv".to_string(), hex: false, body: t });
+}

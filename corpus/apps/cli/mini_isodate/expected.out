@@ -1,0 +1,1542 @@
+== dates
+-- date '2024-02-29'
+   date 2024-02-29
+-- date '20240229'
+   date 2024-02-29
+-- date '2023-02-29'
+   error: ValueError: day is out of range for month
+-- date '2024-13-01'
+   error: ValueError: month must be in 1..12
+-- date '2024-00-10'
+   date 2024-01-10
+-- date '1985-W15-5'
+   date 1985-04-12
+-- date '1985W155'
+   date 1985-04-12
+-- date '2009-W01-1'
+   date 2008-12-29
+-- date '2009-W53-7'
+   date 2010-01-03
+-- date '2010-W01'
+   date 2010-01-04
+-- date '2010W01'
+   date 2010-01-04
+-- date '2008-W52-0'
+   date 2008-12-21
+-- date '2004-W53-9'
+   date 2005-01-04
+-- date '1985-102'
+   date 1985-04-12
+-- date '1985102'
+   date 1985-04-12
+-- date '2024-366'
+   date 2024-12-31
+-- date '2023-366'
+   date 2024-01-01
+-- date '1985-04'
+   date 1985-04-01
+-- date '198504'
+   date 1985-04-01
+-- date '1985'
+   date 1985-01-01
+-- date '19'
+   date 1901-01-01
+-- date '20'
+   date 2001-01-01
+-- date '2000-02'
+   date 2000-02-01
+-- date '0000-01-01'
+   error: ValueError: year 0 is out of range
+-- date '0001-01-01'
+   date 0001-01-01
+-- date '9999-12-31'
+   date 9999-12-31
+-- date '10000'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '10000'
+-- date '+1985-04-12'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '+1985-04-12'
+-- date '1985-4-12'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '1985-4-12'
+-- date '1985-04-12 '
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '1985-04-12 '
+-- date ' 1985-04-12'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: ' 1985-04-12'
+-- date '1985-04-12\n'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '1985-04-12\n'
+-- date ''
+   error: ISO8601Error: Unrecognised ISO 8601 date format: ''
+-- date 'abcd'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: 'abcd'
+-- date '2024-02-30'
+   error: ValueError: day is out of range for month
+-- date '2024-W60-1'
+   date 2025-02-17
+-- date '2024-000'
+   date 2023-12-31
+-- date '+001985-04-12' '6' '1'
+   date 1985-04-12
+-- date '+0019850412' '6' '1'
+   date 1985-04-12
+-- date '-001985-04-12' '6' '1'
+   error: ValueError: year -1985 is out of range
+-- date '+1985-04-12' '4' '1'
+   date 1985-04-12
+-- date '-1985-04-12' '4' '1'
+   error: ValueError: year -1985 is out of range
+-- date '1985-04-12' '4' '1'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '1985-04-12'
+-- date '+001985-W15-5' '6' '1'
+   date 1985-04-12
+-- date '+001985102' '6' '1'
+   date 1985-04-12
+-- date '+0019' '6' '1'
+   date 1901-01-01
+-- date '+19' '4' '1'
+   date 1901-01-01
+-- date '+001985' '6' '1'
+   date 1985-01-01
+-- date '+012345-06-07' '6' '0'
+   error: ValueError: year 12345 is out of range
+-- date '+12345-06-07' '5' '0'
+   error: ValueError: year 12345 is out of range
+-- date '+0000-01-01' '4' '1'
+   error: ValueError: year 0 is out of range
+-- date '1985' '4' '0' '6' '15'
+   date 1985-06-15
+-- date '19' '4' '0' '12' '31'
+   date 1901-12-31
+-- date '1985-04' '4' '0' '1' '30'
+   date 1985-04-30
+-- date '2023' '4' '0' '2' '29'
+   error: ValueError: day is out of range for month
+-- date '1985-04' '4' '0' '4' '31'
+   error: ValueError: day is out of range for month
+-- date_fmt '2024-02-29' '%Y-%m-%d'
+   2024-02-29
+-- date_fmt '2024-02-29' '%Y%m%d'
+   20240229
+-- date_fmt '2024-02-29' '%Y-W%W-%w'
+   2024-W09-4
+-- date_fmt '2024-02-29' '%YW%W%w'
+   2024W094
+-- date_fmt '2024-02-29' '%Y-%j'
+   2024-060
+-- date_fmt '2024-02-29' '%Y%j'
+   2024060
+-- date_fmt '2024-02-29' '%Y-W%W'
+   2024-W09
+-- date_fmt '2024-02-29' '%Y-%m'
+   2024-02
+-- date_fmt '2024-02-29' '%Y'
+   2024
+-- date_fmt '2024-02-29' '%C'
+   20
+-- date_fmt '2024-02-29' '%d.%m.%Y %%'
+   29.02.2024 %
+-- date_fmt '2024-02-29' '%H'
+   error: AttributeError: 'datetime.date' object has no attribute 'hour'
+-- date_fmt '2024-02-29' '%Y-%m-%d' '6'
+   +002024-02-29
+-- date_fmt '2024-02-29' '%C' '6'
+   +0020
+-- date_fmt '1985-04-12' '%Y-%m-%d'
+   1985-04-12
+-- date_fmt '1985-04-12' '%Y%m%d'
+   19850412
+-- date_fmt '1985-04-12' '%Y-W%W-%w'
+   1985-W15-5
+-- date_fmt '1985-04-12' '%YW%W%w'
+   1985W155
+-- date_fmt '1985-04-12' '%Y-%j'
+   1985-102
+-- date_fmt '1985-04-12' '%Y%j'
+   1985102
+-- date_fmt '1985-04-12' '%Y-W%W'
+   1985-W15
+-- date_fmt '1985-04-12' '%Y-%m'
+   1985-04
+-- date_fmt '1985-04-12' '%Y'
+   1985
+-- date_fmt '1985-04-12' '%C'
+   19
+-- date_fmt '1985-04-12' '%d.%m.%Y %%'
+   12.04.1985 %
+-- date_fmt '1985-04-12' '%H'
+   error: AttributeError: 'datetime.date' object has no attribute 'hour'
+-- date_fmt '1985-04-12' '%Y-%m-%d' '6'
+   +001985-04-12
+-- date_fmt '1985-04-12' '%C' '6'
+   +0019
+-- date_fmt '2009-12-31' '%Y-%m-%d'
+   2009-12-31
+-- date_fmt '2009-12-31' '%Y%m%d'
+   20091231
+-- date_fmt '2009-12-31' '%Y-W%W-%w'
+   2009-W53-4
+-- date_fmt '2009-12-31' '%YW%W%w'
+   2009W534
+-- date_fmt '2009-12-31' '%Y-%j'
+   2009-365
+-- date_fmt '2009-12-31' '%Y%j'
+   2009365
+-- date_fmt '2009-12-31' '%Y-W%W'
+   2009-W53
+-- date_fmt '2009-12-31' '%Y-%m'
+   2009-12
+-- date_fmt '2009-12-31' '%Y'
+   2009
+-- date_fmt '2009-12-31' '%C'
+   20
+-- date_fmt '2009-12-31' '%d.%m.%Y %%'
+   31.12.2009 %
+-- date_fmt '2009-12-31' '%H'
+   error: AttributeError: 'datetime.date' object has no attribute 'hour'
+-- date_fmt '2009-12-31' '%Y-%m-%d' '6'
+   +002009-12-31
+-- date_fmt '2009-12-31' '%C' '6'
+   +0020
+-- date_fmt '2010-01-03' '%Y-%m-%d'
+   2010-01-03
+-- date_fmt '2010-01-03' '%Y%m%d'
+   20100103
+-- date_fmt '2010-01-03' '%Y-W%W-%w'
+   2010-W53-7
+-- date_fmt '2010-01-03' '%YW%W%w'
+   2010W537
+-- date_fmt '2010-01-03' '%Y-%j'
+   2010-003
+-- date_fmt '2010-01-03' '%Y%j'
+   2010003
+-- date_fmt '2010-01-03' '%Y-W%W'
+   2010-W53
+-- date_fmt '2010-01-03' '%Y-%m'
+   2010-01
+-- date_fmt '2010-01-03' '%Y'
+   2010
+-- date_fmt '2010-01-03' '%C'
+   20
+-- date_fmt '2010-01-03' '%d.%m.%Y %%'
+   03.01.2010 %
+-- date_fmt '2010-01-03' '%H'
+   error: AttributeError: 'datetime.date' object has no attribute 'hour'
+-- date_fmt '2010-01-03' '%Y-%m-%d' '6'
+   +002010-01-03
+-- date_fmt '2010-01-03' '%C' '6'
+   +0020
+-- date_fmt '0001-01-01' '%Y-%m-%d'
+   0001-01-01
+-- date_fmt '0001-01-01' '%Y%m%d'
+   00010101
+-- date_fmt '0001-01-01' '%Y-W%W-%w'
+   0001-W01-1
+-- date_fmt '0001-01-01' '%YW%W%w'
+   0001W011
+-- date_fmt '0001-01-01' '%Y-%j'
+   0001-001
+-- date_fmt '0001-01-01' '%Y%j'
+   0001001
+-- date_fmt '0001-01-01' '%Y-W%W'
+   0001-W01
+-- date_fmt '0001-01-01' '%Y-%m'
+   0001-01
+-- date_fmt '0001-01-01' '%Y'
+   0001
+-- date_fmt '0001-01-01' '%C'
+   00
+-- date_fmt '0001-01-01' '%d.%m.%Y %%'
+   01.01.0001 %
+-- date_fmt '0001-01-01' '%H'
+   error: AttributeError: 'datetime.date' object has no attribute 'hour'
+-- date_fmt '0001-01-01' '%Y-%m-%d' '6'
+   +000001-01-01
+-- date_fmt '0001-01-01' '%C' '6'
+   +0000
+-- date_fmt '2008-12-29' '%Y-%m-%d'
+   2008-12-29
+-- date_fmt '2008-12-29' '%Y%m%d'
+   20081229
+-- date_fmt '2008-12-29' '%Y-W%W-%w'
+   2008-W01-1
+-- date_fmt '2008-12-29' '%YW%W%w'
+   2008W011
+-- date_fmt '2008-12-29' '%Y-%j'
+   2008-364
+-- date_fmt '2008-12-29' '%Y%j'
+   2008364
+-- date_fmt '2008-12-29' '%Y-W%W'
+   2008-W01
+-- date_fmt '2008-12-29' '%Y-%m'
+   2008-12
+-- date_fmt '2008-12-29' '%Y'
+   2008
+-- date_fmt '2008-12-29' '%C'
+   20
+-- date_fmt '2008-12-29' '%d.%m.%Y %%'
+   29.12.2008 %
+-- date_fmt '2008-12-29' '%H'
+   error: AttributeError: 'datetime.date' object has no attribute 'hour'
+-- date_fmt '2008-12-29' '%Y-%m-%d' '6'
+   +002008-12-29
+-- date_fmt '2008-12-29' '%C' '6'
+   +0020
+-- date_fmt '1999-01-01' '%Y-%m-%d'
+   1999-01-01
+-- date_fmt '1999-01-01' '%Y%m%d'
+   19990101
+-- date_fmt '1999-01-01' '%Y-W%W-%w'
+   1999-W53-5
+-- date_fmt '1999-01-01' '%YW%W%w'
+   1999W535
+-- date_fmt '1999-01-01' '%Y-%j'
+   1999-001
+-- date_fmt '1999-01-01' '%Y%j'
+   1999001
+-- date_fmt '1999-01-01' '%Y-W%W'
+   1999-W53
+-- date_fmt '1999-01-01' '%Y-%m'
+   1999-01
+-- date_fmt '1999-01-01' '%Y'
+   1999
+-- date_fmt '1999-01-01' '%C'
+   19
+-- date_fmt '1999-01-01' '%d.%m.%Y %%'
+   01.01.1999 %
+-- date_fmt '1999-01-01' '%H'
+   error: AttributeError: 'datetime.date' object has no attribute 'hour'
+-- date_fmt '1999-01-01' '%Y-%m-%d' '6'
+   +001999-01-01
+-- date_fmt '1999-01-01' '%C' '6'
+   +0019
+== times
+-- time '23:20:50'
+   time 23:20:50.000000 naive
+-- time '232050'
+   time 23:20:50.000000 naive
+-- time '23:20'
+   time 23:20:00.000000 naive
+-- time '2320'
+   time 23:20:00.000000 naive
+-- time '23'
+   time 23:00:00.000000 naive
+-- time '23:20:50.5'
+   time 23:20:50.500000 naive
+-- time '23:20:50,5'
+   time 23:20:50.500000 naive
+-- time '232050.5'
+   time 23:20:50.500000 naive
+-- time '23:20.5'
+   time 23:20:30.000000 naive
+-- time '2320,8'
+   time 23:20:48.000000 naive
+-- time '23.3'
+   time 23:18:00.000000 naive
+-- time '23,3'
+   time 23:18:00.000000 naive
+-- time '12.33333333'
+   time 12:19:59.999988 naive
+-- time '00:00:00.1234567'
+   time 00:00:00.123456 naive
+-- time '15:27:46.123456789'
+   time 15:27:46.123456 naive
+-- time '10:00:00.000001'
+   time 10:00:00.000001 naive
+-- time '11:59:59.9999999'
+   time 11:59:59.999999 naive
+-- time 'T23:20:50'
+   time 23:20:50.000000 naive
+-- time 'T2320'
+   time 23:20:00.000000 naive
+-- time '23:20:50Z'
+   time 23:20:50.000000 UTC
+-- time '23:20:50+01:00'
+   time 23:20:50.000000 <FixedOffset '+01:00'> 3600
+-- time '232050+0100'
+   time 23:20:50.000000 <FixedOffset '+0100'> 3600
+-- time '23:20:50-05'
+   time 23:20:50.000000 <FixedOffset '-05'> -18000
+-- time '23:20:50-05:30'
+   time 23:20:50.000000 <FixedOffset '-05:30'> -19800
+-- time '23:20:50+00:00'
+   time 23:20:50.000000 <FixedOffset '+00:00'> 0
+-- time '23:20:50-00:00'
+   time 23:20:50.000000 <FixedOffset '-00:00'> 0
+-- time '152746+0100'
+   time 15:27:46.000000 <FixedOffset '+0100'> 3600
+-- time '23:20:50.5+01:00'
+   time 23:20:50.500000 <FixedOffset '+01:00'> 3600
+-- time '23:20.25-0800'
+   time 23:20:15.000000 <FixedOffset '-0800'> -28800
+-- time '24:00:00'
+   error: ValueError: hour must be in 0..23
+-- time '23:60:00'
+   error: ValueError: minute must be in 0..59
+-- time '23:59:60'
+   error: ValueError: second must be in 0..59
+-- time '25'
+   error: ValueError: hour must be in 0..23
+-- time '1:2:3'
+   error: ISO8601Error: Unrecognised ISO 8601 time format: '1:2:3'
+-- time '23:20:50 '
+   error: ISO8601Error: Unrecognised ISO 8601 time format: '23:20:50 '
+-- time '23:20:50+1'
+   error: ISO8601Error: Unrecognised ISO 8601 time format: '23:20:50+1'
+-- time '23:20:50+01:'
+   error: ISO8601Error: Unrecognised ISO 8601 time format: '23:20:50+01:'
+-- time '23:20:50+99:00'
+   time 23:20:50.000000 <FixedOffset '+99:00'> 356400
+-- time '23:20:50z'
+   error: ISO8601Error: Unrecognised ISO 8601 time format: '23:20:50z'
+-- time ''
+   error: ISO8601Error: Unrecognised ISO 8601 time format: ''
+-- time 'T'
+   error: ISO8601Error: Unrecognised ISO 8601 time format: 'T'
+-- time '07:15.123456789012'
+   time 07:15:07.407407 naive
+-- time_fmt '23:20:50.5+01:00' '%H:%M:%S'
+   23:20:50
+-- time_fmt '23:20:50.5+01:00' '%H%M%S'
+   232050
+-- time_fmt '23:20:50.5+01:00' '%H:%M'
+   23:20
+-- time_fmt '23:20:50.5+01:00' '%H%M'
+   2320
+-- time_fmt '23:20:50.5+01:00' '%H'
+   23
+-- time_fmt '23:20:50.5+01:00' '%H:%M:%S%Z'
+   23:20:50+01:00
+-- time_fmt '23:20:50.5+01:00' '%H%M%S%z'
+   232050+0100
+-- time_fmt '23:20:50.5+01:00' '%H%h'
+   23+01
+-- time_fmt '23:20:50.5+01:00' '%H:%M:%S.%f'
+   23:20:50.500000
+-- time_fmt '23:20:50.5+01:00' '%Y'
+   error: AttributeError: 'datetime.time' object has no attribute 'year'
+-- time_fmt '08:05:09Z' '%H:%M:%S'
+   08:05:09
+-- time_fmt '08:05:09Z' '%H%M%S'
+   080509
+-- time_fmt '08:05:09Z' '%H:%M'
+   08:05
+-- time_fmt '08:05:09Z' '%H%M'
+   0805
+-- time_fmt '08:05:09Z' '%H'
+   08
+-- time_fmt '08:05:09Z' '%H:%M:%S%Z'
+   08:05:09Z
+-- time_fmt '08:05:09Z' '%H%M%S%z'
+   080509Z
+-- time_fmt '08:05:09Z' '%H%h'
+   08Z
+-- time_fmt '08:05:09Z' '%H:%M:%S.%f'
+   08:05:09.000000
+-- time_fmt '08:05:09Z' '%Y'
+   error: AttributeError: 'datetime.time' object has no attribute 'year'
+-- time_fmt '12:00' '%H:%M:%S'
+   12:00:00
+-- time_fmt '12:00' '%H%M%S'
+   120000
+-- time_fmt '12:00' '%H:%M'
+   12:00
+-- time_fmt '12:00' '%H%M'
+   1200
+-- time_fmt '12:00' '%H'
+   12
+-- time_fmt '12:00' '%H:%M:%S%Z'
+   12:00:00
+-- time_fmt '12:00' '%H%M%S%z'
+   120000
+-- time_fmt '12:00' '%H%h'
+   12
+-- time_fmt '12:00' '%H:%M:%S.%f'
+   12:00:00.000000
+-- time_fmt '12:00' '%Y'
+   error: AttributeError: 'datetime.time' object has no attribute 'year'
+-- time_fmt '152746-0530' '%H:%M:%S'
+   15:27:46
+-- time_fmt '152746-0530' '%H%M%S'
+   152746
+-- time_fmt '152746-0530' '%H:%M'
+   15:27
+-- time_fmt '152746-0530' '%H%M'
+   1527
+-- time_fmt '152746-0530' '%H'
+   15
+-- time_fmt '152746-0530' '%H:%M:%S%Z'
+   15:27:46-05:30
+-- time_fmt '152746-0530' '%H%M%S%z'
+   152746-0530
+-- time_fmt '152746-0530' '%H%h'
+   15-05
+-- time_fmt '152746-0530' '%H:%M:%S.%f'
+   15:27:46.000000
+-- time_fmt '152746-0530' '%Y'
+   error: AttributeError: 'datetime.time' object has no attribute 'year'
+-- time_fmt '00:00:00.000123' '%H:%M:%S'
+   00:00:00
+-- time_fmt '00:00:00.000123' '%H%M%S'
+   000000
+-- time_fmt '00:00:00.000123' '%H:%M'
+   00:00
+-- time_fmt '00:00:00.000123' '%H%M'
+   0000
+-- time_fmt '00:00:00.000123' '%H'
+   00
+-- time_fmt '00:00:00.000123' '%H:%M:%S%Z'
+   00:00:00
+-- time_fmt '00:00:00.000123' '%H%M%S%z'
+   000000
+-- time_fmt '00:00:00.000123' '%H%h'
+   00
+-- time_fmt '00:00:00.000123' '%H:%M:%S.%f'
+   00:00:00.000123
+-- time_fmt '00:00:00.000123' '%Y'
+   error: AttributeError: 'datetime.time' object has no attribute 'year'
+== zones
+-- tz 'Z'
+   UTC
+-- tz '+01:00'
+   <FixedOffset '+01:00'> 3600
+-- tz '+0100'
+   <FixedOffset '+0100'> 3600
+-- tz '+01'
+   <FixedOffset '+01'> 3600
+-- tz '-05:30'
+   <FixedOffset '-05:30'> -19800
+-- tz '-0530'
+   <FixedOffset '-0530'> -19800
+-- tz '-00:30'
+   <FixedOffset '-00:30'> -1800
+-- tz '+00:00'
+   <FixedOffset '+00:00'> 0
+-- tz '-00'
+   <FixedOffset '-00'> 0
+-- tz ''
+   naive
+-- tz '+1'
+   naive
+-- tz 'x'
+   naive
+-- tz '+01:00x'
+   <FixedOffset '+01:00'> 3600
+-- tz 'z'
+   naive
+-- tz '+14:00'
+   <FixedOffset '+14:00'> 50400
+== datetimes
+-- datetime '1985-04-12T10:15:30'
+   datetime 1985-04-12 10:15:30.000000 naive
+-- datetime '19850412T101530'
+   datetime 1985-04-12 10:15:30.000000 naive
+-- datetime '1985-04-12T10:15:30Z'
+   datetime 1985-04-12 10:15:30.000000 UTC
+-- datetime '1985-04-12T10:15:30+04:00'
+   datetime 1985-04-12 10:15:30.000000 <FixedOffset '+04:00'> 14400
+-- datetime '1985-W15-5T10:15'
+   datetime 1985-04-12 10:15:00.000000 naive
+-- datetime '1985102T23:50:30'
+   datetime 1985-04-12 23:50:30.000000 naive
+-- datetime '1985-04T10:15'
+   datetime 1985-04-01 10:15:00.000000 naive
+-- datetime '1985-04-12T10:15:30.5+01:00'
+   datetime 1985-04-12 10:15:30.500000 <FixedOffset '+01:00'> 3600
+-- datetime '2012-10-30T08:55:22.7-05:00'
+   datetime 2012-10-30 08:55:22.700000 <FixedOffset '-05:00'> -18000
+-- datetime '1985-04-12'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1985-04-12'
+-- datetime '1985-04-12T'
+   error: ISO8601Error: Unrecognised ISO 8601 time format: ''
+-- datetime 'T10:15:30'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: ''
+-- datetime '1985-04-12T10:15:30T'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1985-04-12T10:15:30T'
+-- datetime '1985-04-12 10:15:30'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1985-04-12 10:15:30'
+-- datetime '2024-02-30T10:00'
+   error: ValueError: day is out of range for month
+-- datetime '2024-02-29T24:00'
+   error: ValueError: hour must be in 0..23
+-- datetime '2014-11-02T01:30:00-04:00'
+   datetime 2014-11-02 01:30:00.000000 <FixedOffset '-04:00'> -14400
+-- datetime '1997-07-16T19:20+01:00'
+   datetime 1997-07-16 19:20:00.000000 <FixedOffset '+01:00'> 3600
+-- datetime '1997-07-16t19:20'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1997-07-16t19:20'
+-- datetime_fmt '1985-04-12T10:15:30Z' '%Y-%m-%dT%H:%M:%S%Z'
+   1985-04-12T10:15:30Z
+-- datetime_fmt '1985-04-12T10:15:30Z' '%Y%m%dT%H%M%S%z'
+   19850412T101530Z
+-- datetime_fmt '1985-04-12T10:15:30Z' '%Y-%jT%H:%M:%S%Z'
+   1985-102T10:15:30Z
+-- datetime_fmt '1985-04-12T10:15:30Z' '%Y%jT%H%M%S%z'
+   1985102T101530Z
+-- datetime_fmt '1985-04-12T10:15:30Z' '%Y-W%W-%wT%H:%M:%S%Z'
+   1985-W15-5T10:15:30Z
+-- datetime_fmt '1985-04-12T10:15:30Z' '%YW%W%wT%H%M%S%z'
+   1985W155T101530Z
+-- datetime_fmt '1985-04-12T10:15:30Z' '%Y-%m-%dT%H:%M:%S.%f%h'
+   1985-04-12T10:15:30.000000Z
+-- datetime_fmt '1985-04-12T10:15:30Z' '%d/%m/%Y %H:%M'
+   12/04/1985 10:15
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%Y-%m-%dT%H:%M:%S%Z'
+   2012-10-30T08:55:22-05:00
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%Y%m%dT%H%M%S%z'
+   20121030T085522-0500
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%Y-%jT%H:%M:%S%Z'
+   2012-304T08:55:22-05:00
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%Y%jT%H%M%S%z'
+   2012304T085522-0500
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%Y-W%W-%wT%H:%M:%S%Z'
+   2012-W44-2T08:55:22-05:00
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%YW%W%wT%H%M%S%z'
+   2012W442T085522-0500
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%Y-%m-%dT%H:%M:%S.%f%h'
+   2012-10-30T08:55:22.700000-05
+-- datetime_fmt '2012-10-30T08:55:22.7-05:00' '%d/%m/%Y %H:%M'
+   30/10/2012 08:55
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%Y-%m-%dT%H:%M:%S%Z'
+   2009-12-31T23:59:59+05:45
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%Y%m%dT%H%M%S%z'
+   20091231T235959+0545
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%Y-%jT%H:%M:%S%Z'
+   2009-365T23:59:59+05:45
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%Y%jT%H%M%S%z'
+   2009365T235959+0545
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%Y-W%W-%wT%H:%M:%S%Z'
+   2009-W53-4T23:59:59+05:45
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%YW%W%wT%H%M%S%z'
+   2009W534T235959+0545
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%Y-%m-%dT%H:%M:%S.%f%h'
+   2009-12-31T23:59:59.000000+05
+-- datetime_fmt '2009-12-31T23:59:59+05:45' '%d/%m/%Y %H:%M'
+   31/12/2009 23:59
+-- datetime_fmt '1985-04-12T10:15:30' '%Y-%m-%dT%H:%M:%S%Z'
+   1985-04-12T10:15:30
+-- datetime_fmt '1985-04-12T10:15:30' '%Y%m%dT%H%M%S%z'
+   19850412T101530
+-- datetime_fmt '1985-04-12T10:15:30' '%Y-%jT%H:%M:%S%Z'
+   1985-102T10:15:30
+-- datetime_fmt '1985-04-12T10:15:30' '%Y%jT%H%M%S%z'
+   1985102T101530
+-- datetime_fmt '1985-04-12T10:15:30' '%Y-W%W-%wT%H:%M:%S%Z'
+   1985-W15-5T10:15:30
+-- datetime_fmt '1985-04-12T10:15:30' '%YW%W%wT%H%M%S%z'
+   1985W155T101530
+-- datetime_fmt '1985-04-12T10:15:30' '%Y-%m-%dT%H:%M:%S.%f%h'
+   1985-04-12T10:15:30.000000
+-- datetime_fmt '1985-04-12T10:15:30' '%d/%m/%Y %H:%M'
+   12/04/1985 10:15
+== durations
+-- duration 'P18Y9M4DT11H9M8S'
+   isodate.duration.Duration(4, 40148, 0, years=18, months=9) = 18 years, 9 months, 4 days, 11:09:08
+-- duration 'P18Y9M4DT11H9M8S' 'no'
+   isodate.duration.Duration(4, 40148, 0, years=18, months=9) = 18 years, 9 months, 4 days, 11:09:08
+-- duration 'P2W'
+   datetime.timedelta(days=14) = 14 days, 0:00:00
+-- duration 'P2W' 'no'
+   isodate.duration.Duration(14, 0, 0, years=0, months=0) = 14 days, 0:00:00
+-- duration 'P3Y6M4DT12H30M5S'
+   isodate.duration.Duration(4, 45005, 0, years=3, months=6) = 3 years, 6 months, 4 days, 12:30:05
+-- duration 'P3Y6M4DT12H30M5S' 'no'
+   isodate.duration.Duration(4, 45005, 0, years=3, months=6) = 3 years, 6 months, 4 days, 12:30:05
+-- duration 'P23DT23H'
+   datetime.timedelta(days=23, seconds=82800) = 23 days, 23:00:00
+-- duration 'P23DT23H' 'no'
+   isodate.duration.Duration(23, 82800, 0, years=0, months=0) = 23 days, 23:00:00
+-- duration 'P4Y'
+   isodate.duration.Duration(0, 0, 0, years=4, months=0) = 4 years, 0:00:00
+-- duration 'P4Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=4, months=0) = 4 years, 0:00:00
+-- duration 'PT36H'
+   datetime.timedelta(days=1, seconds=43200) = 1 day, 12:00:00
+-- duration 'PT36H' 'no'
+   isodate.duration.Duration(1, 43200, 0, years=0, months=0) = 1 day, 12:00:00
+-- duration 'P1DT12H'
+   datetime.timedelta(days=1, seconds=43200) = 1 day, 12:00:00
+-- duration 'P1DT12H' 'no'
+   isodate.duration.Duration(1, 43200, 0, years=0, months=0) = 1 day, 12:00:00
+-- duration 'PT0.5S'
+   datetime.timedelta(microseconds=500000) = 0:00:00.500000
+-- duration 'PT0.5S' 'no'
+   isodate.duration.Duration(0, 0, 500000, years=0, months=0) = 0:00:00.500000
+-- duration 'PT0,5S'
+   datetime.timedelta(microseconds=500000) = 0:00:00.500000
+-- duration 'PT0,5S' 'no'
+   isodate.duration.Duration(0, 0, 500000, years=0, months=0) = 0:00:00.500000
+-- duration 'P0.5Y'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P0.5Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P0,5Y'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P0,5Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P1.5M'
+   isodate.duration.Duration(0, 0, 0, years=0, months=1) = 1 months, 0:00:00
+-- duration 'P1.5M' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=1) = 1 months, 0:00:00
+-- duration 'P0.5W'
+   datetime.timedelta(days=3, seconds=43200) = 3 days, 12:00:00
+-- duration 'P0.5W' 'no'
+   isodate.duration.Duration(3, 43200, 0, years=0, months=0) = 3 days, 12:00:00
+-- duration 'P1.5D'
+   datetime.timedelta(days=1, seconds=43200) = 1 day, 12:00:00
+-- duration 'P1.5D' 'no'
+   isodate.duration.Duration(1, 43200, 0, years=0, months=0) = 1 day, 12:00:00
+-- duration 'PT1.5H'
+   datetime.timedelta(seconds=5400) = 1:30:00
+-- duration 'PT1.5H' 'no'
+   isodate.duration.Duration(0, 5400, 0, years=0, months=0) = 1:30:00
+-- duration 'PT1.5M'
+   datetime.timedelta(seconds=90) = 0:01:30
+-- duration 'PT1.5M' 'no'
+   isodate.duration.Duration(0, 90, 0, years=0, months=0) = 0:01:30
+-- duration 'P1M'
+   isodate.duration.Duration(0, 0, 0, years=0, months=1) = 1 month, 0:00:00
+-- duration 'P1M' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=1) = 1 month, 0:00:00
+-- duration '-P1M'
+   isodate.duration.Duration(0, 0, 0, years=0, months=-1) = -1 month, 0:00:00
+-- duration '-P1M' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=-1) = -1 month, 0:00:00
+-- duration '-P2W'
+   datetime.timedelta(days=-14) = -14 days, 0:00:00
+-- duration '-P2W' 'no'
+   isodate.duration.Duration(-14, 0, 0, years=0, months=0) = -14 days, 0:00:00
+-- duration '-PT1S'
+   datetime.timedelta(days=-1, seconds=86399) = -1 day, 23:59:59
+-- duration '-PT1S' 'no'
+   isodate.duration.Duration(-1, 86399, 0, years=0, months=0) = -1 day, 23:59:59
+-- duration '+P1D'
+   datetime.timedelta(days=1) = 1 day, 0:00:00
+-- duration '+P1D' 'no'
+   isodate.duration.Duration(1, 0, 0, years=0, months=0) = 1 day, 0:00:00
+-- duration 'P0D'
+   datetime.timedelta(0) = 0:00:00
+-- duration 'P0D' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration 'PT0S'
+   datetime.timedelta(0) = 0:00:00
+-- duration 'PT0S' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration 'P0Y'
+   datetime.timedelta(0) = 0:00:00
+-- duration 'P0Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration 'P'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string ''
+-- duration 'P' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string ''
+-- duration 'PT'
+   datetime.timedelta(0) = 0:00:00
+-- duration 'PT' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration 'P1'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1'
+-- duration 'P1' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1'
+-- duration '1Y'
+   error: ISO8601Error: Unable to parse duration string '1Y'
+-- duration '1Y' 'no'
+   error: ISO8601Error: Unable to parse duration string '1Y'
+-- duration 'P1Y2'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1Y2'
+-- duration 'P1Y2' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1Y2'
+-- duration 'P1D2H'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1D2H'
+-- duration 'P1D2H' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1D2H'
+-- duration 'P1DT'
+   datetime.timedelta(days=1) = 1 day, 0:00:00
+-- duration 'P1DT' 'no'
+   isodate.duration.Duration(1, 0, 0, years=0, months=0) = 1 day, 0:00:00
+-- duration 'PT1H2'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: ''
+-- duration 'PT1H2' 'no'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: ''
+-- duration 'P1W2D'
+   datetime.timedelta(days=9) = 9 days, 0:00:00
+-- duration 'P1W2D' 'no'
+   isodate.duration.Duration(9, 0, 0, years=0, months=0) = 9 days, 0:00:00
+-- duration 'PT1000000S'
+   datetime.timedelta(days=11, seconds=49600) = 11 days, 13:46:40
+-- duration 'PT1000000S' 'no'
+   isodate.duration.Duration(11, 49600, 0, years=0, months=0) = 11 days, 13:46:40
+-- duration 'P10000D'
+   datetime.timedelta(days=10000) = 10000 days, 0:00:00
+-- duration 'P10000D' 'no'
+   isodate.duration.Duration(10000, 0, 0, years=0, months=0) = 10000 days, 0:00:00
+-- duration 'PT0.0000001S'
+   datetime.timedelta(0) = 0:00:00
+-- duration 'PT0.0000001S' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration 'PT0.0000005S'
+   datetime.timedelta(0) = 0:00:00
+-- duration 'PT0.0000005S' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration 'PT0.0000015S'
+   datetime.timedelta(microseconds=2) = 0:00:00.000002
+-- duration 'PT0.0000015S' 'no'
+   isodate.duration.Duration(0, 0, 2, years=0, months=0) = 0:00:00.000002
+-- duration 'PT1.0000005S'
+   datetime.timedelta(seconds=1, microseconds=1) = 0:00:01.000001
+-- duration 'PT1.0000005S' 'no'
+   isodate.duration.Duration(0, 1, 1, years=0, months=0) = 0:00:01.000001
+-- duration 'P0.000001D'
+   datetime.timedelta(microseconds=86400) = 0:00:00.086400
+-- duration 'P0.000001D' 'no'
+   isodate.duration.Duration(0, 0, 86400, years=0, months=0) = 0:00:00.086400
+-- duration 'PT0.1H'
+   datetime.timedelta(seconds=360) = 0:06:00
+-- duration 'PT0.1H' 'no'
+   isodate.duration.Duration(0, 360, 0, years=0, months=0) = 0:06:00
+-- duration 'P1.333333333333333D'
+   datetime.timedelta(days=1, seconds=28800) = 1 day, 8:00:00
+-- duration 'P1.333333333333333D' 'no'
+   isodate.duration.Duration(1, 28800, 0, years=0, months=0) = 1 day, 8:00:00
+-- duration 'P0.00001Y'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P0.00001Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P0.0000001Y'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P0.0000001Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0 years, 0:00:00
+-- duration 'P1.50Y'
+   isodate.duration.Duration(0, 0, 0, years=1, months=0) = 1 years, 0:00:00
+-- duration 'P1.50Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=1, months=0) = 1 years, 0:00:00
+-- duration 'P007Y0010M'
+   isodate.duration.Duration(0, 0, 0, years=7, months=10) = 7 years, 10 months, 0:00:00
+-- duration 'P007Y0010M' 'no'
+   isodate.duration.Duration(0, 0, 0, years=7, months=10) = 7 years, 10 months, 0:00:00
+-- duration 'P0.0M'
+   datetime.timedelta(0) = 0:00:00
+-- duration 'P0.0M' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration '-P0.0Y'
+   datetime.timedelta(0) = 0:00:00
+-- duration '-P0.0Y' 'no'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- duration 'P1YT'
+   isodate.duration.Duration(0, 0, 0, years=1, months=0) = 1 years, 0:00:00
+-- duration 'P1YT' 'no'
+   isodate.duration.Duration(0, 0, 0, years=1, months=0) = 1 years, 0:00:00
+-- duration 'P1y'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1y'
+-- duration 'P1y' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1y'
+-- duration 'P0003-02-01T04:05:06'
+   isodate.duration.Duration(1, 14706, 0, years=3, months=2) = 3 years, 2 months, 1 day, 4:05:06
+-- duration 'P0003-02-01T04:05:06' 'no'
+   isodate.duration.Duration(1, 14706, 0, years=3, months=2) = 3 years, 2 months, 1 day, 4:05:06
+-- duration 'P00030201T040506'
+   isodate.duration.Duration(1, 14706, 0, years=3, months=2) = 3 years, 2 months, 1 day, 4:05:06
+-- duration 'P00030201T040506' 'no'
+   isodate.duration.Duration(1, 14706, 0, years=3, months=2) = 3 years, 2 months, 1 day, 4:05:06
+-- duration 'P0000-00-01T00:00:00'
+   error: ValueError: year 0 is out of range
+-- duration 'P0000-00-01T00:00:00' 'no'
+   error: ValueError: year 0 is out of range
+-- duration 'P0003-032T04:05:06'
+   isodate.duration.Duration(1, 14706, 0, years=3, months=2) = 3 years, 2 months, 1 day, 4:05:06
+-- duration 'P0003-032T04:05:06' 'no'
+   isodate.duration.Duration(1, 14706, 0, years=3, months=2) = 3 years, 2 months, 1 day, 4:05:06
+-- duration 'P0001-01-01T00:00:00.5'
+   isodate.duration.Duration(1, 0, 500000, years=1, months=1) = 1 years, 1 month, 1 day, 0:00:00.500000
+-- duration 'P0001-01-01T00:00:00.5' 'no'
+   isodate.duration.Duration(1, 0, 500000, years=1, months=1) = 1 years, 1 month, 1 day, 0:00:00.500000
+-- duration 'P0002-02-30T00:00'
+   error: ValueError: day is out of range for month
+-- duration 'P0002-02-30T00:00' 'no'
+   error: ValueError: day is out of range for month
+-- duration 'P0018-09-04T11:09:08'
+   isodate.duration.Duration(4, 40148, 0, years=18, months=9) = 18 years, 9 months, 4 days, 11:09:08
+-- duration 'P0018-09-04T11:09:08' 'no'
+   isodate.duration.Duration(4, 40148, 0, years=18, months=9) = 18 years, 9 months, 4 days, 11:09:08
+-- duration 'P1985-W15-5T10:15'
+   isodate.duration.Duration(12, 36900, 0, years=1985, months=4) = 1985 years, 4 months, 12 days, 10:15:00
+-- duration 'P1985-W15-5T10:15' 'no'
+   isodate.duration.Duration(12, 36900, 0, years=1985, months=4) = 1985 years, 4 months, 12 days, 10:15:00
+-- duration 'Pfoo'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string 'foo'
+-- duration 'Pfoo' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string 'foo'
+-- duration ''
+   error: ISO8601Error: Unable to parse duration string ''
+-- duration '' 'no'
+   error: ISO8601Error: Unable to parse duration string ''
+-- duration 'PT36H1D'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: ''
+-- duration 'PT36H1D' 'no'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: ''
+-- duration 'P1DT-1H'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '1D'
+-- duration 'P1DT-1H' 'no'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '1D'
+-- duration 'p1d'
+   error: ISO8601Error: Unable to parse duration string 'p1d'
+-- duration 'p1d' 'no'
+   error: ISO8601Error: Unable to parse duration string 'p1d'
+-- duration 'P1D '
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1D '
+-- duration 'P1D ' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1D '
+-- duration 'P1.D'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1.D'
+-- duration 'P1.D' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1.D'
+-- duration 'P.5D'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '.5D'
+-- duration 'P.5D' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '.5D'
+-- duration 'P1e3D'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1e3D'
+-- duration 'P1e3D' 'no'
+   error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string '1e3D'
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%P'
+   P3Y6M4DT12H30M5S
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%P' 'no'
+   P3Y6M4DT12H30M5S
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%p'
+   P0W
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%p' 'no'
+   P0W
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%Y-%m-%dT%H:%M:%S'
+   P0003-06-04T12:30:05
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0003-06-04T12:30:05
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%Y%m%dT%H%M%S'
+   P00030604T123005
+-- duration_fmt 'P3Y6M4DT12H30M5S' 'P%Y%m%dT%H%M%S' 'no'
+   P00030604T123005
+-- duration_fmt 'P3Y6M4DT12H30M5S' '%d %H %M %S %f'
+   04 12 30 05 000000
+-- duration_fmt 'P3Y6M4DT12H30M5S' '%d %H %M %S %f' 'no'
+   04 12 30 05 000000
+-- duration_fmt 'P3Y6M4DT12H30M5S' '%W %%'
+   00 %
+-- duration_fmt 'P3Y6M4DT12H30M5S' '%W %%' 'no'
+   00 %
+-- duration_fmt 'P3Y6M4DT12H30M5S' '%C'
+   00
+-- duration_fmt 'P3Y6M4DT12H30M5S' '%C' 'no'
+   00
+-- duration_fmt 'PT36H' 'P%P'
+   P1DT12H
+-- duration_fmt 'PT36H' 'P%P' 'no'
+   P1DT12H
+-- duration_fmt 'PT36H' 'P%p'
+   P0W
+-- duration_fmt 'PT36H' 'P%p' 'no'
+   P0W
+-- duration_fmt 'PT36H' 'P%Y-%m-%dT%H:%M:%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'PT36H' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0000-00-01T12:00:00
+-- duration_fmt 'PT36H' 'P%Y%m%dT%H%M%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'PT36H' 'P%Y%m%dT%H%M%S' 'no'
+   P00000001T120000
+-- duration_fmt 'PT36H' '%d %H %M %S %f'
+   01 12 00 00 000000
+-- duration_fmt 'PT36H' '%d %H %M %S %f' 'no'
+   01 12 00 00 000000
+-- duration_fmt 'PT36H' '%W %%'
+   00 %
+-- duration_fmt 'PT36H' '%W %%' 'no'
+   00 %
+-- duration_fmt 'PT36H' '%C'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'PT36H' '%C' 'no'
+   00
+-- duration_fmt '-P1M' 'P%P'
+   -P1M
+-- duration_fmt '-P1M' 'P%P' 'no'
+   -P1M
+-- duration_fmt '-P1M' 'P%p'
+   -P0W
+-- duration_fmt '-P1M' 'P%p' 'no'
+   -P0W
+-- duration_fmt '-P1M' 'P%Y-%m-%dT%H:%M:%S'
+   -P0000--1-00T00:00:00
+-- duration_fmt '-P1M' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   -P0000--1-00T00:00:00
+-- duration_fmt '-P1M' 'P%Y%m%dT%H%M%S'
+   -P0000-100T000000
+-- duration_fmt '-P1M' 'P%Y%m%dT%H%M%S' 'no'
+   -P0000-100T000000
+-- duration_fmt '-P1M' '%d %H %M %S %f'
+   -00 00 00 00 000000
+-- duration_fmt '-P1M' '%d %H %M %S %f' 'no'
+   -00 00 00 00 000000
+-- duration_fmt '-P1M' '%W %%'
+   -00 %
+-- duration_fmt '-P1M' '%W %%' 'no'
+   -00 %
+-- duration_fmt '-P1M' '%C'
+   -00
+-- duration_fmt '-P1M' '%C' 'no'
+   -00
+-- duration_fmt 'P2W' 'P%P'
+   P14D
+-- duration_fmt 'P2W' 'P%P' 'no'
+   P14D
+-- duration_fmt 'P2W' 'P%p'
+   P2W
+-- duration_fmt 'P2W' 'P%p' 'no'
+   P2W
+-- duration_fmt 'P2W' 'P%Y-%m-%dT%H:%M:%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P2W' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0000-00-14T00:00:00
+-- duration_fmt 'P2W' 'P%Y%m%dT%H%M%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P2W' 'P%Y%m%dT%H%M%S' 'no'
+   P00000014T000000
+-- duration_fmt 'P2W' '%d %H %M %S %f'
+   14 00 00 00 000000
+-- duration_fmt 'P2W' '%d %H %M %S %f' 'no'
+   14 00 00 00 000000
+-- duration_fmt 'P2W' '%W %%'
+   02 %
+-- duration_fmt 'P2W' '%W %%' 'no'
+   02 %
+-- duration_fmt 'P2W' '%C'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P2W' '%C' 'no'
+   00
+-- duration_fmt '-PT1.5S' 'P%P'
+   -PT1.5S
+-- duration_fmt '-PT1.5S' 'P%P' 'no'
+   -PT1.5S
+-- duration_fmt '-PT1.5S' 'P%p'
+   -P1W
+-- duration_fmt '-PT1.5S' 'P%p' 'no'
+   -P1W
+-- duration_fmt '-PT1.5S' 'P%Y-%m-%dT%H:%M:%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt '-PT1.5S' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   -P0000-00--1T23:59:58
+-- duration_fmt '-PT1.5S' 'P%Y%m%dT%H%M%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt '-PT1.5S' 'P%Y%m%dT%H%M%S' 'no'
+   -P000000-1T235958
+-- duration_fmt '-PT1.5S' '%d %H %M %S %f'
+   --1 23 59 58 500000
+-- duration_fmt '-PT1.5S' '%d %H %M %S %f' 'no'
+   --1 23 59 58 500000
+-- duration_fmt '-PT1.5S' '%W %%'
+   -00 %
+-- duration_fmt '-PT1.5S' '%W %%' 'no'
+   -00 %
+-- duration_fmt '-PT1.5S' '%C'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt '-PT1.5S' '%C' 'no'
+   -00
+-- duration_fmt 'P0D' 'P%P'
+   P0D
+-- duration_fmt 'P0D' 'P%P' 'no'
+   P0D
+-- duration_fmt 'P0D' 'P%p'
+   P0W
+-- duration_fmt 'P0D' 'P%p' 'no'
+   P0W
+-- duration_fmt 'P0D' 'P%Y-%m-%dT%H:%M:%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P0D' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0000-00-00T00:00:00
+-- duration_fmt 'P0D' 'P%Y%m%dT%H%M%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P0D' 'P%Y%m%dT%H%M%S' 'no'
+   P00000000T000000
+-- duration_fmt 'P0D' '%d %H %M %S %f'
+   00 00 00 00 000000
+-- duration_fmt 'P0D' '%d %H %M %S %f' 'no'
+   00 00 00 00 000000
+-- duration_fmt 'P0D' '%W %%'
+   00 %
+-- duration_fmt 'P0D' '%W %%' 'no'
+   00 %
+-- duration_fmt 'P0D' '%C'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P0D' '%C' 'no'
+   00
+-- duration_fmt 'PT0.000001S' 'P%P'
+   PT0.000001S
+-- duration_fmt 'PT0.000001S' 'P%P' 'no'
+   PT0.000001S
+-- duration_fmt 'PT0.000001S' 'P%p'
+   P0W
+-- duration_fmt 'PT0.000001S' 'P%p' 'no'
+   P0W
+-- duration_fmt 'PT0.000001S' 'P%Y-%m-%dT%H:%M:%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'PT0.000001S' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0000-00-00T00:00:00
+-- duration_fmt 'PT0.000001S' 'P%Y%m%dT%H%M%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'PT0.000001S' 'P%Y%m%dT%H%M%S' 'no'
+   P00000000T000000
+-- duration_fmt 'PT0.000001S' '%d %H %M %S %f'
+   00 00 00 00 000001
+-- duration_fmt 'PT0.000001S' '%d %H %M %S %f' 'no'
+   00 00 00 00 000001
+-- duration_fmt 'PT0.000001S' '%W %%'
+   00 %
+-- duration_fmt 'PT0.000001S' '%W %%' 'no'
+   00 %
+-- duration_fmt 'PT0.000001S' '%C'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'PT0.000001S' '%C' 'no'
+   00
+-- duration_fmt 'P1.5Y' 'P%P'
+   P1.5Y
+-- duration_fmt 'P1.5Y' 'P%P' 'no'
+   P1.5Y
+-- duration_fmt 'P1.5Y' 'P%p'
+   P0W
+-- duration_fmt 'P1.5Y' 'P%p' 'no'
+   P0W
+-- duration_fmt 'P1.5Y' 'P%Y-%m-%dT%H:%M:%S'
+   P0001-00-00T00:00:00
+-- duration_fmt 'P1.5Y' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0001-00-00T00:00:00
+-- duration_fmt 'P1.5Y' 'P%Y%m%dT%H%M%S'
+   P00010000T000000
+-- duration_fmt 'P1.5Y' 'P%Y%m%dT%H%M%S' 'no'
+   P00010000T000000
+-- duration_fmt 'P1.5Y' '%d %H %M %S %f'
+   00 00 00 00 000000
+-- duration_fmt 'P1.5Y' '%d %H %M %S %f' 'no'
+   00 00 00 00 000000
+-- duration_fmt 'P1.5Y' '%W %%'
+   00 %
+-- duration_fmt 'P1.5Y' '%W %%' 'no'
+   00 %
+-- duration_fmt 'P1.5Y' '%C'
+   00
+-- duration_fmt 'P1.5Y' '%C' 'no'
+   00
+-- duration_fmt '-P1Y1DT1S' 'P%P'
+   -P1Y1DT1S
+-- duration_fmt '-P1Y1DT1S' 'P%P' 'no'
+   -P1Y1DT1S
+-- duration_fmt '-P1Y1DT1S' 'P%p'
+   -P1W
+-- duration_fmt '-P1Y1DT1S' 'P%p' 'no'
+   -P1W
+-- duration_fmt '-P1Y1DT1S' 'P%Y-%m-%dT%H:%M:%S'
+   -P-001-00--2T23:59:59
+-- duration_fmt '-P1Y1DT1S' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   -P-001-00--2T23:59:59
+-- duration_fmt '-P1Y1DT1S' 'P%Y%m%dT%H%M%S'
+   -P-00100-2T235959
+-- duration_fmt '-P1Y1DT1S' 'P%Y%m%dT%H%M%S' 'no'
+   -P-00100-2T235959
+-- duration_fmt '-P1Y1DT1S' '%d %H %M %S %f'
+   --2 23 59 59 000000
+-- duration_fmt '-P1Y1DT1S' '%d %H %M %S %f' 'no'
+   --2 23 59 59 000000
+-- duration_fmt '-P1Y1DT1S' '%W %%'
+   -00 %
+-- duration_fmt '-P1Y1DT1S' '%W %%' 'no'
+   -00 %
+-- duration_fmt '-P1Y1DT1S' '%C'
+   -00
+-- duration_fmt '-P1Y1DT1S' '%C' 'no'
+   -00
+-- duration_fmt 'P0.0000001Y' 'P%P'
+   P1E-7Y
+-- duration_fmt 'P0.0000001Y' 'P%P' 'no'
+   P1E-7Y
+-- duration_fmt 'P0.0000001Y' 'P%p'
+   P0W
+-- duration_fmt 'P0.0000001Y' 'P%p' 'no'
+   P0W
+-- duration_fmt 'P0.0000001Y' 'P%Y-%m-%dT%H:%M:%S'
+   P0000-00-00T00:00:00
+-- duration_fmt 'P0.0000001Y' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0000-00-00T00:00:00
+-- duration_fmt 'P0.0000001Y' 'P%Y%m%dT%H%M%S'
+   P00000000T000000
+-- duration_fmt 'P0.0000001Y' 'P%Y%m%dT%H%M%S' 'no'
+   P00000000T000000
+-- duration_fmt 'P0.0000001Y' '%d %H %M %S %f'
+   00 00 00 00 000000
+-- duration_fmt 'P0.0000001Y' '%d %H %M %S %f' 'no'
+   00 00 00 00 000000
+-- duration_fmt 'P0.0000001Y' '%W %%'
+   00 %
+-- duration_fmt 'P0.0000001Y' '%W %%' 'no'
+   00 %
+-- duration_fmt 'P0.0000001Y' '%C'
+   00
+-- duration_fmt 'P0.0000001Y' '%C' 'no'
+   00
+-- duration_fmt 'P400D' 'P%P'
+   P400D
+-- duration_fmt 'P400D' 'P%P' 'no'
+   P400D
+-- duration_fmt 'P400D' 'P%p'
+   P57W
+-- duration_fmt 'P400D' 'P%p' 'no'
+   P57W
+-- duration_fmt 'P400D' 'P%Y-%m-%dT%H:%M:%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P400D' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   P0000-00-400T00:00:00
+-- duration_fmt 'P400D' 'P%Y%m%dT%H%M%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P400D' 'P%Y%m%dT%H%M%S' 'no'
+   P000000400T000000
+-- duration_fmt 'P400D' '%d %H %M %S %f'
+   400 00 00 00 000000
+-- duration_fmt 'P400D' '%d %H %M %S %f' 'no'
+   400 00 00 00 000000
+-- duration_fmt 'P400D' '%W %%'
+   57 %
+-- duration_fmt 'P400D' '%W %%' 'no'
+   57 %
+-- duration_fmt 'P400D' '%C'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt 'P400D' '%C' 'no'
+   00
+-- duration_fmt '-P10D' 'P%P'
+   -P10D
+-- duration_fmt '-P10D' 'P%P' 'no'
+   -P10D
+-- duration_fmt '-P10D' 'P%p'
+   -P2W
+-- duration_fmt '-P10D' 'P%p' 'no'
+   -P2W
+-- duration_fmt '-P10D' 'P%Y-%m-%dT%H:%M:%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt '-P10D' 'P%Y-%m-%dT%H:%M:%S' 'no'
+   -P0000-00--10T00:00:00
+-- duration_fmt '-P10D' 'P%Y%m%dT%H%M%S'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt '-P10D' 'P%Y%m%dT%H%M%S' 'no'
+   -P000000-10T000000
+-- duration_fmt '-P10D' '%d %H %M %S %f'
+   --10 00 00 00 000000
+-- duration_fmt '-P10D' '%d %H %M %S %f' 'no'
+   --10 00 00 00 000000
+-- duration_fmt '-P10D' '%W %%'
+   -01 %
+-- duration_fmt '-P10D' '%W %%' 'no'
+   -01 %
+-- duration_fmt '-P10D' '%C'
+   error: AttributeError: 'datetime.timedelta' object has no attribute 'years'
+-- duration_fmt '-P10D' '%C' 'no'
+   -00
+== arithmetic
+-- add 'P:P1M' 'd:2024-01-31'
+   date 2024-02-29
+-- add 'd:2024-01-31' 'P:P1M'
+   date 2024-02-29
+-- add 'P:P1M' 'd:2023-01-31'
+   date 2023-02-28
+-- add 'd:2023-01-31' 'P:P1M'
+   date 2023-02-28
+-- add 'P:P1Y' 'd:2024-02-29'
+   date 2025-02-28
+-- add 'd:2024-02-29' 'P:P1Y'
+   date 2025-02-28
+-- add 'P:P1Y1M' 'dt:2024-01-31T10:00:00Z'
+   datetime 2025-02-28 10:00:00.000000 UTC
+-- add 'dt:2024-01-31T10:00:00Z' 'P:P1Y1M'
+   datetime 2025-02-28 10:00:00.000000 UTC
+-- add 'P:P13M' 'd:2024-12-15'
+   date 2026-01-15
+-- add 'd:2024-12-15' 'P:P13M'
+   date 2026-01-15
+-- add 'P:-P1M' 'd:2024-03-31'
+   date 2024-02-29
+-- add 'd:2024-03-31' 'P:-P1M'
+   date 2024-02-29
+-- add 'P:P1MT12H' 'd:2024-01-31'
+   date 2024-02-29
+-- add 'd:2024-01-31' 'P:P1MT12H'
+   date 2024-02-29
+-- add 'P:P1MT12H' 'dt:2024-01-31T18:00'
+   datetime 2024-03-01 06:00:00.000000 naive
+-- add 'dt:2024-01-31T18:00' 'P:P1MT12H'
+   datetime 2024-03-01 06:00:00.000000 naive
+-- add 'P:P0.5M' 'd:2024-01-01'
+   error: ValueError: fractional years or months not supported for date calculations
+-- add 'd:2024-01-01' 'P:P0.5M'
+   error: ValueError: fractional years or months not supported for date calculations
+-- add 'P:P1.0M' 'd:2024-01-31'
+   date 2024-02-29
+-- add 'd:2024-01-31' 'P:P1.0M'
+   date 2024-02-29
+-- add 'P:PT36H' 'd:2024-01-01'
+   date 2024-01-02
+-- add 'd:2024-01-01' 'P:PT36H'
+   date 2024-01-02
+-- add 'P:PT36H' 'dt:2024-01-01T00:00+05:30'
+   datetime 2024-01-02 12:00:00.000000 <FixedOffset '+05:30'> 19800
+-- add 'dt:2024-01-01T00:00+05:30' 'P:PT36H'
+   datetime 2024-01-02 12:00:00.000000 <FixedOffset '+05:30'> 19800
+-- add 'P:P1M' 'P:P1D'
+   isodate.duration.Duration(1, 0, 0, years=0, months=1) = 1 month, 1 day, 0:00:00
+-- add 'P:P1D' 'P:P1M'
+   isodate.duration.Duration(1, 0, 0, years=0, months=1) = 1 month, 1 day, 0:00:00
+-- add 'P:P1M' 'p:PT1H'
+   isodate.duration.Duration(0, 3600, 0, years=0, months=1) = 1 month, 1:00:00
+-- add 'p:PT1H' 'P:P1M'
+   isodate.duration.Duration(0, 3600, 0, years=0, months=1) = 1 month, 1:00:00
+-- add 'P:P9000Y' 'd:2024-01-01'
+   error: ValueError: year 11024 is out of range
+-- add 'd:2024-01-01' 'P:P9000Y'
+   error: ValueError: year 11024 is out of range
+-- add 'P:-P2025Y' 'd:2024-01-01'
+   error: ValueError: year -1 is out of range
+-- add 'd:2024-01-01' 'P:-P2025Y'
+   error: ValueError: year -1 is out of range
+-- add 'P:P2Y' 'd:9998-06-01'
+   error: ValueError: year 10000 is out of range
+-- add 'd:9998-06-01' 'P:P2Y'
+   error: ValueError: year 10000 is out of range
+-- add 'P:P1D' 'd:9999-12-31'
+   error: OverflowError: date value out of range
+-- add 'd:9999-12-31' 'P:P1D'
+   error: OverflowError: date value out of range
+-- add 'P:P100Y' 'dt:1999-12-31T23:59:59.5'
+   datetime 2099-12-31 23:59:59.500000 naive
+-- add 'dt:1999-12-31T23:59:59.5' 'P:P100Y'
+   datetime 2099-12-31 23:59:59.500000 naive
+-- sub 'd:2024-03-31' 'P:P1M'
+   date 2024-02-29
+-- sub 'd:2024-03-31' 'P:P1Y1M'
+   date 2023-02-28
+-- sub 'd:2024-01-15' 'P:P1M'
+   date 2023-12-15
+-- sub 'dt:2024-03-31T12:00' 'P:P1MT12H'
+   datetime 2024-02-29 00:00:00.000000 naive
+-- sub 'd:2024-03-01' 'P:PT1H'
+   date 2024-03-01
+-- sub 'd:2024-03-01' 'P:P1D'
+   date 2024-02-29
+-- sub 'p:PT1H' 'P:P1M'
+   isodate.duration.Duration(0, 3600, 0, years=0, months=-1) = -1 month, 1:00:00
+-- sub 'P:P1Y' 'P:P1M'
+   isodate.duration.Duration(0, 0, 0, years=1, months=-1) = 1 years, -1 month, 0:00:00
+-- sub 'd:2024-01-31' 'P:P0.5M'
+   error: ValueError: fractional years or months not supported for date calculations
+-- sub 'd:0001-03-01' 'P:P1Y'
+   error: ValueError: year 0 is out of range
+-- sub 'P:P1M' 'd:2024-01-01'
+   error: TypeError: unsupported operand type(s) for -: 'Duration' and 'datetime.date'
+-- mul 'P:P1M' '3'
+   isodate.duration.Duration(0, 0, 0, years=0, months=3) = 3 months, 0:00:00
+-- mul 'P:P1Y2M3DT4H' '2'
+   isodate.duration.Duration(6, 28800, 0, years=2, months=4) = 2 years, 4 months, 6 days, 8:00:00
+-- mul 'P:P1.5Y' '2'
+   isodate.duration.Duration(0, 0, 0, years=3, months=0) = 3 years, 0:00:00
+-- mul 'P:-P1M' '4'
+   isodate.duration.Duration(0, 0, 0, years=0, months=-4) = -4 month, 0:00:00
+-- mul 'P:P1M' '0'
+   isodate.duration.Duration(0, 0, 0, years=0, months=0) = 0:00:00
+-- mul 'P:PT1S' '-3'
+   isodate.duration.Duration(-1, 86397, 0, years=0, months=0) = -1 day, 23:59:57
+-- neg 'P:P1Y2M'
+   isodate.duration.Duration(0, 0, 0, years=-1, months=-2) = -1 years, -2 month, 0:00:00
+-- neg 'P:-P1M'
+   isodate.duration.Duration(0, 0, 0, years=0, months=1) = 1 month, 0:00:00
+-- neg 'P:PT1H'
+   isodate.duration.Duration(-1, 82800, 0, years=0, months=0) = -1 day, 23:00:00
+-- neg 'P:P1.5Y'
+   isodate.duration.Duration(0, 0, 0, years=-1, months=0) = -1 years, 0:00:00
+-- eq 'P:P1Y' 'P:P12M'
+   True False
+-- eq 'P:P1Y' 'P:P365D'
+   False True
+-- eq 'P:P1D' 'p:PT24H'
+   True False
+-- eq 'P:P0Y' 'p:P1D'
+   False True
+-- eq 'P:P0YT1D' 'p:P1D'
+   error: ISO8601Error: Unrecognised ISO 8601 date format: '0Y'
+-- eq 'P:P1M' 'P:P1M'
+   True False
+-- eq 'P:P1.5Y' 'P:P18M'
+   True False
+-- eq 'P:P2W' 'P:P14D'
+   True False
+-- totd 'P:P1M' 'start' 'd:2024-01-31'
+   datetime.timedelta(days=29) = 29 days, 0:00:00
+-- totd 'P:P1M' 'start' 'd:2024-02-01'
+   datetime.timedelta(days=29) = 29 days, 0:00:00
+-- totd 'P:P1M' 'end' 'd:2024-03-31'
+   datetime.timedelta(days=31) = 31 days, 0:00:00
+-- totd 'P:P1Y' 'start' 'dt:2024-02-29T00:00'
+   datetime.timedelta(days=365) = 365 days, 0:00:00
+-- totd 'P:P1Y' 'end' 'd:2025-02-28'
+   datetime.timedelta(days=366) = 366 days, 0:00:00
+-- totd 'P:P1M' 'none' 'd:2024-01-01'
+   error: ValueError: start or end required
+-- totd 'P:P1M' 'both' 'd:2024-01-01'
+   error: ValueError: only start or end allowed
+-- totd 'P:P0.5Y' 'start' 'd:2024-01-01'
+   error: ValueError: fractional years or months not supported for date calculations
+-- add 'P:-P3Y0M36D' 'd:2005-11-06'
+   date 2002-10-01
+-- add 'P:P2Y7M14D' 'd:1998-11-16'
+   date 2001-06-30
+-- add 'P:P1Y11M18D' 'd:2012-04-25'
+   date 2014-04-12
+-- add 'P:-P2Y6M2D' 'd:2016-05-16'
+   date 2013-11-14
+-- add 'P:P2Y8M0D' 'd:2009-03-08'
+   date 2011-11-08
+-- add 'P:-P3Y3M25D' 'd:2005-07-02'
+   date 2002-03-08
+-- add 'P:P1Y12M26D' 'd:1991-09-23'
+   date 1993-10-19
+-- add 'P:P3Y2M12D' 'd:2016-11-28'
+   date 2020-02-09
+-- add 'P:P1Y9M23D' 'd:2001-08-19'
+   date 2003-06-11
+-- add 'P:-P2Y7M26D' 'd:2023-05-26'
+   date 2020-09-30
+-- add 'P:P3Y0M22D' 'd:2021-11-24'
+   date 2024-12-16
+-- add 'P:P1Y7M10D' 'd:1991-09-19'
+   date 1993-04-29
+-- add 'P:-P1Y12M19D' 'd:2008-02-17'
+   date 2006-01-29
+-- add 'P:P1Y7M11D' 'd:2010-07-23'
+   date 2012-03-05
+-- add 'P:-P1Y10M8D' 'd:2015-07-26'
+   date 2013-09-18
+-- add 'P:P3Y11M37D' 'd:2012-12-16'
+   date 2016-12-23
+-- add 'P:-P1Y12M21D' 'd:2024-10-24'
+   date 2022-10-03
+-- add 'P:P2Y6M36D' 'd:2029-04-07'
+   date 2031-11-12
+-- add 'P:-P3Y8M24D' 'd:2011-09-20'
+   date 2007-12-27
+-- add 'P:-P2Y12M5D' 'd:1991-10-06'
+   date 1988-10-01
+-- add 'P:P3Y0M6D' 'd:2000-05-15'
+   date 2003-05-21
+-- add 'P:-P1Y6M14D' 'd:2007-06-01'
+   date 2005-11-17
+-- add 'P:P3Y13M1D' 'd:2002-09-07'
+   date 2006-10-08
+-- add 'P:-P1Y6M29D' 'd:2028-04-14'
+   date 2026-09-15
+-- add 'P:P2Y11M2D' 'd:1990-09-12'
+   date 1993-08-14
+-- add 'P:P1Y11M0D' 'd:2012-10-19'
+   date 2014-09-19
+-- add 'P:P1Y13M14D' 'd:2027-07-01'
+   date 2029-08-15
+-- add 'P:-P2Y4M30D' 'd:1990-03-05'
+   date 1987-10-06
+-- add 'P:P2Y3M37D' 'd:1994-12-09'
+   date 1997-04-15
+-- add 'P:P1Y3M21D' 'd:2008-03-20'
+   date 2009-07-11
+== subscriptions
+-- subscriptions 'subscriptions.tsv'
+   acme-pro: monthly, billed on the last day the month allows
+     starts 2024-01-31, every P1M (1 month, 0:00:00), grace P3D
+     renewal 1: 2024-02-29, due by 2024-03-03
+     renewal 2: 2024-03-29, due by 2024-04-01 (period x 2 from the start gives 2024-03-31)
+     renewal 3: 2024-04-29, due by 2024-05-02 (period x 3 from the start gives 2024-04-30)
+     renewal 4: 2024-05-29, due by 2024-06-01 (period x 4 from the start gives 2024-05-31)
+     renewal 5: 2024-06-29, due by 2024-07-02 (period x 5 from the start gives 2024-06-30)
+     renewal 6: 2024-07-29, due by 2024-08-01 (period x 6 from the start gives 2024-07-31)
+     covered P180D (180 days, 0:00:00)
+   globex: monthly from a datetime
+     starts 2023-11-30T09:00:00Z, every P1M (1 month, 0:00:00), grace P1DT12H
+     renewal 1: 2023-12-30T09:00:00Z, due by 2023-12-31T21:00:00Z
+     renewal 2: 2024-01-30T09:00:00Z, due by 2024-01-31T21:00:00Z
+     renewal 3: 2024-02-29T09:00:00Z, due by 2024-03-01T21:00:00Z
+     renewal 4: 2024-03-29T09:00:00Z, due by 2024-03-30T21:00:00Z (period x 4 from the start gives 2024-03-30T09:00:00Z)
+     covered P120D (120 days, 0:00:00)
+   initech: yearly from a leap day
+     starts 2024-02-29, every P1Y (1 years, 0:00:00), grace P14D
+     renewal 1: 2025-02-28, due by 2025-03-14
+     renewal 2: 2026-02-28, due by 2026-03-14
+     renewal 3: 2027-02-28, due by 2027-03-14
+     renewal 4: 2028-02-28, due by 2028-03-13 (period x 4 from the start gives 2028-02-29)
+     renewal 5: 2029-02-28, due by 2029-03-14
+     covered P1826D (1826 days, 0:00:00)
+   hooli: quarterly
+     starts 2024-03-15T12:00:00+05:30, every P3M (3 months, 0:00:00), grace P7D
+     renewal 1: 2024-06-15T12:00:00+05:30, due by 2024-06-22T12:00:00+05:30
+     renewal 2: 2024-09-15T12:00:00+05:30, due by 2024-09-22T12:00:00+05:30
+     renewal 3: 2024-12-15T12:00:00+05:30, due by 2024-12-22T12:00:00+05:30
+     renewal 4: 2025-03-15T12:00:00+05:30, due by 2025-03-22T12:00:00+05:30
+     renewal 5: 2025-06-15T12:00:00+05:30, due by 2025-06-22T12:00:00+05:30
+     covered P457D (457 days, 0:00:00)
+   umbrella: fortnightly
+     starts 2024-01-01, every P14D (14 days, 0:00:00), grace P2D
+     renewal 1: 2024-01-15, due by 2024-01-17
+     renewal 2: 2024-01-29, due by 2024-01-31
+     renewal 3: 2024-02-12, due by 2024-02-14
+     renewal 4: 2024-02-26, due by 2024-02-28
+     renewal 5: 2024-03-11, due by 2024-03-13
+     renewal 6: 2024-03-25, due by 2024-03-27
+     covered P84D (84 days, 0:00:00)
+   stark: a month and a half
+     starts 2024-05-31, every P1M15D (1 month, 15 days, 0:00:00), grace P0D
+     renewal 1: 2024-07-15, due by 2024-07-15
+     renewal 2: 2024-08-30, due by 2024-08-30
+     renewal 3: 2024-10-15, due by 2024-10-15
+     renewal 4: 2024-11-30, due by 2024-11-30 (period x 4 from the start gives 2024-11-29)
+     covered P183D (183 days, 0:00:00)
+   wayne: half-yearly
+     starts 2024-08-31, every P6M (6 months, 0:00:00), grace PT12H
+     renewal 1: 2025-02-28, due by 2025-02-28
+     renewal 2: 2025-08-28, due by 2025-08-28 (period x 2 from the start gives 2025-08-31)
+     renewal 3: 2026-02-28, due by 2026-02-28
+     covered P546D (546 days, 0:00:00)
+   tyrell: fractional months are refused
+     starts 2024-01-15, every P1.5M (1 months, 0:00:00), grace P1D
+     error: ValueError: fractional years or months not supported for date calculations
+   cyberdyne: monthly plus an hour
+     starts 2024-12-31T23:30:00-08:00, every P1MT1H (1 month, 1:00:00), grace PT30M
+     renewal 1: 2025-02-01T00:30:00-08:00, due by 2025-02-01T01:00:00-08:00
+     renewal 2: 2025-03-01T01:30:00-08:00, due by 2025-03-01T02:00:00-08:00
+     renewal 3: 2025-04-01T02:30:00-08:00, due by 2025-04-01T03:00:00-08:00
+     covered P90DT3H (90 days, 3:00:00)
+   soylent: fourteen months
+     starts 2024-06-30, every P1Y2M (1 years, 2 months, 0:00:00), grace P0D
+     renewal 1: 2025-08-30, due by 2025-08-30
+     renewal 2: 2026-10-30, due by 2026-10-30
+     renewal 3: 2027-12-30, due by 2027-12-30
+     covered P1278D (1278 days, 0:00:00)
+   oscorp: thirty days, as hours
+     starts 2025-01-31, every P30D (30 days, 0:00:00), grace P1D
+     renewal 1: 2025-03-02, due by 2025-03-03
+     renewal 2: 2025-04-01, due by 2025-04-02
+     renewal 3: 2025-05-01, due by 2025-05-02
+     covered P90D (90 days, 0:00:00)
+   nakatomi: bad start
+     error: ValueError: day is out of range for month
+== incidents
+-- incidents 'incidents.tsv'
+   api: across the DST change, written with offsets: down PT1M45S (0:01:45), budget PT45M, within budget
+   api: short blip: down PT7M30.25S (0:07:30.250000), budget PT45M, within budget
+   api: basic format: down PT2H30M (2:30:00), budget PT45M, over by PT1H45M
+   db: across midnight: down PT30M (0:30:00), budget PT1H, within budget
+   db: week dates: down PT1H15M (1:15:00), budget PT1H, over by PT15M
+   db: ordinal dates: down PT42M0.5S (0:42:00.500000), budget PT1H, within budget
+   web: local times: down PT30M (0:30:00), budget PT20M, over by PT10M
+   web: naive and aware: error: TypeError: can't subtract offset-naive and offset-aware datetimes
+   web: resolved in another zone: down PT59M (0:59:00), budget PT20M, over by PT39M
+   web: resolved before it started: down -PT1H (-1 day, 23:00:00), budget PT20M, within budget
+   queue: long outage: down P1DT1H30M0.530865S (1 day, 1:30:00.530865), budget P1D, over by PT1H30M0.530865S
+   queue: bad resolved time: error: ISO8601Error: ISO 8601 time designator 'T' missing. Unable to parse datetime string 'not-a-time'
+   queue: bad budget: error: ISO8601Error: Unrecognised ISO 8601 date format: ''
+   api: 3 incidents, PT2H39M15.25S down, 1 over budget, longest PT2H30M
+   db: 3 incidents, PT2H27M0.5S down, 1 over budget, longest PT1H15M
+   queue: 1 incidents, P1DT1H30M0.530865S down, 1 over budget, longest P1DT1H30M0.530865S
+   web: 3 incidents, PT29M down, 2 over budget, longest PT59M
