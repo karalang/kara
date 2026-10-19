@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 175 |
 | diagnostics | 172 |
 | crash | 124 |
-| soundness | 120 |
+| soundness | 121 |
 | use-after-free | 91 |
 
 ### By surface
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2950 |
-| interp | 966 |
-| typecheck | 490 |
+| interp | 967 |
+| typecheck | 491 |
 | ownership | 116 |
 | other | 115 |
 | cli | 79 |
@@ -161,13 +161,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-52 | 2026-10-18 | codegen | medium | A bare list literal used only to be walked or read, `for step in [1, 9] { .. }` or `let steps = [1, 9]; steps[0] + steps[1]`, heap-allocates a `Vec` every time it is evaluated under `karac build --mir`, where legacy `karac build` keeps it on the stack (B-2026-10-02-70's fix): 1,000,008 allocations against 9 for a million evaluations, so kata 752's bench, which walks `[1, 9]` four times per visited lock setting, is 2.5x legacy | — |
 | B-2026-10-18-53 | 2026-10-18 | interp+codegen | high | `opt ?? ""` with `opt: Option[ref String]` (a `Map[String, String].get(k)`) takes the literal fallback as the reference itself rather than a reference to it: when `opt` is `None`, the first read of the result crashes on every MIR surface, `deref of non-reference Box` under `__mir-run` and a SEGV at address 0x8 under `build --mir` and `__mir-llvm-asan`; `karac check` passes it and suggests exactly this spelling for the empty default, and `.unwrap_or("")` is right | — |
 | B-2026-10-19-10 | 2026-10-19 | resolver | low | A gated library module's TYPE the import did not list still collides with a program's own type of the same name: `import std.time.{sleep};` beside a program's `struct Duration { n: i64 }` is refused with "'Duration' is already defined in this scope", because the splice copies `sleep`'s `Duration` into the program's scope under its own name; B-2026-10-18-54 made unlisted helper FUNCTIONS private and left types out | — |
-| B-2026-10-19-13 | 2026-10-19 | typecheck+interp | low | An owned local assigned to a local bound to a borrow (`let mut out = s; out = t;` with `s` a borrowed param and `t` an owned `String`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR); `out = ref t` works | — |
 | B-2026-10-19-15 | 2026-10-19 | ownership | medium | `let v = r;` with `r: mut ref i64` passes `karac check`, and every MIR surface refuses it at borrow check: `fn take(counter: mut ref i64) -> i64 { let v = counter; *counter += 1; v }` is `All checks passed.` and then E0516 "read of (*_1) while it is borrowed mutably" on `__mir-run` and `__mir-llvm-run` | — |
 | B-2026-10-19-16 | 2026-10-19 | typecheck | low | Plain `=` to a `mut ref i64` binding writes through on every surface, where design.md says it does not: `fn inc(counter: mut ref i64) { counter = counter + 1; }` passes `karac check` and leaves the caller's value at 1 on `__mir-run` and `__mir-llvm-run`, against design.md "Plain `=` does not auto-deref: write `*x = v`" | — |
 | B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
 | B-2026-10-19-21 | 2026-10-19 | typecheck+cli | low | `karac check` typechecks the Kāra library's bodies a second time for its MIR borrow check (9ee80c0104), so a small program's check takes about 1.1 s instead of 0.2 s in a debug build; lowering the program's own bodies against the library's signatures, or reusing check's typecheck, would avoid it | — |
 | B-2026-10-19-22 | 2026-10-19 | interp | medium | MIR interpreter orders u128 values as signed in sort, sort_by_key, tuple sort and SortedSet, so values with the top bit set come first; `<` and `>` are right | — |
 | B-2026-10-19-23 | 2026-10-19 | codegen+interp | high | A `Mutex` does not exclude across a suspension: four tasks each running `lock m x { let v = x; sleep(Duration.ms(2)); x = v + 1; }` leave `m` at 1, not 4, on `__mir-run` and `__mir-llvm-run`; `lock` takes no lock at all (MIR lowers it to `Mutex.get_mut`, which only hands back the cell's address), and exclusion holds today only because tasks run one at a time and switch only at a suspension | — |
+| B-2026-10-19-24 | 2026-10-19 | typecheck+interp | low | An `own` parameter, or a local made by an `if`/`match`, stored by value into a local bound to a borrow (`let mut out = s; out = t;`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR) | — |
 
 ### Relocated
 
@@ -4201,6 +4201,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-9 | typecheck | low | A `Vec.new()` inside a struct literal passed to a generic function is not pinned by the expected type of the call: `let h: Holder[Bag[String]] = hold… | b115567cf2 |
 | B-2026-10-19-11 | typecheck+interp | medium | docs/library/core-types.md promises checked/wrapping/saturating/overflowing integer methods for div, rem, neg, shl, shr and pow, and a method `x.tota… | 741dfefc06 |
 | B-2026-10-19-12 | typecheck | low | A misspelled `Vec` method (`v.lenn()`, `v.length()`, `v.size()`) gets no did-you-mean: the Vec surface has no name list for the suggestion to search | ae3b8d5e51 |
+| B-2026-10-19-13 | typecheck+interp | low | An owned local assigned to a local bound to a borrow (`let mut out = s; out = t;` with `s` a borrowed param and `t` an owned `String`) passes check,… | d05a120ea5 |
 | B-2026-10-19-14 | typecheck | low | A closure over a NAMED value iterator still takes `*c` on a Copy item: `let it = w.chars(); it.filter(\|c\| *c == 'Q')` checks and prints 2, though cor… | 3c988e5931 |
 | B-2026-10-19-18 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program… | 9ee80c0104 |
 | B-2026-10-19-19 | typecheck | low | "a reference to a temporary outlives its statement" has no `karac fix` edit for `let n = s.substring(..).trim();` or `m.get(k).unwrap_or(Vec.new())`,… | 5d124b94d3 |
