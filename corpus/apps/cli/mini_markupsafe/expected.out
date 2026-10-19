@@ -1,0 +1,1521 @@
+== escape
+-- escape 'plain text'
+   Markup('plain text')
+-- escape_silent 'plain text'
+   Markup('plain text')
+-- soft_str 'plain text'
+   'plain text'
+-- markup 'plain text'
+   Markup('plain text')
+-- str 'plain text'
+   'plain text'
+-- repr 'plain text'
+   "'plain text'"
+-- escape '<script>alert("x")</script>'
+   Markup('&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;')
+-- escape_silent '<script>alert("x")</script>'
+   Markup('&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;')
+-- soft_str '<script>alert("x")</script>'
+   '<script>alert("x")</script>'
+-- markup '<script>alert("x")</script>'
+   Markup('<script>alert("x")</script>')
+-- str '<script>alert("x")</script>'
+   '<script>alert("x")</script>'
+-- repr '<script>alert("x")</script>'
+   '\'<script>alert("x")</script>\''
+-- escape 'Tom & Jerry'
+   Markup('Tom &amp; Jerry')
+-- escape_silent 'Tom & Jerry'
+   Markup('Tom &amp; Jerry')
+-- soft_str 'Tom & Jerry'
+   'Tom & Jerry'
+-- markup 'Tom & Jerry'
+   Markup('Tom & Jerry')
+-- str 'Tom & Jerry'
+   'Tom & Jerry'
+-- repr 'Tom & Jerry'
+   "'Tom & Jerry'"
+-- escape "it's"
+   Markup('it&#39;s')
+-- escape_silent "it's"
+   Markup('it&#39;s')
+-- soft_str "it's"
+   "it's"
+-- markup "it's"
+   Markup("it's")
+-- str "it's"
+   "it's"
+-- repr "it's"
+   '"it\'s"'
+-- escape 'a < b > c'
+   Markup('a &lt; b &gt; c')
+-- escape_silent 'a < b > c'
+   Markup('a &lt; b &gt; c')
+-- soft_str 'a < b > c'
+   'a < b > c'
+-- markup 'a < b > c'
+   Markup('a < b > c')
+-- str 'a < b > c'
+   'a < b > c'
+-- repr 'a < b > c'
+   "'a < b > c'"
+-- escape ''
+   Markup('')
+-- escape_silent ''
+   Markup('')
+-- soft_str ''
+   ''
+-- markup ''
+   Markup('')
+-- str ''
+   ''
+-- repr ''
+   "''"
+-- escape '&amp; already'
+   Markup('&amp;amp; already')
+-- escape_silent '&amp; already'
+   Markup('&amp;amp; already')
+-- soft_str '&amp; already'
+   '&amp; already'
+-- markup '&amp; already'
+   Markup('&amp; already')
+-- str '&amp; already'
+   '&amp; already'
+-- repr '&amp; already'
+   "'&amp; already'"
+-- escape 'caf\xe9 \u2014 \xab\xbb'
+   Markup('café — «»')
+-- escape_silent 'caf\xe9 \u2014 \xab\xbb'
+   Markup('café — «»')
+-- soft_str 'caf\xe9 \u2014 \xab\xbb'
+   'café — «»'
+-- markup 'caf\xe9 \u2014 \xab\xbb'
+   Markup('café — «»')
+-- str 'caf\xe9 \u2014 \xab\xbb'
+   'café — «»'
+-- repr 'caf\xe9 \u2014 \xab\xbb'
+   "'café — «»'"
+-- escape 'tab\tnew\nline'
+   Markup('tab\tnew\nline')
+-- escape_silent 'tab\tnew\nline'
+   Markup('tab\tnew\nline')
+-- soft_str 'tab\tnew\nline'
+   'tab\tnew\nline'
+-- markup 'tab\tnew\nline'
+   Markup('tab\tnew\nline')
+-- str 'tab\tnew\nline'
+   'tab\tnew\nline'
+-- repr 'tab\tnew\nline'
+   "'tab\\tnew\\nline'"
+-- escape None
+   Markup('None')
+-- escape_silent None
+   Markup('')
+-- soft_str None
+   'None'
+-- markup None
+   Markup('None')
+-- str None
+   'None'
+-- repr None
+   'None'
+-- escape True
+   Markup('True')
+-- escape_silent True
+   Markup('True')
+-- soft_str True
+   'True'
+-- markup True
+   Markup('True')
+-- str True
+   'True'
+-- repr True
+   'True'
+-- escape False
+   Markup('False')
+-- escape_silent False
+   Markup('False')
+-- soft_str False
+   'False'
+-- markup False
+   Markup('False')
+-- str False
+   'False'
+-- repr False
+   'False'
+-- escape 0
+   Markup('0')
+-- escape_silent 0
+   Markup('0')
+-- soft_str 0
+   '0'
+-- markup 0
+   Markup('0')
+-- str 0
+   '0'
+-- repr 0
+   '0'
+-- escape 42
+   Markup('42')
+-- escape_silent 42
+   Markup('42')
+-- soft_str 42
+   '42'
+-- markup 42
+   Markup('42')
+-- str 42
+   '42'
+-- repr 42
+   '42'
+-- escape -7
+   Markup('-7')
+-- escape_silent -7
+   Markup('-7')
+-- soft_str -7
+   '-7'
+-- markup -7
+   Markup('-7')
+-- str -7
+   '-7'
+-- repr -7
+   '-7'
+-- escape 3.25
+   Markup('3.25')
+-- escape_silent 3.25
+   Markup('3.25')
+-- soft_str 3.25
+   '3.25'
+-- markup 3.25
+   Markup('3.25')
+-- str 3.25
+   '3.25'
+-- repr 3.25
+   '3.25'
+-- escape 0.1
+   Markup('0.1')
+-- escape_silent 0.1
+   Markup('0.1')
+-- soft_str 0.1
+   '0.1'
+-- markup 0.1
+   Markup('0.1')
+-- str 0.1
+   '0.1'
+-- repr 0.1
+   '0.1'
+-- escape -0.0
+   Markup('-0.0')
+-- escape_silent -0.0
+   Markup('-0.0')
+-- soft_str -0.0
+   '-0.0'
+-- markup -0.0
+   Markup('-0.0')
+-- str -0.0
+   '-0.0'
+-- repr -0.0
+   '-0.0'
+-- escape 1e16
+   Markup('1e+16')
+-- escape_silent 1e16
+   Markup('1e+16')
+-- soft_str 1e16
+   '1e+16'
+-- markup 1e16
+   Markup('1e+16')
+-- str 1e16
+   '1e+16'
+-- repr 1e16
+   '1e+16'
+-- escape 1.5e-07
+   Markup('1.5e-07')
+-- escape_silent 1.5e-07
+   Markup('1.5e-07')
+-- soft_str 1.5e-07
+   '1.5e-07'
+-- markup 1.5e-07
+   Markup('1.5e-07')
+-- str 1.5e-07
+   '1.5e-07'
+-- repr 1.5e-07
+   '1.5e-07'
+-- escape 123456789.125
+   Markup('123456789.125')
+-- escape_silent 123456789.125
+   Markup('123456789.125')
+-- soft_str 123456789.125
+   '123456789.125'
+-- markup 123456789.125
+   Markup('123456789.125')
+-- str 123456789.125
+   '123456789.125'
+-- repr 123456789.125
+   '123456789.125'
+-- escape 1e+300
+   Markup('1e+300')
+-- escape_silent 1e+300
+   Markup('1e+300')
+-- soft_str 1e+300
+   '1e+300'
+-- markup 1e+300
+   Markup('1e+300')
+-- str 1e+300
+   '1e+300'
+-- repr 1e+300
+   '1e+300'
+-- escape 2.5e-05
+   Markup('2.5e-05')
+-- escape_silent 2.5e-05
+   Markup('2.5e-05')
+-- soft_str 2.5e-05
+   '2.5e-05'
+-- markup 2.5e-05
+   Markup('2.5e-05')
+-- str 2.5e-05
+   '2.5e-05'
+-- repr 2.5e-05
+   '2.5e-05'
+-- escape 100.0
+   Markup('100.0')
+-- escape_silent 100.0
+   Markup('100.0')
+-- soft_str 100.0
+   '100.0'
+-- markup 100.0
+   Markup('100.0')
+-- str 100.0
+   '100.0'
+-- repr 100.0
+   '100.0'
+-- escape [1, '<b>', None]
+   Markup('[1, &#39;&lt;b&gt;&#39;, None]')
+-- escape_silent [1, '<b>', None]
+   Markup('[1, &#39;&lt;b&gt;&#39;, None]')
+-- soft_str [1, '<b>', None]
+   "[1, '<b>', None]"
+-- markup [1, '<b>', None]
+   Markup("[1, '<b>', None]")
+-- str [1, '<b>', None]
+   "[1, '<b>', None]"
+-- repr [1, '<b>', None]
+   "[1, '<b>', None]"
+-- escape ('a&b', 2)
+   Markup('(&#39;a&amp;b&#39;, 2)')
+-- escape_silent ('a&b', 2)
+   Markup('(&#39;a&amp;b&#39;, 2)')
+-- soft_str ('a&b', 2)
+   "('a&b', 2)"
+-- markup ('a&b', 2)
+   Markup("('a&b', 2)")
+-- str ('a&b', 2)
+   "('a&b', 2)"
+-- repr ('a&b', 2)
+   "('a&b', 2)"
+-- escape {'k': '<v>', 1: [2.5]}
+   Markup('{&#39;k&#39;: &#39;&lt;v&gt;&#39;, 1: [2.5]}')
+-- escape_silent {'k': '<v>', 1: [2.5]}
+   Markup('{&#39;k&#39;: &#39;&lt;v&gt;&#39;, 1: [2.5]}')
+-- soft_str {'k': '<v>', 1: [2.5]}
+   "{'k': '<v>', 1: [2.5]}"
+-- markup {'k': '<v>', 1: [2.5]}
+   Markup("{'k': '<v>', 1: [2.5]}")
+-- str {'k': '<v>', 1: [2.5]}
+   "{'k': '<v>', 1: [2.5]}"
+-- repr {'k': '<v>', 1: [2.5]}
+   "{'k': '<v>', 1: [2.5]}"
+-- escape Markup('<em>safe</em>')
+   Markup('<em>safe</em>')
+-- escape_silent Markup('<em>safe</em>')
+   Markup('<em>safe</em>')
+-- soft_str Markup('<em>safe</em>')
+   Markup('<em>safe</em>')
+-- markup Markup('<em>safe</em>')
+   Markup('<em>safe</em>')
+-- str Markup('<em>safe</em>')
+   '<em>safe</em>'
+-- repr Markup('<em>safe</em>')
+   "Markup('<em>safe</em>')"
+-- escape Markup('')
+   Markup('')
+-- escape_silent Markup('')
+   Markup('')
+-- soft_str Markup('')
+   Markup('')
+-- markup Markup('')
+   Markup('')
+-- str Markup('')
+   ''
+-- repr Markup('')
+   "Markup('')"
+-- escape Markup(42)
+   Markup('42')
+-- escape_silent Markup(42)
+   Markup('42')
+-- soft_str Markup(42)
+   Markup('42')
+-- markup Markup(42)
+   Markup('42')
+-- str Markup(42)
+   '42'
+-- repr Markup(42)
+   "Markup('42')"
+-- escape Markup(None)
+   Markup('None')
+-- escape_silent Markup(None)
+   Markup('None')
+-- soft_str Markup(None)
+   Markup('None')
+-- markup Markup(None)
+   Markup('None')
+-- str Markup(None)
+   'None'
+-- repr Markup(None)
+   "Markup('None')"
+-- escape Markup(Badge('new'))
+   Markup('<span class="badge">new</span>')
+-- escape_silent Markup(Badge('new'))
+   Markup('<span class="badge">new</span>')
+-- soft_str Markup(Badge('new'))
+   Markup('<span class="badge">new</span>')
+-- markup Markup(Badge('new'))
+   Markup('<span class="badge">new</span>')
+-- str Markup(Badge('new'))
+   '<span class="badge">new</span>'
+-- repr Markup(Badge('new'))
+   'Markup(\'<span class="badge">new</span>\')'
+-- escape User('Ann <admin>', 'ann@example.com', 7)
+   Markup('<a href="mailto:ann@example.com">Ann &lt;admin&gt;</a>')
+-- escape_silent User('Ann <admin>', 'ann@example.com', 7)
+   Markup('<a href="mailto:ann@example.com">Ann &lt;admin&gt;</a>')
+-- soft_str User('Ann <admin>', 'ann@example.com', 7)
+   'Ann <admin> <ann@example.com>'
+-- markup User('Ann <admin>', 'ann@example.com', 7)
+   Markup('<a href="mailto:ann@example.com">Ann &lt;admin&gt;</a>')
+-- str User('Ann <admin>', 'ann@example.com', 7)
+   'Ann <admin> <ann@example.com>'
+-- repr User('Ann <admin>', 'ann@example.com', 7)
+   "User('Ann <admin>', 7)"
+-- escape Badge('hot & new')
+   Markup('<span class="badge">hot &amp; new</span>')
+-- escape_silent Badge('hot & new')
+   Markup('<span class="badge">hot &amp; new</span>')
+-- soft_str Badge('hot & new')
+   "Badge('hot & new')"
+-- markup Badge('hot & new')
+   Markup('<span class="badge">hot &amp; new</span>')
+-- str Badge('hot & new')
+   "Badge('hot & new')"
+-- repr Badge('hot & new')
+   "Badge('hot & new')"
+-- escape Plain('<raw>')
+   Markup('&lt;raw&gt;')
+-- escape_silent Plain('<raw>')
+   Markup('&lt;raw&gt;')
+-- soft_str Plain('<raw>')
+   '<raw>'
+-- markup Plain('<raw>')
+   Markup('<raw>')
+-- str Plain('<raw>')
+   '<raw>'
+-- repr Plain('<raw>')
+   "Plain('<raw>')"
+-- escape [Markup('<i>'), Badge('x')]
+   Markup('[Markup(&#39;&lt;i&gt;&#39;), Badge(&#39;x&#39;)]')
+-- escape_silent [Markup('<i>'), Badge('x')]
+   Markup('[Markup(&#39;&lt;i&gt;&#39;), Badge(&#39;x&#39;)]')
+-- soft_str [Markup('<i>'), Badge('x')]
+   "[Markup('<i>'), Badge('x')]"
+-- markup [Markup('<i>'), Badge('x')]
+   Markup("[Markup('<i>'), Badge('x')]")
+-- str [Markup('<i>'), Badge('x')]
+   "[Markup('<i>'), Badge('x')]"
+-- repr [Markup('<i>'), Badge('x')]
+   "[Markup('<i>'), Badge('x')]"
+-- escape '\x00\x7f\u200b\xa0'
+   Markup('\x00\x7f\u200b\xa0')
+-- escape_silent '\x00\x7f\u200b\xa0'
+   Markup('\x00\x7f\u200b\xa0')
+-- soft_str '\x00\x7f\u200b\xa0'
+   '\x00\x7f\u200b\xa0'
+-- markup '\x00\x7f\u200b\xa0'
+   Markup('\x00\x7f\u200b\xa0')
+-- str '\x00\x7f\u200b\xa0'
+   '\x00\x7f\u200b\xa0'
+-- repr '\x00\x7f\u200b\xa0'
+   "'\\x00\\x7f\\u200b\\xa0'"
+-- escape '\U0001f600 emoji'
+   Markup('😀 emoji')
+-- escape_silent '\U0001f600 emoji'
+   Markup('😀 emoji')
+-- soft_str '\U0001f600 emoji'
+   '😀 emoji'
+-- markup '\U0001f600 emoji'
+   Markup('😀 emoji')
+-- str '\U0001f600 emoji'
+   '😀 emoji'
+-- repr '\U0001f600 emoji'
+   "'😀 emoji'"
+== concat
+-- add Markup('<em>Hello</em> ') '<foo>'
+   Markup('<em>Hello</em> &lt;foo&gt;')
+-- add '<foo>' Markup('<em>Hello</em>')
+   Markup('&lt;foo&gt;<em>Hello</em>')
+-- add Markup('a') Markup('<b>')
+   Markup('a<b>')
+-- add Markup('a') Badge('<x>')
+   Markup('a<span class="badge">&lt;x&gt;</span>')
+-- add Badge('<x>') Markup('a')
+   Markup('<span class="badge">&lt;x&gt;</span>a')
+-- add Markup('a') 3
+   error: TypeError: unsupported operand type(s) for +: 'Markup' and 'int'
+-- add 3 Markup('a')
+   error: TypeError: unsupported operand type(s) for +: 'int' and 'Markup'
+-- add Markup('a') None
+   error: TypeError: unsupported operand type(s) for +: 'Markup' and 'NoneType'
+-- add 'x' '<y>'
+   'x<y>'
+-- add Markup('a') User('B&B', 'b@x', 2)
+   Markup('a<a href="mailto:b@x">B&amp;B</a>')
+-- add Markup('') ''
+   Markup('')
+-- add Markup('&') '&'
+   Markup('&&amp;')
+-- mul Markup('<br>') 3
+   Markup('<br><br><br>')
+-- rmul 3 Markup('<br>')
+   Markup('<br><br><br>')
+-- mul Markup('ab') 0
+   Markup('')
+-- rmul 0 Markup('ab')
+   Markup('')
+-- mul Markup('ab') -2
+   Markup('')
+-- rmul -2 Markup('ab')
+   Markup('')
+-- mul Markup('<') True
+   Markup('<')
+-- rmul True Markup('<')
+   Markup('<')
+== percent
+-- mod Markup('<em>%s</em>') ('foo & bar',)
+   Markup('<em>foo &amp; bar</em>')
+-- mod Markup('%d|%.2f|%s|%r|%5s|%-4s|%i') (5, 2.5, '<a>', '<b>', 'x', 'y', 7.9)
+   Markup('5|2.50|&lt;a&gt;|&#39;&lt;b&gt;&#39;|    x|y   |7')
+-- mod Markup('%c') (65,)
+   error: TypeError: %c requires int or char
+-- mod Markup('%d') ('5',)
+   Markup('5')
+-- mod Markup('%d') ('x',)
+   error: ValueError: invalid literal for int() with base 10: 'x'
+-- mod Markup('%f') ('x',)
+   error: ValueError: could not convert string to float: 'x'
+-- mod Markup('%.1f') ('2.25',)
+   Markup('2.2')
+-- mod Markup('%x') (255,)
+   error: TypeError: %x format: an integer is required, not _MarkupEscapeHelper
+-- mod Markup('%(a)s %(b)d') {'a': '<', 'b': 3}
+   Markup('&lt; 3')
+-- mod Markup('%(a)s') {'b': '<'}
+   error: KeyError: 'a'
+-- mod Markup('%s %s') ('a',)
+   error: TypeError: not enough arguments for format string
+-- mod Markup('%s') ('a', 'b')
+   error: TypeError: not all arguments converted during string formatting
+-- mod Markup('%s') [1, '<']
+   Markup('[1, &#39;&lt;&#39;]')
+-- mod Markup('%s') 'x'
+   Markup('x')
+-- mod Markup('%z') 'x'
+   error: ValueError: unsupported format character 'z' (0x7a) at index 1
+-- mod Markup('%s%%') 5
+   Markup('5%')
+-- mod Markup('%*d') (5, 3)
+   error: TypeError: * wants int
+-- mod Markup('%05d|%+d|% d|%-5d|') (42, 42, 42, 42)
+   Markup('00042|+42| 42|42   |')
+-- mod Markup('%d') (True,)
+   Markup('1')
+-- mod Markup('%s') (None,)
+   Markup('None')
+-- mod Markup('%.3s') ('<<<<',)
+   Markup('&lt')
+-- mod Markup('%s by %s') (Markup('<b>x</b>'), User('Zoë', 'z@x', 1))
+   Markup('<b>x</b> by <a href="mailto:z@x">Zoë</a>')
+-- mod Markup('%s') Badge('a<b')
+   Markup('<span class="badge">a&lt;b</span>')
+-- mod Markup('%r') Badge('a<b')
+   Markup('Badge(&#39;a&lt;b&#39;)')
+-- mod Markup('%r') (Plain('<p>'),)
+   Markup('Plain(&#39;&lt;p&gt;&#39;)')
+-- mod Markup('%s') Plain('<p>')
+   Markup('&lt;p&gt;')
+-- mod Markup('%(u)s') {'u': User('Q', 'q@x', 9)}
+   Markup('<a href="mailto:q@x">Q</a>')
+-- mod Markup('%5.1f%%') (99.95,)
+   Markup('100.0%')
+-- mod Markup('%.0f %.0f %.0f') (0.5, 1.5, 2.5)
+   Markup('0 2 2')
+-- mod Markup('%f') (1e+22,)
+   Markup('10000000000000000000000.000000')
+-- mod Markup('%.3f') (-0.0005,)
+   Markup('-0.001')
+-- mod Markup('%d items') (3.99,)
+   Markup('3 items')
+-- mod Markup('%s') ()
+   error: TypeError: not enough arguments for format string
+-- mod Markup('%s') ((),)
+   Markup('()')
+-- mod Markup('no fields') ()
+   Markup('no fields')
+-- mod Markup('no fields') ('x',)
+   error: TypeError: not all arguments converted during string formatting
+-- mod Markup('no fields') {'a': 1}
+   Markup('no fields')
+-- mod Markup('%(a)s %s') {'a': 1}
+   error: TypeError: not enough arguments for format string
+-- mod Markup('%') ()
+   error: ValueError: incomplete format
+-- mod Markup('%(a') {'a': 1}
+   error: ValueError: incomplete format key
+-- mod Markup('%10.4s|') ('<tag>',)
+   Markup('      &lt;|')
+-- mod Markup('%-+6d|%06.2f') (7, -1.5)
+   Markup('+7    |-01.50')
+-- mod Markup('%s') 1e16
+   Markup('1e+16')
+-- mod Markup('%s') (0.1,)
+   Markup('0.1')
+-- mod Markup('%r') (2.5,)
+   Markup('2.5')
+-- mod Markup('%d') (None,)
+   error: TypeError: %d format: a real number is required, not _MarkupEscapeHelper
+-- mod Markup('%f') (None,)
+   error: TypeError: float() argument must be a string or a real number, not 'NoneType'
+== format
+-- format Markup('<em>{}</em>') ('foo & bar',) {}
+   Markup('<em>foo &amp; bar</em>')
+-- format Markup('{0!s} {0!r} {0}') (Markup('<b>'),) {}
+   Markup('&lt;b&gt; Markup(&#39;&lt;b&gt;&#39;) <b>')
+-- format Markup('{0:>5}') (Markup('<b>'),) {}
+   error: ValueError: Unsupported format specification for Markup.
+-- format Markup('{0:>5}') ('<b>',) {}
+   Markup('  &lt;b&gt;')
+-- format Markup('{}') (3.25,) {}
+   Markup('3.25')
+-- format Markup('{:.2f}') (3.255,) {}
+   Markup('3.25')
+-- format Markup('{x}') () {}
+   error: KeyError: 'x'
+-- format Markup('{0}{1}') ('a',) {}
+   error: IndexError: tuple index out of range
+-- format Markup('{user:link} wrote') () {'user': User('Ann <a>', 'ann@x', 7)}
+   Markup('<a href="mailto:ann@x">Ann &lt;a&gt;</a> wrote')
+-- format Markup('{user:name} | {user}') () {'user': User('Ann <a>', 'ann@x', 7)}
+   Markup('Ann &lt;a&gt; | <a href="mailto:ann@x">Ann &lt;a&gt;</a>')
+-- format Markup('{user:bogus}') () {'user': User('Ann', 'a@x', 7)}
+   error: ValueError: Invalid format spec 'bogus' for User
+-- format Markup('{0.name} <{0.email}> #{0.id:03d}') (User('B&B', 'b@x', 5),) {}
+   Markup('B&amp;B <b@x> #005')
+-- format Markup('{0.nope}') (User('B', 'b@x', 5),) {}
+   error: AttributeError: 'User' object has no attribute 'nope'
+-- format Markup('{b} {b:x}') () {'b': Badge('<hot>')}
+   error: ValueError: Format specifier x given, but <class '__main__.Badge'> does not define __html_format__. A class that defines __html__ must define __html_format__ to work with format specifiers.
+-- format Markup('{p} {p!r}') () {'p': Plain('<p>')}
+   Markup('&lt;p&gt; Plain(&#39;&lt;p&gt;&#39;)')
+-- format Markup('{0[name]} {0[n]:,}') ({'name': '<N>', 'n': 1234567},) {}
+   Markup('&lt;N&gt; 1,234,567')
+-- format Markup('{0[1]} {0[0]}') (['<a>', '<b>'],) {}
+   Markup('&lt;b&gt; &lt;a&gt;')
+-- format Markup('{0[2]}') (['<a>'],) {}
+   error: IndexError: list index out of range
+-- format Markup('{0[k]}') ({},) {}
+   error: KeyError: 'k'
+-- format Markup('{} {1}') ('a', 'b') {}
+   error: ValueError: cannot switch from manual field specification to automatic field numbering
+-- format Markup('{0} {}') ('a', 'b') {}
+   error: ValueError: cannot switch from manual field specification to automatic field numbering
+-- format Markup('{:{w}}|') ('<x>',) {'w': 8}
+   Markup('&lt;x&gt;     |')
+-- format Markup('{:^{w}.{p}}|') ('<xyz>',) {'w': 9, 'p': 2}
+   Markup('   &lt;x    |')
+-- format Markup('{{literal}} {}') ('<',) {}
+   Markup('{literal} &lt;')
+-- format Markup('{0!x}') ('a',) {}
+   error: ValueError: Unknown conversion specifier x
+-- format Markup('}') () {}
+   error: ValueError: Single '}' encountered in format string
+-- format Markup('{') () {}
+   error: ValueError: Single '{' encountered in format string
+-- format Markup('{0') ('a',) {}
+   error: ValueError: expected '}' before end of string
+-- format Markup('{:d}') ('5',) {}
+   error: ValueError: Unknown format code 'd' for object of type 'str'
+-- format Markup('{:s}') (5,) {}
+   error: ValueError: Unknown format code 's' for object of type 'int'
+-- format Markup('{:+.1%}') (0.256,) {}
+   Markup('+25.6%')
+-- format Markup('{:,.2f} {:_d} {:#x} {:08.3f}') (1234567.891, 1000000, 255, -3.14159) {}
+   Markup('1,234,567.89 1_000_000 0xff -003.142')
+-- format Markup('{!a}') ('caf\xe9 <',) {}
+   Markup('&#39;caf\\xe9 &lt;&#39;')
+-- format Markup('{:*<6}|{:=+6d}') ('ab', 42) {}
+   Markup('ab****|+   42')
+-- format Markup('{0:{1}}') (Markup('<i>'), '') {}
+   Markup('<i>')
+-- format Markup('{a.b}') () {'a': 1}
+   error: AttributeError: 'int' object has no attribute 'b'
+-- format Markup('{}') (None,) {}
+   Markup('None')
+-- format Markup('{} {}') (True, [Markup('<i>')]) {}
+   Markup('True [Markup(&#39;&lt;i&gt;&#39;)]')
+-- format Markup('{0:.3}') ('<abcdef>',) {}
+   Markup('&lt;ab')
+-- format Markup('{:e}') (5,) {}
+   Markup('5.000000e+00')
+-- format_map Markup('{a} & {b}') {'a': '<', 'b': Markup('<')}
+   Markup('&lt; & <')
+-- format_map Markup('{missing}') {'a': 1}
+   error: KeyError: 'missing'
+== methods
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') split 
+   [Markup('<b>Hello</b>,'), Markup('World'), Markup('&amp;'), Markup('Co.')]
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') split ','
+   [Markup('  <b>Hello</b>'), Markup('  World &amp; Co.  ')]
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') split None, 1
+   [Markup('<b>Hello</b>,'), Markup('World &amp; Co.  ')]
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') rsplit None, 1
+   [Markup('  <b>Hello</b>,  World &amp;'), Markup('Co.')]
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') rsplit 'o'
+   [Markup('  <b>Hell'), Markup('</b>,  W'), Markup('rld &amp; C'), Markup('.  ')]
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') splitlines 
+   [Markup('  <b>Hello</b>,  World &amp; Co.  ')]
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') strip 
+   Markup('<b>Hello</b>,  World &amp; Co.')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') lstrip 
+   Markup('<b>Hello</b>,  World &amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') rstrip ' .'
+   Markup('  <b>Hello</b>,  World &amp; Co')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') strip ' <>'
+   Markup('b>Hello</b>,  World &amp; Co.')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') lower 
+   Markup('  <b>hello</b>,  world &amp; co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') upper 
+   Markup('  <B>HELLO</B>,  WORLD &AMP; CO.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') title 
+   Markup('  <B>Hello</B>,  World &Amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') capitalize 
+   Markup('  <b>hello</b>,  world &amp; co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') swapcase 
+   Markup('  <B>hELLO</B>,  wORLD &AMP; cO.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') casefold 
+   Markup('  <b>hello</b>,  world &amp; co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') replace 'World', '<Earth>'
+   Markup('  <b>Hello</b>,  &lt;Earth&gt; &amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') replace 'l', Markup('<L>'), 2
+   Markup('  <b>He<L><L>o</b>,  World &amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') ljust 40, '*'
+   Markup('  <b>Hello</b>,  World &amp; Co.  ******')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') rjust 40, '<'
+   error: TypeError: The fill character must be exactly one character long
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') center 41, '&'
+   error: TypeError: The fill character must be exactly one character long
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') zfill 40
+   Markup('000000  <b>Hello</b>,  World &amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') expandtabs 
+   Markup('  <b>Hello</b>,  World &amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') removeprefix '  <b>'
+   Markup('Hello</b>,  World &amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') removesuffix 'Co.  '
+   Markup('  <b>Hello</b>,  World &amp; ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') partition '</b>'
+   (Markup('  <b>Hello'), Markup('</b>'), Markup(',  World &amp; Co.  '))
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') rpartition ' '
+   (Markup('  <b>Hello</b>,  World &amp; Co. '), Markup(' '), Markup(''))
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') partition 'zzz'
+   (Markup('  <b>Hello</b>,  World &amp; Co.  '), Markup(''), Markup(''))
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') rpartition 'zzz'
+   (Markup(''), Markup(''), Markup('  <b>Hello</b>,  World &amp; Co.  '))
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') unescape 
+   '  <b>Hello</b>,  World & Co.  '
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') striptags 
+   'Hello, World & Co.'
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') getitem 2
+   Markup('<')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') getitem -1
+   Markup(' ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') getitem 40
+   error: IndexError: string index out of range
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') slice 2, 10
+   Markup('<b>Hello')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') slice None, None, -1
+   Markup('  .oC ;pma& dlroW  ,>b/<olleH>b<  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') slice 1, None, 3
+   Markup(' >l<> r m .')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') join ['<a>', Markup('<b>'), 3]
+   Markup('&lt;a&gt;  <b>Hello</b>,  World &amp; Co.  <b>  <b>Hello</b>,  World &amp; Co.  3')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') join ['x', 'y']
+   Markup('x  <b>Hello</b>,  World &amp; Co.  y')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') join []
+   Markup('')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') center 5
+   Markup('  <b>Hello</b>,  World &amp; Co.  ')
+-- call Markup('  <b>Hello</b>,  World &amp; Co.  ') ljust 40, 'ab'
+   error: TypeError: The fill character must be exactly one character long
+-- call Markup('line one\nline two\r\nthree\x0bfour\u2028five') splitlines 
+   [Markup('line one'), Markup('line two'), Markup('three'), Markup('four'), Markup('five')]
+-- call Markup('a\nb\n') splitlines True
+   [Markup('a\n'), Markup('b\n')]
+-- call Markup('\tx\ty\t') expandtabs 4
+   Markup('    x   y   ')
+-- call Markup('stra\xdfe \u0130stanbul \u01c6ungla') upper 
+   Markup('STRASSE İSTANBUL ǄUNGLA')
+-- call Markup('stra\xdfe \u0130stanbul \u01c6ungla') lower 
+   Markup('straße i̇stanbul ǆungla')
+-- call Markup('stra\xdfe \u0130stanbul \u01c6ungla') title 
+   Markup('Straße İstanbul ǅungla')
+-- call Markup('stra\xdfe \u0130stanbul \u01c6ungla') casefold 
+   Markup('strasse i̇stanbul ǆungla')
+-- call Markup('stra\xdfe \u0130stanbul \u01c6ungla') swapcase 
+   Markup('STRASSE i̇STANBUL ǄUNGLA')
+-- call Markup('\u03a3\u039f\u03a6\u039f\u03a3 \u03a3') lower 
+   Markup('σοφος σ')
+-- call Markup('-42') zfill 6
+   Markup('-00042')
+-- call Markup('+') zfill 3
+   Markup('+00')
+-- call Markup('a\u3000b\xa0c\x1cd  e') split 
+   [Markup('a'), Markup('b'), Markup('c'), Markup('d'), Markup('e')]
+-- call Markup('a,,b,') split ','
+   [Markup('a'), Markup(''), Markup('b'), Markup('')]
+-- call Markup('a,,b,') rsplit ',', 1
+   [Markup('a,,b'), Markup('')]
+-- call Markup('abc') split ''
+   error: ValueError: empty separator
+-- call Markup('xxhixx') strip 'x'
+   Markup('hi')
+-- call Markup('<a>') replace '', '-'
+   Markup('-<-a->-')
+== striptags
+-- striptags Markup('Main &raquo;\t<em>About</em>')
+   'Main » About'
+-- unescape Markup('Main &raquo;\t<em>About</em>')
+   'Main »\t<em>About</em>'
+-- striptags Markup('<p>Hello <b>World</b></p>')
+   'Hello World'
+-- unescape Markup('<p>Hello <b>World</b></p>')
+   '<p>Hello <b>World</b></p>'
+-- striptags Markup('a <!-- hidden <b> --> b')
+   'a b'
+-- unescape Markup('a <!-- hidden <b> --> b')
+   'a <!-- hidden <b> --> b'
+-- striptags Markup('a <!-- never closed')
+   'a <!-- never closed'
+-- unescape Markup('a <!-- never closed')
+   'a <!-- never closed'
+-- striptags Markup('x < y and y > z')
+   'x z'
+-- unescape Markup('x < y and y > z')
+   'x < y and y > z'
+-- striptags Markup('<a href=\'/x\' title="a>b">link</a>')
+   'b">link'
+-- unescape Markup('<a href=\'/x\' title="a>b">link</a>')
+   '<a href=\'/x\' title="a>b">link</a>'
+-- striptags Markup('&lt;tag&gt; &amp;amp; &#39; &#x27; &#34; &quot;')
+   '<tag> &amp; \' \' " "'
+-- unescape Markup('&lt;tag&gt; &amp;amp; &#39; &#x27; &#34; &quot;')
+   '<tag> &amp; \' \' " "'
+-- striptags Markup('&copy 2024 &copy; &COPY')
+   '© 2024 © ©'
+-- unescape Markup('&copy 2024 &copy; &COPY')
+   '© 2024 © ©'
+-- striptags Markup('&notit; &notin; &not')
+   '¬it; ∉ ¬'
+-- unescape Markup('&notit; &notin; &not')
+   '¬it; ∉ ¬'
+-- striptags Markup('&#128512; &#x1F600; &#0; &#129; &#xD800; &#1114112; &#65534;')
+   '😀 😀 � \x81 � � '
+-- unescape Markup('&#128512; &#x1F600; &#0; &#129; &#xD800; &#1114112; &#65534;')
+   '😀 😀 � \x81 � � '
+-- striptags Markup('&;&#;&#x;&abc')
+   '&;&#;&#x;&abc'
+-- unescape Markup('&;&#;&#x;&abc')
+   '&;&#;&#x;&abc'
+-- striptags Markup('&AMP;&ampx')
+   '&&x'
+-- unescape Markup('&AMP;&ampx')
+   '&&x'
+-- striptags Markup('line\n\n  two   three\r\n')
+   'line two three'
+-- unescape Markup('line\n\n  two   three\r\n')
+   'line\n\n  two   three\r\n'
+-- striptags Markup('<br/><br />text<hr>')
+   'text'
+-- unescape Markup('<br/><br />text<hr>')
+   '<br/><br />text<hr>'
+-- striptags Markup('unclosed <tag text')
+   'unclosed <tag text'
+-- unescape Markup('unclosed <tag text')
+   'unclosed <tag text'
+-- striptags Markup('<<<>>>')
+   '>>'
+-- unescape Markup('<<<>>>')
+   '<<<>>>'
+-- striptags Markup('')
+   ''
+-- unescape Markup('')
+   ''
+-- striptags Markup('Caf&eacute; &mdash; cr&egrave;me &frac12; &hellip;')
+   'Café — crème ½ …'
+-- unescape Markup('Caf&eacute; &mdash; cr&egrave;me &frac12; &hellip;')
+   'Café — crème ½ …'
+-- striptags Markup('<script>evil()</script>Safe')
+   'evil()Safe'
+-- unescape Markup('<script>evil()</script>Safe')
+   '<script>evil()</script>Safe'
+-- striptags Markup('&#9;&#10;&#13;')
+   '\t\n\r'
+-- unescape Markup('&#9;&#10;&#13;')
+   '\t\n\r'
+-- striptags Markup('\u3000wide\u3000space\u3000')
+   'wide space'
+-- unescape Markup('\u3000wide\u3000space\u3000')
+   '\u3000wide\u3000space\u3000'
+-- striptags Markup('<p>a</p><p>b</p>')
+   'ab'
+-- unescape Markup('<p>a</p><p>b</p>')
+   '<p>a</p><p>b</p>'
+-- striptags Markup('<!---->x<!-- -->y')
+   'xy'
+-- unescape Markup('<!---->x<!-- -->y')
+   '<!---->x<!-- -->y'
+== thread
+-- thread 'Re: <Kara> & friends' [  (User('Ann <admin>', 'ann@example.com', 1), 'First!\nCheck <this> & that.', 12, ['op', 'mod'], None),  (User("O'Brien", 'ob@example.com', 2), 'Quotes "here" and \'there\'', -3, [], '<p>Edited: <b>bold</b> &amp; <i>italic</i></p>'),  (User('Zo\xeb', 'zoe@example.com', 3), 'Unicode: caf\xe9 \u2014 na\xefve \U0001f600', 0, ['new & shiny'], None),  (User('<script>', 'x@example.com', 4), 'Line one\nLine two\n\nLine four', 7, ['<b>'], '<div><!-- note --><p>A long body that goes on and on, well past forty characters of text.</p></div>'),  (User('Bob', 'bob@example.com', 5), '', 100, ['a', 'b', 'c'], 'Plain &copy; text &notin; set'), ]
+   <h1>Re: &lt;Kara&gt; &amp; friends</h1>
+   <ul>
+   <li id="c1"><p><a href="mailto:ann@example.com">Ann &lt;admin&gt;</a> +12 <span class="badge">op</span> <span class="badge">mod</span></p>
+   <div>First!<br>Check &lt;this&gt; &amp; that.</div>
+   </li>
+   <li id="c2"><p><a href="mailto:ob@example.com">O&#39;Brien</a> -3</p>
+   <div>Quotes &#34;here&#34; and &#39;there&#39;</div>
+   <p class="preview" title="Edited: bold &amp; italic"><p>Edited: <b>bold</b> &amp; <i>italic</i></p></p>
+   </li>
+   <li id="c3"><p><a href="mailto:zoe@example.com">Zoë</a> +0 <span class="badge">new &amp; shiny</span></p>
+   <div>Unicode: café — naïve 😀</div>
+   </li>
+   <li id="c4"><p><a href="mailto:x@example.com">&lt;script&gt;</a> +7 <span class="badge">&lt;b&gt;</span></p>
+   <div>Line one<br>Line two<br><br>Line four</div>
+   <p class="preview" title="A long body that goes on and on, well p…"><div><!-- note --><p>A long body that goes on and on, well past forty characters of text.</p></div></p>
+   </li>
+   <li id="c5"><p><a href="mailto:bob@example.com">Bob</a> +100 <span class="badge">a</span> <span class="badge">b</span> <span class="badge">c</span></p>
+   <div></div>
+   <p class="preview" title="Plain © text ∉ set">Plain &copy; text &notin; set</p>
+   </li>
+   </ul>
+   <p>5 comments by Ann &lt;admin&gt; &lt;ann@example.com&gt;, O&#39;Brien &lt;ob@example.com&gt;, Zoë &lt;zoe@example.com&gt;, &lt;script&gt; &lt;x@example.com&gt;, Bob &lt;bob@example.com&gt;</p>
+== numbers
+-- escape 0.5
+   Markup('0.5')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.5, 0.5, 0.5, 0.5, 0.5)
+   Markup('0.500|5.000000e-01|        0.50|+0.5      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.5,) {}
+   Markup('0.5000 5.000e-01 +50.0% 0.5            0.5')
+-- escape -1.5
+   Markup('-1.5')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1.5, -1.5, -1.5, -1.5, -1.5)
+   Markup('-1.500|-1.500000e+00|       -1.50|-1.5      |-2')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1.5,) {}
+   Markup('-1.5000 -1.500e+00 -150.0% -1.5           -1.5')
+-- escape 2.5
+   Markup('2.5')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (2.5, 2.5, 2.5, 2.5, 2.5)
+   Markup('2.500|2.500000e+00|        2.50|+2.5      |2')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (2.5,) {}
+   Markup('2.5000 2.500e+00 +250.0% 2.5            2.5')
+-- escape 0.125
+   Markup('0.125')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.125, 0.125, 0.125, 0.125, 0.125)
+   Markup('0.125|1.250000e-01|        0.12|+0.1      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.125,) {}
+   Markup('0.1250 1.250e-01 +12.5% 0.125          0.125')
+-- escape -0.375
+   Markup('-0.375')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-0.375, -0.375, -0.375, -0.375, -0.375)
+   Markup('-0.375|-3.750000e-01|       -0.38|-0.4      |-0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-0.375,) {}
+   Markup('-0.3750 -3.750e-01 -37.5% -0.375         -0.375')
+-- escape 2.675
+   Markup('2.675')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (2.675, 2.675, 2.675, 2.675, 2.675)
+   Markup('2.675|2.675000e+00|        2.67|+2.7      |3')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (2.675,) {}
+   Markup('2.6750 2.675e+00 +267.5% 2.675          2.675')
+-- escape 1.005
+   Markup('1.005')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (1.005, 1.005, 1.005, 1.005, 1.005)
+   Markup('1.005|1.005000e+00|        1.00|+1.0      |1')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (1.005,) {}
+   Markup('1.0050 1.005e+00 +100.5% 1.005          1.005')
+-- escape -1e-05
+   Markup('-1e-05')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1e-05, -1e-05, -1e-05, -1e-05, -1e-05)
+   Markup('-0.000|-1.000000e-05|       -0.00|-0.0      |-0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1e-05,) {}
+   Markup('-0.0000 -1.000e-05 -0.0% -1e-05         -1e-05')
+-- escape 9.995
+   Markup('9.995')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (9.995, 9.995, 9.995, 9.995, 9.995)
+   Markup('9.995|9.995000e+00|        9.99|+10.0     |10')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (9.995,) {}
+   Markup('9.9950 9.995e+00 +999.5% 9.995          9.995')
+-- escape 99.995
+   Markup('99.995')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (99.995, 99.995, 99.995, 99.995, 99.995)
+   Markup('99.995|9.999500e+01|      100.00|+100.0    |100')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (99.995,) {}
+   Markup('99.9950 1.000e+02 +9999.5% 99.995         99.995')
+-- escape -1234.5678
+   Markup('-1234.5678')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1234.5678, -1234.5678, -1234.5678, -1234.5678, -1234.5678)
+   Markup('-1234.568|-1.234568e+03|    -1234.57|-1234.6   |-1235')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1234.5678,) {}
+   Markup('-1,234.5678 -1.235e+03 -123456.8% -1234.5678     -1234.5678')
+-- escape 5e-324
+   Markup('5e-324')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (5e-324, 5e-324, 5e-324, 5e-324, 5e-324)
+   Markup('0.000|4.940656e-324|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (5e-324,) {}
+   Markup('0.0000 4.941e-324 +0.0% 5e-324         5e-324')
+-- escape 2.2250738585072014e-308
+   Markup('2.2250738585072014e-308')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (2.2250738585072014e-308, 2.2250738585072014e-308, 2.2250738585072014e-308, 2.2250738585072014e-308, 2.2250738585072014e-308)
+   Markup('0.000|2.225074e-308|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (2.2250738585072014e-308,) {}
+   Markup('0.0000 2.225e-308 +0.0% 2.2250738585072014e-308 2.2250738585072014e-308')
+-- escape -1.7976931348623157e+308
+   Markup('-1.7976931348623157e+308')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1.7976931348623157e+308, -1.7976931348623157e+308, -1.7976931348623157e+308, -1.7976931348623157e+308, -1.7976931348623157e+308)
+   Markup('-179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000|-1.797693e+308|-179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.00|-179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0|-179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1.7976931348623157e+308,) {}
+   Markup('-179,769,313,486,231,570,814,527,423,731,704,356,798,070,567,525,844,996,598,917,476,803,157,260,780,028,538,760,589,558,632,766,878,171,540,458,953,514,382,464,234,321,326,889,464,182,768,467,546,703,537,516,986,049,910,576,551,282,076,245,490,090,389,328,944,075,868,508,455,133,942,304,583,236,903,222,948,165,808,559,332,123,348,274,797,826,204,144,723,168,738,177,180,919,299,881,250,404,026,184,124,858,368.0000 -1.798e+308 -inf% -1.7976931348623157e+308 -1.7976931348623157e+308')
+-- escape 0.30000000000000004
+   Markup('0.30000000000000004')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.30000000000000004, 0.30000000000000004, 0.30000000000000004, 0.30000000000000004, 0.30000000000000004)
+   Markup('0.300|3.000000e-01|        0.30|+0.3      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.30000000000000004,) {}
+   Markup('0.3000 3.000e-01 +30.0% 0.30000000000000004 0.30000000000000004')
+-- escape 1e+22
+   Markup('1e+22')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (1e+22, 1e+22, 1e+22, 1e+22, 1e+22)
+   Markup('10000000000000000000000.000|1.000000e+22|10000000000000000000000.00|+10000000000000000000000.0|10000000000000000000000')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (1e+22,) {}
+   Markup('10,000,000,000,000,000,000,000.0000 1.000e+22 +999999999999999983222784.0% 1e+22          1e+22')
+-- escape -1e+23
+   Markup('-1e+23')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1e+23, -1e+23, -1e+23, -1e+23, -1e+23)
+   Markup('-99999999999999991611392.000|-1.000000e+23|-99999999999999991611392.00|-99999999999999991611392.0|-99999999999999991611392')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1e+23,) {}
+   Markup('-99,999,999,999,999,991,611,392.0000 -1.000e+23 -9999999999999998758486016.0% -1e+23         -1e+23')
+-- escape 123456789012345.6
+   Markup('123456789012345.6')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (123456789012345.6, 123456789012345.6, 123456789012345.6, 123456789012345.6, 123456789012345.6)
+   Markup('123456789012345.594|1.234568e+14|123456789012345.59|+123456789012345.6|123456789012346')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (123456789012345.6,) {}
+   Markup('123,456,789,012,345.5938 1.235e+14 +12345678901234560.0% 123456789012345.6 123456789012345.6')
+-- escape 0.0001
+   Markup('0.0001')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.0001, 0.0001, 0.0001, 0.0001, 0.0001)
+   Markup('0.000|1.000000e-04|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.0001,) {}
+   Markup('0.0001 1.000e-04 +0.0% 0.0001         0.0001')
+-- escape -1e-07
+   Markup('-1e-07')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1e-07, -1e-07, -1e-07, -1e-07, -1e-07)
+   Markup('-0.000|-1.000000e-07|       -0.00|-0.0      |-0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1e-07,) {}
+   Markup('-0.0000 -1.000e-07 -0.0% -1e-07         -1e-07')
+-- escape 4.35
+   Markup('4.35')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (4.35, 4.35, 4.35, 4.35, 4.35)
+   Markup('4.350|4.350000e+00|        4.35|+4.3      |4')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (4.35,) {}
+   Markup('4.3500 4.350e+00 +435.0% 4.35           4.35')
+-- escape 0.045
+   Markup('0.045')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.045, 0.045, 0.045, 0.045, 0.045)
+   Markup('0.045|4.500000e-02|        0.04|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.045,) {}
+   Markup('0.0450 4.500e-02 +4.5% 0.045          0.045')
+-- escape -1.0
+   Markup('-1.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1.0, -1.0, -1.0, -1.0, -1.0)
+   Markup('-1.000|-1.000000e+00|       -1.00|-1.0      |-1')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1.0,) {}
+   Markup('-1.0000 -1.000e+00 -100.0% -1.0           -1.0')
+-- escape 10.0
+   Markup('10.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (10.0, 10.0, 10.0, 10.0, 10.0)
+   Markup('10.000|1.000000e+01|       10.00|+10.0     |10')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (10.0,) {}
+   Markup('10.0000 1.000e+01 +1000.0% 10.0           10.0')
+-- escape 9007199254740992.0
+   Markup('9007199254740992.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (9007199254740992.0, 9007199254740992.0, 9007199254740992.0, 9007199254740992.0, 9007199254740992.0)
+   Markup('9007199254740992.000|9.007199e+15|9007199254740992.00|+9007199254740992.0|9007199254740992')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (9007199254740992.0,) {}
+   Markup('9,007,199,254,740,992.0000 9.007e+15 +900719925474099200.0% 9007199254740992.0 9007199254740992.0')
+-- escape -5482.6
+   Markup('-5482.6')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-5482.6, -5482.6, -5482.6, -5482.6, -5482.6)
+   Markup('-5482.600|-5.482600e+03|    -5482.60|-5482.6   |-5483')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-5482.6,) {}
+   Markup('-5,482.6000 -5.483e+03 -548260.0% -5482.6        -5482.6')
+-- escape 0.416189
+   Markup('0.416189')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.416189, 0.416189, 0.416189, 0.416189, 0.416189)
+   Markup('0.416|4.161890e-01|        0.42|+0.4      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.416189,) {}
+   Markup('0.4162 4.162e-01 +41.6% 0.416189       0.416189')
+-- escape 3159.0
+   Markup('3159.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (3159.0, 3159.0, 3159.0, 3159.0, 3159.0)
+   Markup('3159.000|3.159000e+03|     3159.00|+3159.0   |3159')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (3159.0,) {}
+   Markup('3,159.0000 3.159e+03 +315900.0% 3159.0         3159.0')
+-- escape -968046.250277
+   Markup('-968046.250277')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-968046.250277, -968046.250277, -968046.250277, -968046.250277, -968046.250277)
+   Markup('-968046.250|-9.680463e+05|  -968046.25|-968046.3 |-968046')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-968046.250277,) {}
+   Markup('-968,046.2503 -9.680e+05 -96804625.0% -968046.250277 -968046.250277')
+-- escape 21754.999
+   Markup('21754.999')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (21754.999, 21754.999, 21754.999, 21754.999, 21754.999)
+   Markup('21754.999|2.175500e+04|    21755.00|+21755.0  |21755')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (21754.999,) {}
+   Markup('21,754.9990 2.175e+04 +2175499.9% 21754.999      21754.999')
+-- escape 425574094.2
+   Markup('425574094.2')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (425574094.2, 425574094.2, 425574094.2, 425574094.2, 425574094.2)
+   Markup('425574094.200|4.255741e+08|425574094.20|+425574094.2|425574094')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (425574094.2,) {}
+   Markup('425,574,094.2000 4.256e+08 +42557409420.0% 425574094.2    425574094.2')
+-- escape -101.31
+   Markup('-101.31')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-101.31, -101.31, -101.31, -101.31, -101.31)
+   Markup('-101.310|-1.013100e+02|     -101.31|-101.3    |-101')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-101.31,) {}
+   Markup('-101.3100 -1.013e+02 -10131.0% -101.31        -101.31')
+-- escape 141.8
+   Markup('141.8')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (141.8, 141.8, 141.8, 141.8, 141.8)
+   Markup('141.800|1.418000e+02|      141.80|+141.8    |142')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (141.8,) {}
+   Markup('141.8000 1.418e+02 +14180.0% 141.8          141.8')
+-- escape 53766.873699
+   Markup('53766.873699')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (53766.873699, 53766.873699, 53766.873699, 53766.873699, 53766.873699)
+   Markup('53766.874|5.376687e+04|    53766.87|+53766.9  |53767')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (53766.873699,) {}
+   Markup('53,766.8737 5.377e+04 +5376687.4% 53766.873699   53766.873699')
+-- escape -170175.33
+   Markup('-170175.33')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-170175.33, -170175.33, -170175.33, -170175.33, -170175.33)
+   Markup('-170175.330|-1.701753e+05|  -170175.33|-170175.3 |-170175')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-170175.33,) {}
+   Markup('-170,175.3300 -1.702e+05 -17017533.0% -170175.33     -170175.33')
+-- escape 60515884.05829
+   Markup('60515884.05829')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (60515884.05829, 60515884.05829, 60515884.05829, 60515884.05829, 60515884.05829)
+   Markup('60515884.058|6.051588e+07| 60515884.06|+60515884.1|60515884')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (60515884.05829,) {}
+   Markup('60,515,884.0583 6.052e+07 +6051588405.8% 60515884.05829 60515884.05829')
+-- escape 3.8491
+   Markup('3.8491')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (3.8491, 3.8491, 3.8491, 3.8491, 3.8491)
+   Markup('3.849|3.849100e+00|        3.85|+3.8      |4')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (3.8491,) {}
+   Markup('3.8491 3.849e+00 +384.9% 3.8491         3.8491')
+-- escape -9319766.0
+   Markup('-9319766.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-9319766.0, -9319766.0, -9319766.0, -9319766.0, -9319766.0)
+   Markup('-9319766.000|-9.319766e+06| -9319766.00|-9319766.0|-9319766')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-9319766.0,) {}
+   Markup('-9,319,766.0000 -9.320e+06 -931976600.0% -9319766.0     -9319766.0')
+-- escape 881985057.0
+   Markup('881985057.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (881985057.0, 881985057.0, 881985057.0, 881985057.0, 881985057.0)
+   Markup('881985057.000|8.819851e+08|881985057.00|+881985057.0|881985057')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (881985057.0,) {}
+   Markup('881,985,057.0000 8.820e+08 +88198505700.0% 881985057.0    881985057.0')
+-- escape 74.93
+   Markup('74.93')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (74.93, 74.93, 74.93, 74.93, 74.93)
+   Markup('74.930|7.493000e+01|       74.93|+74.9     |75')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (74.93,) {}
+   Markup('74.9300 7.493e+01 +7493.0% 74.93          74.93')
+-- escape -948.082
+   Markup('-948.082')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-948.082, -948.082, -948.082, -948.082, -948.082)
+   Markup('-948.082|-9.480820e+02|     -948.08|-948.1    |-948')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-948.082,) {}
+   Markup('-948.0820 -9.481e+02 -94808.2% -948.082       -948.082')
+-- escape 3819601.08947
+   Markup('3819601.08947')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (3819601.08947, 3819601.08947, 3819601.08947, 3819601.08947, 3819601.08947)
+   Markup('3819601.089|3.819601e+06|  3819601.09|+3819601.1|3819601')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (3819601.08947,) {}
+   Markup('3,819,601.0895 3.820e+06 +381960108.9% 3819601.08947  3819601.08947')
+-- escape 6369828.0159
+   Markup('6369828.0159')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (6369828.0159, 6369828.0159, 6369828.0159, 6369828.0159, 6369828.0159)
+   Markup('6369828.016|6.369828e+06|  6369828.02|+6369828.0|6369828')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (6369828.0159,) {}
+   Markup('6,369,828.0159 6.370e+06 +636982801.6% 6369828.0159   6369828.0159')
+-- escape -88242.690706
+   Markup('-88242.690706')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-88242.690706, -88242.690706, -88242.690706, -88242.690706, -88242.690706)
+   Markup('-88242.691|-8.824269e+04|   -88242.69|-88242.7  |-88243')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-88242.690706,) {}
+   Markup('-88,242.6907 -8.824e+04 -8824269.1% -88242.690706  -88242.690706')
+-- escape 9306036.9
+   Markup('9306036.9')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (9306036.9, 9306036.9, 9306036.9, 9306036.9, 9306036.9)
+   Markup('9306036.900|9.306037e+06|  9306036.90|+9306036.9|9306037')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (9306036.9,) {}
+   Markup('9,306,036.9000 9.306e+06 +930603690.0% 9306036.9      9306036.9')
+-- escape 5.0
+   Markup('5.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (5.0, 5.0, 5.0, 5.0, 5.0)
+   Markup('5.000|5.000000e+00|        5.00|+5.0      |5')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (5.0,) {}
+   Markup('5.0000 5.000e+00 +500.0% 5.0            5.0')
+-- escape -0.2351
+   Markup('-0.2351')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-0.2351, -0.2351, -0.2351, -0.2351, -0.2351)
+   Markup('-0.235|-2.351000e-01|       -0.24|-0.2      |-0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-0.2351,) {}
+   Markup('-0.2351 -2.351e-01 -23.5% -0.2351        -0.2351')
+-- escape 6.931
+   Markup('6.931')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (6.931, 6.931, 6.931, 6.931, 6.931)
+   Markup('6.931|6.931000e+00|        6.93|+6.9      |7')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (6.931,) {}
+   Markup('6.9310 6.931e+00 +693.1% 6.931          6.931')
+-- escape 6057759.0
+   Markup('6057759.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (6057759.0, 6057759.0, 6057759.0, 6057759.0, 6057759.0)
+   Markup('6057759.000|6.057759e+06|  6057759.00|+6057759.0|6057759')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (6057759.0,) {}
+   Markup('6,057,759.0000 6.058e+06 +605775900.0% 6057759.0      6057759.0')
+-- escape -481389043.03795
+   Markup('-481389043.03795')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-481389043.03795, -481389043.03795, -481389043.03795, -481389043.03795, -481389043.03795)
+   Markup('-481389043.038|-4.813890e+08|-481389043.04|-481389043.0|-481389043')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-481389043.03795,) {}
+   Markup('-481,389,043.0379 -4.814e+08 -48138904303.8% -481389043.03795 -481389043.03795')
+-- escape 0.47
+   Markup('0.47')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.47, 0.47, 0.47, 0.47, 0.47)
+   Markup('0.470|4.700000e-01|        0.47|+0.5      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.47,) {}
+   Markup('0.4700 4.700e-01 +47.0% 0.47           0.47')
+-- escape 21.885163
+   Markup('21.885163')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (21.885163, 21.885163, 21.885163, 21.885163, 21.885163)
+   Markup('21.885|2.188516e+01|       21.89|+21.9     |22')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (21.885163,) {}
+   Markup('21.8852 2.189e+01 +2188.5% 21.885163      21.885163')
+-- escape -51425.49
+   Markup('-51425.49')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-51425.49, -51425.49, -51425.49, -51425.49, -51425.49)
+   Markup('-51425.490|-5.142549e+04|   -51425.49|-51425.5  |-51425')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-51425.49,) {}
+   Markup('-51,425.4900 -5.143e+04 -5142549.0% -51425.49      -51425.49')
+-- escape 4374540.012688
+   Markup('4374540.012688')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (4374540.012688, 4374540.012688, 4374540.012688, 4374540.012688, 4374540.012688)
+   Markup('4374540.013|4.374540e+06|  4374540.01|+4374540.0|4374540')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (4374540.012688,) {}
+   Markup('4,374,540.0127 4.375e+06 +437454001.3% 4374540.012688 4374540.012688')
+-- escape 7574648.0177
+   Markup('7574648.0177')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (7574648.0177, 7574648.0177, 7574648.0177, 7574648.0177, 7574648.0177)
+   Markup('7574648.018|7.574648e+06|  7574648.02|+7574648.0|7574648')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (7574648.0177,) {}
+   Markup('7,574,648.0177 7.575e+06 +757464801.8% 7574648.0177   7574648.0177')
+-- escape -36749.4345
+   Markup('-36749.4345')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-36749.4345, -36749.4345, -36749.4345, -36749.4345, -36749.4345)
+   Markup('-36749.435|-3.674943e+04|   -36749.43|-36749.4  |-36749')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-36749.4345,) {}
+   Markup('-36,749.4345 -3.675e+04 -3674943.5% -36749.4345    -36749.4345')
+-- escape 0.84
+   Markup('0.84')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.84, 0.84, 0.84, 0.84, 0.84)
+   Markup('0.840|8.400000e-01|        0.84|+0.8      |1')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.84,) {}
+   Markup('0.8400 8.400e-01 +84.0% 0.84           0.84')
+-- escape 88474.111
+   Markup('88474.111')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (88474.111, 88474.111, 88474.111, 88474.111, 88474.111)
+   Markup('88474.111|8.847411e+04|    88474.11|+88474.1  |88474')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (88474.111,) {}
+   Markup('88,474.1110 8.847e+04 +8847411.1% 88474.111      88474.111')
+-- escape -502.9694
+   Markup('-502.9694')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-502.9694, -502.9694, -502.9694, -502.9694, -502.9694)
+   Markup('-502.969|-5.029694e+02|     -502.97|-503.0    |-503')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-502.9694,) {}
+   Markup('-502.9694 -5.030e+02 -50296.9% -502.9694      -502.9694')
+-- escape 424.55699
+   Markup('424.55699')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (424.55699, 424.55699, 424.55699, 424.55699, 424.55699)
+   Markup('424.557|4.245570e+02|      424.56|+424.6    |425')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (424.55699,) {}
+   Markup('424.5570 4.246e+02 +42455.7% 424.55699      424.55699')
+-- escape 765.0
+   Markup('765.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (765.0, 765.0, 765.0, 765.0, 765.0)
+   Markup('765.000|7.650000e+02|      765.00|+765.0    |765')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (765.0,) {}
+   Markup('765.0000 7.650e+02 +76500.0% 765.0          765.0')
+-- escape -0.03495
+   Markup('-0.03495')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-0.03495, -0.03495, -0.03495, -0.03495, -0.03495)
+   Markup('-0.035|-3.495000e-02|       -0.03|-0.0      |-0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-0.03495,) {}
+   Markup('-0.0350 -3.495e-02 -3.5% -0.03495       -0.03495')
+-- escape 6.0
+   Markup('6.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (6.0, 6.0, 6.0, 6.0, 6.0)
+   Markup('6.000|6.000000e+00|        6.00|+6.0      |6')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (6.0,) {}
+   Markup('6.0000 6.000e+00 +600.0% 6.0            6.0')
+-- escape 202.0
+   Markup('202.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (202.0, 202.0, 202.0, 202.0, 202.0)
+   Markup('202.000|2.020000e+02|      202.00|+202.0    |202')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (202.0,) {}
+   Markup('202.0000 2.020e+02 +20200.0% 202.0          202.0')
+-- escape -479510.365
+   Markup('-479510.365')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-479510.365, -479510.365, -479510.365, -479510.365, -479510.365)
+   Markup('-479510.365|-4.795104e+05|  -479510.36|-479510.4 |-479510')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-479510.365,) {}
+   Markup('-479,510.3650 -4.795e+05 -47951036.5% -479510.365    -479510.365')
+-- escape 0.650836
+   Markup('0.650836')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.650836, 0.650836, 0.650836, 0.650836, 0.650836)
+   Markup('0.651|6.508360e-01|        0.65|+0.7      |1')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.650836,) {}
+   Markup('0.6508 6.508e-01 +65.1% 0.650836       0.650836')
+-- escape 4.643112
+   Markup('4.643112')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (4.643112, 4.643112, 4.643112, 4.643112, 4.643112)
+   Markup('4.643|4.643112e+00|        4.64|+4.6      |5')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (4.643112,) {}
+   Markup('4.6431 4.643e+00 +464.3% 4.643112       4.643112')
+-- escape -0.736
+   Markup('-0.736')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-0.736, -0.736, -0.736, -0.736, -0.736)
+   Markup('-0.736|-7.360000e-01|       -0.74|-0.7      |-1')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-0.736,) {}
+   Markup('-0.7360 -7.360e-01 -73.6% -0.736         -0.736')
+-- escape 177856.4
+   Markup('177856.4')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (177856.4, 177856.4, 177856.4, 177856.4, 177856.4)
+   Markup('177856.400|1.778564e+05|   177856.40|+177856.4 |177856')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (177856.4,) {}
+   Markup('177,856.4000 1.779e+05 +17785640.0% 177856.4       177856.4')
+-- escape 5592.607069
+   Markup('5592.607069')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (5592.607069, 5592.607069, 5592.607069, 5592.607069, 5592.607069)
+   Markup('5592.607|5.592607e+03|     5592.61|+5592.6   |5593')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (5592.607069,) {}
+   Markup('5,592.6071 5.593e+03 +559260.7% 5592.607069    5592.607069')
+-- escape -954.939935
+   Markup('-954.939935')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-954.939935, -954.939935, -954.939935, -954.939935, -954.939935)
+   Markup('-954.940|-9.549399e+02|     -954.94|-954.9    |-955')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-954.939935,) {}
+   Markup('-954.9399 -9.549e+02 -95494.0% -954.939935    -954.939935')
+-- escape 0.431
+   Markup('0.431')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (0.431, 0.431, 0.431, 0.431, 0.431)
+   Markup('0.431|4.310000e-01|        0.43|+0.4      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (0.431,) {}
+   Markup('0.4310 4.310e-01 +43.1% 0.431          0.431')
+-- escape 54864684.0
+   Markup('54864684.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (54864684.0, 54864684.0, 54864684.0, 54864684.0, 54864684.0)
+   Markup('54864684.000|5.486468e+07| 54864684.00|+54864684.0|54864684')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (54864684.0,) {}
+   Markup('54,864,684.0000 5.486e+07 +5486468400.0% 54864684.0     54864684.0')
+-- escape -44145.5
+   Markup('-44145.5')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-44145.5, -44145.5, -44145.5, -44145.5, -44145.5)
+   Markup('-44145.500|-4.414550e+04|   -44145.50|-44145.5  |-44146')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-44145.5,) {}
+   Markup('-44,145.5000 -4.415e+04 -4414550.0% -44145.5       -44145.5')
+-- escape 63356949.664088
+   Markup('63356949.664088')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (63356949.664088, 63356949.664088, 63356949.664088, 63356949.664088, 63356949.664088)
+   Markup('63356949.664|6.335695e+07| 63356949.66|+63356949.7|63356950')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (63356949.664088,) {}
+   Markup('63,356,949.6641 6.336e+07 +6335694966.4% 63356949.664088 63356949.664088')
+-- escape 72701.0
+   Markup('72701.0')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (72701.0, 72701.0, 72701.0, 72701.0, 72701.0)
+   Markup('72701.000|7.270100e+04|    72701.00|+72701.0  |72701')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (72701.0,) {}
+   Markup('72,701.0000 7.270e+04 +7270100.0% 72701.0        72701.0')
+-- escape -864409.996929
+   Markup('-864409.996929')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-864409.996929, -864409.996929, -864409.996929, -864409.996929, -864409.996929)
+   Markup('-864409.997|-8.644100e+05|  -864410.00|-864410.0 |-864410')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-864409.996929,) {}
+   Markup('-864,409.9969 -8.644e+05 -86440999.7% -864409.996929 -864409.996929')
+-- escape 314668829.15
+   Markup('314668829.15')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (314668829.15, 314668829.15, 314668829.15, 314668829.15, 314668829.15)
+   Markup('314668829.150|3.146688e+08|314668829.15|+314668829.1|314668829')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (314668829.15,) {}
+   Markup('314,668,829.1500 3.147e+08 +31466882915.0% 314668829.15   314668829.15')
+-- escape 1430152.5849
+   Markup('1430152.5849')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (1430152.5849, 1430152.5849, 1430152.5849, 1430152.5849, 1430152.5849)
+   Markup('1430152.585|1.430153e+06|  1430152.58|+1430152.6|1430153')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (1430152.5849,) {}
+   Markup('1,430,152.5849 1.430e+06 +143015258.5% 1430152.5849   1430152.5849')
+-- escape -0.656
+   Markup('-0.656')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-0.656, -0.656, -0.656, -0.656, -0.656)
+   Markup('-0.656|-6.560000e-01|       -0.66|-0.7      |-1')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-0.656,) {}
+   Markup('-0.6560 -6.560e-01 -65.6% -0.656         -0.656')
+-- escape 95589.2
+   Markup('95589.2')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (95589.2, 95589.2, 95589.2, 95589.2, 95589.2)
+   Markup('95589.200|9.558920e+04|    95589.20|+95589.2  |95589')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (95589.2,) {}
+   Markup('95,589.2000 9.559e+04 +9558920.0% 95589.2        95589.2')
+-- escape 3.33521
+   Markup('3.33521')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (3.33521, 3.33521, 3.33521, 3.33521, 3.33521)
+   Markup('3.335|3.335210e+00|        3.34|+3.3      |3')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (3.33521,) {}
+   Markup('3.3352 3.335e+00 +333.5% 3.33521        3.33521')
+-- escape -446457.70855
+   Markup('-446457.70855')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-446457.70855, -446457.70855, -446457.70855, -446457.70855, -446457.70855)
+   Markup('-446457.709|-4.464577e+05|  -446457.71|-446457.7 |-446458')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-446457.70855,) {}
+   Markup('-446,457.7085 -4.465e+05 -44645770.9% -446457.70855  -446457.70855')
+-- escape 6743.9181
+   Markup('6743.9181')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (6743.9181, 6743.9181, 6743.9181, 6743.9181, 6743.9181)
+   Markup('6743.918|6.743918e+03|     6743.92|+6743.9   |6744')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (6743.9181,) {}
+   Markup('6,743.9181 6.744e+03 +674391.8% 6743.9181      6743.9181')
+-- escape 9811.14509
+   Markup('9811.14509')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (9811.14509, 9811.14509, 9811.14509, 9811.14509, 9811.14509)
+   Markup('9811.145|9.811145e+03|     9811.15|+9811.1   |9811')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (9811.14509,) {}
+   Markup('9,811.1451 9.811e+03 +981114.5% 9811.14509     9811.14509')
+-- escape -1.2238774330941372e-26
+   Markup('-1.2238774330941372e-26')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1.2238774330941372e-26, -1.2238774330941372e-26, -1.2238774330941372e-26, -1.2238774330941372e-26, -1.2238774330941372e-26)
+   Markup('-0.000|-1.223877e-26|       -0.00|-0.0      |-0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1.2238774330941372e-26,) {}
+   Markup('-0.0000 -1.224e-26 -0.0% -1.2238774330941372e-26 -1.2238774330941372e-26')
+-- escape 4.185924231338492e-236
+   Markup('4.185924231338492e-236')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (4.185924231338492e-236, 4.185924231338492e-236, 4.185924231338492e-236, 4.185924231338492e-236, 4.185924231338492e-236)
+   Markup('0.000|4.185924e-236|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (4.185924231338492e-236,) {}
+   Markup('0.0000 4.186e-236 +0.0% 4.185924231338492e-236 4.185924231338492e-236')
+-- escape 2.3295424575752493e-270
+   Markup('2.3295424575752493e-270')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (2.3295424575752493e-270, 2.3295424575752493e-270, 2.3295424575752493e-270, 2.3295424575752493e-270, 2.3295424575752493e-270)
+   Markup('0.000|2.329542e-270|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (2.3295424575752493e-270,) {}
+   Markup('0.0000 2.330e-270 +0.0% 2.3295424575752493e-270 2.3295424575752493e-270')
+-- escape -6.4120393767287e-36
+   Markup('-6.4120393767287e-36')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-6.4120393767287e-36, -6.4120393767287e-36, -6.4120393767287e-36, -6.4120393767287e-36, -6.4120393767287e-36)
+   Markup('-0.000|-6.412039e-36|       -0.00|-0.0      |-0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-6.4120393767287e-36,) {}
+   Markup('-0.0000 -6.412e-36 -0.0% -6.4120393767287e-36 -6.4120393767287e-36')
+-- escape 1.1903307395749151e+207
+   Markup('1.1903307395749151e+207')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (1.1903307395749151e+207, 1.1903307395749151e+207, 1.1903307395749151e+207, 1.1903307395749151e+207, 1.1903307395749151e+207)
+   Markup('1190330739574915112051791600417846490869878069549133129848023196919095031535180917734088094385703130738927412408315677174613572298150188117391392660802883232273949278076503280771143913450826996847087622029312.000|1.190331e+207|1190330739574915112051791600417846490869878069549133129848023196919095031535180917734088094385703130738927412408315677174613572298150188117391392660802883232273949278076503280771143913450826996847087622029312.00|+1190330739574915112051791600417846490869878069549133129848023196919095031535180917734088094385703130738927412408315677174613572298150188117391392660802883232273949278076503280771143913450826996847087622029312.0|1190330739574915112051791600417846490869878069549133129848023196919095031535180917734088094385703130738927412408315677174613572298150188117391392660802883232273949278076503280771143913450826996847087622029312')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (1.1903307395749151e+207,) {}
+   Markup('1,190,330,739,574,915,112,051,791,600,417,846,490,869,878,069,549,133,129,848,023,196,919,095,031,535,180,917,734,088,094,385,703,130,738,927,412,408,315,677,174,613,572,298,150,188,117,391,392,660,802,883,232,273,949,278,076,503,280,771,143,913,450,826,996,847,087,622,029,312.0000 1.190e+207 +119033073957491510064569005636235844426694905529840481761495192879769520508719962298590017636400966447414538411488717772800779836416416984066963085736428823664229597877096781014115722755016462163990214141280256.0% 1.1903307395749151e+207 1.1903307395749151e+207')
+-- escape 1.950807061786699e-165
+   Markup('1.950807061786699e-165')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (1.950807061786699e-165, 1.950807061786699e-165, 1.950807061786699e-165, 1.950807061786699e-165, 1.950807061786699e-165)
+   Markup('0.000|1.950807e-165|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (1.950807061786699e-165,) {}
+   Markup('0.0000 1.951e-165 +0.0% 1.950807061786699e-165 1.950807061786699e-165')
+-- escape -6.660248042806262e+127
+   Markup('-6.660248042806262e+127')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-6.660248042806262e+127, -6.660248042806262e+127, -6.660248042806262e+127, -6.660248042806262e+127, -6.660248042806262e+127)
+   Markup('-66602480428062617348855978657313478001814860208035214705463717961795156149272649867044532826654530284485747079301422620904259584.000|-6.660248e+127|-66602480428062617348855978657313478001814860208035214705463717961795156149272649867044532826654530284485747079301422620904259584.00|-66602480428062617348855978657313478001814860208035214705463717961795156149272649867044532826654530284485747079301422620904259584.0|-66602480428062617348855978657313478001814860208035214705463717961795156149272649867044532826654530284485747079301422620904259584')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-6.660248042806262e+127,) {}
+   Markup('-66,602,480,428,062,617,348,855,978,657,313,478,001,814,860,208,035,214,705,463,717,961,795,156,149,272,649,867,044,532,826,654,530,284,485,747,079,301,422,620,904,259,584.0000 -6.660e+127 -6660248042806261965756727922730249434628986607582508609685469084062992184936796652206729287531921454704041045146444844941761839104.0% -6.660248042806262e+127 -6.660248042806262e+127')
+-- escape 1.6162180940328485e-252
+   Markup('1.6162180940328485e-252')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (1.6162180940328485e-252, 1.6162180940328485e-252, 1.6162180940328485e-252, 1.6162180940328485e-252, 1.6162180940328485e-252)
+   Markup('0.000|1.616218e-252|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (1.6162180940328485e-252,) {}
+   Markup('0.0000 1.616e-252 +0.0% 1.6162180940328485e-252 1.6162180940328485e-252')
+-- escape 2.7705061880846734e+95
+   Markup('2.7705061880846734e+95')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (2.7705061880846734e+95, 2.7705061880846734e+95, 2.7705061880846734e+95, 2.7705061880846734e+95, 2.7705061880846734e+95)
+   Markup('277050618808467341926905840989611373448472025680493054225349819500756324559439412686755618357248.000|2.770506e+95|277050618808467341926905840989611373448472025680493054225349819500756324559439412686755618357248.00|+277050618808467341926905840989611373448472025680493054225349819500756324559439412686755618357248.0|277050618808467341926905840989611373448472025680493054225349819500756324559439412686755618357248')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (2.7705061880846734e+95,) {}
+   Markup('277,050,618,808,467,341,926,905,840,989,611,373,448,472,025,680,493,054,225,349,819,500,756,324,559,439,412,686,755,618,357,248.0000 2.771e+95 +27705061880846733006979590308843296207480316079085129005050338973916256691898281027645114322780160.0% 2.7705061880846734e+95 2.7705061880846734e+95')
+-- escape -1.122195381758316e+304
+   Markup('-1.122195381758316e+304')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1.122195381758316e+304, -1.122195381758316e+304, -1.122195381758316e+304, -1.122195381758316e+304, -1.122195381758316e+304)
+   Markup('-11221953817583161074863365803831917730869117641072661958411807880032282025579877918660804007925597584131856079592219477232224388191747991399401035599070994250180472430258883403514009360699789886480315265067467972080678192086969119823523500551556473551049620736091603987168539938742599295423985009836425216.000|-1.122195e+304|-11221953817583161074863365803831917730869117641072661958411807880032282025579877918660804007925597584131856079592219477232224388191747991399401035599070994250180472430258883403514009360699789886480315265067467972080678192086969119823523500551556473551049620736091603987168539938742599295423985009836425216.00|-11221953817583161074863365803831917730869117641072661958411807880032282025579877918660804007925597584131856079592219477232224388191747991399401035599070994250180472430258883403514009360699789886480315265067467972080678192086969119823523500551556473551049620736091603987168539938742599295423985009836425216.0|-11221953817583161074863365803831917730869117641072661958411807880032282025579877918660804007925597584131856079592219477232224388191747991399401035599070994250180472430258883403514009360699789886480315265067467972080678192086969119823523500551556473551049620736091603987168539938742599295423985009836425216')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1.122195381758316e+304,) {}
+   Markup('-11,221,953,817,583,161,074,863,365,803,831,917,730,869,117,641,072,661,958,411,807,880,032,282,025,579,877,918,660,804,007,925,597,584,131,856,079,592,219,477,232,224,388,191,747,991,399,401,035,599,070,994,250,180,472,430,258,883,403,514,009,360,699,789,886,480,315,265,067,467,972,080,678,192,086,969,119,823,523,500,551,556,473,551,049,620,736,091,603,987,168,539,938,742,599,295,423,985,009,836,425,216.0000 -1.122e+304 -1122195381758316097741022568983192692733529376232077884964953930408220675690081334653131710026133655947570542077211688497917522587766130956480933694704005378440059946713234920820123236113505958777241871016693148855268225729478533108666752129760772409358598458140194785889115190769982382460569910991728410624.0% -1.122195381758316e+304 -1.122195381758316e+304')
+-- escape 1.366076676668583e-69
+   Markup('1.366076676668583e-69')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (1.366076676668583e-69, 1.366076676668583e-69, 1.366076676668583e-69, 1.366076676668583e-69, 1.366076676668583e-69)
+   Markup('0.000|1.366077e-69|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (1.366076676668583e-69,) {}
+   Markup('0.0000 1.366e-69 +0.0% 1.366076676668583e-69 1.366076676668583e-69')
+-- escape 3.5683601590838705e-12
+   Markup('3.5683601590838705e-12')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (3.5683601590838705e-12, 3.5683601590838705e-12, 3.5683601590838705e-12, 3.5683601590838705e-12, 3.5683601590838705e-12)
+   Markup('0.000|3.568360e-12|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (3.5683601590838705e-12,) {}
+   Markup('0.0000 3.568e-12 +0.0% 3.5683601590838705e-12 3.5683601590838705e-12')
+-- escape -8.028682407031823e+47
+   Markup('-8.028682407031823e+47')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-8.028682407031823e+47, -8.028682407031823e+47, -8.028682407031823e+47, -8.028682407031823e+47, -8.028682407031823e+47)
+   Markup('-802868240703182319086343133659038944637589913600.000|-8.028682e+47|-802868240703182319086343133659038944637589913600.00|-802868240703182319086343133659038944637589913600.0|-802868240703182319086343133659038944637589913600')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-8.028682407031823e+47,) {}
+   Markup('-802,868,240,703,182,319,086,343,133,659,038,944,637,589,913,600.0000 -8.029e+47 -80286824070318231259597206049050440897446950207488.0% -8.028682407031823e+47 -8.028682407031823e+47')
+-- escape 4.594999504174555e+274
+   Markup('4.594999504174555e+274')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (4.594999504174555e+274, 4.594999504174555e+274, 4.594999504174555e+274, 4.594999504174555e+274, 4.594999504174555e+274)
+   Markup('45949995041745552751503347102955654838866772934448226298529772594316864319122152197871398769665938025968672985792531751684863051238181750584639637919552024169779749404888098210375576899461697891474269449635694739535175775944042958563981127337899593109597939701271939889758208.000|4.595000e+274|45949995041745552751503347102955654838866772934448226298529772594316864319122152197871398769665938025968672985792531751684863051238181750584639637919552024169779749404888098210375576899461697891474269449635694739535175775944042958563981127337899593109597939701271939889758208.00|+45949995041745552751503347102955654838866772934448226298529772594316864319122152197871398769665938025968672985792531751684863051238181750584639637919552024169779749404888098210375576899461697891474269449635694739535175775944042958563981127337899593109597939701271939889758208.0|45949995041745552751503347102955654838866772934448226298529772594316864319122152197871398769665938025968672985792531751684863051238181750584639637919552024169779749404888098210375576899461697891474269449635694739535175775944042958563981127337899593109597939701271939889758208')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (4.594999504174555e+274,) {}
+   Markup('45,949,995,041,745,552,751,503,347,102,955,654,838,866,772,934,448,226,298,529,772,594,316,864,319,122,152,197,871,398,769,665,938,025,968,672,985,792,531,751,684,863,051,238,181,750,584,639,637,919,552,024,169,779,749,404,888,098,210,375,576,899,461,697,891,474,269,449,635,694,739,535,175,775,944,042,958,563,981,127,337,899,593,109,597,939,701,271,939,889,758,208.0000 4.595e+274 +4594999504174555490405857225783930477619710739086235357383748325683051835540946551733312040385205332865012512274514526858227143187693199275670070576173121218202582055668170569696608014472528486543234992985146735991977483336508392953357593822987301354514803345060938270667440128.0% 4.594999504174555e+274 4.594999504174555e+274')
+-- escape 8.685567829656514e-25
+   Markup('8.685567829656514e-25')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (8.685567829656514e-25, 8.685567829656514e-25, 8.685567829656514e-25, 8.685567829656514e-25, 8.685567829656514e-25)
+   Markup('0.000|8.685568e-25|        0.00|+0.0      |0')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (8.685567829656514e-25,) {}
+   Markup('0.0000 8.686e-25 +0.0% 8.685567829656514e-25 8.685567829656514e-25')
+-- escape -1.2662460558123277e+123
+   Markup('-1.2662460558123277e+123')
+-- mod Markup('%.3f|%e|%12.2f|%-+10.1f|%.0f') (-1.2662460558123277e+123, -1.2662460558123277e+123, -1.2662460558123277e+123, -1.2662460558123277e+123, -1.2662460558123277e+123)
+   Markup('-1266246055812327672884266440527745882578457202239534982264870924518010645017080527072835556301493849977394057722877729308672.000|-1.266246e+123|-1266246055812327672884266440527745882578457202239534982264870924518010645017080527072835556301493849977394057722877729308672.00|-1266246055812327672884266440527745882578457202239534982264870924518010645017080527072835556301493849977394057722877729308672.0|-1266246055812327672884266440527745882578457202239534982264870924518010645017080527072835556301493849977394057722877729308672')
+-- format Markup('{0:,.4f} {0:.3e} {0:+.1%} {0} {0:>14}') (-1.2662460558123277e+123,) {}
+   Markup('-1,266,246,055,812,327,672,884,266,440,527,745,882,578,457,202,239,534,982,264,870,924,518,010,645,017,080,527,072,835,556,301,493,849,977,394,057,722,877,729,308,672.0000 -1.266e+123 -126624605581232762004205832811649825506514377447945186631201357408081355410303366759813249122280387204416659406558191109013504.0% -1.2662460558123277e+123 -1.2662460558123277e+123')
