@@ -1,0 +1,972 @@
+== suite suite/tests.json (95 cases)
+[0] empty list, empty docs
+  result: {}
+  suite: pass
+[1] empty patch list
+  result: {"foo": 1}
+  suite: pass
+[2] rearrangements OK?
+  result: {"foo": 1, "bar": 2}
+  suite: pass
+[3] rearrangements OK?  How about one level down ... array
+  result: [{"foo": 1, "bar": 2}]
+  suite: pass
+[4] rearrangements OK?  How about one level down...
+  result: {"foo": {"foo": 1, "bar": 2}}
+  suite: pass
+[5] add replaces any existing field
+  result: {"foo": 1}
+  suite: pass
+[6] toplevel array
+  result: ["foo"]
+  suite: pass
+[7] toplevel array, no change
+  result: ["foo"]
+  suite: pass
+[8] toplevel object, numeric string
+  result: {"foo": "1"}
+  suite: pass
+[9] toplevel object, integer
+  result: {"foo": 1}
+  suite: pass
+[10] Toplevel scalar values OK?
+  disabled in the suite
+  result: "bar"
+  suite: pass
+[11] replace object document with array document?
+  result: []
+  suite: pass
+[12] replace array document with object document?
+  error: TypeError: '>' not supported between instances of 'NoneType' and 'int'
+  suite: differs
+[13] append to root array document?
+  result: ["hi"]
+  suite: pass
+[14] Add, / target
+  result: {"": 1}
+  suite: pass
+[15] Add, /foo/ deep target (trailing slash)
+  result: {"foo": {"": 1}}
+  suite: pass
+[16] Add composite value at top level
+  result: {"foo": 1, "bar": [1, 2]}
+  suite: pass
+[17] Add into composite value
+  result: {"foo": 1, "baz": [{"qux": "hello", "foo": "world"}]}
+  suite: pass
+[18] -
+  error: JsonPatchConflict: can't insert outside of list
+  suite: pass
+[19] -
+  error: JsonPointerException: '-1' is not a valid sequence index
+  suite: pass
+[20] -
+  result: {"foo": 1, "bar": true}
+  suite: pass
+[21] -
+  result: {"foo": 1, "bar": false}
+  suite: pass
+[22] -
+  result: {"foo": 1, "bar": null}
+  suite: pass
+[23] 0 can be an array index or object element name
+  result: {"foo": 1, "0": "bar"}
+  suite: pass
+[24] -
+  result: ["foo", "bar"]
+  suite: pass
+[25] -
+  result: ["foo", "bar", "sil"]
+  suite: pass
+[26] -
+  result: ["bar", "foo", "sil"]
+  suite: pass
+[27] push item to array via last index + 1
+  result: ["foo", "sil", "bar"]
+  suite: pass
+[28] add item to array at index > length should fail
+  error: JsonPatchConflict: can't insert outside of list
+  suite: pass
+[29] test against implementation-specific numeric parsing
+  result: {"1e0": "foo"}
+  suite: pass
+[30] test with bad number should fail
+  error: JsonPatchTestFailed: '1e0' is not a valid sequence index
+  suite: pass
+[31] -
+  error: JsonPointerException: 'bar' is not a valid sequence index
+  suite: pass
+[32] value in array add not flattened
+  result: ["foo", ["bar", "baz"], "sil"]
+  suite: pass
+[33] -
+  result: {"foo": 1}
+  suite: pass
+[34] -
+  result: {"foo": 1, "baz": [{}]}
+  suite: pass
+[35] -
+  result: {"foo": [1, 2, 3, 4], "baz": [{"qux": "hello"}]}
+  suite: pass
+[36] -
+  result: {"foo": [1, 2, 3, 4], "baz": [{"qux": "world"}]}
+  suite: pass
+[37] -
+  result: ["bar"]
+  suite: pass
+[38] -
+  result: [0]
+  suite: pass
+[39] -
+  result: [true]
+  suite: pass
+[40] -
+  result: [false]
+  suite: pass
+[41] -
+  result: [null]
+  suite: pass
+[42] value in array replace not flattened
+  result: ["foo", ["bar", "baz"]]
+  suite: pass
+[43] replace whole document
+  result: {"baz": "qux"}
+  suite: pass
+[44] test replace with missing parent key should fail
+  error: JsonPointerException: member 'foo' not found in {'bar': 'baz'}
+  suite: pass
+[45] spurious patch properties
+  result: {"foo": 1}
+  suite: pass
+[46] null value should be valid obj property
+  result: {"foo": null}
+  suite: pass
+[47] null value should be valid obj property to be replaced with something truthy
+  result: {"foo": "truthy"}
+  suite: pass
+[48] null value should be valid obj property to be moved
+  result: {"bar": null}
+  suite: pass
+[49] null value should be valid obj property to be copied
+  result: {"foo": null, "bar": null}
+  suite: pass
+[50] null value should be valid obj property to be removed
+  result: {}
+  suite: pass
+[51] null value should still be valid obj property replace other value
+  result: {"foo": null}
+  suite: pass
+[52] test should pass despite rearrangement
+  result: {"foo": {"foo": 1, "bar": 2}}
+  suite: pass
+[53] test should pass despite (nested) rearrangement
+  result: {"foo": [{"foo": 1, "bar": 2}]}
+  suite: pass
+[54] test should pass - no error
+  result: {"foo": {"bar": [1, 2, 5, 4]}}
+  suite: pass
+[55] -
+  error: JsonPatchTestFailed: {'bar': [1, 2, 5, 4]} (<class 'dict'>) is not equal to tested value [1, 2] (<class 'list'>)
+  suite: pass
+[56] Whole document
+  disabled in the suite
+  result: {"foo": 1}
+  suite: pass
+[57] Empty-string element
+  result: {"": 1}
+  suite: pass
+[58] -
+  result: {"foo": ["bar", "baz"], "": 0, "a/b": 1, "c%d": 2, "e^f": 3, "g|h": 4, "i\\j": 5, "k\"l": 6, " ": 7, "m~n": 8}
+  suite: pass
+[59] Move to same location has no effect
+  result: {"foo": 1}
+  suite: pass
+[60] -
+  result: {"baz": [{"qux": "hello"}], "bar": 1}
+  suite: pass
+[61] -
+  result: {"baz": [{}, "hello"], "bar": 1}
+  suite: pass
+[62] -
+  result: {"baz": [{"qux": "hello"}], "bar": 1, "boo": {"qux": "hello"}}
+  suite: pass
+[63] replacing the root of the document is possible with add
+  result: {"baz": "qux"}
+  suite: pass
+[64] Adding to "/-" adds to the end of the array
+  result: [1, 2, {"foo": ["bar", "baz"]}]
+  suite: pass
+[65] Adding to "/-" adds to the end of the array, even n levels down
+  result: [1, 2, [3, [4, 5, {"foo": ["bar", "baz"]}]]]
+  suite: pass
+[66] test remove with bad number should fail
+  error: JsonPointerException: '1e0' is not a valid sequence index
+  suite: pass
+[67] test remove on array
+  result: [2, 3, 4]
+  suite: pass
+[68] test repeated removes
+  result: [1, 3]
+  suite: pass
+[69] test remove with bad index should fail
+  error: JsonPointerException: '1e0' is not a valid sequence index
+  suite: pass
+[70] test replace with bad number should fail
+  error: JsonPointerException: '1e0' is not a valid sequence index
+  suite: pass
+[71] test copy with bad number should fail
+  error: JsonPointerException: '1e0' is not a valid sequence index
+  suite: pass
+[72] test move with bad number should fail
+  error: JsonPointerException: '1e0' is not a valid sequence index
+  suite: pass
+[73] test add with bad number should fail
+  error: JsonPointerException: '1e0' is not a valid sequence index
+  suite: pass
+[74] missing 'path' parameter
+  error: InvalidJsonPatch: Operation must have a 'path' member
+  suite: pass
+[75] 'path' parameter with null value
+  error: InvalidJsonPatch: Invalid 'path'
+  suite: pass
+[76] invalid JSON Pointer token
+  error: JsonPointerException: Location must start with /
+  suite: pass
+[77] missing 'value' parameter to add
+  error: InvalidJsonPatch: The operation does not contain a 'value' member
+  suite: pass
+[78] missing 'value' parameter to replace
+  error: InvalidJsonPatch: The operation does not contain a 'value' member
+  suite: pass
+[79] missing 'value' parameter to test
+  error: InvalidJsonPatch: The operation does not contain a 'value' member
+  suite: pass
+[80] missing value parameter to test - where undef is falsy
+  error: InvalidJsonPatch: The operation does not contain a 'value' member
+  suite: pass
+[81] missing from parameter to copy
+  error: InvalidJsonPatch: The operation does not contain a 'from' member
+  suite: pass
+[82] missing from location to copy
+  error: JsonPatchConflict: 'bar'
+  suite: pass
+[83] missing from parameter to move
+  error: InvalidJsonPatch: The operation does not contain a 'from' member
+  suite: pass
+[84] missing from location to move
+  error: JsonPatchConflict: 'bar'
+  suite: pass
+[85] duplicate ops
+  disabled in the suite
+  result: {"baz": "bar"}
+  suite: differs
+[86] unrecognized op should fail
+  error: InvalidJsonPatch: Unknown operation 'spam'
+  suite: pass
+[87] test with bad array number that has leading zeros
+  result: ["foo", "bar"]
+  suite: differs
+[88] test with bad array number that has leading zeros
+  result: ["foo", "bar"]
+  suite: differs
+[89] Removing nonexistent field
+  error: JsonPatchConflict: can't remove a non-existent object 'baz'
+  suite: pass
+[90] Removing deep nonexistent path
+  error: JsonPointerException: member 'missing1' not found in {'foo': 'bar'}
+  suite: pass
+[91] Removing nonexistent index
+  error: JsonPatchConflict: can't remove a non-existent object '2'
+  suite: pass
+[92] Patch with different capitalisation than doc
+  result: {"foo": "bar", "FOO": "BAR"}
+  suite: pass
+[93] test copy object then change destination
+  result: {"foo": {"bar": {"baz": [{"boo": "net"}]}}, "bak": {"bar": {"baz": [{"boo": "qux"}]}}}
+  suite: pass
+[94] test copy object then change source
+  result: {"foo": {"bar": {"baz": [{"boo": "qux"}]}}, "bak": {"bar": {"baz": [{"boo": "net"}]}}}
+  suite: pass
+== suite suite/spec_tests.json (17 cases)
+[0] 4.1. add with missing object
+  error: JsonPointerException: member 'a' not found in {'q': {'bar': 2}}
+  suite: pass
+[1] A.1.  Adding an Object Member
+  result: {"foo": "bar", "baz": "qux"}
+  suite: pass
+[2] A.2.  Adding an Array Element
+  result: {"foo": ["bar", "qux", "baz"]}
+  suite: pass
+[3] A.3.  Removing an Object Member
+  result: {"foo": "bar"}
+  suite: pass
+[4] A.4.  Removing an Array Element
+  result: {"foo": ["bar", "baz"]}
+  suite: pass
+[5] A.5.  Replacing a Value
+  result: {"baz": "boo", "foo": "bar"}
+  suite: pass
+[6] A.6.  Moving a Value
+  result: {"foo": {"bar": "baz"}, "qux": {"corge": "grault", "thud": "fred"}}
+  suite: pass
+[7] A.7.  Moving an Array Element
+  result: {"foo": ["all", "cows", "eat", "grass"]}
+  suite: pass
+[8] A.8.  Testing a Value: Success
+  result: {"baz": "qux", "foo": ["a", 2, "c"]}
+  suite: pass
+[9] A.9.  Testing a Value: Error
+  error: JsonPatchTestFailed: qux (<class 'str'>) is not equal to tested value bar (<class 'str'>)
+  suite: pass
+[10] A.10.  Adding a nested Member Object
+  result: {"foo": "bar", "child": {"grandchild": {}}}
+  suite: pass
+[11] A.11.  Ignoring Unrecognized Elements
+  result: {"foo": "bar", "baz": "qux"}
+  suite: pass
+[12] A.12.  Adding to a Non-existent Target
+  error: JsonPointerException: member 'baz' not found in {'foo': 'bar'}
+  suite: pass
+[13] A.13 Invalid JSON Patch Document
+  disabled in the suite
+  error: JsonPatchConflict: can't remove a non-existent object 'baz'
+  suite: pass
+[14] A.14. ~ Escape Ordering
+  result: {"/": 9, "~1": 10}
+  suite: pass
+[15] A.15. Comparing Strings and Numbers
+  error: JsonPatchTestFailed: 10 (<class 'int'>) is not equal to tested value 10 (<class 'str'>)
+  suite: pass
+[16] A.16. Adding an Array Value
+  result: {"foo": ["bar", ["abc", "def"]]}
+  suite: pass
+== jsonpatch  k8s/deployment.json patches/prod-overlay.json
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "checkout", "namespace": "shop", "labels": {"app": "checkout", "tier": "backend", "env": "prod"}, "annotations": {"deployment.kubernetes.io/revision": "8", "team~owner": "payments"}}, "spec": {"replicas": 6, "selector": {"matchLabels": {"app": "checkout"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "checkout", "tier": "backend"}}, "spec": {"containers": [{"name": "app", "image": "registry.example/checkout:2.5.0", "args": ["--port=8080", "--log-level=info"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "300"}, {"name": "REGION", "value": "eu-west-1"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}], "tolerations": [{"key": "dedicated", "operator": "Equal", "value": "shop", "effect": "NoSchedule"}], "nodeSelector": {"kubernetes.io/os": "linux"}}}}}
+== jsonpatch  k8s/deployment.json patches/debug-overlay.json
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "checkout", "namespace": "shop", "labels": {"app": "checkout", "tier": "backend", "owner": "payments"}, "annotations": {"deployment.kubernetes.io/revision": "7"}}, "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "checkout"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "checkout", "tier": "backend"}}, "spec": {"containers": [{"name": "app", "image": "registry.example/checkout:2.4.1", "args": ["--profile", "--port=8080", "--log-level=info"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}, {"name": "sidecar", "image": "registry.example/envoy:1.29", "args": []}, {"name": "debug", "image": "registry.example/checkout:2.4.1", "args": ["--port=8080", "--log-level=debug"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}}], "tolerations": [], "nodeSelector": {"kubernetes.io/os": "linux"}}}}}
+== jsonpatch  k8s/deployment.json patches/bad-test.json
+error: JsonPatchTestFailed: 2 (<class 'int'>) is not equal to tested value 3 (<class 'int'>)
+== jsonpatch  k8s/deployment.json patches/bad-index.json
+error: JsonPatchConflict: can't insert outside of list
+== jsonpatch  k8s/deployment.json patches/bad-leading-zero.json
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "checkout", "namespace": "shop", "labels": {"app": "checkout", "tier": "backend"}, "annotations": {"deployment.kubernetes.io/revision": "7", "team~owner": "payments"}}, "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "checkout"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "checkout", "tier": "backend"}}, "spec": {"containers": [{"name": "app", "image": "registry.example/checkout:2.4.1", "args": ["--port=8080", "--log-level=info"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}], "tolerations": [], "nodeSelector": {"kubernetes.io/os": "linux"}}}}}
+== jsonpatch  k8s/deployment.json patches/bad-hex-index.json
+error: ValueError: invalid literal for int() with base 10: '0x1'
+== jsonpatch  k8s/deployment.json patches/bad-escape.json
+error: JsonPointerException: Found invalid escape ~2
+== jsonpatch  k8s/deployment.json patches/bad-replace-dash.json
+error: InvalidJsonPatch: 'path' with '-' can't be applied to 'replace' operation
+== jsonpatch  k8s/deployment.json patches/bad-into-child.json
+error: JsonPatchConflict: Cannot move values into their own children
+== jsonpatch  k8s/deployment.json patches/noop-move.json
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "checkout", "namespace": "shop", "labels": {"app": "checkout", "tier": "backend"}, "annotations": {"deployment.kubernetes.io/revision": "7", "team~owner": "payments"}}, "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "checkout"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "checkout", "tier": "backend"}}, "spec": {"containers": [{"name": "app", "image": "registry.example/checkout:2.4.1", "args": ["--port=8080", "--log-level=info"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}, {"name": "sidecar", "image": "registry.example/envoy:1.29", "args": []}], "tolerations": [], "nodeSelector": {"kubernetes.io/os": "linux"}}}}}
+== jsonpatch  k8s/deployment.json patches/into-string.json
+error: JsonPatchConflict: unable to fully resolve json pointer /kind/0, part 0
+== jsonpatch  k8s/deployment.json patches/remove-in-string.json
+error: TypeError: 'str' object doesn't support item deletion
+== jsonpatch  k8s/deployment.json patches/test-string-char.json
+error: JsonPatchTestFailed: e (<class 'str'>) is not equal to tested value x (<class 'str'>)
+== jsonpatch  k8s/deployment.json patches/test-end.json
+error: JsonPatchTestFailed: EndOfList(['--port=8080', '--log-level=info']) (<class 'jsonpointer.EndOfList'>) is not equal to tested value None (<class 'NoneType'>)
+== jsonpatch  k8s/deployment.json patches/into-int.json
+error: JsonPointerException: Document '<class 'int'>' does not support indexing, must be mapping/sequence or support __getitem__
+== jsonpatch  k8s/deployment.json patches/remove-dash.json
+error: JsonPointerException: invalid array index '-'
+== jsonpatch  k8s/deployment.json patches/remove-root.json
+error: JsonPatchConflict: can't remove a non-existent object 'None'
+== jsonpatch  k8s/deployment.json patches/replace-root.json
+{"kind": "Empty", "note": "rebuilt"}
+== jsonpatch  k8s/deployment.json patches/add-root-list.json
+error: TypeError: '>' not supported between instances of 'NoneType' and 'int'
+== jsonpatch  k8s/deployment.json patches/move-missing.json
+error: JsonPatchConflict: 'paused'
+== jsonpatch  k8s/deployment.json patches/copy-missing-index.json
+error: JsonPatchConflict: list index out of range
+== jsonpatch  k8s/deployment.json patches/move-dash.json
+error: TypeError: list indices must be integers or slices, not str
+== jsonpatch  k8s/deployment.json patches/copy-then-edit.json
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "checkout", "namespace": "shop", "labels": {"app": "checkout", "tier": "backend"}, "annotations": {"deployment.kubernetes.io/revision": "7", "team~owner": "payments"}}, "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "checkout"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "checkout", "tier": "backend"}}, "spec": {"containers": [{"name": "app", "image": "registry.example/checkout:2.4.1", "args": ["--port=8080", "--log-level=info"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}, {"name": "sidecar", "image": "registry.example/envoy:1.29", "args": []}], "tolerations": [], "nodeSelector": {"kubernetes.io/os": "linux"}}}, "selectorCopy": {"matchLabels": {"app": "checkout", "extra": true}}}}
+== jsonpatch  k8s/deployment.json patches/test-numbers.json
+error: JsonPatchTestFailed: 8080 (<class 'int'>) is not equal to tested value 8080 (<class 'str'>)
+== jsonpatch  k8s/deployment.json patches/test-bool-int.json
+error: JsonPatchTestFailed: 0 (<class 'int'>) is not equal to tested value True (<class 'bool'>)
+== jsonpatch  k8s/deployment.json patches/not-a-list.json
+error: InvalidJsonPatch: Document is expected to be sequence of operations, got a sequence of strings.
+== jsonpatch  k8s/deployment.json patches/empty-object.json
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "checkout", "namespace": "shop", "labels": {"app": "checkout", "tier": "backend"}, "annotations": {"deployment.kubernetes.io/revision": "7", "team~owner": "payments"}}, "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "checkout"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "checkout", "tier": "backend"}}, "spec": {"containers": [{"name": "app", "image": "registry.example/checkout:2.4.1", "args": ["--port=8080", "--log-level=info"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}, {"name": "sidecar", "image": "registry.example/envoy:1.29", "args": []}], "tolerations": [], "nodeSelector": {"kubernetes.io/os": "linux"}}}}}
+== jsonpatch  k8s/deployment.json patches/strings.json
+error: InvalidJsonPatch: Document is expected to be sequence of operations, got a sequence of strings.
+== jsonpatch  k8s/deployment.json patches/op-not-string.json
+error: InvalidJsonPatch: Operation's op must be a string
+== jsonpatch  k8s/deployment.json patches/path-not-string.json
+error: InvalidJsonPatch: Invalid 'path'
+== jsonpatch  k8s/deployment.json patches/no-op-member.json
+error: InvalidJsonPatch: Operation does not contain 'op' member
+== jsonpatch  k8s/deployment.json patches/unknown-op.json
+error: InvalidJsonPatch: Unknown operation 'merge'
+== jsonpatch  k8s/deployment.json patches/late-error.json
+error: InvalidJsonPatch: The operation does not contain a 'from' member
+== jsonpatch  k8s/deployment.json patches/patch-in-string.json
+{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "checkout", "namespace": "shop", "labels": {"app": "checkout", "tier": "backend"}, "annotations": {"deployment.kubernetes.io/revision": "7", "team~owner": "payments"}}, "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "checkout"}}, "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": 0}}, "template": {"metadata": {"labels": {"app": "checkout", "tier": "backend"}}, "spec": {"containers": [{"name": "app", "image": "registry.example/checkout:2.4.1", "args": ["--port=8080", "--log-level=info"], "ports": [{"containerPort": 8080, "name": "http"}], "env": [{"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}], "resources": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": 0.25, "memory": "128Mi"}}, "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}, {"name": "sidecar", "image": "registry.example/envoy:1.29", "args": []}], "tolerations": [], "nodeSelector": {"kubernetes.io/os": "linux"}}}, "paused": false}}
+== jsonpatch  k8s/service.json patches/service-ports.json
+{"apiVersion": "v1", "kind": "Service", "metadata": {"name": "checkout", "namespace": "shop", "annotations": {"service.beta.kubernetes.io/aws-load-balancer-type": "nlb"}}, "spec": {"selector": {"app": "checkout"}, "ports": [{"port": 443, "targetPort": "https", "name": "https"}, {"port": 80, "targetPort": "http", "name": "http"}], "type": "LoadBalancer"}}
+== jsonpatch --indent 2 k8s/deployment.json patches/prod-overlay.json
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "checkout",
+    "namespace": "shop",
+    "labels": {
+      "app": "checkout",
+      "tier": "backend",
+      "env": "prod"
+    },
+    "annotations": {
+      "deployment.kubernetes.io/revision": "8",
+      "team~owner": "payments"
+    }
+  },
+  "spec": {
+    "replicas": 6,
+    "selector": {
+      "matchLabels": {
+        "app": "checkout"
+      }
+    },
+    "strategy": {
+      "type": "RollingUpdate",
+      "rollingUpdate": {
+        "maxSurge": "25%",
+        "maxUnavailable": 0
+      }
+    },
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "checkout",
+          "tier": "backend"
+        }
+      },
+      "spec": {
+        "containers": [
+          {
+            "name": "app",
+            "image": "registry.example/checkout:2.5.0",
+            "args": [
+              "--port=8080",
+              "--log-level=info"
+            ],
+            "ports": [
+              {
+                "containerPort": 8080,
+                "name": "http"
+              }
+            ],
+            "env": [
+              {
+                "name": "DB_HOST",
+                "value": "db.shop.svc"
+              },
+              {
+                "name": "CACHE_TTL",
+                "value": "300"
+              },
+              {
+                "name": "REGION",
+                "value": "eu-west-1"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "500m",
+                "memory": "256Mi"
+              },
+              "requests": {
+                "cpu": 0.25,
+                "memory": "128Mi"
+              }
+            },
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/healthz",
+                "port": 8080
+              },
+              "periodSeconds": 10
+            }
+          }
+        ],
+        "tolerations": [
+          {
+            "key": "dedicated",
+            "operator": "Equal",
+            "value": "shop",
+            "effect": "NoSchedule"
+          }
+        ],
+        "nodeSelector": {
+          "kubernetes.io/os": "linux"
+        }
+      }
+    }
+  }
+}
+== jsonpatch --indent 4 -u config/settings.json patches/empty-object.json
+{
+    "http": {
+        "errors": {
+            "404": "/errors/not-found.html",
+            "500": "/errors/oops.html",
+            "1": "one"
+        },
+        "routes": [
+            "/",
+            "/cart",
+            "/cart/checkout",
+            "/api/v1/orders"
+        ]
+    },
+    "paths/with/slashes": {
+        "a~b": 1,
+        "~": 2,
+        "": 3
+    },
+    "unicode": {
+        "café": "crème brûlée",
+        "naïve": [
+            "日本",
+            "😀"
+        ]
+    },
+    "flags": [
+        true,
+        false,
+        null,
+        0,
+        1,
+        1.5,
+        "1"
+    ],
+    "matrix": [
+        [
+            1,
+            2
+        ],
+        [
+            3,
+            4
+        ],
+        []
+    ]
+}
+== jsonpatch  config/settings-list.json patches/add-root-list.json
+error: TypeError: '>' not supported between instances of 'NoneType' and 'int'
+== jsonpatch  config/settings-text.json patches/remove-root.json
+error: JsonPointerException: invalid array index 'None'
+== jsonpatch  config/settings-scalar.json patches/remove-root.json
+error: TypeError: 'int' object does not support item deletion
+== jsonpatch  config/settings-list.json patches/remove-root.json
+error: JsonPointerException: invalid array index 'None'
+== jsonpatch  config/settings-text.json patches/add-root-list.json
+error: TypeError: invalid document type <class 'str'>
+== fromstring k8s/service.json strpatch/dup-value.json
+patch: [{"op": "add", "path": "/tags", "value": ["a", "b"]}]
+{"apiVersion": "v1", "kind": "Service", "metadata": {"name": "checkout", "namespace": "shop"}, "spec": {"selector": {"app": "checkout"}, "ports": [{"port": 80, "targetPort": "http"}], "type": "ClusterIP"}, "tags": ["a", "b"]}
+== fromstring k8s/service.json strpatch/dup-path.json
+error: InvalidJsonPatch: Invalid 'path'
+== fromstring k8s/service.json strpatch/dup-in-value.json
+patch: [{"op": "add", "path": "/limits", "value": {"cpu": [1, 2], "mem": 3}}]
+{"apiVersion": "v1", "kind": "Service", "metadata": {"name": "checkout", "namespace": "shop"}, "spec": {"selector": {"app": "checkout"}, "ports": [{"port": 80, "targetPort": "http"}], "type": "ClusterIP"}, "limits": {"cpu": [1, 2], "mem": 3}}
+== fromstring k8s/service.json strpatch/plain.json
+patch: [{"op": "replace", "path": "/kind", "value": "StatefulSet"}]
+{"apiVersion": "v1", "kind": "StatefulSet", "metadata": {"name": "checkout", "namespace": "shop"}, "spec": {"selector": {"app": "checkout"}, "ports": [{"port": 80, "targetPort": "http"}], "type": "ClusterIP"}}
+== jsondiff  history/rev1.json history/rev2.json
+[{"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "registry.example/checkout:2.4.2"}, {"op": "replace", "path": "/spec/replicas", "value": 4}]
+exit 1
+roundtrip: equal
+== jsondiff  history/rev2.json history/rev3.json
+[{"op": "replace", "path": "/spec/template/spec/containers/0/env/0/value", "value": "on"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/0/name", "value": "FEATURE_X"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/1/value", "value": "db.shop.svc"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/1/name", "value": "DB_HOST"}, {"op": "add", "path": "/spec/template/spec/containers/0/env/2", "value": {"name": "CACHE_TTL", "value": "30"}}, {"op": "move", "from": "/spec/template/spec/containers/0/args/0", "path": "/spec/template/spec/containers/0/args/1"}]
+exit 1
+roundtrip: equal
+== jsondiff  history/rev3.json history/rev4.json
+[{"op": "replace", "path": "/metadata/labels/tier", "value": "core"}, {"op": "move", "from": "/metadata/annotations/team~0owner", "path": "/metadata/annotations/team~1owner"}, {"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "registry.example/envoy:1.29"}, {"op": "replace", "path": "/spec/template/spec/containers/0/name", "value": "sidecar"}, {"op": "move", "from": "/spec/template/spec/containers/0/readinessProbe", "path": "/spec/template/spec/containers/1/readinessProbe"}, {"op": "move", "from": "/spec/template/spec/containers/0/ports", "path": "/spec/template/spec/containers/1/ports"}, {"op": "move", "from": "/spec/template/spec/containers/0/env", "path": "/spec/template/spec/containers/1/env"}, {"op": "move", "from": "/spec/template/spec/containers/0/resources", "path": "/spec/template/spec/containers/1/resources"}, {"op": "move", "from": "/spec/template/spec/containers/0/args/0", "path": "/spec/template/spec/containers/1/args/0"}, {"op": "move", "from": "/spec/template/spec/containers/0/args/0", "path": "/spec/template/spec/containers/1/args/1"}, {"op": "replace", "path": "/spec/template/spec/containers/1/image", "value": "registry.example/checkout:2.4.2"}, {"op": "replace", "path": "/spec/template/spec/containers/1/name", "value": "app"}]
+exit 1
+roundtrip: equal
+== jsondiff  history/rev4.json history/rev5.json
+[{"op": "add", "path": "/spec/template/spec/tolerations/0", "value": {"key": "spot", "operator": "Exists"}}, {"op": "replace", "path": "/spec/template/spec/containers/1/resources/requests/cpu", "value": "250m"}, {"op": "remove", "path": "/spec/strategy/rollingUpdate"}, {"op": "replace", "path": "/spec/strategy/type", "value": "Recreate"}]
+exit 1
+roundtrip: equal
+== jsondiff  history/rev5.json history/rev6.json
+[{"op": "add", "path": "/spec/template/spec/containers/0/readinessProbe", "value": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}, {"op": "add", "path": "/spec/template/spec/containers/0/ports", "value": [{"containerPort": 8080, "name": "http"}]}, {"op": "add", "path": "/spec/template/spec/containers/0/env", "value": [{"name": "FEATURE_X", "value": "on"}, {"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}]}, {"op": "add", "path": "/spec/template/spec/containers/0/resources", "value": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": "250m", "memory": "128Mi"}}}, {"op": "add", "path": "/spec/template/spec/containers/0/args/0", "value": "--log-level=info"}, {"op": "add", "path": "/spec/template/spec/containers/0/args/1", "value": "--port=8080"}, {"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "registry.example/checkout:2.4.2"}, {"op": "replace", "path": "/spec/template/spec/containers/0/name", "value": "app"}, {"op": "remove", "path": "/spec/template/spec/containers/1"}, {"op": "replace", "path": "/spec/replicas", "value": 4.0}]
+exit 1
+roundtrip: equal
+== jsondiff --indent 2 history/rev1.json history/rev6.json
+[
+  {
+    "op": "replace",
+    "path": "/metadata/labels/tier",
+    "value": "core"
+  },
+  {
+    "op": "move",
+    "from": "/metadata/annotations/team~0owner",
+    "path": "/metadata/annotations/team~1owner"
+  },
+  {
+    "op": "add",
+    "path": "/spec/template/spec/tolerations/0",
+    "value": {
+      "key": "spot",
+      "operator": "Exists"
+    }
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/env/0/value",
+    "value": "on"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/env/0/name",
+    "value": "FEATURE_X"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/env/1/value",
+    "value": "db.shop.svc"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/env/1/name",
+    "value": "DB_HOST"
+  },
+  {
+    "op": "add",
+    "path": "/spec/template/spec/containers/0/env/2",
+    "value": {
+      "name": "CACHE_TTL",
+      "value": "30"
+    }
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/resources/requests/cpu",
+    "value": "250m"
+  },
+  {
+    "op": "move",
+    "from": "/spec/template/spec/containers/0/args/0",
+    "path": "/spec/template/spec/containers/0/args/1"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/image",
+    "value": "registry.example/checkout:2.4.2"
+  },
+  {
+    "op": "remove",
+    "path": "/spec/template/spec/containers/1"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/replicas",
+    "value": 4.0
+  },
+  {
+    "op": "remove",
+    "path": "/spec/strategy/rollingUpdate"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/strategy/type",
+    "value": "Recreate"
+  }
+]
+exit 1
+roundtrip: equal
+== jsondiff  history/rev6.json history/rev1.json
+[{"op": "replace", "path": "/metadata/labels/tier", "value": "backend"}, {"op": "move", "from": "/metadata/annotations/team~1owner", "path": "/metadata/annotations/team~0owner"}, {"op": "remove", "path": "/spec/template/spec/tolerations/0"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/0/value", "value": "db.shop.svc"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/0/name", "value": "DB_HOST"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/1/value", "value": "30"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/1/name", "value": "CACHE_TTL"}, {"op": "remove", "path": "/spec/template/spec/containers/0/env/2"}, {"op": "replace", "path": "/spec/template/spec/containers/0/resources/requests/cpu", "value": 0.25}, {"op": "move", "from": "/spec/template/spec/containers/0/args/0", "path": "/spec/template/spec/containers/0/args/1"}, {"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "registry.example/checkout:2.4.1"}, {"op": "add", "path": "/spec/template/spec/containers/1", "value": {"name": "sidecar", "image": "registry.example/envoy:1.29", "args": []}}, {"op": "replace", "path": "/spec/replicas", "value": 3}, {"op": "add", "path": "/spec/strategy/rollingUpdate", "value": {"maxSurge": "25%", "maxUnavailable": 0}}, {"op": "replace", "path": "/spec/strategy/type", "value": "RollingUpdate"}]
+exit 1
+roundtrip: equal
+== jsondiff  history/rev3.json history/rev3.json
+exit 0
+roundtrip: equal
+== jsondiff -u config/settings.json config/settings-list.json
+[{"op": "replace", "path": "", "value": ["a", "b", "c"]}]
+exit 1
+roundtrip: equal
+== jsondiff  config/settings-list.json config/settings-scalar.json
+[{"op": "replace", "path": "", "value": 42}]
+exit 1
+roundtrip: equal
+== jsondiff  config/settings-scalar.json config/settings-text.json
+[{"op": "replace", "path": "", "value": "plain text"}]
+exit 1
+roundtrip: equal
+== history history
+rev1 -> rev2: 2 ops (replace 2)
+  [{"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "registry.example/checkout:2.4.2"}, {"op": "replace", "path": "/spec/replicas", "value": 4}]
+rev2 -> rev3: 6 ops (add 1, replace 4, move 1)
+  [{"op": "replace", "path": "/spec/template/spec/containers/0/env/0/value", "value": "on"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/0/name", "value": "FEATURE_X"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/1/value", "value": "db.shop.svc"}, {"op": "replace", "path": "/spec/template/spec/containers/0/env/1/name", "value": "DB_HOST"}, {"op": "add", "path": "/spec/template/spec/containers/0/env/2", "value": {"name": "CACHE_TTL", "value": "30"}}, {"op": "move", "from": "/spec/template/spec/containers/0/args/0", "path": "/spec/template/spec/containers/0/args/1"}]
+rev3 -> rev4: 12 ops (replace 5, move 7)
+  [{"op": "replace", "path": "/metadata/labels/tier", "value": "core"}, {"op": "move", "from": "/metadata/annotations/team~0owner", "path": "/metadata/annotations/team~1owner"}, {"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "registry.example/envoy:1.29"}, {"op": "replace", "path": "/spec/template/spec/containers/0/name", "value": "sidecar"}, {"op": "move", "from": "/spec/template/spec/containers/0/readinessProbe", "path": "/spec/template/spec/containers/1/readinessProbe"}, {"op": "move", "from": "/spec/template/spec/containers/0/ports", "path": "/spec/template/spec/containers/1/ports"}, {"op": "move", "from": "/spec/template/spec/containers/0/env", "path": "/spec/template/spec/containers/1/env"}, {"op": "move", "from": "/spec/template/spec/containers/0/resources", "path": "/spec/template/spec/containers/1/resources"}, {"op": "move", "from": "/spec/template/spec/containers/0/args/0", "path": "/spec/template/spec/containers/1/args/0"}, {"op": "move", "from": "/spec/template/spec/containers/0/args/0", "path": "/spec/template/spec/containers/1/args/1"}, {"op": "replace", "path": "/spec/template/spec/containers/1/image", "value": "registry.example/checkout:2.4.2"}, {"op": "replace", "path": "/spec/template/spec/containers/1/name", "value": "app"}]
+rev4 -> rev5: 4 ops (add 1, remove 1, replace 2)
+  [{"op": "add", "path": "/spec/template/spec/tolerations/0", "value": {"key": "spot", "operator": "Exists"}}, {"op": "replace", "path": "/spec/template/spec/containers/1/resources/requests/cpu", "value": "250m"}, {"op": "remove", "path": "/spec/strategy/rollingUpdate"}, {"op": "replace", "path": "/spec/strategy/type", "value": "Recreate"}]
+rev5 -> rev6: 10 ops (add 6, remove 1, replace 3)
+  [{"op": "add", "path": "/spec/template/spec/containers/0/readinessProbe", "value": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 10}}, {"op": "add", "path": "/spec/template/spec/containers/0/ports", "value": [{"containerPort": 8080, "name": "http"}]}, {"op": "add", "path": "/spec/template/spec/containers/0/env", "value": [{"name": "FEATURE_X", "value": "on"}, {"name": "DB_HOST", "value": "db.shop.svc"}, {"name": "CACHE_TTL", "value": "30"}]}, {"op": "add", "path": "/spec/template/spec/containers/0/resources", "value": {"limits": {"cpu": "500m", "memory": "256Mi"}, "requests": {"cpu": "250m", "memory": "128Mi"}}}, {"op": "add", "path": "/spec/template/spec/containers/0/args/0", "value": "--log-level=info"}, {"op": "add", "path": "/spec/template/spec/containers/0/args/1", "value": "--port=8080"}, {"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "registry.example/checkout:2.4.2"}, {"op": "replace", "path": "/spec/template/spec/containers/0/name", "value": "app"}, {"op": "remove", "path": "/spec/template/spec/containers/1"}, {"op": "replace", "path": "/spec/replicas", "value": 4.0}]
+replayed 5 patches onto rev1 (add 8, remove 2, replace 16, move 8)
+  equal to rev6: True
+== pairs gen/pairs.jsonl
+[0] [{"op": "add", "path": "/2", "value": 2}, {"op": "add", "path": "/3", "value": "m~n"}]
+  roundtrip: equal
+[1] [{"op": "replace", "path": "", "value": {"x": false}}]
+  roundtrip: equal
+[2] [{"op": "remove", "path": "/n"}]
+  roundtrip: equal
+[3] [{"op": "add", "path": "/3", "value": "delta"}, {"op": "add", "path": "/7", "value": "b"}]
+  roundtrip: equal
+[4] [{"op": "replace", "path": "", "value": "2"}]
+  roundtrip: equal
+[5] [{"op": "move", "from": "/n", "path": "/beta"}]
+  roundtrip: equal
+[6] [{"op": "move", "from": "/0", "path": "/2"}]
+  roundtrip: equal
+[7] [{"op": "replace", "path": "/0", "value": {"beta": null, "alpha": -3, "1": false, "z\u00e9": "y", "gamma": true}}, {"op": "remove", "path": "/1/alpha"}, {"op": "remove", "path": "/1/1"}, {"op": "remove", "path": "/1/gamma"}, {"op": "remove", "path": "/1/z\u00e9"}, {"op": "move", "from": "/1/beta", "path": "/1/m~0n"}, {"op": "remove", "path": "/2"}]
+  roundtrip: equal
+[8] [{"op": "remove", "path": "/items"}, {"op": "add", "path": "/meta//y", "value": "10"}, {"op": "replace", "path": "/meta//m~0n", "value": true}]
+  roundtrip: equal
+[9] [{"op": "replace", "path": "/3", "value": 3}, {"op": "remove", "path": "/4"}]
+  roundtrip: equal
+[10] [{"op": "remove", "path": "/beta"}, {"op": "add", "path": "/y", "value": [-0.0, 8, "beta"]}, {"op": "add", "path": "/alpha", "value": ""}]
+  roundtrip: equal
+[11] [{"op": "remove", "path": "/meta"}, {"op": "move", "from": "/n", "path": "/10"}]
+  roundtrip: equal
+[12] []
+  roundtrip: equal
+[13] [{"op": "remove", "path": "/0"}, {"op": "add", "path": "/2", "value": [[3.25, "alpha"], {"z\u00e9": null, "10": "10", "m~n": 0.5}]}, {"op": "remove", "path": "/3"}]
+  roundtrip: equal
+[14] [{"op": "move", "from": "/n", "path": "/10"}]
+  roundtrip: equal
+[15] [{"op": "move", "from": "/2", "path": "/0"}, {"op": "move", "from": "/1", "path": "/2"}]
+  roundtrip: equal
+[16] [{"op": "replace", "path": "", "value": {"beta": true, "1": {"a/b": "2", "2": "", "z\u00e9": "y"}, "gamma": {}, "": "gamma", "m~n": "delta"}}]
+  roundtrip: equal
+[17] [{"op": "remove", "path": "/meta"}, {"op": "move", "from": "/items", "path": "/2"}]
+  roundtrip: equal
+[18] [{"op": "replace", "path": "/0", "value": null}, {"op": "remove", "path": "/1"}, {"op": "move", "from": "/2", "path": "/1"}]
+  roundtrip: equal
+[19] [{"op": "replace", "path": "", "value": false}]
+  roundtrip: equal
+[20] [{"op": "add", "path": "/", "value": [null, false, 0.5]}]
+  roundtrip: equal
+[21] [{"op": "move", "from": "/1", "path": "/3"}, {"op": "move", "from": "/1", "path": "/3"}, {"op": "add", "path": "/4", "value": true}, {"op": "move", "from": "/8", "path": "/0"}]
+  roundtrip: equal
+[22] [{"op": "replace", "path": "", "value": [{}, 1.0, {"beta": "10", "y": "", "x": ""}]}]
+  roundtrip: equal
+[23] [{"op": "remove", "path": "/n"}]
+  roundtrip: equal
+[24] [{"op": "replace", "path": "/0", "value": false}, {"op": "remove", "path": "/1"}]
+  roundtrip: equal
+[25] [{"op": "replace", "path": "/0", "value": "1"}]
+  roundtrip: equal
+[26] [{"op": "add", "path": "/z\u00e9", "value": [true, null, "a/b", false, "1"]}, {"op": "add", "path": "/items/0", "value": null}, {"op": "replace", "path": "/items/1/0", "value": "delta"}, {"op": "replace", "path": "/items/1/1", "value": null}, {"op": "replace", "path": "/items/1/2", "value": "delta"}, {"op": "add", "path": "/items/1/3", "value": 11}, {"op": "move", "from": "/items/5", "path": "/items/3"}, {"op": "move", "from": "/items/4", "path": "/items/5"}, {"op": "add", "path": "/items/6", "value": ["beta", true, 2.0]}, {"op": "move", "from": "/items/1", "path": "/items/6"}]
+  roundtrip: NOT equal: {"items": [null, ["beta", true, 2.0], null, ["a/b", "1", 0, -2], false, ["beta", true, 2.0], ["delta", null, "delta", 11, 11]], "meta": true, "n": 1, "z\u00e9": [true, null, "a/b", false, "1"]}
+[27] [{"op": "add", "path": "/0", "value": 8}, {"op": "remove", "path": "/4"}, {"op": "move", "from": "/1", "path": "/3"}]
+  roundtrip: equal
+[28] []
+  roundtrip: equal
+[29] [{"op": "add", "path": "/z\u00e9", "value": "alpha"}, {"op": "add", "path": "/gamma", "value": "10"}, {"op": "replace", "path": "/meta", "value": ""}]
+  roundtrip: equal
+[30] [{"op": "remove", "path": "/3"}]
+  roundtrip: equal
+[31] [{"op": "replace", "path": "", "value": ""}]
+  roundtrip: equal
+[32] [{"op": "add", "path": "/meta/alpha", "value": null}, {"op": "add", "path": "/items/0", "value": "delta"}, {"op": "move", "from": "/items/1", "path": "/items/3"}]
+  roundtrip: equal
+[33] [{"op": "add", "path": "/0", "value": true}, {"op": "move", "from": "/1", "path": "/2"}]
+  roundtrip: equal
+[34] [{"op": "replace", "path": "", "value": "delta"}]
+  roundtrip: equal
+[35] [{"op": "replace", "path": "/meta", "value": {"10": true, "1": ["1", "y", false]}}]
+  roundtrip: equal
+[36] [{"op": "add", "path": "/7", "value": 2}]
+  roundtrip: equal
+[37] []
+  roundtrip: equal
+[38] [{"op": "remove", "path": "/meta"}, {"op": "remove", "path": "/n"}, {"op": "add", "path": "/", "value": ["beta", "alpha"]}]
+  roundtrip: equal
+[39] [{"op": "move", "from": "/2", "path": "/0"}, {"op": "add", "path": "/3", "value": "b"}, {"op": "move", "from": "/1", "path": "/5"}]
+  roundtrip: equal
+[40] []
+  roundtrip: equal
+[41] [{"op": "move", "from": "/meta", "path": "/z\u00e9"}, {"op": "replace", "path": "/items/1", "value": {"10": true, "": "beta", "2": null, "y": "m~n"}}]
+  roundtrip: equal
+[42] [{"op": "move", "from": "/1", "path": "/2"}, {"op": "move", "from": "/5", "path": "/1"}]
+  roundtrip: equal
+[43] [{"op": "replace", "path": "/1", "value": "delta"}]
+  roundtrip: equal
+[44] [{"op": "replace", "path": "/n", "value": null}]
+  roundtrip: equal
+[45] [{"op": "add", "path": "/1", "value": null}]
+  roundtrip: equal
+[46] [{"op": "remove", "path": "/"}]
+  roundtrip: equal
+[47] [{"op": "add", "path": "/y", "value": [null]}, {"op": "move", "from": "/n", "path": "/alpha"}]
+  roundtrip: equal
+[48] [{"op": "move", "from": "/0", "path": "/1"}, {"op": "add", "path": "/3", "value": true}]
+  roundtrip: equal
+[49] [{"op": "move", "from": "/x", "path": "/y"}]
+  roundtrip: equal
+[50] [{"op": "add", "path": "/", "value": ["x", 1e-07, "x", true]}, {"op": "move", "from": "/meta", "path": "/beta"}]
+  roundtrip: equal
+[51] [{"op": "move", "from": "/3", "path": "/0"}, {"op": "move", "from": "/1", "path": "/3"}]
+  roundtrip: equal
+[52] [{"op": "remove", "path": "/0"}, {"op": "replace", "path": "/1/1", "value": "delta"}, {"op": "move", "from": "/1", "path": "/0"}]
+  roundtrip: NOT equal: [[{"z\u00e9": true, "2": "1", "": null, "delta": "1"}, "delta", 0, ["", "y", "y", 11], {"gamma": "m~n", "": "alpha"}], ["delta", [1e-07, null, "beta", "gamma"]]]
+[53] [{"op": "add", "path": "/y", "value": 1}, {"op": "add", "path": "/2", "value": [true, 1.0, "x", 3.25]}]
+  roundtrip: equal
+[54] [{"op": "add", "path": "/5", "value": 2}]
+  roundtrip: equal
+[55] [{"op": "replace", "path": "", "value": "1"}]
+  roundtrip: equal
+[56] [{"op": "move", "from": "/n", "path": "/1"}]
+  roundtrip: equal
+[57] [{"op": "remove", "path": "/0"}]
+  roundtrip: equal
+[58] [{"op": "replace", "path": "", "value": [2.0, -0.0]}]
+  roundtrip: equal
+[59] [{"op": "move", "from": "/meta", "path": "/x"}, {"op": "move", "from": "/items", "path": "/gamma"}]
+  roundtrip: equal
+[60] [{"op": "add", "path": "/7", "value": 3}]
+  roundtrip: equal
+[61] [{"op": "replace", "path": "", "value": ["z\u00e9", [], [], false, ["a/b", "10", 7, "y", "delta"]]}]
+  roundtrip: equal
+[62] [{"op": "move", "from": "/items", "path": "/alpha"}]
+  roundtrip: equal
+[63] []
+  roundtrip: equal
+[64] [{"op": "remove", "path": "/10"}, {"op": "remove", "path": "/delta"}]
+  roundtrip: equal
+[65] [{"op": "replace", "path": "/items/1", "value": {"beta": "beta", "a/b": -0.0, "alpha": null}}, {"op": "replace", "path": "/items/2/alpha", "value": null}]
+  roundtrip: equal
+[66] [{"op": "remove", "path": "/0"}, {"op": "add", "path": "/1", "value": 1}, {"op": "move", "from": "/4", "path": "/1"}, {"op": "move", "from": "/3", "path": "/4"}, {"op": "remove", "path": "/5"}, {"op": "remove", "path": "/5"}]
+  roundtrip: equal
+[67] []
+  roundtrip: equal
+[68] [{"op": "remove", "path": "/meta/10"}, {"op": "add", "path": "/meta//z\u00e9", "value": {"": "1"}}, {"op": "add", "path": "/meta//y", "value": {"1": "alpha"}}, {"op": "replace", "path": "/meta//10", "value": "y"}]
+  roundtrip: equal
+[69] []
+  roundtrip: equal
+== jsonpointer  '' config/settings.json
+{"http": {"errors": {"404": "/errors/not-found.html", "500": "/errors/oops.html", "1": "one"}, "routes": ["/", "/cart", "/cart/checkout", "/api/v1/orders"]}, "paths/with/slashes": {"a~b": 1, "~": 2, "": 3}, "unicode": {"caf\u00e9": "cr\u00e8me br\u00fbl\u00e9e", "na\u00efve": ["\u65e5\u672c", "\ud83d\ude00"]}, "flags": [true, false, null, 0, 1, 1.5, "1"], "matrix": [[1, 2], [3, 4], []]}
+== jsonpointer  '/' config/settings.json
+stderr: Could not resolve pointer: member '' not found in {'http': {'errors': {'404': '/errors/not-found.html', '500': '/errors/oops.html', '1': 'one'}, 'routes': ['/', '/cart', '/cart/checkout', '/api/v1/orders']}, 'paths/with/slashes': {'a~b': 1, '~': 2, '': 3}, 'unicode': {'café': 'crème brûlée', 'naïve': ['日本', '😀']}, 'flags': [True, False, None, 0, 1, 1.5, '1'], 'matrix': [[1, 2], [3, 4], []]}
+== jsonpointer  '/http/errors/404' config/settings.json
+"/errors/not-found.html"
+== jsonpointer  '/http/routes/2' config/settings.json
+"/cart/checkout"
+== jsonpointer  '/http/routes/-' config/settings.json
+error: TypeError: Object of type EndOfList is not JSON serializable
+== jsonpointer  '/http/routes/-/0' config/settings.json
+stderr: Could not resolve pointer: Document '<class 'jsonpointer.EndOfList'>' does not support indexing, must be mapping/sequence or support __getitem__
+== jsonpointer  '/http/routes/4' config/settings.json
+stderr: Could not resolve pointer: index '4' is out of bounds
+== jsonpointer  '/paths~1with~1slashes/a~0b' config/settings.json
+1
+== jsonpointer  '/paths~1with~1slashes/~0' config/settings.json
+2
+== jsonpointer  '/paths~1with~1slashes/' config/settings.json
+3
+== jsonpointer  '/unicode/café' config/settings.json
+"cr\u00e8me br\u00fbl\u00e9e"
+== jsonpointer  '/unicode/naïve/1' config/settings.json
+"\ud83d\ude00"
+== jsonpointer  '/flags/0' config/settings.json
+true
+== jsonpointer  '/flags/01' config/settings.json
+false
+== jsonpointer  '/flags/1 ' config/settings.json
+stderr: Could not resolve pointer: '1 ' is not a valid sequence index
+== jsonpointer  '/flags/0_1' config/settings.json
+false
+== jsonpointer  '/flags/0x' config/settings.json
+error: ValueError: invalid literal for int() with base 10: '0x'
+== jsonpointer  '/flags/+1' config/settings.json
+stderr: Could not resolve pointer: '+1' is not a valid sequence index
+== jsonpointer  '/matrix/1/0' config/settings.json
+3
+== jsonpointer  '/matrix/2/0' config/settings.json
+stderr: Could not resolve pointer: index '0' is out of bounds
+== jsonpointer  '/matrix/0/1/x' config/settings.json
+stderr: Could not resolve pointer: Document '<class 'int'>' does not support indexing, must be mapping/sequence or support __getitem__
+== jsonpointer  '/http/routes/0/0' config/settings.json
+"/"
+== jsonpointer  '/http/routes/0/9' config/settings.json
+stderr: Could not resolve pointer: index '9' is out of bounds
+== jsonpointer  '/http/nothing' config/settings.json
+stderr: Could not resolve pointer: member 'nothing' not found in {'errors': {'404': '/errors/not-found.html', '500': '/errors/oops.html', '1': 'one'}, 'routes': ['/', '/cart', '/cart/checkout', '/api/v1/orders']}
+== jsonpointer  '/http/errors/404/0/x' config/settings.json
+stderr: Could not resolve pointer: 'x' is not a valid sequence index
+== jsonpointer  'flags' config/settings.json
+stderr: Could not resolve pointer: Location must start with /
+== jsonpointer  '/flags/~2' config/settings.json
+stderr: Could not resolve pointer: Found invalid escape ~2
+== jsonpointer  '/flags/~' config/settings.json
+stderr: Could not resolve pointer: Found invalid escape ~
+== jsonpointer  '/http/errors/1' config/settings.json
+"one"
+== jsonpointer --indent 2 '/http' config/settings.json k8s/service.json config/settings-list.json
+{
+  "errors": {
+    "404": "/errors/not-found.html",
+    "500": "/errors/oops.html",
+    "1": "one"
+  },
+  "routes": [
+    "/",
+    "/cart",
+    "/cart/checkout",
+    "/api/v1/orders"
+  ]
+}
+stderr: Could not resolve pointer: member 'http' not found in {'apiVersion': 'v1', 'kind': 'Service', 'metadata': {'name': 'checkout', 'namespace': 'shop'}, 'spec': {'selector': {'app': 'checkout'}, 'ports': [{'port': 80, 'targetPort': 'http'}], 'type': 'ClusterIP'}}
+stderr: Could not resolve pointer: 'http' is not a valid sequence index
+== jsonpointer  '/0' config/settings-list.json config/settings-text.json config/settings-scalar.json
+"a"
+"p"
+stderr: Could not resolve pointer: Document '<class 'int'>' does not support indexing, must be mapping/sequence or support __getitem__
+== set config/settings.json '/http/routes/-' "/api/v2"
+{"http": {"errors": {"404": "/errors/not-found.html", "500": "/errors/oops.html", "1": "one"}, "routes": ["/", "/cart", "/cart/checkout", "/api/v1/orders", "/api/v2"]}, "paths/with/slashes": {"a~b": 1, "~": 2, "": 3}, "unicode": {"caf\u00e9": "cr\u00e8me br\u00fbl\u00e9e", "na\u00efve": ["\u65e5\u672c", "\ud83d\ude00"]}, "flags": [true, false, null, 0, 1, 1.5, "1"], "matrix": [[1, 2], [3, 4], []]}
+== set config/settings.json '/http/routes/0' "/home"
+{"http": {"errors": {"404": "/errors/not-found.html", "500": "/errors/oops.html", "1": "one"}, "routes": ["/home", "/cart", "/cart/checkout", "/api/v1/orders"]}, "paths/with/slashes": {"a~b": 1, "~": 2, "": 3}, "unicode": {"caf\u00e9": "cr\u00e8me br\u00fbl\u00e9e", "na\u00efve": ["\u65e5\u672c", "\ud83d\ude00"]}, "flags": [true, false, null, 0, 1, 1.5, "1"], "matrix": [[1, 2], [3, 4], []]}
+== set config/settings.json '/http/newkey' {"a": [1]}
+{"http": {"errors": {"404": "/errors/not-found.html", "500": "/errors/oops.html", "1": "one"}, "routes": ["/", "/cart", "/cart/checkout", "/api/v1/orders"], "newkey": {"a": [1]}}, "paths/with/slashes": {"a~b": 1, "~": 2, "": 3}, "unicode": {"caf\u00e9": "cr\u00e8me br\u00fbl\u00e9e", "na\u00efve": ["\u65e5\u672c", "\ud83d\ude00"]}, "flags": [true, false, null, 0, 1, 1.5, "1"], "matrix": [[1, 2], [3, 4], []]}
+== set config/settings.json '' "root"
+"root"
+== set config/settings.json '/matrix/2/0' 7
+error: IndexError: list assignment index out of range
+== set config/settings.json '/matrix/9' null
+error: IndexError: list assignment index out of range
+== set config/settings.json '/http/errors/x/y' 1
+error: JsonPointerException: member 'x' not found in {'404': '/errors/not-found.html', '500': '/errors/oops.html', '1': 'one'}
+== set config/settings.json '/flags/-' []
+{"http": {"errors": {"404": "/errors/not-found.html", "500": "/errors/oops.html", "1": "one"}, "routes": ["/", "/cart", "/cart/checkout", "/api/v1/orders"]}, "paths/with/slashes": {"a~b": 1, "~": 2, "": 3}, "unicode": {"caf\u00e9": "cr\u00e8me br\u00fbl\u00e9e", "na\u00efve": ["\u65e5\u672c", "\ud83d\ude00"]}, "flags": [true, false, null, 0, 1, 1.5, "1", []], "matrix": [[1, 2], [3, 4], []]}
+ptr '': parts [], path ''
+ptr '/': parts [''], path '/'
+ptr '/a/b~0c~1d': parts ['a', 'b~c/d'], path '/a/b~0c~1d'
+ptr '/~01': parts ['~1'], path '/~01'
+ptr 'a': error: JsonPointerException: Location must start with /
+ptr '/x~': error: JsonPointerException: Found invalid escape ~
+ptr '/x~3': error: JsonPointerException: Found invalid escape ~3
+ptr '/0/-/~1~0': parts ['0', '-', '/~'], path '/0/-/~1~0'
+ptr '//': parts ['', ''], path '//'
+'/a/b/c' contains '/a/b': True
+'/a/b' contains '/a/b/c': False
+'/a/b' contains '': True
+'/a~1b' contains '/a': False
+'/a/b' joined with '/c/d': '/a/b/c/d'
+'/a' joined with 'x': error: JsonPointerException: Location must start with /
+'' joined with '/m~0n': '/m~0n'
+from_parts ["a", "~", "/", 0, ""]: '/a/~0/~1/0/'
+from_parts []: ''
+from_parts [1, 2.5, true, null]: '/1/2.5/True/None'

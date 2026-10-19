@@ -1,0 +1,4534 @@
+// mini_jsonpatch: jsonpatch 1.33 and jsonpointer 3.0.0 as Python 3.13 runs
+// them. It applies RFC 6902 patches (add, remove, replace, move, copy and
+// test, with every exception the library raises, in the order it raises
+// them), resolves and sets RFC 6901 pointers, and computes patches between
+// two documents the way make_patch does, move detection and index fixups
+// included. make_patch walks dict keys through Python sets, so the port
+// carries CPython's set table (SipHash-1-3 string hashes under
+// PYTHONHASHSEED=0, linear probing and perturbation, the resize rules) to
+// put the operations in the same order.
+//
+// The jobs in data/jobs.txt run the json-patch-tests conformance suite, the
+// `jsonpatch`, `jsondiff` and `jsonpointer` command-line tools over
+// Kubernetes manifests and kustomize-style patch files, a deployment's
+// revision history, and seventy pairs of documents made by seeded random
+// edits. Each computed patch is sent through its JSON text and applied
+// back, as a client would, to check that it rebuilds the target.
+
+// ------------------------------------------------------------ values
+
+// A Python value loaded from JSON. Ints keep their digits; End is
+// jsonpointer's EndOfList, holding the list (or string) it ends.
+#[derive(Clone)]
+enum V {
+    Null,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    Arr(Vec[V]),
+    Obj(Vec[(String, V)]),
+    End(Vec[V]),
+}
+
+struct PyErr {
+    cls: String,
+    msg: String,
+}
+
+fn perr(cls: Str, msg: own String) -> PyErr {
+    PyErr { cls: cls.to_string(), msg: msg }
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn type_name(v: ref V) -> String {
+    let n = match v {
+        V.Null => "NoneType",
+        V.Bool(_) => "bool",
+        V.Int(_) => "int",
+        V.Float(_) => "float",
+        V.Str(_) => "str",
+        V.Arr(_) => "list",
+        V.Obj(_) => "dict",
+        V.End(_) => "jsonpointer.EndOfList",
+    };
+    n.to_string()
+}
+
+fn type_repr(v: ref V) -> String {
+    f"<class '{type_name(v)}'>"
+}
+
+fn kind_tag(v: ref V) -> i64 {
+    match v {
+        V.Null => 0,
+        V.Bool(_) => 1,
+        V.Int(_) => 2,
+        V.Float(_) => 3,
+        V.Str(_) => 4,
+        V.Arr(_) => 5,
+        V.Obj(_) => 6,
+        V.End(_) => 7,
+    }
+}
+
+fn obj_get(m: ref Vec[(String, V)], key: ref String) -> Option[V] {
+    for (k, v) in m.iter() {
+        if k == key {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn obj_has(m: ref Vec[(String, V)], key: ref String) -> bool {
+    for (k, _) in m.iter() {
+        if k == key {
+            return true;
+        }
+    }
+    false
+}
+
+// d[key] = value: a new key goes last, an old one keeps its place.
+fn obj_set(m: mut ref Vec[(String, V)], key: ref String, value: own V) {
+    let mut i = 0;
+    while i < m.len() {
+        if m[i].0 == key {
+            m[i].1 = value;
+            return;
+        }
+        i += 1;
+    }
+    m.push((key.clone(), value));
+}
+
+fn obj_del(m: mut ref Vec[(String, V)], key: ref String) -> bool {
+    let mut i = 0;
+    while i < m.len() {
+        if m[i].0 == key {
+            m.remove(i);
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// ------------------------------------------------------------ JSON in
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+// json.loads over well-formed input. With multi set, an object's repeated
+// member becomes the list of its values, as jsonpatch's multidict hook
+// makes it; without, the member keeps its first place and its last value,
+// as dict() does.
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+    multi: bool,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[V, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut pairs: Vec[(String, V)] = Vec.new();
+            self.ws();
+            if not self.eat("}") {
+                loop {
+                    self.ws();
+                    let k = self.string()?;
+                    self.ws();
+                    if not self.eat(":") {
+                        return Err(f"expected ':' at {self.at}");
+                    }
+                    let v = self.value()?;
+                    pairs.push((k, v));
+                    self.ws();
+                    if self.eat("}") {
+                        break;
+                    }
+                    if not self.eat(",") {
+                        return Err(f"expected ',' at {self.at}");
+                    }
+                }
+            }
+            return Ok(V.Obj(self.build(pairs)));
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[V] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(V.Arr(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(V.Arr(items));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(V.Str(self.string()?));
+        }
+        if self.eat("true") {
+            return Ok(V.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(V.Bool(false));
+        }
+        if self.eat("null") {
+            return Ok(V.Null);
+        }
+        self.number()
+    }
+
+    fn build(ref self, pairs: own Vec[(String, V)]) -> Vec[(String, V)] {
+        let mut m: Vec[(String, V)] = Vec.new();
+        if not self.multi {
+            for (k, v) in pairs.into_iter() {
+                obj_set(mut m, k, v);
+            }
+            return m;
+        }
+        let mut groups: Vec[(String, Vec[V])] = Vec.new();
+        for (k, v) in pairs.into_iter() {
+            let mut found = false;
+            let mut i = 0;
+            while i < groups.len() {
+                if groups[i].0 == k {
+                    groups[i].1.push(v.clone());
+                    found = true;
+                    break;
+                }
+                i += 1;
+            }
+            if not found {
+                groups.push((k, vec![v]));
+            }
+        }
+        for (k, vs) in groups.into_iter() {
+            if vs.len() == 1 {
+                m.push((k, vs[0].clone()));
+            } else {
+                m.push((k, V.Arr(vs)));
+            }
+        }
+        m
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.b[self.at];
+            self.at += 1;
+            let d = if c >= b'0' and c <= b'9' {
+                c - b'0'
+            } else if c >= b'a' and c <= b'f' {
+                c - b'a' + 10
+            } else {
+                c - b'A' + 10
+            };
+            v = v * 16 + d as u32;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.eat("\"") {
+            return Err(f"expected string at {self.at}");
+        }
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.at >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.b[self.at];
+            self.at += 1;
+            if e == b'n' {
+                out.push(10);
+            } else if e == b't' {
+                out.push(9);
+            } else if e == b'r' {
+                out.push(13);
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(String.from_utf8(out).unwrap_or("?".to_string()))
+    }
+
+    fn number(mut ref self) -> Result[V, String] {
+        let start = self.at;
+        let mut float = false;
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c >= b'0' and c <= b'9' {
+                self.at += 1;
+            } else if c == b'-' or c == b'+' {
+                self.at += 1;
+            } else if c == b'.' or c == b'e' or c == b'E' {
+                float = true;
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        let t = String.from_utf8(self.b[start..self.at].to_vec()).unwrap_or(String.new());
+        if t.is_empty() {
+            return Err(f"bad value at {start}");
+        }
+        if float {
+            return match f64.parse(t) {
+                Ok(f) => Ok(V.Float(f)),
+                Err(_) => Err(f"bad number {t}"),
+            };
+        }
+        // int(): "-0" is 0, and digits otherwise stand as written.
+        if t == "-0" {
+            return Ok(V.Int("0".to_string()));
+        }
+        Ok(V.Int(t))
+    }
+}
+
+fn loads(t: ref String, multi: bool) -> Result[V, String] {
+    let mut r = JsonReader { b: t.bytes().to_vec(), at: 0, multi: multi };
+    r.value()
+}
+
+// ------------------------------------------------------------ JSON out
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < n {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+fn json_str(s: ref String, ascii: bool, out: mut ref String) {
+    out.push('"');
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if o == 8 {
+            out.push_str("\\b");
+        } else if o == 12 {
+            out.push_str("\\f");
+        } else if o < 0x20 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else if not ascii or o < 0x7F {
+            out.push(c);
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            let n = o - 0x10000;
+            out.push_str(f"\\u{hex_digits(0xD800 | (n >> 10), 4)}\\u{hex_digits(0xDC00 | (n & 0x3FF), 4)}");
+        }
+    }
+    out.push('"');
+}
+
+fn newline_indent(indent: i64, level: i64, out: mut ref String) {
+    out.push('\n');
+    for _ in 0..indent * level {
+        out.push(' ');
+    }
+}
+
+// json.dumps with its default separators; indent < 0 is indent=None.
+fn dump_into(v: ref V, indent: i64, ascii: bool, level: i64, out: mut ref String) -> Result[(), PyErr] {
+    match v {
+        V.Null => out.push_str("null"),
+        V.Bool(b) => out.push_str(if b { "true" } else { "false" }),
+        V.Int(d) => out.push_str(d),
+        V.Float(x) => {
+            if x != x {
+                out.push_str("NaN");
+            } else if x == 1.0 / 0.0 {
+                out.push_str("Infinity");
+            } else if x == -1.0 / 0.0 {
+                out.push_str("-Infinity");
+            } else {
+                out.push_str(float_repr(x));
+            }
+        }
+        V.Str(s) => json_str(s, ascii, mut out),
+        V.Arr(items) => {
+            if items.is_empty() {
+                out.push_str("[]");
+                return Ok(());
+            }
+            out.push('[');
+            let mut i = 0;
+            while i < items.len() {
+                if i > 0 {
+                    out.push_str(if indent >= 0 { "," } else { ", " });
+                }
+                if indent >= 0 {
+                    newline_indent(indent, level + 1, mut out);
+                }
+                dump_into(items[i], indent, ascii, level + 1, mut out)?;
+                i += 1;
+            }
+            if indent >= 0 {
+                newline_indent(indent, level, mut out);
+            }
+            out.push(']');
+        }
+        V.Obj(m) => {
+            if m.is_empty() {
+                out.push_str("{}");
+                return Ok(());
+            }
+            out.push('{');
+            let mut i = 0;
+            while i < m.len() {
+                if i > 0 {
+                    out.push_str(if indent >= 0 { "," } else { ", " });
+                }
+                if indent >= 0 {
+                    newline_indent(indent, level + 1, mut out);
+                }
+                json_str(m[i].0, ascii, mut out);
+                out.push_str(": ");
+                dump_into(m[i].1, indent, ascii, level + 1, mut out)?;
+                i += 1;
+            }
+            if indent >= 0 {
+                newline_indent(indent, level, mut out);
+            }
+            out.push('}');
+        }
+        V.End(_) => return Err(perr("TypeError", "Object of type EndOfList is not JSON serializable".to_string())),
+    }
+    Ok(())
+}
+
+fn dumps_opt(v: ref V, indent: i64, ascii: bool) -> Result[String, PyErr] {
+    let mut out = String.new();
+    dump_into(v, indent, ascii, 0, mut out)?;
+    Ok(out)
+}
+
+fn dumps(v: ref V) -> String {
+    match dumps_opt(v, -1, true) {
+        Ok(s) => s,
+        Err(e) => e.msg,
+    }
+}
+
+// ------------------------------------------------------------ repr
+
+fn printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let single = s.contains("'");
+    let double = s.contains("\"");
+    let q = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if printable(o) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_into(v: ref V, out: mut ref String) {
+    match v {
+        V.Null => out.push_str("None"),
+        V.Bool(b) => out.push_str(if b { "True" } else { "False" }),
+        V.Int(d) => out.push_str(d),
+        V.Float(x) => out.push_str(float_repr(x)),
+        V.Str(s) => out.push_str(repr_str(s)),
+        V.Arr(items) => {
+            out.push('[');
+            let mut i = 0;
+            while i < items.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                repr_into(items[i], mut out);
+                i += 1;
+            }
+            out.push(']');
+        }
+        V.Obj(m) => {
+            out.push('{');
+            let mut i = 0;
+            while i < m.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(repr_str(m[i].0));
+                out.push_str(": ");
+                repr_into(m[i].1, mut out);
+                i += 1;
+            }
+            out.push('}');
+        }
+        V.End(inner) => {
+            out.push_str("EndOfList(");
+            repr_into(inner[0], mut out);
+            out.push(')');
+        }
+    }
+}
+
+fn repr(v: ref V) -> String {
+    let mut out = String.new();
+    repr_into(v, mut out);
+    out
+}
+
+// str(): a string is its own text, anything else its repr.
+fn py_str(v: ref V) -> String {
+    match v {
+        V.Str(s) => s.clone(),
+        _ => repr(v),
+    }
+}
+
+fn repr_list(v: ref Vec[String]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    let mut i = 0;
+    while i < v.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(repr_str(v[i]));
+        i += 1;
+    }
+    out.push(']');
+    out
+}
+
+// ------------------------------------------------------------ equality
+
+fn int_f64(d: ref String) -> f64 {
+    f64.parse(d.clone()).unwrap_or(0.0)
+}
+
+// The value of a number for ==, with bool counting as 0 or 1.
+fn num_of(v: ref V) -> Option[f64] {
+    match v {
+        V.Bool(b) => Some(if b { 1.0 } else { 0.0 }),
+        V.Int(d) => Some(int_f64(d)),
+        V.Float(x) => Some(x),
+        _ => None,
+    }
+}
+
+// Python's ==: 1 == 1.0 == True, dicts ignore order, an EndOfList equals
+// nothing but itself.
+fn py_eq(a: ref V, b: ref V) -> bool {
+    match (a, b) {
+        (V.Int(x), V.Int(y)) => return x == y,
+        (V.Null, V.Null) => return true,
+        (V.Str(x), V.Str(y)) => return x == y,
+        (V.Arr(x), V.Arr(y)) => {
+            if x.len() != y.len() {
+                return false;
+            }
+            let mut i = 0;
+            while i < x.len() {
+                if not py_eq(x[i], y[i]) {
+                    return false;
+                }
+                i += 1;
+            }
+            return true;
+        }
+        (V.Obj(x), V.Obj(y)) => {
+            if x.len() != y.len() {
+                return false;
+            }
+            for (k, v) in x.iter() {
+                match obj_get(y, k) {
+                    Some(w) => {
+                        if not py_eq(v, w) {
+                            return false;
+                        }
+                    }
+                    None => return false,
+                }
+            }
+            return true;
+        }
+        _ => {}
+    }
+    match (num_of(a), num_of(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+// (value, type(value)) == (other, type(other))
+fn typed_eq(a: ref V, b: ref V) -> bool {
+    kind_tag(a) == kind_tag(b) and py_eq(a, b)
+}
+
+// ------------------------------------------------------------ jsonpointer
+
+fn replace_all(s: ref String, from: Str, to: Str) -> String {
+    let v = chars(s);
+    let f: Vec[char] = from.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let mut hit = i + f.len() <= v.len();
+        if hit {
+            let mut k = 0;
+            while k < f.len() {
+                if v[i + k] != f[k] {
+                    hit = false;
+                    break;
+                }
+                k += 1;
+            }
+        }
+        if hit {
+            out.push_str(to);
+            i += f.len();
+        } else {
+            out.push(v[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn escape(s: ref String) -> String {
+    let a = replace_all(s, "~", "~0");
+    replace_all(a, "/", "~1")
+}
+
+fn unescape(s: ref String) -> String {
+    let a = replace_all(s, "~1", "/");
+    replace_all(a, "~0", "~")
+}
+
+fn ptr_path(parts: ref Vec[String]) -> String {
+    let mut out = String.new();
+    for p in parts.iter() {
+        out.push('/');
+        out.push_str(escape(p));
+    }
+    out
+}
+
+fn ptr_exc(msg: own String) -> PyErr {
+    perr("JsonPointerException", msg)
+}
+
+// JsonPointer(pointer).parts
+fn parse_pointer(p: ref String) -> Result[Vec[String], PyErr] {
+    let v = chars(p);
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '~' {
+            if i + 1 == v.len() {
+                return Err(ptr_exc("Found invalid escape ~".to_string()));
+            }
+            if v[i + 1] != '0' and v[i + 1] != '1' {
+                return Err(ptr_exc(f"Found invalid escape ~{v[i + 1]}"));
+            }
+        }
+        i += 1;
+    }
+    let raw: Vec[String] = p.split("/").map(|s| s.to_string()).collect();
+    if not raw[0].is_empty() {
+        return Err(ptr_exc("Location must start with /".to_string()));
+    }
+    let mut parts: Vec[String] = Vec.new();
+    let mut k = 1;
+    while k < raw.len() {
+        parts.push(unescape(raw[k]));
+        k += 1;
+    }
+    Ok(parts)
+}
+
+fn py_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}' or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+// int(s) for a str, over ASCII digits: surrounding whitespace, a sign, and
+// single underscores between digits.
+fn py_int(s: ref String) -> Option[i64] {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (v[lo] == '+' or v[lo] == '-') {
+        neg = v[lo] == '-';
+        lo += 1;
+    }
+    if lo >= hi {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    let mut i = lo;
+    while i < hi {
+        let c = v[i];
+        if c >= '0' and c <= '9' {
+            n = n * 10 + ((c as i64) - 48);
+            prev_digit = true;
+        } else if c == '_' and prev_digit and i + 1 < hi and v[i + 1] >= '0' and v[i + 1] <= '9' {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn int_literal_err(s: ref String) -> PyErr {
+    perr("ValueError", f"invalid literal for int() with base 10: {repr_str(s)}")
+}
+
+// What a pointer's next step is, by the document it indexes.
+#[derive(Clone)]
+enum Part {
+    Root,
+    Key(String),
+    Idx(i64),
+    Dash,
+}
+
+fn part_str(p: ref Part) -> String {
+    match p {
+        Part.Root => "None".to_string(),
+        Part.Key(k) => k.clone(),
+        Part.Idx(i) => f"{i}",
+        Part.Dash => "-".to_string(),
+    }
+}
+
+// _RE_ARRAY_INDEX.match: '0' anywhere first, or [1-9][0-9]* up to the end
+// (where $ also takes a trailing newline).
+fn index_like(s: ref String) -> bool {
+    let v = chars(s);
+    if v.is_empty() {
+        return false;
+    }
+    if v[0] == '0' {
+        return true;
+    }
+    if v[0] < '1' or v[0] > '9' {
+        return false;
+    }
+    let mut i = 1;
+    while i < v.len() and v[i] >= '0' and v[i] <= '9' {
+        i += 1;
+    }
+    i == v.len() or (i == v.len() - 1 and v[i] == '\n')
+}
+
+fn is_sequence(v: ref V) -> bool {
+    match v {
+        V.Arr(_) => true,
+        V.Str(_) => true,
+        _ => false,
+    }
+}
+
+// JsonPointer.get_part
+fn get_part(doc: ref V, part: ref String) -> Result[Part, PyErr] {
+    match doc {
+        V.Obj(_) => return Ok(Part.Key(part.clone())),
+        V.Arr(_) => {}
+        V.Str(_) => {}
+        _ => return Err(ptr_exc(f"Document '{type_repr(doc)}' does not support indexing, must be mapping/sequence or support __getitem__")),
+    }
+    if part == "-" {
+        return Ok(Part.Dash);
+    }
+    if not index_like(part) {
+        return Err(ptr_exc(f"'{part}' is not a valid sequence index"));
+    }
+    match py_int(part) {
+        Some(n) => Ok(Part.Idx(n)),
+        None => Err(int_literal_err(part)),
+    }
+}
+
+// One step down, as walk() takes it once get_part has typed the part.
+fn step(doc: ref V, p: ref Part) -> Result[V, PyErr] {
+    match doc {
+        V.Arr(items) => match p {
+            Part.Dash => Ok(V.End(vec![doc.clone()])),
+            Part.Idx(i) => {
+                if i < items.len() {
+                    Ok(items[i].clone())
+                } else {
+                    Err(ptr_exc(f"index '{i}' is out of bounds"))
+                }
+            }
+            _ => Err(ptr_exc("bad step".to_string())),
+        },
+        V.Str(s) => match p {
+            Part.Dash => Ok(V.End(vec![doc.clone()])),
+            Part.Idx(i) => {
+                let v = chars(s);
+                if i < v.len() {
+                    Ok(V.Str(v[i].to_string()))
+                } else {
+                    Err(ptr_exc(f"index '{i}' is out of bounds"))
+                }
+            }
+            _ => Err(ptr_exc("bad step".to_string())),
+        },
+        V.Obj(m) => {
+            let k = part_str(p);
+            match obj_get(m, k) {
+                Some(v) => Ok(v),
+                None => Err(ptr_exc(f"member '{k}' not found in {py_str(doc)}")),
+            }
+        }
+        _ => Err(ptr_exc("bad step".to_string())),
+    }
+}
+
+// JsonPointer.walk
+fn walk(doc: ref V, part: ref String) -> Result[V, PyErr] {
+    let p = get_part(doc, part)?;
+    step(doc, p)
+}
+
+// The parent of a pointer's target, the steps that reach it, and the last
+// part typed against it: JsonPointer.to_last.
+struct Last {
+    sub: V,
+    steps: Vec[Part],
+    part: Part,
+}
+
+fn to_last(doc: ref V, parts: ref Vec[String]) -> Result[Last, PyErr] {
+    if parts.is_empty() {
+        return Ok(Last { sub: doc.clone(), steps: Vec.new(), part: Part.Root });
+    }
+    let mut cur = doc.clone();
+    let mut steps: Vec[Part] = Vec.new();
+    let mut i = 0;
+    while i + 1 < parts.len() {
+        let p = get_part(cur, parts[i])?;
+        let next = step(cur, p)?;
+        steps.push(p);
+        cur = next;
+        i += 1;
+    }
+    let part = get_part(cur, parts[parts.len() - 1])?;
+    Ok(Last { sub: cur, steps: steps, part: part })
+}
+
+fn resolve(doc: ref V, parts: ref Vec[String]) -> Result[V, PyErr] {
+    let mut cur = doc.clone();
+    for p in parts.iter() {
+        let next = walk(cur, p)?;
+        cur = next;
+    }
+    Ok(cur)
+}
+
+// What to do to the parent once the steps reach it.
+enum Edit {
+    Append(V),
+    Insert(i64, V),
+    SetKey(String, V),
+    SetIdx(i64, V),
+    DelKey(String),
+    DelIdx(i64),
+}
+
+fn edit_at(doc: mut ref V, steps: ref Vec[Part], i: i64, e: ref Edit) {
+    if i < steps.len() {
+        match doc {
+            V.Arr(items) => {
+                if let Part.Idx(k) = steps[i] {
+                    edit_at(mut items[k], steps, i + 1, e);
+                }
+            }
+            V.Obj(m) => {
+                let key = part_str(steps[i]);
+                let mut j = 0;
+                while j < m.len() {
+                    if m[j].0 == key {
+                        edit_at(mut m[j].1, steps, i + 1, e);
+                        return;
+                    }
+                    j += 1;
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+    match doc {
+        V.Arr(items) => match e {
+            Edit.Append(v) => items.push(v.clone()),
+            Edit.Insert(k, v) => items.insert(k, v.clone()),
+            Edit.SetIdx(k, v) => items[k] = v.clone(),
+            Edit.DelIdx(k) => {
+                items.remove(k);
+            }
+            _ => {}
+        },
+        V.Obj(m) => match e {
+            Edit.SetKey(k, v) => obj_set(mut m, k, v.clone()),
+            Edit.DelKey(k) => {
+                obj_del(mut m, k);
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
+fn apply_edit(doc: mut ref V, steps: ref Vec[Part], e: own Edit) {
+    edit_at(mut doc, steps, 0, e);
+}
+
+// set_pointer(doc, pointer, value, inplace=False)
+fn set_pointer(doc: ref V, pointer: ref String, value: own V) -> Result[V, PyErr] {
+    let parts = parse_pointer(pointer)?;
+    if parts.is_empty() {
+        return Ok(value);
+    }
+    let mut out = doc.clone();
+    let last = to_last(out, parts)?;
+    match last.sub {
+        V.Arr(items) => match last.part {
+            Part.Dash => apply_edit(mut out, last.steps, Edit.Append(value)),
+            Part.Idx(k) => {
+                if k >= items.len() {
+                    return Err(perr("IndexError", "list assignment index out of range".to_string()));
+                }
+                apply_edit(mut out, last.steps, Edit.SetIdx(k, value));
+            }
+            _ => {}
+        },
+        V.Str(_) => {
+            if let Part.Dash = last.part {
+                return Err(perr("AttributeError", "'str' object has no attribute 'append'".to_string()));
+            }
+            return Err(perr("TypeError", "'str' object does not support item assignment".to_string()));
+        }
+        V.Obj(_) => apply_edit(mut out, last.steps, Edit.SetKey(part_str(last.part), value)),
+        _ => {}
+    }
+    Ok(out)
+}
+
+// JsonPointer.from_parts, with str() of each part.
+fn from_parts(items: ref Vec[V]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in items.iter() {
+        parts.push(py_str(v));
+    }
+    ptr_path(parts)
+}
+
+fn parts_contain(a: ref Vec[String], b: ref Vec[String]) -> bool {
+    if b.len() > a.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < b.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// ------------------------------------------------------------ jsonpatch apply
+
+fn invalid(msg: Str) -> PyErr {
+    perr("InvalidJsonPatch", msg.to_string())
+}
+
+fn conflict(msg: own String) -> PyErr {
+    perr("JsonPatchConflict", msg)
+}
+
+fn member(op: ref V, name: Str) -> Option[V] {
+    match op {
+        V.Obj(m) => obj_get(m, name.to_string()),
+        _ => None,
+    }
+}
+
+fn not_iterable(v: ref V) -> PyErr {
+    perr("TypeError", f"argument of type '{type_name(v)}' is not iterable")
+}
+
+// JsonPatch._get_operation and PatchOperation.__init__: the checks every
+// operation passes before any of them is applied.
+fn check_operation(op: ref V) -> Result[(), PyErr] {
+    match op {
+        V.Obj(_) => {}
+        V.Arr(items) => {
+            for x in items.iter() {
+                if py_eq(x, V.Str("op".to_string())) {
+                    return Err(perr("TypeError", "list indices must be integers or slices, not str".to_string()));
+                }
+            }
+            return Err(invalid("Operation does not contain 'op' member"));
+        }
+        _ => return Err(not_iterable(op)),
+    }
+    let name = match member(op, "op") {
+        None => return Err(invalid("Operation does not contain 'op' member")),
+        Some(V.Str(s)) => s,
+        Some(_) => return Err(invalid("Operation's op must be a string")),
+    };
+    if name != "add" and name != "remove" and name != "replace" and name != "move" and name != "test" and name != "copy" {
+        return Err(perr("InvalidJsonPatch", f"Unknown operation {repr_str(name)}"));
+    }
+    match member(op, "path") {
+        None => Err(invalid("Operation must have a 'path' member")),
+        Some(V.Str(p)) => {
+            parse_pointer(p)?;
+            Ok(())
+        }
+        Some(_) => Err(invalid("Invalid 'path'")),
+    }
+}
+
+// JsonPatch(patch): the list of operations.
+fn patch_ops(patch: ref V) -> Result[Vec[V], PyErr] {
+    let ops = match patch {
+        V.Arr(items) => items.clone(),
+        V.Obj(m) => {
+            if not m.is_empty() {
+                return Err(invalid("Document is expected to be sequence of operations, got a sequence of strings."));
+            }
+            Vec.new()
+        }
+        _ => return Err(perr("TypeError", f"'{type_name(patch)}' object is not iterable")),
+    };
+    for op in ops.iter() {
+        if let V.Str(_) = op {
+            return Err(invalid("Document is expected to be sequence of operations, got a sequence of strings."));
+        }
+        check_operation(op)?;
+    }
+    Ok(ops)
+}
+
+fn path_of(op: ref V) -> String {
+    match member(op, "path") {
+        Some(V.Str(p)) => p,
+        _ => String.new(),
+    }
+}
+
+// AddOperation.apply
+fn op_add(obj: own V, loc: ref String, value: own V) -> Result[V, PyErr] {
+    let parts = parse_pointer(loc)?;
+    let last = to_last(obj, parts)?;
+    match last.sub {
+        V.Arr(items) => {
+            match last.part {
+                Part.Dash => {
+                    let mut out = obj;
+                    apply_edit(mut out, last.steps, Edit.Append(value));
+                    return Ok(out);
+                }
+                Part.Idx(k) => {
+                    if k > items.len() {
+                        return Err(conflict("can't insert outside of list".to_string()));
+                    }
+                    let mut out = obj;
+                    apply_edit(mut out, last.steps, Edit.Insert(k, value));
+                    return Ok(out);
+                }
+                _ => return Err(perr("TypeError", "'>' not supported between instances of 'NoneType' and 'int'".to_string())),
+            }
+        }
+        V.Obj(_) => {
+            if let Part.Root = last.part {
+                return Ok(value);
+            }
+            let mut out = obj;
+            apply_edit(mut out, last.steps, Edit.SetKey(part_str(last.part), value));
+            return Ok(out);
+        }
+        _ => {}
+    }
+    if let Part.Root = last.part {
+        return Err(perr("TypeError", f"invalid document type {type_repr(last.sub)}"));
+    }
+    Err(conflict(f"unable to fully resolve json pointer {loc}, part {part_str(last.part)}"))
+}
+
+fn no_deletion(v: ref V) -> PyErr {
+    let verb = if kind_tag(v) == 4 { "doesn't" } else { "does not" };
+    perr("TypeError", f"'{type_name(v)}' object {verb} support item deletion")
+}
+
+// RemoveOperation.apply
+fn op_remove(obj: own V, loc: ref String) -> Result[V, PyErr] {
+    let parts = parse_pointer(loc)?;
+    let last = to_last(obj, parts)?;
+    if is_sequence(last.sub) {
+        match last.part {
+            Part.Idx(_) => {}
+            _ => return Err(ptr_exc(f"invalid array index '{part_str(last.part)}'")),
+        }
+    }
+    match last.sub {
+        V.Obj(m) => {
+            let k = part_str(last.part);
+            let present = match last.part {
+                Part.Root => false,
+                _ => obj_has(m, k),
+            };
+            if not present {
+                return Err(conflict(f"can't remove a non-existent object '{k}'"));
+            }
+            let mut out = obj;
+            apply_edit(mut out, last.steps, Edit.DelKey(k));
+            Ok(out)
+        }
+        V.Arr(items) => {
+            if let Part.Idx(k) = last.part {
+                if k >= items.len() {
+                    return Err(conflict(f"can't remove a non-existent object '{k}'"));
+                }
+                let mut out = obj;
+                apply_edit(mut out, last.steps, Edit.DelIdx(k));
+                return Ok(out);
+            }
+            Ok(obj)
+        }
+        _ => Err(no_deletion(last.sub)),
+    }
+}
+
+// ReplaceOperation.apply
+fn op_replace(obj: own V, loc: ref String, value: own V) -> Result[V, PyErr] {
+    let parts = parse_pointer(loc)?;
+    let last = to_last(obj, parts)?;
+    if let Part.Root = last.part {
+        return Ok(value);
+    }
+    if let Part.Dash = last.part {
+        return Err(invalid("'path' with '-' can't be applied to 'replace' operation"));
+    }
+    match last.sub {
+        V.Arr(items) => {
+            if let Part.Idx(k) = last.part {
+                if k >= items.len() {
+                    return Err(conflict("can't replace outside of list".to_string()));
+                }
+                let mut out = obj;
+                apply_edit(mut out, last.steps, Edit.SetIdx(k, value));
+                return Ok(out);
+            }
+            Ok(obj)
+        }
+        V.Obj(m) => {
+            let k = part_str(last.part);
+            if not obj_has(m, k) {
+                return Err(conflict(f"can't replace a non-existent object '{k}'"));
+            }
+            let mut out = obj;
+            apply_edit(mut out, last.steps, Edit.SetKey(k, value));
+            Ok(out)
+        }
+        _ => Err(conflict(f"unable to fully resolve json pointer {loc}, part {part_str(last.part)}")),
+    }
+}
+
+// subobj[part] for move and copy: a missing key or index becomes a
+// conflict carrying str() of the KeyError or IndexError.
+fn take_value(last: ref Last) -> Result[V, PyErr] {
+    match last.sub {
+        V.Obj(m) => match last.part {
+            Part.Root => Err(conflict("None".to_string())),
+            _ => {
+                let k = part_str(last.part);
+                match obj_get(m, k) {
+                    Some(v) => Ok(v),
+                    None => Err(conflict(repr_str(k))),
+                }
+            }
+        },
+        V.Arr(items) => match last.part {
+            Part.Idx(k) => {
+                if k < items.len() {
+                    Ok(items[k].clone())
+                } else {
+                    Err(conflict("list index out of range".to_string()))
+                }
+            }
+            Part.Dash => Err(perr("TypeError", "list indices must be integers or slices, not str".to_string())),
+            _ => Err(perr("TypeError", "list indices must be integers or slices, not NoneType".to_string())),
+        },
+        V.Str(s) => match last.part {
+            Part.Idx(k) => {
+                let v = chars(s);
+                if k < v.len() {
+                    Ok(V.Str(v[k].to_string()))
+                } else {
+                    Err(conflict("string index out of range".to_string()))
+                }
+            }
+            Part.Dash => Err(perr("TypeError", "string indices must be integers, not 'str'".to_string())),
+            _ => Err(perr("TypeError", "string indices must be integers, not 'NoneType'".to_string())),
+        },
+        _ => Err(perr("TypeError", f"'{type_name(last.sub)}' object is not subscriptable")),
+    }
+}
+
+fn from_of(op: ref V) -> Result[String, PyErr] {
+    match member(op, "from") {
+        None => Err(invalid("The operation does not contain a 'from' member")),
+        Some(V.Str(s)) => Ok(s),
+        Some(v) => Err(perr("TypeError", f"expected string or bytes-like object, got '{type_name(v)}'")),
+    }
+}
+
+fn value_of(op: ref V) -> Result[V, PyErr] {
+    match member(op, "value") {
+        Some(v) => Ok(v),
+        None => Err(invalid("The operation does not contain a 'value' member")),
+    }
+}
+
+// MoveOperation.apply
+fn op_move(obj: own V, op: ref V) -> Result[V, PyErr] {
+    let from = from_of(op)?;
+    let from_parts = parse_pointer(from)?;
+    let last = to_last(obj, from_parts)?;
+    let value = take_value(last)?;
+    let loc = path_of(op);
+    let to_parts = parse_pointer(loc)?;
+    if to_parts == from_parts {
+        return Ok(obj);
+    }
+    if kind_tag(last.sub) == 6 and parts_contain(to_parts, from_parts) {
+        return Err(conflict("Cannot move values into their own children".to_string()));
+    }
+    let removed = op_remove(obj, from)?;
+    op_add(removed, loc, value)
+}
+
+// TestOperation.apply
+fn op_test(obj: ref V, op: ref V) -> Result[(), PyErr] {
+    let loc = path_of(op);
+    let parts = parse_pointer(loc)?;
+    let found = match to_last(obj, parts) {
+        Ok(last) => match last.part {
+            Part.Root => Ok(last.sub),
+            _ => step(last.sub, last.part),
+        },
+        Err(e) => Err(e),
+    };
+    let val = match found {
+        Ok(v) => v,
+        Err(e) => {
+            if e.cls == "JsonPointerException" {
+                return Err(perr("JsonPatchTestFailed", e.msg));
+            }
+            return Err(e);
+        }
+    };
+    let value = value_of(op)?;
+    if not py_eq(val, value) {
+        return Err(perr("JsonPatchTestFailed", f"{py_str(val)} ({type_repr(val)}) is not equal to tested value {py_str(value)} ({type_repr(value)})"));
+    }
+    Ok(())
+}
+
+// CopyOperation.apply
+fn op_copy(obj: own V, op: ref V) -> Result[V, PyErr] {
+    let from = from_of(op)?;
+    let from_parts = parse_pointer(from)?;
+    let last = to_last(obj, from_parts)?;
+    let value = take_value(last)?;
+    op_add(obj, path_of(op), value)
+}
+
+fn apply_op(obj: own V, op: ref V) -> Result[V, PyErr] {
+    let name = match member(op, "op") {
+        Some(V.Str(s)) => s,
+        _ => String.new(),
+    };
+    if name == "add" {
+        let value = value_of(op)?;
+        return op_add(obj, path_of(op), value);
+    }
+    if name == "remove" {
+        return op_remove(obj, path_of(op));
+    }
+    if name == "replace" {
+        let value = value_of(op)?;
+        return op_replace(obj, path_of(op), value);
+    }
+    if name == "move" {
+        return op_move(obj, op);
+    }
+    if name == "copy" {
+        return op_copy(obj, op);
+    }
+    op_test(obj, op)?;
+    Ok(obj)
+}
+
+// JsonPatch(patch).apply(doc) on a copy of doc.
+fn apply_patch_ops(doc: ref V, ops: ref Vec[V]) -> Result[V, PyErr] {
+    let mut obj = doc.clone();
+    for op in ops.iter() {
+        let next = apply_op(obj, op)?;
+        obj = next;
+    }
+    Ok(obj)
+}
+
+// jsonpatch.apply_patch(doc, patch): a str patch goes through from_string.
+fn apply_patch(doc: ref V, patch: ref V) -> Result[V, PyErr] {
+    if let V.Str(s) = patch {
+        let p = match loads(s, true) {
+            Ok(p) => p,
+            Err(e) => return Err(perr("JSONDecodeError", e)),
+        };
+        let ops = patch_ops(p)?;
+        return apply_patch_ops(doc, ops);
+    }
+    let ops = patch_ops(patch)?;
+    apply_patch_ops(doc, ops)
+}
+
+// ------------------------------------------------------------ CPython sets
+
+fn sip_round(v: mut ref Vec[u64]) {
+    v[0] = v[0].wrapping_add(v[1]);
+    v[2] = v[2].wrapping_add(v[3]);
+    v[1] = v[1].rotate_left(13) ^ v[0];
+    v[3] = v[3].rotate_left(16) ^ v[2];
+    v[0] = v[0].rotate_left(32);
+    v[2] = v[2].wrapping_add(v[1]);
+    v[0] = v[0].wrapping_add(v[3]);
+    v[1] = v[1].rotate_left(17) ^ v[2];
+    v[3] = v[3].rotate_left(21) ^ v[0];
+    v[2] = v[2].rotate_left(32);
+}
+
+// Python/pyhash.c's siphash13 with both keys zero, as PYTHONHASHSEED=0
+// leaves them.
+fn siphash13(data: ref Vec[u8]) -> u64 {
+    let n = data.len();
+    let mut b: u64 = (n as u64) << 56;
+    let mut v: Vec[u64] = vec![0x736f6d6570736575u64, 0x646f72616e646f6du64, 0x6c7967656e657261u64, 0x7465646279746573u64];
+    let mut i = 0;
+    while n - i >= 8 {
+        let mut mi: u64 = 0;
+        let mut k = 7;
+        while k >= 0 {
+            mi = (mi << 8) | (data[i + k] as u64);
+            k -= 1;
+        }
+        i += 8;
+        v[3] = v[3] ^ mi;
+        sip_round(mut v);
+        v[0] = v[0] ^ mi;
+    }
+    let mut t: u64 = 0;
+    let mut k = n - i - 1;
+    while k >= 0 {
+        t = (t << 8) | (data[i + k] as u64);
+        k -= 1;
+    }
+    b = b | t;
+    v[3] = v[3] ^ b;
+    sip_round(mut v);
+    v[0] = v[0] ^ b;
+    v[2] = v[2] ^ 0xffu64;
+    sip_round(mut v);
+    sip_round(mut v);
+    sip_round(mut v);
+    (v[0] ^ v[1]) ^ (v[2] ^ v[3])
+}
+
+// hash(str): SipHash over the string's code units at its narrowest width.
+fn str_hash(s: ref String) -> i64 {
+    if s.is_empty() {
+        return 0;
+    }
+    let mut widest: i64 = 0;
+    for c in s.chars() {
+        let o = c as i64;
+        if o > widest {
+            widest = o;
+        }
+    }
+    let width = if widest < 256 { 1 } else if widest < 65536 { 2 } else { 4 };
+    let mut data: Vec[u8] = Vec.new();
+    for c in s.chars() {
+        let o = c as i64;
+        for k in 0..width {
+            data.push(((o >> (8 * k)) & 0xFF) as u8);
+        }
+    }
+    let h = siphash13(data) as i64;
+    if h == -1 { -2 } else { h }
+}
+
+// A set of str laid out as Objects/setobject.c lays it out, so that
+// iterating it visits the slots in table order. state: 0 unused, 1 active,
+// 2 dummy.
+struct PySet {
+    mask: i64,
+    keys: Vec[String],
+    hashes: Vec[i64],
+    state: Vec[i64],
+    fill: i64,
+    used: i64,
+}
+
+fn new_set() -> PySet {
+    pyset_sized(8)
+}
+
+fn pyset_sized(size: i64) -> PySet {
+    let mut keys: Vec[String] = Vec.new();
+    let mut hashes: Vec[i64] = Vec.new();
+    let mut state: Vec[i64] = Vec.new();
+    for _ in 0..size {
+        keys.push(String.new());
+        hashes.push(0);
+        state.push(0);
+    }
+    PySet { mask: size - 1, keys: keys, hashes: hashes, state: state, fill: 0, used: 0 }
+}
+
+impl PySet {
+    fn entries(ref self) -> Vec[(String, i64)] {
+        let mut out: Vec[(String, i64)] = Vec.new();
+        let mut i = 0;
+        while i <= self.mask {
+            if self.state[i] == 1 {
+                out.push((self.keys[i].clone(), self.hashes[i]));
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn keys_in_order(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        for (k, _) in self.entries().into_iter() {
+            out.push(k);
+        }
+        out
+    }
+
+    fn contains(ref self, key: ref String) -> bool {
+        let mut i = 0;
+        while i <= self.mask {
+            if self.state[i] == 1 and self.keys[i] == key {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn put(mut ref self, slot: i64, key: ref String, hash: i64) {
+        self.keys[slot] = key.clone();
+        self.hashes[slot] = hash;
+        self.state[slot] = 1;
+    }
+
+    // set_insert_clean
+    fn insert_clean(mut ref self, key: ref String, hash: i64) {
+        let mask = self.mask as u64;
+        let mut perturb = hash as u64;
+        let mut i = (hash as u64) & mask;
+        loop {
+            let probes: u64 = if i + 9 <= mask { 9 } else { 0 };
+            let mut j: u64 = 0;
+            while j <= probes {
+                let slot = (i + j) as i64;
+                if self.state[slot] == 0 {
+                    self.put(slot, key, hash);
+                    return;
+                }
+                j += 1;
+            }
+            // After up to nine slots in a row, jump.
+            perturb = perturb >> 5;
+            i = (i * 5 + 1).wrapping_add(perturb) & mask;
+        }
+    }
+
+    // set_table_resize
+    fn resize(mut ref self, minused: i64) {
+        let mut size = 8;
+        while size <= minused {
+            size = size * 2;
+        }
+        if size == 8 and self.mask == 7 and self.fill == self.used {
+            return;
+        }
+        let old = self.entries();
+        let fresh = pyset_sized(size);
+        self.mask = fresh.mask;
+        self.keys = fresh.keys;
+        self.hashes = fresh.hashes;
+        self.state = fresh.state;
+        self.fill = self.used;
+        for (k, h) in old {
+            self.insert_clean(k, h);
+        }
+    }
+
+    // set_add_entry
+    fn add(mut ref self, key: ref String, hash: i64) {
+        let mask = self.mask as u64;
+        let mut perturb = hash as u64;
+        let mut i = (hash as u64) & mask;
+        let mut free: i64 = -1;
+        loop {
+            let probes: u64 = if i + 9 <= mask { 9 } else { 0 };
+            let mut j: u64 = 0;
+            while j <= probes {
+                let slot = (i + j) as i64;
+                let st = self.state[slot];
+                if st == 0 {
+                    if free >= 0 {
+                        self.used += 1;
+                        self.put(free, key, hash);
+                        return;
+                    }
+                    self.fill += 1;
+                    self.used += 1;
+                    self.put(slot, key, hash);
+                    if self.fill * 5 < self.mask * 3 {
+                        return;
+                    }
+                    let grow = if self.used > 50000 { self.used * 2 } else { self.used * 4 };
+                    self.resize(grow);
+                    return;
+                }
+                if st == 1 and self.hashes[slot] == hash and self.keys[slot] == key {
+                    return;
+                }
+                if st == 2 and free < 0 {
+                    free = slot;
+                }
+                j += 1;
+            }
+            // After up to nine slots in a row, jump.
+            perturb = perturb >> 5;
+            i = (i * 5 + 1).wrapping_add(perturb) & mask;
+        }
+    }
+
+    fn discard(mut ref self, key: ref String) {
+        let mut i = 0;
+        while i <= self.mask {
+            if self.state[i] == 1 and self.keys[i] == key {
+                self.state[i] = 2;
+                self.hashes[i] = -1;
+                self.used -= 1;
+                return;
+            }
+            i += 1;
+        }
+    }
+}
+
+// set(iterable) over str keys, added one by one.
+fn set_of(keys: ref Vec[String]) -> PySet {
+    let mut s = new_set();
+    for k in keys.iter() {
+        s.add(k, str_hash(k));
+    }
+    s
+}
+
+// set_merge into a set that is still empty: set.copy().
+fn set_copy(other: ref PySet) -> PySet {
+    let mut so = new_set();
+    if other.used == 0 {
+        return so;
+    }
+    if (so.fill + other.used) * 5 >= so.mask * 3 {
+        so.resize((so.used + other.used) * 2);
+    }
+    if so.mask == other.mask and other.fill == other.used {
+        so.keys = other.keys.clone();
+        so.hashes = other.hashes.clone();
+        so.state = other.state.clone();
+        so.fill = other.fill;
+        so.used = other.used;
+        return so;
+    }
+    so.fill = other.used;
+    so.used = other.used;
+    for (k, h) in other.entries() {
+        so.insert_clean(k, h);
+    }
+    so
+}
+
+// a & b
+fn set_and(a: ref PySet, b: ref PySet) -> PySet {
+    let mut result = new_set();
+    if b.used > a.used {
+        for (k, h) in a.entries() {
+            if b.contains(k) {
+                result.add(k, h);
+            }
+        }
+    } else {
+        for (k, h) in b.entries() {
+            if a.contains(k) {
+                result.add(k, h);
+            }
+        }
+    }
+    result
+}
+
+// a - b
+fn set_sub(a: ref PySet, b: ref PySet) -> PySet {
+    if (a.used >> 2) > b.used {
+        // set_copy_and_difference
+        let mut result = set_copy(a);
+        for (k, _) in b.entries() {
+            result.discard(k);
+        }
+        if result.fill - result.used > result.mask / 4 {
+            let grow = if result.used > 50000 { result.used * 2 } else { result.used * 4 };
+            result.resize(grow);
+        }
+        return result;
+    }
+    let mut result = new_set();
+    for (k, h) in a.entries() {
+        if not b.contains(k) {
+            result.add(k, h);
+        }
+    }
+    result
+}
+
+// ------------------------------------------------------------ make_patch
+
+// A key as DiffBuilder passes it: None at the root, an int for a list
+// position, a str for a dict member.
+#[derive(Clone)]
+enum DKey {
+    Root,
+    I(i64),
+    S(String),
+}
+
+fn path_join(path: ref String, key: ref DKey) -> String {
+    match key {
+        DKey.Root => path.clone(),
+        DKey.I(i) => f"{path}/{i}",
+        DKey.S(s) => f"{path}/{escape(s)}",
+    }
+}
+
+// One operation DiffBuilder holds. kind: 0 add, 1 remove, 2 replace, 3 move.
+// parts is the pointer of 'path', from_text the 'from' member as written.
+struct DOp {
+    kind: i64,
+    parts: Vec[String],
+    from_text: String,
+    value: V,
+}
+
+fn dop(kind: i64, location: ref String, value: own V) -> DOp {
+    DOp { kind: kind, parts: parse_pointer(location).unwrap_or(Vec.new()), from_text: String.new(), value: value }
+}
+
+// PatchOperation.key: int(last part) when that parses, else the str.
+enum Key {
+    I(i64),
+    S(String),
+}
+
+fn key_of(parts: ref Vec[String]) -> Key {
+    let last = parts[parts.len() - 1].clone();
+    match py_int(last) {
+        Some(n) => Key.I(n),
+        None => Key.S(last),
+    }
+}
+
+fn parent_path(parts: ref Vec[String]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i + 1 < parts.len() {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(parts[i]);
+        i += 1;
+    }
+    out
+}
+
+fn set_last(parts: mut ref Vec[String], n: i64) {
+    let k = parts.len() - 1;
+    parts[k] = f"{n}";
+}
+
+// self.key > key or self.key >= key, with Python's TypeError when the
+// operation's key is a str.
+fn key_cmp(k: ref Key, key: i64, strict: bool) -> Result[bool, PyErr] {
+    match k {
+        Key.I(n) => Ok(if strict { n > key } else { n >= key }),
+        Key.S(_) => {
+            let op = if strict { ">" } else { ">=" };
+            Err(perr("TypeError", f"'{op}' not supported between instances of 'str' and 'int'"))
+        }
+    }
+}
+
+fn key_int(k: ref Key) -> i64 {
+    match k {
+        Key.I(n) => n,
+        Key.S(_) => 0,
+    }
+}
+
+impl DOp {
+    fn location(ref self) -> String {
+        ptr_path(self.parts)
+    }
+
+    fn path(ref self) -> String {
+        parent_path(self.parts)
+    }
+
+    fn from_parts(ref self) -> Vec[String] {
+        parse_pointer(self.from_text).unwrap_or(Vec.new())
+    }
+
+    // MoveOperation.from_key: int() of the last part, whose ValueError
+    // the property does not catch.
+    fn from_key(ref self) -> Result[i64, PyErr] {
+        let fp = self.from_parts();
+        let last = fp[fp.len() - 1].clone();
+        match py_int(last) {
+            Some(n) => Ok(n),
+            None => Err(int_literal_err(last)),
+        }
+    }
+
+    fn set_from_key(mut ref self, n: i64) {
+        let mut fp = self.from_parts();
+        set_last(mut fp, n);
+        self.from_text = ptr_path(fp);
+    }
+
+    fn bump_key(mut ref self, by: i64) {
+        let k = key_int(key_of(self.parts));
+        set_last(mut self.parts, k + by);
+    }
+
+    // _on_undo_remove(path, key)
+    fn undo_remove(mut ref self, path: ref String, key: i64) -> Result[i64, PyErr] {
+        let mut key = key;
+        if self.kind == 0 or self.kind == 1 {
+            if self.path() == path {
+                let strict = self.kind == 0;
+                if key_cmp(key_of(self.parts), key, strict)? {
+                    self.bump_key(1);
+                } else if self.kind == 1 {
+                    key -= 1;
+                } else {
+                    key += 1;
+                }
+            }
+        } else if self.kind == 3 {
+            if parent_path(self.from_parts()) == path {
+                let fk = self.from_key()?;
+                if fk >= key {
+                    self.set_from_key(fk + 1);
+                } else {
+                    key -= 1;
+                }
+            }
+            if self.path() == path {
+                if key_cmp(key_of(self.parts), key, true)? {
+                    self.bump_key(1);
+                } else {
+                    key += 1;
+                }
+            }
+        }
+        Ok(key)
+    }
+
+    // _on_undo_add(path, key)
+    fn undo_add(mut ref self, path: ref String, key: i64) -> Result[i64, PyErr] {
+        let mut key = key;
+        if self.kind == 0 or self.kind == 1 {
+            if self.path() == path {
+                if key_cmp(key_of(self.parts), key, true)? {
+                    self.bump_key(-1);
+                } else if self.kind == 1 {
+                    key -= 1;
+                } else {
+                    key += 1;
+                }
+            }
+        } else if self.kind == 3 {
+            if parent_path(self.from_parts()) == path {
+                let fk = self.from_key()?;
+                if fk > key {
+                    self.set_from_key(fk - 1);
+                } else {
+                    key -= 1;
+                }
+            }
+            if self.path() == path {
+                if key_cmp(key_of(self.parts), key, true)? {
+                    self.bump_key(-1);
+                } else {
+                    key += 1;
+                }
+            }
+        }
+        Ok(key)
+    }
+
+    // The operation's dict, members in the order jsonpatch writes them.
+    fn to_value(ref self) -> V {
+        let names = vec!["add", "remove", "replace", "move"];
+        let mut m: Vec[(String, V)] = Vec.new();
+        m.push(("op".to_string(), V.Str(names[self.kind].to_string())));
+        if self.kind == 3 {
+            m.push(("from".to_string(), V.Str(self.from_text.clone())));
+        }
+        m.push(("path".to_string(), V.Str(self.location())));
+        if self.kind == 0 or self.kind == 2 {
+            m.push(("value".to_string(), self.value.clone()));
+        }
+        V.Obj(m)
+    }
+}
+
+// The index storage: values that are hashable sit under their
+// (value, type) key; dicts and lists in a list searched from the end.
+struct Store {
+    hashed: Vec[(V, Vec[i64])],
+    unhashed: Vec[(V, i64)],
+}
+
+fn new_store() -> Store {
+    Store { hashed: Vec.new(), unhashed: Vec.new() }
+}
+
+fn hashable(v: ref V) -> bool {
+    match v {
+        V.Arr(_) => false,
+        V.Obj(_) => false,
+        _ => true,
+    }
+}
+
+struct DiffBuilder {
+    ops: Vec[DOp],
+    // The operations' linked list, as nodes: node 0 is the root.
+    prev: Vec[i64],
+    next: Vec[i64],
+    op_at: Vec[i64],
+    stores: Vec[Store],
+    dst: V,
+}
+
+fn new_builder(dst: ref V) -> DiffBuilder {
+    DiffBuilder {
+        ops: Vec.new(),
+        prev: vec![0],
+        next: vec![0],
+        op_at: vec![-1],
+        stores: vec![new_store(), new_store()],
+        dst: dst.clone(),
+    }
+}
+
+impl DiffBuilder {
+    fn store_index(mut ref self, value: ref V, node: i64, st: i64) {
+        if hashable(value) {
+            let mut i = 0;
+            while i < self.stores[st].hashed.len() {
+                if typed_eq(self.stores[st].hashed[i].0, value) {
+                    self.stores[st].hashed[i].1.push(node);
+                    return;
+                }
+                i += 1;
+            }
+            self.stores[st].hashed.push((value.clone(), vec![node]));
+        } else {
+            self.stores[st].unhashed.push((value.clone(), node));
+        }
+    }
+
+    fn take_index(mut ref self, value: ref V, st: i64) -> Option[i64] {
+        if hashable(value) {
+            let mut i = 0;
+            while i < self.stores[st].hashed.len() {
+                if typed_eq(self.stores[st].hashed[i].0, value) {
+                    return self.stores[st].hashed[i].1.pop();
+                }
+                i += 1;
+            }
+            return None;
+        }
+        let mut i = self.stores[st].unhashed.len() - 1;
+        while i >= 0 {
+            if typed_eq(self.stores[st].unhashed[i].0, value) {
+                let node = self.stores[st].unhashed[i].1;
+                self.stores[st].unhashed.remove(i);
+                return Some(node);
+            }
+            i -= 1;
+        }
+        None
+    }
+
+    fn insert(mut ref self, op: own DOp) -> i64 {
+        self.ops.push(op);
+        let node = self.prev.len();
+        let last = self.prev[0];
+        self.prev.push(last);
+        self.next.push(0);
+        self.op_at.push(self.ops.len() - 1);
+        self.next[last] = node;
+        self.prev[0] = node;
+        node
+    }
+
+    fn unlink(mut ref self, node: i64) {
+        let p = self.prev[node];
+        let n = self.next[node];
+        self.next[p] = n;
+        self.prev[n] = p;
+    }
+
+    // The operations after a node, by their index in ops.
+    fn ops_after(ref self, node: i64) -> Vec[i64] {
+        let mut out: Vec[i64] = Vec.new();
+        let mut cur = self.next[node];
+        while cur != 0 {
+            out.push(self.op_at[cur]);
+            cur = self.next[cur];
+        }
+        out
+    }
+
+    fn item_added(mut ref self, path: ref String, key: ref DKey, item: ref V) -> Result[(), PyErr] {
+        match self.take_index(item, 1) {
+            Some(node) => {
+                let oi = self.op_at[node];
+                let is_int_key = match key {
+                    DKey.I(_) => true,
+                    _ => false,
+                };
+                if is_int_key {
+                    if let Key.I(_) = key_of(self.ops[oi].parts) {
+                        let op_path = self.ops[oi].path();
+                        for vi in self.ops_after(node) {
+                            let k = key_int(key_of(self.ops[oi].parts));
+                            let nk = self.ops[vi].undo_remove(op_path, k)?;
+                            set_last(mut self.ops[oi].parts, nk);
+                        }
+                    }
+                }
+                self.unlink(node);
+                let target = path_join(path, key);
+                let from = self.ops[oi].location();
+                if from != target {
+                    let mut mv = dop(3, target, V.Null);
+                    mv.from_text = from;
+                    self.insert(mv);
+                }
+            }
+            None => {
+                let node = self.insert(dop(0, path_join(path, key), item.clone()));
+                self.store_index(item, node, 0);
+            }
+        }
+        Ok(())
+    }
+
+    fn item_removed(mut ref self, path: ref String, key: ref DKey, item: ref V) -> Result[(), PyErr] {
+        let found = self.take_index(item, 0);
+        let new_node = self.insert(dop(1, path_join(path, key), V.Null));
+        let ri = self.op_at[new_node];
+        match found {
+            Some(node) => {
+                let oi = self.op_at[node];
+                let parts = self.ops[oi].parts.clone();
+                let last = to_last(self.dst, parts)?;
+                if kind_tag(last.sub) == 5 {
+                    let op_path = self.ops[oi].path();
+                    for vi in self.ops_after(node) {
+                        let k = key_int(key_of(self.ops[oi].parts));
+                        let nk = self.ops[vi].undo_add(op_path, k)?;
+                        set_last(mut self.ops[oi].parts, nk);
+                    }
+                }
+                self.unlink(node);
+                let from = self.ops[ri].location();
+                let to = self.ops[oi].location();
+                if from != to {
+                    let mut mv = dop(3, to, V.Null);
+                    mv.from_text = from;
+                    self.ops[ri] = mv;
+                } else {
+                    self.unlink(new_node);
+                }
+            }
+            None => self.store_index(item, new_node, 1),
+        }
+        Ok(())
+    }
+
+    fn item_replaced(mut ref self, path: ref String, key: ref DKey, item: ref V) {
+        self.insert(dop(2, path_join(path, key), item.clone()));
+    }
+
+    fn compare_dicts(mut ref self, path: ref String, src: ref Vec[(String, V)], dst: ref Vec[(String, V)]) -> Result[(), PyErr] {
+        let mut sk: Vec[String] = Vec.new();
+        for (k, _) in src.iter() {
+            sk.push(k.clone());
+        }
+        let mut dk: Vec[String] = Vec.new();
+        for (k, _) in dst.iter() {
+            dk.push(k.clone());
+        }
+        let src_keys = set_of(sk);
+        let dst_keys = set_of(dk);
+        let added = set_sub(dst_keys, src_keys);
+        let removed = set_sub(src_keys, dst_keys);
+        for k in removed.keys_in_order().into_iter() {
+            let v = obj_get(src, k).unwrap_or(V.Null);
+            self.item_removed(path, DKey.S(k), v)?;
+        }
+        for k in added.keys_in_order().into_iter() {
+            let v = obj_get(dst, k).unwrap_or(V.Null);
+            self.item_added(path, DKey.S(k), v)?;
+        }
+        for k in set_and(src_keys, dst_keys).keys_in_order().into_iter() {
+            let a = obj_get(src, k).unwrap_or(V.Null);
+            let b = obj_get(dst, k).unwrap_or(V.Null);
+            self.compare_values(path, DKey.S(k), a, b)?;
+        }
+        Ok(())
+    }
+
+    fn compare_lists(mut ref self, path: ref String, src: ref Vec[V], dst: ref Vec[V]) -> Result[(), PyErr] {
+        let len_src = src.len();
+        let len_dst = dst.len();
+        let max_len = if len_src > len_dst { len_src } else { len_dst };
+        let min_len = if len_src < len_dst { len_src } else { len_dst };
+        for key in 0..max_len {
+            if key < min_len {
+                let old = src[key].clone();
+                let new = dst[key].clone();
+                if py_eq(old, new) {
+                    continue;
+                }
+                let sub = path_join(path, DKey.I(key));
+                match (old, new) {
+                    (V.Obj(a), V.Obj(b)) => self.compare_dicts(sub, a, b)?,
+                    (V.Arr(a), V.Arr(b)) => self.compare_lists(sub, a, b)?,
+                    _ => {
+                        self.item_removed(path, DKey.I(key), src[key])?;
+                        self.item_added(path, DKey.I(key), dst[key])?;
+                    }
+                }
+            } else if len_src > len_dst {
+                self.item_removed(path, DKey.I(len_dst), src[key])?;
+            } else {
+                self.item_added(path, DKey.I(key), dst[key])?;
+            }
+        }
+        Ok(())
+    }
+
+    fn compare_values(mut ref self, path: ref String, key: ref DKey, src: ref V, dst: ref V) -> Result[(), PyErr] {
+        match (src, dst) {
+            (V.Obj(a), V.Obj(b)) => self.compare_dicts(path_join(path, key), a, b),
+            (V.Arr(a), V.Arr(b)) => self.compare_lists(path_join(path, key), a, b),
+            _ => {
+                if dumps(src) != dumps(dst) {
+                    self.item_replaced(path, key, dst);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    // execute(): a remove followed by an add at the same place is a replace.
+    fn execute(ref self) -> Vec[V] {
+        let mut out: Vec[V] = Vec.new();
+        let mut cur = self.next[0];
+        while cur != 0 {
+            let nxt = self.next[cur];
+            if nxt != 0 {
+                let a = self.op_at[cur];
+                let b = self.op_at[nxt];
+                if self.ops[a].kind == 1 and self.ops[b].kind == 0 and self.ops[a].location() == self.ops[b].location() {
+                    let r = dop(2, self.ops[b].location(), self.ops[b].value.clone());
+                    out.push(r.to_value());
+                    cur = self.next[nxt];
+                    continue;
+                }
+            }
+            out.push(self.ops[self.op_at[cur]].to_value());
+            cur = nxt;
+        }
+        out
+    }
+}
+
+// jsonpatch.make_patch(src, dst).patch
+fn make_patch(src: ref V, dst: ref V) -> Result[Vec[V], PyErr] {
+    let mut b = new_builder(dst);
+    b.compare_values(String.new(), DKey.Root, src, dst)?;
+    Ok(b.execute())
+}
+
+// ------------------------------------------------------------ jobs
+
+fn err_text(e: ref PyErr) -> String {
+    f"{e.cls}: {e.msg}"
+}
+
+fn say(out: mut ref Vec[String], line: own String) {
+    out.push(line);
+}
+
+fn read_file(name: ref String) -> Result[String, String] {
+    match fs.read_to_string(f"data/{name}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {name}: {e}"),
+    }
+}
+
+fn load(name: ref String) -> Result[V, String] {
+    let t = read_file(name)?;
+    loads(t, false)
+}
+
+struct Opts {
+    indent: i64,
+    ascii: bool,
+}
+
+fn parse_opts(t: ref String) -> Opts {
+    let f: Vec[String] = t.split(" ").filter(|p| not p.is_empty()).map(|p| p.to_string()).collect();
+    let mut o = Opts { indent: -1, ascii: true };
+    let mut i = 0;
+    while i < f.len() {
+        if f[i] == "--indent" {
+            o.indent = i64.parse(f[i + 1].clone()).unwrap_or(-1);
+            i += 1;
+        } else if f[i] == "-u" {
+            o.ascii = false;
+        }
+        i += 1;
+    }
+    o
+}
+
+// A computed patch, sent through its JSON text and applied back.
+fn roundtrip(a: ref V, b: ref V, text: ref String) -> String {
+    let p = match loads(text, false) {
+        Ok(p) => p,
+        Err(e) => return f"roundtrip: error: {e}",
+    };
+    match apply_patch(a, p) {
+        Ok(r) => {
+            if py_eq(r, b) {
+                "roundtrip: equal".to_string()
+            } else {
+                f"roundtrip: NOT equal: {dumps(r)}"
+            }
+        }
+        Err(e) => f"roundtrip: error: {err_text(e)}",
+    }
+}
+
+fn suite(path: ref String, out: mut ref Vec[String]) -> Result[(), String] {
+    let cases = match load(path)? {
+        V.Arr(items) => items,
+        _ => return Err(f"{path}: not a list"),
+    };
+    say(mut out, f"== suite {path} ({cases.len()} cases)");
+    let mut i = 0;
+    while i < cases.len() {
+        let t = cases[i].clone();
+        let comment = match member(t, "comment") {
+            Some(c) => py_str(c),
+            None => "-".to_string(),
+        };
+        say(mut out, f"[{i}] {comment}");
+        if let Some(d) = member(t, "disabled") {
+            if py_eq(d, V.Bool(true)) {
+                say(mut out, "  disabled in the suite".to_string());
+            }
+        }
+        let doc = member(t, "doc").unwrap_or(V.Null);
+        let patch = member(t, "patch").unwrap_or(V.Null);
+        let expected = member(t, "expected");
+        let wants_error = member(t, "error").is_some();
+        let ok = match apply_patch(doc, patch) {
+            Ok(r) => {
+                say(mut out, f"  result: {dumps(r)}");
+                match expected {
+                    Some(e) => py_eq(r, e),
+                    None => not wants_error,
+                }
+            }
+            Err(e) => {
+                say(mut out, f"  error: {err_text(e)}");
+                wants_error
+            }
+        };
+        say(mut out, f"  suite: {if ok { "pass" } else { "differs" }}");
+        i += 1;
+    }
+    Ok(())
+}
+
+fn job_jsonpatch(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    say(mut out, f"== jsonpatch {f[1]} {f[2]} {f[3]}");
+    let o = parse_opts(f[1]);
+    let doc = load(f[2])?;
+    let patch = load(f[3])?;
+    match apply_patch(doc, patch) {
+        Ok(r) => match dumps_opt(r, o.indent, o.ascii) {
+            Ok(s) => say(mut out, s),
+            Err(e) => say(mut out, f"error: {err_text(e)}"),
+        },
+        Err(e) => say(mut out, f"error: {err_text(e)}"),
+    }
+    Ok(())
+}
+
+fn job_fromstring(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    say(mut out, f"== fromstring {f[1]} {f[2]}");
+    let t = read_file(f[2])?;
+    let doc = load(f[1])?;
+    let p = loads(t, true)?;
+    let ops = match patch_ops(p) {
+        Ok(ops) => ops,
+        Err(e) => {
+            say(mut out, f"error: {err_text(e)}");
+            return Ok(());
+        }
+    };
+    say(mut out, f"patch: {dumps(V.Arr(ops.clone()))}");
+    match apply_patch_ops(doc, ops) {
+        Ok(r) => say(mut out, dumps(r)),
+        Err(e) => say(mut out, f"error: {err_text(e)}"),
+    }
+    Ok(())
+}
+
+fn job_jsondiff(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    say(mut out, f"== jsondiff {f[1]} {f[2]} {f[3]}");
+    let o = parse_opts(f[1]);
+    let a = load(f[2])?;
+    let b = load(f[3])?;
+    let ops = match make_patch(a, b) {
+        Ok(ops) => ops,
+        Err(e) => {
+            say(mut out, f"error: {err_text(e)}");
+            return Ok(());
+        }
+    };
+    let empty = ops.is_empty();
+    let p = V.Arr(ops);
+    if empty {
+        say(mut out, "exit 0".to_string());
+    } else {
+        say(mut out, dumps_opt(p, o.indent, o.ascii).unwrap_or(String.new()));
+        say(mut out, "exit 1".to_string());
+    }
+    say(mut out, roundtrip(a, b, dumps(p)));
+    Ok(())
+}
+
+fn tally(counts: ref Vec[i64]) -> String {
+    let names = vec!["add", "remove", "replace", "move", "copy", "test"];
+    let mut parts: Vec[String] = Vec.new();
+    for k in 0..6 {
+        if counts[k] > 0 {
+            parts.push(f"{names[k]} {counts[k]}");
+        }
+    }
+    parts.join(", ".to_string())
+}
+
+fn op_index(op: ref V) -> i64 {
+    let names = vec!["add", "remove", "replace", "move", "copy", "test"];
+    let name = match member(op, "op") {
+        Some(V.Str(s)) => s,
+        _ => String.new(),
+    };
+    let mut k = 0;
+    while k < 6 {
+        if name == names[k] {
+            return k;
+        }
+        k += 1;
+    }
+    0
+}
+
+fn job_history(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    say(mut out, f"== history {f[1]}");
+    let n = i64.parse(f[2].clone()).unwrap_or(0);
+    let mut revs: Vec[V] = Vec.new();
+    for i in 1..n + 1 {
+        revs.push(load(f"{f[1]}/rev{i}.json")?);
+    }
+    let mut texts: Vec[String] = Vec.new();
+    let mut total = vec![0, 0, 0, 0, 0, 0];
+    for i in 0..n - 1 {
+        let ops = match make_patch(revs[i], revs[i + 1]) {
+            Ok(ops) => ops,
+            Err(e) => return Err(err_text(e)),
+        };
+        let mut count = vec![0, 0, 0, 0, 0, 0];
+        for op in ops.iter() {
+            let k = op_index(op);
+            count[k] += 1;
+            total[k] += 1;
+        }
+        say(mut out, f"rev{i + 1} -> rev{i + 2}: {ops.len()} ops ({tally(count)})");
+        let t = dumps(V.Arr(ops));
+        say(mut out, f"  {t}");
+        texts.push(t);
+    }
+    let mut doc = revs[0].clone();
+    for t in texts.iter() {
+        let p = loads(t, false)?;
+        doc = match apply_patch(doc, p) {
+            Ok(d) => d,
+            Err(e) => return Err(err_text(e)),
+        };
+    }
+    say(mut out, f"replayed {texts.len()} patches onto rev1 ({tally(total)})");
+    let same = if py_eq(doc, revs[revs.len() - 1]) { "True" } else { "False" };
+    say(mut out, f"  equal to rev{n}: {same}");
+    Ok(())
+}
+
+fn job_pairs(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    say(mut out, f"== pairs {f[1]}");
+    let t = read_file(f[1])?;
+    let lines: Vec[String] = t.lines().filter(|l| not l.trim().is_empty()).map(|l| l.to_string()).collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let pr = loads(lines[i], false)?;
+        let a = member(pr, "a").unwrap_or(V.Null);
+        let b = member(pr, "b").unwrap_or(V.Null);
+        match make_patch(a, b) {
+            Ok(ops) => {
+                let text = dumps(V.Arr(ops));
+                say(mut out, f"[{i}] {text}");
+                say(mut out, f"  {roundtrip(a, b, text)}");
+            }
+            Err(e) => say(mut out, f"[{i}] make_patch: error: {err_text(e)}"),
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn job_jsonpointer(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    say(mut out, f"== jsonpointer {f[1]} {repr_str(f[2])} {f[3]}");
+    let o = parse_opts(f[1]);
+    let names: Vec[String] = f[3].split(" ").filter(|p| not p.is_empty()).map(|p| p.to_string()).collect();
+    for name in names.iter() {
+        let doc = load(name)?;
+        let found = match parse_pointer(f[2]) {
+            Ok(parts) => resolve(doc, parts),
+            Err(e) => Err(e),
+        };
+        match found {
+            Ok(r) => match dumps_opt(r, o.indent, true) {
+                Ok(s) => say(mut out, s),
+                Err(e) => {
+                    say(mut out, f"error: {err_text(e)}");
+                    return Ok(());
+                }
+            },
+            Err(e) => {
+                if e.cls != "JsonPointerException" {
+                    say(mut out, f"error: {err_text(e)}");
+                    return Ok(());
+                }
+                say(mut out, f"stderr: Could not resolve pointer: {e.msg}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn job_set(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    say(mut out, f"== set {f[1]} {repr_str(f[2])} {f[3]}");
+    let doc = load(f[1])?;
+    let value = loads(f[3], false)?;
+    match set_pointer(doc, f[2], value) {
+        Ok(r) => say(mut out, dumps(r)),
+        Err(e) => say(mut out, f"error: {err_text(e)}"),
+    }
+    Ok(())
+}
+
+fn job_ptr(f: ref Vec[String], out: mut ref Vec[String]) {
+    match parse_pointer(f[1]) {
+        Ok(parts) => say(mut out, f"ptr {repr_str(f[1])}: parts {repr_list(parts)}, path {repr_str(ptr_path(parts))}"),
+        Err(e) => say(mut out, f"ptr {repr_str(f[1])}: error: {err_text(e)}"),
+    }
+}
+
+fn job_contains(f: ref Vec[String], out: mut ref Vec[String]) {
+    let a = parse_pointer(f[1]).unwrap_or(Vec.new());
+    let b = parse_pointer(f[2]).unwrap_or(Vec.new());
+    let r = if parts_contain(a, b) { "True" } else { "False" };
+    say(mut out, f"{repr_str(f[1])} contains {repr_str(f[2])}: {r}");
+}
+
+fn job_join(f: ref Vec[String], out: mut ref Vec[String]) {
+    let head = f"{repr_str(f[1])} joined with {repr_str(f[2])}";
+    let a = match parse_pointer(f[1]) {
+        Ok(p) => p,
+        Err(e) => {
+            say(mut out, f"{head}: error: {err_text(e)}");
+            return;
+        }
+    };
+    match parse_pointer(f[2]) {
+        Ok(b) => {
+            let mut parts = a.clone();
+            for p in b.iter() {
+                parts.push(p.clone());
+            }
+            say(mut out, f"{head}: {repr_str(ptr_path(parts))}");
+        }
+        Err(e) => say(mut out, f"{head}: error: {err_text(e)}"),
+    }
+}
+
+fn job_from_parts(f: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    let items = match loads(f[1], false)? {
+        V.Arr(items) => items,
+        _ => Vec.new(),
+    };
+    say(mut out, f"from_parts {f[1]}: {repr_str(from_parts(items))}");
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    let jobs = read_file("jobs.txt".to_string())?;
+    let mut out: Vec[String] = Vec.new();
+    let lines: Vec[String] = jobs.lines().filter(|l| not l.trim().is_empty()).map(|l| l.to_string()).collect();
+    for line in lines.iter() {
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        let kind = f[0].clone();
+        if kind == "suite" {
+            suite(f[1], mut out)?;
+        } else if kind == "jsonpatch" {
+            job_jsonpatch(f, mut out)?;
+        } else if kind == "fromstring" {
+            job_fromstring(f, mut out)?;
+        } else if kind == "jsondiff" {
+            job_jsondiff(f, mut out)?;
+        } else if kind == "history" {
+            job_history(f, mut out)?;
+        } else if kind == "pairs" {
+            job_pairs(f, mut out)?;
+        } else if kind == "jsonpointer" {
+            job_jsonpointer(f, mut out)?;
+        } else if kind == "set" {
+            job_set(f, mut out)?;
+        } else if kind == "ptr" {
+            job_ptr(f, mut out);
+        } else if kind == "contains" {
+            job_contains(f, mut out);
+        } else if kind == "join" {
+            job_join(f, mut out);
+        } else if kind == "from_parts" {
+            job_from_parts(f, mut out)?;
+        }
+    }
+    let mut text = out.join("\n".to_string());
+    text.push('\n');
+    print(text);
+    Ok(())
+}
+
+// ------------------------------------------------------------ data/
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    data_part_5(mut v);
+    data_part_6(mut v);
+    data_part_7(mut v);
+    data_part_8(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str("  \"a\",\n");
+    t.push_str("  \"b\",\n");
+    t.push_str("  \"c\"\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "config/settings-list.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("42\n");
+    v.push(DataFile { path: "config/settings-scalar.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"plain text\"\n");
+    v.push(DataFile { path: "config/settings-text.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"http\": {\n");
+    t.push_str("    \"errors\": {\n");
+    t.push_str("      \"404\": \"/errors/not-found.html\",\n");
+    t.push_str("      \"500\": \"/errors/oops.html\",\n");
+    t.push_str("      \"1\": \"one\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"routes\": [\n");
+    t.push_str("      \"/\",\n");
+    t.push_str("      \"/cart\",\n");
+    t.push_str("      \"/cart/checkout\",\n");
+    t.push_str("      \"/api/v1/orders\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"paths/with/slashes\": {\n");
+    t.push_str("    \"a~b\": 1,\n");
+    t.push_str("    \"~\": 2,\n");
+    t.push_str("    \"\": 3\n");
+    t.push_str("  },\n");
+    t.push_str("  \"unicode\": {\n");
+    t.push_str("    \"café\": \"crème brûlée\",\n");
+    t.push_str("    \"naïve\": [\n");
+    t.push_str("      \"日本\",\n");
+    t.push_str("      \"😀\"\n");
+    t.push_str("    ]\n");
+    t.push_str("  },\n");
+    t.push_str("  \"flags\": [\n");
+    t.push_str("    true,\n");
+    t.push_str("    false,\n");
+    t.push_str("    null,\n");
+    t.push_str("    0,\n");
+    t.push_str("    1,\n");
+    t.push_str("    1.5,\n");
+    t.push_str("    \"1\"\n");
+    t.push_str("  ],\n");
+    t.push_str("  \"matrix\": [\n");
+    t.push_str("    [\n");
+    t.push_str("      1,\n");
+    t.push_str("      2\n");
+    t.push_str("    ],\n");
+    t.push_str("    [\n");
+    t.push_str("      3,\n");
+    t.push_str("      4\n");
+    t.push_str("    ],\n");
+    t.push_str("    []\n");
+    t.push_str("  ]\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "config/settings.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"a\": [1, 2], \"b\": [1, 2, 2, \"m~n\"]}\n");
+    t.push_str("{\"a\": 3.25, \"b\": {\"x\": false}}\n");
+    t.push_str("{\"a\": {\"items\": [{\"alpha\": \"2\"}, \"m~n\", \"a/b\", \"beta\", \"alpha\"], \"meta\": [[11, \"1\", \"a/b\"], 3.25, \"2\", {\"10\": \"y\", \"y\": false, \"delta\": \"m~n\", \"a/b\": false}, []], \"n\": 4}, \"b\": {\"items\": [{\"alpha\": \"2\"}, \"m~n\", \"a/b\", \"beta\", \"alpha\"], \"meta\": [[11, \"1\", \"a/b\"], 3.25, \"2\", {\"10\": \"y\", \"y\": false, \"delta\": \"m~n\", \"a/b\": false}, []]}}\n");
+    t.push_str("{\"a\": [\"b\", true, \"b\", 1, 3, \"b\"], \"b\": [\"b\", true, \"b\", \"delta\", 1, 3, \"b\", \"b\"]}\n");
+    t.push_str("{\"a\": -0.0, \"b\": \"2\"}\n");
+    t.push_str("{\"a\": {\"items\": [{\"y\": \"beta\", \"m~n\": \"\", \"10\": -1}], \"meta\": {\"x\": [\"x\", 1e-07], \"beta\": [1e-07, \"a/b\", 7], \"2\": 2.0, \"10\": 1e-07}, \"n\": 0}, \"b\": {\"meta\": {\"x\": [\"x\", 1e-07], \"beta\": [1e-07, \"a/b\", 7], \"2\": 2.0, \"10\": 1e-07}, \"beta\": 0, \"items\": [{\"y\": \"beta\", \"m~n\": \"\", \"10\": -1}]}}\n");
+    t.push_str("{\"a\": [1, \"a\", 3], \"b\": [\"a\", 3, 1]}\n");
+    t.push_str("{\"a\": [\"gamma\", {\"beta\": null, \"alpha\": -3, \"1\": false, \"zé\": \"y\", \"gamma\": true}, 2], \"b\": [{\"beta\": null, \"alpha\": -3, \"1\": false, \"zé\": \"y\", \"gamma\": true}, {\"m~n\": null}]}\n");
+    t.push_str("{\"a\": {\"items\": [\"1\", [true, \"10\", \"10\", \"\"], {}, true, false, []], \"meta\": {\"\": {\"2\": \"a/b\", \"gamma\": 1, \"10\": 1e-07, \"m~n\": \"alpha\"}}, \"n\": 2}, \"b\": {\"meta\": {\"\": {\"2\": \"a/b\", \"gamma\": 1, \"10\": 1e-07, \"y\": \"10\", \"m~n\": true}}, \"n\": 2}}\n");
+    t.push_str("{\"a\": [\"a\", 2, 3, 1, null], \"b\": [\"a\", 2, 3, 3]}\n");
+    t.push_str("{\"a\": {\"beta\": \"delta\"}, \"b\": {\"alpha\": \"\", \"y\": [-0.0, 8, \"beta\"]}}\n");
+    t.push_str("{\"a\": {\"items\": [{\"y\": \"x\"}], \"meta\": \"zé\", \"n\": 2}, \"b\": {\"items\": [{\"y\": \"x\"}], \"10\": 2}}\n");
+    t.push_str("{\"a\": [\"b\"], \"b\": [\"b\"]}\n");
+    t.push_str("{\"a\": [[[\"zé\", \"1\", 2.0, false]], {}, null, [[\"alpha\"], []]], \"b\": [{}, null, [[3.25, \"alpha\"], {\"zé\": null, \"10\": \"10\", \"m~n\": 0.5}]]}\n");
+    t.push_str("{\"a\": {\"items\": [true], \"meta\": 0, \"n\": 0}, \"b\": {\"items\": [true], \"meta\": 0, \"10\": 0}}\n");
+    t.push_str("{\"a\": [2, 2, true], \"b\": [true, 2, 2]}\n");
+    t.push_str("{\"a\": \"10\", \"b\": {\"beta\": true, \"1\": {\"a/b\": \"2\", \"2\": \"\", \"zé\": \"y\"}, \"gamma\": {}, \"\": \"gamma\", \"m~n\": \"delta\"}}\n");
+    t.push_str("{\"a\": {\"items\": [\"x\", [false, \"2\"], [], {\"x\": 3.25, \"beta\": \"1\"}, [\"y\", \"a/b\"], [\"delta\"]], \"meta\": [{\"delta\": \"\"}], \"n\": 3}, \"b\": {\"2\": [\"x\", [false, \"2\"], [], {\"x\": 3.25, \"beta\": \"1\"}, [\"y\", \"a/b\"], [\"delta\"]], \"n\": 3}}\n");
+    t.push_str("{\"a\": [3, \"b\", null, true], \"b\": [null, true, null]}\n");
+    t.push_str("{\"a\": 0.5, \"b\": false}\n");
+    t.push_str("{\"a\": {\"items\": [[1], [1, 8], [3.25, \"a/b\", 1.0, true]], \"meta\": [], \"n\": 4}, \"b\": {\"items\": [[1], [1, 8], [3.25, \"a/b\", 1.0, true]], \"meta\": [], \"\": [null, false, 0.5], \"n\": 4}}\n");
+    t.push_str("{\"a\": [\"b\", \"a\", 3, true, null, \"a\", \"b\", 2], \"b\": [2, \"b\", true, \"a\", 3, true, null, \"a\", \"b\"]}\n");
+    t.push_str("{\"a\": \"a/b\", \"b\": [{}, 1.0, {\"beta\": \"10\", \"y\": \"\", \"x\": \"\"}]}\n");
+    t.push_str("{\"a\": {\"items\": [[null, \"gamma\", 0.5], -0.0, true, [null], []], \"meta\": 0.5, \"n\": 1}, \"b\": {\"items\": [[null, \"gamma\", 0.5], -0.0, true, [null], []], \"meta\": 0.5}}\n");
+    t.push_str("{\"a\": [1, 3], \"b\": [false]}\n");
+    t.push_str("{\"a\": [\"m~n\", {\"y\": -0.0, \"delta\": \"2\", \"a/b\": {\"10\": \"x\"}}], \"b\": [\"1\", {\"y\": -0.0, \"delta\": \"2\", \"a/b\": {\"10\": \"x\"}}]}\n");
+    t.push_str("{\"a\": {\"items\": [[\"delta\", null, \"delta\", 11], [\"beta\", true, 2.0], false, [\"a/b\", \"1\", 0, -2], null], \"meta\": true, \"n\": 1}, \"b\": {\"zé\": [true, null, \"a/b\", false, \"1\"], \"items\": [null, [\"delta\", null, \"delta\", 11], null, [\"a/b\", \"1\", 0, -2], false, [\"beta\", true, 2.0], [\"delta\", null, \"delta\", 11]], \"meta\": true, \"n\": 1}}\n");
+    t.push_str("{\"a\": [3, \"a\", null, \"a\", 3, \"a\", 3, 2], \"b\": [8, \"a\", null, 3, 3, \"a\", 3, 2]}\n");
+    t.push_str("{\"a\": [1.0, false, null], \"b\": [1.0, false, null]}\n");
+    t.push_str("{\"a\": {\"items\": [[\"a/b\", 0.5, 1.0, \"\"], {\"gamma\": false, \"zé\": \"10\", \"m~n\": \"x\"}, [null, -0.0, \"zé\", \"m~n\", null], \"delta\"], \"meta\": 11, \"n\": 0}, \"b\": {\"items\": [[\"a/b\", 0.5, 1.0, \"\"], {\"gamma\": false, \"zé\": \"10\", \"m~n\": \"x\"}, [null, -0.0, \"zé\", \"m~n\", null], \"delta\"], \"zé\": \"alpha\", \"gamma\": \"10\", \"meta\": \"\", \"n\": 0}}\n");
+    t.push_str("{\"a\": [2, \"b\", 1, true], \"b\": [2, \"b\", true]}\n");
+    t.push_str("{\"a\": \"beta\", \"b\": \"\"}\n");
+    t.push_str("{\"a\": {\"items\": [[null, null, null, true], [null, 4, \"10\", 3.25, \"m~n\"], {\"\": null, \"delta\": \"alpha\"}], \"meta\": {\"y\": {\"1\": false, \"m~n\": \"beta\", \"10\": \"zé\", \"\": \"alpha\"}, \"zé\": false, \"beta\": []}, \"n\": 3}, \"b\": {\"items\": [\"delta\", [null, 4, \"10\", 3.25, \"m~n\"], {\"\": null, \"delta\": \"alpha\"}, [null, null, null, true]], \"meta\": {\"beta\": [], \"y\": {\"1\": false, \"m~n\": \"beta\", \"10\": \"zé\", \"\": \"alpha\"}, \"alpha\": null, \"zé\": false}, \"n\": 3}}\n");
+    t.push_str("{\"a\": [2, true], \"b\": [true, true, 2]}\n");
+    t.push_str("{\"a\": \"zé\", \"b\": \"delta\"}\n");
+    t.push_str("{\"a\": {\"items\": [\"zé\"], \"meta\": \"y\", \"n\": 0}, \"b\": {\"items\": [\"zé\"], \"meta\": {\"10\": true, \"1\": [\"1\", \"y\", false]}, \"n\": 0}}\n");
+    t.push_str("{\"a\": [1, true, 2, null, \"a\", 1, null], \"b\": [1, true, 2, null, \"a\", 1, null, 2]}\n");
+    t.push_str("{\"a\": [], \"b\": []}\n");
+    t.push_str("{\"a\": {\"items\": [[\"2\", 1.0, true], [3.25, \"m~n\"], -0.0, [\"zé\"], {\"beta\": \"a/b\", \"gamma\": 8, \"2\": \"gamma\", \"x\": 2.0}], \"meta\": null, \"n\": 1}, \"b\": {\"items\": [[\"2\", 1.0, true], [3.25, \"m~n\"], -0.0, [\"zé\"], {\"beta\": \"a/b\", \"gamma\": 8, \"2\": \"gamma\", \"x\": 2.0}], \"\": [\"beta\", \"alpha\"]}}\n");
+    t.push_str("{\"a\": [\"a\", 3, 3, true, \"b\"], \"b\": [3, 3, \"b\", true, \"b\", \"a\"]}\n");
+    t.push_str("{\"a\": [], \"b\": []}\n");
+    t.push_str("{\"a\": {\"items\": [{\"10\": true, \"\": \"beta\", \"2\": null, \"y\": \"m~n\"}, 0], \"meta\": {\"x\": null, \"\": \"gamma\"}, \"n\": 0}, \"b\": {\"items\": [{\"10\": true, \"\": \"beta\", \"2\": null, \"y\": \"m~n\"}, {\"10\": true, \"\": \"beta\", \"2\": null, \"y\": \"m~n\"}], \"n\": 0, \"zé\": {\"x\": null, \"\": \"gamma\"}}}\n");
+    t.push_str("{\"a\": [3, \"a\", null, 2, \"a\", \"b\"], \"b\": [3, \"b\", null, \"a\", 2, \"a\"]}\n");
+    t.push_str("{\"a\": {\"gamma\": {\"\": [\"gamma\", false, false, \"y\"], \"zé\": \"beta\", \"a/b\": \"zé\", \"delta\": 3.25}, \"delta\": [], \"1\": null, \"m~n\": \"zé\"}, \"b\": {\"gamma\": {\"\": [\"gamma\", false, false, \"y\"], \"zé\": \"beta\", \"a/b\": \"zé\", \"delta\": 3.25}, \"delta\": [], \"1\": \"delta\", \"m~n\": \"zé\"}}\n");
+    t.push_str("{\"a\": {\"items\": [\"m~n\", []], \"meta\": null, \"n\": 0}, \"b\": {\"meta\": null, \"n\": null, \"items\": [\"m~n\", []]}}\n");
+    t.push_str("{\"a\": [null], \"b\": [null, null]}\n");
+    t.push_str("{\"a\": {\"m~n\": [null, \"gamma\", \"zé\"], \"a/b\": \"2\", \"\": null, \"2\": {\"a/b\": 8, \"beta\": {\"alpha\": \"1\"}}}, \"b\": {\"m~n\": [null, \"gamma\", \"zé\"], \"a/b\": \"2\", \"2\": {\"a/b\": 8, \"beta\": {\"alpha\": \"1\"}}}}\n");
+    t.push_str("{\"a\": {\"items\": [\"\", [null, \"alpha\", \"a/b\", 9, \"2\"], [\"zé\", \"zé\", \"2\", 11, 2.0], [\"beta\", false], {\"alpha\": null, \"10\": true, \"delta\": false, \"1\": 5, \"beta\": null}, \"delta\"], \"meta\": \"beta\", \"n\": 2}, \"b\": {\"items\": [\"\", [null, \"alpha\", \"a/b\", 9, \"2\"], [\"zé\", \"zé\", \"2\", 11, 2.0], [\"beta\", false], {\"alpha\": null, \"10\": true, \"delta\": false, \"1\": 5, \"beta\": null}, \"delta\"], \"alpha\": 2, \"meta\": \"beta\", \"y\": [null]}}\n");
+    t.push_str("{\"a\": [\"b\", true, true, 3], \"b\": [true, \"b\", true, true, 3]}\n");
+    t.push_str("{\"a\": {\"x\": [false, [], {\"y\": true, \"alpha\": null}, [3.25, 0.5, -3, 1e-07]], \"zé\": [\"10\", null, \"zé\"], \"2\": {\"y\": \"beta\"}, \"gamma\": {\"delta\": [\"10\", \"alpha\", null, 8], \"2\": \"10\", \"zé\": [\"beta\", false, null, \"alpha\"], \"1\": \"gamma\"}, \"\": \"2\"}, \"b\": {\"y\": [false, [], {\"y\": true, \"alpha\": null}, [3.25, 0.5, -3, 1e-07]], \"zé\": [\"10\", null, \"zé\"], \"2\": {\"y\": \"beta\"}, \"gamma\": {\"delta\": [\"10\", \"alpha\", null, 8], \"2\": \"10\", \"zé\": [\"beta\", false, null, \"alpha\"], \"1\": \"gamma\"}, \"\": \"2\"}}\n");
+    t.push_str("{\"a\": {\"items\": [null, true, [null, -2, null], false, \"delta\", true], \"meta\": [], \"n\": 3}, \"b\": {\"beta\": [], \"\": [\"x\", 1e-07, \"x\", true], \"items\": [null, true, [null, -2, null], false, \"delta\", true], \"n\": 3}}\n");
+    t.push_str("{\"a\": [1, 3, null, \"b\"], \"b\": [\"b\", 3, null, 1]}\n");
+    t.push_str("{\"a\": [{\"y\": {}, \"gamma\": true}, [\"delta\", [1e-07, null, \"beta\", \"gamma\"]], [{\"zé\": true, \"2\": \"1\", \"\": null, \"delta\": \"1\"}, \"y\", 0, [\"\", \"y\", \"y\", 11], {\"gamma\": \"m~n\", \"\": \"alpha\"}]], \"b\": [[{\"zé\": true, \"2\": \"1\", \"\": null, \"delta\": \"1\"}, \"y\", 0, [\"\", \"y\", \"y\", 11], {\"gamma\": \"m~n\", \"\": \"alpha\"}], [\"delta\", \"delta\"]]}\n");
+    t.push_str("{\"a\": {\"items\": [false, [\"delta\", null, 5], 9, \"a/b\", \"gamma\"], \"meta\": \"delta\", \"n\": 0}, \"b\": {\"items\": [false, [\"delta\", null, 5], 9, \"a/b\", \"gamma\"], \"meta\": \"delta\", \"y\": 1, \"n\": 0, \"2\": [true, 1.0, \"x\", 3.25]}}\n");
+    t.push_str("{\"a\": [true, 2, 2, \"b\", 3], \"b\": [true, 2, 2, \"b\", 3, 2]}\n");
+    t.push_str("{\"a\": 0.5, \"b\": \"1\"}\n");
+    t.push_str("{\"a\": {\"items\": [\"m~n\", [-0.0, 1.0, 3.25]], \"meta\": \"y\", \"n\": 3}, \"b\": {\"items\": [\"m~n\", [-0.0, 1.0, 3.25]], \"meta\": \"y\", \"1\": 3}}\n");
+    t.push_str("{\"a\": [\"a\"], \"b\": []}\n");
+    t.push_str("{\"a\": \"10\", \"b\": [2.0, -0.0]}\n");
+    t.push_str("{\"a\": {\"items\": [[10, true, 1], {\"x\": \"a/b\", \"y\": 6, \"2\": \"gamma\", \"m~n\": \"gamma\"}, \"\", [\"delta\"]], \"meta\": {\"x\": 0.5, \"m~n\": \"gamma\", \"1\": \"10\"}, \"n\": 0}, \"b\": {\"gamma\": [[10, true, 1], {\"x\": \"a/b\", \"y\": 6, \"2\": \"gamma\", \"m~n\": \"gamma\"}, \"\", [\"delta\"]], \"x\": {\"x\": 0.5, \"m~n\": \"gamma\", \"1\": \"10\"}, \"n\": 0}}\n");
+    t.push_str("{\"a\": [\"b\", 3, null, \"a\", \"a\", 3, 1], \"b\": [\"b\", 3, null, \"a\", \"a\", 3, 1, 3]}\n");
+    t.push_str("{\"a\": \"y\", \"b\": [\"zé\", [], [], false, [\"a/b\", \"10\", 7, \"y\", \"delta\"]]}\n");
+    t.push_str("{\"a\": {\"items\": [[false, null, 0], {\"beta\": false, \"a/b\": null}, \"a/b\"], \"meta\": [1.0], \"n\": 1}, \"b\": {\"alpha\": [[false, null, 0], {\"beta\": false, \"a/b\": null}, \"a/b\"], \"meta\": [1.0], \"n\": 1}}\n");
+    t.push_str("{\"a\": [true, 2, 1], \"b\": [1, 2, true]}\n");
+    t.push_str("{\"a\": {\"delta\": 6, \"10\": {\"zé\": false, \"1\": [-2, \"zé\", \"beta\"], \"a/b\": [2.0, true], \"x\": \"beta\"}, \"m~n\": [null]}, \"b\": {\"m~n\": [null]}}\n");
+    t.push_str("{\"a\": {\"items\": [true, false, {\"a/b\": -0.0, \"alpha\": 1, \"beta\": \"beta\"}, [2.0]], \"meta\": [[11, \"beta\", false, \"alpha\", false], \"a/b\", [false, -3, 0.5, \"1\"]], \"n\": 3}, \"b\": {\"meta\": [[11, \"beta\", false, \"alpha\", false], \"a/b\", [false, -3, 0.5, \"1\"]], \"n\": 3, \"items\": [true, {\"beta\": \"beta\", \"a/b\": -0.0, \"alpha\": null}, {\"beta\": \"beta\", \"a/b\": -0.0, \"alpha\": null}, [2.0]]}}\n");
+    t.push_str("{\"a\": [2, 1, \"b\", 1, null, true, \"b\"], \"b\": [1, null, 1, true, \"b\"]}\n");
+    t.push_str("{\"a\": {\"2\": [false, [\"gamma\", \"x\", \"alpha\"], []], \"beta\": [[]]}, \"b\": {\"2\": [false, [\"gamma\", \"x\", \"alpha\"], []], \"beta\": [[]]}}\n");
+    t.push_str("{\"a\": {\"items\": [\"m~n\", {\"alpha\": \"gamma\", \"10\": true, \"a/b\": null, \"delta\": null}, \"alpha\"], \"meta\": {\"10\": \"alpha\", \"\": {\"10\": \"zé\"}, \"2\": {\"a/b\": false, \"beta\": false, \"gamma\": \"1\", \"2\": \"a/b\"}, \"m~n\": [null, \"\", 4], \"zé\": {}}, \"n\": 0}, \"b\": {\"items\": [\"m~n\", {\"alpha\": \"gamma\", \"10\": true, \"a/b\": null, \"delta\": null}, \"alpha\"], \"meta\": {\"2\": {\"a/b\": false, \"beta\": false, \"gamma\": \"1\", \"2\": \"a/b\"}, \"\": {\"y\": {\"1\": \"alpha\"}, \"10\": \"y\", \"zé\": {\"\": \"1\"}}, \"zé\": {}, \"m~n\": [null, \"\", 4]}, \"n\": 0}}\n");
+    t.push_str("{\"a\": [\"b\"], \"b\": [\"b\"]}\n");
+    v.push(DataFile { path: "gen/pairs.jsonl".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"apps/v1\",\n");
+    t.push_str("  \"kind\": \"Deployment\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\",\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"app\": \"checkout\",\n");
+    t.push_str("      \"tier\": \"backend\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"annotations\": {\n");
+    t.push_str("      \"deployment.kubernetes.io/revision\": \"7\",\n");
+    t.push_str("      \"team~owner\": \"payments\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"replicas\": 3,\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"matchLabels\": {\n");
+    t.push_str("        \"app\": \"checkout\"\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"strategy\": {\n");
+    t.push_str("      \"type\": \"RollingUpdate\",\n");
+    t.push_str("      \"rollingUpdate\": {\n");
+    t.push_str("        \"maxSurge\": \"25%\",\n");
+    t.push_str("        \"maxUnavailable\": 0\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"template\": {\n");
+    t.push_str("      \"metadata\": {\n");
+    t.push_str("        \"labels\": {\n");
+    t.push_str("          \"app\": \"checkout\",\n");
+    t.push_str("          \"tier\": \"backend\"\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"spec\": {\n");
+    t.push_str("        \"containers\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"app\",\n");
+    t.push_str("            \"image\": \"registry.example/checkout:2.4.1\",\n");
+    t.push_str("            \"args\": [\n");
+    t.push_str("              \"--port=8080\",\n");
+    t.push_str("              \"--log-level=info\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"ports\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"containerPort\": 8080,\n");
+    t.push_str("                \"name\": \"http\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"env\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"DB_HOST\",\n");
+    t.push_str("                \"value\": \"db.shop.svc\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"CACHE_TTL\",\n");
+    t.push_str("                \"value\": \"30\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"limits\": {\n");
+    t.push_str("                \"cpu\": \"500m\",\n");
+    t.push_str("                \"memory\": \"256Mi\"\n");
+    t.push_str("              },\n");
+    t.push_str("              \"requests\": {\n");
+    t.push_str("                \"cpu\": 0.25,\n");
+    t.push_str("                \"memory\": \"128Mi\"\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"readinessProbe\": {\n");
+    t.push_str("              \"httpGet\": {\n");
+    t.push_str("                \"path\": \"/healthz\",\n");
+    t.push_str("                \"port\": 8080\n");
+    t.push_str("              },\n");
+    t.push_str("              \"periodSeconds\": 10\n");
+    t.push_str("            }\n");
+    t.push_str("          },\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"sidecar\",\n");
+    t.push_str("            \"image\": \"registry.example/envoy:1.29\",\n");
+    t.push_str("            \"args\": []\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"tolerations\": [],\n");
+    t.push_str("        \"nodeSelector\": {\n");
+    t.push_str("          \"kubernetes.io/os\": \"linux\"\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/rev1.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"apps/v1\",\n");
+    t.push_str("  \"kind\": \"Deployment\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\",\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"app\": \"checkout\",\n");
+    t.push_str("      \"tier\": \"backend\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"annotations\": {\n");
+    t.push_str("      \"deployment.kubernetes.io/revision\": \"7\",\n");
+    t.push_str("      \"team~owner\": \"payments\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"replicas\": 4,\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"matchLabels\": {\n");
+    t.push_str("        \"app\": \"checkout\"\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"strategy\": {\n");
+    t.push_str("      \"type\": \"RollingUpdate\",\n");
+    t.push_str("      \"rollingUpdate\": {\n");
+    t.push_str("        \"maxSurge\": \"25%\",\n");
+    t.push_str("        \"maxUnavailable\": 0\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"template\": {\n");
+    t.push_str("      \"metadata\": {\n");
+    t.push_str("        \"labels\": {\n");
+    t.push_str("          \"app\": \"checkout\",\n");
+    t.push_str("          \"tier\": \"backend\"\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"spec\": {\n");
+    t.push_str("        \"containers\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"app\",\n");
+    t.push_str("            \"image\": \"registry.example/checkout:2.4.2\",\n");
+    t.push_str("            \"args\": [\n");
+    t.push_str("              \"--port=8080\",\n");
+    t.push_str("              \"--log-level=info\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"ports\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"containerPort\": 8080,\n");
+    t.push_str("                \"name\": \"http\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"env\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"DB_HOST\",\n");
+    t.push_str("                \"value\": \"db.shop.svc\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"CACHE_TTL\",\n");
+    t.push_str("                \"value\": \"30\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"limits\": {\n");
+    t.push_str("                \"cpu\": \"500m\",\n");
+    t.push_str("                \"memory\": \"256Mi\"\n");
+    t.push_str("              },\n");
+    t.push_str("              \"requests\": {\n");
+    t.push_str("                \"cpu\": 0.25,\n");
+    t.push_str("                \"memory\": \"128Mi\"\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"readinessProbe\": {\n");
+    t.push_str("              \"httpGet\": {\n");
+    t.push_str("                \"path\": \"/healthz\",\n");
+    t.push_str("                \"port\": 8080\n");
+    t.push_str("              },\n");
+    t.push_str("              \"periodSeconds\": 10\n");
+    t.push_str("            }\n");
+    t.push_str("          },\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"sidecar\",\n");
+    t.push_str("            \"image\": \"registry.example/envoy:1.29\",\n");
+    t.push_str("            \"args\": []\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"tolerations\": [],\n");
+    t.push_str("        \"nodeSelector\": {\n");
+    t.push_str("          \"kubernetes.io/os\": \"linux\"\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/rev2.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"apps/v1\",\n");
+    t.push_str("  \"kind\": \"Deployment\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\",\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"app\": \"checkout\",\n");
+    t.push_str("      \"tier\": \"backend\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"annotations\": {\n");
+    t.push_str("      \"deployment.kubernetes.io/revision\": \"7\",\n");
+    t.push_str("      \"team~owner\": \"payments\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"replicas\": 4,\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"matchLabels\": {\n");
+    t.push_str("        \"app\": \"checkout\"\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"strategy\": {\n");
+    t.push_str("      \"type\": \"RollingUpdate\",\n");
+    t.push_str("      \"rollingUpdate\": {\n");
+    t.push_str("        \"maxSurge\": \"25%\",\n");
+    t.push_str("        \"maxUnavailable\": 0\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"template\": {\n");
+    t.push_str("      \"metadata\": {\n");
+    t.push_str("        \"labels\": {\n");
+    t.push_str("          \"app\": \"checkout\",\n");
+    t.push_str("          \"tier\": \"backend\"\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"spec\": {\n");
+    t.push_str("        \"containers\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"app\",\n");
+    t.push_str("            \"image\": \"registry.example/checkout:2.4.2\",\n");
+    t.push_str("            \"args\": [\n");
+    t.push_str("              \"--log-level=info\",\n");
+    t.push_str("              \"--port=8080\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"ports\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"containerPort\": 8080,\n");
+    t.push_str("                \"name\": \"http\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"env\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"FEATURE_X\",\n");
+    t.push_str("                \"value\": \"on\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"DB_HOST\",\n");
+    t.push_str("                \"value\": \"db.shop.svc\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"CACHE_TTL\",\n");
+    t.push_str("                \"value\": \"30\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"limits\": {\n");
+    t.push_str("                \"cpu\": \"500m\",\n");
+    t.push_str("                \"memory\": \"256Mi\"\n");
+    t.push_str("              },\n");
+    t.push_str("              \"requests\": {\n");
+    t.push_str("                \"cpu\": 0.25,\n");
+    t.push_str("                \"memory\": \"128Mi\"\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"readinessProbe\": {\n");
+    t.push_str("              \"httpGet\": {\n");
+    t.push_str("                \"path\": \"/healthz\",\n");
+    t.push_str("                \"port\": 8080\n");
+    t.push_str("              },\n");
+    t.push_str("              \"periodSeconds\": 10\n");
+    t.push_str("            }\n");
+    t.push_str("          },\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"sidecar\",\n");
+    t.push_str("            \"image\": \"registry.example/envoy:1.29\",\n");
+    t.push_str("            \"args\": []\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"tolerations\": [],\n");
+    t.push_str("        \"nodeSelector\": {\n");
+    t.push_str("          \"kubernetes.io/os\": \"linux\"\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/rev3.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"apps/v1\",\n");
+    t.push_str("  \"kind\": \"Deployment\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\",\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"app\": \"checkout\",\n");
+    t.push_str("      \"tier\": \"core\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"annotations\": {\n");
+    t.push_str("      \"deployment.kubernetes.io/revision\": \"7\",\n");
+    t.push_str("      \"team/owner\": \"payments\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"replicas\": 4,\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"matchLabels\": {\n");
+    t.push_str("        \"app\": \"checkout\"\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"strategy\": {\n");
+    t.push_str("      \"type\": \"RollingUpdate\",\n");
+    t.push_str("      \"rollingUpdate\": {\n");
+    t.push_str("        \"maxSurge\": \"25%\",\n");
+    t.push_str("        \"maxUnavailable\": 0\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"template\": {\n");
+    t.push_str("      \"metadata\": {\n");
+    t.push_str("        \"labels\": {\n");
+    t.push_str("          \"app\": \"checkout\",\n");
+    t.push_str("          \"tier\": \"backend\"\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"spec\": {\n");
+    t.push_str("        \"containers\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"sidecar\",\n");
+    t.push_str("            \"image\": \"registry.example/envoy:1.29\",\n");
+    t.push_str("            \"args\": []\n");
+    t.push_str("          },\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"app\",\n");
+    t.push_str("            \"image\": \"registry.example/checkout:2.4.2\",\n");
+    t.push_str("            \"args\": [\n");
+    t.push_str("              \"--log-level=info\",\n");
+    t.push_str("              \"--port=8080\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"ports\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"containerPort\": 8080,\n");
+    t.push_str("                \"name\": \"http\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"env\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"FEATURE_X\",\n");
+    t.push_str("                \"value\": \"on\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"DB_HOST\",\n");
+    t.push_str("                \"value\": \"db.shop.svc\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"CACHE_TTL\",\n");
+    t.push_str("                \"value\": \"30\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"limits\": {\n");
+    t.push_str("                \"cpu\": \"500m\",\n");
+    t.push_str("                \"memory\": \"256Mi\"\n");
+    t.push_str("              },\n");
+    t.push_str("              \"requests\": {\n");
+    t.push_str("                \"cpu\": 0.25,\n");
+    t.push_str("                \"memory\": \"128Mi\"\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"readinessProbe\": {\n");
+    t.push_str("              \"httpGet\": {\n");
+    t.push_str("                \"path\": \"/healthz\",\n");
+    t.push_str("                \"port\": 8080\n");
+    t.push_str("              },\n");
+    t.push_str("              \"periodSeconds\": 10\n");
+    t.push_str("            }\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"tolerations\": [],\n");
+    t.push_str("        \"nodeSelector\": {\n");
+    t.push_str("          \"kubernetes.io/os\": \"linux\"\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/rev4.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"apps/v1\",\n");
+    t.push_str("  \"kind\": \"Deployment\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\",\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"app\": \"checkout\",\n");
+    t.push_str("      \"tier\": \"core\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"annotations\": {\n");
+    t.push_str("      \"deployment.kubernetes.io/revision\": \"7\",\n");
+    t.push_str("      \"team/owner\": \"payments\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"replicas\": 4,\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"matchLabels\": {\n");
+    t.push_str("        \"app\": \"checkout\"\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"strategy\": {\n");
+    t.push_str("      \"type\": \"Recreate\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"template\": {\n");
+    t.push_str("      \"metadata\": {\n");
+    t.push_str("        \"labels\": {\n");
+    t.push_str("          \"app\": \"checkout\",\n");
+    t.push_str("          \"tier\": \"backend\"\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"spec\": {\n");
+    t.push_str("        \"containers\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"sidecar\",\n");
+    t.push_str("            \"image\": \"registry.example/envoy:1.29\",\n");
+    t.push_str("            \"args\": []\n");
+    t.push_str("          },\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"app\",\n");
+    t.push_str("            \"image\": \"registry.example/checkout:2.4.2\",\n");
+    t.push_str("            \"args\": [\n");
+    t.push_str("              \"--log-level=info\",\n");
+    t.push_str("              \"--port=8080\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"ports\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"containerPort\": 8080,\n");
+    t.push_str("                \"name\": \"http\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"env\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"FEATURE_X\",\n");
+    t.push_str("                \"value\": \"on\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"DB_HOST\",\n");
+    t.push_str("                \"value\": \"db.shop.svc\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"CACHE_TTL\",\n");
+    t.push_str("                \"value\": \"30\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"limits\": {\n");
+    t.push_str("                \"cpu\": \"500m\",\n");
+    t.push_str("                \"memory\": \"256Mi\"\n");
+    t.push_str("              },\n");
+    t.push_str("              \"requests\": {\n");
+    t.push_str("                \"cpu\": \"250m\",\n");
+    t.push_str("                \"memory\": \"128Mi\"\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"readinessProbe\": {\n");
+    t.push_str("              \"httpGet\": {\n");
+    t.push_str("                \"path\": \"/healthz\",\n");
+    t.push_str("                \"port\": 8080\n");
+    t.push_str("              },\n");
+    t.push_str("              \"periodSeconds\": 10\n");
+    t.push_str("            }\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"tolerations\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"key\": \"spot\",\n");
+    t.push_str("            \"operator\": \"Exists\"\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"nodeSelector\": {\n");
+    t.push_str("          \"kubernetes.io/os\": \"linux\"\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/rev5.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"apps/v1\",\n");
+    t.push_str("  \"kind\": \"Deployment\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\",\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"app\": \"checkout\",\n");
+    t.push_str("      \"tier\": \"core\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"annotations\": {\n");
+    t.push_str("      \"deployment.kubernetes.io/revision\": \"7\",\n");
+    t.push_str("      \"team/owner\": \"payments\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"replicas\": 4.0,\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"matchLabels\": {\n");
+    t.push_str("        \"app\": \"checkout\"\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"strategy\": {\n");
+    t.push_str("      \"type\": \"Recreate\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"template\": {\n");
+    t.push_str("      \"metadata\": {\n");
+    t.push_str("        \"labels\": {\n");
+    t.push_str("          \"app\": \"checkout\",\n");
+    t.push_str("          \"tier\": \"backend\"\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"spec\": {\n");
+    t.push_str("        \"containers\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"app\",\n");
+    t.push_str("            \"image\": \"registry.example/checkout:2.4.2\",\n");
+    t.push_str("            \"args\": [\n");
+    t.push_str("              \"--log-level=info\",\n");
+    t.push_str("              \"--port=8080\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"ports\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"containerPort\": 8080,\n");
+    t.push_str("                \"name\": \"http\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"env\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"FEATURE_X\",\n");
+    t.push_str("                \"value\": \"on\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"DB_HOST\",\n");
+    t.push_str("                \"value\": \"db.shop.svc\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"CACHE_TTL\",\n");
+    t.push_str("                \"value\": \"30\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"limits\": {\n");
+    t.push_str("                \"cpu\": \"500m\",\n");
+    t.push_str("                \"memory\": \"256Mi\"\n");
+    t.push_str("              },\n");
+    t.push_str("              \"requests\": {\n");
+    t.push_str("                \"cpu\": \"250m\",\n");
+    t.push_str("                \"memory\": \"128Mi\"\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"readinessProbe\": {\n");
+    t.push_str("              \"httpGet\": {\n");
+    t.push_str("                \"path\": \"/healthz\",\n");
+    t.push_str("                \"port\": 8080\n");
+    t.push_str("              },\n");
+    t.push_str("              \"periodSeconds\": 10\n");
+    t.push_str("            }\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"tolerations\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"key\": \"spot\",\n");
+    t.push_str("            \"operator\": \"Exists\"\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"nodeSelector\": {\n");
+    t.push_str("          \"kubernetes.io/os\": \"linux\"\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "history/rev6.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("suite\tsuite/tests.json\n");
+    t.push_str("suite\tsuite/spec_tests.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/prod-overlay.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/debug-overlay.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/bad-test.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/bad-index.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/bad-leading-zero.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/bad-hex-index.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/bad-escape.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/bad-replace-dash.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/bad-into-child.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/noop-move.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/into-string.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/remove-in-string.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/test-string-char.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/test-end.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/into-int.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/remove-dash.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/remove-root.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/replace-root.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/add-root-list.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/move-missing.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/copy-missing-index.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/move-dash.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/copy-then-edit.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/test-numbers.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/test-bool-int.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/not-a-list.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/empty-object.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/strings.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/op-not-string.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/path-not-string.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/no-op-member.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/unknown-op.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/late-error.json\n");
+    t.push_str("jsonpatch\t\tk8s/deployment.json\tpatches/patch-in-string.json\n");
+    t.push_str("jsonpatch\t\tk8s/service.json\tpatches/service-ports.json\n");
+    t.push_str("jsonpatch\t--indent 2\tk8s/deployment.json\tpatches/prod-overlay.json\n");
+    t.push_str("jsonpatch\t--indent 4 -u\tconfig/settings.json\tpatches/empty-object.json\n");
+    t.push_str("jsonpatch\t\tconfig/settings-list.json\tpatches/add-root-list.json\n");
+    t.push_str("jsonpatch\t\tconfig/settings-text.json\tpatches/remove-root.json\n");
+    t.push_str("jsonpatch\t\tconfig/settings-scalar.json\tpatches/remove-root.json\n");
+    t.push_str("jsonpatch\t\tconfig/settings-list.json\tpatches/remove-root.json\n");
+    t.push_str("jsonpatch\t\tconfig/settings-text.json\tpatches/add-root-list.json\n");
+    t.push_str("fromstring\tk8s/service.json\tstrpatch/dup-value.json\n");
+    t.push_str("fromstring\tk8s/service.json\tstrpatch/dup-path.json\n");
+    t.push_str("fromstring\tk8s/service.json\tstrpatch/dup-in-value.json\n");
+    t.push_str("fromstring\tk8s/service.json\tstrpatch/plain.json\n");
+    t.push_str("jsondiff\t\thistory/rev1.json\thistory/rev2.json\n");
+    t.push_str("jsondiff\t\thistory/rev2.json\thistory/rev3.json\n");
+    t.push_str("jsondiff\t\thistory/rev3.json\thistory/rev4.json\n");
+    t.push_str("jsondiff\t\thistory/rev4.json\thistory/rev5.json\n");
+    t.push_str("jsondiff\t\thistory/rev5.json\thistory/rev6.json\n");
+    t.push_str("jsondiff\t--indent 2\thistory/rev1.json\thistory/rev6.json\n");
+    t.push_str("jsondiff\t\thistory/rev6.json\thistory/rev1.json\n");
+    t.push_str("jsondiff\t\thistory/rev3.json\thistory/rev3.json\n");
+    t.push_str("jsondiff\t-u\tconfig/settings.json\tconfig/settings-list.json\n");
+    t.push_str("jsondiff\t\tconfig/settings-list.json\tconfig/settings-scalar.json\n");
+    t.push_str("jsondiff\t\tconfig/settings-scalar.json\tconfig/settings-text.json\n");
+    t.push_str("history\thistory\t6\n");
+    t.push_str("pairs\tgen/pairs.jsonl\n");
+    t.push_str("jsonpointer\t\t\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/errors/404\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/routes/2\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/routes/-\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/routes/-/0\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/routes/4\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/paths~1with~1slashes/a~0b\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/paths~1with~1slashes/~0\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/paths~1with~1slashes/\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/unicode/café\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/unicode/naïve/1\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/0\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/01\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/1 \tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/0_1\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/0x\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/+1\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/matrix/1/0\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/matrix/2/0\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/matrix/0/1/x\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/routes/0/0\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/routes/0/9\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/nothing\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/errors/404/0/x\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\tflags\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/~2\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/flags/~\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t\t/http/errors/1\tconfig/settings.json\n");
+    t.push_str("jsonpointer\t--indent 2\t/http\tconfig/settings.json k8s/service.json config/settings-list.json\n");
+    t.push_str("jsonpointer\t\t/0\tconfig/settings-list.json config/settings-text.json config/settings-scalar.json\n");
+    t.push_str("set\tconfig/settings.json\t/http/routes/-\t\"/api/v2\"\n");
+    t.push_str("set\tconfig/settings.json\t/http/routes/0\t\"/home\"\n");
+    t.push_str("set\tconfig/settings.json\t/http/newkey\t{\"a\": [1]}\n");
+    t.push_str("set\tconfig/settings.json\t\t\"root\"\n");
+    t.push_str("set\tconfig/settings.json\t/matrix/2/0\t7\n");
+    t.push_str("set\tconfig/settings.json\t/matrix/9\tnull\n");
+    t.push_str("set\tconfig/settings.json\t/http/errors/x/y\t1\n");
+    t.push_str("set\tconfig/settings.json\t/flags/-\t[]\n");
+    t.push_str("ptr\t\n");
+    t.push_str("ptr\t/\n");
+    t.push_str("ptr\t/a/b~0c~1d\n");
+    t.push_str("ptr\t/~01\n");
+    t.push_str("ptr\ta\n");
+    t.push_str("ptr\t/x~\n");
+    t.push_str("ptr\t/x~3\n");
+    t.push_str("ptr\t/0/-/~1~0\n");
+    t.push_str("ptr\t//\n");
+    t.push_str("contains\t/a/b/c\t/a/b\n");
+    t.push_str("contains\t/a/b\t/a/b/c\n");
+    t.push_str("contains\t/a/b\t\n");
+    t.push_str("contains\t/a~1b\t/a\n");
+    t.push_str("join\t/a/b\t/c/d\n");
+    t.push_str("join\t/a\tx\n");
+    t.push_str("join\t\t/m~0n\n");
+    t.push_str("from_parts\t[\"a\", \"~\", \"/\", 0, \"\"]\n");
+    t.push_str("from_parts\t[]\n");
+    t.push_str("from_parts\t[1, 2.5, true, null]\n");
+    v.push(DataFile { path: "jobs.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_5(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"apps/v1\",\n");
+    t.push_str("  \"kind\": \"Deployment\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\",\n");
+    t.push_str("    \"labels\": {\n");
+    t.push_str("      \"app\": \"checkout\",\n");
+    t.push_str("      \"tier\": \"backend\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"annotations\": {\n");
+    t.push_str("      \"deployment.kubernetes.io/revision\": \"7\",\n");
+    t.push_str("      \"team~owner\": \"payments\"\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"replicas\": 3,\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"matchLabels\": {\n");
+    t.push_str("        \"app\": \"checkout\"\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"strategy\": {\n");
+    t.push_str("      \"type\": \"RollingUpdate\",\n");
+    t.push_str("      \"rollingUpdate\": {\n");
+    t.push_str("        \"maxSurge\": \"25%\",\n");
+    t.push_str("        \"maxUnavailable\": 0\n");
+    t.push_str("      }\n");
+    t.push_str("    },\n");
+    t.push_str("    \"template\": {\n");
+    t.push_str("      \"metadata\": {\n");
+    t.push_str("        \"labels\": {\n");
+    t.push_str("          \"app\": \"checkout\",\n");
+    t.push_str("          \"tier\": \"backend\"\n");
+    t.push_str("        }\n");
+    t.push_str("      },\n");
+    t.push_str("      \"spec\": {\n");
+    t.push_str("        \"containers\": [\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"app\",\n");
+    t.push_str("            \"image\": \"registry.example/checkout:2.4.1\",\n");
+    t.push_str("            \"args\": [\n");
+    t.push_str("              \"--port=8080\",\n");
+    t.push_str("              \"--log-level=info\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"ports\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"containerPort\": 8080,\n");
+    t.push_str("                \"name\": \"http\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"env\": [\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"DB_HOST\",\n");
+    t.push_str("                \"value\": \"db.shop.svc\"\n");
+    t.push_str("              },\n");
+    t.push_str("              {\n");
+    t.push_str("                \"name\": \"CACHE_TTL\",\n");
+    t.push_str("                \"value\": \"30\"\n");
+    t.push_str("              }\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"resources\": {\n");
+    t.push_str("              \"limits\": {\n");
+    t.push_str("                \"cpu\": \"500m\",\n");
+    t.push_str("                \"memory\": \"256Mi\"\n");
+    t.push_str("              },\n");
+    t.push_str("              \"requests\": {\n");
+    t.push_str("                \"cpu\": 0.25,\n");
+    t.push_str("                \"memory\": \"128Mi\"\n");
+    t.push_str("              }\n");
+    t.push_str("            },\n");
+    t.push_str("            \"readinessProbe\": {\n");
+    t.push_str("              \"httpGet\": {\n");
+    t.push_str("                \"path\": \"/healthz\",\n");
+    t.push_str("                \"port\": 8080\n");
+    t.push_str("              },\n");
+    t.push_str("              \"periodSeconds\": 10\n");
+    t.push_str("            }\n");
+    t.push_str("          },\n");
+    t.push_str("          {\n");
+    t.push_str("            \"name\": \"sidecar\",\n");
+    t.push_str("            \"image\": \"registry.example/envoy:1.29\",\n");
+    t.push_str("            \"args\": []\n");
+    t.push_str("          }\n");
+    t.push_str("        ],\n");
+    t.push_str("        \"tolerations\": [],\n");
+    t.push_str("        \"nodeSelector\": {\n");
+    t.push_str("          \"kubernetes.io/os\": \"linux\"\n");
+    t.push_str("        }\n");
+    t.push_str("      }\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "k8s/deployment.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str("  \"apiVersion\": \"v1\",\n");
+    t.push_str("  \"kind\": \"Service\",\n");
+    t.push_str("  \"metadata\": {\n");
+    t.push_str("    \"name\": \"checkout\",\n");
+    t.push_str("    \"namespace\": \"shop\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"spec\": {\n");
+    t.push_str("    \"selector\": {\n");
+    t.push_str("      \"app\": \"checkout\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"ports\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"port\": 80,\n");
+    t.push_str("        \"targetPort\": \"http\"\n");
+    t.push_str("      }\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"type\": \"ClusterIP\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "k8s/service.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"\", \"value\": [1, 2]}, {\"op\": \"add\", \"path\": \"\", \"value\": [3]}]\n");
+    v.push(DataFile { path: "patches/add-root-list.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/metadata/labels/a~2b\", \"value\": \"x\"}]\n");
+    v.push(DataFile { path: "patches/bad-escape.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"remove\", \"path\": \"/spec/template/spec/containers/0x1\"}]\n");
+    v.push(DataFile { path: "patches/bad-hex-index.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/5\", \"value\": {\"name\": \"x\"}}]\n");
+    v.push(DataFile { path: "patches/bad-index.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"move\", \"from\": \"/metadata\", \"path\": \"/metadata/labels/meta\"}]\n");
+    v.push(DataFile { path: "patches/bad-into-child.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"remove\", \"path\": \"/spec/template/spec/containers/01\"}]\n");
+    v.push(DataFile { path: "patches/bad-leading-zero.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/-\", \"value\": {}}]\n");
+    v.push(DataFile { path: "patches/bad-replace-dash.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"replace\", \"path\": \"/spec/replicas\", \"value\": 2}, {\"op\": \"test\", \"path\": \"/spec/replicas\", \"value\": 3}]\n");
+    v.push(DataFile { path: "patches/bad-test.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"copy\", \"from\": \"/spec/template/spec/containers/9\", \"path\": \"/spec/x\"}]\n");
+    v.push(DataFile { path: "patches/copy-missing-index.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"copy\", \"from\": \"/spec/selector\", \"path\": \"/spec/selectorCopy\"}, {\"op\": \"add\", \"path\": \"/spec/selectorCopy/matchLabels/extra\", \"value\": true}, {\"op\": \"test\", \"path\": \"/spec/selector/matchLabels\", \"value\": {\"app\": \"checkout\"}}]\n");
+    v.push(DataFile { path: "patches/copy-then-edit.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"copy\", \"from\": \"/spec/template/spec/containers/0\", \"path\": \"/spec/template/spec/containers/-\"}, {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/2/name\", \"value\": \"debug\"}, {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/2/args/1\", \"value\": \"--log-level=debug\"}, {\"op\": \"remove\", \"path\": \"/spec/template/spec/containers/2/readinessProbe\"}, {\"op\": \"move\", \"from\": \"/metadata/annotations/team~0owner\", \"path\": \"/metadata/labels/owner\"}, {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/0\", \"value\": \"--profile\"}]\n");
+    v.push(DataFile { path: "patches/debug-overlay.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{}\n");
+    v.push(DataFile { path: "patches/empty-object.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/spec/replicas/x\", \"value\": 1}]\n");
+    v.push(DataFile { path: "patches/into-int.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/kind/0\", \"value\": \"x\"}]\n");
+    v.push(DataFile { path: "patches/into-string.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/spec/paused\", \"value\": true}, {\"op\": \"copy\", \"path\": \"/spec/x\"}]\n");
+    v.push(DataFile { path: "patches/late-error.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"move\", \"from\": \"/spec/template/spec/containers/-\", \"path\": \"/spec/x\"}]\n");
+    v.push(DataFile { path: "patches/move-dash.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"move\", \"from\": \"/spec/paused\", \"path\": \"/spec/suspended\"}]\n");
+    v.push(DataFile { path: "patches/move-missing.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"path\": \"/x\", \"value\": 1}]\n");
+    v.push(DataFile { path: "patches/no-op-member.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"move\", \"from\": \"/spec/replicas\", \"path\": \"/spec/replicas\"}]\n");
+    v.push(DataFile { path: "patches/noop-move.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"op\": \"add\", \"path\": \"/x\", \"value\": 1}\n");
+    v.push(DataFile { path: "patches/not-a-list.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": 7, \"path\": \"/x\"}]\n");
+    v.push(DataFile { path: "patches/op-not-string.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"[{\\\"op\\\": \\\"add\\\", \\\"path\\\": \\\"/spec/paused\\\", \\\"value\\\": false}]\"\n");
+    v.push(DataFile { path: "patches/patch-in-string.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": [\"spec\"], \"value\": 1}]\n");
+    v.push(DataFile { path: "patches/path-not-string.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"replace\", \"path\": \"/spec/replicas\", \"value\": 6}, {\"op\": \"add\", \"path\": \"/metadata/labels/env\", \"value\": \"prod\"}, {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/image\", \"value\": \"registry.example/checkout:2.5.0\"}, {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/env/-\", \"value\": {\"name\": \"REGION\", \"value\": \"eu-west-1\"}}, {\"op\": \"test\", \"path\": \"/spec/template/spec/containers/0/env/1/name\", \"value\": \"CACHE_TTL\"}, {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/env/1/value\", \"value\": \"300\"}, {\"op\": \"add\", \"path\": \"/spec/template/spec/tolerations/0\", \"value\": {\"key\": \"dedicated\", \"operator\": \"Equal\", \"value\": \"shop\", \"effect\": \"NoSchedule\"}}, {\"op\": \"remove\", \"path\": \"/spec/template/spec/containers/1\"}, {\"op\": \"add\", \"path\": \"/metadata/annotations/deployment.kubernetes.io~1revision\", \"value\": \"8\"}]\n");
+    v.push(DataFile { path: "patches/prod-overlay.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"remove\", \"path\": \"/spec/template/spec/containers/-\"}]\n");
+    v.push(DataFile { path: "patches/remove-dash.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"remove\", \"path\": \"/kind/0\"}]\n");
+    v.push(DataFile { path: "patches/remove-in-string.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"remove\", \"path\": \"\"}]\n");
+    v.push(DataFile { path: "patches/remove-root.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_6(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"replace\", \"path\": \"\", \"value\": {\"kind\": \"Empty\"}}, {\"op\": \"add\", \"path\": \"/note\", \"value\": \"rebuilt\"}]\n");
+    v.push(DataFile { path: "patches/replace-root.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/spec/ports/-\", \"value\": {\"port\": 443, \"targetPort\": \"https\", \"name\": \"https\"}}, {\"op\": \"add\", \"path\": \"/spec/ports/0/name\", \"value\": \"http\"}, {\"op\": \"replace\", \"path\": \"/spec/type\", \"value\": \"LoadBalancer\"}, {\"op\": \"add\", \"path\": \"/metadata/annotations\", \"value\": {\"service.beta.kubernetes.io/aws-load-balancer-type\": \"nlb\"}}, {\"op\": \"move\", \"from\": \"/spec/ports/1\", \"path\": \"/spec/ports/0\"}]\n");
+    v.push(DataFile { path: "patches/service-ports.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[\"add\", \"remove\"]\n");
+    v.push(DataFile { path: "patches/strings.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"test\", \"path\": \"/spec/strategy/rollingUpdate/maxUnavailable\", \"value\": true}]\n");
+    v.push(DataFile { path: "patches/test-bool-int.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"test\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": null}]\n");
+    v.push(DataFile { path: "patches/test-end.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"test\", \"path\": \"/spec/replicas\", \"value\": 3.0}, {\"op\": \"test\", \"path\": \"/spec/strategy/rollingUpdate/maxUnavailable\", \"value\": false}, {\"op\": \"test\", \"path\": \"/spec/template/spec/containers/0/resources/requests/cpu\", \"value\": 0.25}, {\"op\": \"test\", \"path\": \"/spec/template/spec/containers/0/ports/0\", \"value\": {\"name\": \"http\", \"containerPort\": 8080.0}}, {\"op\": \"test\", \"path\": \"/spec/template/spec/containers/0/ports/0/containerPort\", \"value\": \"8080\"}]\n");
+    v.push(DataFile { path: "patches/test-numbers.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"test\", \"path\": \"/kind/0\", \"value\": \"D\"}, {\"op\": \"test\", \"path\": \"/kind/1\", \"value\": \"x\"}]\n");
+    v.push(DataFile { path: "patches/test-string-char.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"merge\", \"path\": \"/x\", \"value\": 1}]\n");
+    v.push(DataFile { path: "patches/unknown-op.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/limits\", \"value\": {\"cpu\": 1, \"cpu\": 2, \"mem\": 3}}]\n");
+    v.push(DataFile { path: "strpatch/dup-in-value.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/a\", \"path\": \"/b\", \"value\": 1}]\n");
+    v.push(DataFile { path: "strpatch/dup-path.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"add\", \"path\": \"/tags\", \"value\": \"a\", \"value\": \"b\"}]\n");
+    v.push(DataFile { path: "strpatch/dup-value.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[{\"op\": \"replace\", \"path\": \"/kind\", \"value\": \"StatefulSet\"}]\n");
+    v.push(DataFile { path: "strpatch/plain.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_7(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"4.1. add with missing object\",\n");
+    t.push_str("    \"doc\": { \"q\": { \"bar\": 2 } },\n");
+    t.push_str("    \"patch\": [ {\"op\": \"add\", \"path\": \"/a/b\", \"value\": 1} ],\n");
+    t.push_str("    \"error\":\n");
+    t.push_str("       \"path /a does not exist -- missing objects are not created recursively\"\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.1.  Adding an Object Member\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"add\", \"path\": \"/baz\", \"value\": \"qux\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"baz\": \"qux\",\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.2.  Adding an Array Element\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\": [ \"bar\", \"baz\" ]\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"add\", \"path\": \"/foo/1\", \"value\": \"qux\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"foo\": [ \"bar\", \"qux\", \"baz\" ]\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.3.  Removing an Object Member\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"baz\": \"qux\",\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"remove\", \"path\": \"/baz\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.4.  Removing an Array Element\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\": [ \"bar\", \"qux\", \"baz\" ]\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"remove\", \"path\": \"/foo/1\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"foo\": [ \"bar\", \"baz\" ]\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.5.  Replacing a Value\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"baz\": \"qux\",\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"replace\", \"path\": \"/baz\", \"value\": \"boo\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"baz\": \"boo\",\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.6.  Moving a Value\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\": {\n");
+    t.push_str("    \"bar\": \"baz\",\n");
+    t.push_str("    \"waldo\": \"fred\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"qux\": {\n");
+    t.push_str("    \"corge\": \"grault\"\n");
+    t.push_str("  }\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"move\", \"from\": \"/foo/waldo\", \"path\": \"/qux/thud\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"foo\": {\n");
+    t.push_str("    \"bar\": \"baz\"\n");
+    t.push_str("  },\n");
+    t.push_str("  \"qux\": {\n");
+    t.push_str("    \"corge\": \"grault\",\n");
+    t.push_str("    \"thud\": \"fred\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.7.  Moving an Array Element\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\": [ \"all\", \"grass\", \"cows\", \"eat\" ]\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"move\", \"from\": \"/foo/1\", \"path\": \"/foo/3\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"foo\": [ \"all\", \"cows\", \"eat\", \"grass\" ]\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.8.  Testing a Value: Success\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"baz\": \"qux\",\n");
+    t.push_str("  \"foo\": [ \"a\", 2, \"c\" ]\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"test\", \"path\": \"/baz\", \"value\": \"qux\" },\n");
+    t.push_str("  { \"op\": \"test\", \"path\": \"/foo/1\", \"value\": 2 }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("     \"baz\": \"qux\",\n");
+    t.push_str("     \"foo\": [ \"a\", 2, \"c\" ]\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.9.  Testing a Value: Error\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"baz\": \"qux\"\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"test\", \"path\": \"/baz\", \"value\": \"bar\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"error\": \"string not equivalent\"\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.10.  Adding a nested Member Object\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"add\", \"path\": \"/child\", \"value\": { \"grandchild\": { } } }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"foo\": \"bar\",\n");
+    t.push_str("  \"child\": {\n");
+    t.push_str("    \"grandchild\": {\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.11.  Ignoring Unrecognized Elements\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\":\"bar\"\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"add\", \"path\": \"/baz\", \"value\": \"qux\", \"xyz\": 123 }\n");
+    t.push_str("],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("  \"foo\":\"bar\",\n");
+    t.push_str("  \"baz\":\"qux\"\n");
+    t.push_str("}\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str(" {\n");
+    t.push_str("    \"comment\": \"A.12.  Adding to a Non-existent Target\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("  \"foo\": \"bar\"\n");
+    t.push_str("},\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"add\", \"path\": \"/baz/bat\", \"value\": \"qux\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"error\": \"add to a non-existent target\"\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str(" {\n");
+    t.push_str("    \"comment\": \"A.13 Invalid JSON Patch Document\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("     \"foo\": \"bar\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"patch\": [\n");
+    t.push_str("  { \"op\": \"add\", \"path\": \"/baz\", \"value\": \"qux\", \"op\": \"remove\" }\n");
+    t.push_str("],\n");
+    t.push_str("    \"error\": \"operation has two 'op' members\",\n");
+    t.push_str("    \"disabled\": true\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.14. ~ Escape Ordering\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("       \"/\": 9,\n");
+    t.push_str("       \"~1\": 10\n");
+    t.push_str("    },\n");
+    t.push_str("    \"patch\": [{\"op\": \"test\", \"path\": \"/~01\", \"value\": 10}],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("       \"/\": 9,\n");
+    t.push_str("       \"~1\": 10\n");
+    t.push_str("    }\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.15. Comparing Strings and Numbers\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("       \"/\": 9,\n");
+    t.push_str("       \"~1\": 10\n");
+    t.push_str("    },\n");
+    t.push_str("    \"patch\": [{\"op\": \"test\", \"path\": \"/~01\", \"value\": \"10\"}],\n");
+    t.push_str("    \"error\": \"number is not equal to string\"\n");
+    t.push_str("  },\n");
+    t.push_str("\n");
+    t.push_str("  {\n");
+    t.push_str("    \"comment\": \"A.16. Adding an Array Value\",\n");
+    t.push_str("    \"doc\": {\n");
+    t.push_str("       \"foo\": [\"bar\"]\n");
+    t.push_str("    },\n");
+    t.push_str("    \"patch\": [{ \"op\": \"add\", \"path\": \"/foo/-\", \"value\": [\"abc\", \"def\"] }],\n");
+    t.push_str("    \"expected\": {\n");
+    t.push_str("      \"foo\": [\"bar\", [\"abc\", \"def\"]]\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "suite/spec_tests.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_8(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\n");
+    t.push_str("    { \"comment\": \"empty list, empty docs\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [],\n");
+    t.push_str("      \"expected\": {} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"empty patch list\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [],\n");
+    t.push_str("      \"expected\": {\"foo\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"rearrangements OK?\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1, \"bar\": 2},\n");
+    t.push_str("      \"patch\": [],\n");
+    t.push_str("      \"expected\": {\"bar\":2, \"foo\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"rearrangements OK?  How about one level down ... array\",\n");
+    t.push_str("      \"doc\": [{\"foo\": 1, \"bar\": 2}],\n");
+    t.push_str("      \"patch\": [],\n");
+    t.push_str("      \"expected\": [{\"bar\":2, \"foo\": 1}] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"rearrangements OK?  How about one level down...\",\n");
+    t.push_str("      \"doc\": {\"foo\":{\"foo\": 1, \"bar\": 2}},\n");
+    t.push_str("      \"patch\": [],\n");
+    t.push_str("      \"expected\": {\"foo\":{\"bar\":2, \"foo\": 1}} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"add replaces any existing field\",\n");
+    t.push_str("      \"doc\": {\"foo\": null},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/foo\", \"value\":1}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"toplevel array\",\n");
+    t.push_str("      \"doc\": [],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/0\", \"value\": \"foo\"}],\n");
+    t.push_str("      \"expected\": [\"foo\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"toplevel array, no change\",\n");
+    t.push_str("      \"doc\": [\"foo\"],\n");
+    t.push_str("      \"patch\": [],\n");
+    t.push_str("      \"expected\": [\"foo\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"toplevel object, numeric string\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/foo\", \"value\": \"1\"}],\n");
+    t.push_str("      \"expected\": {\"foo\":\"1\"} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"toplevel object, integer\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/foo\", \"value\": 1}],\n");
+    t.push_str("      \"expected\": {\"foo\":1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Toplevel scalar values OK?\",\n");
+    t.push_str("      \"doc\": \"foo\",\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"expected\": \"bar\",\n");
+    t.push_str("      \"disabled\": true },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"replace object document with array document?\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"\", \"value\": []}],\n");
+    t.push_str("      \"expected\": [] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"replace array document with object document?\",\n");
+    t.push_str("      \"doc\": [],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"\", \"value\": {}}],\n");
+    t.push_str("      \"expected\": {} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"append to root array document?\",\n");
+    t.push_str("      \"doc\": [],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/-\", \"value\": \"hi\"}],\n");
+    t.push_str("      \"expected\": [\"hi\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Add, / target\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [ {\"op\": \"add\", \"path\": \"/\", \"value\":1 } ],\n");
+    t.push_str("      \"expected\": {\"\":1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Add, /foo/ deep target (trailing slash)\",\n");
+    t.push_str("      \"doc\": {\"foo\": {}},\n");
+    t.push_str("      \"patch\": [ {\"op\": \"add\", \"path\": \"/foo/\", \"value\":1 } ],\n");
+    t.push_str("      \"expected\": {\"foo\":{\"\": 1}} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Add composite value at top level\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/bar\", \"value\": [1, 2]}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1, \"bar\": [1, 2]} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Add into composite value\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1, \"baz\": [{\"qux\": \"hello\"}]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/baz/0/foo\", \"value\": \"world\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1, \"baz\": [{\"qux\": \"hello\", \"foo\": \"world\"}]} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"bar\": [1, 2]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/bar/8\", \"value\": \"5\"}],\n");
+    t.push_str("      \"error\": \"Out of bounds (upper)\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"bar\": [1, 2]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/bar/-1\", \"value\": \"5\"}],\n");
+    t.push_str("      \"error\": \"Out of bounds (lower)\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/bar\", \"value\": true}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1, \"bar\": true} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/bar\", \"value\": false}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1, \"bar\": false} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/bar\", \"value\": null}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1, \"bar\": null} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"0 can be an array index or object element name\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/0\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1, \"0\": \"bar\" } },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"foo\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/1\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"expected\": [\"foo\", \"bar\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/1\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"expected\": [\"foo\", \"bar\", \"sil\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/0\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"expected\": [\"bar\", \"foo\", \"sil\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"push item to array via last index + 1\",\n");
+    t.push_str("      \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\":\"add\", \"path\": \"/2\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"expected\": [\"foo\", \"sil\", \"bar\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"add item to array at index > length should fail\",\n");
+    t.push_str("      \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\":\"add\", \"path\": \"/3\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"error\": \"index is greater than number of items in array\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test against implementation-specific numeric parsing\",\n");
+    t.push_str("      \"doc\": {\"1e0\": \"foo\"},\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/1e0\", \"value\": \"foo\"}],\n");
+    t.push_str("      \"expected\": {\"1e0\": \"foo\"} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test with bad number should fail\",\n");
+    t.push_str("      \"doc\": [\"foo\", \"bar\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/1e0\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"error\": \"test op shouldn't get array element 1\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/bar\", \"value\": 42}],\n");
+    t.push_str("      \"error\": \"Object operation on array target\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/1\", \"value\": [\"bar\", \"baz\"]}],\n");
+    t.push_str("      \"expected\": [\"foo\", [\"bar\", \"baz\"], \"sil\"],\n");
+    t.push_str("      \"comment\": \"value in array add not flattened\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": 1, \"bar\": [1, 2, 3, 4]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/bar\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": 1, \"baz\": [{\"qux\": \"hello\"}]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/baz/0/qux\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1, \"baz\": [{}]} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": 1, \"baz\": [{\"qux\": \"hello\"}]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/foo\", \"value\": [1, 2, 3, 4]}],\n");
+    t.push_str("      \"expected\": {\"foo\": [1, 2, 3, 4], \"baz\": [{\"qux\": \"hello\"}]} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": [1, 2, 3, 4], \"baz\": [{\"qux\": \"hello\"}]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/baz/0/qux\", \"value\": \"world\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": [1, 2, 3, 4], \"baz\": [{\"qux\": \"world\"}]} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"foo\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/0\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"expected\": [\"bar\"] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/0\", \"value\": 0}],\n");
+    t.push_str("      \"expected\": [0] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/0\", \"value\": true}],\n");
+    t.push_str("      \"expected\": [true] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/0\", \"value\": false}],\n");
+    t.push_str("      \"expected\": [false] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/0\", \"value\": null}],\n");
+    t.push_str("      \"expected\": [null] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/1\", \"value\": [\"bar\", \"baz\"]}],\n");
+    t.push_str("      \"expected\": [\"foo\", [\"bar\", \"baz\"]],\n");
+    t.push_str("      \"comment\": \"value in array replace not flattened\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"replace whole document\",\n");
+    t.push_str("      \"doc\": {\"foo\": \"bar\"},\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"\", \"value\": {\"baz\": \"qux\"}}],\n");
+    t.push_str("      \"expected\": {\"baz\": \"qux\"} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test replace with missing parent key should fail\",\n");
+    t.push_str("      \"doc\": {\"bar\": \"baz\"},\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/foo/bar\", \"value\": false}],\n");
+    t.push_str("      \"error\": \"replace op should fail with missing parent key\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"spurious patch properties\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/foo\", \"value\": 1, \"spurious\": 1}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": null},\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/foo\", \"value\": null}],\n");
+    t.push_str("      \"expected\": {\"foo\": null},\n");
+    t.push_str("      \"comment\": \"null value should be valid obj property\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": null},\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/foo\", \"value\": \"truthy\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": \"truthy\"},\n");
+    t.push_str("      \"comment\": \"null value should be valid obj property to be replaced with something truthy\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": null},\n");
+    t.push_str("      \"patch\": [{\"op\": \"move\", \"from\": \"/foo\", \"path\": \"/bar\"}],\n");
+    t.push_str("      \"expected\": {\"bar\": null},\n");
+    t.push_str("      \"comment\": \"null value should be valid obj property to be moved\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": null},\n");
+    t.push_str("      \"patch\": [{\"op\": \"copy\", \"from\": \"/foo\", \"path\": \"/bar\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": null, \"bar\": null},\n");
+    t.push_str("      \"comment\": \"null value should be valid obj property to be copied\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": null},\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/foo\"}],\n");
+    t.push_str("      \"expected\": {},\n");
+    t.push_str("      \"comment\": \"null value should be valid obj property to be removed\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": \"bar\"},\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/foo\", \"value\": null}],\n");
+    t.push_str("      \"expected\": {\"foo\": null},\n");
+    t.push_str("      \"comment\": \"null value should still be valid obj property replace other value\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": {\"foo\": 1, \"bar\": 2}},\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/foo\", \"value\": {\"bar\": 2, \"foo\": 1}}],\n");
+    t.push_str("      \"expected\": {\"foo\": {\"foo\": 1, \"bar\": 2}},\n");
+    t.push_str("      \"comment\": \"test should pass despite rearrangement\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": [{\"foo\": 1, \"bar\": 2}]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/foo\", \"value\": [{\"bar\": 2, \"foo\": 1}]}],\n");
+    t.push_str("      \"expected\": {\"foo\": [{\"foo\": 1, \"bar\": 2}]},\n");
+    t.push_str("      \"comment\": \"test should pass despite (nested) rearrangement\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": {\"bar\": [1, 2, 5, 4]}},\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/foo\", \"value\": {\"bar\": [1, 2, 5, 4]}}],\n");
+    t.push_str("      \"expected\": {\"foo\": {\"bar\": [1, 2, 5, 4]}},\n");
+    t.push_str("      \"comment\": \"test should pass - no error\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": {\"bar\": [1, 2, 5, 4]}},\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/foo\", \"value\": [1, 2]}],\n");
+    t.push_str("      \"error\": \"test op should fail\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Whole document\",\n");
+    t.push_str("      \"doc\": { \"foo\": 1 },\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"\", \"value\": {\"foo\": 1}}],\n");
+    t.push_str("      \"disabled\": true },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Empty-string element\",\n");
+    t.push_str("      \"doc\": { \"\": 1 },\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/\", \"value\": 1}],\n");
+    t.push_str("      \"expected\": { \"\": 1 } },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\n");
+    t.push_str("            \"foo\": [\"bar\", \"baz\"],\n");
+    t.push_str("            \"\": 0,\n");
+    t.push_str("            \"a/b\": 1,\n");
+    t.push_str("            \"c%d\": 2,\n");
+    t.push_str("            \"e^f\": 3,\n");
+    t.push_str("            \"g|h\": 4,\n");
+    t.push_str("            \"i\\\\j\": 5,\n");
+    t.push_str("            \"k\\\"l\": 6,\n");
+    t.push_str("            \" \": 7,\n");
+    t.push_str("            \"m~n\": 8\n");
+    t.push_str("            },\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/foo\", \"value\": [\"bar\", \"baz\"]},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/foo/0\", \"value\": \"bar\"},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/\", \"value\": 0},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/a~1b\", \"value\": 1},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/c%d\", \"value\": 2},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/e^f\", \"value\": 3},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/g|h\", \"value\": 4},\n");
+    t.push_str("                {\"op\": \"test\", \"path\":  \"/i\\\\j\", \"value\": 5},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/k\\\"l\", \"value\": 6},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/ \", \"value\": 7},\n");
+    t.push_str("                {\"op\": \"test\", \"path\": \"/m~0n\", \"value\": 8}],\n");
+    t.push_str("      \"expected\": {\n");
+    t.push_str("            \"\": 0,\n");
+    t.push_str("            \" \": 7,\n");
+    t.push_str("            \"a/b\": 1,\n");
+    t.push_str("            \"c%d\": 2,\n");
+    t.push_str("            \"e^f\": 3,\n");
+    t.push_str("            \"foo\": [\n");
+    t.push_str("                \"bar\",\n");
+    t.push_str("                \"baz\"\n");
+    t.push_str("            ],\n");
+    t.push_str("            \"g|h\": 4,\n");
+    t.push_str("            \"i\\\\j\": 5,\n");
+    t.push_str("            \"k\\\"l\": 6,\n");
+    t.push_str("            \"m~n\": 8\n");
+    t.push_str("        }\n");
+    t.push_str("    },\n");
+    t.push_str("    { \"comment\": \"Move to same location has no effect\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"move\", \"from\": \"/foo\", \"path\": \"/foo\"}],\n");
+    t.push_str("      \"expected\": {\"foo\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"foo\": 1, \"baz\": [{\"qux\": \"hello\"}]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"move\", \"from\": \"/foo\", \"path\": \"/bar\"}],\n");
+    t.push_str("      \"expected\": {\"baz\": [{\"qux\": \"hello\"}], \"bar\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"baz\": [{\"qux\": \"hello\"}], \"bar\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"move\", \"from\": \"/baz/0/qux\", \"path\": \"/baz/1\"}],\n");
+    t.push_str("      \"expected\": {\"baz\": [{}, \"hello\"], \"bar\": 1} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"doc\": {\"baz\": [{\"qux\": \"hello\"}], \"bar\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"copy\", \"from\": \"/baz/0\", \"path\": \"/boo\"}],\n");
+    t.push_str("      \"expected\": {\"baz\":[{\"qux\":\"hello\"}],\"bar\":1,\"boo\":{\"qux\":\"hello\"}} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"replacing the root of the document is possible with add\",\n");
+    t.push_str("      \"doc\": {\"foo\": \"bar\"},\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"\", \"value\": {\"baz\": \"qux\"}}],\n");
+    t.push_str("      \"expected\": {\"baz\":\"qux\"}},\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Adding to \\\"/-\\\" adds to the end of the array\",\n");
+    t.push_str("      \"doc\": [ 1, 2 ],\n");
+    t.push_str("      \"patch\": [ { \"op\": \"add\", \"path\": \"/-\", \"value\": { \"foo\": [ \"bar\", \"baz\" ] } } ],\n");
+    t.push_str("      \"expected\": [ 1, 2, { \"foo\": [ \"bar\", \"baz\" ] } ]},\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Adding to \\\"/-\\\" adds to the end of the array, even n levels down\",\n");
+    t.push_str("      \"doc\": [ 1, 2, [ 3, [ 4, 5 ] ] ],\n");
+    t.push_str("      \"patch\": [ { \"op\": \"add\", \"path\": \"/2/1/-\", \"value\": { \"foo\": [ \"bar\", \"baz\" ] } } ],\n");
+    t.push_str("      \"expected\": [ 1, 2, [ 3, [ 4, 5, { \"foo\": [ \"bar\", \"baz\" ] } ] ] ]},\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test remove with bad number should fail\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1, \"baz\": [{\"qux\": \"hello\"}]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/baz/1e0/qux\"}],\n");
+    t.push_str("      \"error\": \"remove op shouldn't remove from array with bad number\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test remove on array\",\n");
+    t.push_str("      \"doc\": [1, 2, 3, 4],\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/0\"}],\n");
+    t.push_str("      \"expected\": [2, 3, 4] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test repeated removes\",\n");
+    t.push_str("      \"doc\": [1, 2, 3, 4],\n");
+    t.push_str("      \"patch\": [{ \"op\": \"remove\", \"path\": \"/1\" },\n");
+    t.push_str("                { \"op\": \"remove\", \"path\": \"/2\" }],\n");
+    t.push_str("      \"expected\": [1, 3] },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test remove with bad index should fail\",\n");
+    t.push_str("      \"doc\": [1, 2, 3, 4],\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/1e0\"}],\n");
+    t.push_str("      \"error\": \"remove op shouldn't remove from array with bad number\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test replace with bad number should fail\",\n");
+    t.push_str("      \"doc\": [\"\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"replace\", \"path\": \"/1e0\", \"value\": false}],\n");
+    t.push_str("      \"error\": \"replace op shouldn't replace in array with bad number\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test copy with bad number should fail\",\n");
+    t.push_str("      \"doc\": {\"baz\": [1,2,3], \"bar\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"copy\", \"from\": \"/baz/1e0\", \"path\": \"/boo\"}],\n");
+    t.push_str("      \"error\": \"copy op shouldn't work with bad number\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test move with bad number should fail\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1, \"baz\": [1,2,3,4]},\n");
+    t.push_str("      \"patch\": [{\"op\": \"move\", \"from\": \"/baz/1e0\", \"path\": \"/foo\"}],\n");
+    t.push_str("      \"error\": \"move op shouldn't work with bad number\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test add with bad number should fail\",\n");
+    t.push_str("      \"doc\": [\"foo\", \"sil\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"add\", \"path\": \"/1e0\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"error\": \"add op shouldn't add to array with bad number\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing 'path' parameter\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [ { \"op\": \"add\", \"value\": \"bar\" } ],\n");
+    t.push_str("      \"error\": \"missing 'path' parameter\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"'path' parameter with null value\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [ { \"op\": \"add\", \"path\": null, \"value\": \"bar\" } ],\n");
+    t.push_str("      \"error\": \"null is not valid value for 'path'\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"invalid JSON Pointer token\",\n");
+    t.push_str("      \"doc\": {},\n");
+    t.push_str("      \"patch\": [ { \"op\": \"add\", \"path\": \"foo\", \"value\": \"bar\" } ],\n");
+    t.push_str("      \"error\": \"JSON Pointer should start with a slash\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing 'value' parameter to add\",\n");
+    t.push_str("      \"doc\": [ 1 ],\n");
+    t.push_str("      \"patch\": [ { \"op\": \"add\", \"path\": \"/-\" } ],\n");
+    t.push_str("      \"error\": \"missing 'value' parameter\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing 'value' parameter to replace\",\n");
+    t.push_str("      \"doc\": [ 1 ],\n");
+    t.push_str("      \"patch\": [ { \"op\": \"replace\", \"path\": \"/0\" } ],\n");
+    t.push_str("      \"error\": \"missing 'value' parameter\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing 'value' parameter to test\",\n");
+    t.push_str("      \"doc\": [ null ],\n");
+    t.push_str("      \"patch\": [ { \"op\": \"test\", \"path\": \"/0\" } ],\n");
+    t.push_str("      \"error\": \"missing 'value' parameter\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing value parameter to test - where undef is falsy\",\n");
+    t.push_str("      \"doc\": [ false ],\n");
+    t.push_str("      \"patch\": [ { \"op\": \"test\", \"path\": \"/0\" } ],\n");
+    t.push_str("      \"error\": \"missing 'value' parameter\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing from parameter to copy\",\n");
+    t.push_str("      \"doc\": [ 1 ],\n");
+    t.push_str("      \"patch\": [ { \"op\": \"copy\", \"path\": \"/-\" } ],\n");
+    t.push_str("      \"error\": \"missing 'from' parameter\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing from location to copy\",\n");
+    t.push_str("      \"doc\": { \"foo\": 1 },\n");
+    t.push_str("      \"patch\": [ { \"op\": \"copy\", \"from\": \"/bar\", \"path\": \"/foo\" } ],\n");
+    t.push_str("      \"error\": \"missing 'from' location\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing from parameter to move\",\n");
+    t.push_str("      \"doc\": { \"foo\": 1 },\n");
+    t.push_str("      \"patch\": [ { \"op\": \"move\", \"path\": \"\" } ],\n");
+    t.push_str("      \"error\": \"missing 'from' parameter\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"missing from location to move\",\n");
+    t.push_str("      \"doc\": { \"foo\": 1 },\n");
+    t.push_str("      \"patch\": [ { \"op\": \"move\", \"from\": \"/bar\", \"path\": \"/foo\" } ],\n");
+    t.push_str("      \"error\": \"missing 'from' location\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"duplicate ops\",\n");
+    t.push_str("      \"doc\": { \"foo\": \"bar\" },\n");
+    t.push_str("      \"patch\": [ { \"op\": \"add\", \"path\": \"/baz\", \"value\": \"qux\",\n");
+    t.push_str("                   \"op\": \"move\", \"from\":\"/foo\" } ],\n");
+    t.push_str("      \"error\": \"patch has two 'op' members\",\n");
+    t.push_str("      \"disabled\": true },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"unrecognized op should fail\",\n");
+    t.push_str("      \"doc\": {\"foo\": 1},\n");
+    t.push_str("      \"patch\": [{\"op\": \"spam\", \"path\": \"/foo\", \"value\": 1}],\n");
+    t.push_str("      \"error\": \"Unrecognized op 'spam'\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test with bad array number that has leading zeros\",\n");
+    t.push_str("      \"doc\": [\"foo\", \"bar\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/00\", \"value\": \"foo\"}],\n");
+    t.push_str("      \"error\": \"test op should reject the array value, it has leading zeros\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test with bad array number that has leading zeros\",\n");
+    t.push_str("      \"doc\": [\"foo\", \"bar\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"test\", \"path\": \"/01\", \"value\": \"bar\"}],\n");
+    t.push_str("      \"error\": \"test op should reject the array value, it has leading zeros\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Removing nonexistent field\",\n");
+    t.push_str("      \"doc\": {\"foo\" : \"bar\"},\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/baz\"}],\n");
+    t.push_str("      \"error\": \"removing a nonexistent field should fail\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Removing deep nonexistent path\",\n");
+    t.push_str("      \"doc\": {\"foo\" : \"bar\"},\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/missing1/missing2\"}],\n");
+    t.push_str("      \"error\": \"removing a nonexistent field should fail\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Removing nonexistent index\",\n");
+    t.push_str("      \"doc\": [\"foo\", \"bar\"],\n");
+    t.push_str("      \"patch\": [{\"op\": \"remove\", \"path\": \"/2\"}],\n");
+    t.push_str("      \"error\": \"removing a nonexistent index should fail\" },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"Patch with different capitalisation than doc\",\n");
+    t.push_str("       \"doc\": {\"foo\":\"bar\"},\n");
+    t.push_str("       \"patch\": [{\"op\": \"add\", \"path\": \"/FOO\", \"value\": \"BAR\"}],\n");
+    t.push_str("       \"expected\": {\"foo\": \"bar\", \"FOO\": \"BAR\"} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test copy object then change destination\",\n");
+    t.push_str("      \"doc\": {\"foo\": {\"bar\": {\"baz\": [{\"boo\": \"net\"}]}}},\n");
+    t.push_str("      \"patch\": [\n");
+    t.push_str("        {\"op\": \"copy\", \"from\": \"/foo\", \"path\": \"/bak\"},\n");
+    t.push_str("        {\"op\": \"replace\", \"path\": \"/bak/bar/baz/0/boo\", \"value\": \"qux\"}\n");
+    t.push_str("      ],\n");
+    t.push_str("      \"expected\": {\"foo\": {\"bar\": {\"baz\": [{\"boo\": \"net\"}]}}, \"bak\": {\"bar\": {\"baz\": [{\"boo\":\"qux\"}]}}} },\n");
+    t.push_str("\n");
+    t.push_str("    { \"comment\": \"test copy object then change source\",\n");
+    t.push_str("      \"doc\": {\"foo\": {\"bar\": {\"baz\": [{\"boo\": \"net\"}]}}},\n");
+    t.push_str("      \"patch\": [\n");
+    t.push_str("        {\"op\": \"copy\", \"from\": \"/foo\", \"path\": \"/bak\"},\n");
+    t.push_str("        {\"op\": \"replace\", \"path\": \"/foo/bar/baz/0/boo\", \"value\": \"qux\"}\n");
+    t.push_str("      ],\n");
+    t.push_str("      \"expected\": {\"foo\": {\"bar\": {\"baz\": [{\"boo\": \"qux\"}]}}, \"bak\": {\"bar\": {\"baz\": [{\"boo\":\"net\"}]}}}\n");
+    t.push_str("    }\n");
+    t.push_str("\n");
+    t.push_str("]\n");
+    v.push(DataFile { path: "suite/tests.json".to_string(), hex: false, body: t });
+}
