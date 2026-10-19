@@ -5463,6 +5463,57 @@ fn plain_assign_does_not_write_through_a_mut_ref() {
     );
 }
 
+/// B-2026-10-15-106 (design.md § Collection literals): a bare `[v; n]` always
+/// builds an `Array`. A constant count gives an `Array[T, n]`; a count that is
+/// not a constant, and a `[v; n]` where a `Vec` is wanted, are refused with
+/// the `Vec.filled(n, v)` fix-it, nested ones over two passes.
+#[test]
+fn a_repeat_literal_is_an_array_and_a_vec_is_vec_filled() {
+    accepted_and_runs(
+        "repeat-literal-constant-array",
+        "const SIZE: usize = 4;\n\
+         fn main() {\n\
+             let mut counts = [0; 26];\n\
+             counts[2] += 5;\n\
+             let b = [7; SIZE];\n\
+             let grid = [[0u8; 3]; 2];\n\
+             println(f\"{counts.len()} {counts[2]} {b.len()} {b[3]} {grid[1].len()}\");\n\
+         }\n",
+        "26 5 4 7 3\n",
+    );
+    rejected_then_fixed_by(
+        "repeat-literal-runtime-count",
+        "fn main() {\n\
+             let n = 5;\n\
+             let mut v = [0; n];\n\
+             v.push(1);\n\
+             println(f\"{v.len()}\");\n\
+         }\n",
+        "its count must be a compile-time constant: write `Vec.filled(n, 0)`",
+        "let mut v = Vec.filled(n, 0);",
+    );
+    rejected_then_fixed_by(
+        "repeat-literal-vec-annotation",
+        "fn total(v: Vec[i64]) -> i64 { v.len() as i64 }\n\
+         fn main() {\n\
+             let v: Vec[i64] = [0; 8];\n\
+             println(f\"{v.len()} {total([3; 2])}\");\n\
+         }\n",
+        "a `[v; n]` literal builds an `Array`, not a `Vec`: write `Vec.filled(8, 0)`",
+        "total(Vec.filled(2, 3))",
+    );
+    rejected_then_fixed_in(
+        "repeat-literal-nested-vec",
+        "fn main() {\n\
+             let g: Vec[Vec[i64]] = [[0; 3]; 3];\n\
+             println(f\"{g.len()}\");\n\
+         }\n",
+        "not a `Vec`: write",
+        "Vec.filled(3, Vec.filled(3, 0))",
+        2,
+    );
+}
+
 /// B-2026-10-19-23: `m.lock()` returns a `MutexGuard` that releases the
 /// mutex when it drops, and a `lock` block is one in a scope of its own.
 /// Four tasks that hold the mutex across a sleep end at 4 (plus the 100 a

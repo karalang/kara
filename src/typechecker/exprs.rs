@@ -653,6 +653,56 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The count of a bare `[v; n]` as a compile-time constant: a
+    /// non-negative integer literal, or an expression the const evaluator
+    /// folds (`[0; N]` over `const N`). `None` for anything else, which on
+    /// the v2 pipelines is refused by [`Self::reject_vec_repeat_literal`]
+    /// (B-2026-10-15-106).
+    fn repeat_count_const(&mut self, count: &Expr) -> Option<i128> {
+        if let ExprKind::Integer(n, _) = &count.kind {
+            return (*n >= 0).then_some(*n);
+        }
+        let errors = self.errors.len();
+        let value = self
+            .eval_const_expr(count, &Type::UInt(UIntSize::Usize))
+            .ok()
+            .and_then(|cv| super::const_eval::const_value_to_i128(&cv));
+        self.errors.truncate(errors);
+        value.filter(|n| *n >= 0)
+    }
+
+    /// B-2026-10-15-106 — a bare `[v; n]` always builds an `Array`
+    /// (design.md § Collection literals), so one whose count is not a
+    /// constant, or one written where a `Vec` is wanted, is refused with
+    /// the machine-applicable `Vec.filled(n, v)` in its place.
+    fn reject_vec_repeat_literal(
+        &mut self,
+        expr: &Expr,
+        value: &Expr,
+        count: &Expr,
+        for_vec: bool,
+    ) {
+        let replacement = format!(
+            "Vec.filled({}, {})",
+            crate::formatter::render_expr(count),
+            crate::formatter::render_expr(value)
+        );
+        let why = if for_vec {
+            "a `[v; n]` literal builds an `Array`, not a `Vec`"
+        } else {
+            "a `[v; n]` literal builds an `Array`, so its count must be a compile-time constant"
+        };
+        self.type_error_with_fix_it(
+            format!("{why}: write `{replacement}` (design.md § Collection literals)"),
+            expr.span,
+            TypeErrorKind::TypeMismatch,
+            FixIt {
+                span: expr.span,
+                replacement,
+            },
+        );
+    }
+
     /// A char literal where a `Str` is wanted (`s.split(',')`, whose
     /// separator is a `Str`, B-2026-10-12-7): reported, with the same text
     /// as a string literal for `karac fix`.
@@ -2206,7 +2256,14 @@ impl<'a> super::TypeChecker<'a> {
             Type::Array { element, size },
         ) = (&expr.kind, expected)
         {
-            if let ExprKind::Integer(n, _) = &count.kind {
+            let v2 = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+            let constant = match &count.kind {
+                ExprKind::Integer(n, _) => Some(*n),
+                _ if v2 => self.repeat_count_const(count),
+                _ => None,
+            };
+            if let Some(n) = constant {
+                let n = &n;
                 // Length-mismatch check skipped for non-literal sizes
                 // (slice 3 `ConstParam` / `ConstVar` resolve at mono-
                 // emission time).
@@ -2234,6 +2291,34 @@ impl<'a> super::TypeChecker<'a> {
             self.check_expr(value, element);
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
+        }
+        // B-2026-10-15-106 — a bare `[v; n]` where a `Vec` is wanted. It
+        // builds an `Array` on the v2 pipelines, so it is refused with its
+        // `Vec.filled(n, v)` fix-it rather than coerced.
+        if let ExprKind::RepeatLiteral {
+            type_name: None,
+            value,
+            count,
+        } = &expr.kind
+        {
+            let wanted = match expected {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                && matches!(wanted, Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1)
+            {
+                let Type::Named { args, .. } = wanted else {
+                    unreachable!()
+                };
+                let element = args[0].clone();
+                self.infer_expr(count);
+                self.check_expr(value, &element);
+                self.reject_vec_repeat_literal(expr, value, count, true);
+                self.record_expr_type(&expr.span, expected);
+                return expected.clone();
+            }
         }
         // B-2026-09-14-24 — the same propagation for every other (literal
         // spelling, expected sequence form) pair: a `Vec`/`VecDeque`/`Slice`/
@@ -9782,6 +9867,27 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Array {
                             element: Box::new(elem_ty),
                             size: ConstArg::Literal(size as i64),
+                        }
+                    }
+                    // B-2026-10-15-106 — on the v2 pipelines a bare `[v; n]`
+                    // is an `Array` (design.md § Collection literals), and a
+                    // count that is not a constant is refused with its
+                    // `Vec.filled(n, v)` fix-it.
+                    None if self.cli_lint_overrides.strict_core
+                        || self.library_methods_from_source =>
+                    {
+                        match self.repeat_count_const(count) {
+                            Some(n) => Type::Array {
+                                element: Box::new(elem_ty),
+                                size: ConstArg::Literal(n as i64),
+                            },
+                            None => {
+                                self.reject_vec_repeat_literal(expr, value, count, false);
+                                Type::Named {
+                                    name: "Vec".to_string(),
+                                    args: vec![elem_ty],
+                                }
+                            }
                         }
                     }
                     None | Some("Vec") => {
