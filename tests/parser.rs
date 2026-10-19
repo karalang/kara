@@ -558,6 +558,17 @@ fn test_multi_assign_formatter_round_trips() {
     );
 }
 
+/// The formatter writes the parentheses an operand needs, so a formatted
+/// program is the program it was: `(a + 1) * b` printed as `a + 1 * b`, and
+/// every fix-it that renders an expression with it, changed what the code
+/// computes (B-2026-10-19-69).
+#[test]
+fn test_formatter_keeps_the_parentheses_an_operand_needs() {
+    let src = "fn main() {\n    let a = 1;\n    let b = 2;\n    let x = (a + 1) * b;\n    let y = a - (b - 1);\n    let z = -(a + b);\n    let w = (a + b) as i64;\n    let v = (-a).abs();\n    let u = (a + b).pow(2);\n    let r = 0..(a + b) * 2;\n    let t = (a < b) == (b < a);\n    let s = a - b - 1;\n}\n";
+    let out = karac::formatter::format_program(&parse_ok(src));
+    assert_eq!(out, src);
+}
+
 #[test]
 fn test_multi_assign_desugar_expands_to_temp_block() {
     // The desugar pass (between parse and resolve) rewrites the MultiAssign

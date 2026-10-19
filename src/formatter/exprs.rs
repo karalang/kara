@@ -5,7 +5,66 @@ use std::fmt::Write;
 
 use super::{escape_string, float_suffix_str, int_suffix_str};
 
+/// Binding powers, as the parser's Pratt loop assigns them
+/// (`src/parser/exprs.rs`): an operand is written in parentheses when its
+/// own operator binds more loosely than its slot needs, so a rendered
+/// expression reparses to the tree it came from. `(a + 1) * b` printed as
+/// `a + 1 * b` was a different program, under `karac fmt` and in every
+/// fix-it that renders an expression (B-2026-10-19-69).
+const RANGE_POWER: u8 = 5;
+const CAST_POWER: u8 = 23;
+const UNARY_POWER: u8 = 24;
+
+/// The left and right binding powers of a binary operator.
+fn binop_power(op: &BinOp) -> (u8, u8) {
+    match op {
+        BinOp::Or => (6, 7),
+        BinOp::And => (8, 9),
+        // A comparison of comparisons keeps both sides' parentheses: the
+        // chain reads as Python's `a < b < c`, which Kāra does not mean.
+        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => (11, 11),
+        BinOp::BitOr => (12, 13),
+        BinOp::BitXor => (14, 15),
+        BinOp::BitAnd => (16, 17),
+        BinOp::Shl | BinOp::Shr => (18, 19),
+        BinOp::Add | BinOp::Sub => (20, 21),
+        BinOp::Mul | BinOp::Div | BinOp::Mod => (22, 23),
+        BinOp::Range | BinOp::RangeInclusive => (RANGE_POWER, RANGE_POWER + 1),
+    }
+}
+
+/// How tightly an expression's outermost operator binds; `u8::MAX` for an
+/// atom or a postfix form, which never needs parentheses as an operand.
+fn expr_power(e: &Expr) -> u8 {
+    match &e.kind {
+        ExprKind::Closure { .. } => 0,
+        ExprKind::Pipe { .. } => 2,
+        ExprKind::NilCoalesce { .. } => 4,
+        ExprKind::Range { .. } => RANGE_POWER,
+        ExprKind::Binary {
+            op: BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
+            ..
+        } => 10,
+        ExprKind::Binary { op, .. } => binop_power(op).0,
+        ExprKind::Cast { .. } => CAST_POWER,
+        ExprKind::Unary { .. } => UNARY_POWER,
+        _ => u8::MAX,
+    }
+}
+
 impl super::Formatter {
+    /// `e` in a slot that needs binding power `min`, parenthesized when its
+    /// own operator binds more loosely.
+    fn format_operand(&mut self, e: &Expr, min: u8) {
+        if expr_power(e) < min {
+            self.write_str("(");
+            self.format_expr(e);
+            self.write_str(")");
+        } else {
+            self.format_expr(e);
+        }
+    }
+
     pub(super) fn format_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Integer(n, sfx) => {
@@ -106,7 +165,8 @@ impl super::Formatter {
             ExprKind::SelfType => self.write_str("Self"),
 
             ExprKind::Binary { op, left, right } => {
-                self.format_expr(left);
+                let (l_bp, r_bp) = binop_power(op);
+                self.format_operand(left, l_bp);
                 self.write_str(match op {
                     BinOp::Add => " + ",
                     BinOp::Sub => " - ",
@@ -129,7 +189,7 @@ impl super::Formatter {
                     BinOp::Range => "..",
                     BinOp::RangeInclusive => "..=",
                 });
-                self.format_expr(right);
+                self.format_operand(right, r_bp);
             }
             ExprKind::Unary { op, operand } => {
                 self.write_str(match op {
@@ -140,10 +200,10 @@ impl super::Formatter {
                     UnaryOp::Ref => "ref ",
                     UnaryOp::MutRef => "mut ref ",
                 });
-                self.format_expr(operand);
+                self.format_operand(operand, UNARY_POWER);
             }
             ExprKind::Question(inner) => {
-                self.format_expr(inner);
+                self.format_operand(inner, u8::MAX);
                 self.write_str("?");
             }
             ExprKind::OptionalChain {
@@ -151,7 +211,7 @@ impl super::Formatter {
                 field_or_method,
                 args,
             } => {
-                self.format_expr(object);
+                self.format_operand(object, u8::MAX);
                 self.write_str("?.");
                 self.write_ident(field_or_method);
                 if let Some(ref a) = args {
@@ -161,9 +221,9 @@ impl super::Formatter {
                 }
             }
             ExprKind::NilCoalesce { left, right } => {
-                self.format_expr(left);
+                self.format_operand(left, 4);
                 self.write_str(" ?? ");
-                self.format_expr(right);
+                self.format_operand(right, 5);
             }
             ExprKind::Call { callee, args } => {
                 // `(h.f)()` calls a function-typed field; without the
@@ -199,7 +259,7 @@ impl super::Formatter {
                 args,
                 ..
             } => {
-                self.format_expr(object);
+                self.format_operand(object, u8::MAX);
                 self.write_str(".");
                 // Any keyword is a member name after `.`; no `r#` needed.
                 self.write_str(method);
@@ -218,16 +278,16 @@ impl super::Formatter {
                 self.write_str(")");
             }
             ExprKind::FieldAccess { object, field } => {
-                self.format_expr(object);
+                self.format_operand(object, u8::MAX);
                 self.write_str(".");
                 self.write_str(field);
             }
             ExprKind::TupleIndex { object, index } => {
-                self.format_expr(object);
+                self.format_operand(object, u8::MAX);
                 write!(self.output, ".{index}").unwrap();
             }
             ExprKind::Index { object, index } => {
-                self.format_expr(object);
+                self.format_operand(object, u8::MAX);
                 self.write_str("[");
                 self.format_expr(index);
                 self.write_str("]");
@@ -519,13 +579,13 @@ impl super::Formatter {
                 self.write_str("}");
             }
             ExprKind::Pipe { left, right } => {
-                self.format_expr(left);
+                self.format_operand(left, 2);
                 self.write_str(" |> ");
-                self.format_expr(right);
+                self.format_operand(right, 3);
             }
             ExprKind::PipePlaceholder => self.write_str("_"),
             ExprKind::Cast { expr, ty } => {
-                self.format_expr(expr);
+                self.format_operand(expr, CAST_POWER);
                 self.write_str(" as ");
                 self.format_type_expr(ty);
             }
@@ -535,7 +595,7 @@ impl super::Formatter {
                 inclusive,
             } => {
                 if let Some(s) = start {
-                    self.format_expr(s);
+                    self.format_operand(s, RANGE_POWER + 1);
                 }
                 if *inclusive {
                     self.write_str("..=");
@@ -543,7 +603,7 @@ impl super::Formatter {
                     self.write_str("..");
                 }
                 if let Some(e) = end {
-                    self.format_expr(e);
+                    self.format_operand(e, RANGE_POWER + 1);
                 }
             }
             ExprKind::Unsafe(block) => {
