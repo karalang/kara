@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 282 |
 | codegen-gap | 276 |
-| false-positive | 241 |
+| false-positive | 242 |
 | perf | 178 |
 | other | 175 |
 | diagnostics | 172 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 115 |
 | runtime | 79 |
 | cli | 79 |
-| parser | 69 |
+| parser | 70 |
 | autopar | 59 |
 | resolver | 47 |
 | effect | 32 |
@@ -166,6 +166,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-26 | 2026-10-19 | runtime+codegen | medium | On the MIR compiled backend, `String.contains` goes to Rust `str::contains` (two-way search), which makes kata 796's bench 4.6x the legacy build (2.03 s vs 0.44 s, medians of five interleaved runs; first filed as 5.7x from spot runs); legacy's naive memcmp scan and C `strstr` (0.20 s) are far faster on short needles | — |
 | B-2026-10-19-27 | 2026-10-19 | interp+codegen | medium | At 128 bits, 12 integer methods are refused by the MIR compiled backend with "native `u128.<m>` is not lowered yet" (the same for i128): clamp, leading_zeros, trailing_zeros, count_ones, count_zeros, to_ne_bytes, pow, to_f64, swap_bytes, reverse_bits, is_power_of_two and next_power_of_two. The MIR interpreter also refuses swap_bytes, reverse_bits and next_power_of_two with "call of unknown function" | — |
 | B-2026-10-19-28 | 2026-10-19 | interp | medium | The MIR interpreter's `x.pow(n)` at 128 bits prints i128::MAX when the result overflows, where it should panic with "integer overflow": `(1u128 << 100).pow(2)` and `(1i128 << 100).pow(2)` both print 170141183460469231731687303715884105727. `x * x` at the same values panics, and `pow` at 64 bits panics | — |
+| B-2026-10-19-30 | 2026-10-19 | parser | low | A tuple index straight after `?` (`f()?.0`) does not parse: `Expected identifier, found Integer(0, None)`. design.md says `f()?.x` means `(f()?).x` and there is no `?.`, but the lexer still makes a `?.` token and the parser's QuestionDot arm (src/parser/exprs.rs, the legacy ExprKind::OptionalChain path) only accepts an identifier after it | — |
 
 ### Relocated
 

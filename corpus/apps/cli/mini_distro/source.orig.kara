@@ -1,0 +1,4170 @@
+// mini_distro: distro 1.9.0, the library pip, Ansible facts, cloud-init
+// and every "which Linux is this" script ask for the OS distribution:
+// its ID, name, version, version parts, codename and the IDs it is
+// like. It reads the same data sources in the same order of trust:
+// os-release (etc first, then usr/lib), `lsb_release -a`, the distro
+// release file found by scanning /etc (CentOS, Red Hat, Gentoo, SUSE,
+// Slackware, CloudLinux, ...), `uname -rs` and AIX's oslevel, with the
+// lazy caching, the ID normalization tables and the "best version"
+// rule of the original.
+//
+// data/roots holds a fake root filesystem per distribution, and the
+// jobs run LinuxDistribution(root_dir=...) on each, call the parsers
+// directly, feed in what lsb_release, uname and oslevel would print,
+// and run the command line (text and --json). distro is built on re
+// and shlex, so this carries mini_re's regular expression engine and
+// mini_shlex's POSIX lexer and uses them the way distro does.
+// expected.out is the output of oracle.py, which runs the jobs through
+// distro itself.
+
+// ------------------------------------------------------------ errors
+
+struct ReErr {
+    kind: String,
+    msg: String,
+    pos: i64,
+}
+
+fn re_error(msg: own String, pos: i64) -> ReErr {
+    ReErr { kind: "error".to_string(), msg: msg, pos: pos }
+}
+
+fn other_error(kind: Str, msg: own String) -> ReErr {
+    ReErr { kind: kind.to_string(), msg: msg, pos: -1 }
+}
+
+fn err_text(e: ref ReErr) -> String {
+    if e.kind == "error" {
+        if e.pos >= 0 {
+            return f"error: {e.msg} at position {e.pos}";
+        }
+        return f"error: {e.msg}";
+    }
+    f"{e.kind}: {e.msg}"
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+// ------------------------------------------------------- parsed form
+
+// The categories of \d \D \s \S \w \W.
+fn cat_digit() -> i64 { 0 }
+fn cat_not_digit() -> i64 { 1 }
+fn cat_space() -> i64 { 2 }
+fn cat_not_space() -> i64 { 3 }
+fn cat_word() -> i64 { 4 }
+fn cat_not_word() -> i64 { 5 }
+
+// The positions ^ $ \A \Z \b \B and the forms the compiler turns them
+// into under MULTILINE.
+fn at_beginning() -> i64 { 0 }
+fn at_beginning_line() -> i64 { 1 }
+fn at_beginning_string() -> i64 { 2 }
+fn at_end() -> i64 { 3 }
+fn at_end_line() -> i64 { 4 }
+fn at_end_string() -> i64 { 5 }
+fn at_boundary() -> i64 { 6 }
+fn at_non_boundary() -> i64 { 7 }
+
+#[derive(Clone)]
+enum Item {
+    Lit(i64),
+    Range(i64, i64),
+    Cat(i64),
+}
+
+enum Node {
+    Lit(i64),
+    NotLit(i64),
+    Any,
+    In(Vec[Item], bool),
+    At(i64),
+    Branch(Vec[Vec[Node]]),
+    // group (0: none), flags turned on, flags turned off, contents
+    Group(i64, i64, i64, Vec[Node]),
+    // 0 greedy, 1 lazy, 2 possessive; min; max; the item repeated
+    Repeat(i64, i64, i64, Vec[Node]),
+    Atomic(Vec[Node]),
+    // direction (1 ahead, -1 behind), negative, contents
+    Assert(i64, bool, Vec[Node]),
+    GroupRef(i64),
+    // group, yes branch, no branch
+    Exists(i64, Vec[Node], Vec[Node]),
+    Failure,
+}
+
+fn is_repeat(n: ref Node) -> bool {
+    match n {
+        Node.Repeat(_, _, _, _) => true,
+        _ => false,
+    }
+}
+
+fn is_at(n: ref Node) -> bool {
+    match n {
+        Node.At(_) => true,
+        _ => false,
+    }
+}
+
+fn flag_i() -> i64 { 2 }
+fn flag_l() -> i64 { 4 }
+fn flag_m() -> i64 { 8 }
+fn flag_s() -> i64 { 16 }
+fn flag_u() -> i64 { 32 }
+fn flag_x() -> i64 { 64 }
+fn flag_a() -> i64 { 256 }
+fn type_flags() -> i64 { 4 | 32 | 256 }
+fn maxrepeat() -> i64 { 4294967295 }
+fn maxgroups() -> i64 { 1073741823 }
+fn maxwidth() -> i64 { 1 << 62 }
+
+fn flag_value(c: i64) -> i64 {
+    match c {
+        105 => 2,
+        76 => 4,
+        109 => 8,
+        115 => 16,
+        120 => 64,
+        97 => 256,
+        117 => 32,
+        _ => 0,
+    }
+}
+
+// ------------------------------------------------------------ tokens
+
+// One token: nothing at the end of the pattern (n 0), a character (n 1),
+// or a backslash and the character after it (n 2).
+#[derive(Copy, Clone)]
+struct T {
+    n: i64,
+    a: i64,
+    b: i64,
+}
+
+fn tok_none() -> T {
+    T { n: 0, a: 0, b: 0 }
+}
+
+fn tok_is(t: T, c: i64) -> bool {
+    t.n == 1 and t.a == c
+}
+
+fn tok_text(t: T) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    if t.n >= 1 {
+        v.push(t.a);
+    }
+    if t.n == 2 {
+        v.push(t.b);
+    }
+    v
+}
+
+fn is_ascii_letter(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_hex(c: i64) -> bool {
+    (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_oct(c: i64) -> bool {
+    c >= 48 and c <= 55
+}
+
+fn is_dec(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn digits_value(s: ref Vec[i64], start: i64, base: i64) -> i64 {
+    let mut v = 0;
+    let mut i = start;
+    while i < s.len() {
+        let c = s[i];
+        let d = if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 };
+        v = v * base + d;
+        i += 1;
+    }
+    v
+}
+
+// str.isidentifier, near enough: a letter or underscore, then letters,
+// digits and underscores.
+fn is_identifier(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    let mut i = 0;
+    while i < name.len() {
+        let c = name[i];
+        let ok = if c == 95 {
+            true
+        } else if i == 0 {
+            match as_char(c) {
+                Some(ch) => ch.is_alphabetic(),
+                None => false,
+            }
+        } else {
+            is_word(c, false)
+        };
+        if not ok {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_ascii_decimal(name: ref Vec[i64]) -> bool {
+    if name.len() == 0 {
+        return false;
+    }
+    for c in name {
+        if not is_dec(c) {
+            return false;
+        }
+    }
+    true
+}
+
+struct Tokenizer {
+    s: Vec[i64],
+    index: i64,
+    next: T,
+}
+
+impl Tokenizer {
+    fn advance(mut ref self) -> Result[(), ReErr] {
+        let index = self.index;
+        if index >= self.s.len() {
+            self.next = tok_none();
+            return Ok(());
+        }
+        let c = self.s[index];
+        if c == 92 {
+            if index + 1 >= self.s.len() {
+                return Err(re_error("bad escape (end of pattern)".to_string(), self.s.len() - 1));
+            }
+            self.next = T { n: 2, a: 92, b: self.s[index + 1] };
+            self.index = index + 2;
+        } else {
+            self.next = T { n: 1, a: c, b: 0 };
+            self.index = index + 1;
+        }
+        Ok(())
+    }
+
+    fn get(mut ref self) -> Result[T, ReErr] {
+        let t = self.next;
+        self.advance()?;
+        Ok(t)
+    }
+
+    fn take(mut ref self, c: i64) -> Result[bool, ReErr] {
+        if tok_is(self.next, c) {
+            self.advance()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn tell(ref self) -> i64 {
+        self.index - self.next.n
+    }
+
+    fn seek(mut ref self, index: i64) -> Result[(), ReErr] {
+        self.index = index;
+        self.advance()
+    }
+
+    fn error(ref self, msg: own String, offset: i64) -> ReErr {
+        re_error(msg, self.tell() - offset)
+    }
+
+    // getwhile: up to n characters of a kind (0 octal, 1 decimal, 2 hex).
+    fn getwhile(mut ref self, n: i64, kind: i64, out: mut ref Vec[i64]) -> Result[(), ReErr] {
+        let mut k = 0;
+        while k < n {
+            let t = self.next;
+            if t.n != 1 {
+                break;
+            }
+            let ok = if kind == 0 { is_oct(t.a) } else if kind == 1 { is_dec(t.a) } else { is_hex(t.a) };
+            if not ok {
+                break;
+            }
+            out.push(t.a);
+            self.advance()?;
+            k += 1;
+        }
+        Ok(())
+    }
+
+    fn getuntil(mut ref self, terminator: i64, name: Str) -> Result[Vec[i64], ReErr] {
+        let mut result: Vec[i64] = Vec.new();
+        loop {
+            let c = self.next;
+            self.advance()?;
+            if c.n == 0 {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 0));
+                }
+                let term = to_string(vec_of(terminator));
+                return Err(self.error(f"missing {term}, unterminated name", result.len()));
+            }
+            if tok_is(c, terminator) {
+                if result.len() == 0 {
+                    return Err(self.error(f"missing {name}", 1));
+                }
+                break;
+            }
+            push_all(mut result, tok_text(c));
+        }
+        Ok(result)
+    }
+
+    fn checkgroupname(ref self, name: ref Vec[i64], offset: i64) -> Result[(), ReErr] {
+        if not is_identifier(name) {
+            return Err(self.error(f"bad character in group name {repr_of(name)}", name.len() + offset));
+        }
+        Ok(())
+    }
+}
+
+fn vec_of(c: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(c);
+    v
+}
+
+fn new_tokenizer(s: ref Vec[i64]) -> Result[Tokenizer, ReErr] {
+    let mut t = Tokenizer { s: s.clone(), index: 0, next: tok_none() };
+    t.advance()?;
+    Ok(t)
+}
+
+// ------------------------------------------------------------ parser
+
+#[derive(Clone)]
+struct Width {
+    lo: i64,
+    hi: i64,
+}
+
+struct ParseState {
+    flags: i64,
+    names: Vec[(Vec[i64], i64)],
+    // per group: whether it is closed, and its width
+    closed: Vec[bool],
+    widths: Vec[Width],
+    lookbehind_groups: i64,
+    // conditional references by number, in order: (group, position)
+    refpos: Vec[(i64, i64)],
+}
+
+impl ParseState {
+    fn groups(ref self) -> i64 {
+        self.closed.len()
+    }
+
+    fn group_of(ref self, name: ref Vec[i64]) -> i64 {
+        for (n, g) in self.names.iter() {
+            if same(n, name) {
+                return *g;
+            }
+        }
+        -1
+    }
+
+    fn checkgroup(ref self, gid: i64) -> bool {
+        gid < self.groups() and self.closed[gid]
+    }
+
+    fn checklookbehindgroup(ref self, gid: i64, src: ref Tokenizer) -> Result[(), ReErr] {
+        if self.lookbehind_groups >= 0 {
+            if not self.checkgroup(gid) {
+                return Err(src.error("cannot refer to an open group".to_string(), 0));
+            }
+            if gid >= self.lookbehind_groups {
+                return Err(src.error("cannot refer to group defined in the same lookbehind subpattern".to_string(), 0));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn add_width(a: i64, b: i64) -> i64 {
+    if a >= maxwidth() - b { maxwidth() } else { a + b }
+}
+
+fn mul_width(a: i64, n: i64) -> i64 {
+    if a == 0 or n == 0 {
+        0
+    } else if a >= maxwidth() / n {
+        maxwidth()
+    } else {
+        a * n
+    }
+}
+
+// SubPattern.getwidth.
+fn width_of(widths: ref Vec[Width], p: ref Vec[Node]) -> Width {
+    let mut lo = 0;
+    let mut hi = 0;
+    for n in p.iter() {
+        match n {
+            Node.Branch(items) => {
+                let mut i = maxwidth();
+                let mut j = 0;
+                for item in items.iter() {
+                    let w = width_of(widths, item);
+                    if w.lo < i {
+                        i = w.lo;
+                    }
+                    if w.hi > j {
+                        j = w.hi;
+                    }
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Atomic(body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Group(_, _, _, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Repeat(_, min, max, body) => {
+                let w = width_of(widths, body);
+                lo = add_width(lo, mul_width(w.lo, *min));
+                if *max == maxrepeat() and w.hi > 0 {
+                    hi = maxwidth();
+                } else {
+                    hi = add_width(hi, mul_width(w.hi, *max));
+                }
+            }
+            Node.GroupRef(g) => {
+                let w = ref widths[*g];
+                lo = add_width(lo, w.lo);
+                hi = add_width(hi, w.hi);
+            }
+            Node.Exists(_, yes, no) => {
+                let wy = width_of(widths, yes);
+                let mut i = wy.lo;
+                let mut j = wy.hi;
+                if no.len() > 0 {
+                    let wn = width_of(widths, no);
+                    if wn.lo < i {
+                        i = wn.lo;
+                    }
+                    if wn.hi > j {
+                        j = wn.hi;
+                    }
+                } else {
+                    i = 0;
+                }
+                lo = add_width(lo, i);
+                hi = add_width(hi, j);
+            }
+            Node.Lit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.NotLit(_) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.Any => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            Node.In(_, _) => {
+                lo = add_width(lo, 1);
+                hi = add_width(hi, 1);
+            }
+            _ => {}
+        }
+    }
+    Width { lo: lo, hi: hi }
+}
+
+fn category_of(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        100 => 0,
+        68 => 1,
+        115 => 2,
+        83 => 3,
+        119 => 4,
+        87 => 5,
+        _ => -1,
+    }
+}
+
+fn escape_value(t: T) -> i64 {
+    if t.n != 2 {
+        return -1;
+    }
+    match t.b {
+        97 => 7,
+        98 => 8,
+        102 => 12,
+        110 => 10,
+        114 => 13,
+        116 => 9,
+        118 => 11,
+        92 => 92,
+        _ => -1,
+    }
+}
+
+// \x, \u and \U: the escape text so far, and the code point.
+fn hex_escape(src: mut ref Tokenizer, t: T, esc: mut ref Vec[i64]) -> Result[i64, ReErr] {
+    let n = if t.b == 120 { 2 } else if t.b == 117 { 4 } else { 8 };
+    src.getwhile(n, 2, mut esc)?;
+    if esc.len() != n + 2 {
+        return Err(src.error(f"incomplete escape {to_string(esc)}", esc.len()));
+    }
+    let c = digits_value(esc, 2, 16);
+    if c > 0x10FFFF {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(c)
+}
+
+// _class_escape: an escape inside [...], a literal or a category.
+fn class_escape(src: mut ref Tokenizer, t: T) -> Result[Item, ReErr] {
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Item.Lit(e));
+    }
+    let cat = category_of(t);
+    if cat >= 0 {
+        return Ok(Item.Cat(cat));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Item.Lit(v));
+    }
+    if is_oct(c) {
+        src.getwhile(2, 0, mut esc)?;
+        let v = digits_value(esc, 1, 8);
+        if v > 0o377 {
+            return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+        }
+        return Ok(Item.Lit(v));
+    }
+    if is_dec(c) or is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Item.Lit(c))
+}
+
+// _escape: an escape outside a set.
+fn escape(src: mut ref Tokenizer, t: T, st: ref ParseState) -> Result[Node, ReErr] {
+    let cat = category_of(t);
+    if cat >= 0 {
+        let mut items: Vec[Item] = Vec.new();
+        items.push(Item.Cat(cat));
+        return Ok(Node.In(items, false));
+    }
+    match t.b {
+        65 => return Ok(Node.At(at_beginning_string())),
+        98 => return Ok(Node.At(at_boundary())),
+        66 => return Ok(Node.At(at_non_boundary())),
+        90 => return Ok(Node.At(at_end_string())),
+        _ => {}
+    }
+    let e = escape_value(t);
+    if e >= 0 {
+        return Ok(Node.Lit(e));
+    }
+    let c = t.b;
+    let mut esc = tok_text(t);
+    if c == 120 or c == 117 or c == 85 {
+        let v = hex_escape(mut src, t, mut esc)?;
+        return Ok(Node.Lit(v));
+    }
+    if c == 48 {
+        src.getwhile(2, 0, mut esc)?;
+        return Ok(Node.Lit(digits_value(esc, 1, 8)));
+    }
+    if is_dec(c) {
+        // an octal escape or a group reference
+        let nt = src.next;
+        if nt.n == 1 and is_dec(nt.a) {
+            esc.push(nt.a);
+            src.advance()?;
+            let nt2 = src.next;
+            if is_oct(esc[1]) and is_oct(esc[2]) and nt2.n == 1 and is_oct(nt2.a) {
+                esc.push(nt2.a);
+                src.advance()?;
+                let v = digits_value(esc, 1, 8);
+                if v > 0o377 {
+                    return Err(src.error(f"octal escape value {to_string(esc)} outside of range 0-0o377", esc.len()));
+                }
+                return Ok(Node.Lit(v));
+            }
+        }
+        let group = digits_value(esc, 1, 10);
+        if group < st.groups() {
+            if not st.checkgroup(group) {
+                return Err(src.error("cannot refer to an open group".to_string(), esc.len()));
+            }
+            st.checklookbehindgroup(group, src)?;
+            return Ok(Node.GroupRef(group));
+        }
+        return Err(src.error(f"invalid group reference {group}", esc.len() - 1));
+    }
+    if is_ascii_letter(c) {
+        return Err(src.error(f"bad escape {to_string(esc)}", esc.len()));
+    }
+    Ok(Node.Lit(c))
+}
+
+fn parse_sub(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64) -> Result[Vec[Node], ReErr] {
+    let mut items: Vec[Vec[Node]] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let first = nested == 0 and items.len() == 0;
+        let item = parse_seq(mut src, mut st, verbose, nested + 1, first)?;
+        items.push(item);
+        if not src.take(124)? {
+            break;
+        }
+        if nested == 0 {
+            verbose = (st.flags & flag_x()) != 0;
+        }
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().unwrap());
+    }
+    let mut out: Vec[Node] = Vec.new();
+    out.push(Node.Branch(items));
+    Ok(out)
+}
+
+// _parse_flags: None (as Err-free Ok(None)) for global flags, else the
+// flags turned on and off.
+fn parse_flags(src: mut ref Tokenizer, st: mut ref ParseState, first_char: T) -> Result[Option[(i64, i64)], ReErr] {
+    let mut ch = first_char;
+    let mut add = 0;
+    let mut del = 0;
+    if not tok_is(ch, 45) {
+        loop {
+            let flag = flag_value(ch.a);
+            if ch.a == 76 {
+                return Err(src.error("bad inline flags: cannot use 'L' flag with a str pattern".to_string(), 0));
+            }
+            add = add | flag;
+            if (flag & type_flags()) != 0 and (add & type_flags()) != flag {
+                return Err(src.error("bad inline flags: flags 'a', 'u' and 'L' are incompatible".to_string(), 0));
+            }
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing -, : or )".to_string(), 0));
+            }
+            if tok_is(ch, 41) or tok_is(ch, 45) or tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing -, : or )" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if tok_is(ch, 41) {
+        st.flags = st.flags | add;
+        return Ok(None);
+    }
+    if tok_is(ch, 45) {
+        ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("missing flag".to_string(), 0));
+        }
+        if ch.n != 1 or flag_value(ch.a) == 0 {
+            let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing flag" };
+            return Err(src.error(msg.to_string(), ch.n));
+        }
+        loop {
+            let flag = flag_value(ch.a);
+            if (flag & type_flags()) != 0 {
+                return Err(src.error("bad inline flags: cannot turn off flags 'a', 'u' and 'L'".to_string(), 0));
+            }
+            del = del | flag;
+            ch = src.get()?;
+            if ch.n == 0 {
+                return Err(src.error("missing :".to_string(), 0));
+            }
+            if tok_is(ch, 58) {
+                break;
+            }
+            if ch.n != 1 or flag_value(ch.a) == 0 {
+                let msg = if ch.n == 1 and is_alpha(ch.a) { "unknown flag" } else { "missing :" };
+                return Err(src.error(msg.to_string(), ch.n));
+            }
+        }
+    }
+    if (add & del) != 0 {
+        return Err(src.error("bad inline flags: flag turned on and off".to_string(), 1));
+    }
+    Ok(Some((add, del)))
+}
+
+fn is_alpha(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+fn parse_set(src: mut ref Tokenizer, out: mut ref Vec[Node]) -> Result[(), ReErr] {
+    let here = src.tell() - 1;
+    let mut set: Vec[Item] = Vec.new();
+    let negate = src.take(94)?;
+    loop {
+        let this = src.get()?;
+        if this.n == 0 {
+            return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+        }
+        if tok_is(this, 93) and set.len() > 0 {
+            break;
+        }
+        let code1 = if this.n == 2 { class_escape(mut src, this)? } else { Item.Lit(this.a) };
+        if src.take(45)? {
+            let that = src.get()?;
+            if that.n == 0 {
+                return Err(src.error("unterminated character set".to_string(), src.tell() - here));
+            }
+            if tok_is(that, 93) {
+                set.push(code1);
+                set.push(Item.Lit(45));
+                break;
+            }
+            let code2 = if that.n == 2 { class_escape(mut src, that)? } else { Item.Lit(that.a) };
+            let text = f"{to_string(tok_text(this))}-{to_string(tok_text(that))}";
+            let offset = this.n + 1 + that.n;
+            let lo = match code1 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            let hi = match code2 {
+                Item.Lit(c) => c,
+                _ => -1,
+            };
+            if lo < 0 or hi < 0 or hi < lo {
+                return Err(src.error(f"bad character range {text}", offset));
+            }
+            set.push(Item.Range(lo, hi));
+        } else {
+            set.push(code1);
+        }
+    }
+    if set.len() == 1 {
+        let only = ref set[0];
+        if let Item.Lit(c) = only {
+            if negate {
+                out.push(Node.NotLit(*c));
+            } else {
+                out.push(Node.Lit(*c));
+            }
+            return Ok(());
+        }
+    }
+    out.push(Node.In(set, negate));
+    Ok(())
+}
+
+// The quantifier just read (its first character is `this`), applied to
+// the last item. Returns false when `{` turned out to be a literal.
+fn parse_repeat(src: mut ref Tokenizer, this: T, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let here = src.tell();
+    let mut min = 0;
+    let mut max = maxrepeat();
+    if tok_is(this, 63) {
+        max = 1;
+    } else if tok_is(this, 43) {
+        min = 1;
+    } else if tok_is(this, 123) {
+        if tok_is(src.next, 125) {
+            out.push(Node.Lit(123));
+            return Ok(false);
+        }
+        let mut lo: Vec[i64] = Vec.new();
+        let mut hi: Vec[i64] = Vec.new();
+        while src.next.n == 1 and is_dec(src.next.a) {
+            lo.push(src.get()?.a);
+        }
+        if src.take(44)? {
+            while src.next.n == 1 and is_dec(src.next.a) {
+                hi.push(src.get()?.a);
+            }
+        } else {
+            hi = lo.clone();
+        }
+        if not src.take(125)? {
+            out.push(Node.Lit(123));
+            src.seek(here)?;
+            return Ok(false);
+        }
+        if lo.len() > 0 {
+            if lo.len() > 10 or digits_value(lo, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            min = digits_value(lo, 0, 10);
+        }
+        if hi.len() > 0 {
+            if hi.len() > 10 or digits_value(hi, 0, 10) >= maxrepeat() {
+                return Err(other_error("OverflowError", "the repetition number is too large".to_string()));
+            }
+            max = digits_value(hi, 0, 10);
+            if max < min {
+                return Err(src.error("min repeat greater than max repeat".to_string(), src.tell() - here));
+            }
+        }
+    }
+    if out.len() == 0 or is_at(out[out.len() - 1]) {
+        return Err(src.error("nothing to repeat".to_string(), src.tell() - here + 1));
+    }
+    if is_repeat(out[out.len() - 1]) {
+        return Err(src.error("multiple repeat".to_string(), src.tell() - here + 1));
+    }
+    let last = out.pop().unwrap();
+    let mut body: Vec[Node] = Vec.new();
+    match last {
+        Node.Group(0, 0, 0, p) => body = p,
+        other => body.push(other),
+    }
+    let kind = if src.take(63)? { 1 } else if src.take(43)? { 2 } else { 0 };
+    out.push(Node.Repeat(kind, min, max, body));
+    Ok(true)
+}
+
+fn parse_seq(src: mut ref Tokenizer, st: mut ref ParseState, verbose0: bool, nested: i64, first: bool) -> Result[Vec[Node], ReErr] {
+    let mut out: Vec[Node] = Vec.new();
+    let mut verbose = verbose0;
+    loop {
+        let this = src.next;
+        if this.n == 0 or tok_is(this, 124) or tok_is(this, 41) {
+            break;
+        }
+        src.advance()?;
+        if verbose {
+            if this.n == 1 and (this.a == 32 or (this.a >= 9 and this.a <= 13)) {
+                continue;
+            }
+            if tok_is(this, 35) {
+                loop {
+                    let t = src.get()?;
+                    if t.n == 0 or tok_is(t, 10) {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        if this.n == 2 {
+            let node = escape(mut src, this, st)?;
+            out.push(node);
+            continue;
+        }
+        let c = this.a;
+        if c == 91 {
+            parse_set(mut src, mut out)?;
+        } else if c == 42 or c == 43 or c == 63 or c == 123 {
+            parse_repeat(mut src, this, mut out)?;
+        } else if c == 46 {
+            out.push(Node.Any);
+        } else if c == 94 {
+            out.push(Node.At(at_beginning()));
+        } else if c == 36 {
+            out.push(Node.At(at_end()));
+        } else if c == 40 {
+            if parse_group(mut src, mut st, mut verbose, nested, first, mut out)? {
+                continue;
+            }
+        } else {
+            out.push(Node.Lit(c));
+        }
+    }
+    Ok(out)
+}
+
+// `(` and what follows. Returns true for a construct that adds nothing
+// (a comment, global flags).
+fn parse_group(src: mut ref Tokenizer, st: mut ref ParseState, verbose: mut ref bool, nested: i64, first: bool, out: mut ref Vec[Node]) -> Result[bool, ReErr] {
+    let start = src.tell() - 1;
+    let mut capture = true;
+    let mut atomic = false;
+    let mut name: Vec[i64] = Vec.new();
+    let mut named = false;
+    let mut add = 0;
+    let mut del = 0;
+    if src.take(63)? {
+        let ch = src.get()?;
+        if ch.n == 0 {
+            return Err(src.error("unexpected end of pattern".to_string(), 0));
+        }
+        if tok_is(ch, 80) {
+            if src.take(60)? {
+                name = src.getuntil(62, "group name")?;
+                src.checkgroupname(name, 1)?;
+                named = true;
+            } else if src.take(61)? {
+                let ref_name = src.getuntil(41, "group name")?;
+                src.checkgroupname(ref_name, 1)?;
+                let gid = st.group_of(ref_name);
+                if gid < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(ref_name)}", ref_name.len() + 1));
+                }
+                if not st.checkgroup(gid) {
+                    return Err(src.error("cannot refer to an open group".to_string(), ref_name.len() + 1));
+                }
+                st.checklookbehindgroup(gid, src)?;
+                out.push(Node.GroupRef(gid));
+                return Ok(true);
+            } else {
+                let c2 = src.get()?;
+                if c2.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                return Err(src.error(f"unknown extension ?P{to_string(tok_text(c2))}", c2.n + 2));
+            }
+        } else if tok_is(ch, 58) {
+            capture = false;
+        } else if tok_is(ch, 35) {
+            loop {
+                if src.next.n == 0 {
+                    return Err(src.error("missing ), unterminated comment".to_string(), src.tell() - start));
+                }
+                if tok_is(src.get()?, 41) {
+                    break;
+                }
+            }
+            return Ok(true);
+        } else if tok_is(ch, 61) or tok_is(ch, 33) or tok_is(ch, 60) {
+            let mut kind = ch;
+            let mut dir = 1;
+            let mut outer_lookbehind = 0;
+            if tok_is(ch, 60) {
+                kind = src.get()?;
+                if kind.n == 0 {
+                    return Err(src.error("unexpected end of pattern".to_string(), 0));
+                }
+                if not (tok_is(kind, 61) or tok_is(kind, 33)) {
+                    return Err(src.error(f"unknown extension ?<{to_string(tok_text(kind))}", kind.n + 2));
+                }
+                dir = -1;
+                outer_lookbehind = st.lookbehind_groups;
+                if outer_lookbehind < 0 {
+                    st.lookbehind_groups = st.groups();
+                }
+            }
+            let p = parse_sub(mut src, mut st, *verbose, nested + 1)?;
+            if dir < 0 and outer_lookbehind < 0 {
+                st.lookbehind_groups = -1;
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            if tok_is(kind, 61) {
+                out.push(Node.Assert(dir, false, p));
+            } else if p.len() > 0 {
+                out.push(Node.Assert(dir, true, p));
+            } else {
+                out.push(Node.Failure);
+            }
+            return Ok(true);
+        } else if tok_is(ch, 40) {
+            let condname = src.getuntil(41, "group name")?;
+            let mut condgroup = 0;
+            if not is_ascii_decimal(condname) {
+                src.checkgroupname(condname, 1)?;
+                condgroup = st.group_of(condname);
+                if condgroup < 0 {
+                    return Err(src.error(f"unknown group name {repr_of(condname)}", condname.len() + 1));
+                }
+            } else {
+                if condname.len() > 10 {
+                    return Err(src.error(f"invalid group reference {to_string(condname)}", condname.len() + 1));
+                }
+                condgroup = digits_value(condname, 0, 10);
+                if condgroup == 0 {
+                    return Err(src.error("bad group number".to_string(), condname.len() + 1));
+                }
+                if condgroup >= maxgroups() {
+                    return Err(src.error(f"invalid group reference {condgroup}", condname.len() + 1));
+                }
+                let mut seen = false;
+                for (g, _) in st.refpos.iter() {
+                    if *g == condgroup {
+                        seen = true;
+                    }
+                }
+                if not seen {
+                    st.refpos.push((condgroup, src.tell() - condname.len() - 1));
+                }
+            }
+            st.checklookbehindgroup(condgroup, src)?;
+            let yes = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+            let mut no: Vec[Node] = Vec.new();
+            if src.take(124)? {
+                no = parse_seq(mut src, mut st, *verbose, nested + 1, false)?;
+                if tok_is(src.next, 124) {
+                    return Err(src.error("conditional backref with more than two branches".to_string(), 0));
+                }
+            }
+            if not src.take(41)? {
+                return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+            }
+            out.push(Node.Exists(condgroup, yes, no));
+            return Ok(true);
+        } else if tok_is(ch, 62) {
+            capture = false;
+            atomic = true;
+        } else if (ch.n == 1 and flag_value(ch.a) != 0) or tok_is(ch, 45) {
+            match parse_flags(mut src, mut st, ch)? {
+                None => {
+                    if not first or out.len() > 0 {
+                        return Err(src.error("global flags not at the start of the expression".to_string(), src.tell() - start));
+                    }
+                    *verbose = (st.flags & flag_x()) != 0;
+                    return Ok(true);
+                }
+                Some((a, d)) => {
+                    add = a;
+                    del = d;
+                    capture = false;
+                }
+            }
+        } else {
+            return Err(src.error(f"unknown extension ?{to_string(tok_text(ch))}", ch.n + 1));
+        }
+    }
+    let mut group = 0;
+    if capture {
+        group = st.groups();
+        st.closed.push(false);
+        st.widths.push(Width { lo: 0, hi: 0 });
+        if named {
+            let was = st.group_of(name);
+            if was >= 0 {
+                return Err(src.error(f"redefinition of group name {repr_of(name)} as group {group}; was group {was}", name.len() + 1));
+            }
+            st.names.push((name.clone(), group));
+        }
+    }
+    let sub_verbose = (*verbose or (add & flag_x()) != 0) and (del & flag_x()) == 0;
+    let p = parse_sub(mut src, mut st, sub_verbose, nested + 1)?;
+    if not src.take(41)? {
+        return Err(src.error("missing ), unterminated subpattern".to_string(), src.tell() - start));
+    }
+    if group > 0 {
+        let w = width_of(st.widths, p);
+        st.widths[group] = w;
+        st.closed[group] = true;
+    }
+    if atomic {
+        out.push(Node.Atomic(p));
+    } else {
+        out.push(Node.Group(group, add, del, p));
+    }
+    Ok(false)
+}
+
+struct Parsed {
+    nodes: Vec[Node],
+    flags: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+    widths: Vec[Width],
+}
+
+fn parse(pattern: ref Vec[i64], flags: i64) -> Result[Parsed, ReErr] {
+    let mut src = new_tokenizer(pattern)?;
+    let mut st = ParseState {
+        flags: flags,
+        names: Vec.new(),
+        closed: Vec.new(),
+        widths: Vec.new(),
+        lookbehind_groups: -1,
+        refpos: Vec.new(),
+    };
+    // group 0 is the whole match
+    st.closed.push(true);
+    st.widths.push(Width { lo: 0, hi: 0 });
+    let nodes = parse_sub(mut src, mut st, (flags & flag_x()) != 0, 0)?;
+    if (st.flags & flag_a()) != 0 and (st.flags & flag_u()) != 0 {
+        return Err(other_error("ValueError", "ASCII and UNICODE flags are incompatible".to_string()));
+    }
+    if src.next.n != 0 {
+        return Err(src.error("unbalanced parenthesis".to_string(), 0));
+    }
+    for (g, pos) in st.refpos.iter() {
+        if *g >= st.groups() {
+            return Err(re_error(f"invalid group reference {*g}", *pos));
+        }
+    }
+    let groups = st.groups() - 1;
+    Ok(Parsed { nodes: nodes, flags: st.flags, groups: groups, names: st.names, widths: st.widths })
+}
+
+// ---------------------------------------------------------- compiler
+
+enum Op {
+    // character (lowered when case-insensitive), case-insensitive, ASCII
+    Lit(i64, bool, bool),
+    NotLit(i64, bool, bool),
+    Any,
+    AnyAll,
+    // set, case-insensitive, ASCII-only categories
+    In(i64, bool, bool),
+    // anchor kind, ASCII-only word boundary
+    At(i64, bool),
+    Mark(i64),
+    Split(i64, i64),
+    Jmp(i64),
+    // repeat register, the Until it starts at
+    RepInit(i64, i64),
+    // register, min, max, greedy, body, exit
+    Until(i64, i64, i64, bool, i64, i64),
+    Ref(i64, bool, bool),
+    // lookbehind width (-1 for lookahead), negative, sub-program, next
+    Look(i64, bool, i64, i64),
+    Atomic(i64, i64),
+    Exists(i64, i64),
+    Fail,
+    Succeed,
+    Match,
+}
+
+struct Program {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+    groups: i64,
+    names: Vec[(Vec[i64], i64)],
+}
+
+struct CharSet {
+    items: Vec[Item],
+    negate: bool,
+}
+
+fn combine(flags: i64, add: i64, del: i64) -> i64 {
+    let mut f = flags;
+    if (add & type_flags()) != 0 {
+        f = f & (0x7FFFFFFF ^ type_flags());
+    }
+    (f | add) & (0x7FFFFFFF ^ del)
+}
+
+struct Compiler {
+    ops: Vec[Op],
+    sets: Vec[CharSet],
+    repeats: i64,
+}
+
+impl Compiler {
+    fn emit(mut ref self, op: own Op) -> i64 {
+        self.ops.push(op);
+        self.ops.len() - 1
+    }
+
+    fn here(ref self) -> i64 {
+        self.ops.len()
+    }
+
+    fn compile(mut ref self, p: ref Parsed, nodes: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let icase = (flags & flag_i()) != 0;
+        let ascii = (flags & flag_a()) != 0;
+        for n in nodes.iter() {
+            match n {
+                Node.Lit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.Lit(v, icase, ascii));
+                }
+                Node.NotLit(c) => {
+                    let v = if icase { lower(*c, ascii) } else { *c };
+                    self.emit(Op.NotLit(v, icase, ascii));
+                }
+                Node.Any => {
+                    if (flags & flag_s()) != 0 {
+                        self.emit(Op.AnyAll);
+                    } else {
+                        self.emit(Op.Any);
+                    }
+                }
+                Node.In(items, negate) => {
+                    self.sets.push(CharSet { items: items.clone(), negate: *negate });
+                    let idx = self.sets.len() - 1;
+                    self.emit(Op.In(idx, icase, ascii));
+                }
+                Node.At(kind) => {
+                    let mut k = *kind;
+                    if (flags & flag_m()) != 0 {
+                        if k == at_beginning() {
+                            k = at_beginning_line();
+                        } else if k == at_end() {
+                            k = at_end_line();
+                        }
+                    }
+                    self.emit(Op.At(k, ascii));
+                }
+                Node.Branch(items) => {
+                    let mut ends: Vec[i64] = Vec.new();
+                    let mut i = 0;
+                    while i < items.len() {
+                        if i + 1 < items.len() {
+                            let split = self.emit(Op.Fail);
+                            self.compile(p, items[i], flags)?;
+                            ends.push(self.emit(Op.Fail));
+                            let next = self.here();
+                            self.ops[split] = Op.Split(split + 1, next);
+                        } else {
+                            self.compile(p, items[i], flags)?;
+                        }
+                        i += 1;
+                    }
+                    let end = self.here();
+                    for at in ends {
+                        self.ops[at] = Op.Jmp(end);
+                    }
+                }
+                Node.Group(g, add, off, body) => {
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g));
+                    }
+                    self.compile(p, body, combine(flags, *add, *off))?;
+                    if *g > 0 {
+                        self.emit(Op.Mark(2 * *g + 1));
+                    }
+                }
+                Node.Repeat(kind, min, max, body) => {
+                    if *kind == 2 {
+                        let at = self.emit(Op.Fail);
+                        self.compile_repeat(p, *min, *max, true, body, flags)?;
+                        self.emit(Op.Succeed);
+                        let next = self.here();
+                        self.ops[at] = Op.Atomic(at + 1, next);
+                    } else {
+                        self.compile_repeat(p, *min, *max, *kind == 0, body, flags)?;
+                    }
+                }
+                Node.Atomic(body) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Atomic(at + 1, next);
+                }
+                Node.Assert(dir, negative, body) => {
+                    let mut width = -1;
+                    if *dir < 0 {
+                        let w = width_of(p.widths, body);
+                        if w.lo != w.hi {
+                            return Err(other_error("error", "look-behind requires fixed-width pattern".to_string()));
+                        }
+                        width = w.lo;
+                    }
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, body, flags)?;
+                    self.emit(Op.Succeed);
+                    let next = self.here();
+                    self.ops[at] = Op.Look(width, *negative, at + 1, next);
+                }
+                Node.GroupRef(g) => {
+                    self.emit(Op.Ref(*g, icase, ascii));
+                }
+                Node.Exists(g, yes, no) => {
+                    let at = self.emit(Op.Fail);
+                    self.compile(p, yes, flags)?;
+                    if no.len() > 0 {
+                        let jump = self.emit(Op.Fail);
+                        let no_pc = self.here();
+                        self.compile(p, no, flags)?;
+                        let end = self.here();
+                        self.ops[jump] = Op.Jmp(end);
+                        self.ops[at] = Op.Exists(*g, no_pc);
+                    } else {
+                        let end = self.here();
+                        self.ops[at] = Op.Exists(*g, end);
+                    }
+                }
+                Node.Failure => {
+                    self.emit(Op.Fail);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_repeat(mut ref self, p: ref Parsed, min: i64, max: i64, greedy: bool, body: ref Vec[Node], flags: i64) -> Result[(), ReErr] {
+        let r = self.repeats;
+        self.repeats += 1;
+        let init = self.emit(Op.Fail);
+        self.compile(p, body, flags)?;
+        let until = self.emit(Op.Fail);
+        self.ops[init] = Op.RepInit(r, until);
+        self.ops[until] = Op.Until(r, min, max, greedy, init + 1, until + 1);
+        Ok(())
+    }
+}
+
+fn compile(pattern: ref Vec[i64], flags: i64) -> Result[Program, ReErr] {
+    let p = parse(pattern, flags)?;
+    let mut c = Compiler { ops: Vec.new(), sets: Vec.new(), repeats: 0 };
+    c.compile(p, p.nodes, p.flags)?;
+    c.emit(Op.Match);
+    Ok(Program { ops: c.ops, sets: c.sets, repeats: c.repeats, groups: p.groups, names: p.names })
+}
+
+// ----------------------------------------------------------- matcher
+
+struct Undo {
+    kind: i64,
+    idx: i64,
+    old: i64,
+}
+
+struct Choice {
+    pc: i64,
+    pos: i64,
+    trail: i64,
+    // 0: resume at pc; 1: a lazy repeat's Until, after its tail failed
+    mode: i64,
+}
+
+struct Matcher {
+    s: Vec[i64],
+    marks: Vec[i64],
+    counts: Vec[i64],
+    lasts: Vec[i64],
+    lastindex: i64,
+    trail: Vec[Undo],
+    start: i64,
+    must_advance: bool,
+    match_all: bool,
+}
+
+impl Matcher {
+    fn set_mark(mut ref self, slot: i64, v: i64) {
+        self.trail.push(Undo { kind: 0, idx: slot, old: self.marks[slot] });
+        self.marks[slot] = v;
+    }
+
+    fn set_count(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 1, idx: r, old: self.counts[r] });
+        self.counts[r] = v;
+    }
+
+    fn set_last(mut ref self, r: i64, v: i64) {
+        self.trail.push(Undo { kind: 2, idx: r, old: self.lasts[r] });
+        self.lasts[r] = v;
+    }
+
+    fn set_lastindex(mut ref self, v: i64) {
+        self.trail.push(Undo { kind: 3, idx: 0, old: self.lastindex });
+        self.lastindex = v;
+    }
+
+    fn undo_to(mut ref self, len: i64) {
+        while self.trail.len() > len {
+            let u = self.trail.pop().unwrap();
+            if u.kind == 0 {
+                self.marks[u.idx] = u.old;
+            } else if u.kind == 1 {
+                self.counts[u.idx] = u.old;
+            } else if u.kind == 2 {
+                self.lasts[u.idx] = u.old;
+            } else {
+                self.lastindex = u.old;
+            }
+        }
+    }
+
+    // A group that has both marks, the end not before the start.
+    fn group_span(ref self, g: i64) -> (i64, i64) {
+        let a = self.marks[2 * g];
+        let b = self.marks[2 * g + 1];
+        if a < 0 or b < 0 or b < a {
+            return (-1, -1);
+        }
+        (a, b)
+    }
+
+    fn at(ref self, kind: i64, ascii: bool, pos: i64) -> bool {
+        let n = self.s.len();
+        if kind == 0 or kind == 2 {
+            return pos == 0;
+        }
+        if kind == 1 {
+            return pos == 0 or self.s[pos - 1] == 10;
+        }
+        if kind == 3 {
+            return pos == n or (pos == n - 1 and self.s[pos] == 10);
+        }
+        if kind == 4 {
+            return pos == n or self.s[pos] == 10;
+        }
+        if kind == 5 {
+            return pos == n;
+        }
+        if n == 0 {
+            return false;
+        }
+        let before = pos > 0 and is_word(self.s[pos - 1], ascii);
+        let after = pos < n and is_word(self.s[pos], ascii);
+        if kind == 6 { before != after } else { before == after }
+    }
+
+    // Runs the program from pc at pos, backtracking through its own
+    // choices only. Returns where it succeeded, or -1.
+    fn run(mut ref self, prog: ref Program, pc0: i64, pos0: i64, top: bool) -> i64 {
+        let base = self.trail.len();
+        let mut choices: Vec[Choice] = Vec.new();
+        let mut pc = pc0;
+        let mut pos = pos0;
+        let mut mode = 0;
+        loop {
+            let mut ok = true;
+            let op = ref prog.ops[pc];
+            if mode == 1 {
+                // a lazy repeat whose tail failed: try one more item
+                mode = 0;
+                ok = false;
+                if let Op.Until(r, _, max, _, body, _) = op {
+                    let count = self.counts[*r] + 1;
+                    if not ((count >= *max and *max != maxrepeat()) or pos == self.lasts[*r]) {
+                        self.set_count(*r, count);
+                        self.set_last(*r, pos);
+                        pc = *body;
+                        ok = true;
+                    }
+                }
+                if ok {
+                    continue;
+                }
+            } else {
+                match op {
+                    Op.Lit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) == *c } else { self.s[pos] == *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.NotLit(c, icase, ascii) => {
+                        if pos < self.s.len() and (if *icase { lower(self.s[pos], *ascii) != *c } else { self.s[pos] != *c }) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Any => {
+                        if pos < self.s.len() and self.s[pos] != 10 {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.AnyAll => {
+                        if pos < self.s.len() {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.In(set, icase, ascii) => {
+                        if pos < self.s.len() and in_set(prog.sets[*set], self.s[pos], *icase, *ascii) {
+                            pos += 1;
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.At(kind, ascii) => {
+                        if self.at(*kind, *ascii, pos) {
+                            pc += 1;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Mark(slot) => {
+                        self.set_mark(*slot, pos);
+                        if (*slot & 1) == 1 {
+                            self.set_lastindex(*slot / 2);
+                        }
+                        pc += 1;
+                    }
+                    Op.Split(a, b) => {
+                        choices.push(Choice { pc: *b, pos: pos, trail: self.trail.len(), mode: 0 });
+                        pc = *a;
+                    }
+                    Op.Jmp(a) => pc = *a,
+                    Op.RepInit(r, until) => {
+                        self.set_count(*r, -1);
+                        self.set_last(*r, -1);
+                        pc = *until;
+                    }
+                    Op.Until(r, min, max, greedy, body, exit) => {
+                        let count = self.counts[*r] + 1;
+                        if count < *min {
+                            self.set_count(*r, count);
+                            pc = *body;
+                        } else if *greedy {
+                            if (count < *max or *max == maxrepeat()) and pos != self.lasts[*r] {
+                                choices.push(Choice { pc: *exit, pos: pos, trail: self.trail.len(), mode: 0 });
+                                self.set_count(*r, count);
+                                self.set_last(*r, pos);
+                                pc = *body;
+                            } else {
+                                pc = *exit;
+                            }
+                        } else {
+                            choices.push(Choice { pc: pc, pos: pos, trail: self.trail.len(), mode: 1 });
+                            pc = *exit;
+                        }
+                    }
+                    Op.Ref(g, icase, ascii) => {
+                        let (a, b) = self.group_span(*g);
+                        if a < 0 {
+                            ok = false;
+                        } else {
+                            let len = b - a;
+                            if pos + len > self.s.len() {
+                                ok = false;
+                            } else {
+                                let mut k = 0;
+                                while k < len {
+                                    let x = self.s[a + k];
+                                    let y = self.s[pos + k];
+                                    let eq = if *icase { lower(x, *ascii) == lower(y, *ascii) } else { x == y };
+                                    if not eq {
+                                        ok = false;
+                                        break;
+                                    }
+                                    k += 1;
+                                }
+                                if ok {
+                                    pos += len;
+                                    pc += 1;
+                                }
+                            }
+                        }
+                    }
+                    Op.Look(width, negative, sub, next) => {
+                        let mark = self.trail.len();
+                        let from = if *width < 0 { pos } else { pos - *width };
+                        let found = from >= 0 and self.run(prog, *sub, from, false) >= 0;
+                        if *negative {
+                            self.undo_to(mark);
+                            if found {
+                                ok = false;
+                            } else {
+                                pc = *next;
+                            }
+                        } else if found {
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Atomic(sub, next) => {
+                        let end = self.run(prog, *sub, pos, false);
+                        if end >= 0 {
+                            pos = end;
+                            pc = *next;
+                        } else {
+                            ok = false;
+                        }
+                    }
+                    Op.Exists(g, no) => {
+                        let (a, _) = self.group_span(*g);
+                        if a >= 0 {
+                            pc += 1;
+                        } else {
+                            pc = *no;
+                        }
+                    }
+                    Op.Fail => ok = false,
+                    Op.Succeed => return pos,
+                    Op.Match => {
+                        if top and ((self.match_all and pos != self.s.len()) or (self.must_advance and pos == self.start)) {
+                            ok = false;
+                        } else {
+                            return pos;
+                        }
+                    }
+                }
+            }
+            if not ok {
+                match choices.pop() {
+                    Some(ch) => {
+                        self.undo_to(ch.trail);
+                        pc = ch.pc;
+                        pos = ch.pos;
+                        mode = ch.mode;
+                    }
+                    None => {
+                        self.undo_to(base);
+                        return -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn in_items(set: ref CharSet, c: i64, ascii: bool) -> bool {
+    for item in set.items.iter() {
+        let hit = match item {
+            Item.Lit(l) => c == *l,
+            Item.Range(lo, hi) => c >= *lo and c <= *hi,
+            Item.Cat(k) => {
+                let kind = *k;
+                if kind == 0 {
+                    if ascii { c >= 48 and c <= 57 } else { is_decimal(c) }
+                } else if kind == 1 {
+                    if ascii { not (c >= 48 and c <= 57) } else { not is_decimal(c) }
+                } else if kind == 2 {
+                    is_space(c, ascii)
+                } else if kind == 3 {
+                    not is_space(c, ascii)
+                } else if kind == 4 {
+                    is_word(c, ascii)
+                } else {
+                    not is_word(c, ascii)
+                }
+            }
+        };
+        if hit {
+            return true;
+        }
+    }
+    false
+}
+
+// Under IGNORECASE sre lowercases the set when it compiles it and tests
+// the lowercased character; a character is in the lowered set if it, or
+// its uppercase, is in the set and lowers to it.
+fn in_set(set: ref CharSet, c: i64, icase: bool, ascii: bool) -> bool {
+    let mut hit = false;
+    if icase {
+        let lo = lower(c, ascii);
+        if lower(lo, ascii) == lo and in_items(set, lo, ascii) {
+            hit = true;
+        }
+        let up = upper(lo, ascii);
+        if not hit and lower(up, ascii) == lo and in_items(set, up, ascii) {
+            hit = true;
+        }
+    } else {
+        hit = in_items(set, c, ascii);
+    }
+    hit != set.negate
+}
+
+// ------------------------------------------------------- the module
+
+struct Found {
+    start: i64,
+    end: i64,
+    // group spans, (-1, -1) when a group did not take part
+    spans: Vec[(i64, i64)],
+    lastindex: i64,
+}
+
+fn new_matcher(prog: ref Program, s: ref Vec[i64]) -> Matcher {
+    let mut marks: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 * (prog.groups + 1) {
+        marks.push(-1);
+        k += 1;
+    }
+    let mut counts: Vec[i64] = Vec.new();
+    let mut lasts: Vec[i64] = Vec.new();
+    k = 0;
+    while k < prog.repeats {
+        counts.push(-1);
+        lasts.push(-1);
+        k += 1;
+    }
+    Matcher {
+        s: s.clone(),
+        marks: marks,
+        counts: counts,
+        lasts: lasts,
+        lastindex: -1,
+        trail: Vec.new(),
+        start: 0,
+        must_advance: false,
+        match_all: false,
+    }
+}
+
+// sre_search from `from` (or one attempt there for match and
+// fullmatch: mode 1 and 2).
+fn find(m: mut ref Matcher, prog: ref Program, from: i64, must_advance: bool, mode: i64) -> Option[Found] {
+    let mut start = from;
+    while start <= m.s.len() {
+        let mut k = 0;
+        while k < m.marks.len() {
+            m.marks[k] = -1;
+            k += 1;
+        }
+        m.lastindex = -1;
+        m.trail.clear();
+        m.start = start;
+        m.must_advance = must_advance and start == from;
+        m.match_all = mode == 2;
+        let end = m.run(prog, 0, start, true);
+        if end >= 0 {
+            let mut spans: Vec[(i64, i64)] = Vec.new();
+            let mut g = 1;
+            while g <= prog.groups {
+                spans.push(m.group_span(g));
+                g += 1;
+            }
+            return Some(Found { start: start, end: end, spans: spans, lastindex: m.lastindex });
+        }
+        if mode != 0 {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+
+// All the matches finditer gives: each search starts where the last
+// match ended, and must move on past an empty one.
+fn all_matches(prog: ref Program, s: ref Vec[i64], limit: i64) -> Vec[Found] {
+    let mut m = new_matcher(prog, s);
+    let mut out: Vec[Found] = Vec.new();
+    let mut pos = 0;
+    let mut must_advance = false;
+    while pos <= s.len() and (limit == 0 or out.len() < limit) {
+        match find(mut m, prog, pos, must_advance, 0) {
+            Some(found) => {
+                must_advance = found.end == found.start;
+                pos = found.end;
+                out.push(found);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+fn has(set: Str, c: char) -> bool {
+    for x in set.chars() {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+
+// ------------------------------------------------------------ shlex
+
+const WORDCHARS: Str = "abcdfeghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+const POSIX_WORDCHARS: Str = "ßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞ";
+
+struct Lexer {
+    input: Vec[char],
+    pos: i64,
+    posix: bool,
+    commenters: String,
+    wordchars: String,
+    whitespace: String,
+    whitespace_split: bool,
+    quotes: String,
+    escape: String,
+    escapedquotes: String,
+    punctuation_chars: String,
+    // The state: ' ', 'a', 'c', a quote or the escape; None past the end.
+    state: Option[char],
+    pushback: Vec[String],
+    pushback_chars: Vec[char],
+    lineno: i64,
+    token: String,
+}
+
+impl Lexer {
+    fn new(text: ref String, posix: bool, punctuation_chars: Str) -> Lexer {
+        let mut wordchars = WORDCHARS.to_string();
+        if posix {
+            wordchars.push_str(POSIX_WORDCHARS);
+        }
+        if not punctuation_chars.is_empty() {
+            wordchars.push_str("~-./*?=");
+            let mut kept = String.new();
+            for c in wordchars.chars() {
+                if not has(punctuation_chars, c) {
+                    kept.push(c);
+                }
+            }
+            wordchars = kept;
+        }
+        Lexer {
+            input: text.chars().collect(),
+            pos: 0,
+            posix: posix,
+            commenters: "#".to_string(),
+            wordchars: wordchars,
+            whitespace: " \t\r\n".to_string(),
+            whitespace_split: false,
+            quotes: "'\"".to_string(),
+            escape: "\\".to_string(),
+            escapedquotes: "\"".to_string(),
+            punctuation_chars: punctuation_chars.to_string(),
+            state: Some(' '),
+            pushback: Vec.new(),
+            pushback_chars: Vec.new(),
+            lineno: 1,
+            token: String.new(),
+        }
+    }
+
+    fn read_char(mut ref self) -> Option[char] {
+        if self.pos >= self.input.len() {
+            return None;
+        }
+        let c = self.input[self.pos];
+        self.pos += 1;
+        Some(c)
+    }
+
+    // instream.readline(): the rest of the line, newline included.
+    fn skip_line(mut ref self) {
+        while let Some(c) = self.read_char() {
+            if c == '\n' {
+                break;
+            }
+        }
+    }
+
+    fn emit_now(ref self, quoted: bool) -> bool {
+        not self.token.is_empty() or (self.posix and quoted)
+    }
+
+    // read_token: one token, or None at the end in POSIX mode ("" in the
+    // compatibility mode).
+    fn read_token(mut ref self) -> Result[Option[String], String] {
+        let mut quoted = false;
+        let mut escapedstate = ' ';
+        loop {
+            let next = if not self.punctuation_chars.is_empty() and not self.pushback_chars.is_empty() {
+                self.pushback_chars.pop()
+            } else {
+                self.read_char()
+            };
+            if next == Some('\n') {
+                self.lineno += 1;
+            }
+            let state = match self.state {
+                None => {
+                    self.token = String.new();
+                    break;
+                }
+                Some(s) => s,
+            };
+            if state == ' ' {
+                let c = match next {
+                    None => {
+                        self.state = None;
+                        break;
+                    }
+                    Some(c) => c,
+                };
+                if has(self.whitespace, c) {
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                } else if has(self.commenters, c) {
+                    self.skip_line();
+                    self.lineno += 1;
+                } else if self.posix and has(self.escape, c) {
+                    escapedstate = 'a';
+                    self.state = Some(c);
+                } else if has(self.wordchars, c) {
+                    self.token = c.to_string();
+                    self.state = Some('a');
+                } else if has(self.punctuation_chars, c) {
+                    self.token = c.to_string();
+                    self.state = Some('c');
+                } else if has(self.quotes, c) {
+                    if not self.posix {
+                        self.token = c.to_string();
+                    }
+                    self.state = Some(c);
+                } else if self.whitespace_split {
+                    self.token = c.to_string();
+                    self.state = Some('a');
+                } else {
+                    self.token = c.to_string();
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                }
+            } else if has(self.quotes, state) {
+                quoted = true;
+                let c = match next {
+                    None => return Err("No closing quotation".to_string()),
+                    Some(c) => c,
+                };
+                if c == state {
+                    if not self.posix {
+                        self.token.push(c);
+                        self.state = Some(' ');
+                        break;
+                    }
+                    self.state = Some('a');
+                } else if self.posix and has(self.escape, c) and has(self.escapedquotes, state) {
+                    escapedstate = state;
+                    self.state = Some(c);
+                } else {
+                    self.token.push(c);
+                }
+            } else if has(self.escape, state) {
+                let c = match next {
+                    None => return Err("No escaped character".to_string()),
+                    Some(c) => c,
+                };
+                if has(self.quotes, escapedstate) and c != state and c != escapedstate {
+                    self.token.push(state);
+                }
+                self.token.push(c);
+                self.state = Some(escapedstate);
+            } else if state == 'a' or state == 'c' {
+                let c = match next {
+                    None => {
+                        self.state = None;
+                        break;
+                    }
+                    Some(c) => c,
+                };
+                if has(self.whitespace, c) {
+                    self.state = Some(' ');
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                } else if has(self.commenters, c) {
+                    self.skip_line();
+                    self.lineno += 1;
+                    if self.posix {
+                        self.state = Some(' ');
+                        if self.emit_now(quoted) {
+                            break;
+                        }
+                        continue;
+                    }
+                } else if state == 'c' {
+                    if has(self.punctuation_chars, c) {
+                        self.token.push(c);
+                    } else {
+                        if not has(self.whitespace, c) {
+                            self.pushback_chars.push(c);
+                        }
+                        self.state = Some(' ');
+                        break;
+                    }
+                } else if self.posix and has(self.quotes, c) {
+                    self.state = Some(c);
+                } else if self.posix and has(self.escape, c) {
+                    escapedstate = 'a';
+                    self.state = Some(c);
+                } else if has(self.wordchars, c) or has(self.quotes, c)
+                    or (self.whitespace_split and not has(self.punctuation_chars, c)) {
+                    self.token.push(c);
+                } else {
+                    if not self.punctuation_chars.is_empty() {
+                        self.pushback_chars.push(c);
+                    } else {
+                        self.pushback.insert(0, c.to_string());
+                    }
+                    self.state = Some(' ');
+                    if self.emit_now(quoted) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        }
+        let result = self.token.clone();
+        self.token = String.new();
+        if self.posix and not quoted and result.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(result))
+    }
+
+    fn get_token(mut ref self) -> Result[Option[String], String] {
+        if not self.pushback.is_empty() {
+            return Ok(Some(self.pushback.remove(0)));
+        }
+        self.read_token()
+    }
+
+    // list(lexer): tokens up to the end marker.
+    fn tokens(mut ref self) -> Result[Vec[String], String] {
+        let mut out: Vec[String] = Vec.new();
+        loop {
+            match self.get_token()? {
+                None => break,
+                Some(t) => {
+                    if not self.posix and t.is_empty() {
+                        break;
+                    }
+                    out.push(t);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+
+// ------------------------------------------------------------ strings
+
+fn cps(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn py_repr(s: ref String) -> String {
+    repr_of(cps(s))
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// str.strip() with no argument.
+fn py_strip(s: ref String) -> String {
+    let c = cps(s);
+    let mut a = 0;
+    let mut b = c.len();
+    while a < b and is_space(c[a], false) {
+        a += 1;
+    }
+    while b > a and is_space(c[b - 1], false) {
+        b -= 1;
+    }
+    to_string(slice(c, a, b))
+}
+
+fn py_rstrip(s: ref String) -> String {
+    let c = cps(s);
+    let mut b = c.len();
+    while b > 0 and is_space(c[b - 1], false) {
+        b -= 1;
+    }
+    to_string(slice(c, 0, b))
+}
+
+// str.split() with no argument.
+fn py_split(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in cps(s) {
+        if is_space(c, false) {
+            if cur.len() > 0 {
+                out.push(to_string(cur));
+                cur = Vec.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(to_string(cur));
+    }
+    out
+}
+
+fn reversed(s: ref String) -> String {
+    let c = cps(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = c.len() - 1;
+    while i >= 0 {
+        out.push(c[i]);
+        i -= 1;
+    }
+    to_string(out)
+}
+
+fn count_dots(s: ref String) -> i64 {
+    let mut n = 0;
+    for b in s.bytes() {
+        if b == b'.' {
+            n += 1;
+        }
+    }
+    n
+}
+
+// str.splitlines() for text with \n line ends.
+fn split_lines(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in text.chars() {
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// file.readline(): the first line, its newline kept.
+fn first_line(text: ref String) -> String {
+    let mut out = String.new();
+    for c in text.chars() {
+        out.push(c);
+        if c == '\n' {
+            break;
+        }
+    }
+    out
+}
+
+// s.split(sep, 1) when sep occurs in s.
+fn split_once(s: ref String, sep: char) -> Option[(String, String)] {
+    let mut k = String.new();
+    let mut v = String.new();
+    let mut seen = false;
+    for c in s.chars() {
+        if seen {
+            v.push(c);
+        } else if c == sep {
+            seen = true;
+        } else {
+            k.push(c);
+        }
+    }
+    if seen { Some((k, v)) } else { None }
+}
+
+fn tuple3(a: ref String, b: ref String, c: ref String) -> String {
+    f"({py_repr(a)}, {py_repr(b)}, {py_repr(c)})"
+}
+
+// ------------------------------------------------------------ a dict
+
+// A str -> str dict: insertion order, an update keeps a key's place.
+struct Props {
+    keys: Vec[String],
+    vals: Vec[String],
+}
+
+impl Clone for Props {
+    fn clone(ref self) -> Props {
+        Props { keys: self.keys.clone(), vals: self.vals.clone() }
+    }
+}
+
+fn props() -> Props {
+    Props { keys: Vec.new(), vals: Vec.new() }
+}
+
+impl Props {
+    fn index(ref self, k: Str) -> i64 {
+        let mut i = 0;
+        while i < self.keys.len() {
+            if self.keys[i] == k {
+                return i;
+            }
+            i += 1;
+        }
+        -1
+    }
+
+    fn has(ref self, k: Str) -> bool {
+        self.index(k) >= 0
+    }
+
+    // dict.get(k, "")
+    fn get(ref self, k: Str) -> String {
+        let i = self.index(k);
+        if i < 0 { String.new() } else { self.vals[i].clone() }
+    }
+
+    fn set(mut ref self, k: ref String, v: ref String) {
+        let i = self.index(k);
+        if i < 0 {
+            self.keys.push(k.clone());
+            self.vals.push(v.clone());
+        } else {
+            self.vals[i] = v.clone();
+        }
+    }
+
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < self.keys.len() {
+            parts.push(f"{py_repr(self.keys[i])}: {py_repr(self.vals[i])}");
+            i += 1;
+        }
+        f"{{{parts.join(", ")}}}"
+    }
+}
+
+// ------------------------------------------------------------ files
+
+fn is_file(path: ref String) -> bool {
+    match fs.metadata(path.clone()) {
+        Ok(m) => m.is_file,
+        Err(_) => false,
+    }
+}
+
+fn join_path(a: ref String, b: Str) -> String {
+    if a.ends_with("/") { f"{a}{b}" } else { f"{a}/{b}" }
+}
+
+fn basename(p: ref String) -> String {
+    let mut out = String.new();
+    for c in p.chars() {
+        if c == '/' {
+            out = String.new();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ regexes
+
+struct Res {
+    // _DISTRO_RELEASE_CONTENT_REVERSED_PATTERN
+    release_content: Program,
+    // _DISTRO_RELEASE_BASENAME_PATTERN
+    release_basename: Program,
+    version_parts: Program,
+    os_codename: Program,
+    uname: Program,
+}
+
+fn fixed(p: Str) -> Result[Program, String] {
+    match compile(cps(p.to_string()), 0) {
+        Ok(prog) => Ok(prog),
+        Err(e) => Err(f"cannot compile {p}: {err_text(e)}"),
+    }
+}
+
+fn new_res() -> Result[Res, String] {
+    Ok(Res {
+        release_content: fixed("(?:[^)]*\\)(.*)\\()? *(?:STL )?([\\d.+\\-a-z]*\\d) *(?:esaeler *)?(.+)")?,
+        release_basename: fixed("(\\w+)[-_](release|version)$")?,
+        version_parts: fixed("(\\d+)\\.?(\\d+)?\\.?(\\d+)?")?,
+        os_codename: fixed("\\((\\D+)\\)|,\\s*(\\D+)")?,
+        uname: fixed("^([^\\s]+)\\s+([\\d\\.]+)")?,
+    })
+}
+
+// A match: its groups, None where a group took no part.
+struct Groups {
+    groups: Vec[Option[String]],
+}
+
+impl Groups {
+    fn group(ref self, g: i64) -> Option[String] {
+        self.groups[g - 1].clone()
+    }
+
+    // match.group(g) or "".
+    fn text(ref self, g: i64) -> String {
+        self.groups[g - 1].clone().unwrap_or(String.new())
+    }
+}
+
+// mode 0 is re.search, 1 re.match.
+fn re_run(prog: ref Program, s: ref String, mode: i64) -> Option[Groups] {
+    let c = cps(s);
+    let mut m = new_matcher(prog, c);
+    match find(mut m, prog, 0, false, mode) {
+        None => None,
+        Some(found) => {
+            let mut groups: Vec[Option[String]] = Vec.new();
+            for span in found.spans.iter() {
+                let (a, b) = span;
+                groups.push(if a < 0 { None } else { Some(to_string(slice(c, a, b))) });
+            }
+            Some(Groups { groups: groups })
+        }
+    }
+}
+
+// ------------------------------------------------------------ parsers
+
+fn parse_os_release_content(re: ref Res, text: ref String) -> Result[Props, String] {
+    let mut p = props();
+    let mut lexer = Lexer.new(text, true, "");
+    lexer.whitespace_split = true;
+    let tokens = match lexer.tokens() {
+        Ok(t) => t,
+        Err(e) => return Err(f"ValueError: {e}"),
+    };
+    for token in tokens.iter() {
+        if let Some((k, v)) = split_once(token, '=') {
+            p.set(k.to_lowercase(), v);
+        }
+    }
+    if p.has("version") {
+        if let Some(m) = re_run(re.os_codename, p.get("version"), 0) {
+            let codename = match m.group(1) {
+                Some(g) => g,
+                None => m.text(2),
+            };
+            p.set("codename".to_string(), codename);
+            p.set("release_codename".to_string(), codename);
+        }
+    }
+    if p.has("version_codename") {
+        p.set("codename".to_string(), p.get("version_codename"));
+    } else if p.has("ubuntu_codename") {
+        p.set("codename".to_string(), p.get("ubuntu_codename"));
+    }
+    Ok(p)
+}
+
+fn parse_lsb_release_content(lines: ref Vec[String]) -> Props {
+    let mut p = props();
+    for line in lines.iter() {
+        if let Some((k, v)) = split_once(line, ':') {
+            p.set(k.replace(" ", "_").to_lowercase(), py_strip(v));
+        }
+    }
+    p
+}
+
+fn parse_uname_content(re: ref Res, lines: ref Vec[String]) -> Props {
+    let mut p = props();
+    if lines.is_empty() {
+        return p;
+    }
+    if let Some(m) = re_run(re.uname, py_strip(lines[0]), 0) {
+        let name = m.text(1);
+        if name == "Linux" {
+            return p;
+        }
+        p.set("id".to_string(), name.to_lowercase());
+        p.set("name".to_string(), name);
+        p.set("release".to_string(), m.text(2));
+    }
+    p
+}
+
+fn parse_distro_release_content(re: ref Res, line: ref String) -> Props {
+    let mut p = props();
+    match re_run(re.release_content, reversed(py_strip(line)), 1) {
+        Some(m) => {
+            p.set("name".to_string(), reversed(m.text(3)));
+            let version = m.text(2);
+            if not version.is_empty() {
+                p.set("version_id".to_string(), reversed(version));
+            }
+            let codename = m.text(1);
+            if not codename.is_empty() {
+                p.set("codename".to_string(), reversed(codename));
+            }
+        }
+        None => {
+            if not line.is_empty() {
+                p.set("name".to_string(), py_strip(line));
+            }
+        }
+    }
+    p
+}
+
+fn parse_distro_release_file(re: ref Res, path: ref String) -> Props {
+    match fs.read_to_string(path.clone()) {
+        Ok(text) => parse_distro_release_content(re, first_line(text)),
+        Err(_) => props(),
+    }
+}
+
+fn normalize(id: ref String, table: i64) -> String {
+    let d = id.to_lowercase().replace(" ", "_");
+    let pairs: Vec[(Str, Str)] = if table == 0 {
+        vec![("ol", "oracle"), ("opensuse-leap", "opensuse")]
+    } else if table == 1 {
+        vec![
+            ("enterpriseenterpriseas", "oracle"),
+            ("enterpriseenterpriseserver", "oracle"),
+            ("redhatenterpriseworkstation", "rhel"),
+            ("redhatenterpriseserver", "rhel"),
+            ("redhatenterprisecomputenode", "rhel"),
+        ]
+    } else {
+        vec![("redhat", "rhel")]
+    };
+    for (k, v) in pairs {
+        if d == k {
+            return v.to_string();
+        }
+    }
+    d
+}
+
+fn ignore_basenames() -> Vec[Str] {
+    vec!["debian_version", "lsb-release", "oem-release", "os-release", "system-release", "plesk-release", "iredmail-release", "board-release", "ec2_version"]
+}
+
+fn release_basenames() -> Vec[Str] {
+    vec!["SuSE-release", "altlinux-release", "arch-release", "base-release", "centos-release", "fedora-release", "gentoo-release", "mageia-release", "mandrake-release", "mandriva-release", "mandrivalinux-release", "manjaro-release", "oracle-release", "redhat-release", "rocky-release", "sl-release", "slackware-version"]
+}
+
+fn ignored(name: ref String) -> bool {
+    for b in ignore_basenames() {
+        if name == b {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ the class
+
+struct Dist {
+    root_dir: Option[String],
+    etc_dir: String,
+    usr_lib_dir: String,
+    os_release_file: String,
+    distro_release_file: String,
+    include_lsb: bool,
+    include_uname: bool,
+    include_oslevel: bool,
+    // the cached properties
+    os_info: Option[Props],
+    lsb_info: Option[Props],
+    distro_info: Option[Props],
+    uname_info: Option[Props],
+    oslevel: Option[String],
+    debian_version: Option[String],
+}
+
+fn new_dist(include_lsb: Option[bool], os_release_file: Str, distro_release_file: Str, include_uname: Option[bool], root_dir: own Option[String], include_oslevel: Option[bool]) -> Result[Dist, String] {
+    let etc_dir = match root_dir {
+        Some(ref r) => join_path(r, "etc"),
+        None => "/etc".to_string(),
+    };
+    let usr_lib_dir = match root_dir {
+        Some(ref r) => join_path(r, "usr/lib"),
+        None => "/usr/lib".to_string(),
+    };
+    let os_file = if not os_release_file.is_empty() {
+        os_release_file.to_string()
+    } else {
+        let in_etc = join_path(etc_dir, "os-release");
+        let in_lib = join_path(usr_lib_dir, "os-release");
+        if is_file(in_etc) or not is_file(in_lib) { in_etc } else { in_lib }
+    };
+    let rooted = root_dir.is_some();
+    if rooted and (include_lsb == Some(true) or include_uname == Some(true) or include_oslevel == Some(true)) {
+        return Err("ValueError: Including subprocess data sources from specific root_dir is disallowed to prevent false information".to_string());
+    }
+    Ok(Dist {
+        root_dir: root_dir,
+        etc_dir: etc_dir,
+        usr_lib_dir: usr_lib_dir,
+        os_release_file: os_file,
+        distro_release_file: distro_release_file.to_string(),
+        include_lsb: include_lsb.unwrap_or(not rooted),
+        include_uname: include_uname.unwrap_or(not rooted),
+        include_oslevel: include_oslevel.unwrap_or(not rooted),
+        os_info: None,
+        lsb_info: None,
+        distro_info: None,
+        uname_info: None,
+        oslevel: None,
+        debian_version: None,
+    })
+}
+
+impl Dist {
+    fn os_release_info(mut ref self, re: ref Res) -> Result[Props, String] {
+        if let Some(p) = self.os_info {
+            return Ok(p.clone());
+        }
+        let p = if is_file(self.os_release_file) {
+            match fs.read_to_string(self.os_release_file.clone()) {
+                Ok(text) => parse_os_release_content(re, text)?,
+                Err(e) => return Err(f"OSError: {e}"),
+            }
+        } else {
+            props()
+        };
+        self.os_info = Some(p.clone());
+        Ok(p)
+    }
+
+    // The subprocess sources are never run from a root directory; the
+    // jobs fill them in.
+    fn lsb_release_info(mut ref self) -> Props {
+        if self.lsb_info.is_none() {
+            self.lsb_info = Some(props());
+        }
+        self.lsb_info.clone().unwrap()
+    }
+
+    fn uname_info(mut ref self) -> Props {
+        if self.uname_info.is_none() {
+            self.uname_info = Some(props());
+        }
+        self.uname_info.clone().unwrap()
+    }
+
+    fn oslevel_info(mut ref self) -> String {
+        if self.oslevel.is_none() {
+            self.oslevel = Some(String.new());
+        }
+        self.oslevel.clone().unwrap()
+    }
+
+    fn debian_version(mut ref self) -> String {
+        if let Some(v) = self.debian_version {
+            return v.clone();
+        }
+        let v = match fs.read_to_string(join_path(self.etc_dir, "debian_version")) {
+            Ok(text) => py_rstrip(first_line(text)),
+            Err(_) => String.new(),
+        };
+        self.debian_version = Some(v.clone());
+        v
+    }
+
+    fn distro_release_info(mut ref self, re: ref Res) -> Props {
+        if let Some(p) = self.distro_info {
+            return p.clone();
+        }
+        let p = self.find_distro_release(re);
+        self.distro_info = Some(p.clone());
+        p
+    }
+
+    fn find_distro_release(mut ref self, re: ref Res) -> Props {
+        let mut info = props();
+        let mut m: Option[Groups] = None;
+        if not self.distro_release_file.is_empty() {
+            info = parse_distro_release_file(re, self.distro_release_file);
+            m = re_run(re.release_basename, basename(self.distro_release_file), 1);
+        } else {
+            let basenames: Vec[String] = match fs.read_dir(self.etc_dir.clone()) {
+                Ok(names) => {
+                    let mut kept: Vec[String] = Vec.new();
+                    for n in names.iter() {
+                        if not ignored(n) and is_file(join_path(self.etc_dir, n)) {
+                            kept.push(n.clone());
+                        }
+                    }
+                    kept.sort();
+                    kept
+                }
+                Err(_) => release_basenames().iter().map(|b| b.to_string()).collect(),
+            };
+            let mut found = false;
+            for name in basenames.iter() {
+                let g = re_run(re.release_basename, name, 1);
+                if g.is_none() {
+                    continue;
+                }
+                let path = join_path(self.etc_dir, name);
+                let candidate = parse_distro_release_file(re, path);
+                if not candidate.has("name") {
+                    continue;
+                }
+                self.distro_release_file = path;
+                info = candidate;
+                m = g;
+                found = true;
+                break;
+            }
+            if not found {
+                return props();
+            }
+        }
+        if let Some(g) = m {
+            info.set("id".to_string(), g.text(1));
+        }
+        if info.get("name").to_lowercase().contains("cloudlinux") {
+            info.set("id".to_string(), "cloudlinux".to_string());
+        }
+        info
+    }
+
+    fn os_attr(mut ref self, re: ref Res, k: Str) -> Result[String, String] {
+        Ok(self.os_release_info(re)?.get(k))
+    }
+
+    fn lsb_attr(mut ref self, k: Str) -> String {
+        self.lsb_release_info().get(k)
+    }
+
+    fn distro_attr(mut ref self, re: ref Res, k: Str) -> String {
+        self.distro_release_info(re).get(k)
+    }
+
+    fn uname_attr(mut ref self, k: Str) -> String {
+        self.uname_info().get(k)
+    }
+
+    fn id(mut ref self, re: ref Res) -> Result[String, String] {
+        let d = self.os_attr(re, "id")?;
+        if not d.is_empty() {
+            return Ok(normalize(d, 0));
+        }
+        let d = self.lsb_attr("distributor_id");
+        if not d.is_empty() {
+            return Ok(normalize(d, 1));
+        }
+        let d = self.distro_attr(re, "id");
+        if not d.is_empty() {
+            return Ok(normalize(d, 2));
+        }
+        let d = self.uname_attr("id");
+        if not d.is_empty() {
+            return Ok(normalize(d, 2));
+        }
+        Ok(String.new())
+    }
+
+    fn name(mut ref self, re: ref Res, pretty: bool) -> Result[String, String] {
+        let mut name = self.os_attr(re, "name")?;
+        if name.is_empty() {
+            name = self.lsb_attr("distributor_id");
+        }
+        if name.is_empty() {
+            name = self.distro_attr(re, "name");
+        }
+        if name.is_empty() {
+            name = self.uname_attr("name");
+        }
+        if pretty {
+            name = self.os_attr(re, "pretty_name")?;
+            if name.is_empty() {
+                name = self.lsb_attr("description");
+            }
+            if name.is_empty() {
+                name = self.distro_attr(re, "name");
+                if name.is_empty() {
+                    name = self.uname_attr("name");
+                }
+                let version = self.version(re, true, false)?;
+                if not version.is_empty() {
+                    name = f"{name} {version}";
+                }
+            }
+        }
+        Ok(name)
+    }
+
+    fn version(mut ref self, re: ref Res, pretty: bool, best: bool) -> Result[String, String] {
+        let mut versions: Vec[String] = Vec.new();
+        versions.push(self.os_attr(re, "version_id")?);
+        versions.push(self.lsb_attr("release"));
+        versions.push(self.distro_attr(re, "version_id"));
+        versions.push(parse_distro_release_content(re, self.os_attr(re, "pretty_name")?).get("version_id"));
+        versions.push(parse_distro_release_content(re, self.lsb_attr("description")).get("version_id"));
+        versions.push(self.uname_attr("release"));
+        if self.uname_attr("id").starts_with("aix") {
+            versions.insert(0, self.oslevel_info());
+        } else {
+            let mut debian_like = self.id(re)? == "debian";
+            if not debian_like {
+                for w in py_split(self.like(re)?).iter() {
+                    if w == "debian" {
+                        debian_like = true;
+                    }
+                }
+            }
+            if debian_like {
+                versions.push(self.debian_version());
+            }
+        }
+        let mut version = String.new();
+        if best {
+            for v in versions.iter() {
+                if count_dots(v) > count_dots(version) or version.is_empty() {
+                    version = v.clone();
+                }
+            }
+        } else {
+            for v in versions.iter() {
+                if not v.is_empty() {
+                    version = v.clone();
+                    break;
+                }
+            }
+        }
+        if pretty and not version.is_empty() {
+            let codename = self.codename(re)?;
+            if not codename.is_empty() {
+                version = f"{version} ({codename})";
+            }
+        }
+        Ok(version)
+    }
+
+    fn version_parts(mut ref self, re: ref Res, best: bool) -> Result[(String, String, String), String] {
+        let v = self.version(re, false, best)?;
+        if not v.is_empty() {
+            if let Some(m) = re_run(re.version_parts, v, 1) {
+                return Ok((m.text(1), m.text(2), m.text(3)));
+            }
+        }
+        Ok((String.new(), String.new(), String.new()))
+    }
+
+    fn like(mut ref self, re: ref Res) -> Result[String, String] {
+        self.os_attr(re, "id_like")
+    }
+
+    fn codename(mut ref self, re: ref Res) -> Result[String, String] {
+        let os = self.os_release_info(re)?;
+        if os.has("codename") {
+            return Ok(os.get("codename"));
+        }
+        let mut c = self.lsb_attr("codename");
+        if c.is_empty() {
+            c = self.distro_attr(re, "codename");
+        }
+        Ok(c)
+    }
+
+    fn linux_distribution(mut ref self, re: ref Res, full_name: bool) -> Result[String, String] {
+        let first = if full_name { self.name(re, false)? } else { self.id(re)? };
+        let version = self.version(re, false, false)?;
+        let mut third = self.os_attr(re, "release_codename")?;
+        if third.is_empty() {
+            third = self.codename(re)?;
+        }
+        Ok(tuple3(first, version, third))
+    }
+
+    fn info(mut ref self, re: ref Res, pretty: bool, best: bool) -> Result[Info, String] {
+        let id = self.id(re)?;
+        let version = self.version(re, pretty, best)?;
+        let (major, minor, build) = self.version_parts(re, best)?;
+        let like = self.like(re)?;
+        let codename = self.codename(re)?;
+        Ok(Info { id: id, version: version, major: major, minor: minor, build_number: build, like: like, codename: codename })
+    }
+
+    // __repr__: its fields in order, so it names the distro release file
+    // before looking for one.
+    fn repr(mut ref self, re: ref Res) -> Result[String, String] {
+        let root = match self.root_dir {
+            Some(r) => py_repr(r),
+            None => "None".to_string(),
+        };
+        let mut s = f"LinuxDistribution(os_release_file={py_repr(self.os_release_file)}, distro_release_file={py_repr(self.distro_release_file)}, include_lsb={py_bool(self.include_lsb)}, include_uname={py_bool(self.include_uname)}, include_oslevel={py_bool(self.include_oslevel)}, root_dir={root}, ";
+        s.push_str(f"_os_release_info={self.os_release_info(re)?.repr()}, ");
+        s.push_str(f"_lsb_release_info={self.lsb_release_info().repr()}, ");
+        s.push_str(f"_distro_release_info={self.distro_release_info(re).repr()}, ");
+        s.push_str(f"_uname_info={self.uname_info().repr()}, ");
+        s.push_str(f"_oslevel_info={py_repr(self.oslevel_info())})");
+        Ok(s)
+    }
+}
+
+struct Info {
+    id: String,
+    version: String,
+    major: String,
+    minor: String,
+    build_number: String,
+    like: String,
+    codename: String,
+}
+
+impl Info {
+    fn repr(ref self) -> String {
+        f"{{'id': {py_repr(self.id)}, 'version': {py_repr(self.version)}, 'version_parts': {{'major': {py_repr(self.major)}, 'minor': {py_repr(self.minor)}, 'build_number': {py_repr(self.build_number)}}}, 'like': {py_repr(self.like)}, 'codename': {py_repr(self.codename)}}}"
+    }
+
+    // json.dumps(info, indent=4, sort_keys=True)
+    fn json(ref self) -> String {
+        let mut s = "{\n".to_string();
+        s.push_str(f"    \"codename\": {json_str(self.codename)},\n");
+        s.push_str(f"    \"id\": {json_str(self.id)},\n");
+        s.push_str(f"    \"like\": {json_str(self.like)},\n");
+        s.push_str(f"    \"version\": {json_str(self.version)},\n");
+        s.push_str("    \"version_parts\": {\n");
+        s.push_str(f"        \"build_number\": {json_str(self.build_number)},\n");
+        s.push_str(f"        \"major\": {json_str(self.major)},\n");
+        s.push_str(f"        \"minor\": {json_str(self.minor)}\n");
+        s.push_str("    }\n}");
+        s
+    }
+}
+
+// A JSON string the way json.dumps writes one (ensure_ascii).
+fn json_str(s: ref String) -> String {
+    let mut out = "\"".to_string();
+    for c in cps(s) {
+        if c == 34 {
+            out.push_str("\\\"");
+        } else if c == 92 {
+            out.push_str("\\\\");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 8 {
+            out.push_str("\\b");
+        } else if c == 12 {
+            out.push_str("\\f");
+        } else if c < 0x20 or c > 0x7F {
+            if c > 0xFFFF {
+                let v = c - 0x10000;
+                out.push_str(f"\\u{hex_n(0xD800 + (v >> 10), 4)}\\u{hex_n(0xDC00 + (v & 0x3FF), 4)}");
+            } else {
+                out.push_str(f"\\u{hex_n(c, 4)}");
+            }
+        } else {
+            out.push(c as u8 as char);
+        }
+    }
+    out.push('"');
+    out
+}
+
+// ------------------------------------------------------------ the jobs
+
+const ROOTS: Str = "data/roots/";
+
+fn field(s: ref String) -> Option[String] {
+    if s == "-" {
+        return None;
+    }
+    Some(s.replace("∅", "").replace("⏎", "\n").replace("⇥", "\t").replace("␣", " "))
+}
+
+fn field_text(s: ref String) -> String {
+    field(s).unwrap_or(String.new())
+}
+
+fn show(label: Str, v: Result[String, String]) {
+    match v {
+        Ok(s) => println(f"   {label:<22} {s}"),
+        Err(e) => println(f"   {label:<22} raised {e}"),
+    }
+}
+
+fn str_result(v: own Result[String, String]) -> Result[String, String] {
+    match v {
+        Ok(s) => Ok(py_repr(s)),
+        Err(e) => Err(e),
+    }
+}
+
+fn parts_repr(v: own Result[(String, String, String), String]) -> Result[String, String] {
+    match v {
+        Ok((a, b, c)) => Ok(tuple3(a, b, c)),
+        Err(e) => Err(e),
+    }
+}
+
+fn info_repr(v: own Result[Info, String]) -> Result[String, String] {
+    match v {
+        Ok(i) => Ok(i.repr()),
+        Err(e) => Err(e),
+    }
+}
+
+fn mmb(d: mut ref Dist, re: ref Res) -> Result[String, String] {
+    // major_version(), minor_version(), build_number(): each takes its
+    // part of a fresh version_parts(). The parentheses are B-2026-10-19-30: `x?.0`
+    // does not parse.
+    let major = (d.version_parts(re, false)?).0;
+    let minor = (d.version_parts(re, false)?).1;
+    let build = (d.version_parts(re, false)?).2;
+    Ok(tuple3(major, minor, build))
+}
+
+fn report(d: mut ref Dist, re: ref Res) {
+    show("repr", d.repr(re));
+    show("id", str_result(d.id(re)));
+    show("name", str_result(d.name(re, false)));
+    show("name pretty", str_result(d.name(re, true)));
+    show("version", str_result(d.version(re, false, false)));
+    show("version pretty", str_result(d.version(re, true, false)));
+    show("version best", str_result(d.version(re, false, true)));
+    show("version pretty best", str_result(d.version(re, true, true)));
+    show("version_parts", parts_repr(d.version_parts(re, false)));
+    show("version_parts best", parts_repr(d.version_parts(re, true)));
+    show("major minor build", mmb(mut d, re));
+    show("like", str_result(d.like(re)));
+    show("codename", str_result(d.codename(re)));
+    show("linux_distribution", d.linux_distribution(re, true));
+    show("linux_distribution id", d.linux_distribution(re, false));
+    show("info", info_repr(d.info(re, false, false)));
+    show("info pretty best", info_repr(d.info(re, true, true)));
+    show("os_release_file", Ok(py_repr(d.os_release_file)));
+    show("distro_release_file", Ok(py_repr(d.distro_release_file)));
+    let os = match d.os_release_info(re) {
+        Ok(p) => Ok(p.repr()),
+        Err(e) => Err(e),
+    };
+    show("os_release_info", os);
+    show("lsb_release_info", Ok(d.lsb_release_info().repr()));
+    show("distro_release_info", Ok(d.distro_release_info(re).repr()));
+    show("uname_info", Ok(d.uname_info().repr()));
+    show("oslevel_info", Ok(py_repr(d.oslevel_info())));
+    show("os_release_attr id", str_result(d.os_attr(re, "id")));
+    show("distro_release_attr", Ok(py_repr(d.distro_attr(re, "name"))));
+}
+
+fn rooted(name: ref String, os_file: Str, distro_file: Str) -> Result[Dist, String] {
+    new_dist(None, os_file, distro_file, None, Some(f"{ROOTS}{name}"), None)
+}
+
+fn flag(s: ref String) -> Option[bool] {
+    if s == "-" { None } else { Some(s == "T") }
+}
+
+// distro's main(): --json/-j and --root-dir/-r, the way argparse reads
+// them (a short-flag cluster, an attached value, --opt=value).
+fn cli(re: ref Res, args: ref Vec[String]) {
+    let mut json = false;
+    let mut root: Option[String] = None;
+    let mut i = 0;
+    let mut bad = false;
+    while i < args.len() {
+        let a = args[i].clone();
+        if a == "--json" {
+            json = true;
+        } else if a == "--root-dir" {
+            if i + 1 >= args.len() {
+                bad = true;
+                break;
+            }
+            i += 1;
+            root = Some(args[i].clone());
+        } else if a.starts_with("--root-dir=") {
+            root = Some(a.replace("--root-dir=", ""));
+        } else if a.starts_with("-") and not a.starts_with("--") and a.len() > 1 {
+            let chars: Vec[char] = a.chars().collect();
+            let mut k = 1;
+            while k < chars.len() {
+                if chars[k] == 'j' {
+                    json = true;
+                    k += 1;
+                } else if chars[k] == 'r' {
+                    let mut rest = String.new();
+                    for c in chars[k + 1..].iter() {
+                        rest.push(c);
+                    }
+                    if rest.is_empty() {
+                        if i + 1 >= args.len() {
+                            bad = true;
+                            break;
+                        }
+                        i += 1;
+                        root = Some(args[i].clone());
+                    } else {
+                        root = Some(rest);
+                    }
+                    break;
+                } else {
+                    bad = true;
+                    break;
+                }
+            }
+        } else {
+            bad = true;
+        }
+        if bad {
+            break;
+        }
+        i += 1;
+    }
+    let r = match root {
+        Some(r) => r,
+        None => {
+            bad = true;
+            String.new()
+        }
+    };
+    if bad {
+        println("   [exit status 2]");
+        return;
+    }
+    let mut d = match new_dist(Some(false), "", "", Some(false), Some(r), Some(false)) {
+        Ok(d) => d,
+        Err(e) => {
+            println(f"   raised {e}");
+            return;
+        }
+    };
+    if json {
+        match d.info(re, false, false) {
+            Ok(info) => println(info.json()),
+            Err(e) => println(f"   raised {e}"),
+        }
+        return;
+    }
+    match d.name(re, true) {
+        Ok(n) => println(f"Name: {n}"),
+        Err(e) => {
+            println(f"   raised {e}");
+            return;
+        }
+    }
+    match d.version(re, true, false) {
+        Ok(v) => println(f"Version: {v}"),
+        Err(e) => {
+            println(f"   raised {e}");
+            return;
+        }
+    }
+    match d.codename(re) {
+        Ok(c) => println(f"Codename: {c}"),
+        Err(e) => println(f"   raised {e}"),
+    }
+}
+
+fn job(re: ref Res, w: ref Vec[String]) {
+    let op = w[0].clone();
+    if op == "root" {
+        match rooted(w[1], "", "") {
+            Ok(d) => {
+                let mut d = d;
+                report(mut d, re);
+            }
+            Err(e) => println(f"   raised {e}"),
+        }
+    } else if op == "files" {
+        let os_file = field_text(w[2]);
+        let distro_file = field_text(w[3]);
+        match rooted(w[1], os_file.as_str(), distro_file.as_str()) {
+            Ok(d) => {
+                let mut d = d;
+                report(mut d, re);
+            }
+            Err(e) => println(f"   raised {e}"),
+        }
+    } else if op == "inject" {
+        let mut d = match rooted(w[1], "", "") {
+            Ok(d) => d,
+            Err(e) => {
+                println(f"   raised {e}");
+                return;
+            }
+        };
+        // What lsb_release -a, uname -rs and oslevel would have printed.
+        if let Some(t) = field(w[2]) {
+            d.lsb_info = Some(parse_lsb_release_content(split_lines(t)));
+        }
+        if let Some(t) = field(w[3]) {
+            d.uname_info = Some(parse_uname_content(re, split_lines(t)));
+        }
+        if let Some(t) = field(w[4]) {
+            d.oslevel = Some(py_strip(t));
+        }
+        report(mut d, re);
+    } else if op == "ctor" {
+        match new_dist(flag(w[2]), "", "", flag(w[3]), Some(w[1].clone()), flag(w[4])) {
+            Ok(d) => {
+                let root = match d.root_dir {
+                    Some(r) => py_repr(r),
+                    None => "None".to_string(),
+                };
+                println(f"   include_lsb={py_bool(d.include_lsb)} include_uname={py_bool(d.include_uname)} include_oslevel={py_bool(d.include_oslevel)} root_dir={root} etc_dir={py_repr(d.etc_dir)} usr_lib_dir={py_repr(d.usr_lib_dir)}");
+            }
+            Err(e) => println(f"   raised {e}"),
+        }
+    } else if op == "release" {
+        show("parsed", Ok(parse_distro_release_content(re, field_text(w[1])).repr()));
+    } else if op == "osrel" {
+        let r = match parse_os_release_content(re, field_text(w[1])) {
+            Ok(p) => Ok(p.repr()),
+            Err(e) => Err(e),
+        };
+        show("parsed", r);
+    } else if op == "lsb" {
+        show("parsed", Ok(parse_lsb_release_content(split_lines(field_text(w[1]))).repr()));
+    } else if op == "uname" {
+        show("parsed", Ok(parse_uname_content(re, split_lines(field_text(w[1]))).repr()));
+    } else if op == "cli" {
+        let args: Vec[String] = w[1..].to_vec();
+        cli(re, args);
+    }
+}
+
+fn write_data() -> Result[(), String] {
+    for dir in data_dirs().iter() {
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+    }
+    for (name, text) in data_files().into_iter() {
+        let path = f"data/{name}";
+        let mut parent = String.new();
+        let mut cur = String.new();
+        for c in path.chars() {
+            if c == '/' {
+                parent.push_str(cur);
+                cur = "/".to_string();
+            } else {
+                cur.push(c);
+            }
+        }
+        if let Err(e) = fs.create_dir_all(parent.clone()) {
+            return Err(f"cannot create {parent}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let re = new_res()?;
+    let text = match fs.read_to_string("data/jobs.tsv".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.tsv: {e}"),
+    };
+    for line in split_lines(text).iter() {
+        if line.starts_with("#") {
+            println(line);
+            continue;
+        }
+        println(f"-- {line.replace("\t", " | ")}");
+        let w: Vec[String] = line.split("\t").map(|s| s.to_string()).collect();
+        job(re, w);
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
+
+// ------------------------------------------------------------ data
+
+fn file_0() -> String {
+    let mut s = String.new();
+    s.push_str("PRETTY_NAME=\"Ubuntu 22.04.3 LTS\"\n");
+    s.push_str("NAME=\"Ubuntu\"\n");
+    s.push_str("VERSION_ID=\"22.04\"\n");
+    s.push_str("VERSION=\"22.04.3 LTS (Jammy Jellyfish)\"\n");
+    s.push_str("VERSION_CODENAME=jammy\n");
+    s.push_str("ID=ubuntu\n");
+    s.push_str("ID_LIKE=debian\n");
+    s.push_str("HOME_URL=\"https://www.ubuntu.com/\"\n");
+    s.push_str("SUPPORT_URL=\"https://help.ubuntu.com/\"\n");
+    s.push_str("BUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\n");
+    s.push_str("PRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\n");
+    s.push_str("UBUNTU_CODENAME=jammy\n");
+    s
+}
+
+fn file_1() -> String {
+    let mut s = String.new();
+    s.push_str("DISTRIB_ID=Ubuntu\n");
+    s.push_str("DISTRIB_RELEASE=22.04\n");
+    s.push_str("DISTRIB_CODENAME=jammy\n");
+    s.push_str("DISTRIB_DESCRIPTION=\"Ubuntu 22.04.3 LTS\"\n");
+    s
+}
+
+fn file_2() -> String {
+    let mut s = String.new();
+    s.push_str("bookworm/sid\n");
+    s
+}
+
+fn file_3() -> String {
+    let mut s = String.new();
+    s.push_str("build-box\n");
+    s
+}
+
+fn file_4() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Ubuntu\"\n");
+    s.push_str("VERSION=\"14.04.6 LTS, Trusty Tahr\"\n");
+    s.push_str("ID=ubuntu\n");
+    s.push_str("ID_LIKE=debian\n");
+    s.push_str("PRETTY_NAME=\"Ubuntu 14.04.6 LTS\"\n");
+    s.push_str("VERSION_ID=\"14.04\"\n");
+    s.push_str("HOME_URL=\"http://www.ubuntu.com/\"\n");
+    s
+}
+
+fn file_5() -> String {
+    let mut s = String.new();
+    s.push_str("jessie/sid\n");
+    s
+}
+
+fn file_6() -> String {
+    let mut s = String.new();
+    s.push_str("PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n");
+    s.push_str("NAME=\"Debian GNU/Linux\"\n");
+    s.push_str("VERSION_ID=\"12\"\n");
+    s.push_str("VERSION=\"12 (bookworm)\"\n");
+    s.push_str("VERSION_CODENAME=bookworm\n");
+    s.push_str("ID=debian\n");
+    s.push_str("HOME_URL=\"https://www.debian.org/\"\n");
+    s
+}
+
+fn file_7() -> String {
+    let mut s = String.new();
+    s.push_str("12.4\n");
+    s
+}
+
+fn file_8() -> String {
+    let mut s = String.new();
+    s.push_str("PRETTY_NAME=\"Debian GNU/Linux trixie/sid\"\n");
+    s.push_str("NAME=\"Debian GNU/Linux\"\n");
+    s.push_str("VERSION_CODENAME=trixie\n");
+    s.push_str("ID=debian\n");
+    s
+}
+
+fn file_9() -> String {
+    let mut s = String.new();
+    s.push_str("trixie/sid\n");
+    s
+}
+
+fn file_10() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Fedora Linux\"\n");
+    s.push_str("VERSION=\"39 (Workstation Edition)\"\n");
+    s.push_str("ID=fedora\n");
+    s.push_str("VERSION_ID=39\n");
+    s.push_str("VERSION_CODENAME=\"\"\n");
+    s.push_str("PLATFORM_ID=\"platform:f39\"\n");
+    s.push_str("PRETTY_NAME=\"Fedora Linux 39 (Workstation Edition)\"\n");
+    s.push_str("ANSI_COLOR=\"0;38;2;60;110;180\"\n");
+    s.push_str("LOGO=fedora-logo-icon\n");
+    s.push_str("CPE_NAME=\"cpe:/o:fedoraproject:fedora:39\"\n");
+    s.push_str("DEFAULT_HOSTNAME=\"fedora\"\n");
+    s.push_str("VARIANT=\"Workstation Edition\"\n");
+    s.push_str("VARIANT_ID=workstation\n");
+    s
+}
+
+fn file_11() -> String {
+    let mut s = String.new();
+    s.push_str("Fedora release 39 (Thirty Nine)\n");
+    s
+}
+
+fn file_12() -> String {
+    let mut s = String.new();
+    s.push_str("Fedora release 39 (Thirty Nine)\n");
+    s
+}
+
+fn file_13() -> String {
+    let mut s = String.new();
+    s.push_str("Fedora release 39 (Thirty Nine)\n");
+    s
+}
+
+fn file_14() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"CentOS Linux\"\n");
+    s.push_str("VERSION=\"7 (Core)\"\n");
+    s.push_str("ID=\"centos\"\n");
+    s.push_str("ID_LIKE=\"rhel fedora\"\n");
+    s.push_str("VERSION_ID=\"7\"\n");
+    s.push_str("PRETTY_NAME=\"CentOS Linux 7 (Core)\"\n");
+    s.push_str("ANSI_COLOR=\"0;31\"\n");
+    s.push_str("CPE_NAME=\"cpe:/o:centos:centos:7\"\n");
+    s
+}
+
+fn file_15() -> String {
+    let mut s = String.new();
+    s.push_str("CentOS Linux release 7.9.2009 (Core)\n");
+    s
+}
+
+fn file_16() -> String {
+    let mut s = String.new();
+    s.push_str("CentOS Linux release 7.9.2009 (Core)\n");
+    s
+}
+
+fn file_17() -> String {
+    let mut s = String.new();
+    s.push_str("CentOS Linux release 7.9.2009 (Core)\n");
+    s
+}
+
+fn file_18() -> String {
+    let mut s = String.new();
+    s.push_str("CentOS release 5.11 (Final)\n");
+    s
+}
+
+fn file_19() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Red Hat Enterprise Linux\"\n");
+    s.push_str("VERSION=\"9.3 (Plow)\"\n");
+    s.push_str("ID=\"rhel\"\n");
+    s.push_str("ID_LIKE=\"fedora\"\n");
+    s.push_str("VERSION_ID=\"9.3\"\n");
+    s.push_str("PLATFORM_ID=\"platform:el9\"\n");
+    s.push_str("PRETTY_NAME=\"Red Hat Enterprise Linux 9.3 (Plow)\"\n");
+    s
+}
+
+fn file_20() -> String {
+    let mut s = String.new();
+    s.push_str("Red Hat Enterprise Linux release 9.3 (Plow)\n");
+    s
+}
+
+fn file_21() -> String {
+    let mut s = String.new();
+    s.push_str("Red Hat Enterprise Linux Server release 6.5 (Santiago)\n");
+    s
+}
+
+fn file_22() -> String {
+    let mut s = String.new();
+    s.push_str("Red Hat Enterprise Linux Server release 6.5 (Santiago)\n");
+    s.push_str("Kernel \\r on an \\m\n");
+    s
+}
+
+fn file_23() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Rocky Linux\"\n");
+    s.push_str("VERSION=\"9.3 (Blue Onyx)\"\n");
+    s.push_str("ID=\"rocky\"\n");
+    s.push_str("ID_LIKE=\"rhel centos fedora\"\n");
+    s.push_str("VERSION_ID=\"9.3\"\n");
+    s.push_str("PRETTY_NAME=\"Rocky Linux 9.3 (Blue Onyx)\"\n");
+    s.push_str("ROCKY_SUPPORT_PRODUCT=\"Rocky-Linux-9\"\n");
+    s
+}
+
+fn file_24() -> String {
+    let mut s = String.new();
+    s.push_str("Rocky Linux release 9.3 (Blue Onyx)\n");
+    s
+}
+
+fn file_25() -> String {
+    let mut s = String.new();
+    s.push_str("Rocky Linux release 9.3 (Blue Onyx)\n");
+    s
+}
+
+fn file_26() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Alpine Linux\"\n");
+    s.push_str("ID=alpine\n");
+    s.push_str("VERSION_ID=3.19.0\n");
+    s.push_str("PRETTY_NAME=\"Alpine Linux v3.19\"\n");
+    s.push_str("HOME_URL=\"https://alpinelinux.org/\"\n");
+    s
+}
+
+fn file_27() -> String {
+    let mut s = String.new();
+    s.push_str("3.19.0\n");
+    s
+}
+
+fn file_28() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Arch Linux\"\n");
+    s.push_str("PRETTY_NAME=\"Arch Linux\"\n");
+    s.push_str("ID=arch\n");
+    s.push_str("BUILD_ID=rolling\n");
+    s.push_str("ANSI_COLOR=\"38;2;23;147;209\"\n");
+    s.push_str("LOGO=archlinux-logo\n");
+    s
+}
+
+fn file_29() -> String {
+    let mut s = String.new();
+    s
+}
+
+fn file_30() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"openSUSE Leap\"\n");
+    s.push_str("VERSION=\"15.5\"\n");
+    s.push_str("ID=\"opensuse-leap\"\n");
+    s.push_str("ID_LIKE=\"suse opensuse\"\n");
+    s.push_str("VERSION_ID=\"15.5\"\n");
+    s.push_str("PRETTY_NAME=\"openSUSE Leap 15.5\"\n");
+    s.push_str("CPE_NAME=\"cpe:/o:opensuse:leap:15.5\"\n");
+    s
+}
+
+fn file_31() -> String {
+    let mut s = String.new();
+    s.push_str("openSUSE\n");
+    s.push_str("VERSION = 15.5\n");
+    s
+}
+
+fn file_32() -> String {
+    let mut s = String.new();
+    s.push_str("SUSE Linux Enterprise Server 12 (x86_64)\n");
+    s.push_str("VERSION = 12\n");
+    s.push_str("PATCHLEVEL = 5\n");
+    s
+}
+
+fn file_33() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Amazon Linux\"\n");
+    s.push_str("VERSION=\"2\"\n");
+    s.push_str("ID=\"amzn\"\n");
+    s.push_str("ID_LIKE=\"centos rhel fedora\"\n");
+    s.push_str("VERSION_ID=\"2\"\n");
+    s.push_str("PRETTY_NAME=\"Amazon Linux 2\"\n");
+    s.push_str("CPE_NAME=\"cpe:2.3:o:amazon:amazon_linux:2\"\n");
+    s
+}
+
+fn file_34() -> String {
+    let mut s = String.new();
+    s.push_str("Amazon Linux release 2 (Karoo)\n");
+    s
+}
+
+fn file_35() -> String {
+    let mut s = String.new();
+    s.push_str("image_name=\"amzn2-ami-kernel-5.10-hvm\"\n");
+    s
+}
+
+fn file_36() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Linux Mint\"\n");
+    s.push_str("VERSION=\"21.2 (Victoria)\"\n");
+    s.push_str("ID=linuxmint\n");
+    s.push_str("ID_LIKE=\"ubuntu debian\"\n");
+    s.push_str("PRETTY_NAME=\"Linux Mint 21.2\"\n");
+    s.push_str("VERSION_ID=\"21.2\"\n");
+    s.push_str("VERSION_CODENAME=victoria\n");
+    s.push_str("UBUNTU_CODENAME=jammy\n");
+    s
+}
+
+fn file_37() -> String {
+    let mut s = String.new();
+    s.push_str("bookworm/sid\n");
+    s
+}
+
+fn file_38() -> String {
+    let mut s = String.new();
+    s.push_str("DISTRIB_ID=Ubuntu\n");
+    s.push_str("DISTRIB_RELEASE=22.04\n");
+    s
+}
+
+fn file_39() -> String {
+    let mut s = String.new();
+    s.push_str("PRETTY_NAME=\"Raspbian GNU/Linux 11 (bullseye)\"\n");
+    s.push_str("NAME=\"Raspbian GNU/Linux\"\n");
+    s.push_str("VERSION_ID=\"11\"\n");
+    s.push_str("VERSION=\"11 (bullseye)\"\n");
+    s.push_str("VERSION_CODENAME=bullseye\n");
+    s.push_str("ID=raspbian\n");
+    s.push_str("ID_LIKE=debian\n");
+    s
+}
+
+fn file_40() -> String {
+    let mut s = String.new();
+    s.push_str("11.8\n");
+    s
+}
+
+fn file_41() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=Gentoo\n");
+    s.push_str("ID=gentoo\n");
+    s.push_str("PRETTY_NAME=\"Gentoo Linux\"\n");
+    s.push_str("ANSI_COLOR=\"1;32\"\n");
+    s
+}
+
+fn file_42() -> String {
+    let mut s = String.new();
+    s.push_str("Gentoo Base System release 2.14\n");
+    s
+}
+
+fn file_43() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=Slackware\n");
+    s.push_str("VERSION=\"15.0\"\n");
+    s.push_str("ID=slackware\n");
+    s.push_str("VERSION_ID=15.0\n");
+    s.push_str("PRETTY_NAME=\"Slackware 15.0 x86_64\"\n");
+    s
+}
+
+fn file_44() -> String {
+    let mut s = String.new();
+    s.push_str("Slackware 15.0\n");
+    s
+}
+
+fn file_45() -> String {
+    let mut s = String.new();
+    s.push_str("CloudLinux Server release 6.10 (Vladislav Volkov)\n");
+    s
+}
+
+fn file_46() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Oracle Linux Server\"\n");
+    s.push_str("VERSION=\"8.9\"\n");
+    s.push_str("ID=\"ol\"\n");
+    s.push_str("ID_LIKE=\"fedora\"\n");
+    s.push_str("VARIANT=\"Server\"\n");
+    s.push_str("VERSION_ID=\"8.9\"\n");
+    s.push_str("PRETTY_NAME=\"Oracle Linux Server 8.9\"\n");
+    s
+}
+
+fn file_47() -> String {
+    let mut s = String.new();
+    s.push_str("Oracle Linux Server release 8.9\n");
+    s
+}
+
+fn file_48() -> String {
+    let mut s = String.new();
+    s.push_str("Red Hat Enterprise Linux release 8.9 (Ootpa)\n");
+    s
+}
+
+fn file_49() -> String {
+    let mut s = String.new();
+    s.push_str("Mageia release 9 (Official) for x86_64\n");
+    s
+}
+
+fn file_50() -> String {
+    let mut s = String.new();
+    s.push_str("BUG_REPORT_URL=\"https://github.com/NixOS/nixpkgs/issues\"\n");
+    s.push_str("BUILD_ID=\"23.11.20240115.b8dd8be\"\n");
+    s.push_str("ID=nixos\n");
+    s.push_str("NAME=NixOS\n");
+    s.push_str("PRETTY_NAME=\"NixOS 23.11 (Tapir)\"\n");
+    s.push_str("VERSION=\"23.11 (Tapir)\"\n");
+    s.push_str("VERSION_CODENAME=tapir\n");
+    s.push_str("VERSION_ID=\"23.11\"\n");
+    s
+}
+
+fn file_51() -> String {
+    let mut s = String.new();
+    s.push_str("ID=etcwins\n");
+    s.push_str("NAME=\"From etc\"\n");
+    s.push_str("VERSION_ID=1.2\n");
+    s
+}
+
+fn file_52() -> String {
+    let mut s = String.new();
+    s.push_str("ID=libloses\n");
+    s.push_str("NAME=\"From usr/lib\"\n");
+    s.push_str("VERSION_ID=9.9.9\n");
+    s
+}
+
+fn file_53() -> String {
+    let mut s = String.new();
+    s.push_str("NAME=\"Broken Linux\n");
+    s.push_str("ID=broken\n");
+    s
+}
+
+fn file_54() -> String {
+    let mut s = String.new();
+    s.push_str("# comment line\n");
+    s.push_str("NAME='Quirky \"Q\" Linux'   # trailing comment\n");
+    s.push_str("ID=\"Quirky Linux\"\n");
+    s.push_str("Version=\"2.4.1, Hatchling Edition\"\n");
+    s.push_str("VERSION_CODENAME=café\n");
+    s.push_str("PRETTY_NAME=\"Quirky\\ Linux \\\"2.4\\\"\" extra-token another\n");
+    s.push_str("MULTI=\"first\n");
+    s.push_str("second\"\n");
+    s.push_str("ESCAPED=a\\ b\\$c\n");
+    s.push_str("EMPTY=\n");
+    s.push_str("=novalue\n");
+    s.push_str("noequals\n");
+    s.push_str("KEY=one=two\n");
+    s.push_str("ID_LIKE=\"suse    debian\"\n");
+    s
+}
+
+fn file_55() -> String {
+    let mut s = String.new();
+    s.push_str("\n");
+    s
+}
+
+fn file_56() -> String {
+    let mut s = String.new();
+    s.push_str("CentOS Stream release 9\n");
+    s
+}
+
+fn file_57() -> String {
+    let mut s = String.new();
+    s.push_str("CentOS Stream release 9\n");
+    s
+}
+
+fn file_58() -> String {
+    let mut s = String.new();
+    s.push_str("Zed Linux 1.0\n");
+    s
+}
+
+fn file_59() -> String {
+    let mut s = String.new();
+    s.push_str("Foo 2\n");
+    s
+}
+
+fn file_60() -> String {
+    let mut s = String.new();
+    s.push_str("DISTRIB_ID=Nope\n");
+    s
+}
+
+fn file_61() -> String {
+    let mut s = String.new();
+    s.push_str("Some OEM 7\n");
+    s
+}
+
+fn file_62() -> String {
+    let mut s = String.new();
+    s.push_str("Plain Release 3.0\n");
+    s
+}
+
+fn file_63() -> String {
+    let mut s = String.new();
+    s.push_str("Dotted 4.0\n");
+    s
+}
+
+fn file_64() -> String {
+    let mut s = String.new();
+    s.push_str("System 5.0\n");
+    s
+}
+
+fn file_65() -> String {
+    let mut s = String.new();
+    s.push_str("  Weird OS  release  8.1.2  (Wobbly)  \n");
+    s
+}
+
+fn file_66() -> String {
+    let mut s = String.new();
+    s.push_str("Custom Distro 3.1 (Lazy)\n");
+    s
+}
+
+fn file_67() -> String {
+    let mut s = String.new();
+    s
+}
+
+fn file_68() -> String {
+    let mut s = String.new();
+    s.push_str("ID=altid\n");
+    s.push_str("NAME=Alt\n");
+    s.push_str("VERSION_ID=\"5.6.7\"\n");
+    s.push_str("VERSION=\"5.6.7 (Seven)\"\n");
+    s
+}
+
+fn file_69() -> String {
+    let mut s = String.new();
+    s.push_str("# Every root, through the class the way `distro` builds it from a root.\n");
+    s.push_str("root\tubuntu2204\n");
+    s.push_str("root\tubuntu1404\n");
+    s.push_str("root\tdebian12\n");
+    s.push_str("root\tdebian_testing\n");
+    s.push_str("root\tfedora39\n");
+    s.push_str("root\tcentos7\n");
+    s.push_str("root\tcentos5\n");
+    s.push_str("root\trhel9\n");
+    s.push_str("root\trhel6\n");
+    s.push_str("root\trocky9\n");
+    s.push_str("root\talpine319\n");
+    s.push_str("root\tarch\n");
+    s.push_str("root\tleap155\n");
+    s.push_str("root\tsles12\n");
+    s.push_str("root\tamzn2\n");
+    s.push_str("root\tmint21\n");
+    s.push_str("root\traspbian11\n");
+    s.push_str("root\tgentoo\n");
+    s.push_str("root\tslackware15\n");
+    s.push_str("root\tcloudlinux6\n");
+    s.push_str("root\toracle8\n");
+    s.push_str("root\tmageia9\n");
+    s.push_str("root\tnixos\n");
+    s.push_str("root\tboth\n");
+    s.push_str("root\tempty\n");
+    s.push_str("root\tnoetc\n");
+    s.push_str("root\tnosuchroot\n");
+    s.push_str("root\tbroken\n");
+    s.push_str("root\tquirky\n");
+    s.push_str("root\tmulti\n");
+    s.push_str("root\tnomatch\n");
+    s.push_str("root\tmisc\n");
+    s.push_str("# Data source files named explicitly.\n");
+    s.push_str("files\tmisc\tdata/roots/misc/etc/os-release-alt\t-\n");
+    s.push_str("files\tmisc\t-\tdata/roots/misc/etc/custom-info\n");
+    s.push_str("files\tmisc\t-\tdata/roots/misc/etc/empty-release\n");
+    s.push_str("files\tmisc\t-\tdata/roots/misc/etc/missing-release\n");
+    s.push_str("files\tempty\tdata/roots/fedora39/etc/os-release\tdata/roots/rhel6/etc/redhat-release\n");
+    s.push_str("files\tdebian12\tdata/roots/nowhere/os-release\t-\n");
+    s.push_str("files\tnomatch\t-\tdata/roots/nomatch/etc/Weird_version\n");
+    s.push_str("# lsb_release -a, uname -rs and oslevel output, fed in.\n");
+    s.push_str("inject\tempty\tNo LSB modules are available.⏎Distributor ID:⇥Ubuntu⏎Description:⇥Ubuntu 20.04.6 LTS⏎Release:⇥20.04⏎Codename:⇥focal⏎\t-\t-\n");
+    s.push_str("inject\tempty\tDistributor ID:⇥RedHatEnterpriseServer⏎Description:⇥Red Hat Enterprise Linux Server release 7.9 (Maipo)⏎Release:⇥7.9⏎Codename:⇥Maipo⏎\t-\t-\n");
+    s.push_str("inject\tempty\tDistributor ID:⇥EnterpriseEnterpriseServer⏎Description:⇥Enterprise Linux Enterprise Linux Server release 5.11 (Carthage)⏎Release:⇥5.11⏎Codename:⇥Carthage⏎\t-\t-\n");
+    s.push_str("inject\tempty\tLSB Version:⇥:core-4.1-amd64:core-4.1-noarch⏎Distributor ID:⇥Linux Mint⏎Description:⇥Linux Mint 21.2 Victoria⏎Release:⇥21.2⏎Codename:⇥victoria⏎\t-\t-\n");
+    s.push_str("inject\tempty\t-\tFreeBSD 13.2-RELEASE⏎\t-\n");
+    s.push_str("inject\tempty\t-\tLinux 6.1.0-13-amd64⏎\t-\n");
+    s.push_str("inject\tempty\t-\tDarwin 23.1.0⏎\t-\n");
+    s.push_str("inject\tempty\t-\t   ⏎\t-\n");
+    s.push_str("inject\tempty\t-\tMidnightBSD⏎\t-\n");
+    s.push_str("inject\tempty\t-\tAIX 2⏎\t7200-05-06-2320⏎\n");
+    s.push_str("inject\tempty\t-\tAIX 1⏎\t-\n");
+    s.push_str("inject\trhel6\tDistributor ID:⇥RedHatEnterpriseServer⏎Description:⇥Red Hat Enterprise Linux Server release 6.5 (Santiago)⏎Release:⇥6.5⏎Codename:⇥Santiago⏎\tLinux 2.6.32-431.el6.x86_64⏎\t-\n");
+    s.push_str("inject\tdebian12\tDistributor ID:⇥Debian⏎Description:⇥Debian GNU/Linux 12 (bookworm)⏎Release:⇥12⏎Codename:⇥bookworm⏎\t-\t-\n");
+    s.push_str("inject\tarch\tDistributor ID:⇥Arch⏎Description:⇥Arch Linux⏎Release:⇥rolling⏎Codename:⇥n/a⏎\t-\t-\n");
+    s.push_str("inject\tcloudlinux6\t-\tOpenBSD 7.4⏎\t-\n");
+    s.push_str("# The constructor's guard.\n");
+    s.push_str("ctor\tdata/roots/debian12\tT\t-\t-\n");
+    s.push_str("ctor\tdata/roots/debian12\t-\tT\t-\n");
+    s.push_str("ctor\tdata/roots/debian12\t-\t-\tT\n");
+    s.push_str("ctor\tdata/roots/debian12\tF\tF\tF\n");
+    s.push_str("ctor\tdata/roots/debian12\t-\t-\t-\n");
+    s.push_str("# Release-file lines.\n");
+    s.push_str("release\tCentOS Linux release 7.9.2009 (Core)\n");
+    s.push_str("release\tRed Hat Enterprise Linux Server release 6.5 (Santiago)\n");
+    s.push_str("release\tFedora release 39 (Thirty Nine)\n");
+    s.push_str("release\tUbuntu 22.04.3 LTS\n");
+    s.push_str("release\tGentoo Base System release 2.14\n");
+    s.push_str("release\tSUSE Linux Enterprise Server 12 (x86_64)\n");
+    s.push_str("release\tMageia release 9 (Official) for x86_64\n");
+    s.push_str("release\t3.19.0\n");
+    s.push_str("release\tSlackware 15.0\n");
+    s.push_str("release\tSlackware 14.2 LTS\n");
+    s.push_str("release\tDebian GNU/Linux trixie/sid\n");
+    s.push_str("release\tLinux Mint 21.2 Victoria\n");
+    s.push_str("release\tCloudLinux release 7.9 (Boris Yegorov)\n");
+    s.push_str("release\t   Padded release  1.2-beta3␣␣␣\n");
+    s.push_str("release\tRolling\n");
+    s.push_str("release\t1.0\n");
+    s.push_str("release\trelease 2\n");
+    s.push_str("release\tName (Code) Name 4.4 (Codename) tail\n");
+    s.push_str("release\tv1.2.3+git20240101\n");
+    s.push_str("release\tOS 10.0-rc1 (pre (alpha))\n");
+    s.push_str("release\ta)b(c 5\n");
+    s.push_str("release\t∅\n");
+    s.push_str("release\t␣␣␣\n");
+    s.push_str("# os-release text.\n");
+    s.push_str("osrel\tID=x⏎VERSION=\"1.0 (Alpha One)\"⏎\n");
+    s.push_str("osrel\tID=x⏎VERSION=\"1.0, Beta\"⏎VERSION_CODENAME=gamma⏎\n");
+    s.push_str("osrel\tID=x⏎VERSION=\"1.0 (Alpha One)\"⏎UBUNTU_CODENAME=delta⏎\n");
+    s.push_str("osrel\tID=x⏎VERSION=\"12 (1984)\"⏎\n");
+    s.push_str("osrel\tID=x⏎VERSION=\"7 (Core), extra\"⏎\n");
+    s.push_str("osrel\tID=x⏎VERSION=\"7(Core)\"⏎\n");
+    s.push_str("osrel\tVERSION=\",   spaced out\"⏎\n");
+    s.push_str("osrel\tVERSION=\",9\"⏎\n");
+    s.push_str("osrel\ta=1 b=2 c=\"3 4\"⏎d='5'\"6\"⏎\n");
+    s.push_str("osrel\tX=\"unterminated⏎\n");
+    s.push_str("osrel\tX=trailing\\\n");
+    s.push_str("osrel\t# just a comment⏎\n");
+    s.push_str("osrel\t∅\n");
+    s.push_str("osrel\tQ=\"a\\\"b\" R='a\\b' S=a\\\\b T=\"a\\$b\\`c\"⏎\n");
+    s.push_str("osrel\tÄÖ=Ü ID=Mixed_Case⏎\n");
+    s.push_str("# lsb_release -a text.\n");
+    s.push_str("lsb\tDistributor ID:⇥Ubuntu⏎Description:⇥Ubuntu 22.04.3 LTS⏎Release:⇥22.04⏎Codename:⇥jammy⏎\n");
+    s.push_str("lsb\tNo colon here⏎Key: value: with: colons⏎ Spaced Key :  padded  ⏎:empty key⏎\n");
+    s.push_str("lsb\t∅\n");
+    s.push_str("# uname -rs text.\n");
+    s.push_str("uname\tLinux 5.15.0-91-generic\n");
+    s.push_str("uname\tFreeBSD 14.0-RELEASE-p3⏎ignored second line\n");
+    s.push_str("uname\tSunOS 5.11\n");
+    s.push_str("uname\t  NetBSD   9.3␣␣\n");
+    s.push_str("uname\tHP-UX B.11.31\n");
+    s.push_str("uname\t∅\n");
+    s.push_str("# The command line.\n");
+    s.push_str("cli\t--root-dir\tdata/roots/ubuntu2204\n");
+    s.push_str("cli\t-r\tdata/roots/centos5\n");
+    s.push_str("cli\t--json\t--root-dir\tdata/roots/fedora39\n");
+    s.push_str("cli\t-j\t-r\tdata/roots/quirky\n");
+    s.push_str("cli\t-r\tdata/roots/empty\t-j\n");
+    s.push_str("cli\t--root-dir=data/roots/sles12\n");
+    s.push_str("cli\t-jr\tdata/roots/mint21\n");
+    s
+}
+
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("roots/ubuntu2204/etc/os-release".to_string(), file_0()));
+    v.push(("roots/ubuntu2204/etc/lsb-release".to_string(), file_1()));
+    v.push(("roots/ubuntu2204/etc/debian_version".to_string(), file_2()));
+    v.push(("roots/ubuntu2204/etc/hostname".to_string(), file_3()));
+    v.push(("roots/ubuntu1404/etc/os-release".to_string(), file_4()));
+    v.push(("roots/ubuntu1404/etc/debian_version".to_string(), file_5()));
+    v.push(("roots/debian12/etc/os-release".to_string(), file_6()));
+    v.push(("roots/debian12/etc/debian_version".to_string(), file_7()));
+    v.push(("roots/debian_testing/etc/os-release".to_string(), file_8()));
+    v.push(("roots/debian_testing/etc/debian_version".to_string(), file_9()));
+    v.push(("roots/fedora39/etc/os-release".to_string(), file_10()));
+    v.push(("roots/fedora39/etc/fedora-release".to_string(), file_11()));
+    v.push(("roots/fedora39/etc/redhat-release".to_string(), file_12()));
+    v.push(("roots/fedora39/etc/system-release".to_string(), file_13()));
+    v.push(("roots/centos7/etc/os-release".to_string(), file_14()));
+    v.push(("roots/centos7/etc/centos-release".to_string(), file_15()));
+    v.push(("roots/centos7/etc/redhat-release".to_string(), file_16()));
+    v.push(("roots/centos7/etc/system-release".to_string(), file_17()));
+    v.push(("roots/centos5/etc/redhat-release".to_string(), file_18()));
+    v.push(("roots/rhel9/etc/os-release".to_string(), file_19()));
+    v.push(("roots/rhel9/etc/redhat-release".to_string(), file_20()));
+    v.push(("roots/rhel6/etc/redhat-release".to_string(), file_21()));
+    v.push(("roots/rhel6/etc/issue".to_string(), file_22()));
+    v.push(("roots/rocky9/etc/os-release".to_string(), file_23()));
+    v.push(("roots/rocky9/etc/rocky-release".to_string(), file_24()));
+    v.push(("roots/rocky9/etc/redhat-release".to_string(), file_25()));
+    v.push(("roots/alpine319/etc/os-release".to_string(), file_26()));
+    v.push(("roots/alpine319/etc/alpine-release".to_string(), file_27()));
+    v.push(("roots/arch/etc/os-release".to_string(), file_28()));
+    v.push(("roots/arch/etc/arch-release".to_string(), file_29()));
+    v.push(("roots/leap155/usr/lib/os-release".to_string(), file_30()));
+    v.push(("roots/leap155/etc/SUSE-brand".to_string(), file_31()));
+    v.push(("roots/sles12/etc/SuSE-release".to_string(), file_32()));
+    v.push(("roots/amzn2/etc/os-release".to_string(), file_33()));
+    v.push(("roots/amzn2/etc/system-release".to_string(), file_34()));
+    v.push(("roots/amzn2/etc/image-id".to_string(), file_35()));
+    v.push(("roots/mint21/etc/os-release".to_string(), file_36()));
+    v.push(("roots/mint21/etc/debian_version".to_string(), file_37()));
+    v.push(("roots/mint21/etc/upstream-release/lsb-release".to_string(), file_38()));
+    v.push(("roots/raspbian11/etc/os-release".to_string(), file_39()));
+    v.push(("roots/raspbian11/etc/debian_version".to_string(), file_40()));
+    v.push(("roots/gentoo/etc/os-release".to_string(), file_41()));
+    v.push(("roots/gentoo/etc/gentoo-release".to_string(), file_42()));
+    v.push(("roots/slackware15/etc/os-release".to_string(), file_43()));
+    v.push(("roots/slackware15/etc/slackware-version".to_string(), file_44()));
+    v.push(("roots/cloudlinux6/etc/redhat-release".to_string(), file_45()));
+    v.push(("roots/oracle8/etc/os-release".to_string(), file_46()));
+    v.push(("roots/oracle8/etc/oracle-release".to_string(), file_47()));
+    v.push(("roots/oracle8/etc/redhat-release".to_string(), file_48()));
+    v.push(("roots/mageia9/etc/mageia-release".to_string(), file_49()));
+    v.push(("roots/nixos/usr/lib/os-release".to_string(), file_50()));
+    v.push(("roots/both/etc/os-release".to_string(), file_51()));
+    v.push(("roots/both/usr/lib/os-release".to_string(), file_52()));
+    v.push(("roots/broken/etc/os-release".to_string(), file_53()));
+    v.push(("roots/quirky/etc/os-release".to_string(), file_54()));
+    v.push(("roots/multi/etc/aaa-release".to_string(), file_55()));
+    v.push(("roots/multi/etc/centos-release".to_string(), file_56()));
+    v.push(("roots/multi/etc/redhat-release".to_string(), file_57()));
+    v.push(("roots/multi/etc/zzz-release".to_string(), file_58()));
+    v.push(("roots/multi/etc/foo-version.bak".to_string(), file_59()));
+    v.push(("roots/multi/etc/lsb-release".to_string(), file_60()));
+    v.push(("roots/multi/etc/oem-release".to_string(), file_61()));
+    v.push(("roots/nomatch/etc/release".to_string(), file_62()));
+    v.push(("roots/nomatch/etc/my.distro-release".to_string(), file_63()));
+    v.push(("roots/nomatch/etc/system-release".to_string(), file_64()));
+    v.push(("roots/nomatch/etc/Weird_version".to_string(), file_65()));
+    v.push(("roots/misc/etc/custom-info".to_string(), file_66()));
+    v.push(("roots/misc/etc/empty-release".to_string(), file_67()));
+    v.push(("roots/misc/etc/os-release-alt".to_string(), file_68()));
+    v.push(("jobs.tsv".to_string(), file_69()));
+    v
+}
+
+fn data_dirs() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("data/roots/nixos/etc/static/".to_string());
+    v.push("data/roots/empty/".to_string());
+    v.push("data/roots/noetc/usr/lib/".to_string());
+    v.push("data/roots/multi/etc/bbb-release/".to_string());
+    v
+}

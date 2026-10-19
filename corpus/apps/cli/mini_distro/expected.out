@@ -1,0 +1,1631 @@
+# Every root, through the class the way `distro` builds it from a root.
+-- root | ubuntu2204
+   repr                   LinuxDistribution(os_release_file='data/roots/ubuntu2204/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/ubuntu2204', _os_release_info={'pretty_name': 'Ubuntu 22.04.3 LTS', 'name': 'Ubuntu', 'version_id': '22.04', 'version': '22.04.3 LTS (Jammy Jellyfish)', 'version_codename': 'jammy', 'id': 'ubuntu', 'id_like': 'debian', 'home_url': 'https://www.ubuntu.com/', 'support_url': 'https://help.ubuntu.com/', 'bug_report_url': 'https://bugs.launchpad.net/ubuntu/', 'privacy_policy_url': 'https://www.ubuntu.com/legal/terms-and-policies/privacy-policy', 'ubuntu_codename': 'jammy', 'codename': 'jammy', 'release_codename': 'Jammy Jellyfish'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'ubuntu'
+   name                   'Ubuntu'
+   name pretty            'Ubuntu 22.04.3 LTS'
+   version                '22.04'
+   version pretty         '22.04 (jammy)'
+   version best           '22.04.3'
+   version pretty best    '22.04.3 (jammy)'
+   version_parts          ('22', '04', '')
+   version_parts best     ('22', '04', '3')
+   major minor build      ('22', '04', '')
+   like                   'debian'
+   codename               'jammy'
+   linux_distribution     ('Ubuntu', '22.04', 'Jammy Jellyfish')
+   linux_distribution id  ('ubuntu', '22.04', 'Jammy Jellyfish')
+   info                   {'id': 'ubuntu', 'version': '22.04', 'version_parts': {'major': '22', 'minor': '04', 'build_number': ''}, 'like': 'debian', 'codename': 'jammy'}
+   info pretty best       {'id': 'ubuntu', 'version': '22.04.3 (jammy)', 'version_parts': {'major': '22', 'minor': '04', 'build_number': '3'}, 'like': 'debian', 'codename': 'jammy'}
+   os_release_file        'data/roots/ubuntu2204/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'pretty_name': 'Ubuntu 22.04.3 LTS', 'name': 'Ubuntu', 'version_id': '22.04', 'version': '22.04.3 LTS (Jammy Jellyfish)', 'version_codename': 'jammy', 'id': 'ubuntu', 'id_like': 'debian', 'home_url': 'https://www.ubuntu.com/', 'support_url': 'https://help.ubuntu.com/', 'bug_report_url': 'https://bugs.launchpad.net/ubuntu/', 'privacy_policy_url': 'https://www.ubuntu.com/legal/terms-and-policies/privacy-policy', 'ubuntu_codename': 'jammy', 'codename': 'jammy', 'release_codename': 'Jammy Jellyfish'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'ubuntu'
+   distro_release_attr    ''
+-- root | ubuntu1404
+   repr                   LinuxDistribution(os_release_file='data/roots/ubuntu1404/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/ubuntu1404', _os_release_info={'name': 'Ubuntu', 'version': '14.04.6 LTS, Trusty Tahr', 'id': 'ubuntu', 'id_like': 'debian', 'pretty_name': 'Ubuntu 14.04.6 LTS', 'version_id': '14.04', 'home_url': 'http://www.ubuntu.com/', 'codename': 'Trusty Tahr', 'release_codename': 'Trusty Tahr'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'ubuntu'
+   name                   'Ubuntu'
+   name pretty            'Ubuntu 14.04.6 LTS'
+   version                '14.04'
+   version pretty         '14.04 (Trusty Tahr)'
+   version best           '14.04.6'
+   version pretty best    '14.04.6 (Trusty Tahr)'
+   version_parts          ('14', '04', '')
+   version_parts best     ('14', '04', '6')
+   major minor build      ('14', '04', '')
+   like                   'debian'
+   codename               'Trusty Tahr'
+   linux_distribution     ('Ubuntu', '14.04', 'Trusty Tahr')
+   linux_distribution id  ('ubuntu', '14.04', 'Trusty Tahr')
+   info                   {'id': 'ubuntu', 'version': '14.04', 'version_parts': {'major': '14', 'minor': '04', 'build_number': ''}, 'like': 'debian', 'codename': 'Trusty Tahr'}
+   info pretty best       {'id': 'ubuntu', 'version': '14.04.6 (Trusty Tahr)', 'version_parts': {'major': '14', 'minor': '04', 'build_number': '6'}, 'like': 'debian', 'codename': 'Trusty Tahr'}
+   os_release_file        'data/roots/ubuntu1404/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'name': 'Ubuntu', 'version': '14.04.6 LTS, Trusty Tahr', 'id': 'ubuntu', 'id_like': 'debian', 'pretty_name': 'Ubuntu 14.04.6 LTS', 'version_id': '14.04', 'home_url': 'http://www.ubuntu.com/', 'codename': 'Trusty Tahr', 'release_codename': 'Trusty Tahr'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'ubuntu'
+   distro_release_attr    ''
+-- root | debian12
+   repr                   LinuxDistribution(os_release_file='data/roots/debian12/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/debian12', _os_release_info={'pretty_name': 'Debian GNU/Linux 12 (bookworm)', 'name': 'Debian GNU/Linux', 'version_id': '12', 'version': '12 (bookworm)', 'version_codename': 'bookworm', 'id': 'debian', 'home_url': 'https://www.debian.org/', 'codename': 'bookworm', 'release_codename': 'bookworm'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'debian'
+   name                   'Debian GNU/Linux'
+   name pretty            'Debian GNU/Linux 12 (bookworm)'
+   version                '12'
+   version pretty         '12 (bookworm)'
+   version best           '12.4'
+   version pretty best    '12.4 (bookworm)'
+   version_parts          ('12', '', '')
+   version_parts best     ('12', '4', '')
+   major minor build      ('12', '', '')
+   like                   ''
+   codename               'bookworm'
+   linux_distribution     ('Debian GNU/Linux', '12', 'bookworm')
+   linux_distribution id  ('debian', '12', 'bookworm')
+   info                   {'id': 'debian', 'version': '12', 'version_parts': {'major': '12', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'bookworm'}
+   info pretty best       {'id': 'debian', 'version': '12.4 (bookworm)', 'version_parts': {'major': '12', 'minor': '4', 'build_number': ''}, 'like': '', 'codename': 'bookworm'}
+   os_release_file        'data/roots/debian12/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'pretty_name': 'Debian GNU/Linux 12 (bookworm)', 'name': 'Debian GNU/Linux', 'version_id': '12', 'version': '12 (bookworm)', 'version_codename': 'bookworm', 'id': 'debian', 'home_url': 'https://www.debian.org/', 'codename': 'bookworm', 'release_codename': 'bookworm'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'debian'
+   distro_release_attr    ''
+-- root | debian_testing
+   repr                   LinuxDistribution(os_release_file='data/roots/debian_testing/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/debian_testing', _os_release_info={'pretty_name': 'Debian GNU/Linux trixie/sid', 'name': 'Debian GNU/Linux', 'version_codename': 'trixie', 'id': 'debian', 'codename': 'trixie'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'debian'
+   name                   'Debian GNU/Linux'
+   name pretty            'Debian GNU/Linux trixie/sid'
+   version                'trixie/sid'
+   version pretty         'trixie/sid (trixie)'
+   version best           'trixie/sid'
+   version pretty best    'trixie/sid (trixie)'
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               'trixie'
+   linux_distribution     ('Debian GNU/Linux', 'trixie/sid', 'trixie')
+   linux_distribution id  ('debian', 'trixie/sid', 'trixie')
+   info                   {'id': 'debian', 'version': 'trixie/sid', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'trixie'}
+   info pretty best       {'id': 'debian', 'version': 'trixie/sid (trixie)', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'trixie'}
+   os_release_file        'data/roots/debian_testing/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'pretty_name': 'Debian GNU/Linux trixie/sid', 'name': 'Debian GNU/Linux', 'version_codename': 'trixie', 'id': 'debian', 'codename': 'trixie'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'debian'
+   distro_release_attr    ''
+-- root | fedora39
+   repr                   LinuxDistribution(os_release_file='data/roots/fedora39/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/fedora39', _os_release_info={'name': 'Fedora Linux', 'version': '39 (Workstation Edition)', 'id': 'fedora', 'version_id': '39', 'version_codename': '', 'platform_id': 'platform:f39', 'pretty_name': 'Fedora Linux 39 (Workstation Edition)', 'ansi_color': '0;38;2;60;110;180', 'logo': 'fedora-logo-icon', 'cpe_name': 'cpe:/o:fedoraproject:fedora:39', 'default_hostname': 'fedora', 'variant': 'Workstation Edition', 'variant_id': 'workstation', 'codename': '', 'release_codename': 'Workstation Edition'}, _lsb_release_info={}, _distro_release_info={'name': 'Fedora', 'version_id': '39', 'codename': 'Thirty Nine', 'id': 'fedora'}, _uname_info={}, _oslevel_info='')
+   id                     'fedora'
+   name                   'Fedora Linux'
+   name pretty            'Fedora Linux 39 (Workstation Edition)'
+   version                '39'
+   version pretty         '39'
+   version best           '39'
+   version pretty best    '39'
+   version_parts          ('39', '', '')
+   version_parts best     ('39', '', '')
+   major minor build      ('39', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('Fedora Linux', '39', 'Workstation Edition')
+   linux_distribution id  ('fedora', '39', 'Workstation Edition')
+   info                   {'id': 'fedora', 'version': '39', 'version_parts': {'major': '39', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'fedora', 'version': '39', 'version_parts': {'major': '39', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/fedora39/etc/os-release'
+   distro_release_file    'data/roots/fedora39/etc/fedora-release'
+   os_release_info        {'name': 'Fedora Linux', 'version': '39 (Workstation Edition)', 'id': 'fedora', 'version_id': '39', 'version_codename': '', 'platform_id': 'platform:f39', 'pretty_name': 'Fedora Linux 39 (Workstation Edition)', 'ansi_color': '0;38;2;60;110;180', 'logo': 'fedora-logo-icon', 'cpe_name': 'cpe:/o:fedoraproject:fedora:39', 'default_hostname': 'fedora', 'variant': 'Workstation Edition', 'variant_id': 'workstation', 'codename': '', 'release_codename': 'Workstation Edition'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Fedora', 'version_id': '39', 'codename': 'Thirty Nine', 'id': 'fedora'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'fedora'
+   distro_release_attr    'Fedora'
+-- root | centos7
+   repr                   LinuxDistribution(os_release_file='data/roots/centos7/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/centos7', _os_release_info={'name': 'CentOS Linux', 'version': '7 (Core)', 'id': 'centos', 'id_like': 'rhel fedora', 'version_id': '7', 'pretty_name': 'CentOS Linux 7 (Core)', 'ansi_color': '0;31', 'cpe_name': 'cpe:/o:centos:centos:7', 'codename': 'Core', 'release_codename': 'Core'}, _lsb_release_info={}, _distro_release_info={'name': 'CentOS Linux', 'version_id': '7.9.2009', 'codename': 'Core', 'id': 'centos'}, _uname_info={}, _oslevel_info='')
+   id                     'centos'
+   name                   'CentOS Linux'
+   name pretty            'CentOS Linux 7 (Core)'
+   version                '7'
+   version pretty         '7 (Core)'
+   version best           '7.9.2009'
+   version pretty best    '7.9.2009 (Core)'
+   version_parts          ('7', '', '')
+   version_parts best     ('7', '9', '2009')
+   major minor build      ('7', '', '')
+   like                   'rhel fedora'
+   codename               'Core'
+   linux_distribution     ('CentOS Linux', '7', 'Core')
+   linux_distribution id  ('centos', '7', 'Core')
+   info                   {'id': 'centos', 'version': '7', 'version_parts': {'major': '7', 'minor': '', 'build_number': ''}, 'like': 'rhel fedora', 'codename': 'Core'}
+   info pretty best       {'id': 'centos', 'version': '7.9.2009 (Core)', 'version_parts': {'major': '7', 'minor': '9', 'build_number': '2009'}, 'like': 'rhel fedora', 'codename': 'Core'}
+   os_release_file        'data/roots/centos7/etc/os-release'
+   distro_release_file    'data/roots/centos7/etc/centos-release'
+   os_release_info        {'name': 'CentOS Linux', 'version': '7 (Core)', 'id': 'centos', 'id_like': 'rhel fedora', 'version_id': '7', 'pretty_name': 'CentOS Linux 7 (Core)', 'ansi_color': '0;31', 'cpe_name': 'cpe:/o:centos:centos:7', 'codename': 'Core', 'release_codename': 'Core'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'CentOS Linux', 'version_id': '7.9.2009', 'codename': 'Core', 'id': 'centos'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'centos'
+   distro_release_attr    'CentOS Linux'
+-- root | centos5
+   repr                   LinuxDistribution(os_release_file='data/roots/centos5/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/centos5', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'CentOS', 'version_id': '5.11', 'codename': 'Final', 'id': 'redhat'}, _uname_info={}, _oslevel_info='')
+   id                     'rhel'
+   name                   'CentOS'
+   name pretty            'CentOS 5.11 (Final)'
+   version                '5.11'
+   version pretty         '5.11 (Final)'
+   version best           '5.11'
+   version pretty best    '5.11 (Final)'
+   version_parts          ('5', '11', '')
+   version_parts best     ('5', '11', '')
+   major minor build      ('5', '11', '')
+   like                   ''
+   codename               'Final'
+   linux_distribution     ('CentOS', '5.11', 'Final')
+   linux_distribution id  ('rhel', '5.11', 'Final')
+   info                   {'id': 'rhel', 'version': '5.11', 'version_parts': {'major': '5', 'minor': '11', 'build_number': ''}, 'like': '', 'codename': 'Final'}
+   info pretty best       {'id': 'rhel', 'version': '5.11 (Final)', 'version_parts': {'major': '5', 'minor': '11', 'build_number': ''}, 'like': '', 'codename': 'Final'}
+   os_release_file        'data/roots/centos5/etc/os-release'
+   distro_release_file    'data/roots/centos5/etc/redhat-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'CentOS', 'version_id': '5.11', 'codename': 'Final', 'id': 'redhat'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'CentOS'
+-- root | rhel9
+   repr                   LinuxDistribution(os_release_file='data/roots/rhel9/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/rhel9', _os_release_info={'name': 'Red Hat Enterprise Linux', 'version': '9.3 (Plow)', 'id': 'rhel', 'id_like': 'fedora', 'version_id': '9.3', 'platform_id': 'platform:el9', 'pretty_name': 'Red Hat Enterprise Linux 9.3 (Plow)', 'codename': 'Plow', 'release_codename': 'Plow'}, _lsb_release_info={}, _distro_release_info={'name': 'Red Hat Enterprise Linux', 'version_id': '9.3', 'codename': 'Plow', 'id': 'redhat'}, _uname_info={}, _oslevel_info='')
+   id                     'rhel'
+   name                   'Red Hat Enterprise Linux'
+   name pretty            'Red Hat Enterprise Linux 9.3 (Plow)'
+   version                '9.3'
+   version pretty         '9.3 (Plow)'
+   version best           '9.3'
+   version pretty best    '9.3 (Plow)'
+   version_parts          ('9', '3', '')
+   version_parts best     ('9', '3', '')
+   major minor build      ('9', '3', '')
+   like                   'fedora'
+   codename               'Plow'
+   linux_distribution     ('Red Hat Enterprise Linux', '9.3', 'Plow')
+   linux_distribution id  ('rhel', '9.3', 'Plow')
+   info                   {'id': 'rhel', 'version': '9.3', 'version_parts': {'major': '9', 'minor': '3', 'build_number': ''}, 'like': 'fedora', 'codename': 'Plow'}
+   info pretty best       {'id': 'rhel', 'version': '9.3 (Plow)', 'version_parts': {'major': '9', 'minor': '3', 'build_number': ''}, 'like': 'fedora', 'codename': 'Plow'}
+   os_release_file        'data/roots/rhel9/etc/os-release'
+   distro_release_file    'data/roots/rhel9/etc/redhat-release'
+   os_release_info        {'name': 'Red Hat Enterprise Linux', 'version': '9.3 (Plow)', 'id': 'rhel', 'id_like': 'fedora', 'version_id': '9.3', 'platform_id': 'platform:el9', 'pretty_name': 'Red Hat Enterprise Linux 9.3 (Plow)', 'codename': 'Plow', 'release_codename': 'Plow'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Red Hat Enterprise Linux', 'version_id': '9.3', 'codename': 'Plow', 'id': 'redhat'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'rhel'
+   distro_release_attr    'Red Hat Enterprise Linux'
+-- root | rhel6
+   repr                   LinuxDistribution(os_release_file='data/roots/rhel6/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/rhel6', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'Red Hat Enterprise Linux Server', 'version_id': '6.5', 'codename': 'Santiago', 'id': 'redhat'}, _uname_info={}, _oslevel_info='')
+   id                     'rhel'
+   name                   'Red Hat Enterprise Linux Server'
+   name pretty            'Red Hat Enterprise Linux Server 6.5 (Santiago)'
+   version                '6.5'
+   version pretty         '6.5 (Santiago)'
+   version best           '6.5'
+   version pretty best    '6.5 (Santiago)'
+   version_parts          ('6', '5', '')
+   version_parts best     ('6', '5', '')
+   major minor build      ('6', '5', '')
+   like                   ''
+   codename               'Santiago'
+   linux_distribution     ('Red Hat Enterprise Linux Server', '6.5', 'Santiago')
+   linux_distribution id  ('rhel', '6.5', 'Santiago')
+   info                   {'id': 'rhel', 'version': '6.5', 'version_parts': {'major': '6', 'minor': '5', 'build_number': ''}, 'like': '', 'codename': 'Santiago'}
+   info pretty best       {'id': 'rhel', 'version': '6.5 (Santiago)', 'version_parts': {'major': '6', 'minor': '5', 'build_number': ''}, 'like': '', 'codename': 'Santiago'}
+   os_release_file        'data/roots/rhel6/etc/os-release'
+   distro_release_file    'data/roots/rhel6/etc/redhat-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Red Hat Enterprise Linux Server', 'version_id': '6.5', 'codename': 'Santiago', 'id': 'redhat'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'Red Hat Enterprise Linux Server'
+-- root | rocky9
+   repr                   LinuxDistribution(os_release_file='data/roots/rocky9/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/rocky9', _os_release_info={'name': 'Rocky Linux', 'version': '9.3 (Blue Onyx)', 'id': 'rocky', 'id_like': 'rhel centos fedora', 'version_id': '9.3', 'pretty_name': 'Rocky Linux 9.3 (Blue Onyx)', 'rocky_support_product': 'Rocky-Linux-9', 'codename': 'Blue Onyx', 'release_codename': 'Blue Onyx'}, _lsb_release_info={}, _distro_release_info={'name': 'Rocky Linux', 'version_id': '9.3', 'codename': 'Blue Onyx', 'id': 'redhat'}, _uname_info={}, _oslevel_info='')
+   id                     'rocky'
+   name                   'Rocky Linux'
+   name pretty            'Rocky Linux 9.3 (Blue Onyx)'
+   version                '9.3'
+   version pretty         '9.3 (Blue Onyx)'
+   version best           '9.3'
+   version pretty best    '9.3 (Blue Onyx)'
+   version_parts          ('9', '3', '')
+   version_parts best     ('9', '3', '')
+   major minor build      ('9', '3', '')
+   like                   'rhel centos fedora'
+   codename               'Blue Onyx'
+   linux_distribution     ('Rocky Linux', '9.3', 'Blue Onyx')
+   linux_distribution id  ('rocky', '9.3', 'Blue Onyx')
+   info                   {'id': 'rocky', 'version': '9.3', 'version_parts': {'major': '9', 'minor': '3', 'build_number': ''}, 'like': 'rhel centos fedora', 'codename': 'Blue Onyx'}
+   info pretty best       {'id': 'rocky', 'version': '9.3 (Blue Onyx)', 'version_parts': {'major': '9', 'minor': '3', 'build_number': ''}, 'like': 'rhel centos fedora', 'codename': 'Blue Onyx'}
+   os_release_file        'data/roots/rocky9/etc/os-release'
+   distro_release_file    'data/roots/rocky9/etc/redhat-release'
+   os_release_info        {'name': 'Rocky Linux', 'version': '9.3 (Blue Onyx)', 'id': 'rocky', 'id_like': 'rhel centos fedora', 'version_id': '9.3', 'pretty_name': 'Rocky Linux 9.3 (Blue Onyx)', 'rocky_support_product': 'Rocky-Linux-9', 'codename': 'Blue Onyx', 'release_codename': 'Blue Onyx'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Rocky Linux', 'version_id': '9.3', 'codename': 'Blue Onyx', 'id': 'redhat'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'rocky'
+   distro_release_attr    'Rocky Linux'
+-- root | alpine319
+   repr                   LinuxDistribution(os_release_file='data/roots/alpine319/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/alpine319', _os_release_info={'name': 'Alpine Linux', 'id': 'alpine', 'version_id': '3.19.0', 'pretty_name': 'Alpine Linux v3.19', 'home_url': 'https://alpinelinux.org/'}, _lsb_release_info={}, _distro_release_info={'name': '3.', 'version_id': '19.0', 'id': 'alpine'}, _uname_info={}, _oslevel_info='')
+   id                     'alpine'
+   name                   'Alpine Linux'
+   name pretty            'Alpine Linux v3.19'
+   version                '3.19.0'
+   version pretty         '3.19.0'
+   version best           '3.19.0'
+   version pretty best    '3.19.0'
+   version_parts          ('3', '19', '0')
+   version_parts best     ('3', '19', '0')
+   major minor build      ('3', '19', '0')
+   like                   ''
+   codename               ''
+   linux_distribution     ('Alpine Linux', '3.19.0', '')
+   linux_distribution id  ('alpine', '3.19.0', '')
+   info                   {'id': 'alpine', 'version': '3.19.0', 'version_parts': {'major': '3', 'minor': '19', 'build_number': '0'}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'alpine', 'version': '3.19.0', 'version_parts': {'major': '3', 'minor': '19', 'build_number': '0'}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/alpine319/etc/os-release'
+   distro_release_file    'data/roots/alpine319/etc/alpine-release'
+   os_release_info        {'name': 'Alpine Linux', 'id': 'alpine', 'version_id': '3.19.0', 'pretty_name': 'Alpine Linux v3.19', 'home_url': 'https://alpinelinux.org/'}
+   lsb_release_info       {}
+   distro_release_info    {'name': '3.', 'version_id': '19.0', 'id': 'alpine'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'alpine'
+   distro_release_attr    '3.'
+-- root | arch
+   repr                   LinuxDistribution(os_release_file='data/roots/arch/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/arch', _os_release_info={'name': 'Arch Linux', 'pretty_name': 'Arch Linux', 'id': 'arch', 'build_id': 'rolling', 'ansi_color': '38;2;23;147;209', 'logo': 'archlinux-logo'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'arch'
+   name                   'Arch Linux'
+   name pretty            'Arch Linux'
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('Arch Linux', '', '')
+   linux_distribution id  ('arch', '', '')
+   info                   {'id': 'arch', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'arch', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/arch/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'name': 'Arch Linux', 'pretty_name': 'Arch Linux', 'id': 'arch', 'build_id': 'rolling', 'ansi_color': '38;2;23;147;209', 'logo': 'archlinux-logo'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'arch'
+   distro_release_attr    ''
+-- root | leap155
+   repr                   LinuxDistribution(os_release_file='data/roots/leap155/usr/lib/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/leap155', _os_release_info={'name': 'openSUSE Leap', 'version': '15.5', 'id': 'opensuse-leap', 'id_like': 'suse opensuse', 'version_id': '15.5', 'pretty_name': 'openSUSE Leap 15.5', 'cpe_name': 'cpe:/o:opensuse:leap:15.5'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'opensuse'
+   name                   'openSUSE Leap'
+   name pretty            'openSUSE Leap 15.5'
+   version                '15.5'
+   version pretty         '15.5'
+   version best           '15.5'
+   version pretty best    '15.5'
+   version_parts          ('15', '5', '')
+   version_parts best     ('15', '5', '')
+   major minor build      ('15', '5', '')
+   like                   'suse opensuse'
+   codename               ''
+   linux_distribution     ('openSUSE Leap', '15.5', '')
+   linux_distribution id  ('opensuse', '15.5', '')
+   info                   {'id': 'opensuse', 'version': '15.5', 'version_parts': {'major': '15', 'minor': '5', 'build_number': ''}, 'like': 'suse opensuse', 'codename': ''}
+   info pretty best       {'id': 'opensuse', 'version': '15.5', 'version_parts': {'major': '15', 'minor': '5', 'build_number': ''}, 'like': 'suse opensuse', 'codename': ''}
+   os_release_file        'data/roots/leap155/usr/lib/os-release'
+   distro_release_file    ''
+   os_release_info        {'name': 'openSUSE Leap', 'version': '15.5', 'id': 'opensuse-leap', 'id_like': 'suse opensuse', 'version_id': '15.5', 'pretty_name': 'openSUSE Leap 15.5', 'cpe_name': 'cpe:/o:opensuse:leap:15.5'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'opensuse-leap'
+   distro_release_attr    ''
+-- root | sles12
+   repr                   LinuxDistribution(os_release_file='data/roots/sles12/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/sles12', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'SUSE Linux Enterprise Server', 'version_id': '12', 'codename': 'x86_64', 'id': 'SuSE'}, _uname_info={}, _oslevel_info='')
+   id                     'suse'
+   name                   'SUSE Linux Enterprise Server'
+   name pretty            'SUSE Linux Enterprise Server 12 (x86_64)'
+   version                '12'
+   version pretty         '12 (x86_64)'
+   version best           '12'
+   version pretty best    '12 (x86_64)'
+   version_parts          ('12', '', '')
+   version_parts best     ('12', '', '')
+   major minor build      ('12', '', '')
+   like                   ''
+   codename               'x86_64'
+   linux_distribution     ('SUSE Linux Enterprise Server', '12', 'x86_64')
+   linux_distribution id  ('suse', '12', 'x86_64')
+   info                   {'id': 'suse', 'version': '12', 'version_parts': {'major': '12', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'x86_64'}
+   info pretty best       {'id': 'suse', 'version': '12 (x86_64)', 'version_parts': {'major': '12', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'x86_64'}
+   os_release_file        'data/roots/sles12/etc/os-release'
+   distro_release_file    'data/roots/sles12/etc/SuSE-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'SUSE Linux Enterprise Server', 'version_id': '12', 'codename': 'x86_64', 'id': 'SuSE'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'SUSE Linux Enterprise Server'
+-- root | amzn2
+   repr                   LinuxDistribution(os_release_file='data/roots/amzn2/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/amzn2', _os_release_info={'name': 'Amazon Linux', 'version': '2', 'id': 'amzn', 'id_like': 'centos rhel fedora', 'version_id': '2', 'pretty_name': 'Amazon Linux 2', 'cpe_name': 'cpe:2.3:o:amazon:amazon_linux:2'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'amzn'
+   name                   'Amazon Linux'
+   name pretty            'Amazon Linux 2'
+   version                '2'
+   version pretty         '2'
+   version best           '2'
+   version pretty best    '2'
+   version_parts          ('2', '', '')
+   version_parts best     ('2', '', '')
+   major minor build      ('2', '', '')
+   like                   'centos rhel fedora'
+   codename               ''
+   linux_distribution     ('Amazon Linux', '2', '')
+   linux_distribution id  ('amzn', '2', '')
+   info                   {'id': 'amzn', 'version': '2', 'version_parts': {'major': '2', 'minor': '', 'build_number': ''}, 'like': 'centos rhel fedora', 'codename': ''}
+   info pretty best       {'id': 'amzn', 'version': '2', 'version_parts': {'major': '2', 'minor': '', 'build_number': ''}, 'like': 'centos rhel fedora', 'codename': ''}
+   os_release_file        'data/roots/amzn2/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'name': 'Amazon Linux', 'version': '2', 'id': 'amzn', 'id_like': 'centos rhel fedora', 'version_id': '2', 'pretty_name': 'Amazon Linux 2', 'cpe_name': 'cpe:2.3:o:amazon:amazon_linux:2'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'amzn'
+   distro_release_attr    ''
+-- root | mint21
+   repr                   LinuxDistribution(os_release_file='data/roots/mint21/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/mint21', _os_release_info={'name': 'Linux Mint', 'version': '21.2 (Victoria)', 'id': 'linuxmint', 'id_like': 'ubuntu debian', 'pretty_name': 'Linux Mint 21.2', 'version_id': '21.2', 'version_codename': 'victoria', 'ubuntu_codename': 'jammy', 'codename': 'victoria', 'release_codename': 'Victoria'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'linuxmint'
+   name                   'Linux Mint'
+   name pretty            'Linux Mint 21.2'
+   version                '21.2'
+   version pretty         '21.2 (victoria)'
+   version best           '21.2'
+   version pretty best    '21.2 (victoria)'
+   version_parts          ('21', '2', '')
+   version_parts best     ('21', '2', '')
+   major minor build      ('21', '2', '')
+   like                   'ubuntu debian'
+   codename               'victoria'
+   linux_distribution     ('Linux Mint', '21.2', 'Victoria')
+   linux_distribution id  ('linuxmint', '21.2', 'Victoria')
+   info                   {'id': 'linuxmint', 'version': '21.2', 'version_parts': {'major': '21', 'minor': '2', 'build_number': ''}, 'like': 'ubuntu debian', 'codename': 'victoria'}
+   info pretty best       {'id': 'linuxmint', 'version': '21.2 (victoria)', 'version_parts': {'major': '21', 'minor': '2', 'build_number': ''}, 'like': 'ubuntu debian', 'codename': 'victoria'}
+   os_release_file        'data/roots/mint21/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'name': 'Linux Mint', 'version': '21.2 (Victoria)', 'id': 'linuxmint', 'id_like': 'ubuntu debian', 'pretty_name': 'Linux Mint 21.2', 'version_id': '21.2', 'version_codename': 'victoria', 'ubuntu_codename': 'jammy', 'codename': 'victoria', 'release_codename': 'Victoria'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'linuxmint'
+   distro_release_attr    ''
+-- root | raspbian11
+   repr                   LinuxDistribution(os_release_file='data/roots/raspbian11/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/raspbian11', _os_release_info={'pretty_name': 'Raspbian GNU/Linux 11 (bullseye)', 'name': 'Raspbian GNU/Linux', 'version_id': '11', 'version': '11 (bullseye)', 'version_codename': 'bullseye', 'id': 'raspbian', 'id_like': 'debian', 'codename': 'bullseye', 'release_codename': 'bullseye'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'raspbian'
+   name                   'Raspbian GNU/Linux'
+   name pretty            'Raspbian GNU/Linux 11 (bullseye)'
+   version                '11'
+   version pretty         '11 (bullseye)'
+   version best           '11.8'
+   version pretty best    '11.8 (bullseye)'
+   version_parts          ('11', '', '')
+   version_parts best     ('11', '8', '')
+   major minor build      ('11', '', '')
+   like                   'debian'
+   codename               'bullseye'
+   linux_distribution     ('Raspbian GNU/Linux', '11', 'bullseye')
+   linux_distribution id  ('raspbian', '11', 'bullseye')
+   info                   {'id': 'raspbian', 'version': '11', 'version_parts': {'major': '11', 'minor': '', 'build_number': ''}, 'like': 'debian', 'codename': 'bullseye'}
+   info pretty best       {'id': 'raspbian', 'version': '11.8 (bullseye)', 'version_parts': {'major': '11', 'minor': '8', 'build_number': ''}, 'like': 'debian', 'codename': 'bullseye'}
+   os_release_file        'data/roots/raspbian11/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'pretty_name': 'Raspbian GNU/Linux 11 (bullseye)', 'name': 'Raspbian GNU/Linux', 'version_id': '11', 'version': '11 (bullseye)', 'version_codename': 'bullseye', 'id': 'raspbian', 'id_like': 'debian', 'codename': 'bullseye', 'release_codename': 'bullseye'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'raspbian'
+   distro_release_attr    ''
+-- root | gentoo
+   repr                   LinuxDistribution(os_release_file='data/roots/gentoo/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/gentoo', _os_release_info={'name': 'Gentoo', 'id': 'gentoo', 'pretty_name': 'Gentoo Linux', 'ansi_color': '1;32'}, _lsb_release_info={}, _distro_release_info={'name': 'Gentoo Base System', 'version_id': '2.14', 'id': 'gentoo'}, _uname_info={}, _oslevel_info='')
+   id                     'gentoo'
+   name                   'Gentoo'
+   name pretty            'Gentoo Linux'
+   version                '2.14'
+   version pretty         '2.14'
+   version best           '2.14'
+   version pretty best    '2.14'
+   version_parts          ('2', '14', '')
+   version_parts best     ('2', '14', '')
+   major minor build      ('2', '14', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('Gentoo', '2.14', '')
+   linux_distribution id  ('gentoo', '2.14', '')
+   info                   {'id': 'gentoo', 'version': '2.14', 'version_parts': {'major': '2', 'minor': '14', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'gentoo', 'version': '2.14', 'version_parts': {'major': '2', 'minor': '14', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/gentoo/etc/os-release'
+   distro_release_file    'data/roots/gentoo/etc/gentoo-release'
+   os_release_info        {'name': 'Gentoo', 'id': 'gentoo', 'pretty_name': 'Gentoo Linux', 'ansi_color': '1;32'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Gentoo Base System', 'version_id': '2.14', 'id': 'gentoo'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'gentoo'
+   distro_release_attr    'Gentoo Base System'
+-- root | slackware15
+   repr                   LinuxDistribution(os_release_file='data/roots/slackware15/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/slackware15', _os_release_info={'name': 'Slackware', 'version': '15.0', 'id': 'slackware', 'version_id': '15.0', 'pretty_name': 'Slackware 15.0 x86_64'}, _lsb_release_info={}, _distro_release_info={'name': 'Slackware', 'version_id': '15.0', 'id': 'slackware'}, _uname_info={}, _oslevel_info='')
+   id                     'slackware'
+   name                   'Slackware'
+   name pretty            'Slackware 15.0 x86_64'
+   version                '15.0'
+   version pretty         '15.0'
+   version best           '15.0'
+   version pretty best    '15.0'
+   version_parts          ('15', '0', '')
+   version_parts best     ('15', '0', '')
+   major minor build      ('15', '0', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('Slackware', '15.0', '')
+   linux_distribution id  ('slackware', '15.0', '')
+   info                   {'id': 'slackware', 'version': '15.0', 'version_parts': {'major': '15', 'minor': '0', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'slackware', 'version': '15.0', 'version_parts': {'major': '15', 'minor': '0', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/slackware15/etc/os-release'
+   distro_release_file    'data/roots/slackware15/etc/slackware-version'
+   os_release_info        {'name': 'Slackware', 'version': '15.0', 'id': 'slackware', 'version_id': '15.0', 'pretty_name': 'Slackware 15.0 x86_64'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Slackware', 'version_id': '15.0', 'id': 'slackware'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'slackware'
+   distro_release_attr    'Slackware'
+-- root | cloudlinux6
+   repr                   LinuxDistribution(os_release_file='data/roots/cloudlinux6/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/cloudlinux6', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'CloudLinux Server', 'version_id': '6.10', 'codename': 'Vladislav Volkov', 'id': 'cloudlinux'}, _uname_info={}, _oslevel_info='')
+   id                     'cloudlinux'
+   name                   'CloudLinux Server'
+   name pretty            'CloudLinux Server 6.10 (Vladislav Volkov)'
+   version                '6.10'
+   version pretty         '6.10 (Vladislav Volkov)'
+   version best           '6.10'
+   version pretty best    '6.10 (Vladislav Volkov)'
+   version_parts          ('6', '10', '')
+   version_parts best     ('6', '10', '')
+   major minor build      ('6', '10', '')
+   like                   ''
+   codename               'Vladislav Volkov'
+   linux_distribution     ('CloudLinux Server', '6.10', 'Vladislav Volkov')
+   linux_distribution id  ('cloudlinux', '6.10', 'Vladislav Volkov')
+   info                   {'id': 'cloudlinux', 'version': '6.10', 'version_parts': {'major': '6', 'minor': '10', 'build_number': ''}, 'like': '', 'codename': 'Vladislav Volkov'}
+   info pretty best       {'id': 'cloudlinux', 'version': '6.10 (Vladislav Volkov)', 'version_parts': {'major': '6', 'minor': '10', 'build_number': ''}, 'like': '', 'codename': 'Vladislav Volkov'}
+   os_release_file        'data/roots/cloudlinux6/etc/os-release'
+   distro_release_file    'data/roots/cloudlinux6/etc/redhat-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'CloudLinux Server', 'version_id': '6.10', 'codename': 'Vladislav Volkov', 'id': 'cloudlinux'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'CloudLinux Server'
+-- root | oracle8
+   repr                   LinuxDistribution(os_release_file='data/roots/oracle8/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/oracle8', _os_release_info={'name': 'Oracle Linux Server', 'version': '8.9', 'id': 'ol', 'id_like': 'fedora', 'variant': 'Server', 'version_id': '8.9', 'pretty_name': 'Oracle Linux Server 8.9'}, _lsb_release_info={}, _distro_release_info={'name': 'Oracle Linux Server', 'version_id': '8.9', 'id': 'oracle'}, _uname_info={}, _oslevel_info='')
+   id                     'oracle'
+   name                   'Oracle Linux Server'
+   name pretty            'Oracle Linux Server 8.9'
+   version                '8.9'
+   version pretty         '8.9'
+   version best           '8.9'
+   version pretty best    '8.9'
+   version_parts          ('8', '9', '')
+   version_parts best     ('8', '9', '')
+   major minor build      ('8', '9', '')
+   like                   'fedora'
+   codename               ''
+   linux_distribution     ('Oracle Linux Server', '8.9', '')
+   linux_distribution id  ('oracle', '8.9', '')
+   info                   {'id': 'oracle', 'version': '8.9', 'version_parts': {'major': '8', 'minor': '9', 'build_number': ''}, 'like': 'fedora', 'codename': ''}
+   info pretty best       {'id': 'oracle', 'version': '8.9', 'version_parts': {'major': '8', 'minor': '9', 'build_number': ''}, 'like': 'fedora', 'codename': ''}
+   os_release_file        'data/roots/oracle8/etc/os-release'
+   distro_release_file    'data/roots/oracle8/etc/oracle-release'
+   os_release_info        {'name': 'Oracle Linux Server', 'version': '8.9', 'id': 'ol', 'id_like': 'fedora', 'variant': 'Server', 'version_id': '8.9', 'pretty_name': 'Oracle Linux Server 8.9'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Oracle Linux Server', 'version_id': '8.9', 'id': 'oracle'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'ol'
+   distro_release_attr    'Oracle Linux Server'
+-- root | mageia9
+   repr                   LinuxDistribution(os_release_file='data/roots/mageia9/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/mageia9', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'Mageia', 'version_id': '9', 'codename': 'Official', 'id': 'mageia'}, _uname_info={}, _oslevel_info='')
+   id                     'mageia'
+   name                   'Mageia'
+   name pretty            'Mageia 9 (Official)'
+   version                '9'
+   version pretty         '9 (Official)'
+   version best           '9'
+   version pretty best    '9 (Official)'
+   version_parts          ('9', '', '')
+   version_parts best     ('9', '', '')
+   major minor build      ('9', '', '')
+   like                   ''
+   codename               'Official'
+   linux_distribution     ('Mageia', '9', 'Official')
+   linux_distribution id  ('mageia', '9', 'Official')
+   info                   {'id': 'mageia', 'version': '9', 'version_parts': {'major': '9', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'Official'}
+   info pretty best       {'id': 'mageia', 'version': '9 (Official)', 'version_parts': {'major': '9', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'Official'}
+   os_release_file        'data/roots/mageia9/etc/os-release'
+   distro_release_file    'data/roots/mageia9/etc/mageia-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Mageia', 'version_id': '9', 'codename': 'Official', 'id': 'mageia'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'Mageia'
+-- root | nixos
+   repr                   LinuxDistribution(os_release_file='data/roots/nixos/usr/lib/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/nixos', _os_release_info={'bug_report_url': 'https://github.com/NixOS/nixpkgs/issues', 'build_id': '23.11.20240115.b8dd8be', 'id': 'nixos', 'name': 'NixOS', 'pretty_name': 'NixOS 23.11 (Tapir)', 'version': '23.11 (Tapir)', 'version_codename': 'tapir', 'version_id': '23.11', 'codename': 'tapir', 'release_codename': 'Tapir'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'nixos'
+   name                   'NixOS'
+   name pretty            'NixOS 23.11 (Tapir)'
+   version                '23.11'
+   version pretty         '23.11 (tapir)'
+   version best           '23.11'
+   version pretty best    '23.11 (tapir)'
+   version_parts          ('23', '11', '')
+   version_parts best     ('23', '11', '')
+   major minor build      ('23', '11', '')
+   like                   ''
+   codename               'tapir'
+   linux_distribution     ('NixOS', '23.11', 'Tapir')
+   linux_distribution id  ('nixos', '23.11', 'Tapir')
+   info                   {'id': 'nixos', 'version': '23.11', 'version_parts': {'major': '23', 'minor': '11', 'build_number': ''}, 'like': '', 'codename': 'tapir'}
+   info pretty best       {'id': 'nixos', 'version': '23.11 (tapir)', 'version_parts': {'major': '23', 'minor': '11', 'build_number': ''}, 'like': '', 'codename': 'tapir'}
+   os_release_file        'data/roots/nixos/usr/lib/os-release'
+   distro_release_file    ''
+   os_release_info        {'bug_report_url': 'https://github.com/NixOS/nixpkgs/issues', 'build_id': '23.11.20240115.b8dd8be', 'id': 'nixos', 'name': 'NixOS', 'pretty_name': 'NixOS 23.11 (Tapir)', 'version': '23.11 (Tapir)', 'version_codename': 'tapir', 'version_id': '23.11', 'codename': 'tapir', 'release_codename': 'Tapir'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'nixos'
+   distro_release_attr    ''
+-- root | both
+   repr                   LinuxDistribution(os_release_file='data/roots/both/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/both', _os_release_info={'id': 'etcwins', 'name': 'From etc', 'version_id': '1.2'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'etcwins'
+   name                   'From etc'
+   name pretty            ' 1.2'
+   version                '1.2'
+   version pretty         '1.2'
+   version best           '1.2'
+   version pretty best    '1.2'
+   version_parts          ('1', '2', '')
+   version_parts best     ('1', '2', '')
+   major minor build      ('1', '2', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('From etc', '1.2', '')
+   linux_distribution id  ('etcwins', '1.2', '')
+   info                   {'id': 'etcwins', 'version': '1.2', 'version_parts': {'major': '1', 'minor': '2', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'etcwins', 'version': '1.2', 'version_parts': {'major': '1', 'minor': '2', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/both/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'id': 'etcwins', 'name': 'From etc', 'version_id': '1.2'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'etcwins'
+   distro_release_attr    ''
+-- root | empty
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- root | noetc
+   repr                   LinuxDistribution(os_release_file='data/roots/noetc/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/noetc', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/noetc/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- root | nosuchroot
+   repr                   LinuxDistribution(os_release_file='data/roots/nosuchroot/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/nosuchroot', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/nosuchroot/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- root | broken
+   repr                   raised ValueError: No closing quotation
+   id                     raised ValueError: No closing quotation
+   name                   raised ValueError: No closing quotation
+   name pretty            raised ValueError: No closing quotation
+   version                raised ValueError: No closing quotation
+   version pretty         raised ValueError: No closing quotation
+   version best           raised ValueError: No closing quotation
+   version pretty best    raised ValueError: No closing quotation
+   version_parts          raised ValueError: No closing quotation
+   version_parts best     raised ValueError: No closing quotation
+   major minor build      raised ValueError: No closing quotation
+   like                   raised ValueError: No closing quotation
+   codename               raised ValueError: No closing quotation
+   linux_distribution     raised ValueError: No closing quotation
+   linux_distribution id  raised ValueError: No closing quotation
+   info                   raised ValueError: No closing quotation
+   info pretty best       raised ValueError: No closing quotation
+   os_release_file        'data/roots/broken/etc/os-release'
+   distro_release_file    ''
+   os_release_info        raised ValueError: No closing quotation
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     raised ValueError: No closing quotation
+   distro_release_attr    ''
+-- root | quirky
+   repr                   LinuxDistribution(os_release_file='data/roots/quirky/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/quirky', _os_release_info={'name': 'Quirky "Q" Linux', 'id': 'Quirky Linux', 'version': '2.4.1, Hatchling Edition', 'version_codename': 'café', 'pretty_name': 'Quirky\\ Linux "2.4"', 'multi': 'first\nsecond', 'escaped': 'a b$c', 'empty': '', '': 'novalue', 'key': 'one=two', 'id_like': 'suse    debian', 'codename': 'café', 'release_codename': 'Hatchling Edition'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'quirky_linux'
+   name                   'Quirky "Q" Linux'
+   name pretty            'Quirky\\ Linux "2.4"'
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   'suse    debian'
+   codename               'café'
+   linux_distribution     ('Quirky "Q" Linux', '', 'Hatchling Edition')
+   linux_distribution id  ('quirky_linux', '', 'Hatchling Edition')
+   info                   {'id': 'quirky_linux', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': 'suse    debian', 'codename': 'café'}
+   info pretty best       {'id': 'quirky_linux', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': 'suse    debian', 'codename': 'café'}
+   os_release_file        'data/roots/quirky/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'name': 'Quirky "Q" Linux', 'id': 'Quirky Linux', 'version': '2.4.1, Hatchling Edition', 'version_codename': 'café', 'pretty_name': 'Quirky\\ Linux "2.4"', 'multi': 'first\nsecond', 'escaped': 'a b$c', 'empty': '', '': 'novalue', 'key': 'one=two', 'id_like': 'suse    debian', 'codename': 'café', 'release_codename': 'Hatchling Edition'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'Quirky Linux'
+   distro_release_attr    ''
+-- root | multi
+   repr                   LinuxDistribution(os_release_file='data/roots/multi/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/multi', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': '', 'id': 'aaa'}, _uname_info={}, _oslevel_info='')
+   id                     'aaa'
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('aaa', '', '')
+   info                   {'id': 'aaa', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'aaa', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/multi/etc/os-release'
+   distro_release_file    'data/roots/multi/etc/aaa-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': '', 'id': 'aaa'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- root | nomatch
+   repr                   LinuxDistribution(os_release_file='data/roots/nomatch/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/nomatch', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'Weird OS', 'version_id': '8.1.2', 'codename': 'Wobbly', 'id': 'Weird'}, _uname_info={}, _oslevel_info='')
+   id                     'weird'
+   name                   'Weird OS'
+   name pretty            'Weird OS 8.1.2 (Wobbly)'
+   version                '8.1.2'
+   version pretty         '8.1.2 (Wobbly)'
+   version best           '8.1.2'
+   version pretty best    '8.1.2 (Wobbly)'
+   version_parts          ('8', '1', '2')
+   version_parts best     ('8', '1', '2')
+   major minor build      ('8', '1', '2')
+   like                   ''
+   codename               'Wobbly'
+   linux_distribution     ('Weird OS', '8.1.2', 'Wobbly')
+   linux_distribution id  ('weird', '8.1.2', 'Wobbly')
+   info                   {'id': 'weird', 'version': '8.1.2', 'version_parts': {'major': '8', 'minor': '1', 'build_number': '2'}, 'like': '', 'codename': 'Wobbly'}
+   info pretty best       {'id': 'weird', 'version': '8.1.2 (Wobbly)', 'version_parts': {'major': '8', 'minor': '1', 'build_number': '2'}, 'like': '', 'codename': 'Wobbly'}
+   os_release_file        'data/roots/nomatch/etc/os-release'
+   distro_release_file    'data/roots/nomatch/etc/Weird_version'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Weird OS', 'version_id': '8.1.2', 'codename': 'Wobbly', 'id': 'Weird'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'Weird OS'
+-- root | misc
+   repr                   LinuxDistribution(os_release_file='data/roots/misc/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/misc', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/misc/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+# Data source files named explicitly.
+-- files | misc | data/roots/misc/etc/os-release-alt | -
+   repr                   LinuxDistribution(os_release_file='data/roots/misc/etc/os-release-alt', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/misc', _os_release_info={'id': 'altid', 'name': 'Alt', 'version_id': '5.6.7', 'version': '5.6.7 (Seven)', 'codename': 'Seven', 'release_codename': 'Seven'}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'altid'
+   name                   'Alt'
+   name pretty            ' 5.6.7 (Seven)'
+   version                '5.6.7'
+   version pretty         '5.6.7 (Seven)'
+   version best           '5.6.7'
+   version pretty best    '5.6.7 (Seven)'
+   version_parts          ('5', '6', '7')
+   version_parts best     ('5', '6', '7')
+   major minor build      ('5', '6', '7')
+   like                   ''
+   codename               'Seven'
+   linux_distribution     ('Alt', '5.6.7', 'Seven')
+   linux_distribution id  ('altid', '5.6.7', 'Seven')
+   info                   {'id': 'altid', 'version': '5.6.7', 'version_parts': {'major': '5', 'minor': '6', 'build_number': '7'}, 'like': '', 'codename': 'Seven'}
+   info pretty best       {'id': 'altid', 'version': '5.6.7 (Seven)', 'version_parts': {'major': '5', 'minor': '6', 'build_number': '7'}, 'like': '', 'codename': 'Seven'}
+   os_release_file        'data/roots/misc/etc/os-release-alt'
+   distro_release_file    ''
+   os_release_info        {'id': 'altid', 'name': 'Alt', 'version_id': '5.6.7', 'version': '5.6.7 (Seven)', 'codename': 'Seven', 'release_codename': 'Seven'}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'altid'
+   distro_release_attr    ''
+-- files | misc | - | data/roots/misc/etc/custom-info
+   repr                   LinuxDistribution(os_release_file='data/roots/misc/etc/os-release', distro_release_file='data/roots/misc/etc/custom-info', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/misc', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'Custom Distro', 'version_id': '3.1', 'codename': 'Lazy'}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   'Custom Distro'
+   name pretty            'Custom Distro 3.1 (Lazy)'
+   version                '3.1'
+   version pretty         '3.1 (Lazy)'
+   version best           '3.1'
+   version pretty best    '3.1 (Lazy)'
+   version_parts          ('3', '1', '')
+   version_parts best     ('3', '1', '')
+   major minor build      ('3', '1', '')
+   like                   ''
+   codename               'Lazy'
+   linux_distribution     ('Custom Distro', '3.1', 'Lazy')
+   linux_distribution id  ('', '3.1', 'Lazy')
+   info                   {'id': '', 'version': '3.1', 'version_parts': {'major': '3', 'minor': '1', 'build_number': ''}, 'like': '', 'codename': 'Lazy'}
+   info pretty best       {'id': '', 'version': '3.1 (Lazy)', 'version_parts': {'major': '3', 'minor': '1', 'build_number': ''}, 'like': '', 'codename': 'Lazy'}
+   os_release_file        'data/roots/misc/etc/os-release'
+   distro_release_file    'data/roots/misc/etc/custom-info'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Custom Distro', 'version_id': '3.1', 'codename': 'Lazy'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'Custom Distro'
+-- files | misc | - | data/roots/misc/etc/empty-release
+   repr                   LinuxDistribution(os_release_file='data/roots/misc/etc/os-release', distro_release_file='data/roots/misc/etc/empty-release', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/misc', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'id': 'empty'}, _uname_info={}, _oslevel_info='')
+   id                     'empty'
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('empty', '', '')
+   info                   {'id': 'empty', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'empty', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/misc/etc/os-release'
+   distro_release_file    'data/roots/misc/etc/empty-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'id': 'empty'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- files | misc | - | data/roots/misc/etc/missing-release
+   repr                   LinuxDistribution(os_release_file='data/roots/misc/etc/os-release', distro_release_file='data/roots/misc/etc/missing-release', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/misc', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'id': 'missing'}, _uname_info={}, _oslevel_info='')
+   id                     'missing'
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('missing', '', '')
+   info                   {'id': 'missing', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'missing', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/misc/etc/os-release'
+   distro_release_file    'data/roots/misc/etc/missing-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'id': 'missing'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- files | empty | data/roots/fedora39/etc/os-release | data/roots/rhel6/etc/redhat-release
+   repr                   LinuxDistribution(os_release_file='data/roots/fedora39/etc/os-release', distro_release_file='data/roots/rhel6/etc/redhat-release', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={'name': 'Fedora Linux', 'version': '39 (Workstation Edition)', 'id': 'fedora', 'version_id': '39', 'version_codename': '', 'platform_id': 'platform:f39', 'pretty_name': 'Fedora Linux 39 (Workstation Edition)', 'ansi_color': '0;38;2;60;110;180', 'logo': 'fedora-logo-icon', 'cpe_name': 'cpe:/o:fedoraproject:fedora:39', 'default_hostname': 'fedora', 'variant': 'Workstation Edition', 'variant_id': 'workstation', 'codename': '', 'release_codename': 'Workstation Edition'}, _lsb_release_info={}, _distro_release_info={'name': 'Red Hat Enterprise Linux Server', 'version_id': '6.5', 'codename': 'Santiago', 'id': 'redhat'}, _uname_info={}, _oslevel_info='')
+   id                     'fedora'
+   name                   'Fedora Linux'
+   name pretty            'Fedora Linux 39 (Workstation Edition)'
+   version                '39'
+   version pretty         '39'
+   version best           '6.5'
+   version pretty best    '6.5'
+   version_parts          ('39', '', '')
+   version_parts best     ('6', '5', '')
+   major minor build      ('39', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('Fedora Linux', '39', 'Workstation Edition')
+   linux_distribution id  ('fedora', '39', 'Workstation Edition')
+   info                   {'id': 'fedora', 'version': '39', 'version_parts': {'major': '39', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'fedora', 'version': '6.5', 'version_parts': {'major': '6', 'minor': '5', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/fedora39/etc/os-release'
+   distro_release_file    'data/roots/rhel6/etc/redhat-release'
+   os_release_info        {'name': 'Fedora Linux', 'version': '39 (Workstation Edition)', 'id': 'fedora', 'version_id': '39', 'version_codename': '', 'platform_id': 'platform:f39', 'pretty_name': 'Fedora Linux 39 (Workstation Edition)', 'ansi_color': '0;38;2;60;110;180', 'logo': 'fedora-logo-icon', 'cpe_name': 'cpe:/o:fedoraproject:fedora:39', 'default_hostname': 'fedora', 'variant': 'Workstation Edition', 'variant_id': 'workstation', 'codename': '', 'release_codename': 'Workstation Edition'}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Red Hat Enterprise Linux Server', 'version_id': '6.5', 'codename': 'Santiago', 'id': 'redhat'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'fedora'
+   distro_release_attr    'Red Hat Enterprise Linux Server'
+-- files | debian12 | data/roots/nowhere/os-release | -
+   repr                   LinuxDistribution(os_release_file='data/roots/nowhere/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/debian12', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/nowhere/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- files | nomatch | - | data/roots/nomatch/etc/Weird_version
+   repr                   LinuxDistribution(os_release_file='data/roots/nomatch/etc/os-release', distro_release_file='data/roots/nomatch/etc/Weird_version', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/nomatch', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'Weird OS', 'version_id': '8.1.2', 'codename': 'Wobbly', 'id': 'Weird'}, _uname_info={}, _oslevel_info='')
+   id                     'weird'
+   name                   'Weird OS'
+   name pretty            'Weird OS 8.1.2 (Wobbly)'
+   version                '8.1.2'
+   version pretty         '8.1.2 (Wobbly)'
+   version best           '8.1.2'
+   version pretty best    '8.1.2 (Wobbly)'
+   version_parts          ('8', '1', '2')
+   version_parts best     ('8', '1', '2')
+   major minor build      ('8', '1', '2')
+   like                   ''
+   codename               'Wobbly'
+   linux_distribution     ('Weird OS', '8.1.2', 'Wobbly')
+   linux_distribution id  ('weird', '8.1.2', 'Wobbly')
+   info                   {'id': 'weird', 'version': '8.1.2', 'version_parts': {'major': '8', 'minor': '1', 'build_number': '2'}, 'like': '', 'codename': 'Wobbly'}
+   info pretty best       {'id': 'weird', 'version': '8.1.2 (Wobbly)', 'version_parts': {'major': '8', 'minor': '1', 'build_number': '2'}, 'like': '', 'codename': 'Wobbly'}
+   os_release_file        'data/roots/nomatch/etc/os-release'
+   distro_release_file    'data/roots/nomatch/etc/Weird_version'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'Weird OS', 'version_id': '8.1.2', 'codename': 'Wobbly', 'id': 'Weird'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'Weird OS'
+# lsb_release -a, uname -rs and oslevel output, fed in.
+-- inject | empty | No LSB modules are available.⏎Distributor ID:⇥Ubuntu⏎Description:⇥Ubuntu 20.04.6 LTS⏎Release:⇥20.04⏎Codename:⇥focal⏎ | - | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={'distributor_id': 'Ubuntu', 'description': 'Ubuntu 20.04.6 LTS', 'release': '20.04', 'codename': 'focal'}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'ubuntu'
+   name                   'Ubuntu'
+   name pretty            'Ubuntu 20.04.6 LTS'
+   version                '20.04'
+   version pretty         '20.04 (focal)'
+   version best           '20.04.6'
+   version pretty best    '20.04.6 (focal)'
+   version_parts          ('20', '04', '')
+   version_parts best     ('20', '04', '6')
+   major minor build      ('20', '04', '')
+   like                   ''
+   codename               'focal'
+   linux_distribution     ('Ubuntu', '20.04', 'focal')
+   linux_distribution id  ('ubuntu', '20.04', 'focal')
+   info                   {'id': 'ubuntu', 'version': '20.04', 'version_parts': {'major': '20', 'minor': '04', 'build_number': ''}, 'like': '', 'codename': 'focal'}
+   info pretty best       {'id': 'ubuntu', 'version': '20.04.6 (focal)', 'version_parts': {'major': '20', 'minor': '04', 'build_number': '6'}, 'like': '', 'codename': 'focal'}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {'distributor_id': 'Ubuntu', 'description': 'Ubuntu 20.04.6 LTS', 'release': '20.04', 'codename': 'focal'}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | Distributor ID:⇥RedHatEnterpriseServer⏎Description:⇥Red Hat Enterprise Linux Server release 7.9 (Maipo)⏎Release:⇥7.9⏎Codename:⇥Maipo⏎ | - | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={'distributor_id': 'RedHatEnterpriseServer', 'description': 'Red Hat Enterprise Linux Server release 7.9 (Maipo)', 'release': '7.9', 'codename': 'Maipo'}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'rhel'
+   name                   'RedHatEnterpriseServer'
+   name pretty            'Red Hat Enterprise Linux Server release 7.9 (Maipo)'
+   version                '7.9'
+   version pretty         '7.9 (Maipo)'
+   version best           '7.9'
+   version pretty best    '7.9 (Maipo)'
+   version_parts          ('7', '9', '')
+   version_parts best     ('7', '9', '')
+   major minor build      ('7', '9', '')
+   like                   ''
+   codename               'Maipo'
+   linux_distribution     ('RedHatEnterpriseServer', '7.9', 'Maipo')
+   linux_distribution id  ('rhel', '7.9', 'Maipo')
+   info                   {'id': 'rhel', 'version': '7.9', 'version_parts': {'major': '7', 'minor': '9', 'build_number': ''}, 'like': '', 'codename': 'Maipo'}
+   info pretty best       {'id': 'rhel', 'version': '7.9 (Maipo)', 'version_parts': {'major': '7', 'minor': '9', 'build_number': ''}, 'like': '', 'codename': 'Maipo'}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {'distributor_id': 'RedHatEnterpriseServer', 'description': 'Red Hat Enterprise Linux Server release 7.9 (Maipo)', 'release': '7.9', 'codename': 'Maipo'}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | Distributor ID:⇥EnterpriseEnterpriseServer⏎Description:⇥Enterprise Linux Enterprise Linux Server release 5.11 (Carthage)⏎Release:⇥5.11⏎Codename:⇥Carthage⏎ | - | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={'distributor_id': 'EnterpriseEnterpriseServer', 'description': 'Enterprise Linux Enterprise Linux Server release 5.11 (Carthage)', 'release': '5.11', 'codename': 'Carthage'}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'oracle'
+   name                   'EnterpriseEnterpriseServer'
+   name pretty            'Enterprise Linux Enterprise Linux Server release 5.11 (Carthage)'
+   version                '5.11'
+   version pretty         '5.11 (Carthage)'
+   version best           '5.11'
+   version pretty best    '5.11 (Carthage)'
+   version_parts          ('5', '11', '')
+   version_parts best     ('5', '11', '')
+   major minor build      ('5', '11', '')
+   like                   ''
+   codename               'Carthage'
+   linux_distribution     ('EnterpriseEnterpriseServer', '5.11', 'Carthage')
+   linux_distribution id  ('oracle', '5.11', 'Carthage')
+   info                   {'id': 'oracle', 'version': '5.11', 'version_parts': {'major': '5', 'minor': '11', 'build_number': ''}, 'like': '', 'codename': 'Carthage'}
+   info pretty best       {'id': 'oracle', 'version': '5.11 (Carthage)', 'version_parts': {'major': '5', 'minor': '11', 'build_number': ''}, 'like': '', 'codename': 'Carthage'}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {'distributor_id': 'EnterpriseEnterpriseServer', 'description': 'Enterprise Linux Enterprise Linux Server release 5.11 (Carthage)', 'release': '5.11', 'codename': 'Carthage'}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | LSB Version:⇥:core-4.1-amd64:core-4.1-noarch⏎Distributor ID:⇥Linux Mint⏎Description:⇥Linux Mint 21.2 Victoria⏎Release:⇥21.2⏎Codename:⇥victoria⏎ | - | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={'lsb_version': ':core-4.1-amd64:core-4.1-noarch', 'distributor_id': 'Linux Mint', 'description': 'Linux Mint 21.2 Victoria', 'release': '21.2', 'codename': 'victoria'}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'linux_mint'
+   name                   'Linux Mint'
+   name pretty            'Linux Mint 21.2 Victoria'
+   version                '21.2'
+   version pretty         '21.2 (victoria)'
+   version best           '21.2'
+   version pretty best    '21.2 (victoria)'
+   version_parts          ('21', '2', '')
+   version_parts best     ('21', '2', '')
+   major minor build      ('21', '2', '')
+   like                   ''
+   codename               'victoria'
+   linux_distribution     ('Linux Mint', '21.2', 'victoria')
+   linux_distribution id  ('linux_mint', '21.2', 'victoria')
+   info                   {'id': 'linux_mint', 'version': '21.2', 'version_parts': {'major': '21', 'minor': '2', 'build_number': ''}, 'like': '', 'codename': 'victoria'}
+   info pretty best       {'id': 'linux_mint', 'version': '21.2 (victoria)', 'version_parts': {'major': '21', 'minor': '2', 'build_number': ''}, 'like': '', 'codename': 'victoria'}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {'lsb_version': ':core-4.1-amd64:core-4.1-noarch', 'distributor_id': 'Linux Mint', 'description': 'Linux Mint 21.2 Victoria', 'release': '21.2', 'codename': 'victoria'}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | - | FreeBSD 13.2-RELEASE⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={'id': 'freebsd', 'name': 'FreeBSD', 'release': '13.2'}, _oslevel_info='')
+   id                     'freebsd'
+   name                   'FreeBSD'
+   name pretty            'FreeBSD 13.2'
+   version                '13.2'
+   version pretty         '13.2'
+   version best           '13.2'
+   version pretty best    '13.2'
+   version_parts          ('13', '2', '')
+   version_parts best     ('13', '2', '')
+   major minor build      ('13', '2', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('FreeBSD', '13.2', '')
+   linux_distribution id  ('freebsd', '13.2', '')
+   info                   {'id': 'freebsd', 'version': '13.2', 'version_parts': {'major': '13', 'minor': '2', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'freebsd', 'version': '13.2', 'version_parts': {'major': '13', 'minor': '2', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {'id': 'freebsd', 'name': 'FreeBSD', 'release': '13.2'}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | - | Linux 6.1.0-13-amd64⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | - | Darwin 23.1.0⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={'id': 'darwin', 'name': 'Darwin', 'release': '23.1.0'}, _oslevel_info='')
+   id                     'darwin'
+   name                   'Darwin'
+   name pretty            'Darwin 23.1.0'
+   version                '23.1.0'
+   version pretty         '23.1.0'
+   version best           '23.1.0'
+   version pretty best    '23.1.0'
+   version_parts          ('23', '1', '0')
+   version_parts best     ('23', '1', '0')
+   major minor build      ('23', '1', '0')
+   like                   ''
+   codename               ''
+   linux_distribution     ('Darwin', '23.1.0', '')
+   linux_distribution id  ('darwin', '23.1.0', '')
+   info                   {'id': 'darwin', 'version': '23.1.0', 'version_parts': {'major': '23', 'minor': '1', 'build_number': '0'}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'darwin', 'version': '23.1.0', 'version_parts': {'major': '23', 'minor': '1', 'build_number': '0'}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {'id': 'darwin', 'name': 'Darwin', 'release': '23.1.0'}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | - |    ⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | - | MidnightBSD⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     ''
+   name                   ''
+   name pretty            ''
+   version                ''
+   version pretty         ''
+   version best           ''
+   version pretty best    ''
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('', '', '')
+   linux_distribution id  ('', '', '')
+   info                   {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': '', 'version': '', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | - | AIX 2⏎ | 7200-05-06-2320⏎
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={'id': 'aix', 'name': 'AIX', 'release': '2'}, _oslevel_info='7200-05-06-2320')
+   id                     'aix'
+   name                   'AIX'
+   name pretty            'AIX 7200-05-06-2320'
+   version                '7200-05-06-2320'
+   version pretty         '7200-05-06-2320'
+   version best           '7200-05-06-2320'
+   version pretty best    '7200-05-06-2320'
+   version_parts          ('7200', '', '')
+   version_parts best     ('7200', '', '')
+   major minor build      ('7200', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('AIX', '7200-05-06-2320', '')
+   linux_distribution id  ('aix', '7200-05-06-2320', '')
+   info                   {'id': 'aix', 'version': '7200-05-06-2320', 'version_parts': {'major': '7200', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'aix', 'version': '7200-05-06-2320', 'version_parts': {'major': '7200', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {'id': 'aix', 'name': 'AIX', 'release': '2'}
+   oslevel_info           '7200-05-06-2320'
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | empty | - | AIX 1⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/empty/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/empty', _os_release_info={}, _lsb_release_info={}, _distro_release_info={}, _uname_info={'id': 'aix', 'name': 'AIX', 'release': '1'}, _oslevel_info='')
+   id                     'aix'
+   name                   'AIX'
+   name pretty            'AIX 1'
+   version                '1'
+   version pretty         '1'
+   version best           '1'
+   version pretty best    '1'
+   version_parts          ('1', '', '')
+   version_parts best     ('1', '', '')
+   major minor build      ('1', '', '')
+   like                   ''
+   codename               ''
+   linux_distribution     ('AIX', '1', '')
+   linux_distribution id  ('aix', '1', '')
+   info                   {'id': 'aix', 'version': '1', 'version_parts': {'major': '1', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   info pretty best       {'id': 'aix', 'version': '1', 'version_parts': {'major': '1', 'minor': '', 'build_number': ''}, 'like': '', 'codename': ''}
+   os_release_file        'data/roots/empty/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {}
+   uname_info             {'id': 'aix', 'name': 'AIX', 'release': '1'}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    ''
+-- inject | rhel6 | Distributor ID:⇥RedHatEnterpriseServer⏎Description:⇥Red Hat Enterprise Linux Server release 6.5 (Santiago)⏎Release:⇥6.5⏎Codename:⇥Santiago⏎ | Linux 2.6.32-431.el6.x86_64⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/rhel6/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/rhel6', _os_release_info={}, _lsb_release_info={'distributor_id': 'RedHatEnterpriseServer', 'description': 'Red Hat Enterprise Linux Server release 6.5 (Santiago)', 'release': '6.5', 'codename': 'Santiago'}, _distro_release_info={'name': 'Red Hat Enterprise Linux Server', 'version_id': '6.5', 'codename': 'Santiago', 'id': 'redhat'}, _uname_info={}, _oslevel_info='')
+   id                     'rhel'
+   name                   'RedHatEnterpriseServer'
+   name pretty            'Red Hat Enterprise Linux Server release 6.5 (Santiago)'
+   version                '6.5'
+   version pretty         '6.5 (Santiago)'
+   version best           '6.5'
+   version pretty best    '6.5 (Santiago)'
+   version_parts          ('6', '5', '')
+   version_parts best     ('6', '5', '')
+   major minor build      ('6', '5', '')
+   like                   ''
+   codename               'Santiago'
+   linux_distribution     ('RedHatEnterpriseServer', '6.5', 'Santiago')
+   linux_distribution id  ('rhel', '6.5', 'Santiago')
+   info                   {'id': 'rhel', 'version': '6.5', 'version_parts': {'major': '6', 'minor': '5', 'build_number': ''}, 'like': '', 'codename': 'Santiago'}
+   info pretty best       {'id': 'rhel', 'version': '6.5 (Santiago)', 'version_parts': {'major': '6', 'minor': '5', 'build_number': ''}, 'like': '', 'codename': 'Santiago'}
+   os_release_file        'data/roots/rhel6/etc/os-release'
+   distro_release_file    'data/roots/rhel6/etc/redhat-release'
+   os_release_info        {}
+   lsb_release_info       {'distributor_id': 'RedHatEnterpriseServer', 'description': 'Red Hat Enterprise Linux Server release 6.5 (Santiago)', 'release': '6.5', 'codename': 'Santiago'}
+   distro_release_info    {'name': 'Red Hat Enterprise Linux Server', 'version_id': '6.5', 'codename': 'Santiago', 'id': 'redhat'}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'Red Hat Enterprise Linux Server'
+-- inject | debian12 | Distributor ID:⇥Debian⏎Description:⇥Debian GNU/Linux 12 (bookworm)⏎Release:⇥12⏎Codename:⇥bookworm⏎ | - | -
+   repr                   LinuxDistribution(os_release_file='data/roots/debian12/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/debian12', _os_release_info={'pretty_name': 'Debian GNU/Linux 12 (bookworm)', 'name': 'Debian GNU/Linux', 'version_id': '12', 'version': '12 (bookworm)', 'version_codename': 'bookworm', 'id': 'debian', 'home_url': 'https://www.debian.org/', 'codename': 'bookworm', 'release_codename': 'bookworm'}, _lsb_release_info={'distributor_id': 'Debian', 'description': 'Debian GNU/Linux 12 (bookworm)', 'release': '12', 'codename': 'bookworm'}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'debian'
+   name                   'Debian GNU/Linux'
+   name pretty            'Debian GNU/Linux 12 (bookworm)'
+   version                '12'
+   version pretty         '12 (bookworm)'
+   version best           '12.4'
+   version pretty best    '12.4 (bookworm)'
+   version_parts          ('12', '', '')
+   version_parts best     ('12', '4', '')
+   major minor build      ('12', '', '')
+   like                   ''
+   codename               'bookworm'
+   linux_distribution     ('Debian GNU/Linux', '12', 'bookworm')
+   linux_distribution id  ('debian', '12', 'bookworm')
+   info                   {'id': 'debian', 'version': '12', 'version_parts': {'major': '12', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'bookworm'}
+   info pretty best       {'id': 'debian', 'version': '12.4 (bookworm)', 'version_parts': {'major': '12', 'minor': '4', 'build_number': ''}, 'like': '', 'codename': 'bookworm'}
+   os_release_file        'data/roots/debian12/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'pretty_name': 'Debian GNU/Linux 12 (bookworm)', 'name': 'Debian GNU/Linux', 'version_id': '12', 'version': '12 (bookworm)', 'version_codename': 'bookworm', 'id': 'debian', 'home_url': 'https://www.debian.org/', 'codename': 'bookworm', 'release_codename': 'bookworm'}
+   lsb_release_info       {'distributor_id': 'Debian', 'description': 'Debian GNU/Linux 12 (bookworm)', 'release': '12', 'codename': 'bookworm'}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'debian'
+   distro_release_attr    ''
+-- inject | arch | Distributor ID:⇥Arch⏎Description:⇥Arch Linux⏎Release:⇥rolling⏎Codename:⇥n/a⏎ | - | -
+   repr                   LinuxDistribution(os_release_file='data/roots/arch/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/arch', _os_release_info={'name': 'Arch Linux', 'pretty_name': 'Arch Linux', 'id': 'arch', 'build_id': 'rolling', 'ansi_color': '38;2;23;147;209', 'logo': 'archlinux-logo'}, _lsb_release_info={'distributor_id': 'Arch', 'description': 'Arch Linux', 'release': 'rolling', 'codename': 'n/a'}, _distro_release_info={}, _uname_info={}, _oslevel_info='')
+   id                     'arch'
+   name                   'Arch Linux'
+   name pretty            'Arch Linux'
+   version                'rolling'
+   version pretty         'rolling (n/a)'
+   version best           'rolling'
+   version pretty best    'rolling (n/a)'
+   version_parts          ('', '', '')
+   version_parts best     ('', '', '')
+   major minor build      ('', '', '')
+   like                   ''
+   codename               'n/a'
+   linux_distribution     ('Arch Linux', 'rolling', 'n/a')
+   linux_distribution id  ('arch', 'rolling', 'n/a')
+   info                   {'id': 'arch', 'version': 'rolling', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'n/a'}
+   info pretty best       {'id': 'arch', 'version': 'rolling (n/a)', 'version_parts': {'major': '', 'minor': '', 'build_number': ''}, 'like': '', 'codename': 'n/a'}
+   os_release_file        'data/roots/arch/etc/os-release'
+   distro_release_file    ''
+   os_release_info        {'name': 'Arch Linux', 'pretty_name': 'Arch Linux', 'id': 'arch', 'build_id': 'rolling', 'ansi_color': '38;2;23;147;209', 'logo': 'archlinux-logo'}
+   lsb_release_info       {'distributor_id': 'Arch', 'description': 'Arch Linux', 'release': 'rolling', 'codename': 'n/a'}
+   distro_release_info    {}
+   uname_info             {}
+   oslevel_info           ''
+   os_release_attr id     'arch'
+   distro_release_attr    ''
+-- inject | cloudlinux6 | - | OpenBSD 7.4⏎ | -
+   repr                   LinuxDistribution(os_release_file='data/roots/cloudlinux6/etc/os-release', distro_release_file='', include_lsb=False, include_uname=False, include_oslevel=False, root_dir='data/roots/cloudlinux6', _os_release_info={}, _lsb_release_info={}, _distro_release_info={'name': 'CloudLinux Server', 'version_id': '6.10', 'codename': 'Vladislav Volkov', 'id': 'cloudlinux'}, _uname_info={'id': 'openbsd', 'name': 'OpenBSD', 'release': '7.4'}, _oslevel_info='')
+   id                     'cloudlinux'
+   name                   'CloudLinux Server'
+   name pretty            'CloudLinux Server 6.10 (Vladislav Volkov)'
+   version                '6.10'
+   version pretty         '6.10 (Vladislav Volkov)'
+   version best           '6.10'
+   version pretty best    '6.10 (Vladislav Volkov)'
+   version_parts          ('6', '10', '')
+   version_parts best     ('6', '10', '')
+   major minor build      ('6', '10', '')
+   like                   ''
+   codename               'Vladislav Volkov'
+   linux_distribution     ('CloudLinux Server', '6.10', 'Vladislav Volkov')
+   linux_distribution id  ('cloudlinux', '6.10', 'Vladislav Volkov')
+   info                   {'id': 'cloudlinux', 'version': '6.10', 'version_parts': {'major': '6', 'minor': '10', 'build_number': ''}, 'like': '', 'codename': 'Vladislav Volkov'}
+   info pretty best       {'id': 'cloudlinux', 'version': '6.10 (Vladislav Volkov)', 'version_parts': {'major': '6', 'minor': '10', 'build_number': ''}, 'like': '', 'codename': 'Vladislav Volkov'}
+   os_release_file        'data/roots/cloudlinux6/etc/os-release'
+   distro_release_file    'data/roots/cloudlinux6/etc/redhat-release'
+   os_release_info        {}
+   lsb_release_info       {}
+   distro_release_info    {'name': 'CloudLinux Server', 'version_id': '6.10', 'codename': 'Vladislav Volkov', 'id': 'cloudlinux'}
+   uname_info             {'id': 'openbsd', 'name': 'OpenBSD', 'release': '7.4'}
+   oslevel_info           ''
+   os_release_attr id     ''
+   distro_release_attr    'CloudLinux Server'
+# The constructor's guard.
+-- ctor | data/roots/debian12 | T | - | -
+   raised ValueError: Including subprocess data sources from specific root_dir is disallowed to prevent false information
+-- ctor | data/roots/debian12 | - | T | -
+   raised ValueError: Including subprocess data sources from specific root_dir is disallowed to prevent false information
+-- ctor | data/roots/debian12 | - | - | T
+   raised ValueError: Including subprocess data sources from specific root_dir is disallowed to prevent false information
+-- ctor | data/roots/debian12 | F | F | F
+   include_lsb=False include_uname=False include_oslevel=False root_dir='data/roots/debian12' etc_dir='data/roots/debian12/etc' usr_lib_dir='data/roots/debian12/usr/lib'
+-- ctor | data/roots/debian12 | - | - | -
+   include_lsb=False include_uname=False include_oslevel=False root_dir='data/roots/debian12' etc_dir='data/roots/debian12/etc' usr_lib_dir='data/roots/debian12/usr/lib'
+# Release-file lines.
+-- release | CentOS Linux release 7.9.2009 (Core)
+   parsed                 {'name': 'CentOS Linux', 'version_id': '7.9.2009', 'codename': 'Core'}
+-- release | Red Hat Enterprise Linux Server release 6.5 (Santiago)
+   parsed                 {'name': 'Red Hat Enterprise Linux Server', 'version_id': '6.5', 'codename': 'Santiago'}
+-- release | Fedora release 39 (Thirty Nine)
+   parsed                 {'name': 'Fedora', 'version_id': '39', 'codename': 'Thirty Nine'}
+-- release | Ubuntu 22.04.3 LTS
+   parsed                 {'name': 'Ubuntu', 'version_id': '22.04.3'}
+-- release | Gentoo Base System release 2.14
+   parsed                 {'name': 'Gentoo Base System', 'version_id': '2.14'}
+-- release | SUSE Linux Enterprise Server 12 (x86_64)
+   parsed                 {'name': 'SUSE Linux Enterprise Server', 'version_id': '12', 'codename': 'x86_64'}
+-- release | Mageia release 9 (Official) for x86_64
+   parsed                 {'name': 'Mageia', 'version_id': '9', 'codename': 'Official'}
+-- release | 3.19.0
+   parsed                 {'name': '3.', 'version_id': '19.0'}
+-- release | Slackware 15.0
+   parsed                 {'name': 'Slackware', 'version_id': '15.0'}
+-- release | Slackware 14.2 LTS
+   parsed                 {'name': 'Slackware', 'version_id': '14.2'}
+-- release | Debian GNU/Linux trixie/sid
+   parsed                 {'name': 'Debian GNU/Linux trixie/sid'}
+-- release | Linux Mint 21.2 Victoria
+   parsed                 {'name': 'Linux Mint 21.2 Victoria'}
+-- release | CloudLinux release 7.9 (Boris Yegorov)
+   parsed                 {'name': 'CloudLinux', 'version_id': '7.9', 'codename': 'Boris Yegorov'}
+-- release |    Padded release  1.2-beta3␣␣␣
+   parsed                 {'name': 'Padded', 'version_id': '1.2-beta3'}
+-- release | Rolling
+   parsed                 {'name': 'Rolling'}
+-- release | 1.0
+   parsed                 {'name': '1.', 'version_id': '0'}
+-- release | release 2
+   parsed                 {'name': 'release', 'version_id': '2'}
+-- release | Name (Code) Name 4.4 (Codename) tail
+   parsed                 {'name': 'Name (Code) Name', 'version_id': '4.4', 'codename': 'Codename'}
+-- release | v1.2.3+git20240101
+   parsed                 {'name': 'v', 'version_id': '1.2.3+git20240101'}
+-- release | OS 10.0-rc1 (pre (alpha))
+   parsed                 {'name': 'OS', 'version_id': '10.0-rc1', 'codename': 'pre (alpha)'}
+-- release | a)b(c 5
+   parsed                 {'name': 'a)b(c', 'version_id': '5'}
+-- release | ∅
+   parsed                 {}
+-- release | ␣␣␣
+   parsed                 {'name': ''}
+# os-release text.
+-- osrel | ID=x⏎VERSION="1.0 (Alpha One)"⏎
+   parsed                 {'id': 'x', 'version': '1.0 (Alpha One)', 'codename': 'Alpha One', 'release_codename': 'Alpha One'}
+-- osrel | ID=x⏎VERSION="1.0, Beta"⏎VERSION_CODENAME=gamma⏎
+   parsed                 {'id': 'x', 'version': '1.0, Beta', 'version_codename': 'gamma', 'codename': 'gamma', 'release_codename': 'Beta'}
+-- osrel | ID=x⏎VERSION="1.0 (Alpha One)"⏎UBUNTU_CODENAME=delta⏎
+   parsed                 {'id': 'x', 'version': '1.0 (Alpha One)', 'ubuntu_codename': 'delta', 'codename': 'delta', 'release_codename': 'Alpha One'}
+-- osrel | ID=x⏎VERSION="12 (1984)"⏎
+   parsed                 {'id': 'x', 'version': '12 (1984)'}
+-- osrel | ID=x⏎VERSION="7 (Core), extra"⏎
+   parsed                 {'id': 'x', 'version': '7 (Core), extra', 'codename': 'Core', 'release_codename': 'Core'}
+-- osrel | ID=x⏎VERSION="7(Core)"⏎
+   parsed                 {'id': 'x', 'version': '7(Core)', 'codename': 'Core', 'release_codename': 'Core'}
+-- osrel | VERSION=",   spaced out"⏎
+   parsed                 {'version': ',   spaced out', 'codename': 'spaced out', 'release_codename': 'spaced out'}
+-- osrel | VERSION=",9"⏎
+   parsed                 {'version': ',9'}
+-- osrel | a=1 b=2 c="3 4"⏎d='5'"6"⏎
+   parsed                 {'a': '1', 'b': '2', 'c': '3 4', 'd': '56'}
+-- osrel | X="unterminated⏎
+   parsed                 raised ValueError: No closing quotation
+-- osrel | X=trailing\
+   parsed                 raised ValueError: No escaped character
+-- osrel | # just a comment⏎
+   parsed                 {}
+-- osrel | ∅
+   parsed                 {}
+-- osrel | Q="a\"b" R='a\b' S=a\\b T="a\$b\`c"⏎
+   parsed                 {'q': 'a"b', 'r': 'a\\b', 's': 'a\\b', 't': 'a\\$b\\`c'}
+-- osrel | ÄÖ=Ü ID=Mixed_Case⏎
+   parsed                 {'äö': 'Ü', 'id': 'Mixed_Case'}
+# lsb_release -a text.
+-- lsb | Distributor ID:⇥Ubuntu⏎Description:⇥Ubuntu 22.04.3 LTS⏎Release:⇥22.04⏎Codename:⇥jammy⏎
+   parsed                 {'distributor_id': 'Ubuntu', 'description': 'Ubuntu 22.04.3 LTS', 'release': '22.04', 'codename': 'jammy'}
+-- lsb | No colon here⏎Key: value: with: colons⏎ Spaced Key :  padded  ⏎:empty key⏎
+   parsed                 {'key': 'value: with: colons', '_spaced_key_': 'padded', '': 'empty key'}
+-- lsb | ∅
+   parsed                 {}
+# uname -rs text.
+-- uname | Linux 5.15.0-91-generic
+   parsed                 {}
+-- uname | FreeBSD 14.0-RELEASE-p3⏎ignored second line
+   parsed                 {'id': 'freebsd', 'name': 'FreeBSD', 'release': '14.0'}
+-- uname | SunOS 5.11
+   parsed                 {'id': 'sunos', 'name': 'SunOS', 'release': '5.11'}
+-- uname |   NetBSD   9.3␣␣
+   parsed                 {'id': 'netbsd', 'name': 'NetBSD', 'release': '9.3'}
+-- uname | HP-UX B.11.31
+   parsed                 {}
+-- uname | ∅
+   parsed                 {}
+# The command line.
+-- cli | --root-dir | data/roots/ubuntu2204
+Name: Ubuntu 22.04.3 LTS
+Version: 22.04 (jammy)
+Codename: jammy
+-- cli | -r | data/roots/centos5
+Name: CentOS 5.11 (Final)
+Version: 5.11 (Final)
+Codename: Final
+-- cli | --json | --root-dir | data/roots/fedora39
+{
+    "codename": "",
+    "id": "fedora",
+    "like": "",
+    "version": "39",
+    "version_parts": {
+        "build_number": "",
+        "major": "39",
+        "minor": ""
+    }
+}
+-- cli | -j | -r | data/roots/quirky
+{
+    "codename": "caf\u00e9",
+    "id": "quirky_linux",
+    "like": "suse    debian",
+    "version": "",
+    "version_parts": {
+        "build_number": "",
+        "major": "",
+        "minor": ""
+    }
+}
+-- cli | -r | data/roots/empty | -j
+{
+    "codename": "",
+    "id": "",
+    "like": "",
+    "version": "",
+    "version_parts": {
+        "build_number": "",
+        "major": "",
+        "minor": ""
+    }
+}
+-- cli | --root-dir=data/roots/sles12
+Name: SUSE Linux Enterprise Server 12 (x86_64)
+Version: 12 (x86_64)
+Codename: x86_64
+-- cli | -jr | data/roots/mint21
+{
+    "codename": "victoria",
+    "id": "linuxmint",
+    "like": "ubuntu debian",
+    "version": "21.2",
+    "version_parts": {
+        "build_number": "",
+        "major": "21",
+        "minor": "2"
+    }
+}
