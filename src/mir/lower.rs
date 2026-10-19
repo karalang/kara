@@ -15493,11 +15493,12 @@ const NET_WORDS: &[&str] = &[
 /// from the baked legacy ones the checker otherwise registers
 /// (B-2026-10-15-6, B-2026-10-15-18, B-2026-10-14-63).
 pub fn uses_v2_library_module(src: &str) -> bool {
+    let ours = declared_names(src);
     BAKED_SOURCES
         .iter()
         .filter(|(text, _, _)| [PROCESS_SOURCE, NET_SOURCE, REGEX_SOURCE].contains(text))
         .any(|(text, words, owners)| {
-            names_baked(src, words) && !defines_a_baked_type(src, text, owners)
+            names_baked(src, &ours, words) && !defines_a_baked_type(&ours, text, owners)
         })
 }
 
@@ -15555,12 +15556,21 @@ fn stores_argument(method: &str) -> bool {
 /// `owners`, when there are any). A program with its own `Command` or
 /// `Message` means its own, and appending the library's would define the
 /// name twice.
-fn defines_a_baked_type(src: &str, baked: &str, owners: &[&str]) -> bool {
-    let ours = declared_names(src);
+fn defines_a_baked_type(ours: &[String], baked: &str, owners: &[&str]) -> bool {
     if !owners.is_empty() {
         return owners.iter().any(|n| ours.iter().any(|o| o == n));
     }
     declared_names(baked).iter().any(|n| ours.contains(n))
+}
+
+/// `s` without any leading run of `prefix`, as `trim_start_matches` would
+/// give, without building a substring searcher for each call (these run per
+/// line of the program, per baked module).
+fn strip_repeated<'a>(mut s: &'a str, prefix: &str) -> &'a str {
+    while let Some(rest) = s.strip_prefix(prefix) {
+        s = rest;
+    }
+    s
 }
 
 /// The types, resources and top-level functions `text` declares.
@@ -15570,11 +15580,9 @@ fn declared_names(text: &str) -> Vec<String> {
         // A top-level function counts too (`tracing.kara`'s `with_span`),
         // where a method's name does not.
         let top = !line.starts_with(char::is_whitespace);
-        let line = line
-            .trim_start()
-            .trim_start_matches("pub ")
-            .trim_start_matches("shared ")
-            .trim_start_matches("effect ");
+        let line = strip_repeated(line.trim_start(), "pub ");
+        let line = strip_repeated(line, "shared ");
+        let line = strip_repeated(line, "effect ");
         let fun = ["fn "];
         let kinds = ["struct ", "enum ", "trait ", "type ", "resource "];
         for kw in kinds.iter().chain(if top { &fun[..] } else { &[] }) {
@@ -15596,8 +15604,7 @@ fn declared_names(text: &str) -> Vec<String> {
 /// that it does not declare itself. A tree's own `struct Child` is not a
 /// use of `std.process`, where a program that builds the library's `Child`
 /// without a `Command` is one.
-fn names_baked(src: &str, words: &[&str]) -> bool {
-    let ours = declared_names(src);
+fn names_baked(src: &str, ours: &[String], words: &[&str]) -> bool {
     words
         .iter()
         .any(|w| src.contains(w) && !ours.iter().any(|o| o == w))
@@ -15637,13 +15644,14 @@ pub fn library_source(src: &str) -> (String, usize) {
     let (renamed, _) = rename_compiler_name_shadows(src);
     let src = renamed.as_str();
     let user_len = src.len();
+    let ours = declared_names(src);
     // Baked modules whose bodies are Kāra, for a program that names them
     // (`#[derive(Message)]`'s `encode` / `decode` call `std.protobuf`), as
     // `PriorityQueue`'s is appended. Most programs do not, and they are long.
     let baked: Vec<&str> = BAKED_SOURCES
         .iter()
         .filter(|(text, words, owners)| {
-            names_baked(src, words) && !defines_a_baked_type(src, text, owners)
+            names_baked(src, &ours, words) && !defines_a_baked_type(&ours, text, owners)
         })
         .map(|(text, _, _)| *text)
         .collect();
@@ -15693,14 +15701,20 @@ const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
 /// its own type's (B-2026-10-15-41). The new name is as long as the old,
 /// so every span stays where it was.
 pub fn rename_compiler_name_shadows(src: &str) -> (String, Vec<(String, String)>) {
+    let lines: Vec<&str> = src
+        .lines()
+        .map(|line| strip_repeated(strip_repeated(line, "pub "), "shared "))
+        .filter(|line| {
+            ["struct ", "enum ", "type ", "trait "]
+                .iter()
+                .any(|kw| line.starts_with(kw))
+        })
+        .collect();
     let declared: Vec<&str> = TYPES_THE_COMPILER_SPELLS
         .iter()
         .copied()
         .filter(|name| {
-            src.lines().any(|line| {
-                let line = line
-                    .trim_start_matches("pub ")
-                    .trim_start_matches("shared ");
+            lines.iter().any(|line| {
                 ["struct ", "enum ", "type ", "trait "].iter().any(|kw| {
                     line.strip_prefix(kw).is_some_and(|rest| {
                         rest.strip_prefix(name).is_some_and(|after| {

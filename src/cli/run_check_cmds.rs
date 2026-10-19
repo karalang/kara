@@ -2258,10 +2258,11 @@ pub(super) fn cmd_check(
                 .with_library();
             pipeline.run_all_checks();
 
-            // Slice D: concurrency report fires after `run_all_checks` (which
-            // already runs `concurrencycheck()`) and before the final OK /
-            // error summary so the report sits with the rest of stdout.
+            // Slice D: concurrency report fires after `run_all_checks` and
+            // before the final OK / error summary so the report sits with the
+            // rest of stdout. Only the report needs the analysis.
             if concurrency_report {
+                pipeline.concurrencycheck();
                 emit_concurrency_report(&pipeline);
             }
             // SIMD lowering report (slice 5b) — same render-side placement.

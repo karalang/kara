@@ -1293,36 +1293,42 @@ impl<'a> super::TypeChecker<'a> {
             // impls participate; specialized impls (`impl Foo for
             // Bar[i32]`) need an args-aware path-expr lookup that this
             // site doesn't carry.
-            for imp in &self.env.impls.clone() {
-                if imp.target_type == *type_name && imp.target_args.is_empty() {
-                    if let Some(sig) = imp.methods.get(member) {
-                        // Phase-8 line 96 — associated-function use-site
-                        // stability lint (`Server.serve_static(...)` and any
-                        // other `Type.method(...)` assoc call). This path
-                        // never touches `method_callee_types`, so the check
-                        // keys directly off the resolved `(type_name, member)`.
-                        self.check_method_stability(type_name, member, span);
-                        // `fn new() -> Self` in an inherent impl: `Self` names
-                        // the impl target here as it does in the body, written
-                        // with the impl's own params (`Pair[T]`), the same
-                        // shape a spelled-out `-> Pair[T]` lowers to.
-                        let target = Type::Named {
-                            name: type_name.clone(),
-                            args: imp.target_generic_args.clone(),
-                        };
-                        return Type::Function {
-                            params: sig
-                                .params
-                                .iter()
-                                .map(|p| Self::resolve_self_in_type(p.clone(), &target))
-                                .collect(),
-                            return_type: Box::new(Self::resolve_self_in_type(
-                                sig.return_type.clone(),
-                                &target,
-                            )),
-                        };
-                    }
-                }
+            // Find the impl first: the stability check below needs `&mut
+            // self`, and cloning every impl to get there was most of this
+            // function's time.
+            let found = self.env.impls.iter().position(|imp| {
+                imp.target_type == *type_name
+                    && imp.target_args.is_empty()
+                    && imp.methods.contains_key(member)
+            });
+            if let Some(i) = found {
+                let target_generic_args = self.env.impls[i].target_generic_args.clone();
+                let sig = self.env.impls[i].methods[member].clone();
+                // Phase-8 line 96 — associated-function use-site
+                // stability lint (`Server.serve_static(...)` and any
+                // other `Type.method(...)` assoc call). This path
+                // never touches `method_callee_types`, so the check
+                // keys directly off the resolved `(type_name, member)`.
+                self.check_method_stability(type_name, member, span);
+                // `fn new() -> Self` in an inherent impl: `Self` names
+                // the impl target here as it does in the body, written
+                // with the impl's own params (`Pair[T]`), the same
+                // shape a spelled-out `-> Pair[T]` lowers to.
+                let target = Type::Named {
+                    name: type_name.clone(),
+                    args: target_generic_args,
+                };
+                return Type::Function {
+                    params: sig
+                        .params
+                        .iter()
+                        .map(|p| Self::resolve_self_in_type(p.clone(), &target))
+                        .collect(),
+                    return_type: Box::new(Self::resolve_self_in_type(
+                        sig.return_type.clone(),
+                        &target,
+                    )),
+                };
             }
 
             // Module-path free functions registered as "module.fn" in the

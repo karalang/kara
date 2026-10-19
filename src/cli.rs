@@ -200,8 +200,8 @@ pub enum Command {
         platforms: Option<Vec<crate::walker::Platform>>,
         /// `--concurrency-report` (Slice D, 2026-05-08): also emit the
         /// human-readable concurrency analysis to stdout after checks
-        /// complete. Already runs `concurrencycheck()` via
-        /// `Pipeline::run_all_checks`, so wiring is purely render-side.
+        /// complete. `Pipeline::run_all_checks` does not run
+        /// `concurrencycheck()`, so `cmd_check` runs it for the report.
         concurrency_report: bool,
         /// `--simd-report=verbose` (phase-7-codegen.md line 308, slice 5b):
         /// also emit the per-function SIMD lowering-tier report to stdout
@@ -1984,7 +1984,10 @@ impl Pipeline {
         self.drop_library_diagnostics();
         self.ownershipcheck();
         self.drop_library_diagnostics();
-        self.concurrencycheck();
+        // No `concurrencycheck` here: the auto-par analysis reports no
+        // diagnostics, and on a large program it was a third of check's time.
+        // The paths that read it (build, run, query, `--concurrency-report`)
+        // run it themselves.
         self.provider_escape_check();
         self.raii_check();
         self.simd_check();
