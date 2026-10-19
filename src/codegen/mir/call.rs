@@ -807,9 +807,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 // the length (a fill to a constant count) at the call.
                 let lenp = self.offset(v, 8)?;
                 let len = self.load_i64(lenp)?;
-                self.if_then(pos, |cx| {
-                    cx.rt("vec_reserve", &[v.into(), n.into(), cx.i64(size).into()])
-                })?;
+                self.if_then(pos, |cx| cx.reserve_via_copy(v, n, cx.i64(size)))?;
                 self.store(lenp, len.into())
             }
             ("Vec", "push") => {

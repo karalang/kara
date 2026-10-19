@@ -65,9 +65,8 @@ impl<'ctx> Cx<'ctx, '_> {
     }
 
     /// Grow the `Vec` or `String` at `v` (holding `len` of `cap`) by one
-    /// `size`-byte element, through a copy of its header: the runtime
-    /// never sees `v` itself, so a local's header stays in registers and
-    /// LLVM keeps what it knows of its length across the push.
+    /// `size`-byte element: [`Self::reserve_via_copy`] with the header
+    /// already loaded.
     pub(super) fn grow_by_one(
         &mut self,
         v: PointerValue<'ctx>,
@@ -75,14 +74,40 @@ impl<'ctx> Cx<'ctx, '_> {
         cap: IntValue<'ctx>,
         size: u64,
     ) -> R<()> {
+        let ptr = self.load_ptr(v)?;
+        self.reserve_header(v, ptr, len, cap, self.i64(1), self.i64(size))
+    }
+
+    /// `karac_mir_vec_reserve` on a copy of the header at `v`, with the
+    /// pointer and capacity stored back. The runtime never sees `v`
+    /// itself, so a local's header stays in registers and LLVM keeps
+    /// what it knows of its length across the call.
+    pub(super) fn reserve_via_copy(
+        &mut self,
+        v: PointerValue<'ctx>,
+        more: IntValue<'ctx>,
+        size: IntValue<'ctx>,
+    ) -> R<()> {
+        let ptr = self.load_ptr(v)?;
+        let len = self.load_i64(self.offset(v, 8)?)?;
+        let cap = self.load_i64(self.offset(v, 16)?)?;
+        self.reserve_header(v, ptr, len, cap, more, size)
+    }
+
+    fn reserve_header(
+        &mut self,
+        v: PointerValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+        more: IntValue<'ctx>,
+        size: IntValue<'ctx>,
+    ) -> R<()> {
         let tmp = self.entry_slot(24, "grow")?;
-        self.store(tmp, self.load_ptr(v)?.into())?;
+        self.store(tmp, ptr.into())?;
         self.store(self.offset(tmp, 8)?, len.into())?;
         self.store(self.offset(tmp, 16)?, cap.into())?;
-        self.rt(
-            "vec_reserve",
-            &[tmp.into(), self.i64(1).into(), self.i64(size).into()],
-        )?;
+        self.rt("vec_reserve", &[tmp.into(), more.into(), size.into()])?;
         self.store(v, self.load_ptr(tmp)?.into())?;
         let cap = self.load_i64(self.offset(tmp, 16)?)?;
         self.store(self.offset(v, 16)?, cap.into())
@@ -1177,10 +1202,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .map_err(e)?;
                 self.abort_unless(ok, "index out of bounds")?;
                 let v = self.ref_arg(recv)?;
-                self.rt(
-                    "vec_reserve",
-                    &[v.into(), self.i64(1).into(), self.i64(size).into()],
-                )?;
+                self.reserve_via_copy(v, self.i64(1), self.i64(size))?;
                 let buf = self.load_ptr(v)?;
                 let at = self.elem_ptr(buf, i, size)?;
                 let rest = self.builder.build_int_sub(n, i, "").map_err(e)?;
@@ -1209,7 +1231,7 @@ impl<'ctx> Cx<'ctx, '_> {
             ("extend_from_slice", [other]) if is_vec => {
                 let (op, on, _) = self.view_parts(other)?;
                 let v = self.ref_arg(recv)?;
-                self.rt("vec_reserve", &[v.into(), on.into(), self.i64(size).into()])?;
+                self.reserve_via_copy(v, on, self.i64(size))?;
                 let buf = self.load_ptr(v)?;
                 let end = self.elem_ptr(buf, n, size)?;
                 self.clone_seq(end, op, on, el)?;
@@ -1231,7 +1253,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 let op = self.load_ptr(q)?;
                 let on = self.load_i64(self.offset(q, 8)?)?;
                 let v = self.ref_arg(recv)?;
-                self.rt("vec_reserve", &[v.into(), on.into(), self.i64(size).into()])?;
+                self.reserve_via_copy(v, on, self.i64(size))?;
                 let buf = self.load_ptr(v)?;
                 let end = self.elem_ptr(buf, n, size)?;
                 let bytes = self
@@ -1364,10 +1386,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 }
                 let grow = self.builder.build_int_sub(want, from, "").map_err(e)?;
                 let v = self.ref_arg(recv)?;
-                self.rt(
-                    "vec_reserve",
-                    &[v.into(), grow.into(), self.i64(size).into()],
-                )?;
+                self.reserve_via_copy(v, grow, self.i64(size))?;
                 let buf = self.load_ptr(v)?;
                 let vp = self.operand_ptr(val)?;
                 let moved = matches!(val, Operand::Move(_)) && self.tys.needs_drop(el);
@@ -1528,9 +1547,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
                     .map_err(e)?;
                 let v = self.ref_arg(recv)?;
-                self.if_then(pos, |cx| {
-                    cx.rt("vec_reserve", &[v.into(), k.into(), cx.i64(size).into()])
-                })?;
+                self.if_then(pos, |cx| cx.reserve_via_copy(v, k, cx.i64(size)))?;
             }
             ("try_reserve" | "try_reserve_exact", [k]) if is_vec => {
                 // Allocation failure aborts, so the request always succeeds.
@@ -1540,9 +1557,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_int_compare(IntPredicate::SGT, k, self.i64(0), "")
                     .map_err(e)?;
                 let v = self.ref_arg(recv)?;
-                self.if_then(pos, |cx| {
-                    cx.rt("vec_reserve", &[v.into(), k.into(), cx.i64(size).into()])
-                })?;
+                self.if_then(pos, |cx| cx.reserve_via_copy(v, k, cx.i64(size)))?;
                 let ok = self.variant_of(dty, "Ok")?;
                 let d = self.place_ptr(dest)?;
                 self.store_tag(d, dty, ok)?;
