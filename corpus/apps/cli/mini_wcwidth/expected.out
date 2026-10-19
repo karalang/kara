@@ -1,0 +1,2440 @@
+wcwidth 0.2.13, Unicode 4.1.0, 5.0.0, 5.1.0, 5.2.0, 6.0.0, 6.1.0, 6.2.0, 6.3.0, 7.0.0, 8.0.0, 9.0.0, 10.0.0, 11.0.0, 12.0.0, 12.1.0, 13.0.0, 14.0.0, 15.0.0, 15.1.0
+job 1: wcwidth version='4.1.0'
+  '҇' 1
+  '᪹' 1
+  'ⷨ' 1
+  'ꨯ' 1
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 1
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 2: wcwidth version='4.1.0'
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 1
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 1
+  '👨' 1
+  '💻' 1
+  '😀' 1
+  '🛗' 1
+  '🤌' 1
+  '🩰' 1
+  '🫨' 1
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 3: wcwidth version='5.0.0'
+  '҇' 1
+  '᪹' 1
+  'ⷨ' 1
+  'ꨯ' 1
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 1
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 4: wcwidth version='5.1.0'
+  '҇' 0
+  '᪹' 1
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 1
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 5: wcwidth version='5.2.0'
+  '҇' 0
+  '᪹' 1
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 6: wcwidth version='5.2.0'
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 1
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 1
+  '👨' 1
+  '💻' 1
+  '😀' 1
+  '🛗' 1
+  '🤌' 1
+  '🩰' 1
+  '🫨' 1
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 7: wcwidth version='6.0.0'
+  '҇' 0
+  '᪹' 1
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 8: wcwidth version='6.1.0'
+  '҇' 0
+  '᪹' 1
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 9: wcwidth version='6.2.0'
+  '҇' 0
+  '᪹' 1
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 10: wcwidth version='6.2.0'
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 1
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 1
+  '👨' 1
+  '💻' 1
+  '😀' 1
+  '🛗' 1
+  '🤌' 1
+  '🩰' 1
+  '🫨' 1
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 11: wcwidth version='6.3.0'
+  '҇' 0
+  '᪹' 1
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 12: wcwidth version='7.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 13: wcwidth version='8.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+  '𗜎' 1
+  '𗠢' 1
+  '𗤶' 1
+  '𗩊' 1
+  '𗭞' 1
+  '𗱲' 1
+  '𗶆' 1
+  '𗺚' 1
+  '𗾮' 1
+  '𘃂' 1
+  '𘇖' 1
+  '𘋪' 1
+  '𘏾' 1
+  '𘔒' 1
+  '𘘦' 1
+  '𘜺' 1
+  '𘡖' 1
+  '𘥪' 1
+  '𘩾' 1
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 1
+  '🕠' 1
+  '🥖' 1
+job 14: wcwidth version='8.0.0'
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 1
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 1
+  '👨' 1
+  '💻' 1
+  '😀' 1
+  '🛗' 1
+  '🤌' 1
+  '🩰' 1
+  '🫨' 1
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 15: wcwidth version='9.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 1
+  '𛈦' 1
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 16: wcwidth version='10.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 17: wcwidth version='11.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 18: wcwidth version='11.0.0'
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 2
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 2
+  '👨' 2
+  '💻' 2
+  '😀' 2
+  '🛗' 1
+  '🤌' 1
+  '🩰' 1
+  '🫨' 1
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 19: wcwidth version='12.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 20: wcwidth version='12.1.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 1
+  '𘲦' 1
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 21: wcwidth version='13.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 2
+  '𘲦' 2
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 1
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 22: wcwidth version='13.0.0'
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 2
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 2
+  '👨' 2
+  '💻' 2
+  '😀' 2
+  '🛗' 2
+  '🤌' 2
+  '🩰' 2
+  '🫨' 1
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 23: wcwidth version='14.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 2
+  '𘲦' 2
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 0
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 24: wcwidth version='15.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 0
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 2
+  '𘲦' 2
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 0
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 25: wcwidth version='15.1.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 0
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+  '𗜎' 2
+  '𗠢' 2
+  '𗤶' 2
+  '𗩊' 2
+  '𗭞' 2
+  '𗱲' 2
+  '𗶆' 2
+  '𗺚' 2
+  '𗾮' 2
+  '𘃂' 2
+  '𘇖' 2
+  '𘋪' 2
+  '𘏾' 2
+  '𘔒' 2
+  '𘘦' 2
+  '𘜺' 2
+  '𘡖' 2
+  '𘥪' 2
+  '𘩾' 2
+  '𘮒' 2
+  '𘲦' 2
+  '𛃎' 2
+  '𛈦' 2
+  '𜼺' 0
+  '🉇' 2
+  '🐺' 2
+  '🕠' 2
+  '🥖' 2
+job 26: wcwidth version='15.1.0'
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 2
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 2
+  '👨' 2
+  '💻' 2
+  '😀' 2
+  '🛗' 2
+  '🤌' 2
+  '🩰' 2
+  '🫨' 2
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 27: wcwidth
+  '\x00' 0
+  '\x01' -1
+  '\x1f' -1
+  ' ' 1
+  'A' 1
+  '~' 1
+  '\x7f' -1
+  '\x80' -1
+  '\x9f' -1
+  '\xa0' 1
+  '\xad' 0
+  'é' 1
+  '̀' 0
+  '҃' 0
+  '҈' 0
+  'ֿ' 0
+  '\u0600' 0
+  'ः' 0
+  'ᄀ' 2
+  'ᅟ' 2
+  'ᅠ' 0
+  'ᇿ' 0
+  '\u200b' 0
+  '\u200c' 0
+  '\u200d' 0
+  '\u200e' 0
+  '\u2028' 0
+  '\u2060' 0
+  '⌚' 2
+  '〈' 2
+  '❤' 1
+  '\u3000' 2
+  'ぁ' 2
+  '〿' 1
+  '中' 2
+  'ꓐ' 1
+  '가' 2
+  '힣' 2
+  'ힰ' 0
+  '️' 0
+  '︐' 2
+  '\ufeff' 0
+  '！' 2
+  '｡' 1
+  '￠' 2
+  '🇯' 1
+  '🌀' 2
+  '👨' 2
+  '💻' 2
+  '😀' 2
+  '🛗' 2
+  '🤌' 2
+  '🩰' 2
+  '🫨' 2
+  '𠀀' 2
+  '\U0002fffd' 2
+  '𰀀' 2
+  '\U000e0001' 0
+  '󠄀' 0
+  '\U000f0000' 1
+  '\U0010fffd' 1
+job 28: wcwidth env='9.0.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 1
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+job 29: wcwidth version='auto' env='5.0'
+  '҇' 1
+  '᪹' 1
+  'ⷨ' 1
+  'ꨯ' 1
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+job 30: wcwidth version='latest' env='4.1.0'
+  '҇' 0
+  '᪹' 0
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 0
+  '𑼀' 0
+  '𗂖' 2
+  '𗆪' 2
+  '𗊾' 2
+  '𗏒' 2
+  '𗓦' 2
+  '𗗺' 2
+job 31: wcwidth version='6.2.9'
+  '҇' 0
+  '᪹' 1
+  'ⷨ' 0
+  'ꨯ' 0
+  '𑐺' 1
+  '𑼀' 1
+  '𗂖' 1
+  '𗆪' 1
+  '𗊾' 1
+  '𗏒' 1
+  '𗓦' 1
+  '𗗺' 1
+job 32: wcwidth version='2'
+  'a' 1
+  '中' 2
+    warning: UNICODE_VERSION value, '2', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  '̀' 0
+  '中' 2
+  '́' 0
+job 33: wcwidth version='nine'
+  'b' 1
+  '中' 2
+    warning: UNICODE_VERSION value, 'nine', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '́' 0
+  '中' 2
+job 34: wcwidth version='nine'
+  'c' 1
+  'd' 1
+  '\x07' -1
+  '\x9b' -1
+job 35: wcwidth
+  '' 0
+  'ab' TypeError: ord() expected a character, but string of length 2 found
+  '中文' TypeError: ord() expected a character, but string of length 2 found
+  'é' TypeError: ord() expected a character, but string of length 2 found
+job 36: match
+  '4.1.0' -> '4.1.0'
+  '5.0.0' -> '5.0.0'
+  '15.1.0' -> '15.1.0'
+  '8.0' -> '8.0.0'
+  '8' -> '8.0.0'
+  '4.9.9' -> '4.1.0'
+  '1' -> '4.1.0'
+    warning: UNICODE_VERSION value, '1', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+job 37: match
+  '4.1' -> '4.1.0'
+    warning: UNICODE_VERSION value, '4.1', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  '4.0.9' -> '4.1.0'
+    warning: UNICODE_VERSION value, '4.0.9', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  '5' -> '5.0.0'
+  '12' -> '12.0.0'
+  '12.1' -> '12.1.0'
+  '15' -> '15.0.0'
+  '16' -> '15.1.0'
+job 38: match
+  '16.0.0' -> '15.1.0'
+  '99.0' -> '15.1.0'
+  '6.2.5' -> '6.2.0'
+  '9.0.0.1' -> '9.0.0'
+  '9.0.0.0' -> '9.0.0'
+  '10.0' -> '10.0.0'
+  '10.0.0.0.0' -> '10.0.0'
+job 39: match
+  'latest' -> '15.1.0'
+  'auto' -> '15.1.0'
+  'LATEST' -> '15.1.0'
+    warning: UNICODE_VERSION value, 'LATEST', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '' -> '15.1.0'
+    warning: UNICODE_VERSION value, '', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  ' 8.0' -> '8.0.0'
+  '8.0 ' -> '8.0.0'
+  '\u3000 9 .0' -> '9.0.0'
+job 40: match
+  '８.0.0' -> '8.0.0'
+  '٨.٠' -> '8.0.0'
+  '8_0.0' -> '15.1.0'
+  '1_0.0.0' -> '10.0.0'
+  '8__0' -> '15.1.0'
+    warning: UNICODE_VERSION value, '8__0', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '+8.0' -> '8.0.0'
+  '-1' -> '4.1.0'
+    warning: UNICODE_VERSION value, '-1', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+job 41: match
+  '0.0.0' -> '4.1.0'
+    warning: UNICODE_VERSION value, '0.0.0', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  '-0' -> '4.1.0'
+    warning: UNICODE_VERSION value, '-0', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  '8.-1' -> '7.0.0'
+  'x.y' -> '15.1.0'
+    warning: UNICODE_VERSION value, 'x.y', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '8.0a' -> '15.1.0'
+    warning: UNICODE_VERSION value, '8.0a', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '.8' -> '15.1.0'
+    warning: UNICODE_VERSION value, '.8', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '8.' -> '15.1.0'
+    warning: UNICODE_VERSION value, '8.', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+job 42: match
+  '1e3' -> '15.1.0'
+    warning: UNICODE_VERSION value, '1e3', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '௪.1' -> '4.1.0'
+    warning: UNICODE_VERSION value, '௪.1', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  '5.१' -> '5.1.0'
+  '0x9' -> '15.1.0'
+    warning: UNICODE_VERSION value, '0x9', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '15.1.0 ' -> '15.1.0'
+  '15.0.0.0' -> '15.0.0'
+  '15.0.1' -> '15.0.0'
+job 43: match
+  '14.9' -> '14.0.0'
+  '11.0.0' -> '11.0.0'
+  '11.00.000' -> '11.0.0'
+  '011' -> '11.0.0'
+  '4.1.0' -> '4.1.0'
+  '\x00' -> '15.1.0'
+    warning: UNICODE_VERSION value, '\x00', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '8.0\n' -> '8.0.0'
+job 44: match env='12.1'
+  'auto' -> '12.1.0'
+  'latest' -> '15.1.0'
+  'auto' -> '12.1.0'
+job 45: match env=''
+  'auto' -> '15.1.0'
+    warning: UNICODE_VERSION value, '', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '8.0' -> '8.0.0'
+job 46: match env='auto'
+  'auto' -> '15.1.0'
+    warning: UNICODE_VERSION value, 'auto', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+job 47: match env='latest'
+  'auto' -> '15.1.0'
+job 48: match env=' 7'
+  'auto' -> '7.0.0'
+  '7.0.0' -> '7.0.0'
+job 49: match env='0.5'
+  'auto' -> '4.1.0'
+    warning: UNICODE_VERSION value, '0.5', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  'auto' -> '4.1.0'
+job 50: wcswidth version='latest'
+  '' 0
+  'hello' 5
+  'hello, world' 12
+  '中文字' 6
+  'こんにちは' 10
+  'ﾊﾝｶｸ' 4
+  'ＡＢＣ' 6
+  'é́' 1
+  'क्ष' 2
+  '각' 2
+  '각' 2
+  'กำ' 2
+  'العربية' 7
+  'שָׁלוֹם' 4
+  'tab\there' -1
+  'bell\x07' -1
+  'csi\x9b' -1
+  'nul\x00x' 4
+  '\x7f' -1
+  'soft\xadhyphen' 10
+  'zero\u200bwidth' 9
+  '\u200d' 0
+  'a\u200d' 1
+  '\u200da' 0
+  '\u200d\u200d' 0
+  'a\u200d\u200db' 2
+  '👩\u200d💻' 2
+  '👨\u200d👩\u200d👧\u200d👦' 2
+  '👍🏽' 2
+  '❤️' 2
+  '❤' 1
+  '️' 0
+  'a️' 1
+  '#️⃣' 2
+  '1️' 2
+  '©️' 2
+  '❤️️' 2
+  '中️' 2
+  '́️' 0
+  '❤\u200d️' 1
+  '❤́️' 2
+  '🇯🇵' 2
+  '🏳️\u200d🌈' 2
+  '⌚' 2
+  '☕' 2
+  '🛗' 2
+  '🫨' 2
+  '𠀀𪛖' 4
+  '\ue000' 1
+  '\U000e0001\U000e0041' 0
+  '\u2028' 0
+  '\ufeffbom' 3
+  '\u3000\u3000' 4
+  '⺀' 2
+  '〿' 1
+job 51: wcswidth version='8.0.0'
+  '' 0
+  'hello' 5
+  'hello, world' 12
+  '中文字' 6
+  'こんにちは' 10
+  'ﾊﾝｶｸ' 4
+  'ＡＢＣ' 6
+  'é́' 1
+  'क्ष' 2
+  '각' 2
+  '각' 2
+  'กำ' 2
+  'العربية' 7
+  'שָׁלוֹם' 4
+  'tab\there' -1
+  'bell\x07' -1
+  'csi\x9b' -1
+  'nul\x00x' 4
+  '\x7f' -1
+  'soft\xadhyphen' 10
+  'zero\u200bwidth' 9
+  '\u200d' 0
+  'a\u200d' 1
+  '\u200da' 0
+  '\u200d\u200d' 0
+  'a\u200d\u200db' 2
+  '👩\u200d💻' 1
+  '👨\u200d👩\u200d👧\u200d👦' 1
+  '👍🏽' 1
+  '❤️' 1
+  '❤' 1
+  '️' 0
+  'a️' 1
+  '#️⃣' 1
+  '1️' 1
+  '©️' 1
+  '❤️️' 1
+  '中️' 2
+  '́️' 0
+  '❤\u200d️' 1
+  '❤́️' 1
+  '🇯🇵' 2
+  '🏳️\u200d🌈' 1
+  '⌚' 1
+  '☕' 1
+  '🛗' 1
+  '🫨' 1
+  '𠀀𪛖' 4
+  '\ue000' 1
+  '\U000e0001\U000e0041' 0
+  '\u2028' 0
+  '\ufeffbom' 3
+  '\u3000\u3000' 4
+  '⺀' 2
+  '〿' 1
+job 52: wcswidth version='9.0.0'
+  '' 0
+  'hello' 5
+  'hello, world' 12
+  '中文字' 6
+  'こんにちは' 10
+  'ﾊﾝｶｸ' 4
+  'ＡＢＣ' 6
+  'é́' 1
+  'क्ष' 2
+  '각' 2
+  '각' 2
+  'กำ' 2
+  'العربية' 7
+  'שָׁלוֹם' 4
+  'tab\there' -1
+  'bell\x07' -1
+  'csi\x9b' -1
+  'nul\x00x' 4
+  '\x7f' -1
+  'soft\xadhyphen' 10
+  'zero\u200bwidth' 9
+  '\u200d' 0
+  'a\u200d' 1
+  '\u200da' 0
+  '\u200d\u200d' 0
+  'a\u200d\u200db' 2
+  '👩\u200d💻' 2
+  '👨\u200d👩\u200d👧\u200d👦' 2
+  '👍🏽' 2
+  '❤️' 2
+  '❤' 1
+  '️' 0
+  'a️' 1
+  '#️⃣' 2
+  '1️' 2
+  '©️' 2
+  '❤️️' 2
+  '中️' 2
+  '́️' 0
+  '❤\u200d️' 1
+  '❤́️' 2
+  '🇯🇵' 2
+  '🏳️\u200d🌈' 2
+  '⌚' 2
+  '☕' 2
+  '🛗' 1
+  '🫨' 1
+  '𠀀𪛖' 4
+  '\ue000' 1
+  '\U000e0001\U000e0041' 0
+  '\u2028' 0
+  '\ufeffbom' 3
+  '\u3000\u3000' 4
+  '⺀' 2
+  '〿' 1
+job 53: wcswidth version='13.0.0'
+  '' 0
+  'hello' 5
+  'hello, world' 12
+  '中文字' 6
+  'こんにちは' 10
+  'ﾊﾝｶｸ' 4
+  'ＡＢＣ' 6
+  'é́' 1
+  'क्ष' 2
+  '각' 2
+  '각' 2
+  'กำ' 2
+  'العربية' 7
+  'שָׁלוֹם' 4
+  'tab\there' -1
+  'bell\x07' -1
+  'csi\x9b' -1
+  'nul\x00x' 4
+  '\x7f' -1
+  'soft\xadhyphen' 10
+  'zero\u200bwidth' 9
+  '\u200d' 0
+  'a\u200d' 1
+  '\u200da' 0
+  '\u200d\u200d' 0
+  'a\u200d\u200db' 2
+  '👩\u200d💻' 2
+  '👨\u200d👩\u200d👧\u200d👦' 2
+  '👍🏽' 2
+  '❤️' 2
+  '❤' 1
+  '️' 0
+  'a️' 1
+  '#️⃣' 2
+  '1️' 2
+  '©️' 2
+  '❤️️' 2
+  '中️' 2
+  '́️' 0
+  '❤\u200d️' 1
+  '❤́️' 2
+  '🇯🇵' 2
+  '🏳️\u200d🌈' 2
+  '⌚' 2
+  '☕' 2
+  '🛗' 2
+  '🫨' 1
+  '𠀀𪛖' 4
+  '\ue000' 1
+  '\U000e0001\U000e0041' 0
+  '\u2028' 0
+  '\ufeffbom' 3
+  '\u3000\u3000' 4
+  '⺀' 2
+  '〿' 1
+job 54: wcswidth version='5.0.0'
+  '' 0
+  'hello' 5
+  'hello, world' 12
+  '中文字' 6
+  'こんにちは' 10
+  'ﾊﾝｶｸ' 4
+  'ＡＢＣ' 6
+  'é́' 1
+  'क्ष' 2
+  '각' 2
+  '각' 2
+  'กำ' 2
+  'العربية' 7
+  'שָׁלוֹם' 4
+  'tab\there' -1
+  'bell\x07' -1
+  'csi\x9b' -1
+  'nul\x00x' 4
+  '\x7f' -1
+  'soft\xadhyphen' 10
+  'zero\u200bwidth' 9
+  '\u200d' 0
+  'a\u200d' 1
+  '\u200da' 0
+  '\u200d\u200d' 0
+  'a\u200d\u200db' 2
+  '👩\u200d💻' 1
+  '👨\u200d👩\u200d👧\u200d👦' 1
+  '👍🏽' 2
+  '❤️' 1
+  '❤' 1
+  '️' 0
+  'a️' 1
+  '#️⃣' 1
+  '1️' 1
+  '©️' 1
+  '❤️️' 1
+  '中️' 2
+  '́️' 0
+  '❤\u200d️' 1
+  '❤́️' 1
+  '🇯🇵' 2
+  '🏳️\u200d🌈' 1
+  '⌚' 1
+  '☕' 1
+  '🛗' 1
+  '🫨' 1
+  '𠀀𪛖' 4
+  '\ue000' 1
+  '\U000e0001\U000e0041' 0
+  '\u2028' 0
+  '\ufeffbom' 3
+  '\u3000\u3000' 4
+  '⺀' 2
+  '〿' 1
+job 55: wcswidth version='4.1'
+  '' 0
+  'hello' 5
+  'hello, world' 12
+  '中文字' 6
+    warning: UNICODE_VERSION value, '4.1', is lower than any available unicode version. Returning lowest version level, '4.1.0'
+  'こんにちは' 10
+  'ﾊﾝｶｸ' 4
+  'ＡＢＣ' 6
+  'é́' 1
+  'क्ष' 2
+  '각' 2
+  '각' 2
+  'กำ' 2
+  'العربية' 7
+  'שָׁלוֹם' 4
+  'tab\there' -1
+  'bell\x07' -1
+  'csi\x9b' -1
+  'nul\x00x' 4
+  '\x7f' -1
+  'soft\xadhyphen' 10
+job 56: wcswidth n=2
+  'hello' 2
+  '中文' 4
+  'a\u200d' 1
+job 57: wcswidth n=3
+  '中文字' 6
+  '❤️x' 3
+  'ab\x07c' -1
+job 58: wcswidth n=0
+  'abc' 0
+  '中文' 0
+job 59: wcswidth n=-2
+  'abc' 0
+  '中' 0
+job 60: wcswidth n=5
+  'abc' IndexError: string index out of range
+  'a\u200d' IndexError: string index out of range
+  'a\u200db' IndexError: string index out of range
+job 61: wcswidth n=1
+  'a\u200d' 1
+job 62: wcswidth version='nine'
+  'abc' 3
+  '❤️' 2
+    warning: UNICODE_VERSION value, 'nine', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+  '中' 2
+  '❤️' 2
+job 63: wcswidth version='7'
+  '❤️' 1
+  '中' 2
+job 64: wcswidth version='x'
+  'abc' 3
+  'ab\x01' -1
+  'é' 1
+    warning: UNICODE_VERSION value, 'x', is invalid. Value should be in form of `integer[.]+', the latest supported unicode version '15.1.0' has been inferred.
+job 65: columns file='files.txt' width=80
+  5 columns, 5 rows, widths [10, 11, 9, 27, 8]
+  |README.md   café.txt     사진       zero​space                    tmp
+  |説明書.txt  📁 projects  Makefile   日本語の長いファイル名.docx  ＡＢＣ
+  |写真        👩‍💻 code      bad?name   x.tar.gz                     build.sh
+  |notes       ❤️.png       الملف.pdf  🇯🇵 trip
+  |café.txt    ﾊﾝｶｸ.csv     a          ภาษาไทย
+job 66: columns file='files.txt' width=60
+  3 columns, 8 rows, widths [11, 9, 27]
+  |README.md    ❤️.png     日本語の長いファイル名.docx
+  |説明書.txt   ﾊﾝｶｸ.csv   x.tar.gz
+  |写真         사진       🇯🇵 trip
+  |notes        Makefile   ภาษาไทย
+  |café.txt     bad?name   tmp
+  |café.txt     الملف.pdf  ＡＢＣ
+  |📁 projects  a          build.sh
+  |👩‍💻 code      zero​space
+job 67: columns file='files.txt' width=40
+  2 columns, 12 rows, widths [11, 27]
+  |README.md    bad?name
+  |説明書.txt   الملف.pdf
+  |写真         a
+  |notes        zero​space
+  |café.txt     日本語の長いファイル名.docx
+  |café.txt     x.tar.gz
+  |📁 projects  🇯🇵 trip
+  |👩‍💻 code      ภาษาไทย
+  |❤️.png       tmp
+  |ﾊﾝｶｸ.csv     ＡＢＣ
+  |사진         build.sh
+  |Makefile
+job 68: columns file='files.txt' width=30
+  1 columns, 23 rows, widths [27]
+  |README.md
+  |説明書.txt
+  |写真
+  |notes
+  |café.txt
+  |café.txt
+  |📁 projects
+  |👩‍💻 code
+  |❤️.png
+  |ﾊﾝｶｸ.csv
+  |사진
+  |Makefile
+  |bad?name
+  |الملف.pdf
+  |a
+  |zero​space
+  |日本語の長いファイル名.docx
+  |x.tar.gz
+  |🇯🇵 trip
+  |ภาษาไทย
+  |tmp
+  |ＡＢＣ
+  |build.sh
+job 69: columns file='files.txt' width=20
+  1 columns, 23 rows, widths [27]
+  |README.md
+  |説明書.txt
+  |写真
+  |notes
+  |café.txt
+  |café.txt
+  |📁 projects
+  |👩‍💻 code
+  |❤️.png
+  |ﾊﾝｶｸ.csv
+  |사진
+  |Makefile
+  |bad?name
+  |الملف.pdf
+  |a
+  |zero​space
+  |日本語の長いファイル名.docx
+  |x.tar.gz
+  |🇯🇵 trip
+  |ภาษาไทย
+  |tmp
+  |ＡＢＣ
+  |build.sh
+job 70: columns file='files.txt' width=12
+  1 columns, 23 rows, widths [27]
+  |README.md
+  |説明書.txt
+  |写真
+  |notes
+  |café.txt
+  |café.txt
+  |📁 projects
+  |👩‍💻 code
+  |❤️.png
+  |ﾊﾝｶｸ.csv
+  |사진
+  |Makefile
+  |bad?name
+  |الملف.pdf
+  |a
+  |zero​space
+  |日本語の長いファイル名.docx
+  |x.tar.gz
+  |🇯🇵 trip
+  |ภาษาไทย
+  |tmp
+  |ＡＢＣ
+  |build.sh
+job 71: columns file='files_small.txt' width=40
+  3 columns, 2 rows, widths [10, 5, 8]
+  |README.md   写真   café.txt
+  |説明書.txt  notes  café.txt
+job 72: columns file='files_small.txt' width=8
+  1 columns, 6 rows, widths [10]
+  |README.md
+  |説明書.txt
+  |写真
+  |notes
+  |café.txt
+  |café.txt
+job 73: columns file='files_one.txt' width=10
+  1 columns, 1 rows, widths [27]
+  |日本語の長いファイル名.docx
+job 74: table file='users.csv' widths=[0, 0, 0, 0] align='<<^<'
+  ┌──────────────┬─────────┬───────┬──────────────────┐
+  │ name         │ city    │ role  │ note             │
+  ├──────────────┼─────────┼───────┼──────────────────┤
+  │ Ada Lovelace │ London  │ admin │ first programmer │
+  │ 山田太郎     │ 東京    │  dev  │ リードエンジニア │
+  │ Renée        │ Paris   │  ops  │ on call 📟       │
+  │ José         │ Bogotá  │  dev  │ ❤️ rust          │
+  │ 김민준       │ 서울    │  qa   │ 테스트 자동화    │
+  │ محمد         │ القاهرة │  dev  │ مرحبا            │
+  │ Ngozi        │ Lagos   │ lead  │ 👩‍🔬 research      │
+  │ สมชาย        │ กรุงเทพ  │  ops  │ กะดึก             │
+  │ tab?user     │ Oslo    │  dev  │ ctrl?char        │
+  │ ﾊﾝｶｸ         │ 大阪    │  dev  │ ﾊﾝｶｸ only        │
+  └──────────────┴─────────┴───────┴──────────────────┘
+job 75: table file='users.csv' widths=[8, 6, 5, 10] align='<>^<'
+  ┌──────────┬────────┬───────┬────────────┐
+  │ name     │   city │ role  │ note       │
+  ├──────────┼────────┼───────┼────────────┤
+  │ Ada Lov… │ London │ admin │ first pro… │
+  │ 山田太郎 │   東京 │  dev  │ リードエ…  │
+  │ Renée    │  Paris │  ops  │ on call 📟 │
+  │ José     │ Bogotá │  dev  │ ❤️ rust    │
+  │ 김민준   │   서울 │  qa   │ 테스트 자… │
+  │ محمد     │ القاه… │  dev  │ مرحبا      │
+  │ Ngozi    │  Lagos │ lead  │ 👩‍🔬 resear… │
+  │ สมชาย    │ กรุงเทพ │  ops  │ กะดึก       │
+  │ tab?user │   Oslo │  dev  │ ctrl?char  │
+  │ ﾊﾝｶｸ     │   大阪 │  dev  │ ﾊﾝｶｸ only  │
+  └──────────┴────────┴───────┴────────────┘
+job 76: table file='users.csv' widths=[4, 3, 1, 6] align='>^<>'
+  ┌──────┬─────┬───┬────────┐
+  │ name │ ci… │ … │   note │
+  ├──────┼─────┼───┼────────┤
+  │ Ada… │ Lo… │ … │ first… │
+  │  山… │ 東… │ … │  リー… │
+  │ Ren… │ Pa… │ … │ on ca… │
+  │ José │ Bo… │ … │ ❤️ ru… │
+  │  김… │ 서… │ … │  테스… │
+  │ محمد │ ال… │ … │  مرحبا │
+  │ Ngo… │ La… │ … │ 👩‍🔬 re… │
+  │ สมช… │ กรุ… │ … │   กะดึก │
+  │ tab… │ Os… │ … │ ctrl?… │
+  │ ﾊﾝｶｸ │ 大… │ … │ ﾊﾝｶｸ … │
+  └──────┴─────┴───┴────────┘
+job 77: table file='users.csv' widths=[12, 0, 0, 16] align='^^^^'
+  ┌──────────────┬─────────┬───────┬──────────────────┐
+  │     name     │  city   │ role  │       note       │
+  ├──────────────┼─────────┼───────┼──────────────────┤
+  │ Ada Lovelace │ London  │ admin │ first programmer │
+  │   山田太郎   │  東京   │  dev  │ リードエンジニア │
+  │    Renée     │  Paris  │  ops  │    on call 📟    │
+  │     José     │ Bogotá  │  dev  │     ❤️ rust      │
+  │    김민준    │  서울   │  qa   │  테스트 자동화   │
+  │     محمد     │ القاهرة │  dev  │      مرحبا       │
+  │    Ngozi     │  Lagos  │ lead  │   👩‍🔬 research    │
+  │    สมชาย     │ กรุงเทพ  │  ops  │       กะดึก       │
+  │   tab?user   │  Oslo   │  dev  │    ctrl?char     │
+  │     ﾊﾝｶｸ     │  大阪   │  dev  │    ﾊﾝｶｸ only     │
+  └──────────────┴─────────┴───────┴──────────────────┘
+job 78: table file='users.csv' widths=[2, 2, 2, 2] align='<<<<'
+  ┌────┬────┬────┬────┐
+  │ n… │ c… │ r… │ n… │
+  ├────┼────┼────┼────┤
+  │ A… │ L… │ a… │ f… │
+  │ …  │ …  │ d… │ …  │
+  │ R… │ P… │ o… │ o… │
+  │ J… │ B… │ d… │ ❤… │
+  │ …  │ …  │ qa │ …  │
+  │ م… │ ا… │ d… │ م… │
+  │ N… │ L… │ l… │ …  │
+  │ ส… │ ก… │ o… │ ก… │
+  │ t… │ O… │ d… │ c… │
+  │ ﾊ… │ …  │ d… │ ﾊ… │
+  └────┴────┴────┴────┘
+job 79: wrap file='chat.log' width=40
+  ada: Has anyone tried the new build? It
+       prints 中文 fine now.
+  太郎: はい、昨日から使っています。問題な
+        しです！
+  renée: ❤️❤️❤️ great work 👏🏽👏🏽
+  ngozi: see
+         https://example.com/a/very/long/p
+         ath/that/does/not/fit/on/one/line
+  민준: 한국어로 된 긴 문장을 여기에
+        씁니다 줄바꿈 테스트
+  bot: build #42 👩‍💻👨‍💻🧑‍💻 done in 3 spaces
+  🤖: 🇯🇵🇰🇷🇳🇬🇫🇷
+  x: éééééééééééé
+  long_user_name_here: hi
+  山: 山山山山山山山山山山山山山山山山山山
+job 80: wrap file='chat.log' width=24
+  ada: Has anyone tried
+       the new build? It
+       prints 中文 fine
+       now.
+  太郎: はい、昨日から使っ
+        ています。問題なし
+        です！
+  renée: ❤️❤️❤️ great work
+         👏🏽👏🏽
+  ngozi: see
+         https://example.c
+         om/a/very/long/pa
+         th/that/does/not/
+         fit/on/one/line
+  민준: 한국어로 된 긴
+        문장을 여기에
+        씁니다 줄바꿈
+        테스트
+  bot: build #42 👩‍💻👨‍💻🧑‍💻
+       done in 3 spaces
+  🤖: 🇯🇵🇰🇷🇳🇬🇫🇷
+  x: éééééééééééé
+  long_user_name_here: hi
+  山: 山山山山山山山山山山
+      山山山山山山山山
+job 81: wrap file='chat.log' width=16
+  ada: Has anyone
+       tried the
+       new build?
+       It prints
+       中文 fine
+       now.
+  太郎: はい、昨日
+        から使って
+        います。問
+        題なしです
+        ！
+  renée: ❤️❤️❤️
+         great
+         work 👏🏽👏🏽
+  ngozi: see
+         https://e
+         xample.co
+         m/a/very/
+         long/path
+         /that/doe
+         s/not/fit
+         /on/one/l
+         ine
+  민준: 한국어로
+        된 긴
+        문장을
+        여기에
+        씁니다
+        줄바꿈
+        테스트
+  bot: build #42
+       👩‍💻👨‍💻🧑‍💻 done
+       in 3 spaces
+  🤖: 🇯🇵🇰🇷🇳🇬🇫🇷
+  x: éééééééééééé
+  long_user_name_here: h
+                       i
+  山: 山山山山山山
+      山山山山山山
+      山山山山山山
+job 82: wrap file='chat.log' width=10
+  ada: Has
+       anyon
+       e
+       tried
+       the
+       new
+       build
+       ? It
+       print
+       s
+       中文
+       fine
+       now.
+  太郎: はい
+        、昨
+        日か
+        ら使
+        って
+        いま
+        す。
+        問題
+        なし
+        です
+        ！
+  renée: ❤️❤
+         ️❤️
+         gre
+         at
+         wor
+         k
+         👏🏽
+         👏🏽
+  ngozi: see
+         htt
+         ps:
+         //e
+         xam
+         ple
+         .co
+         m/a
+         /ve
+         ry/
+         lon
+         g/p
+         ath
+         /th
+         at/
+         doe
+         s/n
+         ot/
+         fit
+         /on
+         /on
+         e/l
+         ine
+  민준: 한국
+        어로
+        된
+        긴
+        문장
+        을
+        여기
+        에
+        씁니
+        다
+        줄바
+        꿈
+        테스
+        트
+  bot: build
+       #42
+       👩‍💻👨‍💻
+       🧑‍💻
+       done
+       in 3
+       space
+       s
+  🤖: 🇯🇵🇰🇷🇳🇬
+      🇫🇷
+  x: ééééééé
+     ééééé
+  long_user_name_here: h
+                       i
+  山: 山山山
+      山山山
+      山山山
+      山山山
+      山山山
+      山山山
+job 83: wrap file='chat.log' width=6
+  ada: H
+       a
+       s
+       a
+       n
+       y
+       o
+       n
+       e
+       t
+       r
+       i
+       e
+       d
+       t
+       h
+       e
+       n
+       e
+       w
+       b
+       u
+       i
+       l
+       d
+       ?
+       I
+       t
+       p
+       r
+       i
+       n
+       t
+       s
+       中
+       文
+       f
+       i
+       n
+       e
+       n
+       o
+       w
+       .
+  太郎: は
+        い
+        、
+        昨
+        日
+        か
+        ら
+        使
+        っ
+        て
+        い
+        ま
+        す
+        。
+        問
+        題
+        な
+        し
+        で
+        す
+        ！
+  renée: ❤
+         ️❤
+         ️❤
+         ️
+         g
+         r
+         e
+         a
+         t
+         w
+         o
+         r
+         k
+         👏
+         🏽
+         👏
+         🏽
+  ngozi: s
+         e
+         e
+         h
+         t
+         t
+         p
+         s
+         :
+         /
+         /
+         e
+         x
+         a
+         m
+         p
+         l
+         e
+         .
+         c
+         o
+         m
+         /
+         a
+         /
+         v
+         e
+         r
+         y
+         /
+         l
+         o
+         n
+         g
+         /
+         p
+         a
+         t
+         h
+         /
+         t
+         h
+         a
+         t
+         /
+         d
+         o
+         e
+         s
+         /
+         n
+         o
+         t
+         /
+         f
+         i
+         t
+         /
+         o
+         n
+         /
+         o
+         n
+         e
+         /
+         l
+         i
+         n
+         e
+  민준: 한
+        국
+        어
+        로
+        된
+        긴
+        문
+        장
+        을
+        여
+        기
+        에
+        씁
+        니
+        다
+        줄
+        바
+        꿈
+        테
+        스
+        트
+  bot: b
+       u
+       i
+       l
+       d
+       #
+       4
+       2
+       👩
+       ‍💻
+       👨
+       ‍💻
+       🧑
+       ‍💻
+       d
+       o
+       n
+       e
+       i
+       n
+       3
+       s
+       p
+       a
+       c
+       e
+       s
+  🤖: 🇯🇵
+      🇰🇷
+      🇳🇬
+      🇫🇷
+  x: ééé
+     ééé
+     ééé
+     ééé
+  long_user_name_here: h
+                       i
+  山: 山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+      山
+job 84: tail file='app.log' width=72
+  |2026-10-19 12:00:01 INFO        server started on :8080                 |
+  |2026-10-19 12:00:02 WARN        slow query → 注文テーブル (812 ms)      |
+  |2026-10-19 12:00:03 INFO        user 山田太郎 logged in from 🇯🇵         |
+  |2026-10-19 12:00:04 ERROR       bad byte ^[[31m in header^?             |
+  |                indented        twice                                   |
+  |中      文      字      x                                               |
+  |c1 control \x85 and \x9b here                                           |
+  |❤️      👩‍💻      end                                                     |
+  |                                                                        |
+  |short                                                                   |
+job 85: tail file='app.log' width=50
+  |2026-10-19 12:00:01 INFO        server started on…|
+  |2026-10-19 12:00:02 WARN        slow query → 注文…|
+  |2026-10-19 12:00:03 INFO        user 山田太郎 log…|
+  |2026-10-19 12:00:04 ERROR       bad byte ^[[31m i…|
+  |                indented        twice             |
+  |中      文      字      x                         |
+  |c1 control \x85 and \x9b here                     |
+  |❤️      👩‍💻      end                               |
+  |                                                  |
+  |short                                             |
+job 86: tail file='app.log' width=30
+  |2026-10-19 12:00:01 INFO     …|
+  |2026-10-19 12:00:02 WARN     …|
+  |2026-10-19 12:00:03 INFO     …|
+  |2026-10-19 12:00:04 ERROR    …|
+  |                indented     …|
+  |中      文      字      x     |
+  |c1 control \x85 and \x9b here |
+  |❤️      👩‍💻      end           |
+  |                              |
+  |short                         |
+job 87: tail file='app.log' width=12
+  |2026-10-19 …|
+  |2026-10-19 …|
+  |2026-10-19 …|
+  |2026-10-19 …|
+  |           …|
+  |中      文 …|
+  |c1 control …|
+  |❤️      👩‍💻 …|
+  |            |
+  |short       |
+job 88: tail file='app.log' width=3
+  |20…|
+  |20…|
+  |20…|
+  |20…|
+  |  …|
+  |中…|
+  |c1…|
+  |❤️…|
+  |   |
+  |sh…|

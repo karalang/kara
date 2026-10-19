@@ -1,0 +1,2564 @@
+// mini_wcwidth: how many terminal cells a string takes, as wcwidth 0.2.13
+// works it out. wcwidth() gives one character's width for any of the 19
+// Unicode versions wcwidth knows (zero width marks, wide East Asian and
+// emoji characters, -1 for controls), wcswidth() adds a string up with its
+// handling of zero width joiners and variation selector 16, and the
+// version a caller asks for is matched to one of the 19 the way
+// _wcmatch_version does it, warnings and int() parsing included.
+//
+// The jobs in data/jobs.jsonl measure characters and strings across the
+// versions and match version strings, and then do what a terminal
+// program needs widths for: lay file names out in columns like ls, draw a
+// table with cells cut to fit, wrap chat messages, and show log lines with
+// tabs expanded and controls made visible.
+
+// ------------------------------------------------------------ JSON in
+
+// The jobs file holds strings, numbers, booleans, arrays and objects.
+#[derive(Clone)]
+enum J {
+    S(String),
+    N(i64),
+    A(Vec[J]),
+    O(Vec[(String, J)]),
+    B(bool),
+    Null,
+}
+
+fn json_space(c: char) -> bool {
+    c == ' ' or c == '\n' or c == '\r' or c == '\t'
+}
+
+struct JsonIn {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl JsonIn {
+    fn ws(mut ref self) {
+        while self.pos < self.cs.len() and json_space(self.cs[self.pos]) {
+            self.pos += 1;
+        }
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let wc: Vec[char] = w.chars().collect();
+        if self.pos + wc.len() > self.cs.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < wc.len() {
+            if self.cs[self.pos + k] != wc[k] {
+                return false;
+            }
+            k += 1;
+        }
+        self.pos += wc.len();
+        true
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut n: u32 = 0;
+        let mut k = 0;
+        while k < 4 {
+            let c = self.cs[self.pos];
+            let d = if c >= '0' and c <= '9' {
+                (c as u32) - ('0' as u32)
+            } else if c >= 'a' and c <= 'f' {
+                (c as u32) - ('a' as u32) + 10
+            } else {
+                (c as u32) - ('A' as u32) + 10
+            };
+            n = n * 16 + d;
+            self.pos += 1;
+            k += 1;
+        }
+        n
+    }
+
+    fn value(mut ref self) -> Result[J, String] {
+        self.ws();
+        if self.pos >= self.cs.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.cs[self.pos];
+        if c == '[' {
+            self.pos += 1;
+            let mut items: Vec[J] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == ']' {
+                self.pos += 1;
+                return Ok(J.A(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON array".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == ']' {
+                    return Ok(J.A(items));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON array separator {d}");
+                }
+            }
+        }
+        if c == '{' {
+            self.pos += 1;
+            let mut members: Vec[(String, J)] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == '}' {
+                self.pos += 1;
+                return Ok(J.O(members));
+            }
+            loop {
+                let key = match self.value()? {
+                    J.S(k) => k,
+                    _ => return Err("JSON object key is not a string".to_string()),
+                };
+                self.ws();
+                if self.pos >= self.cs.len() or self.cs[self.pos] != ':' {
+                    return Err("missing ':' in JSON object".to_string());
+                }
+                self.pos += 1;
+                let v = self.value()?;
+                members.push((key, v));
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON object".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == '}' {
+                    return Ok(J.O(members));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON object separator {d}");
+                }
+            }
+        }
+        if self.word("true") {
+            return Ok(J.B(true));
+        }
+        if self.word("false") {
+            return Ok(J.B(false));
+        }
+        if self.word("null") {
+            return Ok(J.Null);
+        }
+        if c == '-' or (c >= '0' and c <= '9') {
+            let mut neg = false;
+            if c == '-' {
+                neg = true;
+                self.pos += 1;
+            }
+            let mut n: i64 = 0;
+            while self.pos < self.cs.len() and self.cs[self.pos] >= '0' and self.cs[self.pos] <= '9' {
+                n = n * 10 + ((self.cs[self.pos] as u32) - ('0' as u32)) as i64;
+                self.pos += 1;
+            }
+            return Ok(J.N(if neg { -n } else { n }));
+        }
+        if c != '"' {
+            return Err(f"unexpected JSON character {c}");
+        }
+        self.pos += 1;
+        let mut s = String.new();
+        while self.pos < self.cs.len() {
+            let d = self.cs[self.pos];
+            self.pos += 1;
+            if d == '"' {
+                return Ok(J.S(s));
+            }
+            if d != '\\' {
+                s.push(d);
+                continue;
+            }
+            let e = self.cs[self.pos];
+            self.pos += 1;
+            if e == 'n' {
+                s.push('\n');
+            } else if e == 't' {
+                s.push('\t');
+            } else if e == 'r' {
+                s.push('\r');
+            } else if e == 'b' {
+                s.push('\u{8}');
+            } else if e == 'f' {
+                s.push('\u{c}');
+            } else if e == 'u' {
+                let mut n = self.hex4();
+                if n >= 0xD800 and n < 0xDC00 {
+                    self.pos += 2;
+                    let lo = self.hex4();
+                    n = 0x10000 + ((n - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                s.push(char.try_from(n).unwrap_or('?'));
+            } else {
+                s.push(e);
+            }
+        }
+        Err("unterminated JSON string".to_string())
+    }
+}
+
+fn json_line(l: ref String) -> Result[J, String] {
+    let mut p = JsonIn { cs: l.chars().collect(), pos: 0 };
+    p.value()
+}
+
+fn j_get(j: ref J, key: Str) -> J {
+    match j {
+        J.O(members) => {
+            for (k, v) in members.iter() {
+                if k == key {
+                    return v.clone();
+                }
+            }
+            J.Null
+        }
+        _ => J.Null,
+    }
+}
+
+fn j_has(j: ref J, key: Str) -> bool {
+    match j_get(j, key) {
+        J.Null => false,
+        _ => true,
+    }
+}
+
+fn j_str(j: ref J, key: Str) -> String {
+    match j_get(j, key) {
+        J.S(s) => s,
+        _ => String.new(),
+    }
+}
+
+fn j_int(j: ref J, key: Str, default: i64) -> i64 {
+    match j_get(j, key) {
+        J.N(n) => n,
+        _ => default,
+    }
+}
+
+fn j_bool(j: ref J, key: Str) -> bool {
+    match j_get(j, key) {
+        J.B(b) => b,
+        _ => false,
+    }
+}
+
+fn j_strs(j: ref J, key: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let J.A(items) = j_get(j, key) {
+        for it in items.iter() {
+            if let J.S(s) = it {
+                out.push(s.clone());
+            }
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ text as code points
+
+fn cps(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cps_of(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cat(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    push_all(mut out, b);
+    out
+}
+
+fn cat_ascii(a: ref Vec[i64], s: Str) -> Vec[i64] {
+    let mut out = a.clone();
+    push_ascii(mut out, s);
+    out
+}
+
+fn index_of(s: ref Vec[i64], c: i64) -> i64 {
+    let mut i = 0;
+    while i < s.len() {
+        if s[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn has(s: ref Vec[i64], c: i64) -> bool {
+    index_of(s, c) >= 0
+}
+
+// `needle in s` for str
+fn contains_seq(s: ref Vec[i64], needle: ref Vec[i64]) -> bool {
+    find_seq(s, needle, 0) >= 0
+}
+
+fn find_seq(s: ref Vec[i64], needle: ref Vec[i64], from: i64) -> i64 {
+    let mut i = from;
+    while i + needle.len() <= s.len() {
+        let mut k = 0;
+        while k < needle.len() and s[i + k] == needle[k] {
+            k += 1;
+        }
+        if k == needle.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn starts_with_seq(s: ref Vec[i64], p: Str) -> bool {
+    let n = cps(p);
+    if n.len() > s.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < n.len() {
+        if s[k] != n[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn eq_ascii(s: ref Vec[i64], p: Str) -> bool {
+    same(s, cps(p))
+}
+
+// One character in a str of ASCII choices.
+fn in_ascii(c: i64, set: Str) -> bool {
+    for b in set.bytes() {
+        if (b as i64) == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.replace
+fn replace_seq(s: ref Vec[i64], old: ref Vec[i64], new: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        if old.len() > 0 and i + old.len() <= s.len() {
+            let mut k = 0;
+            while k < old.len() and s[i + k] == old[k] {
+                k += 1;
+            }
+            if k == old.len() {
+                push_all(mut out, new);
+                i += old.len();
+                continue;
+            }
+        }
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn replace_char(s: ref Vec[i64], old: i64, new: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s {
+        if c == old {
+            push_all(mut out, new);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn repeat(c: i64, n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(c);
+        k += 1;
+    }
+    out
+}
+
+// str.split(sep) for a one-character separator
+fn split_on(s: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in s {
+        if c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn strip(s: ref Vec[i64]) -> Vec[i64] {
+    let mut a = 0;
+    let mut b = s.len();
+    while a < b and is_space(s[a], false) {
+        a += 1;
+    }
+    while b > a and is_space(s[b - 1], false) {
+        b -= 1;
+    }
+    slice(s, a, b)
+}
+
+
+// The value of a decimal digit: the decimal digits come in runs of ten.
+fn digit_value(c: i64) -> i64 {
+    if c < 0x80 {
+        return c - 48;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return c - s;
+        }
+    }
+    0
+}
+
+// str.isdigit, for the strings date_convert looks at
+fn all_decimal(s: ref Vec[i64]) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s {
+        if not is_decimal(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn pad_n(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn floor_mod(a: i64, b: i64) -> i64 {
+    a - floor_div(a, b) * b
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable() from U+0080 up, from the table of code points that
+// are not printable.
+fn is_printable(c: i64, un: ref Vec[(i64, i64)]) -> bool {
+    bisearch(c, un) == 0
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64], un: ref Vec[(i64, i64)]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c, un) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+
+fn repr_of(s: ref Vec[i64], un: ref Vec[(i64, i64)]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out, un);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+
+// ------------------------------------------------------------ int()
+
+// What int(s, base) makes of a str, for base 10 or 16, as CPython reads
+// it: Unicode spaces and decimal digits are first turned into ASCII, then
+// surrounding whitespace, a sign, a 0x prefix (base 16, with one
+// underscore allowed after it), and single underscores between digits.
+// `big` is set when the value does not fit a u128.
+struct PyInt {
+    neg: bool,
+    val: u128,
+    big: bool,
+}
+
+fn u128_max() -> u128 {
+    (0xFFFF_FFFF_FFFF_FFFFu128 << 64) | 0xFFFF_FFFF_FFFF_FFFFu128
+}
+
+fn ascii_digit(c: i64, base: i64) -> i64 {
+    let d = if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 122 {
+        c - 87
+    } else if c >= 65 and c <= 90 {
+        c - 55
+    } else {
+        99
+    };
+    if d < base { d } else { -1 }
+}
+
+fn py_int(s: ref Vec[i64], base: i64) -> Option[PyInt] {
+    // _PyUnicode_TransformDecimalAndSpaceToASCII
+    let mut a: Vec[i64] = Vec.new();
+    for c in s.iter() {
+        if *c < 0x80 {
+            a.push(*c);
+        } else if is_space(*c, false) {
+            a.push(32);
+        } else if is_decimal(*c) {
+            a.push(48 + digit_value(*c));
+        } else {
+            a.push(63);
+        }
+    }
+    let n = a.len();
+    let mut i = 0;
+    while i < n and is_space(a[i], true) {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < n and (a[i] == 43 or a[i] == 45) {
+        neg = a[i] == 45;
+        i += 1;
+    }
+    if base == 16 and i + 1 < n and a[i] == 48 and (a[i + 1] == 120 or a[i + 1] == 88) {
+        i += 2;
+        if i < n and a[i] == 95 {
+            i += 1;
+        }
+    }
+    if i < n and a[i] == 95 {
+        return None;
+    }
+    let mut val: u128 = 0;
+    let mut big = false;
+    let mut digits = 0;
+    let mut prev = 0;
+    while i < n and (ascii_digit(a[i], base) >= 0 or a[i] == 95) {
+        if a[i] == 95 {
+            if prev == 95 {
+                return None;
+            }
+        } else {
+            let d = ascii_digit(a[i], base) as u128;
+            let b = base as u128;
+            if big or val > (u128_max() - d) / b {
+                big = true;
+            } else {
+                val = val * b + d;
+            }
+            digits += 1;
+        }
+        prev = a[i];
+        i += 1;
+    }
+    if prev == 95 or digits == 0 {
+        return None;
+    }
+    while i < n and is_space(a[i], true) {
+        i += 1;
+    }
+    if i != n {
+        return None;
+    }
+    Some(PyInt { neg: neg, val: val, big: big })
+}
+
+
+// ------------------------------------------------------------ tables
+
+// A table is a sorted list of code point ranges, both ends included.
+fn parse_ranges(t: ref String) -> Vec[(i64, i64)] {
+    let mut out: Vec[(i64, i64)] = Vec.new();
+    if t.is_empty() {
+        return out;
+    }
+    for part in t.split(",") {
+        let ends: Vec[Str] = part.split("-").collect();
+        let a = hex_value(ends[0]);
+        let b = if ends.len() > 1 { hex_value(ends[1]) } else { a };
+        out.push((a, b));
+    }
+    out
+}
+
+fn hex_value(s: Str) -> i64 {
+    let mut v = 0;
+    for b in s.bytes() {
+        let d = if b >= b'a' { (b - b'a') as i64 + 10 } else { (b - b'0') as i64 };
+        v = v * 16 + d;
+    }
+    v
+}
+
+// _bisearch: 1 when ucs is in one of the table's ranges, else 0.
+fn bisearch(ucs: i64, table: ref Vec[(i64, i64)]) -> i64 {
+    let mut lbound = 0;
+    let mut ubound = table.len() - 1;
+    if ubound < 0 {
+        return 0;
+    }
+    if ucs < table[0].0 or ucs > table[ubound].1 {
+        return 0;
+    }
+    while ubound >= lbound {
+        let mid = (lbound + ubound) / 2;
+        if ucs > table[mid].1 {
+            lbound = mid + 1;
+        } else if ucs < table[mid].0 {
+            ubound = mid - 1;
+        } else {
+            return 1;
+        }
+    }
+    0
+}
+
+struct Tables {
+    versions: Vec[String],
+    zero: Vec[Vec[(i64, i64)]],
+    wide: Vec[Vec[(i64, i64)]],
+    vs16: Vec[(i64, i64)],
+    unprintable: Vec[(i64, i64)],
+}
+
+fn load_tables() -> Tables {
+    let versions = versions();
+    let mut zero: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut wide: Vec[Vec[(i64, i64)]] = Vec.new();
+    let mut k = 0;
+    while k < versions.len() {
+        zero.push(parse_ranges(table_text(true, k)));
+        wide.push(parse_ranges(table_text(false, k)));
+        k += 1;
+    }
+    Tables {
+        versions: versions,
+        zero: zero,
+        wide: wide,
+        vs16: parse_ranges(vs16_text()),
+        unprintable: parse_ranges(unprintable_text()),
+    }
+}
+
+// ------------------------------------------------------------ versions
+
+// What one job keeps between calls: the UNICODE_VERSION it runs under,
+// the version strings already matched (wcwidth caches those, so each one
+// warns only the first time), and the warnings not yet shown.
+struct Job {
+    env: Option[String],
+    seen: Vec[(String, i64)],
+    warnings: Vec[String],
+}
+
+fn new_job(env: own Option[String]) -> Job {
+    Job { env: env, seen: Vec.new(), warnings: Vec.new() }
+}
+
+// _wcversion_value: the version split on dots, each part read by int().
+fn version_value(s: ref String) -> Option[Vec[i64]] {
+    let mut out: Vec[i64] = Vec.new();
+    for part in split_on(cps_of(s), 46) {
+        match py_int(part, 10) {
+            Some(p) => {
+                let v = if p.big or p.val > 0x7FFF_FFFF_FFFF_FFFFu128 {
+                    0x7FFF_FFFF_FFFF_FFFF
+                } else {
+                    p.val as i64
+                };
+                out.push(if p.neg { -v } else { v });
+            }
+            None => return None,
+        }
+    }
+    Some(out)
+}
+
+// Python's tuple comparison: -1, 0 or 1.
+fn cmp_tuple(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut k = 0;
+    while k < a.len() and k < b.len() {
+        if a[k] < b[k] {
+            return -1;
+        }
+        if a[k] > b[k] {
+            return 1;
+        }
+        k += 1;
+    }
+    if a.len() < b.len() {
+        return -1;
+    }
+    if a.len() > b.len() {
+        return 1;
+    }
+    0
+}
+
+fn prefix(a: ref Vec[i64], n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n and k < a.len() {
+        out.push(a[k]);
+        k += 1;
+    }
+    out
+}
+
+fn repr_str(s: ref String, t: ref Tables) -> String {
+    repr_of(cps_of(s), t.unprintable)
+}
+
+// _wcmatch_version: which of the versions a given version string means,
+// as an index into t.versions.
+fn match_version(t: ref Tables, job: mut ref Job, given: ref String) -> i64 {
+    for (g, k) in job.seen.iter() {
+        if g == given {
+            return *k;
+        }
+    }
+    let k = match_uncached(t, mut job, given);
+    job.seen.push((given.clone(), k));
+    k
+}
+
+fn match_uncached(t: ref Tables, job: mut ref Job, given0: ref String) -> i64 {
+    let last = t.versions.len() - 1;
+    let mut given = given0.clone();
+    if given == "auto" {
+        given = match ref job.env {
+            Some(e) => e.clone(),
+            None => "latest".to_string(),
+        };
+    }
+    if given == "latest" {
+        return last;
+    }
+    let mut k = 0;
+    while k <= last {
+        if t.versions[k] == given {
+            return k;
+        }
+        k += 1;
+    }
+    let cmp_given = match version_value(given) {
+        Some(v) => v,
+        None => {
+            let g = repr_str(given, t);
+            let l = repr_str(t.versions[last], t);
+            job.warnings.push(f"UNICODE_VERSION value, {g}, is invalid. Value should be in form of `integer[.]+', the latest supported unicode version {l} has been inferred.");
+            return last;
+        }
+    };
+    let earliest = version_value(t.versions[0]).unwrap();
+    if cmp_tuple(cmp_given, earliest) <= 0 {
+        let g = repr_str(given, t);
+        let e = repr_str(t.versions[0], t);
+        job.warnings.push(f"UNICODE_VERSION value, {g}, is lower than any available unicode version. Returning lowest version level, {e}");
+        return 0;
+    }
+    let mut idx = 0;
+    while idx < last {
+        let next = version_value(t.versions[idx + 1]).unwrap();
+        if cmp_tuple(cmp_given, prefix(next, cmp_given.len())) == 0 {
+            return idx + 1;
+        }
+        if cmp_tuple(next, cmp_given) > 0 {
+            return idx;
+        }
+        idx += 1;
+    }
+    last
+}
+
+// ------------------------------------------------------------ widths
+
+// wcwidth(): the cells one character takes, 0 for none, -1 for a control.
+// Python passes a str, so an empty one counts as NUL and a longer one is
+// an error.
+fn wcwidth(t: ref Tables, job: mut ref Job, wc: ref Vec[i64], version: ref String) -> Result[i64, String] {
+    if wc.len() > 1 {
+        let n = wc.len();
+        return Err(f"TypeError: ord() expected a character, but string of length {n} found");
+    }
+    let ucs = if wc.len() == 1 { wc[0] } else { 0 };
+    Ok(char_width(t, mut job, ucs, version))
+}
+
+fn char_width(t: ref Tables, job: mut ref Job, ucs: i64, version: ref String) -> i64 {
+    if ucs >= 32 and ucs < 0x7f {
+        return 1;
+    }
+    if (ucs != 0 and ucs < 32) or (ucs >= 0x7f and ucs < 0xa0) {
+        return -1;
+    }
+    let k = match_version(t, mut job, version);
+    if bisearch(ucs, t.zero[k]) == 1 {
+        return 0;
+    }
+    1 + bisearch(ucs, t.wide[k])
+}
+
+// wcswidth(): the cells a string takes, or -1 when it holds a control.
+// A zero width joiner hides the character after it, and VS16 makes the
+// character before it wide when the table says so (from Unicode 9 on).
+fn wcswidth(t: ref Tables, job: mut ref Job, s: ref Vec[i64], n: Option[i64], version: ref String) -> Result[i64, String] {
+    let end = match n {
+        Some(k) => k,
+        None => s.len(),
+    };
+    let mut vs16_on: Option[bool] = None;
+    let mut width = 0;
+    let mut idx = 0;
+    let mut last: Option[i64] = None;
+    while idx < end {
+        if idx >= s.len() {
+            return Err("IndexError: string index out of range".to_string());
+        }
+        let c = s[idx];
+        if c == 0x200D {
+            idx += 2;
+            continue;
+        }
+        if c == 0xFE0F and last.is_some() {
+            if vs16_on.is_none() {
+                let k = match_version(t, mut job, version);
+                vs16_on = Some(k >= 10);
+            }
+            if vs16_on == Some(true) {
+                width += bisearch(last.unwrap(), t.vs16);
+                last = None;
+            }
+            idx += 1;
+            continue;
+        }
+        let w = char_width(t, mut job, c, version);
+        if w < 0 {
+            return Ok(w);
+        }
+        if w > 0 {
+            last = Some(c);
+        }
+        width += w;
+        idx += 1;
+    }
+    Ok(width)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn emit(s: ref String) {
+    println(s);
+}
+
+fn read_data(name: ref String) -> String {
+    match fs.read_to_string(f"data/{name}") {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/{name}: {e}");
+            String.new()
+        }
+    }
+}
+
+// The file's lines, without the newline at the end of the last one.
+fn read_lines(name: ref String) -> Vec[Vec[i64]] {
+    let text = read_data(name);
+    let mut lines = split_on(cps_of(text), 10);
+    if lines.len() > 0 and lines[lines.len() - 1].len() == 0 {
+        lines.pop();
+    }
+    lines
+}
+
+fn j_ints(j: ref J, key: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if let J.A(items) = j_get(j, key) {
+        for it in items.iter() {
+            if let J.N(n) = it {
+                out.push(*n);
+            }
+        }
+    }
+    out
+}
+
+fn int_list(v: ref Vec[i64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v.iter() {
+        parts.push(f"{x}");
+    }
+    let inner = parts.join(", ");
+    f"[{inner}]"
+}
+
+fn flush_warnings(job: mut ref Job) {
+    for w in job.warnings.iter() {
+        emit(f"    warning: {w}");
+    }
+    job.warnings.clear();
+}
+
+fn version_of(j: ref J) -> String {
+    if j_has(j, "version") { j_str(j, "version") } else { "auto".to_string() }
+}
+
+fn run_wcwidth(t: ref Tables, job: mut ref Job, j: ref J) {
+    let v = version_of(j);
+    for s in j_strs(j, "texts").iter() {
+        let c = cps_of(s);
+        let r = repr_of(c, t.unprintable);
+        match wcwidth(t, mut job, c, v) {
+            Ok(w) => emit(f"  {r} {w}"),
+            Err(e) => emit(f"  {r} {e}"),
+        }
+        flush_warnings(mut job);
+    }
+}
+
+fn run_wcswidth(t: ref Tables, job: mut ref Job, j: ref J) {
+    let v = version_of(j);
+    let n = if j_has(j, "n") { Some(j_int(j, "n", 0)) } else { None };
+    for s in j_strs(j, "texts").iter() {
+        let c = cps_of(s);
+        let r = repr_of(c, t.unprintable);
+        match wcswidth(t, mut job, c, n, v) {
+            Ok(w) => emit(f"  {r} {w}"),
+            Err(e) => emit(f"  {r} {e}"),
+        }
+        flush_warnings(mut job);
+    }
+}
+
+fn run_match(t: ref Tables, job: mut ref Job, j: ref J) {
+    for g in j_strs(j, "given").iter() {
+        let k = match_version(t, mut job, g);
+        let a = repr_str(g, t);
+        let b = repr_str(t.versions[k], t);
+        emit(f"  {a} -> {b}");
+        flush_warnings(mut job);
+    }
+}
+
+// ------------------------------------------------------------ reports
+
+// The width of a string the reports have already cleaned of controls.
+fn width(t: ref Tables, job: mut ref Job, s: ref Vec[i64]) -> i64 {
+    wcswidth(t, mut job, s, None, "auto".to_string()).unwrap()
+}
+
+// Controls shown as '?', the way ls -q shows them.
+fn clean(t: ref Tables, job: mut ref Job, s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.iter() {
+        if char_width(t, mut job, *c, "auto".to_string()) < 0 {
+            out.push(63);
+        } else {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+fn spaces(n: i64) -> Vec[i64] {
+    repeat(32, n)
+}
+
+// ls -C: the most columns that fit, filled top to bottom.
+fn run_columns(t: ref Tables, job: mut ref Job, j: ref J) {
+    let mut names: Vec[Vec[i64]] = Vec.new();
+    let mut ws: Vec[i64] = Vec.new();
+    for raw in read_lines(j_str(j, "file")).iter() {
+        let n = clean(t, mut job, raw);
+        ws.push(width(t, mut job, n));
+        names.push(n);
+    }
+    let n = names.len();
+    let w = j_int(j, "width", 80);
+    let mut cols = n;
+    let mut rows = 1;
+    let mut colw: Vec[i64] = Vec.new();
+    while cols > 0 {
+        rows = (n + cols - 1) / cols;
+        if (cols - 1) * rows >= n {
+            cols -= 1;
+            continue;
+        }
+        colw = Vec.new();
+        let mut total = 2 * (cols - 1);
+        let mut c = 0;
+        while c < cols {
+            let mut m = 0;
+            let mut i = c * rows;
+            while i < (c + 1) * rows and i < n {
+                if ws[i] > m {
+                    m = ws[i];
+                }
+                i += 1;
+            }
+            colw.push(m);
+            total += m;
+            c += 1;
+        }
+        if total <= w or cols == 1 {
+            break;
+        }
+        cols -= 1;
+    }
+    let cw = int_list(colw);
+    emit(f"  {cols} columns, {rows} rows, widths {cw}");
+    let mut r = 0;
+    while r < rows {
+        let mut line: Vec[i64] = Vec.new();
+        let mut c = 0;
+        while c < cols {
+            let i = c * rows + r;
+            if i >= n {
+                break;
+            }
+            push_all(mut line, names[i]);
+            if (c + 1) * rows + r < n {
+                push_all(mut line, spaces(colw[c] - ws[i] + 2));
+            }
+            c += 1;
+        }
+        let l = to_string(line);
+        emit(f"  |{l}");
+        r += 1;
+    }
+}
+
+// The string cut to w cells, with an ellipsis when anything was cut.
+fn fit(t: ref Tables, job: mut ref Job, s: ref Vec[i64], w: i64) -> Vec[i64] {
+    if width(t, mut job, s) <= w {
+        return s.clone();
+    }
+    if w <= 0 {
+        return Vec.new();
+    }
+    let mut k = 0;
+    while k < s.len() and width(t, mut job, slice(s, 0, k + 1)) <= w - 1 {
+        k += 1;
+    }
+    let mut out = slice(s, 0, k);
+    out.push(0x2026);
+    out
+}
+
+fn pad(t: ref Tables, job: mut ref Job, s: ref Vec[i64], w: i64, how: i64) -> Vec[i64] {
+    let gap = w - width(t, mut job, s);
+    if gap <= 0 {
+        return s.clone();
+    }
+    if how == 60 {
+        return cat(s, spaces(gap));
+    }
+    if how == 62 {
+        return cat(spaces(gap), s);
+    }
+    let left = gap / 2;
+    cat(cat(spaces(left), s), spaces(gap - left))
+}
+
+fn rule(ws: ref Vec[i64], a: i64, m: i64, b: i64) -> String {
+    let mut out: Vec[i64] = vec![a];
+    let mut k = 0;
+    while k < ws.len() {
+        if k > 0 {
+            out.push(m);
+        }
+        push_all(mut out, repeat(0x2500, ws[k] + 2));
+        k += 1;
+    }
+    out.push(b);
+    to_string(out)
+}
+
+fn run_table(t: ref Tables, job: mut ref Job, j: ref J) {
+    let mut rows: Vec[Vec[Vec[i64]]] = Vec.new();
+    for line in read_lines(j_str(j, "file")).iter() {
+        let mut cells: Vec[Vec[i64]] = Vec.new();
+        for c in split_on(line, 44).iter() {
+            cells.push(clean(t, mut job, c));
+        }
+        rows.push(cells);
+    }
+    let mut ws = j_ints(j, "widths");
+    let mut c = 0;
+    while c < ws.len() {
+        if ws[c] == 0 {
+            let mut m = 0;
+            for r in rows.iter() {
+                let x = width(t, mut job, r[c]);
+                if x > m {
+                    m = x;
+                }
+            }
+            ws[c] = m;
+        }
+        c += 1;
+    }
+    let align = cps_of(j_str(j, "align"));
+    let top = rule(ws, 0x250c, 0x252c, 0x2510);
+    emit(f"  {top}");
+    let mut k = 0;
+    while k < rows.len() {
+        let mut out: Vec[i64] = vec![0x2502, 32];
+        let mut c = 0;
+        while c < ws.len() {
+            if c > 0 {
+                push_all(mut out, vec![32, 0x2502, 32]);
+            }
+            let cell = fit(t, mut job, rows[k][c], ws[c]);
+            push_all(mut out, pad(t, mut job, cell, ws[c], align[c]));
+            c += 1;
+        }
+        push_all(mut out, vec![32, 0x2502]);
+        let l = to_string(out);
+        emit(f"  {l}");
+        if k == 0 {
+            let mid = rule(ws, 0x251c, 0x253c, 0x2524);
+            emit(f"  {mid}");
+        }
+        k += 1;
+    }
+    let bottom = rule(ws, 0x2514, 0x2534, 0x2518);
+    emit(f"  {bottom}");
+}
+
+// Greedy wrapping by cells: words go on the line while it fits, and a
+// word wider than the line is cut into pieces that fit.
+fn wrap(t: ref Tables, job: mut ref Job, text: ref Vec[i64], w: i64) -> Vec[Vec[i64]] {
+    let mut lines: Vec[Vec[i64]] = Vec.new();
+    let mut line: Vec[i64] = Vec.new();
+    for word0 in split_on(text, 32).iter() {
+        if word0.len() == 0 {
+            continue;
+        }
+        let mut word = word0.clone();
+        let cand = if line.len() == 0 {
+            word.clone()
+        } else {
+            let mut c = line.clone();
+            c.push(32);
+            push_all(mut c, word);
+            c
+        };
+        if width(t, mut job, cand) <= w {
+            line = cand;
+            continue;
+        }
+        if line.len() > 0 {
+            lines.push(line);
+            line = Vec.new();
+        }
+        while width(t, mut job, word) > w {
+            let mut take = 1;
+            while take < word.len() and width(t, mut job, slice(word, 0, take + 1)) <= w {
+                take += 1;
+            }
+            lines.push(slice(word, 0, take));
+            word = slice(word, take, word.len());
+        }
+        line = word;
+    }
+    if line.len() > 0 {
+        lines.push(line);
+    }
+    lines
+}
+
+fn run_wrap(t: ref Tables, job: mut ref Job, j: ref J) {
+    for raw in read_lines(j_str(j, "file")).iter() {
+        let msg = clean(t, mut job, raw);
+        let k = find_seq(msg, cps(": "), 0);
+        let who = slice(msg, 0, k + 2);
+        let indent = width(t, mut job, who);
+        let mut w = j_int(j, "width", 80) - indent;
+        if w < 1 {
+            w = 1;
+        }
+        let mut lines = wrap(t, mut job, slice(msg, k + 2, msg.len()), w);
+        if lines.len() == 0 {
+            lines.push(Vec.new());
+        }
+        let a = to_string(who);
+        let b = to_string(lines[0]);
+        emit(f"  {a}{b}");
+        let pad = to_string(spaces(indent));
+        let mut i = 1;
+        while i < lines.len() {
+            let l = to_string(lines[i]);
+            emit(f"  {pad}{l}");
+            i += 1;
+        }
+    }
+}
+
+// Tabs expanded to the next multiple of 8 cells, and controls written
+// out: ^X for C0, ^? for DEL, \xNN for C1.
+fn expand(t: ref Tables, job: mut ref Job, s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut col = 0;
+    for c in s.iter() {
+        let u = *c;
+        if u == 9 {
+            let n = 8 - col % 8;
+            push_all(mut out, spaces(n));
+            col += n;
+            continue;
+        }
+        if u < 32 {
+            out.push(94);
+            out.push(u + 64);
+        } else if u == 0x7F {
+            push_ascii(mut out, "^?");
+        } else if u >= 0x80 and u < 0xA0 {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(u, 2));
+        } else {
+            out.push(u);
+        }
+        col = width(t, mut job, out);
+    }
+    out
+}
+
+fn run_tail(t: ref Tables, job: mut ref Job, j: ref J) {
+    let w = j_int(j, "width", 80);
+    for line in read_lines(j_str(j, "file")).iter() {
+        let s = fit(t, mut job, expand(t, mut job, line), w);
+        let l = to_string(pad(t, mut job, s, w, 60));
+        emit(f"  |{l}|");
+    }
+}
+
+// The job line: its kind, then what it was given, in a fixed order.
+fn describe(t: ref Tables, j: ref J) -> String {
+    let mut parts: Vec[String] = vec![j_str(j, "kind")];
+    for k in ["version", "env", "n", "file", "width", "widths", "align"] {
+        if not j_has(j, k) {
+            continue;
+        }
+        let v = match j_get(j, k) {
+            J.S(s) => repr_str(s, t),
+            J.N(n) => f"{n}",
+            J.A(_) => int_list(j_ints(j, k)),
+            _ => "?".to_string(),
+        };
+        parts.push(f"{k}={v}");
+    }
+    parts.join(" ")
+}
+
+fn run() -> Result[(), String] {
+    let t = load_tables();
+    let vs = t.versions.join(", ");
+    emit(f"wcwidth 0.2.13, Unicode {vs}");
+    let text = read_data("jobs.jsonl".to_string());
+    let mut n = 0;
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let j = json_line(line.to_string())?;
+        n += 1;
+        let d = describe(t, j);
+        emit(f"job {n}: {d}");
+        let env = if j_has(j, "env") { Some(j_str(j, "env")) } else { None };
+        let mut job = new_job(env);
+        let kind = j_str(j, "kind");
+        if kind == "wcwidth" {
+            run_wcwidth(t, mut job, j);
+        } else if kind == "wcswidth" {
+            run_wcswidth(t, mut job, j);
+        } else if kind == "match" {
+            run_match(t, mut job, j);
+        } else if kind == "columns" {
+            run_columns(t, mut job, j);
+        } else if kind == "table" {
+            run_table(t, mut job, j);
+        } else if kind == "wrap" {
+            run_wrap(t, mut job, j);
+        } else if kind == "tail" {
+            run_tail(t, mut job, j);
+        }
+        flush_warnings(mut job);
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ the tables
+
+// The Unicode versions the tables are for, oldest first.
+fn versions() -> Vec[String] {
+    vec!["4.1.0".to_string(), "5.0.0".to_string(), "5.1.0".to_string(), "5.2.0".to_string(), "6.0.0".to_string(), "6.1.0".to_string(), "6.2.0".to_string(), "6.3.0".to_string(), "7.0.0".to_string(), "8.0.0".to_string(), "9.0.0".to_string(), "10.0.0".to_string(), "11.0.0".to_string(), "12.0.0".to_string(), "12.1.0".to_string(), "13.0.0".to_string(), "14.0.0".to_string(), "15.0.0".to_string(), "15.1.0".to_string()]
+}
+
+// The table text for version k of versions(): zero width when `zero`,
+// else wide.
+fn table_text(zero: bool, k: i64) -> String {
+    match (zero, k) {
+        (true, 0) => zero_0(),
+        (true, 1) => zero_1(),
+        (true, 2) => zero_2(),
+        (true, 3) => zero_3(),
+        (true, 4) => zero_4(),
+        (true, 5) => zero_5(),
+        (true, 6) => zero_6(),
+        (true, 7) => zero_7(),
+        (true, 8) => zero_8(),
+        (true, 9) => zero_9(),
+        (true, 10) => zero_10(),
+        (true, 11) => zero_11(),
+        (true, 12) => zero_12(),
+        (true, 13) => zero_13(),
+        (true, 14) => zero_14(),
+        (true, 15) => zero_15(),
+        (true, 16) => zero_16(),
+        (true, 17) => zero_17(),
+        (true, 18) => zero_18(),
+        (false, 0) => wide_0(),
+        (false, 1) => wide_1(),
+        (false, 2) => wide_2(),
+        (false, 3) => wide_3(),
+        (false, 4) => wide_4(),
+        (false, 5) => wide_5(),
+        (false, 6) => wide_6(),
+        (false, 7) => wide_7(),
+        (false, 8) => wide_8(),
+        (false, 9) => wide_9(),
+        (false, 10) => wide_10(),
+        (false, 11) => wide_11(),
+        (false, 12) => wide_12(),
+        (false, 13) => wide_13(),
+        (false, 14) => wide_14(),
+        (false, 15) => wide_15(),
+        (false, 16) => wide_16(),
+        (false, 17) => wide_17(),
+        (false, 18) => wide_18(),
+        _ => String.new(),
+    }
+}
+
+fn zero_0() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-486,488-489,591-5b9,5bb-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-603,610-615,64b-65e,670,6d6");
+    t.push_str("-6e4,6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,901-903,93c,93e-94d,951-954,962-963,981-983,9bc,9be-9c4");
+    t.push_str(",9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47-a48,a4b-a4d,a70-a71,a81-a83,abc,abe-ac5,ac7-ac9");
+    t.push_str(",acb-acd,ae2-ae3,b01-b03,b3c,b3e-b43,b47-b48,b4b-b4d,b56-b57,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c01-c03");
+    t.push_str(",c3e-c44,c46-c48,c4a-c4d,c55-c56,c82-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,d02-d03,d3e-d43,d46-d48");
+    t.push_str(",d4a-d4d,d57,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd");
+    t.push_str(",f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f90-f97,f99-fbc,fc6,102c-1032,1036-1039,1056-1059,1160-");
+    t.push_str("11ff,135f,1712-1714,1732-1734,1752-1753,1772-1773,17b4-17d3,17dd,180b-180d,18a9,1920-192b,1930-193b,");
+    t.push_str("19b0-19c0,19c8-19c9,1a17-1a1b,1dc0-1dc3,200b-200f,2028-202e,2060-2063,206a-206f,20d0-20eb,302a-302f,");
+    t.push_str("3099-309a,a802,a806,a80b,a823-a827,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe23,feff,fff9-fffb,10a01-10a03,10a");
+    t.push_str("05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e");
+    t.push_str("0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_0() -> String {
+    let mut t = String.new();
+    t.push_str("1100-1159,115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-");
+    t.push_str("30ff,3105-312c,3131-318e,3190-31b7,31c0-31cf,31f0-321e,3220-3243,3250-32fe,3300-4db5,4e00-9fbb,a000-");
+    t.push_str("a48c,a490-a4c6,ac00-d7a3,f900-fa2d,fa30-fa6a,fa70-fad9,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-");
+    t.push_str("ff60,ffe0-ffe6,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_1() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-486,488-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-603,610-615,64b-65e,670,6d6-6e4,6e7");
+    t.push_str("-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,901-903,93c,93e-94d,951-954,962-963,981-983,9bc,9be-9c4");
+    t.push_str(",9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47-a48,a4b-a4d,a70-a71,a81-a83,abc,abe-ac5,ac7-ac9");
+    t.push_str(",acb-acd,ae2-ae3,b01-b03,b3c,b3e-b43,b47-b48,b4b-b4d,b56-b57,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c01-c03");
+    t.push_str(",c3e-c44,c46-c48,c4a-c4d,c55-c56,c82-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d02-d03,d3e-d43");
+    t.push_str(",d46-d48,d4a-d4d,d57,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc");
+    t.push_str(",ec8-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f90-f97,f99-fbc,fc6,102c-1032,1036-1039,1056-10");
+    t.push_str("59,1160-11ff,135f,1712-1714,1732-1734,1752-1753,1772-1773,17b4-17d3,17dd,180b-180d,18a9,1920-192b,19");
+    t.push_str("30-193b,19b0-19c0,19c8-19c9,1a17-1a1b,1b00-1b04,1b34-1b44,1b6b-1b73,1dc0-1dca,1dfe-1dff,200b-200f,20");
+    t.push_str("28-202e,2060-2063,206a-206f,20d0-20ef,302a-302f,3099-309a,a802,a806,a80b,a823-a827,d7b0-d7ff,fb1e,fe");
+    t.push_str("00-fe0f,fe20-fe23,feff,fff9-fffb,10a01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,1d165-1d169,1");
+    t.push_str("d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_1() -> String {
+    let mut t = String.new();
+    t.push_str("1100-1159,115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-");
+    t.push_str("30ff,3105-312c,3131-318e,3190-31b7,31c0-31cf,31f0-321e,3220-3243,3250-32fe,3300-4db5,4e00-9fbb,a000-");
+    t.push_str("a48c,a490-a4c6,ac00-d7a3,f900-fa2d,fa30-fa6a,fa70-fad9,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-");
+    t.push_str("ff60,ffe0-ffe6,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_2() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-603,610-61a,64b-65e,670,6d6-6e4,6e7-6e8,6ea");
+    t.push_str("-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,901-903,93c,93e-94d,951-954,962-963,981-983,9bc,9be-9c4,9c7-9c8");
+    t.push_str(",9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9");
+    t.push_str(",acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7");
+    t.push_str(",c01-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56,c62-c63,c82-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3");
+    t.push_str(",d02-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47");
+    t.push_str("-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f90-f97,f99-fbc,fc6,102");
+    t.push_str("b-103e,1056-1059,105e-1060,1062-1064,1067-106d,1071-1074,1082-108d,108f,1160-11ff,135f,1712-1714,173");
+    t.push_str("2-1734,1752-1753,1772-1773,17b4-17d3,17dd,180b-180d,18a9,1920-192b,1930-193b,19b0-19c0,19c8-19c9,1a1");
+    t.push_str("7-1a1b,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1baa,1c24-1c37,1dc0-1de6,1dfe-1dff,200b-200f,202");
+    t.push_str("8-202e,2060-2064,206a-206f,20d0-20f0,2de0-2dff,302a-302f,3099-309a,a66f-a672,a67c-a67d,a802,a806,a80");
+    t.push_str("b,a823-a827,a880-a881,a8b4-a8c4,a926-a92d,a947-a953,aa29-aa36,aa43,aa4c-aa4d,d7b0-d7ff,fb1e,fe00-fe0");
+    t.push_str("f,fe20-fe26,feff,fff9-fffb,101fd,10a01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,1d165-1d169,1");
+    t.push_str("d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_2() -> String {
+    let mut t = String.new();
+    t.push_str("1100-1159,115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-");
+    t.push_str("30ff,3105-312d,3131-318e,3190-31b7,31c0-31e3,31f0-321e,3220-3243,3250-32fe,3300-4db5,4e00-9fc3,a000-");
+    t.push_str("a48c,a490-a4c6,ac00-d7a3,f900-fa2d,fa30-fa6a,fa70-fad9,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-");
+    t.push_str("ff60,ffe0-ffe6,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_3() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-603,610-61a,64b-65e,670,6d6-6e4,6e7-6e8,6ea");
+    t.push_str("-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,900-903,93c,93e-94e,951-955,962");
+    t.push_str("-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47-a48,a4b-a4d,a51,a70-a71");
+    t.push_str(",a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47-b48,b4b-b4d,b56-b57,b62-b63");
+    t.push_str(",b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c01-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56,c62-c63,c82-c83,cbc,cbe-cc4");
+    t.push_str(",cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d02-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63,d82-d83,dca,dcf-dd4,dd6");
+    t.push_str(",dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84");
+    t.push_str(",f86-f87,f90-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064,1067-106d,1071-1074,1082-108d,1");
+    t.push_str("08f,109a-109d,1160-11ff,135f,1712-1714,1732-1734,1752-1753,1772-1773,17b4-17d3,17dd,180b-180d,18a9,1");
+    t.push_str("920-192b,1930-193b,19b0-19c0,19c8-19c9,1a17-1a1b,1a55-1a5e,1a60-1a7c,1a7f,1b00-1b04,1b34-1b44,1b6b-1");
+    t.push_str("b73,1b80-1b82,1ba1-1baa,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ced,1cf2,1dc0-1de6,1dfd-1dff,200b-200f,2028-2");
+    t.push_str("02e,2060-2064,206a-206f,20d0-20f0,2cef-2cf1,2de0-2dff,302a-302f,3099-309a,a66f-a672,a67c-a67d,a6f0-a");
+    t.push_str("6f1,a802,a806,a80b,a823-a827,a880-a881,a8b4-a8c4,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a");
+    t.push_str("a29-aa36,aa43,aa4c-aa4d,aa7b,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,abe3-abea,abec-abed,d7b0-d7ff,f");
+    t.push_str("b1e,fe00-fe0f,fe20-fe26,feff,fff9-fffb,101fd,10a01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,1");
+    t.push_str("1080-11082,110b0-110ba,110bd,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e0001,e0020");
+    t.push_str("-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_3() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-30ff,");
+    t.push_str("3105-312d,3131-318e,3190-31b7,31c0-31e3,31f0-321e,3220-3247,3250-32fe,3300-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,1f200,1f21");
+    t.push_str("0-1f231,1f240-1f248,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_4() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-603,610-61a,64b-65f,670,6d6-6dd,6df-6e4,6e7");
+    t.push_str("-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,900-903,93a-93c");
+    t.push_str(",93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47-a48");
+    t.push_str(",a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47-b48,b4b");
+    t.push_str("-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c01-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56,c62-c63");
+    t.push_str(",c82-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d02-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63,d82");
+    t.push_str("-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19,f35,f37");
+    t.push_str(",f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064,1067-106d,1");
+    t.push_str("071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1753,1772-1773,17b4-1");
+    t.push_str("7d3,17dd,180b-180d,18a9,1920-192b,1930-193b,19b0-19c0,19c8-19c9,1a17-1a1b,1a55-1a5e,1a60-1a7c,1a7f,1");
+    t.push_str("b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1baa,1be6-1bf3,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ced,1cf2,1");
+    t.push_str("dc0-1de6,1dfc-1dff,200b-200f,2028-202e,2060-2064,206a-206f,20d0-20f0,2cef-2cf1,2d7f,2de0-2dff,302a-3");
+    t.push_str("02f,3099-309a,a66f-a672,a67c-a67d,a6f0-a6f1,a802,a806,a80b,a823-a827,a880-a881,a8b4-a8c4,a8e0-a8f1,a");
+    t.push_str("926-a92d,a947-a953,a980-a983,a9b3-a9c0,aa29-aa36,aa43,aa4c-aa4d,aa7b,aab0,aab2-aab4,aab7-aab8,aabe-a");
+    t.push_str("abf,aac1,abe3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe26,feff,fff9-fffb,101fd,10a01-10a03,10a");
+    t.push_str("05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,11000-11002,11038-11046,11080-11082,110b0-110ba,110bd,1d165-1");
+    t.push_str("d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_4() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-30ff,");
+    t.push_str("3105-312d,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,3300-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,1b000-1b00");
+    t.push_str("1,1f200-1f202,1f210-1f23a,1f240-1f248,1f250-1f251,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_5() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-604,610-61a,64b-65f,670,6d6-6dd,6df-6e4,6e7");
+    t.push_str("-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,8e4-8fe,900-903");
+    t.push_str(",93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42");
+    t.push_str(",a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47");
+    t.push_str("-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c01-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56");
+    t.push_str(",c62-c63,c82-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d02-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62");
+    t.push_str("-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19");
+    t.push_str(",f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064,106");
+    t.push_str("7-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1753,1772-177");
+    t.push_str("3,17b4-17d3,17dd,180b-180d,18a9,1920-192b,1930-193b,19b0-19c0,19c8-19c9,1a17-1a1b,1a55-1a5e,1a60-1a7");
+    t.push_str("c,1a7f,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ce");
+    t.push_str("d,1cf2-1cf4,1dc0-1de6,1dfc-1dff,200b-200f,2028-202e,2060-2064,206a-206f,20d0-20f0,2cef-2cf1,2d7f,2de");
+    t.push_str("0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69f,a6f0-a6f1,a802,a806,a80b,a823-a827,a880-a881,a8b");
+    t.push_str("4-a8c4,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,aa29-aa36,aa43,aa4c-aa4d,aa7b,aab0,aab2-aab");
+    t.push_str("4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2");
+    t.push_str("6,feff,fff9-fffb,101fd,10a01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,11000-11002,11038-11046");
+    t.push_str(",11080-11082,110b0-110ba,110bd,11100-11102,11127-11134,11180-11182,111b3-111c0,116ab-116b7,16f51-16f");
+    t.push_str("7e,16f8f-16f92,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e0001,e0020-e007f,e0100-e");
+    t.push_str("01ef");
+    t
+}
+
+fn wide_5() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-30ff,");
+    t.push_str("3105-312d,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,3300-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,1b000-1b00");
+    t.push_str("1,1f200-1f202,1f210-1f23a,1f240-1f248,1f250-1f251,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_6() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-604,610-61a,64b-65f,670,6d6-6dd,6df-6e4,6e7");
+    t.push_str("-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,8e4-8fe,900-903");
+    t.push_str(",93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42");
+    t.push_str(",a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47");
+    t.push_str("-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c01-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56");
+    t.push_str(",c62-c63,c82-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d02-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62");
+    t.push_str("-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19");
+    t.push_str(",f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064,106");
+    t.push_str("7-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1753,1772-177");
+    t.push_str("3,17b4-17d3,17dd,180b-180d,18a9,1920-192b,1930-193b,19b0-19c0,19c8-19c9,1a17-1a1b,1a55-1a5e,1a60-1a7");
+    t.push_str("c,1a7f,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ce");
+    t.push_str("d,1cf2-1cf4,1dc0-1de6,1dfc-1dff,200b-200f,2028-202e,2060-2064,206a-206f,20d0-20f0,2cef-2cf1,2d7f,2de");
+    t.push_str("0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69f,a6f0-a6f1,a802,a806,a80b,a823-a827,a880-a881,a8b");
+    t.push_str("4-a8c4,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,aa29-aa36,aa43,aa4c-aa4d,aa7b,aab0,aab2-aab");
+    t.push_str("4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2");
+    t.push_str("6,feff,fff9-fffb,101fd,10a01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,11000-11002,11038-11046");
+    t.push_str(",11080-11082,110b0-110ba,110bd,11100-11102,11127-11134,11180-11182,111b3-111c0,116ab-116b7,16f51-16f");
+    t.push_str("7e,16f8f-16f92,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e0001,e0020-e007f,e0100-e");
+    t.push_str("01ef");
+    t
+}
+
+fn wide_6() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-30ff,");
+    t.push_str("3105-312d,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,3300-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,1b000-1b00");
+    t.push_str("1,1f200-1f202,1f210-1f23a,1f240-1f248,1f250-1f251,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_7() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-604,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,8e4-8fe,900");
+    t.push_str("-903,93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e");
+    t.push_str("-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44");
+    t.push_str(",b47-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c01-c03,c3e-c44,c46-c48,c4a-c4d,c55");
+    t.push_str("-c56,c62-c63,c82-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d02-d03,d3e-d44,d46-d48,d4a-d4d,d57");
+    t.push_str(",d62-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18");
+    t.push_str("-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064");
+    t.push_str(",1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1753,1772");
+    t.push_str("-1773,17b4-17d3,17dd,180b-180e,18a9,1920-192b,1930-193b,19b0-19c0,19c8-19c9,1a17-1a1b,1a55-1a5e,1a60");
+    t.push_str("-1a7c,1a7f,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1cd4-1ce8");
+    t.push_str(",1ced,1cf2-1cf4,1dc0-1de6,1dfc-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-20f0,2cef-2cf1,2d7f");
+    t.push_str(",2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69f,a6f0-a6f1,a802,a806,a80b,a823-a827,a880-a881");
+    t.push_str(",a8b4-a8c4,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,aa29-aa36,aa43,aa4c-aa4d,aa7b,aab0,aab2");
+    t.push_str("-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20");
+    t.push_str("-fe26,feff,fff9-fffb,101fd,10a01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,11000-11002,11038-1");
+    t.push_str("1046,11080-11082,110b0-110ba,110bd,11100-11102,11127-11134,11180-11182,111b3-111c0,116ab-116b7,16f51");
+    t.push_str("-16f7e,16f8f-16f92,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,e0001,e0020-e007f,e01");
+    t.push_str("00-e01ef");
+    t
+}
+
+fn wide_7() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-30ff,");
+    t.push_str("3105-312d,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,3300-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,1b000-1b00");
+    t.push_str("1,1f200-1f202,1f210-1f23a,1f240-1f248,1f250-1f251,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_8() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,8e4-903,93a");
+    t.push_str("-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47");
+    t.push_str("-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47-b48");
+    t.push_str(",b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56,c62");
+    t.push_str("-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d01-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63");
+    t.push_str(",d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19,f35");
+    t.push_str(",f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064,1067-10");
+    t.push_str("6d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1753,1772-1773,17");
+    t.push_str("b4-17d3,17dd,180b-180e,18a9,1920-192b,1930-193b,19b0-19c0,19c8-19c9,1a17-1a1b,1a55-1a5e,1a60-1a7c,1a");
+    t.push_str("7f,1ab0-1abe,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1cd4-1c");
+    t.push_str("e8,1ced,1cf2-1cf4,1cf8-1cf9,1dc0-1df5,1dfc-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-20f0,2c");
+    t.push_str("ef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69f,a6f0-a6f1,a802,a806,a80b,a823-a8");
+    t.push_str("27,a880-a881,a8b4-a8c4,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e5,aa29-aa36,aa43,aa4c-aa");
+    t.push_str("4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-abed,d7b0-d7");
+    t.push_str("ff,fb1e,fe00-fe0f,fe20-fe2d,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a03,10a05-10a06,10a0c-10a");
+    t.push_str("0f,10a38-10a3a,10a3f,10ae5-10ae6,11000-11002,11038-11046,1107f-11082,110b0-110ba,110bd,11100-11102,1");
+    t.push_str("1127-11134,11173,11180-11182,111b3-111c0,1122c-11237,112df-112ea,11301-11303,1133c,1133e-11344,11347");
+    t.push_str("-11348,1134b-1134d,11357,11362-11363,11366-1136c,11370-11374,114b0-114c3,115af-115b5,115b8-115c0,116");
+    t.push_str("30-11640,116ab-116b7,16af0-16af4,16b30-16b36,16f51-16f7e,16f8f-16f92,1bc9d-1bc9e,1bca0-1bca3,1d165-1");
+    t.push_str("d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1e8d0-1e8d6,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_8() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-30ff,");
+    t.push_str("3105-312d,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,3300-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,1b000-1b00");
+    t.push_str("1,1f200-1f202,1f210-1f23a,1f240-1f248,1f250-1f251,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_9() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,8e3-903,93a");
+    t.push_str("-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47");
+    t.push_str("-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47-b48");
+    t.push_str(",b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56,c62");
+    t.push_str("-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d01-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63");
+    t.push_str(",d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19,f35");
+    t.push_str(",f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064,1067-10");
+    t.push_str("6d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1753,1772-1773,17");
+    t.push_str("b4-17d3,17dd,180b-180e,18a9,1920-192b,1930-193b,1a17-1a1b,1a55-1a5e,1a60-1a7c,1a7f,1ab0-1abe,1b00-1b");
+    t.push_str("04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ced,1cf2-1cf4,1c");
+    t.push_str("f8-1cf9,1dc0-1df5,1dfc-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-20f0,2cef-2cf1,2d7f,2de0-2d");
+    t.push_str("ff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a802,a806,a80b,a823-a827,a880-a881,a8");
+    t.push_str("b4-a8c4,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e5,aa29-aa36,aa43,aa4c-aa4d,aa7b-aa7d,aa");
+    t.push_str("b0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe");
+    t.push_str("0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,");
+    t.push_str("10a3f,10ae5-10ae6,11000-11002,11038-11046,1107f-11082,110b0-110ba,110bd,11100-11102,11127-11134,1117");
+    t.push_str("3,11180-11182,111b3-111c0,111ca-111cc,1122c-11237,112df-112ea,11300-11303,1133c,1133e-11344,11347-11");
+    t.push_str("348,1134b-1134d,11357,11362-11363,11366-1136c,11370-11374,114b0-114c3,115af-115b5,115b8-115c0,115dc-");
+    t.push_str("115dd,11630-11640,116ab-116b7,1171d-1172b,16af0-16af4,16b30-16b36,16f51-16f7e,16f8f-16f92,1bc9d-1bc9");
+    t.push_str("e,1bca0-1bca3,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36,1da3b-1da6c,1d");
+    t.push_str("a75,1da84,1da9b-1da9f,1daa1-1daaf,1e8d0-1e8d6,1f3fb-1f3ff,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_9() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,2329-232a,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,3030-303e,3041-3096,309b-30ff,");
+    t.push_str("3105-312d,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,3300-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,1b000-1b00");
+    t.push_str("1,1f200-1f202,1f210-1f23a,1f240-1f248,1f250-1f251,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_10() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,8d4-903,93a");
+    t.push_str("-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47");
+    t.push_str("-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,b01-b03,b3c,b3e-b44,b47-b48");
+    t.push_str(",b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c03,c3e-c44,c46-c48,c4a-c4d,c55-c56,c62");
+    t.push_str("-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d01-d03,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63");
+    t.push_str(",d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8-ecd,f18-f19,f35");
+    t.push_str(",f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1062-1064,1067-10");
+    t.push_str("6d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1753,1772-1773,17");
+    t.push_str("b4-17d3,17dd,180b-180e,1885-1886,18a9,1920-192b,1930-193b,1a17-1a1b,1a55-1a5e,1a60-1a7c,1a7f,1ab0-1a");
+    t.push_str("be,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ced,1c");
+    t.push_str("f2-1cf4,1cf8-1cf9,1dc0-1df5,1dfb-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-20f0,2cef-2cf1,2d");
+    t.push_str("7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a802,a806,a80b,a823-a827,a8");
+    t.push_str("80-a881,a8b4-a8c5,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e5,aa29-aa36,aa43,aa4c-aa4d,aa");
+    t.push_str("7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-abed,d7b0-d7ff,fb");
+    t.push_str("1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a03,10a05-10a06,10a0c-10a0f,10");
+    t.push_str("a38-10a3a,10a3f,10ae5-10ae6,11000-11002,11038-11046,1107f-11082,110b0-110ba,110bd,11100-11102,11127-");
+    t.push_str("11134,11173,11180-11182,111b3-111c0,111ca-111cc,1122c-11237,1123e,112df-112ea,11300-11303,1133c,1133");
+    t.push_str("e-11344,11347-11348,1134b-1134d,11357,11362-11363,11366-1136c,11370-11374,11435-11446,114b0-114c3,11");
+    t.push_str("5af-115b5,115b8-115c0,115dc-115dd,11630-11640,116ab-116b7,1171d-1172b,11c2f-11c36,11c38-11c3f,11c92-");
+    t.push_str("11ca7,11ca9-11cb6,16af0-16af4,16b30-16b36,16f51-16f7e,16f8f-16f92,1bc9d-1bc9e,1bca0-1bca3,1d165-1d16");
+    t.push_str("9,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36,1da3b-1da6c,1da75,1da84,1da9b-1da9f,1d");
+    t.push_str("aa1-1daaf,1e000-1e006,1e008-1e018,1e01b-1e021,1e023-1e024,1e026-1e02a,1e8d0-1e8d6,1e944-1e94a,1f3fb-");
+    t.push_str("1f3ff,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_10() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312d,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,");
+    t.push_str("3300-4dbf,4e00-a48c,a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,");
+    t.push_str("ff01-ff60,ffe0-ffe6,16fe0,17000-187ec,18800-18af2,1b000-1b001,1f004,1f0cf,1f18e,1f191-1f19a,1f200-1f");
+    t.push_str("202,1f210-1f23b,1f240-1f248,1f250-1f251,1f300-1f320,1f32d-1f335,1f337-1f37c,1f37e-1f393,1f3a0-1f3ca,");
+    t.push_str("1f3cf-1f3d3,1f3e0-1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,1f440,1f442-1f4fc,1f4ff-1f53d,1f54b-1f54e,1f55");
+    t.push_str("0-1f567,1f57a,1f595-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c5,1f6cc,1f6d0-1f6d2,1f6eb-1f6ec,1f6f4-1f6f6,1f");
+    t.push_str("910-1f91e,1f920-1f927,1f930,1f933-1f93e,1f940-1f94b,1f950-1f95e,1f980-1f991,1f9c0,20000-2fffd,30000-");
+    t.push_str("3fffd");
+    t
+}
+
+fn zero_11() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,816-819,81b-823,825-827,829-82d,859-85b,8d4-903,93a");
+    t.push_str("-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,a01-a03,a3c,a3e-a42,a47");
+    t.push_str("-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa-aff,b01-b03,b3c,b3e-b44");
+    t.push_str(",b47-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c03,c3e-c44,c46-c48,c4a-c4d,c55");
+    t.push_str("-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d00-d03,d3b-d3c,d3e-d44,d46-d48,d4a");
+    t.push_str("-d4d,d57,d62-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb-ebc,ec8");
+    t.push_str("-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1");
+    t.push_str("062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1");
+    t.push_str("753,1772-1773,17b4-17d3,17dd,180b-180e,1885-1886,18a9,1920-192b,1930-193b,1a17-1a1b,1a55-1a5e,1a60-1");
+    t.push_str("a7c,1a7f,1ab0-1abe,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1");
+    t.push_str("cd4-1ce8,1ced,1cf2-1cf4,1cf7-1cf9,1dc0-1df9,1dfb-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-2");
+    t.push_str("0f0,2cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a802,a806,a");
+    t.push_str("80b,a823-a827,a880-a881,a8b4-a8c5,a8e0-a8f1,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e5,aa29-aa36,a");
+    t.push_str("a43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-a");
+    t.push_str("bed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a03,10a05-10a0");
+    t.push_str("6,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,11000-11002,11038-11046,1107f-11082,110b0-110ba,110bd,11");
+    t.push_str("100-11102,11127-11134,11173,11180-11182,111b3-111c0,111ca-111cc,1122c-11237,1123e,112df-112ea,11300-");
+    t.push_str("11303,1133c,1133e-11344,11347-11348,1134b-1134d,11357,11362-11363,11366-1136c,11370-11374,11435-1144");
+    t.push_str("6,114b0-114c3,115af-115b5,115b8-115c0,115dc-115dd,11630-11640,116ab-116b7,1171d-1172b,11a01-11a0a,11");
+    t.push_str("a33-11a39,11a3b-11a3e,11a47,11a51-11a5b,11a8a-11a99,11c2f-11c36,11c38-11c3f,11c92-11ca7,11ca9-11cb6,");
+    t.push_str("11d31-11d36,11d3a,11d3c-11d3d,11d3f-11d45,11d47,16af0-16af4,16b30-16b36,16f51-16f7e,16f8f-16f92,1bc9");
+    t.push_str("d-1bc9e,1bca0-1bca3,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36,1da3b-1d");
+    t.push_str("a6c,1da75,1da84,1da9b-1da9f,1daa1-1daaf,1e000-1e006,1e008-1e018,1e01b-1e021,1e023-1e024,1e026-1e02a,");
+    t.push_str("1e8d0-1e8d6,1e944-1e94a,1f3fb-1f3ff,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_11() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312e,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,");
+    t.push_str("3300-4dbf,4e00-a48c,a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,");
+    t.push_str("ff01-ff60,ffe0-ffe6,16fe0-16fe1,17000-187ec,18800-18af2,1b000-1b11e,1b170-1b2fb,1f004,1f0cf,1f18e,1f");
+    t.push_str("191-1f19a,1f200-1f202,1f210-1f23b,1f240-1f248,1f250-1f251,1f260-1f265,1f300-1f320,1f32d-1f335,1f337-");
+    t.push_str("1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-1f3d3,1f3e0-1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,1f440,1f442-1f4f");
+    t.push_str("c,1f4ff-1f53d,1f54b-1f54e,1f550-1f567,1f57a,1f595-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c5,1f6cc,1f6d0-1f");
+    t.push_str("6d2,1f6eb-1f6ec,1f6f4-1f6f8,1f910-1f93e,1f940-1f94c,1f950-1f96b,1f980-1f997,1f9c0,1f9d0-1f9e6,20000-");
+    t.push_str("2fffd,30000-3fffd");
+    t
+}
+
+fn zero_12() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,7fd,816-819,81b-823,825-827,829-82d,859-85b,8d3-903");
+    t.push_str(",93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,9fe,a01-a03,a3c,a3e");
+    t.push_str("-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa-aff,b01-b03,b3c");
+    t.push_str(",b3e-b44,b47-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c04,c3e-c44,c46-c48,c4a");
+    t.push_str("-c4d,c55-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d00-d03,d3b-d3c,d3e-d44,d46");
+    t.push_str("-d48,d4a-d4d,d57,d62-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-eb9,ebb");
+    t.push_str("-ebc,ec8-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105");
+    t.push_str("e-1060,1062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-173");
+    t.push_str("4,1752-1753,1772-1773,17b4-17d3,17dd,180b-180e,1885-1886,18a9,1920-192b,1930-193b,1a17-1a1b,1a55-1a5");
+    t.push_str("e,1a60-1a7c,1a7f,1ab0-1abe,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd");
+    t.push_str("0-1cd2,1cd4-1ce8,1ced,1cf2-1cf4,1cf7-1cf9,1dc0-1df9,1dfb-1dff,200b-200f,2028-202e,2060-2064,2066-206");
+    t.push_str("f,20d0-20f0,2cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a80");
+    t.push_str("2,a806,a80b,a823-a827,a880-a881,a8b4-a8c5,a8e0-a8f1,a8ff,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e");
+    t.push_str("5,aa29-aa36,aa43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe");
+    t.push_str("3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a");
+    t.push_str("03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,10d24-10d27,10f46-10f50,11000-11002,11038-1");
+    t.push_str("1046,1107f-11082,110b0-110ba,110bd,110cd,11100-11102,11127-11134,11145-11146,11173,11180-11182,111b3");
+    t.push_str("-111c0,111c9-111cc,1122c-11237,1123e,112df-112ea,11300-11303,1133b-1133c,1133e-11344,11347-11348,113");
+    t.push_str("4b-1134d,11357,11362-11363,11366-1136c,11370-11374,11435-11446,1145e,114b0-114c3,115af-115b5,115b8-1");
+    t.push_str("15c0,115dc-115dd,11630-11640,116ab-116b7,1171d-1172b,1182c-1183a,11a01-11a0a,11a33-11a39,11a3b-11a3e");
+    t.push_str(",11a47,11a51-11a5b,11a8a-11a99,11c2f-11c36,11c38-11c3f,11c92-11ca7,11ca9-11cb6,11d31-11d36,11d3a,11d");
+    t.push_str("3c-11d3d,11d3f-11d45,11d47,11d8a-11d8e,11d90-11d91,11d93-11d97,11ef3-11ef6,16af0-16af4,16b30-16b36,1");
+    t.push_str("6f51-16f7e,16f8f-16f92,1bc9d-1bc9e,1bca0-1bca3,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242");
+    t.push_str("-1d244,1da00-1da36,1da3b-1da6c,1da75,1da84,1da9b-1da9f,1daa1-1daaf,1e000-1e006,1e008-1e018,1e01b-1e0");
+    t.push_str("21,1e023-1e024,1e026-1e02a,1e8d0-1e8d6,1e944-1e94a,1f3fb-1f3ff,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_12() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312f,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,");
+    t.push_str("3300-4dbf,4e00-a48c,a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,");
+    t.push_str("ff01-ff60,ffe0-ffe6,16fe0-16fe1,17000-187f1,18800-18af2,1b000-1b11e,1b170-1b2fb,1f004,1f0cf,1f18e,1f");
+    t.push_str("191-1f19a,1f200-1f202,1f210-1f23b,1f240-1f248,1f250-1f251,1f260-1f265,1f300-1f320,1f32d-1f335,1f337-");
+    t.push_str("1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-1f3d3,1f3e0-1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,1f440,1f442-1f4f");
+    t.push_str("c,1f4ff-1f53d,1f54b-1f54e,1f550-1f567,1f57a,1f595-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c5,1f6cc,1f6d0-1f");
+    t.push_str("6d2,1f6eb-1f6ec,1f6f4-1f6f9,1f910-1f93e,1f940-1f970,1f973-1f976,1f97a,1f97c-1f9a2,1f9b0-1f9b9,1f9c0-");
+    t.push_str("1f9c2,1f9d0-1f9ff,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_13() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,7fd,816-819,81b-823,825-827,829-82d,859-85b,8d3-903");
+    t.push_str(",93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,9fe,a01-a03,a3c,a3e");
+    t.push_str("-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa-aff,b01-b03,b3c");
+    t.push_str(",b3e-b44,b47-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c04,c3e-c44,c46-c48,c4a");
+    t.push_str("-c4d,c55-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d00-d03,d3b-d3c,d3e-d44,d46");
+    t.push_str("-d48,d4a-d4d,d57,d62-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-ebc,ec8");
+    t.push_str("-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1");
+    t.push_str("062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1");
+    t.push_str("753,1772-1773,17b4-17d3,17dd,180b-180e,1885-1886,18a9,1920-192b,1930-193b,1a17-1a1b,1a55-1a5e,1a60-1");
+    t.push_str("a7c,1a7f,1ab0-1abe,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1");
+    t.push_str("cd4-1ce8,1ced,1cf4,1cf7-1cf9,1dc0-1df9,1dfb-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-20f0,2");
+    t.push_str("cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a802,a806,a80b,a");
+    t.push_str("823-a827,a880-a881,a8b4-a8c5,a8e0-a8f1,a8ff,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e5,aa29-aa36,a");
+    t.push_str("a43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-a");
+    t.push_str("bed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a03,10a05-10a0");
+    t.push_str("6,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,10d24-10d27,10f46-10f50,11000-11002,11038-11046,1107f-11");
+    t.push_str("082,110b0-110ba,110bd,110cd,11100-11102,11127-11134,11145-11146,11173,11180-11182,111b3-111c0,111c9-");
+    t.push_str("111cc,1122c-11237,1123e,112df-112ea,11300-11303,1133b-1133c,1133e-11344,11347-11348,1134b-1134d,1135");
+    t.push_str("7,11362-11363,11366-1136c,11370-11374,11435-11446,1145e,114b0-114c3,115af-115b5,115b8-115c0,115dc-11");
+    t.push_str("5dd,11630-11640,116ab-116b7,1171d-1172b,1182c-1183a,119d1-119d7,119da-119e0,119e4,11a01-11a0a,11a33-");
+    t.push_str("11a39,11a3b-11a3e,11a47,11a51-11a5b,11a8a-11a99,11c2f-11c36,11c38-11c3f,11c92-11ca7,11ca9-11cb6,11d3");
+    t.push_str("1-11d36,11d3a,11d3c-11d3d,11d3f-11d45,11d47,11d8a-11d8e,11d90-11d91,11d93-11d97,11ef3-11ef6,13430-13");
+    t.push_str("438,16af0-16af4,16b30-16b36,16f4f,16f51-16f87,16f8f-16f92,1bc9d-1bc9e,1bca0-1bca3,1d165-1d169,1d16d-");
+    t.push_str("1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36,1da3b-1da6c,1da75,1da84,1da9b-1da9f,1daa1-1daa");
+    t.push_str("f,1e000-1e006,1e008-1e018,1e01b-1e021,1e023-1e024,1e026-1e02a,1e130-1e136,1e2ec-1e2ef,1e8d0-1e8d6,1e");
+    t.push_str("944-1e94a,1f3fb-1f3ff,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_13() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312f,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-32fe,");
+    t.push_str("3300-4dbf,4e00-a48c,a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,");
+    t.push_str("ff01-ff60,ffe0-ffe6,16fe0-16fe3,17000-187f7,18800-18af2,1b000-1b11e,1b150-1b152,1b164-1b167,1b170-1b");
+    t.push_str("2fb,1f004,1f0cf,1f18e,1f191-1f19a,1f200-1f202,1f210-1f23b,1f240-1f248,1f250-1f251,1f260-1f265,1f300-");
+    t.push_str("1f320,1f32d-1f335,1f337-1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-1f3d3,1f3e0-1f3f0,1f3f4,1f3f8-1f3fa,1f40");
+    t.push_str("0-1f43e,1f440,1f442-1f4fc,1f4ff-1f53d,1f54b-1f54e,1f550-1f567,1f57a,1f595-1f596,1f5a4,1f5fb-1f64f,1f");
+    t.push_str("680-1f6c5,1f6cc,1f6d0-1f6d2,1f6d5,1f6eb-1f6ec,1f6f4-1f6fa,1f7e0-1f7eb,1f90d-1f971,1f973-1f976,1f97a-");
+    t.push_str("1f9a2,1f9a5-1f9aa,1f9ae-1f9ca,1f9cd-1f9ff,1fa70-1fa73,1fa78-1fa7a,1fa80-1fa82,1fa90-1fa95,20000-2fff");
+    t.push_str("d,30000-3fffd");
+    t
+}
+
+fn zero_14() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,7fd,816-819,81b-823,825-827,829-82d,859-85b,8d3-903");
+    t.push_str(",93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,9fe,a01-a03,a3c,a3e");
+    t.push_str("-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa-aff,b01-b03,b3c");
+    t.push_str(",b3e-b44,b47-b48,b4b-b4d,b56-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c04,c3e-c44,c46-c48,c4a");
+    t.push_str("-c4d,c55-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d00-d03,d3b-d3c,d3e-d44,d46");
+    t.push_str("-d48,d4a-d4d,d57,d62-d63,d82-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-ebc,ec8");
+    t.push_str("-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1");
+    t.push_str("062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1");
+    t.push_str("753,1772-1773,17b4-17d3,17dd,180b-180e,1885-1886,18a9,1920-192b,1930-193b,1a17-1a1b,1a55-1a5e,1a60-1");
+    t.push_str("a7c,1a7f,1ab0-1abe,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1");
+    t.push_str("cd4-1ce8,1ced,1cf4,1cf7-1cf9,1dc0-1df9,1dfb-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-20f0,2");
+    t.push_str("cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a802,a806,a80b,a");
+    t.push_str("823-a827,a880-a881,a8b4-a8c5,a8e0-a8f1,a8ff,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e5,aa29-aa36,a");
+    t.push_str("a43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,abec-a");
+    t.push_str("bed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a03,10a05-10a0");
+    t.push_str("6,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,10d24-10d27,10f46-10f50,11000-11002,11038-11046,1107f-11");
+    t.push_str("082,110b0-110ba,110bd,110cd,11100-11102,11127-11134,11145-11146,11173,11180-11182,111b3-111c0,111c9-");
+    t.push_str("111cc,1122c-11237,1123e,112df-112ea,11300-11303,1133b-1133c,1133e-11344,11347-11348,1134b-1134d,1135");
+    t.push_str("7,11362-11363,11366-1136c,11370-11374,11435-11446,1145e,114b0-114c3,115af-115b5,115b8-115c0,115dc-11");
+    t.push_str("5dd,11630-11640,116ab-116b7,1171d-1172b,1182c-1183a,119d1-119d7,119da-119e0,119e4,11a01-11a0a,11a33-");
+    t.push_str("11a39,11a3b-11a3e,11a47,11a51-11a5b,11a8a-11a99,11c2f-11c36,11c38-11c3f,11c92-11ca7,11ca9-11cb6,11d3");
+    t.push_str("1-11d36,11d3a,11d3c-11d3d,11d3f-11d45,11d47,11d8a-11d8e,11d90-11d91,11d93-11d97,11ef3-11ef6,13430-13");
+    t.push_str("438,16af0-16af4,16b30-16b36,16f4f,16f51-16f87,16f8f-16f92,1bc9d-1bc9e,1bca0-1bca3,1d165-1d169,1d16d-");
+    t.push_str("1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36,1da3b-1da6c,1da75,1da84,1da9b-1da9f,1daa1-1daa");
+    t.push_str("f,1e000-1e006,1e008-1e018,1e01b-1e021,1e023-1e024,1e026-1e02a,1e130-1e136,1e2ec-1e2ef,1e8d0-1e8d6,1e");
+    t.push_str("944-1e94a,1f3fb-1f3ff,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_14() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312f,3131-318e,3190-31ba,31c0-31e3,31f0-321e,3220-3247,3250-4dbf,");
+    t.push_str("4e00-a48c,a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,");
+    t.push_str("ffe0-ffe6,16fe0-16fe3,17000-187f7,18800-18af2,1b000-1b11e,1b150-1b152,1b164-1b167,1b170-1b2fb,1f004,");
+    t.push_str("1f0cf,1f18e,1f191-1f19a,1f200-1f202,1f210-1f23b,1f240-1f248,1f250-1f251,1f260-1f265,1f300-1f320,1f32");
+    t.push_str("d-1f335,1f337-1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-1f3d3,1f3e0-1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,1f");
+    t.push_str("440,1f442-1f4fc,1f4ff-1f53d,1f54b-1f54e,1f550-1f567,1f57a,1f595-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c5,");
+    t.push_str("1f6cc,1f6d0-1f6d2,1f6d5,1f6eb-1f6ec,1f6f4-1f6fa,1f7e0-1f7eb,1f90d-1f971,1f973-1f976,1f97a-1f9a2,1f9a");
+    t.push_str("5-1f9aa,1f9ae-1f9ca,1f9cd-1f9ff,1fa70-1fa73,1fa78-1fa7a,1fa80-1fa82,1fa90-1fa95,20000-2fffd,30000-3f");
+    t.push_str("ffd");
+    t
+}
+
+fn zero_15() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,7fd,816-819,81b-823,825-827,829-82d,859-85b,8d3-903");
+    t.push_str(",93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,9fe,a01-a03,a3c,a3e");
+    t.push_str("-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa-aff,b01-b03,b3c");
+    t.push_str(",b3e-b44,b47-b48,b4b-b4d,b55-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c04,c3e-c44,c46-c48,c4a");
+    t.push_str("-c4d,c55-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d00-d03,d3b-d3c,d3e-d44,d46");
+    t.push_str("-d48,d4a-d4d,d57,d62-d63,d81-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47-e4e,eb1,eb4-ebc,ec8");
+    t.push_str("-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1056-1059,105e-1060,1");
+    t.push_str("062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1714,1732-1734,1752-1");
+    t.push_str("753,1772-1773,17b4-17d3,17dd,180b-180e,1885-1886,18a9,1920-192b,1930-193b,1a17-1a1b,1a55-1a5e,1a60-1");
+    t.push_str("a7c,1a7f,1ab0-1ac0,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1c24-1c37,1cd0-1cd2,1");
+    t.push_str("cd4-1ce8,1ced,1cf4,1cf7-1cf9,1dc0-1df9,1dfb-1dff,200b-200f,2028-202e,2060-2064,2066-206f,20d0-20f0,2");
+    t.push_str("cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a802,a806,a80b,a");
+    t.push_str("823-a827,a82c,a880-a881,a8b4-a8c5,a8e0-a8f1,a8ff,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a9e5,aa29-a");
+    t.push_str("a36,aa43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,abe3-abea,a");
+    t.push_str("bec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-10a03,10a05");
+    t.push_str("-10a06,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,10d24-10d27,10eab-10eac,10f46-10f50,11000-11002,110");
+    t.push_str("38-11046,1107f-11082,110b0-110ba,110bd,110cd,11100-11102,11127-11134,11145-11146,11173,11180-11182,1");
+    t.push_str("11b3-111c0,111c9-111cc,111ce-111cf,1122c-11237,1123e,112df-112ea,11300-11303,1133b-1133c,1133e-11344");
+    t.push_str(",11347-11348,1134b-1134d,11357,11362-11363,11366-1136c,11370-11374,11435-11446,1145e,114b0-114c3,115");
+    t.push_str("af-115b5,115b8-115c0,115dc-115dd,11630-11640,116ab-116b7,1171d-1172b,1182c-1183a,11930-11935,11937-1");
+    t.push_str("1938,1193b-1193e,11940,11942-11943,119d1-119d7,119da-119e0,119e4,11a01-11a0a,11a33-11a39,11a3b-11a3e");
+    t.push_str(",11a47,11a51-11a5b,11a8a-11a99,11c2f-11c36,11c38-11c3f,11c92-11ca7,11ca9-11cb6,11d31-11d36,11d3a,11d");
+    t.push_str("3c-11d3d,11d3f-11d45,11d47,11d8a-11d8e,11d90-11d91,11d93-11d97,11ef3-11ef6,13430-13438,16af0-16af4,1");
+    t.push_str("6b30-16b36,16f4f,16f51-16f87,16f8f-16f92,16fe4,16ff0-16ff1,1bc9d-1bc9e,1bca0-1bca3,1d165-1d169,1d16d");
+    t.push_str("-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36,1da3b-1da6c,1da75,1da84,1da9b-1da9f,1daa1-1da");
+    t.push_str("af,1e000-1e006,1e008-1e018,1e01b-1e021,1e023-1e024,1e026-1e02a,1e130-1e136,1e2ec-1e2ef,1e8d0-1e8d6,1");
+    t.push_str("e944-1e94a,1f3fb-1f3ff,e0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_15() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312f,3131-318e,3190-31e3,31f0-321e,3220-3247,3250-4dbf,4e00-a48c,");
+    t.push_str("a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,");
+    t.push_str("16fe0-16fe3,17000-187f7,18800-18cd5,18d00-18d08,1b000-1b11e,1b150-1b152,1b164-1b167,1b170-1b2fb,1f00");
+    t.push_str("4,1f0cf,1f18e,1f191-1f19a,1f200-1f202,1f210-1f23b,1f240-1f248,1f250-1f251,1f260-1f265,1f300-1f320,1f");
+    t.push_str("32d-1f335,1f337-1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-1f3d3,1f3e0-1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,");
+    t.push_str("1f440,1f442-1f4fc,1f4ff-1f53d,1f54b-1f54e,1f550-1f567,1f57a,1f595-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c");
+    t.push_str("5,1f6cc,1f6d0-1f6d2,1f6d5-1f6d7,1f6eb-1f6ec,1f6f4-1f6fc,1f7e0-1f7eb,1f90c-1f93a,1f93c-1f945,1f947-1f");
+    t.push_str("978,1f97a-1f9cb,1f9cd-1f9ff,1fa70-1fa74,1fa78-1fa7a,1fa80-1fa86,1fa90-1faa8,1fab0-1fab6,1fac0-1fac2,");
+    t.push_str("1fad0-1fad6,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_16() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,7fd,816-819,81b-823,825-827,829-82d,859-85b,890-891");
+    t.push_str(",898-89f,8ca-903,93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,9fe");
+    t.push_str(",a01-a03,a3c,a3e-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa");
+    t.push_str("-aff,b01-b03,b3c,b3e-b44,b47-b48,b4b-b4d,b55-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c04,c3c");
+    t.push_str(",c3e-c44,c46-c48,c4a-c4d,c55-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,d00-d03");
+    t.push_str(",d3b-d3c,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63,d81-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a,e47");
+    t.push_str("-e4e,eb1,eb4-ebc,ec8-ecd,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-103e,1");
+    t.push_str("056-1059,105e-1060,1062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,1712-1");
+    t.push_str("715,1732-1734,1752-1753,1772-1773,17b4-17d3,17dd,180b-180f,1885-1886,18a9,1920-192b,1930-193b,1a17-1");
+    t.push_str("a1b,1a55-1a5e,1a60-1a7c,1a7f,1ab0-1ace,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1bf3,1");
+    t.push_str("c24-1c37,1cd0-1cd2,1cd4-1ce8,1ced,1cf4,1cf7-1cf9,1dc0-1dff,200b-200f,2028-202e,2060-2064,2066-206f,2");
+    t.push_str("0d0-20f0,2cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a802,a");
+    t.push_str("806,a80b,a823-a827,a82c,a880-a881,a8b4-a8c5,a8e0-a8f1,a8ff,a926-a92d,a947-a953,a980-a983,a9b3-a9c0,a");
+    t.push_str("9e5,aa29-aa36,aa43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aaf6,a");
+    t.push_str("be3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a01-1");
+    t.push_str("0a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,10d24-10d27,10eab-10eac,10f46-10f50,10f82");
+    t.push_str("-10f85,11000-11002,11038-11046,11070,11073-11074,1107f-11082,110b0-110ba,110bd,110c2,110cd,11100-111");
+    t.push_str("02,11127-11134,11145-11146,11173,11180-11182,111b3-111c0,111c9-111cc,111ce-111cf,1122c-11237,1123e,1");
+    t.push_str("12df-112ea,11300-11303,1133b-1133c,1133e-11344,11347-11348,1134b-1134d,11357,11362-11363,11366-1136c");
+    t.push_str(",11370-11374,11435-11446,1145e,114b0-114c3,115af-115b5,115b8-115c0,115dc-115dd,11630-11640,116ab-116");
+    t.push_str("b7,1171d-1172b,1182c-1183a,11930-11935,11937-11938,1193b-1193e,11940,11942-11943,119d1-119d7,119da-1");
+    t.push_str("19e0,119e4,11a01-11a0a,11a33-11a39,11a3b-11a3e,11a47,11a51-11a5b,11a8a-11a99,11c2f-11c36,11c38-11c3f");
+    t.push_str(",11c92-11ca7,11ca9-11cb6,11d31-11d36,11d3a,11d3c-11d3d,11d3f-11d45,11d47,11d8a-11d8e,11d90-11d91,11d");
+    t.push_str("93-11d97,11ef3-11ef6,13430-13438,16af0-16af4,16b30-16b36,16f4f,16f51-16f87,16f8f-16f92,16fe4,16ff0-1");
+    t.push_str("6ff1,1bc9d-1bc9e,1bca0-1bca3,1cf00-1cf2d,1cf30-1cf46,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad");
+    t.push_str(",1d242-1d244,1da00-1da36,1da3b-1da6c,1da75,1da84,1da9b-1da9f,1daa1-1daaf,1e000-1e006,1e008-1e018,1e0");
+    t.push_str("1b-1e021,1e023-1e024,1e026-1e02a,1e130-1e136,1e2ae,1e2ec-1e2ef,1e8d0-1e8d6,1e944-1e94a,1f3fb-1f3ff,e");
+    t.push_str("0001,e0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_16() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312f,3131-318e,3190-31e3,31f0-321e,3220-3247,3250-4dbf,4e00-a48c,");
+    t.push_str("a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,");
+    t.push_str("16fe0-16fe3,17000-187f7,18800-18cd5,18d00-18d08,1aff0-1aff3,1aff5-1affb,1affd-1affe,1b000-1b122,1b15");
+    t.push_str("0-1b152,1b164-1b167,1b170-1b2fb,1f004,1f0cf,1f18e,1f191-1f19a,1f200-1f202,1f210-1f23b,1f240-1f248,1f");
+    t.push_str("250-1f251,1f260-1f265,1f300-1f320,1f32d-1f335,1f337-1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-1f3d3,1f3e0-");
+    t.push_str("1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,1f440,1f442-1f4fc,1f4ff-1f53d,1f54b-1f54e,1f550-1f567,1f57a,1f59");
+    t.push_str("5-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c5,1f6cc,1f6d0-1f6d2,1f6d5-1f6d7,1f6dd-1f6df,1f6eb-1f6ec,1f6f4-1f");
+    t.push_str("6fc,1f7e0-1f7eb,1f7f0,1f90c-1f93a,1f93c-1f945,1f947-1f9ff,1fa70-1fa74,1fa78-1fa7c,1fa80-1fa86,1fa90-");
+    t.push_str("1faac,1fab0-1faba,1fac0-1fac5,1fad0-1fad9,1fae0-1fae7,1faf0-1faf6,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_17() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,7fd,816-819,81b-823,825-827,829-82d,859-85b,890-891");
+    t.push_str(",898-89f,8ca-903,93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,9fe");
+    t.push_str(",a01-a03,a3c,a3e-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa");
+    t.push_str("-aff,b01-b03,b3c,b3e-b44,b47-b48,b4b-b4d,b55-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c04,c3c");
+    t.push_str(",c3e-c44,c46-c48,c4a-c4d,c55-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,cf3,d00");
+    t.push_str("-d03,d3b-d3c,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63,d81-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a");
+    t.push_str(",e47-e4e,eb1,eb4-ebc,ec8-ece,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-10");
+    t.push_str("3e,1056-1059,105e-1060,1062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,17");
+    t.push_str("12-1715,1732-1734,1752-1753,1772-1773,17b4-17d3,17dd,180b-180f,1885-1886,18a9,1920-192b,1930-193b,1a");
+    t.push_str("17-1a1b,1a55-1a5e,1a60-1a7c,1a7f,1ab0-1ace,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1b");
+    t.push_str("f3,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ced,1cf4,1cf7-1cf9,1dc0-1dff,200b-200f,2028-202e,2060-2064,2066-20");
+    t.push_str("6f,20d0-20f0,2cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a8");
+    t.push_str("02,a806,a80b,a823-a827,a82c,a880-a881,a8b4-a8c5,a8e0-a8f1,a8ff,a926-a92d,a947-a953,a980-a983,a9b3-a9");
+    t.push_str("c0,a9e5,aa29-aa36,aa43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aa");
+    t.push_str("f6,abe3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a");
+    t.push_str("01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,10d24-10d27,10eab-10eac,10efd-10eff,1");
+    t.push_str("0f46-10f50,10f82-10f85,11000-11002,11038-11046,11070,11073-11074,1107f-11082,110b0-110ba,110bd,110c2");
+    t.push_str(",110cd,11100-11102,11127-11134,11145-11146,11173,11180-11182,111b3-111c0,111c9-111cc,111ce-111cf,112");
+    t.push_str("2c-11237,1123e,11241,112df-112ea,11300-11303,1133b-1133c,1133e-11344,11347-11348,1134b-1134d,11357,1");
+    t.push_str("1362-11363,11366-1136c,11370-11374,11435-11446,1145e,114b0-114c3,115af-115b5,115b8-115c0,115dc-115dd");
+    t.push_str(",11630-11640,116ab-116b7,1171d-1172b,1182c-1183a,11930-11935,11937-11938,1193b-1193e,11940,11942-119");
+    t.push_str("43,119d1-119d7,119da-119e0,119e4,11a01-11a0a,11a33-11a39,11a3b-11a3e,11a47,11a51-11a5b,11a8a-11a99,1");
+    t.push_str("1c2f-11c36,11c38-11c3f,11c92-11ca7,11ca9-11cb6,11d31-11d36,11d3a,11d3c-11d3d,11d3f-11d45,11d47,11d8a");
+    t.push_str("-11d8e,11d90-11d91,11d93-11d97,11ef3-11ef6,11f00-11f01,11f03,11f34-11f3a,11f3e-11f42,13430-13440,134");
+    t.push_str("47-13455,16af0-16af4,16b30-16b36,16f4f,16f51-16f87,16f8f-16f92,16fe4,16ff0-16ff1,1bc9d-1bc9e,1bca0-1");
+    t.push_str("bca3,1cf00-1cf2d,1cf30-1cf46,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36");
+    t.push_str(",1da3b-1da6c,1da75,1da84,1da9b-1da9f,1daa1-1daaf,1e000-1e006,1e008-1e018,1e01b-1e021,1e023-1e024,1e0");
+    t.push_str("26-1e02a,1e08f,1e130-1e136,1e2ae,1e2ec-1e2ef,1e4ec-1e4ef,1e8d0-1e8d6,1e944-1e94a,1f3fb-1f3ff,e0001,e");
+    t.push_str("0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_17() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-2ffb,3000-3029,");
+    t.push_str("3030-303e,3041-3096,309b-30ff,3105-312f,3131-318e,3190-31e3,31f0-321e,3220-3247,3250-4dbf,4e00-a48c,");
+    t.push_str("a490-a4c6,a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,");
+    t.push_str("16fe0-16fe3,17000-187f7,18800-18cd5,18d00-18d08,1aff0-1aff3,1aff5-1affb,1affd-1affe,1b000-1b122,1b13");
+    t.push_str("2,1b150-1b152,1b155,1b164-1b167,1b170-1b2fb,1f004,1f0cf,1f18e,1f191-1f19a,1f200-1f202,1f210-1f23b,1f");
+    t.push_str("240-1f248,1f250-1f251,1f260-1f265,1f300-1f320,1f32d-1f335,1f337-1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-");
+    t.push_str("1f3d3,1f3e0-1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,1f440,1f442-1f4fc,1f4ff-1f53d,1f54b-1f54e,1f550-1f56");
+    t.push_str("7,1f57a,1f595-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c5,1f6cc,1f6d0-1f6d2,1f6d5-1f6d7,1f6dc-1f6df,1f6eb-1f");
+    t.push_str("6ec,1f6f4-1f6fc,1f7e0-1f7eb,1f7f0,1f90c-1f93a,1f93c-1f945,1f947-1f9ff,1fa70-1fa7c,1fa80-1fa88,1fa90-");
+    t.push_str("1fabd,1fabf-1fac5,1face-1fadb,1fae0-1fae8,1faf0-1faf8,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn zero_18() -> String {
+    let mut t = String.new();
+    t.push_str("0,ad,300-36f,483-489,591-5bd,5bf,5c1-5c2,5c4-5c5,5c7,600-605,610-61a,61c,64b-65f,670,6d6-6dd,6df-6e4");
+    t.push_str(",6e7-6e8,6ea-6ed,70f,711,730-74a,7a6-7b0,7eb-7f3,7fd,816-819,81b-823,825-827,829-82d,859-85b,890-891");
+    t.push_str(",898-89f,8ca-903,93a-93c,93e-94f,951-957,962-963,981-983,9bc,9be-9c4,9c7-9c8,9cb-9cd,9d7,9e2-9e3,9fe");
+    t.push_str(",a01-a03,a3c,a3e-a42,a47-a48,a4b-a4d,a51,a70-a71,a75,a81-a83,abc,abe-ac5,ac7-ac9,acb-acd,ae2-ae3,afa");
+    t.push_str("-aff,b01-b03,b3c,b3e-b44,b47-b48,b4b-b4d,b55-b57,b62-b63,b82,bbe-bc2,bc6-bc8,bca-bcd,bd7,c00-c04,c3c");
+    t.push_str(",c3e-c44,c46-c48,c4a-c4d,c55-c56,c62-c63,c81-c83,cbc,cbe-cc4,cc6-cc8,cca-ccd,cd5-cd6,ce2-ce3,cf3,d00");
+    t.push_str("-d03,d3b-d3c,d3e-d44,d46-d48,d4a-d4d,d57,d62-d63,d81-d83,dca,dcf-dd4,dd6,dd8-ddf,df2-df3,e31,e34-e3a");
+    t.push_str(",e47-e4e,eb1,eb4-ebc,ec8-ece,f18-f19,f35,f37,f39,f3e-f3f,f71-f84,f86-f87,f8d-f97,f99-fbc,fc6,102b-10");
+    t.push_str("3e,1056-1059,105e-1060,1062-1064,1067-106d,1071-1074,1082-108d,108f,109a-109d,1160-11ff,135d-135f,17");
+    t.push_str("12-1715,1732-1734,1752-1753,1772-1773,17b4-17d3,17dd,180b-180f,1885-1886,18a9,1920-192b,1930-193b,1a");
+    t.push_str("17-1a1b,1a55-1a5e,1a60-1a7c,1a7f,1ab0-1ace,1b00-1b04,1b34-1b44,1b6b-1b73,1b80-1b82,1ba1-1bad,1be6-1b");
+    t.push_str("f3,1c24-1c37,1cd0-1cd2,1cd4-1ce8,1ced,1cf4,1cf7-1cf9,1dc0-1dff,200b-200f,2028-202e,2060-2064,2066-20");
+    t.push_str("6f,20d0-20f0,2cef-2cf1,2d7f,2de0-2dff,302a-302f,3099-309a,a66f-a672,a674-a67d,a69e-a69f,a6f0-a6f1,a8");
+    t.push_str("02,a806,a80b,a823-a827,a82c,a880-a881,a8b4-a8c5,a8e0-a8f1,a8ff,a926-a92d,a947-a953,a980-a983,a9b3-a9");
+    t.push_str("c0,a9e5,aa29-aa36,aa43,aa4c-aa4d,aa7b-aa7d,aab0,aab2-aab4,aab7-aab8,aabe-aabf,aac1,aaeb-aaef,aaf5-aa");
+    t.push_str("f6,abe3-abea,abec-abed,d7b0-d7ff,fb1e,fe00-fe0f,fe20-fe2f,feff,fff9-fffb,101fd,102e0,10376-1037a,10a");
+    t.push_str("01-10a03,10a05-10a06,10a0c-10a0f,10a38-10a3a,10a3f,10ae5-10ae6,10d24-10d27,10eab-10eac,10efd-10eff,1");
+    t.push_str("0f46-10f50,10f82-10f85,11000-11002,11038-11046,11070,11073-11074,1107f-11082,110b0-110ba,110bd,110c2");
+    t.push_str(",110cd,11100-11102,11127-11134,11145-11146,11173,11180-11182,111b3-111c0,111c9-111cc,111ce-111cf,112");
+    t.push_str("2c-11237,1123e,11241,112df-112ea,11300-11303,1133b-1133c,1133e-11344,11347-11348,1134b-1134d,11357,1");
+    t.push_str("1362-11363,11366-1136c,11370-11374,11435-11446,1145e,114b0-114c3,115af-115b5,115b8-115c0,115dc-115dd");
+    t.push_str(",11630-11640,116ab-116b7,1171d-1172b,1182c-1183a,11930-11935,11937-11938,1193b-1193e,11940,11942-119");
+    t.push_str("43,119d1-119d7,119da-119e0,119e4,11a01-11a0a,11a33-11a39,11a3b-11a3e,11a47,11a51-11a5b,11a8a-11a99,1");
+    t.push_str("1c2f-11c36,11c38-11c3f,11c92-11ca7,11ca9-11cb6,11d31-11d36,11d3a,11d3c-11d3d,11d3f-11d45,11d47,11d8a");
+    t.push_str("-11d8e,11d90-11d91,11d93-11d97,11ef3-11ef6,11f00-11f01,11f03,11f34-11f3a,11f3e-11f42,13430-13440,134");
+    t.push_str("47-13455,16af0-16af4,16b30-16b36,16f4f,16f51-16f87,16f8f-16f92,16fe4,16ff0-16ff1,1bc9d-1bc9e,1bca0-1");
+    t.push_str("bca3,1cf00-1cf2d,1cf30-1cf46,1d165-1d169,1d16d-1d182,1d185-1d18b,1d1aa-1d1ad,1d242-1d244,1da00-1da36");
+    t.push_str(",1da3b-1da6c,1da75,1da84,1da9b-1da9f,1daa1-1daaf,1e000-1e006,1e008-1e018,1e01b-1e021,1e023-1e024,1e0");
+    t.push_str("26-1e02a,1e08f,1e130-1e136,1e2ae,1e2ec-1e2ef,1e4ec-1e4ef,1e8d0-1e8d6,1e944-1e94a,1f3fb-1f3ff,e0001,e");
+    t.push_str("0020-e007f,e0100-e01ef");
+    t
+}
+
+fn wide_18() -> String {
+    let mut t = String.new();
+    t.push_str("1100-115f,231a-231b,2329-232a,23e9-23ec,23f0,23f3,25fd-25fe,2614-2615,2648-2653,267f,2693,26a1,26aa-");
+    t.push_str("26ab,26bd-26be,26c4-26c5,26ce,26d4,26ea,26f2-26f3,26f5,26fa,26fd,2705,270a-270b,2728,274c,274e,2753-");
+    t.push_str("2755,2757,2795-2797,27b0,27bf,2b1b-2b1c,2b50,2b55,2e80-2e99,2e9b-2ef3,2f00-2fd5,2ff0-3029,3030-303e,");
+    t.push_str("3041-3096,309b-30ff,3105-312f,3131-318e,3190-31e3,31ef-321e,3220-3247,3250-4dbf,4e00-a48c,a490-a4c6,");
+    t.push_str("a960-a97c,ac00-d7a3,f900-faff,fe10-fe19,fe30-fe52,fe54-fe66,fe68-fe6b,ff01-ff60,ffe0-ffe6,16fe0-16fe");
+    t.push_str("3,17000-187f7,18800-18cd5,18d00-18d08,1aff0-1aff3,1aff5-1affb,1affd-1affe,1b000-1b122,1b132,1b150-1b");
+    t.push_str("152,1b155,1b164-1b167,1b170-1b2fb,1f004,1f0cf,1f18e,1f191-1f19a,1f200-1f202,1f210-1f23b,1f240-1f248,");
+    t.push_str("1f250-1f251,1f260-1f265,1f300-1f320,1f32d-1f335,1f337-1f37c,1f37e-1f393,1f3a0-1f3ca,1f3cf-1f3d3,1f3e");
+    t.push_str("0-1f3f0,1f3f4,1f3f8-1f3fa,1f400-1f43e,1f440,1f442-1f4fc,1f4ff-1f53d,1f54b-1f54e,1f550-1f567,1f57a,1f");
+    t.push_str("595-1f596,1f5a4,1f5fb-1f64f,1f680-1f6c5,1f6cc,1f6d0-1f6d2,1f6d5-1f6d7,1f6dc-1f6df,1f6eb-1f6ec,1f6f4-");
+    t.push_str("1f6fc,1f7e0-1f7eb,1f7f0,1f90c-1f93a,1f93c-1f945,1f947-1f9ff,1fa70-1fa7c,1fa80-1fa88,1fa90-1fabd,1fab");
+    t.push_str("f-1fac5,1face-1fadb,1fae0-1fae8,1faf0-1faf8,20000-2fffd,30000-3fffd");
+    t
+}
+
+fn vs16_text() -> String {
+    let mut t = String.new();
+    t.push_str("23,2a,30-39,a9,ae,203c,2049,2122,2139,2194-2199,21a9-21aa,2328,23cf,23ed-23ef,23f1-23f2,23f8-23fa,24");
+    t.push_str("c2,25aa-25ab,25b6,25c0,25fb-25fc,2600-2604,260e,2611,2618,261d,2620,2622-2623,2626,262a,262e-262f,26");
+    t.push_str("38-263a,2640,2642,265f-2660,2663,2665-2666,2668,267b,267e,2692,2694-2697,2699,269b-269c,26a0,26a7,26");
+    t.push_str("b0-26b1,26c8,26cf,26d1,26d3,26e9,26f0-26f1,26f4,26f7-26f9,2702,2708-2709,270c-270d,270f,2712,2714,27");
+    t.push_str("16,271d,2721,2733-2734,2744,2747,2763-2764,27a1,2934-2935,2b05-2b07,1f170-1f171,1f17e-1f17f,1f321,1f");
+    t.push_str("324-1f32c,1f336,1f37d,1f396-1f397,1f399-1f39b,1f39e-1f39f,1f3cb-1f3ce,1f3d4-1f3df,1f3f3,1f3f5,1f3f7,");
+    t.push_str("1f43f,1f441,1f4fd,1f549-1f54a,1f56f-1f570,1f573-1f579,1f587,1f58a-1f58d,1f590,1f5a5,1f5a8,1f5b1-1f5b");
+    t.push_str("2,1f5bc,1f5c2-1f5c4,1f5d1-1f5d3,1f5dc-1f5de,1f5e1,1f5e3,1f5e8,1f5ef,1f5f3,1f5fa,1f6cb,1f6cd-1f6cf,1f");
+    t.push_str("6e0-1f6e5,1f6e9,1f6f0,1f6f3");
+    t
+}
+
+fn unprintable_text() -> String {
+    let mut t = String.new();
+    t.push_str("80-a0,ad,378-379,380-383,38b,38d,3a2,530,557-558,58b-58c,590,5c8-5cf,5eb-5ee,5f5-605,61c,6dd,70e-70f");
+    t.push_str(",74b-74c,7b2-7bf,7fb-7fc,82e-82f,83f,85c-85d,85f,86b-86f,88f-897,8e2,984,98d-98e,991-992,9a9,9b1,9b3");
+    t.push_str("-9b5,9ba-9bb,9c5-9c6,9c9-9ca,9cf-9d6,9d8-9db,9de,9e4-9e5,9ff-a00,a04,a0b-a0e,a11-a12,a29,a31,a34,a37");
+    t.push_str(",a3a-a3b,a3d,a43-a46,a49-a4a,a4e-a50,a52-a58,a5d,a5f-a65,a77-a80,a84,a8e,a92,aa9,ab1,ab4,aba-abb,ac6");
+    t.push_str(",aca,ace-acf,ad1-adf,ae4-ae5,af2-af8,b00,b04,b0d-b0e,b11-b12,b29,b31,b34,b3a-b3b,b45-b46,b49-b4a,b4e");
+    t.push_str("-b54,b58-b5b,b5e,b64-b65,b78-b81,b84,b8b-b8d,b91,b96-b98,b9b,b9d,ba0-ba2,ba5-ba7,bab-bad,bba-bbd,bc3");
+    t.push_str("-bc5,bc9,bce-bcf,bd1-bd6,bd8-be5,bfb-bff,c0d,c11,c29,c3a-c3b,c45,c49,c4e-c54,c57,c5b-c5c,c5e-c5f,c64");
+    t.push_str("-c65,c70-c76,c8d,c91,ca9,cb4,cba-cbb,cc5,cc9,cce-cd4,cd7-cdc,cdf,ce4-ce5,cf0,cf4-cff,d0d,d11,d45,d49");
+    t.push_str(",d50-d53,d64-d65,d80,d84,d97-d99,db2,dbc,dbe-dbf,dc7-dc9,dcb-dce,dd5,dd7,de0-de5,df0-df1,df5-e00,e3b");
+    t.push_str("-e3e,e5c-e80,e83,e85,e8b,ea4,ea6,ebe-ebf,ec5,ec7,ecf,eda-edb,ee0-eff,f48,f6d-f70,f98,fbd,fcd,fdb-fff");
+    t.push_str(",10c6,10c8-10cc,10ce-10cf,1249,124e-124f,1257,1259,125e-125f,1289,128e-128f,12b1,12b6-12b7,12bf,12c1");
+    t.push_str(",12c6-12c7,12d7,1311,1316-1317,135b-135c,137d-137f,139a-139f,13f6-13f7,13fe-13ff,1680,169d-169f,16f9");
+    t.push_str("-16ff,1716-171e,1737-173f,1754-175f,176d,1771,1774-177f,17de-17df,17ea-17ef,17fa-17ff,180e,181a-181f");
+    t.push_str(",1879-187f,18ab-18af,18f6-18ff,191f,192c-192f,193c-193f,1941-1943,196e-196f,1975-197f,19ac-19af,19ca");
+    t.push_str("-19cf,19db-19dd,1a1c-1a1d,1a5f,1a7d-1a7e,1a8a-1a8f,1a9a-1a9f,1aae-1aaf,1acf-1aff,1b4d-1b4f,1b7f,1bf4");
+    t.push_str("-1bfb,1c38-1c3a,1c4a-1c4c,1c89-1c8f,1cbb-1cbc,1cc8-1ccf,1cfb-1cff,1f16-1f17,1f1e-1f1f,1f46-1f47,1f4e");
+    t.push_str("-1f4f,1f58,1f5a,1f5c,1f5e,1f7e-1f7f,1fb5,1fc5,1fd4-1fd5,1fdc,1ff0-1ff1,1ff5,1fff-200f,2028-202f,205f");
+    t.push_str("-206f,2072-2073,208f,209d-209f,20c1-20cf,20f1-20ff,218c-218f,2427-243f,244b-245f,2b74-2b75,2b96,2cf4");
+    t.push_str("-2cf8,2d26,2d28-2d2c,2d2e-2d2f,2d68-2d6e,2d71-2d7e,2d97-2d9f,2da7,2daf,2db7,2dbf,2dc7,2dcf,2dd7,2ddf");
+    t.push_str(",2e5e-2e7f,2e9a,2ef4-2eff,2fd6-2fef,3000,3040,3097-3098,3100-3104,3130,318f,31e4-31ee,321f,a48d-a48f");
+    t.push_str(",a4c7-a4cf,a62c-a63f,a6f8-a6ff,a7cb-a7cf,a7d2,a7d4,a7da-a7f1,a82d-a82f,a83a-a83f,a878-a87f,a8c6-a8cd");
+    t.push_str(",a8da-a8df,a954-a95e,a97d-a97f,a9ce,a9da-a9dd,a9ff,aa37-aa3f,aa4e-aa4f,aa5a-aa5b,aac3-aada,aaf7-ab00");
+    t.push_str(",ab07-ab08,ab0f-ab10,ab17-ab1f,ab27,ab2f,ab6c-ab6f,abee-abef,abfa-abff,d7a4-d7af,d7c7-d7ca,d7fc-f8ff");
+    t.push_str(",fa6e-fa6f,fada-faff,fb07-fb12,fb18-fb1c,fb37,fb3d,fb3f,fb42,fb45,fbc3-fbd2,fd90-fd91,fdc8-fdce,fdd0");
+    t.push_str("-fdef,fe1a-fe1f,fe53,fe67,fe6c-fe6f,fe75,fefd-ff00,ffbf-ffc1,ffc8-ffc9,ffd0-ffd1,ffd8-ffd9,ffdd-ffdf");
+    t.push_str(",ffe7,ffef-fffb,fffe-ffff,1000c,10027,1003b,1003e,1004e-1004f,1005e-1007f,100fb-100ff,10103-10106,10");
+    t.push_str("134-10136,1018f,1019d-1019f,101a1-101cf,101fe-1027f,1029d-1029f,102d1-102df,102fc-102ff,10324-1032c,");
+    t.push_str("1034b-1034f,1037b-1037f,1039e,103c4-103c7,103d6-103ff,1049e-1049f,104aa-104af,104d4-104d7,104fc-104f");
+    t.push_str("f,10528-1052f,10564-1056e,1057b,1058b,10593,10596,105a2,105b2,105ba,105bd-105ff,10737-1073f,10756-10");
+    t.push_str("75f,10768-1077f,10786,107b1,107bb-107ff,10806-10807,10809,10836,10839-1083b,1083d-1083e,10856,1089f-");
+    t.push_str("108a6,108b0-108df,108f3,108f6-108fa,1091c-1091e,1093a-1093e,10940-1097f,109b8-109bb,109d0-109d1,10a0");
+    t.push_str("4,10a07-10a0b,10a14,10a18,10a36-10a37,10a3b-10a3e,10a49-10a4f,10a59-10a5f,10aa0-10abf,10ae7-10aea,10");
+    t.push_str("af7-10aff,10b36-10b38,10b56-10b57,10b73-10b77,10b92-10b98,10b9d-10ba8,10bb0-10bff,10c49-10c7f,10cb3-");
+    t.push_str("10cbf,10cf3-10cf9,10d28-10d2f,10d3a-10e5f,10e7f,10eaa,10eae-10eaf,10eb2-10efc,10f28-10f2f,10f5a-10f6");
+    t.push_str("f,10f8a-10faf,10fcc-10fdf,10ff7-10fff,1104e-11051,11076-1107e,110bd,110c3-110cf,110e9-110ef,110fa-11");
+    t.push_str("0ff,11135,11148-1114f,11177-1117f,111e0,111f5-111ff,11212,11242-1127f,11287,11289,1128e,1129e,112aa-");
+    t.push_str("112af,112eb-112ef,112fa-112ff,11304,1130d-1130e,11311-11312,11329,11331,11334,1133a,11345-11346,1134");
+    t.push_str("9-1134a,1134e-1134f,11351-11356,11358-1135c,11364-11365,1136d-1136f,11375-113ff,1145c,11462-1147f,11");
+    t.push_str("4c8-114cf,114da-1157f,115b6-115b7,115de-115ff,11645-1164f,1165a-1165f,1166d-1167f,116ba-116bf,116ca-");
+    t.push_str("116ff,1171b-1171c,1172c-1172f,11747-117ff,1183c-1189f,118f3-118fe,11907-11908,1190a-1190b,11914,1191");
+    t.push_str("7,11936,11939-1193a,11947-1194f,1195a-1199f,119a8-119a9,119d8-119d9,119e5-119ff,11a48-11a4f,11aa3-11");
+    t.push_str("aaf,11af9-11aff,11b0a-11bff,11c09,11c37,11c46-11c4f,11c6d-11c6f,11c90-11c91,11ca8,11cb7-11cff,11d07,");
+    t.push_str("11d0a,11d37-11d39,11d3b,11d3e,11d48-11d4f,11d5a-11d5f,11d66,11d69,11d8f,11d92,11d99-11d9f,11daa-11ed");
+    t.push_str("f,11ef9-11eff,11f11,11f3b-11f3d,11f5a-11faf,11fb1-11fbf,11ff2-11ffe,1239a-123ff,1246f,12475-1247f,12");
+    t.push_str("544-12f8f,12ff3-12fff,13430-1343f,13456-143ff,14647-167ff,16a39-16a3f,16a5f,16a6a-16a6d,16abf,16aca-");
+    t.push_str("16acf,16aee-16aef,16af6-16aff,16b46-16b4f,16b5a,16b62,16b78-16b7c,16b90-16e3f,16e9b-16eff,16f4b-16f4");
+    t.push_str("e,16f88-16f8e,16fa0-16fdf,16fe5-16fef,16ff2-16fff,187f8-187ff,18cd6-18cff,18d09-1afef,1aff4,1affc,1a");
+    t.push_str("fff,1b123-1b131,1b133-1b14f,1b153-1b154,1b156-1b163,1b168-1b16f,1b2fc-1bbff,1bc6b-1bc6f,1bc7d-1bc7f,");
+    t.push_str("1bc89-1bc8f,1bc9a-1bc9b,1bca0-1ceff,1cf2e-1cf2f,1cf47-1cf4f,1cfc4-1cfff,1d0f6-1d0ff,1d127-1d128,1d17");
+    t.push_str("3-1d17a,1d1eb-1d1ff,1d246-1d2bf,1d2d4-1d2df,1d2f4-1d2ff,1d357-1d35f,1d379-1d3ff,1d455,1d49d,1d4a0-1d");
+    t.push_str("4a1,1d4a3-1d4a4,1d4a7-1d4a8,1d4ad,1d4ba,1d4bc,1d4c4,1d506,1d50b-1d50c,1d515,1d51d,1d53a,1d53f,1d545,");
+    t.push_str("1d547-1d549,1d551,1d6a6-1d6a7,1d7cc-1d7cd,1da8c-1da9a,1daa0,1dab0-1deff,1df1f-1df24,1df2b-1dfff,1e00");
+    t.push_str("7,1e019-1e01a,1e022,1e025,1e02b-1e02f,1e06e-1e08e,1e090-1e0ff,1e12d-1e12f,1e13e-1e13f,1e14a-1e14d,1e");
+    t.push_str("150-1e28f,1e2af-1e2bf,1e2fa-1e2fe,1e300-1e4cf,1e4fa-1e7df,1e7e7,1e7ec,1e7ef,1e7ff,1e8c5-1e8c6,1e8d7-");
+    t.push_str("1e8ff,1e94c-1e94f,1e95a-1e95d,1e960-1ec70,1ecb5-1ed00,1ed3e-1edff,1ee04,1ee20,1ee23,1ee25-1ee26,1ee2");
+    t.push_str("8,1ee33,1ee38,1ee3a,1ee3c-1ee41,1ee43-1ee46,1ee48,1ee4a,1ee4c,1ee50,1ee53,1ee55-1ee56,1ee58,1ee5a,1e");
+    t.push_str("e5c,1ee5e,1ee60,1ee63,1ee65-1ee66,1ee6b,1ee73,1ee78,1ee7d,1ee7f,1ee8a,1ee9c-1eea0,1eea4,1eeaa,1eebc-");
+    t.push_str("1eeef,1eef2-1efff,1f02c-1f02f,1f094-1f09f,1f0af-1f0b0,1f0c0,1f0d0,1f0f6-1f0ff,1f1ae-1f1e5,1f203-1f20");
+    t.push_str("f,1f23c-1f23f,1f249-1f24f,1f252-1f25f,1f266-1f2ff,1f6d8-1f6db,1f6ed-1f6ef,1f6fd-1f6ff,1f777-1f77a,1f");
+    t.push_str("7da-1f7df,1f7ec-1f7ef,1f7f1-1f7ff,1f80c-1f80f,1f848-1f84f,1f85a-1f85f,1f888-1f88f,1f8ae-1f8af,1f8b2-");
+    t.push_str("1f8ff,1fa54-1fa5f,1fa6e-1fa6f,1fa7d-1fa7f,1fa89-1fa8f,1fabe,1fac6-1facd,1fadc-1fadf,1fae9-1faef,1faf");
+    t.push_str("9-1faff,1fb93,1fbcb-1fbef,1fbfa-1ffff,2a6e0-2a6ff,2b73a-2b73f,2b81e-2b81f,2cea2-2ceaf,2ebe1-2ebef,2e");
+    t.push_str("e5e-2f7ff,2fa1e-2ffff,3134b-3134f,323b0-e00ff,e01f0-10ffff");
+    t
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("323032362d31302d31392031323a30303a303120494e464f097365727665722073746172746564206f6e203a38303830");
+    t.push_str("0a323032362d31302d31392031323a30303a3032205741524e09736c6f7720717565727920e2869220e6b3a8e69687e3");
+    t.push_str("8386e383bce38396e383ab2028383132206d73290a323032362d31302d31392031323a30303a303320494e464f097573");
+    t.push_str("657220e5b1b1e794b0e5a4aae9838e206c6f6767656420696e2066726f6d20f09f87aff09f87b50a323032362d31302d");
+    t.push_str("31392031323a30303a3034204552524f52096261642062797465201b5b33316d20696e206865616465727f0a0909696e");
+    t.push_str("64656e7465640974776963650ae4b8ad09e6968709e5ad9709780a633120636f6e74726f6c20c28520616e6420c29b20");
+    t.push_str("686572650ae29da4efb88f09f09f91a9e2808df09f92bb09656e640a0a73686f72740a");
+    v.push(DataFile { path: "app.log".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ada: Has anyone tried the new build? It prints 中文 fine now.\n");
+    t.push_str("太郎: はい、昨日から使っています。問題なしです！\n");
+    t.push_str("renée: ❤️❤️❤️ great work 👏🏽👏🏽\n");
+    t.push_str("ngozi: see https://example.com/a/very/long/path/that/does/not/fit/on/one/line\n");
+    t.push_str("민준: 한국어로 된 긴 문장을 여기에 씁니다 줄바꿈 테스트\n");
+    t.push_str("bot: build #42 👩‍💻👨‍💻🧑‍💻 done in  3   spaces\n");
+    t.push_str("🤖: 🇯🇵🇰🇷🇳🇬🇫🇷\n");
+    t.push_str("x: éééééééééééé\n");
+    t.push_str("long_user_name_here: hi\n");
+    t.push_str("山: 山山山山山山山山山山山山山山山山山山\n");
+    v.push(DataFile { path: "chat.log".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("524541444d452e6d640ae8aaace6988ee69bb82e7478740ae58699e79c9f0a6e6f7465730a636166c3a92e7478740a63");
+    t.push_str("616665cc812e7478740af09f93812070726f6a656374730af09f91a9e2808df09f92bb20636f64650ae29da4efb88f2e");
+    t.push_str("706e670aefbe8aefbe9defbdb6efbdb82e6373760aec82aceca7840a4d616b6566696c650a626164016e616d650ad8a7");
+    t.push_str("d984d985d984d9812e7064660a610a7a65726fe2808b73706163650ae697a5e69cace8aa9ee381aee995b7e38184e383");
+    t.push_str("95e382a1e382a4e383abe5908d2e646f63780a782e7461722e677a0af09f87aff09f87b520747269700ae0b8a0e0b8b2");
+    t.push_str("e0b8a9e0b8b2e0b984e0b897e0b8a20a746d700aefbca1efbca2efbca30a6275696c642e73680a");
+    v.push(DataFile { path: "files.txt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("日本語の長いファイル名.docx\n");
+    v.push(DataFile { path: "files_one.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("README.md\n");
+    t.push_str("説明書.txt\n");
+    t.push_str("写真\n");
+    t.push_str("notes\n");
+    t.push_str("café.txt\n");
+    t.push_str("café.txt\n");
+    v.push(DataFile { path: "files_small.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"version\": \"4.1.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"4.1.0\", \"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"5.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"5.1.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"5.2.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"5.2.0\", \"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"6.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"6.1.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"6.2.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"6.2.0\", \"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"6.3.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"7.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"8.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"8.0.0\", \"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"9.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"10.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"11.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"11.0.0\", \"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"12.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"12.1.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"13.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"13.0.0\", \"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"14.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"15.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"15.1.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\", \"\\ud81d\\udf0e\", \"\\ud81e\\udc22\", \"\\ud81e\\udd36\", \"\\ud81e\\ude4a\", \"\\ud81e\\udf5e\", \"\\ud81f\\udc72\", \"\\ud81f\\udd86\", \"\\ud81f\\ude9a\", \"\\ud81f\\udfae\", \"\\ud820\\udcc2\", \"\\ud820\\uddd6\", \"\\ud820\\udeea\", \"\\ud820\\udffe\", \"\\ud821\\udd12\", \"\\ud821\\ude26\", \"\\ud821\\udf3a\", \"\\ud822\\udc56\", \"\\ud822\\udd6a\", \"\\ud822\\ude7e\", \"\\ud822\\udf92\", \"\\ud823\\udca6\", \"\\ud82c\\udcce\", \"\\ud82c\\ude26\", \"\\ud833\\udf3a\", \"\\ud83c\\ude47\", \"\\ud83d\\udc3a\", \"\\ud83d\\udd60\", \"\\ud83e\\udd56\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"15.1.0\", \"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"texts\": [\"\\u0000\", \"\\u0001\", \"\\u001f\", \" \", \"A\", \"~\", \"\\u007f\", \"\\u0080\", \"\\u009f\", \"\\u00a0\", \"\\u00ad\", \"\\u00e9\", \"\\u0300\", \"\\u0483\", \"\\u0488\", \"\\u05bf\", \"\\u0600\", \"\\u0903\", \"\\u1100\", \"\\u115f\", \"\\u1160\", \"\\u11ff\", \"\\u200b\", \"\\u200c\", \"\\u200d\", \"\\u200e\", \"\\u2028\", \"\\u2060\", \"\\u231a\", \"\\u2329\", \"\\u2764\", \"\\u3000\", \"\\u3041\", \"\\u303f\", \"\\u4e2d\", \"\\ua4d0\", \"\\uac00\", \"\\ud7a3\", \"\\ud7b0\", \"\\ufe0f\", \"\\ufe10\", \"\\ufeff\", \"\\uff01\", \"\\uff61\", \"\\uffe0\", \"\\ud83c\\uddef\", \"\\ud83c\\udf00\", \"\\ud83d\\udc68\", \"\\ud83d\\udcbb\", \"\\ud83d\\ude00\", \"\\ud83d\\uded7\", \"\\ud83e\\udd0c\", \"\\ud83e\\ude70\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\", \"\\ud87f\\udffd\", \"\\ud880\\udc00\", \"\\udb40\\udc01\", \"\\udb40\\udd00\", \"\\udb80\\udc00\", \"\\udbff\\udffd\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"env\": \"9.0.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"auto\", \"env\": \"5.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"latest\", \"env\": \"4.1.0\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"6.2.9\", \"texts\": [\"\\u0487\", \"\\u1ab9\", \"\\u2de8\", \"\\uaa2f\", \"\\ud805\\udc3a\", \"\\ud807\\udf00\", \"\\ud81c\\udc96\", \"\\ud81c\\uddaa\", \"\\ud81c\\udebe\", \"\\ud81c\\udfd2\", \"\\ud81d\\udce6\", \"\\ud81d\\uddfa\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"2\", \"texts\": [\"a\", \"\\u4e2d\", \"\\u0300\", \"\\u4e2d\", \"\\u0301\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"nine\", \"texts\": [\"b\", \"\\u4e2d\", \"\\u0301\", \"\\u4e2d\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"version\": \"nine\", \"texts\": [\"c\", \"d\", \"\\u0007\", \"\\u009b\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"texts\": [\"\", \"ab\", \"\\u4e2d\\u6587\", \"e\\u0301\"], \"kind\": \"wcwidth\"}\n");
+    t.push_str("{\"given\": [\"4.1.0\", \"5.0.0\", \"15.1.0\", \"8.0\", \"8\", \"4.9.9\", \"1\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"given\": [\"4.1\", \"4.0.9\", \"5\", \"12\", \"12.1\", \"15\", \"16\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"given\": [\"16.0.0\", \"99.0\", \"6.2.5\", \"9.0.0.1\", \"9.0.0.0\", \"10.0\", \"10.0.0.0.0\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"given\": [\"latest\", \"auto\", \"LATEST\", \"\", \" 8.0\", \"8.0 \", \"\\u3000 9 .0\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"given\": [\"\\uff18.0.0\", \"\\u0668.\\u0660\", \"8_0.0\", \"1_0.0.0\", \"8__0\", \"+8.0\", \"-1\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"given\": [\"0.0.0\", \"-0\", \"8.-1\", \"x.y\", \"8.0a\", \".8\", \"8.\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"given\": [\"1e3\", \"\\u0bea.1\", \"5.\\u0967\", \"0x9\", \"15.1.0 \", \"15.0.0.0\", \"15.0.1\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"given\": [\"14.9\", \"11.0.0\", \"11.00.000\", \"011\", \"4.1.0\", \"\\u0000\", \"8.0\\n\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"env\": \"12.1\", \"given\": [\"auto\", \"latest\", \"auto\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"env\": \"\", \"given\": [\"auto\", \"8.0\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"env\": \"auto\", \"given\": [\"auto\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"env\": \"latest\", \"given\": [\"auto\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"env\": \" 7\", \"given\": [\"auto\", \"7.0.0\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"env\": \"0.5\", \"given\": [\"auto\", \"auto\"], \"kind\": \"match\"}\n");
+    t.push_str("{\"version\": \"latest\", \"texts\": [\"\", \"hello\", \"hello, world\", \"\\u4e2d\\u6587\\u5b57\", \"\\u3053\\u3093\\u306b\\u3061\\u306f\", \"\\uff8a\\uff9d\\uff76\\uff78\", \"\\uff21\\uff22\\uff23\", \"e\\u0301\\u0301\", \"\\u0915\\u094d\\u0937\", \"\\u1100\\u1161\\u11a8\", \"\\uac01\", \"\\u0e01\\u0e33\", \"\\u0627\\u0644\\u0639\\u0631\\u0628\\u064a\\u0629\", \"\\u05e9\\u05b8\\u05c1\\u05dc\\u05d5\\u05b9\\u05dd\", \"tab\\there\", \"bell\\u0007\", \"csi\\u009b\", \"nul\\u0000x\", \"\\u007f\", \"soft\\u00adhyphen\", \"zero\\u200bwidth\", \"\\u200d\", \"a\\u200d\", \"\\u200da\", \"\\u200d\\u200d\", \"a\\u200d\\u200db\", \"\\ud83d\\udc69\\u200d\\ud83d\\udcbb\", \"\\ud83d\\udc68\\u200d\\ud83d\\udc69\\u200d\\ud83d\\udc67\\u200d\\ud83d\\udc66\", \"\\ud83d\\udc4d\\ud83c\\udffd\", \"\\u2764\\ufe0f\", \"\\u2764\", \"\\ufe0f\", \"a\\ufe0f\", \"#\\ufe0f\\u20e3\", \"1\\ufe0f\", \"\\u00a9\\ufe0f\", \"\\u2764\\ufe0f\\ufe0f\", \"\\u4e2d\\ufe0f\", \"\\u0301\\ufe0f\", \"\\u2764\\u200d\\ufe0f\", \"\\u2764\\u0301\\ufe0f\", \"\\ud83c\\uddef\\ud83c\\uddf5\", \"\\ud83c\\udff3\\ufe0f\\u200d\\ud83c\\udf08\", \"\\u231a\", \"\\u2615\", \"\\ud83d\\uded7\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\\ud869\\uded6\", \"\\ue000\", \"\\udb40\\udc01\\udb40\\udc41\", \"\\u2028\", \"\\ufeffbom\", \"\\u3000\\u3000\", \"\\u2e80\", \"\\u303f\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"8.0.0\", \"texts\": [\"\", \"hello\", \"hello, world\", \"\\u4e2d\\u6587\\u5b57\", \"\\u3053\\u3093\\u306b\\u3061\\u306f\", \"\\uff8a\\uff9d\\uff76\\uff78\", \"\\uff21\\uff22\\uff23\", \"e\\u0301\\u0301\", \"\\u0915\\u094d\\u0937\", \"\\u1100\\u1161\\u11a8\", \"\\uac01\", \"\\u0e01\\u0e33\", \"\\u0627\\u0644\\u0639\\u0631\\u0628\\u064a\\u0629\", \"\\u05e9\\u05b8\\u05c1\\u05dc\\u05d5\\u05b9\\u05dd\", \"tab\\there\", \"bell\\u0007\", \"csi\\u009b\", \"nul\\u0000x\", \"\\u007f\", \"soft\\u00adhyphen\", \"zero\\u200bwidth\", \"\\u200d\", \"a\\u200d\", \"\\u200da\", \"\\u200d\\u200d\", \"a\\u200d\\u200db\", \"\\ud83d\\udc69\\u200d\\ud83d\\udcbb\", \"\\ud83d\\udc68\\u200d\\ud83d\\udc69\\u200d\\ud83d\\udc67\\u200d\\ud83d\\udc66\", \"\\ud83d\\udc4d\\ud83c\\udffd\", \"\\u2764\\ufe0f\", \"\\u2764\", \"\\ufe0f\", \"a\\ufe0f\", \"#\\ufe0f\\u20e3\", \"1\\ufe0f\", \"\\u00a9\\ufe0f\", \"\\u2764\\ufe0f\\ufe0f\", \"\\u4e2d\\ufe0f\", \"\\u0301\\ufe0f\", \"\\u2764\\u200d\\ufe0f\", \"\\u2764\\u0301\\ufe0f\", \"\\ud83c\\uddef\\ud83c\\uddf5\", \"\\ud83c\\udff3\\ufe0f\\u200d\\ud83c\\udf08\", \"\\u231a\", \"\\u2615\", \"\\ud83d\\uded7\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\\ud869\\uded6\", \"\\ue000\", \"\\udb40\\udc01\\udb40\\udc41\", \"\\u2028\", \"\\ufeffbom\", \"\\u3000\\u3000\", \"\\u2e80\", \"\\u303f\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"9.0.0\", \"texts\": [\"\", \"hello\", \"hello, world\", \"\\u4e2d\\u6587\\u5b57\", \"\\u3053\\u3093\\u306b\\u3061\\u306f\", \"\\uff8a\\uff9d\\uff76\\uff78\", \"\\uff21\\uff22\\uff23\", \"e\\u0301\\u0301\", \"\\u0915\\u094d\\u0937\", \"\\u1100\\u1161\\u11a8\", \"\\uac01\", \"\\u0e01\\u0e33\", \"\\u0627\\u0644\\u0639\\u0631\\u0628\\u064a\\u0629\", \"\\u05e9\\u05b8\\u05c1\\u05dc\\u05d5\\u05b9\\u05dd\", \"tab\\there\", \"bell\\u0007\", \"csi\\u009b\", \"nul\\u0000x\", \"\\u007f\", \"soft\\u00adhyphen\", \"zero\\u200bwidth\", \"\\u200d\", \"a\\u200d\", \"\\u200da\", \"\\u200d\\u200d\", \"a\\u200d\\u200db\", \"\\ud83d\\udc69\\u200d\\ud83d\\udcbb\", \"\\ud83d\\udc68\\u200d\\ud83d\\udc69\\u200d\\ud83d\\udc67\\u200d\\ud83d\\udc66\", \"\\ud83d\\udc4d\\ud83c\\udffd\", \"\\u2764\\ufe0f\", \"\\u2764\", \"\\ufe0f\", \"a\\ufe0f\", \"#\\ufe0f\\u20e3\", \"1\\ufe0f\", \"\\u00a9\\ufe0f\", \"\\u2764\\ufe0f\\ufe0f\", \"\\u4e2d\\ufe0f\", \"\\u0301\\ufe0f\", \"\\u2764\\u200d\\ufe0f\", \"\\u2764\\u0301\\ufe0f\", \"\\ud83c\\uddef\\ud83c\\uddf5\", \"\\ud83c\\udff3\\ufe0f\\u200d\\ud83c\\udf08\", \"\\u231a\", \"\\u2615\", \"\\ud83d\\uded7\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\\ud869\\uded6\", \"\\ue000\", \"\\udb40\\udc01\\udb40\\udc41\", \"\\u2028\", \"\\ufeffbom\", \"\\u3000\\u3000\", \"\\u2e80\", \"\\u303f\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"13.0.0\", \"texts\": [\"\", \"hello\", \"hello, world\", \"\\u4e2d\\u6587\\u5b57\", \"\\u3053\\u3093\\u306b\\u3061\\u306f\", \"\\uff8a\\uff9d\\uff76\\uff78\", \"\\uff21\\uff22\\uff23\", \"e\\u0301\\u0301\", \"\\u0915\\u094d\\u0937\", \"\\u1100\\u1161\\u11a8\", \"\\uac01\", \"\\u0e01\\u0e33\", \"\\u0627\\u0644\\u0639\\u0631\\u0628\\u064a\\u0629\", \"\\u05e9\\u05b8\\u05c1\\u05dc\\u05d5\\u05b9\\u05dd\", \"tab\\there\", \"bell\\u0007\", \"csi\\u009b\", \"nul\\u0000x\", \"\\u007f\", \"soft\\u00adhyphen\", \"zero\\u200bwidth\", \"\\u200d\", \"a\\u200d\", \"\\u200da\", \"\\u200d\\u200d\", \"a\\u200d\\u200db\", \"\\ud83d\\udc69\\u200d\\ud83d\\udcbb\", \"\\ud83d\\udc68\\u200d\\ud83d\\udc69\\u200d\\ud83d\\udc67\\u200d\\ud83d\\udc66\", \"\\ud83d\\udc4d\\ud83c\\udffd\", \"\\u2764\\ufe0f\", \"\\u2764\", \"\\ufe0f\", \"a\\ufe0f\", \"#\\ufe0f\\u20e3\", \"1\\ufe0f\", \"\\u00a9\\ufe0f\", \"\\u2764\\ufe0f\\ufe0f\", \"\\u4e2d\\ufe0f\", \"\\u0301\\ufe0f\", \"\\u2764\\u200d\\ufe0f\", \"\\u2764\\u0301\\ufe0f\", \"\\ud83c\\uddef\\ud83c\\uddf5\", \"\\ud83c\\udff3\\ufe0f\\u200d\\ud83c\\udf08\", \"\\u231a\", \"\\u2615\", \"\\ud83d\\uded7\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\\ud869\\uded6\", \"\\ue000\", \"\\udb40\\udc01\\udb40\\udc41\", \"\\u2028\", \"\\ufeffbom\", \"\\u3000\\u3000\", \"\\u2e80\", \"\\u303f\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"5.0.0\", \"texts\": [\"\", \"hello\", \"hello, world\", \"\\u4e2d\\u6587\\u5b57\", \"\\u3053\\u3093\\u306b\\u3061\\u306f\", \"\\uff8a\\uff9d\\uff76\\uff78\", \"\\uff21\\uff22\\uff23\", \"e\\u0301\\u0301\", \"\\u0915\\u094d\\u0937\", \"\\u1100\\u1161\\u11a8\", \"\\uac01\", \"\\u0e01\\u0e33\", \"\\u0627\\u0644\\u0639\\u0631\\u0628\\u064a\\u0629\", \"\\u05e9\\u05b8\\u05c1\\u05dc\\u05d5\\u05b9\\u05dd\", \"tab\\there\", \"bell\\u0007\", \"csi\\u009b\", \"nul\\u0000x\", \"\\u007f\", \"soft\\u00adhyphen\", \"zero\\u200bwidth\", \"\\u200d\", \"a\\u200d\", \"\\u200da\", \"\\u200d\\u200d\", \"a\\u200d\\u200db\", \"\\ud83d\\udc69\\u200d\\ud83d\\udcbb\", \"\\ud83d\\udc68\\u200d\\ud83d\\udc69\\u200d\\ud83d\\udc67\\u200d\\ud83d\\udc66\", \"\\ud83d\\udc4d\\ud83c\\udffd\", \"\\u2764\\ufe0f\", \"\\u2764\", \"\\ufe0f\", \"a\\ufe0f\", \"#\\ufe0f\\u20e3\", \"1\\ufe0f\", \"\\u00a9\\ufe0f\", \"\\u2764\\ufe0f\\ufe0f\", \"\\u4e2d\\ufe0f\", \"\\u0301\\ufe0f\", \"\\u2764\\u200d\\ufe0f\", \"\\u2764\\u0301\\ufe0f\", \"\\ud83c\\uddef\\ud83c\\uddf5\", \"\\ud83c\\udff3\\ufe0f\\u200d\\ud83c\\udf08\", \"\\u231a\", \"\\u2615\", \"\\ud83d\\uded7\", \"\\ud83e\\udee8\", \"\\ud840\\udc00\\ud869\\uded6\", \"\\ue000\", \"\\udb40\\udc01\\udb40\\udc41\", \"\\u2028\", \"\\ufeffbom\", \"\\u3000\\u3000\", \"\\u2e80\", \"\\u303f\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"4.1\", \"texts\": [\"\", \"hello\", \"hello, world\", \"\\u4e2d\\u6587\\u5b57\", \"\\u3053\\u3093\\u306b\\u3061\\u306f\", \"\\uff8a\\uff9d\\uff76\\uff78\", \"\\uff21\\uff22\\uff23\", \"e\\u0301\\u0301\", \"\\u0915\\u094d\\u0937\", \"\\u1100\\u1161\\u11a8\", \"\\uac01\", \"\\u0e01\\u0e33\", \"\\u0627\\u0644\\u0639\\u0631\\u0628\\u064a\\u0629\", \"\\u05e9\\u05b8\\u05c1\\u05dc\\u05d5\\u05b9\\u05dd\", \"tab\\there\", \"bell\\u0007\", \"csi\\u009b\", \"nul\\u0000x\", \"\\u007f\", \"soft\\u00adhyphen\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"texts\": [\"hello\", \"\\u4e2d\\u6587\", \"a\\u200d\"], \"n\": 2, \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"texts\": [\"\\u4e2d\\u6587\\u5b57\", \"\\u2764\\ufe0fx\", \"ab\\u0007c\"], \"n\": 3, \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"texts\": [\"abc\", \"\\u4e2d\\u6587\"], \"n\": 0, \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"texts\": [\"abc\", \"\\u4e2d\"], \"n\": -2, \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"texts\": [\"abc\", \"a\\u200d\", \"a\\u200db\"], \"n\": 5, \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"texts\": [\"a\\u200d\"], \"n\": 1, \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"nine\", \"texts\": [\"abc\", \"\\u2764\\ufe0f\", \"\\u4e2d\", \"\\u2764\\ufe0f\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"7\", \"texts\": [\"\\u2764\\ufe0f\", \"\\u4e2d\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"version\": \"x\", \"texts\": [\"abc\", \"ab\\u0001\", \"\\u00e9\"], \"kind\": \"wcswidth\"}\n");
+    t.push_str("{\"file\": \"files.txt\", \"width\": 80, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files.txt\", \"width\": 60, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files.txt\", \"width\": 40, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files.txt\", \"width\": 30, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files.txt\", \"width\": 20, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files.txt\", \"width\": 12, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files_small.txt\", \"width\": 40, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files_small.txt\", \"width\": 8, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"files_one.txt\", \"width\": 10, \"kind\": \"columns\"}\n");
+    t.push_str("{\"file\": \"users.csv\", \"widths\": [0, 0, 0, 0], \"align\": \"<<^<\", \"kind\": \"table\"}\n");
+    t.push_str("{\"file\": \"users.csv\", \"widths\": [8, 6, 5, 10], \"align\": \"<>^<\", \"kind\": \"table\"}\n");
+    t.push_str("{\"file\": \"users.csv\", \"widths\": [4, 3, 1, 6], \"align\": \">^<>\", \"kind\": \"table\"}\n");
+    t.push_str("{\"file\": \"users.csv\", \"widths\": [12, 0, 0, 16], \"align\": \"^^^^\", \"kind\": \"table\"}\n");
+    t.push_str("{\"file\": \"users.csv\", \"widths\": [2, 2, 2, 2], \"align\": \"<<<<\", \"kind\": \"table\"}\n");
+    t.push_str("{\"file\": \"chat.log\", \"width\": 40, \"kind\": \"wrap\"}\n");
+    t.push_str("{\"file\": \"chat.log\", \"width\": 24, \"kind\": \"wrap\"}\n");
+    t.push_str("{\"file\": \"chat.log\", \"width\": 16, \"kind\": \"wrap\"}\n");
+    t.push_str("{\"file\": \"chat.log\", \"width\": 10, \"kind\": \"wrap\"}\n");
+    t.push_str("{\"file\": \"chat.log\", \"width\": 6, \"kind\": \"wrap\"}\n");
+    t.push_str("{\"file\": \"app.log\", \"width\": 72, \"kind\": \"tail\"}\n");
+    t.push_str("{\"file\": \"app.log\", \"width\": 50, \"kind\": \"tail\"}\n");
+    t.push_str("{\"file\": \"app.log\", \"width\": 30, \"kind\": \"tail\"}\n");
+    t.push_str("{\"file\": \"app.log\", \"width\": 12, \"kind\": \"tail\"}\n");
+    t.push_str("{\"file\": \"app.log\", \"width\": 3, \"kind\": \"tail\"}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("6e616d652c636974792c726f6c652c6e6f74650a416461204c6f76656c6163652c4c6f6e646f6e2c61646d696e2c6669");
+    t.push_str("7273742070726f6772616d6d65720ae5b1b1e794b0e5a4aae9838e2ce69db1e4baac2c6465762ce383aae383bce38389");
+    t.push_str("e382a8e383b3e382b8e3838be382a20a52656ec3a9652c50617269732c6f70732c6f6e2063616c6c20f09f939f0a4a6f");
+    t.push_str("7365cc812c426f676f74c3a12c6465762ce29da4efb88f20727573740aeab980ebafbceca4802cec849cec9ab82c7161");
+    t.push_str("2ced858cec8aa4ed8ab820ec9e90eb8f99ed99940ad985d8add985d8af2cd8a7d984d982d8a7d987d8b1d8a92c646576");
+    t.push_str("2cd985d8b1d8add8a8d8a70a4e676f7a692c4c61676f732c6c6561642cf09f91a9e2808df09f94ac2072657365617263");
+    t.push_str("680ae0b8aae0b8a1e0b88ae0b8b2e0b8a22ce0b881e0b8a3e0b8b8e0b887e0b980e0b897e0b89e2c6f70732ce0b881e0");
+    t.push_str("b8b0e0b894e0b8b6e0b8810a74616209757365722c4f736c6f2c6465762c6374726c07636861720aefbe8aefbe9defbd");
+    t.push_str("b6efbdb82ce5a4a7e998aa2c6465762cefbe8aefbe9defbdb6efbdb8206f6e6c790a");
+    v.push(DataFile { path: "users.csv".to_string(), hex: true, body: t });
+}
