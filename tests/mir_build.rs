@@ -5529,3 +5529,106 @@ fn mir_u128_pow_overflow_panics_on_the_interpreter() {
         "{err}"
     );
 }
+
+#[test]
+fn mir_an_impl_listing_its_parameters_in_another_order_takes_them_by_name() {
+    // B-2026-10-18-48: `impl[T: Clone, I: Iterator] Iterator for Tagged[I, T]`
+    // built `self` as `Tagged[T, I]`, the impl's parameters put into the
+    // target by position, so `self.tag.clone()` was lowered at
+    // `T = VecIter[i64]` ("clone of VecIter[i64] needs its Clone body").
+    // An impl's arguments now go where its target writes each parameter;
+    // the same holds for an enum and for a method that returns the target
+    // with its arguments swapped.
+    let src = r#"
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Tagged[I, T] { it: I, tag: T }
+
+impl[T: Clone, I: Iterator] Iterator for Tagged[I, T] {
+    type Item = (T, I.Item);
+    fn next(mut ref self) -> Option[(T, I.Item)] {
+        match self.it.next() {
+            Some(x) => Some((self.tag.clone(), x)),
+            None => None,
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tagged { it: VecIter { items: vec![1, 2], pos: 0 }, tag: "a".to_string() };
+    while let Some((s, x)) = t.next() {
+        println(f"{s} {x}");
+    }
+}
+"#;
+    let want = "a 1\na 2\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    let src = r#"
+enum Either[L, R] { Left(L), Right(R) }
+
+impl[R: Clone, L: Clone] Either[L, R] {
+    fn right_or(self, d: own R) -> R {
+        match self {
+            Either.Left(_) => d,
+            Either.Right(r) => r.clone(),
+        }
+    }
+    fn flip(self) -> Either[R, L] {
+        match self {
+            Either.Left(l) => Either.Right(l.clone()),
+            Either.Right(r) => Either.Left(r.clone()),
+        }
+    }
+}
+
+struct Pair[A, B] { a: A, b: B }
+
+impl[B: Clone, A: Clone] Pair[A, B] {
+    fn second(self) -> B { self.b.clone() }
+    fn swap(self) -> Pair[B, A] { Pair { a: self.b.clone(), b: self.a.clone() } }
+}
+
+fn main() {
+    let e: Either[i64, String] = Either.Right("r".to_string());
+    println(e.right_or("d".to_string()));
+    let l: Either[i64, String] = Either.Left(4);
+    println(l.right_or("d".to_string()));
+    match l.flip() {
+        Either.Left(s) => println(f"L {s}"),
+        Either.Right(n) => println(f"R {n}"),
+    }
+    let p = Pair { a: 1, b: "two".to_string() };
+    println(p.second());
+    let q = p.swap();
+    println(f"{q.a} {q.b}");
+}
+"#;
+    let want = "r\nd\nR 4\ntwo\ntwo 1\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

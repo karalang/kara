@@ -402,6 +402,25 @@ struct FnItem<'a> {
 }
 
 impl FnItem<'_> {
+    /// The impl's target's arguments, from the impl's own `args` in its
+    /// declared order: `impl[T, I] .. for Tagged[I, T]` writes them
+    /// swapped (B-2026-10-18-48). The arguments as given when they are not
+    /// a reordering of all of the target's.
+    fn target_args(&self, args: &[Ty]) -> Vec<Ty> {
+        let Some(pos) = &self.impl_arg_pos else {
+            return args.to_vec();
+        };
+        let mut out = vec![None; args.len()];
+        for (&a, &k) in args.iter().zip(pos) {
+            if let Some(slot) = out.get_mut(k) {
+                *slot = Some(a);
+            }
+        }
+        out.into_iter()
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_else(|| args.to_vec())
+    }
+
     /// The impl's generic arguments, read off its target's arguments.
     fn impl_args(&self, targs: &[Ty]) -> Option<Vec<Ty>> {
         match &self.impl_arg_pos {
@@ -1236,7 +1255,9 @@ impl<'a> Lcx<'a> {
         if n > args.len() {
             return t;
         }
-        self.tys.tcx().fill_erased_args(t, target, &args[..n])
+        self.tys
+            .tcx()
+            .fill_erased_args(t, target, &item.target_args(&args[..n]))
     }
 
     /// `self`'s type in `f`, instantiated, when the checker recorded the
@@ -3020,7 +3041,8 @@ impl<'l, 'a> Bx<'l, 'a> {
                         Some(Err(e)) => return self.unsupported(f.span, &e),
                         None => {
                             let tcx = self.tys().tcx();
-                            let params: Vec<Ty> = self.args[..n.min(self.args.len())].to_vec();
+                            let params = self.lcx.fns[&def]
+                                .target_args(&self.args[..n.min(self.args.len())]);
                             let target_ty = tcx.adt(target, &params);
                             match self.lcx.convert(target_ty) {
                                 Ok(t) => t,
@@ -10808,8 +10830,8 @@ impl<'l, 'a> Bx<'l, 'a> {
             return Ok(None);
         };
         let n = self.lcx.fns[&d].impl_params;
-        let targs = inst_args.get(..n).unwrap_or(&[]);
-        let t = self.tys().tcx().adt(def, targs);
+        let targs = self.lcx.fns[&d].target_args(inst_args.get(..n).unwrap_or(&[]));
+        let t = self.tys().tcx().adt(def, &targs);
         let t = match self.lcx.mir_ty(t, &[]) {
             Ok(t) => t,
             Err(err) => return self.unsupported(callee.span, &err),
