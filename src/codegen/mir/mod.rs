@@ -327,6 +327,85 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
         }
     }
 
+    /// Tells LLVM that each `ref T` / `mut ref T` parameter points at a
+    /// whole live `T` (`llvm.assume` with `dereferenceable` and `align`
+    /// bundles), which a borrow guarantees for the whole call. Unlike a
+    /// parameter attribute the assume survives inlining, so a load
+    /// through the reference that only some iterations reach (a `Vec`'s
+    /// data pointer behind an `if`) can still be hoisted out of a loop.
+    /// `KARAC_MIR_DEREF_ASSUME=0` leaves them out.
+    fn assume_ref_params(&mut self, body: &Body) -> R<()> {
+        use inkwell::types::AsTypeRef;
+        use inkwell::values::AsValueRef;
+        use llvm_sys::core::{
+            LLVMBuildCallWithOperandBundles, LLVMCreateOperandBundle, LLVMDisposeOperandBundle,
+        };
+        if std::env::var("KARAC_MIR_DEREF_ASSUME").as_deref() == Ok("0") {
+            return Ok(());
+        }
+        let i64t = self.llcx.i64_type();
+        for i in 1..=body.arg_count {
+            let ty = body.locals[i].ty;
+            let (TyKind::Ref(t) | TyKind::MutRef(t)) = self.tys.kind(ty) else {
+                continue;
+            };
+            // A `str` or slice reference is a view, not a thin pointer.
+            if matches!(self.tys.kind(t), TyKind::Str | TyKind::Slice(_)) {
+                continue;
+            }
+            if self.layout(ty)?.size != 8 {
+                continue;
+            }
+            let l = self.layout(t)?;
+            if l.size == 0 {
+                continue;
+            }
+            let p = self
+                .builder
+                .build_load(self.ptr_ty(), self.locals[i], "")
+                .map_err(|e| e.to_string())?
+                .into_pointer_value();
+            let assume = self.module.get_function("llvm.assume").unwrap_or_else(|| {
+                let ty = self
+                    .llcx
+                    .void_type()
+                    .fn_type(&[self.llcx.bool_type().into()], false);
+                self.module.add_function("llvm.assume", ty, None)
+            });
+            let mut deref = [
+                p.as_value_ref(),
+                i64t.const_int(l.size, false).as_value_ref(),
+            ];
+            let mut align = [
+                p.as_value_ref(),
+                i64t.const_int(l.align.max(1), false).as_value_ref(),
+            ];
+            let mut arg = [self.llcx.bool_type().const_int(1, false).as_value_ref()];
+            // SAFETY: every value comes from this module's context, and each
+            // bundle is disposed after the call that copies it.
+            unsafe {
+                let mut bundles = [
+                    LLVMCreateOperandBundle(c"dereferenceable".as_ptr(), 15, deref.as_mut_ptr(), 2),
+                    LLVMCreateOperandBundle(c"align".as_ptr(), 5, align.as_mut_ptr(), 2),
+                ];
+                LLVMBuildCallWithOperandBundles(
+                    self.builder.as_mut_ptr(),
+                    assume.get_type().as_type_ref(),
+                    assume.as_value_ref(),
+                    arg.as_mut_ptr(),
+                    1,
+                    bundles.as_mut_ptr(),
+                    2,
+                    c"".as_ptr(),
+                );
+                for b in bundles {
+                    LLVMDisposeOperandBundle(b);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Marks the back edge `br` `!llvm.loop !{!self,
     /// !{!"llvm.loop.unroll.full"}}`, the self-referential loop id built
     /// through a temporary node, as the legacy backend does
@@ -462,6 +541,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             };
             self.locals.push(slot);
         }
+        self.assume_ref_params(body)?;
         self.blocks = (0..body.blocks.len())
             .map(|i| self.llcx.append_basic_block(f, &format!("bb{i}")))
             .collect();
