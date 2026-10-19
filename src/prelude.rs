@@ -1809,6 +1809,135 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
     Some(out)
 }
 
+/// A module type the import did not list (`std.time`'s `Duration`, reached
+/// through `sleep`) stays private to its module (design.md § Visibility):
+/// when the program declares an item of the same name, the module's type
+/// is renamed to a name no program can write, together with every use of
+/// it in the spliced items, so the two do not meet (B-2026-10-19-10). The
+/// name is the type's own, then `$` and the module path, which
+/// [`display_private_names`] shows as `std.time.Duration`. A type with no
+/// such collision keeps its name, so nothing else about the splice changes.
+fn privatize_unlisted_types(
+    expansion: &mut [Item],
+    path: &[String],
+    listed: &[ImportItem],
+    own_names: &std::collections::HashSet<String>,
+) {
+    let renames: HashMap<String, String> = expansion
+        .iter()
+        .filter_map(|item| match item {
+            Item::StructDef(s) if s.stdlib_origin => Some(&s.name),
+            Item::EnumDef(e) if e.stdlib_origin => Some(&e.name),
+            _ => None,
+        })
+        .filter(|name| own_names.contains(*name))
+        .filter(|name| {
+            !listed
+                .iter()
+                .any(|ii| ii.alias.as_ref().unwrap_or(&ii.name) == *name)
+        })
+        .map(|name| (name.clone(), format!("{name}${}", path.join("."))))
+        .collect();
+    if renames.is_empty() {
+        return;
+    }
+    for item in expansion.iter_mut() {
+        match item {
+            Item::StructDef(s) => {
+                if let Some(private) = renames.get(&s.name) {
+                    s.name = private.clone();
+                }
+            }
+            Item::EnumDef(e) => {
+                if let Some(private) = renames.get(&e.name) {
+                    e.name = private.clone();
+                }
+            }
+            _ => {}
+        }
+        crate::span_visitor::walk_item_mut_with(item, &mut RenameTypes(&renames));
+    }
+}
+
+/// Renames the uses of the types in its map: type expressions, struct
+/// literals and patterns, and a path or name that starts with the type
+/// (`Duration.ms(5)`, `DecodeError.BadLength`).
+struct RenameTypes<'a>(&'a HashMap<String, String>);
+
+impl RenameTypes<'_> {
+    fn head(&self, segments: &mut [String]) {
+        if let Some(private) = segments.first().and_then(|s| self.0.get(s)) {
+            segments[0] = private.clone();
+        }
+    }
+}
+
+impl crate::span_visitor::MutVisitor for RenameTypes<'_> {
+    fn span(&mut self, _: &mut Span) {}
+
+    fn type_expr(&mut self, t: &mut crate::ast::TypeExpr) {
+        if let crate::ast::TypeKind::Path(p) = &mut t.kind {
+            self.head(&mut p.segments);
+        }
+    }
+
+    fn expr(&mut self, e: &mut crate::ast::Expr) {
+        match &mut e.kind {
+            crate::ast::ExprKind::Identifier(name) => {
+                if let Some(private) = self.0.get(name) {
+                    *name = private.clone();
+                }
+            }
+            crate::ast::ExprKind::Path { segments, .. }
+            | crate::ast::ExprKind::StructLiteral { path: segments, .. } => self.head(segments),
+            _ => {}
+        }
+    }
+
+    fn pattern(&mut self, p: &mut crate::ast::Pattern) {
+        match &mut p.kind {
+            crate::ast::PatternKind::Struct { path, .. }
+            | crate::ast::PatternKind::TupleVariant { path, .. } => self.head(path),
+            _ => {}
+        }
+    }
+}
+
+/// A diagnostic's text with each private module type
+/// ([`privatize_unlisted_types`]) shown by its path: `Duration$std.time`
+/// reads `std.time.Duration`.
+pub fn display_private_names(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('$') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('$') {
+        let before = &rest[..at];
+        let name_start = before
+            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map_or(0, |i| i + 1);
+        let after = &rest[at + 1..];
+        let module_len = after
+            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(after.len());
+        let module = after[..module_len].trim_end_matches('.');
+        let name = &before[name_start..];
+        if name.is_empty() || !module.contains('.') {
+            out.push_str(&rest[..=at]);
+            rest = after;
+            continue;
+        }
+        out.push_str(&before[..name_start]);
+        out.push_str(module);
+        out.push('.');
+        out.push_str(name);
+        rest = &after[module.len()..];
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
 /// Renames the bare references to the functions in its map: `uuid_hex(x)`
 /// and `uuid_hex` used as a value. A method call names its method by string
 /// and is left alone.
@@ -2053,6 +2182,19 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
             _ => Vec::new(),
         })
         .collect();
+    // The program's own items: a module type the import did not list is
+    // renamed when it would meet one of these (B-2026-10-19-10).
+    let own_names: std::collections::HashSet<String> = program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(f) => Some(f.name.clone()),
+            Item::StructDef(s) => Some(s.name.clone()),
+            Item::EnumDef(e) => Some(e.name.clone()),
+            Item::TraitDef(t) => Some(t.name.clone()),
+            _ => None,
+        })
+        .collect();
     for item in &mut program.items {
         let Item::Import(imp) = item else { continue };
         if let Some((have, _)) = library_global_module(&imp.path) {
@@ -2078,9 +2220,10 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
                 imp.is_wildcard = false;
             }
         }
-        let Some(expansion) = gated_items_for_import(&imp.path, &imp.items) else {
+        let Some(mut expansion) = gated_items_for_import(&imp.path, &imp.items) else {
             continue;
         };
+        privatize_unlisted_types(&mut expansion, &imp.path, &imp.items, &own_names);
         // Drop exactly the import items that expanded; keep the rest.
         let expanded_names: Vec<&str> = expansion
             .iter()

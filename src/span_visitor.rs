@@ -881,6 +881,8 @@ pub trait MutVisitor {
     /// Every expression, before anything in it is visited, so a visitor
     /// can rewrite the node and have the walk continue into the result.
     fn expr(&mut self, _e: &mut Expr) {}
+    /// Every pattern, before its parts are walked.
+    fn pattern(&mut self, _p: &mut Pattern) {}
 }
 
 struct SpanOnly<F>(F);
@@ -1276,6 +1278,7 @@ fn visit_field_init_spans_mut(f: &mut FieldInit, visit: &mut impl MutVisitor) {
 }
 
 fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl MutVisitor) {
+    visit.pattern(p);
     visit.span(&mut p.span);
     visit.node_id(&mut p.id);
     match &mut p.kind {

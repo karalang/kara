@@ -4895,12 +4895,11 @@ fn main() {
 /// B-2026-10-15-107: an error in a spliced library module's item is
 /// reported by `karac check`, as the build stops on it, at the program's
 /// import of the module and naming where in the module it is. The error here
-/// is a module type the import did not list colliding with the program's own
-/// (PREDICTS B-2026-10-19-10: once an unlisted type stays private to its
-/// module, this program checks and the fixture needs another trigger).
+/// is a module type the import lists colliding with the program's own (an
+/// unlisted one stays private to the module since B-2026-10-19-10).
 #[test]
 fn an_error_in_a_library_module_is_reported_at_its_import() {
-    let src = "import std.time.{sleep};\n\
+    let src = "import std.time.{sleep, Duration};\n\
                struct Duration { n: i64 }\n\
                fn main() { let d = Duration { n: 1 }; println(f\"{d.n}\"); }\n";
     let (dir, path) = fixture("library-module-error", src);
@@ -5319,6 +5318,43 @@ fn a_named_value_iterator_closure_parameter_is_a_copy() {
 }
 "#,
         "2\n5\n2\n",
+    );
+}
+
+/// B-2026-10-19-10: a library module's type the import did not list stays
+/// private to the module, so a program's own `Duration` beside
+/// `import std.time.{sleep};` is its own type, and an enum's patterns in the
+/// module's own `impl` follow the rename. A mix-up of the two reads by the
+/// library type's path.
+#[test]
+fn a_library_type_does_not_meet_a_program_type_of_its_name() {
+    accepted_and_runs(
+        "library-type-private",
+        "import std.time.{sleep};\n\
+         struct Duration { n: i64 }\n\
+         fn main() { let d = Duration { n: 1 }; println(f\"{d.n}\"); }\n",
+        "1\n",
+    );
+    accepted_and_runs(
+        "library-enum-private",
+        "import std.encoding.{base64_decode};\n\
+         enum DecodeError { Mine }\n\
+         fn main() {\n\
+             let e = DecodeError.Mine;\n\
+             match e { DecodeError.Mine => println(\"mine\") }\n\
+             match base64_decode(\"abc\") {\n\
+                 Ok(b) => println(f\"{b.len()}\"),\n\
+                 Err(err) => println(err.to_string()),\n\
+             }\n\
+         }\n",
+        "mine\ninvalid length\n",
+    );
+    rejected(
+        "library-type-private-mixup",
+        "import std.time.{sleep};\n\
+         struct Duration { n: i64 }\n\
+         fn main() { sleep(Duration { n: 1 }); }\n",
+        "std.time.Duration",
     );
 }
 

@@ -3802,6 +3802,13 @@ impl<'a> TypeChecker<'a> {
         } else {
             FxHashSet::default()
         };
+        // A library type kept private to its module reads by its path
+        // (`std.time.Duration`, B-2026-10-19-10).
+        for e in &mut self.errors {
+            if let std::borrow::Cow::Owned(m) = crate::prelude::display_private_names(&e.message) {
+                e.message = m;
+            }
+        }
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
