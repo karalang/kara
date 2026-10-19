@@ -1,0 +1,9 @@
+// `std.process.exit` (docs/library/io.md § Process exit; B-2026-10-15-10).
+// `Command`, `Stdio`, `Child` and the rest of `std.process` are globals of
+// the library.
+
+/// Flushes standard output and standard error, then ends the process with
+/// `code`. No `Drop` body, `defer` or `errdefer` runs.
+pub fn exit(code: i32) -> Never {
+    process.exit(code)
+}

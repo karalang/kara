@@ -1235,6 +1235,11 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         &["std", "uuid"],
         include_str!("../runtime/stdlib/std_uuid.kara"),
     ),
+    // `std.process` is also a module of globals (`Command`, `Child`, ...).
+    (
+        &["std", "process"],
+        include_str!("../runtime/stdlib/std_process.kara"),
+    ),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -1954,7 +1959,7 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
         ],
         &[],
     ),
-    (&["std", "iter"], &[], &["DoubleEndedIterator", "Extend"]),
+    (&["std", "iter"], &["DoubleEndedIterator"], &["Extend"]),
     (
         &["std", "process"],
         &[
@@ -1967,7 +1972,7 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "ExitStatus",
             "Output",
         ],
-        &["exit"],
+        &[],
     ),
     (
         &["std", "log"],

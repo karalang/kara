@@ -5058,6 +5058,96 @@ fn v_iter(w: ref Vec[i64]) -> i64 { w.iter().filter(|x| *x > 5).count() }
     );
 }
 
+/// B-2026-10-15-10: `std.process.exit` is a library function now. It ends
+/// the process with its code after flushing output, and runs no `Drop` body or
+/// `defer` (docs/library/io.md § Process exit). Its `-> Never` also stands in
+/// for any type at the call.
+#[test]
+fn std_process_exit_ends_the_process_with_its_code() {
+    let src = r#"import std.process.{exit};
+struct Noisy { n: i64 }
+impl Drop for Noisy {
+    fn drop(mut ref self) { println(f"drop {self.n}"); }
+}
+fn bail(code: i32) -> i64 {
+    exit(code)
+}
+fn main() {
+    let a = Noisy { n: 1 };
+    defer { println("deferred"); }
+    print("no newline");
+    let v = bail(7);
+    println(f"{v} {a.n}");
+}
+"#;
+    accepted("process-exit", src);
+    let (dir, path) = fixture("process-exit", src);
+    let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "no newline",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(7));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-10-15-10: `std.iter.DoubleEndedIterator` resolves. A program type
+/// implements it, gets `rev` from it, and bounds a generic on it, as a library
+/// iterator does (docs/library/iterators.md § `DoubleEndedIterator`).
+#[test]
+fn std_iter_double_ended_iterator_imports_and_runs() {
+    accepted_and_runs(
+        "double-ended",
+        r#"import std.iter.{DoubleEndedIterator};
+
+struct Count {
+    lo: i64,
+    hi: i64,
+}
+
+impl Iterator for Count {
+    type Item = i64;
+    fn next(mut ref self) -> Option[i64] {
+        if self.lo >= self.hi {
+            return None;
+        }
+        self.lo += 1;
+        Some(self.lo - 1)
+    }
+}
+
+impl DoubleEndedIterator for Count {
+    fn next_back(mut ref self) -> Option[i64] {
+        if self.lo >= self.hi {
+            return None;
+        }
+        self.hi -= 1;
+        Some(self.hi)
+    }
+}
+
+fn last_of[I: DoubleEndedIterator](it: own I) -> Option[I.Item] {
+    let mut it = it;
+    it.next_back()
+}
+
+fn main() {
+    let mut c = Count { lo: 0, hi: 4 };
+    println(f"{c.next_back()} {c.next()}");
+    for x in Count { lo: 0, hi: 3 }.rev() {
+        println(f"{x}");
+    }
+    println(f"{last_of(Count { lo: 1, hi: 9 })}");
+    let v = vec![1, 2, 3];
+    println(f"{last_of(v.iter())}");
+}
+"#,
+        "Some(3) Some(0)\n2\n1\n0\nSome(8)\nSome(3)\n",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.

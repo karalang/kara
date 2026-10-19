@@ -811,6 +811,7 @@ impl<'a> Lcx<'a> {
             "f64" => HK::Float(FloatSize::F64),
             "bool" => HK::Bool,
             "char" => HK::Char,
+            "Never" => HK::Never,
             "String" => HK::Str,
             _ => return None,
         };

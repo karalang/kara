@@ -1217,6 +1217,9 @@ impl<'a> super::TypeChecker<'a> {
             "f64" => Some(Type::Float(FloatSize::F64)),
             "bool" => Some(Type::Bool),
             "char" => Some(Type::Char),
+            // The bottom type, of a function that never returns
+            // (`std.process.exit`, design.md § Never).
+            "Never" => Some(Type::Never),
             "String" => Some(Type::Str),
             // `Str` is the spec's name for the string view, `StringSlice`
             // (docs/library/strings.md; core-semantics §5.2).
