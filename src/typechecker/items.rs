@@ -8474,7 +8474,7 @@ impl<'a> super::TypeChecker<'a> {
                 // (B-2026-08-26-21). `Index.index_set` takes `val: T` by value,
                 // which a `ref T` cannot supply.
                 let errors_before_rhs = self.errors.len();
-                {
+                let rhs_ty = {
                     let rhs_ty = self.infer_expr(value);
                     self.reject_index_move_non_copy(value, &rhs_ty);
                     // B-2026-09-01-4 — sibling of the rule above, same
@@ -8490,7 +8490,9 @@ impl<'a> super::TypeChecker<'a> {
                     self.warn_partial_move_of_drop_struct(value, &rhs_ty);
                     // B-2026-09-04-15 — the RC-owner spelling of the same shape.
                     self.reject_shared_field_move(value, &rhs_ty);
-                }
+                    rhs_ty
+                };
+                self.reject_owned_value_into_ref_local(target, value, &rhs_ty);
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
                 if let ExprKind::Unary {
                     op: UnaryOp::Deref,
@@ -8596,6 +8598,45 @@ impl<'a> super::TypeChecker<'a> {
             StmtKind::Expr(_) => {}
         }
         Type::Unit
+    }
+
+    /// B-2026-10-18-40 — a local bound to a borrow (`let mut out = s;` with
+    /// `s` a borrowed parameter) is a `ref` (core semantics §5.1), so it can
+    /// only be rebound to another borrow. An owned temporary (`out = " " +
+    /// out`) would be dropped at the end of the statement; check accepted it
+    /// and the MIR builder then stored a `String` into a `ref String` local.
+    /// A place on the right is left alone: a pattern binding over a borrowed
+    /// scrutinee is typed by its value here although it is a borrow.
+    fn reject_owned_value_into_ref_local(&mut self, target: &Expr, value: &Expr, rhs_ty: &Type) {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return;
+        }
+        let ExprKind::Identifier(name) = &target.kind else {
+            return;
+        };
+        let Some(Type::Ref(inner)) = self.local_scope.lookup(name.as_str()).cloned() else {
+            return;
+        };
+        if matches!(
+            rhs_ty,
+            Type::Ref(_) | Type::MutRef(_) | Type::Error | Type::Never | Type::TypeVar(_)
+        ) || self.is_copy_type_during_check(rhs_ty)
+            || Self::is_place_expression(value)
+        {
+            return;
+        }
+        self.type_error(
+            format!(
+                "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot hold this \
+                 owned `{}`, which would be dropped at the end of the statement; bind an \
+                 owned copy where `{name}` is declared (`.clone()`), or take the parameter \
+                 it borrows as `own`",
+                type_display(&inner),
+                type_display(rhs_ty)
+            ),
+            value.span,
+            TypeErrorKind::TypeMismatch,
+        );
     }
 
     /// The edit for `(a, b) = (c, d)`: drop the parentheses on BOTH sides.

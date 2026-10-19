@@ -8783,3 +8783,69 @@ fn an_unknown_number_or_string_method_names_the_nearest() {
         );
     }
 }
+
+/// B-2026-10-18-40: a local bound to a borrowed parameter is a `ref`
+/// (core semantics §5.1), so an owned temporary stored into it would drop at
+/// the end of the statement. Check accepted `out = " " + out` and the MIR
+/// builder then stored a `String` into a `ref String` local. Rebinding it to
+/// another borrow, or to a binding over a borrowed scrutinee, stays accepted.
+#[test]
+fn an_owned_temporary_cannot_be_stored_into_a_local_bound_to_a_borrow() {
+    rejected(
+        "owned-into-ref-local",
+        r#"fn pad_left(s: String, width: i64) -> String {
+    let mut out = s;
+    while out.len() < width {
+        out = " " + out;
+    }
+    out.clone()
+}
+
+fn main() {
+    println(f"[{pad_left("ab".to_string(), 5)}]");
+}
+"#,
+        "`out` is a `ref String` (it was bound to a borrow), so it cannot hold this owned `String`",
+    );
+    rejected(
+        "literal-into-ref-local",
+        "fn f(s: String) -> i64 {\n    let mut out = s;\n    out = \"lit\";\n    out.len()\n}\n\nfn main() {\n    println(f(\"a\".to_string()));\n}\n",
+        "so it cannot hold this owned `String`",
+    );
+    accepted_and_runs(
+        "owned-copy-of-a-borrow",
+        r#"fn pad_left(s: String, width: i64) -> String {
+    let mut out = s.clone();
+    while out.len() < width {
+        out = " " + out;
+    }
+    out
+}
+
+struct Node { val: i64, next: Option[Node] }
+
+fn last(head: Node) -> i64 {
+    let mut node = ref head;
+    while let Some(n) = node.next {
+        node = n;
+    }
+    node.val
+}
+
+fn longer(a: String, b: String) -> i64 {
+    let mut out = a;
+    if b.len() > out.len() {
+        out = b;
+    }
+    out.len()
+}
+
+fn main() {
+    println(f"[{pad_left("ab".to_string(), 5)}]");
+    let l = Node { val: 1, next: Some(Node { val: 2, next: None }) };
+    println(f"{last(l)} {longer("a".to_string(), "bcd".to_string())}");
+}
+"#,
+        "[   ab]\n2 3\n",
+    );
+}

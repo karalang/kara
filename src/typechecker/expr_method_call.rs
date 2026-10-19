@@ -2372,7 +2372,7 @@ impl<'a> super::TypeChecker<'a> {
     /// `self`, field access, tuple index, index, and dereference of
     /// a place. Method calls / function calls / binops / literals
     /// are not places — they produce values without stable addresses.
-    fn is_place_expression(expr: &Expr) -> bool {
+    pub(super) fn is_place_expression(expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Identifier(_) | ExprKind::SelfValue => true,
             ExprKind::FieldAccess { object, .. } => Self::is_place_expression(object),
