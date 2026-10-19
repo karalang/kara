@@ -9106,3 +9106,48 @@ fn an_unknown_vec_method_names_the_nearest() {
         );
     }
 }
+
+/// B-2026-10-19-11: the overflow families check their operands: a shift
+/// amount or `pow` exponent is a `u32`, a divisor is `Self`, `neg` takes
+/// none, and `saturating_` has no `rem` or shift (and no unsigned `neg`).
+#[test]
+fn overflow_family_operands_are_checked() {
+    for (tag, call, want) in [
+        (
+            "shl-amount",
+            "let n: i64 = 3; let _ = x.wrapping_shl(n);",
+            "wrapping_shl expects an amount of type `u32`, got `i64` (cast with `as u32`)",
+        ),
+        (
+            "div-peer",
+            "let y: i32 = 2; let _ = x.checked_div(y);",
+            "checked_div expects an argument of type `i64`, got `i32`",
+        ),
+        (
+            "neg-arity",
+            "let _ = x.checked_neg(1);",
+            "checked_neg expects 0 argument(s), got 1",
+        ),
+        (
+            "saturating-rem",
+            "let _ = x.saturating_rem(2);",
+            "no method 'saturating_rem' on type 'i64'",
+        ),
+        (
+            "unsigned-saturating-neg",
+            "let u: u8 = 3; let _ = u.saturating_neg();",
+            "no method 'saturating_neg' on type 'u8'",
+        ),
+        (
+            "typo",
+            "let _ = x.wraping_neg();",
+            "did you mean 'wrapping_neg'?",
+        ),
+    ] {
+        rejected(
+            &format!("overflow-family-{tag}"),
+            &format!("fn main() {{\n    let x: i64 = 5;\n    {call}\n}}\n"),
+            want,
+        );
+    }
+}

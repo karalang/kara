@@ -2110,6 +2110,10 @@ impl<'a> Interp<'a> {
                 | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes" | "to_le_bytes"
                 | "to_be_bytes" | "rotate_left" | "rotate_right",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
+            // B-2026-10-19-11: the families' div / rem / neg / shl / shr / pow.
+            (t, m) if int_width(t).is_some() && is_overflow_family_op(m) => {
+                self.int_family_op(name, t, m, &args, ret)
+            }
             // `None` when a float side is NaN (floats are `PartialOrd`, not
             // `Ord`), else the order (B-2026-10-15-68).
             (t, "partial_cmp") if matches!(t, "f64" | "f32") || int_width(t).is_some() => {
@@ -7256,6 +7260,111 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// `checked_` / `wrapping_` / `saturating_` / `overflowing_` `div`,
+    /// `rem`, `neg`, `shl`, `shr` and `pow`, as Rust's `iN` defines them
+    /// (B-2026-10-19-11): a zero divisor panics outside `checked_`, a shift
+    /// amount at or past the width overflows, and `wrapping_` takes it
+    /// modulo the width.
+    fn int_family_op(
+        &mut self,
+        name: &str,
+        t: &str,
+        method: &str,
+        args: &[Value],
+        ret: Ty,
+    ) -> R<Value> {
+        let Some((bits, signed)) = int_width(t) else {
+            return err(format!("{name} on {t}"));
+        };
+        let Some((family, op)) = method.split_once('_') else {
+            return err(format!("{name} is not an overflow method"));
+        };
+        let int = |i: usize| match args.get(i) {
+            Some(Value::Int(n)) => Ok(*n),
+            other => err(format!("{name}: argument {i} is {other:?}")),
+        };
+        let (lo, hi) = if signed && bits == 128 {
+            (i128::MIN, i128::MAX)
+        } else if signed {
+            (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+        } else if bits == 128 {
+            (0, i128::MAX)
+        } else {
+            (0, (1i128 << bits) - 1)
+        };
+        let raw = |v: i128| -> u128 {
+            let shift = 128 - bits;
+            (v as u128) << shift >> shift
+        };
+        let wrap = |m: u128| -> i128 {
+            let m = m << (128 - bits) >> (128 - bits);
+            if signed && bits < 128 && (m >> (bits - 1)) & 1 == 1 {
+                m as i128 - (1i128 << bits)
+            } else {
+                m as i128
+            }
+        };
+        let a = at_width(int(0)?, bits, signed);
+        // The wrapped result, and the exact one when it is in range.
+        let (wrapped, exact): (i128, Option<i128>) = match op {
+            "div" | "rem" => {
+                let b = at_width(int(1)?, bits, signed);
+                if b == 0 {
+                    if family == "checked" {
+                        return self.option(ret, None);
+                    }
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::DivByZero));
+                    }
+                    return Err(Stop::Abort(AbortReason::DivByZero));
+                }
+                // `MIN / -1` overflows to MIN, and `MIN % -1` to 0, as
+                // Rust counts both.
+                if signed && a == lo && b == -1 {
+                    (if op == "div" { a } else { 0 }, None)
+                } else if op == "div" {
+                    (a / b, Some(a / b))
+                } else {
+                    (a % b, Some(a % b))
+                }
+            }
+            "neg" => (wrap(raw(a).wrapping_neg()), a.checked_neg()),
+            "shl" | "shr" => {
+                let n = int(1)?;
+                let k = n.rem_euclid(i128::from(bits)) as u32;
+                let w = if op == "shl" {
+                    wrap(raw(a) << k)
+                } else if signed {
+                    a >> k
+                } else {
+                    (raw(a) >> k) as i128
+                };
+                (w, (0..i128::from(bits)).contains(&n).then_some(w))
+            }
+            _ => {
+                let n = int(1)?;
+                let Ok(e) = u32::try_from(n) else {
+                    return err(format!("{name}: exponent {n}"));
+                };
+                (wrap(raw(a).wrapping_pow(e)), a.checked_pow(e))
+            }
+        };
+        let exact = exact.filter(|v| (lo..=hi).contains(v));
+        match family {
+            "checked" => self.option(ret, exact.map(Value::Int)),
+            "wrapping" => Ok(Value::Int(wrapped)),
+            "overflowing" => Ok(Value::Agg(vec![
+                Value::Int(wrapped),
+                Value::Bool(exact.is_none()),
+            ])),
+            _ => Ok(Value::Int(exact.unwrap_or(match op {
+                // An odd power of a negative number passes MIN.
+                "pow" if a < 0 && int(1)? % 2 == 1 => lo,
+                _ => hi,
+            }))),
+        }
+    }
+
     fn int_method(
         &mut self,
         name: &str,
@@ -12199,6 +12308,17 @@ fn from_bits(v: u128, it: IntTy) -> i128 {
 
 /// The width and signedness of an integer type named `name`.
 /// `v`'s low `bits` bits, read as a signed or unsigned integer.
+/// One of the overflow families' `div` / `rem` / `neg` / `shl` / `shr` /
+/// `pow` methods (B-2026-10-19-11).
+fn is_overflow_family_op(method: &str) -> bool {
+    method.split_once('_').is_some_and(|(family, op)| {
+        matches!(
+            family,
+            "checked" | "wrapping" | "saturating" | "overflowing"
+        ) && matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow")
+    })
+}
+
 fn at_width(v: i128, bits: u32, signed: bool) -> i128 {
     let shift = 128 - bits;
     if signed {

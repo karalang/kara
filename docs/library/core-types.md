@@ -57,14 +57,14 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 
 ## Numbers
 
-**Overflow method families.** Every integer type has four families of named arithmetic methods, for each of `add`, `sub`, `mul`, `div`, `rem`, `neg`, `shl`, `shr` and `pow`:
+**Overflow method families.** Every integer type has four families of named arithmetic methods, for each of `add`, `sub`, `mul`, `div`, `rem`, `neg`, `shl`, `shr` and `pow`, with the same meaning as Rust's methods of those names. `saturating_` has only `add`, `sub`, `mul`, `div`, `pow` and, on signed types, `neg`, since a remainder or a shift has no bound to clamp to. Every other operand is of type `Self`, except a shift amount or a `pow` exponent, which is a `u32`. A zero divisor panics in every family but `checked_`, which gives `None`:
 
 | Family | Returns | On overflow or out-of-range |
 |---|---|---|
 | `checked_add(y)`, `checked_div(y)`, `checked_pow(e)`, ... | `Option[Self]` | `None` |
-| `wrapping_add(y)`, `wrapping_neg()`, ... | `Self` | Two's-complement wrap; a shift amount is taken modulo the bit width |
+| `wrapping_add(y)`, `wrapping_neg()`, ... | `Self` | Two's-complement wrap; a shift amount is taken modulo the bit width, so `x.wrapping_shl(n)` equals `x.wrapping_shl(n % bits)` |
 | `saturating_add(y)`, ... | `Self` | Clamps to the type's minimum or maximum |
-| `overflowing_add(y)`, ... | `(Self, bool)` | The wrapped result and whether it overflowed |
+| `overflowing_add(y)`, ... | `(Self, bool)` | The wrapped result and whether it overflowed; a shift overflows when its amount is at least the bit width |
 
 What the plain operators do on overflow, and the other numeric rules, are in [design.md §5](../design.md#numeric-semantics).
 
@@ -83,7 +83,7 @@ What the plain operators do on overflow, and the other numeric rules, are in [de
 - `f as iN` saturates: an out-of-range value gives the nearest end of the range, and NaN gives 0.
 - `iN.checked_from(f: f64) -> Option[iN]` returns `None` for NaN or an out-of-range value, and otherwise `Some` of the value truncated toward zero. It exists on every integer type; an `f32` argument widens to `f64` losslessly.
 
-**`total_cmp`.** `f32` and `f64` have `fn total_cmp(self, other: Self) -> Ordering`, the IEEE 754 `totalOrder` comparison. It orders every value, NaN included, so it can sort floats directly:
+**`total_cmp`.** `f32` and `f64` have `fn total_cmp(self, other: Self) -> Ordering`, the IEEE 754 `totalOrder` comparison, called as `x.total_cmp(y)` or passed as `f64.total_cmp`. It orders every value, NaN included, so it can sort floats directly:
 
 ```kara
 let mut w: Vec[f64] = [2.5, -1.0, 0.25];

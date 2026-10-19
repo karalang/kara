@@ -70,6 +70,7 @@ pub(super) const FLOAT_METHODS: &[&str] = &[
     "to_degrees",
     "to_radians",
     "to_string",
+    "total_cmp",
     "trunc",
 ];
 
@@ -79,7 +80,13 @@ pub(super) const INT_METHODS: &[&str] = &[
     "bits_as_f32",
     "bits_as_f64",
     "checked_add",
+    "checked_div",
     "checked_mul",
+    "checked_neg",
+    "checked_pow",
+    "checked_rem",
+    "checked_shl",
+    "checked_shr",
     "checked_sub",
     "clamp",
     "clone",
@@ -89,14 +96,22 @@ pub(super) const INT_METHODS: &[&str] = &[
     "max",
     "min",
     "overflowing_add",
+    "overflowing_div",
     "overflowing_mul",
+    "overflowing_neg",
+    "overflowing_pow",
+    "overflowing_rem",
+    "overflowing_shl",
+    "overflowing_shr",
     "overflowing_sub",
     "pow",
     "reverse_bits",
     "rotate_left",
     "rotate_right",
     "saturating_add",
+    "saturating_div",
     "saturating_mul",
+    "saturating_pow",
     "saturating_sub",
     "swap_bytes",
     "to_f32",
@@ -105,12 +120,24 @@ pub(super) const INT_METHODS: &[&str] = &[
     "to_string",
     "trailing_zeros",
     "wrapping_add",
+    "wrapping_div",
     "wrapping_mul",
+    "wrapping_neg",
+    "wrapping_pow",
+    "wrapping_rem",
+    "wrapping_shl",
+    "wrapping_shr",
     "wrapping_sub",
 ];
 
 /// The methods only a signed integer has.
-pub(super) const SIGNED_INT_METHODS: &[&str] = &["abs", "div_euclid", "rem_euclid", "signum"];
+pub(super) const SIGNED_INT_METHODS: &[&str] = &[
+    "abs",
+    "div_euclid",
+    "rem_euclid",
+    "saturating_neg",
+    "signum",
+];
 
 /// The methods only an unsigned integer has.
 pub(super) const UNSIGNED_INT_METHODS: &[&str] = &["is_power_of_two", "next_power_of_two"];
@@ -614,6 +641,106 @@ impl<'a> super::TypeChecker<'a> {
         // type stashed at `args_close_span` (the non-aliased close-paren leaf)
         // so the trap fires at the declared width. Backends: interpreter +
         // codegen `method_call.rs`.
+        // B-2026-10-19-11: the families' other operations, as Rust's
+        // `iN`: `div` / `rem` take a `Self`, `neg` nothing, and `shl` /
+        // `shr` / `pow` a `u32`. `saturating_` has no `rem` / `shl` / `shr`
+        // (there is no bound to clamp to), and no unsigned `neg`.
+        if let Some((family, op)) = method.split_once('_') {
+            let signed = matches!(receiver_for_lookup, Type::Int(_));
+            let known = matches!(
+                family,
+                "checked" | "wrapping" | "saturating" | "overflowing"
+            ) && matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow")
+                && !(family == "saturating"
+                    && (matches!(op, "rem" | "shl" | "shr") || (op == "neg" && !signed)));
+            if known && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
+                let want = usize::from(op != "neg");
+                if args.len() != want {
+                    self.type_error(
+                        format!("{method} expects {want} argument(s), got {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    return Some(Type::Error);
+                }
+                if let Some(arg) = args.first().map(|a| &a.value) {
+                    let arg_ty = self.infer_expr(arg);
+                    if matches!(op, "div" | "rem") {
+                        if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(false) {
+                            self.record_promoted_literal(arg, receiver_for_lookup);
+                        } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
+                            self.type_error(
+                                format!(
+                                    "{method} expects an argument of type `{}`, got `{}`",
+                                    type_display(receiver_for_lookup),
+                                    type_display(&arg_ty)
+                                ),
+                                arg.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Some(Type::Error);
+                        }
+                    } else {
+                        let u32_ty = Type::UInt(UIntSize::U32);
+                        if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                            self.record_expr_type(&arg.span, &u32_ty);
+                        } else if arg_ty != Type::Error && arg_ty != u32_ty {
+                            self.type_error(
+                                format!(
+                                    "{method} expects an amount of type `u32`, got `{}` \
+                                     (cast with `as u32`)",
+                                    type_display(&arg_ty)
+                                ),
+                                arg.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Some(Type::Error);
+                        }
+                    }
+                }
+                let self_ty = receiver_for_lookup.clone();
+                return Some(match family {
+                    "checked" => Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![self_ty],
+                    },
+                    "overflowing" => Type::Tuple(vec![self_ty, Type::Bool]),
+                    _ => self_ty,
+                });
+            }
+        }
+        // `x.total_cmp(y)`: the total order `f64.total_cmp` names
+        // (B-2026-10-19-11, docs/library/core-types.md).
+        if method == "total_cmp" && matches!(receiver_for_lookup, Type::Float(_)) {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("total_cmp expects 1 argument, got {}", args.len()),
+                    *span,
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Some(Type::Error);
+            }
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            if Self::unsuffixed_num_literal(arg, receiver_for_lookup) == Some(true) {
+                self.record_promoted_literal(arg, receiver_for_lookup);
+            } else if self.numeric_arg_mismatch(&arg_ty, receiver_for_lookup) {
+                self.type_error(
+                    format!(
+                        "total_cmp expects an argument of type `{}`, got `{}`",
+                        type_display(receiver_for_lookup),
+                        type_display(&arg_ty)
+                    ),
+                    arg.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Some(Type::Error);
+            }
+            return Some(Type::Named {
+                name: "Ordering".to_string(),
+                args: vec![],
+            });
+        }
         if method == "pow" && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
             if args.len() != 1 {
                 self.type_error(

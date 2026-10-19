@@ -1683,7 +1683,13 @@ mod number_method_table_tests {
         ("cbrt", "x.cbrt()"),
         ("ceil", "x.ceil()"),
         ("checked_add", "n.checked_add(n) u.checked_add(u)"),
+        ("checked_div", "n.checked_div(n) u.checked_div(u)"),
         ("checked_mul", "n.checked_mul(n) u.checked_mul(u)"),
+        ("checked_neg", "n.checked_neg() u.checked_neg()"),
+        ("checked_pow", "n.checked_pow(3) u.checked_pow(2 as u32)"),
+        ("checked_rem", "n.checked_rem(n) u.checked_rem(u)"),
+        ("checked_shl", "n.checked_shl(3) u.checked_shl(2 as u32)"),
+        ("checked_shr", "n.checked_shr(3) u.checked_shr(2 as u32)"),
         ("checked_sub", "n.checked_sub(n) u.checked_sub(u)"),
         ("clamp", "x.clamp(0.0, 1.0) n.clamp(0, 1) u.clamp(0, 1)"),
         ("clone", "x.clone() n.clone() u.clone()"),
@@ -1713,12 +1719,33 @@ mod number_method_table_tests {
             "n.overflowing_add(n) u.overflowing_add(u)",
         ),
         (
+            "overflowing_div",
+            "n.overflowing_div(n) u.overflowing_div(u)",
+        ),
+        ("overflowing_neg", "n.overflowing_neg() u.overflowing_neg()"),
+        (
             "overflowing_mul",
             "n.overflowing_mul(n) u.overflowing_mul(u)",
         ),
         (
+            "overflowing_pow",
+            "n.overflowing_pow(3) u.overflowing_pow(2 as u32)",
+        ),
+        (
+            "overflowing_rem",
+            "n.overflowing_rem(n) u.overflowing_rem(u)",
+        ),
+        (
             "overflowing_sub",
             "n.overflowing_sub(n) u.overflowing_sub(u)",
+        ),
+        (
+            "overflowing_shl",
+            "n.overflowing_shl(3) u.overflowing_shl(2 as u32)",
+        ),
+        (
+            "overflowing_shr",
+            "n.overflowing_shr(3) u.overflowing_shr(2 as u32)",
         ),
         ("pow", "x.pow(x) n.pow(2) u.pow(2)"),
         ("powi", "x.powi(2)"),
@@ -1729,7 +1756,13 @@ mod number_method_table_tests {
         ("rotate_right", "n.rotate_right(2) u.rotate_right(2)"),
         ("round", "x.round()"),
         ("saturating_add", "n.saturating_add(n) u.saturating_add(u)"),
+        ("saturating_div", "n.saturating_div(n) u.saturating_div(u)"),
         ("saturating_mul", "n.saturating_mul(n) u.saturating_mul(u)"),
+        ("saturating_neg", "n.saturating_neg()"),
+        (
+            "saturating_pow",
+            "n.saturating_pow(3) u.saturating_pow(2 as u32)",
+        ),
         ("saturating_sub", "n.saturating_sub(n) u.saturating_sub(u)"),
         ("signum", "x.signum() n.signum()"),
         ("sin", "x.sin()"),
@@ -1746,10 +1779,17 @@ mod number_method_table_tests {
         ("to_ne_bytes", "n.to_ne_bytes() u.to_ne_bytes()"),
         ("to_radians", "x.to_radians()"),
         ("to_string", "x.to_string() n.to_string() u.to_string()"),
+        ("total_cmp", "x.total_cmp(x) x.total_cmp(2.0)"),
         ("trailing_zeros", "n.trailing_zeros() u.trailing_zeros()"),
         ("trunc", "x.trunc()"),
         ("wrapping_add", "n.wrapping_add(n) u.wrapping_add(u)"),
+        ("wrapping_div", "n.wrapping_div(n) u.wrapping_div(u)"),
         ("wrapping_mul", "n.wrapping_mul(n) u.wrapping_mul(u)"),
+        ("wrapping_neg", "n.wrapping_neg() u.wrapping_neg()"),
+        ("wrapping_pow", "n.wrapping_pow(3) u.wrapping_pow(2 as u32)"),
+        ("wrapping_rem", "n.wrapping_rem(n) u.wrapping_rem(u)"),
+        ("wrapping_shl", "n.wrapping_shl(3) u.wrapping_shl(2 as u32)"),
+        ("wrapping_shr", "n.wrapping_shr(3) u.wrapping_shr(2 as u32)"),
         ("wrapping_sub", "n.wrapping_sub(n) u.wrapping_sub(u)"),
     ];
 
@@ -1799,6 +1839,8 @@ mod number_method_table_tests {
             ("sqr", &f64_, Some("sqrt")),
             ("count_one", &i64_, Some("count_ones")),
             ("is_power_of_tow", &u64_, Some("is_power_of_two")),
+            ("wraping_neg", &i64_, Some("wrapping_neg")),
+            ("checked_shll", &u64_, Some("checked_shl")),
             ("zzzzzz", &f64_, None),
         ];
         for (typo, ty, want) in cases {

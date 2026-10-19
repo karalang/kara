@@ -915,8 +915,273 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
+    /// `checked_` / `wrapping_` / `saturating_` / `overflowing_` `div`,
+    /// `rem`, `neg`, `shl`, `shr` and `pow` (B-2026-10-19-11), at any width:
+    /// the wrapped value and whether the exact one left the range, stored as
+    /// the family asks. A zero divisor aborts outside `checked_`; a shift
+    /// amount is masked to the width and overflows at or past it; `pow`
+    /// squares and multiplies as Rust's `overflowing_pow`, so the flag
+    /// agrees with the interpreter's `checked_pow`.
+    fn int_family_op(
+        &mut self,
+        it: IntTy,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let Some((family, op)) = method.split_once('_') else {
+            return Ok(None);
+        };
+        if !matches!(
+            family,
+            "checked" | "wrapping" | "saturating" | "overflowing"
+        ) || !matches!(op, "div" | "rem" | "neg" | "shl" | "shr" | "pow")
+        {
+            return Ok(None);
+        }
+        let Some(a) = args.first() else {
+            return Ok(None);
+        };
+        let x = self.operand_scalar(a)?.into_int_value();
+        let xt = x.get_type();
+        let signed = it.signed();
+        let bits = it.bits();
+        let one = xt.const_int(1, false);
+        let z = xt.const_zero();
+        let min = if signed {
+            one.const_shl(xt.const_int(u64::from(bits - 1), false))
+        } else {
+            z
+        };
+        let max = if signed {
+            min.const_not()
+        } else {
+            xt.const_all_ones()
+        };
+        let no = self.llcx.bool_type().const_zero();
+        // The wrapped value, the overflow flag, and what `saturating_`
+        // stores on overflow.
+        let (v, o, sat) = match (op, &args[1..]) {
+            ("neg", []) => {
+                let b = &self.builder;
+                let v = b.build_int_sub(z, x, "").map_err(e)?;
+                let o = if signed {
+                    b.build_int_compare(IntPredicate::EQ, x, min, "")
+                } else {
+                    b.build_int_compare(IntPredicate::NE, x, z, "")
+                }
+                .map_err(e)?;
+                (v, o, max)
+            }
+            ("div" | "rem", [y]) => {
+                let xty = self.operand_type(a)?;
+                let Some(y) = self.int_peer(x, xty, y)? else {
+                    return Ok(None);
+                };
+                let nz = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, y, z, "")
+                    .map_err(e)?;
+                if family != "checked" {
+                    self.abort_unless(nz, "division by zero")?;
+                }
+                let b = &self.builder;
+                let ov = if signed {
+                    let at_min = b
+                        .build_int_compare(IntPredicate::EQ, x, min, "")
+                        .map_err(e)?;
+                    let m1 = b
+                        .build_int_compare(IntPredicate::EQ, y, xt.const_all_ones(), "")
+                        .map_err(e)?;
+                    b.build_and(at_min, m1, "").map_err(e)?
+                } else {
+                    no
+                };
+                // Divide by 1 where the instruction would trap: `MIN / 1`
+                // is the wrapped quotient and `MIN % 1` the wrapped rest.
+                let zero = b.build_not(nz, "").map_err(e)?;
+                let bad = b.build_or(ov, zero, "").map_err(e)?;
+                let safe = b.build_select(bad, one, y, "").map_err(e)?.into_int_value();
+                let v = match (op, signed) {
+                    ("div", true) => b.build_int_signed_div(x, safe, ""),
+                    ("div", false) => b.build_int_unsigned_div(x, safe, ""),
+                    (_, true) => b.build_int_signed_rem(x, safe, ""),
+                    _ => b.build_int_unsigned_rem(x, safe, ""),
+                }
+                .map_err(e)?;
+                let v = if op == "rem" {
+                    b.build_select(ov, z, v, "").map_err(e)?.into_int_value()
+                } else {
+                    v
+                };
+                (v, bad, max)
+            }
+            ("shl" | "shr", [n]) => {
+                let n = self.operand_scalar(n)?.into_int_value();
+                let nt = n.get_type();
+                let b = &self.builder;
+                let o = b
+                    .build_int_compare(
+                        IntPredicate::UGE,
+                        n,
+                        nt.const_int(u64::from(bits), false),
+                        "",
+                    )
+                    .map_err(e)?;
+                let k = b
+                    .build_and(n, nt.const_int(u64::from(bits - 1), false), "")
+                    .map_err(e)?;
+                let k = b.build_int_cast_sign_flag(k, xt, false, "").map_err(e)?;
+                let v = if op == "shl" {
+                    b.build_left_shift(x, k, "")
+                } else {
+                    b.build_right_shift(x, k, signed, "")
+                }
+                .map_err(e)?;
+                (v, o, max)
+            }
+            ("pow", [n]) => {
+                let n = self.operand_scalar(n)?.into_int_value();
+                let (v, o) = self.int_pow_overflowing(x, n, signed)?;
+                // A negative base to an odd power saturates low.
+                let b = &self.builder;
+                let nt = n.get_type();
+                let odd = b.build_and(n, nt.const_int(1, false), "").map_err(e)?;
+                let odd = b
+                    .build_int_compare(IntPredicate::NE, odd, nt.const_zero(), "")
+                    .map_err(e)?;
+                let sat = if signed {
+                    let neg = b
+                        .build_int_compare(IntPredicate::SLT, x, z, "")
+                        .map_err(e)?;
+                    let low = b.build_and(neg, odd, "").map_err(e)?;
+                    b.build_select(low, min, max, "")
+                        .map_err(e)?
+                        .into_int_value()
+                } else {
+                    max
+                };
+                (v, o, sat)
+            }
+            _ => return Ok(None),
+        };
+        let dty = self.place_type(dest)?;
+        let d = self.place_ptr(dest)?;
+        match family {
+            "checked" => {
+                let (some, none) = self.option_variants(dty)?;
+                let q = self.offset(d, self.field_offset(dty, Some(some), 0)?)?;
+                self.store(q, v.into())?;
+                let i32t = self.llcx.i32_type();
+                let k = self
+                    .builder
+                    .build_select(
+                        o,
+                        i32t.const_int(u64::from(none), false),
+                        i32t.const_int(u64::from(some), false),
+                        "",
+                    )
+                    .map_err(e)?
+                    .into_int_value();
+                self.store_tag_dyn(d, dty, k)?;
+            }
+            "overflowing" => {
+                self.store(d, v.into())?;
+                let q = self.offset(d, self.field_offset(dty, None, 1)?)?;
+                let b = self
+                    .builder
+                    .build_int_z_extend(o, self.llcx.i8_type(), "")
+                    .map_err(e)?;
+                self.store(q, b.into())?;
+            }
+            "saturating" => {
+                let r = self
+                    .builder
+                    .build_select(o, sat, v, "")
+                    .map_err(e)?
+                    .into_int_value();
+                self.store(d, r.into())?;
+            }
+            _ => self.store(d, v.into())?,
+        }
+        Ok(Some(()))
+    }
+
+    /// `x ** n` wrapped to `x`'s width and whether a multiplication
+    /// overflowed, in Rust's `overflowing_pow` order: the base is squared
+    /// only while exponent bits remain, so the last square never counts.
+    fn int_pow_overflowing(
+        &mut self,
+        x: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+        signed: bool,
+    ) -> R<(IntValue<'ctx>, IntValue<'ctx>)> {
+        let xt = x.get_type();
+        let nt = n.get_type();
+        let bt = self.llcx.bool_type();
+        let nz = nt.const_zero();
+        let f = self.cur_fn()?;
+        let pre = self.builder.get_insert_block().ok_or("no insert block")?;
+        let head = self.llcx.append_basic_block(f, "ipow");
+        let step = self.llcx.append_basic_block(f, "ipow.step");
+        let done = self.llcx.append_basic_block(f, "ipow.done");
+        let b = &self.builder;
+        b.build_unconditional_branch(head).map_err(e)?;
+        b.position_at_end(head);
+        let acc = b.build_phi(xt, "acc").map_err(e)?;
+        let base = b.build_phi(xt, "base").map_err(e)?;
+        let left = b.build_phi(nt, "e").map_err(e)?;
+        let over = b.build_phi(bt, "o").map_err(e)?;
+        acc.add_incoming(&[(&xt.const_int(1, false), pre)]);
+        base.add_incoming(&[(&x, pre)]);
+        left.add_incoming(&[(&n, pre)]);
+        over.add_incoming(&[(&bt.const_zero(), pre)]);
+        let (av, bv, ev, ov) = (
+            acc.as_basic_value().into_int_value(),
+            base.as_basic_value().into_int_value(),
+            left.as_basic_value().into_int_value(),
+            over.as_basic_value().into_int_value(),
+        );
+        let more = b
+            .build_int_compare(IntPredicate::NE, ev, nz, "")
+            .map_err(e)?;
+        b.build_conditional_branch(more, step, done).map_err(e)?;
+        b.position_at_end(step);
+        let low = b.build_and(ev, nt.const_int(1, false), "").map_err(e)?;
+        let odd = b
+            .build_int_compare(IntPredicate::NE, low, nz, "")
+            .map_err(e)?;
+        let (times, o1) = self.with_overflow("mul", signed, av, bv)?;
+        let (sq, o2) = self.with_overflow("mul", signed, bv, bv)?;
+        let b = &self.builder;
+        let a2 = b
+            .build_select(odd, times, av, "")
+            .map_err(e)?
+            .into_int_value();
+        let o1 = b.build_and(odd, o1, "").map_err(e)?;
+        let e2 = b
+            .build_right_shift(ev, nt.const_int(1, false), false, "")
+            .map_err(e)?;
+        let still = b
+            .build_int_compare(IntPredicate::NE, e2, nz, "")
+            .map_err(e)?;
+        let o2 = b.build_and(still, o2, "").map_err(e)?;
+        let o3 = b.build_or(ov, o1, "").map_err(e)?;
+        let o3 = b.build_or(o3, o2, "").map_err(e)?;
+        acc.add_incoming(&[(&a2, step)]);
+        base.add_incoming(&[(&sq, step)]);
+        left.add_incoming(&[(&e2, step)]);
+        over.add_incoming(&[(&o3, step)]);
+        b.build_unconditional_branch(head).map_err(e)?;
+        b.position_at_end(done);
+        Ok((av, ov))
+    }
+
     fn int_op(&mut self, it: IntTy, method: &str, args: &[Operand], dest: &Place) -> R<Option<()>> {
         if self.int_overflow_op(it, method, args, dest)?.is_some() {
+            return Ok(Some(()));
+        }
+        if self.int_family_op(it, method, args, dest)?.is_some() {
             return Ok(Some(()));
         }
         if method == "abs_diff" && args.len() == 2 {

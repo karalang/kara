@@ -5260,3 +5260,90 @@ fn main() {
         }
     }
 }
+
+/// The `checked_` / `wrapping_` / `saturating_` / `overflowing_` `div`, `rem`,
+/// `neg`, `shl`, `shr` and `pow` methods and `x.total_cmp(y)`, at 8, 64 and
+/// 128 bits, signed and unsigned, on both backends (B-2026-10-19-11). The
+/// expected output is what Rust's methods of those names print for the same
+/// operands.
+#[test]
+fn mir_integer_overflow_families() {
+    const SRC: &str = r#"fn o(x: Ordering) -> String {
+    match x {
+        Ordering.Less => "Less",
+        Ordering.Equal => "Equal",
+        Ordering.Greater => "Greater",
+    }
+}
+
+fn main() {
+    let a: i8 = -128;
+    let b: i8 = 7;
+    let z: i8 = 0;
+    let m: i8 = -1;
+    println(f"{a.checked_div(m).is_none()} {b.checked_div(z).is_none()} {a.checked_div(b).unwrap()} {a.checked_rem(m).is_none()} {b.checked_rem(2).unwrap()}");
+    println(f"{a.wrapping_div(m)} {a.wrapping_rem(m)} {a.wrapping_neg()} {b.wrapping_neg()} {b.wrapping_shl(9)} {a.wrapping_shr(9)} {b.wrapping_pow(3)}");
+    println(f"{a.saturating_div(m)} {a.saturating_neg()} {b.saturating_pow(3)} {a.saturating_pow(3)} {m.saturating_pow(3)}");
+    println(f"{a.overflowing_div(m)} {a.overflowing_rem(m)} {a.overflowing_neg()} {b.overflowing_shl(8)} {b.overflowing_shr(3)} {b.overflowing_pow(3)}");
+    println(f"{a.checked_neg().is_none()} {b.checked_shl(8).is_none()} {b.checked_shl(6).unwrap()} {a.checked_shr(7).unwrap()} {b.checked_pow(2).unwrap()} {b.checked_pow(3).is_none()}");
+    let u: u8 = 200;
+    let w: u8 = 3;
+    println(f"{u.checked_neg().is_none()} {u.wrapping_neg()} {u.overflowing_neg()} {u.wrapping_div(w)} {u.wrapping_rem(w)} {u.saturating_pow(2)} {w.wrapping_pow(6)} {u.wrapping_shr(10)} {u.overflowing_shl(1)}");
+    let n: i64 = -9223372036854775807 - 1;
+    println(f"{n.checked_div(-1).is_none()} {n.wrapping_div(-1)} {n.saturating_div(-1)} {n.overflowing_pow(2)} {n.wrapping_neg()} {n.checked_pow(1).unwrap()} {(-2i64).checked_pow(63).unwrap()} {3i64.wrapping_pow(41)}");
+    let q: u64 = 18446744073709551615;
+    println(f"{q.wrapping_pow(2)} {q.overflowing_neg()} {q.saturating_pow(2)} {q.wrapping_shl(65)}");
+    let x: i128 = 170141183460469231731687303715884105727;
+    println(f"{x.checked_pow(2).is_none()} {x.wrapping_pow(2)} {x.wrapping_neg()} {x.saturating_pow(3)} {(-x - 1).saturating_div(-1)}");
+    let f: f64 = 1.5;
+    println(f"{o(f.total_cmp(2.0))} {o(f.total_cmp(1.5))} {o((-0.0f64).total_cmp(0.0))}");
+}
+"#;
+    let want = "true true -18 true 1\n-128 0 -128 -7 14 -64 87\n127 127 127 -128 -1\n(-128, true) (0, true) (-128, true) (7, true) (0, false) (87, true)\ntrue true -64 -1 49 true\ntrue 56 (56, true) 66 2 255 217 50 (144, false)\ntrue -9223372036854775808 9223372036854775807 (0, true) -9223372036854775808 -9223372036854775808 -9223372036854775808 -420491770248316829\n1 (1, true) 18446744073709551615 18446744073709551614\ntrue 1 -170141183460469231731687303715884105727 170141183460469231731687303715884105727 170141183460469231731687303715884105727\nLess Equal Less\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// A zero divisor panics in the `wrapping_` family, with the same message on
+/// both backends; `checked_div` gives `None` instead (B-2026-10-19-11).
+#[test]
+fn mir_wrapping_div_by_zero_panics() {
+    let src = "fn main() {\n    let z: i32 = 0;\n    \
+               println(f\"{7i32.checked_div(z).is_none()}\");\n    \
+               println(f\"{7i32.wrapping_div(z)}\");\n}\n";
+    let want = "runtime error: division by zero\n";
+    let dir = Scratch::new();
+    let file = dir.path().join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["__mir-run", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let first = |b: &[u8]| {
+        String::from_utf8_lossy(b)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string()
+            + "\n"
+    };
+    assert_eq!(interp.status.code(), Some(101), "__mir-run");
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stdout),
+        "true\n",
+        "__mir-run"
+    );
+    assert_eq!(first(&interp.stderr), want, "__mir-run");
+    let Some(exe) = cli_build(&dir, src, &[]) else {
+        return;
+    };
+    let run = Command::new(&exe).output().unwrap();
+    assert_eq!(run.status.code(), Some(101));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
+    assert_eq!(first(&run.stderr), want, "compiled");
+}
