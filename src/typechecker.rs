@@ -3159,6 +3159,11 @@ pub struct TypeChecker<'a> {
     /// v2 core §4.6: closures handed to an adaptor over `.iter()`, with the
     /// index of the parameter that receives the lent element.
     pub(super) core_view_closure_params: FxHashMap<SpanKey, usize>,
+    /// core-semantics.md §5.10: closures handed to an adaptor over an
+    /// iterator that yields values (a range, `chars()`, a `map`), with the
+    /// index of the parameter that receives the item. A `Copy` item reaches
+    /// that parameter as a copy (B-2026-10-13-32).
+    pub(super) copy_item_closure_params: FxHashMap<SpanKey, usize>,
     /// `stdlib_origin` of the function whose body we're currently
     /// checking. Saved/restored across `check_function` so nested
     /// item-checks (e.g. impl method bodies inside a stdlib-origin
@@ -3483,6 +3488,7 @@ impl<'a> TypeChecker<'a> {
             closure_once_reasons: FxHashMap::default(),
             closure_param_seeds: FxHashMap::default(),
             core_view_closure_params: FxHashMap::default(),
+            copy_item_closure_params: FxHashMap::default(),
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             library_methods_from_source: false,

@@ -1107,6 +1107,68 @@ impl<'a> super::TypeChecker<'a> {
     /// where its parameter is lent (`Fn(ref String) -> i64`, the type a bare
     /// `Fn(String) -> i64` reads as). Where the slot takes the value
     /// (`MutFn(own T)`), the annotation keeps its owned reading.
+    /// The parameter of an iterator adaptor's closure that receives the
+    /// item: the first, or `fold`'s second (after the accumulator).
+    pub(super) fn adaptor_item_param(method: &str) -> Option<usize> {
+        match method {
+            "map" | "filter" | "for_each" | "any" | "all" | "find" | "filter_map" | "flat_map"
+            | "take_while" | "skip_while" | "position" | "inspect" | "max_by_key"
+            | "min_by_key" | "partition" | "find_map" => Some(0),
+            "fold" => Some(1),
+            _ => None,
+        }
+    }
+
+    /// Whether an iterator chain yields values rather than lending them: it
+    /// starts at a range, a string's `chars()` / `bytes()` / `char_indices()`,
+    /// or a `map` (whose items are what its closure returns), through the
+    /// adaptors that pass items on. A chain over `.iter()` lends them
+    /// ([`Self::core_iter_yields_refs`]); a named iterator says nothing here.
+    pub(super) fn iter_yields_values(e: &Expr) -> bool {
+        let mut e = e;
+        loop {
+            match &e.kind {
+                ExprKind::Range { .. } => return true,
+                ExprKind::MethodCall { object, method, .. } => match method.as_str() {
+                    "chars" | "bytes" | "char_indices" | "map" => return true,
+                    "enumerate" | "rev" | "skip" | "take" | "step_by" | "filter" | "peekable"
+                    | "skip_while" | "take_while" | "inspect" => e = object,
+                    _ => return false,
+                },
+                _ => return false,
+            }
+        }
+    }
+
+    /// core-semantics.md §5.10: a closure parameter takes its type from the
+    /// function type it is checked against and is then an ordinary bare
+    /// parameter, so over an iterator of `Copy` values it is a copy:
+    /// `(1..n).find(|j| ..)` binds `j: i64`, not the `ref i64` the library's
+    /// borrowed `Self.Item` spelling gives (B-2026-10-13-32). The closure's
+    /// own type keeps the parameter it is checked against; only the binding
+    /// is the copy. An annotated parameter keeps its annotation.
+    fn copy_item_param(&self, closure: &Span, i: usize, p: &ClosureParam, ty: Type) -> Type {
+        if p.ty.is_some()
+            || self
+                .copy_item_closure_params
+                .get(&SpanKey::from_span(closure))
+                != Some(&i)
+        {
+            return ty;
+        }
+        match resolve_type_var_top(&ty, &self.env.substitutions) {
+            Type::Ref(inner) => {
+                let inner = resolve_type_var_top(&inner, &self.env.substitutions);
+                if copied_item(&inner) {
+                    inner
+                } else {
+                    ty
+                }
+            }
+            _ => ty,
+        }
+    }
+
     fn d5_closure_param_borrows(
         &self,
         annotation: &Option<TypeExpr>,
@@ -2261,21 +2323,23 @@ impl<'a> super::TypeChecker<'a> {
                 let param_types: Vec<Type> = params
                     .iter()
                     .zip(expected_params.iter())
-                    .map(|(p, expected_pty)| {
+                    .enumerate()
+                    .map(|(i, (p, expected_pty))| {
                         let ty = p
                             .ty
                             .as_ref()
                             .map(|t| self.lower_type_expr(t, &[]))
                             .unwrap_or_else(|| expected_pty.clone());
                         let ty = self.d5_closure_param_borrows(&p.ty, ty, expected_pty);
-                        if !self.is_irrefutable_pattern(&p.pattern, &ty) {
+                        let bound = self.copy_item_param(&expr.span, i, p, ty.clone());
+                        if !self.is_irrefutable_pattern(&p.pattern, &bound) {
                             self.type_error(
                                 "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),
                                 p.pattern.span,
                                 TypeErrorKind::RefutablePattern,
                             );
                         }
-                        self.bind_pattern_types(&p.pattern, &ty);
+                        self.bind_pattern_types(&p.pattern, &bound);
                         ty
                     })
                     .collect();
@@ -7501,17 +7565,22 @@ impl<'a> super::TypeChecker<'a> {
                 // v2 core §4.6: an adaptor over `.iter()` lends each element,
                 // so the closure's element parameter is a view of it.
                 if self.cli_lint_overrides.strict_core && Self::core_iter_yields_refs(object) {
-                    let at = match method.as_str() {
-                        "map" | "filter" | "for_each" | "any" | "all" | "find" | "filter_map"
-                        | "flat_map" | "take_while" | "skip_while" | "position" | "inspect"
-                        | "max_by_key" | "min_by_key" | "partition" | "find_map" => Some(0),
-                        "fold" => Some(1),
-                        _ => None,
-                    };
-                    if let Some(i) = at {
+                    if let Some(i) = Self::adaptor_item_param(method) {
                         for a in args {
                             if matches!(a.value.kind, ExprKind::Closure { .. }) {
                                 self.core_view_closure_params
+                                    .insert(SpanKey::from_span(&a.value.span), i);
+                            }
+                        }
+                    }
+                }
+                if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                    && Self::iter_yields_values(object)
+                {
+                    if let Some(i) = Self::adaptor_item_param(method) {
+                        for a in args {
+                            if matches!(a.value.kind, ExprKind::Closure { .. }) {
+                                self.copy_item_closure_params
                                     .insert(SpanKey::from_span(&a.value.span), i);
                             }
                         }
@@ -8816,14 +8885,15 @@ impl<'a> super::TypeChecker<'a> {
                         let ty = annotated
                             .or(seeded)
                             .unwrap_or_else(|| self.env.fresh_type_var());
-                        if !self.is_irrefutable_pattern(&p.pattern, &ty) {
+                        let bound = self.copy_item_param(&expr.span, i, p, ty.clone());
+                        if !self.is_irrefutable_pattern(&p.pattern, &bound) {
                             self.type_error(
                                 "refutable pattern in closure parameter; use `if let` or `match` for patterns that may not match".to_string(),
                                 p.pattern.span,
                                 TypeErrorKind::RefutablePattern,
                             );
                         }
-                        self.bind_pattern_types(&p.pattern, &ty);
+                        self.bind_pattern_types(&p.pattern, &bound);
                         ty
                     })
                     .collect();
@@ -9905,4 +9975,13 @@ fn builds_a_value_shape(e: &Expr) -> bool {
             | ExprKind::MapLiteral { .. }
             | ExprKind::StructLiteral { .. }
     )
+}
+
+/// A scalar, or a tuple of them: an item every read copies.
+fn copied_item(t: &Type) -> bool {
+    match t {
+        Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => true,
+        Type::Tuple(ts) => !ts.is_empty() && ts.iter().all(copied_item),
+        _ => false,
+    }
 }

@@ -13883,12 +13883,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         // after all of them are declared.
         let mut through = Vec::new();
         let mut destructured = Vec::new();
-        for p in params {
+        // A parameter whose function type lends a `Copy` item that the
+        // checker binds as a copy (`(1..n).find(|j| ..)`, core-semantics.md
+        // §5.10, B-2026-10-13-32) takes the reference and copies it out.
+        let fn_params = self.closure_fn_param_tys(job);
+        for (i, p) in params.iter().enumerate() {
             let t = self.node_ty(p.pattern.id, p.span)?;
+            let lent_copy = !job.ref_params
+                && fn_params.get(i).is_some_and(|&pt| {
+                    matches!(self.tys().tcx().kind(pt), HK::Ref(inner) if inner == t)
+                        && self.is_copy(t)
+                });
+            let by_ref = job.ref_params || lent_copy;
             let PatternKind::Binding(name) = &p.pattern.kind else {
                 // Lent: the parts bind through the reference.
-                if job.ref_params && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_))
-                {
+                if by_ref && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)) {
                     let rt = self.tys().tcx().reference(t, false);
                     let arg = self.b.arg("arg", rt);
                     destructured.push((&p.pattern, arg, rt));
@@ -13906,7 +13915,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 .binding_syms
                 .get(&(p.pattern.id, name.clone()))
                 .copied();
-            if job.ref_params && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)) {
+            if by_ref && !matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)) {
                 let rt = self.tys().tcx().reference(t, false);
                 let arg = self.b.arg("arg", rt);
                 through.push((name, p.pattern.id, sym, arg, t));
@@ -14097,6 +14106,22 @@ impl<'l, 'a> Bx<'l, 'a> {
             next,
         );
         Ok(())
+    }
+
+    /// The parameter types of the function type a closure job was checked
+    /// against, in its instance; empty when the checker recorded none.
+    fn closure_fn_param_tys(&mut self, job: &ClosureJob<'a>) -> Vec<Ty> {
+        let Some(&t) = self.lcx.node_types.get(&job.expr.id) else {
+            return Vec::new();
+        };
+        let HK::Fn { params, .. } = self.tys().tcx().kind(t) else {
+            return Vec::new();
+        };
+        let params = self.tys().tcx().list(params).to_vec();
+        params
+            .into_iter()
+            .filter_map(|p| self.lcx.mir_ty(p, &job.args).ok())
+            .collect()
     }
 
     /// A closure's parameter types, from its checked function type.

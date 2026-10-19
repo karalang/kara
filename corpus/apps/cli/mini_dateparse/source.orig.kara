@@ -854,7 +854,7 @@ impl Lexer {
         if not have {
             return None;
         }
-        let dots = token.chars().filter(|c| *c == '.').count();
+        let dots = token.chars().filter(|c| c == '.').count();
         let last = token.chars().last().unwrap_or(' ');
         if (state == 3 or state == 4) and (seen_letters or dots > 1 or last == '.' or last == ',') {
             // re.split("([.,])", token), empty pieces dropped

@@ -4245,15 +4245,34 @@ impl<'a> super::TypeChecker<'a> {
                     other
                 }
                 _ => {
-                    self.type_error(
-                        format!(
-                            "unary '*' requires 'ref T', 'mut ref T', or a raw pointer \
-                             ('*const T' / '*mut T'), found '{}'",
-                            type_display(&ty)
-                        ),
-                        *span,
-                        TypeErrorKind::InvalidUnaryOp,
+                    let message = format!(
+                        "unary '*' requires 'ref T', 'mut ref T', or a raw pointer \
+                         ('*const T' / '*mut T'), found '{}'",
+                        type_display(&ty)
                     );
+                    // A `Copy` value is already the value: `*c` on a `char`
+                    // parameter (a predicate over `chars()`, core-semantics.md
+                    // §5.10) means `c`. The fix drops the `*`.
+                    if self.is_copy_type_during_check(&ty) && operand.span.offset > span.offset {
+                        let star = Span {
+                            length: operand.span.offset - span.offset,
+                            ..*span
+                        };
+                        self.type_error_with_fix_it(
+                            format!(
+                                "{message}; a '{}' is copied, so drop the `*`",
+                                type_display(&ty)
+                            ),
+                            *span,
+                            TypeErrorKind::InvalidUnaryOp,
+                            super::FixIt {
+                                span: star,
+                                replacement: String::new(),
+                            },
+                        );
+                        return Type::Error;
+                    }
+                    self.type_error(message, *span, TypeErrorKind::InvalidUnaryOp);
                     Type::Error
                 }
             },

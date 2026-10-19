@@ -832,9 +832,9 @@ fn a_string_s_chars_are_a_library_source() {
     let src = r#"
 fn main() {
     let s = "héllo".to_string();
-    let n = s.chars().filter(|c| *c != 'l').count();
+    let n = s.chars().filter(|c| c != 'l').count();
     println(f"{n}");
-    let kept: String = s.chars().filter(|c| *c != 'é').collect();
+    let kept: String = s.chars().filter(|c| c != 'é').collect();
     println(kept);
     let mut w = 0;
     for c in s.chars() {

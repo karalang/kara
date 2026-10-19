@@ -4972,6 +4972,92 @@ fn main() {
     );
 }
 
+/// B-2026-10-13-32, B-2026-10-13-6: a closure parameter is an ordinary bare
+/// parameter of the item type it is lent (core-semantics.md §5.10). Over an
+/// iterator of `Copy` values it is a copy, so `*j` is an error whose fix drops
+/// the `*`; over `.iter()`, and from a named `VecIter` / `DequeIter`, the item
+/// is a `ref T` and `*k` reads it.
+#[test]
+fn a_closure_parameter_over_copy_items_is_a_copy() {
+    for (tag, src, at) in [
+        (
+            "closure-copy-find",
+            "fn main() {\n    let w = vec![4, 6, 9];\n    let n = w.len();\n    \
+             let r = (1..n).find(|j| w[0] + w[*j] == 13);\n    println(f\"{r.unwrap()}\");\n}\n",
+            ":4:38: unary '*'",
+        ),
+        (
+            "closure-copy-chars",
+            "fn main() {\n    let w = \"QqqQ\";\n    \
+             println(f\"{w.chars().filter(|c| *c == 'Q').count()}\");\n}\n",
+            ":3:37: unary '*'",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must refuse `*`: {err}");
+        assert!(
+            err.contains(at) && err.contains("drop the `*`"),
+            "{tag}: {err}"
+        );
+        let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+        assert!(
+            !out.status.success(),
+            "{tag}: the MIR pipeline refuses it too"
+        );
+        let out = karac().arg("fix").arg(&path).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{tag}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let fixed = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !fixed.contains("*j") && !fixed.contains("*c"),
+            "{tag}: {fixed}"
+        );
+        let out = karac().arg("__mir-run").arg(&path).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "2\n", "{tag}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    accepted_and_runs(
+        "closure-copy-values",
+        r#"fn main() {
+    let w = vec![4, 6, 9];
+    let n = w.len();
+    let r = (1..n).find(|j| w[0] + w[j] == 13);
+    let word = "QqqQ";
+    let c = word.chars().filter(|c| c == 'Q').count();
+    let up: Vec[char] = word.chars().map(|c| c.to_ascii_uppercase()).filter(|c| c != 'X').collect();
+    let s = (0..5).fold(0, |acc, k| acc + k * k);
+    let e: Vec[(i64, char)] = word.chars().enumerate().filter(|p| p.1 == 'Q').collect();
+    let big = v_iter(w);
+    println(f"{r.unwrap()} {c} {up.len()} {s} {e.len()} {big}");
+}
+fn v_iter(w: ref Vec[i64]) -> i64 { w.iter().filter(|x| *x > 5).count() }
+"#,
+        "2 2 4 30 2 2\n",
+    );
+    accepted_and_runs(
+        "named-iter-ref-items",
+        r#"fn main() {
+    let w = vec![4, 6, 9];
+    let mut it = w.iter();
+    let Some(k) = it.next() else { return; };
+    let x = *k;
+    let mut c: VecDeque[i64] = VecDeque.new();
+    c.push_back(5);
+    let mut dit = c.iter();
+    let Some(d) = dit.next() else { return; };
+    let y = *d;
+    println(f"{x} {y}");
+}
+"#,
+        "4 5\n",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.
