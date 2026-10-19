@@ -5499,3 +5499,33 @@ fn mir_u128_orders_unsigned() {
         }
     }
 }
+
+/// `pow` at 128 bits on the interpreter: a `u128` is raised as a `u128`
+/// (`2u128.pow(127)` was `i128::MAX`), and a result past 128 bits panics
+/// with "integer overflow" as `pow` at 64 bits does, rather than printing
+/// `i128::MAX`. The first line is what Rust prints (B-2026-10-19-28). The
+/// compiled backend does not lower 128-bit `pow` yet (B-2026-10-19-27).
+#[test]
+fn mir_u128_pow_overflow_panics_on_the_interpreter() {
+    let src = "fn main() {\n    let t: u128 = 3;\n    let s: i128 = -3;\n    \
+               println(f\"{t.pow(80)} {s.pow(79)} {(2u128).pow(127)} {(-2i128).pow(127)}\");\n    \
+               let x: u128 = 1 << 100;\n    println(f\"{x.pow(2)}\");\n}\n";
+    let dir = Scratch::new();
+    let file = dir.path().join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["__mir-run", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(101));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "147808829414345923316083210206383297601 -49269609804781974438694403402127765867 \
+         170141183460469231731687303715884105728 -170141183460469231731687303715884105728\n"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.starts_with("runtime error: integer overflow\n"),
+        "{err}"
+    );
+}

@@ -7971,9 +7971,22 @@ impl<'a> Interp<'a> {
                 let Ok(e) = u32::try_from(*b) else {
                     return err(format!("{name}: exponent {b} out of range"));
                 };
-                match a.checked_pow(e) {
+                // A `u128` is held as its bits, so it is raised as a
+                // `u128`; and a result past 128 bits overflows here, since
+                // no out-of-range stand-in can reach `fit` at that width
+                // (B-2026-10-19-28).
+                let exact = match it {
+                    Some(IntTy::U128) => (*a as u128).checked_pow(e).map(|v| v as i128),
+                    _ => a.checked_pow(e),
+                };
+                match exact {
                     Some(v) => fit(self, v),
-                    None => fit(self, i128::MAX),
+                    None => {
+                        if self.trace {
+                            self.events.push(Event::Abort(AbortReason::Overflow));
+                        }
+                        Err(Stop::Abort(AbortReason::Overflow))
+                    }
                 }
             }
             ("wrapping_add" | "wrapping_sub" | "wrapping_mul", [Value::Int(a), Value::Int(b)]) => {
