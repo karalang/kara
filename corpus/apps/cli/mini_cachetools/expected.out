@@ -1,0 +1,2860 @@
+cachetools 7.2.3
+job 1: script Cache(maxsize=3)
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  repr -> Cache({'a': 1, 'b': 2, 'c': 3}, maxsize=3, currsize=3)
+  getitem 'a' -> 1
+  set 'd' 4 -> None
+  repr -> Cache({'b': 2, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  get 'b' -> 2
+  get 'zz' -> None
+  get 'zz' 'none' -> 'none'
+  in 'a' -> False
+  in 'b' -> True
+  len -> 3
+  currsize -> 3
+  maxsize -> 3
+  set 'a' 10 -> None
+  repr -> Cache({'c': 3, 'd': 4, 'a': 10}, maxsize=3, currsize=3)
+  pop 'c' -> 3
+  pop 'c' -> KeyError('c')
+  pop 'c' 0 -> 0
+  setdefault 'e' 5 -> 5
+  setdefault 'e' 6 -> 5
+  setdefault 'f' -> None
+  repr -> Cache({'a': 10, 'e': 5, 'f': None}, maxsize=3, currsize=3)
+  del 'nope' -> KeyError('nope')
+  popitem -> ('a', 10)
+  repr -> Cache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  list -> ['e', 'f']
+  items -> [('e', 5), ('f', None)]
+  values -> [5, None]
+  repr -> Cache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  update (('x', 7), ('y', 8)) -> None
+  repr -> Cache({'f': None, 'x': 7, 'y': 8}, maxsize=3, currsize=3)
+  clear -> None
+  repr -> Cache({}, maxsize=3, currsize=0)
+  popitem -> KeyError()
+  len -> 0
+job 2: script FIFOCache(maxsize=3)
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  repr -> FIFOCache({'a': 1, 'b': 2, 'c': 3}, maxsize=3, currsize=3)
+  getitem 'a' -> 1
+  set 'd' 4 -> None
+  repr -> FIFOCache({'b': 2, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  get 'b' -> 2
+  get 'zz' -> None
+  get 'zz' 'none' -> 'none'
+  in 'a' -> False
+  in 'b' -> True
+  len -> 3
+  currsize -> 3
+  maxsize -> 3
+  set 'a' 10 -> None
+  repr -> FIFOCache({'c': 3, 'd': 4, 'a': 10}, maxsize=3, currsize=3)
+  pop 'c' -> 3
+  pop 'c' -> KeyError('c')
+  pop 'c' 0 -> 0
+  setdefault 'e' 5 -> 5
+  setdefault 'e' 6 -> 5
+  setdefault 'f' -> None
+  repr -> FIFOCache({'a': 10, 'e': 5, 'f': None}, maxsize=3, currsize=3)
+  del 'nope' -> KeyError('nope')
+  popitem -> ('a', 10)
+  repr -> FIFOCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  list -> ['e', 'f']
+  items -> [('e', 5), ('f', None)]
+  values -> [5, None]
+  repr -> FIFOCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  update (('x', 7), ('y', 8)) -> None
+  repr -> FIFOCache({'f': None, 'x': 7, 'y': 8}, maxsize=3, currsize=3)
+  clear -> None
+  repr -> FIFOCache({}, maxsize=3, currsize=0)
+  popitem -> KeyError('FIFOCache is empty')
+  len -> 0
+job 3: script LRUCache(maxsize=3)
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  repr -> LRUCache({'a': 1, 'b': 2, 'c': 3}, maxsize=3, currsize=3)
+  getitem 'a' -> 1
+  set 'd' 4 -> None
+  repr -> LRUCache({'a': 1, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  get 'b' -> None
+  get 'zz' -> None
+  get 'zz' 'none' -> 'none'
+  in 'a' -> True
+  in 'b' -> False
+  len -> 3
+  currsize -> 3
+  maxsize -> 3
+  set 'a' 10 -> None
+  repr -> LRUCache({'a': 10, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  pop 'c' -> 3
+  pop 'c' -> KeyError('c')
+  pop 'c' 0 -> 0
+  setdefault 'e' 5 -> 5
+  setdefault 'e' 6 -> 5
+  setdefault 'f' -> None
+  repr -> LRUCache({'a': 10, 'e': 5, 'f': None}, maxsize=3, currsize=3)
+  del 'nope' -> KeyError('nope')
+  popitem -> ('a', 10)
+  repr -> LRUCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  list -> ['e', 'f']
+  items -> [('e', 5), ('f', None)]
+  values -> [5, None]
+  repr -> LRUCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  update (('x', 7), ('y', 8)) -> None
+  repr -> LRUCache({'f': None, 'x': 7, 'y': 8}, maxsize=3, currsize=3)
+  clear -> None
+  repr -> LRUCache({}, maxsize=3, currsize=0)
+  popitem -> KeyError('LRUCache is empty')
+  len -> 0
+job 4: script LFUCache(maxsize=3)
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  repr -> LFUCache({'a': 1, 'b': 2, 'c': 3}, maxsize=3, currsize=3)
+  getitem 'a' -> 1
+  set 'd' 4 -> None
+  repr -> LFUCache({'a': 1, 'b': 2, 'd': 4}, maxsize=3, currsize=3)
+  get 'b' -> 2
+  get 'zz' -> None
+  get 'zz' 'none' -> 'none'
+  in 'a' -> True
+  in 'b' -> True
+  len -> 3
+  currsize -> 3
+  maxsize -> 3
+  set 'a' 10 -> None
+  repr -> LFUCache({'a': 10, 'b': 2, 'd': 4}, maxsize=3, currsize=3)
+  pop 'c' -> KeyError('c')
+  pop 'c' -> KeyError('c')
+  pop 'c' 0 -> 0
+  setdefault 'e' 5 -> 5
+  setdefault 'e' 6 -> 5
+  setdefault 'f' -> None
+  repr -> LFUCache({'a': 10, 'b': 2, 'f': None}, maxsize=3, currsize=3)
+  del 'nope' -> KeyError('nope')
+  popitem -> ('f', None)
+  repr -> LFUCache({'a': 10, 'b': 2}, maxsize=3, currsize=2)
+  list -> ['a', 'b']
+  items -> [('a', 10), ('b', 2)]
+  values -> [10, 2]
+  repr -> LFUCache({'a': 10, 'b': 2}, maxsize=3, currsize=2)
+  update (('x', 7), ('y', 8)) -> None
+  repr -> LFUCache({'a': 10, 'b': 2, 'y': 8}, maxsize=3, currsize=3)
+  clear -> None
+  repr -> LFUCache({}, maxsize=3, currsize=0)
+  popitem -> KeyError('LFUCache is empty')
+  len -> 0
+job 5: script RRCache(maxsize=3, picks=[0, 2, 1, 5])
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  repr -> RRCache({'a': 1, 'b': 2, 'c': 3}, maxsize=3, currsize=3)
+  getitem 'a' -> 1
+  set 'd' 4 -> None
+  repr -> RRCache({'b': 2, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  get 'b' -> 2
+  get 'zz' -> None
+  get 'zz' 'none' -> 'none'
+  in 'a' -> False
+  in 'b' -> True
+  len -> 3
+  currsize -> 3
+  maxsize -> 3
+  set 'a' 10 -> None
+  repr -> RRCache({'b': 2, 'c': 3, 'a': 10}, maxsize=3, currsize=3)
+  pop 'c' -> 3
+  pop 'c' -> KeyError('c')
+  pop 'c' 0 -> 0
+  setdefault 'e' 5 -> 5
+  setdefault 'e' 6 -> 5
+  setdefault 'f' -> None
+  repr -> RRCache({'a': 10, 'e': 5, 'f': None}, maxsize=3, currsize=3)
+  del 'nope' -> KeyError('nope')
+  popitem -> ('f', None)
+  repr -> RRCache({'a': 10, 'e': 5}, maxsize=3, currsize=2)
+  list -> ['a', 'e']
+  items -> [('a', 10), ('e', 5)]
+  values -> [10, 5]
+  repr -> RRCache({'a': 10, 'e': 5}, maxsize=3, currsize=2)
+  update (('x', 7), ('y', 8)) -> None
+  repr -> RRCache({'e': 5, 'x': 7, 'y': 8}, maxsize=3, currsize=3)
+  clear -> None
+  repr -> RRCache({}, maxsize=3, currsize=0)
+  popitem -> KeyError('RRCache is empty')
+  len -> 0
+job 6: script TTLCache(maxsize=3, ttl=10)
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  repr -> TTLCache({'a': 1, 'b': 2, 'c': 3}, maxsize=3, currsize=3)
+  getitem 'a' -> 1
+  set 'd' 4 -> None
+  repr -> TTLCache({'a': 1, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  get 'b' -> None
+  get 'zz' -> None
+  get 'zz' 'none' -> 'none'
+  in 'a' -> True
+  in 'b' -> False
+  len -> 3
+  currsize -> 3
+  maxsize -> 3
+  set 'a' 10 -> None
+  repr -> TTLCache({'a': 10, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  pop 'c' -> 3
+  pop 'c' -> KeyError('c')
+  pop 'c' 0 -> 0
+  setdefault 'e' 5 -> 5
+  setdefault 'e' 6 -> 5
+  setdefault 'f' -> None
+  repr -> TTLCache({'a': 10, 'e': 5, 'f': None}, maxsize=3, currsize=3)
+  del 'nope' -> KeyError('nope')
+  popitem -> ('a', 10)
+  repr -> TTLCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  list -> ['e', 'f']
+  items -> [('e', 5), ('f', None)]
+  values -> [5, None]
+  repr -> TTLCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  update (('x', 7), ('y', 8)) -> None
+  repr -> TTLCache({'f': None, 'x': 7, 'y': 8}, maxsize=3, currsize=3)
+  clear -> None
+  repr -> TTLCache({}, maxsize=3, currsize=0)
+  popitem -> KeyError('TTLCache is empty')
+  len -> 0
+job 7: script TLRUCache(maxsize=3, ttu={'kind': 'fixed', 'n': 10})
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  repr -> TLRUCache({'a': 1, 'b': 2, 'c': 3}, maxsize=3, currsize=3)
+  getitem 'a' -> 1
+  set 'd' 4 -> None
+  repr -> TLRUCache({'a': 1, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  get 'b' -> None
+  get 'zz' -> None
+  get 'zz' 'none' -> 'none'
+  in 'a' -> True
+  in 'b' -> False
+  len -> 3
+  currsize -> 3
+  maxsize -> 3
+  set 'a' 10 -> None
+  repr -> TLRUCache({'a': 10, 'c': 3, 'd': 4}, maxsize=3, currsize=3)
+  pop 'c' -> 3
+  pop 'c' -> KeyError('c')
+  pop 'c' 0 -> 0
+  setdefault 'e' 5 -> 5
+  setdefault 'e' 6 -> 5
+  setdefault 'f' -> None
+  repr -> TLRUCache({'a': 10, 'e': 5, 'f': None}, maxsize=3, currsize=3)
+  del 'nope' -> KeyError('nope')
+  popitem -> ('a', 10)
+  repr -> TLRUCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  list -> ['f', 'e']
+  items -> [('f', None), ('e', 5)]
+  values -> [None, 5]
+  repr -> TLRUCache({'e': 5, 'f': None}, maxsize=3, currsize=2)
+  update (('x', 7), ('y', 8)) -> None
+  repr -> TLRUCache({'e': 5, 'x': 7, 'y': 8}, maxsize=3, currsize=3)
+  clear -> None
+  repr -> TLRUCache({}, maxsize=3, currsize=0)
+  popitem -> KeyError('TLRUCache is empty')
+  len -> 0
+job 8: script LRUCache(maxsize=-1)
+  new -> ValueError('maxsize must be non-negative')
+job 9: script LRUCache(maxsize=0)
+  set 'a' 1 -> ValueError('value too large')
+  repr -> LRUCache({}, maxsize=0, currsize=0)
+  popitem -> KeyError('LRUCache is empty')
+job 10: script Cache(maxsize=2)
+  set ('user', 1) 'ada' -> None
+  set ('user', 2) 'grace' -> None
+  set ('user', 3) 'linus' -> None
+  repr -> Cache({('user', 2): 'grace', ('user', 3): 'linus'}, maxsize=2, currsize=2)
+  popitem -> (('user', 2), 'grace')
+  popitem -> (('user', 3), 'linus')
+  popitem -> KeyError()
+  set None None -> None
+  repr -> Cache({None: None}, maxsize=2, currsize=1)
+  getitem None -> None
+  set 7 (1, (2, 3)) -> None
+  repr -> Cache({None: None, 7: (1, (2, 3))}, maxsize=2, currsize=2)
+  set -3 () -> None
+  repr -> Cache({7: (1, (2, 3)), -3: ()}, maxsize=2, currsize=2)
+job 11: script Cache(maxsize=40, getsizeof='checked')
+  set 'home' '<html>home</html>' -> None
+  set 'about' 'about us' -> None
+  repr -> Cache({'home': '<html>home</html>', 'about': 'about us'}, maxsize=40, currsize=25)
+  set 'docs' 'documentation index page' -> None
+  repr -> Cache({'about': 'about us', 'docs': 'documentation index page'}, maxsize=40, currsize=32)
+  currsize -> 32
+  set 'about' 'about us, longer now' -> None
+  repr -> Cache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'huge' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' -> ValueError('value too large')
+  repr -> Cache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'empty' '' -> None
+  repr -> Cache({'about': 'about us, longer now', 'empty': ''}, maxsize=40, currsize=20)
+  set 'home' 'h' -> None
+  set 'blog' 'a blog post body' -> None
+  repr -> Cache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'bad' '!bad' -> ValueError('value size must be non-negative')
+  repr -> Cache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'edge' 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' -> None
+  repr -> Cache({'edge': 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'}, maxsize=40, currsize=40)
+  pop 'edge' -> 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  currsize -> 0
+  update (('a', 'aa'), ('b', 'bbb'), ('c', 'c')) -> None
+  repr -> Cache({'a': 'aa', 'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=6)
+  del 'a' -> None
+  del 'a' -> KeyError('a')
+  repr -> Cache({'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=4)
+job 12: script FIFOCache(maxsize=40, getsizeof='checked')
+  set 'home' '<html>home</html>' -> None
+  set 'about' 'about us' -> None
+  repr -> FIFOCache({'home': '<html>home</html>', 'about': 'about us'}, maxsize=40, currsize=25)
+  set 'docs' 'documentation index page' -> None
+  repr -> FIFOCache({'about': 'about us', 'docs': 'documentation index page'}, maxsize=40, currsize=32)
+  currsize -> 32
+  set 'about' 'about us, longer now' -> None
+  repr -> FIFOCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'huge' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' -> ValueError('value too large')
+  repr -> FIFOCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'empty' '' -> None
+  repr -> FIFOCache({'about': 'about us, longer now', 'empty': ''}, maxsize=40, currsize=20)
+  set 'home' 'h' -> None
+  set 'blog' 'a blog post body' -> None
+  repr -> FIFOCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'bad' '!bad' -> ValueError('value size must be non-negative')
+  repr -> FIFOCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'edge' 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' -> None
+  repr -> FIFOCache({'edge': 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'}, maxsize=40, currsize=40)
+  pop 'edge' -> 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  currsize -> 0
+  update (('a', 'aa'), ('b', 'bbb'), ('c', 'c')) -> None
+  repr -> FIFOCache({'a': 'aa', 'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=6)
+  del 'a' -> None
+  del 'a' -> KeyError('a')
+  repr -> FIFOCache({'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=4)
+job 13: script LRUCache(maxsize=40, getsizeof='checked')
+  set 'home' '<html>home</html>' -> None
+  set 'about' 'about us' -> None
+  repr -> LRUCache({'home': '<html>home</html>', 'about': 'about us'}, maxsize=40, currsize=25)
+  set 'docs' 'documentation index page' -> None
+  repr -> LRUCache({'about': 'about us', 'docs': 'documentation index page'}, maxsize=40, currsize=32)
+  currsize -> 32
+  set 'about' 'about us, longer now' -> None
+  repr -> LRUCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'huge' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' -> ValueError('value too large')
+  repr -> LRUCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'empty' '' -> None
+  repr -> LRUCache({'about': 'about us, longer now', 'empty': ''}, maxsize=40, currsize=20)
+  set 'home' 'h' -> None
+  set 'blog' 'a blog post body' -> None
+  repr -> LRUCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'bad' '!bad' -> ValueError('value size must be non-negative')
+  repr -> LRUCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'edge' 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' -> None
+  repr -> LRUCache({'edge': 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'}, maxsize=40, currsize=40)
+  pop 'edge' -> 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  currsize -> 0
+  update (('a', 'aa'), ('b', 'bbb'), ('c', 'c')) -> None
+  repr -> LRUCache({'a': 'aa', 'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=6)
+  del 'a' -> None
+  del 'a' -> KeyError('a')
+  repr -> LRUCache({'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=4)
+job 14: script LFUCache(maxsize=40, getsizeof='checked')
+  set 'home' '<html>home</html>' -> None
+  set 'about' 'about us' -> None
+  repr -> LFUCache({'home': '<html>home</html>', 'about': 'about us'}, maxsize=40, currsize=25)
+  set 'docs' 'documentation index page' -> None
+  repr -> LFUCache({'about': 'about us', 'docs': 'documentation index page'}, maxsize=40, currsize=32)
+  currsize -> 32
+  set 'about' 'about us, longer now' -> None
+  repr -> LFUCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'huge' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' -> ValueError('value too large')
+  repr -> LFUCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'empty' '' -> None
+  repr -> LFUCache({'about': 'about us, longer now', 'empty': ''}, maxsize=40, currsize=20)
+  set 'home' 'h' -> None
+  set 'blog' 'a blog post body' -> None
+  repr -> LFUCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'bad' '!bad' -> ValueError('value size must be non-negative')
+  repr -> LFUCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'edge' 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' -> None
+  repr -> LFUCache({'edge': 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'}, maxsize=40, currsize=40)
+  pop 'edge' -> 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  currsize -> 0
+  update (('a', 'aa'), ('b', 'bbb'), ('c', 'c')) -> None
+  repr -> LFUCache({'a': 'aa', 'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=6)
+  del 'a' -> None
+  del 'a' -> KeyError('a')
+  repr -> LFUCache({'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=4)
+job 15: script RRCache(maxsize=40, getsizeof='checked', picks=[1, 0, 3])
+  set 'home' '<html>home</html>' -> None
+  set 'about' 'about us' -> None
+  repr -> RRCache({'home': '<html>home</html>', 'about': 'about us'}, maxsize=40, currsize=25)
+  set 'docs' 'documentation index page' -> None
+  repr -> RRCache({'docs': 'documentation index page'}, maxsize=40, currsize=24)
+  currsize -> 24
+  set 'about' 'about us, longer now' -> None
+  repr -> RRCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'huge' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' -> ValueError('value too large')
+  repr -> RRCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'empty' '' -> None
+  repr -> RRCache({'about': 'about us, longer now', 'empty': ''}, maxsize=40, currsize=20)
+  set 'home' 'h' -> None
+  set 'blog' 'a blog post body' -> None
+  repr -> RRCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'bad' '!bad' -> ValueError('value size must be non-negative')
+  repr -> RRCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'edge' 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' -> None
+  repr -> RRCache({'edge': 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'}, maxsize=40, currsize=40)
+  pop 'edge' -> 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  currsize -> 0
+  update (('a', 'aa'), ('b', 'bbb'), ('c', 'c')) -> None
+  repr -> RRCache({'a': 'aa', 'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=6)
+  del 'a' -> None
+  del 'a' -> KeyError('a')
+  repr -> RRCache({'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=4)
+job 16: script TTLCache(maxsize=40, ttl=100, getsizeof='checked')
+  set 'home' '<html>home</html>' -> None
+  set 'about' 'about us' -> None
+  repr -> TTLCache({'home': '<html>home</html>', 'about': 'about us'}, maxsize=40, currsize=25)
+  set 'docs' 'documentation index page' -> None
+  repr -> TTLCache({'about': 'about us', 'docs': 'documentation index page'}, maxsize=40, currsize=32)
+  currsize -> 32
+  set 'about' 'about us, longer now' -> None
+  repr -> TTLCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'huge' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' -> ValueError('value too large')
+  repr -> TTLCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'empty' '' -> None
+  repr -> TTLCache({'about': 'about us, longer now', 'empty': ''}, maxsize=40, currsize=20)
+  set 'home' 'h' -> None
+  set 'blog' 'a blog post body' -> None
+  repr -> TTLCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'bad' '!bad' -> ValueError('value size must be non-negative')
+  repr -> TTLCache({'about': 'about us, longer now', 'empty': '', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'edge' 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' -> None
+  repr -> TTLCache({'edge': 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'}, maxsize=40, currsize=40)
+  pop 'edge' -> 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  currsize -> 0
+  update (('a', 'aa'), ('b', 'bbb'), ('c', 'c')) -> None
+  repr -> TTLCache({'a': 'aa', 'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=6)
+  del 'a' -> None
+  del 'a' -> KeyError('a')
+  repr -> TTLCache({'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=4)
+job 17: script TLRUCache(maxsize=40, getsizeof='checked', ttu={'kind': 'len'})
+  set 'home' '<html>home</html>' -> None
+  set 'about' 'about us' -> None
+  repr -> TLRUCache({'home': '<html>home</html>', 'about': 'about us'}, maxsize=40, currsize=25)
+  set 'docs' 'documentation index page' -> None
+  repr -> TLRUCache({'about': 'about us', 'docs': 'documentation index page'}, maxsize=40, currsize=32)
+  currsize -> 32
+  set 'about' 'about us, longer now' -> None
+  repr -> TLRUCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'huge' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' -> ValueError('value too large')
+  repr -> TLRUCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'empty' '' -> None
+  repr -> TLRUCache({'about': 'about us, longer now'}, maxsize=40, currsize=20)
+  set 'home' 'h' -> None
+  set 'blog' 'a blog post body' -> None
+  repr -> TLRUCache({'about': 'about us, longer now', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'bad' '!bad' -> ValueError('value size must be non-negative')
+  repr -> TLRUCache({'about': 'about us, longer now', 'home': 'h', 'blog': 'a blog post body'}, maxsize=40, currsize=37)
+  set 'edge' 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy' -> None
+  repr -> TLRUCache({'edge': 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'}, maxsize=40, currsize=40)
+  pop 'edge' -> 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  currsize -> 0
+  update (('a', 'aa'), ('b', 'bbb'), ('c', 'c')) -> None
+  repr -> TLRUCache({'a': 'aa', 'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=6)
+  del 'a' -> None
+  del 'a' -> KeyError('a')
+  repr -> TLRUCache({'b': 'bbb', 'c': 'c'}, maxsize=40, currsize=4)
+job 18: script LRUCache(maxsize=4)
+  set 'a' 1 -> None
+  set 'b' 2 -> None
+  set 'c' 3 -> None
+  set 'd' 4 -> None
+  getitem 'a' -> 1
+  set 'e' 5 -> None
+  repr -> LRUCache({'a': 1, 'c': 3, 'd': 4, 'e': 5}, maxsize=4, currsize=4)
+  get 'c' -> 3
+  set 'f' 6 -> None
+  repr -> LRUCache({'a': 1, 'c': 3, 'e': 5, 'f': 6}, maxsize=4, currsize=4)
+  in 'd' -> False
+  set 'g' 7 -> None
+  repr -> LRUCache({'c': 3, 'e': 5, 'f': 6, 'g': 7}, maxsize=4, currsize=4)
+  values -> [3, 5, 6, 7]
+  set 'h' 8 -> None
+  repr -> LRUCache({'e': 5, 'f': 6, 'g': 7, 'h': 8}, maxsize=4, currsize=4)
+  items -> [('e', 5), ('f', 6), ('g', 7), ('h', 8)]
+  setdefault 'c' 0 -> 0
+  set 'i' 9 -> None
+  repr -> LRUCache({'g': 7, 'h': 8, 'c': 0, 'i': 9}, maxsize=4, currsize=4)
+  pop 'nope' 'x' -> 'x'
+  popitem -> ('g', 7)
+  popitem -> ('h', 8)
+  repr -> LRUCache({'c': 0, 'i': 9}, maxsize=4, currsize=2)
+job 19: script LFUCache(maxsize=5)
+  set 'alpha' 0 -> None
+  set 'beta' 1 -> None
+  set 'gamma' 2 -> None
+  set 'delta' 3 -> None
+  set 'eps' 4 -> None
+  getitem 'alpha' -> 0
+  getitem 'alpha' -> 0
+  getitem 'beta' -> 1
+  get 'gamma' -> 2
+  set 'zeta' 6 -> None
+  repr -> LFUCache({'alpha': 0, 'beta': 1, 'gamma': 2, 'delta': 3, 'zeta': 6}, maxsize=5, currsize=5)
+  set 'eta' 7 -> None
+  repr -> LFUCache({'alpha': 0, 'beta': 1, 'gamma': 2, 'delta': 3, 'eta': 7}, maxsize=5, currsize=5)
+  set 'theta' 8 -> None
+  repr -> LFUCache({'alpha': 0, 'beta': 1, 'gamma': 2, 'delta': 3, 'theta': 8}, maxsize=5, currsize=5)
+  getitem 'zeta' -> KeyError('zeta')
+  set 'beta' 22 -> None
+  getitem 'beta' -> 22
+  set 'iota' 9 -> None
+  repr -> LFUCache({'alpha': 0, 'beta': 22, 'gamma': 2, 'delta': 3, 'iota': 9}, maxsize=5, currsize=5)
+  popitem -> ('iota', 9)
+  popitem -> ('delta', 3)
+  popitem -> ('gamma', 2)
+  repr -> LFUCache({'alpha': 0, 'beta': 22}, maxsize=5, currsize=2)
+  values -> [0, 22]
+  values -> [0, 22]
+  set 'kappa' 10 -> None
+  set 'lambda' 11 -> None
+  repr -> LFUCache({'alpha': 0, 'beta': 22, 'kappa': 10, 'lambda': 11}, maxsize=5, currsize=4)
+job 20: script LFUCache(maxsize=3)
+  set 1 'one' -> None
+  set 2 'two' -> None
+  set 3 'three' -> None
+  set 4 'four' -> None
+  repr -> LFUCache({2: 'two', 3: 'three', 4: 'four'}, maxsize=3, currsize=3)
+  set 9 'nine' -> None
+  set 17 'seventeen' -> None
+  repr -> LFUCache({3: 'three', 4: 'four', 17: 'seventeen'}, maxsize=3, currsize=3)
+  getitem 9 -> KeyError(9)
+  set -1 'minus' -> None
+  set -2 'minus two' -> None
+  repr -> LFUCache({4: 'four', -1: 'minus', -2: 'minus two'}, maxsize=3, currsize=3)
+  set ('k', 1) 't1' -> None
+  set ('k', 2) 't2' -> None
+  repr -> LFUCache({-1: 'minus', -2: 'minus two', ('k', 2): 't2'}, maxsize=3, currsize=3)
+  set '' 'empty' -> None
+  set ('k', 3) 't3' -> None
+  repr -> LFUCache({-1: 'minus', ('k', 2): 't2', ('k', 3): 't3'}, maxsize=3, currsize=3)
+job 21: script TTLCache(maxsize=3, ttl=10)
+  set 's1' 'alice' -> None
+  tick 3 -> now 3
+  set 's2' 'bob' -> None
+  tick 3 -> now 6
+  set 's3' 'carol' -> None
+  repr -> TTLCache({'s1': 'alice', 's2': 'bob', 's3': 'carol'}, maxsize=3, currsize=3)
+  tick 4 -> now 10
+  in 's1' -> False
+  repr -> TTLCache({'s2': 'bob', 's3': 'carol'}, maxsize=3, currsize=2)
+  len -> 2
+  getitem 's1' -> KeyError('s1')
+  get 's2' -> 'bob'
+  tick 3 -> now 13
+  getitem 's2' -> KeyError('s2')
+  del 's2' -> KeyError('s2')
+  set 's4' 'dave' -> None
+  set 's5' 'erin' -> None
+  set 's6' 'frank' -> None
+  repr -> TTLCache({'s4': 'dave', 's5': 'erin', 's6': 'frank'}, maxsize=3, currsize=3)
+  getitem 's4' -> 'dave'
+  set 's7' 'grace' -> None
+  repr -> TTLCache({'s4': 'dave', 's6': 'frank', 's7': 'grace'}, maxsize=3, currsize=3)
+  tick 5 -> now 18
+  list -> ['s4', 's6', 's7']
+  items -> [('s4', 'dave'), ('s6', 'frank'), ('s7', 'grace')]
+  expire -> []
+  repr -> TTLCache({'s4': 'dave', 's6': 'frank', 's7': 'grace'}, maxsize=3, currsize=3)
+  tick 20 -> now 38
+  currsize -> 0
+  repr -> TTLCache({}, maxsize=3, currsize=0)
+  set 's8' 'heidi' -> None
+  tick 2 -> now 40
+  set 's8' 'heidi2' -> None
+  tick 9 -> now 49
+  get 's8' -> 'heidi2'
+  expire 100 -> [('s8', 'heidi2')]
+  popitem -> KeyError('TTLCache is empty')
+job 22: script TTLCache(maxsize=3, ttl=10)
+  set 's1' 'alice' -> None
+  tick 3 -> now 1004
+  set 's2' 'bob' -> None
+  tick 3 -> now 1008
+  set 's3' 'carol' -> None
+  repr -> TTLCache({'s1': 'alice', 's2': 'bob', 's3': 'carol'}, maxsize=3, currsize=3)
+  tick 4 -> now 1014
+  in 's1' -> False
+  repr -> TTLCache({'s3': 'carol'}, maxsize=3, currsize=1)
+  len -> 1
+  getitem 's1' -> KeyError('s1')
+  get 's2' -> None
+  tick 3 -> now 1021
+  getitem 's2' -> KeyError('s2')
+  del 's2' -> KeyError('s2')
+  set 's4' 'dave' -> None
+  set 's5' 'erin' -> None
+  set 's6' 'frank' -> None
+  repr -> TTLCache({'s4': 'dave', 's5': 'erin', 's6': 'frank'}, maxsize=3, currsize=3)
+  getitem 's4' -> 'dave'
+  set 's7' 'grace' -> None
+  repr -> TTLCache({'s4': 'dave', 's6': 'frank', 's7': 'grace'}, maxsize=3, currsize=3)
+  tick 5 -> now 1033
+  list -> ['s7']
+  items -> []
+  expire -> [('s7', 'grace')]
+  repr -> TTLCache({}, maxsize=3, currsize=0)
+  tick 20 -> now 1059
+  currsize -> 0
+  repr -> TTLCache({}, maxsize=3, currsize=0)
+  set 's8' 'heidi' -> None
+  tick 2 -> now 1064
+  set 's8' 'heidi2' -> None
+  tick 9 -> now 1074
+  get 's8' -> None
+  expire 100 -> []
+  popitem -> KeyError('TTLCache is empty')
+job 23: script TTLCache(maxsize=2, ttl=0)
+  set 'a' 1 -> None
+  repr -> TTLCache({}, maxsize=2, currsize=0)
+  getitem 'a' -> KeyError('a')
+  del 'a' -> KeyError('a')
+  len -> 0
+job 24: script TLRUCache(maxsize=4, ttu={'kind': 'table', 'table': {'short': 2, 'long': 50, 'never': -1, 'now': 0}, 'default': 10})
+  set 'short' 1 -> None
+  set 'long' 2 -> None
+  set 'mid' 3 -> None
+  repr -> TLRUCache({'short': 1, 'long': 2, 'mid': 3}, maxsize=4, currsize=3)
+  list -> ['short', 'long', 'mid']
+  tick 2 -> now 2
+  repr -> TLRUCache({'long': 2, 'mid': 3}, maxsize=4, currsize=2)
+  set 'never' 4 -> None
+  repr -> TLRUCache({'long': 2, 'mid': 3}, maxsize=4, currsize=2)
+  set 'now' 5 -> None
+  repr -> TLRUCache({'long': 2, 'mid': 3}, maxsize=4, currsize=2)
+  set 'long' 6 -> None
+  set 'long' 7 -> None
+  set 'long' 8 -> None
+  list -> ['mid', 'long']
+  repr -> TLRUCache({'long': 8, 'mid': 3}, maxsize=4, currsize=2)
+  set 'a' 9 -> None
+  set 'b' 10 -> None
+  repr -> TLRUCache({'long': 8, 'mid': 3, 'a': 9, 'b': 10}, maxsize=4, currsize=4)
+  list -> ['mid', 'b', 'a', 'long']
+  getitem 'long' -> 8
+  tick 9 -> now 11
+  list -> ['a', 'b', 'long']
+  items -> [('a', 9), ('b', 10), ('long', 8)]
+  set 'long' 'x' -> None
+  set 'never' 1 -> None
+  repr -> TLRUCache({'long': 'x', 'a': 9, 'b': 10}, maxsize=4, currsize=3)
+  del 'long' -> None
+  popitem -> ('a', 9)
+  tick 60 -> now 71
+  expire -> [('b', 10)]
+  repr -> TLRUCache({}, maxsize=4, currsize=0)
+job 25: script TLRUCache(maxsize=4, ttu={'kind': 'table', 'table': {'short': 2, 'long': 50, 'never': -1, 'now': 0}, 'default': 10})
+  set 'short' 1 -> None
+  set 'long' 2 -> None
+  set 'mid' 3 -> None
+  repr -> TLRUCache({'long': 2, 'mid': 3}, maxsize=4, currsize=2)
+  list -> ['mid', 'long']
+  tick 2 -> now 14
+  repr -> TLRUCache({'long': 2, 'mid': 3}, maxsize=4, currsize=2)
+  set 'never' 4 -> None
+  repr -> TLRUCache({'long': 2, 'mid': 3}, maxsize=4, currsize=2)
+  set 'now' 5 -> None
+  repr -> TLRUCache({'long': 2}, maxsize=4, currsize=1)
+  set 'long' 6 -> None
+  set 'long' 7 -> None
+  set 'long' 8 -> None
+  list -> ['long']
+  repr -> TLRUCache({'long': 8}, maxsize=4, currsize=1)
+  set 'a' 9 -> None
+  set 'b' 10 -> None
+  repr -> TLRUCache({'long': 8, 'a': 9, 'b': 10}, maxsize=4, currsize=3)
+  list -> ['a', 'long', 'b']
+  getitem 'long' -> 8
+  tick 9 -> now 42
+  list -> ['long']
+  items -> [('long', 8)]
+  set 'long' 'x' -> None
+  set 'never' 1 -> None
+  repr -> TLRUCache({'long': 'x'}, maxsize=4, currsize=1)
+  del 'long' -> None
+  popitem -> KeyError('TLRUCache is empty')
+  tick 60 -> now 111
+  expire -> []
+  repr -> TLRUCache({}, maxsize=4, currsize=0)
+job 26: script Cache(maxsize=4)
+  del 'k1' -> KeyError('k1')
+  set 4 91 -> None
+  set 'k2' 69 -> None
+  set 'k4' 'vv' -> None
+  set 'k4' 10 -> None
+  set 'k5' 70 -> None
+  clear -> None
+  set 'k2' 'vvvvvv' -> None
+  del ('t', 1) -> KeyError(('t', 1))
+  getitem 'k5' -> KeyError('k5')
+  clear -> None
+  getitem 'k4' -> KeyError('k4')
+  get 'k5' -> None
+  set 'k1' 'vvv' -> None
+  getitem 3 -> KeyError(3)
+  set 'k3' 44 -> None
+  set ('t', 1) (0, 'x') -> None
+  del 'k3' -> None
+  getitem 'k4' -> KeyError('k4')
+  set 'k0' 'vvv' -> None
+  values -> ['vvv', (0, 'x'), 'vvv']
+  get 'k4' -> None
+  get 'k1' -> 'vvv'
+  repr -> Cache({'k1': 'vvv', ('t', 1): (0, 'x'), 'k0': 'vvv'}, maxsize=4, currsize=3)
+  set 'k5' 12 -> None
+  set 'k2' 90 -> None
+  values -> [(0, 'x'), 'vvv', 12, 90]
+  set 'k4' 'vvvvvvv' -> None
+  set 'k0' 71 -> None
+  pop 'k5' None -> 12
+  repr -> Cache({'k0': 71, 'k2': 90, 'k4': 'vvvvvvv'}, maxsize=4, currsize=3)
+  set 4 63 -> None
+  set 'k3' 'vvvvv' -> None
+  set 'k3' 45 -> None
+  set 'k4' 'vvvvv' -> None
+  set 'k3' (4, 'x') -> None
+  values -> [90, 'vvvvv', 63, (4, 'x')]
+  repr -> Cache({'k2': 90, 'k4': 'vvvvv', 4: 63, 'k3': (4, 'x')}, maxsize=4, currsize=4)
+  set 4 'vvvvvvvv' -> None
+  set 'k2' 'vvvvvv' -> None
+  set 'k0' 9 -> None
+  del 'k1' -> KeyError('k1')
+  repr -> Cache({'k4': 'vvvvv', 4: 'vvvvvvvv', 'k3': (4, 'x'), 'k0': 9}, maxsize=4, currsize=4)
+  set 3 'vvv' -> None
+  set 3 'vvvvvv' -> None
+  values -> ['vvvvvvvv', (4, 'x'), 9, 'vvvvvv']
+  repr -> Cache({4: 'vvvvvvvv', 'k3': (4, 'x'), 'k0': 9, 3: 'vvvvvv'}, maxsize=4, currsize=4)
+  repr -> Cache({4: 'vvvvvvvv', 'k3': (4, 'x'), 'k0': 9, 3: 'vvvvvv'}, maxsize=4, currsize=4)
+  getitem 'k5' -> KeyError('k5')
+  set 'k2' 89 -> None
+  get 'k5' -> None
+  del 'k1' -> KeyError('k1')
+  set 'k0' 'vvvv' -> None
+  set 'k5' 28 -> None
+  get 'k3' -> None
+  repr -> Cache({'k0': 'vvvv', 3: 'vvvvvv', 'k2': 89, 'k5': 28}, maxsize=4, currsize=4)
+  pop 'k0' None -> 'vvvv'
+  getitem ('t', 1) -> KeyError(('t', 1))
+  set 'k1' 4 -> None
+  popitem -> (3, 'vvvvvv')
+  get 'k2' -> 89
+  getitem 'k6' -> KeyError('k6')
+  getitem 'k0' -> KeyError('k0')
+  set 'k6' 'vvvv' -> None
+  set ('t', 1) 34 -> None
+  getitem 4 -> KeyError(4)
+  repr -> Cache({'k5': 28, 'k1': 4, 'k6': 'vvvv', ('t', 1): 34}, maxsize=4, currsize=4)
+  getitem 'k4' -> KeyError('k4')
+  getitem ('t', 1) -> 34
+  setdefault 'k3' 72 -> 72
+  set 'k2' 'vvvvvv' -> None
+  repr -> Cache({'k6': 'vvvv', ('t', 1): 34, 'k3': 72, 'k2': 'vvvvvv'}, maxsize=4, currsize=4)
+  in 'k5' -> False
+  getitem ('t', 1) -> 34
+  del 'k6' -> None
+  get 'k3' -> 72
+  repr -> Cache({('t', 1): 34, 'k3': 72, 'k2': 'vvvvvv'}, maxsize=4, currsize=3)
+  set 'k4' 90 -> None
+  set 'k5' 45 -> None
+  set 'k3' 'vvvvv' -> None
+  clear -> None
+  getitem 'k3' -> KeyError('k3')
+  repr -> Cache({}, maxsize=4, currsize=0)
+  set 3 50 -> None
+  set 4 'vvvvv' -> None
+  set 'k1' 94 -> None
+  getitem 4 -> 'vvvvv'
+  del 'k6' -> KeyError('k6')
+  get 'k0' -> None
+  pop 'k4' None -> None
+  setdefault 'k6' (0, 'x') -> (0, 'x')
+  set 'k4' 84 -> None
+  set 'k1' 'vvvvv' -> None
+  repr -> Cache({4: 'vvvvv', 'k1': 'vvvvv', 'k6': (0, 'x'), 'k4': 84}, maxsize=4, currsize=4)
+  clear -> None
+  set 'k6' 8 -> None
+  values -> [8]
+  set 3 'vvvv' -> None
+  del 'k6' -> None
+  set 4 73 -> None
+  getitem 'k4' -> KeyError('k4')
+  in 'k1' -> False
+  set 'k1' 9 -> None
+  get 'k6' -> None
+  clear -> None
+  set 3 'vvvv' -> None
+  in 'k1' -> False
+  set 4 55 -> None
+  set 'k3' 'vvvv' -> None
+  pop 'k4' None -> None
+  set 4 'vvvvvvvv' -> None
+  repr -> Cache({3: 'vvvv', 4: 'vvvvvvvv', 'k3': 'vvvv'}, maxsize=4, currsize=3)
+  set 'k3' 4 -> None
+  set 3 (0, 'x') -> None
+  set 'k3' 54 -> None
+  getitem 'k5' -> KeyError('k5')
+  set 3 'vvvvvvv' -> None
+  in 'k6' -> False
+  del ('t', 1) -> KeyError(('t', 1))
+  getitem 'k0' -> KeyError('k0')
+  set 'k1' 21 -> None
+  repr -> Cache({3: 'vvvvvvv', 4: 'vvvvvvvv', 'k3': 54, 'k1': 21}, maxsize=4, currsize=4)
+  popitem -> (3, 'vvvvvvv')
+  set 'k5' 37 -> None
+  pop 4 None -> 'vvvvvvvv'
+  set 'k2' 48 -> None
+  set 'k6' 52 -> None
+  set ('t', 1) 76 -> None
+  getitem 4 -> KeyError(4)
+  repr -> Cache({'k5': 37, 'k2': 48, 'k6': 52, ('t', 1): 76}, maxsize=4, currsize=4)
+  getitem 3 -> KeyError(3)
+  set 3 'v' -> None
+  set 'k0' (4, 'x') -> None
+  del 'k4' -> KeyError('k4')
+  set 'k4' 95 -> None
+  getitem 'k4' -> 95
+  pop 'k2' None -> None
+  getitem 3 -> 'v'
+  repr -> Cache({('t', 1): 76, 3: 'v', 'k0': (4, 'x'), 'k4': 95}, maxsize=4, currsize=4)
+  set 'k3' (4, 'x') -> None
+  pop 'k0' None -> (4, 'x')
+  set 'k2' (1, 'x') -> None
+  pop 'k2' None -> (1, 'x')
+  repr -> Cache({3: 'v', 'k4': 95, 'k3': (4, 'x')}, maxsize=4, currsize=3)
+  repr -> Cache({3: 'v', 'k4': 95, 'k3': (4, 'x')}, maxsize=4, currsize=3)
+  set 'k0' 'vvvv' -> None
+  repr -> Cache({3: 'v', 'k4': 95, 'k3': (4, 'x'), 'k0': 'vvvv'}, maxsize=4, currsize=4)
+  set 4 'vvvvvvvv' -> None
+  set 'k4' 5 -> None
+  in 'k4' -> True
+  repr -> Cache({'k4': 5, 'k3': (4, 'x'), 'k0': 'vvvv', 4: 'vvvvvvvv'}, maxsize=4, currsize=4)
+job 27: script Cache(maxsize=12, getsizeof='len')
+  repr -> Cache({}, maxsize=12, currsize=0)
+  clear -> None
+  set 'k3' 'vvvvvvv' -> None
+  del 'k1' -> KeyError('k1')
+  setdefault 'k2' 'vvv' -> 'vvv'
+  set 'k4' 'vvvvv' -> None
+  set 'k5' 'vvvvvvv' -> None
+  in 'k2' -> False
+  in ('t', 1) -> False
+  repr -> Cache({'k4': 'vvvvv', 'k5': 'vvvvvvv'}, maxsize=12, currsize=12)
+  repr -> Cache({'k4': 'vvvvv', 'k5': 'vvvvvvv'}, maxsize=12, currsize=12)
+  values -> ['vvvvv', 'vvvvvvv']
+  getitem 'k3' -> KeyError('k3')
+  repr -> Cache({'k4': 'vvvvv', 'k5': 'vvvvvvv'}, maxsize=12, currsize=12)
+  set 'k4' 'vvvvvv' -> None
+  get 'k5' -> None
+  set 'k5' 'vvvvvvv' -> None
+  pop 4 None -> None
+  set ('t', 1) 'vvvvvvvv' -> None
+  set 'k3' 'v' -> None
+  set ('t', 1) 'vv' -> None
+  set 4 'vvvv' -> None
+  set 'k2' 'vvvv' -> None
+  setdefault 'k6' 'vv' -> 'vv'
+  repr -> Cache({'k3': 'v', 4: 'vvvv', 'k2': 'vvvv', 'k6': 'vv'}, maxsize=12, currsize=11)
+  set 'k2' 'vvvv' -> None
+  get 'k4' -> None
+  set 'k2' 'vvvvvvvv' -> None
+  del 'k1' -> KeyError('k1')
+  set 'k1' 'vvv' -> None
+  getitem 'k2' -> KeyError('k2')
+  get 'k5' -> None
+  set 'k5' 'vvvvvvv' -> None
+  setdefault 'k4' 'vvvvvvv' -> 'vvvvvvv'
+  set 3 'vvv' -> None
+  set ('t', 1) 'vv' -> None
+  getitem 4 -> KeyError(4)
+  get ('t', 1) -> 'vv'
+  repr -> Cache({'k4': 'vvvvvvv', 3: 'vvv', ('t', 1): 'vv'}, maxsize=12, currsize=12)
+  getitem 'k0' -> KeyError('k0')
+  set 'k6' 'vvvvvvv' -> None
+  repr -> Cache({3: 'vvv', ('t', 1): 'vv', 'k6': 'vvvvvvv'}, maxsize=12, currsize=12)
+  set 4 'vvvvvvvv' -> None
+  in 'k2' -> False
+  getitem 4 -> 'vvvvvvvv'
+  set 'k5' 7 -> TypeError("object of type 'int' has no len()")
+  set 'k1' 'vvvvvvv' -> None
+  repr -> Cache({'k1': 'vvvvvvv'}, maxsize=12, currsize=7)
+  set 3 (1, 'x') -> None
+  set 'k3' 'vvvvv' -> None
+  set 'k1' 'vv' -> None
+  set 'k3' 'v' -> None
+  set 3 'vvvvv' -> None
+  in 'k0' -> False
+  set 'k1' 'vv' -> None
+  set 'k3' 'v' -> None
+  get 'k6' -> None
+  pop 3 None -> 'vvvvv'
+  get 3 -> None
+  set 'k0' 'vv' -> None
+  set ('t', 1) 'v' -> None
+  repr -> Cache({'k3': 'v', 'k1': 'vv', 'k0': 'vv', ('t', 1): 'v'}, maxsize=12, currsize=6)
+  pop 'k1' None -> 'vv'
+  values -> ['v', 'vv', 'v']
+  set 'k0' (2, 'x') -> None
+  pop 'k5' None -> None
+  repr -> Cache({'k3': 'v', 'k0': (2, 'x'), ('t', 1): 'v'}, maxsize=12, currsize=4)
+  repr -> Cache({'k3': 'v', 'k0': (2, 'x'), ('t', 1): 'v'}, maxsize=12, currsize=4)
+  set 'k0' 76 -> TypeError("object of type 'int' has no len()")
+  get 4 -> None
+  getitem 'k2' -> KeyError('k2')
+  get 4 -> None
+  set 'k3' 'v' -> None
+  repr -> Cache({'k3': 'v', 'k0': (2, 'x'), ('t', 1): 'v'}, maxsize=12, currsize=4)
+  getitem 'k1' -> KeyError('k1')
+  set 3 'vvvvvvvv' -> None
+  get 'k6' -> None
+  repr -> Cache({'k3': 'v', 'k0': (2, 'x'), ('t', 1): 'v', 3: 'vvvvvvvv'}, maxsize=12, currsize=12)
+  setdefault 'k2' (3, 'x') -> (3, 'x')
+  popitem -> (('t', 1), 'v')
+  repr -> Cache({3: 'vvvvvvvv', 'k2': (3, 'x')}, maxsize=12, currsize=10)
+  in 4 -> False
+  get 'k5' -> None
+  get 'k4' -> None
+  setdefault 'k0' 'vvvvvvv' -> 'vvvvvvv'
+  set 3 'vvvv' -> None
+  in 'k3' -> False
+  get 4 -> None
+  del 'k0' -> None
+  repr -> Cache({3: 'vvvv'}, maxsize=12, currsize=4)
+  set 3 'v' -> None
+  set 'k3' 'vv' -> None
+  set 'k2' 'vvv' -> None
+  getitem 'k1' -> KeyError('k1')
+  getitem 'k0' -> KeyError('k0')
+  getitem 'k6' -> KeyError('k6')
+  repr -> Cache({3: 'v', 'k3': 'vv', 'k2': 'vvv'}, maxsize=12, currsize=6)
+  set 'k5' 'vvvvvv' -> None
+  get 'k5' -> 'vvvvvv'
+  pop 3 None -> 'v'
+  repr -> Cache({'k3': 'vv', 'k2': 'vvv', 'k5': 'vvvvvv'}, maxsize=12, currsize=11)
+  get 'k3' -> 'vv'
+  get 'k3' -> 'vv'
+  set 'k0' 'vvvv' -> None
+  set 4 'vvv' -> None
+  set 'k2' 'vvvv' -> None
+  set 'k5' 'vvvvvvv' -> None
+  repr -> Cache({'k2': 'vvvv', 'k5': 'vvvvvvv'}, maxsize=12, currsize=11)
+  getitem 'k3' -> KeyError('k3')
+  set 'k1' 'vvvvvvvv' -> None
+  set 'k2' 'vvv' -> None
+  setdefault 3 16 -> TypeError("object of type 'int' has no len()")
+  getitem 'k0' -> KeyError('k0')
+  repr -> Cache({'k1': 'vvvvvvvv', 'k2': 'vvv'}, maxsize=12, currsize=11)
+  set 3 'vvvvvvvv' -> None
+  get 'k6' -> None
+  values -> ['vvv', 'vvvvvvvv']
+  get 3 -> 'vvvvvvvv'
+  get 'k4' -> None
+  set 'k6' 'vvvv' -> None
+  set 'k2' 'vv' -> None
+  setdefault ('t', 1) 'vvvvv' -> 'vvvvv'
+  set 'k3' 'vv' -> None
+  popitem -> ('k2', 'vv')
+  set 'k3' 'vvv' -> None
+  set 'k1' 'vv' -> None
+  in 3 -> False
+  set 3 'vvvvv' -> None
+  in 3 -> True
+  get 4 -> None
+  set 3 43 -> TypeError("object of type 'int' has no len()")
+  values -> ['vvv', 'vv', 'vvvvv']
+  set 'k3' 'vvv' -> None
+  set 'k4' 'vv' -> None
+  repr -> Cache({'k3': 'vvv', 'k1': 'vv', 3: 'vvvvv', 'k4': 'vv'}, maxsize=12, currsize=12)
+  set 'k2' 'vv' -> None
+  set 'k1' 'vvvvvvv' -> None
+  getitem 'k3' -> KeyError('k3')
+  set 'k0' 'vvvv' -> None
+  values -> ['vvvvvvv', 'vvvv']
+  set 'k3' 'vvvv' -> None
+  repr -> Cache({'k0': 'vvvv', 'k3': 'vvvv'}, maxsize=12, currsize=8)
+  get 'k5' -> None
+  in 'k2' -> False
+  get 'k2' -> None
+  get 3 -> None
+  get 3 -> None
+  set ('t', 1) 'v' -> None
+  set 'k2' 'vvv' -> None
+  getitem 4 -> KeyError(4)
+  repr -> Cache({'k0': 'vvvv', 'k3': 'vvvv', ('t', 1): 'v', 'k2': 'vvv'}, maxsize=12, currsize=12)
+job 28: script FIFOCache(maxsize=4)
+  set 3 'v' -> None
+  pop 'k1' None -> None
+  repr -> FIFOCache({3: 'v'}, maxsize=4, currsize=1)
+  getitem 'k0' -> KeyError('k0')
+  getitem 'k0' -> KeyError('k0')
+  set 'k0' 'vvv' -> None
+  repr -> FIFOCache({3: 'v', 'k0': 'vvv'}, maxsize=4, currsize=2)
+  set ('t', 1) 25 -> None
+  set 'k4' 11 -> None
+  getitem 'k2' -> KeyError('k2')
+  del ('t', 1) -> None
+  getitem 'k6' -> KeyError('k6')
+  popitem -> (3, 'v')
+  repr -> FIFOCache({'k0': 'vvv', 'k4': 11}, maxsize=4, currsize=2)
+  del 'k2' -> KeyError('k2')
+  repr -> FIFOCache({'k0': 'vvv', 'k4': 11}, maxsize=4, currsize=2)
+  popitem -> ('k0', 'vvv')
+  repr -> FIFOCache({'k4': 11}, maxsize=4, currsize=1)
+  set ('t', 1) 90 -> None
+  repr -> FIFOCache({'k4': 11, ('t', 1): 90}, maxsize=4, currsize=2)
+  values -> [11, 90]
+  set 'k0' 'vvvvv' -> None
+  set 'k5' 'vvvvvvv' -> None
+  del 3 -> KeyError(3)
+  set 'k2' 'vvvvvv' -> None
+  set 'k4' 'vvvvvvvv' -> None
+  set 'k0' 'vvvvv' -> None
+  set 'k1' 'v' -> None
+  set ('t', 1) 63 -> None
+  values -> ['vvvvv', 'vvvvvvvv', 'v', 63]
+  getitem 'k0' -> 'vvvvv'
+  set ('t', 1) 71 -> None
+  get 'k4' -> 'vvvvvvvv'
+  repr -> FIFOCache({'k0': 'vvvvv', 'k4': 'vvvvvvvv', 'k1': 'v', ('t', 1): 71}, maxsize=4, currsize=4)
+  in 4 -> False
+  set 'k0' (1, 'x') -> None
+  getitem 'k3' -> KeyError('k3')
+  getitem ('t', 1) -> 71
+  getitem 'k5' -> KeyError('k5')
+  set 4 31 -> None
+  values -> [(1, 'x'), 'v', 71, 31]
+  setdefault 3 14 -> 14
+  popitem -> (('t', 1), 71)
+  get 'k2' -> None
+  getitem 'k4' -> KeyError('k4')
+  setdefault 'k4' 'vv' -> 'vv'
+  set 'k6' 'vvvvvvv' -> None
+  repr -> FIFOCache({4: 31, 3: 14, 'k4': 'vv', 'k6': 'vvvvvvv'}, maxsize=4, currsize=4)
+  repr -> FIFOCache({4: 31, 3: 14, 'k4': 'vv', 'k6': 'vvvvvvv'}, maxsize=4, currsize=4)
+  set 'k1' 62 -> None
+  getitem 'k6' -> 'vvvvvvv'
+  set 'k6' 12 -> None
+  values -> [14, 'vv', 12, 62]
+  repr -> FIFOCache({3: 14, 'k4': 'vv', 'k6': 12, 'k1': 62}, maxsize=4, currsize=4)
+  repr -> FIFOCache({3: 14, 'k4': 'vv', 'k6': 12, 'k1': 62}, maxsize=4, currsize=4)
+  pop 'k2' None -> None
+  setdefault 'k1' (3, 'x') -> 62
+  repr -> FIFOCache({3: 14, 'k4': 'vv', 'k6': 12, 'k1': 62}, maxsize=4, currsize=4)
+  get 'k2' -> None
+  getitem 4 -> KeyError(4)
+  getitem ('t', 1) -> KeyError(('t', 1))
+  get 'k5' -> None
+  set 3 58 -> None
+  get 'k5' -> None
+  del 4 -> KeyError(4)
+  set 'k0' 'v' -> None
+  set 'k2' 62 -> None
+  repr -> FIFOCache({3: 58, 'k6': 12, 'k0': 'v', 'k2': 62}, maxsize=4, currsize=4)
+  del 4 -> KeyError(4)
+  get ('t', 1) -> None
+  set 'k0' 'vvvv' -> None
+  get 'k0' -> 'vvvv'
+  set 'k0' 60 -> None
+  set 'k4' 85 -> None
+  get 4 -> None
+  clear -> None
+  set 4 6 -> None
+  set 'k3' 38 -> None
+  del 3 -> KeyError(3)
+  popitem -> (4, 6)
+  setdefault 'k3' 'vvvvvv' -> 38
+  getitem ('t', 1) -> KeyError(('t', 1))
+  set 'k5' 83 -> None
+  set 'k6' 'vvv' -> None
+  set 'k5' 'vvvvvv' -> None
+  set 'k3' 'v' -> None
+  in ('t', 1) -> False
+  in 'k5' -> True
+  del 'k3' -> None
+  getitem ('t', 1) -> KeyError(('t', 1))
+  repr -> FIFOCache({'k5': 'vvvvvv', 'k6': 'vvv'}, maxsize=4, currsize=2)
+  getitem 'k1' -> KeyError('k1')
+  del 4 -> KeyError(4)
+  repr -> FIFOCache({'k5': 'vvvvvv', 'k6': 'vvv'}, maxsize=4, currsize=2)
+  set 'k0' 'vvvvvv' -> None
+  values -> ['vvvvvv', 'vvv', 'vvvvvv']
+  set 4 'vvvvvvvv' -> None
+  set 'k1' 57 -> None
+  get 'k1' -> 57
+  pop 'k1' None -> 57
+  set 'k1' 12 -> None
+  del 'k3' -> KeyError('k3')
+  repr -> FIFOCache({'k5': 'vvvvvv', 'k0': 'vvvvvv', 4: 'vvvvvvvv', 'k1': 12}, maxsize=4, currsize=4)
+  set 4 (4, 'x') -> None
+  set 'k1' (3, 'x') -> None
+  in 'k4' -> False
+  pop 'k0' None -> 'vvvvvv'
+  get 4 -> (4, 'x')
+  set 'k4' 54 -> None
+  set 3 'vv' -> None
+  repr -> FIFOCache({4: (4, 'x'), 'k1': (3, 'x'), 'k4': 54, 3: 'vv'}, maxsize=4, currsize=4)
+  getitem 'k0' -> KeyError('k0')
+  set 3 'vv' -> None
+  getitem 'k1' -> (3, 'x')
+  pop ('t', 1) None -> None
+  pop 'k5' None -> None
+  set 'k5' 'vvvvvvv' -> None
+  get 'k2' -> None
+  set ('t', 1) 5 -> None
+  repr -> FIFOCache({'k4': 54, 3: 'vv', 'k5': 'vvvvvvv', ('t', 1): 5}, maxsize=4, currsize=4)
+  repr -> FIFOCache({'k4': 54, 3: 'vv', 'k5': 'vvvvvvv', ('t', 1): 5}, maxsize=4, currsize=4)
+  get 'k0' -> None
+  setdefault 4 'vvvvvvvv' -> 'vvvvvvvv'
+  getitem 'k2' -> KeyError('k2')
+  in 'k5' -> True
+  set 3 'vv' -> None
+  del 'k6' -> KeyError('k6')
+  set 'k6' 'vvvvvv' -> None
+  getitem 'k1' -> KeyError('k1')
+  set 'k0' (2, 'x') -> None
+  set 'k6' 38 -> None
+  set 'k5' 9 -> None
+  repr -> FIFOCache({3: 'vv', 'k6': 38, 'k0': (2, 'x'), 'k5': 9}, maxsize=4, currsize=4)
+  pop 'k4' None -> None
+  repr -> FIFOCache({3: 'vv', 'k6': 38, 'k0': (2, 'x'), 'k5': 9}, maxsize=4, currsize=4)
+  get 'k4' -> None
+  getitem 'k5' -> 9
+  values -> ['vv', 38, (2, 'x'), 9]
+  getitem 4 -> KeyError(4)
+  repr -> FIFOCache({3: 'vv', 'k6': 38, 'k0': (2, 'x'), 'k5': 9}, maxsize=4, currsize=4)
+  repr -> FIFOCache({3: 'vv', 'k6': 38, 'k0': (2, 'x'), 'k5': 9}, maxsize=4, currsize=4)
+  getitem 'k1' -> KeyError('k1')
+  get 'k5' -> 9
+  set 'k1' 'vvvvv' -> None
+  set 'k1' 'vvvvvvv' -> None
+  set 3 78 -> None
+  set 'k4' (3, 'x') -> None
+  repr -> FIFOCache({'k5': 9, 'k1': 'vvvvvvv', 3: 78, 'k4': (3, 'x')}, maxsize=4, currsize=4)
+  getitem 4 -> KeyError(4)
+  set 'k5' 'v' -> None
+  repr -> FIFOCache({'k5': 'v', 'k1': 'vvvvvvv', 3: 78, 'k4': (3, 'x')}, maxsize=4, currsize=4)
+job 29: script FIFOCache(maxsize=12, getsizeof='len')
+  pop 'k0' None -> None
+  setdefault 'k0' 'vvvvvv' -> 'vvvvvv'
+  set 'k3' 'vvvv' -> None
+  repr -> FIFOCache({'k0': 'vvvvvv', 'k3': 'vvvv'}, maxsize=12, currsize=10)
+  in 'k1' -> False
+  set 'k0' 'vv' -> None
+  set 'k6' 'vvvvv' -> None
+  del 'k6' -> None
+  setdefault 'k3' (1, 'x') -> 'vvvv'
+  set 3 83 -> TypeError("object of type 'int' has no len()")
+  getitem ('t', 1) -> KeyError(('t', 1))
+  pop 'k5' None -> None
+  get 'k4' -> None
+  set ('t', 1) 'v' -> None
+  getitem 'k1' -> KeyError('k1')
+  in 'k2' -> False
+  repr -> FIFOCache({'k0': 'vv', 'k3': 'vvvv', ('t', 1): 'v'}, maxsize=12, currsize=7)
+  set 4 'vvvvvvvv' -> None
+  getitem 'k4' -> KeyError('k4')
+  set 'k6' 'vvvvvvvv' -> None
+  popitem -> ('k6', 'vvvvvvvv')
+  repr -> FIFOCache({}, maxsize=12, currsize=0)
+  set 'k5' 'v' -> None
+  set ('t', 1) 'vvvvvvvv' -> None
+  pop 3 None -> None
+  repr -> FIFOCache({'k5': 'v', ('t', 1): 'vvvvvvvv'}, maxsize=12, currsize=9)
+  set 'k1' 'vvv' -> None
+  getitem 'k4' -> KeyError('k4')
+  set 'k0' 'vvv' -> None
+  repr -> FIFOCache({'k1': 'vvv', 'k0': 'vvv'}, maxsize=12, currsize=6)
+  repr -> FIFOCache({'k1': 'vvv', 'k0': 'vvv'}, maxsize=12, currsize=6)
+  set 'k0' 'vvvvvv' -> None
+  get 'k1' -> 'vvv'
+  popitem -> ('k1', 'vvv')
+  values -> ['vvvvvv']
+  pop 'k3' None -> None
+  repr -> FIFOCache({'k0': 'vvvvvv'}, maxsize=12, currsize=6)
+  set 'k6' 'vvvv' -> None
+  getitem 3 -> KeyError(3)
+  setdefault 3 'vvvvv' -> 'vvvvv'
+  set 'k3' 'vvvv' -> None
+  set 'k2' 'v' -> None
+  set 'k5' 'vvvvvv' -> None
+  set 'k5' 'vv' -> None
+  in ('t', 1) -> False
+  pop 'k6' None -> None
+  set 'k3' 'vvvv' -> None
+  set 'k0' 'vvvvv' -> None
+  values -> ['vvvv', 'v', 'vv', 'vvvvv']
+  set 'k5' (4, 'x') -> None
+  get 'k2' -> 'v'
+  get 3 -> None
+  getitem 4 -> KeyError(4)
+  del 'k6' -> KeyError('k6')
+  set 3 'v' -> None
+  del 4 -> KeyError(4)
+  getitem 'k6' -> KeyError('k6')
+  set 'k6' 'vvvvvv' -> None
+  del 'k3' -> KeyError('k3')
+  repr -> FIFOCache({'k5': (4, 'x'), 3: 'v', 'k6': 'vvvvvv'}, maxsize=12, currsize=9)
+  repr -> FIFOCache({'k5': (4, 'x'), 3: 'v', 'k6': 'vvvvvv'}, maxsize=12, currsize=9)
+  pop 4 None -> None
+  set 'k5' 'vvvv' -> None
+  set 'k5' 'vvvv' -> None
+  getitem 'k3' -> KeyError('k3')
+  set 4 'vvvvvvv' -> None
+  set 'k4' 'vvvv' -> None
+  set 'k6' 'vvvvvvv' -> None
+  pop 'k0' None -> None
+  getitem 'k2' -> KeyError('k2')
+  in 4 -> False
+  repr -> FIFOCache({'k4': 'vvvv', 'k6': 'vvvvvvv'}, maxsize=12, currsize=11)
+  getitem 'k1' -> KeyError('k1')
+  repr -> FIFOCache({'k4': 'vvvv', 'k6': 'vvvvvvv'}, maxsize=12, currsize=11)
+  set 'k5' 'vv' -> None
+  get 'k1' -> None
+  repr -> FIFOCache({'k6': 'vvvvvvv', 'k5': 'vv'}, maxsize=12, currsize=9)
+  getitem 'k4' -> KeyError('k4')
+  getitem 'k4' -> KeyError('k4')
+  getitem 'k0' -> KeyError('k0')
+  in 'k4' -> False
+  repr -> FIFOCache({'k6': 'vvvvvvv', 'k5': 'vv'}, maxsize=12, currsize=9)
+  set 'k3' 'v' -> None
+  getitem ('t', 1) -> KeyError(('t', 1))
+  popitem -> ('k6', 'vvvvvvv')
+  popitem -> ('k5', 'vv')
+  getitem 'k1' -> KeyError('k1')
+  set 'k3' 'v' -> None
+  getitem 'k6' -> KeyError('k6')
+  pop 3 None -> None
+  values -> ['v']
+  set 'k3' 'vvvvvv' -> None
+  in 'k5' -> False
+  set 'k4' (1, 'x') -> None
+  set 'k5' 'vvvvvv' -> None
+  set 'k5' 'vvvvvvv' -> None
+  set 4 'vvvvvv' -> None
+  repr -> FIFOCache({4: 'vvvvvv'}, maxsize=12, currsize=6)
+  pop 3 None -> None
+  getitem 3 -> KeyError(3)
+  get 'k5' -> None
+  set 'k5' 'vv' -> None
+  set ('t', 1) 'vv' -> None
+  clear -> None
+  del 'k4' -> KeyError('k4')
+  getitem 3 -> KeyError(3)
+  pop 'k3' None -> None
+  repr -> FIFOCache({}, maxsize=12, currsize=0)
+  values -> []
+  repr -> FIFOCache({}, maxsize=12, currsize=0)
+  getitem 'k6' -> KeyError('k6')
+  set 'k2' 'vvvvvvv' -> None
+  set 'k4' 'vvvvvv' -> None
+  get 3 -> None
+  set 'k1' 'vvvvvvv' -> None
+  getitem 'k6' -> KeyError('k6')
+  set 'k3' 'vvvvv' -> None
+  set 4 'vvv' -> None
+  get 'k3' -> 'vvvvv'
+  values -> ['vvvvv', 'vvv']
+  pop 'k5' None -> None
+  popitem -> ('k3', 'vvvvv')
+  setdefault 4 'v' -> 'vvv'
+  set 'k2' 'vv' -> None
+  get 'k3' -> None
+  getitem 'k6' -> KeyError('k6')
+  set 'k6' 'vvvvvvv' -> None
+  set 3 49 -> TypeError("object of type 'int' has no len()")
+  getitem ('t', 1) -> KeyError(('t', 1))
+  in 'k3' -> False
+  getitem 'k5' -> KeyError('k5')
+  getitem 'k1' -> KeyError('k1')
+  pop 'k2' None -> 'vv'
+  getitem 4 -> 'vvv'
+  repr -> FIFOCache({4: 'vvv', 'k6': 'vvvvvvv'}, maxsize=12, currsize=10)
+  setdefault 'k0' 'vvvvv' -> 'vvvvv'
+  set ('t', 1) 'vvv' -> None
+  get 'k3' -> None
+  del 'k0' -> None
+  values -> ['vvv']
+  set 3 (3, 'x') -> None
+  pop 3 None -> (3, 'x')
+  set 'k2' 'vv' -> None
+  getitem 'k3' -> KeyError('k3')
+  repr -> FIFOCache({('t', 1): 'vvv', 'k2': 'vv'}, maxsize=12, currsize=5)
+  set 4 'vvvvvv' -> None
+  getitem 'k3' -> KeyError('k3')
+  set 'k0' 'vvv' -> None
+  set 'k2' 'vv' -> None
+  getitem 'k5' -> KeyError('k5')
+  repr -> FIFOCache({'k2': 'vv', 4: 'vvvvvv', 'k0': 'vvv'}, maxsize=12, currsize=11)
+job 30: script LRUCache(maxsize=4)
+  repr -> LRUCache({}, maxsize=4, currsize=0)
+  set 4 53 -> None
+  getitem 'k2' -> KeyError('k2')
+  repr -> LRUCache({4: 53}, maxsize=4, currsize=1)
+  set 'k4' 95 -> None
+  popitem -> (4, 53)
+  set 'k0' 'vvvvvvvv' -> None
+  repr -> LRUCache({'k4': 95, 'k0': 'vvvvvvvv'}, maxsize=4, currsize=2)
+  getitem 3 -> KeyError(3)
+  repr -> LRUCache({'k4': 95, 'k0': 'vvvvvvvv'}, maxsize=4, currsize=2)
+  values -> [95, 'vvvvvvvv']
+  setdefault 'k0' 'v' -> 'vvvvvvvv'
+  popitem -> ('k4', 95)
+  getitem 4 -> KeyError(4)
+  set ('t', 1) 'vv' -> None
+  values -> ['vvvvvvvv', 'vv']
+  values -> ['vvvvvvvv', 'vv']
+  set 'k1' (4, 'x') -> None
+  getitem ('t', 1) -> 'vv'
+  getitem 'k2' -> KeyError('k2')
+  repr -> LRUCache({'k0': 'vvvvvvvv', ('t', 1): 'vv', 'k1': (4, 'x')}, maxsize=4, currsize=3)
+  getitem 'k3' -> KeyError('k3')
+  repr -> LRUCache({'k0': 'vvvvvvvv', ('t', 1): 'vv', 'k1': (4, 'x')}, maxsize=4, currsize=3)
+  getitem ('t', 1) -> 'vv'
+  getitem ('t', 1) -> 'vv'
+  set 4 51 -> None
+  del 3 -> KeyError(3)
+  repr -> LRUCache({'k0': 'vvvvvvvv', ('t', 1): 'vv', 'k1': (4, 'x'), 4: 51}, maxsize=4, currsize=4)
+  set 'k5' 'vvvvvvv' -> None
+  set 'k3' 53 -> None
+  getitem 4 -> 51
+  repr -> LRUCache({('t', 1): 'vv', 4: 51, 'k5': 'vvvvvvv', 'k3': 53}, maxsize=4, currsize=4)
+  setdefault 'k5' 37 -> 'vvvvvvv'
+  pop 'k3' None -> 53
+  set 'k2' 'vvv' -> None
+  repr -> LRUCache({('t', 1): 'vv', 4: 51, 'k5': 'vvvvvvv', 'k2': 'vvv'}, maxsize=4, currsize=4)
+  set 3 71 -> None
+  set 'k5' 'vvv' -> None
+  set 'k5' 53 -> None
+  setdefault 4 'v' -> 51
+  set 'k3' 'vvv' -> None
+  set 'k0' 'vvvvvvv' -> None
+  set 'k6' 48 -> None
+  getitem 'k1' -> KeyError('k1')
+  set 3 12 -> None
+  pop 'k1' None -> None
+  popitem -> ('k3', 'vvv')
+  repr -> LRUCache({'k0': 'vvvvvvv', 'k6': 48, 3: 12}, maxsize=4, currsize=3)
+  getitem 'k5' -> KeyError('k5')
+  getitem 'k4' -> KeyError('k4')
+  get 'k1' -> None
+  set 'k0' 'v' -> None
+  getitem 3 -> 12
+  in 'k5' -> False
+  del 'k4' -> KeyError('k4')
+  del 'k4' -> KeyError('k4')
+  values -> ['v', 48, 12]
+  get 'k2' -> None
+  set ('t', 1) (0, 'x') -> None
+  repr -> LRUCache({'k0': 'v', 'k6': 48, 3: 12, ('t', 1): (0, 'x')}, maxsize=4, currsize=4)
+  set 3 43 -> None
+  repr -> LRUCache({'k0': 'v', 'k6': 48, 3: 43, ('t', 1): (0, 'x')}, maxsize=4, currsize=4)
+  set 'k4' 'vvvvvvv' -> None
+  repr -> LRUCache({'k6': 48, 3: 43, ('t', 1): (0, 'x'), 'k4': 'vvvvvvv'}, maxsize=4, currsize=4)
+  set ('t', 1) 85 -> None
+  set 'k5' 'vvvvvv' -> None
+  set 3 'vvvvv' -> None
+  set 'k5' 'vvvvvvv' -> None
+  pop 'k0' None -> None
+  values -> ['vvvvv', 85, 'vvvvvvv', 'vvvvvvv']
+  in 4 -> False
+  setdefault 4 'v' -> 'v'
+  getitem 'k3' -> KeyError('k3')
+  get 'k5' -> 'vvvvvvv'
+  getitem 4 -> 'v'
+  getitem 'k6' -> KeyError('k6')
+  getitem 'k6' -> KeyError('k6')
+  set 'k0' 'vv' -> None
+  pop 'k2' None -> None
+  set 'k4' 14 -> None
+  set 'k1' 74 -> None
+  in 3 -> False
+  set 'k5' 15 -> None
+  getitem ('t', 1) -> KeyError(('t', 1))
+  repr -> LRUCache({'k4': 14, 'k0': 'vv', 'k1': 74, 'k5': 15}, maxsize=4, currsize=4)
+  getitem 'k4' -> 14
+  get 3 -> None
+  pop 'k4' None -> 14
+  repr -> LRUCache({'k0': 'vv', 'k1': 74, 'k5': 15}, maxsize=4, currsize=3)
+  clear -> None
+  repr -> LRUCache({}, maxsize=4, currsize=0)
+  set 'k4' 26 -> None
+  repr -> LRUCache({'k4': 26}, maxsize=4, currsize=1)
+  repr -> LRUCache({'k4': 26}, maxsize=4, currsize=1)
+  repr -> LRUCache({'k4': 26}, maxsize=4, currsize=1)
+  repr -> LRUCache({'k4': 26}, maxsize=4, currsize=1)
+  values -> [26]
+  set 3 'v' -> None
+  setdefault ('t', 1) 'vvv' -> 'vvv'
+  set 'k3' 35 -> None
+  set 'k0' 63 -> None
+  repr -> LRUCache({3: 'v', ('t', 1): 'vvv', 'k3': 35, 'k0': 63}, maxsize=4, currsize=4)
+  pop 'k6' None -> None
+  getitem 'k4' -> KeyError('k4')
+  set 'k6' 'vvv' -> None
+  setdefault 'k4' 86 -> 86
+  set 3 'vvv' -> None
+  set 'k1' 'vvvvvv' -> None
+  values -> ['vvv', 86, 'vvv', 'vvvvvv']
+  del 'k5' -> KeyError('k5')
+  pop 'k1' None -> 'vvvvvv'
+  set 'k6' 99 -> None
+  values -> [99, 86, 'vvv']
+  values -> [99, 86, 'vvv']
+  pop 4 None -> None
+  set 'k2' 70 -> None
+  set 4 2 -> None
+  repr -> LRUCache({'k4': 86, 3: 'vvv', 'k2': 70, 4: 2}, maxsize=4, currsize=4)
+  repr -> LRUCache({'k4': 86, 3: 'vvv', 'k2': 70, 4: 2}, maxsize=4, currsize=4)
+  set 'k0' 'vvvvv' -> None
+  get 'k2' -> 70
+  repr -> LRUCache({3: 'vvv', 'k2': 70, 4: 2, 'k0': 'vvvvv'}, maxsize=4, currsize=4)
+  set 'k6' 34 -> None
+  set 'k4' 78 -> None
+  set 'k0' 'v' -> None
+  set 4 'vvv' -> None
+  pop ('t', 1) None -> None
+  set 'k0' 88 -> None
+  pop 'k2' None -> None
+  getitem ('t', 1) -> KeyError(('t', 1))
+  repr -> LRUCache({'k0': 88, 'k6': 34, 'k4': 78, 4: 'vvv'}, maxsize=4, currsize=4)
+  set 'k1' 'vv' -> None
+  set 'k5' (3, 'x') -> None
+  set 'k0' 81 -> None
+  set ('t', 1) 'vvvv' -> None
+  del 'k1' -> None
+  repr -> LRUCache({'k0': 81, 'k5': (3, 'x'), ('t', 1): 'vvvv'}, maxsize=4, currsize=3)
+  getitem ('t', 1) -> 'vvvv'
+  getitem 3 -> KeyError(3)
+  getitem 'k6' -> KeyError('k6')
+  repr -> LRUCache({'k0': 81, 'k5': (3, 'x'), ('t', 1): 'vvvv'}, maxsize=4, currsize=3)
+  set 'k3' 20 -> None
+  pop ('t', 1) None -> 'vvvv'
+  in 'k0' -> True
+  set ('t', 1) 66 -> None
+  getitem 'k4' -> KeyError('k4')
+  getitem 'k3' -> 20
+  set 'k4' 73 -> None
+  repr -> LRUCache({'k0': 81, 'k3': 20, ('t', 1): 66, 'k4': 73}, maxsize=4, currsize=4)
+  set 4 'vvvvvv' -> None
+  repr -> LRUCache({'k3': 20, ('t', 1): 66, 'k4': 73, 4: 'vvvvvv'}, maxsize=4, currsize=4)
+job 31: script LRUCache(maxsize=12, getsizeof='len')
+  getitem 'k0' -> KeyError('k0')
+  set ('t', 1) 'vvvvvvvv' -> None
+  get ('t', 1) -> 'vvvvvvvv'
+  set 'k3' 'vvvv' -> None
+  values -> ['vvvvvvvv', 'vvvv']
+  set 3 'vvvv' -> None
+  set 'k4' (3, 'x') -> None
+  get ('t', 1) -> None
+  setdefault 'k1' (1, 'x') -> (1, 'x')
+  get 'k0' -> None
+  set 'k4' 'vvv' -> None
+  set 3 'v' -> None
+  set 3 'vvvvv' -> None
+  getitem 3 -> 'vvvvv'
+  set 'k1' 'vvvvv' -> None
+  popitem -> (3, 'vvvvv')
+  setdefault 'k4' 40 -> TypeError("object of type 'int' has no len()")
+  setdefault 3 'vvvv' -> 'vvvv'
+  values -> ['vvvvv', 'vvvv']
+  del 'k5' -> KeyError('k5')
+  popitem -> ('k1', 'vvvvv')
+  setdefault 'k1' (2, 'x') -> (2, 'x')
+  set 'k5' 'vvvvvvv' -> None
+  values -> [(2, 'x'), 'vvvvvvv']
+  values -> [(2, 'x'), 'vvvvvvv']
+  values -> [(2, 'x'), 'vvvvvvv']
+  set 'k3' 'vvv' -> None
+  getitem 'k3' -> 'vvv'
+  repr -> LRUCache({'k1': (2, 'x'), 'k5': 'vvvvvvv', 'k3': 'vvv'}, maxsize=12, currsize=12)
+  getitem 4 -> KeyError(4)
+  set 'k1' 'v' -> None
+  get 4 -> None
+  values -> ['v', 'vvvvvvv', 'vvv']
+  setdefault 'k6' 'vvvvvvv' -> 'vvvvvvv'
+  values -> ['vvv', 'vvvvvvv']
+  set 'k0' 'vvvvvv' -> None
+  repr -> LRUCache({'k0': 'vvvvvv'}, maxsize=12, currsize=6)
+  set 'k1' 'vvvv' -> None
+  setdefault 3 (0, 'x') -> (0, 'x')
+  pop 'k1' None -> 'vvvv'
+  set 'k6' 'vvvvvvvv' -> None
+  values -> [(0, 'x'), 'vvvvvvvv']
+  repr -> LRUCache({3: (0, 'x'), 'k6': 'vvvvvvvv'}, maxsize=12, currsize=10)
+  setdefault 3 'vv' -> (0, 'x')
+  clear -> None
+  set 4 'vv' -> None
+  set 'k6' 'v' -> None
+  repr -> LRUCache({4: 'vv', 'k6': 'v'}, maxsize=12, currsize=3)
+  set 3 'vvvvv' -> None
+  popitem -> (4, 'vv')
+  pop 'k3' None -> None
+  get 'k6' -> 'v'
+  in 'k4' -> False
+  get 3 -> 'vvvvv'
+  set 3 'vvvvvvvv' -> None
+  set 'k3' 'vvvvvvv' -> None
+  set 'k3' 'v' -> None
+  popitem -> ('k3', 'v')
+  pop 'k0' None -> None
+  repr -> LRUCache({}, maxsize=12, currsize=0)
+  getitem 'k5' -> KeyError('k5')
+  getitem 'k4' -> KeyError('k4')
+  getitem 'k1' -> KeyError('k1')
+  set 'k1' 'vvvvvv' -> None
+  set 'k6' 'v' -> None
+  set 3 'vvvvvvv' -> None
+  getitem 'k6' -> 'v'
+  pop 'k4' None -> None
+  values -> ['v', 'vvvvvvv']
+  clear -> None
+  set 'k1' 'vvvvv' -> None
+  set 'k3' 'v' -> None
+  in 'k3' -> True
+  get ('t', 1) -> None
+  set 'k5' 'vvvv' -> None
+  get 4 -> None
+  set 'k0' 'vvv' -> None
+  set 3 'vvvv' -> None
+  getitem 'k3' -> 'v'
+  getitem 'k3' -> 'v'
+  repr -> LRUCache({'k3': 'v', 'k5': 'vvvv', 'k0': 'vvv', 3: 'vvvv'}, maxsize=12, currsize=12)
+  set 'k6' 'vvv' -> None
+  set 'k2' 'vvvvvv' -> None
+  setdefault 'k3' 'vvv' -> 'v'
+  set 'k4' 'vvvvvvv' -> None
+  values -> ['v', 'vvvvvvv']
+  getitem 'k6' -> KeyError('k6')
+  getitem 'k6' -> KeyError('k6')
+  set 'k4' 'vvvvvvv' -> None
+  getitem 3 -> KeyError(3)
+  set 'k2' 'vv' -> None
+  set 'k4' 'vvvv' -> None
+  setdefault 'k1' 'vvv' -> 'vvv'
+  set 'k3' 'vvvvvv' -> None
+  set 'k2' 'vvvvvvvv' -> None
+  getitem 'k6' -> KeyError('k6')
+  values -> ['vvvvvvvv']
+  setdefault 3 'vvv' -> 'vvv'
+  del 'k5' -> KeyError('k5')
+  getitem 'k4' -> KeyError('k4')
+  set 'k3' 'vv' -> None
+  getitem 'k6' -> KeyError('k6')
+  pop 3 None -> 'vvv'
+  set 'k0' 'vvvvv' -> None
+  get 4 -> None
+  getitem 'k6' -> KeyError('k6')
+  getitem 'k1' -> KeyError('k1')
+  set 'k6' 'vvvv' -> None
+  repr -> LRUCache({'k3': 'vv', 'k0': 'vvvvv', 'k6': 'vvvv'}, maxsize=12, currsize=11)
+  getitem 4 -> KeyError(4)
+  del 'k2' -> KeyError('k2')
+  pop 'k6' None -> 'vvvv'
+  pop ('t', 1) None -> None
+  getitem 'k1' -> KeyError('k1')
+  set 'k3' 'vvvvvvvv' -> None
+  set 'k1' (3, 'x') -> None
+  getitem 'k0' -> KeyError('k0')
+  popitem -> ('k3', 'vvvvvvvv')
+  in 'k6' -> False
+  set 'k0' 'v' -> None
+  set ('t', 1) 37 -> TypeError("object of type 'int' has no len()")
+  set 'k3' (2, 'x') -> None
+  repr -> LRUCache({'k1': (3, 'x'), 'k0': 'v', 'k3': (2, 'x')}, maxsize=12, currsize=5)
+  values -> [(3, 'x'), 'v', (2, 'x')]
+  set 'k6' 'vvvvv' -> None
+  get 'k4' -> None
+  repr -> LRUCache({'k1': (3, 'x'), 'k0': 'v', 'k3': (2, 'x'), 'k6': 'vvvvv'}, maxsize=12, currsize=10)
+  getitem 'k4' -> KeyError('k4')
+  del ('t', 1) -> KeyError(('t', 1))
+  set 'k1' 'v' -> None
+  getitem 4 -> KeyError(4)
+  set 'k0' 'vvvvvvv' -> None
+  values -> ['v', 'vvvvvvv']
+  set ('t', 1) 'vvvvvv' -> None
+  repr -> LRUCache({('t', 1): 'vvvvvv'}, maxsize=12, currsize=6)
+  repr -> LRUCache({('t', 1): 'vvvvvv'}, maxsize=12, currsize=6)
+  set 'k2' 'vv' -> None
+  set ('t', 1) 'vvvvvvvv' -> None
+  in 'k4' -> False
+  set 'k0' (0, 'x') -> None
+  repr -> LRUCache({('t', 1): 'vvvvvvvv', 'k2': 'vv', 'k0': (0, 'x')}, maxsize=12, currsize=12)
+  del 'k4' -> KeyError('k4')
+  set 'k1' 'vvvvv' -> None
+  clear -> None
+  del 'k6' -> KeyError('k6')
+  getitem 'k2' -> KeyError('k2')
+  set ('t', 1) 'vvv' -> None
+  clear -> None
+  set 'k1' 'v' -> None
+  get 'k6' -> None
+  repr -> LRUCache({'k1': 'v'}, maxsize=12, currsize=1)
+job 32: script LFUCache(maxsize=4)
+  getitem 'k2' -> KeyError('k2')
+  set 'k2' 30 -> None
+  getitem 'k5' -> KeyError('k5')
+  get 'k4' -> None
+  del 'k5' -> KeyError('k5')
+  set 'k2' 13 -> None
+  getitem 'k6' -> KeyError('k6')
+  repr -> LFUCache({'k2': 13}, maxsize=4, currsize=1)
+  get 'k5' -> None
+  set 3 'vv' -> None
+  get 'k6' -> None
+  values -> [13, 'vv']
+  setdefault 'k0' 'vvv' -> 'vvv'
+  values -> [13, 'vv', 'vvv']
+  set 'k1' 72 -> None
+  set 'k1' 60 -> None
+  repr -> LFUCache({'k2': 13, 3: 'vv', 'k0': 'vvv', 'k1': 60}, maxsize=4, currsize=4)
+  del ('t', 1) -> KeyError(('t', 1))
+  set 'k2' 'vvvvv' -> None
+  repr -> LFUCache({'k2': 'vvvvv', 3: 'vv', 'k0': 'vvv', 'k1': 60}, maxsize=4, currsize=4)
+  repr -> LFUCache({'k2': 'vvvvv', 3: 'vv', 'k0': 'vvv', 'k1': 60}, maxsize=4, currsize=4)
+  popitem -> ('k1', 60)
+  del ('t', 1) -> KeyError(('t', 1))
+  set 'k3' (0, 'x') -> None
+  setdefault 'k6' 38 -> 38
+  getitem ('t', 1) -> KeyError(('t', 1))
+  values -> ['vvvvv', 'vv', 'vvv', 38]
+  set 4 'vvvv' -> None
+  setdefault 'k4' 'vv' -> 'vv'
+  set 'k6' 96 -> None
+  set 'k6' 41 -> None
+  pop 'k6' None -> 41
+  in 'k2' -> True
+  repr -> LFUCache({'k2': 'vvvvv', 3: 'vv', 'k0': 'vvv'}, maxsize=4, currsize=3)
+  set 'k3' 'vvv' -> None
+  set 'k6' 43 -> None
+  repr -> LFUCache({'k2': 'vvvvv', 3: 'vv', 'k0': 'vvv', 'k6': 43}, maxsize=4, currsize=4)
+  in 'k2' -> True
+  getitem 'k5' -> KeyError('k5')
+  set 'k0' 22 -> None
+  set 'k2' 24 -> None
+  values -> [24, 'vv', 22, 43]
+  get 'k3' -> None
+  pop 'k2' None -> 24
+  get 'k2' -> None
+  getitem 'k3' -> KeyError('k3')
+  set 'k5' 'vvvvvv' -> None
+  repr -> LFUCache({3: 'vv', 'k0': 22, 'k6': 43, 'k5': 'vvvvvv'}, maxsize=4, currsize=4)
+  getitem 'k0' -> 22
+  set ('t', 1) 'v' -> None
+  get 3 -> 'vv'
+  set 'k5' 'v' -> None
+  values -> ['vv', 22, 43, 'v']
+  setdefault ('t', 1) 76 -> 76
+  values -> ['vv', 22, 43, 76]
+  set 3 'vv' -> None
+  in 3 -> True
+  get 'k5' -> None
+  set 'k0' 69 -> None
+  pop 'k5' None -> None
+  set 'k0' (4, 'x') -> None
+  set 'k0' 92 -> None
+  repr -> LFUCache({3: 'vv', 'k0': 92, 'k6': 43, ('t', 1): 76}, maxsize=4, currsize=4)
+  popitem -> (('t', 1), 76)
+  popitem -> ('k6', 43)
+  repr -> LFUCache({3: 'vv', 'k0': 92}, maxsize=4, currsize=2)
+  get 'k2' -> None
+  getitem 4 -> KeyError(4)
+  set 'k3' 67 -> None
+  repr -> LFUCache({3: 'vv', 'k0': 92, 'k3': 67}, maxsize=4, currsize=3)
+  get ('t', 1) -> None
+  values -> ['vv', 92, 67]
+  pop 'k6' None -> None
+  set 'k5' (1, 'x') -> None
+  set 'k6' 36 -> None
+  pop 'k2' None -> None
+  clear -> None
+  popitem -> KeyError('LFUCache is empty')
+  set ('t', 1) (2, 'x') -> None
+  repr -> LFUCache({('t', 1): (2, 'x')}, maxsize=4, currsize=1)
+  getitem 'k5' -> KeyError('k5')
+  set 'k4' 18 -> None
+  pop 'k4' None -> 18
+  popitem -> (('t', 1), (2, 'x'))
+  get 4 -> None
+  get 'k5' -> None
+  pop 'k0' None -> None
+  del ('t', 1) -> KeyError(('t', 1))
+  pop 3 None -> None
+  set 'k5' 'vvvvv' -> None
+  in 'k3' -> False
+  repr -> LFUCache({'k5': 'vvvvv'}, maxsize=4, currsize=1)
+  del ('t', 1) -> KeyError(('t', 1))
+  set 'k0' 'vvvvv' -> None
+  set 'k6' 18 -> None
+  del 3 -> KeyError(3)
+  values -> ['vvvvv', 'vvvvv', 18]
+  set 'k6' 'vvvvv' -> None
+  repr -> LFUCache({'k5': 'vvvvv', 'k0': 'vvvvv', 'k6': 'vvvvv'}, maxsize=4, currsize=3)
+  get 3 -> None
+  set 3 0 -> None
+  values -> ['vvvvv', 'vvvvv', 'vvvvv', 0]
+  set 'k3' 64 -> None
+  get 'k1' -> None
+  popitem -> ('k3', 64)
+  getitem ('t', 1) -> KeyError(('t', 1))
+  values -> ['vvvvv', 'vvvvv', 'vvvvv']
+  repr -> LFUCache({'k5': 'vvvvv', 'k0': 'vvvvv', 'k6': 'vvvvv'}, maxsize=4, currsize=3)
+  pop 'k0' None -> 'vvvvv'
+  repr -> LFUCache({'k5': 'vvvvv', 'k6': 'vvvvv'}, maxsize=4, currsize=2)
+  getitem 4 -> KeyError(4)
+  del 'k3' -> KeyError('k3')
+  values -> ['vvvvv', 'vvvvv']
+  in 'k1' -> False
+  getitem 4 -> KeyError(4)
+  getitem 'k0' -> KeyError('k0')
+  pop ('t', 1) None -> None
+  popitem -> ('k5', 'vvvvv')
+  values -> ['vvvvv']
+  set 'k6' 80 -> None
+  set 'k3' 83 -> None
+  set 'k6' 'vvvvv' -> None
+  set 'k0' (3, 'x') -> None
+  set 'k0' 'v' -> None
+  set 3 93 -> None
+  get 'k3' -> 83
+  pop 'k0' None -> 'v'
+  set 'k3' (0, 'x') -> None
+  getitem 'k5' -> KeyError('k5')
+  repr -> LFUCache({'k6': 'vvvvv', 'k3': (0, 'x'), 3: 93}, maxsize=4, currsize=3)
+  getitem 3 -> 93
+  repr -> LFUCache({'k6': 'vvvvv', 'k3': (0, 'x'), 3: 93}, maxsize=4, currsize=3)
+  popitem -> (3, 93)
+  set 3 65 -> None
+  set 'k3' 'vvvvvv' -> None
+  getitem 'k6' -> 'vvvvv'
+  set 'k3' 33 -> None
+  values -> ['vvvvv', 33, 65]
+  values -> ['vvvvv', 33, 65]
+  popitem -> (3, 65)
+  setdefault 4 'vvvvvvv' -> 'vvvvvvv'
+  set 'k6' 92 -> None
+  set 'k3' 12 -> None
+  set 'k5' 'vvvvvvv' -> None
+  set 'k2' 'vvvvv' -> None
+  set 'k1' (2, 'x') -> None
+  repr -> LFUCache({'k6': 92, 'k3': 12, 'k5': 'vvvvvvv', 'k1': (2, 'x')}, maxsize=4, currsize=4)
+  repr -> LFUCache({'k6': 92, 'k3': 12, 'k5': 'vvvvvvv', 'k1': (2, 'x')}, maxsize=4, currsize=4)
+  getitem 'k3' -> 12
+  setdefault 4 'vvvvvvvv' -> 'vvvvvvvv'
+  repr -> LFUCache({'k6': 92, 'k3': 12, 'k5': 'vvvvvvv', 4: 'vvvvvvvv'}, maxsize=4, currsize=4)
+job 33: script LFUCache(maxsize=12, getsizeof='len')
+  set ('t', 1) 'vvvvv' -> None
+  del 'k0' -> KeyError('k0')
+  set 'k0' 'vvvvvvv' -> None
+  set 'k1' 'vvv' -> None
+  get 'k3' -> None
+  getitem 'k4' -> KeyError('k4')
+  values -> ['vvvvv', 'vvv']
+  repr -> LFUCache({('t', 1): 'vvvvv', 'k1': 'vvv'}, maxsize=12, currsize=8)
+  pop 'k6' None -> None
+  popitem -> ('k1', 'vvv')
+  getitem 3 -> KeyError(3)
+  values -> ['vvvvv']
+  repr -> LFUCache({('t', 1): 'vvvvv'}, maxsize=12, currsize=5)
+  del 'k6' -> KeyError('k6')
+  repr -> LFUCache({('t', 1): 'vvvvv'}, maxsize=12, currsize=5)
+  popitem -> (('t', 1), 'vvvvv')
+  getitem 'k1' -> KeyError('k1')
+  set ('t', 1) 'v' -> None
+  getitem 'k3' -> KeyError('k3')
+  values -> ['v']
+  repr -> LFUCache({('t', 1): 'v'}, maxsize=12, currsize=1)
+  set 'k0' 'vv' -> None
+  getitem 'k2' -> KeyError('k2')
+  get 'k2' -> None
+  get 3 -> None
+  getitem ('t', 1) -> 'v'
+  setdefault 3 'vvv' -> 'vvv'
+  set 'k5' 'vvv' -> None
+  del 3 -> None
+  popitem -> ('k5', 'vvv')
+  getitem 'k4' -> KeyError('k4')
+  getitem 4 -> KeyError(4)
+  getitem 'k5' -> KeyError('k5')
+  get 'k2' -> None
+  values -> ['v', 'vv']
+  repr -> LFUCache({('t', 1): 'v', 'k0': 'vv'}, maxsize=12, currsize=3)
+  set 'k4' 'vvvvvvvv' -> None
+  get 4 -> None
+  set ('t', 1) 'vvvvvvv' -> None
+  getitem 4 -> KeyError(4)
+  get 'k0' -> 'vv'
+  get 'k5' -> None
+  in 4 -> False
+  values -> ['vvvvvvv', 'vv']
+  del 'k2' -> KeyError('k2')
+  set 'k5' 'vvvvvvv' -> None
+  repr -> LFUCache({'k5': 'vvvvvvv'}, maxsize=12, currsize=7)
+  get 'k1' -> None
+  set 'k5' 'v' -> None
+  get ('t', 1) -> None
+  in 4 -> False
+  setdefault 'k5' (2, 'x') -> 'v'
+  set 'k1' 'vv' -> None
+  set 'k4' 'vvvvvvv' -> None
+  getitem 'k3' -> KeyError('k3')
+  set ('t', 1) 'vvvvvvvv' -> None
+  del 'k3' -> KeyError('k3')
+  set 4 'v' -> None
+  set 3 'v' -> None
+  get 'k3' -> None
+  repr -> LFUCache({'k5': 'v', ('t', 1): 'vvvvvvvv', 4: 'v', 3: 'v'}, maxsize=12, currsize=11)
+  getitem 'k6' -> KeyError('k6')
+  repr -> LFUCache({'k5': 'v', ('t', 1): 'vvvvvvvv', 4: 'v', 3: 'v'}, maxsize=12, currsize=11)
+  pop ('t', 1) None -> 'vvvvvvvv'
+  set 'k1' 'vv' -> None
+  popitem -> ('k1', 'vv')
+  set 'k3' 'vvvvvvv' -> None
+  values -> ['v', 'v', 'v', 'vvvvvvv']
+  setdefault 'k0' 'vv' -> 'vv'
+  get 4 -> 'v'
+  in 'k4' -> False
+  in 'k5' -> True
+  popitem -> ('k0', 'vv')
+  repr -> LFUCache({'k5': 'v', 4: 'v', 3: 'v', 'k3': 'vvvvvvv'}, maxsize=12, currsize=10)
+  del 'k1' -> KeyError('k1')
+  getitem 'k2' -> KeyError('k2')
+  get 'k6' -> None
+  repr -> LFUCache({'k5': 'v', 4: 'v', 3: 'v', 'k3': 'vvvvvvv'}, maxsize=12, currsize=10)
+  set 'k1' (0, 'x') -> None
+  set 'k3' 'vvvv' -> None
+  set 4 'vvvvvv' -> None
+  values -> ['v', 'vvvvvv', 'v', 'vvvv']
+  getitem 'k5' -> 'v'
+  set 'k5' (2, 'x') -> None
+  set 3 'vvvvvvvv' -> None
+  get 'k2' -> None
+  getitem 3 -> 'vvvvvvvv'
+  get 'k4' -> None
+  setdefault 'k5' (3, 'x') -> (2, 'x')
+  set 'k6' 'vvv' -> None
+  getitem 3 -> KeyError(3)
+  values -> [(2, 'x'), 'vvv']
+  get 4 -> None
+  popitem -> ('k6', 'vvv')
+  getitem 4 -> KeyError(4)
+  set 'k6' 'vvv' -> None
+  values -> [(2, 'x'), 'vvv']
+  set 'k4' 'vvvvvvv' -> None
+  in 'k0' -> False
+  get 'k0' -> None
+  values -> [(2, 'x'), 'vvv', 'vvvvvvv']
+  set 'k6' (2, 'x') -> None
+  set 3 'vvv' -> None
+  set 'k4' 'vvvvv' -> None
+  set 3 'vvv' -> None
+  repr -> LFUCache({'k5': (2, 'x'), 'k6': (2, 'x'), 3: 'vvv', 'k4': 'vvvvv'}, maxsize=12, currsize=12)
+  set 'k0' 'v' -> None
+  popitem -> ('k0', 'v')
+  del 'k3' -> KeyError('k3')
+  set 'k3' 'vvvvvvv' -> None
+  getitem 'k2' -> KeyError('k2')
+  getitem 3 -> KeyError(3)
+  values -> [(2, 'x'), (2, 'x'), 'vvvvvvv']
+  repr -> LFUCache({'k5': (2, 'x'), 'k6': (2, 'x'), 'k3': 'vvvvvvv'}, maxsize=12, currsize=11)
+  set 'k6' 'vvvvv' -> None
+  set 'k4' 'vvvvvv' -> None
+  repr -> LFUCache({'k5': (2, 'x'), 'k4': 'vvvvvv'}, maxsize=12, currsize=8)
+  set 'k2' 'vvv' -> None
+  popitem -> ('k2', 'vvv')
+  del 'k0' -> KeyError('k0')
+  setdefault 'k1' 'vvv' -> 'vvv'
+  getitem 'k5' -> (2, 'x')
+  set 'k2' 'vvvvvvv' -> None
+  pop 'k0' None -> None
+  set 'k5' 'vvvv' -> None
+  get 3 -> None
+  popitem -> ('k2', 'vvvvvvv')
+  set ('t', 1) 'vv' -> None
+  getitem 4 -> KeyError(4)
+  pop 'k5' None -> 'vvvv'
+  repr -> LFUCache({('t', 1): 'vv'}, maxsize=12, currsize=2)
+  set ('t', 1) 'vvvvv' -> None
+  repr -> LFUCache({('t', 1): 'vvvvv'}, maxsize=12, currsize=5)
+  set 4 'v' -> None
+  get 'k5' -> None
+  set 'k1' 'v' -> None
+  getitem 'k5' -> KeyError('k5')
+  get 'k4' -> None
+  in 'k6' -> False
+  set ('t', 1) 'vvvvv' -> None
+  setdefault 'k4' 'vvvv' -> 'vvvv'
+  del 3 -> KeyError(3)
+  values -> ['vvvvv', 'v', 'v', 'vvvv']
+  setdefault 4 'v' -> 'v'
+  popitem -> ('k1', 'v')
+  set 4 'v' -> None
+  getitem 'k6' -> KeyError('k6')
+  in 'k0' -> False
+  get ('t', 1) -> 'vvvvv'
+  repr -> LFUCache({('t', 1): 'vvvvv', 4: 'v', 'k4': 'vvvv'}, maxsize=12, currsize=10)
+  repr -> LFUCache({('t', 1): 'vvvvv', 4: 'v', 'k4': 'vvvv'}, maxsize=12, currsize=10)
+job 34: script RRCache(maxsize=4, picks=[1, 3, 3, 2, 5, 5, 4, 2, 2, 8, 3, 7, 1, 7, 1, 3, 6, 3, 7, 6, 2, 3, 2, 7, 7, 5, 8, 4, 0, 2])
+  set ('t', 1) 'vvvvvvv' -> None
+  getitem 'k5' -> KeyError('k5')
+  get ('t', 1) -> 'vvvvvvv'
+  values -> ['vvvvvvv']
+  set 'k1' 33 -> None
+  pop 'k3' None -> None
+  set ('t', 1) 'v' -> None
+  repr -> RRCache({('t', 1): 'v', 'k1': 33}, maxsize=4, currsize=2)
+  pop 'k3' None -> None
+  repr -> RRCache({('t', 1): 'v', 'k1': 33}, maxsize=4, currsize=2)
+  set 'k3' 'vvvvvv' -> None
+  del 3 -> KeyError(3)
+  getitem 'k1' -> 33
+  set 'k2' 'vvvvvv' -> None
+  in 'k0' -> False
+  set ('t', 1) 86 -> None
+  repr -> RRCache({('t', 1): 86, 'k1': 33, 'k3': 'vvvvvv', 'k2': 'vvvvvv'}, maxsize=4, currsize=4)
+  repr -> RRCache({('t', 1): 86, 'k1': 33, 'k3': 'vvvvvv', 'k2': 'vvvvvv'}, maxsize=4, currsize=4)
+  pop 'k2' None -> 'vvvvvv'
+  values -> [86, 33, 'vvvvvv']
+  set 'k4' 'vvvvvvvv' -> None
+  repr -> RRCache({('t', 1): 86, 'k1': 33, 'k3': 'vvvvvv', 'k4': 'vvvvvvvv'}, maxsize=4, currsize=4)
+  pop 'k2' None -> None
+  getitem ('t', 1) -> 86
+  getitem 'k6' -> KeyError('k6')
+  pop 4 None -> None
+  set 'k1' 28 -> None
+  pop 'k0' None -> None
+  set 3 'vvvvvvvv' -> None
+  get 'k5' -> None
+  set 4 'vvvvvv' -> None
+  setdefault ('t', 1) 66 -> 86
+  get 4 -> 'vvvvvv'
+  del 4 -> None
+  getitem 4 -> KeyError(4)
+  setdefault 'k2' 'vvvv' -> 'vvvv'
+  values -> [86, 'vvvvvv', 'vvvvvvvv', 'vvvv']
+  values -> [86, 'vvvvvv', 'vvvvvvvv', 'vvvv']
+  getitem 'k5' -> KeyError('k5')
+  popitem -> ('k2', 'vvvv')
+  set ('t', 1) 30 -> None
+  repr -> RRCache({('t', 1): 30, 'k3': 'vvvvvv', 'k4': 'vvvvvvvv'}, maxsize=4, currsize=3)
+  repr -> RRCache({('t', 1): 30, 'k3': 'vvvvvv', 'k4': 'vvvvvvvv'}, maxsize=4, currsize=3)
+  set 3 (0, 'x') -> None
+  set 4 'vvvvv' -> None
+  repr -> RRCache({('t', 1): 30, 'k4': 'vvvvvvvv', 3: (0, 'x'), 4: 'vvvvv'}, maxsize=4, currsize=4)
+  set 4 'vv' -> None
+  set 'k5' 'vvv' -> None
+  getitem 'k5' -> 'vvv'
+  get 4 -> 'vv'
+  setdefault ('t', 1) 66 -> 30
+  set 'k1' (2, 'x') -> None
+  in 3 -> True
+  set 'k2' 'vvvvv' -> None
+  set 'k5' 'vvvvvvv' -> None
+  set 'k5' 'vv' -> None
+  set 'k1' 15 -> None
+  del 'k1' -> None
+  set ('t', 1) 7 -> None
+  set 'k1' 'vvvvv' -> None
+  getitem 'k1' -> 'vvvvv'
+  popitem -> (('t', 1), 7)
+  setdefault 4 'vvvvvv' -> 'vvvvvv'
+  repr -> RRCache({'k5': 'vv', 'k2': 'vvvvv', 'k1': 'vvvvv', 4: 'vvvvvv'}, maxsize=4, currsize=4)
+  set 3 10 -> None
+  set 3 50 -> None
+  set 'k1' (3, 'x') -> None
+  get 4 -> 'vvvvvv'
+  repr -> RRCache({'k5': 'vv', 'k1': (3, 'x'), 4: 'vvvvvv', 3: 50}, maxsize=4, currsize=4)
+  setdefault 'k6' 'v' -> 'v'
+  popitem -> ('k6', 'v')
+  set ('t', 1) 82 -> None
+  getitem 'k6' -> KeyError('k6')
+  pop 'k1' None -> (3, 'x')
+  repr -> RRCache({'k5': 'vv', 4: 'vvvvvv', ('t', 1): 82}, maxsize=4, currsize=3)
+  repr -> RRCache({'k5': 'vv', 4: 'vvvvvv', ('t', 1): 82}, maxsize=4, currsize=3)
+  repr -> RRCache({'k5': 'vv', 4: 'vvvvvv', ('t', 1): 82}, maxsize=4, currsize=3)
+  set 'k3' 66 -> None
+  pop 'k4' None -> None
+  set 'k4' 13 -> None
+  set 'k1' 10 -> None
+  values -> ['vvvvvv', 82, 66, 10]
+  set 'k1' 88 -> None
+  del 4 -> None
+  clear -> None
+  del 4 -> KeyError(4)
+  repr -> RRCache({}, maxsize=4, currsize=0)
+  repr -> RRCache({}, maxsize=4, currsize=0)
+  getitem 'k0' -> KeyError('k0')
+  repr -> RRCache({}, maxsize=4, currsize=0)
+  set 'k5' 44 -> None
+  getitem 'k5' -> 44
+  del 'k3' -> KeyError('k3')
+  getitem 'k6' -> KeyError('k6')
+  repr -> RRCache({'k5': 44}, maxsize=4, currsize=1)
+  setdefault 'k2' 'vvvvvvv' -> 'vvvvvvv'
+  popitem -> ('k2', 'vvvvvvv')
+  set 'k6' 84 -> None
+  set 'k2' 'vvvvvvvv' -> None
+  repr -> RRCache({'k5': 44, 'k6': 84, 'k2': 'vvvvvvvv'}, maxsize=4, currsize=3)
+  set 'k5' 97 -> None
+  set 'k5' 'vvvvvvv' -> None
+  set 'k5' 'vvv' -> None
+  set 'k1' 'vvvvvvvv' -> None
+  get 'k1' -> 'vvvvvvvv'
+  values -> ['vvv', 84, 'vvvvvvvv', 'vvvvvvvv']
+  in 3 -> False
+  popitem -> ('k1', 'vvvvvvvv')
+  set 'k5' 'vvvvvvvv' -> None
+  set 'k0' 'vvvvvvv' -> None
+  get ('t', 1) -> None
+  del 'k3' -> KeyError('k3')
+  get 'k1' -> None
+  get 4 -> None
+  setdefault 'k1' 'vvvvvvv' -> 'vvvvvvv'
+  set 'k6' 'vvvvvvv' -> None
+  set 3 'vvvvvvv' -> None
+  repr -> RRCache({'k5': 'vvvvvvvv', 'k6': 'vvvvvvv', 'k0': 'vvvvvvv', 3: 'vvvvvvv'}, maxsize=4, currsize=4)
+  del 'k0' -> None
+  setdefault ('t', 1) 91 -> 91
+  repr -> RRCache({'k5': 'vvvvvvvv', 'k6': 'vvvvvvv', 3: 'vvvvvvv', ('t', 1): 91}, maxsize=4, currsize=4)
+  set 'k5' 7 -> None
+  repr -> RRCache({'k5': 7, 'k6': 'vvvvvvv', 3: 'vvvvvvv', ('t', 1): 91}, maxsize=4, currsize=4)
+  getitem 'k1' -> KeyError('k1')
+  del ('t', 1) -> None
+  repr -> RRCache({'k5': 7, 'k6': 'vvvvvvv', 3: 'vvvvvvv'}, maxsize=4, currsize=3)
+  values -> [7, 'vvvvvvv', 'vvvvvvv']
+  set 'k2' 88 -> None
+  del 4 -> KeyError(4)
+  set 'k1' (2, 'x') -> None
+  del 'k3' -> KeyError('k3')
+  set 'k6' 'vvvvvvv' -> None
+  set ('t', 1) 'vvvvvv' -> None
+  set 'k6' 78 -> None
+  set 'k1' 'vvvvvv' -> None
+  set 'k1' 66 -> None
+  set 4 'v' -> None
+  del 'k1' -> KeyError('k1')
+  get 'k4' -> None
+  repr -> RRCache({'k5': 7, 'k6': 78, ('t', 1): 'vvvvvv', 4: 'v'}, maxsize=4, currsize=4)
+  getitem 'k6' -> 78
+  getitem 'k3' -> KeyError('k3')
+  pop 'k2' None -> None
+  repr -> RRCache({'k5': 7, 'k6': 78, ('t', 1): 'vvvvvv', 4: 'v'}, maxsize=4, currsize=4)
+  set 'k4' (4, 'x') -> None
+  set ('t', 1) (0, 'x') -> None
+  setdefault 'k2' 71 -> 71
+  pop 4 None -> None
+  values -> [7, 78, (4, 'x'), 71]
+  set 'k3' 76 -> None
+  repr -> RRCache({'k5': 7, 'k6': 78, 'k4': (4, 'x'), 'k3': 76}, maxsize=4, currsize=4)
+job 35: script TTLCache(maxsize=4, ttl=7)
+  set ('t', 1) 73 -> None
+  getitem ('t', 1) -> 73
+  getitem 'k6' -> KeyError('k6')
+  set 3 46 -> None
+  popitem -> (('t', 1), 73)
+  repr -> TTLCache({3: 46}, maxsize=4, currsize=1)
+  set 'k0' 'v' -> None
+  values -> [46, 'v']
+  in 'k6' -> False
+  tick 4 -> now 4
+  set 3 (2, 'x') -> None
+  getitem 4 -> KeyError(4)
+  set ('t', 1) 19 -> None
+  getitem 'k2' -> KeyError('k2')
+  setdefault 'k3' 'vvvvvv' -> 'vvvvvv'
+  getitem 'k5' -> KeyError('k5')
+  getitem 'k5' -> KeyError('k5')
+  getitem 'k1' -> KeyError('k1')
+  set 'k3' 44 -> None
+  del 'k5' -> KeyError('k5')
+  set 4 'v' -> None
+  set 'k4' 42 -> None
+  in 'k2' -> False
+  set 'k1' 6 -> None
+  getitem 'k2' -> KeyError('k2')
+  getitem 'k0' -> KeyError('k0')
+  set 'k2' (1, 'x') -> None
+  getitem 'k0' -> KeyError('k0')
+  del 'k2' -> None
+  repr -> TTLCache({4: 'v', 'k4': 42, 'k1': 6}, maxsize=4, currsize=3)
+  set 'k5' 9 -> None
+  repr -> TTLCache({4: 'v', 'k4': 42, 'k1': 6, 'k5': 9}, maxsize=4, currsize=4)
+  set 'k6' (4, 'x') -> None
+  set 'k4' 64 -> None
+  set 'k6' 9 -> None
+  set 'k0' (2, 'x') -> None
+  repr -> TTLCache({'k4': 64, 'k5': 9, 'k6': 9, 'k0': (2, 'x')}, maxsize=4, currsize=4)
+  repr -> TTLCache({'k4': 64, 'k5': 9, 'k6': 9, 'k0': (2, 'x')}, maxsize=4, currsize=4)
+  setdefault 'k5' 73 -> 9
+  get 'k4' -> 64
+  set 'k2' 'vv' -> None
+  set ('t', 1) 'vvvvv' -> None
+  in 3 -> False
+  set 'k2' 86 -> None
+  get 'k2' -> 86
+  set ('t', 1) 'v' -> None
+  getitem 'k4' -> 64
+  set ('t', 1) 'vvvvvvvv' -> None
+  tick 5 -> now 9
+  set ('t', 1) 78 -> None
+  set 'k1' (3, 'x') -> None
+  getitem 4 -> KeyError(4)
+  values -> [64, 86, 78, (3, 'x')]
+  repr -> TTLCache({'k4': 64, 'k2': 86, ('t', 1): 78, 'k1': (3, 'x')}, maxsize=4, currsize=4)
+  set ('t', 1) (4, 'x') -> None
+  repr -> TTLCache({'k4': 64, 'k2': 86, ('t', 1): (4, 'x'), 'k1': (3, 'x')}, maxsize=4, currsize=4)
+  set 3 'vvvvvvvv' -> None
+  in 'k0' -> False
+  getitem 3 -> 'vvvvvvvv'
+  getitem 'k6' -> KeyError('k6')
+  getitem 'k1' -> (3, 'x')
+  getitem 'k4' -> KeyError('k4')
+  getitem 3 -> 'vvvvvvvv'
+  get 3 -> 'vvvvvvvv'
+  tick 3 -> now 12
+  set ('t', 1) 18 -> None
+  pop 'k2' None -> None
+  values -> [(3, 'x'), 'vvvvvvvv', 18]
+  getitem ('t', 1) -> 18
+  get 'k4' -> None
+  tick 5 -> now 17
+  set 'k1' 'vvvv' -> None
+  set 'k4' 38 -> None
+  values -> [18, 'vvvv', 38]
+  popitem -> (('t', 1), 18)
+  values -> ['vvvv', 38]
+  getitem 'k6' -> KeyError('k6')
+  del 'k2' -> KeyError('k2')
+  getitem 'k3' -> KeyError('k3')
+  repr -> TTLCache({'k1': 'vvvv', 'k4': 38}, maxsize=4, currsize=2)
+  set ('t', 1) 32 -> None
+  set 3 72 -> None
+  repr -> TTLCache({'k1': 'vvvv', 'k4': 38, ('t', 1): 32, 3: 72}, maxsize=4, currsize=4)
+  set 'k6' 95 -> None
+  set 'k1' 'vvvv' -> None
+  getitem 'k4' -> KeyError('k4')
+  clear -> None
+  pop ('t', 1) None -> None
+  set 4 'vvv' -> None
+  set 'k6' 84 -> None
+  clear -> None
+  tick 4 -> now 21
+  repr -> TTLCache({}, maxsize=4, currsize=0)
+  tick 2 -> now 23
+  getitem 'k6' -> KeyError('k6')
+  popitem -> KeyError('TTLCache is empty')
+  set 'k0' 'vvv' -> None
+  getitem 'k3' -> KeyError('k3')
+  tick 1 -> now 24
+  tick 5 -> now 29
+  getitem 'k5' -> KeyError('k5')
+  repr -> TTLCache({'k0': 'vvv'}, maxsize=4, currsize=1)
+  get 'k1' -> None
+  repr -> TTLCache({'k0': 'vvv'}, maxsize=4, currsize=1)
+  get ('t', 1) -> None
+  set 'k1' 'vvvvvvv' -> None
+  getitem 3 -> KeyError(3)
+  get 'k3' -> None
+  setdefault 'k5' 'vvvvvvv' -> 'vvvvvvv'
+  repr -> TTLCache({'k0': 'vvv', 'k1': 'vvvvvvv', 'k5': 'vvvvvvv'}, maxsize=4, currsize=3)
+  set ('t', 1) 46 -> None
+  set 'k5' 5 -> None
+  setdefault ('t', 1) (0, 'x') -> 46
+  set 'k5' 6 -> None
+  popitem -> ('k0', 'vvv')
+  values -> ['vvvvvvv', 46, 6]
+  set ('t', 1) 'vvvvvvvv' -> None
+  set 'k4' 'vvvv' -> None
+  getitem 'k0' -> KeyError('k0')
+  in 'k0' -> False
+  set 'k6' 36 -> None
+  set 'k1' 6 -> None
+  repr -> TTLCache({('t', 1): 'vvvvvvvv', 'k4': 'vvvv', 'k6': 36, 'k1': 6}, maxsize=4, currsize=4)
+  get ('t', 1) -> 'vvvvvvvv'
+  clear -> None
+  in 'k5' -> False
+  tick 4 -> now 33
+  set 'k3' 0 -> None
+  getitem 'k4' -> KeyError('k4')
+  set 'k6' (1, 'x') -> None
+  getitem 'k1' -> KeyError('k1')
+  set 'k1' 84 -> None
+  tick 3 -> now 36
+  set 3 7 -> None
+  set 'k4' 75 -> None
+  get 'k3' -> None
+  clear -> None
+  tick 3 -> now 39
+  set 'k5' 'vvvvvv' -> None
+  setdefault 'k5' 30 -> 'vvvvvv'
+  set 'k2' 90 -> None
+  getitem 'k2' -> 90
+  setdefault 'k3' 86 -> 86
+  set 'k5' 84 -> None
+  set 3 10 -> None
+  repr -> TTLCache({'k5': 84, 'k2': 90, 'k3': 86, 3: 10}, maxsize=4, currsize=4)
+  set 'k4' 'vvvvv' -> None
+  in 'k6' -> False
+  getitem 'k6' -> KeyError('k6')
+  set 3 49 -> None
+  repr -> TTLCache({'k5': 84, 'k3': 86, 3: 49, 'k4': 'vvvvv'}, maxsize=4, currsize=4)
+job 36: script TTLCache(maxsize=12, ttl=9, getsizeof='len')
+  get 'k1' -> None
+  set 'k4' 'v' -> None
+  getitem 'k6' -> KeyError('k6')
+  getitem 'k2' -> KeyError('k2')
+  setdefault 'k1' 'v' -> 'v'
+  in 'k2' -> False
+  set 3 'v' -> None
+  set 'k5' 'vvvv' -> None
+  repr -> TTLCache({'k4': 'v', 'k1': 'v', 3: 'v', 'k5': 'vvvv'}, maxsize=12, currsize=7)
+  getitem 'k3' -> KeyError('k3')
+  getitem 'k6' -> KeyError('k6')
+  tick 4 -> now 10
+  setdefault 'k2' 'vvv' -> 'vvv'
+  getitem ('t', 1) -> KeyError(('t', 1))
+  get 4 -> None
+  get 'k4' -> None
+  set ('t', 1) 'vvvvvv' -> None
+  popitem -> ('k2', 'vvv')
+  set 3 'v' -> None
+  set 'k5' 'vv' -> None
+  values -> ['vvvvvv', 'v', 'vv']
+  set 'k5' 'vvvvvvvv' -> None
+  repr -> TTLCache({3: 'v', 'k5': 'vvvvvvvv'}, maxsize=12, currsize=9)
+  set 'k3' 'vvv' -> None
+  repr -> TTLCache({'k5': 'vvvvvvvv', 'k3': 'vvv'}, maxsize=12, currsize=11)
+  getitem 'k3' -> 'vvv'
+  set 3 'vvvv' -> None
+  set 4 'vvvvvvvv' -> None
+  getitem 4 -> 'vvvvvvvv'
+  set 4 'vvvv' -> None
+  popitem -> (3, 'vvvv')
+  getitem 'k6' -> KeyError('k6')
+  set 3 'vv' -> None
+  get 'k1' -> None
+  get ('t', 1) -> None
+  set 4 'vvvvv' -> None
+  set 'k3' 'vvvvvvv' -> None
+  getitem 'k2' -> KeyError('k2')
+  set 'k0' 'vvv' -> None
+  repr -> TTLCache({'k3': 'vvvvvvv', 'k0': 'vvv'}, maxsize=12, currsize=10)
+  repr -> TTLCache({'k3': 'vvvvvvv', 'k0': 'vvv'}, maxsize=12, currsize=10)
+  set 'k3' 'vv' -> None
+  set 'k2' 'vvv' -> None
+  get 'k0' -> 'vvv'
+  getitem ('t', 1) -> KeyError(('t', 1))
+  pop 4 None -> None
+  set 'k3' 'vvvv' -> None
+  set 'k3' 'vvvvvvv' -> None
+  set 'k3' 'vvv' -> None
+  get 'k3' -> 'vvv'
+  popitem -> ('k3', 'vvv')
+  pop 'k6' None -> None
+  set 3 'vvvvvvvv' -> None
+  set 'k3' 26 -> TypeError("object of type 'int' has no len()")
+  getitem 'k2' -> KeyError('k2')
+  set 'k3' 'vvv' -> None
+  repr -> TTLCache({3: 'vvvvvvvv', 'k3': 'vvv'}, maxsize=12, currsize=11)
+  set 3 'vvv' -> None
+  getitem 3 -> 'vvv'
+  popitem -> ('k3', 'vvv')
+  popitem -> (3, 'vvv')
+  in 'k3' -> False
+  set 'k4' 'vvvvvvv' -> None
+  getitem 'k1' -> KeyError('k1')
+  set 4 'v' -> None
+  del 'k4' -> None
+  clear -> None
+  repr -> TTLCache({}, maxsize=12, currsize=0)
+  setdefault ('t', 1) (0, 'x') -> (0, 'x')
+  set 4 (3, 'x') -> None
+  get 3 -> None
+  getitem ('t', 1) -> (0, 'x')
+  values -> [(0, 'x'), (3, 'x')]
+  pop 'k1' None -> None
+  set 'k0' 'vvvvvv' -> None
+  get 'k1' -> None
+  set 'k4' 'vvvvvvvv' -> None
+  repr -> TTLCache({'k4': 'vvvvvvvv'}, maxsize=12, currsize=8)
+  set 'k1' 'vvv' -> None
+  set 'k3' (2, 'x') -> None
+  set ('t', 1) 'vvvvvvvv' -> None
+  getitem 3 -> KeyError(3)
+  repr -> TTLCache({'k3': (2, 'x'), ('t', 1): 'vvvvvvvv'}, maxsize=12, currsize=10)
+  repr -> TTLCache({'k3': (2, 'x'), ('t', 1): 'vvvvvvvv'}, maxsize=12, currsize=10)
+  tick 3 -> now 81
+  set 'k3' 'vvvvvv' -> None
+  set 'k0' 'vvv' -> None
+  getitem 'k2' -> KeyError('k2')
+  set 'k5' 'vvvvvv' -> None
+  set ('t', 1) 'v' -> None
+  repr -> TTLCache({'k0': 'vvv', 'k5': 'vvvvvv', ('t', 1): 'v'}, maxsize=12, currsize=10)
+  set 'k4' 'vvvvvvvv' -> None
+  set 'k3' 'vvv' -> None
+  set 3 'vvvvvvv' -> None
+  set 4 (0, 'x') -> None
+  repr -> TTLCache({'k3': 'vvv', 3: 'vvvvvvv', 4: (0, 'x')}, maxsize=12, currsize=12)
+  tick 5 -> now 96
+  getitem 4 -> (0, 'x')
+  set 'k6' 'vvvvvvv' -> None
+  set 'k3' 'vvvv' -> None
+  get 'k5' -> None
+  set 'k5' 'vvvvvv' -> None
+  popitem -> ('k3', 'vvvv')
+  set 'k2' 'vvvvvvv' -> None
+  getitem ('t', 1) -> KeyError(('t', 1))
+  set 4 (2, 'x') -> None
+  clear -> None
+  set 'k5' 'vvv' -> None
+  del 'k3' -> KeyError('k3')
+  getitem 'k5' -> 'vvv'
+  get 'k0' -> None
+  getitem ('t', 1) -> KeyError(('t', 1))
+  tick 1 -> now 108
+  del 'k6' -> KeyError('k6')
+  set 'k1' 'vvvv' -> None
+  getitem 'k6' -> KeyError('k6')
+  get 'k1' -> 'vvvv'
+  set 'k6' 'vvvvvvv' -> None
+  set ('t', 1) 'vvvvvvvv' -> None
+  getitem 'k4' -> KeyError('k4')
+  del ('t', 1) -> None
+  in 'k2' -> False
+  repr -> TTLCache({}, maxsize=12, currsize=0)
+  getitem 3 -> KeyError(3)
+  getitem 'k1' -> KeyError('k1')
+  set 'k6' 'vvvvvv' -> None
+  in 'k4' -> False
+  set 'k5' 'vvvvvv' -> None
+  set 'k5' 'vvvvvvv' -> None
+  getitem 'k2' -> KeyError('k2')
+  repr -> TTLCache({'k5': 'vvvvvvv'}, maxsize=12, currsize=7)
+  repr -> TTLCache({'k5': 'vvvvvvv'}, maxsize=12, currsize=7)
+  set 3 'vvvvv' -> None
+  set 'k4' 'vvv' -> None
+  set 'k2' 'vv' -> None
+  getitem 'k1' -> KeyError('k1')
+  pop 4 None -> None
+  set 'k2' 'vv' -> None
+  del 3 -> None
+  repr -> TTLCache({'k4': 'vvv', 'k2': 'vv'}, maxsize=12, currsize=5)
+  get 'k4' -> 'vvv'
+  repr -> TTLCache({'k4': 'vvv', 'k2': 'vv'}, maxsize=12, currsize=5)
+  getitem 4 -> KeyError(4)
+  repr -> TTLCache({'k4': 'vvv', 'k2': 'vv'}, maxsize=12, currsize=5)
+  in 'k4' -> False
+  setdefault 'k2' 'vvvv' -> 'vv'
+  set 'k3' 'vv' -> None
+  values -> ['vv']
+  set 'k6' 'vvvvvvvv' -> None
+  get 'k6' -> 'vvvvvvvv'
+  repr -> TTLCache({'k3': 'vv', 'k6': 'vvvvvvvv'}, maxsize=12, currsize=10)
+job 37: script TLRUCache(maxsize=4, ttu={'kind': 'table', 'table': {'k1': 3, 'k2': 1, 'k3': 30}, 'default': 8})
+  del 'k5' -> KeyError('k5')
+  repr -> TLRUCache({}, maxsize=4, currsize=0)
+  repr -> TLRUCache({}, maxsize=4, currsize=0)
+  repr -> TLRUCache({}, maxsize=4, currsize=0)
+  set 3 61 -> None
+  repr -> TLRUCache({3: 61}, maxsize=4, currsize=1)
+  set 'k4' 81 -> None
+  del 3 -> None
+  set 'k3' (3, 'x') -> None
+  in 4 -> False
+  del 'k2' -> KeyError('k2')
+  popitem -> ('k4', 81)
+  del 'k0' -> KeyError('k0')
+  set 'k2' 4 -> None
+  get ('t', 1) -> None
+  get 'k5' -> None
+  set ('t', 1) (0, 'x') -> None
+  set 'k0' 'vvvvvvvv' -> None
+  set 'k0' (0, 'x') -> None
+  get 'k2' -> 4
+  get 'k6' -> None
+  getitem 'k2' -> 4
+  repr -> TLRUCache({'k3': (3, 'x'), 'k2': 4, ('t', 1): (0, 'x'), 'k0': (0, 'x')}, maxsize=4, currsize=4)
+  set 4 'vvvvvvvv' -> None
+  getitem 'k3' -> KeyError('k3')
+  set 'k3' 'vvv' -> None
+  repr -> TLRUCache({'k2': 4, 'k0': (0, 'x'), 4: 'vvvvvvvv', 'k3': 'vvv'}, maxsize=4, currsize=4)
+  repr -> TLRUCache({'k2': 4, 'k0': (0, 'x'), 4: 'vvvvvvvv', 'k3': 'vvv'}, maxsize=4, currsize=4)
+  del ('t', 1) -> KeyError(('t', 1))
+  clear -> None
+  repr -> TLRUCache({}, maxsize=4, currsize=0)
+  set 3 'vvvvv' -> None
+  set 'k4' 5 -> None
+  del 'k4' -> None
+  get 'k1' -> None
+  set 3 'vvvvv' -> None
+  set 'k0' 71 -> None
+  get 'k4' -> None
+  getitem 'k2' -> KeyError('k2')
+  set 'k1' (3, 'x') -> None
+  set 'k2' 50 -> None
+  set 'k4' 56 -> None
+  pop 'k4' None -> 56
+  pop 'k6' None -> None
+  set 'k2' 'vvvvvvv' -> None
+  get 'k4' -> None
+  getitem 'k2' -> 'vvvvvvv'
+  set 'k0' 67 -> None
+  get 'k2' -> 'vvvvvvv'
+  get ('t', 1) -> None
+  set 'k3' (0, 'x') -> None
+  in ('t', 1) -> False
+  set 'k4' 'vvvvvvv' -> None
+  repr -> TLRUCache({'k0': 67, 'k2': 'vvvvvvv', 'k3': (0, 'x'), 'k4': 'vvvvvvv'}, maxsize=4, currsize=4)
+  getitem 'k3' -> (0, 'x')
+  set 'k3' 'vvvvv' -> None
+  in 'k2' -> True
+  getitem 'k1' -> KeyError('k1')
+  del 'k3' -> None
+  repr -> TLRUCache({'k0': 67, 'k2': 'vvvvvvv', 'k4': 'vvvvvvv'}, maxsize=4, currsize=3)
+  repr -> TLRUCache({'k0': 67, 'k2': 'vvvvvvv', 'k4': 'vvvvvvv'}, maxsize=4, currsize=3)
+  pop 'k4' None -> 'vvvvvvv'
+  values -> ['vvvvvvv', 67]
+  del 'k2' -> None
+  getitem 'k4' -> KeyError('k4')
+  set ('t', 1) 82 -> None
+  tick 3 -> now 3
+  in 'k4' -> False
+  getitem 4 -> KeyError(4)
+  in 'k2' -> False
+  getitem 'k5' -> KeyError('k5')
+  set ('t', 1) (2, 'x') -> None
+  setdefault 'k5' 37 -> 37
+  repr -> TLRUCache({'k0': 67, ('t', 1): (2, 'x'), 'k5': 37}, maxsize=4, currsize=3)
+  set 4 'vvvv' -> None
+  getitem 'k0' -> 67
+  getitem 'k5' -> 37
+  set 3 'vvv' -> None
+  getitem 'k2' -> KeyError('k2')
+  set 'k1' 63 -> None
+  popitem -> ('k0', 67)
+  get 'k3' -> None
+  setdefault 4 43 -> 43
+  getitem 'k5' -> 37
+  setdefault 3 98 -> 'vvv'
+  getitem 'k0' -> KeyError('k0')
+  repr -> TLRUCache({'k5': 37, 3: 'vvv', 'k1': 63, 4: 43}, maxsize=4, currsize=4)
+  set 'k1' 'vvvvvv' -> None
+  clear -> None
+  set 3 5 -> None
+  set 'k2' 87 -> None
+  getitem 3 -> 5
+  get 3 -> 5
+  getitem 'k1' -> KeyError('k1')
+  set 3 17 -> None
+  set 'k4' 'vv' -> None
+  set ('t', 1) 'vvvvvvvv' -> None
+  repr -> TLRUCache({3: 17, 'k2': 87, 'k4': 'vv', ('t', 1): 'vvvvvvvv'}, maxsize=4, currsize=4)
+  set ('t', 1) 7 -> None
+  del 'k0' -> KeyError('k0')
+  getitem 'k2' -> 87
+  del 'k0' -> KeyError('k0')
+  tick 4 -> now 7
+  get 'k0' -> None
+  repr -> TLRUCache({3: 17, 'k4': 'vv', ('t', 1): 7}, maxsize=4, currsize=3)
+  repr -> TLRUCache({3: 17, 'k4': 'vv', ('t', 1): 7}, maxsize=4, currsize=3)
+  get 'k6' -> None
+  getitem 'k4' -> 'vv'
+  repr -> TLRUCache({3: 17, 'k4': 'vv', ('t', 1): 7}, maxsize=4, currsize=3)
+  repr -> TLRUCache({3: 17, 'k4': 'vv', ('t', 1): 7}, maxsize=4, currsize=3)
+  set 4 74 -> None
+  set 3 'v' -> None
+  tick 1 -> now 8
+  set 4 'vvvvvvvv' -> None
+  getitem 'k0' -> KeyError('k0')
+  getitem 'k3' -> KeyError('k3')
+  getitem 'k4' -> 'vv'
+  getitem 'k5' -> KeyError('k5')
+  popitem -> (('t', 1), 7)
+  tick 2 -> now 10
+  repr -> TLRUCache({3: 'v', 'k4': 'vv', 4: 'vvvvvvvv'}, maxsize=4, currsize=3)
+  getitem 'k5' -> KeyError('k5')
+  set 'k5' 99 -> None
+  set 'k0' 43 -> None
+  getitem 'k0' -> 43
+  getitem 'k3' -> KeyError('k3')
+  getitem 'k3' -> KeyError('k3')
+  set 'k5' 'vvvv' -> None
+  popitem -> (4, 'vvvvvvvv')
+  set 'k1' 'vvvvv' -> None
+  set 'k3' 'vvv' -> None
+  tick 1 -> now 11
+  repr -> TLRUCache({'k5': 'vvvv', 'k0': 43, 'k1': 'vvvvv', 'k3': 'vvv'}, maxsize=4, currsize=4)
+  getitem 'k2' -> KeyError('k2')
+  getitem 'k4' -> KeyError('k4')
+  clear -> None
+  values -> []
+  set 4 'vvvvvv' -> None
+  tick 5 -> now 16
+  set 'k0' 'vvv' -> None
+  set 4 10 -> None
+  set 'k1' 'vvvvvvvv' -> None
+  get 'k5' -> None
+  set 'k2' 'vv' -> None
+  pop 'k4' None -> None
+  set 'k5' 8 -> None
+  set 'k3' 56 -> None
+  get 4 -> None
+  clear -> None
+  get 'k1' -> None
+  repr -> TLRUCache({}, maxsize=4, currsize=0)
+job 38: script TLRUCache(maxsize=12, getsizeof='len', ttu={'kind': 'len'})
+  getitem ('t', 1) -> KeyError(('t', 1))
+  in 'k6' -> False
+  pop 'k5' None -> None
+  set 'k1' 'vvvvvvvv' -> None
+  set 'k3' 'vvvvv' -> None
+  set 'k6' 32 -> TypeError("object of type 'int' has no len()")
+  tick 4 -> now 58
+  set 3 (0, 'x') -> None
+  repr -> TLRUCache({3: (0, 'x')}, maxsize=12, currsize=2)
+  getitem 4 -> KeyError(4)
+  popitem -> KeyError('TLRUCache is empty')
+  tick 2 -> now 63
+  getitem 'k4' -> KeyError('k4')
+  in 'k0' -> False
+  set 4 'vvv' -> None
+  values -> ['vvv']
+  set 'k1' 'v' -> None
+  del 'k2' -> KeyError('k2')
+  set 'k0' 'v' -> None
+  set 'k1' 'v' -> None
+  getitem 'k5' -> KeyError('k5')
+  set 'k6' 'vvvvv' -> None
+  set 'k4' 'v' -> None
+  repr -> TLRUCache({'k6': 'vvvvv'}, maxsize=12, currsize=5)
+  set 'k1' 'vvvvvvv' -> None
+  getitem 4 -> KeyError(4)
+  set ('t', 1) 'vv' -> None
+  repr -> TLRUCache({'k1': 'vvvvvvv', ('t', 1): 'vv'}, maxsize=12, currsize=9)
+  pop 'k3' None -> None
+  repr -> TLRUCache({'k1': 'vvvvvvv'}, maxsize=12, currsize=7)
+  values -> ['vvvvvvv']
+  popitem -> KeyError('TLRUCache is empty')
+  set 3 'vvv' -> None
+  set 3 'vvvvv' -> None
+  getitem 'k1' -> KeyError('k1')
+  getitem 3 -> 'vvvvv'
+  popitem -> (3, 'vvvvv')
+  setdefault 'k5' 'vvv' -> 'vvv'
+  get 'k3' -> None
+  getitem 'k2' -> KeyError('k2')
+  set 'k1' 'vvvv' -> None
+  set 'k5' 'vv' -> None
+  pop 'k5' None -> 'vv'
+  set 3 'vvvvv' -> None
+  pop 4 None -> None
+  popitem -> (3, 'vvvvv')
+  set 'k6' 'vvvv' -> None
+  getitem 'k4' -> KeyError('k4')
+  set ('t', 1) 'vvv' -> None
+  repr -> TLRUCache({'k6': 'vvvv', ('t', 1): 'vvv'}, maxsize=12, currsize=7)
+  set 'k5' 31 -> TypeError("object of type 'int' has no len()")
+  set 'k0' 'vv' -> None
+  set 'k0' 'vv' -> None
+  getitem 3 -> KeyError(3)
+  set 'k6' 'vvvvvvv' -> None
+  repr -> TLRUCache({'k6': 'vvvvvvv'}, maxsize=12, currsize=7)
+  del 'k6' -> None
+  set ('t', 1) 'v' -> None
+  set 'k0' 'vvvvvvvv' -> None
+  getitem 'k6' -> KeyError('k6')
+  getitem 'k0' -> 'vvvvvvvv'
+  tick 5 -> now 110
+  del 'k5' -> KeyError('k5')
+  getitem 'k0' -> KeyError('k0')
+  values -> []
+  getitem 'k4' -> KeyError('k4')
+  pop 'k5' None -> None
+  set 'k4' 'vvvv' -> None
+  set 'k0' 34 -> TypeError("object of type 'int' has no len()")
+  pop 3 None -> None
+  repr -> TLRUCache({'k4': 'vvvv'}, maxsize=12, currsize=4)
+  getitem 'k2' -> KeyError('k2')
+  repr -> TLRUCache({}, maxsize=12, currsize=0)
+  getitem 'k2' -> KeyError('k2')
+  set 4 'vvvv' -> None
+  set 'k3' 'vvvv' -> None
+  set 4 'vvvvvvv' -> None
+  getitem 'k5' -> KeyError('k5')
+  tick 5 -> now 127
+  get 'k0' -> None
+  getitem 'k4' -> KeyError('k4')
+  pop 'k5' None -> None
+  getitem 'k0' -> KeyError('k0')
+  setdefault 'k3' 'vvvvv' -> 'vvvvv'
+  set 3 'vv' -> None
+  set 'k3' 'vvvvvvv' -> None
+  values -> ['vvvvvvv']
+  tick 2 -> now 136
+  repr -> TLRUCache({'k3': 'vvvvvvv'}, maxsize=12, currsize=7)
+  set 4 (0, 'x') -> None
+  repr -> TLRUCache({4: (0, 'x')}, maxsize=12, currsize=2)
+  getitem 'k3' -> KeyError('k3')
+  repr -> TLRUCache({}, maxsize=12, currsize=0)
+  set 'k4' 'vv' -> None
+  set 'k0' 'v' -> None
+  tick 2 -> now 144
+  getitem ('t', 1) -> KeyError(('t', 1))
+  repr -> TLRUCache({}, maxsize=12, currsize=0)
+  repr -> TLRUCache({}, maxsize=12, currsize=0)
+  popitem -> KeyError('TLRUCache is empty')
+  getitem 4 -> KeyError(4)
+  set 'k1' 'v' -> None
+  getitem 3 -> KeyError(3)
+  repr -> TLRUCache({}, maxsize=12, currsize=0)
+  set 'k6' 'vvvvvvvv' -> None
+  setdefault 'k4' 'vvvvvvv' -> 'vvvvvvv'
+  pop 'k2' None -> None
+  in 'k2' -> False
+  repr -> TLRUCache({'k4': 'vvvvvvv'}, maxsize=12, currsize=7)
+  set ('t', 1) (4, 'x') -> None
+  set ('t', 1) (4, 'x') -> None
+  set 'k4' 83 -> TypeError("object of type 'int' has no len()")
+  get 'k6' -> None
+  set 3 'vvv' -> None
+  set 'k5' 'vvvv' -> None
+  set 3 'vvvvvvv' -> None
+  pop 'k3' None -> None
+  tick 3 -> now 164
+  getitem 'k6' -> KeyError('k6')
+  set 'k0' 'vvv' -> None
+  set 'k5' 'vv' -> None
+  popitem -> ('k0', 'vvv')
+  popitem -> KeyError('TLRUCache is empty')
+  get 'k2' -> None
+  getitem 'k1' -> KeyError('k1')
+  popitem -> KeyError('TLRUCache is empty')
+  tick 3 -> now 173
+  getitem ('t', 1) -> KeyError(('t', 1))
+  set 'k3' 'vvv' -> None
+  set 'k6' 'vv' -> None
+  pop 'k6' None -> 'vv'
+  del 'k0' -> KeyError('k0')
+  del 3 -> KeyError(3)
+  repr -> TLRUCache({}, maxsize=12, currsize=0)
+  set 3 'vvvvvvvv' -> None
+  repr -> TLRUCache({3: 'vvvvvvvv'}, maxsize=12, currsize=8)
+  getitem 'k5' -> KeyError('k5')
+  set 'k6' 'vvvvvvvv' -> None
+  set 'k3' 'vvvv' -> None
+  tick 3 -> now 186
+  getitem 'k5' -> KeyError('k5')
+  del 'k0' -> KeyError('k0')
+  getitem 'k4' -> KeyError('k4')
+  set 4 'vvvv' -> None
+  values -> ['vvvv']
+  tick 4 -> now 195
+  set 'k6' 'vv' -> None
+  get ('t', 1) -> None
+  repr -> TLRUCache({}, maxsize=12, currsize=0)
+  setdefault 'k4' 'vvv' -> 'vvv'
+  repr -> TLRUCache({'k4': 'vvv'}, maxsize=12, currsize=3)
+job 39: memo fib lru_cache(maxsize=4)
+  fib(10) -> 55
+    ran fib(10) fib(9) fib(8) fib(7) fib(6) fib(5) fib(4) fib(3) fib(2) fib(1) fib(0)
+  cache_info -> CacheInfo(hits=8, misses=11, maxsize=4, currsize=4)
+  fib(12) -> 144
+    ran fib(12) fib(11)
+  cache_info -> CacheInfo(hits=11, misses=13, maxsize=4, currsize=4)
+  cache -> LRUCache({(9,): 34, (10,): 55, (11,): 89, (12,): 144}, maxsize=4, currsize=4)
+  cache_parameters -> {'maxsize': 4, 'typed': False}
+job 40: memo fib lru_cache(maxsize=None)
+  fib(15) -> 610
+    ran fib(15) fib(14) fib(13) fib(12) fib(11) fib(10) fib(9) fib(8) fib(7) fib(6) fib(5) fib(4) fib(3) fib(2) fib(1) fib(0)
+  cache_info -> CacheInfo(hits=13, misses=16, maxsize=None, currsize=16)
+  cache_parameters -> {'maxsize': None, 'typed': False}
+job 41: memo fib lfu_cache(maxsize=3)
+  fib(9) -> 34
+    ran fib(9) fib(8) fib(7) fib(6) fib(5) fib(4) fib(3) fib(2) fib(1) fib(0) fib(3) fib(4) fib(3) fib(5) fib(4) fib(3) fib(3) fib(6) fib(5) fib(4) fib(3) fib(3) fib(4) fib(3) fib(7) fib(6) fib(5) fib(4) fib(3) fib(3) fib(4) fib(3) fib(5) fib(4) fib(3) fib(3)
+  cache_info -> CacheInfo(hits=33, misses=36, maxsize=3, currsize=3)
+  cache -> LFUCache({(1,): 1, (2,): 1, (9,): 34}, maxsize=3, currsize=3)
+  fib(3) -> 2
+    ran fib(3)
+  cache -> LFUCache({(1,): 1, (2,): 1, (3,): 2}, maxsize=3, currsize=3)
+job 42: memo fib fifo_cache(maxsize=3)
+  fib(8) -> 21
+    ran fib(8) fib(7) fib(6) fib(5) fib(4) fib(3) fib(2) fib(1) fib(0)
+  cache_info -> CacheInfo(hits=6, misses=9, maxsize=3, currsize=3)
+  cache -> FIFOCache({(6,): 8, (7,): 13, (8,): 21}, maxsize=3, currsize=3)
+job 43: memo fib rr_cache(maxsize=3, picks=[1, 0, 2, 2, 1])
+  fib(8) -> 21
+    ran fib(8) fib(7) fib(6) fib(5) fib(4) fib(3) fib(2) fib(1) fib(0) fib(4) fib(5)
+  cache_info -> CacheInfo(hits=8, misses=11, maxsize=3, currsize=3)
+  cache -> RRCache({(6,): 8, (5,): 5, (8,): 21}, maxsize=3, currsize=3)
+job 44: memo fib cached(cache={'type': 'LRUCache', 'maxsize': 20})
+  fib(11) -> 89
+    ran fib(11) fib(10) fib(9) fib(8) fib(7) fib(6) fib(5) fib(4) fib(3) fib(2) fib(1) fib(0)
+  cache -> LRUCache({(1,): 1, (0,): 0, (2,): 1, (3,): 2, (4,): 3, (5,): 5, (6,): 8, (7,): 13, (8,): 21, (9,): 34, (10,): 55, (11,): 89}, maxsize=20, currsize=12)
+job 45: memo user ttl_cache(maxsize=2, ttl=60)
+  user(1) -> 'ada#1'
+    ran user(1)
+  user(2) -> 'grace#2'
+    ran user(2)
+  user(1) -> 'ada#1'
+  now 30
+  user(1) -> 'ada#1'
+  user(9) -> None
+    ran user(9)
+  user(9) -> None
+  cache_info -> CacheInfo(hits=3, misses=3, maxsize=2, currsize=2)
+  now 61
+  user(2) -> 'grace#2'
+    ran user(2)
+  user(1) -> 'ada#1'
+    ran user(1)
+  cache_info -> CacheInfo(hits=3, misses=5, maxsize=2, currsize=2)
+  cache -> TTLCache({(2,): 'grace#2', (1,): 'ada#1'}, maxsize=2, currsize=2)
+  cache_clear
+  cache_info -> CacheInfo(hits=0, misses=0, maxsize=2, currsize=0)
+  user(3) -> 'linus#3'
+    ran user(3)
+  user(3.0) -> 'linus#3'
+  cache_info -> CacheInfo(hits=1, misses=1, maxsize=2, currsize=1)
+  cache_parameters -> {'maxsize': 2, 'typed': False}
+job 46: memo user ttl_cache(maxsize=None, ttl=600)
+  user(1) -> 'ada#1'
+    ran user(1)
+  user(1) -> 'ada#1'
+  now 600
+  user(1) -> 'ada#1'
+    ran user(1)
+  cache_info -> CacheInfo(hits=1, misses=2, maxsize=None, currsize=1)
+  cache -> _UnboundTTLCache({(1,): 'ada#1'}, maxsize=inf, currsize=1)
+  cache_parameters -> {'maxsize': None, 'typed': False}
+job 47: memo user lru_cache(typed=True)
+  user(1) -> 'ada#1'
+    ran user(1)
+  user(1.0) -> 'ada#1'
+    ran user(1.0)
+  user(True) -> 'ada#1'
+    ran user(True)
+  cache_info -> CacheInfo(hits=0, misses=3, maxsize=128, currsize=3)
+  cache -> LRUCache({(1, <class 'int'>): 'ada#1', (1.0, <class 'float'>): 'ada#1', (True, <class 'bool'>): 'ada#1'}, maxsize=128, currsize=3)
+job 48: memo user lru_cache(typed=False)
+  user(1) -> 'ada#1'
+    ran user(1)
+  user(1.0) -> 'ada#1'
+  user(True) -> 'ada#1'
+  cache_info -> CacheInfo(hits=2, misses=1, maxsize=128, currsize=1)
+job 49: memo price cached(cache={'type': 'LRUCache', 'maxsize': 8}, info=True)
+  price('apple') -> ('apple', 30, 'EUR')
+    ran price('apple', qty=1, currency='EUR')
+  price('apple', qty=1) -> ('apple', 30, 'EUR')
+    ran price('apple', qty=1, currency='EUR')
+  price('apple', 1) -> ('apple', 30, 'EUR')
+    ran price('apple', qty=1, currency='EUR')
+  price('pear', qty=3, currency='USD') -> ('pear', 135, 'USD')
+    ran price('pear', qty=3, currency='USD')
+  price('pear', currency='USD', qty=3) -> ('pear', 135, 'USD')
+  price('fig', 2, 'GBP') -> ('fig', 240, 'GBP')
+    ran price('fig', qty=2, currency='GBP')
+  price('apple') -> ('apple', 30, 'EUR')
+  cache_info -> CacheInfo(hits=2, misses=5, maxsize=8, currsize=5)
+  cache -> LRUCache({('apple',): ('apple', 30, 'EUR'), ('apple', <class 'cachetools.keys._HashedTuple'>, ('qty', 1)): ('apple', 30, 'EUR'), ('apple', 1): ('apple', 30, 'EUR'), ('pear', <class 'cachetools.keys._HashedTuple'>, ('currency', 'USD'), ('qty', 3)): ('pear', 135, 'USD'), ('fig', 2, 'GBP'): ('fig', 240, 'GBP')}, maxsize=8, currsize=5)
+job 50: memo price cached(cache={'type': 'Cache', 'maxsize': 8}, typed=True)
+  price('kiwi') -> ('kiwi', 25, 'EUR')
+    ran price('kiwi', qty=1, currency='EUR')
+  price('kiwi') -> ('kiwi', 25, 'EUR')
+  cache -> Cache({('kiwi', <class 'str'>): ('kiwi', 25, 'EUR')}, maxsize=8, currsize=1)
+job 51: memo render cached(cache={'type': 'LRUCache', 'maxsize': 100, 'getsizeof': 'len'}, info=True, lock=True)
+  render('home') -> '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+    ran render('home', 'en')
+  render('about') -> '<en:about>~~'
+    ran render('about', 'en')
+  render('docs') -> '<en:docs>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+    ran render('docs', 'en')
+  render('home') -> '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+    ran render('home', 'en')
+  render('blog', lang='fr') -> '<fr:blog>~~~~~~~~~~~~~~~~~~~~~~~~'
+    ran render('blog', 'fr')
+  render('home') -> '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+  render('huge') -> '<en:huge>'
+    ran render('huge', 'en')
+  render('missing') -> '<en:missing>'
+    ran render('missing', 'en')
+  cache_info -> CacheInfo(hits=1, misses=7, maxsize=100, currsize=94)
+  cache -> LRUCache({('home',): '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~', ('blog', <class 'cachetools.keys._HashedTuple'>, ('lang', 'fr')): '<fr:blog>~~~~~~~~~~~~~~~~~~~~~~~~', ('huge',): '<en:huge>', ('missing',): '<en:missing>'}, maxsize=100, currsize=94)
+  cache_clear
+  cache_info -> CacheInfo(hits=0, misses=0, maxsize=100, currsize=0)
+  cache -> LRUCache({}, maxsize=100, currsize=0)
+job 52: memo render cached(cache='dict', info=True)
+  render('home') -> '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+    ran render('home', 'en')
+  render('home') -> '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+  cache_info -> CacheInfo(hits=1, misses=1, maxsize=None, currsize=1)
+  cache -> {('home',): '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'}
+job 53: memo render cached(cache=None, info=True)
+  warning: DeprecationWarning: @cachetools.cached(cache=None) is deprecated
+  render('home') -> '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+    ran render('home', 'en')
+  render('home') -> '<en:home>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+    ran render('home', 'en')
+  cache_info -> CacheInfo(hits=0, misses=2, maxsize=0, currsize=0)
+  cache_clear
+  cache_info -> CacheInfo(hits=0, misses=0, maxsize=0, currsize=0)
+job 54: memo user cached(cache=None)
+  warning: DeprecationWarning: @cachetools.cached(cache=None) is deprecated
+  user(5) -> 'ken#5'
+    ran user(5)
+  user(5) -> 'ken#5'
+    ran user(5)
+  cache -> None
+job 55: memo user cached(cache={'type': 'TLRUCache', 'maxsize': 3, 'ttu': {'kind': 'fixed', 'n': 5}}, info=True, step=1)
+  user(1) -> 'ada#1'
+    ran user(1)
+  user(2) -> 'grace#2'
+    ran user(2)
+  user(3) -> 'linus#3'
+    ran user(3)
+  user(1) -> 'ada#1'
+  user(4) -> 'margaret#4'
+    ran user(4)
+  user(5) -> 'ken#5'
+    ran user(5)
+  user(1) -> 'ada#1'
+    ran user(1)
+  user(6) -> None
+    ran user(6)
+  user(7) -> 'barbara#7'
+    ran user(7)
+  cache_info -> CacheInfo(hits=1, misses=8, maxsize=3, currsize=3)
+  cache -> TLRUCache({(1,): 'ada#1', (6,): None, (7,): 'barbara#7'}, maxsize=3, currsize=3)
+job 56: key hashkey
+  ()
+  (1, 2)
+  ('a', <class 'cachetools.keys._HashedTuple'>, ('b', 2))
+  (<class 'cachetools.keys._HashedTuple'>, ('a', 2), ('z', 1))
+  ((1, 2),)
+  (None,)
+job 57: key typedkey
+  ()
+  (1, 2, <class 'int'>, <class 'int'>)
+  ('a', <class 'cachetools.keys._HashedTuple'>, ('b', 2), <class 'int'>, <class 'str'>)
+  (<class 'cachetools.keys._HashedTuple'>, ('a', 'x'), ('z', 1), <class 'str'>, <class 'int'>)
+  ((1, 2), <class 'tuple'>)
+  (None, 1.5, <class 'NoneType'>, <class 'float'>)
+  (True, <class 'bool'>)

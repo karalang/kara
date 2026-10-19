@@ -1,0 +1,2999 @@
+// mini_cachetools: the caches a service puts in front of slow lookups, as
+// cachetools 7.2.3 implements them. The seven cache classes (Cache,
+// FIFOCache, LFUCache, LRUCache, RRCache, TTLCache and TLRUCache) keep
+// their eviction order, size accounting with getsizeof, expiry under a
+// clock that is frozen while one operation runs, and Python's repr and
+// exceptions. LFUCache breaks ties by the order of a CPython set, so the
+// set table and str hash are carried as well. On top of them come the
+// `cached` decorator and the functools-style lru_cache, lfu_cache,
+// fifo_cache, rr_cache and ttl_cache, with their hits and misses, and the
+// key functions hashkey and typedkey.
+//
+// The jobs in data/jobs.jsonl run scripts of cache operations, written by
+// hand and drawn at random, memoize a recursive fib, a user lookup, a
+// price table and a page renderer, and print cache keys.
+
+// ------------------------------------------------------------ JSON in
+
+// The jobs file holds strings, numbers, booleans, arrays and objects.
+#[derive(Clone)]
+enum J {
+    S(String),
+    N(i64),
+    F(f64),
+    A(Vec[J]),
+    O(Vec[(String, J)]),
+    B(bool),
+    Null,
+}
+
+fn json_space(c: char) -> bool {
+    c == ' ' or c == '\n' or c == '\r' or c == '\t'
+}
+
+struct JsonIn {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl JsonIn {
+    fn ws(mut ref self) {
+        while self.pos < self.cs.len() and json_space(self.cs[self.pos]) {
+            self.pos += 1;
+        }
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let wc: Vec[char] = w.chars().collect();
+        if self.pos + wc.len() > self.cs.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < wc.len() {
+            if self.cs[self.pos + k] != wc[k] {
+                return false;
+            }
+            k += 1;
+        }
+        self.pos += wc.len();
+        true
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut n: u32 = 0;
+        let mut k = 0;
+        while k < 4 {
+            let c = self.cs[self.pos];
+            let d = if c >= '0' and c <= '9' {
+                (c as u32) - ('0' as u32)
+            } else if c >= 'a' and c <= 'f' {
+                (c as u32) - ('a' as u32) + 10
+            } else {
+                (c as u32) - ('A' as u32) + 10
+            };
+            n = n * 16 + d;
+            self.pos += 1;
+            k += 1;
+        }
+        n
+    }
+
+    fn value(mut ref self) -> Result[J, String] {
+        self.ws();
+        if self.pos >= self.cs.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.cs[self.pos];
+        if c == '[' {
+            self.pos += 1;
+            let mut items: Vec[J] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == ']' {
+                self.pos += 1;
+                return Ok(J.A(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON array".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == ']' {
+                    return Ok(J.A(items));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON array separator {d}");
+                }
+            }
+        }
+        if c == '{' {
+            self.pos += 1;
+            let mut members: Vec[(String, J)] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == '}' {
+                self.pos += 1;
+                return Ok(J.O(members));
+            }
+            loop {
+                let key = match self.value()? {
+                    J.S(k) => k,
+                    _ => return Err("JSON object key is not a string".to_string()),
+                };
+                self.ws();
+                if self.pos >= self.cs.len() or self.cs[self.pos] != ':' {
+                    return Err("missing ':' in JSON object".to_string());
+                }
+                self.pos += 1;
+                let v = self.value()?;
+                members.push((key, v));
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON object".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == '}' {
+                    return Ok(J.O(members));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON object separator {d}");
+                }
+            }
+        }
+        if self.word("true") {
+            return Ok(J.B(true));
+        }
+        if self.word("false") {
+            return Ok(J.B(false));
+        }
+        if self.word("null") {
+            return Ok(J.Null);
+        }
+        if c == '-' or (c >= '0' and c <= '9') {
+            let mut neg = false;
+            if c == '-' {
+                neg = true;
+                self.pos += 1;
+            }
+            let mut n: i64 = 0;
+            while self.pos < self.cs.len() and self.cs[self.pos] >= '0' and self.cs[self.pos] <= '9' {
+                n = n * 10 + ((self.cs[self.pos] as u32) - ('0' as u32)) as i64;
+                self.pos += 1;
+            }
+            if self.pos < self.cs.len() and self.cs[self.pos] == '.' {
+                self.pos += 1;
+                let mut f = n as f64;
+                let mut scale = 1.0;
+                while self.pos < self.cs.len() and self.cs[self.pos] >= '0' and self.cs[self.pos] <= '9' {
+                    scale = scale / 10.0;
+                    f = f + scale * (((self.cs[self.pos] as u32) - ('0' as u32)) as f64);
+                    self.pos += 1;
+                }
+                return Ok(J.F(if neg { -f } else { f }));
+            }
+            return Ok(J.N(if neg { -n } else { n }));
+        }
+        if c != '"' {
+            return Err(f"unexpected JSON character {c}");
+        }
+        self.pos += 1;
+        let mut s = String.new();
+        while self.pos < self.cs.len() {
+            let d = self.cs[self.pos];
+            self.pos += 1;
+            if d == '"' {
+                return Ok(J.S(s));
+            }
+            if d != '\\' {
+                s.push(d);
+                continue;
+            }
+            let e = self.cs[self.pos];
+            self.pos += 1;
+            if e == 'n' {
+                s.push('\n');
+            } else if e == 't' {
+                s.push('\t');
+            } else if e == 'r' {
+                s.push('\r');
+            } else if e == 'b' {
+                s.push('\u{8}');
+            } else if e == 'f' {
+                s.push('\u{c}');
+            } else if e == 'u' {
+                let mut n = self.hex4();
+                if n >= 0xD800 and n < 0xDC00 {
+                    self.pos += 2;
+                    let lo = self.hex4();
+                    n = 0x10000 + ((n - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                s.push(char.try_from(n).unwrap_or('?'));
+            } else {
+                s.push(e);
+            }
+        }
+        Err("unterminated JSON string".to_string())
+    }
+}
+
+fn json_line(l: ref String) -> Result[J, String] {
+    let mut p = JsonIn { cs: l.chars().collect(), pos: 0 };
+    p.value()
+}
+
+fn j_get(j: ref J, key: Str) -> J {
+    match j {
+        J.O(members) => {
+            for (k, v) in members.iter() {
+                if k == key {
+                    return v.clone();
+                }
+            }
+            J.Null
+        }
+        _ => J.Null,
+    }
+}
+
+fn j_has(j: ref J, key: Str) -> bool {
+    match j_get(j, key) {
+        J.Null => false,
+        _ => true,
+    }
+}
+
+fn j_str(j: ref J, key: Str) -> String {
+    match j_get(j, key) {
+        J.S(s) => s,
+        _ => String.new(),
+    }
+}
+
+fn j_int(j: ref J, key: Str, default: i64) -> i64 {
+    match j_get(j, key) {
+        J.N(n) => n,
+        _ => default,
+    }
+}
+
+fn j_bool(j: ref J, key: Str) -> bool {
+    match j_get(j, key) {
+        J.B(b) => b,
+        _ => false,
+    }
+}
+
+fn j_strs(j: ref J, key: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let J.A(items) = j_get(j, key) {
+        for it in items.iter() {
+            if let J.S(s) = it {
+                out.push(s.clone());
+            }
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ text as code points
+
+fn cps(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cps_of(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cat(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    push_all(mut out, b);
+    out
+}
+
+fn cat_ascii(a: ref Vec[i64], s: Str) -> Vec[i64] {
+    let mut out = a.clone();
+    push_ascii(mut out, s);
+    out
+}
+
+fn index_of(s: ref Vec[i64], c: i64) -> i64 {
+    let mut i = 0;
+    while i < s.len() {
+        if s[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn has(s: ref Vec[i64], c: i64) -> bool {
+    index_of(s, c) >= 0
+}
+
+// `needle in s` for str
+fn contains_seq(s: ref Vec[i64], needle: ref Vec[i64]) -> bool {
+    find_seq(s, needle, 0) >= 0
+}
+
+fn find_seq(s: ref Vec[i64], needle: ref Vec[i64], from: i64) -> i64 {
+    let mut i = from;
+    while i + needle.len() <= s.len() {
+        let mut k = 0;
+        while k < needle.len() and s[i + k] == needle[k] {
+            k += 1;
+        }
+        if k == needle.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn starts_with_seq(s: ref Vec[i64], p: Str) -> bool {
+    let n = cps(p);
+    if n.len() > s.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < n.len() {
+        if s[k] != n[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn eq_ascii(s: ref Vec[i64], p: Str) -> bool {
+    same(s, cps(p))
+}
+
+// One character in a str of ASCII choices.
+fn in_ascii(c: i64, set: Str) -> bool {
+    for b in set.bytes() {
+        if (b as i64) == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.replace
+fn replace_seq(s: ref Vec[i64], old: ref Vec[i64], new: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        if old.len() > 0 and i + old.len() <= s.len() {
+            let mut k = 0;
+            while k < old.len() and s[i + k] == old[k] {
+                k += 1;
+            }
+            if k == old.len() {
+                push_all(mut out, new);
+                i += old.len();
+                continue;
+            }
+        }
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn replace_char(s: ref Vec[i64], old: i64, new: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s {
+        if c == old {
+            push_all(mut out, new);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn repeat(c: i64, n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(c);
+        k += 1;
+    }
+    out
+}
+
+// str.split(sep) for a one-character separator
+fn split_on(s: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in s {
+        if c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn strip(s: ref Vec[i64]) -> Vec[i64] {
+    let mut a = 0;
+    let mut b = s.len();
+    while a < b and is_space(s[a], false) {
+        a += 1;
+    }
+    while b > a and is_space(s[b - 1], false) {
+        b -= 1;
+    }
+    slice(s, a, b)
+}
+
+
+// The value of a decimal digit: the decimal digits come in runs of ten.
+fn digit_value(c: i64) -> i64 {
+    if c < 0x80 {
+        return c - 48;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return c - s;
+        }
+    }
+    0
+}
+
+// str.isdigit, for the strings date_convert looks at
+fn all_decimal(s: ref Vec[i64]) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s {
+        if not is_decimal(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn pad_n(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn floor_mod(a: i64, b: i64) -> i64 {
+    a - floor_div(a, b) * b
+}
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+
+// ------------------------------------------------------------ CPython hashes and sets
+
+fn sip_round(v: mut ref Vec[u64]) {
+    v[0] = v[0].wrapping_add(v[1]);
+    v[2] = v[2].wrapping_add(v[3]);
+    v[1] = v[1].rotate_left(13) ^ v[0];
+    v[3] = v[3].rotate_left(16) ^ v[2];
+    v[0] = v[0].rotate_left(32);
+    v[2] = v[2].wrapping_add(v[1]);
+    v[0] = v[0].wrapping_add(v[3]);
+    v[1] = v[1].rotate_left(17) ^ v[2];
+    v[3] = v[3].rotate_left(21) ^ v[0];
+    v[2] = v[2].rotate_left(32);
+}
+
+// Python/pyhash.c's siphash13 with both keys zero, as PYTHONHASHSEED=0
+// leaves them.
+fn siphash13(data: ref Vec[u8]) -> u64 {
+    let n = data.len();
+    let mut b: u64 = (n as u64) << 56;
+    let mut v: Vec[u64] = vec![0x736f6d6570736575u64, 0x646f72616e646f6du64, 0x6c7967656e657261u64, 0x7465646279746573u64];
+    let mut i = 0;
+    while n - i >= 8 {
+        let mut mi: u64 = 0;
+        let mut k = 7;
+        while k >= 0 {
+            mi = (mi << 8) | (data[i + k] as u64);
+            k -= 1;
+        }
+        i += 8;
+        v[3] = v[3] ^ mi;
+        sip_round(mut v);
+        v[0] = v[0] ^ mi;
+    }
+    let mut t: u64 = 0;
+    let mut k = n - i - 1;
+    while k >= 0 {
+        t = (t << 8) | (data[i + k] as u64);
+        k -= 1;
+    }
+    b = b | t;
+    v[3] = v[3] ^ b;
+    sip_round(mut v);
+    v[0] = v[0] ^ b;
+    v[2] = v[2] ^ 0xffu64;
+    sip_round(mut v);
+    sip_round(mut v);
+    sip_round(mut v);
+    (v[0] ^ v[1]) ^ (v[2] ^ v[3])
+}
+
+// hash(str): SipHash over the string's code units at its narrowest width.
+fn str_hash(s: ref String) -> i64 {
+    if s.is_empty() {
+        return 0;
+    }
+    let mut widest: i64 = 0;
+    for c in s.chars() {
+        let o = c as i64;
+        if o > widest {
+            widest = o;
+        }
+    }
+    let width = if widest < 256 { 1 } else if widest < 65536 { 2 } else { 4 };
+    let mut data: Vec[u8] = Vec.new();
+    for c in s.chars() {
+        let o = c as i64;
+        for k in 0..width {
+            data.push(((o >> (8 * k)) & 0xFF) as u8);
+        }
+    }
+    let h = siphash13(data) as i64;
+    if h == -1 { -2 } else { h }
+}
+
+// hash(int) for values that fit an i64: the value modulo 2**61 - 1, with
+// the sign kept, and -1 turned into -2.
+fn int_hash(n: i64) -> i64 {
+    let p: i64 = (1 << 61) - 1;
+    let a = if n < 0 { -n } else { n };
+    let mut h = a % p;
+    if n < 0 {
+        h = -h;
+    }
+    if h == -1 { -2 } else { h }
+}
+
+// Objects/tupleobject.c's tuplehash (xxHash's mixing).
+fn tuple_hash(items: ref Vec[V]) -> i64 {
+    let mut acc: u64 = 2870177450012600261u64;
+    for it in items.iter() {
+        let lane = v_hash(it) as u64;
+        acc = acc.wrapping_add(lane.wrapping_mul(14029467366897019727u64));
+        acc = (acc << 31) | (acc >> 33);
+        acc = acc.wrapping_mul(11400714785074694791u64);
+    }
+    acc = acc.wrapping_add((items.len() as u64) ^ (2870177450012600261u64 ^ 3527539u64));
+    if acc == 0xFFFF_FFFF_FFFF_FFFFu64 {
+        return 1546275796;
+    }
+    acc as i64
+}
+
+// ------------------------------------------------------------ values
+
+// The Python values the jobs use as keys and values.
+#[derive(Clone)]
+enum V {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    Tup(Vec[V]),
+    Nil,
+    Type(String),
+}
+
+fn float_repr(x: f64) -> String {
+    let i = x as i64;
+    if (i as f64) == x {
+        return f"{i}.0";
+    }
+    f"{x}"
+}
+
+fn v_repr(v: ref V) -> String {
+    match v {
+        V.Int(n) => f"{n}",
+        V.Float(x) => float_repr(*x),
+        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Str(s) => repr_of(cps_of(s)),
+        V.Tup(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for it in items.iter() {
+                parts.push(v_repr(it));
+            }
+            if parts.len() == 1 {
+                let p = parts[0].clone();
+                return f"({p},)";
+            }
+            let body = parts.join(", ");
+            f"({body})"
+        }
+        V.Nil => "None".to_string(),
+        V.Type(name) => f"<class '{name}'>",
+    }
+}
+
+fn list_repr(vs: ref Vec[V]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for v in vs.iter() {
+        parts.push(v_repr(v));
+    }
+    let body = parts.join(", ");
+    f"[{body}]"
+}
+
+// Two values are the same key when Python's == says so: 1, 1.0 and True
+// are one key. This is the text that stands for a key in the maps.
+fn v_key(v: ref V) -> String {
+    match v {
+        V.Int(n) => f"n{n}",
+        V.Float(x) => {
+            let i = *x as i64;
+            if (i as f64) == *x {
+                return f"n{i}";
+            }
+            f"f{x}"
+        }
+        V.Bool(b) => if *b { "n1".to_string() } else { "n0".to_string() },
+        V.Str(s) => f"s{s}",
+        V.Tup(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for it in items.iter() {
+                parts.push(v_key(it));
+            }
+            let n = items.len();
+            let body = parts.join("\u{1}");
+            f"t{n}({body})"
+        }
+        V.Nil => "N".to_string(),
+        V.Type(name) => f"T{name}",
+    }
+}
+
+fn v_hash(v: ref V) -> i64 {
+    match v {
+        V.Int(n) => int_hash(*n),
+        V.Float(x) => int_hash(*x as i64),
+        V.Bool(b) => if *b { 1 } else { 0 },
+        V.Str(s) => str_hash(s),
+        V.Tup(items) => tuple_hash(items),
+        _ => 0,
+    }
+}
+
+fn type_name(v: ref V) -> String {
+    let n = match v {
+        V.Int(_) => "int",
+        V.Float(_) => "float",
+        V.Bool(_) => "bool",
+        V.Str(_) => "str",
+        V.Tup(_) => "tuple",
+        V.Nil => "NoneType",
+        V.Type(_) => "type",
+    };
+    n.to_string()
+}
+
+// A JSON value from the jobs file as Python reads it, with lists made
+// into tuples.
+fn v_of(j: ref J) -> V {
+    match j {
+        J.S(s) => V.Str(s.clone()),
+        J.N(n) => V.Int(*n),
+        J.F(x) => V.Float(*x),
+        J.B(b) => V.Bool(*b),
+        J.A(items) => {
+            let mut out: Vec[V] = Vec.new();
+            for it in items.iter() {
+                out.push(v_of(it));
+            }
+            V.Tup(out)
+        }
+        _ => V.Nil,
+    }
+}
+
+// The exception reprs the jobs print.
+fn key_error(k: ref V) -> String {
+    let r = v_repr(k);
+    f"KeyError({r})"
+}
+
+fn key_error_msg(msg: ref String) -> String {
+    let r = repr_of(cps_of(msg));
+    f"KeyError({r})"
+}
+
+fn value_error(msg: Str) -> String {
+    let r = repr_of(cps(msg));
+    f"ValueError({r})"
+}
+
+// ------------------------------------------------------------ dicts
+
+// A dict in insertion order, as Python's dict and OrderedDict keep it.
+// Setting a key that is already there keeps the key it was first set
+// with and its place.
+struct ODict {
+    keys: Vec[V],
+    vals: Vec[V],
+    alive: Vec[bool],
+    index: Map[String, i64],
+}
+
+fn new_odict() -> ODict {
+    ODict { keys: Vec.new(), vals: Vec.new(), alive: Vec.new(), index: Map.new() }
+}
+
+impl ODict {
+    fn len(ref self) -> i64 {
+        self.index.len()
+    }
+
+    fn has(ref self, k: ref V) -> bool {
+        self.index.contains_key(v_key(k))
+    }
+
+    fn get(ref self, k: ref V) -> Option[V] {
+        match self.index.get(v_key(k)) {
+            Some(i) => Some(self.vals[*i].clone()),
+            None => None,
+        }
+    }
+
+    fn set(mut ref self, k: ref V, v: own V) {
+        let ks = v_key(k);
+        if let Some(i) = self.index.get(ks) {
+            let at = *i;
+            self.vals[at] = v;
+            return;
+        }
+        self.index.insert(ks, self.keys.len());
+        self.keys.push(k.clone());
+        self.vals.push(v);
+        self.alive.push(true);
+    }
+
+    fn remove(mut ref self, k: ref V) -> Option[V] {
+        let ks = v_key(k);
+        let at = match self.index.get(ks) {
+            Some(i) => *i,
+            None => return None,
+        };
+        self.index.remove(ks);
+        self.alive[at] = false;
+        Some(self.vals[at].clone())
+    }
+
+    // OrderedDict.move_to_end: false when the key is not there.
+    fn move_to_end(mut ref self, k: ref V) -> bool {
+        let ks = v_key(k);
+        let at = match self.index.get(ks) {
+            Some(i) => *i,
+            None => return false,
+        };
+        self.alive[at] = false;
+        let key = self.keys[at].clone();
+        let val = self.vals[at].clone();
+        self.index.insert(ks, self.keys.len());
+        self.keys.push(key);
+        self.vals.push(val);
+        self.alive.push(true);
+        true
+    }
+
+    fn first(ref self) -> Option[V] {
+        let mut i = 0;
+        while i < self.keys.len() {
+            if self.alive[i] {
+                return Some(self.keys[i].clone());
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn key_list(ref self) -> Vec[V] {
+        let mut out: Vec[V] = Vec.new();
+        let mut i = 0;
+        while i < self.keys.len() {
+            if self.alive[i] {
+                out.push(self.keys[i].clone());
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn clear(mut ref self) {
+        self.keys = Vec.new();
+        self.vals = Vec.new();
+        self.alive = Vec.new();
+        self.index = Map.new();
+    }
+
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < self.keys.len() {
+            if self.alive[i] {
+                let k = v_repr(self.keys[i]);
+                let v = v_repr(self.vals[i]);
+                parts.push(f"{k}: {v}");
+            }
+            i += 1;
+        }
+        let body = parts.join(", ");
+        f"{{{body}}}"
+    }
+}
+
+// ------------------------------------------------------------ sets
+
+// A set laid out as Objects/setobject.c lays it out, so that iterating it
+// visits the slots in table order. state: 0 unused, 1 active, 2 dummy.
+struct PySet {
+    mask: i64,
+    keys: Vec[V],
+    kstr: Vec[String],
+    hashes: Vec[i64],
+    state: Vec[i64],
+    fill: i64,
+    used: i64,
+}
+
+fn new_set() -> PySet {
+    pyset_sized(8)
+}
+
+fn pyset_sized(size: i64) -> PySet {
+    let mut keys: Vec[V] = Vec.new();
+    let mut kstr: Vec[String] = Vec.new();
+    let mut hashes: Vec[i64] = Vec.new();
+    let mut state: Vec[i64] = Vec.new();
+    for _ in 0..size {
+        keys.push(V.Nil);
+        kstr.push(String.new());
+        hashes.push(0);
+        state.push(0);
+    }
+    PySet { mask: size - 1, keys: keys, kstr: kstr, hashes: hashes, state: state, fill: 0, used: 0 }
+}
+
+impl PySet {
+    fn entries(ref self) -> Vec[(V, i64)] {
+        let mut out: Vec[(V, i64)] = Vec.new();
+        let mut i = 0;
+        while i <= self.mask {
+            if self.state[i] == 1 {
+                out.push((self.keys[i].clone(), self.hashes[i]));
+            }
+            i += 1;
+        }
+        out
+    }
+
+    // next(iter(s))
+    fn first(ref self) -> V {
+        let mut i = 0;
+        while i <= self.mask {
+            if self.state[i] == 1 {
+                return self.keys[i].clone();
+            }
+            i += 1;
+        }
+        V.Nil
+    }
+
+    fn put(mut ref self, slot: i64, key: ref V, hash: i64) {
+        self.keys[slot] = key.clone();
+        self.kstr[slot] = v_key(key);
+        self.hashes[slot] = hash;
+        self.state[slot] = 1;
+    }
+
+    // set_insert_clean
+    fn insert_clean(mut ref self, key: ref V, hash: i64) {
+        let mask = self.mask as u64;
+        let mut perturb = hash as u64;
+        let mut i = (hash as u64) & mask;
+        loop {
+            let probes: u64 = if i + 9 <= mask { 9 } else { 0 };
+            let mut j: u64 = 0;
+            while j <= probes {
+                let slot = (i + j) as i64;
+                if self.state[slot] == 0 {
+                    self.put(slot, key, hash);
+                    return;
+                }
+                j += 1;
+            }
+            perturb = perturb >> 5;
+            i = (i * 5 + 1).wrapping_add(perturb) & mask;
+        }
+    }
+
+    // set_table_resize
+    fn resize(mut ref self, minused: i64) {
+        let mut size = 8;
+        while size <= minused {
+            size = size * 2;
+        }
+        if size == 8 and self.mask == 7 and self.fill == self.used {
+            return;
+        }
+        let old = self.entries();
+        let fresh = pyset_sized(size);
+        self.mask = fresh.mask;
+        self.keys = fresh.keys;
+        self.kstr = fresh.kstr;
+        self.hashes = fresh.hashes;
+        self.state = fresh.state;
+        self.fill = self.used;
+        for (k, h) in old.iter() {
+            self.insert_clean(k, *h);
+        }
+    }
+
+    // set_add_entry
+    fn add(mut ref self, key: ref V) {
+        let hash = v_hash(key);
+        let ks = v_key(key);
+        let mask = self.mask as u64;
+        let mut perturb = hash as u64;
+        let mut i = (hash as u64) & mask;
+        let mut free: i64 = -1;
+        loop {
+            let probes: u64 = if i + 9 <= mask { 9 } else { 0 };
+            let mut j: u64 = 0;
+            while j <= probes {
+                let slot = (i + j) as i64;
+                let st = self.state[slot];
+                if st == 0 {
+                    if free >= 0 {
+                        self.used += 1;
+                        self.put(free, key, hash);
+                        return;
+                    }
+                    self.fill += 1;
+                    self.used += 1;
+                    self.put(slot, key, hash);
+                    if self.fill * 5 < self.mask * 3 {
+                        return;
+                    }
+                    let grow = if self.used > 50000 { self.used * 2 } else { self.used * 4 };
+                    self.resize(grow);
+                    return;
+                }
+                if st == 1 and self.hashes[slot] == hash and self.kstr[slot] == ks {
+                    return;
+                }
+                if st == 2 and free < 0 {
+                    free = slot;
+                }
+                j += 1;
+            }
+            perturb = perturb >> 5;
+            i = (i * 5 + 1).wrapping_add(perturb) & mask;
+        }
+    }
+
+    fn remove(mut ref self, key: ref V) {
+        let ks = v_key(key);
+        let mut i = 0;
+        while i <= self.mask {
+            if self.state[i] == 1 and self.kstr[i] == ks {
+                self.state[i] = 2;
+                self.hashes[i] = -1;
+                self.used -= 1;
+                return;
+            }
+            i += 1;
+        }
+    }
+}
+
+// ------------------------------------------------------------ caches
+
+// The class of a cache, by its Python name.
+fn kind_of(name: ref String) -> i64 {
+    if name == "Cache" { return 0; }
+    if name == "FIFOCache" { return 1; }
+    if name == "LFUCache" { return 2; }
+    if name == "LRUCache" { return 3; }
+    if name == "RRCache" { return 4; }
+    if name == "TTLCache" { return 5; }
+    if name == "TLRUCache" { return 6; }
+    if name == "_UnboundTTLCache" { return 7; }
+    8
+}
+
+const PLAIN: i64 = 0;
+const FIFO: i64 = 1;
+const LFU: i64 = 2;
+const LRU: i64 = 3;
+const RR: i64 = 4;
+const TTL: i64 = 5;
+const TLRU: i64 = 6;
+const UNBOUND: i64 = 7;
+const DICT: i64 = 8;
+
+// LFUCache._Link: the keys used `count` times, in a ring ordered by count.
+struct LfuLink {
+    count: i64,
+    keys: PySet,
+    next: i64,
+    prev: i64,
+}
+
+// TTLCache._Link: a ring in expiry order.
+struct TtlLink {
+    key: V,
+    expires: i64,
+    next: i64,
+    prev: i64,
+}
+
+// TLRUCache._Item, kept in a heap ordered by `expires`.
+struct TItem {
+    key: V,
+    expires: i64,
+    removed: bool,
+}
+
+// How a TLRUCache works out an item's expiry: a fixed time to use, the
+// value's length, or a table by key with a default.
+struct Ttu {
+    kind: String,
+    n: i64,
+    table: Vec[(String, i64)],
+}
+
+struct Cache {
+    kind: i64,
+    name: String,
+    maxsize: i64,
+    inf: bool,
+    sizeof: i64,
+    data: ODict,
+    sizes: Map[String, i64],
+    currsize: i64,
+    // FIFOCache and LRUCache: the order; TTLCache: key -> link; TLRUCache:
+    // key -> item.
+    order: ODict,
+    lfu: Vec[LfuLink],
+    lfu_of: Map[String, i64],
+    rr_index: Map[String, i64],
+    rr_keys: Vec[V],
+    picks: Vec[i64],
+    pick_n: i64,
+    ttl: i64,
+    links: Vec[TtlLink],
+    ttu: Ttu,
+    items: Vec[TItem],
+    heap: Vec[i64],
+    // The job's clock, and _TimedCache._Timer's nesting and frozen time.
+    clock: i64,
+    step: i64,
+    nesting: i64,
+    frozen: i64,
+}
+
+fn new_cache(kind: i64, maxsize: i64, sizeof: i64) -> Cache {
+    let names = ["Cache", "FIFOCache", "LFUCache", "LRUCache", "RRCache", "TTLCache", "TLRUCache", "_UnboundTTLCache", "dict"];
+    let mut lfu: Vec[LfuLink] = Vec.new();
+    lfu.push(LfuLink { count: 0, keys: new_set(), next: 0, prev: 0 });
+    let mut links: Vec[TtlLink] = Vec.new();
+    links.push(TtlLink { key: V.Nil, expires: 0, next: 0, prev: 0 });
+    Cache {
+        kind: kind,
+        name: names[kind].to_string(),
+        maxsize: maxsize,
+        inf: kind == UNBOUND,
+        sizeof: sizeof,
+        data: new_odict(),
+        sizes: Map.new(),
+        currsize: 0,
+        order: new_odict(),
+        lfu: lfu,
+        lfu_of: Map.new(),
+        rr_index: Map.new(),
+        rr_keys: Vec.new(),
+        picks: Vec.new(),
+        pick_n: 0,
+        ttl: 0,
+        links: links,
+        ttu: Ttu { kind: String.new(), n: 0, table: Vec.new() },
+        items: Vec.new(),
+        heap: Vec.new(),
+        clock: 0,
+        step: 0,
+        nesting: 0,
+        frozen: 0,
+    }
+}
+
+fn len_of(v: ref V) -> Result[i64, String] {
+    match v {
+        V.Str(s) => Ok(cps_of(s).len()),
+        V.Tup(items) => Ok(items.len()),
+        _ => {
+            let t = type_name(v);
+            let msg = f"object of type '{t}' has no len()";
+            let r = repr_of(cps_of(msg));
+            Err(f"TypeError({r})")
+        }
+    }
+}
+
+impl Cache {
+    // ---------------------------------------------------- the timer
+
+    fn clock_read(mut ref self) -> i64 {
+        let v = self.clock;
+        self.clock += self.step;
+        v
+    }
+
+    fn timer(mut ref self) -> i64 {
+        if self.nesting == 0 {
+            return self.clock_read();
+        }
+        self.frozen
+    }
+
+    fn enter(mut ref self) -> i64 {
+        if self.nesting == 0 {
+            self.frozen = self.clock_read();
+        }
+        self.nesting += 1;
+        self.frozen
+    }
+
+    fn exit(mut ref self) {
+        self.nesting -= 1;
+    }
+
+    fn timed(ref self) -> bool {
+        self.kind == TTL or self.kind == TLRU or self.kind == UNBOUND
+    }
+
+    fn ttl_like(ref self) -> bool {
+        self.kind == TTL or self.kind == UNBOUND
+    }
+
+    // ---------------------------------------------------- Cache itself
+
+    fn getsizeof(ref self, v: ref V) -> Result[i64, String] {
+        if self.sizeof == 0 {
+            return Ok(1);
+        }
+        if self.sizeof == 2 {
+            if let V.Str(s) = v {
+                if s.starts_with("!") {
+                    return Ok(-1);
+                }
+            }
+        }
+        len_of(v)
+    }
+
+    fn size_of_key(ref self, k: ref V) -> i64 {
+        if self.sizeof == 0 {
+            return 1;
+        }
+        match self.sizes.get(v_key(k)) {
+            Some(n) => *n,
+            None => 0,
+        }
+    }
+
+    fn base_getitem(ref self, k: ref V) -> Result[V, String] {
+        match self.data.get(k) {
+            Some(v) => Ok(v),
+            None => Err(key_error(k)),
+        }
+    }
+
+    fn base_setitem(mut ref self, k: ref V, v: own V) -> Result[(), String] {
+        let size = self.getsizeof(v)?;
+        if size < 0 {
+            return Err(value_error("value size must be non-negative"));
+        }
+        if not self.inf and size > self.maxsize {
+            return Err(value_error("value too large"));
+        }
+        let mut diffsize = size;
+        if not self.data.has(k) {
+            while not self.inf and self.currsize + diffsize > self.maxsize {
+                self.popitem()?;
+            }
+        } else {
+            diffsize = size - self.size_of_key(k);
+            while not self.inf and self.currsize + diffsize > self.maxsize {
+                self.popitem()?;
+                if not self.data.has(k) {
+                    diffsize = size;
+                }
+            }
+        }
+        self.data.set(k, v);
+        if self.sizeof != 0 {
+            self.sizes.insert(v_key(k), size);
+        }
+        self.currsize += diffsize;
+        Ok(())
+    }
+
+    fn base_delitem(mut ref self, k: ref V) -> Result[(), String] {
+        let mut size = 1;
+        if self.sizeof != 0 {
+            let ks = v_key(k);
+            size = match self.sizes.get(ks) {
+                Some(n) => *n,
+                None => return Err(key_error(k)),
+            };
+            self.sizes.remove(ks);
+        }
+        if self.data.remove(k).is_none() {
+            return Err(key_error(k));
+        }
+        self.currsize -= size;
+        Ok(())
+    }
+
+    fn base_clear(mut ref self) {
+        self.data.clear();
+        self.sizes = Map.new();
+        self.currsize = 0;
+    }
+
+    fn maxsize_repr(ref self) -> String {
+        if self.inf { "inf".to_string() } else { f"{self.maxsize}" }
+    }
+
+    // The maxsize property: None for the unbounded TTL cache.
+    fn maxsize_prop(ref self) -> V {
+        if self.kind == UNBOUND or self.kind == DICT { V.Nil } else { V.Int(self.maxsize) }
+    }
+
+    fn base_repr(ref self) -> String {
+        if self.kind == DICT {
+            return self.data.repr();
+        }
+        let d = self.data.repr();
+        let m = self.maxsize_repr();
+        f"{self.name}({d}, maxsize={m}, currsize={self.currsize})"
+    }
+
+    // ---------------------------------------------------- dispatch
+
+    fn contains(mut ref self, k: ref V) -> bool {
+        if self.ttl_like() {
+            let l = match self.order.get(k) {
+                Some(V.Int(i)) => i,
+                _ => return false,
+            };
+            return self.timer() < self.links[l].expires;
+        }
+        if self.kind == TLRU {
+            let i = match self.order.get(k) {
+                Some(V.Int(i)) => i,
+                _ => return false,
+            };
+            return self.timer() < self.items[i].expires;
+        }
+        self.data.has(k)
+    }
+
+    fn getitem(mut ref self, k: ref V) -> Result[V, String] {
+        if self.kind == LRU {
+            let v = self.base_getitem(k)?;
+            if self.data.has(k) {
+                self.lru_touch(k);
+            }
+            return Ok(v);
+        }
+        if self.kind == LFU {
+            let v = self.base_getitem(k)?;
+            if self.data.has(k) {
+                self.lfu_touch(k);
+            }
+            return Ok(v);
+        }
+        if self.ttl_like() {
+            let expired = match self.ttl_getlink(k) {
+                Some(l) => not (self.timer() < self.links[l].expires),
+                None => false,
+            };
+            if expired {
+                return Err(key_error(k));
+            }
+            return self.base_getitem(k);
+        }
+        if self.kind == TLRU {
+            let expired = match self.tlru_getitem(k) {
+                Some(i) => not (self.timer() < self.items[i].expires),
+                None => false,
+            };
+            if expired {
+                return Err(key_error(k));
+            }
+            return self.base_getitem(k);
+        }
+        self.base_getitem(k)
+    }
+
+    fn setitem(mut ref self, k: ref V, v: own V) -> Result[(), String] {
+        if self.kind == DICT {
+            self.data.set(k, v);
+            return Ok(());
+        }
+        if self.kind == FIFO {
+            self.base_setitem(k, v)?;
+            if not self.order.move_to_end(k) {
+                self.order.set(k, V.Nil);
+            }
+            return Ok(());
+        }
+        if self.kind == LRU {
+            self.base_setitem(k, v)?;
+            self.lru_touch(k);
+            return Ok(());
+        }
+        if self.kind == LFU {
+            return self.lfu_setitem(k, v);
+        }
+        if self.kind == RR {
+            self.base_setitem(k, v)?;
+            let ks = v_key(k);
+            if not self.rr_index.contains_key(ks) {
+                self.rr_index.insert(ks, self.rr_keys.len());
+                self.rr_keys.push(k.clone());
+            }
+            return Ok(());
+        }
+        if self.ttl_like() {
+            return self.ttl_setitem(k, v);
+        }
+        if self.kind == TLRU {
+            return self.tlru_setitem(k, v);
+        }
+        self.base_setitem(k, v)
+    }
+
+    fn delitem(mut ref self, k: ref V) -> Result[(), String] {
+        if self.kind == FIFO or self.kind == LRU {
+            self.base_delitem(k)?;
+            let _ = self.order.remove(k);
+            return Ok(());
+        }
+        if self.kind == LFU {
+            self.base_delitem(k)?;
+            let ks = v_key(k);
+            let l = *self.lfu_of.get(ks).unwrap();
+            self.lfu_of.remove(ks);
+            self.lfu[l].keys.remove(k);
+            if self.lfu[l].keys.used == 0 {
+                self.lfu_unlink(l);
+            }
+            return Ok(());
+        }
+        if self.kind == RR {
+            self.base_delitem(k)?;
+            let ks = v_key(k);
+            let index = *self.rr_index.get(ks).unwrap();
+            self.rr_index.remove(ks);
+            let n = self.rr_keys.len();
+            if index != n - 1 {
+                let last = self.rr_keys[n - 1].clone();
+                self.rr_index.insert(v_key(last), index);
+                self.rr_keys[index] = last;
+            }
+            self.rr_keys.pop();
+            return Ok(());
+        }
+        if self.ttl_like() {
+            self.base_delitem(k)?;
+            let l = match self.order.remove(k) {
+                Some(V.Int(i)) => i,
+                _ => return Err(key_error(k)),
+            };
+            self.ttl_unlink(l);
+            if not (self.timer() < self.links[l].expires) {
+                return Err(key_error(k));
+            }
+            return Ok(());
+        }
+        if self.kind == TLRU {
+            let time = self.enter();
+            let r = self.base_delitem(k);
+            self.exit();
+            r?;
+            let i = match self.order.remove(k) {
+                Some(V.Int(i)) => i,
+                _ => return Err(key_error(k)),
+            };
+            self.items[i].removed = true;
+            if not (time < self.items[i].expires) {
+                return Err(key_error(k));
+            }
+            return Ok(());
+        }
+        if self.kind == DICT {
+            if self.data.remove(k).is_none() {
+                return Err(key_error(k));
+            }
+            return Ok(());
+        }
+        self.base_delitem(k)
+    }
+
+    fn popitem(mut ref self) -> Result[V, String] {
+        let empty = f"{self.name} is empty";
+        if self.kind == PLAIN {
+            // MutableMapping.popitem
+            let k = match self.data.first() {
+                Some(k) => k,
+                None => return Err("KeyError()".to_string()),
+            };
+            let v = self.getitem(k)?;
+            self.delitem(k)?;
+            return Ok(V.Tup(vec![k, v]));
+        }
+        if self.kind == FIFO or self.kind == LRU {
+            let k = match self.order.first() {
+                Some(k) => k,
+                None => return Err(key_error_msg(empty)),
+            };
+            let v = self.pop(k, None)?;
+            return Ok(V.Tup(vec![k, v]));
+        }
+        if self.kind == LFU {
+            let curr = self.lfu[0].next;
+            if curr == 0 {
+                return Err(key_error_msg(empty));
+            }
+            let k = self.lfu[curr].keys.first();
+            let v = self.pop(k, None)?;
+            return Ok(V.Tup(vec![k, v]));
+        }
+        if self.kind == RR {
+            if self.rr_keys.len() == 0 {
+                return Err(key_error_msg(empty));
+            }
+            let p = self.picks[self.pick_n % self.picks.len()];
+            self.pick_n += 1;
+            let k = self.rr_keys[p % self.rr_keys.len()].clone();
+            let v = self.pop(k, None)?;
+            return Ok(V.Tup(vec![k, v]));
+        }
+        // TTLCache and TLRUCache
+        let time = self.enter();
+        let r = self.timed_popitem(time, empty);
+        self.exit();
+        r
+    }
+
+    fn timed_popitem(mut ref self, time: i64, empty: ref String) -> Result[V, String] {
+        self.expire(Some(time))?;
+        let k = match self.order.first() {
+            Some(k) => k,
+            None => return Err(key_error_msg(empty)),
+        };
+        let v = self.pop(k, None)?;
+        Ok(V.Tup(vec![k, v]))
+    }
+
+    fn clear(mut ref self) {
+        self.base_clear();
+        self.order.clear();
+        if self.kind == LFU {
+            self.lfu[0].next = 0;
+            self.lfu[0].prev = 0;
+            self.lfu_of = Map.new();
+        }
+        if self.kind == RR {
+            self.rr_index = Map.new();
+            self.rr_keys = Vec.new();
+        }
+        if self.ttl_like() {
+            self.links[0].next = 0;
+            self.links[0].prev = 0;
+        }
+        if self.kind == TLRU {
+            self.heap = Vec.new();
+        }
+    }
+
+    // ---------------------------------------------------- the mapping API
+
+    fn get(mut ref self, k: ref V, default: own V) -> Result[V, String] {
+        if self.timed() {
+            self.enter();
+            let r = self.base_get(k, default);
+            self.exit();
+            return r;
+        }
+        self.base_get(k, default)
+    }
+
+    fn base_get(mut ref self, k: ref V, default: own V) -> Result[V, String] {
+        if self.contains(k) {
+            return self.getitem(k);
+        }
+        Ok(default)
+    }
+
+    fn pop(mut ref self, k: ref V, default: Option[V]) -> Result[V, String] {
+        if self.timed() {
+            self.enter();
+            let r = self.base_pop(k, default);
+            self.exit();
+            return r;
+        }
+        self.base_pop(k, default)
+    }
+
+    fn base_pop(mut ref self, k: ref V, default: Option[V]) -> Result[V, String] {
+        if self.contains(k) {
+            let v = self.getitem(k)?;
+            self.delitem(k)?;
+            return Ok(v);
+        }
+        match default {
+            Some(d) => Ok(d.clone()),
+            None => Err(key_error(k)),
+        }
+    }
+
+    fn setdefault(mut ref self, k: ref V, default: own V) -> Result[V, String] {
+        if self.timed() {
+            self.enter();
+            let r = self.base_setdefault(k, default);
+            self.exit();
+            return r;
+        }
+        self.base_setdefault(k, default)
+    }
+
+    fn base_setdefault(mut ref self, k: ref V, default: own V) -> Result[V, String] {
+        if self.contains(k) {
+            return self.getitem(k);
+        }
+        self.setitem(k, default.clone())?;
+        Ok(default)
+    }
+
+    fn len(mut ref self) -> Result[i64, String] {
+        if self.timed() {
+            let time = self.enter();
+            let r = self.expire(Some(time));
+            self.exit();
+            r?;
+        }
+        Ok(self.data.len())
+    }
+
+    fn currsize_prop(mut ref self) -> Result[i64, String] {
+        if self.kind == DICT {
+            return Ok(self.data.len());
+        }
+        if self.timed() {
+            let time = self.enter();
+            let r = self.expire(Some(time));
+            self.exit();
+            r?;
+        }
+        Ok(self.currsize)
+    }
+
+    fn repr(mut ref self) -> Result[String, String] {
+        if self.timed() {
+            let time = self.enter();
+            let r = self.expire(Some(time));
+            let s = self.base_repr();
+            self.exit();
+            r?;
+            return Ok(s);
+        }
+        Ok(self.base_repr())
+    }
+
+    // list(cache), or list(cache.items()) (mode 1) or list(cache.values())
+    // (mode 2). The timed caches freeze the clock around each key they
+    // hand out, and the read for items and values happens inside that.
+    fn walk(mut ref self, mode: i64) -> Result[Vec[V], String] {
+        // list() asks for the length first, and a timed cache expires
+        // items to answer it.
+        self.len()?;
+        let mut out: Vec[V] = Vec.new();
+        if self.ttl_like() {
+            let mut curr = self.links[0].next;
+            while curr != 0 {
+                let time = self.enter();
+                if time < self.links[curr].expires {
+                    let k = self.links[curr].key.clone();
+                    let r = self.walk_one(k, mode, mut out);
+                    if r.is_err() {
+                        self.exit();
+                        return Err(r.unwrap_err());
+                    }
+                }
+                self.exit();
+                curr = self.links[curr].next;
+            }
+            return Ok(out);
+        }
+        if self.kind == TLRU {
+            let order = self.heap.clone();
+            for i in order.iter() {
+                let time = self.enter();
+                if time < self.items[*i].expires and not self.items[*i].removed {
+                    let k = self.items[*i].key.clone();
+                    let r = self.walk_one(k, mode, mut out);
+                    if r.is_err() {
+                        self.exit();
+                        return Err(r.unwrap_err());
+                    }
+                }
+                self.exit();
+            }
+            return Ok(out);
+        }
+        for k in self.data.key_list().iter() {
+            self.walk_one(k, mode, mut out)?;
+        }
+        Ok(out)
+    }
+
+    fn walk_one(mut ref self, k: ref V, mode: i64, out: mut ref Vec[V]) -> Result[(), String] {
+        if mode == 0 {
+            out.push(k.clone());
+            return Ok(());
+        }
+        let v = self.getitem(k)?;
+        if mode == 1 {
+            out.push(V.Tup(vec![k.clone(), v]));
+        } else {
+            out.push(v);
+        }
+        Ok(())
+    }
+
+    // MutableMapping.update over a sequence of pairs.
+    fn update(mut ref self, pairs: ref V) -> Result[(), String] {
+        if let V.Tup(ps) = pairs {
+            for p in ps.iter() {
+                if let V.Tup(kv) = p {
+                    self.setitem(kv[0], kv[1].clone())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // ---------------------------------------------------- LRUCache
+
+    fn lru_touch(mut ref self, k: ref V) {
+        if not self.order.move_to_end(k) {
+            self.order.set(k, V.Nil);
+        }
+    }
+
+    // ---------------------------------------------------- LFUCache
+
+    fn lfu_new_link(mut ref self, count: i64) -> i64 {
+        self.lfu.push(LfuLink { count: count, keys: new_set(), next: 0, prev: 0 });
+        self.lfu.len() - 1
+    }
+
+    fn lfu_unlink(mut ref self, l: i64) {
+        let next = self.lfu[l].next;
+        let prev = self.lfu[l].prev;
+        self.lfu[prev].next = next;
+        self.lfu[next].prev = prev;
+    }
+
+    fn lfu_setitem(mut ref self, k: ref V, v: own V) -> Result[(), String] {
+        self.base_setitem(k, v)?;
+        let ks = v_key(k);
+        if self.lfu_of.contains_key(ks) {
+            self.lfu_touch(k);
+            return Ok(());
+        }
+        let mut link = self.lfu[0].next;
+        if self.lfu[link].count != 1 {
+            link = self.lfu_new_link(1);
+            self.lfu[link].next = self.lfu[0].next;
+            self.lfu[0].next = link;
+            let after = self.lfu[link].next;
+            self.lfu[after].prev = link;
+            self.lfu[link].prev = 0;
+        }
+        self.lfu[link].keys.add(k);
+        self.lfu_of.insert(ks, link);
+        Ok(())
+    }
+
+    fn lfu_touch(mut ref self, k: ref V) {
+        let ks = v_key(k);
+        let link = *self.lfu_of.get(ks).unwrap();
+        let mut curr = self.lfu[link].next;
+        if self.lfu[curr].count != self.lfu[link].count + 1 {
+            if self.lfu[link].keys.used == 1 {
+                self.lfu[link].count += 1;
+                return;
+            }
+            curr = self.lfu_new_link(self.lfu[link].count + 1);
+            self.lfu[curr].next = self.lfu[link].next;
+            self.lfu[link].next = curr;
+            let after = self.lfu[curr].next;
+            self.lfu[after].prev = curr;
+            self.lfu[curr].prev = link;
+        }
+        self.lfu[curr].keys.add(k);
+        self.lfu[link].keys.remove(k);
+        if self.lfu[link].keys.used == 0 {
+            self.lfu_unlink(link);
+        }
+        self.lfu_of.insert(ks, curr);
+    }
+
+    // ---------------------------------------------------- TTLCache
+
+    fn ttl_getlink(mut ref self, k: ref V) -> Option[i64] {
+        let l = match self.order.get(k) {
+            Some(V.Int(i)) => i,
+            _ => return None,
+        };
+        self.order.move_to_end(k);
+        Some(l)
+    }
+
+    fn ttl_unlink(mut ref self, l: i64) {
+        let next = self.links[l].next;
+        let prev = self.links[l].prev;
+        self.links[prev].next = next;
+        self.links[next].prev = prev;
+    }
+
+    fn ttl_setitem(mut ref self, k: ref V, v: own V) -> Result[(), String] {
+        let time = self.enter();
+        let expires = time + self.ttl;
+        let mut r = self.expire(Some(time)).map(|_| ());
+        if r.is_ok() {
+            r = self.base_setitem(k, v);
+        }
+        self.exit();
+        r?;
+        let l = match self.ttl_getlink(k) {
+            Some(l) => {
+                self.ttl_unlink(l);
+                l
+            }
+            None => {
+                self.links.push(TtlLink { key: k.clone(), expires: 0, next: 0, prev: 0 });
+                let l = self.links.len() - 1;
+                self.order.set(k, V.Int(l));
+                l
+            }
+        };
+        self.links[l].expires = expires;
+        self.links[l].next = 0;
+        let prev = self.links[0].prev;
+        self.links[l].prev = prev;
+        self.links[prev].next = l;
+        self.links[0].prev = l;
+        Ok(())
+    }
+
+    // expire(): drop what has expired at `time` (now, without one) and
+    // return the (key, value) pairs dropped.
+    fn expire(mut ref self, time0: Option[i64]) -> Result[Vec[V], String] {
+        let time = match time0 {
+            Some(t) => t,
+            None => self.timer(),
+        };
+        let mut expired: Vec[V] = Vec.new();
+        if self.ttl_like() {
+            let mut curr = self.links[0].next;
+            while curr != 0 and not (time < self.links[curr].expires) {
+                let k = self.links[curr].key.clone();
+                let v = self.base_getitem(k)?;
+                expired.push(V.Tup(vec![k.clone(), v]));
+                self.base_delitem(k)?;
+                let _ = self.order.remove(k);
+                let next = self.links[curr].next;
+                self.ttl_unlink(curr);
+                curr = next;
+            }
+            return Ok(expired);
+        }
+        if self.kind == TLRU {
+            if self.heap.len() > self.order.len() * 2 {
+                let mut kept: Vec[i64] = Vec.new();
+                for i in self.heap.iter() {
+                    if not self.items[*i].removed {
+                        kept.push(*i);
+                    }
+                }
+                self.heap = kept;
+                self.heapify();
+            }
+            while self.heap.len() > 0 and (self.items[self.heap[0]].removed or not (time < self.items[self.heap[0]].expires)) {
+                let i = self.heappop();
+                if not self.items[i].removed {
+                    let k = self.items[i].key.clone();
+                    let v = self.base_getitem(k)?;
+                    expired.push(V.Tup(vec![k.clone(), v]));
+                    self.base_delitem(k)?;
+                    let _ = self.order.remove(k);
+                }
+            }
+        }
+        Ok(expired)
+    }
+
+    // ---------------------------------------------------- TLRUCache
+
+    fn tlru_getitem(mut ref self, k: ref V) -> Option[i64] {
+        let i = match self.order.get(k) {
+            Some(V.Int(i)) => i,
+            _ => return None,
+        };
+        self.order.move_to_end(k);
+        Some(i)
+    }
+
+    fn ttu_of(ref self, k: ref V, v: ref V, time: i64) -> Result[i64, String] {
+        if self.ttu.kind == "fixed" {
+            return Ok(time + self.ttu.n);
+        }
+        if self.ttu.kind == "len" {
+            return Ok(time + len_of(v)?);
+        }
+        if let V.Str(s) = k {
+            for (name, n) in self.ttu.table.iter() {
+                if name == s {
+                    return Ok(time + *n);
+                }
+            }
+        }
+        Ok(time + self.ttu.n)
+    }
+
+    fn tlru_setitem(mut ref self, k: ref V, v: own V) -> Result[(), String] {
+        let time = self.enter();
+        let r = self.tlru_set_timed(k, v, time);
+        self.exit();
+        let expires = match r? {
+            Some(e) => e,
+            None => return Ok(()),
+        };
+        if let Some(i) = self.tlru_getitem(k) {
+            self.items[i].removed = true;
+        }
+        self.items.push(TItem { key: k.clone(), expires: expires, removed: false });
+        let i = self.items.len() - 1;
+        self.order.set(k, V.Int(i));
+        self.heappush(i);
+        Ok(())
+    }
+
+    // The part of TLRUCache.__setitem__ inside `with self.timer`: None
+    // when the item is already expired and only the old one is dropped.
+    fn tlru_set_timed(mut ref self, k: ref V, v: own V, time: i64) -> Result[Option[i64], String] {
+        self.expire(Some(time))?;
+        let expires = self.ttu_of(k, v, time)?;
+        if not (time < expires) {
+            if let Some(V.Int(i)) = self.order.remove(k) {
+                self.items[i].removed = true;
+                self.base_delitem(k)?;
+            }
+            return Ok(None);
+        }
+        self.base_setitem(k, v)?;
+        Ok(Some(expires))
+    }
+
+    // heapq over item indices, by expiry.
+    fn less(ref self, a: i64, b: i64) -> bool {
+        self.items[a].expires < self.items[b].expires
+    }
+
+    fn siftdown(mut ref self, startpos: i64, pos0: i64) {
+        let mut pos = pos0;
+        let newitem = self.heap[pos];
+        while pos > startpos {
+            let parentpos = (pos - 1) >> 1;
+            let parent = self.heap[parentpos];
+            if self.less(newitem, parent) {
+                self.heap[pos] = parent;
+                pos = parentpos;
+                continue;
+            }
+            break;
+        }
+        self.heap[pos] = newitem;
+    }
+
+    fn siftup(mut ref self, pos0: i64) {
+        let mut pos = pos0;
+        let endpos = self.heap.len();
+        let startpos = pos;
+        let newitem = self.heap[pos];
+        let mut childpos = 2 * pos + 1;
+        while childpos < endpos {
+            let rightpos = childpos + 1;
+            if rightpos < endpos and not self.less(self.heap[childpos], self.heap[rightpos]) {
+                childpos = rightpos;
+            }
+            self.heap[pos] = self.heap[childpos];
+            pos = childpos;
+            childpos = 2 * pos + 1;
+        }
+        self.heap[pos] = newitem;
+        self.siftdown(startpos, pos);
+    }
+
+    fn heappush(mut ref self, i: i64) {
+        self.heap.push(i);
+        let n = self.heap.len() - 1;
+        self.siftdown(0, n);
+    }
+
+    fn heappop(mut ref self) -> i64 {
+        let last = self.heap.pop().unwrap();
+        if self.heap.len() > 0 {
+            let top = self.heap[0];
+            self.heap[0] = last;
+            self.siftup(0);
+            return top;
+        }
+        last
+    }
+
+    fn heapify(mut ref self) {
+        let n = self.heap.len();
+        let mut i = n / 2 - 1;
+        while i >= 0 {
+            self.siftup(i);
+            i -= 1;
+        }
+    }
+}
+
+// ------------------------------------------------------------ cache keys
+
+fn kwmark() -> V {
+    V.Type("cachetools.keys._HashedTuple".to_string())
+}
+
+// The keyword arguments sorted by name, as sorted(kwargs.items()) has
+// them.
+fn sorted_kwargs(kw: ref Vec[(String, V)]) -> Vec[(String, V)] {
+    let mut out: Vec[(String, V)] = Vec.new();
+    for (k, v) in kw.iter() {
+        let mut at = out.len();
+        let mut i = 0;
+        while i < out.len() {
+            if k < out[i].0 {
+                at = i;
+                break;
+            }
+            i += 1;
+        }
+        out.insert(at, (k.clone(), v.clone()));
+    }
+    out
+}
+
+// keys.hashkey, or keys.typedkey when `typed`.
+fn make_key(args: ref Vec[V], kw: ref Vec[(String, V)], typed: bool) -> V {
+    let mut items = args.clone();
+    let sk = sorted_kwargs(kw);
+    if sk.len() > 0 {
+        items.push(kwmark());
+        for (k, v) in sk.iter() {
+            items.push(V.Tup(vec![V.Str(k.clone()), v.clone()]));
+        }
+        if typed {
+            for (_, v) in sk.iter() {
+                items.push(V.Type(type_name(v)));
+            }
+        }
+    }
+    if typed {
+        for a in args.iter() {
+            items.push(V.Type(type_name(a)));
+        }
+    }
+    V.Tup(items)
+}
+
+// ------------------------------------------------------------ memoizing
+
+// A function wrapped by cached() or one of the cachetools.func
+// decorators. `cache` is None for cached(cache=None).
+struct Memo {
+    func: String,
+    cache: Option[Cache],
+    typed: bool,
+    info: bool,
+    lock: bool,
+    // The cachetools.func decorators: their maxsize for cache_parameters().
+    func_style: bool,
+    params_maxsize: V,
+    hits: i64,
+    misses: i64,
+    calls: Vec[String],
+}
+
+fn profile(uid: ref V) -> Option[String] {
+    let n = match uid {
+        V.Int(n) => *n,
+        V.Bool(b) => if *b { 1 } else { 0 },
+        V.Float(x) => {
+            let i = *x as i64;
+            if (i as f64) != *x {
+                return None;
+            }
+            i
+        }
+        _ => return None,
+    };
+    let names = [(1, "ada"), (2, "grace"), (3, "linus"), (4, "margaret"), (5, "ken"), (7, "barbara")];
+    for (k, name) in names {
+        if k == n {
+            return Some(f"{name}#{n}");
+        }
+    }
+    None
+}
+
+fn table_int(name: ref V, table: ref Vec[(Str, i64)], default: i64) -> i64 {
+    if let V.Str(s) = name {
+        for (k, n) in table.iter() {
+            if s == *k {
+                return *n;
+            }
+        }
+    }
+    default
+}
+
+fn arg(args: ref Vec[V], kw: ref Vec[(String, V)], pos: i64, name: Str, default: own V) -> V {
+    if pos < args.len() {
+        return args[pos].clone();
+    }
+    for (k, v) in kw.iter() {
+        if k == name {
+            return v.clone();
+        }
+    }
+    default
+}
+
+fn int_of(v: ref V) -> i64 {
+    match v {
+        V.Int(n) => *n,
+        V.Bool(b) => if *b { 1 } else { 0 },
+        V.Float(x) => *x as i64,
+        _ => 0,
+    }
+}
+
+impl Memo {
+    // The undecorated functions. fib calls itself through the wrapper.
+    fn run_impl(mut ref self, args: ref Vec[V], kw: ref Vec[(String, V)]) -> V {
+        if self.func == "fib" {
+            let n = int_of(args[0]);
+            self.calls.push(f"fib({n})");
+            if n < 2 {
+                return V.Int(n);
+            }
+            let a = int_of(self.call(vec![V.Int(n - 1)], Vec.new()));
+            let b = int_of(self.call(vec![V.Int(n - 2)], Vec.new()));
+            return V.Int(a + b);
+        }
+        if self.func == "user" {
+            let r = v_repr(args[0]);
+            self.calls.push(f"user({r})");
+            return match profile(args[0]) {
+                Some(p) => V.Str(p),
+                None => V.Nil,
+            };
+        }
+        if self.func == "price" {
+            let sku = arg(args, kw, 0, "sku", V.Nil);
+            let qty = arg(args, kw, 1, "qty", V.Int(1));
+            let cur = arg(args, kw, 2, "currency", V.Str("EUR".to_string()));
+            let a = v_repr(sku);
+            let b = v_repr(qty);
+            let c = v_repr(cur);
+            self.calls.push(f"price({a}, qty={b}, currency={c})");
+            let prices: Vec[(Str, i64)] = vec![("apple", 30), ("pear", 45), ("fig", 120), ("kiwi", 25)];
+            let total = table_int(sku, prices, 0) * int_of(qty);
+            return V.Tup(vec![sku, V.Int(total), cur]);
+        }
+        let page = arg(args, kw, 0, "page", V.Nil);
+        let lang = arg(args, kw, 1, "lang", V.Str("en".to_string()));
+        let a = v_repr(page);
+        let b = v_repr(lang);
+        self.calls.push(f"render({a}, {b})");
+        let pages: Vec[(Str, i64)] = vec![("home", 40), ("about", 12), ("docs", 75), ("blog", 33)];
+        let n = table_int(page, pages, 5);
+        let mut s = String.new();
+        if let V.Str(l) = lang {
+            if let V.Str(p) = page {
+                s = f"<{l}:{p}>";
+            }
+        }
+        let mut cs = cps_of(s);
+        while cs.len() < n {
+            cs.push(126);
+        }
+        V.Str(to_string(cs))
+    }
+
+    // The wrapper: look the key up, and on a miss run the function and
+    // store what it returns, unless the cache finds it too large.
+    fn call(mut ref self, args: own Vec[V], kw: own Vec[(String, V)]) -> V {
+        if self.cache.is_none() {
+            self.misses += 1;
+            return self.run_impl(args, kw);
+        }
+        let k = make_key(args, kw, self.typed);
+        let found = match self.cache {
+            Some(mut ref c) => c.getitem(k),
+            None => Err(String.new()),
+        };
+        match found {
+            Ok(v) => {
+                self.hits += 1;
+                return v;
+            }
+            Err(_) => {
+                self.misses += 1;
+            }
+        }
+        let v = self.run_impl(args, kw);
+        let lock = self.lock;
+        match self.cache {
+            Some(mut ref c) => {
+                if lock {
+                    return match c.setdefault(k, v.clone()) {
+                        Ok(r) => r,
+                        Err(_) => v,
+                    };
+                }
+                let _ = c.setitem(k, v.clone());
+            }
+            None => {}
+        }
+        v
+    }
+
+    fn info(mut ref self) -> String {
+        let (maxsize, currsize) = match self.cache {
+            Some(mut ref c) => {
+                let m = v_repr(c.maxsize_prop());
+                let n = match c.currsize_prop() {
+                    Ok(n) => n,
+                    Err(_) => 0,
+                };
+                (m, n)
+            }
+            None => ("0".to_string(), 0),
+        };
+        f"CacheInfo(hits={self.hits}, misses={self.misses}, maxsize={maxsize}, currsize={currsize})"
+    }
+
+    fn clear(mut ref self) {
+        if let Some(mut ref c) = self.cache {
+            c.clear();
+        }
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    fn cache_repr(mut ref self) -> String {
+        match self.cache {
+            Some(mut ref c) => match c.repr() {
+                Ok(s) => s,
+                Err(e) => e,
+            },
+            None => "None".to_string(),
+        }
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn emit(s: ref String) {
+    println(s);
+}
+
+fn read_data(name: Str) -> String {
+    match fs.read_to_string(f"data/{name}") {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/{name}: {e}");
+            String.new()
+        }
+    }
+}
+
+fn bool_repr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// repr() of a JSON value read back into Python.
+fn j_repr(j: ref J) -> String {
+    match j {
+        J.S(s) => repr_of(cps_of(s)),
+        J.N(n) => f"{n}",
+        J.F(x) => float_repr(*x),
+        J.B(b) => bool_repr(*b),
+        J.Null => "None".to_string(),
+        J.A(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for it in items.iter() {
+                parts.push(j_repr(it));
+            }
+            let body = parts.join(", ");
+            f"[{body}]"
+        }
+        J.O(members) => {
+            let mut parts: Vec[String] = Vec.new();
+            for (k, v) in members.iter() {
+                let kr = repr_of(cps_of(k));
+                let vr = j_repr(v);
+                parts.push(f"{kr}: {vr}");
+            }
+            let body = parts.join(", ");
+            f"{{{body}}}"
+        }
+    }
+}
+
+fn j_items(j: ref J, key: Str) -> Vec[J] {
+    match j_get(j, key) {
+        J.A(items) => items,
+        _ => Vec.new(),
+    }
+}
+
+fn ints_of(j: ref J) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if let J.A(items) = j {
+        for it in items.iter() {
+            if let J.N(n) = it {
+                out.push(*n);
+            }
+        }
+    }
+    out
+}
+
+// The cache a job asks for. Err holds the repr of the exception.
+fn make_cache(spec: ref J, j: ref J) -> Result[Cache, String] {
+    let kind = kind_of(j_str(spec, "type"));
+    let maxsize = j_int(spec, "maxsize", 0);
+    if maxsize < 0 {
+        return Err(value_error("maxsize must be non-negative"));
+    }
+    let g = j_str(spec, "getsizeof");
+    let sizeof = if g == "len" { 1 } else if g == "checked" { 2 } else { 0 };
+    let mut c = new_cache(kind, maxsize, sizeof);
+    c.clock = j_int(j, "start", 0);
+    c.step = j_int(j, "step", 0);
+    c.ttl = j_int(spec, "ttl", 0);
+    c.picks = ints_of(j_get(spec, "picks"));
+    if j_has(spec, "ttu") {
+        let t = j_get(spec, "ttu");
+        c.ttu.kind = j_str(t, "kind");
+        c.ttu.n = if c.ttu.kind == "table" { j_int(t, "default", 0) } else { j_int(t, "n", 0) };
+        if let J.O(members) = j_get(t, "table") {
+            for (k, v) in members.iter() {
+                if let J.N(n) = v {
+                    c.ttu.table.push((k.clone(), *n));
+                }
+            }
+        }
+    }
+    Ok(c)
+}
+
+fn show(r: ref Result[V, String]) -> String {
+    match r {
+        Ok(v) => v_repr(v),
+        Err(e) => e.clone(),
+    }
+}
+
+fn show_list(r: ref Result[Vec[V], String]) -> String {
+    match r {
+        Ok(vs) => list_repr(vs),
+        Err(e) => e.clone(),
+    }
+}
+
+fn unit(r: ref Result[(), String]) -> String {
+    match r {
+        Ok(_) => "None".to_string(),
+        Err(e) => e.clone(),
+    }
+}
+
+fn do_op(c: mut ref Cache, op: ref String, a: ref Vec[V]) -> String {
+    if op == "set" {
+        return unit(c.setitem(a[0], a[1].clone()));
+    }
+    if op == "getitem" {
+        return show(c.getitem(a[0]));
+    }
+    if op == "get" {
+        let d = if a.len() > 1 { a[1].clone() } else { V.Nil };
+        return show(c.get(a[0], d));
+    }
+    if op == "del" {
+        return unit(c.delitem(a[0]));
+    }
+    if op == "pop" {
+        let d = if a.len() > 1 { Some(a[1].clone()) } else { None };
+        return show(c.pop(a[0], d));
+    }
+    if op == "popitem" {
+        return show(c.popitem());
+    }
+    if op == "setdefault" {
+        let d = if a.len() > 1 { a[1].clone() } else { V.Nil };
+        return show(c.setdefault(a[0], d));
+    }
+    if op == "in" {
+        return bool_repr(c.contains(a[0]));
+    }
+    if op == "len" {
+        return match c.len() {
+            Ok(n) => f"{n}",
+            Err(e) => e,
+        };
+    }
+    if op == "currsize" {
+        return match c.currsize_prop() {
+            Ok(n) => f"{n}",
+            Err(e) => e,
+        };
+    }
+    if op == "maxsize" {
+        return v_repr(c.maxsize_prop());
+    }
+    if op == "repr" {
+        return match c.repr() {
+            Ok(s) => s,
+            Err(e) => e,
+        };
+    }
+    if op == "list" {
+        return show_list(c.walk(0));
+    }
+    if op == "items" {
+        return show_list(c.walk(1));
+    }
+    if op == "values" {
+        return show_list(c.walk(2));
+    }
+    if op == "update" {
+        return unit(c.update(a[0]));
+    }
+    if op == "expire" {
+        let t = if a.len() > 0 { Some(int_of(a[0])) } else { None };
+        return show_list(c.expire(t));
+    }
+    if op == "clear" {
+        c.clear();
+        return "None".to_string();
+    }
+    if op == "tick" {
+        c.clock += int_of(a[0]);
+        return f"now {c.clock}";
+    }
+    "?".to_string()
+}
+
+fn run_script(j: ref J) {
+    let spec = j_get(j, "cache");
+    let mut c = match make_cache(spec, j) {
+        Ok(c) => c,
+        Err(e) => {
+            emit(f"  new -> {e}");
+            return;
+        }
+    };
+    for op in j_items(j, "ops").iter() {
+        let parts = match op {
+            J.A(items) => items.clone(),
+            _ => Vec.new(),
+        };
+        let name = match parts[0] {
+            J.S(s) => s.clone(),
+            _ => String.new(),
+        };
+        let mut args: Vec[V] = Vec.new();
+        let mut texts: Vec[String] = vec![name.clone()];
+        let mut i = 1;
+        while i < parts.len() {
+            let v = v_of(parts[i]);
+            texts.push(v_repr(v));
+            args.push(v);
+            i += 1;
+        }
+        let head = texts.join(" ");
+        let r = do_op(mut c, name, args);
+        emit(f"  {head} -> {r}");
+    }
+}
+
+fn run_memo(j: ref J) {
+    let d = j_str(j, "decorator");
+    let func = j_str(j, "func");
+    let mut m = Memo {
+        func: func.clone(),
+        cache: None,
+        typed: j_bool(j, "typed"),
+        info: j_bool(j, "info"),
+        lock: j_bool(j, "lock"),
+        func_style: d != "cached",
+        params_maxsize: V.Int(128),
+        hits: 0,
+        misses: 0,
+        calls: Vec.new(),
+    };
+    if d == "cached" {
+        match j_get(j, "cache") {
+            J.Null => {
+                emit("  warning: DeprecationWarning: @cachetools.cached(cache=None) is deprecated".to_string());
+            }
+            J.S(_) => {
+                m.cache = Some(new_cache(DICT, 0, 0));
+            }
+            spec => {
+                m.cache = Some(make_cache(spec, j).unwrap());
+            }
+        }
+    } else {
+        // maxsize=None is there but null, which j_has does not count.
+        let mut unbounded = false;
+        if let J.O(members) = ref j {
+            for (k, v) in members.iter() {
+                if k == "maxsize" {
+                    if let J.Null = v {
+                        unbounded = true;
+                    }
+                }
+            }
+        }
+        let maxsize = j_int(j, "maxsize", 128);
+        m.params_maxsize = if unbounded { V.Nil } else { V.Int(maxsize) };
+        let mut c = if unbounded {
+            if d == "ttl_cache" { new_cache(UNBOUND, 0, 0) } else { new_cache(DICT, 0, 0) }
+        } else if d == "lru_cache" {
+            new_cache(LRU, maxsize, 0)
+        } else if d == "fifo_cache" {
+            new_cache(FIFO, maxsize, 0)
+        } else if d == "lfu_cache" {
+            new_cache(LFU, maxsize, 0)
+        } else if d == "rr_cache" {
+            new_cache(RR, maxsize, 0)
+        } else {
+            new_cache(TTL, maxsize, 0)
+        };
+        c.ttl = j_int(j, "ttl", 0);
+        c.picks = ints_of(j_get(j, "picks"));
+        c.clock = j_int(j, "start", 0);
+        c.step = j_int(j, "step", 0);
+        m.cache = Some(c);
+    }
+    for call in j_items(j, "calls").iter() {
+        let parts = match call {
+            J.A(items) => items.clone(),
+            _ => Vec.new(),
+        };
+        let what = match parts[0] {
+            J.S(s) => s.clone(),
+            _ => String.new(),
+        };
+        if what == "info" {
+            let s = m.info();
+            emit(f"  cache_info -> {s}");
+            continue;
+        }
+        if what == "params" {
+            let ms = v_repr(m.params_maxsize);
+            let t = bool_repr(m.typed);
+            emit(f"  cache_parameters -> {{'maxsize': {ms}, 'typed': {t}}}");
+            continue;
+        }
+        if what == "clear" {
+            m.clear();
+            emit("  cache_clear".to_string());
+            continue;
+        }
+        if what == "cache" {
+            let s = m.cache_repr();
+            emit(f"  cache -> {s}");
+            continue;
+        }
+        if what == "tick" {
+            let n = match parts[1] {
+                J.N(n) => n,
+                _ => 0,
+            };
+            let mut now = 0;
+            if let Some(mut ref c) = m.cache {
+                c.clock += n;
+                now = c.clock;
+            }
+            emit(f"  now {now}");
+            continue;
+        }
+        let mut args: Vec[V] = Vec.new();
+        if let J.A(items) = parts[1] {
+            for it in items.iter() {
+                args.push(v_of(it));
+            }
+        }
+        let mut kw: Vec[(String, V)] = Vec.new();
+        if parts.len() > 2 {
+            if let J.O(members) = parts[2] {
+                for (k, v) in members.iter() {
+                    kw.push((k.clone(), v_of(v)));
+                }
+            }
+        }
+        let mut shown: Vec[String] = Vec.new();
+        for a in args.iter() {
+            shown.push(v_repr(a));
+        }
+        for (k, v) in kw.iter() {
+            let r = v_repr(v);
+            shown.push(f"{k}={r}");
+        }
+        m.calls = Vec.new();
+        let r = m.call(args, kw);
+        let s = shown.join(", ");
+        let rr = v_repr(r);
+        emit(f"  {func}({s}) -> {rr}");
+        if m.calls.len() > 0 {
+            let ran = m.calls.join(" ");
+            emit(f"    ran {ran}");
+        }
+    }
+}
+
+fn run_key(j: ref J) {
+    let typed = j_bool(j, "typed");
+    for call in j_items(j, "calls").iter() {
+        let parts = match call {
+            J.A(items) => items.clone(),
+            _ => Vec.new(),
+        };
+        let mut args: Vec[V] = Vec.new();
+        if let J.A(items) = parts[0] {
+            for it in items.iter() {
+                args.push(v_of(it));
+            }
+        }
+        let mut kw: Vec[(String, V)] = Vec.new();
+        if parts.len() > 1 {
+            if let J.O(members) = parts[1] {
+                for (k, v) in members.iter() {
+                    kw.push((k.clone(), v_of(v)));
+                }
+            }
+        }
+        let k = v_repr(make_key(args, kw, typed));
+        emit(f"  {k}");
+    }
+}
+
+fn describe(j: ref J) -> String {
+    let kind = j_str(j, "kind");
+    if kind == "script" {
+        let spec = j_get(j, "cache");
+        let mut parts: Vec[String] = Vec.new();
+        if let J.O(members) = ref spec {
+            for (k, v) in members.iter() {
+                if k != "type" {
+                    let r = j_repr(v);
+                    parts.push(f"{k}={r}");
+                }
+            }
+        }
+        let t = j_str(spec, "type");
+        let body = parts.join(", ");
+        return f"{t}({body})";
+    }
+    if kind == "memo" {
+        let mut parts: Vec[String] = Vec.new();
+        if let J.O(members) = j {
+            for (k, v) in members.iter() {
+                if k != "kind" and k != "calls" and k != "func" and k != "decorator" {
+                    let r = j_repr(v);
+                    parts.push(f"{k}={r}");
+                }
+            }
+        }
+        let f = j_str(j, "func");
+        let d = j_str(j, "decorator");
+        let body = parts.join(", ");
+        return f"{f} {d}({body})";
+    }
+    if j_bool(j, "typed") { "typedkey".to_string() } else { "hashkey".to_string() }
+}
+
+fn run() -> Result[(), String] {
+    emit("cachetools 7.2.3".to_string());
+    let text = read_data("jobs.jsonl");
+    let mut n = 0;
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let j = json_line(line.to_string())?;
+        n += 1;
+        let kind = j_str(j, "kind");
+        let d = describe(j);
+        emit(f"job {n}: {kind} {d}");
+        if kind == "script" {
+            run_script(j);
+        } else if kind == "memo" {
+            run_memo(j);
+        } else {
+            run_key(j);
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"Cache\", \"maxsize\": 3}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"repr\"], [\"getitem\", \"a\"], [\"set\", \"d\", 4], [\"repr\"], [\"get\", \"b\"], [\"get\", \"zz\"], [\"get\", \"zz\", \"none\"], [\"in\", \"a\"], [\"in\", \"b\"], [\"len\"], [\"currsize\"], [\"maxsize\"], [\"set\", \"a\", 10], [\"repr\"], [\"pop\", \"c\"], [\"pop\", \"c\"], [\"pop\", \"c\", 0], [\"setdefault\", \"e\", 5], [\"setdefault\", \"e\", 6], [\"setdefault\", \"f\"], [\"repr\"], [\"del\", \"nope\"], [\"popitem\"], [\"repr\"], [\"list\"], [\"items\"], [\"values\"], [\"repr\"], [\"update\", [[\"x\", 7], [\"y\", 8]]], [\"repr\"], [\"clear\"], [\"repr\"], [\"popitem\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"FIFOCache\", \"maxsize\": 3}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"repr\"], [\"getitem\", \"a\"], [\"set\", \"d\", 4], [\"repr\"], [\"get\", \"b\"], [\"get\", \"zz\"], [\"get\", \"zz\", \"none\"], [\"in\", \"a\"], [\"in\", \"b\"], [\"len\"], [\"currsize\"], [\"maxsize\"], [\"set\", \"a\", 10], [\"repr\"], [\"pop\", \"c\"], [\"pop\", \"c\"], [\"pop\", \"c\", 0], [\"setdefault\", \"e\", 5], [\"setdefault\", \"e\", 6], [\"setdefault\", \"f\"], [\"repr\"], [\"del\", \"nope\"], [\"popitem\"], [\"repr\"], [\"list\"], [\"items\"], [\"values\"], [\"repr\"], [\"update\", [[\"x\", 7], [\"y\", 8]]], [\"repr\"], [\"clear\"], [\"repr\"], [\"popitem\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 3}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"repr\"], [\"getitem\", \"a\"], [\"set\", \"d\", 4], [\"repr\"], [\"get\", \"b\"], [\"get\", \"zz\"], [\"get\", \"zz\", \"none\"], [\"in\", \"a\"], [\"in\", \"b\"], [\"len\"], [\"currsize\"], [\"maxsize\"], [\"set\", \"a\", 10], [\"repr\"], [\"pop\", \"c\"], [\"pop\", \"c\"], [\"pop\", \"c\", 0], [\"setdefault\", \"e\", 5], [\"setdefault\", \"e\", 6], [\"setdefault\", \"f\"], [\"repr\"], [\"del\", \"nope\"], [\"popitem\"], [\"repr\"], [\"list\"], [\"items\"], [\"values\"], [\"repr\"], [\"update\", [[\"x\", 7], [\"y\", 8]]], [\"repr\"], [\"clear\"], [\"repr\"], [\"popitem\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LFUCache\", \"maxsize\": 3}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"repr\"], [\"getitem\", \"a\"], [\"set\", \"d\", 4], [\"repr\"], [\"get\", \"b\"], [\"get\", \"zz\"], [\"get\", \"zz\", \"none\"], [\"in\", \"a\"], [\"in\", \"b\"], [\"len\"], [\"currsize\"], [\"maxsize\"], [\"set\", \"a\", 10], [\"repr\"], [\"pop\", \"c\"], [\"pop\", \"c\"], [\"pop\", \"c\", 0], [\"setdefault\", \"e\", 5], [\"setdefault\", \"e\", 6], [\"setdefault\", \"f\"], [\"repr\"], [\"del\", \"nope\"], [\"popitem\"], [\"repr\"], [\"list\"], [\"items\"], [\"values\"], [\"repr\"], [\"update\", [[\"x\", 7], [\"y\", 8]]], [\"repr\"], [\"clear\"], [\"repr\"], [\"popitem\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"RRCache\", \"maxsize\": 3, \"picks\": [0, 2, 1, 5]}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"repr\"], [\"getitem\", \"a\"], [\"set\", \"d\", 4], [\"repr\"], [\"get\", \"b\"], [\"get\", \"zz\"], [\"get\", \"zz\", \"none\"], [\"in\", \"a\"], [\"in\", \"b\"], [\"len\"], [\"currsize\"], [\"maxsize\"], [\"set\", \"a\", 10], [\"repr\"], [\"pop\", \"c\"], [\"pop\", \"c\"], [\"pop\", \"c\", 0], [\"setdefault\", \"e\", 5], [\"setdefault\", \"e\", 6], [\"setdefault\", \"f\"], [\"repr\"], [\"del\", \"nope\"], [\"popitem\"], [\"repr\"], [\"list\"], [\"items\"], [\"values\"], [\"repr\"], [\"update\", [[\"x\", 7], [\"y\", 8]]], [\"repr\"], [\"clear\"], [\"repr\"], [\"popitem\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TTLCache\", \"maxsize\": 3, \"ttl\": 10}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"repr\"], [\"getitem\", \"a\"], [\"set\", \"d\", 4], [\"repr\"], [\"get\", \"b\"], [\"get\", \"zz\"], [\"get\", \"zz\", \"none\"], [\"in\", \"a\"], [\"in\", \"b\"], [\"len\"], [\"currsize\"], [\"maxsize\"], [\"set\", \"a\", 10], [\"repr\"], [\"pop\", \"c\"], [\"pop\", \"c\"], [\"pop\", \"c\", 0], [\"setdefault\", \"e\", 5], [\"setdefault\", \"e\", 6], [\"setdefault\", \"f\"], [\"repr\"], [\"del\", \"nope\"], [\"popitem\"], [\"repr\"], [\"list\"], [\"items\"], [\"values\"], [\"repr\"], [\"update\", [[\"x\", 7], [\"y\", 8]]], [\"repr\"], [\"clear\"], [\"repr\"], [\"popitem\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TLRUCache\", \"maxsize\": 3, \"ttu\": {\"kind\": \"fixed\", \"n\": 10}}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"repr\"], [\"getitem\", \"a\"], [\"set\", \"d\", 4], [\"repr\"], [\"get\", \"b\"], [\"get\", \"zz\"], [\"get\", \"zz\", \"none\"], [\"in\", \"a\"], [\"in\", \"b\"], [\"len\"], [\"currsize\"], [\"maxsize\"], [\"set\", \"a\", 10], [\"repr\"], [\"pop\", \"c\"], [\"pop\", \"c\"], [\"pop\", \"c\", 0], [\"setdefault\", \"e\", 5], [\"setdefault\", \"e\", 6], [\"setdefault\", \"f\"], [\"repr\"], [\"del\", \"nope\"], [\"popitem\"], [\"repr\"], [\"list\"], [\"items\"], [\"values\"], [\"repr\"], [\"update\", [[\"x\", 7], [\"y\", 8]]], [\"repr\"], [\"clear\"], [\"repr\"], [\"popitem\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": -1}, \"ops\": [[\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 0}, \"ops\": [[\"set\", \"a\", 1], [\"repr\"], [\"popitem\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"Cache\", \"maxsize\": 2}, \"ops\": [[\"set\", [\"user\", 1], \"ada\"], [\"set\", [\"user\", 2], \"grace\"], [\"set\", [\"user\", 3], \"linus\"], [\"repr\"], [\"popitem\"], [\"popitem\"], [\"popitem\"], [\"set\", null, null], [\"repr\"], [\"getitem\", null], [\"set\", 7, [1, [2, 3]]], [\"repr\"], [\"set\", -3, []], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"Cache\", \"maxsize\": 40, \"getsizeof\": \"checked\"}, \"ops\": [[\"set\", \"home\", \"<html>home</html>\"], [\"set\", \"about\", \"about us\"], [\"repr\"], [\"set\", \"docs\", \"documentation index page\"], [\"repr\"], [\"currsize\"], [\"set\", \"about\", \"about us, longer now\"], [\"repr\"], [\"set\", \"huge\", \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [\"repr\"], [\"set\", \"empty\", \"\"], [\"repr\"], [\"set\", \"home\", \"h\"], [\"set\", \"blog\", \"a blog post body\"], [\"repr\"], [\"set\", \"bad\", \"!bad\"], [\"repr\"], [\"set\", \"edge\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"repr\"], [\"pop\", \"edge\"], [\"currsize\"], [\"update\", [[\"a\", \"aa\"], [\"b\", \"bbb\"], [\"c\", \"c\"]]], [\"repr\"], [\"del\", \"a\"], [\"del\", \"a\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"FIFOCache\", \"maxsize\": 40, \"getsizeof\": \"checked\"}, \"ops\": [[\"set\", \"home\", \"<html>home</html>\"], [\"set\", \"about\", \"about us\"], [\"repr\"], [\"set\", \"docs\", \"documentation index page\"], [\"repr\"], [\"currsize\"], [\"set\", \"about\", \"about us, longer now\"], [\"repr\"], [\"set\", \"huge\", \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [\"repr\"], [\"set\", \"empty\", \"\"], [\"repr\"], [\"set\", \"home\", \"h\"], [\"set\", \"blog\", \"a blog post body\"], [\"repr\"], [\"set\", \"bad\", \"!bad\"], [\"repr\"], [\"set\", \"edge\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"repr\"], [\"pop\", \"edge\"], [\"currsize\"], [\"update\", [[\"a\", \"aa\"], [\"b\", \"bbb\"], [\"c\", \"c\"]]], [\"repr\"], [\"del\", \"a\"], [\"del\", \"a\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 40, \"getsizeof\": \"checked\"}, \"ops\": [[\"set\", \"home\", \"<html>home</html>\"], [\"set\", \"about\", \"about us\"], [\"repr\"], [\"set\", \"docs\", \"documentation index page\"], [\"repr\"], [\"currsize\"], [\"set\", \"about\", \"about us, longer now\"], [\"repr\"], [\"set\", \"huge\", \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [\"repr\"], [\"set\", \"empty\", \"\"], [\"repr\"], [\"set\", \"home\", \"h\"], [\"set\", \"blog\", \"a blog post body\"], [\"repr\"], [\"set\", \"bad\", \"!bad\"], [\"repr\"], [\"set\", \"edge\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"repr\"], [\"pop\", \"edge\"], [\"currsize\"], [\"update\", [[\"a\", \"aa\"], [\"b\", \"bbb\"], [\"c\", \"c\"]]], [\"repr\"], [\"del\", \"a\"], [\"del\", \"a\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LFUCache\", \"maxsize\": 40, \"getsizeof\": \"checked\"}, \"ops\": [[\"set\", \"home\", \"<html>home</html>\"], [\"set\", \"about\", \"about us\"], [\"repr\"], [\"set\", \"docs\", \"documentation index page\"], [\"repr\"], [\"currsize\"], [\"set\", \"about\", \"about us, longer now\"], [\"repr\"], [\"set\", \"huge\", \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [\"repr\"], [\"set\", \"empty\", \"\"], [\"repr\"], [\"set\", \"home\", \"h\"], [\"set\", \"blog\", \"a blog post body\"], [\"repr\"], [\"set\", \"bad\", \"!bad\"], [\"repr\"], [\"set\", \"edge\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"repr\"], [\"pop\", \"edge\"], [\"currsize\"], [\"update\", [[\"a\", \"aa\"], [\"b\", \"bbb\"], [\"c\", \"c\"]]], [\"repr\"], [\"del\", \"a\"], [\"del\", \"a\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"RRCache\", \"maxsize\": 40, \"getsizeof\": \"checked\", \"picks\": [1, 0, 3]}, \"ops\": [[\"set\", \"home\", \"<html>home</html>\"], [\"set\", \"about\", \"about us\"], [\"repr\"], [\"set\", \"docs\", \"documentation index page\"], [\"repr\"], [\"currsize\"], [\"set\", \"about\", \"about us, longer now\"], [\"repr\"], [\"set\", \"huge\", \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [\"repr\"], [\"set\", \"empty\", \"\"], [\"repr\"], [\"set\", \"home\", \"h\"], [\"set\", \"blog\", \"a blog post body\"], [\"repr\"], [\"set\", \"bad\", \"!bad\"], [\"repr\"], [\"set\", \"edge\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"repr\"], [\"pop\", \"edge\"], [\"currsize\"], [\"update\", [[\"a\", \"aa\"], [\"b\", \"bbb\"], [\"c\", \"c\"]]], [\"repr\"], [\"del\", \"a\"], [\"del\", \"a\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TTLCache\", \"maxsize\": 40, \"ttl\": 100, \"getsizeof\": \"checked\"}, \"ops\": [[\"set\", \"home\", \"<html>home</html>\"], [\"set\", \"about\", \"about us\"], [\"repr\"], [\"set\", \"docs\", \"documentation index page\"], [\"repr\"], [\"currsize\"], [\"set\", \"about\", \"about us, longer now\"], [\"repr\"], [\"set\", \"huge\", \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [\"repr\"], [\"set\", \"empty\", \"\"], [\"repr\"], [\"set\", \"home\", \"h\"], [\"set\", \"blog\", \"a blog post body\"], [\"repr\"], [\"set\", \"bad\", \"!bad\"], [\"repr\"], [\"set\", \"edge\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"repr\"], [\"pop\", \"edge\"], [\"currsize\"], [\"update\", [[\"a\", \"aa\"], [\"b\", \"bbb\"], [\"c\", \"c\"]]], [\"repr\"], [\"del\", \"a\"], [\"del\", \"a\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TLRUCache\", \"maxsize\": 40, \"getsizeof\": \"checked\", \"ttu\": {\"kind\": \"len\"}}, \"ops\": [[\"set\", \"home\", \"<html>home</html>\"], [\"set\", \"about\", \"about us\"], [\"repr\"], [\"set\", \"docs\", \"documentation index page\"], [\"repr\"], [\"currsize\"], [\"set\", \"about\", \"about us, longer now\"], [\"repr\"], [\"set\", \"huge\", \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [\"repr\"], [\"set\", \"empty\", \"\"], [\"repr\"], [\"set\", \"home\", \"h\"], [\"set\", \"blog\", \"a blog post body\"], [\"repr\"], [\"set\", \"bad\", \"!bad\"], [\"repr\"], [\"set\", \"edge\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"repr\"], [\"pop\", \"edge\"], [\"currsize\"], [\"update\", [[\"a\", \"aa\"], [\"b\", \"bbb\"], [\"c\", \"c\"]]], [\"repr\"], [\"del\", \"a\"], [\"del\", \"a\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 4}, \"ops\": [[\"set\", \"a\", 1], [\"set\", \"b\", 2], [\"set\", \"c\", 3], [\"set\", \"d\", 4], [\"getitem\", \"a\"], [\"set\", \"e\", 5], [\"repr\"], [\"get\", \"c\"], [\"set\", \"f\", 6], [\"repr\"], [\"in\", \"d\"], [\"set\", \"g\", 7], [\"repr\"], [\"values\"], [\"set\", \"h\", 8], [\"repr\"], [\"items\"], [\"setdefault\", \"c\", 0], [\"set\", \"i\", 9], [\"repr\"], [\"pop\", \"nope\", \"x\"], [\"popitem\"], [\"popitem\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LFUCache\", \"maxsize\": 5}, \"ops\": [[\"set\", \"alpha\", 0], [\"set\", \"beta\", 1], [\"set\", \"gamma\", 2], [\"set\", \"delta\", 3], [\"set\", \"eps\", 4], [\"getitem\", \"alpha\"], [\"getitem\", \"alpha\"], [\"getitem\", \"beta\"], [\"get\", \"gamma\"], [\"set\", \"zeta\", 6], [\"repr\"], [\"set\", \"eta\", 7], [\"repr\"], [\"set\", \"theta\", 8], [\"repr\"], [\"getitem\", \"zeta\"], [\"set\", \"beta\", 22], [\"getitem\", \"beta\"], [\"set\", \"iota\", 9], [\"repr\"], [\"popitem\"], [\"popitem\"], [\"popitem\"], [\"repr\"], [\"values\"], [\"values\"], [\"set\", \"kappa\", 10], [\"set\", \"lambda\", 11], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LFUCache\", \"maxsize\": 3}, \"ops\": [[\"set\", 1, \"one\"], [\"set\", 2, \"two\"], [\"set\", 3, \"three\"], [\"set\", 4, \"four\"], [\"repr\"], [\"set\", 9, \"nine\"], [\"set\", 17, \"seventeen\"], [\"repr\"], [\"getitem\", 9], [\"set\", -1, \"minus\"], [\"set\", -2, \"minus two\"], [\"repr\"], [\"set\", [\"k\", 1], \"t1\"], [\"set\", [\"k\", 2], \"t2\"], [\"repr\"], [\"set\", \"\", \"empty\"], [\"set\", [\"k\", 3], \"t3\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TTLCache\", \"maxsize\": 3, \"ttl\": 10}, \"ops\": [[\"set\", \"s1\", \"alice\"], [\"tick\", 3], [\"set\", \"s2\", \"bob\"], [\"tick\", 3], [\"set\", \"s3\", \"carol\"], [\"repr\"], [\"tick\", 4], [\"in\", \"s1\"], [\"repr\"], [\"len\"], [\"getitem\", \"s1\"], [\"get\", \"s2\"], [\"tick\", 3], [\"getitem\", \"s2\"], [\"del\", \"s2\"], [\"set\", \"s4\", \"dave\"], [\"set\", \"s5\", \"erin\"], [\"set\", \"s6\", \"frank\"], [\"repr\"], [\"getitem\", \"s4\"], [\"set\", \"s7\", \"grace\"], [\"repr\"], [\"tick\", 5], [\"list\"], [\"items\"], [\"expire\"], [\"repr\"], [\"tick\", 20], [\"currsize\"], [\"repr\"], [\"set\", \"s8\", \"heidi\"], [\"tick\", 2], [\"set\", \"s8\", \"heidi2\"], [\"tick\", 9], [\"get\", \"s8\"], [\"expire\", 100], [\"popitem\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TTLCache\", \"maxsize\": 3, \"ttl\": 10}, \"ops\": [[\"set\", \"s1\", \"alice\"], [\"tick\", 3], [\"set\", \"s2\", \"bob\"], [\"tick\", 3], [\"set\", \"s3\", \"carol\"], [\"repr\"], [\"tick\", 4], [\"in\", \"s1\"], [\"repr\"], [\"len\"], [\"getitem\", \"s1\"], [\"get\", \"s2\"], [\"tick\", 3], [\"getitem\", \"s2\"], [\"del\", \"s2\"], [\"set\", \"s4\", \"dave\"], [\"set\", \"s5\", \"erin\"], [\"set\", \"s6\", \"frank\"], [\"repr\"], [\"getitem\", \"s4\"], [\"set\", \"s7\", \"grace\"], [\"repr\"], [\"tick\", 5], [\"list\"], [\"items\"], [\"expire\"], [\"repr\"], [\"tick\", 20], [\"currsize\"], [\"repr\"], [\"set\", \"s8\", \"heidi\"], [\"tick\", 2], [\"set\", \"s8\", \"heidi2\"], [\"tick\", 9], [\"get\", \"s8\"], [\"expire\", 100], [\"popitem\"]], \"start\": 1000, \"step\": 1}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TTLCache\", \"maxsize\": 2, \"ttl\": 0}, \"ops\": [[\"set\", \"a\", 1], [\"repr\"], [\"getitem\", \"a\"], [\"del\", \"a\"], [\"len\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TLRUCache\", \"maxsize\": 4, \"ttu\": {\"kind\": \"table\", \"table\": {\"short\": 2, \"long\": 50, \"never\": -1, \"now\": 0}, \"default\": 10}}, \"ops\": [[\"set\", \"short\", 1], [\"set\", \"long\", 2], [\"set\", \"mid\", 3], [\"repr\"], [\"list\"], [\"tick\", 2], [\"repr\"], [\"set\", \"never\", 4], [\"repr\"], [\"set\", \"now\", 5], [\"repr\"], [\"set\", \"long\", 6], [\"set\", \"long\", 7], [\"set\", \"long\", 8], [\"list\"], [\"repr\"], [\"set\", \"a\", 9], [\"set\", \"b\", 10], [\"repr\"], [\"list\"], [\"getitem\", \"long\"], [\"tick\", 9], [\"list\"], [\"items\"], [\"set\", \"long\", \"x\"], [\"set\", \"never\", 1], [\"repr\"], [\"del\", \"long\"], [\"popitem\"], [\"tick\", 60], [\"expire\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TLRUCache\", \"maxsize\": 4, \"ttu\": {\"kind\": \"table\", \"table\": {\"short\": 2, \"long\": 50, \"never\": -1, \"now\": 0}, \"default\": 10}}, \"ops\": [[\"set\", \"short\", 1], [\"set\", \"long\", 2], [\"set\", \"mid\", 3], [\"repr\"], [\"list\"], [\"tick\", 2], [\"repr\"], [\"set\", \"never\", 4], [\"repr\"], [\"set\", \"now\", 5], [\"repr\"], [\"set\", \"long\", 6], [\"set\", \"long\", 7], [\"set\", \"long\", 8], [\"list\"], [\"repr\"], [\"set\", \"a\", 9], [\"set\", \"b\", 10], [\"repr\"], [\"list\"], [\"getitem\", \"long\"], [\"tick\", 9], [\"list\"], [\"items\"], [\"set\", \"long\", \"x\"], [\"set\", \"never\", 1], [\"repr\"], [\"del\", \"long\"], [\"popitem\"], [\"tick\", 60], [\"expire\"], [\"repr\"]], \"start\": 5, \"step\": 1}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"Cache\", \"maxsize\": 4}, \"ops\": [[\"del\", \"k1\"], [\"set\", 4, 91], [\"set\", \"k2\", 69], [\"set\", \"k4\", \"vv\"], [\"set\", \"k4\", 10], [\"set\", \"k5\", 70], [\"clear\"], [\"set\", \"k2\", \"vvvvvv\"], [\"del\", [\"t\", 1]], [\"getitem\", \"k5\"], [\"clear\"], [\"getitem\", \"k4\"], [\"get\", \"k5\"], [\"set\", \"k1\", \"vvv\"], [\"getitem\", 3], [\"set\", \"k3\", 44], [\"set\", [\"t\", 1], [0, \"x\"]], [\"del\", \"k3\"], [\"getitem\", \"k4\"], [\"set\", \"k0\", \"vvv\"], [\"values\"], [\"get\", \"k4\"], [\"get\", \"k1\"], [\"repr\"], [\"set\", \"k5\", 12], [\"set\", \"k2\", 90], [\"values\"], [\"set\", \"k4\", \"vvvvvvv\"], [\"set\", \"k0\", 71], [\"pop\", \"k5\", null], [\"repr\"], [\"set\", 4, 63], [\"set\", \"k3\", \"vvvvv\"], [\"set\", \"k3\", 45], [\"set\", \"k4\", \"vvvvv\"], [\"set\", \"k3\", [4, \"x\"]], [\"values\"], [\"repr\"], [\"set\", 4, \"vvvvvvvv\"], [\"set\", \"k2\", \"vvvvvv\"], [\"set\", \"k0\", 9], [\"del\", \"k1\"], [\"repr\"], [\"set\", 3, \"vvv\"], [\"set\", 3, \"vvvvvv\"], [\"values\"], [\"repr\"], [\"repr\"], [\"getitem\", \"k5\"], [\"set\", \"k2\", 89], [\"get\", \"k5\"], [\"del\", \"k1\"], [\"set\", \"k0\", \"vvvv\"], [\"set\", \"k5\", 28], [\"get\", \"k3\"], [\"repr\"], [\"pop\", \"k0\", null], [\"getitem\", [\"t\", 1]], [\"set\", \"k1\", 4], [\"popitem\"], [\"get\", \"k2\"], [\"getitem\", \"k6\"], [\"getitem\", \"k0\"], [\"set\", \"k6\", \"vvvv\"], [\"set\", [\"t\", 1], 34], [\"getitem\", 4], [\"repr\"], [\"getitem\", \"k4\"], [\"getitem\", [\"t\", 1]], [\"setdefault\", \"k3\", 72], [\"set\", \"k2\", \"vvvvvv\"], [\"repr\"], [\"in\", \"k5\"], [\"getitem\", [\"t\", 1]], [\"del\", \"k6\"], [\"get\", \"k3\"], [\"repr\"], [\"set\", \"k4\", 90], [\"set\", \"k5\", 45], [\"set\", \"k3\", \"vvvvv\"], [\"clear\"], [\"getitem\", \"k3\"], [\"repr\"], [\"set\", 3, 50], [\"set\", 4, \"vvvvv\"], [\"set\", \"k1\", 94], [\"getitem\", 4], [\"del\", \"k6\"], [\"get\", \"k0\"], [\"pop\", \"k4\", null], [\"setdefault\", \"k6\", [0, \"x\"]], [\"set\", \"k4\", 84], [\"set\", \"k1\", \"vvvvv\"], [\"repr\"], [\"clear\"], [\"set\", \"k6\", 8], [\"values\"], [\"set\", 3, \"vvvv\"], [\"del\", \"k6\"], [\"set\", 4, 73], [\"getitem\", \"k4\"], [\"in\", \"k1\"], [\"set\", \"k1\", 9], [\"get\", \"k6\"], [\"clear\"], [\"set\", 3, \"vvvv\"], [\"in\", \"k1\"], [\"set\", 4, 55], [\"set\", \"k3\", \"vvvv\"], [\"pop\", \"k4\", null], [\"set\", 4, \"vvvvvvvv\"], [\"repr\"], [\"set\", \"k3\", 4], [\"set\", 3, [0, \"x\"]], [\"set\", \"k3\", 54], [\"getitem\", \"k5\"], [\"set\", 3, \"vvvvvvv\"], [\"in\", \"k6\"], [\"del\", [\"t\", 1]], [\"getitem\", \"k0\"], [\"set\", \"k1\", 21], [\"repr\"], [\"popitem\"], [\"set\", \"k5\", 37], [\"pop\", 4, null], [\"set\", \"k2\", 48], [\"set\", \"k6\", 52], [\"set\", [\"t\", 1], 76], [\"getitem\", 4], [\"repr\"], [\"getitem\", 3], [\"set\", 3, \"v\"], [\"set\", \"k0\", [4, \"x\"]], [\"del\", \"k4\"], [\"set\", \"k4\", 95], [\"getitem\", \"k4\"], [\"pop\", \"k2\", null], [\"getitem\", 3], [\"repr\"], [\"set\", \"k3\", [4, \"x\"]], [\"pop\", \"k0\", null], [\"set\", \"k2\", [1, \"x\"]], [\"pop\", \"k2\", null], [\"repr\"], [\"repr\"], [\"set\", \"k0\", \"vvvv\"], [\"repr\"], [\"set\", 4, \"vvvvvvvv\"], [\"set\", \"k4\", 5], [\"in\", \"k4\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"Cache\", \"maxsize\": 12, \"getsizeof\": \"len\"}, \"ops\": [[\"repr\"], [\"clear\"], [\"set\", \"k3\", \"vvvvvvv\"], [\"del\", \"k1\"], [\"setdefault\", \"k2\", \"vvv\"], [\"set\", \"k4\", \"vvvvv\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"in\", \"k2\"], [\"in\", [\"t\", 1]], [\"repr\"], [\"repr\"], [\"values\"], [\"getitem\", \"k3\"], [\"repr\"], [\"set\", \"k4\", \"vvvvvv\"], [\"get\", \"k5\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"pop\", 4, null], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"set\", \"k3\", \"v\"], [\"set\", [\"t\", 1], \"vv\"], [\"set\", 4, \"vvvv\"], [\"set\", \"k2\", \"vvvv\"], [\"setdefault\", \"k6\", \"vv\"], [\"repr\"], [\"set\", \"k2\", \"vvvv\"], [\"get\", \"k4\"], [\"set\", \"k2\", \"vvvvvvvv\"], [\"del\", \"k1\"], [\"set\", \"k1\", \"vvv\"], [\"getitem\", \"k2\"], [\"get\", \"k5\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"setdefault\", \"k4\", \"vvvvvvv\"], [\"set\", 3, \"vvv\"], [\"set\", [\"t\", 1], \"vv\"], [\"getitem\", 4], [\"get\", [\"t\", 1]], [\"repr\"], [\"getitem\", \"k0\"], [\"set\", \"k6\", \"vvvvvvv\"], [\"repr\"], [\"set\", 4, \"vvvvvvvv\"], [\"in\", \"k2\"], [\"getitem\", 4], [\"set\", \"k5\", 7], [\"set\", \"k1\", \"vvvvvvv\"], [\"repr\"], [\"set\", 3, [1, \"x\"]], [\"set\", \"k3\", \"vvvvv\"], [\"set\", \"k1\", \"vv\"], [\"set\", \"k3\", \"v\"], [\"set\", 3, \"vvvvv\"], [\"in\", \"k0\"], [\"set\", \"k1\", \"vv\"], [\"set\", \"k3\", \"v\"], [\"get\", \"k6\"], [\"pop\", 3, null], [\"get\", 3], [\"set\", \"k0\", \"vv\"], [\"set\", [\"t\", 1], \"v\"], [\"repr\"], [\"pop\", \"k1\", null], [\"values\"], [\"set\", \"k0\", [2, \"x\"]], [\"pop\", \"k5\", null], [\"repr\"], [\"repr\"], [\"set\", \"k0\", 76], [\"get\", 4], [\"getitem\", \"k2\"], [\"get\", 4], [\"set\", \"k3\", \"v\"], [\"repr\"], [\"getitem\", \"k1\"], [\"set\", 3, \"vvvvvvvv\"], [\"get\", \"k6\"], [\"repr\"], [\"setdefault\", \"k2\", [3, \"x\"]], [\"popitem\"], [\"repr\"], [\"in\", 4], [\"get\", \"k5\"], [\"get\", \"k4\"], [\"setdefault\", \"k0\", \"vvvvvvv\"], [\"set\", 3, \"vvvv\"], [\"in\", \"k3\"], [\"get\", 4], [\"del\", \"k0\"], [\"repr\"], [\"set\", 3, \"v\"], [\"set\", \"k3\", \"vv\"], [\"set\", \"k2\", \"vvv\"], [\"getitem\", \"k1\"], [\"getitem\", \"k0\"], [\"getitem\", \"k6\"], [\"repr\"], [\"set\", \"k5\", \"vvvvvv\"], [\"get\", \"k5\"], [\"pop\", 3, null], [\"repr\"], [\"get\", \"k3\"], [\"get\", \"k3\"], [\"set\", \"k0\", \"vvvv\"], [\"set\", 4, \"vvv\"], [\"set\", \"k2\", \"vvvv\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"repr\"], [\"getitem\", \"k3\"], [\"set\", \"k1\", \"vvvvvvvv\"], [\"set\", \"k2\", \"vvv\"], [\"setdefault\", 3, 16], [\"getitem\", \"k0\"], [\"repr\"], [\"set\", 3, \"vvvvvvvv\"], [\"get\", \"k6\"], [\"values\"], [\"get\", 3], [\"get\", \"k4\"], [\"set\", \"k6\", \"vvvv\"], [\"set\", \"k2\", \"vv\"], [\"setdefault\", [\"t\", 1], \"vvvvv\"], [\"set\", \"k3\", \"vv\"], [\"popitem\"], [\"set\", \"k3\", \"vvv\"], [\"set\", \"k1\", \"vv\"], [\"in\", 3], [\"set\", 3, \"vvvvv\"], [\"in\", 3], [\"get\", 4], [\"set\", 3, 43], [\"values\"], [\"set\", \"k3\", \"vvv\"], [\"set\", \"k4\", \"vv\"], [\"repr\"], [\"set\", \"k2\", \"vv\"], [\"set\", \"k1\", \"vvvvvvv\"], [\"getitem\", \"k3\"], [\"set\", \"k0\", \"vvvv\"], [\"values\"], [\"set\", \"k3\", \"vvvv\"], [\"repr\"], [\"get\", \"k5\"], [\"in\", \"k2\"], [\"get\", \"k2\"], [\"get\", 3], [\"get\", 3], [\"set\", [\"t\", 1], \"v\"], [\"set\", \"k2\", \"vvv\"], [\"getitem\", 4], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"FIFOCache\", \"maxsize\": 4}, \"ops\": [[\"set\", 3, \"v\"], [\"pop\", \"k1\", null], [\"repr\"], [\"getitem\", \"k0\"], [\"getitem\", \"k0\"], [\"set\", \"k0\", \"vvv\"], [\"repr\"], [\"set\", [\"t\", 1], 25], [\"set\", \"k4\", 11], [\"getitem\", \"k2\"], [\"del\", [\"t\", 1]], [\"getitem\", \"k6\"], [\"popitem\"], [\"repr\"], [\"del\", \"k2\"], [\"repr\"], [\"popitem\"], [\"repr\"], [\"set\", [\"t\", 1], 90], [\"repr\"], [\"values\"], [\"set\", \"k0\", \"vvvvv\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"del\", 3], [\"set\", \"k2\", \"vvvvvv\"], [\"set\", \"k4\", \"vvvvvvvv\"], [\"set\", \"k0\", \"vvvvv\"], [\"set\", \"k1\", \"v\"], [\"set\", [\"t\", 1], 63], [\"values\"], [\"getitem\", \"k0\"], [\"set\", [\"t\", 1], 71], [\"get\", \"k4\"], [\"repr\"], [\"in\", 4], [\"set\", \"k0\", [1, \"x\"]], [\"getitem\", \"k3\"], [\"getitem\", [\"t\", 1]], [\"getitem\", \"k5\"], [\"set\", 4, 31], [\"values\"], [\"setdefault\", 3, 14], [\"popitem\"], [\"get\", \"k2\"], [\"getitem\", \"k4\"], [\"setdefault\", \"k4\", \"vv\"], [\"set\", \"k6\", \"vvvvvvv\"], [\"repr\"], [\"repr\"], [\"set\", \"k1\", 62], [\"getitem\", \"k6\"], [\"set\", \"k6\", 12], [\"values\"], [\"repr\"], [\"repr\"], [\"pop\", \"k2\", null], [\"setdefault\", \"k1\", [3, \"x\"]], [\"repr\"], [\"get\", \"k2\"], [\"getitem\", 4], [\"getitem\", [\"t\", 1]], [\"get\", \"k5\"], [\"set\", 3, 58], [\"get\", \"k5\"], [\"del\", 4], [\"set\", \"k0\", \"v\"], [\"set\", \"k2\", 62], [\"repr\"], [\"del\", 4], [\"get\", [\"t\", 1]], [\"set\", \"k0\", \"vvvv\"], [\"get\", \"k0\"], [\"set\", \"k0\", 60], [\"set\", \"k4\", 85], [\"get\", 4], [\"clear\"], [\"set\", 4, 6], [\"set\", \"k3\", 38], [\"del\", 3], [\"popitem\"], [\"setdefault\", \"k3\", \"vvvvvv\"], [\"getitem\", [\"t\", 1]], [\"set\", \"k5\", 83], [\"set\", \"k6\", \"vvv\"], [\"set\", \"k5\", \"vvvvvv\"], [\"set\", \"k3\", \"v\"], [\"in\", [\"t\", 1]], [\"in\", \"k5\"], [\"del\", \"k3\"], [\"getitem\", [\"t\", 1]], [\"repr\"], [\"getitem\", \"k1\"], [\"del\", 4], [\"repr\"], [\"set\", \"k0\", \"vvvvvv\"], [\"values\"], [\"set\", 4, \"vvvvvvvv\"], [\"set\", \"k1\", 57], [\"get\", \"k1\"], [\"pop\", \"k1\", null], [\"set\", \"k1\", 12], [\"del\", \"k3\"], [\"repr\"], [\"set\", 4, [4, \"x\"]], [\"set\", \"k1\", [3, \"x\"]], [\"in\", \"k4\"], [\"pop\", \"k0\", null], [\"get\", 4], [\"set\", \"k4\", 54], [\"set\", 3, \"vv\"], [\"repr\"], [\"getitem\", \"k0\"], [\"set\", 3, \"vv\"], [\"getitem\", \"k1\"], [\"pop\", [\"t\", 1], null], [\"pop\", \"k5\", null], [\"set\", \"k5\", \"vvvvvvv\"], [\"get\", \"k2\"], [\"set\", [\"t\", 1], 5], [\"repr\"], [\"repr\"], [\"get\", \"k0\"], [\"setdefault\", 4, \"vvvvvvvv\"], [\"getitem\", \"k2\"], [\"in\", \"k5\"], [\"set\", 3, \"vv\"], [\"del\", \"k6\"], [\"set\", \"k6\", \"vvvvvv\"], [\"getitem\", \"k1\"], [\"set\", \"k0\", [2, \"x\"]], [\"set\", \"k6\", 38], [\"set\", \"k5\", 9], [\"repr\"], [\"pop\", \"k4\", null], [\"repr\"], [\"get\", \"k4\"], [\"getitem\", \"k5\"], [\"values\"], [\"getitem\", 4], [\"repr\"], [\"repr\"], [\"getitem\", \"k1\"], [\"get\", \"k5\"], [\"set\", \"k1\", \"vvvvv\"], [\"set\", \"k1\", \"vvvvvvv\"], [\"set\", 3, 78], [\"set\", \"k4\", [3, \"x\"]], [\"repr\"], [\"getitem\", 4], [\"set\", \"k5\", \"v\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"FIFOCache\", \"maxsize\": 12, \"getsizeof\": \"len\"}, \"ops\": [[\"pop\", \"k0\", null], [\"setdefault\", \"k0\", \"vvvvvv\"], [\"set\", \"k3\", \"vvvv\"], [\"repr\"], [\"in\", \"k1\"], [\"set\", \"k0\", \"vv\"], [\"set\", \"k6\", \"vvvvv\"], [\"del\", \"k6\"], [\"setdefault\", \"k3\", [1, \"x\"]], [\"set\", 3, 83], [\"getitem\", [\"t\", 1]], [\"pop\", \"k5\", null], [\"get\", \"k4\"], [\"set\", [\"t\", 1], \"v\"], [\"getitem\", \"k1\"], [\"in\", \"k2\"], [\"repr\"], [\"set\", 4, \"vvvvvvvv\"], [\"getitem\", \"k4\"], [\"set\", \"k6\", \"vvvvvvvv\"], [\"popitem\"], [\"repr\"], [\"set\", \"k5\", \"v\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"pop\", 3, null], [\"repr\"], [\"set\", \"k1\", \"vvv\"], [\"getitem\", \"k4\"], [\"set\", \"k0\", \"vvv\"], [\"repr\"], [\"repr\"], [\"set\", \"k0\", \"vvvvvv\"], [\"get\", \"k1\"], [\"popitem\"], [\"values\"], [\"pop\", \"k3\", null], [\"repr\"], [\"set\", \"k6\", \"vvvv\"], [\"getitem\", 3], [\"setdefault\", 3, \"vvvvv\"], [\"set\", \"k3\", \"vvvv\"], [\"set\", \"k2\", \"v\"], [\"set\", \"k5\", \"vvvvvv\"], [\"set\", \"k5\", \"vv\"], [\"in\", [\"t\", 1]], [\"pop\", \"k6\", null], [\"set\", \"k3\", \"vvvv\"], [\"set\", \"k0\", \"vvvvv\"], [\"values\"], [\"set\", \"k5\", [4, \"x\"]], [\"get\", \"k2\"], [\"get\", 3], [\"getitem\", 4], [\"del\", \"k6\"], [\"set\", 3, \"v\"], [\"del\", 4], [\"getitem\", \"k6\"], [\"set\", \"k6\", \"vvvvvv\"], [\"del\", \"k3\"], [\"repr\"], [\"repr\"], [\"pop\", 4, null], [\"set\", \"k5\", \"vvvv\"], [\"set\", \"k5\", \"vvvv\"], [\"getitem\", \"k3\"], [\"set\", 4, \"vvvvvvv\"], [\"set\", \"k4\", \"vvvv\"], [\"set\", \"k6\", \"vvvvvvv\"], [\"pop\", \"k0\", null], [\"getitem\", \"k2\"], [\"in\", 4], [\"repr\"], [\"getitem\", \"k1\"], [\"repr\"], [\"set\", \"k5\", \"vv\"], [\"get\", \"k1\"], [\"repr\"], [\"getitem\", \"k4\"], [\"getitem\", \"k4\"], [\"getitem\", \"k0\"], [\"in\", \"k4\"], [\"repr\"], [\"set\", \"k3\", \"v\"], [\"getitem\", [\"t\", 1]], [\"popitem\"], [\"popitem\"], [\"getitem\", \"k1\"], [\"set\", \"k3\", \"v\"], [\"getitem\", \"k6\"], [\"pop\", 3, null], [\"values\"], [\"set\", \"k3\", \"vvvvvv\"], [\"in\", \"k5\"], [\"set\", \"k4\", [1, \"x\"]], [\"set\", \"k5\", \"vvvvvv\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"set\", 4, \"vvvvvv\"], [\"repr\"], [\"pop\", 3, null], [\"getitem\", 3], [\"get\", \"k5\"], [\"set\", \"k5\", \"vv\"], [\"set\", [\"t\", 1], \"vv\"], [\"clear\"], [\"del\", \"k4\"], [\"getitem\", 3], [\"pop\", \"k3\", null], [\"repr\"], [\"values\"], [\"repr\"], [\"getitem\", \"k6\"], [\"set\", \"k2\", \"vvvvvvv\"], [\"set\", \"k4\", \"vvvvvv\"], [\"get\", 3], [\"set\", \"k1\", \"vvvvvvv\"], [\"getitem\", \"k6\"], [\"set\", \"k3\", \"vvvvv\"], [\"set\", 4, \"vvv\"], [\"get\", \"k3\"], [\"values\"], [\"pop\", \"k5\", null], [\"popitem\"], [\"setdefault\", 4, \"v\"], [\"set\", \"k2\", \"vv\"], [\"get\", \"k3\"], [\"getitem\", \"k6\"], [\"set\", \"k6\", \"vvvvvvv\"], [\"set\", 3, 49], [\"getitem\", [\"t\", 1]], [\"in\", \"k3\"], [\"getitem\", \"k5\"], [\"getitem\", \"k1\"], [\"pop\", \"k2\", null], [\"getitem\", 4], [\"repr\"], [\"setdefault\", \"k0\", \"vvvvv\"], [\"set\", [\"t\", 1], \"vvv\"], [\"get\", \"k3\"], [\"del\", \"k0\"], [\"values\"], [\"set\", 3, [3, \"x\"]], [\"pop\", 3, null], [\"set\", \"k2\", \"vv\"], [\"getitem\", \"k3\"], [\"repr\"], [\"set\", 4, \"vvvvvv\"], [\"getitem\", \"k3\"], [\"set\", \"k0\", \"vvv\"], [\"set\", \"k2\", \"vv\"], [\"getitem\", \"k5\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 4}, \"ops\": [[\"repr\"], [\"set\", 4, 53], [\"getitem\", \"k2\"], [\"repr\"], [\"set\", \"k4\", 95], [\"popitem\"], [\"set\", \"k0\", \"vvvvvvvv\"], [\"repr\"], [\"getitem\", 3], [\"repr\"], [\"values\"], [\"setdefault\", \"k0\", \"v\"], [\"popitem\"], [\"getitem\", 4], [\"set\", [\"t\", 1], \"vv\"], [\"values\"], [\"values\"], [\"set\", \"k1\", [4, \"x\"]], [\"getitem\", [\"t\", 1]], [\"getitem\", \"k2\"], [\"repr\"], [\"getitem\", \"k3\"], [\"repr\"], [\"getitem\", [\"t\", 1]], [\"getitem\", [\"t\", 1]], [\"set\", 4, 51], [\"del\", 3], [\"repr\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"set\", \"k3\", 53], [\"getitem\", 4], [\"repr\"], [\"setdefault\", \"k5\", 37], [\"pop\", \"k3\", null], [\"set\", \"k2\", \"vvv\"], [\"repr\"], [\"set\", 3, 71], [\"set\", \"k5\", \"vvv\"], [\"set\", \"k5\", 53], [\"setdefault\", 4, \"v\"], [\"set\", \"k3\", \"vvv\"], [\"set\", \"k0\", \"vvvvvvv\"], [\"set\", \"k6\", 48], [\"getitem\", \"k1\"], [\"set\", 3, 12], [\"pop\", \"k1\", null], [\"popitem\"], [\"repr\"], [\"getitem\", \"k5\"], [\"getitem\", \"k4\"], [\"get\", \"k1\"], [\"set\", \"k0\", \"v\"], [\"getitem\", 3], [\"in\", \"k5\"], [\"del\", \"k4\"], [\"del\", \"k4\"], [\"values\"], [\"get\", \"k2\"], [\"set\", [\"t\", 1], [0, \"x\"]], [\"repr\"], [\"set\", 3, 43], [\"repr\"], [\"set\", \"k4\", \"vvvvvvv\"], [\"repr\"], [\"set\", [\"t\", 1], 85], [\"set\", \"k5\", \"vvvvvv\"], [\"set\", 3, \"vvvvv\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"pop\", \"k0\", null], [\"values\"], [\"in\", 4], [\"setdefault\", 4, \"v\"], [\"getitem\", \"k3\"], [\"get\", \"k5\"], [\"getitem\", 4], [\"getitem\", \"k6\"], [\"getitem\", \"k6\"], [\"set\", \"k0\", \"vv\"], [\"pop\", \"k2\", null], [\"set\", \"k4\", 14], [\"set\", \"k1\", 74], [\"in\", 3], [\"set\", \"k5\", 15], [\"getitem\", [\"t\", 1]], [\"repr\"], [\"getitem\", \"k4\"], [\"get\", 3], [\"pop\", \"k4\", null], [\"repr\"], [\"clear\"], [\"repr\"], [\"set\", \"k4\", 26], [\"repr\"], [\"repr\"], [\"repr\"], [\"repr\"], [\"values\"], [\"set\", 3, \"v\"], [\"setdefault\", [\"t\", 1], \"vvv\"], [\"set\", \"k3\", 35], [\"set\", \"k0\", 63], [\"repr\"], [\"pop\", \"k6\", null], [\"getitem\", \"k4\"], [\"set\", \"k6\", \"vvv\"], [\"setdefault\", \"k4\", 86], [\"set\", 3, \"vvv\"], [\"set\", \"k1\", \"vvvvvv\"], [\"values\"], [\"del\", \"k5\"], [\"pop\", \"k1\", null], [\"set\", \"k6\", 99], [\"values\"], [\"values\"], [\"pop\", 4, null], [\"set\", \"k2\", 70], [\"set\", 4, 2], [\"repr\"], [\"repr\"], [\"set\", \"k0\", \"vvvvv\"], [\"get\", \"k2\"], [\"repr\"], [\"set\", \"k6\", 34], [\"set\", \"k4\", 78], [\"set\", \"k0\", \"v\"], [\"set\", 4, \"vvv\"], [\"pop\", [\"t\", 1], null], [\"set\", \"k0\", 88], [\"pop\", \"k2\", null], [\"getitem\", [\"t\", 1]], [\"repr\"], [\"set\", \"k1\", \"vv\"], [\"set\", \"k5\", [3, \"x\"]], [\"set\", \"k0\", 81], [\"set\", [\"t\", 1], \"vvvv\"], [\"del\", \"k1\"], [\"repr\"], [\"getitem\", [\"t\", 1]], [\"getitem\", 3], [\"getitem\", \"k6\"], [\"repr\"], [\"set\", \"k3\", 20], [\"pop\", [\"t\", 1], null], [\"in\", \"k0\"], [\"set\", [\"t\", 1], 66], [\"getitem\", \"k4\"], [\"getitem\", \"k3\"], [\"set\", \"k4\", 73], [\"repr\"], [\"set\", 4, \"vvvvvv\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 12, \"getsizeof\": \"len\"}, \"ops\": [[\"getitem\", \"k0\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"get\", [\"t\", 1]], [\"set\", \"k3\", \"vvvv\"], [\"values\"], [\"set\", 3, \"vvvv\"], [\"set\", \"k4\", [3, \"x\"]], [\"get\", [\"t\", 1]], [\"setdefault\", \"k1\", [1, \"x\"]], [\"get\", \"k0\"], [\"set\", \"k4\", \"vvv\"], [\"set\", 3, \"v\"], [\"set\", 3, \"vvvvv\"], [\"getitem\", 3], [\"set\", \"k1\", \"vvvvv\"], [\"popitem\"], [\"setdefault\", \"k4\", 40], [\"setdefault\", 3, \"vvvv\"], [\"values\"], [\"del\", \"k5\"], [\"popitem\"], [\"setdefault\", \"k1\", [2, \"x\"]], [\"set\", \"k5\", \"vvvvvvv\"], [\"values\"], [\"values\"], [\"values\"], [\"set\", \"k3\", \"vvv\"], [\"getitem\", \"k3\"], [\"repr\"], [\"getitem\", 4], [\"set\", \"k1\", \"v\"], [\"get\", 4], [\"values\"], [\"setdefault\", \"k6\", \"vvvvvvv\"], [\"values\"], [\"set\", \"k0\", \"vvvvvv\"], [\"repr\"], [\"set\", \"k1\", \"vvvv\"], [\"setdefault\", 3, [0, \"x\"]], [\"pop\", \"k1\", null], [\"set\", \"k6\", \"vvvvvvvv\"], [\"values\"], [\"repr\"], [\"setdefault\", 3, \"vv\"], [\"clear\"], [\"set\", 4, \"vv\"], [\"set\", \"k6\", \"v\"], [\"repr\"], [\"set\", 3, \"vvvvv\"], [\"popitem\"], [\"pop\", \"k3\", null], [\"get\", \"k6\"], [\"in\", \"k4\"], [\"get\", 3], [\"set\", 3, \"vvvvvvvv\"], [\"set\", \"k3\", \"vvvvvvv\"], [\"set\", \"k3\", \"v\"], [\"popitem\"], [\"pop\", \"k0\", null], [\"repr\"], [\"getitem\", \"k5\"], [\"getitem\", \"k4\"], [\"getitem\", \"k1\"], [\"set\", \"k1\", \"vvvvvv\"], [\"set\", \"k6\", \"v\"], [\"set\", 3, \"vvvvvvv\"], [\"getitem\", \"k6\"], [\"pop\", \"k4\", null], [\"values\"], [\"clear\"], [\"set\", \"k1\", \"vvvvv\"], [\"set\", \"k3\", \"v\"], [\"in\", \"k3\"], [\"get\", [\"t\", 1]], [\"set\", \"k5\", \"vvvv\"], [\"get\", 4], [\"set\", \"k0\", \"vvv\"], [\"set\", 3, \"vvvv\"], [\"getitem\", \"k3\"], [\"getitem\", \"k3\"], [\"repr\"], [\"set\", \"k6\", \"vvv\"], [\"set\", \"k2\", \"vvvvvv\"], [\"setdefault\", \"k3\", \"vvv\"], [\"set\", \"k4\", \"vvvvvvv\"], [\"values\"], [\"getitem\", \"k6\"], [\"getitem\", \"k6\"], [\"set\", \"k4\", \"vvvvvvv\"], [\"getitem\", 3], [\"set\", \"k2\", \"vv\"], [\"set\", \"k4\", \"vvvv\"], [\"setdefault\", \"k1\", \"vvv\"], [\"set\", \"k3\", \"vvvvvv\"], [\"set\", \"k2\", \"vvvvvvvv\"], [\"getitem\", \"k6\"], [\"values\"], [\"setdefault\", 3, \"vvv\"], [\"del\", \"k5\"], [\"getitem\", \"k4\"], [\"set\", \"k3\", \"vv\"], [\"getitem\", \"k6\"], [\"pop\", 3, null], [\"set\", \"k0\", \"vvvvv\"], [\"get\", 4], [\"getitem\", \"k6\"], [\"getitem\", \"k1\"], [\"set\", \"k6\", \"vvvv\"], [\"repr\"], [\"getitem\", 4], [\"del\", \"k2\"], [\"pop\", \"k6\", null], [\"pop\", [\"t\", 1], null], [\"getitem\", \"k1\"], [\"set\", \"k3\", \"vvvvvvvv\"], [\"set\", \"k1\", [3, \"x\"]], [\"getitem\", \"k0\"], [\"popitem\"], [\"in\", \"k6\"], [\"set\", \"k0\", \"v\"], [\"set\", [\"t\", 1], 37], [\"set\", \"k3\", [2, \"x\"]], [\"repr\"], [\"values\"], [\"set\", \"k6\", \"vvvvv\"], [\"get\", \"k4\"], [\"repr\"], [\"getitem\", \"k4\"], [\"del\", [\"t\", 1]], [\"set\", \"k1\", \"v\"], [\"getitem\", 4], [\"set\", \"k0\", \"vvvvvvv\"], [\"values\"], [\"set\", [\"t\", 1], \"vvvvvv\"], [\"repr\"], [\"repr\"], [\"set\", \"k2\", \"vv\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"in\", \"k4\"], [\"set\", \"k0\", [0, \"x\"]], [\"repr\"], [\"del\", \"k4\"], [\"set\", \"k1\", \"vvvvv\"], [\"clear\"], [\"del\", \"k6\"], [\"getitem\", \"k2\"], [\"set\", [\"t\", 1], \"vvv\"], [\"clear\"], [\"set\", \"k1\", \"v\"], [\"get\", \"k6\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LFUCache\", \"maxsize\": 4}, \"ops\": [[\"getitem\", \"k2\"], [\"set\", \"k2\", 30], [\"getitem\", \"k5\"], [\"get\", \"k4\"], [\"del\", \"k5\"], [\"set\", \"k2\", 13], [\"getitem\", \"k6\"], [\"repr\"], [\"get\", \"k5\"], [\"set\", 3, \"vv\"], [\"get\", \"k6\"], [\"values\"], [\"setdefault\", \"k0\", \"vvv\"], [\"values\"], [\"set\", \"k1\", 72], [\"set\", \"k1\", 60], [\"repr\"], [\"del\", [\"t\", 1]], [\"set\", \"k2\", \"vvvvv\"], [\"repr\"], [\"repr\"], [\"popitem\"], [\"del\", [\"t\", 1]], [\"set\", \"k3\", [0, \"x\"]], [\"setdefault\", \"k6\", 38], [\"getitem\", [\"t\", 1]], [\"values\"], [\"set\", 4, \"vvvv\"], [\"setdefault\", \"k4\", \"vv\"], [\"set\", \"k6\", 96], [\"set\", \"k6\", 41], [\"pop\", \"k6\", null], [\"in\", \"k2\"], [\"repr\"], [\"set\", \"k3\", \"vvv\"], [\"set\", \"k6\", 43], [\"repr\"], [\"in\", \"k2\"], [\"getitem\", \"k5\"], [\"set\", \"k0\", 22], [\"set\", \"k2\", 24], [\"values\"], [\"get\", \"k3\"], [\"pop\", \"k2\", null], [\"get\", \"k2\"], [\"getitem\", \"k3\"], [\"set\", \"k5\", \"vvvvvv\"], [\"repr\"], [\"getitem\", \"k0\"], [\"set\", [\"t\", 1], \"v\"], [\"get\", 3], [\"set\", \"k5\", \"v\"], [\"values\"], [\"setdefault\", [\"t\", 1], 76], [\"values\"], [\"set\", 3, \"vv\"], [\"in\", 3], [\"get\", \"k5\"], [\"set\", \"k0\", 69], [\"pop\", \"k5\", null], [\"set\", \"k0\", [4, \"x\"]], [\"set\", \"k0\", 92], [\"repr\"], [\"popitem\"], [\"popitem\"], [\"repr\"], [\"get\", \"k2\"], [\"getitem\", 4], [\"set\", \"k3\", 67], [\"repr\"], [\"get\", [\"t\", 1]], [\"values\"], [\"pop\", \"k6\", null], [\"set\", \"k5\", [1, \"x\"]], [\"set\", \"k6\", 36], [\"pop\", \"k2\", null], [\"clear\"], [\"popitem\"], [\"set\", [\"t\", 1], [2, \"x\"]], [\"repr\"], [\"getitem\", \"k5\"], [\"set\", \"k4\", 18], [\"pop\", \"k4\", null], [\"popitem\"], [\"get\", 4], [\"get\", \"k5\"], [\"pop\", \"k0\", null], [\"del\", [\"t\", 1]], [\"pop\", 3, null], [\"set\", \"k5\", \"vvvvv\"], [\"in\", \"k3\"], [\"repr\"], [\"del\", [\"t\", 1]], [\"set\", \"k0\", \"vvvvv\"], [\"set\", \"k6\", 18], [\"del\", 3], [\"values\"], [\"set\", \"k6\", \"vvvvv\"], [\"repr\"], [\"get\", 3], [\"set\", 3, 0], [\"values\"], [\"set\", \"k3\", 64], [\"get\", \"k1\"], [\"popitem\"], [\"getitem\", [\"t\", 1]], [\"values\"], [\"repr\"], [\"pop\", \"k0\", null], [\"repr\"], [\"getitem\", 4], [\"del\", \"k3\"], [\"values\"], [\"in\", \"k1\"], [\"getitem\", 4], [\"getitem\", \"k0\"], [\"pop\", [\"t\", 1], null], [\"popitem\"], [\"values\"], [\"set\", \"k6\", 80], [\"set\", \"k3\", 83], [\"set\", \"k6\", \"vvvvv\"], [\"set\", \"k0\", [3, \"x\"]], [\"set\", \"k0\", \"v\"], [\"set\", 3, 93], [\"get\", \"k3\"], [\"pop\", \"k0\", null], [\"set\", \"k3\", [0, \"x\"]], [\"getitem\", \"k5\"], [\"repr\"], [\"getitem\", 3], [\"repr\"], [\"popitem\"], [\"set\", 3, 65], [\"set\", \"k3\", \"vvvvvv\"], [\"getitem\", \"k6\"], [\"set\", \"k3\", 33], [\"values\"], [\"values\"], [\"popitem\"], [\"setdefault\", 4, \"vvvvvvv\"], [\"set\", \"k6\", 92], [\"set\", \"k3\", 12], [\"set\", \"k5\", \"vvvvvvv\"], [\"set\", \"k2\", \"vvvvv\"], [\"set\", \"k1\", [2, \"x\"]], [\"repr\"], [\"repr\"], [\"getitem\", \"k3\"], [\"setdefault\", 4, \"vvvvvvvv\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"LFUCache\", \"maxsize\": 12, \"getsizeof\": \"len\"}, \"ops\": [[\"set\", [\"t\", 1], \"vvvvv\"], [\"del\", \"k0\"], [\"set\", \"k0\", \"vvvvvvv\"], [\"set\", \"k1\", \"vvv\"], [\"get\", \"k3\"], [\"getitem\", \"k4\"], [\"values\"], [\"repr\"], [\"pop\", \"k6\", null], [\"popitem\"], [\"getitem\", 3], [\"values\"], [\"repr\"], [\"del\", \"k6\"], [\"repr\"], [\"popitem\"], [\"getitem\", \"k1\"], [\"set\", [\"t\", 1], \"v\"], [\"getitem\", \"k3\"], [\"values\"], [\"repr\"], [\"set\", \"k0\", \"vv\"], [\"getitem\", \"k2\"], [\"get\", \"k2\"], [\"get\", 3], [\"getitem\", [\"t\", 1]], [\"setdefault\", 3, \"vvv\"], [\"set\", \"k5\", \"vvv\"], [\"del\", 3], [\"popitem\"], [\"getitem\", \"k4\"], [\"getitem\", 4], [\"getitem\", \"k5\"], [\"get\", \"k2\"], [\"values\"], [\"repr\"], [\"set\", \"k4\", \"vvvvvvvv\"], [\"get\", 4], [\"set\", [\"t\", 1], \"vvvvvvv\"], [\"getitem\", 4], [\"get\", \"k0\"], [\"get\", \"k5\"], [\"in\", 4], [\"values\"], [\"del\", \"k2\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"repr\"], [\"get\", \"k1\"], [\"set\", \"k5\", \"v\"], [\"get\", [\"t\", 1]], [\"in\", 4], [\"setdefault\", \"k5\", [2, \"x\"]], [\"set\", \"k1\", \"vv\"], [\"set\", \"k4\", \"vvvvvvv\"], [\"getitem\", \"k3\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"del\", \"k3\"], [\"set\", 4, \"v\"], [\"set\", 3, \"v\"], [\"get\", \"k3\"], [\"repr\"], [\"getitem\", \"k6\"], [\"repr\"], [\"pop\", [\"t\", 1], null], [\"set\", \"k1\", \"vv\"], [\"popitem\"], [\"set\", \"k3\", \"vvvvvvv\"], [\"values\"], [\"setdefault\", \"k0\", \"vv\"], [\"get\", 4], [\"in\", \"k4\"], [\"in\", \"k5\"], [\"popitem\"], [\"repr\"], [\"del\", \"k1\"], [\"getitem\", \"k2\"], [\"get\", \"k6\"], [\"repr\"], [\"set\", \"k1\", [0, \"x\"]], [\"set\", \"k3\", \"vvvv\"], [\"set\", 4, \"vvvvvv\"], [\"values\"], [\"getitem\", \"k5\"], [\"set\", \"k5\", [2, \"x\"]], [\"set\", 3, \"vvvvvvvv\"], [\"get\", \"k2\"], [\"getitem\", 3], [\"get\", \"k4\"], [\"setdefault\", \"k5\", [3, \"x\"]], [\"set\", \"k6\", \"vvv\"], [\"getitem\", 3], [\"values\"], [\"get\", 4], [\"popitem\"], [\"getitem\", 4], [\"set\", \"k6\", \"vvv\"], [\"values\"], [\"set\", \"k4\", \"vvvvvvv\"], [\"in\", \"k0\"], [\"get\", \"k0\"], [\"values\"], [\"set\", \"k6\", [2, \"x\"]], [\"set\", 3, \"vvv\"], [\"set\", \"k4\", \"vvvvv\"], [\"set\", 3, \"vvv\"], [\"repr\"], [\"set\", \"k0\", \"v\"], [\"popitem\"], [\"del\", \"k3\"], [\"set\", \"k3\", \"vvvvvvv\"], [\"getitem\", \"k2\"], [\"getitem\", 3], [\"values\"], [\"repr\"], [\"set\", \"k6\", \"vvvvv\"], [\"set\", \"k4\", \"vvvvvv\"], [\"repr\"], [\"set\", \"k2\", \"vvv\"], [\"popitem\"], [\"del\", \"k0\"], [\"setdefault\", \"k1\", \"vvv\"], [\"getitem\", \"k5\"], [\"set\", \"k2\", \"vvvvvvv\"], [\"pop\", \"k0\", null], [\"set\", \"k5\", \"vvvv\"], [\"get\", 3], [\"popitem\"], [\"set\", [\"t\", 1], \"vv\"], [\"getitem\", 4], [\"pop\", \"k5\", null], [\"repr\"], [\"set\", [\"t\", 1], \"vvvvv\"], [\"repr\"], [\"set\", 4, \"v\"], [\"get\", \"k5\"], [\"set\", \"k1\", \"v\"], [\"getitem\", \"k5\"], [\"get\", \"k4\"], [\"in\", \"k6\"], [\"set\", [\"t\", 1], \"vvvvv\"], [\"setdefault\", \"k4\", \"vvvv\"], [\"del\", 3], [\"values\"], [\"setdefault\", 4, \"v\"], [\"popitem\"], [\"set\", 4, \"v\"], [\"getitem\", \"k6\"], [\"in\", \"k0\"], [\"get\", [\"t\", 1]], [\"repr\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"RRCache\", \"maxsize\": 4, \"picks\": [1, 3, 3, 2, 5, 5, 4, 2, 2, 8, 3, 7, 1, 7, 1, 3, 6, 3, 7, 6, 2, 3, 2, 7, 7, 5, 8, 4, 0, 2]}, \"ops\": [[\"set\", [\"t\", 1], \"vvvvvvv\"], [\"getitem\", \"k5\"], [\"get\", [\"t\", 1]], [\"values\"], [\"set\", \"k1\", 33], [\"pop\", \"k3\", null], [\"set\", [\"t\", 1], \"v\"], [\"repr\"], [\"pop\", \"k3\", null], [\"repr\"], [\"set\", \"k3\", \"vvvvvv\"], [\"del\", 3], [\"getitem\", \"k1\"], [\"set\", \"k2\", \"vvvvvv\"], [\"in\", \"k0\"], [\"set\", [\"t\", 1], 86], [\"repr\"], [\"repr\"], [\"pop\", \"k2\", null], [\"values\"], [\"set\", \"k4\", \"vvvvvvvv\"], [\"repr\"], [\"pop\", \"k2\", null], [\"getitem\", [\"t\", 1]], [\"getitem\", \"k6\"], [\"pop\", 4, null], [\"set\", \"k1\", 28], [\"pop\", \"k0\", null], [\"set\", 3, \"vvvvvvvv\"], [\"get\", \"k5\"], [\"set\", 4, \"vvvvvv\"], [\"setdefault\", [\"t\", 1], 66], [\"get\", 4], [\"del\", 4], [\"getitem\", 4], [\"setdefault\", \"k2\", \"vvvv\"], [\"values\"], [\"values\"], [\"getitem\", \"k5\"], [\"popitem\"], [\"set\", [\"t\", 1], 30], [\"repr\"], [\"repr\"], [\"set\", 3, [0, \"x\"]], [\"set\", 4, \"vvvvv\"], [\"repr\"], [\"set\", 4, \"vv\"], [\"set\", \"k5\", \"vvv\"], [\"getitem\", \"k5\"], [\"get\", 4], [\"setdefault\", [\"t\", 1], 66], [\"set\", \"k1\", [2, \"x\"]], [\"in\", 3], [\"set\", \"k2\", \"vvvvv\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"set\", \"k5\", \"vv\"], [\"set\", \"k1\", 15], [\"del\", \"k1\"], [\"set\", [\"t\", 1], 7], [\"set\", \"k1\", \"vvvvv\"], [\"getitem\", \"k1\"], [\"popitem\"], [\"setdefault\", 4, \"vvvvvv\"], [\"repr\"], [\"set\", 3, 10], [\"set\", 3, 50], [\"set\", \"k1\", [3, \"x\"]], [\"get\", 4], [\"repr\"], [\"setdefault\", \"k6\", \"v\"], [\"popitem\"], [\"set\", [\"t\", 1], 82], [\"getitem\", \"k6\"], [\"pop\", \"k1\", null], [\"repr\"], [\"repr\"], [\"repr\"], [\"set\", \"k3\", 66], [\"pop\", \"k4\", null], [\"set\", \"k4\", 13], [\"set\", \"k1\", 10], [\"values\"], [\"set\", \"k1\", 88], [\"del\", 4], [\"clear\"], [\"del\", 4], [\"repr\"], [\"repr\"], [\"getitem\", \"k0\"], [\"repr\"], [\"set\", \"k5\", 44], [\"getitem\", \"k5\"], [\"del\", \"k3\"], [\"getitem\", \"k6\"], [\"repr\"], [\"setdefault\", \"k2\", \"vvvvvvv\"], [\"popitem\"], [\"set\", \"k6\", 84], [\"set\", \"k2\", \"vvvvvvvv\"], [\"repr\"], [\"set\", \"k5\", 97], [\"set\", \"k5\", \"vvvvvvv\"], [\"set\", \"k5\", \"vvv\"], [\"set\", \"k1\", \"vvvvvvvv\"], [\"get\", \"k1\"], [\"values\"], [\"in\", 3], [\"popitem\"], [\"set\", \"k5\", \"vvvvvvvv\"], [\"set\", \"k0\", \"vvvvvvv\"], [\"get\", [\"t\", 1]], [\"del\", \"k3\"], [\"get\", \"k1\"], [\"get\", 4], [\"setdefault\", \"k1\", \"vvvvvvv\"], [\"set\", \"k6\", \"vvvvvvv\"], [\"set\", 3, \"vvvvvvv\"], [\"repr\"], [\"del\", \"k0\"], [\"setdefault\", [\"t\", 1], 91], [\"repr\"], [\"set\", \"k5\", 7], [\"repr\"], [\"getitem\", \"k1\"], [\"del\", [\"t\", 1]], [\"repr\"], [\"values\"], [\"set\", \"k2\", 88], [\"del\", 4], [\"set\", \"k1\", [2, \"x\"]], [\"del\", \"k3\"], [\"set\", \"k6\", \"vvvvvvv\"], [\"set\", [\"t\", 1], \"vvvvvv\"], [\"set\", \"k6\", 78], [\"set\", \"k1\", \"vvvvvv\"], [\"set\", \"k1\", 66], [\"set\", 4, \"v\"], [\"del\", \"k1\"], [\"get\", \"k4\"], [\"repr\"], [\"getitem\", \"k6\"], [\"getitem\", \"k3\"], [\"pop\", \"k2\", null], [\"repr\"], [\"set\", \"k4\", [4, \"x\"]], [\"set\", [\"t\", 1], [0, \"x\"]], [\"setdefault\", \"k2\", 71], [\"pop\", 4, null], [\"values\"], [\"set\", \"k3\", 76], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TTLCache\", \"maxsize\": 4, \"ttl\": 7}, \"ops\": [[\"set\", [\"t\", 1], 73], [\"getitem\", [\"t\", 1]], [\"getitem\", \"k6\"], [\"set\", 3, 46], [\"popitem\"], [\"repr\"], [\"set\", \"k0\", \"v\"], [\"values\"], [\"in\", \"k6\"], [\"tick\", 4], [\"set\", 3, [2, \"x\"]], [\"getitem\", 4], [\"set\", [\"t\", 1], 19], [\"getitem\", \"k2\"], [\"setdefault\", \"k3\", \"vvvvvv\"], [\"getitem\", \"k5\"], [\"getitem\", \"k5\"], [\"getitem\", \"k1\"], [\"set\", \"k3\", 44], [\"del\", \"k5\"], [\"set\", 4, \"v\"], [\"set\", \"k4\", 42], [\"in\", \"k2\"], [\"set\", \"k1\", 6], [\"getitem\", \"k2\"], [\"getitem\", \"k0\"], [\"set\", \"k2\", [1, \"x\"]], [\"getitem\", \"k0\"], [\"del\", \"k2\"], [\"repr\"], [\"set\", \"k5\", 9], [\"repr\"], [\"set\", \"k6\", [4, \"x\"]], [\"set\", \"k4\", 64], [\"set\", \"k6\", 9], [\"set\", \"k0\", [2, \"x\"]], [\"repr\"], [\"repr\"], [\"setdefault\", \"k5\", 73], [\"get\", \"k4\"], [\"set\", \"k2\", \"vv\"], [\"set\", [\"t\", 1], \"vvvvv\"], [\"in\", 3], [\"set\", \"k2\", 86], [\"get\", \"k2\"], [\"set\", [\"t\", 1], \"v\"], [\"getitem\", \"k4\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"tick\", 5], [\"set\", [\"t\", 1], 78], [\"set\", \"k1\", [3, \"x\"]], [\"getitem\", 4], [\"values\"], [\"repr\"], [\"set\", [\"t\", 1], [4, \"x\"]], [\"repr\"], [\"set\", 3, \"vvvvvvvv\"], [\"in\", \"k0\"], [\"getitem\", 3], [\"getitem\", \"k6\"], [\"getitem\", \"k1\"], [\"getitem\", \"k4\"], [\"getitem\", 3], [\"get\", 3], [\"tick\", 3], [\"set\", [\"t\", 1], 18], [\"pop\", \"k2\", null], [\"values\"], [\"getitem\", [\"t\", 1]], [\"get\", \"k4\"], [\"tick\", 5], [\"set\", \"k1\", \"vvvv\"], [\"set\", \"k4\", 38], [\"values\"], [\"popitem\"], [\"values\"], [\"getitem\", \"k6\"], [\"del\", \"k2\"], [\"getitem\", \"k3\"], [\"repr\"], [\"set\", [\"t\", 1], 32], [\"set\", 3, 72], [\"repr\"], [\"set\", \"k6\", 95], [\"set\", \"k1\", \"vvvv\"], [\"getitem\", \"k4\"], [\"clear\"], [\"pop\", [\"t\", 1], null], [\"set\", 4, \"vvv\"], [\"set\", \"k6\", 84], [\"clear\"], [\"tick\", 4], [\"repr\"], [\"tick\", 2], [\"getitem\", \"k6\"], [\"popitem\"], [\"set\", \"k0\", \"vvv\"], [\"getitem\", \"k3\"], [\"tick\", 1], [\"tick\", 5], [\"getitem\", \"k5\"], [\"repr\"], [\"get\", \"k1\"], [\"repr\"], [\"get\", [\"t\", 1]], [\"set\", \"k1\", \"vvvvvvv\"], [\"getitem\", 3], [\"get\", \"k3\"], [\"setdefault\", \"k5\", \"vvvvvvv\"], [\"repr\"], [\"set\", [\"t\", 1], 46], [\"set\", \"k5\", 5], [\"setdefault\", [\"t\", 1], [0, \"x\"]], [\"set\", \"k5\", 6], [\"popitem\"], [\"values\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"set\", \"k4\", \"vvvv\"], [\"getitem\", \"k0\"], [\"in\", \"k0\"], [\"set\", \"k6\", 36], [\"set\", \"k1\", 6], [\"repr\"], [\"get\", [\"t\", 1]], [\"clear\"], [\"in\", \"k5\"], [\"tick\", 4], [\"set\", \"k3\", 0], [\"getitem\", \"k4\"], [\"set\", \"k6\", [1, \"x\"]], [\"getitem\", \"k1\"], [\"set\", \"k1\", 84], [\"tick\", 3], [\"set\", 3, 7], [\"set\", \"k4\", 75], [\"get\", \"k3\"], [\"clear\"], [\"tick\", 3], [\"set\", \"k5\", \"vvvvvv\"], [\"setdefault\", \"k5\", 30], [\"set\", \"k2\", 90], [\"getitem\", \"k2\"], [\"setdefault\", \"k3\", 86], [\"set\", \"k5\", 84], [\"set\", 3, 10], [\"repr\"], [\"set\", \"k4\", \"vvvvv\"], [\"in\", \"k6\"], [\"getitem\", \"k6\"], [\"set\", 3, 49], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TTLCache\", \"maxsize\": 12, \"ttl\": 9, \"getsizeof\": \"len\"}, \"ops\": [[\"get\", \"k1\"], [\"set\", \"k4\", \"v\"], [\"getitem\", \"k6\"], [\"getitem\", \"k2\"], [\"setdefault\", \"k1\", \"v\"], [\"in\", \"k2\"], [\"set\", 3, \"v\"], [\"set\", \"k5\", \"vvvv\"], [\"repr\"], [\"getitem\", \"k3\"], [\"getitem\", \"k6\"], [\"tick\", 4], [\"setdefault\", \"k2\", \"vvv\"], [\"getitem\", [\"t\", 1]], [\"get\", 4], [\"get\", \"k4\"], [\"set\", [\"t\", 1], \"vvvvvv\"], [\"popitem\"], [\"set\", 3, \"v\"], [\"set\", \"k5\", \"vv\"], [\"values\"], [\"set\", \"k5\", \"vvvvvvvv\"], [\"repr\"], [\"set\", \"k3\", \"vvv\"], [\"repr\"], [\"getitem\", \"k3\"], [\"set\", 3, \"vvvv\"], [\"set\", 4, \"vvvvvvvv\"], [\"getitem\", 4], [\"set\", 4, \"vvvv\"], [\"popitem\"], [\"getitem\", \"k6\"], [\"set\", 3, \"vv\"], [\"get\", \"k1\"], [\"get\", [\"t\", 1]], [\"set\", 4, \"vvvvv\"], [\"set\", \"k3\", \"vvvvvvv\"], [\"getitem\", \"k2\"], [\"set\", \"k0\", \"vvv\"], [\"repr\"], [\"repr\"], [\"set\", \"k3\", \"vv\"], [\"set\", \"k2\", \"vvv\"], [\"get\", \"k0\"], [\"getitem\", [\"t\", 1]], [\"pop\", 4, null], [\"set\", \"k3\", \"vvvv\"], [\"set\", \"k3\", \"vvvvvvv\"], [\"set\", \"k3\", \"vvv\"], [\"get\", \"k3\"], [\"popitem\"], [\"pop\", \"k6\", null], [\"set\", 3, \"vvvvvvvv\"], [\"set\", \"k3\", 26], [\"getitem\", \"k2\"], [\"set\", \"k3\", \"vvv\"], [\"repr\"], [\"set\", 3, \"vvv\"], [\"getitem\", 3], [\"popitem\"], [\"popitem\"], [\"in\", \"k3\"], [\"set\", \"k4\", \"vvvvvvv\"], [\"getitem\", \"k1\"], [\"set\", 4, \"v\"], [\"del\", \"k4\"], [\"clear\"], [\"repr\"], [\"setdefault\", [\"t\", 1], [0, \"x\"]], [\"set\", 4, [3, \"x\"]], [\"get\", 3], [\"getitem\", [\"t\", 1]], [\"values\"], [\"pop\", \"k1\", null], [\"set\", \"k0\", \"vvvvvv\"], [\"get\", \"k1\"], [\"set\", \"k4\", \"vvvvvvvv\"], [\"repr\"], [\"set\", \"k1\", \"vvv\"], [\"set\", \"k3\", [2, \"x\"]], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"getitem\", 3], [\"repr\"], [\"repr\"], [\"tick\", 3], [\"set\", \"k3\", \"vvvvvv\"], [\"set\", \"k0\", \"vvv\"], [\"getitem\", \"k2\"], [\"set\", \"k5\", \"vvvvvv\"], [\"set\", [\"t\", 1], \"v\"], [\"repr\"], [\"set\", \"k4\", \"vvvvvvvv\"], [\"set\", \"k3\", \"vvv\"], [\"set\", 3, \"vvvvvvv\"], [\"set\", 4, [0, \"x\"]], [\"repr\"], [\"tick\", 5], [\"getitem\", 4], [\"set\", \"k6\", \"vvvvvvv\"], [\"set\", \"k3\", \"vvvv\"], [\"get\", \"k5\"], [\"set\", \"k5\", \"vvvvvv\"], [\"popitem\"], [\"set\", \"k2\", \"vvvvvvv\"], [\"getitem\", [\"t\", 1]], [\"set\", 4, [2, \"x\"]], [\"clear\"], [\"set\", \"k5\", \"vvv\"], [\"del\", \"k3\"], [\"getitem\", \"k5\"], [\"get\", \"k0\"], [\"getitem\", [\"t\", 1]], [\"tick\", 1], [\"del\", \"k6\"], [\"set\", \"k1\", \"vvvv\"], [\"getitem\", \"k6\"], [\"get\", \"k1\"], [\"set\", \"k6\", \"vvvvvvv\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"getitem\", \"k4\"], [\"del\", [\"t\", 1]], [\"in\", \"k2\"], [\"repr\"], [\"getitem\", 3], [\"getitem\", \"k1\"], [\"set\", \"k6\", \"vvvvvv\"], [\"in\", \"k4\"], [\"set\", \"k5\", \"vvvvvv\"], [\"set\", \"k5\", \"vvvvvvv\"], [\"getitem\", \"k2\"], [\"repr\"], [\"repr\"], [\"set\", 3, \"vvvvv\"], [\"set\", \"k4\", \"vvv\"], [\"set\", \"k2\", \"vv\"], [\"getitem\", \"k1\"], [\"pop\", 4, null], [\"set\", \"k2\", \"vv\"], [\"del\", 3], [\"repr\"], [\"get\", \"k4\"], [\"repr\"], [\"getitem\", 4], [\"repr\"], [\"in\", \"k4\"], [\"setdefault\", \"k2\", \"vvvv\"], [\"set\", \"k3\", \"vv\"], [\"values\"], [\"set\", \"k6\", \"vvvvvvvv\"], [\"get\", \"k6\"], [\"repr\"]], \"step\": 1}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TLRUCache\", \"maxsize\": 4, \"ttu\": {\"kind\": \"table\", \"table\": {\"k1\": 3, \"k2\": 1, \"k3\": 30}, \"default\": 8}}, \"ops\": [[\"del\", \"k5\"], [\"repr\"], [\"repr\"], [\"repr\"], [\"set\", 3, 61], [\"repr\"], [\"set\", \"k4\", 81], [\"del\", 3], [\"set\", \"k3\", [3, \"x\"]], [\"in\", 4], [\"del\", \"k2\"], [\"popitem\"], [\"del\", \"k0\"], [\"set\", \"k2\", 4], [\"get\", [\"t\", 1]], [\"get\", \"k5\"], [\"set\", [\"t\", 1], [0, \"x\"]], [\"set\", \"k0\", \"vvvvvvvv\"], [\"set\", \"k0\", [0, \"x\"]], [\"get\", \"k2\"], [\"get\", \"k6\"], [\"getitem\", \"k2\"], [\"repr\"], [\"set\", 4, \"vvvvvvvv\"], [\"getitem\", \"k3\"], [\"set\", \"k3\", \"vvv\"], [\"repr\"], [\"repr\"], [\"del\", [\"t\", 1]], [\"clear\"], [\"repr\"], [\"set\", 3, \"vvvvv\"], [\"set\", \"k4\", 5], [\"del\", \"k4\"], [\"get\", \"k1\"], [\"set\", 3, \"vvvvv\"], [\"set\", \"k0\", 71], [\"get\", \"k4\"], [\"getitem\", \"k2\"], [\"set\", \"k1\", [3, \"x\"]], [\"set\", \"k2\", 50], [\"set\", \"k4\", 56], [\"pop\", \"k4\", null], [\"pop\", \"k6\", null], [\"set\", \"k2\", \"vvvvvvv\"], [\"get\", \"k4\"], [\"getitem\", \"k2\"], [\"set\", \"k0\", 67], [\"get\", \"k2\"], [\"get\", [\"t\", 1]], [\"set\", \"k3\", [0, \"x\"]], [\"in\", [\"t\", 1]], [\"set\", \"k4\", \"vvvvvvv\"], [\"repr\"], [\"getitem\", \"k3\"], [\"set\", \"k3\", \"vvvvv\"], [\"in\", \"k2\"], [\"getitem\", \"k1\"], [\"del\", \"k3\"], [\"repr\"], [\"repr\"], [\"pop\", \"k4\", null], [\"values\"], [\"del\", \"k2\"], [\"getitem\", \"k4\"], [\"set\", [\"t\", 1], 82], [\"tick\", 3], [\"in\", \"k4\"], [\"getitem\", 4], [\"in\", \"k2\"], [\"getitem\", \"k5\"], [\"set\", [\"t\", 1], [2, \"x\"]], [\"setdefault\", \"k5\", 37], [\"repr\"], [\"set\", 4, \"vvvv\"], [\"getitem\", \"k0\"], [\"getitem\", \"k5\"], [\"set\", 3, \"vvv\"], [\"getitem\", \"k2\"], [\"set\", \"k1\", 63], [\"popitem\"], [\"get\", \"k3\"], [\"setdefault\", 4, 43], [\"getitem\", \"k5\"], [\"setdefault\", 3, 98], [\"getitem\", \"k0\"], [\"repr\"], [\"set\", \"k1\", \"vvvvvv\"], [\"clear\"], [\"set\", 3, 5], [\"set\", \"k2\", 87], [\"getitem\", 3], [\"get\", 3], [\"getitem\", \"k1\"], [\"set\", 3, 17], [\"set\", \"k4\", \"vv\"], [\"set\", [\"t\", 1], \"vvvvvvvv\"], [\"repr\"], [\"set\", [\"t\", 1], 7], [\"del\", \"k0\"], [\"getitem\", \"k2\"], [\"del\", \"k0\"], [\"tick\", 4], [\"get\", \"k0\"], [\"repr\"], [\"repr\"], [\"get\", \"k6\"], [\"getitem\", \"k4\"], [\"repr\"], [\"repr\"], [\"set\", 4, 74], [\"set\", 3, \"v\"], [\"tick\", 1], [\"set\", 4, \"vvvvvvvv\"], [\"getitem\", \"k0\"], [\"getitem\", \"k3\"], [\"getitem\", \"k4\"], [\"getitem\", \"k5\"], [\"popitem\"], [\"tick\", 2], [\"repr\"], [\"getitem\", \"k5\"], [\"set\", \"k5\", 99], [\"set\", \"k0\", 43], [\"getitem\", \"k0\"], [\"getitem\", \"k3\"], [\"getitem\", \"k3\"], [\"set\", \"k5\", \"vvvv\"], [\"popitem\"], [\"set\", \"k1\", \"vvvvv\"], [\"set\", \"k3\", \"vvv\"], [\"tick\", 1], [\"repr\"], [\"getitem\", \"k2\"], [\"getitem\", \"k4\"], [\"clear\"], [\"values\"], [\"set\", 4, \"vvvvvv\"], [\"tick\", 5], [\"set\", \"k0\", \"vvv\"], [\"set\", 4, 10], [\"set\", \"k1\", \"vvvvvvvv\"], [\"get\", \"k5\"], [\"set\", \"k2\", \"vv\"], [\"pop\", \"k4\", null], [\"set\", \"k5\", 8], [\"set\", \"k3\", 56], [\"get\", 4], [\"clear\"], [\"get\", \"k1\"], [\"repr\"]]}\n");
+    t.push_str("{\"kind\": \"script\", \"cache\": {\"type\": \"TLRUCache\", \"maxsize\": 12, \"getsizeof\": \"len\", \"ttu\": {\"kind\": \"len\"}}, \"ops\": [[\"getitem\", [\"t\", 1]], [\"in\", \"k6\"], [\"pop\", \"k5\", null], [\"set\", \"k1\", \"vvvvvvvv\"], [\"set\", \"k3\", \"vvvvv\"], [\"set\", \"k6\", 32], [\"tick\", 4], [\"set\", 3, [0, \"x\"]], [\"repr\"], [\"getitem\", 4], [\"popitem\"], [\"tick\", 2], [\"getitem\", \"k4\"], [\"in\", \"k0\"], [\"set\", 4, \"vvv\"], [\"values\"], [\"set\", \"k1\", \"v\"], [\"del\", \"k2\"], [\"set\", \"k0\", \"v\"], [\"set\", \"k1\", \"v\"], [\"getitem\", \"k5\"], [\"set\", \"k6\", \"vvvvv\"], [\"set\", \"k4\", \"v\"], [\"repr\"], [\"set\", \"k1\", \"vvvvvvv\"], [\"getitem\", 4], [\"set\", [\"t\", 1], \"vv\"], [\"repr\"], [\"pop\", \"k3\", null], [\"repr\"], [\"values\"], [\"popitem\"], [\"set\", 3, \"vvv\"], [\"set\", 3, \"vvvvv\"], [\"getitem\", \"k1\"], [\"getitem\", 3], [\"popitem\"], [\"setdefault\", \"k5\", \"vvv\"], [\"get\", \"k3\"], [\"getitem\", \"k2\"], [\"set\", \"k1\", \"vvvv\"], [\"set\", \"k5\", \"vv\"], [\"pop\", \"k5\", null], [\"set\", 3, \"vvvvv\"], [\"pop\", 4, null], [\"popitem\"], [\"set\", \"k6\", \"vvvv\"], [\"getitem\", \"k4\"], [\"set\", [\"t\", 1], \"vvv\"], [\"repr\"], [\"set\", \"k5\", 31], [\"set\", \"k0\", \"vv\"], [\"set\", \"k0\", \"vv\"], [\"getitem\", 3], [\"set\", \"k6\", \"vvvvvvv\"], [\"repr\"], [\"del\", \"k6\"], [\"set\", [\"t\", 1], \"v\"], [\"set\", \"k0\", \"vvvvvvvv\"], [\"getitem\", \"k6\"], [\"getitem\", \"k0\"], [\"tick\", 5], [\"del\", \"k5\"], [\"getitem\", \"k0\"], [\"values\"], [\"getitem\", \"k4\"], [\"pop\", \"k5\", null], [\"set\", \"k4\", \"vvvv\"], [\"set\", \"k0\", 34], [\"pop\", 3, null], [\"repr\"], [\"getitem\", \"k2\"], [\"repr\"], [\"getitem\", \"k2\"], [\"set\", 4, \"vvvv\"], [\"set\", \"k3\", \"vvvv\"], [\"set\", 4, \"vvvvvvv\"], [\"getitem\", \"k5\"], [\"tick\", 5], [\"get\", \"k0\"], [\"getitem\", \"k4\"], [\"pop\", \"k5\", null], [\"getitem\", \"k0\"], [\"setdefault\", \"k3\", \"vvvvv\"], [\"set\", 3, \"vv\"], [\"set\", \"k3\", \"vvvvvvv\"], [\"values\"], [\"tick\", 2], [\"repr\"], [\"set\", 4, [0, \"x\"]], [\"repr\"], [\"getitem\", \"k3\"], [\"repr\"], [\"set\", \"k4\", \"vv\"], [\"set\", \"k0\", \"v\"], [\"tick\", 2], [\"getitem\", [\"t\", 1]], [\"repr\"], [\"repr\"], [\"popitem\"], [\"getitem\", 4], [\"set\", \"k1\", \"v\"], [\"getitem\", 3], [\"repr\"], [\"set\", \"k6\", \"vvvvvvvv\"], [\"setdefault\", \"k4\", \"vvvvvvv\"], [\"pop\", \"k2\", null], [\"in\", \"k2\"], [\"repr\"], [\"set\", [\"t\", 1], [4, \"x\"]], [\"set\", [\"t\", 1], [4, \"x\"]], [\"set\", \"k4\", 83], [\"get\", \"k6\"], [\"set\", 3, \"vvv\"], [\"set\", \"k5\", \"vvvv\"], [\"set\", 3, \"vvvvvvv\"], [\"pop\", \"k3\", null], [\"tick\", 3], [\"getitem\", \"k6\"], [\"set\", \"k0\", \"vvv\"], [\"set\", \"k5\", \"vv\"], [\"popitem\"], [\"popitem\"], [\"get\", \"k2\"], [\"getitem\", \"k1\"], [\"popitem\"], [\"tick\", 3], [\"getitem\", [\"t\", 1]], [\"set\", \"k3\", \"vvv\"], [\"set\", \"k6\", \"vv\"], [\"pop\", \"k6\", null], [\"del\", \"k0\"], [\"del\", 3], [\"repr\"], [\"set\", 3, \"vvvvvvvv\"], [\"repr\"], [\"getitem\", \"k5\"], [\"set\", \"k6\", \"vvvvvvvv\"], [\"set\", \"k3\", \"vvvv\"], [\"tick\", 3], [\"getitem\", \"k5\"], [\"del\", \"k0\"], [\"getitem\", \"k4\"], [\"set\", 4, \"vvvv\"], [\"values\"], [\"tick\", 4], [\"set\", \"k6\", \"vv\"], [\"get\", [\"t\", 1]], [\"repr\"], [\"setdefault\", \"k4\", \"vvv\"], [\"repr\"]], \"start\": 50, \"step\": 1}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"fib\", \"decorator\": \"lru_cache\", \"maxsize\": 4, \"calls\": [[\"call\", [10]], [\"info\"], [\"call\", [12]], [\"info\"], [\"cache\"], [\"params\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"fib\", \"decorator\": \"lru_cache\", \"maxsize\": null, \"calls\": [[\"call\", [15]], [\"info\"], [\"params\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"fib\", \"decorator\": \"lfu_cache\", \"maxsize\": 3, \"calls\": [[\"call\", [9]], [\"info\"], [\"cache\"], [\"call\", [3]], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"fib\", \"decorator\": \"fifo_cache\", \"maxsize\": 3, \"calls\": [[\"call\", [8]], [\"info\"], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"fib\", \"decorator\": \"rr_cache\", \"maxsize\": 3, \"picks\": [1, 0, 2, 2, 1], \"calls\": [[\"call\", [8]], [\"info\"], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"fib\", \"decorator\": \"cached\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 20}, \"calls\": [[\"call\", [11]], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"user\", \"decorator\": \"ttl_cache\", \"maxsize\": 2, \"ttl\": 60, \"calls\": [[\"call\", [1]], [\"call\", [2]], [\"call\", [1]], [\"tick\", 30], [\"call\", [1]], [\"call\", [9]], [\"call\", [9]], [\"info\"], [\"tick\", 31], [\"call\", [2]], [\"call\", [1]], [\"info\"], [\"cache\"], [\"clear\"], [\"info\"], [\"call\", [3]], [\"call\", [3.0]], [\"info\"], [\"params\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"user\", \"decorator\": \"ttl_cache\", \"maxsize\": null, \"ttl\": 600, \"calls\": [[\"call\", [1]], [\"call\", [1]], [\"tick\", 600], [\"call\", [1]], [\"info\"], [\"cache\"], [\"params\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"user\", \"decorator\": \"lru_cache\", \"typed\": true, \"calls\": [[\"call\", [1]], [\"call\", [1.0]], [\"call\", [true]], [\"info\"], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"user\", \"decorator\": \"lru_cache\", \"typed\": false, \"calls\": [[\"call\", [1]], [\"call\", [1.0]], [\"call\", [true]], [\"info\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"price\", \"decorator\": \"cached\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 8}, \"info\": true, \"calls\": [[\"call\", [\"apple\"]], [\"call\", [\"apple\"], {\"qty\": 1}], [\"call\", [\"apple\", 1]], [\"call\", [\"pear\"], {\"qty\": 3, \"currency\": \"USD\"}], [\"call\", [\"pear\"], {\"currency\": \"USD\", \"qty\": 3}], [\"call\", [\"fig\", 2, \"GBP\"]], [\"call\", [\"apple\"]], [\"info\"], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"price\", \"decorator\": \"cached\", \"cache\": {\"type\": \"Cache\", \"maxsize\": 8}, \"typed\": true, \"calls\": [[\"call\", [\"kiwi\"]], [\"call\", [\"kiwi\"]], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"render\", \"decorator\": \"cached\", \"cache\": {\"type\": \"LRUCache\", \"maxsize\": 100, \"getsizeof\": \"len\"}, \"info\": true, \"lock\": true, \"calls\": [[\"call\", [\"home\"]], [\"call\", [\"about\"]], [\"call\", [\"docs\"]], [\"call\", [\"home\"]], [\"call\", [\"blog\"], {\"lang\": \"fr\"}], [\"call\", [\"home\"]], [\"call\", [\"huge\"]], [\"call\", [\"missing\"]], [\"info\"], [\"cache\"], [\"clear\"], [\"info\"], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"render\", \"decorator\": \"cached\", \"cache\": \"dict\", \"info\": true, \"calls\": [[\"call\", [\"home\"]], [\"call\", [\"home\"]], [\"info\"], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"render\", \"decorator\": \"cached\", \"cache\": null, \"info\": true, \"calls\": [[\"call\", [\"home\"]], [\"call\", [\"home\"]], [\"info\"], [\"clear\"], [\"info\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"user\", \"decorator\": \"cached\", \"cache\": null, \"calls\": [[\"call\", [5]], [\"call\", [5]], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"memo\", \"func\": \"user\", \"decorator\": \"cached\", \"cache\": {\"type\": \"TLRUCache\", \"maxsize\": 3, \"ttu\": {\"kind\": \"fixed\", \"n\": 5}}, \"info\": true, \"step\": 1, \"calls\": [[\"call\", [1]], [\"call\", [2]], [\"call\", [3]], [\"call\", [1]], [\"call\", [4]], [\"call\", [5]], [\"call\", [1]], [\"call\", [6]], [\"call\", [7]], [\"info\"], [\"cache\"]]}\n");
+    t.push_str("{\"kind\": \"key\", \"typed\": false, \"calls\": [[[]], [[1, 2]], [[\"a\"], {\"b\": 2}], [[], {\"z\": 1, \"a\": 2}], [[[1, 2]]], [[null]]]}\n");
+    t.push_str("{\"kind\": \"key\", \"typed\": true, \"calls\": [[[]], [[1, 2]], [[\"a\"], {\"b\": 2}], [[], {\"z\": 1, \"a\": \"x\"}], [[[1, 2]]], [[null, 1.5]], [[true]]]}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}
