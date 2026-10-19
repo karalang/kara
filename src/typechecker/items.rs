@@ -8318,6 +8318,14 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 self.bind_pattern_types(pattern, &expected_ty);
                 self.current_scrutinee_core_borrowed = prev_core;
+                if matches!(pattern.kind, PatternKind::Binding(_))
+                    && !matches!(expected_ty, Type::Ref(_) | Type::MutRef(_))
+                    && Self::is_fresh_owned_value(value)
+                    && !self.lib_unwrapped_clone_view(value)
+                {
+                    self.owned_let_bindings
+                        .insert(SpanKey::from_span(&pattern.span));
+                }
                 if borrowed_destructure {
                     for name in pattern.binding_names() {
                         self.local_scope.mark_view(&name);
@@ -8680,6 +8688,22 @@ impl<'a> super::TypeChecker<'a> {
     /// and the MIR builder then stored a `String` into a `ref String` local.
     /// A place on the right is left alone: a pattern binding over a borrowed
     /// scrutinee is typed by its value here although it is a borrow.
+    /// Whether `value` makes a value nothing else holds: a call, a method
+    /// call or a literal (B-2026-10-19-13).
+    fn is_fresh_owned_value(value: &Expr) -> bool {
+        matches!(
+            &value.kind,
+            ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::StringLit(_)
+                | ExprKind::InterpolatedStringLit(_)
+                | ExprKind::StructLiteral { .. }
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. }
+                | ExprKind::MapLiteral { .. }
+        )
+    }
+
     fn reject_owned_value_into_ref_local(&mut self, target: &Expr, value: &Expr, rhs_ty: &Type) {
         if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
             return;
@@ -8694,8 +8718,40 @@ impl<'a> super::TypeChecker<'a> {
             rhs_ty,
             Type::Ref(_) | Type::MutRef(_) | Type::Error | Type::Never | Type::TypeVar(_)
         ) || self.is_copy_type_during_check(rhs_ty)
-            || Self::is_place_expression(value)
         {
+            return;
+        }
+        if Self::is_place_expression(value) {
+            // B-2026-10-19-13 — a place is refused only when it is a local
+            // that owns a fresh value: a binding over a borrowed scrutinee
+            // (`while let Some(n) = node.next { node = n; }`) is typed by
+            // value here and is a borrow, so it is fine.
+            let ExprKind::Identifier(src) = &value.kind else {
+                return;
+            };
+            let owned = self
+                .resolve_result
+                .resolutions
+                .get(&SpanKey::from_span(&value.span))
+                .map(|id| self.resolve_result.symbol_table.get_symbol(*id).span)
+                .is_some_and(|decl| self.owned_let_bindings.contains(&SpanKey::from_span(&decl)));
+            if !owned {
+                return;
+            }
+            self.type_error_with_fix_it(
+                format!(
+                    "`{name}` is a `ref {}` (it was bound to a borrow), so it cannot take \
+                     `{src}` by value; write `{name} = ref {src}` to borrow it, or bind an \
+                     owned copy where `{name}` is declared (`.clone()`)",
+                    type_display(&inner),
+                ),
+                value.span,
+                TypeErrorKind::TypeMismatch,
+                super::FixIt {
+                    span: value.span,
+                    replacement: format!("ref {src}"),
+                },
+            );
             return;
         }
         self.type_error(

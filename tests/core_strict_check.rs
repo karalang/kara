@@ -9319,3 +9319,53 @@ fn overflow_family_operands_are_checked() {
         );
     }
 }
+
+/// B-2026-10-19-13: the place half of B-2026-10-18-40. A local that owns a
+/// fresh value cannot be stored by value into a local bound to a borrow;
+/// `out = ref t` borrows it, and a binding over a borrowed scrutinee is a
+/// borrow already.
+#[test]
+fn an_owned_local_cannot_be_stored_into_a_local_bound_to_a_borrow() {
+    rejected_then_fixed_by(
+        "owned-local-into-ref-local",
+        r#"fn f(s: String) -> i64 {
+    let t = "xyz".to_string();
+    let mut out = s;
+    out = t;
+    out.len()
+}
+
+fn main() {
+    println(f"{f("a".to_string())}");
+}
+"#,
+        "`out` is a `ref String` (it was bound to a borrow), so it cannot take `t` by value; write `out = ref t`",
+        "out = ref t;",
+    );
+    accepted_and_runs(
+        "borrowed-owned-local-into-ref-local",
+        r#"fn f(s: String) -> i64 {
+    let t = "xyz".to_string();
+    let mut out = s;
+    out = ref t;
+    out.len()
+}
+
+struct Node { val: i64, next: Option[Node] }
+
+fn last(head: Node) -> i64 {
+    let mut node = ref head;
+    while let Some(n) = node.next {
+        node = n;
+    }
+    node.val
+}
+
+fn main() {
+    let l = Node { val: 1, next: Some(Node { val: 2, next: None }) };
+    println(f"{f("a".to_string())} {last(l)}");
+}
+"#,
+        "3 2\n",
+    );
+}

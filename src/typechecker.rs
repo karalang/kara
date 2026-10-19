@@ -3080,6 +3080,11 @@ pub struct TypeChecker<'a> {
     /// at every leaf-binding site (and at struct shorthand fields) when
     /// the scrutinee mode is non-Owned. Surfaced in `check()`.
     pub(super) pattern_binding_borrow_modes: FxHashMap<SpanKey, crate::ast::PatternBindingBorrow>,
+    /// B-2026-10-19-13: the `let` bindings that own a fresh value (a call,
+    /// a literal), keyed by the binding's span, so an assignment of one into
+    /// a local bound to a borrow can be told from a binding over a borrowed
+    /// scrutinee, which the checker types by value too.
+    pub(super) owned_let_bindings: FxHashSet<SpanKey>,
     /// Parallel to `pattern_binding_inner_types`, storing the raw `Type`
     /// (which may contain unresolved `Type::TypeVar`) captured at the
     /// recording site. After body inference completes, `finalize_pattern_
@@ -3483,6 +3488,7 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_types: FxHashMap::default(),
             pattern_binding_inner_types: FxHashMap::default(),
             pattern_binding_borrow_modes: FxHashMap::default(),
+            owned_let_bindings: FxHashSet::default(),
             pattern_binding_inner_unresolved: FxHashMap::default(),
             pending_typevar_pattern_bindings: Vec::new(),
             freshened_scrutinee_vars: std::collections::HashSet::new(),
