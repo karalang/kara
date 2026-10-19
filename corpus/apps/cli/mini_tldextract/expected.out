@@ -1,0 +1,734 @@
+== urls and hosts
+-- extract('http://forums.news.cnn.com/')
+   ExtractResult(subdomain='forums.news', domain='cnn', suffix='com', is_private=False)
+   registered_domain='cnn.com' fqdn='forums.news.cnn.com' ipv4='' ipv6=''
+-- extract('http://forums.bbc.co.uk/')
+   ExtractResult(subdomain='forums', domain='bbc', suffix='co.uk', is_private=False)
+   registered_domain='bbc.co.uk' fqdn='forums.bbc.co.uk' ipv4='' ipv6=''
+-- extract('http://www.worldbank.org.kg/')
+   ExtractResult(subdomain='www', domain='worldbank', suffix='org.kg', is_private=False)
+   registered_domain='worldbank.org.kg' fqdn='www.worldbank.org.kg' ipv4='' ipv6=''
+-- extract('https://www.google.com:443/search?q=x')
+   ExtractResult(subdomain='www', domain='google', suffix='com', is_private=False)
+   registered_domain='google.com' fqdn='www.google.com' ipv4='' ipv6=''
+-- extract('google.com')
+   ExtractResult(subdomain='', domain='google', suffix='com', is_private=False)
+   registered_domain='google.com' fqdn='google.com' ipv4='' ipv6=''
+-- extract('google.notavalidsuffix')
+   ExtractResult(subdomain='google', domain='notavalidsuffix', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('http://127.0.0.1:8080/deployed/')
+   ExtractResult(subdomain='', domain='127.0.0.1', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='127.0.0.1' ipv6=''
+-- extract('http://[2001:db8::1]:8443/path')
+   ExtractResult(subdomain='', domain='[2001:db8::1]', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6='2001:db8::1'
+-- extract('[::1]')
+   ExtractResult(subdomain='', domain='[::1]', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6='::1'
+-- extract('[fe80::1%25eth0]')
+   ExtractResult(subdomain='', domain='[fe80::1%25eth0]', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6='fe80::1%25eth0'
+-- extract('[not-an-ip]')
+   ExtractResult(subdomain='', domain='[not-an-ip]', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('https://user:pass@sub.example.co.uk:8443/a?b#c')
+   ExtractResult(subdomain='sub', domain='example', suffix='co.uk', is_private=False)
+   registered_domain='example.co.uk' fqdn='sub.example.co.uk' ipv4='' ipv6=''
+-- extract('ftp://mirror.kernel.org/pub')
+   ExtractResult(subdomain='mirror', domain='kernel', suffix='org', is_private=False)
+   registered_domain='kernel.org' fqdn='mirror.kernel.org' ipv4='' ipv6=''
+-- extract('//cdn.example.com/lib.js')
+   ExtractResult(subdomain='cdn', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='cdn.example.com' ipv4='' ipv6=''
+-- extract('mailto:someone@example.com')
+   ExtractResult(subdomain='', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='example.com' ipv4='' ipv6=''
+-- extract('example.com.')
+   ExtractResult(subdomain='', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='example.com' ipv4='' ipv6=''
+-- extract('EXAMPLE.CO.UK')
+   ExtractResult(subdomain='', domain='EXAMPLE', suffix='CO.UK', is_private=False)
+   registered_domain='EXAMPLE.CO.UK' fqdn='EXAMPLE.CO.UK' ipv4='' ipv6=''
+-- extract('WWW.Example.COM')
+   ExtractResult(subdomain='WWW', domain='Example', suffix='COM', is_private=False)
+   registered_domain='Example.COM' fqdn='WWW.Example.COM' ipv4='' ipv6=''
+-- extract('a.b.c.d.example.com')
+   ExtractResult(subdomain='a.b.c.d', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='a.b.c.d.example.com' ipv4='' ipv6=''
+-- extract('localhost')
+   ExtractResult(subdomain='', domain='localhost', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('localhost:5000')
+   ExtractResult(subdomain='', domain='localhost', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('')
+   ExtractResult(subdomain='', domain='', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('   ')
+   ExtractResult(subdomain='', domain='', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('http://')
+   ExtractResult(subdomain='', domain='', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('http://.example.com')
+   ExtractResult(subdomain='', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='example.com' ipv4='' ipv6=''
+-- extract('http://example..com')
+   ExtractResult(subdomain='example', domain='', suffix='com', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('com')
+   ExtractResult(subdomain='', domain='', suffix='com', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('co.uk')
+   ExtractResult(subdomain='', domain='', suffix='co.uk', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('.co.uk')
+   ExtractResult(subdomain='', domain='', suffix='co.uk', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('http://foo.bar.com\\x')
+   ExtractResult(subdomain='foo.bar', domain='com\\x', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('s3.amazonaws.com')
+   ExtractResult(subdomain='s3', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='s3.amazonaws.com' ipv4='' ipv6=''
+-- extract('mybucket.s3.amazonaws.com')
+   ExtractResult(subdomain='mybucket.s3', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='mybucket.s3.amazonaws.com' ipv4='' ipv6=''
+-- extract('ec2-1-2-3-4.compute-1.amazonaws.com')
+   ExtractResult(subdomain='ec2-1-2-3-4.compute-1', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='ec2-1-2-3-4.compute-1.amazonaws.com' ipv4='' ipv6=''
+-- extract('ip-10-0-0-1.us-west-2.compute.amazonaws.com')
+   ExtractResult(subdomain='ip-10-0-0-1.us-west-2.compute', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='ip-10-0-0-1.us-west-2.compute.amazonaws.com' ipv4='' ipv6=''
+-- extract('myapp.herokuapp.com')
+   ExtractResult(subdomain='myapp', domain='herokuapp', suffix='com', is_private=False)
+   registered_domain='herokuapp.com' fqdn='myapp.herokuapp.com' ipv4='' ipv6=''
+-- extract('user.github.io')
+   ExtractResult(subdomain='user', domain='github', suffix='io', is_private=False)
+   registered_domain='github.io' fqdn='user.github.io' ipv4='' ipv6=''
+-- extract('github.io')
+   ExtractResult(subdomain='', domain='github', suffix='io', is_private=False)
+   registered_domain='github.io' fqdn='github.io' ipv4='' ipv6=''
+-- extract('www.blogspot.com')
+   ExtractResult(subdomain='www', domain='blogspot', suffix='com', is_private=False)
+   registered_domain='blogspot.com' fqdn='www.blogspot.com' ipv4='' ipv6=''
+-- extract('someone.blogspot.co.uk')
+   ExtractResult(subdomain='someone', domain='blogspot', suffix='co.uk', is_private=False)
+   registered_domain='blogspot.co.uk' fqdn='someone.blogspot.co.uk' ipv4='' ipv6=''
+-- extract('my-site.netlify.app')
+   ExtractResult(subdomain='my-site', domain='netlify', suffix='app', is_private=False)
+   registered_domain='netlify.app' fqdn='my-site.netlify.app' ipv4='' ipv6=''
+-- extract('abc.pages.dev')
+   ExtractResult(subdomain='abc', domain='pages', suffix='dev', is_private=False)
+   registered_domain='pages.dev' fqdn='abc.pages.dev' ipv4='' ipv6=''
+-- extract('www.ck')
+   ExtractResult(subdomain='', domain='www', suffix='ck', is_private=False)
+   registered_domain='www.ck' fqdn='www.ck' ipv4='' ipv6=''
+-- extract('city.kawasaki.jp')
+   ExtractResult(subdomain='', domain='city', suffix='kawasaki.jp', is_private=False)
+   registered_domain='city.kawasaki.jp' fqdn='city.kawasaki.jp' ipv4='' ipv6=''
+-- extract('foo.city.kawasaki.jp')
+   ExtractResult(subdomain='foo', domain='city', suffix='kawasaki.jp', is_private=False)
+   registered_domain='city.kawasaki.jp' fqdn='foo.city.kawasaki.jp' ipv4='' ipv6=''
+-- extract('foo.bar.kawasaki.jp')
+   ExtractResult(subdomain='', domain='foo', suffix='bar.kawasaki.jp', is_private=False)
+   registered_domain='foo.bar.kawasaki.jp' fqdn='foo.bar.kawasaki.jp' ipv4='' ipv6=''
+-- extract('bar.kawasaki.jp')
+   ExtractResult(subdomain='', domain='', suffix='bar.kawasaki.jp', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('kawasaki.jp')
+   ExtractResult(subdomain='', domain='kawasaki', suffix='jp', is_private=False)
+   registered_domain='kawasaki.jp' fqdn='kawasaki.jp' ipv4='' ipv6=''
+-- extract('a.b.example.bd')
+   ExtractResult(subdomain='a', domain='b', suffix='example.bd', is_private=False)
+   registered_domain='b.example.bd' fqdn='a.b.example.bd' ipv4='' ipv6=''
+-- extract('example.bd')
+   ExtractResult(subdomain='', domain='', suffix='example.bd', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('x.school.sch.uk')
+   ExtractResult(subdomain='', domain='x', suffix='school.sch.uk', is_private=False)
+   registered_domain='x.school.sch.uk' fqdn='x.school.sch.uk' ipv4='' ipv6=''
+-- extract('news.bbc.co.uk')
+   ExtractResult(subdomain='news', domain='bbc', suffix='co.uk', is_private=False)
+   registered_domain='bbc.co.uk' fqdn='news.bbc.co.uk' ipv4='' ipv6=''
+-- extract('www.parliament.uk')
+   ExtractResult(subdomain='www', domain='parliament', suffix='uk', is_private=False)
+   registered_domain='parliament.uk' fqdn='www.parliament.uk' ipv4='' ipv6=''
+-- extract('test.k12.ca.us')
+   ExtractResult(subdomain='', domain='test', suffix='k12.ca.us', is_private=False)
+   registered_domain='test.k12.ca.us' fqdn='test.k12.ca.us' ipv4='' ipv6=''
+-- extract('www.ox.ac.uk')
+   ExtractResult(subdomain='www', domain='ox', suffix='ac.uk', is_private=False)
+   registered_domain='ox.ac.uk' fqdn='www.ox.ac.uk' ipv4='' ipv6=''
+-- extract('shop.example.com.au')
+   ExtractResult(subdomain='shop', domain='example', suffix='com.au', is_private=False)
+   registered_domain='example.com.au' fqdn='shop.example.com.au' ipv4='' ipv6=''
+-- extract('www.city.yokohama.jp')
+   ExtractResult(subdomain='www', domain='city', suffix='yokohama.jp', is_private=False)
+   registered_domain='city.yokohama.jp' fqdn='www.city.yokohama.jp' ipv4='' ipv6=''
+-- extract('www.example.co.jp')
+   ExtractResult(subdomain='www', domain='example', suffix='co.jp', is_private=False)
+   registered_domain='example.co.jp' fqdn='www.example.co.jp' ipv4='' ipv6=''
+-- extract('例子.中国')
+   ExtractResult(subdomain='', domain='例子', suffix='中国', is_private=False)
+   registered_domain='例子.中国' fqdn='例子.中国' ipv4='' ipv6=''
+-- extract('www.例子.公司.cn')
+   ExtractResult(subdomain='www', domain='例子', suffix='公司.cn', is_private=False)
+   registered_domain='例子.公司.cn' fqdn='www.例子.公司.cn' ipv4='' ipv6=''
+-- extract('www.xn--fiqs8s')
+   ExtractResult(subdomain='', domain='www', suffix='xn--fiqs8s', is_private=False)
+   registered_domain='www.xn--fiqs8s' fqdn='www.xn--fiqs8s' ipv4='' ipv6=''
+-- extract('www.example.xn--fiqs8s')
+   ExtractResult(subdomain='www', domain='example', suffix='xn--fiqs8s', is_private=False)
+   registered_domain='example.xn--fiqs8s' fqdn='www.example.xn--fiqs8s' ipv4='' ipv6=''
+-- extract('www.EXAMPLE.XN--FIQS8S')
+   ExtractResult(subdomain='www', domain='EXAMPLE', suffix='XN--FIQS8S', is_private=False)
+   registered_domain='EXAMPLE.XN--FIQS8S' fqdn='www.EXAMPLE.XN--FIQS8S' ipv4='' ipv6=''
+-- extract('foo.xn--55qx5d.cn')
+   ExtractResult(subdomain='', domain='foo', suffix='xn--55qx5d.cn', is_private=False)
+   registered_domain='foo.xn--55qx5d.cn' fqdn='foo.xn--55qx5d.cn' ipv4='' ipv6=''
+-- extract('www.xn--bcher-kva.example')
+   ExtractResult(subdomain='www.xn--bcher-kva', domain='example', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('www.example.xn--')
+   ExtractResult(subdomain='www.example', domain='xn--', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('www.example.xn--zz')
+   ExtractResult(subdomain='www.example', domain='xn--zz', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('www.example.xn--a-ecp.ru')
+   ExtractResult(subdomain='www.example', domain='xn--a-ecp', suffix='ru', is_private=False)
+   registered_domain='xn--a-ecp.ru' fqdn='www.example.xn--a-ecp.ru' ipv4='' ipv6=''
+-- extract('xn--mgbaam7a8h.xn--mgbaam7a8h')
+   ExtractResult(subdomain='', domain='xn--mgbaam7a8h', suffix='xn--mgbaam7a8h', is_private=False)
+   registered_domain='xn--mgbaam7a8h.xn--mgbaam7a8h' fqdn='xn--mgbaam7a8h.xn--mgbaam7a8h' ipv4='' ipv6=''
+-- extract('bücher.de')
+   ExtractResult(subdomain='', domain='bücher', suffix='de', is_private=False)
+   registered_domain='bücher.de' fqdn='bücher.de' ipv4='' ipv6=''
+-- extract('www.食狮.公司.cn')
+   ExtractResult(subdomain='www', domain='食狮', suffix='公司.cn', is_private=False)
+   registered_domain='食狮.公司.cn' fqdn='www.食狮.公司.cn' ipv4='' ipv6=''
+-- extract('www。example。com')
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('www．example．co．uk')
+   ExtractResult(subdomain='www', domain='example', suffix='co.uk', is_private=False)
+   registered_domain='example.co.uk' fqdn='www.example.co.uk' ipv4='' ipv6=''
+-- extract('www｡example｡org')
+   ExtractResult(subdomain='www', domain='example', suffix='org', is_private=False)
+   registered_domain='example.org' fqdn='www.example.org' ipv4='' ipv6=''
+-- extract('example.com。')
+   ExtractResult(subdomain='', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='example.com' ipv4='' ipv6=''
+-- extract('1.2.3.4')
+   ExtractResult(subdomain='', domain='1.2.3.4', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='1.2.3.4' ipv6=''
+-- extract('1.2.3.4.5')
+   ExtractResult(subdomain='1.2.3.4', domain='5', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('01.2.3.4')
+   ExtractResult(subdomain='01.2.3', domain='4', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('256.1.1.1')
+   ExtractResult(subdomain='256.1.1', domain='1', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('1.2.3')
+   ExtractResult(subdomain='1.2', domain='3', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('١.2.3.4')
+   ExtractResult(subdomain='١.2.3', domain='4', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('http://1.2.3.4/')
+   ExtractResult(subdomain='', domain='1.2.3.4', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='1.2.3.4' ipv6=''
+-- extract('http://user@1.2.3.4:80/')
+   ExtractResult(subdomain='', domain='1.2.3.4', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='1.2.3.4' ipv6=''
+-- extract('1.2.3.com')
+   ExtractResult(subdomain='1.2', domain='3', suffix='com', is_private=False)
+   registered_domain='3.com' fqdn='1.2.3.com' ipv4='' ipv6=''
+-- extract('http://www.example.com#frag')
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('http://www.example.com?q=1')
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('https://www.example.com/path/to/page.html')
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('https:/www.example.com')
+   ExtractResult(subdomain='', domain='https', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('1http://www.example.com')
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('git+ssh://git@github.com/org/repo.git')
+   ExtractResult(subdomain='', domain='github', suffix='com', is_private=False)
+   registered_domain='github.com' fqdn='github.com' ipv4='' ipv6=''
+-- extract('a b.example.com')
+   ExtractResult(subdomain='a b', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='a b.example.com' ipv4='' ipv6=''
+-- extract(' http://example.com ')
+   ExtractResult(subdomain='', domain='http', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('_dmarc.example.com')
+   ExtractResult(subdomain='_dmarc', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='_dmarc.example.com' ipv4='' ipv6=''
+-- extract('-bad-.example.com')
+   ExtractResult(subdomain='-bad-', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='-bad-.example.com' ipv4='' ipv6=''
+-- extract('xn--.com')
+   ExtractResult(subdomain='', domain='xn--', suffix='com', is_private=False)
+   registered_domain='xn--.com' fqdn='xn--.com' ipv4='' ipv6=''
+-- extract('uk')
+   ExtractResult(subdomain='', domain='', suffix='uk', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('jp')
+   ExtractResult(subdomain='', domain='', suffix='jp', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('zz')
+   ExtractResult(subdomain='', domain='zz', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('www.gov.uk')
+   ExtractResult(subdomain='', domain='www', suffix='gov.uk', is_private=False)
+   registered_domain='www.gov.uk' fqdn='www.gov.uk' ipv4='' ipv6=''
+-- extract('service.gov.uk')
+   ExtractResult(subdomain='', domain='service', suffix='gov.uk', is_private=False)
+   registered_domain='service.gov.uk' fqdn='service.gov.uk' ipv4='' ipv6=''
+-- extract('a.service.gov.uk')
+   ExtractResult(subdomain='a', domain='service', suffix='gov.uk', is_private=False)
+   registered_domain='service.gov.uk' fqdn='a.service.gov.uk' ipv4='' ipv6=''
+== private domains per call
+-- extract('user.github.io', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='user', suffix='github.io', is_private=True)
+   registered_domain='user.github.io' fqdn='user.github.io' ipv4='' ipv6=''
+-- extract('user.github.io', include_psl_private_domains=False)
+   ExtractResult(subdomain='user', domain='github', suffix='io', is_private=False)
+   registered_domain='github.io' fqdn='user.github.io' ipv4='' ipv6=''
+-- extract('github.io', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='', suffix='github.io', is_private=True)
+   registered_domain='' fqdn='github.io' ipv4='' ipv6=''
+-- extract('github.io', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='github', suffix='io', is_private=False)
+   registered_domain='github.io' fqdn='github.io' ipv4='' ipv6=''
+-- extract('www.blogspot.com', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='www', suffix='blogspot.com', is_private=True)
+   registered_domain='www.blogspot.com' fqdn='www.blogspot.com' ipv4='' ipv6=''
+-- extract('www.blogspot.com', include_psl_private_domains=False)
+   ExtractResult(subdomain='www', domain='blogspot', suffix='com', is_private=False)
+   registered_domain='blogspot.com' fqdn='www.blogspot.com' ipv4='' ipv6=''
+-- extract('s3.amazonaws.com', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='', suffix='s3.amazonaws.com', is_private=True)
+   registered_domain='' fqdn='s3.amazonaws.com' ipv4='' ipv6=''
+-- extract('s3.amazonaws.com', include_psl_private_domains=False)
+   ExtractResult(subdomain='s3', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='s3.amazonaws.com' ipv4='' ipv6=''
+-- extract('mybucket.s3.amazonaws.com', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='mybucket', suffix='s3.amazonaws.com', is_private=True)
+   registered_domain='mybucket.s3.amazonaws.com' fqdn='mybucket.s3.amazonaws.com' ipv4='' ipv6=''
+-- extract('mybucket.s3.amazonaws.com', include_psl_private_domains=False)
+   ExtractResult(subdomain='mybucket.s3', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='mybucket.s3.amazonaws.com' ipv4='' ipv6=''
+-- extract('ip-10-0-0-1.us-west-2.compute.amazonaws.com', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='ip-10-0-0-1', suffix='us-west-2.compute.amazonaws.com', is_private=True)
+   registered_domain='ip-10-0-0-1.us-west-2.compute.amazonaws.com' fqdn='ip-10-0-0-1.us-west-2.compute.amazonaws.com' ipv4='' ipv6=''
+-- extract('ip-10-0-0-1.us-west-2.compute.amazonaws.com', include_psl_private_domains=False)
+   ExtractResult(subdomain='ip-10-0-0-1.us-west-2.compute', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='ip-10-0-0-1.us-west-2.compute.amazonaws.com' ipv4='' ipv6=''
+-- extract('foo.bar.compute.amazonaws.com', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='foo', suffix='bar.compute.amazonaws.com', is_private=True)
+   registered_domain='foo.bar.compute.amazonaws.com' fqdn='foo.bar.compute.amazonaws.com' ipv4='' ipv6=''
+-- extract('foo.bar.compute.amazonaws.com', include_psl_private_domains=False)
+   ExtractResult(subdomain='foo.bar.compute', domain='amazonaws', suffix='com', is_private=False)
+   registered_domain='amazonaws.com' fqdn='foo.bar.compute.amazonaws.com' ipv4='' ipv6=''
+-- extract('abc.pages.dev', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='abc', suffix='pages.dev', is_private=True)
+   registered_domain='abc.pages.dev' fqdn='abc.pages.dev' ipv4='' ipv6=''
+-- extract('abc.pages.dev', include_psl_private_domains=False)
+   ExtractResult(subdomain='abc', domain='pages', suffix='dev', is_private=False)
+   registered_domain='pages.dev' fqdn='abc.pages.dev' ipv4='' ipv6=''
+-- extract('x.on-acorn.io', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='', suffix='x.on-acorn.io', is_private=True)
+   registered_domain='' fqdn='x.on-acorn.io' ipv4='' ipv6=''
+-- extract('x.on-acorn.io', include_psl_private_domains=False)
+   ExtractResult(subdomain='x', domain='on-acorn', suffix='io', is_private=False)
+   registered_domain='on-acorn.io' fqdn='x.on-acorn.io' ipv4='' ipv6=''
+-- extract('on-acorn.io', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='on-acorn', suffix='io', is_private=False)
+   registered_domain='on-acorn.io' fqdn='on-acorn.io' ipv4='' ipv6=''
+-- extract('on-acorn.io', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='on-acorn', suffix='io', is_private=False)
+   registered_domain='on-acorn.io' fqdn='on-acorn.io' ipv4='' ipv6=''
+-- extract('y.x.on-acorn.io', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='y', suffix='x.on-acorn.io', is_private=True)
+   registered_domain='y.x.on-acorn.io' fqdn='y.x.on-acorn.io' ipv4='' ipv6=''
+-- extract('y.x.on-acorn.io', include_psl_private_domains=False)
+   ExtractResult(subdomain='y.x', domain='on-acorn', suffix='io', is_private=False)
+   registered_domain='on-acorn.io' fqdn='y.x.on-acorn.io' ipv4='' ipv6=''
+-- extract('myapp.herokuapp.com', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='myapp', suffix='herokuapp.com', is_private=True)
+   registered_domain='myapp.herokuapp.com' fqdn='myapp.herokuapp.com' ipv4='' ipv6=''
+-- extract('myapp.herokuapp.com', include_psl_private_domains=False)
+   ExtractResult(subdomain='myapp', domain='herokuapp', suffix='com', is_private=False)
+   registered_domain='herokuapp.com' fqdn='myapp.herokuapp.com' ipv4='' ipv6=''
+-- extract('www.example.com', include_psl_private_domains=True)
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('www.example.com', include_psl_private_domains=False)
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('co.uk', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='', suffix='co.uk', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('co.uk', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='', suffix='co.uk', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+== an extractor with private domains on
+-- TLDExtract(include_psl_private_domains=True)
+-- extract('user.github.io')
+   ExtractResult(subdomain='', domain='user', suffix='github.io', is_private=True)
+   registered_domain='user.github.io' fqdn='user.github.io' ipv4='' ipv6=''
+-- extract('www.google.com')
+   ExtractResult(subdomain='www', domain='google', suffix='com', is_private=False)
+   registered_domain='google.com' fqdn='www.google.com' ipv4='' ipv6=''
+-- extract('a.b.blogspot.com')
+   ExtractResult(subdomain='a', domain='b', suffix='blogspot.com', is_private=True)
+   registered_domain='b.blogspot.com' fqdn='a.b.blogspot.com' ipv4='' ipv6=''
+-- extract('s3.amazonaws.com')
+   ExtractResult(subdomain='', domain='', suffix='s3.amazonaws.com', is_private=True)
+   registered_domain='' fqdn='s3.amazonaws.com' ipv4='' ipv6=''
+-- extract('foo.city.kawasaki.jp')
+   ExtractResult(subdomain='foo', domain='city', suffix='kawasaki.jp', is_private=False)
+   registered_domain='city.kawasaki.jp' fqdn='foo.city.kawasaki.jp' ipv4='' ipv6=''
+-- extract('user.github.io', include_psl_private_domains=False)
+   ExtractResult(subdomain='user', domain='github', suffix='io', is_private=False)
+   registered_domain='github.io' fqdn='user.github.io' ipv4='' ipv6=''
+== extra suffixes
+-- TLDExtract(extra_suffixes=['internal', 'corp.example.com', '*.svc.cluster.local'])
+-- extract('api.internal')
+   ExtractResult(subdomain='', domain='api', suffix='internal', is_private=False)
+   registered_domain='api.internal' fqdn='api.internal' ipv4='' ipv6=''
+-- extract('db.prod.internal')
+   ExtractResult(subdomain='db', domain='prod', suffix='internal', is_private=False)
+   registered_domain='prod.internal' fqdn='db.prod.internal' ipv4='' ipv6=''
+-- extract('wiki.corp.example.com')
+   ExtractResult(subdomain='', domain='wiki', suffix='corp.example.com', is_private=False)
+   registered_domain='wiki.corp.example.com' fqdn='wiki.corp.example.com' ipv4='' ipv6=''
+-- extract('corp.example.com')
+   ExtractResult(subdomain='', domain='', suffix='corp.example.com', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('www.example.com')
+   ExtractResult(subdomain='www', domain='example', suffix='com', is_private=False)
+   registered_domain='example.com' fqdn='www.example.com' ipv4='' ipv6=''
+-- extract('web.default.svc.cluster.local')
+   ExtractResult(subdomain='', domain='web', suffix='default.svc.cluster.local', is_private=False)
+   registered_domain='web.default.svc.cluster.local' fqdn='web.default.svc.cluster.local' ipv4='' ipv6=''
+-- extract('svc.cluster.local')
+   ExtractResult(subdomain='svc.cluster', domain='local', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('x.cluster.local')
+   ExtractResult(subdomain='x.cluster', domain='local', suffix='', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('internal')
+   ExtractResult(subdomain='', domain='', suffix='internal', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- TLDExtract(extra_suffixes=['github.io'], include_psl_private_domains=False)
+-- extract('user.github.io')
+   ExtractResult(subdomain='', domain='user', suffix='github.io', is_private=False)
+   registered_domain='user.github.io' fqdn='user.github.io' ipv4='' ipv6=''
+-- TLDExtract()
+== random hosts
+-- extract('http://www.dev.foo.ck/')
+   ExtractResult(subdomain='www', domain='dev', suffix='foo.ck', is_private=False)
+   registered_domain='dev.foo.ck' fqdn='www.dev.foo.ck' ipv4='' ipv6=''
+-- extract('//static.cdn.contoso.xn--fiqs8s', include_psl_private_domains=True)
+   ExtractResult(subdomain='static.cdn', domain='contoso', suffix='xn--fiqs8s', is_private=False)
+   registered_domain='contoso.xn--fiqs8s' fqdn='static.cdn.contoso.xn--fiqs8s' ipv4='' ipv6=''
+-- extract('//my-site.org/', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='my-site', suffix='org', is_private=False)
+   registered_domain='my-site.org' fqdn='my-site.org' ipv4='' ipv6=''
+-- extract('https://api.foo.xn--fiqs8s:8080/a/b?c=d', include_psl_private_domains=True)
+   ExtractResult(subdomain='api', domain='foo', suffix='xn--fiqs8s', is_private=False)
+   registered_domain='foo.xn--fiqs8s' fqdn='api.foo.xn--fiqs8s' ipv4='' ipv6=''
+-- extract('blog.widgets.公司.cn:8080/')
+   ExtractResult(subdomain='blog', domain='widgets', suffix='公司.cn', is_private=False)
+   registered_domain='widgets.公司.cn' fqdn='blog.widgets.公司.cn' ipv4='' ipv6=''
+-- extract('https://x-y.widgets.co.jp/a/b?c=d', include_psl_private_domains=False)
+   ExtractResult(subdomain='x-y', domain='widgets', suffix='co.jp', is_private=False)
+   registered_domain='widgets.co.jp' fqdn='x-y.widgets.co.jp' ipv4='' ipv6=''
+-- extract('http://blog.m.mail.contoso.ac.uk/')
+   ExtractResult(subdomain='blog.m.mail', domain='contoso', suffix='ac.uk', is_private=False)
+   registered_domain='contoso.ac.uk' fqdn='blog.m.mail.contoso.ac.uk' ipv4='' ipv6=''
+-- extract('//shop.foo.edu.cn/')
+   ExtractResult(subdomain='shop', domain='foo', suffix='edu.cn', is_private=False)
+   registered_domain='foo.edu.cn' fqdn='shop.foo.edu.cn' ipv4='' ipv6=''
+-- extract('http://NEWS.AC.UK:8080/', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='NEWS', suffix='AC.UK', is_private=False)
+   registered_domain='NEWS.AC.UK' fqdn='NEWS.AC.UK' ipv4='' ipv6=''
+-- extract('//dev.img.my-site.ac.uk/', include_psl_private_domains=False)
+   ExtractResult(subdomain='dev.img', domain='my-site', suffix='ac.uk', is_private=False)
+   registered_domain='my-site.ac.uk' fqdn='dev.img.my-site.ac.uk' ipv4='' ipv6=''
+-- extract('http://a1.example.appspot.com:8080#top', include_psl_private_domains=True)
+   ExtractResult(subdomain='a1', domain='example', suffix='appspot.com', is_private=True)
+   registered_domain='example.appspot.com' fqdn='a1.example.appspot.com' ipv4='' ipv6=''
+-- extract('http://shop.acme.nom.br#top')
+   ExtractResult(subdomain='', domain='shop', suffix='acme.nom.br', is_private=False)
+   registered_domain='shop.acme.nom.br' fqdn='shop.acme.nom.br' ipv4='' ipv6=''
+-- extract('//static.a1.shop.acme.com.au/a/b?c=d', include_psl_private_domains=False)
+   ExtractResult(subdomain='static.a1.shop', domain='acme', suffix='com.au', is_private=False)
+   registered_domain='acme.com.au' fqdn='static.a1.shop.acme.com.au' ipv4='' ipv6=''
+-- extract('http://blog.static.my-site.blogspot.com/a/b?c=d', include_psl_private_domains=False)
+   ExtractResult(subdomain='blog.static.my-site', domain='blogspot', suffix='com', is_private=False)
+   registered_domain='blogspot.com' fqdn='blog.static.my-site.blogspot.com' ipv4='' ipv6=''
+-- extract('//IMG.WIDGETS.EDU.CN:8080/')
+   ExtractResult(subdomain='IMG', domain='WIDGETS', suffix='EDU.CN', is_private=False)
+   registered_domain='WIDGETS.EDU.CN' fqdn='IMG.WIDGETS.EDU.CN' ipv4='' ipv6=''
+-- extract('WWW.X-Y.ACME.AC.UK#top', include_psl_private_domains=True)
+   ExtractResult(subdomain='WWW.X-Y', domain='ACME', suffix='AC.UK', is_private=False)
+   registered_domain='ACME.AC.UK' fqdn='WWW.X-Y.ACME.AC.UK' ipv4='' ipv6=''
+-- extract('www.blog.m.news.公司.cn:8080/a/b?c=d', include_psl_private_domains=False)
+   ExtractResult(subdomain='www.blog.m', domain='news', suffix='公司.cn', is_private=False)
+   registered_domain='news.公司.cn' fqdn='www.blog.m.news.公司.cn' ipv4='' ipv6=''
+-- extract('example.ck:8080#top', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='', suffix='example.ck', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('//acme.github.io/', include_psl_private_domains=False)
+   ExtractResult(subdomain='acme', domain='github', suffix='io', is_private=False)
+   registered_domain='github.io' fqdn='acme.github.io' ipv4='' ipv6=''
+-- extract('blog.dev.news.github.io', include_psl_private_domains=True)
+   ExtractResult(subdomain='blog.dev', domain='news', suffix='github.io', is_private=True)
+   registered_domain='news.github.io' fqdn='blog.dev.news.github.io' ipv4='' ipv6=''
+-- extract('//shop.static.contoso.appspot.com:8080')
+   ExtractResult(subdomain='shop.static.contoso', domain='appspot', suffix='com', is_private=False)
+   registered_domain='appspot.com' fqdn='shop.static.contoso.appspot.com' ipv4='' ipv6=''
+-- extract('foo.kawasaki.jp/a/b?c=d', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='', suffix='foo.kawasaki.jp', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('//api.my-site.kawasaki.jp/a/b?c=d')
+   ExtractResult(subdomain='', domain='api', suffix='my-site.kawasaki.jp', is_private=False)
+   registered_domain='api.my-site.kawasaki.jp' fqdn='api.my-site.kawasaki.jp' ipv4='' ipv6=''
+-- extract('http://x-y.img.acme.com.au:8080#top', include_psl_private_domains=False)
+   ExtractResult(subdomain='x-y.img', domain='acme', suffix='com.au', is_private=False)
+   registered_domain='acme.com.au' fqdn='x-y.img.acme.com.au' ipv4='' ipv6=''
+-- extract('x-y.static.m.foo.ac.uk:8080/', include_psl_private_domains=False)
+   ExtractResult(subdomain='x-y.static.m', domain='foo', suffix='ac.uk', is_private=False)
+   registered_domain='foo.ac.uk' fqdn='x-y.static.m.foo.ac.uk' ipv4='' ipv6=''
+-- extract('http://widgets.kawasaki.jp:8080')
+   ExtractResult(subdomain='', domain='', suffix='widgets.kawasaki.jp', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('//SHOP.API.WIDGETS.COM.AU#top')
+   ExtractResult(subdomain='SHOP.API', domain='WIDGETS', suffix='COM.AU', is_private=False)
+   registered_domain='WIDGETS.COM.AU' fqdn='SHOP.API.WIDGETS.COM.AU' ipv4='' ipv6=''
+-- extract('https://a1.cdn.widgets.xn--fiqs8s:8080/', include_psl_private_domains=True)
+   ExtractResult(subdomain='a1.cdn', domain='widgets', suffix='xn--fiqs8s', is_private=False)
+   registered_domain='widgets.xn--fiqs8s' fqdn='a1.cdn.widgets.xn--fiqs8s' ipv4='' ipv6=''
+-- extract('//news.museum', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='news', suffix='museum', is_private=False)
+   registered_domain='news.museum' fqdn='news.museum' ipv4='' ipv6=''
+-- extract('https://api.www.acme.com.au', include_psl_private_domains=True)
+   ExtractResult(subdomain='api.www', domain='acme', suffix='com.au', is_private=False)
+   registered_domain='acme.com.au' fqdn='api.www.acme.com.au' ipv4='' ipv6=''
+-- extract('https://data.net.br:8080', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='data', suffix='net.br', is_private=False)
+   registered_domain='data.net.br' fqdn='data.net.br' ipv4='' ipv6=''
+-- extract('//news.gov.uk:8080/', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='news', suffix='gov.uk', is_private=False)
+   registered_domain='news.gov.uk' fqdn='news.gov.uk' ipv4='' ipv6=''
+-- extract('https://STATIC.FOO.KAWASAKI.JP', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='STATIC', suffix='FOO.KAWASAKI.JP', is_private=False)
+   registered_domain='STATIC.FOO.KAWASAKI.JP' fqdn='STATIC.FOO.KAWASAKI.JP' ipv4='' ipv6=''
+-- extract('//M.DATA.NOM.BR:8080/a/b?c=d', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='M', suffix='DATA.NOM.BR', is_private=False)
+   registered_domain='M.DATA.NOM.BR' fqdn='M.DATA.NOM.BR' ipv4='' ipv6=''
+-- extract('https://cdn.acme.museum#top', include_psl_private_domains=True)
+   ExtractResult(subdomain='cdn', domain='acme', suffix='museum', is_private=False)
+   registered_domain='acme.museum' fqdn='cdn.acme.museum' ipv4='' ipv6=''
+-- extract('http://img.shop.foo.blogspot.com')
+   ExtractResult(subdomain='img.shop.foo', domain='blogspot', suffix='com', is_private=False)
+   registered_domain='blogspot.com' fqdn='img.shop.foo.blogspot.com' ipv4='' ipv6=''
+-- extract('https://img.mail.acme.ac.uk', include_psl_private_domains=True)
+   ExtractResult(subdomain='img.mail', domain='acme', suffix='ac.uk', is_private=False)
+   registered_domain='acme.ac.uk' fqdn='img.mail.acme.ac.uk' ipv4='' ipv6=''
+-- extract('www.news.gov.uk:8080', include_psl_private_domains=True)
+   ExtractResult(subdomain='www', domain='news', suffix='gov.uk', is_private=False)
+   registered_domain='news.gov.uk' fqdn='www.news.gov.uk' ipv4='' ipv6=''
+-- extract('https://WWW.FOO.公司.CN:8080/a/b?c=d')
+   ExtractResult(subdomain='WWW', domain='FOO', suffix='公司.CN', is_private=False)
+   registered_domain='FOO.公司.CN' fqdn='WWW.FOO.公司.CN' ipv4='' ipv6=''
+-- extract('img.www.static.foo.appspot.com/', include_psl_private_domains=False)
+   ExtractResult(subdomain='img.www.static.foo', domain='appspot', suffix='com', is_private=False)
+   registered_domain='appspot.com' fqdn='img.www.static.foo.appspot.com' ipv4='' ipv6=''
+-- extract('https://acme.net.br#top', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='acme', suffix='net.br', is_private=False)
+   registered_domain='acme.net.br' fqdn='acme.net.br' ipv4='' ipv6=''
+-- extract('http://example.公司.cn/', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='example', suffix='公司.cn', is_private=False)
+   registered_domain='example.公司.cn' fqdn='example.公司.cn' ipv4='' ipv6=''
+-- extract('https://WWW.BLOG.DEV.DATA.MUSEUM/', include_psl_private_domains=True)
+   ExtractResult(subdomain='WWW.BLOG.DEV', domain='DATA', suffix='MUSEUM', is_private=False)
+   registered_domain='DATA.MUSEUM' fqdn='WWW.BLOG.DEV.DATA.MUSEUM' ipv4='' ipv6=''
+-- extract('http://static.blog.widgets.org:8080', include_psl_private_domains=False)
+   ExtractResult(subdomain='static.blog', domain='widgets', suffix='org', is_private=False)
+   registered_domain='widgets.org' fqdn='static.blog.widgets.org' ipv4='' ipv6=''
+-- extract('http://example.kawasaki.jp#top')
+   ExtractResult(subdomain='', domain='', suffix='example.kawasaki.jp', is_private=False)
+   registered_domain='' fqdn='' ipv4='' ipv6=''
+-- extract('http://img.static.widgets.kawasaki.jp/a/b?c=d', include_psl_private_domains=True)
+   ExtractResult(subdomain='img', domain='static', suffix='widgets.kawasaki.jp', is_private=False)
+   registered_domain='static.widgets.kawasaki.jp' fqdn='img.static.widgets.kawasaki.jp' ipv4='' ipv6=''
+-- extract('//mail.widgets.github.io/')
+   ExtractResult(subdomain='mail.widgets', domain='github', suffix='io', is_private=False)
+   registered_domain='github.io' fqdn='mail.widgets.github.io' ipv4='' ipv6=''
+-- extract('http://DEV.CDN.IMG.NEWS.JP/', include_psl_private_domains=False)
+   ExtractResult(subdomain='DEV.CDN.IMG', domain='NEWS', suffix='JP', is_private=False)
+   registered_domain='NEWS.JP' fqdn='DEV.CDN.IMG.NEWS.JP' ipv4='' ipv6=''
+-- extract('//m.www.contoso.ck:8080/a/b?c=d', include_psl_private_domains=True)
+   ExtractResult(subdomain='m', domain='www', suffix='contoso.ck', is_private=False)
+   registered_domain='www.contoso.ck' fqdn='m.www.contoso.ck' ipv4='' ipv6=''
+-- extract('//www.blog.img.example.blogspot.com/', include_psl_private_domains=False)
+   ExtractResult(subdomain='www.blog.img.example', domain='blogspot', suffix='com', is_private=False)
+   registered_domain='blogspot.com' fqdn='www.blog.img.example.blogspot.com' ipv4='' ipv6=''
+-- extract('https://blog.a1.m.my-site.edu.cn')
+   ExtractResult(subdomain='blog.a1.m', domain='my-site', suffix='edu.cn', is_private=False)
+   registered_domain='my-site.edu.cn' fqdn='blog.a1.m.my-site.edu.cn' ipv4='' ipv6=''
+-- extract('http://static.x-y.acme.ac.uk#top', include_psl_private_domains=False)
+   ExtractResult(subdomain='static.x-y', domain='acme', suffix='ac.uk', is_private=False)
+   registered_domain='acme.ac.uk' fqdn='static.x-y.acme.ac.uk' ipv4='' ipv6=''
+-- extract('http://dev.m.img.contoso.ac.uk:8080/', include_psl_private_domains=True)
+   ExtractResult(subdomain='dev.m.img', domain='contoso', suffix='ac.uk', is_private=False)
+   registered_domain='contoso.ac.uk' fqdn='dev.m.img.contoso.ac.uk' ipv4='' ipv6=''
+-- extract('https://contoso.gov.uk#top', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='contoso', suffix='gov.uk', is_private=False)
+   registered_domain='contoso.gov.uk' fqdn='contoso.gov.uk' ipv4='' ipv6=''
+-- extract('dev.m.x-y.foo.co.jp/a/b?c=d')
+   ExtractResult(subdomain='dev.m.x-y', domain='foo', suffix='co.jp', is_private=False)
+   registered_domain='foo.co.jp' fqdn='dev.m.x-y.foo.co.jp' ipv4='' ipv6=''
+-- extract('https://example.xn--fiqs8s#top')
+   ExtractResult(subdomain='', domain='example', suffix='xn--fiqs8s', is_private=False)
+   registered_domain='example.xn--fiqs8s' fqdn='example.xn--fiqs8s' ipv4='' ipv6=''
+-- extract('EXAMPLE.GOV.UK:8080#top', include_psl_private_domains=False)
+   ExtractResult(subdomain='', domain='EXAMPLE', suffix='GOV.UK', is_private=False)
+   registered_domain='EXAMPLE.GOV.UK' fqdn='EXAMPLE.GOV.UK' ipv4='' ipv6=''
+-- extract('http://foo.appspot.com/', include_psl_private_domains=True)
+   ExtractResult(subdomain='', domain='foo', suffix='appspot.com', is_private=True)
+   registered_domain='foo.appspot.com' fqdn='foo.appspot.com' ipv4='' ipv6=''
+-- extract('//shop.api.x-y.acme.appspot.com:8080/')
+   ExtractResult(subdomain='shop.api.x-y.acme', domain='appspot', suffix='com', is_private=False)
+   registered_domain='appspot.com' fqdn='shop.api.x-y.acme.appspot.com' ipv4='' ipv6=''
+-- extract('http://CDN.DATA.公司.CN:8080', include_psl_private_domains=False)
+   ExtractResult(subdomain='CDN', domain='DATA', suffix='公司.CN', is_private=False)
+   registered_domain='DATA.公司.CN' fqdn='CDN.DATA.公司.CN' ipv4='' ipv6=''
+== the tldextract command
+-- tldextract forums.bbc.co.uk
+   forums bbc co.uk
+   exit 0
+-- tldextract -j http://user.github.io/x 例子.中国
+   {"subdomain": "user", "domain": "github", "suffix": "io", "is_private": false, "fqdn": "user.github.io", "ipv4": "", "ipv6": "", "registered_domain": "github.io"}
+   {"subdomain": "", "domain": "\u4f8b\u5b50", "suffix": "\u4e2d\u56fd", "is_private": false, "fqdn": "\u4f8b\u5b50.\u4e2d\u56fd", "ipv4": "", "ipv6": "", "registered_domain": "\u4f8b\u5b50.\u4e2d\u56fd"}
+   exit 0
+-- tldextract -p user.github.io
+    user github.io
+   exit 0
+-- tldextract --private_domains --json s3.amazonaws.com
+   {"subdomain": "", "domain": "", "suffix": "s3.amazonaws.com", "is_private": true, "fqdn": "s3.amazonaws.com", "ipv4": "", "ipv6": "", "registered_domain": ""}
+   exit 0
+-- tldextract --include_psl_private_domains a.b.c
+   a.b c 
+   exit 0
+-- tldextract [::1] 127.0.0.1
+    [::1] 
+    127.0.0.1 
+   exit 0
+-- tldextract -j [2001:db8::1] 1.2.3.4
+   {"subdomain": "", "domain": "[2001:db8::1]", "suffix": "", "is_private": false, "fqdn": "", "ipv4": "", "ipv6": "2001:db8::1", "registered_domain": ""}
+   {"subdomain": "", "domain": "1.2.3.4", "suffix": "", "is_private": false, "fqdn": "", "ipv4": "1.2.3.4", "ipv6": "", "registered_domain": ""}
+   exit 0
+-- tldextract 
+   usage: tldextract [-h] [--version] [-j] [-u]
+                     [--suffix_list_url SUFFIX_LIST_URL] [-c CACHE_DIR] [-p]
+                     [--no_fallback_to_snapshot]
+                     [fqdn|url ...]
+   exit 1
+== suffix list
+   6870 public rules, 2910 private rules
+   160 wildcard rules, 8 exceptions
+   6870 suffixes without private domains, 9780 with
+== referrers in an access log
+   120 requests from 22 sites
+      12 reddit.com (old, www)
+       8 192.168.1.10 (@)
+       8 other.blogspot.com (@)
+       8 yahoo.co.jp (mail, search)
+       7 2001:db8::7 (@)
+       7 bing.com (www)
+       7 duckduckgo.com (@)
+       7 facebook.com (l, m)
+       7 google.com (www)
+       7 ycombinator.com (news)
+       6 例子.中国 (@)
+       4 (direct)
+       4 bob.github.io (@)
+       4 pypi.org (@)
+       4 python.org (docs)
+       4 slack (com)
+       4 t.co (@)
+       4 www.xn--fiqs8s (@)
+       3 someblog.blogspot.com (@)
+       2 alice.github.io (@)
+       2 google.co.uk (www)
+       1 myapp.herokuapp.com (@)
+   by public suffix:
+      47 com
+      19 (none)
+      11 blogspot.com
+       8 co.jp
+       8 org
+       6 github.io
+       6 中国
+       4 co
+       4 xn--fiqs8s
+       2 co.uk
+       1 herokuapp.com
+== cookie domains
+   www.example.com Domain=example.com: accepted for example.com and its subdomains
+   www.example.com Domain=.example.com: accepted for example.com and its subdomains
+   www.example.com Domain=www.example.com: accepted for www.example.com
+   www.example.com Domain=com: rejected: Domain is a public suffix
+   www.example.co.uk Domain=co.uk: rejected: Domain is a public suffix
+   www.example.co.uk Domain=example.co.uk: accepted for example.co.uk and its subdomains
+   alice.github.io Domain=github.io: rejected: Domain is a public suffix
+   alice.github.io Domain=alice.github.io: accepted for alice.github.io
+   bob.github.io Domain=alice.github.io: rejected: Domain does not match the host
+   shop.example.com Domain=other.com: rejected: Domain does not match the host
+   shop.example.com Domain=ample.com: rejected: Domain does not match the host
+   a.b.example.com Domain=b.example.com: accepted for b.example.com and its subdomains
+   foo.city.kawasaki.jp Domain=city.kawasaki.jp: accepted for city.kawasaki.jp and its subdomains
+   foo.bar.kawasaki.jp Domain=bar.kawasaki.jp: rejected: Domain is a public suffix
+   x.y.bar.kawasaki.jp Domain=y.bar.kawasaki.jp: accepted for y.bar.kawasaki.jp and its subdomains
+   app.herokuapp.com Domain=herokuapp.com: rejected: Domain is a public suffix
+   www.EXAMPLE.com Domain=Example.COM: accepted for example.com and its subdomains
+   1.2.3.4 Domain=1.2.3.4: accepted, host only
+   1.2.3.4 Domain=2.3.4: rejected: the host is an IP address
+   localhost Domain=localhost: accepted for localhost
+   www.例子.中国 Domain=例子.中国: accepted for 例子.中国 and its subdomains
+   www.例子.中国 Domain=中国: rejected: Domain is a public suffix
+   www.xn--fiqs8s Domain=xn--fiqs8s: rejected: Domain is a public suffix
+   bucket.s3.amazonaws.com Domain=s3.amazonaws.com: rejected: Domain is a public suffix
+   a.www.ck Domain=www.ck: accepted for www.ck and its subdomains
+   a.foo.ck Domain=foo.ck: rejected: Domain is a public suffix
+     accepted: 13
+     rejected: 13
+== same site
+   https://www.example.com/ and https://api.example.com/v1: same site, example.com
+   https://alice.github.io/ and https://bob.github.io/: different sites, alice.github.io and bob.github.io
+   https://example.co.uk/ and https://example.com/: different sites, example.co.uk and example.com
+   https://a.example.co.uk and http://b.example.co.uk:8080: same site, example.co.uk
+   https://foo.blogspot.com and https://bar.blogspot.com: different sites, foo.blogspot.com and bar.blogspot.com
+   https://news.bbc.co.uk and https://www.bbc.com: different sites, bbc.co.uk and bbc.com
+   http://1.2.3.4/ and http://1.2.3.4:81/: same site, 1.2.3.4
+   https://localhost and https://localhost:3000: same site, localhost
+   https://例子.中国/ and https://www.xn--fsqu00a.xn--fiqs8s/: different sites, 例子.中国 and xn--fsqu00a.xn--fiqs8s
+   https://a.foo.ck and https://b.foo.ck: different sites, a.foo.ck and b.foo.ck
+   https://www.ck and https://a.www.ck: same site, www.ck
+   https://mail.google.com and https://accounts.google.com: same site, google.com
