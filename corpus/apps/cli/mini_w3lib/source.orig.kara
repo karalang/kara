@@ -6688,11 +6688,8 @@ fn crawl(w: ref W3) -> Result[(), PyErr] {
             None => None,
         };
         let page = V.Str(text.clone());
-        // A bare None argument here would do (WORKAROUND B-2026-10-19-31:
-        // with V's None variant in scope it lowers to Some in MIR).
-        let no_limit: Option[i64] = None;
-        let base = get_base_url(w, page, V.Str(url.clone()), "utf-8".to_string(), no_limit)?;
-        let refresh = get_meta_refresh(w, page, url, "utf-8".to_string(), ns, no_limit)?;
+        let base = get_base_url(w, page, V.Str(url.clone()), "utf-8".to_string(), None)?;
+        let refresh = get_meta_refresh(w, page, url, "utf-8".to_string(), ns, None)?;
         println(f"   {status} encoding={enc} title={repr_opt(w, title)}");
         if base != url {
             println(f"   base {base}");
