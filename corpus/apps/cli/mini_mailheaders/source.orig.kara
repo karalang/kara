@@ -712,9 +712,7 @@ fn decode_bytes(b: ref Vec[u8], c: ref Codec, replace: bool) -> Result[String, S
     let mut out = String.new();
     let mut i = 0;
     while i < b.len() {
-        // Workaround (B-2026-10-19-4): without the annotation the literal-only
-        // nested if arm is not coerced to Str.
-        let (cp, n, reason): (i64, i64, Str) = match c {
+        let (cp, n, reason) = match c {
             Codec.Utf8 => utf8_step(b, i),
             Codec.Latin1 => (b[i] as i64, 1, ""),
             Codec.Latin9 => (latin9_char(b[i] as i64), 1, ""),
@@ -1513,8 +1511,7 @@ struct ValueFormatter {
 impl ValueFormatter {
     fn finish(mut ref self, linesep: ref String) -> String {
         self.newline();
-        // Workaround (B-2026-10-19-5): join refuses a Str separator.
-        self.lines.join(linesep.clone())
+        self.lines.join(linesep.as_str())
     }
 
     fn newline(mut ref self) {
