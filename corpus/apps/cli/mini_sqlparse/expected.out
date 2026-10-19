@@ -1,0 +1,4206 @@
+== 0 tokens misc/edge.sql
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Name 'a'
+  Token.Punctuation ','
+  Token.Name 'b'
+  Token.Punctuation ','
+  Token.Name 'c'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Name 't'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'where'
+  Token.Text.Whitespace ' '
+  Token.Name 'x'
+  Token.Operator.Comparison '='
+  Token.Literal.Number.Integer '1'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'and'
+  Token.Text.Whitespace ' '
+  Token.Name 'y'
+  Token.Operator.Comparison '>='
+  Token.Literal.Number.Integer '2'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'or'
+  Token.Text.Whitespace ' '
+  Token.Name 'z'
+  Token.Operator.Comparison '<>'
+  Token.Literal.Number.Integer '3'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'it''s'"
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Symbol '"quoted ""name"""'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name '`back``tick`'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal '$tag$ dollar $ body $tag$'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Hexadecimal '0x1F'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '-12'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Float '3.5e-2'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Float '.5'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Float '7.'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Name 'json_col'
+  Token.Operator '->'
+  Token.Literal.String.Single "'a'"
+  Token.Operator '->>'
+  Token.Literal.String.Single "'b'"
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'arr'
+  Token.Punctuation '['
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation ']'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'arr'
+  Token.Punctuation '['
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation ':'
+  Token.Literal.Number.Integer '2'
+  Token.Punctuation ']'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'x'
+  Token.Punctuation '::'
+  Token.Name.Builtin 'text'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'cast'
+  Token.Punctuation '('
+  Token.Name 'y'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'as'
+  Token.Text.Whitespace ' '
+  Token.Name.Builtin 'int'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Name 'j'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Wildcard '*'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Name 't1'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'natural join'
+  Token.Text.Whitespace ' '
+  Token.Name 't2'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'cross join'
+  Token.Text.Whitespace ' '
+  Token.Name 't3'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'left join'
+  Token.Text.Whitespace ' '
+  Token.Name 't4'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'using'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Name 'k'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'full outer join'
+  Token.Text.Whitespace ' '
+  Token.Name 't5'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'on'
+  Token.Text.Whitespace ' '
+  Token.Name 't5'
+  Token.Punctuation '.'
+  Token.Name 'k'
+  Token.Operator.Comparison '='
+  Token.Name 't4'
+  Token.Punctuation '.'
+  Token.Name 'k'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Name 'count'
+  Token.Punctuation '('
+  Token.Wildcard '*'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Name 'filter'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Keyword 'where'
+  Token.Text.Whitespace ' '
+  Token.Name 'a'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '>'
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation ')'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'lag'
+  Token.Punctuation '('
+  Token.Name 'x'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'over'
+  Token.Text.Whitespace ' '
+  Token.Name 'w'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Name 't'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'window'
+  Token.Text.Whitespace ' '
+  Token.Name 'w'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'as'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Keyword 'order by'
+  Token.Text.Whitespace ' '
+  Token.Name 'ts'
+  Token.Punctuation ')'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Name.Builtin 'date'
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'2001-09-28'"
+  Token.Text.Whitespace ' '
+  Token.Operator '+'
+  Token.Text.Whitespace ' '
+  Token.Name.Builtin 'interval'
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'7'"
+  Token.Text.Whitespace ' '
+  Token.Keyword 'day'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name.Builtin 'timestamp'
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'2001-09-28 01:00'"
+  Token.Text.Whitespace ' '
+  Token.Keyword.TZCast "at time zone 'UTC'"
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Name 'x'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Name 't'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'order by'
+  Token.Text.Whitespace ' '
+  Token.Name 'x'
+  Token.Text.Whitespace ' '
+  Token.Keyword.Order 'asc nulls first'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'y'
+  Token.Text.Whitespace ' '
+  Token.Keyword.Order 'desc'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'update'
+  Token.Text.Whitespace ' '
+  Token.Name 't'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'set'
+  Token.Text.Whitespace ' '
+  Token.Name 'a'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Name 'a'
+  Token.Operator '+'
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'b'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Keyword 'default'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'where'
+  Token.Text.Whitespace ' '
+  Token.Name 'c'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'is'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'null'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'returning'
+  Token.Text.Whitespace ' '
+  Token.Wildcard '*'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Comment.Single '-- trailing comment only\n'
+== 1 tokens misc/unicode.sql
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Name 'prénom'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'ÉTAT'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'naïve_score'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'FROM'
+  Token.Text.Whitespace ' '
+  Token.Name 'Élèves'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'WHERE'
+  Token.Text.Whitespace ' '
+  Token.Name 'ville'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'Zürich'"
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AND'
+  Token.Text.Whitespace ' '
+  Token.Name 'café'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '>'
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '2'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'smörgåsbord'"
+  Token.Text.Whitespace ' '
+  Token.Operator '||'
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "' — '"
+  Token.Text.Whitespace ' '
+  Token.Operator '||'
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'ｆｕｌｌ'"
+  Token.Text.Whitespace ' '
+  Token.Keyword 'as'
+  Token.Text.Whitespace ' '
+  Token.Name 'menu'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+== 2 tokens tsql/report.sql
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Name 'TOP'
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '10'
+  Token.Text.Whitespace ' '
+  Token.Name '[o]'
+  Token.Punctuation '.'
+  Token.Name '[Id]'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name '[c]'
+  Token.Punctuation '.'
+  Token.Name '[Name]'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AS'
+  Token.Text.Whitespace ' '
+  Token.Name '[Customer Name]'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Operator '@@'
+  Token.Name 'ROWCOUNT'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AS'
+  Token.Text.Whitespace ' '
+  Token.Name 'rc'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'FROM'
+  Token.Text.Whitespace ' '
+  Token.Name '[dbo]'
+  Token.Punctuation '.'
+  Token.Name '[Orders]'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AS'
+  Token.Text.Whitespace ' '
+  Token.Name '[o]'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'INNER JOIN'
+  Token.Text.Whitespace ' '
+  Token.Name '[dbo]'
+  Token.Punctuation '.'
+  Token.Name '[Customers]'
+  Token.Text.Whitespace ' '
+  Token.Name '[c]'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'ON'
+  Token.Text.Whitespace ' '
+  Token.Name '[c]'
+  Token.Punctuation '.'
+  Token.Name '[Id]'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Name '[o]'
+  Token.Punctuation '.'
+  Token.Name '[CustomerId]'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'WHERE'
+  Token.Text.Whitespace ' '
+  Token.Name '[o]'
+  Token.Punctuation '.'
+  Token.Name '[Total]'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '>'
+  Token.Text.Whitespace ' '
+  Token.Name '@minTotal'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'GO'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'DECLARE'
+  Token.Text.Whitespace ' '
+  Token.Operator '@'
+  Token.Name 'n'
+  Token.Text.Whitespace ' '
+  Token.Name.Builtin 'INT'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '5'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Operator '@'
+  Token.Name 'n'
+  Token.Text.Whitespace ' '
+  Token.Wildcard '*'
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '2'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AS'
+  Token.Text.Whitespace ' '
+  Token.Name 'doubled'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'GO 2'
+  Token.Text.Whitespace.Newline '\n'
+== 3 tokens oracle/hints.sql
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Comment.Multiline.Hint '/*+ INDEX(e emp_name_ix) */'
+  Token.Text.Whitespace ' '
+  Token.Name 'e'
+  Token.Punctuation '.'
+  Token.Name 'last_name'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'd'
+  Token.Punctuation '.'
+  Token.Name 'department_name'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'FROM'
+  Token.Text.Whitespace ' '
+  Token.Name 'employees'
+  Token.Text.Whitespace ' '
+  Token.Name 'e'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name 'departments'
+  Token.Text.Whitespace ' '
+  Token.Name 'd'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'WHERE'
+  Token.Text.Whitespace ' '
+  Token.Name 'e'
+  Token.Punctuation '.'
+  Token.Name 'department_id'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Name 'd'
+  Token.Punctuation '.'
+  Token.Name 'department_id'
+  Token.Punctuation '('
+  Token.Operator '+'
+  Token.Punctuation ')'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'AND'
+  Token.Text.Whitespace ' '
+  Token.Name.Builtin 'ROWNUM'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '<='
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '10'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Comment.Single.Hint '--+ ordered\n'
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Name 'emp'
+  Token.Punctuation '.'
+  Token.Wildcard '*'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'FROM'
+  Token.Text.Whitespace ' '
+  Token.Name 'emp'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'WHERE'
+  Token.Text.Whitespace ' '
+  Token.Name 'sal'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '>'
+  Token.Text.Whitespace ' '
+  Token.Name.Placeholder ':min_sal'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'MINUS'
+  Token.Text.Whitespace ' '
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Name 'emp'
+  Token.Punctuation '.'
+  Token.Wildcard '*'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'FROM'
+  Token.Text.Whitespace ' '
+  Token.Name 'emp'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'WHERE'
+  Token.Text.Whitespace ' '
+  Token.Name 'deptno'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Name.Placeholder ':dept'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+== 4 tokens mysql/dump.sql
+  Token.Comment.Single '-- MySQL dump 10.13  Distrib 8.0.36, for Linux (x86_64)\n'
+  Token.Comment.Single '--\n'
+  Token.Comment.Single '-- Host: localhost    Database: shop\n'
+  Token.Comment.Single '-- ------------------------------------------------------\n'
+  Token.Comment.Multiline '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Comment.Multiline '/*!40101 SET NAMES utf8mb4 */'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DDL 'DROP'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'TABLE'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'IF'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'EXISTS'
+  Token.Text.Whitespace ' '
+  Token.Name '`products`'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DDL 'CREATE'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'TABLE'
+  Token.Text.Whitespace ' '
+  Token.Name '`products`'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace ' '
+  Token.Text.Whitespace ' '
+  Token.Name '`id`'
+  Token.Text.Whitespace ' '
+  Token.Name.Builtin 'int'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'NOT NULL'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AUTO_INCREMENT'
+  Token.Punctuation ','
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace ' '
+  Token.Text.Whitespace ' '
+  Token.Name '`name`'
+  Token.Text.Whitespace ' '
+  Token.Name 'varchar'
+  Token.Punctuation '('
+  Token.Literal.Number.Integer '120'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'COLLATE'
+  Token.Text.Whitespace ' '
+  Token.Name 'utf8mb4_unicode_ci'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'NOT NULL'
+  Token.Punctuation ','
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace ' '
+  Token.Text.Whitespace ' '
+  Token.Name '`price`'
+  Token.Text.Whitespace ' '
+  Token.Name 'decimal'
+  Token.Punctuation '('
+  Token.Literal.Number.Integer '10'
+  Token.Punctuation ','
+  Token.Literal.Number.Integer '2'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'DEFAULT'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'NULL'
+  Token.Punctuation ','
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace ' '
+  Token.Text.Whitespace ' '
+  Token.Name '`tags`'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'json'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'DEFAULT'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'NULL'
+  Token.Punctuation ','
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace ' '
+  Token.Text.Whitespace ' '
+  Token.Keyword 'PRIMARY KEY'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Name '`id`'
+  Token.Punctuation ')'
+  Token.Punctuation ','
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace ' '
+  Token.Text.Whitespace ' '
+  Token.Keyword 'KEY'
+  Token.Text.Whitespace ' '
+  Token.Name '`idx_name`'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Name '`name`'
+  Token.Punctuation ')'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'ENGINE'
+  Token.Operator.Comparison '='
+  Token.Name 'InnoDB'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AUTO_INCREMENT'
+  Token.Operator.Comparison '='
+  Token.Literal.Number.Integer '4'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'DEFAULT'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'CHARSET'
+  Token.Operator.Comparison '='
+  Token.Name 'utf8mb4'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'LOCK'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'TABLES'
+  Token.Text.Whitespace ' '
+  Token.Name '`products`'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'WRITE'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'INSERT'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'INTO'
+  Token.Text.Whitespace ' '
+  Token.Name '`products`'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'VALUES'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation ','
+  Token.Literal.String.Single "'Kettle'"
+  Token.Punctuation ','
+  Token.Literal.Number.Float '24.99'
+  Token.Punctuation ','
+  Token.Literal.String.Single '\'[\\"kitchen\\"]\''
+  Token.Punctuation ')'
+  Token.Punctuation ','
+  Token.Punctuation '('
+  Token.Literal.Number.Integer '2'
+  Token.Punctuation ','
+  Token.Literal.String.Single "'Toaster'"
+  Token.Punctuation ','
+  Token.Literal.Number.Float '39.50'
+  Token.Punctuation ','
+  Token.Keyword 'NULL'
+  Token.Punctuation ')'
+  Token.Punctuation ','
+  Token.Punctuation '('
+  Token.Literal.Number.Integer '3'
+  Token.Punctuation ','
+  Token.Literal.String.Single "'O\\'Brien\\'s mug'"
+  Token.Punctuation ','
+  Token.Literal.Number.Float '7.00'
+  Token.Punctuation ','
+  Token.Literal.String.Single "'[]'"
+  Token.Punctuation ')'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'UNLOCK'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'TABLES'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Name '`name`'
+  Token.Punctuation ','
+  Token.Text.Whitespace ' '
+  Token.Name '`price`'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'FROM'
+  Token.Text.Whitespace ' '
+  Token.Name '`products`'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'WHERE'
+  Token.Text.Whitespace ' '
+  Token.Name '`tags`'
+  Token.Operator '->>'
+  Token.Literal.String.Single "'$[0]'"
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison '='
+  Token.Text.Whitespace ' '
+  Token.Literal.String.Single "'kitchen'"
+  Token.Text.Whitespace ' '
+  Token.Comment.Single '# inline note\n'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+== 5 tokens plpgsql/audit.sql
+  Token.Keyword.DDL 'CREATE OR REPLACE'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'FUNCTION'
+  Token.Text.Whitespace ' '
+  Token.Name 'audit_order_change'
+  Token.Punctuation '('
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'RETURNS'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'trigger'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AS'
+  Token.Text.Whitespace ' '
+  Token.Literal "$$\nDECLARE\n    changed text;\nBEGIN\n    IF TG_OP = 'UPDATE' THEN\n        changed := 'update';\n    ELSE\n        changed := 'other';\n    END IF;\n    INSERT INTO order_audit (order_id, action, at) VALUES (NEW.id, changed, now());\n    RETURN NEW;\nEND;\n$$"
+  Token.Text.Whitespace ' '
+  Token.Keyword 'LANGUAGE'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'plpgsql'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DDL 'CREATE'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'TRIGGER'
+  Token.Text.Whitespace ' '
+  Token.Name 'orders_audit'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'AFTER'
+  Token.Text.Whitespace ' '
+  Token.Keyword.DML 'UPDATE'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'ON'
+  Token.Text.Whitespace ' '
+  Token.Name 'orders'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'FOR'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'EACH'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'ROW'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'EXECUTE'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'FUNCTION'
+  Token.Text.Whitespace ' '
+  Token.Name 'audit_order_change'
+  Token.Punctuation '('
+  Token.Punctuation ')'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+== 6 tokens misc/broken.sql
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Text.Whitespace ' '
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'where'
+  Token.Text.Whitespace ' '
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Error "'"
+  Token.Name 'unterminated'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Name 't'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'end'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'end'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'case'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'case'
+  Token.Punctuation ';'
+  Token.Text.Whitespace.Newline '\n'
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Punctuation ')'
+  Token.Text.Whitespace ' '
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '('
+  Token.Punctuation '('
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '1'
+  Token.Text.Whitespace.Newline '\n'
+== 7 tokens 'SELECT 1'
+  Token.Keyword.DML 'SELECT'
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '1'
+== 8 tokens 'select a.b from c'
+  Token.Keyword.DML 'select'
+  Token.Text.Whitespace ' '
+  Token.Name 'a'
+  Token.Punctuation '.'
+  Token.Name 'b'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'from'
+  Token.Text.Whitespace ' '
+  Token.Name 'c'
+== 9 tokens 'x:=1'
+  Token.Name 'x'
+  Token.Assignment ':='
+  Token.Literal.Number.Integer '1'
+== 10 tokens 'a::int'
+  Token.Name 'a'
+  Token.Punctuation '::'
+  Token.Name.Builtin 'int'
+== 11 tokens '%(name)s ?'
+  Token.Name.Placeholder '%(name)s'
+  Token.Text.Whitespace ' '
+  Token.Name.Placeholder '?'
+== 12 tokens ':v $1 ?'
+  Token.Name.Placeholder ':v'
+  Token.Text.Whitespace ' '
+  Token.Name.Placeholder '$1'
+  Token.Text.Whitespace ' '
+  Token.Name.Placeholder '?'
+== 13 tokens '\\copy t'
+  Token.Generic.Command '\\copy'
+  Token.Text.Whitespace ' '
+  Token.Name 't'
+== 14 tokens '@var ##tmp #t'
+  Token.Name '@var'
+  Token.Text.Whitespace ' '
+  Token.Name '##tmp'
+  Token.Text.Whitespace ' '
+  Token.Operator '#'
+  Token.Name 't'
+== 15 tokens 'GO 3'
+  Token.Keyword 'GO 3'
+== 16 tokens 'go'
+  Token.Keyword 'go'
+== 17 tokens 'end if'
+  Token.Keyword 'end if'
+== 18 tokens 'END   LOOP'
+  Token.Keyword 'END   LOOP'
+== 19 tokens 'lateral view explode(x)'
+  Token.Keyword 'lateral view explode'
+  Token.Punctuation '('
+  Token.Name 'x'
+  Token.Punctuation ')'
+== 20 tokens 'x not like y'
+  Token.Name 'x'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison 'not like'
+  Token.Text.Whitespace ' '
+  Token.Name 'y'
+== 21 tokens 'x NOT  REGEXP y'
+  Token.Name 'x'
+  Token.Text.Whitespace ' '
+  Token.Operator.Comparison 'NOT  REGEXP'
+  Token.Text.Whitespace ' '
+  Token.Name 'y'
+== 22 tokens 'with t as'
+  Token.Keyword.CTE 'with'
+  Token.Text.Whitespace ' '
+  Token.Name 't'
+  Token.Text.Whitespace ' '
+  Token.Keyword 'as'
+== 23 tokens 'order by 1 desc nulls last'
+  Token.Keyword 'order by'
+  Token.Text.Whitespace ' '
+  Token.Literal.Number.Integer '1'
+  Token.Text.Whitespace ' '
+  Token.Keyword.Order 'desc nulls last'
+== 24 tokens 'double precision'
+  Token.Name.Builtin 'double precision'
+== 25 tokens 'union all'
+  Token.Keyword 'union all'
+== 26 tokens 'create or replace'
+  Token.Keyword.DDL 'create or replace'
+== 27 tokens 'a ->> b #> c @> d <@ e ?| f ?& g #- h'
+  Token.Name 'a'
+  Token.Text.Whitespace ' '
+  Token.Operator '->>'
+  Token.Text.Whitespace ' '
+  Token.Name 'b'
+  Token.Text.Whitespace ' '
+  Token.Operator '#>'
+  Token.Text.Whitespace ' '
+  Token.Name 'c'
+  Token.Text.Whitespace ' '
+  Token.Operator '@>'
+  Token.Text.Whitespace ' '
+  Token.Name 'd'
+  Token.Text.Whitespace ' '
+  Token.Operator '<@'
+  Token.Text.Whitespace ' '
+  Token.Name 'e'
+  Token.Text.Whitespace ' '
+  Token.Name.Placeholder '?'
+  Token.Operator '|'
+  Token.Text.Whitespace ' '
+  Token.Name 'f'
+  Token.Text.Whitespace ' '
+  Token.Name.Placeholder '?'
+  Token.Operator '&'
+  Token.Text.Whitespace ' '
+  Token.Name 'g'
+  Token.Text.Whitespace ' '
+  Token.Operator '#-'
+  Token.Text.Whitespace ' '
+  Token.Name 'h'
+== 28 tokens 'a!=b<>c<=d'
+  Token.Name 'a'
+  Token.Operator.Comparison '!='
+  Token.Name 'b'
+  Token.Operator.Comparison '<>'
+  Token.Name 'c'
+  Token.Operator.Comparison '<='
+  Token.Name 'd'
+== 29 tokens 'a||b&c|d^e%f'
+  Token.Name 'a'
+  Token.Operator '||'
+  Token.Name 'b'
+  Token.Operator '&'
+  Token.Name 'c'
+  Token.Operator '|'
+  Token.Name 'd'
+  Token.Operator '^'
+  Token.Name 'e'
+  Token.Operator '%'
+  Token.Name 'f'
+== 30 tokens '1.e5'
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation '.'
+  Token.Name 'e5'
+== 31 tokens '-0x1A'
+  Token.Literal.Number.Hexadecimal '-0x1A'
+== 32 tokens 'abc123 1abc'
+  Token.Name 'abc123'
+  Token.Text.Whitespace ' '
+  Token.Name '1abc'
+== 33 tokens '´quoted´'
+  Token.Name '´quoted´'
+== 34 tokens 'a.b . c'
+  Token.Name 'a'
+  Token.Punctuation '.'
+  Token.Name 'b'
+  Token.Text.Whitespace ' '
+  Token.Punctuation '.'
+  Token.Text.Whitespace ' '
+  Token.Name 'c'
+== 35 tokens '[x] y[1]'
+  Token.Name '[x]'
+  Token.Text.Whitespace ' '
+  Token.Name 'y'
+  Token.Punctuation '['
+  Token.Literal.Number.Integer '1'
+  Token.Punctuation ']'
+== 36 tokens '-- c\r\nx'
+  Token.Comment.Single '-- c\r\n'
+  Token.Name 'x'
+== 37 tokens '/* a\n b */ /*+ hint */'
+  Token.Comment.Multiline '/* a\n b */'
+  Token.Text.Whitespace ' '
+  Token.Comment.Multiline.Hint '/*+ hint */'
+== 38 tokens '# not comment'
+  Token.Comment.Single '# not comment'
+== 39 tokens '#  hint?'
+  Token.Comment.Single '#  hint?'
+== 40 tokens "'a\\'b'"
+  Token.Literal.String.Single "'a\\'b'"
+== 41 tokens '"a\\"b"'
+  Token.Literal.String.Symbol '"a\\"b"'
+== 42 tokens '""'
+  Token.Literal.String.Symbol '""'
+== 43 tokens "''"
+  Token.Literal.String.Single "''"
+== 44 tokens "e'x'"
+  Token.Name 'e'
+  Token.Literal.String.Single "'x'"
+== 45 tokens "N'abc'"
+  Token.Name 'N'
+  Token.Literal.String.Single "'abc'"
+== 46 tokens 'x\xa0y'
+  Token.Name 'x'
+  Token.Text.Whitespace '\xa0'
+  Token.Name 'y'
+== 47 tokens '\tx\x0b'
+  Token.Text.Whitespace '\t'
+  Token.Name 'x'
+  Token.Text.Whitespace '\x0b'
+== 48 split analytics/cohorts.sql
+  [0] "SELECT c.id AS customer, MIN(o.placed_at) AS first_order, COUNT(DISTINCT o.id) orders,\n  SUM(CASE WHEN o.status = 'refunded' THEN 1 ELSE 0 END) AS refunds\nFROM customers c LEFT OUTER JOIN orders o ON o.customer_id = c.id\nWHERE c.created_at BETWEEN '2024-01-01' AND '2024-12-31' AND c.email NOT LIKE '%@example.com'\nGROUP BY c.id ORDER BY first_order ASC, orders DESC;"
+  [1] 'SELECT * FROM customers WHERE id IN (SELECT customer_id FROM orders WHERE total_cents > 50000);'
+  2 statements
+== 49 split analytics/daily_revenue.sql
+  [0] "with paid as (\n    select o.id, o.customer_id, date_trunc('day', o.placed_at) as day, o.total_cents\n    from orders o\n    where o.status in ('paid', 'shipped') and o.placed_at >= now() - interval '30 days'\n), ranked as (\n    select p.*, row_number() over (partition by p.customer_id order by p.total_cents desc) as rn\n    from paid p\n)\nselect day, count(*) as orders, sum(total_cents) / 100.0 as revenue,\n       avg(total_cents)::numeric(10,2) as avg_cents,\n       case when sum(total_cents) > 1000000 then 'big' when sum(total_cents) > 100000 then 'medium' else 'small' end as bucket\nfrom ranked\nwhere rn = 1\ngroup by day\nhaving count(*) > 5\norder by day desc nulls last\nlimit 30;"
+  1 statements
+== 50 split logs/django_queries.log
+  [0] '(0.002) SELECT "auth_user"."id", "auth_user"."username" FROM "auth_user" WHERE "auth_user"."id" = 7 LIMIT 21;'
+  [1] 'args=(7,)\n(0.015) SELECT COUNT(*) AS "__count" FROM "blog_post" WHERE ("blog_post"."published" AND "blog_post"."author_id" = 7);'
+  [2] 'args=(True, 7)\n(0.001) UPDATE "blog_post" SET "views" = ("blog_post"."views" + 1) WHERE "blog_post"."id" = 31;'
+  [3] 'args=(1, 31)\n(0.120) SELECT "blog_post"."id", "blog_post"."title" FROM "blog_post" INNER JOIN "blog_tag_posts" ON ("blog_post"."id" = "blog_tag_posts"."post_id") WHERE "blog_tag_posts"."tag_id" IN (1, 2, 3) ORDER BY "blog_post"."created" DESC;'
+  [4] 'args=(1, 2, 3)\n(0.004) INSERT INTO "blog_comment" ("post_id", "body", "created") VALUES (31, \'Nice post! It\'\'s great\', \'2024-05-01 10:00:00\') RETURNING "blog_comment"."id";'
+  [5] 'args=(31, "Nice post! It\'s great")\n(0.000) DELETE FROM "django_session" WHERE "django_session"."expire_date" < \'2024-05-01\';'
+  [6] 'args=()'
+  7 statements
+== 51 split migrations/0001_initial.sql
+  [0] '-- Initial schema for the orders service.\n-- Generated by hand, reviewed in PR 118.\n\nCREATE TABLE customers (\n    id          BIGSERIAL PRIMARY KEY,\n    email       VARCHAR(255) NOT NULL UNIQUE,\n    full_name   TEXT,\n    created_at  TIMESTAMP WITH TIME ZONE DEFAULT now(),\n    is_active   BOOLEAN NOT NULL DEFAULT TRUE\n);'
+  [1] "CREATE TABLE orders (\n    id           BIGSERIAL PRIMARY KEY,\n    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,\n    status       VARCHAR(20) NOT NULL DEFAULT 'pending',\n    total_cents  INTEGER NOT NULL CHECK (total_cents >= 0),\n    placed_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n);"
+  [2] 'CREATE INDEX orders_customer_idx ON orders (customer_id);'
+  [3] 'CREATE UNIQUE INDEX customers_email_lower_idx ON customers (lower(email));'
+  [4] "COMMENT ON TABLE orders IS 'One row per checkout';"
+  5 statements
+== 52 split migrations/0002_line_items.sql
+  [0] '/* Line items and a view over them. */\ncreate table line_items (\n  id bigserial primary key,\n  order_id bigint not null references orders(id),\n  sku varchar(64) not null,\n  quantity integer not null default 1,\n  unit_price_cents integer not null\n);'
+  [1] 'alter table orders add column shipped_at timestamp null;'
+  [2] "alter table orders alter column status set default 'new';"
+  [3] 'create or replace view order_totals as\nselect o.id, o.customer_id, sum(li.quantity * li.unit_price_cents) as computed_total\nfrom orders o join line_items li on li.order_id = o.id\ngroup by o.id, o.customer_id;'
+  [4] "insert into line_items (order_id, sku, quantity, unit_price_cents) values (1, 'SKU-001', 2, 1999), (1, 'SKU-042', 1, 4500);"
+  5 statements
+== 53 split migrations/0003_backfill.sql
+  [0] 'BEGIN;'
+  [1] "UPDATE orders SET status = 'shipped' WHERE shipped_at IS NOT NULL AND status <> 'shipped';"
+  [2] 'UPDATE customers SET is_active = FALSE;'
+  [3] 'DELETE FROM line_items WHERE quantity = 0;'
+  [4] 'DELETE FROM orders;'
+  [5] 'COMMIT;'
+  6 statements
+== 54 split misc/broken.sql
+  [0] "select ( from where ;\nselect 'unterminated\nfrom t;\nselect end end case case;"
+  [1] ') ) select (( 1'
+  2 statements
+== 55 split misc/edge.sql
+  [0] 'select a,b,c from t where x=1 and y>=2 or z<>3;'
+  [1] 'select \'it\'\'s\', "quoted ""name""", `back``tick`, $tag$ dollar $ body $tag$, 0x1F, -12, 3.5e-2, .5, 7.;'
+  [2] "select json_col->'a'->>'b', arr[1], arr[1:2], x::text, cast(y as int) from j;"
+  [3] 'select * from t1 natural join t2 cross join t3 left join t4 using (k) full outer join t5 on t5.k=t4.k;'
+  [4] 'select count(*) filter (where a > 1), lag(x, 1) over w from t window w as (order by ts);'
+  [5] "select date '2001-09-28' + interval '7' day, timestamp '2001-09-28 01:00' at time zone 'UTC';"
+  [6] 'select x from t order by x asc nulls first, y desc;'
+  [7] 'update t set a = a+1, b = default where c is null returning *;'
+  [8] '-- trailing comment only'
+  9 statements
+== 56 split misc/empty.sql
+  [0] '-- nothing but a comment'
+  1 statements
+== 57 split misc/messy.sql
+  [0] 'SELECT    a ,   b\nFROM t    -- why\n    WHERE   (  a = 1   )\n;'
+  [1] ';'
+  [2] 'select * from (select a,b from (select 1 as a, 2 as b) x) y where y.a in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);'
+  [3] 'insert into t(a,b) values(1,2),(3,4),(5,6);'
+  [4] "select case x when 1 then 'one' when 2 then 'two' else 'many' end, case when y then 1 end from t;"
+  5 statements
+== 58 split misc/unicode.sql
+  [0] "SELECT prénom, ÉTAT, naïve_score FROM Élèves WHERE ville = 'Zürich' AND café > 2;"
+  [1] "select 'smörgåsbord' || ' — ' || 'ｆｕｌｌ' as menu;"
+  2 statements
+== 59 split mysql/dump.sql
+  [0] '-- MySQL dump 10.13  Distrib 8.0.36, for Linux (x86_64)\n--\n-- Host: localhost    Database: shop\n-- ------------------------------------------------------\n/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;'
+  [1] '/*!40101 SET NAMES utf8mb4 */;'
+  [2] 'DROP TABLE IF EXISTS `products`;'
+  [3] 'CREATE TABLE `products` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(120) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `price` decimal(10,2) DEFAULT NULL,\n  `tags` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_name` (`name`)\n) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4;'
+  [4] 'LOCK TABLES `products` WRITE;'
+  [5] 'INSERT INTO `products` VALUES (1,\'Kettle\',24.99,\'[\\"kitchen\\"]\'),(2,\'Toaster\',39.50,NULL),(3,\'O\\\'Brien\\\'s mug\',7.00,\'[]\');'
+  [6] 'UNLOCK TABLES;'
+  [7] "SELECT `name`, `price` FROM `products` WHERE `tags`->>'$[0]' = 'kitchen' # inline note\n;"
+  8 statements
+== 60 split oracle/hints.sql
+  [0] 'SELECT /*+ INDEX(e emp_name_ix) */ e.last_name, d.department_name\nFROM employees e, departments d\nWHERE e.department_id = d.department_id(+)\nAND ROWNUM <= 10;'
+  [1] '--+ ordered\nSELECT emp.* FROM emp WHERE sal > :min_sal MINUS SELECT emp.* FROM emp WHERE deptno = :dept;'
+  2 statements
+== 61 split plpgsql/audit.sql
+  [0] "CREATE OR REPLACE FUNCTION audit_order_change() RETURNS trigger AS $$\nDECLARE\n    changed text;\nBEGIN\n    IF TG_OP = 'UPDATE' THEN\n        changed := 'update';\n    ELSE\n        changed := 'other';\n    END IF;\n    INSERT INTO order_audit (order_id, action, at) VALUES (NEW.id, changed, now());\n    RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;"
+  [1] 'CREATE TRIGGER orders_audit AFTER UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION audit_order_change();'
+  2 statements
+== 62 split plpgsql/proc.sql
+  [0] 'create function bump_counter(p_id int) returns void as\nbegin\n  declare c int;\n  for r in select id from counters loop\n    update counters set n = n + 1 where id = r.id;\n  end loop;\n  if p_id > 0 then\n    update counters set n = 0 where id = p_id;\n  end if;\nend;\nselect bump_counter(3);'
+  1 statements
+== 63 split sqlite/app.sql
+  [0] 'PRAGMA foreign_keys = ON;'
+  [1] "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, tags TEXT DEFAULT '', created REAL DEFAULT (julianday('now')));"
+  [2] 'INSERT OR REPLACE INTO notes (id, body) VALUES (?, ?);'
+  [3] "SELECT id, substr(body, 1, 40) || '...' AS preview FROM notes WHERE tags LIKE '%' || ? || '%' ORDER BY created DESC LIMIT 20 OFFSET 40;"
+  [4] "UPDATE notes SET tags = trim(tags || ',' || :tag, ',') WHERE id = :id;"
+  5 statements
+== 64 split tsql/report.sql
+  [0] 'SELECT TOP 10 [o].[Id], [c].[Name] AS [Customer Name], @@ROWCOUNT AS rc\nFROM [dbo].[Orders] AS [o]\nINNER JOIN [dbo].[Customers] [c] ON [c].[Id] = [o].[CustomerId]\nWHERE [o].[Total] > @minTotal\nGO'
+  [1] 'DECLARE @n INT = 5;'
+  [2] 'SELECT @n * 2 AS doubled\nGO 2'
+  3 statements
+== 65 split migrations/0003_backfill.sql strip_semicolon
+  [0] 'BEGIN'
+  [1] "UPDATE orders SET status = 'shipped' WHERE shipped_at IS NOT NULL AND status <> 'shipped'"
+  [2] 'UPDATE customers SET is_active = FALSE'
+  [3] 'DELETE FROM line_items WHERE quantity = 0'
+  [4] 'DELETE FROM orders'
+  [5] 'COMMIT'
+  6 statements
+== 66 split mysql/dump.sql strip_semicolon
+  [0] '-- MySQL dump 10.13  Distrib 8.0.36, for Linux (x86_64)\n--\n-- Host: localhost    Database: shop\n-- ------------------------------------------------------\n/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */'
+  [1] '/*!40101 SET NAMES utf8mb4 */'
+  [2] 'DROP TABLE IF EXISTS `products`'
+  [3] 'CREATE TABLE `products` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(120) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `price` decimal(10,2) DEFAULT NULL,\n  `tags` json DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_name` (`name`)\n) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4'
+  [4] 'LOCK TABLES `products` WRITE'
+  [5] 'INSERT INTO `products` VALUES (1,\'Kettle\',24.99,\'[\\"kitchen\\"]\'),(2,\'Toaster\',39.50,NULL),(3,\'O\\\'Brien\\\'s mug\',7.00,\'[]\')'
+  [6] 'UNLOCK TABLES'
+  [7] "SELECT `name`, `price` FROM `products` WHERE `tags`->>'$[0]' = 'kitchen' # inline note"
+  8 statements
+== 67 split misc/messy.sql strip_semicolon
+  [0] 'SELECT    a ,   b\nFROM t    -- why\n    WHERE   (  a = 1   )'
+  [1] ''
+  [2] 'select * from (select a,b from (select 1 as a, 2 as b) x) y where y.a in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20)'
+  [3] 'insert into t(a,b) values(1,2),(3,4),(5,6)'
+  [4] "select case x when 1 then 'one' when 2 then 'two' else 'many' end, case when y then 1 end from t"
+  5 statements
+== 68 split tsql/report.sql strip_semicolon
+  [0] 'SELECT TOP 10 [o].[Id], [c].[Name] AS [Customer Name], @@ROWCOUNT AS rc\nFROM [dbo].[Orders] AS [o]\nINNER JOIN [dbo].[Customers] [c] ON [c].[Id] = [o].[CustomerId]\nWHERE [o].[Total] > @minTotal\nGO'
+  [1] 'DECLARE @n INT = 5'
+  [2] 'SELECT @n * 2 AS doubled\nGO 2'
+  3 statements
+== 69 tree migrations/0002_line_items.sql
+  statement 0 CREATE
+    |- 0 Comment '/* Lin...'
+    |  |- 0 Multiline '/* Lin...'
+    |  `- 1 Newline ' '
+    |- 1 DDL 'create'
+    |- 2 Whitespace ' '
+    |- 3 Keyword 'table'
+    |- 4 Whitespace ' '
+    |- 5 Identifier 'line_i...'
+    |  `- 0 Name 'line_i...'
+    |- 6 Whitespace ' '
+    |- 7 Parenthesis '( id...'
+    |  |- 0 Punctuation '('
+    |  |- 1 Newline ' '
+    |  |- 2 Whitespace ' '
+    |  |- 3 Whitespace ' '
+    |  |- 4 Identifier 'id'
+    |  |  `- 0 Name 'id'
+    |  |- 5 Whitespace ' '
+    |  |- 6 Keyword 'bigser...'
+    |  |- 7 Whitespace ' '
+    |  |- 8 IdentifierList 'primar...'
+    |  |  |- 0 Keyword 'primar...'
+    |  |  |- 1 Punctuation ','
+    |  |  |- 2 Newline ' '
+    |  |  |- 3 Whitespace ' '
+    |  |  |- 4 Whitespace ' '
+    |  |  `- 5 Identifier 'order_...'
+    |  |     `- 0 Name 'order_...'
+    |  |- 9 Whitespace ' '
+    |  |- 10 Builtin 'bigint'
+    |  |- 11 Whitespace ' '
+    |  |- 12 Keyword 'not nu...'
+    |  |- 13 Whitespace ' '
+    |  |- 14 Keyword 'refere...'
+    |  |- 15 Whitespace ' '
+    |  |- 16 IdentifierList 'orders...'
+    |  |  |- 0 Function 'orders...'
+    |  |  |  |- 0 Identifier 'orders'
+    |  |  |  |  `- 0 Name 'orders'
+    |  |  |  `- 1 Parenthesis '(id)'
+    |  |  |     |- 0 Punctuation '('
+    |  |  |     |- 1 Identifier 'id'
+    |  |  |     |  `- 0 Name 'id'
+    |  |  |     `- 2 Punctuation ')'
+    |  |  |- 1 Punctuation ','
+    |  |  |- 2 Newline ' '
+    |  |  |- 3 Whitespace ' '
+    |  |  |- 4 Whitespace ' '
+    |  |  `- 5 Identifier 'sku'
+    |  |     `- 0 Name 'sku'
+    |  |- 17 Whitespace ' '
+    |  |- 18 Function 'varcha...'
+    |  |  |- 0 Identifier 'varchar'
+    |  |  |  `- 0 Name 'varchar'
+    |  |  `- 1 Parenthesis '(64)'
+    |  |     |- 0 Punctuation '('
+    |  |     |- 1 Integer '64'
+    |  |     `- 2 Punctuation ')'
+    |  |- 19 Whitespace ' '
+    |  |- 20 IdentifierList 'not nu...'
+    |  |  |- 0 Keyword 'not nu...'
+    |  |  |- 1 Punctuation ','
+    |  |  |- 2 Newline ' '
+    |  |  |- 3 Whitespace ' '
+    |  |  |- 4 Whitespace ' '
+    |  |  `- 5 Identifier 'quanti...'
+    |  |     `- 0 Name 'quanti...'
+    |  |- 21 Whitespace ' '
+    |  |- 22 Builtin 'integer'
+    |  |- 23 Whitespace ' '
+    |  |- 24 Keyword 'not nu...'
+    |  |- 25 Whitespace ' '
+    |  |- 26 Keyword 'default'
+    |  |- 27 Whitespace ' '
+    |  |- 28 IdentifierList '1, u...'
+    |  |  |- 0 Integer '1'
+    |  |  |- 1 Punctuation ','
+    |  |  |- 2 Newline ' '
+    |  |  |- 3 Whitespace ' '
+    |  |  |- 4 Whitespace ' '
+    |  |  `- 5 Identifier 'unit_p...'
+    |  |     `- 0 Name 'unit_p...'
+    |  |- 29 Whitespace ' '
+    |  |- 30 Builtin 'integer'
+    |  |- 31 Whitespace ' '
+    |  |- 32 Keyword 'not nu...'
+    |  |- 33 Newline ' '
+    |  `- 34 Punctuation ')'
+    `- 8 Punctuation ';'
+  statement 1 ALTER
+    |- 0 Newline ' '
+    |- 1 Newline ' '
+    |- 2 DDL 'alter'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'table'
+    |- 5 Whitespace ' '
+    |- 6 Identifier 'orders'
+    |  `- 0 Name 'orders'
+    |- 7 Whitespace ' '
+    |- 8 Keyword 'add'
+    |- 9 Whitespace ' '
+    |- 10 Keyword 'column'
+    |- 11 Whitespace ' '
+    |- 12 Identifier 'shippe...'
+    |  `- 0 Name 'shippe...'
+    |- 13 Whitespace ' '
+    |- 14 Builtin 'timest...'
+    |- 15 Whitespace ' '
+    |- 16 Keyword 'null'
+    `- 17 Punctuation ';'
+  statement 2 ALTER
+    |- 0 Newline ' '
+    |- 1 DDL 'alter'
+    |- 2 Whitespace ' '
+    |- 3 Keyword 'table'
+    |- 4 Whitespace ' '
+    |- 5 Identifier 'orders'
+    |  `- 0 Name 'orders'
+    |- 6 Whitespace ' '
+    |- 7 DDL 'alter'
+    |- 8 Whitespace ' '
+    |- 9 Keyword 'column'
+    |- 10 Whitespace ' '
+    |- 11 Identifier 'status'
+    |  `- 0 Name 'status'
+    |- 12 Whitespace ' '
+    |- 13 Keyword 'set'
+    |- 14 Whitespace ' '
+    |- 15 Keyword 'default'
+    |- 16 Whitespace ' '
+    |- 17 Single "'new'"
+    `- 18 Punctuation ';'
+  statement 3 CREATE OR REPLACE
+    |- 0 Newline ' '
+    |- 1 Newline ' '
+    |- 2 DDL 'create...'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'view'
+    |- 5 Whitespace ' '
+    |- 6 Identifier 'order_...'
+    |  `- 0 Name 'order_...'
+    |- 7 Whitespace ' '
+    |- 8 Keyword 'as'
+    |- 9 Newline ' '
+    |- 10 DML 'select'
+    |- 11 Whitespace ' '
+    |- 12 IdentifierList 'o.id, ...'
+    |  |- 0 Identifier 'o.id'
+    |  |  |- 0 Name 'o'
+    |  |  |- 1 Punctuation '.'
+    |  |  `- 2 Name 'id'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  |- 3 Identifier 'o.cust...'
+    |  |  |- 0 Name 'o'
+    |  |  |- 1 Punctuation '.'
+    |  |  `- 2 Name 'custom...'
+    |  |- 4 Punctuation ','
+    |  |- 5 Whitespace ' '
+    |  `- 6 Identifier 'sum(li...'
+    |     |- 0 Function 'sum(li...'
+    |     |  |- 0 Identifier 'sum'
+    |     |  |  `- 0 Name 'sum'
+    |     |  `- 1 Parenthesis '(li.qu...'
+    |     |     |- 0 Punctuation '('
+    |     |     |- 1 Operation 'li.qua...'
+    |     |     |  |- 0 Identifier 'li.qua...'
+    |     |     |  |  |- 0 Name 'li'
+    |     |     |  |  |- 1 Punctuation '.'
+    |     |     |  |  `- 2 Name 'quanti...'
+    |     |     |  |- 1 Whitespace ' '
+    |     |     |  |- 2 Operator '*'
+    |     |     |  |- 3 Whitespace ' '
+    |     |     |  `- 4 Identifier 'li.uni...'
+    |     |     |     |- 0 Name 'li'
+    |     |     |     |- 1 Punctuation '.'
+    |     |     |     `- 2 Name 'unit_p...'
+    |     |     `- 2 Punctuation ')'
+    |     |- 1 Whitespace ' '
+    |     |- 2 Keyword 'as'
+    |     |- 3 Whitespace ' '
+    |     `- 4 Identifier 'comput...'
+    |        `- 0 Name 'comput...'
+    |- 13 Newline ' '
+    |- 14 Keyword 'from'
+    |- 15 Whitespace ' '
+    |- 16 Identifier 'orders...'
+    |  |- 0 Name 'orders'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Identifier 'o'
+    |     `- 0 Name 'o'
+    |- 17 Whitespace ' '
+    |- 18 Keyword 'join'
+    |- 19 Whitespace ' '
+    |- 20 Identifier 'line_i...'
+    |  |- 0 Name 'line_i...'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Identifier 'li'
+    |     `- 0 Name 'li'
+    |- 21 Whitespace ' '
+    |- 22 Keyword 'on'
+    |- 23 Whitespace ' '
+    |- 24 Comparison 'li.ord...'
+    |  |- 0 Identifier 'li.ord...'
+    |  |  |- 0 Name 'li'
+    |  |  |- 1 Punctuation '.'
+    |  |  `- 2 Name 'order_...'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Comparison '='
+    |  |- 3 Whitespace ' '
+    |  `- 4 Identifier 'o.id'
+    |     |- 0 Name 'o'
+    |     |- 1 Punctuation '.'
+    |     `- 2 Name 'id'
+    |- 25 Newline ' '
+    |- 26 Keyword 'group ...'
+    |- 27 Whitespace ' '
+    |- 28 IdentifierList 'o.id, ...'
+    |  |- 0 Identifier 'o.id'
+    |  |  |- 0 Name 'o'
+    |  |  |- 1 Punctuation '.'
+    |  |  `- 2 Name 'id'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  `- 3 Identifier 'o.cust...'
+    |     |- 0 Name 'o'
+    |     |- 1 Punctuation '.'
+    |     `- 2 Name 'custom...'
+    `- 29 Punctuation ';'
+  statement 4 INSERT
+    |- 0 Newline ' '
+    |- 1 Newline ' '
+    |- 2 DML 'insert'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'into'
+    |- 5 Whitespace ' '
+    |- 6 Function 'line_i...'
+    |  |- 0 Identifier 'line_i...'
+    |  |  `- 0 Name 'line_i...'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Parenthesis '(order...'
+    |     |- 0 Punctuation '('
+    |     |- 1 IdentifierList 'order_...'
+    |     |  |- 0 Identifier 'order_...'
+    |     |  |  `- 0 Name 'order_...'
+    |     |  |- 1 Punctuation ','
+    |     |  |- 2 Whitespace ' '
+    |     |  |- 3 Identifier 'sku'
+    |     |  |  `- 0 Name 'sku'
+    |     |  |- 4 Punctuation ','
+    |     |  |- 5 Whitespace ' '
+    |     |  |- 6 Identifier 'quanti...'
+    |     |  |  `- 0 Name 'quanti...'
+    |     |  |- 7 Punctuation ','
+    |     |  |- 8 Whitespace ' '
+    |     |  `- 9 Identifier 'unit_p...'
+    |     |     `- 0 Name 'unit_p...'
+    |     `- 2 Punctuation ')'
+    |- 7 Whitespace ' '
+    |- 8 Values 'values...'
+    |  |- 0 Keyword 'values'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Parenthesis '(1, 'S...'
+    |  |  |- 0 Punctuation '('
+    |  |  |- 1 IdentifierList '1, 'SK...'
+    |  |  |  |- 0 Integer '1'
+    |  |  |  |- 1 Punctuation ','
+    |  |  |  |- 2 Whitespace ' '
+    |  |  |  |- 3 Single ''SKU-0...'
+    |  |  |  |- 4 Punctuation ','
+    |  |  |  |- 5 Whitespace ' '
+    |  |  |  |- 6 Integer '2'
+    |  |  |  |- 7 Punctuation ','
+    |  |  |  |- 8 Whitespace ' '
+    |  |  |  `- 9 Integer '1999'
+    |  |  `- 2 Punctuation ')'
+    |  |- 3 Punctuation ','
+    |  |- 4 Whitespace ' '
+    |  `- 5 Parenthesis '(1, 'S...'
+    |     |- 0 Punctuation '('
+    |     |- 1 IdentifierList '1, 'SK...'
+    |     |  |- 0 Integer '1'
+    |     |  |- 1 Punctuation ','
+    |     |  |- 2 Whitespace ' '
+    |     |  |- 3 Single ''SKU-0...'
+    |     |  |- 4 Punctuation ','
+    |     |  |- 5 Whitespace ' '
+    |     |  |- 6 Integer '1'
+    |     |  |- 7 Punctuation ','
+    |     |  |- 8 Whitespace ' '
+    |     |  `- 9 Integer '4500'
+    |     `- 2 Punctuation ')'
+    `- 9 Punctuation ';'
+== 70 tree plpgsql/audit.sql
+  statement 0 CREATE OR REPLACE
+    |- 0 DDL 'CREATE...'
+    |- 1 Whitespace ' '
+    |- 2 Keyword 'FUNCTI...'
+    |- 3 Whitespace ' '
+    |- 4 Function 'audit_...'
+    |  |- 0 Identifier 'audit_...'
+    |  |  `- 0 Name 'audit_...'
+    |  `- 1 Parenthesis '()'
+    |     |- 0 Punctuation '('
+    |     `- 1 Punctuation ')'
+    |- 5 Whitespace ' '
+    |- 6 Keyword 'RETURNS'
+    |- 7 Whitespace ' '
+    |- 8 Keyword 'trigger'
+    |- 9 Whitespace ' '
+    |- 10 Keyword 'AS'
+    |- 11 Whitespace ' '
+    |- 12 Literal '$$ DEC...'
+    |- 13 Whitespace ' '
+    |- 14 Keyword 'LANGUA...'
+    |- 15 Whitespace ' '
+    |- 16 Keyword 'plpgsql'
+    `- 17 Punctuation ';'
+  statement 1 CREATE
+    |- 0 Newline ' '
+    |- 1 Newline ' '
+    |- 2 DDL 'CREATE'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'TRIGGER'
+    |- 5 Whitespace ' '
+    |- 6 Identifier 'orders...'
+    |  `- 0 Name 'orders...'
+    |- 7 Whitespace ' '
+    |- 8 Keyword 'AFTER'
+    |- 9 Whitespace ' '
+    |- 10 DML 'UPDATE'
+    |- 11 Whitespace ' '
+    |- 12 Keyword 'ON'
+    |- 13 Whitespace ' '
+    |- 14 Identifier 'orders'
+    |  `- 0 Name 'orders'
+    |- 15 Whitespace ' '
+    |- 16 Keyword 'FOR'
+    |- 17 Whitespace ' '
+    |- 18 Keyword 'EACH'
+    |- 19 Whitespace ' '
+    |- 20 Keyword 'ROW'
+    |- 21 Whitespace ' '
+    |- 22 Keyword 'EXECUTE'
+    |- 23 Whitespace ' '
+    |- 24 Keyword 'FUNCTI...'
+    |- 25 Whitespace ' '
+    |- 26 Function 'audit_...'
+    |  |- 0 Identifier 'audit_...'
+    |  |  `- 0 Name 'audit_...'
+    |  `- 1 Parenthesis '()'
+    |     |- 0 Punctuation '('
+    |     `- 1 Punctuation ')'
+    `- 27 Punctuation ';'
+== 71 tree misc/broken.sql
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 Punctuation '('
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'from'
+    |- 5 Whitespace ' '
+    `- 6 Where 'where ...'
+       |- 0 Keyword 'where'
+       |- 1 Whitespace ' '
+       |- 2 Punctuation ';'
+       |- 3 Newline ' '
+       |- 4 DML 'select'
+       |- 5 Whitespace ' '
+       |- 6 Error "'"
+       |- 7 Identifier 'unterm...'
+       |  `- 0 Name 'unterm...'
+       |- 8 Newline ' '
+       |- 9 Keyword 'from'
+       |- 10 Whitespace ' '
+       |- 11 Identifier 't'
+       |  `- 0 Name 't'
+       |- 12 Punctuation ';'
+       |- 13 Newline ' '
+       |- 14 DML 'select'
+       |- 15 Whitespace ' '
+       |- 16 Keyword 'end'
+       |- 17 Whitespace ' '
+       |- 18 Keyword 'end'
+       |- 19 Whitespace ' '
+       |- 20 Keyword 'case'
+       |- 21 Whitespace ' '
+       |- 22 Keyword 'case'
+       `- 23 Punctuation ';'
+  statement 1 UNKNOWN
+    |- 0 Newline ' '
+    |- 1 Punctuation ')'
+    |- 2 Whitespace ' '
+    |- 3 Punctuation ')'
+    |- 4 Whitespace ' '
+    |- 5 DML 'select'
+    |- 6 Whitespace ' '
+    |- 7 Punctuation '('
+    |- 8 Punctuation '('
+    |- 9 Whitespace ' '
+    |- 10 Integer '1'
+    `- 11 Newline ' '
+== 72 tree oracle/hints.sql
+  statement 0 SELECT
+    |- 0 DML 'SELECT'
+    |- 1 Whitespace ' '
+    |- 2 Comment '/*+ IN...'
+    |  `- 0 Hint '/*+ IN...'
+    |- 3 Whitespace ' '
+    |- 4 IdentifierList 'e.last...'
+    |  |- 0 Identifier 'e.last...'
+    |  |  |- 0 Name 'e'
+    |  |  |- 1 Punctuation '.'
+    |  |  `- 2 Name 'last_n...'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  `- 3 Identifier 'd.depa...'
+    |     |- 0 Name 'd'
+    |     |- 1 Punctuation '.'
+    |     `- 2 Name 'depart...'
+    |- 5 Newline ' '
+    |- 6 Keyword 'FROM'
+    |- 7 Whitespace ' '
+    |- 8 IdentifierList 'employ...'
+    |  |- 0 Identifier 'employ...'
+    |  |  |- 0 Name 'employ...'
+    |  |  |- 1 Whitespace ' '
+    |  |  `- 2 Identifier 'e'
+    |  |     `- 0 Name 'e'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  `- 3 Identifier 'depart...'
+    |     |- 0 Name 'depart...'
+    |     |- 1 Whitespace ' '
+    |     `- 2 Identifier 'd'
+    |        `- 0 Name 'd'
+    |- 9 Newline ' '
+    `- 10 Where 'WHERE ...'
+       |- 0 Keyword 'WHERE'
+       |- 1 Whitespace ' '
+       |- 2 Comparison 'e.depa...'
+       |  |- 0 Identifier 'e.depa...'
+       |  |  |- 0 Name 'e'
+       |  |  |- 1 Punctuation '.'
+       |  |  `- 2 Name 'depart...'
+       |  |- 1 Whitespace ' '
+       |  |- 2 Comparison '='
+       |  |- 3 Whitespace ' '
+       |  `- 4 Identifier 'd.depa...'
+       |     |- 0 Name 'd'
+       |     |- 1 Punctuation '.'
+       |     `- 2 Function 'depart...'
+       |        |- 0 Name 'depart...'
+       |        `- 1 Parenthesis '(+)'
+       |           |- 0 Punctuation '('
+       |           |- 1 Operator '+'
+       |           `- 2 Punctuation ')'
+       |- 3 Newline ' '
+       |- 4 Keyword 'AND'
+       |- 5 Whitespace ' '
+       |- 6 Builtin 'ROWNUM'
+       |- 7 Whitespace ' '
+       |- 8 Comparison '<='
+       |- 9 Whitespace ' '
+       |- 10 Integer '10'
+       `- 11 Punctuation ';'
+  statement 1 SELECT
+    |- 0 Newline ' '
+    |- 1 Comment '--+ or...'
+    |  `- 0 Hint '--+ or...'
+    |- 2 DML 'SELECT'
+    |- 3 Whitespace ' '
+    |- 4 Identifier 'emp.*'
+    |  |- 0 Name 'emp'
+    |  |- 1 Punctuation '.'
+    |  `- 2 Wildcard '*'
+    |- 5 Whitespace ' '
+    |- 6 Keyword 'FROM'
+    |- 7 Whitespace ' '
+    |- 8 Identifier 'emp'
+    |  `- 0 Name 'emp'
+    |- 9 Whitespace ' '
+    `- 10 Where 'WHERE ...'
+       |- 0 Keyword 'WHERE'
+       |- 1 Whitespace ' '
+       |- 2 Comparison 'sal > ...'
+       |  |- 0 Identifier 'sal'
+       |  |  `- 0 Name 'sal'
+       |  |- 1 Whitespace ' '
+       |  |- 2 Comparison '>'
+       |  |- 3 Whitespace ' '
+       |  `- 4 Placeholder ':min_s...'
+       |- 3 Whitespace ' '
+       |- 4 Keyword 'MINUS'
+       |- 5 Whitespace ' '
+       |- 6 DML 'SELECT'
+       |- 7 Whitespace ' '
+       |- 8 Identifier 'emp.*'
+       |  |- 0 Name 'emp'
+       |  |- 1 Punctuation '.'
+       |  `- 2 Wildcard '*'
+       |- 9 Whitespace ' '
+       |- 10 Keyword 'FROM'
+       |- 11 Whitespace ' '
+       |- 12 Identifier 'emp'
+       |  `- 0 Name 'emp'
+       |- 13 Whitespace ' '
+       |- 14 Keyword 'WHERE'
+       |- 15 Whitespace ' '
+       |- 16 Comparison 'deptno...'
+       |  |- 0 Identifier 'deptno'
+       |  |  `- 0 Name 'deptno'
+       |  |- 1 Whitespace ' '
+       |  |- 2 Comparison '='
+       |  |- 3 Whitespace ' '
+       |  `- 4 Placeholder ':dept'
+       `- 17 Punctuation ';'
+== 73 tree sqlite/app.sql
+  statement 0 UNKNOWN
+    |- 0 Identifier 'PRAGMA...'
+    |  |- 0 Name 'PRAGMA'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Identifier 'foreig...'
+    |     `- 0 Name 'foreig...'
+    |- 1 Whitespace ' '
+    |- 2 Comparison '='
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'ON'
+    `- 5 Punctuation ';'
+  statement 1 CREATE
+    |- 0 Newline ' '
+    |- 1 DDL 'CREATE'
+    |- 2 Whitespace ' '
+    |- 3 Keyword 'TABLE'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'IF'
+    |- 6 Whitespace ' '
+    |- 7 Keyword 'NOT'
+    |- 8 Whitespace ' '
+    |- 9 Keyword 'EXISTS'
+    |- 10 Whitespace ' '
+    |- 11 Identifier 'notes'
+    |  `- 0 Name 'notes'
+    |- 12 Whitespace ' '
+    |- 13 Parenthesis '(id IN...'
+    |  |- 0 Punctuation '('
+    |  |- 1 Identifier 'id'
+    |  |  `- 0 Name 'id'
+    |  |- 2 Whitespace ' '
+    |  |- 3 Builtin 'INTEGER'
+    |  |- 4 Whitespace ' '
+    |  |- 5 Keyword 'PRIMAR...'
+    |  |- 6 Whitespace ' '
+    |  |- 7 IdentifierList 'AUTOIN...'
+    |  |  |- 0 Identifier 'AUTOIN...'
+    |  |  |  `- 0 Name 'AUTOIN...'
+    |  |  |- 1 Punctuation ','
+    |  |  |- 2 Whitespace ' '
+    |  |  `- 3 Keyword 'body'
+    |  |- 8 Whitespace ' '
+    |  |- 9 Builtin 'TEXT'
+    |  |- 10 Whitespace ' '
+    |  |- 11 IdentifierList 'NOT NU...'
+    |  |  |- 0 Keyword 'NOT NU...'
+    |  |  |- 1 Punctuation ','
+    |  |  |- 2 Whitespace ' '
+    |  |  `- 3 Identifier 'tags'
+    |  |     `- 0 Name 'tags'
+    |  |- 12 Whitespace ' '
+    |  |- 13 Builtin 'TEXT'
+    |  |- 14 Whitespace ' '
+    |  |- 15 Keyword 'DEFAULT'
+    |  |- 16 Whitespace ' '
+    |  |- 17 IdentifierList ''', cr...'
+    |  |  |- 0 Single "''"
+    |  |  |- 1 Punctuation ','
+    |  |  |- 2 Whitespace ' '
+    |  |  `- 3 Identifier 'created'
+    |  |     `- 0 Name 'created'
+    |  |- 18 Whitespace ' '
+    |  |- 19 Builtin 'REAL'
+    |  |- 20 Whitespace ' '
+    |  |- 21 Keyword 'DEFAULT'
+    |  |- 22 Whitespace ' '
+    |  |- 23 Parenthesis '(julia...'
+    |  |  |- 0 Punctuation '('
+    |  |  |- 1 Function 'julian...'
+    |  |  |  |- 0 Identifier 'julian...'
+    |  |  |  |  `- 0 Name 'julian...'
+    |  |  |  `- 1 Parenthesis '('now')'
+    |  |  |     |- 0 Punctuation '('
+    |  |  |     |- 1 Single "'now'"
+    |  |  |     `- 2 Punctuation ')'
+    |  |  `- 2 Punctuation ')'
+    |  `- 24 Punctuation ')'
+    `- 14 Punctuation ';'
+  statement 2 INSERT
+    |- 0 Newline ' '
+    |- 1 DML 'INSERT'
+    |- 2 Whitespace ' '
+    |- 3 Keyword 'OR'
+    |- 4 Whitespace ' '
+    |- 5 DML 'REPLACE'
+    |- 6 Whitespace ' '
+    |- 7 Keyword 'INTO'
+    |- 8 Whitespace ' '
+    |- 9 Function 'notes ...'
+    |  |- 0 Identifier 'notes'
+    |  |  `- 0 Name 'notes'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Parenthesis '(id, b...'
+    |     |- 0 Punctuation '('
+    |     |- 1 IdentifierList 'id, bo...'
+    |     |  |- 0 Identifier 'id'
+    |     |  |  `- 0 Name 'id'
+    |     |  |- 1 Punctuation ','
+    |     |  |- 2 Whitespace ' '
+    |     |  `- 3 Keyword 'body'
+    |     `- 2 Punctuation ')'
+    |- 10 Whitespace ' '
+    |- 11 Values 'VALUES...'
+    |  |- 0 Keyword 'VALUES'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Parenthesis '(?, ?)'
+    |     |- 0 Punctuation '('
+    |     |- 1 IdentifierList '?, ?'
+    |     |  |- 0 Placeholder '?'
+    |     |  |- 1 Punctuation ','
+    |     |  |- 2 Whitespace ' '
+    |     |  `- 3 Placeholder '?'
+    |     `- 2 Punctuation ')'
+    `- 12 Punctuation ';'
+  statement 3 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'SELECT'
+    |- 2 Whitespace ' '
+    |- 3 IdentifierList 'id, su...'
+    |  |- 0 Identifier 'id'
+    |  |  `- 0 Name 'id'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  `- 3 Identifier 'substr...'
+    |     |- 0 Operation 'substr...'
+    |     |  |- 0 Function 'substr...'
+    |     |  |  |- 0 Identifier 'substr'
+    |     |  |  |  `- 0 Name 'substr'
+    |     |  |  `- 1 Parenthesis '(body,...'
+    |     |  |     |- 0 Punctuation '('
+    |     |  |     |- 1 IdentifierList 'body, ...'
+    |     |  |     |  |- 0 Keyword 'body'
+    |     |  |     |  |- 1 Punctuation ','
+    |     |  |     |  |- 2 Whitespace ' '
+    |     |  |     |  |- 3 Integer '1'
+    |     |  |     |  |- 4 Punctuation ','
+    |     |  |     |  |- 5 Whitespace ' '
+    |     |  |     |  `- 6 Integer '40'
+    |     |  |     `- 2 Punctuation ')'
+    |     |  |- 1 Whitespace ' '
+    |     |  |- 2 Operator '||'
+    |     |  |- 3 Whitespace ' '
+    |     |  `- 4 Single "'...'"
+    |     |- 1 Whitespace ' '
+    |     |- 2 Keyword 'AS'
+    |     |- 3 Whitespace ' '
+    |     `- 4 Identifier 'preview'
+    |        `- 0 Name 'preview'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'FROM'
+    |- 6 Whitespace ' '
+    |- 7 Identifier 'notes'
+    |  `- 0 Name 'notes'
+    |- 8 Whitespace ' '
+    |- 9 Where 'WHERE ...'
+    |  |- 0 Keyword 'WHERE'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Comparison 'tags L...'
+    |  |  |- 0 Identifier 'tags'
+    |  |  |  `- 0 Name 'tags'
+    |  |  |- 1 Whitespace ' '
+    |  |  |- 2 Comparison 'LIKE'
+    |  |  |- 3 Whitespace ' '
+    |  |  `- 4 Operation ''%' ||...'
+    |  |     |- 0 Operation ''%' ||...'
+    |  |     |  |- 0 Single "'%'"
+    |  |     |  |- 1 Whitespace ' '
+    |  |     |  |- 2 Operator '||'
+    |  |     |  |- 3 Whitespace ' '
+    |  |     |  `- 4 Placeholder '?'
+    |  |     |- 1 Whitespace ' '
+    |  |     |- 2 Operator '||'
+    |  |     |- 3 Whitespace ' '
+    |  |     `- 4 Single "'%'"
+    |  `- 3 Whitespace ' '
+    |- 10 Keyword 'ORDER ...'
+    |- 11 Whitespace ' '
+    |- 12 Identifier 'create...'
+    |  |- 0 Identifier 'created'
+    |  |  `- 0 Name 'created'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Order 'DESC'
+    |- 13 Whitespace ' '
+    |- 14 Keyword 'LIMIT'
+    |- 15 Whitespace ' '
+    |- 16 Integer '20'
+    |- 17 Whitespace ' '
+    |- 18 Keyword 'OFFSET'
+    |- 19 Whitespace ' '
+    |- 20 Integer '40'
+    `- 21 Punctuation ';'
+  statement 4 UPDATE
+    |- 0 Newline ' '
+    |- 1 DML 'UPDATE'
+    |- 2 Whitespace ' '
+    |- 3 Identifier 'notes'
+    |  `- 0 Name 'notes'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'SET'
+    |- 6 Whitespace ' '
+    |- 7 Comparison 'tags =...'
+    |  |- 0 Identifier 'tags'
+    |  |  `- 0 Name 'tags'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Comparison '='
+    |  |- 3 Whitespace ' '
+    |  `- 4 Function 'trim(t...'
+    |     |- 0 Identifier 'trim'
+    |     |  `- 0 Name 'trim'
+    |     `- 1 Parenthesis '(tags ...'
+    |        |- 0 Punctuation '('
+    |        |- 1 IdentifierList 'tags |...'
+    |        |  |- 0 Operation 'tags |...'
+    |        |  |  |- 0 Operation 'tags |...'
+    |        |  |  |  |- 0 Identifier 'tags'
+    |        |  |  |  |  `- 0 Name 'tags'
+    |        |  |  |  |- 1 Whitespace ' '
+    |        |  |  |  |- 2 Operator '||'
+    |        |  |  |  |- 3 Whitespace ' '
+    |        |  |  |  `- 4 Single "','"
+    |        |  |  |- 1 Whitespace ' '
+    |        |  |  |- 2 Operator '||'
+    |        |  |  |- 3 Whitespace ' '
+    |        |  |  `- 4 Placeholder ':tag'
+    |        |  |- 1 Punctuation ','
+    |        |  |- 2 Whitespace ' '
+    |        |  `- 3 Single "','"
+    |        `- 2 Punctuation ')'
+    |- 8 Whitespace ' '
+    `- 9 Where 'WHERE ...'
+       |- 0 Keyword 'WHERE'
+       |- 1 Whitespace ' '
+       |- 2 Comparison 'id = :...'
+       |  |- 0 Identifier 'id'
+       |  |  `- 0 Name 'id'
+       |  |- 1 Whitespace ' '
+       |  |- 2 Comparison '='
+       |  |- 3 Whitespace ' '
+       |  `- 4 Placeholder ':id'
+       `- 3 Punctuation ';'
+== 74 tree 'select a as b, c d, e.f g from t'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 IdentifierList 'a as b...'
+    |  |- 0 Identifier 'a as b'
+    |  |  |- 0 Name 'a'
+    |  |  |- 1 Whitespace ' '
+    |  |  |- 2 Keyword 'as'
+    |  |  |- 3 Whitespace ' '
+    |  |  `- 4 Identifier 'b'
+    |  |     `- 0 Name 'b'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  |- 3 Identifier 'c d'
+    |  |  |- 0 Name 'c'
+    |  |  |- 1 Whitespace ' '
+    |  |  `- 2 Identifier 'd'
+    |  |     `- 0 Name 'd'
+    |  |- 4 Punctuation ','
+    |  |- 5 Whitespace ' '
+    |  `- 6 Identifier 'e.f g'
+    |     |- 0 Name 'e'
+    |     |- 1 Punctuation '.'
+    |     |- 2 Name 'f'
+    |     |- 3 Whitespace ' '
+    |     `- 4 Identifier 'g'
+    |        `- 0 Name 'g'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'from'
+    |- 5 Whitespace ' '
+    `- 6 Identifier 't'
+       `- 0 Name 't'
+== 75 tree 'select max(x) over (partition by y) from t'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 Function 'max(x)...'
+    |  |- 0 Identifier 'max'
+    |  |  `- 0 Name 'max'
+    |  |- 1 Parenthesis '(x)'
+    |  |  |- 0 Punctuation '('
+    |  |  |- 1 Identifier 'x'
+    |  |  |  `- 0 Name 'x'
+    |  |  `- 2 Punctuation ')'
+    |  |- 2 Whitespace ' '
+    |  `- 3 Over 'over (...'
+    |     |- 0 Keyword 'over'
+    |     |- 1 Whitespace ' '
+    |     `- 2 Parenthesis '(parti...'
+    |        |- 0 Punctuation '('
+    |        |- 1 Keyword 'partit...'
+    |        |- 2 Whitespace ' '
+    |        |- 3 Keyword 'by'
+    |        |- 4 Whitespace ' '
+    |        |- 5 Identifier 'y'
+    |        |  `- 0 Name 'y'
+    |        `- 6 Punctuation ')'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'from'
+    |- 5 Whitespace ' '
+    `- 6 Identifier 't'
+       `- 0 Name 't'
+== 76 tree 'select f(a, b)::int as c'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    `- 2 Identifier 'f(a, b...'
+       |- 0 Function 'f(a, b)'
+       |  |- 0 Identifier 'f'
+       |  |  `- 0 Name 'f'
+       |  `- 1 Parenthesis '(a, b)'
+       |     |- 0 Punctuation '('
+       |     |- 1 IdentifierList 'a, b'
+       |     |  |- 0 Identifier 'a'
+       |     |  |  `- 0 Name 'a'
+       |     |  |- 1 Punctuation ','
+       |     |  |- 2 Whitespace ' '
+       |     |  `- 3 Identifier 'b'
+       |     |     `- 0 Name 'b'
+       |     `- 2 Punctuation ')'
+       |- 1 Punctuation '::'
+       |- 2 Builtin 'int'
+       |- 3 Whitespace ' '
+       |- 4 Keyword 'as'
+       |- 5 Whitespace ' '
+       `- 6 Identifier 'c'
+          `- 0 Name 'c'
+== 77 tree 'select * from t where a = 1 group by b'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 Wildcard '*'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'from'
+    |- 5 Whitespace ' '
+    |- 6 Identifier 't'
+    |  `- 0 Name 't'
+    |- 7 Whitespace ' '
+    |- 8 Where 'where ...'
+    |  |- 0 Keyword 'where'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Comparison 'a = 1'
+    |  |  |- 0 Identifier 'a'
+    |  |  |  `- 0 Name 'a'
+    |  |  |- 1 Whitespace ' '
+    |  |  |- 2 Comparison '='
+    |  |  |- 3 Whitespace ' '
+    |  |  `- 4 Integer '1'
+    |  `- 3 Whitespace ' '
+    |- 9 Keyword 'group ...'
+    |- 10 Whitespace ' '
+    `- 11 Identifier 'b'
+       `- 0 Name 'b'
+== 78 tree 'x := y + 1;'
+  statement 0 UNKNOWN
+    `- 0 Assignment 'x := y...'
+       |- 0 Identifier 'x'
+       |  `- 0 Name 'x'
+       |- 1 Whitespace ' '
+       |- 2 Assignment ':='
+       |- 3 Whitespace ' '
+       |- 4 Operation 'y + 1'
+       |  |- 0 Identifier 'y'
+       |  |  `- 0 Name 'y'
+       |  |- 1 Whitespace ' '
+       |  |- 2 Operator '+'
+       |  |- 3 Whitespace ' '
+       |  `- 4 Integer '1'
+       `- 5 Punctuation ';'
+== 79 tree 'select a from b where c = 1 order by d'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 Identifier 'a'
+    |  `- 0 Name 'a'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'from'
+    |- 5 Whitespace ' '
+    |- 6 Identifier 'b'
+    |  `- 0 Name 'b'
+    |- 7 Whitespace ' '
+    |- 8 Where 'where ...'
+    |  |- 0 Keyword 'where'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Comparison 'c = 1'
+    |  |  |- 0 Identifier 'c'
+    |  |  |  `- 0 Name 'c'
+    |  |  |- 1 Whitespace ' '
+    |  |  |- 2 Comparison '='
+    |  |  |- 3 Whitespace ' '
+    |  |  `- 4 Integer '1'
+    |  `- 3 Whitespace ' '
+    |- 9 Keyword 'order ...'
+    |- 10 Whitespace ' '
+    `- 11 Identifier 'd'
+       `- 0 Name 'd'
+== 80 tree 'if x then y end if'
+  statement 0 UNKNOWN
+    `- 0 If 'if x t...'
+       |- 0 Keyword 'if'
+       |- 1 Whitespace ' '
+       |- 2 Identifier 'x'
+       |  `- 0 Name 'x'
+       |- 3 Whitespace ' '
+       |- 4 Keyword 'then'
+       |- 5 Whitespace ' '
+       |- 6 Identifier 'y'
+       |  `- 0 Name 'y'
+       |- 7 Whitespace ' '
+       `- 8 Keyword 'end if'
+== 81 tree 'for x in y loop z end loop'
+  statement 0 UNKNOWN
+    `- 0 For 'for x ...'
+       |- 0 Keyword 'for'
+       |- 1 Whitespace ' '
+       |- 2 Identifier 'x'
+       |  `- 0 Name 'x'
+       |- 3 Whitespace ' '
+       |- 4 Keyword 'in'
+       |- 5 Whitespace ' '
+       |- 6 Identifier 'y'
+       |  `- 0 Name 'y'
+       |- 7 Whitespace ' '
+       |- 8 Keyword 'loop'
+       |- 9 Whitespace ' '
+       |- 10 Identifier 'z'
+       |  `- 0 Name 'z'
+       |- 11 Whitespace ' '
+       `- 12 Keyword 'end lo...'
+== 82 tree 'select 1 -- c\n, 2'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 Integer '1'
+    |- 3 Whitespace ' '
+    |- 4 Comment '-- c '
+    |  `- 0 Single '-- c '
+    |- 5 Punctuation ','
+    |- 6 Whitespace ' '
+    `- 7 Integer '2'
+== 83 tree 'select a[1][2] from t'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 Identifier 'a[1][2]'
+    |  |- 0 Name 'a'
+    |  |- 1 SquareBrackets '[1]'
+    |  |  |- 0 Punctuation '['
+    |  |  |- 1 Integer '1'
+    |  |  `- 2 Punctuation ']'
+    |  `- 2 SquareBrackets '[2]'
+    |     |- 0 Punctuation '['
+    |     |- 1 Integer '2'
+    |     `- 2 Punctuation ']'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'from'
+    |- 5 Whitespace ' '
+    `- 6 Identifier 't'
+       `- 0 Name 't'
+== 84 tree "select date '2020-01-01', interval '1' hour"
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 TypedLiteral 'date '...'
+    |  |- 0 Builtin 'date'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Single ''2020-...'
+    |- 3 Punctuation ','
+    |- 4 Whitespace ' '
+    `- 5 TypedLiteral 'interv...'
+       |- 0 Builtin 'interv...'
+       |- 1 Whitespace ' '
+       |- 2 Single "'1'"
+       |- 3 Whitespace ' '
+       `- 4 Keyword 'hour'
+== 85 tree "select x at time zone 'UTC' as y"
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    `- 2 Identifier 'x at t...'
+       |- 0 Name 'x'
+       |- 1 Whitespace ' '
+       |- 2 TZCast 'at tim...'
+       |- 3 Whitespace ' '
+       |- 4 Keyword 'as'
+       |- 5 Whitespace ' '
+       `- 6 Identifier 'y'
+          `- 0 Name 'y'
+== 86 tree 'insert into t values (1), (2)'
+  statement 0 INSERT
+    |- 0 DML 'insert'
+    |- 1 Whitespace ' '
+    |- 2 Keyword 'into'
+    |- 3 Whitespace ' '
+    |- 4 Identifier 't'
+    |  `- 0 Name 't'
+    |- 5 Whitespace ' '
+    `- 6 Values 'values...'
+       |- 0 Keyword 'values'
+       |- 1 Whitespace ' '
+       |- 2 Parenthesis '(1)'
+       |  |- 0 Punctuation '('
+       |  |- 1 Integer '1'
+       |  `- 2 Punctuation ')'
+       |- 3 Punctuation ','
+       |- 4 Whitespace ' '
+       `- 5 Parenthesis '(2)'
+          |- 0 Punctuation '('
+          |- 1 Integer '2'
+          `- 2 Punctuation ')'
+== 87 tree 'select a, -- one\n b from t'
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 Identifier 'a'
+    |  `- 0 Name 'a'
+    |- 3 Punctuation ','
+    |- 4 Whitespace ' '
+    |- 5 Comment '-- one '
+    |  `- 0 Single '-- one '
+    |- 6 Whitespace ' '
+    |- 7 Identifier 'b'
+    |  `- 0 Name 'b'
+    |- 8 Whitespace ' '
+    |- 9 Keyword 'from'
+    |- 10 Whitespace ' '
+    `- 11 Identifier 't'
+       `- 0 Name 't'
+== 88 tree analytics/cohorts.sql depth=1
+  statement 0 SELECT
+    |- 0 DML 'SELECT'
+    |- 1 Whitespace ' '
+    |- 2 IdentifierList 'c.id A...'
+    |  |- 0 Identifier 'c.id A...'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  |- 3 Identifier 'MIN(o....'
+    |  |- 4 Punctuation ','
+    |  |- 5 Whitespace ' '
+    |  |- 6 Identifier 'COUNT(...'
+    |  |- 7 Punctuation ','
+    |  |- 8 Newline ' '
+    |  |- 9 Whitespace ' '
+    |  |- 10 Whitespace ' '
+    |  `- 11 Identifier 'SUM(CA...'
+    |- 3 Newline ' '
+    |- 4 Keyword 'FROM'
+    |- 5 Whitespace ' '
+    |- 6 Identifier 'custom...'
+    |  |- 0 Name 'custom...'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Identifier 'c'
+    |- 7 Whitespace ' '
+    |- 8 Keyword 'LEFT O...'
+    |- 9 Whitespace ' '
+    |- 10 Identifier 'orders...'
+    |  |- 0 Name 'orders'
+    |  |- 1 Whitespace ' '
+    |  `- 2 Identifier 'o'
+    |- 11 Whitespace ' '
+    |- 12 Keyword 'ON'
+    |- 13 Whitespace ' '
+    |- 14 Comparison 'o.cust...'
+    |  |- 0 Identifier 'o.cust...'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Comparison '='
+    |  |- 3 Whitespace ' '
+    |  `- 4 Identifier 'c.id'
+    |- 15 Newline ' '
+    |- 16 Where 'WHERE ...'
+    |  |- 0 Keyword 'WHERE'
+    |  |- 1 Whitespace ' '
+    |  |- 2 Identifier 'c.crea...'
+    |  |- 3 Whitespace ' '
+    |  |- 4 Keyword 'BETWEEN'
+    |  |- 5 Whitespace ' '
+    |  |- 6 Single ''2024-...'
+    |  |- 7 Whitespace ' '
+    |  |- 8 Keyword 'AND'
+    |  |- 9 Whitespace ' '
+    |  |- 10 Single ''2024-...'
+    |  |- 11 Whitespace ' '
+    |  |- 12 Keyword 'AND'
+    |  |- 13 Whitespace ' '
+    |  |- 14 Comparison 'c.emai...'
+    |  `- 15 Newline ' '
+    |- 17 Keyword 'GROUP ...'
+    |- 18 Whitespace ' '
+    |- 19 Identifier 'c.id'
+    |  |- 0 Name 'c'
+    |  |- 1 Punctuation '.'
+    |  `- 2 Name 'id'
+    |- 20 Whitespace ' '
+    |- 21 Keyword 'ORDER ...'
+    |- 22 Whitespace ' '
+    |- 23 IdentifierList 'first_...'
+    |  |- 0 Identifier 'first_...'
+    |  |- 1 Punctuation ','
+    |  |- 2 Whitespace ' '
+    |  `- 3 Identifier 'orders...'
+    `- 24 Punctuation ';'
+  statement 1 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'SELECT'
+    |- 2 Whitespace ' '
+    |- 3 Wildcard '*'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'FROM'
+    |- 6 Whitespace ' '
+    |- 7 Identifier 'custom...'
+    |  `- 0 Name 'custom...'
+    |- 8 Whitespace ' '
+    `- 9 Where 'WHERE ...'
+       |- 0 Keyword 'WHERE'
+       |- 1 Whitespace ' '
+       |- 2 Identifier 'id'
+       |- 3 Whitespace ' '
+       |- 4 Keyword 'IN'
+       |- 5 Whitespace ' '
+       |- 6 Parenthesis '(SELEC...'
+       `- 7 Punctuation ';'
+== 89 tree misc/edge.sql depth=0
+  statement 0 SELECT
+    |- 0 DML 'select'
+    |- 1 Whitespace ' '
+    |- 2 IdentifierList 'a,b,c'
+    |- 3 Whitespace ' '
+    |- 4 Keyword 'from'
+    |- 5 Whitespace ' '
+    |- 6 Identifier 't'
+    |- 7 Whitespace ' '
+    `- 8 Where 'where ...'
+  statement 1 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'select'
+    |- 2 Whitespace ' '
+    |- 3 IdentifierList ''it''s...'
+    |- 4 Punctuation ','
+    |- 5 Whitespace ' '
+    |- 6 Literal '$tag$ ...'
+    |- 7 Punctuation ','
+    |- 8 Whitespace ' '
+    |- 9 Hexadecimal '0x1F'
+    |- 10 Punctuation ','
+    |- 11 Whitespace ' '
+    |- 12 IdentifierList '-12, 3...'
+    `- 13 Punctuation ';'
+  statement 2 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'select'
+    |- 2 Whitespace ' '
+    |- 3 IdentifierList 'json_c...'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'from'
+    |- 6 Whitespace ' '
+    |- 7 Identifier 'j'
+    `- 8 Punctuation ';'
+  statement 3 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'select'
+    |- 2 Whitespace ' '
+    |- 3 Wildcard '*'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'from'
+    |- 6 Whitespace ' '
+    |- 7 Identifier 't1'
+    |- 8 Whitespace ' '
+    |- 9 Keyword 'natura...'
+    |- 10 Whitespace ' '
+    |- 11 Identifier 't2'
+    |- 12 Whitespace ' '
+    |- 13 Keyword 'cross ...'
+    |- 14 Whitespace ' '
+    |- 15 Identifier 't3'
+    |- 16 Whitespace ' '
+    |- 17 Keyword 'left j...'
+    |- 18 Whitespace ' '
+    |- 19 Identifier 't4'
+    |- 20 Whitespace ' '
+    |- 21 Keyword 'using'
+    |- 22 Whitespace ' '
+    |- 23 Parenthesis '(k)'
+    |- 24 Whitespace ' '
+    |- 25 Keyword 'full o...'
+    |- 26 Whitespace ' '
+    |- 27 Identifier 't5'
+    |- 28 Whitespace ' '
+    |- 29 Keyword 'on'
+    |- 30 Whitespace ' '
+    |- 31 Comparison 't5.k=t...'
+    `- 32 Punctuation ';'
+  statement 4 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'select'
+    |- 2 Whitespace ' '
+    |- 3 Function 'count(...'
+    |- 4 Whitespace ' '
+    |- 5 IdentifierList 'filter...'
+    |- 6 Whitespace ' '
+    |- 7 Keyword 'from'
+    |- 8 Whitespace ' '
+    |- 9 Identifier 't'
+    |- 10 Whitespace ' '
+    |- 11 Keyword 'window'
+    |- 12 Whitespace ' '
+    |- 13 Identifier 'w as (...'
+    `- 14 Punctuation ';'
+  statement 5 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'select'
+    |- 2 Whitespace ' '
+    |- 3 Operation 'date '...'
+    |- 4 Punctuation ','
+    |- 5 Whitespace ' '
+    |- 6 TypedLiteral 'timest...'
+    |- 7 Whitespace ' '
+    |- 8 TZCast 'at tim...'
+    `- 9 Punctuation ';'
+  statement 6 SELECT
+    |- 0 Newline ' '
+    |- 1 DML 'select'
+    |- 2 Whitespace ' '
+    |- 3 Identifier 'x'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'from'
+    |- 6 Whitespace ' '
+    |- 7 Identifier 't'
+    |- 8 Whitespace ' '
+    |- 9 Keyword 'order ...'
+    |- 10 Whitespace ' '
+    |- 11 IdentifierList 'x asc ...'
+    `- 12 Punctuation ';'
+  statement 7 UPDATE
+    |- 0 Newline ' '
+    |- 1 DML 'update'
+    |- 2 Whitespace ' '
+    |- 3 Identifier 't'
+    |- 4 Whitespace ' '
+    |- 5 Keyword 'set'
+    |- 6 Whitespace ' '
+    |- 7 IdentifierList 'a = a+...'
+    |- 8 Whitespace ' '
+    |- 9 Comparison '='
+    |- 10 Whitespace ' '
+    |- 11 Keyword 'default'
+    |- 12 Whitespace ' '
+    |- 13 Where 'where ...'
+    |- 14 Keyword 'return...'
+    |- 15 Whitespace ' '
+    |- 16 Wildcard '*'
+    `- 17 Punctuation ';'
+  statement 8 UNKNOWN
+    |- 0 Newline ' '
+    `- 1 Single '-- tra...'
+== 90 info migrations/0002_line_items.sql
+  statement 0 CREATE '/* Line items and a view over them. */\ncreate table line_ite'
+    Comment '/* Line items and a view over them. */\n' multiline=True
+    Identifier 'line_items' name='line_items' real='line_items' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(\n  id bigserial primary key,\n  order_id bigint not null references orders(id),\n  sku varchar(64) not null,\n  quantity integer not null default 1,\n  unit_price_cents integer not null\n)'
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['primary key', 'order_id']
+    Identifier 'order_id' name='order_id' real='order_id' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['orders(id)', 'sku']
+    Function 'orders(id)' name='orders' real='orders' alias=None params=['id'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'orders' name='orders' real='orders' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(id)'
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    Identifier 'sku' name='sku' real='sku' alias=None parent=None cast=None order=None star=False
+    Function 'varchar(64)' name='varchar' real='varchar' alias=None params=['64'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'varchar' name='varchar' real='varchar' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(64)'
+    IdentifierList ['not null', 'quantity']
+    Identifier 'quantity' name='quantity' real='quantity' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['1', 'unit_price_cents']
+    Identifier 'unit_price_cents' name='unit_price_cents' real='unit_price_cents' alias=None parent=None cast=None order=None star=False
+  statement 1 ALTER '\n\nalter table orders add column shipped_at timestamp null;'
+    Identifier 'orders' name='orders' real='orders' alias=None parent=None cast=None order=None star=False
+    Identifier 'shipped_at' name='shipped_at' real='shipped_at' alias=None parent=None cast=None order=None star=False
+  statement 2 ALTER "\nalter table orders alter column status set default 'new';"
+    Identifier 'orders' name='orders' real='orders' alias=None parent=None cast=None order=None star=False
+    Identifier 'status' name='status' real='status' alias=None parent=None cast=None order=None star=False
+  statement 3 CREATE OR REPLACE '\n\ncreate or replace view order_totals as\nselect o.id, o.cust'
+    Identifier 'order_totals' name='order_totals' real='order_totals' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['o.id', 'o.customer_id', 'sum(li.quantity * li.unit_price_cents) as computed_total']
+    Identifier 'o.id' name='id' real='id' alias=None parent='o' cast=None order=None star=False
+    Identifier 'o.customer_id' name='customer_id' real='customer_id' alias=None parent='o' cast=None order=None star=False
+    Identifier 'sum(li.quantity * li.unit_price_cents) as computed_total' name='computed_total' real='sum' alias='computed_total' parent=None cast=None order=None star=False
+    Function 'sum(li.quantity * li.unit_price_cents)' name='sum' real='sum' alias=None params=[] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'sum' name='sum' real='sum' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(li.quantity * li.unit_price_cents)'
+    Operation 'li.quantity * li.unit_price_cents'
+    Identifier 'li.quantity' name='quantity' real='quantity' alias=None parent='li' cast=None order=None star=False
+    Identifier 'li.unit_price_cents' name='unit_price_cents' real='unit_price_cents' alias=None parent='li' cast=None order=None star=False
+    Identifier 'computed_total' name='computed_total' real='computed_total' alias=None parent=None cast=None order=None star=False
+    Identifier 'orders o' name='o' real='orders' alias='o' parent=None cast=None order=None star=False
+    Identifier 'o' name='o' real='o' alias=None parent=None cast=None order=None star=False
+    Identifier 'line_items li' name='li' real='line_items' alias='li' parent=None cast=None order=None star=False
+    Identifier 'li' name='li' real='li' alias=None parent=None cast=None order=None star=False
+    Comparison 'li.order_id' 'o.id'
+    Identifier 'li.order_id' name='order_id' real='order_id' alias=None parent='li' cast=None order=None star=False
+    Identifier 'o.id' name='id' real='id' alias=None parent='o' cast=None order=None star=False
+    IdentifierList ['o.id', 'o.customer_id']
+    Identifier 'o.id' name='id' real='id' alias=None parent='o' cast=None order=None star=False
+    Identifier 'o.customer_id' name='customer_id' real='customer_id' alias=None parent='o' cast=None order=None star=False
+  statement 4 INSERT '\n\ninsert into line_items (order_id, sku, quantity, unit_pric'
+    Function 'line_items (order_id, sku, quantity, unit_price_cents)' name='line_items' real='line_items' alias='line_items' params=['order_id', 'sku', 'quantity', 'unit_price_cents'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'line_items' name='line_items' real='line_items' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(order_id, sku, quantity, unit_price_cents)'
+    IdentifierList ['order_id', 'sku', 'quantity', 'unit_price_cents']
+    Identifier 'order_id' name='order_id' real='order_id' alias=None parent=None cast=None order=None star=False
+    Identifier 'sku' name='sku' real='sku' alias=None parent=None cast=None order=None star=False
+    Identifier 'quantity' name='quantity' real='quantity' alias=None parent=None cast=None order=None star=False
+    Identifier 'unit_price_cents' name='unit_price_cents' real='unit_price_cents' alias=None parent=None cast=None order=None star=False
+    Values "values (1, 'SKU-001', 2, 1999), (1, 'SKU-042', 1, 4500)"
+    Parenthesis "(1, 'SKU-001', 2, 1999)"
+    IdentifierList ['1', "'SKU-001'", '2', '1999']
+    Parenthesis "(1, 'SKU-042', 1, 4500)"
+    IdentifierList ['1', "'SKU-042'", '1', '4500']
+== 91 info analytics/daily_revenue.sql
+  statement 0 SELECT "with paid as (\n    select o.id, o.customer_id, date_trunc('d"
+    IdentifierList ["paid as (\n    select o.id, o.customer_id, date_trunc('day', o.placed_at) as day, o.total_cents\n    from orders o\n    where o.status in ('paid', 'shipped') and o.placed_at >= now() - interval '30 days'\n)", 'ranked as (\n    select p.*, row_number() over (partition by p.customer_id order by p.total_cents desc) as rn\n    from paid p\n)']
+    Identifier "paid as (\n    select o.id, o.customer_id, date_trunc('day', o.placed_at) as day, o.total_cents\n    from orders o\n    where o.status in ('paid', 'shipped') and o.placed_at >= now() - interval '30 days'\n)" name='paid' real='paid' alias=None parent=None cast=None order=None star=False
+    Parenthesis "(\n    select o.id, o.customer_id, date_trunc('day', o.placed_at) as day, o.total_cents\n    from orders o\n    where o.status in ('paid', 'shipped') and o.placed_at >= now() - interval '30 days'\n)"
+    IdentifierList ['o.id', 'o.customer_id', "date_trunc('day', o.placed_at) as day", 'o.total_cents']
+    Identifier 'o.id' name='id' real='id' alias=None parent='o' cast=None order=None star=False
+    Identifier 'o.customer_id' name='customer_id' real='customer_id' alias=None parent='o' cast=None order=None star=False
+    Identifier "date_trunc('day', o.placed_at) as day" name='day' real='date_trunc' alias='day' parent=None cast=None order=None star=False
+    Function "date_trunc('day', o.placed_at)" name='date_trunc' real='date_trunc' alias=None params=["'day'", 'o.placed_at'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'date_trunc' name='date_trunc' real='date_trunc' alias=None parent=None cast=None order=None star=False
+    Parenthesis "('day', o.placed_at)"
+    IdentifierList ["'day'", 'o.placed_at']
+    Identifier 'o.placed_at' name='placed_at' real='placed_at' alias=None parent='o' cast=None order=None star=False
+    Identifier 'o.total_cents' name='total_cents' real='total_cents' alias=None parent='o' cast=None order=None star=False
+    Identifier 'orders o' name='o' real='orders' alias='o' parent=None cast=None order=None star=False
+    Identifier 'o' name='o' real='o' alias=None parent=None cast=None order=None star=False
+    Where "where o.status in ('paid', 'shipped') and o.placed_at >= now() - interval '30 days'\n"
+    Identifier 'o.status' name='status' real='status' alias=None parent='o' cast=None order=None star=False
+    Parenthesis "('paid', 'shipped')"
+    IdentifierList ["'paid'", "'shipped'"]
+    Comparison 'o.placed_at' "now() - interval '30 days'"
+    Identifier 'o.placed_at' name='placed_at' real='placed_at' alias=None parent='o' cast=None order=None star=False
+    Operation "now() - interval '30 days'"
+    Function 'now()' name='now' real='now' alias=None params=[] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'now' name='now' real='now' alias=None parent=None cast=None order=None star=False
+    Parenthesis '()'
+    TypedLiteral "interval '30 days'"
+    Identifier 'ranked as (\n    select p.*, row_number() over (partition by p.customer_id order by p.total_cents desc) as rn\n    from paid p\n)' name='ranked' real='ranked' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(\n    select p.*, row_number() over (partition by p.customer_id order by p.total_cents desc) as rn\n    from paid p\n)'
+    IdentifierList ['p.*', 'row_number() over (partition by p.customer_id order by p.total_cents desc) as rn']
+    Identifier 'p.*' name='*' real='*' alias=None parent='p' cast=None order=None star=True
+    Identifier 'row_number() over (partition by p.customer_id order by p.total_cents desc) as rn' name='rn' real='row_number' alias='rn' parent=None cast=None order=None star=False
+    Function 'row_number() over (partition by p.customer_id order by p.total_cents desc)' name='row_number' real='row_number' alias='row_number' params=[] window='(partition by p.customer_id order by p.total_cents desc)'
+    Identifier 'row_number' name='row_number' real='row_number' alias=None parent=None cast=None order=None star=False
+    Parenthesis '()'
+    Over 'over (partition by p.customer_id order by p.total_cents desc)'
+    Parenthesis '(partition by p.customer_id order by p.total_cents desc)'
+    Identifier 'p.customer_id' name='customer_id' real='customer_id' alias=None parent='p' cast=None order=None star=False
+    Identifier 'p.total_cents desc' name='total_cents' real='total_cents' alias='total_cents' parent=None cast=None order='DESC' star=False
+    Identifier 'p.total_cents' name='total_cents' real='total_cents' alias=None parent='p' cast=None order=None star=False
+    Identifier 'rn' name='rn' real='rn' alias=None parent=None cast=None order=None star=False
+    Identifier 'paid p' name='p' real='paid' alias='p' parent=None cast=None order=None star=False
+    Identifier 'p' name='p' real='p' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['day', 'count(*) as orders', 'sum(total_cents) / 100.0 as revenue', 'avg(total_cents)::numeric(10,2) as avg_cents', "case when sum(total_cents) > 1000000 then 'big' when sum(total_cents) > 100000 then 'medium' else 'small' end as bucket"]
+    Identifier 'count(*) as orders' name='orders' real='count' alias='orders' parent=None cast=None order=None star=False
+    Function 'count(*)' name='count' real='count' alias=None params=[] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'count' name='count' real='count' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(*)'
+    Identifier 'orders' name='orders' real='orders' alias=None parent=None cast=None order=None star=False
+    Identifier 'sum(total_cents) / 100.0 as revenue' name='revenue' real='revenue' alias='revenue' parent=None cast=None order=None star=False
+    Operation 'sum(total_cents) / 100.0'
+    Function 'sum(total_cents)' name='sum' real='sum' alias=None params=['total_cents'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'sum' name='sum' real='sum' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(total_cents)'
+    Identifier 'total_cents' name='total_cents' real='total_cents' alias=None parent=None cast=None order=None star=False
+    Identifier 'revenue' name='revenue' real='revenue' alias=None parent=None cast=None order=None star=False
+    Identifier 'avg(total_cents)::numeric(10,2) as avg_cents' name='avg_cents' real='avg' alias='avg_cents' parent=None cast='numeric(10,2)' order=None star=False
+    Function 'avg(total_cents)' name='avg' real='avg' alias=None params=['total_cents'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'avg' name='avg' real='avg' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(total_cents)'
+    Identifier 'total_cents' name='total_cents' real='total_cents' alias=None parent=None cast=None order=None star=False
+    Function 'numeric(10,2)' name='numeric' real='numeric' alias=None params=['10', '2'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'numeric' name='numeric' real='numeric' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(10,2)'
+    IdentifierList ['10', '2']
+    Identifier 'avg_cents' name='avg_cents' real='avg_cents' alias=None parent=None cast=None order=None star=False
+    Identifier "case when sum(total_cents) > 1000000 then 'big' when sum(total_cents) > 100000 then 'medium' else 'small' end as bucket" name='bucket' real='bucket' alias='bucket' parent=None cast=None order=None star=False
+    Case ' '->'' 'when sum(total_cents) > 1000000 '->"then 'big' " 'when sum(total_cents) > 100000 '->"then 'medium' " None->"else 'small' "
+    Comparison 'sum(total_cents)' '1000000'
+    Function 'sum(total_cents)' name='sum' real='sum' alias=None params=['total_cents'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'sum' name='sum' real='sum' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(total_cents)'
+    Identifier 'total_cents' name='total_cents' real='total_cents' alias=None parent=None cast=None order=None star=False
+    Comparison 'sum(total_cents)' '100000'
+    Function 'sum(total_cents)' name='sum' real='sum' alias=None params=['total_cents'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'sum' name='sum' real='sum' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(total_cents)'
+    Identifier 'total_cents' name='total_cents' real='total_cents' alias=None parent=None cast=None order=None star=False
+    Identifier 'bucket' name='bucket' real='bucket' alias=None parent=None cast=None order=None star=False
+    Identifier 'ranked' name='ranked' real='ranked' alias=None parent=None cast=None order=None star=False
+    Where 'where rn = 1\n'
+    Comparison 'rn' '1'
+    Identifier 'rn' name='rn' real='rn' alias=None parent=None cast=None order=None star=False
+    Comparison 'count(*)' '5'
+    Function 'count(*)' name='count' real='count' alias=None params=[] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'count' name='count' real='count' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(*)'
+== 92 info misc/edge.sql
+  statement 0 SELECT 'select a,b,c from t where x=1 and y>=2 or z<>3;'
+    IdentifierList ['a', 'b', 'c']
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Identifier 'b' name='b' real='b' alias=None parent=None cast=None order=None star=False
+    Identifier 'c' name='c' real='c' alias=None parent=None cast=None order=None star=False
+    Identifier 't' name='t' real='t' alias=None parent=None cast=None order=None star=False
+    Where 'where x=1 and y>=2 or z<>3;'
+    Comparison 'x' '1'
+    Identifier 'x' name='x' real='x' alias=None parent=None cast=None order=None star=False
+    Comparison 'y' '2'
+    Identifier 'y' name='y' real='y' alias=None parent=None cast=None order=None star=False
+    Comparison 'z' '3'
+    Identifier 'z' name='z' real='z' alias=None parent=None cast=None order=None star=False
+  statement 1 SELECT '\nselect \'it\'\'s\', "quoted ""name""", `back``tick`, $tag$ doll'
+    IdentifierList ["'it''s'", '"quoted ""name"""', '`back``tick`']
+    Identifier '"quoted ""name"""' name='quoted ""name""' real='quoted ""name""' alias=None parent=None cast=None order=None star=False
+    Identifier '`back``tick`' name='back``tick' real='back``tick' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['-12', '3.5e-2', '.5', '7.']
+  statement 2 SELECT "\nselect json_col->'a'->>'b', arr[1], arr[1:2], x::text, cast"
+    IdentifierList ["json_col->'a'->>'b'", 'arr[1]', 'arr[1:2]', 'x::text', 'cast(y as int)']
+    Operation "json_col->'a'->>'b'"
+    Identifier "json_col->'a'" name=None real=None alias=None parent=None cast=None order=None star=False
+    Operation "json_col->'a'"
+    Identifier 'arr[1]' name='arr' real='arr' alias=None parent=None cast=None order=None star=False
+    SquareBrackets '[1]'
+    Identifier 'arr[1:2]' name='arr' real='arr' alias=None parent=None cast=None order=None star=False
+    SquareBrackets '[1:2]'
+    Identifier 'x::text' name='x' real='x' alias=None parent=None cast='text' order=None star=False
+    Function 'cast(y as int)' name='cast' real='cast' alias=None params=['y as int'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'cast' name='cast' real='cast' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(y as int)'
+    Identifier 'y as int' name='y' real='y' alias=None parent=None cast=None order=None star=False
+    Identifier 'j' name='j' real='j' alias=None parent=None cast=None order=None star=False
+  statement 3 SELECT '\nselect * from t1 natural join t2 cross join t3 left join t4'
+    Identifier 't1' name='t1' real='t1' alias=None parent=None cast=None order=None star=False
+    Identifier 't2' name='t2' real='t2' alias=None parent=None cast=None order=None star=False
+    Identifier 't3' name='t3' real='t3' alias=None parent=None cast=None order=None star=False
+    Identifier 't4' name='t4' real='t4' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(k)'
+    Identifier 'k' name='k' real='k' alias=None parent=None cast=None order=None star=False
+    Identifier 't5' name='t5' real='t5' alias=None parent=None cast=None order=None star=False
+    Comparison 't5.k' 't4.k'
+    Identifier 't5.k' name='k' real='k' alias=None parent='t5' cast=None order=None star=False
+    Identifier 't4.k' name='k' real='k' alias=None parent='t4' cast=None order=None star=False
+  statement 4 SELECT '\nselect count(*) filter (where a > 1), lag(x, 1) over w from'
+    Function 'count(*)' name='count' real='count' alias=None params=[] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'count' name='count' real='count' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(*)'
+    IdentifierList ['filter (where a > 1)', 'lag(x, 1) over w']
+    Function 'filter (where a > 1)' name='filter' real='filter' alias='filter' params=[] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'filter' name='filter' real='filter' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(where a > 1)'
+    Where 'where a > 1'
+    Comparison 'a' '1'
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Function 'lag(x, 1) over w' name='lag' real='lag' alias='lag' params=['x', '1'] window='w'
+    Identifier 'lag' name='lag' real='lag' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(x, 1)'
+    IdentifierList ['x', '1']
+    Identifier 'x' name='x' real='x' alias=None parent=None cast=None order=None star=False
+    Over 'over w'
+    Identifier 'w' name='w' real='w' alias=None parent=None cast=None order=None star=False
+    Identifier 't' name='t' real='t' alias=None parent=None cast=None order=None star=False
+    Identifier 'w as (order by ts)' name='w' real='w' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(order by ts)'
+    Identifier 'ts' name='ts' real='ts' alias=None parent=None cast=None order=None star=False
+  statement 5 SELECT "\nselect date '2001-09-28' + interval '7' day, timestamp '200"
+    Operation "date '2001-09-28' + interval '7' day"
+    TypedLiteral "date '2001-09-28'"
+    TypedLiteral "interval '7' day"
+    TypedLiteral "timestamp '2001-09-28 01:00'"
+  statement 6 SELECT '\nselect x from t order by x asc nulls first, y desc;'
+    Identifier 'x' name='x' real='x' alias=None parent=None cast=None order=None star=False
+    Identifier 't' name='t' real='t' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['x asc nulls first', 'y desc']
+    Identifier 'x asc nulls first' name='x' real='x' alias='x' parent=None cast=None order='ASC NULLS FIRST' star=False
+    Identifier 'x' name='x' real='x' alias=None parent=None cast=None order=None star=False
+    Identifier 'y desc' name='y' real='y' alias='y' parent=None cast=None order='DESC' star=False
+    Identifier 'y' name='y' real='y' alias=None parent=None cast=None order=None star=False
+  statement 7 UPDATE '\nupdate t set a = a+1, b = default where c is null returning'
+    Identifier 't' name='t' real='t' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['a = a+1', 'b']
+    Comparison 'a' 'a+1'
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Operation 'a+1'
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Identifier 'b' name='b' real='b' alias=None parent=None cast=None order=None star=False
+    Where 'where c is null '
+    Identifier 'c' name='c' real='c' alias=None parent=None cast=None order=None star=False
+  statement 8 UNKNOWN '\n-- trailing comment only\n'
+== 93 info plpgsql/proc.sql
+  statement 0 CREATE 'create function bump_counter(p_id int) returns void as\nbegin'
+    Function 'bump_counter(p_id int)' name='bump_counter' real='bump_counter' alias=None params=['p_id'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'bump_counter' name='bump_counter' real='bump_counter' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(p_id int)'
+    Identifier 'p_id' name='p_id' real='p_id' alias=None parent=None cast=None order=None star=False
+    Identifier 'void as\nbegin\n  declare c int;\n  for r in select id from counters loop\n    update counters set n = n + 1 where id = r.id;\n  end loop;\n  if p_id > 0 then\n    update counters set n = 0 where id = p_id;\n  end if;\nend' name='void' real='void' alias=None parent=None cast=None order=None star=False
+    Begin 'begin\n  declare c int;\n  for r in select id from counters loop\n    update counters set n = n + 1 where id = r.id;\n  end loop;\n  if p_id > 0 then\n    update counters set n = 0 where id = p_id;\n  end if;\nend'
+    Identifier 'c' name='c' real='c' alias=None parent=None cast=None order=None star=False
+    For 'for r in select id from counters loop\n    update counters set n = n + 1 where id = r.id;\n  end loop'
+    Identifier 'r' name='r' real='r' alias=None parent=None cast=None order=None star=False
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    Identifier 'counters' name='counters' real='counters' alias=None parent=None cast=None order=None star=False
+    Identifier 'counters' name='counters' real='counters' alias=None parent=None cast=None order=None star=False
+    Comparison 'n' 'n + 1'
+    Identifier 'n' name='n' real='n' alias=None parent=None cast=None order=None star=False
+    Operation 'n + 1'
+    Identifier 'n' name='n' real='n' alias=None parent=None cast=None order=None star=False
+    Where 'where id = r.id;\n  end loop'
+    Comparison 'id' 'r.id'
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    Identifier 'r.id' name='id' real='id' alias=None parent='r' cast=None order=None star=False
+    If 'if p_id > 0 then\n    update counters set n = 0 where id = p_id;\n  end if'
+    Comparison 'p_id' '0'
+    Identifier 'p_id' name='p_id' real='p_id' alias=None parent=None cast=None order=None star=False
+    Identifier 'counters' name='counters' real='counters' alias=None parent=None cast=None order=None star=False
+    Comparison 'n' '0'
+    Identifier 'n' name='n' real='n' alias=None parent=None cast=None order=None star=False
+    Where 'where id = p_id;\n  end if'
+    Comparison 'id' 'p_id'
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    Identifier 'p_id' name='p_id' real='p_id' alias=None parent=None cast=None order=None star=False
+    Function 'bump_counter(3)' name='bump_counter' real='bump_counter' alias=None params=['3'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'bump_counter' name='bump_counter' real='bump_counter' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(3)'
+== 94 info tsql/report.sql
+  statement 0 SELECT 'SELECT TOP 10 [o].[Id], [c].[Name] AS [Customer Name], @@ROW'
+    Identifier 'TOP' name='TOP' real='TOP' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['10 [o].[Id]', '[c].[Name] AS [Customer Name]']
+    Identifier '10 [o].[Id]' name='[Id]' real='[Id]' alias='[Id]' parent=None cast=None order=None star=False
+    Identifier '[o].[Id]' name='[Id]' real='[Id]' alias=None parent='[o]' cast=None order=None star=False
+    Identifier '[c].[Name] AS [Customer Name]' name='[Customer Name]' real='[Name]' alias='[Customer Name]' parent='[c]' cast=None order=None star=False
+    Identifier '[Customer Name]' name='[Customer Name]' real='[Customer Name]' alias=None parent=None cast=None order=None star=False
+    Identifier 'ROWCOUNT AS rc' name='rc' real='ROWCOUNT' alias='rc' parent=None cast=None order=None star=False
+    Identifier 'rc' name='rc' real='rc' alias=None parent=None cast=None order=None star=False
+    Identifier '[dbo].[Orders] AS [o]' name='[o]' real='[Orders]' alias='[o]' parent='[dbo]' cast=None order=None star=False
+    Identifier '[o]' name='[o]' real='[o]' alias=None parent=None cast=None order=None star=False
+    Identifier '[dbo].[Customers] [c]' name='[c]' real='[Customers]' alias='[c]' parent='[dbo]' cast=None order=None star=False
+    Identifier '[c]' name='[c]' real='[c]' alias=None parent=None cast=None order=None star=False
+    Comparison '[c].[Id]' '[o].[CustomerId]'
+    Identifier '[c].[Id]' name='[Id]' real='[Id]' alias=None parent='[c]' cast=None order=None star=False
+    Identifier '[o].[CustomerId]' name='[CustomerId]' real='[CustomerId]' alias=None parent='[o]' cast=None order=None star=False
+    Where 'WHERE [o].[Total] > @minTotal\nGO'
+    Comparison '[o].[Total]' '@minTotal'
+    Identifier '[o].[Total]' name='[Total]' real='[Total]' alias=None parent='[o]' cast=None order=None star=False
+    Identifier '@minTotal' name='@minTotal' real='@minTotal' alias=None parent=None cast=None order=None star=False
+  statement 1 UNKNOWN '\nDECLARE @n INT = 5;'
+    Identifier 'n' name='n' real='n' alias=None parent=None cast=None order=None star=False
+  statement 2 SELECT '\nSELECT @n * 2 AS doubled\nGO 2'
+    Identifier 'n * 2 AS doubled' name='doubled' real='doubled' alias='doubled' parent=None cast=None order=None star=False
+    Operation 'n * 2'
+    Identifier 'n' name='n' real='n' alias=None parent=None cast=None order=None star=False
+    Identifier 'doubled' name='doubled' real='doubled' alias=None parent=None cast=None order=None star=False
+== 95 info misc/messy.sql
+  statement 0 SELECT '   SELECT    a ,   b\nFROM t    -- why\n    WHERE   (  a = 1  '
+    IdentifierList ['a', 'b']
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Identifier 'b' name='b' real='b' alias=None parent=None cast=None order=None star=False
+    Identifier 't    -- why\n' name='t' real='t' alias='t' parent=None cast=None order=None star=False
+    Comment '-- why\n' multiline=False
+    Where 'WHERE   (  a = 1   )\n;'
+    Parenthesis '(  a = 1   )'
+    Comparison 'a' '1'
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+  statement 1 UNKNOWN ';'
+  statement 2 SELECT '\nselect * from (select a,b from (select 1 as a, 2 as b) x) y'
+    Identifier '(select a,b from (select 1 as a, 2 as b) x) y' name='y' real='y' alias='y' parent=None cast=None order=None star=False
+    Parenthesis '(select a,b from (select 1 as a, 2 as b) x)'
+    IdentifierList ['a', 'b']
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Identifier 'b' name='b' real='b' alias=None parent=None cast=None order=None star=False
+    Identifier '(select 1 as a, 2 as b) x' name='x' real='x' alias='x' parent=None cast=None order=None star=False
+    Parenthesis '(select 1 as a, 2 as b)'
+    IdentifierList ['1 as a', '2 as b']
+    Identifier '1 as a' name='a' real='a' alias='a' parent=None cast=None order=None star=False
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Identifier '2 as b' name='b' real='b' alias='b' parent=None cast=None order=None star=False
+    Identifier 'b' name='b' real='b' alias=None parent=None cast=None order=None star=False
+    Identifier 'x' name='x' real='x' alias=None parent=None cast=None order=None star=False
+    Identifier 'y' name='y' real='y' alias=None parent=None cast=None order=None star=False
+    Where 'where y.a in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);'
+    Identifier 'y.a' name='a' real='a' alias=None parent='y' cast=None order=None star=False
+    Parenthesis '(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20)'
+    IdentifierList ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20']
+  statement 3 INSERT '\ninsert into t(a,b) values(1,2),(3,4),(5,6);'
+    Function 't(a,b)' name='t' real='t' alias=None params=['a', 'b'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 't' name='t' real='t' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(a,b)'
+    IdentifierList ['a', 'b']
+    Identifier 'a' name='a' real='a' alias=None parent=None cast=None order=None star=False
+    Identifier 'b' name='b' real='b' alias=None parent=None cast=None order=None star=False
+    Values 'values(1,2),(3,4),(5,6)'
+    Parenthesis '(1,2)'
+    IdentifierList ['1', '2']
+    Parenthesis '(3,4)'
+    IdentifierList ['3', '4']
+    Parenthesis '(5,6)'
+    IdentifierList ['5', '6']
+  statement 4 SELECT "\nselect case x when 1 then 'one' when 2 then 'two' else 'man"
+    IdentifierList ["case x when 1 then 'one' when 2 then 'two' else 'many' end", 'case when y then 1 end']
+    Case ' x '->'' 'when 1 '->"then 'one' " 'when 2 '->"then 'two' " None->"else 'many' "
+    Identifier 'x' name='x' real='x' alias=None parent=None cast=None order=None star=False
+    Case ' '->'' 'when y '->'then 1 '
+    Identifier 'y' name='y' real='y' alias=None parent=None cast=None order=None star=False
+    Identifier 't' name='t' real='t' alias=None parent=None cast=None order=None star=False
+== 96 info sqlite/app.sql
+  statement 0 UNKNOWN 'PRAGMA foreign_keys = ON;'
+    Identifier 'PRAGMA foreign_keys' name='foreign_keys' real='PRAGMA' alias='foreign_keys' parent=None cast=None order=None star=False
+    Identifier 'foreign_keys' name='foreign_keys' real='foreign_keys' alias=None parent=None cast=None order=None star=False
+  statement 1 CREATE '\nCREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AU'
+    Identifier 'notes' name='notes' real='notes' alias=None parent=None cast=None order=None star=False
+    Parenthesis "(id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, tags TEXT DEFAULT '', created REAL DEFAULT (julianday('now')))"
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['AUTOINCREMENT', 'body']
+    Identifier 'AUTOINCREMENT' name='AUTOINCREMENT' real='AUTOINCREMENT' alias=None parent=None cast=None order=None star=False
+    IdentifierList ['NOT NULL', 'tags']
+    Identifier 'tags' name='tags' real='tags' alias=None parent=None cast=None order=None star=False
+    IdentifierList ["''", 'created']
+    Identifier 'created' name='created' real='created' alias=None parent=None cast=None order=None star=False
+    Parenthesis "(julianday('now'))"
+    Function "julianday('now')" name='julianday' real='julianday' alias=None params=["'now'"] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'julianday' name='julianday' real='julianday' alias=None parent=None cast=None order=None star=False
+    Parenthesis "('now')"
+  statement 2 INSERT '\nINSERT OR REPLACE INTO notes (id, body) VALUES (?, ?);'
+    Function 'notes (id, body)' name='notes' real='notes' alias='notes' params=['id', 'body'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'notes' name='notes' real='notes' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(id, body)'
+    IdentifierList ['id', 'body']
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    Values 'VALUES (?, ?)'
+    Parenthesis '(?, ?)'
+    IdentifierList ['?', '?']
+  statement 3 SELECT "\nSELECT id, substr(body, 1, 40) || '...' AS preview FROM not"
+    IdentifierList ['id', "substr(body, 1, 40) || '...' AS preview"]
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+    Identifier "substr(body, 1, 40) || '...' AS preview" name='preview' real='preview' alias='preview' parent=None cast=None order=None star=False
+    Operation "substr(body, 1, 40) || '...'"
+    Function 'substr(body, 1, 40)' name='substr' real='substr' alias=None params=['body', '1', '40'] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'substr' name='substr' real='substr' alias=None parent=None cast=None order=None star=False
+    Parenthesis '(body, 1, 40)'
+    IdentifierList ['body', '1', '40']
+    Identifier 'preview' name='preview' real='preview' alias=None parent=None cast=None order=None star=False
+    Identifier 'notes' name='notes' real='notes' alias=None parent=None cast=None order=None star=False
+    Where "WHERE tags LIKE '%' || ? || '%' "
+    Comparison 'tags' "'%' || ? || '%'"
+    Identifier 'tags' name='tags' real='tags' alias=None parent=None cast=None order=None star=False
+    Operation "'%' || ? || '%'"
+    Operation "'%' || ?"
+    Identifier 'created DESC' name='created' real='created' alias='created' parent=None cast=None order='DESC' star=False
+    Identifier 'created' name='created' real='created' alias=None parent=None cast=None order=None star=False
+  statement 4 UPDATE "\nUPDATE notes SET tags = trim(tags || ',' || :tag, ',') WHER"
+    Identifier 'notes' name='notes' real='notes' alias=None parent=None cast=None order=None star=False
+    Comparison 'tags' "trim(tags || ',' || :tag, ',')"
+    Identifier 'tags' name='tags' real='tags' alias=None parent=None cast=None order=None star=False
+    Function "trim(tags || ',' || :tag, ',')" name='trim' real='trim' alias=None params=["tags || ',' || :tag", "','"] window=AttributeError('NoneType' object has no attribute 'tokens')
+    Identifier 'trim' name='trim' real='trim' alias=None parent=None cast=None order=None star=False
+    Parenthesis "(tags || ',' || :tag, ',')"
+    IdentifierList ["tags || ',' || :tag", "','"]
+    Operation "tags || ',' || :tag"
+    Operation "tags || ','"
+    Identifier 'tags' name='tags' real='tags' alias=None parent=None cast=None order=None star=False
+    Where 'WHERE id = :id;'
+    Comparison 'id' ':id'
+    Identifier 'id' name='id' real='id' alias=None parent=None cast=None order=None star=False
+== 97 info misc/unicode.sql
+  statement 0 SELECT "SELECT prénom, ÉTAT, naïve_score FROM Élèves WHERE ville = '"
+    IdentifierList ['prénom', 'ÉTAT', 'naïve_score']
+    Identifier 'prénom' name='prénom' real='prénom' alias=None parent=None cast=None order=None star=False
+    Identifier 'ÉTAT' name='ÉTAT' real='ÉTAT' alias=None parent=None cast=None order=None star=False
+    Identifier 'naïve_score' name='naïve_score' real='naïve_score' alias=None parent=None cast=None order=None star=False
+    Identifier 'Élèves' name='Élèves' real='Élèves' alias=None parent=None cast=None order=None star=False
+    Where "WHERE ville = 'Zürich' AND café > 2;"
+    Comparison 'ville' "'Zürich'"
+    Identifier 'ville' name='ville' real='ville' alias=None parent=None cast=None order=None star=False
+    Comparison 'café' '2'
+    Identifier 'café' name='café' real='café' alias=None parent=None cast=None order=None star=False
+  statement 1 SELECT "\nselect 'smörgåsbord' || ' — ' || 'ｆｕｌｌ' as menu;"
+    Identifier "'smörgåsbord' || ' — ' || 'ｆｕｌｌ' as menu" name='menu' real='menu' alias='menu' parent=None cast=None order=None star=False
+    Operation "'smörgåsbord' || ' — ' || 'ｆｕｌｌ'"
+    Operation "'smörgåsbord' || ' — '"
+    Identifier 'menu' name='menu' real='menu' alias=None parent=None cast=None order=None star=False
+== 98 format analytics/cohorts.sql 
+  |SELECT c.id AS customer, MIN(o.placed_at) AS first_order, COUNT(DISTINCT o.id) orders,
+  |  SUM(CASE WHEN o.status = 'refunded' THEN 1 ELSE 0 END) AS refunds
+  |FROM customers c LEFT OUTER JOIN orders o ON o.customer_id = c.id
+  |WHERE c.created_at BETWEEN '2024-01-01' AND '2024-12-31' AND c.email NOT LIKE '%@example.com'
+  |GROUP BY c.id ORDER BY first_order ASC, orders DESC;
+  |SELECT * FROM customers WHERE id IN (SELECT customer_id FROM orders WHERE total_cents > 50000);
+== 99 format analytics/daily_revenue.sql 
+  |with paid as (
+  |    select o.id, o.customer_id, date_trunc('day', o.placed_at) as day, o.total_cents
+  |    from orders o
+  |    where o.status in ('paid', 'shipped') and o.placed_at >= now() - interval '30 days'
+  |), ranked as (
+  |    select p.*, row_number() over (partition by p.customer_id order by p.total_cents desc) as rn
+  |    from paid p
+  |)
+  |select day, count(*) as orders, sum(total_cents) / 100.0 as revenue,
+  |       avg(total_cents)::numeric(10,2) as avg_cents,
+  |       case when sum(total_cents) > 1000000 then 'big' when sum(total_cents) > 100000 then 'medium' else 'small' end as bucket
+  |from ranked
+  |where rn = 1
+  |group by day
+  |having count(*) > 5
+  |order by day desc nulls last
+  |limit 30;
+== 100 format migrations/0001_initial.sql keyword_case='upper'
+  |-- Initial schema for the orders service.
+  |-- Generated by hand, reviewed in PR 118.
+  |
+  |CREATE TABLE customers (
+  |    id          BIGSERIAL PRIMARY KEY,
+  |    email       VARCHAR(255) NOT NULL UNIQUE,
+  |    full_name   TEXT,
+  |    created_at  TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  |    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+  |);
+  |
+  |CREATE TABLE orders (
+  |    id           BIGSERIAL PRIMARY KEY,
+  |    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  |    status       VARCHAR(20) NOT NULL DEFAULT 'pending',
+  |    total_cents  INTEGER NOT NULL CHECK (total_cents >= 0),
+  |    placed_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  |);
+  |
+  |CREATE INDEX orders_customer_idx ON orders (customer_id);
+  |CREATE UNIQUE INDEX customers_email_lower_idx ON customers (lower(email));
+  |
+  |COMMENT ON TABLE orders IS 'One row per checkout';
+== 101 format migrations/0002_line_items.sql keyword_case='upper'
+  |/* Line items and a view over them. */
+  |CREATE TABLE line_items (
+  |  id BIGSERIAL PRIMARY KEY,
+  |  order_id bigint NOT NULL REFERENCES orders(id),
+  |  sku varchar(64) NOT NULL,
+  |  quantity integer NOT NULL DEFAULT 1,
+  |  unit_price_cents integer NOT NULL
+  |);
+  |
+  |ALTER TABLE orders ADD COLUMN shipped_at timestamp NULL;
+  |ALTER TABLE orders ALTER COLUMN status SET DEFAULT 'new';
+  |
+  |CREATE OR REPLACE VIEW order_totals AS
+  |SELECT o.id, o.customer_id, sum(li.quantity * li.unit_price_cents) AS computed_total
+  |FROM orders o JOIN line_items li ON li.order_id = o.id
+  |GROUP BY o.id, o.customer_id;
+  |
+  |INSERT INTO line_items (order_id, sku, quantity, unit_price_cents) VALUES (1, 'SKU-001', 2, 1999), (1, 'SKU-042', 1, 4500);
+== 102 format migrations/0003_backfill.sql keyword_case='lower' identifier_case='upper'
+  |begin;
+  |update ORDERS set STATUS = 'shipped' where SHIPPED_AT is not null and STATUS <> 'shipped';
+  |update CUSTOMERS set IS_ACTIVE = false;
+  |delete from LINE_ITEMS where QUANTITY = 0;
+  |delete from ORDERS;
+  |commit;
+== 103 format misc/broken.sql keyword_case='lower' identifier_case='upper'
+  |select ( from where ;
+  |select 'UNTERMINATED
+  |from T;
+  |select end end case case;
+  |) ) select (( 1
+  |
+== 104 format misc/edge.sql keyword_case='capitalize' identifier_case='capitalize'
+  |Select A,B,C From T Where X=1 And Y>=2 Or Z<>3;
+  |Select 'it''s', "quoted ""name""", `back``tick`, $tag$ dollar $ body $tag$, 0x1F, -12, 3.5e-2, .5, 7.;
+  |Select Json_col->'a'->>'b', Arr[1], Arr[1:2], X::text, Cast(Y As int) From J;
+  |Select * From T1 Natural join T2 Cross join T3 Left join T4 Using (K) Full outer join T5 On T5.K=T4.K;
+  |Select Count(*) Filter (Where A > 1), Lag(X, 1) Over W From T Window W As (Order by Ts);
+  |Select date '2001-09-28' + interval '7' Day, timestamp '2001-09-28 01:00' At time zone 'utc';
+  |Select X From T Order by X Asc nulls first, Y Desc;
+  |Update T Set A = A+1, B = Default Where C Is Null Returning *;
+  |-- trailing comment only
+  |
+== 105 format misc/empty.sql keyword_case='capitalize' identifier_case='capitalize'
+  |
+  |
+  |-- nothing but a comment
+  |
+== 106 format misc/messy.sql strip_comments=True
+  |   SELECT    a ,   b
+  |FROM t
+  |    WHERE   (  a = 1   )
+  |;;
+  |select * from (select a,b from (select 1 as a, 2 as b) x) y where y.a in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);
+  |insert into t(a,b) values(1,2),(3,4),(5,6);
+  |select case x when 1 then 'one' when 2 then 'two' else 'many' end, case when y then 1 end from t;
+== 107 format misc/unicode.sql strip_comments=True
+  |SELECT prénom, ÉTAT, naïve_score FROM Élèves WHERE ville = 'Zürich' AND café > 2;
+  |select 'smörgåsbord' || ' — ' || 'ｆｕｌｌ' as menu;
+== 108 format mysql/dump.sql strip_whitespace=True
+  |-- MySQL dump 10.13  Distrib 8.0.36, for Linux (x86_64)
+  |--
+  |-- Host: localhost    Database: shop
+  |-- ------------------------------------------------------
+  |/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;/*!40101 SET NAMES utf8mb4 */;DROP TABLE IF EXISTS `products`;CREATE TABLE `products` (`id` int NOT NULL AUTO_INCREMENT, `name` varchar(120) COLLATE utf8mb4_unicode_ci NOT NULL, `price` decimal(10,2) DEFAULT NULL, `tags` json DEFAULT NULL, PRIMARY KEY (`id`), KEY `idx_name` (`name`)) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4;LOCK TABLES `products` WRITE;INSERT INTO `products` VALUES (1,'Kettle',24.99,'[\"kitchen\"]'),(2,'Toaster',39.50,NULL),(3,'O\'Brien\'s mug',7.00,'[]');UNLOCK TABLES;SELECT `name`, `price` FROM `products` WHERE `tags`->>'$[0]' = 'kitchen' # inline note
+  |;
+== 109 format oracle/hints.sql strip_whitespace=True
+  |SELECT /*+ INDEX(e emp_name_ix) */ e.last_name, d.department_name FROM employees e, departments d WHERE e.department_id = d.department_id(+) AND ROWNUM <= 10;--+ ordered
+  |SELECT emp.* FROM emp WHERE sal > :min_sal MINUS SELECT emp.* FROM emp WHERE deptno = :dept;
+== 110 format plpgsql/audit.sql reindent=True
+  |CREATE OR REPLACE FUNCTION audit_order_change() RETURNS trigger AS $$
+  |DECLARE
+  |    changed text;
+  |BEGIN
+  |    IF TG_OP = 'UPDATE' THEN
+  |        changed := 'update';
+  |    ELSE
+  |        changed := 'other';
+  |    END IF;
+  |    INSERT INTO order_audit (order_id, action, at) VALUES (NEW.id, changed, now());
+  |    RETURN NEW;
+  |END;
+  |$$ LANGUAGE plpgsql;
+  |
+  |
+  |CREATE TRIGGER orders_audit AFTER
+  |UPDATE ON orders
+  |FOR EACH ROW EXECUTE FUNCTION audit_order_change();
+== 111 format plpgsql/proc.sql reindent=True
+  |create function bump_counter(p_id int) returns void as begin declare c int;
+  |for r in
+  |select id
+  |from counters loop
+  |update counters
+  |set n = n + 1
+  |where id = r.id; end loop; if p_id > 0 then
+  |update counters
+  |set n = 0
+  |where id = p_id; end if; end;
+  |select bump_counter(3);
+== 112 format sqlite/app.sql reindent=True keyword_case='upper'
+  |PRAGMA foreign_keys = ON;
+  |
+  |
+  |CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT,
+  |                                                         BODY TEXT NOT NULL,
+  |                                                                   tags TEXT DEFAULT '',
+  |                                                                                     created REAL DEFAULT (julianday('now')));
+  |
+  |
+  |INSERT
+  |OR
+  |REPLACE INTO notes (id, BODY)
+  |VALUES (?, ?);
+  |
+  |
+  |SELECT id,
+  |       substr(BODY, 1, 40) || '...' AS preview
+  |FROM notes
+  |WHERE tags LIKE '%' || ? || '%'
+  |ORDER BY created DESC
+  |LIMIT 20
+  |OFFSET 40;
+  |
+  |
+  |UPDATE notes
+  |SET tags = trim(tags || ',' || :tag, ',')
+  |WHERE id = :id;
+== 113 format tsql/report.sql reindent=True keyword_case='upper'
+  |SELECT TOP 10 [o].[Id],
+  |           [c].[Name] AS [Customer Name], @@ROWCOUNT AS rc
+  |FROM [dbo].[Orders] AS [o]
+  |INNER JOIN [dbo].[Customers] [c] ON [c].[Id] = [o].[CustomerId]
+  |WHERE [o].[Total] > @minTotal GO
+  |
+  |DECLARE @n INT = 5;
+  |
+  |
+  |SELECT @n * 2 AS doubled GO 2
+== 114 format analytics/cohorts.sql reindent=True indent_width=4 indent_after_first=True
+  |SELECT c.id AS customer,
+  |       MIN(o.placed_at) AS first_order,
+  |       COUNT(DISTINCT o.id) orders,
+  |       SUM(CASE
+  |               WHEN o.status = 'refunded' THEN 1
+  |               ELSE 0
+  |           END) AS refunds
+  |    FROM customers c
+  |    LEFT OUTER JOIN orders o ON o.customer_id = c.id
+  |    WHERE c.created_at BETWEEN '2024-01-01' AND '2024-12-31'
+  |        AND c.email NOT LIKE '%@example.com'
+  |    GROUP BY c.id
+  |    ORDER BY first_order ASC,
+  |             orders DESC;
+  |
+  |
+  |    SELECT *
+  |    FROM customers
+  |    WHERE id IN
+  |            (SELECT customer_id
+  |             FROM orders
+  |             WHERE total_cents > 50000);
+== 115 format analytics/daily_revenue.sql reindent=True indent_width=4 indent_after_first=True
+  |with paid as
+  |        (select o.id,
+  |                o.customer_id,
+  |                date_trunc('day', o.placed_at) as day,
+  |                o.total_cents
+  |         from orders o
+  |         where o.status in ('paid',
+  |                            'shipped')
+  |             and o.placed_at >= now() - interval '30 days'),
+  |     ranked as
+  |        (select p.*,
+  |                row_number() over (partition by p.customer_id
+  |                                   order by p.total_cents desc) as rn
+  |         from paid p)
+  |    select day,
+  |           count(*) as orders,
+  |           sum(total_cents) / 100.0 as revenue,
+  |           avg(total_cents)::numeric(10, 2) as avg_cents,
+  |           case
+  |               when sum(total_cents) > 1000000 then 'big'
+  |               when sum(total_cents) > 100000 then 'medium'
+  |               else 'small'
+  |           end as bucket
+  |    from ranked
+  |    where rn = 1
+  |    group by day
+  |    having count(*) > 5
+  |    order by day desc nulls last
+  |    limit 30;
+== 116 format migrations/0001_initial.sql reindent=True indent_tabs=True
+  |-- Initial schema for the orders service.
+  |-- Generated by hand, reviewed in PR 118.
+  |
+  |CREATE TABLE customers (id BIGSERIAL PRIMARY KEY,
+  |																									email VARCHAR(255) NOT NULL UNIQUE,
+  |																									full_name TEXT, created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  |																									is_active BOOLEAN NOT NULL DEFAULT TRUE);
+  |
+  |
+  |CREATE TABLE orders
+  |		(id BIGSERIAL PRIMARY KEY,
+  |				customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  |				status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  |				total_cents INTEGER NOT NULL CHECK (total_cents >= 0), placed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
+  |
+  |
+  |CREATE INDEX orders_customer_idx ON orders (customer_id);
+  |
+  |
+  |CREATE UNIQUE INDEX customers_email_lower_idx ON customers (lower(email));
+  |
+  |COMMENT ON TABLE orders IS 'One row per checkout';
+== 117 format migrations/0002_line_items.sql reindent=True indent_tabs=True
+  |/* Line items and a view over them. */
+  |create table line_items (id bigserial primary key,
+  |																										order_id bigint not null references orders(id),
+  |																										sku varchar(64) not null,
+  |																										quantity integer not null default 1,
+  |																										unit_price_cents integer not null);
+  |
+  |
+  |alter table orders add column shipped_at timestamp null;
+  |
+  |
+  |alter table orders
+  |alter column status
+  |set default 'new';
+  |
+  |
+  |create or replace view order_totals as
+  |select o.id,
+  |	o.customer_id,
+  |	sum(li.quantity * li.unit_price_cents) as computed_total
+  |from orders o
+  |join line_items li on li.order_id = o.id
+  |group by o.id,
+  |	o.customer_id;
+  |
+  |
+  |insert into line_items (order_id, sku, quantity, unit_price_cents)
+  |values (1, 'SKU-001', 2, 1999),
+  |							(1, 'SKU-042', 1, 4500);
+== 118 format migrations/0003_backfill.sql reindent=True indent_columns=True
+  |BEGIN;
+  |
+  |
+  |UPDATE orders
+  |SET status = 'shipped'
+  |WHERE shipped_at IS NOT NULL
+  |  AND status <> 'shipped';
+  |
+  |
+  |UPDATE customers
+  |SET is_active = FALSE;
+  |
+  |
+  |DELETE
+  |FROM line_items
+  |WHERE quantity = 0;
+  |
+  |
+  |DELETE
+  |FROM orders;
+  |
+  |
+  |COMMIT;
+== 119 format misc/broken.sql reindent=True indent_columns=True
+  |select (
+  |from
+  |where ;
+  |  select 'unterminated
+  |  from t;
+  |  select end end case case;
+  |
+  |) )
+  |select (( 1
+== 120 format misc/edge.sql reindent=True wrap_after=40
+  |select a,b,c
+  |from t
+  |where x=1
+  |  and y>=2
+  |  or z<>3;
+  |
+  |
+  |select 'it''s', "quoted ""name""", `back``tick`, $tag$ dollar $ body $tag$, 0x1F, -12,
+  |                                                                                  3.5e-2,
+  |                                                                                  .5,
+  |                                                                                  7.;
+  |
+  |
+  |select json_col->'a'->>'b', arr[1], arr[1:2], x::text,
+  |       cast(y as int)
+  |from j;
+  |
+  |
+  |select *
+  |from t1
+  |natural join t2
+  |cross join t3
+  |left join t4 using (k)
+  |full outer join t5 on t5.k=t4.k;
+  |
+  |
+  |select count(*) filter (
+  |                        where a > 1), lag(x,
+  |                                        1) over w
+  |from t window w as (
+  |                    order by ts);
+  |
+  |
+  |select date '2001-09-28' + interval '7' day, timestamp '2001-09-28 01:00' at time zone 'UTC';
+  |
+  |
+  |select x
+  |from t
+  |order by x asc nulls first, y desc;
+  |
+  |
+  |update t
+  |set a = a+1, b = default
+  |where c is null returning *;
+  |
+  |-- trailing comment only
+  |
+== 121 format misc/empty.sql reindent=True wrap_after=40
+  |-- nothing but a comment
+  |
+== 122 format misc/messy.sql reindent=True comma_first=True
+  |
+  |SELECT a
+  |     , b
+  |FROM t -- why
+  |
+  |WHERE (a = 1) ;
+  |
+  |;
+  |
+  |
+  |select *
+  |from
+  |  (select a
+  |        , b
+  |   from
+  |     (select 1 as a
+  |           , 2 as b) x) y
+  |where y.a in (1
+  |            , 2
+  |            , 3
+  |            , 4
+  |            , 5
+  |            , 6
+  |            , 7
+  |            , 8
+  |            , 9
+  |            , 10
+  |            , 11
+  |            , 12
+  |            , 13
+  |            , 14
+  |            , 15
+  |            , 16
+  |            , 17
+  |            , 18
+  |            , 19
+  |            , 20);
+  |
+  |
+  |insert into t(a, b)
+  |values(1,2)
+  |    ,(3,4)
+  |    ,(5,6);
+  |
+  |
+  |select case x
+  |           when 1 then 'one'
+  |           when 2 then 'two'
+  |           else 'many'
+  |       end
+  |     , case
+  |           when y then 1
+  |       end
+  |from t;
+== 123 format misc/unicode.sql reindent=True comma_first=True
+  |SELECT prénom
+  |     , ÉTAT
+  |     , naïve_score
+  |FROM Élèves
+  |WHERE ville = 'Zürich'
+  |  AND café > 2;
+  |
+  |
+  |select 'smörgåsbord' || ' — ' || 'ｆｕｌｌ' as menu;
+== 124 format mysql/dump.sql reindent=True compact=True wrap_after=60
+  |-- MySQL dump 10.13  Distrib 8.0.36, for Linux (x86_64)
+  |--
+  |-- Host: localhost    Database: shop
+  |-- ------------------------------------------------------
+  |/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+  |
+  |/*!40101 SET NAMES utf8mb4 */;
+  |
+  |
+  |DROP TABLE IF EXISTS `products`;
+  |
+  |
+  |CREATE TABLE `products` (`id` int NOT NULL AUTO_INCREMENT, `name` varchar(120) COLLATE utf8mb4_unicode_ci NOT NULL,
+  |                                                                                                          `price` decimal(10,
+  |
+  |                                                                                                                    2) DEFAULT NULL,
+  |                                                                                                                               `tags` json DEFAULT NULL,
+  |                                                                                                                                                   PRIMARY KEY (`id`), KEY `idx_name` (`name`)) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT
+  |CHARSET=utf8mb4;
+  |
+  |LOCK TABLES `products` WRITE;
+  |
+  |
+  |INSERT INTO `products`
+  |VALUES (1,'Kettle',24.99,'[\"kitchen\"]'),
+  |       (2,'Toaster',39.50,NULL),
+  |       (3,'O\'Brien\'s mug',7.00,'[]');
+  |
+  |UNLOCK TABLES;
+  |
+  |
+  |SELECT `name`, `price`
+  |FROM `products`
+  |WHERE `tags`->>'$[0]' = 'kitchen' # inline note
+  |;
+== 125 format oracle/hints.sql reindent=True compact=True wrap_after=60
+  |SELECT /*+ INDEX(e emp_name_ix) */ e.last_name, d.department_name
+  |FROM employees e, departments d
+  |WHERE e.department_id = d.department_id(+)
+  |  AND ROWNUM <= 10;
+  |
+  |--+ ordered
+  |
+  |SELECT emp.*
+  |FROM emp
+  |WHERE sal > :min_sal MINUS
+  |  SELECT emp.*
+  |  FROM emp WHERE deptno = :dept;
+== 126 format plpgsql/audit.sql reindent_aligned=True
+  |CREATE OR REPLACE
+  |FUNCTION audit_order_change() RETURNS trigger AS $$
+  |DECLARE
+  |    changed text;
+  |BEGIN
+  |    IF TG_OP = 'UPDATE' THEN
+  |        changed := 'update';
+  |    ELSE
+  |        changed := 'other';
+  |    END IF;
+  |    INSERT INTO order_audit (order_id, action, at) VALUES (NEW.id, changed, now());
+  |    RETURN NEW;
+  |END;
+  |$$ LANGUAGE plpgsql;CREATE TRIGGER orders_audit AFTER UPDATE
+  |    ON orders
+  |   FOR EACH ROW EXECUTE
+  |FUNCTION audit_order_change();
+== 127 format plpgsql/proc.sql reindent_aligned=True
+  |create
+  |function bump_counter(p_id int) returns void as begin declare c int;
+  |   for r in select id
+  |  from counters loop update counters
+  |   set n = n + 1
+  | where id = r.id; end loop; if p_id > 0 then update counters
+  |   set n = 0
+  | where id = p_id; end if; end; select bump_counter(3);
+== 128 format sqlite/app.sql reindent_aligned=True keyword_case='upper'
+  |PRAGMA foreign_keys =
+  |    ON;CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, BODY TEXT NOT NULL, tags TEXT DEFAULT '', created REAL DEFAULT (julianday('now')));INSERT
+  |    OR REPLACE INTO notes (id, BODY)
+  |VALUES (?, ?);SELECT id,
+  |       substr(BODY, 1, 40) || '...' AS preview
+  |  FROM notes
+  | WHERE tags LIKE '%' || ? || '%'
+  | ORDER BY created DESC
+  | LIMIT 20
+  |OFFSET 40;UPDATE notes
+  |   SET tags = trim(tags || ',' || :tag, ',')
+  | WHERE id = :id;
+== 129 format tsql/report.sql reindent_aligned=True keyword_case='upper'
+  |SELECT TOP 10 [o].[Id],
+  |       [c].[Name] AS [Customer Name], @@ROWCOUNT AS rc
+  |  FROM [dbo].[Orders] AS [o]
+  | INNER JOIN [dbo].[Customers] [c]
+  |    ON [c].[Id] = [o].[CustomerId]
+  | WHERE [o].[Total] > @minTotal GODECLARE @n INT = 5;SELECT @n * 2 AS doubled GO 2
+== 130 format analytics/cohorts.sql use_space_around_operators=True
+  |SELECT c.id AS customer, MIN(o.placed_at) AS first_order, COUNT(DISTINCT o.id) orders,
+  |  SUM(CASE WHEN o.status = 'refunded' THEN 1 ELSE 0 END) AS refunds
+  |FROM customers c LEFT OUTER JOIN orders o ON o.customer_id = c.id
+  |WHERE c.created_at BETWEEN '2024-01-01' AND '2024-12-31' AND c.email NOT LIKE '%@example.com'
+  |GROUP BY c.id ORDER BY first_order ASC, orders DESC;
+  |SELECT * FROM customers WHERE id IN (SELECT customer_id FROM orders WHERE total_cents > 50000);
+== 131 format analytics/daily_revenue.sql use_space_around_operators=True
+  |with paid as (
+  |    select o.id, o.customer_id, date_trunc('day', o.placed_at) as day, o.total_cents
+  |    from orders o
+  |    where o.status in ('paid', 'shipped') and o.placed_at >= now() - interval '30 days'
+  |), ranked as (
+  |    select p.*, row_number() over (partition by p.customer_id order by p.total_cents desc) as rn
+  |    from paid p
+  |)
+  |select day, count(*) as orders, sum(total_cents) / 100.0 as revenue,
+  |       avg(total_cents)::numeric(10,2) as avg_cents,
+  |       case when sum(total_cents) > 1000000 then 'big' when sum(total_cents) > 100000 then 'medium' else 'small' end as bucket
+  |from ranked
+  |where rn = 1
+  |group by day
+  |having count(*) > 5
+  |order by day desc nulls last
+  |limit 30;
+== 132 format migrations/0001_initial.sql truncate_strings=5
+  |-- Initial schema for the orders service.
+  |-- Generated by hand, reviewed in PR 118.
+  |
+  |CREATE TABLE customers (
+  |    id          BIGSERIAL PRIMARY KEY,
+  |    email       VARCHAR(255) NOT NULL UNIQUE,
+  |    full_name   TEXT,
+  |    created_at  TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  |    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+  |);
+  |
+  |CREATE TABLE orders (
+  |    id           BIGSERIAL PRIMARY KEY,
+  |    customer_id  BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  |    status       VARCHAR(20) NOT NULL DEFAULT 'pendi[...]',
+  |    total_cents  INTEGER NOT NULL CHECK (total_cents >= 0),
+  |    placed_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  |);
+  |
+  |CREATE INDEX orders_customer_idx ON orders (customer_id);
+  |CREATE UNIQUE INDEX customers_email_lower_idx ON customers (lower(email));
+  |
+  |COMMENT ON TABLE orders IS 'One r[...]';
+== 133 format migrations/0002_line_items.sql truncate_strings=5
+  |/* Line items and a view over them. */
+  |create table line_items (
+  |  id bigserial primary key,
+  |  order_id bigint not null references orders(id),
+  |  sku varchar(64) not null,
+  |  quantity integer not null default 1,
+  |  unit_price_cents integer not null
+  |);
+  |
+  |alter table orders add column shipped_at timestamp null;
+  |alter table orders alter column status set default 'new';
+  |
+  |create or replace view order_totals as
+  |select o.id, o.customer_id, sum(li.quantity * li.unit_price_cents) as computed_total
+  |from orders o join line_items li on li.order_id = o.id
+  |group by o.id, o.customer_id;
+  |
+  |insert into line_items (order_id, sku, quantity, unit_price_cents) values (1, 'SKU-0[...]', 2, 1999), (1, 'SKU-0[...]', 1, 4500);
+== 134 format migrations/0003_backfill.sql truncate_strings=3 truncate_char='~'
+  |BEGIN;
+  |UPDATE orders SET status = 'shi~' WHERE shipped_at IS NOT NULL AND status <> 'shi~';
+  |UPDATE customers SET is_active = FALSE;
+  |DELETE FROM line_items WHERE quantity = 0;
+  |DELETE FROM orders;
+  |COMMIT;
+== 135 format misc/broken.sql truncate_strings=3 truncate_char='~'
+  |select ( from where ;
+  |select 'unterminated
+  |from t;
+  |select end end case case;
+  |) ) select (( 1
+  |
+== 136 format misc/edge.sql output_format='python'
+  |sql = 'select a,b,c from t where x=1 and y>=2 or z<>3;'
+  |sql2 = ' '
+  |        'select \'it\'\'s\', "quoted ""name""", `back``tick`, $tag$ dollar $ body $tag$, 0x1F, -12, 3.5e-2, .5, 7.;'
+  |sql3 = ' '
+  |        'select json_col->\'a\'->>\'b\', arr[1], arr[1:2], x::text, cast(y as int) from j;'
+  |sql4 = ' '
+  |        'select * from t1 natural join t2 cross join t3 left join t4 using (k) full outer join t5 on t5.k=t4.k;'
+  |sql5 = ' '
+  |        'select count(*) filter (where a > 1), lag(x, 1) over w from t window w as (order by ts);'
+  |sql6 = ' '
+  |        'select date \'2001-09-28\' + interval \'7\' day, timestamp \'2001-09-28 01:00\' at time zone \'UTC\';'
+  |sql7 = ' '
+  |        'select x from t order by x asc nulls first, y desc;'
+  |sql8 = ' '
+  |        'update t set a = a+1, b = default where c is null returning *;'
+  |sql9 = ' '
+  |        '-- trailing comment only
+  |'
+== 137 format misc/empty.sql output_format='python'
+  |sql = ' '
+  |       ' '
+  |       '-- nothing but a comment
+  |'
+== 138 format misc/messy.sql output_format='php' reindent=True
+  |$sql  = " ";
+  |$sql .= "SELECT a ,   b ";
+  |$sql .= "FROM t    -- why
+  | WHERE   (  a = 1   )
+  |;";
+  |$sql2 = " ";
+  |$sql2 .= "
+  |;";
+  |$sql3  = " ";
+  |$sql3 .= "
+  | ";
+  |$sql3 .= "select * ";
+  |$sql3 .= "from (select a,b from (select 1 as a, 2 as b) x) y where y.a in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);";
+  |$sql4  = " ";
+  |$sql4 .= "
+  | ";
+  |$sql4 .= "insert into t(a,b) values(1,2),(3,4),(5,6);";
+  |$sql5  = " ";
+  |$sql5 .= "
+  | ";
+  |$sql5 .= "select case x when 1 then 'one' when 2 then 'two' else 'many' end, case when y then 1 end ";
+  |$sql5 .= "from t;";
+== 139 format misc/unicode.sql output_format='php' reindent=True
+  |$sql  = "SELECT prénom, ÉTAT, naïve_score ";
+  |$sql .= "FROM Élèves WHERE ville = 'Zürich' AND café > 2;";
+  |$sql2 = " ";
+  |$sql2 .= "
+  | ";
+  |$sql2 .= "select 'smörgåsbord' || ' — ' || 'ｆｕｌｌ' as menu;";
+== 140 format mysql/dump.sql output_format='sql' strip_comments=True reindent=True
+  |;
+  |
+  |;
+  |
+  |
+  |DROP TABLE IF EXISTS `products`;
+  |
+  |
+  |CREATE TABLE `products` (`id` int NOT NULL AUTO_INCREMENT,
+  |                                           `name` varchar(120) COLLATE utf8mb4_unicode_ci NOT NULL,
+  |                                                                                          `price` decimal(10, 2) DEFAULT NULL,
+  |                                                                                                                         `tags` json DEFAULT NULL,
+  |                                                                                                                                             PRIMARY KEY (`id`), KEY `idx_name` (`name`)) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT
+  |CHARSET=utf8mb4;
+  |
+  |LOCK TABLES `products` WRITE;
+  |
+  |
+  |INSERT INTO `products`
+  |VALUES (1,'Kettle',24.99,'[\"kitchen\"]'),
+  |       (2,'Toaster',39.50,NULL),
+  |       (3,'O\'Brien\'s mug',7.00,'[]');
+  |
+  |UNLOCK TABLES;
+  |
+  |
+  |SELECT `name`,
+  |       `price`
+  |FROM `products`
+  |WHERE `tags`->>'$[0]' = 'kitchen' ;
+== 141 format oracle/hints.sql output_format='sql' strip_comments=True reindent=True
+  |SELECT /*+ INDEX(e emp_name_ix) */ e.last_name,
+  |                                   d.department_name
+  |FROM employees e,
+  |     departments d
+  |WHERE e.department_id = d.department_id(+)
+  |  AND ROWNUM <= 10;
+  |
+  |--+ ordered
+  |
+  |SELECT emp.*
+  |FROM emp
+  |WHERE sal > :min_sal MINUS
+  |  SELECT emp.*
+  |  FROM emp WHERE deptno = :dept;
+== 142 format plpgsql/audit.sql strip_comments=True reindent=True keyword_case='upper' use_space_around_operators=True
+  |CREATE OR REPLACE FUNCTION audit_order_change() RETURNS TRIGGER AS $$
+  |DECLARE
+  |    changed text;
+  |BEGIN
+  |    IF TG_OP = 'UPDATE' THEN
+  |        changed := 'update';
+  |    ELSE
+  |        changed := 'other';
+  |    END IF;
+  |    INSERT INTO order_audit (order_id, action, at) VALUES (NEW.id, changed, now());
+  |    RETURN NEW;
+  |END;
+  |$$ LANGUAGE PLPGSQL;
+  |
+  |
+  |CREATE TRIGGER orders_audit AFTER
+  |UPDATE ON orders
+  |FOR EACH ROW EXECUTE FUNCTION audit_order_change();
+== 143 format plpgsql/proc.sql strip_comments=True reindent=True keyword_case='upper' use_space_around_operators=True
+  |CREATE FUNCTION bump_counter(p_id int) RETURNS void AS BEGIN DECLARE c int;
+  |FOR r IN
+  |SELECT id
+  |FROM counters LOOP
+  |UPDATE counters
+  |SET n = n + 1
+  |WHERE id = r.id; END LOOP; IF p_id > 0 THEN
+  |UPDATE counters
+  |SET n = 0
+  |WHERE id = p_id; END IF; END;
+  |SELECT bump_counter(3);
+== 144 format misc/messy.sql keyword_case='title'
+  SQLParseError: Invalid value for keyword_case: 'title'
+== 145 format misc/messy.sql identifier_case=1
+  SQLParseError: Invalid value for identifier_case: 1
+== 146 format misc/messy.sql output_format='java'
+  SQLParseError: Unknown output format: 'java'
+== 147 format misc/messy.sql strip_comments='yes'
+  SQLParseError: Invalid value for strip_comments: 'yes'
+== 148 format misc/messy.sql use_space_around_operators=[1]
+  SQLParseError: Invalid value for use_space_around_operators: [1]
+== 149 format misc/messy.sql strip_whitespace=None
+  SQLParseError: Invalid value for strip_whitespace: None
+== 150 format misc/messy.sql truncate_strings='x'
+  SQLParseError: Invalid value for truncate_strings: 'x'
+== 151 format misc/messy.sql truncate_strings=1
+  SQLParseError: Invalid value for truncate_strings: 1
+== 152 format misc/messy.sql truncate_strings='12'
+  |   SELECT    a ,   b
+  |FROM t    -- why
+  |    WHERE   (  a = 1   )
+  |;;
+  |select * from (select a,b from (select 1 as a, 2 as b) x) y where y.a in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);
+  |insert into t(a,b) values(1,2),(3,4),(5,6);
+  |select case x when 1 then 'one' when 2 then 'two' else 'many' end, case when y then 1 end from t;
+== 153 format misc/messy.sql indent_columns='no'
+  SQLParseError: Invalid value for indent_columns: 'no'
+== 154 format misc/messy.sql reindent=0
+  |   SELECT    a ,   b
+  |FROM t    -- why
+  |    WHERE   (  a = 1   )
+  |;;
+  |select * from (select a,b from (select 1 as a, 2 as b) x) y where y.a in (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20);
+  |insert into t(a,b) values(1,2),(3,4),(5,6);
+  |select case x when 1 then 'one' when 2 then 'two' else 'many' end, case when y then 1 end from t;
+== 155 format misc/messy.sql reindent_aligned='on'
+  SQLParseError: Invalid value for reindent_aligned: False
+== 156 format misc/messy.sql indent_after_first=2
+  SQLParseError: Invalid value for indent_after_first: 2
+== 157 format misc/messy.sql indent_tabs='t'
+  SQLParseError: Invalid value for indent_tabs: 't'
+== 158 format misc/messy.sql indent_width='two'
+  SQLParseError: indent_width requires an integer
+== 159 format misc/messy.sql indent_width=0
+  SQLParseError: indent_width requires a positive integer
+== 160 format misc/messy.sql indent_width='3' reindent=True
+  |
+  |SELECT a,
+  |       b
+  |FROM t -- why
+  |
+  |WHERE (a = 1) ;
+  |
+  |;
+  |
+  |
+  |select *
+  |from
+  |   (select a,
+  |           b
+  |    from
+  |       (select 1 as a,
+  |               2 as b) x) y
+  |where y.a in (1,
+  |              2,
+  |              3,
+  |              4,
+  |              5,
+  |              6,
+  |              7,
+  |              8,
+  |              9,
+  |              10,
+  |              11,
+  |              12,
+  |              13,
+  |              14,
+  |              15,
+  |              16,
+  |              17,
+  |              18,
+  |              19,
+  |              20);
+  |
+  |
+  |insert into t(a, b)
+  |values(1,2),
+  |      (3,4),
+  |      (5,6);
+  |
+  |
+  |select case x
+  |           when 1 then 'one'
+  |           when 2 then 'two'
+  |           else 'many'
+  |       end,
+  |       case
+  |           when y then 1
+  |       end
+  |from t;
+== 161 format misc/messy.sql wrap_after='x'
+  SQLParseError: wrap_after requires an integer
+== 162 format misc/messy.sql wrap_after=-1
+  SQLParseError: wrap_after requires a positive integer
+== 163 format misc/messy.sql comma_first='x'
+  SQLParseError: comma_first requires a boolean value
+== 164 format misc/messy.sql compact='x'
+  SQLParseError: compact requires a boolean value
+== 165 format misc/messy.sql right_margin='a'
+  SQLParseError: right_margin requires an integer
+== 166 format misc/messy.sql right_margin=5
+  SQLParseError: right_margin requires an integer > 10
+== 167 format misc/messy.sql right_margin=40
+  NotImplementedError: 
+== 168 format misc/messy.sql truncate_strings=True
+  SQLParseError: Invalid value for truncate_strings: 1
+== 169 format misc/messy.sql reindent=False indent_width=-3
+  SQLParseError: indent_width requires a positive integer
+== 170 format 'select a, b, c, d, e, f, g, h from tbl where a = 1 and b = 2 or c = 3' reindent=True
+  |select a,
+  |       b,
+  |       c,
+  |       d,
+  |       e,
+  |       f,
+  |       g,
+  |       h
+  |from tbl
+  |where a = 1
+  |  and b = 2
+  |  or c = 3
+== 171 format 'select a, b, c, d, e, f, g, h from tbl where a = 1 and b = 2 or c = 3' reindent=True keyword_case='upper'
+  |SELECT a,
+  |       b,
+  |       c,
+  |       d,
+  |       e,
+  |       f,
+  |       g,
+  |       h
+  |FROM tbl
+  |WHERE a = 1
+  |  AND b = 2
+  |  OR c = 3
+== 172 format 'insert into t (a, b) values (1, 2), (3, 4), (5, 6)' reindent=True indent_width=4 indent_after_first=True
+  |insert into t (a, b)
+  |    values (1, 2),
+  |           (3, 4),
+  |           (5, 6)
+== 173 format 'insert into t (a, b) values (1, 2), (3, 4), (5, 6)' reindent=True indent_tabs=True
+  |insert into t (a, b)
+  |values (1, 2),
+  |							(3, 4),
+  |							(5, 6)
+== 174 format 'select f(a, b, c, d, e) from t' reindent=True indent_columns=True
+  |select f(a, b, c, d, e)
+  |from t
+== 175 format 'select f(a, b, c, d, e) from t' reindent=True wrap_after=40
+  |select f(a, b, c, d, e)
+  |from t
+== 176 format "select case when a = 1 then 'x' when a = 2 then 'y' else 'z' end from t" reindent=True comma_first=True
+  |select case
+  |           when a = 1 then 'x'
+  |           when a = 2 then 'y'
+  |           else 'z'
+  |       end
+  |from t
+== 177 format "select case when a = 1 then 'x' when a = 2 then 'y' else 'z' end from t" reindent=True compact=True wrap_after=60
+  |select case when a = 1 then 'x' when a = 2 then 'y' else 'z' end
+  |from t
+== 178 format 'select * from a join b on a.id = b.id left join c on c.id = b.id where a.x between 1 and 5 and c.y = 2' reindent_aligned=True
+  |select *
+  |  from a
+  |  join b
+  |    on a.id = b.id
+  |  left join c
+  |    on c.id = b.id
+  | where a.x between 1 and 5
+  |   and c.y = 2
+== 179 format 'select * from a join b on a.id = b.id left join c on c.id = b.id where a.x between 1 and 5 and c.y = 2' reindent_aligned=True keyword_case='upper'
+  |SELECT *
+  |  FROM a
+  |  JOIN b
+  |    ON a.id = b.id
+  |  LEFT JOIN c
+  |    ON c.id = b.id
+  | WHERE a.x BETWEEN 1 AND 5
+  |   AND c.y = 2
+== 180 format 'update t set a = 1, b = 2 where c = 3' reindent=True
+  |update t
+  |set a = 1,
+  |    b = 2
+  |where c = 3
+== 181 format 'update t set a = 1, b = 2 where c = 3' reindent=True keyword_case='upper'
+  |UPDATE t
+  |SET a = 1,
+  |    b = 2
+  |WHERE c = 3
+== 182 format 'select a from t union select b from u union all select c from v' reindent=True indent_width=4 indent_after_first=True
+  |select a
+  |    from t
+  |    union
+  |    select b
+  |    from u
+  |    union all
+  |    select c
+  |    from v
+== 183 format 'select a from t union select b from u union all select c from v' reindent=True indent_tabs=True
+  |select a
+  |from t
+  |union
+  |select b
+  |from u
+  |union all
+  |select c
+  |from v
+== 184 format 'select x from (select y as x from z where y > 1) sub order by x limit 5' reindent=True indent_columns=True
+  |select x
+  |from
+  |  (select y as x
+  |   from z
+  |   where y > 1) sub
+  |order by x
+  |limit 5
+== 185 format 'select x from (select y as x from z where y > 1) sub order by x limit 5' reindent=True wrap_after=40
+  |select x
+  |from
+  |  (select y as x
+  |   from z
+  |   where y > 1) sub
+  |order by x
+  |limit 5
+== 186 format 'select count(*), sum(a*b+c/d-e) from t group by f, g having count(*) > 1' reindent=True comma_first=True
+  |select count(*)
+  |     , sum(a*b+c/d-e)
+  |from t
+  |group by f
+  |       , g
+  |having count(*) > 1
+== 187 format 'select count(*), sum(a*b+c/d-e) from t group by f, g having count(*) > 1' reindent=True compact=True wrap_after=60
+  |select count(*), sum(a*b+c/d-e)
+  |from t
+  |group by f, g
+  |having count(*) > 1
+== 188 format 'delete from t where id in (select id from u where flag)' reindent_aligned=True
+  |delete
+  |  from t
+  | where id in (
+  |        select id
+  |          from u
+  |         where flag
+  |       )
+== 189 format 'delete from t where id in (select id from u where flag)' reindent_aligned=True keyword_case='upper'
+  |DELETE
+  |  FROM t
+  | WHERE id IN (
+  |        SELECT id
+  |          FROM u
+  |         WHERE flag
+  |       )
+== 190 format 'select 1; select 2; select 3' reindent=True
+  |select 1;
+  |
+  |select 2;
+  |
+  |select 3
+== 191 format 'select 1; select 2; select 3' reindent=True keyword_case='upper'
+  |SELECT 1;
+  |
+  |SELECT 2;
+  |
+  |SELECT 3
+== 192 format 'create table t (a int, b text, c numeric(10, 2))' reindent=True indent_width=4 indent_after_first=True
+  |create table t (a int, b text, c numeric(10, 2))
+== 193 format 'create table t (a int, b text, c numeric(10, 2))' reindent=True indent_tabs=True
+  |create table t (a int, b text, c numeric(10, 2))
+== 194 format 'select a,b from t where (a=1 or b=2) and not c' reindent=True indent_columns=True
+  |select
+  |  a,
+  |  b
+  |from t
+  |where (a=1
+  |       or b=2)
+  |  and not c
+== 195 format 'select a,b from t where (a=1 or b=2) and not c' reindent=True wrap_after=40
+  |select a,b
+  |from t
+  |where (a=1
+  |       or b=2)
+  |  and not c
+== 196 format 'select very_long_column_name_one, very_long_column_name_two, very_long_column_name_three from some_table' reindent=True comma_first=True
+  |select very_long_column_name_one
+  |     , very_long_column_name_two
+  |     , very_long_column_name_three
+  |from some_table
+== 197 format 'select very_long_column_name_one, very_long_column_name_two, very_long_column_name_three from some_table' reindent=True compact=True wrap_after=60
+  |select very_long_column_name_one, very_long_column_name_two,
+  |       very_long_column_name_three
+  |from some_table
+== 198 format "select status from logs where price <= 'o'k' or id > 'new' or email > 'new';" compact=True
+  |select status from logs where price <= 'o'k' or id > 'new' or email > 'new';
+== 199 format "select o.total, created_at, qty from logs where o.total like '%x_y%';\nupdate orders set u.id = 4 where id > null;\nselect u.id as x1 from items where u.id = 99 order by created_at desc;\n" reindent_aligned=True indent_width=4
+  |select o.total,
+  |       created_at,
+  |       qty
+  |  from logs
+  | where o.total like '%x_y%';update orders
+  |   set u.id = 4
+  | where id > null;select u.id as x1
+  |  from items
+  | where u.id = 99
+  | order by created_at desc;
+== 200 format '-- note 2\nselect price, count(name), email from users u where email = qty or total < name or o.total <> 309 order by o.total limit 42;\n' truncate_strings=2
+  |-- note 2
+  |select price, count(name), email from users u where email = qty or total < name or o.total <> 309 order by o.total limit 42;
+== 201 format "-- note 3\nselect total as b, coalesce(o.total), status from items and id in (select price, total, status * 9, lower(o.total), status from items where price like '%bob%' and status < null) limit 88;" truncate_strings=4
+  |-- note 3
+  |select total as b, coalesce(o.total), status from items and id in (select price, total, status * 9, lower(o.total), status from items where price like '%bob[...]' and status < null) limit 88;
+== 202 format "insert into users (c, a) values (5, 'y z'), (9, 'y z'), (9, 'x')" keyword_case='capitalize' indent_after_first=True use_space_around_operators=True truncate_strings=4
+  |Insert Into users (c, a) Values (5, 'y z'), (9, 'y z'), (9, 'x')
+== 203 format "select u.id, created_at, email, u.id, status from logs where total like '%bob%' and u.id >= 'o'k'" compact=True indent_columns=True keyword_case='upper'
+  |SELECT
+  |  u.id,
+  |  created_at,
+  |  email,
+  |  u.id,
+  |  status
+  |FROM logs
+  |WHERE total like '%bob%'
+  |  AND u.id >= 'o'k'
+== 204 format "-- note 6\ninsert into users (a, d) values (3, 'y z'), (6, 'x'), (4, 'y z');\n" keyword_case='capitalize' compact=True reindent_aligned=True strip_whitespace=True
+  |-- note 6
+  |Insert Into users (a, d)
+  |Values (3, 'y z'), (6, 'x'), (4, 'y z');
+== 205 format '-- note 7\nselect distinct created_at - 6, o.total, id + 1 from orders o where id > null order by o.total;\n' identifier_case='lower'
+  |-- note 7
+  |select distinct created_at - 6, o.total, id + 1 from orders o where id > null order by o.total;
+== 206 format 'select id, id, u.id, name from users u inner join users u on email in (45, 82) group by qty;\nselect name * 6 from public.events e' keyword_case='capitalize' reindent_aligned=True
+  |Select id,
+  |       id,
+  |       u.id,
+  |       name
+  |  From users u
+  | Inner join users u
+  |    On email In (45, 82)
+  | Group by qty;Select name * 6
+  |  From public.events e
+== 207 format "select name, coalesce(price), status, price from logs inner join items on qty = null where created_at < 'new' group by u.id limit 30;\nselect price, email, email, price from users u inner join items on name > 'paid' and id in (select id, max(o.total), sum(o.total), total, count(u.id) from items left outer join items on price < 219 where created_at like '%bob%' and o.total <= 404 order by status asc)" wrap_after=20 strip_comments=True compact=True indent_columns=True
+  |select name,
+  |  coalesce(price), status, price
+  |from logs
+  |inner join items on qty = null
+  |where created_at < 'new'
+  |group by u.id
+  |limit 30;
+  |
+  |
+  |select price, email, email,
+  |  price
+  |from users u
+  |inner join items on name > 'paid'
+  |and id in
+  |  (select id, max(o.total),
+  |     sum(o.total), total,
+  |     count(u.id)
+  |   from items
+  |   left outer join items on price < 219
+  |   where created_at like '%bob%'
+  |     and o.total <= 404
+  |   order by status asc)
+== 208 format "insert into users (c, b) values (4, 'y z'), (5, 'y z'), (4, 'y z');" use_space_around_operators=True truncate_strings=2
+  |insert into users (c, b) values (4, 'y [...]'), (5, 'y [...]'), (4, 'y [...]');
+== 209 format "insert into users (a, b) values (3, 'x'), (3, 'y z'), (1, 'y z');\nupdate users set id = 2 where qty < 'paid';\n" use_space_around_operators=True
+  |insert into users (a, b) values (3, 'x'), (3, 'y z'), (1, 'y z');
+  |update users set id = 2 where qty < 'paid';
+== 210 format 'update orders set id = 2 where status = null;\n' indent_columns=True
+  |update orders
+  |set id = 2
+  |where status = null;
+== 211 format "update users set u.id = 7 where name = 'paid';" identifier_case='lower' use_space_around_operators=True strip_comments=True wrap_after=20
+  |update users set u.id = 7 where name = 'paid';
+== 212 format 'update users set name = 2 where email > price;\n' comma_first=True truncate_strings=2
+  |update users set name = 2 where email > price;
+== 213 format "select u.id as x1, price, qty from users u where o.total > 442 and created_at = 'o'k' and u.id > 'o'k'" indent_tabs=True
+  |select u.id as x1, price, qty from users u where o.total > 442 and created_at = 'o'k' and u.id > 'o'k'
+== 214 format "select total from orders o left join orders o on u.id < 'new' where status = null and o.total <= 452 order by created_at asc" strip_comments=True compact=True indent_tabs=True
+  |select total from orders o left join orders o on u.id < 'new' where status = null and o.total <= 452 order by created_at asc
+== 215 format "insert into items (d, c) values (2, 'y z'), (1, 'x'), (1, 'x');" indent_tabs=True indent_after_first=True use_space_around_operators=True keyword_case='lower'
+  |insert into items (d, c) values (2, 'y z'), (1, 'x'), (1, 'x');
+== 216 format "-- note 18\ninsert into items (d, a) values (7, 'x');" keyword_case='upper' compact=True strip_whitespace=True
+  |-- note 18
+  |INSERT INTO items (d, a) VALUES (7, 'x');
+== 217 format "-- note 19\nupdate orders set created_at = 8 where id <> 'paid';" reindent_aligned=True wrap_after=80
+  |-- note 19
+  |update orders
+  |   set created_at = 8
+  | where id <> 'paid';
+== 218 format "-- note 20\nupdate users set email = 0 where name in (19, 17, 14);\nupdate users set name = 0 where name < 'paid';\nselect id as label, u.id, id as a, name, o.total from items where price like '%x_y%' or u.id < null or o.total in (54, 96) group by u.id order by email;\n" identifier_case='lower' truncate_strings=4 indent_columns=True
+  |-- note 20
+  |
+  |update users
+  |set email = 0
+  |where name in (
+  |                 19,
+  |                 17,
+  |                 14);
+  |
+  |
+  |update users
+  |set name = 0
+  |where name < 'paid';
+  |
+  |
+  |select
+  |  id as label,
+  |  u.id,
+  |  id as a,
+  |  name,
+  |  o.total
+  |from items
+  |where price like '%x_y[...]'
+  |  or u.id < null
+  |  or o.total in (
+  |                   54,
+  |                   96)
+  |group by u.id
+  |order by email;
+== 219 format "-- note 21\nselect distinct email, u.id, price + 5 from items where o.total <= 'new' and u.id <= 463 and name >= u.id group by status order by qty asc" keyword_case='upper' indent_after_first=True indent_tabs=True
+  |-- note 21
+  |SELECT DISTINCT email, u.id, price + 5 FROM items WHERE o.total <= 'new' AND u.id <= 463 AND name >= u.id GROUP BY status ORDER BY qty ASC
+== 220 format 'select id as label, price / 5, status, sum(id), qty + 5 from logs;' indent_columns=True
+  |select
+  |  id as label,
+  |  price / 5,
+  |  status,
+  |  sum(id),
+  |  qty + 5
+  |from logs;
+== 221 format '-- note 23\ndelete from logs where qty in (64, 60, 40, 65);\n' strip_whitespace=True compact=True indent_width=4 truncate_strings=2
+  |-- note 23
+  |delete from logs where qty in (64, 60, 40, 65);
+== 222 format "delete from users where name like '%a%';" indent_tabs=True reindent=True
+  |delete
+  |from users
+  |where name like '%a%';
+== 223 format '-- note 25\nupdate users set status = 9 where status <= total;\n' truncate_strings=4 indent_columns=True strip_whitespace=True
+  |-- note 25
+  |
+  |update users
+  |set status = 9
+  |where status <= total;
+== 224 format "delete from users where o.total like '%a%';\n" reindent_aligned=True strip_whitespace=True comma_first=True
+  |delete
+  |  from users
+  | where o.total like '%a%';
+== 225 format "insert into users (d, b) values (5, 'y z');\nupdate users set qty = 9 where o.total > 'paid';\nselect qty, max(status) from orders o left join users u on o.total >= 'o'k' where total > 293 or total = total limit 57" indent_width=1 use_space_around_operators=True identifier_case='upper' reindent=True
+  |insert into USERS (D, B)
+  |values (5, 'y z');
+  |
+  |
+  |update USERS
+  |set QTY = 9
+  |where O.TOTAL > 'paid';
+  |
+  |
+  |select QTY,
+  |       MAX(STATUS)
+  |from ORDERS O
+  |left join USERS U on O.TOTAL >= 'o'K'
+  |where TOTAL > 293
+  | or TOTAL = TOTAL
+  |limit 57
+== 226 format "select o.total / 3 from users u where id >= 96 and qty in (50);\nselect email, name as label, created_at, o.total from users u where o.total like '%bob%' and id in (select o.total from users u group by u.id) order by u.id desc;\ndelete from logs where u.id <= 'o'k'" use_space_around_operators=True indent_width=4
+  |select o.total / 3 from users u where id >= 96 and qty in (50);
+  |select email, name as label, created_at, o.total from users u where o.total like '%bob%' and id in (select o.total from users u group by u.id) order by u.id desc;
+  |delete from logs where u.id <= 'o'k'
+== 227 format 'select u.id, price, coalesce(price) from users u left join users u on status = 330 order by price asc limit 69;\n' strip_comments=True use_space_around_operators=True identifier_case='upper' indent_columns=True
+  |select
+  |  U.ID,
+  |  PRICE,
+  |  COALESCE(PRICE)
+  |from USERS U
+  |left join USERS U on STATUS = 330
+  |order by PRICE asc
+  |limit 69;
+== 228 format "insert into users (a, b) values (8, 'y z'), (5, 'x');\nselect sum(id), id, created_at, price as b from users u where u.id >= created_at or u.id < null or email in (15, 12);\nselect qty from items join users u on u.id like '%a%' group by id limit 86;" identifier_case='lower'
+  |insert into users (a, b) values (8, 'y z'), (5, 'x');
+  |select sum(id), id, created_at, price as b from users u where u.id >= created_at or u.id < null or email in (15, 12);
+  |select qty from items join users u on u.id like '%a%' group by id limit 86;
+== 229 format "select total, qty - 4, id, sum(id) from logs join orders o on price like '%a%' order by name asc;\nselect name as label from logs where name <= 79 or price >= 'o'k' or u.id < 'paid' group by created_at;" strip_whitespace=True
+  |select total, qty - 4, id, sum(id) from logs join orders o on price like '%a%' order by name asc;select name as label from logs where name <= 79 or price >= 'o'k' or u.id < 'paid' group by created_at;
+== 230 format 'select distinct u.id from logs left outer join public.events e on email in (95, 26, 88) where id >= null group by total order by qty asc;\n' strip_whitespace=True identifier_case='upper'
+  |select distinct U.ID from LOGS left outer join PUBLIC.EVENTS E on EMAIL in (95, 26, 88) where ID >= null group by TOTAL order by QTY asc;
+== 231 format "-- note 33\ninsert into users (b, d) values (7, 'x'), (1, 'x'), (6, 'y z');\nselect max(price) from users u;\nselect u.id as a, qty, o.total, total, o.total from users u inner join orders o on o.total >= 'new' where email <= 307 and o.total > 'paid' limit 78" truncate_strings=2
+  |-- note 33
+  |insert into users (b, d) values (7, 'x'), (1, 'x'), (6, 'y [...]');
+  |select max(price) from users u;
+  |select u.id as a, qty, o.total, total, o.total from users u inner join orders o on o.total >= 'ne[...]' where email <= 307 and o.total > 'pa[...]' limit 78
+== 232 format "select status, lower(price), max(u.id), price, id + 5 from orders o limit 22;\nselect price, price, o.total from users u inner join public.events e on created_at >= 'o'k' where total like '%a%' or o.total = 296 and id in (select price, qty, qty, name, created_at from public.events e where u.id like '%bob%' or o.total >= 397 or created_at >= 402) limit 51;" keyword_case='upper' identifier_case='lower' truncate_strings=2
+  |SELECT status, lower(price), max(u.id), price, id + 5 FROM orders o LIMIT 22;
+  |SELECT price, price, o.total FROM users u INNER JOIN public.events e ON created_at >= 'o'k' w[...]'%a%' o[...]'%bob%' OR o.total >= 397 OR created_at >= 402) LIMIT 51;
+== 233 format 'select email, created_at, o.total, qty from users u inner join items on u.id in (78, 73) where qty >= null and u.id >= status;\n' indent_tabs=True
+  |select email, created_at, o.total, qty from users u inner join items on u.id in (78, 73) where qty >= null and u.id >= status;
+== 234 format "select name / 1 from public.events e where price <> null or name like '%a%' or id in (98, 63, 10, 39);\n" indent_columns=True compact=True use_space_around_operators=True truncate_strings=2
+  |select name / 1
+  |from public.events e
+  |where price <> null
+  |  or name like '%a[...]'
+  |  or id in (
+  |              98,
+  |              63,
+  |              10,
+  |              39);
+== 235 format "-- note 37\ndelete from logs where status < 'new'" reindent=True indent_tabs=True
+  |-- note 37
+  |
+  |delete
+  |from logs
+  |where status < 'new'
+== 236 format "insert into items (d, a) values (9, 'x');\nselect qty, price, email as x1, created_at, created_at from public.events e where name > 174 and created_at >= email and u.id in (55, 52, 91) order by created_at asc;\nselect price from logs left outer join public.events e on u.id > 'new' where price <> null and id = 237;" strip_whitespace=True
+  |insert into items (d, a) values (9, 'x');select qty, price, email as x1, created_at, created_at from public.events e where name > 174 and created_at >= email and u.id in (55, 52, 91) order by created_at asc;select price from logs left outer join public.events e on u.id > 'new' where price <> null and id = 237;
+== 237 format "select total as a, sum(name), status from public.events e where status > null or created_at <> null or u.id >= 'paid' group by email order by name desc;\ninsert into items (b, c) values (8, 'y z');\n" truncate_strings=2
+  |select total as a, sum(name), status from public.events e where status > null or created_at <> null or u.id >= 'pa[...]' group by email order by name desc;
+  |insert into items (b, c) values (8, 'y [...]');
+== 238 format '-- note 40\nselect price from orders o where id <> null;\n' keyword_case='lower'
+  |-- note 40
+  |select price from orders o where id <> null;
+== 239 format "-- note 41\nupdate users set email = 1 where price < 'paid';\nselect total / 2, total, email as a from items where name >= id and name <= created_at;\n" use_space_around_operators=True compact=True
+  |-- note 41
+  |update users set email = 1 where price < 'paid';
+  |select total / 2, total, email as a from items where name >= id and name <= created_at;
+== 240 format 'select price from users u and id in (select name, u.id as x1, qty, name from users u where email <> null);' indent_tabs=True strip_comments=True
+  |select price from users u and id in (select name, u.id as x1, qty, name from users u where email <> null);
+== 241 format "select price from public.events e where name <> 'new' and id in (select created_at from logs inner join orders o on name in (83)) group by price" use_space_around_operators=True truncate_strings=2 identifier_case='upper'
+  |select PRICE from PUBLIC.EVENTS E where NAME <> 'ne[...]' and ID in (select CREATED_AT from LOGS inner join ORDERS O on NAME in (83)) group by PRICE
+== 242 format "-- note 44\nselect qty, price, o.total, count(name), created_at from users u inner join orders o on id in (81, 80) where email = 360 or email like '%x_y%' or email = 'new' and id in (select u.id, o.total from orders o group by qty limit 45);" indent_width=1 compact=True keyword_case='upper'
+  |-- note 44
+  |SELECT qty, price, o.total, count(name), created_at FROM users u INNER JOIN orders o ON id IN (81, 80) WHERE email = 360 OR email like '%x_y%' OR email = 'new' AND id IN (SELECT u.id, o.total FROM orders o GROUP BY qty LIMIT 45);
+== 243 format '-- note 45\nselect name, o.total, total, status, status + 7 from logs where o.total < 478 and id in (select distinct id from logs order by u.id);' indent_after_first=True
+  |-- note 45
+  |select name, o.total, total, status, status + 7 from logs where o.total < 478 and id in (select distinct id from logs order by u.id);
+== 244 format "-- note 46\ndelete from logs where name in (7, 91, 62, 43);\ninsert into users (b, d) values (6, 'y z'), (5, 'y z'), (9, 'x');" strip_comments=True indent_tabs=True wrap_after=50
+  |delete from logs where name in (7, 91, 62, 43);
+  |insert into users (b, d) values (6, 'y z'), (5, 'y z'), (9, 'x');
+== 245 format "insert into users (a, c) values (5, 'y z'), (9, 'y z'), (4, 'x')" indent_tabs=True use_space_around_operators=True strip_whitespace=True compact=True
+  |insert into users (a, c) values (5, 'y z'), (9, 'y z'), (4, 'x')
+== 246 format "select name, max(o.total), u.id, email, qty from public.events e left join orders o on o.total < 'o'k' where qty = 71 and name = 'new' and id >= 'o'k' group by qty limit 2" indent_after_first=True strip_comments=True
+  |select name, max(o.total), u.id, email, qty from public.events e left join orders o on o.total < 'o'k' where qty = 71 and name = 'new' and id >= 'o'k' group by qty limit 2
+== 247 format 'select status from users u join logs on total >= 360 group by created_at' indent_columns=True reindent=True strip_whitespace=True keyword_case='upper'
+  |SELECT status
+  |FROM users u
+  |JOIN logs ON total >= 360
+  |GROUP BY created_at
+== 248 lint migrations
+  0001_initial.sql: 5 statements
+    1 CREATE tables=[customers] !ddl  -- Initial schema for the orders service.
+    2 CREATE tables=[orders] !ddl  CREATE TABLE orders (
+    3 CREATE tables=[] !ddl  CREATE INDEX orders_customer_idx ON orders (cus...
+    4 CREATE tables=[] !ddl  CREATE UNIQUE INDEX customers_email_lower_idx O...
+    5 UNKNOWN tables=[orders]  COMMENT ON TABLE orders IS 'One row per checkout';
+  0002_line_items.sql: 5 statements
+    1 CREATE tables=[line_items] !ddl  /* Line items and a view over them. */
+    2 ALTER tables=[orders] !ddl  alter table orders add column shipped_at timest...
+    3 ALTER tables=[orders] !ddl  alter table orders alter column status set defa...
+    4 CREATE OR REPLACE tables=[orders, line_items] !ddl  create or replace view order_totals as
+    5 INSERT tables=[line_items]  insert into line_items (order_id, sku, quantity...
+  0003_backfill.sql: 6 statements
+    1 UNKNOWN tables=[]  BEGIN;
+    2 UPDATE tables=[orders]  UPDATE orders SET status = 'shipped' WHERE ship...
+    3 UPDATE tables=[customers] !no-where  UPDATE customers SET is_active = FALSE;
+    4 DELETE tables=[line_items]  DELETE FROM line_items WHERE quantity = 0;
+    5 DELETE tables=[orders] !no-where  DELETE FROM orders;
+    6 COMMIT tables=[]  COMMIT;
+  total ALTER 2
+  total COMMIT 1
+  total CREATE 5
+  total CREATE OR REPLACE 1
+  total DELETE 2
+  total INSERT 1
+  total UNKNOWN 2
+  total UPDATE 2
+  flags 10
+== 249 lint sqlite
+  app.sql: 5 statements
+    1 UNKNOWN tables=[]  PRAGMA foreign_keys = ON;
+    2 CREATE tables=[] !ddl  CREATE TABLE IF NOT EXISTS notes (id INTEGER PR...
+    3 INSERT tables=[notes]  INSERT OR REPLACE INTO notes (id, body) VALUES ...
+    4 SELECT tables=[notes]  SELECT id, substr(body, 1, 40) || '...' AS prev...
+    5 UPDATE tables=[notes]  UPDATE notes SET tags = trim(tags || ',' || :ta...
+  total CREATE 1
+  total INSERT 1
+  total SELECT 1
+  total UNKNOWN 1
+  total UPDATE 1
+  flags 1
+== 250 querylog logs/django_queries.log
+    120ms x1 SELECT [blog_post, blog_tag_posts] SELECT "blog_post"."id", "blog_post"."title" FROM "blog_post" INNER JOIN "blog_tag_posts" ON ("blog_post"."id" = "blog_tag_posts"."post_id") WHERE "blog_tag_posts"."tag_id" IN (?) ORDER BY "blog_post"."created" DESC
+     15ms x1 SELECT [blog_post] SELECT COUNT(*) AS "__count" FROM "blog_post" WHERE ("blog_post"."published" AND "blog_post"."author_id" = ?)
+      4ms x1 INSERT [blog_comment] INSERT INTO "blog_comment" ("post_id", "body", "created") VALUES (?) RETURNING "blog_comment"."id"
+      2ms x1 SELECT [auth_user] SELECT "auth_user"."id", "auth_user"."username" FROM "auth_user" WHERE "auth_user"."id" = ? LIMIT ?
+      1ms x1 UPDATE [blog_post] UPDATE "blog_post" SET "views" = ("blog_post"."views" + ?) WHERE "blog_post"."id" = ?
+      0ms x1 DELETE [django_session] DELETE FROM "django_session" WHERE "django_session"."expire_date" < ?
+== 251 tables analytics/daily_revenue.sql
+  1 SELECT [orders, paid, ranked]
+== 252 tables tsql/report.sql
+  1 SELECT [[dbo].[Orders], [dbo].[Customers]]
+  2 UNKNOWN []
+  3 SELECT []
+== 253 splitfiles mysql/dump.sql
+  001_unknown.sql 2 bytes 1 lines  ;
+  002_unknown.sql 2 bytes 1 lines  ;
+  003_drop.sql 33 bytes 1 lines  DROP TABLE IF EXISTS `products`;
+  004_create.sql 675 bytes 6 lines  CREATE TABLE `products` (`id` int NOT NULL AUTO_INCREMENT,
+  005_unknown.sql 30 bytes 1 lines  LOCK TABLES `products` WRITE;
+  006_insert.sql 139 bytes 4 lines  INSERT INTO `products`
+  007_unknown.sql 15 bytes 1 lines  UNLOCK TABLES;
+  008_select.sql 82 bytes 4 lines  SELECT `name`,
