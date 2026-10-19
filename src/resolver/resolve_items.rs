@@ -513,7 +513,16 @@ impl<'a> super::Resolver<'a> {
             } else {
                 self.resolve_path_expr(trait_path);
             }
-            self.check_operator_trait_restriction(trait_path, &imp.target_type);
+            // The restriction is on user code: the library's own operator
+            // impls (`impl Sub for Instant` in std.time, B-2026-10-15-112)
+            // are the stdlib impls it points to.
+            let from_library = imp.items.iter().any(|i| match i {
+                ImplItem::Method(f) => f.stdlib_origin,
+                ImplItem::AssocType(_) => false,
+            });
+            if !from_library {
+                self.check_operator_trait_restriction(trait_path, &imp.target_type);
+            }
             self.check_into_trait_restriction(trait_path);
         }
         self.check_impl_level_effect_vars(imp);

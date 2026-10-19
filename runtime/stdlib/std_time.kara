@@ -44,12 +44,11 @@ impl SystemTime {
     }
 }
 
-/// A point on the monotonic clock, for measuring elapsed time.
+/// A point on the monotonic clock, for measuring elapsed time:
+/// `later - earlier` is a `Duration`, and `i + d` an `Instant`.
 ///
-/// The spec reads one with `Clock.now()` and compares two with `-`; until
-/// `Clock.now()` returns an `Instant` and the arithmetic traits have an
-/// `Output` (B-2026-10-15-112), it is read with `Instant.now()` and
-/// compared with `duration_since`.
+/// The spec reads one with `Clock.now()`; until `Clock.now()` returns an
+/// `Instant` (B-2026-10-15-112), it is read with `Instant.now()`.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Instant {
     ns: i64,
@@ -74,6 +73,24 @@ impl Instant {
     /// The span from this instant to now.
     pub fn elapsed(self) -> Duration with reads(Clock) {
         Duration { ns: Clock.monotonic_ns() - self.ns }
+    }
+}
+
+impl Sub for Instant {
+    type Output = Duration;
+
+    /// The span from `rhs` to this instant.
+    fn sub(own self, rhs: own Instant) -> Duration {
+        Duration { ns: self.ns - rhs.ns }
+    }
+}
+
+impl Add[Duration] for Instant {
+    type Output = Instant;
+
+    /// The instant `rhs` after this one.
+    fn add(own self, rhs: own Duration) -> Instant {
+        Instant { ns: self.ns + rhs.ns }
     }
 }
 

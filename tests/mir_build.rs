@@ -5347,3 +5347,31 @@ fn mir_wrapping_div_by_zero_panics() {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "true\n");
     assert_eq!(first(&run.stderr), want, "compiled");
 }
+
+/// `later - earlier` is a `Duration` and `i + d` an `Instant`, through the
+/// library's `impl Sub for Instant` and `impl Add[Duration] for Instant`,
+/// (B-2026-10-15-112).
+#[test]
+fn mir_std_time_instant_operators() {
+    const SRC: &str = r#"import std.time.{Instant, Duration};
+
+fn main() {
+    let a = Instant.now();
+    let b = a + Duration.ms(1500);
+    let d = b - a;
+    let mut t = a;
+    t += Duration.secs(2);
+    println(f"{d.as_ms()} {b > a} {a == a} {(t - a).as_ms()} {(t - b).as_ms()}");
+    let z = a - a;
+    println(f"{z.as_ms()} {a + z == a}");
+}
+"#;
+    let want = "1500 true true 2000 500\n0 true\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
