@@ -5225,3 +5225,38 @@ fn mir_build_takes_the_cpu_baseline_of_karac_build() {
     let run = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), "hello 30 5 p3\n");
 }
+
+#[test]
+fn mir_an_empty_vec_in_a_generic_struct_literal_takes_the_calls_type() {
+    // B-2026-10-19-9: `hold(Bag { items: Vec.new(), n: 0 })` into a
+    // `Holder[Bag[String]]` checked, and MIR stopped on the `Vec.new()` with
+    // an unknown `T`: the literal's own `T` came back from the field and
+    // fixed it as `Bag[T]` before the call could say `String`. The element
+    // now comes from whatever decides it: the call's expected type, a later
+    // argument, or a push.
+    let src = r#"
+struct Bag[T] { items: Vec[T], n: i64 }
+struct Holder[I] { v: I }
+fn hold[I](x: own I) -> Holder[I] { Holder { v: x } }
+fn first[I](a: own I, b: own I) -> I { a }
+fn main() {
+    let h: Holder[Bag[String]] = hold(Bag { items: Vec.new(), n: 0 });
+    println(f"{h.v.items.len()} {h.v.n}");
+    let mut v: Vec[String] = Vec.new();
+    v.push("x");
+    let b = first(Bag { items: Vec.new(), n: 4 }, Bag { items: v, n: 5 });
+    println(f"{b.items.len()} {b.n}");
+    let mut c = Bag { items: Vec.new(), n: 2 };
+    c.items.push("y");
+    println(f"{c.items.len()} {c.items[0]} {c.n}");
+}
+"#;
+    let want = "0 0\n0 4\n1 y 2\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

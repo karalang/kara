@@ -1103,6 +1103,9 @@ impl<'a> super::TypeChecker<'a> {
         // build an empty `param_subs` and behave exactly as before.
         let mut param_subs: HashMap<String, SubstValue> = HashMap::new();
         let mut id_to_name: HashMap<TypeVarId, String> = HashMap::new();
+        // B-2026-10-19-9: the params a field value only echoed back (see the
+        // field loop), left for the literal's context to decide.
+        let mut echoed: HashSet<TypeVarId> = HashSet::new();
         // Seed the type params from the expected type's args when the caller
         // supplied a matching-arity generic-struct expectation (B-2026-07-18-17):
         // each param binds directly to its concrete expected arg, so the
@@ -1252,11 +1255,37 @@ impl<'a> super::TypeChecker<'a> {
                 // copies too (measured two bodies).
                 self.warn_borrow_projection_copy(&f.value, &push_ty);
                 if !param_subs.is_empty() {
-                    if let Some(actual) = self
+                    if let Some(mut actual) = self
                         .expr_types
                         .get(&crate::resolver::SpanKey::from_span(&f.value.span))
                         .cloned()
                     {
+                        // B-2026-10-19-9 — a value with no element type of its
+                        // own (`items: Vec.new()`) checked against the raw
+                        // `Vec[T]` hands back this struct's `T`, which is not in
+                        // scope here. Binding the param to it typed the literal
+                        // `Bag[T]` for good, so a call's expected `Bag[String]`
+                        // could not reach the `Vec`. The value takes the param's
+                        // variable instead, which the context then solves.
+                        if !seeded && self.mentions_foreign_param(&actual) {
+                            let foreign: HashMap<String, SubstValue> = param_subs
+                                .iter()
+                                .filter(|(p, _)| {
+                                    self.mentions_foreign_param(&Type::TypeParam((*p).clone()))
+                                })
+                                .map(|(p, v)| (p.clone(), v.clone()))
+                                .collect();
+                            let opened = substitute_type_params(&actual, &foreign);
+                            if opened != actual {
+                                for v in foreign.values() {
+                                    if let Some(Type::TypeVar(id)) = v.as_type() {
+                                        echoed.insert(*id);
+                                    }
+                                }
+                                self.record_node_type(f.value.id, &opened);
+                                actual = opened;
+                            }
+                        }
                         let slot = projected
                             .clone()
                             .unwrap_or_else(|| substitute_type_params(expected_ty, &param_subs));
@@ -1357,6 +1386,15 @@ impl<'a> super::TypeChecker<'a> {
                 .generic_params
                 .iter()
                 .map(|p| match param_subs.get(p).and_then(SubstValue::as_type) {
+                    Some(Type::TypeVar(id))
+                        if echoed.contains(id)
+                            && matches!(
+                                resolve_type_var_top(&Type::TypeVar(*id), &self.env.substitutions),
+                                Type::TypeVar(_)
+                            ) =>
+                    {
+                        Type::TypeVar(*id)
+                    }
                     Some(var) => resolve_type_vars(
                         var,
                         &self.env.substitutions,
