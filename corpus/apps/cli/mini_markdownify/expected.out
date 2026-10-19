@@ -1,0 +1,2137 @@
+# Whole pages through each option set.
+-- page | blog.html | default
+Zero-downtime Postgres migrations
+
+
+
+
+Zero-downtime Postgres migrations
+=================================
+
+By [Ana Ruiz](/authors/ana) · March 3, 2024 · 8 min read
+
+Every team that runs **Postgres** in production eventually needs to change a
+table that is *too big to lock*. This post walks through the pattern we use at
+[Example](https://example.com "Example Inc."), step by step.
+
+Why `ALTER TABLE` hurts
+-----------------------
+
+Most `ALTER TABLE` forms take an **ACCESS EXCLUSIVE** lock. While it is held,
+even a plain `SELECT` waits — and so does every query queued behind it.
+
+> A migration is only as safe as its slowest lock.
+>
+> — someone on call at 3 a.m.
+
+The steps
+---------
+
+1. Add the new column as `NULL`able, with no default.
+2. Backfill in batches:
+
+   ```
+   UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+   ```
+3. Add the constraint as `NOT VALID`, then validate it:
+   * `ALTER TABLE orders ADD CONSTRAINT … NOT VALID;`
+   * `ALTER TABLE orders VALIDATE CONSTRAINT …;`
+4. Switch reads, then writes, behind a [feature flag](/flags).
+
+### What about *indexes*?
+
+Use `CREATE INDEX CONCURRENTLY`. It cannot run inside a transaction, so most
+migration tools need a flag for it; ours is `disable_ddl_transaction!`.  
+Watch `pg_stat_progress_create_index` while it runs.
+
+![A queue of blocked queries](/img/lock-queue.png "Lock queue")
+
+---
+
+Tags: [postgres](/t/postgres), [migrations](/t/migrations).
+Questions? Mail [blog@example.com](mailto:blog@example.com) or see
+<https://example.com/faq>.
+-- end
+-- page | blog.html | atx
+Zero-downtime Postgres migrations
+
+
+
+
+# Zero-downtime Postgres migrations
+
+By [Ana Ruiz](/authors/ana) · March 3, 2024 · 8 min read
+
+Every team that runs __Postgres__ in production eventually needs to change a
+table that is _too big to lock_. This post walks through the pattern we use at
+[Example](https://example.com "Example Inc."), step by step.
+
+## Why `ALTER TABLE` hurts
+
+Most `ALTER TABLE` forms take an __ACCESS EXCLUSIVE__ lock. While it is held,
+even a plain `SELECT` waits — and so does every query queued behind it.
+
+> A migration is only as safe as its slowest lock.
+>
+> — someone on call at 3 a.m.
+
+## The steps
+
+1. Add the new column as `NULL`able, with no default.
+2. Backfill in batches:
+
+   ```
+   UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+   ```
+3. Add the constraint as `NOT VALID`, then validate it:
+   - `ALTER TABLE orders ADD CONSTRAINT … NOT VALID;`
+   - `ALTER TABLE orders VALIDATE CONSTRAINT …;`
+4. Switch reads, then writes, behind a [feature flag](/flags).
+
+### What about _indexes_?
+
+Use `CREATE INDEX CONCURRENTLY`. It cannot run inside a transaction, so most
+migration tools need a flag for it; ours is `disable_ddl_transaction!`.  
+Watch `pg_stat_progress_create_index` while it runs.
+
+![A queue of blocked queries](/img/lock-queue.png "Lock queue")
+
+---
+
+Tags: [postgres](/t/postgres), [migrations](/t/migrations).
+Questions? Mail [blog@example.com](mailto:blog@example.com) or see
+<https://example.com/faq>.
+-- end
+-- page | blog.html | closed
+Zero-downtime Postgres migrations
+
+
+
+
+# Zero-downtime Postgres migrations #
+
+By [Ana Ruiz](/authors/ana) · March 3, 2024 · 8 min read
+
+Every team that runs **Postgres** in production eventually needs to change a
+table that is *too big to lock*. This post walks through the pattern we use at
+[Example](https://example.com "Example Inc."), step by step.
+
+## Why `ALTER TABLE` hurts ##
+
+Most `ALTER TABLE` forms take an **ACCESS EXCLUSIVE** lock. While it is held,
+even a plain `SELECT` waits — and so does every query queued behind it.
+
+> A migration is only as safe as its slowest lock.
+>
+> — someone on call at 3 a.m.
+
+## The steps ##
+
+1. Add the new column as `NULL`able, with no default.
+2. Backfill in batches:
+
+   ```python
+   UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+   ```
+3. Add the constraint as `NOT VALID`, then validate it:
+   * `ALTER TABLE orders ADD CONSTRAINT … NOT VALID;`
+   * `ALTER TABLE orders VALIDATE CONSTRAINT …;`
+4. Switch reads, then writes, behind a [feature flag](/flags).
+
+### What about *indexes*? ###
+
+Use `CREATE INDEX CONCURRENTLY`. It cannot run inside a transaction, so most
+migration tools need a flag for it; ours is `disable_ddl_transaction!`.\
+Watch `pg_stat_progress_create_index` while it runs.
+
+![A queue of blocked queries](/img/lock-queue.png "Lock queue")
+
+---
+
+Tags: [postgres](/t/postgres), [migrations](/t/migrations).
+Questions? Mail [blog@example.com](mailto:blog@example.com) or see
+<https://example.com/faq>.
+-- end
+-- page | blog.html | wrap40
+    Zero-downtime Postgres migrations     
+
+Zero-downtime Postgres migrations
+=================================
+
+By [Ana Ruiz](/authors/ana) · March 3,
+2024 · 8 min read
+
+Every team that runs **Postgres** in
+production eventually needs to change a
+table that is *too big to lock*. This
+post walks through the pattern we use at
+[Example](https://example.com "Example
+Inc."), step by step.
+
+Why `ALTER TABLE` hurts
+-----------------------
+
+Most `ALTER TABLE` forms take an
+**ACCESS EXCLUSIVE** lock. While it is
+held, even a plain `SELECT` waits — and
+so does every query queued behind it.
+
+> A migration is only as safe as its
+> slowest lock.
+>
+> — someone on call at 3 a.m.
+
+The steps
+---------
+
+1. Add the new column as `NULL`able, with no default.
+2. Backfill in batches:
+
+   ```
+   UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+   ```
+3. Add the constraint as `NOT VALID`, then validate it:
+   * `ALTER TABLE orders ADD CONSTRAINT … NOT VALID;`
+   * `ALTER TABLE orders VALIDATE CONSTRAINT …;`
+4. Switch reads, then writes, behind a [feature flag](/flags).
+
+### What about *indexes*?
+
+Use `CREATE INDEX CONCURRENTLY`. It
+cannot run inside a transaction, so most
+migration tools need a flag for it; ours
+is `disable_ddl_transaction!`.  
+Watch `pg_stat_progress_create_index`
+while it runs.
+
+![A queue of blocked
+queries](/img/lock-queue.png "Lock
+queue")
+
+---
+
+Tags: [postgres](/t/postgres),
+[migrations](/t/migrations). Questions?
+Mail
+[blog@example.com](mailto:blog@example.com)
+or see <https://example.com/faq>.
+
+  
+-- end
+-- page | blog.html | strip
+Zero-downtime Postgres migrations
+
+
+
+
+Zero-downtime Postgres migrations
+=================================
+
+By Ana Ruiz · March 3, 2024 · 8 min read
+
+Every team that runs **Postgres** in production eventually needs to change a
+table that is *too big to lock*. This post walks through the pattern we use at
+Example, step by step.
+
+Why `ALTER TABLE` hurts
+
+Most `ALTER TABLE` forms take an **ACCESS EXCLUSIVE** lock. While it is held,
+even a plain `SELECT` waits — and so does every query queued behind it.
+
+> A migration is only as safe as its slowest lock.
+>
+> — someone on call at 3 a.m.
+
+The steps
+
+1. Add the new column as `NULL`able, with no default.
+2. Backfill in batches:
+
+   ```
+   UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+   ```
+3. Add the constraint as `NOT VALID`, then validate it:
+   * `ALTER TABLE orders ADD CONSTRAINT … NOT VALID;`
+   * `ALTER TABLE orders VALIDATE CONSTRAINT …;`
+4. Switch reads, then writes, behind a feature flag.
+
+### What about *indexes*?
+
+Use `CREATE INDEX CONCURRENTLY`. It cannot run inside a transaction, so most
+migration tools need a flag for it; ours is `disable_ddl_transaction!`.  
+Watch `pg_stat_progress_create_index` while it runs.
+
+---
+
+Tags: postgres, migrations.
+Questions? Mail blog@example.com or see
+https://example.com/faq.
+-- end
+-- page | blog.html | convert
+
+
+
+
+Zero-downtime Postgres migrations
+body { font-family: sans-serif; } .note { color: #555; }
+window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments);}
+
+
+
+Zero-downtime Postgres migrations
+=================================
+
+By Ana Ruiz · March 3, 2024 · 8 min read
+
+Every team that runs Postgres in production eventually needs to change a
+table that is too big to lock. This post walks through the pattern we use at
+Example, step by step.
+
+Why ALTER TABLE hurts
+
+Most ALTER TABLE forms take an **ACCESS EXCLUSIVE** lock. While it is held,
+even a plain SELECT waits — and so does every query queued behind it.
+
+A migration is only as safe as its slowest lock.
+
+— someone on call at 3 a.m.
+
+The steps1. Add the new column as NULLable, with no default.
+2. Backfill in batches:UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+3. Add the constraint as NOT VALID, then validate it:
+   * ALTER TABLE orders ADD CONSTRAINT … NOT VALID;
+   * ALTER TABLE orders VALIDATE CONSTRAINT …;
+4. Switch reads, then writes, behind a feature flag.
+What about indexes?
+
+Use CREATE INDEX CONCURRENTLY. It cannot run inside a transaction, so most
+migration tools need a flag for it; ours is disable_ddl_transaction!.
+Watch pg_stat_progress_create_index while it runs.
+
+Tags: postgres, migrations.
+Questions? Mail blog@example.com or see
+https://example.com/faq.
+
+
+-- end
+-- page | blog.html | links
+Zero-downtime Postgres migrations
+
+
+
+
+Zero-downtime Postgres migrations
+=================================
+
+By [Ana Ruiz](/authors/ana "/authors/ana") · March 3, 2024 · 8 min read
+
+Every team that runs **Postgres** in production eventually needs to change a
+table that is *too big to lock*. This post walks through the pattern we use at
+[Example](https://example.com "Example Inc."), step by step.
+
+Why `ALTER TABLE` hurts
+-----------------------
+
+Most `ALTER TABLE` forms take an **ACCESS EXCLUSIVE** lock. While it is held,
+even a plain `SELECT` waits — and so does every query queued behind it.
+
+> A migration is only as safe as its slowest lock.
+>
+> — someone on call at 3 a.m.
+
+The steps
+---------
+
+1. Add the new column as `NULL`able, with no default.
+2. Backfill in batches:
+
+   ```
+   UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+   ```
+3. Add the constraint as `NOT VALID`, then validate it:
+   * `ALTER TABLE orders ADD CONSTRAINT … NOT VALID;`
+   * `ALTER TABLE orders VALIDATE CONSTRAINT …;`
+4. Switch reads, then writes, behind a [feature flag](/flags "/flags").
+
+### What about *indexes*?
+
+Use `CREATE INDEX CONCURRENTLY`. It cannot run inside a transaction, so most
+migration tools need a flag for it; ours is `disable_ddl_transaction!`.  
+Watch `pg_stat_progress_create_index` while it runs.
+
+![A queue of blocked queries](/img/lock-queue.png "Lock queue")
+
+---
+
+Tags: [postgres](/t/postgres "/t/postgres"), [migrations](/t/migrations "/t/migrations").
+Questions? Mail [blog@example.com](mailto:blog@example.com "mailto:blog@example.com") or see
+[https://example.com/faq](https://example.com/faq "https://example.com/faq").
+-- end
+-- page | blog.html | keepdoc
+
+
+
+
+Zero-downtime Postgres migrations
+
+
+
+
+Zero-downtime Postgres migrations
+=================================
+
+By [Ana Ruiz](/authors/ana) · March 3, 2024 · 8 min read
+
+Every team that runs **Postgres** in production eventually needs to change a
+table that is *too big to lock*. This post walks through the pattern we use at
+[Example](https://example.com "Example Inc."), step by step.
+
+Why `ALTER TABLE` hurts
+-----------------------
+
+Most `ALTER TABLE` forms take an **ACCESS EXCLUSIVE** lock. While it is held,
+even a plain `SELECT` waits — and so does every query queued behind it.
+
+> A migration is only as safe as its slowest lock.
+>
+> — someone on call at 3 a.m.
+
+The steps
+---------
+
+1. Add the new column as `NULL`able, with no default.
+2. Backfill in batches:
+
+   ```
+   UPDATE orders
+   SET    total_cents = total * 100
+   WHERE  id BETWEEN $1 AND $2;
+
+   ```
+3. Add the constraint as `NOT VALID`, then validate it:
+   * `ALTER TABLE orders ADD CONSTRAINT … NOT VALID;`
+   * `ALTER TABLE orders VALIDATE CONSTRAINT …;`
+4. Switch reads, then writes, behind a [feature flag](/flags).
+
+### What about *indexes*?
+
+Use `CREATE INDEX CONCURRENTLY`. It cannot run inside a transaction, so most
+migration tools need a flag for it; ours is `disable_ddl_transaction!`.  
+Watch `pg_stat_progress_create_index` while it runs.
+
+![A queue of blocked queries](/img/lock-queue.png "Lock queue")
+
+---
+
+Tags: [postgres](/t/postgres), [migrations](/t/migrations).
+Questions? Mail [blog@example.com](mailto:blog@example.com) or see
+<https://example.com/faq>.
+
+
+-- end
+-- page | docs.html | default
+kvctl reference
+===============
+
+Version 2.4. See also: [kvd(8)](kvd.html).
+
+Options
+-------
+
+`--endpoint` URL
+:   The server to talk to. Defaults to `http://127.0.0.1:2379`.
+
+`--timeout`
+:   How long to wait for a reply.
+
+    Accepts units: `500ms`, `2s`, `1m`.
+
+--dry-run
+
+Exit codes
+----------
+
+Exit codes of kvctl
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Usage error; see `kvctl --help` |
+| 69 | Server ~~down~~ unavailable |
+
+Limits
+------
+
+|  |  |
+| --- | --- |
+| Key size | 1 KiB |
+| Values over 1 MiB are rejected with E2BIG. | |
+| bad colspan | zero |
+
+Keyboard
+--------
+
+Press `Ctrl`+`C` to cancel; x2 means squared;
+H2O is water. "Quoted" text, ~~struck~~ text.
+
+![Architecture](arch.svg)
+
+
+Figure 1: **request flow**
+
+Demo: [![the demo video](demo.jpg)](demo.mp4)
+![poster only](only-poster.jpg)
+[sources](a.webm)
+no source at all
+
+#### Fourth level
+
+##### Fifth
+
+###### Sixth [top](#top)
+-- end
+-- page | docs.html | tables
+kvctl reference
+===============
+
+Version 2.4. See also: [kvd(8)](kvd.html).
+
+Options
+-------
+
+`--endpoint` URL
+:   The server to talk to. Defaults to `http://127.0.0.1:2379`.
+
+`--timeout`
+:   How long to wait for a reply.
+
+    Accepts units: `500ms`, `2s`, `1m`.
+
+--dry-run
+
+Exit codes
+----------
+
+Exit codes of kvctl
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Usage error; see `kvctl --help` |
+| 69 | Server ~~down~~ unavailable |
+
+Limits
+------
+
+| Key size | 1 KiB |
+| --- | --- |
+| Values over 1 MiB are rejected with E2BIG. | |
+| bad colspan | zero |
+
+Keyboard
+--------
+
+Press `Ctrl`+`C` to cancel; x2 means squared;
+H2O is water. "Quoted" text, ~~struck~~ text.
+
+![Architecture](arch.svg)
+
+
+Figure 1: **request flow**
+
+Demo: [![the demo video](demo.jpg)](demo.mp4)
+![poster only](only-poster.jpg)
+[sources](a.webm)
+no source at all
+
+#### Fourth level
+
+##### Fifth
+
+###### Sixth [top](#top)
+-- end
+-- page | docs.html | subsup
+kvctl reference
+===============
+
+Version 2.4. See also: [kvd(8)](kvd.html).
+
+Options
+-------
+
+`--endpoint` URL
+:   The server to talk to. Defaults to `http://127.0.0.1:2379`.
+
+`--timeout`
+:   How long to wait for a reply.
+
+    Accepts units: `500ms`, `2s`, `1m`.
+
+--dry-run
+
+Exit codes
+----------
+
+Exit codes of kvctl
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Usage error; see `kvctl --help` |
+| 69 | Server ~~down~~ unavailable |
+
+Limits
+------
+
+|  |  |
+| --- | --- |
+| Key size | 1 KiB |
+| Values over 1 MiB are rejected with E~2~BIG. | |
+| bad colspan | zero |
+
+Keyboard
+--------
+
+Press `Ctrl`+`C` to cancel; x^2^ means squared;
+H~2~O is water. "Quoted" text, ~~struck~~ text.
+
+![Architecture](arch.svg)
+
+
+Figure 1: **request flow**
+
+Demo: [![the demo video](demo.jpg)](demo.mp4)
+![poster only](only-poster.jpg)
+[sources](a.webm)
+no source at all
+
+#### Fourth level
+
+##### Fifth
+
+###### Sixth [top](#top)
+-- end
+-- page | docs.html | tagsym
+kvctl reference
+===============
+
+Version 2.4. See also: [kvd(8)](kvd.html).
+
+Options
+-------
+
+`--endpoint` URL
+:   The server to talk to. Defaults to `http://127.0.0.1:2379`.
+
+`--timeout`
+:   How long to wait for a reply.
+
+    Accepts units: `500ms`, `2s`, `1m`.
+
+--dry-run
+
+Exit codes
+----------
+
+Exit codes of kvctl
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Usage error; see `kvctl --help` |
+| 69 | Server ~~down~~ unavailable |
+
+Limits
+------
+
+|  |  |
+| --- | --- |
+| Key size | 1 KiB |
+| Values over 1 MiB are rejected with E<sub>2</sub>BIG. | |
+| bad colspan | zero |
+
+Keyboard
+--------
+
+Press `Ctrl`+`C` to cancel; x<sup>2</sup> means squared;
+H<sub>2</sub>O is water. "Quoted" text, ~~struck~~ text.
+
+![Architecture](arch.svg)
+
+
+Figure 1: __request flow__
+
+Demo: [![the demo video](demo.jpg)](demo.mp4)
+![poster only](only-poster.jpg)
+[sources](a.webm)
+no source at all
+
+#### Fourth level
+
+##### Fifth
+
+###### Sixth [top](#top)
+-- end
+-- page | docs.html | atx
+# kvctl reference
+
+Version 2.4. See also: [kvd(8)](kvd.html).
+
+## Options
+
+`--endpoint` URL
+:   The server to talk to. Defaults to `http://127.0.0.1:2379`.
+
+`--timeout`
+:   How long to wait for a reply.
+
+    Accepts units: `500ms`, `2s`, `1m`.
+
+--dry-run
+
+## Exit codes
+
+Exit codes of kvctl
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Usage error; see `kvctl --help` |
+| 69 | Server ~~down~~ unavailable |
+
+## Limits
+
+|  |  |
+| --- | --- |
+| Key size | 1 KiB |
+| Values over 1 MiB are rejected with E2BIG. | |
+| bad colspan | zero |
+
+## Keyboard
+
+Press `Ctrl`+`C` to cancel; x2 means squared;
+H2O is water. "Quoted" text, ~~struck~~ text.
+
+![Architecture](arch.svg)
+
+
+Figure 1: __request flow__
+
+Demo: [![the demo video](demo.jpg)](demo.mp4)
+![poster only](only-poster.jpg)
+[sources](a.webm)
+no source at all
+
+#### Fourth level
+
+##### Fifth
+
+###### Sixth [top](#top)
+-- end
+-- page | docs.html | wrap20
+# kvctl reference
+
+Version 2.4. See
+also:
+[kvd(8)](kvd.html).
+
+## Options
+
+`--endpoint` URL
+:   The server to talk to. Defaults to `http://127.0.0.1:2379`.
+
+`--timeout`
+:   How long to wait for
+    a reply.
+
+    Accepts units:
+    `500ms`, `2s`, `1m`.
+
+--dry-run
+
+## Exit codes
+
+Exit codes of kvctl
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Usage error; see `kvctl --help` |
+| 69 | Server ~~down~~ unavailable |
+
+## Limits
+
+|  |  |
+| --- | --- |
+| Key size | 1 KiB |
+| Values over 1 MiB are rejected with E2BIG. | |
+| bad colspan | zero |
+
+## Keyboard
+
+Press `Ctrl`+`C` to
+cancel; x2 means
+squared; H2O is
+water. "Quoted"
+text, ~~struck~~
+text.
+
+ ![Architecture](arch.svg) 
+
+Figure 1: **request flow**
+
+ 
+
+Demo: [![the demo
+video](demo.jpg)](demo.mp4)
+![poster
+only](only-poster.jpg)
+[sources](a.webm) no
+source at all
+
+#### Fourth level
+
+##### Fifth
+
+###### Sixth [top](#top)
+
+ 
+-- end
+-- page | newsletter.html | default
+Weekly digest
+
+
+
+|  |
+| --- |
+| Example Weekly |
+| This week  | Story | Reads | | --- | --- | | [Rust 2024 edition lands](https://example.com/a) | 12,402 | | [Why we left Kubernetes](https://example.com/b) hot! | 9,881 | |
+| You are receiving this because you signed up at example.com. [Unsubscribe](https://example.com/unsubscribe?u=123&list=weekly) • [Preferences](https://example.com/prefs) |
+-- end
+-- page | newsletter.html | tables
+Weekly digest
+
+
+
+| ![Example Weekly](https://cdn.example.com/logo.png) |
+| --- |
+| This week  | Story | Reads | | --- | --- | | [Rust 2024 edition lands](https://example.com/a) | 12,402 | | [Why we left Kubernetes](https://example.com/b) ![hot!](hot.gif) | 9,881 | |
+| You are receiving this because you signed up at example.com. [Unsubscribe](https://example.com/unsubscribe?u=123&list=weekly) • [Preferences](https://example.com/prefs) |
+-- end
+-- page | newsletter.html | links
+Weekly digest
+
+
+
+|  |
+| --- |
+| Example Weekly |
+| This week  | Story | Reads | | --- | --- | | [Rust 2024 edition lands](https://example.com/a "https://example.com/a") | 12,402 | | [Why we left Kubernetes](https://example.com/b "https://example.com/b") hot! | 9,881 | |
+| You are receiving this because you signed up at example.com. [Unsubscribe](https://example.com/unsubscribe?u=123&list=weekly "https://example.com/unsubscribe?u=123&list=weekly") • [Preferences](https://example.com/prefs "https://example.com/prefs") |
+-- end
+-- page | readme.html | default
+tinyq
+=====
+
+[![build status](https://ci.example.com/badge.svg)](https://ci.example.com/tinyq) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A tiny job queue on top of SQLite — no broker, no daemon.
+
+Install
+-------
+
+```
+pip install tinyq
+tinyq init --db jobs.sqlite
+```
+
+Usage
+-----
+
+```
+from tinyq import Queue
+
+q = Queue("jobs.sqlite")
+q.put({"to": "ana@example.com"})
+```
+
+Roadmap
+-------
+
+* retries with backoff
+* priorities
+* a list item with `` `backticks` `` and ``` ``double`` ``` inside code
+* snake\_case\_names and \*stars\* in text, 2 \* 3 = 6
+
+Use the `__init__` hook, or set `TINYQ_DB=/var/lib/tinyq.db`.
+
+```
+  indented
+    pre block
+```
+
+```
+one leading newline
+```
+-- end
+-- page | readme.html | closed
+# tinyq #
+
+[![build status](https://ci.example.com/badge.svg)](https://ci.example.com/tinyq) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A tiny job queue on top of SQLite — no broker, no daemon.
+
+## Install ##
+
+```python
+pip install tinyq
+tinyq init --db jobs.sqlite
+```
+
+## Usage ##
+
+```python
+from tinyq import Queue
+
+q = Queue("jobs.sqlite")
+q.put({"to": "ana@example.com"})
+```
+
+## Roadmap ##
+
+* retries with backoff
+* priorities
+* a list item with `` `backticks` `` and ``` ``double`` ``` inside code
+* snake\_case\_names and \*stars\* in text, 2 \* 3 = 6
+
+Use the `__init__` hook, or set `TINYQ_DB=/var/lib/tinyq.db`.
+
+```python
+  indented
+    pre block
+```
+
+```python
+one leading newline
+```
+-- end
+-- page | readme.html | keepdoc
+
+
+tinyq
+=====
+
+[![build status](https://ci.example.com/badge.svg)](https://ci.example.com/tinyq) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A tiny job queue on top of SQLite — no broker, no daemon.
+
+Install
+-------
+
+```
+pip install tinyq
+tinyq init --db jobs.sqlite
+```
+
+Usage
+-----
+
+```
+from tinyq import Queue
+
+q = Queue("jobs.sqlite")
+q.put({"to": "ana@example.com"})
+```
+
+Roadmap
+-------
+
+* retries with backoff
+* priorities
+* a list item with `` `backticks` `` and ``` ``double`` ``` inside code
+* snake\_case\_names and \*stars\* in text, 2 \* 3 = 6
+
+Use the `__init__` hook, or set `TINYQ_DB=/var/lib/tinyq.db`.
+
+```
+  indented
+    pre block
+
+
+
+```
+
+```
+
+one leading newline
+
+```
+
+
+-- end
+-- page | readme.html | lstrip
+tinyq
+=====
+
+[![build status](https://ci.example.com/badge.svg)](https://ci.example.com/tinyq) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A tiny job queue on top of SQLite — no broker, no daemon.
+
+Install
+-------
+
+```
+pip install tinyq
+tinyq init --db jobs.sqlite
+```
+
+Usage
+-----
+
+```
+from tinyq import Queue
+
+q = Queue("jobs.sqlite")
+q.put({"to": "ana@example.com"})
+```
+
+Roadmap
+-------
+
+* retries with backoff
+* priorities
+* a list item with `` `backticks` `` and ``` ``double`` ``` inside code
+* snake\_case\_names and \*stars\* in text, 2 \* 3 = 6
+
+Use the `__init__` hook, or set `TINYQ_DB=/var/lib/tinyq.db`.
+
+```
+  indented
+    pre block
+
+```
+
+```
+one leading newline
+```
+
+
+-- end
+-- page | readme.html | misc
+tinyq
+=====
+
+[![build status](https://ci.example.com/badge.svg)](https://ci.example.com/tinyq) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A tiny job queue on top of SQLite — no broker, no daemon.
+
+Install
+-------
+
+```
+pip install tinyq
+tinyq init --db jobs.sqlite
+```
+
+Usage
+-----
+
+```
+from tinyq import Queue
+
+q = Queue("jobs.sqlite")
+q.put({"to": "ana@example.com"})
+```
+
+Roadmap
+-------
+
+* retries with backoff
+* priorities
+* a list item with `` `backticks` `` and ``` ``double`` ``` inside code
+* snake_case_names and *stars* in text, 2 * 3 \= 6
+
+Use the `__init__` hook, or set `TINYQ_DB=/var/lib/tinyq.db`.
+
+```
+  indented
+    pre block
+```
+
+```
+one leading newline
+```
+-- end
+-- page | readme.html | bullets
+tinyq
+=====
+
+[![build status](https://ci.example.com/badge.svg)](https://ci.example.com/tinyq) [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A tiny job queue on top of SQLite — no broker, no daemon.
+
+Install
+-------
+
+```
+pip install tinyq
+tinyq init --db jobs.sqlite
+```
+
+Usage
+-----
+
+```
+from tinyq import Queue
+
+q = Queue("jobs.sqlite")
+q.put({"to": "ana@example.com"})
+```
+
+Roadmap
+-------
+
+a retries with backoff
+a priorities
+a a list item with `` `backticks` `` and ``` ``double`` ``` inside code
+a snake\_case\_names and \*stars\* in text, 2 \* 3 = 6
+
+Use the `__init__` hook, or set `TINYQ_DB=/var/lib/tinyq.db`.
+
+```
+  indented
+    pre block
+```
+
+```
+one leading newline
+```
+-- end
+-- page | edge.html | default
+xml version="1.0"?
+
+UPPER case tags and **bold** & *italic*
+
+Markdown specials: 1. not a list; 2) neither; - dash; -- double; # hash; ###### six; ####### seven;
++ plus; > quote; [link](x); `tick`; a=b; a|b; ~tilde~; back\slash; <tag>; 100. 1234567890.
+
+-
+- leading dash line
+
+#heading-ish
+
+lots of
+spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+* one* two
+
+* outer
+  + inner
+    - innermost
+* paragraph in a list item
+
+  second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+heading zero
+============
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc &nosuchthing & &ampx
+
+cdata:  x < y  and a PI php echo 1; ? end
+
+a  
+bc  
+de
+
+<http://example.com> <http://ex_ample.com> no href [titled](x "say \"hi\"")
+
+**padded bold** andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+|  |  |
+| --- | --- |
+| heading in cell para in cell cell image line | * list in cell |
+
+|  |
+| --- |
+| body first |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+A logo heading   with br
+------------------------
+
+Multi
+line heading
+==================
+
+after script
+
+ keep these spaces 
+
+trailing
+-- end
+-- page | edge.html | misc
+xml version\="1.0"?
+
+UPPER case tags and **bold** \& *italic*
+
+Markdown specials: 1\. not a list; 2\) neither; \- dash; \-- double; \# hash; \###### six; ####### seven;
+\+ plus; \> quote; \[link\](x); \`tick\`; a\=b; a\|b; \~tilde\~; back\\slash; \<tag\>; 100\. 1234567890.
+
+\-
+- leading dash line
+
+#heading-ish
+
+lots of
+spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+* one* two
+
+* outer
+  + inner
+    - innermost
+* paragraph in a list item
+
+  second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+heading zero
+============
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc \&nosuchthing \& \&ampx
+
+cdata:  x \< y  and a PI php echo 1; ? end
+
+a  
+bc  
+de
+
+<http://example.com> <http://ex_ample.com> no href [titled](x "say \"hi\"")
+
+**padded bold** andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+|  |  |
+| --- | --- |
+| heading in cell para in cell cell image line | * list in cell |
+
+|  |
+| --- |
+| body first |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+A logo heading   with br
+------------------------
+
+Multi
+line heading
+==================
+
+after script
+
+ keep these spaces 
+
+trailing
+-- end
+-- page | edge.html | atx
+xml version="1.0"?
+
+UPPER case tags and __bold__ & _italic_
+
+Markdown specials: 1. not a list; 2) neither; - dash; -- double; # hash; ###### six; ####### seven;
++ plus; > quote; [link](x); `tick`; a=b; a|b; ~tilde~; back\slash; <tag>; 100. 1234567890.
+
+-
+- leading dash line
+
+#heading-ish
+
+lots of
+spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+- one- two
+
+- outer
+  - inner
+    - innermost
+- paragraph in a list item
+
+  second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+# heading zero
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc &nosuchthing & &ampx
+
+cdata:  x < y  and a PI php echo 1; ? end
+
+a  
+bc  
+de
+
+<http://example.com> <http://ex_ample.com> no href [titled](x "say \"hi\"")
+
+__padded bold__ andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+|  |  |
+| --- | --- |
+| heading in cell para in cell cell image line | - list in cell |
+
+|  |
+| --- |
+| body first |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+## A logo heading with br
+
+# Multi line heading
+
+# 
+
+after script
+
+ keep these spaces 
+
+trailing
+-- end
+-- page | edge.html | wrap40
+xml version="1.0"?
+
+UPPER case tags and **bold** & *italic*
+
+Markdown specials: 1. not a list; 2)
+neither; - dash; -- double; # hash;
+###### six; ####### seven; + plus; >
+quote; [link](x); `tick`; a=b; a|b;
+~tilde~; back\slash; <tag>; 100.
+1234567890.
+
+- - leading dash line
+
+#heading-ish
+
+lots of spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+* one* two
+
+* outer
++ inner
+- innermost
+* paragraph in a list item
+
+second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+heading zero
+============
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc &nosuchthing
+& &ampx
+
+cdata:  x < y  and a PI php echo 1; ?
+end
+
+a  
+bc  
+de
+
+<http://example.com>
+<http://ex_ample.com> no href [titled](x
+"say \"hi\"")
+
+**padded bold** andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+|  |  |
+| --- | --- |
+| heading in cell para in cell cell
+image line | * list in cell |
+
+|  |
+| --- |
+| body first |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+A logo heading   with br
+------------------------
+
+Multi line heading
+==================
+
+after script
+
+keep these spaces 
+
+trailing
+-- end
+-- page | edge.html | tables
+xml version="1.0"?
+
+UPPER case tags and **bold** & *italic*
+
+Markdown specials: 1. not a list; 2) neither; - dash; -- double; # hash; ###### six; ####### seven;
++ plus; > quote; [link](x); `tick`; a=b; a|b; ~tilde~; back\slash; <tag>; 100. 1234567890.
+
+-
+- leading dash line
+
+#heading-ish
+
+lots of
+spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+* one* two
+
+* outer
+  + inner
+    - innermost
+* paragraph in a list item
+
+  second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+heading zero
+============
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc &nosuchthing & &ampx
+
+cdata:  x < y  and a PI php echo 1; ? end
+
+a  
+bc  
+de
+
+<http://example.com> <http://ex_ample.com> no href [titled](x "say \"hi\"")
+
+**padded bold** andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+| heading in cell para in cell ![cell image](i.png) line | * list in cell |
+| --- | --- |
+
+| body first |
+| --- |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+A ![logo](h.png) heading   with br
+----------------------------------
+
+Multi
+line heading
+==================
+
+after script
+
+ keep these spaces 
+
+trailing
+-- end
+-- page | edge.html | keepdoc
+xml version="1.0"?
+
+UPPER case tags and **bold** & *italic*
+
+Markdown specials: 1. not a list; 2) neither; - dash; -- double; # hash; ###### six; ####### seven;
++ plus; > quote; [link](x); `tick`; a=b; a|b; ~tilde~; back\slash; <tag>; 100. 1234567890.
+
+-
+- leading dash line
+
+#heading-ish
+
+lots of
+spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+* one* two
+
+* outer
+  + inner
+    - innermost
+* paragraph in a list item
+
+  second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+heading zero
+============
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc &nosuchthing & &ampx
+
+cdata:  x < y  and a PI php echo 1; ? end
+
+a  
+bc  
+de
+
+<http://example.com> <http://ex_ample.com> no href [titled](x "say \"hi\"")
+
+**padded bold** andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+|  |  |
+| --- | --- |
+| heading in cell para in cell cell image line | * list in cell |
+
+|  |
+| --- |
+| body first |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+A logo heading   with br
+------------------------
+
+Multi
+line heading
+==================
+
+after script
+
+ keep these spaces 
+
+trailing
+
+
+-- end
+-- page | edge.html | rstrip
+xml version="1.0"?
+
+UPPER case tags and **bold** & *italic*
+
+Markdown specials: 1. not a list; 2) neither; - dash; -- double; # hash; ###### six; ####### seven;
++ plus; > quote; [link](x); `tick`; a=b; a|b; ~tilde~; back\slash; <tag>; 100. 1234567890.
+
+-
+- leading dash line
+
+#heading-ish
+
+lots of
+spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+* one* two
+
+* outer
+  + inner
+    - innermost
+* paragraph in a list item
+
+  second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+heading zero
+============
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc &nosuchthing & &ampx
+
+cdata:  x < y  and a PI php echo 1; ? end
+
+a  
+bc  
+de
+
+<http://example.com> <http://ex_ample.com> no href [titled](x "say \"hi\"")
+
+**padded bold** andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+|  |  |
+| --- | --- |
+| heading in cell para in cell cell image line | * list in cell |
+
+|  |
+| --- |
+| body first |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+A logo heading   with br
+------------------------
+
+Multi
+line heading
+==================
+
+after script
+
+ keep these spaces 
+
+trailing
+-- end
+-- page | edge.html | baddoc
+raised ValueError: Invalid value for strip_document: middle
+-- end
+-- page | edge.html | badpre
+raised ValueError: Invalid value for strip_pre: both
+-- end
+-- page | edge.html | both
+raised ValueError: You may specify either tags to strip or tags to convert, but not both.
+-- end
+-- page | edge.html | wrapnone
+xml version="1.0"?
+
+UPPER case tags and **bold** & *italic*
+
+Markdown specials: 1. not a list; 2) neither; - dash; -- double; # hash; ###### six; ####### seven; + plus; > quote; [link](x); `tick`; a=b; a|b; ~tilde~; back\slash; <tag>; 100. 1234567890.
+
+- - leading dash line
+
+#heading-ish
+
+lots of spaces and tabs
+
+nested span
+
+second
+
+unclosed paragraph
+
+another one
+
+* one* two
+
+* outer
+  + inner
+    - innermost
+* paragraph in a list item
+
+  second paragraph
+
+7. seven
+8. eight
+
+1. bad start
+
+- orphan item
+custom element office tag 
+
+a list tag
+
+###### heading seven
+
+heading zero
+============
+
+###### heading twelve x
+
+refs: © © © — € – � � � Abc &nosuchthing & &ampx
+
+cdata:  x < y  and a PI php echo 1; ? end
+
+a  
+bc  
+de
+
+<http://example.com> <http://ex_ample.com> no href [titled](x "say \"hi\"")
+
+**padded bold** andempty.
+
+`` a ` b `` ``` `` ```  `spaced`  `K`
+
+```
+inside pre: *stars* _under_ <tags>
+```
+
+Café — naïve 日本語 😀
+
+> outer
+> > inner quote
+
+
+
+|  |  |
+| --- | --- |
+| heading in cell para in cell cell image line | * list in cell |
+
+|  |
+| --- |
+| body first |
+
+| head td |
+| --- |
+| x |
+
+| a |
+| --- |
+| b |
+
+A logo heading   with br
+------------------------
+
+Multi line heading
+==================
+
+after script
+
+ keep these spaces 
+
+trailing
+-- end
+-- page | wiki.html | default
+**Paxos** is a family of protocols for solving
+[consensus](/wiki/Consensus_(computer_science) "Consensus (computer science)")
+in a network of unreliable processors.[[1]](#cite_note-1)
+It was first submitted in 1989.[[2]](#cite_note-2)
+
+Contents
+--------
+
+* [1 History](#History)
+* [2 Basic Paxos](#Basic_Paxos)
+  + [2.1 Phase 1](#Phase_1)
+
+History
+-------
+
+The topic predates the protocol. In 1988, Lynch, Dwork and Stockmeyer had demonstrated
+the solvability of consensus in a broad family of "partially synchronous" systems.
+
+Basic Paxos
+-----------
+
+### Phase 1
+
+Prepare
+:   A *Proposer* creates a message, which we call a "Prepare", identified with a number *n*.
+
+Promise
+:   An *Acceptor* waits for a *Prepare* message.
+
+1. **[^](#cite_ref-1)** Lamport, Leslie (1998).
+2. **[^](#cite_ref-2)** Lamport, Leslie (2001). *Paxos Made Simple*.
+-- end
+-- page | wiki.html | atx
+__Paxos__ is a family of protocols for solving
+[consensus](/wiki/Consensus_(computer_science) "Consensus (computer science)")
+in a network of unreliable processors.[[1]](#cite_note-1)
+It was first submitted in 1989.[[2]](#cite_note-2)
+
+## Contents
+
+- [1 History](#History)
+- [2 Basic Paxos](#Basic_Paxos)
+  - [2.1 Phase 1](#Phase_1)
+
+## History
+
+The topic predates the protocol. In 1988, Lynch, Dwork and Stockmeyer had demonstrated
+the solvability of consensus in a broad family of "partially synchronous" systems.
+
+## Basic Paxos
+
+### Phase 1
+
+Prepare
+:   A _Proposer_ creates a message, which we call a "Prepare", identified with a number _n_.
+
+Promise
+:   An _Acceptor_ waits for a _Prepare_ message.
+
+1. __[^](#cite_ref-1)__ Lamport, Leslie (1998).
+2. __[^](#cite_ref-2)__ Lamport, Leslie (2001). _Paxos Made Simple_.
+-- end
+-- page | wiki.html | misc
+**Paxos** is a family of protocols for solving
+[consensus](/wiki/Consensus_(computer_science) "Consensus (computer science)")
+in a network of unreliable processors.[\[1\]](#cite_note-1)
+It was first submitted in 1989\.[\[2\]](#cite_note-2)
+
+Contents
+--------
+
+* [1 History](#History)
+* [2 Basic Paxos](#Basic_Paxos)
+  + [2.1 Phase 1](#Phase_1)
+
+History
+-------
+
+The topic predates the protocol. In 1988, Lynch, Dwork and Stockmeyer had demonstrated
+the solvability of consensus in a broad family of "partially synchronous" systems.
+
+Basic Paxos
+-----------
+
+### Phase 1
+
+Prepare
+:   A *Proposer* creates a message, which we call a "Prepare", identified with a number *n*.
+
+Promise
+:   An *Acceptor* waits for a *Prepare* message.
+
+1. **[^](#cite_ref-1)** Lamport, Leslie (1998).
+2. **[^](#cite_ref-2)** Lamport, Leslie (2001). *Paxos Made Simple*.
+-- end
+# Fragments.
+-- frag | default | <p>Hello, <b>world</b>!</p>
+   'Hello, **world**!'
+-- frag | default | plain text with *stars* and _underscores_
+   'plain text with \\*stars\\* and \\_underscores\\_'
+-- frag | misc | 1. a⏎2) b⏎- c⏎-- d⏎# e⏎####### f⏎+ g⏎> h
+   '1\\. a\n2\\) b\n\\- c\n\\-- d\n\\# e\n####### f\n\\+ g\n\\> h'
+-- frag | misc | x-y a - b a -b- #x x# ## y ###### z 12345678901. 123456789.ok 7)
+   'x-y a \\- b a -b- #x x# \\## y \\###### z 12345678901. 123456789.ok 7\\)'
+-- frag | misc | [a](b) <c> `d` e=f g|h i~j k+l m&n o\p
+   '\\[a\\](b)  \\`d\\` e\\=f g\\|h i\\~j k\\+l m\\&n o\\\\p'
+-- frag | default | <a href="https://a.example/x_y">https://a.example/x_y</a>
+   '<https://a.example/x_y>'
+-- frag | links | <a href="https://a.example/">https://a.example/</a>
+   '[https://a.example/](https://a.example/ "https://a.example/")'
+-- frag | default | <a href="/p" title="T">text</a><a href="/q">  spaced  </a>
+   '[text](/p "T") [spaced](/q) '
+-- frag | default | <img src="a.png"><img alt="only alt"><img src="b.png" title='a "q"'>
+   '![](a.png)![only alt]()![](b.png "a \\"q\\"")'
+-- frag | default | <h3>  spaced   heading  </h3>
+   '### spaced heading'
+-- frag | atx | <h1>one</h1><h2>two</h2><h9>nine</h9>
+   '# one\n\n## two\n\n###### nine'
+-- frag | default | <ul><li></li><li>  </li><li>x</li></ul>
+   '* x'
+-- frag | default | <ol><li>a</li><li>b<ol><li>c</li></ol></li></ol>
+   '1. a\n2. b\n   1. c'
+-- frag | default | <ul><li>a</li></ul><p>after</p><ul><li>b</li></ul><ul><li>c</li></ul>
+   '* a\n\nafter\n\n* b\n\n* c'
+-- frag | default | <pre>⏎⏎  code⏎⏎</pre>
+   '```\n  code\n```'
+-- frag | keepdoc | <pre>⏎⏎  code⏎⏎</pre>
+   '\n\n```\n\n\n  code\n\n\n```\n\n'
+-- frag | lstrip | <pre>⏎⏎  code⏎⏎</pre>
+   '```\n\n  code\n```\n\n'
+-- frag | default | <pre></pre><pre> </pre>x
+   '```\n\n```\n\nx'
+-- frag | default | <code>``a`b```</code>
+   '```` ``a`b``` ````'
+-- frag | default | <b><i>bold italic</i></b> <i><b>x</b></i> <b>a<b>b</b></b>
+   '***bold italic*** ***x*** **a**b****'
+-- frag | default | <p>a<br>b<br><br>c</p>
+   'a  \nb  \n  \nc'
+-- frag | closed | <p>a<br>b</p><h1>x<br>y</h1>
+   'a\\\nb\n\n# x y #'
+-- frag | default | <blockquote>⏎line one⏎⏎line two⏎</blockquote>
+   '> line one\n> line two'
+-- frag | default | <dl><dt>term⏎one</dt><dd>first line<br>second line</dd></dl>
+   'term one\n:   first line  \n    second line'
+-- frag | default | <table><tr><td>a</td><td>b|c</td></tr></table>
+   '|  |  |\n| --- | --- |\n| a | b|c |'
+-- frag | tables | <table><tr><td>a</td></tr><tr><td>b</td></tr></table>
+   '| a |\n| --- |\n| b |'
+-- frag | default | <table><tr><th colspan="3">wide</th></tr><tr><td>1</td><td>2</td><td>3</td></tr></table>
+   '| wide | | |\n| --- | --- | --- |\n| 1 | 2 | 3 |'
+-- frag | default | text<!-- comment -->more
+   'textmore'
+-- frag | default | <p>&lt;script&gt; &amp;amp; &quot;q&quot; &apos;a&apos; &#x26;</p>
+   '<script> &amp; "q" \'a\' &'
+-- frag | default | <div>   </div><p>   </p>⏎⏎<span>  </span>
+   ' '
+-- frag | wrap40 | <p>The quick brown fox jumps over the lazy dog and keeps running far beyond the horizon.<br>Next line after a break that is also rather long indeed.</p>
+   'The quick brown fox jumps over the lazy\ndog and keeps running far beyond the\nhorizon.  \nNext line after a break that is also\nrather long indeed.'
+-- frag | wrap20 | <p>supercalifragilisticexpialidocious word-with-hyphens-that-is-long ok</p>
+   'supercalifragilisticexpialidocious\nword-with-hyphens-that-is-long\nok'
+-- frag | default | <q>nested <q>quotes</q></q>
+   '"nested "quotes""'
+-- frag | strip | <p><a href="x">link</a> and <img src="y" alt="img"></p>
+   'link and'
+-- frag | convert | <p><a href="x">link</a> and <b>bold</b> <i>italic</i></p>
+   '\n\nlink and **bold** italic\n\n'
+-- frag | default | ∅
+   ''
+-- frag | default | ␣␣␣
+   ' '
+-- frag | default | ⏎⏎
+   ''
