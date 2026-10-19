@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 290 |
 | codegen-gap | 277 |
 | false-positive | 249 |
-| other | 183 |
-| perf | 179 |
+| other | 184 |
+| perf | 180 |
 | diagnostics | 175 |
 | crash | 125 |
 | soundness | 123 |
@@ -111,12 +111,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2967 |
-| interp | 984 |
+| interp | 985 |
 | typecheck | 502 |
 | ownership | 123 |
 | other | 121 |
+| cli | 81 |
 | runtime | 80 |
-| cli | 80 |
 | parser | 72 |
 | autopar | 59 |
 | resolver | 48 |
@@ -194,6 +194,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
 | B-2026-10-19-67 | 2026-10-19 | other | low | LIBRARY DOC: docs/library/concurrency.md declares `Atomic` operations without a `MemoryOrdering` argument (`fn load(self) -> T`, `fn fetch_add(self, n: T) -> T`), but every surface requires one (E0270) | — |
 | B-2026-10-19-68 | 2026-10-19 | interp+codegen | high | Calling a closure through a `mut ref MutFn()` parameter is broken on both MIR backends: a temporary closure argument `twice(mut || { n += 1; })` runs but its writes are lost (prints 0, expected 2), and a named one `twice(mut c)` stops mir-interp ('call through Agg([Ref(..)]), which is not a function value') and overflows the stack in mir-llvm; `karac check` accepts both | — |
+| B-2026-10-19-69 | 2026-10-19 | cli | high | `karac fmt` and every fix-it that renders an expression drop the parentheses an operand needs: `(a + 1) * b` is written `a + 1 * b`, a different program | — |
+| B-2026-10-19-70 | 2026-10-19 | interp | medium | `karac __mir-run` copies a whole `Array` on each index or `len()`: a loop over `[0i64; 50000]` takes 25 s, against 0.95 s for `Vec.filled(50000, 0i64)` | — |
 
 ### Relocated
 
