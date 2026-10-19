@@ -2292,6 +2292,29 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
         }
+        // design.md § Collection literals: a bare map literal is a
+        // `SortedMap` where one is expected, and `[:]` takes its key and
+        // value types from the expected type (B-2026-10-19-60).
+        if let (
+            ExprKind::MapLiteral {
+                type_name: None,
+                entries,
+            },
+            Type::Named { name, args },
+        ) = (&expr.kind, expected)
+        {
+            if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
+                && (name == "SortedMap" || (name == "Map" && entries.is_empty()))
+                && args.len() == 2
+            {
+                for (k, v) in entries {
+                    self.check_expr(k, &args[0]);
+                    self.check_expr(v, &args[1]);
+                }
+                self.record_expr_type(&expr.span, expected);
+                return expected.clone();
+            }
+        }
         // B-2026-10-15-106 — a bare `[v; n]` where a `Vec` is wanted. It
         // builds an `Array` on the v2 pipelines, so it is refused with its
         // `Vec.filled(n, v)` fix-it rather than coerced.
@@ -9913,6 +9936,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
 
+            // `[:]`: the empty map, whose types come from its use
+            // (B-2026-10-19-60).
+            ExprKind::MapLiteral { entries, .. } if entries.is_empty() => Type::Named {
+                name: "Map".to_string(),
+                args: vec![self.env.fresh_type_var(), self.env.fresh_type_var()],
+            },
             ExprKind::MapLiteral { type_name, entries } => {
                 let (first_key, first_val) = &entries[0];
                 let key_ty = self.infer_expr(first_key);

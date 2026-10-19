@@ -569,6 +569,15 @@ fn test_formatter_keeps_the_parentheses_an_operand_needs() {
     assert_eq!(out, src);
 }
 
+/// `[:]` parses as the empty map and the formatter writes it back
+/// (B-2026-10-19-60).
+#[test]
+fn test_empty_map_literal_round_trips() {
+    let src = "fn main() {\n    let m: Map[String, i64] = [:];\n}\n";
+    let out = karac::formatter::format_program(&parse_ok(src));
+    assert_eq!(out, src);
+}
+
 #[test]
 fn test_multi_assign_desugar_expands_to_temp_block() {
     // The desugar pass (between parse and resolve) rewrites the MultiAssign

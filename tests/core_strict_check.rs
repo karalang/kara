@@ -5463,6 +5463,30 @@ fn plain_assign_does_not_write_through_a_mut_ref() {
     );
 }
 
+/// B-2026-10-19-60 (design.md § Collection literals): `[:]` is the empty
+/// map, typed from what is expected, and a map literal is a `SortedMap`
+/// where one is expected.
+#[test]
+fn the_empty_map_literal_and_a_sorted_map_literal() {
+    accepted_and_runs(
+        "empty-and-sorted-map-literals",
+        "fn main() {\n\
+             let mut m: Map[String, i64] = [:];\n\
+             m.insert(\"a\".to_string(), 1);\n\
+             let mut n = [:];\n\
+             n.insert(4, true);\n\
+             let mut s: SortedMap[i64, i64] = [:];\n\
+             s.insert(3, 1);\n\
+             s.insert(2, 3);\n\
+             let t: SortedMap[String, i64] = [\"b\": 2, \"a\": 1];\n\
+             for (k, v) in t.iter() { println(f\"{k} {v}\"); }\n\
+             for (k, v) in s.iter() { println(f\"{k} {v}\"); }\n\
+             println(f\"{m.len()} {n.len()}\");\n\
+         }\n",
+        "a 1\nb 2\n2 3\n3 1\n1 1\n",
+    );
+}
+
 /// B-2026-10-19-33: `extend` consumes its argument, so a bare (borrowed)
 /// `Vec` parameter is refused there as it is by `push`, with `.clone()` as
 /// the fix; an owned one is accepted.

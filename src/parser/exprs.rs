@@ -2471,6 +2471,26 @@ impl super::Parser {
             });
         }
 
+        // [:] — the empty map (design.md § Collection literals,
+        // B-2026-10-19-60).
+        if self.check(&Token::Colon)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.token),
+                Some(Token::RightBracket)
+            )
+        {
+            self.advance();
+            self.advance();
+            return Some(Expr {
+                id: crate::ids::NodeId::DUMMY,
+                span: self.span_from(&start),
+                kind: ExprKind::MapLiteral {
+                    type_name: None,
+                    entries: Vec::new(),
+                },
+            });
+        }
+
         let first = self.parse_expression()?;
 
         // [key: val, ...] — map literal (disambiguate from array by colon after first expr)

@@ -537,16 +537,21 @@ impl super::Formatter {
                 if let Some(name) = type_name {
                     self.write_ident(name);
                 }
-                self.write_str("[");
-                for (i, (k, v)) in entries.iter().enumerate() {
-                    if i > 0 {
-                        self.write_str(", ");
+                // `[:]`, the empty map (B-2026-10-19-60).
+                if type_name.is_none() && entries.is_empty() {
+                    self.write_str("[:]");
+                } else {
+                    self.write_str("[");
+                    for (i, (k, v)) in entries.iter().enumerate() {
+                        if i > 0 {
+                            self.write_str(", ");
+                        }
+                        self.format_expr(k);
+                        self.write_str(": ");
+                        self.format_expr(v);
                     }
-                    self.format_expr(k);
-                    self.write_str(": ");
-                    self.format_expr(v);
+                    self.write_str("]");
                 }
-                self.write_str("]");
             }
             ExprKind::StructLiteral {
                 path,
