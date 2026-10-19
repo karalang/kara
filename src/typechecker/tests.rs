@@ -1656,3 +1656,157 @@ mod shape_kind_unit_probes {
         );
     }
 }
+
+#[cfg(test)]
+mod number_method_table_tests {
+    //! B-2026-10-19-3: every name the number did-you-mean can suggest is a
+    //! method the checker accepts.
+    use super::super::method_numeric::{
+        number_method_suggestion, FLOAT_METHODS, INT_METHODS, SIGNED_INT_METHODS,
+        UNSIGNED_INT_METHODS,
+    };
+    use super::super::types::{FloatSize, IntSize, Type, UIntSize};
+
+    /// A call of each listed method: `x: f64`, `n: i64`, `u: u64`.
+    const CALLS: &[(&str, &str)] = &[
+        ("abs", "x.abs() n.abs()"),
+        ("abs_diff", "n.abs_diff(n) u.abs_diff(u)"),
+        ("acos", "x.acos()"),
+        ("acosh", "x.acosh()"),
+        ("asin", "x.asin()"),
+        ("asinh", "x.asinh()"),
+        ("atan", "x.atan()"),
+        ("atan2", "x.atan2(x)"),
+        ("atanh", "x.atanh()"),
+        ("bits_as_f32", "n.bits_as_f32() u.bits_as_f32()"),
+        ("bits_as_f64", "n.bits_as_f64() u.bits_as_f64()"),
+        ("cbrt", "x.cbrt()"),
+        ("ceil", "x.ceil()"),
+        ("checked_add", "n.checked_add(n) u.checked_add(u)"),
+        ("checked_mul", "n.checked_mul(n) u.checked_mul(u)"),
+        ("checked_sub", "n.checked_sub(n) u.checked_sub(u)"),
+        ("clamp", "x.clamp(0.0, 1.0) n.clamp(0, 1) u.clamp(0, 1)"),
+        ("clone", "x.clone() n.clone() u.clone()"),
+        ("copysign", "x.copysign(x)"),
+        ("cos", "x.cos()"),
+        ("cosh", "x.cosh()"),
+        ("count_ones", "n.count_ones() u.count_ones()"),
+        ("count_zeros", "n.count_zeros() u.count_zeros()"),
+        ("div_euclid", "n.div_euclid(n)"),
+        ("exp", "x.exp()"),
+        ("exp2", "x.exp2()"),
+        ("exp_m1", "x.exp_m1()"),
+        ("floor", "x.floor()"),
+        ("fract", "x.fract()"),
+        ("hypot", "x.hypot(x)"),
+        ("is_power_of_two", "u.is_power_of_two()"),
+        ("leading_zeros", "n.leading_zeros() u.leading_zeros()"),
+        ("ln", "x.ln()"),
+        ("ln_1p", "x.ln_1p()"),
+        ("log10", "x.log10()"),
+        ("log2", "x.log2()"),
+        ("max", "x.max(x) n.max(n) u.max(u)"),
+        ("min", "x.min(x) n.min(n) u.min(u)"),
+        ("next_power_of_two", "u.next_power_of_two()"),
+        (
+            "overflowing_add",
+            "n.overflowing_add(n) u.overflowing_add(u)",
+        ),
+        (
+            "overflowing_mul",
+            "n.overflowing_mul(n) u.overflowing_mul(u)",
+        ),
+        (
+            "overflowing_sub",
+            "n.overflowing_sub(n) u.overflowing_sub(u)",
+        ),
+        ("pow", "x.pow(x) n.pow(2) u.pow(2)"),
+        ("powi", "x.powi(2)"),
+        ("recip", "x.recip()"),
+        ("rem_euclid", "n.rem_euclid(n)"),
+        ("reverse_bits", "n.reverse_bits() u.reverse_bits()"),
+        ("rotate_left", "n.rotate_left(2) u.rotate_left(2)"),
+        ("rotate_right", "n.rotate_right(2) u.rotate_right(2)"),
+        ("round", "x.round()"),
+        ("saturating_add", "n.saturating_add(n) u.saturating_add(u)"),
+        ("saturating_mul", "n.saturating_mul(n) u.saturating_mul(u)"),
+        ("saturating_sub", "n.saturating_sub(n) u.saturating_sub(u)"),
+        ("signum", "x.signum() n.signum()"),
+        ("sin", "x.sin()"),
+        ("sinh", "x.sinh()"),
+        ("sqrt", "x.sqrt()"),
+        ("swap_bytes", "n.swap_bytes() u.swap_bytes()"),
+        ("tan", "x.tan()"),
+        ("tanh", "x.tanh()"),
+        ("to_bits", "x.to_bits()"),
+        ("to_bits32", "x.to_bits32()"),
+        ("to_degrees", "x.to_degrees()"),
+        ("to_f32", "n.to_f32() u.to_f32()"),
+        ("to_f64", "n.to_f64() u.to_f64()"),
+        ("to_ne_bytes", "n.to_ne_bytes() u.to_ne_bytes()"),
+        ("to_radians", "x.to_radians()"),
+        ("to_string", "x.to_string() n.to_string() u.to_string()"),
+        ("trailing_zeros", "n.trailing_zeros() u.trailing_zeros()"),
+        ("trunc", "x.trunc()"),
+        ("wrapping_add", "n.wrapping_add(n) u.wrapping_add(u)"),
+        ("wrapping_mul", "n.wrapping_mul(n) u.wrapping_mul(u)"),
+        ("wrapping_sub", "n.wrapping_sub(n) u.wrapping_sub(u)"),
+    ];
+
+    #[test]
+    fn every_listed_number_method_checks() {
+        let lists: [(&str, &[&str]); 4] = [
+            ("x.", FLOAT_METHODS),
+            ("n.", INT_METHODS),
+            ("n.", SIGNED_INT_METHODS),
+            ("u.", UNSIGNED_INT_METHODS),
+        ];
+        let mut body = String::new();
+        for (recv, names) in lists {
+            for name in names {
+                let call = CALLS
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .unwrap_or_else(|| panic!("no call of `{name}` in CALLS"))
+                    .1;
+                let want = format!("{recv}{name}(");
+                assert!(call.contains(&want), "CALLS `{name}` lacks `{want}`");
+                for (i, c) in call.split(' ').filter(|c| c.contains('(')).enumerate() {
+                    body.push_str(&format!("    let _{name}_{i} = {c};\n"));
+                }
+            }
+        }
+        let src = format!(
+            "fn main() {{\n    let x: f64 = 0.5;\n    let n: i64 = 5;\n    let u: u64 = 4;\n{body}}}\n"
+        );
+        let parsed = crate::parse(&src);
+        let resolved = crate::resolve(&parsed.program);
+        let result = crate::typecheck(&parsed.program, &resolved);
+        assert!(
+            result.errors.is_empty(),
+            "{:?}\n{src}",
+            result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_number_method_typo_names_the_method() {
+        let f64_ = Type::Float(FloatSize::F64);
+        let i64_ = Type::Int(IntSize::I64);
+        let u64_ = Type::UInt(UIntSize::U64);
+        let cases = [
+            ("powf", &f64_, Some("pow")),
+            ("sqr", &f64_, Some("sqrt")),
+            ("count_one", &i64_, Some("count_ones")),
+            ("is_power_of_tow", &u64_, Some("is_power_of_two")),
+            ("zzzzzz", &f64_, None),
+        ];
+        for (typo, ty, want) in cases {
+            assert_eq!(
+                number_method_suggestion(typo, ty).as_deref(),
+                want,
+                "{typo}"
+            );
+        }
+    }
+}

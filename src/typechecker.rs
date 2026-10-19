@@ -5280,7 +5280,7 @@ impl<'a> TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        let msg = match crate::edit_distance::suggest_similar(method, known_methods) {
+        let msg = match crate::edit_distance::suggest_method(method, known_methods) {
             Some(suggestion) => format!(
                 "no method '{}' on type '{}', did you mean '{}'?",
                 method, type_name, suggestion

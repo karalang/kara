@@ -24,6 +24,110 @@ use crate::token::Span;
 use super::types::{type_display, ConstArg, FloatSize, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
+/// The value-receiver methods every float has, for the did-you-mean on an
+/// unknown one (B-2026-10-19-3). src/typechecker/tests.rs
+/// `every_listed_number_method_checks` calls each, so a name here exists.
+pub(super) const FLOAT_METHODS: &[&str] = &[
+    "abs",
+    "acos",
+    "acosh",
+    "asin",
+    "asinh",
+    "atan",
+    "atan2",
+    "atanh",
+    "cbrt",
+    "ceil",
+    "clamp",
+    "clone",
+    "copysign",
+    "cos",
+    "cosh",
+    "exp",
+    "exp2",
+    "exp_m1",
+    "floor",
+    "fract",
+    "hypot",
+    "ln",
+    "ln_1p",
+    "log10",
+    "log2",
+    "max",
+    "min",
+    "pow",
+    "powi",
+    "recip",
+    "round",
+    "signum",
+    "sin",
+    "sinh",
+    "sqrt",
+    "tan",
+    "tanh",
+    "to_bits",
+    "to_bits32",
+    "to_degrees",
+    "to_radians",
+    "to_string",
+    "trunc",
+];
+
+/// The value-receiver methods every integer has, as [`FLOAT_METHODS`].
+pub(super) const INT_METHODS: &[&str] = &[
+    "abs_diff",
+    "bits_as_f32",
+    "bits_as_f64",
+    "checked_add",
+    "checked_mul",
+    "checked_sub",
+    "clamp",
+    "clone",
+    "count_ones",
+    "count_zeros",
+    "leading_zeros",
+    "max",
+    "min",
+    "overflowing_add",
+    "overflowing_mul",
+    "overflowing_sub",
+    "pow",
+    "reverse_bits",
+    "rotate_left",
+    "rotate_right",
+    "saturating_add",
+    "saturating_mul",
+    "saturating_sub",
+    "swap_bytes",
+    "to_f32",
+    "to_f64",
+    "to_ne_bytes",
+    "to_string",
+    "trailing_zeros",
+    "wrapping_add",
+    "wrapping_mul",
+    "wrapping_sub",
+];
+
+/// The methods only a signed integer has.
+pub(super) const SIGNED_INT_METHODS: &[&str] = &["abs", "div_euclid", "rem_euclid", "signum"];
+
+/// The methods only an unsigned integer has.
+pub(super) const UNSIGNED_INT_METHODS: &[&str] = &["is_power_of_two", "next_power_of_two"];
+
+/// The method a number of type `ty` has that an unknown `method` most likely
+/// meant.
+pub(super) fn number_method_suggestion(method: &str, ty: &Type) -> Option<String> {
+    let mut names: Vec<&str> = match ty {
+        Type::Float(_) => FLOAT_METHODS.to_vec(),
+        Type::Int(_) => [INT_METHODS, SIGNED_INT_METHODS].concat(),
+        Type::UInt(_) => [INT_METHODS, UNSIGNED_INT_METHODS].concat(),
+        _ => return None,
+    };
+    names.sort_unstable();
+    crate::edit_distance::suggest_method(method, &names)
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// Type a built-in method on a scalar primitive receiver.
     ///

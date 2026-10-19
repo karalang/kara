@@ -96,12 +96,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 281 |
+| missing-feature | 282 |
 | codegen-gap | 274 |
 | false-positive | 240 |
 | perf | 175 |
 | other | 175 |
-| diagnostics | 168 |
+| diagnostics | 169 |
 | crash | 124 |
 | soundness | 116 |
 | use-after-free | 91 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2948 |
-| interp | 962 |
-| typecheck | 482 |
+| interp | 963 |
+| typecheck | 484 |
 | other | 115 |
 | ownership | 114 |
 | runtime | 78 |
@@ -173,6 +173,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-8 | 2026-10-19 | typecheck | medium | `x.clone()` on a value of a projection type (`x: I.Item` under `where I.Item: Clone`) is typed as an error type that check accepts: `let p: bool = x.clone();` passes `karac check`, and on MIR every such program stops with "a type that failed to check is not lowered yet" | — |
 | B-2026-10-19-9 | 2026-10-19 | typecheck | low | A `Vec.new()` inside a struct literal passed to a generic function is not pinned by the expected type of the call: `let h: Holder[Bag[String]] = hold(Bag { items: Vec.new(), n: 0 });` passes check, and MIR stops with "an expression whose type does not lower (Type(UnknownParam(\"T\")))" | — |
 | B-2026-10-19-10 | 2026-10-19 | resolver | low | A gated library module's TYPE the import did not list still collides with a program's own type of the same name: `import std.time.{sleep};` beside a program's `struct Duration { n: i64 }` is refused with "'Duration' is already defined in this scope", because the splice copies `sleep`'s `Duration` into the program's scope under its own name; B-2026-10-18-54 made unlisted helper FUNCTIONS private and left types out | — |
+| B-2026-10-19-11 | 2026-10-19 | typecheck+interp | medium | docs/library/core-types.md promises checked/wrapping/saturating/overflowing integer methods for div, rem, neg, shl, shr and pow, and a method `x.total_cmp(y)` on floats, but `karac check` refuses all of them: only the add, sub and mul variants exist | — |
+| B-2026-10-19-12 | 2026-10-19 | typecheck | low | A misspelled `Vec` method (`v.lenn()`, `v.length()`, `v.size()`) gets no did-you-mean: the Vec surface has no name list for the suggestion to search | — |
 
 ### Relocated
 

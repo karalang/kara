@@ -945,37 +945,13 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Error
             }
             // Unknown string method — typo-suggestion diagnostic if close to
-            // a known name. `len` / `is_empty` / `contains` joined the
-            // enumerated list 2026-05-22; `push_str` joined 2026-05-23;
-            // `push` joined 2026-05-25 (kata 71 follow-up); `find` / `slice`
-            // joined 2026-06-14 (StringSlice v1).
-            // Further runtime-only surface (e.g. `to_uppercase`, `split`)
-            // still falls through to the typo-suggestion path until
-            // per-method typechecker arms land — design.md § Method
-            // Resolution Step 7.
+            // a known name.
+            // The candidates are every name this match answers
+            // (B-2026-10-19-3: `s.trimm()` named no `trim`).
             _ => self.require_known_method(
                 "String",
                 method,
-                &[
-                    "as_str",
-                    "bytes",
-                    "chars",
-                    "clear",
-                    "contains",
-                    "find",
-                    "is_empty",
-                    "len",
-                    "push",
-                    "push_str",
-                    "slice",
-                    "sorted",
-                    "sorted_by",
-                    "split",
-                    "starts_with",
-                    "strip_prefix",
-                    "strip_suffix",
-                    "substring",
-                ],
+                super::expr_method_call::STRING_BUILTIN_METHODS,
                 args,
                 span,
             ),

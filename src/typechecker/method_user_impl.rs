@@ -500,6 +500,7 @@ impl<'a> super::TypeChecker<'a> {
                             }
                             {
                                 let mut msg = format!("no method '{}' on type '{}'", method, prim);
+                                let plain = msg.len();
                                 // `char` has no numeric-value method — the route
                                 // is the cast. This is the exact spelling the
                                 // dogfood that filed B-2026-08-11-2 guessed
@@ -554,6 +555,17 @@ impl<'a> super::TypeChecker<'a> {
                                 // (B-2026-08-12-25). A bare `c.is_digit()` now lands
                                 // on the radix arm's arity error, which carries the
                                 // same two routes.
+                                // B-2026-10-19-3: otherwise the nearest method
+                                // of the number's type, or Kāra's name for a
+                                // Rust spelling (`powf` is `pow`).
+                                if msg.len() == plain {
+                                    if let Some(s) = super::method_numeric::number_method_suggestion(
+                                        method,
+                                        receiver_for_lookup,
+                                    ) {
+                                        msg.push_str(&format!(", did you mean '{s}'?"));
+                                    }
+                                }
                                 self.type_error(msg, *span, TypeErrorKind::NoMethodFound);
                             }
                             return Type::Error;
@@ -1437,7 +1449,7 @@ impl<'a> super::TypeChecker<'a> {
                         let candidate_refs: Vec<&str> =
                             candidates.iter().map(String::as_str).collect();
                         if let Some(suggestion) =
-                            crate::edit_distance::suggest_similar(method, &candidate_refs)
+                            crate::edit_distance::suggest_method(method, &candidate_refs)
                         {
                             msg.push_str(&format!(", did you mean '{}'?", suggestion));
                         }

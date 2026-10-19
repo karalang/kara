@@ -69,9 +69,47 @@ pub fn suggest_similar(name: &str, visible: &[&str]) -> Option<String> {
     best.map(|(s, _)| s.to_string())
 }
 
+/// Method names spelled as another language spells them, with Kāra's name
+/// for the same method (B-2026-10-19-3). Too far for [`suggest_similar`]:
+/// `length` is three edits from `len`.
+const METHOD_SPELLINGS: &[(&str, &str)] = &[
+    ("length", "len"),
+    ("lenght", "len"),
+    ("size", "len"),
+    ("powf", "pow"),
+    ("to_upper", "to_uppercase"),
+    ("to_lower", "to_lowercase"),
+    ("trim_left", "trim_start"),
+    ("trim_right", "trim_end"),
+];
+
+/// The method an unknown `name` most likely meant: Kāra's name for a common
+/// spelling from elsewhere when `visible` has it, else [`suggest_similar`].
+pub fn suggest_method(name: &str, visible: &[&str]) -> Option<String> {
+    match METHOD_SPELLINGS.iter().find(|(other, _)| *other == name) {
+        Some((_, ours)) if visible.contains(ours) => Some(ours.to_string()),
+        _ => suggest_similar(name, visible),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B-2026-10-19-3: a spelling from elsewhere maps to Kāra's name only
+    /// when the receiver has it.
+    #[test]
+    fn a_method_spelling_from_elsewhere_maps_to_ours() {
+        assert_eq!(
+            suggest_method("length", &["len", "push"]).as_deref(),
+            Some("len")
+        );
+        assert_eq!(suggest_method("length", &["push"]), None);
+        assert_eq!(
+            suggest_method("pushh", &["len", "push"]).as_deref(),
+            Some("push")
+        );
+    }
 
     /// B-2026-08-14-34 leg A — pin the tie-break rule the doc comment states,
     /// so a future refactor cannot quietly change it back to "whatever the

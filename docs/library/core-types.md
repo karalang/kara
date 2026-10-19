@@ -68,6 +68,17 @@ Methods that can panic (`unwrap`, `expect`, `unwrap_err`) report the caller's so
 
 What the plain operators do on overflow, and the other numeric rules, are in [design.md §5](../design.md#numeric-semantics).
 
+**Float methods.** `f32` and `f64` have these methods, each returning `Self` unless noted. Kāra's power method is `pow`, not Rust's `powf`.
+
+| Group | Methods |
+|---|---|
+| Rounding | `floor()`, `ceil()`, `round()`, `trunc()`, `fract()` |
+| Sign and size | `abs()`, `signum()`, `copysign(y)`, `min(y)`, `max(y)`, `clamp(lo, hi)`, `recip()` |
+| Powers and roots | `pow(y)`, `powi(n: i32)`, `sqrt()`, `cbrt()`, `hypot(y)` |
+| Exponentials and logarithms | `exp()`, `exp2()`, `exp_m1()`, `ln()`, `ln_1p()`, `log2()`, `log10()` |
+| Trigonometry | `sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2(x)`, `sinh()`, `cosh()`, `tanh()`, `asinh()`, `acosh()`, `atanh()`, `to_degrees()`, `to_radians()` |
+| Bits and text | `to_bits()` (the `u64` pattern of the value as an `f64`, at both widths), `to_bits32()` (the `u32` pattern of the value rounded to `f32`), `to_string()`. The inverses are the integer methods `bits_as_f64()` and `bits_as_f32()` |
+
 **Float to integer.** There are two forms ([design.md §5](../design.md#float-to-integer-conversion)):
 - `f as iN` saturates: an out-of-range value gives the nearest end of the range, and NaN gives 0.
 - `iN.checked_from(f: f64) -> Option[iN]` returns `None` for NaN or an out-of-range value, and otherwise `Some` of the value truncated toward zero. It exists on every integer type; an `f32` argument widens to `f64` losslessly.

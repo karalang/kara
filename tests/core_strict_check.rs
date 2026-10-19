@@ -8711,3 +8711,34 @@ fn main() {
         "0\n0\n",
     );
 }
+
+/// B-2026-10-19-3: an unknown method on a number or a `String` names the
+/// method it most likely meant, including Kāra's name for a Rust spelling.
+#[test]
+fn an_unknown_number_or_string_method_names_the_nearest() {
+    for (tag, call, want) in [
+        (
+            "powf",
+            "x.powf(3.0)",
+            "no method 'powf' on type 'f64', did you mean 'pow'?",
+        ),
+        ("sqr", "x.sqr()", "did you mean 'sqrt'?"),
+        ("count-one", "n.count_one()", "did you mean 'count_ones'?"),
+        (
+            "trimm",
+            "s.trimm()",
+            "no method 'trimm' on type 'String', did you mean 'trim'?",
+        ),
+        ("length", "s.length()", "did you mean 'len'?"),
+        ("to-upper", "s.to_upper()", "did you mean 'to_uppercase'?"),
+    ] {
+        rejected(
+            &format!("method-typo-{tag}"),
+            &format!(
+                "fn main() {{\n    let x: f64 = 2.0;\n    let n: i64 = 5;\n    \
+                 let s = \"ab\".to_string();\n    println(f\"{{{call}}}\");\n}}\n"
+            ),
+            want,
+        );
+    }
+}
