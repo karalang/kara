@@ -1,0 +1,2004 @@
+// mini_qrcode: a port of qrcode 8.0 (BSD, see LICENSE-qrcode; it started
+// as a port of Kazuhiko Arase's MIT-licensed QR Code for JavaScript), the
+// Python QR code generator behind the `qr` command.
+//
+// - splitting the data into numeric, alphanumeric and byte chunks with
+//   qrcode's regexes, the bit buffer, the smallest version that holds
+//   the bits at an error correction level;
+// - Reed-Solomon error correction over GF(256) with qrcode's polynomial
+//   class, and the interleaving of the blocks;
+// - the matrix: finder, alignment and timing patterns, format and version
+//   information with their BCH codes, the zigzag placement of the bits,
+//   the eight masks and the penalty rules that choose one;
+// - print_ascii, get_matrix and the SVG images (rects, circles, one
+//   path), with their sizes in millimetres as Decimal prints them.
+//
+// The run writes data/ (the payloads and the job list from mk.py), then
+// runs each job: it reads a payload as the `qr` command reads stdin,
+// encodes it with the job's options and prints what the job asks for.
+// expected.out is the output of oracle.py, which does the same with
+// qrcode itself.
+
+// ---------------------------------------------------------------- helpers
+
+fn slice_chars(cs: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut i = lo;
+    while i < hi {
+        s.push(cs[i]);
+        i += 1;
+    }
+    s
+}
+
+fn split_char(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.split() on spaces and tabs
+fn words(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == ' ' or c == '\t' {
+            if cur.len() > 0 {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+fn strip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and (cs[a] == ' ' or cs[a] == '\t' or cs[a] == '\n' or cs[a] == '\r') {
+        a += 1;
+    }
+    while b > a and (cs[b - 1] == ' ' or cs[b - 1] == '\t' or cs[b - 1] == '\n' or cs[b - 1] == '\r') {
+        b -= 1;
+    }
+    slice_chars(cs, a, b)
+}
+
+fn hex2(v: i64) -> String {
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push(ds[(v >> 4) & 15]);
+    s.push(ds[v & 15]);
+    s
+}
+
+fn crc32_bytes(data: ref Vec[i64]) -> String {
+    let mut table: Vec[i64] = Vec.new();
+    let mut n = 0;
+    while n < 256 {
+        let mut c = n;
+        let mut k = 0;
+        while k < 8 {
+            if c & 1 == 1 {
+                c = 0xEDB88320 ^ (c >> 1);
+            } else {
+                c = c >> 1;
+            }
+            k += 1;
+        }
+        table.push(c);
+        n += 1;
+    }
+    let mut crc = 0xFFFFFFFF;
+    for b in data.iter() {
+        crc = table[(crc ^ *b) & 0xFF] ^ (crc >> 8);
+    }
+    let v = crc ^ 0xFFFFFFFF;
+    f"{hex2(v >> 24)}{hex2((v >> 16) & 255)}{hex2((v >> 8) & 255)}{hex2(v & 255)}"
+}
+
+fn utf8_bytes(s: ref String) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for b in s.bytes() {
+        out.push(*b as i64);
+    }
+    out
+}
+
+// Python's floor modulo
+fn pymod(a: i64, m: i64) -> i64 {
+    ((a % m) + m) % m
+}
+
+// ---------------------------------------------------------------- util
+
+const MODE_NUMBER: i64 = 1;
+const MODE_ALPHA_NUM: i64 = 2;
+const MODE_8BIT_BYTE: i64 = 4;
+
+// The error correction levels as qrcode numbers them.
+const EC_L: i64 = 1;
+const EC_M: i64 = 0;
+const EC_Q: i64 = 3;
+const EC_H: i64 = 2;
+
+const PAD0: i64 = 0xEC;
+const PAD1: i64 = 0x11;
+
+fn alpha_num() -> Vec[i64] {
+    utf8_bytes("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:")
+}
+
+fn is_digit_byte(b: i64) -> bool {
+    b >= 48 and b <= 57
+}
+
+fn is_alnum_byte(table: ref Vec[i64], b: i64) -> bool {
+    table.contains(b)
+}
+
+fn mode_name(mode: i64) -> String {
+    if mode == MODE_NUMBER {
+        "numeric".to_string()
+    } else if mode == MODE_ALPHA_NUM {
+        "alphanumeric".to_string()
+    } else {
+        "byte".to_string()
+    }
+}
+
+// MODE_SIZE_SMALL / MEDIUM / LARGE: which of the three a version uses
+fn mode_size_class(version: i64) -> i64 {
+    if version < 10 {
+        0
+    } else if version < 27 {
+        1
+    } else {
+        2
+    }
+}
+
+fn mode_size(class: i64, mode: i64) -> i64 {
+    if mode == MODE_NUMBER {
+        vec![10, 12, 14][class]
+    } else if mode == MODE_ALPHA_NUM {
+        vec![9, 11, 13][class]
+    } else {
+        vec![8, 16, 16][class]
+    }
+}
+
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: own String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg }
+}
+
+fn check_version(version: i64) -> Result[(), PyErr] {
+    if version < 1 or version > 40 {
+        return Err(py_err("ValueError", f"Invalid version (was {version}, expected 1 to 40)"));
+    }
+    Ok(())
+}
+
+// QRData: a chunk of the data in one mode
+#[derive(Clone)]
+struct Chunk {
+    mode: i64,
+    data: Vec[i64],
+}
+
+fn slice_bytes(v: ref Vec[i64], lo: i64, hi: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = lo;
+    while i < hi {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+// The class of a pattern: digits (\d on bytes) or the alphanumeric set.
+fn in_class(numeric: bool, alnum: ref Vec[i64], b: i64) -> bool {
+    if numeric { is_digit_byte(b) } else { is_alnum_byte(alnum, b) }
+}
+
+// re.search for the patterns optimal_data_chunks compiles: `^C+$` when
+// the data is no longer than `minimum` (and `$` also matches before a
+// final newline), else `C{minimum,}`, the first run that long.
+fn search_chunk(data: ref Vec[i64], numeric: bool, alnum: ref Vec[i64], anchored: bool, minimum: i64) -> Option[(i64, i64)] {
+    let n = data.len();
+    if anchored {
+        let mut end = n;
+        if end > 0 and data[end - 1] == 10 {
+            end -= 1;
+        }
+        if end == 0 {
+            return None;
+        }
+        let mut i = 0;
+        while i < end {
+            if not in_class(numeric, alnum, data[i]) {
+                return None;
+            }
+            i += 1;
+        }
+        return Some((0, end));
+    }
+    let mut i = 0;
+    while i < n {
+        if in_class(numeric, alnum, data[i]) {
+            let start = i;
+            while i < n and in_class(numeric, alnum, data[i]) {
+                i += 1;
+            }
+            if i - start >= minimum {
+                return Some((start, i));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+// _optimal_split: (matched, piece) in order
+fn optimal_split(data: ref Vec[i64], numeric: bool, alnum: ref Vec[i64], anchored: bool, minimum: i64) -> Vec[(bool, Vec[i64])] {
+    let mut out: Vec[(bool, Vec[i64])] = Vec.new();
+    let mut rest = data.clone();
+    while rest.len() > 0 {
+        let (start, end) = match search_chunk(rest, numeric, alnum, anchored, minimum) {
+            Some(m) => m,
+            None => break,
+        };
+        if start > 0 {
+            out.push((false, slice_bytes(rest, 0, start)));
+        }
+        out.push((true, slice_bytes(rest, start, end)));
+        rest = slice_bytes(rest, end, rest.len());
+    }
+    if rest.len() > 0 {
+        out.push((false, rest));
+    }
+    out
+}
+
+fn optimal_data_chunks(data: ref Vec[i64], minimum: i64) -> Vec[Chunk] {
+    let alnum = alpha_num();
+    let anchored = data.len() <= minimum;
+    let mut out: Vec[Chunk] = Vec.new();
+    for (is_num, piece) in optimal_split(data, true, alnum, anchored, minimum).into_iter() {
+        if is_num {
+            out.push(Chunk { mode: MODE_NUMBER, data: piece });
+        } else {
+            for (is_alpha, sub) in optimal_split(piece, false, alnum, anchored, minimum).into_iter() {
+                let mode = if is_alpha { MODE_ALPHA_NUM } else { MODE_8BIT_BYTE };
+                out.push(Chunk { mode: mode, data: sub });
+            }
+        }
+    }
+    out
+}
+
+// optimal_mode: bytes.isdigit() (not for b''), then RE_ALPHA_NUM.match
+// (which the empty string passes)
+fn optimal_mode(data: ref Vec[i64]) -> i64 {
+    let alnum = alpha_num();
+    let mut digits = data.len() > 0;
+    let mut alpha = true;
+    for b in data.iter() {
+        if not is_digit_byte(*b) {
+            digits = false;
+        }
+        if not is_alnum_byte(alnum, *b) {
+            alpha = false;
+        }
+    }
+    if digits {
+        MODE_NUMBER
+    } else if alpha {
+        MODE_ALPHA_NUM
+    } else {
+        MODE_8BIT_BYTE
+    }
+}
+
+struct BitBuffer {
+    buffer: Vec[i64],
+    length: i64,
+}
+
+fn new_bit_buffer() -> BitBuffer {
+    BitBuffer { buffer: Vec.new(), length: 0 }
+}
+
+impl BitBuffer {
+    fn put(mut ref self, num: i64, length: i64) {
+        let mut i = 0;
+        while i < length {
+            self.put_bit(((num >> (length - i - 1)) & 1) == 1);
+            i += 1;
+        }
+    }
+
+    fn put_bit(mut ref self, bit: bool) {
+        let buf_index = self.length / 8;
+        if self.buffer.len() <= buf_index {
+            self.buffer.push(0);
+        }
+        if bit {
+            self.buffer[buf_index] = self.buffer[buf_index] | (0x80 >> (self.length % 8));
+        }
+        self.length += 1;
+    }
+}
+
+// QRData.write
+fn write_chunk(c: ref Chunk, buffer: mut ref BitBuffer) {
+    let n = c.data.len();
+    if c.mode == MODE_NUMBER {
+        let mut i = 0;
+        while i < n {
+            let end = if i + 3 < n { i + 3 } else { n };
+            let mut v = 0;
+            let mut j = i;
+            while j < end {
+                v = v * 10 + (c.data[j] - 48);
+                j += 1;
+            }
+            let bits = vec![0, 4, 7, 10][end - i];
+            buffer.put(v, bits);
+            i += 3;
+        }
+    } else if c.mode == MODE_ALPHA_NUM {
+        let alnum = alpha_num();
+        let mut i = 0;
+        while i < n {
+            let a = index_in(alnum, c.data[i]);
+            if i + 1 < n {
+                buffer.put(a * 45 + index_in(alnum, c.data[i + 1]), 11);
+            } else {
+                buffer.put(a, 6);
+            }
+            i += 2;
+        }
+    } else {
+        for b in c.data.iter() {
+            buffer.put(*b, 8);
+        }
+    }
+}
+
+// bytes.find, -1 when missing
+fn index_in(v: ref Vec[i64], b: i64) -> i64 {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == b {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn bch_digit(data: i64) -> i64 {
+    let mut digit = 0;
+    let mut d = data;
+    while d != 0 {
+        digit += 1;
+        d = d >> 1;
+    }
+    digit
+}
+
+const GEN_G15: i64 = 0x537;
+const GEN_G18: i64 = 0x1F25;
+const GEN_G15_MASK: i64 = 0x5412;
+
+fn bch_type_info(data: i64) -> i64 {
+    let mut d = data << 10;
+    while bch_digit(d) - bch_digit(GEN_G15) >= 0 {
+        d = d ^ (GEN_G15 << (bch_digit(d) - bch_digit(GEN_G15)));
+    }
+    ((data << 10) | d) ^ GEN_G15_MASK
+}
+
+fn bch_type_number(data: i64) -> i64 {
+    let mut d = data << 12;
+    while bch_digit(d) - bch_digit(GEN_G18) >= 0 {
+        d = d ^ (GEN_G18 << (bch_digit(d) - bch_digit(GEN_G18)));
+    }
+    (data << 12) | d
+}
+
+fn mask_bit(pattern: i64, i: i64, j: i64) -> bool {
+    if pattern == 0 {
+        (i + j) % 2 == 0
+    } else if pattern == 1 {
+        i % 2 == 0
+    } else if pattern == 2 {
+        j % 3 == 0
+    } else if pattern == 3 {
+        (i + j) % 3 == 0
+    } else if pattern == 4 {
+        (i / 2 + j / 3) % 2 == 0
+    } else if pattern == 5 {
+        (i * j) % 2 + (i * j) % 3 == 0
+    } else if pattern == 6 {
+        ((i * j) % 2 + (i * j) % 3) % 2 == 0
+    } else {
+        ((i * j) % 3 + (i + j) % 2) % 2 == 0
+    }
+}
+
+// ---------------------------------------------------------------- Reed-Solomon
+
+struct Gf {
+    exp: Vec[i64],
+    log: Vec[i64],
+}
+
+fn new_gf() -> Gf {
+    let mut exp: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 256 {
+        exp.push(if i < 8 { 1 << i } else { 0 });
+        i += 1;
+    }
+    i = 8;
+    while i < 256 {
+        exp[i] = exp[i - 4] ^ exp[i - 5] ^ exp[i - 6] ^ exp[i - 8];
+        i += 1;
+    }
+    let mut log: Vec[i64] = Vec.new();
+    i = 0;
+    while i < 256 {
+        log.push(i);
+        i += 1;
+    }
+    i = 0;
+    while i < 255 {
+        log[exp[i]] = i;
+        i += 1;
+    }
+    Gf { exp: exp, log: log }
+}
+
+impl Gf {
+    fn glog(ref self, n: i64) -> Result[i64, PyErr] {
+        if n < 1 {
+            return Err(py_err("ValueError", f"glog({n})"));
+        }
+        Ok(self.log[n])
+    }
+
+    fn gexp(ref self, n: i64) -> i64 {
+        self.exp[pymod(n, 255)]
+    }
+}
+
+// Polynomial(num, shift): the leading zeros dropped (all but the last when
+// every coefficient is zero), then `shift` zeros appended
+fn poly(num: ref Vec[i64], shift: i64) -> Vec[i64] {
+    let mut offset = 0;
+    while offset < num.len() - 1 and num[offset] == 0 {
+        offset += 1;
+    }
+    let mut out = slice_bytes(num, offset, num.len());
+    let mut k = 0;
+    while k < shift {
+        out.push(0);
+        k += 1;
+    }
+    out
+}
+
+fn poly_mul(gf: ref Gf, a: ref Vec[i64], b: ref Vec[i64]) -> Result[Vec[i64], PyErr] {
+    let mut num: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < a.len() + b.len() - 1 {
+        num.push(0);
+        k += 1;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        let mut j = 0;
+        while j < b.len() {
+            num[i + j] = num[i + j] ^ gf.gexp(gf.glog(a[i])? + gf.glog(b[j])?);
+            j += 1;
+        }
+        i += 1;
+    }
+    Ok(poly(num, 0))
+}
+
+// Polynomial.__mod__, its recursion as a loop
+fn poly_mod(gf: ref Gf, a: ref Vec[i64], other: ref Vec[i64]) -> Result[Vec[i64], PyErr] {
+    let mut cur = a.clone();
+    loop {
+        let difference = cur.len() - other.len();
+        if difference < 0 {
+            return Ok(cur);
+        }
+        let ratio = gf.glog(cur[0])? - gf.glog(other[0])?;
+        let mut num: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < other.len() {
+            num.push(cur[i] ^ gf.gexp(gf.glog(other[i])? + ratio));
+            i += 1;
+        }
+        if difference > 0 {
+            let mut j = cur.len() - difference;
+            while j < cur.len() {
+                num.push(cur[j]);
+                j += 1;
+            }
+        }
+        cur = poly(num, 0);
+    }
+}
+
+// rs_blocks: (total_count, data_count) of each block
+fn rs_blocks(table: ref Vec[Vec[i64]], version: i64, ec: i64) -> Vec[(i64, i64)] {
+    let offset = if ec == EC_L { 0 } else if ec == EC_M { 1 } else if ec == EC_Q { 2 } else { 3 };
+    let row = table[(version - 1) * 4 + offset].clone();
+    let mut blocks: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < row.len() {
+        let mut k = 0;
+        while k < row[i] {
+            blocks.push((row[i + 1], row[i + 2]));
+            k += 1;
+        }
+        i += 3;
+    }
+    blocks
+}
+
+fn data_bits(table: ref Vec[Vec[i64]], version: i64, ec: i64) -> i64 {
+    let mut total = 0;
+    for (_, dc) in rs_blocks(table, version, ec).iter() {
+        total += *dc * 8;
+    }
+    total
+}
+
+// BIT_LIMIT_TABLE[ec]: index 0 holds 0, then versions 1 to 40
+fn bit_limits(table: ref Vec[Vec[i64]], ec: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = vec![0];
+    let mut v = 1;
+    while v <= 40 {
+        out.push(data_bits(table, v, ec));
+        v += 1;
+    }
+    out
+}
+
+fn create_bytes(gf: ref Gf, buffer: ref BitBuffer, blocks: ref Vec[(i64, i64)]) -> Result[Vec[i64], PyErr] {
+    let mut offset = 0;
+    let mut max_dc = 0;
+    let mut max_ec = 0;
+    let mut dcdata: Vec[Vec[i64]] = Vec.new();
+    let mut ecdata: Vec[Vec[i64]] = Vec.new();
+    let mut gens: Vec[(i64, Vec[i64])] = Vec.new();
+    for (total, dc_count) in blocks.iter() {
+        let dc_n = *dc_count;
+        let ec_n = *total - dc_n;
+        if dc_n > max_dc {
+            max_dc = dc_n;
+        }
+        if ec_n > max_ec {
+            max_ec = ec_n;
+        }
+        let mut current_dc: Vec[i64] = Vec.new();
+        let mut i = 0;
+        while i < dc_n {
+            current_dc.push(0xFF & buffer.buffer[i + offset]);
+            i += 1;
+        }
+        offset += dc_n;
+        // the generator polynomial (qrcode looks the common ones up in LUT,
+        // which holds the same products)
+        let mut rs_poly: Vec[i64] = Vec.new();
+        for (n, p) in gens.iter() {
+            if *n == ec_n {
+                rs_poly = p.clone();
+            }
+        }
+        if rs_poly.len() == 0 {
+            rs_poly = vec![1];
+            let mut k = 0;
+            while k < ec_n {
+                rs_poly = poly_mul(gf, rs_poly, vec![1, gf.gexp(k)])?;
+                k += 1;
+            }
+            gens.push((ec_n, rs_poly.clone()));
+        }
+        let raw = poly(current_dc, rs_poly.len() - 1);
+        let modp = poly_mod(gf, raw, rs_poly)?;
+        let mut current_ec: Vec[i64] = Vec.new();
+        let mod_offset = modp.len() - ec_n;
+        let mut k = 0;
+        while k < ec_n {
+            let idx = k + mod_offset;
+            current_ec.push(if idx >= 0 { modp[idx] } else { 0 });
+            k += 1;
+        }
+        dcdata.push(current_dc);
+        ecdata.push(current_ec);
+    }
+    let mut data: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < max_dc {
+        for dc in dcdata.iter() {
+            if i < dc.len() {
+                data.push(dc[i]);
+            }
+        }
+        i += 1;
+    }
+    i = 0;
+    while i < max_ec {
+        for ec in ecdata.iter() {
+            if i < ec.len() {
+                data.push(ec[i]);
+            }
+        }
+        i += 1;
+    }
+    Ok(data)
+}
+
+fn create_data(gf: ref Gf, table: ref Vec[Vec[i64]], version: i64, ec: i64, chunks: ref Vec[Chunk]) -> Result[Vec[i64], PyErr] {
+    let mut buffer = new_bit_buffer();
+    let class = mode_size_class(version);
+    for c in chunks.iter() {
+        buffer.put(c.mode, 4);
+        buffer.put(c.data.len(), mode_size(class, c.mode));
+        write_chunk(c, mut buffer);
+    }
+    let blocks = rs_blocks(table, version, ec);
+    let mut bit_limit = 0;
+    for (_, dc) in blocks.iter() {
+        bit_limit += *dc * 8;
+    }
+    if buffer.length > bit_limit {
+        return Err(py_err("DataOverflowError", f"Code length overflow. Data size ({buffer.length}) > size available ({bit_limit})"));
+    }
+    // the terminator, up to four zero bits
+    let term = if bit_limit - buffer.length < 4 { bit_limit - buffer.length } else { 4 };
+    let mut k = 0;
+    while k < term {
+        buffer.put_bit(false);
+        k += 1;
+    }
+    let delimit = buffer.length % 8;
+    if delimit != 0 {
+        k = 0;
+        while k < 8 - delimit {
+            buffer.put_bit(false);
+            k += 1;
+        }
+    }
+    let bytes_to_fill = (bit_limit - buffer.length) / 8;
+    k = 0;
+    while k < bytes_to_fill {
+        buffer.put(if k % 2 == 0 { PAD0 } else { PAD1 }, 8);
+        k += 1;
+    }
+    create_bytes(gf, buffer, blocks)
+}
+
+// ---------------------------------------------------------------- penalties
+
+fn lost_point_level1(m: ref Vec[i64], n: i64) -> i64 {
+    let mut container: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k <= n {
+        container.push(0);
+        k += 1;
+    }
+    let mut row = 0;
+    while row < n {
+        let mut prev = m[row * n];
+        let mut length = 0;
+        let mut col = 0;
+        while col < n {
+            let v = m[row * n + col];
+            if v == prev {
+                length += 1;
+            } else {
+                if length >= 5 {
+                    container[length] += 1;
+                }
+                length = 1;
+                prev = v;
+            }
+            col += 1;
+        }
+        if length >= 5 {
+            container[length] += 1;
+        }
+        row += 1;
+    }
+    let mut col = 0;
+    while col < n {
+        let mut prev = m[col];
+        let mut length = 0;
+        let mut r = 0;
+        while r < n {
+            let v = m[r * n + col];
+            if v == prev {
+                length += 1;
+            } else {
+                if length >= 5 {
+                    container[length] += 1;
+                }
+                length = 1;
+                prev = v;
+            }
+            r += 1;
+        }
+        if length >= 5 {
+            container[length] += 1;
+        }
+        col += 1;
+    }
+    let mut lost = 0;
+    let mut len = 5;
+    while len <= n {
+        lost += container[len] * (len - 2);
+        len += 1;
+    }
+    lost
+}
+
+fn lost_point_level2(m: ref Vec[i64], n: i64) -> i64 {
+    let mut lost = 0;
+    let mut row = 0;
+    while row < n - 1 {
+        let this = row * n;
+        let next = (row + 1) * n;
+        let mut col = 0;
+        while col < n - 1 {
+            let top_right = m[this + col + 1];
+            if top_right != m[next + col + 1] {
+                // next(modules_range_iter): the next column is skipped
+                col += 2;
+                continue;
+            } else if top_right != m[this + col] {
+            } else if top_right != m[next + col] {
+            } else {
+                lost += 3;
+            }
+            col += 1;
+        }
+        row += 1;
+    }
+    lost
+}
+
+// the 1:1:3:1:1 finder-like pattern with four light modules on one side,
+// at cells at, at+step, ... at+10*step
+fn finder_like(m: ref Vec[i64], at: i64, step: i64) -> bool {
+    let c = |k: i64| { m[at + k * step] == 1 };
+    not c(1) and c(4) and not c(5) and c(6) and not c(9)
+        and ((c(0) and c(2) and c(3) and not c(7) and not c(8) and not c(10))
+            or (not c(0) and not c(2) and not c(3) and c(7) and c(8) and c(10)))
+}
+
+fn lost_point_level3(m: ref Vec[i64], n: i64) -> i64 {
+    let mut lost = 0;
+    let mut row = 0;
+    while row < n {
+        let mut col = 0;
+        while col < n - 10 {
+            if finder_like(m, row * n + col, 1) {
+                lost += 40;
+            }
+            // horspool: a dark module at +10 lets the next column go
+            if m[row * n + col + 10] == 1 {
+                col += 2;
+            } else {
+                col += 1;
+            }
+        }
+        row += 1;
+    }
+    let mut col = 0;
+    while col < n {
+        let mut r = 0;
+        while r < n - 10 {
+            if finder_like(m, r * n + col, n) {
+                lost += 40;
+            }
+            if m[(r + 10) * n + col] == 1 {
+                r += 2;
+            } else {
+                r += 1;
+            }
+        }
+        col += 1;
+    }
+    lost
+}
+
+fn lost_point_level4(m: ref Vec[i64], n: i64) -> i64 {
+    let mut dark = 0;
+    for v in m.iter() {
+        if *v == 1 {
+            dark += 1;
+        }
+    }
+    let percent = dark as f64 / ((n * n) as f64);
+    let mut d = percent * 100.0 - 50.0;
+    if d < 0.0 {
+        d = -d;
+    }
+    let rating = (d / 5.0) as i64;
+    rating * 10
+}
+
+fn lost_point(m: ref Vec[i64], n: i64) -> i64 {
+    lost_point_level1(m, n) + lost_point_level2(m, n) + lost_point_level3(m, n) + lost_point_level4(m, n)
+}
+
+// ---------------------------------------------------------------- QRCode
+
+// The modules are one vec, row by row: -1 for None, 0 light, 1 dark.
+struct QRCode {
+    version: i64, // 0 until best_fit sets it
+    ec: i64,
+    box_size: i64,
+    border: i64,
+    mask: i64, // -1 for None
+    chunks: Vec[Chunk],
+    n: i64,
+    modules: Vec[i64],
+    data_cache: Option[Vec[i64]],
+    penalties: Vec[i64],
+}
+
+struct Env {
+    gf: Gf,
+    table: Vec[Vec[i64]],
+    positions: Vec[Vec[i64]],
+    limits: Vec[Vec[i64]], // BIT_LIMIT_TABLE, by the error correction number
+}
+
+fn new_env() -> Env {
+    let table = rs_block_table();
+    let mut limits: Vec[Vec[i64]] = Vec.new();
+    let mut ec = 0;
+    while ec < 4 {
+        limits.push(bit_limits(table, ec));
+        ec += 1;
+    }
+    Env { gf: new_gf(), table: table, positions: pattern_position_table(), limits: limits }
+}
+
+// QRCode.__init__ with its checks, in its order
+fn new_qr(version: i64, ec: i64, box_size: i64, border: i64, mask: i64) -> Result[QRCode, PyErr] {
+    if box_size <= 0 {
+        return Err(py_err("ValueError", f"Invalid box size (was {box_size}, expected larger than 0)"));
+    }
+    if border < 0 {
+        return Err(py_err("ValueError", f"Invalid border value (was {border}, expected 0 or larger than that)"));
+    }
+    if version != 0 {
+        check_version(version)?;
+    }
+    if mask != -1 and (mask < 0 or mask > 7) {
+        return Err(py_err("ValueError", f"Mask pattern should be in range(8) (got {mask})"));
+    }
+    Ok(QRCode {
+        version: version,
+        ec: ec,
+        box_size: box_size,
+        border: border,
+        mask: mask,
+        chunks: Vec.new(),
+        n: 0,
+        modules: Vec.new(),
+        data_cache: None,
+        penalties: Vec.new(),
+    })
+}
+
+impl QRCode {
+    fn add_data(mut ref self, data: ref Vec[i64], optimize: i64) {
+        if optimize != 0 {
+            for c in optimal_data_chunks(data, optimize).into_iter() {
+                self.chunks.push(c);
+            }
+        } else {
+            self.chunks.push(Chunk { mode: optimal_mode(data), data: data.clone() });
+        }
+        self.data_cache = None;
+    }
+
+    fn best_fit(mut ref self, env: ref Env, start_at: i64) -> Result[i64, PyErr] {
+        let start = if start_at == 0 { 1 } else { start_at };
+        check_version(start)?;
+        let class = mode_size_class(start);
+        let mut buffer = new_bit_buffer();
+        for c in self.chunks.iter() {
+            buffer.put(c.mode, 4);
+            buffer.put(c.data.len(), mode_size(class, c.mode));
+            write_chunk(c, mut buffer);
+        }
+        let needed = buffer.length;
+        // bisect_left(BIT_LIMIT_TABLE[ec], needed, start)
+        let limits = env.limits[self.ec].clone();
+        let mut v = start;
+        while v < limits.len() and limits[v] < needed {
+            v += 1;
+        }
+        // the version setter checks before best_fit looks for 41
+        check_version(v)?;
+        self.version = v;
+        if mode_size_class(v) != class {
+            self.best_fit(env, v)?;
+        }
+        Ok(self.version)
+    }
+
+    fn make(mut ref self, env: ref Env, fit: bool) -> Result[(), PyErr] {
+        if self.version == 0 {
+            // reading the version property runs best_fit()
+            self.best_fit(env, 0)?;
+        }
+        if fit {
+            let start = self.version;
+            self.best_fit(env, start)?;
+        }
+        if self.mask == -1 {
+            let best = self.best_mask_pattern(env)?;
+            self.make_impl(env, false, best)?;
+        } else {
+            let m = self.mask;
+            self.make_impl(env, false, m)?;
+        }
+        Ok(())
+    }
+
+    fn set(mut ref self, r: i64, c: i64, v: i64) {
+        let n = self.n;
+        self.modules[r * n + c] = v;
+    }
+
+    fn get(ref self, r: i64, c: i64) -> i64 {
+        self.modules[r * self.n + c]
+    }
+
+    fn make_impl(mut ref self, env: ref Env, test: bool, mask: i64) -> Result[(), PyErr] {
+        self.n = self.version * 4 + 17;
+        let n = self.n;
+        self.modules = Vec.new();
+        let mut k = 0;
+        while k < n * n {
+            self.modules.push(-1);
+            k += 1;
+        }
+        self.setup_position_probe_pattern(0, 0);
+        self.setup_position_probe_pattern(n - 7, 0);
+        self.setup_position_probe_pattern(0, n - 7);
+        self.setup_position_adjust_pattern(env);
+        self.setup_timing_pattern();
+        self.setup_type_info(test, mask);
+        if self.version >= 7 {
+            self.setup_type_number(test);
+        }
+        if self.data_cache.is_none() {
+            let d = create_data(env.gf, env.table, self.version, self.ec, self.chunks)?;
+            self.data_cache = Some(d);
+        }
+        let data = match self.data_cache.clone() {
+            Some(d) => d,
+            None => Vec.new(),
+        };
+        self.map_data(data, mask);
+        Ok(())
+    }
+
+    fn setup_position_probe_pattern(mut ref self, row: i64, col: i64) {
+        let n = self.n;
+        let mut r = -1;
+        while r < 8 {
+            if not (row + r <= -1 or n <= row + r) {
+                let mut c = -1;
+                while c < 8 {
+                    if not (col + c <= -1 or n <= col + c) {
+                        let on = ((0 <= r and r <= 6) and (c == 0 or c == 6))
+                            or ((0 <= c and c <= 6) and (r == 0 or r == 6))
+                            or ((2 <= r and r <= 4) and (2 <= c and c <= 4));
+                        self.set(row + r, col + c, if on { 1 } else { 0 });
+                    }
+                    c += 1;
+                }
+            }
+            r += 1;
+        }
+    }
+
+    fn setup_timing_pattern(mut ref self) {
+        let n = self.n;
+        let mut r = 8;
+        while r < n - 8 {
+            if self.get(r, 6) == -1 {
+                self.set(r, 6, if r % 2 == 0 { 1 } else { 0 });
+            }
+            r += 1;
+        }
+        let mut c = 8;
+        while c < n - 8 {
+            if self.get(6, c) == -1 {
+                self.set(6, c, if c % 2 == 0 { 1 } else { 0 });
+            }
+            c += 1;
+        }
+    }
+
+    fn setup_position_adjust_pattern(mut ref self, env: ref Env) {
+        let pos = env.positions[self.version - 1].clone();
+        for row in pos.iter() {
+            for col in pos.iter() {
+                if self.get(*row, *col) != -1 {
+                    continue;
+                }
+                let mut r = -2;
+                while r < 3 {
+                    let mut c = -2;
+                    while c < 3 {
+                        let on = r == -2 or r == 2 or c == -2 or c == 2 or (r == 0 and c == 0);
+                        self.set(*row + r, *col + c, if on { 1 } else { 0 });
+                        c += 1;
+                    }
+                    r += 1;
+                }
+            }
+        }
+    }
+
+    fn setup_type_number(mut ref self, test: bool) {
+        let n = self.n;
+        let bits = bch_type_number(self.version);
+        let mut i = 0;
+        while i < 18 {
+            let m = not test and ((bits >> i) & 1) == 1;
+            self.set(i / 3, i % 3 + n - 8 - 3, if m { 1 } else { 0 });
+            i += 1;
+        }
+        i = 0;
+        while i < 18 {
+            let m = not test and ((bits >> i) & 1) == 1;
+            self.set(i % 3 + n - 8 - 3, i / 3, if m { 1 } else { 0 });
+            i += 1;
+        }
+    }
+
+    fn setup_type_info(mut ref self, test: bool, mask: i64) {
+        let n = self.n;
+        let data = (self.ec << 3) | mask;
+        let bits = bch_type_info(data);
+        let mut i = 0;
+        while i < 15 {
+            let m = if not test and ((bits >> i) & 1) == 1 { 1 } else { 0 };
+            if i < 6 {
+                self.set(i, 8, m);
+            } else if i < 8 {
+                self.set(i + 1, 8, m);
+            } else {
+                self.set(n - 15 + i, 8, m);
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < 15 {
+            let m = if not test and ((bits >> i) & 1) == 1 { 1 } else { 0 };
+            if i < 8 {
+                self.set(8, n - i - 1, m);
+            } else if i < 9 {
+                self.set(8, 15 - i - 1 + 1, m);
+            } else {
+                self.set(8, 15 - i - 1, m);
+            }
+            i += 1;
+        }
+        self.set(n - 8, 8, if test { 0 } else { 1 });
+    }
+
+    fn map_data(mut ref self, data: ref Vec[i64], mask: i64) {
+        let n = self.n;
+        let mut inc = -1;
+        let mut row = n - 1;
+        let mut bit_index = 7;
+        let mut byte_index = 0;
+        let mut col0 = n - 1;
+        while col0 > 0 {
+            let col = if col0 <= 6 { col0 - 1 } else { col0 };
+            loop {
+                let mut k = 0;
+                while k < 2 {
+                    let c = col - k;
+                    if self.get(row, c) == -1 {
+                        let mut dark = false;
+                        if byte_index < data.len() {
+                            dark = ((data[byte_index] >> bit_index) & 1) == 1;
+                        }
+                        if mask_bit(mask, row, c) {
+                            dark = not dark;
+                        }
+                        self.set(row, c, if dark { 1 } else { 0 });
+                        bit_index -= 1;
+                        if bit_index == -1 {
+                            byte_index += 1;
+                            bit_index = 7;
+                        }
+                    }
+                    k += 1;
+                }
+                row += inc;
+                if row < 0 or n <= row {
+                    row -= inc;
+                    inc = -inc;
+                    break;
+                }
+            }
+            col0 -= 2;
+        }
+    }
+
+    fn best_mask_pattern(mut ref self, env: ref Env) -> Result[i64, PyErr] {
+        let mut min_lost = 0;
+        let mut pattern = 0;
+        self.penalties = Vec.new();
+        let mut i = 0;
+        while i < 8 {
+            self.make_impl(env, true, i)?;
+            let lost = lost_point(self.modules, self.n);
+            self.penalties.push(lost);
+            if i == 0 or min_lost > lost {
+                min_lost = lost;
+                pattern = i;
+            }
+            i += 1;
+        }
+        Ok(pattern)
+    }
+
+    fn dark(ref self, r: i64, c: i64) -> bool {
+        self.get(r, c) == 1
+    }
+}
+
+// ---------------------------------------------------------------- output
+
+fn ec_name(ec: i64) -> String {
+    if ec == EC_L {
+        "L".to_string()
+    } else if ec == EC_M {
+        "M".to_string()
+    } else if ec == EC_Q {
+        "Q".to_string()
+    } else {
+        "H".to_string()
+    }
+}
+
+fn show_info(qr: ref QRCode, chosen: i64) {
+    let mut parts: Vec[String] = Vec.new();
+    for c in qr.chunks.iter() {
+        parts.push(f"{mode_name(c.mode)} {c.data.len()}");
+    }
+    let chunks = if parts.len() > 0 { parts.join(", ") } else { "none".to_string() };
+    println(f"  chunks: {chunks}");
+    let n = qr.n;
+    println(f"  version {qr.version}, error correction {ec_name(qr.ec)}, {n}x{n}");
+    let codewords = match qr.data_cache.clone() {
+        Some(d) => d,
+        None => Vec.new(),
+    };
+    println(f"  codewords: {codewords.len()}, crc32 {crc32_bytes(codewords)}");
+    let mut first: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 12 and i < codewords.len() {
+        first.push(hex2(codewords[i]));
+        i += 1;
+    }
+    println(f"  first codewords: {first.join(" ")}");
+    if qr.mask == -1 {
+        let mut ps: Vec[String] = Vec.new();
+        for p in qr.penalties.iter() {
+            ps.push(f"{p}");
+        }
+        println(f"  mask {chosen}, penalties {ps.join(" ")}");
+    } else {
+        println(f"  mask {qr.mask} (given)");
+    }
+    let mut dark = 0;
+    for v in qr.modules.iter() {
+        if *v == 1 {
+            dark += 1;
+        }
+    }
+    println(f"  dark modules: {dark} of {n * n}");
+}
+
+// print_ascii: two rows per line in cp437's half blocks
+fn ascii_module(qr: ref QRCode, invert: bool, x: i64, y: i64) -> i64 {
+    let n = qr.n;
+    let hi = if x > y { x } else { y };
+    let lo = if x < y { x } else { y };
+    if invert and qr.border > 0 and hi >= n + qr.border {
+        return 1;
+    }
+    if lo < 0 or hi >= n {
+        return 0;
+    }
+    qr.get(x, y)
+}
+
+fn show_ascii(qr: ref QRCode, invert: bool, label: Str) {
+    let mut codes: Vec[char] = vec!['\u{a0}', '\u{2580}', '\u{2584}', '\u{2588}'];
+    if invert {
+        codes.reverse();
+    }
+    println(f"  -- {label}");
+    let n = qr.n;
+    let b = qr.border;
+    let mut r = -b;
+    while r < n + b {
+        let mut line = String.new();
+        let mut c = -b;
+        while c < n + b {
+            let pos = ascii_module(qr, invert, r, c) + (ascii_module(qr, invert, r + 1, c) << 1);
+            line.push(codes[pos]);
+            c += 1;
+        }
+        println(f"   |{line}");
+        r += 2;
+    }
+}
+
+fn show_matrix(qr: ref QRCode) {
+    println("  -- matrix");
+    let n = qr.n;
+    let b = qr.border;
+    let mut r = -b;
+    while r < n + b {
+        let mut line = String.new();
+        let mut c = -b;
+        while c < n + b {
+            let on = r >= 0 and r < n and c >= 0 and c < n and qr.dark(r, c);
+            line.push(if on { '#' } else { '.' });
+            c += 1;
+        }
+        println(f"   |{line}");
+        r += 1;
+    }
+}
+
+// A length in hundredths of a millimetre as Decimal prints it.
+fn mm(h: i64) -> String {
+    let whole = h / 100;
+    let frac = h % 100;
+    if frac == 0 {
+        f"{whole}"
+    } else if frac % 10 == 0 {
+        f"{whole}.{frac / 10}"
+    } else if frac < 10 {
+        f"{whole}.0{frac}"
+    } else {
+        f"{whole}.{frac}"
+    }
+}
+
+const SVG_NS: Str = "http://www.w3.org/2000/svg";
+
+// The SVG images, as ElementTree writes them. units() is pixels / 10 in
+// millimetres, so a pixel is ten hundredths.
+fn make_svg(qr: ref QRCode, kind: ref String) -> String {
+    let path = kind.starts_with("svg-path");
+    let fragment = kind == "svg-fragment";
+    let fill = kind.ends_with("-fill");
+    let circle = kind.ends_with("-circle");
+    let n = qr.n;
+    let bx = qr.box_size;
+    let pixel_size = (n + qr.border * 2) * bx;
+    let size = f"{mm(pixel_size * 10)}mm";
+
+    let mut body = String.new();
+    let mut subpaths = String.new();
+    let mut r = 0;
+    while r < n {
+        let mut c = 0;
+        while c < n {
+            if qr.dark(r, c) {
+                // pixel_box's corner, with x from the column (coords()
+                // calls it the row)
+                let x = (c + qr.border) * bx;
+                let y = (r + qr.border) * bx;
+                let eye = (r < 7 and c < 7) or (r < 7 and n - c < 8) or (n - r < 8 and c < 7);
+                // in hundredths: x/10 mm is x*10, the half box is bx*5
+                let x0 = x * 10;
+                let y0 = y * 10;
+                let x1 = (x + bx) * 10;
+                let y1 = (y + bx) * 10;
+                let half = bx * 5;
+                if circle and not eye {
+                    if path {
+                        let yh = y0 + half;
+                        let h = mm(half);
+                        subpaths.push_str(f"M{mm(x0)},{mm(yh)}A{h},{h} 0 0 0 {mm(x1)},{mm(yh)}A{h},{h} 0 0 0 {mm(x0)},{mm(yh)}z");
+                    } else {
+                        body.push_str(f"<svg:circle cx=\"{mm(x0 + half)}mm\" cy=\"{mm(y0 + half)}mm\" r=\"{mm(half)}mm\" />");
+                    }
+                } else if path {
+                    subpaths.push_str(f"M{mm(x0)},{mm(y0)}H{mm(x1)}V{mm(y1)}H{mm(x0)}z");
+                } else {
+                    let u = mm(bx * 10);
+                    body.push_str(f"<svg:rect x=\"{mm(x0)}mm\" y=\"{mm(y0)}mm\" width=\"{u}mm\" height=\"{u}mm\" />");
+                }
+            }
+            c += 1;
+        }
+        r += 1;
+    }
+
+    let mut out = String.new();
+    if not fragment {
+        out.push_str("<?xml version='1.0' encoding='UTF-8'?>\n");
+    }
+    let ns_decl = if body.len() > 0 { f"xmlns:svg=\"{SVG_NS}\" " } else { String.new() };
+    if fragment {
+        out.push_str(f"<svg:svg {ns_decl}width=\"{size}\" height=\"{size}\" version=\"1.1\">");
+    } else if path {
+        let d = mm(pixel_size * 10);
+        out.push_str(f"<svg {ns_decl}width=\"{size}\" height=\"{size}\" version=\"1.1\" viewBox=\"0 0 {d} {d}\" xmlns=\"{SVG_NS}\">");
+    } else {
+        out.push_str(f"<svg {ns_decl}width=\"{size}\" height=\"{size}\" version=\"1.1\" xmlns=\"{SVG_NS}\">");
+    }
+    if fill {
+        out.push_str("<rect fill=\"white\" x=\"0\" y=\"0\" width=\"100%\" height=\"100%\" />");
+    }
+    out.push_str(body);
+    if path {
+        out.push_str(f"<path d=\"{subpaths}\" id=\"qr-path\" fill=\"#000000\" fill-opacity=\"1\" fill-rule=\"nonzero\" stroke=\"none\" />");
+    }
+    out.push_str(if fragment { "</svg:svg>" } else { "</svg>" });
+    out
+}
+
+const SVG_LINES: i64 = 12;
+const SVG_WIDTH: i64 = 160;
+
+fn show_svg(label: ref String, text: ref String) {
+    let bytes = utf8_bytes(text);
+    let mut lines = split_char(text.replace("><", ">\n<"), '\n');
+    println(f"  -- {label}: {bytes.len()} bytes, {lines.len()} lines, crc32 {crc32_bytes(bytes)}");
+    if lines.len() > SVG_LINES {
+        let total = lines.len();
+        let last = lines[total - 1].clone();
+        let mut kept: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < SVG_LINES - 2 {
+            kept.push(lines[i].clone());
+            i += 1;
+        }
+        kept.push(f"... {total - SVG_LINES + 1} lines ...");
+        kept.push(last);
+        lines = kept;
+    }
+    for line in lines.iter() {
+        let cs: Vec[char] = line.chars().collect();
+        if cs.len() > SVG_WIDTH {
+            println(f"   |{slice_chars(cs, 0, SVG_WIDTH)}... ({cs.len()} characters)");
+        } else {
+            println(f"   |{line}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------- jobs
+
+fn opt(opts: ref Vec[(String, String)], key: Str) -> Option[String] {
+    for (k, v) in opts.iter() {
+        if k == key {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn opt_int(opts: ref Vec[(String, String)], key: Str, default: i64) -> i64 {
+    match opt(opts, key) {
+        Some(v) => match i64.parse(v) {
+            Ok(i) => i,
+            Err(_) => default,
+        },
+        None => default,
+    }
+}
+
+fn ec_of(name: ref String) -> i64 {
+    if name == "L" {
+        EC_L
+    } else if name == "Q" {
+        EC_Q
+    } else if name == "H" {
+        EC_H
+    } else {
+        EC_M
+    }
+}
+
+fn build(env: ref Env, data: ref Vec[i64], opts: ref Vec[(String, String)]) -> Result[(QRCode, i64), PyErr] {
+    let ec = match opt(opts, "ec") {
+        Some(e) => ec_of(e),
+        None => EC_M,
+    };
+    let mut qr = new_qr(opt_int(opts, "version", 0), ec, opt_int(opts, "box", 10), opt_int(opts, "border", 4), opt_int(opts, "mask", -1))?;
+    qr.add_data(data, opt_int(opts, "optimize", 20));
+    let fit = match opt(opts, "fit") {
+        Some(f) => f == "1",
+        None => true,
+    };
+    qr.make(env, fit)?;
+    // the mask the penalties chose, when none was given
+    let mut chosen = 0;
+    let mut i = 0;
+    while i < qr.penalties.len() {
+        if i == 0 or qr.penalties[i] < qr.penalties[chosen] {
+            chosen = i;
+        }
+        i += 1;
+    }
+    Ok((qr, chosen))
+}
+
+fn run_job(env: ref Env, name: ref String, payload: ref String, options: ref String) -> Result[(), String] {
+    let path = f"data/payloads/{payload}";
+    let text = match fs.read_to_string(path.clone()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    let data = utf8_bytes(text);
+    println(f"== {name}: {payload}, {data.len()} bytes");
+    let mut opts: Vec[(String, String)] = Vec.new();
+    for w in words(options).iter() {
+        let cs: Vec[char] = w.chars().collect();
+        let mut eq = 0;
+        while eq < cs.len() and cs[eq] != '=' {
+            eq += 1;
+        }
+        opts.push((slice_chars(cs, 0, eq), slice_chars(cs, eq + 1, cs.len())));
+    }
+    let (qr, chosen) = match build(env, data, opts) {
+        Ok(r) => r,
+        Err(e) => {
+            println(f"  ! {e.kind}: {e.msg}");
+            return Ok(());
+        }
+    };
+    let outs = match opt(opts, "out") {
+        Some(o) => split_char(o, '+'),
+        None => Vec.new(),
+    };
+    for out in outs.iter() {
+        if out == "info" {
+            show_info(qr, chosen);
+        } else if out == "ascii" {
+            show_ascii(qr, false, "ascii");
+        } else if out == "ascii-invert" {
+            show_ascii(qr, true, "ascii-invert");
+        } else if out == "matrix" {
+            show_matrix(qr);
+        } else {
+            show_svg(out, make_svg(qr, out));
+        }
+    }
+    Ok(())
+}
+
+fn parent_dir(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut i = cs.len();
+    while i > 0 and cs[i - 1] != '/' {
+        i -= 1;
+    }
+    if i == 0 { String.new() } else { slice_chars(cs, 0, i - 1) }
+}
+
+fn write_data() -> Result[(), String] {
+    for (name, text) in data_files().into_iter() {
+        let path = f"data/{name}";
+        let dir = parent_dir(path);
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let jobs = match fs.read_to_string("data/jobs.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.txt: {e}"),
+    };
+    let env = new_env();
+    for line in split_char(jobs, '\n').iter() {
+        if strip(line).len() == 0 {
+            continue;
+        }
+        let parts = split_char(line, '|');
+        run_job(env, strip(parts[0]), strip(parts[1]), strip(parts[2]))?;
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
+
+// ---------------------------------------------------------------- tables
+
+// base.RS_BLOCK_TABLE: for each version and level (L, M, Q, H), runs of
+// (count, total codewords, data codewords)
+fn rs_block_table() -> Vec[Vec[i64]] {
+    vec![
+        // 1
+        vec![1, 26, 19],
+        vec![1, 26, 16],
+        vec![1, 26, 13],
+        vec![1, 26, 9],
+        // 2
+        vec![1, 44, 34],
+        vec![1, 44, 28],
+        vec![1, 44, 22],
+        vec![1, 44, 16],
+        // 3
+        vec![1, 70, 55],
+        vec![1, 70, 44],
+        vec![2, 35, 17],
+        vec![2, 35, 13],
+        // 4
+        vec![1, 100, 80],
+        vec![2, 50, 32],
+        vec![2, 50, 24],
+        vec![4, 25, 9],
+        // 5
+        vec![1, 134, 108],
+        vec![2, 67, 43],
+        vec![2, 33, 15, 2, 34, 16],
+        vec![2, 33, 11, 2, 34, 12],
+        // 6
+        vec![2, 86, 68],
+        vec![4, 43, 27],
+        vec![4, 43, 19],
+        vec![4, 43, 15],
+        // 7
+        vec![2, 98, 78],
+        vec![4, 49, 31],
+        vec![2, 32, 14, 4, 33, 15],
+        vec![4, 39, 13, 1, 40, 14],
+        // 8
+        vec![2, 121, 97],
+        vec![2, 60, 38, 2, 61, 39],
+        vec![4, 40, 18, 2, 41, 19],
+        vec![4, 40, 14, 2, 41, 15],
+        // 9
+        vec![2, 146, 116],
+        vec![3, 58, 36, 2, 59, 37],
+        vec![4, 36, 16, 4, 37, 17],
+        vec![4, 36, 12, 4, 37, 13],
+        // 10
+        vec![2, 86, 68, 2, 87, 69],
+        vec![4, 69, 43, 1, 70, 44],
+        vec![6, 43, 19, 2, 44, 20],
+        vec![6, 43, 15, 2, 44, 16],
+        // 11
+        vec![4, 101, 81],
+        vec![1, 80, 50, 4, 81, 51],
+        vec![4, 50, 22, 4, 51, 23],
+        vec![3, 36, 12, 8, 37, 13],
+        // 12
+        vec![2, 116, 92, 2, 117, 93],
+        vec![6, 58, 36, 2, 59, 37],
+        vec![4, 46, 20, 6, 47, 21],
+        vec![7, 42, 14, 4, 43, 15],
+        // 13
+        vec![4, 133, 107],
+        vec![8, 59, 37, 1, 60, 38],
+        vec![8, 44, 20, 4, 45, 21],
+        vec![12, 33, 11, 4, 34, 12],
+        // 14
+        vec![3, 145, 115, 1, 146, 116],
+        vec![4, 64, 40, 5, 65, 41],
+        vec![11, 36, 16, 5, 37, 17],
+        vec![11, 36, 12, 5, 37, 13],
+        // 15
+        vec![5, 109, 87, 1, 110, 88],
+        vec![5, 65, 41, 5, 66, 42],
+        vec![5, 54, 24, 7, 55, 25],
+        vec![11, 36, 12, 7, 37, 13],
+        // 16
+        vec![5, 122, 98, 1, 123, 99],
+        vec![7, 73, 45, 3, 74, 46],
+        vec![15, 43, 19, 2, 44, 20],
+        vec![3, 45, 15, 13, 46, 16],
+        // 17
+        vec![1, 135, 107, 5, 136, 108],
+        vec![10, 74, 46, 1, 75, 47],
+        vec![1, 50, 22, 15, 51, 23],
+        vec![2, 42, 14, 17, 43, 15],
+        // 18
+        vec![5, 150, 120, 1, 151, 121],
+        vec![9, 69, 43, 4, 70, 44],
+        vec![17, 50, 22, 1, 51, 23],
+        vec![2, 42, 14, 19, 43, 15],
+        // 19
+        vec![3, 141, 113, 4, 142, 114],
+        vec![3, 70, 44, 11, 71, 45],
+        vec![17, 47, 21, 4, 48, 22],
+        vec![9, 39, 13, 16, 40, 14],
+        // 20
+        vec![3, 135, 107, 5, 136, 108],
+        vec![3, 67, 41, 13, 68, 42],
+        vec![15, 54, 24, 5, 55, 25],
+        vec![15, 43, 15, 10, 44, 16],
+        // 21
+        vec![4, 144, 116, 4, 145, 117],
+        vec![17, 68, 42],
+        vec![17, 50, 22, 6, 51, 23],
+        vec![19, 46, 16, 6, 47, 17],
+        // 22
+        vec![2, 139, 111, 7, 140, 112],
+        vec![17, 74, 46],
+        vec![7, 54, 24, 16, 55, 25],
+        vec![34, 37, 13],
+        // 23
+        vec![4, 151, 121, 5, 152, 122],
+        vec![4, 75, 47, 14, 76, 48],
+        vec![11, 54, 24, 14, 55, 25],
+        vec![16, 45, 15, 14, 46, 16],
+        // 24
+        vec![6, 147, 117, 4, 148, 118],
+        vec![6, 73, 45, 14, 74, 46],
+        vec![11, 54, 24, 16, 55, 25],
+        vec![30, 46, 16, 2, 47, 17],
+        // 25
+        vec![8, 132, 106, 4, 133, 107],
+        vec![8, 75, 47, 13, 76, 48],
+        vec![7, 54, 24, 22, 55, 25],
+        vec![22, 45, 15, 13, 46, 16],
+        // 26
+        vec![10, 142, 114, 2, 143, 115],
+        vec![19, 74, 46, 4, 75, 47],
+        vec![28, 50, 22, 6, 51, 23],
+        vec![33, 46, 16, 4, 47, 17],
+        // 27
+        vec![8, 152, 122, 4, 153, 123],
+        vec![22, 73, 45, 3, 74, 46],
+        vec![8, 53, 23, 26, 54, 24],
+        vec![12, 45, 15, 28, 46, 16],
+        // 28
+        vec![3, 147, 117, 10, 148, 118],
+        vec![3, 73, 45, 23, 74, 46],
+        vec![4, 54, 24, 31, 55, 25],
+        vec![11, 45, 15, 31, 46, 16],
+        // 29
+        vec![7, 146, 116, 7, 147, 117],
+        vec![21, 73, 45, 7, 74, 46],
+        vec![1, 53, 23, 37, 54, 24],
+        vec![19, 45, 15, 26, 46, 16],
+        // 30
+        vec![5, 145, 115, 10, 146, 116],
+        vec![19, 75, 47, 10, 76, 48],
+        vec![15, 54, 24, 25, 55, 25],
+        vec![23, 45, 15, 25, 46, 16],
+        // 31
+        vec![13, 145, 115, 3, 146, 116],
+        vec![2, 74, 46, 29, 75, 47],
+        vec![42, 54, 24, 1, 55, 25],
+        vec![23, 45, 15, 28, 46, 16],
+        // 32
+        vec![17, 145, 115],
+        vec![10, 74, 46, 23, 75, 47],
+        vec![10, 54, 24, 35, 55, 25],
+        vec![19, 45, 15, 35, 46, 16],
+        // 33
+        vec![17, 145, 115, 1, 146, 116],
+        vec![14, 74, 46, 21, 75, 47],
+        vec![29, 54, 24, 19, 55, 25],
+        vec![11, 45, 15, 46, 46, 16],
+        // 34
+        vec![13, 145, 115, 6, 146, 116],
+        vec![14, 74, 46, 23, 75, 47],
+        vec![44, 54, 24, 7, 55, 25],
+        vec![59, 46, 16, 1, 47, 17],
+        // 35
+        vec![12, 151, 121, 7, 152, 122],
+        vec![12, 75, 47, 26, 76, 48],
+        vec![39, 54, 24, 14, 55, 25],
+        vec![22, 45, 15, 41, 46, 16],
+        // 36
+        vec![6, 151, 121, 14, 152, 122],
+        vec![6, 75, 47, 34, 76, 48],
+        vec![46, 54, 24, 10, 55, 25],
+        vec![2, 45, 15, 64, 46, 16],
+        // 37
+        vec![17, 152, 122, 4, 153, 123],
+        vec![29, 74, 46, 14, 75, 47],
+        vec![49, 54, 24, 10, 55, 25],
+        vec![24, 45, 15, 46, 46, 16],
+        // 38
+        vec![4, 152, 122, 18, 153, 123],
+        vec![13, 74, 46, 32, 75, 47],
+        vec![48, 54, 24, 14, 55, 25],
+        vec![42, 45, 15, 32, 46, 16],
+        // 39
+        vec![20, 147, 117, 4, 148, 118],
+        vec![40, 75, 47, 7, 76, 48],
+        vec![43, 54, 24, 22, 55, 25],
+        vec![10, 45, 15, 67, 46, 16],
+        // 40
+        vec![19, 148, 118, 6, 149, 119],
+        vec![18, 75, 47, 31, 76, 48],
+        vec![34, 54, 24, 34, 55, 25],
+        vec![20, 45, 15, 61, 46, 16],
+    ]
+}
+
+// util.PATTERN_POSITION_TABLE: the centres of the alignment patterns
+fn pattern_position_table() -> Vec[Vec[i64]] {
+    vec![
+        Vec.new(),
+        vec![6, 18],
+        vec![6, 22],
+        vec![6, 26],
+        vec![6, 30],
+        vec![6, 34],
+        vec![6, 22, 38],
+        vec![6, 24, 42],
+        vec![6, 26, 46],
+        vec![6, 28, 50],
+        vec![6, 30, 54],
+        vec![6, 32, 58],
+        vec![6, 34, 62],
+        vec![6, 26, 46, 66],
+        vec![6, 26, 48, 70],
+        vec![6, 26, 50, 74],
+        vec![6, 30, 54, 78],
+        vec![6, 30, 56, 82],
+        vec![6, 30, 58, 86],
+        vec![6, 34, 62, 90],
+        vec![6, 28, 50, 72, 94],
+        vec![6, 26, 50, 74, 98],
+        vec![6, 30, 54, 78, 102],
+        vec![6, 28, 54, 80, 106],
+        vec![6, 32, 58, 84, 110],
+        vec![6, 30, 58, 86, 114],
+        vec![6, 34, 62, 90, 118],
+        vec![6, 26, 50, 74, 98, 122],
+        vec![6, 30, 54, 78, 102, 126],
+        vec![6, 26, 52, 78, 104, 130],
+        vec![6, 30, 56, 82, 108, 134],
+        vec![6, 34, 60, 86, 112, 138],
+        vec![6, 30, 58, 86, 114, 142],
+        vec![6, 34, 62, 90, 118, 146],
+        vec![6, 30, 54, 78, 102, 126, 150],
+        vec![6, 24, 50, 76, 102, 128, 154],
+        vec![6, 28, 54, 80, 106, 132, 158],
+        vec![6, 32, 58, 84, 110, 136, 162],
+        vec![6, 26, 54, 82, 110, 138, 166],
+        vec![6, 30, 58, 86, 114, 142, 170],
+    ]
+}
+// ---------------------------------------------------------------- data
+// Generated by gen_kara.py.
+
+fn file_0_0(out: mut ref String) {
+    out.push_str("url default        | url.txt          | out=info+ascii\u{a}url high           | url.txt          | ec=H out=info+svg-path\u{a}wifi               | wifi.txt         | ec=Q out=info+ascii-invert\u{a}vcard              | vcard.vcf        | out=info+matrix\u{a}phone              | phone.txt        | ec=L border=1 out=info+ascii+svg\u{a}phone no border    | phone.txt        | ec=L border=0 out=info+ascii+ascii-invert\u{a}digi");
+    out.push_str("ts             | digits.txt       | out=info\u{a}digits optimize 0  | digits.txt       | optimize=0 out=info\u{a}alnum              | alnum.txt        | ec=Q out=info+svg-fragment\u{a}mixed              | mixed.txt        | out=info+svg-path-circle\u{a}mixed optimize 4   | mixed.txt        | optimize=4 out=info\u{a}mixed optimize 0   | mixed.txt        | optimize=0 out=info\u{a}utf8               | utf8.txt         | ec=");
+    out.push_str("H out=info+ascii\u{a}boarding pass      | boarding.txt     | ec=L out=info+svg-circle\u{a}short digits       | short-digits.txt | out=info+ascii\u{a}empty              | empty.txt        | out=info+ascii\u{a}mask 3             | url.txt          | mask=3 out=info+ascii\u{a}version 6          | wifi.txt         | version=6 out=info\u{a}version 2 no fit   | wifi.txt         | version=2 fit=0 out=info\u{a}version 41         | w");
+    out.push_str("ifi.txt         | version=41 out=info\u{a}mask 9             | wifi.txt         | mask=9 out=info\u{a}box 4              | alnum.txt        | box=4 border=2 out=svg-path-fill\u{a}box 25             | phone.txt        | box=25 out=svg-fill\u{a}paragraph          | paragraph.txt    | out=info+matrix\u{a}long               | long.txt         | ec=L out=info\u{a}long high          | long.txt         | ec=H out=info\u{a}bytes    ");
+    out.push_str("          | bytes.bin        | ec=Q out=info+svg-path\u{a}");
+}
+
+fn file_0() -> String {
+    let mut out = String.new();
+    file_0_0(mut out);
+    out
+}
+
+fn file_1_0(out: mut ref String) {
+    out.push_str("HTTPS://EXAMPLE.ORG/TRACK/1Z999AA10123456784");
+}
+
+fn file_1() -> String {
+    let mut out = String.new();
+    file_1_0(mut out);
+    out
+}
+
+fn file_2_0(out: mut ref String) {
+    out.push_str("M1LOVELACE/ADA        EABC123 LHRJFKBA 0175 123Y012A0001 147>1181W 4123BBA 0000000000000");
+}
+
+fn file_2() -> String {
+    let mut out = String.new();
+    file_2_0(mut out);
+    out
+}
+
+fn file_3_0(out: mut ref String) {
+    out.push_str("\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{9}\u{a}\u{b}\u{c}\u{d}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f} !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}\u{a0}¡¢£¤¥¦§¨©ª«¬\u{ad}®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ");
+}
+
+fn file_3() -> String {
+    let mut out = String.new();
+    file_3_0(mut out);
+    out
+}
+
+fn file_4_0(out: mut ref String) {
+    out.push_str("3074185296307418529630741852963074185296307418529630741852963074185296307418529630741852963074185296307418529630741852963074185296307418529630741852963074185296");
+}
+
+fn file_4() -> String {
+    let mut out = String.new();
+    file_4_0(mut out);
+    out
+}
+
+fn file_5_0(out: mut ref String) {
+    out.push_str("");
+}
+
+fn file_5() -> String {
+    let mut out = String.new();
+    file_5_0(mut out);
+    out
+}
+
+fn file_6_0(out: mut ref String) {
+    out.push_str("Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event details, a short note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event");
+    out.push_str(" details, a short note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event details, a short note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragra");
+    out.push_str("ph stands in for the kind of text people put in QR codes on posters: event details, a short note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event details, a short note, a menu, a link with a long tracking query string. Kara is a syste");
+    out.push_str("ms language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event details, a short note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event details, a sho");
+    out.push_str("rt note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR c");
+}
+
+fn file_6() -> String {
+    let mut out = String.new();
+    file_6_0(mut out);
+    out
+}
+
+fn file_7_0(out: mut ref String) {
+    out.push_str("Order #A-1007: 000123456789012345678901 SHIPPED VIA DHL EXPRESS TO BERLIN 10115, ETA 3 days");
+}
+
+fn file_7() -> String {
+    let mut out = String.new();
+    file_7_0(mut out);
+    out
+}
+
+fn file_8_0(out: mut ref String) {
+    out.push_str("Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event details, a short note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event");
+    out.push_str(" details, a short note, a menu, a link with a long tracking query string. Kara is a systems language with effects, ownership and parallelism built in. This paragraph stands in for the kind of text people put in QR codes on posters: event details, a short note, a menu, a link with a long tracking query string. ");
+}
+
+fn file_8() -> String {
+    let mut out = String.new();
+    file_8_0(mut out);
+    out
+}
+
+fn file_9_0(out: mut ref String) {
+    out.push_str("4915112345678");
+}
+
+fn file_9() -> String {
+    let mut out = String.new();
+    file_9_0(mut out);
+    out
+}
+
+fn file_10_0(out: mut ref String) {
+    out.push_str("123\u{a}");
+}
+
+fn file_10() -> String {
+    let mut out = String.new();
+    file_10_0(mut out);
+    out
+}
+
+fn file_11_0(out: mut ref String) {
+    out.push_str("https://www.example.org/products/ultra-widget?ref=qr&utm_source=print&utm_campaign=2024");
+}
+
+fn file_11() -> String {
+    let mut out = String.new();
+    file_11_0(mut out);
+    out
+}
+
+fn file_12_0(out: mut ref String) {
+    out.push_str("Grüße aus Köln — 東京 🚀 naïve café");
+}
+
+fn file_12() -> String {
+    let mut out = String.new();
+    file_12_0(mut out);
+    out
+}
+
+fn file_13_0(out: mut ref String) {
+    out.push_str("BEGIN:VCARD\u{d}\u{a}VERSION:3.0\u{d}\u{a}N:Lovelace;Ada;;;\u{d}\u{a}FN:Ada Lovelace\u{d}\u{a}ORG:Analytical Engines Ltd\u{d}\u{a}TEL;TYPE=WORK,VOICE:+44 20 7946 0958\u{d}\u{a}EMAIL:ada@engines.example\u{d}\u{a}URL:https://engines.example/ada\u{d}\u{a}END:VCARD\u{d}\u{a}");
+}
+
+fn file_13() -> String {
+    let mut out = String.new();
+    file_13_0(mut out);
+    out
+}
+
+fn file_14_0(out: mut ref String) {
+    out.push_str("WIFI:T:WPA;S:Cafe Gamma 5G;P:correct horse battery staple;H:false;;");
+}
+
+fn file_14() -> String {
+    let mut out = String.new();
+    file_14_0(mut out);
+    out
+}
+
+// (path under data/, contents)
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("jobs.txt".to_string(), file_0()));
+    v.push(("payloads/alnum.txt".to_string(), file_1()));
+    v.push(("payloads/boarding.txt".to_string(), file_2()));
+    v.push(("payloads/bytes.bin".to_string(), file_3()));
+    v.push(("payloads/digits.txt".to_string(), file_4()));
+    v.push(("payloads/empty.txt".to_string(), file_5()));
+    v.push(("payloads/long.txt".to_string(), file_6()));
+    v.push(("payloads/mixed.txt".to_string(), file_7()));
+    v.push(("payloads/paragraph.txt".to_string(), file_8()));
+    v.push(("payloads/phone.txt".to_string(), file_9()));
+    v.push(("payloads/short-digits.txt".to_string(), file_10()));
+    v.push(("payloads/url.txt".to_string(), file_11()));
+    v.push(("payloads/utf8.txt".to_string(), file_12()));
+    v.push(("payloads/vcard.vcf".to_string(), file_13()));
+    v.push(("payloads/wifi.txt".to_string(), file_14()));
+    v
+}
