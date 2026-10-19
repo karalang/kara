@@ -333,6 +333,27 @@ impl<'a> super::TypeChecker<'a> {
                 // the enclosing trait being defined, not just bounds.
                 return self.dispatch_typeparam_receiver_method(name, method, args, span);
             }
+            // B-2026-10-19-8 — a value of a projection a where clause bounds
+            // (`x: I.Item` under `where I.Item: Clone`) takes that bound's
+            // methods, as a type parameter takes its own. It fell to the
+            // silent `Type::Error` below, so `x.clone()` checked as anything.
+            Type::AssocProjection {
+                param,
+                assoc,
+                args: pargs,
+                receiver_args,
+            } if pargs.is_empty()
+                && receiver_args.is_empty()
+                && self
+                    .enclosing_proj_bounds
+                    .contains_key(&(param.clone(), assoc.clone())) =>
+            {
+                let bounds = self.enclosing_proj_bounds[&(param.clone(), assoc.clone())].clone();
+                let name = format!("{param}.{assoc}");
+                let self_ty = receiver_for_lookup.clone();
+                return self
+                    .dispatch_bounded_receiver_method(&name, self_ty, bounds, method, args, span);
+            }
             Type::Existential { .. } => {
                 // `impl Trait` slice 6 — TAIT and return-position
                 // existentials dispatch through the declared trait

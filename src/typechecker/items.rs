@@ -2098,6 +2098,9 @@ impl<'a> super::TypeChecker<'a> {
         let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
         self.enclosing_assoc_eqs
             .extend(Self::collect_assoc_eqs(&f.where_clause));
+        let saved_proj_bounds = self.enclosing_proj_bounds.clone();
+        self.enclosing_proj_bounds
+            .extend(Self::collect_proj_bounds(&f.where_clause));
 
         // Collect the DIM params used in shape positions in the signature (and
         // any `const` / `...S` params) so body-level annotations can resolve
@@ -2399,6 +2402,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_self_type = None;
         self.enclosing_bounds = saved_bounds;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
+        self.enclosing_proj_bounds = saved_proj_bounds;
         self.current_body_dim_scope = saved_body_dim_scope;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
         self.current_generic_frame = saved_generic_frame;
@@ -4026,6 +4030,9 @@ impl<'a> super::TypeChecker<'a> {
         let saved_assoc_eqs = self.enclosing_assoc_eqs.clone();
         self.enclosing_assoc_eqs
             .extend(Self::collect_assoc_eqs(&imp.where_clause));
+        let saved_proj_bounds = self.enclosing_proj_bounds.clone();
+        self.enclosing_proj_bounds
+            .extend(Self::collect_proj_bounds(&imp.where_clause));
 
         // Lint-level slice 4b — push the impl block's lint overrides
         // so per-method `check_function` calls inherit the impl's
@@ -4231,6 +4238,7 @@ impl<'a> super::TypeChecker<'a> {
 
         self.enclosing_bounds = saved_bounds;
         self.enclosing_assoc_eqs = saved_assoc_eqs;
+        self.enclosing_proj_bounds = saved_proj_bounds;
         self.current_impl_target = saved_impl_target;
         self.current_concrete_impl_target = saved_concrete_impl_target;
         self.lint_override_stack.pop();

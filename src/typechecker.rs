@@ -3117,6 +3117,11 @@ pub struct TypeChecker<'a> {
     /// `enclosing_bounds`, and read to normalize `I.Item` in a method's
     /// signature when the receiver is that parameter.
     pub(super) enclosing_assoc_eqs: FxHashMap<(String, String), crate::ast::TypeExpr>,
+    /// The projection bounds in scope, `(param, assoc) -> bounds`: the
+    /// `Clone` of `where I.Item: Clone`, read to dispatch a method on a
+    /// value of that projection (B-2026-10-19-8). Saved and restored with
+    /// `enclosing_bounds`.
+    pub(super) enclosing_proj_bounds: FxHashMap<(String, String), Vec<crate::ast::TraitBound>>,
     /// Generic-parameter names that are DIM/const params (appear in a shape
     /// position `[D]` in the current function's signature, or are declared
     /// `const` / `...S`) — the subset whose body-annotation resolution needs
@@ -3483,6 +3488,7 @@ impl<'a> TypeChecker<'a> {
             freshened_scrutinee_vars: std::collections::HashSet::new(),
             enclosing_bounds: FxHashMap::default(),
             enclosing_assoc_eqs: FxHashMap::default(),
+            enclosing_proj_bounds: FxHashMap::default(),
             current_body_dim_scope: Vec::new(),
             enclosing_trait: None,
             closure_once_reasons: FxHashMap::default(),

@@ -590,6 +590,18 @@ impl<'a> super::TypeChecker<'a> {
             // is the whole point of the bound. Discharged against the declared
             // bounds only — an unbounded `T` still gets the `no method` error.
             Type::TypeParam(p) => self.type_param_has_clone_bound(p).then(|| ty.clone()),
+            // A projection a where clause bounds (`x: I.Item` under
+            // `where I.Item: Clone`) likewise (B-2026-10-19-8).
+            Type::AssocProjection {
+                param,
+                assoc,
+                args,
+                receiver_args,
+            } if args.is_empty() && receiver_args.is_empty() => self
+                .enclosing_proj_bounds
+                .get(&(param.clone(), assoc.clone()))
+                .is_some_and(|bounds| self.bounds_include_clone(bounds))
+                .then(|| ty.clone()),
             _ => None,
         }
     }
@@ -688,16 +700,21 @@ impl<'a> super::TypeChecker<'a> {
     /// { x.clone() }` resolves while an unbounded `[T]` still reports
     /// `no method 'clone'`.
     pub(super) fn type_param_has_clone_bound(&self, p: &str) -> bool {
-        self.enclosing_bounds.get(p).is_some_and(|bounds| {
-            bounds.iter().any(|tb| {
-                let trait_name = tb.path.last().cloned().unwrap_or_default();
-                trait_name == "Clone"
-                    || self
-                        .env
-                        .supertrait_closure_traits(&trait_name)
-                        .iter()
-                        .any(|st| st == "Clone")
-            })
+        self.enclosing_bounds
+            .get(p)
+            .is_some_and(|bounds| self.bounds_include_clone(bounds))
+    }
+
+    /// Whether `bounds` name `Clone` or a trait with it as a supertrait.
+    fn bounds_include_clone(&self, bounds: &[crate::ast::TraitBound]) -> bool {
+        bounds.iter().any(|tb| {
+            let trait_name = tb.path.last().cloned().unwrap_or_default();
+            trait_name == "Clone"
+                || self
+                    .env
+                    .supertrait_closure_traits(&trait_name)
+                    .iter()
+                    .any(|st| st == "Clone")
         })
     }
 

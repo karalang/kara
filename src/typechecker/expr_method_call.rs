@@ -552,6 +552,23 @@ impl<'a> super::TypeChecker<'a> {
             Some(b) => b.clone(),
             None => Vec::new(),
         };
+        let self_ty = Type::TypeParam(type_param_name.to_string());
+        self.dispatch_bounded_receiver_method(type_param_name, self_ty, bounds, method, args, span)
+    }
+
+    /// A method on a receiver of type `self_ty`, `type_param_name` in
+    /// messages, through its `bounds`: a type parameter's, or a projection's
+    /// (`x.clone()` with `x: I.Item` under `where I.Item: Clone`,
+    /// B-2026-10-19-8).
+    pub(super) fn dispatch_bounded_receiver_method(
+        &mut self,
+        type_param_name: &str,
+        self_ty: Type,
+        bounds: Vec<crate::ast::TraitBound>,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
         let mut candidates: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
             .iter()
             .filter_map(|b| {
@@ -622,13 +639,8 @@ impl<'a> super::TypeChecker<'a> {
                 // — without this, `c.sum()` under `C: Reduce[i64]` typed
                 // as the raw TypeParam `T` (S6a, expected-i64-found-T).
                 let trait_subs = self.trait_bound_arg_subs(&bound);
-                let ret = self.dispatch_trait_assoc_fn(
-                    type_param_name,
-                    &trait_method,
-                    &trait_subs,
-                    args,
-                    span,
-                );
+                let ret =
+                    self.dispatch_trait_method_as(self_ty, &trait_method, &trait_subs, args, span);
                 // `I.Item` in the result names the type a `where I.Item = T`
                 // (or an `I: Iterator[Item = T]` bound) fixes, so `next()`
                 // under that bound is an `Option[T]`, not an abstract
@@ -1037,11 +1049,22 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        let self_ty = Type::TypeParam(target.to_string());
+        self.dispatch_trait_method_as(self_ty, method, trait_subs, args, span)
+    }
+
+    /// [`Self::dispatch_trait_assoc_fn`] with `Self` standing for `self_ty`
+    /// (a projection `I.Item` under `where I.Item: Clone`, B-2026-10-19-8).
+    pub(super) fn dispatch_trait_method_as(
+        &mut self,
+        self_ty: Type,
+        method: &crate::ast::TraitMethod,
+        trait_subs: &[(String, Type)],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
         let mut subs: HashMap<String, SubstValue> = HashMap::new();
-        subs.insert(
-            "Self".to_string(),
-            SubstValue::Type(Type::TypeParam(target.to_string())),
-        );
+        subs.insert("Self".to_string(), SubstValue::Type(self_ty));
         for (name, ty) in trait_subs {
             subs.insert(name.clone(), SubstValue::Type(ty.clone()));
         }

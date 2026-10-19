@@ -1315,6 +1315,33 @@ impl<'a> super::TypeChecker<'a> {
         map
     }
 
+    /// The `where P.Assoc: Trait` bounds of a where clause, keyed by
+    /// `(P, Assoc)`; see `enclosing_proj_bounds`.
+    pub(super) fn collect_proj_bounds(
+        where_clause: &Option<WhereClause>,
+    ) -> Vec<((String, String), Vec<crate::ast::TraitBound>)> {
+        let Some(wc) = where_clause else {
+            return Vec::new();
+        };
+        wc.constraints
+            .iter()
+            .filter_map(|c| match c {
+                WhereConstraint::ProjectionBound {
+                    projection, bounds, ..
+                } => match &projection.kind {
+                    TypeKind::Path(p) if p.segments.len() == 2 && p.generic_args.is_none() => {
+                        Some((
+                            (p.segments[0].clone(), p.segments[1].clone()),
+                            bounds.clone(),
+                        ))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The `where P.Assoc = T` equalities of a where clause, keyed by
     /// `(P, Assoc)`; see `enclosing_assoc_eqs`.
     pub(super) fn collect_assoc_eqs(

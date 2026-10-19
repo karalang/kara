@@ -5041,3 +5041,140 @@ fn mir_string_truncate_inside_a_char_panics() {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
     assert_eq!(first(&run.stderr), want, "compiled");
 }
+
+#[test]
+fn mir_a_projection_bound_by_a_where_clause_takes_its_methods() {
+    // B-2026-10-19-8: `x.clone()` on `x: I.Item` under `where I.Item: Clone`
+    // checked as an error type, so a `Pairwise` adapter, which keeps a copy
+    // of each item, stopped on MIR with "a type that failed to check". A
+    // projection a where clause bounds now takes that bound's methods, in a
+    // generic function and in a generic impl, nested and under `for`.
+    let src = r#"
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Pairwise[I: Iterator] {
+    it: I,
+    prev: Option[I.Item],
+}
+
+fn pairwise[I: Iterator](it: own I) -> Pairwise[I] {
+    Pairwise { it: it, prev: None }
+}
+
+impl[I: Iterator] Iterator for Pairwise[I] where I.Item: Clone {
+    type Item = (I.Item, I.Item);
+    fn next(mut ref self) -> Option[(I.Item, I.Item)] {
+        if self.prev.is_none() {
+            self.prev = self.it.next();
+        }
+        match self.it.next() {
+            Some(x) => {
+                let p = self.prev.take().unwrap();
+                self.prev = Some(x.clone());
+                Some((p, x))
+            }
+            None => None,
+        }
+    }
+}
+
+enum Slot[I: Iterator] {
+    Empty,
+    Held(I.Item),
+}
+
+fn first_slot[I: Iterator](it: own I) -> Slot[I] {
+    let mut it = it;
+    match it.next() {
+        Some(x) => Slot.Held(x),
+        None => Slot.Empty,
+    }
+}
+
+fn main() {
+    let words: Vec[String] = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let mut pw = pairwise(VecIter { items: words, pos: 0 });
+    while let Some((a, b)) = pw.next() {
+        println(f"{a}{b}");
+    }
+    let nums: Vec[i64] = vec![1, 2, 3, 4];
+    let mut nested = pairwise(pairwise(VecIter { items: nums, pos: 0 }));
+    while let Some(((a, b), (c, d))) = nested.next() {
+        println(f"{a}{b}-{c}{d}");
+    }
+    let s = first_slot(VecIter { items: vec!["z".to_string()], pos: 0 });
+    match s {
+        Slot.Held(x) => println(f"held {x}"),
+        Slot.Empty => println("empty"),
+    }
+    for (a, b) in pairwise(VecIter { items: vec![7, 8, 9], pos: 0 }) {
+        println(f"{a}+{b}={a + b}");
+    }
+}
+"#;
+    let want = "ab\nbc\n12-23\n23-34\nheld z\n7+8=15\n8+9=17\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    // A user trait's method through the same kind of bound.
+    let src = r#"
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+trait Shout {
+    fn shout(self) -> String;
+}
+impl Shout for String {
+    fn shout(self) -> String { self.to_uppercase() }
+}
+fn loudest[I: Iterator](it: own I) -> String where I.Item: Shout {
+    let mut it = it;
+    let mut out = "".to_string();
+    while let Some(x) = it.next() {
+        out = out + x.shout();
+    }
+    out
+}
+fn main() {
+    println(loudest(VecIter { items: vec!["a".to_string(), "b".to_string()], pos: 0 }));
+}
+"#;
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, "AB\n");
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, "AB\n", "at -O{opt}");
+        }
+    }
+}
