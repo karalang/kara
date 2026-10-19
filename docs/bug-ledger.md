@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 740 |
+| miscompile | 741 |
 | run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 282 |
-| codegen-gap | 275 |
+| codegen-gap | 276 |
 | false-positive | 241 |
 | perf | 178 |
 | other | 175 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2951 |
-| interp | 968 |
+| codegen | 2952 |
+| interp | 970 |
 | typecheck | 492 |
 | ownership | 116 |
 | other | 115 |
@@ -163,11 +163,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-16 | 2026-10-19 | typecheck | low | Plain `=` to a `mut ref i64` binding writes through on every surface, where design.md says it does not: `fn inc(counter: mut ref i64) { counter = counter + 1; }` passes `karac check` and leaves the caller's value at 1 on `__mir-run` and `__mir-llvm-run`, against design.md "Plain `=` does not auto-deref: write `*x = v`" | — |
 | B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
 | B-2026-10-19-21 | 2026-10-19 | typecheck+cli | low | `karac check` typechecks the Kāra library's bodies a second time for its MIR borrow check (9ee80c0104), so a small program's check takes about 1.1 s instead of 0.2 s in a debug build; lowering the program's own bodies against the library's signatures, or reusing check's typecheck, would avoid it | — |
-| B-2026-10-19-22 | 2026-10-19 | interp | medium | MIR interpreter orders u128 values as signed in sort, sort_by_key, tuple sort and SortedSet, so values with the top bit set come first; `<` and `>` are right | — |
 | B-2026-10-19-23 | 2026-10-19 | codegen+interp | high | A `Mutex` does not exclude across a suspension: four tasks each running `lock m x { let v = x; sleep(Duration.ms(2)); x = v + 1; }` leave `m` at 1, not 4, on `__mir-run` and `__mir-llvm-run`; `lock` takes no lock at all (MIR lowers it to `Mutex.get_mut`, which only hands back the cell's address), and exclusion holds today only because tasks run one at a time and switch only at a suspension | — |
 | B-2026-10-19-24 | 2026-10-19 | typecheck+interp | low | An `own` parameter, or a local made by an `if`/`match`, stored by value into a local bound to a borrow (`let mut out = s; out = t;`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR) | — |
 | B-2026-10-19-25 | 2026-10-19 | typecheck+interp | medium | On MIR, a bare `collect()` as the tail of one branch of an un-annotated `let x = if .. { .. } else { .. }` does not lower (`UnsolvedParam("C")`) when the target type comes only from the OTHER branch; `karac check` passes | — |
 | B-2026-10-19-26 | 2026-10-19 | runtime+codegen | medium | On the MIR compiled backend, `String.contains` goes to Rust `str::contains` (two-way search), which makes kata 796's bench 4.6x the legacy build (2.03 s vs 0.44 s, medians of five interleaved runs; first filed as 5.7x from spot runs); legacy's naive memcmp scan and C `strstr` (0.20 s) are far faster on short needles | — |
+| B-2026-10-19-27 | 2026-10-19 | interp+codegen | medium | At 128 bits, 12 integer methods are refused by the MIR compiled backend with "native `u128.<m>` is not lowered yet" (the same for i128): clamp, leading_zeros, trailing_zeros, count_ones, count_zeros, to_ne_bytes, pow, to_f64, swap_bytes, reverse_bits, is_power_of_two and next_power_of_two. The MIR interpreter also refuses swap_bytes, reverse_bits and next_power_of_two with "call of unknown function" | — |
+| B-2026-10-19-28 | 2026-10-19 | interp | medium | The MIR interpreter's `x.pow(n)` at 128 bits prints i128::MAX when the result overflows, where it should panic with "integer overflow": `(1u128 << 100).pow(2)` and `(1i128 << 100).pow(2)` both print 170141183460469231731687303715884105727. `x * x` at the same values panics, and `pow` at 64 bits panics | — |
 
 ### Relocated
 
@@ -4207,6 +4208,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-14 | typecheck | low | A closure over a NAMED value iterator still takes `*c` on a Copy item: `let it = w.chars(); it.filter(\|c\| *c == 'Q')` checks and prints 2, though cor… | 3c988e5931 |
 | B-2026-10-19-18 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program… | 9ee80c0104 |
 | B-2026-10-19-19 | typecheck | low | "a reference to a temporary outlives its statement" has no `karac fix` edit for `let n = s.substring(..).trim();` or `m.get(k).unwrap_or(Vec.new())`,… | 5d124b94d3 |
+| B-2026-10-19-22 | interp | medium | MIR interpreter orders u128 values as signed in sort, sort_by_key, tuple sort and SortedSet, so values with the top bit set come first; `<` and `>` a… | f0ec11cf9d |
 
 </details>
 
