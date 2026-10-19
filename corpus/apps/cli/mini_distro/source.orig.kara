@@ -3133,11 +3133,10 @@ fn info_repr(v: own Result[Info, String]) -> Result[String, String] {
 
 fn mmb(d: mut ref Dist, re: ref Res) -> Result[String, String] {
     // major_version(), minor_version(), build_number(): each takes its
-    // part of a fresh version_parts(). The parentheses are B-2026-10-19-30: `x?.0`
-    // does not parse.
-    let major = (d.version_parts(re, false)?).0;
-    let minor = (d.version_parts(re, false)?).1;
-    let build = (d.version_parts(re, false)?).2;
+    // part of a fresh version_parts().
+    let major = d.version_parts(re, false)?.0;
+    let minor = d.version_parts(re, false)?.1;
+    let build = d.version_parts(re, false)?.2;
     Ok(tuple3(major, minor, build))
 }
 
