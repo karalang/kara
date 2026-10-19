@@ -53,12 +53,7 @@ impl<'ctx> Cx<'ctx, '_> {
             .builder
             .build_int_compare(IntPredicate::UGE, len, cap, "full")
             .map_err(e)?;
-        self.if_then(full, |cx| {
-            cx.rt(
-                "vec_reserve",
-                &[v.into(), cx.i64(1).into(), cx.i64(size).into()],
-            )
-        })?;
+        self.if_then(full, |cx| cx.grow_by_one(v, len, cap, size))?;
         let buf = self.load_ptr(v)?;
         let at = self.elem_ptr(buf, len, size)?;
         self.copy(at, x, et)?;
@@ -67,6 +62,30 @@ impl<'ctx> Cx<'ctx, '_> {
             .build_int_add(len, self.i64(1), "")
             .map_err(e)?;
         self.store(lenp, len.into())
+    }
+
+    /// Grow the `Vec` or `String` at `v` (holding `len` of `cap`) by one
+    /// `size`-byte element, through a copy of its header: the runtime
+    /// never sees `v` itself, so a local's header stays in registers and
+    /// LLVM keeps what it knows of its length across the push.
+    pub(super) fn grow_by_one(
+        &mut self,
+        v: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+        size: u64,
+    ) -> R<()> {
+        let tmp = self.entry_slot(24, "grow")?;
+        self.store(tmp, self.load_ptr(v)?.into())?;
+        self.store(self.offset(tmp, 8)?, len.into())?;
+        self.store(self.offset(tmp, 16)?, cap.into())?;
+        self.rt(
+            "vec_reserve",
+            &[tmp.into(), self.i64(1).into(), self.i64(size).into()],
+        )?;
+        self.store(v, self.load_ptr(tmp)?.into())?;
+        let cap = self.load_i64(self.offset(tmp, 16)?)?;
+        self.store(self.offset(v, 16)?, cap.into())
     }
 
     /// The char starting at byte `i` of the text `p[..n]`, or -1 when

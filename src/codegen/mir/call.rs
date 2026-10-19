@@ -852,12 +852,7 @@ impl<'ctx> Cx<'ctx, '_> {
                     .builder
                     .build_int_compare(IntPredicate::UGE, len, cap, "full")
                     .map_err(e)?;
-                self.if_then(full, |cx| {
-                    cx.rt(
-                        "vec_reserve",
-                        &[v.into(), cx.i64(1).into(), cx.i64(1).into()],
-                    )
-                })?;
+                self.if_then(full, |cx| cx.grow_by_one(v, len, cap, 1))?;
                 let buf = self.load_ptr(v)?;
                 let at = self.elem_ptr(buf, len, 1)?;
                 self.store(at, b.into())?;
