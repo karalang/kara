@@ -1,0 +1,2952 @@
+// mini_docopt: docopt 0.6.2, the library that builds a command-line parser
+// from the usage message itself, as Python 3.13 runs it. It ports how the
+// usage section and the option descriptions are found in the text, the
+// pattern parser with its language errors, the argv tokenizer with prefix
+// matching of long options and stacked short ones, the [options]
+// shortcut, the rewrite that makes repeated elements count or collect,
+// and the backtracking matcher. Matching mutates the parsed objects as it
+// goes, as docopt's does, so values can leak from one alternative into the
+// next; the port keeps objects in an arena to get the same results.
+//
+// The jobs in data/jobs.jsonl run the programs from docopt's examples/
+// directory and some made-up tools (docker run, curl, ssh, tar, kubectl,
+// pip, a backup tool) over many command lines, docopt's git example
+// dispatching to its subcommands, a Naval Fate session that carries out
+// what it parses, and small cases that each test one rule.
+
+// ------------------------------------------------------------ text helpers
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut i = a;
+    while i < b and i < v.len() {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+// str.isspace() for one character, which is also what `\s` matches.
+fn py_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or (n >= 0x1C and n <= 0x20) or n == 0x85 or n == 0xA0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200A) or n == 0x2028 or n == 0x2029 or n == 0x202F or n == 0x205F
+        or n == 0x3000
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut a = 0;
+    let mut b = v.len();
+    while a < b and py_space(v[a]) {
+        a += 1;
+    }
+    while b > a and py_space(v[b - 1]) {
+        b -= 1;
+    }
+    slice(v, a, b)
+}
+
+fn py_rstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut b = v.len();
+    while b > 0 and py_space(v[b - 1]) {
+        b -= 1;
+    }
+    slice(v, 0, b)
+}
+
+fn py_lstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut a = 0;
+    while a < v.len() and py_space(v[a]) {
+        a += 1;
+    }
+    slice(v, a, v.len())
+}
+
+fn hex_digits(n: u32, width: i64) -> String {
+    let digits = chars("0123456789abcdef".to_string());
+    let mut out: Vec[char] = Vec.new();
+    let mut k = 0;
+    let mut x = n;
+    while k < width {
+        out.push(digits[(x % 16) as i64]);
+        x = x / 16;
+        k += 1;
+    }
+    out.reverse();
+    text(out)
+}
+
+// Whether repr() prints a character as it is.
+fn printable(c: char) -> bool {
+    let n = c as u32;
+    if n < 0x20 or (n >= 0x7F and n <= 0xA0) or n == 0xAD {
+        return false;
+    }
+    if (n >= 0x2000 and n <= 0x200F) or (n >= 0x2028 and n <= 0x202F) or (n >= 0x205F and n <= 0x2064) {
+        return false;
+    }
+    not (n == 0x1680 or n == 0x3000 or n == 0xFEFF or (n >= 0xD800 and n <= 0xDFFF))
+}
+
+// repr() of a str.
+fn py_repr(s: ref String) -> String {
+    let quote = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if printable(c) {
+            out.push(c);
+        } else {
+            let n = c as u32;
+            if n < 0x100 {
+                out.push_str("\\x");
+                out.push_str(hex_digits(n, 2).as_str());
+            } else if n < 0x10000 {
+                out.push_str("\\u");
+                out.push_str(hex_digits(n, 4).as_str());
+            } else {
+                out.push_str("\\U");
+                out.push_str(hex_digits(n, 8).as_str());
+            }
+        }
+    }
+    out.push(quote);
+    out
+}
+
+// str.splitlines(keepends=True), which is how codecs' readline cuts a file.
+fn split_lines(s: ref String) -> Vec[String] {
+    let v = chars(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        cur.push(c);
+        let n = c as u32;
+        let mut ends = (n >= 10 and n <= 13) or (n >= 0x1C and n <= 0x1E) or n == 0x85 or n == 0x2028
+            or n == 0x2029;
+        if c == '\r' and i + 1 < v.len() and v[i + 1] == '\n' {
+            cur.push('\n');
+            i += 1;
+            ends = true;
+        }
+        if ends {
+            out.push(cur.clone());
+            cur = String.new();
+        }
+        i += 1;
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// ------------------------------------------------------------ JSON in
+
+// The jobs file holds arrays, strings, small objects, booleans and null.
+#[derive(Clone)]
+enum J {
+    S(String),
+    A(Vec[J]),
+    O(Vec[(String, J)]),
+    B(bool),
+    Null,
+}
+
+struct JsonIn {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl JsonIn {
+    fn ws(mut ref self) {
+        while self.pos < self.cs.len() and py_space(self.cs[self.pos]) {
+            self.pos += 1;
+        }
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let wc = chars(w.to_string());
+        if self.pos + wc.len() > self.cs.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < wc.len() {
+            if self.cs[self.pos + k] != wc[k] {
+                return false;
+            }
+            k += 1;
+        }
+        self.pos += wc.len();
+        true
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut n: u32 = 0;
+        let mut k = 0;
+        while k < 4 {
+            let c = self.cs[self.pos];
+            let d = if c >= '0' and c <= '9' {
+                (c as u32) - ('0' as u32)
+            } else if c >= 'a' and c <= 'f' {
+                (c as u32) - ('a' as u32) + 10
+            } else {
+                (c as u32) - ('A' as u32) + 10
+            };
+            n = n * 16 + d;
+            self.pos += 1;
+            k += 1;
+        }
+        n
+    }
+
+    fn value(mut ref self) -> Result[J, String] {
+        self.ws();
+        if self.pos >= self.cs.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.cs[self.pos];
+        if c == '[' {
+            self.pos += 1;
+            let mut items: Vec[J] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == ']' {
+                self.pos += 1;
+                return Ok(J.A(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON array".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == ']' {
+                    return Ok(J.A(items));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON array separator {d}");
+                }
+            }
+        }
+        if c == '{' {
+            self.pos += 1;
+            let mut members: Vec[(String, J)] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == '}' {
+                self.pos += 1;
+                return Ok(J.O(members));
+            }
+            loop {
+                let key = match self.value()? {
+                    J.S(k) => k,
+                    _ => return Err("JSON object key is not a string".to_string()),
+                };
+                self.ws();
+                if self.pos >= self.cs.len() or self.cs[self.pos] != ':' {
+                    return Err("missing ':' in JSON object".to_string());
+                }
+                self.pos += 1;
+                let v = self.value()?;
+                members.push((key, v));
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON object".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == '}' {
+                    return Ok(J.O(members));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON object separator {d}");
+                }
+            }
+        }
+        if self.word("true") {
+            return Ok(J.B(true));
+        }
+        if self.word("false") {
+            return Ok(J.B(false));
+        }
+        if self.word("null") {
+            return Ok(J.Null);
+        }
+        if c != '"' {
+            return Err(f"unexpected JSON character {c}");
+        }
+        self.pos += 1;
+        let mut s = String.new();
+        while self.pos < self.cs.len() {
+            let d = self.cs[self.pos];
+            self.pos += 1;
+            if d == '"' {
+                return Ok(J.S(s));
+            }
+            if d != '\\' {
+                s.push(d);
+                continue;
+            }
+            let e = self.cs[self.pos];
+            self.pos += 1;
+            if e == 'n' {
+                s.push('\n');
+            } else if e == 't' {
+                s.push('\t');
+            } else if e == 'r' {
+                s.push('\r');
+            } else if e == 'b' {
+                s.push('\u{8}');
+            } else if e == 'f' {
+                s.push('\u{c}');
+            } else if e == 'u' {
+                let mut n = self.hex4();
+                if n >= 0xD800 and n < 0xDC00 {
+                    self.pos += 2;
+                    let lo = self.hex4();
+                    n = 0x10000 + ((n - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                s.push(char.try_from(n).unwrap_or('?'));
+            } else {
+                s.push(e);
+            }
+        }
+        Err("unterminated JSON string".to_string())
+    }
+}
+
+fn json_line(l: ref String) -> Result[J, String] {
+    let mut p = JsonIn { cs: chars(l), pos: 0 };
+    p.value()
+}
+
+fn j_str(j: ref J) -> String {
+    match j {
+        J.S(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+fn j_opt_str(j: ref J) -> Option[String] {
+    match j {
+        J.S(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn j_strs(j: ref J) -> Vec[String] {
+    match j {
+        J.A(items) => items.iter().map(|x| j_str(x)).collect(),
+        _ => Vec.new(),
+    }
+}
+
+fn j_get(j: ref J, key: Str) -> J {
+    match j {
+        J.O(members) => {
+            for (k, v) in members.iter() {
+                if k == key {
+                    return v.clone();
+                }
+            }
+            J.Null
+        }
+        _ => J.Null,
+    }
+}
+
+fn j_bool(j: ref J, default: bool) -> bool {
+    match j {
+        J.B(b) => *b,
+        _ => default,
+    }
+}
+
+// json.dumps(s, ensure_ascii=False)
+fn json_quote(s: ref String) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if (c as u32) < 0x20 {
+            out.push_str("\\u");
+            out.push_str(hex_digits(c as u32, 4).as_str());
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+// ------------------------------------------------------------ values and objects
+
+// A value docopt stores on a pattern element. Lists live in the arena, so
+// two elements can share one, as Python objects do.
+#[derive(Clone)]
+enum Pv {
+    Nothing,
+    Flag(bool),
+    Count(i64),
+    Text(String),
+    List(i64),
+}
+
+// The three kinds of leaf: Argument, Command and Option.
+#[derive(Clone)]
+struct Leaf {
+    kind: i64,
+    name: Option[String],
+    short: Option[String],
+    long: Option[String],
+    argcount: i64,
+    value: Pv,
+}
+
+fn is_arg(l: ref Leaf) -> bool {
+    l.kind == 0
+}
+
+fn is_cmd(l: ref Leaf) -> bool {
+    l.kind == 1
+}
+
+fn is_opt(l: ref Leaf) -> bool {
+    l.kind == 2
+}
+
+#[derive(Clone)]
+enum Pat {
+    Leaf(i64),
+    Required(Vec[Pat]),
+    Optional(Vec[Pat]),
+    AnyOptions(Vec[Pat]),
+    OneOrMore(Vec[Pat]),
+    Either(Vec[Pat]),
+}
+
+// The objects one docopt() call makes.
+struct World {
+    leaves: Vec[Leaf],
+    lists: Vec[Vec[String]],
+}
+
+fn opt_repr(o: ref Option[String]) -> String {
+    match o {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+// What a docopt() call ends with when it does not return a dict.
+enum Stop {
+    // a DocoptLanguageError, which the caller does not catch
+    Lang(String),
+    // DocoptExit: the message and usage, on stderr with status 1
+    Exit(String),
+    // help or version, printed with status 0
+    Print(String),
+}
+
+impl World {
+    fn add(mut ref self, l: own Leaf) -> i64 {
+        self.leaves.push(l);
+        self.leaves.len() - 1
+    }
+
+    fn new_list(mut ref self, items: own Vec[String]) -> i64 {
+        self.lists.push(items);
+        self.lists.len() - 1
+    }
+
+    fn argument(mut ref self, name: own Option[String], value: own Pv) -> i64 {
+        self.add(Leaf { kind: 0, name: name, short: None, long: None, argcount: 0, value: value })
+    }
+
+    fn command(mut ref self, name: own Option[String], value: own Pv) -> i64 {
+        self.add(Leaf { kind: 1, name: name, short: None, long: None, argcount: 0, value: value })
+    }
+
+    // Option(short, long, argcount, value): a False value of an option
+    // with an argument becomes None.
+    fn option(mut ref self, short: own Option[String], long: own Option[String], argcount: i64, value: own Pv) -> i64 {
+        let v = match value {
+            Pv.Flag(false) => if argcount > 0 { Pv.Nothing } else { Pv.Flag(false) },
+            other => other.clone(),
+        };
+        self.add(Leaf { kind: 2, name: None, short: short, long: long, argcount: argcount, value: v })
+    }
+
+    fn copy_option(mut ref self, id: i64) -> i64 {
+        let o = self.leaves[id].clone();
+        self.option(o.short, o.long, o.argcount, o.value)
+    }
+
+    // The element's name: an option's long name or else its short one.
+    fn name(ref self, id: i64) -> Option[String] {
+        if self.leaves[id].kind == 2 {
+            if self.leaves[id].long.is_some() {
+                return self.leaves[id].long.clone();
+            }
+            return self.leaves[id].short.clone();
+        }
+        self.leaves[id].name.clone()
+    }
+
+    fn value_repr(ref self, v: ref Pv) -> String {
+        match v {
+            Pv.Nothing => "None".to_string(),
+            Pv.Flag(b) => if *b { "True".to_string() } else { "False".to_string() },
+            Pv.Count(n) => f"{n}",
+            Pv.Text(s) => py_repr(s),
+            Pv.List(id) => {
+                let parts: Vec[String] = self.lists[*id].iter().map(|s| py_repr(s)).collect();
+                let joined = parts.join(", ");
+                f"[{joined}]"
+            }
+        }
+    }
+
+    fn truthy(ref self, v: ref Pv) -> bool {
+        match v {
+            Pv.Nothing => false,
+            Pv.Flag(b) => *b,
+            Pv.Count(n) => *n != 0,
+            Pv.Text(s) => not s.is_empty(),
+            Pv.List(id) => not self.lists[*id].is_empty(),
+        }
+    }
+
+    // repr() of a leaf, which is also how docopt compares them.
+    fn repr(ref self, id: i64) -> String {
+        let v = self.value_repr(self.leaves[id].value);
+        let kind = self.leaves[id].kind;
+        if kind == 2 {
+            let s = opt_repr(self.leaves[id].short);
+            let g = opt_repr(self.leaves[id].long);
+            let n = self.leaves[id].argcount;
+            return f"Option({s}, {g}, {n}, {v})";
+        }
+        let n = opt_repr(self.leaves[id].name);
+        if kind == 1 { f"Command({n}, {v})" } else { f"Argument({n}, {v})" }
+    }
+
+    fn reprs_equal(ref self, a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] and self.repr(a[i]) != self.repr(b[i]) {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+}
+
+// ------------------------------------------------------------ the pattern tree
+
+fn flat_into(p: ref Pat, out: mut ref Vec[i64]) {
+    match p {
+        Pat.Leaf(id) => out.push(*id),
+        Pat.Required(c) => flat_all(c, mut out),
+        Pat.Optional(c) => flat_all(c, mut out),
+        Pat.AnyOptions(c) => flat_all(c, mut out),
+        Pat.OneOrMore(c) => flat_all(c, mut out),
+        Pat.Either(c) => flat_all(c, mut out),
+    }
+}
+
+fn flat_all(c: ref Vec[Pat], out: mut ref Vec[i64]) {
+    for p in c.iter() {
+        flat_into(p, mut out);
+    }
+}
+
+fn flat(p: ref Pat) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    flat_into(p, mut out);
+    out
+}
+
+fn count_any(p: ref Pat) -> i64 {
+    match p {
+        Pat.Leaf(_) => 0,
+        Pat.AnyOptions(c) => 1 + count_all(c),
+        Pat.Required(c) => count_all(c),
+        Pat.Optional(c) => count_all(c),
+        Pat.OneOrMore(c) => count_all(c),
+        Pat.Either(c) => count_all(c),
+    }
+}
+
+fn count_all(c: ref Vec[Pat]) -> i64 {
+    let mut n = 0;
+    for p in c.iter() {
+        n += count_any(p);
+    }
+    n
+}
+
+// Gives every [options] its children: the documented options the pattern
+// does not mention, a fresh set of objects for each one, copied from the
+// options parse_defaults() found (nothing has changed them yet).
+fn fill_any(p: own Pat, w: mut ref World, doc: ref Vec[i64], pattern_options: ref Vec[String]) -> Pat {
+    match p {
+        Pat.Leaf(id) => Pat.Leaf(id),
+        Pat.AnyOptions(_) => {
+            let mut kids: Vec[Pat] = Vec.new();
+            let mut seen: Vec[String] = Vec.new();
+            for d in doc.iter() {
+                // parse_defaults(doc) again: a fresh object for each option.
+                let id = w.copy_option(*d);
+                let r = w.repr(id);
+                if pattern_options.contains(r) or seen.contains(r) {
+                    continue;
+                }
+                seen.push(r);
+                kids.push(Pat.Leaf(id));
+            }
+            Pat.AnyOptions(kids)
+        }
+        Pat.Required(c) => Pat.Required(fill_list(c, mut w, doc, pattern_options)),
+        Pat.Optional(c) => Pat.Optional(fill_list(c, mut w, doc, pattern_options)),
+        Pat.OneOrMore(c) => Pat.OneOrMore(fill_list(c, mut w, doc, pattern_options)),
+        Pat.Either(c) => Pat.Either(fill_list(c, mut w, doc, pattern_options)),
+    }
+}
+
+fn fill_list(c: own Vec[Pat], w: mut ref World, doc: ref Vec[i64], pattern_options: ref Vec[String]) -> Vec[Pat] {
+    let mut out: Vec[Pat] = Vec.new();
+    for p in c.into_iter() {
+        out.push(fill_any(p, mut w, doc, pattern_options));
+    }
+    out
+}
+
+// fix_identities(): equal leaves become one object, the first of them.
+fn unify(p: own Pat, w: ref World, uniq: ref Vec[(String, i64)]) -> Pat {
+    match p {
+        Pat.Leaf(id) => {
+            let r = w.repr(id);
+            for (ur, uid) in uniq.iter() {
+                if *ur == r {
+                    return Pat.Leaf(*uid);
+                }
+            }
+            Pat.Leaf(id)
+        }
+        Pat.Required(c) => Pat.Required(unify_list(c, w, uniq)),
+        Pat.Optional(c) => Pat.Optional(unify_list(c, w, uniq)),
+        Pat.AnyOptions(c) => Pat.AnyOptions(unify_list(c, w, uniq)),
+        Pat.OneOrMore(c) => Pat.OneOrMore(unify_list(c, w, uniq)),
+        Pat.Either(c) => Pat.Either(unify_list(c, w, uniq)),
+    }
+}
+
+fn unify_list(c: own Vec[Pat], w: ref World, uniq: ref Vec[(String, i64)]) -> Vec[Pat] {
+    let mut out: Vec[Pat] = Vec.new();
+    for p in c.into_iter() {
+        out.push(unify(p, w, uniq));
+    }
+    out
+}
+
+fn kind_rank(p: ref Pat) -> i64 {
+    match p {
+        Pat.Either(_) => 0,
+        Pat.Required(_) => 1,
+        Pat.Optional(_) => 2,
+        Pat.AnyOptions(_) => 3,
+        Pat.OneOrMore(_) => 4,
+        Pat.Leaf(_) => 5,
+    }
+}
+
+fn kids(p: ref Pat) -> Vec[Pat] {
+    match p {
+        Pat.Leaf(_) => Vec.new(),
+        Pat.Required(c) => c.clone(),
+        Pat.Optional(c) => c.clone(),
+        Pat.AnyOptions(c) => c.clone(),
+        Pat.OneOrMore(c) => c.clone(),
+        Pat.Either(c) => c.clone(),
+    }
+}
+
+// The `either` property: every way through the pattern as a list of leaves.
+fn either_cases(p: ref Pat) -> Vec[Vec[i64]] {
+    let mut ret: Vec[Vec[i64]] = Vec.new();
+    let mut groups: Vec[Vec[Pat]] = vec![vec![p.clone()]];
+    let mut head = 0;
+    while head < groups.len() {
+        let children = groups[head].clone();
+        head += 1;
+        // The kind to expand: Either first, then Required, Optional,
+        // [options] and OneOrMore, each time the first of that kind.
+        let mut best = 5;
+        for c in children.iter() {
+            let r = kind_rank(c);
+            if r < best {
+                best = r;
+            }
+        }
+        if best == 5 {
+            let mut leaves: Vec[i64] = Vec.new();
+            for c in children.iter() {
+                if let Pat.Leaf(id) = c {
+                    leaves.push(*id);
+                }
+            }
+            ret.push(leaves);
+            continue;
+        }
+        let mut at = 0;
+        while kind_rank(children[at]) != best {
+            at += 1;
+        }
+        let picked = children[at].clone();
+        let mut rest: Vec[Pat] = Vec.new();
+        let mut k = 0;
+        while k < children.len() {
+            if k != at {
+                rest.push(children[k].clone());
+            }
+            k += 1;
+        }
+        let inner = kids(picked);
+        if best == 0 {
+            for c in inner.iter() {
+                let mut g: Vec[Pat] = vec![c.clone()];
+                for r in rest.iter() {
+                    g.push(r.clone());
+                }
+                groups.push(g);
+            }
+        } else {
+            let mut g: Vec[Pat] = inner.clone();
+            if best == 4 {
+                for c in inner.iter() {
+                    g.push(c.clone());
+                }
+            }
+            for r in rest.iter() {
+                g.push(r.clone());
+            }
+            groups.push(g);
+        }
+    }
+    ret
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if py_space(c) {
+            if not cur.is_empty() {
+                out.push(cur.clone());
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// fix_repeating_arguments(): an element that can occur twice in one way
+// through the pattern collects a list or counts.
+fn fix_repeating(p: ref Pat, w: mut ref World) {
+    for case in either_cases(p).iter() {
+        let mut repeated: Vec[i64] = Vec.new();
+        for e in case.iter() {
+            let mut n = 0;
+            for f in case.iter() {
+                if *f == *e {
+                    n += 1;
+                }
+            }
+            if n > 1 {
+                repeated.push(*e);
+            }
+        }
+        for e in repeated.iter() {
+            let l = w.leaves[*e].clone();
+            if is_arg(l) or (is_opt(l) and l.argcount > 0) {
+                match l.value.clone() {
+                    Pv.Nothing => {
+                        let id = w.new_list(Vec.new());
+                        w.leaves[*e].value = Pv.List(id);
+                    }
+                    Pv.List(_) => {}
+                    Pv.Text(s) => {
+                        let id = w.new_list(split_ws(s));
+                        w.leaves[*e].value = Pv.List(id);
+                    }
+                    _ => {}
+                }
+            }
+            if is_cmd(l) or (is_opt(l) and l.argcount == 0) {
+                w.leaves[*e].value = Pv.Count(0);
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ matching
+
+struct M {
+    ok: bool,
+    left: Vec[i64],
+    collected: Vec[i64],
+}
+
+fn single_match(w: mut ref World, id: i64, left: ref Vec[i64]) -> Option[(i64, i64)] {
+    let my_kind = w.leaves[id].kind;
+    let my_name = w.name(id);
+    let mut n = 0;
+    while n < left.len() {
+        let p = left[n];
+        if my_kind == 2 {
+            if my_name == w.name(p) {
+                return Some((n, p));
+            }
+        } else if w.leaves[p].kind == 0 {
+            let value = w.leaves[p].value.clone();
+            if my_kind == 0 {
+                let m = w.argument(my_name, value);
+                return Some((n, m));
+            }
+            let same = match value {
+                Pv.Text(s) => Some(s) == my_name,
+                _ => false,
+            };
+            if same {
+                let m = w.command(my_name, Pv.Flag(true));
+                return Some((n, m));
+            }
+            return None;
+        }
+        n += 1;
+    }
+    None
+}
+
+fn match_leaf(w: mut ref World, id: i64, left: ref Vec[i64], collected: ref Vec[i64]) -> M {
+    let (pos, m) = match single_match(mut w, id, left) {
+        Some(r) => r,
+        None => return M { ok: false, left: left.clone(), collected: collected.clone() },
+    };
+    let mut left2: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < left.len() {
+        if k != pos {
+            left2.push(left[k]);
+        }
+        k += 1;
+    }
+    let my_name = w.name(id);
+    let mut same: Option[i64] = None;
+    for c in collected.iter() {
+        if w.name(*c) == my_name {
+            same = Some(*c);
+            break;
+        }
+    }
+    let mut out = collected.clone();
+    let increment = match w.leaves[id].value.clone() {
+        Pv.Count(_) => Pv.Count(1),
+        Pv.List(_) => match w.leaves[m].value.clone() {
+            Pv.Text(s) => Pv.List(w.new_list(vec![s])),
+            other => other.clone(),
+        },
+        _ => {
+            out.push(m);
+            return M { ok: true, left: left2, collected: out };
+        }
+    };
+    match same {
+        None => {
+            w.leaves[m].value = increment;
+            out.push(m);
+        }
+        Some(s) => {
+            match (w.leaves[s].value.clone(), increment) {
+                (Pv.Count(a), Pv.Count(b)) => w.leaves[s].value = Pv.Count(a + b),
+                (Pv.Flag(a), Pv.Count(b)) => w.leaves[s].value = Pv.Count(if a { 1 + b } else { b }),
+                (Pv.List(a), Pv.List(b)) => {
+                    let more = w.lists[b].clone();
+                    for x in more.into_iter() {
+                        w.lists[a].push(x);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    M { ok: true, left: left2, collected: out }
+}
+
+fn do_match(w: mut ref World, p: ref Pat, left: ref Vec[i64], collected: ref Vec[i64]) -> M {
+    match p {
+        Pat.Leaf(id) => match_leaf(mut w, *id, left, collected),
+        Pat.Required(c) => {
+            let mut l = left.clone();
+            let mut col = collected.clone();
+            for q in c.iter() {
+                let r = do_match(mut w, q, l, col);
+                if not r.ok {
+                    return M { ok: false, left: left.clone(), collected: collected.clone() };
+                }
+                l = r.left;
+                col = r.collected;
+            }
+            M { ok: true, left: l, collected: col }
+        }
+        Pat.Optional(c) => match_optional(mut w, c, left, collected),
+        Pat.AnyOptions(c) => match_optional(mut w, c, left, collected),
+        Pat.OneOrMore(c) => {
+            let mut l = left.clone();
+            let mut col = collected.clone();
+            let mut prev: Option[Vec[i64]] = None;
+            let mut times = 0;
+            loop {
+                let r = do_match(mut w, c[0], l, col);
+                if r.ok {
+                    times += 1;
+                }
+                l = r.left;
+                col = r.collected;
+                if let Some(pl) = prev.clone() {
+                    if w.reprs_equal(pl, l) {
+                        break;
+                    }
+                }
+                prev = Some(l.clone());
+                if not r.ok {
+                    break;
+                }
+            }
+            if times >= 1 {
+                return M { ok: true, left: l, collected: col };
+            }
+            M { ok: false, left: left.clone(), collected: collected.clone() }
+        }
+        Pat.Either(c) => {
+            let mut best: Option[M] = None;
+            let mut best_len = -1;
+            for q in c.iter() {
+                let r = do_match(mut w, q, left, collected);
+                if r.ok and (best_len < 0 or r.left.len() < best_len) {
+                    best_len = r.left.len();
+                    best = Some(r);
+                }
+            }
+            match best {
+                Some(b) => b,
+                None => M { ok: false, left: left.clone(), collected: collected.clone() },
+            }
+        }
+    }
+}
+
+fn match_optional(w: mut ref World, c: ref Vec[Pat], left: ref Vec[i64], collected: ref Vec[i64]) -> M {
+    let mut l = left.clone();
+    let mut col = collected.clone();
+    for q in c.iter() {
+        let r = do_match(mut w, q, l, col);
+        l = r.left;
+        col = r.collected;
+    }
+    M { ok: true, left: l, collected: col }
+}
+
+// ------------------------------------------------------------ parsing
+
+struct Tokens {
+    items: Vec[String],
+    pos: i64,
+    // DocoptExit when parsing argv, DocoptLanguageError for the usage
+    exit: bool,
+}
+
+impl Tokens {
+    fn current(ref self) -> Option[String] {
+        if self.pos < self.items.len() { Some(self.items[self.pos].clone()) } else { None }
+    }
+
+    fn is(ref self, s: Str) -> bool {
+        self.pos < self.items.len() and self.items[self.pos] == s
+    }
+
+    fn step(mut ref self) {
+        self.pos += 1;
+    }
+
+    fn take(mut ref self) -> Option[String] {
+        let t = self.current();
+        if t.is_some() {
+            self.pos += 1;
+        }
+        t
+    }
+
+    fn error(ref self, msg: own String) -> Stop {
+        if self.exit { Stop.Exit(msg) } else { Stop.Lang(msg) }
+    }
+
+    fn rest(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut i = self.pos;
+        while i < self.items.len() {
+            out.push(self.items[i].clone());
+            i += 1;
+        }
+        out
+    }
+}
+
+fn find_char(v: ref Vec[char], c: char) -> i64 {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn parse_long(t: mut ref Tokens, options: mut ref Vec[i64], w: mut ref World) -> Result[Vec[i64], Stop] {
+    let tok = t.take().unwrap_or(String.new());
+    let v = chars(tok);
+    let eq_at = find_char(v, '=');
+    let mut (long, has_eq, value) = if eq_at < 0 {
+        (tok.clone(), false, None)
+    } else {
+        (slice(v, 0, eq_at), true, Some(slice(v, eq_at + 1, v.len())))
+    };
+    let mut similar: Vec[i64] = Vec.new();
+    for o in options.iter() {
+        if w.leaves[*o].long == Some(long.clone()) {
+            similar.push(*o);
+        }
+    }
+    if t.exit and similar.is_empty() {
+        for o in options.iter() {
+            if let Some(l) = w.leaves[*o].long.clone() {
+                if l.starts_with(long.as_str()) {
+                    similar.push(*o);
+                }
+            }
+        }
+    }
+    if similar.len() > 1 {
+        let names: Vec[String] = similar.iter().map(|o| w.leaves[*o].long.clone().unwrap_or(String.new())).collect();
+        let joined = names.join(", ");
+        return Err(t.error(f"{long} is not a unique prefix: {joined}?"));
+    }
+    if similar.is_empty() {
+        let argcount = if has_eq { 1 } else { 0 };
+        let o = w.option(None, Some(long.clone()), argcount, Pv.Flag(false));
+        options.push(o);
+        if t.exit {
+            let val = if argcount > 0 { Pv.Text(value.unwrap_or(String.new())) } else { Pv.Flag(true) };
+            return Ok(vec![w.option(None, Some(long), argcount, val)]);
+        }
+        return Ok(vec![o]);
+    }
+    let o = w.copy_option(similar[0]);
+    let olong = w.leaves[o].long.clone().unwrap_or(String.new());
+    if w.leaves[o].argcount == 0 {
+        if value.is_some() {
+            return Err(t.error(f"{olong} must not have an argument"));
+        }
+    } else if value.is_none() {
+        if t.current().is_none() {
+            return Err(t.error(f"{olong} requires argument"));
+        }
+        value = t.take();
+    }
+    if t.exit {
+        w.leaves[o].value = match value {
+            Some(s) => Pv.Text(s),
+            None => Pv.Flag(true),
+        };
+    }
+    Ok(vec![o])
+}
+
+fn parse_shorts(t: mut ref Tokens, options: mut ref Vec[i64], w: mut ref World) -> Result[Vec[i64], Stop] {
+    let tok = t.take().unwrap_or(String.new());
+    let v = chars(tok);
+    let mut i = 0;
+    while i < v.len() and v[i] == '-' {
+        i += 1;
+    }
+    let mut parsed: Vec[i64] = Vec.new();
+    while i < v.len() {
+        let short = f"-{v[i]}";
+        i += 1;
+        let mut similar: Vec[i64] = Vec.new();
+        for o in options.iter() {
+            if w.leaves[*o].short == Some(short.clone()) {
+                similar.push(*o);
+            }
+        }
+        if similar.len() > 1 {
+            return Err(t.error(f"{short} is specified ambiguously {similar.len()} times"));
+        }
+        if similar.is_empty() {
+            let o = w.option(Some(short.clone()), None, 0, Pv.Flag(false));
+            options.push(o);
+            if t.exit {
+                parsed.push(w.option(Some(short), None, 0, Pv.Flag(true)));
+            } else {
+                parsed.push(o);
+            }
+            continue;
+        }
+        let o = w.copy_option(similar[0]);
+        let mut value: Option[String] = None;
+        if w.leaves[o].argcount != 0 {
+            if i >= v.len() {
+                if t.current().is_none() {
+                    return Err(t.error(f"{short} requires argument"));
+                }
+                value = t.take();
+            } else {
+                value = Some(slice(v, i, v.len()));
+                i = v.len();
+            }
+        }
+        if t.exit {
+            w.leaves[o].value = match value {
+                Some(s) => Pv.Text(s),
+                None => Pv.Flag(true),
+            };
+        }
+        parsed.push(o);
+    }
+    Ok(parsed)
+}
+
+// str.isupper()
+fn py_isupper(s: ref String) -> bool {
+    let mut cased = false;
+    for c in s.chars() {
+        let one = f"{c}";
+        let lo = one.to_lowercase();
+        let up = one.to_uppercase();
+        if lo != up {
+            cased = true;
+            if one != up {
+                return false;
+            }
+        }
+    }
+    cased
+}
+
+fn parse_atom(t: mut ref Tokens, options: mut ref Vec[i64], w: mut ref World) -> Result[Vec[Pat], Stop] {
+    let token = t.current().unwrap_or(String.new());
+    if token == "(" or token == "[" {
+        t.step();
+        let inner = parse_expr(mut t, mut options, mut w)?;
+        let closing = if token == "(" { ")" } else { "]" };
+        let got = t.take();
+        if got != Some(closing.to_string()) {
+            return Err(t.error(f"unmatched '{token}'"));
+        }
+        return Ok(vec![if token == "(" { Pat.Required(inner) } else { Pat.Optional(inner) }]);
+    }
+    if token == "options" {
+        t.step();
+        return Ok(vec![Pat.AnyOptions(Vec.new())]);
+    }
+    if token.starts_with("--") and token != "--" {
+        let ids = parse_long(mut t, mut options, mut w)?;
+        return Ok(ids.iter().map(|i| Pat.Leaf(*i)).collect());
+    }
+    if token.starts_with("-") and token != "-" and token != "--" {
+        let ids = parse_shorts(mut t, mut options, mut w)?;
+        return Ok(ids.iter().map(|i| Pat.Leaf(*i)).collect());
+    }
+    t.step();
+    if (token.starts_with("<") and token.ends_with(">")) or py_isupper(token) {
+        return Ok(vec![Pat.Leaf(w.argument(Some(token), Pv.Nothing))]);
+    }
+    Ok(vec![Pat.Leaf(w.command(Some(token), Pv.Flag(false)))])
+}
+
+fn parse_seq(t: mut ref Tokens, options: mut ref Vec[i64], w: mut ref World) -> Result[Vec[Pat], Stop] {
+    let mut result: Vec[Pat] = Vec.new();
+    loop {
+        match t.current() {
+            None => break,
+            Some(c) => {
+                if c == "]" or c == ")" or c == "|" {
+                    break;
+                }
+            }
+        }
+        let mut atom = parse_atom(mut t, mut options, mut w)?;
+        if t.is("...") {
+            atom = vec![Pat.OneOrMore(atom)];
+            t.step();
+        }
+        for a in atom.into_iter() {
+            result.push(a);
+        }
+    }
+    Ok(result)
+}
+
+fn parse_expr(t: mut ref Tokens, options: mut ref Vec[i64], w: mut ref World) -> Result[Vec[Pat], Stop] {
+    let seq = parse_seq(mut t, mut options, mut w)?;
+    if not t.is("|") {
+        return Ok(seq);
+    }
+    let mut result: Vec[Pat] = if seq.len() > 1 { vec![Pat.Required(seq)] } else { seq };
+    while t.is("|") {
+        t.step();
+        let s = parse_seq(mut t, mut options, mut w)?;
+        if s.len() > 1 {
+            result.push(Pat.Required(s));
+        } else {
+            for x in s.into_iter() {
+                result.push(x);
+            }
+        }
+    }
+    if result.len() > 1 {
+        return Ok(vec![Pat.Either(result)]);
+    }
+    Ok(result)
+}
+
+fn parse_pattern(source: ref String, options: mut ref Vec[i64], w: mut ref World) -> Result[Pat, Stop] {
+    // re.sub(r'([\[\]\(\)\|]|\.\.\.)', r' \1 ', source)
+    let v = chars(source);
+    let mut spaced = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        if c == '[' or c == ']' or c == '(' or c == ')' or c == '|' {
+            spaced.push(' ');
+            spaced.push(c);
+            spaced.push(' ');
+            i += 1;
+        } else if c == '.' and i + 2 < v.len() and v[i + 1] == '.' and v[i + 2] == '.' {
+            spaced.push_str(" ... ");
+            i += 3;
+        } else {
+            spaced.push(c);
+            i += 1;
+        }
+    }
+    let mut t = Tokens { items: split_ws(spaced), pos: 0, exit: false };
+    let result = parse_expr(mut t, mut options, mut w)?;
+    if t.current().is_some() {
+        let joined = py_repr(t.rest().join(" "));
+        return Err(t.error(f"unexpected ending: {joined}"));
+    }
+    Ok(Pat.Required(result))
+}
+
+fn parse_argv(t: mut ref Tokens, options: mut ref Vec[i64], w: mut ref World, options_first: bool)
+    -> Result[Vec[i64], Stop] {
+    let mut parsed: Vec[i64] = Vec.new();
+    loop {
+        let cur = match t.current() {
+            Some(c) => c,
+            None => break,
+        };
+        if cur == "--" or (options_first and not cur.starts_with("-")) or (options_first and cur == "-") {
+            for v in t.rest().into_iter() {
+                parsed.push(w.argument(None, Pv.Text(v)));
+            }
+            return Ok(parsed);
+        }
+        if cur.starts_with("--") {
+            for o in parse_long(mut t, mut options, mut w)? {
+                parsed.push(o);
+            }
+        } else if cur.starts_with("-") and cur != "-" {
+            for o in parse_shorts(mut t, mut options, mut w)? {
+                parsed.push(o);
+            }
+        } else {
+            t.step();
+            parsed.push(w.argument(None, Pv.Text(cur)));
+        }
+    }
+    Ok(parsed)
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' { char.try_from((c as u32) + 32).unwrap_or(c) } else { c }
+}
+
+// `\[default: (.*)\]` with re.I over v[a..b]: the first match's group.
+fn find_default(v: ref Vec[char], a: i64, b: i64) -> Option[String] {
+    let lead = chars("[default: ".to_string());
+    let mut i = a;
+    while i + lead.len() <= b {
+        if v[i] == '[' {
+            let mut ok = true;
+            let mut k = 1;
+            while k < lead.len() {
+                if ascii_lower(v[i + k]) != lead[k] {
+                    ok = false;
+                    break;
+                }
+                k += 1;
+            }
+            if ok {
+                let start = i + lead.len();
+                let mut end = start;
+                while end < b and v[end] != '\n' {
+                    end += 1;
+                }
+                let mut j = end - 1;
+                while j >= start {
+                    if v[j] == ']' {
+                        return Some(slice(v, start, j));
+                    }
+                    j -= 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+// Option.parse() of the text v[a..b].
+fn parse_option(v: ref Vec[char], a0: i64, b0: i64, w: mut ref World) -> i64 {
+    let mut a = a0;
+    let mut b = b0;
+    while a < b and py_space(v[a]) {
+        a += 1;
+    }
+    while b > a and py_space(v[b - 1]) {
+        b -= 1;
+    }
+    // partition('  ')
+    let mut cut = b;
+    let mut i = a;
+    while i + 1 < b {
+        if v[i] == ' ' and v[i + 1] == ' ' {
+            cut = i;
+            break;
+        }
+        i += 1;
+    }
+    let mut cleaned = String.new();
+    let mut k = a;
+    while k < cut {
+        let c = v[k];
+        cleaned.push(if c == ',' or c == '=' { ' ' } else { c });
+        k += 1;
+    }
+    let mut short: Option[String] = None;
+    let mut long: Option[String] = None;
+    let mut argcount = 0;
+    for part in split_ws(cleaned).into_iter() {
+        if part.starts_with("--") {
+            long = Some(part);
+        } else if part.starts_with("-") {
+            short = Some(part);
+        } else {
+            argcount = 1;
+        }
+    }
+    let mut value = Pv.Flag(false);
+    if argcount > 0 {
+        value = if cut + 2 <= b {
+            match find_default(v, cut + 2, b) {
+                Some(d) => Pv.Text(d),
+                None => Pv.Nothing,
+            }
+        } else {
+            Pv.Nothing
+        };
+    }
+    w.option(short, long, argcount, value)
+}
+
+// parse_defaults(): re.split('\n *(<\S+?>|-\S+?)', doc), each piece that
+// starts with `-` read as an option. A piece runs from its matched token to
+// the next match.
+fn parse_defaults(doc: ref String, w: mut ref World) -> Vec[i64] {
+    let v = chars(doc);
+    let mut starts: Vec[i64] = Vec.new();
+    let mut ends: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        let mut hit = -1;
+        let mut j = i + 1;
+        if v[i] == '\n' {
+            while j < v.len() and v[j] == ' ' {
+                j += 1;
+            }
+            // `<\S+?>`: at least one character, then up to the first `>`,
+            // with no whitespace on the way.
+            if j + 1 < v.len() and v[j] == '<' and not py_space(v[j + 1]) {
+                let mut k = j + 2;
+                while k < v.len() and not py_space(v[k]) and v[k] != '>' {
+                    k += 1;
+                }
+                if k < v.len() and v[k] == '>' {
+                    hit = k + 1;
+                }
+            }
+            if hit < 0 and j + 1 < v.len() and v[j] == '-' and not py_space(v[j + 1]) {
+                hit = j + 2;
+            }
+        }
+        if hit >= 0 {
+            if not starts.is_empty() {
+                ends.push(i);
+            }
+            starts.push(j);
+            i = hit;
+        } else {
+            i += 1;
+        }
+    }
+    if not starts.is_empty() {
+        ends.push(v.len());
+    }
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < starts.len() {
+        if v[starts[k]] == '-' {
+            out.push(parse_option(v, starts[k], ends[k], mut w));
+        }
+        k += 1;
+    }
+    out
+}
+
+fn is_usage_at(v: ref Vec[char], i: i64) -> bool {
+    if i + 6 > v.len() or ascii_lower(v[i]) != 'u' {
+        return false;
+    }
+    ascii_lower(v[i + 1]) == 's' and ascii_lower(v[i + 2]) == 'a' and ascii_lower(v[i + 3]) == 'g'
+        and ascii_lower(v[i + 4]) == 'e' and v[i + 5] == ':'
+}
+
+fn printable_usage(doc: ref String) -> Result[String, Stop] {
+    let v = chars(doc);
+    let mut starts: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        if is_usage_at(v, i) {
+            starts.push(i);
+            i += 6;
+        } else {
+            i += 1;
+        }
+    }
+    if starts.is_empty() {
+        return Err(Stop.Lang("\"usage:\" (case-insensitive) not found.".to_string()));
+    }
+    if starts.len() > 1 {
+        return Err(Stop.Lang("More than one \"usage:\" (case-insensitive).".to_string()));
+    }
+    // Up to the first `\n\s*\n`.
+    let mut end = v.len();
+    let mut k = starts[0];
+    while k < v.len() {
+        if v[k] == '\n' {
+            let mut j = k + 1;
+            let mut blank = false;
+            while j < v.len() and py_space(v[j]) {
+                if v[j] == '\n' {
+                    blank = true;
+                    break;
+                }
+                j += 1;
+            }
+            if blank {
+                end = k;
+                break;
+            }
+        }
+        k += 1;
+    }
+    Ok(py_strip(slice(v, starts[0], end)))
+}
+
+fn formal_usage(usage: ref String) -> String {
+    let words = split_ws(usage);
+    let mut out = "( ".to_string();
+    let mut parts: Vec[String] = Vec.new();
+    let mut k = 2;
+    while k < words.len() {
+        parts.push(if words[k] == words[1] { ") | (".to_string() } else { words[k].clone() });
+        k += 1;
+    }
+    out.push_str(parts.join(" ").as_str());
+    out.push_str(" )");
+    out
+}
+
+fn strip_newlines(s: ref String) -> String {
+    let v = chars(s);
+    let mut a = 0;
+    let mut b = v.len();
+    while a < b and v[a] == '\n' {
+        a += 1;
+    }
+    while b > a and v[b - 1] == '\n' {
+        b -= 1;
+    }
+    slice(v, a, b)
+}
+
+struct Parsed {
+    w: World,
+    items: Vec[(String, Pv)],
+}
+
+impl Parsed {
+    fn get(ref self, key: Str) -> Pv {
+        for (k, v) in self.items.iter() {
+            if k == key {
+                return v.clone();
+            }
+        }
+        Pv.Nothing
+    }
+
+    fn text(ref self, key: Str) -> Option[String] {
+        match self.get(key) {
+            Pv.Text(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn list(ref self, key: Str) -> Vec[String] {
+        match self.get(key) {
+            Pv.List(id) => self.w.lists[id].clone(),
+            _ => Vec.new(),
+        }
+    }
+
+    fn flag(ref self, key: Str) -> bool {
+        self.w.truthy(self.get(key))
+    }
+
+    // repr() of the Dict docopt returns: its items sorted, one per line.
+    fn repr(ref self) -> String {
+        let mut keys: Vec[String] = self.items.iter().map(|kv| kv.0.clone()).collect();
+        keys.sort();
+        let mut parts: Vec[String] = Vec.new();
+        for k in keys.iter() {
+            let v = self.get(k.as_str());
+            let kr = py_repr(k);
+            let vr = self.w.value_repr(v);
+            parts.push(f"{kr}: {vr}");
+        }
+        let mut out = "{".to_string();
+        out.push_str(parts.join(",\n ").as_str());
+        out.push('}');
+        out
+    }
+}
+
+struct Opts {
+    help: bool,
+    version: Option[String],
+    options_first: bool,
+}
+
+// docopt(doc, argv, help, version, options_first)
+fn docopt(doc: ref String, argv: ref Vec[String], o: ref Opts) -> Result[Parsed, Stop] {
+    let mut w = World { leaves: Vec.new(), lists: Vec.new() };
+    let usage = printable_usage(doc)?;
+    let mut options = parse_defaults(doc, mut w);
+    let documented = options.clone();
+    let mut pattern = parse_pattern(formal_usage(usage), mut options, mut w)?;
+    let mut opts_copy = options.clone();
+    let mut t = Tokens { items: argv.clone(), pos: 0, exit: true };
+    let parsed = match parse_argv(mut t, mut opts_copy, mut w, o.options_first) {
+        Ok(p) => p,
+        Err(Stop.Exit(msg)) => return Err(Stop.Exit(py_strip(f"{msg}\n{usage}"))),
+        Err(e) => return Err(e),
+    };
+    let mut pattern_options: Vec[String] = Vec.new();
+    for id in flat(pattern).iter() {
+        if is_opt(w.leaves[*id]) {
+            pattern_options.push(w.repr(*id));
+        }
+    }
+    if count_any(pattern) > 0 {
+        pattern = fill_any(pattern, mut w, documented, pattern_options);
+    }
+    if o.help {
+        for id in parsed.iter() {
+            let n = w.name(*id);
+            if (n == Some("-h".to_string()) or n == Some("--help".to_string())) and w.truthy(w.leaves[*id].value) {
+                return Err(Stop.Print(strip_newlines(doc)));
+            }
+        }
+    }
+    if let Some(ver) = o.version.clone() {
+        for id in parsed.iter() {
+            if w.name(*id) == Some("--version".to_string()) and w.truthy(w.leaves[*id].value) {
+                return Err(Stop.Print(ver));
+            }
+        }
+    }
+    // fix(): one object per distinct leaf, then the repeating rules.
+    let mut uniq: Vec[(String, i64)] = Vec.new();
+    for id in flat(pattern).iter() {
+        let r = w.repr(*id);
+        let mut seen = false;
+        for (ur, _) in uniq.iter() {
+            if *ur == r {
+                seen = true;
+                break;
+            }
+        }
+        if not seen {
+            uniq.push((r, *id));
+        }
+    }
+    pattern = unify(pattern, w, uniq);
+    fix_repeating(pattern, mut w);
+    let empty: Vec[i64] = Vec.new();
+    let r = do_match(mut w, pattern, parsed, empty);
+    if not r.ok or not r.left.is_empty() {
+        return Err(Stop.Exit(py_strip(f"\n{usage}")));
+    }
+    let mut items: Vec[(String, Pv)] = Vec.new();
+    let mut all = flat(pattern);
+    for c in r.collected.iter() {
+        all.push(*c);
+    }
+    for id in all.iter() {
+        let name = w.name(*id).unwrap_or(String.new());
+        let value = w.leaves[*id].value.clone();
+        let mut found = false;
+        let mut k = 0;
+        while k < items.len() {
+            if items[k].0 == name {
+                items[k].1 = value.clone();
+                found = true;
+                break;
+            }
+            k += 1;
+        }
+        if not found {
+            items.push((name, value));
+        }
+    }
+    Ok(Parsed { w: w, items: items })
+}
+
+// ------------------------------------------------------------ jobs
+
+// str.splitlines()
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in split_lines(s).iter() {
+        let v = chars(l);
+        let mut end = v.len();
+        if end >= 2 and v[end - 2] == '\r' and v[end - 1] == '\n' {
+            end -= 2;
+        } else if end >= 1 {
+            let n = v[end - 1] as u32;
+            if (n >= 10 and n <= 13) or (n >= 0x1C and n <= 0x1E) or n == 0x85 or n == 0x2028 or n == 0x2029 {
+                end -= 1;
+            }
+        }
+        out.push(slice(v, 0, end));
+    }
+    out
+}
+
+fn show(r: ref Result[Parsed, Stop], out: mut ref Vec[String]) {
+    match r {
+        Ok(args) => {
+            for l in lines_of(args.repr()).iter() {
+                out.push(l.clone());
+            }
+        }
+        Err(Stop.Print(text)) => {
+            for l in lines_of(text).iter() {
+                out.push(l.clone());
+            }
+        }
+        Err(Stop.Exit(msg)) => {
+            for l in lines_of(msg).iter() {
+                out.push(f"stderr: {l}");
+            }
+            out.push("exit 1".to_string());
+        }
+        Err(Stop.Lang(msg)) => {
+            out.push(f"uncaught DocoptLanguageError: {msg}");
+            out.push("exit 1".to_string());
+        }
+    }
+}
+
+fn read_doc(name: ref String) -> Result[String, String] {
+    match fs.read_to_string(f"data/docs/{name}.txt") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {name}: {e}"),
+    }
+}
+
+fn argv_json(argv: ref Vec[String]) -> String {
+    let parts: Vec[String] = argv.iter().map(|a| json_quote(a)).collect();
+    let joined = parts.join(", ");
+    f"[{joined}]"
+}
+
+fn opts_of(j: ref J) -> Opts {
+    Opts { help: j_bool(j_get(j, "help"), true), version: j_opt_str(j_get(j, "version")),
+           options_first: j_bool(j_get(j, "options_first"), false) }
+}
+
+fn plain() -> Opts {
+    Opts { help: true, version: None, options_first: false }
+}
+
+fn git_opts() -> Opts {
+    Opts { help: true, version: Some("git version 1.7.4.4".to_string()), options_first: true }
+}
+
+fn job_git(argv: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    let aj = argv_json(argv);
+    out.push(f"== git {aj}");
+    let r = docopt(read_doc("git".to_string())?, argv, git_opts());
+    let args = match r {
+        Ok(a) => a,
+        Err(_) => {
+            show(r, mut out);
+            return Ok(());
+        }
+    };
+    let cmd = args.text("<command>");
+    let subs = vec!["add", "branch", "checkout", "clone", "commit", "push", "remote"];
+    match cmd {
+        Some(c) => {
+            if subs.iter().any(|x| x == c.as_str()) {
+                let mut sub = vec![c.clone()];
+                for a in args.list("<args>").into_iter() {
+                    sub.push(a);
+                }
+                let sj = argv_json(sub);
+                out.push(f"-> git_{c} {sj}");
+                let r2 = docopt(read_doc(f"git_{c}")?, sub, plain());
+                show(r2, mut out);
+            } else if c == "help" {
+                out.push("-> git --help".to_string());
+                let r2 = docopt(read_doc("git".to_string())?, vec!["--help".to_string()], git_opts());
+                show(r2, mut out);
+            } else {
+                let q = py_repr(c);
+                out.push(f"stderr: {q} is not a git.py command. See 'git help'.");
+                out.push("exit 1".to_string());
+            }
+        }
+        None => {
+            out.push("-> git --help".to_string());
+            let r2 = docopt(read_doc("git".to_string())?, vec!["--help".to_string()], git_opts());
+            show(r2, mut out);
+        }
+    }
+    Ok(())
+}
+
+// int() of a str: optional whitespace and sign, digits with single
+// underscores between them.
+fn py_int_parse(s: ref String) -> Option[i64] {
+    let v = chars(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    if i >= v.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut last_digit = false;
+    while i < v.len() {
+        let c = v[i];
+        if c >= '0' and c <= '9' {
+            n = n * 10 + ((c as u32) - ('0' as u32)) as i64;
+            last_digit = true;
+        } else if c == '_' and last_digit and i + 1 < v.len() {
+            last_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if not last_digit {
+        return None;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn abs_i(n: i64) -> i64 {
+    if n < 0 { -n } else { n }
+}
+
+struct Ship {
+    name: String,
+    x: i64,
+    y: i64,
+}
+
+struct Mine {
+    x: i64,
+    y: i64,
+    kind: String,
+}
+
+fn job_naval(lines: ref Vec[String], out: mut ref Vec[String]) -> Result[(), String] {
+    out.push(f"== naval session ({lines.len()} commands)");
+    let doc = read_doc("naval_fate".to_string())?;
+    let mut ships: Vec[Ship] = Vec.new();
+    let mut mines: Vec[Mine] = Vec.new();
+    let opts = Opts { help: true, version: Some("Naval Fate 2.0".to_string()), options_first: false };
+    for line in lines.iter() {
+        out.push(f"$ naval_fate.py {line}");
+        let r = docopt(doc, split_ws(line), opts);
+        let args = match r {
+            Ok(a) => a,
+            Err(_) => {
+                show(r, mut out);
+                continue;
+            }
+        };
+        let xs = args.text("<x>");
+        let ys = args.text("<y>");
+        let mut x = 0;
+        let mut y = 0;
+        let mut bad = false;
+        if let Some(s) = xs.clone() {
+            match py_int_parse(s) {
+                Some(n) => x = n,
+                None => bad = true,
+            }
+        }
+        if let Some(s) = ys.clone() {
+            match py_int_parse(s) {
+                Some(n) => y = n,
+                None => bad = true,
+            }
+        }
+        if bad {
+            let a = xs.unwrap_or("None".to_string());
+            let b = ys.unwrap_or("None".to_string());
+            out.push(f"  bad coordinates: {a} {b}");
+            continue;
+        }
+        if args.flag("ship") and args.flag("new") {
+            for n in args.list("<name>").into_iter() {
+                let mut exists = false;
+                for s in ships.iter() {
+                    if s.name == n {
+                        exists = true;
+                    }
+                }
+                if exists {
+                    out.push(f"  ship {n} already exists");
+                } else {
+                    out.push(f"  launched {n} at (0, 0)");
+                    ships.push(Ship { name: n, x: 0, y: 0 });
+                }
+            }
+        } else if args.flag("ship") and args.flag("move") {
+            let names = args.list("<name>");
+            let n = names[0].clone();
+            let mut at = -1;
+            let mut k = 0;
+            while k < ships.len() {
+                if ships[k].name == n {
+                    at = k;
+                    break;
+                }
+                k += 1;
+            }
+            if at < 0 {
+                out.push(f"  no ship named {n}");
+                continue;
+            }
+            let sp = args.text("--speed").unwrap_or(String.new());
+            let speed = match py_int_parse(sp) {
+                Some(v) => v,
+                None => {
+                    out.push(f"  bad speed: {sp}");
+                    continue;
+                }
+            };
+            let (ox, oy) = (ships[at].x, ships[at].y);
+            let dist = abs_i(x - ox) + abs_i(y - oy);
+            out.push(f"  {n} moves from ({ox}, {oy}) to ({x}, {y}) at {speed} knots, {dist} miles");
+            ships[at].x = x;
+            ships[at].y = y;
+            let mut hit = -1;
+            let mut m = 0;
+            while m < mines.len() {
+                if mines[m].x == x and mines[m].y == y {
+                    hit = m;
+                    break;
+                }
+                m += 1;
+            }
+            if hit >= 0 {
+                let kind = mines[hit].kind.clone();
+                out.push(f"  {n} hits a {kind} mine at ({x}, {y}) and sinks");
+                ships.remove(at);
+                mines.remove(hit);
+            }
+        } else if args.flag("ship") and args.flag("shoot") {
+            let mut sunk: Vec[String] = Vec.new();
+            let mut kept: Vec[Ship] = Vec.new();
+            for s in ships.into_iter() {
+                if s.x == x and s.y == y {
+                    sunk.push(s.name.clone());
+                } else {
+                    kept.push(s);
+                }
+            }
+            ships = kept;
+            if sunk.is_empty() {
+                out.push(f"  shot at ({x}, {y}) hits nothing");
+            } else {
+                let names = sunk.join(", ");
+                out.push(f"  shot at ({x}, {y}) sinks {names}");
+            }
+        } else if args.flag("mine") {
+            let mut here = -1;
+            let mut m = 0;
+            while m < mines.len() {
+                if mines[m].x == x and mines[m].y == y {
+                    here = m;
+                    break;
+                }
+                m += 1;
+            }
+            if args.flag("set") {
+                let kind = if args.flag("--drifting") { "drifting" } else { "moored" };
+                if here >= 0 {
+                    out.push(f"  a mine is already at ({x}, {y})");
+                } else {
+                    mines.push(Mine { x: x, y: y, kind: kind.to_string() });
+                    out.push(f"  {kind} mine set at ({x}, {y})");
+                }
+            } else if here >= 0 {
+                mines.remove(here);
+                out.push(f"  mine removed from ({x}, {y})");
+            } else {
+                out.push(f"  no mine at ({x}, {y})");
+            }
+        }
+    }
+    let fleet: Vec[String] = ships.iter().map(|s| f"{s.name} ({s.x}, {s.y})").collect();
+    let laid: Vec[String] = mines.iter().map(|m| f"({m.x}, {m.y}) {m.kind}").collect();
+    let f = if fleet.is_empty() { "none".to_string() } else { fleet.join(", ") };
+    let g = if laid.is_empty() { "none".to_string() } else { laid.join(", ") };
+    out.push(f"fleet: {f}");
+    out.push(f"mines: {g}");
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    let jobs = match fs.read_to_string("data/jobs.jsonl") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read jobs.jsonl: {e}"),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for l in jobs.lines() {
+        if l.trim().is_empty() {
+            continue;
+        }
+        let items = match json_line(l.to_string())? {
+            J.A(items) => items,
+            _ => return Err(f"bad job line: {l}"),
+        };
+        let kind = j_str(items[0]);
+        if kind == "docopt" {
+            let name = j_str(items[1]);
+            let argv = j_strs(items[2]);
+            let aj = argv_json(argv);
+            out.push(f"== {name} {aj}");
+            let r = docopt(read_doc(name)?, argv, opts_of(items[3]));
+            show(r, mut out);
+        } else if kind == "case" {
+            let label = json_quote(j_str(items[1]));
+            let doc = j_str(items[2]);
+            let argv = j_strs(items[3]);
+            let aj = argv_json(argv);
+            out.push(f"== case {label} {aj}");
+            let r = docopt(doc, argv, opts_of(items[4]));
+            show(r, mut out);
+        } else if kind == "git" {
+            job_git(j_strs(items[1]), mut out)?;
+        } else if kind == "naval" {
+            job_naval(j_strs(items[1]), mut out)?;
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    print(text);
+    Ok(())
+}
+
+// ------------------------------------------------------------ data
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("Usage: arguments_example.py [-vqrh] [FILE] ...\n");
+    t.push_str("          arguments_example.py (--left | --right) CORRECTION FILE\n");
+    t.push_str("\n");
+    t.push_str("Process FILE and optionally apply correction to either left-hand side or\n");
+    t.push_str("right-hand side.\n");
+    t.push_str("\n");
+    t.push_str("Arguments:\n");
+    t.push_str("  FILE        optional input file\n");
+    t.push_str("  CORRECTION  correction angle, needs FILE, --left or --right to be present\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -h --help\n");
+    t.push_str("  -v       verbose mode\n");
+    t.push_str("  -q       quiet mode\n");
+    t.push_str("  -r       make report\n");
+    t.push_str("  --left   use left-hand side\n");
+    t.push_str("  --right  use right-hand side\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/arguments.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("backup -- snapshot directories to a repository.\n");
+    t.push_str("\n");
+    t.push_str("USAGE:\n");
+    t.push_str("    backup init <repo>\n");
+    t.push_str("    backup snapshot <repo> <path>... [--tag=<tag>]... [--exclude=<glob>]... [--dry-run]\n");
+    t.push_str("    backup restore <repo> <snapshot> [--target=<dir>] [--include=<glob>]...\n");
+    t.push_str("    backup forget <repo> (--keep-last=<n> | --keep-daily=<n> | --keep-weekly=<n>)... [--prune]\n");
+    t.push_str("    backup (ls | stats) <repo> [<snapshot>]\n");
+    t.push_str("    backup --version\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("    --tag=<tag>          Tag the snapshot.\n");
+    t.push_str("    --exclude=<glob>     Leave out matching files.\n");
+    t.push_str("    --dry-run            Only say what would be done.\n");
+    t.push_str("    --target=<dir>       Where to restore to [default: .].\n");
+    t.push_str("    --include=<glob>     Restore only matching files.\n");
+    t.push_str("    --keep-last=<n>      Keep the last n snapshots.\n");
+    t.push_str("    --keep-daily=<n>     Keep one snapshot a day for n days.\n");
+    t.push_str("    --keep-weekly=<n>    Keep one snapshot a week for n weeks.\n");
+    t.push_str("    --prune              Delete data nothing refers to any more.\n");
+    v.push(DataFile { path: "docs/backup.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Not a serious example.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  calculator_example.py <value> ( ( + | - | * | / ) <value> )...\n");
+    t.push_str("  calculator_example.py <function> <value> [( , <value> )]...\n");
+    t.push_str("  calculator_example.py (-h | --help)\n");
+    t.push_str("\n");
+    t.push_str("Examples:\n");
+    t.push_str("  calculator_example.py 1 + 2 + 3 + 4 + 5\n");
+    t.push_str("  calculator_example.py 1 + 2 '*' 3 / 4 - 5    # note quotes around '*'\n");
+    t.push_str("  calculator_example.py sum 10 , 20 , 30 , 40\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -h, --help\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/calculator.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Usage: counted_example.py --help\n");
+    t.push_str("       counted_example.py -v...\n");
+    t.push_str("       counted_example.py go [go]\n");
+    t.push_str("       counted_example.py (--path=<path>)...\n");
+    t.push_str("       counted_example.py <file> <file>\n");
+    t.push_str("\n");
+    t.push_str("Try: counted_example.py -vvvvvvvvvv\n");
+    t.push_str("     counted_example.py go go\n");
+    t.push_str("     counted_example.py --path ./here --path ./there\n");
+    t.push_str("     counted_example.py this.txt that.txt\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/counted.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("curl, a small subset.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  curl [options] <url>...\n");
+    t.push_str("  curl --version\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -X, --request=<method>     Request method to use [default: GET]\n");
+    t.push_str("  -H, --header=<header>      Pass a custom header to the server\n");
+    t.push_str("  -d, --data=<data>          HTTP POST data\n");
+    t.push_str("  -o, --output=<file>        Write to file instead of stdout\n");
+    t.push_str("  -s, --silent               Silent mode\n");
+    t.push_str("  -v, --verbose              Make the operation more talkative\n");
+    t.push_str("  -L, --location             Follow redirects\n");
+    t.push_str("  --max-time=<seconds>       Maximum time allowed for the transfer [default: 30]\n");
+    t.push_str("  -u, --user=<user:password> Server user and password\n");
+    t.push_str("  --compressed               Request a compressed response\n");
+    v.push(DataFile { path: "docs/curl.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Run a command in a new container.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]\n");
+    t.push_str("  docker run (-h | --help)\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -h, --help                Show this screen.\n");
+    t.push_str("  -d, --detach              Run container in background and print its ID.\n");
+    t.push_str("  -e, --env=<kv>            Set an environment variable.\n");
+    t.push_str("  -p, --publish=<port>      Publish a container's port [default: ].\n");
+    t.push_str("  --name=<name>             Assign a name to the container.\n");
+    t.push_str("  -i, --interactive         Keep STDIN open even if not attached.\n");
+    t.push_str("  -t, --tty                 Allocate a pseudo-TTY.\n");
+    t.push_str("  --rm                      Remove the container when it exits.\n");
+    t.push_str("  -m, --memory=<bytes>      Memory limit [default: 0].\n");
+    t.push_str("  -v, --volume=<vol>        Bind mount a volume.\n");
+    t.push_str("  -w, --workdir=<dir>       Working directory inside the container.\n");
+    t.push_str("  --restart=<policy>        Restart policy [DEFAULT: no].\n");
+    v.push(DataFile { path: "docs/docker_run.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\n");
+    t.push_str("usage: git [--version] [--exec-path=<path>] [--html-path]\n");
+    t.push_str("           [-p|--paginate|--no-pager] [--no-replace-objects]\n");
+    t.push_str("           [--bare] [--git-dir=<path>] [--work-tree=<path>]\n");
+    t.push_str("           [-c name=value]\n");
+    t.push_str("           <command> [<args>...]\n");
+    t.push_str("       git [--help]\n");
+    t.push_str("\n");
+    t.push_str("The most commonly used git commands are:\n");
+    t.push_str("   add        Add file contents to the index\n");
+    t.push_str("   branch     List, create, or delete branches\n");
+    t.push_str("   checkout   Checkout a branch or paths to the working tree\n");
+    t.push_str("   clone      Clone a repository into a new directory\n");
+    t.push_str("   commit     Record changes to the repository\n");
+    t.push_str("   push       Update remote refs along with associated objects\n");
+    t.push_str("   remote     Manage set of tracked repositories\n");
+    t.push_str("\n");
+    t.push_str("See 'git help <command>' for more information on a specific command.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("usage: git add [options] [--] [<filepattern>...]\n");
+    t.push_str("\n");
+    t.push_str("    -h, --help\n");
+    t.push_str("    -n, --dry-run        dry run\n");
+    t.push_str("    -v, --verbose        be verbose\n");
+    t.push_str("\n");
+    t.push_str("    -i, --interactive    interactive picking\n");
+    t.push_str("    -p, --patch          select hunks interactively\n");
+    t.push_str("    -e, --edit           edit current diff and apply\n");
+    t.push_str("    -f, --force          allow adding otherwise ignored files\n");
+    t.push_str("    -u, --update         update tracked files\n");
+    t.push_str("    -N, --intent-to-add  record only the fact that the path will be added later\n");
+    t.push_str("    -A, --all            add all, noticing removal of tracked files\n");
+    t.push_str("    --refresh            don't add, only refresh the index\n");
+    t.push_str("    --ignore-errors      just skip files which cannot be added because of errors\n");
+    t.push_str("    --ignore-missing     check if - even missing - files are ignored in dry run\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git_add.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\n");
+    t.push_str("usage: git branch [options] [-r | -a] [--merged=<commit> | --no-merged=<commit>]\n");
+    t.push_str("       git branch [options] [-l] [-f] <branchname> [<start-point>]\n");
+    t.push_str("       git branch [options] [-r] (-d | -D) <branchname>\n");
+    t.push_str("       git branch [options] (-m | -M) [<oldbranch>] <newbranch>\n");
+    t.push_str("\n");
+    t.push_str("Generic options\n");
+    t.push_str("    -h, --help\n");
+    t.push_str("    -v, --verbose         show hash and subject, give twice for upstream branch\n");
+    t.push_str("    -t, --track           set up tracking mode (see git-pull(1))\n");
+    t.push_str("    --set-upstream        change upstream info\n");
+    t.push_str("    --color=<when>        use colored output\n");
+    t.push_str("    -r                    act on remote-tracking branches\n");
+    t.push_str("    --contains=<commit>   print only branches that contain the commit\n");
+    t.push_str("    --abbrev=<n>          use <n> digits to display SHA-1s\n");
+    t.push_str("\n");
+    t.push_str("Specific git-branch actions:\n");
+    t.push_str("    -a                    list both remote-tracking and local branches\n");
+    t.push_str("    -d                    delete fully merged branch\n");
+    t.push_str("    -D                    delete branch (even if not merged)\n");
+    t.push_str("    -m                    move/rename a branch and its reflog\n");
+    t.push_str("    -M                    move/rename a branch, even if target exists\n");
+    t.push_str("    -l                    create the branch's reflog\n");
+    t.push_str("    -f, --force           force creation (when already exists)\n");
+    t.push_str("    --no-merged=<commit>  print only not merged branches\n");
+    t.push_str("    --merged=<commit>     print only merged branches\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git_branch.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("usage: git checkout [options] <branch>\n");
+    t.push_str("       git checkout [options] <branch> -- <file>...\n");
+    t.push_str("\n");
+    t.push_str("    -q, --quiet           suppress progress reporting\n");
+    t.push_str("    -b <branch>           create and checkout a new branch\n");
+    t.push_str("    -B <branch>           create/reset and checkout a branch\n");
+    t.push_str("    -l                    create reflog for new branch\n");
+    t.push_str("    -t, --track           set upstream info for new branch\n");
+    t.push_str("    --orphan <new branch>\n");
+    t.push_str("                          new unparented branch\n");
+    t.push_str("    -2, --ours            checkout our version for unmerged files\n");
+    t.push_str("    -3, --theirs          checkout their version for unmerged files\n");
+    t.push_str("    -f, --force           force checkout (throw away local modifications)\n");
+    t.push_str("    -m, --merge           perform a 3-way merge with the new branch\n");
+    t.push_str("    --conflict <style>    conflict style (merge or diff3)\n");
+    t.push_str("    -p, --patch           select hunks interactively\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git_checkout.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("usage: git clone [options] [--] <repo> [<dir>]\n");
+    t.push_str("\n");
+    t.push_str("    -v, --verbose         be more verbose\n");
+    t.push_str("    -q, --quiet           be more quiet\n");
+    t.push_str("    --progress            force progress reporting\n");
+    t.push_str("    -n, --no-checkout     don't create a checkout\n");
+    t.push_str("    --bare                create a bare repository\n");
+    t.push_str("    --mirror              create a mirror repository (implies bare)\n");
+    t.push_str("    -l, --local           to clone from a local repository\n");
+    t.push_str("    --no-hardlinks        don't use local hardlinks, always copy\n");
+    t.push_str("    -s, --shared          setup as shared repository\n");
+    t.push_str("    --recursive           initialize submodules in the clone\n");
+    t.push_str("    --recurse-submodules  initialize submodules in the clone\n");
+    t.push_str("    --template <template-directory>\n");
+    t.push_str("                          directory from which templates will be used\n");
+    t.push_str("    --reference <repo>    reference repository\n");
+    t.push_str("    -o, --origin <branch>\n");
+    t.push_str("                          use <branch> instead of 'origin' to track upstream\n");
+    t.push_str("    -b, --branch <branch>\n");
+    t.push_str("                          checkout <branch> instead of the remote's HEAD\n");
+    t.push_str("    -u, --upload-pack <path>\n");
+    t.push_str("                          path to git-upload-pack on the remote\n");
+    t.push_str("    --depth <depth>       create a shallow clone of that depth\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git_clone.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("usage: git commit [options] [--] [<filepattern>...]\n");
+    t.push_str("\n");
+    t.push_str("    -h, --help\n");
+    t.push_str("    -q, --quiet           suppress summary after successful commit\n");
+    t.push_str("    -v, --verbose         show diff in commit message template\n");
+    t.push_str("\n");
+    t.push_str("Commit message options\n");
+    t.push_str("    -F, --file <file>     read message from file\n");
+    t.push_str("    --author <author>     override author for commit\n");
+    t.push_str("    --date <date>         override date for commit\n");
+    t.push_str("    -m, --message <message>\n");
+    t.push_str("                          commit message\n");
+    t.push_str("    -c, --reedit-message <commit>\n");
+    t.push_str("                          reuse and edit message from specified commit\n");
+    t.push_str("    -C, --reuse-message <commit>\n");
+    t.push_str("                          reuse message from specified commit\n");
+    t.push_str("    --fixup <commit>      use autosquash formatted message to fixup specified commit\n");
+    t.push_str("    --squash <commit>     use autosquash formatted message to squash specified commit\n");
+    t.push_str("    --reset-author        the commit is authored by me now\n");
+    t.push_str("                          (used with -C-c/--amend)\n");
+    t.push_str("    -s, --signoff         add Signed-off-by:\n");
+    t.push_str("    -t, --template <file>\n");
+    t.push_str("                          use specified template file\n");
+    t.push_str("    -e, --edit            force edit of commit\n");
+    t.push_str("    --cleanup <default>   how to strip spaces and #comments from message\n");
+    t.push_str("    --status              include status in commit message template\n");
+    t.push_str("\n");
+    t.push_str("Commit contents options\n");
+    t.push_str("    -a, --all             commit all changed files\n");
+    t.push_str("    -i, --include         add specified files to index for commit\n");
+    t.push_str("    --interactive         interactively add files\n");
+    t.push_str("    -o, --only            commit only specified files\n");
+    t.push_str("    -n, --no-verify       bypass pre-commit hook\n");
+    t.push_str("    --dry-run             show what would be committed\n");
+    t.push_str("    --short               show status concisely\n");
+    t.push_str("    --branch              show branch information\n");
+    t.push_str("    --porcelain           machine-readable output\n");
+    t.push_str("    -z, --null            terminate entries with NUL\n");
+    t.push_str("    --amend               amend previous commit\n");
+    t.push_str("    --no-post-rewrite     bypass post-rewrite hook\n");
+    t.push_str("    -u, --untracked-files=<mode>\n");
+    t.push_str("                          show untracked files, optional modes: all, normal, no.\n");
+    t.push_str("                          [default: all]\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git_commit.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("usage: git push [options] [<repository> [<refspec>...]]\n");
+    t.push_str("\n");
+    t.push_str("    -h, --help\n");
+    t.push_str("    -v, --verbose         be more verbose\n");
+    t.push_str("    -q, --quiet           be more quiet\n");
+    t.push_str("    --repo <repository>   repository\n");
+    t.push_str("    --all                 push all refs\n");
+    t.push_str("    --mirror              mirror all refs\n");
+    t.push_str("    --delete              delete refs\n");
+    t.push_str("    --tags                push tags (can't be used with --all or --mirror)\n");
+    t.push_str("    -n, --dry-run         dry run\n");
+    t.push_str("    --porcelain           machine-readable output\n");
+    t.push_str("    -f, --force           force updates\n");
+    t.push_str("    --thin                use thin pack\n");
+    t.push_str("    --receive-pack <receive-pack>\n");
+    t.push_str("                          receive pack program\n");
+    t.push_str("    --exec <receive-pack>\n");
+    t.push_str("                          receive pack program\n");
+    t.push_str("    -u, --set-upstream    set upstream for git pull/status\n");
+    t.push_str("    --progress            force progress reporting\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git_push.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\n");
+    t.push_str("usage: git remote [-v | --verbose]\n");
+    t.push_str("       git remote add [-t <branch>] [-m <master>] [-f] [--mirror] <name> <url>\n");
+    t.push_str("       git remote rename <old> <new>\n");
+    t.push_str("       git remote rm <name>\n");
+    t.push_str("       git remote set-head <name> (-a | -d | <branch>)\n");
+    t.push_str("       git remote [-v | --verbose] show [-n] <name>\n");
+    t.push_str("       git remote prune [-n | --dry-run] <name>\n");
+    t.push_str("       git remote [-v | --verbose] update [-p | --prune] [(<group> | <remote>)...]\n");
+    t.push_str("       git remote set-branches <name> [--add] <branch>...\n");
+    t.push_str("       git remote set-url <name> <newurl> [<oldurl>]\n");
+    t.push_str("       git remote set-url --add <name> <newurl>\n");
+    t.push_str("       git remote set-url --delete <name> <url>\n");
+    t.push_str("\n");
+    t.push_str("    -v, --verbose         be verbose; must be placed before a subcommand\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/git_remote.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Display one or many resources.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]\n");
+    t.push_str("  kubectl get -h\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -n, --namespace=<namespace>  The namespace scope for this request [default: default].\n");
+    t.push_str("  -A, --all-namespaces         List the requested object(s) across all namespaces.\n");
+    t.push_str("  -o, --output=<format>        Output format, one of json|yaml|wide|name.\n");
+    t.push_str("  -l, --selector=<selector>    Selector (label query) to filter on.\n");
+    t.push_str("  -w, --watch                  After listing, watch for changes.\n");
+    t.push_str("  --show-labels                Show all labels as the last column.\n");
+    t.push_str("  -h, --help                   Help for get.\n");
+    v.push(DataFile { path: "docs/kubectl_get.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Naval Fate.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  naval_fate.py ship new <name>...\n");
+    t.push_str("  naval_fate.py ship <name> move <x> <y> [--speed=<kn>]\n");
+    t.push_str("  naval_fate.py ship shoot <x> <y>\n");
+    t.push_str("  naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]\n");
+    t.push_str("  naval_fate.py -h | --help\n");
+    t.push_str("  naval_fate.py --version\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -h --help     Show this screen.\n");
+    t.push_str("  --version     Show version.\n");
+    t.push_str("  --speed=<kn>  Speed in knots [default: 10].\n");
+    t.push_str("  --moored      Moored (anchored) mine.\n");
+    t.push_str("  --drifting    Drifting mine.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/naval_fate.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Usage: odd_even_example.py [-h | --help] (ODD EVEN)...\n");
+    t.push_str("\n");
+    t.push_str("Example, try:\n");
+    t.push_str("  odd_even_example.py 1 2 3 4\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -h, --help\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/odd_even.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Example of program with many options using docopt.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  options_example.py [-hvqrf NAME] [--exclude=PATTERNS]\n");
+    t.push_str("                     [--select=ERRORS | --ignore=ERRORS] [--show-source]\n");
+    t.push_str("                     [--statistics] [--count] [--benchmark] PATH...\n");
+    t.push_str("  options_example.py (--doctest | --testsuite=DIR)\n");
+    t.push_str("  options_example.py --version\n");
+    t.push_str("\n");
+    t.push_str("Arguments:\n");
+    t.push_str("  PATH  destination path\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -h --help            show this help message and exit\n");
+    t.push_str("  --version            show version and exit\n");
+    t.push_str("  -v --verbose         print status messages\n");
+    t.push_str("  -q --quiet           report only file names\n");
+    t.push_str("  -r --repeat          show all occurrences of the same error\n");
+    t.push_str("  --exclude=PATTERNS   exclude files or directories which match these comma\n");
+    t.push_str("                       separated patterns [default: .svn,CVS,.bzr,.hg,.git]\n");
+    t.push_str("  -f NAME --file=NAME  when parsing directories, only check filenames matching\n");
+    t.push_str("                       these comma separated patterns [default: *.py]\n");
+    t.push_str("  --select=ERRORS      select errors and warnings (e.g. E,W6)\n");
+    t.push_str("  --ignore=ERRORS      skip errors and warnings (e.g. E4,W)\n");
+    t.push_str("  --show-source        show source code for each error\n");
+    t.push_str("  --statistics         count errors and warnings\n");
+    t.push_str("  --count              print total number of errors and warnings to standard\n");
+    t.push_str("                       error and set exit code to 1 if total is not null\n");
+    t.push_str("  --benchmark          measure processing speed\n");
+    t.push_str("  --testsuite=DIR      run regression tests from dir\n");
+    t.push_str("  --doctest            run doctest on myself\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/options.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("Example of program which uses [options] shortcut in pattern.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  options_shortcut_example.py [options] <port>\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -h --help                show this help message and exit\n");
+    t.push_str("  --version                show version and exit\n");
+    t.push_str("  -n, --number N           use N as a number\n");
+    t.push_str("  -t, --timeout TIMEOUT    set timeout TIMEOUT seconds\n");
+    t.push_str("  --apply                  apply changes to database\n");
+    t.push_str("  -q                       operate in quiet mode\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/options_shortcut.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("pip, the top level.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  pip [options] <command> [<args>...]\n");
+    t.push_str("\n");
+    t.push_str("General Options:\n");
+    t.push_str("  -h, --help          Show help.\n");
+    t.push_str("  --isolated          Run pip in an isolated mode.\n");
+    t.push_str("  -v, --verbose       Give more output.\n");
+    t.push_str("  -q, --quiet         Give less output.\n");
+    t.push_str("  --log=<path>        Path to a verbose appending log.\n");
+    t.push_str("  --proxy=<proxy>     Specify a proxy in the form scheme://[user:passwd@]proxy.server:port.\n");
+    t.push_str("  --timeout=<sec>     Set the socket timeout [default: 15].\n");
+    v.push(DataFile { path: "docs/pip.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Usage:\n");
+    t.push_str("  pip install [options] <requirement>...\n");
+    t.push_str("  pip install [options] -r <file>...\n");
+    t.push_str("  pip install [options] [-e] <path>...\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -r, --requirement <file>  Install from the given requirements file.\n");
+    t.push_str("  -e, --editable            Install a project in editable mode.\n");
+    t.push_str("  -U, --upgrade             Upgrade all specified packages.\n");
+    t.push_str("  --user                    Install to the user install directory.\n");
+    t.push_str("  --no-deps                 Don't install package dependencies.\n");
+    t.push_str("  -t, --target <dir>        Install packages into <dir>.\n");
+    t.push_str("  --index-url=<url>         Base URL of the package index [default: https://pypi.org/simple].\n");
+    v.push(DataFile { path: "docs/pip_install.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Usage:\n");
+    t.push_str("  quick_example.py tcp <host> <port> [--timeout=<seconds>]\n");
+    t.push_str("  quick_example.py serial <port> [--baud=9600] [--timeout=<seconds>]\n");
+    t.push_str("  quick_example.py -h | --help | --version\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/quick.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OpenSSH client, in docopt's words.\n");
+    t.push_str("\n");
+    t.push_str("Usage:\n");
+    t.push_str("  ssh [-46AaCNqT] [-v]... [-p <port>] [-i <identity>]... [-L <spec>]... [-o <option>]... <destination> [<command>...]\n");
+    t.push_str("  ssh -V\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  -4             Use IPv4 addresses only.\n");
+    t.push_str("  -6             Use IPv6 addresses only.\n");
+    t.push_str("  -A             Enable forwarding of the authentication agent.\n");
+    t.push_str("  -a             Disable forwarding of the authentication agent.\n");
+    t.push_str("  -C             Request compression of all data.\n");
+    t.push_str("  -N             Do not execute a remote command.\n");
+    t.push_str("  -q             Quiet mode.\n");
+    t.push_str("  -T             Disable pseudo-terminal allocation.\n");
+    t.push_str("  -v             Verbose mode; give it several times for more.\n");
+    t.push_str("  -p <port>      Port to connect to on the remote host [default: 22].\n");
+    t.push_str("  -i <identity>  Identity (private key) file.\n");
+    t.push_str("  -L <spec>      Local port forwarding, [bind_address:]port:host:hostport.\n");
+    t.push_str("  -o <option>    Options in the format used in the configuration file.\n");
+    t.push_str("  -V             Display the version number and exit.\n");
+    v.push(DataFile { path: "docs/ssh.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Usage: tar (-c | -x | -t) [-vzjp] [-f ARCHIVE] [-C DIR] [--exclude=PATTERN]... [FILE...]\n");
+    t.push_str("       tar --help\n");
+    t.push_str("\n");
+    t.push_str("  -c             create a new archive\n");
+    t.push_str("  -x             extract files from an archive\n");
+    t.push_str("  -t             list the contents of an archive\n");
+    t.push_str("  -v             verbosely list files processed\n");
+    t.push_str("  -z             filter the archive through gzip\n");
+    t.push_str("  -j             filter the archive through bzip2\n");
+    t.push_str("  -p             preserve permissions\n");
+    t.push_str("  -f ARCHIVE     use archive file ARCHIVE [default: -]\n");
+    t.push_str("  -C DIR         change to directory DIR\n");
+    t.push_str("  --exclude=PATTERN  exclude files matching PATTERN\n");
+    t.push_str("  --help         give this help list\n");
+    v.push(DataFile { path: "docs/tar.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Usage: prog.py [--count=N] PATH FILE...\n");
+    t.push_str("\n");
+    t.push_str("Arguments:\n");
+    t.push_str("  FILE     input file\n");
+    t.push_str("  PATH     out directory\n");
+    t.push_str("\n");
+    t.push_str("Options:\n");
+    t.push_str("  --count=N   number of operations\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "docs/validation.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\"docopt\", \"quick\", [\"tcp\", \"127.0.0.1\", \"80\", \"--timeout=30\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"serial\", \"COM3\", \"--baud=115200\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"serial\", \"/dev/ttyUSB0\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"--version\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"-h\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"tcp\", \"localhost\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"tcp\", \"h\", \"p\", \"--timeout\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"serial\", \"p\", \"--baud\", \"9600\", \"--timeout\", \"5\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"quick\", [\"--help\", \"--version\"], {\"version\": \"0.1.1rc\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"new\", \"Guardian\", \"Defiant\", \"Enterprise\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"Guardian\", \"move\", \"10\", \"50\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"Guardian\", \"move\", \"10\", \"50\", \"--speed=20\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"Guardian\", \"move\", \"1\", \"2\", \"--speed\", \"5\", \"--sp=6\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"shoot\", \"3\", \"4\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"mine\", \"set\", \"10\", \"20\", \"--moored\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"mine\", \"remove\", \"1\", \"1\", \"--drifting\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"mine\", \"set\", \"1\", \"1\", \"--moored\", \"--drifting\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"new\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"--version\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"--help\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"-h\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"Guardian\", \"move\", \"1\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"mine\", \"set\", \"1\", \"2\", \"--moor\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"mine\", \"set\", \"1\", \"2\", \"--mo\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"x\", \"move\", \"1\", \"2\", \"--speed\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"x\", \"move\", \"1\", \"2\", \"--moored=yes\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"x\", \"move\", \"1\", \"2\", \"--unknown\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"Guardian\", \"move\", \"--\", \"-1\", \"-2\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"naval_fate\", [\"ship\", \"move\", \"1\", \"2\"], {\"version\": \"Naval Fate 2.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"-vqr\", \"file.txt\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"-v\", \"a\", \"b\", \"c\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"--left\", \"5\", \"FILE\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"--right\", \"7\", \"x.txt\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"--left\", \"5\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"--left\", \"--right\", \"1\", \"f\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"-h\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"arguments\", [\"-vvq\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"1\", \"+\", \"2\", \"+\", \"3\", \"+\", \"4\", \"+\", \"5\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"1\", \"+\", \"2\", \"*\", \"3\", \"/\", \"4\", \"-\", \"5\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"sum\", \"10\", \",\", \"20\", \",\", \"30\", \",\", \"40\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"sum\", \"10\", \"20\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"1\", \"+\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"max\", \"1\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"1\", \"+\", \"2\", \"x\", \"3\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"calculator\", [\"-h\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"--help\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"-v\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"-vvvvvvvvvv\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"-v\", \"-v\", \"-vv\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"go\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"go\", \"go\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"go\", \"go\", \"go\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"--path\", \"./here\", \"--path\", \"./there\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"--path=a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"this.txt\", \"that.txt\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"only.txt\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [\"--pa\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"counted\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"odd_even\", [\"1\", \"2\", \"3\", \"4\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"odd_even\", [\"1\", \"2\", \"3\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"odd_even\", [\"-h\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"odd_even\", [\"a\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"odd_even\", [\"--help\", \"1\", \"2\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"-vq\", \"--exclude=x,y\", \"--select=E1\", \"--show-source\", \"src\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"--doctest\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"--testsuite=tests\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"--version\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"-f\", \"'*.py'\", \"-r\", \"--count\", \"src\", \"lib\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"-fNAME\", \"src\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"--select=E\", \"--ignore=W\", \"src\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"--file=x.py\", \"--stat\", \"--bench\", \"p\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"--testsuite\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"src\", \"--count\", \"--count\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options\", [\"-hv\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"8080\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"-n\", \"5\", \"-t\", \"30\", \"8080\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"--number=5\", \"--timeout=30\", \"--apply\", \"-q\", \"8080\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"-qn5\", \"80\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"--apply\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"--appl\", \"80\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"--number\", \"1\", \"--number\", \"2\", \"80\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"-x\", \"80\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"options_shortcut\", [\"--version\"], {\"version\": \"1.0.0rc2\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"validation\", [\"--count=5\", \"out\", \"a\", \"b\", \"c\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"validation\", [\"out\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"validation\", [\"out\", \"a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"validation\", [\"--count=x\", \"out\", \"a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_add\", [\"add\", \"-n\", \"-v\", \"file1\", \"file2\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_add\", [\"add\", \"--patch\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_add\", [\"add\", \"--\", \"-weird\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_add\", [\"add\", \"-A\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_add\", [\"add\", \"--all\", \"--dry\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_add\", [\"add\", \"--ignore\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_add\", [\"add\", \"-i\", \"-p\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-r\", \"--merged=main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"new-feature\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-d\", \"old\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-D\", \"old\", \"-f\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-m\", \"old\", \"new\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-M\", \"new\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-vv\", \"--color=always\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"--merged=a\", \"--no-merged=b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"-r\", \"-a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_branch\", [\"branch\", \"--contains=HEAD~3\", \"--abbrev=7\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_checkout\", [\"checkout\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_checkout\", [\"checkout\", \"-b\", \"feature\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_checkout\", [\"checkout\", \"main\", \"--\", \"a.txt\", \"b.txt\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_checkout\", [\"checkout\", \"-q\", \"--orphan\", \"gh-pages\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_checkout\", [\"checkout\", \"--conflict\", \"diff3\", \"-m\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_checkout\", [\"checkout\", \"-23\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_checkout\", [\"checkout\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_clone\", [\"clone\", \"https://example.com/r.git\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_clone\", [\"clone\", \"--depth\", \"1\", \"-b\", \"main\", \"https://example.com/r.git\", \"dir\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_clone\", [\"clone\", \"--bare\", \"--mirror\", \"--\", \"src\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_clone\", [\"clone\", \"-vq\", \"--origin=up\", \"-u\", \"/bin/up\", \"src\", \"dst\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_clone\", [\"clone\", \"--recurs\", \"src\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_clone\", [\"clone\", \"--re\", \"src\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-m\", \"'msg'\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-am\", \"fix\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"--amend\", \"--no-edit\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-m\", \"a\", \"-m\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-F\", \"msg.txt\", \"--\", \"a\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-u\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-uno\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"--untracked-files=normal\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-C\", \"HEAD\", \"--reset-author\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_commit\", [\"commit\", \"-s\", \"-S\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\", \"origin\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\", \"-u\", \"origin\", \"feature\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\", \"--tags\", \"--force\", \"origin\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\", \"--delete\", \"origin\", \"old\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\", \"--repo=up\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\", \"-nv\", \"--porcelain\", \"origin\", \"a\", \"b\", \"c\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_push\", [\"push\", \"--exec=/x\", \"origin\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"-v\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"add\", \"-f\", \"origin\", \"https://example.com/r.git\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"add\", \"-t\", \"main\", \"-m\", \"main\", \"up\", \"url\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"rename\", \"a\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"rm\", \"a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"set-head\", \"origin\", \"-a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"set-head\", \"origin\", \"main\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"-v\", \"show\", \"origin\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"prune\", \"--dry-run\", \"origin\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"update\", \"-p\", \"a\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"set-branches\", \"o\", \"a\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"set-url\", \"o\", \"new\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"set-url\", \"--add\", \"o\", \"new\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"set-url\", \"--delete\", \"o\", \"old\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"git_remote\", [\"remote\", \"set-url\", \"o\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"-d\", \"--name\", \"web\", \"-p\", \"80:80\", \"-p\", \"443:443\", \"-e\", \"A=1\", \"-e\", \"B=2\", \"nginx\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"-it\", \"--rm\", \"alpine\", \"sh\", \"-c\", \"'echo\", \"hi'\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"--memory=512m\", \"-v\", \"/data:/data\", \"-w\", \"/data\", \"postgres:16\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"nginx\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"-e\", \"A=1\", \"-e\", \"B=2\", \"-e\", \"C=3\", \"img\", \"cmd\", \"a1\", \"a2\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"--restart=always\", \"redis\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"-h\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"--rm\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"-dit\", \"busybox\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"-p\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"--name=x\", \"--name=y\", \"img\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"--det\", \"img\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"docker_run\", [\"img\", \"--rm\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"https://example.com\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"-sSL\", \"https://a\", \"https://b\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"-X\", \"POST\", \"-d\", \"'{}'\", \"-H\", \"'Content-Type:\", \"x'\", \"https://api\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"--request=PUT\", \"--data=a\", \"--max-time=5\", \"u\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"-u\", \"admin:secret\", \"https://x\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"--user=a:b\", \"u\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"-o\", \"out.html\", \"-L\", \"u\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"--version\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"--compress\", \"u\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"--max\", \"u\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"curl\", [\"-v\"], {\"version\": \"curl 8.5.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"host\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-v\", \"host\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-vvv\", \"-p\", \"2222\", \"user@host\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-i\", \"~/.ssh/id_ed25519\", \"-i\", \"k2\", \"-L\", \"8080:localhost:80\", \"host\", \"uptime\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-46\", \"host\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-NT\", \"-L\", \"1:a:2\", \"-L\", \"3:b:4\", \"host\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-o\", \"StrictHostKeyChecking=no\", \"-o\", \"UserKnownHostsFile=/dev/null\", \"h\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-V\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-q\", \"host\", \"ls\", \"-la\", \"/tmp\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"host\", \"-v\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-p\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"ssh\", [\"-Cqp22\", \"host\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-cvzf\", \"backup.tar.gz\", \"src\", \"docs\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-xf\", \"a.tar\", \"-C\", \"/tmp\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-t\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-tvf\", \"a.tar\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-c\", \"-x\", \"f\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"--exclude=*.o\", \"--exclude=*.a\", \"-cf\", \"x\", \".\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-xjpf\", \"a.tar.bz2\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"--help\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-cf\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-cfx\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"tar\", [\"-czf\", \"-\", \".\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"pods\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"pods\", \"-A\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"pods\", \"web-1\", \"web-2\", \"-n\", \"prod\", \"-o\", \"wide\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"deploy\", \"-l\", \"app=web,tier!=db\", \"-w\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"pods\", \"-n\", \"a\", \"-A\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"svc\", \"--show-labels\", \"-o=yaml\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"-h\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"nodes\", \"--namespace=kube-system\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"pods\", \"--all\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"kubectl_get\", [\"pods\", \"--s\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"install\", \"requests\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"-v\", \"install\", \"--upgrade\", \"requests\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"--isolated\", \"--timeout=5\", \"list\", \"--outdated\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"install\", \"-r\", \"req.txt\", \"--user\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"--log=/tmp/pip.log\", \"--proxy=http://proxy:3128\", \"download\", \"x\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"-h\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"help\", \"install\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"--verbose\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip\", [\"-vv\", \"install\", \"x\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\", \"requests\", \"flask\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\", \"-r\", \"requirements.txt\", \"-r\", \"dev.txt\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\", \"-e\", \".\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\", \"-U\", \"--user\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\", \"--index-url=https://test.pypi.org/simple\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\", \"-t\", \"vendor\", \"--no-deps\", \"a\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\", \"-r\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"pip_install\", [\"install\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"init\", \"/srv/repo\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"snapshot\", \"/srv/repo\", \"/home\", \"/etc\", \"--tag=daily\", \"--tag=host1\", \"--exclude=*.tmp\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"snapshot\", \"/srv/repo\", \"/home\", \"--dry-run\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"restore\", \"/srv/repo\", \"latest\", \"--target=/tmp/r\", \"--include=*.conf\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"restore\", \"r\", \"s\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"forget\", \"/srv/repo\", \"--keep-last=3\", \"--keep-daily=7\", \"--prune\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"forget\", \"r\", \"--keep-weekly=4\", \"--keep-weekly=8\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"forget\", \"r\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"ls\", \"r\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"stats\", \"r\", \"snap1\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"ls\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"--version\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"snapshot\", \"r\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"docopt\", \"backup\", [\"restore\", \"r\", \"s\", \"--target\"], {\"version\": \"backup 1.4.0\", \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"git\", [\"add\", \"-n\", \"file\"]]\n");
+    t.push_str("[\"git\", [\"--bare\", \"-p\", \"branch\", \"-a\"]]\n");
+    t.push_str("[\"git\", [\"--version\"]]\n");
+    t.push_str("[\"git\", [\"-c\", \"user.name=x\", \"commit\", \"-m\", \"hi\"]]\n");
+    t.push_str("[\"git\", [\"--git-dir=/r\", \"push\", \"origin\"]]\n");
+    t.push_str("[\"git\", [\"checkout\", \"-b\", \"f\"]]\n");
+    t.push_str("[\"git\", [\"clone\", \"src\"]]\n");
+    t.push_str("[\"git\", [\"remote\", \"-v\"]]\n");
+    t.push_str("[\"git\", [\"help\"]]\n");
+    t.push_str("[\"git\", [\"--help\"]]\n");
+    t.push_str("[\"git\", [\"frobnicate\"]]\n");
+    t.push_str("[\"git\", [\"--no-pager\", \"status\"]]\n");
+    t.push_str("[\"git\", [\"--exec-path=/x\", \"--html-path\", \"--work-tree=/w\", \"add\", \"-A\"]]\n");
+    t.push_str("[\"git\", [\"-p\"]]\n");
+    t.push_str("[\"git\", []]\n");
+    t.push_str("[\"git\", [\"branch\", \"-x\"]]\n");
+    t.push_str("[\"naval\", [\"ship new Guardian Defiant Enterprise\", \"ship Guardian move 10 50\", \"ship Defiant move 10 50 --speed=20\", \"ship Enterprise move 3 4 --speed 12\", \"mine set 3 4 --moored\", \"mine set 7 7 --drifting\", \"mine set 8 8\", \"ship shoot 10 50\", \"ship Voyager move 1 1\", \"ship Enterprise move 7 7\", \"mine remove 3 4\", \"mine remove 0 0\", \"ship new Defiant Voyager\", \"ship shoot 7 7\", \"ship Voyager move 3 4 --speed=fast\", \"ship Guardian move 1\", \"--version\", \"ship shoot 3 4\"]]\n");
+    t.push_str("[\"case\", \"no usage\", \"Program that does things.\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"two usages\", \"Usage: prog\\n\\nusage: prog other\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"usage in prose\", \"Read the usage: notes.\\n\\nUsage: prog\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"unmatched paren\", \"Usage: prog (a | b\\n\", [\"a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"unmatched bracket\", \"Usage: prog [a\\n\", [\"a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"unexpected ending\", \"Usage: prog a )\\n\", [\"a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"short twice\", \"Usage: prog -x\\n\\nOptions:\\n  -x  one\\n  -x  two\\n\", [\"-x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"flag given an argument\", \"Usage: prog --foo=<x>\\n\\nOptions:\\n  --foo  a flag\\n\", [\"--foo=1\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"option eats paren\", \"Usage: prog -o\\n\\nOptions:\\n  -o FILE  output\\n\", [\"-o\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"long eats paren\", \"Usage: prog --out\\n\\nOptions:\\n  --out=<f>  output\\n\", [\"--out\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"long in usage only\", \"Usage: prog --out=<f>\\n\", [\"--out=x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"long in usage, space\", \"Usage: prog --out <f>\\n\", [\"--out\", \"x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"options shortcut\", \"Usage: prog [options]\\n\\nOptions: -a  All.\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"options shortcut set\", \"Usage: prog [options]\\n\\nOptions: -a  All.\\n\", [\"-a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"options shortcut unknown\", \"Usage: prog [options]\\n\\nOptions: -a  All.\\n\", [\"-x\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"one-line options\", \"Usage: prog [options]\\n\\nOptions:\\n  -a  All.\\n  -b, --bee  Bees. [default: none]\\n\", [\"-ab\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"default on flag\", \"Usage: prog [-q]\\n\\nOptions:\\n  -q  quiet [default: yes]\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"default case\", \"Usage: prog [--x=<v>]\\n\\nOptions:\\n  --x=<v>  [DeFaUlT: 7]\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"two defaults\", \"Usage: prog [--x=<v>]\\n\\nOptions:\\n  --x=<v>  a [default: 1] or [default: 2]\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"default runs on\", \"Usage: prog [--x=<v>]\\n\\nOptions:\\n  --x=<v>  first line\\n           [default: from line two]\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"commands\", \"Usage: prog add | rm\\n\", [\"add\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"commands other\", \"Usage: prog add | rm\\n\", [\"mv\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"command case\", \"Usage: prog ADD | rm\\n\", [\"ADD\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"argument forms\", \"Usage: prog <a> [B] [<c>...]\\n\", [\"1\", \"2\", \"3\", \"4\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"required repeat\", \"Usage: prog <f>...\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"either options\", \"Usage: prog (--xx=X|--yy=Y)\\n\", [\"--xx=1\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"either both\", \"Usage: prog (--xx=X|--yy=Y)\\n\", [\"--xx=1\", \"--yy=2\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"stacked arg\", \"Usage: prog [-v] [-o FILE]\\n\\nOptions:\\n  -v\\n  -o FILE\\n\", [\"-vofile\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"stacked arg apart\", \"Usage: prog [-v] [-o FILE]\\n\\nOptions:\\n  -v\\n  -o FILE\\n\", [\"-vo\", \"file\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"short needs arg\", \"Usage: prog [-o FILE]\\n\\nOptions:\\n  -o FILE\\n\", [\"-o\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"double dash\", \"Usage: prog [-o] [--] <arg>\\n\\nOptions: -o\\n\", [\"--\", \"-o\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"double dash only\", \"Usage: prog [-o] [--] <arg>\\n\\nOptions: -o\\n\", [\"-o\", \"--\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"dash command\", \"Usage: prog [-]\\n\", [\"-\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"upper arguments\", \"Usage: prog [NAME]...\\n\", [\"a\", \"b\", \"c\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"upper with digits\", \"Usage: prog X1 Y_2\\n\", [\"a\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"not upper\", \"Usage: prog x1 y_2\\n\", [\"x1\", \"y_2\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"options first\", \"Usage: prog [--opt] [<args>...]\\n\", [\"this\", \"--opt\"], {\"version\": null, \"options_first\": true, \"help\": true}]\n");
+    t.push_str("[\"case\", \"options before\", \"Usage: prog [--opt] [<args>...]\\n\", [\"--opt\", \"this\", \"that\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"prefix unique\", \"Usage: prog [--version] [--verbose]\\n\", [\"--verb\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"prefix ambiguous\", \"Usage: prog [--version] [--verbose]\\n\", [\"--ver\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"exact beats prefix\", \"Usage: prog [--ver] [--verbose]\\n\", [\"--ver\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"count -v\", \"Usage: prog -v...\\n\", [\"-vvvv\", \"-v\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"count both forms\", \"Usage: prog [-v | -vv | -vvv]\\n\", [\"-vv\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"count none\", \"Usage: prog [-v]...\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"repeated command\", \"Usage: prog (go | stop)...\\n\", [\"go\", \"go\", \"stop\", \"go\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"either repeat\", \"Usage: prog (a <x> | b <x>)...\\n\", [\"a\", \"1\", \"b\", \"2\", \"a\", \"3\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"either repeat 2\", \"Usage: prog (a <x> | b <y>)...\\n\", [\"a\", \"1\", \"b\", \"2\", \"a\", \"3\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"argument list default\", \"Usage: prog [-o <o>]...\\n\\nOptions: -o <o>  [default: x y]\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"argument list given\", \"Usage: prog [-o <o>]...\\n\\nOptions: -o <o>  [default: x y]\\n\", [\"-o\", \"a\", \"-o\", \"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"long equals empty\", \"Usage: prog [--opt=<v>]\\n\", [\"--opt=\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"unknown long equals\", \"Usage: prog [options]\\n\", [\"--zip=3\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"help disabled\", \"Usage: prog [-h]\\n\\nOptions: -h  help\\n\", [\"-h\"], {\"version\": null, \"options_first\": false, \"help\": false}]\n");
+    t.push_str("[\"case\", \"help unknown\", \"Usage: prog <x>\\n\", [\"--help\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"help after error\", \"Usage: prog <x>\\n\", [\"--he\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"version disabled\", \"Usage: prog [--version]\\n\", [\"--version\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"tabs in options\", \"Usage: prog [options]\\n\\nOptions:\\n\\t-a\\tAll\\n  -b  Bees\\n\", [\"-a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"unicode\", \"Usage: prog <ünï> [--café=<x>]\\n\", [\"ö\", \"--café=b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"blank line with spaces\", \"Usage: prog a\\n   \\n  prog b\\n\", [\"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"usage continues\", \"Usage: prog a\\n  prog b\\nOther text\\n\\n\", [\"b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"ellipsis glued\", \"Usage: prog <a>...<b>\\n\", [\"1\", \"2\", \"3\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"pipes glued\", \"Usage: prog (a|b|c)[d]\\n\", [\"c\", \"d\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"option shadowing arg\", \"Usage: prog [-a] <x>\\n\\nOptions: -a  all\\n\", [\"--\", \"-a\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"command after args\", \"Usage: prog <x> add\\n\", [\"add\", \"add\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"negative number\", \"Usage: prog <n>\\n\", [\"-5\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"lone dash dash in usage\", \"Usage: prog --\\n\", [\"--\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"bracket default arg\", \"Usage: prog [<a>]\\n\\nArguments:\\n  <a>  thing [default: 3]\\n\", [], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"Usage word inside\", \"Program usage:\\n  prog go\\n\", [\"go\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"repeated option arg\", \"Usage: prog --path=<p> --path=<p>\\n\", [\"--path=a\", \"--path=b\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"repeated flag\", \"Usage: prog -v -v\\n\", [\"-v\", \"-v\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    t.push_str("[\"case\", \"repeated flag once\", \"Usage: prog -v -v\\n\", [\"-v\"], {\"version\": null, \"options_first\": false, \"help\": true}]\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}

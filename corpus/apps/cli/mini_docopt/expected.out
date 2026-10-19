@@ -1,0 +1,3598 @@
+== quick ["tcp", "127.0.0.1", "80", "--timeout=30"]
+{'--baud': None,
+ '--help': False,
+ '--timeout': '30',
+ '--version': False,
+ '-h': False,
+ '<host>': '127.0.0.1',
+ '<port>': '80',
+ 'serial': False,
+ 'tcp': True}
+== quick ["serial", "COM3", "--baud=115200"]
+{'--baud': '115200',
+ '--help': False,
+ '--timeout': None,
+ '--version': False,
+ '-h': False,
+ '<host>': None,
+ '<port>': 'COM3',
+ 'serial': True,
+ 'tcp': False}
+== quick ["serial", "/dev/ttyUSB0"]
+{'--baud': None,
+ '--help': False,
+ '--timeout': None,
+ '--version': False,
+ '-h': False,
+ '<host>': None,
+ '<port>': '/dev/ttyUSB0',
+ 'serial': True,
+ 'tcp': False}
+== quick ["--version"]
+0.1.1rc
+== quick ["-h"]
+Usage:
+  quick_example.py tcp <host> <port> [--timeout=<seconds>]
+  quick_example.py serial <port> [--baud=9600] [--timeout=<seconds>]
+  quick_example.py -h | --help | --version
+== quick ["tcp", "localhost"]
+stderr: Usage:
+stderr:   quick_example.py tcp <host> <port> [--timeout=<seconds>]
+stderr:   quick_example.py serial <port> [--baud=9600] [--timeout=<seconds>]
+stderr:   quick_example.py -h | --help | --version
+exit 1
+== quick ["tcp", "h", "p", "--timeout"]
+stderr: --timeout requires argument
+stderr: Usage:
+stderr:   quick_example.py tcp <host> <port> [--timeout=<seconds>]
+stderr:   quick_example.py serial <port> [--baud=9600] [--timeout=<seconds>]
+stderr:   quick_example.py -h | --help | --version
+exit 1
+== quick ["serial", "p", "--baud", "9600", "--timeout", "5"]
+{'--baud': '9600',
+ '--help': False,
+ '--timeout': '5',
+ '--version': False,
+ '-h': False,
+ '<host>': None,
+ '<port>': 'p',
+ 'serial': True,
+ 'tcp': False}
+== quick ["--help", "--version"]
+Usage:
+  quick_example.py tcp <host> <port> [--timeout=<seconds>]
+  quick_example.py serial <port> [--baud=9600] [--timeout=<seconds>]
+  quick_example.py -h | --help | --version
+== naval_fate ["ship", "new", "Guardian", "Defiant", "Enterprise"]
+{'--drifting': False,
+ '--help': False,
+ '--moored': False,
+ '--speed': '10',
+ '--version': False,
+ '<name>': ['Guardian', 'Defiant', 'Enterprise'],
+ '<x>': None,
+ '<y>': None,
+ 'mine': False,
+ 'move': False,
+ 'new': True,
+ 'remove': False,
+ 'set': False,
+ 'ship': True,
+ 'shoot': False}
+== naval_fate ["ship", "Guardian", "move", "10", "50"]
+{'--drifting': False,
+ '--help': False,
+ '--moored': False,
+ '--speed': '10',
+ '--version': False,
+ '<name>': ['Guardian'],
+ '<x>': '10',
+ '<y>': '50',
+ 'mine': False,
+ 'move': True,
+ 'new': False,
+ 'remove': False,
+ 'set': False,
+ 'ship': True,
+ 'shoot': False}
+== naval_fate ["ship", "Guardian", "move", "10", "50", "--speed=20"]
+{'--drifting': False,
+ '--help': False,
+ '--moored': False,
+ '--speed': '20',
+ '--version': False,
+ '<name>': ['Guardian'],
+ '<x>': '10',
+ '<y>': '50',
+ 'mine': False,
+ 'move': True,
+ 'new': False,
+ 'remove': False,
+ 'set': False,
+ 'ship': True,
+ 'shoot': False}
+== naval_fate ["ship", "Guardian", "move", "1", "2", "--speed", "5", "--sp=6"]
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["ship", "shoot", "3", "4"]
+{'--drifting': False,
+ '--help': False,
+ '--moored': False,
+ '--speed': '10',
+ '--version': False,
+ '<name>': [],
+ '<x>': '3',
+ '<y>': '4',
+ 'mine': False,
+ 'move': False,
+ 'new': False,
+ 'remove': False,
+ 'set': False,
+ 'ship': True,
+ 'shoot': True}
+== naval_fate ["mine", "set", "10", "20", "--moored"]
+{'--drifting': False,
+ '--help': False,
+ '--moored': True,
+ '--speed': '10',
+ '--version': False,
+ '<name>': [],
+ '<x>': '10',
+ '<y>': '20',
+ 'mine': True,
+ 'move': False,
+ 'new': False,
+ 'remove': False,
+ 'set': True,
+ 'ship': False,
+ 'shoot': False}
+== naval_fate ["mine", "remove", "1", "1", "--drifting"]
+{'--drifting': True,
+ '--help': False,
+ '--moored': False,
+ '--speed': '10',
+ '--version': False,
+ '<name>': [],
+ '<x>': '1',
+ '<y>': '1',
+ 'mine': True,
+ 'move': False,
+ 'new': False,
+ 'remove': True,
+ 'set': False,
+ 'ship': False,
+ 'shoot': False}
+== naval_fate ["mine", "set", "1", "1", "--moored", "--drifting"]
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["ship", "new"]
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["--version"]
+Naval Fate 2.0
+== naval_fate ["--help"]
+Naval Fate.
+
+Usage:
+  naval_fate.py ship new <name>...
+  naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+  naval_fate.py ship shoot <x> <y>
+  naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+  naval_fate.py -h | --help
+  naval_fate.py --version
+
+Options:
+  -h --help     Show this screen.
+  --version     Show version.
+  --speed=<kn>  Speed in knots [default: 10].
+  --moored      Moored (anchored) mine.
+  --drifting    Drifting mine.
+== naval_fate ["-h"]
+Naval Fate.
+
+Usage:
+  naval_fate.py ship new <name>...
+  naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+  naval_fate.py ship shoot <x> <y>
+  naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+  naval_fate.py -h | --help
+  naval_fate.py --version
+
+Options:
+  -h --help     Show this screen.
+  --version     Show version.
+  --speed=<kn>  Speed in knots [default: 10].
+  --moored      Moored (anchored) mine.
+  --drifting    Drifting mine.
+== naval_fate ["ship", "Guardian", "move", "1"]
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["mine", "set", "1", "2", "--moor"]
+{'--drifting': False,
+ '--help': False,
+ '--moored': True,
+ '--speed': '10',
+ '--version': False,
+ '<name>': [],
+ '<x>': '1',
+ '<y>': '2',
+ 'mine': True,
+ 'move': False,
+ 'new': False,
+ 'remove': False,
+ 'set': True,
+ 'ship': False,
+ 'shoot': False}
+== naval_fate ["mine", "set", "1", "2", "--mo"]
+{'--drifting': False,
+ '--help': False,
+ '--moored': True,
+ '--speed': '10',
+ '--version': False,
+ '<name>': [],
+ '<x>': '1',
+ '<y>': '2',
+ 'mine': True,
+ 'move': False,
+ 'new': False,
+ 'remove': False,
+ 'set': True,
+ 'ship': False,
+ 'shoot': False}
+== naval_fate ["ship", "x", "move", "1", "2", "--speed"]
+stderr: --speed requires argument
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["ship", "x", "move", "1", "2", "--moored=yes"]
+stderr: --moored must not have an argument
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["ship", "x", "move", "1", "2", "--unknown"]
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["ship", "Guardian", "move", "--", "-1", "-2"]
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== naval_fate ["ship", "move", "1", "2"]
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+== arguments ["-vqr", "file.txt"]
+{'--help': False,
+ '--left': False,
+ '--right': False,
+ '-q': True,
+ '-r': True,
+ '-v': True,
+ 'CORRECTION': None,
+ 'FILE': ['file.txt']}
+== arguments ["-v", "a", "b", "c"]
+{'--help': False,
+ '--left': False,
+ '--right': False,
+ '-q': False,
+ '-r': False,
+ '-v': True,
+ 'CORRECTION': None,
+ 'FILE': ['a', 'b', 'c']}
+== arguments ["--left", "5", "FILE"]
+{'--help': False,
+ '--left': True,
+ '--right': False,
+ '-q': False,
+ '-r': False,
+ '-v': False,
+ 'CORRECTION': '5',
+ 'FILE': ['FILE']}
+== arguments ["--right", "7", "x.txt"]
+{'--help': False,
+ '--left': False,
+ '--right': True,
+ '-q': False,
+ '-r': False,
+ '-v': False,
+ 'CORRECTION': '7',
+ 'FILE': ['x.txt']}
+== arguments ["--left", "5"]
+stderr: Usage: arguments_example.py [-vqrh] [FILE] ...
+stderr:           arguments_example.py (--left | --right) CORRECTION FILE
+exit 1
+== arguments ["--left", "--right", "1", "f"]
+stderr: Usage: arguments_example.py [-vqrh] [FILE] ...
+stderr:           arguments_example.py (--left | --right) CORRECTION FILE
+exit 1
+== arguments []
+{'--help': False,
+ '--left': False,
+ '--right': False,
+ '-q': False,
+ '-r': False,
+ '-v': False,
+ 'CORRECTION': None,
+ 'FILE': []}
+== arguments ["-h"]
+Usage: arguments_example.py [-vqrh] [FILE] ...
+          arguments_example.py (--left | --right) CORRECTION FILE
+
+Process FILE and optionally apply correction to either left-hand side or
+right-hand side.
+
+Arguments:
+  FILE        optional input file
+  CORRECTION  correction angle, needs FILE, --left or --right to be present
+
+Options:
+  -h --help
+  -v       verbose mode
+  -q       quiet mode
+  -r       make report
+  --left   use left-hand side
+  --right  use right-hand side
+== arguments ["-vvq", "x"]
+stderr: Usage: arguments_example.py [-vqrh] [FILE] ...
+stderr:           arguments_example.py (--left | --right) CORRECTION FILE
+exit 1
+== calculator ["1", "+", "2", "+", "3", "+", "4", "+", "5"]
+{'*': 0,
+ '+': 4,
+ ',': 0,
+ '-': 0,
+ '--help': False,
+ '/': 0,
+ '<function>': None,
+ '<value>': ['1', '2', '3', '4', '5']}
+== calculator ["1", "+", "2", "*", "3", "/", "4", "-", "5"]
+{'*': 1,
+ '+': 1,
+ ',': 0,
+ '-': 1,
+ '--help': False,
+ '/': 1,
+ '<function>': None,
+ '<value>': ['1', '2', '3', '4', '5']}
+== calculator ["sum", "10", ",", "20", ",", "30", ",", "40"]
+{'*': 0,
+ '+': 0,
+ ',': 3,
+ '-': 0,
+ '--help': False,
+ '/': 0,
+ '<function>': 'sum',
+ '<value>': ['10', '20', '30', '40']}
+== calculator ["sum", "10", "20"]
+stderr: Usage:
+stderr:   calculator_example.py <value> ( ( + | - | * | / ) <value> )...
+stderr:   calculator_example.py <function> <value> [( , <value> )]...
+stderr:   calculator_example.py (-h | --help)
+exit 1
+== calculator ["1", "+"]
+{'*': 0,
+ '+': 0,
+ ',': 0,
+ '-': 0,
+ '--help': False,
+ '/': 0,
+ '<function>': '1',
+ '<value>': ['+']}
+== calculator ["max", "1"]
+{'*': 0,
+ '+': 0,
+ ',': 0,
+ '-': 0,
+ '--help': False,
+ '/': 0,
+ '<function>': 'max',
+ '<value>': ['1']}
+== calculator ["1", "+", "2", "x", "3"]
+stderr: Usage:
+stderr:   calculator_example.py <value> ( ( + | - | * | / ) <value> )...
+stderr:   calculator_example.py <function> <value> [( , <value> )]...
+stderr:   calculator_example.py (-h | --help)
+exit 1
+== calculator ["-h"]
+Not a serious example.
+
+Usage:
+  calculator_example.py <value> ( ( + | - | * | / ) <value> )...
+  calculator_example.py <function> <value> [( , <value> )]...
+  calculator_example.py (-h | --help)
+
+Examples:
+  calculator_example.py 1 + 2 + 3 + 4 + 5
+  calculator_example.py 1 + 2 '*' 3 / 4 - 5    # note quotes around '*'
+  calculator_example.py sum 10 , 20 , 30 , 40
+
+Options:
+  -h, --help
+== counted ["--help"]
+Usage: counted_example.py --help
+       counted_example.py -v...
+       counted_example.py go [go]
+       counted_example.py (--path=<path>)...
+       counted_example.py <file> <file>
+
+Try: counted_example.py -vvvvvvvvvv
+     counted_example.py go go
+     counted_example.py --path ./here --path ./there
+     counted_example.py this.txt that.txt
+== counted ["-v"]
+{'--help': False,
+ '--path': [],
+ '-v': 1,
+ '<file>': [],
+ 'go': 0}
+== counted ["-vvvvvvvvvv"]
+{'--help': False,
+ '--path': [],
+ '-v': 10,
+ '<file>': [],
+ 'go': 0}
+== counted ["-v", "-v", "-vv"]
+{'--help': False,
+ '--path': [],
+ '-v': 4,
+ '<file>': [],
+ 'go': 0}
+== counted ["go"]
+{'--help': False,
+ '--path': [],
+ '-v': 0,
+ '<file>': [],
+ 'go': 1}
+== counted ["go", "go"]
+{'--help': False,
+ '--path': [],
+ '-v': 0,
+ '<file>': [],
+ 'go': 2}
+== counted ["go", "go", "go"]
+stderr: Usage: counted_example.py --help
+stderr:        counted_example.py -v...
+stderr:        counted_example.py go [go]
+stderr:        counted_example.py (--path=<path>)...
+stderr:        counted_example.py <file> <file>
+exit 1
+== counted ["--path", "./here", "--path", "./there"]
+{'--help': False,
+ '--path': ['./here', './there'],
+ '-v': 0,
+ '<file>': [],
+ 'go': 0}
+== counted ["--path=a"]
+{'--help': False,
+ '--path': ['a'],
+ '-v': 0,
+ '<file>': [],
+ 'go': 0}
+== counted ["this.txt", "that.txt"]
+{'--help': False,
+ '--path': [],
+ '-v': 0,
+ '<file>': ['this.txt', 'that.txt'],
+ 'go': 0}
+== counted ["only.txt"]
+stderr: Usage: counted_example.py --help
+stderr:        counted_example.py -v...
+stderr:        counted_example.py go [go]
+stderr:        counted_example.py (--path=<path>)...
+stderr:        counted_example.py <file> <file>
+exit 1
+== counted ["--pa", "x"]
+{'--help': False,
+ '--path': ['x'],
+ '-v': 0,
+ '<file>': [],
+ 'go': 0}
+== counted []
+stderr: Usage: counted_example.py --help
+stderr:        counted_example.py -v...
+stderr:        counted_example.py go [go]
+stderr:        counted_example.py (--path=<path>)...
+stderr:        counted_example.py <file> <file>
+exit 1
+== odd_even ["1", "2", "3", "4"]
+{'--help': False,
+ 'EVEN': ['2', '4'],
+ 'ODD': ['1', '3']}
+== odd_even ["1", "2", "3"]
+stderr: Usage: odd_even_example.py [-h | --help] (ODD EVEN)...
+exit 1
+== odd_even ["-h"]
+Usage: odd_even_example.py [-h | --help] (ODD EVEN)...
+
+Example, try:
+  odd_even_example.py 1 2 3 4
+
+Options:
+  -h, --help
+== odd_even ["a", "b"]
+{'--help': False,
+ 'EVEN': ['b'],
+ 'ODD': ['a']}
+== odd_even ["--help", "1", "2"]
+Usage: odd_even_example.py [-h | --help] (ODD EVEN)...
+
+Example, try:
+  odd_even_example.py 1 2 3 4
+
+Options:
+  -h, --help
+== options ["-vq", "--exclude=x,y", "--select=E1", "--show-source", "src"]
+{'--benchmark': False,
+ '--count': False,
+ '--doctest': False,
+ '--exclude': 'x,y',
+ '--file': '*.py',
+ '--help': False,
+ '--ignore': None,
+ '--quiet': True,
+ '--repeat': False,
+ '--select': 'E1',
+ '--show-source': True,
+ '--statistics': False,
+ '--testsuite': None,
+ '--verbose': True,
+ '--version': False,
+ 'PATH': ['src']}
+== options ["--doctest"]
+{'--benchmark': False,
+ '--count': False,
+ '--doctest': True,
+ '--exclude': '.svn,CVS,.bzr,.hg,.git',
+ '--file': '*.py',
+ '--help': False,
+ '--ignore': None,
+ '--quiet': False,
+ '--repeat': False,
+ '--select': None,
+ '--show-source': False,
+ '--statistics': False,
+ '--testsuite': None,
+ '--verbose': False,
+ '--version': False,
+ 'PATH': []}
+== options ["--testsuite=tests"]
+{'--benchmark': False,
+ '--count': False,
+ '--doctest': False,
+ '--exclude': '.svn,CVS,.bzr,.hg,.git',
+ '--file': '*.py',
+ '--help': False,
+ '--ignore': None,
+ '--quiet': False,
+ '--repeat': False,
+ '--select': None,
+ '--show-source': False,
+ '--statistics': False,
+ '--testsuite': 'tests',
+ '--verbose': False,
+ '--version': False,
+ 'PATH': []}
+== options ["--version"]
+1.0.0rc2
+== options ["-f", "'*.py'", "-r", "--count", "src", "lib"]
+{'--benchmark': False,
+ '--count': True,
+ '--doctest': False,
+ '--exclude': '.svn,CVS,.bzr,.hg,.git',
+ '--file': "'*.py'",
+ '--help': False,
+ '--ignore': None,
+ '--quiet': False,
+ '--repeat': True,
+ '--select': None,
+ '--show-source': False,
+ '--statistics': False,
+ '--testsuite': None,
+ '--verbose': False,
+ '--version': False,
+ 'PATH': ['src', 'lib']}
+== options ["-fNAME", "src"]
+{'--benchmark': False,
+ '--count': False,
+ '--doctest': False,
+ '--exclude': '.svn,CVS,.bzr,.hg,.git',
+ '--file': 'NAME',
+ '--help': False,
+ '--ignore': None,
+ '--quiet': False,
+ '--repeat': False,
+ '--select': None,
+ '--show-source': False,
+ '--statistics': False,
+ '--testsuite': None,
+ '--verbose': False,
+ '--version': False,
+ 'PATH': ['src']}
+== options ["--select=E", "--ignore=W", "src"]
+stderr: Usage:
+stderr:   options_example.py [-hvqrf NAME] [--exclude=PATTERNS]
+stderr:                      [--select=ERRORS | --ignore=ERRORS] [--show-source]
+stderr:                      [--statistics] [--count] [--benchmark] PATH...
+stderr:   options_example.py (--doctest | --testsuite=DIR)
+stderr:   options_example.py --version
+exit 1
+== options ["--file=x.py", "--stat", "--bench", "p"]
+{'--benchmark': True,
+ '--count': False,
+ '--doctest': False,
+ '--exclude': '.svn,CVS,.bzr,.hg,.git',
+ '--file': 'x.py',
+ '--help': False,
+ '--ignore': None,
+ '--quiet': False,
+ '--repeat': False,
+ '--select': None,
+ '--show-source': False,
+ '--statistics': True,
+ '--testsuite': None,
+ '--verbose': False,
+ '--version': False,
+ 'PATH': ['p']}
+== options ["--testsuite"]
+stderr: --testsuite requires argument
+stderr: Usage:
+stderr:   options_example.py [-hvqrf NAME] [--exclude=PATTERNS]
+stderr:                      [--select=ERRORS | --ignore=ERRORS] [--show-source]
+stderr:                      [--statistics] [--count] [--benchmark] PATH...
+stderr:   options_example.py (--doctest | --testsuite=DIR)
+stderr:   options_example.py --version
+exit 1
+== options ["src", "--count", "--count"]
+stderr: Usage:
+stderr:   options_example.py [-hvqrf NAME] [--exclude=PATTERNS]
+stderr:                      [--select=ERRORS | --ignore=ERRORS] [--show-source]
+stderr:                      [--statistics] [--count] [--benchmark] PATH...
+stderr:   options_example.py (--doctest | --testsuite=DIR)
+stderr:   options_example.py --version
+exit 1
+== options ["-hv"]
+Example of program with many options using docopt.
+
+Usage:
+  options_example.py [-hvqrf NAME] [--exclude=PATTERNS]
+                     [--select=ERRORS | --ignore=ERRORS] [--show-source]
+                     [--statistics] [--count] [--benchmark] PATH...
+  options_example.py (--doctest | --testsuite=DIR)
+  options_example.py --version
+
+Arguments:
+  PATH  destination path
+
+Options:
+  -h --help            show this help message and exit
+  --version            show version and exit
+  -v --verbose         print status messages
+  -q --quiet           report only file names
+  -r --repeat          show all occurrences of the same error
+  --exclude=PATTERNS   exclude files or directories which match these comma
+                       separated patterns [default: .svn,CVS,.bzr,.hg,.git]
+  -f NAME --file=NAME  when parsing directories, only check filenames matching
+                       these comma separated patterns [default: *.py]
+  --select=ERRORS      select errors and warnings (e.g. E,W6)
+  --ignore=ERRORS      skip errors and warnings (e.g. E4,W)
+  --show-source        show source code for each error
+  --statistics         count errors and warnings
+  --count              print total number of errors and warnings to standard
+                       error and set exit code to 1 if total is not null
+  --benchmark          measure processing speed
+  --testsuite=DIR      run regression tests from dir
+  --doctest            run doctest on myself
+== options_shortcut ["8080"]
+{'--apply': False,
+ '--help': False,
+ '--number': None,
+ '--timeout': None,
+ '--version': False,
+ '-q': False,
+ '<port>': '8080'}
+== options_shortcut ["-n", "5", "-t", "30", "8080"]
+{'--apply': False,
+ '--help': False,
+ '--number': '5',
+ '--timeout': '30',
+ '--version': False,
+ '-q': False,
+ '<port>': '8080'}
+== options_shortcut ["--number=5", "--timeout=30", "--apply", "-q", "8080"]
+{'--apply': True,
+ '--help': False,
+ '--number': '5',
+ '--timeout': '30',
+ '--version': False,
+ '-q': True,
+ '<port>': '8080'}
+== options_shortcut ["-qn5", "80"]
+{'--apply': False,
+ '--help': False,
+ '--number': '5',
+ '--timeout': None,
+ '--version': False,
+ '-q': True,
+ '<port>': '80'}
+== options_shortcut ["--apply"]
+stderr: Usage:
+stderr:   options_shortcut_example.py [options] <port>
+exit 1
+== options_shortcut ["--appl", "80"]
+{'--apply': True,
+ '--help': False,
+ '--number': None,
+ '--timeout': None,
+ '--version': False,
+ '-q': False,
+ '<port>': '80'}
+== options_shortcut ["--number", "1", "--number", "2", "80"]
+stderr: Usage:
+stderr:   options_shortcut_example.py [options] <port>
+exit 1
+== options_shortcut ["-x", "80"]
+stderr: Usage:
+stderr:   options_shortcut_example.py [options] <port>
+exit 1
+== options_shortcut ["--version"]
+1.0.0rc2
+== validation ["--count=5", "out", "a", "b", "c"]
+{'--count': '5',
+ 'FILE': ['a', 'b', 'c'],
+ 'PATH': 'out'}
+== validation ["out"]
+stderr: Usage: prog.py [--count=N] PATH FILE...
+exit 1
+== validation ["out", "a"]
+{'--count': None,
+ 'FILE': ['a'],
+ 'PATH': 'out'}
+== validation ["--count=x", "out", "a"]
+{'--count': 'x',
+ 'FILE': ['a'],
+ 'PATH': 'out'}
+== git_add ["add", "-n", "-v", "file1", "file2"]
+{'--': False,
+ '--all': False,
+ '--dry-run': True,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': False,
+ '--patch': False,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': True,
+ '<filepattern>': ['file1', 'file2'],
+ 'add': True}
+== git_add ["add", "--patch"]
+{'--': False,
+ '--all': False,
+ '--dry-run': False,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': False,
+ '--patch': True,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': False,
+ '<filepattern>': [],
+ 'add': True}
+== git_add ["add", "--", "-weird"]
+{'--': True,
+ '--all': False,
+ '--dry-run': False,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': False,
+ '--patch': False,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': False,
+ '<filepattern>': ['-weird'],
+ 'add': True}
+== git_add ["add", "-A"]
+{'--': False,
+ '--all': True,
+ '--dry-run': False,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': False,
+ '--patch': False,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': False,
+ '<filepattern>': [],
+ 'add': True}
+== git_add ["add", "--all", "--dry"]
+{'--': False,
+ '--all': True,
+ '--dry-run': True,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': False,
+ '--patch': False,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': False,
+ '<filepattern>': [],
+ 'add': True}
+== git_add ["add", "--ignore", "x"]
+stderr: --ignore is not a unique prefix: --ignore-errors, --ignore-missing?
+stderr: usage: git add [options] [--] [<filepattern>...]
+exit 1
+== git_add ["add", "-i", "-p"]
+{'--': False,
+ '--all': False,
+ '--dry-run': False,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': True,
+ '--patch': True,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': False,
+ '<filepattern>': [],
+ 'add': True}
+== git_branch ["branch"]
+{'--abbrev': None,
+ '--color': None,
+ '--contains': None,
+ '--force': False,
+ '--help': False,
+ '--merged': None,
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': False,
+ '-d': False,
+ '-l': False,
+ '-m': False,
+ '-r': False,
+ '<branchname>': None,
+ '<newbranch>': None,
+ '<oldbranch>': None,
+ '<start-point>': None,
+ 'branch': True}
+== git_branch ["branch", "-a"]
+{'--abbrev': None,
+ '--color': None,
+ '--contains': None,
+ '--force': False,
+ '--help': False,
+ '--merged': None,
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': True,
+ '-d': False,
+ '-l': False,
+ '-m': False,
+ '-r': False,
+ '<branchname>': None,
+ '<newbranch>': None,
+ '<oldbranch>': None,
+ '<start-point>': None,
+ 'branch': True}
+== git_branch ["branch", "-r", "--merged=main"]
+{'--abbrev': None,
+ '--color': None,
+ '--contains': None,
+ '--force': False,
+ '--help': False,
+ '--merged': 'main',
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': False,
+ '-d': False,
+ '-l': False,
+ '-m': False,
+ '-r': True,
+ '<branchname>': None,
+ '<newbranch>': None,
+ '<oldbranch>': None,
+ '<start-point>': None,
+ 'branch': True}
+== git_branch ["branch", "new-feature", "main"]
+{'--abbrev': None,
+ '--color': None,
+ '--contains': None,
+ '--force': False,
+ '--help': False,
+ '--merged': None,
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': False,
+ '-d': False,
+ '-l': False,
+ '-m': False,
+ '-r': False,
+ '<branchname>': 'new-feature',
+ '<newbranch>': None,
+ '<oldbranch>': None,
+ '<start-point>': 'main',
+ 'branch': True}
+== git_branch ["branch", "-d", "old"]
+{'--abbrev': None,
+ '--color': None,
+ '--contains': None,
+ '--force': False,
+ '--help': False,
+ '--merged': None,
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': False,
+ '-d': True,
+ '-l': False,
+ '-m': False,
+ '-r': False,
+ '<branchname>': 'old',
+ '<newbranch>': None,
+ '<oldbranch>': None,
+ '<start-point>': None,
+ 'branch': True}
+== git_branch ["branch", "-D", "old", "-f"]
+stderr: usage: git branch [options] [-r | -a] [--merged=<commit> | --no-merged=<commit>]
+stderr:        git branch [options] [-l] [-f] <branchname> [<start-point>]
+stderr:        git branch [options] [-r] (-d | -D) <branchname>
+stderr:        git branch [options] (-m | -M) [<oldbranch>] <newbranch>
+exit 1
+== git_branch ["branch", "-m", "old", "new"]
+{'--abbrev': None,
+ '--color': None,
+ '--contains': None,
+ '--force': False,
+ '--help': False,
+ '--merged': None,
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': False,
+ '-d': False,
+ '-l': False,
+ '-m': True,
+ '-r': False,
+ '<branchname>': None,
+ '<newbranch>': 'new',
+ '<oldbranch>': 'old',
+ '<start-point>': None,
+ 'branch': True}
+== git_branch ["branch", "-M", "new"]
+stderr: usage: git branch [options] [-r | -a] [--merged=<commit> | --no-merged=<commit>]
+stderr:        git branch [options] [-l] [-f] <branchname> [<start-point>]
+stderr:        git branch [options] [-r] (-d | -D) <branchname>
+stderr:        git branch [options] (-m | -M) [<oldbranch>] <newbranch>
+exit 1
+== git_branch ["branch", "-vv", "--color=always"]
+stderr: usage: git branch [options] [-r | -a] [--merged=<commit> | --no-merged=<commit>]
+stderr:        git branch [options] [-l] [-f] <branchname> [<start-point>]
+stderr:        git branch [options] [-r] (-d | -D) <branchname>
+stderr:        git branch [options] (-m | -M) [<oldbranch>] <newbranch>
+exit 1
+== git_branch ["branch", "--merged=a", "--no-merged=b"]
+stderr: usage: git branch [options] [-r | -a] [--merged=<commit> | --no-merged=<commit>]
+stderr:        git branch [options] [-l] [-f] <branchname> [<start-point>]
+stderr:        git branch [options] [-r] (-d | -D) <branchname>
+stderr:        git branch [options] (-m | -M) [<oldbranch>] <newbranch>
+exit 1
+== git_branch ["branch", "-r", "-a"]
+stderr: usage: git branch [options] [-r | -a] [--merged=<commit> | --no-merged=<commit>]
+stderr:        git branch [options] [-l] [-f] <branchname> [<start-point>]
+stderr:        git branch [options] [-r] (-d | -D) <branchname>
+stderr:        git branch [options] (-m | -M) [<oldbranch>] <newbranch>
+exit 1
+== git_branch ["branch", "--contains=HEAD~3", "--abbrev=7"]
+{'--abbrev': '7',
+ '--color': None,
+ '--contains': 'HEAD~3',
+ '--force': False,
+ '--help': False,
+ '--merged': None,
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': False,
+ '-d': False,
+ '-l': False,
+ '-m': False,
+ '-r': False,
+ '<branchname>': None,
+ '<newbranch>': None,
+ '<oldbranch>': None,
+ '<start-point>': None,
+ 'branch': True}
+== git_checkout ["checkout", "main"]
+{'--': False,
+ '--conflict': None,
+ '--force': False,
+ '--merge': False,
+ '--orphan': None,
+ '--ours': False,
+ '--patch': False,
+ '--quiet': False,
+ '--theirs': False,
+ '--track': False,
+ '-B': None,
+ '-b': None,
+ '-l': False,
+ '<branch>': 'main',
+ '<file>': [],
+ 'checkout': True}
+== git_checkout ["checkout", "-b", "feature", "main"]
+{'--': False,
+ '--conflict': None,
+ '--force': False,
+ '--merge': False,
+ '--orphan': None,
+ '--ours': False,
+ '--patch': False,
+ '--quiet': False,
+ '--theirs': False,
+ '--track': False,
+ '-B': None,
+ '-b': 'feature',
+ '-l': False,
+ '<branch>': 'main',
+ '<file>': [],
+ 'checkout': True}
+== git_checkout ["checkout", "main", "--", "a.txt", "b.txt"]
+{'--': True,
+ '--conflict': None,
+ '--force': False,
+ '--merge': False,
+ '--orphan': None,
+ '--ours': False,
+ '--patch': False,
+ '--quiet': False,
+ '--theirs': False,
+ '--track': False,
+ '-B': None,
+ '-b': None,
+ '-l': False,
+ '<branch>': 'main',
+ '<file>': ['a.txt', 'b.txt'],
+ 'checkout': True}
+== git_checkout ["checkout", "-q", "--orphan", "gh-pages", "main"]
+{'--': False,
+ '--conflict': None,
+ '--force': False,
+ '--merge': False,
+ '--orphan': 'gh-pages',
+ '--ours': False,
+ '--patch': False,
+ '--quiet': True,
+ '--theirs': False,
+ '--track': False,
+ '-B': None,
+ '-b': None,
+ '-l': False,
+ '<branch>': 'main',
+ '<file>': [],
+ 'checkout': True}
+== git_checkout ["checkout", "--conflict", "diff3", "-m", "main"]
+{'--': False,
+ '--conflict': 'diff3',
+ '--force': False,
+ '--merge': True,
+ '--orphan': None,
+ '--ours': False,
+ '--patch': False,
+ '--quiet': False,
+ '--theirs': False,
+ '--track': False,
+ '-B': None,
+ '-b': None,
+ '-l': False,
+ '<branch>': 'main',
+ '<file>': [],
+ 'checkout': True}
+== git_checkout ["checkout", "-23", "main"]
+{'--': False,
+ '--conflict': None,
+ '--force': False,
+ '--merge': False,
+ '--orphan': None,
+ '--ours': True,
+ '--patch': False,
+ '--quiet': False,
+ '--theirs': True,
+ '--track': False,
+ '-B': None,
+ '-b': None,
+ '-l': False,
+ '<branch>': 'main',
+ '<file>': [],
+ 'checkout': True}
+== git_checkout ["checkout"]
+stderr: usage: git checkout [options] <branch>
+stderr:        git checkout [options] <branch> -- <file>...
+exit 1
+== git_clone ["clone", "https://example.com/r.git"]
+{'--': False,
+ '--bare': False,
+ '--branch': None,
+ '--depth': None,
+ '--local': False,
+ '--mirror': False,
+ '--no-checkout': False,
+ '--no-hardlinks': False,
+ '--origin': None,
+ '--progress': False,
+ '--quiet': False,
+ '--recurse-submodules': False,
+ '--recursive': False,
+ '--reference': None,
+ '--shared': False,
+ '--template': None,
+ '--upload-pack': None,
+ '--verbose': False,
+ '<dir>': None,
+ '<repo>': 'https://example.com/r.git',
+ 'clone': True}
+== git_clone ["clone", "--depth", "1", "-b", "main", "https://example.com/r.git", "dir"]
+{'--': False,
+ '--bare': False,
+ '--branch': 'main',
+ '--depth': '1',
+ '--local': False,
+ '--mirror': False,
+ '--no-checkout': False,
+ '--no-hardlinks': False,
+ '--origin': None,
+ '--progress': False,
+ '--quiet': False,
+ '--recurse-submodules': False,
+ '--recursive': False,
+ '--reference': None,
+ '--shared': False,
+ '--template': None,
+ '--upload-pack': None,
+ '--verbose': False,
+ '<dir>': 'dir',
+ '<repo>': 'https://example.com/r.git',
+ 'clone': True}
+== git_clone ["clone", "--bare", "--mirror", "--", "src"]
+{'--': True,
+ '--bare': True,
+ '--branch': None,
+ '--depth': None,
+ '--local': False,
+ '--mirror': True,
+ '--no-checkout': False,
+ '--no-hardlinks': False,
+ '--origin': None,
+ '--progress': False,
+ '--quiet': False,
+ '--recurse-submodules': False,
+ '--recursive': False,
+ '--reference': None,
+ '--shared': False,
+ '--template': None,
+ '--upload-pack': None,
+ '--verbose': False,
+ '<dir>': None,
+ '<repo>': 'src',
+ 'clone': True}
+== git_clone ["clone", "-vq", "--origin=up", "-u", "/bin/up", "src", "dst"]
+{'--': False,
+ '--bare': False,
+ '--branch': None,
+ '--depth': None,
+ '--local': False,
+ '--mirror': False,
+ '--no-checkout': False,
+ '--no-hardlinks': False,
+ '--origin': 'up',
+ '--progress': False,
+ '--quiet': True,
+ '--recurse-submodules': False,
+ '--recursive': False,
+ '--reference': None,
+ '--shared': False,
+ '--template': None,
+ '--upload-pack': '/bin/up',
+ '--verbose': True,
+ '<dir>': 'dst',
+ '<repo>': 'src',
+ 'clone': True}
+== git_clone ["clone", "--recurs", "src"]
+stderr: --recurs is not a unique prefix: --recursive, --recurse-submodules?
+stderr: usage: git clone [options] [--] <repo> [<dir>]
+exit 1
+== git_clone ["clone", "--re", "src"]
+stderr: --re is not a unique prefix: --recursive, --recurse-submodules, --reference?
+stderr: usage: git clone [options] [--] <repo> [<dir>]
+exit 1
+== git_commit ["commit", "-m", "'msg'"]
+{'--': False,
+ '--all': False,
+ '--amend': False,
+ '--author': None,
+ '--branch': False,
+ '--cleanup': None,
+ '--date': None,
+ '--dry-run': False,
+ '--edit': False,
+ '--file': None,
+ '--fixup': None,
+ '--help': False,
+ '--include': False,
+ '--interactive': False,
+ '--message': "'msg'",
+ '--no-post-rewrite': False,
+ '--no-verify': False,
+ '--null': False,
+ '--only': False,
+ '--porcelain': False,
+ '--quiet': False,
+ '--reedit-message': None,
+ '--reset-author': False,
+ '--reuse-message': None,
+ '--short': False,
+ '--signoff': False,
+ '--squash': None,
+ '--status': False,
+ '--template': None,
+ '--untracked-files': 'all',
+ '--verbose': False,
+ '<filepattern>': [],
+ 'commit': True}
+== git_commit ["commit", "-am", "fix"]
+{'--': False,
+ '--all': True,
+ '--amend': False,
+ '--author': None,
+ '--branch': False,
+ '--cleanup': None,
+ '--date': None,
+ '--dry-run': False,
+ '--edit': False,
+ '--file': None,
+ '--fixup': None,
+ '--help': False,
+ '--include': False,
+ '--interactive': False,
+ '--message': 'fix',
+ '--no-post-rewrite': False,
+ '--no-verify': False,
+ '--null': False,
+ '--only': False,
+ '--porcelain': False,
+ '--quiet': False,
+ '--reedit-message': None,
+ '--reset-author': False,
+ '--reuse-message': None,
+ '--short': False,
+ '--signoff': False,
+ '--squash': None,
+ '--status': False,
+ '--template': None,
+ '--untracked-files': 'all',
+ '--verbose': False,
+ '<filepattern>': [],
+ 'commit': True}
+== git_commit ["commit", "--amend", "--no-edit"]
+stderr: usage: git commit [options] [--] [<filepattern>...]
+exit 1
+== git_commit ["commit", "-m", "a", "-m", "b"]
+stderr: usage: git commit [options] [--] [<filepattern>...]
+exit 1
+== git_commit ["commit", "-F", "msg.txt", "--", "a", "b"]
+{'--': True,
+ '--all': False,
+ '--amend': False,
+ '--author': None,
+ '--branch': False,
+ '--cleanup': None,
+ '--date': None,
+ '--dry-run': False,
+ '--edit': False,
+ '--file': 'msg.txt',
+ '--fixup': None,
+ '--help': False,
+ '--include': False,
+ '--interactive': False,
+ '--message': None,
+ '--no-post-rewrite': False,
+ '--no-verify': False,
+ '--null': False,
+ '--only': False,
+ '--porcelain': False,
+ '--quiet': False,
+ '--reedit-message': None,
+ '--reset-author': False,
+ '--reuse-message': None,
+ '--short': False,
+ '--signoff': False,
+ '--squash': None,
+ '--status': False,
+ '--template': None,
+ '--untracked-files': 'all',
+ '--verbose': False,
+ '<filepattern>': ['a', 'b'],
+ 'commit': True}
+== git_commit ["commit", "-u"]
+stderr: -u requires argument
+stderr: usage: git commit [options] [--] [<filepattern>...]
+exit 1
+== git_commit ["commit", "-uno"]
+{'--': False,
+ '--all': False,
+ '--amend': False,
+ '--author': None,
+ '--branch': False,
+ '--cleanup': None,
+ '--date': None,
+ '--dry-run': False,
+ '--edit': False,
+ '--file': None,
+ '--fixup': None,
+ '--help': False,
+ '--include': False,
+ '--interactive': False,
+ '--message': None,
+ '--no-post-rewrite': False,
+ '--no-verify': False,
+ '--null': False,
+ '--only': False,
+ '--porcelain': False,
+ '--quiet': False,
+ '--reedit-message': None,
+ '--reset-author': False,
+ '--reuse-message': None,
+ '--short': False,
+ '--signoff': False,
+ '--squash': None,
+ '--status': False,
+ '--template': None,
+ '--untracked-files': 'no',
+ '--verbose': False,
+ '<filepattern>': [],
+ 'commit': True}
+== git_commit ["commit", "--untracked-files=normal"]
+{'--': False,
+ '--all': False,
+ '--amend': False,
+ '--author': None,
+ '--branch': False,
+ '--cleanup': None,
+ '--date': None,
+ '--dry-run': False,
+ '--edit': False,
+ '--file': None,
+ '--fixup': None,
+ '--help': False,
+ '--include': False,
+ '--interactive': False,
+ '--message': None,
+ '--no-post-rewrite': False,
+ '--no-verify': False,
+ '--null': False,
+ '--only': False,
+ '--porcelain': False,
+ '--quiet': False,
+ '--reedit-message': None,
+ '--reset-author': False,
+ '--reuse-message': None,
+ '--short': False,
+ '--signoff': False,
+ '--squash': None,
+ '--status': False,
+ '--template': None,
+ '--untracked-files': 'normal',
+ '--verbose': False,
+ '<filepattern>': [],
+ 'commit': True}
+== git_commit ["commit", "-C", "HEAD", "--reset-author"]
+{'--': False,
+ '--all': False,
+ '--amend': False,
+ '--author': None,
+ '--branch': False,
+ '--cleanup': None,
+ '--date': None,
+ '--dry-run': False,
+ '--edit': False,
+ '--file': None,
+ '--fixup': None,
+ '--help': False,
+ '--include': False,
+ '--interactive': False,
+ '--message': None,
+ '--no-post-rewrite': False,
+ '--no-verify': False,
+ '--null': False,
+ '--only': False,
+ '--porcelain': False,
+ '--quiet': False,
+ '--reedit-message': None,
+ '--reset-author': True,
+ '--reuse-message': 'HEAD',
+ '--short': False,
+ '--signoff': False,
+ '--squash': None,
+ '--status': False,
+ '--template': None,
+ '--untracked-files': 'all',
+ '--verbose': False,
+ '<filepattern>': [],
+ 'commit': True}
+== git_commit ["commit", "-s", "-S"]
+stderr: usage: git commit [options] [--] [<filepattern>...]
+exit 1
+== git_push ["push"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--exec': None,
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': False,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': [],
+ '<repository>': None,
+ 'push': True}
+== git_push ["push", "origin", "main"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--exec': None,
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': False,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': ['main'],
+ '<repository>': 'origin',
+ 'push': True}
+== git_push ["push", "-u", "origin", "feature"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--exec': None,
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': True,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': ['feature'],
+ '<repository>': 'origin',
+ 'push': True}
+== git_push ["push", "--tags", "--force", "origin"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--exec': None,
+ '--force': True,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': False,
+ '--tags': True,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': [],
+ '<repository>': 'origin',
+ 'push': True}
+== git_push ["push", "--delete", "origin", "old"]
+{'--all': False,
+ '--delete': True,
+ '--dry-run': False,
+ '--exec': None,
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': False,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': ['old'],
+ '<repository>': 'origin',
+ 'push': True}
+== git_push ["push", "--repo=up"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--exec': None,
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': 'up',
+ '--set-upstream': False,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': [],
+ '<repository>': None,
+ 'push': True}
+== git_push ["push", "-nv", "--porcelain", "origin", "a", "b", "c"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': True,
+ '--exec': None,
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': True,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': False,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': True,
+ '<refspec>': ['a', 'b', 'c'],
+ '<repository>': 'origin',
+ 'push': True}
+== git_push ["push", "--exec=/x", "origin"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--exec': '/x',
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': False,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': [],
+ '<repository>': 'origin',
+ 'push': True}
+== git_remote ["remote"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': None,
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "-v"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': True,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': None,
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "add", "-f", "origin", "https://example.com/r.git"]
+stderr: usage: git remote [-v | --verbose]
+stderr:        git remote add [-t <branch>] [-m <master>] [-f] [--mirror] <name> <url>
+stderr:        git remote rename <old> <new>
+stderr:        git remote rm <name>
+stderr:        git remote set-head <name> (-a | -d | <branch>)
+stderr:        git remote [-v | --verbose] show [-n] <name>
+stderr:        git remote prune [-n | --dry-run] <name>
+stderr:        git remote [-v | --verbose] update [-p | --prune] [(<group> | <remote>)...]
+stderr:        git remote set-branches <name> [--add] <branch>...
+stderr:        git remote set-url <name> <newurl> [<oldurl>]
+stderr:        git remote set-url --add <name> <newurl>
+stderr:        git remote set-url --delete <name> <url>
+exit 1
+== git_remote ["remote", "add", "-t", "main", "-m", "main", "up", "url"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': True,
+ '-n': False,
+ '-p': False,
+ '-t': True,
+ '<branch>': ['main'],
+ '<group>': [],
+ '<master>': 'main',
+ '<name>': 'up',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': 'url',
+ 'add': True,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "rename", "a", "b"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': None,
+ '<new>': 'b',
+ '<newurl>': None,
+ '<old>': 'a',
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': True,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "rm", "a"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'a',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': True,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "set-head", "origin", "-a"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': True,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'origin',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': True,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "set-head", "origin", "main"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': ['main'],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'origin',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': True,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "-v", "show", "origin"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': True,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'origin',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': True,
+ 'update': False}
+== git_remote ["remote", "prune", "--dry-run", "origin"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': True,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'origin',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': True,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "update", "-p", "a", "b"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': True,
+ '-t': False,
+ '<branch>': [],
+ '<group>': ['a', 'b'],
+ '<master>': None,
+ '<name>': None,
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': True}
+== git_remote ["remote", "set-branches", "o", "a", "b"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': ['a', 'b'],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'o',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': True,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "set-url", "o", "new"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'o',
+ '<new>': None,
+ '<newurl>': 'new',
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': True,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "set-url", "--add", "o", "new"]
+{'--add': True,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'o',
+ '<new>': None,
+ '<newurl>': 'new',
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': True,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "set-url", "--delete", "o", "old"]
+{'--add': False,
+ '--delete': True,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': False,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': 'o',
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': 'old',
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': True,
+ 'show': False,
+ 'update': False}
+== git_remote ["remote", "set-url", "o"]
+stderr: usage: git remote [-v | --verbose]
+stderr:        git remote add [-t <branch>] [-m <master>] [-f] [--mirror] <name> <url>
+stderr:        git remote rename <old> <new>
+stderr:        git remote rm <name>
+stderr:        git remote set-head <name> (-a | -d | <branch>)
+stderr:        git remote [-v | --verbose] show [-n] <name>
+stderr:        git remote prune [-n | --dry-run] <name>
+stderr:        git remote [-v | --verbose] update [-p | --prune] [(<group> | <remote>)...]
+stderr:        git remote set-branches <name> [--add] <branch>...
+stderr:        git remote set-url <name> <newurl> [<oldurl>]
+stderr:        git remote set-url --add <name> <newurl>
+stderr:        git remote set-url --delete <name> <url>
+exit 1
+== docker_run ["-d", "--name", "web", "-p", "80:80", "-p", "443:443", "-e", "A=1", "-e", "B=2", "nginx"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["-it", "--rm", "alpine", "sh", "-c", "'echo", "hi'"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["--memory=512m", "-v", "/data:/data", "-w", "/data", "postgres:16"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["nginx"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["-e", "A=1", "-e", "B=2", "-e", "C=3", "img", "cmd", "a1", "a2"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["--restart=always", "redis"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["-h"]
+Run a command in a new container.
+
+Usage:
+  docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+  docker run (-h | --help)
+
+Options:
+  -h, --help                Show this screen.
+  -d, --detach              Run container in background and print its ID.
+  -e, --env=<kv>            Set an environment variable.
+  -p, --publish=<port>      Publish a container's port [default: ].
+  --name=<name>             Assign a name to the container.
+  -i, --interactive         Keep STDIN open even if not attached.
+  -t, --tty                 Allocate a pseudo-TTY.
+  --rm                      Remove the container when it exits.
+  -m, --memory=<bytes>      Memory limit [default: 0].
+  -v, --volume=<vol>        Bind mount a volume.
+  -w, --workdir=<dir>       Working directory inside the container.
+  --restart=<policy>        Restart policy [DEFAULT: no].
+== docker_run ["--rm"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["-dit", "busybox"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["-p"]
+stderr: -p requires argument
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["--name=x", "--name=y", "img"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["--det", "img"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== docker_run ["img", "--rm"]
+stderr: Usage:
+stderr:   docker run [options] [-e <kv>]... [-p <port>]... IMAGE [COMMAND] [ARG...]
+stderr:   docker run (-h | --help)
+exit 1
+== curl ["https://example.com"]
+{'--compressed': False,
+ '--data': None,
+ '--header': None,
+ '--location': False,
+ '--max-time': '30',
+ '--output': None,
+ '--request': 'GET',
+ '--silent': False,
+ '--user': None,
+ '--verbose': False,
+ '--version': False,
+ '<url>': ['https://example.com']}
+== curl ["-sSL", "https://a", "https://b"]
+stderr: Usage:
+stderr:   curl [options] <url>...
+stderr:   curl --version
+exit 1
+== curl ["-X", "POST", "-d", "'{}'", "-H", "'Content-Type:", "x'", "https://api"]
+{'--compressed': False,
+ '--data': "'{}'",
+ '--header': "'Content-Type:",
+ '--location': False,
+ '--max-time': '30',
+ '--output': None,
+ '--request': 'POST',
+ '--silent': False,
+ '--user': None,
+ '--verbose': False,
+ '--version': False,
+ '<url>': ["x'", 'https://api']}
+== curl ["--request=PUT", "--data=a", "--max-time=5", "u"]
+{'--compressed': False,
+ '--data': 'a',
+ '--header': None,
+ '--location': False,
+ '--max-time': '5',
+ '--output': None,
+ '--request': 'PUT',
+ '--silent': False,
+ '--user': None,
+ '--verbose': False,
+ '--version': False,
+ '<url>': ['u']}
+== curl ["-u", "admin:secret", "https://x"]
+{'--compressed': False,
+ '--data': None,
+ '--header': None,
+ '--location': False,
+ '--max-time': '30',
+ '--output': None,
+ '--request': 'GET',
+ '--silent': False,
+ '--user': 'admin:secret',
+ '--verbose': False,
+ '--version': False,
+ '<url>': ['https://x']}
+== curl ["--user=a:b", "u"]
+{'--compressed': False,
+ '--data': None,
+ '--header': None,
+ '--location': False,
+ '--max-time': '30',
+ '--output': None,
+ '--request': 'GET',
+ '--silent': False,
+ '--user': 'a:b',
+ '--verbose': False,
+ '--version': False,
+ '<url>': ['u']}
+== curl ["-o", "out.html", "-L", "u"]
+{'--compressed': False,
+ '--data': None,
+ '--header': None,
+ '--location': True,
+ '--max-time': '30',
+ '--output': 'out.html',
+ '--request': 'GET',
+ '--silent': False,
+ '--user': None,
+ '--verbose': False,
+ '--version': False,
+ '<url>': ['u']}
+== curl ["--version"]
+curl 8.5.0
+== curl ["--compress", "u"]
+{'--compressed': True,
+ '--data': None,
+ '--header': None,
+ '--location': False,
+ '--max-time': '30',
+ '--output': None,
+ '--request': 'GET',
+ '--silent': False,
+ '--user': None,
+ '--verbose': False,
+ '--version': False,
+ '<url>': ['u']}
+== curl ["--max", "u"]
+stderr: Usage:
+stderr:   curl [options] <url>...
+stderr:   curl --version
+exit 1
+== curl ["-v"]
+stderr: Usage:
+stderr:   curl [options] <url>...
+stderr:   curl --version
+exit 1
+== ssh ["host"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '22',
+ '-q': False,
+ '-v': 0,
+ '<command>': [],
+ '<destination>': 'host'}
+== ssh ["-v", "host"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '22',
+ '-q': False,
+ '-v': 1,
+ '<command>': [],
+ '<destination>': 'host'}
+== ssh ["-vvv", "-p", "2222", "user@host"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '2222',
+ '-q': False,
+ '-v': 3,
+ '<command>': [],
+ '<destination>': 'user@host'}
+== ssh ["-i", "~/.ssh/id_ed25519", "-i", "k2", "-L", "8080:localhost:80", "host", "uptime"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': ['8080:localhost:80'],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': ['~/.ssh/id_ed25519', 'k2'],
+ '-o': [],
+ '-p': '22',
+ '-q': False,
+ '-v': 0,
+ '<command>': ['uptime'],
+ '<destination>': 'host'}
+== ssh ["-46", "host"]
+{'-4': True,
+ '-6': True,
+ '-A': False,
+ '-C': False,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '22',
+ '-q': False,
+ '-v': 0,
+ '<command>': [],
+ '<destination>': 'host'}
+== ssh ["-NT", "-L", "1:a:2", "-L", "3:b:4", "host"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': ['1:a:2', '3:b:4'],
+ '-N': True,
+ '-T': True,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '22',
+ '-q': False,
+ '-v': 0,
+ '<command>': [],
+ '<destination>': 'host'}
+== ssh ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "h"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': ['StrictHostKeyChecking=no', 'UserKnownHostsFile=/dev/null'],
+ '-p': '22',
+ '-q': False,
+ '-v': 0,
+ '<command>': [],
+ '<destination>': 'h'}
+== ssh ["-V"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': True,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '22',
+ '-q': False,
+ '-v': 0,
+ '<command>': [],
+ '<destination>': None}
+== ssh ["-q", "host", "ls", "-la", "/tmp"]
+stderr: Usage:
+stderr:   ssh [-46AaCNqT] [-v]... [-p <port>] [-i <identity>]... [-L <spec>]... [-o <option>]... <destination> [<command>...]
+stderr:   ssh -V
+exit 1
+== ssh ["host", "-v"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': False,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '22',
+ '-q': False,
+ '-v': 1,
+ '<command>': [],
+ '<destination>': 'host'}
+== ssh ["-p"]
+stderr: -p requires argument
+stderr: Usage:
+stderr:   ssh [-46AaCNqT] [-v]... [-p <port>] [-i <identity>]... [-L <spec>]... [-o <option>]... <destination> [<command>...]
+stderr:   ssh -V
+exit 1
+== ssh ["-Cqp22", "host"]
+{'-4': False,
+ '-6': False,
+ '-A': False,
+ '-C': True,
+ '-L': [],
+ '-N': False,
+ '-T': False,
+ '-V': False,
+ '-a': False,
+ '-i': [],
+ '-o': [],
+ '-p': '22',
+ '-q': True,
+ '-v': 0,
+ '<command>': [],
+ '<destination>': 'host'}
+== tar ["-cvzf", "backup.tar.gz", "src", "docs"]
+{'--exclude': [],
+ '--help': False,
+ '-C': None,
+ '-c': True,
+ '-f': 'backup.tar.gz',
+ '-j': False,
+ '-p': False,
+ '-t': False,
+ '-v': True,
+ '-x': False,
+ '-z': True,
+ 'FILE': ['src', 'docs']}
+== tar ["-xf", "a.tar", "-C", "/tmp"]
+{'--exclude': [],
+ '--help': False,
+ '-C': '/tmp',
+ '-c': False,
+ '-f': 'a.tar',
+ '-j': False,
+ '-p': False,
+ '-t': False,
+ '-v': False,
+ '-x': True,
+ '-z': False,
+ 'FILE': []}
+== tar ["-t"]
+{'--exclude': [],
+ '--help': False,
+ '-C': None,
+ '-c': False,
+ '-f': '-',
+ '-j': False,
+ '-p': False,
+ '-t': True,
+ '-v': False,
+ '-x': False,
+ '-z': False,
+ 'FILE': []}
+== tar ["-tvf", "a.tar"]
+{'--exclude': [],
+ '--help': False,
+ '-C': None,
+ '-c': False,
+ '-f': 'a.tar',
+ '-j': False,
+ '-p': False,
+ '-t': True,
+ '-v': True,
+ '-x': False,
+ '-z': False,
+ 'FILE': []}
+== tar ["-c", "-x", "f"]
+stderr: Usage: tar (-c | -x | -t) [-vzjp] [-f ARCHIVE] [-C DIR] [--exclude=PATTERN]... [FILE...]
+stderr:        tar --help
+exit 1
+== tar ["--exclude=*.o", "--exclude=*.a", "-cf", "x", "."]
+{'--exclude': ['*.o', '*.a'],
+ '--help': False,
+ '-C': None,
+ '-c': True,
+ '-f': 'x',
+ '-j': False,
+ '-p': False,
+ '-t': False,
+ '-v': False,
+ '-x': False,
+ '-z': False,
+ 'FILE': ['.']}
+== tar ["-xjpf", "a.tar.bz2"]
+{'--exclude': [],
+ '--help': False,
+ '-C': None,
+ '-c': False,
+ '-f': 'a.tar.bz2',
+ '-j': True,
+ '-p': True,
+ '-t': False,
+ '-v': False,
+ '-x': True,
+ '-z': False,
+ 'FILE': []}
+== tar ["--help"]
+Usage: tar (-c | -x | -t) [-vzjp] [-f ARCHIVE] [-C DIR] [--exclude=PATTERN]... [FILE...]
+       tar --help
+
+  -c             create a new archive
+  -x             extract files from an archive
+  -t             list the contents of an archive
+  -v             verbosely list files processed
+  -z             filter the archive through gzip
+  -j             filter the archive through bzip2
+  -p             preserve permissions
+  -f ARCHIVE     use archive file ARCHIVE [default: -]
+  -C DIR         change to directory DIR
+  --exclude=PATTERN  exclude files matching PATTERN
+  --help         give this help list
+== tar ["-cf"]
+stderr: -f requires argument
+stderr: Usage: tar (-c | -x | -t) [-vzjp] [-f ARCHIVE] [-C DIR] [--exclude=PATTERN]... [FILE...]
+stderr:        tar --help
+exit 1
+== tar ["-cfx"]
+{'--exclude': [],
+ '--help': False,
+ '-C': None,
+ '-c': True,
+ '-f': 'x',
+ '-j': False,
+ '-p': False,
+ '-t': False,
+ '-v': False,
+ '-x': False,
+ '-z': False,
+ 'FILE': []}
+== tar ["-czf", "-", "."]
+{'--exclude': [],
+ '--help': False,
+ '-C': None,
+ '-c': True,
+ '-f': '-',
+ '-j': False,
+ '-p': False,
+ '-t': False,
+ '-v': False,
+ '-x': False,
+ '-z': True,
+ 'FILE': ['.']}
+== kubectl_get ["pods"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["pods", "-A"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["pods", "web-1", "web-2", "-n", "prod", "-o", "wide"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["deploy", "-l", "app=web,tier!=db", "-w"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["pods", "-n", "a", "-A"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["svc", "--show-labels", "-o=yaml"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["-h"]
+Display one or many resources.
+
+Usage:
+  kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+  kubectl get -h
+
+Options:
+  -n, --namespace=<namespace>  The namespace scope for this request [default: default].
+  -A, --all-namespaces         List the requested object(s) across all namespaces.
+  -o, --output=<format>        Output format, one of json|yaml|wide|name.
+  -l, --selector=<selector>    Selector (label query) to filter on.
+  -w, --watch                  After listing, watch for changes.
+  --show-labels                Show all labels as the last column.
+  -h, --help                   Help for get.
+== kubectl_get ["nodes", "--namespace=kube-system"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["pods", "--all"]
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== kubectl_get ["pods", "--s"]
+stderr: --s is not a unique prefix: --selector, --show-labels?
+stderr: Usage:
+stderr:   kubectl get <resource> [<name>...] [-n <namespace> | -A] [-o <format>] [-l <selector>] [-w] [--show-labels]
+stderr:   kubectl get -h
+exit 1
+== pip ["install", "requests"]
+{'--help': False,
+ '--isolated': False,
+ '--log': None,
+ '--proxy': None,
+ '--quiet': False,
+ '--timeout': '15',
+ '--verbose': False,
+ '<args>': ['requests'],
+ '<command>': 'install'}
+== pip ["-v", "install", "--upgrade", "requests"]
+{'--help': False,
+ '--isolated': False,
+ '--log': None,
+ '--proxy': None,
+ '--quiet': False,
+ '--timeout': '15',
+ '--verbose': True,
+ '<args>': ['--upgrade', 'requests'],
+ '<command>': 'install'}
+== pip ["--isolated", "--timeout=5", "list", "--outdated"]
+{'--help': False,
+ '--isolated': True,
+ '--log': None,
+ '--proxy': None,
+ '--quiet': False,
+ '--timeout': '5',
+ '--verbose': False,
+ '<args>': ['--outdated'],
+ '<command>': 'list'}
+== pip ["install", "-r", "req.txt", "--user"]
+{'--help': False,
+ '--isolated': False,
+ '--log': None,
+ '--proxy': None,
+ '--quiet': False,
+ '--timeout': '15',
+ '--verbose': False,
+ '<args>': ['-r', 'req.txt', '--user'],
+ '<command>': 'install'}
+== pip ["--log=/tmp/pip.log", "--proxy=http://proxy:3128", "download", "x"]
+{'--help': False,
+ '--isolated': False,
+ '--log': '/tmp/pip.log',
+ '--proxy': 'http://proxy:3128',
+ '--quiet': False,
+ '--timeout': '15',
+ '--verbose': False,
+ '<args>': ['x'],
+ '<command>': 'download'}
+== pip ["-h"]
+pip, the top level.
+
+Usage:
+  pip [options] <command> [<args>...]
+
+General Options:
+  -h, --help          Show help.
+  --isolated          Run pip in an isolated mode.
+  -v, --verbose       Give more output.
+  -q, --quiet         Give less output.
+  --log=<path>        Path to a verbose appending log.
+  --proxy=<proxy>     Specify a proxy in the form scheme://[user:passwd@]proxy.server:port.
+  --timeout=<sec>     Set the socket timeout [default: 15].
+== pip ["help", "install"]
+{'--help': False,
+ '--isolated': False,
+ '--log': None,
+ '--proxy': None,
+ '--quiet': False,
+ '--timeout': '15',
+ '--verbose': False,
+ '<args>': ['install'],
+ '<command>': 'help'}
+== pip ["--verbose"]
+stderr: Usage:
+stderr:   pip [options] <command> [<args>...]
+exit 1
+== pip ["-vv", "install", "x"]
+stderr: Usage:
+stderr:   pip [options] <command> [<args>...]
+exit 1
+== pip_install ["install", "requests", "flask"]
+{'--editable': False,
+ '--index-url': 'https://pypi.org/simple',
+ '--no-deps': False,
+ '--requirement': [],
+ '--target': None,
+ '--upgrade': False,
+ '--user': False,
+ '<path>': [],
+ '<requirement>': ['requests', 'flask'],
+ 'install': True}
+== pip_install ["install", "-r", "requirements.txt", "-r", "dev.txt"]
+{'--editable': False,
+ '--index-url': 'https://pypi.org/simple',
+ '--no-deps': False,
+ '--requirement': ['requirements.txt', 'dev.txt'],
+ '--target': None,
+ '--upgrade': False,
+ '--user': False,
+ '<path>': [],
+ '<requirement>': [],
+ 'install': True}
+== pip_install ["install", "-e", "."]
+{'--editable': True,
+ '--index-url': 'https://pypi.org/simple',
+ '--no-deps': False,
+ '--requirement': [],
+ '--target': None,
+ '--upgrade': False,
+ '--user': False,
+ '<path>': ['.'],
+ '<requirement>': [],
+ 'install': True}
+== pip_install ["install", "-U", "--user", "x"]
+{'--editable': False,
+ '--index-url': 'https://pypi.org/simple',
+ '--no-deps': False,
+ '--requirement': [],
+ '--target': None,
+ '--upgrade': True,
+ '--user': True,
+ '<path>': [],
+ '<requirement>': ['x'],
+ 'install': True}
+== pip_install ["install", "--index-url=https://test.pypi.org/simple", "x"]
+{'--editable': False,
+ '--index-url': 'https://test.pypi.org/simple',
+ '--no-deps': False,
+ '--requirement': [],
+ '--target': None,
+ '--upgrade': False,
+ '--user': False,
+ '<path>': [],
+ '<requirement>': ['x'],
+ 'install': True}
+== pip_install ["install", "-t", "vendor", "--no-deps", "a", "b"]
+{'--editable': False,
+ '--index-url': 'https://pypi.org/simple',
+ '--no-deps': True,
+ '--requirement': [],
+ '--target': 'vendor',
+ '--upgrade': False,
+ '--user': False,
+ '<path>': [],
+ '<requirement>': ['a', 'b'],
+ 'install': True}
+== pip_install ["install", "-r"]
+stderr: -r requires argument
+stderr: Usage:
+stderr:   pip install [options] <requirement>...
+stderr:   pip install [options] -r <file>...
+stderr:   pip install [options] [-e] <path>...
+exit 1
+== pip_install ["install"]
+stderr: Usage:
+stderr:   pip install [options] <requirement>...
+stderr:   pip install [options] -r <file>...
+stderr:   pip install [options] [-e] <path>...
+exit 1
+== backup ["init", "/srv/repo"]
+{'--dry-run': False,
+ '--exclude': [],
+ '--include': [],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': [],
+ '--prune': False,
+ '--tag': [],
+ '--target': '.',
+ '--version': False,
+ '<path>': [],
+ '<repo>': '/srv/repo',
+ '<snapshot>': None,
+ 'forget': False,
+ 'init': True,
+ 'ls': False,
+ 'restore': False,
+ 'snapshot': False,
+ 'stats': False}
+== backup ["snapshot", "/srv/repo", "/home", "/etc", "--tag=daily", "--tag=host1", "--exclude=*.tmp"]
+{'--dry-run': False,
+ '--exclude': ['*.tmp'],
+ '--include': [],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': [],
+ '--prune': False,
+ '--tag': ['daily', 'host1'],
+ '--target': '.',
+ '--version': False,
+ '<path>': ['/home', '/etc'],
+ '<repo>': '/srv/repo',
+ '<snapshot>': None,
+ 'forget': False,
+ 'init': False,
+ 'ls': False,
+ 'restore': False,
+ 'snapshot': True,
+ 'stats': False}
+== backup ["snapshot", "/srv/repo", "/home", "--dry-run"]
+{'--dry-run': True,
+ '--exclude': [],
+ '--include': [],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': [],
+ '--prune': False,
+ '--tag': [],
+ '--target': '.',
+ '--version': False,
+ '<path>': ['/home'],
+ '<repo>': '/srv/repo',
+ '<snapshot>': None,
+ 'forget': False,
+ 'init': False,
+ 'ls': False,
+ 'restore': False,
+ 'snapshot': True,
+ 'stats': False}
+== backup ["restore", "/srv/repo", "latest", "--target=/tmp/r", "--include=*.conf"]
+{'--dry-run': False,
+ '--exclude': [],
+ '--include': ['*.conf'],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': [],
+ '--prune': False,
+ '--tag': [],
+ '--target': '/tmp/r',
+ '--version': False,
+ '<path>': [],
+ '<repo>': '/srv/repo',
+ '<snapshot>': 'latest',
+ 'forget': False,
+ 'init': False,
+ 'ls': False,
+ 'restore': True,
+ 'snapshot': False,
+ 'stats': False}
+== backup ["restore", "r", "s"]
+{'--dry-run': False,
+ '--exclude': [],
+ '--include': [],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': [],
+ '--prune': False,
+ '--tag': [],
+ '--target': '.',
+ '--version': False,
+ '<path>': [],
+ '<repo>': 'r',
+ '<snapshot>': 's',
+ 'forget': False,
+ 'init': False,
+ 'ls': False,
+ 'restore': True,
+ 'snapshot': False,
+ 'stats': False}
+== backup ["forget", "/srv/repo", "--keep-last=3", "--keep-daily=7", "--prune"]
+{'--dry-run': False,
+ '--exclude': [],
+ '--include': [],
+ '--keep-daily': ['7'],
+ '--keep-last': ['3'],
+ '--keep-weekly': [],
+ '--prune': True,
+ '--tag': [],
+ '--target': '.',
+ '--version': False,
+ '<path>': [],
+ '<repo>': '/srv/repo',
+ '<snapshot>': None,
+ 'forget': True,
+ 'init': False,
+ 'ls': False,
+ 'restore': False,
+ 'snapshot': False,
+ 'stats': False}
+== backup ["forget", "r", "--keep-weekly=4", "--keep-weekly=8"]
+{'--dry-run': False,
+ '--exclude': [],
+ '--include': [],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': ['4', '8'],
+ '--prune': False,
+ '--tag': [],
+ '--target': '.',
+ '--version': False,
+ '<path>': [],
+ '<repo>': 'r',
+ '<snapshot>': None,
+ 'forget': True,
+ 'init': False,
+ 'ls': False,
+ 'restore': False,
+ 'snapshot': False,
+ 'stats': False}
+== backup ["forget", "r"]
+stderr: USAGE:
+stderr:     backup init <repo>
+stderr:     backup snapshot <repo> <path>... [--tag=<tag>]... [--exclude=<glob>]... [--dry-run]
+stderr:     backup restore <repo> <snapshot> [--target=<dir>] [--include=<glob>]...
+stderr:     backup forget <repo> (--keep-last=<n> | --keep-daily=<n> | --keep-weekly=<n>)... [--prune]
+stderr:     backup (ls | stats) <repo> [<snapshot>]
+stderr:     backup --version
+exit 1
+== backup ["ls", "r"]
+{'--dry-run': False,
+ '--exclude': [],
+ '--include': [],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': [],
+ '--prune': False,
+ '--tag': [],
+ '--target': '.',
+ '--version': False,
+ '<path>': [],
+ '<repo>': 'r',
+ '<snapshot>': None,
+ 'forget': False,
+ 'init': False,
+ 'ls': True,
+ 'restore': False,
+ 'snapshot': False,
+ 'stats': False}
+== backup ["stats", "r", "snap1"]
+{'--dry-run': False,
+ '--exclude': [],
+ '--include': [],
+ '--keep-daily': [],
+ '--keep-last': [],
+ '--keep-weekly': [],
+ '--prune': False,
+ '--tag': [],
+ '--target': '.',
+ '--version': False,
+ '<path>': [],
+ '<repo>': 'r',
+ '<snapshot>': 'snap1',
+ 'forget': False,
+ 'init': False,
+ 'ls': False,
+ 'restore': False,
+ 'snapshot': False,
+ 'stats': True}
+== backup ["ls"]
+stderr: USAGE:
+stderr:     backup init <repo>
+stderr:     backup snapshot <repo> <path>... [--tag=<tag>]... [--exclude=<glob>]... [--dry-run]
+stderr:     backup restore <repo> <snapshot> [--target=<dir>] [--include=<glob>]...
+stderr:     backup forget <repo> (--keep-last=<n> | --keep-daily=<n> | --keep-weekly=<n>)... [--prune]
+stderr:     backup (ls | stats) <repo> [<snapshot>]
+stderr:     backup --version
+exit 1
+== backup ["--version"]
+backup 1.4.0
+== backup ["snapshot", "r"]
+stderr: USAGE:
+stderr:     backup init <repo>
+stderr:     backup snapshot <repo> <path>... [--tag=<tag>]... [--exclude=<glob>]... [--dry-run]
+stderr:     backup restore <repo> <snapshot> [--target=<dir>] [--include=<glob>]...
+stderr:     backup forget <repo> (--keep-last=<n> | --keep-daily=<n> | --keep-weekly=<n>)... [--prune]
+stderr:     backup (ls | stats) <repo> [<snapshot>]
+stderr:     backup --version
+exit 1
+== backup ["restore", "r", "s", "--target"]
+stderr: --target requires argument
+stderr: USAGE:
+stderr:     backup init <repo>
+stderr:     backup snapshot <repo> <path>... [--tag=<tag>]... [--exclude=<glob>]... [--dry-run]
+stderr:     backup restore <repo> <snapshot> [--target=<dir>] [--include=<glob>]...
+stderr:     backup forget <repo> (--keep-last=<n> | --keep-daily=<n> | --keep-weekly=<n>)... [--prune]
+stderr:     backup (ls | stats) <repo> [<snapshot>]
+stderr:     backup --version
+exit 1
+== git ["add", "-n", "file"]
+-> git_add ["add", "-n", "file"]
+{'--': False,
+ '--all': False,
+ '--dry-run': True,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': False,
+ '--patch': False,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': False,
+ '<filepattern>': ['file'],
+ 'add': True}
+== git ["--bare", "-p", "branch", "-a"]
+-> git_branch ["branch", "-a"]
+{'--abbrev': None,
+ '--color': None,
+ '--contains': None,
+ '--force': False,
+ '--help': False,
+ '--merged': None,
+ '--no-merged': None,
+ '--set-upstream': False,
+ '--track': False,
+ '--verbose': False,
+ '-D': False,
+ '-M': False,
+ '-a': True,
+ '-d': False,
+ '-l': False,
+ '-m': False,
+ '-r': False,
+ '<branchname>': None,
+ '<newbranch>': None,
+ '<oldbranch>': None,
+ '<start-point>': None,
+ 'branch': True}
+== git ["--version"]
+git version 1.7.4.4
+== git ["-c", "user.name=x", "commit", "-m", "hi"]
+stderr: 'user.name=x' is not a git.py command. See 'git help'.
+exit 1
+== git ["--git-dir=/r", "push", "origin"]
+-> git_push ["push", "origin"]
+{'--all': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--exec': None,
+ '--force': False,
+ '--help': False,
+ '--mirror': False,
+ '--porcelain': False,
+ '--progress': False,
+ '--quiet': False,
+ '--receive-pack': None,
+ '--repo': None,
+ '--set-upstream': False,
+ '--tags': False,
+ '--thin': False,
+ '--verbose': False,
+ '<refspec>': [],
+ '<repository>': 'origin',
+ 'push': True}
+== git ["checkout", "-b", "f"]
+-> git_checkout ["checkout", "-b", "f"]
+stderr: usage: git checkout [options] <branch>
+stderr:        git checkout [options] <branch> -- <file>...
+exit 1
+== git ["clone", "src"]
+-> git_clone ["clone", "src"]
+{'--': False,
+ '--bare': False,
+ '--branch': None,
+ '--depth': None,
+ '--local': False,
+ '--mirror': False,
+ '--no-checkout': False,
+ '--no-hardlinks': False,
+ '--origin': None,
+ '--progress': False,
+ '--quiet': False,
+ '--recurse-submodules': False,
+ '--recursive': False,
+ '--reference': None,
+ '--shared': False,
+ '--template': None,
+ '--upload-pack': None,
+ '--verbose': False,
+ '<dir>': None,
+ '<repo>': 'src',
+ 'clone': True}
+== git ["remote", "-v"]
+-> git_remote ["remote", "-v"]
+{'--add': False,
+ '--delete': False,
+ '--dry-run': False,
+ '--mirror': False,
+ '--prune': False,
+ '--verbose': True,
+ '-a': False,
+ '-d': False,
+ '-f': False,
+ '-m': False,
+ '-n': False,
+ '-p': False,
+ '-t': False,
+ '<branch>': [],
+ '<group>': [],
+ '<master>': None,
+ '<name>': None,
+ '<new>': None,
+ '<newurl>': None,
+ '<old>': None,
+ '<oldurl>': None,
+ '<remote>': [],
+ '<url>': None,
+ 'add': False,
+ 'prune': False,
+ 'remote': True,
+ 'rename': False,
+ 'rm': False,
+ 'set-branches': False,
+ 'set-head': False,
+ 'set-url': False,
+ 'show': False,
+ 'update': False}
+== git ["help"]
+-> git --help
+usage: git [--version] [--exec-path=<path>] [--html-path]
+           [-p|--paginate|--no-pager] [--no-replace-objects]
+           [--bare] [--git-dir=<path>] [--work-tree=<path>]
+           [-c name=value]
+           <command> [<args>...]
+       git [--help]
+
+The most commonly used git commands are:
+   add        Add file contents to the index
+   branch     List, create, or delete branches
+   checkout   Checkout a branch or paths to the working tree
+   clone      Clone a repository into a new directory
+   commit     Record changes to the repository
+   push       Update remote refs along with associated objects
+   remote     Manage set of tracked repositories
+
+See 'git help <command>' for more information on a specific command.
+== git ["--help"]
+usage: git [--version] [--exec-path=<path>] [--html-path]
+           [-p|--paginate|--no-pager] [--no-replace-objects]
+           [--bare] [--git-dir=<path>] [--work-tree=<path>]
+           [-c name=value]
+           <command> [<args>...]
+       git [--help]
+
+The most commonly used git commands are:
+   add        Add file contents to the index
+   branch     List, create, or delete branches
+   checkout   Checkout a branch or paths to the working tree
+   clone      Clone a repository into a new directory
+   commit     Record changes to the repository
+   push       Update remote refs along with associated objects
+   remote     Manage set of tracked repositories
+
+See 'git help <command>' for more information on a specific command.
+== git ["frobnicate"]
+stderr: 'frobnicate' is not a git.py command. See 'git help'.
+exit 1
+== git ["--no-pager", "status"]
+stderr: 'status' is not a git.py command. See 'git help'.
+exit 1
+== git ["--exec-path=/x", "--html-path", "--work-tree=/w", "add", "-A"]
+-> git_add ["add", "-A"]
+{'--': False,
+ '--all': True,
+ '--dry-run': False,
+ '--edit': False,
+ '--force': False,
+ '--help': False,
+ '--ignore-errors': False,
+ '--ignore-missing': False,
+ '--intent-to-add': False,
+ '--interactive': False,
+ '--patch': False,
+ '--refresh': False,
+ '--update': False,
+ '--verbose': False,
+ '<filepattern>': [],
+ 'add': True}
+== git ["-p"]
+stderr: usage: git [--version] [--exec-path=<path>] [--html-path]
+stderr:            [-p|--paginate|--no-pager] [--no-replace-objects]
+stderr:            [--bare] [--git-dir=<path>] [--work-tree=<path>]
+stderr:            [-c name=value]
+stderr:            <command> [<args>...]
+stderr:        git [--help]
+exit 1
+== git []
+-> git --help
+usage: git [--version] [--exec-path=<path>] [--html-path]
+           [-p|--paginate|--no-pager] [--no-replace-objects]
+           [--bare] [--git-dir=<path>] [--work-tree=<path>]
+           [-c name=value]
+           <command> [<args>...]
+       git [--help]
+
+The most commonly used git commands are:
+   add        Add file contents to the index
+   branch     List, create, or delete branches
+   checkout   Checkout a branch or paths to the working tree
+   clone      Clone a repository into a new directory
+   commit     Record changes to the repository
+   push       Update remote refs along with associated objects
+   remote     Manage set of tracked repositories
+
+See 'git help <command>' for more information on a specific command.
+== git ["branch", "-x"]
+-> git_branch ["branch", "-x"]
+stderr: usage: git branch [options] [-r | -a] [--merged=<commit> | --no-merged=<commit>]
+stderr:        git branch [options] [-l] [-f] <branchname> [<start-point>]
+stderr:        git branch [options] [-r] (-d | -D) <branchname>
+stderr:        git branch [options] (-m | -M) [<oldbranch>] <newbranch>
+exit 1
+== naval session (18 commands)
+$ naval_fate.py ship new Guardian Defiant Enterprise
+  launched Guardian at (0, 0)
+  launched Defiant at (0, 0)
+  launched Enterprise at (0, 0)
+$ naval_fate.py ship Guardian move 10 50
+  Guardian moves from (0, 0) to (10, 50) at 10 knots, 60 miles
+$ naval_fate.py ship Defiant move 10 50 --speed=20
+  Defiant moves from (0, 0) to (10, 50) at 20 knots, 60 miles
+$ naval_fate.py ship Enterprise move 3 4 --speed 12
+  Enterprise moves from (0, 0) to (3, 4) at 12 knots, 7 miles
+$ naval_fate.py mine set 3 4 --moored
+  moored mine set at (3, 4)
+$ naval_fate.py mine set 7 7 --drifting
+  drifting mine set at (7, 7)
+$ naval_fate.py mine set 8 8
+  moored mine set at (8, 8)
+$ naval_fate.py ship shoot 10 50
+  shot at (10, 50) sinks Guardian, Defiant
+$ naval_fate.py ship Voyager move 1 1
+  no ship named Voyager
+$ naval_fate.py ship Enterprise move 7 7
+  Enterprise moves from (3, 4) to (7, 7) at 10 knots, 7 miles
+  Enterprise hits a drifting mine at (7, 7) and sinks
+$ naval_fate.py mine remove 3 4
+  mine removed from (3, 4)
+$ naval_fate.py mine remove 0 0
+  no mine at (0, 0)
+$ naval_fate.py ship new Defiant Voyager
+  launched Defiant at (0, 0)
+  launched Voyager at (0, 0)
+$ naval_fate.py ship shoot 7 7
+  shot at (7, 7) hits nothing
+$ naval_fate.py ship Voyager move 3 4 --speed=fast
+  bad speed: fast
+$ naval_fate.py ship Guardian move 1
+stderr: Usage:
+stderr:   naval_fate.py ship new <name>...
+stderr:   naval_fate.py ship <name> move <x> <y> [--speed=<kn>]
+stderr:   naval_fate.py ship shoot <x> <y>
+stderr:   naval_fate.py mine (set|remove) <x> <y> [--moored|--drifting]
+stderr:   naval_fate.py -h | --help
+stderr:   naval_fate.py --version
+exit 1
+$ naval_fate.py --version
+Naval Fate 2.0
+$ naval_fate.py ship shoot 3 4
+  shot at (3, 4) hits nothing
+fleet: Defiant (0, 0), Voyager (0, 0)
+mines: (8, 8) moored
+== case "no usage" []
+uncaught DocoptLanguageError: "usage:" (case-insensitive) not found.
+exit 1
+== case "two usages" []
+uncaught DocoptLanguageError: More than one "usage:" (case-insensitive).
+exit 1
+== case "usage in prose" []
+uncaught DocoptLanguageError: More than one "usage:" (case-insensitive).
+exit 1
+== case "unmatched paren" ["a"]
+uncaught DocoptLanguageError: unmatched '('
+exit 1
+== case "unmatched bracket" ["a"]
+uncaught DocoptLanguageError: unmatched '['
+exit 1
+== case "unexpected ending" ["a"]
+uncaught DocoptLanguageError: unexpected ending: ')'
+exit 1
+== case "short twice" ["-x"]
+uncaught DocoptLanguageError: -x is specified ambiguously 2 times
+exit 1
+== case "flag given an argument" ["--foo=1"]
+uncaught DocoptLanguageError: --foo must not have an argument
+exit 1
+== case "option eats paren" ["-o", "x"]
+uncaught DocoptLanguageError: unmatched '('
+exit 1
+== case "long eats paren" ["--out", "x"]
+uncaught DocoptLanguageError: unmatched '('
+exit 1
+== case "long in usage only" ["--out=x"]
+{'--out': 'x'}
+== case "long in usage, space" ["--out", "x"]
+{'--out': True,
+ '<f>': 'x'}
+== case "options shortcut" []
+{}
+== case "options shortcut set" ["-a"]
+stderr: Usage: prog [options]
+exit 1
+== case "options shortcut unknown" ["-x"]
+stderr: Usage: prog [options]
+exit 1
+== case "one-line options" ["-ab"]
+{'--bee': True,
+ '-a': True}
+== case "default on flag" []
+{'-q': False}
+== case "default case" []
+{'--x': '7'}
+== case "two defaults" []
+{'--x': '1] or [default: 2'}
+== case "default runs on" []
+{'--x': 'from line two'}
+== case "commands" ["add"]
+{'add': True,
+ 'rm': False}
+== case "commands other" ["mv"]
+stderr: Usage: prog add | rm
+exit 1
+== case "command case" ["ADD"]
+{'ADD': 'ADD',
+ 'rm': False}
+== case "argument forms" ["1", "2", "3", "4"]
+{'<a>': '1',
+ '<c>': ['3', '4'],
+ 'B': '2'}
+== case "required repeat" []
+stderr: Usage: prog <f>...
+exit 1
+== case "either options" ["--xx=1"]
+{'--xx': '1',
+ '--yy': None}
+== case "either both" ["--xx=1", "--yy=2"]
+stderr: Usage: prog (--xx=X|--yy=Y)
+exit 1
+== case "stacked arg" ["-vofile"]
+{'-o': 'file',
+ '-v': True}
+== case "stacked arg apart" ["-vo", "file"]
+{'-o': 'file',
+ '-v': True}
+== case "short needs arg" ["-o"]
+stderr: -o requires argument
+stderr: Usage: prog [-o FILE]
+exit 1
+== case "double dash" ["--", "-o"]
+{'--': True,
+ '-o': False,
+ '<arg>': '-o'}
+== case "double dash only" ["-o", "--"]
+stderr: Usage: prog [-o] [--] <arg>
+exit 1
+== case "dash command" ["-"]
+{'-': True}
+== case "upper arguments" ["a", "b", "c"]
+{'NAME': ['a', 'b', 'c']}
+== case "upper with digits" ["a", "b"]
+{'X1': 'a',
+ 'Y_2': 'b'}
+== case "not upper" ["x1", "y_2"]
+{'x1': True,
+ 'y_2': True}
+== case "options first" ["this", "--opt"]
+{'--opt': False,
+ '<args>': ['this', '--opt']}
+== case "options before" ["--opt", "this", "that"]
+{'--opt': True,
+ '<args>': ['this', 'that']}
+== case "prefix unique" ["--verb"]
+{'--verbose': True,
+ '--version': False}
+== case "prefix ambiguous" ["--ver"]
+stderr: --ver is not a unique prefix: --version, --verbose?
+stderr: Usage: prog [--version] [--verbose]
+exit 1
+== case "exact beats prefix" ["--ver"]
+{'--ver': True,
+ '--verbose': False}
+== case "count -v" ["-vvvv", "-v"]
+{'-v': 5}
+== case "count both forms" ["-vv"]
+{'-v': 2}
+== case "count none" []
+{'-v': 0}
+== case "repeated command" ["go", "go", "stop", "go"]
+{'go': 3,
+ 'stop': 1}
+== case "either repeat" ["a", "1", "b", "2", "a", "3"]
+{'<x>': ['1', '2', '3'],
+ 'a': 2,
+ 'b': 1}
+== case "either repeat 2" ["a", "1", "b", "2", "a", "3"]
+{'<x>': ['1', '3'],
+ '<y>': ['2'],
+ 'a': 2,
+ 'b': 1}
+== case "argument list default" []
+{'-o': 0,
+ '<o>': []}
+== case "argument list given" ["-o", "a", "-o", "b"]
+{'-o': 2,
+ '<o>': ['a', 'b']}
+== case "long equals empty" ["--opt="]
+{'--opt': ''}
+== case "unknown long equals" ["--zip=3"]
+stderr: Usage: prog [options]
+exit 1
+== case "help disabled" ["-h"]
+{'-h': True}
+== case "help unknown" ["--help"]
+Usage: prog <x>
+== case "help after error" ["--he"]
+stderr: Usage: prog <x>
+exit 1
+== case "version disabled" ["--version"]
+{'--version': True}
+== case "tabs in options" ["-a"]
+stderr: Usage: prog [options]
+exit 1
+== case "unicode" ["ö", "--café=b"]
+{'--café': 'b',
+ '<ünï>': 'ö'}
+== case "blank line with spaces" ["b"]
+stderr: Usage: prog a
+exit 1
+== case "usage continues" ["b"]
+stderr: Usage: prog a
+stderr:   prog b
+stderr: Other text
+exit 1
+== case "ellipsis glued" ["1", "2", "3"]
+stderr: Usage: prog <a>...<b>
+exit 1
+== case "pipes glued" ["c", "d"]
+{'a': False,
+ 'b': False,
+ 'c': True,
+ 'd': True}
+== case "option shadowing arg" ["--", "-a"]
+stderr: Usage: prog [-a] <x>
+exit 1
+== case "command after args" ["add", "add"]
+{'<x>': 'add',
+ 'add': True}
+== case "negative number" ["-5"]
+stderr: Usage: prog <n>
+exit 1
+== case "lone dash dash in usage" ["--"]
+{'--': True}
+== case "bracket default arg" []
+{'<a>': None}
+== case "Usage word inside" ["go"]
+{'go': True}
+== case "repeated option arg" ["--path=a", "--path=b"]
+{'--path': ['a', 'b']}
+== case "repeated flag" ["-v", "-v"]
+{'-v': 2}
+== case "repeated flag once" ["-v"]
+stderr: Usage: prog -v -v
+exit 1
