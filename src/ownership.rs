@@ -4195,6 +4195,9 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         | "String.push_str"
         | "String.clear"
         | "String.insert_str"
+        // B-2026-10-19-2.
+        | "String.pop"
+        | "String.truncate"
         // B-2026-08-26-22 — `reserve` may reallocate the byte buffer, so it is
         // a write borrow of the receiver even though it changes no content.
         | "String.reserve"

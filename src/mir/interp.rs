@@ -2508,6 +2508,33 @@ impl<'a> Interp<'a> {
                 }
                 Ok(Value::Unit)
             }
+            // B-2026-10-19-2: the last char off the end, and the text cut to
+            // `n` bytes (a no-op past the end and 0 below it, as
+            // `Vec.truncate`; a cut inside a char panics).
+            (false, "pop", [s]) => {
+                let id = self.box_behind(s)?;
+                let c = match &mut self.live(id)?.value {
+                    Value::Str(text) => text.pop().map(Value::Char),
+                    other => return err(format!("{name} of {other:?}")),
+                };
+                self.option(ret, c)
+            }
+            (false, "truncate", [s, Value::Int(n)]) => {
+                let id = self.box_behind(s)?;
+                let Value::Str(text) = &mut self.live(id)?.value else {
+                    return err(format!("{name} of a non-string"));
+                };
+                let keep = (*n).clamp(0, text.len() as i128) as usize;
+                if !text.is_char_boundary(keep) {
+                    self.panic_message = Some(TRUNCATE_OFF_A_CHAR.to_string());
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::Panic));
+                    }
+                    return Err(Stop::Abort(AbortReason::Panic));
+                }
+                text.truncate(keep);
+                Ok(Value::Unit)
+            }
             _ => err(format!("call of unknown function {name}")),
         }
     }
@@ -11595,6 +11622,10 @@ impl<'a> Interp<'a> {
         Some(format!("leaked at exit: {}", text.join(", ")))
     }
 }
+
+/// What `String.truncate` says when its length is inside a char, on both
+/// backends (B-2026-10-19-2).
+pub const TRUNCATE_OFF_A_CHAR: &str = "String.truncate: the length is not on a UTF-8 char boundary";
 
 /// `String` methods [`Interp::string_text_method`] implements.
 const STRING_TEXT_METHODS: &[&str] = &[

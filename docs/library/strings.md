@@ -83,6 +83,8 @@ Parsing text into a number is `T.parse(s)` on the target type, which returns `Re
 | `push` | `fn push(mut ref self, c: char)` | Appends one scalar value, encoded as UTF-8 |
 | `push_str` | `fn push_str(mut ref self, s: Str)` | Appends text |
 | `clear` | `fn clear(mut ref self)` | Empties the string |
+| `pop` | `fn pop(mut ref self) -> Option[char]` | Removes and returns the last scalar value; `None` when empty |
+| `truncate` | `fn truncate(mut ref self, len: i64)` | Keeps the first `len` bytes. A `len` at or past the end does nothing and a negative one empties the string, as `Vec.truncate`; a `len` inside a char panics |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` more bytes. A hint: `additional <= 0` does nothing, and there is no `capacity()` |
 | `+` | `fn add(self, other: String) -> String` | Concatenation into a new `String`. Borrows both operands, so `a + b` leaves both usable ([core-semantics.md §4.7](../core-semantics.md#4-parameters-calls-and-patterns)). In a loop, prefer `push_str` |
 

@@ -759,6 +759,51 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Unit
             }
+            "pop" => {
+                // pop() -> Option[char]: removes the last char
+                // (B-2026-10-19-2, docs/library/strings.md).
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'pop' takes no arguments, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Char],
+                }
+            }
+            "truncate" => {
+                // truncate(n: i64) -> (): keeps the first `n` bytes; panics
+                // when byte `n` is inside a char (B-2026-10-19-2).
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'truncate' expects 1 argument, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'truncate' expects an integer length, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Unit
+            }
             "push_str" => {
                 // push_str(other: String) -> (). Mutating append; receiver
                 // must be a mutable binding (ownership.rs classifies this

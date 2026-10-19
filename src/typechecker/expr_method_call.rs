@@ -133,6 +133,7 @@ pub(crate) const STRING_BUILTIN_METHODS: &[&str] = &[
     "is_empty",
     "len",
     "lines",
+    "pop",
     "push",
     "push_str",
     "repeat",
@@ -155,6 +156,7 @@ pub(crate) const STRING_BUILTIN_METHODS: &[&str] = &[
     "trim",
     "trim_end",
     "trim_start",
+    "truncate",
 ];
 
 /// Every method name `infer_slice_method` answers — the builtin `Slice`

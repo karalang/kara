@@ -8849,3 +8849,16 @@ fn main() {
         "[   ab]\n2 3\n",
     );
 }
+
+/// B-2026-10-19-2: `pop` and `truncate` write the `String`, so a `let`
+/// binding cannot call them.
+#[test]
+fn string_pop_and_truncate_need_a_mut_binding() {
+    for call in ["let _ = s.pop();", "s.truncate(1);"] {
+        rejected(
+            "string-pop-truncate-immutable",
+            &format!("fn main() {{\n    let s = \"ab\".to_string();\n    {call}\n}}\n"),
+            "is declared without `mut`",
+        );
+    }
+}

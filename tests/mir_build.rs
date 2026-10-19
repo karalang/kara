@@ -4964,3 +4964,80 @@ fn main() {
         }
     }
 }
+
+/// `String.pop` takes the last char off the end, whatever its UTF-8 width,
+/// and `String.truncate` keeps the first `n` bytes (a no-op past the end, as
+/// `Vec.truncate`), on both backends (B-2026-10-19-2).
+#[test]
+fn mir_string_pop_and_truncate() {
+    const SRC: &str = "fn strip_newline(s: mut ref String) {\n    \
+        if s.ends_with(\"\\n\") { let _ = s.pop(); }\n}\n\
+        fn main() {\n    \
+        let mut s = \"abc\\n\".to_string();\n    \
+        strip_newline(mut s);\n    \
+        println(f\"[{s}] {s.len()}\");\n    \
+        let mut t = \"h\\u{e9}llo\\u{2192}\\u{20ac}\\u{1f600}\".to_string();\n    \
+        let a = t.pop().unwrap();\n    \
+        let b = t.pop().unwrap();\n    \
+        let c = t.pop().unwrap();\n    \
+        println(f\"{a} {b} {c} {t} {t.len()}\");\n    \
+        t.truncate(3);\n    \
+        println(f\"[{t}] {t.len()}\");\n    \
+        t.truncate(10);\n    \
+        t.push('!');\n    \
+        println(f\"[{t}] {t.len()}\");\n    \
+        t.truncate(-1);\n    \
+        let none = t.pop().is_none();\n    \
+        println(f\"[{t}] {t.is_empty()} {none}\");\n    \
+        let mut w = \"ab\".to_string();\n    \
+        w.push('c');\n    \
+        while let Some(ch) = w.pop() { print(f\"{ch}\"); }\n    \
+        println(f\" {w.len()}\");\n\
+        }\n";
+    let want = "[abc] 3\n\u{1f600} \u{20ac} \u{2192} h\u{e9}llo 6\n[h\u{e9}] 3\n[h\u{e9}!] 4\n[] true true\ncba 0\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+/// A `String.truncate` length inside a char panics, with the same message on
+/// both backends (B-2026-10-19-2).
+#[test]
+fn mir_string_truncate_inside_a_char_panics() {
+    let src = "fn main() {\n    let mut t = \"h\\u{e9}\".to_string();\n    \
+               println(\"before\");\n    t.truncate(2);\n    println(t);\n}\n";
+    let want = "runtime error: String.truncate: the length is not on a UTF-8 char boundary\n";
+    let dir = Scratch::new();
+    let file = dir.path().join("main.kara");
+    std::fs::write(&file, src).unwrap();
+    let interp = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["__mir-run", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let first = |b: &[u8]| {
+        String::from_utf8_lossy(b)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string()
+            + "\n"
+    };
+    assert_eq!(interp.status.code(), Some(101), "__mir-run");
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stdout),
+        "before\n",
+        "__mir-run"
+    );
+    assert_eq!(first(&interp.stderr), want, "__mir-run");
+    let Some(exe) = cli_build(&dir, src, &[]) else {
+        return;
+    };
+    let run = Command::new(&exe).output().unwrap();
+    assert_eq!(run.status.code(), Some(101));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "before\n");
+    assert_eq!(first(&run.stderr), want, "compiled");
+}

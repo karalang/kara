@@ -131,7 +131,7 @@ impl<'ctx> Cx<'ctx, '_> {
     /// The char ending at byte `i` of the text `p[..n]` (its last byte is
     /// `i - 1`), or -1 when there is none: an ASCII byte in line, anything
     /// else through the runtime. `StrChars.next_back`'s step.
-    fn char_before_byte(
+    pub(super) fn char_before_byte(
         &mut self,
         p: PointerValue<'ctx>,
         n: IntValue<'ctx>,

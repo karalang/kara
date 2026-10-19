@@ -918,6 +918,76 @@ impl<'ctx> Cx<'ctx, '_> {
                 let v = self.ref_arg(&args[0])?;
                 self.store(self.offset(v, 8)?, self.i64(0).into())
             }
+            // B-2026-10-19-2: the last char, and `len` lowered by its UTF-8
+            // width; like `clear`, only `len` moves.
+            ("String", "pop") => {
+                let v = self.ref_arg(&args[0])?;
+                let lenp = self.offset(v, 8)?;
+                let n = self.load_i64(lenp)?;
+                let p = self.load_ptr(v)?;
+                let c = self.char_before_byte(p, n, n)?;
+                self.store_opt_int(dest, c)?;
+                let found = self
+                    .builder
+                    .build_int_compare(IntPredicate::SGE, c, self.i64(0), "")
+                    .map_err(e)?;
+                self.if_then(found, |cx| {
+                    let mut left = n;
+                    for at in [0, 0x80, 0x800, 0x10000] {
+                        let wider = cx
+                            .builder
+                            .build_int_compare(IntPredicate::SGE, c, cx.i64(at), "")
+                            .map_err(e)?;
+                        let step = cx
+                            .builder
+                            .build_int_z_extend(wider, cx.llcx.i64_type(), "")
+                            .map_err(e)?;
+                        left = cx.builder.build_int_sub(left, step, "").map_err(e)?;
+                    }
+                    cx.store(lenp, left.into())
+                })
+            }
+            // Keeps the first `k` bytes: none below 0, a no-op past the end
+            // (as `Vec.truncate`), and a cut inside a char panics.
+            ("String", "truncate") => {
+                let v = self.ref_arg(&args[0])?;
+                let k = self.int_arg(&args[1])?;
+                let lenp = self.offset(v, 8)?;
+                let n = self.load_i64(lenp)?;
+                let neg = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, k, self.i64(0), "")
+                    .map_err(e)?;
+                let k = self
+                    .builder
+                    .build_select(neg, self.i64(0), k, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let shorter = self
+                    .builder
+                    .build_int_compare(IntPredicate::SLT, k, n, "")
+                    .map_err(e)?;
+                self.if_then(shorter, |cx| {
+                    let p = cx.load_ptr(v)?;
+                    let bp = cx.elem_ptr(p, k, 1)?;
+                    let b = cx
+                        .builder
+                        .build_load(cx.llcx.i8_type(), bp, "")
+                        .map_err(e)?
+                        .into_int_value();
+                    let i8t = cx.llcx.i8_type();
+                    let top = cx
+                        .builder
+                        .build_and(b, i8t.const_int(0xC0, false), "")
+                        .map_err(e)?;
+                    let starts = cx
+                        .builder
+                        .build_int_compare(IntPredicate::NE, top, i8t.const_int(0x80, false), "")
+                        .map_err(e)?;
+                    cx.abort_unless(starts, crate::mir::interp::TRUNCATE_OFF_A_CHAR)?;
+                    cx.store(lenp, k.into())
+                })
+            }
             ("Vec", "from_array") => {
                 let at = self.operand_type(&args[0])?;
                 let TyKind::Array(el, n) = self.tys.kind(at) else {
