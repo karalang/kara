@@ -171,7 +171,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
 | B-2026-10-19-18 | 2026-10-19 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program (E0516) | — |
 | B-2026-10-19-19 | 2026-10-19 | typecheck | low | "a reference to a temporary outlives its statement" has no `karac fix` edit for `let n = s.substring(..).trim();` or `m.get(k).unwrap_or(Vec.new())`, though the `unwrap_or(String.new())` shape gets one (B-2026-10-15-16) | — |
-| B-2026-10-19-20 | 2026-10-19 | codegen | medium | `karac build --mir` runs katas 85 (maximal rectangle) and 752 (open the lock) about 2x and 1.5x slower since 4e2ceaae49 (push grows through a copy of the Vec header), although callgrind counts FEWER instructions and the same simulated mispredicts | — |
 
 ### Relocated
 
@@ -643,6 +642,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-09-12-29 | 2026-09-12 | codegen | medium | The stack-boxed enum payload covers Map.get only; Vec.pop / Vec.first / a -> Option[Wide] return still heap-box per iteration |
 | B-2026-09-13-31 | 2026-09-13 | codegen | medium | Three map katas are 5-8% slower under the group-scan default, and no runtime signal is known that would route them back to the byte walk |
 | B-2026-09-17-35 | 2026-09-17 | codegen+interp | medium | WONTFIX (documented as design.md drop-order rule 3, 2026-09-28): A BY-VALUE PARAMETER'S `Drop` BODY RUNS IN THE CALLER AT THE END OF THE CALL, NOT AT THE CALLEE LOCAL'S LIVE-RANGE END -- first seen as a tuple-param move-out (`fn eat(t: (R, i64)) { let x = t.0; println("mid") }` prints `mid dR5 end` on all four surfaces), but the whole-param spelling (`fn eatr(r: R) { let x = r; println("mid") }`) does the same, so it is the caller-retains convention and not a tuple gap |
+| B-2026-10-19-20 | 2026-10-19 | codegen | medium | `karac build --mir` katas 85 and 752 got slower after 4e2ceaae49 (push grows through a copy of the Vec header) because the code moved, not because it got worse: kata 85 changes by 1.6x with loop alignment alone, in both directions |
 
 </details>
 
