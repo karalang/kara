@@ -1639,6 +1639,7 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         .iter()
         .filter_map(|ii| ii.alias.as_ref().map(|a| (a, &ii.name)))
         .collect();
+    let mut helpers: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut pending: Vec<Item> = out.clone();
     for item in &program.items {
         if let Item::ImplBlock(imp) = item {
@@ -1666,7 +1667,10 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
             };
             let mut cloned = found.clone();
             match &mut cloned {
-                Item::Function(f) => f.stdlib_origin = true,
+                Item::Function(f) => {
+                    f.stdlib_origin = true;
+                    helpers.insert(f.name.clone());
+                }
                 Item::StructDef(s) => {
                     s.stdlib_origin = true;
                     spliced_type_names.insert(s.name.clone());
@@ -1774,7 +1778,55 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         }
     }
 
+    // A helper function the import did not list stays private to its module
+    // (design.md § Visibility): it is spliced under a name no program can
+    // write, so a program's own `uuid_hex` does not meet `std.uuid`'s
+    // (B-2026-10-18-54). The name keeps the helper's own as its prefix, for
+    // diagnostics.
+    if !helpers.is_empty() {
+        let renames: HashMap<String, String> = helpers
+            .into_iter()
+            .map(|h| {
+                let private = format!("{h}${}", path.join("_"));
+                (h, private)
+            })
+            .collect();
+        for item in &mut out {
+            if let Item::Function(f) = item {
+                if let Some(private) = renames.get(&f.name) {
+                    f.name = private.clone();
+                }
+            }
+            crate::span_visitor::walk_item_mut_with(item, &mut RenameCallees(&renames));
+        }
+    }
+
     Some(out)
+}
+
+/// Renames the bare references to the functions in its map: `uuid_hex(x)`
+/// and `uuid_hex` used as a value. A method call names its method by string
+/// and is left alone.
+struct RenameCallees<'a>(&'a HashMap<String, String>);
+
+impl crate::span_visitor::MutVisitor for RenameCallees<'_> {
+    fn span(&mut self, _: &mut Span) {}
+
+    fn expr(&mut self, e: &mut crate::ast::Expr) {
+        match &mut e.kind {
+            crate::ast::ExprKind::Identifier(name) => {
+                if let Some(private) = self.0.get(name) {
+                    *name = private.clone();
+                }
+            }
+            crate::ast::ExprKind::Path { segments, .. } if segments.len() == 1 => {
+                if let Some(private) = self.0.get(&segments[0]) {
+                    segments[0] = private.clone();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Whether a gated `std.*` module declares a struct or enum named `name`.

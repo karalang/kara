@@ -4895,26 +4895,40 @@ fn main() {
 /// B-2026-10-15-107: an error in a spliced library module's item is
 /// reported by `karac check`, as the build stops on it, at the program's
 /// import of the module and naming where in the module it is. The error here
-/// is a module-private helper colliding with the program's own item
-/// (PREDICTS B-2026-10-18-54: once a helper stays private to its module,
-/// this program checks and the fixture needs another trigger).
+/// is a module type the import did not list colliding with the program's own
+/// (PREDICTS B-2026-10-19-10: once an unlisted type stays private to its
+/// module, this program checks and the fixture needs another trigger).
 #[test]
 fn an_error_in_a_library_module_is_reported_at_its_import() {
-    let src = "import std.uuid.{v4};\n\
-               fn uuid_hex(x: i64) -> i64 { x }\n\
-               fn main() { println(f\"{v4().len()} {uuid_hex(3)}\"); }\n";
+    let src = "import std.time.{sleep};\n\
+               struct Duration { n: i64 }\n\
+               fn main() { let d = Duration { n: 1 }; println(f\"{d.n}\"); }\n";
     let (dir, path) = fixture("library-module-error", src);
     let out = karac().arg("check").arg(&path).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "check must reject: {err}");
     assert!(
-        err.contains(":1:1: 'uuid_hex' is already defined")
-            && err.contains("(in the library module `std.uuid` at 5:1, imported here)"),
+        err.contains(":1:1: 'Duration' is already defined")
+            && err.contains("(in the library module `std.time` at 7:5, imported here)"),
         "{err}"
     );
     let out = karac().arg("__mir-run").arg(&path).output().unwrap();
     assert!(!out.status.success(), "the build stops on it too");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-10-18-54: a library module's helper function the import did not
+/// list stays private to the module, so a program's own `uuid_hex` beside
+/// `import std.uuid.{v4};` is its own function.
+#[test]
+fn a_library_helper_does_not_meet_a_program_item_of_its_name() {
+    accepted_and_runs(
+        "library-helper-private",
+        "import std.uuid.{v4};\n\
+         fn uuid_hex(x: i64) -> i64 { x }\n\
+         fn main() { println(f\"{v4().len()} {uuid_hex(3)}\"); }\n",
+        "36 3\n",
+    );
 }
 
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a

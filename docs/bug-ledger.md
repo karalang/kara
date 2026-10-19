@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 281 |
 | codegen-gap | 274 |
-| false-positive | 239 |
+| false-positive | 240 |
 | perf | 175 |
 | other | 175 |
 | diagnostics | 168 |
@@ -119,7 +119,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 78 |
 | parser | 69 |
 | autopar | 59 |
-| resolver | 46 |
+| resolver | 47 |
 | effect | 32 |
 | lexer | 12 |
 ## Current state
@@ -173,6 +173,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-7 | 2026-10-19 | ownership | medium | `karac check` passes a `ref` copied out of a collection and used after that collection is mutated, which every MIR surface refuses as a borrow conflict: `let before = m.get(1).unwrap_or(0); m.insert(1, 6); println(f"{before}")` over a `Map[i64, i64]`, and `match v.last() { Some(top) => { let largest = top; v.pop(); v.push(largest); } None => {} }` over a `Vec[i64]`. Both bindings are `ref i64` (design.md line 397 and core-semantics.md §5.10: an unannotated `let` keeps the reference), so the MIR borrow checker is right and check is the one that misses it; the MIR message also names the collection `_1` rather than `m` or `v` | — |
 | B-2026-10-19-8 | 2026-10-19 | typecheck | medium | `x.clone()` on a value of a projection type (`x: I.Item` under `where I.Item: Clone`) is typed as an error type that check accepts: `let p: bool = x.clone();` passes `karac check`, and on MIR every such program stops with "a type that failed to check is not lowered yet" | — |
 | B-2026-10-19-9 | 2026-10-19 | typecheck | low | A `Vec.new()` inside a struct literal passed to a generic function is not pinned by the expected type of the call: `let h: Holder[Bag[String]] = hold(Bag { items: Vec.new(), n: 0 });` passes check, and MIR stops with "an expression whose type does not lower (Type(UnknownParam(\"T\")))" | — |
+| B-2026-10-19-10 | 2026-10-19 | resolver | low | A gated library module's TYPE the import did not list still collides with a program's own type of the same name: `import std.time.{sleep};` beside a program's `struct Duration { n: i64 }` is refused with "'Duration' is already defined in this scope", because the splice copies `sleep`'s `Duration` into the program's scope under its own name; B-2026-10-18-54 made unlisted helper FUNCTIONS private and left types out | — |
 
 ### Relocated
 
