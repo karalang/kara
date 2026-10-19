@@ -772,7 +772,8 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Atomic", "load" | "store" | "swap" | "compare_exchange" | "fetch_add" | "fetch_sub") => {
             vec![]
         }
-        ("Mutex", "lock" | "try_lock") => vec![(Blocks, "", None)],
+        ("Mutex", "lock" | "try_lock" | "acquire") => vec![(Blocks, "", None)],
+        ("Mutex", "release") => vec![],
         // D6: channels and connections key their effects by the endpoint
         // (argument 0, the receiver); files by the open file. These have no
         // MIR natives yet (M2 brings the I/O intrinsics); the entries fix

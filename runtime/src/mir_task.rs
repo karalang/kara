@@ -381,6 +381,56 @@ pub extern "C" fn karac_mir_ready_fd(fd: i64, write: u8) -> u8 {
     note(ready, Wait::Fd(fd as i32, events))
 }
 
+thread_local! {
+    /// The mutexes a task holds, by their cells' addresses (B-2026-10-19-23):
+    /// kept here so a `Mutex[T]` is its value alone.
+    static HELD: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `__ready("Mutex[T].acquire", m)`: whether no task holds the mutex at
+/// `cell`; only another task's release can change that.
+#[no_mangle]
+pub extern "C" fn karac_mir_mutex_ready(cell: *mut u8) -> u8 {
+    let free = HELD.with(|h| !h.borrow().contains(&(cell as usize)));
+    note(free, Wait::Task)
+}
+
+/// `Mutex[T].acquire`, run once its `__ready` saw the mutex free: marks it
+/// held.
+#[no_mangle]
+pub extern "C" fn karac_mir_mutex_acquire(cell: *mut u8) {
+    let taken = HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        let held = h.contains(&(cell as usize));
+        if !held {
+            h.push(cell as usize);
+        }
+        held
+    });
+    if taken {
+        crate::mir::karac_mir_flush();
+        eprintln!("error: deadlock: lock of a mutex that is already held");
+        std::process::exit(101);
+    }
+}
+
+/// `Mutex[T].release`: frees the mutex at `cell` for the next task waiting
+/// on it, in the order they parked.
+#[no_mangle]
+pub extern "C" fn karac_mir_mutex_release(cell: *mut u8) {
+    let held = HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        let at = h.iter().position(|&c| c == cell as usize);
+        at.map(|i| h.swap_remove(i))
+    });
+    if held.is_none() {
+        crate::mir::karac_mir_flush();
+        eprintln!("error: unlock of a mutex that is not held");
+        std::process::exit(101);
+    }
+    bump();
+}
+
 /// Whether the socket `fd` has a read timeout (`SO_RCVTIMEO`).
 #[cfg(unix)]
 fn read_timeout_set(fd: i32) -> bool {

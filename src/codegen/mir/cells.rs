@@ -225,6 +225,29 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(Some(()))
     }
 
+    /// `Mutex[T].acquire(ref self) -> mut ref T` and `release(ref self)`
+    /// (B-2026-10-19-23): the runtime keeps the held set, by the cell's
+    /// address; the acquire runs once its `__ready` saw the mutex free.
+    pub(super) fn mutex_native(
+        &mut self,
+        method: &str,
+        args: &[Operand],
+        dest: &Place,
+    ) -> R<Option<()>> {
+        let ([recv], "acquire" | "release") = (args, method) else {
+            return Ok(None);
+        };
+        let (cell, _) = self.cell_arg(recv)?;
+        if method == "release" {
+            self.rt("mutex_release", &[cell.into()])?;
+            return Ok(Some(()));
+        }
+        self.rt("mutex_acquire", &[cell.into()])?;
+        let d = self.place_ptr(dest)?;
+        self.store(d, cell.into())?;
+        Ok(Some(()))
+    }
+
     /// The methods of `Atomic[T]`, or `None` for one not lowered here.
     pub(super) fn atomic_native(
         &mut self,

@@ -84,6 +84,10 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.rt_flag("ready_fd", &[fd.into(), i8t.const_zero().into()])?
             }
             ("TcpStream", "connect", _) => self.llcx.bool_type().const_int(1, false),
+            ("Mutex", "acquire", [m, ..]) => {
+                let (cell, _) = self.cell_arg(m)?;
+                self.rt_flag("mutex_ready", &[cell.into()])?
+            }
             ("TaskGroup", "spawn_frame" | "end", [g, ..]) => {
                 let g = self.group_handle(g)?;
                 let end = i8t.const_int(u64::from(method == "end"), false);

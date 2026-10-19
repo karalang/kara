@@ -480,6 +480,9 @@ impl<'ctx> Cx<'ctx, '_> {
         if self.io_native(base, method, args, dest)?.is_some() {
             return Ok(());
         }
+        if base == "Mutex" && self.mutex_native(method, args, dest)?.is_some() {
+            return Ok(());
+        }
         if (base == "Atomic"
             || (base == "Mutex" && matches!(method, "new" | "get_mut" | "into_inner")))
             && self.atomic_native(method, args, dest)?.is_some()

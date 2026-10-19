@@ -613,6 +613,7 @@ fn run_with(
         flags: Vec::new(),
         resumes: 0,
         parked_flags: Vec::new(),
+        held_locks: Vec::new(),
         tracing_min: 0,
         debug_render: false,
         panic_message: None,
@@ -958,6 +959,10 @@ struct Interp<'a> {
     wait: Option<Wait>,
     /// The borrow flags each suspended coroutine frame holds, by its address.
     parked_flags: Vec<(Addr, Held)>,
+    /// The cells of the mutexes a task holds, from its `Mutex.acquire` to
+    /// its `Mutex.release` (B-2026-10-19-23). Kept outside the value, so a
+    /// `Mutex[T]` is its value alone.
+    held_locks: Vec<Addr>,
     /// `std.tracing`'s minimum level, by rank (trace 0 .. error 4).
     tracing_min: i128,
     /// Set while `dbg` renders its value: the `Debug` form, which quotes
@@ -1642,6 +1647,7 @@ impl<'a> Interp<'a> {
             ("Mutex", "new" | "get_mut" | "into_inner") => {
                 self.atomic_method(name, method, args, ret)
             }
+            ("Mutex", "acquire" | "release") => self.mutex_method(name, method, &args),
             // Only the library entry's methods: a user `struct Entry` keeps
             // its own (derived `clone`, ...) through the arms below.
             ("Entry", "and_modify" | "or_insert" | "or_insert_with") => {
@@ -5194,6 +5200,29 @@ impl<'a> Interp<'a> {
 
     /// The cell inside the atomic a (possibly doubly) referenced value
     /// points at.
+    /// `Mutex[T].acquire(ref self) -> mut ref T`, which the executor runs
+    /// only once its `__ready` saw the mutex free, and
+    /// `Mutex[T].release(ref self)` (B-2026-10-19-23).
+    fn mutex_method(&mut self, name: &str, method: &str, args: &[Value]) -> R<Value> {
+        let Some(recv) = args.first() else {
+            return err(format!("{name} needs its receiver"));
+        };
+        let cell = self.atomic_cell(recv, name)?;
+        let at = self.held_locks.iter().position(|c| *c == cell);
+        match (method, at) {
+            ("acquire", None) => {
+                self.held_locks.push(cell.clone());
+                Ok(Value::Ref(cell))
+            }
+            ("acquire", Some(_)) => err("deadlock: lock of a mutex that is already held"),
+            (_, Some(i)) => {
+                self.held_locks.swap_remove(i);
+                Ok(Value::Unit)
+            }
+            (_, None) => err("unlock of a mutex that is not held"),
+        }
+    }
+
     fn atomic_cell(&mut self, v: &Value, name: &str) -> R<Addr> {
         let mut v = v.clone();
         loop {
@@ -10463,7 +10492,8 @@ impl<'a> Interp<'a> {
             match w {
                 Wait::Until(at) => nearest = Some(nearest.map_or(*at, |n| n.min(*at))),
                 Wait::Accept(_) | Wait::Read(_) => io = true,
-                Wait::Recv(_) | Wait::Send(_) | Wait::Join(_) | Wait::Group(..) => {}
+                Wait::Recv(_) | Wait::Send(_) | Wait::Join(_) | Wait::Group(..) | Wait::Lock(_) => {
+                }
             }
         }
         let step = std::time::Duration::from_millis(1);
@@ -10540,6 +10570,7 @@ impl<'a> Interp<'a> {
             ("TcpListener", "accept", [l, ..]) => Some(Wait::Accept(self.socket_of(l, &callee)?)),
             ("TcpStream", "read", [st, ..]) => Some(Wait::Read(self.socket_of(st, &callee)?)),
             ("TcpStream", "connect", _) => None,
+            ("Mutex", "acquire", [m, ..]) => Some(Wait::Lock(self.atomic_cell(m, &callee)?)),
             _ => return err(format!("__ready of {callee}, which does not suspend")),
         };
         let ready = match &wait {
@@ -10580,6 +10611,7 @@ impl<'a> Interp<'a> {
                 c.cap == 0 || c.queue.len() < c.cap || c.receivers == 0
             }
             Wait::Until(at) => std::time::Instant::now() >= *at,
+            Wait::Lock(cell) => !self.held_locks.contains(cell),
             Wait::Join(h) => self.handles.get(h - 1).is_none_or(|h| h.done),
             Wait::Group(g, end) => match self.groups.get(g - 1) {
                 Some(g) if *end => g.live == 0,
@@ -11976,6 +12008,8 @@ enum Wait {
     Join(usize),
     /// Room under a group's limit, or (`true`) all its tasks returned.
     Group(usize, bool),
+    /// A mutex, by its cell, that no task holds.
+    Lock(Addr),
 }
 
 /// The interpreter's sockets, by descriptor (`Interp::tcp_method`).
