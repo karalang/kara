@@ -1,0 +1,1389 @@
+// mini_hpack: hpack 4.1.0, the HPACK (RFC 7541) header compression of
+// the Python HTTP/2 stack (h2, httpx, hypercorn, twisted's HTTP/2).
+//
+// The port covers the integer and string representations, Huffman
+// coding (the encoder of RFC 7541 Appendix B and hpack's nibble-driven
+// decoding state machine), the static and dynamic tables with their
+// eviction rules, the Encoder (indexed, literal and never-indexed forms,
+// table size updates) and the Decoder (with its header list and table
+// size limits and its errors).
+//
+// The run plays HTTP/2 connections through an Encoder and a Decoder: the
+// RFC 7541 Appendix C examples, a browser loading a page, the server's
+// answers, an API client with credentials, SETTINGS changes, eviction
+// and the limits a decoder enforces. Then it decodes header blocks
+// alone: the RFC examples, hpack's own test blocks and malformed ones.
+// expected.out is oracle.py's output, which runs the same through hpack
+// itself.
+
+// ---------------------------------------------------------------- bytes
+
+fn char_of(cp: i64) -> char {
+    char.try_from(cp as u32).unwrap_or('\u{fffd}')
+}
+
+fn is_cont(b: u8) -> bool {
+    b >= 0x80 and b < 0xC0
+}
+
+// CPython's UTF-8 decoder with errors="replace": each maximal invalid
+// subpart is one U+FFFD. The flag says whether the bytes were valid.
+fn utf8_decode(data: ref Vec[u8]) -> (String, bool) {
+    let mut out = String.new();
+    let mut clean = true;
+    let mut i = 0;
+    let n = data.len();
+    while i < n {
+        let b = data[i];
+        if b < 0x80 {
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        let mut need = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if b >= 0xC2 and b <= 0xDF {
+            need = 1;
+        } else if b >= 0xE0 and b <= 0xEF {
+            need = 2;
+            if b == 0xE0 {
+                lo = 0xA0;
+            }
+            if b == 0xED {
+                hi = 0x9F;
+            }
+        } else if b >= 0xF0 and b <= 0xF4 {
+            need = 3;
+            if b == 0xF0 {
+                lo = 0x90;
+            }
+            if b == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        clean = clean and need > 0;
+        if need == 0 {
+            out.push('\u{fffd}');
+            i += 1;
+            continue;
+        }
+        let mut k = 1;
+        let mut bad = false;
+        while k <= need {
+            if i + k >= n {
+                out.push('\u{fffd}');
+                return (out, false);
+            }
+            let c = data[i + k];
+            let ok = if k == 1 { c >= lo and c <= hi } else { is_cont(c) };
+            if not ok {
+                bad = true;
+                break;
+            }
+            k += 1;
+        }
+        if bad {
+            clean = false;
+            out.push('\u{fffd}');
+            i += k;
+            continue;
+        }
+        let mut cp: i64 = if need == 1 { (b & 0x1F) as i64 } else if need == 2 { (b & 0x0F) as i64 } else { (b & 0x07) as i64 };
+        k = 1;
+        while k <= need {
+            cp = (cp << 6) | ((data[i + k] & 0x3F) as i64);
+            k += 1;
+        }
+        out.push(char_of(cp));
+        i += need + 1;
+    }
+    (out, clean)
+}
+
+fn bytes_of(s: ref String) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for b in s.bytes() {
+        v.push(*b);
+    }
+    v
+}
+
+fn hex_val(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else {
+        c as i64 - 55
+    }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < cs.len() {
+        out.push((hex_val(cs[i]) * 16 + hex_val(cs[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn hex_of(data: ref Vec[u8]) -> String {
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    for b in data.iter() {
+        let v = *b as i64;
+        s.push(ds[v / 16]);
+        s.push(ds[v % 16]);
+    }
+    s
+}
+
+fn push_all(out: mut ref Vec[u8], more: ref Vec[u8]) {
+    for b in more.iter() {
+        out.push(*b);
+    }
+}
+
+fn sub(data: ref Vec[u8], lo: i64, hi: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = lo;
+    let end = if hi < data.len() { hi } else { data.len() };
+    while i < end {
+        out.push(data[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same_bytes(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+// Control characters as \xNN, the way the report prints header text.
+fn esc(s: ref String) -> String {
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    for c in s.chars() {
+        let o = c as i64;
+        if o < 0x20 or o == 0x7F {
+            out.push_str("\\x");
+            out.push(ds[o / 16]);
+            out.push(ds[o % 16]);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn text_of(data: ref Vec[u8]) -> String {
+    let (s, _) = utf8_decode(data);
+    s
+}
+
+// ---------------------------------------------------------------- errors
+
+// The hpack exception: its class name and message.
+struct HErr {
+    kind: String,
+    msg: String,
+}
+
+fn decoding_error(msg: Str) -> HErr {
+    HErr { kind: "HPACKDecodingError".to_string(), msg: msg.to_string() }
+}
+
+// ---------------------------------------------------------------- integers
+
+fn encode_integer(integer: i64, prefix_bits: i64) -> Vec[u8] {
+    let max_number = (1 << prefix_bits) - 1;
+    let mut out: Vec[u8] = Vec.new();
+    if integer < max_number {
+        out.push(integer as u8);
+        return out;
+    }
+    out.push(max_number as u8);
+    let mut rest = integer - max_number;
+    while rest >= 128 {
+        out.push(((rest & 127) + 128) as u8);
+        rest = rest >> 7;
+    }
+    out.push(rest as u8);
+    out
+}
+
+// decode_integer on data[at:]: the number and the bytes it took.
+fn decode_integer(data: ref Vec[u8], at: i64, prefix_bits: i64) -> Result[(i64, i64), HErr] {
+    let max_number = (1 << prefix_bits) - 1;
+    let mask = 0xFF >> (8 - prefix_bits);
+    if at >= data.len() {
+        return Err(decoding_error("Unable to decode HPACK integer representation from <memory>"));
+    }
+    let mut number = (data[at] as i64) & mask;
+    let mut index = 1;
+    let mut shift = 0;
+    if number == max_number {
+        loop {
+            if at + index >= data.len() {
+                return Err(decoding_error("Unable to decode HPACK integer representation from <memory>"));
+            }
+            let next_byte = data[at + index] as i64;
+            index += 1;
+            if next_byte >= 128 {
+                number += (next_byte - 128) << shift;
+            } else {
+                number += next_byte << shift;
+                break;
+            }
+            shift += 7;
+        }
+    }
+    Ok((number, index))
+}
+
+// ---------------------------------------------------------------- Huffman
+
+struct Huffman {
+    codes: Vec[(i64, i64)],
+    fsm: Vec[i64],
+}
+
+fn new_huffman() -> Huffman {
+    let text = huffman_fsm_hex();
+    let raw = unhex(text);
+    let mut fsm: Vec[i64] = Vec.new();
+    for b in raw.iter() {
+        fsm.push(*b as i64);
+    }
+    Huffman { codes: huffman_codes(), fsm: fsm }
+}
+
+const HUFFMAN_COMPLETE: i64 = 1;
+const HUFFMAN_EMIT_SYMBOL: i64 = 2;
+const HUFFMAN_FAIL: i64 = 4;
+
+impl Huffman {
+    // HuffmanEncoder.encode: the codes, padded to an octet with ones.
+    fn encode(ref self, data: ref Vec[u8]) -> Vec[u8] {
+        let mut out: Vec[u8] = Vec.new();
+        let mut acc: i64 = 0;
+        let mut bits = 0;
+        for b in data.iter() {
+            let (code, len) = self.codes[*b as i64];
+            acc = (acc << len) | code;
+            bits += len;
+            while bits >= 8 {
+                bits -= 8;
+                out.push(((acc >> bits) & 0xFF) as u8);
+            }
+            acc = acc & ((1 << bits) - 1);
+        }
+        if bits > 0 {
+            let pad = 8 - bits;
+            out.push((((acc << pad) | ((1 << pad) - 1)) & 0xFF) as u8);
+        }
+        out
+    }
+
+    // decode_huffman: two nibbles per byte through the state machine.
+    fn decode(ref self, data: ref Vec[u8]) -> Result[Vec[u8], HErr] {
+        let mut out: Vec[u8] = Vec.new();
+        if data.len() == 0 {
+            return Ok(out);
+        }
+        let mut state = 0;
+        let mut flags = 0;
+        for b in data.iter() {
+            let byte = *b as i64;
+            for nibble in [byte >> 4, byte & 0x0F] {
+                let index = (state * 16 + nibble) * 3;
+                state = self.fsm[index];
+                flags = self.fsm[index + 1];
+                if flags & HUFFMAN_FAIL != 0 {
+                    return Err(decoding_error("Invalid Huffman string"));
+                }
+                if flags & HUFFMAN_EMIT_SYMBOL != 0 {
+                    out.push(self.fsm[index + 2] as u8);
+                }
+            }
+        }
+        if flags & HUFFMAN_COMPLETE == 0 {
+            return Err(decoding_error("Incomplete Huffman string"));
+        }
+        Ok(out)
+    }
+}
+
+// ---------------------------------------------------------------- tables
+
+struct Field {
+    name: Vec[u8],
+    value: Vec[u8],
+}
+
+fn entry_size(name: ref Vec[u8], value: ref Vec[u8]) -> i64 {
+    32 + name.len() + value.len()
+}
+
+enum Found {
+    Nothing,
+    Partial(i64),
+    Perfect(i64),
+}
+
+// HeaderTable: the dynamic entries newest first, as hpack's deque.
+struct Table {
+    maxsize: i64,
+    current: i64,
+    resized: bool,
+    dynamic: Vec[Field],
+}
+
+fn new_table() -> Table {
+    Table { maxsize: 4096, current: 0, resized: false, dynamic: Vec.new() }
+}
+
+const STATIC_LEN: i64 = 61;
+
+impl Table {
+    fn get_by_index(ref self, statics: ref Vec[Field], index: i64) -> Result[Field, HErr] {
+        let i = index - 1;
+        if i >= 0 {
+            if i < STATIC_LEN {
+                let e = ref statics[i];
+                return Ok(Field { name: e.name.clone(), value: e.value.clone() });
+            }
+            let j = i - STATIC_LEN;
+            if j < self.dynamic.len() {
+                let e = ref self.dynamic[j];
+                return Ok(Field { name: e.name.clone(), value: e.value.clone() });
+            }
+        }
+        Err(HErr { kind: "InvalidTableIndex".to_string(), msg: f"Invalid table index {index}" })
+    }
+
+    fn add(mut ref self, name: ref Vec[u8], value: ref Vec[u8]) {
+        let size = entry_size(name, value);
+        if size > self.maxsize {
+            self.dynamic.clear();
+            self.current = 0;
+        } else {
+            self.dynamic.insert(0, Field { name: name.clone(), value: value.clone() });
+            self.current += size;
+            self.shrink();
+        }
+    }
+
+    fn search(ref self, statics: ref Vec[Field], name: ref Vec[u8], value: ref Vec[u8]) -> Found {
+        let mut partial = Found.Nothing;
+        let mut i = 0;
+        let mut first = -1;
+        while i < STATIC_LEN {
+            let e = ref statics[i];
+            if same_bytes(e.name, name) {
+                if first < 0 {
+                    first = i + 1;
+                }
+                if same_bytes(e.value, value) {
+                    return Found.Perfect(i + 1);
+                }
+            }
+            i += 1;
+        }
+        if first > 0 {
+            partial = Found.Partial(first);
+        }
+        let mut have_partial = first > 0;
+        let mut k = 0;
+        while k < self.dynamic.len() {
+            let e = ref self.dynamic[k];
+            if same_bytes(e.name, name) {
+                if same_bytes(e.value, value) {
+                    return Found.Perfect(k + STATIC_LEN + 1);
+                } else if not have_partial {
+                    partial = Found.Partial(k + STATIC_LEN + 1);
+                    have_partial = true;
+                }
+            }
+            k += 1;
+        }
+        partial
+    }
+
+    fn set_maxsize(mut ref self, newmax: i64) {
+        let oldmax = self.maxsize;
+        self.maxsize = newmax;
+        self.resized = newmax != oldmax;
+        if newmax <= 0 {
+            self.dynamic.clear();
+            self.current = 0;
+        } else if oldmax > newmax {
+            self.shrink();
+        }
+    }
+
+    fn shrink(mut ref self) {
+        let mut cursize = self.current;
+        while cursize > self.maxsize {
+            if let Some(e) = self.dynamic.pop() {
+                cursize -= entry_size(e.name, e.value);
+            }
+        }
+        self.current = cursize;
+    }
+
+    fn same_entries(ref self, other: ref Table) -> bool {
+        if self.dynamic.len() != other.dynamic.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < self.dynamic.len() {
+            let a = ref self.dynamic[i];
+            let b = ref other.dynamic[i];
+            if not same_bytes(a.name, b.name) or not same_bytes(a.value, b.value) {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    fn show(ref self) {
+        println(f"   table: {self.dynamic.len()} entries, {self.current} of {self.maxsize} bytes");
+        let mut i = 0;
+        while i < self.dynamic.len() {
+            let e = ref self.dynamic[i];
+            println(f"     [{62 + i}] {esc(text_of(e.name))}: {esc(text_of(e.value))}");
+            i += 1;
+        }
+    }
+}
+
+fn static_entries() -> Vec[Field] {
+    let mut v: Vec[Field] = Vec.new();
+    for (n, val) in static_table().iter() {
+        v.push(Field { name: bytes_of(n.to_string()), value: bytes_of(val.to_string()) });
+    }
+    v
+}
+
+// ---------------------------------------------------------------- Encoder
+
+struct Header {
+    name: Vec[u8],
+    value: Vec[u8],
+    never: bool,
+}
+
+struct Encoder {
+    table: Table,
+    changes: Vec[i64],
+}
+
+fn new_encoder() -> Encoder {
+    Encoder { table: new_table(), changes: Vec.new() }
+}
+
+fn with_bit(v: own Vec[u8], bit: u8) -> Vec[u8] {
+    let mut v = v;
+    v[0] = v[0] | bit;
+    v
+}
+
+impl Encoder {
+    fn set_table_size(mut ref self, value: i64) {
+        self.table.set_maxsize(value);
+        if self.table.resized {
+            self.changes.push(value);
+        }
+    }
+
+    fn encode(mut ref self, ctx: ref Ctx, headers: ref Vec[Header], huffman: bool) -> Vec[u8] {
+        let mut block: Vec[u8] = Vec.new();
+        if self.table.resized {
+            for size in self.changes.iter() {
+                push_all(mut block, with_bit(encode_integer(*size, 5), 0x20));
+            }
+            self.changes.clear();
+            self.table.resized = false;
+        }
+        for h in headers.iter() {
+            let part = self.add(ctx, h, huffman);
+            push_all(mut block, part);
+        }
+        block
+    }
+
+    fn add(mut ref self, ctx: ref Ctx, h: ref Header, huffman: bool) -> Vec[u8] {
+        let sensitive = h.never;
+        let indexbit: u8 = if sensitive { 0x10 } else { 0x40 };
+        // hpack tests the matched value for truth, so a perfect match on
+        // an empty value is encoded like a match on the name alone.
+        let (index, perfect) = match self.table.search(ctx.statics, h.name, h.value) {
+            Found.Nothing => {
+                let encoded = encode_literal(ctx, h.name, h.value, indexbit, huffman);
+                if not sensitive {
+                    self.table.add(h.name, h.value);
+                }
+                return encoded;
+            }
+            Found.Perfect(index) => (index, h.value.len() > 0),
+            Found.Partial(index) => (index, false),
+        };
+        if perfect {
+            return with_bit(encode_integer(index, 7), 0x80);
+        }
+        let prefix = if indexbit != 0x40 { encode_integer(index, 4) } else { encode_integer(index, 6) };
+        let mut out = with_bit(prefix, indexbit);
+        push_all(mut out, string_literal(ctx, h.value, huffman));
+        if not sensitive {
+            self.table.add(h.name, h.value);
+        }
+        out
+    }
+}
+
+// A length-prefixed string, Huffman-coded or not.
+fn string_literal(ctx: ref Ctx, s: ref Vec[u8], huffman: bool) -> Vec[u8] {
+    let body = if huffman { ctx.huffman.encode(s) } else { s.clone() };
+    let len = encode_integer(body.len(), 7);
+    let mut out = if huffman { with_bit(len, 0x80) } else { len };
+    push_all(mut out, body);
+    out
+}
+
+fn encode_literal(ctx: ref Ctx, name: ref Vec[u8], value: ref Vec[u8], indexbit: u8, huffman: bool) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    out.push(indexbit);
+    push_all(mut out, string_literal(ctx, name, huffman));
+    push_all(mut out, string_literal(ctx, value, huffman));
+    out
+}
+
+// ---------------------------------------------------------------- Decoder
+
+struct Decoder {
+    table: Table,
+    max_list: i64,
+    max_allowed: i64,
+}
+
+fn new_decoder() -> Decoder {
+    Decoder { table: new_table(), max_list: 65536, max_allowed: 4096 }
+}
+
+impl Decoder {
+    fn decode(mut ref self, ctx: ref Ctx, data: ref Vec[u8]) -> Result[Vec[Header], HErr] {
+        let mut headers: Vec[Header] = Vec.new();
+        let mut inflated = 0;
+        let mut at = 0;
+        while at < data.len() {
+            let current = data[at];
+            let mut got: Option[Header] = None;
+            let mut consumed = 0;
+            if current & 0x80 != 0 {
+                let (index, n) = decode_integer(data, at, 7)?;
+                let e = self.table.get_by_index(ctx.statics, index)?;
+                got = Some(Header { name: e.name, value: e.value, never: false });
+                consumed = n;
+            } else if current & 0x40 != 0 {
+                let (h, n) = self.decode_literal(ctx, data, at, true)?;
+                got = Some(h);
+                consumed = n;
+            } else if current & 0x20 != 0 {
+                if headers.len() > 0 {
+                    return Err(decoding_error("Table size update not at the start of the block"));
+                }
+                let (new_size, n) = decode_integer(data, at, 5)?;
+                if new_size > self.max_allowed {
+                    return Err(HErr { kind: "InvalidTableSizeError".to_string(), msg: "Encoder exceeded max allowable table size".to_string() });
+                }
+                self.table.set_maxsize(new_size);
+                consumed = n;
+            } else {
+                let (h, n) = self.decode_literal(ctx, data, at, false)?;
+                got = Some(h);
+                consumed = n;
+            }
+            if let Some(h) = got {
+                inflated += entry_size(h.name, h.value);
+                headers.push(h);
+                if inflated > self.max_list {
+                    return Err(HErr { kind: "OversizedHeaderListError".to_string(), msg: f"A header list larger than {self.max_list} has been received" });
+                }
+            }
+            at += consumed;
+        }
+        if self.table.maxsize > self.max_allowed {
+            return Err(HErr { kind: "InvalidTableSizeError".to_string(), msg: "Encoder did not shrink table size to within the max".to_string() });
+        }
+        for h in headers.iter() {
+            let (_, a) = utf8_decode(h.name);
+            let (_, b) = utf8_decode(h.value);
+            if not a or not b {
+                return Err(decoding_error("Unable to decode headers as UTF-8"));
+            }
+        }
+        Ok(headers)
+    }
+
+    // _decode_literal on data[at:]: the header and the bytes it took.
+    fn decode_literal(mut ref self, ctx: ref Ctx, data: ref Vec[u8], at: i64, should_index: bool) -> Result[(Header, i64), HErr] {
+        let high = data[at] as i64;
+        let indexed_name = if should_index { high & 0x3F } else { high & 0x0F };
+        let name_len = if should_index { 6 } else { 4 };
+        let not_indexable = not should_index and high & 0x10 != 0;
+        let mut total = 0;
+        let mut name: Vec[u8] = Vec.new();
+        // `pos` is where hpack's `data` starts before the value: after the
+        // name's index, or after the name.
+        let mut pos = at;
+        if indexed_name != 0 {
+            let (index, n) = decode_integer(data, at, name_len)?;
+            name = self.table.get_by_index(ctx.statics, index)?.name;
+            total = n;
+            pos = at + n;
+        } else {
+            let start = at + 1;
+            let (length, n) = decode_integer(data, start, 7)?;
+            let raw = sub(data, start + n, start + n + length);
+            if raw.len() != length {
+                return Err(decoding_error("Truncated header block"));
+            }
+            name = if data[start] & 0x80 != 0 { ctx.huffman.decode(raw)? } else { raw };
+            total = n + length + 1;
+            pos = start + n + length;
+        }
+        let (length, n) = decode_integer(data, pos, 7)?;
+        let raw = sub(data, pos + n, pos + n + length);
+        if raw.len() != length {
+            return Err(decoding_error("Truncated header block"));
+        }
+        let value = if data[pos] & 0x80 != 0 { ctx.huffman.decode(raw)? } else { raw };
+        total += length + n;
+        if should_index {
+            self.table.add(name, value);
+        }
+        Ok((Header { name: name, value: value, never: not_indexable }, total))
+    }
+}
+
+// ---------------------------------------------------------------- the run
+
+struct Ctx {
+    statics: Vec[Field],
+    huffman: Huffman,
+}
+
+fn partition(s: ref String, sep: Str) -> (String, String) {
+    match s.find(sep) {
+        Some(i) => (s[..i].to_string(), s[i + sep.len()..].to_string()),
+        None => (s.clone(), String.new()),
+    }
+}
+
+fn per_mille(num: i64, den: i64) -> String {
+    if den == 0 {
+        return "-".to_string();
+    }
+    let r = num * 1000 / den;
+    f"{r / 10}.{r % 10}%"
+}
+
+fn number(s: ref String) -> i64 {
+    i64.parse(s).ok().unwrap_or(0)
+}
+
+struct Story {
+    enc: Encoder,
+    dec: Decoder,
+    huffman: bool,
+    closed: bool,
+    raw: i64,
+    sent: i64,
+    open: bool,
+}
+
+fn new_story() -> Story {
+    Story { enc: new_encoder(), dec: new_decoder(), huffman: true, closed: false, raw: 0, sent: 0, open: false }
+}
+
+fn finish(st: ref Story) {
+    if st.open {
+        println(f"   connection: {st.raw} bytes of headers sent as {st.sent} ({per_mille(st.sent, st.raw)})");
+    }
+}
+
+fn run_stories(ctx: ref Ctx, text: ref String) {
+    let lines: Vec[String] = text.split("\n").map(|l| l.to_string()).collect();
+    let mut st = new_story();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].clone();
+        i += 1;
+        if line.len() == 0 {
+            continue;
+        }
+        let (word, rest) = partition(line, " ");
+        if word == "story" {
+            finish(st);
+            println(f"== story: {rest}");
+            st = new_story();
+            st.open = true;
+        } else if word == "huffman" {
+            st.huffman = rest == "on";
+        } else if word == "encoder-table" or word == "decoder-table" or word == "decoder-max" or word == "decoder-list-max" {
+            let n = number(rest);
+            println(f"   {word} {n}");
+            if word == "encoder-table" {
+                st.enc.set_table_size(n);
+            } else if word == "decoder-table" {
+                st.dec.table.set_maxsize(n);
+            } else if word == "decoder-max" {
+                st.dec.max_allowed = n;
+            } else {
+                st.dec.max_list = n;
+            }
+        } else if word == "block" or word == "dict" {
+            let mut headers: Vec[Header] = Vec.new();
+            while lines[i] != "end" {
+                let (kind, nv) = partition(lines[i], " ");
+                let (name, value) = partition(nv, "\t");
+                headers.push(Header { name: bytes_of(name), value: bytes_of(value), never: kind == "s" and word == "block" });
+                i += 1;
+            }
+            i += 1;
+            if st.closed {
+                println(f"-- {word} {rest}: not sent, the connection is closed");
+                continue;
+            }
+            // _dict_to_iterable: a stable sort that puts the ":" names first.
+            let mut sent: Vec[Header] = Vec.new();
+            if word == "dict" {
+                for pass in [true, false] {
+                    for h in headers.iter() {
+                        let special = h.name.len() > 0 and h.name[0] == 0x3A;
+                        if special == pass {
+                            sent.push(Header { name: h.name.clone(), value: h.value.clone(), never: false });
+                        }
+                    }
+                }
+            } else {
+                for h in headers.iter() {
+                    sent.push(Header { name: h.name.clone(), value: h.value.clone(), never: h.never });
+                }
+            }
+            let data = st.enc.encode(ctx, sent, st.huffman);
+            let mut raw = 0;
+            for h in headers.iter() {
+                raw += h.name.len() + h.value.len();
+            }
+            st.raw += raw;
+            st.sent += data.len();
+            println(f"-- {word} {rest}: {headers.len()} headers, {raw} bytes, encoded in {data.len()} ({per_mille(data.len(), raw)})");
+            println(f"   {hex_of(data)}");
+            match st.dec.decode(ctx, data) {
+                Err(e) => {
+                    println(f"   decode error {e.kind}: {e.msg}");
+                    println("   connection closed");
+                    st.closed = true;
+                }
+                Ok(got) => {
+                    let mut same = got.len() == sent.len();
+                    let mut k = 0;
+                    while same and k < got.len() {
+                        let a = ref got[k];
+                        let b = ref sent[k];
+                        same = same_bytes(a.name, b.name) and same_bytes(a.value, b.value) and a.never == b.never;
+                        k += 1;
+                    }
+                    if same {
+                        println("   decoded the same headers");
+                    } else {
+                        println("   decoded DIFFERENT headers:");
+                        for h in got.iter() {
+                            let mark = if h.never { "! " } else { "" };
+                            println(f"     {mark}{esc(text_of(h.name))}: {esc(text_of(h.value))}");
+                        }
+                    }
+                    if st.enc.table.same_entries(st.dec.table) {
+                        println("   tables agree");
+                    } else {
+                        println("   tables DIFFER");
+                    }
+                    st.dec.table.show();
+                }
+            }
+        }
+    }
+    finish(st);
+}
+
+fn run_vectors(ctx: ref Ctx, text: ref String) {
+    let mut dec = new_decoder();
+    let mut n = 0;
+    for line in text.split("\n") {
+        let line = line.to_string();
+        if line.len() == 0 {
+            continue;
+        }
+        let (word, rest) = partition(line, " ");
+        if word == "case" {
+            println(f"== case: {rest}");
+            dec = new_decoder();
+            n = 0;
+        } else if word == "decoder-table" or word == "decoder-max" or word == "decoder-list-max" {
+            let v = number(rest);
+            println(f"   {word} {v}");
+            if word == "decoder-table" {
+                dec.table.set_maxsize(v);
+            } else if word == "decoder-max" {
+                dec.max_allowed = v;
+            } else {
+                dec.max_list = v;
+            }
+        } else if word == "hex" {
+            n += 1;
+            let data = unhex(rest);
+            println(f"-- block {n}: {data.len()} bytes");
+            match dec.decode(ctx, data) {
+                Err(e) => println(f"   error {e.kind}: {e.msg}"),
+                Ok(got) => {
+                    for h in got.iter() {
+                        let mark = if h.never { "! " } else { "" };
+                        println(f"   {mark}{esc(text_of(h.name))}: {esc(text_of(h.value))}");
+                    }
+                }
+            }
+            dec.table.show();
+        }
+    }
+}
+
+fn write_data() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data".to_string()) {
+        return Err(f"cannot create data: {e}");
+    }
+    for (name, text) in data_files().into_iter() {
+        let path = f"data/{name}";
+        if let Err(e) = fs.write_bytes(path.clone(), bytes_of(text)) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_data(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let ctx = Ctx { statics: static_entries(), huffman: new_huffman() };
+    run_stories(ctx, read_data("data/stories.txt")?);
+    run_vectors(ctx, read_data("data/vectors.txt")?);
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
+
+// ---------------------------------------------------------------- data
+// Generated by gen_kara.py.
+
+fn file_0_0(out: mut ref String) {
+    out.push_str("story RFC 7541 C.3: requests without Huffman coding\u{a}huffman off\u{a}block C.3.1\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}http\u{a}h :path\u{9}/\u{a}h :authority\u{9}www.example.com\u{a}end\u{a}block C.3.2\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}http\u{a}h :path\u{9}/\u{a}h :authority\u{9}www.example.com\u{a}h cache-control\u{9}no-cache\u{a}end\u{a}block C.3.3\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :path\u{9}/index.html\u{a}h :authority\u{9}www.example.com\u{a}h custom-key\u{9}custom-value\u{a}end\u{a}story RFC 7541 C.4: re");
+    out.push_str("quests with Huffman coding\u{a}huffman on\u{a}block C.4.1\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}http\u{a}h :path\u{9}/\u{a}h :authority\u{9}www.example.com\u{a}end\u{a}block C.4.2\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}http\u{a}h :path\u{9}/\u{a}h :authority\u{9}www.example.com\u{a}h cache-control\u{9}no-cache\u{a}end\u{a}block C.4.3\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :path\u{9}/index.html\u{a}h :authority\u{9}www.example.com\u{a}h custom-key\u{9}custom-value\u{a}end\u{a}story RFC 7541 C.5: responses, table of 256, Huf");
+    out.push_str("fman off\u{a}huffman off\u{a}encoder-table 256\u{a}decoder-table 256\u{a}block C.5.1\u{a}h :status\u{9}302\u{a}h cache-control\u{9}private\u{a}h date\u{9}Mon, 21 Oct 2013 20:13:21 GMT\u{a}h location\u{9}https://www.example.com\u{a}end\u{a}block C.5.2\u{a}h :status\u{9}307\u{a}h cache-control\u{9}private\u{a}h date\u{9}Mon, 21 Oct 2013 20:13:21 GMT\u{a}h location\u{9}https://www.example.com\u{a}end\u{a}block C.5.3\u{a}h :status\u{9}200\u{a}h cache-control\u{9}private\u{a}h date\u{9}Mon, 21 Oct 2013 20:13:22 GMT\u{a}h lo");
+    out.push_str("cation\u{9}https://www.example.com\u{a}h content-encoding\u{9}gzip\u{a}h set-cookie\u{9}foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1\u{a}end\u{a}story RFC 7541 C.6: responses, table of 256, Huffman on\u{a}huffman on\u{a}encoder-table 256\u{a}decoder-table 256\u{a}block C.6.1\u{a}h :status\u{9}302\u{a}h cache-control\u{9}private\u{a}h date\u{9}Mon, 21 Oct 2013 20:13:21 GMT\u{a}h location\u{9}https://www.example.com\u{a}end\u{a}block C.6.2\u{a}h :status\u{9}307\u{a}h cache-control\u{9}");
+    out.push_str("private\u{a}h date\u{9}Mon, 21 Oct 2013 20:13:21 GMT\u{a}h location\u{9}https://www.example.com\u{a}end\u{a}block C.6.3\u{a}h :status\u{9}200\u{a}h cache-control\u{9}private\u{a}h date\u{9}Mon, 21 Oct 2013 20:13:22 GMT\u{a}h location\u{9}https://www.example.com\u{a}h content-encoding\u{9}gzip\u{a}h set-cookie\u{9}foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1\u{a}end\u{a}story a browser loads a shop's home page\u{a}huffman on\u{a}block GET /\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h ");
+    out.push_str(":authority\u{9}shop.example.net\u{a}h :path\u{9}/\u{a}h accept\u{9}text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h upgrade-insecure-requests\u{9}1\u{a}h sec-fetch-dest\u{9}document\u{a}h sec-fetch-mode\u{9}navigate\u{a}h sec-fetch-site\u{9}none\u{a}h priority\u{9}u=0, i");
+    out.push_str("\u{a}end\u{a}block GET /static/css/site.4f1a.css\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/static/css/site.4f1a.css\u{a}h accept\u{9}text/css,*/*;q=0.1\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cookie\u{9}cart=3 items; theme=dark");
+    out.push_str("; consent=analytics:no\u{a}h sec-fetch-dest\u{9}style\u{a}h sec-fetch-mode\u{9}no-cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=2\u{a}end\u{a}block GET /static/js/app.9c03.js\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/static/js/app.9c03.js\u{a}h accept\u{9}*/*\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}");
+    out.push_str("gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cookie\u{9}cart=3 items; theme=dark; consent=analytics:no\u{a}h sec-fetch-dest\u{9}script\u{a}h sec-fetch-mode\u{9}no-cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=1\u{a}end\u{a}block GET /static/img/logo.svg\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/static/img/logo.svg\u{a}h accept\u{9}image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.");
+    out.push_str("8,*/*;q=0.5\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cookie\u{9}cart=3 items; theme=dark; consent=analytics:no\u{a}h sec-fetch-dest\u{9}image\u{a}h sec-fetch-mode\u{9}no-cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=5, i\u{a}end\u{a}block GET /static/img/hero-au");
+    out.push_str("tumn.webp\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/static/img/hero-autumn.webp\u{a}h accept\u{9}image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cookie\u{9}c");
+    out.push_str("art=3 items; theme=dark; consent=analytics:no\u{a}h sec-fetch-dest\u{9}image\u{a}h sec-fetch-mode\u{9}no-cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=5, i\u{a}end\u{a}block GET /api/v2/cart\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/api/v2/cart\u{a}h accept\u{9}application/json\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3");
+    out.push_str("\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cookie\u{9}cart=3 items; theme=dark; consent=analytics:no\u{a}h sec-fetch-dest\u{9}empty\u{a}h sec-fetch-mode\u{9}cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=4\u{a}end\u{a}block GET /api/v2/recommendations?limit=8&locale=en-GB\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/api/v2/recommendations?limit=8&locale=en-GB\u{a}h ac");
+    out.push_str("cept\u{9}application/json\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cookie\u{9}cart=3 items; theme=dark; consent=analytics:no\u{a}h sec-fetch-dest\u{9}empty\u{a}h sec-fetch-mode\u{9}cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=4\u{a}end\u{a}block GET /static/fonts/i");
+    out.push_str("nter-var.woff2\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/static/fonts/inter-var.woff2\u{a}h accept\u{9}application/font-woff2;q=1.0,application/font-woff;q=0.9,*/*;q=0.8\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cooki");
+    out.push_str("e\u{9}cart=3 items; theme=dark; consent=analytics:no\u{a}h sec-fetch-dest\u{9}font\u{a}h sec-fetch-mode\u{9}cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=2\u{a}end\u{a}block GET /favicon.ico\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}shop.example.net\u{a}h :path\u{9}/favicon.ico\u{a}h accept\u{9}image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5\u{a}h user-agent\u{9}Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefo");
+    out.push_str("x/131.0\u{a}h accept-language\u{9}en-GB,en;q=0.7,fr;q=0.3\u{a}h accept-encoding\u{9}gzip, deflate, br, zstd\u{a}h referer\u{9}https://shop.example.net/\u{a}h cookie\u{9}cart=3 items; theme=dark; consent=analytics:no\u{a}h sec-fetch-dest\u{9}image\u{a}h sec-fetch-mode\u{9}no-cors\u{a}h sec-fetch-site\u{9}same-origin\u{a}h priority\u{9}u=6\u{a}end\u{a}story the shop's server answers\u{a}huffman on\u{a}encoder-table 2048\u{a}decoder-table 2048\u{a}block 200 /\u{a}h :status\u{9}200\u{a}h date\u{9}Sat, 1");
+    out.push_str("9 Oct 2024 09:41:03 GMT\u{a}h content-type\u{9}text/html; charset=utf-8\u{a}h content-length\u{9}48213\u{a}h cache-control\u{9}no-cache\u{a}h set-cookie\u{9}visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax\u{a}h vary\u{9}Accept-Encoding\u{a}h content-encoding\u{9}br\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}block 200 /static/css/site.4f1a.css\u{a}h :");
+    out.push_str("status\u{9}200\u{a}h date\u{9}Sat, 19 Oct 2024 09:41:04 GMT\u{a}h content-type\u{9}text/css\u{a}h content-length\u{9}18337\u{a}h etag\u{9}\"4f1a-1912bd\"\u{a}h cache-control\u{9}public, max-age=31536000, immutable\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}block 200 /static/js/app.9c03.js\u{a}h :status\u{9}200\u{a}h date\u{9}Sat, 19 Oct 2024 09:41:05 GMT\u{a}h content-type\u{9}applicat");
+    out.push_str("ion/javascript\u{a}h content-length\u{9}203111\u{a}h etag\u{9}\"9c03-8f2e11\"\u{a}h cache-control\u{9}public, max-age=31536000, immutable\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}block 304 /static/img/logo.svg\u{a}h :status\u{9}304\u{a}h date\u{9}Sat, 19 Oct 2024 09:41:06 GMT\u{a}h etag\u{9}\"logo-v7\"\u{a}h cache-control\u{9}public, max-age=86400\u{a}h strict-transport-securit");
+    out.push_str("y\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}block 200 /static/img/hero-autumn.webp\u{a}h :status\u{9}200\u{a}h date\u{9}Sat, 19 Oct 2024 09:41:07 GMT\u{a}h content-type\u{9}image/webp\u{a}h content-length\u{9}381560\u{a}h etag\u{9}\"hero-0912\"\u{a}h cache-control\u{9}public, max-age=604800\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosni");
+    out.push_str("ff\u{a}h server\u{9}envoy\u{a}end\u{a}block 200 /api/v2/cart\u{a}h :status\u{9}200\u{a}h date\u{9}Sat, 19 Oct 2024 09:41:08 GMT\u{a}h content-type\u{9}application/json\u{a}h content-length\u{9}212\u{a}h cache-control\u{9}private, no-store\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}block 404 /api/v2/recommendations?limit=8&locale=en-GB\u{a}h :status\u{9}404\u{a}h date\u{9}Sat, 19 Oct 2024");
+    out.push_str(" 09:41:09 GMT\u{a}h content-type\u{9}application/json\u{a}h content-length\u{9}61\u{a}h cache-control\u{9}private, no-store\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}block 200 /static/fonts/inter-var.woff2\u{a}h :status\u{9}200\u{a}h date\u{9}Sat, 19 Oct 2024 09:41:10 GMT\u{a}h content-type\u{9}font/woff2\u{a}h content-length\u{9}348960\u{a}h etag\u{9}\"inter-4.0\"\u{a}h cache-control");
+    out.push_str("\u{9}public, max-age=31536000, immutable\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}block 503 /favicon.ico\u{a}h :status\u{9}503\u{a}h date\u{9}Sat, 19 Oct 2024 09:41:11 GMT\u{a}h content-type\u{9}text/plain\u{a}h content-length\u{9}19\u{a}h cache-control\u{9}no-store\u{a}h retry-after\u{9}120\u{a}h strict-transport-security\u{9}max-age=63072000; includeSubDomains; preload\u{a}h ");
+    out.push_str("x-content-type-options\u{9}nosniff\u{a}h server\u{9}envoy\u{a}end\u{a}story an API client with credentials\u{a}huffman on\u{a}block POST /v1/orders\u{a}h :method\u{9}POST\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}api.example.org\u{a}h :path\u{9}/v1/orders\u{a}s authorization\u{9}Bearer demo-token-for-docs-only\u{a}h x-request-id\u{9}req-1000\u{a}h user-agent\u{9}orders-cli/2.3.1 python-httpx/0.27\u{a}h accept\u{9}application/json\u{a}h content-type\u{9}application/json\u{a}h content-length\u{9}88\u{a}s i");
+    out.push_str("dempotency-key\u{9}a7c1-orders-0001\u{a}end\u{a}block GET /v1/orders/7731\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}api.example.org\u{a}h :path\u{9}/v1/orders/7731\u{a}s authorization\u{9}Bearer demo-token-for-docs-only\u{a}h x-request-id\u{9}req-1001\u{a}h user-agent\u{9}orders-cli/2.3.1 python-httpx/0.27\u{a}h accept\u{9}application/json\u{a}end\u{a}block GET /v1/orders/7731\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}api.example.org\u{a}h :path\u{9}/v1/orders/7");
+    out.push_str("731\u{a}s authorization\u{9}Bearer demo-token-for-docs-only\u{a}h x-request-id\u{9}req-1002\u{a}h user-agent\u{9}orders-cli/2.3.1 python-httpx/0.27\u{a}h accept\u{9}application/json\u{a}end\u{a}block DELETE /v1/orders/7731/hold\u{a}h :method\u{9}DELETE\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}api.example.org\u{a}h :path\u{9}/v1/orders/7731/hold\u{a}s authorization\u{9}Bearer demo-token-for-docs-only\u{a}h x-request-id\u{9}req-1003\u{a}h user-agent\u{9}orders-cli/2.3.1 python-httpx/0.27\u{a}h");
+    out.push_str(" accept\u{9}application/json\u{a}end\u{a}block a sensitive header already in the table\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}api.example.org\u{a}h :path\u{9}/v1/whoami\u{a}s x-request-id\u{9}req-1003\u{a}s cookie\u{9}region=eu-west\u{a}h cookie\u{9}region=eu-west\u{a}end\u{a}story SETTINGS resize the table mid-connection\u{a}huffman off\u{a}block fill the table\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}cdn.example.com\u{a}h :path\u{9}/a.js\u{a}h x-cache-key\u{9}aaaa");
+    out.push_str("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u{a}h x-trace\u{9}t-0001-aaaa\u{a}end\u{a}encoder-table 128\u{a}decoder-table 128\u{a}block after shrinking to 128\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}cdn.example.com\u{a}h :path\u{9}/b.js\u{a}h x-trace\u{9}t-0001-aaaa\u{a}end\u{a}encoder-table 0\u{a}encoder-table 64\u{a}encoder-table 4096\u{a}block after 0, 64 and 4096 in one SETTINGS round\u{a}h :method\u{9}GET\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}cdn.example.com\u{a}h :path\u{9}/c.js");
+    out.push_str("\u{a}end\u{a}encoder-table 512\u{a}encoder-table 512\u{a}block a change to 512, then 512 again\u{a}h :method\u{9}GET\u{a}h :path\u{9}/d.js\u{a}end\u{a}encoder-table 1024\u{a}block then 1024\u{a}h :method\u{9}GET\u{a}h :path\u{9}/e.js\u{a}end\u{a}story big headers evict and clear the table\u{a}huffman on\u{a}encoder-table 1024\u{a}decoder-table 1024\u{a}block small headers\u{a}h :status\u{9}200\u{a}h x-a\u{9}1\u{a}h x-b\u{9}2\u{a}h x-c\u{9}3\u{a}end\u{a}block a 600-byte header evicts\u{a}h :status\u{9}200\u{a}h x-report\u{9}csp=000-001");
+    out.push_str("-002-003-004-005-006-007-008-009-010-011-012-013-014-015-016-017-018-019-020-021-022-023-024-025-026-027-028-029-030-031-032-033-034-035-036-037-038-039-040-041-042-043-044-045-046-047-048-049-050-051-052-053-054-055-056-057-058-059-060-061-062-063-064-065-066-067-068-069-070-071-072-073-074-075-076-077-078-079-080-081-082-083-084-085-086-087-088-089-090-091-092-093-094-095-096-097-098-099-100-101");
+    out.push_str("-102-103-104-105-106-107-108-109-110-111-112-113-114-115-116-117-118-119-120-121-122-123-124-125-126-127-128-129-130-131-132-133-134-135-136-137-138-139-140-141-142-143-144-145-146-147-148-149\u{a}end\u{a}block a header bigger than the table clears it\u{a}h :status\u{9}200\u{a}h set-cookie\u{9}prefs=zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+    out.push_str("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+    out.push_str("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+    out.push_str("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\u{a}h x-a\u{9}1\u{a}end\u{a}story a dict of headers is reordered\u{a}huffman on\u{a}dict dict with :path last\u{a}h user-agent\u{9}Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15\u{a}h accept");
+    out.push_str("\u{9}*/*\u{a}h :method\u{9}GET\u{a}h x-debug\u{9}on\u{a}h :scheme\u{9}https\u{a}h :authority\u{9}status.example.com\u{a}h :path\u{9}/health\u{a}end\u{a}story non-ASCII values in Huffman\u{a}huffman on\u{a}block a download\u{a}h :status\u{9}200\u{a}h content-disposition\u{9}attachment; filename*=UTF-8''résumé.pdf\u{a}h x-display-name\u{9}Björk Guðmundsdóttir\u{a}h x-city\u{9}東京\u{a}h x-empty\u{9}\u{a}end\u{a}block the same again\u{a}h :status\u{9}200\u{a}h x-city\u{9}東京\u{a}h x-empty\u{9}\u{a}end\u{a}story a decoder that limits the hea");
+    out.push_str("der list\u{a}huffman on\u{a}decoder-list-max 400\u{a}block a small request\u{a}h :method\u{9}GET\u{a}h :path\u{9}/\u{a}h x-n\u{9}1\u{a}end\u{a}block cookies over the limit\u{a}h :method\u{9}GET\u{a}h :path\u{9}/\u{a}h cookie\u{9}c0=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c1=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c2=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c3=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c4=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c5=vvvvvvvvvvvvvvvvvvvvv");
+    out.push_str("vvvvvvvvv\u{a}h cookie\u{9}c6=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c7=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c8=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}h cookie\u{9}c9=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\u{a}end\u{a}block never reached\u{a}h :method\u{9}GET\u{a}end\u{a}story a decoder whose SETTINGS the encoder ignores\u{a}huffman off\u{a}block first\u{a}h :method\u{9}GET\u{a}h :path\u{9}/\u{a}h x-trace\u{9}one\u{a}end\u{a}decoder-max 1024\u{a}block the encoder sent no size update\u{a}h :m");
+    out.push_str("ethod\u{9}GET\u{a}h :path\u{9}/\u{a}end\u{a}story an encoder that grows past the decoder's limit\u{a}huffman off\u{a}encoder-table 8192\u{a}block first\u{a}h :method\u{9}GET\u{a}h :path\u{9}/\u{a}end\u{a}");
+}
+
+fn file_0() -> String {
+    let mut out = String.new();
+    file_0_0(mut out);
+    out
+}
+
+fn file_1_0(out: mut ref String) {
+    out.push_str("case RFC 7541 C.2.1 literal with indexing\u{a}hex 400a637573746f6d2d6b65790d637573746f6d2d686561646572\u{a}case RFC 7541 C.2.2 literal without indexing\u{a}hex 040c2f73616d706c652f70617468\u{a}case RFC 7541 C.2.3 literal never indexed\u{a}hex 100870617373776f726406736563726574\u{a}case RFC 7541 C.2.4 indexed\u{a}hex 82\u{a}case RFC 7541 C.3 requests\u{a}hex 828684410f7777772e6578616d706c652e636f6d\u{a}hex 828684be58086e6f2d6361636865\u{a}he");
+    out.push_str("x 828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565\u{a}case RFC 7541 C.4 requests with Huffman\u{a}hex 828684418cf1e3c2e5f23a6ba0ab90f4ff\u{a}hex 828684be5886a8eb10649cbf\u{a}hex 828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf\u{a}case RFC 7541 C.5 responses\u{a}decoder-table 256\u{a}hex 4803333032580770726976617465611d4d6f6e2c203231204f637420323031332032303a31333a323120474d546e1768747470733a2f2f7777772e6578616d70");
+    out.push_str("6c652e636f6d\u{a}hex 4803333037c1c0bf\u{a}hex 88c1611d4d6f6e2c203231204f637420323031332032303a31333a323220474d54c05a04677a69707738666f6f3d4153444a4b48514b425a584f5157454f50495541585157454f49553b206d61782d6167653d333630303b2076657273696f6e3d31\u{a}case RFC 7541 C.6 responses with Huffman\u{a}decoder-table 256\u{a}hex 488264025885aec3771a4b6196d07abe941054d444a8200595040b8166e082a62d1bff6e919d29ad171863c78f0b97c8e9ae82");
+    out.push_str("ae43d3\u{a}hex 4883640effc1c0bf\u{a}hex 88c16196d07abe941054d444a8200595040b8166e084a62d1bffc05a839bd9ab77ad94e7821dd7f2e6c7b335dfdfcd5b3960d5af27087f3672c1ab270fb5291f9587316065c003ed4ee5b1063d5007\u{a}case Apache Traffic Server response (hpack issue 110)\u{a}hex 10073a737461747573033230304006736572766572094154532f362e302e304004646174651d5475652c203331204d617220323031352030383a30393a353120474d54400c636f6e74656e7");
+    out.push_str("42d7479706509746578742f68746d6c400e636f6e74656e742d6c656e677468053432343638400d6c6173742d6d6f6469666965641d5475652c203331204d617220323031352030313a35353a353120474d544004766172790f4163636570742d456e636f64696e674004657461670f2235353139666561372d61356534224008782d736572766564054e67696e784014782d737562646f6d61696e2d74727966696c657304547275654007782d64656974790968796472612d6c7473400d6163636570742d72616");
+    out.push_str("e6765730562797465734003616765013040197374726963742d7472616e73706f72742d73656375726974790d6d61782d6167653d383634303040037669613268747470732f312e31204154532028417061636865547261666669635365727665722f362e302e30205b6353734e66555d29\u{a}case raw bytes in a Huffman-free name\u{a}hex 400a000199301122552189140d637573746f6d2d686561646572\u{a}case an empty block\u{a}hex \u{a}case index 0\u{a}hex 80\u{a}case index 62 with an empty dyna");
+    out.push_str("mic table\u{a}hex be\u{a}case an indexed name past the table\u{a}hex 8286847f0a0f7777772e6578616d706c652e636f6d\u{a}case a big index\u{a}hex ffffffffffffffff7f\u{a}case an integer cut short\u{a}hex ff\u{a}case an integer cut short inside a literal\u{a}hex 828640\u{a}case a name cut short\u{a}hex 4005616263\u{a}case a value cut short\u{a}hex 400161056162\u{a}case a value length cut short\u{a}hex 400161\u{a}case EOS inside a Huffman string\u{a}hex 4084fffffffc0161\u{a}c");
+    out.push_str("ase padding longer than 7 bits\u{a}hex 40821fff0161\u{a}case padding with a zero bit\u{a}hex 4081000161\u{a}case an empty Huffman name and value\u{a}hex 408080\u{a}hex be\u{a}case never indexed with an indexed name\u{a}hex 140c2f73616d706c652f70617468\u{a}case literal without indexing, name index 58\u{a}hex 0f2b0a6375726c2f382e392e31\u{a}case table size updates at the start\u{a}hex 203fe11f82\u{a}hex 3f9a0a82\u{a}case a table size update after a header");
+    out.push_str("\u{a}hex 823fe11f\u{a}case a table size update above the maximum\u{a}hex 3fe21f\u{a}case a table size update between two headers\u{a}hex 823fe11f86\u{a}case invalid UTF-8\u{a}hex 82868401107777772e07aad795d7a8d7942e636f6d\u{a}case table eviction with size 64\u{a}hex 3f21400361626303313233\u{a}hex be\u{a}hex 400364656603343536\u{a}hex bebf\u{a}case the header list limit\u{a}decoder-list-max 45\u{a}hex 82\u{a}hex 140c2f73616d706c652f70617468\u{a}case a lowered maxim");
+    out.push_str("um the encoder did not follow\u{a}decoder-max 1024\u{a}hex 828684418cf1e3c2e5f23a6ba0ab90f4ff\u{a}hex 3fe10782\u{a}hex 82\u{a}case a raised table with the default maximum\u{a}decoder-table 8000\u{a}hex 82\u{a}hex 3fe11f82\u{a}");
+}
+
+fn file_1() -> String {
+    let mut out = String.new();
+    file_1_0(mut out);
+    out
+}
+
+// (path under data/, contents)
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("stories.txt".to_string(), file_0()));
+    v.push(("vectors.txt".to_string(), file_1()));
+    v
+}
+
+// HeaderTable.STATIC_TABLE
+fn static_table() -> Vec[(Str, Str)] {
+    vec![
+        (":authority", ""),
+        (":method", "GET"),
+        (":method", "POST"),
+        (":path", "/"),
+        (":path", "/index.html"),
+        (":scheme", "http"),
+        (":scheme", "https"),
+        (":status", "200"),
+        (":status", "204"),
+        (":status", "206"),
+        (":status", "304"),
+        (":status", "400"),
+        (":status", "404"),
+        (":status", "500"),
+        ("accept-charset", ""),
+        ("accept-encoding", "gzip, deflate"),
+        ("accept-language", ""),
+        ("accept-ranges", ""),
+        ("accept", ""),
+        ("access-control-allow-origin", ""),
+        ("age", ""),
+        ("allow", ""),
+        ("authorization", ""),
+        ("cache-control", ""),
+        ("content-disposition", ""),
+        ("content-encoding", ""),
+        ("content-language", ""),
+        ("content-length", ""),
+        ("content-location", ""),
+        ("content-range", ""),
+        ("content-type", ""),
+        ("cookie", ""),
+        ("date", ""),
+        ("etag", ""),
+        ("expect", ""),
+        ("expires", ""),
+        ("from", ""),
+        ("host", ""),
+        ("if-match", ""),
+        ("if-modified-since", ""),
+        ("if-none-match", ""),
+        ("if-range", ""),
+        ("if-unmodified-since", ""),
+        ("last-modified", ""),
+        ("link", ""),
+        ("location", ""),
+        ("max-forwards", ""),
+        ("proxy-authenticate", ""),
+        ("proxy-authorization", ""),
+        ("range", ""),
+        ("referer", ""),
+        ("refresh", ""),
+        ("retry-after", ""),
+        ("server", ""),
+        ("set-cookie", ""),
+        ("strict-transport-security", ""),
+        ("transfer-encoding", ""),
+        ("user-agent", ""),
+        ("vary", ""),
+        ("via", ""),
+        ("www-authenticate", ""),
+    ]
+}
+
+// REQUEST_CODES and REQUEST_CODES_LENGTH, one (code, length) per symbol
+fn huffman_codes() -> Vec[(i64, i64)] {
+    vec![
+        (0x1ff8, 13),
+        (0x7fffd8, 23),
+        (0xfffffe2, 28),
+        (0xfffffe3, 28),
+        (0xfffffe4, 28),
+        (0xfffffe5, 28),
+        (0xfffffe6, 28),
+        (0xfffffe7, 28),
+        (0xfffffe8, 28),
+        (0xffffea, 24),
+        (0x3ffffffc, 30),
+        (0xfffffe9, 28),
+        (0xfffffea, 28),
+        (0x3ffffffd, 30),
+        (0xfffffeb, 28),
+        (0xfffffec, 28),
+        (0xfffffed, 28),
+        (0xfffffee, 28),
+        (0xfffffef, 28),
+        (0xffffff0, 28),
+        (0xffffff1, 28),
+        (0xffffff2, 28),
+        (0x3ffffffe, 30),
+        (0xffffff3, 28),
+        (0xffffff4, 28),
+        (0xffffff5, 28),
+        (0xffffff6, 28),
+        (0xffffff7, 28),
+        (0xffffff8, 28),
+        (0xffffff9, 28),
+        (0xffffffa, 28),
+        (0xffffffb, 28),
+        (0x14, 6),
+        (0x3f8, 10),
+        (0x3f9, 10),
+        (0xffa, 12),
+        (0x1ff9, 13),
+        (0x15, 6),
+        (0xf8, 8),
+        (0x7fa, 11),
+        (0x3fa, 10),
+        (0x3fb, 10),
+        (0xf9, 8),
+        (0x7fb, 11),
+        (0xfa, 8),
+        (0x16, 6),
+        (0x17, 6),
+        (0x18, 6),
+        (0x0, 5),
+        (0x1, 5),
+        (0x2, 5),
+        (0x19, 6),
+        (0x1a, 6),
+        (0x1b, 6),
+        (0x1c, 6),
+        (0x1d, 6),
+        (0x1e, 6),
+        (0x1f, 6),
+        (0x5c, 7),
+        (0xfb, 8),
+        (0x7ffc, 15),
+        (0x20, 6),
+        (0xffb, 12),
+        (0x3fc, 10),
+        (0x1ffa, 13),
+        (0x21, 6),
+        (0x5d, 7),
+        (0x5e, 7),
+        (0x5f, 7),
+        (0x60, 7),
+        (0x61, 7),
+        (0x62, 7),
+        (0x63, 7),
+        (0x64, 7),
+        (0x65, 7),
+        (0x66, 7),
+        (0x67, 7),
+        (0x68, 7),
+        (0x69, 7),
+        (0x6a, 7),
+        (0x6b, 7),
+        (0x6c, 7),
+        (0x6d, 7),
+        (0x6e, 7),
+        (0x6f, 7),
+        (0x70, 7),
+        (0x71, 7),
+        (0x72, 7),
+        (0xfc, 8),
+        (0x73, 7),
+        (0xfd, 8),
+        (0x1ffb, 13),
+        (0x7fff0, 19),
+        (0x1ffc, 13),
+        (0x3ffc, 14),
+        (0x22, 6),
+        (0x7ffd, 15),
+        (0x3, 5),
+        (0x23, 6),
+        (0x4, 5),
+        (0x24, 6),
+        (0x5, 5),
+        (0x25, 6),
+        (0x26, 6),
+        (0x27, 6),
+        (0x6, 5),
+        (0x74, 7),
+        (0x75, 7),
+        (0x28, 6),
+        (0x29, 6),
+        (0x2a, 6),
+        (0x7, 5),
+        (0x2b, 6),
+        (0x76, 7),
+        (0x2c, 6),
+        (0x8, 5),
+        (0x9, 5),
+        (0x2d, 6),
+        (0x77, 7),
+        (0x78, 7),
+        (0x79, 7),
+        (0x7a, 7),
+        (0x7b, 7),
+        (0x7ffe, 15),
+        (0x7fc, 11),
+        (0x3ffd, 14),
+        (0x1ffd, 13),
+        (0xffffffc, 28),
+        (0xfffe6, 20),
+        (0x3fffd2, 22),
+        (0xfffe7, 20),
+        (0xfffe8, 20),
+        (0x3fffd3, 22),
+        (0x3fffd4, 22),
+        (0x3fffd5, 22),
+        (0x7fffd9, 23),
+        (0x3fffd6, 22),
+        (0x7fffda, 23),
+        (0x7fffdb, 23),
+        (0x7fffdc, 23),
+        (0x7fffdd, 23),
+        (0x7fffde, 23),
+        (0xffffeb, 24),
+        (0x7fffdf, 23),
+        (0xffffec, 24),
+        (0xffffed, 24),
+        (0x3fffd7, 22),
+        (0x7fffe0, 23),
+        (0xffffee, 24),
+        (0x7fffe1, 23),
+        (0x7fffe2, 23),
+        (0x7fffe3, 23),
+        (0x7fffe4, 23),
+        (0x1fffdc, 21),
+        (0x3fffd8, 22),
+        (0x7fffe5, 23),
+        (0x3fffd9, 22),
+        (0x7fffe6, 23),
+        (0x7fffe7, 23),
+        (0xffffef, 24),
+        (0x3fffda, 22),
+        (0x1fffdd, 21),
+        (0xfffe9, 20),
+        (0x3fffdb, 22),
+        (0x3fffdc, 22),
+        (0x7fffe8, 23),
+        (0x7fffe9, 23),
+        (0x1fffde, 21),
+        (0x7fffea, 23),
+        (0x3fffdd, 22),
+        (0x3fffde, 22),
+        (0xfffff0, 24),
+        (0x1fffdf, 21),
+        (0x3fffdf, 22),
+        (0x7fffeb, 23),
+        (0x7fffec, 23),
+        (0x1fffe0, 21),
+        (0x1fffe1, 21),
+        (0x3fffe0, 22),
+        (0x1fffe2, 21),
+        (0x7fffed, 23),
+        (0x3fffe1, 22),
+        (0x7fffee, 23),
+        (0x7fffef, 23),
+        (0xfffea, 20),
+        (0x3fffe2, 22),
+        (0x3fffe3, 22),
+        (0x3fffe4, 22),
+        (0x7ffff0, 23),
+        (0x3fffe5, 22),
+        (0x3fffe6, 22),
+        (0x7ffff1, 23),
+        (0x3ffffe0, 26),
+        (0x3ffffe1, 26),
+        (0xfffeb, 20),
+        (0x7fff1, 19),
+        (0x3fffe7, 22),
+        (0x7ffff2, 23),
+        (0x3fffe8, 22),
+        (0x1ffffec, 25),
+        (0x3ffffe2, 26),
+        (0x3ffffe3, 26),
+        (0x3ffffe4, 26),
+        (0x7ffffde, 27),
+        (0x7ffffdf, 27),
+        (0x3ffffe5, 26),
+        (0xfffff1, 24),
+        (0x1ffffed, 25),
+        (0x7fff2, 19),
+        (0x1fffe3, 21),
+        (0x3ffffe6, 26),
+        (0x7ffffe0, 27),
+        (0x7ffffe1, 27),
+        (0x3ffffe7, 26),
+        (0x7ffffe2, 27),
+        (0xfffff2, 24),
+        (0x1fffe4, 21),
+        (0x1fffe5, 21),
+        (0x3ffffe8, 26),
+        (0x3ffffe9, 26),
+        (0xffffffd, 28),
+        (0x7ffffe3, 27),
+        (0x7ffffe4, 27),
+        (0x7ffffe5, 27),
+        (0xfffec, 20),
+        (0xfffff3, 24),
+        (0xfffed, 20),
+        (0x1fffe6, 21),
+        (0x3fffe9, 22),
+        (0x1fffe7, 21),
+        (0x1fffe8, 21),
+        (0x7ffff3, 23),
+        (0x3fffea, 22),
+        (0x3fffeb, 22),
+        (0x1ffffee, 25),
+        (0x1ffffef, 25),
+        (0xfffff4, 24),
+        (0xfffff5, 24),
+        (0x3ffffea, 26),
+        (0x7ffff4, 23),
+        (0x3ffffeb, 26),
+        (0x7ffffe6, 27),
+        (0x3ffffec, 26),
+        (0x3ffffed, 26),
+        (0x7ffffe7, 27),
+        (0x7ffffe8, 27),
+        (0x7ffffe9, 27),
+        (0x7ffffea, 27),
+        (0x7ffffeb, 27),
+        (0xffffffe, 28),
+        (0x7ffffec, 27),
+        (0x7ffffed, 27),
+        (0x7ffffee, 27),
+        (0x7ffffef, 27),
+        (0x7fffff0, 27),
+        (0x3ffffee, 26),
+        (0x3fffffff, 30),
+    ]
+}
+
+// HUFFMAN_TABLE: 256 nodes of 16 (state, flags, symbol) entries
+fn huffman_fsm_hex_0(out: mut ref String) {
+    out.push_str("0400000500000700000800000b00000c00001000001300001900001c00002000002300002a000031000039000040010000033000033100033200036100036300036500036900036f0003730003740d00000e000011000012000014000015000001023016033001023116033101023216033201026116036101026316036301026516036501026916036901026f16036f0202300902301702302803300202310902311702312803310202320902321702322803320202610902611702612803610302300602300a02");
+    out.push_str("300f02301802301f02302902303803300302310602310a02310f02311802311f02312902313803310302320602320a02320f02321802321f02322902323803320302610602610a02610f02611802611f026129026138036102026309026317026328036302026509026517026528036502026909026917026928036902026f09026f17026f28036f0302630602630a02630f02631802631f02632902633803630302650602650a02650f02651802651f02652902653803650302690602690a02690f02691802691f");
+    out.push_str("026929026938036903026f06026f0a026f0f026f18026f1f026f29026f38036f01027316037301027416037400032000032500032d00032e00032f00033300033400033500033600033700033800033902027309027317027328037302027409027417027428037401022016032001022516032501022d16032d01022e16032e0302730602730a02730f02731802731f02732902733803730302740602740a02740f02741802741f0274290274380374020220090220170220280320020225090225170225280325");
+    out.push_str("02022d09022d17022d28032d02022e09022e17022e28032e0302200602200a02200f02201802201f02202902203803200302250602250a02250f02251802251f022529022538032503022d06022d0a022d0f022d18022d1f022d29022d38032d03022e06022e0a022e0f022e18022e1f022e29022e38032e01022f16032f01023316033301023416033401023516033501023616033601023716033701023816033801023916033902022f09022f17022f28032f0202330902331702332803330202340902341702");
+    out.push_str("3428033402023509023517023528033503022f06022f0a022f0f022f18022f1f022f29022f38032f0302330602330a02330f02331802331f02332902333803330302340602340a02340f02341802341f02342902343803340302350602350a02350f02351802351f02352902353803350202360902361702362803360202370902371702372803370202380902381702382803380202390902391702392803390302360602360a02360f02361802361f02362902363803360302370602370a02370f02371802371f");
+    out.push_str("02372902373803370302380602380a02380f02381802381f02382902383803380302390602390a02390f02391802391f02392902393803391a00001b00001d00001e00002100002200002400002500002b00002e00003200003500003a00003d000041000044010000033d00034100035f00036200036400036600036700036800036c00036d00036e00037000037200037526000027000001023d16033d01024116034101025f16035f010262160362010264160364010266160366010267160367010268160368");
+    out.push_str("02023d09023d17023d28033d02024109024117024128034102025f09025f17025f28035f02026209026217026228036203023d06023d0a023d0f023d18023d1f023d29023d38033d0302410602410a02410f02411802411f024129024138034103025f06025f0a025f0f025f18025f1f025f29025f38035f0302620602620a02620f02621802621f02622902623803620202640902641702642803640202660902661702662803660202670902671702672803670202680902681702682803680302640602640a02");
+    out.push_str("640f02641802641f02642902643803640302660602660a02660f02661802661f02662902663803660302670602670a02670f02671802671f02672902673803670302680602680a02680f02681802681f026829026838036801026c16036c01026d16036d01026e16036e01027016037001027216037201027516037500033a00034200034300034402026c09026c17026c28036c02026d09026d17026d28036d02026e09026e17026e28036e02027009027017027028037003026c06026c0a026c0f026c18026c1f");
+    out.push_str("026c29026c38036c03026d06026d0a026d0f026d18026d1f026d29026d38036d03026e06026e0a026e0f026e18026e1f026e29026e38036e0302700602700a02700f02701802701f027029027038037002027209027217027228037202027509027517027528037501023a16033a0102421603420102431603430102441603440302720602720a02720f02721802721f02722902723803720302750602750a02750f02751802751f027529027538037502023a09023a17023a28033a020242090242170242280342");
+    out.push_str("02024309024317024328034302024409024417024428034403023a06023a0a023a0f023a18023a1f023a29023a38033a0302420602420a02420f02421802421f02422902423803420302430602430a02430f02431802431f02432902433803430302440602440a02440f02441802441f02442902443803442c00002d00002f00003000003300003400003600003700003b00003c00003e00003f000042000043000045000048010000034500034600034700034800034900034a00034b00034c00034d00034e0003");
+    out.push_str("4f00035000035100035200035300035401024516034501024616034601024716034701024816034801024916034901024a16034a01024b16034b01024c16034c0202450902451702452803450202460902461702462803460202470902471702472803470202480902481702482803480302450602450a02450f02451802451f02452902453803450302460602460a02460f02461802461f02462902463803460302470602470a02470f02471802471f02472902473803470302480602480a02480f02481802481f");
+    out.push_str("024829024838034802024909024917024928034902024a09024a17024a28034a02024b09024b17024b28034b02024c09024c17024c28034c0302490602490a02490f02491802491f024929024938034903024a06024a0a024a0f024a18024a1f024a29024a38034a03024b06024b0a024b0f024b18024b1f024b29024b38034b03024c06024c0a024c0f024c18024c1f024c29024c38034c01024d16034d01024e16034e01024f16034f010250160350010251160351010252160352010253160353010254160354");
+    out.push_str("02024d09024d17024d28034d02024e09024e17024e28034e02024f09024f17024f28034f02025009025017025028035003024d06024d0a024d0f024d18024d1f024d29024d38034d03024e06024e0a024e0f024e18024e1f024e29024e38034e03024f06024f0a024f0f024f18024f1f024f29024f38034f0302500602500a02500f02501802501f02502902503803500202510902511702512803510202520902521702522803520202530902531702532803530202540902541702542803540302510602510a02");
+    out.push_str("510f02511802511f02512902513803510302520602520a02520f02521802521f02522902523803520302530602530a02530f02531802531f02532902533803530302540602540a02540f02541802541f025429025438035400035500035600035700035900036a00036b00037100037600037700037800037900037a4600004700004900004a010001025516035501025616035601025716035701025916035901026a16036a01026b16036b01027116037101027616037602025509025517025528035502025609");
+    out.push_str("02561702562803560202570902571702572803570202590902591702592803590302550602550a02550f02551802551f02552902553803550302560602560a02560f02561802561f02562902563803560302570602570a02570f02571802571f02572902573803570302590602590a02590f02591802591f025929025938035902026a09026a17026a28036a02026b09026b17026b28036b02027109027117027128037102027609027617027628037603026a06026a0a026a0f026a18026a1f026a29026a38036a");
+    out.push_str("03026b06026b0a026b0f026b18026b1f026b29026b38036b0302710602710a02710f02711802711f02712902713803710302760602760a02760f02761802761f027629027638037601027716037701027816037801027916037901027a16037a00032600032a00032c00033b00035800035a4b00004e000002027709027717027728037702027809027817027828037802027909027917027928037902027a09027a17027a28037a0302770602770a02770f02771802771f02772902773803770302780602780a02");
+    out.push_str("780f02781802781f02782902783803780302790602790a02790f02791802791f027929027938037903027a06027a0a027a0f027a18027a1f027a29027a38037a01022616032601022a16032a01022c16032c01023b16033b01025816035801025a16035a4c00004d00004f000051000002022609022617022628032602022a09022a17022a28032a02022c09022c17022c28032c02023b09023b17023b28033b0302260602260a02260f02261802261f022629022638032603022a06022a0a022a0f022a18022a1f");
+    out.push_str("022a29022a38032a03022c06022c0a022c0f022c18022c1f022c29022c38032c03023b06023b0a023b0f023b18023b1f023b29023b38033b02025809025817025828035802025a09025a17025a28035a00032100032200032800032900033f5000005200005400000302580602580a02580f02581802581f025829025838035803025a06025a0a025a0f025a18025a1f025a29025a38035a01022116032101022216032201022816032801022916032901023f16033f00032700032b00037c530000550000580000");
+    out.push_str("0202210902211702212803210202220902221702222803220202280902281702282803280202290902291702292803290302210602210a02210f02211802211f02212902213803210302220602220a02220f02221802221f02222902223803220302280602280a02280f02281802281f02282902283803280302290602290a02290f02291802291f022929022938032902023f09023f17023f28033f01022716032701022b16032b01027c16037c00032300033e5600005700005900005a000003023f06023f0a02");
+    out.push_str("3f0f023f18023f1f023f29023f38033f02022709022717022728032702022b09022b17022b28032b0302270602270a02270f02271802271f022729022738032703022b06022b0a022b0f022b18022b1f022b29022b38032b02027c09027c17027c28037c01022316032301023e16033e00030000032400034000035b00035d00037e5b00005c000003027c06027c0a027c0f027c18027c1f027c29027c38037c02022309022317022328032302023e09023e17023e28033e0302230602230a02230f02231802231f");
+    out.push_str("022329022338032303023e06023e0a023e0f023e18023e1f023e29023e38033e01020016030001022416032401024016034001025b16035b01025d16035d01027e16037e00035e00037d5d00005e000002020009020017020028030002022409022417022428032402024009024017024028034002025b09025b17025b28035b0302000602000a02000f02001802001f02002902003803000302240602240a02240f02241802241f02242902243803240302400602400a02400f02401802401f0240290240380340");
+    out.push_str("03025b06025b0a025b0f025b18025b1f025b29025b38035b02025d09025d17025d28035d02027e09027e17027e28037e01025e16035e01027d16037d00033c00036000037b5f000003025d06025d0a025d0f025d18025d1f025d29025d38035d03027e06027e0a027e0f027e18027e1f027e29027e38037e02025e09025e17025e28035e02027d09027d17027d28037d01023c16033c01026016036001027b16037b6000006e000003025e06025e0a025e0f025e18025e1f025e29025e38035e03027d06027d0a02");
+    out.push_str("7d0f027d18027d1f027d29027d38037d02023c09023c17023c28033c02026009026017026028036002027b09027b17027b28037b6100006500006f000085000003023c06023c0a023c0f023c18023c1f023c29023c38033c0302600602600a02600f02601802601f026029026038036003027b06027b0a027b0f027b18027b1f027b29027b38037b62000063000066000069000070000077000086000099000000035c0003c30003d06400006700006800006a00006b00007100007400007800007e00008700008e");
+    out.push_str("00009a0000a9000001025c16035c0102c31603c30102d01603d00003800003820003830003a20003b80003c20003e00003e26c00006d000002025c09025c17025c28035c0202c30902c31702c32803c30202d00902d01702d02803d001028016038001028216038203025c06025c0a025c0f025c18025c1f025c29025c38035c0302c30602c30a02c30f02c31802c31f02c32902c33803c30302d00602d00a02d00f02d01802d01f02d02902d03803d0020280090280170280280380020282090282170282280382");
+    out.push_str("0302800602800a02800f02801802801f02802902803803800302820602820a02820f02821802821f02822902823803820102831603830102a21603a20102b81603b80102c21603c20102e01603e00102e21603e20003990003a10003a70003ac0202830902831702832803830202a20902a21702a22803a20202b80902b81702b82803b80202c20902c21702c22803c20302830602830a02830f02831802831f02832902833803830302a20602a20a02a20f02a21802a21f02a22902a23803a20302b80602b80a02");
+    out.push_str("b80f02b81802b81f02b82902b83803b80302c20602c20a02c20f02c21802c21f02c22902c23803c20202e00902e01702e02803e00202e20902e21702e22803e20102991603990102a11603a10102a71603a70102ac1603ac0302e00602e00a02e00f02e01802e01f02e02902e03803e00302e20602e20a02e20f02e21802e21f02e22902e23803e20202990902991702992803990202a10902a11702a12803a10202a70902a71702a72803a70202ac0902ac1702ac2803ac0302990602990a02990f02991802991f");
+    out.push_str("02992902993803990302a10602a10a02a10f02a11802a11f02a12902a13803a10302a70602a70a02a70f02a71802a71f02a72902a73803a70302ac0602ac0a02ac0f02ac1802ac1f02ac2902ac3803ac7200007300007500007600007900007b00007f00008200008800008b00008f00009200009b0000a20000aa0000b400000003b00003b10003b30003d10003d80003d90003e30003e50003e67a00007c00007d00008000008100008300008400000102b01603b00102b11603b10102b31603b30102d11603d1");
+    out.push_str("0102d81603d80102d91603d90102e31603e30102e51603e50202b00902b01702b02803b00202b10902b11702b12803b10202b30902b31702b32803b30202d10902d11702d12803d10302b00602b00a02b00f02b01802b01f02b02902b03803b00302b10602b10a02b10f02b11802b11f02b12902b13803b10302b30602b30a02b30f02b31802b31f02b32902b33803b30302d10602d10a02d10f02d11802d11f02d12902d13803d10202d80902d81702d82803d80202d90902d91702d92803d90202e30902e31702");
+    out.push_str("e32803e30202e50902e51702e52803e50302d80602d80a02d80f02d81802d81f02d82902d83803d80302d90602d90a02d90f02d91802d91f02d92902d93803d90302e30602e30a02e30f02e31802e31f02e32902e33803e30302e50602e50a02e50f02e51802e51f02e52902e53803e50102e61603e600038100038400038500038600038800039200039a00039c0003a00003a30003a40003a90003aa0003ad0202e60902e61702e62803e601028116038101028416038401028516038501028616038601028816");
+    out.push_str("03880102921603920302e60602e60a02e60f02e61802e61f02e62902e63803e60202810902811702812803810202840902841702842803840302810602810a02810f02811802811f02812902813803810302840602840a02840f02841802841f02842902843803840202850902851702852803850202860902861702862803860202880902881702882803880202920902921702922803920302850602850a02850f02851802851f02852902853803850302860602860a02860f02861802861f0286290286380386");
+    out.push_str("0302880602880a02880f02881802881f02882902883803880302920602920a02920f02921802921f029229029238039201029a16039a01029c16039c0102a01603a00102a31603a30102a41603a40102a91603a90102aa1603aa0102ad1603ad02029a09029a17029a28039a02029c09029c17029c28039c0202a00902a01702a02803a00202a30902a31702a32803a303029a06029a0a029a0f029a18029a1f029a29029a38039a03029c06029c0a029c0f029c18029c1f029c29029c38039c0302a00602a00a02");
+    out.push_str("a00f02a01802a01f02a02902a03803a00302a30602a30a02a30f02a31802a31f02a32902a33803a30202a40902a41702a42803a40202a90902a91702a92803a90202aa0902aa1702aa2803aa0202ad0902ad1702ad2803ad0302a40602a40a02a40f02a41802a41f02a42902a43803a40302a90602a90a02a90f02a91802a91f02a92902a93803a90302aa0602aa0a02aa0f02aa1802aa1f02aa2902aa3803aa0302ad0602ad0a02ad0f02ad1802ad1f02ad2902ad3803ad8900008a00008c00008d000090000091");
+    out.push_str("00009300009600009c00009f0000a30000a60000ab0000ae0000b50000be00000003b20003b50003b90003ba0003bb0003bd0003be0003c40003c60003e40003e80003e99400009500009700009800000102b21603b20102b51603b50102b91603b90102ba1603ba0102bb1603bb0102bd1603bd0102be1603be0102c41603c40202b20902b21702b22803b20202b50902b51702b52803b50202b90902b91702b92803b90202ba0902ba1702ba2803ba0302b20602b20a02b20f02b21802b21f02b22902b23803b2");
+    out.push_str("0302b50602b50a02b50f02b51802b51f02b52902b53803b50302b90602b90a02b90f02b91802b91f02b92902b93803b90302ba0602ba0a02ba0f02ba1802ba1f02ba2902ba3803ba0202bb0902bb1702bb2803bb0202bd0902bd1702bd2803bd0202be0902be1702be2803be0202c40902c41702c42803c40302bb0602bb0a02bb0f02bb1802bb1f02bb2902bb3803bb0302bd0602bd0a02bd0f02bd1802bd1f02bd2902bd3803bd0302be0602be0a02be0f02be1802be1f02be2902be3803be0302c40602c40a02");
+    out.push_str("c40f02c41802c41f02c42902c43803c40102c61603c60102e41603e40102e81603e80102e91603e900030100038700038900038a00038b00038c00038d00038f0202c60902c61702c62803c60202e40902e41702e42803e40202e80902e81702e82803e80202e90902e91702e92803e90302c60602c60a02c60f02c61802c61f02c62902c63803c60302e40602e40a02e40f02e41802e41f02e42902e43803e40302e80602e80a02e80f02e81802e81f02e82902e83803e80302e90602e90a02e90f02e91802e91f");
+    out.push_str("02e92902e93803e901020116030101028716038701028916038901028a16038a01028b16038b01028c16038c01028d16038d01028f16038f02020109020117020128030102028709028717028728038702028909028917028928038902028a09028a17028a28038a0302010602010a02010f02011802011f02012902013803010302870602870a02870f02871802871f02872902873803870302890602890a02890f02891802891f028929028938038903028a06028a0a028a0f028a18028a1f028a29028a38038a");
+    out.push_str("02028b09028b17028b28038b02028c09028c17028c28038c02028d09028d17028d28038d02028f09028f17028f28038f03028b06028b0a028b0f028b18028b1f028b29028b38038b03028c06028c0a028c0f028c18028c1f028c29028c38038c03028d06028d0a028d0f028d18028d1f028d29028d38038d03028f06028f0a028f0f028f18028f1f028f29028f38038f9d00009e0000a00000a10000a40000a50000a70000a80000ac0000ad0000af0000b10000b60000b90000bf0000cf00000003930003950003");
+    out.push_str("9600039700039800039b00039d00039e0003a50003a60003a80003ae0003af0003b40003b60003b701029316039301029516039501029616039601029716039701029816039801029b16039b01029d16039d01029e16039e0202930902931702932803930202950902951702952803950202960902961702962803960202970902971702972803970302930602930a02930f02931802931f02932902933803930302950602950a02950f02951802951f02952902953803950302960602960a02960f02961802961f");
+    out.push_str("02962902963803960302970602970a02970f02971802971f029729029738039702029809029817029828039802029b09029b17029b28039b02029d09029d17029d28039d02029e09029e17029e28039e0302980602980a02980f02981802981f029829029838039803029b06029b0a029b0f029b18029b1f029b29029b38039b03029d06029d0a029d0f029d18029d1f029d29029d38039d03029e06029e0a029e0f029e18029e1f029e29029e38039e0102a51603a50102a61603a60102a81603a80102ae1603ae");
+    out.push_str("0102af1603af0102b41603b40102b61603b60102b71603b70202a50902a51702a52803a50202a60902a61702a62803a60202a80902a81702a82803a80202ae0902ae1702ae2803ae0302a50602a50a02a50f02a51802a51f02a52902a53803a50302a60602a60a02a60f02a61802a61f02a62902a63803a60302a80602a80a02a80f02a81802a81f02a82902a83803a80302ae0602ae0a02ae0f02ae1802ae1f02ae2902ae3803ae0202af0902af1702af2803af0202b40902b41702b42803b40202b60902b61702");
+    out.push_str("b62803b60202b70902b71702b72803b70302af0602af0a02af0f02af1802af1f02af2902af3803af0302b40602b40a02b40f02b41802b41f02b42902b43803b40302b60602b60a02b60f02b61802b61f02b62902b63803b60302b70602b70a02b70f02b71802b71f02b72902b73803b70003bc0003bf0003c50003e70003efb00000b20000b30000b70000b80000ba0000bb0000c00000c70000d00000df00000102bc1603bc0102bf1603bf0102c51603c50102e71603e70102ef1603ef00030900038e00039000");
+    out.push_str("039100039400039f0202bc0902bc1702bc2803bc0202bf0902bf1702bf2803bf0202c50902c51702c52803c50202e70902e71702e72803e70302bc0602bc0a02bc0f02bc1802bc1f02bc2902bc3803bc0302bf0602bf0a02bf0f02bf1802bf1f02bf2902bf3803bf0302c50602c50a02c50f02c51802c51f02c52902c53803c50302e70602e70a02e70f02e71802e71f02e72902e73803e70202ef0902ef1702ef2803ef01020916030901028e16038e01029016039001029116039101029416039401029f16039f");
+    out.push_str("0302ef0602ef0a02ef0f02ef1802ef1f02ef2902ef3803ef02020909020917020928030902028e09028e17028e28038e0302090602090a02090f02091802091f020929020938030903028e06028e0a028e0f028e18028e1f028e29028e38038e02029009029017029028039002029109029117029128039102029409029417029428039402029f09029f17029f28039f0302900602900a02900f02901802901f02902902903803900302910602910a02910f02911802911f02912902913803910302940602940a02");
+    out.push_str("940f02941802941f029429029438039403029f06029f0a029f0f029f18029f1f029f29029f38039f0003ab0003ce0003d70003e10003ec0003edbc0000bd0000c10000c40000c80000cb0000d10000d80000e00000ee00000102ab1603ab0102ce1603ce0102d71603d70102e11603e10102ec1603ec0102ed1603ed0003c70003cf0003ea0003eb0202ab0902ab1702ab2803ab0202ce0902ce1702ce2803ce0202d70902d71702d72803d70202e10902e11702e12803e10302ab0602ab0a02ab0f02ab1802ab1f");
+    out.push_str("02ab2902ab3803ab0302ce0602ce0a02ce0f02ce1802ce1f02ce2902ce3803ce0302d70602d70a02d70f02d71802d71f02d72902d73803d70302e10602e10a02e10f02e11802e11f02e12902e13803e10202ec0902ec1702ec2803ec0202ed0902ed1702ed2803ed0102c71603c70102cf1603cf0102ea1603ea0102eb1603eb0302ec0602ec0a02ec0f02ec1802ec1f02ec2902ec3803ec0302ed0602ed0a02ed0f02ed1802ed1f02ed2902ed3803ed0202c70902c71702c72803c70202cf0902cf1702cf2803cf");
+    out.push_str("0202ea0902ea1702ea2803ea0202eb0902eb1702eb2803eb0302c70602c70a02c70f02c71802c71f02c72902c73803c70302cf0602cf0a02cf0f02cf1802cf1f02cf2902cf3803cf0302ea0602ea0a02ea0f02ea1802ea1f02ea2902ea3803ea0302eb0602eb0a02eb0f02eb1802eb1f02eb2902eb3803ebc20000c30000c50000c60000c90000ca0000cc0000cd0000d20000d50000d90000dc0000e10000e70000ef0000f600000003c00003c10003c80003c90003ca0003cd0003d20003d50003da0003db0003");
+    out.push_str("ee0003f00003f20003f30003ffce00000102c01603c00102c11603c10102c81603c80102c91603c90102ca1603ca0102cd1603cd0102d21603d20102d51603d50202c00902c01702c02803c00202c10902c11702c12803c10202c80902c81702c82803c80202c90902c91702c92803c90302c00602c00a02c00f02c01802c01f02c02902c03803c00302c10602c10a02c10f02c11802c11f02c12902c13803c10302c80602c80a02c80f02c81802c81f02c82902c83803c80302c90602c90a02c90f02c91802c91f");
+    out.push_str("02c92902c93803c90202ca0902ca1702ca2803ca0202cd0902cd1702cd2803cd0202d20902d21702d22803d20202d50902d51702d52803d50302ca0602ca0a02ca0f02ca1802ca1f02ca2902ca3803ca0302cd0602cd0a02cd0f02cd1802cd1f02cd2902cd3803cd0302d20602d20a02d20f02d21802d21f02d22902d23803d20302d50602d50a02d50f02d51802d51f02d52902d53803d50102da1603da0102db1603db0102ee1603ee0102f01603f00102f21603f20102f31603f30102ff1603ff0003cb0003cc");
+    out.push_str("0202da0902da1702da2803da0202db0902db1702db2803db0202ee0902ee1702ee2803ee0202f00902f01702f02803f00302da0602da0a02da0f02da1802da1f02da2902da3803da0302db0602db0a02db0f02db1802db1f02db2902db3803db0302ee0602ee0a02ee0f02ee1802ee1f02ee2902ee3803ee0302f00602f00a02f00f02f01802f01f02f02902f03803f00202f20902f21702f22803f20202f30902f31702f32803f30202ff0902ff1702ff2803ff0102cb1603cb0102cc1603cc0302f20602f20a02");
+    out.push_str("f20f02f21802f21f02f22902f23803f20302f30602f30a02f30f02f31802f31f02f32902f33803f30302ff0602ff0a02ff0f02ff1802ff1f02ff2902ff3803ff0202cb0902cb1702cb2803cb0202cc0902cc1702cc2803cc0302cb0602cb0a02cb0f02cb1802cb1f02cb2902cb3803cb0302cc0602cc0a02cc0f02cc1802cc1f02cc2902cc3803ccd30000d40000d60000d70000da0000db0000dd0000de0000e20000e40000e80000eb0000f00000f30000f70000fa00000003d30003d40003d60003dd0003de00");
+    out.push_str("03df0003f10003f40003f50003f60003f70003f80003fa0003fb0003fc0003fd0102d31603d30102d41603d40102d61603d60102dd1603dd0102de1603de0102df1603df0102f11603f10102f41603f40202d30902d31702d32803d30202d40902d41702d42803d40202d60902d61702d62803d60202dd0902dd1702dd2803dd0302d30602d30a02d30f02d31802d31f02d32902d33803d30302d40602d40a02d40f02d41802d41f02d42902d43803d40302d60602d60a02d60f02d61802d61f02d62902d63803d6");
+    out.push_str("0302dd0602dd0a02dd0f02dd1802dd1f02dd2902dd3803dd0202de0902de1702de2803de0202df0902df1702df2803df0202f10902f11702f12803f10202f40902f41702f42803f40302de0602de0a02de0f02de1802de1f02de2902de3803de0302df0602df0a02df0f02df1802df1f02df2902df3803df0302f10602f10a02f10f02f11802f11f02f12902f13803f10302f40602f40a02f40f02f41802f41f02f42902f43803f40102f51603f50102f61603f60102f71603f70102f81603f80102fa1603fa0102");
+    out.push_str("fb1603fb0102fc1603fc0102fd1603fd0202f50902f51702f52803f50202f60902f61702f62803f60202f70902f71702f72803f70202f80902f81702f82803f80302f50602f50a02f50f02f51802f51f02f52902f53803f50302f60602f60a02f60f02f61802f61f02f62902f63803f60302f70602f70a02f70f02f71802f71f02f72902f73803f70302f80602f80a02f80f02f81802f81f02f82902f83803f80202fa0902fa1702fa2803fa0202fb0902fb1702fb2803fb0202fc0902fc1702fc2803fc0202fd09");
+    out.push_str("02fd1702fd2803fd0302fa0602fa0a02fa0f02fa1802fa1f02fa2902fa3803fa0302fb0602fb0a02fb0f02fb1802fb1f02fb2902fb3803fb0302fc0602fc0a02fc0f02fc1802fc1f02fc2902fc3803fc0302fd0602fd0a02fd0f02fd1802fd1f02fd2902fd3803fd0003fee30000e50000e60000e90000ea0000ec0000ed0000f10000f20000f40000f50000f80000f90000fb0000fc00000102fe1603fe00030200030300030400030500030600030700030800030b00030c00030e00030f000310000311000312");
+    out.push_str("0202fe0902fe1702fe2803fe0102021603020102031603030102041603040102051603050102061603060102071603070302fe0602fe0a02fe0f02fe1802fe1f02fe2902fe3803fe0202020902021702022803020202030902031702032803030302020602020a02020f02021802021f02022902023803020302030602030a02030f02031802031f02032902033803030202040902041702042803040202050902051702052803050202060902061702062803060202070902071702072803070302040602040a02");
+    out.push_str("040f02041802041f02042902043803040302050602050a02050f02051802051f02052902053803050302060602060a02060f02061802061f02062902063803060302070602070a02070f02071802071f020729020738030701020816030801020b16030b01020c16030c01020e16030e01020f16030f01021016031001021116031101021216031202020809020817020828030802020b09020b17020b28030b02020c09020c17020c28030c02020e09020e17020e28030e0302080602080a02080f02081802081f");
+    out.push_str("020829020838030803020b06020b0a020b0f020b18020b1f020b29020b38030b03020c06020c0a020c0f020c18020c1f020c29020c38030c03020e06020e0a020e0f020e18020e1f020e29020e38030e02020f09020f17020f28030f02021009021017021028031002021109021117021128031102021209021217021228031203020f06020f0a020f0f020f18020f1f020f29020f38030f0302100602100a02100f02101802101f02102902103803100302110602110a02110f02111802111f0211290211380311");
+    out.push_str("0302120602120a02120f02121802121f021229021238031200031300031400031500031700031800031900031a00031b00031c00031d00031e00031f00037f0003dc0003f9fd000001021316031301021416031401021516031501021716031701021816031801021916031901021a16031a01021b16031b0202130902131702132803130202140902141702142803140202150902151702152803150202170902171702172803170302130602130a02130f02131802131f02132902133803130302140602140a02");
+    out.push_str("140f02141802141f02142902143803140302150602150a02150f02151802151f02152902153803150302170602170a02170f02171802171f021729021738031702021809021817021828031802021909021917021928031902021a09021a17021a28031a02021b09021b17021b28031b0302180602180a02180f02181802181f02182902183803180302190602190a02190f02191802191f021929021938031903021a06021a0a021a0f021a18021a1f021a29021a38031a03021b06021b0a021b0f021b18021b1f");
+    out.push_str("021b29021b38031b01021c16031c01021d16031d01021e16031e01021f16031f01027f16037f0102dc1603dc0102f91603f9fe0000ff000002021c09021c17021c28031c02021d09021d17021d28031d02021e09021e17021e28031e02021f09021f17021f28031f03021c06021c0a021c0f021c18021c1f021c29021c38031c03021d06021d0a021d0f021d18021d1f021d29021d38031d03021e06021e0a021e0f021e18021e1f021e29021e38031e03021f06021f0a021f0f021f18021f1f021f29021f38031f");
+    out.push_str("02027f09027f17027f28037f0202dc0902dc1702dc2803dc0202f90902f91702f92803f900030a00030d00031600040003027f06027f0a027f0f027f18027f1f027f29027f38037f0302dc0602dc0a02dc0f02dc1802dc1f02dc2902dc3803dc0302f90602f90a02f90f02f91802f91f02f92902f93803f901020a16030a01020d16030d01021616031600040000040002020a09020a17020a28030a02020d09020d17020d28030d02021609021617021628031600040000040000040000040003020a06020a0a02");
+    out.push_str("0a0f020a18020a1f020a29020a38030a03020d06020d0a020d0f020d18020d1f020d29020d38030d0302160602160a02160f02161802161f0216290216380316000400000400000400000400000400000400000400000400");
+}
+
+fn huffman_fsm_hex() -> String {
+    let mut out = String.new();
+    huffman_fsm_hex_0(mut out);
+    out
+}
+

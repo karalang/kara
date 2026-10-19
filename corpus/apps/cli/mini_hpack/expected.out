@@ -1,0 +1,1214 @@
+== story: RFC 7541 C.3: requests without Huffman coding
+-- block C.3.1: 4 headers, 52 bytes, encoded in 20 (38.4%)
+   828684410f7777772e6578616d706c652e636f6d
+   decoded the same headers
+   tables agree
+   table: 1 entries, 57 of 4096 bytes
+     [62] :authority: www.example.com
+-- block C.3.2: 5 headers, 73 bytes, encoded in 14 (19.1%)
+   828684be58086e6f2d6361636865
+   decoded the same headers
+   tables agree
+   table: 2 entries, 110 of 4096 bytes
+     [62] cache-control: no-cache
+     [63] :authority: www.example.com
+-- block C.3.3: 5 headers, 85 bytes, encoded in 29 (34.1%)
+   828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565
+   decoded the same headers
+   tables agree
+   table: 3 entries, 164 of 4096 bytes
+     [62] custom-key: custom-value
+     [63] cache-control: no-cache
+     [64] :authority: www.example.com
+   connection: 210 bytes of headers sent as 63 (30.0%)
+== story: RFC 7541 C.4: requests with Huffman coding
+-- block C.4.1: 4 headers, 52 bytes, encoded in 17 (32.6%)
+   828684418cf1e3c2e5f23a6ba0ab90f4ff
+   decoded the same headers
+   tables agree
+   table: 1 entries, 57 of 4096 bytes
+     [62] :authority: www.example.com
+-- block C.4.2: 5 headers, 73 bytes, encoded in 12 (16.4%)
+   828684be5886a8eb10649cbf
+   decoded the same headers
+   tables agree
+   table: 2 entries, 110 of 4096 bytes
+     [62] cache-control: no-cache
+     [63] :authority: www.example.com
+-- block C.4.3: 5 headers, 85 bytes, encoded in 24 (28.2%)
+   828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf
+   decoded the same headers
+   tables agree
+   table: 3 entries, 164 of 4096 bytes
+     [62] custom-key: custom-value
+     [63] cache-control: no-cache
+     [64] :authority: www.example.com
+   connection: 210 bytes of headers sent as 53 (25.2%)
+== story: RFC 7541 C.5: responses, table of 256, Huffman off
+   encoder-table 256
+   decoder-table 256
+-- block C.5.1: 4 headers, 94 bytes, encoded in 73 (77.6%)
+   3fe1014803333032580770726976617465611d4d6f6e2c203231204f637420323031332032303a31333a323120474d546e1768747470733a2f2f7777772e6578616d706c652e636f6d
+   decoded the same headers
+   tables agree
+   table: 4 entries, 222 of 256 bytes
+     [62] location: https://www.example.com
+     [63] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [64] cache-control: private
+     [65] :status: 302
+-- block C.5.2: 4 headers, 94 bytes, encoded in 8 (8.5%)
+   4803333037c1c0bf
+   decoded the same headers
+   tables agree
+   table: 4 entries, 222 of 256 bytes
+     [62] :status: 307
+     [63] location: https://www.example.com
+     [64] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [65] cache-control: private
+-- block C.5.3: 6 headers, 180 bytes, encoded in 98 (54.4%)
+   88c1611d4d6f6e2c203231204f637420323031332032303a31333a323220474d54c05a04677a69707738666f6f3d4153444a4b48514b425a584f5157454f50495541585157454f49553b206d61782d6167653d333630303b2076657273696f6e3d31
+   decoded the same headers
+   tables agree
+   table: 3 entries, 215 of 256 bytes
+     [62] set-cookie: foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1
+     [63] content-encoding: gzip
+     [64] date: Mon, 21 Oct 2013 20:13:22 GMT
+   connection: 368 bytes of headers sent as 179 (48.6%)
+== story: RFC 7541 C.6: responses, table of 256, Huffman on
+   encoder-table 256
+   decoder-table 256
+-- block C.6.1: 4 headers, 94 bytes, encoded in 57 (60.6%)
+   3fe101488264025885aec3771a4b6196d07abe941054d444a8200595040b8166e082a62d1bff6e919d29ad171863c78f0b97c8e9ae82ae43d3
+   decoded the same headers
+   tables agree
+   table: 4 entries, 222 of 256 bytes
+     [62] location: https://www.example.com
+     [63] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [64] cache-control: private
+     [65] :status: 302
+-- block C.6.2: 4 headers, 94 bytes, encoded in 8 (8.5%)
+   4883640effc1c0bf
+   decoded the same headers
+   tables agree
+   table: 4 entries, 222 of 256 bytes
+     [62] :status: 307
+     [63] location: https://www.example.com
+     [64] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [65] cache-control: private
+-- block C.6.3: 6 headers, 180 bytes, encoded in 79 (43.8%)
+   88c16196d07abe941054d444a8200595040b8166e084a62d1bffc05a839bd9ab77ad94e7821dd7f2e6c7b335dfdfcd5b3960d5af27087f3672c1ab270fb5291f9587316065c003ed4ee5b1063d5007
+   decoded the same headers
+   tables agree
+   table: 3 entries, 215 of 256 bytes
+     [62] set-cookie: foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1
+     [63] content-encoding: gzip
+     [64] date: Mon, 21 Oct 2013 20:13:22 GMT
+   connection: 368 bytes of headers sent as 144 (39.1%)
+== story: a browser loads a shop's home page
+-- block GET /: 13 headers, 381 bytes, encoded in 253 (66.4%)
+   8287418c44e7ad72f91d35d055ea2a7f8453b0497ca589d34d1f43aeba0c41a4c7a98f33a69a3fdf9a68fa1d75d0620d263d4c79a68fbed00177febe58f9fbed00177b7ab5d07f66a281b0dae053fafc087ed4ce6aadf2a7979c89c6bed4b3bdc0b215c1fda988a4ea76040080010054c26b0b29fcb01642b83f51932d4b62bbf45abefb4005ddfa96cfbed001767f50929bd9abfa5242cb40d25fa523b3e94f684c9f4092b6b9ac1c8558d520a4b6c2ad617b5a54251f810f408a4148b4a549275a42a13f8690e4b692d49f408a4148b4a549275a93c85f86a87dcd30d25f408a4148b4a549275906497f83a8f5174086aec31ec327d785b6007d286f
+   decoded the same headers
+   tables agree
+   table: 10 entries, 673 of 4096 bytes
+     [62] priority: u=0, i
+     [63] sec-fetch-site: none
+     [64] sec-fetch-mode: navigate
+     [65] sec-fetch-dest: document
+     [66] upgrade-insecure-requests: 1
+     [67] accept-encoding: gzip, deflate, br, zstd
+     [68] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [69] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [70] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [71] :authority: shop.example.net
+-- block GET /static/css/site.4f1a.css: 14 headers, 418 bytes, encoded in 128 (30.6%)
+   8287c7449161091a4c460884308324abb52846b9108f538e497ca582211f5f2c7cfdf6800b87c7c6c573929d29ad171861139eb5cbe474d74157a8a96360a120ec4c0ca86496947da899cb4960907675fb5087a905a9300ea1d1e926222e547f7f0684427d505f7f0685a8eb10f6237f068840e92ac7b0d31aaf7f0683b6017f
+   decoded the same headers
+   tables agree
+   table: 18 entries, 1143 of 4096 bytes
+     [62] priority: u=2
+     [63] sec-fetch-site: same-origin
+     [64] sec-fetch-mode: no-cors
+     [65] sec-fetch-dest: style
+     [66] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [67] referer: https://shop.example.net/
+     [68] accept: text/css,*/*;q=0.1
+     [69] :path: /static/css/site.4f1a.css
+     [70] priority: u=0, i
+     [71] sec-fetch-site: none
+     [72] sec-fetch-mode: navigate
+     [73] sec-fetch-dest: document
+     [74] upgrade-insecure-requests: 1
+     [75] accept-encoding: gzip, deflate, br, zstd
+     [76] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [77] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [78] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [79] :authority: shop.example.net
+-- block GET /static/js/app.9c03.js: 14 headers, 401 bytes, encoded in 46 (11.4%)
+   8287cf449061091a4c463a2181d75aef900cafd11f5383f963e7cfcecdc5c47f0484412c3569c3c27f0283b600ff
+   decoded the same headers
+   tables agree
+   table: 22 entries, 1338 of 4096 bytes
+     [62] priority: u=1
+     [63] sec-fetch-dest: script
+     [64] accept: */*
+     [65] :path: /static/js/app.9c03.js
+     [66] priority: u=2
+     [67] sec-fetch-site: same-origin
+     [68] sec-fetch-mode: no-cors
+     [69] sec-fetch-dest: style
+     [70] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [71] referer: https://shop.example.net/
+     [72] accept: text/css,*/*;q=0.1
+     [73] :path: /static/css/site.4f1a.css
+     [74] priority: u=0, i
+     [75] sec-fetch-site: none
+     [76] sec-fetch-mode: navigate
+     [77] sec-fetch-dest: document
+     [78] upgrade-insecure-requests: 1
+     [79] accept-encoding: gzip, deflate, br, zstd
+     [80] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [81] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [82] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [83] :authority: shop.example.net
+-- block GET /static/img/logo.svg: 14 headers, 467 bytes, encoded in 96 (20.5%)
+   8287d3448e61091a4c460d4ccc50798eba3bcd53b5352398ac0fb9a5fa352398ac782c75fd1a91cc562baa6fa352398ac23bcdfefcd347d1a91cc563e7efb4005defaf963e7efb4005dbd3d2d1c9c87f0284352398bfc7c67f0285b606fe9437
+   decoded the same headers
+   tables agree
+   table: 26 entries, 1599 of 4096 bytes
+     [62] priority: u=5, i
+     [63] sec-fetch-dest: image
+     [64] accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+     [65] :path: /static/img/logo.svg
+     [66] priority: u=1
+     [67] sec-fetch-dest: script
+     [68] accept: */*
+     [69] :path: /static/js/app.9c03.js
+     [70] priority: u=2
+     [71] sec-fetch-site: same-origin
+     [72] sec-fetch-mode: no-cors
+     [73] sec-fetch-dest: style
+     [74] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [75] referer: https://shop.example.net/
+     [76] accept: text/css,*/*;q=0.1
+     [77] :path: /static/css/site.4f1a.css
+     [78] priority: u=0, i
+     [79] sec-fetch-site: none
+     [80] sec-fetch-mode: navigate
+     [81] sec-fetch-dest: document
+     [82] upgrade-insecure-requests: 1
+     [83] accept-encoding: gzip, deflate, br, zstd
+     [84] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [85] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [86] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [87] :authority: shop.example.net
+-- block GET /static/img/hero-autumn.webp: 14 headers, 475 bytes, encoded in 35 (7.3%)
+   8287d7449461091a4c460d4ccc4e5b0eb0ed4db4d4bf82c75fc1d6d5d4cccbc0c9c8bf
+   decoded the same headers
+   tables agree
+   table: 27 entries, 1664 of 4096 bytes
+     [62] :path: /static/img/hero-autumn.webp
+     [63] priority: u=5, i
+     [64] sec-fetch-dest: image
+     [65] accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+     [66] :path: /static/img/logo.svg
+     [67] priority: u=1
+     [68] sec-fetch-dest: script
+     [69] accept: */*
+     [70] :path: /static/js/app.9c03.js
+     [71] priority: u=2
+     [72] sec-fetch-site: same-origin
+     [73] sec-fetch-mode: no-cors
+     [74] sec-fetch-dest: style
+     [75] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [76] referer: https://shop.example.net/
+     [77] accept: text/css,*/*;q=0.1
+     [78] :path: /static/css/site.4f1a.css
+     [79] priority: u=0, i
+     [80] sec-fetch-site: none
+     [81] sec-fetch-mode: navigate
+     [82] sec-fetch-dest: document
+     [83] upgrade-insecure-requests: 1
+     [84] accept-encoding: gzip, deflate, br, zstd
+     [85] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [86] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [87] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [88] :authority: shop.example.net
+-- block GET /api/v2/cart: 14 headers, 400 bytes, encoded in 52 (13.0%)
+   8287d844896075998ee26083b13f538b1d75d0620d263d4c7441ead8d7d6cecd7f03842d35a7d77f0d8321ec47cc7f0483b606bf
+   decoded the same headers
+   tables agree
+   table: 32 entries, 1911 of 4096 bytes
+     [62] priority: u=4
+     [63] sec-fetch-mode: cors
+     [64] sec-fetch-dest: empty
+     [65] accept: application/json
+     [66] :path: /api/v2/cart
+     [67] :path: /static/img/hero-autumn.webp
+     [68] priority: u=5, i
+     [69] sec-fetch-dest: image
+     [70] accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+     [71] :path: /static/img/logo.svg
+     [72] priority: u=1
+     [73] sec-fetch-dest: script
+     [74] accept: */*
+     [75] :path: /static/js/app.9c03.js
+     [76] priority: u=2
+     [77] sec-fetch-site: same-origin
+     [78] sec-fetch-mode: no-cors
+     [79] sec-fetch-dest: style
+     [80] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [81] referer: https://shop.example.net/
+     [82] accept: text/css,*/*;q=0.1
+     [83] :path: /static/css/site.4f1a.css
+     [84] priority: u=0, i
+     [85] sec-fetch-site: none
+     [86] sec-fetch-mode: navigate
+     [87] sec-fetch-dest: document
+     [88] upgrade-insecure-requests: 1
+     [89] accept-encoding: gzip, deflate, br, zstd
+     [90] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [91] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [92] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [93] :authority: shop.example.net
+-- block GET /api/v2/recommendations?limit=8&locale=en-GB: 14 headers, 432 bytes, encoded in 47 (10.8%)
+   8287dd44a06075998ee262c290f4d25aa41a4c7a91fe506a4c981ef8a0e41d0580b52d8aefc2dcdbdad2d1c1c0cebf
+   decoded the same headers
+   tables agree
+   table: 33 entries, 1992 of 4096 bytes
+     [62] :path: /api/v2/recommendations?limit=8&locale=en-GB
+     [63] priority: u=4
+     [64] sec-fetch-mode: cors
+     [65] sec-fetch-dest: empty
+     [66] accept: application/json
+     [67] :path: /api/v2/cart
+     [68] :path: /static/img/hero-autumn.webp
+     [69] priority: u=5, i
+     [70] sec-fetch-dest: image
+     [71] accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+     [72] :path: /static/img/logo.svg
+     [73] priority: u=1
+     [74] sec-fetch-dest: script
+     [75] accept: */*
+     [76] :path: /static/js/app.9c03.js
+     [77] priority: u=2
+     [78] sec-fetch-site: same-origin
+     [79] sec-fetch-mode: no-cors
+     [80] sec-fetch-dest: style
+     [81] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [82] referer: https://shop.example.net/
+     [83] accept: text/css,*/*;q=0.1
+     [84] :path: /static/css/site.4f1a.css
+     [85] priority: u=0, i
+     [86] sec-fetch-site: none
+     [87] sec-fetch-mode: navigate
+     [88] sec-fetch-dest: document
+     [89] upgrade-insecure-requests: 1
+     [90] accept-encoding: gzip, deflate, br, zstd
+     [91] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [92] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [93] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [94] :authority: shop.example.net
+-- block GET /static/fonts/inter-var.woff2: 14 headers, 466 bytes, encoded in 91 (19.5%)
+   8287de449561091a4c46253d494306a925b16ee3b17f0796517f53b11d75d0620d263d4c4a7a92b783cb28befb4015c1f43aeba0c41a4c7a9894f5256f07965fbed00177febe58f9fbed00177bdedddcd4d37f048394f527c3d1d0
+   decoded the same headers
+   tables agree
+   table: 36 entries, 2212 of 4096 bytes
+     [62] sec-fetch-dest: font
+     [63] accept: application/font-woff2;q=1.0,application/font-woff;q=0.9,*/*;q=0.8
+     [64] :path: /static/fonts/inter-var.woff2
+     [65] :path: /api/v2/recommendations?limit=8&locale=en-GB
+     [66] priority: u=4
+     [67] sec-fetch-mode: cors
+     [68] sec-fetch-dest: empty
+     [69] accept: application/json
+     [70] :path: /api/v2/cart
+     [71] :path: /static/img/hero-autumn.webp
+     [72] priority: u=5, i
+     [73] sec-fetch-dest: image
+     [74] accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+     [75] :path: /static/img/logo.svg
+     [76] priority: u=1
+     [77] sec-fetch-dest: script
+     [78] accept: */*
+     [79] :path: /static/js/app.9c03.js
+     [80] priority: u=2
+     [81] sec-fetch-site: same-origin
+     [82] sec-fetch-mode: no-cors
+     [83] sec-fetch-dest: style
+     [84] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [85] referer: https://shop.example.net/
+     [86] accept: text/css,*/*;q=0.1
+     [87] :path: /static/css/site.4f1a.css
+     [88] priority: u=0, i
+     [89] sec-fetch-site: none
+     [90] sec-fetch-mode: navigate
+     [91] sec-fetch-dest: document
+     [92] upgrade-insecure-requests: 1
+     [93] accept-encoding: gzip, deflate, br, zstd
+     [94] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [95] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [96] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [97] :authority: shop.example.net
+-- block GET /favicon.ico: 14 headers, 456 bytes, encoded in 29 (6.3%)
+   8287e144896251f7310f52e621ffcbe0dfded6d5cad3d27f0483b6073f
+   decoded the same headers
+   tables agree
+   table: 38 entries, 2304 of 4096 bytes
+     [62] priority: u=6
+     [63] :path: /favicon.ico
+     [64] sec-fetch-dest: font
+     [65] accept: application/font-woff2;q=1.0,application/font-woff;q=0.9,*/*;q=0.8
+     [66] :path: /static/fonts/inter-var.woff2
+     [67] :path: /api/v2/recommendations?limit=8&locale=en-GB
+     [68] priority: u=4
+     [69] sec-fetch-mode: cors
+     [70] sec-fetch-dest: empty
+     [71] accept: application/json
+     [72] :path: /api/v2/cart
+     [73] :path: /static/img/hero-autumn.webp
+     [74] priority: u=5, i
+     [75] sec-fetch-dest: image
+     [76] accept: image/avif,image/webp,image/png,image/svg+xml,image/*;q=0.8,*/*;q=0.5
+     [77] :path: /static/img/logo.svg
+     [78] priority: u=1
+     [79] sec-fetch-dest: script
+     [80] accept: */*
+     [81] :path: /static/js/app.9c03.js
+     [82] priority: u=2
+     [83] sec-fetch-site: same-origin
+     [84] sec-fetch-mode: no-cors
+     [85] sec-fetch-dest: style
+     [86] cookie: cart=3 items; theme=dark; consent=analytics:no
+     [87] referer: https://shop.example.net/
+     [88] accept: text/css,*/*;q=0.1
+     [89] :path: /static/css/site.4f1a.css
+     [90] priority: u=0, i
+     [91] sec-fetch-site: none
+     [92] sec-fetch-mode: navigate
+     [93] sec-fetch-dest: document
+     [94] upgrade-insecure-requests: 1
+     [95] accept-encoding: gzip, deflate, br, zstd
+     [96] accept-language: en-GB,en;q=0.7,fr;q=0.3
+     [97] user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0
+     [98] accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+     [99] :authority: shop.example.net
+   connection: 3896 bytes of headers sent as 777 (19.9%)
+== story: the shop's server answers
+   encoder-table 2048
+   decoder-table 2048
+-- block 200 /: 11 headers, 340 bytes, encoded in 194 (57.0%)
+   3fe10f886196dc34fd2817d4d444a82009a500fdc683700ca98b46ff5f92497ca589d34d1f6a1271d882a60b532acf7f5c8469e1059f5886a8eb10649cbf77b1ee6419304a6b109fb5358d33c0c7da9a07e568662c017800fb5371496d85fb531a535eaaa8f5f6a6e1d25dc64960ce3f3f7b8b84842d695b05443c86aa6f5a828ecf78a0a47e561cc581c640e880007da86a8945b21775b1df3d233548fb52bb0b41c7274090f2b10f524b52564faacab1eb498f523f85a8e8a8d2cb76842d5dcfeb
+   decoded the same headers
+   tables agree
+   table: 10 entries, 650 of 2048 bytes
+     [62] server: envoy
+     [63] x-content-type-options: nosniff
+     [64] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [65] content-encoding: br
+     [66] vary: Accept-Encoding
+     [67] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [68] cache-control: no-cache
+     [69] content-length: 48213
+     [70] content-type: text/html; charset=utf-8
+     [71] date: Sat, 19 Oct 2024 09:41:03 GMT
+-- block 200 /static/css/site.4f1a.css: 9 headers, 256 bytes, encoded in 83 (32.4%)
+   886196dc34fd2817d4d444a82009a500fdc683700d298b46ff5f86497ca582211f5c840bccb2ef628bfe5a9423582f8451c9fcff589aaed8e8313e94a47e561cc58190b6cb80003e943534da91c7417fc5c4c3
+   decoded the same headers
+   tables agree
+   table: 15 entries, 947 of 2048 bytes
+     [62] cache-control: public, max-age=31536000, immutable
+     [63] etag: "4f1a-1912bd"
+     [64] content-length: 18337
+     [65] content-type: text/css
+     [66] date: Sat, 19 Oct 2024 09:41:04 GMT
+     [67] server: envoy
+     [68] x-content-type-options: nosniff
+     [69] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [70] content-encoding: br
+     [71] vary: Accept-Encoding
+     [72] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [73] cache-control: no-cache
+     [74] content-length: 48213
+     [75] content-type: text/html; charset=utf-8
+     [76] date: Sat, 19 Oct 2024 09:41:03 GMT
+-- block 200 /static/js/app.9c03.js: 9 headers, 271 bytes, encoded in 65 (23.9%)
+   886196dc34fd2817d4d444a82009a500fdc683700da98b46ff5f901d75d0620d263d4c741f71a0961ab4ff5c8410190843628afe5f201959e9445087f9c2c9c8c7
+   decoded the same headers
+   tables agree
+   table: 19 entries, 1179 of 2048 bytes
+     [62] etag: "9c03-8f2e11"
+     [63] content-length: 203111
+     [64] content-type: application/javascript
+     [65] date: Sat, 19 Oct 2024 09:41:05 GMT
+     [66] cache-control: public, max-age=31536000, immutable
+     [67] etag: "4f1a-1912bd"
+     [68] content-length: 18337
+     [69] content-type: text/css
+     [70] date: Sat, 19 Oct 2024 09:41:04 GMT
+     [71] server: envoy
+     [72] x-content-type-options: nosniff
+     [73] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [74] content-encoding: br
+     [75] vary: Accept-Encoding
+     [76] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [77] cache-control: no-cache
+     [78] content-length: 48213
+     [79] content-type: text/html; charset=utf-8
+     [80] date: Sat, 19 Oct 2024 09:41:03 GMT
+-- block 304 /static/img/logo.svg: 7 headers, 199 bytes, encoded in 56 (28.1%)
+   8b6196dc34fd2817d4d444a82009a500fdc683700e298b46ff6288fe683cc75bbbbfcf5890aed8e8313e94a47e561cc581e71a003fcccbca
+   decoded the same headers
+   tables agree
+   table: 22 entries, 1355 of 2048 bytes
+     [62] cache-control: public, max-age=86400
+     [63] etag: "logo-v7"
+     [64] date: Sat, 19 Oct 2024 09:41:06 GMT
+     [65] etag: "9c03-8f2e11"
+     [66] content-length: 203111
+     [67] content-type: application/javascript
+     [68] date: Sat, 19 Oct 2024 09:41:05 GMT
+     [69] cache-control: public, max-age=31536000, immutable
+     [70] etag: "4f1a-1912bd"
+     [71] content-length: 18337
+     [72] content-type: text/css
+     [73] date: Sat, 19 Oct 2024 09:41:04 GMT
+     [74] server: envoy
+     [75] x-content-type-options: nosniff
+     [76] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [77] content-encoding: br
+     [78] vary: Accept-Encoding
+     [79] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [80] cache-control: no-cache
+     [81] content-length: 48213
+     [82] content-type: text/html; charset=utf-8
+     [83] date: Sat, 19 Oct 2024 09:41:03 GMT
+-- block 200 /static/img/hero-autumn.webp: 9 headers, 244 bytes, encoded in 74 (30.3%)
+   886196dc34fd2817d4d444a82009a500fdc683700ea98b46ff5f88352398ac782c75ff5c8565e0b6e03f6289fe672d87580f845fcf5890aed8e8313e94a47e561cc581c034f001d1d0cf
+   decoded the same headers
+   tables agree
+   table: 27 entries, 1640 of 2048 bytes
+     [62] cache-control: public, max-age=604800
+     [63] etag: "hero-0912"
+     [64] content-length: 381560
+     [65] content-type: image/webp
+     [66] date: Sat, 19 Oct 2024 09:41:07 GMT
+     [67] cache-control: public, max-age=86400
+     [68] etag: "logo-v7"
+     [69] date: Sat, 19 Oct 2024 09:41:06 GMT
+     [70] etag: "9c03-8f2e11"
+     [71] content-length: 203111
+     [72] content-type: application/javascript
+     [73] date: Sat, 19 Oct 2024 09:41:05 GMT
+     [74] cache-control: public, max-age=31536000, immutable
+     [75] etag: "4f1a-1912bd"
+     [76] content-length: 18337
+     [77] content-type: text/css
+     [78] date: Sat, 19 Oct 2024 09:41:04 GMT
+     [79] server: envoy
+     [80] x-content-type-options: nosniff
+     [81] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [82] content-encoding: br
+     [83] vary: Accept-Encoding
+     [84] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [85] cache-control: no-cache
+     [86] content-length: 48213
+     [87] content-type: text/html; charset=utf-8
+     [88] date: Sat, 19 Oct 2024 09:41:03 GMT
+-- block 200 /api/v2/cart: 8 headers, 227 bytes, encoded in 59 (25.9%)
+   886196dc34fd2817d4d444a82009a500fdc683700f298b46ff5f8b1d75d0620d263d4c7441ea5c821045588caec3771a4bf4a54759093d85d5d4d3
+   decoded the same headers
+   tables agree
+   table: 31 entries, 1876 of 2048 bytes
+     [62] cache-control: private, no-store
+     [63] content-length: 212
+     [64] content-type: application/json
+     [65] date: Sat, 19 Oct 2024 09:41:08 GMT
+     [66] cache-control: public, max-age=604800
+     [67] etag: "hero-0912"
+     [68] content-length: 381560
+     [69] content-type: image/webp
+     [70] date: Sat, 19 Oct 2024 09:41:07 GMT
+     [71] cache-control: public, max-age=86400
+     [72] etag: "logo-v7"
+     [73] date: Sat, 19 Oct 2024 09:41:06 GMT
+     [74] etag: "9c03-8f2e11"
+     [75] content-length: 203111
+     [76] content-type: application/javascript
+     [77] date: Sat, 19 Oct 2024 09:41:05 GMT
+     [78] cache-control: public, max-age=31536000, immutable
+     [79] etag: "4f1a-1912bd"
+     [80] content-length: 18337
+     [81] content-type: text/css
+     [82] date: Sat, 19 Oct 2024 09:41:04 GMT
+     [83] server: envoy
+     [84] x-content-type-options: nosniff
+     [85] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [86] content-encoding: br
+     [87] vary: Accept-Encoding
+     [88] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [89] cache-control: no-cache
+     [90] content-length: 48213
+     [91] content-type: text/html; charset=utf-8
+     [92] date: Sat, 19 Oct 2024 09:41:03 GMT
+-- block 404 /api/v2/recommendations?limit=8&locale=en-GB: 8 headers, 226 bytes, encoded in 34 (15.0%)
+   8d6196dc34fd2817d4d444a82009a500fdc683700fa98b46ffc15c82703fc0d7d6d5
+   decoded the same headers
+   tables agree
+   table: 33 entries, 1989 of 2048 bytes
+     [62] content-length: 61
+     [63] date: Sat, 19 Oct 2024 09:41:09 GMT
+     [64] cache-control: private, no-store
+     [65] content-length: 212
+     [66] content-type: application/json
+     [67] date: Sat, 19 Oct 2024 09:41:08 GMT
+     [68] cache-control: public, max-age=604800
+     [69] etag: "hero-0912"
+     [70] content-length: 381560
+     [71] content-type: image/webp
+     [72] date: Sat, 19 Oct 2024 09:41:07 GMT
+     [73] cache-control: public, max-age=86400
+     [74] etag: "logo-v7"
+     [75] date: Sat, 19 Oct 2024 09:41:06 GMT
+     [76] etag: "9c03-8f2e11"
+     [77] content-length: 203111
+     [78] content-type: application/javascript
+     [79] date: Sat, 19 Oct 2024 09:41:05 GMT
+     [80] cache-control: public, max-age=31536000, immutable
+     [81] etag: "4f1a-1912bd"
+     [82] content-length: 18337
+     [83] content-type: text/css
+     [84] date: Sat, 19 Oct 2024 09:41:04 GMT
+     [85] server: envoy
+     [86] x-content-type-options: nosniff
+     [87] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [88] content-encoding: br
+     [89] vary: Accept-Encoding
+     [90] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [91] cache-control: no-cache
+     [92] content-length: 48213
+     [93] content-type: text/html; charset=utf-8
+     [94] date: Sat, 19 Oct 2024 09:41:03 GMT
+-- block 200 /static/fonts/inter-var.woff2: 9 headers, 257 bytes, encoded in 57 (22.1%)
+   886196dc34fd2817d4d444a82009a500fdc683702053168dff5f8894f5258f0796517f5c8565a79f701f6289fe4d524b62cd2e0fe7d4dbdad9
+   decoded the same headers
+   tables agree
+   table: 34 entries, 2023 of 2048 bytes
+     [62] etag: "inter-4.0"
+     [63] content-length: 348960
+     [64] content-type: font/woff2
+     [65] date: Sat, 19 Oct 2024 09:41:10 GMT
+     [66] content-length: 61
+     [67] date: Sat, 19 Oct 2024 09:41:09 GMT
+     [68] cache-control: private, no-store
+     [69] content-length: 212
+     [70] content-type: application/json
+     [71] date: Sat, 19 Oct 2024 09:41:08 GMT
+     [72] cache-control: public, max-age=604800
+     [73] etag: "hero-0912"
+     [74] content-length: 381560
+     [75] content-type: image/webp
+     [76] date: Sat, 19 Oct 2024 09:41:07 GMT
+     [77] cache-control: public, max-age=86400
+     [78] etag: "logo-v7"
+     [79] date: Sat, 19 Oct 2024 09:41:06 GMT
+     [80] etag: "9c03-8f2e11"
+     [81] content-length: 203111
+     [82] content-type: application/javascript
+     [83] date: Sat, 19 Oct 2024 09:41:05 GMT
+     [84] cache-control: public, max-age=31536000, immutable
+     [85] etag: "4f1a-1912bd"
+     [86] content-length: 18337
+     [87] content-type: text/css
+     [88] date: Sat, 19 Oct 2024 09:41:04 GMT
+     [89] server: envoy
+     [90] x-content-type-options: nosniff
+     [91] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [92] content-encoding: br
+     [93] vary: Accept-Encoding
+     [94] set-cookie: visit=first; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax
+     [95] cache-control: no-cache
+-- block 503 /favicon.ico: 9 headers, 225 bytes, encoded in 118 (52.4%)
+   48836c0cff6196dc34fd2817d4d444a82009a500fdc683702153168dff5f87497ca58ae819aa5c820bff5886a8eb2127b0bf7582088178a0a47e561cc581c640e880007da86a8945b21775b1df3d233548fb52bb0b41c7274090f2b10f524b52564faacab1eb498f523f85a8e8a8d2cb76842d5dcfeb
+   decoded the same headers
+   tables agree
+   table: 35 entries, 2005 of 2048 bytes
+     [62] server: envoy
+     [63] x-content-type-options: nosniff
+     [64] strict-transport-security: max-age=63072000; includeSubDomains; preload
+     [65] retry-after: 120
+     [66] cache-control: no-store
+     [67] content-length: 19
+     [68] content-type: text/plain
+     [69] date: Sat, 19 Oct 2024 09:41:11 GMT
+     [70] :status: 503
+     [71] etag: "inter-4.0"
+     [72] content-length: 348960
+     [73] content-type: font/woff2
+     [74] date: Sat, 19 Oct 2024 09:41:10 GMT
+     [75] content-length: 61
+     [76] date: Sat, 19 Oct 2024 09:41:09 GMT
+     [77] cache-control: private, no-store
+     [78] content-length: 212
+     [79] content-type: application/json
+     [80] date: Sat, 19 Oct 2024 09:41:08 GMT
+     [81] cache-control: public, max-age=604800
+     [82] etag: "hero-0912"
+     [83] content-length: 381560
+     [84] content-type: image/webp
+     [85] date: Sat, 19 Oct 2024 09:41:07 GMT
+     [86] cache-control: public, max-age=86400
+     [87] etag: "logo-v7"
+     [88] date: Sat, 19 Oct 2024 09:41:06 GMT
+     [89] etag: "9c03-8f2e11"
+     [90] content-length: 203111
+     [91] content-type: application/javascript
+     [92] date: Sat, 19 Oct 2024 09:41:05 GMT
+     [93] cache-control: public, max-age=31536000, immutable
+     [94] etag: "4f1a-1912bd"
+     [95] content-length: 18337
+     [96] content-type: text/css
+   connection: 2245 bytes of headers sent as 740 (32.9%)
+== story: an API client with credentials
+-- block POST /v1/orders: 11 headers, 268 bytes, encoded in 150 (55.9%)
+   8387418b1d665cbe474d741573d937448863b8583d9216c47f1f0896ba51d85b1490b49d649fa96a5a53d8b48722163d547a4089f2b585ed6950958d2786b0bd9608000f7a993d9216c42c4a0cc0976570a95fa4ce7a969d29afcb005c4eff538b1d75d0620d263d4c7441ea5f8b1d75d0620d263d4c7441ea5c8279ef108b3485a6b3a4b513d2dd4beb8b1ba40ac7b242d885800007
+   decoded the same headers
+   tables agree
+   table: 7 entries, 394 of 4096 bytes
+     [62] content-length: 88
+     [63] content-type: application/json
+     [64] accept: application/json
+     [65] user-agent: orders-cli/2.3.1 python-httpx/0.27
+     [66] x-request-id: req-1000
+     [67] :path: /v1/orders
+     [68] :authority: api.example.org
+-- block GET /v1/orders/7731: 8 headers, 197 bytes, encoded in 52 (26.3%)
+   8287c4448b63b8583d9216c430ebac871f0896ba51d85b1490b49d649fa96a5a53d8b48722163d547a7f0486b0bd9608001fc3c2
+   decoded the same headers
+   tables agree
+   table: 9 entries, 498 of 4096 bytes
+     [62] x-request-id: req-1001
+     [63] :path: /v1/orders/7731
+     [64] content-length: 88
+     [65] content-type: application/json
+     [66] accept: application/json
+     [67] user-agent: orders-cli/2.3.1 python-httpx/0.27
+     [68] x-request-id: req-1000
+     [69] :path: /v1/orders
+     [70] :authority: api.example.org
+-- block GET /v1/orders/7731: 8 headers, 197 bytes, encoded in 39 (19.7%)
+   8287c6bf1f0896ba51d85b1490b49d649fa96a5a53d8b48722163d547a7e86b0bd9608002fc4c3
+   decoded the same headers
+   tables agree
+   table: 10 entries, 550 of 4096 bytes
+     [62] x-request-id: req-1002
+     [63] x-request-id: req-1001
+     [64] :path: /v1/orders/7731
+     [65] content-length: 88
+     [66] content-type: application/json
+     [67] accept: application/json
+     [68] user-agent: orders-cli/2.3.1 python-httpx/0.27
+     [69] x-request-id: req-1000
+     [70] :path: /v1/orders
+     [71] :authority: api.example.org
+-- block DELETE /v1/orders/7731/hold: 8 headers, 205 bytes, encoded in 63 (30.7%)
+   4286bf833e0df83f87c8448f63b8583d9216c430ebac8589cf449f1f0896ba51d85b1490b49d649fa96a5a53d8b48722163d547a7f0186b0bd960800cfc7c6
+   decoded the same headers
+   tables agree
+   table: 13 entries, 704 of 4096 bytes
+     [62] x-request-id: req-1003
+     [63] :path: /v1/orders/7731/hold
+     [64] :method: DELETE
+     [65] x-request-id: req-1002
+     [66] x-request-id: req-1001
+     [67] :path: /v1/orders/7731
+     [68] content-length: 88
+     [69] content-type: application/json
+     [70] accept: application/json
+     [71] user-agent: orders-cli/2.3.1 python-httpx/0.27
+     [72] x-request-id: req-1000
+     [73] :path: /v1/orders
+     [74] :authority: api.example.org
+-- block a sensitive header already in the table: 7 headers, 122 bytes, encoded in 39 (31.9%)
+   8287ca448863b858f139c749bfbf1f118ab0b318f5405b56f05427608ab0b318f5405b56f05427
+   decoded DIFFERENT headers:
+     :method: GET
+     :scheme: https
+     :authority: api.example.org
+     :path: /v1/whoami
+     x-request-id: req-1003
+     ! cookie: region=eu-west
+     cookie: region=eu-west
+   tables agree
+   table: 15 entries, 803 of 4096 bytes
+     [62] cookie: region=eu-west
+     [63] :path: /v1/whoami
+     [64] x-request-id: req-1003
+     [65] :path: /v1/orders/7731/hold
+     [66] :method: DELETE
+     [67] x-request-id: req-1002
+     [68] x-request-id: req-1001
+     [69] :path: /v1/orders/7731
+     [70] content-length: 88
+     [71] content-type: application/json
+     [72] accept: application/json
+     [73] user-agent: orders-cli/2.3.1 python-httpx/0.27
+     [74] x-request-id: req-1000
+     [75] :path: /v1/orders
+     [76] :authority: api.example.org
+   connection: 989 bytes of headers sent as 343 (34.6%)
+== story: SETTINGS resize the table mid-connection
+-- block fill the table: 6 headers, 126 bytes, encoded in 101 (80.1%)
+   8287410f63646e2e6578616d706c652e636f6d44052f612e6a73400b782d63616368652d6b657928616161616161616161616161616161616161616161616161616161616161616161616161616161614007782d74726163650b742d303030312d61616161
+   decoded the same headers
+   tables agree
+   table: 4 entries, 232 of 4096 bytes
+     [62] x-trace: t-0001-aaaa
+     [63] x-cache-key: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+     [64] :path: /a.js
+     [65] :authority: cdn.example.com
+   encoder-table 128
+   decoder-table 128
+-- block after shrinking to 128: 5 headers, 75 bytes, encoded in 49 (65.3%)
+   3f618287410f63646e2e6578616d706c652e636f6d44052f622e6a734007782d74726163650b742d303030312d61616161
+   decoded the same headers
+   tables agree
+   table: 2 entries, 92 of 128 bytes
+     [62] x-trace: t-0001-aaaa
+     [63] :path: /b.js
+   encoder-table 0
+   encoder-table 64
+   encoder-table 4096
+-- block after 0, 64 and 4096 in one SETTINGS round: 4 headers, 57 bytes, encoded in 32 (56.1%)
+   203f213fe11f8287410f63646e2e6578616d706c652e636f6d44052f632e6a73
+   decoded the same headers
+   tables agree
+   table: 2 entries, 99 of 4096 bytes
+     [62] :path: /c.js
+     [63] :authority: cdn.example.com
+   encoder-table 512
+   encoder-table 512
+-- block a change to 512, then 512 again: 2 headers, 20 bytes, encoded in 8 (40.0%)
+   8244052f642e6a73
+   decoded the same headers
+   tables agree
+   table: 3 entries, 141 of 4096 bytes
+     [62] :path: /d.js
+     [63] :path: /c.js
+     [64] :authority: cdn.example.com
+   encoder-table 1024
+-- block then 1024: 2 headers, 20 bytes, encoded in 14 (70.0%)
+   3fe1033fe1078244052f652e6a73
+   decoded the same headers
+   tables agree
+   table: 4 entries, 183 of 1024 bytes
+     [62] :path: /e.js
+     [63] :path: /d.js
+     [64] :path: /c.js
+     [65] :authority: cdn.example.com
+   connection: 298 bytes of headers sent as 204 (68.4%)
+== story: big headers evict and clear the table
+   encoder-table 1024
+   decoder-table 1024
+-- block small headers: 4 headers, 22 bytes, encoded in 25 (113.6%)
+   3fe107884083f2b0ff810f4083f2b47f81174083f2b13f8167
+   decoded the same headers
+   tables agree
+   table: 3 entries, 108 of 1024 bytes
+     [62] x-c: 3
+     [63] x-b: 2
+     [64] x-a: 1
+-- block a 600-byte header evicts: 2 headers, 621 bytes, encoded in 433 (69.7%)
+   884086f2b585acf627ffa602222b800002c000560004b000cac0034b000dac0038b000eac003cb000fac008160042b00225801656005a58016d6005c5801756005e58017d60080b0041580212c0132b004d2c0136b004e2c013ab004f2c013eb01902c0642b01912c0659580cb4b0196d6032e2c065d580cbcb0197d60340580d0560342580d32b01a696034dac069c580d3ab01a796034fac06c0b01b0ac06c4b01b656036d2c06db580db8b01b756036f2c06df580e0160381580e096038cac071a580e36b01c716038eac071e580e3eb01d02c0742b01d12c0759580eb4b01d6d603ae2c075d580ebcb01d7d603c0580f05603c2580f32b01e69603cdac079c580f3ab01e79603cfac07c0b01f0ac07c4b01f65603ed2c07db580fb8b01f75603ef2c07df582002c100560804b040cac1034b040dac1038b040eac103cb040fac108160842b04225821656085a58216d6085c5821756085e58217d60880b0441582212c1132b044d2c1136b044e2c113ab044f2c113eb05902c1642b05912c1659582cb4b0596d60b2e2c165d582cbcb0597d60b40582d0560b42582d32b05a6960b4dac169c582d3ab05a7960b4fff
+   decoded the same headers
+   tables agree
+   table: 4 entries, 751 of 1024 bytes
+     [62] x-report: csp=000-001-002-003-004-005-006-007-008-009-010-011-012-013-014-015-016-017-018-019-020-021-022-023-024-025-026-027-028-029-030-031-032-033-034-035-036-037-038-039-040-041-042-043-044-045-046-047-048-049-050-051-052-053-054-055-056-057-058-059-060-061-062-063-064-065-066-067-068-069-070-071-072-073-074-075-076-077-078-079-080-081-082-083-084-085-086-087-088-089-090-091-092-093-094-095-096-097-098-099-100-101-102-103-104-105-106-107-108-109-110-111-112-113-114-115-116-117-118-119-120-121-122-123-124-125-126-127-128-129-130-131-132-133-134-135-136-137-138-139-140-141-142-143-144-145-146-147-148-149
+     [63] x-c: 3
+     [64] x-b: 2
+     [65] x-a: 1
+-- block a header bigger than the table clears it: 3 headers, 1130 bytes, encoded in 979 (86.6%)
+   8877ffc806aec2ca883dfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7ef4083f2b0ff810f
+   decoded the same headers
+   tables agree
+   table: 1 entries, 36 of 1024 bytes
+     [62] x-a: 1
+   connection: 1773 bytes of headers sent as 1437 (81.0%)
+== story: a dict of headers is reordered
+-- dict dict with :path last: 7 headers, 204 bytes, encoded in 128 (62.7%)
+   8287418d42469b50b97c8e9ae82ae43d3f448562728e84cf7ad6d07f66a281b0dae053fad0321aa49d13fda992a49685340c8a6adca7e2816a273fb521aeba0bc8b1e63258700dae15c2da9fd66c7bf467fa5283752a988a4ea7fed4e25b1063d4c05d5dc5370e51d8661c036b8570b75383f963e74086f2b4858ed9bf823d5f
+   decoded the same headers
+   tables agree
+   table: 5 entries, 342 of 4096 bytes
+     [62] x-debug: on
+     [63] accept: */*
+     [64] user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15
+     [65] :path: /health
+     [66] :authority: status.example.com
+   connection: 204 bytes of headers sent as 128 (62.7%)
+== story: non-ASCII values in Huffman
+-- block a download: 5 headers, 126 bytes, encoded in 118 (93.6%)
+   8859a71a52324f496a4fda929a82d43a4bf3070df8567bfd7fab3fff8ffffba8b69fffe3fffeeaf5c92f408bf2b48645740fd2d50e92ff9cbbd3fff8ffffeeb3aa98adfffe3fffe0a6daa4449fffc7fffc4949ac4085f2b10c9f5f91ffff47fffe6ffff0ffffd3ffff1ffff7ff4086f2b169ad3ebf80
+   decoded the same headers
+   tables agree
+   table: 4 entries, 244 of 4096 bytes
+     [62] x-empty: 
+     [63] x-city: 東京
+     [64] x-display-name: Björk Guðmundsdóttir
+     [65] content-disposition: attachment; filename*=UTF-8''résumé.pdf
+-- block the same again: 3 headers, 29 bytes, encoded in 4 (13.7%)
+   88bf7e80
+   decoded the same headers
+   tables agree
+   table: 5 entries, 283 of 4096 bytes
+     [62] x-empty: 
+     [63] x-empty: 
+     [64] x-city: 東京
+     [65] x-display-name: Björk Guðmundsdóttir
+     [66] content-disposition: attachment; filename*=UTF-8''résumé.pdf
+   connection: 155 bytes of headers sent as 122 (78.7%)
+== story: a decoder that limits the header list
+   decoder-list-max 400
+-- block a small request: 3 headers, 20 bytes, encoded in 9 (45.0%)
+   82844083f2b55f810f
+   decoded the same headers
+   tables agree
+   table: 1 entries, 36 of 4096 bytes
+     [62] x-n: 1
+-- block cookies over the limit: 12 headers, 406 bytes, encoded in 312 (76.8%)
+   8284609d2020efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdff609d2060efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdff609d20a0efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdff609d233077efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7eff609d235077efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7eff609d237077efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7eff609d239077efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7eff609d23b077efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7eff609d23d077efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7eff609d23f077efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7efdfbf7eff
+   decode error OversizedHeaderListError: A header list larger than 400 has been received
+   connection closed
+-- block never reached: not sent, the connection is closed
+   connection: 426 bytes of headers sent as 321 (75.3%)
+== story: a decoder whose SETTINGS the encoder ignores
+-- block first: 3 headers, 26 bytes, encoded in 15 (57.6%)
+   82844007782d7472616365036f6e65
+   decoded the same headers
+   tables agree
+   table: 1 entries, 42 of 4096 bytes
+     [62] x-trace: one
+   decoder-max 1024
+-- block the encoder sent no size update: 2 headers, 16 bytes, encoded in 2 (12.5%)
+   8284
+   decode error InvalidTableSizeError: Encoder did not shrink table size to within the max
+   connection closed
+   connection: 42 bytes of headers sent as 17 (40.4%)
+== story: an encoder that grows past the decoder's limit
+   encoder-table 8192
+-- block first: 2 headers, 16 bytes, encoded in 5 (31.2%)
+   3fe13f8284
+   decode error InvalidTableSizeError: Encoder exceeded max allowable table size
+   connection closed
+   connection: 16 bytes of headers sent as 5 (31.2%)
+== case: RFC 7541 C.2.1 literal with indexing
+-- block 1: 26 bytes
+   custom-key: custom-header
+   table: 1 entries, 55 of 4096 bytes
+     [62] custom-key: custom-header
+== case: RFC 7541 C.2.2 literal without indexing
+-- block 1: 14 bytes
+   :path: /sample/path
+   table: 0 entries, 0 of 4096 bytes
+== case: RFC 7541 C.2.3 literal never indexed
+-- block 1: 17 bytes
+   ! password: secret
+   table: 0 entries, 0 of 4096 bytes
+== case: RFC 7541 C.2.4 indexed
+-- block 1: 1 bytes
+   :method: GET
+   table: 0 entries, 0 of 4096 bytes
+== case: RFC 7541 C.3 requests
+-- block 1: 20 bytes
+   :method: GET
+   :scheme: http
+   :path: /
+   :authority: www.example.com
+   table: 1 entries, 57 of 4096 bytes
+     [62] :authority: www.example.com
+-- block 2: 14 bytes
+   :method: GET
+   :scheme: http
+   :path: /
+   :authority: www.example.com
+   cache-control: no-cache
+   table: 2 entries, 110 of 4096 bytes
+     [62] cache-control: no-cache
+     [63] :authority: www.example.com
+-- block 3: 29 bytes
+   :method: GET
+   :scheme: https
+   :path: /index.html
+   :authority: www.example.com
+   custom-key: custom-value
+   table: 3 entries, 164 of 4096 bytes
+     [62] custom-key: custom-value
+     [63] cache-control: no-cache
+     [64] :authority: www.example.com
+== case: RFC 7541 C.4 requests with Huffman
+-- block 1: 17 bytes
+   :method: GET
+   :scheme: http
+   :path: /
+   :authority: www.example.com
+   table: 1 entries, 57 of 4096 bytes
+     [62] :authority: www.example.com
+-- block 2: 12 bytes
+   :method: GET
+   :scheme: http
+   :path: /
+   :authority: www.example.com
+   cache-control: no-cache
+   table: 2 entries, 110 of 4096 bytes
+     [62] cache-control: no-cache
+     [63] :authority: www.example.com
+-- block 3: 24 bytes
+   :method: GET
+   :scheme: https
+   :path: /index.html
+   :authority: www.example.com
+   custom-key: custom-value
+   table: 3 entries, 164 of 4096 bytes
+     [62] custom-key: custom-value
+     [63] cache-control: no-cache
+     [64] :authority: www.example.com
+== case: RFC 7541 C.5 responses
+   decoder-table 256
+-- block 1: 70 bytes
+   :status: 302
+   cache-control: private
+   date: Mon, 21 Oct 2013 20:13:21 GMT
+   location: https://www.example.com
+   table: 4 entries, 222 of 256 bytes
+     [62] location: https://www.example.com
+     [63] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [64] cache-control: private
+     [65] :status: 302
+-- block 2: 8 bytes
+   :status: 307
+   cache-control: private
+   date: Mon, 21 Oct 2013 20:13:21 GMT
+   location: https://www.example.com
+   table: 4 entries, 222 of 256 bytes
+     [62] :status: 307
+     [63] location: https://www.example.com
+     [64] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [65] cache-control: private
+-- block 3: 98 bytes
+   :status: 200
+   cache-control: private
+   date: Mon, 21 Oct 2013 20:13:22 GMT
+   location: https://www.example.com
+   content-encoding: gzip
+   set-cookie: foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1
+   table: 3 entries, 215 of 256 bytes
+     [62] set-cookie: foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1
+     [63] content-encoding: gzip
+     [64] date: Mon, 21 Oct 2013 20:13:22 GMT
+== case: RFC 7541 C.6 responses with Huffman
+   decoder-table 256
+-- block 1: 54 bytes
+   :status: 302
+   cache-control: private
+   date: Mon, 21 Oct 2013 20:13:21 GMT
+   location: https://www.example.com
+   table: 4 entries, 222 of 256 bytes
+     [62] location: https://www.example.com
+     [63] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [64] cache-control: private
+     [65] :status: 302
+-- block 2: 8 bytes
+   :status: 307
+   cache-control: private
+   date: Mon, 21 Oct 2013 20:13:21 GMT
+   location: https://www.example.com
+   table: 4 entries, 222 of 256 bytes
+     [62] :status: 307
+     [63] location: https://www.example.com
+     [64] date: Mon, 21 Oct 2013 20:13:21 GMT
+     [65] cache-control: private
+-- block 3: 79 bytes
+   :status: 200
+   cache-control: private
+   date: Mon, 21 Oct 2013 20:13:22 GMT
+   location: https://www.example.com
+   content-encoding: gzip
+   set-cookie: foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1
+   table: 3 entries, 215 of 256 bytes
+     [62] set-cookie: foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1
+     [63] content-encoding: gzip
+     [64] date: Mon, 21 Oct 2013 20:13:22 GMT
+== case: Apache Traffic Server response (hpack issue 110)
+-- block 1: 389 bytes
+   ! :status: 200
+   server: ATS/6.0.0
+   date: Tue, 31 Mar 2015 08:09:51 GMT
+   content-type: text/html
+   content-length: 42468
+   last-modified: Tue, 31 Mar 2015 01:55:51 GMT
+   vary: Accept-Encoding
+   etag: "5519fea7-a5e4"
+   x-served: Nginx
+   x-subdomain-tryfiles: True
+   x-deity: hydra-lts
+   accept-ranges: bytes
+   age: 0
+   strict-transport-security: max-age=86400
+   via: https/1.1 ATS (ApacheTrafficServer/6.0.0 [cSsNfU])
+   table: 14 entries, 782 of 4096 bytes
+     [62] via: https/1.1 ATS (ApacheTrafficServer/6.0.0 [cSsNfU])
+     [63] strict-transport-security: max-age=86400
+     [64] age: 0
+     [65] accept-ranges: bytes
+     [66] x-deity: hydra-lts
+     [67] x-subdomain-tryfiles: True
+     [68] x-served: Nginx
+     [69] etag: "5519fea7-a5e4"
+     [70] vary: Accept-Encoding
+     [71] last-modified: Tue, 31 Mar 2015 01:55:51 GMT
+     [72] content-length: 42468
+     [73] content-type: text/html
+     [74] date: Tue, 31 Mar 2015 08:09:51 GMT
+     [75] server: ATS/6.0.0
+== case: raw bytes in a Huffman-free name
+-- block 1: 26 bytes
+   error HPACKDecodingError: Unable to decode headers as UTF-8
+   table: 1 entries, 55 of 4096 bytes
+     [62] \x00\x01�0\x11"U!�\x14: custom-header
+== case: an empty block
+-- block 1: 0 bytes
+   table: 0 entries, 0 of 4096 bytes
+== case: index 0
+-- block 1: 1 bytes
+   error InvalidTableIndex: Invalid table index 0
+   table: 0 entries, 0 of 4096 bytes
+== case: index 62 with an empty dynamic table
+-- block 1: 1 bytes
+   error InvalidTableIndex: Invalid table index 62
+   table: 0 entries, 0 of 4096 bytes
+== case: an indexed name past the table
+-- block 1: 21 bytes
+   error InvalidTableIndex: Invalid table index 73
+   table: 0 entries, 0 of 4096 bytes
+== case: a big index
+-- block 1: 9 bytes
+   error InvalidTableIndex: Invalid table index 72057594037928062
+   table: 0 entries, 0 of 4096 bytes
+== case: an integer cut short
+-- block 1: 1 bytes
+   error HPACKDecodingError: Unable to decode HPACK integer representation from <memory>
+   table: 0 entries, 0 of 4096 bytes
+== case: an integer cut short inside a literal
+-- block 1: 3 bytes
+   error HPACKDecodingError: Unable to decode HPACK integer representation from <memory>
+   table: 0 entries, 0 of 4096 bytes
+== case: a name cut short
+-- block 1: 5 bytes
+   error HPACKDecodingError: Truncated header block
+   table: 0 entries, 0 of 4096 bytes
+== case: a value cut short
+-- block 1: 6 bytes
+   error HPACKDecodingError: Truncated header block
+   table: 0 entries, 0 of 4096 bytes
+== case: a value length cut short
+-- block 1: 3 bytes
+   error HPACKDecodingError: Unable to decode HPACK integer representation from <memory>
+   table: 0 entries, 0 of 4096 bytes
+== case: EOS inside a Huffman string
+-- block 1: 8 bytes
+   error HPACKDecodingError: Invalid Huffman string
+   table: 0 entries, 0 of 4096 bytes
+== case: padding longer than 7 bits
+-- block 1: 6 bytes
+   error HPACKDecodingError: Incomplete Huffman string
+   table: 0 entries, 0 of 4096 bytes
+== case: padding with a zero bit
+-- block 1: 5 bytes
+   error HPACKDecodingError: Incomplete Huffman string
+   table: 0 entries, 0 of 4096 bytes
+== case: an empty Huffman name and value
+-- block 1: 3 bytes
+   : 
+   table: 1 entries, 32 of 4096 bytes
+     [62] : 
+-- block 2: 1 bytes
+   : 
+   table: 1 entries, 32 of 4096 bytes
+     [62] : 
+== case: never indexed with an indexed name
+-- block 1: 14 bytes
+   ! :path: /sample/path
+   table: 0 entries, 0 of 4096 bytes
+== case: literal without indexing, name index 58
+-- block 1: 13 bytes
+   user-agent: curl/8.9.1
+   table: 0 entries, 0 of 4096 bytes
+== case: table size updates at the start
+-- block 1: 5 bytes
+   :method: GET
+   table: 0 entries, 0 of 4096 bytes
+-- block 2: 4 bytes
+   :method: GET
+   table: 0 entries, 0 of 1337 bytes
+== case: a table size update after a header
+-- block 1: 4 bytes
+   error HPACKDecodingError: Table size update not at the start of the block
+   table: 0 entries, 0 of 4096 bytes
+== case: a table size update above the maximum
+-- block 1: 3 bytes
+   error InvalidTableSizeError: Encoder exceeded max allowable table size
+   table: 0 entries, 0 of 4096 bytes
+== case: a table size update between two headers
+-- block 1: 5 bytes
+   error HPACKDecodingError: Table size update not at the start of the block
+   table: 0 entries, 0 of 4096 bytes
+== case: invalid UTF-8
+-- block 1: 21 bytes
+   error HPACKDecodingError: Unable to decode headers as UTF-8
+   table: 0 entries, 0 of 4096 bytes
+== case: table eviction with size 64
+-- block 1: 11 bytes
+   abc: 123
+   table: 1 entries, 38 of 64 bytes
+     [62] abc: 123
+-- block 2: 1 bytes
+   abc: 123
+   table: 1 entries, 38 of 64 bytes
+     [62] abc: 123
+-- block 3: 9 bytes
+   def: 456
+   table: 1 entries, 38 of 64 bytes
+     [62] def: 456
+-- block 4: 2 bytes
+   error InvalidTableIndex: Invalid table index 63
+   table: 1 entries, 38 of 64 bytes
+     [62] def: 456
+== case: the header list limit
+   decoder-list-max 45
+-- block 1: 1 bytes
+   :method: GET
+   table: 0 entries, 0 of 4096 bytes
+-- block 2: 14 bytes
+   error OversizedHeaderListError: A header list larger than 45 has been received
+   table: 0 entries, 0 of 4096 bytes
+== case: a lowered maximum the encoder did not follow
+   decoder-max 1024
+-- block 1: 17 bytes
+   error InvalidTableSizeError: Encoder did not shrink table size to within the max
+   table: 1 entries, 57 of 4096 bytes
+     [62] :authority: www.example.com
+-- block 2: 4 bytes
+   :method: GET
+   table: 1 entries, 57 of 1024 bytes
+     [62] :authority: www.example.com
+-- block 3: 1 bytes
+   :method: GET
+   table: 1 entries, 57 of 1024 bytes
+     [62] :authority: www.example.com
+== case: a raised table with the default maximum
+   decoder-table 8000
+-- block 1: 1 bytes
+   error InvalidTableSizeError: Encoder did not shrink table size to within the max
+   table: 0 entries, 0 of 8000 bytes
+-- block 2: 4 bytes
+   :method: GET
+   table: 0 entries, 0 of 4096 bytes
