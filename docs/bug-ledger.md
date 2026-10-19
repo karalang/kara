@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 175 |
 | diagnostics | 168 |
 | crash | 124 |
-| soundness | 114 |
+| soundness | 115 |
 | use-after-free | 91 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 962 |
 | typecheck | 480 |
 | other | 115 |
-| ownership | 113 |
+| ownership | 114 |
 | runtime | 78 |
 | cli | 78 |
 | parser | 69 |
@@ -171,6 +171,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-4 | 2026-10-19 | typecheck | low | A literal-only nested if (or else-if chain) is not coerced to Str when unified with a Str arm or branch: `match b { 0 => step(b), _ => if b < 128 { "" } else { "bad" } }` fails 'incompatible types StringSlice and String' (remainder of B-2026-10-18-6) | — |
 | B-2026-10-19-5 | 2026-10-19 | typecheck | low | Vec[String].join refuses a Str separator ('expected String, found Str'), though docs/library/collections.md gives `fn join(self, sep: Str)`; a String literal works | — |
 | B-2026-10-19-6 | 2026-10-19 | interp+codegen | medium | MIR borrowck keeps a Vec[Str] collected from s.split(..) borrowing s until scope end, so a later `s = ...` is refused (E0516 'drop of _1 while it is borrowed'); karac check accepts it | — |
+| B-2026-10-19-7 | 2026-10-19 | ownership | medium | `karac check` passes a `ref` copied out of a collection and used after that collection is mutated, which every MIR surface refuses as a borrow conflict: `let before = m.get(1).unwrap_or(0); m.insert(1, 6); println(f"{before}")` over a `Map[i64, i64]`, and `match v.last() { Some(top) => { let largest = top; v.pop(); v.push(largest); } None => {} }` over a `Vec[i64]`. Both bindings are `ref i64` (design.md line 397 and core-semantics.md §5.10: an unannotated `let` keeps the reference), so the MIR borrow checker is right and check is the one that misses it; the MIR message also names the collection `_1` rather than `m` or `v` | — |
 
 ### Relocated
 
