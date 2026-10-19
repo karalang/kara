@@ -1,0 +1,1957 @@
+// mini_dotenv: python-dotenv 1.2.3, which reads the .env file of nearly
+// every Python web app, Docker Compose project and twelve-factor service.
+// Ported from dotenv/parser.py, variables.py, main.py and cli.py:
+// - the parser, whose regular expressions are written out as matchers,
+//   with each binding's original text and line, for files that are
+//   rewritten in place;
+// - POSIX-style ${VAR} and ${VAR:-default} expansion, against the .env
+//   values and the process environment in either order;
+// - dotenv_values, load_dotenv (override, interpolate and
+//   PYTHON_DOTENV_DISABLED), get_key, set_key and unset_key, with their
+//   quote modes and warnings;
+// - the `dotenv` command line (list in four formats, get, set, unset), with
+//   click's usage errors for the options it has.
+//
+// The run writes the files of the data section into data/ and runs every
+// job of data/jobs.jsonl. Each job brings the process environment it runs
+// under, so os.environ is a value the program keeps rather than its own.
+// ------------------------------------------------------------ characters
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    if a >= b {
+        return Vec.new();
+    }
+    v[a..b].to_vec()
+}
+
+
+fn width(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(' ');
+    }
+    s
+}
+
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// str.isspace, which str.strip, str.split and float() use.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(v, lo, hi))
+}
+
+
+fn ascii_lower(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(char.try_from(c as i64 + 32).unwrap_or(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < n {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) {
+        return false;
+    }
+    true
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let single = s.contains("'");
+    let double = s.contains("\"");
+    let q = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if printable(o) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ------------------------------------------------------------ JSON
+
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[JValue]),
+    Obj(Vec[(String, JValue)]),
+}
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[JValue, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut m: Vec[(String, JValue)] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(JValue.Obj(m));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(f"expected ':' at {self.at}");
+                }
+                let v = self.value()?;
+                m.push((k, v));
+                self.ws();
+                if self.eat("}") {
+                    return Ok(JValue.Obj(m));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(JValue.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(JValue.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(JValue.Str(self.string()?));
+        }
+        if self.eat("true") {
+            return Ok(JValue.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(JValue.Bool(false));
+        }
+        if self.eat("null") {
+            return Ok(JValue.Null);
+        }
+        self.number()
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.b[self.at];
+            self.at += 1;
+            let d = if c >= b'0' and c <= b'9' {
+                c - b'0'
+            } else if c >= b'a' and c <= b'f' {
+                c - b'a' + 10
+            } else {
+                c - b'A' + 10
+            };
+            v = v * 16 + d as u32;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.eat("\"") {
+            return Err(f"expected string at {self.at}");
+        }
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.at >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.b[self.at];
+            self.at += 1;
+            if e == b'n' {
+                out.push(10);
+            } else if e == b't' {
+                out.push(9);
+            } else if e == b'r' {
+                out.push(13);
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(String.from_utf8(out).unwrap_or("?".to_string()))
+    }
+
+    fn number(mut ref self) -> Result[JValue, String] {
+        let start = self.at;
+        let mut float = false;
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c >= b'0' and c <= b'9' {
+                self.at += 1;
+            } else if c == b'-' or c == b'+' {
+                self.at += 1;
+            } else if c == b'.' or c == b'e' or c == b'E' {
+                float = true;
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        let t = String.from_utf8(self.b[start..self.at].to_vec()).unwrap_or(String.new());
+        if t.is_empty() {
+            return Err(f"bad value at {start}");
+        }
+        if float {
+            return match f64.parse(t) {
+                Ok(f) => Ok(JValue.Float(f)),
+                Err(_) => Err(f"bad number {t}"),
+            };
+        }
+        match i64.parse(t) {
+            Ok(i) => Ok(JValue.Int(i)),
+            Err(_) => Err(f"bad number {t}"),
+        }
+    }
+}
+
+fn parse_json(t: ref String) -> Result[JValue, String] {
+    let mut r = JsonReader { b: t.bytes().to_vec(), at: 0 };
+    r.value()
+}
+
+fn get(o: ref JValue, key: Str) -> Option[JValue] {
+    if let JValue.Obj(items) = o {
+        for (k, v) in items.iter() {
+            if k == key {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+
+// ------------------------------------------------------------ Python's int() and float()
+
+// The digits of s[lo..hi] with Python's underscores: each '_' sits between
+// two digits. None if anything else is there.
+fn digits_with_underscores(v: ref Vec[char], lo: i64, hi: i64) -> Option[String] {
+    let mut out = String.new();
+    for k in lo..hi {
+        let c = v[k];
+        if is_digit(c) {
+            out.push(c);
+        } else if c == '_' and k > lo and k + 1 < hi and is_digit(v[k - 1]) and is_digit(v[k + 1]) {
+            continue;
+        } else {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+// int(s) for a str (Unicode whitespace stripped) or, with `ascii`, for the
+// bytes isoparse works on. None where int() raises. Values past i64 are
+// out of scope: the jobs never write one.
+fn py_int(s: ref String, ascii: bool) -> Option[i64] {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and (if ascii { ascii_space(v[lo]) } else { py_space(v[lo]) }) {
+        lo += 1;
+    }
+    while hi > lo and (if ascii { ascii_space(v[hi - 1]) } else { py_space(v[hi - 1]) }) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (v[lo] == '+' or v[lo] == '-') {
+        neg = v[lo] == '-';
+        lo += 1;
+    }
+    if lo >= hi {
+        return None;
+    }
+    let d = digits_with_underscores(v, lo, hi)?;
+    if d.is_empty() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    for c in d.chars() {
+        n = n * 10 + (c as i64 - 48);
+    }
+    if neg { Some(0 - n) } else { Some(n) }
+}
+
+fn ascii_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}'
+}
+
+// ------------------------------------------------------------ text
+
+fn is_nl(c: char) -> bool {
+    c == '\n' or c == '\r'
+}
+
+// [^\S\r\n]: whitespace that does not end a line.
+fn is_inline_space(c: char) -> bool {
+    py_space(c) and not is_nl(c)
+}
+
+fn opt_repr(s: ref Option[String]) -> String {
+    match s {
+        Some(v) => repr_str(v),
+        None => "None".to_string(),
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// str.isalnum
+fn py_isalnum(s: ref String) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    for c in s.chars() {
+        if not c.is_alphanumeric() {
+            return false;
+        }
+    }
+    true
+}
+
+fn replace_str(s: ref String, old: Str, new: Str) -> String {
+    s.replace(old, new)
+}
+
+// A text file read as open(path, encoding="utf-8") reads it: universal
+// newlines turn "\r\n" and a lone "\r" into "\n".
+fn read_text(path: ref String) -> Option[String] {
+    let raw = match fs.read_to_string(path.clone()) {
+        Ok(t) => t,
+        Err(_) => return None,
+    };
+    let mut out = String.new();
+    let v = chars(raw);
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '\r' {
+            out.push('\n');
+            if i + 1 < v.len() and v[i + 1] == '\n' {
+                i += 1;
+            }
+        } else {
+            out.push(v[i]);
+        }
+        i += 1;
+    }
+    Some(out)
+}
+
+// ------------------------------------------------------------ the parser
+
+#[derive(Clone)]
+struct Binding {
+    key: Option[String],
+    value: Option[String],
+    original: String,
+    line: i64,
+    error: bool,
+}
+
+fn binding_repr(b: ref Binding) -> String {
+    f"Binding(key={opt_repr(b.key)}, value={opt_repr(b.value)}, original=Original(string={repr_str(b.original)}, line={b.line}), error={py_bool(b.error)})"
+}
+
+// The parser's Reader: the text, where it is, and the mark where the
+// current binding began. Each read_* method is one of the parser's
+// regular expressions, matched at the position; Err(()) is its
+// "Pattern not found".
+struct Reader {
+    s: Vec[char],
+    pos: i64,
+    line: i64,
+    mark_pos: i64,
+    mark_line: i64,
+}
+
+fn new_reader(text: ref String) -> Reader {
+    let mut s = chars(text);
+    if s.len() > 0 and s[0] == '\u{feff}' {
+        s.remove(0);
+    }
+    Reader { s: s, pos: 0, line: 1, mark_pos: 0, mark_line: 1 }
+}
+
+impl Reader {
+    fn has_next(ref self) -> bool {
+        self.pos < self.s.len()
+    }
+
+    fn at(ref self, k: i64) -> Option[char] {
+        if k < self.s.len() { Some(self.s[k]) } else { None }
+    }
+
+    fn peek(ref self) -> Option[char] {
+        self.at(self.pos)
+    }
+
+    // Position.advance: move to `end`, counting "\r\n", "\n" and "\r" as
+    // one line break each.
+    fn advance_to(mut ref self, end: i64) {
+        let mut k = self.pos;
+        while k < end {
+            if self.s[k] == '\r' {
+                if k + 1 < end and self.s[k + 1] == '\n' {
+                    k += 1;
+                }
+                self.line += 1;
+            } else if self.s[k] == '\n' {
+                self.line += 1;
+            }
+            k += 1;
+        }
+        self.pos = end;
+    }
+
+    fn text(ref self, lo: i64, hi: i64) -> String {
+        text(slice(self.s, lo, hi))
+    }
+
+    fn skip_while_space(ref self, from: i64) -> i64 {
+        let mut k = from;
+        while k < self.s.len() and py_space(self.s[k]) {
+            k += 1;
+        }
+        k
+    }
+
+    fn skip_inline_space(ref self, from: i64) -> i64 {
+        let mut k = from;
+        while k < self.s.len() and is_inline_space(self.s[k]) {
+            k += 1;
+        }
+        k
+    }
+
+    fn skip_to_eol(ref self, from: i64) -> i64 {
+        let mut k = from;
+        while k < self.s.len() and not is_nl(self.s[k]) {
+            k += 1;
+        }
+        k
+    }
+
+    // \s*
+    fn read_multiline_whitespace(mut ref self) {
+        let end = self.skip_while_space(self.pos);
+        self.advance_to(end);
+    }
+
+    // (?:export[^\S\r\n]+)?
+    fn read_export(mut ref self) {
+        let word = chars("export".to_string());
+        let mut k = self.pos;
+        for c in word.iter() {
+            if self.at(k) != Some(*c) {
+                return;
+            }
+            k += 1;
+        }
+        let end = self.skip_inline_space(k);
+        if end > k {
+            self.advance_to(end);
+        }
+    }
+
+    // '([^']+)'
+    fn read_single_quoted_key(mut ref self) -> Result[String, ()] {
+        if self.peek() != Some('\'') {
+            return Err(());
+        }
+        let mut k = self.pos + 1;
+        while k < self.s.len() and self.s[k] != '\'' {
+            k += 1;
+        }
+        if k == self.pos + 1 or k >= self.s.len() {
+            return Err(());
+        }
+        let key = self.text(self.pos + 1, k);
+        self.advance_to(k + 1);
+        Ok(key)
+    }
+
+    // ([^=\#\s]+)
+    fn read_unquoted_key(mut ref self) -> Result[String, ()] {
+        let mut k = self.pos;
+        while k < self.s.len() and self.s[k] != '=' and self.s[k] != '#' and not py_space(self.s[k]) {
+            k += 1;
+        }
+        if k == self.pos {
+            return Err(());
+        }
+        let key = self.text(self.pos, k);
+        self.advance_to(k);
+        Ok(key)
+    }
+
+    // [^\S\r\n]*
+    fn read_whitespace(mut ref self) {
+        let end = self.skip_inline_space(self.pos);
+        self.advance_to(end);
+    }
+
+    // (=[^\S\r\n]*)
+    fn read_equal_sign(mut ref self) -> Result[(), ()] {
+        if self.peek() != Some('=') {
+            return Err(());
+        }
+        let end = self.skip_inline_space(self.pos + 1);
+        self.advance_to(end);
+        Ok(())
+    }
+
+    // '((?:\\.|[^'\\])*)' or "((?:\\.|[^"\\])*)", with DOTALL.
+    fn read_quoted_value(mut ref self, q: char) -> Result[String, ()] {
+        if self.peek() != Some(q) {
+            return Err(());
+        }
+        let mut k = self.pos + 1;
+        loop {
+            if k >= self.s.len() {
+                return Err(());
+            }
+            let c = self.s[k];
+            if c == '\\' {
+                if k + 1 >= self.s.len() {
+                    return Err(());
+                }
+                k += 2;
+            } else if c == q {
+                break;
+            } else {
+                k += 1;
+            }
+        }
+        let value = self.text(self.pos + 1, k);
+        self.advance_to(k + 1);
+        Ok(value)
+    }
+
+    // ([^\r\n]*)
+    fn read_unquoted_value(mut ref self) -> String {
+        let end = self.skip_to_eol(self.pos);
+        let part = self.text(self.pos, end);
+        self.advance_to(end);
+        part
+    }
+
+    // (?:[^\S\r\n]*#[^\r\n]*)?
+    fn read_comment(mut ref self) {
+        let k = self.skip_inline_space(self.pos);
+        if self.at(k) == Some('#') {
+            let end = self.skip_to_eol(k);
+            self.advance_to(end);
+        }
+    }
+
+    // [^\S\r\n]*(?:\r\n|\n|\r|$)
+    fn read_end_of_line(mut ref self) -> Result[(), ()] {
+        let k = self.skip_inline_space(self.pos);
+        match self.at(k) {
+            None => self.advance_to(k),
+            Some('\r') => {
+                if self.at(k + 1) == Some('\n') {
+                    self.advance_to(k + 2);
+                } else {
+                    self.advance_to(k + 1);
+                }
+            }
+            Some('\n') => self.advance_to(k + 1),
+            Some(_) => return Err(()),
+        }
+        Ok(())
+    }
+
+    // [^\r\n]*(?:\r|\n|\r\n)? -- the "\r" alternative comes first, so a
+    // "\r\n" gives up only its "\r" here.
+    fn read_rest_of_line(mut ref self) {
+        let mut end = self.skip_to_eol(self.pos);
+        if end < self.s.len() {
+            end += 1;
+        }
+        self.advance_to(end);
+    }
+}
+
+// decode_escapes: each two-character escape in the set is replaced by
+// what the unicode-escape codec makes of it; anything else stays.
+fn decode_escapes(v: ref String, set: Str) -> String {
+    let c = chars(v);
+    let allowed = chars(set.to_string());
+    let mut out = String.new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == '\\' and i + 1 < c.len() and allowed.contains(c[i + 1]) {
+            let e = c[i + 1];
+            let d = if e == 'a' {
+                '\u{7}'
+            } else if e == 'b' {
+                '\u{8}'
+            } else if e == 'f' {
+                '\u{c}'
+            } else if e == 'n' {
+                '\n'
+            } else if e == 'r' {
+                '\r'
+            } else if e == 't' {
+                '\t'
+            } else if e == 'v' {
+                '\u{b}'
+            } else {
+                e
+            };
+            out.push(d);
+            i += 2;
+        } else {
+            out.push(c[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// parse_unquoted_value: re.sub(r"\s+#.*", "", part).rstrip()
+fn clean_unquoted(part: ref String) -> String {
+    let c = chars(part);
+    let mut cut = c.len();
+    let mut i = 0;
+    while i < c.len() {
+        if py_space(c[i]) {
+            let mut k = i;
+            while k < c.len() and py_space(c[k]) {
+                k += 1;
+            }
+            if k < c.len() and c[k] == '#' {
+                cut = i;
+                break;
+            }
+            i = k;
+        } else {
+            i += 1;
+        }
+    }
+    let mut hi = cut;
+    while hi > 0 and py_space(c[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(c, 0, hi))
+}
+
+fn parse_key(r: mut ref Reader) -> Result[Option[String], ()] {
+    match r.peek() {
+        Some('#') => Ok(None),
+        Some('\'') => Ok(Some(r.read_single_quoted_key()?)),
+        _ => Ok(Some(r.read_unquoted_key()?)),
+    }
+}
+
+fn parse_value(r: mut ref Reader) -> Result[String, ()] {
+    match r.peek() {
+        Some('\'') => {
+            let v = r.read_quoted_value('\'')?;
+            Ok(decode_escapes(v, "\\'"))
+        }
+        Some('"') => {
+            let v = r.read_quoted_value('"')?;
+            Ok(decode_escapes(v, "\\'\"abfnrtv"))
+        }
+        None => Ok(String.new()),
+        Some('\n') => Ok(String.new()),
+        Some('\r') => Ok(String.new()),
+        _ => Ok(clean_unquoted(r.read_unquoted_value())),
+    }
+}
+
+fn parse_binding_body(r: mut ref Reader) -> Result[Option[(Option[String], Option[String])], ()] {
+    r.read_multiline_whitespace();
+    if not r.has_next() {
+        return Ok(None);
+    }
+    r.read_export();
+    let key = parse_key(mut r)?;
+    r.read_whitespace();
+    let mut value: Option[String] = None;
+    if r.peek() == Some('=') {
+        r.read_equal_sign()?;
+        value = Some(parse_value(mut r)?);
+    }
+    r.read_comment();
+    r.read_end_of_line()?;
+    Ok(Some((key, value)))
+}
+
+fn parse_binding(r: mut ref Reader) -> Binding {
+    r.mark_pos = r.pos;
+    r.mark_line = r.line;
+    let (key, value, error) = match parse_binding_body(mut r) {
+        Ok(None) => (None, None, false),
+        Ok(Some((k, v))) => (k, v, false),
+        Err(()) => {
+            r.read_rest_of_line();
+            (None, None, true)
+        }
+    };
+    Binding { key: key, value: value, original: r.text(r.mark_pos, r.pos), line: r.mark_line, error: error }
+}
+
+fn parse_stream(text: ref String) -> Vec[Binding] {
+    let mut r = new_reader(text);
+    let mut out: Vec[Binding] = Vec.new();
+    while r.has_next() {
+        out.push(parse_binding(mut r));
+    }
+    out
+}
+
+// ------------------------------------------------------------ variables
+
+#[derive(Clone)]
+enum Atom {
+    Literal(String),
+    Variable(String, Option[String]),
+}
+
+fn atom_repr(a: ref Atom) -> String {
+    match a {
+        Atom.Literal(v) => f"Literal(value={v})",
+        Atom.Variable(n, d) => {
+            let ds = match d {
+                Some(x) => x.clone(),
+                None => "None".to_string(),
+            };
+            f"Variable(name={n}, default={ds})"
+        }
+    }
+}
+
+// A match of \$\{(?P<name>[^\}:]*)(?::-(?P<default>[^\}]*))?\} at p: its
+// end, name and default.
+fn match_variable(s: ref Vec[char], p: i64) -> Option[(i64, String, Option[String])] {
+    if p + 1 >= s.len() or s[p] != '$' or s[p + 1] != '{' {
+        return None;
+    }
+    let mut q = p + 2;
+    while q < s.len() and s[q] != '}' and s[q] != ':' {
+        q += 1;
+    }
+    let name = text(slice(s, p + 2, q));
+    if q + 1 < s.len() and s[q] == ':' and s[q + 1] == '-' {
+        let mut r = q + 2;
+        while r < s.len() and s[r] != '}' {
+            r += 1;
+        }
+        if r < s.len() {
+            return Some((r + 1, name, Some(text(slice(s, q + 2, r)))));
+        }
+    }
+    if q < s.len() and s[q] == '}' {
+        return Some((q + 1, name, None));
+    }
+    None
+}
+
+fn parse_variables(value: ref String) -> Vec[Atom] {
+    let s = chars(value);
+    let mut atoms: Vec[Atom] = Vec.new();
+    let mut cursor = 0;
+    let mut p = 0;
+    while p < s.len() {
+        match match_variable(s, p) {
+            Some((end, name, default)) => {
+                if p > cursor {
+                    atoms.push(Atom.Literal(text(slice(s, cursor, p))));
+                }
+                atoms.push(Atom.Variable(name, default));
+                cursor = end;
+                p = end;
+            }
+            None => p += 1,
+        }
+    }
+    if cursor < s.len() {
+        atoms.push(Atom.Literal(text(slice(s, cursor, s.len()))));
+    }
+    atoms
+}
+
+// ------------------------------------------------------------ dicts
+
+// A Python dict of str to Optional[str], in insertion order.
+#[derive(Clone)]
+struct Dict {
+    items: Vec[(String, Option[String])],
+}
+
+fn new_dict() -> Dict {
+    Dict { items: Vec.new() }
+}
+
+impl Dict {
+    fn find(ref self, k: ref String) -> Option[i64] {
+        for i in 0..self.items.len() {
+            if self.items[i].0 == *k {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn contains(ref self, k: ref String) -> bool {
+        self.find(k).is_some()
+    }
+
+    fn get(ref self, k: ref String) -> Option[Option[String]] {
+        match self.find(k) {
+            Some(i) => Some(self.items[i].1.clone()),
+            None => None,
+        }
+    }
+
+    fn set(mut ref self, k: ref String, v: ref Option[String]) {
+        match self.find(k) {
+            Some(i) => self.items[i] = (k.clone(), v.clone()),
+            None => self.items.push((k.clone(), v.clone())),
+        }
+    }
+
+    fn update(mut ref self, other: ref Dict) {
+        for (k, v) in other.items.iter() {
+            self.set(k, v);
+        }
+    }
+
+    fn sorted_keys(ref self) -> Vec[String] {
+        let mut keys: Vec[String] = self.items.iter().map(|kv| kv.0.clone()).collect();
+        keys.sort();
+        keys
+    }
+}
+
+// ------------------------------------------------------------ the process
+
+// What a job runs under: the process environment, and where warnings
+// go. dotenv logs them; inside the command line they join its output.
+struct Ctx {
+    environ: Dict,
+    cli: bool,
+    out: String,
+}
+
+fn warn(ctx: mut ref Ctx, msg: ref String) {
+    if ctx.cli {
+        ctx.out.push_str(f"warning: {msg}\n");
+    } else {
+        println(f"  warning: {msg}");
+    }
+}
+
+fn echo(ctx: mut ref Ctx, line: ref String) {
+    ctx.out.push_str(line);
+    ctx.out.push('\n');
+}
+
+// ------------------------------------------------------------ DotEnv
+
+// The bindings DotEnv.parse yields, with the warning for each line that
+// does not parse.
+fn parse_pairs(ctx: mut ref Ctx, text: ref String) -> Vec[(String, Option[String])] {
+    let mut out: Vec[(String, Option[String])] = Vec.new();
+    for b in parse_stream(text).into_iter() {
+        if b.error {
+            warn(mut ctx, f"python-dotenv could not parse statement starting at line {b.line}");
+        }
+        if let Some(k) = b.key {
+            out.push((k, b.value));
+        }
+    }
+    out
+}
+
+fn resolve(atoms: ref Vec[Atom], env: ref Dict) -> String {
+    let mut out = String.new();
+    for a in atoms.iter() {
+        match a {
+            Atom.Literal(v) => out.push_str(v),
+            Atom.Variable(name, default) => {
+                let d = default.clone().unwrap_or(String.new());
+                let r = match env.get(name) {
+                    Some(v) => v,
+                    None => Some(d),
+                };
+                out.push_str(r.unwrap_or(String.new()));
+            }
+        }
+    }
+    out
+}
+
+fn environ_dict(ctx: ref Ctx) -> Dict {
+    ctx.environ.clone()
+}
+
+// resolve_variables: each value is expanded against the values before it
+// and the environment, the .env values winning with `override`.
+fn resolve_variables(ctx: ref Ctx, values: ref Vec[(String, Option[String])], overrides: bool) -> Dict {
+    let mut new_values = new_dict();
+    for (name, value) in values.iter() {
+        let result = match value {
+            None => None,
+            Some(v) => {
+                let atoms = parse_variables(v);
+                let mut env = new_dict();
+                if overrides {
+                    env.update(environ_dict(ctx));
+                    env.update(new_values);
+                } else {
+                    env.update(new_values);
+                    env.update(environ_dict(ctx));
+                }
+                Some(resolve(atoms, env))
+            }
+        };
+        new_values.set(name, result);
+    }
+    new_values
+}
+
+// DotEnv(path or text, interpolate, override).dict(). A path that is not
+// a file reads as an empty file.
+fn dotenv_dict(ctx: mut ref Ctx, text: ref String, interpolate: bool, overrides: bool) -> Dict {
+    let raw = parse_pairs(mut ctx, text);
+    if interpolate {
+        return resolve_variables(ctx, raw, overrides);
+    }
+    let mut d = new_dict();
+    for (k, v) in raw.iter() {
+        d.set(k, v);
+    }
+    d
+}
+
+fn file_text(path: ref String) -> String {
+    read_text(path).unwrap_or(String.new())
+}
+
+fn dotenv_values(ctx: mut ref Ctx, path: ref String, interpolate: bool) -> Dict {
+    dotenv_dict(mut ctx, file_text(path), interpolate, true)
+}
+
+fn load_disabled(ctx: ref Ctx) -> bool {
+    match ctx.environ.get("PYTHON_DOTENV_DISABLED".to_string()) {
+        Some(Some(v)) => {
+            let f = v.to_lowercase();
+            f == "1" or f == "true" or f == "t" or f == "yes" or f == "y"
+        }
+        _ => false,
+    }
+}
+
+// load_dotenv: put the values into the environment; False when there were
+// none or loading is disabled.
+fn load_dotenv(ctx: mut ref Ctx, path: ref String, overrides: bool, interpolate: bool) -> bool {
+    if load_disabled(ctx) {
+        return false;
+    }
+    let d = dotenv_dict(mut ctx, file_text(path), interpolate, overrides);
+    if d.items.is_empty() {
+        return false;
+    }
+    for (k, v) in d.items.iter() {
+        if ctx.environ.contains(k) and not overrides {
+            continue;
+        }
+        if v.is_some() {
+            ctx.environ.set(k, v);
+        }
+    }
+    true
+}
+
+// get_key: DotEnv(path, verbose=True).get(key)
+fn get_key(ctx: mut ref Ctx, path: ref String, key: ref String) -> Option[String] {
+    let d = dotenv_dict(mut ctx, file_text(path), true, true);
+    match d.get(key) {
+        Some(v) => v,
+        None => {
+            warn(mut ctx, f"Key {key} not found in {path}.");
+            None
+        }
+    }
+}
+
+// rewrite(): the bindings of the file (none if it does not exist), and
+// the new text written to a temporary file beside it and moved over it.
+fn replace_file(path: ref String, contents: ref String) -> Result[(), String] {
+    let c = chars(path);
+    let mut k = c.len();
+    while k > 0 and c[k - 1] != '/' {
+        k -= 1;
+    }
+    let tmp = text(slice(c, 0, k)) + ".tmp_dotenv";
+    if let Err(e) = fs.write(tmp.clone(), contents.clone()) {
+        return Err(f"{e}");
+    }
+    if let Err(e) = fs.rename(tmp.clone(), path.clone()) {
+        let _ = fs.remove_file(tmp.clone());
+        return Err(f"{e}");
+    }
+    Ok(())
+}
+
+fn source_bindings(ctx: mut ref Ctx, path: ref String) -> Vec[Binding] {
+    let bindings = parse_stream(file_text(path));
+    for b in bindings.iter() {
+        if b.error {
+            warn(mut ctx, f"python-dotenv could not parse statement starting at line {b.line}");
+        }
+    }
+    bindings
+}
+
+fn set_key(ctx: mut ref Ctx, path: ref String, key: ref String, value: ref String, quote_mode: ref String, export: bool) -> Result[String, String] {
+    if quote_mode != "always" and quote_mode != "auto" and quote_mode != "never" {
+        return Err(f"ValueError: Unknown quote_mode: {quote_mode}");
+    }
+    let quote = quote_mode == "always" or (quote_mode == "auto" and not py_isalnum(value));
+    let value_out = if quote {
+        let escaped = replace_str(replace_str(value, "\\", "\\\\"), "'", "\\'");
+        f"'{escaped}'"
+    } else {
+        value.clone()
+    };
+    let line_out = if export { f"export {key}={value_out}\n" } else { f"{key}={value_out}\n" };
+    let mut dest = String.new();
+    let mut replaced = false;
+    let mut missing_newline = false;
+    for b in source_bindings(mut ctx, path) {
+        if b.key == Some(key.clone()) {
+            dest.push_str(line_out);
+            replaced = true;
+        } else {
+            dest.push_str(b.original);
+            missing_newline = not b.original.ends_with("\n");
+        }
+    }
+    if not replaced {
+        if missing_newline {
+            dest.push('\n');
+        }
+        dest.push_str(line_out);
+    }
+    replace_file(path, dest)?;
+    Ok(f"(True, {repr_str(key)}, {repr_str(value)})")
+}
+
+fn unset_key(ctx: mut ref Ctx, path: ref String, key: ref String) -> Result[String, String] {
+    if not fs.exists(path.clone()) {
+        warn(mut ctx, f"Can't delete from {path} - it doesn't exist.");
+        return Ok(f"(None, {repr_str(key)})");
+    }
+    let mut removed = false;
+    let mut dest = String.new();
+    for b in source_bindings(mut ctx, path) {
+        if b.key == Some(key.clone()) {
+            removed = true;
+        } else {
+            dest.push_str(b.original);
+        }
+    }
+    replace_file(path, dest)?;
+    if not removed {
+        warn(mut ctx, f"Key {key} not removed from {path} - key doesn't exist.");
+        return Ok(f"(None, {repr_str(key)})");
+    }
+    Ok(f"(True, {repr_str(key)})")
+}
+
+// ------------------------------------------------------------ output formats
+
+// json.dumps of a str, with ensure_ascii.
+fn json_str(s: ref String) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if o == 8 {
+            out.push_str("\\b");
+        } else if o == 12 {
+            out.push_str("\\f");
+        } else if o < 0x20 or (o >= 0x7f and o < 0x10000) {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else if o >= 0x10000 {
+            let v = o - 0x10000;
+            out.push_str(f"\\u{hex_digits(0xd800 + (v >> 10), 4)}\\u{hex_digits(0xdc00 + (v & 0x3ff), 4)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+// json.dumps(values, indent=2, sort_keys=True)
+fn json_dump(d: ref Dict) -> String {
+    let keys = d.sorted_keys();
+    if keys.is_empty() {
+        return "{}".to_string();
+    }
+    let mut lines: Vec[String] = Vec.new();
+    for k in keys.iter() {
+        let v = match d.get(k) {
+            Some(Some(s)) => json_str(s),
+            _ => "null".to_string(),
+        };
+        lines.push(f"  {json_str(k)}: {v}");
+    }
+    "{\n".to_string() + lines.join(",\n") + "\n}"
+}
+
+fn shlex_safe(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '@' or c == '%' or c == '+' or c == '=' or c == ':' or c == ',' or c == '.' or c == '/' or c == '-'
+}
+
+// shlex.quote
+fn shlex_quote(s: ref String) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if s.chars().all(|c| shlex_safe(c)) {
+        return s.clone();
+    }
+    "'".to_string() + s.replace("'", "'\"'\"'") + "'"
+}
+
+// A line of command output with its control characters made visible.
+fn vis(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let o = c as i64;
+        if (o < 32 and c != '\t') or o == 127 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ the command line
+
+struct CliOpts {
+    file: String,
+    quote: String,
+    export: bool,
+}
+
+// A click UsageError: the usage line of the command it came from, and the
+// message.
+fn usage_error(ctx: mut ref Ctx, usage: Str, help: Str, msg: ref String) -> i64 {
+    ctx.out.push_str(f"Usage: {usage}\nTry '{help} --help' for help.\n\nError: {msg}\n");
+    2
+}
+
+const GROUP_USAGE: Str = "cli [OPTIONS] COMMAND [ARGS]...";
+
+fn click_bool(v: ref String) -> Option[bool] {
+    let l = v.to_lowercase();
+    if l == "1" or l == "true" or l == "t" or l == "yes" or l == "y" or l == "on" {
+        Some(true)
+    } else if l == "0" or l == "false" or l == "f" or l == "no" or l == "n" or l == "off" or l == "" {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+// An option's value: `--name value`, or `--name=value` for a long name.
+fn option_value(args: ref Vec[String], i: i64, short: Str, long: Str) -> Option[(String, i64)] {
+    let a = args[i].clone();
+    if (a == short or a == long) and i + 1 < args.len() {
+        return Some((args[i + 1].clone(), i + 2));
+    }
+    let prefix = f"{long}=";
+    if a.starts_with(prefix.as_str()) {
+        return Some((a[prefix.len()..a.len()].to_string(), i + 1));
+    }
+    None
+}
+
+fn choice_error(ctx: mut ref Ctx, usage: Str, help: Str, names: Str, value: ref String, choices: Str) -> i64 {
+    usage_error(mut ctx, usage, help, f"Invalid value for {names}: {repr_str(value)} is not one of {choices}.")
+}
+
+fn run_cli(ctx: mut ref Ctx, args: ref Vec[String]) -> i64 {
+    let mut opts = CliOpts { file: ".env".to_string(), quote: "always".to_string(), export: false };
+    let mut i = 0;
+    while i < args.len() and args[i].starts_with("-") {
+        if args[i] == "--version" {
+            echo(mut ctx, "cli, version 1.2.3".to_string());
+            return 0;
+        }
+        if let Some((v, next)) = option_value(args, i, "-f", "--file") {
+            opts.file = v;
+            i = next;
+        } else if let Some((v, next)) = option_value(args, i, "-q", "--quote") {
+            if v != "always" and v != "never" and v != "auto" {
+                return choice_error(mut ctx, GROUP_USAGE, "cli", "'-q' / '--quote'", v, "'always', 'never', 'auto'");
+            }
+            opts.quote = v;
+            i = next;
+        } else if let Some((v, next)) = option_value(args, i, "-e", "--export") {
+            match click_bool(v) {
+                Some(b) => opts.export = b,
+                None => {
+                    let msg = f"Invalid value for '-e' / '--export': {repr_str(v)} is not a valid boolean. Recognized values: , 0, 1, f, false, n, no, off, on, t, true, y, yes";
+                    return usage_error(mut ctx, GROUP_USAGE, "cli", msg);
+                }
+            }
+            i = next;
+        } else {
+            return usage_error(mut ctx, GROUP_USAGE, "cli", f"No such option: {args[i]}");
+        }
+    }
+    if i >= args.len() {
+        return usage_error(mut ctx, GROUP_USAGE, "cli", "Missing command.".to_string());
+    }
+    let command = args[i].clone();
+    let rest: Vec[String] = args[i + 1..args.len()].to_vec();
+    if command == "list" {
+        cli_list(mut ctx, opts, rest)
+    } else if command == "get" {
+        if rest.len() < 1 {
+            return usage_error(mut ctx, "cli get [OPTIONS] KEY", "cli get", "Missing argument 'KEY'.".to_string());
+        }
+        cli_get(mut ctx, opts, rest[0])
+    } else if command == "set" {
+        if rest.len() < 1 {
+            return usage_error(mut ctx, "cli set [OPTIONS] KEY VALUE", "cli set", "Missing argument 'KEY'.".to_string());
+        }
+        if rest.len() < 2 {
+            return usage_error(mut ctx, "cli set [OPTIONS] KEY VALUE", "cli set", "Missing argument 'VALUE'.".to_string());
+        }
+        match set_key(mut ctx, opts.file, rest[0], rest[1], opts.quote, opts.export) {
+            Ok(_) => {
+                echo(mut ctx, f"{rest[0]}={rest[1]}");
+                0
+            }
+            Err(e) => {
+                echo(mut ctx, e);
+                1
+            }
+        }
+    } else if command == "unset" {
+        if rest.len() < 1 {
+            return usage_error(mut ctx, "cli unset [OPTIONS] KEY", "cli unset", "Missing argument 'KEY'.".to_string());
+        }
+        match unset_key(mut ctx, opts.file, rest[0]) {
+            Ok(r) => {
+                if r.starts_with("(True") {
+                    echo(mut ctx, f"Successfully removed {rest[0]}");
+                    0
+                } else {
+                    1
+                }
+            }
+            Err(e) => {
+                echo(mut ctx, e);
+                1
+            }
+        }
+    } else {
+        usage_error(mut ctx, GROUP_USAGE, "cli", f"No such command {repr_str(command)}.")
+    }
+}
+
+// stream_file: the file's text, or the message and exit status 2.
+fn stream_file(ctx: mut ref Ctx, path: ref String) -> Option[String] {
+    match read_text(path) {
+        Some(t) => Some(t),
+        None => {
+            echo(mut ctx, f"Error opening env file: [Errno 2] No such file or directory: {repr_str(path)}");
+            None
+        }
+    }
+}
+
+fn cli_list(ctx: mut ref Ctx, opts: ref CliOpts, rest: ref Vec[String]) -> i64 {
+    let mut format = "simple".to_string();
+    let mut i = 0;
+    while i < rest.len() {
+        match option_value(rest, i, "--format", "--format") {
+            Some((v, next)) => {
+                if v != "simple" and v != "json" and v != "shell" and v != "export" {
+                    return choice_error(mut ctx, "cli list [OPTIONS]", "cli list", "'--format'", v, "'simple', 'json', 'shell', 'export'");
+                }
+                format = v;
+                i = next;
+            }
+            None => return usage_error(mut ctx, "cli list [OPTIONS]", "cli list", f"Got unexpected extra argument ({rest[i]})"),
+        }
+    }
+    let text = match stream_file(mut ctx, opts.file) {
+        Some(t) => t,
+        None => return 2,
+    };
+    let values = dotenv_dict(mut ctx, text, true, true);
+    if format == "json" {
+        echo(mut ctx, json_dump(values));
+        return 0;
+    }
+    let prefix = if format == "export" { "export " } else { "" };
+    for k in values.sorted_keys() {
+        if let Some(Some(v)) = values.get(k) {
+            let shown = if format == "export" or format == "shell" { shlex_quote(v) } else { v };
+            echo(mut ctx, f"{prefix}{k}={shown}");
+        }
+    }
+    0
+}
+
+fn cli_get(ctx: mut ref Ctx, opts: ref CliOpts, key: ref String) -> i64 {
+    let text = match stream_file(mut ctx, opts.file) {
+        Some(t) => t,
+        None => return 2,
+    };
+    let values = dotenv_dict(mut ctx, text, true, true);
+    match values.get(key) {
+        Some(Some(v)) => {
+            if v.is_empty() {
+                return 1;
+            }
+            echo(mut ctx, v);
+            0
+        }
+        _ => 1,
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn str_field(j: ref JValue, key: Str) -> String {
+    match get(j, key) {
+        Some(JValue.Str(s)) => s,
+        _ => String.new(),
+    }
+}
+
+fn bool_field(j: ref JValue, key: Str, default: bool) -> bool {
+    match get(j, key) {
+        Some(JValue.Bool(b)) => b,
+        _ => default,
+    }
+}
+
+fn str_list(v: ref Option[JValue]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let Some(JValue.List(items)) = v {
+        for it in items.iter() {
+            match it {
+                JValue.Str(s) => out.push(s.clone()),
+                JValue.Bool(b) => out.push(py_bool(*b)),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn job_environ(j: ref JValue) -> Dict {
+    let mut d = new_dict();
+    if let Some(JValue.Obj(items)) = get(j, "environ") {
+        for (k, v) in items.iter() {
+            if let JValue.Str(s) = v {
+                d.set(k, Some(s.clone()));
+            }
+        }
+    }
+    d
+}
+
+fn show_dict(d: ref Dict) {
+    for (k, v) in d.items.iter() {
+        println(f"  {repr_str(k)}: {opt_repr(v)}");
+    }
+}
+
+fn run_edit(ctx: mut ref Ctx, j: ref JValue, n: i64) {
+    let path = f"data/work/edit{n}.env";
+    if let Some(JValue.Str(start)) = get(j, "start") {
+        if let Ok(t) = fs.read_to_string(start) {
+            let _ = fs.write(path.clone(), t);
+        }
+    }
+    if let Some(JValue.List(ops)) = get(j, "ops") {
+        for op in ops.iter() {
+            let o = str_list(Some(op.clone()));
+            let shown = o.join(" ");
+            let r = if o[0] == "set" {
+                let mode = if o.len() > 3 { o[3].clone() } else { "always".to_string() };
+                let export = o.len() > 4 and o[4] == "True";
+                set_key(mut ctx, path, o[1], o[2], mode, export)
+            } else if o[0] == "unset" {
+                unset_key(mut ctx, path, o[1])
+            } else {
+                Ok(opt_repr(get_key(mut ctx, path, o[1])))
+            };
+            match r {
+                Ok(v) => println(f"  {shown} -> {v}"),
+                Err(e) => println(f"  {shown} -> {e}"),
+            }
+        }
+    }
+    match fs.read_to_string(path.clone()) {
+        Ok(t) => println(f"  file {repr_str(t)}"),
+        Err(_) => println("  no file"),
+    }
+}
+
+fn run_job(ctx: mut ref Ctx, j: ref JValue, edits: mut ref i64) {
+    let kind = str_field(j, "kind");
+    if kind == "parse" {
+        for b in parse_stream(file_text(str_field(j, "file"))) {
+            println(f"  {binding_repr(b)}");
+        }
+    } else if kind == "parse_text" {
+        for b in parse_stream(str_field(j, "text")) {
+            println(f"  {binding_repr(b)}");
+        }
+    } else if kind == "vars" {
+        let atoms: Vec[String] = parse_variables(str_field(j, "value")).iter().map(|a| atom_repr(a)).collect();
+        println(f"  [{atoms.join(", ")}]");
+    } else if kind == "values" {
+        let d = dotenv_values(mut ctx, str_field(j, "file"), bool_field(j, "interpolate", true));
+        show_dict(d);
+    } else if kind == "values_override" {
+        let d = dotenv_dict(mut ctx, file_text(str_field(j, "file")), true, bool_field(j, "override", true));
+        show_dict(d);
+    } else if kind == "load" {
+        let before = ctx.environ.clone();
+        for f in str_list(get(j, "files")) {
+            let r = load_dotenv(mut ctx, f, bool_field(j, "override", false), bool_field(j, "interpolate", true));
+            println(f"  load {f} -> {py_bool(r)}");
+        }
+        for k in ctx.environ.sorted_keys() {
+            let now = ctx.environ.get(k).unwrap_or(None);
+            if before.get(k) != Some(now.clone()) {
+                println(f"  {k}={opt_repr(now)}");
+            }
+        }
+    } else if kind == "merge" {
+        let mut config = new_dict();
+        for f in str_list(get(j, "files")) {
+            let d = dotenv_values(mut ctx, f, true);
+            config.update(d);
+        }
+        config.update(ctx.environ);
+        for k in config.sorted_keys() {
+            println(f"  {k}={opt_repr(config.get(k).unwrap_or(None))}");
+        }
+    } else if kind == "edit" {
+        *edits += 1;
+        run_edit(mut ctx, j, *edits);
+    } else if kind == "cli" {
+        ctx.cli = true;
+        ctx.out = String.new();
+        let code = run_cli(mut ctx, str_list(get(j, "args")));
+        ctx.cli = false;
+        let mut out = ctx.out.clone();
+        if out.ends_with("\n") {
+            out = out[0..out.len() - 1].to_string();
+        }
+        if not out.is_empty() {
+            for line in out.split("\n") {
+                println(f"  | {vis(line.to_string())}");
+            }
+        }
+        println(f"  exit {code}");
+    }
+}
+
+// ------------------------------------------------------------ data
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    if let Err(e) = fs.create_dir_all("data/work") {
+        return Err(f"cannot create data/work: {e}");
+    }
+    if let Ok(names) = fs.read_dir("data/work") {
+        for n in names {
+            let _ = fs.remove_file(f"data/work/{n}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.jsonl".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.jsonl: {e}");
+            return;
+        }
+    };
+    let mut edits = 0;
+    for line in jobs.lines() {
+        println(f"== {line}");
+        let j = match parse_json(line.to_string()) {
+            Ok(v) => v,
+            Err(e) => {
+                println(f"  bad job: {e}");
+                continue;
+            }
+        };
+        let mut ctx = Ctx { environ: job_environ(j), cli: false, out: String.new() };
+        run_job(mut ctx, j, mut edits);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# Settings for the web app. Copy to .env and edit.\n");
+    t.push_str("SECRET_KEY=change-me-not-a-real-key\n");
+    t.push_str("DEBUG=true\n");
+    t.push_str("ALLOWED_HOSTS=localhost,127.0.0.1,.example.test\n");
+    t.push_str("\n");
+    t.push_str("# Database\n");
+    t.push_str("DB_HOST=localhost\n");
+    t.push_str("DB_PORT=5432\n");
+    t.push_str("DB_NAME=\"shop\"\n");
+    t.push_str("DB_USER='shop_app'\n");
+    t.push_str("DB_PASSWORD=\"p@ss word #1\"   # quoted, so the hash stays\n");
+    t.push_str("DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}\n");
+    t.push_str("\n");
+    t.push_str("export REDIS_URL=redis://${REDIS_HOST:-localhost}:6379/0\n");
+    t.push_str("CACHE_TTL = 300\n");
+    t.push_str("EMPTY=\n");
+    t.push_str("EMPTY_QUOTED=\"\"\n");
+    t.push_str("NO_VALUE\n");
+    t.push_str("GREETING=\"Hello,\\nWorld\\t!\"\n");
+    t.push_str("LITERAL='Hello,\\nWorld'\n");
+    t.push_str("QUOTE_IN_SINGLE='it\\'s fine'\n");
+    t.push_str("PATH_LIKE=C:\\Program Files\\App\n");
+    t.push_str("MOTD=\"Welcome to the shop.\n");
+    t.push_str("Mind the gap.\n");
+    t.push_str("  -- the ops team\"\n");
+    t.push_str("UNICODE_NAME=Zoë Ångström\n");
+    t.push_str("INLINE=value # a comment\n");
+    t.push_str("HASH_IN_VALUE=abc#def\n");
+    t.push_str("URL_WITH_FRAGMENT=https://example.test/page#top\n");
+    v.push(DataFile { path: "env/app.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("efbbbf424f4d5f4b45593d310a4f544845523d320a");
+    v.push(DataFile { path: "env/bom.env".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("GOOD=1\n");
+    t.push_str("\"BAD QUOTE=2\n");
+    t.push_str("=nokey\n");
+    t.push_str("KEY=\"unterminated\n");
+    t.push_str("STILL_GOOD=3\n");
+    t.push_str("TRAILING=\"ok\" junk here\n");
+    t.push_str("SPACE IN KEY=4\n");
+    t.push_str("'SINGLE KEY'=5\n");
+    t.push_str("''=6\n");
+    t.push_str("LAST=end");
+    v.push(DataFile { path: "env/broken.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# only\n");
+    t.push_str("# comments\n");
+    t.push_str("\n");
+    t.push_str("   \n");
+    v.push(DataFile { path: "env/comments.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("COMPOSE_PROJECT_NAME=shop\n");
+    t.push_str("IMAGE_TAG=${TAG:-latest}\n");
+    t.push_str("REGISTRY=${REGISTRY:-registry.example.test}\n");
+    t.push_str("IMAGE=${REGISTRY}/${COMPOSE_PROJECT_NAME}/web:${IMAGE_TAG}\n");
+    t.push_str("WEB_PORT=${PORT}\n");
+    t.push_str("UNSET_REF=${NOPE}\n");
+    t.push_str("DEFAULT_EMPTY=${NOPE:-}\n");
+    t.push_str("NESTED=${A:-${B}}\n");
+    t.push_str("COLON_ONLY=${A:B}\n");
+    t.push_str("EMPTY_NAME=${}\n");
+    t.push_str("DOLLAR=$HOME and ${HOME}\n");
+    t.push_str("SELF=${SELF:-start}-again\n");
+    t.push_str("LATER=${DEFINED_BELOW}\n");
+    t.push_str("DEFINED_BELOW=now\n");
+    t.push_str("STAGE=${STAGE:-dev}\n");
+    t.push_str("DEBUG=${DEBUG:-off}\n");
+    v.push(DataFile { path: "env/compose.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("A=1\r");
+    t.push_str("B=2\r");
+    t.push_str("C=3\r");
+    v.push(DataFile { path: "env/cr.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("A=1\r\n");
+    t.push_str("B=\"two\r\n");
+    t.push_str("lines\"\r\n");
+    t.push_str("# c\r\n");
+    t.push_str("C='3'\r\n");
+    v.push(DataFile { path: "env/crlf.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PORT=8000\n");
+    t.push_str("WORKERS=2\n");
+    t.push_str("LOG_LEVEL=info\n");
+    t.push_str("FEATURE_X=off\n");
+    v.push(DataFile { path: "env/defaults.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "env/empty.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("WORKERS=8\n");
+    t.push_str("LOG_LEVEL=debug\n");
+    t.push_str("FEATURE_X=on\n");
+    t.push_str("EXTRA=${WORKERS}x\n");
+    v.push(DataFile { path: "env/local.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("FIRST=1\n");
+    t.push_str("SECOND=2");
+    v.push(DataFile { path: "env/nonl.env".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("export   EXPORTED=1\n");
+    t.push_str("exportNOT=2\n");
+    t.push_str("export=3\n");
+    t.push_str("export\n");
+    t.push_str(" indented=4\n");
+    t.push_str("\tTABBED=5\n");
+    t.push_str("KEY.WITH.DOTS=6\n");
+    t.push_str("key-with-dashes=7\n");
+    t.push_str("DUP=first\n");
+    t.push_str("DUP=second\n");
+    t.push_str("A=1;B=2\n");
+    t.push_str("SP_BEFORE  =x\n");
+    t.push_str("SP_AFTER=   y\n");
+    t.push_str("TRAIL=z   \n");
+    t.push_str("ESC_DQ=\"a \\\"quoted\\\" word\"\n");
+    t.push_str("ESC_BS=\"back\\\\slash\"\n");
+    t.push_str("ESC_ALL=\"\\a\\b\\f\\v\\r\\'\\\\\"\n");
+    t.push_str("NOT_ESC=\"\\u00e9 \\x41 \\0\"\n");
+    t.push_str("SQ_BS='one\\\\two \\n'\n");
+    t.push_str("EQ_IN_VALUE=a=b=c\n");
+    t.push_str("#COMMENTED=1\n");
+    t.push_str("  # indented comment\n");
+    t.push_str("VALUE_THEN_HASH=\"x\"#y\n");
+    v.push(DataFile { path: "env/tricky.env".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/app.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/bom.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/broken.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/comments.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/compose.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/cr.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/crlf.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/defaults.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/empty.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/local.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/nonl.env\"}\n");
+    t.push_str("{\"kind\": \"parse\", \"file\": \"data/env/tricky.env\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"A=1\\rB=2\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"A=1\\r\\nB=2\\r\\n\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"A='x\\r\\ny'\\r\\nB=2\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"\\r\\n\\r\\nA=1\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"A=\\\"1\\\\\\\"\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"X=1\\u000bY=2\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"A=\\u00a0b\\u00a0 #c\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"A=1\\u2028B=2\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"K \\t=\\t v\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"'K'\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"K=\\\"a\\\"\\\"b\\\"\"}\n");
+    t.push_str("{\"kind\": \"parse_text\", \"text\": \"#!/bin/sh\\nA=1\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"plain\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A}\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"x${A}y${B:-z}w\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A:-}\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${:-d}\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A:B}\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"$A\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A}}\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A:-x:y}\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A:-${B}}\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"a${}b\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"\"}\n");
+    t.push_str("{\"kind\": \"vars\", \"value\": \"${A:-}${B:-b}\"}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/app.env\", \"interpolate\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/compose.env\", \"interpolate\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/tricky.env\", \"interpolate\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/broken.env\", \"interpolate\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/crlf.env\", \"interpolate\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/bom.env\", \"interpolate\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/compose.env\", \"interpolate\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/compose.env\", \"interpolate\": true, \"environ\": {}}\n");
+    t.push_str("{\"kind\": \"values\", \"file\": \"data/env/missing.env\", \"interpolate\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"values_override\", \"file\": \"data/env/compose.env\", \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/local.env\", \"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/local.env\", \"data/env/defaults.env\"], \"override\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\", \"data/env/local.env\"], \"override\": true, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}, \"interpolate\": false}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/empty.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/tricky.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"1\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"TRUE\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"Yes\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"y\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"t\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"0\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"off\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"\"}}\n");
+    t.push_str("{\"kind\": \"load\", \"files\": [\"data/env/defaults.env\"], \"override\": false, \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\", \"PYTHON_DOTENV_DISABLED\": \"nope\"}}\n");
+    t.push_str("{\"kind\": \"merge\", \"files\": [\"data/env/defaults.env\", \"data/env/local.env\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"edit\", \"start\": \"data/env/app.env\", \"ops\": [[\"set\", \"DEBUG\", \"false\"], [\"set\", \"DB_PASSWORD\", \"new 'pw' \\\\ here\", \"always\"], [\"get\", \"DB_PASSWORD\"], [\"set\", \"WORKERS\", \"4\", \"never\"], [\"set\", \"LOG_FORMAT\", \"json\", \"auto\"], [\"set\", \"TAGS\", \"a,b c\", \"auto\"], [\"set\", \"PI\", \"\", \"auto\"], [\"set\", \"NAME\", \"Zo\\u00eb\", \"auto\"], [\"set\", \"PUBLIC_URL\", \"https://shop.example.test\", \"always\", true], [\"unset\", \"NO_VALUE\"], [\"unset\", \"MISSING_KEY\"], [\"get\", \"MISSING_KEY\"], [\"get\", \"NO_VALUE\"], [\"get\", \"MOTD\"], [\"set\", \"BAD\", \"x\", \"sometimes\"]]}\n");
+    t.push_str("{\"kind\": \"edit\", \"start\": \"data/env/nonl.env\", \"ops\": [[\"set\", \"THIRD\", \"3\", \"never\"], [\"set\", \"FIRST\", \"one\", \"never\"]]}\n");
+    t.push_str("{\"kind\": \"edit\", \"start\": \"data/env/broken.env\", \"ops\": [[\"set\", \"GOOD\", \"11\", \"never\"], [\"unset\", \"LAST\"]]}\n");
+    t.push_str("{\"kind\": \"edit\", \"start\": \"data/env/crlf.env\", \"ops\": [[\"set\", \"B\", \"2\", \"never\"]]}\n");
+    t.push_str("{\"kind\": \"edit\", \"start\": null, \"ops\": [[\"unset\", \"A\"], [\"set\", \"A\", \"1\"], [\"set\", \"B\", \"it's\"], [\"get\", \"B\"], [\"unset\", \"A\"], [\"unset\", \"B\"], [\"get\", \"B\"]]}\n");
+    t.push_str("{\"kind\": \"edit\", \"start\": \"data/env/tricky.env\", \"ops\": [[\"set\", \"DUP\", \"third\", \"never\"], [\"unset\", \"DUP\"], [\"set\", \"export\", \"4\", \"never\"]]}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"list\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/compose.env\", \"list\", \"--format\", \"json\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"list\", \"--format=shell\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/tricky.env\", \"list\", \"--format\", \"export\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"get\", \"DATABASE_URL\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"get\", \"EMPTY\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"get\", \"NOPE\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/missing.env\", \"list\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/missing.env\", \"get\", \"A\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"set\", \"API_URL\", \"https://api.example.test/v1\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"-q\", \"never\", \"set\", \"RETRIES\", \"3\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"-q\", \"auto\", \"-e\", \"true\", \"set\", \"REGION\", \"eu west\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"--quote=auto\", \"--export\", \"no\", \"set\", \"ZONE\", \"b\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"list\", \"--format\", \"export\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"unset\", \"RETRIES\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"unset\", \"RETRIES\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--file\", \"data/work/cli.env\", \"list\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"--version\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"list\", \"--format\", \"xml\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"-q\", \"sometimes\", \"list\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"get\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"-e\", \"maybe\", \"list\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    t.push_str("{\"kind\": \"cli\", \"args\": [\"-f\", \"data/env/app.env\", \"frobnicate\"], \"environ\": {\"HOME\": \"/home/ada\", \"USER\": \"ada\", \"LANG\": \"C.UTF-8\", \"DB_HOST\": \"db.internal\", \"PORT\": \"9000\", \"DEBUG\": \"\", \"STAGE\": \"prod\"}}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}

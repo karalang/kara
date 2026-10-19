@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 280 |
+| missing-feature | 281 |
 | codegen-gap | 273 |
 | false-positive | 235 |
 | perf | 175 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2947 |
 | interp | 961 |
-| typecheck | 476 |
+| typecheck | 477 |
 | other | 115 |
 | ownership | 113 |
 | runtime | 78 |
@@ -170,6 +170,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-52 | 2026-10-18 | codegen | medium | A bare list literal used only to be walked or read, `for step in [1, 9] { .. }` or `let steps = [1, 9]; steps[0] + steps[1]`, heap-allocates a `Vec` every time it is evaluated under `karac build --mir`, where legacy `karac build` keeps it on the stack (B-2026-10-02-70's fix): 1,000,008 allocations against 9 for a million evaluations, so kata 752's bench, which walks `[1, 9]` four times per visited lock setting, is 2.5x legacy | — |
 | B-2026-10-18-53 | 2026-10-18 | interp+codegen | high | `opt ?? ""` with `opt: Option[ref String]` (a `Map[String, String].get(k)`) takes the literal fallback as the reference itself rather than a reference to it: when `opt` is `None`, the first read of the result crashes on every MIR surface, `deref of non-reference Box` under `__mir-run` and a SEGV at address 0x8 under `build --mir` and `__mir-llvm-asan`; `karac check` passes it and suggests exactly this spelling for the empty default, and `.unwrap_or("")` is right | — |
 | B-2026-10-19-1 | 2026-10-19 | typecheck | low | An unsolved `Vec.new()` is not pinned by a `Slice[T]` parameter: `fs.write_bytes(path, Vec.new())` and `take(Vec.new())` against `fn take(b: ref Slice[u8])` are refused with "expected 'Slice[u8]', found 'Vec[?T0]'"; B-2026-10-06-124 made a `Vec[T]` slot pin it, the Vec-to-Slice coercion slot was left out | — |
+| B-2026-10-19-2 | 2026-10-19 | typecheck | low | String has no pop() or truncate(): `s.pop()` and `s.truncate(n)` are refused with "no method 'pop'/'truncate' on type 'String'" | — |
 
 ### Relocated
 

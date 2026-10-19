@@ -1,0 +1,604 @@
+== {"kind": "parse", "file": "data/env/app.env"}
+  Binding(key=None, value=None, original=Original(string='# Settings for the web app. Copy to .env and edit.\n', line=1), error=False)
+  Binding(key='SECRET_KEY', value='change-me-not-a-real-key', original=Original(string='SECRET_KEY=change-me-not-a-real-key\n', line=2), error=False)
+  Binding(key='DEBUG', value='true', original=Original(string='DEBUG=true\n', line=3), error=False)
+  Binding(key='ALLOWED_HOSTS', value='localhost,127.0.0.1,.example.test', original=Original(string='ALLOWED_HOSTS=localhost,127.0.0.1,.example.test\n', line=4), error=False)
+  Binding(key=None, value=None, original=Original(string='\n# Database\n', line=5), error=False)
+  Binding(key='DB_HOST', value='localhost', original=Original(string='DB_HOST=localhost\n', line=7), error=False)
+  Binding(key='DB_PORT', value='5432', original=Original(string='DB_PORT=5432\n', line=8), error=False)
+  Binding(key='DB_NAME', value='shop', original=Original(string='DB_NAME="shop"\n', line=9), error=False)
+  Binding(key='DB_USER', value='shop_app', original=Original(string="DB_USER='shop_app'\n", line=10), error=False)
+  Binding(key='DB_PASSWORD', value='p@ss word #1', original=Original(string='DB_PASSWORD="p@ss word #1"   # quoted, so the hash stays\n', line=11), error=False)
+  Binding(key='DATABASE_URL', value='postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}', original=Original(string='DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}\n', line=12), error=False)
+  Binding(key='REDIS_URL', value='redis://${REDIS_HOST:-localhost}:6379/0', original=Original(string='\nexport REDIS_URL=redis://${REDIS_HOST:-localhost}:6379/0\n', line=13), error=False)
+  Binding(key='CACHE_TTL', value='300', original=Original(string='CACHE_TTL = 300\n', line=15), error=False)
+  Binding(key='EMPTY', value='', original=Original(string='EMPTY=\n', line=16), error=False)
+  Binding(key='EMPTY_QUOTED', value='', original=Original(string='EMPTY_QUOTED=""\n', line=17), error=False)
+  Binding(key='NO_VALUE', value=None, original=Original(string='NO_VALUE\n', line=18), error=False)
+  Binding(key='GREETING', value='Hello,\nWorld\t!', original=Original(string='GREETING="Hello,\\nWorld\\t!"\n', line=19), error=False)
+  Binding(key='LITERAL', value='Hello,\\nWorld', original=Original(string="LITERAL='Hello,\\nWorld'\n", line=20), error=False)
+  Binding(key='QUOTE_IN_SINGLE', value="it's fine", original=Original(string="QUOTE_IN_SINGLE='it\\'s fine'\n", line=21), error=False)
+  Binding(key='PATH_LIKE', value='C:\\Program Files\\App', original=Original(string='PATH_LIKE=C:\\Program Files\\App\n', line=22), error=False)
+  Binding(key='MOTD', value='Welcome to the shop.\nMind the gap.\n  -- the ops team', original=Original(string='MOTD="Welcome to the shop.\nMind the gap.\n  -- the ops team"\n', line=23), error=False)
+  Binding(key='UNICODE_NAME', value='Zoë Ångström', original=Original(string='UNICODE_NAME=Zoë Ångström\n', line=26), error=False)
+  Binding(key='INLINE', value='value', original=Original(string='INLINE=value # a comment\n', line=27), error=False)
+  Binding(key='HASH_IN_VALUE', value='abc#def', original=Original(string='HASH_IN_VALUE=abc#def\n', line=28), error=False)
+  Binding(key='URL_WITH_FRAGMENT', value='https://example.test/page#top', original=Original(string='URL_WITH_FRAGMENT=https://example.test/page#top\n', line=29), error=False)
+== {"kind": "parse", "file": "data/env/bom.env"}
+  Binding(key='BOM_KEY', value='1', original=Original(string='BOM_KEY=1\n', line=1), error=False)
+  Binding(key='OTHER', value='2', original=Original(string='OTHER=2\n', line=2), error=False)
+== {"kind": "parse", "file": "data/env/broken.env"}
+  Binding(key='GOOD', value='1', original=Original(string='GOOD=1\n', line=1), error=False)
+  Binding(key=None, value=None, original=Original(string='"BAD QUOTE=2\n', line=2), error=True)
+  Binding(key=None, value=None, original=Original(string='=nokey\n', line=3), error=True)
+  Binding(key=None, value=None, original=Original(string='KEY="unterminated\nSTILL_GOOD=3\nTRAILING="ok" junk here\n', line=4), error=True)
+  Binding(key=None, value=None, original=Original(string='SPACE IN KEY=4\n', line=7), error=True)
+  Binding(key='SINGLE KEY', value='5', original=Original(string="'SINGLE KEY'=5\n", line=8), error=False)
+  Binding(key=None, value=None, original=Original(string="''=6\n", line=9), error=True)
+  Binding(key='LAST', value='end', original=Original(string='LAST=end', line=10), error=False)
+== {"kind": "parse", "file": "data/env/comments.env"}
+  Binding(key=None, value=None, original=Original(string='# only\n', line=1), error=False)
+  Binding(key=None, value=None, original=Original(string='# comments\n', line=2), error=False)
+  Binding(key=None, value=None, original=Original(string='\n   \n', line=3), error=False)
+== {"kind": "parse", "file": "data/env/compose.env"}
+  Binding(key='COMPOSE_PROJECT_NAME', value='shop', original=Original(string='COMPOSE_PROJECT_NAME=shop\n', line=1), error=False)
+  Binding(key='IMAGE_TAG', value='${TAG:-latest}', original=Original(string='IMAGE_TAG=${TAG:-latest}\n', line=2), error=False)
+  Binding(key='REGISTRY', value='${REGISTRY:-registry.example.test}', original=Original(string='REGISTRY=${REGISTRY:-registry.example.test}\n', line=3), error=False)
+  Binding(key='IMAGE', value='${REGISTRY}/${COMPOSE_PROJECT_NAME}/web:${IMAGE_TAG}', original=Original(string='IMAGE=${REGISTRY}/${COMPOSE_PROJECT_NAME}/web:${IMAGE_TAG}\n', line=4), error=False)
+  Binding(key='WEB_PORT', value='${PORT}', original=Original(string='WEB_PORT=${PORT}\n', line=5), error=False)
+  Binding(key='UNSET_REF', value='${NOPE}', original=Original(string='UNSET_REF=${NOPE}\n', line=6), error=False)
+  Binding(key='DEFAULT_EMPTY', value='${NOPE:-}', original=Original(string='DEFAULT_EMPTY=${NOPE:-}\n', line=7), error=False)
+  Binding(key='NESTED', value='${A:-${B}}', original=Original(string='NESTED=${A:-${B}}\n', line=8), error=False)
+  Binding(key='COLON_ONLY', value='${A:B}', original=Original(string='COLON_ONLY=${A:B}\n', line=9), error=False)
+  Binding(key='EMPTY_NAME', value='${}', original=Original(string='EMPTY_NAME=${}\n', line=10), error=False)
+  Binding(key='DOLLAR', value='$HOME and ${HOME}', original=Original(string='DOLLAR=$HOME and ${HOME}\n', line=11), error=False)
+  Binding(key='SELF', value='${SELF:-start}-again', original=Original(string='SELF=${SELF:-start}-again\n', line=12), error=False)
+  Binding(key='LATER', value='${DEFINED_BELOW}', original=Original(string='LATER=${DEFINED_BELOW}\n', line=13), error=False)
+  Binding(key='DEFINED_BELOW', value='now', original=Original(string='DEFINED_BELOW=now\n', line=14), error=False)
+  Binding(key='STAGE', value='${STAGE:-dev}', original=Original(string='STAGE=${STAGE:-dev}\n', line=15), error=False)
+  Binding(key='DEBUG', value='${DEBUG:-off}', original=Original(string='DEBUG=${DEBUG:-off}\n', line=16), error=False)
+== {"kind": "parse", "file": "data/env/cr.env"}
+  Binding(key='A', value='1', original=Original(string='A=1\n', line=1), error=False)
+  Binding(key='B', value='2', original=Original(string='B=2\n', line=2), error=False)
+  Binding(key='C', value='3', original=Original(string='C=3\n', line=3), error=False)
+== {"kind": "parse", "file": "data/env/crlf.env"}
+  Binding(key='A', value='1', original=Original(string='A=1\n', line=1), error=False)
+  Binding(key='B', value='two\nlines', original=Original(string='B="two\nlines"\n', line=2), error=False)
+  Binding(key=None, value=None, original=Original(string='# c\n', line=4), error=False)
+  Binding(key='C', value='3', original=Original(string="C='3'\n", line=5), error=False)
+== {"kind": "parse", "file": "data/env/defaults.env"}
+  Binding(key='PORT', value='8000', original=Original(string='PORT=8000\n', line=1), error=False)
+  Binding(key='WORKERS', value='2', original=Original(string='WORKERS=2\n', line=2), error=False)
+  Binding(key='LOG_LEVEL', value='info', original=Original(string='LOG_LEVEL=info\n', line=3), error=False)
+  Binding(key='FEATURE_X', value='off', original=Original(string='FEATURE_X=off\n', line=4), error=False)
+== {"kind": "parse", "file": "data/env/empty.env"}
+== {"kind": "parse", "file": "data/env/local.env"}
+  Binding(key='WORKERS', value='8', original=Original(string='WORKERS=8\n', line=1), error=False)
+  Binding(key='LOG_LEVEL', value='debug', original=Original(string='LOG_LEVEL=debug\n', line=2), error=False)
+  Binding(key='FEATURE_X', value='on', original=Original(string='FEATURE_X=on\n', line=3), error=False)
+  Binding(key='EXTRA', value='${WORKERS}x', original=Original(string='EXTRA=${WORKERS}x\n', line=4), error=False)
+== {"kind": "parse", "file": "data/env/nonl.env"}
+  Binding(key='FIRST', value='1', original=Original(string='FIRST=1\n', line=1), error=False)
+  Binding(key='SECOND', value='2', original=Original(string='SECOND=2', line=2), error=False)
+== {"kind": "parse", "file": "data/env/tricky.env"}
+  Binding(key='EXPORTED', value='1', original=Original(string='export   EXPORTED=1\n', line=1), error=False)
+  Binding(key='exportNOT', value='2', original=Original(string='exportNOT=2\n', line=2), error=False)
+  Binding(key='export', value='3', original=Original(string='export=3\n', line=3), error=False)
+  Binding(key='export', value=None, original=Original(string='export\n', line=4), error=False)
+  Binding(key='indented', value='4', original=Original(string=' indented=4\n', line=5), error=False)
+  Binding(key='TABBED', value='5', original=Original(string='\tTABBED=5\n', line=6), error=False)
+  Binding(key='KEY.WITH.DOTS', value='6', original=Original(string='KEY.WITH.DOTS=6\n', line=7), error=False)
+  Binding(key='key-with-dashes', value='7', original=Original(string='key-with-dashes=7\n', line=8), error=False)
+  Binding(key='DUP', value='first', original=Original(string='DUP=first\n', line=9), error=False)
+  Binding(key='DUP', value='second', original=Original(string='DUP=second\n', line=10), error=False)
+  Binding(key='A', value='1;B=2', original=Original(string='A=1;B=2\n', line=11), error=False)
+  Binding(key='SP_BEFORE', value='x', original=Original(string='SP_BEFORE  =x\n', line=12), error=False)
+  Binding(key='SP_AFTER', value='y', original=Original(string='SP_AFTER=   y\n', line=13), error=False)
+  Binding(key='TRAIL', value='z', original=Original(string='TRAIL=z   \n', line=14), error=False)
+  Binding(key='ESC_DQ', value='a "quoted" word', original=Original(string='ESC_DQ="a \\"quoted\\" word"\n', line=15), error=False)
+  Binding(key='ESC_BS', value='back\\slash', original=Original(string='ESC_BS="back\\\\slash"\n', line=16), error=False)
+  Binding(key='ESC_ALL', value="\x07\x08\x0c\x0b\r'\\", original=Original(string='ESC_ALL="\\a\\b\\f\\v\\r\\\'\\\\"\n', line=17), error=False)
+  Binding(key='NOT_ESC', value='\\u00e9 \\x41 \\0', original=Original(string='NOT_ESC="\\u00e9 \\x41 \\0"\n', line=18), error=False)
+  Binding(key='SQ_BS', value='one\\two \\n', original=Original(string="SQ_BS='one\\\\two \\n'\n", line=19), error=False)
+  Binding(key='EQ_IN_VALUE', value='a=b=c', original=Original(string='EQ_IN_VALUE=a=b=c\n', line=20), error=False)
+  Binding(key=None, value=None, original=Original(string='#COMMENTED=1\n', line=21), error=False)
+  Binding(key=None, value=None, original=Original(string='  # indented comment\n', line=22), error=False)
+  Binding(key='VALUE_THEN_HASH', value='x', original=Original(string='VALUE_THEN_HASH="x"#y\n', line=23), error=False)
+== {"kind": "parse_text", "text": "A=1\rB=2"}
+  Binding(key='A', value='1', original=Original(string='A=1\r', line=1), error=False)
+  Binding(key='B', value='2', original=Original(string='B=2', line=2), error=False)
+== {"kind": "parse_text", "text": "A=1\r\nB=2\r\n"}
+  Binding(key='A', value='1', original=Original(string='A=1\r\n', line=1), error=False)
+  Binding(key='B', value='2', original=Original(string='B=2\r\n', line=2), error=False)
+== {"kind": "parse_text", "text": "A='x\r\ny'\r\nB=2"}
+  Binding(key='A', value='x\r\ny', original=Original(string="A='x\r\ny'\r\n", line=1), error=False)
+  Binding(key='B', value='2', original=Original(string='B=2', line=3), error=False)
+== {"kind": "parse_text", "text": "\r\n\r\nA=1"}
+  Binding(key='A', value='1', original=Original(string='\r\n\r\nA=1', line=1), error=False)
+== {"kind": "parse_text", "text": "A=\"1\\\""}
+  Binding(key=None, value=None, original=Original(string='A="1\\"', line=1), error=True)
+== {"kind": "parse_text", "text": "X=1\u000bY=2"}
+  Binding(key='X', value='1\x0bY=2', original=Original(string='X=1\x0bY=2', line=1), error=False)
+== {"kind": "parse_text", "text": "A=\u00a0b\u00a0 #c"}
+  Binding(key='A', value='b', original=Original(string='A=\xa0b\xa0 #c', line=1), error=False)
+== {"kind": "parse_text", "text": "A=1\u2028B=2"}
+  Binding(key='A', value='1\u2028B=2', original=Original(string='A=1\u2028B=2', line=1), error=False)
+== {"kind": "parse_text", "text": "K \t=\t v"}
+  Binding(key='K', value='v', original=Original(string='K \t=\t v', line=1), error=False)
+== {"kind": "parse_text", "text": "'K'"}
+  Binding(key='K', value=None, original=Original(string="'K'", line=1), error=False)
+== {"kind": "parse_text", "text": "K=\"a\"\"b\""}
+  Binding(key=None, value=None, original=Original(string='K="a""b"', line=1), error=True)
+== {"kind": "parse_text", "text": "#!/bin/sh\nA=1"}
+  Binding(key=None, value=None, original=Original(string='#!/bin/sh\n', line=1), error=False)
+  Binding(key='A', value='1', original=Original(string='A=1', line=2), error=False)
+== {"kind": "vars", "value": "plain"}
+  [Literal(value=plain)]
+== {"kind": "vars", "value": "${A}"}
+  [Variable(name=A, default=None)]
+== {"kind": "vars", "value": "x${A}y${B:-z}w"}
+  [Literal(value=x), Variable(name=A, default=None), Literal(value=y), Variable(name=B, default=z), Literal(value=w)]
+== {"kind": "vars", "value": "${A:-}"}
+  [Variable(name=A, default=)]
+== {"kind": "vars", "value": "${:-d}"}
+  [Variable(name=, default=d)]
+== {"kind": "vars", "value": "${A:B}"}
+  [Literal(value=${A:B})]
+== {"kind": "vars", "value": "$A"}
+  [Literal(value=$A)]
+== {"kind": "vars", "value": "${A"}
+  [Literal(value=${A)]
+== {"kind": "vars", "value": "${A}}"}
+  [Variable(name=A, default=None), Literal(value=})]
+== {"kind": "vars", "value": "${A:-x:y}"}
+  [Variable(name=A, default=x:y)]
+== {"kind": "vars", "value": "${A:-${B}}"}
+  [Variable(name=A, default=${B), Literal(value=})]
+== {"kind": "vars", "value": "a${}b"}
+  [Literal(value=a), Variable(name=, default=None), Literal(value=b)]
+== {"kind": "vars", "value": ""}
+  []
+== {"kind": "vars", "value": "${A:-}${B:-b}"}
+  [Variable(name=A, default=), Variable(name=B, default=b)]
+== {"kind": "values", "file": "data/env/app.env", "interpolate": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  'SECRET_KEY': 'change-me-not-a-real-key'
+  'DEBUG': 'true'
+  'ALLOWED_HOSTS': 'localhost,127.0.0.1,.example.test'
+  'DB_HOST': 'localhost'
+  'DB_PORT': '5432'
+  'DB_NAME': 'shop'
+  'DB_USER': 'shop_app'
+  'DB_PASSWORD': 'p@ss word #1'
+  'DATABASE_URL': 'postgres://shop_app:p@ss word #1@localhost:5432/shop'
+  'REDIS_URL': 'redis://localhost:6379/0'
+  'CACHE_TTL': '300'
+  'EMPTY': ''
+  'EMPTY_QUOTED': ''
+  'NO_VALUE': None
+  'GREETING': 'Hello,\nWorld\t!'
+  'LITERAL': 'Hello,\\nWorld'
+  'QUOTE_IN_SINGLE': "it's fine"
+  'PATH_LIKE': 'C:\\Program Files\\App'
+  'MOTD': 'Welcome to the shop.\nMind the gap.\n  -- the ops team'
+  'UNICODE_NAME': 'Zoë Ångström'
+  'INLINE': 'value'
+  'HASH_IN_VALUE': 'abc#def'
+  'URL_WITH_FRAGMENT': 'https://example.test/page#top'
+== {"kind": "values", "file": "data/env/compose.env", "interpolate": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  'COMPOSE_PROJECT_NAME': 'shop'
+  'IMAGE_TAG': 'latest'
+  'REGISTRY': 'registry.example.test'
+  'IMAGE': 'registry.example.test/shop/web:latest'
+  'WEB_PORT': '9000'
+  'UNSET_REF': ''
+  'DEFAULT_EMPTY': ''
+  'NESTED': '${B}'
+  'COLON_ONLY': '${A:B}'
+  'EMPTY_NAME': ''
+  'DOLLAR': '$HOME and /home/ada'
+  'SELF': 'start-again'
+  'LATER': ''
+  'DEFINED_BELOW': 'now'
+  'STAGE': 'prod'
+  'DEBUG': ''
+== {"kind": "values", "file": "data/env/tricky.env", "interpolate": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  'EXPORTED': '1'
+  'exportNOT': '2'
+  'export': None
+  'indented': '4'
+  'TABBED': '5'
+  'KEY.WITH.DOTS': '6'
+  'key-with-dashes': '7'
+  'DUP': 'second'
+  'A': '1;B=2'
+  'SP_BEFORE': 'x'
+  'SP_AFTER': 'y'
+  'TRAIL': 'z'
+  'ESC_DQ': 'a "quoted" word'
+  'ESC_BS': 'back\\slash'
+  'ESC_ALL': "\x07\x08\x0c\x0b\r'\\"
+  'NOT_ESC': '\\u00e9 \\x41 \\0'
+  'SQ_BS': 'one\\two \\n'
+  'EQ_IN_VALUE': 'a=b=c'
+  'VALUE_THEN_HASH': 'x'
+== {"kind": "values", "file": "data/env/broken.env", "interpolate": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  warning: python-dotenv could not parse statement starting at line 2
+  warning: python-dotenv could not parse statement starting at line 3
+  warning: python-dotenv could not parse statement starting at line 4
+  warning: python-dotenv could not parse statement starting at line 7
+  warning: python-dotenv could not parse statement starting at line 9
+  'GOOD': '1'
+  'SINGLE KEY': '5'
+  'LAST': 'end'
+== {"kind": "values", "file": "data/env/crlf.env", "interpolate": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  'A': '1'
+  'B': 'two\nlines'
+  'C': '3'
+== {"kind": "values", "file": "data/env/bom.env", "interpolate": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  'BOM_KEY': '1'
+  'OTHER': '2'
+== {"kind": "values", "file": "data/env/compose.env", "interpolate": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  'COMPOSE_PROJECT_NAME': 'shop'
+  'IMAGE_TAG': '${TAG:-latest}'
+  'REGISTRY': '${REGISTRY:-registry.example.test}'
+  'IMAGE': '${REGISTRY}/${COMPOSE_PROJECT_NAME}/web:${IMAGE_TAG}'
+  'WEB_PORT': '${PORT}'
+  'UNSET_REF': '${NOPE}'
+  'DEFAULT_EMPTY': '${NOPE:-}'
+  'NESTED': '${A:-${B}}'
+  'COLON_ONLY': '${A:B}'
+  'EMPTY_NAME': '${}'
+  'DOLLAR': '$HOME and ${HOME}'
+  'SELF': '${SELF:-start}-again'
+  'LATER': '${DEFINED_BELOW}'
+  'DEFINED_BELOW': 'now'
+  'STAGE': '${STAGE:-dev}'
+  'DEBUG': '${DEBUG:-off}'
+== {"kind": "values", "file": "data/env/compose.env", "interpolate": true, "environ": {}}
+  'COMPOSE_PROJECT_NAME': 'shop'
+  'IMAGE_TAG': 'latest'
+  'REGISTRY': 'registry.example.test'
+  'IMAGE': 'registry.example.test/shop/web:latest'
+  'WEB_PORT': ''
+  'UNSET_REF': ''
+  'DEFAULT_EMPTY': ''
+  'NESTED': '${B}'
+  'COLON_ONLY': '${A:B}'
+  'EMPTY_NAME': ''
+  'DOLLAR': '$HOME and '
+  'SELF': 'start-again'
+  'LATER': ''
+  'DEFINED_BELOW': 'now'
+  'STAGE': 'dev'
+  'DEBUG': 'off'
+== {"kind": "values", "file": "data/env/missing.env", "interpolate": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+== {"kind": "values_override", "file": "data/env/compose.env", "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  'COMPOSE_PROJECT_NAME': 'shop'
+  'IMAGE_TAG': 'latest'
+  'REGISTRY': 'registry.example.test'
+  'IMAGE': 'registry.example.test/shop/web:latest'
+  'WEB_PORT': '9000'
+  'UNSET_REF': ''
+  'DEFAULT_EMPTY': ''
+  'NESTED': '${B}'
+  'COLON_ONLY': '${A:B}'
+  'EMPTY_NAME': ''
+  'DOLLAR': '$HOME and /home/ada'
+  'SELF': 'start-again'
+  'LATER': ''
+  'DEFINED_BELOW': 'now'
+  'STAGE': 'prod'
+  'DEBUG': ''
+== {"kind": "load", "files": ["data/env/local.env", "data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  load data/env/local.env -> True
+  load data/env/defaults.env -> True
+  EXTRA='8x'
+  FEATURE_X='on'
+  LOG_LEVEL='debug'
+  WORKERS='8'
+== {"kind": "load", "files": ["data/env/local.env", "data/env/defaults.env"], "override": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  load data/env/local.env -> True
+  load data/env/defaults.env -> True
+  EXTRA='8x'
+  FEATURE_X='off'
+  LOG_LEVEL='info'
+  PORT='8000'
+  WORKERS='2'
+== {"kind": "load", "files": ["data/env/defaults.env", "data/env/local.env"], "override": true, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}, "interpolate": false}
+  load data/env/defaults.env -> True
+  load data/env/local.env -> True
+  EXTRA='${WORKERS}x'
+  FEATURE_X='on'
+  LOG_LEVEL='debug'
+  PORT='8000'
+  WORKERS='8'
+== {"kind": "load", "files": ["data/env/empty.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  load data/env/empty.env -> False
+== {"kind": "load", "files": ["data/env/tricky.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  load data/env/tricky.env -> True
+  A='1;B=2'
+  DUP='second'
+  EQ_IN_VALUE='a=b=c'
+  ESC_ALL="\x07\x08\x0c\x0b\r'\\"
+  ESC_BS='back\\slash'
+  ESC_DQ='a "quoted" word'
+  EXPORTED='1'
+  KEY.WITH.DOTS='6'
+  NOT_ESC='\\u00e9 \\x41 \\0'
+  SP_AFTER='y'
+  SP_BEFORE='x'
+  SQ_BS='one\\two \\n'
+  TABBED='5'
+  TRAIL='z'
+  VALUE_THEN_HASH='x'
+  exportNOT='2'
+  indented='4'
+  key-with-dashes='7'
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "1"}}
+  load data/env/defaults.env -> False
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "TRUE"}}
+  load data/env/defaults.env -> False
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "Yes"}}
+  load data/env/defaults.env -> False
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "y"}}
+  load data/env/defaults.env -> False
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "t"}}
+  load data/env/defaults.env -> False
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "0"}}
+  load data/env/defaults.env -> True
+  FEATURE_X='off'
+  LOG_LEVEL='info'
+  WORKERS='2'
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "off"}}
+  load data/env/defaults.env -> True
+  FEATURE_X='off'
+  LOG_LEVEL='info'
+  WORKERS='2'
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": ""}}
+  load data/env/defaults.env -> True
+  FEATURE_X='off'
+  LOG_LEVEL='info'
+  WORKERS='2'
+== {"kind": "load", "files": ["data/env/defaults.env"], "override": false, "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod", "PYTHON_DOTENV_DISABLED": "nope"}}
+  load data/env/defaults.env -> True
+  FEATURE_X='off'
+  LOG_LEVEL='info'
+  WORKERS='2'
+== {"kind": "merge", "files": ["data/env/defaults.env", "data/env/local.env"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  DB_HOST='db.internal'
+  DEBUG=''
+  EXTRA='8x'
+  FEATURE_X='on'
+  HOME='/home/ada'
+  LANG='C.UTF-8'
+  LOG_LEVEL='debug'
+  PORT='9000'
+  STAGE='prod'
+  USER='ada'
+  WORKERS='8'
+== {"kind": "edit", "start": "data/env/app.env", "ops": [["set", "DEBUG", "false"], ["set", "DB_PASSWORD", "new 'pw' \\ here", "always"], ["get", "DB_PASSWORD"], ["set", "WORKERS", "4", "never"], ["set", "LOG_FORMAT", "json", "auto"], ["set", "TAGS", "a,b c", "auto"], ["set", "PI", "", "auto"], ["set", "NAME", "Zo\u00eb", "auto"], ["set", "PUBLIC_URL", "https://shop.example.test", "always", true], ["unset", "NO_VALUE"], ["unset", "MISSING_KEY"], ["get", "MISSING_KEY"], ["get", "NO_VALUE"], ["get", "MOTD"], ["set", "BAD", "x", "sometimes"]]}
+  set DEBUG false -> (True, 'DEBUG', 'false')
+  set DB_PASSWORD new 'pw' \ here always -> (True, 'DB_PASSWORD', "new 'pw' \\ here")
+  get DB_PASSWORD -> "new 'pw' \\ here"
+  set WORKERS 4 never -> (True, 'WORKERS', '4')
+  set LOG_FORMAT json auto -> (True, 'LOG_FORMAT', 'json')
+  set TAGS a,b c auto -> (True, 'TAGS', 'a,b c')
+  set PI  auto -> (True, 'PI', '')
+  set NAME Zoë auto -> (True, 'NAME', 'Zoë')
+  set PUBLIC_URL https://shop.example.test always True -> (True, 'PUBLIC_URL', 'https://shop.example.test')
+  unset NO_VALUE -> (True, 'NO_VALUE')
+  warning: Key MISSING_KEY not removed from data/work/edit1.env - key doesn't exist.
+  unset MISSING_KEY -> (None, 'MISSING_KEY')
+  warning: Key MISSING_KEY not found in data/work/edit1.env.
+  get MISSING_KEY -> None
+  warning: Key NO_VALUE not found in data/work/edit1.env.
+  get NO_VALUE -> None
+  get MOTD -> 'Welcome to the shop.\nMind the gap.\n  -- the ops team'
+  set BAD x sometimes -> ValueError: Unknown quote_mode: sometimes
+  file '# Settings for the web app. Copy to .env and edit.\nSECRET_KEY=change-me-not-a-real-key\nDEBUG=\'false\'\nALLOWED_HOSTS=localhost,127.0.0.1,.example.test\n\n# Database\nDB_HOST=localhost\nDB_PORT=5432\nDB_NAME="shop"\nDB_USER=\'shop_app\'\nDB_PASSWORD=\'new \\\'pw\\\' \\\\ here\'\nDATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}\n\nexport REDIS_URL=redis://${REDIS_HOST:-localhost}:6379/0\nCACHE_TTL = 300\nEMPTY=\nEMPTY_QUOTED=""\nGREETING="Hello,\\nWorld\\t!"\nLITERAL=\'Hello,\\nWorld\'\nQUOTE_IN_SINGLE=\'it\\\'s fine\'\nPATH_LIKE=C:\\Program Files\\App\nMOTD="Welcome to the shop.\nMind the gap.\n  -- the ops team"\nUNICODE_NAME=Zoë Ångström\nINLINE=value # a comment\nHASH_IN_VALUE=abc#def\nURL_WITH_FRAGMENT=https://example.test/page#top\nWORKERS=4\nLOG_FORMAT=json\nTAGS=\'a,b c\'\nPI=\'\'\nNAME=Zoë\nexport PUBLIC_URL=\'https://shop.example.test\'\n'
+== {"kind": "edit", "start": "data/env/nonl.env", "ops": [["set", "THIRD", "3", "never"], ["set", "FIRST", "one", "never"]]}
+  set THIRD 3 never -> (True, 'THIRD', '3')
+  set FIRST one never -> (True, 'FIRST', 'one')
+  file 'FIRST=one\nSECOND=2\nTHIRD=3\n'
+== {"kind": "edit", "start": "data/env/broken.env", "ops": [["set", "GOOD", "11", "never"], ["unset", "LAST"]]}
+  warning: python-dotenv could not parse statement starting at line 2
+  warning: python-dotenv could not parse statement starting at line 3
+  warning: python-dotenv could not parse statement starting at line 4
+  warning: python-dotenv could not parse statement starting at line 7
+  warning: python-dotenv could not parse statement starting at line 9
+  set GOOD 11 never -> (True, 'GOOD', '11')
+  warning: python-dotenv could not parse statement starting at line 2
+  warning: python-dotenv could not parse statement starting at line 3
+  warning: python-dotenv could not parse statement starting at line 4
+  warning: python-dotenv could not parse statement starting at line 7
+  warning: python-dotenv could not parse statement starting at line 9
+  unset LAST -> (True, 'LAST')
+  file 'GOOD=11\n"BAD QUOTE=2\n=nokey\nKEY="unterminated\nSTILL_GOOD=3\nTRAILING="ok" junk here\nSPACE IN KEY=4\n\'SINGLE KEY\'=5\n\'\'=6\n'
+== {"kind": "edit", "start": "data/env/crlf.env", "ops": [["set", "B", "2", "never"]]}
+  set B 2 never -> (True, 'B', '2')
+  file "A=1\nB=2\n# c\nC='3'\n"
+== {"kind": "edit", "start": null, "ops": [["unset", "A"], ["set", "A", "1"], ["set", "B", "it's"], ["get", "B"], ["unset", "A"], ["unset", "B"], ["get", "B"]]}
+  warning: Can't delete from data/work/edit5.env - it doesn't exist.
+  unset A -> (None, 'A')
+  set A 1 -> (True, 'A', '1')
+  set B it's -> (True, 'B', "it's")
+  get B -> "it's"
+  unset A -> (True, 'A')
+  unset B -> (True, 'B')
+  warning: Key B not found in data/work/edit5.env.
+  get B -> None
+  file ''
+== {"kind": "edit", "start": "data/env/tricky.env", "ops": [["set", "DUP", "third", "never"], ["unset", "DUP"], ["set", "export", "4", "never"]]}
+  set DUP third never -> (True, 'DUP', 'third')
+  unset DUP -> (True, 'DUP')
+  set export 4 never -> (True, 'export', '4')
+  file 'export   EXPORTED=1\nexportNOT=2\nexport=4\nexport=4\n indented=4\n\tTABBED=5\nKEY.WITH.DOTS=6\nkey-with-dashes=7\nA=1;B=2\nSP_BEFORE  =x\nSP_AFTER=   y\nTRAIL=z   \nESC_DQ="a \\"quoted\\" word"\nESC_BS="back\\\\slash"\nESC_ALL="\\a\\b\\f\\v\\r\\\'\\\\"\nNOT_ESC="\\u00e9 \\x41 \\0"\nSQ_BS=\'one\\\\two \\n\'\nEQ_IN_VALUE=a=b=c\n#COMMENTED=1\n  # indented comment\nVALUE_THEN_HASH="x"#y\n'
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "list"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | ALLOWED_HOSTS=localhost,127.0.0.1,.example.test
+  | CACHE_TTL=300
+  | DATABASE_URL=postgres://shop_app:p@ss word #1@localhost:5432/shop
+  | DB_HOST=localhost
+  | DB_NAME=shop
+  | DB_PASSWORD=p@ss word #1
+  | DB_PORT=5432
+  | DB_USER=shop_app
+  | DEBUG=true
+  | EMPTY=
+  | EMPTY_QUOTED=
+  | GREETING=Hello,
+  | World	!
+  | HASH_IN_VALUE=abc#def
+  | INLINE=value
+  | LITERAL=Hello,\nWorld
+  | MOTD=Welcome to the shop.
+  | Mind the gap.
+  |   -- the ops team
+  | PATH_LIKE=C:\Program Files\App
+  | QUOTE_IN_SINGLE=it's fine
+  | REDIS_URL=redis://localhost:6379/0
+  | SECRET_KEY=change-me-not-a-real-key
+  | UNICODE_NAME=Zoë Ångström
+  | URL_WITH_FRAGMENT=https://example.test/page#top
+  exit 0
+== {"kind": "cli", "args": ["-f", "data/env/compose.env", "list", "--format", "json"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | {
+  |   "COLON_ONLY": "${A:B}",
+  |   "COMPOSE_PROJECT_NAME": "shop",
+  |   "DEBUG": "",
+  |   "DEFAULT_EMPTY": "",
+  |   "DEFINED_BELOW": "now",
+  |   "DOLLAR": "$HOME and /home/ada",
+  |   "EMPTY_NAME": "",
+  |   "IMAGE": "registry.example.test/shop/web:latest",
+  |   "IMAGE_TAG": "latest",
+  |   "LATER": "",
+  |   "NESTED": "${B}",
+  |   "REGISTRY": "registry.example.test",
+  |   "SELF": "start-again",
+  |   "STAGE": "prod",
+  |   "UNSET_REF": "",
+  |   "WEB_PORT": "9000"
+  | }
+  exit 0
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "list", "--format=shell"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | ALLOWED_HOSTS=localhost,127.0.0.1,.example.test
+  | CACHE_TTL=300
+  | DATABASE_URL='postgres://shop_app:p@ss word #1@localhost:5432/shop'
+  | DB_HOST=localhost
+  | DB_NAME=shop
+  | DB_PASSWORD='p@ss word #1'
+  | DB_PORT=5432
+  | DB_USER=shop_app
+  | DEBUG=true
+  | EMPTY=''
+  | EMPTY_QUOTED=''
+  | GREETING='Hello,
+  | World	!'
+  | HASH_IN_VALUE='abc#def'
+  | INLINE=value
+  | LITERAL='Hello,\nWorld'
+  | MOTD='Welcome to the shop.
+  | Mind the gap.
+  |   -- the ops team'
+  | PATH_LIKE='C:\Program Files\App'
+  | QUOTE_IN_SINGLE='it'"'"'s fine'
+  | REDIS_URL=redis://localhost:6379/0
+  | SECRET_KEY=change-me-not-a-real-key
+  | UNICODE_NAME='Zoë Ångström'
+  | URL_WITH_FRAGMENT='https://example.test/page#top'
+  exit 0
+== {"kind": "cli", "args": ["-f", "data/env/tricky.env", "list", "--format", "export"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | export A='1;B=2'
+  | export DUP=second
+  | export EQ_IN_VALUE=a=b=c
+  | export ESC_ALL='\x07\x08\x0c\x0b\x0d'"'"'\'
+  | export ESC_BS='back\slash'
+  | export ESC_DQ='a "quoted" word'
+  | export EXPORTED=1
+  | export KEY.WITH.DOTS=6
+  | export NOT_ESC='\u00e9 \x41 \0'
+  | export SP_AFTER=y
+  | export SP_BEFORE=x
+  | export SQ_BS='one\two \n'
+  | export TABBED=5
+  | export TRAIL=z
+  | export VALUE_THEN_HASH=x
+  | export exportNOT=2
+  | export indented=4
+  | export key-with-dashes=7
+  exit 0
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "get", "DATABASE_URL"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | postgres://shop_app:p@ss word #1@localhost:5432/shop
+  exit 0
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "get", "EMPTY"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  exit 1
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "get", "NOPE"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  exit 1
+== {"kind": "cli", "args": ["-f", "data/env/missing.env", "list"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Error opening env file: [Errno 2] No such file or directory: 'data/env/missing.env'
+  exit 2
+== {"kind": "cli", "args": ["-f", "data/env/missing.env", "get", "A"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Error opening env file: [Errno 2] No such file or directory: 'data/env/missing.env'
+  exit 2
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "set", "API_URL", "https://api.example.test/v1"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | API_URL=https://api.example.test/v1
+  exit 0
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "-q", "never", "set", "RETRIES", "3"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | RETRIES=3
+  exit 0
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "-q", "auto", "-e", "true", "set", "REGION", "eu west"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | REGION=eu west
+  exit 0
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "--quote=auto", "--export", "no", "set", "ZONE", "b"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | ZONE=b
+  exit 0
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "list", "--format", "export"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | export API_URL=https://api.example.test/v1
+  | export REGION='eu west'
+  | export RETRIES=3
+  | export ZONE=b
+  exit 0
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "unset", "RETRIES"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Successfully removed RETRIES
+  exit 0
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "unset", "RETRIES"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | warning: Key RETRIES not removed from data/work/cli.env - key doesn't exist.
+  exit 1
+== {"kind": "cli", "args": ["--file", "data/work/cli.env", "list"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | API_URL=https://api.example.test/v1
+  | REGION=eu west
+  | ZONE=b
+  exit 0
+== {"kind": "cli", "args": ["--version"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | cli, version 1.2.3
+  exit 0
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "list", "--format", "xml"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Usage: cli list [OPTIONS]
+  | Try 'cli list --help' for help.
+  | 
+  | Error: Invalid value for '--format': 'xml' is not one of 'simple', 'json', 'shell', 'export'.
+  exit 2
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "-q", "sometimes", "list"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Usage: cli [OPTIONS] COMMAND [ARGS]...
+  | Try 'cli --help' for help.
+  | 
+  | Error: Invalid value for '-q' / '--quote': 'sometimes' is not one of 'always', 'never', 'auto'.
+  exit 2
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "get"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Usage: cli get [OPTIONS] KEY
+  | Try 'cli get --help' for help.
+  | 
+  | Error: Missing argument 'KEY'.
+  exit 2
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "-e", "maybe", "list"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Usage: cli [OPTIONS] COMMAND [ARGS]...
+  | Try 'cli --help' for help.
+  | 
+  | Error: Invalid value for '-e' / '--export': 'maybe' is not a valid boolean. Recognized values: , 0, 1, f, false, n, no, off, on, t, true, y, yes
+  exit 2
+== {"kind": "cli", "args": ["-f", "data/env/app.env", "frobnicate"], "environ": {"HOME": "/home/ada", "USER": "ada", "LANG": "C.UTF-8", "DB_HOST": "db.internal", "PORT": "9000", "DEBUG": "", "STAGE": "prod"}}
+  | Usage: cli [OPTIONS] COMMAND [ARGS]...
+  | Try 'cli --help' for help.
+  | 
+  | Error: No such command 'frobnicate'.
+  exit 2
