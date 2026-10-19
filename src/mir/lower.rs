@@ -3254,7 +3254,21 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(unit(tcx.kind(dt)) && !unit(tcx.kind(et)))
     }
 
+    /// Lower `s`. What it pushes outside any expression of its own carries
+    /// `s`'s span, so a borrow error in an assignment's write or a compound
+    /// assignment's read names that statement (B-2026-10-19-15).
     fn stmt(&mut self, s: &'a Stmt) -> R<()> {
+        let outer = self.b.source_info();
+        self.b.set_source_info(SourceInfo {
+            span: s.span,
+            ..outer
+        });
+        let r = self.stmt_here(s);
+        self.b.set_source_info(outer);
+        r
+    }
+
+    fn stmt_here(&mut self, s: &'a Stmt) -> R<()> {
         match &s.kind {
             StmtKind::Let {
                 pattern, value, ty, ..
