@@ -15761,6 +15761,134 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
 }
 
 fn build_renamed_source(src: &str) -> Result<Lowered, String> {
+    let lowered = lower_source_for_checks(src)?;
+    finish_build(lowered)
+}
+
+/// `karac check`'s run of the MIR move and borrow checks (B-2026-10-19-7):
+/// the program built as [`build_source`] builds it, up to and including
+/// those checks, with every error in the program's own text, from all its
+/// bodies, once per span. A program the builder stops on for another reason
+/// (an unsupported construct anywhere, a type error) gives none: check then
+/// reports only what its own rules find, as it did before.
+/// `KARAC_MIR_BORROWCK=0` skips the borrow check, as it does for a run.
+pub fn source_borrow_errors(src: &str) -> Vec<SourceBorrowError> {
+    let (_, renames) = rename_compiler_name_shadows(src);
+    let Ok(mut lowered) = lower_source_for_checks(src) else {
+        return Vec::new();
+    };
+    // The library follows the program's text, so its lines come after.
+    let user_lines = src.lines().count();
+    let in_program = |at: Option<(usize, usize)>| at.is_some_and(|(l, _)| l > 0 && l <= user_lines);
+    let borrowck = std::env::var("KARAC_MIR_BORROWCK").as_deref() != Ok("0");
+    let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
+    let mut out: Vec<SourceBorrowError> = Vec::new();
+    let mut push = |e: SourceBorrowError| {
+        if !out
+            .iter()
+            .any(|o| o.error.at == e.error.at && o.error.code == e.error.code)
+        {
+            out.push(e);
+        }
+    };
+    for body in lowered.program.bodies.values_mut() {
+        if let Err(errs) = crate::mir::check_moves(body, &lowered.tys) {
+            for text in errs {
+                let at = text_position(&text);
+                if in_program(at) {
+                    push(SourceBorrowError::moved(text, at));
+                }
+            }
+            continue;
+        }
+        if !borrowck {
+            continue;
+        }
+        let has_receiver =
+            |i: &InstanceId| result_borrows(&names, &lowered.receivers, &lowered.views, i);
+        for mut e in crate::mir::borrow_errors(body, &lowered.tys, &has_receiver) {
+            if !in_program(e.at) {
+                continue;
+            }
+            for (new, old) in &renames {
+                e.text = e.text.replace(new.as_str(), old);
+            }
+            push(SourceBorrowError { error: e });
+        }
+    }
+    out.sort_by_key(|e| e.error.at);
+    out
+}
+
+/// One error of [`source_borrow_errors`].
+#[derive(Clone, Debug)]
+pub struct SourceBorrowError {
+    pub error: crate::mir::BorrowError,
+}
+
+impl SourceBorrowError {
+    /// A move check's error, which carries only its text and position.
+    fn moved(text: String, at: Option<(usize, usize)>) -> Self {
+        SourceBorrowError {
+            error: crate::mir::BorrowError {
+                text,
+                code: "",
+                at,
+                access: "move",
+                place: None,
+                loan_at: None,
+                holder: None,
+            },
+        }
+    }
+}
+
+/// The leading `line:column` of a MIR check's error, if it has one.
+fn text_position(text: &str) -> Option<(usize, usize)> {
+    let mut parts = text.splitn(3, ':');
+    let line = parts.next()?.trim().parse().ok()?;
+    let col = parts.next()?.trim().parse().ok()?;
+    Some((line, col))
+}
+
+/// What a callee's result borrows, for the borrow check: a library native's
+/// borrows from its first argument, the collection, when it borrows at all.
+fn result_borrows(
+    names: &FxHashSet<String>,
+    receivers: &FxHashSet<String>,
+    views: &FxHashSet<String>,
+    i: &InstanceId,
+) -> crate::mir::ResultBorrows {
+    // A native that moves a value out of its receiver returns what that
+    // value borrowed, not a borrow of the receiver.
+    let moves_out = !names.contains(i.name.as_str())
+        && matches!(
+            i.name.rsplit('.').next(),
+            Some("take" | "replace" | "pop" | "pop_front" | "pop_back" | "remove" | "swap_remove")
+        );
+    // An element read out of a sequence of shared references
+    // (`Vec[ref Node].index`) is one of those references, so it borrows
+    // what the sequence's elements borrow, not the sequence
+    // (B-2026-10-14-11).
+    let ref_elem = !names.contains(i.name.as_str())
+        && i.name.rsplit_once('.').is_some_and(|(owner, m)| {
+            matches!(m, "index" | "get" | "first" | "last")
+                && ["Vec[ref ", "VecDeque[ref ", "Slice[ref "]
+                    .iter()
+                    .any(|p| owner.starts_with(p))
+        });
+    if views.contains(&i.name) || moves_out || ref_elem {
+        crate::mir::ResultBorrows::ReceiverValue
+    } else if !names.contains(i.name.as_str()) || receivers.contains(&i.name) {
+        crate::mir::ResultBorrows::Receiver
+    } else {
+        crate::mir::ResultBorrows::Args
+    }
+}
+
+/// [`build_source`] up to the MIR checks: the program with the library,
+/// parsed, checked and lowered, with §3.7's forbidden moves refused.
+fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
     let (src, user_len) = library_source(src);
     let parsed = crate::parse(&src);
     if !parsed.errors.is_empty() {
@@ -15868,6 +15996,12 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
             .collect();
         return Err(format!("build: {}", msgs.join("; ")));
     }
+    Ok(lowered)
+}
+
+/// The rest of [`build_source`]: each body's move and borrow checks, drop
+/// elaboration and the passes after it.
+fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     // `KARAC_MIR_DUMP=built` or `=elaborated` prints every body to stderr.
     let dump = std::env::var("KARAC_MIR_DUMP").ok();
     let names: FxHashSet<String> = lowered.program.bodies.keys().cloned().collect();
@@ -15887,46 +16021,10 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
         }
         crate::mir::check_moves(body, &lowered.tys)
             .map_err(|e| format!("move check {}: {}", body.instance.name, e.join("; ")))?;
-        // A library native's result borrows from its first argument, the
-        // collection, when it borrows at all. `KARAC_MIR_BORROWCK=0` skips
-        // the check.
+        // `KARAC_MIR_BORROWCK=0` skips the check.
         let receivers = &lowered.receivers;
         let views = &lowered.views;
-        let has_receiver = |i: &InstanceId| {
-            // A native that moves a value out of its receiver returns what
-            // that value borrowed, not a borrow of the receiver.
-            let moves_out = !names.contains(i.name.as_str())
-                && matches!(
-                    i.name.rsplit('.').next(),
-                    Some(
-                        "take"
-                            | "replace"
-                            | "pop"
-                            | "pop_front"
-                            | "pop_back"
-                            | "remove"
-                            | "swap_remove"
-                    )
-                );
-            // An element read out of a sequence of shared references
-            // (`Vec[ref Node].index`) is one of those references, so it
-            // borrows what the sequence's elements borrow, not the
-            // sequence (B-2026-10-14-11).
-            let ref_elem = !names.contains(i.name.as_str())
-                && i.name.rsplit_once('.').is_some_and(|(owner, m)| {
-                    matches!(m, "index" | "get" | "first" | "last")
-                        && ["Vec[ref ", "VecDeque[ref ", "Slice[ref "]
-                            .iter()
-                            .any(|p| owner.starts_with(p))
-                });
-            if views.contains(&i.name) || moves_out || ref_elem {
-                crate::mir::ResultBorrows::ReceiverValue
-            } else if !names.contains(i.name.as_str()) || receivers.contains(&i.name) {
-                crate::mir::ResultBorrows::Receiver
-            } else {
-                crate::mir::ResultBorrows::Args
-            }
-        };
+        let has_receiver = |i: &InstanceId| result_borrows(&names, receivers, views, i);
         if borrowck {
             crate::mir::check_borrows(body, &lowered.tys, &has_receiver)
                 .map_err(|e| format!("borrow check {}: {}", body.instance.name, e.join("; ")))?;

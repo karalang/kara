@@ -48,7 +48,7 @@
 
 use std::collections::BTreeMap;
 
-use super::place_ty::place_ty;
+use super::place_ty::{place_ty, PlaceTy};
 use super::pretty::place as show_place;
 use super::syntax::*;
 use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
@@ -205,10 +205,59 @@ pub fn check_borrows(
     tys: &TyInterner,
     has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
 ) -> Result<(), Vec<String>> {
+    let errs = borrow_errors(body, tys, has_receiver);
+    if errs.is_empty() {
+        Ok(())
+    } else {
+        Err(errs.into_iter().map(|e| e.text).collect())
+    }
+}
+
+/// One error of [`check_borrows`], with what a report in the program's own
+/// terms needs (`karac check`, B-2026-10-19-7): where it is, its code, and
+/// the places it names as the program spells them, where it does.
+#[derive(Clone, Debug)]
+pub struct BorrowError {
+    /// The error as [`check_borrows`] reports it.
+    pub text: String,
+    /// `E0516`, `E0517` or `E0509`; empty for the §9.3 function-value one.
+    pub code: &'static str,
+    /// The source `line:column` of the access, when known.
+    pub at: Option<(usize, usize)>,
+    /// The access (`write`, `mutable borrow`, ...), or empty for E0509.
+    pub access: &'static str,
+    /// The place accessed (the one borrowed, for E0509), in source terms.
+    pub place: Option<String>,
+    /// The source `line:column` of the conflicting borrow, when known.
+    pub loan_at: Option<(usize, usize)>,
+    /// A named local still holding that borrow at the access.
+    pub holder: Option<String>,
+}
+
+impl BorrowError {
+    fn new(text: String, code: &'static str, at: Option<(usize, usize)>) -> Self {
+        BorrowError {
+            text,
+            code,
+            at,
+            access: "",
+            place: None,
+            loan_at: None,
+            holder: None,
+        }
+    }
+}
+
+/// [`check_borrows`]'s errors, each with its places.
+pub fn borrow_errors(
+    body: &Body,
+    tys: &TyInterner,
+    has_receiver: &dyn Fn(&InstanceId) -> ResultBorrows,
+) -> Vec<BorrowError> {
     let mut errs = read_only_errors(body, tys);
     let loans = collect_loans(body, tys);
     if loans.is_empty() {
-        return if errs.is_empty() { Ok(()) } else { Err(errs) };
+        return errs;
     }
     let entry = Origins::default();
     let cx = Cx {
@@ -258,7 +307,7 @@ pub fn check_borrows(
                         continue;
                     }
                     if conflicts(loan, &place, access) {
-                        errs.push(format!(
+                        let text = format!(
                             "{}: {} of {} while it is borrowed{} (borrow at {}) [E0516]",
                             site(body, at, Some(loan.at)),
                             access_name(access),
@@ -269,7 +318,18 @@ pub fn check_borrows(
                                 ""
                             },
                             borrow_site(body, loan.at),
-                        ));
+                        );
+                        let holder = live
+                            .iter()
+                            .filter(|l| o.get(**l).iter().any(|h| h == li))
+                            .find_map(|l| local_name(body, *l));
+                        errs.push(BorrowError {
+                            access: access_name(access),
+                            place: source_place(body, tys, &place),
+                            loan_at: source_at(body, loan.at),
+                            holder,
+                            ..BorrowError::new(text, "E0516", site_at(body, at, Some(loan.at)))
+                        });
                     }
                 }
             }
@@ -296,23 +356,24 @@ pub fn check_borrows(
                     } else {
                         continue;
                     };
-                    errs.push(format!(
+                    let text = format!(
                         "{}: the result borrows {}, which {} (borrow at {}) [E0509]",
                         site(body, at, Some(loan.at)),
                         show_place(body, tys, &loan.place),
                         owned,
                         borrow_site(body, loan.at),
-                    ));
+                    );
+                    errs.push(BorrowError {
+                        place: source_place(body, tys, &loan.place),
+                        loan_at: source_at(body, loan.at),
+                        ..BorrowError::new(text, "E0509", site_at(body, at, Some(loan.at)))
+                    });
                 }
             }
         }
     }
-    errs.dedup();
-    if errs.is_empty() {
-        Ok(())
-    } else {
-        Err(errs)
-    }
+    errs.dedup_by(|a, b| a.text == b.text);
+    errs
 }
 
 /// A loan as the flag pass sees it: kind, place and `Ref` site.
@@ -377,7 +438,7 @@ pub(super) fn loan_liveness(
 /// error, unless a projection on a `shared` handle comes after that
 /// dereference: a `shared` value's fields are reached through the handle,
 /// and which of them are `mut` is the type checker's question.
-fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
+fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<BorrowError> {
     let mut errs = Vec::new();
     for (bi, block) in body.blocks.iter().enumerate() {
         let n = block.statements.len();
@@ -397,11 +458,15 @@ fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
                 ) = &block.statements[si].kind
                 {
                     if p.projection.contains(&ProjElem::Deref) {
-                        errs.push(format!(
+                        let text = format!(
                             "{}: {} is borrowed, so it cannot be stored as a function value; declare the parameter `escaping` (core semantics §9.3)",
                             site(body, (bi, si), None),
                             show_place(body, tys, p),
-                        ));
+                        );
+                        errs.push(BorrowError {
+                            place: source_place(body, tys, p),
+                            ..BorrowError::new(text, "", site_at(body, (bi, si), None))
+                        });
                     }
                 }
             }
@@ -417,12 +482,17 @@ fn read_only_errors(body: &Body, tys: &TyInterner) -> Vec<String> {
                     _ => continue,
                 };
                 if through_shared_ref(body, tys, &place) {
-                    errs.push(format!(
+                    let text = format!(
                         "{}: {} of {} through a shared reference [E0517]",
                         site(body, (bi, si), None),
                         what,
                         show_place(body, tys, &place),
-                    ));
+                    );
+                    errs.push(BorrowError {
+                        access: what,
+                        place: source_place(body, tys, &place),
+                        ..BorrowError::new(text, "E0517", site_at(body, (bi, si), None))
+                    });
                 }
             }
         }
@@ -469,13 +539,60 @@ fn source_at(body: &Body, (bi, si): (usize, usize)) -> Option<(usize, usize)> {
 /// else that of `near` (the borrow it conflicts with).
 fn site(body: &Body, at: (usize, usize), near: Option<(usize, usize)>) -> String {
     let l = loc(at, body.blocks[at.0].statements.len());
-    let line = source_at(body, at)
-        .or_else(|| (0..at.1).rev().find_map(|si| source_at(body, (at.0, si))))
-        .or_else(|| near.and_then(|n| source_at(body, n)));
-    match line {
+    match site_at(body, at, near) {
         Some((line, col)) => format!("{line}:{col}: {l}"),
         None => l,
     }
+}
+
+/// The source `line:column` [`site`] names.
+fn site_at(
+    body: &Body,
+    at: (usize, usize),
+    near: Option<(usize, usize)>,
+) -> Option<(usize, usize)> {
+    source_at(body, at)
+        .or_else(|| (0..at.1).rev().find_map(|si| source_at(body, (at.0, si))))
+        .or_else(|| near.and_then(|n| source_at(body, n)))
+}
+
+/// The name the program gives local `l`, if it gives one.
+fn local_name(body: &Body, l: Local) -> Option<String> {
+    match &body.local(l).kind {
+        LocalKind::Arg { name, .. } | LocalKind::User { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// `place` as the program would write it (`self.index`), when its local is
+/// one the program names: a dereference of a reference is implicit, and a
+/// field is named. `None` for a temporary's place, or an indexed one.
+fn source_place(body: &Body, tys: &TyInterner, p: &Place) -> Option<String> {
+    let mut s = local_name(body, p.local)?;
+    let mut cur = Place::local(p.local);
+    for elem in &p.projection {
+        match elem {
+            ProjElem::Deref => {}
+            ProjElem::Downcast(_) => {}
+            ProjElem::Field(f, _) => {
+                let PlaceTy { ty, variant } = place_ty(body, tys, &cur).ok()?;
+                let name = match tys.kind(ty) {
+                    TyKind::Adt(a) | TyKind::Shared(a) => tys
+                        .adt(a)
+                        .variants
+                        .get(variant.unwrap_or(0) as usize)
+                        .and_then(|v| v.fields.get(f.0 as usize))
+                        .map(|(n, _)| n.clone()),
+                    TyKind::Tuple(_) => Some(f.0.to_string()),
+                    _ => None,
+                }?;
+                s = format!("{s}.{name}");
+            }
+            ProjElem::Index(_) | ProjElem::ConstIndex(_) => return None,
+        }
+        cur = cur.project(*elem);
+    }
+    Some(s)
 }
 
 /// Where a borrow was taken: `bbN[i]`, then ` at line:column` when known.

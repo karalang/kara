@@ -1099,6 +1099,9 @@ struct Pipeline {
     /// dotted path and the import's span, read before the splice removes
     /// them: an error in a spliced item is reported there (B-2026-10-15-107).
     gated_imports: Vec<(String, crate::token::Span)>,
+    /// The program's own text, before [`Self::with_library`] appends the
+    /// library, for the MIR borrow check ([`Self::mir_borrow_errors`]).
+    user_source: Option<String>,
 }
 
 impl Pipeline {
@@ -1127,6 +1130,7 @@ impl Pipeline {
             library_fns: std::collections::HashSet::new(),
             renames: Vec::new(),
             gated_imports: Vec::new(),
+            user_source: None,
         }
     }
 
@@ -1153,6 +1157,7 @@ impl Pipeline {
             return self;
         }
         let (text, user_len) = crate::mir::lower::library_source(&src);
+        self.user_source = Some(src.clone());
         self.parsed = crate::parse(&text);
         crate::mir::lower::mark_library_builtins(&mut self.parsed.program, user_len);
         library_closures_take_their_callers_effects(&mut self.parsed.program, user_len);
@@ -1850,7 +1855,60 @@ impl Pipeline {
             }
             ownership.errors.sort_by_key(|e| e.span.offset);
         }
+        let clean = ownership.errors.is_empty();
         self.ownership = Some(ownership);
+        if self.strict_core && clean {
+            self.mir_borrow_errors();
+        }
+    }
+
+    /// B-2026-10-19-7: what the MIR move and borrow checks refuse, check
+    /// refuses, so that check and run agree. They run once check's own rules
+    /// pass, over the program as the build sees it, and each error is a
+    /// type error at its source position. `KARAC_CHECK_MIR=0` leaves them
+    /// out (`KARAC_MIR_BORROWCK=0` skips only the borrow check, as for a run).
+    fn mir_borrow_errors(&mut self) {
+        if std::env::var("KARAC_CHECK_MIR").as_deref() == Ok("0") {
+            return;
+        }
+        let Some(src) = self.user_source.clone() else {
+            return;
+        };
+        let resolve_failed = self.resolved.as_ref().is_some_and(|r| {
+            r.errors
+                .iter()
+                .any(|e| !crate::resolver::resolve_kind_is_note(&e.kind))
+        });
+        if self.has_parse_errors() || resolve_failed {
+            return;
+        }
+        let Some(typed) = self.typed.as_mut() else {
+            return;
+        };
+        if !typed.errors.is_empty() {
+            return;
+        }
+        for e in crate::mir::lower::source_borrow_errors(&src) {
+            let e = e.error;
+            let Some(span) = source_span_at(&src, e.at) else {
+                continue;
+            };
+            let kind = match e.code {
+                "E0517" => crate::typechecker::TypeErrorKind::WriteThroughSharedRef,
+                _ => crate::typechecker::TypeErrorKind::BorrowConflict,
+            };
+            let class = crate::typechecker::class_for_type_error_kind(&kind);
+            typed.errors.push(crate::typechecker::TypeError {
+                message: mir_check_message(&e),
+                span,
+                kind,
+                lint_name: None,
+                fix_it: None,
+                class,
+                expected: None,
+                got: None,
+            });
+        }
     }
 
     fn concurrencycheck(&mut self) {
@@ -2820,4 +2878,84 @@ fn uses_serde(src: &str) -> bool {
         matches!(&t.token, crate::token::Token::Identifier { name, .. }
             if matches!(name.as_str(), "Serialize" | "Deserialize" | "Json" | "DeserializeError" | "Serializer" | "Deserializer"))
     })
+}
+
+/// The span at source `line:column` (both from 1) of `src`, over the name or
+/// path that starts there (`self.index`), else one character.
+fn source_span_at(src: &str, at: Option<(usize, usize)>) -> Option<crate::token::Span> {
+    let (line, column) = at?;
+    let start: usize = src
+        .split_inclusive('\n')
+        .take(line.checked_sub(1)?)
+        .map(str::len)
+        .sum();
+    let offset = start + column.checked_sub(1)?;
+    let rest = src.get(offset..)?;
+    let length = rest
+        .char_indices()
+        .find(|(_, c)| !(c.is_alphanumeric() || *c == '_' || *c == '.'))
+        .map_or(rest.len(), |(i, _)| i)
+        .max(1);
+    Some(crate::token::Span {
+        offset,
+        length,
+        line,
+        column,
+    })
+}
+
+/// A MIR check's error in the program's terms: the places it names as the
+/// program spells them, and no block positions.
+fn mir_check_message(e: &crate::mir::BorrowError) -> String {
+    let place = e.place.as_deref().map(|p| format!("`{p}`"));
+    let at = |p: Option<(usize, usize)>| p.map(|(l, c)| format!(" at {l}:{c}")).unwrap_or_default();
+    match (e.code, place) {
+        ("E0516", Some(place)) => {
+            let verb = match e.access {
+                "write" => "write to",
+                "mutable borrow" => "mutably borrow",
+                "shared borrow" => "borrow",
+                "end of storage" => "end",
+                other => other,
+            };
+            let holder = match &e.holder {
+                Some(h) => format!("`{h}` still holds a borrow of it, taken{}", at(e.loan_at)),
+                None => format!(
+                    "it is still borrowed (the borrow is taken{})",
+                    at(e.loan_at)
+                ),
+            };
+            format!(
+                "cannot {verb} {place} while {holder} (core-semantics.md §5.6) [E0516]. \
+                 Finish using the borrow first, or take a copy of the value (`.clone()`, \
+                 `.cloned()`, `*r` for a `Copy` value) where it is borrowed"
+            )
+        }
+        ("E0517", Some(place)) => format!(
+            "cannot {} {place}: it is reached through a shared `ref`, which is read-only \
+             (core-semantics.md §5.9) [E0517]",
+            match e.access {
+                "write" => "write to",
+                "mutable borrow" => "mutably borrow",
+                other => other,
+            }
+        ),
+        ("E0509", Some(place)) => format!(
+            "the result borrows {place}, which this function owns, so it would outlive \
+             it (core-semantics.md §5.4) [E0509]"
+        ),
+        _ => mir_check_text(&e.text),
+    }
+}
+
+/// `text` without its leading `line:column:` and the MIR block positions
+/// (`bb4[3]: `, and ` (borrow at bb0[1] at 16:21)` becomes ` (borrow at 16:21)`).
+fn mir_check_text(text: &str) -> String {
+    let lead = regex::Regex::new(r"^\d+:\d+: (bb\d+\[(\d+|term)\]: )?").unwrap();
+    let block = regex::Regex::new(r"bb\d+\[(\d+|term)\]( at)? ?").unwrap();
+    let t = lead.replace(text, "");
+    block
+        .replace_all(&t, "")
+        .replace("(borrow at )", "")
+        .replace("  ", " ")
 }

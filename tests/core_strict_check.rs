@@ -5190,6 +5190,104 @@ fn a_view_of_a_temporary_is_fixed_by_owning_it() {
     );
 }
 
+/// B-2026-10-19-7, B-2026-10-19-18: `karac check` runs the MIR borrow check
+/// once its own rules pass, so a borrow held in a local across a mutation of
+/// what it borrows is refused at check, as every MIR surface refuses it, and
+/// the message names the binding that holds the borrow. The copying form
+/// passes and runs.
+#[test]
+fn check_refuses_what_the_mir_borrow_check_refuses() {
+    let lru = r#"shared struct Node {
+    value: i64,
+}
+
+struct Cache {
+    index: Map[String, Node],
+    hits: i64,
+}
+
+impl Cache {
+    fn touch(mut ref self, node: Node) {
+        self.hits += node.value;
+    }
+
+    fn get(mut ref self, key: String) -> Option[i64] {
+        let found = self.index.get(key);
+        match found {
+            Some(node) => {
+                self.touch(node);
+                Some(node.value)
+            }
+            None => None,
+        }
+    }
+}
+
+fn main() {
+    let mut c = Cache { index: Map.new(), hits: 0 };
+    c.index.insert("a".to_string(), Node { value: 5 });
+    println(f"{c.get("a".to_string()).unwrap_or(0)} {c.hits}");
+}
+"#;
+    rejected(
+        "mir-borrowck-lru",
+        lru,
+        "cannot mutably borrow `self` while `node` still holds a borrow of it, taken at 16:21",
+    );
+    accepted_and_runs(
+        "mir-borrowck-lru-cloned",
+        &lru.replace("self.index.get(key);", "self.index.get(key).cloned();"),
+        "5 5\n",
+    );
+    rejected(
+        "mir-borrowck-map-default",
+        r#"fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 5);
+    let before = m.get(1).unwrap_or(0);
+    m.insert(1, 6);
+    println(f"{before}");
+}
+"#,
+        "cannot mutably borrow `m` while `before` still holds a borrow of it",
+    );
+    rejected(
+        "mir-borrowck-vec-last",
+        r#"fn main() {
+    let mut v = vec![1, 9];
+    match v.last() {
+        Some(top) => {
+            let largest = top;
+            v.pop();
+            v.push(largest);
+        }
+        None => {}
+    }
+    println(f"{v}");
+}
+"#,
+        "cannot mutably borrow `v` while `largest` still holds a borrow of it",
+    );
+    rejected(
+        "mir-borrowck-field",
+        r#"struct S { v: Vec[i64], n: i64 }
+impl S {
+    fn bump(mut ref self) { self.n += 1; }
+    fn go(mut ref self) -> i64 {
+        let f = self.v.get(0);
+        self.v.push(3);
+        f.unwrap_or(0)
+    }
+}
+fn main() {
+    let mut s = S { v: vec![1], n: 0 };
+    println(f"{s.go()}");
+}
+"#,
+        "cannot mutably borrow `self.v` while `f` still holds a borrow of it",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.

@@ -29,7 +29,7 @@ pub mod syntax;
 pub mod ty;
 pub mod validate;
 
-pub use borrowck::{check_borrows, ResultBorrows};
+pub use borrowck::{borrow_errors, check_borrows, BorrowError, ResultBorrows};
 pub use build::BodyBuilder;
 pub use elaborate::elaborate_drops;
 pub use flags::insert_borrow_flags;
