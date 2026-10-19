@@ -1,0 +1,2926 @@
+// mini_idgen: the ids a web service hands out, as Python 3.13 makes them
+// with its uuid module, hashids 1.3.1 and shortuuid 1.0.13. The UUID class
+// takes every form the constructor accepts (hex strings with braces, URN
+// prefixes and whatever int() lets through, bytes, little-endian bytes,
+// fields and integers) and shows every property; uuid1 runs with its
+// monotonic timestamp, uuid3 and uuid5 on their own MD5 and SHA-1, and
+// uuid4 on given bytes. hashids turns database ids into short salted
+// strings and back, and shortuuid writes UUIDs in a smaller alphabet.
+//
+// The jobs in data/jobs.jsonl build, compare and generate UUIDs, run both
+// libraries over many settings, and then mint public order ids per tenant,
+// read times and hosts back out of version-1 event ids, shorten links,
+// and check the ids clients send back.
+
+// ------------------------------------------------------------ JSON in
+
+// The jobs file holds strings, numbers, booleans, arrays and objects.
+#[derive(Clone)]
+enum J {
+    S(String),
+    N(i64),
+    A(Vec[J]),
+    O(Vec[(String, J)]),
+    B(bool),
+    Null,
+}
+
+fn json_space(c: char) -> bool {
+    c == ' ' or c == '\n' or c == '\r' or c == '\t'
+}
+
+struct JsonIn {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl JsonIn {
+    fn ws(mut ref self) {
+        while self.pos < self.cs.len() and json_space(self.cs[self.pos]) {
+            self.pos += 1;
+        }
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let wc: Vec[char] = w.chars().collect();
+        if self.pos + wc.len() > self.cs.len() {
+            return false;
+        }
+        let mut k = 0;
+        while k < wc.len() {
+            if self.cs[self.pos + k] != wc[k] {
+                return false;
+            }
+            k += 1;
+        }
+        self.pos += wc.len();
+        true
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut n: u32 = 0;
+        let mut k = 0;
+        while k < 4 {
+            let c = self.cs[self.pos];
+            let d = if c >= '0' and c <= '9' {
+                (c as u32) - ('0' as u32)
+            } else if c >= 'a' and c <= 'f' {
+                (c as u32) - ('a' as u32) + 10
+            } else {
+                (c as u32) - ('A' as u32) + 10
+            };
+            n = n * 16 + d;
+            self.pos += 1;
+            k += 1;
+        }
+        n
+    }
+
+    fn value(mut ref self) -> Result[J, String] {
+        self.ws();
+        if self.pos >= self.cs.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.cs[self.pos];
+        if c == '[' {
+            self.pos += 1;
+            let mut items: Vec[J] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == ']' {
+                self.pos += 1;
+                return Ok(J.A(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON array".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == ']' {
+                    return Ok(J.A(items));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON array separator {d}");
+                }
+            }
+        }
+        if c == '{' {
+            self.pos += 1;
+            let mut members: Vec[(String, J)] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == '}' {
+                self.pos += 1;
+                return Ok(J.O(members));
+            }
+            loop {
+                let key = match self.value()? {
+                    J.S(k) => k,
+                    _ => return Err("JSON object key is not a string".to_string()),
+                };
+                self.ws();
+                if self.pos >= self.cs.len() or self.cs[self.pos] != ':' {
+                    return Err("missing ':' in JSON object".to_string());
+                }
+                self.pos += 1;
+                let v = self.value()?;
+                members.push((key, v));
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON object".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == '}' {
+                    return Ok(J.O(members));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON object separator {d}");
+                }
+            }
+        }
+        if self.word("true") {
+            return Ok(J.B(true));
+        }
+        if self.word("false") {
+            return Ok(J.B(false));
+        }
+        if self.word("null") {
+            return Ok(J.Null);
+        }
+        if c == '-' or (c >= '0' and c <= '9') {
+            let mut neg = false;
+            if c == '-' {
+                neg = true;
+                self.pos += 1;
+            }
+            let mut n: i64 = 0;
+            while self.pos < self.cs.len() and self.cs[self.pos] >= '0' and self.cs[self.pos] <= '9' {
+                n = n * 10 + ((self.cs[self.pos] as u32) - ('0' as u32)) as i64;
+                self.pos += 1;
+            }
+            return Ok(J.N(if neg { -n } else { n }));
+        }
+        if c != '"' {
+            return Err(f"unexpected JSON character {c}");
+        }
+        self.pos += 1;
+        let mut s = String.new();
+        while self.pos < self.cs.len() {
+            let d = self.cs[self.pos];
+            self.pos += 1;
+            if d == '"' {
+                return Ok(J.S(s));
+            }
+            if d != '\\' {
+                s.push(d);
+                continue;
+            }
+            let e = self.cs[self.pos];
+            self.pos += 1;
+            if e == 'n' {
+                s.push('\n');
+            } else if e == 't' {
+                s.push('\t');
+            } else if e == 'r' {
+                s.push('\r');
+            } else if e == 'b' {
+                s.push('\u{8}');
+            } else if e == 'f' {
+                s.push('\u{c}');
+            } else if e == 'u' {
+                let mut n = self.hex4();
+                if n >= 0xD800 and n < 0xDC00 {
+                    self.pos += 2;
+                    let lo = self.hex4();
+                    n = 0x10000 + ((n - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                s.push(char.try_from(n).unwrap_or('?'));
+            } else {
+                s.push(e);
+            }
+        }
+        Err("unterminated JSON string".to_string())
+    }
+}
+
+fn json_line(l: ref String) -> Result[J, String] {
+    let mut p = JsonIn { cs: l.chars().collect(), pos: 0 };
+    p.value()
+}
+
+fn j_get(j: ref J, key: Str) -> J {
+    match j {
+        J.O(members) => {
+            for (k, v) in members.iter() {
+                if k == key {
+                    return v.clone();
+                }
+            }
+            J.Null
+        }
+        _ => J.Null,
+    }
+}
+
+fn j_has(j: ref J, key: Str) -> bool {
+    match j_get(j, key) {
+        J.Null => false,
+        _ => true,
+    }
+}
+
+fn j_str(j: ref J, key: Str) -> String {
+    match j_get(j, key) {
+        J.S(s) => s,
+        _ => String.new(),
+    }
+}
+
+fn j_int(j: ref J, key: Str, default: i64) -> i64 {
+    match j_get(j, key) {
+        J.N(n) => n,
+        _ => default,
+    }
+}
+
+fn j_bool(j: ref J, key: Str) -> bool {
+    match j_get(j, key) {
+        J.B(b) => b,
+        _ => false,
+    }
+}
+
+fn j_strs(j: ref J, key: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let J.A(items) = j_get(j, key) {
+        for it in items.iter() {
+            if let J.S(s) = it {
+                out.push(s.clone());
+            }
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ text as code points
+
+fn cps(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cps_of(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cat(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out = a.clone();
+    push_all(mut out, b);
+    out
+}
+
+fn cat_ascii(a: ref Vec[i64], s: Str) -> Vec[i64] {
+    let mut out = a.clone();
+    push_ascii(mut out, s);
+    out
+}
+
+fn index_of(s: ref Vec[i64], c: i64) -> i64 {
+    let mut i = 0;
+    while i < s.len() {
+        if s[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn has(s: ref Vec[i64], c: i64) -> bool {
+    index_of(s, c) >= 0
+}
+
+// `needle in s` for str
+fn contains_seq(s: ref Vec[i64], needle: ref Vec[i64]) -> bool {
+    find_seq(s, needle, 0) >= 0
+}
+
+fn find_seq(s: ref Vec[i64], needle: ref Vec[i64], from: i64) -> i64 {
+    let mut i = from;
+    while i + needle.len() <= s.len() {
+        let mut k = 0;
+        while k < needle.len() and s[i + k] == needle[k] {
+            k += 1;
+        }
+        if k == needle.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn starts_with_seq(s: ref Vec[i64], p: Str) -> bool {
+    let n = cps(p);
+    if n.len() > s.len() {
+        return false;
+    }
+    let mut k = 0;
+    while k < n.len() {
+        if s[k] != n[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn eq_ascii(s: ref Vec[i64], p: Str) -> bool {
+    same(s, cps(p))
+}
+
+// One character in a str of ASCII choices.
+fn in_ascii(c: i64, set: Str) -> bool {
+    for b in set.bytes() {
+        if (b as i64) == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.replace
+fn replace_seq(s: ref Vec[i64], old: ref Vec[i64], new: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < s.len() {
+        if old.len() > 0 and i + old.len() <= s.len() {
+            let mut k = 0;
+            while k < old.len() and s[i + k] == old[k] {
+                k += 1;
+            }
+            if k == old.len() {
+                push_all(mut out, new);
+                i += old.len();
+                continue;
+            }
+        }
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn replace_char(s: ref Vec[i64], old: i64, new: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s {
+        if c == old {
+            push_all(mut out, new);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn repeat(c: i64, n: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n {
+        out.push(c);
+        k += 1;
+    }
+    out
+}
+
+// str.split(sep) for a one-character separator
+fn split_on(s: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in s {
+        if c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn strip(s: ref Vec[i64]) -> Vec[i64] {
+    let mut a = 0;
+    let mut b = s.len();
+    while a < b and is_space(s[a], false) {
+        a += 1;
+    }
+    while b > a and is_space(s[b - 1], false) {
+        b -= 1;
+    }
+    slice(s, a, b)
+}
+
+fn lower_all(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s {
+        out.push(lower(c, false));
+    }
+    out
+}
+
+fn upper_all(s: ref Vec[i64]) -> Vec[i64] {
+    cps_of(to_string(s).to_uppercase())
+}
+
+fn is_alpha_cp(c: i64) -> bool {
+    match as_char(c) {
+        Some(ch) => ch.is_alphabetic(),
+        None => false,
+    }
+}
+
+// str.isupper
+fn is_upper_str(s: ref Vec[i64]) -> bool {
+    let mut cased = false;
+    for c in s {
+        if lower(c, false) != c {
+            cased = true;
+        } else if upper(c, false) != c {
+            return false;
+        }
+    }
+    cased
+}
+
+// The value of a decimal digit: the decimal digits come in runs of ten.
+fn digit_value(c: i64) -> i64 {
+    if c < 0x80 {
+        return c - 48;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return c - s;
+        }
+    }
+    0
+}
+
+// str.isdigit, for the strings date_convert looks at
+fn all_decimal(s: ref Vec[i64]) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s {
+        if not is_decimal(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn pad_n(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn floor_mod(a: i64, b: i64) -> i64 {
+    a - floor_div(a, b) * b
+}
+
+// ------------------------------------------------------------ text
+
+// -------------------------------------------------------------- text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for cp in s {
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push((0xC0 | (cp >> 6)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else if cp < 0x10000 {
+            out.push((0xE0 | (cp >> 12)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (cp >> 18)) as u8);
+            out.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (cp & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn hex_n(cp: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(cp >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+fn str_repr(s: ref Vec[i64], out: mut ref Vec[i64]) {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+}
+
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    str_repr(s, mut out);
+    to_string(out)
+}
+
+// ----------------------------------------------------- character kinds
+
+fn is_decimal(c: i64) -> bool {
+    if c < 0x80 {
+        return c >= 48 and c <= 57;
+    }
+    let starts = [0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0];
+    for s in starts {
+        if c >= s and c < s + 10 {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_space(c: i64, ascii: bool) -> bool {
+    if c == 32 or (c >= 9 and c <= 13) {
+        return true;
+    }
+    if ascii {
+        return false;
+    }
+    (c >= 0x1C and c <= 0x1F) or c == 0x85 or c == 0xA0 or c == 0x1680 or (c >= 0x2000 and c <= 0x200A) or c == 0x2028 or c == 0x2029 or c == 0x202F or c == 0x205F or c == 0x3000
+}
+
+fn as_char(c: i64) -> Option[char] {
+    if c < 0 or (c >= 0xD800 and c <= 0xDFFF) or c > 0x10FFFF {
+        return None;
+    }
+    char.try_from(c as u32).ok()
+}
+
+fn is_word(c: i64, ascii: bool) -> bool {
+    if c < 0x80 {
+        return (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95;
+    }
+    if ascii {
+        return false;
+    }
+    match as_char(c) {
+        Some(ch) => ch.is_alphanumeric(),
+        None => false,
+    }
+}
+
+fn lower(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 65 and c <= 90 { c + 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_lowercase() as u32 as i64,
+        None => c,
+    }
+}
+
+fn upper(c: i64, ascii: bool) -> i64 {
+    if c < 0x80 {
+        return if c >= 97 and c <= 122 { c - 32 } else { c };
+    }
+    if ascii {
+        return c;
+    }
+    match as_char(c) {
+        Some(ch) => ch.to_uppercase() as u32 as i64,
+        None => c,
+    }
+}
+
+
+// ------------------------------------------------------------ dates
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+
+// ------------------------------------------------------------ MD5 (RFC 1321)
+
+const MD5_S: Array[i64, 64] = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+const MD5_K: Array[u32, 64] = [
+    0xd76aa478u32, 0xe8c7b756u32, 0x242070dbu32, 0xc1bdceeeu32, 0xf57c0fafu32, 0x4787c62au32, 0xa8304613u32, 0xfd469501u32,
+    0x698098d8u32, 0x8b44f7afu32, 0xffff5bb1u32, 0x895cd7beu32, 0x6b901122u32, 0xfd987193u32, 0xa679438eu32, 0x49b40821u32,
+    0xf61e2562u32, 0xc040b340u32, 0x265e5a51u32, 0xe9b6c7aau32, 0xd62f105du32, 0x02441453u32, 0xd8a1e681u32, 0xe7d3fbc8u32,
+    0x21e1cde6u32, 0xc33707d6u32, 0xf4d50d87u32, 0x455a14edu32, 0xa9e3e905u32, 0xfcefa3f8u32, 0x676f02d9u32, 0x8d2a4c8au32,
+    0xfffa3942u32, 0x8771f681u32, 0x6d9d6122u32, 0xfde5380cu32, 0xa4beea44u32, 0x4bdecfa9u32, 0xf6bb4b60u32, 0xbebfbc70u32,
+    0x289b7ec6u32, 0xeaa127fau32, 0xd4ef3085u32, 0x04881d05u32, 0xd9d4d039u32, 0xe6db99e5u32, 0x1fa27cf8u32, 0xc4ac5665u32,
+    0xf4292244u32, 0x432aff97u32, 0xab9423a7u32, 0xfc93a039u32, 0x655b59c3u32, 0x8f0ccc92u32, 0xffeff47du32, 0x85845dd1u32,
+    0x6fa87e4fu32, 0xfe2ce6e0u32, 0xa3014314u32, 0x4e0811a1u32, 0xf7537e82u32, 0xbd3af235u32, 0x2ad7d2bbu32, 0xeb86d391u32,
+];
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+fn le32(b: ref Vec[u8], i: i64) -> u32 {
+    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+
+
+fn push_le32(out: mut ref Vec[u8], x: u32) {
+    for k in 0..4 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+    }
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+
+fn md5(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, false);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32] {
+        h.push(x);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        for i in 0..64 {
+            let mut f: u32 = 0;
+            let mut g: i64 = 0;
+            if i < 16 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                g = i;
+            } else if i < 32 {
+                f = (d & b) | ((d ^ 0xFFFFFFFFu32) & c);
+                g = (5 * i + 1) % 16;
+            } else if i < 48 {
+                f = b ^ c ^ d;
+                g = (3 * i + 5) % 16;
+            } else {
+                f = c ^ (b | (d ^ 0xFFFFFFFFu32));
+                g = (7 * i) % 16;
+            }
+            let x = a.wrapping_add(f).wrapping_add(MD5_K[i]).wrapping_add(le32(m, blk + 4 * g));
+            a = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(x.rotate_left(MD5_S[i] as u32));
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_le32(mut out, x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ SHA-1 and SHA-2 (FIPS 180-4)
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let mut f: u32 = 0;
+            let mut k: u32 = 0;
+            if t < 20 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                k = 0x5A827999u32;
+            } else if t < 40 {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1u32;
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCu32;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6u32;
+            }
+            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[t]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+// ------------------------------------------------------------ int()
+
+// What int(s, base) makes of a str, for base 10 or 16, as CPython reads
+// it: Unicode spaces and decimal digits are first turned into ASCII, then
+// surrounding whitespace, a sign, a 0x prefix (base 16, with one
+// underscore allowed after it), and single underscores between digits.
+// `big` is set when the value does not fit a u128.
+struct PyInt {
+    neg: bool,
+    val: u128,
+    big: bool,
+}
+
+fn u128_max() -> u128 {
+    (0xFFFF_FFFF_FFFF_FFFFu128 << 64) | 0xFFFF_FFFF_FFFF_FFFFu128
+}
+
+fn ascii_digit(c: i64, base: i64) -> i64 {
+    let d = if c >= 48 and c <= 57 {
+        c - 48
+    } else if c >= 97 and c <= 122 {
+        c - 87
+    } else if c >= 65 and c <= 90 {
+        c - 55
+    } else {
+        99
+    };
+    if d < base { d } else { -1 }
+}
+
+fn py_int(s: ref Vec[i64], base: i64) -> Option[PyInt] {
+    // _PyUnicode_TransformDecimalAndSpaceToASCII
+    let mut a: Vec[i64] = Vec.new();
+    for c in s.iter() {
+        if *c < 0x80 {
+            a.push(*c);
+        } else if is_space(*c, false) {
+            a.push(32);
+        } else if is_decimal(*c) {
+            a.push(48 + digit_value(*c));
+        } else {
+            a.push(63);
+        }
+    }
+    let n = a.len();
+    let mut i = 0;
+    while i < n and is_space(a[i], true) {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < n and (a[i] == 43 or a[i] == 45) {
+        neg = a[i] == 45;
+        i += 1;
+    }
+    if base == 16 and i + 1 < n and a[i] == 48 and (a[i + 1] == 120 or a[i + 1] == 88) {
+        i += 2;
+        if i < n and a[i] == 95 {
+            i += 1;
+        }
+    }
+    if i < n and a[i] == 95 {
+        return None;
+    }
+    let mut val: u128 = 0;
+    let mut big = false;
+    let mut digits = 0;
+    let mut prev = 0;
+    while i < n and (ascii_digit(a[i], base) >= 0 or a[i] == 95) {
+        if a[i] == 95 {
+            if prev == 95 {
+                return None;
+            }
+        } else {
+            let d = ascii_digit(a[i], base) as u128;
+            let b = base as u128;
+            if big or val > (u128_max() - d) / b {
+                big = true;
+            } else {
+                val = val * b + d;
+            }
+            digits += 1;
+        }
+        prev = a[i];
+        i += 1;
+    }
+    if prev == 95 or digits == 0 {
+        return None;
+    }
+    while i < n and is_space(a[i], true) {
+        i += 1;
+    }
+    if i != n {
+        return None;
+    }
+    Some(PyInt { neg: neg, val: val, big: big })
+}
+
+fn int_error(s: ref Vec[i64], base: i64) -> String {
+    let r = repr_of(s);
+    f"ValueError: invalid literal for int() with base {base}: {r}"
+}
+
+// int(s) for the CSV columns: None when Python raises.
+fn py_int10(s: ref String) -> Option[i64] {
+    match py_int(cps_of(s), 10) {
+        Some(p) => {
+            if p.big or p.val > 0x7FFF_FFFF_FFFF_FFFFu128 {
+                return None;
+            }
+            let v = p.val as i64;
+            Some(if p.neg { -v } else { v })
+        }
+        None => None,
+    }
+}
+
+// ------------------------------------------------------------ bytes
+
+// repr() of a bytes object.
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in b.iter() {
+        if *c == 39 {
+            has_single = true;
+        } else if *c == 34 {
+            has_double = true;
+        }
+    }
+    let quote: u8 = if has_single and not has_double { 34 } else { 39 };
+    let mut out = "b".to_string();
+    out.push(quote as char);
+    for c in b.iter() {
+        let x = *c;
+        if x == quote or x == 92 {
+            out.push('\\');
+            out.push(x as char);
+        } else if x == 9 {
+            out.push_str("\\t");
+        } else if x == 10 {
+            out.push_str("\\n");
+        } else if x == 13 {
+            out.push_str("\\r");
+        } else if x < 32 or x >= 127 {
+            let h = hex_n(x as i64, 2);
+            out.push_str(f"\\x{h}");
+        } else {
+            out.push(x as char);
+        }
+    }
+    out.push(quote as char);
+    out
+}
+
+// `n` hex digits of x, lower case, with leading zeros.
+fn hex_digits(x: u128, n: i64) -> String {
+    let hex = "0123456789abcdef".bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut y = x;
+    for _ in 0..n {
+        out.push(hex[(y & 15) as i64]);
+        y = y >> 4;
+    }
+    out.reverse();
+    String.from_utf8(out).unwrap_or(String.new())
+}
+
+// '%x' % x
+fn hex_of(x: u128) -> String {
+    let mut n = 1;
+    let mut y = x >> 4;
+    while y > 0 {
+        n += 1;
+        y = y >> 4;
+    }
+    hex_digits(x, n)
+}
+
+fn tuple_repr(v: ref Vec[i128]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v.iter() {
+        parts.push(f"{x}");
+    }
+    if parts.len() == 1 {
+        let p = ref parts[0];
+        return f"({p},)";
+    }
+    let body = parts.join(", ");
+    f"({body})"
+}
+
+fn pad_right(s: ref String, width: i64) -> String {
+    let mut out = s.clone();
+    let mut n = cps_of(s).len();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out
+}
+
+fn pad_left(s: ref String, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = cps_of(s).len();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+// '%.2f' % (cents / 100) for whole cents, padded to `width`.
+fn money(cents: i64, width: i64) -> String {
+    let whole = cents / 100;
+    let frac = cents % 100;
+    let f = pad_n(frac, 2);
+    pad_left(f"{whole}.{f}", width)
+}
+
+fn bool_repr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// ------------------------------------------------------------ uuid.UUID
+
+#[derive(Clone)]
+struct Uuid {
+    int: u128,
+}
+
+fn bit(n: i64) -> u128 {
+    1u128 << n
+}
+
+// The arguments of UUID(...): at most one of them is meant to be set.
+struct UuidArgs {
+    hex: Option[String],
+    bytes: Option[Vec[i64]],
+    bytes_le: Option[Vec[i64]],
+    fields: Option[Vec[i64]],
+    int: Option[String],
+    version: Option[i64],
+}
+
+fn no_args() -> UuidArgs {
+    UuidArgs { hex: None, bytes: None, bytes_le: None, fields: None, int: None, version: None }
+}
+
+fn value_error(msg: Str) -> String {
+    f"ValueError: {msg}"
+}
+
+fn strip_braces(s: ref Vec[i64]) -> Vec[i64] {
+    let mut a = 0;
+    let mut b = s.len();
+    while a < b and (s[a] == 123 or s[a] == 125) {
+        a += 1;
+    }
+    while b > a and (s[b - 1] == 123 or s[b - 1] == 125) {
+        b -= 1;
+    }
+    slice(s, a, b)
+}
+
+fn int_from_bytes(b: ref Vec[i64]) -> u128 {
+    let mut v: u128 = 0;
+    for x in b.iter() {
+        v = (v << 8) | (*x as u128);
+    }
+    v
+}
+
+// bytes_le[4-1::-1] + bytes_le[6-1:4-1:-1] + bytes_le[8-1:6-1:-1] + bytes_le[8:]
+fn swap_le(b: ref Vec[i64]) -> Vec[i64] {
+    let order = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15];
+    let mut out: Vec[i64] = Vec.new();
+    for k in order {
+        out.push(b[k]);
+    }
+    out
+}
+
+fn make_uuid(a: ref UuidArgs) -> Result[Uuid, String] {
+    let mut given = 0;
+    if a.hex.is_some() { given += 1; }
+    if a.bytes.is_some() { given += 1; }
+    if a.bytes_le.is_some() { given += 1; }
+    if a.fields.is_some() { given += 1; }
+    if a.int.is_some() { given += 1; }
+    if given != 1 {
+        return Err("TypeError: one of the hex, bytes, bytes_le, fields, or int arguments must be given".to_string());
+    }
+    let mut int: u128 = 0;
+    if let Some(h) = ref a.hex {
+        let c0 = cps_of(h);
+        let c1 = replace_seq(c0, cps("urn:"), Vec.new());
+        let c2 = replace_seq(c1, cps("uuid:"), Vec.new());
+        let c3 = replace_seq(strip_braces(c2), cps("-"), Vec.new());
+        if c3.len() != 32 {
+            return Err(value_error("badly formed hexadecimal UUID string"));
+        }
+        match py_int(c3, 16) {
+            Some(p) => int = p.val,
+            None => return Err(int_error(c3, 16)),
+        }
+    }
+    let mut bytes: Option[Vec[i64]] = a.bytes.clone();
+    if let Some(le) = ref a.bytes_le {
+        if le.len() != 16 {
+            return Err(value_error("bytes_le is not a 16-char string"));
+        }
+        bytes = Some(swap_le(le));
+    }
+    if let Some(b) = ref bytes {
+        if b.len() != 16 {
+            return Err(value_error("bytes is not a 16-char string"));
+        }
+        int = int_from_bytes(b);
+    }
+    if let Some(f) = ref a.fields {
+        if f.len() != 6 {
+            return Err(value_error("fields is not a 6-tuple"));
+        }
+        if f[0] < 0 or f[0] >= 1 << 32 {
+            return Err(value_error("field 1 out of range (need a 32-bit value)"));
+        }
+        if f[1] < 0 or f[1] >= 1 << 16 {
+            return Err(value_error("field 2 out of range (need a 16-bit value)"));
+        }
+        if f[2] < 0 or f[2] >= 1 << 16 {
+            return Err(value_error("field 3 out of range (need a 16-bit value)"));
+        }
+        if f[3] < 0 or f[3] >= 1 << 8 {
+            return Err(value_error("field 4 out of range (need an 8-bit value)"));
+        }
+        if f[4] < 0 or f[4] >= 1 << 8 {
+            return Err(value_error("field 5 out of range (need an 8-bit value)"));
+        }
+        if f[5] < 0 or f[5] >= 1 << 48 {
+            return Err(value_error("field 6 out of range (need a 48-bit value)"));
+        }
+        let clock_seq = ((f[3] << 8) | f[4]) as u128;
+        int = ((f[0] as u128) << 96) | ((f[1] as u128) << 80) | ((f[2] as u128) << 64)
+            | (clock_seq << 48) | (f[5] as u128);
+    }
+    if let Some(s) = ref a.int {
+        match py_int(cps_of(s), 10) {
+            Some(p) => {
+                if p.neg and p.val != 0 or p.big {
+                    return Err(value_error("int is out of range (need a 128-bit value)"));
+                }
+                int = p.val;
+            }
+            None => return Err(int_error(cps_of(s), 10)),
+        }
+    }
+    if let Some(v) = a.version {
+        if v < 1 or v > 5 {
+            return Err(value_error("illegal version number"));
+        }
+        int = int & (u128_max() ^ (0xc000u128 << 48));
+        int = int | (0x8000u128 << 48);
+        int = int & (u128_max() ^ (0xf000u128 << 64));
+        int = int | ((v as u128) << 76);
+    }
+    Ok(Uuid { int: int })
+}
+
+fn uuid_hex(h: Str) -> Uuid {
+    let mut a = no_args();
+    a.hex = Some(h.to_string());
+    make_uuid(a).unwrap()
+}
+
+fn uuid_of_bytes(b: ref Vec[u8], version: i64) -> Uuid {
+    let mut v: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 16 {
+        v.push(b[k] as i64);
+        k += 1;
+    }
+    let mut a = no_args();
+    a.bytes = Some(v);
+    a.version = Some(version);
+    make_uuid(a).unwrap()
+}
+
+impl Uuid {
+    fn hex(ref self) -> String {
+        hex_digits(self.int, 32)
+    }
+
+    fn str(ref self) -> String {
+        let h = cps_of(self.hex());
+        let a = to_string(slice(h, 0, 8));
+        let b = to_string(slice(h, 8, 12));
+        let c = to_string(slice(h, 12, 16));
+        let d = to_string(slice(h, 16, 20));
+        let e = to_string(slice(h, 20, 32));
+        f"{a}-{b}-{c}-{d}-{e}"
+    }
+
+    fn bytes(ref self) -> Vec[u8] {
+        let mut out: Vec[u8] = Vec.new();
+        let mut k = 15;
+        while k >= 0 {
+            out.push(((self.int >> (8 * k)) & 0xFF) as u8);
+            k -= 1;
+        }
+        out
+    }
+
+    fn bytes_le(ref self) -> Vec[u8] {
+        let b = self.bytes();
+        let order = [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15];
+        let mut out: Vec[u8] = Vec.new();
+        for k in order {
+            out.push(b[k]);
+        }
+        out
+    }
+
+    fn time_low(ref self) -> i64 { (self.int >> 96) as i64 }
+    fn time_mid(ref self) -> i64 { ((self.int >> 80) & 0xffff) as i64 }
+    fn time_hi_version(ref self) -> i64 { ((self.int >> 64) & 0xffff) as i64 }
+    fn clock_seq_hi_variant(ref self) -> i64 { ((self.int >> 56) & 0xff) as i64 }
+    fn clock_seq_low(ref self) -> i64 { ((self.int >> 48) & 0xff) as i64 }
+    fn node(ref self) -> i64 { (self.int & 0xffffffffffff) as i64 }
+
+    fn time(ref self) -> i64 {
+        ((self.time_hi_version() & 0x0fff) << 48) | (self.time_mid() << 32) | self.time_low()
+    }
+
+    fn clock_seq(ref self) -> i64 {
+        ((self.clock_seq_hi_variant() & 0x3f) << 8) | self.clock_seq_low()
+    }
+
+    fn variant(ref self) -> String {
+        let v = if self.int & (0x8000u128 << 48) == 0 {
+            "reserved for NCS compatibility"
+        } else if self.int & (0x4000u128 << 48) == 0 {
+            "specified in RFC 4122"
+        } else if self.int & (0x2000u128 << 48) == 0 {
+            "reserved for Microsoft compatibility"
+        } else {
+            "reserved for future definition"
+        };
+        v.to_string()
+    }
+
+    fn version(ref self) -> Option[i64] {
+        if self.variant() == "specified in RFC 4122" {
+            return Some(((self.int >> 76) & 0xf) as i64);
+        }
+        None
+    }
+
+    fn version_repr(ref self) -> String {
+        match self.version() {
+            Some(v) => f"{v}",
+            None => "None".to_string(),
+        }
+    }
+}
+
+// uuid1 keeps the last timestamp it handed out, so that two calls in the
+// same 100 ns still get different ids.
+fn uuid1(last: mut ref Option[i64], ns: i64, node: i64, clock_seq: i64) -> Result[Uuid, String] {
+    let mut timestamp = ns / 100 + 0x01b21dd213814000;
+    if let Some(l) = *last {
+        if timestamp <= l {
+            timestamp = l + 1;
+        }
+    }
+    *last = Some(timestamp);
+    let mut a = no_args();
+    a.fields = Some(vec![timestamp & 0xffffffff, (timestamp >> 32) & 0xffff, (timestamp >> 48) & 0x0fff,
+                         (clock_seq >> 8) & 0x3f, clock_seq & 0xff, node]);
+    a.version = Some(1);
+    make_uuid(a)
+}
+
+fn hashed_uuid(ns: ref Uuid, name: ref Vec[u8], version: i64) -> Uuid {
+    let mut msg = ns.bytes();
+    for b in name.iter() {
+        msg.push(*b);
+    }
+    let digest = if version == 3 { md5(msg) } else { sha1(msg) };
+    uuid_of_bytes(digest, version)
+}
+
+fn namespace(name: ref String) -> Uuid {
+    if name == "@dns" {
+        return uuid_hex("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
+    }
+    if name == "@url" {
+        return uuid_hex("6ba7b811-9dad-11d1-80b4-00c04fd430c8");
+    }
+    if name == "@oid" {
+        return uuid_hex("6ba7b812-9dad-11d1-80b4-00c04fd430c8");
+    }
+    if name == "@x500" {
+        return uuid_hex("6ba7b814-9dad-11d1-80b4-00c04fd430c8");
+    }
+    let mut a = no_args();
+    a.hex = Some(name.clone());
+    make_uuid(a).unwrap()
+}
+
+// ------------------------------------------------------------ hashids
+
+// Strings are lists of code points throughout, as Python indexes str.
+struct Hashids {
+    salt: Vec[i64],
+    min_length: i64,
+    alphabet: Vec[i64],
+    separators: Vec[i64],
+    guards: Vec[i64],
+}
+
+fn default_hashids_alphabet() -> Vec[i64] {
+    cps("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890")
+}
+
+// _reorder: a shuffle driven by the salt.
+fn reorder(s: ref Vec[i64], salt: ref Vec[i64]) -> Vec[i64] {
+    let mut out = s.clone();
+    let len_salt = salt.len();
+    if len_salt == 0 {
+        return out;
+    }
+    let mut index = 0;
+    let mut integer_sum = 0;
+    let mut i = out.len() - 1;
+    while i > 0 {
+        let integer = salt[index];
+        integer_sum += integer;
+        let j = (integer + index + integer_sum) % i;
+        let t = out[i];
+        out[i] = out[j];
+        out[j] = t;
+        index = (index + 1) % len_salt;
+        i -= 1;
+    }
+    out
+}
+
+// ceil(float(a) / 3.5) and ceil(float(a) / 12), which are exact here.
+fn ceil_div(a: i64, num: i64, den: i64) -> i64 {
+    (a * num + den - 1) / den
+}
+
+fn new_hashids(salt: ref Vec[i64], min_length: i64, alpha: ref Vec[i64]) -> Result[Hashids, String] {
+    let ml = if min_length > 0 { min_length } else { 0 };
+    let mut separators: Vec[i64] = Vec.new();
+    for c in cps("cfhistuCFHISTU").iter() {
+        if has(alpha, *c) {
+            separators.push(*c);
+        }
+    }
+    let mut alphabet: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < alpha.len() {
+        let x = alpha[i];
+        if index_of(alpha, x) == i and not has(separators, x) {
+            alphabet.push(x);
+        }
+        i += 1;
+    }
+    let mut len_alphabet = alphabet.len();
+    let len_separators = separators.len();
+    if len_alphabet + len_separators < 16 {
+        return Err("ValueError: Alphabet must contain at least 16 unique characters.".to_string());
+    }
+    separators = reorder(separators, salt);
+    let min_separators = ceil_div(len_alphabet, 2, 7);
+    let missing = min_separators - len_separators;
+    if missing > 0 {
+        for c in slice(alphabet, 0, missing).iter() {
+            separators.push(*c);
+        }
+        alphabet = slice(alphabet, missing, alphabet.len());
+        len_alphabet = alphabet.len();
+    }
+    alphabet = reorder(alphabet, salt);
+    let num_guards = ceil_div(len_alphabet, 1, 12);
+    let mut guards: Vec[i64] = Vec.new();
+    if len_alphabet < 3 {
+        let n = if num_guards < separators.len() { num_guards } else { separators.len() };
+        guards = slice(separators, 0, n);
+        separators = slice(separators, n, separators.len());
+    } else {
+        let n = if num_guards < alphabet.len() { num_guards } else { alphabet.len() };
+        guards = slice(alphabet, 0, n);
+        alphabet = slice(alphabet, n, alphabet.len());
+    }
+    Ok(Hashids { salt: salt.clone(), min_length: ml, alphabet: alphabet, separators: separators, guards: guards })
+}
+
+fn hash_num(number: i128, alphabet: ref Vec[i64]) -> Vec[i64] {
+    let mut digits: Vec[i64] = Vec.new();
+    let n = alphabet.len() as i128;
+    let mut x = number;
+    loop {
+        digits.push(alphabet[(x % n) as i64]);
+        x = x / n;
+        if x == 0 {
+            break;
+        }
+    }
+    digits.reverse();
+    digits
+}
+
+// _unhash; None for a character outside the alphabet, which is the
+// ValueError decode catches, or a value too big for an i128.
+fn unhash(hashed: ref Vec[i64], alphabet: ref Vec[i64]) -> Option[i128] {
+    let mut number: i128 = 0;
+    let n = alphabet.len() as i128;
+    let limit: i128 = 0x7FFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFFi128;
+    for c in hashed.iter() {
+        let position = index_of(alphabet, *c);
+        if position < 0 {
+            return None;
+        }
+        if number > (limit - position as i128) / n {
+            return None;
+        }
+        number = number * n + position as i128;
+    }
+    Some(number)
+}
+
+fn split_at_any(s: ref Vec[i64], splitters: ref Vec[i64]) -> Vec[Vec[i64]] {
+    let mut parts: Vec[Vec[i64]] = Vec.new();
+    let mut part: Vec[i64] = Vec.new();
+    for c in s.iter() {
+        if has(splitters, *c) {
+            parts.push(part);
+            part = Vec.new();
+        } else {
+            part.push(*c);
+        }
+    }
+    parts.push(part);
+    parts
+}
+
+fn salted(lottery: i64, salt: ref Vec[i64], alphabet: ref Vec[i64]) -> Vec[i64] {
+    let mut s = vec![lottery];
+    for c in salt.iter() {
+        s.push(*c);
+    }
+    for c in alphabet.iter() {
+        s.push(*c);
+    }
+    slice(s, 0, if alphabet.len() < s.len() { alphabet.len() } else { s.len() })
+}
+
+impl Hashids {
+    fn encode(ref self, values: ref Vec[i128]) -> Vec[i64] {
+        if values.len() == 0 {
+            return Vec.new();
+        }
+        for v in values.iter() {
+            if *v < 0 {
+                return Vec.new();
+            }
+        }
+        let mut alphabet = self.alphabet.clone();
+        let len_alphabet = alphabet.len();
+        let len_separators = self.separators.len() as i128;
+        let mut values_hash: i128 = 0;
+        let mut i = 0;
+        while i < values.len() {
+            values_hash += values[i] % (i as i128 + 100);
+            i += 1;
+        }
+        let lottery = alphabet[(values_hash % len_alphabet as i128) as i64];
+        let mut encoded = vec![lottery];
+        let mut k = 0;
+        while k < values.len() {
+            let alphabet_salt = salted(lottery, self.salt, alphabet);
+            alphabet = reorder(alphabet, alphabet_salt);
+            let last = hash_num(values[k], alphabet);
+            for c in last.iter() {
+                encoded.push(*c);
+            }
+            let value = values[k] % (last[0] as i128 + k as i128);
+            encoded.push(self.separators[(value % len_separators) as i64]);
+            k += 1;
+        }
+        encoded.pop();
+        if encoded.len() >= self.min_length {
+            return encoded;
+        }
+        self.ensure_length(encoded, alphabet, values_hash)
+    }
+
+    fn ensure_length(ref self, start: ref Vec[i64], alpha: ref Vec[i64], values_hash: i128) -> Vec[i64] {
+        let len_guards = self.guards.len() as i128;
+        let gi = ((values_hash + start[0] as i128) % len_guards) as i64;
+        let mut encoded = vec![self.guards[gi]];
+        for c in start.iter() {
+            encoded.push(*c);
+        }
+        if encoded.len() < self.min_length {
+            let gi2 = ((values_hash + encoded[2] as i128) % len_guards) as i64;
+            encoded.push(self.guards[gi2]);
+        }
+        let mut alphabet = alpha.clone();
+        let split_at = alphabet.len() / 2;
+        while encoded.len() < self.min_length {
+            alphabet = reorder(alphabet, alphabet);
+            let mut next = slice(alphabet, split_at, alphabet.len());
+            for c in encoded.iter() {
+                next.push(*c);
+            }
+            for c in slice(alphabet, 0, split_at).iter() {
+                next.push(*c);
+            }
+            encoded = next;
+            let excess = encoded.len() - self.min_length;
+            if excess > 0 {
+                let from = excess / 2;
+                encoded = slice(encoded, from, from + self.min_length);
+            }
+        }
+        encoded
+    }
+
+    fn decode(ref self, hashid: ref Vec[i64]) -> Vec[i128] {
+        if hashid.len() == 0 {
+            return Vec.new();
+        }
+        let parts = split_at_any(hashid, self.guards);
+        let h = if parts.len() >= 2 and parts.len() <= 3 { parts[1].clone() } else { parts[0].clone() };
+        let mut numbers: Vec[i128] = Vec.new();
+        if h.len() > 0 {
+            let lottery = h[0];
+            let rest = slice(h, 1, h.len());
+            let mut alphabet = self.alphabet.clone();
+            for part in split_at_any(rest, self.separators).iter() {
+                let alphabet_salt = salted(lottery, self.salt, alphabet);
+                alphabet = reorder(alphabet, alphabet_salt);
+                match unhash(part, alphabet) {
+                    Some(n) => numbers.push(n),
+                    None => return Vec.new(),
+                }
+            }
+        }
+        if same(hashid, self.encode(numbers)) { numbers } else { Vec.new() }
+    }
+
+    fn encode_hex(ref self, hex_str: ref Vec[i64]) -> Vec[i64] {
+        let mut numbers: Vec[i128] = Vec.new();
+        let mut i = 0;
+        while i < hex_str.len() {
+            let end = if i + 12 < hex_str.len() { i + 12 } else { hex_str.len() };
+            let mut digits = vec![49];
+            for c in slice(hex_str, i, end).iter() {
+                digits.push(*c);
+            }
+            match py_int(digits, 16) {
+                Some(p) => numbers.push(if p.neg { -(p.val as i128) } else { p.val as i128 }),
+                None => return Vec.new(),
+            }
+            i += 12;
+        }
+        self.encode(numbers)
+    }
+
+    fn decode_hex(ref self, hashid: ref Vec[i64]) -> String {
+        let mut out = String.new();
+        for x in self.decode(hashid).iter() {
+            let h = cps_of(hex_of(*x as u128));
+            out.push_str(to_string(slice(h, 1, h.len())));
+        }
+        out
+    }
+}
+
+// ------------------------------------------------------------ shortuuid
+
+struct ShortUuid {
+    alphabet: Vec[i64],
+}
+
+fn default_short_alphabet() -> Vec[i64] {
+    cps("23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+}
+
+// set_alphabet: sorted(set(alphabet)).
+fn new_shortuuid(alpha: ref Vec[i64]) -> Result[ShortUuid, String] {
+    let mut a: Vec[i64] = Vec.new();
+    for c in alpha.iter() {
+        if not has(a, *c) {
+            a.push(*c);
+        }
+    }
+    a.sort();
+    if a.len() > 1 {
+        return Ok(ShortUuid { alphabet: a });
+    }
+    Err("ValueError: Alphabet with more than one unique symbols required.".to_string())
+}
+
+impl ShortUuid {
+    // int(math.ceil(math.log(2**128, len(alphabet))))
+    fn length(ref self) -> i64 {
+        let two128: f64 = 340282366920938463463374607431768211456.0;
+        let x = two128.ln() / (self.alphabet.len() as f64).ln();
+        x.ceil() as i64
+    }
+
+    fn encode(ref self, u: ref Uuid, pad: Option[i64]) -> Vec[i64] {
+        let padding = match pad {
+            Some(p) => p,
+            None => self.length(),
+        };
+        let mut out: Vec[i64] = Vec.new();
+        let n = self.alphabet.len() as u128;
+        let mut number = u.int;
+        while number > 0 {
+            out.push(self.alphabet[(number % n) as i64]);
+            number = number / n;
+        }
+        if padding != 0 {
+            while out.len() < padding {
+                out.push(self.alphabet[0]);
+            }
+        }
+        out.reverse();
+        out
+    }
+
+    fn decode(ref self, s: ref Vec[i64], legacy: bool) -> Result[Uuid, String] {
+        let mut t = s.clone();
+        if legacy {
+            t.reverse();
+        }
+        let n = self.alphabet.len() as u128;
+        let mut number: u128 = 0;
+        let mut big = false;
+        for c in t.iter() {
+            let d = index_of(self.alphabet, *c);
+            if d < 0 {
+                let r = repr_of(vec![*c]);
+                return Err(f"ValueError: {r} is not in list");
+            }
+            if big or number > (u128_max() - d as u128) / n {
+                big = true;
+            } else {
+                number = number * n + d as u128;
+            }
+        }
+        if big {
+            return Err("ValueError: int is out of range (need a 128-bit value)".to_string());
+        }
+        Ok(Uuid { int: number })
+    }
+
+    fn uuid(ref self, name: ref String, pad: Option[i64]) -> Vec[i64] {
+        let lower = lower_all(cps_of(name));
+        let url = starts_with_seq(lower, "http://") or starts_with_seq(lower, "https://");
+        let ns = namespace(if url { "@url".to_string() } else { "@dns".to_string() });
+        let u = hashed_uuid(ns, name.bytes().to_vec(), 5);
+        self.encode(u, pad)
+    }
+
+    fn encoded_length(ref self, num_bytes: i64) -> i64 {
+        let factor = (256.0).ln() / (self.alphabet.len() as f64).ln();
+        (factor * (num_bytes as f64)).ceil() as i64
+    }
+}
+
+// ------------------------------------------------------------ jobs
+
+fn emit(s: ref String) {
+    println(s);
+}
+
+fn read_data(name: Str) -> String {
+    match fs.read_to_string(f"data/{name}") {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read data/{name}: {e}");
+            String.new()
+        }
+    }
+}
+
+// repr() of a JSON value read back into Python.
+fn j_repr(j: ref J) -> String {
+    match j {
+        J.S(s) => repr_of(cps_of(s)),
+        J.N(n) => f"{n}",
+        J.B(b) => bool_repr(*b),
+        J.Null => "None".to_string(),
+        J.A(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for it in items.iter() {
+                parts.push(j_repr(it));
+            }
+            let body = parts.join(", ");
+            f"[{body}]"
+        }
+        J.O(members) => {
+            let mut parts: Vec[String] = Vec.new();
+            for (k, v) in members.iter() {
+                let kr = repr_of(cps_of(k));
+                let vr = j_repr(v);
+                parts.push(f"{kr}: {vr}");
+            }
+            let body = parts.join(", ");
+            f"{{{body}}}"
+        }
+    }
+}
+
+fn j_items(j: ref J, key: Str) -> Vec[J] {
+    match j_get(j, key) {
+        J.A(items) => items,
+        _ => Vec.new(),
+    }
+}
+
+fn j_ints(j: ref J) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if let J.A(items) = j {
+        for it in items.iter() {
+            if let J.N(n) = it {
+                out.push(*n);
+            }
+        }
+    }
+    out
+}
+
+fn j_opt_int(j: ref J) -> Option[i64] {
+    match j {
+        J.N(n) => Some(*n),
+        _ => None,
+    }
+}
+
+fn opt_repr(p: Option[i64]) -> String {
+    match p {
+        Some(n) => f"{n}",
+        None => "None".to_string(),
+    }
+}
+
+fn show(u: ref Uuid) {
+    let s = u.str();
+    let h = u.hex();
+    let i = u.int;
+    emit(f"  str {s}");
+    emit(f"  repr UUID('{s}')");
+    emit(f"  hex {h} int {i}");
+    emit(f"  urn urn:uuid:{s}");
+    let f = f"({u.time_low()}, {u.time_mid()}, {u.time_hi_version()}, {u.clock_seq_hi_variant()}, {u.clock_seq_low()}, {u.node()})";
+    emit(f"  fields {f}");
+    emit(f"  time {u.time()} clock_seq {u.clock_seq()} node {u.node()}");
+    let vr = repr_of(cps_of(u.variant()));
+    emit(f"  variant {vr} version {u.version_repr()}");
+    emit(f"  bytes {bytes_repr(u.bytes())}");
+    emit(f"  bytes_le {bytes_repr(u.bytes_le())}");
+}
+
+fn run_uuid(j: ref J) {
+    let mut a = no_args();
+    if let J.S(h) = j_get(j, "hex") {
+        a.hex = Some(h);
+    }
+    if j_has(j, "bytes") {
+        a.bytes = Some(j_ints(j_get(j, "bytes")));
+    }
+    if j_has(j, "bytes_le") {
+        a.bytes_le = Some(j_ints(j_get(j, "bytes_le")));
+    }
+    if j_has(j, "fields") {
+        a.fields = Some(j_ints(j_get(j, "fields")));
+    }
+    if let J.S(i) = j_get(j, "int") {
+        a.int = Some(i);
+    }
+    a.version = j_opt_int(j_get(j, "version"));
+    match make_uuid(a) {
+        Ok(u) => show(u),
+        Err(e) => emit(f"  {e}"),
+    }
+}
+
+fn run_sort(j: ref J) {
+    let mut us: Vec[Uuid] = Vec.new();
+    for h in j_strs(j, "uuids").iter() {
+        let mut a = no_args();
+        a.hex = Some(h.clone());
+        us.push(make_uuid(a).unwrap());
+    }
+    let mut ints: Vec[u128] = Vec.new();
+    for u in us.iter() {
+        ints.push(u.int);
+    }
+    // An insertion sort on `<`, because the MIR interpreter sorts u128
+    // values as if they were signed (B-2026-10-19-22).
+    let mut i = 1;
+    while i < ints.len() {
+        let x = ints[i];
+        let mut k = i;
+        while k > 0 and x < ints[k - 1] {
+            ints[k] = ints[k - 1];
+            k -= 1;
+        }
+        ints[k] = x;
+        i += 1;
+    }
+    let mut distinct = 0;
+    let mut k = 0;
+    while k < ints.len() {
+        let s = (Uuid { int: ints[k] }).str();
+        emit(f"  {s}");
+        if k == 0 or ints[k] != ints[k - 1] {
+            distinct += 1;
+        }
+        k += 1;
+    }
+    emit(f"  {distinct} distinct");
+    let a = us[0].int;
+    let b = us[1].int;
+    emit(f"  first two: == {bool_repr(a == b)} < {bool_repr(a < b)} <= {bool_repr(a <= b)} > {bool_repr(a > b)} >= {bool_repr(a >= b)}");
+}
+
+fn run_hashed(j: ref J, version: i64) {
+    let ns = namespace(j_str(j, "namespace"));
+    let name: Vec[u8] = if j_has(j, "name_bytes") {
+        let mut b: Vec[u8] = Vec.new();
+        for x in j_ints(j_get(j, "name_bytes")).iter() {
+            b.push(*x as u8);
+        }
+        b
+    } else {
+        j_str(j, "name").bytes().to_vec()
+    };
+    let u = hashed_uuid(ns, name, version);
+    let s = u.str();
+    emit(f"  {s} version {u.version_repr()}");
+}
+
+fn run_uuid1(last: mut ref Option[i64], j: ref J) {
+    for call in j_items(j, "calls").iter() {
+        let c = j_ints(call);
+        match uuid1(mut last, c[0], c[1], c[2]) {
+            Ok(u) => {
+                let s = u.str();
+                let node = hex_digits(u.node() as u128, 12);
+                emit(f"  {s} time {u.time()} clock_seq {u.clock_seq()} node {node}");
+            }
+            Err(e) => emit(f"  {e}"),
+        }
+    }
+}
+
+fn run_uuid4(j: ref J) {
+    let mut b: Vec[u8] = Vec.new();
+    for x in j_ints(j_get(j, "bytes")).iter() {
+        b.push(*x as u8);
+    }
+    let u = uuid_of_bytes(b, 4);
+    let s = u.str();
+    let vr = repr_of(cps_of(u.variant()));
+    emit(f"  {s} variant {vr} version {u.version_repr()}");
+}
+
+fn run_hashids(j: ref J) {
+    let cfg = j_get(j, "config");
+    let salt = cps_of(j_str(cfg, "salt"));
+    let alphabet = if j_has(cfg, "alphabet") { cps_of(j_str(cfg, "alphabet")) } else { default_hashids_alphabet() };
+    let h = match new_hashids(salt, j_int(cfg, "min_length", 0), alphabet) {
+        Ok(h) => h,
+        Err(e) => {
+            emit(f"  {e}");
+            return;
+        }
+    };
+    let ar = repr_of(h.alphabet);
+    let sr = repr_of(h.separators);
+    let gr = repr_of(h.guards);
+    emit(f"  alphabet {ar} separators {sr} guards {gr}");
+    let roundtrip = j_bool(j, "roundtrip");
+    for v in j_items(j, "encode").iter() {
+        let mut values: Vec[i128] = Vec.new();
+        for x in j_ints(v).iter() {
+            values.push(*x as i128);
+        }
+        let s = h.encode(values);
+        let sr = repr_of(s);
+        emit(f"  encode{tuple_repr(values)} = {sr}");
+        if roundtrip and s.len() > 0 {
+            emit(f"    decode = {tuple_repr(h.decode(s))}");
+        }
+    }
+    for s in j_strs(j, "decode").iter() {
+        let c = cps_of(s);
+        emit(f"  decode({repr_of(c)}) = {tuple_repr(h.decode(c))}");
+    }
+    for x in j_strs(j, "encode_hex").iter() {
+        let c = cps_of(x);
+        let s = h.encode_hex(c);
+        let back = h.decode_hex(s);
+        emit(f"  encode_hex({repr_of(c)}) = {repr_of(s)} decode_hex = {repr_of(cps_of(back))}");
+    }
+}
+
+fn run_shortuuid(j: ref J) {
+    let alphabet = if j_has(j, "alphabet") { cps_of(j_str(j, "alphabet")) } else { default_short_alphabet() };
+    let su = match new_shortuuid(alphabet) {
+        Ok(s) => s,
+        Err(e) => {
+            emit(f"  {e}");
+            return;
+        }
+    };
+    emit(f"  alphabet {repr_of(su.alphabet)} length {su.length()}");
+    for pair in j_items(j, "encode").iter() {
+        if let J.A(p) = pair {
+            let h = match ref p[0] {
+                J.S(s) => s.clone(),
+                _ => String.new(),
+            };
+            let pad = j_opt_int(p[1]);
+            let u = uuid_hex(h);
+            let s = su.encode(u, pad);
+            emit(f"  encode({h}, {opt_repr(pad)}) = {repr_of(s)}");
+            let back = su.decode(s, false).unwrap();
+            emit(f"    decode = {back.str()}");
+        }
+    }
+    for pair in j_items(j, "decode").iter() {
+        if let J.A(p) = pair {
+            let s = match ref p[0] {
+                J.S(s) => cps_of(s),
+                _ => Vec.new(),
+            };
+            let legacy = match ref p[1] {
+                J.B(b) => *b,
+                _ => false,
+            };
+            let head = f"  decode({repr_of(s)}, legacy={bool_repr(legacy)})";
+            match su.decode(s, legacy) {
+                Ok(u) => emit(f"{head} = {u.str()}"),
+                Err(e) => emit(f"{head}: {e}"),
+            }
+        }
+    }
+    for pair in j_items(j, "names").iter() {
+        if let J.A(p) = pair {
+            let name = match ref p[0] {
+                J.S(s) => s.clone(),
+                _ => String.new(),
+            };
+            let pad = j_opt_int(p[1]);
+            let s = su.uuid(name, pad);
+            emit(f"  uuid({repr_of(cps_of(name))}, {opt_repr(pad)}) = {repr_of(s)}");
+        }
+    }
+    for n in j_ints(j_get(j, "lengths")).iter() {
+        emit(f"  encoded_length({n}) = {su.encoded_length(*n)}");
+    }
+}
+
+// ------------------------------------------------------------ reports
+
+struct Tenant {
+    name: String,
+    salt: String,
+}
+
+fn tenants() -> Vec[Tenant] {
+    let mut out: Vec[Tenant] = Vec.new();
+    for line in read_data("tenants.txt").lines() {
+        let l = line.to_string();
+        let c = cps_of(l);
+        let sp = index_of(c, 32);
+        out.push(Tenant { name: to_string(slice(c, 0, sp)), salt: to_string(slice(c, sp + 1, c.len())) });
+    }
+    out
+}
+
+fn salt_of(ts: ref Vec[Tenant], name: ref String) -> Option[String] {
+    for t in ts.iter() {
+        if t.name == *name {
+            return Some(t.salt.clone());
+        }
+    }
+    None
+}
+
+// One row of orders.csv: the minted public id, or what was wrong.
+struct Minted {
+    line: i64,
+    tenant: String,
+    order: i64,
+    customer: i64,
+    amount: i64,
+    public: Vec[i64],
+    problem: String,
+}
+
+fn minted() -> Vec[Minted] {
+    let ts = tenants();
+    let mut out: Vec[Minted] = Vec.new();
+    let text = read_data("orders.csv");
+    let mut n = 0;
+    for line in text.lines() {
+        n += 1;
+        if n == 1 {
+            continue;
+        }
+        let cols: Vec[String] = line.split(",").map(|p| p.to_string()).collect();
+        let tenant = cols[0].clone();
+        let mut m = Minted { line: n, tenant: tenant.clone(), order: 0, customer: 0, amount: 0,
+                             public: Vec.new(), problem: String.new() };
+        let salt = match salt_of(ts, tenant) {
+            Some(s) => s,
+            None => {
+                m.problem = f"unknown tenant {repr_of(cps_of(tenant))}";
+                out.push(m);
+                continue;
+            }
+        };
+        let oid = match py_int10(cols[1]) {
+            Some(v) => v,
+            None => {
+                m.problem = f"bad order id {repr_of(cps_of(cols[1]))}";
+                out.push(m);
+                continue;
+            }
+        };
+        let customer = py_int10(cols[2]).unwrap_or(0);
+        let h = new_hashids(cps_of(salt), 8, default_hashids_alphabet()).unwrap();
+        let public = h.encode(vec![oid as i128, customer as i128]);
+        if public.len() == 0 {
+            m.problem = f"order id {oid} cannot be encoded";
+            out.push(m);
+            continue;
+        }
+        m.order = oid;
+        m.customer = customer;
+        m.amount = py_int10(cols[3]).unwrap_or(0);
+        m.public = public;
+        out.push(m);
+    }
+    out
+}
+
+fn run_orders() {
+    let mut names: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    let mut sums: Vec[i64] = Vec.new();
+    for m in minted().iter() {
+        if not m.problem.is_empty() {
+            emit(f"  line {m.line}: {m.problem}");
+            continue;
+        }
+        let t = pad_right(m.tenant, 8);
+        let o = pad_left(f"{m.order}", 5);
+        let c = pad_left(f"{m.customer}", 3);
+        let a = money(m.amount, 9);
+        let p = to_string(m.public);
+        emit(f"  {t} order {o} customer {c} {a} -> {p}");
+        let mut k = 0;
+        while k < names.len() and names[k] != m.tenant {
+            k += 1;
+        }
+        if k == names.len() {
+            names.push(m.tenant.clone());
+            counts.push(0);
+            sums.push(0);
+        }
+        counts[k] += 1;
+        sums[k] += m.amount;
+    }
+    let mut order: Vec[(String, i64)] = Vec.new();
+    let mut k = 0;
+    while k < names.len() {
+        order.push((names[k].clone(), k));
+        k += 1;
+    }
+    order.sort();
+    for (name, k) in order.iter() {
+        let t = pad_right(name, 8);
+        let c = pad_left(f"{counts[*k]}", 2);
+        let s = money(sums[*k], 10);
+        emit(f"  total {t} {c} orders {s}");
+    }
+}
+
+// time.gmtime for the report: "YYYY-MM-DD HH:MM:SS.fffffff" from 100 ns
+// ticks since 1970.
+fn utc(ticks: i64) -> String {
+    let secs = floor_div(ticks, 10000000);
+    let frac = floor_mod(ticks, 10000000);
+    let days = floor_div(secs, 86400);
+    let rem = floor_mod(secs, 86400);
+    let (y, m, d) = civil_from_days(days);
+    let ys = pad_n(y, 4);
+    let ms = pad_n(m, 2);
+    let ds = pad_n(d, 2);
+    let hh = pad_n(rem / 3600, 2);
+    let mm = pad_n(rem / 60 % 60, 2);
+    let ss = pad_n(rem % 60, 2);
+    let fr = pad_n(frac, 7);
+    f"{ys}-{ms}-{ds} {hh}:{mm}:{ss}.{fr}"
+}
+
+struct Event {
+    ticks: i64,
+    node: i64,
+    seq: i64,
+    kind: String,
+}
+
+fn mac_of(node: i64) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut s = 40;
+    while s >= 0 {
+        parts.push(hex_digits(((node >> s) & 0xff) as u128, 2));
+        s -= 8;
+    }
+    parts.join(":")
+}
+
+fn run_events() {
+    let mut good: Vec[Event] = Vec.new();
+    for line in read_data("events.log").lines() {
+        let c = cps_of(line.to_string());
+        let sp = index_of(c, 32);
+        let ident = to_string(slice(c, 0, sp));
+        let kind = to_string(slice(c, sp + 1, c.len()));
+        let mut a = no_args();
+        a.hex = Some(ident.clone());
+        let u = match make_uuid(a) {
+            Ok(u) => u,
+            Err(_) => {
+                emit(f"  skipped {repr_of(cps_of(ident))}: not a UUID");
+                continue;
+            }
+        };
+        if u.version() != Some(1) {
+            emit(f"  skipped {u.str()}: version {u.version_repr()}, not a time-based id");
+            continue;
+        }
+        good.push(Event { ticks: u.time() - 0x01b21dd213814000, node: u.node(), seq: u.clock_seq(), kind: kind });
+    }
+    // sort by (ticks, node), keeping the order of equal keys
+    let mut idx: Vec[(i64, i64, i64)] = Vec.new();
+    let mut k = 0;
+    while k < good.len() {
+        idx.push((good[k].ticks, good[k].node, k));
+        k += 1;
+    }
+    idx.sort();
+    let mut prev: Option[i64] = None;
+    let mut macs: Vec[String] = Vec.new();
+    let mut counts: Vec[i64] = Vec.new();
+    for (_, _, i) in idx.iter() {
+        let e = ref good[*i];
+        let mac = mac_of(e.node);
+        let gap = match prev {
+            None => String.new(),
+            Some(p) => f" +{floor_div(e.ticks - p, 10000)}ms",
+        };
+        let seq = pad_left(f"{e.seq}", 5);
+        let kind = pad_right(e.kind, 13);
+        let line = f"  {utc(e.ticks)} {mac} seq {seq} {kind}{gap}";
+        emit(line.trim_end().to_string());
+        prev = Some(e.ticks);
+        let mut m = 0;
+        while m < macs.len() and macs[m] != mac {
+            m += 1;
+        }
+        if m == macs.len() {
+            macs.push(mac.clone());
+            counts.push(0);
+        }
+        counts[m] += 1;
+    }
+    let mut order: Vec[(String, i64)] = Vec.new();
+    let mut m = 0;
+    while m < macs.len() {
+        order.push((macs[m].clone(), counts[m]));
+        m += 1;
+    }
+    order.sort();
+    for (mac, n) in order.iter() {
+        emit(f"  host {mac} {n} events");
+    }
+}
+
+fn run_links() {
+    let su = new_shortuuid(default_short_alphabet()).unwrap();
+    let mut seen: Vec[String] = Vec.new();
+    for line in read_data("links.txt").lines() {
+        let url = line.to_string();
+        let short = to_string(su.uuid(url, None));
+        let lower = lower_all(cps_of(url));
+        let ns = if starts_with_seq(lower, "http://") or starts_with_seq(lower, "https://") { "url" } else { "dns" };
+        let mut mark = "";
+        for s in seen.iter() {
+            if *s == short {
+                mark = " (seen)";
+            }
+        }
+        seen.push(short.clone());
+        emit(f"  {short} {ns} {url}{mark}");
+        let back = su.decode(cps_of(short), false).unwrap();
+        emit(f"    = {back.str()}");
+    }
+}
+
+fn swapcase(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    for c in s.iter() {
+        if *c >= 97 and *c <= 122 {
+            out.push(*c - 32);
+        } else if *c >= 65 and *c <= 90 {
+            out.push(*c + 32);
+        } else {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+fn run_incoming() {
+    let ts = tenants();
+    let mut names: Vec[String] = Vec.new();
+    for t in ts.iter() {
+        names.push(t.name.clone());
+    }
+    names.sort();
+    for m in minted().iter() {
+        if not m.problem.is_empty() or m.line % 3 != 0 {
+            continue;
+        }
+        let salt = salt_of(ts, m.tenant).unwrap();
+        let h = new_hashids(cps_of(salt), 8, default_hashids_alphabet()).unwrap();
+        let mut other = String.new();
+        for n in names.iter() {
+            if *n != m.tenant {
+                other = n.clone();
+                break;
+            }
+        }
+        let wrong = new_hashids(cps_of(salt_of(ts, other).unwrap()), 8, default_hashids_alphabet()).unwrap();
+        let p = m.public.clone();
+        let last = p[p.len() - 1];
+        let mut changed = slice(p, 0, p.len() - 1);
+        changed.push(if last != 97 { 97 } else { 98 });
+        let mut longer = p.clone();
+        longer.push(p[0]);
+        let cases = vec![p.clone(), changed, swapcase(p), longer, slice(p, 1, p.len())];
+        for c in cases.iter() {
+            let r = pad_right(repr_of(c), 22);
+            emit(f"  {m.tenant} {r} -> {tuple_repr(h.decode(c))}, under {other} -> {tuple_repr(wrong.decode(c))}");
+        }
+    }
+}
+
+fn run() -> Result[(), String] {
+    let text = read_data("jobs.jsonl");
+    let mut last_ts: Option[i64] = None;
+    let mut n = 0;
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let j = json_line(line.to_string())?;
+        let op = j_str(j, "op");
+        let mut parts: Vec[String] = Vec.new();
+        if let J.O(members) = ref j {
+            for (k, v) in members.iter() {
+                if k != "op" {
+                    let r = j_repr(v);
+                    parts.push(f"{k}={r}");
+                }
+            }
+        }
+        let rest = parts.join(" ");
+        let head = f"== {n} {op} {rest}";
+        emit(head.trim_end().to_string());
+        if op == "uuid" {
+            run_uuid(j);
+        } else if op == "sort" {
+            run_sort(j);
+        } else if op == "uuid3" {
+            run_hashed(j, 3);
+        } else if op == "uuid5" {
+            run_hashed(j, 5);
+        } else if op == "uuid1" {
+            run_uuid1(mut last_ts, j);
+        } else if op == "uuid4" {
+            run_uuid4(j);
+        } else if op == "hashids" {
+            run_hashids(j);
+        } else if op == "shortuuid" {
+            run_shortuuid(j);
+        } else if op == "orders" {
+            run_orders();
+        } else if op == "events" {
+            run_events();
+        } else if op == "links" {
+            run_links();
+        } else if op == "incoming" {
+            run_incoming();
+        }
+        n += 1;
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("38efec96-8df0-11ef-843d-3c22fb7a10de order.shipped\n");
+    t.push_str("43350571-8df0-11ef-82f0-0242ac110002 order.shipped\n");
+    t.push_str("31f3ba74-8df0-11ef-b8d9-3c22fb7a10de user.login\n");
+    t.push_str("27f1769c-8df0-11ef-a357-0242ac110002 order.paid\n");
+    t.push_str("261d02ed-8df0-11ef-87dc-3c22fb7a10de user.login\n");
+    t.push_str("40ff7d0f-8df0-11ef-9de0-0242ac110003 order.paid\n");
+    t.push_str("2bd7bb88-8df0-11ef-8cd7-0242ac110003 order.created\n");
+    t.push_str("2e4f4759-8df0-11ef-a054-0242ac110002 order.created\n");
+    t.push_str("2e848867-8df0-11ef-b4c3-0242ac110002 user.login\n");
+    t.push_str("3d57a6c3-8df0-11ef-b9a0-0242ac110003 user.login\n");
+    t.push_str("44469e9b-8df0-11ef-87c2-0242ac110002 cart.updated\n");
+    t.push_str("2a367f73-8df0-11ef-af71-3c22fb7a10de user.login\n");
+    t.push_str("244fcb84-8df0-11ef-af32-0242ac110002 order.paid\n");
+    t.push_str("3eb06b19-8df0-11ef-888c-0242ac110002 cart.updated\n");
+    t.push_str("42338743-8df0-11ef-afe9-0242ac110002 cart.updated\n");
+    t.push_str("37441923-8df0-11ef-a2bd-0242ac110002 user.login\n");
+    t.push_str("26560333-8df0-11ef-a675-3c22fb7a10de order.created\n");
+    t.push_str("34674ede-8df0-11ef-9bee-0242ac110002 order.created\n");
+    t.push_str("30be7070-8df0-11ef-bb1c-0242ac110002 order.paid\n");
+    t.push_str("3b412e91-8df0-11ef-a189-3c22fb7a10de user.login\n");
+    t.push_str("2ddcf085-8df0-11ef-823d-3c22fb7a10de order.shipped\n");
+    t.push_str("358ae534-8df0-11ef-a2ef-0242ac110003 order.shipped\n");
+    t.push_str("3353dd7f-8df0-11ef-9258-0242ac110002 order.paid\n");
+    t.push_str("2fd0aa3e-8df0-11ef-b721-0242ac110003 order.shipped\n");
+    t.push_str("not-a-uuid junk\n");
+    t.push_str("12345678-1234-4678-9234-567812345678 random.id\n");
+    v.push(DataFile { path: "events.log".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"{12345678-1234-5678-1234-567812345678}\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"urn:uuid:12345678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678123456781234567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-0000-0000-000000000000\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"ffffffff-ffff-ffff-ffff-ffffffffffff\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"a8098c1a-f86e-11da-bd1a-00112444be1e\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"6fa459ea-ee8a-3ca4-894e-db77e160355e\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"886313e1-3b8a-5372-9b90-0c9aee199e5d\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"f81d4fae-7dec-11d0-a765-00a0c91e6bf6\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"{{{12345678-1234-5678-1234-567812345678}}\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"uuid:urn:12345678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"1234-5678-1234-5678-1234-5678-1234-5678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"0x345678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12_45678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"+2345678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \" 2345678-1234-5678-1234-56781234567 \"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"１２345678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-56781234567\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-5678123456789\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-56781234567g\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12_4567_-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"0x_45678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"urn:uuid:\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"xurn:uuid:12345678-1234-5678-1234-567812345678\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"c232ab00-9414-11ec-b3c8-9e6bdeced846\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-8000-c000-000000000000\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-0000-e000-000000000000\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-f000-6000-000000000000\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"{12345678-1234-5678-1234-567812345678}\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"{12345678-1234-5678-1234-567812345678}\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"{12345678-1234-5678-1234-567812345678}\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"{12345678-1234-5678-1234-567812345678}\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"urn:uuid:12345678-1234-5678-1234-567812345678\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"urn:uuid:12345678-1234-5678-1234-567812345678\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"urn:uuid:12345678-1234-5678-1234-567812345678\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"urn:uuid:12345678-1234-5678-1234-567812345678\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678123456781234567812345678\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678123456781234567812345678\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678123456781234567812345678\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678123456781234567812345678\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-0000-0000-000000000000\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-0000-0000-000000000000\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-0000-0000-000000000000\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"00000000-0000-0000-0000-000000000000\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"ffffffff-ffff-ffff-ffff-ffffffffffff\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"ffffffff-ffff-ffff-ffff-ffffffffffff\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"ffffffff-ffff-ffff-ffff-ffffffffffff\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"ffffffff-ffff-ffff-ffff-ffffffffffff\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\", \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\", \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\", \"version\": 5}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\", \"version\": 0}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\", \"version\": 6}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [39, 34, 92, 9, 10, 13, 127, 128, 32, 126, 0, 1, 2, 3, 4, 5]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [39, 34, 92, 9, 10, 13, 127, 128, 32, 126, 0, 1, 2, 3, 4, 5]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], \"version\": 4}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes_le\": [18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120], \"version\": 2}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [305419896, 4660, 22136, 18, 52, 95073701484152]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [0, 0, 0, 0, 0, 0]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [4294967295, 65535, 65535, 255, 255, 281474976710655]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [4294967296, 0, 0, 0, 0, 0]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [0, 65536, 0, 0, 0, 0]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [0, 0, -1, 0, 0, 0]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [0, 0, 0, 256, 0, 0]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [0, 0, 0, 0, 300, 0]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [0, 0, 0, 0, 0, 281474976710656]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [1, 2, 3, 4, 5]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [1, 2, 3, 4, 5, 6, 7]}\n");
+    t.push_str("{\"op\": \"uuid\", \"fields\": [305419896, 4660, 22136, 18, 52, 95073701484152], \"version\": 1}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"0\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"1\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"170141183460469231731687303715884105728\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"340282366920938463463374607431768211455\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"340282366920938463463374607431768211456\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"-1\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"24197857161011715162171839636988778104\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"24197857161011715162171839636988778104\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"int\": \"170141183460469231731687303715884105728\", \"version\": 3}\n");
+    t.push_str("{\"op\": \"uuid\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"hex\": \"12345678-1234-5678-1234-567812345678\", \"int\": \"5\"}\n");
+    t.push_str("{\"op\": \"uuid\", \"bytes\": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], \"fields\": [305419896, 4660, 22136, 18, 52, 95073701484152]}\n");
+    t.push_str("{\"op\": \"sort\", \"uuids\": [\"6fa459ea-ee8a-3ca4-894e-db77e160355e\", \"12345678-1234-5678-1234-567812345678\", \"12345678123456781234567812345678\", \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"0x345678-1234-5678-1234-567812345678\", \"0x345678-1234-5678-1234-567812345678\", \"6868d87f462bccca3ef68a44f4acbde2\", \"dd849c006c76703195633b5de1d521dc\", \"73b320fd12bccb3392a87fe5eef93ebc\", \"c26784ccf401607d50af16d4105b03ae\", \"0e9bbe9c7f08507a526791c8842f752e\", \"84a2462ecf2cd5b88e163c3bf70cb2e7\"]}\n");
+    t.push_str("{\"op\": \"sort\", \"uuids\": [\"12345678123456781234567812345678\", \"{{{12345678-1234-5678-1234-567812345678}}\", \"1234-5678-1234-5678-1234-5678-1234-5678\", \"00000000-0000-0000-0000-000000000000\", \"f81d4fae-7dec-11d0-a765-00a0c91e6bf6\", \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"833b22161443de648e16453f7dcac9e9\", \"90766628352f128a9f417ea8765ca0b9\", \"ff4a68f443ff7c4d8b2c1d3467bc0ed2\", \"df61edbf5fcfb736d0823bb2b5792a13\", \"ccf5a80e6c2add4d0a415d3e677dd8b8\", \"af23eab3657274a301391683a19c980a\"]}\n");
+    t.push_str("{\"op\": \"sort\", \"uuids\": [\"FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF\", \"886313e1-3b8a-5372-9b90-0c9aee199e5d\", \"12345678123456781234567812345678\", \"12345678-1234-5678-1234-567812345678\", \"uuid:urn:12345678-1234-5678-1234-567812345678\", \"886313e1-3b8a-5372-9b90-0c9aee199e5d\", \"7b4b8cef5bdce7fe3b033f5749599504\", \"cb406c43f5aae7f72de9ca6368210624\", \"be11a6654d0b833fd059f34bbfe5539f\", \"621ee9b5bde3bb66af1f2c0b09f3b67b\", \"e2a14d5d09afda1d1b3c332d6216ed2c\", \"514286ee293b78130ddcac294ac934c2\"]}\n");
+    t.push_str("{\"op\": \"sort\", \"uuids\": [\"a8098c1a-f86e-11da-bd1a-00112444be1e\", \"{12345678-1234-5678-1234-567812345678}\", \"0x345678-1234-5678-1234-567812345678\", \"{12345678-1234-5678-1234-567812345678}\", \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"a8098c1a-f86e-11da-bd1a-00112444be1e\", \"9dc961f404cb8788733598b1813e6d78\", \"284a9a1cdb094e0bf062fd8799b8ed81\", \"d9dce8de8cc6024a39af341a797e2234\", \"b8d908fc6b0c42ca7e2ee931ef1d9fff\", \"71bf95d9e1cd3d2ff5d129b68f7e5bf2\", \"4a546f6a8342d27c6270741caa9f2c15\"]}\n");
+    t.push_str("{\"op\": \"uuid1\", \"calls\": [[1729324800000000000, 2485377892354, 4660], [1729324800000000100, 2485377892354, 4660], [1729324800000000150, 2485377892354, 4660], [1729324800000000150, 2485377892354, 4660], [1729324799999995000, 2485377892354, 4660], [1729324801000000000, 2485377892354, 4660]]}\n");
+    t.push_str("{\"op\": \"uuid1\", \"calls\": [[1729324802000000000, 0, 0], [1729324803000000000, 281474976710655, 16383], [1729324804000000000, 1, 16384], [1729324805000000000, 2, 65543]]}\n");
+    t.push_str("{\"op\": \"uuid1\", \"calls\": [[0, 3735928559, 99], [1000000000000000000, 3735928559, 99], [4611686018427387904, 3735928559, 99], [9000000000000000000, 3735928559, 99]]}\n");
+    t.push_str("{\"op\": \"uuid1\", \"calls\": [[1, 95529467905, 7]]}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@url\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@oid\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@x500\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid3\", \"namespace\": \"@dns\", \"name_bytes\": [0, 255, 128, 10]}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@url\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@oid\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"1.3.6.1.4.1.343\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"cn=John Smith,o=Example,c=US\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"naïve café\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"日本語ドメイン.jp\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"\\u0000\\u0001\\u0002\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@x500\", \"name\": \"🙂 emoji\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"12345678-1234-5678-1234-567812345678\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"python.org\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"www.example.com\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"http://example.com/a?b=c\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"00000000-0000-0000-0000-000000000000\", \"name\": \"a\"}\n");
+    t.push_str("{\"op\": \"uuid5\", \"namespace\": \"@dns\", \"name_bytes\": [0, 255, 128, 10]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [172, 198, 20, 53, 107, 154, 182, 181, 58, 177, 225, 136, 148, 139, 111, 89]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [226, 191, 146, 44, 42, 30, 29, 69, 183, 22, 110, 133, 134, 82, 172, 215]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [143, 218, 3, 88, 20, 192, 253, 186, 224, 200, 26, 146, 48, 63, 228, 56]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [49, 189, 247, 223, 216, 233, 13, 204, 196, 109, 216, 93, 63, 69, 117, 94]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [9, 118, 103, 188, 148, 52, 136, 235, 152, 67, 244, 144, 115, 1, 37, 233]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [203, 4, 51, 188, 51, 145, 173, 176, 29, 237, 246, 94, 89, 109, 128, 24]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [29, 135, 9, 241, 240, 237, 36, 138, 40, 73, 78, 153, 151, 137, 110, 61]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [27, 250, 162, 113, 103, 249, 48, 155, 96, 135, 108, 29, 85, 3, 11, 210]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}\n");
+    t.push_str("{\"op\": \"uuid4\", \"bytes\": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"this is my salt\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"this is my salt\", \"min_length\": 8}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"arbitrary salt\", \"min_length\": 16, \"alphabet\": \"abcdefghijkl0123456\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"acme-orders\", \"min_length\": 6}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"acme-orders\", \"min_length\": 40}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"\", \"min_length\": 0, \"alphabet\": \"0123456789abcdef\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"short\", \"alphabet\": \"abcdefghijklmnopqrstuvwxyz\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"caps\", \"alphabet\": \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"seps only\", \"alphabet\": \"cfhistuCFHISTUabc\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"dupes\", \"alphabet\": \"aabbccddeeffgghhiijjkkllmmnnoopp\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"ünïcödé sält\", \"alphabet\": \"αβγδεζηθικλμνξοπρστυφχψω0123456789\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"x\", \"min_length\": -5}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"alphabet\": \"abcdefghijklmno\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"alphabet\": \"abcdefghijklmnop\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"alphabet\": \"cfhistu\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"hashids\", \"config\": {\"salt\": \"a very very very very very very very very very very long salt indeed\"}, \"encode\": [[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]], \"decode\": [\"\", \"a\", \"NkK9\", \"laHquq\", \"gB0NV05e\", \"jR\", \"xLmOP\", \"1d6216i30h53elk3\", \"QNrmM\", \"Ö\"], \"encode_hex\": [\"507f1f77bcf86cd799439011\", \"deadbeef\", \"\", \"0\", \"FFFFFFFFFFFFFFFFFFFFFFFF\", \"xyz\", \"5_0\", \" 1\"], \"roundtrip\": true}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": null, \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"01\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"0123456789abcdef\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"abcdefghijklmnopqrstuvwxyz\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA9876543210-_\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"aaaa\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"ab\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"αβγ\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"shortuuid\", \"alphabet\": \"AAAAAAAAAB\", \"encode\": [[\"12345678-1234-5678-1234-567812345678\", null], [\"00000000-0000-0000-0000-000000000000\", null], [\"ffffffff-ffff-ffff-ffff-ffffffffffff\", null], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 5], [\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", 0], [\"00000000-0000-0000-0000-000000000000\", 3]], \"decode\": [[\"CXc85b4rqinB7s5J52TRYb\", false], [\"CXc85b4rqinB7s5J52TRYb\", true], [\"\", false], [\"2\", false], [\"0000\", false], [\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\", false], [\"!\", false], [\"1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111\", false]], \"names\": [[\"example.com\", null], [\"http://example.com\", null], [\"HTTPS://Example.com/x\", null], [\"Https://\", 4], [\"\", null]], \"lengths\": [16, 8, 1, 0, 32]}\n");
+    t.push_str("{\"op\": \"orders\"}\n");
+    t.push_str("{\"op\": \"events\"}\n");
+    t.push_str("{\"op\": \"links\"}\n");
+    t.push_str("{\"op\": \"incoming\"}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("https://example.com/docs/getting-started\n");
+    t.push_str("https://example.com/pricing\n");
+    t.push_str("http://blog.example.com/2024/10/launch\n");
+    t.push_str("https://example.com/docs/getting-started\n");
+    t.push_str("example.com/no-scheme\n");
+    t.push_str("HTTPS://EXAMPLE.COM/Upper\n");
+    t.push_str("ftp://files.example.com/a.zip\n");
+    t.push_str("https://example.com/search?q=uuid&lang=en\n");
+    t.push_str("https://例え.jp/パス\n");
+    v.push(DataFile { path: "links.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("tenant,order_id,customer_id,amount_cents\n");
+    t.push_str("globex,1014,294,74092\n");
+    t.push_str("globex,1049,324,66778\n");
+    t.push_str("initech,1095,306,84055\n");
+    t.push_str("acme,1113,435,84501\n");
+    t.push_str("initech,1169,441,85391\n");
+    t.push_str("initech,1189,241,8581\n");
+    t.push_str("acme,1246,49,62329\n");
+    t.push_str("acme,1260,330,77125\n");
+    t.push_str("acme,1321,406,88513\n");
+    t.push_str("globex,1362,322,32288\n");
+    t.push_str("acme,1380,172,58550\n");
+    t.push_str("acme,1407,18,60186\n");
+    t.push_str("globex,1472,174,34212\n");
+    t.push_str("acme,1490,417,49346\n");
+    t.push_str("acme,1529,76,35904\n");
+    t.push_str("globex,1580,330,39608\n");
+    t.push_str("acme,1612,72,6694\n");
+    t.push_str("globex,1631,16,44490\n");
+    t.push_str("acme,1681,12,68803\n");
+    t.push_str("initech,1713,53,34642\n");
+    t.push_str("initech,1746,301,24474\n");
+    t.push_str("initech,1786,464,85773\n");
+    t.push_str("globex,1836,42,33381\n");
+    t.push_str("globex,1861,385,21132\n");
+    t.push_str("globex,1894,427,51009\n");
+    t.push_str("initech,1944,325,1549\n");
+    t.push_str("initech,1964,168,19558\n");
+    t.push_str("acme,2023,118,92660\n");
+    t.push_str("globex,2052,379,5077\n");
+    t.push_str("acme,2095,421,13021\n");
+    t.push_str("acme,notanumber,1,5\n");
+    t.push_str("umbrella,5,1,5\n");
+    t.push_str("globex,-4,1,5\n");
+    v.push(DataFile { path: "orders.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("acme acme-orders\n");
+    t.push_str("globex globex 2024\n");
+    t.push_str("initech TPS reports\n");
+    v.push(DataFile { path: "tenants.txt".to_string(), hex: false, body: t });
+}

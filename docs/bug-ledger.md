@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 739 |
+| miscompile | 740 |
 | run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2949 |
-| interp | 964 |
+| interp | 965 |
 | typecheck | 490 |
 | ownership | 116 |
 | other | 115 |
@@ -167,6 +167,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-16 | 2026-10-19 | typecheck | low | Plain `=` to a `mut ref i64` binding writes through on every surface, where design.md says it does not: `fn inc(counter: mut ref i64) { counter = counter + 1; }` passes `karac check` and leaves the caller's value at 1 on `__mir-run` and `__mir-llvm-run`, against design.md "Plain `=` does not auto-deref: write `*x = v`" | — |
 | B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
 | B-2026-10-19-21 | 2026-10-19 | typecheck+cli | low | `karac check` typechecks the Kāra library's bodies a second time for its MIR borrow check (9ee80c0104), so a small program's check takes about 1.1 s instead of 0.2 s in a debug build; lowering the program's own bodies against the library's signatures, or reusing check's typecheck, would avoid it | — |
+| B-2026-10-19-22 | 2026-10-19 | interp | medium | MIR interpreter orders u128 values as signed in sort, sort_by_key, tuple sort and SortedSet, so values with the top bit set come first; `<` and `>` are right | — |
 
 ### Relocated
 

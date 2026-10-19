@@ -1,0 +1,2382 @@
+== 0 uuid hex='12345678-1234-5678-1234-567812345678'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 1 uuid hex='{12345678-1234-5678-1234-567812345678}'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 2 uuid hex='urn:uuid:12345678-1234-5678-1234-567812345678'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 3 uuid hex='12345678123456781234567812345678'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 4 uuid hex='6ba7b810-9dad-11d1-80b4-00c04fd430c8'
+  str 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  repr UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+  hex 6ba7b8109dad11d180b400c04fd430c8 int 143098242404177361603877621312831893704
+  urn urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  fields (1806153744, 40365, 4561, 128, 180, 825973027016)
+  time 131059232331511824 clock_seq 180 node 825973027016
+  variant 'specified in RFC 4122' version 1
+  bytes b'k\xa7\xb8\x10\x9d\xad\x11\xd1\x80\xb4\x00\xc0O\xd40\xc8'
+  bytes_le b'\x10\xb8\xa7k\xad\x9d\xd1\x11\x80\xb4\x00\xc0O\xd40\xc8'
+== 5 uuid hex='00000000-0000-0000-0000-000000000000'
+  str 00000000-0000-0000-0000-000000000000
+  repr UUID('00000000-0000-0000-0000-000000000000')
+  hex 00000000000000000000000000000000 int 0
+  urn urn:uuid:00000000-0000-0000-0000-000000000000
+  fields (0, 0, 0, 0, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+== 6 uuid hex='ffffffff-ffff-ffff-ffff-ffffffffffff'
+  str ffffffff-ffff-ffff-ffff-ffffffffffff
+  repr UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')
+  hex ffffffffffffffffffffffffffffffff int 340282366920938463463374607431768211455
+  urn urn:uuid:ffffffff-ffff-ffff-ffff-ffffffffffff
+  fields (4294967295, 65535, 65535, 255, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'reserved for future definition' version None
+  bytes b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+== 7 uuid hex='FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF'
+  str ffffffff-ffff-4fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-4fff-bfff-ffffffffffff')
+  hex ffffffffffff4fffbfffffffffffffff int 340282366920937632322261936355783213055
+  urn urn:uuid:ffffffff-ffff-4fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 20479, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 4
+  bytes b'\xff\xff\xff\xff\xff\xffO\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xffO\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 8 uuid hex='a8098c1a-f86e-11da-bd1a-00112444be1e'
+  str a8098c1a-f86e-11da-bd1a-00112444be1e
+  repr UUID('a8098c1a-f86e-11da-bd1a-00112444be1e')
+  hex a8098c1af86e11dabd1a00112444be1e int 223359875637754765292326297443183672862
+  urn urn:uuid:a8098c1a-f86e-11da-bd1a-00112444be1e
+  fields (2819197978, 63598, 4570, 189, 26, 73622928926)
+  time 133692293110139930 clock_seq 15642 node 73622928926
+  variant 'specified in RFC 4122' version 1
+  bytes b'\xa8\t\x8c\x1a\xf8n\x11\xda\xbd\x1a\x00\x11$D\xbe\x1e'
+  bytes_le b'\x1a\x8c\t\xa8n\xf8\xda\x11\xbd\x1a\x00\x11$D\xbe\x1e'
+== 9 uuid hex='6fa459ea-ee8a-3ca4-894e-db77e160355e'
+  str 6fa459ea-ee8a-3ca4-894e-db77e160355e
+  repr UUID('6fa459ea-ee8a-3ca4-894e-db77e160355e')
+  hex 6fa459eaee8a3ca4894edb77e160355e int 148397667964594677437660345472754136414
+  urn urn:uuid:6fa459ea-ee8a-3ca4-894e-db77e160355e
+  fields (1873041898, 61066, 15524, 137, 78, 241307928769886)
+  time 911115302981622250 clock_seq 2382 node 241307928769886
+  variant 'specified in RFC 4122' version 3
+  bytes b'o\xa4Y\xea\xee\x8a<\xa4\x89N\xdbw\xe1`5^'
+  bytes_le b'\xeaY\xa4o\x8a\xee\xa4<\x89N\xdbw\xe1`5^'
+== 10 uuid hex='886313e1-3b8a-5372-9b90-0c9aee199e5d'
+  str 886313e1-3b8a-5372-9b90-0c9aee199e5d
+  repr UUID('886313e1-3b8a-5372-9b90-0c9aee199e5d')
+  hex 886313e13b8a53729b900c9aee199e5d int 181289448026289383154478846676280385117
+  urn urn:uuid:886313e1-3b8a-5372-9b90-0c9aee199e5d
+  fields (2288194529, 15242, 21362, 155, 144, 13859559153245)
+  time 248326395638518753 clock_seq 7056 node 13859559153245
+  variant 'specified in RFC 4122' version 5
+  bytes b'\x88c\x13\xe1;\x8aSr\x9b\x90\x0c\x9a\xee\x19\x9e]'
+  bytes_le b'\xe1\x13c\x88\x8a;rS\x9b\x90\x0c\x9a\xee\x19\x9e]'
+== 11 uuid hex='f81d4fae-7dec-11d0-a765-00a0c91e6bf6'
+  str f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+  repr UUID('f81d4fae-7dec-11d0-a765-00a0c91e6bf6')
+  hex f81d4fae7dec11d0a76500a0c91e6bf6 int 329800735698586629295641978511506172918
+  urn urn:uuid:f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+  fields (4162670510, 32236, 4560, 167, 101, 690568981494)
+  time 130742845922168750 clock_seq 10085 node 690568981494
+  variant 'specified in RFC 4122' version 1
+  bytes b'\xf8\x1dO\xae}\xec\x11\xd0\xa7e\x00\xa0\xc9\x1ek\xf6'
+  bytes_le b'\xaeO\x1d\xf8\xec}\xd0\x11\xa7e\x00\xa0\xc9\x1ek\xf6'
+== 12 uuid hex='{{{12345678-1234-5678-1234-567812345678}}'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 13 uuid hex='uuid:urn:12345678-1234-5678-1234-567812345678'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 14 uuid hex='1234-5678-1234-5678-1234-5678-1234-5678'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 15 uuid hex='0x345678-1234-5678-1234-567812345678'
+  str 00345678-1234-5678-1234-567812345678
+  repr UUID('00345678-1234-5678-1234-567812345678')
+  hex 00345678123456781234567812345678 int 271753236883229449903312551942575736
+  urn urn:uuid:00345678-1234-5678-1234-567812345678
+  fields (3430008, 4660, 22136, 18, 52, 95073701484152)
+  time 466142575983875704 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x004Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x004\x12xV\x124Vx\x124Vx'
+== 16 uuid hex='12_45678-1234-5678-1234-567812345678'
+  str 01245678-1234-5678-1234-567812345678
+  repr UUID('01245678-1234-5678-1234-567812345678')
+  hex 01245678123456781234567812345678 int 1517904482931588080750631670955398776
+  urn urn:uuid:01245678-1234-5678-1234-567812345678
+  fields (19158648, 4660, 22136, 18, 52, 95073701484152)
+  time 466142575999604344 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x01$Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV$\x014\x12xV\x124Vx\x124Vx'
+== 17 uuid hex='+2345678-1234-5678-1234-567812345678'
+  str 02345678-1234-5678-1234-567812345678
+  repr UUID('02345678-1234-5678-1234-567812345678')
+  hex 02345678123456781234567812345678 int 2930209228453061195710926672503264888
+  urn urn:uuid:02345678-1234-5678-1234-567812345678
+  fields (36984440, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576017430136 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x024Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x024\x12xV\x124Vx\x124Vx'
+== 18 uuid hex=' 2345678-1234-5678-1234-56781234567 '
+  str 00234567-8123-4567-8123-456781234567
+  repr UUID('00234567-8123-4567-8123-456781234567')
+  hex 00234567812345678123456781234567 int 183138076778316324731932917031454055
+  urn urn:uuid:00234567-8123-4567-8123-456781234567
+  fields (2311527, 33059, 17767, 129, 35, 76310850520423)
+  time 389421880116987239 clock_seq 291 node 76310850520423
+  variant 'specified in RFC 4122' version 4
+  bytes b'\x00#Eg\x81#Eg\x81#Eg\x81#Eg'
+  bytes_le b'gE#\x00#\x81gE\x81#Eg\x81#Eg'
+== 19 uuid hex='１２345678-1234-5678-1234-567812345678'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 20 uuid hex='12345678-1234-5678-1234-56781234567'
+  ValueError: badly formed hexadecimal UUID string
+== 21 uuid hex='12345678-1234-5678-1234-5678123456789'
+  ValueError: badly formed hexadecimal UUID string
+== 22 uuid hex='12345678-1234-5678-1234-56781234567g'
+  ValueError: invalid literal for int() with base 16: '1234567812345678123456781234567g'
+== 23 uuid hex='12_4567_-1234-5678-1234-567812345678'
+  str 00124567-1234-5678-1234-567812345678
+  repr UUID('00124567-1234-5678-1234-567812345678')
+  hex 00124567123456781234567812345678 int 94868995851020489642329483230074488
+  urn urn:uuid:00124567-1234-5678-1234-567812345678
+  fields (1197415, 4660, 22136, 18, 52, 95073701484152)
+  time 466142575981643111 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x12Eg\x124Vx\x124Vx\x124Vx'
+  bytes_le b'gE\x12\x004\x12xV\x124Vx\x124Vx'
+== 24 uuid hex='0x_45678-1234-5678-1234-567812345678'
+  str 00045678-1234-5678-1234-567812345678
+  repr UUID('00045678-1234-5678-1234-567812345678')
+  hex 00045678123456781234567812345678 int 22522987673557723733848728140011128
+  urn urn:uuid:00045678-1234-5678-1234-567812345678
+  fields (284280, 4660, 22136, 18, 52, 95073701484152)
+  time 466142575980729976 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x04Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV\x04\x004\x12xV\x124Vx\x124Vx'
+== 25 uuid hex=''
+  ValueError: badly formed hexadecimal UUID string
+== 26 uuid hex='urn:uuid:'
+  ValueError: badly formed hexadecimal UUID string
+== 27 uuid hex='xurn:uuid:12345678-1234-5678-1234-567812345678'
+  ValueError: badly formed hexadecimal UUID string
+== 28 uuid hex='c232ab00-9414-11ec-b3c8-9e6bdeced846'
+  str c232ab00-9414-11ec-b3c8-9e6bdeced846
+  repr UUID('c232ab00-9414-11ec-b3c8-9e6bdeced846')
+  hex c232ab00941411ecb3c89e6bdeced846 int 258133314363070689776975540939270314054
+  urn urn:uuid:c232ab00-9414-11ec-b3c8-9e6bdeced846
+  fields (3258100480, 37908, 4588, 179, 200, 174186136787014)
+  time 138648505420000000 clock_seq 13256 node 174186136787014
+  variant 'specified in RFC 4122' version 1
+  bytes b'\xc22\xab\x00\x94\x14\x11\xec\xb3\xc8\x9ek\xde\xce\xd8F'
+  bytes_le b'\x00\xab2\xc2\x14\x94\xec\x11\xb3\xc8\x9ek\xde\xce\xd8F'
+== 29 uuid hex='00000000-0000-8000-c000-000000000000'
+  str 00000000-0000-8000-c000-000000000000
+  repr UUID('00000000-0000-8000-c000-000000000000')
+  hex 0000000000008000c000000000000000 int 604476744865369869516800
+  urn urn:uuid:00000000-0000-8000-c000-000000000000
+  fields (0, 0, 32768, 192, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'reserved for Microsoft compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x80\x00\xc0\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x80\xc0\x00\x00\x00\x00\x00\x00\x00'
+== 30 uuid hex='00000000-0000-0000-e000-000000000000'
+  str 00000000-0000-0000-e000-000000000000
+  repr UUID('00000000-0000-0000-e000-000000000000')
+  hex 0000000000000000e000000000000000 int 16140901064495857664
+  urn urn:uuid:00000000-0000-0000-e000-000000000000
+  fields (0, 0, 0, 224, 0, 0)
+  time 0 clock_seq 8192 node 0
+  variant 'reserved for future definition' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x00\x00\xe0\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x00\xe0\x00\x00\x00\x00\x00\x00\x00'
+== 31 uuid hex='00000000-0000-f000-6000-000000000000'
+  str 00000000-0000-f000-6000-000000000000
+  repr UUID('00000000-0000-f000-6000-000000000000')
+  hex 000000000000f0006000000000000000 int 1133374873417742492368896
+  urn urn:uuid:00000000-0000-f000-6000-000000000000
+  fields (0, 0, 61440, 96, 0, 0)
+  time 0 clock_seq 8192 node 0
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\xf0\x00`\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\xf0`\x00\x00\x00\x00\x00\x00\x00'
+== 32 uuid hex='12345678-1234-5678-1234-567812345678' version=1
+  str 12345678-1234-1678-9234-567812345678
+  repr UUID('12345678-1234-1678-9234-567812345678')
+  hex 12345678123416789234567812345678 int 24197857161011412939940308016549877368
+  urn urn:uuid:12345678-1234-1678-9234-567812345678
+  fields (305419896, 4660, 5752, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 1
+  bytes b'\x124Vx\x124\x16x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x\x16\x924Vx\x124Vx'
+== 33 uuid hex='12345678-1234-5678-1234-567812345678' version=3
+  str 12345678-1234-3678-9234-567812345678
+  repr UUID('12345678-1234-3678-9234-567812345678')
+  hex 12345678123436789234567812345678 int 24197857161011564055667759845196715640
+  urn urn:uuid:12345678-1234-3678-9234-567812345678
+  fields (305419896, 4660, 13944, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 3
+  bytes b'\x124Vx\x1246x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x6\x924Vx\x124Vx'
+== 34 uuid hex='12345678-1234-5678-1234-567812345678' version=4
+  str 12345678-1234-4678-9234-567812345678
+  repr UUID('12345678-1234-4678-9234-567812345678')
+  hex 12345678123446789234567812345678 int 24197857161011639613531485759520134776
+  urn urn:uuid:12345678-1234-4678-9234-567812345678
+  fields (305419896, 4660, 18040, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 4
+  bytes b'\x124Vx\x124Fx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xF\x924Vx\x124Vx'
+== 35 uuid hex='12345678-1234-5678-1234-567812345678' version=5
+  str 12345678-1234-5678-9234-567812345678
+  repr UUID('12345678-1234-5678-9234-567812345678')
+  hex 12345678123456789234567812345678 int 24197857161011715171395211673843553912
+  urn urn:uuid:12345678-1234-5678-9234-567812345678
+  fields (305419896, 4660, 22136, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 5
+  bytes b'\x124Vx\x124Vx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x924Vx\x124Vx'
+== 36 uuid hex='{12345678-1234-5678-1234-567812345678}' version=1
+  str 12345678-1234-1678-9234-567812345678
+  repr UUID('12345678-1234-1678-9234-567812345678')
+  hex 12345678123416789234567812345678 int 24197857161011412939940308016549877368
+  urn urn:uuid:12345678-1234-1678-9234-567812345678
+  fields (305419896, 4660, 5752, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 1
+  bytes b'\x124Vx\x124\x16x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x\x16\x924Vx\x124Vx'
+== 37 uuid hex='{12345678-1234-5678-1234-567812345678}' version=3
+  str 12345678-1234-3678-9234-567812345678
+  repr UUID('12345678-1234-3678-9234-567812345678')
+  hex 12345678123436789234567812345678 int 24197857161011564055667759845196715640
+  urn urn:uuid:12345678-1234-3678-9234-567812345678
+  fields (305419896, 4660, 13944, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 3
+  bytes b'\x124Vx\x1246x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x6\x924Vx\x124Vx'
+== 38 uuid hex='{12345678-1234-5678-1234-567812345678}' version=4
+  str 12345678-1234-4678-9234-567812345678
+  repr UUID('12345678-1234-4678-9234-567812345678')
+  hex 12345678123446789234567812345678 int 24197857161011639613531485759520134776
+  urn urn:uuid:12345678-1234-4678-9234-567812345678
+  fields (305419896, 4660, 18040, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 4
+  bytes b'\x124Vx\x124Fx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xF\x924Vx\x124Vx'
+== 39 uuid hex='{12345678-1234-5678-1234-567812345678}' version=5
+  str 12345678-1234-5678-9234-567812345678
+  repr UUID('12345678-1234-5678-9234-567812345678')
+  hex 12345678123456789234567812345678 int 24197857161011715171395211673843553912
+  urn urn:uuid:12345678-1234-5678-9234-567812345678
+  fields (305419896, 4660, 22136, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 5
+  bytes b'\x124Vx\x124Vx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x924Vx\x124Vx'
+== 40 uuid hex='urn:uuid:12345678-1234-5678-1234-567812345678' version=1
+  str 12345678-1234-1678-9234-567812345678
+  repr UUID('12345678-1234-1678-9234-567812345678')
+  hex 12345678123416789234567812345678 int 24197857161011412939940308016549877368
+  urn urn:uuid:12345678-1234-1678-9234-567812345678
+  fields (305419896, 4660, 5752, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 1
+  bytes b'\x124Vx\x124\x16x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x\x16\x924Vx\x124Vx'
+== 41 uuid hex='urn:uuid:12345678-1234-5678-1234-567812345678' version=3
+  str 12345678-1234-3678-9234-567812345678
+  repr UUID('12345678-1234-3678-9234-567812345678')
+  hex 12345678123436789234567812345678 int 24197857161011564055667759845196715640
+  urn urn:uuid:12345678-1234-3678-9234-567812345678
+  fields (305419896, 4660, 13944, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 3
+  bytes b'\x124Vx\x1246x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x6\x924Vx\x124Vx'
+== 42 uuid hex='urn:uuid:12345678-1234-5678-1234-567812345678' version=4
+  str 12345678-1234-4678-9234-567812345678
+  repr UUID('12345678-1234-4678-9234-567812345678')
+  hex 12345678123446789234567812345678 int 24197857161011639613531485759520134776
+  urn urn:uuid:12345678-1234-4678-9234-567812345678
+  fields (305419896, 4660, 18040, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 4
+  bytes b'\x124Vx\x124Fx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xF\x924Vx\x124Vx'
+== 43 uuid hex='urn:uuid:12345678-1234-5678-1234-567812345678' version=5
+  str 12345678-1234-5678-9234-567812345678
+  repr UUID('12345678-1234-5678-9234-567812345678')
+  hex 12345678123456789234567812345678 int 24197857161011715171395211673843553912
+  urn urn:uuid:12345678-1234-5678-9234-567812345678
+  fields (305419896, 4660, 22136, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 5
+  bytes b'\x124Vx\x124Vx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x924Vx\x124Vx'
+== 44 uuid hex='12345678123456781234567812345678' version=1
+  str 12345678-1234-1678-9234-567812345678
+  repr UUID('12345678-1234-1678-9234-567812345678')
+  hex 12345678123416789234567812345678 int 24197857161011412939940308016549877368
+  urn urn:uuid:12345678-1234-1678-9234-567812345678
+  fields (305419896, 4660, 5752, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 1
+  bytes b'\x124Vx\x124\x16x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x\x16\x924Vx\x124Vx'
+== 45 uuid hex='12345678123456781234567812345678' version=3
+  str 12345678-1234-3678-9234-567812345678
+  repr UUID('12345678-1234-3678-9234-567812345678')
+  hex 12345678123436789234567812345678 int 24197857161011564055667759845196715640
+  urn urn:uuid:12345678-1234-3678-9234-567812345678
+  fields (305419896, 4660, 13944, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 3
+  bytes b'\x124Vx\x1246x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x6\x924Vx\x124Vx'
+== 46 uuid hex='12345678123456781234567812345678' version=4
+  str 12345678-1234-4678-9234-567812345678
+  repr UUID('12345678-1234-4678-9234-567812345678')
+  hex 12345678123446789234567812345678 int 24197857161011639613531485759520134776
+  urn urn:uuid:12345678-1234-4678-9234-567812345678
+  fields (305419896, 4660, 18040, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 4
+  bytes b'\x124Vx\x124Fx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xF\x924Vx\x124Vx'
+== 47 uuid hex='12345678123456781234567812345678' version=5
+  str 12345678-1234-5678-9234-567812345678
+  repr UUID('12345678-1234-5678-9234-567812345678')
+  hex 12345678123456789234567812345678 int 24197857161011715171395211673843553912
+  urn urn:uuid:12345678-1234-5678-9234-567812345678
+  fields (305419896, 4660, 22136, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 5
+  bytes b'\x124Vx\x124Vx\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x924Vx\x124Vx'
+== 48 uuid hex='6ba7b810-9dad-11d1-80b4-00c04fd430c8' version=1
+  str 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  repr UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+  hex 6ba7b8109dad11d180b400c04fd430c8 int 143098242404177361603877621312831893704
+  urn urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  fields (1806153744, 40365, 4561, 128, 180, 825973027016)
+  time 131059232331511824 clock_seq 180 node 825973027016
+  variant 'specified in RFC 4122' version 1
+  bytes b'k\xa7\xb8\x10\x9d\xad\x11\xd1\x80\xb4\x00\xc0O\xd40\xc8'
+  bytes_le b'\x10\xb8\xa7k\xad\x9d\xd1\x11\x80\xb4\x00\xc0O\xd40\xc8'
+== 49 uuid hex='6ba7b810-9dad-11d1-80b4-00c04fd430c8' version=3
+  str 6ba7b810-9dad-31d1-80b4-00c04fd430c8
+  repr UUID('6ba7b810-9dad-31d1-80b4-00c04fd430c8')
+  hex 6ba7b8109dad31d180b400c04fd430c8 int 143098242404177512719605073141478731976
+  urn urn:uuid:6ba7b810-9dad-31d1-80b4-00c04fd430c8
+  fields (1806153744, 40365, 12753, 128, 180, 825973027016)
+  time 131059232331511824 clock_seq 180 node 825973027016
+  variant 'specified in RFC 4122' version 3
+  bytes b'k\xa7\xb8\x10\x9d\xad1\xd1\x80\xb4\x00\xc0O\xd40\xc8'
+  bytes_le b'\x10\xb8\xa7k\xad\x9d\xd11\x80\xb4\x00\xc0O\xd40\xc8'
+== 50 uuid hex='6ba7b810-9dad-11d1-80b4-00c04fd430c8' version=4
+  str 6ba7b810-9dad-41d1-80b4-00c04fd430c8
+  repr UUID('6ba7b810-9dad-41d1-80b4-00c04fd430c8')
+  hex 6ba7b8109dad41d180b400c04fd430c8 int 143098242404177588277468799055802151112
+  urn urn:uuid:6ba7b810-9dad-41d1-80b4-00c04fd430c8
+  fields (1806153744, 40365, 16849, 128, 180, 825973027016)
+  time 131059232331511824 clock_seq 180 node 825973027016
+  variant 'specified in RFC 4122' version 4
+  bytes b'k\xa7\xb8\x10\x9d\xadA\xd1\x80\xb4\x00\xc0O\xd40\xc8'
+  bytes_le b'\x10\xb8\xa7k\xad\x9d\xd1A\x80\xb4\x00\xc0O\xd40\xc8'
+== 51 uuid hex='6ba7b810-9dad-11d1-80b4-00c04fd430c8' version=5
+  str 6ba7b810-9dad-51d1-80b4-00c04fd430c8
+  repr UUID('6ba7b810-9dad-51d1-80b4-00c04fd430c8')
+  hex 6ba7b8109dad51d180b400c04fd430c8 int 143098242404177663835332524970125570248
+  urn urn:uuid:6ba7b810-9dad-51d1-80b4-00c04fd430c8
+  fields (1806153744, 40365, 20945, 128, 180, 825973027016)
+  time 131059232331511824 clock_seq 180 node 825973027016
+  variant 'specified in RFC 4122' version 5
+  bytes b'k\xa7\xb8\x10\x9d\xadQ\xd1\x80\xb4\x00\xc0O\xd40\xc8'
+  bytes_le b'\x10\xb8\xa7k\xad\x9d\xd1Q\x80\xb4\x00\xc0O\xd40\xc8'
+== 52 uuid hex='00000000-0000-0000-0000-000000000000' version=1
+  str 00000000-0000-1000-8000-000000000000
+  repr UUID('00000000-0000-1000-8000-000000000000')
+  hex 00000000000010008000000000000000 int 75567087097951178194944
+  urn urn:uuid:00000000-0000-1000-8000-000000000000
+  fields (0, 0, 4096, 128, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'specified in RFC 4122' version 1
+  bytes b'\x00\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x10\x80\x00\x00\x00\x00\x00\x00\x00'
+== 53 uuid hex='00000000-0000-0000-0000-000000000000' version=3
+  str 00000000-0000-3000-8000-000000000000
+  repr UUID('00000000-0000-3000-8000-000000000000')
+  hex 00000000000030008000000000000000 int 226682814549779825033216
+  urn urn:uuid:00000000-0000-3000-8000-000000000000
+  fields (0, 0, 12288, 128, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'specified in RFC 4122' version 3
+  bytes b'\x00\x00\x00\x00\x00\x000\x00\x80\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x000\x80\x00\x00\x00\x00\x00\x00\x00'
+== 54 uuid hex='00000000-0000-0000-0000-000000000000' version=4
+  str 00000000-0000-4000-8000-000000000000
+  repr UUID('00000000-0000-4000-8000-000000000000')
+  hex 00000000000040008000000000000000 int 302240678275694148452352
+  urn urn:uuid:00000000-0000-4000-8000-000000000000
+  fields (0, 0, 16384, 128, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'specified in RFC 4122' version 4
+  bytes b'\x00\x00\x00\x00\x00\x00@\x00\x80\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00@\x80\x00\x00\x00\x00\x00\x00\x00'
+== 55 uuid hex='00000000-0000-0000-0000-000000000000' version=5
+  str 00000000-0000-5000-8000-000000000000
+  repr UUID('00000000-0000-5000-8000-000000000000')
+  hex 00000000000050008000000000000000 int 377798542001608471871488
+  urn urn:uuid:00000000-0000-5000-8000-000000000000
+  fields (0, 0, 20480, 128, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'specified in RFC 4122' version 5
+  bytes b'\x00\x00\x00\x00\x00\x00P\x00\x80\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00P\x80\x00\x00\x00\x00\x00\x00\x00'
+== 56 uuid hex='ffffffff-ffff-ffff-ffff-ffffffffffff' version=1
+  str ffffffff-ffff-1fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-1fff-bfff-ffffffffffff')
+  hex ffffffffffff1fffbfffffffffffffff int 340282366920937405648670758612812955647
+  urn urn:uuid:ffffffff-ffff-1fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 8191, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 1
+  bytes b'\xff\xff\xff\xff\xff\xff\x1f\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff\x1f\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 57 uuid hex='ffffffff-ffff-ffff-ffff-ffffffffffff' version=3
+  str ffffffff-ffff-3fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-3fff-bfff-ffffffffffff')
+  hex ffffffffffff3fffbfffffffffffffff int 340282366920937556764398210441459793919
+  urn urn:uuid:ffffffff-ffff-3fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 16383, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 3
+  bytes b'\xff\xff\xff\xff\xff\xff?\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff?\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 58 uuid hex='ffffffff-ffff-ffff-ffff-ffffffffffff' version=4
+  str ffffffff-ffff-4fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-4fff-bfff-ffffffffffff')
+  hex ffffffffffff4fffbfffffffffffffff int 340282366920937632322261936355783213055
+  urn urn:uuid:ffffffff-ffff-4fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 20479, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 4
+  bytes b'\xff\xff\xff\xff\xff\xffO\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xffO\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 59 uuid hex='ffffffff-ffff-ffff-ffff-ffffffffffff' version=5
+  str ffffffff-ffff-5fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-5fff-bfff-ffffffffffff')
+  hex ffffffffffff5fffbfffffffffffffff int 340282366920937707880125662270106632191
+  urn urn:uuid:ffffffff-ffff-5fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 24575, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 5
+  bytes b'\xff\xff\xff\xff\xff\xff_\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff_\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 60 uuid hex='FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF' version=1
+  str ffffffff-ffff-1fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-1fff-bfff-ffffffffffff')
+  hex ffffffffffff1fffbfffffffffffffff int 340282366920937405648670758612812955647
+  urn urn:uuid:ffffffff-ffff-1fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 8191, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 1
+  bytes b'\xff\xff\xff\xff\xff\xff\x1f\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff\x1f\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 61 uuid hex='FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF' version=3
+  str ffffffff-ffff-3fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-3fff-bfff-ffffffffffff')
+  hex ffffffffffff3fffbfffffffffffffff int 340282366920937556764398210441459793919
+  urn urn:uuid:ffffffff-ffff-3fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 16383, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 3
+  bytes b'\xff\xff\xff\xff\xff\xff?\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff?\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 62 uuid hex='FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF' version=4
+  str ffffffff-ffff-4fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-4fff-bfff-ffffffffffff')
+  hex ffffffffffff4fffbfffffffffffffff int 340282366920937632322261936355783213055
+  urn urn:uuid:ffffffff-ffff-4fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 20479, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 4
+  bytes b'\xff\xff\xff\xff\xff\xffO\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xffO\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 63 uuid hex='FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF' version=5
+  str ffffffff-ffff-5fff-bfff-ffffffffffff
+  repr UUID('ffffffff-ffff-5fff-bfff-ffffffffffff')
+  hex ffffffffffff5fffbfffffffffffffff int 340282366920937707880125662270106632191
+  urn urn:uuid:ffffffff-ffff-5fff-bfff-ffffffffffff
+  fields (4294967295, 65535, 24575, 191, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'specified in RFC 4122' version 5
+  bytes b'\xff\xff\xff\xff\xff\xff_\xff\xbf\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff_\xbf\xff\xff\xff\xff\xff\xff\xff'
+== 64 uuid hex='12345678-1234-5678-1234-567812345678' version=0
+  ValueError: illegal version number
+== 65 uuid hex='12345678-1234-5678-1234-567812345678' version=6
+  ValueError: illegal version number
+== 66 uuid bytes=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  str 00010203-0405-0607-0809-0a0b0c0d0e0f
+  repr UUID('00010203-0405-0607-0809-0a0b0c0d0e0f')
+  hex 000102030405060708090a0b0c0d0e0f int 5233100606242806050955395731361295
+  urn urn:uuid:00010203-0405-0607-0809-0a0b0c0d0e0f
+  fields (66051, 1029, 1543, 8, 9, 11042563100175)
+  time 434320308585955843 clock_seq 2057 node 11042563100175
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f'
+  bytes_le b'\x03\x02\x01\x00\x05\x04\x07\x06\x08\t\n\x0b\x0c\r\x0e\x0f'
+== 67 uuid bytes_le=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  str 03020100-0504-0706-0809-0a0b0c0d0e0f
+  repr UUID('03020100-0504-0706-0809-0a0b0c0d0e0f')
+  hex 030201000504070608090a0b0c0d0e0f int 3998088865033714845848939580504215055
+  urn urn:uuid:03020100-0504-0706-0809-0a0b0c0d0e0f
+  fields (50462976, 1284, 1798, 8, 9, 11042563100175)
+  time 506097522914230528 clock_seq 2057 node 11042563100175
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x03\x02\x01\x00\x05\x04\x07\x06\x08\t\n\x0b\x0c\r\x0e\x0f'
+  bytes_le b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f'
+== 68 uuid bytes=[18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120]
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 69 uuid bytes_le=[18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120]
+  str 78563412-3412-7856-1234-567812345678
+  repr UUID('78563412-3412-7856-1234-567812345678')
+  hex 78563412341278561234567812345678 int 159954953151545764515303301919265805944
+  urn urn:uuid:78563412-3412-7856-1234-567812345678
+  fields (2018915346, 13330, 30806, 18, 52, 95073701484152)
+  time 600724854233510930 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'xV4\x124\x12xV\x124Vx\x124Vx'
+  bytes_le b'\x124Vx\x124Vx\x124Vx\x124Vx'
+== 70 uuid bytes=[255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+  str ffffffff-ffff-ffff-ffff-ffffffffffff
+  repr UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')
+  hex ffffffffffffffffffffffffffffffff int 340282366920938463463374607431768211455
+  urn urn:uuid:ffffffff-ffff-ffff-ffff-ffffffffffff
+  fields (4294967295, 65535, 65535, 255, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'reserved for future definition' version None
+  bytes b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+== 71 uuid bytes_le=[255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+  str ffffffff-ffff-ffff-ffff-ffffffffffff
+  repr UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')
+  hex ffffffffffffffffffffffffffffffff int 340282366920938463463374607431768211455
+  urn urn:uuid:ffffffff-ffff-ffff-ffff-ffffffffffff
+  fields (4294967295, 65535, 65535, 255, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'reserved for future definition' version None
+  bytes b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+== 72 uuid bytes=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+  str 00000000-0000-0000-0000-000000000001
+  repr UUID('00000000-0000-0000-0000-000000000001')
+  hex 00000000000000000000000000000001 int 1
+  urn urn:uuid:00000000-0000-0000-0000-000000000001
+  fields (0, 0, 0, 0, 0, 1)
+  time 0 clock_seq 0 node 1
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+== 73 uuid bytes_le=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+  str 00000000-0000-0000-0000-000000000001
+  repr UUID('00000000-0000-0000-0000-000000000001')
+  hex 00000000000000000000000000000001 int 1
+  urn urn:uuid:00000000-0000-0000-0000-000000000001
+  fields (0, 0, 0, 0, 0, 1)
+  time 0 clock_seq 0 node 1
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+== 74 uuid bytes=[97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
+  str 61626364-6566-6768-696a-6b6c6d6e6f70
+  repr UUID('61626364-6566-6768-696a-6b6c6d6e6f70')
+  hex 6162636465666768696a6b6c6d6e6f70 int 129445976596022050476432668810952994672
+  urn urn:uuid:61626364-6566-6768-696a-6b6c6d6e6f70
+  fields (1633837924, 25958, 26472, 105, 106, 118113436594032)
+  time 533788046238311268 clock_seq 10602 node 118113436594032
+  variant 'reserved for NCS compatibility' version None
+  bytes b'abcdefghijklmnop'
+  bytes_le b'dcbafehgijklmnop'
+== 75 uuid bytes_le=[97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
+  str 64636261-6665-6867-696a-6b6c6d6e6f70
+  repr UUID('64636261-6665-6867-696a-6b6c6d6e6f70')
+  hex 6463626166656867696a6b6c6d6e6f70 int 133438832360449522516230652995725848432
+  urn urn:uuid:64636261-6665-6867-696a-6b6c6d6e6f70
+  fields (1684234849, 26213, 26727, 105, 106, 118113436594032)
+  time 605565260566585953 clock_seq 10602 node 118113436594032
+  variant 'reserved for NCS compatibility' version None
+  bytes b'dcbafehgijklmnop'
+  bytes_le b'abcdefghijklmnop'
+== 76 uuid bytes=[39, 34, 92, 9, 10, 13, 127, 128, 32, 126, 0, 1, 2, 3, 4, 5]
+  str 27225c09-0a0d-7f80-207e-000102030405
+  repr UUID('27225c09-0a0d-7f80-207e-000102030405')
+  hex 27225c090a0d7f80207e000102030405 int 52018296626650070002612869322032481285
+  urn urn:uuid:27225c09-0a0d-7f80-207e-000102030405
+  fields (656563209, 2573, 32640, 32, 126, 4328719365)
+  time 1116903759195298825 clock_seq 8318 node 4328719365
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\'"\\\t\n\r\x7f\x80 ~\x00\x01\x02\x03\x04\x05'
+  bytes_le b'\t\\"\'\r\n\x80\x7f ~\x00\x01\x02\x03\x04\x05'
+== 77 uuid bytes_le=[39, 34, 92, 9, 10, 13, 127, 128, 32, 126, 0, 1, 2, 3, 4, 5]
+  str 095c2227-0d0a-807f-207e-000102030405
+  repr UUID('095c2227-0d0a-807f-207e-000102030405')
+  hex 095c22270d0a807f207e000102030405 int 12441435968910310404923895281046717445
+  urn urn:uuid:095c2227-0d0a-807f-207e-000102030405
+  fields (157032999, 3338, 32895, 32, 126, 4328719365)
+  time 35761658800120359 clock_seq 8318 node 4328719365
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\t\\"\'\r\n\x80\x7f ~\x00\x01\x02\x03\x04\x05'
+  bytes_le b'\'"\\\t\n\r\x7f\x80 ~\x00\x01\x02\x03\x04\x05'
+== 78 uuid bytes=[39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39]
+  str 27272727-2727-2727-2727-272727272727
+  repr UUID('27272727-2727-2727-2727-272727272727')
+  hex 27272727272727272727272727272727 int 52043185529084706176751410548388079399
+  urn urn:uuid:27272727-2727-2727-2727-272727272727
+  fields (656877351, 10023, 10023, 39, 39, 43049114085159)
+  time 515423731471296295 clock_seq 10023 node 43049114085159
+  variant 'reserved for NCS compatibility' version None
+  bytes b"''''''''''''''''"
+  bytes_le b"''''''''''''''''"
+== 79 uuid bytes_le=[39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39]
+  str 27272727-2727-2727-2727-272727272727
+  repr UUID('27272727-2727-2727-2727-272727272727')
+  hex 27272727272727272727272727272727 int 52043185529084706176751410548388079399
+  urn urn:uuid:27272727-2727-2727-2727-272727272727
+  fields (656877351, 10023, 10023, 39, 39, 43049114085159)
+  time 515423731471296295 clock_seq 10023 node 43049114085159
+  variant 'reserved for NCS compatibility' version None
+  bytes b"''''''''''''''''"
+  bytes_le b"''''''''''''''''"
+== 80 uuid bytes=[39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34]
+  str 27222722-2722-2722-2722-272227222722
+  repr UUID('27222722-2722-2722-2722-272227222722')
+  hex 27222722272227222722272227222722 int 52017223648645174745953869188242220834
+  urn urn:uuid:27222722-2722-2722-2722-272227222722
+  fields (656549666, 10018, 10018, 39, 34, 43027638920994)
+  time 514016335112578850 clock_seq 10018 node 43027638920994
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\'"\'"\'"\'"\'"\'"\'"\'"'
+  bytes_le b'"\'"\'"\'"\'\'"\'"\'"\'"'
+== 81 uuid bytes_le=[39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34, 39, 34]
+  str 22272227-2227-2227-2722-272227222722
+  repr UUID('22272227-2227-2227-2722-272227222722')
+  hex 22272227222722272722272227222722 int 45396944136564659892939708422521235234
+  urn urn:uuid:22272227-2227-2227-2722-272227222722
+  fields (572989991, 8743, 8743, 39, 34, 43027638920994)
+  time 155130263639630375 clock_seq 10018 node 43027638920994
+  variant 'reserved for NCS compatibility' version None
+  bytes b'"\'"\'"\'"\'\'"\'"\'"\'"'
+  bytes_le b'\'"\'"\'"\'"\'"\'"\'"\'"'
+== 82 uuid bytes=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+  ValueError: bytes is not a 16-char string
+== 83 uuid bytes_le=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+  ValueError: bytes_le is not a 16-char string
+== 84 uuid bytes=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  ValueError: bytes is not a 16-char string
+== 85 uuid bytes_le=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  ValueError: bytes_le is not a 16-char string
+== 86 uuid bytes=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] version=4
+  str 00010203-0405-4607-8809-0a0b0c0d0e0f
+  repr UUID('00010203-0405-4607-8809-0a0b0c0d0e0f')
+  hex 000102030405460788090a0b0c0d0e0f int 5233100606545046729231089879813647
+  urn urn:uuid:00010203-0405-4607-8809-0a0b0c0d0e0f
+  fields (66051, 1029, 17927, 136, 9, 11042563100175)
+  time 434320308585955843 clock_seq 2057 node 11042563100175
+  variant 'specified in RFC 4122' version 4
+  bytes b'\x00\x01\x02\x03\x04\x05F\x07\x88\t\n\x0b\x0c\r\x0e\x0f'
+  bytes_le b'\x03\x02\x01\x00\x05\x04\x07F\x88\t\n\x0b\x0c\r\x0e\x0f'
+== 87 uuid bytes_le=[18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120, 18, 52, 86, 120] version=2
+  str 78563412-3412-2856-9234-567812345678
+  repr UUID('78563412-3412-2856-9234-567812345678')
+  hex 78563412341228569234567812345678 int 159954953151545386735208044384503486072
+  urn urn:uuid:78563412-3412-2856-9234-567812345678
+  fields (2018915346, 13330, 10326, 146, 52, 95073701484152)
+  time 600724854233510930 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 2
+  bytes b'xV4\x124\x12(V\x924Vx\x124Vx'
+  bytes_le b'\x124Vx\x124V(\x924Vx\x124Vx'
+== 88 uuid fields=[305419896, 4660, 22136, 18, 52, 95073701484152]
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 89 uuid fields=[0, 0, 0, 0, 0, 0]
+  str 00000000-0000-0000-0000-000000000000
+  repr UUID('00000000-0000-0000-0000-000000000000')
+  hex 00000000000000000000000000000000 int 0
+  urn urn:uuid:00000000-0000-0000-0000-000000000000
+  fields (0, 0, 0, 0, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+== 90 uuid fields=[4294967295, 65535, 65535, 255, 255, 281474976710655]
+  str ffffffff-ffff-ffff-ffff-ffffffffffff
+  repr UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')
+  hex ffffffffffffffffffffffffffffffff int 340282366920938463463374607431768211455
+  urn urn:uuid:ffffffff-ffff-ffff-ffff-ffffffffffff
+  fields (4294967295, 65535, 65535, 255, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'reserved for future definition' version None
+  bytes b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+== 91 uuid fields=[4294967296, 0, 0, 0, 0, 0]
+  ValueError: field 1 out of range (need a 32-bit value)
+== 92 uuid fields=[0, 65536, 0, 0, 0, 0]
+  ValueError: field 2 out of range (need a 16-bit value)
+== 93 uuid fields=[0, 0, -1, 0, 0, 0]
+  ValueError: field 3 out of range (need a 16-bit value)
+== 94 uuid fields=[0, 0, 0, 256, 0, 0]
+  ValueError: field 4 out of range (need an 8-bit value)
+== 95 uuid fields=[0, 0, 0, 0, 300, 0]
+  ValueError: field 5 out of range (need an 8-bit value)
+== 96 uuid fields=[0, 0, 0, 0, 0, 281474976710656]
+  ValueError: field 6 out of range (need a 48-bit value)
+== 97 uuid fields=[1, 2, 3, 4, 5]
+  ValueError: fields is not a 6-tuple
+== 98 uuid fields=[1, 2, 3, 4, 5, 6, 7]
+  ValueError: fields is not a 6-tuple
+== 99 uuid fields=[305419896, 4660, 22136, 18, 52, 95073701484152] version=1
+  str 12345678-1234-1678-9234-567812345678
+  repr UUID('12345678-1234-1678-9234-567812345678')
+  hex 12345678123416789234567812345678 int 24197857161011412939940308016549877368
+  urn urn:uuid:12345678-1234-1678-9234-567812345678
+  fields (305419896, 4660, 5752, 146, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'specified in RFC 4122' version 1
+  bytes b'\x124Vx\x124\x16x\x924Vx\x124Vx'
+  bytes_le b'xV4\x124\x12x\x16\x924Vx\x124Vx'
+== 100 uuid int='0'
+  str 00000000-0000-0000-0000-000000000000
+  repr UUID('00000000-0000-0000-0000-000000000000')
+  hex 00000000000000000000000000000000 int 0
+  urn urn:uuid:00000000-0000-0000-0000-000000000000
+  fields (0, 0, 0, 0, 0, 0)
+  time 0 clock_seq 0 node 0
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+== 101 uuid int='1'
+  str 00000000-0000-0000-0000-000000000001
+  repr UUID('00000000-0000-0000-0000-000000000001')
+  hex 00000000000000000000000000000001 int 1
+  urn urn:uuid:00000000-0000-0000-0000-000000000001
+  fields (0, 0, 0, 0, 0, 1)
+  time 0 clock_seq 0 node 1
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+  bytes_le b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'
+== 102 uuid int='170141183460469231731687303715884105728'
+  str 80000000-0000-0000-0000-000000000000
+  repr UUID('80000000-0000-0000-0000-000000000000')
+  hex 80000000000000000000000000000000 int 170141183460469231731687303715884105728
+  urn urn:uuid:80000000-0000-0000-0000-000000000000
+  fields (2147483648, 0, 0, 0, 0, 0)
+  time 2147483648 clock_seq 0 node 0
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+== 103 uuid int='340282366920938463463374607431768211455'
+  str ffffffff-ffff-ffff-ffff-ffffffffffff
+  repr UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')
+  hex ffffffffffffffffffffffffffffffff int 340282366920938463463374607431768211455
+  urn urn:uuid:ffffffff-ffff-ffff-ffff-ffffffffffff
+  fields (4294967295, 65535, 65535, 255, 255, 281474976710655)
+  time 1152921504606846975 clock_seq 16383 node 281474976710655
+  variant 'reserved for future definition' version None
+  bytes b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+  bytes_le b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+== 104 uuid int='340282366920938463463374607431768211456'
+  ValueError: int is out of range (need a 128-bit value)
+== 105 uuid int='-1'
+  ValueError: int is out of range (need a 128-bit value)
+== 106 uuid int='24197857161011715162171839636988778104'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 107 uuid int='24197857161011715162171839636988778104'
+  str 12345678-1234-5678-1234-567812345678
+  repr UUID('12345678-1234-5678-1234-567812345678')
+  hex 12345678123456781234567812345678 int 24197857161011715162171839636988778104
+  urn urn:uuid:12345678-1234-5678-1234-567812345678
+  fields (305419896, 4660, 22136, 18, 52, 95073701484152)
+  time 466142576285865592 clock_seq 4660 node 95073701484152
+  variant 'reserved for NCS compatibility' version None
+  bytes b'\x124Vx\x124Vx\x124Vx\x124Vx'
+  bytes_le b'xV4\x124\x12xV\x124Vx\x124Vx'
+== 108 uuid int='170141183460469231731687303715884105728' version=3
+  str 80000000-0000-3000-8000-000000000000
+  repr UUID('80000000-0000-3000-8000-000000000000')
+  hex 80000000000030008000000000000000 int 170141183460469458414501853495709138944
+  urn urn:uuid:80000000-0000-3000-8000-000000000000
+  fields (2147483648, 0, 12288, 128, 0, 0)
+  time 2147483648 clock_seq 0 node 0
+  variant 'specified in RFC 4122' version 3
+  bytes b'\x80\x00\x00\x00\x00\x000\x00\x80\x00\x00\x00\x00\x00\x00\x00'
+  bytes_le b'\x00\x00\x00\x80\x00\x00\x000\x80\x00\x00\x00\x00\x00\x00\x00'
+== 109 uuid
+  TypeError: one of the hex, bytes, bytes_le, fields, or int arguments must be given
+== 110 uuid hex='12345678-1234-5678-1234-567812345678' int='5'
+  TypeError: one of the hex, bytes, bytes_le, fields, or int arguments must be given
+== 111 uuid bytes=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] fields=[305419896, 4660, 22136, 18, 52, 95073701484152]
+  TypeError: one of the hex, bytes, bytes_le, fields, or int arguments must be given
+== 112 sort uuids=['6fa459ea-ee8a-3ca4-894e-db77e160355e', '12345678-1234-5678-1234-567812345678', '12345678123456781234567812345678', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '0x345678-1234-5678-1234-567812345678', '0x345678-1234-5678-1234-567812345678', '6868d87f462bccca3ef68a44f4acbde2', 'dd849c006c76703195633b5de1d521dc', '73b320fd12bccb3392a87fe5eef93ebc', 'c26784ccf401607d50af16d4105b03ae', '0e9bbe9c7f08507a526791c8842f752e', '84a2462ecf2cd5b88e163c3bf70cb2e7']
+  00345678-1234-5678-1234-567812345678
+  00345678-1234-5678-1234-567812345678
+  0e9bbe9c-7f08-507a-5267-91c8842f752e
+  12345678-1234-5678-1234-567812345678
+  12345678-1234-5678-1234-567812345678
+  6868d87f-462b-ccca-3ef6-8a44f4acbde2
+  6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  6fa459ea-ee8a-3ca4-894e-db77e160355e
+  73b320fd-12bc-cb33-92a8-7fe5eef93ebc
+  84a2462e-cf2c-d5b8-8e16-3c3bf70cb2e7
+  c26784cc-f401-607d-50af-16d4105b03ae
+  dd849c00-6c76-7031-9563-3b5de1d521dc
+  10 distinct
+  first two: == False < False <= False > True >= True
+== 113 sort uuids=['12345678123456781234567812345678', '{{{12345678-1234-5678-1234-567812345678}}', '1234-5678-1234-5678-1234-5678-1234-5678', '00000000-0000-0000-0000-000000000000', 'f81d4fae-7dec-11d0-a765-00a0c91e6bf6', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '833b22161443de648e16453f7dcac9e9', '90766628352f128a9f417ea8765ca0b9', 'ff4a68f443ff7c4d8b2c1d3467bc0ed2', 'df61edbf5fcfb736d0823bb2b5792a13', 'ccf5a80e6c2add4d0a415d3e677dd8b8', 'af23eab3657274a301391683a19c980a']
+  00000000-0000-0000-0000-000000000000
+  12345678-1234-5678-1234-567812345678
+  12345678-1234-5678-1234-567812345678
+  12345678-1234-5678-1234-567812345678
+  6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  833b2216-1443-de64-8e16-453f7dcac9e9
+  90766628-352f-128a-9f41-7ea8765ca0b9
+  af23eab3-6572-74a3-0139-1683a19c980a
+  ccf5a80e-6c2a-dd4d-0a41-5d3e677dd8b8
+  df61edbf-5fcf-b736-d082-3bb2b5792a13
+  f81d4fae-7dec-11d0-a765-00a0c91e6bf6
+  ff4a68f4-43ff-7c4d-8b2c-1d3467bc0ed2
+  10 distinct
+  first two: == True < False <= True > False >= True
+== 114 sort uuids=['FFFFFFFF-FFFF-4FFF-BFFF-FFFFFFFFFFFF', '886313e1-3b8a-5372-9b90-0c9aee199e5d', '12345678123456781234567812345678', '12345678-1234-5678-1234-567812345678', 'uuid:urn:12345678-1234-5678-1234-567812345678', '886313e1-3b8a-5372-9b90-0c9aee199e5d', '7b4b8cef5bdce7fe3b033f5749599504', 'cb406c43f5aae7f72de9ca6368210624', 'be11a6654d0b833fd059f34bbfe5539f', '621ee9b5bde3bb66af1f2c0b09f3b67b', 'e2a14d5d09afda1d1b3c332d6216ed2c', '514286ee293b78130ddcac294ac934c2']
+  12345678-1234-5678-1234-567812345678
+  12345678-1234-5678-1234-567812345678
+  12345678-1234-5678-1234-567812345678
+  514286ee-293b-7813-0ddc-ac294ac934c2
+  621ee9b5-bde3-bb66-af1f-2c0b09f3b67b
+  7b4b8cef-5bdc-e7fe-3b03-3f5749599504
+  886313e1-3b8a-5372-9b90-0c9aee199e5d
+  886313e1-3b8a-5372-9b90-0c9aee199e5d
+  be11a665-4d0b-833f-d059-f34bbfe5539f
+  cb406c43-f5aa-e7f7-2de9-ca6368210624
+  e2a14d5d-09af-da1d-1b3c-332d6216ed2c
+  ffffffff-ffff-4fff-bfff-ffffffffffff
+  9 distinct
+  first two: == False < False <= False > True >= True
+== 115 sort uuids=['a8098c1a-f86e-11da-bd1a-00112444be1e', '{12345678-1234-5678-1234-567812345678}', '0x345678-1234-5678-1234-567812345678', '{12345678-1234-5678-1234-567812345678}', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'a8098c1a-f86e-11da-bd1a-00112444be1e', '9dc961f404cb8788733598b1813e6d78', '284a9a1cdb094e0bf062fd8799b8ed81', 'd9dce8de8cc6024a39af341a797e2234', 'b8d908fc6b0c42ca7e2ee931ef1d9fff', '71bf95d9e1cd3d2ff5d129b68f7e5bf2', '4a546f6a8342d27c6270741caa9f2c15']
+  00345678-1234-5678-1234-567812345678
+  12345678-1234-5678-1234-567812345678
+  12345678-1234-5678-1234-567812345678
+  284a9a1c-db09-4e0b-f062-fd8799b8ed81
+  4a546f6a-8342-d27c-6270-741caa9f2c15
+  6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  71bf95d9-e1cd-3d2f-f5d1-29b68f7e5bf2
+  9dc961f4-04cb-8788-7335-98b1813e6d78
+  a8098c1a-f86e-11da-bd1a-00112444be1e
+  a8098c1a-f86e-11da-bd1a-00112444be1e
+  b8d908fc-6b0c-42ca-7e2e-e931ef1d9fff
+  d9dce8de-8cc6-024a-39af-341a797e2234
+  10 distinct
+  first two: == False < False <= False > True >= True
+== 116 uuid1 calls=[[1729324800000000000, 2485377892354, 4660], [1729324800000000100, 2485377892354, 4660], [1729324800000000150, 2485377892354, 4660], [1729324800000000150, 2485377892354, 4660], [1729324799999995000, 2485377892354, 4660], [1729324801000000000, 2485377892354, 4660]]
+  238ec000-8df0-11ef-9234-0242ac110002 time 139486176000000000 clock_seq 4660 node 0242ac110002
+  238ec001-8df0-11ef-9234-0242ac110002 time 139486176000000001 clock_seq 4660 node 0242ac110002
+  238ec002-8df0-11ef-9234-0242ac110002 time 139486176000000002 clock_seq 4660 node 0242ac110002
+  238ec003-8df0-11ef-9234-0242ac110002 time 139486176000000003 clock_seq 4660 node 0242ac110002
+  238ec004-8df0-11ef-9234-0242ac110002 time 139486176000000004 clock_seq 4660 node 0242ac110002
+  24275680-8df0-11ef-9234-0242ac110002 time 139486176010000000 clock_seq 4660 node 0242ac110002
+== 117 uuid1 calls=[[1729324802000000000, 0, 0], [1729324803000000000, 281474976710655, 16383], [1729324804000000000, 1, 16384], [1729324805000000000, 2, 65543]]
+  24bfed00-8df0-11ef-8000-000000000000 time 139486176020000000 clock_seq 0 node 000000000000
+  25588380-8df0-11ef-bfff-ffffffffffff time 139486176030000000 clock_seq 16383 node ffffffffffff
+  25f11a00-8df0-11ef-8000-000000000001 time 139486176040000000 clock_seq 0 node 000000000001
+  2689b080-8df0-11ef-8007-000000000002 time 139486176050000000 clock_seq 7 node 000000000002
+== 118 uuid1 calls=[[0, 3735928559, 99], [1000000000000000000, 3735928559, 99], [4611686018427387904, 3735928559, 99], [9000000000000000000, 3735928559, 99]]
+  2689b081-8df0-11ef-8063-0000deadbeef time 139486176050000001 clock_seq 99 node 0000deadbeef
+  2689b082-8df0-11ef-8063-0000deadbeef time 139486176050000002 clock_seq 99 node 0000deadbeef
+  50f1e3d7-f4dc-1255-8063-0000deadbeef time 168309788184273879 clock_seq 99 node 0000deadbeef
+  014a4000-dc58-12f1-8063-0000deadbeef time 212192928000000000 clock_seq 99 node 0000deadbeef
+== 119 uuid1 calls=[[1, 95529467905, 7]]
+  014a4001-dc58-12f1-8007-00163e000001 time 212192928000000001 clock_seq 7 node 00163e000001
+== 120 uuid3 namespace='@dns' name='python.org'
+  6fa459ea-ee8a-3ca4-894e-db77e160355e version 3
+== 121 uuid3 namespace='@dns' name='www.example.com'
+  5df41881-3aed-3515-88a7-2f4a814cf09e version 3
+== 122 uuid3 namespace='@dns' name='http://example.com/a?b=c'
+  5e021c82-cf49-3d09-a063-3e690120ae9d version 3
+== 123 uuid3 namespace='@dns' name=''
+  c87ee674-4ddc-3efe-a74e-dfe25da5d7b3 version 3
+== 124 uuid3 namespace='@dns' name='a'
+  4c104dd0-4821-30d5-9ce3-0e7a1f8b7c0d version 3
+== 125 uuid3 namespace='@dns' name='1.3.6.1.4.1.343'
+  195497aa-c24d-359a-af59-dc513c7f9872 version 3
+== 126 uuid3 namespace='@dns' name='cn=John Smith,o=Example,c=US'
+  a6330e0a-45a1-32d9-8906-37bd5a499d95 version 3
+== 127 uuid3 namespace='@dns' name='naïve café'
+  6947d6e6-89dd-39f0-bbc4-7ad25d2a8051 version 3
+== 128 uuid3 namespace='@dns' name='日本語ドメイン.jp'
+  cb4a628d-ba61-3932-9cba-c50453d74416 version 3
+== 129 uuid3 namespace='@dns' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  80f1dfdb-68e1-3f0b-a506-5467ab5361ba version 3
+== 130 uuid3 namespace='@dns' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  394f370d-552a-3998-bdf3-787c1a2c0b13 version 3
+== 131 uuid3 namespace='@dns' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  d7d525ee-d358-39ea-b843-45493ee46bef version 3
+== 132 uuid3 namespace='@dns' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  771b6326-6f90-3428-8e4d-90f4953f761a version 3
+== 133 uuid3 namespace='@dns' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  eb115601-6f01-3cab-862f-c61c279b8473 version 3
+== 134 uuid3 namespace='@dns' name='\x00\x01\x02'
+  018e5fc7-01e1-3a1f-bad0-af67872a5334 version 3
+== 135 uuid3 namespace='@dns' name='🙂 emoji'
+  a10066a7-976c-37bb-902e-cc62c3838aa8 version 3
+== 136 uuid3 namespace='@url' name='python.org'
+  22fe6191-c161-3d86-a432-a81f343eda08 version 3
+== 137 uuid3 namespace='@url' name='www.example.com'
+  a777199a-c522-31c4-8f4b-335feec7215b version 3
+== 138 uuid3 namespace='@url' name='http://example.com/a?b=c'
+  28d5bf1e-cb8b-3d4b-a6b7-6738db00234f version 3
+== 139 uuid3 namespace='@url' name=''
+  14cdb9b4-de01-3faa-aff5-65bc2f771745 version 3
+== 140 uuid3 namespace='@url' name='a'
+  33838e93-63bc-3732-bf9e-b68d970b79c2 version 3
+== 141 uuid3 namespace='@url' name='1.3.6.1.4.1.343'
+  7a447b6f-926f-36b4-8971-e64550ff9008 version 3
+== 142 uuid3 namespace='@url' name='cn=John Smith,o=Example,c=US'
+  bfa0849a-503a-33df-ba8c-b67a7049350e version 3
+== 143 uuid3 namespace='@url' name='naïve café'
+  3241cfc1-f34c-3ed1-b9f2-0ee3c59e2bd1 version 3
+== 144 uuid3 namespace='@url' name='日本語ドメイン.jp'
+  f296a091-f182-3326-a075-19b29add0dfa version 3
+== 145 uuid3 namespace='@url' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  c99ebe9d-fd08-3f20-a6e8-b703b70e9b42 version 3
+== 146 uuid3 namespace='@url' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  63a658bb-de96-349b-8b36-e700fbec3178 version 3
+== 147 uuid3 namespace='@url' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  e326f41f-9c77-3db5-9793-39e3ce8660ba version 3
+== 148 uuid3 namespace='@url' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  c30e6ce6-5fe9-3bbe-a746-2688cfd73074 version 3
+== 149 uuid3 namespace='@url' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  b479f80c-a18f-3a54-9240-b8d3765934d8 version 3
+== 150 uuid3 namespace='@url' name='\x00\x01\x02'
+  a3f88b07-88a4-3525-aa6e-944d323b3040 version 3
+== 151 uuid3 namespace='@url' name='🙂 emoji'
+  cbe7392e-0113-3968-8298-2c1584cb0780 version 3
+== 152 uuid3 namespace='@oid' name='python.org'
+  edc9f521-7078-3737-aeed-76056ffc7959 version 3
+== 153 uuid3 namespace='@oid' name='www.example.com'
+  c2c1e4de-6589-389e-9375-32a90c6a83a8 version 3
+== 154 uuid3 namespace='@oid' name='http://example.com/a?b=c'
+  d472084e-652d-39a6-b143-f357c80a039e version 3
+== 155 uuid3 namespace='@oid' name=''
+  596b79dc-00dd-3991-a72f-d3696c38c64f version 3
+== 156 uuid3 namespace='@oid' name='a'
+  a20740b4-71b5-3b90-852e-bdb859da9fdd version 3
+== 157 uuid3 namespace='@oid' name='1.3.6.1.4.1.343'
+  77bc1dc3-0a9f-3e7e-bfa5-3f611a660c80 version 3
+== 158 uuid3 namespace='@oid' name='cn=John Smith,o=Example,c=US'
+  df8f55a0-cf9c-3dde-9289-640867eff9c5 version 3
+== 159 uuid3 namespace='@oid' name='naïve café'
+  8a87d9cc-c5d3-3674-9e84-459e04c92346 version 3
+== 160 uuid3 namespace='@oid' name='日本語ドメイン.jp'
+  79094031-8513-3b3f-8b58-f3d4d810ac34 version 3
+== 161 uuid3 namespace='@oid' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  ba76ddf0-3510-37f9-8368-79fbf83f6d11 version 3
+== 162 uuid3 namespace='@oid' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  7991a381-3914-318a-9855-272c872912c6 version 3
+== 163 uuid3 namespace='@oid' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  554bcbbe-6b7d-3a2a-951f-bb8dcba936a3 version 3
+== 164 uuid3 namespace='@oid' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  f8b4d2dd-d583-373e-ac89-b983bbdc7b29 version 3
+== 165 uuid3 namespace='@oid' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  d18f9c5a-8363-3d76-819a-d6df57f28684 version 3
+== 166 uuid3 namespace='@oid' name='\x00\x01\x02'
+  c088725e-1ef8-3aec-8c18-4df41c1d917c version 3
+== 167 uuid3 namespace='@oid' name='🙂 emoji'
+  9bb7a256-62f7-325a-9b6c-caf148b4c170 version 3
+== 168 uuid3 namespace='@x500' name='python.org'
+  94c1b751-792a-3c8b-8eb7-95ea2c6645bb version 3
+== 169 uuid3 namespace='@x500' name='www.example.com'
+  f4ea5e25-91d4-38b0-b74f-af6c57210cae version 3
+== 170 uuid3 namespace='@x500' name='http://example.com/a?b=c'
+  785156d1-c20a-3308-992a-2c12bcfe5755 version 3
+== 171 uuid3 namespace='@x500' name=''
+  7aaf118c-f174-3eba-9ec5-680cd791a020 version 3
+== 172 uuid3 namespace='@x500' name='a'
+  501a4af4-b763-3357-87ea-eaac989f199d version 3
+== 173 uuid3 namespace='@x500' name='1.3.6.1.4.1.343'
+  1bdeb9af-41cd-3280-81df-53502b3985b1 version 3
+== 174 uuid3 namespace='@x500' name='cn=John Smith,o=Example,c=US'
+  f30650d5-5c2a-34a1-ac67-bb542d473fdb version 3
+== 175 uuid3 namespace='@x500' name='naïve café'
+  84460d42-d321-311d-84f9-be2b34f8caa7 version 3
+== 176 uuid3 namespace='@x500' name='日本語ドメイン.jp'
+  ec23015a-5e0c-35ba-a11d-da8299fa821d version 3
+== 177 uuid3 namespace='@x500' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  8d9673ed-70f1-3238-859f-5f58b34ddd63 version 3
+== 178 uuid3 namespace='@x500' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  7ba06885-530d-3d1c-a9c0-32aa9323e7c4 version 3
+== 179 uuid3 namespace='@x500' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  026abe78-ec59-395b-859b-df0ec3759766 version 3
+== 180 uuid3 namespace='@x500' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  758a7a69-7051-3eea-9707-d2cc01212259 version 3
+== 181 uuid3 namespace='@x500' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  408ac69d-281c-3084-bed1-ef237bdbb811 version 3
+== 182 uuid3 namespace='@x500' name='\x00\x01\x02'
+  5021d5c5-5c50-31c3-baff-20838253377a version 3
+== 183 uuid3 namespace='@x500' name='🙂 emoji'
+  481f0fde-e495-3e87-808c-d4cdf97e2982 version 3
+== 184 uuid3 namespace='12345678-1234-5678-1234-567812345678' name='python.org'
+  545ed199-2062-359f-8a29-066e39690120 version 3
+== 185 uuid3 namespace='12345678-1234-5678-1234-567812345678' name='www.example.com'
+  91c1f117-868a-346f-9d70-320578dc68cd version 3
+== 186 uuid3 namespace='12345678-1234-5678-1234-567812345678' name='http://example.com/a?b=c'
+  74f7a3c7-559a-3ca3-86f5-7fe8beb32b7e version 3
+== 187 uuid3 namespace='12345678-1234-5678-1234-567812345678' name=''
+  b7af73c0-8586-32d2-94e3-411f61121ac0 version 3
+== 188 uuid3 namespace='12345678-1234-5678-1234-567812345678' name='a'
+  4d4eb20f-5d06-31ff-a750-d1d48e14485f version 3
+== 189 uuid3 namespace='00000000-0000-0000-0000-000000000000' name='python.org'
+  0421fac3-a9c6-3ea3-aee8-8f20aff3f278 version 3
+== 190 uuid3 namespace='00000000-0000-0000-0000-000000000000' name='www.example.com'
+  e1dbb77c-40ca-39dd-a59b-3973a877b11b version 3
+== 191 uuid3 namespace='00000000-0000-0000-0000-000000000000' name='http://example.com/a?b=c'
+  0efdd4ec-72c8-3cf1-bca5-4fbdc8d4f858 version 3
+== 192 uuid3 namespace='00000000-0000-0000-0000-000000000000' name=''
+  4ae71336-e44b-39bf-b9d2-752e234818a5 version 3
+== 193 uuid3 namespace='00000000-0000-0000-0000-000000000000' name='a'
+  0531103a-d8fc-3dd4-b972-d98e4750994e version 3
+== 194 uuid3 namespace='@dns' name_bytes=[0, 255, 128, 10]
+  6a8fbc61-3fba-3f5d-9e86-52448c38aaea version 3
+== 195 uuid5 namespace='@dns' name='python.org'
+  886313e1-3b8a-5372-9b90-0c9aee199e5d version 5
+== 196 uuid5 namespace='@dns' name='www.example.com'
+  2ed6657d-e927-568b-95e1-2665a8aea6a2 version 5
+== 197 uuid5 namespace='@dns' name='http://example.com/a?b=c'
+  97b4f742-4ae8-56e7-860f-9235eeaa6256 version 5
+== 198 uuid5 namespace='@dns' name=''
+  4ebd0208-8328-5d69-8c44-ec50939c0967 version 5
+== 199 uuid5 namespace='@dns' name='a'
+  4f3f2898-69e3-5a0d-820a-c4e87987dbce version 5
+== 200 uuid5 namespace='@dns' name='1.3.6.1.4.1.343'
+  b292d840-32ce-5b00-9014-009a25c8d9d4 version 5
+== 201 uuid5 namespace='@dns' name='cn=John Smith,o=Example,c=US'
+  9aaa3b9c-ba1c-50aa-8943-dc5f46227efe version 5
+== 202 uuid5 namespace='@dns' name='naïve café'
+  dc334883-483e-5bc6-a2c3-40b9718e0d73 version 5
+== 203 uuid5 namespace='@dns' name='日本語ドメイン.jp'
+  bb71b51e-d2ac-51d1-94e2-91a9f9346c6c version 5
+== 204 uuid5 namespace='@dns' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  4c506c2a-c3a2-508b-b2ce-25c3a06bf481 version 5
+== 205 uuid5 namespace='@dns' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  4d280fc6-b05a-5094-b818-94a93e901355 version 5
+== 206 uuid5 namespace='@dns' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  e7749742-f7ff-5e30-bdfe-cc3db2284dd2 version 5
+== 207 uuid5 namespace='@dns' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  2f223e54-ec7e-5b62-8232-3a8f937c90f4 version 5
+== 208 uuid5 namespace='@dns' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  ef43d834-53f9-548a-9d12-53d7a5787837 version 5
+== 209 uuid5 namespace='@dns' name='\x00\x01\x02'
+  6a6f4226-aab8-5da7-89da-8591911c693b version 5
+== 210 uuid5 namespace='@dns' name='🙂 emoji'
+  731c4b4d-372c-5b5f-8181-96ac3ec7a676 version 5
+== 211 uuid5 namespace='@url' name='python.org'
+  7af94e2b-4dd9-50f0-9c9a-8a48519bdef0 version 5
+== 212 uuid5 namespace='@url' name='www.example.com'
+  b63cdfa4-3df9-568e-97ae-006c5b8fd652 version 5
+== 213 uuid5 namespace='@url' name='http://example.com/a?b=c'
+  6d1f89ce-892b-5e22-a360-3ce1fb39d01a version 5
+== 214 uuid5 namespace='@url' name=''
+  1b4db7eb-4057-5ddf-91e0-36dec72071f5 version 5
+== 215 uuid5 namespace='@url' name='a'
+  e1407479-3136-56c0-9908-bb02fb0339e2 version 5
+== 216 uuid5 namespace='@url' name='1.3.6.1.4.1.343'
+  40e635eb-c438-5e02-8119-01f1752cebca version 5
+== 217 uuid5 namespace='@url' name='cn=John Smith,o=Example,c=US'
+  7ddc7850-3022-5c02-9a1f-d4226601bdf9 version 5
+== 218 uuid5 namespace='@url' name='naïve café'
+  63b56c44-e676-5fe5-94af-78d6e823c793 version 5
+== 219 uuid5 namespace='@url' name='日本語ドメイン.jp'
+  1c8845e3-018c-5de9-b272-6b73e19d1c03 version 5
+== 220 uuid5 namespace='@url' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  d7c769b2-da3b-59fa-bdd6-2f3e8c5ed303 version 5
+== 221 uuid5 namespace='@url' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  cf24ec48-1b0b-5fe0-a033-3e2880d9d34c version 5
+== 222 uuid5 namespace='@url' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  727c7c28-ad19-527c-859b-bcdfbfb096bd version 5
+== 223 uuid5 namespace='@url' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  f21f4201-4c9b-54d3-a65d-3c64fef6d7e1 version 5
+== 224 uuid5 namespace='@url' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  c5ae47b9-d633-532d-a0ad-b9757a60c233 version 5
+== 225 uuid5 namespace='@url' name='\x00\x01\x02'
+  9b18143e-347d-5952-8e56-4c081b0e2ef1 version 5
+== 226 uuid5 namespace='@url' name='🙂 emoji'
+  e81f8ba2-d2e2-5864-8cef-3a3ee2288403 version 5
+== 227 uuid5 namespace='@oid' name='python.org'
+  cd5d0bff-2444-5d26-ab53-4f7db1cb733d version 5
+== 228 uuid5 namespace='@oid' name='www.example.com'
+  a5e87d3b-479e-52da-b98a-db251a851854 version 5
+== 229 uuid5 namespace='@oid' name='http://example.com/a?b=c'
+  48371070-a029-5b19-9d18-1ce4026c2775 version 5
+== 230 uuid5 namespace='@oid' name=''
+  0a68eb57-c88a-5f34-9e9d-27f85e68af4f version 5
+== 231 uuid5 namespace='@oid' name='a'
+  d720e32d-4765-5177-b65b-42dd7f6e6445 version 5
+== 232 uuid5 namespace='@oid' name='1.3.6.1.4.1.343'
+  6aab0456-7392-582a-b92a-ba5a7096945d version 5
+== 233 uuid5 namespace='@oid' name='cn=John Smith,o=Example,c=US'
+  9fe75420-7b97-586f-a5f8-7faad0e43ff9 version 5
+== 234 uuid5 namespace='@oid' name='naïve café'
+  79ffa115-d0fe-5413-903e-0d77b64f048a version 5
+== 235 uuid5 namespace='@oid' name='日本語ドメイン.jp'
+  766c5229-2013-5549-93c5-3d273db42e30 version 5
+== 236 uuid5 namespace='@oid' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  901ff255-344a-5309-bfd2-41b082391967 version 5
+== 237 uuid5 namespace='@oid' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  beb32218-da57-511d-aab1-600c05071dda version 5
+== 238 uuid5 namespace='@oid' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  ec097813-b7de-56a1-81cc-c347ad63c4c6 version 5
+== 239 uuid5 namespace='@oid' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  3fbb4302-a90d-5c8c-9ad2-fe77208a4c44 version 5
+== 240 uuid5 namespace='@oid' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  6a4dcbbe-0014-5815-ad9b-93e88b11dd1c version 5
+== 241 uuid5 namespace='@oid' name='\x00\x01\x02'
+  6556f767-9fea-5f7f-829c-0e2cefa7db10 version 5
+== 242 uuid5 namespace='@oid' name='🙂 emoji'
+  074d5766-771a-5e7f-9cf0-ed36dae581e1 version 5
+== 243 uuid5 namespace='@x500' name='python.org'
+  e9246a06-296f-5b50-be57-0519806c97e8 version 5
+== 244 uuid5 namespace='@x500' name='www.example.com'
+  a1d3adb1-15b7-5395-a05f-9051a08769a2 version 5
+== 245 uuid5 namespace='@x500' name='http://example.com/a?b=c'
+  c5ac5238-963a-5402-8ba1-a40d6b62f6dd version 5
+== 246 uuid5 namespace='@x500' name=''
+  b4bdf874-8c03-5bd8-8fd7-5e409dfd82c0 version 5
+== 247 uuid5 namespace='@x500' name='a'
+  54a0a790-c611-5b5b-b50e-ff01490ecdfa version 5
+== 248 uuid5 namespace='@x500' name='1.3.6.1.4.1.343'
+  9f5b5f51-0672-5fa2-9e16-d6589a578b1d version 5
+== 249 uuid5 namespace='@x500' name='cn=John Smith,o=Example,c=US'
+  731763bb-68b6-5096-b773-1ee33d101665 version 5
+== 250 uuid5 namespace='@x500' name='naïve café'
+  e1f6df9f-bc42-5ac8-91ea-dbd0c24ef09e version 5
+== 251 uuid5 namespace='@x500' name='日本語ドメイン.jp'
+  5e9cc874-81c7-541b-8dc9-61c57fac2fd1 version 5
+== 252 uuid5 namespace='@x500' name='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  db619922-ab20-5af7-ad86-0fd2c825cf59 version 5
+== 253 uuid5 namespace='@x500' name='yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  b26f11a4-b080-5d33-9c70-fd2ed90bab4f version 5
+== 254 uuid5 namespace='@x500' name='zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
+  02bbb402-3a42-576f-8c7f-da344971af2b version 5
+== 255 uuid5 namespace='@x500' name='wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+  c1089f85-2b5e-53f0-902f-3025c0cb181f version 5
+== 256 uuid5 namespace='@x500' name='qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'
+  b0c59a18-ccd1-5c2b-b370-d578109caed2 version 5
+== 257 uuid5 namespace='@x500' name='\x00\x01\x02'
+  c9dd11e7-42c4-5afa-9811-165991be6ee6 version 5
+== 258 uuid5 namespace='@x500' name='🙂 emoji'
+  0522a94c-d784-55bf-b3c8-0a095550c452 version 5
+== 259 uuid5 namespace='12345678-1234-5678-1234-567812345678' name='python.org'
+  effdd875-2208-5fd0-91ca-21f83ec2daeb version 5
+== 260 uuid5 namespace='12345678-1234-5678-1234-567812345678' name='www.example.com'
+  d28ec0ab-78dd-5a88-b6a8-db27b410b566 version 5
+== 261 uuid5 namespace='12345678-1234-5678-1234-567812345678' name='http://example.com/a?b=c'
+  839585bf-ddce-55b3-a33c-7a086f1bb6d9 version 5
+== 262 uuid5 namespace='12345678-1234-5678-1234-567812345678' name=''
+  d687edb1-27fb-5c25-bf30-1b2242e53884 version 5
+== 263 uuid5 namespace='12345678-1234-5678-1234-567812345678' name='a'
+  c42c6218-7394-567a-9c63-de6a41fe226f version 5
+== 264 uuid5 namespace='00000000-0000-0000-0000-000000000000' name='python.org'
+  93128362-2d8d-548e-84ff-e93cd1378be5 version 5
+== 265 uuid5 namespace='00000000-0000-0000-0000-000000000000' name='www.example.com'
+  399fc331-be2b-5b56-b676-d6f38dae5aaa version 5
+== 266 uuid5 namespace='00000000-0000-0000-0000-000000000000' name='http://example.com/a?b=c'
+  f0a9604c-8d0b-520d-8341-2855a14c6df1 version 5
+== 267 uuid5 namespace='00000000-0000-0000-0000-000000000000' name=''
+  e129f27c-5103-5c5c-844b-cdf0a15e160d version 5
+== 268 uuid5 namespace='00000000-0000-0000-0000-000000000000' name='a'
+  35b65f33-a679-5e76-af3c-273ea349ede4 version 5
+== 269 uuid5 namespace='@dns' name_bytes=[0, 255, 128, 10]
+  327e3483-5e2f-51d5-9e1a-8162b9895c4d version 5
+== 270 uuid4 bytes=[172, 198, 20, 53, 107, 154, 182, 181, 58, 177, 225, 136, 148, 139, 111, 89]
+  acc61435-6b9a-46b5-bab1-e188948b6f59 variant 'specified in RFC 4122' version 4
+== 271 uuid4 bytes=[226, 191, 146, 44, 42, 30, 29, 69, 183, 22, 110, 133, 134, 82, 172, 215]
+  e2bf922c-2a1e-4d45-b716-6e858652acd7 variant 'specified in RFC 4122' version 4
+== 272 uuid4 bytes=[143, 218, 3, 88, 20, 192, 253, 186, 224, 200, 26, 146, 48, 63, 228, 56]
+  8fda0358-14c0-4dba-a0c8-1a92303fe438 variant 'specified in RFC 4122' version 4
+== 273 uuid4 bytes=[49, 189, 247, 223, 216, 233, 13, 204, 196, 109, 216, 93, 63, 69, 117, 94]
+  31bdf7df-d8e9-4dcc-846d-d85d3f45755e variant 'specified in RFC 4122' version 4
+== 274 uuid4 bytes=[9, 118, 103, 188, 148, 52, 136, 235, 152, 67, 244, 144, 115, 1, 37, 233]
+  097667bc-9434-48eb-9843-f490730125e9 variant 'specified in RFC 4122' version 4
+== 275 uuid4 bytes=[203, 4, 51, 188, 51, 145, 173, 176, 29, 237, 246, 94, 89, 109, 128, 24]
+  cb0433bc-3391-4db0-9ded-f65e596d8018 variant 'specified in RFC 4122' version 4
+== 276 uuid4 bytes=[29, 135, 9, 241, 240, 237, 36, 138, 40, 73, 78, 153, 151, 137, 110, 61]
+  1d8709f1-f0ed-448a-a849-4e9997896e3d variant 'specified in RFC 4122' version 4
+== 277 uuid4 bytes=[27, 250, 162, 113, 103, 249, 48, 155, 96, 135, 108, 29, 85, 3, 11, 210]
+  1bfaa271-67f9-409b-a087-6c1d55030bd2 variant 'specified in RFC 4122' version 4
+== 278 uuid4 bytes=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  00000000-0000-4000-8000-000000000000 variant 'specified in RFC 4122' version 4
+== 279 uuid4 bytes=[255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+  ffffffff-ffff-4fff-bfff-ffffffffffff variant 'specified in RFC 4122' version 4
+== 280 hashids config={} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'gjklmnopqrvwxyzABDEGJKLMNOPQRVWXYZ1234567890' separators 'cfhistuCFHISTU' guards 'abde'
+  encode(1,) = 'jR'
+    decode = (1,)
+  encode(0,) = 'gY'
+    decode = (0,)
+  encode(12345,) = 'j0gW'
+    decode = (12345,)
+  encode(1, 2, 3) = 'o2fXhV'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'R6fOHWp'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'vJvi7On9cXGtD'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'gYcxcr'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'YvBmWEo30'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'mQD9v0BM9njBO'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = '66ziLSGyIOCgcpigpFomSqFnDl'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = (1,)
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'y42LW46J9luq3Xq9XMly' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'wpVL4j9g' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'BX' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'BxLnqL8Z7AiQDM5DA2ox' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = '3wn' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 281 hashids config={'salt': 'this is my salt'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet '5N6y2rljDQak4xgzn8ZR1oKYLmJpEbVq3OBv9WwXPMe7' separators 'UHuhtcITCsFifS' guards 'AdG0'
+  encode(1,) = 'NV'
+    decode = (1,)
+  encode(0,) = '5x'
+    decode = (0,)
+  encode(12345,) = 'NkK9'
+    decode = (12345,)
+  encode(1, 2, 3) = 'laHquq'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'EmHPsPk'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'aBMswoO2UB3Sj'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = '5xUEUK'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = '3woxejnaR'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = '2JvKQPjBKr4jl'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'XqlH8iVecyTgU5hp5C6PIWCrvB'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = (12345,)
+  decode('laHquq') = (1, 2, 3)
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'x56QL5Dr4Efom6oN6vWO' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'kRNrpKlJ' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'nz' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'nYQZ7QpDbOhy7Vr7KZER' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = '92X' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 282 hashids config={'salt': 'this is my salt', 'min_length': 8} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet '5N6y2rljDQak4xgzn8ZR1oKYLmJpEbVq3OBv9WwXPMe7' separators 'UHuhtcITCsFifS' guards 'AdG0'
+  encode(1,) = 'gB0NV05e'
+    decode = (1,)
+  encode(0,) = 'zjd5xAvO'
+    decode = (0,)
+  encode(12345,) = 'B0NkK9A5'
+    decode = (12345,)
+  encode(1, 2, 3) = 'GlaHquq0'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'dEmHPsPk'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'aBMswoO2UB3Sj'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'd5xUEUKA'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = '3woxejnaR'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = '2JvKQPjBKr4jl'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'XqlH8iVecyTgU5hp5C6PIWCrvB'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = (1,)
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'x56QL5Dr4Efom6oN6vWO' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'kRNrpKlJ' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'bVGnzG4D' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'nYQZ7QpDbOhy7Vr7KZER' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = '9kd92XGn' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 283 hashids config={'salt': 'arbitrary salt', 'min_length': 16, 'alphabet': 'abcdefghijkl0123456'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet '1kdb0jg346e5' separators 'ficha' guards 'l2'
+  encode(1,) = 'e031g5lk02kjd6b4'
+    decode = (1,)
+  encode(0,) = 'g54dkb21g2e13j60'
+    decode = (0,)
+  encode(12345,) = '64kjg26e01bl01de'
+    decode = (12345,)
+  encode(1, 2, 3) = 'ek3d2g6i5c1l6150'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = '1d6216i30h53elk3'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = '2g1k4ij1e1jfk1a4'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'b1d621gf5fe2k3g0'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'jl065g66k100j6kl'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = '0134jb0jjb1ede036gk'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = '55kik0f5d4ikc4fehd6akei60c3jgg'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = (1, 23, 456)
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'k4kkj3j154kg1g5f5jkbd4egb60k4d' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = '56l303j034ek0d21' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'k1603jl06kldg5eb' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = '1416je4bgd4bb0jcbg340b15kb11d4' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = '54dkb21kdg2e13j6' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 284 hashids config={'salt': 'acme-orders', 'min_length': 6} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'lANbE2wrzaJmvXOWZ3xKP6GV9Q145R7dgoq8ey0MLpBk' separators 'isIChUfSutcHFT' guards 'DjnY'
+  encode(1,) = 'vnA2Yz'
+    decode = (1,)
+  encode(0,) = 'GDl4Dy'
+    decode = (0,)
+  encode(12345,) = 'nAxBPj'
+    decode = (12345,)
+  encode(1, 2, 3) = 'wRsxIN'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = '58sztE4'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'JdwTmy39IQLFV'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'l4iqiO'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'gy8v61qrw'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'Ekz3yB013oA0b'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'MK3cWHm5IGSliLC6qhoJHpu8qr'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'XXLyxX1rR5iBPXBGXLdE' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'mP716g4o' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'enZAj4' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'Z4LB8LqrXQTQ9KX9Z2lq' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'rjek3Y' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 285 hashids config={'salt': 'acme-orders', 'min_length': 40} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'lANbE2wrzaJmvXOWZ3xKP6GV9Q145R7dgoq8ey0MLpBk' separators 'isIChUfSutcHFT' guards 'DjnY'
+  encode(1,) = 'm6GxwrX01akBypL9gvnA2YzlAPR5oqMWVeQd3E8b'
+    decode = (1,)
+  encode(0,) = 'Jagz6Ax9klOWV0LMeGDl4Dy1rwbm8KpNE35Q7vBR'
+    decode = (0,)
+  encode(12345,) = '6GxwrX01akBypL9gvnAxBPjzlAPR5oqMWVeQd3E8'
+    decode = (12345,)
+  encode(1, 2, 3) = '0dM5RZ3QJLPwAqEkjwRsxINDKz4xoNpB7gl6veVb'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'xzy13ALpQgMle87Wj58sztE4DVb9ZwERN5GBoKkP'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'RrWkmzL9vMP6dDJdwTmy39IQLFVnp3AXegbx8aG1'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'NVzmgM5y3dpQLkqXDl4iqiODvABRZG6W8JK4b7PO'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = '16wL2b0rk4lMWoxYgy8v61qrwjAXmQdNRGeZzgpB'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'PvbA7r3XJOL5RjEkz3yB013oA0bYKxwol4ZMzBp9'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'AOEKNWDMK3cWHm5IGSliLC6qhoJHpu8qrnv5waQ9'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'gK2oamZkAjXXLyxX1rR5iBPXBGXLdEjERG9OBqde' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'yM5E3pboaeNzlvGDmP716g4oYWwmqK42LgV1AO0r' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'kXB2a6AKZq81zvwGlenZAj4MRQ3dNx7oVgyLOE9r' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'W8l6BgAO0nZ4LB8LqrXQTQ9KX9Z2lqDENkRbwrK2' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'N9RbW23MkLgeX0qyzrjek3Y6KOxVAmJ14wdBQEvl' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 286 hashids config={'salt': '', 'min_length': 0, 'alphabet': '0123456789abcdef'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet '3456789abde' separators 'cf01' guards '2'
+  encode(1,) = '4e'
+    decode = (1,)
+  encode(0,) = '3a'
+    decode = (0,)
+  encode(12345,) = '45aba'
+    decode = (12345,)
+  encode(1, 2, 3) = '9efa0d'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = '9efad1dea'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'e48d1b86930385f6'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = '3ac9ce'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'e7937778d689d'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = '7895669b9796475e735'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = '9a80a8fed40d13c7154f5efb80b7b3'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = '59e653367e9644bf435e33339bbda96' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = '38e9b6955be' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = '8a4' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = '8a4d6aa8b9356da4fd685dd34ae758d6' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = '6a6d' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 287 hashids config={'salt': 'short', 'alphabet': 'abcdefghijklmnopqrstuvwxyz'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'gnarexwlydzomkpbv' separators 'futcish' guards 'jq'
+  encode(1,) = 'nb'
+    decode = (1,)
+  encode(0,) = 'gz'
+    decode = (0,)
+  encode(12345,) = 'obwne'
+    decode = (12345,)
+  encode(1, 2, 3) = 'wbupte'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'eluemtgxm'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'vkowhkggvwsykfg'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'gzfnfb'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'ypyrgmakrdk'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'elkdkdrkxpwlxkeem'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'rbxudlixmaiafyfvcgpuyoiokubmdv'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'dmornlzlygreacpprevgvwdllm' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'elvorvpozo' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'vm' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'dyvlznveakgmztrwykzwxedpok' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'axny' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 288 hashids config={'salt': 'caps', 'alphabet': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet '309WQG61M84RNKED75JLVX2Z' separators 'TUIFHSCAB' guards 'POY'
+  encode(1,) = '0D'
+    decode = (1,)
+  encode(0,) = '3N'
+    decode = (0,)
+  encode(12345,) = 'XGJ4'
+    decode = (12345,)
+  encode(1, 2, 3) = '66U7IV'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = '3VU8SX2'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'JV73TM175H94S8'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = '3NTVT2'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'QE0R4N0E5V'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'Q3JJ99GE05W748V'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'Z36FMMA0KKUEA8TMFW2URGTRH4R4'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = '08RD4547VV92FJ9X9K28W2DV' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = '15WEVW3L3' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = '74' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'NW7X2DERWG24A4VGL76J40LR' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'NGL' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 289 hashids config={'salt': 'seps only', 'alphabet': 'cfhistuCFHISTUabc'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'ba' separators 'UtFisIcTCfhuH' guards 'S'
+  encode(1,) = 'ab'
+    decode = (1,)
+  encode(0,) = 'ba'
+    decode = (0,)
+  encode(12345,) = 'abbaaaaaabbbaab'
+    decode = (12345,)
+  encode(1, 2, 3) = 'bbtabFbb'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'bbtabaaahbbbaabaaa'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'bbababababbsabaabaaaaabbaaabbFbbbbabbhaba'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'baUbUa'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'bbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'bbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'abbaaabbtaabbaHbbbbbabaabtaaaTaUaaibaaaaaaHababbbaibabbafabbaaabbbabbb'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'abababaaaaabbbbbbbaaabbbbbabbbabbbbabbbbaabbbbbaaafabaabaabbaababaaaabbaabbababbbbaaabbabbbbbbbabbba' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'abbbabbbbabababbabbabbbbbabbbabbbb' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'bbaaaa' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'bbababaaaa' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 290 hashids config={'salt': 'dupes', 'alphabet': 'aabbccddeeffgghhiijjkkllmmnnoopp'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'glnoabmkpjd' separators 'icfh' guards 'e'
+  encode(1,) = 'ln'
+    decode = (1,)
+  encode(0,) = 'gb'
+    decode = (0,)
+  encode(12345,) = 'lopbp'
+    decode = (12345,)
+  encode(1, 2, 3) = 'mkcgfb'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'mkcgdhbam'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'ddbohbndamfkamfo'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'gbioid'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'dnalnnnbokbao'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'algboogdgjgonjbmjab'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'maofgpcabphphjighpbimdcojfgago'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'nglbmppbjlgbaakcpljdllllnaakmng' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'gdgoapommag' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'bpd' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'bpdgbppjlnkmbgpdhlmbpllnjaokpblm' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'ooka' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 291 hashids config={'salt': 'ünïcödé sält', 'alphabet': 'αβγδεζηθικλμνξοπρστυφχψω0123456789'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'ξ8ωσ5φλ6ψ20τμορπ349νχ7' separators 'αβγδεζηθικ' guards 'υ1'
+  encode(1,) = '8ω'
+    decode = (1,)
+  encode(0,) = 'ξ5'
+    decode = (0,)
+  encode(12345,) = '8ωπχπ'
+    decode = (12345,)
+  encode(1, 2, 3) = 'λοβ5γλ'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'λοβ00δφμ'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = '0τ7τδπ2μχβ0πδ4'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'ξ5αταψ'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = '0οφ8ωοξμλω'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = '5ω3ωμ7ω64λλχπωο'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = '4τψκ98ζω0ραψθ0α5δψπεσ9βτμγσ0ψ'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'ο25ρ79ν0λο8οετ6μ677φλ4φ7' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'τχψ6νλστ7' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = '3ξ' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = '39ψχτπψπ6654ανρ06σρσππψ3' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'ρ4π' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 292 hashids config={'salt': 'x', 'min_length': -5} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'KplxoezOvL4BmGYnMZVw90gQ2EXDJk63qW785yaRNP1j' separators 'ShistUFfHITCcu' guards 'bdAr'
+  encode(1,) = 'pJ'
+    decode = (1,)
+  encode(0,) = 'KP'
+    decode = (0,)
+  encode(12345,) = 'pyxQ'
+    decode = (12345,)
+  encode(1, 2, 3) = 'zXhPin'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'JPhWIBN'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = '4exfmpoKimBcG'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'KPSySE'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'qjv1LeBDX'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'okQ5ElYq571YL'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'RE1iwCnefwfRSqsJEHG7s8HaxJ'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'GZ0yOZMvQeiP0kP9kowN' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'BMKE5O9a' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'M1' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'MwgVlgBzD4hqxm9xp36g' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = '5wB' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 293 hashids config={'alphabet': 'abcdefghijklmno'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  ValueError: Alphabet must contain at least 16 unique characters.
+== 294 hashids config={'alphabet': 'abcdefghijklmnop'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'bdegjklmnop' separators 'cfhi' guards 'a'
+  encode(1,) = 'dk'
+    decode = (1,)
+  encode(0,) = 'bo'
+    decode = (0,)
+  encode(12345,) = 'dpeme'
+    decode = (12345,)
+  encode(1, 2, 3) = 'ljflhe'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'ljflmield'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'pdnminmpljidejfb'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'bocpce'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'pegbeeenmongm'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'jlmpnnmjmomnkopboep'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'lnpilnflegijincnilkcojfpohngno'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'eebdonndkbedgglhenlknnnnmjjgbmp' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = 'bbkegnellgk' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'ked' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'kedbgeeokmpjgbedfojdkoonmlegkdoj' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'gpob' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 295 hashids config={'alphabet': 'cfhistu'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  ValueError: Alphabet must contain at least 16 unique characters.
+== 296 hashids config={'salt': 'a very very very very very very very very very very long salt indeed'} encode=[[1], [0], [12345], [1, 2, 3], [1, 23, 456], [683, 94108, 123, 5], [0, 0, 0], [1099511627776], [4611686018427387904], [7, -1], [], [99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000]] decode=['', 'a', 'NkK9', 'laHquq', 'gB0NV05e', 'jR', 'xLmOP', '1d6216i30h53elk3', 'QNrmM', 'Ö'] encode_hex=['507f1f77bcf86cd799439011', 'deadbeef', '', '0', 'FFFFFFFFFFFFFFFFFFFFFFFF', 'xyz', '5_0', ' 1'] roundtrip=True
+  alphabet 'jXQ3Yb9y4eP6gLRadrOv5WBEnVoGMp0ANx28z1ZDqlJk' separators 'fCHUFicItShsuT' guards 'wKm7'
+  encode(1,) = 'XR'
+    decode = (1,)
+  encode(0,) = 'jg'
+    decode = (0,)
+  encode(12345,) = 'XN8k'
+    decode = (12345,)
+  encode(1, 2, 3) = '9bCRHV'
+    decode = (1, 2, 3)
+  encode(1, 23, 456) = 'MACvSAJ'
+    decode = (1, 23, 456)
+  encode(683, 94108, 123, 5) = 'PBOSJz69H31Uo'
+    decode = (683, 94108, 123, 5)
+  encode(0, 0, 0) = 'jgfxfl'
+    decode = (0, 0, 0)
+  encode(1099511627776,) = 'NXqdBNGk3'
+    decode = (1099511627776,)
+  encode(4611686018427387904,) = 'YyBz3Dk4zXYkJ'
+    decode = (4611686018427387904,)
+  encode(7, -1) = ''
+  encode() = ''
+  encode(99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000) = 'D1VCLsy3UYIvfjU2atl2s9tlXa'
+    decode = (99, 25, 1001, 7, 0, 3, 64, 81, 22, 5000)
+  decode('') = ()
+  decode('a') = ()
+  decode('NkK9') = ()
+  decode('laHquq') = ()
+  decode('gB0NV05e') = ()
+  decode('jR') = ()
+  decode('xLmOP') = ()
+  decode('1d6216i30h53elk3') = ()
+  decode('QNrmM') = ()
+  decode('Ö') = ()
+  encode_hex('507f1f77bcf86cd799439011') = 'LDQVrDA0x5uWP6Wx6Mv1' decode_hex = '507f1f77bcf86cd799439011'
+  encode_hex('deadbeef') = '6pLzPqQ0' decode_hex = 'deadbeef'
+  encode_hex('') = '' decode_hex = ''
+  encode_hex('0') = 'dZ' decode_hex = '0'
+  encode_hex('FFFFFFFFFFFFFFFFFFFFFFFF') = 'dk9Eb9DPe0iMvajvyYDP' decode_hex = 'ffffffffffffffffffffffff'
+  encode_hex('xyz') = '' decode_hex = ''
+  encode_hex('5_0') = 'zab' decode_hex = '50'
+  encode_hex(' 1') = '' decode_hex = ''
+== 297 shortuuid alphabet=None encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz' length 22
+  encode(12345678-1234-5678-1234-567812345678, None) = '5FdNqEYASQvT6ZhBtUuVoV'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = '2222222222222222222222'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = 'oZEq7ovRbLq6UnGMPwc8B5'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = 'MAnkyno2VCnFzuVMWtxBda'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = 'MAnkyno2VCnFzuVMWtxBda'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = '222'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False) = 3b1f8b40-222c-4a6e-b77e-779d5a94e21c
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True) = bc7960f9-dfb1-55d7-4dd3-529707d0d6dc
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('0000', legacy=False): ValueError: '0' is not in list
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: '1' is not in list
+  uuid('example.com', None) = 'exu3DTbj2ncsn9tLdLWspw'
+  uuid('http://example.com', None) = 'T35fvrnVz6SMSdh9y5hs8c'
+  uuid('HTTPS://Example.com/x', None) = 'ACNB8XDmY2LMmbwcHKgLjV'
+  uuid('Https://', 4) = 'KbGWJXtePiX9EkpERYpBFK'
+  uuid('', None) = 'G2XvSSebd6Tc4bHMenwxLy'
+  encoded_length(16) = 22
+  encoded_length(8) = 11
+  encoded_length(1) = 2
+  encoded_length(0) = 0
+  encoded_length(32) = 44
+== 298 shortuuid alphabet='01' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet '01' length 128
+  encode(12345678-1234-5678-1234-567812345678, None) = '00010010001101000101011001111000000100100011010001010110011110000001001000110100010101100111100000010010001101000101011001111000'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = '11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = '1101011101001111011100000010000100111011010110100010001110100011000000010110100000000001100000001001111110101000011000011001000'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = '1101011101001111011100000010000100111011010110100010001110100011000000010110100000000001100000001001111110101000011000011001000'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = '000'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False): ValueError: 'C' is not in list
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True): ValueError: 'b' is not in list
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False): ValueError: '2' is not in list
+  decode('0000', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: 'z' is not in list
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  uuid('example.com', None) = '11001111101111111111000011010001100100110111010101010110100001011001011010001100010010001100111010001011000101011010111000010111'
+  uuid('http://example.com', None) = '10001100100111011101110010110000100000001000010001011010011111111010100110001000000100001001010110101011000110001011010111011111'
+  uuid('HTTPS://Example.com/x', None) = '00101101111111000001001100011111111100011000111101010111000100001001111101101101001000101101011010000001001101101000010101100010'
+  uuid('Https://', 4) = '1100010110100111011010110101001100000010111001101011111111010011000110001000101110111010001001100001100011010111101110110110010'
+  uuid('', None) = '01001110101111010000001000001000100000110010100001011101011010011000110001000100111011000101000010010011100111000000100101100111'
+  encoded_length(16) = 128
+  encoded_length(8) = 64
+  encoded_length(1) = 8
+  encoded_length(0) = 0
+  encoded_length(32) = 256
+== 299 shortuuid alphabet='0123456789abcdef' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet '0123456789abcdef' length 32
+  encode(12345678-1234-5678-1234-567812345678, None) = '12345678123456781234567812345678'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = '00000000000000000000000000000000'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = 'ffffffffffffffffffffffffffffffff'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = '6ba7b8109dad11d180b400c04fd430c8'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = '6ba7b8109dad11d180b400c04fd430c8'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = '000'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False): ValueError: 'C' is not in list
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True): ValueError: 'Y' is not in list
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False) = 00000000-0000-0000-0000-000000000002
+  decode('0000', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: 'z' is not in list
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  uuid('example.com', None) = 'cfbff0d193755685968c48ce8b15ae17'
+  uuid('http://example.com', None) = '8c9ddcb080845a7fa9881095ab18b5df'
+  uuid('HTTPS://Example.com/x', None) = '2dfc131ff18f57109f6d22d681368562'
+  uuid('Https://', 4) = '62d3b5a981735fe98c45dd130c6bddb2'
+  uuid('', None) = '4ebd020883285d698c44ec50939c0967'
+  encoded_length(16) = 32
+  encoded_length(8) = 16
+  encoded_length(1) = 2
+  encoded_length(0) = 0
+  encoded_length(32) = 64
+== 300 shortuuid alphabet='abcdefghijklmnopqrstuvwxyz' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet 'abcdefghijklmnopqrstuvwxyz' length 28
+  encode(12345678-1234-5678-1234-567812345678, None) = 'adyfdzkqshywpioihrugtilckwdc'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = 'cdhefomrsrxetmsvhtomcungjkbv'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = 'xgjnyxqstxopzvyvawqzlzxylqm'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = 'xgjnyxqstxopzvyvawqzlzxylqm'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = 'aaa'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False): ValueError: 'C' is not in list
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True): ValueError: 'Y' is not in list
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False): ValueError: '2' is not in list
+  decode('0000', legacy=False): ValueError: '0' is not in list
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: '1' is not in list
+  uuid('example.com', None) = 'bswhnqmzyqkdekdhakkpywpuxxvb'
+  uuid('http://example.com', None) = 'bejkrazdpxqrvymtnmmngyvzivet'
+  uuid('HTTPS://Example.com/x', None) = 'ajyeacjbflvdwipclouxgzqvbuni'
+  uuid('Https://', 4) = 'viuzauwaluisljglupggnvcgxyw'
+  uuid('', None) = 'araaujswdlxkjuyumlojlmgrjvhf'
+  encoded_length(16) = 28
+  encoded_length(8) = 14
+  encoded_length(1) = 2
+  encoded_length(0) = 0
+  encoded_length(32) = 55
+== 301 shortuuid alphabet='23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz' length 22
+  encode(12345678-1234-5678-1234-567812345678, None) = '5FdNqEYASQvT6ZhBtUuVoV'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = '2222222222222222222222'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = 'oZEq7ovRbLq6UnGMPwc8B5'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = 'MAnkyno2VCnFzuVMWtxBda'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = 'MAnkyno2VCnFzuVMWtxBda'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = '222'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False) = 3b1f8b40-222c-4a6e-b77e-779d5a94e21c
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True) = bc7960f9-dfb1-55d7-4dd3-529707d0d6dc
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('0000', legacy=False): ValueError: '0' is not in list
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: '1' is not in list
+  uuid('example.com', None) = 'exu3DTbj2ncsn9tLdLWspw'
+  uuid('http://example.com', None) = 'T35fvrnVz6SMSdh9y5hs8c'
+  uuid('HTTPS://Example.com/x', None) = 'ACNB8XDmY2LMmbwcHKgLjV'
+  uuid('Https://', 4) = 'KbGWJXtePiX9EkpERYpBFK'
+  uuid('', None) = 'G2XvSSebd6Tc4bHMenwxLy'
+  encoded_length(16) = 22
+  encoded_length(8) = 11
+  encoded_length(1) = 2
+  encoded_length(0) = 0
+  encoded_length(32) = 44
+== 302 shortuuid alphabet='zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA9876543210-_' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz' length 22
+  encode(12345678-1234-5678-1234-567812345678, None) = '-HC4Os3YGLT07oKbVHC4Os'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = '----------------------'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = '2zzzzzzzzzzzzzzzzzzzzz'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = '0fdvVFbPoGoN1o-B0Ep227'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = '0fdvVFbPoGoN1o-B0Ep227'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = '---'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True): ValueError: int is out of range (need a 128-bit value)
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False) = 00000000-0000-0000-0000-000000000003
+  decode('0000', legacy=False) = 00000000-0000-0000-0000-000000041041
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: int is out of range (need a 128-bit value)
+  uuid('example.com', None) = '2Ejz2GZrKLWOPBHBuA4PsM'
+  uuid('http://example.com', None) = '1BbSmkV7GPUua738Lf5AMU'
+  uuid('HTTPS://Example.com/x', None) = '-hz0BUwNxM38xh7hP0CcKX'
+  uuid('Https://', 4) = '0XovLdVMCUuNl4rGBBPxqm'
+  uuid('', None) = '0DjF77VmWSPNl3v41Ib-_b'
+  encoded_length(16) = 22
+  encoded_length(8) = 11
+  encoded_length(1) = 2
+  encoded_length(0) = 0
+  encoded_length(32) = 43
+== 303 shortuuid alphabet='aaaa' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  ValueError: Alphabet with more than one unique symbols required.
+== 304 shortuuid alphabet='ab' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet 'ab' length 128
+  encode(12345678-1234-5678-1234-567812345678, None) = 'aaabaabaaabbabaaabababbaabbbbaaaaaabaabaaabbabaaabababbaabbbbaaaaaabaabaaabbabaaabababbaabbbbaaaaaabaabaaabbabaaabababbaabbbbaaa'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = 'bbababbbabaabbbbabbbaaaaaabaaaabaabbbabbababbabaaabaaabbbabaaabbaaaaaaababbabaaaaaaaaaabbaaaaaaabaabbbbbbababaaaabbaaaabbaabaaa'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = 'bbababbbabaabbbbabbbaaaaaabaaaabaabbbabbababbabaaabaaabbbabaaabbaaaaaaababbabaaaaaaaaaabbaaaaaaabaabbbbbbababaaaabbaaaabbaabaaa'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = 'aaa'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False): ValueError: 'C' is not in list
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True): ValueError: 'Y' is not in list
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False): ValueError: '2' is not in list
+  decode('0000', legacy=False): ValueError: '0' is not in list
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: 'z' is not in list
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: '1' is not in list
+  uuid('example.com', None) = 'bbaabbbbbabbbbbbbbbbaaaabbabaaabbaabaabbabbbabababababbabaaaababbaababbabaaabbaaabaabaaabbaabbbabaaababbaaabababbababbbaaaababbb'
+  uuid('http://example.com', None) = 'baaabbaabaabbbabbbabbbaababbaaaabaaaaaaabaaaabaaababbabaabbbbbbbbababaabbaaabaaaaaabaaaabaabababbabababbaaabbaaababbababbbabbbbb'
+  uuid('HTTPS://Example.com/x', None) = 'aababbabbbbbbbaaaaabaabbaaabbbbbbbbbaaabbaaabbbbabababbbaaabaaaabaabbbbbabbabbabaabaaababbababbabaaaaaabaabbabbabaaaabababbaaaba'
+  uuid('Https://', 4) = 'bbaaababbabaabbbabbababbababaabbaaaaaababbbaabbababbbbbbbbabaabbaaabbaaabaaababbbabbbabaaabaabbaaaabbaaabbababbbbabbbabbabbaaba'
+  uuid('', None) = 'abaabbbababbbbabaaaaaabaaaaabaaabaaaaabbaababaaaababbbababbabaabbaaabbaaabaaabaabbbabbaaababaaaabaabaabbbaabbbaaaaaabaababbaabbb'
+  encoded_length(16) = 128
+  encoded_length(8) = 64
+  encoded_length(1) = 8
+  encoded_length(0) = 0
+  encoded_length(32) = 256
+== 305 shortuuid alphabet='αβγ' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet 'αβγ' length 81
+  encode(12345678-1234-5678-1234-567812345678, None) = 'ααβββαγβαααγγββαγαββαγβαβγβγβγγαβγγβαγβββγαβγγβααγβαββγαααββγγβαααγγγβααβαγβααααα'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = 'ααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααα'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = 'γαγγαββαγβγβααγαγβαβγαααγββαβγαββαγβγγβαγγγβγαγββββααβαγγββαγββαγααβααγββααβγβαβα'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = 'γγγαβαγαγγαβαγβαβαγαβααγγαγαγγββαβγγγβαγγγααββγββγγαγααγβαγβγγγγααβαβαγγββγβαααγ'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = 'γγγαβαγαγγαβαγβαβαγαβααγγαγαγγββαβγγγβαγγγααββγββγγαγααγβαγβγγγγααβαβαγγββγβαααγ'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = 'ααα'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False): ValueError: 'C' is not in list
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True): ValueError: 'b' is not in list
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False): ValueError: '2' is not in list
+  decode('0000', legacy=False): ValueError: '0' is not in list
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: 'z' is not in list
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: '1' is not in list
+  uuid('example.com', None) = 'βγβγβαγγγγαββαγγααγγγγαββββαββαββββααγγααβαβγββαγββαγγβαββαγγβγγγαγββγγγγγβγαγβαγ'
+  uuid('http://example.com', None) = 'βαγβαβαγβγαβαββαβγγαγααγγββγαβαγβγγγγγβγγγααβαααγγαγααααβαγαγβββααγββγαααααααααγβ'
+  uuid('HTTPS://Example.com/x', None) = 'αβαγαββββαβγββαβββγβαβαββγβββγαγββαγααββββββαβγγβγβγβββγαβγβββγααγγααααγγαβγαγβγα'
+  uuid('Https://', 4) = 'γβγγγγγγαααβγββαααγαβαγααγβγγββγαβγββαγαγγβαβγαβαγβγγααγβγγαγγγβγγγβαγαγαβγβγααγ'
+  uuid('', None) = 'αγαβαβααβγαγααγαβααβββαγαββγγαβγβαγβαββγβααβγγαγαβαγββαγαγβααγγγγγγβγαβγγαααααααβ'
+  encoded_length(16) = 81
+  encoded_length(8) = 41
+  encoded_length(1) = 6
+  encoded_length(0) = 0
+  encoded_length(32) = 162
+== 306 shortuuid alphabet='' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  ValueError: Alphabet with more than one unique symbols required.
+== 307 shortuuid alphabet='AAAAAAAAAB' encode=[['12345678-1234-5678-1234-567812345678', None], ['00000000-0000-0000-0000-000000000000', None], ['ffffffff-ffff-ffff-ffff-ffffffffffff', None], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 5], ['6ba7b810-9dad-11d1-80b4-00c04fd430c8', 0], ['00000000-0000-0000-0000-000000000000', 3]] decode=[['CXc85b4rqinB7s5J52TRYb', False], ['CXc85b4rqinB7s5J52TRYb', True], ['', False], ['2', False], ['0000', False], ['zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', False], ['!', False], ['1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', False]] names=[['example.com', None], ['http://example.com', None], ['HTTPS://Example.com/x', None], ['Https://', 4], ['', None]] lengths=[16, 8, 1, 0, 32]
+  alphabet 'AB' length 128
+  encode(12345678-1234-5678-1234-567812345678, None) = 'AAABAABAAABBABAAABABABBAABBBBAAAAAABAABAAABBABAAABABABBAABBBBAAAAAABAABAAABBABAAABABABBAABBBBAAAAAABAABAAABBABAAABABABBAABBBBAAA'
+    decode = 12345678-1234-5678-1234-567812345678
+  encode(00000000-0000-0000-0000-000000000000, None) = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    decode = 00000000-0000-0000-0000-000000000000
+  encode(ffffffff-ffff-ffff-ffff-ffffffffffff, None) = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+    decode = ffffffff-ffff-ffff-ffff-ffffffffffff
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 5) = 'BBABABBBABAABBBBABBBAAAAAABAAAABAABBBABBABABBABAAABAAABBBABAAABBAAAAAAABABBABAAAAAAAAAABBAAAAAAABAABBBBBBABABAAAABBAAAABBAABAAA'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(6ba7b810-9dad-11d1-80b4-00c04fd430c8, 0) = 'BBABABBBABAABBBBABBBAAAAAABAAAABAABBBABBABABBABAAABAAABBBABAAABBAAAAAAABABBABAAAAAAAAAABBAAAAAAABAABBBBBBABABAAAABBAAAABBAABAAA'
+    decode = 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+  encode(00000000-0000-0000-0000-000000000000, 3) = 'AAA'
+    decode = 00000000-0000-0000-0000-000000000000
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=False): ValueError: 'C' is not in list
+  decode('CXc85b4rqinB7s5J52TRYb', legacy=True): ValueError: 'b' is not in list
+  decode('', legacy=False) = 00000000-0000-0000-0000-000000000000
+  decode('2', legacy=False): ValueError: '2' is not in list
+  decode('0000', legacy=False): ValueError: '0' is not in list
+  decode('zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz', legacy=False): ValueError: 'z' is not in list
+  decode('!', legacy=False): ValueError: '!' is not in list
+  decode('1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', legacy=False): ValueError: '1' is not in list
+  uuid('example.com', None) = 'BBAABBBBBABBBBBBBBBBAAAABBABAAABBAABAABBABBBABABABABABBABAAAABABBAABABBABAAABBAAABAABAAABBAABBBABAAABABBAAABABABBABABBBAAAABABBB'
+  uuid('http://example.com', None) = 'BAAABBAABAABBBABBBABBBAABABBAAAABAAAAAAABAAAABAAABABBABAABBBBBBBBABABAABBAAABAAAAAABAAAABAABABABBABABABBAAABBAAABABBABABBBABBBBB'
+  uuid('HTTPS://Example.com/x', None) = 'AABABBABBBBBBBAAAAABAABBAAABBBBBBBBBAAABBAAABBBBABABABBBAAABAAAABAABBBBBABBABBABAABAAABABBABABBABAAAAAABAABBABBABAAAABABABBAAABA'
+  uuid('Https://', 4) = 'BBAAABABBABAABBBABBABABBABABAABBAAAAAABABBBAABBABABBBBBBBBABAABBAAABBAAABAAABABBBABBBABAAABAABBAAAABBAAABBABABBBBABBBABBABBAABA'
+  uuid('', None) = 'ABAABBBABABBBBABAAAAAABAAAAABAAABAAAAABBAABABAAAABABBBABABBABAABBAAABBAAABAAABAABBBABBAAABABAAAABAABAABBBAABBBAAAAAABAABABBAABBB'
+  encoded_length(16) = 128
+  encoded_length(8) = 64
+  encoded_length(1) = 8
+  encoded_length(0) = 0
+  encoded_length(32) = 256
+== 308 orders
+  globex   order  1014 customer 294    740.92 -> nbePTq39
+  globex   order  1049 customer 324    667.78 -> n6rjtWbn
+  initech  order  1095 customer 306    840.55 -> 96DVi1RB
+  acme     order  1113 customer 435    845.01 -> DlXwsbrD
+  initech  order  1169 customer 441    853.91 -> 9Vq0hDNQ
+  initech  order  1189 customer 241     85.81 -> Qkr1i2mB
+  acme     order  1246 customer  49    623.29 -> jrgEcEKn
+  acme     order  1260 customer 330    771.25 -> nkVViWqj
+  acme     order  1321 customer 406    885.13 -> jVbgU8kj
+  globex   order  1362 customer 322    322.88 -> 9vveU6a9
+  acme     order  1380 customer 172    585.50 -> nK8ouGPY
+  acme     order  1407 customer  18    601.86 -> knQ8oSMj
+  globex   order  1472 customer 174    342.12 -> Y0r5cD89
+  acme     order  1490 customer 417    493.46 -> nWOxFaWn
+  acme     order  1529 customer  76    359.04 -> D3xmU6Mj
+  globex   order  1580 customer 330    396.08 -> nALdTLb9
+  acme     order  1612 customer  72     66.94 -> DLaPhGkj
+  globex   order  1631 customer  16    444.90 -> VOgZauyY
+  acme     order  1681 customer  12    688.03 -> dY2p7sNj
+  initech  order  1713 customer  53    346.42 -> 9rV7Co59
+  initech  order  1746 customer 301    244.74 -> 9WOxcA79
+  initech  order  1786 customer 464    857.73 -> BlMjU08Q
+  globex   order  1836 customer  42    333.81 -> VYkbAIWn
+  globex   order  1861 customer 385    211.32 -> 9paDTgGn
+  globex   order  1894 customer 427    510.09 -> 92Gzc2Gn
+  initech  order  1944 customer 325     15.49 -> 9rxe1s6E
+  initech  order  1964 customer 168    195.58 -> 9MVArIY6
+  acme     order  2023 customer 118    926.60 -> DLOOVf3p
+  globex   order  2052 customer 379     50.77 -> OZENbt8K
+  acme     order  2095 customer 421    130.21 -> j9XWKsmw
+  line 32: bad order id 'notanumber'
+  line 33: unknown tenant 'umbrella'
+  line 34: order id -4 cannot be encoded
+  total acme     12 orders    6976.32
+  total globex   10 orders    4020.67
+  total initech   8 orders    3440.23
+== 309 events
+  skipped 'not-a-uuid': not a UUID
+  skipped 12345678-1234-4678-9234-567812345678: version 4, not a time-based id
+  2024-10-19 08:00:01.2651396 02:42:ac:11:00:02 seq 12082 order.paid
+  2024-10-19 08:00:04.2877677 3c:22:fb:7a:10:de seq  2012 user.login    +3022ms
+  2024-10-19 08:00:04.6613299 3c:22:fb:7a:10:de seq  9845 order.created +373ms
+  2024-10-19 08:00:07.3578140 02:42:ac:11:00:02 seq  9047 order.paid    +2696ms
+  2024-10-19 08:00:11.1656819 3c:22:fb:7a:10:de seq 12145 user.login    +3807ms
+  2024-10-19 08:00:13.9000712 02:42:ac:11:00:03 seq  3287 order.created +2734ms
+  2024-10-19 08:00:17.2896389 3c:22:fb:7a:10:de seq   573 order.shipped +3389ms
+  2024-10-19 08:00:18.0389721 02:42:ac:11:00:02 seq  8276 order.created +749ms
+  2024-10-19 08:00:18.3879783 02:42:ac:11:00:02 seq 13507 user.login    +349ms
+  2024-10-19 08:00:20.5646398 02:42:ac:11:00:03 seq 14113 order.shipped +2176ms
+  2024-10-19 08:00:22.1229168 02:42:ac:11:00:02 seq 15132 order.paid    +1558ms
+  2024-10-19 08:00:24.1498740 3c:22:fb:7a:10:de seq 14553 user.login    +2026ms
+  2024-10-19 08:00:26.4576383 02:42:ac:11:00:02 seq  4696 order.paid    +2307ms
+  2024-10-19 08:00:28.2627806 02:42:ac:11:00:02 seq  7150 order.created +1805ms
+  2024-10-19 08:00:30.1737268 02:42:ac:11:00:03 seq  8943 order.shipped +1910ms
+  2024-10-19 08:00:33.0651939 02:42:ac:11:00:02 seq  8893 user.login    +2891ms
+  2024-10-19 08:00:35.8689942 3c:22:fb:7a:10:de seq  1085 order.shipped +2803ms
+  2024-10-19 08:00:39.7569681 3c:22:fb:7a:10:de seq  8585 user.login    +3887ms
+  2024-10-19 08:00:43.2596675 02:42:ac:11:00:03 seq 14752 user.login    +3502ms
+  2024-10-19 08:00:45.5191321 02:42:ac:11:00:02 seq  2188 cart.updated  +2259ms
+  2024-10-19 08:00:49.3927695 02:42:ac:11:00:03 seq  7648 order.paid    +3873ms
+  2024-10-19 08:00:51.4115395 02:42:ac:11:00:02 seq 12265 cart.updated  +2018ms
+  2024-10-19 08:00:53.0990449 02:42:ac:11:00:02 seq   752 order.shipped +1687ms
+  2024-10-19 08:00:54.8920987 02:42:ac:11:00:02 seq  1986 cart.updated  +1793ms
+  host 02:42:ac:11:00:02 12 events
+  host 02:42:ac:11:00:03 5 events
+  host 3c:22:fb:7a:10:de 7 events
+== 310 links
+  a46kjrEzT6YdQ2GE5oyX39 url https://example.com/docs/getting-started
+    = b40f76c6-2c1f-560d-9afa-c16c493be6df
+  o5VbbddPPYUXjUPcAswwsF url https://example.com/pricing
+    = fd43bd45-b864-58f9-8879-2bc16d392655
+  Hg6CgE23Vvis4tFnZvX4NC url http://blog.example.com/2024/10/launch
+    = 580fadb2-45e9-51f7-88f0-d24b8b16daa3
+  a46kjrEzT6YdQ2GE5oyX39 url https://example.com/docs/getting-started (seen)
+    = b40f76c6-2c1f-560d-9afa-c16c493be6df
+  LyiEY8DF5C3Zz9qXZv6tDe dns example.com/no-scheme
+    = 6aa9486f-b100-5e63-a53e-23b13873d1c9
+  ZnUTT49tXkHhpJ5AKWe8Zw url HTTPS://EXAMPLE.COM/Upper
+    = b29e6e2c-5033-5fcf-a277-86c8ab973e63
+  cisU5R8sYeT899zrerm6bA dns ftp://files.example.com/a.zip
+    = c3202b4f-988c-525a-84d9-4c3c5f6f1b79
+  D5g7SpWu5g5tyKPis5C6Zn url https://example.com/search?q=uuid&lang=en
+    = 3e2fd661-b562-562a-8c6d-5174ef3c12b6
+  YSsmnx4cg8uqPimByUx9GC url https://例え.jp/パス
+    = ab11100c-bddc-55c8-86da-76bbfe8c5465
+== 311 incoming
+  globex 'n6rjtWbn'             -> (1049, 324), under acme -> ()
+  globex 'n6rjtWba'             -> (), under acme -> ()
+  globex 'N6RJTwBN'             -> (), under acme -> ()
+  globex 'n6rjtWbnn'            -> (), under acme -> ()
+  globex '6rjtWbn'              -> (), under acme -> ()
+  initech '9Vq0hDNQ'             -> (1169, 441), under acme -> ()
+  initech '9Vq0hDNa'             -> (), under acme -> ()
+  initech '9vQ0Hdnq'             -> (), under acme -> ()
+  initech '9Vq0hDNQ9'            -> (), under acme -> ()
+  initech 'Vq0hDNQ'              -> (), under acme -> ()
+  acme 'nkVViWqj'             -> (1260, 330), under globex -> ()
+  acme 'nkVViWqa'             -> (), under globex -> ()
+  acme 'NKvvIwQJ'             -> (), under globex -> ()
+  acme 'nkVViWqjn'            -> (), under globex -> ()
+  acme 'kVViWqj'              -> (), under globex -> ()
+  acme 'nK8ouGPY'             -> (1380, 172), under globex -> ()
+  acme 'nK8ouGPa'             -> (), under globex -> ()
+  acme 'Nk8OUgpy'             -> (), under globex -> ()
+  acme 'nK8ouGPYn'            -> (), under globex -> ()
+  acme 'K8ouGPY'              -> (), under globex -> ()
+  acme 'nWOxFaWn'             -> (1490, 417), under globex -> ()
+  acme 'nWOxFaWa'             -> (), under globex -> ()
+  acme 'NwoXfAwN'             -> (), under globex -> ()
+  acme 'nWOxFaWnn'            -> (), under globex -> ()
+  acme 'WOxFaWn'              -> (), under globex -> ()
+  acme 'DLaPhGkj'             -> (1612, 72), under globex -> ()
+  acme 'DLaPhGka'             -> (), under globex -> ()
+  acme 'dlApHgKJ'             -> (), under globex -> ()
+  acme 'DLaPhGkjD'            -> (), under globex -> ()
+  acme 'LaPhGkj'              -> (), under globex -> ()
+  initech '9rV7Co59'             -> (1713, 53), under acme -> ()
+  initech '9rV7Co5a'             -> (), under acme -> ()
+  initech '9Rv7cO59'             -> (), under acme -> ()
+  initech '9rV7Co599'            -> (), under acme -> ()
+  initech 'rV7Co59'              -> (), under acme -> ()
+  globex 'VYkbAIWn'             -> (1836, 42), under acme -> ()
+  globex 'VYkbAIWa'             -> (), under acme -> ()
+  globex 'vyKBaiwN'             -> (), under acme -> ()
+  globex 'VYkbAIWnV'            -> (), under acme -> ()
+  globex 'YkbAIWn'              -> (), under acme -> ()
+  initech '9rxe1s6E'             -> (1944, 325), under acme -> ()
+  initech '9rxe1s6a'             -> (), under acme -> ()
+  initech '9RXE1S6e'             -> (), under acme -> ()
+  initech '9rxe1s6E9'            -> (), under acme -> ()
+  initech 'rxe1s6E'              -> (), under acme -> ()
+  globex 'OZENbt8K'             -> (2052, 379), under acme -> ()
+  globex 'OZENbt8a'             -> (), under acme -> ()
+  globex 'ozenBT8k'             -> (), under acme -> ()
+  globex 'OZENbt8KO'            -> (), under acme -> ()
+  globex 'ZENbt8K'              -> (), under acme -> ()
