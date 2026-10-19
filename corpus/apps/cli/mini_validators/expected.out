@@ -1,0 +1,1576 @@
+== email
+-- email('someone@example.com')
+   True
+-- email('first.last+tag@sub.example.co.uk')
+   True
+-- email('bogus@@')
+   ValidationError(func=email, args={'value': 'bogus@@'})
+-- email('no-at-sign')
+   ValidationError(func=email, args={'value': 'no-at-sign'})
+-- email('')
+   ValidationError(func=email, args={'value': ''})
+-- email('a@b')
+   ValidationError(func=email, args={'value': 'a@b'})
+-- email('user@localhost')
+   ValidationError(func=email, args={'value': 'user@localhost'})
+-- email('user@[127.0.0.1]')
+   ValidationError(func=email, args={'value': 'user@[127.0.0.1]'})
+-- email('user@[::1]')
+   ValidationError(func=email, args={'value': 'user@[::1]'})
+-- email('x@-bad.com')
+   ValidationError(func=email, args={'value': 'x@-bad.com'})
+-- email('x@bad-.com')
+   ValidationError(func=email, args={'value': 'x@bad-.com'})
+-- email('x@exa_mple.com')
+   ValidationError(func=email, args={'value': 'x@exa_mple.com'})
+-- email('"quoted user"@example.org')
+   ValidationError(func=email, args={'value': '"quoted user"@example.org'})
+-- email('"bad"quote"@example.org')
+   ValidationError(func=email, args={'value': '"bad"quote"@example.org'})
+-- email('Ž@example.com')
+   True
+-- email('žluťoučký.kůň@example.com')
+   True
+-- email('user.@example.com')
+   ValidationError(func=email, args={'value': 'user.@example.com'})
+-- email('.user@example.com')
+   ValidationError(func=email, args={'value': '.user@example.com'})
+-- email('us..er@example.com')
+   ValidationError(func=email, args={'value': 'us..er@example.com'})
+-- email('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com')
+   True
+-- email('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com')
+   ValidationError(func=email, args={'value': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com'})
+-- email('x@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com')
+   True
+-- email('x@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com')
+   ValidationError(func=email, args={'value': 'x@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com'})
+-- email('x@abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.abcdefghi.com')
+   True
+-- email('user@example.com.')
+   ValidationError(func=email, args={'value': 'user@example.com.'})
+-- email('user@_srv.example.com')
+   ValidationError(func=email, args={'value': 'user@_srv.example.com'})
+-- email('user@example')
+   ValidationError(func=email, args={'value': 'user@example'})
+-- email('UPPER@EXAMPLE.COM')
+   True
+-- email("o'brien@example.ie")
+   True
+-- email('user@xn--80ak6aa92e.com')
+   True
+-- email('user@123.123.123.123')
+   ValidationError(func=email, args={'value': 'user@123.123.123.123'})
+-- email('user@ex ample.com')
+   ValidationError(func=email, args={'value': 'user@ex ample.com'})
+-- email('user@example..com')
+   ValidationError(func=email, args={'value': 'user@example..com'})
+-- email('user@.example.com')
+   ValidationError(func=email, args={'value': 'user@.example.com'})
+-- email('tab\t@example.com')
+   ValidationError(func=email, args={'value': 'tab\t@example.com'})
+-- email('user@example.c')
+   ValidationError(func=email, args={'value': 'user@example.c'})
+-- email('user@exam!ple.com')
+   ValidationError(func=email, args={'value': 'user@exam!ple.com'})
+-- email('a@b.c0')
+   ValidationError(func=email, args={'value': 'a@b.c0'})
+-- email('a@b.co')
+   True
+-- email('very.common@example.com')
+   True
+-- email('user@[127.0.0.1]', ipv4_address=True)
+   True
+-- email('user@[::1]', ipv6_address=True)
+   True
+-- email('user@[2001:db8::1]', ipv6_address=True)
+   True
+-- email('user@127.0.0.1', ipv4_address=True)
+   ValidationError(func=email, args={'value': 'user@127.0.0.1', 'ipv4_address': True})
+-- email('user@localhost', simple_host=True)
+   True
+-- email('user@example.com.', rfc_1034=True)
+   True
+-- email('user@_srv.example.com', rfc_2782=True)
+   True
+-- email('user@[300.1.1.1]', ipv4_address=True)
+   ValidationError(func=email, args={'value': 'user@[300.1.1.1]', 'ipv4_address': True})
+== domain and hostname
+-- domain('example.com')
+   True
+-- domain('example.com/')
+   ValidationError(func=domain, args={'value': 'example.com/'})
+-- domain('xn----gtbspbbmkef.xn--p1ai')
+   True
+-- domain('sub.domain.example.org')
+   True
+-- domain('-start.com')
+   ValidationError(func=domain, args={'value': '-start.com'})
+-- domain('end-.com')
+   ValidationError(func=domain, args={'value': 'end-.com'})
+-- domain('under_score.com')
+   ValidationError(func=domain, args={'value': 'under_score.com'})
+-- domain('_srv.example.com')
+   ValidationError(func=domain, args={'value': '_srv.example.com'})
+-- domain('a.b')
+   ValidationError(func=domain, args={'value': 'a.b'})
+-- domain('a.b1')
+   ValidationError(func=domain, args={'value': 'a.b1'})
+-- domain('123.com')
+   True
+-- domain('com')
+   ValidationError(func=domain, args={'value': 'com'})
+-- domain('example..com')
+   ValidationError(func=domain, args={'reason': 'Unable to encode/decode example..com', 'value': 'example..com'})
+-- domain('.example.com')
+   ValidationError(func=domain, args={'reason': 'Unable to encode/decode .example.com', 'value': '.example.com'})
+-- domain('example.com.')
+   ValidationError(func=domain, args={'value': 'example.com.'})
+-- domain('ex ample.com')
+   ValidationError(func=domain, args={'value': 'ex ample.com'})
+-- domain('exa__mple.com')
+   ValidationError(func=domain, args={'value': 'exa__mple.com'})
+-- domain('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com')
+   True
+-- domain('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com')
+   ValidationError(func=domain, args={'reason': 'Unable to encode/decode aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com', 'value': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com'})
+-- domain('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com')
+   True
+-- domain('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com')
+   True
+-- domain('example.c-m')
+   True
+-- domain('example.1om')
+   True
+-- domain('EXAMPLE.COM')
+   True
+-- domain('x.y.z.w.v.u.example.museum')
+   True
+-- domain('localhost')
+   ValidationError(func=domain, args={'value': 'localhost'})
+-- domain('example.com.', rfc_1034=True)
+   True
+-- domain('_sip._tcp.example.com', rfc_2782=True)
+   True
+-- domain('my__srv.example.com', rfc_2782=True)
+   ValidationError(func=domain, args={'value': 'my__srv.example.com', 'rfc_2782': True})
+-- domain('example.com', consider_tld=True)
+   True
+-- domain('example.dev', consider_tld=True)
+   True
+-- domain('example.zzz', consider_tld=True)
+   ValidationError(func=domain, args={'value': 'example.zzz', 'consider_tld': True})
+-- domain('example.onion', consider_tld=True)
+   True
+-- domain('example.ninja', consider_tld=True)
+   True
+-- domain('example.local', consider_tld=True)
+   ValidationError(func=domain, args={'value': 'example.local', 'consider_tld': True})
+-- domain('example.COM', consider_tld=True)
+   True
+-- domain('example.org.', consider_tld=True)
+   ValidationError(func=domain, args={'value': 'example.org.', 'consider_tld': True})
+-- domain('example.xn--p1ai', consider_tld=True)
+   True
+-- hostname('ubuntu-pc:443')
+   True
+-- hostname('this-pc')
+   True
+-- hostname('xn----gtbspbbmkef.xn--p1ai:65535')
+   True
+-- hostname('_example.com')
+   ValidationError(func=hostname, args={'value': '_example.com'})
+-- hostname('123.5.77.88:31000')
+   True
+-- hostname('12.12.12.12')
+   True
+-- hostname('[::1]:22')
+   True
+-- hostname('dead:beef:0:0:0:0000:42:1')
+   True
+-- hostname('[0:0:0:0:0:ffff:1.2.3.4]:-65538')
+   ValidationError(func=hostname, args={'value': '[0:0:0:0:0:ffff:1.2.3.4]:-65538'})
+-- hostname('[0:&:b:c:@:e:f::]:9999')
+   ValidationError(func=hostname, args={'value': '[0:&:b:c:@:e:f::]:9999'})
+-- hostname('example.com:0')
+   ValidationError(func=hostname, args={'value': 'example.com:0'})
+-- hostname('example.com:65536')
+   ValidationError(func=hostname, args={'value': 'example.com:65536'})
+-- hostname('example.com:080')
+   ValidationError(func=hostname, args={'value': 'example.com:080'})
+-- hostname('host:1:2')
+   ValidationError(func=hostname, args={'value': 'host:1:2'})
+-- hostname('-pc')
+   ValidationError(func=hostname, args={'value': '-pc'})
+-- hostname('pc-')
+   ValidationError(func=hostname, args={'value': 'pc-'})
+-- hostname('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+   True
+-- hostname('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+   ValidationError(func=hostname, args={'value': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
+-- hostname('my_pc')
+   ValidationError(func=hostname, args={'value': 'my_pc'})
+-- hostname('example.com:99999')
+   ValidationError(func=hostname, args={'value': 'example.com:99999'})
+-- hostname('[::1]')
+   ValidationError(func=hostname, args={'value': '[::1]'})
+-- hostname('::1')
+   True
+-- hostname('1.2.3.4:5')
+   True
+-- hostname('256.1.1.1')
+   ValidationError(func=hostname, args={'value': '256.1.1.1'})
+-- hostname('pc.')
+   ValidationError(func=hostname, args={'value': 'pc.'})
+-- hostname('10.0.0.1')
+   True
+-- hostname('this-pc', maybe_simple=False)
+   ValidationError(func=hostname, args={'value': 'this-pc', 'maybe_simple': False})
+-- hostname('example.com:443', may_have_port=False)
+   ValidationError(func=hostname, args={'value': 'example.com:443', 'may_have_port': False})
+-- hostname('12.12.12.12', skip_ipv4_addr=True)
+   ValidationError(func=hostname, args={'value': '12.12.12.12', 'skip_ipv4_addr': True})
+-- hostname('::1', skip_ipv6_addr=True)
+   ValidationError(func=hostname, args={'value': '::1', 'skip_ipv6_addr': True})
+-- hostname('10.0.0.1', private=True)
+   True
+-- hostname('10.0.0.1', private=False)
+   ValidationError(func=hostname, args={'value': '10.0.0.1', 'private': False})
+-- hostname('8.8.8.8:53', private=False)
+   True
+-- hostname('pc.', rfc_1034=True)
+   True
+-- hostname('example.dev', consider_tld=True)
+   True
+== ip addresses
+-- ipv4('192.168.0.1')
+   True
+-- ipv4('0.0.0.0')
+   True
+-- ipv4('255.255.255.255')
+   True
+-- ipv4('256.0.0.1')
+   ValidationError(func=ipv4, args={'value': '256.0.0.1'})
+-- ipv4('1.2.3')
+   ValidationError(func=ipv4, args={'value': '1.2.3'})
+-- ipv4('1.2.3.4.5')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4.5'})
+-- ipv4('01.2.3.4')
+   ValidationError(func=ipv4, args={'value': '01.2.3.4'})
+-- ipv4('1.2.3.04')
+   ValidationError(func=ipv4, args={'value': '1.2.3.04'})
+-- ipv4('1.2.3.0')
+   True
+-- ipv4('١.2.3.4')
+   ValidationError(func=ipv4, args={'value': '١.2.3.4'})
+-- ipv4('1.2.3.4/24')
+   True
+-- ipv4('1.2.3.0/24')
+   True
+-- ipv4('1.2.3.4/33')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4/33'})
+-- ipv4('1.2.3.4/255.255.255.0')
+   True
+-- ipv4('1.2.3.4/0.0.0.255')
+   True
+-- ipv4('1.2.3.4/255.0.255.0')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4/255.0.255.0'})
+-- ipv4('1.2.3.4/')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4/'})
+-- ipv4('/24')
+   ValidationError(func=ipv4, args={'value': '/24'})
+-- ipv4('1.2.3.4//24')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4//24'})
+-- ipv4(' 1.2.3.4')
+   ValidationError(func=ipv4, args={'value': ' 1.2.3.4'})
+-- ipv4('1.2.3.4 ')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4 '})
+-- ipv4('1.2.3.4/+24')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4/+24'})
+-- ipv4('1.2.3.4/024')
+   True
+-- ipv4('1.2.3.4/２４')
+   ValidationError(func=ipv4, args={'value': '1.2.3.4/２４'})
+-- ipv4('1.2.3.4/24', cidr=False)
+   ValidationError(func=ipv4, args={'value': '1.2.3.4/24', 'cidr': False})
+-- ipv4('1.2.3.4', strict=True)
+   ValidationError(func=ipv4, args={'value': '1.2.3.4', 'strict': True})
+-- ipv4('1.2.3.4/24', strict=True)
+   True
+-- ipv4('1.2.3.4/24', host_bit=False)
+   ValidationError(func=ipv4, args={'value': '1.2.3.4/24', 'host_bit': False})
+-- ipv4('1.2.3.0/24', host_bit=False)
+   True
+-- ipv4('10.1.2.3', private=True)
+   True
+-- ipv4('10.1.2.3', private=False)
+   ValidationError(func=ipv4, args={'value': '10.1.2.3', 'private': False})
+-- ipv4('8.8.8.8', private=False)
+   True
+-- ipv4('8.8.8.8', private=True)
+   ValidationError(func=ipv4, args={'value': '8.8.8.8', 'private': True})
+-- ipv4('172.16.5.4', private=True)
+   True
+-- ipv4('172.32.5.4', private=True)
+   ValidationError(func=ipv4, args={'value': '172.32.5.4', 'private': True})
+-- ipv4('224.0.0.1', private=True)
+   True
+-- ipv4('169.254.1.1', private=False)
+   ValidationError(func=ipv4, args={'value': '169.254.1.1', 'private': False})
+-- ipv4('127.0.0.1', private=True)
+   True
+-- ipv4('0.0.0.0', private=True)
+   True
+-- ipv4('100.64.0.1', private=True)
+   ValidationError(func=ipv4, args={'value': '100.64.0.1', 'private': True})
+-- ipv4('10.0.0.0/8', private=True)
+   True
+-- ipv6('::1')
+   True
+-- ipv6('::')
+   True
+-- ipv6('2001:db8::1')
+   True
+-- ipv6('2001:0db8:0000:0000:0000:ff00:0042:8329')
+   True
+-- ipv6('2001:db8::1::2')
+   ValidationError(func=ipv6, args={'value': '2001:db8::1::2'})
+-- ipv6('1:2:3:4:5:6:7:8')
+   True
+-- ipv6('1:2:3:4:5:6:7:8:9')
+   ValidationError(func=ipv6, args={'value': '1:2:3:4:5:6:7:8:9'})
+-- ipv6('1:2:3:4:5:6:7::')
+   True
+-- ipv6('::ffff:1.2.3.4')
+   True
+-- ipv6('::ffff:1.2.3.256')
+   ValidationError(func=ipv6, args={'value': '::ffff:1.2.3.256'})
+-- ipv6('fe80::1%eth0')
+   True
+-- ipv6('fe80::1%')
+   ValidationError(func=ipv6, args={'value': 'fe80::1%'})
+-- ipv6('fe80::1%a%b')
+   ValidationError(func=ipv6, args={'value': 'fe80::1%a%b'})
+-- ipv6('2001:db8::/32')
+   True
+-- ipv6('2001:db8::1/32')
+   True
+-- ipv6('2001:db8::1/129')
+   ValidationError(func=ipv6, args={'value': '2001:db8::1/129'})
+-- ipv6('12345::1')
+   ValidationError(func=ipv6, args={'value': '12345::1'})
+-- ipv6('g::1')
+   ValidationError(func=ipv6, args={'value': 'g::1'})
+-- ipv6(':1:2:3:4:5:6:7')
+   ValidationError(func=ipv6, args={'value': ':1:2:3:4:5:6:7'})
+-- ipv6('1:2:3:4:5:6:7:')
+   ValidationError(func=ipv6, args={'value': '1:2:3:4:5:6:7:'})
+-- ipv6('1::2:3:4:5:6:7:8')
+   ValidationError(func=ipv6, args={'value': '1::2:3:4:5:6:7:8'})
+-- ipv6('1:2:3:4:5:6:1.2.3.4')
+   True
+-- ipv6('1:2:3:4:5:6:7:1.2.3.4')
+   ValidationError(func=ipv6, args={'value': '1:2:3:4:5:6:7:1.2.3.4'})
+-- ipv6('::1.2.3.4')
+   True
+-- ipv6('1.2.3.4')
+   ValidationError(func=ipv6, args={'value': '1.2.3.4'})
+-- ipv6('')
+   ValidationError(func=ipv6, args={'value': ''})
+-- ipv6('[::1]')
+   ValidationError(func=ipv6, args={'value': '[::1]'})
+-- ipv6('::1/0')
+   True
+-- ipv6('::1/ 64')
+   ValidationError(func=ipv6, args={'value': '::1/ 64'})
+-- ipv6('fe80::1%eth0/64')
+   True
+-- ipv6('0:0:0:0:0:0:0:0:0')
+   ValidationError(func=ipv6, args={'value': '0:0:0:0:0:0:0:0:0'})
+-- ipv6('2001:db8::1/32', host_bit=False)
+   ValidationError(func=ipv6, args={'value': '2001:db8::1/32', 'host_bit': False})
+-- ipv6('2001:db8::/32', strict=True)
+   True
+-- ipv6('2001:db8::', strict=True)
+   ValidationError(func=ipv6, args={'value': '2001:db8::', 'strict': True})
+-- ipv6('2001:db8::/32', cidr=False)
+   ValidationError(func=ipv6, args={'value': '2001:db8::/32', 'cidr': False})
+== url
+-- url('http://duck.com')
+   True
+-- url('ftp://foobar.dk')
+   True
+-- url('http://10.0.0.1')
+   True
+-- url('http://example.com/">user@example.com')
+   ValidationError(func=url, args={'value': 'http://example.com/">user@example.com'})
+-- url('https://example.com/path?query=1#frag')
+   True
+-- url('https://user:pass@example.com:8080/p')
+   True
+-- url('http://[::1]:8080/')
+   True
+-- url('http://[::1]/')
+   True
+-- url('http://[2001:db8::1]')
+   True
+-- url('http://[::1')
+   ValidationError(func=url, args={'value': 'http://[::1'})
+-- url('http://::1]/')
+   ValidationError(func=url, args={'value': 'http://::1]/'})
+-- url('http://example.com:65536')
+   ValidationError(func=url, args={'value': 'http://example.com:65536'})
+-- url('http://example.com:0')
+   ValidationError(func=url, args={'value': 'http://example.com:0'})
+-- url('http://localhost:8000')
+   ValidationError(func=url, args={'value': 'http://localhost:8000'})
+-- url('http://exa mple.com')
+   ValidationError(func=url, args={'value': 'http://exa mple.com'})
+-- url('http://example.com/a b')
+   ValidationError(func=url, args={'value': 'http://example.com/a b'})
+-- url('mailto:someone@example.com')
+   ValidationError(func=url, args={'value': 'mailto:someone@example.com'})
+-- url('file:///etc/passwd')
+   True
+-- url('file://localhost/etc/hosts')
+   True
+-- url('file://example.com/x')
+   True
+-- url('git://github.com/x/y.git')
+   True
+-- url('ssh://git@github.com:22/x/y')
+   True
+-- url('telnet://192.0.2.16:80/')
+   True
+-- url('gopher://x.com')
+   ValidationError(func=url, args={'value': 'gopher://x.com'})
+-- url('http://')
+   ValidationError(func=url, args={'value': 'http://'})
+-- url('http://.com')
+   ValidationError(func=url, args={'value': 'http://.com'})
+-- url('http://example.com?a=1&b')
+   ValidationError(func=url, args={'reason': "bad query field: 'b'", 'value': 'http://example.com?a=1&b'})
+-- url('http://example.com?a=1&&b=2')
+   ValidationError(func=url, args={'reason': "bad query field: ''", 'value': 'http://example.com?a=1&&b=2'})
+-- url('http://example.com?a=')
+   True
+-- url('http://example.com?a=1;b=2')
+   True
+-- url('http://example.com?=1')
+   True
+-- url('http://example.com?a=1&b=2;c')
+   ValidationError(func=url, args={'reason': "bad query field: 'c'", 'value': 'http://example.com?a=1&b=2;c'})
+-- url('http://example.com?x=;y')
+   ValidationError(func=url, args={'reason': "bad query field: 'y'", 'value': 'http://example.com?x=;y'})
+-- url('http://example.com#a#b')
+   True
+-- url('http://example.com#a b')
+   ValidationError(func=url, args={'value': 'http://example.com#a b'})
+-- url('http://example.com#{x}')
+   ValidationError(func=url, args={'value': 'http://example.com#{x}'})
+-- url('http://example.com/😀')
+   True
+-- url('http://example.com/日本')
+   True
+-- url('http://example.com/^')
+   ValidationError(func=url, args={'value': 'http://example.com/^'})
+-- url('http://u@ser@example.com')
+   ValidationError(func=url, args={'value': 'http://u@ser@example.com'})
+-- url('http://user:p@ss@example.com')
+   ValidationError(func=url, args={'value': 'http://user:p@ss@example.com'})
+-- url('http://us%40er:pw@example.com')
+   True
+-- url('http://a:b:c@example.com')
+   True
+-- url('http://žluť@example.com')
+   True
+-- url('http://user:pa/ss@example.com')
+   ValidationError(func=url, args={'value': 'http://user:pa/ss@example.com'})
+-- url('http://_srv.example.com')
+   ValidationError(func=url, args={'value': 'http://_srv.example.com'})
+-- url('http://example.com.')
+   ValidationError(func=url, args={'value': 'http://example.com.'})
+-- url('http://1.2.3.4:80')
+   True
+-- url('http://300.1.1.1')
+   ValidationError(func=url, args={'value': 'http://300.1.1.1'})
+-- url('HTTP://EXAMPLE.COM')
+   True
+-- url('http://example.com/%zz')
+   True
+-- url('http://[v1.fe]/')
+   ValidationError(func=url, args={'value': 'http://[v1.fe]/'})
+-- url('http://[fe80::1%25eth0]/')
+   True
+-- url('http://example.com:8080:90/')
+   ValidationError(func=url, args={'value': 'http://example.com:8080:90/'})
+-- url('https://xn--80ak6aa92e.com/')
+   True
+-- url('http://example.com/?q=%E2%82%AC')
+   True
+-- url('http://localhost/')
+   ValidationError(func=url, args={'value': 'http://localhost/'})
+-- url('http://intranet/')
+   ValidationError(func=url, args={'value': 'http://intranet/'})
+-- url('\x01http://example.com')
+   True
+-- url('http://example.com\u2028')
+   ValidationError(func=url, args={'value': 'http://example.com\u2028'})
+-- url('http://localhost:8000', simple_host=True)
+   True
+-- url('http://intranet/', simple_host=True)
+   True
+-- url('http://example.com?a=1&b', strict_query=False)
+   True
+-- url('http://10.0.0.1/', private=False)
+   ValidationError(func=url, args={'value': 'http://10.0.0.1/', 'private': False})
+-- url('http://10.0.0.1/', private=True)
+   True
+-- url('http://8.8.8.8/', private=False)
+   True
+-- url('http://[::1]/', skip_ipv6_addr=True)
+   ValidationError(func=url, args={'value': 'http://[::1]/', 'skip_ipv6_addr': True})
+-- url('http://10.0.0.1/', skip_ipv4_addr=True)
+   ValidationError(func=url, args={'value': 'http://10.0.0.1/', 'skip_ipv4_addr': True})
+-- url('http://example.com:8080/', may_have_port=False)
+   ValidationError(func=url, args={'value': 'http://example.com:8080/', 'may_have_port': False})
+-- url('http://example.com./', rfc_1034=True)
+   True
+-- url('http://_srv.example.com/', rfc_2782=True)
+   True
+-- url('http://example.dev/', consider_tld=True)
+   True
+-- url('http://example.zzz/', consider_tld=True)
+   ValidationError(func=url, args={'value': 'http://example.zzz/', 'consider_tld': True})
+== uri
+-- uri('mailto:example@domain.com')
+   True
+-- uri('file:path.txt')
+   ValidationError(func=uri, args={'value': 'file:path.txt'})
+-- uri('file:///path.txt')
+   True
+-- uri('ipfs://bafybeigdyrzt')
+   True
+-- uri('ipfs:x')
+   ValidationError(func=uri, args={'value': 'ipfs:x'})
+-- uri('magnet:?xt=urn:btih:abc')
+   True
+-- uri('tel:+1-816-555-1212')
+   True
+-- uri('data:text/plain,hi')
+   True
+-- uri('urn:isbn:0451450523')
+   True
+-- uri('urc:x')
+   True
+-- uri('telnet://192.0.2.16:80/')
+   True
+-- uri('telnet://user@host.example.com')
+   True
+-- uri('telnet://host.example.com/x')
+   ValidationError(func=uri, args={'value': 'telnet://host.example.com/x'})
+-- uri('telnet://host.example.com?x')
+   ValidationError(func=uri, args={'value': 'telnet://host.example.com?x'})
+-- uri('telnet:')
+   ValidationError(func=uri, args={'value': 'telnet:'})
+-- uri('telnet://host\xa0name')
+   ValidationError(func=uri, args={'value': 'telnet://host\xa0name'})
+-- uri('https://example.com')
+   True
+-- uri('httpx://example.com')
+   ValidationError(func=uri, args={'value': 'httpx://example.com'})
+-- uri('news:comp.lang')
+   ValidationError(func=uri, args={'value': 'news:comp.lang'})
+-- uri('')
+   ValidationError(func=uri, args={'value': ''})
+-- uri('mailto:bad@@x')
+   ValidationError(func=uri, args={'value': 'mailto:bad@@x'})
+== formats
+-- mac_address('01:23:45:67:ab:CD')
+   True
+-- mac_address('01-23-45-67-ab-cd')
+   True
+-- mac_address('01:23-45:67:ab:cd')
+   ValidationError(func=mac_address, args={'value': '01:23-45:67:ab:cd'})
+-- mac_address('0123.4567.89ab')
+   ValidationError(func=mac_address, args={'value': '0123.4567.89ab'})
+-- mac_address('01:23:45:67:ab')
+   ValidationError(func=mac_address, args={'value': '01:23:45:67:ab'})
+-- mac_address('01:23:45:67:ab:cg')
+   ValidationError(func=mac_address, args={'value': '01:23:45:67:ab:cg'})
+-- mac_address('')
+   ValidationError(func=mac_address, args={'value': ''})
+-- mac_address('01:23:45:67:ab:cd\n')
+   True
+-- uuid('2bc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   True
+-- uuid('2bc1c94f 0deb-43e9-92a1-4775189ec9f8')
+   ValidationError(func=uuid, args={'value': '2bc1c94f 0deb-43e9-92a1-4775189ec9f8'})
+-- uuid('{2bc1c94f-0deb-43e9-92a1-4775189ec9f8}')
+   True
+-- uuid('urn:uuid:2bc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   True
+-- uuid('2bc1c94f0deb43e992a14775189ec9f8')
+   True
+-- uuid('2BC1C94F-0DEB-43E9-92A1-4775189EC9F8')
+   True
+-- uuid('2bc1c94f-0deb-43e9-92a1-4775189ec9f')
+   ValidationError(func=uuid, args={'value': '2bc1c94f-0deb-43e9-92a1-4775189ec9f'})
+-- uuid('+bc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   True
+-- uuid('-bc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   ValidationError(func=uuid, args={'value': '-bc1c94f-0deb-43e9-92a1-4775189ec9f8'})
+-- uuid(' bc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   True
+-- uuid('0xc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   True
+-- uuid('2bc1_94f-0deb-43e9-92a1-4775189ec9f8')
+   True
+-- uuid('2bc1__4f-0deb-43e9-92a1-4775189ec9f8')
+   ValidationError(func=uuid, args={'value': '2bc1__4f-0deb-43e9-92a1-4775189ec9f8'})
+-- uuid('２bc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   True
+-- uuid('gbc1c94f-0deb-43e9-92a1-4775189ec9f8')
+   ValidationError(func=uuid, args={'value': 'gbc1c94f-0deb-43e9-92a1-4775189ec9f8'})
+-- uuid('uuid:{2bc1c94f-0deb-43e9-92a1-4775189ec9f8}')
+   True
+-- uuid('--2bc1c94f0deb43e992a14775189ec9f8--')
+   True
+-- slug('my-slug-2134')
+   True
+-- slug('my.slug')
+   ValidationError(func=slug, args={'value': 'my.slug'})
+-- slug('-my-slug')
+   ValidationError(func=slug, args={'value': '-my-slug'})
+-- slug('my--slug')
+   ValidationError(func=slug, args={'value': 'my--slug'})
+-- slug('MySlug')
+   ValidationError(func=slug, args={'value': 'MySlug'})
+-- slug('slug')
+   True
+-- slug('')
+   ValidationError(func=slug, args={'value': ''})
+-- slug('a-')
+   ValidationError(func=slug, args={'value': 'a-'})
+-- slug('ünïcode')
+   ValidationError(func=slug, args={'value': 'ünïcode'})
+-- md5('d731e2c5239a8e2cfb07422a40f3763d')
+   True
+-- md5('D731E2C5239A8E2CFB07422A40F3763D')
+   True
+-- md5('d731e2c5239a8e2cfb07422a40f3763')
+   ValidationError(func=md5, args={'value': 'd731e2c5239a8e2cfb07422a40f3763'})
+-- md5('d731e2c5239a8e2cfb07422a40f3763g')
+   ValidationError(func=md5, args={'value': 'd731e2c5239a8e2cfb07422a40f3763g'})
+-- sha1('8e690c185c1bcdb96603af3860ea537621b2b52f')
+   True
+-- sha1('8E690C185C1BCDB96603AF3860EA537621B2B52F')
+   True
+-- sha1('8e690c185c1bcdb96603af3860ea537621b2b52')
+   ValidationError(func=sha1, args={'value': '8e690c185c1bcdb96603af3860ea537621b2b52'})
+-- sha1('8e690c185c1bcdb96603af3860ea537621b2b52g')
+   ValidationError(func=sha1, args={'value': '8e690c185c1bcdb96603af3860ea537621b2b52g'})
+-- sha224('cf5a304c09e255d0a8881bae496a199d25901d2d20432bdef00ef301')
+   True
+-- sha224('CF5A304C09E255D0A8881BAE496A199D25901D2D20432BDEF00EF301')
+   True
+-- sha224('cf5a304c09e255d0a8881bae496a199d25901d2d20432bdef00ef30')
+   ValidationError(func=sha224, args={'value': 'cf5a304c09e255d0a8881bae496a199d25901d2d20432bdef00ef30'})
+-- sha224('cf5a304c09e255d0a8881bae496a199d25901d2d20432bdef00ef30g')
+   ValidationError(func=sha224, args={'value': 'cf5a304c09e255d0a8881bae496a199d25901d2d20432bdef00ef30g'})
+-- sha256('bc13b3dc6e5fd06b9680bff85c16948779e71b3763487d5e493a5b6a9a53d9cb')
+   True
+-- sha256('BC13B3DC6E5FD06B9680BFF85C16948779E71B3763487D5E493A5B6A9A53D9CB')
+   True
+-- sha256('bc13b3dc6e5fd06b9680bff85c16948779e71b3763487d5e493a5b6a9a53d9c')
+   ValidationError(func=sha256, args={'value': 'bc13b3dc6e5fd06b9680bff85c16948779e71b3763487d5e493a5b6a9a53d9c'})
+-- sha256('bc13b3dc6e5fd06b9680bff85c16948779e71b3763487d5e493a5b6a9a53d9cg')
+   ValidationError(func=sha256, args={'value': 'bc13b3dc6e5fd06b9680bff85c16948779e71b3763487d5e493a5b6a9a53d9cg'})
+-- sha384('fa78f2dbf5548c8117fd431fa4536870e0d132faf63a4ff6605f68dc55487e39c85496ee44620fed75403d62e3f3878d')
+   True
+-- sha384('FA78F2DBF5548C8117FD431FA4536870E0D132FAF63A4FF6605F68DC55487E39C85496EE44620FED75403D62E3F3878D')
+   True
+-- sha384('fa78f2dbf5548c8117fd431fa4536870e0d132faf63a4ff6605f68dc55487e39c85496ee44620fed75403d62e3f3878')
+   ValidationError(func=sha384, args={'value': 'fa78f2dbf5548c8117fd431fa4536870e0d132faf63a4ff6605f68dc55487e39c85496ee44620fed75403d62e3f3878'})
+-- sha384('fa78f2dbf5548c8117fd431fa4536870e0d132faf63a4ff6605f68dc55487e39c85496ee44620fed75403d62e3f3878g')
+   ValidationError(func=sha384, args={'value': 'fa78f2dbf5548c8117fd431fa4536870e0d132faf63a4ff6605f68dc55487e39c85496ee44620fed75403d62e3f3878g'})
+-- sha512('acddad99ab72388b6ac2b41da9ef7d1d27ccad164c6307faf49c3a606e6f0820efc21f94f58f7118aaaf52c7a8736728b41fe7510b2af25c88eba05e581cdf30')
+   True
+-- sha512('ACDDAD99AB72388B6AC2B41DA9EF7D1D27CCAD164C6307FAF49C3A606E6F0820EFC21F94F58F7118AAAF52C7A8736728B41FE7510B2AF25C88EBA05E581CDF30')
+   True
+-- sha512('acddad99ab72388b6ac2b41da9ef7d1d27ccad164c6307faf49c3a606e6f0820efc21f94f58f7118aaaf52c7a8736728b41fe7510b2af25c88eba05e581cdf3')
+   ValidationError(func=sha512, args={'value': 'acddad99ab72388b6ac2b41da9ef7d1d27ccad164c6307faf49c3a606e6f0820efc21f94f58f7118aaaf52c7a8736728b41fe7510b2af25c88eba05e581cdf3'})
+-- sha512('acddad99ab72388b6ac2b41da9ef7d1d27ccad164c6307faf49c3a606e6f0820efc21f94f58f7118aaaf52c7a8736728b41fe7510b2af25c88eba05e581cdf3g')
+   ValidationError(func=sha512, args={'value': 'acddad99ab72388b6ac2b41da9ef7d1d27ccad164c6307faf49c3a606e6f0820efc21f94f58f7118aaaf52c7a8736728b41fe7510b2af25c88eba05e581cdf3g'})
+-- sha256('')
+   ValidationError(func=sha256, args={'value': ''})
+-- base16('a3f4B9')
+   True
+-- base16('a3f4g9')
+   ValidationError(func=base16, args={'value': 'a3f4g9'})
+-- base16('')
+   ValidationError(func=base16, args={'value': ''})
+-- base32('MFZWIZLTOQ======')
+   True
+-- base32('MfZW3zLT9Q======')
+   ValidationError(func=base32, args={'value': 'MfZW3zLT9Q======'})
+-- base32('MFZW=IZL')
+   ValidationError(func=base32, args={'value': 'MFZW=IZL'})
+-- base58('14pq6y9H2DLGahPsM4s7ugsNSD2uxpHsJx')
+   True
+-- base58('0OIl')
+   ValidationError(func=base58, args={'value': '0OIl'})
+-- base64('Y2hhcmFjdGVyIHNldA==')
+   True
+-- base64('cUSECm5YzcXJwP')
+   ValidationError(func=base64, args={'value': 'cUSECm5YzcXJwP'})
+-- base64('YWJj')
+   True
+-- base64('YWI=')
+   True
+-- base64('YQ==')
+   True
+-- base64('Y===')
+   ValidationError(func=base64, args={'value': 'Y==='})
+-- base64('YW Jj')
+   ValidationError(func=base64, args={'value': 'YW Jj'})
+== payments
+-- card_number('4368527025849845')
+   True
+-- card_number('5111045172685752')
+   True
+-- card_number('2221758564439026')
+   True
+-- card_number('379211974786598')
+   True
+-- card_number('6265062706784573')
+   True
+-- card_number('36686336207190')
+   True
+-- card_number('3840418298218183')
+   True
+-- card_number('3581346531098356')
+   True
+-- card_number('6011207889740077')
+   True
+-- card_number('2200180912671777')
+   True
+-- card_number('4242424242424242')
+   True
+-- card_number('4242424242424241')
+   ValidationError(func=card_number, args={'value': '4242424242424241'})
+-- card_number('378282246310005')
+   True
+-- card_number('5555555555554444')
+   True
+-- card_number('2223003122003222')
+   True
+-- card_number('')
+   ValidationError(func=card_number, args={'value': ''})
+-- card_number('abc')
+   ValidationError(func=card_number, args={'value': 'abc'})
+-- card_number('4242 4242 4242 4242')
+   ValidationError(func=card_number, args={'value': '4242 4242 4242 4242'})
+-- card_number('４２４２４２４２４２４２４２４２')
+   True
+-- card_number('0')
+   True
+-- card_number('00')
+   True
+-- visa('4368527025849845')
+   True
+-- visa('5111045172685752')
+   ValidationError(func=visa, args={'value': '5111045172685752'})
+-- visa('2221758564439026')
+   ValidationError(func=visa, args={'value': '2221758564439026'})
+-- visa('379211974786598')
+   ValidationError(func=visa, args={'value': '379211974786598'})
+-- visa('6265062706784573')
+   ValidationError(func=visa, args={'value': '6265062706784573'})
+-- visa('36686336207190')
+   ValidationError(func=visa, args={'value': '36686336207190'})
+-- visa('3840418298218183')
+   ValidationError(func=visa, args={'value': '3840418298218183'})
+-- visa('3581346531098356')
+   ValidationError(func=visa, args={'value': '3581346531098356'})
+-- visa('6011207889740077')
+   ValidationError(func=visa, args={'value': '6011207889740077'})
+-- visa('2200180912671777')
+   ValidationError(func=visa, args={'value': '2200180912671777'})
+-- visa('4242424242424242')
+   True
+-- visa('4242424242424241')
+   ValidationError(func=visa, args={'value': '4242424242424241'})
+-- visa('４２４２４２４２４２４２４２４２')
+   ValidationError(func=visa, args={'value': '４２４２４２４２４２４２４２４２'})
+-- mastercard('4368527025849845')
+   ValidationError(func=mastercard, args={'value': '4368527025849845'})
+-- mastercard('5111045172685752')
+   True
+-- mastercard('2221758564439026')
+   True
+-- mastercard('379211974786598')
+   ValidationError(func=mastercard, args={'value': '379211974786598'})
+-- mastercard('6265062706784573')
+   ValidationError(func=mastercard, args={'value': '6265062706784573'})
+-- mastercard('36686336207190')
+   ValidationError(func=mastercard, args={'value': '36686336207190'})
+-- mastercard('3840418298218183')
+   ValidationError(func=mastercard, args={'value': '3840418298218183'})
+-- mastercard('3581346531098356')
+   ValidationError(func=mastercard, args={'value': '3581346531098356'})
+-- mastercard('6011207889740077')
+   ValidationError(func=mastercard, args={'value': '6011207889740077'})
+-- mastercard('2200180912671777')
+   ValidationError(func=mastercard, args={'value': '2200180912671777'})
+-- mastercard('4242424242424242')
+   ValidationError(func=mastercard, args={'value': '4242424242424242'})
+-- mastercard('4242424242424241')
+   ValidationError(func=mastercard, args={'value': '4242424242424241'})
+-- mastercard('４２４２４２４２４２４２４２４２')
+   ValidationError(func=mastercard, args={'value': '４２４２４２４２４２４２４２４２'})
+-- amex('4368527025849845')
+   ValidationError(func=amex, args={'value': '4368527025849845'})
+-- amex('5111045172685752')
+   ValidationError(func=amex, args={'value': '5111045172685752'})
+-- amex('2221758564439026')
+   ValidationError(func=amex, args={'value': '2221758564439026'})
+-- amex('379211974786598')
+   True
+-- amex('6265062706784573')
+   ValidationError(func=amex, args={'value': '6265062706784573'})
+-- amex('36686336207190')
+   ValidationError(func=amex, args={'value': '36686336207190'})
+-- amex('3840418298218183')
+   ValidationError(func=amex, args={'value': '3840418298218183'})
+-- amex('3581346531098356')
+   ValidationError(func=amex, args={'value': '3581346531098356'})
+-- amex('6011207889740077')
+   ValidationError(func=amex, args={'value': '6011207889740077'})
+-- amex('2200180912671777')
+   ValidationError(func=amex, args={'value': '2200180912671777'})
+-- amex('4242424242424242')
+   ValidationError(func=amex, args={'value': '4242424242424242'})
+-- amex('4242424242424241')
+   ValidationError(func=amex, args={'value': '4242424242424241'})
+-- amex('４２４２４２４２４２４２４２４２')
+   ValidationError(func=amex, args={'value': '４２４２４２４２４２４２４２４２'})
+-- unionpay('4368527025849845')
+   ValidationError(func=unionpay, args={'value': '4368527025849845'})
+-- unionpay('5111045172685752')
+   ValidationError(func=unionpay, args={'value': '5111045172685752'})
+-- unionpay('2221758564439026')
+   ValidationError(func=unionpay, args={'value': '2221758564439026'})
+-- unionpay('379211974786598')
+   ValidationError(func=unionpay, args={'value': '379211974786598'})
+-- unionpay('6265062706784573')
+   True
+-- unionpay('36686336207190')
+   ValidationError(func=unionpay, args={'value': '36686336207190'})
+-- unionpay('3840418298218183')
+   ValidationError(func=unionpay, args={'value': '3840418298218183'})
+-- unionpay('3581346531098356')
+   ValidationError(func=unionpay, args={'value': '3581346531098356'})
+-- unionpay('6011207889740077')
+   ValidationError(func=unionpay, args={'value': '6011207889740077'})
+-- unionpay('2200180912671777')
+   ValidationError(func=unionpay, args={'value': '2200180912671777'})
+-- unionpay('4242424242424242')
+   ValidationError(func=unionpay, args={'value': '4242424242424242'})
+-- unionpay('4242424242424241')
+   ValidationError(func=unionpay, args={'value': '4242424242424241'})
+-- unionpay('４２４２４２４２４２４２４２４２')
+   ValidationError(func=unionpay, args={'value': '４２４２４２４２４２４２４２４２'})
+-- diners('4368527025849845')
+   ValidationError(func=diners, args={'value': '4368527025849845'})
+-- diners('5111045172685752')
+   ValidationError(func=diners, args={'value': '5111045172685752'})
+-- diners('2221758564439026')
+   ValidationError(func=diners, args={'value': '2221758564439026'})
+-- diners('379211974786598')
+   ValidationError(func=diners, args={'value': '379211974786598'})
+-- diners('6265062706784573')
+   ValidationError(func=diners, args={'value': '6265062706784573'})
+-- diners('36686336207190')
+   True
+-- diners('3840418298218183')
+   True
+-- diners('3581346531098356')
+   ValidationError(func=diners, args={'value': '3581346531098356'})
+-- diners('6011207889740077')
+   ValidationError(func=diners, args={'value': '6011207889740077'})
+-- diners('2200180912671777')
+   ValidationError(func=diners, args={'value': '2200180912671777'})
+-- diners('4242424242424242')
+   ValidationError(func=diners, args={'value': '4242424242424242'})
+-- diners('4242424242424241')
+   ValidationError(func=diners, args={'value': '4242424242424241'})
+-- diners('４２４２４２４２４２４２４２４２')
+   ValidationError(func=diners, args={'value': '４２４２４２４２４２４２４２４２'})
+-- jcb('4368527025849845')
+   ValidationError(func=jcb, args={'value': '4368527025849845'})
+-- jcb('5111045172685752')
+   ValidationError(func=jcb, args={'value': '5111045172685752'})
+-- jcb('2221758564439026')
+   ValidationError(func=jcb, args={'value': '2221758564439026'})
+-- jcb('379211974786598')
+   ValidationError(func=jcb, args={'value': '379211974786598'})
+-- jcb('6265062706784573')
+   ValidationError(func=jcb, args={'value': '6265062706784573'})
+-- jcb('36686336207190')
+   ValidationError(func=jcb, args={'value': '36686336207190'})
+-- jcb('3840418298218183')
+   ValidationError(func=jcb, args={'value': '3840418298218183'})
+-- jcb('3581346531098356')
+   True
+-- jcb('6011207889740077')
+   ValidationError(func=jcb, args={'value': '6011207889740077'})
+-- jcb('2200180912671777')
+   ValidationError(func=jcb, args={'value': '2200180912671777'})
+-- jcb('4242424242424242')
+   ValidationError(func=jcb, args={'value': '4242424242424242'})
+-- jcb('4242424242424241')
+   ValidationError(func=jcb, args={'value': '4242424242424241'})
+-- jcb('４２４２４２４２４２４２４２４２')
+   ValidationError(func=jcb, args={'value': '４２４２４２４２４２４２４２４２'})
+-- discover('4368527025849845')
+   ValidationError(func=discover, args={'value': '4368527025849845'})
+-- discover('5111045172685752')
+   ValidationError(func=discover, args={'value': '5111045172685752'})
+-- discover('2221758564439026')
+   ValidationError(func=discover, args={'value': '2221758564439026'})
+-- discover('379211974786598')
+   ValidationError(func=discover, args={'value': '379211974786598'})
+-- discover('6265062706784573')
+   ValidationError(func=discover, args={'value': '6265062706784573'})
+-- discover('36686336207190')
+   ValidationError(func=discover, args={'value': '36686336207190'})
+-- discover('3840418298218183')
+   ValidationError(func=discover, args={'value': '3840418298218183'})
+-- discover('3581346531098356')
+   ValidationError(func=discover, args={'value': '3581346531098356'})
+-- discover('6011207889740077')
+   True
+-- discover('2200180912671777')
+   ValidationError(func=discover, args={'value': '2200180912671777'})
+-- discover('4242424242424242')
+   ValidationError(func=discover, args={'value': '4242424242424242'})
+-- discover('4242424242424241')
+   ValidationError(func=discover, args={'value': '4242424242424241'})
+-- discover('４２４２４２４２４２４２４２４２')
+   ValidationError(func=discover, args={'value': '４２４２４２４２４２４２４２４２'})
+-- mir('4368527025849845')
+   ValidationError(func=mir, args={'value': '4368527025849845'})
+-- mir('5111045172685752')
+   ValidationError(func=mir, args={'value': '5111045172685752'})
+-- mir('2221758564439026')
+   ValidationError(func=mir, args={'value': '2221758564439026'})
+-- mir('379211974786598')
+   ValidationError(func=mir, args={'value': '379211974786598'})
+-- mir('6265062706784573')
+   ValidationError(func=mir, args={'value': '6265062706784573'})
+-- mir('36686336207190')
+   ValidationError(func=mir, args={'value': '36686336207190'})
+-- mir('3840418298218183')
+   ValidationError(func=mir, args={'value': '3840418298218183'})
+-- mir('3581346531098356')
+   ValidationError(func=mir, args={'value': '3581346531098356'})
+-- mir('6011207889740077')
+   ValidationError(func=mir, args={'value': '6011207889740077'})
+-- mir('2200180912671777')
+   True
+-- mir('4242424242424242')
+   ValidationError(func=mir, args={'value': '4242424242424242'})
+-- mir('4242424242424241')
+   ValidationError(func=mir, args={'value': '4242424242424241'})
+-- mir('４２４２４２４２４２４２４２４２')
+   ValidationError(func=mir, args={'value': '４２４２４２４２４２４２４２４２'})
+-- iban('DE29100500001061045672')
+   True
+-- iban('GB29NWBK60161331926819')
+   True
+-- iban('FR1420041010050500013M02606')
+   True
+-- iban('NL91ABNA0417164300')
+   True
+-- iban('CH7004830000000000000')
+   True
+-- iban('DE29100500001061045672')
+   True
+-- iban('DE29100500001061045671')
+   ValidationError(func=iban, args={'value': 'DE29100500001061045671'})
+-- iban('de29100500001061045672')
+   True
+-- iban('123456')
+   ValidationError(func=iban, args={'value': '123456'})
+-- iban('DE2910050000106104567')
+   ValidationError(func=iban, args={'value': 'DE2910050000106104567'})
+-- iban('XX001111111111111111111111111111111')
+   ValidationError(func=iban, args={'value': 'XX001111111111111111111111111111111'})
+-- iban('DE29 1005 0000 1061 0456 72')
+   ValidationError(func=iban, args={'value': 'DE29 1005 0000 1061 0456 72'})
+-- iban('')
+   ValidationError(func=iban, args={'value': ''})
+-- cusip('037833100')
+   True
+-- cusip('037833101')
+   ValidationError(func=cusip, args={'value': '037833101'})
+-- cusip('17275R102')
+   True
+-- cusip('38259P508')
+   True
+-- cusip('594918104')
+   True
+-- cusip('68389X10*')
+   ValidationError(func=cusip, args={'value': '68389X10*'})
+-- cusip('03783310')
+   ValidationError(func=cusip, args={'value': '03783310'})
+-- cusip('0378331OO')
+   ValidationError(func=cusip, args={'value': '0378331OO'})
+-- isin('US0378331005')
+   True
+-- isin('US0378331006')
+   ValidationError(func=isin, args={'value': 'US0378331006'})
+-- isin('GB0002634946')
+   True
+-- isin('US38259P5089')
+   True
+-- isin('AU0000XVGZA3')
+   True
+-- isin('US037833100A')
+   ValidationError(func=isin, args={'value': 'US037833100A'})
+-- isin('U10378331005')
+   ValidationError(func=isin, args={'value': 'U10378331005'})
+-- isin('us0378331005')
+   True
+-- sedol('0263494')
+   True
+-- sedol('0263495')
+   ValidationError(func=sedol, args={'value': '0263495'})
+-- sedol('B0YBKJ7')
+   True
+-- sedol('B0YBKL9')
+   True
+-- sedol('B0YBKA7')
+   ValidationError(func=sedol, args={'value': 'B0YBKA7'})
+-- sedol('026349')
+   ValidationError(func=sedol, args={'value': '026349'})
+-- sedol('02634941')
+   ValidationError(func=sedol, args={'value': '02634941'})
+-- sedol('b0ybkj7')
+   ValidationError(func=sedol, args={'value': 'b0ybkj7'})
+-- btc_address('1MFxeuAG4z8592UsWZjKdzfcheB77ytFVA')
+   True
+-- btc_address('1BYnsmVtgmNJJvbg3kn2ThBsMDA5CNt7XY')
+   True
+-- btc_address('12MGgsFkeVHchSTkmwApumnTHV2Hudbvay')
+   True
+-- btc_address('36ax7DGCYuTmss9SWCdqz2WruNZLJTj5T4')
+   True
+-- btc_address('1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2')
+   True
+-- btc_address('1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN3')
+   ValidationError(func=btc_address, args={'value': '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN3'})
+-- btc_address('3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy')
+   True
+-- btc_address('bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')
+   True
+-- btc_address('tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx')
+   True
+-- btc_address('bc1qbbbbbbbbbbbbbbb')
+   ValidationError(func=btc_address, args={'value': 'bc1qbbbbbbbbbbbbbbb'})
+-- btc_address('bc5qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')
+   ValidationError(func=btc_address, args={'value': 'bc5qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'})
+-- btc_address('1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN0')
+   ValidationError(func=btc_address, args={'reason': 'substring not found', 'value': '1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN0'})
+-- btc_address('1BvBMSEY')
+   ValidationError(func=btc_address, args={'value': '1BvBMSEY'})
+-- btc_address('')
+   ValidationError(func=btc_address, args={'value': ''})
+-- trx_address('TTXURk6RsWyiLSDrSJ1QVqpN812UuZtyBK')
+   True
+-- trx_address('TWHy8iGy27AH1AUGTLKUYQJdaCgqBEeigz')
+   True
+-- trx_address('THwB7rXGdAPj2VmCJp3N1DPWJC1uHFaZex')
+   True
+-- trx_address('TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZYH')
+   True
+-- trx_address('TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZYX')
+   ValidationError(func=trx_address, args={'value': 'TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZYX'})
+-- trx_address('T111111111111111111111111111111111')
+   ValidationError(func=trx_address, args={'value': 'T111111111111111111111111111111111'})
+-- trx_address('TZJozAg1ruapycCicgz31GxvYJ1G1qELV7')
+   ValidationError(func=trx_address, args={'value': 'TZJozAg1ruapycCicgz31GxvYJ1G1qELV7'})
+-- trx_address('TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZY0')
+   ValidationError(func=trx_address, args={'value': 'TLyqzVGLV1srkB7dToTAEqgDSfPtXRJZY0'})
+-- bsc_address('0x9cc14ba4f9f68ca159ea4ebf2c292a14e5d1fa4e')
+   True
+-- bsc_address('0x9CC14BA4F9F68CA159EA4EBF2C292A14E5D1FA4E')
+   True
+-- bsc_address('0x9cc14ba4f9f68ca159ea4ebf2c292a14e5d1fa4')
+   ValidationError(func=bsc_address, args={'value': '0x9cc14ba4f9f68ca159ea4ebf2c292a14e5d1fa4'})
+-- bsc_address('9cc14ba4f9f68ca159ea4ebf2c292a14e5d1fa4e')
+   ValidationError(func=bsc_address, args={'value': '9cc14ba4f9f68ca159ea4ebf2c292a14e5d1fa4e'})
+-- bsc_address('0x9cc14ba4f9f68ca159ea4ebf2c292a14e5d1fa4g')
+   ValidationError(func=bsc_address, args={'value': '0x9cc14ba4f9f68ca159ea4ebf2c292a14e5d1fa4g'})
+== ranges and lengths
+-- between(5, min_val=2)
+   True
+-- between(13.2, min_val=13, max_val=14)
+   True
+-- between(500, max_val=400)
+   ValidationError(func=between, args={'value': 500, 'max_val': 400})
+-- between(5, min_val=10, max_val=2)
+   ValidationError(func=between, args={'reason': '`min_val` cannot be greater than `max_val`', 'value': 5, 'min_val': 10, 'max_val': 2})
+-- between('m', min_val='a', max_val='z')
+   True
+-- between('M', min_val='a', max_val='z')
+   ValidationError(func=between, args={'value': 'M', 'min_val': 'a', 'max_val': 'z'})
+-- between(5, min_val='a')
+   ValidationError(func=between, args={'reason': "'<=' not supported between instances of 'str' and 'int'", 'value': 5, 'min_val': 'a'})
+-- between(5, min_val='a', max_val=3)
+   ValidationError(func=between, args={'reason': 'Comparison type mismatch', 'value': 5, 'min_val': 'a', 'max_val': 3})
+-- between(None, min_val=1)
+   ValidationError(func=between, args={'value': None, 'min_val': 1})
+-- between(True, min_val=0, max_val=1)
+   True
+-- between(7)
+   True
+-- between(2.5, min_val=2.5, max_val=2.5)
+   True
+-- length('something', min_val=2)
+   True
+-- length('something', min_val=9, max_val=9)
+   True
+-- length('something', max_val=5)
+   ValidationError(func=length, args={'value': 'something', 'max_val': 5})
+-- length('something', min_val=-1)
+   ValidationError(func=length, args={'reason': 'Length cannot be negative. `min_val` is less than zero.', 'value': 'something', 'min_val': -1})
+-- length('something', max_val=-3)
+   ValidationError(func=length, args={'reason': 'Length cannot be negative. `max_val` is less than zero.', 'value': 'something', 'max_val': -3})
+-- length('žluťoučký', min_val=9, max_val=9)
+   True
+-- length('a😀b', max_val=3)
+   True
+-- length('', min_val=0)
+   True
+-- length(12345, min_val=1)
+   ValidationError(func=length, args={'reason': "object of type 'int' has no len()", 'value': 12345, 'min_val': 1})
+-- length('x', min_val=3, max_val=1)
+   ValidationError(func=length, args={'value': 'x', 'min_val': 3, 'max_val': 1})
+== cron
+-- cron('*/5 * * * *')
+   True
+-- cron('30-31 22/2 1-15,20 */2 1-5')
+   True
+-- cron('0 0 1 1 7')
+   True
+-- cron('60 * * * *')
+   ValidationError(func=cron, args={'value': '60 * * * *'})
+-- cron('* 24 * * *')
+   ValidationError(func=cron, args={'value': '* 24 * * *'})
+-- cron('* * 0 * *')
+   ValidationError(func=cron, args={'value': '* * 0 * *'})
+-- cron('* * * 13 *')
+   ValidationError(func=cron, args={'value': '* * * 13 *'})
+-- cron('* * * * 8')
+   ValidationError(func=cron, args={'value': '* * * * 8'})
+-- cron('*/0 * * * *')
+   ValidationError(func=cron, args={'value': '*/0 * * * *'})
+-- cron('1-60/5 * * * *')
+   ValidationError(func=cron, args={'value': '1-60/5 * * * *'})
+-- cron('5-1 * * * *')
+   ValidationError(func=cron, args={'value': '5-1 * * * *'})
+-- cron('* * * *')
+   ValidationError(func=cron, args={'reason': 'Badly formatted cron string', 'value': '* * * *'})
+-- cron('* * * * * *')
+   ValidationError(func=cron, args={'reason': 'Badly formatted cron string', 'value': '* * * * * *'})
+-- cron('  0  12  *  *  1  ')
+   True
+-- cron('a * * * *')
+   ValidationError(func=cron, args={'value': 'a * * * *'})
+-- cron('1,2,,3 * * * *')
+   ValidationError(func=cron, args={'value': '1,2,,3 * * * *'})
+-- cron('*/x * * * *')
+   ValidationError(func=cron, args={'value': '*/x * * * *'})
+-- cron('١ * * * *')
+   True
+-- cron('0 0 * * 1-1')
+   True
+-- cron('0 0 * * -1')
+   ValidationError(func=cron, args={'value': '0 0 * * -1'})
+-- cron('')
+   ValidationError(func=cron, args={'value': ''})
+-- cron('1-2-3 * * * *')
+   ValidationError(func=cron, args={'value': '1-2-3 * * * *'})
+-- cron('*/5/2 * * * *')
+   ValidationError(func=cron, args={'value': '*/5/2 * * * *'})
+-- cron('0\t0\u3000*\xa0* *')
+   True
+== countries and currencies
+-- country_code('GB', iso_format='alpha3')
+   ValidationError(func=country_code, args={'value': 'GB', 'iso_format': 'alpha3'})
+-- country_code('USA')
+   True
+-- country_code('840', iso_format='numeric')
+   True
+-- country_code('iN', iso_format='alpha2')
+   ValidationError(func=country_code, args={'value': 'iN', 'iso_format': 'alpha2'})
+-- country_code('ZWE', iso_format='alpha3')
+   True
+-- country_code('in', ignore_case=True)
+   True
+-- country_code('usa', ignore_case=True)
+   True
+-- country_code('usa')
+   ValidationError(func=country_code, args={'value': 'usa'})
+-- country_code('840')
+   True
+-- country_code('8400')
+   ValidationError(func=country_code, args={'value': '8400'})
+-- country_code('U')
+   ValidationError(func=country_code, args={'value': 'U'})
+-- country_code('ÜS')
+   ValidationError(func=country_code, args={'value': 'ÜS'})
+-- country_code('US', iso_format='numeric')
+   ValidationError(func=country_code, args={'value': 'US', 'iso_format': 'numeric'})
+-- country_code('US', iso_format='bogus')
+   ValidationError(func=country_code, args={'value': 'US', 'iso_format': 'bogus'})
+-- country_code('004')
+   True
+-- country_code('4')
+   ValidationError(func=country_code, args={'value': '4'})
+-- country_code('١٢٣')
+   ValidationError(func=country_code, args={'value': '١٢٣'})
+-- country_code('ANT')
+   True
+-- country_code('XK')
+   ValidationError(func=country_code, args={'value': 'XK'})
+-- country_code('U1')
+   ValidationError(func=country_code, args={'value': 'U1'})
+-- calling_code('+91')
+   True
+-- calling_code('-31')
+   ValidationError(func=calling_code, args={'value': '-31'})
+-- calling_code('+1')
+   True
+-- calling_code('+1-264')
+   True
+-- calling_code('+44-1481')
+   True
+-- calling_code('+999')
+   ValidationError(func=calling_code, args={'value': '+999'})
+-- calling_code('91')
+   ValidationError(func=calling_code, args={'value': '91'})
+-- calling_code('')
+   ValidationError(func=calling_code, args={'value': ''})
+-- currency('USD')
+   True
+-- currency('ZWX')
+   ValidationError(func=currency, args={'value': 'ZWX'})
+-- currency('usd')
+   ValidationError(func=currency, args={'value': 'usd'})
+-- currency('usd', ignore_case=True)
+   True
+-- currency('$')
+   ValidationError(func=currency, args={'value': '$'})
+-- currency('$', skip_symbols=False)
+   True
+-- currency('₹', skip_symbols=False)
+   True
+-- currency('Rs', skip_symbols=False)
+   True
+-- currency('৳', skip_symbols=False)
+   ValidationError(func=currency, args={'value': '৳', 'skip_symbols': False})
+-- currency('⃀৳', skip_symbols=False)
+   True
+-- currency('EURO')
+   ValidationError(func=currency, args={'value': 'EURO'})
+-- currency('XAU')
+   ValidationError(func=currency, args={'value': 'XAU'})
+-- currency('BTC')
+   ValidationError(func=currency, args={'value': 'BTC'})
+== national ids
+-- es_cif('B25162520')
+   True
+-- es_cif('U4839822F')
+   True
+-- es_cif('B44415919')
+   ValidationError(func=es_cif, args={'value': 'B44415919'})
+-- es_cif('J99216582')
+   True
+-- es_cif('A12345674')
+   True
+-- es_cif('P1234567D')
+   True
+-- es_cif('Q1234567X')
+   ValidationError(func=es_cif, args={'value': 'Q1234567X'})
+-- es_cif('X1234567A')
+   ValidationError(func=es_cif, args={'value': 'X1234567A'})
+-- es_cif('B2516252')
+   ValidationError(func=es_cif, args={'value': 'B2516252'})
+-- es_cif('BX5162520')
+   ValidationError(func=es_cif, args={'value': 'BX5162520'})
+-- es_cif('C1234567D')
+   True
+-- es_cif('C12345674')
+   True
+-- es_nif('26643189N')
+   True
+-- es_nif('12345678Z')
+   True
+-- es_nif('99999999R')
+   True
+-- es_nif('26643189N')
+   True
+-- es_nif('26643189A')
+   ValidationError(func=es_nif, args={'value': '26643189A'})
+-- es_nif('M2812345C')
+   True
+-- es_nif('K1234567L')
+   True
+-- es_nif('L0000000T')
+   True
+-- es_nif('1234567８Z')
+   True
+-- es_nif('12345678²')
+   ValidationError(func=es_nif, args={'value': '12345678²'})
+-- es_nie('X0095892M')
+   True
+-- es_nie('X8095892N')
+   ValidationError(func=es_nie, args={'value': 'X8095892N'})
+-- es_nie('Y1234567X')
+   True
+-- es_nie('Z1234567R')
+   True
+-- es_nie('A1234567B')
+   ValidationError(func=es_nie, args={'value': 'A1234567B'})
+-- es_nie('')
+   ValidationError(func=es_nie, args={'value': ''})
+-- es_doi('X0095892M')
+   True
+-- es_doi('26643189N')
+   True
+-- es_doi('B25162520')
+   True
+-- es_doi('U4839822F')
+   True
+-- es_doi('Q1234567X')
+   ValidationError(func=es_doi, args={'value': 'Q1234567X'})
+-- es_doi('ZZ')
+   ValidationError(func=es_doi, args={'value': 'ZZ'})
+-- fi_business_id('2336509-6')
+   True
+-- fi_business_id('1234567-1')
+   True
+-- fi_business_id('0737546-2')
+   True
+-- fi_business_id('2336509-7')
+   ValidationError(func=fi_business_id, args={'value': '2336509-7'})
+-- fi_business_id('2336509')
+   ValidationError(func=fi_business_id, args={'value': '2336509'})
+-- fi_business_id('abcdefg-h')
+   ValidationError(func=fi_business_id, args={'value': 'abcdefg-h'})
+-- fi_ssn('131052-308T')
+   True
+-- fi_ssn('010101A002S')
+   True
+-- fi_ssn('311299+950V')
+   True
+-- fi_ssn('290200Y1239')
+   True
+-- fi_ssn('010180-0014')
+   ValidationError(func=fi_ssn, args={'value': '010180-0014'})
+-- fi_ssn('311299+950V', allow_temporal_ssn=False)
+   ValidationError(func=fi_ssn, args={'value': '311299+950V', 'allow_temporal_ssn': False})
+-- fi_ssn('131052-308T')
+   True
+-- fi_ssn('131052-308U')
+   ValidationError(func=fi_ssn, args={'value': '131052-308U'})
+-- fi_ssn('321052-308T')
+   ValidationError(func=fi_ssn, args={'value': '321052-308T'})
+-- fi_ssn('130052-308T')
+   ValidationError(func=fi_ssn, args={'value': '130052-308T'})
+-- fi_ssn('131052*308T')
+   ValidationError(func=fi_ssn, args={'value': '131052*308T'})
+-- fi_ssn('131052-308t')
+   ValidationError(func=fi_ssn, args={'value': '131052-308t'})
+-- fr_department('01')
+   True
+-- fr_department('2A')
+   True
+-- fr_department('2B')
+   True
+-- fr_department('20')
+   ValidationError(func=fr_department, args={'value': '20'})
+-- fr_department('95')
+   True
+-- fr_department('96')
+   ValidationError(func=fr_department, args={'value': '96'})
+-- fr_department('971')
+   True
+-- fr_department('976')
+   True
+-- fr_department('977')
+   ValidationError(func=fr_department, args={'value': '977'})
+-- fr_department('0')
+   ValidationError(func=fr_department, args={'value': '0'})
+-- fr_department('abc')
+   ValidationError(func=fr_department, args={'value': 'abc'})
+-- fr_department(' 75 ')
+   True
+-- fr_department('７５')
+   True
+-- fr_department('+3')
+   True
+-- fr_department(75)
+   True
+-- fr_department(0)
+   ValidationError(func=fr_department, args={'value': 0})
+-- fr_department(974)
+   True
+-- fr_ssn('1 84 12 76 451 089 46')
+   True
+-- fr_ssn('2 70 01 2A 123 456 72')
+   True
+-- fr_ssn('1 55 05 971 12 345 32')
+   True
+-- fr_ssn('2 99 12 99 123 456 62')
+   True
+-- fr_ssn('1 84 12 76 451 089')
+   True
+-- fr_ssn('1 84 12 76 451 089 47')
+   ValidationError(func=fr_ssn, args={'value': '1 84 12 76 451 089 47'})
+-- fr_ssn('3 84 12 76 451 089')
+   ValidationError(func=fr_ssn, args={'value': '3 84 12 76 451 089'})
+-- fr_ssn('1 84 13 76 451 089')
+   ValidationError(func=fr_ssn, args={'value': '1 84 13 76 451 089'})
+-- fr_ssn('1 84 12 20 451 089')
+   ValidationError(func=fr_ssn, args={'value': '1 84 12 20 451 089'})
+-- fr_ssn('1 55 05 971 123 345')
+   True
+-- fr_ssn('1841276451089')
+   ValidationError(func=fr_ssn, args={'value': '1841276451089'})
+-- fr_ssn('1 84 12 76 451 089 00')
+   ValidationError(func=fr_ssn, args={'value': '1 84 12 76 451 089 00'})
+-- ind_aadhar('3675 9834 6012')
+   True
+-- ind_aadhar('5046 3182 4299')
+   True
+-- ind_aadhar('1234 5678 9012')
+   ValidationError(func=ind_aadhar, args={'value': '1234 5678 9012'})
+-- ind_aadhar('367598346012')
+   ValidationError(func=ind_aadhar, args={'value': '367598346012'})
+-- ind_aadhar('3675 9834 601')
+   ValidationError(func=ind_aadhar, args={'value': '3675 9834 601'})
+-- ind_aadhar('３６７５ ９８３４ ６０１２')
+   ValidationError(func=ind_aadhar, args={'value': '３６７５ ９８３４ ６０１２'})
+-- ind_pan('ABCDE9999K')
+   True
+-- ind_pan('abcde9999k')
+   ValidationError(func=ind_pan, args={'value': 'abcde9999k'})
+-- ind_pan('ABCD99999K')
+   ValidationError(func=ind_pan, args={'value': 'ABCD99999K'})
+-- ind_pan('ABCDE9999KZ')
+   ValidationError(func=ind_pan, args={'value': 'ABCDE9999KZ'})
+-- ru_inn('7707083893')
+   True
+-- ru_inn('5001007329')
+   True
+-- ru_inn('770708389324')
+   True
+-- ru_inn('500100732964')
+   True
+-- ru_inn('7830002293')
+   True
+-- ru_inn('7830002294')
+   ValidationError(func=ru_inn, args={'value': '7830002294'})
+-- ru_inn('500100732259')
+   True
+-- ru_inn('500100732258')
+   ValidationError(func=ru_inn, args={'value': '500100732258'})
+-- ru_inn('123')
+   ValidationError(func=ru_inn, args={'value': '123'})
+-- ru_inn('77070838930')
+   ValidationError(func=ru_inn, args={'value': '77070838930'})
+-- ru_inn('77О7083893')
+   ValidationError(func=ru_inn, args={'value': '77О7083893'})
+-- ru_inn('')
+   ValidationError(func=ru_inn, args={'value': ''})
+== signup form
+   1000 dmitri-0: ok, discover card, not a public ipv4
+   1001 ines-1: ok, mir card, not a public ipv4
+   1002 dmitri-2: ok, mir card, public ipv4
+   1003 bo: ok, mir card, not a public ipv4
+   1004 oneil: rejected iban, ip
+   1005 kai-5: ok, visa card, not a public ipv4
+   1006 jon_x: rejected username, email
+   1007 lena: rejected country
+   1008 farid: ok, visa card, public ipv4
+   1009 hugo: rejected email
+   1010 farid: rejected card
+   1011 dmitri: ok, visa card, not a public ipv4
+   1012 ana-12: ok, mastercard card, public ipv4
+   1013 chen: ok, mir card, not a public ipv4
+   1014 žofie: rejected username, email, website, country
+   1015 chen: ok, jcb card, public ipv4
+   1016 eva-16: ok, mir card, public ipv4
+   1017 lena-17: ok, visa card, public ipv4
+   1018 ines-18: rejected email, card, ip
+   1019 eva-19: rejected card
+   1020 chen: ok, amex card, not a public ipv4
+   1021 kai: rejected iban
+   1022 žofie-22: rejected username, iban
+   1023 kai-23: rejected website, country
+   1024 ana: ok, mastercard card, not a public ipv4
+   1025 gita-25: rejected email
+   1026 kai: ok, discover card, public ipv4
+   1027 žofie: rejected username, card
+   1028 hugo: rejected iban, ip
+   1029 EVA: rejected username, email
+   1030 -dmitri: rejected username, email, card
+   1031 ana: rejected card, ip
+   1032 ines: rejected email, country, card, iban
+   1033 lena-33: rejected country, ip
+   1034 bo: ok, amex card, not a public ipv4
+   1035 dmitri-35: ok, mir card, not a public ipv4
+   1036 hugo: ok, jcb card, public ipv4
+   1037 eva: ok, jcb card, not a public ipv4
+   1038 chen-38: rejected email, iban, ip
+   1039 ines-39: ok, amex card, public ipv4
+   20 of 40 accepted
+     username rejected 6 times
+     email rejected 9 times
+     website rejected 2 times
+     country rejected 5 times
+     card rejected 7 times
+     iban rejected 6 times
+     ip rejected 6 times
+     amex cards accepted: 3
+     discover cards accepted: 2
+     jcb cards accepted: 3
+     mastercard cards accepted: 2
+     mir cards accepted: 6
+     visa cards accepted: 4
+== webhook callbacks
+   tenant-01 https://hooks.example.com/in/abc: accepted
+   tenant-02 http://127.0.0.1:8080/admin: rejected: private, loopback or multicast address
+   tenant-03 http://10.0.0.5/hook: rejected: private, loopback or multicast address
+   tenant-04 https://8.8.8.8/x: accepted
+   tenant-05 http://169.254.169.254/latest/meta-data/: rejected: private, loopback or multicast address
+   tenant-06 http://[::1]/hook: accepted
+   tenant-07 https://api.partner.example.net:8443/cb?sig=1: accepted
+   tenant-08 http://localhost/hook: rejected: not a valid URL
+   tenant-09 https://172.20.1.1/x: rejected: private, loopback or multicast address
+   tenant-10 https://172.40.1.1/x: accepted
+   tenant-11 https://user:pw@example.com/cb: accepted
+   tenant-12 gopher://example.com/x: rejected: not a valid URL
+   tenant-13 https://example.com/cb?a=1&b: rejected: not a valid URL (bad query field: 'b')
+   tenant-14 https://exa mple.com/cb: rejected: not a valid URL
+   tenant-15 https://224.0.0.5/x: rejected: private, loopback or multicast address
+   tenant-16 https://example.com:99999/cb: rejected: not a valid URL
+   tenant-17 https://example.zzz/cb: accepted
+   tenant-18 https://sub.example.org/cb#frag: accepted
+     accepted: 8
+     rejected: not a valid URL: 5
+     rejected: private, loopback or multicast address: 5
