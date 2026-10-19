@@ -1,0 +1,3619 @@
+// mini_mailheaders: the mail-header half of Python 3.13's email package,
+// ported from email/_parseaddr.py, utils.py, header.py, charset.py,
+// quoprimime.py and base64mime.py: address lists with the strict parsing
+// 3.13 added, RFC 2822 dates, RFC 2047 encoded words in both directions
+// with Header's line folding, and RFC 2231 parameter values, on ports of
+// the codecs they need (UTF-8, Latin-1, ASCII, Windows-1252 and
+// ISO 8859-15) with Python's error messages.
+//
+// The run first does every job of data/jobs.jsonl: each calls one of
+// those functions and prints the repr() of what it returns, or the
+// exception it raises. Then it reads the mailbox in data/mail/ and, for
+// each message, prints its sender, recipients, date and subject decoded,
+// with the headers of a reply; last comes an address book of everyone.
+
+// ------------------------------------------------------------ characters
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    if a >= b {
+        return Vec.new();
+    }
+    v[a..b].to_vec()
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// str.isspace, which str.strip, str.split and float() use.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(v, lo, hi))
+}
+
+// str.splitlines()
+fn line_break(c: char) -> bool {
+    c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}' or c == '\u{1c}' or c == '\u{1d}' or c == '\u{1e}'
+        or c == '\u{85}' or c == '\u{2028}' or c == '\u{2029}'
+}
+
+fn splitlines(s: ref String) -> Vec[String] {
+    let v = chars(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        if line_break(c) {
+            out.push(cur);
+            cur = String.new();
+            if c == '\r' and i + 1 < v.len() and v[i + 1] == '\n' {
+                i += 1;
+            }
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < n {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) {
+        return false;
+    }
+    true
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let single = s.contains("'");
+    let double = s.contains("\"");
+    let q = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if printable(o) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ------------------------------------------------------------ JSON
+
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[JValue]),
+    Obj(Vec[(String, JValue)]),
+}
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[JValue, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut m: Vec[(String, JValue)] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(JValue.Obj(m));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(f"expected ':' at {self.at}");
+                }
+                let v = self.value()?;
+                m.push((k, v));
+                self.ws();
+                if self.eat("}") {
+                    return Ok(JValue.Obj(m));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(JValue.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(JValue.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(JValue.Str(self.string()?));
+        }
+        if self.eat("true") {
+            return Ok(JValue.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(JValue.Bool(false));
+        }
+        if self.eat("null") {
+            return Ok(JValue.Null);
+        }
+        self.number()
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.b[self.at];
+            self.at += 1;
+            let d = if c >= b'0' and c <= b'9' {
+                c - b'0'
+            } else if c >= b'a' and c <= b'f' {
+                c - b'a' + 10
+            } else {
+                c - b'A' + 10
+            };
+            v = v * 16 + d as u32;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.eat("\"") {
+            return Err(f"expected string at {self.at}");
+        }
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.at >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.b[self.at];
+            self.at += 1;
+            if e == b'n' {
+                out.push(10);
+            } else if e == b't' {
+                out.push(9);
+            } else if e == b'r' {
+                out.push(13);
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(String.from_utf8(out).unwrap_or("?".to_string()))
+    }
+
+    fn number(mut ref self) -> Result[JValue, String] {
+        let start = self.at;
+        let mut float = false;
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c >= b'0' and c <= b'9' {
+                self.at += 1;
+            } else if c == b'-' or c == b'+' {
+                self.at += 1;
+            } else if c == b'.' or c == b'e' or c == b'E' {
+                float = true;
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        let t = String.from_utf8(self.b[start..self.at].to_vec()).unwrap_or(String.new());
+        if t.is_empty() {
+            return Err(f"bad value at {start}");
+        }
+        if float {
+            return match f64.parse(t) {
+                Ok(f) => Ok(JValue.Float(f)),
+                Err(_) => Err(f"bad number {t}"),
+            };
+        }
+        match i64.parse(t) {
+            Ok(i) => Ok(JValue.Int(i)),
+            Err(_) => Err(f"bad number {t}"),
+        }
+    }
+}
+
+fn parse_json(t: ref String) -> Result[JValue, String] {
+    let mut r = JsonReader { b: t.bytes().to_vec(), at: 0 };
+    r.value()
+}
+
+fn get(o: ref JValue, key: Str) -> Option[JValue] {
+    if let JValue.Obj(items) = o {
+        for (k, v) in items.iter() {
+            if k == key {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+
+// ------------------------------------------------------------ text helpers
+
+// len(s), in code points.
+fn width(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn py_lstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    while lo < v.len() and py_space(v[lo]) {
+        lo += 1;
+    }
+    text(slice(v, lo, v.len()))
+}
+
+fn py_isspace(s: ref String) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    for c in s.chars() {
+        if not py_space(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// str.split() with no separator: runs of whitespace.
+fn py_split(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if py_space(c) {
+            if not cur.is_empty() {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn last_char(s: ref String) -> char {
+    s.chars().rev().next().unwrap_or('\u{0}')
+}
+
+fn first_char(s: ref String) -> char {
+    s.chars().next().unwrap_or('\u{0}')
+}
+
+fn count_of(s: ref String, c: char) -> i64 {
+    let mut n = 0;
+    for x in s.chars() {
+        if x == c {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn has_char(set: Str, c: char) -> bool {
+    for x in set.chars() {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn opt_repr(s: ref Option[String]) -> String {
+    match s {
+        Some(t) => repr_str(t),
+        None => "None".to_string(),
+    }
+}
+
+// repr(bytes)
+fn repr_bytes(b: ref Vec[u8]) -> String {
+    let mut single = false;
+    let mut double = false;
+    for c in b.iter() {
+        if *c == b'\'' {
+            single = true;
+        }
+        if *c == b'"' {
+            double = true;
+        }
+    }
+    let q: u8 = if single and not double { b'"' } else { b'\'' };
+    let mut out = "b".to_string();
+    out.push(char.try_from(q as i64).unwrap_or('?'));
+    for x in b.iter() {
+        let c = *x;
+        if c == q or c == b'\\' {
+            out.push('\\');
+            out.push(char.try_from(c as i64).unwrap_or('?'));
+        } else if c == b'\t' {
+            out.push_str("\\t");
+        } else if c == b'\n' {
+            out.push_str("\\n");
+        } else if c == b'\r' {
+            out.push_str("\\r");
+        } else if c < 0x20 or c >= 0x7F {
+            out.push_str(f"\\x{hex_digits(c as i64, 2)}");
+        } else {
+            out.push(char.try_from(c as i64).unwrap_or('?'));
+        }
+    }
+    out.push(char.try_from(q as i64).unwrap_or('?'));
+    out
+}
+
+// ------------------------------------------------------------ codecs
+
+#[derive(Clone, PartialEq)]
+enum Codec {
+    Utf8,
+    Latin1,
+    Ascii,
+    Cp1252,
+    Latin9,
+}
+
+// codecs.lookup(name), for the five codecs the port has: the name is
+// lowercased, runs of other characters than letters, digits and "." become
+// one "_", and the result is looked up among the encodings' aliases.
+fn lookup_codec(name: ref String) -> Result[Codec, String] {
+    let mut norm = String.new();
+    let mut pending = false;
+    for c in name.to_lowercase().chars() {
+        if c.is_alphanumeric() or c == '.' {
+            if pending and not norm.is_empty() {
+                norm.push('_');
+            }
+            pending = false;
+            norm.push(c);
+        } else {
+            pending = true;
+        }
+    }
+    let n = norm.as_str();
+    if n == "utf_8" or n == "utf8" or n == "u8" or n == "utf" or n == "utf8_ucs2" or n == "utf8_ucs4" or n == "cp65001" {
+        return Ok(Codec.Utf8);
+    }
+    if n == "latin_1" or n == "latin1" or n == "iso_8859_1" or n == "iso8859_1" or n == "8859" or n == "cp819"
+        or n == "l1" or n == "latin" or n == "iso_ir_100" or n == "csisolatin1" or n == "iso_8859_1_1987" {
+        return Ok(Codec.Latin1);
+    }
+    if n == "ascii" or n == "us_ascii" or n == "us" or n == "646" or n == "cp367" or n == "csascii" or n == "ibm367"
+        or n == "iso646_us" or n == "iso_646.irv_1991" or n == "iso_ir_6" or n == "ansi_x3.4_1968"
+        or n == "ansi_x3.4_1986" or n == "ansi_x3_4_1968" {
+        return Ok(Codec.Ascii);
+    }
+    if n == "cp1252" or n == "windows_1252" or n == "1252" {
+        return Ok(Codec.Cp1252);
+    }
+    if n == "iso8859_15" or n == "iso_8859_15" or n == "latin9" or n == "latin_9" or n == "l9" or n == "8859_15" {
+        return Ok(Codec.Latin9);
+    }
+    Err(f"LookupError: unknown encoding: {name}")
+}
+
+fn codec_label(c: ref Codec) -> Str {
+    match c {
+        Codec.Utf8 => "utf-8",
+        Codec.Latin1 => "latin-1",
+        Codec.Ascii => "ascii",
+        _ => "charmap",
+    }
+}
+
+fn codec_reason(c: ref Codec) -> Str {
+    match c {
+        Codec.Latin1 => "ordinal not in range(256)",
+        Codec.Ascii => "ordinal not in range(128)",
+        _ => "character maps to <undefined>",
+    }
+}
+
+// Windows-1252's 0x80..0x9F; 0 where the byte is undefined.
+fn cp1252_high(b: i64) -> i64 {
+    let t = [0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0,
+        0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153,
+        0, 0x017E, 0x0178];
+    t[b - 0x80]
+}
+
+// The eight places where ISO 8859-15 differs from Latin-1.
+fn latin9_byte(cp: i64) -> i64 {
+    let t = [(0xA4, 0x20AC), (0xA6, 0x0160), (0xA8, 0x0161), (0xB4, 0x017D), (0xB8, 0x017E), (0xBC, 0x0152),
+        (0xBD, 0x0153), (0xBE, 0x0178)];
+    for (b, u) in t.iter() {
+        if *u == cp {
+            return *b;
+        }
+        if *b == cp {
+            return -1;
+        }
+    }
+    if cp < 0x100 { cp } else { -1 }
+}
+
+fn latin9_char(b: i64) -> i64 {
+    let t = [(0xA4, 0x20AC), (0xA6, 0x0160), (0xA8, 0x0161), (0xB4, 0x017D), (0xB8, 0x017E), (0xBC, 0x0152),
+        (0xBD, 0x0153), (0xBE, 0x0178)];
+    for (x, u) in t.iter() {
+        if *x == b {
+            return *u;
+        }
+    }
+    b
+}
+
+// The byte that `cp` encodes to, or -1.
+fn encode_one(c: ref Codec, cp: i64) -> i64 {
+    match c {
+        Codec.Latin1 => if cp < 0x100 { cp } else { -1 },
+        Codec.Ascii => if cp < 0x80 { cp } else { -1 },
+        Codec.Latin9 => latin9_byte(cp),
+        _ => {
+            if cp < 0x80 or (cp >= 0xA0 and cp < 0x100) {
+                return cp;
+            }
+            for b in 0x80..0xA0 {
+                if cp1252_high(b) == cp and cp != 0 {
+                    return b;
+                }
+            }
+            -1
+        }
+    }
+}
+
+fn char_escape(cp: i64) -> String {
+    if cp < 0x100 {
+        f"\\x{hex_digits(cp, 2)}"
+    } else if cp < 0x10000 {
+        f"\\u{hex_digits(cp, 4)}"
+    } else {
+        f"\\U{hex_digits(cp, 8)}"
+    }
+}
+
+// str.encode(codec) with errors="strict"; the UnicodeEncodeError names
+// the run of characters that cannot be encoded.
+fn encode_str(s: ref String, c: ref Codec) -> Result[Vec[u8], String] {
+    let mut out: Vec[u8] = Vec.new();
+    if *c == Codec.Utf8 {
+        return Ok(s.bytes().to_vec());
+    }
+    let v = chars(s);
+    let mut i = 0;
+    while i < v.len() {
+        let b = encode_one(c, v[i] as i64);
+        if b < 0 {
+            let mut end = i + 1;
+            while end < v.len() and encode_one(c, v[end] as i64) < 0 {
+                end += 1;
+            }
+            let label = codec_label(c);
+            let reason = codec_reason(c);
+            if end == i + 1 {
+                return Err(f"UnicodeEncodeError: '{label}' codec can't encode character '{char_escape(v[i] as i64)}' in position {i}: {reason}");
+            }
+            return Err(f"UnicodeEncodeError: '{label}' codec can't encode characters in position {i}-{end - 1}: {reason}");
+        }
+        out.push(b as u8);
+        i += 1;
+    }
+    Ok(out)
+}
+
+fn cont(b: ref Vec[u8], i: i64, lo: u8, hi: u8) -> bool {
+    i < b.len() and b[i] >= lo and b[i] <= hi
+}
+
+// One step of CPython's UTF-8 decoder at b[i]: (code point, length), or
+// (-1, length of the bad span, reason).
+fn utf8_step(b: ref Vec[u8], i: i64) -> (i64, i64, Str) {
+    let c = b[i];
+    if c < 0x80 {
+        return (c as i64, 1, "");
+    }
+    let (n, lo, hi) = if c >= 0xC2 and c <= 0xDF {
+        (2, 0x80, 0xBF)
+    } else if c == 0xE0 {
+        (3, 0xA0, 0xBF)
+    } else if c == 0xED {
+        (3, 0x80, 0x9F)
+    } else if c >= 0xE1 and c <= 0xEF {
+        (3, 0x80, 0xBF)
+    } else if c == 0xF0 {
+        (4, 0x90, 0xBF)
+    } else if c == 0xF4 {
+        (4, 0x80, 0x8F)
+    } else if c >= 0xF1 and c <= 0xF3 {
+        (4, 0x80, 0xBF)
+    } else {
+        return (-1, 1, "invalid start byte");
+    };
+    let mut k = 0;
+    while k < n - 1 {
+        let (l, h) = if k == 0 { (lo as u8, hi as u8) } else { (0x80 as u8, 0xBF as u8) };
+        if not cont(b, i + 1 + k, l, h) {
+            if i + 1 + k >= b.len() {
+                return (-1, 1 + k, "unexpected end of data");
+            }
+            return (-1, 1 + k, "invalid continuation byte");
+        }
+        k += 1;
+    }
+    let mut cp = if n == 2 { c as i64 & 0x1F } else if n == 3 { c as i64 & 0x0F } else { c as i64 & 0x07 };
+    for j in 1..n {
+        cp = cp * 64 + (b[i + j] as i64 & 0x3F);
+    }
+    (cp, n, "")
+}
+
+fn push_cp(out: mut ref String, cp: i64) {
+    out.push(char.try_from(cp).unwrap_or('?'));
+}
+
+// bytes.decode(codec, errors) for errors "strict" and "replace".
+fn decode_bytes(b: ref Vec[u8], c: ref Codec, replace: bool) -> Result[String, String] {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        // Workaround (B-2026-10-19-4): without the annotation the literal-only
+        // nested if arm is not coerced to Str.
+        let (cp, n, reason): (i64, i64, Str) = match c {
+            Codec.Utf8 => utf8_step(b, i),
+            Codec.Latin1 => (b[i] as i64, 1, ""),
+            Codec.Latin9 => (latin9_char(b[i] as i64), 1, ""),
+            Codec.Ascii => if b[i] < 0x80 { (b[i] as i64, 1, "") } else { (-1, 1, "ordinal not in range(128)") },
+            Codec.Cp1252 => {
+                let x = b[i] as i64;
+                if x < 0x80 or x >= 0xA0 {
+                    (x, 1, "")
+                } else if cp1252_high(x) != 0 {
+                    (cp1252_high(x), 1, "")
+                } else {
+                    (-1, 1, "character maps to <undefined>")
+                }
+            }
+        };
+        if cp >= 0 {
+            push_cp(mut out, cp);
+            i += n;
+            continue;
+        }
+        if replace {
+            out.push('\u{FFFD}');
+            i += n;
+            continue;
+        }
+        let label = codec_label(c);
+        if n == 1 {
+            return Err(f"UnicodeDecodeError: '{label}' codec can't decode byte 0x{hex_digits(b[i] as i64, 2)} in position {i}: {reason}");
+        }
+        return Err(f"UnicodeDecodeError: '{label}' codec can't decode bytes in position {i}-{i + n - 1}: {reason}");
+    }
+    Ok(out)
+}
+
+fn encode_named(s: ref String, name: ref String) -> Result[Vec[u8], String] {
+    let c = lookup_codec(name)?;
+    encode_str(s, c)
+}
+
+// str.encode("raw-unicode-escape")
+fn raw_unicode_escape(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.chars() {
+        let o = c as i64;
+        if o < 0x100 {
+            out.push(o as u8);
+        } else {
+            let e = if o < 0x10000 { f"\\u{hex_digits(o, 4)}" } else { f"\\U{hex_digits(o, 8)}" };
+            for x in e.bytes() {
+                out.push(*x);
+            }
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ base64 and Q
+
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        c as i64 - 65
+    } else if c >= b'a' and c <= b'z' {
+        c as i64 - 71
+    } else if c >= b'0' and c <= b'9' {
+        c as i64 + 4
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// binascii.a2b_base64 without strict_mode, as CPython 3.13 runs it:
+// characters outside the alphabet and every "=" are skipped, and only a
+// part-filled last quad must have been padded. None where it raises.
+fn a2b_base64(v: ref Vec[u8]) -> Option[Vec[u8]] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad_pos = 0;
+    let mut left: i64 = 0;
+    let mut pads = 0;
+    for x in v.iter() {
+        let ch = *x;
+        if ch == b'=' {
+            if quad_pos >= 2 {
+                pads += 1;
+            }
+            continue;
+        }
+        let d = b64_value(ch);
+        if d < 0 {
+            continue;
+        }
+        pads = 0;
+        if quad_pos == 0 {
+            quad_pos = 1;
+            left = d;
+        } else if quad_pos == 1 {
+            quad_pos = 2;
+            out.push(((left << 2) | (d >> 4)) as u8);
+            left = d & 15;
+        } else if quad_pos == 2 {
+            quad_pos = 3;
+            out.push(((left << 4) | (d >> 2)) as u8);
+            left = d & 3;
+        } else {
+            quad_pos = 0;
+            out.push(((left << 6) | d) as u8);
+            left = 0;
+        }
+    }
+    if quad_pos == 1 or (quad_pos >= 2 and quad_pos + pads < 4) {
+        return None;
+    }
+    Some(out)
+}
+
+fn b64encode(b: ref Vec[u8]) -> String {
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".bytes();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let n = if b.len() - i >= 3 { 3 } else { b.len() - i };
+        let b0 = b[i] as i64;
+        let b1 = if n > 1 { b[i + 1] as i64 } else { 0 };
+        let b2 = if n > 2 { b[i + 2] as i64 } else { 0 };
+        let v = (b0 << 16) | (b1 << 8) | b2;
+        out.push(char.try_from(alphabet[(v >> 18) & 63] as i64).unwrap_or('?'));
+        out.push(char.try_from(alphabet[(v >> 12) & 63] as i64).unwrap_or('?'));
+        if n > 1 {
+            out.push(char.try_from(alphabet[(v >> 6) & 63] as i64).unwrap_or('?'));
+        } else {
+            out.push('=');
+        }
+        if n > 2 {
+            out.push(char.try_from(alphabet[v & 63] as i64).unwrap_or('?'));
+        } else {
+            out.push('=');
+        }
+        i += 3;
+    }
+    out
+}
+
+// base64mime.header_length
+fn b64_header_length(b: ref Vec[u8]) -> i64 {
+    let mut n = (b.len() / 3) * 4;
+    if b.len() % 3 != 0 {
+        n += 4;
+    }
+    n
+}
+
+fn q_safe(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or (c >= b'0' and c <= b'9') or c == b'-' or c == b'!'
+        or c == b'*' or c == b'+' or c == b'/'
+}
+
+// quoprimime.header_length
+fn q_header_length(b: ref Vec[u8]) -> i64 {
+    let mut n = 0;
+    for c in b.iter() {
+        n += if q_safe(*c) or *c == b' ' { 1 } else { 3 };
+    }
+    n
+}
+
+// quoprimime.header_encode and base64mime.header_encode
+fn q_header_encode(b: ref Vec[u8], charset: ref String) -> String {
+    if b.is_empty() {
+        return String.new();
+    }
+    let mut enc = String.new();
+    for x in b.iter() {
+        let c = *x;
+        if q_safe(c) {
+            enc.push(char.try_from(c as i64).unwrap_or('?'));
+        } else if c == b' ' {
+            enc.push('_');
+        } else {
+            enc.push_str(f"={hex_digits(c as i64, 2).to_uppercase()}");
+        }
+    }
+    f"=?{charset}?q?{enc}?="
+}
+
+fn b64_header_encode(b: ref Vec[u8], charset: ref String) -> String {
+    if b.is_empty() {
+        return String.new();
+    }
+    f"=?{charset}?b?{b64encode(b)}?="
+}
+
+// quoprimime.header_decode: "_" is a space and each =XX a character.
+fn q_header_decode(s: ref String) -> String {
+    let v = chars(s.replace("_", " "));
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '=' and i + 2 < v.len() and hex_value(v[i + 1]) >= 0 and hex_value(v[i + 2]) >= 0
+            and (v[i + 1] as i64) < 128 and (v[i + 2] as i64) < 128 {
+            push_cp(mut out, hex_value(v[i + 1]) * 16 + hex_value(v[i + 2]));
+            i += 3;
+        } else {
+            out.push(v[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn hex_value(c: char) -> i64 {
+    if c >= '0' and c <= '9' {
+        c as i64 - 48
+    } else if c >= 'a' and c <= 'f' {
+        c as i64 - 87
+    } else if c >= 'A' and c <= 'F' {
+        c as i64 - 55
+    } else {
+        -1
+    }
+}
+
+// ------------------------------------------------------------ email.charset
+
+// header_encoding and body_encoding: 0 for none, then QP, BASE64 and
+// SHORTEST as charset.py numbers them.
+#[derive(Clone)]
+struct Charset {
+    input_charset: String,
+    header_encoding: i64,
+    output_charset: String,
+    input_codec: Option[String],
+    output_codec: Option[String],
+}
+
+fn charset_alias(name: ref String) -> String {
+    let n = name.as_str();
+    let pairs = [("latin_1", "iso-8859-1"), ("latin-1", "iso-8859-1"), ("latin_2", "iso-8859-2"), ("latin-2", "iso-8859-2"),
+        ("latin_3", "iso-8859-3"), ("latin-3", "iso-8859-3"), ("latin_4", "iso-8859-4"), ("latin-4", "iso-8859-4"),
+        ("latin_5", "iso-8859-9"), ("latin-5", "iso-8859-9"), ("latin_6", "iso-8859-10"), ("latin-6", "iso-8859-10"),
+        ("latin_7", "iso-8859-13"), ("latin-7", "iso-8859-13"), ("latin_8", "iso-8859-14"), ("latin-8", "iso-8859-14"),
+        ("latin_9", "iso-8859-15"), ("latin-9", "iso-8859-15"), ("latin_10", "iso-8859-16"), ("latin-10", "iso-8859-16"),
+        ("cp949", "ks_c_5601-1987"), ("euc_jp", "euc-jp"), ("euc_kr", "euc-kr"), ("ascii", "us-ascii")];
+    for (a, c) in pairs.iter() {
+        if *a == n {
+            return c.to_string();
+        }
+    }
+    name.clone()
+}
+
+// CHARSETS: (header encoding, output charset or "").
+fn charset_props(name: ref String) -> (i64, String) {
+    let n = name.as_str();
+    let qp = ["iso-8859-1", "iso-8859-2", "iso-8859-3", "iso-8859-4", "iso-8859-9", "iso-8859-10", "iso-8859-13",
+        "iso-8859-14", "iso-8859-15", "iso-8859-16", "windows-1252", "viscii"];
+    for q in qp.iter() {
+        if *q == n {
+            return (1, String.new());
+        }
+    }
+    if n == "us-ascii" {
+        return (0, String.new());
+    }
+    if n == "big5" or n == "gb2312" or n == "koi8-r" or n == "iso-2022-jp" {
+        return (2, String.new());
+    }
+    if n == "euc-jp" or n == "shift_jis" {
+        return (2, "iso-2022-jp".to_string());
+    }
+    if n == "utf-8" {
+        return (3, "utf-8".to_string());
+    }
+    (3, String.new())
+}
+
+fn new_charset(input: ref String) -> Charset {
+    let input_charset = charset_alias(input.to_lowercase());
+    let (henc, conv) = charset_props(input_charset);
+    let conv = if conv.is_empty() { input_charset.clone() } else { conv };
+    let output_charset = charset_alias(conv);
+    let codec = |n: ref String| if n == "us-ascii" { None } else { Some(n.clone()) };
+    Charset {
+        input_charset: input_charset.clone(),
+        header_encoding: henc,
+        output_charset: output_charset.clone(),
+        input_codec: codec(input_charset),
+        output_codec: codec(output_charset),
+    }
+}
+
+// Charset == "name" compares the lowercased names; a missing charset
+// (None) equals nothing.
+fn cs_is(c: ref Option[Charset], name: Str) -> bool {
+    match c {
+        Some(x) => x.input_charset == name,
+        None => false,
+    }
+}
+
+fn cs_eq(a: ref Option[Charset], b: ref Option[Charset]) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => x.input_charset == y.input_charset,
+        _ => false,
+    }
+}
+
+// `charset in (None, "us-ascii")`
+fn cs_plain(c: ref Option[Charset]) -> bool {
+    c.is_none() or cs_is(c, "us-ascii")
+}
+
+fn output_codec_name(c: ref Charset) -> String {
+    // Python's `self.output_codec or 'us-ascii'`: an empty name is falsy too.
+    match c.output_codec.clone() {
+        Some(n) if not n.is_empty() => n,
+        _ => "us-ascii".to_string(),
+    }
+}
+
+// The encoder module _get_encoder picks: 1 quoprimime, 2 base64mime, 0 none.
+fn get_encoder(c: ref Charset, b: ref Vec[u8]) -> i64 {
+    if c.header_encoding == 3 {
+        return if b64_header_length(b) < q_header_length(b) { 2 } else { 1 };
+    }
+    c.header_encoding
+}
+
+fn module_encode(m: i64, b: ref Vec[u8], charset: ref String) -> String {
+    if m == 2 { b64_header_encode(b, charset) } else { q_header_encode(b, charset) }
+}
+
+fn module_length(m: i64, b: ref Vec[u8]) -> i64 {
+    if m == 2 { b64_header_length(b) } else { q_header_length(b) }
+}
+
+// Charset.header_encode
+fn header_encode(c: ref Charset, s: ref String) -> Result[String, String] {
+    let codec = output_codec_name(c);
+    let b = encode_named(s, codec)?;
+    let m = get_encoder(c, b);
+    if m == 0 {
+        return Ok(s.clone());
+    }
+    Ok(module_encode(m, b, codec))
+}
+
+// Charset.header_encode_lines: the encoded words a string is cut into so
+// that each fits the next of the given lengths. None where not even one
+// character fit on the first line.
+fn header_encode_lines(c: ref Charset, s: ref String, first: i64, rest: i64) -> Result[Vec[Option[String]], String] {
+    let codec = output_codec_name(c);
+    let all = encode_named(s, codec)?;
+    let m = get_encoder(c, all);
+    let charset = c.output_charset.clone();
+    let extra = width(charset) + 7;
+    let mut lines: Vec[Option[String]] = Vec.new();
+    let mut current = String.new();
+    let mut maxlen = first - extra;
+    for ch in s.chars() {
+        let mut this_line = current.clone();
+        this_line.push(ch);
+        let length = module_length(m, encode_named(this_line, charset)?);
+        if length > maxlen {
+            if lines.is_empty() and current.is_empty() {
+                lines.push(None);
+            } else {
+                lines.push(Some(module_encode(m, encode_named(current, codec)?, codec)));
+            }
+            current = String.new();
+            current.push(ch);
+            maxlen = rest - extra;
+        } else {
+            current = this_line;
+        }
+    }
+    lines.push(Some(module_encode(m, encode_named(current, codec)?, codec)));
+    Ok(lines)
+}
+
+// ------------------------------------------------------------ email.header
+
+// One match of header.py's ecre, =?charset?q-or-b?encoded?=, at or after
+// `from`: (start, end, charset, encoding, encoded).
+fn ecre_find(v: ref Vec[char], from: i64) -> Option[(i64, i64, String, String, String)] {
+    let mut i = from;
+    while i + 1 < v.len() {
+        if v[i] == '=' and v[i + 1] == '?' {
+            let mut q = i + 2;
+            while q < v.len() and v[q] != '?' {
+                q += 1;
+            }
+            if q + 2 < v.len() and has_char("qQbB", v[q + 1]) and v[q + 2] == '?' {
+                let start = q + 3;
+                let mut e = start;
+                while e + 1 < v.len() and not (v[e] == '?' and v[e + 1] == '=') {
+                    e += 1;
+                }
+                if e + 1 < v.len() {
+                    let cs = text(slice(v, i + 2, q));
+                    let enc = text(slice(v, q + 1, q + 2));
+                    let body = text(slice(v, start, e));
+                    return Some((i, e + 2, cs, enc, body));
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+#[derive(Clone)]
+enum Word {
+    Text(String),
+    Data(Vec[u8]),
+}
+
+fn word_bytes(w: ref Word) -> Vec[u8] {
+    match w {
+        Word.Text(s) => raw_unicode_escape(s),
+        Word.Data(b) => b.clone(),
+    }
+}
+
+// decode_header for a string: Err for HeaderParseError. A header with no
+// encoded word comes back whole, as the one Text chunk.
+fn decode_header(header: ref String) -> Result[Vec[(Word, Option[String])], String] {
+    if ecre_find(chars(header), 0).is_none() {
+        return Ok(vec![(Word.Text(header.clone()), None)]);
+    }
+    // (text, encoding or "", charset)
+    let mut words: Vec[(String, String, String)] = Vec.new();
+    for line in splitlines(header) {
+        let v = chars(line);
+        let mut pos = 0;
+        let mut first = true;
+        loop {
+            let found = ecre_find(v, pos);
+            let end = match found.clone() {
+                Some((s, _, _, _, _)) => s,
+                None => v.len(),
+            };
+            let mut unencoded = text(slice(v, pos, end));
+            if first {
+                unencoded = py_lstrip(unencoded);
+                first = false;
+            }
+            if not unencoded.is_empty() {
+                words.push((unencoded, String.new(), String.new()));
+            }
+            match found {
+                Some((_, e, cs, enc, body)) => {
+                    words.push((body, enc.to_lowercase(), cs.to_lowercase()));
+                    pos = e;
+                }
+                None => break,
+            }
+        }
+    }
+    let mut drop: Vec[i64] = Vec.new();
+    for n in 0..words.len() {
+        if n > 1 and not words[n].1.is_empty() and not words[n - 2].1.is_empty() and py_isspace(words[n - 1].0) {
+            drop.push(n - 1);
+        }
+    }
+    let mut kept: Vec[(String, String, String)] = Vec.new();
+    for n in 0..words.len() {
+        let mut dropped = false;
+        for d in drop.iter() {
+            if *d == n {
+                dropped = true;
+            }
+        }
+        if not dropped {
+            kept.push(words[n].clone());
+        }
+    }
+    let mut decoded: Vec[(Word, Option[String])] = Vec.new();
+    for (s, enc, cs) in kept.iter() {
+        if enc.is_empty() {
+            decoded.push((Word.Text(s.clone()), None));
+        } else if enc == "q" {
+            decoded.push((Word.Text(q_header_decode(s)), Some(cs.clone())));
+        } else {
+            let mut padded = s.clone();
+            let paderr = width(s) % 4;
+            if paderr != 0 {
+                for _ in 0..(4 - paderr) {
+                    padded.push('=');
+                }
+            }
+            match a2b_base64(raw_unicode_escape(padded)) {
+                Some(b) => decoded.push((Word.Data(b), Some(cs.clone()))),
+                None => return Err("HeaderParseError: Base64 decoding error".to_string()),
+            }
+        }
+    }
+    let mut collapsed: Vec[(Word, Option[String])] = Vec.new();
+    let mut last: Option[Vec[u8]] = None;
+    let mut last_cs: Option[String] = None;
+    for (w, cs) in decoded.iter() {
+        let b = word_bytes(w);
+        match last.clone() {
+            None => {
+                last = Some(b);
+                last_cs = cs.clone();
+            }
+            Some(lw) => {
+                if *cs != last_cs {
+                    collapsed.push((Word.Data(lw), last_cs.clone()));
+                    last = Some(b);
+                    last_cs = cs.clone();
+                } else if last_cs.is_none() {
+                    let mut j = lw.clone();
+                    j.push(b' ');
+                    for x in b.iter() {
+                        j.push(*x);
+                    }
+                    last = Some(j);
+                } else {
+                    let mut j = lw.clone();
+                    for x in b.iter() {
+                        j.push(*x);
+                    }
+                    last = Some(j);
+                }
+            }
+        }
+    }
+    collapsed.push((Word.Data(last.unwrap_or(Vec.new())), last_cs));
+    Ok(collapsed)
+}
+
+fn decoded_repr(d: ref Vec[(Word, Option[String])]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    for (w, cs) in d.iter() {
+        let first = match w {
+            Word.Text(s) => repr_str(s),
+            Word.Data(b) => repr_bytes(b),
+        };
+        items.push(f"({first}, {opt_repr(cs)})");
+    }
+    f"[{items.join(", ")}]"
+}
+
+struct Header {
+    charset: Charset,
+    continuation_ws: String,
+    chunks: Vec[(String, Option[Charset])],
+    maxlinelen: i64,
+    headerlen: i64,
+}
+
+fn new_header(charset: ref Option[String], maxlinelen: i64, header_name: ref Option[String], continuation_ws: ref String) -> Header {
+    let cs = match charset {
+        Some(n) => new_charset(n),
+        None => new_charset("us-ascii".to_string()),
+    };
+    let headerlen = match header_name {
+        Some(n) => width(n) + 2,
+        None => 0,
+    };
+    Header { charset: cs, continuation_ws: continuation_ws.clone(), chunks: Vec.new(), maxlinelen: maxlinelen, headerlen: headerlen }
+}
+
+// ctext's complement: whitespace and the three characters a comment cannot
+// hold.
+fn nonctext(c: char) -> bool {
+    py_space(c) or c == '(' or c == ')' or c == '\\'
+}
+
+impl Header {
+    fn append(mut ref self, w: ref Word, charset: ref Option[Charset]) -> Result[(), String] {
+        let mut cs = match charset {
+            Some(c) => c.clone(),
+            None => self.charset.clone(),
+        };
+        let s = match w {
+            Word.Text(t) => t.clone(),
+            Word.Data(b) => {
+                let input = match cs.input_codec.clone() {
+                    Some(n) if not n.is_empty() => n,
+                    _ => "us-ascii".to_string(),
+                };
+                decode_bytes(b, lookup_codec(input)?, false)?
+            }
+        };
+        let output = output_codec_name(cs);
+        if let Err(e) = encode_named(s, output) {
+            if output != "us-ascii" or not e.starts_with("UnicodeEncodeError") {
+                return Err(e);
+            }
+            cs = new_charset("utf-8".to_string());
+        }
+        self.chunks.push((s, Some(cs)));
+        Ok(())
+    }
+
+    fn normalize(mut ref self) {
+        let mut chunks: Vec[(String, Option[Charset])] = Vec.new();
+        let mut last_cs: Option[Charset] = None;
+        let mut last: Vec[String] = Vec.new();
+        for (s, cs) in self.chunks.iter() {
+            if cs_eq(cs, last_cs) {
+                last.push(s.clone());
+            } else {
+                if last_cs.is_some() {
+                    chunks.push((last.join(" "), last_cs.clone()));
+                }
+                last = vec![s.clone()];
+                last_cs = cs.clone();
+            }
+        }
+        if not last.is_empty() {
+            chunks.push((last.join(" "), last_cs));
+        }
+        self.chunks = chunks;
+    }
+
+    fn text(mut ref self) -> String {
+        self.normalize();
+        let mut out = String.new();
+        let mut started = false;
+        let mut lastcs: Option[Charset] = None;
+        let mut lastspace = false;
+        for (s, cs) in self.chunks.iter() {
+            let mut nextcs = cs.clone();
+            if started {
+                let hasspace = not s.is_empty() and nonctext(first_char(s));
+                if not cs_plain(lastcs) {
+                    if cs_plain(nextcs) and not hasspace {
+                        out.push(' ');
+                        nextcs = None;
+                    }
+                } else if not cs_plain(nextcs) and not lastspace {
+                    out.push(' ');
+                }
+            }
+            lastspace = not s.is_empty() and nonctext(last_char(s));
+            lastcs = nextcs;
+            out.push_str(s);
+            started = true;
+        }
+        out
+    }
+
+    fn encode(mut ref self, splitchars: ref String, maxlinelen: ref Option[i64], linesep: ref String) -> Result[String, String] {
+        self.normalize();
+        let mut maxlen = match maxlinelen {
+            Some(n) => *n,
+            None => self.maxlinelen,
+        };
+        if maxlen == 0 {
+            maxlen = 1000000;
+        }
+        let mut f = ValueFormatter {
+            maxlen: maxlen,
+            continuation_ws: self.continuation_ws.clone(),
+            splitchars: splitchars.clone(),
+            lines: Vec.new(),
+            current: Accumulator { parts: Vec.new(), initial_size: self.headerlen },
+        };
+        let mut lastcs: Option[Charset] = None;
+        let mut started = false;
+        let mut lastspace = false;
+        for (s, cs) in self.chunks.iter() {
+            let charset = cs.clone().unwrap_or(new_charset("us-ascii".to_string()));
+            if started {
+                let hasspace = not s.is_empty() and nonctext(first_char(s));
+                if not cs_plain(lastcs) {
+                    if not hasspace or not cs_plain(cs) {
+                        f.add_transition();
+                    }
+                } else if not cs_plain(cs) and not lastspace {
+                    f.add_transition();
+                }
+            }
+            lastspace = not s.is_empty() and nonctext(last_char(s));
+            lastcs = cs.clone();
+            started = true;
+            let lines = splitlines(s);
+            if lines.is_empty() {
+                f.feed("", "", charset)?;
+            } else {
+                f.feed("", lines[0], charset)?;
+            }
+            for k in 1..lines.len() {
+                f.newline();
+                if charset.header_encoding != 0 {
+                    f.feed(self.continuation_ws.clone(), f" {py_lstrip(lines[k])}", charset)?;
+                } else {
+                    let sline = py_lstrip(lines[k]);
+                    let v = chars(lines[k]);
+                    let fws = text(slice(v, 0, v.len() - width(sline)));
+                    f.feed(fws, sline, charset)?;
+                }
+            }
+            if lines.len() > 1 {
+                f.newline();
+            }
+        }
+        if not self.chunks.is_empty() {
+            f.add_transition();
+        }
+        let value = f.finish(linesep);
+        if embedded_header(value) {
+            return Err(f"HeaderParseError: header value appears to contain an embedded header: {repr_str(value)}");
+        }
+        Ok(value)
+    }
+}
+
+// _embedded_header.search(value): a line break, then a field name and ":".
+fn embedded_header(value: ref String) -> bool {
+    let v = chars(value);
+    for i in 0..v.len() {
+        if v[i] == '\n' {
+            let mut j = i + 1;
+            while j < v.len() and v[j] != ' ' and v[j] != '\t' {
+                if v[j] == ':' and j > i + 1 {
+                    return true;
+                }
+                j += 1;
+            }
+        }
+    }
+    false
+}
+
+#[derive(Clone)]
+struct Accumulator {
+    parts: Vec[(String, String)],
+    initial_size: i64,
+}
+
+impl Accumulator {
+    fn push(mut ref self, fws: ref String, s: ref String) {
+        self.parts.push((fws.clone(), s.clone()));
+    }
+
+    fn pop(mut ref self) -> (String, String) {
+        match self.parts.pop() {
+            Some(p) => p,
+            None => (String.new(), String.new()),
+        }
+    }
+
+    fn pop_from(mut ref self, i: i64) -> Vec[(String, String)] {
+        let mut tail: Vec[(String, String)] = Vec.new();
+        for k in i..self.parts.len() {
+            tail.push(self.parts[k].clone());
+        }
+        while self.parts.len() > i {
+            self.parts.pop();
+        }
+        tail
+    }
+
+    fn len(ref self) -> i64 {
+        let mut n = self.initial_size;
+        for (f, s) in self.parts.iter() {
+            n += width(f) + width(s);
+        }
+        n
+    }
+
+    fn text(ref self) -> String {
+        let mut out = String.new();
+        for (f, s) in self.parts.iter() {
+            out.push_str(f);
+            out.push_str(s);
+        }
+        out
+    }
+
+    fn reset(mut ref self, start: own Vec[(String, String)]) {
+        self.parts = start;
+        self.initial_size = 0;
+    }
+
+    fn is_onlyws(ref self) -> bool {
+        self.initial_size == 0 and (self.parts.is_empty() or py_isspace(self.text()))
+    }
+}
+
+struct ValueFormatter {
+    maxlen: i64,
+    continuation_ws: String,
+    splitchars: String,
+    lines: Vec[String],
+    current: Accumulator,
+}
+
+impl ValueFormatter {
+    fn finish(mut ref self, linesep: ref String) -> String {
+        self.newline();
+        // Workaround (B-2026-10-19-5): join refuses a Str separator.
+        self.lines.join(linesep.clone())
+    }
+
+    fn newline(mut ref self) {
+        let end = self.current.pop();
+        if not (end.0 == " " and end.1.is_empty()) {
+            self.current.push(end.0, end.1);
+        }
+        if self.current.len() > 0 {
+            if self.current.is_onlyws() and not self.lines.is_empty() {
+                let k = self.lines.len() - 1;
+                self.lines[k] = f"{self.lines[k]}{self.current.text()}";
+            } else {
+                self.lines.push(self.current.text());
+            }
+        }
+        self.current.reset(Vec.new());
+    }
+
+    fn add_transition(mut ref self) {
+        self.current.push(" ".to_string(), String.new());
+    }
+
+    fn feed(mut ref self, fws: ref String, s: ref String, charset: ref Charset) -> Result[(), String] {
+        if charset.header_encoding == 0 {
+            self.ascii_split(fws, s);
+            return Ok(());
+        }
+        let first = self.maxlen - self.current.len();
+        let rest = self.maxlen - width(self.continuation_ws);
+        let mut lines = header_encode_lines(charset, s, first, rest)?;
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let first_line = lines.remove(0);
+        if let Some(l) = first_line {
+            self.append_chunk(fws, l);
+        }
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let last = lines.pop().unwrap_or(None).unwrap_or(String.new());
+        self.newline();
+        self.current.push(self.continuation_ws.clone(), last);
+        for l in lines.iter() {
+            self.lines.push(f"{self.continuation_ws}{l.clone().unwrap_or(String.new())}");
+        }
+        Ok(())
+    }
+
+    // re.split("([ \t]+)", fws + string), paired up as (fws, part).
+    fn ascii_split(mut ref self, fws: ref String, s: ref String) {
+        let all = chars(f"{fws}{s}");
+        let mut parts: Vec[String] = Vec.new();
+        let mut cur = String.new();
+        let mut i = 0;
+        while i < all.len() {
+            if all[i] == ' ' or all[i] == '\t' {
+                parts.push(cur);
+                cur = String.new();
+                let mut sep = String.new();
+                while i < all.len() and (all[i] == ' ' or all[i] == '\t') {
+                    sep.push(all[i]);
+                    i += 1;
+                }
+                parts.push(sep);
+            } else {
+                cur.push(all[i]);
+                i += 1;
+            }
+        }
+        parts.push(cur);
+        if not parts[0].is_empty() {
+            parts.insert(0, String.new());
+        } else {
+            parts.remove(0);
+        }
+        let mut k = 0;
+        while k + 1 < parts.len() {
+            self.append_chunk(parts[k], parts[k + 1]);
+            k += 2;
+        }
+    }
+
+    fn append_chunk(mut ref self, fws: ref String, s: ref String) {
+        self.current.push(fws, s);
+        if self.current.len() <= self.maxlen {
+            return;
+        }
+        let mut split_at = -1;
+        for ch in self.splitchars.chars() {
+            let mut i = self.current.parts.len() - 1;
+            while i > 0 {
+                if py_space(ch) {
+                    let f = self.current.parts[i].0.clone();
+                    if not f.is_empty() and first_char(f) == ch {
+                        break;
+                    }
+                }
+                let prev = self.current.parts[i - 1].1.clone();
+                if not prev.is_empty() and last_char(prev) == ch {
+                    break;
+                }
+                i -= 1;
+            }
+            if i > 0 {
+                split_at = i;
+                break;
+            }
+        }
+        if split_at < 0 {
+            let (f, part) = self.current.pop();
+            let mut f = f;
+            if self.current.initial_size > 0 {
+                self.newline();
+                if f.is_empty() {
+                    f = " ".to_string();
+                }
+            }
+            self.current.push(f, part);
+            return;
+        }
+        let remainder = self.current.pop_from(split_at);
+        self.lines.push(self.current.text());
+        self.current.reset(remainder);
+    }
+}
+
+// make_header(decode_header(s))
+fn make_header(seq: ref Vec[(Word, Option[String])]) -> Result[Header, String] {
+    let mut h = new_header(None, 78, None, " ".to_string());
+    for (w, cs) in seq.iter() {
+        let charset = match cs {
+            Some(n) => Some(new_charset(n)),
+            None => None,
+        };
+        h.append(w, charset)?;
+    }
+    Ok(h)
+}
+
+fn header_str(s: ref String) -> Result[String, String] {
+    let mut h = make_header(decode_header(s)?)?;
+    Ok(h.text())
+}
+
+// ------------------------------------------------------------ email._parseaddr
+
+// _parseaddr.quote: backslashes and double quotes become quoted pairs.
+fn quote(s: ref String) -> String {
+    s.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
+fn specials() -> Str {
+    "()<>@,:;.\"[]"
+}
+
+fn is_atomend(c: char) -> bool {
+    has_char(specials(), c) or c == ' ' or c == '\t' or c == '\r' or c == '\n'
+}
+
+fn is_phraseend(c: char) -> bool {
+    c != '.' and is_atomend(c)
+}
+
+// AddrlistClass, the address-list parser email.utils still runs.
+struct AddrParser {
+    field: Vec[char],
+    pos: i64,
+    commentlist: Vec[String],
+}
+
+fn new_addr_parser(field: ref String) -> AddrParser {
+    AddrParser { field: chars(field), pos: 0, commentlist: Vec.new() }
+}
+
+impl AddrParser {
+    fn at(ref self) -> char {
+        self.field[self.pos]
+    }
+
+    fn more(ref self) -> bool {
+        self.pos < self.field.len()
+    }
+
+    // Skips white space and collects comments; returns the spaces and tabs.
+    fn gotonext(mut ref self) -> String {
+        let mut ws = String.new();
+        while self.more() {
+            let c = self.at();
+            if c == ' ' or c == '\t' or c == '\n' or c == '\r' {
+                if c != '\n' and c != '\r' {
+                    ws.push(c);
+                }
+                self.pos += 1;
+            } else if c == '(' {
+                let comment = self.getcomment();
+                self.commentlist.push(comment);
+            } else {
+                break;
+            }
+        }
+        ws
+    }
+
+    fn getaddrlist(mut ref self) -> Vec[(String, String)] {
+        let mut result: Vec[(String, String)] = Vec.new();
+        while self.more() {
+            let ad = self.getaddress();
+            if ad.is_empty() {
+                result.push((String.new(), String.new()));
+            } else {
+                for a in ad.into_iter() {
+                    result.push(a);
+                }
+            }
+        }
+        result
+    }
+
+    fn getaddress(mut ref self) -> Vec[(String, String)] {
+        self.commentlist = Vec.new();
+        self.gotonext();
+        let oldpos = self.pos;
+        let oldcl = self.commentlist.clone();
+        let plist = self.getphraselist();
+        self.gotonext();
+        let mut returnlist: Vec[(String, String)] = Vec.new();
+        if not self.more() {
+            if not plist.is_empty() {
+                returnlist = vec![(self.commentlist.join(" "), plist[0].clone())];
+            }
+        } else if self.at() == '.' or self.at() == '@' {
+            self.pos = oldpos;
+            self.commentlist = oldcl;
+            let addrspec = self.getaddrspec();
+            returnlist = vec![(self.commentlist.join(" "), addrspec)];
+        } else if self.at() == ':' {
+            let fieldlen = self.field.len();
+            self.pos += 1;
+            while self.more() {
+                self.gotonext();
+                if self.pos < fieldlen and self.at() == ';' {
+                    self.pos += 1;
+                    break;
+                }
+                for a in self.getaddress().into_iter() {
+                    returnlist.push(a);
+                }
+            }
+        } else if self.at() == '<' {
+            let routeaddr = self.getrouteaddr();
+            if not self.commentlist.is_empty() {
+                returnlist = vec![(f"{plist.join(" ")} ({self.commentlist.join(" ")})", routeaddr)];
+            } else {
+                returnlist = vec![(plist.join(" "), routeaddr)];
+            }
+        } else if not plist.is_empty() {
+            returnlist = vec![(self.commentlist.join(" "), plist[0].clone())];
+        } else if has_char(specials(), self.at()) {
+            self.pos += 1;
+        }
+        self.gotonext();
+        if self.more() and self.at() == ',' {
+            self.pos += 1;
+        }
+        returnlist
+    }
+
+    fn getrouteaddr(mut ref self) -> String {
+        let mut expectroute = false;
+        self.pos += 1;
+        self.gotonext();
+        let mut adlist = String.new();
+        while self.more() {
+            if expectroute {
+                self.getdomain();
+                expectroute = false;
+            } else if self.at() == '>' {
+                self.pos += 1;
+                break;
+            } else if self.at() == '@' {
+                self.pos += 1;
+                expectroute = true;
+            } else if self.at() == ':' {
+                self.pos += 1;
+            } else {
+                adlist = self.getaddrspec();
+                self.pos += 1;
+                break;
+            }
+            self.gotonext();
+        }
+        adlist
+    }
+
+    fn getaddrspec(mut ref self) -> String {
+        let mut aslist: Vec[String] = Vec.new();
+        self.gotonext();
+        while self.more() {
+            let mut preserve_ws = true;
+            let c = self.at();
+            if c == '.' {
+                if not aslist.is_empty() and py_strip(aslist[aslist.len() - 1]).is_empty() {
+                    aslist.pop();
+                }
+                aslist.push(".".to_string());
+                self.pos += 1;
+                preserve_ws = false;
+            } else if c == '"' {
+                let q = self.getquote();
+                aslist.push(f"\"{quote(q)}\"");
+            } else if is_atomend(c) {
+                if not aslist.is_empty() and py_strip(aslist[aslist.len() - 1]).is_empty() {
+                    aslist.pop();
+                }
+                break;
+            } else {
+                let a = self.getatom(false);
+                aslist.push(a);
+            }
+            let ws = self.gotonext();
+            if preserve_ws and not ws.is_empty() {
+                aslist.push(ws);
+            }
+        }
+        if not self.more() or self.at() != '@' {
+            return aslist.join("");
+        }
+        aslist.push("@".to_string());
+        self.pos += 1;
+        self.gotonext();
+        let domain = self.getdomain();
+        if domain.is_empty() {
+            return String.new();
+        }
+        f"{aslist.join("")}{domain}"
+    }
+
+    fn getdomain(mut ref self) -> String {
+        let mut sdlist: Vec[String] = Vec.new();
+        while self.more() {
+            let c = self.at();
+            if c == ' ' or c == '\t' {
+                self.pos += 1;
+            } else if c == '(' {
+                let comment = self.getcomment();
+                self.commentlist.push(comment);
+            } else if c == '[' {
+                let lit = self.getdelimited('[', "]\r", false);
+                sdlist.push(f"[{lit}]");
+            } else if c == '.' {
+                self.pos += 1;
+                sdlist.push(".".to_string());
+            } else if c == '@' {
+                return String.new();
+            } else if is_atomend(c) {
+                break;
+            } else {
+                let a = self.getatom(false);
+                sdlist.push(a);
+            }
+        }
+        sdlist.join("")
+    }
+
+    fn getdelimited(mut ref self, begin: char, endchars: Str, allowcomments: bool) -> String {
+        if self.at() != begin {
+            return String.new();
+        }
+        let mut out = String.new();
+        let mut quoted = false;
+        self.pos += 1;
+        while self.more() {
+            let c = self.at();
+            if quoted {
+                out.push(c);
+                quoted = false;
+            } else if has_char(endchars, c) {
+                self.pos += 1;
+                break;
+            } else if allowcomments and c == '(' {
+                let comment = self.getcomment();
+                out.push_str(comment);
+                continue;
+            } else if c == '\\' {
+                quoted = true;
+            } else {
+                out.push(c);
+            }
+            self.pos += 1;
+        }
+        out
+    }
+
+    fn getquote(mut ref self) -> String {
+        self.getdelimited('"', "\"\r", false)
+    }
+
+    fn getcomment(mut ref self) -> String {
+        self.getdelimited('(', ")\r", true)
+    }
+
+    fn getatom(mut ref self, phrase: bool) -> String {
+        let mut out = String.new();
+        while self.more() {
+            let c = self.at();
+            if (phrase and is_phraseend(c)) or (not phrase and is_atomend(c)) {
+                break;
+            }
+            out.push(c);
+            self.pos += 1;
+        }
+        out
+    }
+
+    fn getphraselist(mut ref self) -> Vec[String] {
+        let mut plist: Vec[String] = Vec.new();
+        while self.more() {
+            let c = self.at();
+            if c == ' ' or c == '\t' or c == '\r' or c == '\n' {
+                self.pos += 1;
+            } else if c == '"' {
+                let q = self.getquote();
+                plist.push(q);
+            } else if c == '(' {
+                let comment = self.getcomment();
+                self.commentlist.push(comment);
+            } else if is_phraseend(c) {
+                break;
+            } else {
+                let a = self.getatom(true);
+                plist.push(a);
+            }
+        }
+        plist
+    }
+}
+
+// AddressList(field).addresslist
+fn address_list(field: ref String) -> Vec[(String, String)] {
+    if field.is_empty() {
+        return Vec.new();
+    }
+    let mut p = new_addr_parser(field);
+    p.getaddrlist()
+}
+
+// ------------------------------------------------------------ email.utils: addresses
+
+// _iter_escaped_chars: (position, character) with a backslash kept on the
+// character it escapes.
+fn iter_escaped_chars(addr: ref String) -> Vec[(i64, String)] {
+    let v = chars(addr);
+    let mut out: Vec[(i64, String)] = Vec.new();
+    let mut escape = false;
+    let mut pos = 0;
+    for k in 0..v.len() {
+        pos = k;
+        if escape {
+            out.push((k, f"\\{v[k]}"));
+            escape = false;
+        } else if v[k] == '\\' {
+            escape = true;
+        } else {
+            out.push((k, v[k].to_string()));
+        }
+    }
+    if escape {
+        out.push((pos, "\\".to_string()));
+    }
+    out
+}
+
+fn strip_quoted_realnames(addr: ref String) -> String {
+    if not addr.contains("\"") {
+        return addr.clone();
+    }
+    let v = chars(addr);
+    let mut start = 0;
+    let mut open = -1;
+    let mut result = String.new();
+    for (pos, ch) in iter_escaped_chars(addr) {
+        if ch == "\"" {
+            if open < 0 {
+                open = pos;
+            } else {
+                if start != open {
+                    result.push_str(text(slice(v, start, open)));
+                }
+                start = pos + 1;
+                open = -1;
+            }
+        }
+    }
+    if start < v.len() {
+        result.push_str(text(slice(v, start, v.len())));
+    }
+    result
+}
+
+fn check_parenthesis(addr: ref String) -> bool {
+    let a = strip_quoted_realnames(addr);
+    let mut opens = 0;
+    for (_, ch) in iter_escaped_chars(a) {
+        if ch == "(" {
+            opens += 1;
+        } else if ch == ")" {
+            opens -= 1;
+            if opens < 0 {
+                return false;
+            }
+        }
+    }
+    opens == 0
+}
+
+fn pre_parse_validation(values: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for v in values.iter() {
+        if check_parenthesis(v) {
+            out.push(v.clone());
+        } else {
+            out.push("('', '')".to_string());
+        }
+    }
+    out
+}
+
+fn post_parse_validation(pairs: own Vec[(String, String)]) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    for (n, a) in pairs.into_iter() {
+        if a.contains("[") {
+            out.push((String.new(), String.new()));
+        } else {
+            out.push((n, a));
+        }
+    }
+    out
+}
+
+fn empty_pair() -> (String, String) {
+    (String.new(), String.new())
+}
+
+fn parseaddr(addr: ref String, strict: bool) -> (String, String) {
+    if not strict {
+        let addrs = address_list(addr);
+        if addrs.is_empty() {
+            return empty_pair();
+        }
+        return addrs[0].clone();
+    }
+    let checked = pre_parse_validation(vec![addr.clone()]);
+    let addrs = post_parse_validation(address_list(checked[0]));
+    if addrs.len() != 1 {
+        return empty_pair();
+    }
+    addrs[0].clone()
+}
+
+fn getaddresses(values: ref Vec[String], strict: bool) -> Vec[(String, String)] {
+    if not strict {
+        return address_list(values.join(", "));
+    }
+    let checked = pre_parse_validation(values);
+    let result = post_parse_validation(address_list(checked.join(", ")));
+    let mut n = 0;
+    for v in checked.iter() {
+        n += 1 + count_of(strip_quoted_realnames(v), ',');
+    }
+    if result.len() != n {
+        return vec![empty_pair()];
+    }
+    result
+}
+
+fn pair_repr(p: ref (String, String)) -> String {
+    f"({repr_str(p.0)}, {repr_str(p.1)})"
+}
+
+fn pairs_repr(v: ref Vec[(String, String)]) -> String {
+    let items: Vec[String] = v.iter().map(|p| pair_repr(p)).collect();
+    f"[{items.join(", ")}]"
+}
+
+fn formataddr(name: ref String, address: ref String, charset: ref String) -> Result[String, String] {
+    encode_str(address, Codec.Ascii)?;
+    if name.is_empty() {
+        return Ok(address.clone());
+    }
+    if encode_str(name, Codec.Ascii).is_err() {
+        let encoded = header_encode(new_charset(charset), name)?;
+        return Ok(f"{encoded} <{address}>");
+    }
+    let mut quotes = "";
+    for c in name.chars() {
+        if has_char("[]\\()<>@,:;\".", c) {
+            quotes = "\"";
+        }
+    }
+    let mut escaped = String.new();
+    for c in name.chars() {
+        if c == '\\' or c == '"' {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    Ok(f"{quotes}{escaped}{quotes} <{address}>")
+}
+
+fn unquote(s: ref String) -> String {
+    let v = chars(s);
+    if v.len() > 1 {
+        if s.starts_with("\"") and s.ends_with("\"") {
+            return text(slice(v, 1, v.len() - 1)).replace("\\\\", "\\").replace("\\\"", "\"");
+        }
+        if s.starts_with("<") and s.ends_with(">") {
+            return text(slice(v, 1, v.len() - 1));
+        }
+    }
+    s.clone()
+}
+
+// ------------------------------------------------------------ email.utils: RFC 2231
+
+// decode_rfc2231: three parts, or None for the first two.
+fn decode_rfc2231(s: ref String) -> String {
+    let parts: Vec[Str] = s.splitn(3, "'").collect();
+    if parts.len() <= 2 {
+        return f"(None, None, {repr_str(s)})";
+    }
+    let items: Vec[String] = parts.iter().map(|p| repr_str(p.to_string())).collect();
+    f"[{items.join(", ")}]"
+}
+
+// urllib.parse.quote(s, safe="", encoding=charset or "ascii")
+fn quote_all(s: ref String, codec: ref Codec) -> Result[String, String] {
+    let b = encode_str(s, codec)?;
+    let mut out = String.new();
+    for x in b.iter() {
+        let c = *x;
+        if (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z') or (c >= b'0' and c <= b'9') or c == b'_'
+            or c == b'.' or c == b'-' or c == b'~' {
+            out.push(char.try_from(c as i64).unwrap_or('?'));
+        } else {
+            out.push_str(f"%{hex_digits(c as i64, 2).to_uppercase()}");
+        }
+    }
+    Ok(out)
+}
+
+fn encode_rfc2231(s: ref String, charset: ref Option[String], language: ref Option[String]) -> Result[String, String] {
+    let codec = match charset {
+        Some(c) => lookup_codec(c)?,
+        None => Codec.Ascii,
+    };
+    let q = quote_all(s, codec)?;
+    if charset.is_none() and language.is_none() {
+        return Ok(q);
+    }
+    let cs = match charset {
+        Some(c) => c.clone(),
+        None => "None".to_string(),
+    };
+    let lang = match language {
+        Some(l) => l.clone(),
+        None => String.new(),
+    };
+    Ok(f"{cs}'{lang}'{q}")
+}
+
+// collapse_rfc2231_value for a plain value, and for a (charset, language,
+// text) triple, decoded with errors="replace".
+fn collapse_rfc2231_value(triple: ref Option[(String, String, String)], plain: ref String) -> String {
+    match triple {
+        None => unquote(plain),
+        Some((cs, _, t)) => {
+            let raw = raw_unicode_escape(t);
+            match lookup_codec(cs) {
+                Ok(c) => decode_bytes(raw, c, true).unwrap_or(String.new()),
+                Err(_) => unquote(t),
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ dates
+
+fn month_names() -> Vec[String] {
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec", "january", "february",
+        "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+}
+
+fn month_index(m: ref String) -> i64 {
+    let names = month_names();
+    for k in 0..names.len() {
+        if names[k] == *m {
+            return k;
+        }
+    }
+    -1
+}
+
+fn is_dayname(d: ref String) -> bool {
+    let days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    for x in days.iter() {
+        if *x == *d {
+            return true;
+        }
+    }
+    false
+}
+
+fn zone_offset(tz: ref String) -> Option[i64] {
+    let zones = [("UT", 0), ("UTC", 0), ("GMT", 0), ("Z", 0), ("AST", -400), ("ADT", -300), ("EST", -500), ("EDT", -400),
+        ("CST", -600), ("CDT", -500), ("MST", -700), ("MDT", -600), ("PST", -800), ("PDT", -700)];
+    for (n, o) in zones.iter() {
+        if *n == *tz {
+            return Some(*o);
+        }
+    }
+    None
+}
+
+// int(s) for the decimal strings dates hold: a sign, then digits with
+// single underscores between them.
+fn py_int(s: ref String) -> Option[i64] {
+    let v = chars(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    if i >= v.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < v.len() {
+        if is_digit(v[i]) {
+            n = n * 10 + (v[i] as i64 - 48);
+            prev_digit = true;
+        } else if v[i] == '_' and prev_digit and i + 1 < v.len() and is_digit(v[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -n } else { n })
+}
+
+fn drop_last(s: ref String) -> String {
+    let v = chars(s);
+    text(slice(v, 0, v.len() - 1))
+}
+
+// _parsedate_tz: the nine time fields, and the zone offset in seconds
+// (None for "-0000").
+fn parsedate_tz_raw(data: ref String) -> Option[(Vec[i64], Option[i64])] {
+    if data.is_empty() {
+        return None;
+    }
+    let mut d = py_split(data);
+    if d.is_empty() {
+        return None;
+    }
+    if d[0].ends_with(",") or is_dayname(d[0].to_lowercase()) {
+        d.remove(0);
+    } else {
+        let v = chars(d[0]);
+        let mut i = v.len() - 1;
+        while i >= 0 and v[i] != ',' {
+            i -= 1;
+        }
+        if i >= 0 {
+            d[0] = text(slice(v, i + 1, v.len()));
+        }
+    }
+    if d.len() == 3 {
+        // Workaround (B-2026-10-19-6): the Vec[Str] borrow of d[0] would last
+        // to scope end, so build the owned split in its own block first.
+        let split_day: Vec[String] = {
+            let stuff: Vec[Str] = d[0].split("-").collect();
+            stuff.iter().map(|x| x.to_string()).collect()
+        };
+        if split_day.len() == 3 {
+            let mut nd = split_day;
+            nd.push(d[1].clone());
+            nd.push(d[2].clone());
+            d = nd;
+        }
+    }
+    if d.len() == 4 {
+        let s = d[3].clone();
+        let i = match s.find("+") {
+            Some(k) => k as i64,
+            None => match s.find("-") {
+                Some(k) => k as i64,
+                None => -1,
+            },
+        };
+        if i > 0 {
+            d[3] = s[..i].to_string();
+            d.push(s[i..].to_string());
+        } else {
+            d.push(String.new());
+        }
+    }
+    if d.len() < 5 {
+        return None;
+    }
+    let mut dd = d[0].clone();
+    let mut mm = d[1].clone();
+    let mut yy = d[2].clone();
+    let mut tm = d[3].clone();
+    let mut tz = d[4].clone();
+    if dd.is_empty() or mm.is_empty() or yy.is_empty() {
+        return None;
+    }
+    mm = mm.to_lowercase();
+    if month_index(mm) < 0 {
+        let t = mm.clone();
+        mm = dd.to_lowercase();
+        dd = t;
+        if month_index(mm) < 0 {
+            return None;
+        }
+    }
+    let mut month = month_index(mm) + 1;
+    if month > 12 {
+        month -= 12;
+    }
+    if last_char(dd) == ',' {
+        dd = drop_last(dd);
+    }
+    if let Some(i) = yy.find(":") {
+        if i > 0 {
+            let t = yy.clone();
+            yy = tm.clone();
+            tm = t;
+        }
+    }
+    if last_char(yy) == ',' {
+        yy = drop_last(yy);
+        if yy.is_empty() {
+            return None;
+        }
+    }
+    if not is_digit(first_char(yy)) {
+        let t = yy.clone();
+        yy = tz.clone();
+        tz = t;
+    }
+    if last_char(tm) == ',' {
+        tm = drop_last(tm);
+    }
+    let mut parts: Vec[String] = tm.split(":").map(|x| x.to_string()).collect();
+    if parts.len() == 1 and parts[0].contains(".") {
+        parts = parts[0].split(".").map(|x| x.to_string()).collect();
+        if parts.len() != 2 and parts.len() != 3 {
+            return None;
+        }
+    } else if parts.len() != 2 and parts.len() != 3 {
+        return None;
+    }
+    if parts.len() == 2 {
+        parts.push("0".to_string());
+    }
+    let year = py_int(yy);
+    let day = py_int(dd);
+    let hh = py_int(parts[0]);
+    let mi = py_int(parts[1]);
+    let ss = py_int(parts[2]);
+    if year.is_none() or day.is_none() or hh.is_none() or mi.is_none() or ss.is_none() {
+        return None;
+    }
+    let mut y = year.unwrap();
+    if y < 100 {
+        y += if y > 68 { 1900 } else { 2000 };
+    }
+    let up = tz.to_uppercase();
+    let mut offset = match zone_offset(up) {
+        Some(o) => Some(o),
+        None => {
+            let o = py_int(up);
+            if o == Some(0) and up.starts_with("-") { None } else { o }
+        }
+    };
+    if let Some(o) = offset {
+        if o != 0 {
+            let sign = if o < 0 { -1 } else { 1 };
+            let a = if o < 0 { -o } else { o };
+            offset = Some(sign * ((a / 100) * 3600 + (a % 100) * 60));
+        }
+    }
+    Some((vec![y, month, day.unwrap(), hh.unwrap(), mi.unwrap(), ss.unwrap(), 0, 1, -1], offset))
+}
+
+fn ints_repr(v: ref Vec[i64]) -> String {
+    let items: Vec[String] = v.iter().map(|x| f"{x}").collect();
+    f"({items.join(", ")})"
+}
+
+fn parsedate_tz_repr(data: ref String) -> String {
+    match parsedate_tz_raw(data) {
+        Some((t0, tz)) => {
+            let mut t = t0;
+            t.push(tz.unwrap_or(0));
+            ints_repr(t)
+        }
+        None => "None".to_string(),
+    }
+}
+
+fn parsedate_repr(data: ref String) -> String {
+    match parsedate_tz_raw(data) {
+        Some((t, _)) => ints_repr(t),
+        None => "None".to_string(),
+    }
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    let d = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if m == 2 and is_leap(y) { 29 } else { d[m - 1] }
+}
+
+// Days from 1970-01-01 to y-m-d (proleptic Gregorian).
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z0: i64) -> (i64, i64, i64) {
+    let z = z0 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn timedelta_repr(secs: i64) -> String {
+    let days = floor_div(secs, 86400);
+    let rest = secs - days * 86400;
+    let mut parts: Vec[String] = Vec.new();
+    if days != 0 {
+        parts.push(f"days={days}");
+    }
+    if rest != 0 {
+        parts.push(f"seconds={rest}");
+    }
+    if parts.is_empty() {
+        parts.push("0".to_string());
+    }
+    f"datetime.timedelta({parts.join(", ")})"
+}
+
+fn pad(n: i64, w: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < w {
+        s = f"0{s}";
+    }
+    s
+}
+
+// mktime_tz(parsedate_tz(data)), through calendar.timegm.
+fn mktime_tz(data: ref String) -> Result[String, String] {
+    let (t, tz) = match parsedate_tz_raw(data) {
+        Some(x) => x,
+        None => return Err("TypeError: 'NoneType' object is not subscriptable".to_string()),
+    };
+    if t[0] < 1 or t[0] > 9999 {
+        return Err(f"ValueError: year {t[0]} is out of range");
+    }
+    let days = days_from_civil(t[0], t[1], 1) + t[2] - 1;
+    let secs = ((days * 24 + t[3]) * 60 + t[4]) * 60 + t[5];
+    Ok(f"{secs - tz.unwrap_or(0)}")
+}
+
+// parsedate_to_datetime(data).isoformat()
+fn parsedate_to_datetime(data: ref String) -> Result[String, String] {
+    let (t, tz) = match parsedate_tz_raw(data) {
+        Some(x) => x,
+        None => return Err(f"ValueError: Invalid date value or format \"{data}\""),
+    };
+    if let Some(o) = tz {
+        if o <= -86400 or o >= 86400 {
+            return Err(f"ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not {timedelta_repr(o)}.");
+        }
+    }
+    if t[0] < 1 or t[0] > 9999 {
+        return Err(f"ValueError: year {t[0]} is out of range");
+    }
+    if t[1] < 1 or t[1] > 12 {
+        return Err("ValueError: month must be in 1..12".to_string());
+    }
+    if t[2] < 1 or t[2] > days_in_month(t[0], t[1]) {
+        return Err("ValueError: day is out of range for month".to_string());
+    }
+    if t[3] < 0 or t[3] > 23 {
+        return Err("ValueError: hour must be in 0..23".to_string());
+    }
+    if t[4] < 0 or t[4] > 59 {
+        return Err("ValueError: minute must be in 0..59".to_string());
+    }
+    if t[5] < 0 or t[5] > 59 {
+        return Err("ValueError: second must be in 0..59".to_string());
+    }
+    let base = f"{pad(t[0], 4)}-{pad(t[1], 2)}-{pad(t[2], 2)}T{pad(t[3], 2)}:{pad(t[4], 2)}:{pad(t[5], 2)}";
+    match tz {
+        None => Ok(base),
+        Some(o) => {
+            let sign = if o < 0 { "-" } else { "+" };
+            let a = if o < 0 { -o } else { o };
+            Ok(f"{base}{sign}{pad(a / 3600, 2)}:{pad((a % 3600) / 60, 2)}")
+        }
+    }
+}
+
+// The whole seconds of datetime.fromtimestamp(x): the fraction is rounded
+// half to even to microseconds first, as CPython does.
+fn timestamp_seconds(x: f64) -> i64 {
+    let mut ip = x.trunc();
+    let f = (x - ip) * 1000000.0;
+    let mut r = f.floor();
+    let diff = f - r;
+    if diff > 0.5 or (diff == 0.5 and (r / 2.0).floor() * 2.0 != r) {
+        r += 1.0;
+    }
+    if r >= 1000000.0 {
+        ip += 1.0;
+    } else if r < 0.0 {
+        ip -= 1.0;
+    }
+    ip as i64
+}
+
+// formatdate(timeval, usegmt=usegmt), in UTC.
+fn formatdate(secs: i64, usegmt: bool) -> String {
+    let days = floor_div(secs, 86400);
+    let rest = secs - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    let wd = floor_div(days + 3, 7);
+    let weekday = days + 3 - wd * 7;
+    let dn = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let zone = if usegmt { "GMT" } else { "-0000" };
+    f"{dn[weekday]}, {pad(d, 2)} {mn[m - 1]} {pad(y, 4)} {pad(rest / 3600, 2)}:{pad((rest % 3600) / 60, 2)}:{pad(rest % 60, 2)} {zone}"
+}
+
+// ------------------------------------------------------------ jobs
+
+fn arg_str(j: ref JValue, i: i64) -> String {
+    if let Some(JValue.List(items)) = get(j, "args") {
+        if i < items.len() {
+            if let JValue.Str(s) = items[i].clone() {
+                return s;
+            }
+        }
+    }
+    String.new()
+}
+
+fn arg(j: ref JValue, i: i64) -> JValue {
+    if let Some(JValue.List(items)) = get(j, "args") {
+        if i < items.len() {
+            return items[i].clone();
+        }
+    }
+    JValue.Null
+}
+
+fn kw(j: ref JValue, key: Str) -> Option[JValue] {
+    match get(j, "kw") {
+        Some(k) => get(k, key),
+        None => None,
+    }
+}
+
+fn opt_str(v: ref Option[JValue]) -> Option[String] {
+    match v {
+        Some(JValue.Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn flag(v: ref Option[JValue], default: bool) -> bool {
+    match v {
+        Some(JValue.Bool(b)) => *b,
+        _ => default,
+    }
+}
+
+fn strings(v: ref JValue) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let JValue.List(items) = v {
+        for it in items.iter() {
+            if let JValue.Str(s) = it {
+                out.push(s.clone());
+            }
+        }
+    }
+    out
+}
+
+fn header_job(init: ref JValue, enc: ref JValue) -> Result[String, String] {
+    let s = opt_str(get(init, "s"));
+    let charset = opt_str(get(init, "charset"));
+    let maxlinelen = match get(init, "maxlinelen") {
+        Some(JValue.Int(n)) => n,
+        _ => 78,
+    };
+    let ws = opt_str(get(init, "continuation_ws")).unwrap_or(" ".to_string());
+    let mut h = new_header(charset, maxlinelen, opt_str(get(init, "header_name")), ws);
+    if let Some(t) = s {
+        let cs = Some(h.charset.clone());
+        h.append(Word.Text(t), cs)?;
+    }
+    let splitchars = opt_str(get(enc, "splitchars")).unwrap_or(";, \t".to_string());
+    let linesep = opt_str(get(enc, "linesep")).unwrap_or("\n".to_string());
+    let max = match get(enc, "maxlinelen") {
+        Some(JValue.Int(n)) => Some(n),
+        _ => None,
+    };
+    let mut out = repr_str(h.text());
+    match h.encode(splitchars, max, linesep) {
+        Ok(v) => out = f"{out}\n  {repr_str(v)}",
+        Err(e) => out = f"{out}\n  {e}",
+    }
+    Ok(out)
+}
+
+fn header_parts_job(parts: ref JValue) -> Result[String, String] {
+    let mut h = new_header(None, 78, None, " ".to_string());
+    if let JValue.List(items) = parts {
+        for p in items.iter() {
+            if let JValue.List(pair) = p {
+                let s = match pair[0].clone() {
+                    JValue.Str(t) => t,
+                    _ => String.new(),
+                };
+                let cs = match pair[1].clone() {
+                    JValue.Str(n) => Some(new_charset(n)),
+                    _ => None,
+                };
+                h.append(Word.Text(s), cs)?;
+            }
+        }
+    }
+    let t = h.text();
+    let e = h.encode(";, \t".to_string(), None, "\n".to_string())?;
+    let mut items: Vec[String] = Vec.new();
+    for (s, cs) in h.chunks.iter() {
+        let name = match cs {
+            Some(c) => c.input_charset.clone(),
+            None => "None".to_string(),
+        };
+        items.push(f"({repr_bytes(encode_named(s, name)?)}, {repr_str(name)})");
+    }
+    Ok(f"{repr_str(t)}\n  {repr_str(e)}\n  [{items.join(", ")}]")
+}
+
+fn call(j: ref JValue) -> Result[String, String] {
+    let f = match get(j, "fn") {
+        Some(JValue.Str(s)) => s,
+        _ => String.new(),
+    };
+    let a0 = arg_str(j, 0);
+    if f == "parseaddr" {
+        return Ok(pair_repr(parseaddr(a0, flag(kw(j, "strict"), true))));
+    }
+    if f == "getaddresses" {
+        return Ok(pairs_repr(getaddresses(strings(arg(j, 0)), flag(kw(j, "strict"), true))));
+    }
+    if f == "formataddr" {
+        let pair = strings(arg(j, 0));
+        let cs = opt_str(kw(j, "charset")).unwrap_or("utf-8".to_string());
+        return Ok(repr_str(formataddr(pair[0], pair[1], cs)?));
+    }
+    if f == "quote" {
+        return Ok(repr_str(quote(a0)));
+    }
+    if f == "unquote" {
+        return Ok(repr_str(unquote(a0)));
+    }
+    if f == "parsedate_tz" {
+        return Ok(parsedate_tz_repr(a0));
+    }
+    if f == "parsedate" {
+        return Ok(parsedate_repr(a0));
+    }
+    if f == "parsedate_to_datetime" {
+        return parsedate_to_datetime(a0);
+    }
+    if f == "mktime_tz" {
+        return mktime_tz(a0);
+    }
+    if f == "formatdate" {
+        let secs = match arg(j, 0) {
+            JValue.Int(n) => n,
+            JValue.Float(x) => timestamp_seconds(x),
+            _ => 0,
+        };
+        return Ok(repr_str(formatdate(secs, flag(kw(j, "usegmt"), false))));
+    }
+    if f == "decode_rfc2231" {
+        return Ok(decode_rfc2231(a0));
+    }
+    if f == "encode_rfc2231" {
+        return Ok(repr_str(encode_rfc2231(a0, opt_str(kw(j, "charset")), opt_str(kw(j, "language")))?));
+    }
+    if f == "collapse_rfc2231_value" {
+        let v = arg(j, 0);
+        let triple = match v.clone() {
+            JValue.List(_) => {
+                let t = strings(v);
+                Some((t[0].clone(), t[1].clone(), t[2].clone()))
+            }
+            _ => None,
+        };
+        return Ok(repr_str(collapse_rfc2231_value(triple, a0)));
+    }
+    if f == "decode_header" {
+        return Ok(decoded_repr(decode_header(a0)?));
+    }
+    if f == "str_make_header" {
+        return Ok(repr_str(header_str(a0)?));
+    }
+    if f == "encode_make_header" {
+        let mut h = make_header(decode_header(a0)?)?;
+        return Ok(repr_str(h.encode(";, \t".to_string(), None, "\n".to_string())?));
+    }
+    if f == "header" {
+        let init = kw(j, "init").unwrap_or(JValue.Null);
+        let enc = kw(j, "encode").unwrap_or(JValue.Null);
+        return header_job(init, enc);
+    }
+    if f == "header_parts" {
+        return header_parts_job(arg(j, 0));
+    }
+    Err(f"AttributeError: no function {f}")
+}
+
+// ------------------------------------------------------------ the mailbox
+
+// A message's header fields in order, a folded line kept with its line
+// break as the file has it.
+fn headers_of(t: ref String) -> Vec[(String, String)] {
+    let all = t.replace("\r\n", "\n");
+    let head = match all.find("\n\n") {
+        Some(k) => all[..k].to_string(),
+        None => all.clone(),
+    };
+    let mut out: Vec[(String, String)] = Vec.new();
+    for line in head.split("\n") {
+        if (line.starts_with(" ") or line.starts_with("\t")) and not out.is_empty() {
+            let k = out.len() - 1;
+            out[k] = (out[k].0.clone(), f"{out[k].1}\n{line}");
+        } else if let Some((name, value)) = line.split_once(":") {
+            out.push((name.to_string(), lstrip_blank(value.to_string())));
+        }
+    }
+    out
+}
+
+// str.lstrip(" \t")
+fn lstrip_blank(s: ref String) -> String {
+    let v = chars(s);
+    let mut i = 0;
+    while i < v.len() and (v[i] == ' ' or v[i] == '\t') {
+        i += 1;
+    }
+    text(slice(v, i, v.len()))
+}
+
+fn header_value(hs: ref Vec[(String, String)], name: Str) -> Option[String] {
+    for (k, v) in hs.iter() {
+        if k.to_lowercase() == name.to_lowercase() {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn decoded(s: ref String) -> String {
+    match header_str(s) {
+        Ok(t) => repr_str(t),
+        Err(e) => e,
+    }
+}
+
+fn read_mailbox() -> Result[(), String] {
+    let mut names: Vec[String] = Vec.new();
+    match fs.read_dir("data/mail".to_string()) {
+        Ok(entries) => {
+            for e in entries.into_iter() {
+                names.push(e);
+            }
+        }
+        Err(e) => return Err(f"cannot list data/mail: {e}"),
+    }
+    names.sort();
+    let mut book_keys: Vec[String] = Vec.new();
+    let mut book_names: Vec[String] = Vec.new();
+    for f in names.iter() {
+        println(f"== mail/{f}");
+        let t = match fs.read_to_string(f"data/mail/{f}") {
+            Ok(t) => t,
+            Err(e) => return Err(f"cannot read {f}: {e}"),
+        };
+        let hs = headers_of(t);
+        let (name, addr) = parseaddr(header_value(hs, "From").unwrap_or(String.new()), true);
+        println(f"  from: {decoded(name)} {repr_str(addr)}");
+        let mut values: Vec[String] = Vec.new();
+        for (k, v) in hs.iter() {
+            let l = k.to_lowercase();
+            if l == "to" or l == "cc" {
+                values.push(v.clone());
+            }
+        }
+        let rcpts = getaddresses(values, true);
+        for (n, a) in rcpts.iter() {
+            println(f"  to: {decoded(n)} {repr_str(a)}");
+        }
+        let mut everyone: Vec[(String, String)] = vec![(name.clone(), addr.clone())];
+        for p in rcpts.iter() {
+            everyone.push(p.clone());
+        }
+        for (n, a) in everyone.iter() {
+            let key = a.to_lowercase();
+            if not a.is_empty() and not has(book_keys, key) {
+                book_keys.push(key);
+                book_names.push(n.clone());
+            }
+        }
+        let date = header_value(hs, "Date").unwrap_or(String.new());
+        match parsedate_to_datetime(date) {
+            Ok(d) => println(f"  date: {d}"),
+            Err(e) => println(f"  date: {e}"),
+        }
+        let mut ts: Option[i64] = None;
+        if parsedate_tz_raw(date).is_some() {
+            match mktime_tz(date) {
+                Ok(s) => {
+                    println(f"  utc: {s}");
+                    ts = i64.parse(s).ok();
+                }
+                Err(e) => println(f"  utc: {e}"),
+            }
+        }
+        let subject = header_value(hs, "Subject").unwrap_or(String.new());
+        println(f"  subject: {decoded(subject)}");
+        let text = header_str(subject).unwrap_or(subject.clone());
+        let reply = if text.to_lowercase().starts_with("re:") { text.clone() } else { f"Re: {text}" };
+        let to = match header_str(name) {
+            Ok(n) => match formataddr(n, addr, "utf-8".to_string()) {
+                Ok(t) => t,
+                Err(e) => e,
+            },
+            Err(e) => e,
+        };
+        println(f"  reply To: {to}");
+        let mut h = new_header(Some("utf-8".to_string()), 78, Some("Subject".to_string()), " ".to_string());
+        let cs = Some(h.charset.clone());
+        let enc = match h.append(Word.Text(reply), cs) {
+            Ok(()) => match h.encode(";, \t".to_string(), None, "\n".to_string()) {
+                Ok(v) => v,
+                Err(e) => e,
+            },
+            Err(e) => e,
+        };
+        println(f"  reply Subject: {enc.replace("\n", "\n  ")}");
+        if let Some(s) = ts {
+            println(f"  reply Date: {formatdate(s + 3600, true)}");
+        }
+    }
+    println("== address book");
+    let mut order: Vec[i64] = Vec.new();
+    for k in 0..book_keys.len() {
+        let mut at = order.len();
+        for m in 0..order.len() {
+            if book_keys[k] < book_keys[order[m]] {
+                at = m;
+                break;
+            }
+        }
+        order.insert(at, k);
+    }
+    for k in order.iter() {
+        println(f"  {book_keys[*k]} {decoded(book_names[*k])}");
+    }
+    Ok(())
+}
+
+fn has(v: ref Vec[String], s: ref String) -> bool {
+    for x in v.iter() {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------ data
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b: Vec[char] = s.chars().collect();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push((hex_value(b[i]) * 16 + hex_value(b[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.jsonl".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.jsonl: {e}");
+            return;
+        }
+    };
+    for line in jobs.lines() {
+        println(f"== {line}");
+        match parse_json(line.to_string()) {
+            Ok(j) => match call(j) {
+                Ok(s) => println(f"  {s}"),
+                Err(e) => println(f"  {e}"),
+            },
+            Err(e) => println(f"  bad job: {e}"),
+        }
+    }
+    if let Err(e) = read_mailbox() {
+        eprintln(e);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice@example.com\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice@example.com\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Alice <alice@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Alice <alice@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"Alice Smith\\\" <alice@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"Alice Smith\\\" <alice@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice@example.com (Alice Smith)\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice@example.com (Alice Smith)\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Alice Smith <alice@example.com> (work)\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Alice Smith <alice@example.com> (work)\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"<alice@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"<alice@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"Smith, Alice\\\" <alice@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"Smith, Alice\\\" <alice@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Smith, Alice <alice@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Smith, Alice <alice@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"a\\\\\\\"b\\\" <x@y.z>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"a\\\\\\\"b\\\" <x@y.z>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice@\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"alice@\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"@example.com\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"@example.com\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@b@c.example\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@b@c.example\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Trent <trent@[192.0.2.1]>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Trent <trent@[192.0.2.1]>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"user@[IPv6:2001:db8::1]\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"user@[IPv6:2001:db8::1]\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a.b.c@example.com\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a.b.c@example.com\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a . b @ example . com\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a . b @ example . com\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"a b\\\"@example.com\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"a b\\\"@example.com\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"José <jose@example.es>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"José <jose@example.es>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"=?utf-8?q?Jos=C3=A9?= <jose@example.es>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"=?utf-8?q?Jos=C3=A9?= <jose@example.es>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Group: a@x.y, b@x.y;\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Group: a@x.y, b@x.y;\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"undisclosed-recipients:;\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"undisclosed-recipients:;\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"(only a comment)\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"(only a comment)\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Bob (x(y)z) <bob@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Bob (x(y)z) <bob@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Bob (unclosed <bob@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Bob (unclosed <bob@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Bob ) <bob@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Bob ) <bob@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"   \"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"   \"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@x.y, b@x.y\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@x.y, b@x.y\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"<@route.example:a@x.y>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"<@route.example:a@x.y>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Joe <joe @ example . com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Joe <joe @ example . com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Name\\n <name@example.com>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Name\\n <name@example.com>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"quoted, comma\\\" <q@example.com>, other@example.com\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"quoted, comma\\\" <q@example.com>, other@example.com\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@x.y,,b@x.y\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@x.y,,b@x.y\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Al <al@x.y\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Al <al@x.y\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Al al@x.y>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Al al@x.y>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"unterminated <u@x.y>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"\\\"unterminated <u@x.y>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@x.y; b@x.y\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"a@x.y; b@x.y\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Mr. Smith <smith@x.y>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Mr. Smith <smith@x.y>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Dr. J. R. R. Tolkien <jrr@x.y>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parseaddr\", \"args\": [\"Dr. J. R. R. Tolkien <jrr@x.y>\"], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"alice@example.com, Bob <bob@example.com>\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"alice@example.com, Bob <bob@example.com>\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"alice@example.com\", \"Bob <bob@example.com>\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"alice@example.com\", \"Bob <bob@example.com>\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\\\"Smith, Alice\\\" <alice@example.com>\", \"carol@example.com\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\\\"Smith, Alice\\\" <alice@example.com>\", \"carol@example.com\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Smith, Alice <alice@example.com>\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Smith, Alice <alice@example.com>\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Group: a@x.y, b@x.y;\", \"c@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Group: a@x.y, b@x.y;\", \"c@x.y\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Bob (x <bob@example.com>\", \"c@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Bob (x <bob@example.com>\", \"c@x.y\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"a@b@c.example, d@e.f\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"a@b@c.example, d@e.f\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Trent <trent@[192.0.2.1]>, ok@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"Trent <trent@[192.0.2.1]>, ok@x.y\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\", \"a@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\", \"a@x.y\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"a@x.y,\", \"b@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"a@x.y,\", \"b@x.y\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"undisclosed-recipients:;\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"undisclosed-recipients:;\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\\\"a, b\\\" <c@d.e>, \\\"f, g\\\" <h@i.j>\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\\\"a, b\\\" <c@d.e>, \\\"f, g\\\" <h@i.j>\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\\\"a\\\\\\\", b\\\" <c@d.e>\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"getaddresses\", \"args\": [[\"\\\"a\\\\\\\", b\\\" <c@d.e>\"]], \"kw\": {\"strict\": false}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"\", \"a@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"Alice\", \"a@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"Smith, Alice\", \"a@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"Al \\\"the pal\\\"\", \"a@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"José\", \"j@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"José\", \"j@x.y\"]], \"kw\": {\"charset\": \"iso-8859-1\"}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"山田太郎\", \"y@x.jp\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"Zoë Ångström-Øster\", \"z@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"a\\\\b\", \"a@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"Ab\", \"jösé@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"€uro\", \"e@x.y\"]], \"kw\": {\"charset\": \"iso-8859-1\"}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"€uro\", \"e@x.y\"]], \"kw\": {\"charset\": \"iso-8859-15\"}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"€uro\", \"e@x.y\"]], \"kw\": {\"charset\": \"windows-1252\"}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxé\", \"e@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"éééééééé\", \"e@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"Dr. Who\", \"who@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"a@b\", \"c@d\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"[ops]\", \"o@x.y\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"José\", \"j@x.y\"]], \"kw\": {\"charset\": \"latin-1\"}}\n");
+    t.push_str("{\"fn\": \"formataddr\", \"args\": [[\"José\", \"j@x.y\"]], \"kw\": {\"charset\": \"koi8-zz\"}}\n");
+    t.push_str("{\"fn\": \"quote\", \"args\": [\"say \\\"hi\\\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"quote\", \"args\": [\"back\\\\slash\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"quote\", \"args\": [\"plain\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"quote\", \"args\": [\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"\\\"quoted\\\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"\\\"esc \\\\\\\"q\\\\\\\" \\\\\\\\ x\\\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"<angle>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"\\\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"<\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"\\\"half\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"<a>b>\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"unquote\", \"args\": [\"x\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Mon, 19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Mon, 19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Mon, 19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Mon, 19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Tue, 20 Oct 2026 14:05:59 +0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Tue, 20 Oct 2026 14:05:59 +0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Tue, 20 Oct 2026 14:05:59 +0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Tue, 20 Oct 2026 14:05:59 +0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"21 Oct 2026 08:00 +0900\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"21 Oct 2026 08:00 +0900\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"21 Oct 2026 08:00 +0900\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"21 Oct 2026 08:00 +0900\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Wed, 21 Oct 2026 23:59:60 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Wed, 21 Oct 2026 23:59:60 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Wed, 21 Oct 2026 23:59:60 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Wed, 21 Oct 2026 23:59:60 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Thu, 22 Oct 26 10:15:00 CEST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Thu, 22 Oct 26 10:15:00 CEST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Thu, 22 Oct 26 10:15:00 CEST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Thu, 22 Oct 26 10:15:00 CEST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Fri, 23 Oct 2026 07:00:00 -0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Fri, 23 Oct 2026 07:00:00 -0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Fri, 23 Oct 2026 07:00:00 -0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Fri, 23 Oct 2026 07:00:00 -0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Sat, 24 Oct 2026 12:00:00 EDT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Sat, 24 Oct 2026 12:00:00 EDT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Sat, 24 Oct 2026 12:00:00 EDT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Sat, 24 Oct 2026 12:00:00 EDT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Sunday, 25-Oct-26 06:30:00 GMT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Sunday, 25-Oct-26 06:30:00 GMT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Sunday, 25-Oct-26 06:30:00 GMT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Sunday, 25-Oct-26 06:30:00 GMT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Mon, 26 Oct 2026 25:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Mon, 26 Oct 2026 25:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Mon, 26 Oct 2026 25:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Mon, 26 Oct 2026 25:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"not a date\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"not a date\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"not a date\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"not a date\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"   \"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"   \"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"   \"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"   \"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Mon,19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Mon,19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Mon,19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Mon,19 Oct 2026 09:30:00 -0500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 October 2026 09:30:00 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 October 2026 09:30:00 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 October 2026 09:30:00 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 October 2026 09:30:00 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Oct 19 2026 09:30:00 PST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Oct 19 2026 09:30:00 PST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Oct 19 2026 09:30:00 PST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Oct 19 2026 09:30:00 PST\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09.30.15 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09.30.15 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09.30.15 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09.30.15 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09.30 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09.30 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09.30 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09.30 +0100\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 69 00:00 Z\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 69 00:00 Z\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 69 00:00 Z\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 69 00:00 Z\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 68 00:00 UT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 68 00:00 UT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 68 00:00 UT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 68 00:00 UT\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 9:5:7 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 9:5:7 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 9:5:7 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 9:5:7 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00+0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00+0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00+0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00+0200\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00-0730\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00-0730\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00-0730\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00-0730\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 +05:30\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 +05:30\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 +05:30\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 +05:30\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 +2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 +2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 +2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 +2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 -2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 -2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 -2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 -2500\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"32 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"32 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"32 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"32 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"29 Feb 2026 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"29 Feb 2026 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"29 Feb 2026 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"29 Feb 2026 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"29 Feb 2024 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"29 Feb 2024 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"29 Feb 2024 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"29 Feb 2024 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Foo 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Foo 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Foo 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Foo 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Oct 19, 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Oct 19, 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Oct 19, 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Oct 19, 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026, 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026, 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026, 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026, 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00, +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00, +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00, +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00, +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 +0000 (UTC)\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 +0000 (UTC)\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 +0000 (UTC)\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 +0000 (UTC)\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 0 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 0 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 0 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 0 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 10000 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 10000 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 10000 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 10000 00:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2_026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2_026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2_026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2_026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:61:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:61:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:61:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:61:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"Mon 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"Mon 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"Mon 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"Mon 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"monday, 19 oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"monday, 19 oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"monday, 19 oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"monday, 19 oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 MSK\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 MSK\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 MSK\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 MSK\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 -0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 -0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 -0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 -0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 +0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 +0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 +0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 +0\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00 +12345\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00 +12345\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00 +12345\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00 +12345\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19 Oct 2026 09:30:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19 Oct 2026 09:30:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19 Oct 2026 09:30:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19 Oct 2026 09:30:00:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"x, 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"x, 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"x, 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"x, 19 Oct 2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_tz\", \"args\": [\"19-Oct-2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate\", \"args\": [\"19-Oct-2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"parsedate_to_datetime\", \"args\": [\"19-Oct-2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"mktime_tz\", \"args\": [\"19-Oct-2026 09:30:00 +0000\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [0], \"kw\": {\"usegmt\": false}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [0], \"kw\": {\"usegmt\": true}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [1792414200], \"kw\": {\"usegmt\": false}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [1792414200], \"kw\": {\"usegmt\": true}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [1792414200.9999995], \"kw\": {\"usegmt\": false}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [1792414200.4999995], \"kw\": {\"usegmt\": true}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [-1], \"kw\": {\"usegmt\": false}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [-0.5], \"kw\": {\"usegmt\": true}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [951782400], \"kw\": {\"usegmt\": false}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [253402300799], \"kw\": {\"usegmt\": true}}\n");
+    t.push_str("{\"fn\": \"formatdate\", \"args\": [1000000000.0], \"kw\": {\"usegmt\": false}}\n");
+    t.push_str("{\"fn\": \"decode_rfc2231\", \"args\": [\"us-ascii'en'This%20is\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_rfc2231\", \"args\": [\"utf-8''%E2%82%AC%20rates\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_rfc2231\", \"args\": [\"no-ticks\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_rfc2231\", \"args\": [\"one'tick\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_rfc2231\", \"args\": [\"a'b'c'd\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_rfc2231\", \"args\": [\"''\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_rfc2231\", \"args\": [\"This is ~ fine\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_rfc2231\", \"args\": [\"€ rates\"], \"kw\": {\"charset\": \"utf-8\"}}\n");
+    t.push_str("{\"fn\": \"encode_rfc2231\", \"args\": [\"café\"], \"kw\": {\"charset\": \"iso-8859-1\", \"language\": \"fr\"}}\n");
+    t.push_str("{\"fn\": \"encode_rfc2231\", \"args\": [\"a/b c\"], \"kw\": {\"language\": \"en\"}}\n");
+    t.push_str("{\"fn\": \"encode_rfc2231\", \"args\": [\"€\"], \"kw\": {\"charset\": \"iso-8859-1\"}}\n");
+    t.push_str("{\"fn\": \"encode_rfc2231\", \"args\": [\"€\"], \"kw\": {\"charset\": \"ascii\"}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [\"plain\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [\"\\\"quoted\\\"\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [[\"utf-8\", \"\", \"%E2%82%AC\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [[\"iso-8859-1\", \"fr\", \"caf%E9\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [[\"\", \"\", \"abc\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [[\"utf-8\", \"\", \"\\\\xff\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [[\"no-such-codec\", \"\", \"\\\"x\\\"\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"collapse_rfc2231_value\", \"args\": [[\"us-ascii\", \"\", \"café\"]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"Plain subject\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"Plain subject\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"Plain subject\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?Jos=C3=A9?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?Jos=C3=A9?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?Jos=C3=A9?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?UTF-8?B?5bGx55Sw5aSq6YOO?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?UTF-8?B?5bGx55Sw5aSq6YOO?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?UTF-8?B?5bGx55Sw5aSq6YOO?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?a?= =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?a?= =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?a?= =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?a?=  \\t =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?a?=  \\t =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?a?=  \\t =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?a?= x =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?a?= x =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?a?= x =?utf-8?q?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"pre =?utf-8?q?mid?= post\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"pre =?utf-8?q?mid?= post\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"pre =?utf-8?q?mid?= post\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?iso-8859-1?q?caf=E9?= =?utf-8?q?_ok?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?iso-8859-1?q?caf=E9?= =?utf-8?q?_ok?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?iso-8859-1?q?caf=E9?= =?utf-8?q?_ok?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"  leading =?utf-8?q?x?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"  leading =?utf-8?q?x?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"  leading =?utf-8?q?x?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw==?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw==?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw==?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?b?QmFkIGJhc2U2NA?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?b?QmFkIGJhc2U2NA?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?b?QmFkIGJhc2U2NA?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?b?///?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?b?///?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?b?///?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?b?Z===?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?b?Z===?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?b?Z===?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?Q?under_score=5F?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?Q?under_score=5F?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?Q?under_score=5F?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?=e2=82=ac?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?=e2=82=ac?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?=e2=82=ac?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?=E2=82=AC?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?=E2=82=AC?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?=E2=82=AC?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?=ZZ?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?=ZZ?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?=ZZ?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?x?nope?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?x?nope?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?x?nope?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q??=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q??=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q??=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=??q?nocharset?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=??q?nocharset?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=??q?nocharset?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"Grüße =?utf-8?q?aus?= Köln\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"Grüße =?utf-8?q?aus?= Köln\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"Grüße =?utf-8?q?aus?= Köln\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"日本 =?utf-8?q?x?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"日本 =?utf-8?q?x?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"日本 =?utf-8?q?x?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?café?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?café?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?café?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?€?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?€?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?€?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?iso-8859-15?q?Prix_=A4_10?= =?utf-8?q?_=E2=82=AC?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?iso-8859-15?q?Prix_=A4_10?= =?utf-8?q?_=E2=82=AC?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?iso-8859-15?q?Prix_=A4_10?= =?utf-8?q?_=E2=82=AC?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42\\n =?utf-8?q?=E2=9C=93?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42\\n =?utf-8?q?=E2=9C=93?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42\\n =?utf-8?q?=E2=9C=93?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?UTF-8?B?5Lya6K2w44Gu6K2w5LqL6Yyy?=\\n =?UTF-8?B?44Gr44Gk44GE44Gm?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?UTF-8?B?5Lya6K2w44Gu6K2w5LqL6Yyy?=\\n =?UTF-8?B?44Gr44Gk44GE44Gm?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?UTF-8?B?5Lya6K2w44Gu6K2w5LqL6Yyy?=\\n =?UTF-8?B?44Gr44Gk44GE44Gm?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?x-unknown?q?Mystery?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?x-unknown?q?Mystery?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?x-unknown?q?Mystery?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?bad=FF?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?bad=FF?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?bad=FF?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?us-ascii?q?caf=E9?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?us-ascii?q?caf=E9?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?us-ascii?q?caf=E9?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?windows-1252?q?=80_42?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?windows-1252?q?=80_42?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?windows-1252?q?=80_42?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?trunc=E2=82?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?trunc=E2=82?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?trunc=E2=82?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8*en?q?lang?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8*en?q?lang?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8*en?q?lang?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"decode_header\", \"args\": [\"=?utf-8?q?a?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"str_make_header\", \"args\": [\"=?utf-8?q?a?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"encode_make_header\", \"args\": [\"=?utf-8?q?a?b?=\"], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Hello world\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Hello wörld\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Hello wörld\", \"charset\": \"utf-8\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Hello wörld\", \"charset\": \"iso-8859-1\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"€ 10\", \"charset\": \"iso-8859-1\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"€ 10\", \"charset\": \"windows-1252\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29\", \"header_name\": \"Subject\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"key0=value0; key1=value1; key2=value2; key3=value3; key4=value4; key5=value5; key6=value6; key7=value7; key8=value8; key9=value9; key10=value10; key11=value11\", \"header_name\": \"Content-Type\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"user0@example.com, user1@example.com, user2@example.com, user3@example.com, user4@example.com, user5@example.com, user6@example.com, user7@example.com, user8@example.com\", \"header_name\": \"To\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"user0@example.com, user1@example.com, user2@example.com, user3@example.com, user4@example.com, user5@example.com, user6@example.com, user7@example.com, user8@example.com\", \"header_name\": \"To\"}, \"encode\": {\"splitchars\": \" \"}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Grüße aus Köln und München, Grüße aus Köln und München, Grüße aus Köln und München, Grüße aus Köln und München, \", \"charset\": \"utf-8\", \"header_name\": \"Subject\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト\", \"charset\": \"utf-8\", \"header_name\": \"Subject\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Résumé of the café meeting\", \"charset\": \"iso-8859-1\", \"header_name\": \"Subject\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"header_name\": \"X-Long-Header-Name\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"short\", \"maxlinelen\": 10}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Grüße aus Köln\", \"charset\": \"utf-8\", \"maxlinelen\": 30}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Grüße aus Köln\", \"charset\": \"utf-8\"}, \"encode\": {\"maxlinelen\": 0}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"line one\\nline two\\n  indented three\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"line one\\nBcc: injected@example.com\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Grüße\\nKöln\", \"charset\": \"utf-8\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"tab\\tseparated\\twords tab\\tseparated\\twords tab\\tseparated\\twords tab\\tseparated\\twords tab\\tseparated\\twords \", \"header_name\": \"Subject\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"a, b\", \"continuation_ws\": \"\\t\", \"header_name\": \"To\", \"maxlinelen\": 8}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Hello\", \"charset\": \"us-ascii\"}, \"encode\": {\"linesep\": \"\\r\\n\"}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"Hello wörld\", \"charset\": \"ascii\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"naïve\", \"charset\": \"koi8-zz\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"\", \"charset\": \"utf-8\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header\", \"args\": [], \"kw\": {\"init\": {\"s\": \"x\", \"charset\": \"Latin_1\"}, \"encode\": {}}}\n");
+    t.push_str("{\"fn\": \"header_parts\", \"args\": [[[\"Hello \", null], [\"wörld\", \"utf-8\"], [\" again\", null]]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"header_parts\", \"args\": [[[\"Price: \", \"us-ascii\"], [\"10 €\", \"iso-8859-15\"], [\"(\", null], [\"net\", \"utf-8\"], [\")\", null]]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"header_parts\", \"args\": [[[\"a\", \"utf-8\"], [\"b\", \"utf-8\"], [\"c\", \"iso-8859-1\"], [\"d\", \"iso-8859-1\"]]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"header_parts\", \"args\": [[[\"café\", \"us-ascii\"], [\"ok\", null]]], \"kw\": {}}\n");
+    t.push_str("{\"fn\": \"header_parts\", \"args\": [[[\"€\", \"iso-8859-1\"]]], \"kw\": {}}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("From: \"Ana Lima\" <ana.lima@example.org>\n");
+    t.push_str("To: Ben Okafor <ben@example.net>, \"Chen, Wei\" <wei.chen@example.com>\n");
+    t.push_str("Cc: team@example.org\n");
+    t.push_str("Date: Mon, 19 Oct 2026 09:30:00 -0500\n");
+    t.push_str("Subject: Quarterly report\n");
+    t.push_str("Message-ID: <r1@example.org>\n");
+    t.push_str("\n");
+    t.push_str("Hi all,\n");
+    v.push(DataFile { path: "mail/01.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: =?utf-8?q?Jos=C3=A9_Mart=C3=ADnez?= <jose@example.es>\n");
+    t.push_str("To: =?iso-8859-1?q?Fran=E7ois?= <francois@example.fr>\n");
+    t.push_str("Date: Tue, 20 Oct 2026 14:05:59 +0200\n");
+    t.push_str("Subject: =?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw==?=\n");
+    t.push_str("\n");
+    t.push_str("Hola\n");
+    v.push(DataFile { path: "mail/02.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: =?UTF-8?B?5bGx55Sw5aSq6YOO?= <yamada@example.jp>\n");
+    t.push_str("To: undisclosed-recipients:;\n");
+    t.push_str("Date: 21 Oct 2026 08:00 +0900\n");
+    t.push_str("Subject: =?UTF-8?B?5Lya6K2w44Gu6K2w5LqL6Yyy?=\n");
+    t.push_str(" =?UTF-8?B?44Gr44Gk44GE44Gm?=\n");
+    t.push_str("\n");
+    t.push_str("本文\n");
+    v.push(DataFile { path: "mail/03.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: billing@example.com (Example Billing)\n");
+    t.push_str("To: \"O'Brien, Pat\" <pat.obrien@example.ie>\n");
+    t.push_str("Date: Wed, 21 Oct 2026 23:59:60 +0000\n");
+    t.push_str("Subject: Your invoice =?windows-1252?q?=80_42?= is ready\n");
+    t.push_str("\n");
+    t.push_str("Invoice\n");
+    v.push(DataFile { path: "mail/04.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: Grüße Team <gruesse@example.de>\n");
+    t.push_str("To: Dörte <doerte@example.de>\n");
+    t.push_str("Date: Thu, 22 Oct 26 10:15:00 CEST\n");
+    t.push_str("Subject: Grüße aus Köln\n");
+    t.push_str("\n");
+    t.push_str("Hallo\n");
+    v.push(DataFile { path: "mail/05.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: \"Support \\\"Desk\\\"\" <support@example.com>\n");
+    t.push_str("Reply-To: <help@example.com>\n");
+    t.push_str("To: alice@example.com, bob@example.com,\n");
+    t.push_str("  carol@example.com\n");
+    t.push_str("Date: Fri, 23 Oct 2026 07:00:00 -0000\n");
+    t.push_str("Subject: [Ticket #4411] Printer on 3rd floor\n");
+    t.push_str("\n");
+    t.push_str("Fixed.\n");
+    v.push(DataFile { path: "mail/06.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: Eve <eve@example.com>\n");
+    t.push_str("To: \"Mallory\" <mallory@example.com>, a@b@c.example\n");
+    t.push_str("Cc: Trent <trent@[192.0.2.1]>\n");
+    t.push_str("Date: Sat, 24 Oct 2026 12:00:00 EDT\n");
+    t.push_str("Subject: =?iso-8859-15?q?Prix_=A4_10?= =?utf-8?q?_=E2=82=AC?=\n");
+    t.push_str("\n");
+    t.push_str("Test\n");
+    v.push(DataFile { path: "mail/07.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: news@example.org\n");
+    t.push_str("To: list@example.org (Weekly list)\n");
+    t.push_str("Date: Sunday, 25-Oct-26 06:30:00 GMT\n");
+    t.push_str("Subject: =?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42\n");
+    t.push_str(" =?utf-8?q?=E2=9C=93?=\n");
+    t.push_str("\n");
+    t.push_str("Digest\n");
+    v.push(DataFile { path: "mail/08.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: Dana Scully <dana@example.gov>\n");
+    t.push_str("To: Fox Mulder <fox@example.gov>\n");
+    t.push_str("Date: Mon, 26 Oct 2026 25:00:00 +0000\n");
+    t.push_str("Subject: =?us-ascii?q?Truth_is_out_there?=\n");
+    t.push_str("\n");
+    t.push_str("?\n");
+    v.push(DataFile { path: "mail/09.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: =?utf-8?b?QmFkIGJhc2U2NA?= <bad@example.com>\n");
+    t.push_str("To: <x@example.com>\n");
+    t.push_str("Date: not a date\n");
+    t.push_str("Subject: =?utf-8?b?///?=\n");
+    t.push_str("\n");
+    t.push_str("x\n");
+    v.push(DataFile { path: "mail/10.eml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("From: Résumé Bot <bot@example.com>\n");
+    t.push_str("To: hr@example.com\n");
+    t.push_str("Date: Tue, 27 Oct 2026 16:45:12 +0530\n");
+    t.push_str("Subject: =?x-unknown?q?Mystery?=\n");
+    t.push_str("\n");
+    t.push_str("x\n");
+    v.push(DataFile { path: "mail/11.eml".to_string(), hex: false, body: t });
+}

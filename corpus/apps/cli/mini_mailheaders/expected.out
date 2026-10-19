@@ -1,0 +1,1150 @@
+== {"fn": "parseaddr", "args": ["alice@example.com"], "kw": {}}
+  ('', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["alice@example.com"], "kw": {"strict": false}}
+  ('', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["Alice <alice@example.com>"], "kw": {}}
+  ('Alice', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["Alice <alice@example.com>"], "kw": {"strict": false}}
+  ('Alice', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["\"Alice Smith\" <alice@example.com>"], "kw": {}}
+  ('Alice Smith', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["\"Alice Smith\" <alice@example.com>"], "kw": {"strict": false}}
+  ('Alice Smith', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["alice@example.com (Alice Smith)"], "kw": {}}
+  ('Alice Smith', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["alice@example.com (Alice Smith)"], "kw": {"strict": false}}
+  ('Alice Smith', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["Alice Smith <alice@example.com> (work)"], "kw": {}}
+  ('Alice Smith', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["Alice Smith <alice@example.com> (work)"], "kw": {"strict": false}}
+  ('Alice Smith', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["<alice@example.com>"], "kw": {}}
+  ('', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["<alice@example.com>"], "kw": {"strict": false}}
+  ('', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["\"Smith, Alice\" <alice@example.com>"], "kw": {}}
+  ('Smith, Alice', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["\"Smith, Alice\" <alice@example.com>"], "kw": {"strict": false}}
+  ('Smith, Alice', 'alice@example.com')
+== {"fn": "parseaddr", "args": ["Smith, Alice <alice@example.com>"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Smith, Alice <alice@example.com>"], "kw": {"strict": false}}
+  ('', 'Smith')
+== {"fn": "parseaddr", "args": ["\"a\\\"b\" <x@y.z>"], "kw": {}}
+  ('a"b', 'x@y.z')
+== {"fn": "parseaddr", "args": ["\"a\\\"b\" <x@y.z>"], "kw": {"strict": false}}
+  ('a"b', 'x@y.z')
+== {"fn": "parseaddr", "args": ["alice"], "kw": {}}
+  ('', 'alice')
+== {"fn": "parseaddr", "args": ["alice"], "kw": {"strict": false}}
+  ('', 'alice')
+== {"fn": "parseaddr", "args": ["alice@"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["alice@"], "kw": {"strict": false}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["@example.com"], "kw": {}}
+  ('', '@example.com')
+== {"fn": "parseaddr", "args": ["@example.com"], "kw": {"strict": false}}
+  ('', '@example.com')
+== {"fn": "parseaddr", "args": ["a@b@c.example"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["a@b@c.example"], "kw": {"strict": false}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Trent <trent@[192.0.2.1]>"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Trent <trent@[192.0.2.1]>"], "kw": {"strict": false}}
+  ('Trent', 'trent@[192.0.2.1]')
+== {"fn": "parseaddr", "args": ["user@[IPv6:2001:db8::1]"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["user@[IPv6:2001:db8::1]"], "kw": {"strict": false}}
+  ('', 'user@[IPv6:2001:db8::1]')
+== {"fn": "parseaddr", "args": ["a.b.c@example.com"], "kw": {}}
+  ('', 'a.b.c@example.com')
+== {"fn": "parseaddr", "args": ["a.b.c@example.com"], "kw": {"strict": false}}
+  ('', 'a.b.c@example.com')
+== {"fn": "parseaddr", "args": ["a . b @ example . com"], "kw": {}}
+  ('', 'a.b@example.com')
+== {"fn": "parseaddr", "args": ["a . b @ example . com"], "kw": {"strict": false}}
+  ('', 'a.b@example.com')
+== {"fn": "parseaddr", "args": ["\"a b\"@example.com"], "kw": {}}
+  ('', '"a b"@example.com')
+== {"fn": "parseaddr", "args": ["\"a b\"@example.com"], "kw": {"strict": false}}
+  ('', '"a b"@example.com')
+== {"fn": "parseaddr", "args": ["José <jose@example.es>"], "kw": {}}
+  ('José', 'jose@example.es')
+== {"fn": "parseaddr", "args": ["José <jose@example.es>"], "kw": {"strict": false}}
+  ('José', 'jose@example.es')
+== {"fn": "parseaddr", "args": ["=?utf-8?q?Jos=C3=A9?= <jose@example.es>"], "kw": {}}
+  ('=?utf-8?q?Jos=C3=A9?=', 'jose@example.es')
+== {"fn": "parseaddr", "args": ["=?utf-8?q?Jos=C3=A9?= <jose@example.es>"], "kw": {"strict": false}}
+  ('=?utf-8?q?Jos=C3=A9?=', 'jose@example.es')
+== {"fn": "parseaddr", "args": ["Group: a@x.y, b@x.y;"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Group: a@x.y, b@x.y;"], "kw": {"strict": false}}
+  ('', 'a@x.y')
+== {"fn": "parseaddr", "args": ["undisclosed-recipients:;"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["undisclosed-recipients:;"], "kw": {"strict": false}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["(only a comment)"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["(only a comment)"], "kw": {"strict": false}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Bob (x(y)z) <bob@example.com>"], "kw": {}}
+  ('Bob (xyz)', 'bob@example.com')
+== {"fn": "parseaddr", "args": ["Bob (x(y)z) <bob@example.com>"], "kw": {"strict": false}}
+  ('Bob (xyz)', 'bob@example.com')
+== {"fn": "parseaddr", "args": ["Bob (unclosed <bob@example.com>"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Bob (unclosed <bob@example.com>"], "kw": {"strict": false}}
+  ('unclosed <bob@example.com>', 'Bob')
+== {"fn": "parseaddr", "args": ["Bob ) <bob@example.com>"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Bob ) <bob@example.com>"], "kw": {"strict": false}}
+  ('', 'Bob')
+== {"fn": "parseaddr", "args": [""], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": [""], "kw": {"strict": false}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["   "], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["   "], "kw": {"strict": false}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["a@x.y, b@x.y"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["a@x.y, b@x.y"], "kw": {"strict": false}}
+  ('', 'a@x.y')
+== {"fn": "parseaddr", "args": ["<@route.example:a@x.y>"], "kw": {}}
+  ('', 'a@x.y')
+== {"fn": "parseaddr", "args": ["<@route.example:a@x.y>"], "kw": {"strict": false}}
+  ('', 'a@x.y')
+== {"fn": "parseaddr", "args": ["Joe <joe @ example . com>"], "kw": {}}
+  ('Joe', 'joe@example.com')
+== {"fn": "parseaddr", "args": ["Joe <joe @ example . com>"], "kw": {"strict": false}}
+  ('Joe', 'joe@example.com')
+== {"fn": "parseaddr", "args": ["Name\n <name@example.com>"], "kw": {}}
+  ('Name', 'name@example.com')
+== {"fn": "parseaddr", "args": ["Name\n <name@example.com>"], "kw": {"strict": false}}
+  ('Name', 'name@example.com')
+== {"fn": "parseaddr", "args": ["\"quoted, comma\" <q@example.com>, other@example.com"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["\"quoted, comma\" <q@example.com>, other@example.com"], "kw": {"strict": false}}
+  ('quoted, comma', 'q@example.com')
+== {"fn": "parseaddr", "args": ["a@x.y,,b@x.y"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["a@x.y,,b@x.y"], "kw": {"strict": false}}
+  ('', 'a@x.y')
+== {"fn": "parseaddr", "args": ["Al <al@x.y"], "kw": {}}
+  ('Al', 'al@x.y')
+== {"fn": "parseaddr", "args": ["Al <al@x.y"], "kw": {"strict": false}}
+  ('Al', 'al@x.y')
+== {"fn": "parseaddr", "args": ["Al al@x.y>"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["Al al@x.y>"], "kw": {"strict": false}}
+  ('', 'Al al@x.y')
+== {"fn": "parseaddr", "args": ["\"unterminated <u@x.y>"], "kw": {}}
+  ('', 'unterminated <u@x.y>')
+== {"fn": "parseaddr", "args": ["\"unterminated <u@x.y>"], "kw": {"strict": false}}
+  ('', 'unterminated <u@x.y>')
+== {"fn": "parseaddr", "args": ["a@x.y; b@x.y"], "kw": {}}
+  ('', '')
+== {"fn": "parseaddr", "args": ["a@x.y; b@x.y"], "kw": {"strict": false}}
+  ('', 'a@x.y')
+== {"fn": "parseaddr", "args": ["Mr. Smith <smith@x.y>"], "kw": {}}
+  ('Mr. Smith', 'smith@x.y')
+== {"fn": "parseaddr", "args": ["Mr. Smith <smith@x.y>"], "kw": {"strict": false}}
+  ('Mr. Smith', 'smith@x.y')
+== {"fn": "parseaddr", "args": ["Dr. J. R. R. Tolkien <jrr@x.y>"], "kw": {}}
+  ('Dr. J. R. R. Tolkien', 'jrr@x.y')
+== {"fn": "parseaddr", "args": ["Dr. J. R. R. Tolkien <jrr@x.y>"], "kw": {"strict": false}}
+  ('Dr. J. R. R. Tolkien', 'jrr@x.y')
+== {"fn": "getaddresses", "args": [["alice@example.com, Bob <bob@example.com>"]], "kw": {}}
+  [('', 'alice@example.com'), ('Bob', 'bob@example.com')]
+== {"fn": "getaddresses", "args": [["alice@example.com, Bob <bob@example.com>"]], "kw": {"strict": false}}
+  [('', 'alice@example.com'), ('Bob', 'bob@example.com')]
+== {"fn": "getaddresses", "args": [["alice@example.com", "Bob <bob@example.com>"]], "kw": {}}
+  [('', 'alice@example.com'), ('Bob', 'bob@example.com')]
+== {"fn": "getaddresses", "args": [["alice@example.com", "Bob <bob@example.com>"]], "kw": {"strict": false}}
+  [('', 'alice@example.com'), ('Bob', 'bob@example.com')]
+== {"fn": "getaddresses", "args": [["\"Smith, Alice\" <alice@example.com>", "carol@example.com"]], "kw": {}}
+  [('Smith, Alice', 'alice@example.com'), ('', 'carol@example.com')]
+== {"fn": "getaddresses", "args": [["\"Smith, Alice\" <alice@example.com>", "carol@example.com"]], "kw": {"strict": false}}
+  [('Smith, Alice', 'alice@example.com'), ('', 'carol@example.com')]
+== {"fn": "getaddresses", "args": [["Smith, Alice <alice@example.com>"]], "kw": {}}
+  [('', 'Smith'), ('Alice', 'alice@example.com')]
+== {"fn": "getaddresses", "args": [["Smith, Alice <alice@example.com>"]], "kw": {"strict": false}}
+  [('', 'Smith'), ('Alice', 'alice@example.com')]
+== {"fn": "getaddresses", "args": [["Group: a@x.y, b@x.y;", "c@x.y"]], "kw": {}}
+  [('', 'a@x.y'), ('', 'b@x.y'), ('', 'c@x.y')]
+== {"fn": "getaddresses", "args": [["Group: a@x.y, b@x.y;", "c@x.y"]], "kw": {"strict": false}}
+  [('', 'a@x.y'), ('', 'b@x.y'), ('', 'c@x.y')]
+== {"fn": "getaddresses", "args": [["Bob (x <bob@example.com>", "c@x.y"]], "kw": {}}
+  [('', '')]
+== {"fn": "getaddresses", "args": [["Bob (x <bob@example.com>", "c@x.y"]], "kw": {"strict": false}}
+  [('x <bob@example.com>, c@x.y', 'Bob')]
+== {"fn": "getaddresses", "args": [["a@b@c.example, d@e.f"]], "kw": {}}
+  [('', '')]
+== {"fn": "getaddresses", "args": [["a@b@c.example, d@e.f"]], "kw": {"strict": false}}
+  [('', ''), ('', '@c.example'), ('', 'd@e.f')]
+== {"fn": "getaddresses", "args": [["Trent <trent@[192.0.2.1]>, ok@x.y"]], "kw": {}}
+  [('', ''), ('', 'ok@x.y')]
+== {"fn": "getaddresses", "args": [["Trent <trent@[192.0.2.1]>, ok@x.y"]], "kw": {"strict": false}}
+  [('Trent', 'trent@[192.0.2.1]'), ('', 'ok@x.y')]
+== {"fn": "getaddresses", "args": [["", "a@x.y"]], "kw": {}}
+  [('', ''), ('', 'a@x.y')]
+== {"fn": "getaddresses", "args": [["", "a@x.y"]], "kw": {"strict": false}}
+  [('', ''), ('', 'a@x.y')]
+== {"fn": "getaddresses", "args": [["a@x.y,", "b@x.y"]], "kw": {}}
+  [('', 'a@x.y'), ('', ''), ('', 'b@x.y')]
+== {"fn": "getaddresses", "args": [["a@x.y,", "b@x.y"]], "kw": {"strict": false}}
+  [('', 'a@x.y'), ('', ''), ('', 'b@x.y')]
+== {"fn": "getaddresses", "args": [["undisclosed-recipients:;"]], "kw": {}}
+  [('', '')]
+== {"fn": "getaddresses", "args": [["undisclosed-recipients:;"]], "kw": {"strict": false}}
+  [('', '')]
+== {"fn": "getaddresses", "args": [["\"a, b\" <c@d.e>, \"f, g\" <h@i.j>"]], "kw": {}}
+  [('a, b', 'c@d.e'), ('f, g', 'h@i.j')]
+== {"fn": "getaddresses", "args": [["\"a, b\" <c@d.e>, \"f, g\" <h@i.j>"]], "kw": {"strict": false}}
+  [('a, b', 'c@d.e'), ('f, g', 'h@i.j')]
+== {"fn": "getaddresses", "args": [["\"a\\\", b\" <c@d.e>"]], "kw": {}}
+  [('a", b', 'c@d.e')]
+== {"fn": "getaddresses", "args": [["\"a\\\", b\" <c@d.e>"]], "kw": {"strict": false}}
+  [('a", b', 'c@d.e')]
+== {"fn": "formataddr", "args": [["", "a@x.y"]], "kw": {}}
+  'a@x.y'
+== {"fn": "formataddr", "args": [["Alice", "a@x.y"]], "kw": {}}
+  'Alice <a@x.y>'
+== {"fn": "formataddr", "args": [["Smith, Alice", "a@x.y"]], "kw": {}}
+  '"Smith, Alice" <a@x.y>'
+== {"fn": "formataddr", "args": [["Al \"the pal\"", "a@x.y"]], "kw": {}}
+  '"Al \\"the pal\\"" <a@x.y>'
+== {"fn": "formataddr", "args": [["José", "j@x.y"]], "kw": {}}
+  '=?utf-8?b?Sm9zw6k=?= <j@x.y>'
+== {"fn": "formataddr", "args": [["José", "j@x.y"]], "kw": {"charset": "iso-8859-1"}}
+  '=?iso-8859-1?q?Jos=E9?= <j@x.y>'
+== {"fn": "formataddr", "args": [["山田太郎", "y@x.jp"]], "kw": {}}
+  '=?utf-8?b?5bGx55Sw5aSq6YOO?= <y@x.jp>'
+== {"fn": "formataddr", "args": [["Zoë Ångström-Øster", "z@x.y"]], "kw": {}}
+  '=?utf-8?b?Wm/DqyDDhW5nc3Ryw7ZtLcOYc3Rlcg==?= <z@x.y>'
+== {"fn": "formataddr", "args": [["a\\b", "a@x.y"]], "kw": {}}
+  '"a\\\\b" <a@x.y>'
+== {"fn": "formataddr", "args": [["Ab", "jösé@x.y"]], "kw": {}}
+  UnicodeEncodeError: 'ascii' codec can't encode character '\xf6' in position 1: ordinal not in range(128)
+== {"fn": "formataddr", "args": [["€uro", "e@x.y"]], "kw": {"charset": "iso-8859-1"}}
+  UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+== {"fn": "formataddr", "args": [["€uro", "e@x.y"]], "kw": {"charset": "iso-8859-15"}}
+  '=?iso-8859-15?q?=A4uro?= <e@x.y>'
+== {"fn": "formataddr", "args": [["€uro", "e@x.y"]], "kw": {"charset": "windows-1252"}}
+  '=?windows-1252?q?=80uro?= <e@x.y>'
+== {"fn": "formataddr", "args": [["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxé", "e@x.y"]], "kw": {}}
+  '=?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=C3=A9?= <e@x.y>'
+== {"fn": "formataddr", "args": [["éééééééé", "e@x.y"]], "kw": {}}
+  '=?utf-8?b?w6nDqcOpw6nDqcOpw6nDqQ==?= <e@x.y>'
+== {"fn": "formataddr", "args": [["Dr. Who", "who@x.y"]], "kw": {}}
+  '"Dr. Who" <who@x.y>'
+== {"fn": "formataddr", "args": [["a@b", "c@d"]], "kw": {}}
+  '"a@b" <c@d>'
+== {"fn": "formataddr", "args": [["[ops]", "o@x.y"]], "kw": {}}
+  '"[ops]" <o@x.y>'
+== {"fn": "formataddr", "args": [["José", "j@x.y"]], "kw": {"charset": "latin-1"}}
+  '=?iso-8859-1?q?Jos=E9?= <j@x.y>'
+== {"fn": "formataddr", "args": [["José", "j@x.y"]], "kw": {"charset": "koi8-zz"}}
+  LookupError: unknown encoding: koi8-zz
+== {"fn": "quote", "args": ["say \"hi\""], "kw": {}}
+  'say \\"hi\\"'
+== {"fn": "quote", "args": ["back\\slash"], "kw": {}}
+  'back\\\\slash'
+== {"fn": "quote", "args": ["plain"], "kw": {}}
+  'plain'
+== {"fn": "quote", "args": [""], "kw": {}}
+  ''
+== {"fn": "unquote", "args": ["\"quoted\""], "kw": {}}
+  'quoted'
+== {"fn": "unquote", "args": ["\"esc \\\"q\\\" \\\\ x\""], "kw": {}}
+  'esc "q" \\ x'
+== {"fn": "unquote", "args": ["<angle>"], "kw": {}}
+  'angle'
+== {"fn": "unquote", "args": ["\""], "kw": {}}
+  '"'
+== {"fn": "unquote", "args": ["<"], "kw": {}}
+  '<'
+== {"fn": "unquote", "args": ["\"half"], "kw": {}}
+  '"half'
+== {"fn": "unquote", "args": ["<a>b>"], "kw": {}}
+  'a>b'
+== {"fn": "unquote", "args": ["x"], "kw": {}}
+  'x'
+== {"fn": "parsedate_tz", "args": ["Mon, 19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, -18000)
+== {"fn": "parsedate", "args": ["Mon, 19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Mon, 19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  2026-10-19T09:30:00-05:00
+== {"fn": "mktime_tz", "args": ["Mon, 19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  1792420200
+== {"fn": "parsedate_tz", "args": ["Tue, 20 Oct 2026 14:05:59 +0200"], "kw": {}}
+  (2026, 10, 20, 14, 5, 59, 0, 1, -1, 7200)
+== {"fn": "parsedate", "args": ["Tue, 20 Oct 2026 14:05:59 +0200"], "kw": {}}
+  (2026, 10, 20, 14, 5, 59, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Tue, 20 Oct 2026 14:05:59 +0200"], "kw": {}}
+  2026-10-20T14:05:59+02:00
+== {"fn": "mktime_tz", "args": ["Tue, 20 Oct 2026 14:05:59 +0200"], "kw": {}}
+  1792497959
+== {"fn": "parsedate_tz", "args": ["21 Oct 2026 08:00 +0900"], "kw": {}}
+  (2026, 10, 21, 8, 0, 0, 0, 1, -1, 32400)
+== {"fn": "parsedate", "args": ["21 Oct 2026 08:00 +0900"], "kw": {}}
+  (2026, 10, 21, 8, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["21 Oct 2026 08:00 +0900"], "kw": {}}
+  2026-10-21T08:00:00+09:00
+== {"fn": "mktime_tz", "args": ["21 Oct 2026 08:00 +0900"], "kw": {}}
+  1792537200
+== {"fn": "parsedate_tz", "args": ["Wed, 21 Oct 2026 23:59:60 +0000"], "kw": {}}
+  (2026, 10, 21, 23, 59, 60, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["Wed, 21 Oct 2026 23:59:60 +0000"], "kw": {}}
+  (2026, 10, 21, 23, 59, 60, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Wed, 21 Oct 2026 23:59:60 +0000"], "kw": {}}
+  ValueError: second must be in 0..59
+== {"fn": "mktime_tz", "args": ["Wed, 21 Oct 2026 23:59:60 +0000"], "kw": {}}
+  1792627200
+== {"fn": "parsedate_tz", "args": ["Thu, 22 Oct 26 10:15:00 CEST"], "kw": {}}
+  (2026, 10, 22, 10, 15, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["Thu, 22 Oct 26 10:15:00 CEST"], "kw": {}}
+  (2026, 10, 22, 10, 15, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Thu, 22 Oct 26 10:15:00 CEST"], "kw": {}}
+  2026-10-22T10:15:00
+== {"fn": "mktime_tz", "args": ["Thu, 22 Oct 26 10:15:00 CEST"], "kw": {}}
+  1792664100
+== {"fn": "parsedate_tz", "args": ["Fri, 23 Oct 2026 07:00:00 -0000"], "kw": {}}
+  (2026, 10, 23, 7, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["Fri, 23 Oct 2026 07:00:00 -0000"], "kw": {}}
+  (2026, 10, 23, 7, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Fri, 23 Oct 2026 07:00:00 -0000"], "kw": {}}
+  2026-10-23T07:00:00
+== {"fn": "mktime_tz", "args": ["Fri, 23 Oct 2026 07:00:00 -0000"], "kw": {}}
+  1792738800
+== {"fn": "parsedate_tz", "args": ["Sat, 24 Oct 2026 12:00:00 EDT"], "kw": {}}
+  (2026, 10, 24, 12, 0, 0, 0, 1, -1, -14400)
+== {"fn": "parsedate", "args": ["Sat, 24 Oct 2026 12:00:00 EDT"], "kw": {}}
+  (2026, 10, 24, 12, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Sat, 24 Oct 2026 12:00:00 EDT"], "kw": {}}
+  2026-10-24T12:00:00-04:00
+== {"fn": "mktime_tz", "args": ["Sat, 24 Oct 2026 12:00:00 EDT"], "kw": {}}
+  1792857600
+== {"fn": "parsedate_tz", "args": ["Sunday, 25-Oct-26 06:30:00 GMT"], "kw": {}}
+  (2026, 10, 25, 6, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["Sunday, 25-Oct-26 06:30:00 GMT"], "kw": {}}
+  (2026, 10, 25, 6, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Sunday, 25-Oct-26 06:30:00 GMT"], "kw": {}}
+  2026-10-25T06:30:00+00:00
+== {"fn": "mktime_tz", "args": ["Sunday, 25-Oct-26 06:30:00 GMT"], "kw": {}}
+  1792909800
+== {"fn": "parsedate_tz", "args": ["Mon, 26 Oct 2026 25:00:00 +0000"], "kw": {}}
+  (2026, 10, 26, 25, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["Mon, 26 Oct 2026 25:00:00 +0000"], "kw": {}}
+  (2026, 10, 26, 25, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Mon, 26 Oct 2026 25:00:00 +0000"], "kw": {}}
+  ValueError: hour must be in 0..23
+== {"fn": "mktime_tz", "args": ["Mon, 26 Oct 2026 25:00:00 +0000"], "kw": {}}
+  1793062800
+== {"fn": "parsedate_tz", "args": ["not a date"], "kw": {}}
+  None
+== {"fn": "parsedate", "args": ["not a date"], "kw": {}}
+  None
+== {"fn": "parsedate_to_datetime", "args": ["not a date"], "kw": {}}
+  ValueError: Invalid date value or format "not a date"
+== {"fn": "mktime_tz", "args": ["not a date"], "kw": {}}
+  TypeError: 'NoneType' object is not subscriptable
+== {"fn": "parsedate_tz", "args": [""], "kw": {}}
+  None
+== {"fn": "parsedate", "args": [""], "kw": {}}
+  None
+== {"fn": "parsedate_to_datetime", "args": [""], "kw": {}}
+  ValueError: Invalid date value or format ""
+== {"fn": "mktime_tz", "args": [""], "kw": {}}
+  TypeError: 'NoneType' object is not subscriptable
+== {"fn": "parsedate_tz", "args": ["   "], "kw": {}}
+  None
+== {"fn": "parsedate", "args": ["   "], "kw": {}}
+  None
+== {"fn": "parsedate_to_datetime", "args": ["   "], "kw": {}}
+  ValueError: Invalid date value or format "   "
+== {"fn": "mktime_tz", "args": ["   "], "kw": {}}
+  TypeError: 'NoneType' object is not subscriptable
+== {"fn": "parsedate_tz", "args": ["Mon,19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, -18000)
+== {"fn": "parsedate", "args": ["Mon,19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Mon,19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  2026-10-19T09:30:00-05:00
+== {"fn": "mktime_tz", "args": ["Mon,19 Oct 2026 09:30:00 -0500"], "kw": {}}
+  1792420200
+== {"fn": "parsedate_tz", "args": ["19 October 2026 09:30:00 +0100"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 3600)
+== {"fn": "parsedate", "args": ["19 October 2026 09:30:00 +0100"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 October 2026 09:30:00 +0100"], "kw": {}}
+  2026-10-19T09:30:00+01:00
+== {"fn": "mktime_tz", "args": ["19 October 2026 09:30:00 +0100"], "kw": {}}
+  1792398600
+== {"fn": "parsedate_tz", "args": ["Oct 19 2026 09:30:00 PST"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, -28800)
+== {"fn": "parsedate", "args": ["Oct 19 2026 09:30:00 PST"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Oct 19 2026 09:30:00 PST"], "kw": {}}
+  2026-10-19T09:30:00-08:00
+== {"fn": "mktime_tz", "args": ["Oct 19 2026 09:30:00 PST"], "kw": {}}
+  1792431000
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09.30.15 +0100"], "kw": {}}
+  (2026, 10, 19, 9, 30, 15, 0, 1, -1, 3600)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09.30.15 +0100"], "kw": {}}
+  (2026, 10, 19, 9, 30, 15, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09.30.15 +0100"], "kw": {}}
+  2026-10-19T09:30:15+01:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09.30.15 +0100"], "kw": {}}
+  1792398615
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09.30 +0100"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 3600)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09.30 +0100"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09.30 +0100"], "kw": {}}
+  2026-10-19T09:30:00+01:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09.30 +0100"], "kw": {}}
+  1792398600
+== {"fn": "parsedate_tz", "args": ["19 Oct 69 00:00 Z"], "kw": {}}
+  (1969, 10, 19, 0, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 69 00:00 Z"], "kw": {}}
+  (1969, 10, 19, 0, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 69 00:00 Z"], "kw": {}}
+  1969-10-19T00:00:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 69 00:00 Z"], "kw": {}}
+  -6393600
+== {"fn": "parsedate_tz", "args": ["19 Oct 68 00:00 UT"], "kw": {}}
+  (2068, 10, 19, 0, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 68 00:00 UT"], "kw": {}}
+  (2068, 10, 19, 0, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 68 00:00 UT"], "kw": {}}
+  2068-10-19T00:00:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 68 00:00 UT"], "kw": {}}
+  3117830400
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 9:5:7 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 5, 7, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 9:5:7 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 5, 7, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 9:5:7 +0000"], "kw": {}}
+  2026-10-19T09:05:07+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 9:5:7 +0000"], "kw": {}}
+  1792400707
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00+0200"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 7200)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00+0200"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00+0200"], "kw": {}}
+  2026-10-19T09:30:00+02:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00+0200"], "kw": {}}
+  1792395000
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00-0730"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, -27000)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00-0730"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00-0730"], "kw": {}}
+  2026-10-19T09:30:00-07:30
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00-0730"], "kw": {}}
+  1792429200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 +05:30"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 +05:30"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 +05:30"], "kw": {}}
+  2026-10-19T09:30:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 +05:30"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 +2500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 90000)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 +2500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 +2500"], "kw": {}}
+  ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=1, seconds=3600).
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 +2500"], "kw": {}}
+  1792312200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 -2500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, -90000)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 -2500"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 -2500"], "kw": {}}
+  ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=-2, seconds=82800).
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 -2500"], "kw": {}}
+  1792492200
+== {"fn": "parsedate_tz", "args": ["32 Oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 32, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["32 Oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 32, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["32 Oct 2026 09:30:00 +0000"], "kw": {}}
+  ValueError: day is out of range for month
+== {"fn": "mktime_tz", "args": ["32 Oct 2026 09:30:00 +0000"], "kw": {}}
+  1793525400
+== {"fn": "parsedate_tz", "args": ["29 Feb 2026 00:00:00 +0000"], "kw": {}}
+  (2026, 2, 29, 0, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["29 Feb 2026 00:00:00 +0000"], "kw": {}}
+  (2026, 2, 29, 0, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["29 Feb 2026 00:00:00 +0000"], "kw": {}}
+  ValueError: day is out of range for month
+== {"fn": "mktime_tz", "args": ["29 Feb 2026 00:00:00 +0000"], "kw": {}}
+  1772323200
+== {"fn": "parsedate_tz", "args": ["29 Feb 2024 00:00:00 +0000"], "kw": {}}
+  (2024, 2, 29, 0, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["29 Feb 2024 00:00:00 +0000"], "kw": {}}
+  (2024, 2, 29, 0, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["29 Feb 2024 00:00:00 +0000"], "kw": {}}
+  2024-02-29T00:00:00+00:00
+== {"fn": "mktime_tz", "args": ["29 Feb 2024 00:00:00 +0000"], "kw": {}}
+  1709164800
+== {"fn": "parsedate_tz", "args": ["19 Foo 2026 09:30:00 +0000"], "kw": {}}
+  None
+== {"fn": "parsedate", "args": ["19 Foo 2026 09:30:00 +0000"], "kw": {}}
+  None
+== {"fn": "parsedate_to_datetime", "args": ["19 Foo 2026 09:30:00 +0000"], "kw": {}}
+  ValueError: Invalid date value or format "19 Foo 2026 09:30:00 +0000"
+== {"fn": "mktime_tz", "args": ["19 Foo 2026 09:30:00 +0000"], "kw": {}}
+  TypeError: 'NoneType' object is not subscriptable
+== {"fn": "parsedate_tz", "args": ["Oct 19, 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["Oct 19, 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Oct 19, 2026 09:30:00 +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["Oct 19, 2026 09:30:00 +0000"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026, 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026, 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026, 09:30:00 +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026, 09:30:00 +0000"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00, +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00, +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00, +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00, +0000"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 +0000 (UTC)"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 +0000 (UTC)"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 +0000 (UTC)"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 +0000 (UTC)"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 0 00:00:00 +0000"], "kw": {}}
+  (2000, 10, 19, 0, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 0 00:00:00 +0000"], "kw": {}}
+  (2000, 10, 19, 0, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 0 00:00:00 +0000"], "kw": {}}
+  2000-10-19T00:00:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 0 00:00:00 +0000"], "kw": {}}
+  971913600
+== {"fn": "parsedate_tz", "args": ["19 Oct 10000 00:00:00 +0000"], "kw": {}}
+  (10000, 10, 19, 0, 0, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 10000 00:00:00 +0000"], "kw": {}}
+  (10000, 10, 19, 0, 0, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 10000 00:00:00 +0000"], "kw": {}}
+  ValueError: year 10000 is out of range
+== {"fn": "mktime_tz", "args": ["19 Oct 10000 00:00:00 +0000"], "kw": {}}
+  ValueError: year 10000 is out of range
+== {"fn": "parsedate_tz", "args": ["19 Oct 2_026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2_026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2_026 09:30:00 +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2_026 09:30:00 +0000"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:61:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 61, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:61:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 61, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:61:00 +0000"], "kw": {}}
+  ValueError: minute must be in 0..59
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:61:00 +0000"], "kw": {}}
+  1792404060
+== {"fn": "parsedate_tz", "args": ["Mon 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["Mon 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["Mon 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["Mon 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["monday, 19 oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["monday, 19 oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["monday, 19 oct 2026 09:30:00 +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["monday, 19 oct 2026 09:30:00 +0000"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 MSK"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 MSK"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 MSK"], "kw": {}}
+  2026-10-19T09:30:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 MSK"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 -0"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 -0"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 -0"], "kw": {}}
+  2026-10-19T09:30:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 -0"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 +0"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 +0"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 +0"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 +0"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00 +12345"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 445500)
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00 +12345"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00 +12345"], "kw": {}}
+  ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=5, seconds=13500).
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00 +12345"], "kw": {}}
+  1791956700
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026"], "kw": {}}
+  None
+== {"fn": "parsedate", "args": ["19 Oct 2026"], "kw": {}}
+  None
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026"], "kw": {}}
+  ValueError: Invalid date value or format "19 Oct 2026"
+== {"fn": "mktime_tz", "args": ["19 Oct 2026"], "kw": {}}
+  TypeError: 'NoneType' object is not subscriptable
+== {"fn": "parsedate_tz", "args": ["19 Oct 2026 09:30:00:00 +0000"], "kw": {}}
+  None
+== {"fn": "parsedate", "args": ["19 Oct 2026 09:30:00:00 +0000"], "kw": {}}
+  None
+== {"fn": "parsedate_to_datetime", "args": ["19 Oct 2026 09:30:00:00 +0000"], "kw": {}}
+  ValueError: Invalid date value or format "19 Oct 2026 09:30:00:00 +0000"
+== {"fn": "mktime_tz", "args": ["19 Oct 2026 09:30:00:00 +0000"], "kw": {}}
+  TypeError: 'NoneType' object is not subscriptable
+== {"fn": "parsedate_tz", "args": ["x, 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["x, 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["x, 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["x, 19 Oct 2026 09:30:00 +0000"], "kw": {}}
+  1792402200
+== {"fn": "parsedate_tz", "args": ["19-Oct-2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1, 0)
+== {"fn": "parsedate", "args": ["19-Oct-2026 09:30:00 +0000"], "kw": {}}
+  (2026, 10, 19, 9, 30, 0, 0, 1, -1)
+== {"fn": "parsedate_to_datetime", "args": ["19-Oct-2026 09:30:00 +0000"], "kw": {}}
+  2026-10-19T09:30:00+00:00
+== {"fn": "mktime_tz", "args": ["19-Oct-2026 09:30:00 +0000"], "kw": {}}
+  1792402200
+== {"fn": "formatdate", "args": [0], "kw": {"usegmt": false}}
+  'Thu, 01 Jan 1970 00:00:00 -0000'
+== {"fn": "formatdate", "args": [0], "kw": {"usegmt": true}}
+  'Thu, 01 Jan 1970 00:00:00 GMT'
+== {"fn": "formatdate", "args": [1792414200], "kw": {"usegmt": false}}
+  'Mon, 19 Oct 2026 12:50:00 -0000'
+== {"fn": "formatdate", "args": [1792414200], "kw": {"usegmt": true}}
+  'Mon, 19 Oct 2026 12:50:00 GMT'
+== {"fn": "formatdate", "args": [1792414200.9999995], "kw": {"usegmt": false}}
+  'Mon, 19 Oct 2026 12:50:01 -0000'
+== {"fn": "formatdate", "args": [1792414200.4999995], "kw": {"usegmt": true}}
+  'Mon, 19 Oct 2026 12:50:00 GMT'
+== {"fn": "formatdate", "args": [-1], "kw": {"usegmt": false}}
+  'Wed, 31 Dec 1969 23:59:59 -0000'
+== {"fn": "formatdate", "args": [-0.5], "kw": {"usegmt": true}}
+  'Wed, 31 Dec 1969 23:59:59 GMT'
+== {"fn": "formatdate", "args": [951782400], "kw": {"usegmt": false}}
+  'Tue, 29 Feb 2000 00:00:00 -0000'
+== {"fn": "formatdate", "args": [253402300799], "kw": {"usegmt": true}}
+  'Fri, 31 Dec 9999 23:59:59 GMT'
+== {"fn": "formatdate", "args": [1000000000.0], "kw": {"usegmt": false}}
+  'Sun, 09 Sep 2001 01:46:40 -0000'
+== {"fn": "decode_rfc2231", "args": ["us-ascii'en'This%20is"], "kw": {}}
+  ['us-ascii', 'en', 'This%20is']
+== {"fn": "decode_rfc2231", "args": ["utf-8''%E2%82%AC%20rates"], "kw": {}}
+  ['utf-8', '', '%E2%82%AC%20rates']
+== {"fn": "decode_rfc2231", "args": ["no-ticks"], "kw": {}}
+  (None, None, 'no-ticks')
+== {"fn": "decode_rfc2231", "args": ["one'tick"], "kw": {}}
+  (None, None, "one'tick")
+== {"fn": "decode_rfc2231", "args": ["a'b'c'd"], "kw": {}}
+  ['a', 'b', "c'd"]
+== {"fn": "decode_rfc2231", "args": ["''"], "kw": {}}
+  ['', '', '']
+== {"fn": "encode_rfc2231", "args": ["This is ~ fine"], "kw": {}}
+  'This%20is%20~%20fine'
+== {"fn": "encode_rfc2231", "args": ["€ rates"], "kw": {"charset": "utf-8"}}
+  "utf-8''%E2%82%AC%20rates"
+== {"fn": "encode_rfc2231", "args": ["café"], "kw": {"charset": "iso-8859-1", "language": "fr"}}
+  "iso-8859-1'fr'caf%E9"
+== {"fn": "encode_rfc2231", "args": ["a/b c"], "kw": {"language": "en"}}
+  "None'en'a%2Fb%20c"
+== {"fn": "encode_rfc2231", "args": ["€"], "kw": {"charset": "iso-8859-1"}}
+  UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+== {"fn": "encode_rfc2231", "args": ["€"], "kw": {"charset": "ascii"}}
+  UnicodeEncodeError: 'ascii' codec can't encode character '\u20ac' in position 0: ordinal not in range(128)
+== {"fn": "collapse_rfc2231_value", "args": ["plain"], "kw": {}}
+  'plain'
+== {"fn": "collapse_rfc2231_value", "args": ["\"quoted\""], "kw": {}}
+  'quoted'
+== {"fn": "collapse_rfc2231_value", "args": [["utf-8", "", "%E2%82%AC"]], "kw": {}}
+  '%E2%82%AC'
+== {"fn": "collapse_rfc2231_value", "args": [["iso-8859-1", "fr", "caf%E9"]], "kw": {}}
+  'caf%E9'
+== {"fn": "collapse_rfc2231_value", "args": [["", "", "abc"]], "kw": {}}
+  'abc'
+== {"fn": "collapse_rfc2231_value", "args": [["utf-8", "", "\\xff"]], "kw": {}}
+  '\\xff'
+== {"fn": "collapse_rfc2231_value", "args": [["no-such-codec", "", "\"x\""]], "kw": {}}
+  'x'
+== {"fn": "collapse_rfc2231_value", "args": [["us-ascii", "", "café"]], "kw": {}}
+  'caf�'
+== {"fn": "decode_header", "args": ["Plain subject"], "kw": {}}
+  [('Plain subject', None)]
+== {"fn": "str_make_header", "args": ["Plain subject"], "kw": {}}
+  'Plain subject'
+== {"fn": "encode_make_header", "args": ["Plain subject"], "kw": {}}
+  'Plain subject'
+== {"fn": "decode_header", "args": ["=?utf-8?q?Jos=C3=A9?="], "kw": {}}
+  [(b'Jos\xc3\xa9', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?Jos=C3=A9?="], "kw": {}}
+  'José'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?Jos=C3=A9?="], "kw": {}}
+  '=?utf-8?b?Sm9zw6k=?='
+== {"fn": "decode_header", "args": ["=?UTF-8?B?5bGx55Sw5aSq6YOO?="], "kw": {}}
+  [(b'\xe5\xb1\xb1\xe7\x94\xb0\xe5\xa4\xaa\xe9\x83\x8e', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?UTF-8?B?5bGx55Sw5aSq6YOO?="], "kw": {}}
+  '山田太郎'
+== {"fn": "encode_make_header", "args": ["=?UTF-8?B?5bGx55Sw5aSq6YOO?="], "kw": {}}
+  '=?utf-8?b?5bGx55Sw5aSq6YOO?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?a?= =?utf-8?q?b?="], "kw": {}}
+  [(b'ab', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?a?= =?utf-8?q?b?="], "kw": {}}
+  'ab'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?a?= =?utf-8?q?b?="], "kw": {}}
+  '=?utf-8?q?ab?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?a?=  \t =?utf-8?q?b?="], "kw": {}}
+  [(b'ab', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?a?=  \t =?utf-8?q?b?="], "kw": {}}
+  'ab'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?a?=  \t =?utf-8?q?b?="], "kw": {}}
+  '=?utf-8?q?ab?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?a?= x =?utf-8?q?b?="], "kw": {}}
+  [(b'a', 'utf-8'), (b' x ', None), (b'b', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?a?= x =?utf-8?q?b?="], "kw": {}}
+  'a x b'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?a?= x =?utf-8?q?b?="], "kw": {}}
+  '=?utf-8?q?a?= x =?utf-8?q?b?='
+== {"fn": "decode_header", "args": ["pre =?utf-8?q?mid?= post"], "kw": {}}
+  [(b'pre ', None), (b'mid', 'utf-8'), (b' post', None)]
+== {"fn": "str_make_header", "args": ["pre =?utf-8?q?mid?= post"], "kw": {}}
+  'pre mid post'
+== {"fn": "encode_make_header", "args": ["pre =?utf-8?q?mid?= post"], "kw": {}}
+  'pre =?utf-8?q?mid?= post'
+== {"fn": "decode_header", "args": ["=?iso-8859-1?q?caf=E9?= =?utf-8?q?_ok?="], "kw": {}}
+  [(b'caf\xe9', 'iso-8859-1'), (b' ok', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?iso-8859-1?q?caf=E9?= =?utf-8?q?_ok?="], "kw": {}}
+  'café ok'
+== {"fn": "encode_make_header", "args": ["=?iso-8859-1?q?caf=E9?= =?utf-8?q?_ok?="], "kw": {}}
+  '=?iso-8859-1?q?caf=E9?= =?utf-8?q?_ok?='
+== {"fn": "decode_header", "args": ["  leading =?utf-8?q?x?="], "kw": {}}
+  [(b'leading ', None), (b'x', 'utf-8')]
+== {"fn": "str_make_header", "args": ["  leading =?utf-8?q?x?="], "kw": {}}
+  'leading x'
+== {"fn": "encode_make_header", "args": ["  leading =?utf-8?q?x?="], "kw": {}}
+  'leading =?utf-8?q?x?='
+== {"fn": "decode_header", "args": ["=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw==?="], "kw": {}}
+  [(b'Re: Reuni\xc3\xb3n del lunes', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw==?="], "kw": {}}
+  'Re: Reunión del lunes'
+== {"fn": "encode_make_header", "args": ["=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw==?="], "kw": {}}
+  '=?utf-8?q?Re=3A_Reuni=C3=B3n_del_lunes?='
+== {"fn": "decode_header", "args": ["=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw?="], "kw": {}}
+  [(b'Re: Reuni\xc3\xb3n del lunes', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw?="], "kw": {}}
+  'Re: Reunión del lunes'
+== {"fn": "encode_make_header", "args": ["=?utf-8?b?UmU6IFJldW5pw7NuIGRlbCBsdW5lcw?="], "kw": {}}
+  '=?utf-8?q?Re=3A_Reuni=C3=B3n_del_lunes?='
+== {"fn": "decode_header", "args": ["=?utf-8?b?QmFkIGJhc2U2NA?="], "kw": {}}
+  [(b'Bad base64', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?b?QmFkIGJhc2U2NA?="], "kw": {}}
+  'Bad base64'
+== {"fn": "encode_make_header", "args": ["=?utf-8?b?QmFkIGJhc2U2NA?="], "kw": {}}
+  '=?utf-8?q?Bad_base64?='
+== {"fn": "decode_header", "args": ["=?utf-8?b?///?="], "kw": {}}
+  [(b'\xff\xff', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?b?///?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+== {"fn": "encode_make_header", "args": ["=?utf-8?b?///?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+== {"fn": "decode_header", "args": ["=?utf-8?b?Z===?="], "kw": {}}
+  HeaderParseError: Base64 decoding error
+== {"fn": "str_make_header", "args": ["=?utf-8?b?Z===?="], "kw": {}}
+  HeaderParseError: Base64 decoding error
+== {"fn": "encode_make_header", "args": ["=?utf-8?b?Z===?="], "kw": {}}
+  HeaderParseError: Base64 decoding error
+== {"fn": "decode_header", "args": ["=?utf-8?Q?under_score=5F?="], "kw": {}}
+  [(b'under score_', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?Q?under_score=5F?="], "kw": {}}
+  'under score_'
+== {"fn": "encode_make_header", "args": ["=?utf-8?Q?under_score=5F?="], "kw": {}}
+  '=?utf-8?q?under_score=5F?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?=e2=82=ac?="], "kw": {}}
+  [(b'\xe2\x82\xac', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?=e2=82=ac?="], "kw": {}}
+  '€'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?=e2=82=ac?="], "kw": {}}
+  '=?utf-8?b?4oKs?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?=E2=82=AC?="], "kw": {}}
+  [(b'\xe2\x82\xac', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?=E2=82=AC?="], "kw": {}}
+  '€'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?=E2=82=AC?="], "kw": {}}
+  '=?utf-8?b?4oKs?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?=ZZ?="], "kw": {}}
+  [(b'=ZZ', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?=ZZ?="], "kw": {}}
+  '=ZZ'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?=ZZ?="], "kw": {}}
+  '=?utf-8?b?PVpa?='
+== {"fn": "decode_header", "args": ["=?utf-8?x?nope?="], "kw": {}}
+  [('=?utf-8?x?nope?=', None)]
+== {"fn": "str_make_header", "args": ["=?utf-8?x?nope?="], "kw": {}}
+  '=?utf-8?x?nope?='
+== {"fn": "encode_make_header", "args": ["=?utf-8?x?nope?="], "kw": {}}
+  '=?utf-8?x?nope?='
+== {"fn": "decode_header", "args": ["=?utf-8?q??="], "kw": {}}
+  [(b'', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q??="], "kw": {}}
+  ''
+== {"fn": "encode_make_header", "args": ["=?utf-8?q??="], "kw": {}}
+  ''
+== {"fn": "decode_header", "args": ["=??q?nocharset?="], "kw": {}}
+  [(b'nocharset', '')]
+== {"fn": "str_make_header", "args": ["=??q?nocharset?="], "kw": {}}
+  'nocharset'
+== {"fn": "encode_make_header", "args": ["=??q?nocharset?="], "kw": {}}
+  LookupError: unknown encoding: 
+== {"fn": "decode_header", "args": ["Grüße =?utf-8?q?aus?= Köln"], "kw": {}}
+  [(b'Gr\xfc\xdfe ', None), (b'aus', 'utf-8'), (b' K\xf6ln', None)]
+== {"fn": "str_make_header", "args": ["Grüße =?utf-8?q?aus?= Köln"], "kw": {}}
+  UnicodeDecodeError: 'ascii' codec can't decode byte 0xfc in position 2: ordinal not in range(128)
+== {"fn": "encode_make_header", "args": ["Grüße =?utf-8?q?aus?= Köln"], "kw": {}}
+  UnicodeDecodeError: 'ascii' codec can't decode byte 0xfc in position 2: ordinal not in range(128)
+== {"fn": "decode_header", "args": ["日本 =?utf-8?q?x?="], "kw": {}}
+  [(b'\\u65e5\\u672c ', None), (b'x', 'utf-8')]
+== {"fn": "str_make_header", "args": ["日本 =?utf-8?q?x?="], "kw": {}}
+  '\\u65e5\\u672c x'
+== {"fn": "encode_make_header", "args": ["日本 =?utf-8?q?x?="], "kw": {}}
+  '\\u65e5\\u672c =?utf-8?q?x?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?café?="], "kw": {}}
+  [(b'caf\xe9', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?café?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 3: unexpected end of data
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?café?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 3: unexpected end of data
+== {"fn": "decode_header", "args": ["=?utf-8?q?€?="], "kw": {}}
+  [(b'\\u20ac', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?€?="], "kw": {}}
+  '\\u20ac'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?€?="], "kw": {}}
+  '=?utf-8?q?=5Cu20ac?='
+== {"fn": "decode_header", "args": ["=?iso-8859-15?q?Prix_=A4_10?= =?utf-8?q?_=E2=82=AC?="], "kw": {}}
+  [(b'Prix \xa4 10', 'iso-8859-15'), (b' \xe2\x82\xac', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?iso-8859-15?q?Prix_=A4_10?= =?utf-8?q?_=E2=82=AC?="], "kw": {}}
+  'Prix € 10 €'
+== {"fn": "encode_make_header", "args": ["=?iso-8859-15?q?Prix_=A4_10?= =?utf-8?q?_=E2=82=AC?="], "kw": {}}
+  '=?iso-8859-15?q?Prix_=A4_10?= =?utf-8?b?IOKCrA==?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42\n =?utf-8?q?=E2=9C=93?="], "kw": {}}
+  [(b'Weekly digest \xe2\x80\x94 issue ', 'utf-8'), (b' 42', None), (b'\xe2\x9c\x93', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42\n =?utf-8?q?=E2=9C=93?="], "kw": {}}
+  'Weekly digest — issue  42 ✓'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42\n =?utf-8?q?=E2=9C=93?="], "kw": {}}
+  '=?utf-8?q?Weekly_digest_=E2=80=94_issue_?= 42 =?utf-8?b?4pyT?='
+== {"fn": "decode_header", "args": ["=?UTF-8?B?5Lya6K2w44Gu6K2w5LqL6Yyy?=\n =?UTF-8?B?44Gr44Gk44GE44Gm?="], "kw": {}}
+  [(b'\xe4\xbc\x9a\xe8\xad\xb0\xe3\x81\xae\xe8\xad\xb0\xe4\xba\x8b\xe9\x8c\xb2\xe3\x81\xab\xe3\x81\xa4\xe3\x81\x84\xe3\x81\xa6', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?UTF-8?B?5Lya6K2w44Gu6K2w5LqL6Yyy?=\n =?UTF-8?B?44Gr44Gk44GE44Gm?="], "kw": {}}
+  '会議の議事録について'
+== {"fn": "encode_make_header", "args": ["=?UTF-8?B?5Lya6K2w44Gu6K2w5LqL6Yyy?=\n =?UTF-8?B?44Gr44Gk44GE44Gm?="], "kw": {}}
+  '=?utf-8?b?5Lya6K2w44Gu6K2w5LqL6Yyy44Gr44Gk44GE44Gm?='
+== {"fn": "decode_header", "args": ["=?x-unknown?q?Mystery?="], "kw": {}}
+  [(b'Mystery', 'x-unknown')]
+== {"fn": "str_make_header", "args": ["=?x-unknown?q?Mystery?="], "kw": {}}
+  LookupError: unknown encoding: x-unknown
+== {"fn": "encode_make_header", "args": ["=?x-unknown?q?Mystery?="], "kw": {}}
+  LookupError: unknown encoding: x-unknown
+== {"fn": "decode_header", "args": ["=?utf-8?q?bad=FF?="], "kw": {}}
+  [(b'bad\xff', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?bad=FF?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 3: invalid start byte
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?bad=FF?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 3: invalid start byte
+== {"fn": "decode_header", "args": ["=?us-ascii?q?caf=E9?="], "kw": {}}
+  [(b'caf\xe9', 'us-ascii')]
+== {"fn": "str_make_header", "args": ["=?us-ascii?q?caf=E9?="], "kw": {}}
+  UnicodeDecodeError: 'ascii' codec can't decode byte 0xe9 in position 3: ordinal not in range(128)
+== {"fn": "encode_make_header", "args": ["=?us-ascii?q?caf=E9?="], "kw": {}}
+  UnicodeDecodeError: 'ascii' codec can't decode byte 0xe9 in position 3: ordinal not in range(128)
+== {"fn": "decode_header", "args": ["=?windows-1252?q?=80_42?="], "kw": {}}
+  [(b'\x80 42', 'windows-1252')]
+== {"fn": "str_make_header", "args": ["=?windows-1252?q?=80_42?="], "kw": {}}
+  '€ 42'
+== {"fn": "encode_make_header", "args": ["=?windows-1252?q?=80_42?="], "kw": {}}
+  '=?windows-1252?q?=80_42?='
+== {"fn": "decode_header", "args": ["=?utf-8?q?trunc=E2=82?="], "kw": {}}
+  [(b'trunc\xe2\x82', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?trunc=E2=82?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 5-6: unexpected end of data
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?trunc=E2=82?="], "kw": {}}
+  UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 5-6: unexpected end of data
+== {"fn": "decode_header", "args": ["=?utf-8*en?q?lang?="], "kw": {}}
+  [(b'lang', 'utf-8*en')]
+== {"fn": "str_make_header", "args": ["=?utf-8*en?q?lang?="], "kw": {}}
+  LookupError: unknown encoding: utf-8*en
+== {"fn": "encode_make_header", "args": ["=?utf-8*en?q?lang?="], "kw": {}}
+  LookupError: unknown encoding: utf-8*en
+== {"fn": "decode_header", "args": ["=?utf-8?q?a?b?="], "kw": {}}
+  [(b'a?b', 'utf-8')]
+== {"fn": "str_make_header", "args": ["=?utf-8?q?a?b?="], "kw": {}}
+  'a?b'
+== {"fn": "encode_make_header", "args": ["=?utf-8?q?a?b?="], "kw": {}}
+  '=?utf-8?b?YT9i?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Hello world"}, "encode": {}}}
+  'Hello world'
+  'Hello world'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Hello wörld"}, "encode": {}}}
+  'Hello wörld'
+  '=?utf-8?q?Hello_w=C3=B6rld?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Hello wörld", "charset": "utf-8"}, "encode": {}}}
+  'Hello wörld'
+  '=?utf-8?q?Hello_w=C3=B6rld?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Hello wörld", "charset": "iso-8859-1"}, "encode": {}}}
+  'Hello wörld'
+  '=?iso-8859-1?q?Hello_w=F6rld?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "€ 10", "charset": "iso-8859-1"}, "encode": {}}}
+  UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+== {"fn": "header", "args": [], "kw": {"init": {"s": "€ 10", "charset": "windows-1252"}, "encode": {}}}
+  '€ 10'
+  '=?windows-1252?q?=80_10?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "encode": {}}}
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29", "header_name": "Subject"}, "encode": {}}}
+  'word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29'
+  'word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10\n word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21\n word22 word23 word24 word25 word26 word27 word28 word29'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "key0=value0; key1=value1; key2=value2; key3=value3; key4=value4; key5=value5; key6=value6; key7=value7; key8=value8; key9=value9; key10=value10; key11=value11", "header_name": "Content-Type"}, "encode": {}}}
+  'key0=value0; key1=value1; key2=value2; key3=value3; key4=value4; key5=value5; key6=value6; key7=value7; key8=value8; key9=value9; key10=value10; key11=value11'
+  'key0=value0; key1=value1; key2=value2; key3=value3; key4=value4;\n key5=value5; key6=value6; key7=value7; key8=value8; key9=value9;\n key10=value10; key11=value11'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "user0@example.com, user1@example.com, user2@example.com, user3@example.com, user4@example.com, user5@example.com, user6@example.com, user7@example.com, user8@example.com", "header_name": "To"}, "encode": {}}}
+  'user0@example.com, user1@example.com, user2@example.com, user3@example.com, user4@example.com, user5@example.com, user6@example.com, user7@example.com, user8@example.com'
+  'user0@example.com, user1@example.com, user2@example.com,\n user3@example.com, user4@example.com, user5@example.com, user6@example.com,\n user7@example.com, user8@example.com'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "user0@example.com, user1@example.com, user2@example.com, user3@example.com, user4@example.com, user5@example.com, user6@example.com, user7@example.com, user8@example.com", "header_name": "To"}, "encode": {"splitchars": " "}}}
+  'user0@example.com, user1@example.com, user2@example.com, user3@example.com, user4@example.com, user5@example.com, user6@example.com, user7@example.com, user8@example.com'
+  'user0@example.com, user1@example.com, user2@example.com,\n user3@example.com, user4@example.com, user5@example.com, user6@example.com,\n user7@example.com, user8@example.com'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Grüße aus Köln und München, Grüße aus Köln und München, Grüße aus Köln und München, Grüße aus Köln und München, ", "charset": "utf-8", "header_name": "Subject"}, "encode": {}}}
+  'Grüße aus Köln und München, Grüße aus Köln und München, Grüße aus Köln und München, Grüße aus Köln und München, '
+  '=?utf-8?b?R3LDvMOfZSBhdXMgS8O2bG4gdW5kIE3DvG5jaGVuLCBHcsO8w59lIGF1?=\n =?utf-8?b?cyBLw7ZsbiB1bmQgTcO8bmNoZW4sIEdyw7zDn2UgYXVzIEvDtmxuIHVuZCBNw7xu?=\n =?utf-8?b?Y2hlbiwgR3LDvMOfZSBhdXMgS8O2bG4gdW5kIE3DvG5jaGVuLCA=?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト", "charset": "utf-8", "header_name": "Subject"}, "encode": {}}}
+  '日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト日本語のテキスト'
+  '=?utf-8?b?5pel5pys6Kqe44Gu44OG44Kt44K544OI5pel5pys6Kqe44Gu44OG44Kt?=\n =?utf-8?b?44K544OI5pel5pys6Kqe44Gu44OG44Kt44K544OI5pel5pys6Kqe44Gu44OG44Kt?=\n =?utf-8?b?44K544OI5pel5pys6Kqe44Gu44OG44Kt44K544OI5pel5pys6Kqe44Gu44OG44Kt?=\n =?utf-8?b?44K544OI?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Résumé of the café meeting", "charset": "iso-8859-1", "header_name": "Subject"}, "encode": {}}}
+  'Résumé of the café meeting'
+  '=?iso-8859-1?q?R=E9sum=E9_of_the_caf=E9_meeting?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "header_name": "X-Long-Header-Name"}, "encode": {}}}
+  'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+  '\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "short", "maxlinelen": 10}, "encode": {}}}
+  'short'
+  'short'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Grüße aus Köln", "charset": "utf-8", "maxlinelen": 30}, "encode": {}}}
+  'Grüße aus Köln'
+  '=?utf-8?b?R3LDvMOfZSBhdXMg?=\n =?utf-8?b?S8O2bG4=?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Grüße aus Köln", "charset": "utf-8"}, "encode": {"maxlinelen": 0}}}
+  'Grüße aus Köln'
+  '=?utf-8?b?R3LDvMOfZSBhdXMgS8O2bG4=?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "line one\nline two\n  indented three"}, "encode": {}}}
+  'line one\nline two\n  indented three'
+  'line one\nline two\n  indented three'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "line one\nBcc: injected@example.com"}, "encode": {}}}
+  'line one\nBcc: injected@example.com'
+  HeaderParseError: header value appears to contain an embedded header: 'line one\nBcc: injected@example.com'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Grüße\nKöln", "charset": "utf-8"}, "encode": {}}}
+  'Grüße\nKöln'
+  '=?utf-8?b?R3LDvMOfZQ==?=\n =?utf-8?b?IEvDtmxu?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "tab\tseparated\twords tab\tseparated\twords tab\tseparated\twords tab\tseparated\twords tab\tseparated\twords ", "header_name": "Subject"}, "encode": {}}}
+  'tab\tseparated\twords tab\tseparated\twords tab\tseparated\twords tab\tseparated\twords tab\tseparated\twords '
+  'tab\tseparated\twords tab\tseparated\twords tab\tseparated\twords\n tab\tseparated\twords tab\tseparated\twords '
+== {"fn": "header", "args": [], "kw": {"init": {"s": "a, b", "continuation_ws": "\t", "header_name": "To", "maxlinelen": 8}, "encode": {}}}
+  'a, b'
+  'a, b'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Hello", "charset": "us-ascii"}, "encode": {"linesep": "\r\n"}}}
+  'Hello'
+  'Hello'
+== {"fn": "header", "args": [], "kw": {"init": {"s": "Hello wörld", "charset": "ascii"}, "encode": {}}}
+  'Hello wörld'
+  '=?utf-8?q?Hello_w=C3=B6rld?='
+== {"fn": "header", "args": [], "kw": {"init": {"s": "naïve", "charset": "koi8-zz"}, "encode": {}}}
+  LookupError: unknown encoding: koi8-zz
+== {"fn": "header", "args": [], "kw": {"init": {"s": "", "charset": "utf-8"}, "encode": {}}}
+  ''
+  ''
+== {"fn": "header", "args": [], "kw": {"init": {"s": "x", "charset": "Latin_1"}, "encode": {}}}
+  'x'
+  '=?iso-8859-1?q?x?='
+== {"fn": "header_parts", "args": [[["Hello ", null], ["wörld", "utf-8"], [" again", null]]], "kw": {}}
+  'Hello wörld again'
+  'Hello =?utf-8?b?d8O2cmxk?= again'
+  [(b'Hello ', 'us-ascii'), (b'w\xc3\xb6rld', 'utf-8'), (b' again', 'us-ascii')]
+== {"fn": "header_parts", "args": [[["Price: ", "us-ascii"], ["10 €", "iso-8859-15"], ["(", null], ["net", "utf-8"], [")", null]]], "kw": {}}
+  'Price: 10 €(net)'
+  'Price: =?iso-8859-15?q?10_=A4?=(=?utf-8?q?net?=)'
+  [(b'Price: ', 'us-ascii'), (b'10 \xa4', 'iso-8859-15'), (b'(', 'us-ascii'), (b'net', 'utf-8'), (b')', 'us-ascii')]
+== {"fn": "header_parts", "args": [[["a", "utf-8"], ["b", "utf-8"], ["c", "iso-8859-1"], ["d", "iso-8859-1"]]], "kw": {}}
+  'a bc d'
+  '=?utf-8?q?a_b?= =?iso-8859-1?q?c_d?='
+  [(b'a b', 'utf-8'), (b'c d', 'iso-8859-1')]
+== {"fn": "header_parts", "args": [[["café", "us-ascii"], ["ok", null]]], "kw": {}}
+  'café ok'
+  '=?utf-8?b?Y2Fmw6k=?= ok'
+  [(b'caf\xc3\xa9', 'utf-8'), (b'ok', 'us-ascii')]
+== {"fn": "header_parts", "args": [[["€", "iso-8859-1"]]], "kw": {}}
+  UnicodeEncodeError: 'latin-1' codec can't encode character '\u20ac' in position 0: ordinal not in range(256)
+== mail/01.eml
+  from: 'Ana Lima' 'ana.lima@example.org'
+  to: 'Ben Okafor' 'ben@example.net'
+  to: 'Chen, Wei' 'wei.chen@example.com'
+  to: '' 'team@example.org'
+  date: 2026-10-19T09:30:00-05:00
+  utc: 1792420200
+  subject: 'Quarterly report'
+  reply To: Ana Lima <ana.lima@example.org>
+  reply Subject: =?utf-8?q?Re=3A_Quarterly_report?=
+  reply Date: Mon, 19 Oct 2026 15:30:00 GMT
+== mail/02.eml
+  from: 'José Martínez' 'jose@example.es'
+  to: 'François' 'francois@example.fr'
+  date: 2026-10-20T14:05:59+02:00
+  utc: 1792497959
+  subject: 'Re: Reunión del lunes'
+  reply To: =?utf-8?b?Sm9zw6kgTWFydMOtbmV6?= <jose@example.es>
+  reply Subject: =?utf-8?q?Re=3A_Reuni=C3=B3n_del_lunes?=
+  reply Date: Tue, 20 Oct 2026 13:05:59 GMT
+== mail/03.eml
+  from: '山田太郎' 'yamada@example.jp'
+  to: '' ''
+  date: 2026-10-21T08:00:00+09:00
+  utc: 1792537200
+  subject: '会議の議事録について'
+  reply To: =?utf-8?b?5bGx55Sw5aSq6YOO?= <yamada@example.jp>
+  reply Subject: =?utf-8?b?UmU6IOS8muitsOOBruitsOS6i+mMsuOBq+OBpOOBhOOBpg==?=
+  reply Date: Wed, 21 Oct 2026 00:00:00 GMT
+== mail/04.eml
+  from: 'Example Billing' 'billing@example.com'
+  to: "O'Brien, Pat" 'pat.obrien@example.ie'
+  date: ValueError: second must be in 0..59
+  utc: 1792627200
+  subject: 'Your invoice € 42 is ready'
+  reply To: Example Billing <billing@example.com>
+  reply Subject: =?utf-8?q?Re=3A_Your_invoice_=E2=82=AC_42_is_ready?=
+  reply Date: Thu, 22 Oct 2026 01:00:00 GMT
+== mail/05.eml
+  from: 'Grüße Team' 'gruesse@example.de'
+  to: 'Dörte' 'doerte@example.de'
+  date: 2026-10-22T10:15:00
+  utc: 1792664100
+  subject: 'Grüße aus Köln'
+  reply To: =?utf-8?b?R3LDvMOfZSBUZWFt?= <gruesse@example.de>
+  reply Subject: =?utf-8?b?UmU6IEdyw7zDn2UgYXVzIEvDtmxu?=
+  reply Date: Thu, 22 Oct 2026 11:15:00 GMT
+== mail/06.eml
+  from: 'Support "Desk"' 'support@example.com'
+  to: '' 'alice@example.com'
+  to: '' 'bob@example.com'
+  to: '' 'carol@example.com'
+  date: 2026-10-23T07:00:00
+  utc: 1792738800
+  subject: '[Ticket #4411] Printer on 3rd floor'
+  reply To: "Support \"Desk\"" <support@example.com>
+  reply Subject: =?utf-8?q?Re=3A_=5BTicket_=234411=5D_Printer_on_3rd_floor?=
+  reply Date: Fri, 23 Oct 2026 08:00:00 GMT
+== mail/07.eml
+  from: 'Eve' 'eve@example.com'
+  to: '' ''
+  date: 2026-10-24T12:00:00-04:00
+  utc: 1792857600
+  subject: 'Prix € 10 €'
+  reply To: Eve <eve@example.com>
+  reply Subject: =?utf-8?b?UmU6IFByaXgg4oKsIDEwIOKCrA==?=
+  reply Date: Sat, 24 Oct 2026 17:00:00 GMT
+== mail/08.eml
+  from: '' 'news@example.org'
+  to: 'Weekly list' 'list@example.org'
+  date: 2026-10-25T06:30:00+00:00
+  utc: 1792909800
+  subject: 'Weekly digest — issue  42 ✓'
+  reply To: news@example.org
+  reply Subject: =?utf-8?b?UmU6IFdlZWtseSBkaWdlc3Qg4oCUIGlzc3VlICA0MiDinJM=?=
+  reply Date: Sun, 25 Oct 2026 07:30:00 GMT
+== mail/09.eml
+  from: 'Dana Scully' 'dana@example.gov'
+  to: 'Fox Mulder' 'fox@example.gov'
+  date: ValueError: hour must be in 0..23
+  utc: 1793062800
+  subject: 'Truth is out there'
+  reply To: Dana Scully <dana@example.gov>
+  reply Subject: =?utf-8?q?Re=3A_Truth_is_out_there?=
+  reply Date: Tue, 27 Oct 2026 02:00:00 GMT
+== mail/10.eml
+  from: 'Bad base64' 'bad@example.com'
+  to: '' 'x@example.com'
+  date: ValueError: Invalid date value or format "not a date"
+  subject: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+  reply To: Bad base64 <bad@example.com>
+  reply Subject: =?utf-8?b?UmU6ID0/dXRmLTg/Yj8vLy8/PQ==?=
+== mail/11.eml
+  from: 'Résumé Bot' 'bot@example.com'
+  to: '' 'hr@example.com'
+  date: 2026-10-27T16:45:12+05:30
+  utc: 1793099712
+  subject: LookupError: unknown encoding: x-unknown
+  reply To: =?utf-8?b?UsOpc3Vtw6kgQm90?= <bot@example.com>
+  reply Subject: =?utf-8?b?UmU6ID0/eC11bmtub3duP3E/TXlzdGVyeT89?=
+  reply Date: Tue, 27 Oct 2026 12:15:12 GMT
+== address book
+  alice@example.com ''
+  ana.lima@example.org 'Ana Lima'
+  bad@example.com 'Bad base64'
+  ben@example.net 'Ben Okafor'
+  billing@example.com 'Example Billing'
+  bob@example.com ''
+  bot@example.com 'Résumé Bot'
+  carol@example.com ''
+  dana@example.gov 'Dana Scully'
+  doerte@example.de 'Dörte'
+  eve@example.com 'Eve'
+  fox@example.gov 'Fox Mulder'
+  francois@example.fr 'François'
+  gruesse@example.de 'Grüße Team'
+  hr@example.com ''
+  jose@example.es 'José Martínez'
+  list@example.org 'Weekly list'
+  news@example.org ''
+  pat.obrien@example.ie "O'Brien, Pat"
+  support@example.com 'Support "Desk"'
+  team@example.org ''
+  wei.chen@example.com 'Chen, Wei'
+  x@example.com ''
+  yamada@example.jp '山田太郎'

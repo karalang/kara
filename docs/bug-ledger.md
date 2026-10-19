@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 281 |
 | codegen-gap | 273 |
-| false-positive | 236 |
+| false-positive | 239 |
 | perf | 175 |
 | other | 175 |
 | diagnostics | 168 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2947 |
-| interp | 961 |
-| typecheck | 478 |
+| codegen | 2948 |
+| interp | 962 |
+| typecheck | 480 |
 | other | 115 |
 | ownership | 113 |
 | runtime | 78 |
@@ -168,6 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-54 | 2026-10-18 | resolver | low | A gated library module's private helper collides with a program's own item of the same name: `import std.uuid.{v4};` beside a program's `fn uuid_hex(x: i64) -> i64` is refused with "'uuid_hex' is already defined in this scope", because the splice copies `v4`'s non-`pub` helper `uuid_hex` into the program's scope | — |
 | B-2026-10-19-2 | 2026-10-19 | typecheck | low | String has no pop() or truncate(): `s.pop()` and `s.truncate(n)` are refused with "no method 'pop'/'truncate' on type 'String'" | — |
 | B-2026-10-19-3 | 2026-10-19 | typecheck | low | `x.powf(y)` on an `f64` is refused with only "no method 'powf' on type 'f64'": the error does not point to Kāra's `pow`, and docs/library lists none of the float math methods | — |
+| B-2026-10-19-4 | 2026-10-19 | typecheck | low | A literal-only nested if (or else-if chain) is not coerced to Str when unified with a Str arm or branch: `match b { 0 => step(b), _ => if b < 128 { "" } else { "bad" } }` fails 'incompatible types StringSlice and String' (remainder of B-2026-10-18-6) | — |
+| B-2026-10-19-5 | 2026-10-19 | typecheck | low | Vec[String].join refuses a Str separator ('expected String, found Str'), though docs/library/collections.md gives `fn join(self, sep: Str)`; a String literal works | — |
+| B-2026-10-19-6 | 2026-10-19 | interp+codegen | medium | MIR borrowck keeps a Vec[Str] collected from s.split(..) borrowing s until scope end, so a later `s = ...` is refused (E0516 'drop of _1 while it is borrowed'); karac check accepts it | — |
 
 ### Relocated
 
