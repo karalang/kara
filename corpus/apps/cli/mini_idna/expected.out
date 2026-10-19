@@ -1,0 +1,1474 @@
+== sites, mapped and back
+-- encode uts46 'Bücher.example'
+   b'xn--bcher-kva.example'
+-- decode uts46 'Bücher.example'
+   'bücher.example'
+-- encode uts46 'münchen.de'
+   b'xn--mnchen-3ya.de'
+-- decode uts46 'münchen.de'
+   'münchen.de'
+-- encode uts46 'MÜNCHEN.DE'
+   b'xn--mnchen-3ya.de'
+-- decode uts46 'MÜNCHEN.DE'
+   'münchen.de'
+-- encode uts46 'straße.de'
+   b'xn--strae-oqa.de'
+-- decode uts46 'straße.de'
+   'straße.de'
+-- encode uts46 'Faß.de'
+   b'xn--fa-hia.de'
+-- decode uts46 'Faß.de'
+   'faß.de'
+-- encode uts46 'ﬁle.example'
+   b'file.example'
+-- decode uts46 'ﬁle.example'
+   'file.example'
+-- encode uts46 'Ⅷ.example'
+   b'viii.example'
+-- decode uts46 'Ⅷ.example'
+   'viii.example'
+-- encode uts46 '①②.com'
+   b'12.com'
+-- decode uts46 '①②.com'
+   '12.com'
+-- encode uts46 'ＡＢＣ．ｃｏｍ'
+   b'abc.com'
+-- decode uts46 'ＡＢＣ．ｃｏｍ'
+   'abc.com'
+-- encode uts46 'example。com'
+   b'example.com'
+-- decode uts46 'example。com'
+   'example.com'
+-- encode uts46 '日本語。ＪＰ'
+   b'xn--wgv71a119e.jp'
+-- decode uts46 '日本語。ＪＰ'
+   '日本語.jp'
+-- encode uts46 '例え.テスト'
+   b'xn--r8jz45g.xn--zckzah'
+-- decode uts46 '例え.テスト'
+   '例え.テスト'
+-- encode uts46 'правительство.рф'
+   b'xn--80aealotwbjpid2k.xn--p1ai'
+-- decode uts46 'правительство.рф'
+   'правительство.рф'
+-- encode uts46 'ПРАВИТЕЛЬСТВО.РФ'
+   b'xn--80aealotwbjpid2k.xn--p1ai'
+-- decode uts46 'ПРАВИТЕЛЬСТВО.РФ'
+   'правительство.рф'
+-- encode uts46 '한국.kr'
+   b'xn--3e0b707e.kr'
+-- decode uts46 '한국.kr'
+   '한국.kr'
+-- encode uts46 'مثال.إختبار'
+   b'xn--mgbh0fb.xn--kgbechtv'
+-- decode uts46 'مثال.إختبار'
+   'مثال.إختبار'
+-- encode uts46 'דוגמה.טעסט'
+   b'xn--6dbbec0c.xn--deba0ad'
+-- decode uts46 'דוגמה.טעסט'
+   'דוגמה.טעסט'
+-- encode uts46 'ελληνικά.gr'
+   b'xn--hxargifdar.gr'
+-- decode uts46 'ελληνικά.gr'
+   'ελληνικά.gr'
+-- encode uts46 'ΕΛΛΗΝΙΚΆ.GR'
+   b'xn--hxargifdar.gr'
+-- decode uts46 'ΕΛΛΗΝΙΚΆ.GR'
+   'ελληνικά.gr'
+-- encode uts46 'ç.com'
+   b'xn--7ca.com'
+-- decode uts46 'ç.com'
+   'ç.com'
+-- encode uts46 'ç.com'
+   b'xn--7ca.com'
+-- decode uts46 'ç.com'
+   'ç.com'
+-- encode uts46 'việt.vn'
+   b'xn--vit-5kz.vn'
+-- decode uts46 'việt.vn'
+   'việt.vn'
+-- encode uts46 'VIỆT.VN'
+   b'xn--vit-5kz.vn'
+-- decode uts46 'VIỆT.VN'
+   'việt.vn'
+-- encode uts46 'ไทย.th'
+   b'xn--o3cw4h.th'
+-- decode uts46 'ไทย.th'
+   'ไทย.th'
+-- encode uts46 'ภาษาไทย.ไทย'
+   b'xn--o3crh0a8bb0k.xn--o3cw4h'
+-- decode uts46 'ภาษาไทย.ไทย'
+   'ภาษาไทย.ไทย'
+-- encode uts46 'भारत.भारत'
+   b'xn--h2brj9c.xn--h2brj9c'
+-- decode uts46 'भारत.भारत'
+   'भारत.भारत'
+-- encode uts46 'नमस्ते.in'
+   b'xn--h2bhs4b8d8a.in'
+-- decode uts46 'नमस्ते.in'
+   'नमस्ते.in'
+-- encode uts46 '中国.中国'
+   b'xn--fiqs8s.xn--fiqs8s'
+-- decode uts46 '中国.中国'
+   '中国.中国'
+-- encode uts46 '香港.香港'
+   b'xn--j6w193g.xn--j6w193g'
+-- decode uts46 '香港.香港'
+   '香港.香港'
+-- encode uts46 'españa.es'
+   b'xn--espaa-rta.es'
+-- decode uts46 'españa.es'
+   'españa.es'
+-- encode uts46 'ESPAÑA.ES'
+   b'xn--espaa-rta.es'
+-- decode uts46 'ESPAÑA.ES'
+   'españa.es'
+-- encode uts46 'øl.no'
+   b'xn--l-4ga.no'
+-- decode uts46 'øl.no'
+   'øl.no'
+-- encode uts46 'æble.dk'
+   b'xn--ble-xla.dk'
+-- decode uts46 'æble.dk'
+   'æble.dk'
+-- encode uts46 'ĳssel.nl'
+   b'ijssel.nl'
+-- decode uts46 'ĳssel.nl'
+   'ijssel.nl'
+-- encode uts46 'ǅemal.ba'
+   b'xn--demal-uib.ba'
+-- decode uts46 'ǅemal.ba'
+   'džemal.ba'
+-- encode uts46 '℡.example'
+   b'tel.example'
+-- decode uts46 '℡.example'
+   'tel.example'
+-- encode uts46 '㎒.example'
+   b'mhz.example'
+-- decode uts46 '㎒.example'
+   'mhz.example'
+-- encode uts46 'ｈｔｔｐｓ．ｅｘａｍｐｌｅ'
+   b'https.example'
+-- decode uts46 'ｈｔｔｐｓ．ｅｘａｍｐｌｅ'
+   'https.example'
+-- encode uts46 'soft\xadhyphen.com'
+   b'softhyphen.com'
+-- decode uts46 'soft\xadhyphen.com'
+   'softhyphen.com'
+-- encode uts46 'zero\u200bwidth.com'
+   b'zerowidth.com'
+-- decode uts46 'zero\u200bwidth.com'
+   'zerowidth.com'
+-- encode uts46 '각.kr'
+   b'xn--p39a.kr'
+-- decode uts46 '각.kr'
+   '각.kr'
+-- encode uts46 'Ⓐⓑ.com'
+   b'ab.com'
+-- decode uts46 'Ⓐⓑ.com'
+   'ab.com'
+-- encode uts46 'ǆ.com'
+   b'xn--d-toa.com'
+-- decode uts46 'ǆ.com'
+   'dž.com'
+-- encode uts46 'ς.gr'
+   b'xn--3xa.gr'
+-- decode uts46 'ς.gr'
+   'ς.gr'
+-- encode uts46 'Σ.gr'
+   b'xn--4xa.gr'
+-- decode uts46 'Σ.gr'
+   'σ.gr'
+-- encode uts46 '\u1c8a.ge'
+error: IDNABidiError bidi_unknown_direction at 1: Unknown directionality in label '\u1c8a' at position 1
+-- decode uts46 '\u1c8a.ge'
+error: IDNABidiError bidi_unknown_direction at 1: Unknown directionality in label '\u1c8a' at position 1
+-- encode uts46 '\U00010d40.example'
+error: IDNABidiError bidi_unknown_direction at 1: Unknown directionality in label '\U00010d40' at position 1
+-- decode uts46 '\U00010d40.example'
+error: IDNABidiError bidi_unknown_direction at 1: Unknown directionality in label '\U00010d40' at position 1
+-- encode uts46 'xn--bcher-kva.example'
+   b'xn--bcher-kva.example'
+-- decode uts46 'xn--bcher-kva.example'
+   'bücher.example'
+-- encode uts46 'xn--mnchen-3ya.de'
+   b'xn--mnchen-3ya.de'
+-- decode uts46 'xn--mnchen-3ya.de'
+   'münchen.de'
+-- encode uts46 'xn--zca.de'
+   b'xn--zca.de'
+-- decode uts46 'xn--zca.de'
+   'ß.de'
+-- encode uts46 'xn--80aealotwbjpid2k.xn--p1ai'
+   b'xn--80aealotwbjpid2k.xn--p1ai'
+-- decode uts46 'xn--80aealotwbjpid2k.xn--p1ai'
+   'правительство.рф'
+-- encode uts46 'xn--3e0b707e.kr'
+   b'xn--3e0b707e.kr'
+-- decode uts46 'xn--3e0b707e.kr'
+   '한국.kr'
+-- encode uts46 'xn--mgbh0fb.xn--kgbechtv'
+   b'xn--mgbh0fb.xn--kgbechtv'
+-- decode uts46 'xn--mgbh0fb.xn--kgbechtv'
+   'مثال.إختبار'
+-- encode uts46 'xn--fsqu00a.xn--0zwm56d'
+   b'xn--fsqu00a.xn--0zwm56d'
+-- decode uts46 'xn--fsqu00a.xn--0zwm56d'
+   '例子.测试'
+-- encode uts46 'XN--BCHER-KVA.EXAMPLE'
+   b'xn--bcher-kva.example'
+-- decode uts46 'XN--BCHER-KVA.EXAMPLE'
+   'bücher.example'
+-- encode uts46 'xn--wgv71a119e.jp'
+   b'xn--wgv71a119e.jp'
+-- decode uts46 'xn--wgv71a119e.jp'
+   '日本語.jp'
+-- encode uts46 'xn--n3h.example'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2603 at position 1 of '☃' not allowed
+-- decode uts46 'xn--n3h.example'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2603 at position 1 of '☃' not allowed
+-- encode uts46 'xn--i-7iq.ws'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+2764 at position 2 of 'i❤' not allowed
+-- decode uts46 'xn--i-7iq.ws'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+2764 at position 2 of 'i❤' not allowed
+-- encode uts46 'xn--ls8h.la'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+1F4A9 at position 1 of '💩' not allowed
+-- decode uts46 'xn--ls8h.la'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+1F4A9 at position 1 of '💩' not allowed
+== strict IDNA 2008
+-- encode 'bücher.example'
+   b'xn--bcher-kva.example'
+-- encode 'Bücher.example'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0042 at position 1 of 'Bücher' not allowed
+-- encode 'straße.de'
+   b'xn--strae-oqa.de'
+-- encode 'ﬁle.example'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+FB01 at position 1 of 'ﬁle' not allowed
+-- encode '☕.us'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2615 at position 1 of '☕' not allowed
+-- encode 'i❤.ws'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+2764 at position 2 of 'i❤' not allowed
+-- encode 'example。com'
+   b'example.com'
+-- encode strict 'example。com'
+error: InvalidCodepoint disallowed_codepoint at 8: Codepoint U+3002 at position 8 of 'example。com' not allowed
+-- encode '日本語。jp'
+   b'xn--wgv71a119e.jp'
+-- encode 'ascii.example'
+   b'ascii.example'
+-- encode 'ASCII.Example'
+   b'ASCII.Example'
+-- encode 'a\x00b.com'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+0000 at position 2 of 'a\x00b' not allowed
+-- encode 'under_score.com'
+error: InvalidCodepoint disallowed_codepoint at 6: Codepoint U+005F at position 6 of 'under_score' not allowed
+-- encode 'ç.com'
+error: IDNAError not_nfc: Label must be in Normalization Form C
+-- decode 'xn--bcher-kva.example'
+   'bücher.example'
+-- decode 'XN--BCHER-KVA.example'
+   'bücher.example'
+-- decode 'xn--n3h.example'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2603 at position 1 of '☃' not allowed
+-- decode 'xn--zca.de'
+   'ß.de'
+-- decode 'bücher.example'
+   'bücher.example'
+-- decode 'Bücher.example'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0042 at position 1 of 'Bücher' not allowed
+-- decode 'example.com.'
+   'example.com.'
+-- decode 'xn--bcher-kva.example'
+   'bücher.example'
+== label rules
+-- encode '-abc.com'
+error: IDNAError hyphen_start_end: Label must not start or end with a hyphen
+-- encode 'abc-.com'
+error: IDNAError hyphen_start_end: Label must not start or end with a hyphen
+-- encode 'ab--cd.com'
+error: IDNAError hyphen_3_4: Label has disallowed hyphens in 3rd and 4th position
+-- encode 'xn--abc.com'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0082 at position 1 of '\x82\x81\x80' not allowed
+-- encode 'xn--.com'
+error: IDNAError invalid_alabel: Malformed A-label, no Punycode eligible content found
+-- encode 'xn--abc-.com'
+error: IDNAError invalid_alabel: A-label must not end with a hyphen
+-- decode 'xn--.com'
+error: IDNAError invalid_alabel: Malformed A-label, no Punycode eligible content found
+-- decode 'xn--abc-.com'
+error: IDNAError invalid_alabel: A-label must not end with a hyphen
+-- decode 'xn---bbk.com'
+error: IDNAError non_canonical_alabel: A-label is not the canonical Punycode encoding of its U-label
+-- decode 'xn--bbk.com'
+   'ま.com'
+-- decode 'xn--zz.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--99999999999999.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--a.com'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0080 at position 1 of '\x80' not allowed
+-- decode 'xn--ab-.com'
+error: IDNAError invalid_alabel: A-label must not end with a hyphen
+-- decode 'xn--ls8h'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+1F4A9 at position 1 of '💩' not allowed
+-- decode 'xn--ls8h-'
+error: IDNAError invalid_alabel: A-label must not end with a hyphen
+-- decode 'xn--Mnchen-3ya.de'
+   'münchen.de'
+-- decode 'xn--mnchen-3yA.de'
+   'münchen.de'
+-- decode 'xn--tda'
+   'ü'
+-- decode 'xn--4ca0bs'
+   'äöü'
+-- encode '́abc.com'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- encode uts46 '́abc.com'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- encode 'a\u200db.com'
+error: InvalidCodepointContext contextj at 2: Joiner U+200D not allowed at position 2 in 'a\u200db'
+-- encode 'क्\u200dष.in'
+   b'xn--11b2ezcw70k.in'
+-- encode 'ab\u200cc.com'
+error: InvalidCodepointContext contextj at 3: Joiner U+200C not allowed at position 3 in 'ab\u200cc'
+-- encode 'ن\u200cی.ir'
+   b'xn--ihb2yl06d.ir'
+-- encode 'ب\u200ca.ir'
+error: InvalidCodepointContext contextj at 2: Joiner U+200C not allowed at position 2 in 'ب\u200ca'
+-- encode 'col·legi.cat'
+   b'xn--collegi-xma.cat'
+-- encode 'a·b.cat'
+error: InvalidCodepointContext contexto at 2: Codepoint U+00B7 not allowed at position 2 in 'a·b'
+-- encode '·l.cat'
+error: InvalidCodepointContext contexto at 1: Codepoint U+00B7 not allowed at position 1 in '·l'
+-- encode 'α͵β.gr'
+   b'xn--wva3je.gr'
+-- encode 'α͵.gr'
+error: InvalidCodepointContext contexto at 2: Codepoint U+0375 not allowed at position 2 in 'α͵'
+-- encode '͵β.gr'
+   b'xn--wva6j.gr'
+-- encode 'א׳.il'
+   b'xn--4db4e.il'
+-- encode 'a׳.il'
+error: InvalidCodepointContext contexto at 2: Codepoint U+05F3 not allowed at position 2 in 'a׳'
+-- encode 'ア・イ.jp'
+   b'xn--ccke4x.jp'
+-- encode 'a・b.jp'
+error: InvalidCodepointContext contexto at 2: Codepoint U+30FB not allowed at position 2 in 'a・b'
+-- encode '・.jp'
+error: InvalidCodepointContext contexto at 1: Codepoint U+30FB not allowed at position 1 in '・'
+-- encode '٠١.eg'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '٠١' must be directionality L, R or AL
+-- encode '٠۱.eg'
+error: InvalidCodepointContext contexto at 1: Codepoint U+0660 not allowed at position 1 in '٠۱'
+-- encode '۰۱.ir'
+   b'xn--dmbc.ir'
+-- encode '\u0378.com'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0378 at position 1 of '\u0378' not allowed
+-- encode '\x01.com'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0001 at position 1 of '\x01' not allowed
+-- encode uts46 '\U000e0001.com'
+error: InvalidCodepoint uts46_disallowed at 1: Codepoint U+E0001 not allowed at position 1 in '\U000e0001.com'
+-- encode '\ue000.com'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+E000 at position 1 of '\ue000' not allowed
+== bidi
+-- check_bidi 'abc'
+   ok
+-- check_bidi ltr 'abc'
+   ok
+-- check_bidi 'aא'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- check_bidi ltr 'aא'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- check_bidi 'א1'
+   ok
+-- check_bidi ltr 'א1'
+   ok
+-- check_bidi '١א'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '١א' must be directionality L, R or AL
+-- check_bidi ltr '١א'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '١א' must be directionality L, R or AL
+-- check_bidi 'אa'
+error: IDNABidiError bidi_rule_2 at 2: Invalid direction for codepoint at position 2 in a right-to-left label
+-- check_bidi ltr 'אa'
+error: IDNABidiError bidi_rule_2 at 2: Invalid direction for codepoint at position 2 in a right-to-left label
+-- check_bidi 'א١1'
+error: IDNABidiError bidi_rule_4 at 3: Can not mix numeral types in a right-to-left label
+-- check_bidi ltr 'א١1'
+error: IDNABidiError bidi_rule_4 at 3: Can not mix numeral types in a right-to-left label
+-- check_bidi 'א̀'
+   ok
+-- check_bidi ltr 'א̀'
+   ok
+-- check_bidi 'א-'
+error: IDNABidiError bidi_rule_3 at 2: Label ends with illegal codepoint directionality
+-- check_bidi ltr 'א-'
+error: IDNABidiError bidi_rule_3 at 2: Label ends with illegal codepoint directionality
+-- check_bidi 'abcאd'
+error: IDNABidiError bidi_rule_5 at 4: Invalid direction for codepoint at position 4 in a left-to-right label
+-- check_bidi ltr 'abcאd'
+error: IDNABidiError bidi_rule_5 at 4: Invalid direction for codepoint at position 4 in a left-to-right label
+-- check_bidi 'مثال'
+   ok
+-- check_bidi ltr 'مثال'
+   ok
+-- check_bidi 'مثال1'
+   ok
+-- check_bidi ltr 'مثال1'
+   ok
+-- check_bidi 'مثال١'
+   ok
+-- check_bidi ltr 'مثال١'
+   ok
+-- check_bidi 'à'
+   ok
+-- check_bidi ltr 'à'
+   ok
+-- check_bidi '1abc'
+   ok
+-- check_bidi ltr '1abc'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '1abc' must be directionality L, R or AL
+-- check_bidi 'abc1'
+   ok
+-- check_bidi ltr 'abc1'
+   ok
+-- check_bidi 'abc-'
+   ok
+-- check_bidi ltr 'abc-'
+error: IDNABidiError bidi_rule_6 at 4: Label ends with illegal codepoint directionality
+-- check_bidi 'ab̀'
+   ok
+-- check_bidi ltr 'ab̀'
+   ok
+-- check_bidi '\U00010d40'
+error: IDNABidiError bidi_unknown_direction at 1: Unknown directionality in label '\U00010d40' at position 1
+-- check_bidi ltr '\U00010d40'
+error: IDNABidiError bidi_unknown_direction at 1: Unknown directionality in label '\U00010d40' at position 1
+-- check_bidi '١'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '١' must be directionality L, R or AL
+-- check_bidi ltr '١'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '١' must be directionality L, R or AL
+-- check_bidi '1'
+   ok
+-- check_bidi ltr '1'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '1' must be directionality L, R or AL
+-- check_bidi 'אב١٢'
+   ok
+-- check_bidi ltr 'אב١٢'
+   ok
+-- check_bidi 'א ב'
+error: IDNABidiError bidi_rule_2 at 2: Invalid direction for codepoint at position 2 in a right-to-left label
+-- check_bidi ltr 'א ב'
+error: IDNABidiError bidi_rule_2 at 2: Invalid direction for codepoint at position 2 in a right-to-left label
+== uts46 mapping
+-- remap std3 'Example.COM'
+   'example.com'
+-- remap 'Example.COM'
+   'example.com'
+-- remap std3 'under_score.com'
+error: InvalidCodepoint uts46_std3 at 6: Codepoint U+005F not allowed at position 6 in 'under_score.com'
+-- remap 'under_score.com'
+   'under_score.com'
+-- remap std3 'a!b.com'
+error: InvalidCodepoint uts46_std3 at 2: Codepoint U+0021 not allowed at position 2 in 'a!b.com'
+-- remap 'a!b.com'
+   'a!b.com'
+-- remap std3 'a！b.com'
+error: InvalidCodepoint uts46_std3 at 2: Codepoint U+FF01 not allowed at position 2 in 'a！b.com'
+-- remap 'a！b.com'
+   'a!b.com'
+-- remap std3 'ＡＢＣ'
+   'abc'
+-- remap 'ＡＢＣ'
+   'abc'
+-- remap std3 '℡'
+   'tel'
+-- remap '℡'
+   'tel'
+-- remap std3 '㎒'
+   'mhz'
+-- remap '㎒'
+   'mhz'
+-- remap std3 'ß'
+   'ß'
+-- remap 'ß'
+   'ß'
+-- remap std3 'ẞ'
+   'ß'
+-- remap 'ẞ'
+   'ß'
+-- remap std3 'Ⅻ'
+   'xii'
+-- remap 'Ⅻ'
+   'xii'
+-- remap std3 '⑴.com'
+error: InvalidCodepoint uts46_std3 at 1: Codepoint U+2474 not allowed at position 1 in '⑴.com'
+-- remap '⑴.com'
+   '(1).com'
+-- remap std3 '⒈.com'
+error: InvalidCodepoint uts46_disallowed at 1: Codepoint U+2488 not allowed at position 1 in '⒈.com'
+-- remap '⒈.com'
+error: InvalidCodepoint uts46_disallowed at 1: Codepoint U+2488 not allowed at position 1 in '⒈.com'
+-- remap std3 'soft\xadhyphen'
+   'softhyphen'
+-- remap 'soft\xadhyphen'
+   'softhyphen'
+-- remap std3 'zero\u200bwidth'
+   'zerowidth'
+-- remap 'zero\u200bwidth'
+   'zerowidth'
+-- remap std3 'ﬀ'
+   'ff'
+-- remap 'ﬀ'
+   'ff'
+-- remap std3 'Ǆ'
+   'dž'
+-- remap 'Ǆ'
+   'dž'
+-- remap std3 'Ꭰ'
+   'Ꭰ'
+-- remap 'Ꭰ'
+   'Ꭰ'
+-- remap std3 'İ'
+   'i̇'
+-- remap 'İ'
+   'i̇'
+-- remap std3 'İstanbul'
+   'i̇stanbul'
+-- remap 'İstanbul'
+   'i̇stanbul'
+-- remap std3 'x́'
+   'x́'
+-- remap 'x́'
+   'x́'
+-- remap std3 '가'
+   '가'
+-- remap '가'
+   '가'
+-- remap std3 '각'
+   '각'
+-- remap '각'
+   '각'
+-- remap std3 'Å'
+   'å'
+-- remap 'Å'
+   'å'
+-- remap std3 'Å'
+   'å'
+-- remap 'Å'
+   'å'
+-- remap std3 'Å'
+   'å'
+-- remap 'Å'
+   'å'
+-- remap std3 'ȩ́'
+   'ȩ́'
+-- remap 'ȩ́'
+   'ȩ́'
+-- remap std3 'ȩ́'
+   'ȩ́'
+-- remap 'ȩ́'
+   'ȩ́'
+-- remap std3 '̈́'
+   '̈́'
+-- remap '̈́'
+   '̈́'
+-- remap std3 'ｶﾞ'
+   'ガ'
+-- remap 'ｶﾞ'
+   'ガ'
+-- remap std3 'ｶﾞ'
+   'ガ'
+-- remap 'ｶﾞ'
+   'ガ'
+-- remap std3 'ﾞ'
+   '゙'
+-- remap 'ﾞ'
+   '゙'
+-- remap std3 '\xa0'
+error: InvalidCodepoint uts46_std3 at 1: Codepoint U+00A0 not allowed at position 1 in '\xa0'
+-- remap '\xa0'
+   ' '
+-- remap std3 ' '
+error: InvalidCodepoint uts46_std3 at 1: Codepoint U+0020 not allowed at position 1 in ' '
+-- remap ' '
+   ' '
+-- remap std3 'a b'
+error: InvalidCodepoint uts46_std3 at 2: Codepoint U+0020 not allowed at position 2 in 'a b'
+-- remap 'a b'
+   'a b'
+-- remap std3 '⒈'
+error: InvalidCodepoint uts46_disallowed at 1: Codepoint U+2488 not allowed at position 1 in '⒈'
+-- remap '⒈'
+error: InvalidCodepoint uts46_disallowed at 1: Codepoint U+2488 not allowed at position 1 in '⒈'
+-- remap std3 '\u2028'
+error: InvalidCodepoint uts46_disallowed at 1: Codepoint U+2028 not allowed at position 1 in '\u2028'
+-- remap '\u2028'
+error: InvalidCodepoint uts46_disallowed at 1: Codepoint U+2028 not allowed at position 1 in '\u2028'
+-- remap std3 'a\u3000b'
+error: InvalidCodepoint uts46_std3 at 2: Codepoint U+3000 not allowed at position 2 in 'a\u3000b'
+-- remap 'a\u3000b'
+   'a b'
+-- remap std3 '\u1c8a'
+   '\u1c8a'
+-- remap '\u1c8a'
+   '\u1c8a'
+-- remap std3 '\U00010d40'
+   '\U00010d40'
+-- remap '\U00010d40'
+   '\U00010d40'
+== labels one at a time
+-- alabel 'bücher'
+   b'xn--bcher-kva'
+-- alabel 'BÜCHER'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0042 at position 1 of 'BÜCHER' not allowed
+-- alabel 'xn--bcher-kva'
+   b'xn--bcher-kva'
+-- alabel 'XN--BCHER-KVA'
+   b'XN--BCHER-KVA'
+-- alabel 'abc'
+   b'abc'
+-- alabel 'ABC'
+   b'ABC'
+-- alabel ''
+error: IDNAError empty_label: Empty Label
+-- alabel 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+-- alabel 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+error: IDNAError label_too_long: Label too long
+-- alabel 'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+   b'xn--tdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+-- alabel 'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+error: IDNAError label_too_long: Label too long
+-- alabel 'xn--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0080 at position 1 of '\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80' not allowed
+-- alabel 'ç'
+error: IDNAError not_nfc: Label must be in Normalization Form C
+-- alabel 'ç'
+   b'xn--7ca'
+-- alabel 'a\u200db'
+error: InvalidCodepointContext contextj at 2: Joiner U+200D not allowed at position 2 in 'a\u200db'
+-- alabel 'aא'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- alabel '́a'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- alabel 'a b'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+0020 at position 2 of 'a b' not allowed
+-- ulabel 'bücher'
+   'bücher'
+-- ulabel 'BÜCHER'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0042 at position 1 of 'BÜCHER' not allowed
+-- ulabel 'xn--bcher-kva'
+   'bücher'
+-- ulabel 'XN--BCHER-KVA'
+   'bücher'
+-- ulabel 'abc'
+   'abc'
+-- ulabel 'ABC'
+   'abc'
+-- ulabel ''
+error: IDNAError empty_label: Empty Label
+-- ulabel 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+-- ulabel 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+-- ulabel 'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+   'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+-- ulabel 'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+   'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+-- ulabel 'xn--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0080 at position 1 of '\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80' not allowed
+-- ulabel 'ç'
+error: IDNAError not_nfc: Label must be in Normalization Form C
+-- ulabel 'ç'
+   'ç'
+-- ulabel 'a\u200db'
+error: InvalidCodepointContext contextj at 2: Joiner U+200D not allowed at position 2 in 'a\u200db'
+-- ulabel 'aא'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- ulabel '́a'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- ulabel 'a b'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+0020 at position 2 of 'a b' not allowed
+-- check_label 'bücher'
+   ok
+-- check_label 'BÜCHER'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0042 at position 1 of 'BÜCHER' not allowed
+-- check_label 'xn--bcher-kva'
+error: IDNAError hyphen_3_4: Label has disallowed hyphens in 3rd and 4th position
+-- check_label 'XN--BCHER-KVA'
+error: IDNAError hyphen_3_4: Label has disallowed hyphens in 3rd and 4th position
+-- check_label 'abc'
+   ok
+-- check_label 'ABC'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0041 at position 1 of 'ABC' not allowed
+-- check_label ''
+error: IDNAError empty_label: Empty Label
+-- check_label 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   ok
+-- check_label 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   ok
+-- check_label 'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+   ok
+-- check_label 'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+   ok
+-- check_label 'xn--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+error: IDNAError hyphen_3_4: Label has disallowed hyphens in 3rd and 4th position
+-- check_label 'ç'
+error: IDNAError not_nfc: Label must be in Normalization Form C
+-- check_label 'ç'
+   ok
+-- check_label 'a\u200db'
+error: InvalidCodepointContext contextj at 2: Joiner U+200D not allowed at position 2 in 'a\u200db'
+-- check_label 'aא'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- check_label '́a'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- check_label 'a b'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+0020 at position 2 of 'a b' not allowed
+== domain lengths
+-- encode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+-- encode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+-- encode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+error: IDNAError domain_too_long: Domain too long
+-- encode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+error: IDNAError domain_too_long: Domain too long
+-- encode 'üüüüüüüüüüüüüüüüüüüü.üüüüüüüüüüüüüüüüüüüü.üüüüüüüüüüüüüüüüüüüü.üüüüüüüüüüüüüüüüüüüü.üüüüüüüüüüüüüüüüüüüü.üüüüüüüüüüüüüüüüüüüü'
+   b'xn--tdaaaaaaaaaaaaaaaaaaaa.xn--tdaaaaaaaaaaaaaaaaaaaa.xn--tdaaaaaaaaaaaaaaaaaaaa.xn--tdaaaaaaaaaaaaaaaaaaaa.xn--tdaaaaaaaaaaaaaaaaaaaa.xn--tdaaaaaaaaaaaaaaaaaaaa'
+-- encode 'üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü'
+error: IDNAError input_too_long: Domain too long
+-- encode uts46 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+error: IDNAError input_too_long: Domain too long
+-- decode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+error: IDNAError domain_too_long: Domain too long
+-- decode 'a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.'
+   'a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.'
+-- encode ''
+error: IDNAError empty_domain: Empty domain
+-- encode '.'
+error: IDNAError empty_label: Empty Label
+-- encode '..'
+error: IDNAError empty_label: Empty Label
+-- encode 'a..b'
+error: IDNAError empty_label: Empty Label
+-- encode '.a'
+error: IDNAError empty_label: Empty Label
+-- decode ''
+error: IDNAError empty_domain: Empty domain
+-- decode '.'
+error: IDNAError empty_label: Empty Label
+-- decode 'a..b'
+error: IDNAError empty_label: Empty Label
+-- encode 'a.'
+   b'a.'
+-- decode 'a.'
+   'a.'
+-- encode uts46 ''
+error: IDNAError empty_domain: Empty domain
+-- encode uts46 '。'
+error: IDNAError empty_label: Empty Label
+-- encode uts46 'a。'
+   b'a.'
+== display decoding
+-- decode display 'xn--bcher-kva.example'
+   'bücher.example'
+-- decode display 'xn--zz.example'
+   'xn--zz.example'
+-- decode display 'XN--ZZ.Example'
+   'xn--zz.example'
+-- decode display 'xn---bbk.com'
+   'xn---bbk.com'
+-- decode display 'good.xn--99999999.bad'
+   'good.xn--99999999.bad'
+-- decode display 'xn--a.xn--b.c'
+   'xn--a.xn--b.c'
+-- decode display '-bad.xn--zz'
+error: IDNAError hyphen_start_end: Label must not start or end with a hyphen
+-- decode display 'xn--n3h.com'
+   'xn--n3h.com'
+== incremental
+-- inc_encode 'bücher' | '.exa' | 'mple'
+   b''
+   b'xn--bcher-kva.'
+   b'example'
+-- inc_encode 'bücher.' | 'example.'
+   b'xn--bcher-kva.'
+   b'example.'
+-- inc_encode '日本' | '語。' | 'jp'
+   b''
+   b'xn--wgv71a119e.'
+   b'jp'
+-- inc_encode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+-- inc_encode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+   b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.'
+error: IDNAError domain_too_long: Domain too long
+-- inc_encode '' | 'ab' | '' | 'c.d'
+   b''
+   b''
+   b''
+   b'abc.d'
+-- inc_encode 'xn--' | 'abc'
+   b''
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0082 at position 1 of '\x82\x81\x80' not allowed
+-- inc_encode '-bad.' | 'good'
+error: IDNAError hyphen_start_end: Label must not start or end with a hyphen
+-- inc_decode 'xn--bcher' | '-kva.exa' | 'mple'
+   ''
+   'bücher.'
+   'example'
+-- inc_decode 'xn--bcher-kva.' | 'example.'
+   'bücher.'
+   'example.'
+-- inc_decode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   ''
+   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+-- inc_decode 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' | 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   ''
+error: IDNAError domain_too_long: Domain too long
+-- inc_decode 'abc' | 'dü'
+   ''
+error: IDNAError invalid_ascii: Invalid ASCII in A-label
+-- inc_decode '' | 'xn--zca' | '.de'
+   ''
+   ''
+   'ß.de'
+-- inc_decode 'xn--zz.' | 'ok'
+error: IDNAError invalid_alabel: Invalid A-label
+-- codec encode 'bücher.example'
+   b'xn--bcher-kva.example'
+-- codec encode ''
+   b''
+-- codec encode 'bad_label.com'
+error: InvalidCodepoint disallowed_codepoint at 4: Codepoint U+005F at position 4 of 'bad_label' not allowed
+-- codec encode '☕.us'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2615 at position 1 of '☕' not allowed
+-- codec decode 'xn--bcher-kva.example'
+   'bücher.example'
+-- codec decode ''
+   ''
+-- codec decode 'xn--zz'
+error: IDNAError invalid_alabel: Invalid A-label
+-- codec decode 'dü.de'
+error: IDNAError invalid_ascii: Invalid ASCII in A-label
+== hosts in URLs
+-- host 'example.com'
+   'example.com'
+-- host 'Bücher.example'
+   'xn--bcher-kva.example'
+-- host '*.example.com'
+error: ValueError: URL has an invalid label.
+-- host '.example.com'
+error: ValueError: URL has an invalid label.
+-- host '☕.us'
+error: ValueError: URL has an invalid label.
+-- host 'münchen.de'
+   'xn--mnchen-3ya.de'
+-- host 'exa_mple.com'
+   'exa_mple.com'
+-- host '日本語.jp'
+   'xn--wgv71a119e.jp'
+-- host 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com'
+   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com'
+-- host 'xn--zz.com'
+   'xn--zz.com'
+-- host 'ﬁle.example'
+   'file.example'
+-- host '１２３.example'
+   '123.example'
+-- host '*ü.com'
+error: ValueError: URL has an invalid label.
+== command line
+-- cli 'bücher.example'
+   out: xn--bcher-kva.example
+   exit 0
+-- cli 'xn--bcher-kva.example'
+   out: bücher.example
+   exit 0
+-- cli '-e' 'xn--bcher-kva.example'
+   out: xn--bcher-kva.example
+   exit 0
+-- cli 'bücher.example' 'xn--zca.de' '☕.us'
+   out: xn--bcher-kva.example
+   out: xn--zca.de
+   err: idna: encode failed for '☕.us': Codepoint U+2615 at position 1 of '☕' not allowed
+   exit 1
+-- cli 'xn--zca.de' 'straße.de' 'xn--zz'
+   out: ß.de
+   out: straße.de
+   err: idna: decode failed for 'xn--zz': Invalid A-label
+   exit 1
+-- cli '--strict' 'Bücher.example'
+   err: idna: encode failed for 'Bücher.example': Codepoint U+0042 at position 1 of 'Bücher' not allowed
+   exit 1
+-- cli 'Bücher.example'
+   out: xn--bcher-kva.example
+   exit 0
+-- cli '-d' 'BÜCHER.example'
+   out: bücher.example
+   exit 0
+-- cli '-d' '--strict' 'xn--bcher-kva.example'
+   out: bücher.example
+   exit 0
+-- cli '-e' '-d' 'x'
+   err: usage: python -m idna [-h] [-e | -d] [--strict] [--version] [domain ...]
+   err: python -m idna: error: argument -d/--decode: not allowed with argument -e/--encode
+   exit 2
+-- cli '--version'
+   out: idna 3.20 (Unicode 18.0.0)
+   exit 0
+-- cli '-x'
+   err: usage: python -m idna [-h] [-e | -d] [--strict] [--version] [domain ...]
+   err: python -m idna: error: unrecognized arguments: -x
+   exit 2
+-- cli 
+   exit 0
+-- cli  < stdin
+   out: xn--bcher-kva.example
+   out: xn--zca.de
+   err: idna: encode failed for '☕.us': Codepoint U+2615 at position 1 of '☕' not allowed
+   exit 1
+== random 1
+-- encode uts46 '나p1.гA8가.ö'
+   b'xn--p1-9n4i.xn--a8-glc4492o.xn--nda'
+-- encode uts46,std3 '٢8ЖX.k'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '٢8жx' must be directionality L, R or AL
+-- encode 'x.ⅨäcⅨ'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2168 at position 1 of 'ⅨäcⅨ' not allowed
+-- encode uts46 '8\u200cx.m·खéت.ב'
+error: InvalidCodepointContext contextj at 2: Joiner U+200C not allowed at position 2 in '8\u200cx'
+-- encode 'Yδבウ8гB.6اn'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0059 at position 1 of 'Yδבウ8гB' not allowed
+-- encode uts46,std3 'βi4ข'
+   b'xn--i4-e9b676h'
+-- decode uts46 'ג5f.ख가。4ç'
+error: IDNABidiError bidi_rule_2 at 3: Invalid direction for codepoint at position 3 in a right-to-left label
+-- encode uts46 'nXc.ø本v̧\u200c.א_8а_'
+error: InvalidCodepointContext contextj at 5: Joiner U+200C not allowed at position 5 in 'ø本v̧\u200c'
+-- encode uts46,std3 'δ_m'
+error: InvalidCodepoint uts46_std3 at 2: Codepoint U+005F not allowed at position 2 in 'δ_m'
+-- decode uts46 '\u200cאZz7กب.6①ขg.fЖث'
+error: InvalidCodepointContext contextj at 1: Joiner U+200C not allowed at position 1 in '\u200cאzz7กب'
+-- encode uts46,std3 'Üt・다аl.ΣBÉ0.75ü1i'
+error: InvalidCodepointContext contexto at 3: Codepoint U+30FB not allowed at position 3 in 'üt・다аl'
+-- encode uts46 'Ć62t①0.ت①ä가дwy'
+error: IDNABidiError bidi_rule_2 at 3: Invalid direction for codepoint at position 3 in a right-to-left label
+-- decode 'xn--4.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--w.xn--he'
+   'xn--w.xn--he'
+-- decode 'xn--4jd9480.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--9-wggl.com'
+   'ནཏ9.com'
+-- decode display 'xn--pio7pd.xn--5-hescc'
+   '䕌䕍䒥.xn--5-hescc'
+-- decode 'xn--k3t05cq1n.xn--tkrx4'
+error: IDNAError invalid_alabel: Invalid A-label
+== random 2
+-- remap '́・日.α्ג.uzf文ЯXv'
+   '́・日.α्ג.uzf文яxv'
+-- encode uts46,std3 '̈.öαZتבа'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- encode uts46,std3 'ÄäCcz・.k.üÉ्'
+error: InvalidCodepointContext contexto at 6: Codepoint U+30FB not allowed at position 6 in 'ääccz・'
+-- remap 'BｂбЯÄm.文ς.คﬁ'
+   'bbбяäm.文ς.คfi'
+-- encode uts46 'ñAeдב̈'
+error: IDNABidiError bidi_rule_5 at 5: Invalid direction for codepoint at position 5 in a left-to-right label
+-- encode uts46 'กβ。ςت中.Яba中'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- encode uts46 'd.ñ7'
+   b'd.xn--7-qga'
+-- encode uts46,std3 'กp文dイ9.イg．กv'
+   b'xn--pd9-dkl7225a6k4d.xn--g-ieu.xn--v-twf'
+-- encode 'ﬁ.ÜZ.βاwא3ت'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+FB01 at position 1 of 'ﬁ' not allowed
+-- encode uts46,std3 'คб0вאÉB.7나Ⅸ。o0文'
+error: IDNABidiError bidi_rule_5 at 5: Invalid direction for codepoint at position 5 in a left-to-right label
+-- encode uts46 '\u200cÄ.дf\u200dÖ́0다.1्B文o'
+error: InvalidCodepointContext contextj at 1: Joiner U+200C not allowed at position 1 in '\u200cä'
+-- decode uts46 '8.yа٢\xadz١É'
+error: IDNABidiError bidi_rule_5 at 3: Invalid direction for codepoint at position 3 in a left-to-right label
+-- decode 'xn--oi74t.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--xp2l0z.com'
+   '𩣁𩛾.com'
+-- decode display 'xn--fwhzs8fu.de'
+   'xn--fwhzs8fu.de'
+-- decode 'xn--mpz06jr.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--0rgzrb74s.com'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+201F at position 1 of '‟ᾣ∴„' not allowed
+-- decode 'xn--vi1.com'
+error: IDNAError invalid_alabel: Invalid A-label
+== random 3
+-- encode 'h'
+   b'h'
+-- encode uts46,std3 '4イ̧B'
+   b'xn--4b-ixb3967b'
+-- decode uts46 '☕_本'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2615 at position 1 of '☕_本' not allowed
+-- encode uts46 'B11i・가1'
+error: InvalidCodepointContext contexto at 5: Codepoint U+30FB not allowed at position 5 in 'b11i・가1'
+-- encode uts46,std3 'กm나.tå.्spo'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- decode uts46 'öت'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- encode uts46 'ñ́גsक.\u200dЯا١ænt.i0æå1-2'
+error: IDNABidiError bidi_rule_5 at 3: Invalid direction for codepoint at position 3 in a left-to-right label
+-- decode uts46 '日بа.Я3ß.Y\u200dé'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- encode uts46,std3 'øбjγข!.æzب①ค'
+error: InvalidCodepoint uts46_std3 at 6: Codepoint U+0021 not allowed at position 6 in 'øбjγข!.æzب①ค'
+-- encode 'uЖ.ä.גウkoCΣ'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+0416 at position 2 of 'uЖ' not allowed
+-- decode uts46 '6'
+   '6'
+-- encode uts46,std3 '．́4कt.éбp☕'
+error: IDNAError empty_label: Empty Label
+-- decode 'xn--5m6.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--k1.xn--6vl'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--0rsm6zw4.xn--d1-'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--8762hzd.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--jp18i3j.xn--n6q6wadq'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--88.com'
+error: IDNAError invalid_alabel: Invalid A-label
+== random 4
+-- encode uts46 '6ŕⅨ・o.ñloб3גy.Y'
+error: InvalidCodepointContext contexto at 5: Codepoint U+30FB not allowed at position 5 in '6ŕix・o'
+-- encode 'га7ग.イdö8j'
+   b'xn--7-7sbi421c.xn--d8j-sna2412d'
+-- encode uts46 'アojв2o\u200d.ς.Ä٢ü'
+error: InvalidCodepointContext contextj at 7: Joiner U+200D not allowed at position 7 in 'アojв2o\u200d'
+-- encode 'β.aगliXñ'
+error: InvalidCodepoint disallowed_codepoint at 5: Codepoint U+0058 at position 5 of 'aगliXñ' not allowed
+-- decode uts46 'æ'
+   'æ'
+-- remap std3 'ñp\u200dYثウ'
+   'ñp\u200dyثウ'
+-- remap std3 '8文'
+   '8文'
+-- encode uts46 '2\xad-yδ.b'
+   b'xn--2-y-2xc.b'
+-- encode uts46,std3 'ｂvאÄ.3ä本4١.аc。\u200c\xad2Ü'
+error: IDNABidiError bidi_rule_5 at 3: Invalid direction for codepoint at position 3 in a left-to-right label
+-- encode uts46,std3 'גक.ЯгæÜ'
+error: IDNABidiError bidi_rule_2 at 2: Invalid direction for codepoint at position 2 in a right-to-left label
+-- encode uts46,std3 '中åウuг!.m.ウбπ-äאа'
+error: InvalidCodepoint uts46_std3 at 6: Codepoint U+0021 not allowed at position 6 in '中åウuг!.m.ウбπ-äאа'
+-- remap std3 'çèn・・イ'
+   'çèn・・イ'
+-- decode display 'xn--yn-o.com'
+   'xn--yn-o.com'
+-- decode 'xn--zygt.de'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+20A1 at position 1 of '₡ₗ' not allowed
+-- decode 'xn--d1ydrku.com'
+   '眔眎県眖眚.com'
+-- decode display 'xn--8-mm.xn--adhpc'
+   'xn--8-mm.xn--adhpc'
+-- decode 'xn--myl.xn--owu0'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--mjhz4.com'
+error: IDNAError invalid_alabel: Invalid A-label
+== random 5
+-- remap 'คβ.ç.üイ'
+   'คβ.ç.üイ'
+-- encode uts46 'Σδ☕.гYñ①'
+error: InvalidCodepoint disallowed_codepoint at 3: Codepoint U+2615 at position 3 of 'σδ☕' not allowed
+-- encode uts46 'δв_イ-.p!ç.・다1he١'
+error: IDNAError hyphen_start_end: Label must not start or end with a hyphen
+-- encode uts46,std3 'π\u200c92i.̈Я.가'
+error: InvalidCodepointContext contextj at 2: Joiner U+200C not allowed at position 2 in 'π\u200c92i'
+-- encode 'A☕.ö나.ﬁ'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0041 at position 1 of 'A☕' not allowed
+-- encode uts46 'αकΣZ\u200cγα'
+error: InvalidCodepointContext contextj at 5: Joiner U+200C not allowed at position 5 in 'αकσz\u200cγα'
+-- encode uts46 'تа1yΣ.0'
+error: IDNABidiError bidi_rule_2 at 2: Invalid direction for codepoint at position 2 in a right-to-left label
+-- encode '5'
+   b'5'
+-- encode uts46 '_'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+005F at position 1 of '_' not allowed
+-- encode uts46 'Ⅸ.β가'
+   b'ix.xn--nxa6827f'
+-- encode uts46 'Äåzh.h.hz\xadmتt'
+error: IDNABidiError bidi_rule_5 at 4: Invalid direction for codepoint at position 4 in a left-to-right label
+-- encode '5hZπΣ.कπs.٢vЯ文α'
+error: InvalidCodepoint disallowed_codepoint at 3: Codepoint U+005A at position 3 of '5hZπΣ' not allowed
+-- decode 'xn--p27dbnj4.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--0bvbks.com'
+   '攻敃攺放.com'
+-- decode 'xn--sd3f28.xn---wy'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--rbl5fulj.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--p152ri.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--j3bto8e6.xn--a'
+error: IDNAError invalid_alabel: Invalid A-label
+== random 6
+-- remap std3 'تCé다hz3.דcm̧Жπ'
+   'تcé다hz3.דcm̧жπ'
+-- encode uts46,std3 'क'
+   b'xn--11b'
+-- encode uts46,std3 'zåข1ß'
+   b'xn--z1-hiaw998n'
+-- remap 'ς.ñب5ﬁè'
+   'ς.ñب5fiè'
+-- encode uts46 'è.・'
+error: InvalidCodepointContext contexto at 1: Codepoint U+30FB not allowed at position 1 in '・'
+-- encode uts46 '☕Bค日'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2615 at position 1 of '☕bค日' not allowed
+-- encode '・。'
+error: InvalidCodepointContext contexto at 1: Codepoint U+30FB not allowed at position 1 in '・'
+-- encode uts46,std3 'Zø!πB_u.h'
+error: InvalidCodepoint uts46_std3 at 3: Codepoint U+0021 not allowed at position 3 in 'Zø!πB_u.h'
+-- encode uts46,std3 '나å.Ⅸñ'
+   b'xn--5ca1701g.xn--ix-0ja'
+-- remap std3 'ḉ.øЖB日cx'
+   'ḉ.øжb日cx'
+-- remap std3 '_zfς.qèü'
+error: InvalidCodepoint uts46_std3 at 1: Codepoint U+005F not allowed at position 1 in '_zfς.qèü'
+-- encode uts46,std3 'βäZ1Σ.æÉаi.تイа'
+error: IDNABidiError bidi_rule_2 at 2: Invalid direction for codepoint at position 2 in a right-to-left label
+-- decode 'xn--d.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--6tglbn-cc.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--h8tzlj7qd.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--fspox5-j.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--wiancwpzf.xn--vy5eo8bgtc'
+   'xn--wiancwpzf.xn--vy5eo8bgtc'
+-- decode 'xn--8cwy7-.xn--2u8gn82'
+error: IDNAError invalid_alabel: A-label must not end with a hyphen
+== random 7
+-- encode uts46 'nw가.ขjkⅨmتå.ก4☕\xada7'
+error: IDNABidiError bidi_rule_5 at 7: Invalid direction for codepoint at position 7 in a left-to-right label
+-- encode uts46,std3 'Ap.É́Ö8٢1a.ⅨвäoB'
+error: IDNABidiError bidi_rule_5 at 5: Invalid direction for codepoint at position 5 in a left-to-right label
+-- encode uts46 'Ⅸhl!.。'
+error: InvalidCodepoint disallowed_codepoint at 5: Codepoint U+0021 at position 5 of 'ixhl!' not allowed
+-- encode '5Ü'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+00DC at position 2 of '5Ü' not allowed
+-- encode 'å.p本कב中eX.c'
+error: InvalidCodepoint disallowed_codepoint at 7: Codepoint U+0058 at position 7 of 'p本कב中eX' not allowed
+-- encode uts46,std3 'Я日vo.̧א'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- encode 'Σ'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+03A3 at position 1 of 'Σ' not allowed
+-- remap std3 '3гखаΣø中'
+   '3гखаσø中'
+-- encode 'd.ขqגｂ'
+error: InvalidCodepoint disallowed_codepoint at 4: Codepoint U+FF42 at position 4 of 'ขqגｂ' not allowed
+-- encode uts46,std3 'è.1œⅨ.ß'
+   b'xn--8ca.xn--1ix-fya.xn--zca'
+-- encode uts46,std3 '0'
+   b'0'
+-- encode uts46,std3 '5．B.4ß'
+   b'5.b.xn--4-qfa'
+-- decode 'xn--et.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--8225e9w.xn--ggrv'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--h55vfrj.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--p.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn---8pehpcbp.com'
+error: IDNAError non_canonical_alabel: A-label is not the canonical Punycode encoding of its U-label
+-- decode 'xn--s4a.com'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+04AC at position 1 of 'Ҭ' not allowed
+== random 8
+-- encode uts46 '·q·ア_̈β'
+error: InvalidCodepointContext contexto at 1: Codepoint U+00B7 not allowed at position 1 in '·q·ア_̈β'
+-- decode uts46 '\u200cгウγΣウ.wבå.8аÉイœö'
+error: InvalidCodepointContext contextj at 1: Joiner U+200C not allowed at position 1 in '\u200cгウγσウ'
+-- encode uts46,std3 'бä.tc96Я'
+   b'xn--4ca30o.xn--tc96-o8d'
+-- encode '!̧Жs.jب.\xad가̈'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0021 at position 1 of '!̧Жs' not allowed
+-- remap 'ñب.0日d.œаqख'
+   'ñب.0日d.œаqख'
+-- encode uts46,std3 '\u200c'
+error: InvalidCodepointContext contextj at 1: Joiner U+200C not allowed at position 1 in '\u200c'
+-- decode uts46 'n가ø.Ⅸq☕5.Σ4t가ös'
+error: InvalidCodepoint disallowed_codepoint at 4: Codepoint U+2615 at position 4 of 'ixq☕5' not allowed
+-- encode uts46 'ب\xad4å्Ü.-Éבגדت'
+error: IDNABidiError bidi_rule_2 at 3: Invalid direction for codepoint at position 3 in a right-to-left label
+-- remap std3 '56나xд.खกfn9ß.γö8ßβ'
+   '56나xд.खกfn9ß.γö8ßβ'
+-- encode '٢Aåx0'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+0041 at position 2 of '٢Aåx0' not allowed
+-- encode uts46,std3 '!'
+error: InvalidCodepoint uts46_std3 at 1: Codepoint U+0021 not allowed at position 1 in '!'
+-- encode '1γXXا'
+error: InvalidCodepoint disallowed_codepoint at 3: Codepoint U+0058 at position 3 of '1γXXا' not allowed
+-- decode 'xn--964.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--xvzv0v-p4.xn--n1b'
+   'xn--xvzv0v-p4.इ'
+-- decode display 'xn--fxnsuy.xn--4prt'
+   'xn--fxnsuy.xn--4prt'
+-- decode display 'xn--ct0mvyt.de'
+   'xn--ct0mvyt.de'
+-- decode 'xn--fmeuue6gzo.de'
+   'ᕲᕍᖧᕞᕟᕗ.de'
+-- decode 'xn--rmj9cz-do.com'
+error: IDNAError invalid_alabel: Invalid A-label
+== random 9
+-- decode uts46 'u·.खbγoæ日б.α\xadæ·גcς'
+error: InvalidCodepointContext contexto at 2: Codepoint U+00B7 not allowed at position 2 in 'u·'
+-- decode uts46 'X́cﬁﬁ.eⅨ7'
+   'x́cfifi.eix7'
+-- remap std3 'X4'
+   'x4'
+-- encode 'mｂè.c.\u200dｂö·b'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+FF42 at position 2 of 'mｂè' not allowed
+-- encode uts46,std3 'iखÉא.イßwm☕ü'
+error: IDNABidiError bidi_rule_5 at 4: Invalid direction for codepoint at position 4 in a left-to-right label
+-- encode uts46 '・3ウiｂ.다ÉثखイC'
+error: IDNABidiError bidi_rule_5 at 3: Invalid direction for codepoint at position 3 in a left-to-right label
+-- encode '4.कπⅨrs!.7ètÄv'
+error: InvalidCodepoint disallowed_codepoint at 3: Codepoint U+2168 at position 3 of 'कπⅨrs!' not allowed
+-- decode uts46 'Яगगåen'
+   'яगगåen'
+-- encode 'XЯΣαd.oⅨÄ.ñγœp'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0058 at position 1 of 'XЯΣαd' not allowed
+-- encode uts46 '7ב☕8pд'
+error: InvalidCodepoint disallowed_codepoint at 3: Codepoint U+2615 at position 3 of '7ב☕8pд' not allowed
+-- encode 'yy\u200cce'
+error: InvalidCodepointContext contextj at 3: Joiner U+200C not allowed at position 3 in 'yy\u200cce'
+-- encode uts46 'ख5กxπग.中bblrä'
+   b'xn--5x-nbc575cia956e.xn--bblr-ooa9189i'
+-- decode 'xn--00ll.com'
+   '㣑㣋.com'
+-- decode display 'xn--n3v1mh9j.de'
+   '榟椁溃.de'
+-- decode display 'xn--kk-nald2t5.xn--5blse1'
+   'xn--kk-nald2t5.xn--5blse1'
+-- decode 'xn--o697x5o.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--ajq9f4.xn--0m6b0x'
+   'xn--ajq9f4.쬸첇'
+-- decode display 'xn--das2o.de'
+   'xn--das2o.de'
+== random 10
+-- encode uts46,std3 'δ̧ث☕אค'
+error: InvalidCodepoint disallowed_codepoint at 4: Codepoint U+2615 at position 4 of 'δ̧ث☕אค' not allowed
+-- encode 'イ._дçßб.ö'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+005F at position 1 of '_дçßб' not allowed
+-- encode uts46,std3 'l\u200dдp①'
+error: InvalidCodepointContext contextj at 2: Joiner U+200D not allowed at position 2 in 'l\u200dдp1'
+-- remap std3 'πβข!'
+error: InvalidCodepoint uts46_std3 at 4: Codepoint U+0021 not allowed at position 4 in 'πβข!'
+-- encode uts46,std3 'zÜ'
+   b'xn--z-eha'
+-- encode '5Ä☕דÄ・ב.。。π.．ø'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+00C4 at position 2 of '5Ä☕דÄ・ב' not allowed
+-- encode 'ד.vé①'
+error: InvalidCodepoint disallowed_codepoint at 3: Codepoint U+2460 at position 3 of 'vé①' not allowed
+-- remap std3 'ö.ed'
+   'ö.ed'
+-- decode uts46 'Öกßäöx.ث3z.xЯ8гﬁr'
+error: IDNABidiError bidi_rule_2 at 3: Invalid direction for codepoint at position 3 in a right-to-left label
+-- encode uts46 'vx.Ée가Жc。.ггx'
+error: IDNAError empty_label: Empty Label
+-- remap '中æक.π'
+   '中æक.π'
+-- remap std3 '①5'
+   '15'
+-- decode display 'xn--2.com'
+   'xn--2.com'
+-- decode 'xn--g.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--x4jq7f.xn--sc'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2FC2 at position 1 of '⿂\u2fe6⿊' not allowed
+-- decode display 'xn--f3txrsm3.com'
+   'xn--f3txrsm3.com'
+-- decode display 'xn--ggiqyw.de'
+   'xn--ggiqyw.de'
+-- decode 'xn--1rfbu16b.xn--ic8x6'
+error: IDNABidiError bidi_unknown_direction at 2: Unknown directionality in label '᭓\u1ae3\u1adc\u1adb' at position 2
+== random 11
+-- encode 'yвウ나.Σk!'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+03A3 at position 1 of 'Σk!' not allowed
+-- encode uts46 'öi्ñ.д'
+   b'xn--i-rgan556f.xn--d1a'
+-- decode uts46 'uj6CÉ.ohxpzp.्\u200cδ4Σ'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- encode uts46 'कpç1.\xadßÖu日'
+   b'xn--p1-4ia884f.xn--u-pfa3e9255c'
+-- encode uts46,std3 'Cv9.3ア9☕7גs.١6'
+error: InvalidCodepoint disallowed_codepoint at 4: Codepoint U+2615 at position 4 of '3ア9☕7גs' not allowed
+-- decode uts46 'wd.r。Ö'
+   'wd.r.ö'
+-- encode uts46 '́ÄdاกÖб'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- encode uts46,std3 'Ⅸا्Ⅸvz'
+error: IDNABidiError bidi_rule_5 at 3: Invalid direction for codepoint at position 3 in a left-to-right label
+-- decode uts46 'pÄ\xad'
+   'pä'
+-- decode uts46 'ख_Σ'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+005F at position 2 of 'ख_σ' not allowed
+-- encode uts46 '·・åÉtA'
+error: InvalidCodepointContext contexto at 1: Codepoint U+00B7 not allowed at position 1 in '·・åéta'
+-- remap std3 'ก·.9éw文bbα.Xq-גk'
+   'ก·.9éw文bbα.xq-גk'
+-- decode 'xn--xv5gvn1.de'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--7h.xn--k29il'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--i.xn--8jocc3s8'
+   'xn--i.xn--8jocc3s8'
+-- decode 'xn--2v2ysr.de'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+5071A at position 1 of '\U0005071a\U000505e7' not allowed
+-- decode 'xn--qkcpbe7lu9.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--3dl.de'
+   '㖩.de'
+== random 12
+-- encode '7bp١.9hבגäz'
+error: IDNABidiError bidi_rule_1 at 1: First codepoint in label '7bp١' must be directionality L, R or AL
+-- decode uts46 'l.æ①·_ख.ααÉ中ñ'
+error: InvalidCodepointContext contexto at 3: Codepoint U+00B7 not allowed at position 3 in 'æ1·_ख'
+-- encode '1ｂ1Ü.中1.ЯखtfpA'
+error: InvalidCodepoint disallowed_codepoint at 2: Codepoint U+FF42 at position 2 of '1ｂ1Ü' not allowed
+-- remap std3 'ñÜ9æç'
+   'ñü9æç'
+-- remap 'X.ウn6्日'
+   'x.ウn6्日'
+-- encode uts46 'éCc'
+   b'xn--cc-9ia'
+-- remap '\u200cकבnก.Я1'
+   '\u200cकבnก.я1'
+-- encode 'Aγ.ב4j日A·Ä'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0041 at position 1 of 'Aγ' not allowed
+-- encode uts46 'vj☕7rд.cu._٢Cगב'
+error: InvalidCodepoint disallowed_codepoint at 3: Codepoint U+2615 at position 3 of 'vj☕7rд' not allowed
+-- encode uts46,std3 '9本gaÖα.æ٢6æ'
+error: IDNABidiError bidi_rule_5 at 2: Invalid direction for codepoint at position 2 in a left-to-right label
+-- remap 'ت7ウЯ'
+   'ت7ウя'
+-- encode uts46 '0.나本É'
+   b'0.xn--9ca1743ccb4b'
+-- decode 'xn--ilwu8h.de'
+   '歏瀹.de'
+-- decode display 'xn--wx8dne.com'
+   'xn--wx8dne.com'
+-- decode 'xn--vgkia99e-.xn--yztoqbf'
+error: IDNAError invalid_alabel: A-label must not end with a hyphen
+-- decode 'xn--aego-4.com'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode display 'xn--3.de'
+   'xn--3.de'
+-- decode 'xn--3.de'
+error: IDNAError invalid_alabel: Invalid A-label
+== round trip 1
+-- decode 'xn--q83fs3l'
+   '𘞱𗼽'
+-- decode 'xn--a3v-ioa05bw1j'
+   'δa3üvœ'
+-- decode 'xn--b'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--hrs2-2oa343a'
+   'hrsç2́'
+-- decode 'xn--27-uia'
+   'ä27'
+-- decode 'xn--j-tmb0955akh7b'
+   'π文イj'
+-- decode 's'
+   's'
+-- decode 'xn--12c'
+   'ก'
+-- decode 'xn--pgb'
+   'ت'
+-- decode 'xn--w'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--z0tdbkc'
+   '弔弗弒弔弗'
+-- decode 'xn--o'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--m6'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--o9q9sbkn1'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--5-bga1b70a'
+   'œö5é'
+== round trip 2
+-- decode 'xn--ix5-je3m'
+   'ix다5'
+-- decode 'xn--a-lq6a.xn--42c'
+   'a中.ค'
+-- decode 'xn--k-856b'
+   'k本'
+-- decode 'xn--pjdlmwi'
+error: IDNAError leading_combiner at 1: Label begins with an illegal combining character
+-- decode 'xn--76iftwzs5'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--7caa4a362i'
+   'กççñ'
+-- decode 'xn--ac-nnf1497n'
+   'ac가क'
+-- decode 'xn--v3kpj6g'
+   '㑮㑱㒈㑦'
+-- decode 'xn--a-9fa'
+   'éa'
+-- decode 'xn--g7i'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+2B51 at position 1 of '⭑' not allowed
+-- decode '0'
+   '0'
+-- decode 'xn--1-zfa45w'
+   'гä1'
+-- decode 'wx'
+   'wx'
+-- decode 'xn--ix-nbca352km84cn48d'
+   '文・ixπคπ'
+-- decode 'xn--94citu0tfm'
+error: InvalidCodepoint disallowed_codepoint at 1: Codepoint U+0E5A at position 1 of '๚\u0e5fຍ๏\u0e8bຊ๓' not allowed
+== round trip 3
+-- decode 'xn--6ca.'
+   'æ.'
+-- decode 'xn--zca'
+   'ß'
+-- decode 'xn--ts6'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--hfsyfand'
+   '垟坘垛垛垟'
+-- decode 'xn--l'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--euo65f'
+   '䘾䥸'
+-- decode 'xn--94'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--ceydvco'
+   '珳珰珨珯珦'
+-- decode 'xn--e-9sb'
+   'бe'
+-- decode '5'
+   '5'
+-- decode 'xn--ca8z-vwc'
+   'c̈a8z'
+-- decode 'xn---6giyst8ws'
+error: IDNAError invalid_alabel: Invalid A-label
+-- decode 'xn--i-u1h'
+   'ጢi'
+-- decode 'xn--h-bga9c'
+   'ühé'
+-- decode 'xn---3-jlc'
+   'д-3'
