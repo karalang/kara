@@ -165,7 +165,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-25 | 2026-10-19 | typecheck+interp | medium | On MIR, a bare `collect()` as the tail of one branch of an un-annotated `let x = if .. { .. } else { .. }` does not lower (`UnsolvedParam("C")`) when the target type comes only from the OTHER branch; `karac check` passes | — |
 | B-2026-10-19-26 | 2026-10-19 | runtime+codegen | medium | On the MIR compiled backend, `String.contains` goes to Rust `str::contains` (two-way search), which makes kata 796's bench 4.6x the legacy build (2.03 s vs 0.44 s, medians of five interleaved runs; first filed as 5.7x from spot runs); legacy's naive memcmp scan and C `strstr` (0.20 s) are far faster on short needles | — |
 | B-2026-10-19-27 | 2026-10-19 | interp+codegen | medium | At 128 bits, 12 integer methods are refused by the MIR compiled backend with "native `u128.<m>` is not lowered yet" (the same for i128): clamp, leading_zeros, trailing_zeros, count_ones, count_zeros, to_ne_bytes, pow, to_f64, swap_bytes, reverse_bits, is_power_of_two and next_power_of_two. The MIR interpreter also refuses swap_bytes, reverse_bits and next_power_of_two with "call of unknown function" | — |
-| B-2026-10-19-28 | 2026-10-19 | interp | medium | The MIR interpreter's `x.pow(n)` at 128 bits prints i128::MAX when the result overflows, where it should panic with "integer overflow": `(1u128 << 100).pow(2)` and `(1i128 << 100).pow(2)` both print 170141183460469231731687303715884105727. `x * x` at the same values panics, and `pow` at 64 bits panics | — |
 | B-2026-10-19-30 | 2026-10-19 | parser | low | A tuple index straight after `?` (`f()?.0`) does not parse: `Expected identifier, found Integer(0, None)`. design.md says `f()?.x` means `(f()?).x` and there is no `?.`, but the lexer still makes a `?.` token and the parser's QuestionDot arm (src/parser/exprs.rs, the legacy ExprKind::OptionalChain path) only accepts an identifier after it | — |
 
 ### Relocated
@@ -4210,6 +4209,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-18 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program… | 9ee80c0104 |
 | B-2026-10-19-19 | typecheck | low | "a reference to a temporary outlives its statement" has no `karac fix` edit for `let n = s.substring(..).trim();` or `m.get(k).unwrap_or(Vec.new())`,… | 5d124b94d3 |
 | B-2026-10-19-22 | interp | medium | MIR interpreter orders u128 values as signed in sort, sort_by_key, tuple sort and SortedSet, so values with the top bit set come first; `<` and `>` a… | f0ec11cf9d |
+| B-2026-10-19-28 | interp | medium | The MIR interpreter's `x.pow(n)` at 128 bits prints i128::MAX when the result overflows, where it should panic with "integer overflow": `(1u128 << 10… | 73941a0590 |
 | B-2026-10-19-29 | typecheck | medium | `let mut r = mut ref a; r += 1;` leaves `a` unchanged on `__mir-run` and `__mir-llvm-run` (prints 1, not 2) and passes `karac check`: the B-2026-10-1… | 937d85ae41 |
 
 </details>
