@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 282 |
 | codegen-gap | 274 |
-| false-positive | 240 |
+| false-positive | 241 |
 | perf | 175 |
 | other | 175 |
 | diagnostics | 169 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2948 |
 | interp | 964 |
-| typecheck | 485 |
+| typecheck | 486 |
 | other | 115 |
 | ownership | 114 |
 | runtime | 78 |
@@ -167,6 +167,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-11 | 2026-10-19 | typecheck+interp | medium | docs/library/core-types.md promises checked/wrapping/saturating/overflowing integer methods for div, rem, neg, shl, shr and pow, and a method `x.total_cmp(y)` on floats, but `karac check` refuses all of them: only the add, sub and mul variants exist | — |
 | B-2026-10-19-12 | 2026-10-19 | typecheck | low | A misspelled `Vec` method (`v.lenn()`, `v.length()`, `v.size()`) gets no did-you-mean: the Vec surface has no name list for the suggestion to search | — |
 | B-2026-10-19-13 | 2026-10-19 | typecheck+interp | low | An owned local assigned to a local bound to a borrow (`let mut out = s; out = t;` with `s` a borrowed param and `t` an owned `String`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR); `out = ref t` works | — |
+| B-2026-10-19-14 | 2026-10-19 | typecheck | low | A closure over a NAMED value iterator still takes `*c` on a Copy item: `let it = w.chars(); it.filter(|c| *c == 'Q')` checks and prints 2, though core-semantics.md §5.10 makes `c` a copy; 448e8fb927 keys the copy rule on the receiver chain's syntax (a range, `chars()`, `map`, ...), which a variable does not show | — |
 
 ### Relocated
 
