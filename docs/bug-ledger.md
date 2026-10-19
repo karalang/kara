@@ -97,13 +97,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 281 |
-| codegen-gap | 273 |
+| codegen-gap | 274 |
 | false-positive | 239 |
 | perf | 175 |
 | other | 175 |
 | diagnostics | 168 |
 | crash | 124 |
-| soundness | 115 |
+| soundness | 116 |
 | use-after-free | 91 |
 
 ### By surface
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2948 |
 | interp | 962 |
-| typecheck | 480 |
+| typecheck | 482 |
 | other | 115 |
 | ownership | 114 |
 | runtime | 78 |
@@ -156,7 +156,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-72 | 2026-10-15 | interp+codegen | low | Outside the task executor (the default, `KARAC_MIR_COROUTINES` unset), a `send` to a full channel returns `Err(SendError.Full(v))` and a `recv` on an empty channel with live senders returns `None` on both v2 backends, where the spec waits or, with no other task able to run, panics as a deadlock | — |
 | B-2026-10-15-106 | 2026-10-15 | typecheck | low | A bare repeat literal `[0u8; 32]` with no expected type is a `Vec[u8]` on `karac check` and every MIR surface, but design.md § Collection literals says "the repeat form `[v; n]` always builds an `Array`, and `n` must be a constant" and that `let v: Vec[i64] = [0; 8];` is an error; `fn f() -> Array[u8, 4] { let mut out = [0u8; 4]; out[0] = 1u8; out }` is refused with "expected 'Array[u8, 4]', found 'Vec[u8]'" | — |
 | B-2026-10-15-112 | 2026-10-15 | runtime | low | `std.time.Instant` is only half the spec: it ships as `Instant.now()` with `duration_since`, `add` and `elapsed` methods, but docs/library/time-random-env.md has `Clock.now()` return an `Instant` (the library's is a `#[compiler_builtin]` returning Unix SECONDS as `i64`) and compares instants with `later - earlier` / `i + d`, which needs an `Output` on the library `Sub`/`Add` traits (`fn sub(own self, rhs: own Self) -> Self` has none) | — |
-| B-2026-10-18-23 | 2026-10-18 | interp+codegen | medium | On the MIR surfaces a generic struct with an `I.Item` field is not lowered when a generic function builds it: `fn last[I: Iterator](it: own I) -> Last[I] { Last { it: it, prev: None } }` for `struct Last[I: Iterator] { it: I, prev: Option[I.Item] }`, called as `last(VecIter {..})`, stops with "an associated type of `I` is not lowered yet"; check passes, and a struct literal written in `main` works | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
 | B-2026-10-18-39 | 2026-10-18 | typecheck+interp+codegen | low | `Map.get_mut(k)` with a `Str` key on a `Map[String, V]` is refused ("expected 'ref String', found 'Str'"), though `get`, `remove` and `contains_key` take a `Str` there. CORRECTION (Thread A, 10-18): accepting the view in `karac check` is easy, but MIR then needs a `get_mut` instance whose key parameter is the view; without it `__mir-llvm-run` passes a `Str` where the instance reads `ref String` | — |
 | B-2026-10-18-40 | 2026-10-18 | interp+codegen | medium | On MIR, `let mut out = s; out = " " + out;` with `s` a bare (borrowed) `String` param builds invalid MIR ("assigning String to _3 of type ref String"); check passes | — |
@@ -172,6 +171,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-5 | 2026-10-19 | typecheck | low | Vec[String].join refuses a Str separator ('expected String, found Str'), though docs/library/collections.md gives `fn join(self, sep: Str)`; a String literal works | — |
 | B-2026-10-19-6 | 2026-10-19 | interp+codegen | medium | MIR borrowck keeps a Vec[Str] collected from s.split(..) borrowing s until scope end, so a later `s = ...` is refused (E0516 'drop of _1 while it is borrowed'); karac check accepts it | — |
 | B-2026-10-19-7 | 2026-10-19 | ownership | medium | `karac check` passes a `ref` copied out of a collection and used after that collection is mutated, which every MIR surface refuses as a borrow conflict: `let before = m.get(1).unwrap_or(0); m.insert(1, 6); println(f"{before}")` over a `Map[i64, i64]`, and `match v.last() { Some(top) => { let largest = top; v.pop(); v.push(largest); } None => {} }` over a `Vec[i64]`. Both bindings are `ref i64` (design.md line 397 and core-semantics.md §5.10: an unannotated `let` keeps the reference), so the MIR borrow checker is right and check is the one that misses it; the MIR message also names the collection `_1` rather than `m` or `v` | — |
+| B-2026-10-19-8 | 2026-10-19 | typecheck | medium | `x.clone()` on a value of a projection type (`x: I.Item` under `where I.Item: Clone`) is typed as an error type that check accepts: `let p: bool = x.clone();` passes `karac check`, and on MIR every such program stops with "a type that failed to check is not lowered yet" | — |
+| B-2026-10-19-9 | 2026-10-19 | typecheck | low | A `Vec.new()` inside a struct literal passed to a generic function is not pinned by the expected type of the call: `let h: Holder[Bag[String]] = hold(Bag { items: Vec.new(), n: 0 });` passes check, and MIR stops with "an expression whose type does not lower (Type(UnknownParam(\"T\")))" | — |
 
 ### Relocated
 
@@ -4165,6 +4166,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-18-20 | typecheck | medium | `karac check` cannot infer `T` in `fn skip1[I: Iterator[Item = T], T](it: own I) -> Skip1[I, T]` from the iterator passed in: `for x in skip1(VecIter… | e5c2afdba5 |
 | B-2026-10-18-21 | typecheck | medium | `karac check` matches an impl's type parameters to the struct's by POSITION, not by name: `impl[T: Clone, I: Iterator] Iterator for Tagged[I, T]` (st… | e5c2afdba5 |
 | B-2026-10-18-22 | typecheck | medium | `karac check` does not match an `I.Item` projection against the concrete type it stands for: `let mut out: Vec[I.Item] = Vec.new(); ...; out` in `fn… | e5c2afdba5 |
+| B-2026-10-18-23 | interp+codegen | medium | On the MIR surfaces a generic struct with an `I.Item` field is not lowered when a generic function builds it: `fn last[I: Iterator](it: own I) -> Las… | 7b723b52ea |
 | B-2026-10-18-24 | interp+codegen | high | On the MIR compiled backends a bare `None` passed for an `Option[T]` parameter, where `T` is fixed by another argument, is lowered with the wrong typ… | fa73802a05 |
 | B-2026-10-18-25 | parser | medium | design.md's remedy for postfix on a block-like expression in statement position does not parse: `(if c { a } else { b }).len()` as a function's tail,… | 500dff0834 |
 | B-2026-10-18-26 | interp+codegen | medium | On the MIR surfaces `check(n).map_err(text)?` with a NAMED function stops with "'?' cannot propagate error 'F' as 'String': target is not a named typ… | f492133823 |
