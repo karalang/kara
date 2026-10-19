@@ -1,0 +1,2978 @@
+== 1 parse 'hello {}' 'hello world'
+  <Result ('world',) {}>
+  spans {0: (6, 11)}
+== 2 parse 'hello {}' 'hello  world '
+  <Result (' world ',) {}>
+  spans {0: (6, 13)}
+== 3 parse 'hello {}' 'Hello World'
+  <Result ('World',) {}>
+  spans {0: (6, 11)}
+== 4 parse 'hello {}' 'Hello World' cs
+  None
+== 5 parse 'hello {}' 'hello world' cs
+  <Result ('world',) {}>
+  spans {0: (6, 11)}
+== 6 parse '{} {}' 'a b c'
+  <Result ('a', 'b c') {}>
+  spans {0: (0, 1), 1: (2, 5)}
+== 7 parse '{}{}' 'abc'
+  <Result ('a', 'bc') {}>
+  spans {0: (0, 1), 1: (1, 3)}
+== 8 parse '{} and {}' 'salt and pepper and ginger'
+  <Result ('salt', 'pepper and ginger') {}>
+  spans {0: (0, 4), 1: (9, 26)}
+== 9 parse '{name} is {age:d}' 'Alice is 30'
+  <Result () {'name': 'Alice', 'age': 30}>
+  spans {'name': (0, 5), 'age': (9, 11)}
+== 10 parse '{name} is {age:d}' 'Alice is thirty'
+  None
+== 11 parse '{name} is {age:d} years' 'Bob Smith is 42 years'
+  <Result () {'name': 'Bob Smith', 'age': 42}>
+  spans {'name': (0, 9), 'age': (13, 15)}
+== 12 parse '{0} {1}' 'x y'
+  <Result ('x', 'y') {}>
+  spans {0: (0, 1), 1: (2, 3)}
+== 13 parse '{1} {0}' 'x y'
+  <Result ('x', 'y') {}>
+  spans {0: (0, 1), 1: (2, 3)}
+== 14 parse '{_x} {y}' '1 2'
+  <Result ('1',) {'y': '2'}>
+  spans {'y': (2, 3), 0: (0, 1)}
+== 15 parse '{-} {y}' '1 2'
+  <Result ('1',) {'y': '2'}>
+  spans {'y': (2, 3), 0: (0, 1)}
+== 16 parse '{}' ''
+  None
+== 17 parse '' ''
+  <Result () {}>
+  spans {}
+== 18 parse '' 'x'
+  None
+== 19 parse 'x' 'X'
+  <Result () {}>
+  spans {}
+== 20 parse '{}' 'line one\nline two'
+  <Result ('line one\nline two',) {}>
+  spans {0: (0, 17)}
+== 21 parse '{}\n{}' 'line one\nline two'
+  <Result ('line one', 'line two') {}>
+  spans {0: (0, 8), 1: (9, 17)}
+== 22 parse 'a.b {}' 'a.b c'
+  <Result ('c',) {}>
+  spans {0: (4, 5)}
+== 23 parse 'a.b {}' 'axb c'
+  None
+== 24 parse '1+1={:d}' '1+1=2'
+  <Result (2,) {}>
+  spans {0: (4, 5)}
+== 25 parse '(x) {}' '(x) y'
+  <Result ('y',) {}>
+  spans {0: (4, 5)}
+== 26 parse '[{}]' '[inside]'
+  <Result ('inside',) {}>
+  spans {0: (1, 7)}
+== 27 parse 'cost: ${:f}' 'cost: $3.50'
+  <Result (3.5,) {}>
+  spans {0: (7, 11)}
+== 28 parse '^{}$' '^anchored$'
+  <Result ('anchored',) {}>
+  spans {0: (1, 9)}
+== 29 parse 'a|b {}' 'a|b c'
+  <Result ('c',) {}>
+  spans {0: (4, 5)}
+== 30 parse 'a!b {}' 'a!b c'
+  <Result ('c',) {}>
+  spans {0: (4, 5)}
+== 31 parse 'path\\to\\{}' 'path\\to\\file'
+  <Result ('file',) {}>
+  spans {0: (8, 12)}
+== 32 parse 'tab\t{}' 'tab\tthere'
+  <Result ('there',) {}>
+  spans {0: (4, 9)}
+== 33 parse 'x{2,3} {}' 'xx y'
+  <Result ('y',) {}>
+  spans {0: (3, 4)}
+== 34 parse 'x{2,3} {}' 'x{2,3} y'
+  None
+== 35 parse 'x{,3}y' 'xxxy'
+  <Result () {}>
+  spans {}
+== 36 parse 'x{,3}y' 'x{,3}y'
+  None
+== 37 parse 'a { b' 'a { b'
+  <Result () {}>
+  spans {}
+== 38 parse 'a } b' 'a } b'
+  <Result () {}>
+  spans {}
+== 39 parse '{{}}' '{}'
+  <Result () {}>
+  spans {}
+== 40 parse '{{{}}}' '{abc}'
+  <Result ('abc',) {}>
+  spans {0: (1, 4)}
+== 41 parse '{{x}} {}' '{x} 5'
+  <Result ('5',) {}>
+  spans {0: (4, 5)}
+== 42 parse '{{x}} {}' '{{x}} 5'
+  None
+== 43 parse '}}{{' '}{'
+  <Result () {}>
+  spans {}
+== 44 parse 'café {}' 'CAFÉ noir'
+  <Result ('noir',) {}>
+  spans {0: (5, 9)}
+== 45 parse 'straße {}' 'STRASSE x'
+  None
+== 46 parse 'Σ {}' 'σ x'
+  <Result ('x',) {}>
+  spans {0: (2, 3)}
+== 47 parse '{} ünïcödé' 'ÜNÏCÖDÉ? no: üNÏcödé'
+  <Result ('ÜNÏCÖDÉ? no:',) {}>
+  spans {0: (0, 12)}
+== 48 parse 'naïve {x}' 'NAÏVE 1'
+  <Result () {'x': '1'}>
+  spans {'x': (6, 7)}
+== 49 parse '{x:d}' '٣'
+  None
+== 50 parse '{x:d}' '1٣'
+  None
+== 51 parse '{x:n}' '١٢'
+  ValueError: invalid literal for int() with base 10: ''
+== 52 parse '{x:w}' '日本語'
+  <Result () {'x': '日本語'}>
+  spans {'x': (0, 3)}
+== 53 parse '{x}-{y}' 'a-b-c'
+  <Result () {'x': 'a', 'y': 'b-c'}>
+  spans {'x': (0, 1), 'y': (2, 5)}
+== 54 parse '{x:d}-{y}' '1-2-3'
+  <Result () {'x': 1, 'y': '2-3'}>
+  spans {'x': (0, 1), 'y': (2, 5)}
+== 55 parse '{greeting}, {name}!' 'Hello, World!'
+  <Result () {'greeting': 'Hello', 'name': 'World'}>
+  spans {'greeting': (0, 5), 'name': (7, 12)}
+== 56 parse '{greeting}, {name}!' 'Hello, , !'
+  <Result () {'greeting': 'Hello', 'name': ', '}>
+  spans {'greeting': (0, 5), 'name': (7, 9)}
+== 57 parse '{} {name} {}' 'a b c'
+  <Result ('a', 'c') {'name': 'b'}>
+  spans {'name': (2, 3), 0: (0, 1), 1: (4, 5)}
+== 58 parse '{name} {} {other} {}' '1 2 3 4'
+  <Result ('2', '4') {'name': '1', 'other': '3'}>
+  spans {'name': (0, 1), 'other': (4, 5), 0: (2, 3), 1: (6, 7)}
+== 59 parse '{:d} {name:d} {:d}' '1 2 3'
+  <Result (1, 3) {'name': 2}>
+  spans {'name': (2, 3), 0: (0, 1), 1: (4, 5)}
+== 60 parse '{} {:g} {}' 'a 1.5e3 b'
+  <Result ('a', 1500.0, 'b') {}>
+  spans {0: (0, 1), 1: (2, 7), 2: (8, 9)}
+== 61 parse '{} {:g} {}' 'a 7 b'
+  <Result ('a', 7.0, 'b') {}>
+  spans {0: (0, 1), 1: (2, 3), 2: (4, 5)}
+== 62 parse '{} {:ti} {}' 'a 2011-11-21 b'
+  <Result ('a', datetime.datetime(2011, 11, 21, 0, 0), 'b') {}>
+  spans {0: (0, 1), 1: (2, 12), 2: (13, 14)}
+== 63 parse '{:%} {}' '50% off'
+  <Result (0.5, 'off') {}>
+  spans {0: (0, 3), 1: (4, 7)}
+== 64 parse '{:n} {}' '1,000 rest'
+  <Result (1000, 'rest') {}>
+  spans {0: (0, 5), 1: (6, 10)}
+== 65 parse '{a} {a}' 'x x'
+  <Result () {'a': 'x'}>
+  spans {'a': (0, 1)}
+== 66 parse '{a} {a}' 'x y'
+  None
+== 67 parse '{a} {a}' 'abc ABC'
+  <Result () {'a': 'abc'}>
+  spans {'a': (0, 3)}
+== 68 parse '{a} {a}' 'abc ABC' cs
+  None
+== 69 parse '{a:d} {a:d}' '5 5'
+  <Result () {'a': 5}>
+  spans {'a': (0, 1)}
+== 70 parse '{a:d} {a:d}' '5 05'
+  None
+== 71 parse '{a:d} {a}' '5 5'
+  RepeatedNameError: field type '' for field "a" does not match previous seen type 'd'
+== 72 parse '{a} {b} {a} {b}' '1 2 1 2'
+  <Result () {'a': '1', 'b': '2'}>
+  spans {'a': (0, 1), 'b': (2, 3)}
+== 73 parse '{a} {b} {a} {b}' '1 2 2 1'
+  None
+== 74 parse '{a}{a}' 'xyxy'
+  <Result () {'a': 'xy'}>
+  spans {'a': (0, 2)}
+== 75 parse '{a}{a}' 'aaaa'
+  <Result () {'a': 'aa'}>
+  spans {'a': (0, 2)}
+== 76 parse '{a}{a}{a}' 'abcabcabc'
+  <Result () {'a': 'abc'}>
+  spans {'a': (0, 3)}
+== 77 parse '{a.b} {a.b}' 'q q'
+  <Result () {'a.b': 'q'}>
+  spans {'a.b': (0, 1)}
+== 78 parse '{a[b]} {a[b]}' 'q q'
+  <Result () {'a': {'b': 'q'}}>
+  spans {'a[b]': (0, 1)}
+== 79 parse '{a:>3} {a:>3}' '  x   x'
+  <Result () {'a': '  x'}>
+  spans {'a': (0, 3)}
+== 80 parse '{a.b}' '1'
+  <Result () {'a.b': '1'}>
+  spans {'a.b': (0, 1)}
+== 81 parse '{a.b} {a_b}' '1 2'
+  <Result () {'a.b': '1', 'a_b': '2'}>
+  spans {'a.b': (0, 1), 'a_b': (2, 3)}
+== 82 parse '{a_b} {a.b}' '1 2'
+  <Result () {'a_b': '1', 'a.b': '2'}>
+  spans {'a_b': (0, 1), 'a.b': (2, 3)}
+== 83 parse '{a.b} {a_b} {a-b}' '1 2 3'
+  <Result () {'a.b': '1', 'a_b': '2', 'a-b': '3'}>
+  spans {'a.b': (0, 1), 'a_b': (2, 3), 'a-b': (4, 5)}
+== 84 parse '{a-b} {a_b}' '1 2'
+  <Result () {'a-b': '1', 'a_b': '2'}>
+  spans {'a-b': (0, 1), 'a_b': (2, 3)}
+== 85 parse '{a-b} {a_b} {a.b}' '1 2 3'
+  <Result () {'a-b': '1', 'a_b': '2', 'a.b': '3'}>
+  spans {'a-b': (0, 1), 'a_b': (2, 3), 'a.b': (4, 5)}
+== 86 parse '{a.b.c} {a_b_c}' '1 2'
+  <Result () {'a.b.c': '1', 'a_b_c': '2'}>
+  spans {'a.b.c': (0, 1), 'a_b_c': (2, 3)}
+== 87 parse '{a_b_c} {a.b.c}' '1 2'
+  <Result () {'a_b_c': '1', 'a.b.c': '2'}>
+  spans {'a_b_c': (0, 1), 'a.b.c': (2, 3)}
+== 88 parse '{hyphen-name}' 'ok'
+  <Result () {'hyphen-name': 'ok'}>
+  spans {'hyphen-name': (0, 2)}
+== 89 parse '{a[b]}' '1'
+  <Result () {'a': {'b': '1'}}>
+  spans {'a[b]': (0, 1)}
+== 90 parse '{a[b]} {a[c]}' '1 2'
+  <Result () {'a': {'b': '1', 'c': '2'}}>
+  spans {'a[b]': (0, 1), 'a[c]': (2, 3)}
+== 91 parse '{a[b][c]} {a[b][d]} {a[e]}' '1 2 3'
+  <Result () {'a': {'b': {'c': '1', 'd': '2'}, 'e': '3'}}>
+  spans {'a[b][c]': (0, 1), 'a[b][d]': (2, 3), 'a[e]': (4, 5)}
+== 92 parse '{x[0]} {x[1]}' 'first second'
+  <Result () {'x': {'0': 'first', '1': 'second'}}>
+  spans {'x[0]': (0, 5), 'x[1]': (6, 12)}
+== 93 parse '{a[b]} {a}' '1 2'
+  <Result () {'a': '2'}>
+  spans {'a[b]': (0, 1), 'a': (2, 3)}
+== 94 parse '{a} {a[b]}' '1 2'
+  TypeError: 'str' object does not support item assignment
+== 95 parse '{a} {a[b][c]}' '1 2'
+  AttributeError: 'str' object has no attribute 'setdefault'
+== 96 parse '{a:d} {a[b]}' '1 2'
+  TypeError: 'int' object does not support item assignment
+== 97 parse '{a[b]} {a[b][c]}' '1 2'
+  TypeError: 'str' object does not support item assignment
+== 98 parse '{a[b][c]} {a[b]}' '1 2'
+  <Result () {'a': {'b': '2'}}>
+  spans {'a[b][c]': (0, 1), 'a[b]': (2, 3)}
+== 99 parse '{a.b[c]} {a.b[d]}' '1 2'
+  <Result () {'a.b': {'c': '1', 'd': '2'}}>
+  spans {'a.b[c]': (0, 1), 'a.b[d]': (2, 3)}
+== 100 parse '{a[b.c]} {a[b-c]}' '1 2'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A(?P<a_b_c_>.+?) (?P<a[b__c]>.+?)\Z'
+== 101 parse '{a[b c]}' '1'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A(?P<a_b c_>.+?)\Z'
+== 102 search '{a[b c]}' '1'
+  PatternError: bad character in group name 'a_b c_' at position 4
+== 103 parse '{a[b!]}' '1'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A(?P<a_b!_>.+?)\Z'
+== 104 parse '{a[*]}' '1'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A(?P<a_*_>.+?)\Z'
+== 105 parse '{a[b:c]}' '1'
+  ValueError: format spec 'c]' not recognised
+== 106 parse '{a[b]} {a_b_}' '1 2'
+  <Result () {'a': {'b': '1'}, 'a_b_': '2'}>
+  spans {'a[b]': (0, 1), 'a_b_': (2, 3)}
+== 107 parse '{a_b_} {a[b]}' '1 2'
+  KeyError: "duplicated group name 'a[b]'"
+== 108 parse '{ab} {ab}' '1 1'
+  <Result () {'ab': '1'}>
+  spans {'ab': (0, 1)}
+== 109 parse '{a[1]} {a[2]}' '1 2'
+  <Result () {'a': {'1': '1', '2': '2'}}>
+  spans {'a[1]': (0, 1), 'a[2]': (2, 3)}
+== 110 parse '{user[name]} <{user[email]}>' 'Jo <jo@example.org>'
+  <Result () {'user': {'name': 'Jo', 'email': 'jo@example.org'}}>
+  spans {'user[name]': (0, 2), 'user[email]': (4, 18)}
+== 111 parse '{a} {a:d}' '1 1'
+  RepeatedNameError: field type 'd' for field "a" does not match previous seen type ''
+== 112 parse '{a:d} {a:f}' '1 1.0'
+  RepeatedNameError: field type 'f' for field "a" does not match previous seen type 'd'
+== 113 parse '{a:>4} {a:<4}' '   x x   '
+  RepeatedNameError: field type '<4' for field "a" does not match previous seen type '>4'
+== 114 parse '{n.x:d} {n.x:w}' '1 1'
+  RepeatedNameError: field type 'w' for field "n.x" does not match previous seen type 'd'
+== 115 parse '{:d}' '0'
+  <Result (0,) {}>
+  spans {0: (0, 1)}
+== 116 parse '{:d}' '42'
+  <Result (42,) {}>
+  spans {0: (0, 2)}
+== 117 parse '{:d}' '-42'
+  <Result (-42,) {}>
+  spans {0: (0, 3)}
+== 118 parse '{:d}' '+42'
+  <Result (42,) {}>
+  spans {0: (0, 3)}
+== 119 parse '{:d}' ' 42'
+  <Result (42,) {}>
+  spans {0: (0, 3)}
+== 120 parse '{:d}' '0042'
+  <Result (42,) {}>
+  spans {0: (0, 4)}
+== 121 parse '{:d}' '1_000'
+  None
+== 122 parse '{:d}' '1,000'
+  None
+== 123 parse '{:d}' '0x1F'
+  <Result (31,) {}>
+  spans {0: (0, 4)}
+== 124 parse '{:d}' '-0x1f'
+  <Result (-31,) {}>
+  spans {0: (0, 5)}
+== 125 parse '{:d}' '+0X1f'
+  <Result (31,) {}>
+  spans {0: (0, 5)}
+== 126 parse '{:d}' ' 0x1f'
+  <Result (1,) {}>
+  spans {0: (0, 5)}
+== 127 parse '{:d}' '0b101'
+  <Result (5,) {}>
+  spans {0: (0, 5)}
+== 128 parse '{:d}' '0o17'
+  <Result (15,) {}>
+  spans {0: (0, 4)}
+== 129 parse '{:d}' '0O17'
+  <Result (15,) {}>
+  spans {0: (0, 4)}
+== 130 parse '{:d}' '-0b11'
+  <Result (-3,) {}>
+  spans {0: (0, 5)}
+== 131 parse '{:d}' '012'
+  <Result (12,) {}>
+  spans {0: (0, 3)}
+== 132 parse '{:d}' '0b'
+  None
+== 133 parse '{:d}' '0x'
+  None
+== 134 parse '{:d}' '4.2'
+  None
+== 135 parse '{:d}' ''
+  None
+== 136 parse '{:d}' 'x'
+  None
+== 137 parse '{:3d}' '1'
+  <Result (1,) {}>
+  spans {0: (0, 1)}
+== 138 parse '{:3d}' '123'
+  <Result (123,) {}>
+  spans {0: (0, 3)}
+== 139 parse '{:3d}' '1234'
+  None
+== 140 parse '{:3d}' '  7'
+  <Result (7,) {}>
+  spans {0: (2, 3)}
+== 141 parse '{:3d}' '-12'
+  <Result (-12,) {}>
+  spans {0: (0, 3)}
+== 142 parse '{:03d}' '007'
+  <Result (7,) {}>
+  spans {0: (0, 3)}
+== 143 parse '{:03d}' '7'
+  <Result (7,) {}>
+  spans {0: (0, 1)}
+== 144 parse '{:03d}' '0007'
+  None
+== 145 parse '{:,d}' '1,234,567'
+  <Result (1234567,) {}>
+  spans {0: (0, 9)}
+== 146 parse '{:,d}' '1234567'
+  <Result (1234567,) {}>
+  spans {0: (0, 7)}
+== 147 parse '{:,d}' '1,2,3'
+  <Result (123,) {}>
+  spans {0: (0, 5)}
+== 148 parse '{:_d}' '1_234'
+  <Result (1234,) {}>
+  spans {0: (0, 5)}
+== 149 parse '{:_d}' '1,234'
+  None
+== 150 parse '{:n}' '1,234'
+  <Result (1234,) {}>
+  spans {0: (0, 5)}
+== 151 parse '{:n}' '1.234.567'
+  <Result (1234567,) {}>
+  spans {0: (0, 9)}
+== 152 parse '{:n}' '123'
+  <Result (123,) {}>
+  spans {0: (0, 3)}
+== 153 parse '{:n}' '1234'
+  None
+== 154 parse '{:n}' '12,34'
+  None
+== 155 parse '{:n}' '-1,000'
+  <Result (-1000,) {}>
+  spans {0: (0, 6)}
+== 156 parse '{:b}' '101'
+  <Result (5,) {}>
+  spans {0: (0, 3)}
+== 157 parse '{:b}' '0b101'
+  <Result (5,) {}>
+  spans {0: (0, 5)}
+== 158 parse '{:b}' '0B11'
+  <Result (3,) {}>
+  spans {0: (0, 4)}
+== 159 parse '{:b}' '-101'
+  <Result (-5,) {}>
+  spans {0: (0, 4)}
+== 160 parse '{:b}' '102'
+  None
+== 161 parse '{:b}' '2'
+  None
+== 162 parse '{:o}' '17'
+  <Result (15,) {}>
+  spans {0: (0, 2)}
+== 163 parse '{:o}' '0o17'
+  <Result (15,) {}>
+  spans {0: (0, 4)}
+== 164 parse '{:o}' '0O7'
+  <Result (7,) {}>
+  spans {0: (0, 3)}
+== 165 parse '{:o}' '-17'
+  <Result (-15,) {}>
+  spans {0: (0, 3)}
+== 166 parse '{:o}' '8'
+  None
+== 167 parse '{:x}' 'ff'
+  <Result (255,) {}>
+  spans {0: (0, 2)}
+== 168 parse '{:x}' 'FF'
+  <Result (255,) {}>
+  spans {0: (0, 2)}
+== 169 parse '{:x}' '0xff'
+  <Result (255,) {}>
+  spans {0: (0, 4)}
+== 170 parse '{:x}' '0XFF'
+  <Result (255,) {}>
+  spans {0: (0, 4)}
+== 171 parse '{:x}' '-1a'
+  <Result (-26,) {}>
+  spans {0: (0, 3)}
+== 172 parse '{:x}' 'g'
+  None
+== 173 parse '{:X}' 'DEADbeef'
+  <Result (3735928559,) {}>
+  spans {0: (0, 8)}
+== 174 parse '{:X}' '0x10'
+  <Result (16,) {}>
+  spans {0: (0, 4)}
+== 175 parse '{:f}' '3.14'
+  <Result (3.14,) {}>
+  spans {0: (0, 4)}
+== 176 parse '{:f}' '.5'
+  <Result (0.5,) {}>
+  spans {0: (0, 2)}
+== 177 parse '{:f}' '-0.5'
+  <Result (-0.5,) {}>
+  spans {0: (0, 4)}
+== 178 parse '{:f}' '+2.0'
+  <Result (2.0,) {}>
+  spans {0: (0, 4)}
+== 179 parse '{:f}' ' 1.25'
+  <Result (1.25,) {}>
+  spans {0: (0, 5)}
+== 180 parse '{:f}' '3'
+  None
+== 181 parse '{:f}' '1e5'
+  None
+== 182 parse '{:f}' 'nan'
+  <Result (nan,) {}>
+  spans {0: (0, 3)}
+== 183 parse '{:f}' 'NAN'
+  <Result (nan,) {}>
+  spans {0: (0, 3)}
+== 184 parse '{:f}' 'NaN'
+  <Result (nan,) {}>
+  spans {0: (0, 3)}
+== 185 parse '{:f}' 'inf'
+  <Result (inf,) {}>
+  spans {0: (0, 3)}
+== 186 parse '{:f}' '-inf'
+  <Result (-inf,) {}>
+  spans {0: (0, 4)}
+== 187 parse '{:f}' 'INF'
+  <Result (inf,) {}>
+  spans {0: (0, 3)}
+== 188 parse '{:f}' '-INF'
+  <Result (-inf,) {}>
+  spans {0: (0, 4)}
+== 189 parse '{:f}' '1.'
+  None
+== 190 parse '{:f}' '0.1'
+  <Result (0.1,) {}>
+  spans {0: (0, 3)}
+== 191 parse '{:f}' '123456789.123456789'
+  <Result (123456789.12345679,) {}>
+  spans {0: (0, 19)}
+== 192 parse '{:f}' '0.000001'
+  <Result (1e-06,) {}>
+  spans {0: (0, 8)}
+== 193 parse '{:f}' '1.0e5'
+  None
+== 194 parse '{:.0f}' '3'
+  <Result (3.0,) {}>
+  spans {0: (0, 1)}
+== 195 parse '{:.0f}' '3.0'
+  None
+== 196 parse '{:.0f}' '-7'
+  <Result (-7.0,) {}>
+  spans {0: (0, 2)}
+== 197 parse '{:.0f}' 'nan'
+  <Result (nan,) {}>
+  spans {0: (0, 3)}
+== 198 parse '{:.2f}' '3.14'
+  <Result (3.14,) {}>
+  spans {0: (0, 4)}
+== 199 parse '{:.2f}' '3.14159'
+  <Result (3.14159,) {}>
+  spans {0: (0, 7)}
+== 200 parse '{:.2f}' '3'
+  None
+== 201 parse '{:F}' '3.14'
+  <Result (Decimal('3.14'),) {}>
+  spans {0: (0, 4)}
+== 202 parse '{:F}' '.5'
+  <Result (Decimal('0.5'),) {}>
+  spans {0: (0, 2)}
+== 203 parse '{:F}' '-0.5'
+  <Result (Decimal('-0.5'),) {}>
+  spans {0: (0, 4)}
+== 204 parse '{:F}' '1.50'
+  <Result (Decimal('1.50'),) {}>
+  spans {0: (0, 4)}
+== 205 parse '{:F}' '+2.000'
+  <Result (Decimal('2.000'),) {}>
+  spans {0: (0, 6)}
+== 206 parse '{:F}' '0.0000001'
+  <Result (Decimal('1E-7'),) {}>
+  spans {0: (0, 9)}
+== 207 parse '{:F}' '00.10'
+  <Result (Decimal('0.10'),) {}>
+  spans {0: (0, 5)}
+== 208 parse '{:F}' '-0.00'
+  <Result (Decimal('-0.00'),) {}>
+  spans {0: (0, 5)}
+== 209 parse '{:F}' 'nan'
+  <Result (Decimal('NaN'),) {}>
+  spans {0: (0, 3)}
+== 210 parse '{:F}' '-nan'
+  <Result (Decimal('-NaN'),) {}>
+  spans {0: (0, 4)}
+== 211 parse '{:F}' 'inf'
+  <Result (Decimal('Infinity'),) {}>
+  spans {0: (0, 3)}
+== 212 parse '{:F}' '-INF'
+  <Result (Decimal('-Infinity'),) {}>
+  spans {0: (0, 4)}
+== 213 parse '{:F}' '3'
+  None
+== 214 parse '{:.0F}' '42'
+  <Result (Decimal('42'),) {}>
+  spans {0: (0, 2)}
+== 215 parse '{:.0F}' '007'
+  <Result (Decimal('7'),) {}>
+  spans {0: (0, 3)}
+== 216 parse '{:.0F}' '-0'
+  <Result (Decimal('-0'),) {}>
+  spans {0: (0, 2)}
+== 217 parse '{:e}' '1.5e3'
+  <Result (1500.0,) {}>
+  spans {0: (0, 5)}
+== 218 parse '{:e}' '1.5E+03'
+  <Result (1500.0,) {}>
+  spans {0: (0, 7)}
+== 219 parse '{:e}' '-2.5e-10'
+  <Result (-2.5e-10,) {}>
+  spans {0: (0, 8)}
+== 220 parse '{:e}' '.5e1'
+  <Result (5.0,) {}>
+  spans {0: (0, 4)}
+== 221 parse '{:e}' '1e5'
+  None
+== 222 parse '{:e}' 'nan'
+  <Result (nan,) {}>
+  spans {0: (0, 3)}
+== 223 parse '{:e}' '-inf'
+  <Result (-inf,) {}>
+  spans {0: (0, 4)}
+== 224 parse '{:e}' '+INF'
+  <Result (inf,) {}>
+  spans {0: (0, 4)}
+== 225 parse '{:e}' '3.0'
+  None
+== 226 parse '{:E}' '1.5E3'
+  <Result (1500.0,) {}>
+  spans {0: (0, 5)}
+== 227 parse '{:g}' '1'
+  <Result (1.0,) {}>
+  spans {0: (0, 1)}
+== 228 parse '{:g}' '1.5'
+  <Result (1.5,) {}>
+  spans {0: (0, 3)}
+== 229 parse '{:g}' '1e5'
+  <Result (100000.0,) {}>
+  spans {0: (0, 3)}
+== 230 parse '{:g}' '1.5e-3'
+  <Result (0.0015,) {}>
+  spans {0: (0, 6)}
+== 231 parse '{:g}' '-7'
+  <Result (-7.0,) {}>
+  spans {0: (0, 2)}
+== 232 parse '{:g}' 'nan'
+  <Result (nan,) {}>
+  spans {0: (0, 3)}
+== 233 parse '{:g}' '-inf'
+  <Result (-inf,) {}>
+  spans {0: (0, 4)}
+== 234 parse '{:g}' '1E+20'
+  <Result (1e+20,) {}>
+  spans {0: (0, 5)}
+== 235 parse '{:g}' '.5'
+  None
+== 236 parse '{:G}' '2.5E2'
+  <Result (250.0,) {}>
+  spans {0: (0, 5)}
+== 237 parse '{:%}' '50%'
+  <Result (0.5,) {}>
+  spans {0: (0, 3)}
+== 238 parse '{:%}' '12.5%'
+  <Result (0.125,) {}>
+  spans {0: (0, 5)}
+== 239 parse '{:%}' '-5%'
+  <Result (-0.05,) {}>
+  spans {0: (0, 3)}
+== 240 parse '{:%}' '100%'
+  <Result (1.0,) {}>
+  spans {0: (0, 4)}
+== 241 parse '{:%}' '0.1%'
+  <Result (0.001,) {}>
+  spans {0: (0, 4)}
+== 242 parse '{:%}' '50'
+  None
+== 243 parse '{:%}' '50 %'
+  None
+== 244 parse '{:w}' 'word'
+  <Result ('word',) {}>
+  spans {0: (0, 4)}
+== 245 parse '{:w}' 'two words'
+  None
+== 246 parse '{:w}' 'under_score'
+  <Result ('under_score',) {}>
+  spans {0: (0, 11)}
+== 247 parse '{:w}' 'dash-ed'
+  None
+== 248 parse '{:w}' '123'
+  <Result ('123',) {}>
+  spans {0: (0, 3)}
+== 249 parse '{:W}' '!?'
+  <Result ('!?',) {}>
+  spans {0: (0, 2)}
+== 250 parse '{:W}' 'a!'
+  None
+== 251 parse '{:s}' '   '
+  <Result ('   ',) {}>
+  spans {0: (0, 3)}
+== 252 parse '{:s}' 'x'
+  None
+== 253 parse '{:s}' '\t\n'
+  <Result ('\t\n',) {}>
+  spans {0: (0, 2)}
+== 254 parse '{:S}' 'nospace'
+  <Result ('nospace',) {}>
+  spans {0: (0, 7)}
+== 255 parse '{:S}' 'has space'
+  None
+== 256 parse '{:D}' 'abc'
+  <Result ('abc',) {}>
+  spans {0: (0, 3)}
+== 257 parse '{:D}' 'a1'
+  None
+== 258 parse '{:l}' 'letters'
+  <Result ('letters',) {}>
+  spans {0: (0, 7)}
+== 259 parse '{:l}' 'Letters'
+  <Result ('Letters',) {}>
+  spans {0: (0, 7)}
+== 260 parse '{:l}' 'l3tters'
+  None
+== 261 parse '{:l}' 'ünï'
+  None
+== 262 parse '{x:5}' '  abc'
+  <Result () {'x': '  abc'}>
+  spans {'x': (0, 5)}
+== 263 parse '{x:5}' 'abc'
+  None
+== 264 parse '{x:5}' 'abcdef'
+  <Result () {'x': 'abcdef'}>
+  spans {'x': (0, 6)}
+== 265 parse '{x:<5}|' 'abc  |'
+  <Result () {'x': 'abc  '}>
+  spans {'x': (0, 5)}
+== 266 parse '{x:>5}|' '  abc|'
+  <Result () {'x': '  abc'}>
+  spans {'x': (0, 5)}
+== 267 parse '{x:^7}|' '  abc  |'
+  <Result () {'x': '  abc  '}>
+  spans {'x': (0, 7)}
+== 268 parse '{x:^}|' '  abc   |'
+  <Result () {'x': 'abc'}>
+  spans {'x': (2, 5)}
+== 269 parse '{x:<}|' 'abc   |'
+  <Result () {'x': 'abc'}>
+  spans {'x': (0, 3)}
+== 270 parse '{x:>}|' '   abc|'
+  <Result () {'x': 'abc'}>
+  spans {'x': (3, 6)}
+== 271 parse '{x:*^9}|' '***abc***|'
+  <Result () {'x': '***abc***'}>
+  spans {'x': (0, 9)}
+== 272 parse '{x:*<9}|' 'abc******|'
+  <Result () {'x': 'abc******'}>
+  spans {'x': (0, 9)}
+== 273 parse '{x:.>6}|' '...abc|'
+  <Result () {'x': '...abc'}>
+  spans {'x': (0, 6)}
+== 274 parse '{x:->6}|' '---abc|'
+  <Result () {'x': '---abc'}>
+  spans {'x': (0, 6)}
+== 275 parse '{x:0>6}|' '000abc|'
+  <Result () {'x': '000abc'}>
+  spans {'x': (0, 6)}
+== 276 parse '{x:.2}' 'ab'
+  <Result () {'x': 'ab'}>
+  spans {'x': (0, 2)}
+== 277 parse '{x:.2}' 'abc'
+  None
+== 278 parse '{x:.2}|' 'abc|'
+  None
+== 279 parse '{x:3.5}' 'ab'
+  None
+== 280 parse '{x:3.5}' 'abcd'
+  <Result () {'x': 'abcd'}>
+  spans {'x': (0, 4)}
+== 281 parse '{x:3.5}' 'abcdefg'
+  None
+== 282 parse '{x:>3.5}' '  abcd'
+  <Result () {'x': 'abcd'}>
+  spans {'x': (2, 6)}
+== 283 parse '{x:0}' 'abc'
+  <Result () {'x': 'abc'}>
+  spans {'x': (0, 3)}
+== 284 parse '{x:}' 'abc'
+  <Result () {'x': 'abc'}>
+  spans {'x': (0, 3)}
+== 285 parse '{x:+}' 'abc'
+  <Result () {'x': 'abc'}>
+  spans {'x': (0, 3)}
+== 286 parse '{x:<10d}|' '42        |'
+  <Result () {'x': 42}>
+  spans {'x': (0, 2)}
+== 287 parse '{x:>10d}|' '        42|'
+  <Result () {'x': 42}>
+  spans {'x': (8, 10)}
+== 288 parse '{x:^10d}|' '    42    |'
+  <Result () {'x': 42}>
+  spans {'x': (4, 6)}
+== 289 parse '{x:=10d}|' '0000000042|'
+  <Result () {'x': 42}>
+  spans {'x': (0, 10)}
+== 290 parse '{x:=10d}|' '-000000042|'
+  <Result () {'x': -42}>
+  spans {'x': (0, 10)}
+== 291 parse '{x:x=10d}|' 'xxxxxxxx42|'
+  <Result () {'x': 42}>
+  spans {'x': (0, 10)}
+== 292 parse '{x:.=8d}|' '......42|'
+  <Result () {'x': 42}>
+  spans {'x': (0, 8)}
+== 293 parse '{x:.=8d}|' 'anything42|'
+  <Result () {'x': 42}>
+  spans {'x': (0, 10)}
+== 294 parse '{x:0=8.2f}' '00003.14'
+  <Result () {'x': 3.14}>
+  spans {'x': (0, 8)}
+== 295 parse '{x:*^10.2f}' '***3.14***'
+  <Result () {'x': 3.14}>
+  spans {'x': (3, 7)}
+== 296 parse '{x:*^10.2f}' '**-3.14***'
+  <Result () {'x': -3.14}>
+  spans {'x': (2, 7)}
+== 297 parse '{x:+d}' '+5'
+  <Result () {'x': 5}>
+  spans {'x': (0, 2)}
+== 298 parse '{x: d}' ' 5'
+  <Result () {'x': 5}>
+  spans {'x': (0, 2)}
+== 299 parse '{x:-d}' '-5'
+  <Result () {'x': -5}>
+  spans {'x': (0, 2)}
+== 300 parse '{x:#x}' '0xff'
+  ValueError: format spec '#x' not recognised
+== 301 parse '{x:#b}' '0b1'
+  ValueError: format spec '#b' not recognised
+== 302 parse '{x:q}' '1'
+  ValueError: format spec 'q' not recognised
+== 303 parse '{x:dd}' '1'
+  ValueError: format spec 'dd' not recognised
+== 304 parse '{x:5q}' '1'
+  ValueError: format spec 'q' not recognised
+== 305 parse '{x:ti }' '1'
+  ValueError: format spec 'ti ' not recognised
+== 306 parse '{x:c]}' '1'
+  ValueError: format spec 'c]' not recognised
+== 307 parse '{x:|>5}' '||abc'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A|*(?P<x>.{5,}?)\Z'
+== 308 search '{x:|>5}' '||abc'
+  PatternError: nothing to repeat at position 1
+== 309 parse '{x:|^9}' 'abc'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A|*(?P<x>.{9,}?)|*\Z'
+== 310 parse '{x:(>5}' '((abc'
+  <Result () {'x': '((abc'}>
+  spans {'x': (0, 5)}
+== 311 parse '{x:)>5}' '))abc'
+  <Result () {'x': '))abc'}>
+  spans {'x': (0, 5)}
+== 312 parse '{x:[>5}' '[[abc'
+  <Result () {'x': '[[abc'}>
+  spans {'x': (0, 5)}
+== 313 parse '{x:]>5}' ']]abc'
+  <Result () {'x': ']]abc'}>
+  spans {'x': (0, 5)}
+== 314 parse '{x:{>5}' '{{abc'
+  <Result () {'x': '{{abc'}>
+  spans {'x': (0, 5)}
+== 315 parse '{x:\\>5}' '\\\\abc'
+  <Result () {'x': '\\\\abc'}>
+  spans {'x': (0, 5)}
+== 316 parse '{x:$>5}' '$$abc'
+  <Result () {'x': '$$abc'}>
+  spans {'x': (0, 5)}
+== 317 parse '{x:?>5}' '??abc'
+  <Result () {'x': '??abc'}>
+  spans {'x': (0, 5)}
+== 318 parse '{x:+>5}' '++abc'
+  <Result () {'x': '++abc'}>
+  spans {'x': (0, 5)}
+== 319 parse '{x:^>5}' '^^abc'
+  ValueError: format spec '>5' not recognised
+== 320 parse '{x:a<5}' 'bcaaa'
+  <Result () {'x': 'bcaaa'}>
+  spans {'x': (0, 5)}
+== 321 parse '{x:<<5}' 'ab<<<'
+  ValueError: format spec '<5' not recognised
+== 322 parse '{x:<5d}' '12   '
+  <Result () {'x': 12}>
+  spans {'x': (0, 2)}
+== 323 parse '{x:,.2f}' '1,234.50'
+  None
+== 324 parse '{x:,.2f}' '1234.50'
+  <Result () {'x': 1234.5}>
+  spans {'x': (0, 7)}
+== 325 parse '{:ti}' '2011-11-21'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 10)}
+== 326 parse '{:ti}' '2011-11-21 10:21'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21),) {}>
+  spans {0: (0, 16)}
+== 327 parse '{:ti}' '2011-11-21T10:21:36'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36),) {}>
+  spans {0: (0, 19)}
+== 328 parse '{:ti}' '2011-11-21T10:21:36.1'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, 100000),) {}>
+  spans {0: (0, 21)}
+== 329 parse '{:ti}' '2011-11-21T10:21:36.123456789'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, 123456),) {}>
+  spans {0: (0, 29)}
+== 330 parse '{:ti}' '2011-11-21T10:21:36Z'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset UTC 0:00:00>),) {}>
+  spans {0: (0, 20)}
+== 331 parse '{:ti}' '2011-11-21T10:21:36z'
+  ValueError: invalid literal for int() with base 10: ''
+== 332 parse '{:ti}' '2011-11-21 10:21:36+10:00'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +10:00 10:00:00>),) {}>
+  spans {0: (0, 25)}
+== 333 parse '{:ti}' '2011-11-21 10:21:36 +1000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 25)}
+== 334 parse '{:ti}' '2011-11-21 10:21:36-0530'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset -0530 -1 day, 18:30:00>),) {}>
+  spans {0: (0, 24)}
+== 335 parse '{:ti}' '2011-11-21T10:21:36 -01:00'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset -01:00 -1 day, 23:00:00>),) {}>
+  spans {0: (0, 26)}
+== 336 parse '{:ti}' '2011-11-21Z'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0, tzinfo=<FixedTzOffset UTC 0:00:00>),) {}>
+  spans {0: (0, 11)}
+== 337 parse '{:ti}' '2011-13-21'
+  ValueError: month must be in 1..12
+== 338 parse '{:ti}' '2011-02-29'
+  ValueError: day is out of range for month
+== 339 parse '{:ti}' '2012-02-29'
+  <Result (datetime.datetime(2012, 2, 29, 0, 0),) {}>
+  spans {0: (0, 10)}
+== 340 parse '{:ti}' '0000-01-01'
+  ValueError: year 0 is out of range
+== 341 parse '{:ti}' '2011-11-21 25:00'
+  ValueError: hour must be in 0..23
+== 342 parse '{:ti}' '2011-11-21 10:61'
+  ValueError: minute must be in 0..59
+== 343 parse '{:ti}' '2011-11-21 10:21:60'
+  ValueError: second must be in 0..59
+== 344 parse '{:ti}' '2011-11-21  10:21'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21),) {}>
+  spans {0: (0, 17)}
+== 345 parse '{:ti}' '2011-1-21'
+  None
+== 346 parse '{:ti}' '2011-11-21T1:2:3'
+  <Result (datetime.datetime(2011, 11, 21, 1, 2, 3),) {}>
+  spans {0: (0, 16)}
+== 347 parse '{:tg}' '21/11/2011'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 10)}
+== 348 parse '{:tg}' '21-11-2011'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 10)}
+== 349 parse '{:tg}' '21/11/2011 10:21'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21),) {}>
+  spans {0: (0, 16)}
+== 350 parse '{:tg}' '21/11/2011 10:21:36 AM'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36),) {}>
+  spans {0: (0, 22)}
+== 351 parse '{:tg}' '21/11/2011 10:21:36 PM'
+  <Result (datetime.datetime(2011, 11, 21, 22, 21, 36),) {}>
+  spans {0: (0, 22)}
+== 352 parse '{:tg}' '21/11/2011 12:00 AM'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 19)}
+== 353 parse '{:tg}' '21/11/2011 12:00 PM'
+  <Result (datetime.datetime(2011, 11, 21, 12, 0),) {}>
+  spans {0: (0, 19)}
+== 354 parse '{:tg}' '21/11/2011 12:30 am'
+  <Result (datetime.datetime(2011, 11, 21, 12, 30),) {}>
+  spans {0: (0, 19)}
+== 355 parse '{:tg}' '21/11/2011 10:21 +1000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 22)}
+== 356 parse '{:tg}' '21/11/2011 10:21 PM -05:30'
+  <Result (datetime.datetime(2011, 11, 21, 22, 21, tzinfo=<FixedTzOffset -05:30 -1 day, 18:30:00>),) {}>
+  spans {0: (0, 26)}
+== 357 parse '{:tg}' '21/Nov/2011'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 11)}
+== 358 parse '{:tg}' '21/November/2011'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 16)}
+== 359 parse '{:tg}' '21/nov/2011'
+  KeyError: 'nov'
+== 360 parse '{:tg}' '21/Sept/2011'
+  None
+== 361 parse '{:tg}' '32/11/2011'
+  ValueError: day is out of range for month
+== 362 parse '{:tg}' '21/13/2011'
+  ValueError: month must be in 1..12
+== 363 parse '{:tg}' '1/2/2011'
+  <Result (datetime.datetime(2011, 2, 1, 0, 0),) {}>
+  spans {0: (0, 8)}
+== 364 parse '{:tg}' '21/11/2011 13:00 PM'
+  ValueError: hour must be in 0..23
+== 365 parse '{:tg}' '21/11/2011 10:21 +530'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, tzinfo=<FixedTzOffset +530 5:30:00>),) {}>
+  spans {0: (0, 21)}
+== 366 parse '{:ta}' '11/21/2011'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 10)}
+== 367 parse '{:ta}' '11-21-2011 10:21:36 AM'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36),) {}>
+  spans {0: (0, 22)}
+== 368 parse '{:ta}' 'Nov/21/2011'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 11)}
+== 369 parse '{:ta}' 'nov/21/2011'
+  KeyError: 'nov'
+== 370 parse '{:ta}' 'November/21/2011 1:02 PM'
+  <Result (datetime.datetime(2011, 11, 21, 13, 2),) {}>
+  spans {0: (0, 24)}
+== 371 parse '{:ta}' '2/30/2012'
+  ValueError: day is out of range for month
+== 372 parse '{:ta}' '12/31/1999 11:59:59.999 PM'
+  <Result (datetime.datetime(1999, 12, 31, 23, 59, 59, 999000),) {}>
+  spans {0: (0, 26)}
+== 373 parse '{:ta}' '11/21/2011 10:21 +10:00'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, tzinfo=<FixedTzOffset +10:00 10:00:00>),) {}>
+  spans {0: (0, 23)}
+== 374 parse '{:te}' 'Mon, 21 Nov 2011 10:21:36 +1000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 31)}
+== 375 parse '{:te}' '21 Nov 2011 10:21:36 +1000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 26)}
+== 376 parse '{:te}' 'Mon, 21 Nov 2011 10:21:36.5 -0800'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, 500000, tzinfo=<FixedTzOffset -0800 -1 day, 16:00:00>),) {}>
+  spans {0: (0, 33)}
+== 377 parse '{:te}' 'Tue, 01 Mar 2016 00:00 +00:00'
+  <Result (datetime.datetime(2016, 3, 1, 0, 0, tzinfo=<FixedTzOffset +00:00 0:00:00>),) {}>
+  spans {0: (0, 29)}
+== 378 parse '{:te}' 'Mon,  21 Nov 2011 10:21:36 +1000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 32)}
+== 379 parse '{:te}' 'Mon, 21  Nov 2011 10:21:36 +1000'
+  ValueError: too many values to unpack (expected 3)
+== 380 parse '{:te}' 'mon, 21 nov 2011 10:21:36 +1000'
+  KeyError: 'nov'
+== 381 parse '{:te}' 'Mon, 21 Nov 2011 10:21:36'
+  None
+== 382 parse '{:te}' 'Wed, 31 Feb 2011 10:21:36 +0000'
+  ValueError: day is out of range for month
+== 383 parse '{:th}' '21/Nov/2011:10:21:36 +1000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 26)}
+== 384 parse '{:th}' '21/Nov/2011:10:21:36 -0700'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset -0700 -1 day, 17:00:00>),) {}>
+  spans {0: (0, 26)}
+== 385 parse '{:th}' '21-Nov-2011:10:21:36 +0000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +0000 0:00:00>),) {}>
+  spans {0: (0, 26)}
+== 386 parse '{:th}' '21/nov/2011:10:21:36 +1000'
+  KeyError: 'nov'
+== 387 parse '{:th}' '21/Nov/2011:10:21 +1000'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 23)}
+== 388 parse '{:th}' '1/Jan/2000:00:00:00 +9999'
+  <Result (datetime.datetime(2000, 1, 1, 0, 0, tzinfo=<FixedTzOffset +9999 4 days, 4:39:00>),) {}>
+  spans {0: (0, 25)}
+== 389 parse '{:th}' '21/Nov/2011:10:21:36'
+  None
+== 390 parse '{:tc}' 'Mon Nov 21 10:21:36 2011'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36),) {}>
+  spans {0: (0, 24)}
+== 391 parse '{:tc}' 'Mon Nov  1 10:21:36 2011'
+  <Result (datetime.datetime(2011, 11, 1, 10, 21, 36),) {}>
+  spans {0: (0, 24)}
+== 392 parse '{:tc}' 'Sun Feb 29 23:59:59 2012'
+  <Result (datetime.datetime(2012, 2, 29, 23, 59, 59),) {}>
+  spans {0: (0, 24)}
+== 393 parse '{:tc}' 'Sun Feb 29 23:59:59 2011'
+  ValueError: day is out of range for month
+== 394 parse '{:tc}' 'mon nov 21 10:21:36 2011'
+  KeyError: 'nov'
+== 395 parse '{:tc}' 'Mon Nov 21 10:21 2011'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21),) {}>
+  spans {0: (0, 21)}
+== 396 parse '{:tt}' '10:21'
+  <Result (datetime.time(10, 21),) {}>
+  spans {0: (0, 5)}
+== 397 parse '{:tt}' '10:21:36'
+  <Result (datetime.time(10, 21, 36),) {}>
+  spans {0: (0, 8)}
+== 398 parse '{:tt}' '10:21:36.5'
+  <Result (datetime.time(10, 21, 36, 500000),) {}>
+  spans {0: (0, 10)}
+== 399 parse '{:tt}' '10:21 PM'
+  <Result (datetime.time(22, 21),) {}>
+  spans {0: (0, 8)}
+== 400 parse '{:tt}' '12:00 AM'
+  <Result (datetime.time(0, 0),) {}>
+  spans {0: (0, 8)}
+== 401 parse '{:tt}' '12:00 PM'
+  <Result (datetime.time(12, 0),) {}>
+  spans {0: (0, 8)}
+== 402 parse '{:tt}' '10:21:36 PM -05:00'
+  <Result (datetime.time(22, 21, 36, tzinfo=<FixedTzOffset -05:00 -1 day, 19:00:00>),) {}>
+  spans {0: (0, 18)}
+== 403 parse '{:tt}' '10:21 +1000'
+  <Result (datetime.time(10, 21, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (0, 11)}
+== 404 parse '{:tt}' ''
+  <Result (datetime.time(0, 0),) {}>
+  spans {0: (0, 0)}
+== 405 parse '{:tt}' 'PM'
+  None
+== 406 parse '{:tt}' ' PM'
+  <Result (datetime.time(12, 0),) {}>
+  spans {0: (0, 3)}
+== 407 parse '{:tt}' '13:21 PM'
+  ValueError: hour must be in 0..23
+== 408 parse '{:tt}' '10:21 pm'
+  <Result (datetime.time(10, 21),) {}>
+  spans {0: (0, 8)}
+== 409 parse '{:tt}' '1:2:3.0000009'
+  <Result (datetime.time(1, 2, 3),) {}>
+  spans {0: (0, 13)}
+== 410 parse '{:tt}' '99:99'
+  ValueError: hour must be in 0..23
+== 411 parse 'at {:tt} on {:ti}' 'at 10:21 PM on 2011-11-21'
+  <Result (datetime.time(22, 21), datetime.datetime(2011, 11, 21, 0, 0)) {}>
+  spans {0: (3, 11), 1: (15, 25)}
+== 412 parse '{when:ti} {level:w}' '2011-11-21 10:21:36 INFO'
+  <Result () {'when': datetime.datetime(2011, 11, 21, 10, 21, 36), 'level': 'INFO'}>
+  spans {'when': (0, 19), 'level': (20, 24)}
+== 413 parse '{when:ti}|{}' '2011-11-21 10:21:36Z|rest'
+  <Result ('rest',) {'when': datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset UTC 0:00:00>)}>
+  spans {'when': (0, 20), 0: (21, 25)}
+== 414 parse '{a:ti} {b:ti}' '2011-11-21 2012-01-02'
+  <Result () {'a': datetime.datetime(2011, 11, 21, 0, 0), 'b': datetime.datetime(2012, 1, 2, 0, 0)}>
+  spans {'a': (0, 10), 'b': (11, 21)}
+== 415 parse '{:th} {} {:d}' '21/Nov/2011:10:21:36 +1000 GET 200'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +1000 10:00:00>), 'GET', 200) {}>
+  spans {0: (0, 26), 1: (27, 30), 2: (31, 34)}
+== 416 parse '{:tg} {}' '21/11/2011 10:21 PM x'
+  <Result (datetime.datetime(2011, 11, 21, 22, 21), 'x') {}>
+  spans {0: (0, 19), 1: (20, 21)}
+== 417 parse '{:ts}' 'x'
+  None
+== 418 parse '{:%Y-%m-%d}' '2020-05-17'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 10)}
+== 419 parse '{:%Y-%m-%d}' '2020-5-7'
+  <Result (datetime.date(2020, 5, 7),) {}>
+  spans {0: (0, 8)}
+== 420 parse '{:%Y-%m-%d}' '2020-02-30'
+  ValueError: day is out of range for month
+== 421 parse '{:%Y-%m-%d}' '2020-13-01'
+  ValueError: time data '2020-13-01' does not match format '%Y-%m-%d'
+== 422 parse '{:%Y-%m-%d}' '0000-01-01'
+  ValueError: year 0 is out of range
+== 423 parse '{:%Y-%m-%d}' '2020-00-10'
+  ValueError: time data '2020-00-10' does not match format '%Y-%m-%d'
+== 424 parse '{:%Y-%m-%d}' '2021-02-29'
+  ValueError: day is out of range for month
+== 425 parse '{:%Y-%m-%d}' '2024-02-29'
+  <Result (datetime.date(2024, 2, 29),) {}>
+  spans {0: (0, 10)}
+== 426 parse '{:%d/%m/%Y}' '17/05/2020'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 10)}
+== 427 parse '{:%d/%m/%Y}' '45/05/2020'
+  ValueError: time data '45/05/2020' does not match format '%d/%m/%Y'
+== 428 parse '{:%d/%m/%Y}' '32/05/2020'
+  ValueError: time data '32/05/2020' does not match format '%d/%m/%Y'
+== 429 parse '{:%d/%m/%Y}' '3/5/2020'
+  <Result (datetime.date(2020, 5, 3),) {}>
+  spans {0: (0, 8)}
+== 430 parse '{:%d/%m/%Y}' '0/5/2020'
+  ValueError: time data '0/5/2020' does not match format '%d/%m/%Y'
+== 431 parse '{:%Y%m%d}' '20200517'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 8)}
+== 432 parse '{:%Y%m%d}' '202051'
+  <Result (datetime.date(2020, 5, 1),) {}>
+  spans {0: (0, 6)}
+== 433 parse '{:%y-%m-%d}' '68-01-01'
+  <Result (datetime.date(2068, 1, 1),) {}>
+  spans {0: (0, 8)}
+== 434 parse '{:%y-%m-%d}' '69-01-01'
+  <Result (datetime.date(1969, 1, 1),) {}>
+  spans {0: (0, 8)}
+== 435 parse '{:%y-%m-%d}' '00-12-31'
+  <Result (datetime.date(2000, 12, 31),) {}>
+  spans {0: (0, 8)}
+== 436 parse '{:%Y.%m.%d}' '2020.05.17'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 10)}
+== 437 parse '{:%Y.%m.%d}' '2020x05x17'
+  ValueError: time data '2020x05x17' does not match format '%Y.%m.%d'
+== 438 parse '{:%H:%M}' '09:30'
+  <Result (datetime.time(9, 30),) {}>
+  spans {0: (0, 5)}
+== 439 parse '{:%H:%M}' '9:5'
+  None
+== 440 parse '{:%H:%M}' '24:00'
+  ValueError: time data '24:00' does not match format '%H:%M'
+== 441 parse '{:%H:%M}' '23:60'
+  ValueError: unconverted data remains: 0
+== 442 parse '{:%H:%M:%S}' '23:59:59'
+  <Result (datetime.time(23, 59, 59),) {}>
+  spans {0: (0, 8)}
+== 443 parse '{:%H:%M:%S}' '23:59:60'
+  ValueError: second must be in 0..59
+== 444 parse '{:%H:%M:%S}' '23:59:61'
+  ValueError: second must be in 0..59
+== 445 parse '{:%H:%M:%S}' '23:59:62'
+  ValueError: unconverted data remains: 2
+== 446 parse '{:%H:%M:%S.%f}' '10:00:00.5'
+  <Result (datetime.time(10, 0, 0, 500000),) {}>
+  spans {0: (0, 10)}
+== 447 parse '{:%H:%M:%S.%f}' '10:00:00.123456'
+  <Result (datetime.time(10, 0, 0, 123456),) {}>
+  spans {0: (0, 15)}
+== 448 parse '{:%I:%M %p}' '09:30 PM'
+  <Result (datetime.time(21, 30),) {}>
+  spans {0: (0, 8)}
+== 449 parse '{:%I:%M %p}' '12:00 AM'
+  <Result (datetime.time(0, 0),) {}>
+  spans {0: (0, 8)}
+== 450 parse '{:%I:%M %p}' '12:00 PM'
+  <Result (datetime.time(12, 0),) {}>
+  spans {0: (0, 8)}
+== 451 parse '{:%I:%M %p}' '12:00 pm'
+  <Result (datetime.time(12, 0),) {}>
+  spans {0: (0, 8)}
+== 452 parse '{:%I:%M %p}' '13:00 PM'
+  ValueError: time data '13:00 PM' does not match format '%I:%M %p'
+== 453 parse '{:%I:%M}' '12:30'
+  <Result (datetime.time(0, 30),) {}>
+  spans {0: (0, 5)}
+== 454 parse '{:%I:%M}' '11:30'
+  <Result (datetime.time(11, 30),) {}>
+  spans {0: (0, 5)}
+== 455 parse '{:%p}' 'PM'
+  <Result (datetime.time(0, 0),) {}>
+  spans {0: (0, 2)}
+== 456 parse '{:%Y-%m-%d %H:%M:%S}' '2020-05-17 10:20:30'
+  <Result (datetime.datetime(2020, 5, 17, 10, 20, 30),) {}>
+  spans {0: (0, 19)}
+== 457 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30+0200'
+  <Result (datetime.datetime(2020, 5, 17, 10, 20, 30, tzinfo=datetime.timezone(datetime.timedelta(seconds=7200))),) {}>
+  spans {0: (0, 24)}
+== 458 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30-05:30'
+  <Result (datetime.datetime(2020, 5, 17, 10, 20, 30, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=66600))),) {}>
+  spans {0: (0, 25)}
+== 459 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30+00:00'
+  <Result (datetime.datetime(2020, 5, 17, 10, 20, 30, tzinfo=datetime.timezone.utc),) {}>
+  spans {0: (0, 25)}
+== 460 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30+0000'
+  <Result (datetime.datetime(2020, 5, 17, 10, 20, 30, tzinfo=datetime.timezone.utc),) {}>
+  spans {0: (0, 24)}
+== 461 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30+01:30:15'
+  <Result (datetime.datetime(2020, 5, 17, 10, 20, 30, tzinfo=datetime.timezone(datetime.timedelta(seconds=5415))),) {}>
+  spans {0: (0, 28)}
+== 462 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30+0130:15'
+  ValueError: invalid literal for int() with base 10: ':1'
+== 463 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30|0200'
+  ValueError: time data '2020-05-17T10:20:30|0200' does not match format '%Y-%m-%dT%H:%M:%S%z'
+== 464 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30+0560'
+  ValueError: time data '2020-05-17T10:20:30+0560' does not match format '%Y-%m-%dT%H:%M:%S%z'
+== 465 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30+2500'
+  ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=1, seconds=3600).
+== 466 parse '{:%Y-%m-%dT%H:%M:%S%z}' '2020-05-17T10:20:30-2400'
+  ValueError: offset must be a timedelta strictly between -timedelta(hours=24) and timedelta(hours=24), not datetime.timedelta(days=-1).
+== 467 parse '{:%H:%M%z}' '10:20+0100'
+  <Result (datetime.time(10, 20, tzinfo=datetime.timezone(datetime.timedelta(seconds=3600))),) {}>
+  spans {0: (0, 10)}
+== 468 parse '{:%H:%M%z}' '10:20-0100'
+  <Result (datetime.time(10, 20, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=82800))),) {}>
+  spans {0: (0, 10)}
+== 469 parse '{:%a %d %b %Y}' 'Sun 17 May 2020'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 15)}
+== 470 parse '{:%a %d %b %Y}' 'sun 17 may 2020'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 15)}
+== 471 parse '{:%a %d %b %Y}' 'Mon 17 May 2020'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 15)}
+== 472 parse '{:%A %d %B %Y}' 'Sunday 17 May 2020'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 18)}
+== 473 parse '{:%A %d %B %Y}' 'WEDNESDAY 1 JANUARY 2020'
+  <Result (datetime.date(2020, 1, 1),) {}>
+  spans {0: (0, 24)}
+== 474 parse '{:%B %d, %Y}' 'September 9, 2020'
+  <Result (datetime.date(2020, 9, 9),) {}>
+  spans {0: (0, 17)}
+== 475 parse '{:%b %d, %Y}' 'Sep 9, 2020'
+  <Result (datetime.date(2020, 9, 9),) {}>
+  spans {0: (0, 11)}
+== 476 parse '{:%b %d, %Y}' 'Sept 9, 2020'
+  None
+== 477 parse '{:%d %B %Y}' '9 Sep 2020'
+  None
+== 478 parse '{:%w %Y-%m-%d}' '3 2020-05-17'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 12)}
+== 479 parse '{:%Y-%j}' '2020-001'
+  <Result (datetime.date(2020, 1, 1),) {}>
+  spans {0: (0, 8)}
+== 480 parse '{:%Y-%j}' '2020-366'
+  <Result (datetime.date(2020, 12, 31),) {}>
+  spans {0: (0, 8)}
+== 481 parse '{:%Y-%j}' '2021-366'
+  <Result (datetime.date(2022, 1, 1),) {}>
+  spans {0: (0, 8)}
+== 482 parse '{:%Y-%j}' '2020-60'
+  <Result (datetime.date(2020, 2, 29),) {}>
+  spans {0: (0, 7)}
+== 483 parse '{:%Y-%j}' '2020-000'
+  ValueError: time data '2020-000' does not match format '%Y-%j'
+== 484 parse '{:%Y-%j}' '2021-367'
+  ValueError: unconverted data remains: 7
+== 485 parse '{:%Y %U %w}' '2020 20 0'
+  <Result (datetime.date(2020, 5, 17),) {}>
+  spans {0: (0, 9)}
+== 486 parse '{:%Y %U %w}' '2020 0 3'
+  <Result (datetime.date(2020, 1, 1),) {}>
+  spans {0: (0, 8)}
+== 487 parse '{:%Y %W %w}' '2020 20 1'
+  <Result (datetime.date(2020, 5, 18),) {}>
+  spans {0: (0, 9)}
+== 488 parse '{:%Y %W %w}' '2020 0 0'
+  <Result (datetime.date(2020, 1, 5),) {}>
+  spans {0: (0, 8)}
+== 489 parse '{:%Y %U}' '2020 20'
+  <Result (datetime.date(2020, 1, 1),) {}>
+  spans {0: (0, 7)}
+== 490 parse '{:%f}' '123'
+  <Result (datetime.time(0, 0, 0, 123000),) {}>
+  spans {0: (0, 3)}
+== 491 parse '{:%f}' '-123'
+  ValueError: time data '-123' does not match format '%f'
+== 492 parse '{:%f}' '1234567'
+  None
+== 493 parse '{:%Y-%q}' '2020-%q'
+  ValueError: 'q' is a bad directive in format '%Y-%q'
+== 494 parse '{:%Y-%m-%d %H}' '2020-05-17 7'
+  <Result (datetime.datetime(2020, 5, 17, 7, 0),) {}>
+  spans {0: (0, 12)}
+== 495 parse '{:%Y-%m-%d %H}' '2020-05-17  7'
+  None
+== 496 parse '{:%Y-%m-%d %H}' '2020-05-17 07'
+  <Result (datetime.datetime(2020, 5, 17, 7, 0),) {}>
+  spans {0: (0, 13)}
+== 497 parse '{:%Y-%m-%d%%}' '2020-05-17%%'
+  ValueError: unconverted data remains: %
+== 498 parse '{:%Y/%m/%d %I%p}' '2020/05/17 7pm'
+  <Result (datetime.datetime(2020, 5, 17, 19, 0),) {}>
+  spans {0: (0, 14)}
+== 499 parse '{:%d.%m.%Y %H:%M}' '17.05.2020 08:00'
+  <Result (datetime.datetime(2020, 5, 17, 8, 0),) {}>
+  spans {0: (0, 16)}
+== 500 parse '{:%Y-%m-%d %H:%M %H}' '2020-05-17 08:00 08'
+  PatternError: redefinition of group name 'H' as group 6; was group 4 at position 140
+== 501 parse '{:%H:%M%z} {}' '10:20+0100 tail'
+  <Result (datetime.time(10, 20, tzinfo=datetime.timezone(datetime.timedelta(seconds=3600))), '00') {}>
+  spans {0: (0, 10), 1: (8, 10)}
+== 502 parse '{:%H:%M%z} {}' '10:20+01:00 tail'
+  <Result (datetime.time(10, 20, tzinfo=datetime.timezone(datetime.timedelta(seconds=3600))), ':00') {}>
+  spans {0: (0, 11), 1: (8, 11)}
+== 503 parse '{:%Y-%m-%d} {:d}' '2020-05-17 5'
+  <Result (datetime.date(2020, 5, 17), 5) {}>
+  spans {0: (0, 10), 1: (11, 12)}
+== 504 parse '{d:%Y-%m-%d} {n:d}' '2020-05-17 5'
+  <Result () {'d': datetime.date(2020, 5, 17), 'n': 5}>
+  spans {'d': (0, 10), 'n': (11, 12)}
+== 505 parse '{:%d/%m/%Y} {:%d/%m/%Y}' '01/02/2020 03/04/2021'
+  <Result (datetime.date(2020, 2, 1), datetime.date(2021, 4, 3)) {}>
+  spans {0: (0, 10), 1: (11, 21)}
+== 506 parse 'from {start:%Y-%m-%d} to {end:%Y-%m-%d}' 'from 2020-01-01 to 2020-12-31'
+  <Result () {'start': datetime.date(2020, 1, 1), 'end': datetime.date(2020, 12, 31)}>
+  spans {'start': (5, 15), 'end': (19, 29)}
+== 507 parse '{:%H}' '7'
+  <Result (datetime.time(7, 0),) {}>
+  spans {0: (0, 1)}
+== 508 parse '{:%Y}' '2020'
+  <Result (datetime.date(2020, 1, 1),) {}>
+  spans {0: (0, 4)}
+== 509 parse '{:%m %Y}' '5 2020'
+  <Result (datetime.date(2020, 5, 1),) {}>
+  spans {0: (0, 6)}
+== 510 parse '{:Number}' '42' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result (42,) {}>
+  spans {0: (0, 2)}
+== 511 parse '{:Number}' '4x' extra=Number,Bool,Word,Color,Size,Range,Csv
+  None
+== 512 parse '{n:Number} items' '12 items' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result () {'n': 12}>
+  spans {'n': (0, 2)}
+== 513 parse '{:Bool} {:Bool}' 'yes NO' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result (True, False) {}>
+  spans {0: (0, 3), 1: (4, 6)}
+== 514 parse '{:Bool} {}' 'On rest' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result (True, 'rest') {}>
+  spans {0: (0, 2), 1: (3, 7)}
+== 515 parse '{:Bool} {}' 'maybe rest' extra=Number,Bool,Word,Color,Size,Range,Csv
+  None
+== 516 parse '{a:Bool} {b:Bool} {c:Bool}' 'true off FALSE' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result () {'a': True, 'b': False, 'c': False}>
+  spans {'a': (0, 4), 'b': (5, 8), 'c': (9, 14)}
+== 517 parse '{:Word}' 'hello' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ('HELLO',) {}>
+  spans {0: (0, 5)}
+== 518 parse '{:Word} {:Word}' 'hello big world' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ('HELLO', 'BIG WORLD') {}>
+  spans {0: (0, 5), 1: (6, 15)}
+== 519 parse '{c:Color}' 'Red' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result () {'c': 'Red'}>
+  spans {'c': (0, 3)}
+== 520 parse '{c:Color}' 'red' cs extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result () {'c': 'red'}>
+  spans {'c': (0, 3)}
+== 521 parse '{c:Color}' 'Red' cs extra=Number,Bool,Word,Color,Size,Range,Csv
+  None
+== 522 parse '{c:Color} {}' 'blue sky' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ('sky',) {'c': 'blue'}>
+  spans {'c': (0, 4), 0: (5, 8)}
+== 523 parse '{:Size} {}' '3x4 tiles' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ((3, 4), 'tiles') {}>
+  spans {0: (0, 3), 1: (4, 9)}
+== 524 parse '{:Size} {}' '3X4 tiles' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ((3, 4), 'tiles') {}>
+  spans {0: (0, 3), 1: (4, 9)}
+== 525 parse '{:Size} {} {}' '3x4 tiles here' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ((3, 4), 'tiles', 'here') {}>
+  spans {0: (0, 3), 1: (4, 9), 2: (10, 14)}
+== 526 parse '{s:Size} {n:d}' '10x20 5' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result () {'s': (10, 20), 'n': 5}>
+  spans {'s': (0, 5), 'n': (6, 7)}
+== 527 parse '{:Range}' '3-6' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ([3, 4, 5, 6],) {}>
+  spans {0: (0, 3)}
+== 528 parse '{:Range} {}' '3-6 rest' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ([3, 4, 5, 6], '3') {}>
+  spans {0: (0, 3), 1: (0, 1)}
+== 529 parse '{:Range} {:d}' '3-6 10' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ([3, 4, 5, 6], 3) {}>
+  spans {0: (0, 3), 1: (0, 1)}
+== 530 parse '{:Range} {} {}' '1-2 x y' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ([1, 2], '1', '2') {}>
+  spans {0: (0, 3), 1: (0, 1), 2: (2, 3)}
+== 531 parse '{r:Range} {n:d}' '1-3 9' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result () {'r': [1, 2, 3], 'n': 9}>
+  spans {'r': (0, 3), 'n': (4, 5)}
+== 532 parse '{:Csv}' 'a, b,c' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result (['a', 'b', 'c'],) {}>
+  spans {0: (0, 6)}
+== 533 parse '{tags:Csv}; {}' 'x,y;z; rest' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ('rest',) {'tags': ['x', 'y;z']}>
+  spans {'tags': (0, 5), 0: (7, 11)}
+== 534 parse '{:d}' '7' extra=d=Number
+  <Result (7,) {}>
+  spans {0: (0, 1)}
+== 535 parse '{:d}' '-7' extra=d=Number
+  <Result (-7,) {}>
+  spans {0: (0, 2)}
+== 536 parse '{:q}' '7' extra=q=Number
+  <Result (7,) {}>
+  spans {0: (0, 1)}
+== 537 parse '{:Num}' '7' extra=Num=Number,Number=Bool
+  <Result (7,) {}>
+  spans {0: (0, 1)}
+== 538 parse '{:Number}' '7' extra=Num=Number
+  ValueError: format spec 'Number' not recognised
+== 539 parse '{:>5Number}' '   42' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result (42,) {}>
+  spans {0: (3, 5)}
+== 540 parse '{:Number:}' '1' extra=Number,Bool,Word,Color,Size,Range,Csv
+  ValueError: format spec 'Number:' not recognised
+== 541 parse '{a} {a:d}' '1 1'
+  RepeatedNameError: field type 'd' for field "a" does not match previous seen type ''
+== 542 parse '{a:d} {a}' '1 1'
+  RepeatedNameError: field type '' for field "a" does not match previous seen type 'd'
+== 543 parse '{:dx}' '1'
+  ValueError: format spec 'dx' not recognised
+== 544 parse '{x:tz}' '1'
+  ValueError: format spec 'tz' not recognised
+== 545 parse '{x:t}' '1'
+  ValueError: format spec 't' not recognised
+== 546 parse '{:%}x' '5%x'
+  <Result (0.05,) {}>
+  spans {0: (0, 2)}
+== 547 parse '{x!r}' '1'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A(?P<x!r>.+?)\Z'
+== 548 parse '{x' '{x'
+  <Result () {}>
+  spans {}
+== 549 parse 'x}' 'x}'
+  <Result () {}>
+  spans {}
+== 550 parse '{x}}' '1}'
+  <Result () {'x': '1'}>
+  spans {'x': (0, 1)}
+== 551 parse '{{x}' '{1'
+  None
+== 552 search 'age: {:d}' 'name: Al, age: 31, height: 180'
+  <Result (31,) {}>
+  spans {0: (15, 17)}
+== 553 search '{:d}' 'abc 12 def 34'
+  <Result (12,) {}>
+  spans {0: (3, 6)}
+== 554 search '{:d}' 'no digits'
+  None
+== 555 search '{} wrote' 'Then Alice wrote a letter'
+  <Result ('Then Alice',) {}>
+  spans {0: (0, 10)}
+== 556 search '{who} wrote' 'Then Alice wrote a letter'
+  <Result () {'who': 'Then Alice'}>
+  spans {'who': (0, 10)}
+== 557 search 'x={:d}' 'x=1 x=2 x=3' pos=4
+  <Result (2,) {}>
+  spans {0: (6, 7)}
+== 558 search 'x={:d}' 'x=1 x=2 x=3' pos=4 endpos=7
+  <Result (2,) {}>
+  spans {0: (6, 7)}
+== 559 search 'x={:d}' 'x=1 x=2 x=3' pos=4 endpos=6
+  None
+== 560 search 'x={:d}' 'x=12' endpos=3
+  <Result (1,) {}>
+  spans {0: (2, 3)}
+== 561 search '{:d}' '12345' pos=2
+  <Result (345,) {}>
+  spans {0: (2, 5)}
+== 562 search '{:ti}' 'logged at 2011-11-21 10:21:36Z by root'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset UTC 0:00:00>),) {}>
+  spans {0: (10, 30)}
+== 563 search '{:th}' '1.2.3.4 - - [21/Nov/2011:10:21:36 +1000] "GET / HTTP/1.1"'
+  <Result (datetime.datetime(2011, 11, 21, 10, 21, 36, tzinfo=<FixedTzOffset +1000 10:00:00>),) {}>
+  spans {0: (13, 39)}
+== 564 search '{:w}' '  -- word --'
+  <Result ('word',) {}>
+  spans {0: (5, 9)}
+== 565 search '{:Size}' 'a 3x4 b' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result ((3, 4),) {}>
+  spans {0: (2, 5)}
+== 566 search 'ERROR {}' 'error disk full'
+  <Result ('d',) {}>
+  spans {0: (6, 7)}
+== 567 search 'ERROR {}' 'error disk full' cs
+  None
+== 568 search '{a}{a}' 'xxabab'
+  <Result () {'a': 'x'}>
+  spans {'a': (0, 1)}
+== 569 search '{a:d}-{a:d}' '1-2 3-3 4-4'
+  <Result () {'a': 3}>
+  spans {'a': (4, 5)}
+== 570 search '<{tag}>' '<b>bold</b>'
+  <Result () {'tag': 'b'}>
+  spans {'tag': (1, 2)}
+== 571 search '{x:^}' '   centered   '
+  <Result () {'x': 'c'}>
+  spans {'x': (3, 4)}
+== 572 findall '{:d}' '1 22 333 4444'
+  <Result (1,) {}>
+  spans {0: (0, 1)}
+  <Result (22,) {}>
+  spans {0: (1, 4)}
+  <Result (333,) {}>
+  spans {0: (4, 8)}
+  <Result (4444,) {}>
+  spans {0: (8, 13)}
+  4 found
+== 573 findall '{:d}' 'abc'
+  0 found
+== 574 findall '<{}>' '<a> <b> <c>'
+  <Result ('a',) {}>
+  spans {0: (1, 2)}
+  <Result ('b',) {}>
+  spans {0: (5, 6)}
+  <Result ('c',) {}>
+  spans {0: (9, 10)}
+  3 found
+== 575 findall '{key}={value}' 'a=1 b=2 c=3'
+  <Result () {'key': 'a', 'value': '1'}>
+  spans {'key': (0, 1), 'value': (2, 3)}
+  <Result () {'key': ' b', 'value': '2'}>
+  spans {'key': (3, 5), 'value': (6, 7)}
+  <Result () {'key': ' c', 'value': '3'}>
+  spans {'key': (7, 9), 'value': (10, 11)}
+  3 found
+== 576 findall '{key:w}={value:w}' 'a=1 b=2 c=3'
+  <Result () {'key': 'a', 'value': '1'}>
+  spans {'key': (0, 1), 'value': (2, 3)}
+  <Result () {'key': 'b', 'value': '2'}>
+  spans {'key': (4, 5), 'value': (6, 7)}
+  <Result () {'key': 'c', 'value': '3'}>
+  spans {'key': (8, 9), 'value': (10, 11)}
+  3 found
+== 577 findall '{key:w}={value:d}' 'a=1, b=two, c=3'
+  <Result () {'key': 'a', 'value': 1}>
+  spans {'key': (0, 1), 'value': (2, 3)}
+  <Result () {'key': 'c', 'value': 3}>
+  spans {'key': (12, 13), 'value': (14, 15)}
+  2 found
+== 578 findall '#{:w}' '#one #two #three'
+  <Result ('one',) {}>
+  spans {0: (1, 4)}
+  <Result ('two',) {}>
+  spans {0: (6, 9)}
+  <Result ('three',) {}>
+  spans {0: (11, 16)}
+  3 found
+== 579 findall '{:d}{:l}' '3kg 10m 5'
+  <Result (3, 'kg') {}>
+  spans {0: (0, 1), 1: (1, 3)}
+  <Result (10, 'm') {}>
+  spans {0: (3, 6), 1: (6, 7)}
+  2 found
+== 580 findall '${:f}' '$3.50 and $4.25, $5'
+  <Result (3.5,) {}>
+  spans {0: (1, 5)}
+  <Result (4.25,) {}>
+  spans {0: (11, 15)}
+  2 found
+== 581 findall '{:d}' '1 2 3 4 5 6' pos=3 endpos=8
+  <Result (3,) {}>
+  spans {0: (3, 5)}
+  <Result (4,) {}>
+  spans {0: (5, 7)}
+  2 found
+== 582 findall '{:ti}' '2011-11-21 then 2012-01-02T03:04 and 1999-12-31Z'
+  <Result (datetime.datetime(2011, 11, 21, 0, 0),) {}>
+  spans {0: (0, 10)}
+  <Result (datetime.datetime(2012, 1, 2, 3, 4),) {}>
+  spans {0: (16, 32)}
+  <Result (datetime.datetime(1999, 12, 31, 0, 0, tzinfo=<FixedTzOffset UTC 0:00:00>),) {}>
+  spans {0: (37, 48)}
+  3 found
+== 583 findall '{a}-{a}' 'x-x y-z w-w'
+  <Result () {'a': 'x'}>
+  spans {'a': (0, 1)}
+  <Result () {'a': 'w'}>
+  spans {'a': (8, 9)}
+  2 found
+== 584 findall '{:Bool}' 'yes no maybe on' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Result (True,) {}>
+  spans {0: (0, 3)}
+  <Result (False,) {}>
+  spans {0: (4, 6)}
+  <Result (True,) {}>
+  spans {0: (13, 15)}
+  3 found
+== 585 findall '[{}]' '[a][b]'
+  <Result ('a',) {}>
+  spans {0: (1, 2)}
+  <Result ('b',) {}>
+  spans {0: (4, 5)}
+  2 found
+== 586 findall '{:.1}' 'abc'
+  <Result ('a',) {}>
+  spans {0: (0, 1)}
+  <Result ('b',) {}>
+  spans {0: (1, 2)}
+  <Result ('c',) {}>
+  spans {0: (2, 3)}
+  3 found
+== 587 findall '{:2}' 'abcde'
+  <Result ('ab',) {}>
+  spans {0: (0, 2)}
+  <Result ('cd',) {}>
+  spans {0: (2, 4)}
+  2 found
+== 588 findall '({:d},{:d})' '(1,2) (3,4)(5, 6)'
+  <Result (1, 2) {}>
+  spans {0: (1, 2), 1: (3, 4)}
+  <Result (3, 4) {}>
+  spans {0: (7, 8), 1: (9, 10)}
+  <Result (5, 6) {}>
+  spans {0: (12, 13), 1: (14, 16)}
+  3 found
+== 589 expr 'hello {}'
+  <Parser 'hello {}'>
+  hello (.+?)
+  named [] fixed [0]
+== 590 expr '{name} is {age:d}'
+  <Parser '{name} is {age:d}'>
+  (?P<name>.+?) is (?P<age>[-+ ]?[-+ ]?[0-9]+|[-+ ]?0[xX][0-9a-fA-F]+|[-+ ]?0[bB][01]+|[-+ ]?0[oO][0-7]+)
+  named ['name', 'age'] fixed []
+== 591 expr '{a} {a}'
+  <Parser '{a} {a}'>
+  (?P<a>.+?) (?P=a)
+  named ['a'] fixed []
+== 592 expr '{a.b} {a_b} {a-b}'
+  <Parser '{a.b} {a_b} {a-b}'>
+  (?P<a_b>.+?) (?P<a__b>.+?) (?P<a___b>.+?)
+  named ['a_b', 'a__b', 'a___b'] fixed []
+== 593 expr '{a[b][c]}'
+  <Parser '{a[b][c]}'>
+  (?P<a_b__c_>.+?)
+  named ['a_b__c_'] fixed []
+== 594 expr '{:5.2f}'
+  <Parser '{:5.2f}'>
+   *([-+ ]?(?:\d*\.\d+|nan|NAN|inf|INF))
+  named [] fixed [0]
+== 595 expr '{:>10}'
+  <Parser '{:>10}'>
+   *(.{10,}?)
+  named [] fixed [0]
+== 596 expr '{:^10d}'
+  <Parser '{:^10d}'>
+   *([-+ ]?[-+ ]?[0-9]{1,10}|[-+ ]?0[xX][0-9a-fA-F]{1,10}|[-+ ]?0[bB][01]{1,10}|[-+ ]?0[oO][0-7]{1,10}) *
+  named [] fixed [0]
+== 597 expr '{:=10d}'
+  <Parser '{:=10d}'>
+  ([-+ ]?0*[-+ ]?[0-9]{1,10}|[-+ ]?0[xX][0-9a-fA-F]{1,10}|[-+ ]?0[bB][01]{1,10}|[-+ ]?0[oO][0-7]{1,10})
+  named [] fixed [0]
+== 598 expr '{:x}'
+  <Parser '{:x}'>
+  ([-+ ]?(0[xX])?[0-9a-fA-F]+)
+  named [] fixed [0]
+== 599 expr '{:g}'
+  <Parser '{:g}'>
+  ([-+ ]?\d+(\.\d+)?([eE][-+]?\d+)?|nan|NAN|[-+]?inf|[-+]?INF)
+  named [] fixed [0]
+== 600 expr '{:%}'
+  <Parser '{:%}'>
+  ([-+ ]?\d+(\.\d+)?%)
+  named [] fixed [0]
+== 601 expr '{:n}'
+  <Parser '{:n}'>
+  ([-+ ]?\d{1,3}([,.]\d{3})*)
+  named [] fixed [0]
+== 602 expr '{:w}'
+  <Parser '{:w}'>
+  (\w+)
+  named [] fixed [0]
+== 603 expr '{:s}'
+  <Parser '{:s}'>
+  (\s+)
+  named [] fixed [0]
+== 604 expr '{:l}'
+  <Parser '{:l}'>
+  ([A-Za-z]+)
+  named [] fixed [0]
+== 605 expr '{:ti}'
+  <Parser '{:ti}'>
+  ((\d{4}-\d\d-\d\d)((\s+|T)(\d{1,2}:\d{1,2}(:\d{1,2}(\.\d+)?)?))?(Z|\s*[-+]\d\d:?\d\d)?)
+  named [] fixed [0]
+== 606 expr '{:tt}'
+  <Parser '{:tt}'>
+  ((\d{1,2}:\d{1,2}(:\d{1,2}(\.\d+)?)?)?(\s+[AP]M)?(\s+[-+]\d\d?:?\d\d)?)
+  named [] fixed [0]
+== 607 expr '{:th}'
+  <Parser '{:th}'>
+  ((\d{1,2}[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/]\d{4}):(\d{1,2}:\d{1,2}(:\d{1,2}(\.\d+)?)?)(\s+[-+]\d\d?:?\d\d))
+  named [] fixed [0]
+== 608 expr '{:%Y-%m-%d}'
+  <Parser '{:%Y-%m-%d}'>
+  ([0-9]{4}-[0-9]{1,2}-[0-9]{1,2})
+  named [] fixed [0]
+== 609 expr '{:%Y.%m}'
+  <Parser '{:%Y.%m}'>
+  ([0-9]{4}.[0-9]{1,2})
+  named [] fixed [0]
+== 610 expr 'a.b(c)*'
+  <Parser 'a.b(c)*'>
+  a\.b\(c\)\*
+  named [] fixed []
+== 611 expr '{{}} {}'
+  <Parser '{{}} {}'>
+  \{\} (.+?)
+  named [] fixed [0]
+== 612 expr 'x{2,3}'
+  <Parser 'x{2,3}'>
+  x{2,3}
+  named [] fixed []
+== 613 expr '{:|>5}'
+  <Parser '{:|>5}'>
+  |*(.{5,}?)
+  named [] fixed [0]
+== 614 expr '{a:,d}'
+  <Parser '{a:,d}'>
+  (?P<a>[-+ ]?[-+ ]?[0-9,]+|[-+ ]?0[xX][0-9a-fA-F,]+|[-+ ]?0[bB][01,]+|[-+ ]?0[oO][0-7,]+)
+  named ['a'] fixed []
+== 615 expr '{a:_x}'
+  <Parser '{a:_x}'>
+  (?P<a>[-+ ]?(0[xX])?[0-9a-fA-F]+)
+  named ['a'] fixed []
+== 616 expr '{:.3}'
+  <Parser '{:.3}'>
+  (.{1,3}?)
+  named [] fixed [0]
+== 617 expr '{:3.5}'
+  <Parser '{:3.5}'>
+   *(.{3,5}?)
+  named [] fixed [0]
+== 618 expr '{:3}'
+  <Parser '{:3}'>
+   *(.{3,}?)
+  named [] fixed [0]
+== 619 expr 'this is a very long format string {} with fields'
+  <Parser 'this is a very lo...'>
+  this is a very long format string (.+?) with fields
+  named [] fixed [0]
+== 620 expr 'exactly twenty chars'
+  <Parser 'exactly twenty chars'>
+  exactly twenty chars
+  named [] fixed []
+== 621 expr 'twenty-one characters'
+  <Parser 'twenty-one charac...'>
+  twenty-one characters
+  named [] fixed []
+== 622 expr '{0} {1} {x}'
+  <Parser '{0} {1} {x}'>
+  (.+?) (.+?) (?P<x>.+?)
+  named ['x'] fixed [0, 1]
+== 623 expr '{:Size} {}' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Parser '{:Size} {}'>
+  ((\d+)x(\d+)) (.+?)
+  named [] fixed [0, 3]
+== 624 expr '{:Range} {}' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Parser '{:Range} {}'>
+  ((\d+)-(\d+)) (.+?)
+  named [] fixed [0, 1]
+== 625 expr '{:Word}' extra=Number,Bool,Word,Color,Size,Range,Csv
+  <Parser '{:Word}'>
+  (.+?)
+  named [] fixed [0]
+== 626 expr '{:e}'
+  <Parser '{:e}'>
+  ([-+ ]?\d*\.\d+[eE][-+]?\d+|nan|NAN|[-+]?inf|[-+]?INF)
+  named [] fixed [0]
+== 627 expr '{:.0f}'
+  <Parser '{:.0f}'>
+  ([-+ ]?(?:\d+|nan|NAN|inf|INF))
+  named [] fixed [0]
+== 628 expr '{:F}'
+  <Parser '{:F}'>
+  ([-+ ]?(?:\d*\.\d+|nan|NAN|inf|INF))
+  named [] fixed [0]
+== 629 expr '{:*^9}'
+  <Parser '{:*^9}'>
+  \**(.{9,}?)\**
+  named [] fixed [0]
+== 630 expr '{:.>9}'
+  <Parser '{:.>9}'>
+  \.*(.{9,}?)
+  named [] fixed [0]
+== 631 expr '{:\\<5}'
+  <Parser '{:\\<5}'>
+  (.{5,}?)\\*
+  named [] fixed [0]
+== 632 expr '{:0=6d}'
+  <Parser '{:0=6d}'>
+  ([-+ ]?0*[-+ ]?[0-9]{1,6}|[-+ ]?0[xX][0-9a-fA-F]{1,6}|[-+ ]?0[bB][01]{1,6}|[-+ ]?0[oO][0-7]{1,6})
+  named [] fixed [0]
+== 633 expr '{:%H:%M%z} {}'
+  <Parser '{:%H:%M%z} {}'>
+  ([0-9]{1,2}:[0-9]{2}[+|-][0-9]{2}(:?[0-9]{2})?(:?[0-9]{2})?) (.+?)
+  named [] fixed [0, 1]
+== 634 expr '{a} {a:d}'
+  RepeatedNameError: field type 'd' for field "a" does not match previous seen type ''
+== 635 expr '{:q}'
+  ValueError: format spec 'q' not recognised
+== 636 expr '{a[b]} {a_b_}'
+  <Parser '{a[b]} {a_b_}'>
+  (?P<a_b_>.+?) (?P<a__b__>.+?)
+  named ['a_b_', 'a__b__'] fixed []
+== 637 parse '[{v:<012.1f}' '[37.300000000'
+  <Result () {'v': 37.3}>
+  spans {'v': (1, 13)}
+== 638 parse '{v:-<8b}]' '110010100101]'
+  <Result () {'v': 3237}>
+  spans {'v': (0, 12)}
+== 639 parse '[{v: ^ 8.1%}' '[ 73028.0%'
+  <Result () {'v': 730.28}>
+  spans {'v': (2, 10)}
+== 640 parse '{v:^+,d};' '+6,088,614;'
+  <Result () {'v': 6088614}>
+  spans {'v': (0, 10)}
+== 641 parse 'v={v:0<8d};' 'v=-3000000;'
+  <Result () {'v': -3000000}>
+  spans {'v': (2, 10)}
+== 642 parse 'value: {v:08.2f}' 'value: -0277.63'
+  <Result () {'v': -277.63}>
+  spans {'v': (7, 15)}
+== 643 parse '[{v:<-0,.3f}]' '[-925.360]'
+  <Result () {'v': -925.36}>
+  spans {'v': (1, 9)}
+== 644 parse 'value: {v:>4g} units' 'value: 0.25 units'
+  <Result () {'v': 0.25}>
+  spans {'v': (7, 11)}
+== 645 parse 'value: {v:12.2e}' 'value:    -1.98e+02'
+  <Result () {'v': -198.0}>
+  spans {'v': (10, 19)}
+== 646 parse 'v={v: ^ 8o};' 'v=  11523 ;'
+  <Result () {'v': 4947}>
+  spans {'v': (4, 9)}
+== 647 parse 'value: {v:.3} units' 'value: Kār units'
+  <Result () {'v': 'Kār'}>
+  spans {'v': (7, 10)}
+== 648 parse '{v:>4.3}' '   x'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A *(?P<v>.{4,3}?)\Z'
+== 649 parse '{v: 04d} units' '-8397457 units'
+  None
+== 650 parse 'v={v:-^4.3};' 'v=abc-;'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\Av=-*(?P<v>.{4,3}?)-*;\Z'
+== 651 parse '{v: <8.8}]' 'a b     ]'
+  <Result () {'v': 'a b     '}>
+  spans {'v': (0, 8)}
+== 652 parse '{v:0= 8b}]' ' 1001011100000]'
+  <Result () {'v': 4832}>
+  spans {'v': (0, 14)}
+== 653 parse '{v:*^12}' '****abc*****'
+  <Result () {'v': '****abc*****'}>
+  spans {'v': (0, 12)}
+== 654 parse 'value: {v:-12,.2f}' 'value:       352.53'
+  <Result () {'v': 352.53}>
+  spans {'v': (13, 19)}
+== 655 parse '{v:.> 08.1f} units' '...-97.4 units'
+  <Result () {'v': -97.4}>
+  spans {'v': (3, 8)}
+== 656 parse 'value: {v:-8g} units' 'value: 1.23457e+08 units'
+  <Result () {'v': 123457000.0}>
+  spans {'v': (7, 18)}
+== 657 parse '{v:=-0d} units' '0 units'
+  <Result () {'v': 0}>
+  spans {'v': (0, 1)}
+== 658 parse '[{v:8,.3f};' '[ 577.940;'
+  <Result () {'v': 577.94}>
+  spans {'v': (2, 9)}
+== 659 parse 'value: {v:,.2f}' 'value: -259.33'
+  <Result () {'v': -259.33}>
+  spans {'v': (7, 14)}
+== 660 parse '[{v:*> d} units' '[-23 units'
+  <Result () {'v': -23}>
+  spans {'v': (1, 4)}
+== 661 parse '{v:-<+12b}' '+101001011101'
+  <Result () {'v': 2653}>
+  spans {'v': (0, 13)}
+== 662 parse 'v={v: ^.3}]' 'v=ünï]'
+  <Result () {'v': 'ünï'}>
+  spans {'v': (2, 5)}
+== 663 parse 'value: {v:-8o} units' 'value:    11600 units'
+  <Result () {'v': 4992}>
+  spans {'v': (10, 15)}
+== 664 parse 'v={v:0d}]' 'v=0]'
+  <Result () {'v': 0}>
+  spans {'v': (2, 3)}
+== 665 parse 'value: {v:<+04d}]' 'value: +000]'
+  <Result () {'v': 0}>
+  spans {'v': (7, 11)}
+== 666 parse '{v:.<+8o};' '+7277...;'
+  <Result () {'v': 3775}>
+  spans {'v': (0, 5)}
+== 667 parse '[{v:>}' '[tab\tsep'
+  <Result () {'v': 'tab\tsep'}>
+  spans {'v': (1, 8)}
+== 668 parse 'v={v:+0g} units' 'v=+7 units'
+  <Result () {'v': 7.0}>
+  spans {'v': (2, 4)}
+== 669 parse 'value: {v:<4.8} units' 'value: x    units'
+  <Result () {'v': 'x   '}>
+  spans {'v': (7, 11)}
+== 670 parse 'value: {v: >+12,.3f};' 'value:     +668.560;'
+  <Result () {'v': 668.56}>
+  spans {'v': (11, 19)}
+== 671 parse 'value: {v:12.8} units' 'value: x            units'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\Avalue:  *(?P<v>.{12,8}?) units\Z'
+== 672 parse '[{v:+12.3%};' '[ -16524.970%;'
+  <Result () {'v': -165.24970000000002}>
+  spans {'v': (2, 13)}
+== 673 parse 'v={v:0> ,d}' 'v= 33'
+  <Result () {'v': 33}>
+  spans {'v': (2, 5)}
+== 674 parse '{v:0.1f};' '99.9;'
+  <Result () {'v': 99.9}>
+  spans {'v': (0, 4)}
+== 675 parse 'value: {v:^-0o}]' 'value: 5515]'
+  <Result () {'v': 2893}>
+  spans {'v': (7, 11)}
+== 676 parse '{v:*>8.1%} units' '80465.0% units'
+  <Result () {'v': 804.65}>
+  spans {'v': (0, 8)}
+== 677 parse '[{v:0<+0d};' '[+27;'
+  <Result () {'v': 27}>
+  spans {'v': (1, 4)}
+== 678 parse 'v={v:<12}' 'v=abc         '
+  <Result () {'v': 'abc         '}>
+  spans {'v': (2, 14)}
+== 679 parse 'v={v:=+x}]' 'v=+9f1]'
+  <Result () {'v': 2545}>
+  spans {'v': (2, 6)}
+== 680 parse '[{v:= ,d}' '[ 70'
+  <Result () {'v': 70}>
+  spans {'v': (1, 4)}
+== 681 parse '[{v:4.3f}]' '[376.602]'
+  <Result () {'v': 376.602}>
+  spans {'v': (1, 8)}
+== 682 parse '{v:0<+8d};' '+0000000;'
+  <Result () {'v': 0}>
+  spans {'v': (0, 8)}
+== 683 parse 'value: {v:12,d}' 'value:            0'
+  <Result () {'v': 0}>
+  spans {'v': (18, 19)}
+== 684 parse '[{v: <} units' '[x units'
+  <Result () {'v': 'x'}>
+  spans {'v': (1, 2)}
+== 685 parse '[{v: 04,d}' '[ 2,007,888'
+  None
+== 686 parse 'value: {v:04.2e}]' 'value: -3.01e+02]'
+  <Result () {'v': -301.0}>
+  spans {'v': (7, 16)}
+== 687 parse 'v={v:=4.3%}]' 'v=-39985.830%]'
+  <Result () {'v': -399.85830000000004}>
+  spans {'v': (2, 13)}
+== 688 parse 'v={v:< 0,.1f}' 'v=-5.1'
+  <Result () {'v': -5.1}>
+  spans {'v': (2, 6)}
+== 689 parse '[{v:.^ 012x}]' '[.... 20.....]'
+  <Result () {'v': 32}>
+  spans {'v': (5, 8)}
+== 690 parse '[{v:> 8x};' '[     4f7;'
+  <Result () {'v': 1271}>
+  spans {'v': (6, 9)}
+== 691 parse '[{v:^.3}]' '[x]'
+  <Result () {'v': 'x'}>
+  spans {'v': (1, 2)}
+== 692 parse '[{v:*^.2f};' '[-58.16;'
+  <Result () {'v': -58.16}>
+  spans {'v': (1, 7)}
+== 693 parse 'value: {v:<12d}]' 'value: 0           ]'
+  <Result () {'v': 0}>
+  spans {'v': (7, 8)}
+== 694 parse '[{v:<4b}]' '[11111100100]'
+  <Result () {'v': 2020}>
+  spans {'v': (1, 12)}
+== 695 parse '[{v:-.2f};' '[322.87;'
+  <Result () {'v': 322.87}>
+  spans {'v': (1, 7)}
+== 696 parse 'value: {v:^+g}' 'value: +1.5'
+  <Result () {'v': 1.5}>
+  spans {'v': (7, 11)}
+== 697 parse '{v:>-g}]' '0.25]'
+  <Result () {'v': 0.25}>
+  spans {'v': (0, 4)}
+== 698 parse '{v: >8.3}]' '     abc]'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A *(?P<v>.{8,3}?)\]\Z'
+== 699 parse 'value: {v:.< 12x}]' 'value:  eed........]'
+  <Result () {'v': 3821}>
+  spans {'v': (7, 11)}
+== 700 parse 'v={v:^0.2e} units' 'v=4.50e+02 units'
+  <Result () {'v': 450.0}>
+  spans {'v': (2, 10)}
+== 701 parse '{v:.^-.0f};' '-43;'
+  <Result () {'v': -43.0}>
+  spans {'v': (0, 3)}
+== 702 parse 'v={v:+.2f}' 'v=-762.82'
+  <Result () {'v': -762.82}>
+  spans {'v': (2, 9)}
+== 703 parse 'value: {v: <08o} units' 'value: 6227     units'
+  <Result () {'v': 3223}>
+  spans {'v': (7, 11)}
+== 704 parse 'value: {v:0^-.2e}]' 'value: 2.36e+02]'
+  <Result () {'v': 236.0}>
+  spans {'v': (7, 15)}
+== 705 parse 'value: {v:0=+4.0%};' 'value: +79453%;'
+  <Result () {'v': 794.53}>
+  spans {'v': (7, 14)}
+== 706 parse 'value: {v:8o} units' 'value:     3341 units'
+  <Result () {'v': 1761}>
+  spans {'v': (11, 15)}
+== 707 parse 'v={v:8o}]' 'v=    1710]'
+  <Result () {'v': 968}>
+  spans {'v': (6, 10)}
+== 708 parse 'v={v:.>4} units' 'v=Kāra units'
+  <Result () {'v': 'Kāra'}>
+  spans {'v': (2, 6)}
+== 709 parse '{v:08d}]' '00000094]'
+  <Result () {'v': 94}>
+  spans {'v': (0, 8)}
+== 710 parse '[{v:^+012d}' '[00-639884700'
+  None
+== 711 parse 'value: {v:*=+12b}' 'value: +110111010001'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\Avalue: (?P<v>[-+ ]?**(0[bB])?[01]+)\Z'
+== 712 parse '[{v:>+g}]' '[+7]'
+  <Result () {'v': 7.0}>
+  spans {'v': (1, 3)}
+== 713 parse 'v={v:+8g} units' 'v=    +100 units'
+  <Result () {'v': 100.0}>
+  spans {'v': (6, 10)}
+== 714 parse 'value: {v:0<.8} units' 'value: x units'
+  <Result () {'v': 'x'}>
+  spans {'v': (7, 8)}
+== 715 parse '{v:0,f} units' '-258.100000 units'
+  <Result () {'v': -258.1}>
+  spans {'v': (0, 11)}
+== 716 parse 'v={v:>-,d}]' 'v=8,130,630]'
+  <Result () {'v': 8130630}>
+  spans {'v': (2, 11)}
+== 717 parse '[{v: <8.3}' '[a b     '
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A\[(?P<v>.{8,3}?) *\Z'
+== 718 parse '[{v:> 4g}' '[   7'
+  <Result () {'v': 7.0}>
+  spans {'v': (4, 5)}
+== 719 parse '[{v:0^08.0f};' '[00201000;'
+  <Result () {'v': 201000.0}>
+  spans {'v': (3, 9)}
+== 720 parse '{v:.> 04.3%}' '-60215.000%'
+  <Result () {'v': -602.15}>
+  spans {'v': (0, 11)}
+== 721 parse 'v={v:+0d} units' 'v=+0 units'
+  <Result () {'v': 0}>
+  spans {'v': (2, 4)}
+== 722 parse 'value: {v:-4.2f};' 'value: 197.56;'
+  <Result () {'v': 197.56}>
+  spans {'v': (7, 13)}
+== 723 parse 'v={v:^12.8}]' 'v=    abc     ]'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\Av= *(?P<v>.{12,8}?) *\]\Z'
+== 724 parse 'value: {v:< .2f};' 'value: -343.90;'
+  <Result () {'v': -343.9}>
+  spans {'v': (7, 14)}
+== 725 parse 'v={v:*<.3}' 'v=Kār'
+  <Result () {'v': 'Kār'}>
+  spans {'v': (2, 5)}
+== 726 parse 'v={v:<}]' 'v=hello world]'
+  <Result () {'v': 'hello world'}>
+  spans {'v': (2, 13)}
+== 727 parse '[{v: >+08g} units' '[  +1e-05 units'
+  <Result () {'v': 1e-05}>
+  spans {'v': (3, 9)}
+== 728 parse 'value: {v:12} units' 'value: hello world  units'
+  <Result () {'v': 'hello world '}>
+  spans {'v': (7, 19)}
+== 729 parse '{v:0<8,.0f}]' '70100000]'
+  <Result () {'v': 70100000.0}>
+  spans {'v': (0, 8)}
+== 730 parse 'value: {v:<-d}]' 'value: 5854358]'
+  <Result () {'v': 5854358}>
+  spans {'v': (7, 14)}
+== 731 parse '{v:0>-d}]' '-51]'
+  <Result () {'v': -51}>
+  spans {'v': (0, 3)}
+== 732 parse 'v={v: =-08x}' 'v=     f6d'
+  <Result () {'v': 3949}>
+  spans {'v': (2, 10)}
+== 733 parse '[{v: <+0g};' '[-3.75;'
+  <Result () {'v': -3.75}>
+  spans {'v': (1, 6)}
+== 734 parse '[{v:-0o};' '[10106;'
+  <Result () {'v': 4166}>
+  spans {'v': (1, 6)}
+== 735 parse 'value: {v:0<+4g}]' 'value: -3.75]'
+  <Result () {'v': -3.75}>
+  spans {'v': (7, 12)}
+== 736 parse '{v:0x} units' '565 units'
+  <Result () {'v': 1381}>
+  spans {'v': (0, 3)}
+== 737 parse 'v={v:>12.3};' 'v=         ünï;'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\Av= *(?P<v>.{12,3}?);\Z'
+== 738 parse 'value: {v:+04g}]' 'value: -3.75]'
+  <Result () {'v': -3.75}>
+  spans {'v': (7, 12)}
+== 739 parse '[{v: ^12x};' '[    3bf     ;'
+  <Result () {'v': 959}>
+  spans {'v': (5, 8)}
+== 740 parse '[{v:*=12.0%}' '[-*****19000%'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A\[(?P<v>[-+ ]?**\d+(\.\d+)?%)\Z'
+== 741 parse '{v:< 8d}' ' 0      '
+  <Result () {'v': 0}>
+  spans {'v': (0, 2)}
+== 742 parse 'v={v:^ g}]' 'v= 1.23457e+08]'
+  <Result () {'v': 123457000.0}>
+  spans {'v': (3, 14)}
+== 743 parse 'v={v: <012,.2f};' 'v=-210.00     ;'
+  <Result () {'v': -210.0}>
+  spans {'v': (2, 9)}
+== 744 parse '[{v:4g} units' '[ 100 units'
+  <Result () {'v': 100.0}>
+  spans {'v': (2, 5)}
+== 745 parse '{v:*=-12b};' '*11011010001;'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A(?P<v>[-+ ]?**(0[bB])?[01]+);\Z'
+== 746 parse 'value: {v:-8b}]' 'value: 1000100101010]'
+  <Result () {'v': 4394}>
+  spans {'v': (7, 20)}
+== 747 parse 'v={v:+0.0e};' 'v=-4e+02;'
+  None
+== 748 parse '[{v:=-4.0e};' '[-7e+02;'
+  None
+== 749 parse 'value: {v:.=.2f}' 'value: -324.00'
+  <Result () {'v': -324.0}>
+  spans {'v': (7, 14)}
+== 750 parse 'v={v:< x};' 'v= 1012;'
+  <Result () {'v': 4114}>
+  spans {'v': (2, 7)}
+== 751 parse 'value: {v:.<.3} units' 'value: tab units'
+  <Result () {'v': 'tab'}>
+  spans {'v': (7, 10)}
+== 752 parse '{v:+12g}]' '        +1.5]'
+  <Result () {'v': 1.5}>
+  spans {'v': (8, 12)}
+== 753 parse '[{v:-^+04.2f}]' '[-515.00]'
+  <Result () {'v': 515.0}>
+  spans {'v': (2, 8)}
+== 754 parse 'value: {v:8} units' 'value: x        units'
+  <Result () {'v': 'x       '}>
+  spans {'v': (7, 15)}
+== 755 parse '[{v:<-,.2f}' '[10.54'
+  <Result () {'v': 10.54}>
+  spans {'v': (1, 6)}
+== 756 parse '[{v:< .0e}]' '[ 7e+02]'
+  None
+== 757 parse '{v: b}]' ' 1000010]'
+  <Result () {'v': 66}>
+  spans {'v': (0, 8)}
+== 758 parse '[{v:.1e};' '[-9.9e+02;'
+  <Result () {'v': -990.0}>
+  spans {'v': (1, 9)}
+== 759 parse '[{v:-=-12,d}' '[---8,843,067'
+  <Result () {'v': -8843067}>
+  spans {'v': (1, 13)}
+== 760 parse '[{v: 4,.0f}' '[-533'
+  <Result () {'v': -533.0}>
+  spans {'v': (1, 5)}
+== 761 parse '{v: <08f};' '443.650000;'
+  <Result () {'v': 443.65}>
+  spans {'v': (0, 10)}
+== 762 parse 'value: {v:<+g}]' 'value: +0.25]'
+  <Result () {'v': 0.25}>
+  spans {'v': (7, 12)}
+== 763 parse '[{v:4g} units' '[0.25 units'
+  <Result () {'v': 0.25}>
+  spans {'v': (1, 5)}
+== 764 parse 'v={v:^ 0.3%} units' 'v= 89789.000% units'
+  <Result () {'v': 897.89}>
+  spans {'v': (3, 13)}
+== 765 parse '{v:=4d} units' '   0 units'
+  None
+== 766 parse '[{v:*=+g};' '[+1.23457e+08;'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A\[(?P<v>[-+ ]?**\d+(\.\d+)?([eE][-+]?\d+)?|nan|NAN|[-+]?inf|[-+]?INF);\Z'
+== 767 parse '[{v:+08o}' '[+0002473'
+  <Result () {'v': 1339}>
+  spans {'v': (1, 9)}
+== 768 parse 'value: {v:<+%}]' 'value: -78547.470000%]'
+  <Result () {'v': -785.4747}>
+  spans {'v': (7, 21)}
+== 769 parse '{v:+12.1f}' '       +53.6'
+  <Result () {'v': 53.6}>
+  spans {'v': (7, 12)}
+== 770 parse '[{v:^4.1e}]' '[-7.7e+02]'
+  <Result () {'v': -770.0}>
+  spans {'v': (1, 9)}
+== 771 parse '{v:^ 12x};' '     5a     ;'
+  <Result () {'v': 90}>
+  spans {'v': (5, 7)}
+== 772 parse '[{v:>12x}' '[         a01'
+  <Result () {'v': 2561}>
+  spans {'v': (10, 13)}
+== 773 parse 'v={v:*=-8o}' 'v=****5747'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\Av=(?P<v>[-+ ]?**(0[oO])?[0-7]+)\Z'
+== 774 parse '{v:<} units' 'abc units'
+  <Result () {'v': 'abc'}>
+  spans {'v': (0, 3)}
+== 775 parse 'v={v:->-4.2%};' 'v=75463.40%;'
+  <Result () {'v': 754.6339999999999}>
+  spans {'v': (2, 11)}
+== 776 parse 'value: {v:8};' 'value: ünï     ;'
+  <Result () {'v': 'ünï     '}>
+  spans {'v': (7, 15)}
+== 777 parse '{v: >+b};' '+1110110000;'
+  <Result () {'v': 944}>
+  spans {'v': (0, 11)}
+== 778 parse '[{v: d}' '[ 0'
+  <Result () {'v': 0}>
+  spans {'v': (1, 3)}
+== 779 parse 'v={v:^}]' 'v=Kāra]'
+  <Result () {'v': 'Kāra'}>
+  spans {'v': (2, 6)}
+== 780 parse '{v:^-08o} units' '00332100 units'
+  <Result () {'v': 111680}>
+  spans {'v': (0, 8)}
+== 781 parse 'value: {v: ^08,.3f}' 'value:  94.000 '
+  <Result () {'v': 94.0}>
+  spans {'v': (8, 14)}
+== 782 parse 'v={v:-=+08d}]' 'v=-5819761]'
+  <Result () {'v': -5819761}>
+  spans {'v': (2, 10)}
+== 783 parse 'value: {v:-8.2e} units' 'value: -2.57e+02 units'
+  <Result () {'v': -257.0}>
+  spans {'v': (7, 16)}
+== 784 parse 'value: {v:*>d}' 'value: -3208388'
+  <Result () {'v': -3208388}>
+  spans {'v': (7, 15)}
+== 785 parse '{v:*<-0o} units' '7051 units'
+  <Result () {'v': 3625}>
+  spans {'v': (0, 4)}
+== 786 parse '[{v:};' '[tab\tsep;'
+  None
+== 787 parse 'value: {v: <-.1%}]' 'value: 3694.8%]'
+  <Result () {'v': 36.948}>
+  spans {'v': (7, 14)}
+== 788 parse '[{v:<-4o}' '[10073'
+  <Result () {'v': 4155}>
+  spans {'v': (1, 6)}
+== 789 parse 'value: {v:*<8.3f} units' 'value: 338.001* units'
+  <Result () {'v': 338.001}>
+  spans {'v': (7, 14)}
+== 790 parse 'v={v:12}]' 'v=tab\tsep     ]'
+  <Result () {'v': 'tab\tsep     '}>
+  spans {'v': (2, 14)}
+== 791 parse '[{v: b}' '[ 1110010'
+  <Result () {'v': 114}>
+  spans {'v': (1, 9)}
+== 792 parse 'value: {v:-<+f}]' 'value: +767.150000]'
+  <Result () {'v': 767.15}>
+  spans {'v': (7, 18)}
+== 793 parse 'value: {v: > o} units' 'value:  1302 units'
+  <Result () {'v': 706}>
+  spans {'v': (8, 12)}
+== 794 parse 'value: {v:.<x};' 'value: af3;'
+  <Result () {'v': 2803}>
+  spans {'v': (7, 10)}
+== 795 parse '{v:+b} units' '+1000000001111 units'
+  <Result () {'v': 4111}>
+  spans {'v': (0, 14)}
+== 796 parse '{v:.>-8.3%}]' '-60100.000%]'
+  <Result () {'v': -601.0}>
+  spans {'v': (0, 11)}
+== 797 parse 'v={v:} units' 'v=a b units'
+  None
+== 798 parse 'value: {v:>8}]' 'value:      a b]'
+  <Result () {'v': '     a b'}>
+  spans {'v': (7, 15)}
+== 799 parse '[{v:=0b};' '[110011001011;'
+  <Result () {'v': 3275}>
+  spans {'v': (1, 13)}
+== 800 parse 'value: {v:=08x}]' 'value: 00001128]'
+  <Result () {'v': 4392}>
+  spans {'v': (7, 15)}
+== 801 parse 'value: {v:<+0o};' 'value: +4402;'
+  <Result () {'v': 2306}>
+  spans {'v': (7, 12)}
+== 802 parse 'v={v:0= 0.1f} units' 'v= 804.8 units'
+  <Result () {'v': 804.8}>
+  spans {'v': (2, 8)}
+== 803 parse 'v={v:=-4x}]' 'v= f68]'
+  <Result () {'v': 3944}>
+  spans {'v': (2, 6)}
+== 804 parse '[{v: ^}' '[x'
+  <Result () {'v': 'x'}>
+  spans {'v': (1, 2)}
+== 805 parse 'value: {v:.1%};' 'value: -87104.2%;'
+  <Result () {'v': -871.0419999999999}>
+  spans {'v': (7, 16)}
+== 806 parse '{v:012f}' '-0651.410600'
+  <Result () {'v': -651.4106}>
+  spans {'v': (0, 12)}
+== 807 parse 'value: {v:0=.3%}' 'value: -1471.000%'
+  <Result () {'v': -14.71}>
+  spans {'v': (7, 17)}
+== 808 parse 'v={v:08,d} units' 'v=0,000,068 units'
+  None
+== 809 parse '[{v:*>-d}]' '[2096314]'
+  <Result () {'v': 2096314}>
+  spans {'v': (1, 8)}
+== 810 parse '[{v:->0x};' '[af8;'
+  <Result () {'v': 2808}>
+  spans {'v': (1, 4)}
+== 811 parse '[{v:.= 04d}' '[ ..0'
+  <Result () {'v': 0}>
+  spans {'v': (1, 5)}
+== 812 parse 'value: {v: 12x}]' 'value:         12b2]'
+  <Result () {'v': 4786}>
+  spans {'v': (15, 19)}
+== 813 parse '{v:*^12.3} units' '****hel***** units'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A\**(?P<v>.{12,3}?)\** units\Z'
+== 814 parse '{v: 0o};' ' 11206;'
+  <Result () {'v': 4742}>
+  spans {'v': (0, 6)}
+== 815 parse 'v={v:+04b} units' 'v=+111111001110 units'
+  <Result () {'v': 4046}>
+  spans {'v': (2, 15)}
+== 816 parse 'v={v:^+d}' 'v=-3238293'
+  <Result () {'v': -3238293}>
+  spans {'v': (2, 10)}
+== 817 parse '[{v:*^-8.2e}' '[-7.63e+02'
+  <Result () {'v': -763.0}>
+  spans {'v': (1, 10)}
+== 818 parse '{v:-,.1f} units' '182.6 units'
+  <Result () {'v': 182.6}>
+  spans {'v': (0, 5)}
+== 819 parse '{v:^-.0f}]' '255]'
+  <Result () {'v': 255.0}>
+  spans {'v': (0, 3)}
+== 820 parse 'value: {v:0=-f} units' 'value: -133.000000 units'
+  <Result () {'v': -133.0}>
+  spans {'v': (7, 18)}
+== 821 parse '[{v:-4g}]' '[   7]'
+  <Result () {'v': 7.0}>
+  spans {'v': (4, 5)}
+== 822 parse '[{v:>-012o};' '[000000002513;'
+  <Result () {'v': 1355}>
+  spans {'v': (1, 13)}
+== 823 parse 'v={v:^.0e}]' 'v=3e+02]'
+  None
+== 824 parse '{v:+08,d} units' '+000,056 units'
+  <Result () {'v': 56}>
+  spans {'v': (0, 8)}
+== 825 parse 'value: {v:=+8.3e} units' 'value: +4.934e+02 units'
+  <Result () {'v': 493.4}>
+  spans {'v': (7, 17)}
+== 826 parse '{v:->-0d};' '0;'
+  <Result () {'v': 0}>
+  spans {'v': (0, 1)}
+== 827 parse 'v={v:+12b}' 'v=+11100011110'
+  <Result () {'v': 1822}>
+  spans {'v': (2, 14)}
+== 828 parse 'v={v:0.3f}' 'v=-283.110'
+  <Result () {'v': -283.11}>
+  spans {'v': (2, 10)}
+== 829 parse 'value: {v:<-0.0%}]' 'value: -93550%]'
+  <Result () {'v': -935.5}>
+  spans {'v': (7, 14)}
+== 830 parse 'v={v:.=-4b}]' 'v=1011000001]'
+  <Result () {'v': 705}>
+  spans {'v': (2, 12)}
+== 831 parse '{v:+0e}]' '-5.254940e+02]'
+  <Result () {'v': -525.494}>
+  spans {'v': (0, 13)}
+== 832 parse '[{v: <+x};' '[+b51;'
+  <Result () {'v': 2897}>
+  spans {'v': (1, 5)}
+== 833 parse '{v:-.3%};' '26901.100%;'
+  <Result () {'v': 269.01099999999997}>
+  spans {'v': (0, 10)}
+== 834 parse '[{v:>} units' '[a b units'
+  <Result () {'v': 'a b'}>
+  spans {'v': (1, 4)}
+== 835 parse '{v:0^-x}' '218'
+  <Result () {'v': 536}>
+  spans {'v': (0, 3)}
+== 836 parse '[{v:0>o}]' '[11071]'
+  <Result () {'v': 4665}>
+  spans {'v': (1, 6)}
+== 837 parse '[{v: 4.1e}]' '[ 3.8e+01]'
+  <Result () {'v': 38.0}>
+  spans {'v': (2, 9)}
+== 838 parse 'value: {v:.^8.3} units' 'value: ..ünï... units'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\Avalue: \.*(?P<v>.{8,3}?)\.* units\Z'
+== 839 parse 'value: {v:+4,d}]' 'value:   +0]'
+  <Result () {'v': 0}>
+  spans {'v': (9, 11)}
+== 840 parse '[{v:x}]' '[df7]'
+  <Result () {'v': 3575}>
+  spans {'v': (1, 4)}
+== 841 parse 'v={v:< .2e} units' 'v=-4.19e+02 units'
+  <Result () {'v': -419.0}>
+  spans {'v': (2, 11)}
+== 842 parse '{v:0%} units' '91500.000000% units'
+  <Result () {'v': 915.0}>
+  spans {'v': (0, 13)}
+== 843 parse 'v={v:.<x}' 'v=6d2'
+  <Result () {'v': 1746}>
+  spans {'v': (2, 5)}
+== 844 parse 'value: {v:g};' 'value: 1.5;'
+  <Result () {'v': 1.5}>
+  spans {'v': (7, 10)}
+== 845 parse 'v={v:= 04d};' 'v= 073;'
+  <Result () {'v': 73}>
+  spans {'v': (2, 6)}
+== 846 parse '{v:0^ o}]' ' 7366]'
+  <Result () {'v': 3830}>
+  spans {'v': (0, 5)}
+== 847 parse '{v:<.3};' 'a b;'
+  <Result () {'v': 'a b'}>
+  spans {'v': (0, 3)}
+== 848 parse 'v={v: 0.1e}' 'v= 6.6e+02'
+  <Result () {'v': 660.0}>
+  spans {'v': (2, 10)}
+== 849 parse '[{v:<.3} units' '[Kār units'
+  <Result () {'v': 'Kār'}>
+  spans {'v': (1, 4)}
+== 850 parse 'v={v:-<4x} units' 'v=122a units'
+  <Result () {'v': 4650}>
+  spans {'v': (2, 6)}
+== 851 parse 'v={v:=+b};' 'v=+101110101011;'
+  <Result () {'v': 2987}>
+  spans {'v': (2, 15)}
+== 852 parse '[{v:*>12.8}]' '[*********abc]'
+  NotImplementedError: Group names (e.g. (?P<name>) can cause failure, as they are not escaped properly: '\A\[\**(?P<v>.{12,8}?)\]\Z'
+== 853 parse 'v={v:>+12b}]' 'v=+111100101111]'
+  <Result () {'v': 3887}>
+  spans {'v': (2, 15)}
+== 854 parse 'v={v:<12} units' 'v=hello world  units'
+  <Result () {'v': 'hello world '}>
+  spans {'v': (2, 14)}
+== 855 parse '[{v:-^4};' '[ünï-;'
+  <Result () {'v': 'ünï-'}>
+  spans {'v': (1, 5)}
+== 856 parse 'value: {v:^ 4.2f}]' 'value:  979.00]'
+  <Result () {'v': 979.0}>
+  spans {'v': (8, 14)}
+== 857 parse '{code:d}/{port}: {user:d}' '9777/delta: 2717'
+  <Result () {'code': 9777, 'port': 'delta', 'user': 2717}>
+  spans {'code': (0, 4), 'port': (5, 10), 'user': (12, 16)}
+== 858 parse '{port:w}: {host}' 'alpha2: alpha'
+  <Result () {'port': 'alpha2', 'host': 'alpha'}>
+  spans {'port': (0, 6), 'host': (8, 13)}
+== 859 parse '{path} {code}' 'gamma Epsilon'
+  <Result () {'path': 'gamma', 'code': 'Epsilon'}>
+  spans {'path': (0, 5), 'code': (6, 13)}
+== 860 search '{code} {user} | {id}' 'alpha delta! | Epsilon!'
+  <Result () {'code': 'alpha', 'user': 'delta!', 'id': 'E'}>
+  spans {'code': (0, 5), 'user': (6, 12), 'id': (15, 16)}
+== 861 parse '{code:d} | {path:l}' '1336 | alpha'
+  <Result () {'code': 1336, 'path': 'alpha'}>
+  spans {'code': (0, 4), 'path': (7, 12)}
+== 862 search '{host}' 'eta'
+  <Result () {'host': 'e'}>
+  spans {'host': (0, 1)}
+== 863 parse '{path:d}={msg:w}' '7819=eta' cs
+  <Result () {'path': 7819, 'msg': 'eta'}>
+  spans {'path': (0, 4), 'msg': (5, 8)}
+== 864 parse '{id:l}' 'ZETA'
+  <Result () {'id': 'ZETA'}>
+  spans {'id': (0, 4)}
+== 865 parse '{path:d}/{id:d}' '4254/6563'
+  <Result () {'path': 4254, 'id': 6563}>
+  spans {'path': (0, 4), 'id': (5, 9)}
+== 866 search '{id:d}/{port}: {path:w}' '6505/ZETA: beta'
+  <Result () {'id': 6505, 'port': 'ZETA', 'path': 'beta'}>
+  spans {'id': (0, 4), 'port': (5, 9), 'path': (11, 15)}
+== 867 parse '{port:d}' '2090'
+  <Result () {'port': 2090}>
+  spans {'port': (0, 4)}
+== 868 parse '{host:l}' 'eta!'
+  None
+== 869 search '{id} | {path:l}/{port:d}={user}' 'theta | Epsilon/6990=delta'
+  <Result () {'id': 'theta', 'path': 'Epsilon', 'port': 6990, 'user': 'd'}>
+  spans {'id': (0, 5), 'path': (8, 15), 'port': (16, 20), 'user': (21, 22)}
+== 870 parse '{id}' 'theta'
+  <Result () {'id': 'theta'}>
+  spans {'id': (0, 5)}
+== 871 parse '{user}' 'a b'
+  <Result () {'user': 'a b'}>
+  spans {'user': (0, 3)}
+== 872 parse '{msg:l}' 'delta'
+  <Result () {'msg': 'delta'}>
+  spans {'msg': (0, 5)}
+== 873 parse '{msg:l} | {path}={id:w}' 'gamma | theta=delta2'
+  <Result () {'msg': 'gamma', 'path': 'theta', 'id': 'delta2'}>
+  spans {'msg': (0, 5), 'path': (8, 13), 'id': (14, 20)}
+== 874 search '{port:d}/{id:d}: {path:d}, {code:w}' '9851/5552!: 6308, gamma2!'
+  None
+== 875 parse '{path}/{id:d}: {user}' 'q, r/6298: eta'
+  <Result () {'path': 'q, r', 'id': 6298, 'user': 'eta'}>
+  spans {'path': (0, 4), 'id': (5, 9), 'user': (11, 14)}
+== 876 parse '{host:l} | {msg}: {path:d}' 'delta | Epsilon: 6793'
+  <Result () {'host': 'delta', 'msg': 'Epsilon', 'path': 6793}>
+  spans {'host': (0, 5), 'msg': (8, 15), 'path': (17, 21)}
+== 877 search '{path:w}={user}, {host:w}: {code}' 'Epsilon=eta, delta: beta'
+  <Result () {'path': 'Epsilon', 'user': 'eta', 'host': 'delta', 'code': 'b'}>
+  spans {'path': (0, 7), 'user': (8, 11), 'host': (13, 18), 'code': (20, 21)}
+== 878 parse '{host}' 'ZETA'
+  <Result () {'host': 'ZETA'}>
+  spans {'host': (0, 4)}
+== 879 parse '{host:w}' 'delta' cs
+  <Result () {'host': 'delta'}>
+  spans {'host': (0, 5)}
+== 880 search '{msg}={code:w}' 'delta=ZETA_1'
+  <Result () {'msg': 'delta', 'code': 'ZETA_1'}>
+  spans {'msg': (0, 5), 'code': (6, 12)}
+== 881 parse '{code:d}/{path}={port}' '3005/1=2=1=2'
+  <Result () {'code': 3005, 'path': '1', 'port': '2=1=2'}>
+  spans {'code': (0, 4), 'path': (5, 6), 'port': (7, 12)}
+== 882 parse '{port} {code:l}' 'x/y ZETA'
+  <Result () {'port': 'x/y', 'code': 'ZETA'}>
+  spans {'port': (0, 3), 'code': (4, 8)}
+== 883 parse '{msg:d} {path:l}' '1378! delta'
+  None
+== 884 parse '{id:l}: {path:w}={code:w}' 'gamma!: alpha2=alpha_1'
+  None
+== 885 search '{path:l}' 'gamma'
+  <Result () {'path': 'gamma'}>
+  spans {'path': (0, 5)}
+== 886 parse '{port:l}' 'delta' cs
+  <Result () {'port': 'delta'}>
+  spans {'port': (0, 5)}
+== 887 parse '{code}' 'eta'
+  <Result () {'code': 'eta'}>
+  spans {'code': (0, 3)}
+== 888 parse '{user}: {id:d}: {msg}: {port:l}' 'Epsilon: 6819: Epsilon!: alpha'
+  <Result () {'user': 'Epsilon', 'id': 6819, 'msg': 'Epsilon!', 'port': 'alpha'}>
+  spans {'user': (0, 7), 'id': (9, 13), 'msg': (15, 23), 'port': (25, 30)}
+== 889 search '{port} {user:w}' 'ZETA delta!' cs
+  <Result () {'port': 'ZETA', 'user': 'delta'}>
+  spans {'port': (0, 4), 'user': (5, 10)}
+== 890 parse '{code:d}' '4227'
+  <Result () {'code': 4227}>
+  spans {'code': (0, 4)}
+== 891 parse '{msg}: {host:l}/{id}' 'a b: theta/theta'
+  <Result () {'msg': 'a b', 'host': 'theta', 'id': 'theta'}>
+  spans {'msg': (0, 3), 'host': (5, 10), 'id': (11, 16)}
+== 892 search '{id}: {user} | {msg:d}={code}' 'q, r: alpha | 5313=gamma'
+  <Result () {'id': 'q, r', 'user': 'alpha', 'msg': 5313, 'code': 'g'}>
+  spans {'id': (0, 4), 'user': (6, 11), 'msg': (14, 18), 'code': (19, 20)}
+== 893 parse '{msg}, {code} {port:w}: {path}' 'alpha, eta gamma_1: x/y'
+  <Result () {'msg': 'alpha', 'code': 'eta', 'port': 'gamma_1', 'path': 'x/y'}>
+  spans {'msg': (0, 5), 'code': (7, 10), 'port': (11, 18), 'path': (20, 23)}
+== 894 parse '{path:d}, {port} | {code:l}' '6586, x/y | alpha'
+  <Result () {'path': 6586, 'port': 'x/y', 'code': 'alpha'}>
+  spans {'path': (0, 4), 'port': (6, 9), 'code': (12, 17)}
+== 895 parse '{id}: {user} | {host:l}: {msg}' 'a b: q, r | alpha: theta'
+  <Result () {'id': 'a b', 'user': 'q, r', 'host': 'alpha', 'msg': 'theta'}>
+  spans {'id': (0, 3), 'user': (5, 9), 'host': (12, 17), 'msg': (19, 24)}
+== 896 search '{id:d}' '7201'
+  <Result () {'id': 7201}>
+  spans {'id': (0, 4)}
+== 897 parse '{msg} {id}/{port}' 'theta 1=2/beta'
+  <Result () {'msg': 'theta', 'id': '1=2', 'port': 'beta'}>
+  spans {'msg': (0, 5), 'id': (6, 9), 'port': (10, 14)}
+== 898 parse '{code:l}, {host:w}: {path}' 'gamma, alpha: theta'
+  <Result () {'code': 'gamma', 'host': 'alpha', 'path': 'theta'}>
+  spans {'code': (0, 5), 'host': (7, 12), 'path': (14, 19)}
+== 899 parse '{user:l}' 'alpha'
+  <Result () {'user': 'alpha'}>
+  spans {'user': (0, 5)}
+== 900 search '{port:w}: {path:l}' 'ZETA2: alpha'
+  <Result () {'port': 'ZETA2', 'path': 'alpha'}>
+  spans {'port': (0, 5), 'path': (7, 12)}
+== 901 parse '{id}, {code}={user:l}' '1=2, q, r=eta' cs
+  <Result () {'id': '1=2', 'code': 'q, r', 'user': 'eta'}>
+  spans {'id': (0, 3), 'code': (5, 9), 'user': (10, 13)}
+== 902 parse '{port}: {msg:d} | {id}' 'alpha: 1922 | beta' cs
+  <Result () {'port': 'alpha', 'msg': 1922, 'id': 'beta'}>
+  spans {'port': (0, 5), 'msg': (7, 11), 'id': (14, 18)}
+== 903 search '{msg:d} | {path}' '7879 | 1=2!'
+  <Result () {'msg': 7879, 'path': '1'}>
+  spans {'msg': (0, 4), 'path': (7, 8)}
+== 904 parse '{id}/{host:d}, {code:l}={port:w}' 'ZETA/7612, ZETA=Epsilon'
+  <Result () {'id': 'ZETA', 'host': 7612, 'code': 'ZETA', 'port': 'Epsilon'}>
+  spans {'id': (0, 4), 'host': (5, 9), 'code': (11, 15), 'port': (16, 23)}
+== 905 parse '{path:d} {code}' '6326 gamma' cs
+  <Result () {'path': 6326, 'code': 'gamma'}>
+  spans {'path': (0, 4), 'code': (5, 10)}
+== 906 search '{id:w}: {port:w}={user}' 'beta_1: theta2=gamma'
+  <Result () {'id': 'beta_1', 'port': 'theta2', 'user': 'g'}>
+  spans {'id': (0, 6), 'port': (8, 14), 'user': (15, 16)}
+== 907 parse '{msg:w}: {id:w}' 'eta_1: delta2'
+  <Result () {'msg': 'eta_1', 'id': 'delta2'}>
+  spans {'msg': (0, 5), 'id': (7, 13)}
+== 908 search '{id}={msg} {path}' 'eta=Epsilon Epsilon' cs
+  <Result () {'id': 'eta', 'msg': 'Epsilon', 'path': 'E'}>
+  spans {'id': (0, 3), 'msg': (4, 11), 'path': (12, 13)}
+== 909 parse '{id:w}/{port:d}' 'delta_1/2675'
+  <Result () {'id': 'delta_1', 'port': 2675}>
+  spans {'id': (0, 7), 'port': (8, 12)}
+== 910 parse '{id:l}' 'Epsilon' cs
+  <Result () {'id': 'Epsilon'}>
+  spans {'id': (0, 7)}
+== 911 parse '{code}' 'Epsilon'
+  <Result () {'code': 'Epsilon'}>
+  spans {'code': (0, 7)}
+== 912 search '{path:w}' 'ZETA_1'
+  <Result () {'path': 'ZETA_1'}>
+  spans {'path': (0, 6)}
+== 913 parse '{msg}' 'gamma'
+  <Result () {'msg': 'gamma'}>
+  spans {'msg': (0, 5)}
+== 914 search '{path:d}={msg:l}: {id:l}' '6790=beta: gamma'
+  <Result () {'path': 6790, 'msg': 'beta', 'id': 'gamma'}>
+  spans {'path': (0, 4), 'msg': (5, 9), 'id': (11, 16)}
+== 915 parse '{id}' '1=2' cs
+  <Result () {'id': '1=2'}>
+  spans {'id': (0, 3)}
+== 916 parse '{port:l}, {code}' 'delta, 1=2'
+  <Result () {'port': 'delta', 'code': '1=2'}>
+  spans {'port': (0, 5), 'code': (7, 10)}
+== 917 search '{path}: {user} | {code}' '1=2: a b! | x/y'
+  <Result () {'path': '1=2', 'user': 'a b!', 'code': 'x'}>
+  spans {'path': (0, 3), 'user': (5, 9), 'code': (12, 13)}
+== 918 parse '{user:d} | {code}' '8991 | x/y'
+  <Result () {'user': 8991, 'code': 'x/y'}>
+  spans {'user': (0, 4), 'code': (7, 10)}
+== 919 parse '{port}' 'a b!'
+  <Result () {'port': 'a b!'}>
+  spans {'port': (0, 4)}
+== 920 parse '{msg}, {host:l}: {id:w}' 'Epsilon, eta: beta' cs
+  <Result () {'msg': 'Epsilon', 'host': 'eta', 'id': 'beta'}>
+  spans {'msg': (0, 7), 'host': (9, 12), 'id': (14, 18)}
+== 921 parse '{path:w}, {host:d}, {user:w} {msg:w}' 'eta_1, 8177, alpha2 theta_1'
+  <Result () {'path': 'eta_1', 'host': 8177, 'user': 'alpha2', 'msg': 'theta_1'}>
+  spans {'path': (0, 5), 'host': (7, 11), 'user': (13, 19), 'msg': (20, 27)}
+== 922 parse '{code:d} {id:l} {msg:d}, {host}' '6537 ZETA 7157, theta'
+  <Result () {'code': 6537, 'id': 'ZETA', 'msg': 7157, 'host': 'theta'}>
+  spans {'code': (0, 4), 'id': (5, 9), 'msg': (10, 14), 'host': (16, 21)}
+== 923 parse '{code:w}' 'gamma_1'
+  <Result () {'code': 'gamma_1'}>
+  spans {'code': (0, 7)}
+== 924 search '{id:d}={path:w} | {host:l}/{port:d}' '8265=delta | beta/3480' cs
+  <Result () {'id': 8265, 'path': 'delta', 'host': 'beta', 'port': 3480}>
+  spans {'id': (0, 4), 'path': (5, 10), 'host': (13, 17), 'port': (18, 22)}
+== 925 parse '{host}, {path}' 'delta!, delta'
+  <Result () {'host': 'delta!', 'path': 'delta'}>
+  spans {'host': (0, 6), 'path': (8, 13)}
+== 926 parse '{user}, {msg}' 'eta, gamma' cs
+  <Result () {'user': 'eta', 'msg': 'gamma'}>
+  spans {'user': (0, 3), 'msg': (5, 10)}
+== 927 parse '{host} {port:l}' 'a b theta'
+  <Result () {'host': 'a b', 'port': 'theta'}>
+  spans {'host': (0, 3), 'port': (4, 9)}
+== 928 search '{code:l}' 'alpha'
+  <Result () {'code': 'alpha'}>
+  spans {'code': (0, 5)}
+== 929 search '{port}, {msg}' 'theta, gamma'
+  <Result () {'port': 'theta', 'msg': 'g'}>
+  spans {'port': (0, 5), 'msg': (7, 8)}
+== 930 search '{port:d}/{msg:l}/{code:l} {user}' '1407!/Epsilon/alpha alpha'
+  None
+== 931 parse '{user:w}' 'alpha2'
+  <Result () {'user': 'alpha2'}>
+  spans {'user': (0, 6)}
+== 932 parse '{id}={msg:l} {port}' 'eta=beta ZETA'
+  <Result () {'id': 'eta', 'msg': 'beta', 'port': 'ZETA'}>
+  spans {'id': (0, 3), 'msg': (4, 8), 'port': (9, 13)}
+== 933 parse '{code:w}' 'alpha_1'
+  <Result () {'code': 'alpha_1'}>
+  spans {'code': (0, 7)}
+== 934 parse '{host:w} | {user}' 'alpha_1 | x/y!' cs
+  <Result () {'host': 'alpha_1', 'user': 'x/y!'}>
+  spans {'host': (0, 7), 'user': (10, 14)}
+== 935 parse '{user:w}' 'Epsilon!'
+  None
+== 936 search '{msg:d} | {user:l}' '284 | gamma'
+  <Result () {'msg': 284, 'user': 'gamma'}>
+  spans {'msg': (0, 3), 'user': (6, 11)}
+== 937 bdd ''
+Feature: Shopping cart
+  Scenario: Adding fruit
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 3 apple ... passed
+    And I add a pear ... passed
+    Then the cart has 4 items ... failed: expected 4 items, the cart has 3
+    And the total is $2.25 ... skipped
+  Scenario: Removing things
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 2 loaf of bread ... passed
+    And I add 1 apple ... passed
+    And I remove apple ... passed
+    Then the cart has 2 items ... passed
+    And the cart contains loaf of bread ... passed
+    But the cart does not contain apple ... passed
+    And the total is $4.50 ... passed
+  Scenario: A discount code
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 10 apple ... passed
+    And I apply the code SAVE10 ... passed
+    Then the total is $4.50 ... passed
+    And the total is $5.00 ... failed: expected $5.00, the total is $4.50
+    And the cart has 10 items ... skipped
+  Scenario: Things the store does not sell
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 2 mango ... passed
+    Then the cart has 0 items ... passed
+    And I am told "we do not sell mango" ... passed
+  Scenario: Steps nobody wrote
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I juggle 3 apple ... undefined
+    Then the cart has 0 items ... skipped
+  Scenario: Many apples [n=1, total=$0.50]
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 1 apple ... passed
+    Then the total is $0.50 ... passed
+    And the cart has 1 items ... passed
+  Scenario: Many apples [n=4, total=$2.00]
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 4 apple ... passed
+    Then the total is $2.00 ... passed
+    And the cart has 4 items ... passed
+  Scenario: Many apples [n=12, total=$6.00]
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 12 apple ... passed
+    Then the total is $6.00 ... passed
+    And the cart has 12 items ... passed
+  Scenario: Many apples [n=7, total=$9.99]
+    Given the store sells apple at $0.50 each ... passed
+    And the store sells "pear" at $0.75 each ... passed
+    And the store sells loaf of bread at $2.25 each ... passed
+    Given an empty cart ... passed
+    When I add 7 apple ... passed
+    Then the total is $9.99 ... failed: expected $9.99, the total is $3.50
+    And the cart has 7 items ... skipped
+Feature: Inventory
+  Scenario: Receiving stock
+    Given the warehouse holds 10 apple ... passed
+    When 5 apple arrive on 2024-03-01 ... passed
+    And 3 apple leave on 2024-03-02 ... passed
+    Then the warehouse holds 12 apple ... passed
+    And the last movement was on 2024-03-02 ... passed
+  Scenario: Selling out
+    Given the warehouse holds 2 PEAR ... passed
+    When 2 pear leave on 2024-02-29 ... passed
+    Then the warehouse holds 0 pear ... passed
+    And pear is out of stock ... passed
+  Scenario: Dates the calendar does not have
+    Given the warehouse holds 1 plum ... passed
+    When 1 plum arrive on 2023-02-29 ... failed: ValueError: day is out of range for month
+    Then the warehouse holds 2 plum ... skipped
+  Scenario: Shouting
+    GIVEN THE WAREHOUSE HOLDS 4 FIG ... passed
+    Then the warehouse holds 4 fig ... passed
+13 scenarios (8 passed, 4 failed, 1 undefined)
+83 steps (73 passed, 4 failed, 1 undefined, 5 skipped)
+== 938 bdd ''
+Feature: Inventory
+  Scenario: Receiving stock
+    Given the warehouse holds 10 apple -> holds {'qty': 10, 'item': 'apple'}
+    When 5 apple arrive on 2024-03-01 -> arrive {'qty': 5, 'item': 'apple', 'day': datetime.date(2024, 3, 1)}
+    And 3 apple leave on 2024-03-02 -> leave {'qty': 3, 'item': 'apple', 'day': datetime.date(2024, 3, 2)}
+    Then the warehouse holds 12 apple -> holds_check {'qty': 12, 'item': 'apple'}
+    And the last movement was on 2024-03-02 -> last_move {'day': datetime.date(2024, 3, 2)}
+  Scenario: Selling out
+    Given the warehouse holds 2 PEAR -> holds {'qty': 2, 'item': 'PEAR'}
+    When 2 pear leave on 2024-02-29 -> leave {'qty': 2, 'item': 'pear', 'day': datetime.date(2024, 2, 29)}
+    Then the warehouse holds 0 pear -> holds_check {'qty': 0, 'item': 'pear'}
+    And pear is out of stock -> out_of_stock {'item': 'pear'}
+  Scenario: Dates the calendar does not have
+    Given the warehouse holds 1 plum -> holds {'qty': 1, 'item': 'plum'}
+    When 1 plum arrive on 2023-02-29 ... failed: ValueError: day is out of range for month
+    Then the warehouse holds 2 plum ... skipped
+  Scenario: Shouting
+    GIVEN THE WAREHOUSE HOLDS 4 FIG -> holds {'qty': 4, 'item': 'FIG'}
+    Then the warehouse holds 4 fig -> holds_check {'qty': 4, 'item': 'fig'}
+4 scenarios (3 passed, 1 failed, 0 undefined)
+14 steps (12 passed, 1 failed, 0 undefined, 1 skipped)
+== 939 logs '{ip} - {user} [{when:th}] "{method} {path} {proto}" {status:d} {size} "{referer}" "{agent}"'
+line 18: no match
+line 45: no match
+line 72: ValueError: hour must be in 0..23
+line 100: no match
+line 122: no match
+line 131: no match
+154 requests from 9 addresses, 2823259 bytes
+status 200=63 201=16 301=17 304=17 404=18 418=1 500=22
+methods GET=65 HEAD=31 POST=21 DELETE=18 PUT=18 BREW=1
+top paths /index.html=24 /api/users=23 /favicon.ico=22 /=21 /api/users/42=18
+days 2011-11-21=58 2011-11-22=58 2011-11-23=38
+first datetime.datetime(2011, 11, 21, 0, 12, 36, tzinfo=<FixedTzOffset +1000 10:00:00>)
+last datetime.datetime(2011, 11, 23, 20, 20, 40, tzinfo=<FixedTzOffset -0700 -1 day, 17:00:00>)
+== 940 logs '{ip} - {user} [{when:th}] "{request}" {status:d} {size}'
+line 18: no match
+line 72: ValueError: hour must be in 0..23
+line 100: no match
+line 122: no match
+line 131: no match
+155 requests from 9 addresses, 360 bytes
+status 200=64 201=16 301=17 304=17 404=18 418=1 500=22
+days 2011-11-21=59 2011-11-22=58 2011-11-23=38
+first datetime.datetime(2011, 11, 21, 0, 12, 36, tzinfo=<FixedTzOffset +1000 10:00:00>)
+last datetime.datetime(2011, 11, 23, 20, 20, 40, tzinfo=<FixedTzOffset -0700 -1 day, 17:00:00>)
+== 941 applog '{when:ti} {level:w} [{logger}] {message}'
+2024-03-01T05:11:17 WARNING app.web.auth: user bo logged in
+line 6: no match
+2024-03-01T06:06:42 WARNING app.web.auth: cache miss for key k9
+2024-03-01T16:28:16 WARNING app.db: request served in 182 ms
+2024-03-01T02:50:50 WARNING app.web: user bo logged in
+2024-03-01T07:01:07 WARNING app.web.auth: disk at 65%
+2024-03-01T13:07:49 ERROR worker: request served in 512 ms
+2024-03-01T18:18:06.666000 WARNING app.web: request served in 721 ms
+2024-03-01T04:40:40 ERROR worker: retrying [attempt 2]
+2024-03-01T09:51:57 ERROR app.web.auth: cache miss for key k34
+2024-03-01T14:02:14 ERROR app.web: user al logged in
+2024-03-01T10:46:22+00:00 WARNING app.db: user bo logged in
+2024-03-01T20:08:56 ERROR app.web: cache miss for key k33
+2024-03-02T06:30:30 ERROR worker: user bo logged in
+line 34: ValueError: hour must be in 0..23
+2024-03-02T02:14:38 WARNING app.db: request served in 442 ms
+2024-03-02T07:25:55 WARNING app.web.auth: retrying [attempt 3]
+2024-03-02T12:36:12.332000 WARNING app.web: user bo logged in
+2024-03-02T17:47:29 ERROR app.web: cache miss for key k2
+2024-03-02T08:20:20 ERROR app.web: request served in 651 ms
+2024-03-02T13:31:37 WARNING app.web.auth: cache miss for key k42
+2024-03-02T18:42:54 WARNING worker: retrying [attempt 3]
+2024-03-02T10:10:10 ERROR app.db: disk at 57%
+2024-03-02T15:21:27 WARNING app.web.auth: cache miss for key k47
+2024-03-02T06:54:18.998000 WARNING worker: user al logged in
+2024-03-02T11:05:35 ERROR app.web.auth: user al logged in
+2024-03-02T02:38:26 ERROR worker: request served in 461 ms
+2024-03-03T17:11:17 WARNING app.db: retrying [attempt 2]
+2024-03-03T22:22:34 ERROR app.web.auth: retrying [attempt 3]
+2024-03-03T03:33:51.331000 WARNING app.db: retrying [attempt 3]
+2024-03-03T08:44:08 WARNING app.db: retrying [attempt 2]
+2024-03-03T13:55:25+00:00 ERROR app.web: disk at 71%
+2024-03-03T04:28:16 WARNING app.web.auth: user bo logged in
+2024-03-03T09:39:33 WARNING app.web: disk at 60%
+levels DEBUG=13 ERROR=13 INFO=23 WARNING=19
+loggers app.web.auth=21 app.web=19 app.db=17 worker=11
+served 13 requests, 6518 ms in all, slowest 849 ms
+== 942 scan '<a href="{url}">{text}</a>'
+  <Result () {'url': 'https://example.org/', 'text': 'the site'}>
+  spans {'url': (16, 36), 'text': (38, 46)}
+  <Result () {'url': '/docs', 'text': 'the docs'}>
+  spans {'url': (64, 69), 'text': (71, 79)}
+  <Result () {'url': '/upper', 'text': 'shouting'}>
+  spans {'url': (106, 112), 'text': (114, 122)}
+  <Result () {'url': '/two', 'text': 'one'}>
+  spans {'url': (144, 148), 'text': (150, 153)}
+  <Result () {'url': '/three', 'text': 'two'}>
+  spans {'url': (166, 172), 'text': (174, 177)}
+  <Result () {'url': '/broken', 'text': 'no end\n<p>then <a href="/later">later'}>
+  spans {'url': (201, 208), 'text': (210, 247)}
+  6 found
+== 943 scan '#{tag:w}'
+  <Result () {'tag': 'kara'}>
+  spans {'tag': (10, 14)}
+  <Result () {'tag': 'compilers'}>
+  spans {'tag': (23, 32)}
+  <Result () {'tag': 'rust_lang'}>
+  spans {'tag': (34, 43)}
+  <Result () {'tag': '2024'}>
+  spans {'tag': (49, 53)}
+  <Result () {'tag': 'über'}>
+  spans {'tag': (55, 59)}
+  <Result () {'tag': 'tag'}>
+  spans {'tag': (67, 70)}
+  <Result () {'tag': 'double'}>
+  spans {'tag': (74, 80)}
+  7 found
+== 944 scan '{qty:d} {unit:l} of {thing:w}'
+  <Result () {'qty': 2, 'unit': 'cups', 'thing': 'flour'}>
+  spans {'qty': (3, 5), 'unit': (6, 10), 'thing': (14, 19)}
+  <Result () {'qty': 1, 'unit': 'cup', 'thing': 'milk'}>
+  spans {'qty': (24, 26), 'unit': (27, 30), 'thing': (34, 38)}
+  <Result () {'qty': 3, 'unit': 'tbsp', 'thing': 'sugar'}>
+  spans {'qty': (43, 45), 'unit': (46, 50), 'thing': (54, 59)}
+  <Result () {'qty': 10, 'unit': 'g', 'thing': 'salt'}>
+  spans {'qty': (60, 63), 'unit': (64, 65), 'thing': (69, 73)}
+  <Result () {'qty': 1, 'unit': 'pinch', 'thing': 'love'}>
+  spans {'qty': (77, 79), 'unit': (80, 85), 'thing': (89, 93)}
+  <Result () {'qty': 25, 'unit': 'minutes', 'thing': 'time'}>
+  spans {'qty': (99, 102), 'unit': (103, 110), 'thing': (114, 118)}
+  6 found
+== 945 scan '{key:w} = {value}\n'
+  <Result () {'key': 'host', 'value': 'example.org'}>
+  spans {'key': (9, 13), 'value': (16, 27)}
+  <Result () {'key': 'port', 'value': '8080'}>
+  spans {'key': (28, 32), 'value': (35, 39)}
+  <Result () {'key': 'retries', 'value': '3'}>
+  spans {'key': (50, 57), 'value': (60, 61)}
+  <Result () {'key': 'name', 'value': 'kara client'}>
+  spans {'key': (62, 66), 'value': (69, 80)}
+  4 found
+== 946 scan 'TODO({who:w}): {what}.'
+  <Result () {'who': 'ana', 'what': 'handle the empty case'}>
+  spans {'who': (7, 10), 'what': (13, 34)}
+  <Result () {'who': 'bo', 'what': 'rename this'}>
+  spans {'who': (50, 52), 'what': (55, 66)}
+  <Result () {'who': 'cy', 'what': 'lower case'}>
+  spans {'who': (75, 77), 'what': (80, 90)}
+  <Result () {'who': 'dee', 'what': 'no full stop\n# TODO(eve): two'}>
+  spans {'who': (99, 102), 'what': (105, 134)}
+  4 found
