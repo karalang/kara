@@ -1,0 +1,2706 @@
+0 read_bom: ('utf-16-be', b'\xfe\xff')
+1 read_bom: ('utf-16-le', b'\xff\xfe')
+2 read_bom: ('utf-32-be', b'\x00\x00\xfe\xff')
+3 read_bom: ('utf-32-le', b'\xff\xfe\x00\x00')
+4 read_bom: (None, None)
+5 read_bom: (None, None)
+6 http_content_type_encoding: 'iso8859-4'
+7 http_content_type_encoding: None
+8 http_content_type_encoding: 'utf-8'
+9 http_content_type_encoding: 'utf-8'
+10 http_content_type_encoding: 'iso8859-4'
+11 http_content_type_encoding: 'utf-8'
+12 http_content_type_encoding: None
+13 http_content_type_encoding: None
+14 http_content_type_encoding: None
+15 http_content_type_encoding: None
+16 http_content_type_encoding: None
+17 http_content_type_encoding: 'utf-8'
+18 http_content_type_encoding: 'utf-8'
+19 http_content_type_encoding: 'utf-8'
+20 http_content_type_encoding: 'utf-8'
+21 http_content_type_encoding: None
+22 http_content_type_encoding: None
+23 http_content_type_encoding: None
+24 http_content_type_encoding: None
+25 http_content_type_encoding: None
+26 http_content_type_encoding: 'utf-8'
+27 http_content_type_encoding: None
+28 http_content_type_encoding: None
+29 http_content_type_encoding: 'utf-8'
+30 http_content_type_encoding: 'utf-8'
+31 http_content_type_encoding: 'utf-8'
+32 http_content_type_encoding: 'utf-8'
+33 http_content_type_encoding: 'utf-8'
+34 http_content_type_encoding: 'utf-8'
+35 http_content_type_encoding: None
+36 html_body_declared_encoding: 'utf-8'
+37 html_body_declared_encoding: 'utf-8'
+38 html_body_declared_encoding: 'utf-8'
+39 html_body_declared_encoding: 'utf-8'
+40 html_body_declared_encoding: 'utf-8'
+41 html_body_declared_encoding: 'utf-8'
+42 html_body_declared_encoding: 'utf-8'
+43 html_body_declared_encoding: 'utf-8'
+44 html_body_declared_encoding: 'utf-8'
+45 html_body_declared_encoding: 'utf-8'
+46 html_body_declared_encoding: None
+47 html_body_declared_encoding: None
+48 html_body_declared_encoding: 'utf-8'
+49 html_body_declared_encoding: 'gb18030'
+50 html_body_declared_encoding: None
+51 html_body_declared_encoding: 'utf-8'
+52 html_body_declared_encoding: None
+53 html_body_declared_encoding: None
+54 html_body_declared_encoding: None
+55 html_body_declared_encoding: None
+56 html_body_declared_encoding: 'utf-8'
+57 html_body_declared_encoding: 'utf-8'
+58 html_body_declared_encoding: 'utf-8'
+59 html_body_declared_encoding: 'utf-8'
+60 html_body_declared_encoding: None
+61 html_body_declared_encoding: None
+62 html_body_declared_encoding: None
+63 html_body_declared_encoding: None
+64 html_body_declared_encoding: 'gb18030'
+65 html_body_declared_encoding: 'gb18030'
+66 html_body_declared_encoding: None
+67 html_body_declared_encoding: None
+68 html_body_declared_encoding: None
+69 html_body_declared_encoding: None
+70 html_body_declared_encoding: None
+71 html_body_declared_encoding: None
+72 html_body_declared_encoding: 'gb18030'
+73 html_body_declared_encoding: 'gb18030'
+74 html_body_declared_encoding: 'gb18030'
+75 html_body_declared_encoding: 'gb18030'
+76 html_body_declared_encoding: 'utf-8'
+77 html_body_declared_encoding: 'utf-8'
+78 html_body_declared_encoding: 'utf-8'
+79 html_body_declared_encoding: 'utf-8'
+80 html_body_declared_encoding: 'utf-8'
+81 html_body_declared_encoding: 'utf-8'
+82 html_body_declared_encoding: None
+83 html_body_declared_encoding: None
+84 html_body_declared_encoding: 'utf-8'
+85 html_body_declared_encoding: 'utf-8'
+86 html_body_declared_encoding: 'utf-8'
+87 html_body_declared_encoding: 'utf-8'
+88 html_body_declared_encoding: None
+89 html_body_declared_encoding: None
+90 html_body_declared_encoding: 'big5hkscs'
+91 html_body_declared_encoding: 'big5hkscs'
+92 html_body_declared_encoding: None
+93 html_body_declared_encoding: None
+94 html_body_declared_encoding: 'utf-8'
+95 html_body_declared_encoding: 'utf-8'
+96 html_body_declared_encoding: 'utf-8'
+97 html_body_declared_encoding: 'utf-8'
+98 html_body_declared_encoding: None
+99 html_body_declared_encoding: 'utf-8'
+100 html_body_declared_encoding: 'utf-8'
+101 html_body_declared_encoding: 'utf-8'
+102 html_body_declared_encoding: 'utf-8'
+103 html_body_declared_encoding: 'utf-8'
+104 html_body_declared_encoding: 'utf-8'
+105 html_body_declared_encoding: 'utf-8'
+106 html_body_declared_encoding: 'utf-8'
+107 html_body_declared_encoding: 'utf-8'
+108 html_body_declared_encoding: 'utf-8'
+109 html_body_declared_encoding: None
+110 html_body_declared_encoding: 'utf-8'
+111 html_body_declared_encoding: None
+112 html_to_unicode: ('utf8', '+ADw-script+AD4-')
+113 html_to_unicode: ('cp1251', 'кириллический текст')
+114 html_to_unicode: ('utf-8', '£')
+115 html_to_unicode: ('cp1252', '£')
+116 html_to_unicode: ('utf8', '£')
+117 html_to_unicode: ('utf8', '£')
+118 html_to_unicode: ('utf-8', 'WORD�WORD2')
+119 html_to_unicode: ('utf-8', 'WORD�WORD2')
+120 html_to_unicode: ('utf-8', 'WORD�')
+121 html_to_unicode: ('utf-8', 'WORD�')
+122 html_to_unicode: ('utf-8', 'PREFIX�SUFFIX')
+123 html_to_unicode: ('utf-8', '�<span>value</span>')
+124 html_to_unicode: ('utf-16-be', 'hi')
+125 html_to_unicode: ('utf-8', 'hi')
+126 html_to_unicode: ('utf-8', 'hi')
+127 html_to_unicode: ('utf-16-be', 'hi')
+128 html_to_unicode: ('utf-16-be', 'hi')
+129 html_to_unicode: ('utf-16-le', 'hi')
+130 html_to_unicode: ('utf-16-le', 'hi')
+131 html_to_unicode: ('utf-32-be', 'hi')
+132 html_to_unicode: ('utf-32-be', 'hi')
+133 html_to_unicode: ('utf-32-le', 'hi')
+134 html_to_unicode: ('utf-32-le', 'hi')
+135 html_to_unicode: ('utf-16-be', 'hi')
+136 html_to_unicode: ('utf-32-be', 'hi')
+137 html_to_unicode: ('utf-16-be', '㱭整愠捨慲獥琽≵瑦ⴱ㘢�')
+138 html_to_unicode: ('cp1252', 'blah blah < meta   http-equiv="Content-Type"\n            content="text/html; charset=iso-8859-1"> other stuff')
+139 html_to_unicode: ('utf-8', 'blah blah < meta   http-equiv="Content-Type"\n            content="text/html; charset=iso-8859-1"> other stuff')
+140 html_to_unicode: ('utf-8', 'blah blah < meta   http-equiv="Content-Type"\n            content="text/html; charset=iso-8859-1"> other stuff')
+141 html_to_unicode: ('utf8', 'no encoding info')
+142 html_to_unicode: ('ascii', 'no encoding info')
+143 html_to_unicode: ('utf8', '')
+144 to_unicode: '£'
+145 to_unicode: '�£'
+146 replace_entities: 'no entities'
+147 replace_entities: 'Price: £100!'
+148 replace_entities: 'no entities'
+149 replace_entities: 'Price: £100!'
+150 replace_entities: 'As low as £100!'
+151 replace_entities: 'As low as £100!'
+152 replace_entities: 'redirectTo=search&searchtext=MR0221Y&aff=buyat&affsrc=d_data&cm_mmc=buyat-_-ELECTRICAL & SEASONAL-_-MR0221Y-_-9-carat gold ½oz solid crucifix pendant'
+153 replace_entities: '<b>Low &lt; High &amp; Medium £ six</b>'
+154 replace_entities: '<b>Low &lt; High &amp; Medium £ six</b>'
+155 replace_entities: 'a < b &illegal; c &#12345678; six'
+156 replace_entities: 'a < b  c  six'
+157 replace_entities: 'x≤y'
+158 replace_entities: 'xy'
+159 replace_entities: 'x&#157;y'
+160 replace_entities: ''
+161 replace_entities: '&#82179209091;'
+162 replace_entities: 'x™y'
+163 replace_entities: 'x™y'
+164 replace_entities: '&#٦٠;script&#٦٢;'
+165 replace_entities: '&#x٣C;'
+166 replace_entities: '&#٠٦٠;'
+167 replace_entities: '\xa0٤;'
+168 replace_entities: 'a�b'
+169 replace_entities: 'a�b'
+170 replace_entities: '�'
+171 replace_entities: '�'
+172 replace_entities: '�'
+173 replace_entities: '�'
+174 replace_entities: '\ud7ff\ue000'
+175 replace_entities: '<<!'
+176 replace_entities: 'x<<!y'
+177 replace_entities: '<!'
+178 replace_entities: 'x<!y'
+179 replace_entities: 'A '
+180 replace_entities: 'xA y'
+181 replace_entities: 'A!'
+182 replace_entities: 'xA!y'
+183 replace_entities: 'Ah'
+184 replace_entities: 'xAhy'
+185 replace_entities: 'A!'
+186 replace_entities: 'xA!y'
+187 replace_entities: 'Ax'
+188 replace_entities: 'xAxy'
+189 replace_entities: '³!'
+190 replace_entities: 'x³!y'
+191 replace_entities: 'Á!'
+192 replace_entities: 'xÁ!y'
+193 replace_entities: '☃!'
+194 replace_entities: 'x☃!y'
+195 replace_entities: '™'
+196 replace_entities: 'x™y'
+197 replace_entities: '™'
+198 replace_entities: 'x™y'
+199 replace_entities: 'x™™™y'
+200 replace_tags: 'no entities'
+201 replace_tags: 'no entities'
+202 replace_tags: 'This text contains some tag'
+203 replace_tags: 'This text is very im port ant'
+204 replace_tags: 'Click here'
+205 replace_tags: 'xy'
+206 replace_tags: 'xy'
+207 replace_tags: 'b">'
+208 replace_tags: "b'>"
+209 replace_tags: 'b">'
+210 replace_tags: 'b">'
+211 replace_tags: 'aKEEP">b'
+212 remove_comments: 'without comments'
+213 remove_comments: ''
+214 remove_comments: 'without comments'
+215 remove_comments: ''
+216 remove_comments: 'text without comments'
+217 remove_comments: ''
+218 remove_comments: 'Hello'
+219 remove_comments: 'Hello'
+220 remove_comments: 'test  whatever'
+221 remove_comments: 'test  whatever'
+222 remove_comments: 'test '
+223 remove_tags: 'no tags'
+224 remove_tags: 'no tags'
+225 remove_tags: 'one tag'
+226 remove_tags: 'one tag'
+227 remove_tags: '<a>link</a>'
+228 remove_tags: 'no tags'
+229 remove_tags: 'no tags'
+230 remove_tags: 'one tag'
+231 remove_tags: 'one tag'
+232 remove_tags: '<a>link</a>'
+233 remove_tags: 'no tags'
+234 remove_tags: 'one p tag'
+235 remove_tags: '<p>one p tag</p>'
+236 remove_tags: '<b>not will removed</b>i will removed'
+237 remove_tags: 'texty'
+238 remove_tags: '<p align="center" class="one">texty</p>'
+239 remove_tags: 'abc'
+240 remove_tags: 'abc'
+241 remove_tags: 'a<br />b<br/>c'
+242 remove_tags: '<p>abc</p>'
+243 remove_tags: '<p>a<br />b<br/>c</p>'
+244 remove_tags: ''
+245 remove_tags: ''
+246 remove_tags: 'txt'
+247 remove_tags: 'txt'
+248 remove_tags: 'aKEEP">b'
+249 remove_tags: '<b "a>b">'
+250 remove_tags: "<b x=y'a>b'>"
+251 remove_tags: '<b x="y""a>b">'
+252 remove_tags: '<b/"a>b">'
+253 remove_tags_with_content: 'no tags'
+254 remove_tags_with_content: 'no tags'
+255 remove_tags_with_content: ''
+256 remove_tags_with_content: '<a>link</a>'
+257 remove_tags_with_content: 'no tags'
+258 remove_tags_with_content: 'no tags'
+259 remove_tags_with_content: ''
+260 remove_tags_with_content: '<a>link</a>'
+261 remove_tags_with_content: 'no tags'
+262 remove_tags_with_content: '<p>one p tag</p>'
+263 remove_tags_with_content: ''
+264 remove_tags_with_content: '<b>not will removed</b>'
+265 remove_tags_with_content: 'a'
+266 remove_tags_with_content: '<span></span>'
+267 remove_tags_with_content: 'headtail'
+268 remove_tags_with_content: 'headtail'
+269 remove_tags_with_content: 'tail'
+270 remove_tags_with_content: 'b"><i>y</script>'
+271 remove_tags_with_content: "b'><i>y</script>"
+272 remove_tags_with_content: 'b"><i>y</script>'
+273 remove_tags_with_content: 'b"><i>y</script>'
+274 remove_tags_with_content: ''
+275 remove_tags_with_content: ''
+276 remove_tags_with_content: ''
+277 remove_tags_with_content: ''
+278 remove_tags_with_content: ''
+279 remove_tags_with_content: ''
+280 remove_tags_with_content: ''
+281 remove_tags_with_content: 'tail'
+282 remove_tags_with_content: '<scriptä>x</script>y'
+283 replace_escape_chars: 'no ec'
+284 replace_escape_chars: 'no ec'
+285 replace_escape_chars: 'no ec'
+286 replace_escape_chars: 'no ec'
+287 replace_escape_chars: 'no ec'
+288 replace_escape_chars: 'no ec'
+289 replace_escape_chars: 'no ec'
+290 replace_escape_chars: 'escape'
+291 replace_escape_chars: 'escape\n'
+292 replace_escape_chars: 'escapechars\n'
+293 replace_escape_chars: 'escape chars '
+294 replace_escape_chars: 'escape£chars£'
+295 replace_escape_chars: 'escape£chars£'
+296 unquote_markup: '<node1>hi, this is sample text with entities: & ©\nalthough this is inside a cdata! &amp; &quot;</node1>'
+297 unquote_markup: '<node2>blah&blahblahblahblah!&pound;moreblah<></node2>'
+298 unquote_markup: '<node1>hi, this is sample text with entities: & ©\nalthough this is inside a cdata! &amp; &quot;</node1>'
+299 unquote_markup: '<node1>hi, this is sample text with entities: & ©\nalthough this is inside a cdata! &amp; &quot;</node1><node2>blah&blahblahblahblah!&pound;moreblah<></node2>'
+300 unquote_markup: 'something£&more<node3>things, stuff, and suchwhat"ever</node3><node4'
+301 unquote_markup: 'foobar'
+302 unquote_markup: 'ab'
+303 unquote_markup: 'foobar'
+304 unquote_markup: 'foo<![CDATA[bar'
+305 get_base_url: 'http://example.org/found'
+306 get_base_url: 'http://example.org/found'
+307 get_base_url: 'https://example.org'
+308 get_base_url: 'http://example.org/found'
+309 get_base_url: 'https://example.org'
+310 get_base_url: 'https://example.org'
+311 get_base_url: 'https://example.org'
+312 get_base_url: 'https://example.org'
+313 get_base_url: 'https://example.org'
+314 get_base_url: 'https://example.org'
+315 get_base_url: 'https://example.org'
+316 get_base_url: 'http://example.org/something'
+317 get_base_url: 'https://example.org'
+318 get_base_url: 'http://example.org/found'
+319 get_base_url: 'http://example_2.com/'
+320 get_base_url: raised LookupError: unknown encoding: not-an-encoding
+321 get_base_url: 'http://example.org/found'
+322 get_base_url: 'https://example.org'
+323 get_base_url: 'https://example.org/path'
+324 get_base_url: 'http://example.org/found'
+325 get_base_url: 'https://example.org'
+326 get_base_url: 'http://example.org/found'
+327 get_base_url: 'http://example.org/found'
+328 get_base_url: 'https://example.org'
+329 get_base_url: 'https://example.org'
+330 get_base_url: 'http://example.org/found'
+331 get_base_url: 'http://example.org/found'
+332 get_base_url: 'https://example.org'
+333 get_base_url: 'http://example.org/found'
+334 get_base_url: 'http://example.org/found'
+335 get_base_url: 'http://example.org/snowman%E2%8D%A8'
+336 get_base_url: 'https://example.org'
+337 get_base_url: 'http://example.org/found'
+338 get_base_url: 'https://example.org'
+339 get_base_url: 'https://example.org'
+340 get_base_url: 'http://example.org/found'
+341 get_base_url: 'http://example.org/found/'
+342 get_base_url: 'http://example.org/found'
+343 get_base_url: 'http://example.org/found'
+344 get_base_url: 'https://example.org'
+345 get_base_url: 'http://example.org/found'
+346 get_base_url: 'http://example.org/found'
+347 get_base_url: 'https://example.org'
+348 get_base_url: 'http://example.org/found'
+349 get_base_url: 'https://example.org'
+350 get_base_url: 'https://example.org'
+351 get_base_url: 'https://example.org'
+352 get_base_url: 'https://example.org'
+353 get_base_url: 'http://example.org/found'
+354 get_base_url: 'http://example.org/found'
+355 get_base_url: 'http://example.org/found'
+356 get_base_url: 'https://example.org'
+357 get_base_url: 'https://example.org'
+358 get_base_url: 'http://example.org/found'
+359 get_base_url: 'https://example.org'
+360 get_base_url: 'http://example.org/found'
+361 get_base_url: 'https://example.org'
+362 get_base_url: 'https://example.org'
+363 get_base_url: 'http://example.org/sterling%C2%A3'
+364 get_base_url: 'http://example.org/found'
+365 get_base_url: 'http://example.org/found'
+366 get_base_url: 'https://example.org'
+367 get_base_url: 'http://example.org/found'
+368 get_base_url: 'https://example.org'
+369 get_base_url: 'https://example.org'
+370 get_base_url: 'https://example.org'
+371 get_base_url: 'http://example.org/found'
+372 get_base_url: 'https://example.org'
+373 get_base_url: 'https://example.org'
+374 get_base_url: 'https://example.org'
+375 get_base_url: 'https://example.org'
+376 get_base_url: 'https://example.org'
+377 get_base_url: 'https://example.org'
+378 get_base_url: 'https://example.org'
+379 get_base_url: 'http://example.org/found'
+380 get_base_url: 'http://example.org/found'
+381 get_base_url: 'https://example.org'
+382 get_base_url: 'http://example.org/found'
+383 get_base_url: 'http://example.org/found'
+384 get_base_url: 'http://example.org/found'
+385 get_base_url: 'https://example.org'
+386 get_base_url: 'https://example.org'
+387 get_base_url: 'http://example.org/found'
+388 get_base_url: 'https://example.org'
+389 get_base_url: 'https://example.org'
+390 get_base_url: 'https://example.org'
+391 get_base_url: 'https://example.org'
+392 get_base_url: 'https://example.org'
+393 get_base_url: 'https://example.org'
+394 get_base_url: 'http://example.org/found'
+395 get_base_url: 'https://example.org'
+396 get_base_url: 'http://example.org/found'
+397 get_base_url: 'https://example.org'
+398 get_base_url: 'https://example.org'
+399 get_base_url: 'http://example_3.com/'
+400 get_base_url: 'https://example.org/path'
+401 get_base_url: 'https://example.org'
+402 get_base_url: 'https://example.org'
+403 get_base_url: 'http://example.org/found'
+404 get_base_url: 'https://example.org'
+405 get_base_url: 'https://example.org'
+406 get_base_url: 'http://example.org/found'
+407 get_base_url: 'http://example.org/found'
+408 get_base_url: 'https://example.org'
+409 get_base_url: 'https://example.org'
+410 get_base_url: 'http://example.org/found'
+411 get_base_url: 'https://example.org'
+412 get_base_url: 'https://example.org'
+413 get_base_url: 'https://example.org'
+414 get_base_url: 'http://example.org/sterling%a3'
+415 get_base_url: 'https://example.org'
+416 get_base_url: 'https://example.org'
+417 get_base_url: 'https://example.org'
+418 get_base_url: 'http://example.org/found'
+419 get_base_url: 'http://example.org/found'
+420 get_base_url: 'https://example.org'
+421 get_base_url: 'https://example.org'
+422 get_base_url: 'https://example.org'
+423 get_base_url: 'https://example.org'
+424 get_base_url: 'https://example.org'
+425 get_base_url: 'http://example.org/found'
+426 get_base_url: 'http://example.org/found'
+427 get_base_url: 'https://example.org'
+428 get_base_url: 'https://example.org'
+429 get_base_url: 'http://example.org/found'
+430 get_base_url: 'https://example.org'
+431 get_base_url: 'http://example.org/found'
+432 get_base_url: 'http://example.org/found'
+433 get_base_url: 'https://example.org'
+434 get_base_url: 'https://example.org'
+435 get_base_url: 'https://example.org'
+436 get_base_url: 'http://example.org/found'
+437 get_base_url: 'http://example.org/found'
+438 get_base_url: 'https://example.org'
+439 get_base_url: 'https://example.org'
+440 get_base_url: 'http://example.org/found'
+441 get_base_url: 'https://example.org'
+442 get_base_url: 'http://example.org/found'
+443 get_base_url: 'http://example.org/found'
+444 get_base_url: 'https://example.org'
+445 get_base_url: 'http://example.org/found'
+446 get_base_url: 'http://example.org/found'
+447 get_base_url: 'https://example.org'
+448 get_base_url: 'https://example.org'
+449 get_base_url: 'http://example.org/found'
+450 get_base_url: 'http://example.org/found'
+451 get_base_url: 'https://example.org/path?%FF%FE'
+452 get_base_url: 'http://example.org/found'
+453 get_base_url: 'http://example.org/found'
+454 get_base_url: 'http://example.org/found'
+455 get_base_url: 'http://example.org/found'
+456 get_base_url: 'https://example.org'
+457 get_base_url: 'https://example.org'
+458 get_base_url: 'http://example.org/found'
+459 get_base_url: 'https://example.org'
+460 get_base_url: 'http://example.org/found'
+461 get_base_url: 'http://example.org/'
+462 get_base_url: 'http://example.org/found'
+463 get_base_url: 'https://example.org'
+464 get_base_url: 'https://example.org'
+465 get_meta_refresh: (5.0, 'http://example.org/found')
+466 get_meta_refresh: (5.0, 'http://example.org/found')
+467 get_meta_refresh: (None, None)
+468 get_meta_refresh: (5.0, 'http://example.org/found')
+469 get_meta_refresh: (None, None)
+470 get_meta_refresh: (None, None)
+471 get_meta_refresh: (None, None)
+472 get_meta_refresh: (None, None)
+473 get_meta_refresh: (None, None)
+474 get_meta_refresh: (5.0, 'http://example.org/found')
+475 get_meta_refresh: (None, None)
+476 get_meta_refresh: (None, None)
+477 get_meta_refresh: (None, None)
+478 get_meta_refresh: (5.0, 'http://example.org/found')
+479 get_meta_refresh: (5.0, 'http://example.org/found')
+480 get_meta_refresh: (None, None)
+481 get_meta_refresh: (5.0, 'http://example.org/found')
+482 get_meta_refresh: (None, None)
+483 get_meta_refresh: (None, None)
+484 get_meta_refresh: (5.0, 'http://example.org/found')
+485 get_meta_refresh: (None, None)
+486 get_meta_refresh: (None, None)
+487 get_meta_refresh: (None, None)
+488 get_meta_refresh: (None, None)
+489 get_meta_refresh: (None, None)
+490 get_meta_refresh: (5.0, 'http://example.org/found')
+491 get_meta_refresh: (5.0, 'http://example.org/found')
+492 get_meta_refresh: (None, None)
+493 get_meta_refresh: (3.0, 'http://example.org/next')
+494 get_meta_refresh: (5.0, 'http://example.org/found')
+495 get_meta_refresh: (3.0, 'http://example.org/next')
+496 get_meta_refresh: (5.0, 'http://example.org/found')
+497 get_meta_refresh: (None, None)
+498 get_meta_refresh: (5.0, 'http://example.org/found')
+499 get_meta_refresh: (None, None)
+500 get_meta_refresh: (5.0, 'http://example.org/found')
+501 get_meta_refresh: (None, None)
+502 get_meta_refresh: (0.0, 'http://example.org/javascript_required')
+503 get_meta_refresh: (None, None)
+504 get_meta_refresh: (5.0, 'http://example.org/newpage')
+505 get_meta_refresh: (5.0, 'http://example.org/found')
+506 get_meta_refresh: (5.0, 'http://example.org/found')
+507 get_meta_refresh: (None, None)
+508 get_meta_refresh: (3.0, 'http://example.org/next?%FF%FE')
+509 get_meta_refresh: (5.0, 'http://example.org/found')
+510 get_meta_refresh: (None, None)
+511 get_meta_refresh: (None, None)
+512 get_meta_refresh: (3.0, 'http://example.org/next')
+513 get_meta_refresh: (5.0, 'http://example.org/found')
+514 get_meta_refresh: (5.0, 'http://example.org/found')
+515 get_meta_refresh: (None, None)
+516 get_meta_refresh: (5.0, 'http://example.org/found')
+517 get_meta_refresh: (5.0, 'http://example.org/found')
+518 get_meta_refresh: (5.0, 'http://example.org/found')
+519 get_meta_refresh: (5.0, 'http://example.org/found')
+520 get_meta_refresh: (5.0, 'http://example.org/found')
+521 get_meta_refresh: (None, None)
+522 get_meta_refresh: (None, None)
+523 get_meta_refresh: (5.0, 'http://example.org/found')
+524 get_meta_refresh: (5.0, 'http://example.org/found')
+525 get_meta_refresh: (5.0, 'http://example.org/found')
+526 get_meta_refresh: (None, None)
+527 get_meta_refresh: (5.0, 'http://example.org/found')
+528 get_meta_refresh: (5.0, 'http://example.org/found')
+529 get_meta_refresh: (5.0, 'http://example.org/found')
+530 get_meta_refresh: (5.0, 'http://example.org/found')
+531 get_meta_refresh: (5.0, 'http://example.org/found')
+532 get_meta_refresh: (3.0, 'http://example.org/next')
+533 get_meta_refresh: (5.0, 'http://example.org/found')
+534 get_meta_refresh: (5.0, 'http://example.org/found')
+535 get_meta_refresh: (5.0, 'http://example.org/found')
+536 get_meta_refresh: (5.0, 'http://example.org/found')
+537 get_meta_refresh: (5.0, 'http://example.org/found')
+538 get_meta_refresh: (5.0, 'http://example.org/found')
+539 get_meta_refresh: (5.0, 'http://example.org/found')
+540 get_meta_refresh: (5.0, 'http://example.org/found')
+541 get_meta_refresh: (5.0, 'http://example.org/found')
+542 get_meta_refresh: (5.0, 'http://example.org/found')
+543 get_meta_refresh: (None, None)
+544 get_meta_refresh: (1.0, 'http://example.org/newpage')
+545 get_meta_refresh: (5.0, 'http://example.org/found')
+546 get_meta_refresh: (None, None)
+547 get_meta_refresh: (5.0, 'http://example.org/found')
+548 get_meta_refresh: (5.0, 'http://example.org/found')
+549 get_meta_refresh: (5.0, 'http://example.org/found')
+550 get_meta_refresh: (5.0, 'http://example.org/found')
+551 get_meta_refresh: (None, None)
+552 get_meta_refresh: (5.0, 'http://example.org/found')
+553 get_meta_refresh: (None, None)
+554 get_meta_refresh: (5.0, 'http://example.org/found')
+555 get_meta_refresh: (None, None)
+556 get_meta_refresh: (3.0, 'http://example.org/next')
+557 get_meta_refresh: (5.0, 'http://example.org/found')
+558 get_meta_refresh: (5.0, 'http://example.org/found')
+559 get_meta_refresh: (None, None)
+560 get_meta_refresh: (5.0, 'http://example.org/found')
+561 get_meta_refresh: (5.0, 'http://example.org/found')
+562 get_meta_refresh: (5.0, 'http://example.org/found')
+563 get_meta_refresh: (None, None)
+564 get_meta_refresh: (5.0, 'http://example.org/found')
+565 get_meta_refresh: (None, None)
+566 get_meta_refresh: (None, None)
+567 get_meta_refresh: (5.0, 'http://example.org/found')
+568 get_meta_refresh: (None, None)
+569 get_meta_refresh: (5.0, 'http://example.org/found')
+570 get_meta_refresh: (5.0, 'http://example.org/found')
+571 get_meta_refresh: (None, None)
+572 get_meta_refresh: (None, None)
+573 get_meta_refresh: (5.0, 'http://example.org/found')
+574 get_meta_refresh: (5.0, 'http://example.org/found')
+575 get_meta_refresh: (5.0, 'http://example.org/found')
+576 get_meta_refresh: (5.0, 'http://example.org/found')
+577 get_meta_refresh: (5.0, 'http://example.org/found')
+578 get_meta_refresh: (5.0, 'http://example.org/found')
+579 get_meta_refresh: (5.0, 'http://example.org/found')
+580 get_meta_refresh: (5.0, 'http://example.org/found')
+581 get_meta_refresh: (5.0, 'http://example.org/found')
+582 get_meta_refresh: (None, None)
+583 get_meta_refresh: (5.0, 'http://example.org/found')
+584 get_meta_refresh: (5.0, 'http://example.org/found')
+585 get_meta_refresh: (0.0, 'http://example.org/a%EF%BF%BDb')
+586 get_meta_refresh: (5.0, 'http://example.org/found')
+587 get_meta_refresh: (5.0, 'http://example.org/found')
+588 get_meta_refresh: (5.0, 'http://example.org/found')
+589 get_meta_refresh: (5.0, 'http://example.org/found')
+590 get_meta_refresh: (5.0, 'http://example.org/found')
+591 get_meta_refresh: (5.0, 'http://example.org/found')
+592 get_meta_refresh: (5.0, 'http://example.org/found')
+593 get_meta_refresh: (5.0, 'http://example.org/found')
+594 get_meta_refresh: (None, None)
+595 get_meta_refresh: (5.0, 'http://example.org/found')
+596 get_meta_refresh: (5.0, 'http://example.org/found')
+597 get_meta_refresh: (5.0, 'http://example.org/found')
+598 get_meta_refresh: (2.0, 'http://example.org/next')
+599 get_meta_refresh: (5.0, 'http://example.org/found')
+600 get_meta_refresh: (5.0, 'http://example.org/found')
+601 get_meta_refresh: (None, None)
+602 get_meta_refresh: (5.0, 'http://example.org/found')
+603 get_meta_refresh: (5.0, 'http://example.org/found')
+604 get_meta_refresh: (5.0, 'http://example.org/found')
+605 get_meta_refresh: (5.0, 'http://example.org/found')
+606 get_meta_refresh: (None, None)
+607 get_meta_refresh: (None, None)
+608 get_meta_refresh: (None, None)
+609 get_meta_refresh: (5.0, 'http://example.org/found')
+610 get_meta_refresh: (5.0, 'http://example.org/found')
+611 get_meta_refresh: (None, None)
+612 get_meta_refresh: (5.0, 'http://example.org/found')
+613 get_meta_refresh: (5.0, 'http://example.org/found')
+614 get_meta_refresh: (5.0, 'http://example.org/found')
+615 get_meta_refresh: (None, None)
+616 get_meta_refresh: (5.0, 'http://example.org/found')
+617 get_meta_refresh: (None, None)
+618 get_meta_refresh: (5.0, 'http://example.org/found')
+619 get_meta_refresh: (5.0, 'http://example.org/found')
+620 get_meta_refresh: (5.0, 'http://example.org/found')
+621 get_meta_refresh: (None, None)
+622 get_meta_refresh: (5.0, 'http://example.org/found')
+623 get_meta_refresh: (5.0, 'http://example.org/found')
+624 get_meta_refresh: (None, None)
+625 has_entities: False
+626 has_entities: False
+627 has_entities: False
+628 has_entities: True
+629 has_entities: True
+630 has_entities: True
+631 has_entities: True
+632 has_entities: True
+633 has_entities: True
+634 has_entities: True
+635 has_entities: True
+636 has_entities: False
+637 has_entities: True
+638 has_entities: True
+639 has_entities: True
+640 has_entities: True
+641 has_entities: False
+642 has_entities: True
+643 has_entities: True
+644 basic_auth_header: b'Basic c29tZXVzZXI6c29tZXBhc3M='
+645 basic_auth_header: b'Basic c29tZXVzZXI6QDx5dTk+Jm8/UQ=='
+646 basic_auth_header: b'Basic c29tw6Z1c8Oocjpzw7htZXDDpHNz'
+647 basic_auth_header: b'Basic c29t5nVz6HI6c/htZXDkc3M='
+648 headers_raw_to_dict: None
+649 headers_raw_to_dict: {}
+650 headers_raw_to_dict: {b'Content-type': [b'text/html'], b'Accept': [b'gzip'], b'Cache-Control': [b'no-cache', b'no-store']}
+651 headers_dict_to_raw: None
+652 headers_dict_to_raw: b''
+653 headers_dict_to_raw: b'Content-type: text/html\r\nAccept: gzip'
+654 headers_dict_to_raw: b'Content-type: text/html\r\nAccept: gzip'
+655 headers_dict_to_raw: b'Cookie: val001\r\nCookie: val002\r\nAccept: gzip'
+656 headers_dict_to_raw: b''
+657 headers_dict_to_raw: b'Accept: gzip'
+658 safe_url_string: ''
+659 safe_url_string: 'https://example.com'
+660 safe_url_string: 'https://example.com/%C2%A9'
+661 safe_url_string: 'https://example.com/%C2%A9'
+662 safe_url_string: 'https://example.com/%C2%A9'
+663 safe_url_string: 'https://example.com/%C2%A9'
+664 safe_url_string: 'a://example.com?%A9'
+665 safe_url_string: 'ws://example.com/?%A9'
+666 safe_url_string: 'wss://example.com/?%A9'
+667 safe_url_string: 'ftp://example.com/?%A9'
+668 safe_url_string: 'ftp://example.com/?%A9'
+669 safe_url_string: 'https://example.com/?%A9'
+670 safe_url_string: 'https://example.com/?%A9'
+671 safe_url_string: 'http://example.com/?%A9'
+672 safe_url_string: 'http://example.com/?%A9'
+673 safe_url_string: 'file://example.com/?%A9'
+674 safe_url_string: 'file://example.com/?%A9'
+675 safe_url_string: 'https://example.com#%A9'
+676 safe_url_string: 'https://example.com'
+677 safe_url_string: 'https://example.com'
+678 safe_url_string: 'https://example.com'
+679 safe_url_string: 'https://example.com'
+680 safe_url_string: 'https://example.com'
+681 safe_url_string: 'https://example.com'
+682 safe_url_string: 'https://example.com'
+683 safe_url_string: 'https://example.com'
+684 safe_url_string: 'https://example.com'
+685 safe_url_string: 'https://example.com'
+686 safe_url_string: 'https://example.com'
+687 safe_url_string: 'https://example.com'
+688 safe_url_string: 'https://example.com'
+689 safe_url_string: 'https://example.com'
+690 safe_url_string: 'https://example.com'
+691 safe_url_string: 'https://example.com'
+692 safe_url_string: 'https://example.com'
+693 safe_url_string: 'https://example.com'
+694 safe_url_string: 'https://example.com'
+695 safe_url_string: 'https://example.com'
+696 safe_url_string: 'https://example.com'
+697 safe_url_string: 'https://example.com'
+698 safe_url_string: 'https://example.com'
+699 safe_url_string: 'https://example.com'
+700 safe_url_string: 'https://example.com'
+701 safe_url_string: 'https://example.com'
+702 safe_url_string: 'https://example.com'
+703 safe_url_string: 'https://example.com'
+704 safe_url_string: 'https://example.com'
+705 safe_url_string: 'https://example.com'
+706 safe_url_string: 'https://ab:ab@example.com:12/ab?ab#ab'
+707 safe_url_string: 'https://ab:ab@example.com:12/ab?ab#ab'
+708 safe_url_string: 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz://example.com'
+709 safe_url_string: 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz://example.com'
+710 safe_url_string: 'aabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789+-.://example.com'
+711 safe_url_string: 'aabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789+-.://example.com'
+712 safe_url_string: '://example.com'
+713 safe_url_string: '!://example.com'
+714 safe_url_string: '%22://example.com'
+715 safe_url_string: '#://example.com'
+716 safe_url_string: '$://example.com'
+717 safe_url_string: '%://example.com'
+718 safe_url_string: '&://example.com'
+719 safe_url_string: "'://example.com"
+720 safe_url_string: '(://example.com'
+721 safe_url_string: ')://example.com'
+722 safe_url_string: '*://example.com'
+723 safe_url_string: '+://example.com'
+724 safe_url_string: ',://example.com'
+725 safe_url_string: '-://example.com'
+726 safe_url_string: '.://example.com'
+727 safe_url_string: '/://example.com'
+728 safe_url_string: '0://example.com'
+729 safe_url_string: '1://example.com'
+730 safe_url_string: '2://example.com'
+731 safe_url_string: '3://example.com'
+732 safe_url_string: '4://example.com'
+733 safe_url_string: '5://example.com'
+734 safe_url_string: '6://example.com'
+735 safe_url_string: '7://example.com'
+736 safe_url_string: '8://example.com'
+737 safe_url_string: '9://example.com'
+738 safe_url_string: ';://example.com'
+739 safe_url_string: '%3C://example.com'
+740 safe_url_string: '=://example.com'
+741 safe_url_string: '%3E://example.com'
+742 safe_url_string: '?://example.com'
+743 safe_url_string: '@://example.com'
+744 safe_url_string: '%5B://example.com'
+745 safe_url_string: '%5C://example.com'
+746 safe_url_string: '%5D://example.com'
+747 safe_url_string: '%5E://example.com'
+748 safe_url_string: '_://example.com'
+749 safe_url_string: '%60://example.com'
+750 safe_url_string: '%7B://example.com'
+751 safe_url_string: '%7C://example.com'
+752 safe_url_string: '%7D://example.com'
+753 safe_url_string: '~://example.com'
+754 safe_url_string: '%7F://example.com'
+755 safe_url_string: '%C2%80://example.com'
+756 safe_url_string: "a!%22#$%&'()*,/;%3C=%3E?@%5B%5C%5D%5E_%60%7B%7C%7D~%7F%C2%80://example.com"
+757 safe_url_string: 'https://a@example.com'
+758 safe_url_string: 'https://a:@example.com'
+759 safe_url_string: 'https://:a@example.com'
+760 safe_url_string: 'https://a:a@example.com'
+761 safe_url_string: 'https://a%3A@example.com'
+762 safe_url_string: "https://abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()&+$,:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()&+$,@example.com"
+763 safe_url_string: 'https://%22%25%3B%3C%3D%3E%40%5E%60%7B%7C%7D%7F:%22%25%3B%3C%3D%3E%40%5E%60%7B%7C%7D%7F%3A@example.com'
+764 safe_url_string: 'https://%22%25%3B%3C%3D%3E%40%5E%60%7B%7C%7D%7F:%22%25%3B%3C%3D%3E%40%5E%60%7B%7C%7D%7F%3A@example.com'
+765 safe_url_string: 'https://@/example.com'
+766 safe_url_string: 'https://evil.com/@good.com/'
+767 safe_url_string: 'https://evil.com/@good.com/'
+768 safe_url_string: 'https://good.com/@evil.com/'
+769 safe_url_string: 'https://good.com/@evil.com/'
+770 safe_url_string: 'https://%C2%80:%C2%80@example.com'
+771 safe_url_string: 'https://%C2%80:%C2%80@example.com'
+772 safe_url_string: 'https://.example'
+773 safe_url_string: 'https://\x80.example'
+774 safe_url_string: 'https://%80.example'
+775 safe_url_string: 'https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example'
+776 safe_url_string: 'https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example'
+777 safe_url_string: 'https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example'
+778 safe_url_string: 'https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example'
+779 safe_url_string: 'https://xn--ida.example'
+780 safe_url_string: 'https://xn--ida.example'
+781 safe_url_string: 'http://192.168.0.0'
+782 safe_url_string: 'http://192.168.0.256'
+783 safe_url_string: 'http://192.168.0.0.0'
+784 safe_url_string: 'http://[2a01:5cc0:1:2::4]'
+785 safe_url_string: raised ValueError: '2a01:5cc0:1:2:3:4' does not appear to be an IPv4 or IPv6 address
+786 safe_url_string: 'https://[2402:4e00:40:40::2:3b6]'
+787 safe_url_string: 'https://[2402:4e00:40:40::2:3b6]:443'
+788 safe_url_string: 'http://[::1]'
+789 safe_url_string: 'http://[::1]:8080/path?q=1'
+790 safe_url_string: 'http://v6a.ip'
+791 safe_url_string: 'http://v6a.ip'
+792 safe_url_string: raised ValueError: An IPv4 address cannot be in brackets
+793 safe_url_string: raised ValueError: 'important.com:8000' does not appear to be an IPv4 or IPv6 address
+794 safe_url_string: raised ValueError: IPvFuture address is invalid
+795 safe_url_string: raised ValueError: IPvFuture address is invalid
+796 safe_url_string: raised ValueError: IPvFuture address is invalid
+797 safe_url_string: raised ValueError: IPvFuture address is invalid
+798 safe_url_string: raised ValueError: IPvFuture address is invalid
+799 safe_url_string: raised ValueError: '0439:23af::2309::fae7:1234' does not appear to be an IPv4 or IPv6 address
+800 safe_url_string: raised ValueError: '0439:23af:2309::fae7:1234:2342:438e:192.0.2.146' does not appear to be an IPv4 or IPv6 address
+801 safe_url_string: raised ValueError: Invalid IPv6 URL
+802 safe_url_string: raised ValueError: Invalid IPv6 URL
+803 safe_url_string: raised ValueError: Invalid IPv6 URL
+804 safe_url_string: raised ValueError: Invalid IPv6 URL
+805 safe_url_string: raised ValueError: Invalid IPv6 URL
+806 safe_url_string: raised ValueError: Invalid IPv6 URL
+807 safe_url_string: raised ValueError: Invalid IPv6 URL
+808 safe_url_string: raised ValueError: Invalid IPv6 URL
+809 safe_url_string: raised ValueError: Invalid IPv6 URL
+810 safe_url_string: raised ValueError: Invalid IPv6 URL
+811 safe_url_string: raised ValueError: Invalid IPv6 URL
+812 safe_url_string: raised ValueError: Invalid IPv6 URL
+813 safe_url_string: raised ValueError: Invalid IPv6 URL
+814 safe_url_string: raised ValueError: Invalid IPv6 URL
+815 safe_url_string: raised ValueError: Invalid IPv6 URL
+816 safe_url_string: raised ValueError: Invalid IPv6 URL
+817 safe_url_string: raised ValueError: Invalid IPv6 URL
+818 safe_url_string: raised ValueError: Invalid IPv6 URL
+819 safe_url_string: raised ValueError: Invalid IPv6 URL
+820 safe_url_string: raised ValueError: Invalid IPv6 URL
+821 safe_url_string: raised ValueError: Invalid IPv6 URL
+822 safe_url_string: raised ValueError: Invalid IPv6 URL
+823 safe_url_string: raised ValueError: Invalid IPv6 URL
+824 safe_url_string: raised ValueError: Invalid IPv6 URL
+825 safe_url_string: raised ValueError: 'example.com' does not appear to be an IPv4 or IPv6 address
+826 safe_url_string: 'scheme://us%5Ber%5D@[::1]'
+827 safe_url_string: 'scheme://us%5Ber%5D@[::1]'
+828 safe_url_string: raised ValueError: Invalid IPv6 URL
+829 safe_url_string: raised ValueError: Invalid IPv6 URL
+830 safe_url_string: raised ValueError: Invalid IPv6 URL
+831 safe_url_string: raised ValueError: Invalid IPv6 URL
+832 safe_url_string: raised ValueError: Invalid IPv6 URL
+833 safe_url_string: raised ValueError: Invalid IPv6 URL
+834 safe_url_string: raised ValueError: Invalid IPv6 URL
+835 safe_url_string: raised ValueError: Invalid IPv6 URL
+836 safe_url_string: raised ValueError: Invalid IPv6 URL
+837 safe_url_string: raised ValueError: Invalid IPv6 URL
+838 safe_url_string: 'https://example.com'
+839 safe_url_string: 'https://example.com:1'
+840 safe_url_string: 'https://example.com:443'
+841 safe_url_string: raised ValueError: Port could not be cast to integer value as bad_port
+842 safe_url_string: raised ValueError: Port could not be cast to integer value as -1
+843 safe_url_string: raised ValueError: Port out of range 0-65535
+844 safe_url_string: raised ValueError: Port could not be cast to integer value as 8_0
+845 safe_url_string: raised ValueError: Port could not be cast to integer value as +80
+846 safe_url_string: raised ValueError: Port could not be cast to integer value as ٨٠
+847 safe_url_string: 'https://example.com/'
+848 safe_url_string: 'https://example.com/a'
+849 safe_url_string: 'https://example.com/a'
+850 safe_url_string: 'https://example.com/a/b'
+851 safe_url_string: 'https://example.com/a/b'
+852 safe_url_string: 'https://example.com/a?b%5Cc'
+853 safe_url_string: 'https://example.com/a?b%5Cc'
+854 safe_url_string: 'https://example.com/a#b%5Cc'
+855 safe_url_string: 'https://example.com/a#b%5Cc'
+856 safe_url_string: 'https://example.com/a?b%5Cc#d%5Ce'
+857 safe_url_string: 'https://example.com/a?b%5Cc#d%5Ce'
+858 safe_url_string: 'https://example.com/a#b?c%5Cd'
+859 safe_url_string: 'https://example.com/a#b?c%5Cd'
+860 safe_url_string: "https://example.com/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'():@&=+$,/;"
+861 safe_url_string: 'https://example.com/%22%%3C%3E%5B%5D%5E%60%7B%7C%7D%7F'
+862 safe_url_string: 'https://example.com/%C3%B1'
+863 safe_url_string: 'https://example.com/%C3%B1'
+864 safe_url_string: 'https://example.com/%C3%B1%C3%B1'
+865 safe_url_string: 'https://example.com/%C3%B1%C3%B1'
+866 safe_url_string: 'https://example.com/%3F'
+867 safe_url_string: 'https://example.com/%23'
+868 safe_url_string: 'https://example.com'
+869 safe_url_string: 'https://example.com/'
+870 safe_url_string: 'https://example.com/?a'
+871 safe_url_string: 'https://example.com/?a'
+872 safe_url_string: 'https://example.com/?a='
+873 safe_url_string: 'https://example.com/?a='
+874 safe_url_string: 'https://example.com/?a=b'
+875 safe_url_string: 'https://example.com/?a=b'
+876 safe_url_string: "a://example.com?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'():@&=+$,/;?"
+877 safe_url_string: 'a://example.com?%22%%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+878 safe_url_string: 'wss://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+879 safe_url_string: 'wss://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+880 safe_url_string: 'ws://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+881 safe_url_string: 'ws://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+882 safe_url_string: 'ftp://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+883 safe_url_string: 'ftp://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+884 safe_url_string: 'https://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+885 safe_url_string: 'https://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+886 safe_url_string: 'http://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+887 safe_url_string: 'http://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+888 safe_url_string: 'file://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+889 safe_url_string: 'file://example.com/?abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*():@&=+$,/;?'
+890 safe_url_string: 'wss://example.com/?%22%%27%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+891 safe_url_string: 'ws://example.com/?%22%%27%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+892 safe_url_string: 'ftp://example.com/?%22%%27%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+893 safe_url_string: 'https://example.com/?%22%%27%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+894 safe_url_string: 'http://example.com/?%22%%27%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+895 safe_url_string: 'file://example.com/?%22%%27%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+896 safe_url_string: 'https://example.com/?%C3%B1'
+897 safe_url_string: 'https://example.com/?%C3%B1'
+898 safe_url_string: 'https://example.com/?%C3%B1%C3%B1'
+899 safe_url_string: 'https://example.com/?%C3%B1%C3%B1'
+900 safe_url_string: 'https://example.com'
+901 safe_url_string: 'https://example.com/'
+902 safe_url_string: 'https://example.com'
+903 safe_url_string: 'https://example.com/'
+904 safe_url_string: 'https://example.com#a'
+905 safe_url_string: "a://example.com#abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'():@&=+$,/;?"
+906 safe_url_string: 'a://example.com#%22%23%%3C%3E%5B%5C%5D%5E%60%7B%7C%7D%7F'
+907 safe_url_string: 'https://example.com#%C3%B1'
+908 safe_url_string: 'https://example.com#%C3%B1'
+909 safe_url_string: 'https://example.com#%C3%B1%C3%B1'
+910 safe_url_string: 'https://example.com#%C3%B1%C3%B1'
+911 safe_url_string: 'https://%C3%B1:%C3%B1@xn--ida.example:1/%C3%B1?%C3%B1#%C3%B1'
+912 safe_url_string: 'https://%C3%B1:%C3%B1@xn--ida.example:1/%C3%B1?%C3%B1#%C3%B1'
+913 safe_url_string: raised ValueError: netloc 'example：80.com' contains invalid characters under NFKC normalization
+914 safe_url_string: raised ValueError: netloc 'example＃.com' contains invalid characters under NFKC normalization
+915 safe_url_string: raised ValueError: netloc 'example？.com' contains invalid characters under NFKC normalization
+916 safe_url_string: raised ValueError: netloc 'example＠.com' contains invalid characters under NFKC normalization
+917 safe_url_string: raised ValueError: netloc 'evil.com＼.example.com' contains invalid characters under NFKC normalization
+918 safe_url_string: raised ValueError: netloc 'evil.com﹨.example.com' contains invalid characters under NFKC normalization
+919 safe_url_string: 'https://example.com'
+920 safe_url_string: 'https://example.com/%5Bx%5D'
+921 safe_url_string: 'https://example.com/%5Bx%5D'
+922 safe_url_string: 'https://example.com/a%5Db'
+923 safe_url_string: 'https://example.com/a%5Db'
+924 safe_url_string: 'http://example.com/search?tags%5B%5D=a'
+925 safe_url_string: 'http://example.com/search?tags%5B%5D=a'
+926 safe_url_string: 'https://example.com/a#f%5B1%5D'
+927 safe_url_string: 'https://example.com/a#f%5B1%5D'
+928 safe_url_string: 'http://[::1]:8080/p?q=%5B1%5D'
+929 safe_url_string: 'http://[::1]:8080/p?q=%5B1%5D'
+930 safe_url_string: '%E8%8D%89%E8%96%99%20%E7%B4%A0%E5%AD%90'
+931 safe_url_string: '%E8%8D%89%E8%96%99%20%E7%B4%A0%E5%AD%90'
+932 safe_url_string: '%C2%A9'
+933 safe_url_string: '%C2%A9'
+934 safe_url_string: '%A9'
+935 safe_url_string: 'http://www.example.org/'
+936 safe_url_string: '/ecommerce/oggetto/Te%20%C3%B2/tea-strainer/1273'
+937 safe_url_string: 'http://www.example.com/test?p(29)url(http://www.another.net/page)'
+938 safe_url_string: 'http://www.example.com/Brochures_&_Paint_Cards&PageSize=200'
+939 safe_url_string: 'http://www.example.com/%C2%A3'
+940 safe_url_string: 'http://www.example.com/%C2%A3'
+941 safe_url_string: 'http://www.example.com/%C2%A3'
+942 safe_url_string: 'http://www.example.com/%A3'
+943 safe_url_string: 'http://example.com/'
+944 safe_url_string: 'http://example.com/test.html'
+945 safe_url_string: 'http://example.com/test.html'
+946 safe_url_string: 'http://example.com/test.html'
+947 safe_url_string: 'http://example.com/test.html'
+948 safe_url_string: 'http://example.com/test.html'
+949 safe_url_string: 'http://example.com/test%07.html'
+950 safe_url_string: 'http://google.com/%22hello%22'
+951 safe_url_string: 'http://google.com/"hello"'
+952 safe_url_string: 'http://google.com/%22hello%22'
+953 safe_url_string: 'http://www.example.com/%C2%A3?unit=%C2%B5'
+954 safe_url_string: 'http://www.example.com/%C2%A3?unit=%C2%B5'
+955 safe_url_string: 'http://www.example.com/%C2%A3?unit=%B5'
+956 safe_url_string: 'http://www.example.com/%A3?unit=%C2%B5'
+957 safe_url_string: 'http://www.example.com/%A3?unit=%B5'
+958 safe_url_string: 'http://www.example.com/%C2%A3?unit=%C2%B5'
+959 safe_url_string: 'http://www.example.com/%C2%A3?unit=%C2%B5'
+960 safe_url_string: '://evil.com/path'
+961 safe_url_string: '1x://evil.com/path'
+962 safe_url_string: '+x://evil.com/path'
+963 safe_url_string: raised ValueError: Invalid IPv6 URL
+964 safe_url_string: raised ValueError: Invalid IPv6 URL
+965 safe_url_string: raised ValueError: Invalid IPv6 URL
+966 safe_url_string: raised ValueError: Invalid IPv6 URL
+967 safe_url_string: 'http://www.example.com/'
+968 safe_url_string: 'http://www.example.com/%C2%B5'
+969 safe_url_string: 'http://www.example.com/%C2%B5'
+970 safe_url_string: 'http://www.example.com/%C2%A3?unit=%B5'
+971 safe_url_string: 'http://www.example.com/%A3?unit=%B5'
+972 safe_url_string: 'http://www.example.com/country/%D0%EE%F1%F1%E8%FF'
+973 safe_url_string: 'http://www.xn--frgbolaget-q5a.nu/f%C3%A4rgbolaget'
+974 safe_url_string: 'http://www.xn--rksmrgs-5wao1o.se/?r%C3%A4ksm%C3%B6rg%C3%A5s=yes'
+975 safe_url_string: 'http://www.xn--brndendekrlighed-vobh.com/br%C3%A6ndende/k%C3%A6rlighed'
+976 safe_url_string: 'http://www.xn--9d0bm53a3xbzui.com'
+977 safe_url_string: 'http://xn--lck1c3crb1723bpq4a.com'
+978 safe_url_string: 'http://xn--l8je6s7a45b.com'
+979 safe_url_string: 'http://www.xn--bcher-kva.de/?q=b%C3%BCcher'
+980 safe_url_string: 'http://xn--p8j9a0d9c9a.xn--q9jyb4c/?query=%E3%82%B5&maxResults=5'
+981 safe_url_string: 'http://xn--j1ail.xn--p1ai/'
+982 safe_url_string: 'http://xn--j1ail.xn--p1ai/index.php?domain=%D0%A7%D1%82%D0%BE'
+983 safe_url_string: 'http://xn--220b31d95hq8o.xn--3e0b707e/'
+984 safe_url_string: 'http://xn--2e0b17htvgtvj9haj53ccob62ni8d.xn--3e0b707e/'
+985 safe_url_string: 'http://nic.xn--ngbc5azd'
+986 safe_url_string: 'https://www.xn--0kwr83e.xn--3ds443g'
+987 safe_url_string: 'https://www2.xn--0kwr83e.xn--3ds443g'
+988 safe_url_string: 'https://www3.xn--0kwr83e.xn--3ds443g'
+989 safe_url_string: 'http://www.xn--frgbolaget-q5a.nu/f%C3%A4rgbolaget'
+990 safe_url_string: 'http://www.xn--rksmrgs-5wao1o.se/?r%C3%A4ksm%C3%B6rg%C3%A5s=yes'
+991 safe_url_string: 'http://www.xn--brndendekrlighed-vobh.com/br%C3%A6ndende/k%C3%A6rlighed'
+992 safe_url_string: 'http://www.xn--9d0bm53a3xbzui.com'
+993 safe_url_string: 'http://xn--lck1c3crb1723bpq4a.com'
+994 safe_url_string: 'http://xn--l8je6s7a45b.com'
+995 safe_url_string: 'http://www.xn--bcher-kva.de/?q=b%C3%BCcher'
+996 safe_url_string: 'http://xn--p8j9a0d9c9a.xn--q9jyb4c/?query=%E3%82%B5&maxResults=5'
+997 safe_url_string: 'http://xn--j1ail.xn--p1ai/'
+998 safe_url_string: 'http://xn--j1ail.xn--p1ai/index.php?domain=%D0%A7%D1%82%D0%BE'
+999 safe_url_string: 'http://xn--220b31d95hq8o.xn--3e0b707e/'
+1000 safe_url_string: 'http://xn--2e0b17htvgtvj9haj53ccob62ni8d.xn--3e0b707e/'
+1001 safe_url_string: 'http://nic.xn--ngbc5azd'
+1002 safe_url_string: 'https://www.xn--0kwr83e.xn--3ds443g'
+1003 safe_url_string: 'https://www2.xn--0kwr83e.xn--3ds443g'
+1004 safe_url_string: 'https://www3.xn--0kwr83e.xn--3ds443g'
+1005 safe_url_string: 'http://.éxamplé.com/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+1006 safe_url_string: 'http://www.éxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplé.com/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+1007 safe_url_string: 'http://.éxamplé.com/'
+1008 safe_url_string: 'http://.éxamplé.com:80/?%FF%FEq%00=%00a%00'
+1009 safe_url_string: 'http://www.example.com:80/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+1010 safe_url_string: 'http://www.example.com/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+1011 safe_url_string: 'http://www.example.com/path/to/%23/foo/bar'
+1012 safe_url_string: 'http://www.example.com/path/to/%23/foo/bar#frag'
+1013 safe_url_string: 'http://www.example.com/path/to/%23/foo/bar?url=http%3A%2F%2Fwww.example.com%2Fpath%2Fto%2F%23%2Fbar%2Ffoo'
+1014 safe_url_string: 'http://www.example.com/path/to/%23/foo/bar?url=http%3A%2F%2Fwww.example.com%2F%2Fpath%2Fto%2F%23%2Fbar%2Ffoo#frag'
+1015 safe_url_string: 'http://xn--xkrr14bows.xn--fiqs8s:80'
+1016 safe_url_string: 'ftp://admin:admin@xn--xkrr14bows.xn--fiqs8s:21'
+1017 safe_url_string: 'http://%C3%85sa:abc123@xn--hgi.ws:81/admin'
+1018 safe_url_string: 'http://jap%C3%A3o:n%C3%A3o@xn--i-7iq.ws:8000/'
+1019 safe_url_string: 'ftp://admin:@xn--xkrr14bows.xn--fiqs8s:21'
+1020 safe_url_string: 'ftp://admin@xn--xkrr14bows.xn--fiqs8s:21'
+1021 safe_url_string: 'ftp://admin:%7C%25@example.com'
+1022 safe_url_string: 'http://%25user:%25pass@host'
+1023 safe_url_string: 'http://%25user:%25pass@host'
+1024 safe_url_string: 'http://&user:&pass@host'
+1025 safe_url_string: 'http://%2525user:%2525pass@host'
+1026 safe_url_string: 'http://%2526user:%2526pass@host'
+1027 safe_url_string: 'http://%25&user:%25&pass@host'
+1028 safe_url_string: 'http://a.com/'
+1029 safe_url_string: 'https://a.com/'
+1030 safe_url_string: 'https://t.pe/_/xrb%23l#%37'
+1031 safe_url_string: 'https://a.ally/'
+1032 safe_url_string: 'http://a.boehringer/'
+1033 safe_url_string: 'http://ahv0.r.x.boehringer///1q0vq%3ChVG(2!%3E/.C2Jb,#%FD'
+1034 safe_url_string: 'http://a.md/'
+1035 safe_url_string: 'http://c.v.md/N/VZ%3D%0B%2F%3E$ZC//z)(U%0Av$L/-t%5Eq%09JK%3D*Cg/%5DY#%70%A2%83%96/'
+1036 safe_url_string: 'http://a.email/'
+1037 safe_url_string: 'http://yo4dqne.email:65535/Q/7%40x7//-i%20%0C2jYaH~%3E/%2FrU%40/r//Hk5/%5Dd//%5B%3Ec%3A/x/%09'
+1038 safe_url_string: 'http://a.charity/'
+1039 safe_url_string: 'http://h.charity/u/%0C/Y%3Ae*'
+1040 safe_url_string: 'http://h.charity/u/%0C/'
+1041 safe_url_string: 'http://a.charity/'
+1042 safe_url_string: 'http://a.charity/'
+1043 safe_url_string: 'https://jvzos3.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p#%FA%45%30%CB%26%E9%61%60%9A'
+1044 safe_url_string: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p#%FA%45%30%CB%26%E9%61%60%9A'
+1045 safe_url_string: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p#%FA%45%30%CB%26%E9%61%60%9A'
+1046 safe_url_string: 'https://s.v.j.j.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p#%FA%45%30%CB%26%E9%61%60%9A'
+1047 safe_url_string: 'https://s.v.j.j.g0yllm.s.ht6sbgxm.s0yllp.mil:323/T//p#%FA%45%30%CB%26%E9%61%60%9A'
+1048 safe_url_string: 'https://t.h0.s0yllp.mil/'
+1049 safe_url_string: 'https://swg0i0.r.c.cv:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1050 safe_url_string: 'https://r.r.c.cv:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1051 safe_url_string: 'https://r.r.c.cv:7421/////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1052 safe_url_string: 'https://r.r.c.cv:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1053 safe_url_string: 'https://r.r.c.cv:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1054 safe_url_string: 'https://r.c.c.cv:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1055 safe_url_string: 'https://a.r.c.cv/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1056 safe_url_string: 'https://koipyln0zp.stockholm/ktxd//!'
+1057 safe_url_string: 'https://koipyln0zp.stockholm/O/I/p/Y/L/n/0/Z'
+1058 safe_url_string: 'https://koipyln0zp.stockholm/O/I/p/K'
+1059 safe_url_string: 'https://koipyln0zp.stockholm/O/I/'
+1060 safe_url_string: 'https://koipyln0zp.stockholm/O//'
+1061 safe_url_string: 'https://koipyln0zp.stockholm/O//'
+1062 safe_url_string: 'https://koipyln0zp.stockholm/O//'
+1063 safe_url_string: 'http://u.nfl//#F%C6%5A%85%E9%0CAb%EA%15%AF%B4%B9'
+1064 safe_url_string: 'http://u.nfl//#F%C6%5A%85%E9'
+1065 safe_url_string: 'http://a.a.nfl//#F%C6%5A%85%E9'
+1066 safe_url_string: 'http://a.a.nfl/A'
+1067 safe_url_string: "http://f-xbgc-lena.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1068 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1069 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22/%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1070 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22/%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1071 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1072 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1073 safe_url_string: "http://if.if.charity:1/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1074 safe_url_string: 'https://ge.v.h.x.o.ally/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm%5D%3DRBoJo%25%3Fs/%20%40*%5BM.%26w/LPBT%0AC/%5D%3F/nil/E%7D#%5D%DEm%A2%30%23%92%07'
+1075 safe_url_string: 'https://ge.v.h.x.o.ally:1/'
+1076 safe_url_string: 'https://ge.v.h.x.x.ally:1/'
+1077 safe_url_string: 'https://a.h.x.x.ally:1/'
+1078 safe_url_string: 'https://a.x.x.x.ally:1/'
+1079 safe_url_string: 'https://x.x.x.x.ally:1/'
+1080 safe_url_string: 'https://w.jxjc.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1081 safe_url_string: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1082 safe_url_string: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1083 safe_url_string: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1084 safe_url_string: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1085 safe_url_string: 'https://w.j.cwb.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1086 safe_url_string: 'https://w.j.w.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1087 safe_url_string: 'https://b.reit:55232/R%0C7%5EOVGPGwu//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x'
+1088 safe_url_string: 'https://b.reit:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x'
+1089 safe_url_string: 'https://b.reit:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~/'
+1090 safe_url_string: 'https://b.reit:55232/%26///%26/%7CO568O~/'
+1091 safe_url_string: 'https://b.reit:55232/%26///%26/%7CO568O~/'
+1092 safe_url_string: 'http://xsb.vc/M/mA%25l#%14'
+1093 safe_url_string: 'http://xsb.vc//'
+1094 safe_url_string: 'http://a.vc/'
+1095 safe_url_string: 'https://i.nab/mL%26#%98'
+1096 safe_url_string: 'https://i.nab/'
+1097 safe_url_string: 'https://a.nab/'
+1098 safe_url_string: 'http://p9-hfb.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1099 safe_url_string: 'http://i.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1100 safe_url_string: 'http://i.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/'
+1101 safe_url_string: 'http://i.i.gay:65534/'
+1102 safe_url_string: 'http://i.i.gay/'
+1103 safe_url_string: "https://r.hb8o.gn:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj("
+1104 safe_url_string: 'https://r.hb8o.gn:4852/ws'
+1105 safe_url_string: 'https://hb8o.hb8o.gn:4852/ws'
+1106 safe_url_string: 'https://hb8o.hb8o.gn:4852/'
+1107 safe_url_string: 'https://hb8o.hb8o.gn/'
+1108 safe_url_string: 'https://h88o.hb8o.gn/'
+1109 safe_url_string: 'http://s.ksx.cafe/fQP*ke/kLgB#%00%EFE%4E%3B-%6D'
+1110 safe_url_string: 'http://s.ksx.cafe/fQP*ke/kLgB#%00%EF%45%4E%3B-%6D'
+1111 safe_url_string: 'http://s.k.cafe/fQP*ke/kLgB#%00%EF%45%4E%3B-%6D'
+1112 safe_url_string: 'http://k.k.cafe/fQP*ke/kLgB#%00%EF%45%4E%3B-%6D'
+1113 safe_url_string: 'http://k.k.cafe:1/'
+1114 safe_url_string: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2//Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1115 safe_url_string: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1116 safe_url_string: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1117 safe_url_string: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1118 safe_url_string: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D'
+1119 safe_url_string: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/H'
+1120 safe_url_string: 'http://a.li/'
+1121 safe_url_string: 'http://a.l4fwuw6rd0uzv5my.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//#%60%08%6D%31'
+1122 safe_url_string: 'http://a.l.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//#%60%08%6D%31'
+1123 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//#%60%08%6D%31'
+1124 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/#%60%08%6D%31'
+1125 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/#%60%08%6D%31'
+1126 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/#%60%08%6D%31'
+1127 safe_url_string: 'http://a.com/'
+1128 safe_url_string: 'https://a.com/'
+1129 safe_url_string: 'https://t.pe/_/xrb%23l#%37'
+1130 safe_url_string: 'https://a.ally/'
+1131 safe_url_string: 'http://a.boehringer/'
+1132 safe_url_string: 'http://ahv0.r.x.boehringer///1q0vq%3ChVG(2!%3E/.C2Jb,#%FD'
+1133 safe_url_string: 'http://a.md/'
+1134 safe_url_string: 'http://c.v.md/N/VZ%3D%0B%2F%3E$ZC//z)(U%0Av$L/-t%5Eq%09JK%3D*Cg/%5DY#%70%A2%83%96/'
+1135 safe_url_string: 'http://a.email/'
+1136 safe_url_string: 'http://yo4dqne.email:65535/Q/7%40x7//-i%20%0C2jYaH~%3E/%2FrU%40/r//Hk5/%5Dd//%5B%3Ec%3A/x/%09'
+1137 safe_url_string: 'http://a.charity/'
+1138 safe_url_string: 'http://h.charity/u/%0C/Y%3Ae*'
+1139 safe_url_string: 'http://h.charity/u/%0C/'
+1140 safe_url_string: 'https://jvzos3.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p#%FA%45%30%CB%26%E9%61%60%9A'
+1141 safe_url_string: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p#%FA%45%30%CB%26%E9%61%60%9A'
+1142 safe_url_string: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p#%FA%45%30%CB%26%E9%61%60%9A'
+1143 safe_url_string: 'https://s.v.j.j.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p#%FA%45%30%CB%26%E9%61%60%9A'
+1144 safe_url_string: 'https://s.v.j.j.g0yllm.s.ht6sbgxm.s0yllp.mil:323/T//p#%FA%45%30%CB%26%E9%61%60%9A'
+1145 safe_url_string: 'https://t.h0.s0yllp.mil/'
+1146 safe_url_string: 'https://swg0i0.r.c.cv:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1147 safe_url_string: 'https://r.r.c.cv:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1148 safe_url_string: 'https://r.r.c.cv:7421/////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1149 safe_url_string: 'https://r.r.c.cv:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1150 safe_url_string: 'https://r.c.c.cv:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1151 safe_url_string: 'https://a.r.c.cv/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2#%58'
+1152 safe_url_string: 'https://koipyln0zp.stockholm/ktxd//!'
+1153 safe_url_string: 'https://koipyln0zp.stockholm/O/I/p/Y/L/n/0/Z'
+1154 safe_url_string: 'https://koipyln0zp.stockholm/O/I/p/K'
+1155 safe_url_string: 'https://koipyln0zp.stockholm/O/I/'
+1156 safe_url_string: 'https://koipyln0zp.stockholm/O//'
+1157 safe_url_string: 'http://u.nfl//#F%C6%5A%85%E9%0CAb%EA%15%AF%B4%B9'
+1158 safe_url_string: 'http://u.nfl//#F%C6%5A%85%E9'
+1159 safe_url_string: 'http://a.a.nfl//#F%C6%5A%85%E9'
+1160 safe_url_string: 'http://a.a.nfl/A'
+1161 safe_url_string: "http://f-xbgc-lena.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1162 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1163 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22/%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1164 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1165 safe_url_string: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1166 safe_url_string: "http://if.if.charity:1/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1167 safe_url_string: 'https://ge.v.h.x.o.ally/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm%5D%3DRBoJo%25%3Fs/%20%40*%5BM.%26w/LPBT%0AC/%5D%3F/nil/E%7D#%5D%DEm%A2%30%23%92%07'
+1168 safe_url_string: 'https://ge.v.h.x.o.ally:1/'
+1169 safe_url_string: 'https://ge.v.h.x.x.ally:1/'
+1170 safe_url_string: 'https://a.h.x.x.ally:1/'
+1171 safe_url_string: 'https://a.x.x.x.ally:1/'
+1172 safe_url_string: 'https://x.x.x.x.ally:1/'
+1173 safe_url_string: 'https://w.jxjc.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1174 safe_url_string: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1175 safe_url_string: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1176 safe_url_string: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1177 safe_url_string: 'https://w.j.cwb.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1178 safe_url_string: 'https://w.j.w.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1179 safe_url_string: 'https://b.reit:55232/R%0C7%5EOVGPGwu//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x'
+1180 safe_url_string: 'https://b.reit:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x'
+1181 safe_url_string: 'https://b.reit:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~/'
+1182 safe_url_string: 'https://b.reit:55232/%26///%26/%7CO568O~/'
+1183 safe_url_string: 'http://xsb.vc/M/mA%25l#%14'
+1184 safe_url_string: 'http://xsb.vc//'
+1185 safe_url_string: 'http://a.vc/'
+1186 safe_url_string: 'https://i.nab/mL%26#%98'
+1187 safe_url_string: 'https://i.nab/'
+1188 safe_url_string: 'https://a.nab/'
+1189 safe_url_string: 'http://p9-hfb.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1190 safe_url_string: 'http://i.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1191 safe_url_string: 'http://i.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/'
+1192 safe_url_string: 'http://i.i.gay:65534/'
+1193 safe_url_string: 'http://i.i.gay/'
+1194 safe_url_string: "https://r.hb8o.gn:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj("
+1195 safe_url_string: 'https://r.hb8o.gn:4852/ws'
+1196 safe_url_string: 'https://hb8o.hb8o.gn:4852/ws'
+1197 safe_url_string: 'https://hb8o.hb8o.gn:4852/'
+1198 safe_url_string: 'https://hb8o.hb8o.gn/'
+1199 safe_url_string: 'https://h88o.hb8o.gn/'
+1200 safe_url_string: 'http://s.ksx.cafe/fQP*ke/kLgB#%00%EFE%4E%3B-%6D'
+1201 safe_url_string: 'http://s.ksx.cafe/fQP*ke/kLgB#%00%EF%45%4E%3B-%6D'
+1202 safe_url_string: 'http://s.k.cafe/fQP*ke/kLgB#%00%EF%45%4E%3B-%6D'
+1203 safe_url_string: 'http://k.k.cafe/fQP*ke/kLgB#%00%EF%45%4E%3B-%6D'
+1204 safe_url_string: 'http://k.k.cafe:1/'
+1205 safe_url_string: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2//Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1206 safe_url_string: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1207 safe_url_string: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1208 safe_url_string: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D'
+1209 safe_url_string: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/H'
+1210 safe_url_string: 'http://a.li/'
+1211 safe_url_string: 'http://a.l4fwuw6rd0uzv5my.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//#%60%08%6D%31'
+1212 safe_url_string: 'http://a.l.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//#%60%08%6D%31'
+1213 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//#%60%08%6D%31'
+1214 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/#%60%08%6D%31'
+1215 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/#%60%08%6D%31'
+1216 safe_url_string: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/#%60%08%6D%31'
+1217 safe_download_url: 'http://www.example.org/'
+1218 safe_download_url: 'http://www.example.org/'
+1219 safe_download_url: 'http://www.example.org/image'
+1220 safe_download_url: 'http://www.example.org/dir/'
+1221 safe_download_url: 'http://www.example.org/dir/'
+1222 safe_download_url: 'http://www.example.org/dir/?a=b'
+1223 safe_download_url: 'http://www.example.org/dir?a=b/'
+1224 safe_download_url: 'http://www.example.org/?%A3'
+1225 safe_download_url: 'http://www.example.org/?%C2%A3'
+1226 safe_download_url: 'http://www.example.org/%A3?%C2%A3'
+1227 safe_download_url: 'http://www.example.org/secret'
+1228 safe_download_url: 'http://www.example.org/image'
+1229 safe_download_url: 'http://www.example.org/a/b'
+1230 safe_download_url: 'http://www.example.org/a%2eb/%2ec/'
+1231 safe_download_url: 'http://a.com/'
+1232 safe_download_url: 'https://a.com/'
+1233 safe_download_url: 'https://t.pe/_/xrb%23l'
+1234 safe_download_url: 'https://a.ally/'
+1235 safe_download_url: 'http://a.boehringer/'
+1236 safe_download_url: 'http://ahv0.r.x.boehringer/1q0vq%3ChVG(2!%3E/.C2Jb,'
+1237 safe_download_url: 'http://a.md/'
+1238 safe_download_url: 'http://c.v.md/N/VZ%3D%0B%2F%3E$ZC/z)(U%0Av$L/-t%5Eq%09JK%3D*Cg/%5DY'
+1239 safe_download_url: 'http://a.email/'
+1240 safe_download_url: 'http://yo4dqne.email:65535/Q/7%40x7/-i%20%0C2jYaH~%3E/%2FrU%40/r/Hk5/%5Dd/%5B%3Ec%3A/x/%09'
+1241 safe_download_url: 'http://a.charity/'
+1242 safe_download_url: 'http://h.charity/u/%0C/Y%3Ae*'
+1243 safe_download_url: 'http://h.charity/u/%0C/'
+1244 safe_download_url: 'http://a.charity/'
+1245 safe_download_url: 'http://a.charity/'
+1246 safe_download_url: 'https://jvzos3.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/p'
+1247 safe_download_url: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/p'
+1248 safe_download_url: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T/p'
+1249 safe_download_url: 'https://s.v.j.j.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T/p'
+1250 safe_download_url: 'https://s.v.j.j.g0yllm.s.ht6sbgxm.s0yllp.mil:323/T/p'
+1251 safe_download_url: 'https://t.h0.s0yllp.mil/'
+1252 safe_download_url: 'https://swg0i0.r.c.cv:7421/oyNWM%0BE1Yl%40/)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1253 safe_download_url: 'https://r.r.c.cv:7421/oyNWM%0BE1Yl%40/)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1254 safe_download_url: 'https://r.r.c.cv:7421/)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1255 safe_download_url: 'https://r.r.c.cv:7421/Qy/)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1256 safe_download_url: 'https://r.r.c.cv:7421/Qy/)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1257 safe_download_url: 'https://r.c.c.cv:7421/Qy/)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1258 safe_download_url: 'https://a.r.c.cv/Qy/)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1259 safe_download_url: 'https://koipyln0zp.stockholm/ktxd/!'
+1260 safe_download_url: 'https://koipyln0zp.stockholm/O/I/p/Y/L/n/0/Z'
+1261 safe_download_url: 'https://koipyln0zp.stockholm/O/I/p/K'
+1262 safe_download_url: 'https://koipyln0zp.stockholm/O/I/'
+1263 safe_download_url: 'https://koipyln0zp.stockholm/O/'
+1264 safe_download_url: 'https://koipyln0zp.stockholm/O/'
+1265 safe_download_url: 'https://koipyln0zp.stockholm/O/'
+1266 safe_download_url: 'http://u.nfl//'
+1267 safe_download_url: 'http://u.nfl//'
+1268 safe_download_url: 'http://a.a.nfl//'
+1269 safe_download_url: 'http://a.a.nfl/A'
+1270 safe_download_url: "http://f-xbgc-lena.if.charity:201/6%3EBq3c/%5C'%26./L/%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1271 safe_download_url: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L/%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1272 safe_download_url: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L/%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1273 safe_download_url: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L/%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1274 safe_download_url: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L/%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1275 safe_download_url: "http://if.if.charity:201/6%3EBq3c/%5C'%26./L/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1276 safe_download_url: "http://if.if.charity:1/6%3EBq3c/%5C'%26./L/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1277 safe_download_url: 'https://ge.v.h.x.o.ally/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm%5D%3DRBoJo%25%3Fs/%20%40*%5BM.%26w/LPBT%0AC/%5D%3F/nil/E%7D'
+1278 safe_download_url: 'https://ge.v.h.x.o.ally:1/'
+1279 safe_download_url: 'https://ge.v.h.x.x.ally:1/'
+1280 safe_download_url: 'https://a.h.x.x.ally:1/'
+1281 safe_download_url: 'https://a.x.x.x.ally:1/'
+1282 safe_download_url: 'https://x.x.x.x.ally:1/'
+1283 safe_download_url: 'https://w.jxjc.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1284 safe_download_url: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1285 safe_download_url: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1286 safe_download_url: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1287 safe_download_url: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1288 safe_download_url: 'https://w.j.cwb.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1289 safe_download_url: 'https://w.j.w.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1290 safe_download_url: 'https://b.reit:55232/R%0C7%5EOVGPGwu/~uwIE)_%3D%3B%3Az/%26/%7CO568O~/-Vs2x'
+1291 safe_download_url: 'https://b.reit:55232/%26/~uwIE)_%3D%3B%3Az/%26/%7CO568O~/-Vs2x'
+1292 safe_download_url: 'https://b.reit:55232/%26/~uwIE)_%3D%3B%3Az/%26/%7CO568O~/'
+1293 safe_download_url: 'https://b.reit:55232/%26/%26/%7CO568O~/'
+1294 safe_download_url: 'https://b.reit:55232/%26/%26/%7CO568O~/'
+1295 safe_download_url: 'http://xsb.vc/M/mA%25l'
+1296 safe_download_url: 'http://xsb.vc//'
+1297 safe_download_url: 'http://a.vc/'
+1298 safe_download_url: 'https://i.nab/mL%26'
+1299 safe_download_url: 'https://i.nab/'
+1300 safe_download_url: 'https://a.nab/'
+1301 safe_download_url: 'http://p9-hfb.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1302 safe_download_url: 'http://i.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1303 safe_download_url: 'http://i.i.gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/'
+1304 safe_download_url: 'http://i.i.gay:65534/'
+1305 safe_download_url: 'http://i.i.gay/'
+1306 safe_download_url: "https://r.hb8o.gn:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj("
+1307 safe_download_url: 'https://r.hb8o.gn:4852/ws'
+1308 safe_download_url: 'https://hb8o.hb8o.gn:4852/ws'
+1309 safe_download_url: 'https://hb8o.hb8o.gn:4852/'
+1310 safe_download_url: 'https://hb8o.hb8o.gn/'
+1311 safe_download_url: 'https://h88o.hb8o.gn/'
+1312 safe_download_url: 'http://s.ksx.cafe/fQP*ke/kLgB'
+1313 safe_download_url: 'http://s.ksx.cafe/fQP*ke/kLgB'
+1314 safe_download_url: 'http://s.k.cafe/fQP*ke/kLgB'
+1315 safe_download_url: 'http://k.k.cafe/fQP*ke/kLgB'
+1316 safe_download_url: 'http://k.k.cafe:1/'
+1317 safe_download_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23/V+eE$%22rZ3C%09/MF%5D"
+1318 safe_download_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23/V+eE$%22rZ3C%09/MF%5D"
+1319 safe_download_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23/V+eE$%22rZ3C%09/MF%5D"
+1320 safe_download_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23/V+eE$%22rZ3C%09/MF%5D"
+1321 safe_download_url: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D'
+1322 safe_download_url: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/H'
+1323 safe_download_url: 'http://a.li/'
+1324 safe_download_url: 'http://a.l4fwuw6rd0uzv5my.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/'
+1325 safe_download_url: 'http://a.l.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/'
+1326 safe_download_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/'
+1327 safe_download_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/'
+1328 safe_download_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/'
+1329 safe_download_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/'
+1330 is_url: True
+1331 is_url: True
+1332 is_url: True
+1333 is_url: False
+1334 is_url: False
+1335 is_url: False
+1336 is_url: True
+1337 is_url: True
+1338 is_url: False
+1339 is_url: True
+1340 is_url: True
+1341 is_url: False
+1342 is_url: True
+1343 is_url: True
+1344 is_url: True
+1345 is_url: False
+1346 is_url: True
+1347 is_url: True
+1348 is_url: True
+1349 is_url: False
+1350 is_url: False
+1351 is_url: True
+1352 is_url: True
+1353 is_url: True
+1354 is_url: True
+1355 is_url: False
+1356 is_url: False
+1357 is_url: False
+1358 is_url: False
+1359 is_url: True
+1360 is_url: True
+1361 is_url: False
+1362 is_url: True
+1363 is_url: True
+1364 is_url: True
+1365 is_url: False
+1366 is_url: True
+1367 is_url: True
+1368 is_url: True
+1369 is_url: True
+1370 is_url: True
+1371 is_url: True
+1372 is_url: True
+1373 is_url: False
+1374 is_url: True
+1375 is_url: True
+1376 is_url: True
+1377 is_url: True
+1378 is_url: True
+1379 is_url: True
+1380 is_url: True
+1381 is_url: True
+1382 is_url: True
+1383 is_url: True
+1384 is_url: True
+1385 is_url: True
+1386 is_url: True
+1387 is_url: True
+1388 is_url: False
+1389 is_url: True
+1390 is_url: True
+1391 is_url: True
+1392 is_url: True
+1393 is_url: True
+1394 is_url: True
+1395 is_url: True
+1396 is_url: True
+1397 is_url: True
+1398 is_url: True
+1399 is_url: True
+1400 is_url: True
+1401 is_url: True
+1402 is_url: True
+1403 is_url: True
+1404 is_url: True
+1405 is_url: True
+1406 is_url: True
+1407 is_url: False
+1408 is_url: False
+1409 is_url: False
+1410 is_url: True
+1411 is_url: True
+1412 is_url: True
+1413 is_url: True
+1414 is_url: True
+1415 is_url: True
+1416 is_url: True
+1417 is_url: False
+1418 is_url: True
+1419 is_url: True
+1420 is_url: True
+1421 is_url: True
+1422 is_url: True
+1423 is_url: True
+1424 is_url: True
+1425 is_url: True
+1426 is_url: True
+1427 is_url: True
+1428 is_url: True
+1429 is_url: True
+1430 is_url: True
+1431 is_url: True
+1432 is_url: True
+1433 is_url: False
+1434 is_url: False
+1435 add_http_if_no_scheme: 'http://www.example.com'
+1436 add_http_if_no_scheme: 'http://www.example.com'
+1437 add_http_if_no_scheme: 'https://www.example.com'
+1438 add_http_if_no_scheme: 'HTTPS://www.example.com'
+1439 add_http_if_no_scheme: 'http://'
+1440 add_http_if_no_scheme: 'http://A.COM/'
+1441 add_http_if_no_scheme: 'http://N.Bid/#%9E%A9h%85'
+1442 add_http_if_no_scheme: 'http://0ªPz\U000e5ec4ú\x1bh'
+1443 add_http_if_no_scheme: 'https://A.COM/'
+1444 add_http_if_no_scheme: 'https://q.sex/%60u%5DK/!m'
+1445 add_http_if_no_scheme: 'http://\U00071703\U000dabdd\U0004b7f7'
+1446 add_http_if_no_scheme: 'https://A.CR/'
+1447 add_http_if_no_scheme: 'https://H.cr/'
+1448 add_http_if_no_scheme: 'http://A.ET/'
+1449 add_http_if_no_scheme: 'http://\U0010eae1'
+1450 add_http_if_no_scheme: 'http://u.hERmES//hVG(2!%3E/.C2Jb,#%FD'
+1451 add_http_if_no_scheme: 'http://u.hERmES//hVG(2!%3E/.C2Jb,'
+1452 add_http_if_no_scheme: 'http://u.hERmES/.C2Jb,/hVG(2!%3E/.C2Jb,'
+1453 add_http_if_no_scheme: 'http://¯\U000ff670\x0b'
+1454 add_http_if_no_scheme: 'http://𫺜Å\x94o\x85\U00062d69\ueb41'
+1455 add_http_if_no_scheme: 'http://M.Bn:1713/#%70%A2%83%96/'
+1456 add_http_if_no_scheme: 'http://M.Bn:1713//'
+1457 add_http_if_no_scheme: 'http://M.Bn:1//'
+1458 add_http_if_no_scheme: 'http://M.Bn/'
+1459 add_http_if_no_scheme: 'http://𪖠\U000b52e8Å\U0004e101\x17\U000b20e7û\U000efc35\x1b'
+1460 add_http_if_no_scheme: 'http://\x1c`¾V'
+1461 add_http_if_no_scheme: 'http://n×\x10/'
+1462 add_http_if_no_scheme: 'http://\U000e5484þ'
+1463 add_http_if_no_scheme: "http://V.W.Xgk19.bb:2511//%7B+5/%40aBV%3Ak%5E%26x//%3Est'%25O/k%0BUt%0DVkhu%3B%7C/2pPe%22P%7BI4Q%2FO//J%26//At'AV%0CKs%097B6/1"
+1464 add_http_if_no_scheme: "http://V.W.V.bb:2511//%7B+5/%40aBV%3Ak%5E%26x//%3Est'%25O/k%0BUt%0DVkhu%3B%7C/2pPe%22P%7BI4Q%2FO//J%26//At'AV%0CKs%097B6/1"
+1465 add_http_if_no_scheme: 'http://dI'
+1466 add_http_if_no_scheme: 'http://hRi200PCtY15Ck.x.kddI:36009/6/%3A%3CCK9b(GLS/TI~hlMi%3C%25T#%49%B7%90%9D%92%AB%CA%15%6D%C4%23%FA%07%F6%14%950%73%B6%B4%30%4F%6E%A8%34%EC%C7%0F%00%04'
+1467 add_http_if_no_scheme: 'http://x.x.kddI:36009/6/%3A%3CCK9b(GLS/TI~hlMi%3C%25T#%49%B7%90%9D%92%AB%CA%15%6D%C4%23%FA%07%F6%14%950%73%B6%B4%30%4F%6E%A8%34%EC%C7%0F%00%04'
+1468 add_http_if_no_scheme: 'http://x.x.kddI:36009/6/%3A%3CCK9b(GLS/4/'
+1469 add_http_if_no_scheme: 'http://\x94'
+1470 add_http_if_no_scheme: 'http://Pvs.nP:529//%401/~ia/8D%5B%60%7BW$vQa%2F%230Ct//%7C2Dktxd//!'
+1471 add_http_if_no_scheme: 'http://Pvs.nP:529//%401/'
+1472 add_http_if_no_scheme: 'http://Pvs.nP//%401/'
+1473 add_http_if_no_scheme: 'http://Pvs.nP/#v'
+1474 add_http_if_no_scheme: 'http://Ps.nP/#v'
+1475 add_http_if_no_scheme: 'http://Ps.nP:1/'
+1476 add_http_if_no_scheme: 'http://ss.nP:1/'
+1477 add_http_if_no_scheme: 'http://\U000b272d\U000394c2¡'
+1478 add_http_if_no_scheme: 'https://nQGM0uZUsw6M.hMOsw12JbMQ.geoLn.Ij2hM5Ciwl2.gLObo/'
+1479 add_http_if_no_scheme: 'https://b.gLObo:1/'
+1480 add_http_if_no_scheme: 'https://b.gLObo:1/b'
+1481 add_http_if_no_scheme: 'https://y.c.hu/9c%3C%23*(%0BeP'
+1482 add_http_if_no_scheme: 'https://y.y.hu/9c%3C%23*(%0BeP'
+1483 add_http_if_no_scheme: 'https://A.y.hu/'
+1484 add_http_if_no_scheme: 'https://y.y.hu/'
+1485 add_http_if_no_scheme: 'http://o.fLvt.team:604/#(0%88%42'
+1486 add_http_if_no_scheme: 'http://o.f.team:604/#(0%88%42'
+1487 add_http_if_no_scheme: 'http://o.f.team:604/#((%88%42'
+1488 add_http_if_no_scheme: 'http://o.f.team:604/('
+1489 add_http_if_no_scheme: 'http://o.f.team/'
+1490 add_http_if_no_scheme: 'http://o.o.team/'
+1491 add_http_if_no_scheme: 'http://o.team/'
+1492 add_http_if_no_scheme: 'http://𰱄\x14\U000117db'
+1493 add_http_if_no_scheme: 'https://v.g.o.Pin:750/%5B/--/%3DUCO%2F%3E)%0D#%9F%2B%DC%30%BA'
+1494 add_http_if_no_scheme: 'https://o.g.o.Pin:750/%5B/--/%3DUCO%2F%3E)%0D#%9F%2B%DC%30%BA'
+1495 add_http_if_no_scheme: 'https://o.g.o.Pin:750/%5B/'
+1496 add_http_if_no_scheme: 'https://o.g.o.pin:750/%5B/'
+1497 add_http_if_no_scheme: 'https://o.g.o.pin:750/o'
+1498 add_http_if_no_scheme: 'https://o.o.o.pin:750/o'
+1499 add_http_if_no_scheme: 'https://A.o.pin/'
+1500 add_http_if_no_scheme: 'http://O.V.Gi/#%72%74%0E%99%4E%08%D2c%DEm%A2%30%23%92%07'
+1501 add_http_if_no_scheme: 'http://O.V.Gi:1/'
+1502 add_http_if_no_scheme: 'http://O.O.Gi:1/'
+1503 add_http_if_no_scheme: 'http://O.O.GI:1/'
+1504 add_http_if_no_scheme: 'http://h.Vp.DOt/3%23k)Ul%60%2F1%09l//8%3Df4Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1505 add_http_if_no_scheme: 'http://h.Vp.DOT/3%23k)Ul%60%2F1%09l//8%3Df4Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1506 add_http_if_no_scheme: 'http://hp.Vp.DOT/3%23k)Ul%60%2F1%09l//8%3Df4Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1507 add_http_if_no_scheme: 'http://hp.Vp.DOT/3%23k)Ul%60%2F1%09l//8%3Df4Lb/Mh%22R./X/%3AYuYi%3ES/X'
+1508 add_http_if_no_scheme: 'http://hp.hp.DOT/3%23k)Ul%60%2F1%09l//8%3Df4Lb/Mh%22R./X/%3AYuYi%3ES/X'
+1509 add_http_if_no_scheme: 'http://hp.hp.DOT/3%23k)Ul%60%2F1%09l//8%3Df4Lb/Mh%22R./%3AYuYi%3ES/%3AYuYi%3ES/X'
+1510 add_http_if_no_scheme: 'http://hh.hp.DOT/3%23k)Ul%60%2F1%09l//8%3Df4Lb/Mh%22R./%3AYuYi%3ES/%3AYuYi%3ES/X'
+1511 add_http_if_no_scheme: 'http://\U0007ec9aÜM¶\U0009a979\U00080c45\U000d6418'
+1512 add_http_if_no_scheme: 'http://\x04\x99:f\U0010364bü5'
+1513 add_http_if_no_scheme: 'http://\x8d'
+1514 add_http_if_no_scheme: 'http://I.BP.X.wc.z.TEL/t/NKEg_%5B/VnxP8gP'
+1515 add_http_if_no_scheme: 'http://z.BP.X.wc.z.TEL/t/NKEg_%5B/VnxP8gP'
+1516 add_http_if_no_scheme: 'http://BP.BP.X.wc.z.TEL/t/NKEg_%5B/VnxP8gP'
+1517 add_http_if_no_scheme: 'http://BP.BP.X.wP.z.TEL/t/NKEg_%5B/VnxP8gP'
+1518 add_http_if_no_scheme: 'http://BP.BP.X.wP.BP.TEL/t/NKEg_%5B/VnxP8gP'
+1519 add_http_if_no_scheme: 'http://BP.PP.X.wP.BP.TEL/t/NKEg_%5B/VnxP8gP'
+1520 add_http_if_no_scheme: 'http://BP.PP.X.w.BP.TEL/t/NKEg_%5B/VnxP8gP'
+1521 add_http_if_no_scheme: "http://ê\U00037b11Ï\t\x1a!\U0005fceb'\x8dV\x14"
+1522 add_http_if_no_scheme: 'http://O.GY:25056/'
+1523 add_http_if_no_scheme: 'http://O.GY:1/'
+1524 add_http_if_no_scheme: 'http://O.GY/'
+1525 add_http_if_no_scheme: 'http://Z9W9-Hfb.e.dj:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1526 add_http_if_no_scheme: 'http://e.e.dj:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1527 add_http_if_no_scheme: 'http://e.e.dj:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/'
+1528 add_http_if_no_scheme: 'http://e.e.dj:65534/'
+1529 add_http_if_no_scheme: 'http://e.e.dj/'
+1530 add_http_if_no_scheme: "http://q.It.f.HOMesENse:7377/d%25%0A%5BL%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj("
+1531 add_http_if_no_scheme: "http://q.It.f.HOMesENsE:7377/d%25%0A%5BL%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj("
+1532 add_http_if_no_scheme: 'http://q.It.f.HOMesENsE:7377/d%25%0A%5BL%20%22nSH%0A_TaFf/%20Q/q'
+1533 add_http_if_no_scheme: 'http://I0.f.HOMesENsE/'
+1534 add_http_if_no_scheme: 'http://I0.A.HOMesENsE/'
+1535 add_http_if_no_scheme: 'http://I.A.HOMesENsE/'
+1536 add_http_if_no_scheme: 'http://A.A.HOMesENsE/'
+1537 add_http_if_no_scheme: 'http://\U000a5277¸'
+1538 add_http_if_no_scheme: 'http://Á𨂠`\x0bÛ\nØ'
+1539 url_query_parameter: '200'
+1540 url_query_parameter: 'mydefault'
+1541 url_query_parameter: None
+1542 url_query_parameter: ''
+1543 url_query_parameter: '200'
+1544 url_query_parameter: '200'
+1545 url_query_parameter: '200'
+1546 url_query_parameter: '200'
+1547 url_query_parameter: '200'
+1548 url_query_parameter: '200'
+1549 url_query_parameter: ''
+1550 url_query_parameter: 'café'
+1551 url_query_parameter: 'café'
+1552 url_query_parameter: '200'
+1553 url_query_parameter: 'b�'
+1554 url_query_parameter: 'b�'
+1555 url_query_parameter: 'http://www.argos.co.uk/webapp/wcs/stores/servlet/ArgosCreateReferral?storeId=10001&langId=-1&referrer=COJUN&params=adref%3DGarden and DIY->Garden furniture->Garden table and chair sets&referredURL=http://www.argos.co.uk/webapp/wcs/stores/servlet/ProductDisplay%3FstoreId%3D10001%26catalogId%3D1500001501%26productId%3D1500357199%26langId%3D-1'
+1556 url_query_parameter: 'http://www.argos.co.uk/webapp/wcs/stores/servlet/ProductDisplay?storeId=10001&catalogId=1500001501&productId=1500357199&langId=-1'
+1557 url_query_parameter: 'http://www.argos.co.uk/webapp/wcs/stores/servlet/ArgosCreateReferral?storeId=10001&langId=-1&referrer=COJUN&params=adref%3DGarden and DIY->Garden furniture->Children&#39;s garden furniture&referredURL=http://www.argos.co.uk/webapp/wcs/stores/servlet/ProductDisplay%3FstoreId%3D10001%26catalogId%3D1500001501%26productId%3D1500357023%26langId%3D-1'
+1558 url_query_parameter: None
+1559 url_query_parameter: None
+1560 url_query_parameter: None
+1561 url_query_parameter: None
+1562 url_query_parameter: None
+1563 url_query_parameter: None
+1564 url_query_parameter: None
+1565 url_query_parameter: None
+1566 url_query_parameter: None
+1567 url_query_parameter: None
+1568 url_query_parameter: None
+1569 url_query_parameter: None
+1570 url_query_parameter: None
+1571 url_query_parameter: None
+1572 url_query_parameter: None
+1573 url_query_parameter: None
+1574 url_query_parameter: None
+1575 url_query_parameter: None
+1576 url_query_parameter: None
+1577 url_query_parameter: None
+1578 url_query_parameter: None
+1579 url_query_parameter: None
+1580 url_query_parameter: None
+1581 url_query_parameter: None
+1582 url_query_parameter: None
+1583 url_query_parameter: None
+1584 url_query_parameter: None
+1585 url_query_parameter: None
+1586 url_query_parameter: None
+1587 url_query_parameter: None
+1588 url_query_parameter: None
+1589 url_query_parameter: None
+1590 url_query_parameter: None
+1591 url_query_parameter: None
+1592 url_query_parameter: None
+1593 url_query_parameter: None
+1594 url_query_parameter: None
+1595 url_query_parameter: None
+1596 url_query_parameter: None
+1597 url_query_parameter: None
+1598 url_query_parameter: None
+1599 url_query_parameter: None
+1600 url_query_parameter: None
+1601 url_query_parameter: None
+1602 url_query_parameter: None
+1603 url_query_parameter: None
+1604 url_query_parameter: None
+1605 url_query_parameter: None
+1606 url_query_parameter: None
+1607 url_query_parameter: None
+1608 url_query_parameter: None
+1609 url_query_parameter: None
+1610 url_query_parameter: None
+1611 url_query_parameter: None
+1612 url_query_parameter: None
+1613 url_query_parameter: None
+1614 url_query_parameter: None
+1615 url_query_parameter: None
+1616 url_query_parameter: None
+1617 url_query_parameter: None
+1618 url_query_parameter: None
+1619 url_query_parameter: None
+1620 url_query_parameter: None
+1621 url_query_parameter: None
+1622 url_query_parameter: None
+1623 url_query_parameter: None
+1624 url_query_parameter: None
+1625 url_query_parameter: None
+1626 url_query_parameter: None
+1627 url_query_parameter: None
+1628 url_query_parameter: None
+1629 url_query_parameter: None
+1630 url_query_parameter: None
+1631 url_query_parameter: None
+1632 url_query_parameter: None
+1633 url_query_parameter: None
+1634 url_query_parameter: None
+1635 url_query_parameter: None
+1636 url_query_parameter: None
+1637 url_query_parameter: None
+1638 url_query_parameter: None
+1639 url_query_parameter: None
+1640 url_query_parameter: None
+1641 url_query_parameter: None
+1642 url_query_parameter: None
+1643 url_query_parameter: None
+1644 url_query_parameter: None
+1645 url_query_parameter: None
+1646 url_query_parameter: None
+1647 url_query_parameter: None
+1648 url_query_parameter: None
+1649 url_query_parameter: None
+1650 url_query_parameter: None
+1651 url_query_parameter: None
+1652 url_query_parameter: None
+1653 url_query_parameter: None
+1654 url_query_parameter: None
+1655 url_query_parameter: None
+1656 url_query_parameter: None
+1657 url_query_parameter: None
+1658 add_or_replace_parameter: 'http://domain/test?arg=v'
+1659 add_or_replace_parameter: 'http://domain/test?arg1=v1&arg2=v2&arg3=v3&arg4=v4'
+1660 add_or_replace_parameter: 'http://domain/test?arg1=v1&arg2=v2&arg3=nv3'
+1661 add_or_replace_parameter: 'http://domain/moreInfo.asp?prodID=20'
+1662 add_or_replace_parameter: 'http://rmc-offers.co.uk/productlist.asp?BCat=newvalue&CatID=60'
+1663 add_or_replace_parameter: 'http://rmc-offers.co.uk/productlist.asp?BCat=newvalue&CatID=60'
+1664 add_or_replace_parameter: 'http://rmc-offers.co.uk/productlist.asp?BCat=newvalue'
+1665 add_or_replace_parameter: 'http://example.com/?version=2&pageurl=http%3A%2F%2Fwww.example.com%2Ftest%2F%23fragment%3Dy&param2=value2'
+1666 add_or_replace_parameter: 'http://example.com/?version=1&pageurl=test&param2=value2'
+1667 add_or_replace_parameter: 'http://domain/test?arg1=v1&arg2=v2&arg1=v3&arg4=v4'
+1668 add_or_replace_parameter: 'http://domain/test?arg1=v3&arg2=v2'
+1669 add_or_replace_parameter: 'http://example.com/?a=1&b=2'
+1670 add_or_replace_parameter: 'http://domain/test?arg1=v3'
+1671 add_or_replace_parameter: 'http://domain/test?arg1=v1;arg2=v2;arg3=v3;arg4=v4'
+1672 add_or_replace_parameter: 'http://domain/test?arg1=v1;arg2=v2;arg3=nv3'
+1673 add_or_replace_parameter: 'http://A.COM/?foo=bar'
+1674 add_or_replace_parameter: 'https://A.COM/?foo=bar'
+1675 add_or_replace_parameter: 'https://T.Pe/_/xrb%23l?foo=bar#%37'
+1676 add_or_replace_parameter: 'https://A.ALLY/?foo=bar'
+1677 add_or_replace_parameter: 'http://A.BOEHRINGER/?foo=bar'
+1678 add_or_replace_parameter: 'http://ahV0.r.x.boeHRINgeR///1q0vq%3ChVG(2!%3E/.C2Jb,?foo=bar#%FD'
+1679 add_or_replace_parameter: 'http://A.MD/?foo=bar'
+1680 add_or_replace_parameter: 'http://C.V.Md/N/VZ%3D%0B%2F%3E$ZC//z)(U%0Av$L/-t%5Eq%09JK%3D*Cg/%5DY?foo=bar#%70%A2%83%96/'
+1681 add_or_replace_parameter: 'http://A.EMAIL/?foo=bar'
+1682 add_or_replace_parameter: 'http://Yo4DQnE.eMAIl:65535/Q/7%40x7//-i%20%0C2jYaH~%3E/%2FrU%40/r//Hk5/%5Dd//%5B%3Ec%3A/x/%09?foo=bar'
+1683 add_or_replace_parameter: 'http://A.CHARITY/?foo=bar'
+1684 add_or_replace_parameter: 'http://H.cHArIty/u/%0C/Y%3Ae*?foo=bar'
+1685 add_or_replace_parameter: 'http://H.cHArIty/u/%0C/?foo=bar'
+1686 add_or_replace_parameter: 'http://A.cHArIty/?foo=bar'
+1687 add_or_replace_parameter: 'http://A.chArIty/?foo=bar'
+1688 add_or_replace_parameter: 'https://JvzOS3.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323///p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1689 add_or_replace_parameter: 'https://S.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323///p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1690 add_or_replace_parameter: 'https://S.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323/T//p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1691 add_or_replace_parameter: 'https://S.V.J.J.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323/T//p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1692 add_or_replace_parameter: 'https://S.V.J.J.G0YllM.S.Ht6sbGXm.S0YllP.mIl:323/T//p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1693 add_or_replace_parameter: 'https://t.H0.S0YllP.mIl/?foo=bar'
+1694 add_or_replace_parameter: 'https://SWG0I0.R.C.cV:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1695 add_or_replace_parameter: 'https://R.R.C.cV:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1696 add_or_replace_parameter: 'https://R.R.C.cV:7421/////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1697 add_or_replace_parameter: 'https://R.R.C.cV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1698 add_or_replace_parameter: 'https://R.R.C.CV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1699 add_or_replace_parameter: 'https://R.C.C.CV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1700 add_or_replace_parameter: 'https://A.R.C.CV/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1701 add_or_replace_parameter: 'https://KOIpYLn0Zp.STOcKhOlm/ktxd//!?foo=bar'
+1702 add_or_replace_parameter: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/p/Y/L/n/0/Z?foo=bar'
+1703 add_or_replace_parameter: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/p/K?foo=bar'
+1704 add_or_replace_parameter: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/?foo=bar'
+1705 add_or_replace_parameter: 'https://KOIpYLn0Zp.STOcKhOlm/O//?foo=bar'
+1706 add_or_replace_parameter: 'https://KOIpYLn0Zp.STOcKhOLm/O//?foo=bar'
+1707 add_or_replace_parameter: 'https://KOIpYLn0Zp.StOcKhOLm/O//?foo=bar'
+1708 add_or_replace_parameter: 'http://U.nFL//?foo=bar#F%C6%5A%85%E9%0CAb%EA%15%AF%B4%B9'
+1709 add_or_replace_parameter: 'http://U.nFL//?foo=bar#F%C6%5A%85%E9'
+1710 add_or_replace_parameter: 'http://A.A.nFL//?foo=bar#F%C6%5A%85%E9'
+1711 add_or_replace_parameter: 'http://A.A.nFL/A?foo=bar'
+1712 add_or_replace_parameter: "http://F-xBgc-LENa.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1713 add_or_replace_parameter: "http://if.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1714 add_or_replace_parameter: "http://if.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1715 add_or_replace_parameter: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1716 add_or_replace_parameter: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1717 add_or_replace_parameter: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1718 add_or_replace_parameter: "http://if.if.chaRITy:1/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1719 add_or_replace_parameter: 'https://gE.V.H.x.o.alLy/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm%5D%3DRBoJo%25%3Fs/%20%40*%5BM.%26w/LPBT%0AC/%5D%3F/nil/E%7D?foo=bar#%5D%DEm%A2%30%23%92%07'
+1720 add_or_replace_parameter: 'https://gE.V.H.x.o.alLy:1/?foo=bar'
+1721 add_or_replace_parameter: 'https://gE.V.H.x.x.alLy:1/?foo=bar'
+1722 add_or_replace_parameter: 'https://A.H.x.x.alLy:1/?foo=bar'
+1723 add_or_replace_parameter: 'https://A.x.x.x.alLy:1/?foo=bar'
+1724 add_or_replace_parameter: 'https://x.x.x.x.alLy:1/?foo=bar'
+1725 add_or_replace_parameter: 'https://w.JXjc.cWb.va9.aQ:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1726 add_or_replace_parameter: 'https://w.JWb.cWb.va9.aQ:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1727 add_or_replace_parameter: 'https://w.JWb.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1728 add_or_replace_parameter: 'https://w.J.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1729 add_or_replace_parameter: 'https://w.J.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w?foo=bar'
+1730 add_or_replace_parameter: 'https://w.J.cWb.cWb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w?foo=bar'
+1731 add_or_replace_parameter: 'https://w.J.w.cWb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w?foo=bar'
+1732 add_or_replace_parameter: 'https://B.reiT:55232/R%0C7%5EOVGPGwu//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x?foo=bar'
+1733 add_or_replace_parameter: 'https://B.reiT:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x?foo=bar'
+1734 add_or_replace_parameter: 'https://B.reiT:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~/?foo=bar'
+1735 add_or_replace_parameter: 'https://B.reiT:55232/%26///%26/%7CO568O~/?foo=bar'
+1736 add_or_replace_parameter: 'https://B.reit:55232/%26///%26/%7CO568O~/?foo=bar'
+1737 add_or_replace_parameter: 'http://xsB.VC/M/mA%25l?foo=bar#%14'
+1738 add_or_replace_parameter: 'http://xsB.VC//?foo=bar'
+1739 add_or_replace_parameter: 'http://A.VC/?foo=bar'
+1740 add_or_replace_parameter: 'https://I.nab/mL%26?foo=bar#%98'
+1741 add_or_replace_parameter: 'https://I.nab/?foo=bar'
+1742 add_or_replace_parameter: 'https://A.nab/?foo=bar'
+1743 add_or_replace_parameter: 'http://p9-Hfb.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/?foo=bar'
+1744 add_or_replace_parameter: 'http://i.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/?foo=bar'
+1745 add_or_replace_parameter: 'http://i.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/?foo=bar'
+1746 add_or_replace_parameter: 'http://i.i.Gay:65534/?foo=bar'
+1747 add_or_replace_parameter: 'http://i.i.Gay/?foo=bar'
+1748 add_or_replace_parameter: "https://R.hB8o.GN:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj(?foo=bar"
+1749 add_or_replace_parameter: 'https://R.hB8o.GN:4852/ws?foo=bar'
+1750 add_or_replace_parameter: 'https://hB8o.hB8o.GN:4852/ws?foo=bar'
+1751 add_or_replace_parameter: 'https://hB8o.hB8o.GN:4852/?foo=bar'
+1752 add_or_replace_parameter: 'https://hB8o.hB8o.GN/?foo=bar'
+1753 add_or_replace_parameter: 'https://h88o.hB8o.GN/?foo=bar'
+1754 add_or_replace_parameter: 'http://s.kSx.caFe/fQP*ke/kLgB?foo=bar#%00%EFE%4E%3B-%6D'
+1755 add_or_replace_parameter: 'http://s.kSx.caFe/fQP*ke/kLgB?foo=bar#%00%EF%45%4E%3B-%6D'
+1756 add_or_replace_parameter: 'http://s.k.caFe/fQP*ke/kLgB?foo=bar#%00%EF%45%4E%3B-%6D'
+1757 add_or_replace_parameter: 'http://k.k.caFe/fQP*ke/kLgB?foo=bar#%00%EF%45%4E%3B-%6D'
+1758 add_or_replace_parameter: 'http://k.k.caFe:1/?foo=bar'
+1759 add_or_replace_parameter: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2//Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1760 add_or_replace_parameter: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1761 add_or_replace_parameter: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1762 add_or_replace_parameter: "http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1763 add_or_replace_parameter: 'http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D?foo=bar'
+1764 add_or_replace_parameter: 'http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/H?foo=bar'
+1765 add_or_replace_parameter: 'http://A.LI/?foo=bar'
+1766 add_or_replace_parameter: 'http://A.l4fwUW6rd0uZv5my.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//?foo=bar#%60%08%6D%31'
+1767 add_or_replace_parameter: 'http://A.l.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//?foo=bar#%60%08%6D%31'
+1768 add_or_replace_parameter: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//?foo=bar#%60%08%6D%31'
+1769 add_or_replace_parameter: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/?foo=bar#%60%08%6D%31'
+1770 add_or_replace_parameter: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/?foo=bar#%60%08%6D%31'
+1771 add_or_replace_parameter: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/?foo=bar#%60%08%6D%31'
+1772 add_or_replace_parameters: 'http://domain/test?arg=v'
+1773 add_or_replace_parameters: 'http://domain/test?arg1=v1&arg2=v2&arg3=v3&arg4=v4'
+1774 add_or_replace_parameters: 'http://domain/test?arg1=v1&arg2=v2&arg3=v3new&arg4=v4'
+1775 add_or_replace_parameters: 'http://domain/test?arg1=v1&arg2=v2&arg1=v3&arg4=v4'
+1776 add_or_replace_parameters: 'http://domain/test?arg1=v3&arg2=v2'
+1777 add_or_replace_parameters: 'http://domain/test?arg=value'
+1778 add_or_replace_parameters: 'http://A.COM/?foo=bar'
+1779 add_or_replace_parameters: 'https://A.COM/?foo=bar'
+1780 add_or_replace_parameters: 'https://T.Pe/_/xrb%23l?foo=bar#%37'
+1781 add_or_replace_parameters: 'https://A.ALLY/?foo=bar'
+1782 add_or_replace_parameters: 'http://A.BOEHRINGER/?foo=bar'
+1783 add_or_replace_parameters: 'http://ahV0.r.x.boeHRINgeR///1q0vq%3ChVG(2!%3E/.C2Jb,?foo=bar#%FD'
+1784 add_or_replace_parameters: 'http://A.MD/?foo=bar'
+1785 add_or_replace_parameters: 'http://C.V.Md/N/VZ%3D%0B%2F%3E$ZC//z)(U%0Av$L/-t%5Eq%09JK%3D*Cg/%5DY?foo=bar#%70%A2%83%96/'
+1786 add_or_replace_parameters: 'http://A.EMAIL/?foo=bar'
+1787 add_or_replace_parameters: 'http://Yo4DQnE.eMAIl:65535/Q/7%40x7//-i%20%0C2jYaH~%3E/%2FrU%40/r//Hk5/%5Dd//%5B%3Ec%3A/x/%09?foo=bar'
+1788 add_or_replace_parameters: 'http://A.CHARITY/?foo=bar'
+1789 add_or_replace_parameters: 'http://H.cHArIty/u/%0C/Y%3Ae*?foo=bar'
+1790 add_or_replace_parameters: 'http://H.cHArIty/u/%0C/?foo=bar'
+1791 add_or_replace_parameters: 'http://A.cHArIty/?foo=bar'
+1792 add_or_replace_parameters: 'http://A.chArIty/?foo=bar'
+1793 add_or_replace_parameters: 'https://JvzOS3.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323///p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1794 add_or_replace_parameters: 'https://S.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323///p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1795 add_or_replace_parameters: 'https://S.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323/T//p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1796 add_or_replace_parameters: 'https://S.V.J.J.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323/T//p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1797 add_or_replace_parameters: 'https://S.V.J.J.G0YllM.S.Ht6sbGXm.S0YllP.mIl:323/T//p?foo=bar#%FA%45%30%CB%26%E9%61%60%9A'
+1798 add_or_replace_parameters: 'https://t.H0.S0YllP.mIl/?foo=bar'
+1799 add_or_replace_parameters: 'https://SWG0I0.R.C.cV:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1800 add_or_replace_parameters: 'https://R.R.C.cV:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1801 add_or_replace_parameters: 'https://R.R.C.cV:7421/////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1802 add_or_replace_parameters: 'https://R.R.C.cV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1803 add_or_replace_parameters: 'https://R.R.C.CV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1804 add_or_replace_parameters: 'https://R.C.C.CV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1805 add_or_replace_parameters: 'https://A.R.C.CV/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2?foo=bar#%58'
+1806 add_or_replace_parameters: 'https://KOIpYLn0Zp.STOcKhOlm/ktxd//!?foo=bar'
+1807 add_or_replace_parameters: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/p/Y/L/n/0/Z?foo=bar'
+1808 add_or_replace_parameters: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/p/K?foo=bar'
+1809 add_or_replace_parameters: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/?foo=bar'
+1810 add_or_replace_parameters: 'https://KOIpYLn0Zp.STOcKhOlm/O//?foo=bar'
+1811 add_or_replace_parameters: 'https://KOIpYLn0Zp.STOcKhOLm/O//?foo=bar'
+1812 add_or_replace_parameters: 'https://KOIpYLn0Zp.StOcKhOLm/O//?foo=bar'
+1813 add_or_replace_parameters: 'http://U.nFL//?foo=bar#F%C6%5A%85%E9%0CAb%EA%15%AF%B4%B9'
+1814 add_or_replace_parameters: 'http://U.nFL//?foo=bar#F%C6%5A%85%E9'
+1815 add_or_replace_parameters: 'http://A.A.nFL//?foo=bar#F%C6%5A%85%E9'
+1816 add_or_replace_parameters: 'http://A.A.nFL/A?foo=bar'
+1817 add_or_replace_parameters: "http://F-xBgc-LENa.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1818 add_or_replace_parameters: "http://if.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%09%04%D1%CF%03.%E9%FBu%11"
+1819 add_or_replace_parameters: "http://if.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1820 add_or_replace_parameters: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22/%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1821 add_or_replace_parameters: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1822 add_or_replace_parameters: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1823 add_or_replace_parameters: "http://if.if.chaRITy:1/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/?foo=bar#%D1%0C$%22%2F%F6%81%D1%04%D1%CF%03.%E9%FBu%11"
+1824 add_or_replace_parameters: 'https://gE.V.H.x.o.alLy/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm%5D%3DRBoJo%25%3Fs/%20%40*%5BM.%26w/LPBT%0AC/%5D%3F/nil/E%7D?foo=bar#%5D%DEm%A2%30%23%92%07'
+1825 add_or_replace_parameters: 'https://gE.V.H.x.o.alLy:1/?foo=bar'
+1826 add_or_replace_parameters: 'https://gE.V.H.x.x.alLy:1/?foo=bar'
+1827 add_or_replace_parameters: 'https://A.H.x.x.alLy:1/?foo=bar'
+1828 add_or_replace_parameters: 'https://A.x.x.x.alLy:1/?foo=bar'
+1829 add_or_replace_parameters: 'https://x.x.x.x.alLy:1/?foo=bar'
+1830 add_or_replace_parameters: 'https://w.JXjc.cWb.va9.aQ:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1831 add_or_replace_parameters: 'https://w.JWb.cWb.va9.aQ:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1832 add_or_replace_parameters: 'https://w.JWb.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1833 add_or_replace_parameters: 'https://w.J.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f?foo=bar'
+1834 add_or_replace_parameters: 'https://w.J.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w?foo=bar'
+1835 add_or_replace_parameters: 'https://w.J.cWb.cWb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w?foo=bar'
+1836 add_or_replace_parameters: 'https://w.J.w.cWb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w?foo=bar'
+1837 add_or_replace_parameters: 'https://B.reiT:55232/R%0C7%5EOVGPGwu//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x?foo=bar'
+1838 add_or_replace_parameters: 'https://B.reiT:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x?foo=bar'
+1839 add_or_replace_parameters: 'https://B.reiT:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~/?foo=bar'
+1840 add_or_replace_parameters: 'https://B.reiT:55232/%26///%26/%7CO568O~/?foo=bar'
+1841 add_or_replace_parameters: 'https://B.reit:55232/%26///%26/%7CO568O~/?foo=bar'
+1842 add_or_replace_parameters: 'http://xsB.VC/M/mA%25l?foo=bar#%14'
+1843 add_or_replace_parameters: 'http://xsB.VC//?foo=bar'
+1844 add_or_replace_parameters: 'http://A.VC/?foo=bar'
+1845 add_or_replace_parameters: 'https://I.nab/mL%26?foo=bar#%98'
+1846 add_or_replace_parameters: 'https://I.nab/?foo=bar'
+1847 add_or_replace_parameters: 'https://A.nab/?foo=bar'
+1848 add_or_replace_parameters: 'http://p9-Hfb.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/?foo=bar'
+1849 add_or_replace_parameters: 'http://i.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/?foo=bar'
+1850 add_or_replace_parameters: 'http://i.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/?foo=bar'
+1851 add_or_replace_parameters: 'http://i.i.Gay:65534/?foo=bar'
+1852 add_or_replace_parameters: 'http://i.i.Gay/?foo=bar'
+1853 add_or_replace_parameters: "https://R.hB8o.GN:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj(?foo=bar"
+1854 add_or_replace_parameters: 'https://R.hB8o.GN:4852/ws?foo=bar'
+1855 add_or_replace_parameters: 'https://hB8o.hB8o.GN:4852/ws?foo=bar'
+1856 add_or_replace_parameters: 'https://hB8o.hB8o.GN:4852/?foo=bar'
+1857 add_or_replace_parameters: 'https://hB8o.hB8o.GN/?foo=bar'
+1858 add_or_replace_parameters: 'https://h88o.hB8o.GN/?foo=bar'
+1859 add_or_replace_parameters: 'http://s.kSx.caFe/fQP*ke/kLgB?foo=bar#%00%EFE%4E%3B-%6D'
+1860 add_or_replace_parameters: 'http://s.kSx.caFe/fQP*ke/kLgB?foo=bar#%00%EF%45%4E%3B-%6D'
+1861 add_or_replace_parameters: 'http://s.k.caFe/fQP*ke/kLgB?foo=bar#%00%EF%45%4E%3B-%6D'
+1862 add_or_replace_parameters: 'http://k.k.caFe/fQP*ke/kLgB?foo=bar#%00%EF%45%4E%3B-%6D'
+1863 add_or_replace_parameters: 'http://k.k.caFe:1/?foo=bar'
+1864 add_or_replace_parameters: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2//Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1865 add_or_replace_parameters: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1866 add_or_replace_parameters: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1867 add_or_replace_parameters: "http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D?foo=bar"
+1868 add_or_replace_parameters: 'http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D?foo=bar'
+1869 add_or_replace_parameters: 'http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/H?foo=bar'
+1870 add_or_replace_parameters: 'http://A.LI/?foo=bar'
+1871 add_or_replace_parameters: 'http://A.l4fwUW6rd0uZv5my.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//?foo=bar#%60%08%6D%31'
+1872 add_or_replace_parameters: 'http://A.l.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//?foo=bar#%60%08%6D%31'
+1873 add_or_replace_parameters: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//?foo=bar#%60%08%6D%31'
+1874 add_or_replace_parameters: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/?foo=bar#%60%08%6D%31'
+1875 add_or_replace_parameters: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/?foo=bar#%60%08%6D%31'
+1876 add_or_replace_parameters: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/?foo=bar#%60%08%6D%31'
+1877 url_query_cleaner: 'product.html'
+1878 url_query_cleaner: 'product.html'
+1879 url_query_cleaner: 'product.html'
+1880 url_query_cleaner: 'product.html?id=200'
+1881 url_query_cleaner: 'product.html?id=200'
+1882 url_query_cleaner: 'product.html?id=200'
+1883 url_query_cleaner: 'product.html'
+1884 url_query_cleaner: 'product.html?id=200&name=wired'
+1885 url_query_cleaner: 'product.html?id'
+1886 url_query_cleaner: 'product.html?d=1'
+1887 url_query_cleaner: 'product.html?d=1&d=2&d=3'
+1888 url_query_cleaner: 'product.html?id=200&foo=bar'
+1889 url_query_cleaner: 'product.html?foo=bar&name=wired'
+1890 url_query_cleaner: 'product.html?name=wired'
+1891 url_query_cleaner: 'product.html?foo=bar&name=wired'
+1892 url_query_cleaner: 'product.html'
+1893 url_query_cleaner: 'product.html'
+1894 url_query_cleaner: 'product.html?foo=bar'
+1895 url_query_cleaner: 'product.html?foobar=wired'
+1896 url_query_cleaner: 'product.html?id=200#foo'
+1897 url_query_cleaner: 'product.html?id=200'
+1898 url_query_cleaner: 'product.html'
+1899 url_query_cleaner: 'product.html'
+1900 url_query_cleaner: 'http://A.COM/'
+1901 url_query_cleaner: 'https://A.COM/'
+1902 url_query_cleaner: 'https://T.Pe/_/xrb%23l'
+1903 url_query_cleaner: 'https://A.ALLY/'
+1904 url_query_cleaner: 'http://A.BOEHRINGER/'
+1905 url_query_cleaner: 'http://ahV0.r.x.boeHRINgeR///1q0vq%3ChVG(2!%3E/.C2Jb,'
+1906 url_query_cleaner: 'http://A.MD/'
+1907 url_query_cleaner: 'http://C.V.Md/N/VZ%3D%0B%2F%3E$ZC//z)(U%0Av$L/-t%5Eq%09JK%3D*Cg/%5DY'
+1908 url_query_cleaner: 'http://A.EMAIL/'
+1909 url_query_cleaner: 'http://Yo4DQnE.eMAIl:65535/Q/7%40x7//-i%20%0C2jYaH~%3E/%2FrU%40/r//Hk5/%5Dd//%5B%3Ec%3A/x/%09'
+1910 url_query_cleaner: 'http://A.CHARITY/'
+1911 url_query_cleaner: 'http://H.cHArIty/u/%0C/Y%3Ae*'
+1912 url_query_cleaner: 'http://H.cHArIty/u/%0C/'
+1913 url_query_cleaner: 'http://A.cHArIty/'
+1914 url_query_cleaner: 'http://A.chArIty/'
+1915 url_query_cleaner: 'https://JvzOS3.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323///p'
+1916 url_query_cleaner: 'https://S.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323///p'
+1917 url_query_cleaner: 'https://S.V.J.Ax00i.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323/T//p'
+1918 url_query_cleaner: 'https://S.V.J.J.Gn-hTMDKS3M.S.Ht6sbGXm.S0YllP.mIl:323/T//p'
+1919 url_query_cleaner: 'https://S.V.J.J.G0YllM.S.Ht6sbGXm.S0YllP.mIl:323/T//p'
+1920 url_query_cleaner: 'https://t.H0.S0YllP.mIl/'
+1921 url_query_cleaner: 'https://SWG0I0.R.C.cV:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1922 url_query_cleaner: 'https://R.R.C.cV:7421/oyNWM%0BE1Yl%40////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1923 url_query_cleaner: 'https://R.R.C.cV:7421/////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1924 url_query_cleaner: 'https://R.R.C.cV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1925 url_query_cleaner: 'https://R.R.C.CV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1926 url_query_cleaner: 'https://R.C.C.CV:7421/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1927 url_query_cleaner: 'https://A.R.C.CV/Qy////)f%09/-WLD%09yX%3AhHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)%5Box%3AF2'
+1928 url_query_cleaner: 'https://KOIpYLn0Zp.STOcKhOlm/ktxd//!'
+1929 url_query_cleaner: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/p/Y/L/n/0/Z'
+1930 url_query_cleaner: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/p/K'
+1931 url_query_cleaner: 'https://KOIpYLn0Zp.STOcKhOlm/O/I/'
+1932 url_query_cleaner: 'https://KOIpYLn0Zp.STOcKhOlm/O//'
+1933 url_query_cleaner: 'https://KOIpYLn0Zp.STOcKhOLm/O//'
+1934 url_query_cleaner: 'https://KOIpYLn0Zp.StOcKhOLm/O//'
+1935 url_query_cleaner: 'http://U.nFL//'
+1936 url_query_cleaner: 'http://U.nFL//'
+1937 url_query_cleaner: 'http://A.A.nFL//'
+1938 url_query_cleaner: 'http://A.A.nFL/A'
+1939 url_query_cleaner: "http://F-xBgc-LENa.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1940 url_query_cleaner: "http://if.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1941 url_query_cleaner: "http://if.if.cHaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1942 url_query_cleaner: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1943 url_query_cleaner: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L//%5E2~Ni(/v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1944 url_query_cleaner: "http://if.if.chaRITy:201/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1945 url_query_cleaner: "http://if.if.chaRITy:1/6%3EBq3c/%5C'%26./L///v%7D(%3DhE%26T%3E/k6Pe*U4RJ%40-%23%0Du9%60AJ3%09jvr%26Q/s*/"
+1946 url_query_cleaner: 'https://gE.V.H.x.o.alLy/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm%5D%3DRBoJo%25%3Fs/%20%40*%5BM.%26w/LPBT%0AC/%5D%3F/nil/E%7D'
+1947 url_query_cleaner: 'https://gE.V.H.x.o.alLy:1/'
+1948 url_query_cleaner: 'https://gE.V.H.x.x.alLy:1/'
+1949 url_query_cleaner: 'https://A.H.x.x.alLy:1/'
+1950 url_query_cleaner: 'https://A.x.x.x.alLy:1/'
+1951 url_query_cleaner: 'https://x.x.x.x.alLy:1/'
+1952 url_query_cleaner: 'https://w.JXjc.cWb.va9.aQ:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1953 url_query_cleaner: 'https://w.JWb.cWb.va9.aQ:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1954 url_query_cleaner: 'https://w.JWb.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1955 url_query_cleaner: 'https://w.J.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/%25%26f'
+1956 url_query_cleaner: 'https://w.J.cWb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1957 url_query_cleaner: 'https://w.J.cWb.cWb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1958 url_query_cleaner: 'https://w.J.w.cWb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/%3AYuYi%3ES/w'
+1959 url_query_cleaner: 'https://B.reiT:55232/R%0C7%5EOVGPGwu//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x'
+1960 url_query_cleaner: 'https://B.reiT:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~//-Vs2x'
+1961 url_query_cleaner: 'https://B.reiT:55232/%26//~uwIE)_%3D%3B%3Az/%26/%7CO568O~/'
+1962 url_query_cleaner: 'https://B.reiT:55232/%26///%26/%7CO568O~/'
+1963 url_query_cleaner: 'https://B.reit:55232/%26///%26/%7CO568O~/'
+1964 url_query_cleaner: 'http://xsB.VC/M/mA%25l'
+1965 url_query_cleaner: 'http://xsB.VC//'
+1966 url_query_cleaner: 'http://A.VC/'
+1967 url_query_cleaner: 'https://I.nab/mL%26'
+1968 url_query_cleaner: 'https://I.nab/'
+1969 url_query_cleaner: 'https://A.nab/'
+1970 url_query_cleaner: 'http://p9-Hfb.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1971 url_query_cleaner: 'http://i.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+1972 url_query_cleaner: 'http://i.i.Gay:65534/%5Cd%3E%7D%60%5B55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/'
+1973 url_query_cleaner: 'http://i.i.Gay:65534/'
+1974 url_query_cleaner: 'http://i.i.Gay/'
+1975 url_query_cleaner: "https://R.hB8o.GN:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni%7C%25J%3B'qnI%3C%26aI%3B%3Chdj("
+1976 url_query_cleaner: 'https://R.hB8o.GN:4852/ws'
+1977 url_query_cleaner: 'https://hB8o.hB8o.GN:4852/ws'
+1978 url_query_cleaner: 'https://hB8o.hB8o.GN:4852/'
+1979 url_query_cleaner: 'https://hB8o.hB8o.GN/'
+1980 url_query_cleaner: 'https://h88o.hB8o.GN/'
+1981 url_query_cleaner: 'http://s.kSx.caFe/fQP*ke/kLgB'
+1982 url_query_cleaner: 'http://s.kSx.caFe/fQP*ke/kLgB'
+1983 url_query_cleaner: 'http://s.k.caFe/fQP*ke/kLgB'
+1984 url_query_cleaner: 'http://k.k.caFe/fQP*ke/kLgB'
+1985 url_query_cleaner: 'http://k.k.caFe:1/'
+1986 url_query_cleaner: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2//Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1987 url_query_cleaner: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C%7CzP~L/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1988 url_query_cleaner: "http://Hh.lI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1989 url_query_cleaner: "http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D/cannot%20read%20%25s%3A%20%25s/2/2vy/Z4%0D%22I8%40wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF%5D"
+1990 url_query_cleaner: 'http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/J)mb/%25/MF%5D'
+1991 url_query_cleaner: 'http://Hh.LI/!1/Nw7UV%3FqB%2F!/Q!%3DZW%5B%3Bi7%3E%22%0Dsu32/H'
+1992 url_query_cleaner: 'http://A.LI/'
+1993 url_query_cleaner: 'http://A.l4fwUW6rd0uZv5my.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+1994 url_query_cleaner: 'http://A.l.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+1995 url_query_cleaner: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+1996 url_query_cleaner: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/'
+1997 url_query_cleaner: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/'
+1998 url_query_cleaner: 'http://A.A.Im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/'
+1999 path_to_file_uri: 'file:///some/path.txt'
+2000 path_to_file_uri: 'file:///path/to/test.txt'
+2001 path_to_file_uri: 'file:///dir/50%25.txt'
+2002 file_uri_to_path: '/tmp/test.txt'
+2003 file_uri_to_path: '/foo/bar'
+2004 file_uri_to_path: '/foo/bar'
+2005 file_uri_to_path: '/path/to/test.txt'
+2006 file_uri_to_path: '/path/to/test.txt'
+2007 file_uri_to_path: '/path/to/test.txt'
+2008 file_uri_to_path: '/path/to/test.txt'
+2009 file_uri_to_path: '/path/to/test file.txt'
+2010 file_uri_to_path: '/dir/50%.txt'
+2011 file_uri_to_path: '/dir/Abc'
+2012 file_uri_to_path: 'test.txt'
+2013 file_uri_to_path: ''
+2014 file_uri_to_path: '/'
+2015 file_uri_to_path: '/'
+2016 file_uri_to_path: '//'
+2017 file_uri_to_path: '/foo/bar'
+2018 file_uri_to_path: '/foo/bar'
+2019 file_uri_to_path: '//foo/bar'
+2020 file_uri_to_path: '/C:/a'
+2021 file_uri_to_path: '///a/b'
+2022 file_uri_to_path: '/C:/a:b'
+2023 any_to_uri: 'file:///some/path.txt'
+2024 any_to_uri: 'file:///some/path.txt'
+2025 any_to_uri: 'http://www.example.com/some/path.txt'
+2026 canonicalize_url: 'http://www.example.com/'
+2027 canonicalize_url: 'http://www.example.com/'
+2028 canonicalize_url: 'http://www.example.com/'
+2029 canonicalize_url: 'http://www.example.com/do?a=1&b=2&c=3'
+2030 canonicalize_url: 'http://www.example.com/do?a=3&b=2&c=1'
+2031 canonicalize_url: 'http://www.example.com/do?a=1'
+2032 canonicalize_url: 'http://www.example.com/do?a=3;b=2;c=1'
+2033 canonicalize_url: 'http://www.example.com:8888/do?a=1&b=2&c=3'
+2034 canonicalize_url: 'http://www.example.com/do?a=1&b=2&c=3'
+2035 canonicalize_url: 'http://www.example.com/do?a=50&b=2&b=5&c=3'
+2036 canonicalize_url: 'http://www.example.com/do?a=2'
+2037 canonicalize_url: 'http://www.example.com/do?a=2&b='
+2038 canonicalize_url: 'http://www.example.com/do?a=2'
+2039 canonicalize_url: 'http://www.example.com/do?a=2&b=&c='
+2040 canonicalize_url: 'http://www.example.com/do?1750%2C4='
+2041 canonicalize_url: 'http://www.example.com/do?a=1&q=a+space'
+2042 canonicalize_url: 'http://www.example.com/do?a=1&q=a+space'
+2043 canonicalize_url: 'http://www.example.com/do?a=1&q=a+space'
+2044 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9'
+2045 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+2046 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?q=r%E9sum%E9'
+2047 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?country=%D0%EE%F1%F1%E8%FF'
+2048 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?currency=%E2%82%AC'
+2049 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?country=%D0%A0%D0%BE%D1%81%D1%81%D0%B8%D1%8F'
+2050 canonicalize_url: 'http://example.com/ab?q=ab'
+2051 canonicalize_url: 'http://example.com/ab?q=ab'
+2052 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9'
+2053 canonicalize_url: 'http://www.example.com/a%A3do'
+2054 canonicalize_url: 'http://www.example.com/a%A3do?q=r%C3%A9sum%C3%A9'
+2055 canonicalize_url: 'http://www.example.com/a%A3do?q=r%E9sum%E9'
+2056 canonicalize_url: 'https://example.com/a%23b,c'
+2057 canonicalize_url: 'https://example.com/a%23b,c'
+2058 canonicalize_url: 'http://www.example.com/do?k=b%A3'
+2059 canonicalize_url: 'http://www.example.com/do?k=r%C3%A9sum%C3%A9'
+2060 canonicalize_url: 'http://www.example.com/a%20do?a=1'
+2061 canonicalize_url: 'http://www.example.com/a%20%20do?a=1'
+2062 canonicalize_url: 'http://www.example.com/a%20do%C2%A3.html?a=1'
+2063 canonicalize_url: 'http://www.example.com/a%20do%C2%A3.html?a=1'
+2064 canonicalize_url: 'http://www.example.com/do?a=5&price=%C2%A3500&z=3'
+2065 canonicalize_url: 'http://www.example.com/do?a=5&price=%C2%A3500&z=3'
+2066 canonicalize_url: 'http://www.example.com/do?a=1&price%28%C2%A3%29=500'
+2067 canonicalize_url: 'http://user:pass@www.example.com:81/do?now=1'
+2068 canonicalize_url: 'http://user:pass@www.example.com/do?a=1'
+2069 canonicalize_url: 'http://user:pass@www.example.com/do?a=1#frag'
+2070 canonicalize_url: 'http://[::1]/do?a=1'
+2071 canonicalize_url: 'http://[::1]/do?a=1#frag'
+2072 canonicalize_url: 'a'
+2073 canonicalize_url: 'a#frag'
+2074 canonicalize_url: 'a?b=1'
+2075 canonicalize_url: '/?b=1'
+2076 canonicalize_url: 'http://www.simplybedrooms.com/White-Bedroom-Furniture/Bedroom-Mirror:-Josephine-Cheval-Mirror.html'
+2077 canonicalize_url: 'http://www.example.com/caf%E9-con-leche.htm'
+2078 canonicalize_url: 'http://www.example.com/'
+2079 canonicalize_url: 'sftp://UsEr:PaSsWoRd@www.example.com/'
+2080 canonicalize_url: 'http://www.example.com/c'
+2081 canonicalize_url: 'http://www.example.com/a/b'
+2082 canonicalize_url: 'http://www.example.com/a/'
+2083 canonicalize_url: 'http://www.example.com/a/'
+2084 canonicalize_url: 'http://www.example.com/a'
+2085 canonicalize_url: 'http://www.example.com/a'
+2086 canonicalize_url: 'http://www.example.com/a//b'
+2087 canonicalize_url: 'http://www.example.com/a///b'
+2088 canonicalize_url: 'http://www.example.com/a/b//'
+2089 canonicalize_url: 'http://www.example.com/a/b'
+2090 canonicalize_url: 'mailto:a/../b'
+2091 canonicalize_url: 'foo:/b'
+2092 canonicalize_url: 'http://[::1]/'
+2093 canonicalize_url: 'http://[2001:db8::1]:8080/a'
+2094 canonicalize_url: 'http://user:pass@[::1]/a'
+2095 canonicalize_url: 'http://www.xn--bcher-kva.de/?q=b%C3%BCcher'
+2096 canonicalize_url: 'http://xn--p8j9a0d9c9a.xn--q9jyb4c/?maxResults=5&query=%E3%82%B5'
+2097 canonicalize_url: 'http://www.xn--bcher-kva.de:8080/?q=b%C3%BCcher'
+2098 canonicalize_url: 'http://user@xn--r8jz45g.jp/path'
+2099 canonicalize_url: 'http://user:pass@xn--r8jz45g.jp:8080/p'
+2100 canonicalize_url: 'http://foo.com/AC%2FDC+rocks%3F/?yeah=1'
+2101 canonicalize_url: 'http://foo.com/AC%2FDC/'
+2102 canonicalize_url: 'http://foo.com/cmp/Supermercados-Dia%25'
+2103 canonicalize_url: 'http://foo.com/100%25/path'
+2104 canonicalize_url: 'http://foo.com/%2525'
+2105 canonicalize_url: 'http://foo.com/x%3B'
+2106 canonicalize_url: 'http://foo.com/%3B'
+2107 canonicalize_url: 'http://foo.com/%0A%3BpE|'
+2108 canonicalize_url: 'http://foo.com/%0A%3BpE|'
+2109 canonicalize_url: 'http://foo.com/x;b'
+2110 canonicalize_url: 'http://foo.com/%253B'
+2111 canonicalize_url: 'http://www.example.com/dir;x/a~b'
+2112 canonicalize_url: 'http://www.xn--bcher-kva.de/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+2113 canonicalize_url: 'http://www.xn--bcher-kva.de/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+2114 canonicalize_url: 'http://www.xn--bcher-kva.de/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+2115 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?q=r%E9sum%E9'
+2116 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?q=r%E9sum%E9'
+2117 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?country=%D0%EE%F1%F1%E8%FF'
+2118 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9?country=%D0%EE%F1%F1%E8%FF'
+2119 canonicalize_url: 'http://xn--p8j9a0d9c9a.xn--q9jyb4c/?maxResults=5&query=%1B%24B%255%1B%28B'
+2120 canonicalize_url: 'http://.éxamplé.com/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+2121 canonicalize_url: 'http://www.éxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplééxamplé.com/r%C3%A9sum%C3%A9?q=r%C3%A9sum%C3%A9'
+2122 canonicalize_url: 'http://www.example.com/path/to/%23/foo/bar'
+2123 canonicalize_url: 'http://www.example.com/path/to/%23/foo/bar'
+2124 canonicalize_url: 'http://www.example.com/path/to/%23/foo/bar#frag'
+2125 canonicalize_url: 'http://www.example.com/path/to/%23/foo/bar?url=http%3A%2F%2Fwww.example.com%2Fpath%2Fto%2F%23%2Fbar%2Ffoo'
+2126 canonicalize_url: 'http://www.example.com/path/to/%23/foo/bar?url=http%3A%2F%2Fwww.example.com%2F%2Fpath%2Fto%2F%23%2Fbar%2Ffoo'
+2127 canonicalize_url: 'http://www.example.com/path/to/%23/foo/bar?url=http%3A%2F%2Fwww.example.com%2F%2Fpath%2Fto%2F%23%2Fbar%2Ffoo#frag'
+2128 canonicalize_url: 'https://example.com/'
+2129 canonicalize_url: 'https://example.com/'
+2130 canonicalize_url: 'https://example.com/'
+2131 canonicalize_url: raised ValueError: Invalid IPv6 URL
+2132 canonicalize_url: raised ValueError: Invalid IPv6 URL
+2133 canonicalize_url: raised ValueError: Invalid IPv6 URL
+2134 canonicalize_url: raised ValueError: Invalid IPv6 URL
+2135 canonicalize_url: 'http://a.com/'
+2136 canonicalize_url: 'https://a.com/'
+2137 canonicalize_url: 'https://t.pe/_/xrb%23l'
+2138 canonicalize_url: 'https://a.ally/'
+2139 canonicalize_url: 'http://a.boehringer/'
+2140 canonicalize_url: 'http://ahv0.r.x.boehringer///1q0vq%3ChVG(2!%3E/.C2Jb,'
+2141 canonicalize_url: 'http://a.md/'
+2142 canonicalize_url: 'http://c.v.md/N/VZ=%0B%2F%3E$ZC//z)(U%0Av$L/-t%5Eq%09JK=*Cg/]Y'
+2143 canonicalize_url: 'http://a.email/'
+2144 canonicalize_url: 'http://yo4dqne.email:65535/Q/7@x7//-i%20%0C2jYaH~%3E/%2FrU@/r//Hk5/]d//[%3Ec:/x/%09'
+2145 canonicalize_url: 'http://a.charity/'
+2146 canonicalize_url: 'http://h.charity/u/%0C/Y:e*'
+2147 canonicalize_url: 'http://h.charity/u/%0C/'
+2148 canonicalize_url: 'http://a.charity/'
+2149 canonicalize_url: 'http://a.charity/'
+2150 canonicalize_url: 'https://jvzos3.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p'
+2151 canonicalize_url: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p'
+2152 canonicalize_url: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p'
+2153 canonicalize_url: 'https://s.v.j.j.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p'
+2154 canonicalize_url: 'https://s.v.j.j.g0yllm.s.ht6sbgxm.s0yllp.mil:323/T//p'
+2155 canonicalize_url: 'https://t.h0.s0yllp.mil/'
+2156 canonicalize_url: 'https://swg0i0.r.c.cv:7421/oyNWM%0BE1Yl@////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2157 canonicalize_url: 'https://r.r.c.cv:7421/oyNWM%0BE1Yl@////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2158 canonicalize_url: 'https://r.r.c.cv:7421/////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2159 canonicalize_url: 'https://r.r.c.cv:7421/Qy////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2160 canonicalize_url: 'https://r.r.c.cv:7421/Qy////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2161 canonicalize_url: 'https://r.c.c.cv:7421/Qy////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2162 canonicalize_url: 'https://a.r.c.cv/Qy////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2163 canonicalize_url: 'https://koipyln0zp.stockholm/ktxd//!'
+2164 canonicalize_url: 'https://koipyln0zp.stockholm/O/I/p/Y/L/n/0/Z'
+2165 canonicalize_url: 'https://koipyln0zp.stockholm/O/I/p/K'
+2166 canonicalize_url: 'https://koipyln0zp.stockholm/O/I/'
+2167 canonicalize_url: 'https://koipyln0zp.stockholm/O//'
+2168 canonicalize_url: 'https://koipyln0zp.stockholm/O//'
+2169 canonicalize_url: 'https://koipyln0zp.stockholm/O//'
+2170 canonicalize_url: 'http://u.nfl//'
+2171 canonicalize_url: 'http://u.nfl//'
+2172 canonicalize_url: 'http://a.a.nfl//'
+2173 canonicalize_url: 'http://a.a.nfl/A'
+2174 canonicalize_url: "http://f-xbgc-lena.if.charity:201/6%3EBq3c/%5C'&./L//%5E2~Ni(/v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2175 canonicalize_url: "http://if.if.charity:201/6%3EBq3c/%5C'&./L//%5E2~Ni(/v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2176 canonicalize_url: "http://if.if.charity:201/6%3EBq3c/%5C'&./L//%5E2~Ni(/v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2177 canonicalize_url: "http://if.if.charity:201/6%3EBq3c/%5C'&./L//%5E2~Ni(/v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2178 canonicalize_url: "http://if.if.charity:201/6%3EBq3c/%5C'&./L//%5E2~Ni(/v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2179 canonicalize_url: "http://if.if.charity:201/6%3EBq3c/%5C'&./L///v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2180 canonicalize_url: "http://if.if.charity:1/6%3EBq3c/%5C'&./L///v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2181 canonicalize_url: 'https://ge.v.h.x.o.ally/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm]=RBoJo%25%3Fs/%20@*[M.&w/LPBT%0AC/]%3F/nil/E%7D'
+2182 canonicalize_url: 'https://ge.v.h.x.o.ally:1/'
+2183 canonicalize_url: 'https://ge.v.h.x.x.ally:1/'
+2184 canonicalize_url: 'https://a.h.x.x.ally:1/'
+2185 canonicalize_url: 'https://a.x.x.x.ally:1/'
+2186 canonicalize_url: 'https://x.x.x.x.ally:1/'
+2187 canonicalize_url: 'https://w.jxjc.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/%25&f'
+2188 canonicalize_url: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/%25&f'
+2189 canonicalize_url: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/%25&f'
+2190 canonicalize_url: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/%25&f'
+2191 canonicalize_url: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/w'
+2192 canonicalize_url: 'https://w.j.cwb.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/w'
+2193 canonicalize_url: 'https://w.j.w.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/w'
+2194 canonicalize_url: 'https://b.reit:55232/R%0C7%5EOVGPGwu//~uwIE)_=%3B:z/&/|O568O~//-Vs2x'
+2195 canonicalize_url: 'https://b.reit:55232/&//~uwIE)_=%3B:z/&/|O568O~//-Vs2x'
+2196 canonicalize_url: 'https://b.reit:55232/&//~uwIE)_=%3B:z/&/|O568O~/'
+2197 canonicalize_url: 'https://b.reit:55232/&///&/|O568O~/'
+2198 canonicalize_url: 'https://b.reit:55232/&///&/|O568O~/'
+2199 canonicalize_url: 'http://xsb.vc/M/mA%25l'
+2200 canonicalize_url: 'http://xsb.vc//'
+2201 canonicalize_url: 'http://a.vc/'
+2202 canonicalize_url: 'https://i.nab/mL&'
+2203 canonicalize_url: 'https://i.nab/'
+2204 canonicalize_url: 'https://a.nab/'
+2205 canonicalize_url: 'http://p9-hfb.i.gay:65534/%5Cd%3E%7D%60[55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+2206 canonicalize_url: 'http://i.i.gay:65534/%5Cd%3E%7D%60[55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+2207 canonicalize_url: 'http://i.i.gay:65534/%5Cd%3E%7D%60[55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/'
+2208 canonicalize_url: 'http://i.i.gay:65534/'
+2209 canonicalize_url: 'http://i.i.gay/'
+2210 canonicalize_url: "https://r.hb8o.gn:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni|%25J%3B'qnI%3C&aI%3B%3Chdj("
+2211 canonicalize_url: 'https://r.hb8o.gn:4852/ws'
+2212 canonicalize_url: 'https://hb8o.hb8o.gn:4852/ws'
+2213 canonicalize_url: 'https://hb8o.hb8o.gn:4852/'
+2214 canonicalize_url: 'https://hb8o.hb8o.gn/'
+2215 canonicalize_url: 'https://h88o.hb8o.gn/'
+2216 canonicalize_url: 'http://s.ksx.cafe/fQP*ke/kLgB'
+2217 canonicalize_url: 'http://s.ksx.cafe/fQP*ke/kLgB'
+2218 canonicalize_url: 'http://s.k.cafe/fQP*ke/kLgB'
+2219 canonicalize_url: 'http://k.k.cafe/fQP*ke/kLgB'
+2220 canonicalize_url: 'http://k.k.cafe:1/'
+2221 canonicalize_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C|zP~L/cannot%20read%20%25s:%20%25s/2//Z4%0D%22I8@wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF]"
+2222 canonicalize_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C|zP~L/cannot%20read%20%25s:%20%25s/2/2vy/Z4%0D%22I8@wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF]"
+2223 canonicalize_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/MF]/cannot%20read%20%25s:%20%25s/2/2vy/Z4%0D%22I8@wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF]"
+2224 canonicalize_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/MF]/cannot%20read%20%25s:%20%25s/2/2vy/Z4%0D%22I8@wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF]"
+2225 canonicalize_url: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/MF]'
+2226 canonicalize_url: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/H'
+2227 canonicalize_url: 'http://a.li/'
+2228 canonicalize_url: 'http://a.l4fwuw6rd0uzv5my.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+2229 canonicalize_url: 'http://a.l.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+2230 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+2231 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/'
+2232 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/'
+2233 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/'
+2234 canonicalize_url: 'http://a.com/'
+2235 canonicalize_url: 'https://a.com/'
+2236 canonicalize_url: 'https://t.pe/_/xrb%23l'
+2237 canonicalize_url: 'https://a.ally/'
+2238 canonicalize_url: 'http://a.boehringer/'
+2239 canonicalize_url: 'http://ahv0.r.x.boehringer///1q0vq%3ChVG(2!%3E/.C2Jb,'
+2240 canonicalize_url: 'http://a.md/'
+2241 canonicalize_url: 'http://c.v.md/N/VZ=%0B%2F%3E$ZC//z)(U%0Av$L/-t%5Eq%09JK=*Cg/]Y'
+2242 canonicalize_url: 'http://a.email/'
+2243 canonicalize_url: 'http://yo4dqne.email:65535/Q/7@x7//-i%20%0C2jYaH~%3E/%2FrU@/r//Hk5/]d//[%3Ec:/x/%09'
+2244 canonicalize_url: 'http://a.charity/'
+2245 canonicalize_url: 'http://h.charity/u/%0C/Y:e*'
+2246 canonicalize_url: 'http://h.charity/u/%0C/'
+2247 canonicalize_url: 'https://jvzos3.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p'
+2248 canonicalize_url: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323///p'
+2249 canonicalize_url: 'https://s.v.j.ax00i.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p'
+2250 canonicalize_url: 'https://s.v.j.j.gn-htmdks3m.s.ht6sbgxm.s0yllp.mil:323/T//p'
+2251 canonicalize_url: 'https://s.v.j.j.g0yllm.s.ht6sbgxm.s0yllp.mil:323/T//p'
+2252 canonicalize_url: 'https://t.h0.s0yllp.mil/'
+2253 canonicalize_url: 'https://swg0i0.r.c.cv:7421/oyNWM%0BE1Yl@////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2254 canonicalize_url: 'https://r.r.c.cv:7421/oyNWM%0BE1Yl@////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2255 canonicalize_url: 'https://r.r.c.cv:7421/////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2256 canonicalize_url: 'https://r.r.c.cv:7421/Qy////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2257 canonicalize_url: 'https://r.c.c.cv:7421/Qy////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2258 canonicalize_url: 'https://a.r.c.cv/Qy////)f%09/-WLD%09yX:hHU7XO%22oQD-7C%0A31n7oKBFx/Qy/%3F)[ox:F2'
+2259 canonicalize_url: 'https://koipyln0zp.stockholm/ktxd//!'
+2260 canonicalize_url: 'https://koipyln0zp.stockholm/O/I/p/Y/L/n/0/Z'
+2261 canonicalize_url: 'https://koipyln0zp.stockholm/O/I/p/K'
+2262 canonicalize_url: 'https://koipyln0zp.stockholm/O/I/'
+2263 canonicalize_url: 'https://koipyln0zp.stockholm/O//'
+2264 canonicalize_url: 'http://u.nfl//'
+2265 canonicalize_url: 'http://a.a.nfl//'
+2266 canonicalize_url: 'http://a.a.nfl/A'
+2267 canonicalize_url: "http://f-xbgc-lena.if.charity:201/6%3EBq3c/%5C'&./L//%5E2~Ni(/v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2268 canonicalize_url: "http://if.if.charity:201/6%3EBq3c/%5C'&./L//%5E2~Ni(/v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2269 canonicalize_url: "http://if.if.charity:201/6%3EBq3c/%5C'&./L///v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2270 canonicalize_url: "http://if.if.charity:1/6%3EBq3c/%5C'&./L///v%7D(=hE&T%3E/k6Pe*U4RJ@-%23%0Du9%60AJ3%09jvr&Q/s*/"
+2271 canonicalize_url: 'https://ge.v.h.x.o.ally/XM%23/NIL/tM/hI%0D0j/%250*/.%2Fm]=RBoJo%25%3Fs/%20@*[M.&w/LPBT%0AC/]%3F/nil/E%7D'
+2272 canonicalize_url: 'https://ge.v.h.x.o.ally:1/'
+2273 canonicalize_url: 'https://ge.v.h.x.x.ally:1/'
+2274 canonicalize_url: 'https://a.h.x.x.ally:1/'
+2275 canonicalize_url: 'https://a.x.x.x.ally:1/'
+2276 canonicalize_url: 'https://x.x.x.x.ally:1/'
+2277 canonicalize_url: 'https://w.jxjc.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/%25&f'
+2278 canonicalize_url: 'https://w.jwb.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/%25&f'
+2279 canonicalize_url: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/%25&f'
+2280 canonicalize_url: 'https://w.j.cwb.va9.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/w'
+2281 canonicalize_url: 'https://w.j.cwb.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/w'
+2282 canonicalize_url: 'https://w.j.w.cwb.aq:3656/%5CD/A%3C%25/9/Lb/Mh%22R./X/:YuYi%3ES/w'
+2283 canonicalize_url: 'https://b.reit:55232/R%0C7%5EOVGPGwu//~uwIE)_=%3B:z/&/|O568O~//-Vs2x'
+2284 canonicalize_url: 'https://b.reit:55232/&//~uwIE)_=%3B:z/&/|O568O~//-Vs2x'
+2285 canonicalize_url: 'https://b.reit:55232/&//~uwIE)_=%3B:z/&/|O568O~/'
+2286 canonicalize_url: 'https://b.reit:55232/&///&/|O568O~/'
+2287 canonicalize_url: 'http://xsb.vc/M/mA%25l'
+2288 canonicalize_url: 'http://xsb.vc//'
+2289 canonicalize_url: 'http://a.vc/'
+2290 canonicalize_url: 'https://i.nab/mL&'
+2291 canonicalize_url: 'https://i.nab/'
+2292 canonicalize_url: 'https://a.nab/'
+2293 canonicalize_url: 'http://p9-hfb.i.gay:65534/%5Cd%3E%7D%60[55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+2294 canonicalize_url: 'http://i.i.gay:65534/%5Cd%3E%7D%60[55/%25mnz.w5%0BEte3jp%22Y/%5CNUP/'
+2295 canonicalize_url: 'http://i.i.gay:65534/%5Cd%3E%7D%60[55/%25mnz.w5%0BEte3jp%22Y/%25mnz.w5%0BEte3jp%22Y/'
+2296 canonicalize_url: 'http://i.i.gay:65534/'
+2297 canonicalize_url: 'http://i.i.gay/'
+2298 canonicalize_url: "https://r.hb8o.gn:4852/ws/By0B5L%20%22nSH%0A_TaFf/%20Q/8Y6))%7D%60ni|%25J%3B'qnI%3C&aI%3B%3Chdj("
+2299 canonicalize_url: 'https://r.hb8o.gn:4852/ws'
+2300 canonicalize_url: 'https://hb8o.hb8o.gn:4852/ws'
+2301 canonicalize_url: 'https://hb8o.hb8o.gn:4852/'
+2302 canonicalize_url: 'https://hb8o.hb8o.gn/'
+2303 canonicalize_url: 'https://h88o.hb8o.gn/'
+2304 canonicalize_url: 'http://s.ksx.cafe/fQP*ke/kLgB'
+2305 canonicalize_url: 'http://s.k.cafe/fQP*ke/kLgB'
+2306 canonicalize_url: 'http://k.k.cafe/fQP*ke/kLgB'
+2307 canonicalize_url: 'http://k.k.cafe:1/'
+2308 canonicalize_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C|zP~L/cannot%20read%20%25s:%20%25s/2//Z4%0D%22I8@wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF]"
+2309 canonicalize_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/%0C|zP~L/cannot%20read%20%25s:%20%25s/2/2vy/Z4%0D%22I8@wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF]"
+2310 canonicalize_url: "http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/MF]/cannot%20read%20%25s:%20%25s/2/2vy/Z4%0D%22I8@wp/2vy/%7D!t4**t%7D%0A/q'%23//V+eE$%22rZ3C%09/MF]"
+2311 canonicalize_url: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/J)mb/%25/MF]'
+2312 canonicalize_url: 'http://hh.li/!1/Nw7UV%3FqB%2F!/Q!=ZW[%3Bi7%3E%22%0Dsu32/H'
+2313 canonicalize_url: 'http://a.li/'
+2314 canonicalize_url: 'http://a.l4fwuw6rd0uzv5my.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+2315 canonicalize_url: 'http://a.l.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+2316 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B//'
+2317 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/%25%0B/%25%0B/'
+2318 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/%25%0B/'
+2319 canonicalize_url: 'http://a.a.im:406/ozk%09Plp-%7DS)4M%7BRD/Z0R~P%5EEc9sQhF/4%7B/fZ/Z0R~P%5EEc9sQhF/4%7B/'
+2320 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'US-ASCII'}, data=b'A brief note')
+2321 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'US-ASCII'}, data=b'A brief note')
+2322 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'US-ASCII'}, data=b'\xc3\xa9')
+2323 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'iso-8859-7'}, data=b'\xbe\xd3\xbe')
+2324 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'iso-8859-7'}, data=b'\xbe\xd3\xbe')
+2325 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'foo': 'foo;bar"', 'charset': 'utf-8', 'bar': 'foo;"foo ;/ ,'}, data=b'\xce\x8e\xce\xa3\xce\x8e')
+2326 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'foo': ''}, data=b'AAA')
+2327 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={}, data=b'Hello, world.')
+2328 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={}, data=b'Hello, world.')
+2329 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={}, data=b'Hello, world.')
+2330 parse_data_uri: raised ValueError: invalid data URI
+2331 parse_data_uri: raised ValueError: invalid data URI
+2332 parse_data_uri: raised ValueError: invalid URI
+2333 parse_data_uri: raised ValueError: not a data URI
+2334 parse_data_uri: raised ValueError: not a data URI
+2335 parse_data_uri: raised ValueError: not a data URI
+2336 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'US-ASCII'}, data=b'A brief note')
+2337 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'US-ASCII'}, data=b'A brief note')
+2338 resolve_encoding: 'utf-8'
+2339 resolve_encoding: 'utf-8'
+2340 resolve_encoding: 'utf-8'
+2341 resolve_encoding: 'utf-8'
+2342 resolve_encoding: 'cp1252'
+2343 resolve_encoding: 'cp1252'
+2344 resolve_encoding: 'cp1252'
+2345 resolve_encoding: 'cp1252'
+2346 resolve_encoding: 'cp1252'
+2347 resolve_encoding: 'cp1252'
+2348 resolve_encoding: 'cp1252'
+2349 resolve_encoding: 'cp1251'
+2350 resolve_encoding: 'cp1251'
+2351 resolve_encoding: 'koi8-r'
+2352 resolve_encoding: 'koi8-u'
+2353 resolve_encoding: 'gb18030'
+2354 resolve_encoding: 'gb18030'
+2355 resolve_encoding: 'gb18030'
+2356 resolve_encoding: 'gb18030'
+2357 resolve_encoding: 'big5hkscs'
+2358 resolve_encoding: 'big5hkscs'
+2359 resolve_encoding: 'cp949'
+2360 resolve_encoding: 'euc_jp'
+2361 resolve_encoding: 'cp932'
+2362 resolve_encoding: 'cp932'
+2363 resolve_encoding: 'cp932'
+2364 resolve_encoding: 'cp932'
+2365 resolve_encoding: 'cp932'
+2366 resolve_encoding: 'iso2022_jp'
+2367 resolve_encoding: 'cp874'
+2368 resolve_encoding: 'cp874'
+2369 resolve_encoding: 'cp874'
+2370 resolve_encoding: 'cp1254'
+2371 resolve_encoding: 'mac-roman'
+2372 resolve_encoding: 'mac-roman'
+2373 resolve_encoding: 'cp1252'
+2374 resolve_encoding: 'cp1252'
+2375 resolve_encoding: 'cp1252'
+2376 resolve_encoding: 'cp1252'
+2377 resolve_encoding: 'utf-16'
+2378 resolve_encoding: 'utf-16-le'
+2379 resolve_encoding: 'utf-16-be'
+2380 resolve_encoding: 'utf-32'
+2381 resolve_encoding: None
+2382 resolve_encoding: None
+2383 resolve_encoding: None
+2384 resolve_encoding: 'gb18030'
+2385 resolve_encoding: 'cp1251'
+2386 resolve_encoding: 'iso8859-15'
+2387 resolve_encoding: 'iso8859-15'
+2388 resolve_encoding: 'iso8859-8'
+2389 resolve_encoding: 'iso8859-7'
+2390 resolve_encoding: 'iso8859-6'
+2391 resolve_encoding: 'iso8859-5'
+2392 resolve_encoding: 'cp437'
+2393 resolve_encoding: 'cp866'
+2394 resolve_encoding: None
+2395 resolve_encoding: 'hz'
+2396 resolve_encoding: None
+2397 resolve_encoding: None
+2398 resolve_encoding: None
+2399 resolve_encoding: None
+2400 resolve_encoding: 'utf-8'
+2401 resolve_encoding: 'utf-8'
+2402 resolve_encoding: None
+2403 resolve_encoding: 'cp1252'
+2404 resolve_encoding: 'cp1252'
+2405 resolve_encoding: 'rot-13'
+2406 resolve_encoding: 'base64'
+2407 resolve_encoding: 'idna'
+2408 resolve_encoding: 'punycode'
+2409 resolve_encoding: 'hex'
+2410 resolve_encoding: 'zlib'
+2411 resolve_encoding: None
+2412 resolve_encoding: 'unicode-escape'
+2413 resolve_encoding: 'raw-unicode-escape'
+2414 resolve_encoding: 'utf-8'
+2415 resolve_encoding: 'cp949'
+2416 resolve_encoding: 'cp1252'
+2417 resolve_encoding: 'cp1252'
+2418 resolve_encoding: 'cp037'
+2419 resolve_encoding: 'cp500'
+2420 resolve_encoding: 'utf-16-le'
+2421 resolve_encoding: 'utf-16'
+2422 resolve_encoding: 'utf-32-be'
+2423 resolve_encoding: None
+2424 http_content_type_encoding: 'iso8859-4'
+2425 http_content_type_encoding: 'cp1251'
+2426 http_content_type_encoding: 'utf-8'
+2427 http_content_type_encoding: 'utf-8'
+2428 http_content_type_encoding: 'koi8-r'
+2429 http_content_type_encoding: None
+2430 http_content_type_encoding: None
+2431 http_content_type_encoding: None
+2432 read_bom: ('utf-8', b'\xef\xbb\xbf')
+2433 read_bom: ('utf-16-be', b'\xfe\xff')
+2434 read_bom: ('utf-32-le', b'\xff\xfe\x00\x00')
+2435 read_bom: ('utf-16-le', b'\xff\xfe')
+2436 read_bom: ('utf-32-be', b'\x00\x00\xfe\xff')
+2437 read_bom: (None, None)
+2438 read_bom: (None, None)
+2439 html_to_unicode: ('cp1251', 'Привет, мир')
+2440 html_to_unicode: ('cp1251', '<meta charset="cp1251"><p>Новости')
+2441 html_to_unicode: ('cp1252', '<?xml version="1.0" encoding="latin1"?><r>café €</r>')
+2442 html_to_unicode: ('cp1252', '<html><head><meta http-equiv="Content-Type" content="text/html; charset=us-ascii"></head>“quoted”')
+2443 html_to_unicode: ('utf-8', '<!-- <meta charset=cp1251> --><meta charset="utf-8">café �� broken')
+2444 html_to_unicode: ('utf-8', '� cut � cut ��� surrogate �� overlong')
+2445 html_to_unicode: ('utf-16-le', 'Grüße�')
+2446 html_to_unicode: ('utf-16-be', 'hi')
+2447 html_to_unicode: ('utf-16-le', 'BOM wins')
+2448 basic_auth_header: b'Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=='
+2449 basic_auth_header: b'Basic am9z6Tpw5HNzd/ZyZA=='
+2450 basic_auth_header: b'Basic cmF3OmJ5dGVzOmNvbG9u'
+2451 basic_auth_header: b'Basic am9zw6k64oKsdXJv'
+2452 headers_raw_to_dict: {b'Content-Type': [b'text/html'], b'Set-Cookie': [b'a=1', b'b=2'], b'X-Spaced': [b'v']}
+2453 headers_dict_to_raw: b'Content-Type: text/html\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2'
+2454 safe_url_string: 'http://www.example.com/a%20b?q=x%20y#frag%20ment'
+2455 safe_url_string: 'https://xn--bcher-kva.example/kaufen?titel=Faust'
+2456 safe_url_string: 'http://example.com/full-width'
+2457 safe_url_string: 'http://xn--bcher-kva.example/already'
+2458 safe_url_string: 'http://strasse.de/'
+2459 safe_url_string: 'http://xii.example/roman'
+2460 safe_url_string: 'http://example.com:8080/path;params?q#f'
+2461 safe_url_string: 'http://user:p%40ss%20w0rd@host.example/'
+2462 safe_url_string: 'http://[2001:db8::1]:8080/v6'
+2463 safe_url_string: 'http://xn--r8jz45g.xn--zckzah/%E3%83%91%E3%82%B9?%E3%82%AF%E3%82%A8%E3%83%AA=%E5%80%A4'
+2464 safe_url_string: 'ftp://ftp.example.org/pub/file%20name.txt'
+2465 safe_url_string: 'http://example.com/?only=query'
+2466 safe_url_string: 'http://xn--vil-9la.com/@good.com/'
+2467 safe_url_string: 'http://example.com/tab'
+2468 safe_url_string: 'http://a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t.u.v.w.x.y.z.aa.bb.cc.dd.ee.ff.gg.hh.ii.jj.kk.ll.mm.nn.oo.pp.qq.rr.ss.tt.uu.vv.ww.xx.yy.zz.example/'
+2469 safe_url_string: 'http://üüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüüü.example/long-label'
+2470 safe_url_string: 'http://.example.com/empty-label'
+2471 safe_url_string: 'http://xn--zz.example/bad-ace'
+2472 safe_url_string: 'http://xn--80arbjktj.xn--p1ai/%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%B8%D1%86%D0%B0?%D0%BF%D0%B0%D1%80%D0%B0%D0%BC%D0%B5%D1%82%D1%80=%D0%B7%D0%BD%D0%B0%D1%87%D0%B5%D0%BD%D0%B8%D0%B5'
+2473 safe_url_string: 'http://example.com/%D0%BF%D1%83%D1%82%D1%8C?%E7%E0%EF%F0%EE%F1=%E7%ED%E0%F7'
+2474 safe_url_string: 'http://example.com/caf%E9?caf%E9=1'
+2475 safe_url_string: 'http://example.com/%E2%82%AC?%80=1'
+2476 safe_url_string: raised UnicodeEncodeError: 'latin-1' codec can't encode character '\u0444' in position 2: ordinal not in range(256)
+2477 safe_url_string: raised UnicodeEncodeError: 'ascii' codec can't encode character '\u0444' in position 2: ordinal not in range(128)
+2478 safe_url_string: 'http://example.com/%E9t%E9?q=%FF'
+2479 safe_url_string: 'http://example.com/%C3%A9t%C3%A9?q=%FF'
+2480 safe_url_string: 'http://example.com/raw path'
+2481 canonicalize_url: 'http://www.example.com/do?a=50&b=2&b=5&c=3'
+2482 canonicalize_url: 'http://www.example.com/r%C3%A9sum%C3%A9'
+2483 canonicalize_url: 'http://[::1]/b'
+2484 canonicalize_url: 'http://example.com/A/C?a=&b=2&z=1'
+2485 canonicalize_url: 'http://user:Pass@www.example.com/~user/%2Fslash%2F?q=a+b&q=a+b'
+2486 canonicalize_url: 'http://www.example.com/a%A3do?q=r%E9sum%E9'
+2487 canonicalize_url: 'mailto:a/../b'
+2488 canonicalize_url: 'foo:/b'
+2489 canonicalize_url: 'http://example.com/a;b/c;d?x=1'
+2490 canonicalize_url: 'http://[2001:db8::ff00:42:8329]/'
+2491 canonicalize_url: 'http://example.com/?b=1&q=%D1%84'
+2492 canonicalize_url: 'http://example.com/?b=1&q=%F4'
+2493 canonicalize_url: 'http://example.com/?a=2'
+2494 canonicalize_url: 'http://example.com/p#keep'
+2495 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'US-ASCII'}, data=b'A brief note')
+2496 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'iso-8859-7'}, data=b'\xbe\xfa\xbe')
+2497 parse_data_uri: ParseDataURIResult(media_type='image/png', media_type_parameters={}, data=b'\x89PNG\r\n\x1a\n')
+2498 parse_data_uri: ParseDataURIResult(media_type='text/html', media_type_parameters={'charset': 'utf-8'}, data=b'<b>hi</b>')
+2499 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'charset': 'US-ASCII'}, data=b'Hello')
+2500 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={'name': 'a"b'}, data=b'ABC')
+2501 parse_data_uri: raised Error: Incorrect padding
+2502 parse_data_uri: raised Error: Invalid base64-encoded string: number of data characters (5) cannot be 1 more than a multiple of 4
+2503 parse_data_uri: raised Error: Invalid base64-encoded string: number of data characters (1) cannot be 1 more than a multiple of 4
+2504 parse_data_uri: ParseDataURIResult(media_type='text/plain', media_type_parameters={}, data=b'ABC')
+2505 parse_data_uri: ParseDataURIResult(media_type='TEXT/PLAIN', media_type_parameters={}, data=b'upper')
+2506 parse_data_uri: raised ValueError: invalid data URI
+2507 path_to_file_uri: 'file:///home/user/My%20Files/report%20%231.pdf'
+2508 path_to_file_uri: 'file:///tmp/a/b/c'
+2509 path_to_file_uri: 'file:///server/share/x'
+2510 path_to_file_uri: 'file:///%C3%BCn%C3%AF%20c%C3%B6d%C3%A9/%C3%B8'
+2511 file_uri_to_path: '/home/user/My Files/report #1.pdf'
+2512 file_uri_to_path: '/etc/hosts'
+2513 file_uri_to_path: '/üÿ'
+2514 replace_entities: '<b> &amp; "q" a'
+2515 replace_entities: '<b> &amp;amp; "q" &apos;a&apos;'
+2516 replace_entities: 'été ÉTÉ é \xa0|\xa0'
+2517 replace_entities: 'été ÉTÉ é \xa0|\xa0'
+2518 replace_entities: '€ € € € €  Ÿ � � \U0010ffff  '
+2519 replace_entities: '€ € € € € &#x81; Ÿ � � \U0010ffff &#1114112; &#99999999999999999999;'
+2520 replace_entities: ' ∉ ¬ &am &#; &#x; &#xZZ;'
+2521 replace_entities: '&notanentity; ∉ ¬ &am &#; &#x; &#xZZ;'
+2522 replace_entities: '…—‘’“”™©®°µ¶'
+2523 replace_entities: '…—‘’“”™©®°µ¶'
+2524 remove_tags: 'Shop &amp; Co\nif (a < b && c > d) { x = ""; }\np > a { color: red }<!-- note hidden -->\nPrice: &pound;100 buy\n<![CDATA[  &amp; ]]>tail'
+2525 remove_tags: '<html><head><title>Shop &amp; Co</title>\nif (a < b && c > d) { x = ""; }\n<style>p > a { color: red }</style><!-- note hidden --></head>\n<body><div class="main"><p>Price: &pound;100 buy</p>\n<br/><img src=x.png alt="pic"><![CDATA[ <raw> &amp; ]]><p>tail</body></html>'
+2526 remove_tags: 'Shop &amp; Co\nif (a < b && c > d) { x = ""; }\np > a { color: red }<!-- note hidden -->\n<p>Price: &pound;100 buy</p>\n<br/><![CDATA[  &amp; ]]><p>tail'
+2527 remove_tags_with_content: '<html><head><title>Shop &amp; Co</title>\n\n<!-- note  --></head>\n<body><div class="main"><p>Price:  <a href="/buy?id=1&amp;q=2" title=\'a > b\'>buy</a></p>\n<br/><img src=x.png alt="pic"><![CDATA[ <raw> &amp; ]]><p>tail</body></html>'
+2528 remove_tags_with_content: '<html><head><title>Shop &amp; Co</title>\n<script type="text/javascript">if (a < b && c > d) { x = "<b>"; }</script>\n<style>p > a { color: red }</style><!-- note <b>hidden</b> --></head>\n<body><div class="main"><p>Price: <b>&pound;100</b> <a href="/buy?id=1&amp;q=2" title=\'a > b\'>buy</a></p>\n<img src=x.png alt="pic"><![CDATA[ <raw> &amp; ]]><p>tail</body></html>'
+2529 replace_tags: ' |  |  | Shop &amp; Co | \n | if (a < b && c > d) { x = " | "; } | \n | p > a { color: red } | <!-- note  | hidden |  --> | \n |  |  | Price:  | &pound;100 |   | buy |  | \n |  | <![CDATA[  |  &amp; ]]> | tail |  | '
+2530 remove_comments: '<html><head><title>Shop &amp; Co</title>\n<script type="text/javascript">if (a < b && c > d) { x = "<b>"; }</script>\n<style>p > a { color: red }</style></head>\n<body><div class="main"><p>Price: <b>&pound;100</b> <a href="/buy?id=1&amp;q=2" title=\'a > b\'>buy</a></p>\n<br/><img src=x.png alt="pic"><![CDATA[ <raw> &amp; ]]><p>tail</body></html>'
+2531 unquote_markup: '<html><head><title>Shop & Co</title>\n<script type="text/javascript">if (a < b && c > d) { x = "<b>"; }</script>\n<style>p > a { color: red }</style><!-- note <b>hidden</b> --></head>\n<body><div class="main"><p>Price: <b>£100</b> <a href="/buy?id=1&q=2" title=\'a > b\'>buy</a></p>\n<br/><img src=x.png alt="pic"> <raw> &amp; <p>tail</body></html>'
+2532 replace_escape_chars: '<html><head><title>Shop &amp; Co</title> <script type="text/javascript">if (a < b && c > d) { x = "<b>"; }</script> <style>p > a { color: red }</style><!-- note <b>hidden</b> --></head> <body><div class="main"><p>Price: <b>&pound;100</b> <a href="/buy?id=1&amp;q=2" title=\'a > b\'>buy</a></p> <br/><img src=x.png alt="pic"><![CDATA[ <raw> &amp; ]]><p>tail</body></html>'
+2533 has_entities: True
+2534 get_base_url: 'http://site.example/root/'
+2535 get_meta_refresh: (2.0, 'http://site.example/dir/next.html')
+2536 get_meta_refresh: (2.0, 'http://site.example/dir/next.html')
+2537 get_meta_refresh: (2.0, 'http://site.example/dir/next.html')
+2538 get_base_url: 'https://other.example/x/'
+2539 get_meta_refresh: (0.0, 'http://other.example/')
+2540 get_meta_refresh: (0.0, 'http://other.example/')
+2541 get_meta_refresh: (0.0, 'http://other.example/')
+2542 get_base_url: 'http://site.example/a/b'
+2543 get_meta_refresh: (None, None)
+2544 get_meta_refresh: (None, None)
+2545 get_meta_refresh: (None, None)
+2546 get_base_url: 'http://site.example/'
+2547 get_meta_refresh: (None, None)
+2548 get_meta_refresh: (None, None)
+2549 get_meta_refresh: (0.0, 'http://site.example/js-off')
+2550 get_base_url: 'http://site.example/caf%C3%A9/'
+2551 get_meta_refresh: (0.5, 'http://site.example/caf%C3%A9.html')
+2552 get_meta_refresh: (0.5, 'http://site.example/caf%C3%A9.html')
+2553 get_meta_refresh: (0.5, 'http://site.example/caf%C3%A9.html')
+2554 get_base_url: 'http://site.example/'
+2555 get_meta_refresh: (None, None)
+2556 get_meta_refresh: (None, None)
+2557 get_meta_refresh: (None, None)
+2558 get_base_url: 'http://site.example/'
+2559 get_meta_refresh: (3.141592653589793, 'http://site.example/pi')
+2560 get_meta_refresh: (3.141592653589793, 'http://site.example/pi')
+2561 get_meta_refresh: (3.141592653589793, 'http://site.example/pi')
+2562 get_base_url: 'http://site.example/'
+2563 get_meta_refresh: (0.25, 'http://site.example/quarter')
+2564 get_meta_refresh: (0.25, 'http://site.example/quarter')
+2565 get_meta_refresh: (0.25, 'http://site.example/quarter')
+2566 get_base_url: 'http://site.example/'
+2567 get_meta_refresh: (None, None)
+2568 get_meta_refresh: (None, None)
+2569 get_meta_refresh: (None, None)
+2570 get_base_url: 'http://site.example/'
+2571 get_meta_refresh: (10.0, 'http://site.example/')
+2572 get_meta_refresh: (10.0, 'http://site.example/')
+2573 get_meta_refresh: (10.0, 'http://site.example/')
+2574 get_base_url: 'http://s.example/r%C3%A9'
+2575 get_meta_refresh: (0.0, 'http://s.example/%D0%9F%D1%80%D0%B8%D0%B2%D0%B5%D1%82')
+2576 get_meta_refresh: (0.0, 'http://s.example/x')
+2577 get_meta_refresh: (None, None)
+2578 strip_html5_whitespace: 'hello'
+2579 strip_html5_whitespace: 'x \xa0'
+2580 strip_html5_whitespace: '\u3000wide\u3000'
+2581 url_query_cleaner: 'http://x.example/a?id=3'
+2582 url_query_cleaner: 'http://x.example/a?id=3&id=4'
+2583 url_query_parameter: '3'
+2584 url_query_parameter: 'dflt'
+2585 add_or_replace_parameter: 'http://x.example/a?utm_source=nl&id=9&utm_medium=mail'
+2586 add_or_replace_parameters: 'http://x.example/a?utm_source=nl&id=3&utm_medium=mail&id=4&z=%C3%BC+w&a=%26'
+2587 safe_download_url: 'http://x.example/a?utm_source=nl&id=3&utm_medium=mail&id=4'
+2588 url_query_cleaner: 'http://x.example/?a=1&b='
+2589 url_query_cleaner: 'http://x.example/#top'
+2590 url_query_parameter: None
+2591 url_query_parameter: ''
+2592 add_or_replace_parameter: 'http://x.example/?a=1&b=&a=2&id=9#top'
+2593 add_or_replace_parameters: 'http://x.example/?a=%26&b=&z=%C3%BC+w#top'
+2594 safe_download_url: 'http://x.example/?a=1&b=&a=2'
+2595 safe_download_url: 'http://x.example/etc/passwd'
+2596 safe_download_url: 'http://x.example/b/c/'
+2597 safe_download_url: 'http://x.example/'
+2598 safe_download_url: 'http://x.example/a'
+2599 add_http_if_no_scheme: 'http://www.example.com/x'
+2600 is_url: False
+2601 parse_url: ParseResult(scheme='', netloc='', path='www.example.com/x', params='', query='', fragment='')
+2602 add_http_if_no_scheme: 'http://cdn.example.com/y'
+2603 any_to_uri: 'file:///cdn.example.com/y'
+2604 is_url: False
+2605 parse_url: ParseResult(scheme='', netloc='cdn.example.com', path='/y', params='', query='', fragment='')
+2606 add_http_if_no_scheme: 'http://example.com'
+2607 is_url: False
+2608 parse_url: ParseResult(scheme='', netloc='', path='example.com', params='', query='', fragment='')
+2609 add_http_if_no_scheme: 'HTTPS://up.example/'
+2610 any_to_uri: 'HTTPS://up.example/'
+2611 is_url: False
+2612 parse_url: ParseResult(scheme='https', netloc='up.example', path='/', params='', query='', fragment='')
+2613 add_http_if_no_scheme: 'ftp://f.example'
+2614 any_to_uri: 'ftp://f.example'
+2615 is_url: False
+2616 parse_url: ParseResult(scheme='ftp', netloc='f.example', path='', params='', query='', fragment='')
+2617 add_http_if_no_scheme: 'http:///relative/path'
+2618 any_to_uri: 'file:///relative/path'
+2619 is_url: False
+2620 parse_url: ParseResult(scheme='', netloc='', path='/relative/path', params='', query='', fragment='')
+2621 add_http_if_no_scheme: 'http://mailto:x@y'
+2622 is_url: False
+2623 parse_url: ParseResult(scheme='mailto', netloc='', path='x@y', params='', query='', fragment='')
+2624 parse_url: ParseResult(scheme='http', netloc='u:p@[::1]:81', path='/p', params='q', query='r', fragment='s')
+2625 parse_qsl_to_bytes: [(b'a', b'1'), (b'b', b'\xff'), (b'c d', b'e f'), (b'', b'x'), (b'g', b'')]
+2626 parse_qsl_to_bytes: [(b'a', b'1'), (b'b', b'2')]
+GET http://shop.example/
+   200 encoding=utf-8 title='Trail & Road | Shop'
+   inline text/plain {} b'Hello, shop!'
+   new http://shop.example/catalog/?cat=shoes&id=3
+   seen http://shop.example/catalog/?cat=shoes&id=3
+   offsite http://shop.example:80/help/?a=1&b=2
+   new http://shop.example/search?q=trail+shoes
+   new http://shop.example/about
+   offsite http://cdn.shop.example/img/logo.png
+   skip 'mailto:info@shop.example'
+   skip 'javascript:void(0)'
+   offsite https://xn--bcher-kva.example/kaufen?titel=Faust
+   new http://shop.example/ru/
+   new http://shop.example/fr/
+   new http://shop.example/jp/
+   new http://shop.example/old-home
+   new http://shop.example/blog/
+   new http://shop.example/admin/
+   new http://shop.example/etc/passwd
+   new http://shop.example/missing
+GET http://shop.example/catalog/?cat=shoes&id=3
+   200 encoding=utf-8 title='Catalog'
+   new http://shop.example/catalog/?cat=shoes&id=3&page=2
+   new http://shop.example/catalog/item?color=red&id=10&size=
+   seen http://shop.example/catalog/item?color=red&id=10&size=
+   seen http://shop.example/
+GET http://shop.example/search?q=trail+shoes
+   404 not in the site
+GET http://shop.example/about
+   404 not in the site
+GET http://shop.example/ru/
+   200 encoding=cp1251 title='Магазин — главная'
+   new http://shop.example/ru/%D0%BE%D0%B1%D1%83%D0%B2%D1%8C?%D1%86%D0%B2%D0%B5%D1%82=%D0%BA%D1%80%D0%B0%D1%81%D0%BD%D1%8B%D0%B9
+   new http://shop.example/ru/%D0%BE%D0%B1%D1%83%D0%B2%D1%8C?%F6%E2%E5%F2=%EA%F0%E0%F1%ED%FB%E9
+GET http://shop.example/fr/
+   200 encoding=cp1252 title='Boutique – café & thé €'
+   new http://shop.example/fr/caf%C3%A9?q=th%C3%A9
+GET http://shop.example/jp/
+   200 encoding=utf-16-le title='靴の店'
+   new http://shop.example/jp/%E9%9D%B4?%E8%89%B2=%E8%B5%A4
+   offsite http://xn--r8jz45g.xn--zckzah/
+GET http://shop.example/old-home
+   200 encoding=utf-8 title=None
+   refresh after 0.0s to http://shop.example/new-home
+   new http://shop.example/new-home
+GET http://shop.example/blog/
+   200 encoding=utf-8 title='Blog'
+   base http://shop.example/blog/2026/
+   new http://shop.example/blog/2026/trail-running.html
+   new http://shop.example/blog/2026/road
+   seen http://shop.example/blog/2026/trail-running.html
+GET http://shop.example/admin/
+   401 Basic realm="admin"; would retry with Authorization: Basic YWRtaW46cORzc3dvcnQ=
+GET http://shop.example/etc/passwd
+   404 not in the site
+GET http://shop.example/missing
+   404 not in the site
+GET http://shop.example/catalog/?cat=shoes&id=3&page=2
+   404 not in the site
+GET http://shop.example/catalog/item?color=red&id=10&size=
+   404 not in the site
+GET http://shop.example/ru/%D0%BE%D0%B1%D1%83%D0%B2%D1%8C?%D1%86%D0%B2%D0%B5%D1%82=%D0%BA%D1%80%D0%B0%D1%81%D0%BD%D1%8B%D0%B9
+   404 not in the site
+GET http://shop.example/ru/%D0%BE%D0%B1%D1%83%D0%B2%D1%8C?%F6%E2%E5%F2=%EA%F0%E0%F1%ED%FB%E9
+   404 not in the site
+GET http://shop.example/fr/caf%C3%A9?q=th%C3%A9
+   404 not in the site
+GET http://shop.example/jp/%E9%9D%B4?%E8%89%B2=%E8%B5%A4
+   404 not in the site
+GET http://shop.example/new-home
+   200 encoding=iso8859-15 title='Nouvelle € maison'
+   base http://static.shop.example/v2/
+   offsite http://static.shop.example/v2/style.css
+   offsite http://static.shop.example/v1/old.css
+GET http://shop.example/blog/2026/trail-running.html
+   404 not in the site
+GET http://shop.example/blog/2026/road
+   404 not in the site
+fetched 9 pages, 21 urls seen
