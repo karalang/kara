@@ -103,6 +103,31 @@ fn stdout_on_both(name: &str, src: &str) -> String {
     interp
 }
 
+/// [`stdout_on_both`] for a program whose tasks race on real sockets or
+/// clocks: the two backends must print the same lines, in any order.
+fn stdout_on_both_unordered(name: &str, src: &str) -> String {
+    let (out, _) = interp_run(name, src);
+    assert!(
+        out.status.success(),
+        "{name} on the interpreter: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let interp = String::from_utf8(out.stdout).unwrap();
+    if let Some(built) = stdout_of(name, src) {
+        let sorted = |s: &str| {
+            let mut v: Vec<String> = s.lines().map(String::from).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            sorted(&built),
+            sorted(&interp),
+            "{name}: the build and the interpreter print different lines"
+        );
+    }
+    interp
+}
+
 /// Spawned tasks start when the spawner suspends, and interleave at their
 /// pauses: both start before either ends.
 #[test]
@@ -285,7 +310,9 @@ fn main() {
     }
 }
 "#;
-    let out = stdout_on_both("accept", src);
+    // Whether the second client's send or the second accept prints first
+    // is a race between the client's sleep and the server's read.
+    let out = stdout_on_both_unordered("accept", src);
     let count = |l: &str| out.lines().filter(|x| *x == l).count();
     assert_eq!((count("accepted"), count("client sent")), (2, 2), "{out}");
     assert!(
