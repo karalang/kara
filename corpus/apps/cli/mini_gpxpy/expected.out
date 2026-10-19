@@ -1,0 +1,5516 @@
+== Mojstrovka.gpx
+File: Mojstrovka.gpx
+    Length 2D: 2.701km
+    Length 3D: 3.009km
+    Moving time: 00:00:00
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 31895.12m/s = 114822.44km/h)
+    Avg speed: 31895.12m/s = 114822.44km/h
+    Total uphill: 446.49m
+    Total downhill: 417.66m
+    Started: 1901-12-13 20:45:52.207343+00:00
+    Ended: 1901-12-13 20:45:52.207343+00:00
+    Points: 184
+    Avg distance between points: 14.68m
+
+    Track #0, Segment #0
+        Length 2D: 2.701km
+        Length 3D: 3.009km
+        Moving time: 00:00:00
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 31895.12m/s = 114822.44km/h)
+        Avg speed: 31895.12m/s = 114822.44km/h
+        Total uphill: 446.49m
+        Total downhill: 417.66m
+        Started: 1901-12-13 20:45:52.207343+00:00
+        Ended: 1901-12-13 20:45:52.207343+00:00
+        Points: 184
+        Avg distance between points: 14.68m
+
+-- to_xml() as GPX 1.0: 745 lines, 26058 bytes, crc32 424fc3b9
+-- parsed again: the same XML
+-- to_xml('1.1'): 747 lines, 26089 bytes, crc32 42830cee
+-- to_xml(prettyprint=False): 745 lines, 20890 bytes, crc32 749c9a5e
+-- operations
+   bounds: 46.43035 46.435641 13.738842 13.748333
+   elevation extremes: 1614.678 2057.36952
+   duration: 0.0
+   has times: True, has elevations: True
+   points data: 184 points, the last 3008.875768491585 m from the start
+   points data in 2D: the last 2700.646447411652 m from the start
+   center of track 0: 46.43301726630434 13.742872266304357
+   nearest to it: track 0 segment 0 point 120 at 46.433241 13.742462
+   near it (5% of the length): 2 passes
+   location at 1901-12-13 20:45:52.207343+00:00: 46.434981 13.748273
+   course from point 0 to 1: 211.2104419904684 loxodromic, 211.21047096925963 great circle
+   elevation angle: 61.80914284267266
+   speeds: 3 of 184 known, fastest 73096.43264705899 m/s
+   first segment moving data: 0.000343 0.0 10.940026461279212 0.0 0.0
+   simplify(): 35 points, 2543.598739960727 m in 2D
+   reduce_points(min_distance=30): 60 points
+   reduce_points(max_points_no=20): 12 points
+   smooth(): uphill 437.69950560000007 downhill 408.8654256000002
+   smooth(horizontal, remove_extremes): 180 points, 2667.9004362742817 m in 2D
+   add_missing_speeds(): 0 with a speed
+   split(0, 0, 92): 2 segments of 93 91
+   join(0): 1 segments, 184 points in the first
+   moved 1000 m at 45 degrees: 46.441333048290446 13.757489856733757
+   moved by -0.5 and 0.25 degrees: 45.934981 13.998273
+   adjust_time(1:00:30.000250): starts 1901-12-13 21:46:22.207593+00:00
+== around-visnjan-with-car.gpx
+File: around-visnjan-with-car.gpx
+    Length 2D: 2.736km
+    Length 3D: 2.742km
+    Moving time: 00:05:08
+    Stopped time: 00:03:26
+    Max speed: 12.41m/s = 44.67km/h (raw: 26.03m/s = 93.72km/h)
+    Avg speed: 8.84m/s = 31.82km/h
+    Total uphill: 49.69m
+    Total downhill: 50.17m
+    Started: 2020-12-18 06:15:50+00:00
+    Ended: 2020-12-18 06:24:24+00:00
+    Points: 104
+    Avg distance between points: 26.31m
+
+    Track #0, Segment #0
+        Length 2D: 2.736km
+        Length 3D: 2.742km
+        Moving time: 00:05:08
+        Stopped time: 00:03:26
+        Max speed: 12.41m/s = 44.67km/h (raw: 26.03m/s = 93.72km/h)
+        Avg speed: 8.84m/s = 31.82km/h
+        Total uphill: 49.69m
+        Total downhill: 50.17m
+        Started: 2020-12-18 06:15:50+00:00
+        Ended: 2020-12-18 06:24:24+00:00
+        Points: 104
+        Avg distance between points: 26.31m
+
+-- to_xml() as GPX 1.1: 435 lines, 15591 bytes, crc32 7f867089
+-- parsed again: the same XML
+-- to_xml('1.0'): 427 lines, 15404 bytes, crc32 4c025ffa
+-- to_xml(prettyprint=False): 435 lines, 12613 bytes, crc32 96a132eb
+-- operations
+   bounds: 45.2724756394 45.2809147071 13.7115180306 13.7224451825
+   elevation extremes: 195.77 241.91
+   duration: 514.0
+   has times: True, has elevations: True
+   points data: 104 points, the last 2741.898688675202 m from the start
+   points data in 2D: the last 2736.299816059205 m from the start
+   center of track 0: 45.27575528625289 13.717165699749035
+   nearest to it: track 0 segment 0 point 89 at 45.2745928243 13.7170127872
+   near it (5% of the length): 1 passes
+   location at 2020-12-18 06:20:07+00:00: 45.2763222624 13.7198120914
+   course from point 0 to 1: 188.14328749956124 loxodromic, 188.14329512189292 great circle
+   elevation angle: 2.3162562443191077
+   speeds: 104 of 104 known, fastest 25.502376958163296 m/s
+   first segment moving data: 308.0 206.0 2722.004412621214 19.894276053988428 12.407931262936177
+   simplify(): 22 points, 2706.795651186252 m in 2D
+   reduce_points(min_distance=30): 31 points
+   reduce_points(max_points_no=20): 14 points
+   smooth(): uphill 48.3768 downhill 48.85680000000002
+   smooth(horizontal, remove_extremes): 102 points, 2734.97684718926 m in 2D
+   add_missing_speeds(): 0 with a speed
+   split(0, 0, 52): 2 segments of 53 51
+   join(0): 1 segments, 104 points in the first
+   moved 1000 m at 45 degrees: 45.279870899290444 13.72323630813807
+   moved by -0.5 and 0.25 degrees: 44.773518851 13.9642099626
+   adjust_time(1:00:30.000250): starts 2020-12-18 07:16:20.000250+00:00
+== broken-fix.gpx
+   GPXException: Invalid value "4d", possible: ('none', '2d', '3d', 'dgps', 'pps', '3')
+== broken-latitude.gpx
+   GPXException: Invalid value for <None>... 46.1x (could not convert string to float: '46.1x')
+== broken-mismatched-tag.gpx
+   GPXXMLSyntaxException: Error parsing XML: mismatched tag: line 3, column 15
+== broken-missing-lon.gpx
+   GPXException: longitude is mandatory in None (got None)
+== cerknicko-jezero-no-creator.gpx
+File: cerknicko-jezero-no-creator.gpx
+    Length 2D: 0.907km
+    Length 3D: 0.913km
+    Moving time: 00:15:50
+    Stopped time: 00:10:27
+    Max speed: 1.37m/s = 4.92km/h (raw: 1.38m/s = 4.99km/h)
+    Avg speed: 0.89m/s = 3.20km/h
+    Total uphill: 28.07m
+    Total downhill: 21.34m
+    Started: 2010-08-05 14:23:59+00:00
+    Ended: 2010-08-05 14:50:16+00:00
+    Points: 90
+    Avg distance between points: 10.07m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #1, Segment #0
+        Length 2D: 0.907km
+        Length 3D: 0.913km
+        Moving time: 00:15:50
+        Stopped time: 00:10:27
+        Max speed: 1.37m/s = 4.92km/h (raw: 1.38m/s = 4.99km/h)
+        Avg speed: 0.89m/s = 3.20km/h
+        Total uphill: 28.07m
+        Total downhill: 21.34m
+        Started: 2010-08-05 14:23:59+00:00
+        Ended: 2010-08-05 14:50:16+00:00
+        Points: 90
+        Avg distance between points: 10.07m
+
+    Track #2, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #3, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #4, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #5, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #6, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #7, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.0: 461 lines, 15045 bytes, crc32 cccd08bd
+-- parsed again: the same XML
+-- to_xml('1.1'): 463 lines, 15076 bytes, crc32 450ae90e
+-- to_xml(prettyprint=False): 461 lines, 12197 bytes, crc32 68e7842c
+-- operations
+   bounds: 45.765888439 45.772175035 14.355442068 14.357659249
+   elevation extremes: 542.320923 555.779297
+   duration: 1577.0
+   has times: True, has elevations: True
+   points data: 90 points, the last 913.4716456072921 m from the start
+   points data in 2D: the last 906.5226470415723 m from the start
+   center of track 0: 0 0
+   nearest to it: track 1 segment 0 point 89 at 45.765888439 14.356514532
+   near it (5% of the length): 0 passes
+   location at 2010-08-05 14:37:07.500000+00:00: 45.769151682 14.356751824
+   course from point 0 to 1: 216.93213301693334 loxodromic, 216.93216593138314 great circle
+   elevation angle: 36.08427538257166
+   speeds: 90 of 90 known, fastest 1.3804479401021594 m/s
+   first segment moving data: 950.0 627.0 843.173433042494 70.29821256479795 1.3659011811216093
+   simplify(): 17 points, 885.9690464508581 m in 2D
+   reduce_points(min_distance=30): 27 points
+   reduce_points(max_points_no=20): 17 points
+   smooth(): uphill 24.82114924000018 downhill 18.09202324000023
+   smooth(horizontal, remove_extremes): 90 points, 906.5226470415723 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 45.77852708329044 14.366765956199972
+   moved by -0.5 and 0.25 degrees: 45.272175035 14.607659249
+   adjust_time(1:00:30.000250): starts 2010-08-05 15:24:29.000250+00:00
+== cerknicko-jezero-with-elevations-zero.gpx
+File: cerknicko-jezero-with-elevations-zero.gpx
+    Length 2D: 0.907km
+    Length 3D: 0.907km
+    Moving time: 00:15:50
+    Stopped time: 00:10:27
+    Max speed: 1.36m/s = 4.91km/h (raw: 1.38m/s = 4.99km/h)
+    Avg speed: 0.88m/s = 3.18km/h
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2010-08-05 14:23:59+00:00
+    Ended: 2010-08-05 14:50:16+00:00
+    Points: 90
+    Avg distance between points: 10.07m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #1, Segment #0
+        Length 2D: 0.907km
+        Length 3D: 0.907km
+        Moving time: 00:15:50
+        Stopped time: 00:10:27
+        Max speed: 1.36m/s = 4.91km/h (raw: 1.38m/s = 4.99km/h)
+        Avg speed: 0.88m/s = 3.18km/h
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2010-08-05 14:23:59+00:00
+        Ended: 2010-08-05 14:50:16+00:00
+        Points: 90
+        Avg distance between points: 10.07m
+
+    Track #2, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #3, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #4, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #5, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #6, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #7, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.0: 460 lines, 14339 bytes, crc32 ec757534
+-- parsed again: the same XML
+-- to_xml('1.1'): 462 lines, 14370 bytes, crc32 cd665dd4
+-- to_xml(prettyprint=False): 460 lines, 11495 bytes, crc32 f4c8b16d
+-- operations
+   bounds: 45.765888439 45.772175035 14.355442068 14.357659249
+   elevation extremes: 0.0 0.0
+   duration: 1577.0
+   has times: True, has elevations: False
+   points data: 90 points, the last 906.5226470415723 m from the start
+   points data in 2D: the last 906.5226470415723 m from the start
+   center of track 0: 0 0
+   nearest to it: track 1 segment 0 point 89 at 45.765888439 14.356514532
+   near it (5% of the length): 0 passes
+   location at 2010-08-05 14:37:07.500000+00:00: 45.769151682 14.356751824
+   course from point 0 to 1: 216.93213301693334 loxodromic, 216.93216593138314 great circle
+   elevation angle: 0.0
+   speeds: 90 of 90 known, fastest 1.3791395213473123 m/s
+   first segment moving data: 950.0 627.0 840.0738588370377 66.44878820453455 1.3645788118119602
+   simplify(): 17 points, 885.9690464508581 m in 2D
+   reduce_points(min_distance=30): 27 points
+   reduce_points(max_points_no=20): 17 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 90 points, 906.5226470415723 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 45.77852708329044 14.366765956199972
+   moved by -0.5 and 0.25 degrees: 45.272175035 14.607659249
+   adjust_time(1:00:30.000250): starts 2010-08-05 15:24:29.000250+00:00
+== cerknicko-jezero-without-elevations.gpx
+File: cerknicko-jezero-without-elevations.gpx
+    Length 2D: 0.907km
+    Length 3D: 0.907km
+    Moving time: 00:15:50
+    Stopped time: 00:10:27
+    Max speed: 1.36m/s = 4.91km/h (raw: 1.38m/s = 4.99km/h)
+    Avg speed: 0.88m/s = 3.18km/h
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2010-08-05 14:23:59+00:00
+    Ended: 2010-08-05 14:50:16+00:00
+    Points: 90
+    Avg distance between points: 10.07m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #1, Segment #0
+        Length 2D: 0.907km
+        Length 3D: 0.907km
+        Moving time: 00:15:50
+        Stopped time: 00:10:27
+        Max speed: 1.36m/s = 4.91km/h (raw: 1.38m/s = 4.99km/h)
+        Avg speed: 0.88m/s = 3.18km/h
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2010-08-05 14:23:59+00:00
+        Ended: 2010-08-05 14:50:16+00:00
+        Points: 90
+        Avg distance between points: 10.07m
+
+    Track #2, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #3, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #4, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #5, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #6, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #7, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.0: 364 lines, 12155 bytes, crc32 b6f2634c
+-- parsed again: the same XML
+-- to_xml('1.1'): 366 lines, 12186 bytes, crc32 b328df31
+-- to_xml(prettyprint=False): 364 lines, 10055 bytes, crc32 30ff77a9
+-- operations
+   bounds: 45.765888439 45.772175035 14.355442068 14.357659249
+   elevation extremes: None None
+   duration: 1577.0
+   has times: True, has elevations: False
+   points data: 90 points, the last 906.5226470415723 m from the start
+   points data in 2D: the last 906.5226470415723 m from the start
+   center of track 0: 0 0
+   nearest to it: track 1 segment 0 point 89 at 45.765888439 14.356514532
+   near it (5% of the length): 0 passes
+   location at 2010-08-05 14:37:07.500000+00:00: 45.769151682 14.356751824
+   course from point 0 to 1: 216.93213301693334 loxodromic, 216.93216593138314 great circle
+   elevation angle: None
+   speeds: 90 of 90 known, fastest 1.3791395213473123 m/s
+   first segment moving data: 950.0 627.0 840.0738588370377 66.44878820453455 1.3645788118119602
+   simplify(): 17 points, 885.9690464508581 m in 2D
+   reduce_points(min_distance=30): 27 points
+   reduce_points(max_points_no=20): 17 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 90 points, 906.5226470415723 m in 2D
+   add_missing_elevations(): 90 missing, 90 left
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 45.77852708329044 14.366765956199972
+   moved by -0.5 and 0.25 degrees: 45.272175035 14.607659249
+   adjust_time(1:00:30.000250): starts 2010-08-05 15:24:29.000250+00:00
+== cerknicko-jezero.gpx
+File: cerknicko-jezero.gpx
+    Length 2D: 0.907km
+    Length 3D: 0.913km
+    Moving time: 00:15:50
+    Stopped time: 00:10:27
+    Max speed: 1.37m/s = 4.92km/h (raw: 1.38m/s = 4.99km/h)
+    Avg speed: 0.89m/s = 3.20km/h
+    Total uphill: 28.07m
+    Total downhill: 21.34m
+    Started: 2010-08-05 14:23:59+00:00
+    Ended: 2010-08-05 14:50:16+00:00
+    Points: 90
+    Avg distance between points: 10.07m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #1, Segment #0
+        Length 2D: 0.907km
+        Length 3D: 0.913km
+        Moving time: 00:15:50
+        Stopped time: 00:10:27
+        Max speed: 1.37m/s = 4.92km/h (raw: 1.38m/s = 4.99km/h)
+        Avg speed: 0.89m/s = 3.20km/h
+        Total uphill: 28.07m
+        Total downhill: 21.34m
+        Started: 2010-08-05 14:23:59+00:00
+        Ended: 2010-08-05 14:50:16+00:00
+        Points: 90
+        Avg distance between points: 10.07m
+
+    Track #2, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #3, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #4, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #5, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #6, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #7, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.0: 461 lines, 15036 bytes, crc32 4167e4cf
+-- parsed again: the same XML
+-- to_xml('1.1'): 463 lines, 15067 bytes, crc32 44bc6fb2
+-- to_xml(prettyprint=False): 461 lines, 12188 bytes, crc32 bf791513
+-- operations
+   bounds: 45.765888439 45.772175035 14.355442068 14.357659249
+   elevation extremes: 542.320923 555.779297
+   duration: 1577.0
+   has times: True, has elevations: True
+   points data: 90 points, the last 913.4716456072921 m from the start
+   points data in 2D: the last 906.5226470415723 m from the start
+   center of track 0: 0 0
+   nearest to it: track 1 segment 0 point 89 at 45.765888439 14.356514532
+   near it (5% of the length): 0 passes
+   location at 2010-08-05 14:37:07.500000+00:00: 45.769151682 14.356751824
+   course from point 0 to 1: 216.93213301693334 loxodromic, 216.93216593138314 great circle
+   elevation angle: 36.08427538257166
+   speeds: 90 of 90 known, fastest 1.3804479401021594 m/s
+   first segment moving data: 950.0 627.0 843.173433042494 70.29821256479795 1.3659011811216093
+   simplify(): 17 points, 885.9690464508581 m in 2D
+   reduce_points(min_distance=30): 27 points
+   reduce_points(max_points_no=20): 17 points
+   smooth(): uphill 24.82114924000018 downhill 18.09202324000023
+   smooth(horizontal, remove_extremes): 90 points, 906.5226470415723 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 45.77852708329044 14.366765956199972
+   moved by -0.5 and 0.25 degrees: 45.272175035 14.607659249
+   adjust_time(1:00:30.000250): starts 2010-08-05 15:24:29.000250+00:00
+== cerknicko-without-times.gpx
+File: cerknicko-without-times.gpx
+    Length 2D: 0.907km
+    Length 3D: 0.913km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 28.07m
+    Total downhill: 21.34m
+    Started: None
+    Ended: None
+    Points: 90
+    Avg distance between points: 10.07m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #1, Segment #0
+        Length 2D: 0.907km
+        Length 3D: 0.913km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 28.07m
+        Total downhill: 21.34m
+        Started: None
+        Ended: None
+        Points: 90
+        Avg distance between points: 10.07m
+
+    Track #2, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #3, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #4, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #5, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #6, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #7, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.0: 370 lines, 11218 bytes, crc32 366a1418
+-- parsed again: the same XML
+-- to_xml('1.1'): 372 lines, 11249 bytes, crc32 ac4471ba
+-- to_xml(prettyprint=False): 370 lines, 9094 bytes, crc32 0d179884
+-- operations
+   bounds: 45.765888439 45.772175035 14.355442068 14.357659249
+   elevation extremes: 542.320923 555.779297
+   duration: None
+   has times: False, has elevations: True
+   points data: 90 points, the last 913.4716456072921 m from the start
+   points data in 2D: the last 906.5226470415723 m from the start
+   center of track 0: 0 0
+   nearest to it: track 1 segment 0 point 89 at 45.765888439 14.356514532
+   near it (5% of the length): 0 passes
+   course from point 0 to 1: 216.93213301693334 loxodromic, 216.93216593138314 great circle
+   elevation angle: 36.08427538257166
+   speeds: 0 of 90 known
+   first segment moving data: 0.0 0.0 0.0 0.0 0.0
+   simplify(): 17 points, 885.9690464508581 m in 2D
+   reduce_points(min_distance=30): 27 points
+   reduce_points(max_points_no=20): 17 points
+   smooth(): uphill 24.82114924000018 downhill 18.09202324000023
+   smooth(horizontal, remove_extremes): 90 points, 906.5226470415723 m in 2D
+   add_missing_times(): 90 missing, 90 left
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 45.77852708329044 14.366765956199972
+   moved by -0.5 and 0.25 degrees: 45.272175035 14.607659249
+   adjust_time(1:00:30.000250): starts None
+   fill_time_data_with_regular_intervals(09:30 to 11:30:07):
+     Length 2D: 0.907km
+     Length 3D: 0.913km
+     Moving time: n/a
+     Stopped time: 02:00:06
+     Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+     Avg speed: ?
+     Total uphill: 28.07m
+     Total downhill: 21.34m
+     Started: 2024-05-01 09:30:00+00:00
+     Ended: 2024-05-01 11:30:06.999992+00:00
+     Points: 90
+     Avg distance between points: 10.07m
+
+== custom_schema_locations.gpx
+File: custom_schema_locations.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.1: 3 lines, 478 bytes, crc32 a788b583
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxx="http://www.garmin.com/xmlschemas/GpxExtensions/v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/GpxExtensions/v3 http://www.garmin.com/xmlschemas/GpxExtensionsv3.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 3 lines, 478 bytes, crc32 0d993f97
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:gpxx="http://www.garmin.com/xmlschemas/GpxExtensions/v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/GpxExtensions/v3 http://www.garmin.com/xmlschemas/GpxExtensionsv3.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |</gpx>
+-- to_xml(prettyprint=False): 3 lines, 478 bytes, crc32 a788b583
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxx="http://www.garmin.com/xmlschemas/GpxExtensions/v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/GpxExtensions/v3 http://www.garmin.com/xmlschemas/GpxExtensionsv3.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |</gpx>
+== default_schema_locations.gpx
+File: default_schema_locations.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.1: 3 lines, 312 bytes, crc32 4d66640c
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 3 lines, 312 bytes, crc32 0ed04d90
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |</gpx>
+-- to_xml(prettyprint=False): 3 lines, 312 bytes, crc32 4d66640c
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |</gpx>
+== first_and_last_elevation.gpx
+File: first_and_last_elevation.gpx
+    Length 2D: 195.708km
+    Length 3D: 195.708km
+    Moving time: 02:00:00
+    Stopped time: n/a
+    Max speed: 54.40m/s = 195.84km/h (raw: 54.40m/s = 195.84km/h)
+    Avg speed: 27.18m/s = 97.85km/h
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2013-05-18 08:23:04+00:00
+    Ended: 2013-05-18 09:23:04+00:00
+    Points: 10
+    Avg distance between points: 19570.81m
+
+    Track #0, Segment #0
+        Length 2D: 195.708km
+        Length 3D: 195.708km
+        Moving time: 02:00:00
+        Stopped time: n/a
+        Max speed: 54.40m/s = 195.84km/h (raw: 54.40m/s = 195.84km/h)
+        Avg speed: 27.18m/s = 97.85km/h
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2013-05-18 08:23:04+00:00
+        Ended: 2013-05-18 09:23:04+00:00
+        Points: 10
+        Avg distance between points: 19570.81m
+
+-- to_xml() as GPX 1.0: 40 lines, 1542 bytes, crc32 212164fb
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <time>2013-05-19T04:21:21Z</time>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="45.148820188" lon="14.22317069">
+   |        <ele>140.0</ele>
+   |        <time>2013-05-18T08:23:04Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.192713358" lon="14.5431474966">
+   |        <time>2013-05-18T09:30:54Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.2985283474" lon="14.7972063345">
+   |        <time>2013-05-18T09:38:00Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.4390521921" lon="15.0237993521">
+   |        <time>2013-05-18T09:45:15Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.6104068252" lon="15.1625017447">
+   |        <time>2013-05-18T09:51:58Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.8329139495" lon="15.0540117545">
+   |        <time>2013-05-18T09:59:59Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.0094830454" lon="14.7917131705">
+   |        <time>2013-05-18T10:08:39Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.1020093403" lon="14.5404009146">
+   |        <time>2013-05-18T10:15:23Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.148820188" lon="14.22317069">
+   |        <time>2013-05-18T10:23:04Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.148820188" lon="14.22317069">
+   |        <ele>140.0</ele>
+   |        <time>2013-05-18T09:23:04Z</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 42 lines, 1571 bytes, crc32 a6a35245
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <metadata>
+   |    <time>2013-05-19T04:21:21Z</time>
+   |  </metadata>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="45.148820188" lon="14.22317069">
+   |        <ele>140.0</ele>
+   |        <time>2013-05-18T08:23:04Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.192713358" lon="14.5431474966">
+   |        <time>2013-05-18T09:30:54Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.2985283474" lon="14.7972063345">
+   |        <time>2013-05-18T09:38:00Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.4390521921" lon="15.0237993521">
+   |        <time>2013-05-18T09:45:15Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.6104068252" lon="15.1625017447">
+   |        <time>2013-05-18T09:51:58Z</time>
+   |      </trkpt>
+   |      <trkpt lat="45.8329139495" lon="15.0540117545">
+   |        <time>2013-05-18T09:59:59Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.0094830454" lon="14.7917131705">
+   |        <time>2013-05-18T10:08:39Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.1020093403" lon="14.5404009146">
+   |        <time>2013-05-18T10:15:23Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.148820188" lon="14.22317069">
+   |        <time>2013-05-18T10:23:04Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.148820188" lon="14.22317069">
+   |        <ele>140.0</ele>
+   |        <time>2013-05-18T09:23:04Z</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 40 lines, 1312 bytes, crc32 c0b13cf1
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |<time>2013-05-19T04:21:21Z</time>
+   |<trk>
+   |<trkseg>
+   |<trkpt lat="45.148820188" lon="14.22317069">
+   |<ele>140.0</ele>
+   |<time>2013-05-18T08:23:04Z</time>
+   |</trkpt>
+   |<trkpt lat="45.192713358" lon="14.5431474966">
+   |<time>2013-05-18T09:30:54Z</time>
+   |</trkpt>
+   |<trkpt lat="45.2985283474" lon="14.7972063345">
+   |<time>2013-05-18T09:38:00Z</time>
+   |</trkpt>
+   |<trkpt lat="45.4390521921" lon="15.0237993521">
+   |<time>2013-05-18T09:45:15Z</time>
+   |</trkpt>
+   |<trkpt lat="45.6104068252" lon="15.1625017447">
+   |<time>2013-05-18T09:51:58Z</time>
+   |</trkpt>
+   |<trkpt lat="45.8329139495" lon="15.0540117545">
+   |<time>2013-05-18T09:59:59Z</time>
+   |</trkpt>
+   |<trkpt lat="46.0094830454" lon="14.7917131705">
+   |<time>2013-05-18T10:08:39Z</time>
+   |</trkpt>
+   |<trkpt lat="46.1020093403" lon="14.5404009146">
+   |<time>2013-05-18T10:15:23Z</time>
+   |</trkpt>
+   |<trkpt lat="46.148820188" lon="14.22317069">
+   |<time>2013-05-18T10:23:04Z</time>
+   |</trkpt>
+   |<trkpt lat="46.148820188" lon="14.22317069">
+   |<ele>140.0</ele>
+   |<time>2013-05-18T09:23:04Z</time>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 45.148820188 46.148820188 14.22317069 15.1625017447
+   elevation extremes: 140.0 140.0
+   duration: 3600.0
+   has times: True, has elevations: False
+   points data: 10 points, the last 195708.11038381874 m from the start
+   points data in 2D: the last 195708.11038381874 m from the start
+   center of track 0: 45.69315676219001 14.658229283749998
+   nearest to it: track 0 segment 0 point 5 at 45.8329139495 15.0540117545
+   near it (5% of the length): 0 passes
+   location at 2013-05-18 08:53:04+00:00: 45.192713358 14.5431474966
+   course from point 0 to 1: 78.98913547395155 loxodromic, 78.87569873811636 great circle
+   elevation angle: None
+   speeds: 9 of 10 known, fastest 54.39566642561729 m/s
+   first segment moving data: 7200.0 0.0 195708.11038381874 0.0 54.39903546596513
+   simplify(): 9 points, 195708.11038381874 m in 2D
+   reduce_points(min_distance=30): 9 points
+   reduce_points(max_points_no=20): 10 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 10 points, 195708.11038381874 m in 2D
+   add_missing_elevations(): 8 missing, 0 left
+   add_missing_speeds(): 0 with a speed
+   split(0, 0, 5): 2 segments of 6 4
+   join(0): 1 segments, 10 points in the first
+   moved 1000 m at 45 degrees: 45.15517223629045 14.232177266899622
+   moved by -0.5 and 0.25 degrees: 44.648820188 14.47317069
+   adjust_time(1:00:30.000250): starts 2013-05-18 09:23:34.000250+00:00
+== gpx-with-node-with-comments.gpx
+File: gpx-with-node-with-comments.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2014-05-06 12:29:33+00:00
+    Ended: 2014-05-06 12:29:33+00:00
+    Points: 1
+    Avg distance between points: 0.00m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2014-05-06 12:29:33+00:00
+        Ended: 2014-05-06 12:29:33+00:00
+        Points: 1
+        Avg distance between points: 0.00m
+
+-- to_xml() as GPX 1.0: 12 lines, 491 bytes, crc32 02408a72
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="Ultra GPS Logger">
+   |  <trk>
+   |    <name>2014-05-06_132925</name>
+   |    <trkseg>
+   |      <trkpt lat="51.519402" lon="-0.134462">
+   |        <ele>81.0</ele>
+   |        <time>2014-05-06T12:29:33Z</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 12 lines, 491 bytes, crc32 3ee689c7
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="Ultra GPS Logger">
+   |  <trk>
+   |    <name>2014-05-06_132925</name>
+   |    <trkseg>
+   |      <trkpt lat="51.519402" lon="-0.134462">
+   |        <ele>81.0</ele>
+   |        <time>2014-05-06T12:29:33Z</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 12 lines, 447 bytes, crc32 06badb39
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="Ultra GPS Logger">
+   |<trk>
+   |<name>2014-05-06_132925</name>
+   |<trkseg>
+   |<trkpt lat="51.519402" lon="-0.134462">
+   |<ele>81.0</ele>
+   |<time>2014-05-06T12:29:33Z</time>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 51.519402 51.519402 -0.134462 -0.134462
+   elevation extremes: 81.0 81.0
+   duration: 0.0
+   has times: False, has elevations: False
+   points data: 1 points, the last 0 m from the start
+   points data in 2D: the last 0 m from the start
+   center of track 0: 51.519402 -0.134462
+   nearest to it: track 0 segment 0 point 0 at 51.519402 -0.134462
+   near it (5% of the length): 0 passes
+   location at 2014-05-06 12:29:33+00:00: 51.519402 -0.134462
+   simplify(): 1 points, 0 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 1 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 1 points, 0 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 51.525754048290445 -0.12425379991430607
+   moved by -0.5 and 0.25 degrees: 51.019402 0.115538
+   adjust_time(1:00:30.000250): starts 2014-05-06 13:30:03.000250+00:00
+== gpx1.0_with_all_fields.gpx
+File: gpx1.0_with_all_fields.gpx
+  GPX name: example name
+  GPX description: example description
+  Author: example author
+  Email: example@email.com
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2013-01-01 12:00:04
+    Ended: 2013-01-01 12:00:04
+    Points: 1
+    Avg distance between points: 0.00m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2013-01-01 12:00:04
+        Ended: 2013-01-01 12:00:04
+        Points: 1
+        Avg distance between points: 0.00m
+
+    Track #0, Segment #1
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.0: 113 lines, 3286 bytes, crc32 c68f10db
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="...">
+   |  <name>example name</name>
+   |  <desc>example description</desc>
+   |  <author>example author</author>
+   |  <email>example@email.com</email>
+   |  <url>http://example.url</url>
+   |  <urlname>example urlname</urlname>
+   |  <time>2013-01-01T12:00:00</time>
+   |  <keywords>example keywords</keywords>
+   |  <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>example url</url>
+   |    <urlname>example urlname</urlname>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>example url</url>
+   |    <urlname>example urlname</urlname>
+   |    <number>7</number>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <url>example url r</url>
+   |      <urlname>example urlname r</urlname>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <url>example url t</url>
+   |    <urlname>example urlname t</urlname>
+   |    <number>1</number>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <url>example url t</url>
+   |        <urlname>example urlname t</urlname>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 123 lines, 3439 bytes, crc32 8dea4226
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="...">
+   |  <metadata>
+   |    <name>example name</name>
+   |    <desc>example description</desc>
+   |    <author>
+   |      <name>example author</name>
+   |      <email id="example" domain="email.com" />
+   |    </author>
+   |    <link href="http://example.url">
+   |      <text>example urlname</text>
+   |    </link>
+   |    <time>2013-01-01T12:00:00</time>
+   |    <keywords>example keywords</keywords>
+   |    <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |  </metadata>
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="example url">
+   |      <text>example urlname</text>
+   |    </link>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="example url">
+   |      <text>example urlname</text>
+   |    </link>
+   |    <number>7</number>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <link href="example url r">
+   |        <text>example urlname r</text>
+   |      </link>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <link href="example url t">
+   |      <text>example urlname t</text>
+   |    </link>
+   |    <number>1</number>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <link href="example url t">
+   |          <text>example urlname t</text>
+   |        </link>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 113 lines, 2770 bytes, crc32 50eac10a
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="...">
+   |<name>example name</name>
+   |<desc>example description</desc>
+   |<author>example author</author>
+   |<email>example@email.com</email>
+   |<url>http://example.url</url>
+   |<urlname>example urlname</urlname>
+   |<time>2013-01-01T12:00:00</time>
+   |<keywords>example keywords</keywords>
+   |<bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |<wpt lat="12.3" lon="45.6">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:00Z</time>
+   |<magvar>1.1</magvar>
+   |<geoidheight>2.0</geoidheight>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<url>example url</url>
+   |<urlname>example urlname</urlname>
+   |<sym>example sym</sym>
+   |<type>example type</type>
+   |<fix>2d</fix>
+   |<sat>5</sat>
+   |<hdop>6.0</hdop>
+   |<vdop>7.0</vdop>
+   |<pdop>8.0</pdop>
+   |<ageofdgpsdata>9.0</ageofdgpsdata>
+   |<dgpsid>45</dgpsid>
+   |</wpt>
+   |<wpt lat="13.4" lon="46.7">
+   |</wpt>
+   |<rte>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<url>example url</url>
+   |<urlname>example urlname</urlname>
+   |<number>7</number>
+   |<rtept lat="10.0" lon="20.0">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:03Z</time>
+   |<magvar>1.2</magvar>
+   |<geoidheight>2.1</geoidheight>
+   |<name>example name r</name>
+   |<cmt>example cmt r</cmt>
+   |<desc>example desc r</desc>
+   |<src>example src r</src>
+   |<url>example url r</url>
+   |<urlname>example urlname r</urlname>
+   |<sym>example sym r</sym>
+   |<type>example type r</type>
+   |<fix>3d</fix>
+   |<sat>6</sat>
+   |<hdop>7.0</hdop>
+   |<vdop>8.0</vdop>
+   |<pdop>9.0</pdop>
+   |<ageofdgpsdata>10.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |</rtept>
+   |<rtept lat="11.0" lon="21.0">
+   |</rtept>
+   |<rtept lat="12.0" lon="22.0">
+   |</rtept>
+   |</rte>
+   |<rte>
+   |<name>second route</name>
+   |<desc>example desc 2</desc>
+   |<rtept lat="13.0" lon="23.0">
+   |</rtept>
+   |<rtept lat="14.0" lon="24.0">
+   |</rtept>
+   |</rte>
+   |<trk>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<url>example url t</url>
+   |<urlname>example urlname t</urlname>
+   |<number>1</number>
+   |<trkseg>
+   |<trkpt lat="10.1" lon="-20.2">
+   |<ele>11.1</ele>
+   |<time>2013-01-01T12:00:04</time>
+   |<magvar>12.0</magvar>
+   |<geoidheight>13.0</geoidheight>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<url>example url t</url>
+   |<urlname>example urlname t</urlname>
+   |<sym>example sym t</sym>
+   |<type>example type t</type>
+   |<fix>3d</fix>
+   |<sat>100</sat>
+   |<hdop>101.0</hdop>
+   |<vdop>102.0</vdop>
+   |<pdop>103.0</pdop>
+   |<ageofdgpsdata>104.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |</trkpt>
+   |</trkseg>
+   |<trkseg>
+   |</trkseg>
+   |</trk>
+   |<trk>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 10.1 10.1 -20.2 -20.2
+   elevation extremes: 11.1 11.1
+   duration: 0.0
+   has times: False, has elevations: False
+   points data: 1 points, the last 0 m from the start
+   points data in 2D: the last 0 m from the start
+   center of track 0: 10.1 -20.2
+   nearest to it: track 0 segment 0 point 0 at 10.1 -20.2
+   near it (5% of the length): 0 passes
+   location at 2013-01-01 12:00:04: 10.1 -20.2
+   simplify(): 1 points, 0 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 1 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 1 points, 0 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 10.106352048290445 -20.193547965695135
+   moved by -0.5 and 0.25 degrees: 9.6 -19.95
+   adjust_time(1:00:30.000250): starts 2013-01-01 13:00:34.000250
+== gpx1.1_with_all_fields.gpx
+File: gpx1.1_with_all_fields.gpx
+  GPX name: example name
+  GPX description: example description
+  Author: author name
+  Email: aaa@bbb.com
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2013-01-01 12:00:04
+    Ended: 2013-01-01 12:00:04
+    Points: 1
+    Avg distance between points: 0.00m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2013-01-01 12:00:04
+        Ended: 2013-01-01 12:00:04
+        Points: 1
+        Avg distance between points: 0.00m
+
+    Track #0, Segment #1
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.1: 164 lines, 4483 bytes, crc32 5385367d
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:ext="https://github.com/tkrajina/gpxpy" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="...">
+   |  <metadata>
+   |    <name>example name</name>
+   |    <desc>example description</desc>
+   |    <author>
+   |      <name>author name</name>
+   |      <email id="aaa" domain="bbb.com" />
+   |      <link href="http://link">
+   |        <text>link text</text>
+   |        <type>link type</type>
+   |      </link>
+   |    </author>
+   |    <copyright author="gpxauth">
+   |      <year>2013</year>
+   |      <license>lic</license>
+   |    </copyright>
+   |    <link href="http://link2">
+   |      <text>link text2</text>
+   |      <type>link type2</type>
+   |    </link>
+   |    <time>2013-01-01T12:00:00</time>
+   |    <keywords>example keywords</keywords>
+   |    <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |    <extensions>
+   |      <ext:aaa>bbb</ext:aaa>
+   |      <ext:bbb>ccc</ext:bbb>
+   |      <ext:ccc>ddd</ext:ccc>
+   |    </extensions>
+   |  </metadata>
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="http://link3">
+   |      <text>link text3</text>
+   |      <type>link type3</type>
+   |    </link>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |    <extensions>
+   |      <ext:aaa>bbb</ext:aaa>
+   |      <ext:ccc>ddd</ext:ccc>
+   |    </extensions>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="http://link3">
+   |      <text>link text3</text>
+   |      <type>link type3</type>
+   |    </link>
+   |    <number>7</number>
+   |    <type>rte type</type>
+   |    <extensions>
+   |      <ext:rtee1>1</ext:rtee1>
+   |      <ext:rtee2>2</ext:rtee2>
+   |    </extensions>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <link href="http://linkrtept">
+   |        <text>rtept link</text>
+   |        <type>rtept link type</type>
+   |      </link>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |      <extensions>
+   |        <ext:rteepte>rtept</ext:rteepte>
+   |      </extensions>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <link href="http://trk">
+   |      <text>trk link</text>
+   |      <type>trk link type</type>
+   |    </link>
+   |    <number>1</number>
+   |    <type>t</type>
+   |    <extensions>
+   |      <ext:a1>2</ext:a1>
+   |    </extensions>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <link href="http://trkpt">
+   |          <text>trkpt link</text>
+   |          <type>trkpt link type</type>
+   |        </link>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |        <extensions>
+   |          <ext:last>true</ext:last>
+   |        </extensions>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |  <extensions>
+   |    <ext:gpxext>...</ext:gpxext>
+   |  </extensions>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 113 lines, 3280 bytes, crc32 1e40ab9e
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:ext="https://github.com/tkrajina/gpxpy" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="...">
+   |  <name>example name</name>
+   |  <desc>example description</desc>
+   |  <author>author name</author>
+   |  <email>aaa@bbb.com</email>
+   |  <url>http://link2</url>
+   |  <urlname>link text2</urlname>
+   |  <time>2013-01-01T12:00:00</time>
+   |  <keywords>example keywords</keywords>
+   |  <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>http://link3</url>
+   |    <urlname>link text3</urlname>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>http://link3</url>
+   |    <urlname>link text3</urlname>
+   |    <number>7</number>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <url>http://linkrtept</url>
+   |      <urlname>rtept link</urlname>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <url>http://trk</url>
+   |    <urlname>trk link</urlname>
+   |    <number>1</number>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <url>http://trkpt</url>
+   |        <urlname>trkpt link</urlname>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 164 lines, 3659 bytes, crc32 b5ed3a94
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:ext="https://github.com/tkrajina/gpxpy" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="...">
+   |<metadata>
+   |<name>example name</name>
+   |<desc>example description</desc>
+   |<author>
+   |<name>author name</name>
+   |<email id="aaa" domain="bbb.com" />
+   |<link href="http://link">
+   |<text>link text</text>
+   |<type>link type</type>
+   |</link>
+   |</author>
+   |<copyright author="gpxauth">
+   |<year>2013</year>
+   |<license>lic</license>
+   |</copyright>
+   |<link href="http://link2">
+   |<text>link text2</text>
+   |<type>link type2</type>
+   |</link>
+   |<time>2013-01-01T12:00:00</time>
+   |<keywords>example keywords</keywords>
+   |<bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |<extensions>
+   |<ext:aaa>bbb</ext:aaa>
+   |<ext:bbb>ccc</ext:bbb>
+   |<ext:ccc>ddd</ext:ccc>
+   |</extensions>
+   |</metadata>
+   |<wpt lat="12.3" lon="45.6">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:00Z</time>
+   |<magvar>1.1</magvar>
+   |<geoidheight>2.0</geoidheight>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<link href="http://link3">
+   |<text>link text3</text>
+   |<type>link type3</type>
+   |</link>
+   |<sym>example sym</sym>
+   |<type>example type</type>
+   |<fix>2d</fix>
+   |<sat>5</sat>
+   |<hdop>6.0</hdop>
+   |<vdop>7.0</vdop>
+   |<pdop>8.0</pdop>
+   |<ageofdgpsdata>9.0</ageofdgpsdata>
+   |<dgpsid>45</dgpsid>
+   |<extensions>
+   |<ext:aaa>bbb</ext:aaa>
+   |<ext:ccc>ddd</ext:ccc>
+   |</extensions>
+   |</wpt>
+   |<wpt lat="13.4" lon="46.7">
+   |</wpt>
+   |<rte>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<link href="http://link3">
+   |<text>link text3</text>
+   |<type>link type3</type>
+   |</link>
+   |<number>7</number>
+   |<type>rte type</type>
+   |<extensions>
+   |<ext:rtee1>1</ext:rtee1>
+   |<ext:rtee2>2</ext:rtee2>
+   |</extensions>
+   |<rtept lat="10.0" lon="20.0">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:03Z</time>
+   |<magvar>1.2</magvar>
+   |<geoidheight>2.1</geoidheight>
+   |<name>example name r</name>
+   |<cmt>example cmt r</cmt>
+   |<desc>example desc r</desc>
+   |<src>example src r</src>
+   |<link href="http://linkrtept">
+   |<text>rtept link</text>
+   |<type>rtept link type</type>
+   |</link>
+   |<sym>example sym r</sym>
+   |<type>example type r</type>
+   |<fix>3d</fix>
+   |<sat>6</sat>
+   |<hdop>7.0</hdop>
+   |<vdop>8.0</vdop>
+   |<pdop>9.0</pdop>
+   |<ageofdgpsdata>10.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |<extensions>
+   |<ext:rteepte>rtept</ext:rteepte>
+   |</extensions>
+   |</rtept>
+   |<rtept lat="11.0" lon="21.0">
+   |</rtept>
+   |<rtept lat="12.0" lon="22.0">
+   |</rtept>
+   |</rte>
+   |<rte>
+   |<name>second route</name>
+   |<desc>example desc 2</desc>
+   |<rtept lat="13.0" lon="23.0">
+   |</rtept>
+   |<rtept lat="14.0" lon="24.0">
+   |</rtept>
+   |</rte>
+   |<trk>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<link href="http://trk">
+   |<text>trk link</text>
+   |<type>trk link type</type>
+   |</link>
+   |<number>1</number>
+   |<type>t</type>
+   |<extensions>
+   |<ext:a1>2</ext:a1>
+   |</extensions>
+   |<trkseg>
+   |<trkpt lat="10.1" lon="-20.2">
+   |<ele>11.1</ele>
+   |<time>2013-01-01T12:00:04</time>
+   |<magvar>12.0</magvar>
+   |<geoidheight>13.0</geoidheight>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<link href="http://trkpt">
+   |<text>trkpt link</text>
+   |<type>trkpt link type</type>
+   |</link>
+   |<sym>example sym t</sym>
+   |<type>example type t</type>
+   |<fix>3d</fix>
+   |<sat>100</sat>
+   |<hdop>101.0</hdop>
+   |<vdop>102.0</vdop>
+   |<pdop>103.0</pdop>
+   |<ageofdgpsdata>104.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |<extensions>
+   |<ext:last>true</ext:last>
+   |</extensions>
+   |</trkpt>
+   |</trkseg>
+   |<trkseg>
+   |</trkseg>
+   |</trk>
+   |<trk>
+   |</trk>
+   |<extensions>
+   |<ext:gpxext>...</ext:gpxext>
+   |</extensions>
+   |</gpx>
+-- operations
+   bounds: 10.1 10.1 -20.2 -20.2
+   elevation extremes: 11.1 11.1
+   duration: 0.0
+   has times: False, has elevations: False
+   points data: 1 points, the last 0 m from the start
+   points data in 2D: the last 0 m from the start
+   center of track 0: 10.1 -20.2
+   nearest to it: track 0 segment 0 point 0 at 10.1 -20.2
+   near it (5% of the length): 0 passes
+   location at 2013-01-01 12:00:04: 10.1 -20.2
+   simplify(): 1 points, 0 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 1 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 1 points, 0 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 10.106352048290445 -20.193547965695135
+   moved by -0.5 and 0.25 degrees: 9.6 -19.95
+   adjust_time(1:00:30.000250): starts 2013-01-01 13:00:34.000250
+== gpx1.1_with_extensions.gpx
+File: gpx1.1_with_extensions.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.1: 13 lines, 553 bytes, crc32 0f388784
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:ext="gpx.py" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="nawagers">
+   |  <wpt lat="12.3" lon="45.6">
+   |    <extensions>
+   |      <ext:aaa ext:jjj="kkk">bbb</ext:aaa>hhh
+   |      <ext:ccc>
+   |        <ext:ddd ext:lll="mmm" ext:nnn="ooo">eee
+   |          <ext:fff>ggg</ext:fff>iii
+   |        </ext:ddd>
+   |      </ext:ccc>
+   |    </extensions>
+   |  </wpt>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 5 lines, 335 bytes, crc32 9524b8ba
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:ext="gpx.py" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="nawagers">
+   |  <wpt lat="12.3" lon="45.6">
+   |  </wpt>
+   |</gpx>
+-- to_xml(prettyprint=False): 13 lines, 497 bytes, crc32 8ab1b85a
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:ext="gpx.py" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="nawagers">
+   |<wpt lat="12.3" lon="45.6">
+   |<extensions>
+   |<ext:aaa ext:jjj="kkk">bbb</ext:aaa>hhh
+   |<ext:ccc>
+   |<ext:ddd ext:lll="mmm" ext:nnn="ooo">eee
+   |<ext:fff>ggg</ext:fff>iii
+   |</ext:ddd>
+   |</ext:ccc>
+   |</extensions>
+   |</wpt>
+   |</gpx>
+== gpx1.1_with_extensions_without_namespaces.gpx
+File: gpx1.1_with_extensions_without_namespaces.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.1: 13 lines, 490 bytes, crc32 3bdf7a28
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="nawagers">
+   |  <wpt lat="12.3" lon="45.6">
+   |    <extensions>
+   |      <aaa jjj="kkk">bbb</aaa>hhh
+   |      <ccc>
+   |        <ddd lll="mmm" nnn="ooo">eee
+   |          <fff>ggg</fff>iii
+   |        </ddd>
+   |      </ccc>
+   |    </extensions>
+   |  </wpt>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 5 lines, 316 bytes, crc32 13a111db
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="nawagers">
+   |  <wpt lat="12.3" lon="45.6">
+   |  </wpt>
+   |</gpx>
+-- to_xml(prettyprint=False): 13 lines, 434 bytes, crc32 09b2f6a8
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="nawagers">
+   |<wpt lat="12.3" lon="45.6">
+   |<extensions>
+   |<aaa jjj="kkk">bbb</aaa>hhh
+   |<ccc>
+   |<ddd lll="mmm" nnn="ooo">eee
+   |<fff>ggg</fff>iii
+   |</ddd>
+   |</ccc>
+   |</extensions>
+   |</wpt>
+   |</gpx>
+== gpx_with_garmin_extension.gpx
+File: gpx_with_garmin_extension.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.1: 12 lines, 625 bytes, crc32 5528125a
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="Runkeeper - http://www.runkeeper.com">
+   |  <wpt lat="37.778259" lon="-122.391386">
+   |    <ele>3.4</ele>
+   |    <time>2016-06-17T23:41:03Z</time>
+   |    <extensions>
+   |      <gpxtpx:TrackPointExtension>
+   |        <gpxtpx:hr>171</gpxtpx:hr>
+   |      </gpxtpx:TrackPointExtension>
+   |    </extensions>
+   |  </wpt>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 7 lines, 484 bytes, crc32 c4fc6eba
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="Runkeeper - http://www.runkeeper.com">
+   |  <wpt lat="37.778259" lon="-122.391386">
+   |    <ele>3.4</ele>
+   |    <time>2016-06-17T23:41:03Z</time>
+   |  </wpt>
+   |</gpx>
+-- to_xml(prettyprint=False): 12 lines, 585 bytes, crc32 542bcfc4
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="Runkeeper - http://www.runkeeper.com">
+   |<wpt lat="37.778259" lon="-122.391386">
+   |<ele>3.4</ele>
+   |<time>2016-06-17T23:41:03Z</time>
+   |<extensions>
+   |<gpxtpx:TrackPointExtension>
+   |<gpxtpx:hr>171</gpxtpx:hr>
+   |</gpxtpx:TrackPointExtension>
+   |</extensions>
+   |</wpt>
+   |</gpx>
+== korita-zbevnica.gpx
+File: korita-zbevnica.gpx
+    Length 2D: 4.310km
+    Length 3D: 4.526km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 369.68m
+    Total downhill: 96.18m
+    Started: None
+    Ended: None
+    Points: 180
+    Avg distance between points: 23.94m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #1, Segment #0
+        Length 2D: 4.310km
+        Length 3D: 4.526km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 369.68m
+        Total downhill: 96.18m
+        Started: None
+        Ended: None
+        Points: 180
+        Avg distance between points: 23.94m
+
+    Track #2, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+    Track #3, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+gpxinfo -s -m:
+    Length 2D: 2.678miles
+    Length 3D: 2.813miles
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00mph (raw: 0.00mph)
+    Avg speed: ?
+    Total uphill: 1212.85ft
+    Total downhill: 315.55ft
+    Started: None
+    Ended: None
+    Points: 180
+    Avg distance between points: 78.55ft
+
+-- to_xml() as GPX 1.0: 580 lines, 18662 bytes, crc32 ec4641e4
+-- parsed again: the same XML
+-- to_xml('1.1'): 582 lines, 18693 bytes, crc32 a241f11a
+-- to_xml(prettyprint=False): 580 lines, 14942 bytes, crc32 c5f68884
+-- operations
+   bounds: 45.376405958 45.388400462 14.144491442 14.163702093
+   elevation extremes: 728.335938 1050.858154
+   duration: None
+   has times: False, has elevations: True
+   points data: 180 points, the last 4526.428829747926 m from the start
+   points data in 2D: the last 4309.793872995055 m from the start
+   center of track 0: 0 0
+   nearest to it: track 1 segment 0 point 17 at 45.378244193 14.147537341
+   near it (5% of the length): 0 passes
+   course from point 0 to 1: 50.63140593288396 loxodromic, 50.63139459519532 great circle
+   elevation angle: 30.82944295086278
+   speeds: 0 of 180 known
+   first segment moving data: 0.0 0.0 0.0 0.0 0.0
+   simplify(): 46 points, 4215.470618017105 m in 2D
+   reduce_points(min_distance=30): 90 points
+   reduce_points(max_points_no=20): 16 points
+   smooth(): uphill 350.1605765599992 downhill 76.66545955999914
+   smooth(horizontal, remove_extremes): 178 points, 4249.116645436165 m in 2D
+   add_missing_times(): 180 missing, 180 left
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 45.38695214329044 14.15353486690563
+   moved by -0.5 and 0.25 degrees: 44.880600095 14.394491442
+   adjust_time(1:00:30.000250): starts None
+   fill_time_data_with_regular_intervals(09:30 to 11:30:07):
+     Length 2D: 4.310km
+     Length 3D: 4.526km
+     Moving time: 01:35:17
+     Stopped time: 00:24:49
+     Max speed: 1.06m/s = 3.83km/h (raw: 3.42m/s = 12.31km/h)
+     Avg speed: 0.73m/s = 2.62km/h
+     Total uphill: 369.68m
+     Total downhill: 96.18m
+     Started: 2024-05-01 09:30:00+00:00
+     Ended: 2024-05-01 11:30:07.000030+00:00
+     Points: 180
+     Avg distance between points: 23.94m
+
+== odd-times.gpx
+File: odd-times.gpx
+    Length 2D: 0.271km
+    Length 3D: 0.271km
+    Moving time: 00:00:19
+    Stopped time: n/a
+    Max speed: 14.27m/s = 51.36km/h (raw: 14.27m/s = 51.36km/h)
+    Avg speed: 13.90m/s = 50.05km/h
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2021-03-05 04:05:06.500000+01:00
+    Ended: 2021-03-05 05:05:26+02:00
+    Points: 3
+    Avg distance between points: 90.36m
+
+    Track #0, Segment #0
+        Length 2D: 0.271km
+        Length 3D: 0.271km
+        Moving time: 00:00:19
+        Stopped time: n/a
+        Max speed: 14.27m/s = 51.36km/h (raw: 14.27m/s = 51.36km/h)
+        Avg speed: 13.90m/s = 50.05km/h
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2021-03-05 04:05:06.500000+01:00
+        Ended: 2021-03-05 05:05:26+02:00
+        Points: 3
+        Avg distance between points: 90.36m
+
+-- to_xml() as GPX 1.0: 65 lines, 1934 bytes, crc32 c2b0469b
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="hand-edited">
+   |  <time>2021-03-28T01:59:59</time>
+   |  <wpt lat="45.0" lon="13.0">
+   |    <time>2021-03-05T04:05:06</time>
+   |    <name>short fields</name>
+   |  </wpt>
+   |  <wpt lat="45.1" lon="13.1">
+   |    <time>2021-03-05T04:05:06.123456Z</time>
+   |    <name>seven digits</name>
+   |  </wpt>
+   |  <wpt lat="45.2" lon="13.2">
+   |    <time>2021-03-05T04:05:06-05:30</time>
+   |    <name>unicode minus</name>
+   |  </wpt>
+   |  <wpt lat="45.3" lon="13.3">
+   |    <time>2021-03-05T04:05:06Z</time>
+   |    <name>a letter for a sign</name>
+   |  </wpt>
+   |  <wpt lat="45.4" lon="13.4">
+   |    <time>2021-03-05T04:05:06+05:30</time>
+   |    <name>no colon</name>
+   |  </wpt>
+   |  <wpt lat="45.5" lon="13.5">
+   |    <time>2021-03-05T04:05:06+05:00</time>
+   |    <name>hours only</name>
+   |  </wpt>
+   |  <wpt lat="45.6" lon="13.6">
+   |    <name>month 13</name>
+   |  </wpt>
+   |  <wpt lat="45.7" lon="13.7">
+   |    <name>not a leap year</name>
+   |  </wpt>
+   |  <wpt lat="45.8" lon="13.8">
+   |    <time>2021-03-05T04:05:06Z</time>
+   |    <name>newline at the end</name>
+   |  </wpt>
+   |  <wpt lat="45.9" lon="13.9">
+   |    <name>space at the start</name>
+   |  </wpt>
+   |  <wpt lat="46.0" lon="14.0">
+   |    <ele>1000.0</ele>
+   |    <name>padded numbers</name>
+   |    <fix>dgps</fix>
+   |    <sat>7</sat>
+   |  </wpt>
+   |  <wpt lat="46.1" lon="14.1">
+   |    <ele>0.00001</ele>
+   |    <magvar>12345678901234567168</magvar>
+   |    <name>&lt;exponents&gt; &amp; &amp;</name>
+   |  </wpt>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="46.0" lon="14.0">
+   |        <time>2021-03-05T04:05:06.500000+01:00</time>
+   |      </trkpt>
+   |      <trkpt lat="46.001" lon="14.001">
+   |        <time>2021-03-05T03:05:16Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.002" lon="14.002">
+   |        <time>2021-03-05T05:05:26+02:00</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 67 lines, 1963 bytes, crc32 9e3d8217
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="hand-edited">
+   |  <metadata>
+   |    <time>2021-03-28T01:59:59</time>
+   |  </metadata>
+   |  <wpt lat="45.0" lon="13.0">
+   |    <time>2021-03-05T04:05:06</time>
+   |    <name>short fields</name>
+   |  </wpt>
+   |  <wpt lat="45.1" lon="13.1">
+   |    <time>2021-03-05T04:05:06.123456Z</time>
+   |    <name>seven digits</name>
+   |  </wpt>
+   |  <wpt lat="45.2" lon="13.2">
+   |    <time>2021-03-05T04:05:06-05:30</time>
+   |    <name>unicode minus</name>
+   |  </wpt>
+   |  <wpt lat="45.3" lon="13.3">
+   |    <time>2021-03-05T04:05:06Z</time>
+   |    <name>a letter for a sign</name>
+   |  </wpt>
+   |  <wpt lat="45.4" lon="13.4">
+   |    <time>2021-03-05T04:05:06+05:30</time>
+   |    <name>no colon</name>
+   |  </wpt>
+   |  <wpt lat="45.5" lon="13.5">
+   |    <time>2021-03-05T04:05:06+05:00</time>
+   |    <name>hours only</name>
+   |  </wpt>
+   |  <wpt lat="45.6" lon="13.6">
+   |    <name>month 13</name>
+   |  </wpt>
+   |  <wpt lat="45.7" lon="13.7">
+   |    <name>not a leap year</name>
+   |  </wpt>
+   |  <wpt lat="45.8" lon="13.8">
+   |    <time>2021-03-05T04:05:06Z</time>
+   |    <name>newline at the end</name>
+   |  </wpt>
+   |  <wpt lat="45.9" lon="13.9">
+   |    <name>space at the start</name>
+   |  </wpt>
+   |  <wpt lat="46.0" lon="14.0">
+   |    <ele>1000.0</ele>
+   |    <name>padded numbers</name>
+   |    <fix>dgps</fix>
+   |    <sat>7</sat>
+   |  </wpt>
+   |  <wpt lat="46.1" lon="14.1">
+   |    <ele>0.00001</ele>
+   |    <magvar>12345678901234567168</magvar>
+   |    <name>&lt;exponents&gt; &amp; &amp;</name>
+   |  </wpt>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="46.0" lon="14.0">
+   |        <time>2021-03-05T04:05:06.500000+01:00</time>
+   |      </trkpt>
+   |      <trkpt lat="46.001" lon="14.001">
+   |        <time>2021-03-05T03:05:16Z</time>
+   |      </trkpt>
+   |      <trkpt lat="46.002" lon="14.002">
+   |        <time>2021-03-05T05:05:26+02:00</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 65 lines, 1716 bytes, crc32 fc8cfa7c
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="hand-edited">
+   |<time>2021-03-28T01:59:59</time>
+   |<wpt lat="45.0" lon="13.0">
+   |<time>2021-03-05T04:05:06</time>
+   |<name>short fields</name>
+   |</wpt>
+   |<wpt lat="45.1" lon="13.1">
+   |<time>2021-03-05T04:05:06.123456Z</time>
+   |<name>seven digits</name>
+   |</wpt>
+   |<wpt lat="45.2" lon="13.2">
+   |<time>2021-03-05T04:05:06-05:30</time>
+   |<name>unicode minus</name>
+   |</wpt>
+   |<wpt lat="45.3" lon="13.3">
+   |<time>2021-03-05T04:05:06Z</time>
+   |<name>a letter for a sign</name>
+   |</wpt>
+   |<wpt lat="45.4" lon="13.4">
+   |<time>2021-03-05T04:05:06+05:30</time>
+   |<name>no colon</name>
+   |</wpt>
+   |<wpt lat="45.5" lon="13.5">
+   |<time>2021-03-05T04:05:06+05:00</time>
+   |<name>hours only</name>
+   |</wpt>
+   |<wpt lat="45.6" lon="13.6">
+   |<name>month 13</name>
+   |</wpt>
+   |<wpt lat="45.7" lon="13.7">
+   |<name>not a leap year</name>
+   |</wpt>
+   |<wpt lat="45.8" lon="13.8">
+   |<time>2021-03-05T04:05:06Z</time>
+   |<name>newline at the end</name>
+   |</wpt>
+   |<wpt lat="45.9" lon="13.9">
+   |<name>space at the start</name>
+   |</wpt>
+   |<wpt lat="46.0" lon="14.0">
+   |<ele>1000.0</ele>
+   |<name>padded numbers</name>
+   |<fix>dgps</fix>
+   |<sat>7</sat>
+   |</wpt>
+   |<wpt lat="46.1" lon="14.1">
+   |<ele>0.00001</ele>
+   |<magvar>12345678901234567168</magvar>
+   |<name>&lt;exponents&gt; &amp; &amp;</name>
+   |</wpt>
+   |<trk>
+   |<trkseg>
+   |<trkpt lat="46.0" lon="14.0">
+   |<time>2021-03-05T04:05:06.500000+01:00</time>
+   |</trkpt>
+   |<trkpt lat="46.001" lon="14.001">
+   |<time>2021-03-05T03:05:16Z</time>
+   |</trkpt>
+   |<trkpt lat="46.002" lon="14.002">
+   |<time>2021-03-05T05:05:26+02:00</time>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 46.0 46.002 14.0 14.002
+   elevation extremes: None None
+   duration: 19.5
+   has times: True, has elevations: False
+   points data: 3 points, the last 271.0828768686092 m from the start
+   points data in 2D: the last 271.0828768686092 m from the start
+   center of track 0: 46.001000000000005 14.001
+   nearest to it: track 0 segment 0 point 1 at 46.001 14.001
+   near it (5% of the length): 1 passes
+   location at 2021-03-05 04:05:16.250000+01:00: 46.002 14.002
+   course from point 0 to 1: 34.7858571392966 loxodromic, 34.785497468826875 great circle
+   elevation angle: None
+   speeds: 3 of 3 known, fastest 14.267645733076519 m/s
+   first segment moving data: 19.5 0.0 271.0828768686092 0.0 14.267561801257049
+   simplify(): 2 points, 271.0820795126066 m in 2D
+   reduce_points(min_distance=30): 3 points
+   reduce_points(max_points_no=20): 3 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 3 points, 271.0828768686092 m in 2D
+   add_missing_elevations(): 3 missing, 3 left
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 46.006352048290445 14.009144132656527
+   moved by -0.5 and 0.25 degrees: 45.5 14.25
+   adjust_time(1:00:30.000250): starts 2021-03-05 05:05:36.500250+01:00
+== route.gpx
+File: route.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.0: 170 lines, 5213 bytes, crc32 292fbe42
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <rte>
+   |    <rtept lat="45.2787641494" lon="13.726695478">
+   |      <name>#001</name>
+   |    </rtept>
+   |    <rtept lat="45.2785961743" lon="13.7286695838">
+   |      <name>#002</name>
+   |    </rtept>
+   |    <rtept lat="45.2786546825" lon="13.7290772796">
+   |      <name>#003</name>
+   |    </rtept>
+   |    <rtept lat="45.2794030162" lon="13.730610162">
+   |      <name>#004</name>
+   |    </rtept>
+   |    <rtept lat="45.2792227749" lon="13.7308180332">
+   |      <name>#005</name>
+   |    </rtept>
+   |    <rtept lat="45.279001012" lon="13.7315194309">
+   |      <name>#006</name>
+   |    </rtept>
+   |    <rtept lat="45.2790840554" lon="13.732278496">
+   |      <name>#007</name>
+   |    </rtept>
+   |    <rtept lat="45.2788500238" lon="13.7330831587">
+   |      <name>#008</name>
+   |    </rtept>
+   |    <rtept lat="45.2786603444" lon="13.734292835">
+   |      <name>#009</name>
+   |    </rtept>
+   |    <rtept lat="45.2785197363" lon="13.7354971469">
+   |      <name>#010</name>
+   |    </rtept>
+   |    <rtept lat="45.2790934914" lon="13.7353844941">
+   |      <name>#011</name>
+   |    </rtept>
+   |    <rtept lat="45.2792973259" lon="13.7355186045">
+   |      <name>#012</name>
+   |    </rtept>
+   |    <rtept lat="45.2793218613" lon="13.7372298539">
+   |      <name>#013</name>
+   |    </rtept>
+   |    <rtept lat="45.2792331563" lon="13.7383081019">
+   |      <name>#014</name>
+   |    </rtept>
+   |    <rtept lat="45.2794520876" lon="13.7389303744">
+   |      <name>#015</name>
+   |    </rtept>
+   |    <rtept lat="45.2793180866" lon="13.7403063476">
+   |      <name>#016</name>
+   |    </rtept>
+   |    <rtept lat="45.2794785103" lon="13.7408347428">
+   |      <name>#017</name>
+   |    </rtept>
+   |    <rtept lat="45.2806222234" lon="13.7413389981">
+   |      <name>#018</name>
+   |    </rtept>
+   |    <rtept lat="45.2804032966" lon="13.7422724068">
+   |      <name>#019</name>
+   |    </rtept>
+   |    <rtept lat="45.2811110293" lon="13.7462414056">
+   |      <name>#020</name>
+   |    </rtept>
+   |    <rtept lat="45.2808826663" lon="13.747458458">
+   |      <name>#021</name>
+   |    </rtept>
+   |    <rtept lat="45.2840173635" lon="13.7491938472">
+   |      <name>#022</name>
+   |    </rtept>
+   |    <rtept lat="45.2842683593" lon="13.7480378151">
+   |      <name>#023</name>
+   |    </rtept>
+   |    <rtept lat="45.2850081271" lon="13.7476462126">
+   |      <name>#024</name>
+   |    </rtept>
+   |    <rtept lat="45.2890464852" lon="13.7491858006">
+   |      <name>#025</name>
+   |    </rtept>
+   |    <rtept lat="45.2904145557" lon="13.7487459183">
+   |      <name>#026</name>
+   |    </rtept>
+   |    <rtept lat="45.2905881567" lon="13.7478232384">
+   |      <name>#027</name>
+   |    </rtept>
+   |    <rtept lat="45.2911391478" lon="13.746997118">
+   |      <name>#028</name>
+   |    </rtept>
+   |    <rtept lat="45.2912485905" lon="13.7466484308">
+   |      <name>#029</name>
+   |    </rtept>
+   |    <rtept lat="45.2912599122" lon="13.7450551987">
+   |      <name>#030</name>
+   |    </rtept>
+   |    <rtept lat="45.2916976812" lon="13.7447977066">
+   |      <name>#031</name>
+   |    </rtept>
+   |    <rtept lat="45.2912825555" lon="13.7437999249">
+   |      <name>#032</name>
+   |    </rtept>
+   |    <rtept lat="45.290942905" lon="13.7435638905">
+   |      <name>#033</name>
+   |    </rtept>
+   |    <rtept lat="45.2907542094" lon="13.7430274487">
+   |      <name>#034</name>
+   |    </rtept>
+   |    <rtept lat="45.290331529" lon="13.7424588203">
+   |      <name>#035</name>
+   |    </rtept>
+   |    <rtept lat="45.2877425425" lon="13.7419760227">
+   |      <name>#036</name>
+   |    </rtept>
+   |    <rtept lat="45.2884369761" lon="13.7363755703">
+   |      <name>#037</name>
+   |    </rtept>
+   |    <rtept lat="45.2880897604" lon="13.7361073494">
+   |      <name>#038</name>
+   |    </rtept>
+   |    <rtept lat="45.2881916608" lon="13.7356513739">
+   |      <name>#039</name>
+   |    </rtept>
+   |    <rtept lat="45.2882180795" lon="13.7338864803">
+   |      <name>#040</name>
+   |    </rtept>
+   |    <rtept lat="45.2895314466" lon="13.7334251404">
+   |      <name>#041</name>
+   |    </rtept>
+   |    <rtept lat="45.2891615934" lon="13.7286937237">
+   |      <name>#042</name>
+   |    </rtept>
+   |    <rtept lat="45.2893125541" lon="13.728146553">
+   |      <name>#043</name>
+   |    </rtept>
+   |    <rtept lat="45.2893502943" lon="13.7268912792">
+   |      <name>#044</name>
+   |    </rtept>
+   |    <rtept lat="45.2898258179" lon="13.7268269062">
+   |      <name>#045</name>
+   |    </rtept>
+   |    <rtept lat="45.2893389715" lon="13.7269127369">
+   |      <name>#046</name>
+   |    </rtept>
+   |    <rtept lat="45.2892144298" lon="13.7266337872">
+   |      <name>#047</name>
+   |    </rtept>
+   |    <rtept lat="45.2875953508" lon="13.7256467342">
+   |      <name>#048</name>
+   |    </rtept>
+   |    <rtept lat="45.2858139341" lon="13.7251424789">
+   |      <name>#049</name>
+   |    </rtept>
+   |    <rtept lat="45.2847193919" lon="13.7244129181">
+   |      <name>#050</name>
+   |    </rtept>
+   |    <rtept lat="45.2833228763" lon="13.7245202065">
+   |      <name>#051</name>
+   |    </rtept>
+   |    <rtept lat="45.2810430851" lon="13.7263977528">
+   |      <name>#052</name>
+   |    </rtept>
+   |    <rtept lat="45.2805410615" lon="13.7264353037">
+   |      <name>#053</name>
+   |    </rtept>
+   |    <rtept lat="45.279646479" lon="13.7270522118">
+   |      <name>#054</name>
+   |    </rtept>
+   |    <rtept lat="45.2787783011" lon="13.7266552448">
+   |      <name>#055</name>
+   |    </rtept>
+   |  </rte>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 170 lines, 5213 bytes, crc32 3736c2f5
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <rte>
+   |    <rtept lat="45.2787641494" lon="13.726695478">
+   |      <name>#001</name>
+   |    </rtept>
+   |    <rtept lat="45.2785961743" lon="13.7286695838">
+   |      <name>#002</name>
+   |    </rtept>
+   |    <rtept lat="45.2786546825" lon="13.7290772796">
+   |      <name>#003</name>
+   |    </rtept>
+   |    <rtept lat="45.2794030162" lon="13.730610162">
+   |      <name>#004</name>
+   |    </rtept>
+   |    <rtept lat="45.2792227749" lon="13.7308180332">
+   |      <name>#005</name>
+   |    </rtept>
+   |    <rtept lat="45.279001012" lon="13.7315194309">
+   |      <name>#006</name>
+   |    </rtept>
+   |    <rtept lat="45.2790840554" lon="13.732278496">
+   |      <name>#007</name>
+   |    </rtept>
+   |    <rtept lat="45.2788500238" lon="13.7330831587">
+   |      <name>#008</name>
+   |    </rtept>
+   |    <rtept lat="45.2786603444" lon="13.734292835">
+   |      <name>#009</name>
+   |    </rtept>
+   |    <rtept lat="45.2785197363" lon="13.7354971469">
+   |      <name>#010</name>
+   |    </rtept>
+   |    <rtept lat="45.2790934914" lon="13.7353844941">
+   |      <name>#011</name>
+   |    </rtept>
+   |    <rtept lat="45.2792973259" lon="13.7355186045">
+   |      <name>#012</name>
+   |    </rtept>
+   |    <rtept lat="45.2793218613" lon="13.7372298539">
+   |      <name>#013</name>
+   |    </rtept>
+   |    <rtept lat="45.2792331563" lon="13.7383081019">
+   |      <name>#014</name>
+   |    </rtept>
+   |    <rtept lat="45.2794520876" lon="13.7389303744">
+   |      <name>#015</name>
+   |    </rtept>
+   |    <rtept lat="45.2793180866" lon="13.7403063476">
+   |      <name>#016</name>
+   |    </rtept>
+   |    <rtept lat="45.2794785103" lon="13.7408347428">
+   |      <name>#017</name>
+   |    </rtept>
+   |    <rtept lat="45.2806222234" lon="13.7413389981">
+   |      <name>#018</name>
+   |    </rtept>
+   |    <rtept lat="45.2804032966" lon="13.7422724068">
+   |      <name>#019</name>
+   |    </rtept>
+   |    <rtept lat="45.2811110293" lon="13.7462414056">
+   |      <name>#020</name>
+   |    </rtept>
+   |    <rtept lat="45.2808826663" lon="13.747458458">
+   |      <name>#021</name>
+   |    </rtept>
+   |    <rtept lat="45.2840173635" lon="13.7491938472">
+   |      <name>#022</name>
+   |    </rtept>
+   |    <rtept lat="45.2842683593" lon="13.7480378151">
+   |      <name>#023</name>
+   |    </rtept>
+   |    <rtept lat="45.2850081271" lon="13.7476462126">
+   |      <name>#024</name>
+   |    </rtept>
+   |    <rtept lat="45.2890464852" lon="13.7491858006">
+   |      <name>#025</name>
+   |    </rtept>
+   |    <rtept lat="45.2904145557" lon="13.7487459183">
+   |      <name>#026</name>
+   |    </rtept>
+   |    <rtept lat="45.2905881567" lon="13.7478232384">
+   |      <name>#027</name>
+   |    </rtept>
+   |    <rtept lat="45.2911391478" lon="13.746997118">
+   |      <name>#028</name>
+   |    </rtept>
+   |    <rtept lat="45.2912485905" lon="13.7466484308">
+   |      <name>#029</name>
+   |    </rtept>
+   |    <rtept lat="45.2912599122" lon="13.7450551987">
+   |      <name>#030</name>
+   |    </rtept>
+   |    <rtept lat="45.2916976812" lon="13.7447977066">
+   |      <name>#031</name>
+   |    </rtept>
+   |    <rtept lat="45.2912825555" lon="13.7437999249">
+   |      <name>#032</name>
+   |    </rtept>
+   |    <rtept lat="45.290942905" lon="13.7435638905">
+   |      <name>#033</name>
+   |    </rtept>
+   |    <rtept lat="45.2907542094" lon="13.7430274487">
+   |      <name>#034</name>
+   |    </rtept>
+   |    <rtept lat="45.290331529" lon="13.7424588203">
+   |      <name>#035</name>
+   |    </rtept>
+   |    <rtept lat="45.2877425425" lon="13.7419760227">
+   |      <name>#036</name>
+   |    </rtept>
+   |    <rtept lat="45.2884369761" lon="13.7363755703">
+   |      <name>#037</name>
+   |    </rtept>
+   |    <rtept lat="45.2880897604" lon="13.7361073494">
+   |      <name>#038</name>
+   |    </rtept>
+   |    <rtept lat="45.2881916608" lon="13.7356513739">
+   |      <name>#039</name>
+   |    </rtept>
+   |    <rtept lat="45.2882180795" lon="13.7338864803">
+   |      <name>#040</name>
+   |    </rtept>
+   |    <rtept lat="45.2895314466" lon="13.7334251404">
+   |      <name>#041</name>
+   |    </rtept>
+   |    <rtept lat="45.2891615934" lon="13.7286937237">
+   |      <name>#042</name>
+   |    </rtept>
+   |    <rtept lat="45.2893125541" lon="13.728146553">
+   |      <name>#043</name>
+   |    </rtept>
+   |    <rtept lat="45.2893502943" lon="13.7268912792">
+   |      <name>#044</name>
+   |    </rtept>
+   |    <rtept lat="45.2898258179" lon="13.7268269062">
+   |      <name>#045</name>
+   |    </rtept>
+   |    <rtept lat="45.2893389715" lon="13.7269127369">
+   |      <name>#046</name>
+   |    </rtept>
+   |    <rtept lat="45.2892144298" lon="13.7266337872">
+   |      <name>#047</name>
+   |    </rtept>
+   |    <rtept lat="45.2875953508" lon="13.7256467342">
+   |      <name>#048</name>
+   |    </rtept>
+   |    <rtept lat="45.2858139341" lon="13.7251424789">
+   |      <name>#049</name>
+   |    </rtept>
+   |    <rtept lat="45.2847193919" lon="13.7244129181">
+   |      <name>#050</name>
+   |    </rtept>
+   |    <rtept lat="45.2833228763" lon="13.7245202065">
+   |      <name>#051</name>
+   |    </rtept>
+   |    <rtept lat="45.2810430851" lon="13.7263977528">
+   |      <name>#052</name>
+   |    </rtept>
+   |    <rtept lat="45.2805410615" lon="13.7264353037">
+   |      <name>#053</name>
+   |    </rtept>
+   |    <rtept lat="45.279646479" lon="13.7270522118">
+   |      <name>#054</name>
+   |    </rtept>
+   |    <rtept lat="45.2787783011" lon="13.7266552448">
+   |      <name>#055</name>
+   |    </rtept>
+   |  </rte>
+   |</gpx>
+-- to_xml(prettyprint=False): 170 lines, 4439 bytes, crc32 a4f00768
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |<rte>
+   |<rtept lat="45.2787641494" lon="13.726695478">
+   |<name>#001</name>
+   |</rtept>
+   |<rtept lat="45.2785961743" lon="13.7286695838">
+   |<name>#002</name>
+   |</rtept>
+   |<rtept lat="45.2786546825" lon="13.7290772796">
+   |<name>#003</name>
+   |</rtept>
+   |<rtept lat="45.2794030162" lon="13.730610162">
+   |<name>#004</name>
+   |</rtept>
+   |<rtept lat="45.2792227749" lon="13.7308180332">
+   |<name>#005</name>
+   |</rtept>
+   |<rtept lat="45.279001012" lon="13.7315194309">
+   |<name>#006</name>
+   |</rtept>
+   |<rtept lat="45.2790840554" lon="13.732278496">
+   |<name>#007</name>
+   |</rtept>
+   |<rtept lat="45.2788500238" lon="13.7330831587">
+   |<name>#008</name>
+   |</rtept>
+   |<rtept lat="45.2786603444" lon="13.734292835">
+   |<name>#009</name>
+   |</rtept>
+   |<rtept lat="45.2785197363" lon="13.7354971469">
+   |<name>#010</name>
+   |</rtept>
+   |<rtept lat="45.2790934914" lon="13.7353844941">
+   |<name>#011</name>
+   |</rtept>
+   |<rtept lat="45.2792973259" lon="13.7355186045">
+   |<name>#012</name>
+   |</rtept>
+   |<rtept lat="45.2793218613" lon="13.7372298539">
+   |<name>#013</name>
+   |</rtept>
+   |<rtept lat="45.2792331563" lon="13.7383081019">
+   |<name>#014</name>
+   |</rtept>
+   |<rtept lat="45.2794520876" lon="13.7389303744">
+   |<name>#015</name>
+   |</rtept>
+   |<rtept lat="45.2793180866" lon="13.7403063476">
+   |<name>#016</name>
+   |</rtept>
+   |<rtept lat="45.2794785103" lon="13.7408347428">
+   |<name>#017</name>
+   |</rtept>
+   |<rtept lat="45.2806222234" lon="13.7413389981">
+   |<name>#018</name>
+   |</rtept>
+   |<rtept lat="45.2804032966" lon="13.7422724068">
+   |<name>#019</name>
+   |</rtept>
+   |<rtept lat="45.2811110293" lon="13.7462414056">
+   |<name>#020</name>
+   |</rtept>
+   |<rtept lat="45.2808826663" lon="13.747458458">
+   |<name>#021</name>
+   |</rtept>
+   |<rtept lat="45.2840173635" lon="13.7491938472">
+   |<name>#022</name>
+   |</rtept>
+   |<rtept lat="45.2842683593" lon="13.7480378151">
+   |<name>#023</name>
+   |</rtept>
+   |<rtept lat="45.2850081271" lon="13.7476462126">
+   |<name>#024</name>
+   |</rtept>
+   |<rtept lat="45.2890464852" lon="13.7491858006">
+   |<name>#025</name>
+   |</rtept>
+   |<rtept lat="45.2904145557" lon="13.7487459183">
+   |<name>#026</name>
+   |</rtept>
+   |<rtept lat="45.2905881567" lon="13.7478232384">
+   |<name>#027</name>
+   |</rtept>
+   |<rtept lat="45.2911391478" lon="13.746997118">
+   |<name>#028</name>
+   |</rtept>
+   |<rtept lat="45.2912485905" lon="13.7466484308">
+   |<name>#029</name>
+   |</rtept>
+   |<rtept lat="45.2912599122" lon="13.7450551987">
+   |<name>#030</name>
+   |</rtept>
+   |<rtept lat="45.2916976812" lon="13.7447977066">
+   |<name>#031</name>
+   |</rtept>
+   |<rtept lat="45.2912825555" lon="13.7437999249">
+   |<name>#032</name>
+   |</rtept>
+   |<rtept lat="45.290942905" lon="13.7435638905">
+   |<name>#033</name>
+   |</rtept>
+   |<rtept lat="45.2907542094" lon="13.7430274487">
+   |<name>#034</name>
+   |</rtept>
+   |<rtept lat="45.290331529" lon="13.7424588203">
+   |<name>#035</name>
+   |</rtept>
+   |<rtept lat="45.2877425425" lon="13.7419760227">
+   |<name>#036</name>
+   |</rtept>
+   |<rtept lat="45.2884369761" lon="13.7363755703">
+   |<name>#037</name>
+   |</rtept>
+   |<rtept lat="45.2880897604" lon="13.7361073494">
+   |<name>#038</name>
+   |</rtept>
+   |<rtept lat="45.2881916608" lon="13.7356513739">
+   |<name>#039</name>
+   |</rtept>
+   |<rtept lat="45.2882180795" lon="13.7338864803">
+   |<name>#040</name>
+   |</rtept>
+   |<rtept lat="45.2895314466" lon="13.7334251404">
+   |<name>#041</name>
+   |</rtept>
+   |<rtept lat="45.2891615934" lon="13.7286937237">
+   |<name>#042</name>
+   |</rtept>
+   |<rtept lat="45.2893125541" lon="13.728146553">
+   |<name>#043</name>
+   |</rtept>
+   |<rtept lat="45.2893502943" lon="13.7268912792">
+   |<name>#044</name>
+   |</rtept>
+   |<rtept lat="45.2898258179" lon="13.7268269062">
+   |<name>#045</name>
+   |</rtept>
+   |<rtept lat="45.2893389715" lon="13.7269127369">
+   |<name>#046</name>
+   |</rtept>
+   |<rtept lat="45.2892144298" lon="13.7266337872">
+   |<name>#047</name>
+   |</rtept>
+   |<rtept lat="45.2875953508" lon="13.7256467342">
+   |<name>#048</name>
+   |</rtept>
+   |<rtept lat="45.2858139341" lon="13.7251424789">
+   |<name>#049</name>
+   |</rtept>
+   |<rtept lat="45.2847193919" lon="13.7244129181">
+   |<name>#050</name>
+   |</rtept>
+   |<rtept lat="45.2833228763" lon="13.7245202065">
+   |<name>#051</name>
+   |</rtept>
+   |<rtept lat="45.2810430851" lon="13.7263977528">
+   |<name>#052</name>
+   |</rtept>
+   |<rtept lat="45.2805410615" lon="13.7264353037">
+   |<name>#053</name>
+   |</rtept>
+   |<rtept lat="45.279646479" lon="13.7270522118">
+   |<name>#054</name>
+   |</rtept>
+   |<rtept lat="45.2787783011" lon="13.7266552448">
+   |<name>#055</name>
+   |</rtept>
+   |</rte>
+   |</gpx>
+== track-with-empty-segment.gpx
+File: track-with-empty-segment.gpx
+    Length 2D: 0.086km
+    Length 3D: 0.086km
+    Moving time: 00:00:32
+    Stopped time: 00:00:44
+    Max speed: 4.45m/s = 16.03km/h (raw: 4.45m/s = 16.03km/h)
+    Avg speed: 2.47m/s = 8.90km/h
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2013-07-06 17:26:26+00:00
+    Ended: 2013-07-06 17:27:42+00:00
+    Points: 9
+    Avg distance between points: 9.55m
+
+    Track #0, Segment #0
+        Length 2D: 0.086km
+        Length 3D: 0.086km
+        Moving time: 00:00:32
+        Stopped time: 00:00:44
+        Max speed: 4.45m/s = 16.03km/h (raw: 4.45m/s = 16.03km/h)
+        Avg speed: 2.47m/s = 8.90km/h
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2013-07-06 17:26:26+00:00
+        Ended: 2013-07-06 17:27:42+00:00
+        Points: 9
+        Avg distance between points: 9.55m
+
+    Track #0, Segment #1
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.1: 46 lines, 1874 bytes, crc32 5f79b539
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:tc2="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:tp1="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd" version="1.1" creator="TC2 to GPX11 XSLT stylesheet">
+   |  <trk>
+   |    <name>2013-07-06T14:59:00Z</name>
+   |    <trkseg>
+   |      <trkpt lat="50.7772126" lon="6.0819695">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:26Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7773346" lon="6.0821333">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:30Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7774666" lon="6.0823426">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:35Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7776203" lon="6.0826253">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:44Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.777691" lon="6.0826803">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:49Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7777283" lon="6.0827079">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:57Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7777341" lon="6.0827095">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:27:15Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7776789" lon="6.0827233">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:27:41Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7776715" lon="6.0827203">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:27:42Z</time>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 46 lines, 1874 bytes, crc32 2f1fe266
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:tc2="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:tp1="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd" version="1.0" creator="TC2 to GPX11 XSLT stylesheet">
+   |  <trk>
+   |    <name>2013-07-06T14:59:00Z</name>
+   |    <trkseg>
+   |      <trkpt lat="50.7772126" lon="6.0819695">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:26Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7773346" lon="6.0821333">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:30Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7774666" lon="6.0823426">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:35Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7776203" lon="6.0826253">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:44Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.777691" lon="6.0826803">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:49Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7777283" lon="6.0827079">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:26:57Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7777341" lon="6.0827095">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:27:15Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7776789" lon="6.0827233">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:27:41Z</time>
+   |      </trkpt>
+   |      <trkpt lat="50.7776715" lon="6.0827203">
+   |        <ele>191.5999756</ele>
+   |        <time>2013-07-06T17:27:42Z</time>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 46 lines, 1598 bytes, crc32 91644bd5
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:tc2="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:tp1="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd" version="1.1" creator="TC2 to GPX11 XSLT stylesheet">
+   |<trk>
+   |<name>2013-07-06T14:59:00Z</name>
+   |<trkseg>
+   |<trkpt lat="50.7772126" lon="6.0819695">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:26:26Z</time>
+   |</trkpt>
+   |<trkpt lat="50.7773346" lon="6.0821333">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:26:30Z</time>
+   |</trkpt>
+   |<trkpt lat="50.7774666" lon="6.0823426">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:26:35Z</time>
+   |</trkpt>
+   |<trkpt lat="50.7776203" lon="6.0826253">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:26:44Z</time>
+   |</trkpt>
+   |<trkpt lat="50.777691" lon="6.0826803">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:26:49Z</time>
+   |</trkpt>
+   |<trkpt lat="50.7777283" lon="6.0827079">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:26:57Z</time>
+   |</trkpt>
+   |<trkpt lat="50.7777341" lon="6.0827095">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:27:15Z</time>
+   |</trkpt>
+   |<trkpt lat="50.7776789" lon="6.0827233">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:27:41Z</time>
+   |</trkpt>
+   |<trkpt lat="50.7776715" lon="6.0827203">
+   |<ele>191.5999756</ele>
+   |<time>2013-07-06T17:27:42Z</time>
+   |</trkpt>
+   |</trkseg>
+   |<trkseg>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 50.7772126 50.7777341 6.0819695 6.0827233
+   elevation extremes: 191.5999756 191.5999756
+   duration: 76.0
+   has times: True, has elevations: True
+   points data: 9 points, the last 85.94933348340511 m from the start
+   points data in 2D: the last 85.94933348340511 m from the start
+   center of track 0: 50.77757087777778 6.082512444444443
+   nearest to it: track 0 segment 0 point 3 at 50.7776203 6.0826253
+   near it (5% of the length): 0 passes
+   location at 2013-07-06 17:27:04+00:00: 50.7777341 6.0827095
+   course from point 0 to 1: 40.330913348011244 loxodromic, 40.330849901402765 great circle
+   elevation angle: 0.0
+   speeds: 9 of 9 known, fastest 4.453837843596058 m/s
+   first segment moving data: 32.0 44.0 79.07278876011695 6.876544723288156 4.4538329769287825
+   simplify(): 2 points, 73.50297606588445 m in 2D
+   reduce_points(min_distance=30): 3 points
+   reduce_points(max_points_no=20): 9 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 2 points, 73.50297606588445 m in 2D
+   add_missing_speeds(): 0 with a speed
+   split(0, 0, 4): 3 segments of 5 4 0
+   join(0): 2 segments, 9 points in the first
+   moved 1000 m at 45 degrees: 50.783564648290444 6.092014845553385
+   moved by -0.5 and 0.25 degrees: 50.2772126 6.3319695
+   adjust_time(1:00:30.000250): starts 2013-07-06 18:26:56.000250+00:00
+== track-with-extremes.gpx
+File: track-with-extremes.gpx
+    Length 2D: 2.206km
+    Length 3D: 2.211km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 20.60m
+    Total downhill: 8.60m
+    Started: None
+    Ended: None
+    Points: 25
+    Avg distance between points: 88.24m
+
+    Track #0, Segment #0
+        Length 2D: 2.206km
+        Length 3D: 2.211km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 20.60m
+        Total downhill: 8.60m
+        Started: None
+        Ended: None
+        Points: 25
+        Avg distance between points: 88.24m
+
+-- to_xml() as GPX 1.0: 85 lines, 2781 bytes, crc32 a211b8ce
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="GPSBabel - http://www.gpsbabel.org">
+   |  <time>2011-07-05T04:11:41Z</time>
+   |  <bounds minlat="45.479033517" maxlat="45.485465008" minlon="13.50758978" maxlon="13.520498463" />
+   |  <trk>
+   |    <name>Untitled Path</name>
+   |    <trkseg>
+   |      <trkpt lat="45.484591697" lon="13.50758978">
+   |        <ele>10.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484886217" lon="13.508081658">
+   |        <ele>12.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.485073853" lon="13.50884701">
+   |        <ele>30.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484917424" lon="13.509643191">
+   |        <ele>13.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484707053" lon="13.510327969">
+   |        <ele>12.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484363483" lon="13.510938816">
+   |        <ele>14.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.485465008" lon="13.513392241">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.483940495" lon="13.511512125">
+   |        <ele>16.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.483518088" lon="13.512047331">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.48309551" lon="13.512617597">
+   |        <ele>18.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.482700803" lon="13.513113531">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.482174639" lon="13.513458506">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.481543895" lon="13.51365254">
+   |        <ele>14.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480522421" lon="13.511353506">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480991325" lon="13.513769838">
+   |        <ele>17.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480304791" lon="13.513812425">
+   |        <ele>19.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479768537" lon="13.513928747">
+   |        <ele>20.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479286809" lon="13.514120802">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479080765" lon="13.514726474">
+   |        <ele>20.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479033517" lon="13.515254625">
+   |        <ele>21.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479732723" lon="13.5181159">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479893341" lon="13.518642714">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480157135" lon="13.519247902">
+   |        <ele>21.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.48034235" lon="13.519815783">
+   |        <ele>21.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.48036937" lon="13.520498463">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 87 lines, 2812 bytes, crc32 5be1a197
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="GPSBabel - http://www.gpsbabel.org">
+   |  <metadata>
+   |    <time>2011-07-05T04:11:41Z</time>
+   |    <bounds minlat="45.479033517" maxlat="45.485465008" minlon="13.50758978" maxlon="13.520498463" />
+   |  </metadata>
+   |  <trk>
+   |    <name>Untitled Path</name>
+   |    <trkseg>
+   |      <trkpt lat="45.484591697" lon="13.50758978">
+   |        <ele>10.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484886217" lon="13.508081658">
+   |        <ele>12.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.485073853" lon="13.50884701">
+   |        <ele>30.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484917424" lon="13.509643191">
+   |        <ele>13.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484707053" lon="13.510327969">
+   |        <ele>12.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.484363483" lon="13.510938816">
+   |        <ele>14.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.485465008" lon="13.513392241">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.483940495" lon="13.511512125">
+   |        <ele>16.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.483518088" lon="13.512047331">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.48309551" lon="13.512617597">
+   |        <ele>18.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.482700803" lon="13.513113531">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.482174639" lon="13.513458506">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.481543895" lon="13.51365254">
+   |        <ele>14.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480522421" lon="13.511353506">
+   |        <ele>15.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480991325" lon="13.513769838">
+   |        <ele>17.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480304791" lon="13.513812425">
+   |        <ele>19.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479768537" lon="13.513928747">
+   |        <ele>20.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479286809" lon="13.514120802">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479080765" lon="13.514726474">
+   |        <ele>20.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479033517" lon="13.515254625">
+   |        <ele>21.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479732723" lon="13.5181159">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.479893341" lon="13.518642714">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.480157135" lon="13.519247902">
+   |        <ele>21.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.48034235" lon="13.519815783">
+   |        <ele>21.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="45.48036937" lon="13.520498463">
+   |        <ele>22.0</ele>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 85 lines, 2261 bytes, crc32 1502cbf2
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="GPSBabel - http://www.gpsbabel.org">
+   |<time>2011-07-05T04:11:41Z</time>
+   |<bounds minlat="45.479033517" maxlat="45.485465008" minlon="13.50758978" maxlon="13.520498463" />
+   |<trk>
+   |<name>Untitled Path</name>
+   |<trkseg>
+   |<trkpt lat="45.484591697" lon="13.50758978">
+   |<ele>10.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.484886217" lon="13.508081658">
+   |<ele>12.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.485073853" lon="13.50884701">
+   |<ele>30.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.484917424" lon="13.509643191">
+   |<ele>13.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.484707053" lon="13.510327969">
+   |<ele>12.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.484363483" lon="13.510938816">
+   |<ele>14.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.485465008" lon="13.513392241">
+   |<ele>15.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.483940495" lon="13.511512125">
+   |<ele>16.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.483518088" lon="13.512047331">
+   |<ele>15.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.48309551" lon="13.512617597">
+   |<ele>18.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.482700803" lon="13.513113531">
+   |<ele>15.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.482174639" lon="13.513458506">
+   |<ele>15.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.481543895" lon="13.51365254">
+   |<ele>14.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.480522421" lon="13.511353506">
+   |<ele>15.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.480991325" lon="13.513769838">
+   |<ele>17.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.480304791" lon="13.513812425">
+   |<ele>19.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.479768537" lon="13.513928747">
+   |<ele>20.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.479286809" lon="13.514120802">
+   |<ele>22.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.479080765" lon="13.514726474">
+   |<ele>20.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.479033517" lon="13.515254625">
+   |<ele>21.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.479732723" lon="13.5181159">
+   |<ele>22.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.479893341" lon="13.518642714">
+   |<ele>22.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.480157135" lon="13.519247902">
+   |<ele>21.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.48034235" lon="13.519815783">
+   |<ele>21.0</ele>
+   |</trkpt>
+   |<trkpt lat="45.48036937" lon="13.520498463">
+   |<ele>22.0</ele>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 45.479033517 45.485465008 13.50758978 13.520498463
+   elevation extremes: 10.0 30.0
+   duration: None
+   has times: False, has elevations: True
+   points data: 25 points, the last 2211.1171263250208 m from the start
+   points data in 2D: the last 2206.0052814347823 m from the start
+   center of track 0: 45.482018449959995 13.513540378960004
+   nearest to it: track 0 segment 0 point 11 at 45.482174639 13.513458506
+   near it (5% of the length): 1 passes
+   course from point 0 to 1: 49.501367521317945 loxodromic, 49.501192153035255 great circle
+   elevation angle: 2.2686761771295303
+   speeds: 0 of 25 known
+   first segment moving data: 0.0 0.0 0.0 0.0 0.0
+   simplify(): 17 points, 2203.710263146852 m in 2D
+   reduce_points(min_distance=30): 25 points
+   reduce_points(max_points_no=20): 13 points
+   smooth(): uphill 17.07999999999999 downhill 5.079999999999991
+   smooth(horizontal, remove_extremes): 22 points, 1467.408608173262 m in 2D
+   add_missing_times(): 25 missing, 25 left
+   add_missing_speeds(): 0 with a speed
+   split(0, 0, 12): 2 segments of 13 12
+   join(0): 1 segments, 25 points in the first
+   moved 1000 m at 45 degrees: 45.490943745290444 13.516649883800996
+   moved by -0.5 and 0.25 degrees: 44.984591697 13.75758978
+   adjust_time(1:00:30.000250): starts None
+   fill_time_data_with_regular_intervals(09:30 to 11:30:07):
+     Length 2D: 2.206km
+     Length 3D: 2.211km
+     Moving time: 00:25:01
+     Stopped time: 01:35:05
+     Max speed: 0.65m/s = 2.35km/h (raw: 0.79m/s = 2.84km/h)
+     Avg speed: 0.73m/s = 2.63km/h
+     Total uphill: 20.60m
+     Total downhill: 8.60m
+     Started: 2024-05-01 09:30:00+00:00
+     Ended: 2024-05-01 11:30:07.000008+00:00
+     Points: 25
+     Avg distance between points: 88.24m
+
+== track-with-less-sec-time.gpx
+File: track-with-less-sec-time.gpx
+    Length 2D: 0.002km
+    Length 3D: 0.002km
+    Moving time: 00:00:00
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 1.57m/s = 5.66km/h)
+    Avg speed: 1.57m/s = 5.66km/h
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2015-12-11 15:43:13+01:00
+    Ended: 2015-12-11 15:43:13.994000+01:00
+    Points: 2
+    Avg distance between points: 0.78m
+
+    Track #0, Segment #0
+        Length 2D: 0.002km
+        Length 3D: 0.002km
+        Moving time: 00:00:00
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 1.57m/s = 5.66km/h)
+        Avg speed: 1.57m/s = 5.66km/h
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2015-12-11 15:43:13+01:00
+        Ended: 2015-12-11 15:43:13.994000+01:00
+        Points: 2
+        Avg distance between points: 0.78m
+
+-- to_xml() as GPX 1.1: 16 lines, 981 bytes, crc32 ca5de487
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:gpxx="http://www.garmin.com/xmlschemas/GpxExtensions/v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/GpxExtensions/v3 http://www.garmin.com/xmlschemas/GpxExtensionsv3.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd" version="1.1" creator="NikePlus GPX Bridge">
+   |  <trk>
+   |    <type>run</type>
+   |    <trkseg>
+   |      <trkpt lat="57.011456" lon="9.992872">
+   |        <ele>23.5536</ele>
+   |        <time>2015-12-11T15:43:13+01:00</time>
+   |      </trkpt>
+   |      <trkpt lat="57.01147" lon="9.992874">
+   |        <ele>23.551199</ele>
+   |        <time>2015-12-11T15:43:13.994000+01:00</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 15 lines, 960 bytes, crc32 bcf6f291
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:gpxx="http://www.garmin.com/xmlschemas/GpxExtensions/v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/GpxExtensions/v3 http://www.garmin.com/xmlschemas/GpxExtensionsv3.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd" version="1.0" creator="NikePlus GPX Bridge">
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="57.011456" lon="9.992872">
+   |        <ele>23.5536</ele>
+   |        <time>2015-12-11T15:43:13+01:00</time>
+   |      </trkpt>
+   |      <trkpt lat="57.01147" lon="9.992874">
+   |        <ele>23.551199</ele>
+   |        <time>2015-12-11T15:43:13.994000+01:00</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 16 lines, 909 bytes, crc32 f81a33c1
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xmlns:gpxx="http://www.garmin.com/xmlschemas/GpxExtensions/v3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/GpxExtensions/v3 http://www.garmin.com/xmlschemas/GpxExtensionsv3.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd" version="1.1" creator="NikePlus GPX Bridge">
+   |<trk>
+   |<type>run</type>
+   |<trkseg>
+   |<trkpt lat="57.011456" lon="9.992872">
+   |<ele>23.5536</ele>
+   |<time>2015-12-11T15:43:13+01:00</time>
+   |</trkpt>
+   |<trkpt lat="57.01147" lon="9.992874">
+   |<ele>23.551199</ele>
+   |<time>2015-12-11T15:43:13.994000+01:00</time>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 57.011456 57.01147 9.992872 9.992874
+   elevation extremes: 23.551199 23.5536
+   duration: 0.994
+   has times: False, has elevations: False
+   points data: 2 points, the last 1.5631819676596665 m from the start
+   points data in 2D: the last 1.56318012372706 m from the start
+   center of track 0: 57.011463000000006 9.992873
+   nearest to it: track 0 segment 0 point 1 at 57.01147 9.992874
+   near it (5% of the length): 0 passes
+   location at 2015-12-11 15:43:13.497000+01:00: 57.01147 9.992874
+   course from point 0 to 1: 4.447602804141507 loxodromic, 4.4476019673052845 great circle
+   elevation angle: -0.0880046108184966
+   speeds: 2 of 2 known, fastest 1.5726176772617522 m/s
+   first segment moving data: 0.994 0.0 1.5631819676596665 0.0 0.0
+   simplify(): 2 points, 1.56318012372706 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 2 points
+   smooth(): uphill 0 downhill 0.0024009999999989873
+   smooth(horizontal, remove_extremes): 2 points, 1.56318012372706 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 57.01780804829045 10.004538451230756
+   moved by -0.5 and 0.25 degrees: 56.511456 10.242872
+   adjust_time(1:00:30.000250): starts 2015-12-11 16:43:43.000250+01:00
+   fill_time_data_with_regular_intervals(09:30 to 11:30:07):
+     Length 2D: 0.002km
+     Length 3D: 0.002km
+     Moving time: n/a
+     Stopped time: 02:00:07
+     Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+     Avg speed: ?
+     Total uphill: 0.00m
+     Total downhill: 0.00m
+     Started: 2024-05-01 09:30:00+00:00
+     Ended: 2024-05-01 11:30:07+00:00
+     Points: 2
+     Avg distance between points: 0.78m
+
+== track-with-small-floats.gpx
+File: track-with-small-floats.gpx
+    Length 2D: 9.476km
+    Length 3D: 9.488km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 10.00m
+    Started: None
+    Ended: None
+    Points: 3
+    Avg distance between points: 3158.74m
+
+    Track #0, Segment #0
+        Length 2D: 9.476km
+        Length 3D: 9.488km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 10.00m
+        Started: None
+        Ended: None
+        Points: 3
+        Avg distance between points: 3158.74m
+
+-- to_xml() as GPX 1.1: 17 lines, 632 bytes, crc32 b506e983
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="Wolfgang Rohdewald">
+   |  <trk>
+   |    <name>Untitled Path</name>
+   |    <trkseg>
+   |      <trkpt lat="0.000091697" lon="0.00758978">
+   |        <ele>10.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="0.084886217" lon="0.000081658">
+   |        <ele>12.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="0.084886217" lon="0.000081658">
+   |        <ele>0.000005</ele>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 17 lines, 632 bytes, crc32 7578132e
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="Wolfgang Rohdewald">
+   |  <trk>
+   |    <name>Untitled Path</name>
+   |    <trkseg>
+   |      <trkpt lat="0.000091697" lon="0.00758978">
+   |        <ele>10.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="0.084886217" lon="0.000081658">
+   |        <ele>12.0</ele>
+   |      </trkpt>
+   |      <trkpt lat="0.084886217" lon="0.000081658">
+   |        <ele>0.000005</ele>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 17 lines, 556 bytes, crc32 0d98fe13
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="Wolfgang Rohdewald">
+   |<trk>
+   |<name>Untitled Path</name>
+   |<trkseg>
+   |<trkpt lat="0.000091697" lon="0.00758978">
+   |<ele>10.0</ele>
+   |</trkpt>
+   |<trkpt lat="0.084886217" lon="0.000081658">
+   |<ele>12.0</ele>
+   |</trkpt>
+   |<trkpt lat="0.084886217" lon="0.000081658">
+   |<ele>0.000005</ele>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 9.1697e-05 0.084886217 8.1658e-05 0.00758978
+   elevation extremes: 5e-06 12.0
+   duration: None
+   has times: False, has elevations: True
+   points data: 3 points, the last 9488.213595300436 m from the start
+   points data in 2D: the last 9476.213389245673 m from the start
+   center of track 0: 0.056621377 0.0025843653333333335
+   nearest to it: track 0 segment 0 point 1 at 0.084886217 8.1658e-05
+   near it (5% of the length): 0 passes
+   course from point 0 to 1: 354.9399493790483 loxodromic, 354.93995123698915 great circle
+   elevation angle: 0.012092547161796934
+   speeds: 0 of 3 known
+   first segment moving data: 0.0 0.0 0.0 0.0 0.0
+   simplify(): 2 points, 9476.213389245673 m in 2D
+   reduce_points(min_distance=30): 2 points
+   reduce_points(max_points_no=20): 3 points
+   smooth(): uphill 0 downhill 9.999995
+   smooth(horizontal, remove_extremes): 3 points, 9476.213389245673 m in 2D
+   add_missing_times(): 3 missing, 3 left
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 0.006443745290444337 0.013941828290452473
+   moved by -0.5 and 0.25 degrees: -0.499908303 0.25758978
+   adjust_time(1:00:30.000250): starts None
+   fill_time_data_with_regular_intervals(09:30 to 11:30:07):
+     Length 2D: 9.476km
+     Length 3D: 9.488km
+     Moving time: 01:00:03
+     Stopped time: 01:00:03
+     Max speed: 2.63m/s = 9.47km/h (raw: 2.63m/s = 9.47km/h)
+     Avg speed: 2.63m/s = 9.47km/h
+     Total uphill: 0.00m
+     Total downhill: 10.00m
+     Started: 2024-05-01 09:30:00+00:00
+     Ended: 2024-05-01 11:30:07+00:00
+     Points: 3
+     Avg distance between points: 3158.74m
+
+== track_with_dilution_errors.gpx
+File: track_with_dilution_errors.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 1
+    Avg distance between points: 0.00m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 1
+        Avg distance between points: 0.00m
+
+-- to_xml() as GPX 1.0: 24 lines, 735 bytes, crc32 cb9cbdbf
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <wpt lat="12.1" lon="13.2">
+   |    <hdop>100.1</hdop>
+   |    <vdop>101.1</vdop>
+   |    <pdop>102.1</pdop>
+   |  </wpt>
+   |  <rte>
+   |    <rtept lat="12.1" lon="13.2">
+   |      <hdop>200.1</hdop>
+   |      <vdop>201.1</vdop>
+   |      <pdop>202.1</pdop>
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="12.1" lon="13.2">
+   |        <hdop>300.1</hdop>
+   |        <vdop>301.1</vdop>
+   |        <pdop>302.1</pdop>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 24 lines, 735 bytes, crc32 622be7cd
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <wpt lat="12.1" lon="13.2">
+   |    <hdop>100.1</hdop>
+   |    <vdop>101.1</vdop>
+   |    <pdop>102.1</pdop>
+   |  </wpt>
+   |  <rte>
+   |    <rtept lat="12.1" lon="13.2">
+   |      <hdop>200.1</hdop>
+   |      <vdop>201.1</vdop>
+   |      <pdop>202.1</pdop>
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="12.1" lon="13.2">
+   |        <hdop>300.1</hdop>
+   |        <vdop>301.1</vdop>
+   |        <pdop>302.1</pdop>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 24 lines, 641 bytes, crc32 79a0f416
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |<wpt lat="12.1" lon="13.2">
+   |<hdop>100.1</hdop>
+   |<vdop>101.1</vdop>
+   |<pdop>102.1</pdop>
+   |</wpt>
+   |<rte>
+   |<rtept lat="12.1" lon="13.2">
+   |<hdop>200.1</hdop>
+   |<vdop>201.1</vdop>
+   |<pdop>202.1</pdop>
+   |</rtept>
+   |</rte>
+   |<trk>
+   |<trkseg>
+   |<trkpt lat="12.1" lon="13.2">
+   |<hdop>300.1</hdop>
+   |<vdop>301.1</vdop>
+   |<pdop>302.1</pdop>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 12.1 12.1 13.2 13.2
+   elevation extremes: None None
+   duration: 0.0
+   has times: False, has elevations: False
+   points data: 1 points, the last 0 m from the start
+   points data in 2D: the last 0 m from the start
+   center of track 0: 12.1 13.2
+   nearest to it: track 0 segment 0 point 0 at 12.1 13.2
+   near it (5% of the length): 0 passes
+   simplify(): 1 points, 0 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 1 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 1 points, 0 m in 2D
+   add_missing_elevations(): 1 missing, 1 left
+   add_missing_times(): 1 missing, 1 left
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 12.106352048290445 13.20649637675473
+   moved by -0.5 and 0.25 degrees: 11.6 13.45
+   adjust_time(1:00:30.000250): starts None
+== track_with_speed.gpx
+File: track_with_speed.gpx
+  Author: Serial=1443
+    Length 2D: 0.019km
+    Length 3D: 0.023km
+    Moving time: 00:00:13
+    Stopped time: n/a
+    Max speed: 2.47m/s = 8.89km/h (raw: 2.47m/s = 8.89km/h)
+    Avg speed: 1.80m/s = 6.46km/h
+    Total uphill: 5.01m
+    Total downhill: 0.59m
+    Started: 2009-03-02 14:05:52+00:00
+    Ended: 2009-03-02 14:06:05+00:00
+    Points: 3
+    Avg distance between points: 6.22m
+
+    Track #0, Segment #0
+        Length 2D: 0.019km
+        Length 3D: 0.023km
+        Moving time: 00:00:13
+        Stopped time: n/a
+        Max speed: 2.47m/s = 8.89km/h (raw: 2.47m/s = 8.89km/h)
+        Avg speed: 1.80m/s = 6.46km/h
+        Total uphill: 5.01m
+        Total downhill: 0.59m
+        Started: 2009-03-02 14:05:52+00:00
+        Ended: 2009-03-02 14:06:05+00:00
+        Points: 3
+        Avg distance between points: 6.22m
+
+-- to_xml() as GPX 1.1: 25 lines, 872 bytes, crc32 dd036203
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <metadata>
+   |    <author>
+   |      <name>Serial=1443</name>
+   |    </author>
+   |    <time>2007-03-02T10:34:03Z</time>
+   |  </metadata>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="52.330848" lon="5.541371">
+   |        <ele>48.962041</ele>
+   |        <time>2009-03-02T14:05:52Z</time>
+   |      </trkpt>
+   |      <trkpt lat="52.330951" lon="5.541344">
+   |        <ele>58.166437</ele>
+   |        <time>2009-03-02T14:05:58Z</time>
+   |      </trkpt>
+   |      <trkpt lat="52.331014" lon="5.541333">
+   |        <ele>53.381747</ele>
+   |        <time>2009-03-02T14:06:05Z</time>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 24 lines, 897 bytes, crc32 aa433174
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <author>Serial=1443</author>
+   |  <time>2007-03-02T10:34:03Z</time>
+   |  <trk>
+   |    <trkseg>
+   |      <trkpt lat="52.330848" lon="5.541371">
+   |        <ele>48.962041</ele>
+   |        <time>2009-03-02T14:05:52Z</time>
+   |        <speed>1.2</speed>
+   |      </trkpt>
+   |      <trkpt lat="52.330951" lon="5.541344">
+   |        <ele>58.166437</ele>
+   |        <time>2009-03-02T14:05:58Z</time>
+   |        <speed>2.2</speed>
+   |      </trkpt>
+   |      <trkpt lat="52.331014" lon="5.541333">
+   |        <ele>53.381747</ele>
+   |        <time>2009-03-02T14:06:05Z</time>
+   |        <speed>3.2</speed>
+   |      </trkpt>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 25 lines, 754 bytes, crc32 30a1739e
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |<metadata>
+   |<author>
+   |<name>Serial=1443</name>
+   |</author>
+   |<time>2007-03-02T10:34:03Z</time>
+   |</metadata>
+   |<trk>
+   |<trkseg>
+   |<trkpt lat="52.330848" lon="5.541371">
+   |<ele>48.962041</ele>
+   |<time>2009-03-02T14:05:52Z</time>
+   |</trkpt>
+   |<trkpt lat="52.330951" lon="5.541344">
+   |<ele>58.166437</ele>
+   |<time>2009-03-02T14:05:58Z</time>
+   |</trkpt>
+   |<trkpt lat="52.331014" lon="5.541333">
+   |<ele>53.381747</ele>
+   |<time>2009-03-02T14:06:05Z</time>
+   |</trkpt>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 52.330848 52.331014 5.541333 5.541371
+   elevation extremes: 48.962041 58.166437
+   duration: 13.0
+   has times: True, has elevations: True
+   points data: 3 points, the last 23.34035370987997 m from the start
+   points data in 2D: the last 18.665026775139328 m from the start
+   center of track 0: 52.33093766666667 5.541349333333334
+   nearest to it: track 0 segment 0 point 1 at 52.330951 5.541344
+   near it (5% of the length): 0 passes
+   location at 2009-03-02 14:05:58.500000+00:00: 52.331014 5.541333
+   course from point 0 to 1: 350.8990348175906 loxodromic, 350.8990455032964 great circle
+   elevation angle: 38.40232349026039
+   speeds: 3 of 3 known, fastest 2.4696016294442944 m/s
+   first segment moving data: 13.0 0.0 23.34035370987997 0.0 2.469601541085919
+   simplify(): 2 points, 18.65896966954116 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 3 points
+   smooth(): uphill 5.007670200000007 downhill 0.5879642000000089
+   smooth(horizontal, remove_extremes): 3 points, 18.665026775139328 m in 2D
+   add_missing_speeds(): 3 with a speed
+   moved 1000 m at 45 degrees: 52.33720004829045 5.551765433542728
+   moved by -0.5 and 0.25 degrees: 51.830848 5.791371
+   adjust_time(1:00:30.000250): starts 2009-03-02 15:06:22.000250+00:00
+== unicode.gpx
+File: unicode.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.0: 47 lines, 1572 bytes, crc32 5306a886
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="GPSBabel - http://www.gpsbabel.org">
+   |  <time>2010-08-06T10:36:35Z</time>
+   |  <bounds minlat="45.735199945" maxlat="45.795349991" minlon="14.28863327" maxlon="14.377516648" />
+   |  <wpt lat="45.757933259" lon="14.294899916">
+   |    <ele>-0.11438</ele>
+   |    <name>šđčćž</name>
+   |    <cmt>ŠĐČĆŽ</cmt>
+   |    <desc>BACK TO THE ROOTS</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.735199945" lon="14.377516648">
+   |    <ele>-0.11438</ele>
+   |    <name>BIRDS NEST</name>
+   |    <cmt>BIRDS NEST</cmt>
+   |    <desc>BIRDS NEST</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.791266663" lon="14.293566607">
+   |    <ele>-0.11438</ele>
+   |    <name>FAGGIO</name>
+   |    <cmt>FAGGIO</cmt>
+   |    <desc>FAGGIO</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.795349991" lon="14.28863327">
+   |    <ele>-0.11438</ele>
+   |    <name>RAKOV12</name>
+   |    <cmt>RAKOV12</cmt>
+   |    <desc>RAKOV12</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.791666647" lon="14.305099938">
+   |    <ele>-0.11438</ele>
+   |    <name>RAKV SKCJN</name>
+   |    <cmt>RAKOV SKOCJAN</cmt>
+   |    <desc>RAKOV SKOCJAN</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.765583254" lon="14.361333288">
+   |    <ele>-0.11438</ele>
+   |    <name>VANSHNG LK</name>
+   |    <cmt>VANISHING LAKE</cmt>
+   |    <desc>VANISHING LAKE</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 49 lines, 1603 bytes, crc32 4978f7d3
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="GPSBabel - http://www.gpsbabel.org">
+   |  <metadata>
+   |    <time>2010-08-06T10:36:35Z</time>
+   |    <bounds minlat="45.735199945" maxlat="45.795349991" minlon="14.28863327" maxlon="14.377516648" />
+   |  </metadata>
+   |  <wpt lat="45.757933259" lon="14.294899916">
+   |    <ele>-0.11438</ele>
+   |    <name>šđčćž</name>
+   |    <cmt>ŠĐČĆŽ</cmt>
+   |    <desc>BACK TO THE ROOTS</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.735199945" lon="14.377516648">
+   |    <ele>-0.11438</ele>
+   |    <name>BIRDS NEST</name>
+   |    <cmt>BIRDS NEST</cmt>
+   |    <desc>BIRDS NEST</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.791266663" lon="14.293566607">
+   |    <ele>-0.11438</ele>
+   |    <name>FAGGIO</name>
+   |    <cmt>FAGGIO</cmt>
+   |    <desc>FAGGIO</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.795349991" lon="14.28863327">
+   |    <ele>-0.11438</ele>
+   |    <name>RAKOV12</name>
+   |    <cmt>RAKOV12</cmt>
+   |    <desc>RAKOV12</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.791666647" lon="14.305099938">
+   |    <ele>-0.11438</ele>
+   |    <name>RAKV SKCJN</name>
+   |    <cmt>RAKOV SKOCJAN</cmt>
+   |    <desc>RAKOV SKOCJAN</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |  <wpt lat="45.765583254" lon="14.361333288">
+   |    <ele>-0.11438</ele>
+   |    <name>VANSHNG LK</name>
+   |    <cmt>VANISHING LAKE</cmt>
+   |    <desc>VANISHING LAKE</desc>
+   |    <sym>City (Small)</sym>
+   |  </wpt>
+   |</gpx>
+-- to_xml(prettyprint=False): 47 lines, 1424 bytes, crc32 9847eb69
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="GPSBabel - http://www.gpsbabel.org">
+   |<time>2010-08-06T10:36:35Z</time>
+   |<bounds minlat="45.735199945" maxlat="45.795349991" minlon="14.28863327" maxlon="14.377516648" />
+   |<wpt lat="45.757933259" lon="14.294899916">
+   |<ele>-0.11438</ele>
+   |<name>šđčćž</name>
+   |<cmt>ŠĐČĆŽ</cmt>
+   |<desc>BACK TO THE ROOTS</desc>
+   |<sym>City (Small)</sym>
+   |</wpt>
+   |<wpt lat="45.735199945" lon="14.377516648">
+   |<ele>-0.11438</ele>
+   |<name>BIRDS NEST</name>
+   |<cmt>BIRDS NEST</cmt>
+   |<desc>BIRDS NEST</desc>
+   |<sym>City (Small)</sym>
+   |</wpt>
+   |<wpt lat="45.791266663" lon="14.293566607">
+   |<ele>-0.11438</ele>
+   |<name>FAGGIO</name>
+   |<cmt>FAGGIO</cmt>
+   |<desc>FAGGIO</desc>
+   |<sym>City (Small)</sym>
+   |</wpt>
+   |<wpt lat="45.795349991" lon="14.28863327">
+   |<ele>-0.11438</ele>
+   |<name>RAKOV12</name>
+   |<cmt>RAKOV12</cmt>
+   |<desc>RAKOV12</desc>
+   |<sym>City (Small)</sym>
+   |</wpt>
+   |<wpt lat="45.791666647" lon="14.305099938">
+   |<ele>-0.11438</ele>
+   |<name>RAKV SKCJN</name>
+   |<cmt>RAKOV SKOCJAN</cmt>
+   |<desc>RAKOV SKOCJAN</desc>
+   |<sym>City (Small)</sym>
+   |</wpt>
+   |<wpt lat="45.765583254" lon="14.361333288">
+   |<ele>-0.11438</ele>
+   |<name>VANSHNG LK</name>
+   |<cmt>VANISHING LAKE</cmt>
+   |<desc>VANISHING LAKE</desc>
+   |<sym>City (Small)</sym>
+   |</wpt>
+   |</gpx>
+== unicode2.gpx
+File: unicode2.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.1: 8 lines, 407 bytes, crc32 6b172eed
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="OSMTracker for Android™ - http://osmtracker-android.googlecode.com/">
+   |  <trk>
+   |    <name>test™</name>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 8 lines, 407 bytes, crc32 9ef304d6
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="OSMTracker for Android™ - http://osmtracker-android.googlecode.com/">
+   |  <trk>
+   |    <name>test™</name>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 8 lines, 391 bytes, crc32 cf0ceaba
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="OSMTracker for Android™ - http://osmtracker-android.googlecode.com/">
+   |<trk>
+   |<name>test™</name>
+   |<trkseg>
+   |</trkseg>
+   |</trk>
+   |</gpx>
+== unicode_with_bom.gpx
+File: unicode_with_bom.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.1: 15 lines, 619 bytes, crc32 7462b9b0
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <wpt lat="43.309634" lon="3.515386">
+   |    <ele>-14.6</ele>
+   |    <time>2016-05-27T10:08:47.800000Z</time>
+   |    <geoidheight>0.0</geoidheight>
+   |    <name>test</name>
+   |    <cmt>69.26474016</cmt>
+   |    <desc>test desc</desc>
+   |    <sat>4</sat>
+   |    <hdop>16.2</hdop>
+   |    <vdop>9.3</vdop>
+   |    <pdop>18.7</pdop>
+   |  </wpt>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 15 lines, 619 bytes, crc32 3ddf641b
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |  <wpt lat="43.309634" lon="3.515386">
+   |    <ele>-14.6</ele>
+   |    <time>2016-05-27T10:08:47.800000Z</time>
+   |    <geoidheight>0.0</geoidheight>
+   |    <name>test</name>
+   |    <cmt>69.26474016</cmt>
+   |    <desc>test desc</desc>
+   |    <sat>4</sat>
+   |    <hdop>16.2</hdop>
+   |    <vdop>9.3</vdop>
+   |    <pdop>18.7</pdop>
+   |  </wpt>
+   |</gpx>
+-- to_xml(prettyprint=False): 15 lines, 575 bytes, crc32 33b66cda
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="gpx.py -- https://github.com/tkrajina/gpxpy">
+   |<wpt lat="43.309634" lon="3.515386">
+   |<ele>-14.6</ele>
+   |<time>2016-05-27T10:08:47.800000Z</time>
+   |<geoidheight>0.0</geoidheight>
+   |<name>test</name>
+   |<cmt>69.26474016</cmt>
+   |<desc>test desc</desc>
+   |<sat>4</sat>
+   |<hdop>16.2</hdop>
+   |<vdop>9.3</vdop>
+   |<pdop>18.7</pdop>
+   |</wpt>
+   |</gpx>
+== unicode_with_bom_noencoding.gpx
+File: unicode_with_bom_noencoding.gpx
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: None
+    Ended: None
+    Points: 0
+
+-- to_xml() as GPX 1.1: 8 lines, 430 bytes, crc32 36b32fd5
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="GPS Visualizer http://www.gpsvisualizer.com/">
+   |  <wpt lat="0.1" lon="0.1">
+   |    <ele>0.0</ele>
+   |    <name>bom noencoding ő</name>
+   |    <desc>bom desc</desc>
+   |  </wpt>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 8 lines, 430 bytes, crc32 902e9863
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="GPS Visualizer http://www.gpsvisualizer.com/">
+   |  <wpt lat="0.1" lon="0.1">
+   |    <ele>0.0</ele>
+   |    <name>bom noencoding ő</name>
+   |    <desc>bom desc</desc>
+   |  </wpt>
+   |</gpx>
+-- to_xml(prettyprint=False): 8 lines, 414 bytes, crc32 7cb28bc1
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="GPS Visualizer http://www.gpsvisualizer.com/">
+   |<wpt lat="0.1" lon="0.1">
+   |<ele>0.0</ele>
+   |<name>bom noencoding ő</name>
+   |<desc>bom desc</desc>
+   |</wpt>
+   |</gpx>
+== validation_gpx10.gpx
+File: validation_gpx10.gpx
+  GPX name: example name
+  GPX description: example description
+  Author: example author
+  Email: example@email.com
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2013-01-01 12:00:04
+    Ended: 2013-01-01 12:00:04
+    Points: 1
+    Avg distance between points: 0.00m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2013-01-01 12:00:04
+        Ended: 2013-01-01 12:00:04
+        Points: 1
+        Avg distance between points: 0.00m
+
+    Track #0, Segment #1
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.0: 113 lines, 3286 bytes, crc32 c68f10db
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="...">
+   |  <name>example name</name>
+   |  <desc>example description</desc>
+   |  <author>example author</author>
+   |  <email>example@email.com</email>
+   |  <url>http://example.url</url>
+   |  <urlname>example urlname</urlname>
+   |  <time>2013-01-01T12:00:00</time>
+   |  <keywords>example keywords</keywords>
+   |  <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>example url</url>
+   |    <urlname>example urlname</urlname>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>example url</url>
+   |    <urlname>example urlname</urlname>
+   |    <number>7</number>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <url>example url r</url>
+   |      <urlname>example urlname r</urlname>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <url>example url t</url>
+   |    <urlname>example urlname t</urlname>
+   |    <number>1</number>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <url>example url t</url>
+   |        <urlname>example urlname t</urlname>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.1'): 123 lines, 3439 bytes, crc32 8dea4226
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.1" creator="...">
+   |  <metadata>
+   |    <name>example name</name>
+   |    <desc>example description</desc>
+   |    <author>
+   |      <name>example author</name>
+   |      <email id="example" domain="email.com" />
+   |    </author>
+   |    <link href="http://example.url">
+   |      <text>example urlname</text>
+   |    </link>
+   |    <time>2013-01-01T12:00:00</time>
+   |    <keywords>example keywords</keywords>
+   |    <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |  </metadata>
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="example url">
+   |      <text>example urlname</text>
+   |    </link>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="example url">
+   |      <text>example urlname</text>
+   |    </link>
+   |    <number>7</number>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <link href="example url r">
+   |        <text>example urlname r</text>
+   |      </link>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <link href="example url t">
+   |      <text>example urlname t</text>
+   |    </link>
+   |    <number>1</number>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <link href="example url t">
+   |          <text>example urlname t</text>
+   |        </link>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 113 lines, 2770 bytes, crc32 50eac10a
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd" version="1.0" creator="...">
+   |<name>example name</name>
+   |<desc>example description</desc>
+   |<author>example author</author>
+   |<email>example@email.com</email>
+   |<url>http://example.url</url>
+   |<urlname>example urlname</urlname>
+   |<time>2013-01-01T12:00:00</time>
+   |<keywords>example keywords</keywords>
+   |<bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |<wpt lat="12.3" lon="45.6">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:00Z</time>
+   |<magvar>1.1</magvar>
+   |<geoidheight>2.0</geoidheight>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<url>example url</url>
+   |<urlname>example urlname</urlname>
+   |<sym>example sym</sym>
+   |<type>example type</type>
+   |<fix>2d</fix>
+   |<sat>5</sat>
+   |<hdop>6.0</hdop>
+   |<vdop>7.0</vdop>
+   |<pdop>8.0</pdop>
+   |<ageofdgpsdata>9.0</ageofdgpsdata>
+   |<dgpsid>45</dgpsid>
+   |</wpt>
+   |<wpt lat="13.4" lon="46.7">
+   |</wpt>
+   |<rte>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<url>example url</url>
+   |<urlname>example urlname</urlname>
+   |<number>7</number>
+   |<rtept lat="10.0" lon="20.0">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:03Z</time>
+   |<magvar>1.2</magvar>
+   |<geoidheight>2.1</geoidheight>
+   |<name>example name r</name>
+   |<cmt>example cmt r</cmt>
+   |<desc>example desc r</desc>
+   |<src>example src r</src>
+   |<url>example url r</url>
+   |<urlname>example urlname r</urlname>
+   |<sym>example sym r</sym>
+   |<type>example type r</type>
+   |<fix>3d</fix>
+   |<sat>6</sat>
+   |<hdop>7.0</hdop>
+   |<vdop>8.0</vdop>
+   |<pdop>9.0</pdop>
+   |<ageofdgpsdata>10.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |</rtept>
+   |<rtept lat="11.0" lon="21.0">
+   |</rtept>
+   |<rtept lat="12.0" lon="22.0">
+   |</rtept>
+   |</rte>
+   |<rte>
+   |<name>second route</name>
+   |<desc>example desc 2</desc>
+   |<rtept lat="13.0" lon="23.0">
+   |</rtept>
+   |<rtept lat="14.0" lon="24.0">
+   |</rtept>
+   |</rte>
+   |<trk>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<url>example url t</url>
+   |<urlname>example urlname t</urlname>
+   |<number>1</number>
+   |<trkseg>
+   |<trkpt lat="10.1" lon="-20.2">
+   |<ele>11.1</ele>
+   |<time>2013-01-01T12:00:04</time>
+   |<magvar>12.0</magvar>
+   |<geoidheight>13.0</geoidheight>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<url>example url t</url>
+   |<urlname>example urlname t</urlname>
+   |<sym>example sym t</sym>
+   |<type>example type t</type>
+   |<fix>3d</fix>
+   |<sat>100</sat>
+   |<hdop>101.0</hdop>
+   |<vdop>102.0</vdop>
+   |<pdop>103.0</pdop>
+   |<ageofdgpsdata>104.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |</trkpt>
+   |</trkseg>
+   |<trkseg>
+   |</trkseg>
+   |</trk>
+   |<trk>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 10.1 10.1 -20.2 -20.2
+   elevation extremes: 11.1 11.1
+   duration: 0.0
+   has times: False, has elevations: False
+   points data: 1 points, the last 0 m from the start
+   points data in 2D: the last 0 m from the start
+   center of track 0: 10.1 -20.2
+   nearest to it: track 0 segment 0 point 0 at 10.1 -20.2
+   near it (5% of the length): 0 passes
+   location at 2013-01-01 12:00:04: 10.1 -20.2
+   simplify(): 1 points, 0 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 1 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 1 points, 0 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 10.106352048290445 -20.193547965695135
+   moved by -0.5 and 0.25 degrees: 9.6 -19.95
+   adjust_time(1:00:30.000250): starts 2013-01-01 13:00:34.000250
+== validation_gpx11.gpx
+File: validation_gpx11.gpx
+  GPX name: example name
+  GPX description: example description
+  Author: author name
+  Email: aaa@bbb.com
+    Length 2D: 0.000km
+    Length 3D: 0.000km
+    Moving time: n/a
+    Stopped time: n/a
+    Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+    Avg speed: ?
+    Total uphill: 0.00m
+    Total downhill: 0.00m
+    Started: 2013-01-01 12:00:04
+    Ended: 2013-01-01 12:00:04
+    Points: 1
+    Avg distance between points: 0.00m
+
+    Track #0, Segment #0
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: 2013-01-01 12:00:04
+        Ended: 2013-01-01 12:00:04
+        Points: 1
+        Avg distance between points: 0.00m
+
+    Track #0, Segment #1
+        Length 2D: 0.000km
+        Length 3D: 0.000km
+        Moving time: n/a
+        Stopped time: n/a
+        Max speed: 0.00m/s = 0.00km/h (raw: 0.00m/s = 0.00km/h)
+        Avg speed: ?
+        Total uphill: 0.00m
+        Total downhill: 0.00m
+        Started: None
+        Ended: None
+        Points: 0
+
+-- to_xml() as GPX 1.1: 139 lines, 3888 bytes, crc32 cc5ef525
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:ext="https://github.com/tkrajina/gpxpy" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="...">
+   |  <metadata>
+   |    <name>example name</name>
+   |    <desc>example description</desc>
+   |    <author>
+   |      <name>author name</name>
+   |      <email id="aaa" domain="bbb.com" />
+   |      <link href="http://link">
+   |        <text>link text</text>
+   |        <type>link type</type>
+   |      </link>
+   |    </author>
+   |    <copyright author="gpxauth">
+   |      <year>2013</year>
+   |      <license>lic</license>
+   |    </copyright>
+   |    <link href="http://link2">
+   |      <text>link text2</text>
+   |      <type>link type2</type>
+   |    </link>
+   |    <time>2013-01-01T12:00:00</time>
+   |    <keywords>example keywords</keywords>
+   |    <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |  </metadata>
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="http://link3">
+   |      <text>link text3</text>
+   |      <type>link type3</type>
+   |    </link>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <link href="http://link3">
+   |      <text>link text3</text>
+   |      <type>link type3</type>
+   |    </link>
+   |    <number>7</number>
+   |    <type>rte type</type>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <link href="http://linkrtept">
+   |        <text>rtept link</text>
+   |        <type>rtept link type</type>
+   |      </link>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <link href="http://trk">
+   |      <text>trk link</text>
+   |      <type>trk link type</type>
+   |    </link>
+   |    <number>1</number>
+   |    <type>t</type>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <link href="http://trkpt">
+   |          <text>trkpt link</text>
+   |          <type>trkpt link type</type>
+   |        </link>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |</gpx>
+-- parsed again: the same XML
+-- to_xml('1.0'): 113 lines, 3280 bytes, crc32 1e40ab9e
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/0" xmlns:ext="https://github.com/tkrajina/gpxpy" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.0" creator="...">
+   |  <name>example name</name>
+   |  <desc>example description</desc>
+   |  <author>author name</author>
+   |  <email>aaa@bbb.com</email>
+   |  <url>http://link2</url>
+   |  <urlname>link text2</urlname>
+   |  <time>2013-01-01T12:00:00</time>
+   |  <keywords>example keywords</keywords>
+   |  <bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |  <wpt lat="12.3" lon="45.6">
+   |    <ele>75.1</ele>
+   |    <time>2013-01-02T02:03:00Z</time>
+   |    <magvar>1.1</magvar>
+   |    <geoidheight>2.0</geoidheight>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>http://link3</url>
+   |    <urlname>link text3</urlname>
+   |    <sym>example sym</sym>
+   |    <type>example type</type>
+   |    <fix>2d</fix>
+   |    <sat>5</sat>
+   |    <hdop>6.0</hdop>
+   |    <vdop>7.0</vdop>
+   |    <pdop>8.0</pdop>
+   |    <ageofdgpsdata>9.0</ageofdgpsdata>
+   |    <dgpsid>45</dgpsid>
+   |  </wpt>
+   |  <wpt lat="13.4" lon="46.7">
+   |  </wpt>
+   |  <rte>
+   |    <name>example name</name>
+   |    <cmt>example cmt</cmt>
+   |    <desc>example desc</desc>
+   |    <src>example src</src>
+   |    <url>http://link3</url>
+   |    <urlname>link text3</urlname>
+   |    <number>7</number>
+   |    <rtept lat="10.0" lon="20.0">
+   |      <ele>75.1</ele>
+   |      <time>2013-01-02T02:03:03Z</time>
+   |      <magvar>1.2</magvar>
+   |      <geoidheight>2.1</geoidheight>
+   |      <name>example name r</name>
+   |      <cmt>example cmt r</cmt>
+   |      <desc>example desc r</desc>
+   |      <src>example src r</src>
+   |      <url>http://linkrtept</url>
+   |      <urlname>rtept link</urlname>
+   |      <sym>example sym r</sym>
+   |      <type>example type r</type>
+   |      <fix>3d</fix>
+   |      <sat>6</sat>
+   |      <hdop>7.0</hdop>
+   |      <vdop>8.0</vdop>
+   |      <pdop>9.0</pdop>
+   |      <ageofdgpsdata>10.0</ageofdgpsdata>
+   |      <dgpsid>99</dgpsid>
+   |    </rtept>
+   |    <rtept lat="11.0" lon="21.0">
+   |    </rtept>
+   |    <rtept lat="12.0" lon="22.0">
+   |    </rtept>
+   |  </rte>
+   |  <rte>
+   |    <name>second route</name>
+   |    <desc>example desc 2</desc>
+   |    <rtept lat="13.0" lon="23.0">
+   |    </rtept>
+   |    <rtept lat="14.0" lon="24.0">
+   |    </rtept>
+   |  </rte>
+   |  <trk>
+   |    <name>example name t</name>
+   |    <cmt>example cmt t</cmt>
+   |    <desc>example desc t</desc>
+   |    <src>example src t</src>
+   |    <url>http://trk</url>
+   |    <urlname>trk link</urlname>
+   |    <number>1</number>
+   |    <trkseg>
+   |      <trkpt lat="10.1" lon="-20.2">
+   |        <ele>11.1</ele>
+   |        <time>2013-01-01T12:00:04</time>
+   |        <magvar>12.0</magvar>
+   |        <geoidheight>13.0</geoidheight>
+   |        <name>example name t</name>
+   |        <cmt>example cmt t</cmt>
+   |        <desc>example desc t</desc>
+   |        <src>example src t</src>
+   |        <url>http://trkpt</url>
+   |        <urlname>trkpt link</urlname>
+   |        <sym>example sym t</sym>
+   |        <type>example type t</type>
+   |        <fix>3d</fix>
+   |        <sat>100</sat>
+   |        <hdop>101.0</hdop>
+   |        <vdop>102.0</vdop>
+   |        <pdop>103.0</pdop>
+   |        <ageofdgpsdata>104.0</ageofdgpsdata>
+   |        <dgpsid>99</dgpsid>
+   |      </trkpt>
+   |    </trkseg>
+   |    <trkseg>
+   |    </trkseg>
+   |  </trk>
+   |  <trk>
+   |  </trk>
+   |</gpx>
+-- to_xml(prettyprint=False): 139 lines, 3198 bytes, crc32 2e29b766
+   |<?xml version="1.0" encoding="UTF-8"?>
+   |<gpx xmlns="http://www.topografix.com/GPX/1/1" xmlns:ext="https://github.com/tkrajina/gpxpy" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd" version="1.1" creator="...">
+   |<metadata>
+   |<name>example name</name>
+   |<desc>example description</desc>
+   |<author>
+   |<name>author name</name>
+   |<email id="aaa" domain="bbb.com" />
+   |<link href="http://link">
+   |<text>link text</text>
+   |<type>link type</type>
+   |</link>
+   |</author>
+   |<copyright author="gpxauth">
+   |<year>2013</year>
+   |<license>lic</license>
+   |</copyright>
+   |<link href="http://link2">
+   |<text>link text2</text>
+   |<type>link type2</type>
+   |</link>
+   |<time>2013-01-01T12:00:00</time>
+   |<keywords>example keywords</keywords>
+   |<bounds minlat="1.2" maxlat="5.6" minlon="3.4" maxlon="7.8" />
+   |</metadata>
+   |<wpt lat="12.3" lon="45.6">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:00Z</time>
+   |<magvar>1.1</magvar>
+   |<geoidheight>2.0</geoidheight>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<link href="http://link3">
+   |<text>link text3</text>
+   |<type>link type3</type>
+   |</link>
+   |<sym>example sym</sym>
+   |<type>example type</type>
+   |<fix>2d</fix>
+   |<sat>5</sat>
+   |<hdop>6.0</hdop>
+   |<vdop>7.0</vdop>
+   |<pdop>8.0</pdop>
+   |<ageofdgpsdata>9.0</ageofdgpsdata>
+   |<dgpsid>45</dgpsid>
+   |</wpt>
+   |<wpt lat="13.4" lon="46.7">
+   |</wpt>
+   |<rte>
+   |<name>example name</name>
+   |<cmt>example cmt</cmt>
+   |<desc>example desc</desc>
+   |<src>example src</src>
+   |<link href="http://link3">
+   |<text>link text3</text>
+   |<type>link type3</type>
+   |</link>
+   |<number>7</number>
+   |<type>rte type</type>
+   |<rtept lat="10.0" lon="20.0">
+   |<ele>75.1</ele>
+   |<time>2013-01-02T02:03:03Z</time>
+   |<magvar>1.2</magvar>
+   |<geoidheight>2.1</geoidheight>
+   |<name>example name r</name>
+   |<cmt>example cmt r</cmt>
+   |<desc>example desc r</desc>
+   |<src>example src r</src>
+   |<link href="http://linkrtept">
+   |<text>rtept link</text>
+   |<type>rtept link type</type>
+   |</link>
+   |<sym>example sym r</sym>
+   |<type>example type r</type>
+   |<fix>3d</fix>
+   |<sat>6</sat>
+   |<hdop>7.0</hdop>
+   |<vdop>8.0</vdop>
+   |<pdop>9.0</pdop>
+   |<ageofdgpsdata>10.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |</rtept>
+   |<rtept lat="11.0" lon="21.0">
+   |</rtept>
+   |<rtept lat="12.0" lon="22.0">
+   |</rtept>
+   |</rte>
+   |<rte>
+   |<name>second route</name>
+   |<desc>example desc 2</desc>
+   |<rtept lat="13.0" lon="23.0">
+   |</rtept>
+   |<rtept lat="14.0" lon="24.0">
+   |</rtept>
+   |</rte>
+   |<trk>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<link href="http://trk">
+   |<text>trk link</text>
+   |<type>trk link type</type>
+   |</link>
+   |<number>1</number>
+   |<type>t</type>
+   |<trkseg>
+   |<trkpt lat="10.1" lon="-20.2">
+   |<ele>11.1</ele>
+   |<time>2013-01-01T12:00:04</time>
+   |<magvar>12.0</magvar>
+   |<geoidheight>13.0</geoidheight>
+   |<name>example name t</name>
+   |<cmt>example cmt t</cmt>
+   |<desc>example desc t</desc>
+   |<src>example src t</src>
+   |<link href="http://trkpt">
+   |<text>trkpt link</text>
+   |<type>trkpt link type</type>
+   |</link>
+   |<sym>example sym t</sym>
+   |<type>example type t</type>
+   |<fix>3d</fix>
+   |<sat>100</sat>
+   |<hdop>101.0</hdop>
+   |<vdop>102.0</vdop>
+   |<pdop>103.0</pdop>
+   |<ageofdgpsdata>104.0</ageofdgpsdata>
+   |<dgpsid>99</dgpsid>
+   |</trkpt>
+   |</trkseg>
+   |<trkseg>
+   |</trkseg>
+   |</trk>
+   |<trk>
+   |</trk>
+   |</gpx>
+-- operations
+   bounds: 10.1 10.1 -20.2 -20.2
+   elevation extremes: 11.1 11.1
+   duration: 0.0
+   has times: False, has elevations: False
+   points data: 1 points, the last 0 m from the start
+   points data in 2D: the last 0 m from the start
+   center of track 0: 10.1 -20.2
+   nearest to it: track 0 segment 0 point 0 at 10.1 -20.2
+   near it (5% of the length): 0 passes
+   location at 2013-01-01 12:00:04: 10.1 -20.2
+   simplify(): 1 points, 0 m in 2D
+   reduce_points(min_distance=30): 1 points
+   reduce_points(max_points_no=20): 1 points
+   smooth(): uphill 0 downhill 0
+   smooth(horizontal, remove_extremes): 1 points, 0 m in 2D
+   add_missing_speeds(): 0 with a speed
+   moved 1000 m at 45 degrees: 10.106352048290445 -20.193547965695135
+   moved by -0.5 and 0.25 degrees: 9.6 -19.95
+   adjust_time(1:00:30.000250): starts 2013-01-01 13:00:34.000250
+== watch-run.gpx
+File: watch-run.gpx
+    Length 2D: 5.330km
+    Length 3D: 5.338km
+    Moving time: 00:15:33
+    Stopped time: 00:01:10
+    Max speed: 7.31m/s = 26.32km/h (raw: 35.45m/s = 127.61km/h)
+    Avg speed: 5.71m/s = 20.57km/h
+    Total uphill: 62.26m
+    Total downhill: 70.16m
+    Started: 2024-10-12 08:00:03.250000+02:00
+    Ended: 2024-10-12 08:18:28.663000+02:00
+    Points: 150
+    Avg distance between points: 35.78m
+
+    Track #0, Segment #0
+        Length 2D: 3.564km
+        Length 3D: 3.572km
+        Moving time: 00:10:39
+        Stopped time: 00:01:10
+        Max speed: 6.11m/s = 21.99km/h (raw: 35.45m/s = 127.61km/h)
+        Avg speed: 5.58m/s = 20.07km/h
+        Total uphill: 44.38m
+        Total downhill: 43.38m
+        Started: 2024-10-12 08:00:03.250000+02:00
+        Ended: 2024-10-12 08:11:52.813000+02:00
+        Points: 100
+        Avg distance between points: 35.64m
+
+    Track #0, Segment #1
+        Length 2D: 1.766km
+        Length 3D: 1.766km
+        Moving time: 00:04:53
+        Stopped time: n/a
+        Max speed: 7.31m/s = 26.32km/h (raw: 7.33m/s = 26.37km/h)
+        Avg speed: 6.01m/s = 21.65km/h
+        Total uphill: 17.88m
+        Total downhill: 26.78m
+        Started: 2024-10-12 08:13:34.950000+02:00
+        Ended: 2024-10-12 08:18:28.663000+02:00
+        Points: 50
+        Avg distance between points: 35.31m
+
+gpxinfo -s -m:
+    Length 2D: 3.312miles
+    Length 3D: 3.317miles
+    Moving time: 933
+    Stopped time: 70
+    Max speed: 16.35mph (raw: 79.30mph)
+    Avg speed: 12.78mph
+    Total uphill: 204.27ft
+    Total downhill: 230.18ft
+    Started: 2024-10-12 08:00:03.250000+02:00
+    Ended: 2024-10-12 08:18:28.663000+02:00
+    Points: 150
+    Avg distance between points: 117.40ft
+
+-- to_xml() as GPX 1.1: 1517 lines, 52137 bytes, crc32 41393872
+-- parsed again: the same XML
+-- to_xml('1.0'): 613 lines, 21926 bytes, crc32 c610f306
+-- to_xml(prettyprint=False): 1517 lines, 38887 bytes, crc32 8f26f654
+-- operations
+   bounds: 46.0454937 46.0576 14.4969988 14.5150012
+   elevation extremes: 287.0 305.3
+   duration: 1003.2760000000001
+   has times: True, has elevations: True
+   points data: 150 points, the last 5337.882967738651 m from the start
+   points data in 2D: the last 5330.020701762193 m from the start
+   center of track 0: 46.05201567599999 14.507111254000002
+   nearest to it: track 0 segment 0 point 18 at 46.0557305 14.5107728
+   near it (5% of the length): 0 passes
+   location at 2024-10-12 08:09:15.956500+02:00: 46.0486045 14.4986137
+   course from point 0 to 1: 16.691645944257022 loxodromic, 16.69159626714165 great circle
+   elevation angle: 1.5431765173531355
+   speeds: 100 of 100 known, fastest 20.778212083308755 m/s
+   first segment moving data: 639.466999999999 70.096 3565.709608318185 5.799999999999898 6.108375034726903
+   simplify(): 28 points, 5312.780247547535 m in 2D
+   reduce_points(min_distance=30): 142 points
+   reduce_points(max_points_no=20): 19 points
+   smooth(): uphill 61.572 downhill 69.47199999999998
+   smooth(horizontal, remove_extremes): 150 points, 5330.020701762192 m in 2D
+   add_missing_speeds(): 0 with a speed
+   split(0, 0, 50): 3 segments of 51 49 50
+   join(0): 2 segments, 100 points in the first
+   moved 1000 m at 45 degrees: 46.05755204829045 14.523852605753747
+   moved by -0.5 and 0.25 degrees: 45.5512 14.7647
+   adjust_time(1:00:30.000250): starts 2024-10-12 09:00:33.250250+02:00
