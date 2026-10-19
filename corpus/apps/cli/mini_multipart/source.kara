@@ -1,0 +1,3215 @@
+// mini_multipart: python-multipart 0.0.32, the streaming form parser
+// under Starlette and FastAPI, which reads every file a browser or curl
+// uploads to them. Ported from python_multipart/multipart.py and
+// decoders.py:
+// - MultipartParser, the state machine that finds the boundaries of a
+//   multipart/form-data body fed to it in chunks of any size, with its
+//   look-behind for a boundary split across two chunks and its limits on
+//   header count and size;
+// - QuerystringParser and OctetStreamParser, for the other two bodies a
+//   form can send;
+// - parse_options_header, which reads Content-Type and
+//   Content-Disposition values, IE's full Windows paths included;
+// - the Base64 and quoted-printable decoders for Content-Transfer-Encoding;
+// - FormParser, Field and File: fields kept in memory, files spilled to
+//   disk past MAX_MEMORY_FILE_SIZE, under their own name if asked.
+//
+// The run writes the files of the data section into data/ and runs every
+// job of data/jobs.jsonl. The last job is a small upload server: it reads
+// raw HTTP POST requests from data/requests/ and saves what they carry
+// into data/uploads/.
+// ------------------------------------------------------------ characters
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> Vec[char] {
+    let mut a = lo;
+    let mut b = hi;
+    if a < 0 {
+        a = 0;
+    }
+    if b > v.len() {
+        b = v.len();
+    }
+    if a >= b {
+        return Vec.new();
+    }
+    v[a..b].to_vec()
+}
+
+
+fn width(s: ref String) -> i64 {
+    s.chars().count()
+}
+
+fn spaces(n: i64) -> String {
+    let mut s = String.new();
+    for _ in 0..n {
+        s.push(' ');
+    }
+    s
+}
+
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// str.isspace, which str.strip, str.split and float() use.
+fn py_space(c: char) -> bool {
+    c.is_whitespace() or (c >= '\u{1c}' and c <= '\u{1f}')
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    text(slice(v, lo, hi))
+}
+
+
+fn ascii_lower(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(char.try_from(c as i64 + 32).unwrap_or(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let mut s = f"{v:x}";
+    while s.len() < n {
+        s = f"0{s}";
+    }
+    s
+}
+
+fn printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) or (c >= 0x205F and c <= 0x206F) {
+        return false;
+    }
+    if c == 0x3000 or c == 0xFEFF or (c >= 0xE000 and c <= 0xF8FF) {
+        return false;
+    }
+    true
+}
+
+// repr(str)
+fn repr_str(s: ref String) -> String {
+    let single = s.contains("'");
+    let double = s.contains("\"");
+    let q = if single and not double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if printable(o) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str(f"\\x{hex_digits(o, 2)}");
+        } else if o < 0x10000 {
+            out.push_str(f"\\u{hex_digits(o, 4)}");
+        } else {
+            out.push_str(f"\\U{hex_digits(o, 8)}");
+        }
+    }
+    out.push(q);
+    out
+}
+
+// ------------------------------------------------------------ JSON
+
+#[derive(Clone)]
+enum JValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[JValue]),
+    Obj(Vec[(String, JValue)]),
+}
+
+fn push_utf8(out: mut ref Vec[u8], c: u32) {
+    if c < 0x80 {
+        out.push(c as u8);
+    } else if c < 0x800 {
+        out.push((0xC0 | (c >> 6)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else if c < 0x10000 {
+        out.push((0xE0 | (c >> 12)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    } else {
+        out.push((0xF0 | (c >> 18)) as u8);
+        out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+        out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+        out.push((0x80 | (c & 0x3F)) as u8);
+    }
+}
+
+struct JsonReader {
+    b: Vec[u8],
+    at: i64,
+}
+
+impl JsonReader {
+    fn ws(mut ref self) {
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c == b' ' or c == b'\n' or c == b'\r' or c == b'\t' {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn eat(mut ref self, word: Str) -> bool {
+        let w = word.bytes();
+        if self.at + w.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..w.len() {
+            if self.b[self.at + k] != w[k] {
+                return false;
+            }
+        }
+        self.at += w.len();
+        true
+    }
+
+    fn value(mut ref self) -> Result[JValue, String] {
+        self.ws();
+        if self.at >= self.b.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.b[self.at];
+        if c == b'{' {
+            self.at += 1;
+            let mut m: Vec[(String, JValue)] = Vec.new();
+            self.ws();
+            if self.eat("}") {
+                return Ok(JValue.Obj(m));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                if not self.eat(":") {
+                    return Err(f"expected ':' at {self.at}");
+                }
+                let v = self.value()?;
+                m.push((k, v));
+                self.ws();
+                if self.eat("}") {
+                    return Ok(JValue.Obj(m));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'[' {
+            self.at += 1;
+            let mut items: Vec[JValue] = Vec.new();
+            self.ws();
+            if self.eat("]") {
+                return Ok(JValue.List(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.eat("]") {
+                    return Ok(JValue.List(items));
+                }
+                if not self.eat(",") {
+                    return Err(f"expected ',' at {self.at}");
+                }
+            }
+        }
+        if c == b'"' {
+            return Ok(JValue.Str(self.string()?));
+        }
+        if self.eat("true") {
+            return Ok(JValue.Bool(true));
+        }
+        if self.eat("false") {
+            return Ok(JValue.Bool(false));
+        }
+        if self.eat("null") {
+            return Ok(JValue.Null);
+        }
+        self.number()
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut v: u32 = 0;
+        for _ in 0..4 {
+            let c = self.b[self.at];
+            self.at += 1;
+            let d = if c >= b'0' and c <= b'9' {
+                c - b'0'
+            } else if c >= b'a' and c <= b'f' {
+                c - b'a' + 10
+            } else {
+                c - b'A' + 10
+            };
+            v = v * 16 + d as u32;
+        }
+        v
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        if not self.eat("\"") {
+            return Err(f"expected string at {self.at}");
+        }
+        let mut out: Vec[u8] = Vec.new();
+        loop {
+            if self.at >= self.b.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.b[self.at];
+            self.at += 1;
+            if c == b'"' {
+                break;
+            }
+            if c != b'\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.b[self.at];
+            self.at += 1;
+            if e == b'n' {
+                out.push(10);
+            } else if e == b't' {
+                out.push(9);
+            } else if e == b'r' {
+                out.push(13);
+            } else if e == b'b' {
+                out.push(8);
+            } else if e == b'f' {
+                out.push(12);
+            } else if e == b'u' {
+                let mut cp = self.hex4();
+                if cp >= 0xD800 and cp < 0xDC00 and self.eat("\\u") {
+                    let lo = self.hex4();
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                push_utf8(mut out, cp);
+            } else {
+                out.push(e);
+            }
+        }
+        Ok(String.from_utf8(out).unwrap_or("?".to_string()))
+    }
+
+    fn number(mut ref self) -> Result[JValue, String] {
+        let start = self.at;
+        let mut float = false;
+        while self.at < self.b.len() {
+            let c = self.b[self.at];
+            if c >= b'0' and c <= b'9' {
+                self.at += 1;
+            } else if c == b'-' or c == b'+' {
+                self.at += 1;
+            } else if c == b'.' or c == b'e' or c == b'E' {
+                float = true;
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+        let t = String.from_utf8(self.b[start..self.at].to_vec()).unwrap_or(String.new());
+        if t.is_empty() {
+            return Err(f"bad value at {start}");
+        }
+        if float {
+            return match f64.parse(t) {
+                Ok(f) => Ok(JValue.Float(f)),
+                Err(_) => Err(f"bad number {t}"),
+            };
+        }
+        match i64.parse(t) {
+            Ok(i) => Ok(JValue.Int(i)),
+            Err(_) => Err(f"bad number {t}"),
+        }
+    }
+}
+
+fn parse_json(t: ref String) -> Result[JValue, String] {
+    let mut r = JsonReader { b: t.bytes().to_vec(), at: 0 };
+    r.value()
+}
+
+fn get(o: ref JValue, key: Str) -> Option[JValue] {
+    if let JValue.Obj(items) = o {
+        for (k, v) in items.iter() {
+            if k == key {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+
+// ------------------------------------------------------------ Python's int() and float()
+
+// The digits of s[lo..hi] with Python's underscores: each '_' sits between
+// two digits. None if anything else is there.
+fn digits_with_underscores(v: ref Vec[char], lo: i64, hi: i64) -> Option[String] {
+    let mut out = String.new();
+    for k in lo..hi {
+        let c = v[k];
+        if is_digit(c) {
+            out.push(c);
+        } else if c == '_' and k > lo and k + 1 < hi and is_digit(v[k - 1]) and is_digit(v[k + 1]) {
+            continue;
+        } else {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+// int(s) for a str (Unicode whitespace stripped) or, with `ascii`, for the
+// bytes isoparse works on. None where int() raises. Values past i64 are
+// out of scope: the jobs never write one.
+fn py_int(s: ref String, ascii: bool) -> Option[i64] {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and (if ascii { ascii_space(v[lo]) } else { py_space(v[lo]) }) {
+        lo += 1;
+    }
+    while hi > lo and (if ascii { ascii_space(v[hi - 1]) } else { py_space(v[hi - 1]) }) {
+        hi -= 1;
+    }
+    let mut neg = false;
+    if lo < hi and (v[lo] == '+' or v[lo] == '-') {
+        neg = v[lo] == '-';
+        lo += 1;
+    }
+    if lo >= hi {
+        return None;
+    }
+    let d = digits_with_underscores(v, lo, hi)?;
+    if d.is_empty() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    for c in d.chars() {
+        n = n * 10 + (c as i64 - 48);
+    }
+    if neg { Some(0 - n) } else { Some(n) }
+}
+
+fn ascii_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}'
+}
+
+// ------------------------------------------------------------ errors
+
+// A Python exception: its class, its message and, for a ParseError, the
+// offset it carries.
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+    offset: Option[i64],
+}
+
+fn py_err(kind: Str, msg: ref String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg.clone(), offset: None }
+}
+
+fn value_error(msg: ref String) -> PyErr {
+    py_err("ValueError", msg)
+}
+
+fn form_error(msg: ref String) -> PyErr {
+    py_err("FormParserError", msg)
+}
+
+fn mp_error(msg: ref String, offset: i64) -> PyErr {
+    PyErr { kind: "MultipartParseError".to_string(), msg: msg.clone(), offset: Some(offset) }
+}
+
+fn qs_error(msg: ref String, offset: i64) -> PyErr {
+    PyErr { kind: "QuerystringParseError".to_string(), msg: msg.clone(), offset: Some(offset) }
+}
+
+// DecodeError(message), whose offset keeps its default of -1.
+fn decode_error(msg: ref String) -> PyErr {
+    PyErr { kind: "DecodeError".to_string(), msg: msg.clone(), offset: Some(-1) }
+}
+
+fn err_line(e: ref PyErr) -> String {
+    match e.offset {
+        Some(o) => f"{e.kind}: {e.msg} offset={o}",
+        None => f"{e.kind}: {e.msg}",
+    }
+}
+
+// Every exception the library raises on bad input is a ValueError:
+// FormParserError subclasses it, and ParseError and FileError subclass
+// FormParserError.
+fn is_value_error(e: ref PyErr) -> bool {
+    e.kind != "AttributeError"
+}
+
+// ------------------------------------------------------------ bytes
+
+const INF: i64 = 9223372036854775807;
+
+fn imax(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn imin(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn bs(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn append(dst: mut ref Vec[u8], src: ref Vec[u8]) {
+    for b in src.iter() {
+        dst.push(*b);
+    }
+}
+
+fn concat(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut out = a.clone();
+    append(mut out, b);
+    out
+}
+
+// b[lo:hi], with Python's clamping of out-of-range positions.
+fn sub(b: ref Vec[u8], lo: i64, hi: i64) -> Vec[u8] {
+    let n = b.len();
+    let a = norm_index(lo, n);
+    let z = norm_index(hi, n);
+    if a >= z {
+        return Vec.new();
+    }
+    b[a..z].to_vec()
+}
+
+// A slice position as Python reads it: negative counts from the end.
+fn norm_index(i: i64, n: i64) -> i64 {
+    let mut k = i;
+    if k < 0 {
+        k += n;
+        if k < 0 {
+            k = 0;
+        }
+    }
+    if k > n {
+        k = n;
+    }
+    k
+}
+
+fn matches_at(h: ref Vec[u8], n: ref Vec[u8], at: i64) -> bool {
+    for k in 0..n.len() {
+        if h[at + k] != n[k] {
+            return false;
+        }
+    }
+    true
+}
+
+// h.find(n, lo, hi)
+fn find_sub(h: ref Vec[u8], n: ref Vec[u8], lo: i64, hi: i64) -> i64 {
+    if lo > h.len() {
+        return -1;
+    }
+    let a = norm_index(lo, h.len());
+    let z = norm_index(hi, h.len());
+    let mut k = a;
+    while k + n.len() <= z {
+        if matches_at(h, n, k) {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+fn find_byte(h: ref Vec[u8], c: u8, lo: i64, hi: i64) -> i64 {
+    if lo > h.len() {
+        return -1;
+    }
+    let a = norm_index(lo, h.len());
+    let z = norm_index(hi, h.len());
+    for k in a..z {
+        if h[k] == c {
+            return k;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(h: ref Vec[u8], c: u8, lo: i64, hi: i64) -> i64 {
+    if lo > h.len() {
+        return -1;
+    }
+    let a = norm_index(lo, h.len());
+    let mut k = norm_index(hi, h.len()) - 1;
+    while k >= a {
+        if h[k] == c {
+            return k;
+        }
+        k -= 1;
+    }
+    -1
+}
+
+// h.count(n, lo, hi): non-overlapping matches.
+fn count_sub(h: ref Vec[u8], n: ref Vec[u8], lo: i64, hi: i64) -> i64 {
+    if lo > h.len() {
+        return 0;
+    }
+    let mut k = norm_index(lo, h.len());
+    let z = norm_index(hi, h.len());
+    let mut c = 0;
+    while k + n.len() <= z {
+        if matches_at(h, n, k) {
+            c += 1;
+            k += n.len();
+        } else {
+            k += 1;
+        }
+    }
+    c
+}
+
+fn has_byte(h: ref Vec[u8], c: u8) -> bool {
+    find_byte(h, c, 0, h.len()) != -1
+}
+
+fn starts_with(b: ref Vec[u8], prefix: ref Vec[u8]) -> bool {
+    prefix.len() <= b.len() and matches_at(b, prefix, 0)
+}
+
+fn replace_all(b: ref Vec[u8], old: ref Vec[u8], new: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = 0;
+    while k < b.len() {
+        if k + old.len() <= b.len() and matches_at(b, old, k) {
+            append(mut out, new);
+            k += old.len();
+        } else {
+            out.push(b[k]);
+            k += 1;
+        }
+    }
+    out
+}
+
+// The bytes of a str that holds only Latin-1 characters, as
+// s.encode("latin-1") gives them.
+fn latin1(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s.chars() {
+        out.push(c as i64 as u8);
+    }
+    out
+}
+
+// b.decode("latin-1")
+fn from_latin1(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b.iter() {
+        out.push(char.try_from(*x as i64).unwrap_or('?'));
+    }
+    out
+}
+
+// str.isspace for a Latin-1 character.
+fn latin1_space(c: u8) -> bool {
+    (c >= 9 and c <= 13) or (c >= 0x1c and c <= 0x20) or c == 0x85 or c == 0xa0
+}
+
+fn lstrip(b: ref Vec[u8]) -> Vec[u8] {
+    let mut lo = 0;
+    while lo < b.len() and latin1_space(b[lo]) {
+        lo += 1;
+    }
+    sub(b, lo, b.len())
+}
+
+fn rstrip(b: ref Vec[u8]) -> Vec[u8] {
+    let mut hi = b.len();
+    while hi > 0 and latin1_space(b[hi - 1]) {
+        hi -= 1;
+    }
+    sub(b, 0, hi)
+}
+
+fn strip(b: ref Vec[u8]) -> Vec[u8] {
+    lstrip(rstrip(b))
+}
+
+// str.lower for Latin-1 text.
+fn lower_latin1(b: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in b.iter() {
+        let c = *x;
+        if (c >= b'A' and c <= b'Z') or (c >= 0xc0 and c <= 0xde and c != 0xd7) {
+            out.push(c + 32);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// bytes.lower, which only knows ASCII.
+fn lower_ascii(b: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    for x in b.iter() {
+        let c = *x;
+        if c >= b'A' and c <= b'Z' {
+            out.push(c + 32);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// repr(bytes)
+fn bytes_repr(b: ref Vec[u8]) -> String {
+    let single = has_byte(b, b'\'');
+    let double = has_byte(b, b'"');
+    let q = if single and not double { b'"' } else { b'\'' };
+    let mut out = "b".to_string();
+    out.push(q as char);
+    for x in b.iter() {
+        let c = *x;
+        if c == q or c == b'\\' {
+            out.push('\\');
+            out.push(c as char);
+        } else if c == b'\t' {
+            out.push_str("\\t");
+        } else if c == b'\n' {
+            out.push_str("\\n");
+        } else if c == b'\r' {
+            out.push_str("\\r");
+        } else if c < 32 or c >= 127 {
+            out.push_str(f"\\x{hex_digits(c as i64, 2)}");
+        } else {
+            out.push(c as char);
+        }
+    }
+    out.push(q as char);
+    out
+}
+
+fn opt_bytes_repr(b: ref Option[Vec[u8]]) -> String {
+    match b {
+        Some(v) => bytes_repr(v),
+        None => "None".to_string(),
+    }
+}
+
+fn opt_str_repr(s: ref Option[String]) -> String {
+    match s {
+        Some(v) => repr_str(v),
+        None => "None".to_string(),
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// A dict with bytes keys, in insertion order; setting a key that is
+// there already keeps its place.
+fn dict_set(d: mut ref Vec[(Vec[u8], Vec[u8])], k: ref Vec[u8], v: ref Vec[u8]) {
+    for k2 in 0..d.len() {
+        if d[k2].0 == *k {
+            d[k2] = (k.clone(), v.clone());
+            return;
+        }
+    }
+    d.push((k.clone(), v.clone()));
+}
+
+fn dict_get(d: ref Vec[(Vec[u8], Vec[u8])], k: Str) -> Option[Vec[u8]] {
+    let key = bs(k);
+    for (k2, v) in d.iter() {
+        if *k2 == key {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+fn dict_repr(d: ref Vec[(Vec[u8], Vec[u8])]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    for (k, v) in d.iter() {
+        items.push(bytes_repr(k) + ": " + bytes_repr(v));
+    }
+    "{".to_string() + items.join(", ") + "}"
+}
+
+// ------------------------------------------------------------ options headers
+
+// _parseparam: split a header value at the semicolons that are not inside
+// a quoted string, with the library's own way of counting quotes.
+fn parseparam(v: ref Vec[u8]) -> Vec[Vec[u8]] {
+    let mut s = bs(";");
+    append(mut s, v);
+    let n = s.len();
+    let semi = bs(";");
+    let quote = bs("\"");
+    let esc_quote = bs("\\\"");
+    let mut plist: Vec[Vec[u8]] = Vec.new();
+    let mut start = 0;
+    while find_sub(s, semi, start, n) == start {
+        start += 1;
+        let mut end = find_sub(s, semi, start, n);
+        let mut ind = start;
+        let mut diff = 0;
+        while end > 0 {
+            diff += count_sub(s, quote, ind, end) - count_sub(s, esc_quote, ind, end);
+            if diff % 2 == 0 {
+                break;
+            }
+            let next = find_sub(s, semi, end + 1, n);
+            end = ind;
+            ind = next;
+        }
+        if end < 0 {
+            end = n;
+        }
+        let i = find_byte(s, b'=', start, end);
+        let f = if i == -1 {
+            sub(s, start, end)
+        } else {
+            let mut kv = lower_latin1(rstrip(sub(s, start, i)));
+            kv.push(b'=');
+            append(mut kv, lstrip(sub(s, i + 1, end)));
+            kv
+        };
+        plist.push(strip(f));
+        start = end;
+    }
+    plist
+}
+
+// parse_options_header: the value and its parameters. Takes the bytes of
+// the str, one per Latin-1 character.
+fn parse_options_header(value: ref Vec[u8]) -> (Vec[u8], Vec[(Vec[u8], Vec[u8])]) {
+    let mut options: Vec[(Vec[u8], Vec[u8])] = Vec.new();
+    if value.is_empty() {
+        return (Vec.new(), options);
+    }
+    if not has_byte(value, b';') {
+        return (strip(lower_latin1(value)), options);
+    }
+    let plist = parseparam(value);
+    for k in 1..plist.len() {
+        let segment = plist[k].clone();
+        let eq = find_byte(segment, b'=', 0, segment.len());
+        let mut (key, val) = if eq == -1 {
+            (segment.clone(), Vec.new())
+        } else {
+            (sub(segment, 0, eq), sub(segment, eq + 1, segment.len()))
+        };
+        if has_byte(key, b'*') {
+            continue;
+        }
+        if val.len() >= 2 and val[0] == b'"' and val[val.len() - 1] == b'"' {
+            val = replace_all(replace_all(sub(val, 1, val.len() - 1), bs("\\\\"), bs("\\")), bs("\\\""), bs("\""));
+        }
+        if key == bs("filename") and (sub(val, 1, 3) == bs(":\\") or sub(val, 0, 2) == bs("\\\\")) {
+            let cut = rfind_byte(val, b'\\', 0, val.len());
+            val = sub(val, cut + 1, val.len());
+        }
+        dict_set(mut options, key, val);
+    }
+    (plist[0].clone(), options)
+}
+
+// ------------------------------------------------------------ decoders
+
+fn b64_value(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        c as i64 - 65
+    } else if c >= b'a' and c <= b'z' {
+        c as i64 - 71
+    } else if c >= b'0' and c <= b'9' {
+        c as i64 + 4
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// base64.b64decode, which leaves validate off: CPython 3.13's
+// binascii.a2b_base64 then skips characters outside the alphabet and every
+// '=', and only asks at the end that a part-filled quad was padded. None
+// where it raises binascii.Error.
+fn b64decode(v: ref Vec[u8]) -> Option[Vec[u8]] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut quad_pos = 0;
+    let mut left: i64 = 0;
+    let mut pads = 0;
+    for x in v.iter() {
+        let ch = *x;
+        if ch == b'=' {
+            if quad_pos >= 2 {
+                pads += 1;
+            }
+            continue;
+        }
+        let d = b64_value(ch);
+        if d < 0 {
+            continue;
+        }
+        pads = 0;
+        if quad_pos == 0 {
+            quad_pos = 1;
+            left = d;
+        } else if quad_pos == 1 {
+            quad_pos = 2;
+            out.push(((left << 2) | (d >> 4)) as u8);
+            left = d & 15;
+        } else if quad_pos == 2 {
+            quad_pos = 3;
+            out.push(((left << 4) | (d >> 2)) as u8);
+            left = d & 3;
+        } else {
+            quad_pos = 0;
+            out.push(((left << 6) | d) as u8);
+            left = 0;
+        }
+    }
+    if quad_pos == 1 or (quad_pos >= 2 and quad_pos + pads < 4) {
+        return None;
+    }
+    Some(out)
+}
+
+// Base64Decoder.write: what it passes on (None when it has nothing to
+// decode) and its new cache.
+fn b64_write(cache: ref Vec[u8], data: ref Vec[u8]) -> Result[(Option[Vec[u8]], Vec[u8]), PyErr] {
+    let d = concat(cache, data);
+    let decode_len = d.len() / 4 * 4;
+    let val = sub(d, 0, decode_len);
+    let mut passed: Option[Vec[u8]] = None;
+    if val.len() > 0 {
+        match b64decode(val) {
+            Some(out) => passed = Some(out),
+            None => return Err(decode_error("There was an error raised while decoding base64-encoded data.".to_string())),
+        }
+    }
+    let rem = d.len() % 4;
+    let rest = if rem > 0 { sub(d, d.len() - rem, d.len()) } else { Vec.new() };
+    Ok((passed, rest))
+}
+
+fn b64_finalize(cache: ref Vec[u8]) -> Result[(), PyErr] {
+    if cache.len() > 0 {
+        return Err(decode_error(f"There are {cache.len()} bytes remaining in the Base64Decoder cache when finalize() is called"));
+    }
+    Ok(())
+}
+
+fn is_hex(c: u8) -> bool {
+    (c >= b'0' and c <= b'9') or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_value(c: u8) -> u8 {
+    if c >= b'a' {
+        c - b'a' + 10
+    } else if c >= b'A' {
+        c - b'A' + 10
+    } else {
+        c - b'0'
+    }
+}
+
+// binascii.a2b_qp, without header mode.
+fn a2b_qp(d: ref Vec[u8]) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let n = d.len();
+    let mut i = 0;
+    while i < n {
+        if d[i] == b'=' {
+            i += 1;
+            if i >= n {
+                break;
+            }
+            if d[i] == b'\n' or d[i] == b'\r' {
+                if d[i] != b'\n' {
+                    while i < n and d[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                if i < n {
+                    i += 1;
+                }
+            } else if d[i] == b'=' {
+                out.push(b'=');
+                i += 1;
+            } else if i + 1 < n and is_hex(d[i]) and is_hex(d[i + 1]) {
+                out.push(hex_value(d[i]) * 16 + hex_value(d[i + 1]));
+                i += 2;
+            } else {
+                out.push(b'=');
+            }
+        } else {
+            out.push(d[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// QuotedPrintableDecoder.write: it holds back the last two bytes when
+// either is '='.
+fn qp_write(cache: ref Vec[u8], data: ref Vec[u8]) -> (Option[Vec[u8]], Vec[u8]) {
+    let d = concat(cache, data);
+    let tail = sub(d, -2, d.len());
+    let (enc, rest) = if has_byte(tail, b'=') { (sub(d, 0, -2), tail) } else { (d.clone(), Vec.new()) };
+    if enc.len() > 0 {
+        (Some(a2b_qp(enc)), rest)
+    } else {
+        (None, rest)
+    }
+}
+
+fn qp_finalize(cache: ref Vec[u8]) -> Option[Vec[u8]] {
+    if cache.len() > 0 { Some(a2b_qp(cache)) } else { None }
+}
+
+// ------------------------------------------------------------ callbacks
+
+// One callback a parser makes: on_<name>, with the bytes data[start:end]
+// for a data callback. BaseParser.callback skips a data callback whose
+// start equals its end, so an event never carries empty data.
+#[derive(Clone)]
+struct Ev {
+    name: String,
+    data: Option[Vec[u8]],
+}
+
+fn cb(evs: mut ref Vec[Ev], name: Str) {
+    evs.push(Ev { name: name.to_string(), data: None });
+}
+
+fn cb_data(evs: mut ref Vec[Ev], name: Str, data: ref Vec[u8], start: i64, end: i64) {
+    if start == end {
+        return;
+    }
+    evs.push(Ev { name: name.to_string(), data: Some(sub(data, start, end)) });
+}
+
+fn check_max_size(max_size: i64) -> Result[(), PyErr] {
+    if max_size < 1 {
+        return Err(value_error(f"max_size must be a positive number, not {max_size}"));
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ OctetStreamParser
+
+struct OctetParser {
+    started: bool,
+    max_size: i64,
+    current_size: i64,
+}
+
+fn octet_parser(max_size: i64) -> Result[OctetParser, PyErr] {
+    check_max_size(max_size)?;
+    Ok(OctetParser { started: false, max_size: max_size, current_size: 0 })
+}
+
+impl OctetParser {
+    fn write(mut ref self, data: ref Vec[u8], evs: mut ref Vec[Ev]) -> i64 {
+        if not self.started {
+            cb(mut evs, "start");
+            self.started = true;
+        }
+        let mut data_len = data.len();
+        if self.current_size + data_len > self.max_size {
+            data_len = self.max_size - self.current_size;
+        }
+        self.current_size += data_len;
+        cb_data(mut evs, "data", data, 0, data_len);
+        data_len
+    }
+
+    fn finalize(ref self, evs: mut ref Vec[Ev]) {
+        cb(mut evs, "end");
+    }
+}
+
+// ------------------------------------------------------------ QuerystringParser
+
+const QS_BEFORE_FIELD: i64 = 0;
+const QS_FIELD_NAME: i64 = 1;
+const QS_FIELD_DATA: i64 = 2;
+
+struct QsParser {
+    state: i64,
+    found_sep: bool,
+    strict: bool,
+    max_size: i64,
+    current_size: i64,
+}
+
+fn qs_parser(strict: bool, max_size: i64) -> Result[QsParser, PyErr] {
+    check_max_size(max_size)?;
+    Ok(QsParser { state: QS_BEFORE_FIELD, found_sep: false, strict: strict, max_size: max_size, current_size: 0 })
+}
+
+impl QsParser {
+    fn write(mut ref self, data: ref Vec[u8], evs: mut ref Vec[Ev]) -> Result[i64, PyErr] {
+        let mut data_len = data.len();
+        if self.current_size + data_len > self.max_size {
+            data_len = self.max_size - self.current_size;
+        }
+        let l = self.internal_write(data, data_len, mut evs)?;
+        self.current_size += l;
+        Ok(l)
+    }
+
+    fn internal_write(mut ref self, data: ref Vec[u8], length: i64, evs: mut ref Vec[Ev]) -> Result[i64, PyErr] {
+        let mut state = self.state;
+        let strict = self.strict;
+        let mut found_sep = self.found_sep;
+        let mut i = 0;
+        while i < length {
+            let ch = data[i];
+            if state == QS_BEFORE_FIELD {
+                if ch == b'&' {
+                    if found_sep {
+                        if strict {
+                            return Err(qs_error(f"Skipping duplicate ampersand at {i}", i));
+                        }
+                    } else {
+                        found_sep = true;
+                    }
+                } else {
+                    cb(mut evs, "field_start");
+                    i -= 1;
+                    state = QS_FIELD_NAME;
+                    found_sep = false;
+                }
+            } else if state == QS_FIELD_NAME {
+                let sep_pos = find_byte(data, b'&', i, length);
+                let equals_pos = if sep_pos != -1 { find_byte(data, b'=', i, sep_pos) } else { find_byte(data, b'=', i, length) };
+                if equals_pos != -1 {
+                    cb_data(mut evs, "field_name", data, i, equals_pos);
+                    i = equals_pos;
+                    state = QS_FIELD_DATA;
+                } else if not strict {
+                    if sep_pos != -1 {
+                        cb_data(mut evs, "field_name", data, i, sep_pos);
+                        cb(mut evs, "field_end");
+                        i = sep_pos - 1;
+                        state = QS_BEFORE_FIELD;
+                    } else {
+                        cb_data(mut evs, "field_name", data, i, length);
+                        i = length;
+                    }
+                } else {
+                    if sep_pos != -1 {
+                        return Err(qs_error(f"When strict_parsing is True, we require an equals sign in all field chunks. Did not find one in the chunk that starts at {i}", i));
+                    }
+                    cb_data(mut evs, "field_name", data, i, length);
+                    i = length;
+                }
+            } else {
+                let sep_pos = find_byte(data, b'&', i, length);
+                if sep_pos != -1 {
+                    cb_data(mut evs, "field_data", data, i, sep_pos);
+                    cb(mut evs, "field_end");
+                    i = sep_pos - 1;
+                    state = QS_BEFORE_FIELD;
+                } else {
+                    cb_data(mut evs, "field_data", data, i, length);
+                    i = length;
+                }
+            }
+            i += 1;
+        }
+        self.state = state;
+        self.found_sep = found_sep;
+        Ok(length)
+    }
+
+    fn finalize(ref self, evs: mut ref Vec[Ev]) {
+        if self.state == QS_FIELD_DATA or self.state == QS_FIELD_NAME {
+            cb(mut evs, "field_end");
+        }
+        cb(mut evs, "end");
+    }
+}
+
+// ------------------------------------------------------------ MultipartParser
+
+const MP_START: i64 = 0;
+const MP_START_BOUNDARY: i64 = 1;
+const MP_HEADER_FIELD_START: i64 = 2;
+const MP_HEADER_FIELD: i64 = 3;
+const MP_HEADER_VALUE_START: i64 = 4;
+const MP_HEADER_VALUE: i64 = 5;
+const MP_HEADER_VALUE_ALMOST_DONE: i64 = 6;
+const MP_HEADERS_ALMOST_DONE: i64 = 7;
+const MP_PART_DATA_START: i64 = 8;
+const MP_PART_DATA: i64 = 9;
+const MP_END_BOUNDARY: i64 = 11;
+const MP_END: i64 = 12;
+
+const CR: u8 = 13;
+const LF: u8 = 10;
+const HYPHEN: u8 = 45;
+const SPACE: u8 = 32;
+
+// The marks, by number: where the header field, the header value and the
+// part data being read began. A negative mark is a position in the
+// previous chunk, counted back from its end.
+const MARK_HEADER_FIELD: i64 = 0;
+const MARK_HEADER_VALUE: i64 = 1;
+const MARK_PART_DATA: i64 = 2;
+const MARK_NAMES: Array[Str, 3] = ["header_field", "header_value", "part_data"];
+
+const TOKEN_PUNCT: Str = "!#$%&'*+-.^_`|~";
+
+fn is_token(c: u8) -> bool {
+    (c >= b'A' and c <= b'Z') or (c >= b'a' and c <= b'z') or (c >= b'0' and c <= b'9') or has_byte(bs(TOKEN_PUNCT), c)
+}
+
+struct MpParser {
+    state: i64,
+    index: i64,
+    // FLAG_PART_BOUNDARY and FLAG_LAST_BOUNDARY, as the last write left
+    // them.
+    flag_part: bool,
+    flag_last: bool,
+    max_size: i64,
+    current_size: i64,
+    max_header_count: i64,
+    current_header_count: i64,
+    max_header_size: i64,
+    current_header_size: i64,
+    marks: Vec[Option[i64]],
+    boundary: Vec[u8],
+}
+
+fn mp_parser(boundary: ref Vec[u8], max_size: i64, max_header_count: i64, max_header_size: i64) -> Result[MpParser, PyErr] {
+    check_max_size(max_size)?;
+    if boundary.len() > 256 {
+        return Err(form_error(f"Boundary length {boundary.len()} exceeds maximum of 256"));
+    }
+    let mut b = bs("\r\n--");
+    append(mut b, boundary);
+    Ok(MpParser {
+        state: MP_START,
+        index: 0,
+        flag_part: false,
+        flag_last: false,
+        max_size: max_size,
+        current_size: 0,
+        max_header_count: max_header_count,
+        current_header_count: 0,
+        max_header_size: max_header_size,
+        current_header_size: 0,
+        marks: vec![None, None, None],
+        boundary: b,
+    })
+}
+
+impl MpParser {
+    fn write(mut ref self, data: ref Vec[u8], evs: mut ref Vec[Ev]) -> Result[i64, PyErr] {
+        let mut data_len = data.len();
+        if self.current_size + data_len > self.max_size {
+            data_len = self.max_size - self.current_size;
+        }
+        let l = self.internal_write(data, data_len, mut evs)?;
+        self.current_size += l;
+        Ok(l)
+    }
+
+    fn advance_header_size(mut ref self, amount: i64, i: i64) -> Result[(), PyErr] {
+        self.current_header_size += amount;
+        if self.current_header_size > self.max_header_size {
+            return Err(mp_error("Maximum header size exceeded".to_string(), i));
+        }
+        Ok(())
+    }
+
+    // data_callback: report the data from a mark to end_i, reaching back
+    // into the boundary bytes for a mark in the previous chunk. It reads
+    // the flags the previous write left, not the ones this write is
+    // changing.
+    fn data_callback(mut ref self, mark: i64, data: ref Vec[u8], end_i: i64, length: i64, remaining: bool, evs: mut ref Vec[Ev]) {
+        let name = MARK_NAMES[mark];
+        let marked = match self.marks[mark] {
+            Some(m) => m,
+            None => return,
+        };
+        if end_i <= marked {
+        } else if marked >= 0 {
+            cb_data(mut evs, name, data, marked, end_i);
+        } else {
+            let lookbehind_len = 0 - marked;
+            if lookbehind_len <= self.boundary.len() {
+                cb_data(mut evs, name, self.boundary, 0, lookbehind_len);
+            } else if self.flag_part {
+                let lookback = concat(self.boundary, bs("\r\n"));
+                cb_data(mut evs, name, lookback, 0, lookbehind_len);
+            } else if self.flag_last {
+                let lookback = concat(self.boundary, bs("--\r\n"));
+                cb_data(mut evs, name, lookback, 0, lookbehind_len);
+            }
+            if end_i > 0 {
+                cb_data(mut evs, name, data, 0, end_i);
+            }
+        }
+        self.marks[mark] = if remaining { Some(end_i - length) } else { None };
+    }
+
+    fn internal_write(mut ref self, data: ref Vec[u8], length: i64, evs: mut ref Vec[Ev]) -> Result[i64, PyErr] {
+        let boundary = self.boundary.clone();
+        let blen = boundary.len();
+        let mut flag_part = self.flag_part;
+        let mut flag_last = self.flag_last;
+        let mut i = 0;
+        while i < length {
+            let mut c = data[i];
+            let state = self.state;
+            if state == MP_START {
+                if c == CR or c == LF {
+                    i = find_byte(data, HYPHEN, i, data.len());
+                    if i == -1 {
+                        i = length;
+                        break;
+                    }
+                    continue;
+                }
+                self.index = 0;
+                self.state = MP_START_BOUNDARY;
+                i -= 1;
+            } else if state == MP_START_BOUNDARY {
+                if self.index == blen - 2 {
+                    if c == HYPHEN {
+                        self.state = MP_END_BOUNDARY;
+                    } else if c != CR {
+                        return Err(mp_error(f"Did not find CR at end of boundary ({i})", i));
+                    }
+                    self.index += 1;
+                } else if self.index == blen - 1 {
+                    if c != LF {
+                        return Err(mp_error(f"Did not find LF at end of boundary ({i})", i));
+                    }
+                    self.index = 0;
+                    cb(mut evs, "part_begin");
+                    self.current_header_count = 0;
+                    self.current_header_size = 0;
+                    self.state = MP_HEADER_FIELD_START;
+                } else {
+                    let want = boundary[self.index + 2];
+                    if c != want {
+                        return Err(mp_error(f"Expected boundary character {want}, got {c} at index {self.index + 2}", i));
+                    }
+                    self.index += 1;
+                }
+            } else if state == MP_HEADER_FIELD_START {
+                self.index = 0;
+                if c != CR {
+                    self.current_header_count += 1;
+                    if self.current_header_count > self.max_header_count {
+                        return Err(mp_error("Maximum header count exceeded".to_string(), i));
+                    }
+                    self.current_header_size = 0;
+                }
+                self.marks[MARK_HEADER_FIELD] = Some(i);
+                if c != CR {
+                    cb(mut evs, "header_begin");
+                }
+                self.state = MP_HEADER_FIELD;
+                i -= 1;
+            } else if state == MP_HEADER_FIELD {
+                if c == CR and self.index == 0 {
+                    self.marks[MARK_HEADER_FIELD] = None;
+                    self.state = MP_HEADERS_ALMOST_DONE;
+                    i += 1;
+                    continue;
+                }
+                let colon = find_byte(data, b':', i, length);
+                let end = if colon != -1 { colon } else { length };
+                self.advance_header_size(if colon == -1 { end - i } else { end - i + 1 }, i)?;
+                for k in i..end {
+                    if not is_token(data[k]) {
+                        return Err(mp_error(f"Found invalid character {data[k]} in header at {k}", k));
+                    }
+                }
+                self.index += end - i;
+                if colon == -1 {
+                    i = length;
+                } else {
+                    if self.index == 0 {
+                        return Err(mp_error(f"Found 0-length header at {i}", i));
+                    }
+                    i = colon;
+                    self.data_callback(MARK_HEADER_FIELD, data, i, length, false, mut evs);
+                    self.state = MP_HEADER_VALUE_START;
+                }
+            } else if state == MP_HEADER_VALUE_START {
+                if c == SPACE {
+                    self.advance_header_size(1, i)?;
+                    i += 1;
+                    continue;
+                }
+                self.marks[MARK_HEADER_VALUE] = Some(i);
+                self.state = MP_HEADER_VALUE;
+                i -= 1;
+            } else if state == MP_HEADER_VALUE {
+                let cr = find_byte(data, CR, i, length);
+                let end = if cr != -1 { cr } else { length };
+                self.advance_header_size(end - i, i)?;
+                if cr != -1 {
+                    i = cr;
+                    self.data_callback(MARK_HEADER_VALUE, data, i, length, false, mut evs);
+                    cb(mut evs, "header_end");
+                    self.current_header_size = 0;
+                    self.state = MP_HEADER_VALUE_ALMOST_DONE;
+                } else {
+                    i = length;
+                }
+            } else if state == MP_HEADER_VALUE_ALMOST_DONE {
+                if c != LF {
+                    return Err(mp_error(f"Did not find LF character at end of header (found {c})", i));
+                }
+                self.state = MP_HEADER_FIELD_START;
+            } else if state == MP_HEADERS_ALMOST_DONE {
+                if c != LF {
+                    return Err(mp_error(f"Did not find LF at end of headers (found {c})", i));
+                }
+                cb(mut evs, "headers_finished");
+                self.state = MP_PART_DATA_START;
+            } else if state == MP_PART_DATA_START {
+                self.marks[MARK_PART_DATA] = Some(i);
+                self.state = MP_PART_DATA;
+                i -= 1;
+            } else if state == MP_PART_DATA {
+                let mut prev_index = self.index;
+                if self.index == 0 {
+                    let i0 = find_sub(data, boundary, i, length);
+                    if i0 >= 0 {
+                        self.index = blen - 1;
+                        i = i0 + blen - 1;
+                        c = data[i];
+                    } else {
+                        let k = rfind_byte(data, boundary[0], imax(i, length - blen + 1), length);
+                        if k != -1 and starts_with(boundary, sub(data, k, length)) {
+                            self.index = length - k;
+                        }
+                        i = length;
+                        continue;
+                    }
+                }
+                if self.index < blen {
+                    if boundary[self.index] == c {
+                        self.index += 1;
+                    } else {
+                        self.index = 0;
+                    }
+                } else if self.index == blen {
+                    self.index += 1;
+                    if c == CR {
+                        flag_part = true;
+                    } else if c == HYPHEN {
+                        flag_last = true;
+                    } else {
+                        self.index = 0;
+                    }
+                } else if self.index == blen + 1 {
+                    if flag_part {
+                        if c == LF {
+                            flag_part = false;
+                            self.data_callback(MARK_PART_DATA, data, i - self.index, length, false, mut evs);
+                            cb(mut evs, "part_end");
+                            cb(mut evs, "part_begin");
+                            self.current_header_count = 0;
+                            self.current_header_size = 0;
+                            self.index = 0;
+                            self.state = MP_HEADER_FIELD_START;
+                            i += 1;
+                            continue;
+                        }
+                        self.index = 0;
+                        flag_part = false;
+                    } else if flag_last {
+                        if c == HYPHEN {
+                            self.data_callback(MARK_PART_DATA, data, i - self.index, length, false, mut evs);
+                            cb(mut evs, "part_end");
+                            cb(mut evs, "end");
+                            self.state = MP_END;
+                        } else {
+                            self.index = 0;
+                        }
+                    }
+                }
+                if self.index == 0 and prev_index > 0 {
+                    prev_index = 0;
+                    i -= 1;
+                }
+            } else if state == MP_END_BOUNDARY {
+                if self.index == blen - 1 {
+                    if c != HYPHEN {
+                        return Err(mp_error(f"Did not find - at end of boundary ({i})", i));
+                    }
+                    self.index += 1;
+                    cb(mut evs, "end");
+                    self.state = MP_END;
+                }
+            } else {
+                i = length;
+                break;
+            }
+            i += 1;
+        }
+        self.data_callback(MARK_HEADER_FIELD, data, length, length, true, mut evs);
+        self.data_callback(MARK_HEADER_VALUE, data, length, length, true, mut evs);
+        let idx = self.index;
+        self.data_callback(MARK_PART_DATA, data, length - idx, length, true, mut evs);
+        self.flag_part = flag_part;
+        self.flag_last = flag_last;
+        Ok(length)
+    }
+}
+
+// ------------------------------------------------------------ Field and File
+
+#[derive(Clone)]
+struct Config {
+    max_body_size: i64,
+    max_header_count: i64,
+    max_header_size: i64,
+    max_memory_file_size: i64,
+    upload_dir: Option[Vec[u8]],
+    keep_filename: bool,
+    keep_extensions: bool,
+    error_on_bad_cte: bool,
+}
+
+// FormParser.DEFAULT_CONFIG
+fn default_config() -> Config {
+    Config {
+        max_body_size: INF,
+        max_header_count: 8,
+        max_header_size: 4224,
+        max_memory_file_size: 1048576,
+        upload_dir: None,
+        keep_filename: false,
+        keep_extensions: false,
+        error_on_bad_cte: false,
+    }
+}
+
+#[derive(Clone)]
+struct Field {
+    name: Vec[u8],
+    value: Vec[u8],
+    // set_none(): a querystring field with no '='.
+    is_none: bool,
+    content_type: Option[String],
+}
+
+fn new_field(name: ref Vec[u8], content_type: ref Option[String]) -> Field {
+    Field { name: name.clone(), value: Vec.new(), is_none: false, content_type: content_type.clone() }
+}
+
+impl Field {
+    fn write(mut ref self, data: ref Vec[u8]) {
+        append(mut self.value, data);
+        self.is_none = false;
+    }
+}
+
+fn field_repr(f: ref Field) -> String {
+    let v = if f.is_none {
+        "None".to_string()
+    } else if f.value.len() > 97 {
+        let r = chars(bytes_repr(sub(f.value, 0, 97)));
+        text(slice(r, 0, r.len() - 1)) + "...'"
+    } else {
+        bytes_repr(f.value)
+    };
+    f"Field(field_name={bytes_repr(f.name)}, value={v})"
+}
+
+// os.path.basename for bytes.
+fn basename(p: ref Vec[u8]) -> Vec[u8] {
+    let k = rfind_byte(p, b'/', 0, p.len());
+    sub(p, k + 1, p.len())
+}
+
+// os.path.splitext for bytes: a leading dot does not start an extension.
+fn splitext(p: ref Vec[u8]) -> (Vec[u8], Vec[u8]) {
+    let sep = rfind_byte(p, b'/', 0, p.len());
+    let dot = rfind_byte(p, b'.', 0, p.len());
+    if dot > sep {
+        let mut k = sep + 1;
+        while k < dot {
+            if p[k] != b'.' {
+                return (sub(p, 0, dot), sub(p, dot, p.len()));
+            }
+            k += 1;
+        }
+    }
+    (p.clone(), Vec.new())
+}
+
+// os.path.join for two bytes paths.
+fn path_join(a: ref Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    if starts_with(b, bs("/")) or a.is_empty() {
+        return b.clone();
+    }
+    let mut out = a.clone();
+    if out[out.len() - 1] != b'/' {
+        out.push(b'/');
+    }
+    append(mut out, b);
+    out
+}
+
+// A File: in memory until it grows past MAX_MEMORY_FILE_SIZE, then on
+// disk, under its own name with UPLOAD_KEEP_FILENAME or else as a
+// temporary file. Its bytes are kept here as well; the disk copy is
+// written when it moves there and on each flush.
+#[derive(Clone)]
+struct Upload {
+    file_name: Option[Vec[u8]],
+    field_name: Option[Vec[u8]],
+    content_type: Option[String],
+    config: Config,
+    in_memory: bool,
+    size: i64,
+    bytes: Vec[u8],
+    disk_path: Option[String],
+    temporary: bool,
+    actual_file_name: Option[Vec[u8]],
+    // _file_base and _ext, which only a File with a file name has.
+    base_ext: Option[(Vec[u8], Vec[u8])],
+    tmp_id: i64,
+}
+
+fn new_upload(file_name: ref Option[Vec[u8]], field_name: ref Option[Vec[u8]], config: ref Config, content_type: ref Option[String], tmp_id: i64) -> Upload {
+    let base_ext = match file_name {
+        Some(f) => Some(splitext(basename(f))),
+        None => None,
+    };
+    Upload {
+        file_name: file_name.clone(),
+        field_name: field_name.clone(),
+        content_type: content_type.clone(),
+        config: config.clone(),
+        in_memory: true,
+        size: 0,
+        bytes: Vec.new(),
+        disk_path: None,
+        temporary: false,
+        actual_file_name: None,
+        base_ext: base_ext,
+        tmp_id: tmp_id,
+    }
+}
+
+fn no_attribute(name: Str) -> PyErr {
+    py_err("AttributeError", f"'File' object has no attribute '{name}'")
+}
+
+impl Upload {
+    // _get_disk_file: the path of the file the bytes move to.
+    fn disk_file(mut ref self) -> Result[String, PyErr] {
+        let keep_ext = self.config.keep_extensions;
+        if self.config.keep_filename and self.config.upload_dir.is_some() {
+            let dir = self.config.upload_dir.clone().unwrap();
+            let (base, ext) = match self.base_ext.clone() {
+                Some(be) => be,
+                None => return Err(no_attribute("_file_base")),
+            };
+            let fname = if keep_ext { concat(base, ext) } else { base };
+            let path = path_join(dir, fname);
+            let empty: Vec[u8] = Vec.new();
+            if let Err(_) = fs.write_bytes(from_latin1(path), empty) {
+                return Err(py_err("FileError", f"Error opening temporary file: {bytes_repr(path)}"));
+            }
+            self.actual_file_name = Some(fname);
+            return Ok(from_latin1(path));
+        }
+        let suffix = if keep_ext {
+            match self.base_ext.clone() {
+                Some((_, ext)) => from_latin1(ext),
+                None => return Err(no_attribute("_ext")),
+            }
+        } else {
+            String.new()
+        };
+        let dir = match self.config.upload_dir.clone() {
+            Some(d) => from_latin1(d),
+            None => "data/tmp".to_string(),
+        };
+        let path = f"{dir}/tmp{self.tmp_id}{suffix}";
+        let empty: Vec[u8] = Vec.new();
+        if let Err(_) = fs.write_bytes(path.clone(), empty) {
+            return Err(py_err("FileError", "Error creating named temporary file".to_string()));
+        }
+        self.temporary = true;
+        self.actual_file_name = Some(latin1(path));
+        Ok(path)
+    }
+
+    fn flush_to_disk(mut ref self) -> Result[(), PyErr] {
+        if not self.in_memory {
+            return Ok(());
+        }
+        let path = self.disk_file()?;
+        self.in_memory = false;
+        self.disk_path = Some(path);
+        self.flush()
+    }
+
+    fn flush(ref self) -> Result[(), PyErr] {
+        if let Some(path) = self.disk_path.clone() {
+            if let Err(e) = fs.write_bytes(path.clone(), self.bytes.clone()) {
+                return Err(py_err("OSError", f"cannot write {path}: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    fn write(mut ref self, data: ref Vec[u8]) -> Result[(), PyErr] {
+        append(mut self.bytes, data);
+        self.size += data.len();
+        if self.in_memory and self.size > self.config.max_memory_file_size {
+            self.flush_to_disk()?;
+        }
+        Ok(())
+    }
+
+    // What the file holds now: its memory, or the file on disk read back.
+    fn contents(ref self) -> Vec[u8] {
+        match self.disk_path.clone() {
+            Some(p) => fs.read_bytes(p).unwrap_or(Vec.new()),
+            None => self.bytes.clone(),
+        }
+    }
+}
+
+fn upload_repr(f: ref Upload) -> String {
+    f"File(file_name={opt_bytes_repr(f.file_name)}, field_name={opt_bytes_repr(f.field_name)})"
+}
+
+#[derive(Clone)]
+enum Part {
+    F(Field),
+    U(Upload),
+}
+
+// ------------------------------------------------------------ FormParser
+
+const KIND_OCTET: i64 = 0;
+const KIND_QS: i64 = 1;
+const KIND_MULTIPART: i64 = 2;
+
+const WRITER_NONE: i64 = 0;
+const WRITER_DIRECT: i64 = 1;
+const WRITER_BASE64: i64 = 2;
+const WRITER_QP: i64 = 3;
+
+// What a form's on_field and on_file do: print what arrived (a form job),
+// or save the files into data/uploads like an upload handler (the server
+// job).
+struct Sink {
+    server: bool,
+    fields: i64,
+    files: i64,
+}
+
+// A FormParser, its parser, and the state of the callbacks it gives it.
+struct Form {
+    kind: i64,
+    config: Config,
+    octet: OctetParser,
+    qs: QsParser,
+    mp: MpParser,
+    // The octet-stream body's File.
+    file: Option[Upload],
+    // The querystring callbacks' name buffer and field.
+    name_buffer: Vec[u8],
+    field: Option[Field],
+    // The multipart callbacks' state.
+    header_name: Vec[u8],
+    header_value: Vec[u8],
+    headers: Vec[(Vec[u8], Vec[u8])],
+    part: Option[Part],
+    is_file: bool,
+    writer: i64,
+    writer_cache: Vec[u8],
+    tmp_count: i64,
+    sink: Sink,
+}
+
+// create_form_parser
+fn create_form(headers: ref Vec[(String, String)], config: ref Config, sink: own Sink) -> Result[Form, PyErr] {
+    let ct = match header(headers, "Content-Type") {
+        Some(v) => v,
+        None => return Err(value_error("No Content-Type header given!".to_string())),
+    };
+    let (ctype, params) = parse_options_header(latin1(ct));
+    let boundary = dict_get(params, "boundary");
+    let content_type = from_latin1(ctype);
+    let mut form = Form {
+        kind: KIND_OCTET,
+        config: config.clone(),
+        octet: OctetParser { started: false, max_size: INF, current_size: 0 },
+        qs: QsParser { state: QS_BEFORE_FIELD, found_sep: false, strict: false, max_size: INF, current_size: 0 },
+        mp: mp_parser(bs("-"), INF, 8, 4224)?,
+        file: None,
+        name_buffer: Vec.new(),
+        field: None,
+        header_name: Vec.new(),
+        header_value: Vec.new(),
+        headers: Vec.new(),
+        part: None,
+        is_file: false,
+        writer: WRITER_NONE,
+        writer_cache: Vec.new(),
+        tmp_count: 0,
+        sink: sink,
+    };
+    if content_type == "application/octet-stream" {
+        form.octet = octet_parser(config.max_body_size)?;
+    } else if content_type == "application/x-www-form-urlencoded" or content_type == "application/x-url-encoded" {
+        form.kind = KIND_QS;
+        form.qs = qs_parser(false, config.max_body_size)?;
+    } else if content_type == "multipart/form-data" {
+        form.kind = KIND_MULTIPART;
+        let b = match boundary {
+            Some(b) => b,
+            None => return Err(form_error("No boundary given".to_string())),
+        };
+        form.mp = mp_parser(b, config.max_body_size, config.max_header_count, config.max_header_size)?;
+    } else {
+        return Err(form_error(f"Unknown Content-Type: {content_type}"));
+    }
+    Ok(form)
+}
+
+fn header(headers: ref Vec[(String, String)], name: Str) -> Option[String] {
+    for (k, v) in headers.iter() {
+        if k == name {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+impl Form {
+    fn write(mut ref self, data: ref Vec[u8]) -> Result[i64, PyErr] {
+        let mut evs: Vec[Ev] = Vec.new();
+        let r = if self.kind == KIND_OCTET {
+            Ok(self.octet.write(data, mut evs))
+        } else if self.kind == KIND_QS {
+            self.qs.write(data, mut evs)
+        } else {
+            self.mp.write(data, mut evs)
+        };
+        // A callback raises before the parser goes on, so its error comes
+        // first.
+        for ev in evs.iter() {
+            self.handle(ev)?;
+        }
+        r
+    }
+
+    fn finalize(mut ref self) -> Result[(), PyErr] {
+        let mut evs: Vec[Ev] = Vec.new();
+        if self.kind == KIND_OCTET {
+            self.octet.finalize(mut evs);
+        } else if self.kind == KIND_QS {
+            self.qs.finalize(mut evs);
+        }
+        for ev in evs.iter() {
+            self.handle(ev)?;
+        }
+        Ok(())
+    }
+
+    fn handle(mut ref self, ev: ref Ev) -> Result[(), PyErr] {
+        let data = ev.data.clone().unwrap_or(Vec.new());
+        let n = ev.name.clone();
+        if self.kind == KIND_OCTET {
+            if n == "start" {
+                self.tmp_count += 1;
+                self.file = Some(new_upload(None, None, self.config, None, self.tmp_count));
+            } else if n == "data" {
+                let mut f = self.file.clone().unwrap();
+                let r = f.write(data);
+                self.file = Some(f);
+                r?;
+            } else if n == "end" {
+                let f = self.file.clone().unwrap();
+                f.flush()?;
+                self.report_file(f)?;
+            }
+        } else if self.kind == KIND_QS {
+            if n == "field_name" {
+                append(mut self.name_buffer, data);
+            } else if n == "field_data" {
+                if self.field.is_none() {
+                    self.field = Some(new_field(self.name_buffer, None));
+                    self.name_buffer = Vec.new();
+                }
+                let mut f = self.field.clone().unwrap();
+                f.write(data);
+                self.field = Some(f);
+            } else if n == "field_end" {
+                if self.field.is_none() {
+                    let mut f = new_field(self.name_buffer, None);
+                    f.is_none = true;
+                    self.field = Some(f);
+                    self.name_buffer = Vec.new();
+                }
+                let f = self.field.clone().unwrap();
+                self.report_field(f)?;
+                self.field = None;
+            }
+        } else {
+            self.handle_multipart(n, data)?;
+        }
+        Ok(())
+    }
+
+    fn handle_multipart(mut ref self, n: ref String, data: ref Vec[u8]) -> Result[(), PyErr] {
+        if n == "part_begin" {
+            self.headers = Vec.new();
+        } else if n == "part_data" {
+            self.writer_write(data)?;
+        } else if n == "part_end" {
+            self.part_finalize()?;
+            match self.part.clone() {
+                Some(Part.U(f)) => self.report_file(f)?,
+                Some(Part.F(f)) => self.report_field(f)?,
+                None => {}
+            }
+        } else if n == "header_field" {
+            append(mut self.header_name, data);
+        } else if n == "header_value" {
+            append(mut self.header_value, data);
+        } else if n == "header_end" {
+            let key = lower_ascii(self.header_name);
+            let value = self.header_value.clone();
+            dict_set(mut self.headers, key, value);
+            self.header_name = Vec.new();
+            self.header_value = Vec.new();
+        } else if n == "headers_finished" {
+            self.headers_finished()?;
+        } else if n == "end" {
+            if self.writer != WRITER_NONE {
+                self.writer_finalize()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn headers_finished(mut ref self) -> Result[(), PyErr] {
+        self.is_file = false;
+        let content_disp = dict_get(self.headers, "content-disposition");
+        let (_, options) = parse_options_header(content_disp.clone().unwrap_or(Vec.new()));
+        let field_name = match dict_get(options, "name") {
+            Some(f) => f,
+            None => {
+                let shown = opt_bytes_repr(content_disp);
+                return Err(form_error(f"Field name not found in Content-Disposition: \"{shown}\""));
+            }
+        };
+        let file_name = dict_get(options, "filename");
+        let content_type = match dict_get(self.headers, "content-type") {
+            Some(b) => Some(from_latin1(b)),
+            None => None,
+        };
+        match file_name {
+            None => self.part = Some(Part.F(new_field(field_name, content_type))),
+            Some(f) => {
+                self.tmp_count += 1;
+                self.part = Some(Part.U(new_upload(Some(f), Some(field_name), self.config, content_type, self.tmp_count)));
+                self.is_file = true;
+            }
+        }
+        let te = lower_ascii(dict_get(self.headers, "content-transfer-encoding").unwrap_or(bs("7bit")));
+        if te == bs("binary") or te == bs("8bit") or te == bs("7bit") {
+            self.writer = WRITER_DIRECT;
+        } else if te == bs("base64") {
+            self.writer = WRITER_BASE64;
+        } else if te == bs("quoted-printable") {
+            self.writer = WRITER_QP;
+        } else if self.config.error_on_bad_cte {
+            return Err(form_error(f"Unknown Content-Transfer-Encoding \"{bytes_repr(te)}\""));
+        } else {
+            self.writer = WRITER_DIRECT;
+        }
+        self.writer_cache = Vec.new();
+        Ok(())
+    }
+
+    // f_multi.write
+    fn part_write(mut ref self, data: ref Vec[u8]) -> Result[(), PyErr] {
+        match self.part.clone() {
+            Some(Part.F(f)) => {
+                let mut g = f;
+                g.write(data);
+                self.part = Some(Part.F(g));
+            }
+            Some(Part.U(f)) => {
+                let mut g = f;
+                let r = g.write(data);
+                self.part = Some(Part.U(g));
+                r?;
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    // f_multi.finalize: a File flushes its disk copy.
+    fn part_finalize(ref self) -> Result[(), PyErr] {
+        if let Some(Part.U(f)) = self.part.clone() {
+            f.flush()?;
+        }
+        Ok(())
+    }
+
+    fn writer_write(mut ref self, data: ref Vec[u8]) -> Result[(), PyErr] {
+        if self.writer == WRITER_BASE64 {
+            let (out, rest) = b64_write(self.writer_cache, data)?;
+            if let Some(o) = out {
+                self.part_write(o)?;
+            }
+            self.writer_cache = rest;
+        } else if self.writer == WRITER_QP {
+            let (out, rest) = qp_write(self.writer_cache, data);
+            if let Some(o) = out {
+                self.part_write(o)?;
+            }
+            self.writer_cache = rest;
+        } else {
+            self.part_write(data)?;
+        }
+        Ok(())
+    }
+
+    fn writer_finalize(mut ref self) -> Result[(), PyErr] {
+        if self.writer == WRITER_BASE64 {
+            b64_finalize(self.writer_cache)?;
+        } else if self.writer == WRITER_QP {
+            if let Some(o) = qp_finalize(self.writer_cache) {
+                self.part_write(o)?;
+            }
+            self.writer_cache = Vec.new();
+        }
+        self.part_finalize()
+    }
+
+    fn report_field(mut ref self, f: ref Field) -> Result[(), PyErr] {
+        self.sink.fields += 1;
+        if self.sink.server {
+            let v = if f.is_none { "None".to_string() } else { bytes_repr(f.value) };
+            println(f"    field {from_latin1(f.name)} = {v}");
+        } else {
+            println(f"  field {field_repr(f)} content_type={opt_str_repr(f.content_type)}");
+        }
+        Ok(())
+    }
+
+    fn report_file(mut ref self, f: ref Upload) -> Result[(), PyErr] {
+        self.sink.files += 1;
+        if self.sink.server {
+            let where_to = if f.in_memory {
+                let fname = match f.file_name.clone() {
+                    Some(n) => basename(n),
+                    None => bs("upload.bin"),
+                };
+                let w = path_join(bs("data/uploads"), fname);
+                if let Err(e) = fs.write_bytes(from_latin1(w), f.bytes.clone()) {
+                    return Err(py_err("OSError", f"cannot save: {e}"));
+                }
+                w
+            } else {
+                f.actual_file_name.clone().unwrap_or(Vec.new())
+            };
+            let field = match f.field_name.clone() {
+                Some(n) => from_latin1(n),
+                None => "-".to_string(),
+            };
+            println(f"    file {field} {opt_bytes_repr(f.file_name)} {f.size} bytes -> {from_latin1(where_to)}");
+            return Ok(());
+        }
+        println(f"  file {upload_repr(f)} size={f.size} in_memory={py_bool(f.in_memory)} content_type={opt_str_repr(f.content_type)}");
+        if self.config.keep_filename {
+            if let Some(a) = f.actual_file_name.clone() {
+                println(f"    saved {bytes_repr(a)}");
+            }
+        }
+        let data = f.contents();
+        let more = if data.len() > 60 { f" (+{data.len() - 60} more)" } else { String.new() };
+        println(f"    data {bytes_repr(sub(data, 0, 60))}{more}");
+        Ok(())
+    }
+}
+
+// parse_form, with a config for the parser (parse_form itself passes
+// none) and a sink for what it finds.
+fn handle_form(headers: ref Vec[(String, String)], body: ref Vec[u8], chunk_size: i64, config: ref Config, sink: own Sink) -> Result[Sink, PyErr] {
+    if chunk_size < 1 {
+        return Err(value_error(f"chunk_size must be a positive number, not {chunk_size}"));
+    }
+    let mut form = create_form(headers, config, sink)?;
+    let mut content_length = INF;
+    if let Some(cl) = header(headers, "Content-Length") {
+        content_length = match py_int(cl, false) {
+            Some(v) => v,
+            None => return Err(value_error(f"invalid literal for int() with base 10: {repr_str(cl)}")),
+        };
+        if content_length < 0 {
+            return Err(value_error("Content-Length must be non-negative".to_string()));
+        }
+    }
+    let mut bytes_read = 0;
+    loop {
+        let max_readable = imin(content_length - bytes_read, chunk_size);
+        let buff = sub(body, bytes_read, bytes_read + max_readable);
+        form.write(buff)?;
+        bytes_read += buff.len();
+        if buff.len() != max_readable or bytes_read == content_length {
+            break;
+        }
+    }
+    form.finalize()?;
+    Ok(form.sink)
+}
+
+// ------------------------------------------------------------ jobs
+
+// Print the callbacks a parser made, joining each run of one data
+// callback into a line with its count.
+fn dump_events(evs: ref Vec[Ev]) {
+    let mut k = 0;
+    while k < evs.len() {
+        let name = evs[k].name.clone();
+        if evs[k].data.is_none() {
+            println(f"  {name}");
+            k += 1;
+            continue;
+        }
+        let mut j = k;
+        let mut buf: Vec[u8] = Vec.new();
+        while j < evs.len() and evs[j].name == name and evs[j].data.is_some() {
+            append(mut buf, evs[j].data.clone().unwrap());
+            j += 1;
+        }
+        println(f"  {name} {j - k} {bytes_repr(buf)}");
+        k = j;
+    }
+}
+
+fn chunks_of(b: ref Vec[u8], n: i64) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    let mut k = 0;
+    while k < b.len() {
+        out.push(sub(b, k, k + n));
+        k += n;
+    }
+    out
+}
+
+fn int_field(j: ref JValue, key: Str, default: i64) -> i64 {
+    match get(j, key) {
+        Some(JValue.Int(v)) => v,
+        _ => default,
+    }
+}
+
+fn str_field(j: ref JValue, key: Str) -> String {
+    match get(j, key) {
+        Some(JValue.Str(s)) => s,
+        _ => String.new(),
+    }
+}
+
+fn bool_field(j: ref JValue, key: Str) -> bool {
+    match get(j, key) {
+        Some(JValue.Bool(b)) => b,
+        _ => false,
+    }
+}
+
+fn read_body(name: ref String) -> Vec[u8] {
+    fs.read_bytes(f"data/bodies/{name}").unwrap_or(Vec.new())
+}
+
+fn show_result(evs: ref Vec[Ev], r: ref Result[i64, PyErr]) {
+    dump_events(evs);
+    match r {
+        Ok(total) => println(f"  wrote {total}"),
+        Err(e) => println(f"  error {err_line(e)}"),
+    }
+}
+
+fn run_mp(j: ref JValue) {
+    let body = read_body(str_field(j, "file"));
+    let mut evs: Vec[Ev] = Vec.new();
+    let r = feed_mp(j, body, mut evs);
+    show_result(evs, r);
+}
+
+fn feed_mp(j: ref JValue, body: ref Vec[u8], evs: mut ref Vec[Ev]) -> Result[i64, PyErr] {
+    let boundary = bs(str_field(j, "boundary"));
+    let mut p = mp_parser(boundary, int_field(j, "max_size", INF), int_field(j, "max_header_count", 8), int_field(j, "max_header_size", 4224))?;
+    let mut total = 0;
+    for c in chunks_of(body, int_field(j, "chunk", 1)) {
+        total += p.write(c, mut evs)?;
+    }
+    Ok(total)
+}
+
+fn feed_qs(j: ref JValue, evs: mut ref Vec[Ev]) -> Result[i64, PyErr] {
+    let body = latin1(str_field(j, "body"));
+    let mut p = qs_parser(bool_field(j, "strict"), int_field(j, "max_size", INF))?;
+    let mut total = 0;
+    for c in chunks_of(body, int_field(j, "chunk", 1)) {
+        total += p.write(c, mut evs)?;
+    }
+    p.finalize(mut evs);
+    Ok(total)
+}
+
+fn feed_octet(j: ref JValue, evs: mut ref Vec[Ev]) -> Result[i64, PyErr] {
+    let body = latin1(str_field(j, "body"));
+    let mut p = octet_parser(int_field(j, "max_size", INF))?;
+    let mut total = 0;
+    for c in chunks_of(body, int_field(j, "chunk", 1)) {
+        total += p.write(c, mut evs);
+    }
+    p.finalize(mut evs);
+    Ok(total)
+}
+
+fn chunk_list(j: ref JValue) -> Vec[Vec[u8]] {
+    let mut out: Vec[Vec[u8]] = Vec.new();
+    if let Some(JValue.List(items)) = get(j, "chunks") {
+        for it in items.iter() {
+            if let JValue.Str(s) = it {
+                out.push(latin1(s));
+            }
+        }
+    }
+    out
+}
+
+fn run_b64(j: ref JValue) {
+    let mut cache: Vec[u8] = Vec.new();
+    for c in chunk_list(j) {
+        match b64_write(cache, c) {
+            Ok((out, rest)) => {
+                if let Some(o) = out {
+                    println(f"  write {bytes_repr(o)}");
+                }
+                cache = rest;
+            }
+            Err(e) => {
+                println(f"  error {err_line(e)}");
+                return;
+            }
+        }
+    }
+    match b64_finalize(cache) {
+        Ok(()) => println("  finalize"),
+        Err(e) => println(f"  error {err_line(e)}"),
+    }
+}
+
+fn run_qp(j: ref JValue) {
+    let mut cache: Vec[u8] = Vec.new();
+    for c in chunk_list(j) {
+        let (out, rest) = qp_write(cache, c);
+        if let Some(o) = out {
+            println(f"  write {bytes_repr(o)}");
+        }
+        cache = rest;
+    }
+    if let Some(o) = qp_finalize(cache) {
+        println(f"  write {bytes_repr(o)}");
+    }
+    println("  finalize");
+}
+
+fn job_config(j: ref JValue) -> Config {
+    let mut cfg = default_config();
+    let c = get(j, "config").unwrap_or(JValue.Null);
+    cfg.max_memory_file_size = int_field(c, "MAX_MEMORY_FILE_SIZE", cfg.max_memory_file_size);
+    cfg.max_body_size = int_field(c, "MAX_BODY_SIZE", cfg.max_body_size);
+    if let Some(JValue.Str(d)) = get(c, "UPLOAD_DIR") {
+        cfg.upload_dir = Some(latin1(d));
+    }
+    cfg.keep_filename = bool_field(c, "UPLOAD_KEEP_FILENAME");
+    cfg.keep_extensions = bool_field(c, "UPLOAD_KEEP_EXTENSIONS");
+    cfg.error_on_bad_cte = bool_field(c, "UPLOAD_ERROR_ON_BAD_CTE");
+    cfg
+}
+
+fn job_headers(j: ref JValue) -> Vec[(String, String)] {
+    let mut out: Vec[(String, String)] = Vec.new();
+    if let Some(JValue.Obj(items)) = get(j, "headers") {
+        for (k, v) in items.iter() {
+            if let JValue.Str(s) = v {
+                out.push((k.clone(), s.clone()));
+            }
+        }
+    }
+    out
+}
+
+fn new_sink(server: bool) -> Sink {
+    Sink { server: server, fields: 0, files: 0 }
+}
+
+// Temporary files go when their File does, at the end of the job.
+fn clear_dir(dir: Str) {
+    if let Ok(names) = fs.read_dir(dir) {
+        for n in names {
+            let _ = fs.remove_file(f"{dir}/{n}");
+        }
+    }
+}
+
+fn run_form(j: ref JValue) {
+    let body = read_body(str_field(j, "file"));
+    let r = handle_form(job_headers(j), body, int_field(j, "chunk", 1), job_config(j), new_sink(false));
+    clear_dir("data/tmp");
+    match r {
+        Ok(_) => println("  done"),
+        Err(e) => println(f"  error {err_line(e)}"),
+    }
+}
+
+// ------------------------------------------------------------ the upload server
+
+fn server_config() -> Config {
+    let mut cfg = default_config();
+    cfg.upload_dir = Some(bs("data/uploads"));
+    cfg.keep_filename = true;
+    cfg.keep_extensions = true;
+    cfg.max_memory_file_size = 100;
+    cfg
+}
+
+// One raw request: its request line split into words, its headers, and
+// its body.
+fn split_request(raw: ref Vec[u8]) -> (Vec[String], Vec[(String, String)], Vec[u8]) {
+    let at = find_sub(raw, bs("\r\n\r\n"), 0, raw.len());
+    let (head, body) = if at == -1 { (raw.clone(), Vec.new()) } else { (sub(raw, 0, at), sub(raw, at + 4, raw.len())) };
+    let text = from_latin1(head);
+    let lines: Vec[String] = text.split("\r\n").map(|l| l.to_string()).collect();
+    let words: Vec[String] = lines[0].split(" ").map(|w| w.to_string()).collect();
+    let mut headers: Vec[(String, String)] = Vec.new();
+    for k in 1..lines.len() {
+        let line = chars(lines[k]);
+        let mut colon = line.len();
+        for p in 0..line.len() {
+            if line[p] == ':' {
+                colon = p;
+                break;
+            }
+        }
+        let key = py_strip(text_of(slice(line, 0, colon)));
+        let value = py_strip(text_of(slice(line, colon + 1, line.len())));
+        let mut found = false;
+        for h in 0..headers.len() {
+            if headers[h].0 == key {
+                headers[h] = (key.clone(), value.clone());
+                found = true;
+            }
+        }
+        if not found {
+            headers.push((key, value));
+        }
+    }
+    (words, headers, body)
+}
+
+fn text_of(v: ref Vec[char]) -> String {
+    text(v)
+}
+
+fn run_server(j: ref JValue) {
+    let dir = f"data/{str_field(j, "dir")}";
+    let names = fs.read_dir(dir.clone()).unwrap_or(Vec.new());
+    for name in names.iter() {
+        let raw = fs.read_bytes(f"{dir}/{name}").unwrap_or(Vec.new());
+        let (words, headers, body) = split_request(raw);
+        let ct = match header(headers, "Content-Type") {
+            Some(c) => c,
+            None => "None".to_string(),
+        };
+        println(f"  {name} {words[0]} {words[1]} ({ct})");
+        match handle_form(headers, body, 64, server_config(), new_sink(true)) {
+            Ok(s) => println(f"    200 {s.fields} fields, {s.files} files"),
+            Err(e) => {
+                let status = if is_value_error(e) { 400 } else { 500 };
+                println(f"    {status} {err_line(e)}");
+            }
+        }
+        clear_dir("data/tmp");
+    }
+    println("  uploads:");
+    for name in fs.read_dir("data/uploads").unwrap_or(Vec.new()) {
+        let size = fs.read_bytes(f"data/uploads/{name}").unwrap_or(Vec.new()).len();
+        println(f"    {name} {size}");
+    }
+}
+
+fn run_job(line: ref String) {
+    let j = match parse_json(line) {
+        Ok(v) => v,
+        Err(e) => {
+            println(f"  bad job: {e}");
+            return;
+        }
+    };
+    let kind = str_field(j, "kind");
+    if kind == "mp" {
+        run_mp(j);
+    } else if kind == "qs" {
+        let mut evs: Vec[Ev] = Vec.new();
+        let r = feed_qs(j, mut evs);
+        show_result(evs, r);
+    } else if kind == "octet" {
+        let mut evs: Vec[Ev] = Vec.new();
+        let r = feed_octet(j, mut evs);
+        show_result(evs, r);
+    } else if kind == "options" {
+        let (v, opts) = parse_options_header(latin1(str_field(j, "value")));
+        println(f"  ({bytes_repr(v)}, {dict_repr(opts)})");
+    } else if kind == "b64" {
+        run_b64(j);
+    } else if kind == "qp" {
+        run_qp(j);
+    } else if kind == "form" {
+        run_form(j);
+    } else if kind == "server" {
+        run_server(j);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    for d in ["data/uploads", "data/tmp"] {
+        if let Err(e) = fs.create_dir_all(d) {
+            return Err(f"cannot create {d}: {e}");
+        }
+    }
+    clear_dir("data/uploads");
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    let jobs = match fs.read_to_string("data/jobs.jsonl".to_string()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln(f"cannot read jobs.jsonl: {e}");
+            return;
+        }
+    };
+    for line in jobs.lines() {
+        println(f"== {line}");
+        run_job(line.to_string());
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"blob\"; filename=\"blob.bin\"\r\n");
+    t.push_str("Content-Transfer-Encoding: base64\r\n");
+    t.push_str("\r\n");
+    t.push_str("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\r\n");
+    t.push_str("OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\r\n");
+    t.push_str("cnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmq\r\n");
+    t.push_str("q6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxscAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob\r\n");
+    t.push_str("HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNU\r\n");
+    t.push_str("VVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yN\r\n");
+    t.push_str("jo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXG\r\n");
+    t.push_str("xwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3\r\n");
+    t.push_str("ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9w\r\n");
+    t.push_str("cXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ip\r\n");
+    t.push_str("qqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbH\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"flat\"\r\n");
+    t.push_str("Content-Transfer-Encoding: BASE64\r\n");
+    t.push_str("\r\n");
+    t.push_str("ZmxhdCBiYXNlNjQgZmllbGQh\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/b64.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW-x");
+    v.push(DataFile { path: "bodies/badend.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"h\"\r\n");
+    t.push_str("Bad Name: v\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/badheader.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"h\"\r\n");
+    t.push_str("X-Big: yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/bigheader.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\r\n");
+    t.push_str("\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"a\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("1\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/crlfpre.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"x\"\r\n");
+    t.push_str("Content-Transfer-Encoding: x-uuencode\r\n");
+    t.push_str("\r\n");
+    t.push_str("begin 644 x\r\n");
+    t.push_str("end\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/cte.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"h\"\r\n");
+    t.push_str("X-H0: v\r\n");
+    t.push_str("X-H1: v\r\n");
+    t.push_str("X-H2: v\r\n");
+    t.push_str("X-H3: v\r\n");
+    t.push_str("X-H4: v\r\n");
+    t.push_str("X-H5: v\r\n");
+    t.push_str("X-H6: v\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/eightheaders.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/empty.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"a\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("1\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    t.push_str("epilogue text\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/epilogue.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("q=kara+lang&page=2&flag&&empty=&x=1=2&last=end");
+    v.push(DataFile { path: "bodies/form.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\n");
+    t.push_str("content-disposition: form-data; name=\"a\"\n");
+    t.push_str("\n");
+    t.push_str("b\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\n");
+    v.push(DataFile { path: "bodies/lf.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"username\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("ada\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"password\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("s3cr3t pass\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"remember\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("on\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/login.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"h\"\r\n");
+    t.push_str("X-H0: v\r\n");
+    t.push_str("X-H1: v\r\n");
+    t.push_str("X-H2: v\r\n");
+    t.push_str("X-H3: v\r\n");
+    t.push_str("X-H4: v\r\n");
+    t.push_str("X-H5: v\r\n");
+    t.push_str("X-H6: v\r\n");
+    t.push_str("X-H7: v\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/manyheaders.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"files\"; filename=\"a.csv\"\r\n");
+    t.push_str("Content-Type: text/csv\r\n");
+    t.push_str("\r\n");
+    t.push_str("id,name\n");
+    t.push_str("1,ada\n");
+    t.push_str("2,grace\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"files\"; filename=\"b.csv\"\r\n");
+    t.push_str("Content-Type: text/csv\r\n");
+    t.push_str("\r\n");
+    t.push_str("id,name\n");
+    t.push_str("3,linus\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"files\"; filename=\"empty.txt\"\r\n");
+    t.push_str("Content-Type: text/plain\r\n");
+    t.push_str("\r\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"note\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e--\r\n");
+    v.push(DataFile { path: "bodies/multi.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e74");
+    t.push_str("2d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d226965223b2066696c656e616d653d22433a");
+    t.push_str("5c55736572735c6d655c7265706f72742e706466220d0a0d0a255044462d312e340d0a2d2d2d2d2d2d5765624b697446");
+    t.push_str("6f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d446973706f736974696f6e3a");
+    t.push_str("20666f726d2d646174613b206e616d653d22756e63223b2066696c656e616d653d225c5c7365727665725c7368617265");
+    t.push_str("5c782e646f63220d0a0d0a646f630d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b");
+    t.push_str("54725a753067570d0a436f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d2274");
+    t.push_str("726176223b2066696c656e616d653d222e2e2f2e2e2f6574632f706173737764220d0a0d0a726f6f743a783a303a300d");
+    t.push_str("0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e");
+    t.push_str("742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d2271223b2066696c656e616d653d227765");
+    t.push_str("205c2271756f74655c223b20616e643b2073656d69732e747874220d0a0d0a710d0a2d2d2d2d2d2d5765624b6974466f");
+    t.push_str("726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d446973706f736974696f6e3a20");
+    t.push_str("666f726d2d646174613b206e616d653d2273746172223b2066696c656e616d652a3d5554462d3827276e612543332541");
+    t.push_str("4676652e7478743b2066696c656e616d653d226e616976652e747874220d0a0d0a737461720d0a2d2d2d2d2d2d576562");
+    t.push_str("4b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a434f4e54454e542d444953504f534954");
+    t.push_str("494f4e3a20466f726d2d446174613b4e616d653d706c61696e203b202046696c654e616d65203d202e6261736872630d");
+    t.push_str("0a0d0a616c696173206c6c3d276c73202d6c270d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41");
+    t.push_str("345957786b54725a753067570d0a436f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e61");
+    t.push_str("6d653d2261726368223b2066696c656e616d653d226261636b75702e7461722e677a220d0a0d0a1f8b08000d0a2d2d2d");
+    t.push_str("2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067572d2d0d0a");
+    v.push(DataFile { path: "bodies/names.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"a\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gWx\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW-y\r\n");
+    t.push_str("-\r\n");
+    t.push_str("--\r");
+    t.push_str("\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/nearmiss.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("content-disposition: form-data; name=a\r");
+    t.push_str("X");
+    v.push(DataFile { path: "bodies/noLF.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Type: text/plain\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/nodisp.bin".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("content-disposition: form-data; name=a\r\n");
+    t.push_str("\r");
+    t.push_str("X");
+    v.push(DataFile { path: "bodies/nohdrLF.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/noname.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("This is the preamble.\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"a\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("1\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/preamble.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"letter\"\r\n");
+    t.push_str("Content-Transfer-Encoding: quoted-printable\r\n");
+    t.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    t.push_str("\r\n");
+    t.push_str("Gr=C3=BC=C3=9Fe aus K=C3=B6ln =E2=80=94 =C3=A7a va? Line with =3D sign and =\r\n");
+    t.push_str("a very long line that the encoder has to wrap at seventy six characters exa=\r\n");
+    t.push_str("ctly.\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"odd\"\r\n");
+    t.push_str("Content-Transfer-Encoding: quoted-printable\r\n");
+    t.push_str("\r\n");
+    t.push_str("a=3D=3d=zz=\r\n");
+    t.push_str("b==c=4\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/qp.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("content-disposition:      form-data; name=sp\r\n");
+    t.push_str("x-empty:\r\n");
+    t.push_str("\r\n");
+    t.push_str("v\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/spaces.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"a\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("1\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"b\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("never closed");
+    v.push(DataFile { path: "bodies/truncated.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e74");
+    t.push_str("2d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d227469746c65220d0a0d0a51756172746572");
+    t.push_str("6c79207265706f72740d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a7530");
+    t.push_str("67570d0a436f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d22646f63223b20");
+    t.push_str("66696c656e616d653d227265706f72742e747874220d0a436f6e74656e742d547970653a20746578742f706c61696e0d");
+    t.push_str("0a0d0a6c696e65206f6e650d0a6c696e652074776f0d0a0d0a2d2d6e6f74206120626f756e646172790d0a2d2d2d2d2d");
+    t.push_str("2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067580d0a656e640d0a2d2d2d2d2d2d57");
+    t.push_str("65624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d446973706f73");
+    t.push_str("6974696f6e3a20666f726d2d646174613b206e616d653d22696d616765223b2066696c656e616d653d226c6f676f2e70");
+    t.push_str("6e67220d0a436f6e74656e742d547970653a20696d6167652f706e670d0a0d0a89504e470d0a1a0a0000000d49484452");
+    t.push_str("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f");
+    t.push_str("303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f");
+    t.push_str("606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f");
+    t.push_str("909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf");
+    t.push_str("c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef");
+    t.push_str("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0d0a2d2d2d2d2d2d5765624b69740d0a2d789ccb4e2c4acc1ec4180066bc40d9");
+    t.push_str("0d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067572d2d0d0a");
+    v.push(DataFile { path: "bodies/upload.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZuzzz\r\n");
+    v.push(DataFile { path: "bodies/wrongb.bin".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str(": v\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "bodies/zeroheader.bin".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"upload.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"upload.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"upload.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"upload.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"upload.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"multi.bin\", \"boundary\": \"------------------------d74496d66958873e\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"multi.bin\", \"boundary\": \"------------------------d74496d66958873e\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"multi.bin\", \"boundary\": \"------------------------d74496d66958873e\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"multi.bin\", \"boundary\": \"------------------------d74496d66958873e\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"multi.bin\", \"boundary\": \"------------------------d74496d66958873e\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"b64.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"b64.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"b64.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"b64.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"b64.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"nearmiss.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"nearmiss.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"nearmiss.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"nearmiss.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"nearmiss.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"spaces.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"spaces.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"spaces.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"spaces.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"spaces.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"epilogue.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"epilogue.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"epilogue.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"epilogue.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"epilogue.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"crlfpre.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"crlfpre.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 3}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"crlfpre.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 7}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"crlfpre.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 64}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"crlfpre.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"truncated.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"truncated.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"empty.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"empty.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"badend.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"badend.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"noLF.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"noLF.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"nohdrLF.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"nohdrLF.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"wrongb.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"wrongb.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"preamble.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"preamble.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"lf.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"lf.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"badheader.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"badheader.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"zeroheader.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"zeroheader.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"manyheaders.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"manyheaders.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"eightheaders.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"eightheaders.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"bigheader.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"bigheader.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"noname.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 2}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"noname.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 1000000}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 5, \"max_size\": 100}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"upload.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 50, \"max_header_count\": 1}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"upload.bin\", \"boundary\": \"----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"chunk\": 50, \"max_header_size\": 40}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"chunk\": 5}\n");
+    t.push_str("{\"kind\": \"mp\", \"file\": \"login.bin\", \"boundary\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"chunk\": 5}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b=2\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b=2\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b=2\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b=2\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b=2\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&&b=2\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&&b=2\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&&b=2\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&&b=2\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&&b=2\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&a=1\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&a=1\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&a=1\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&a=1\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&a=1\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a&b=\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a&b=\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a&b=\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a&b=\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a&b=\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"=x\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"=x\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"=x\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"=x\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"=x\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1&b\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=b=c&d\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=b=c&d\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=b=c&d\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=b=c&d\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=b=c&d\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&&\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&&\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&&\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&&\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"&&\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1;b=2\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1;b=2\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1;b=2\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1;b=2\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"a=1;b=2\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x&\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x&\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x&\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x&\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"x&\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q\", \"chunk\": 1}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q\", \"chunk\": 1000}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q\", \"chunk\": 1000, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q\", \"chunk\": 2, \"strict\": true}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"aaaa=bbbb&cccc=dddd\", \"chunk\": 3, \"max_size\": 10}\n");
+    t.push_str("{\"kind\": \"qs\", \"body\": \"aaaa=bbbb\", \"chunk\": 3, \"max_size\": 0}\n");
+    t.push_str("{\"kind\": \"octet\", \"body\": \"hello octets\", \"chunk\": 5}\n");
+    t.push_str("{\"kind\": \"octet\", \"body\": \"\", \"chunk\": 4}\n");
+    t.push_str("{\"kind\": \"octet\", \"body\": \"0123456789\", \"chunk\": 3, \"max_size\": 7}\n");
+    t.push_str("{\"kind\": \"octet\", \"body\": \"abc\", \"chunk\": 1, \"max_size\": 1}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"text/plain\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"  TEXT/HTML  \"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"form-data; name=\\\"a\\\"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"form-data; name=a; filename=b.txt\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"multipart/form-data; boundary=----x\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"Multipart/Form-Data; Boundary=\\\"q;r\\\"; charset=utf-8\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"form-data; name=\\\"a;b\\\"; filename=\\\"c\\\\\\\"d.txt\\\"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"form-data; filename*=UTF-8''x.txt; name=n\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"form-data; name=\\\"x\\\"; filename=\\\"C:\\\\\\\\dir\\\\\\\\f.txt\\\"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"form-data; name=\\\"x\\\"; filename=\\\"C:\\\\dir\\\\f.txt\\\"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"form-data; name=\\\"x\\\"; filename=\\\"\\\\\\\\\\\\\\\\host\\\\\\\\f\\\"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a;b;c\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; =x\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; x=\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a;;;b=1\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; b=\\\"unterminated; c=2\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; B = \\\"  spaced  \\\" \"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; q=\\\"\\\"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; q=\\\"\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; k=\\\"one\\\" two\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"caf\\u00e9; name=Zo\\u00eb\"}\n");
+    t.push_str("{\"kind\": \"options\", \"value\": \"a; name=x; name=y\"}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9v\", \"YmFy\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9\", \"vYm\", \"Fy\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9vYg==\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9vYg\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9vY\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm\\r\\n9v\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9v\\r\\n\", \"YmFy\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Z!m9v\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zg==Zm9v\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"====\", \"Zm9v\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9vYmFy\\r\\n\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"SGVsbG8sIHdvcmxkIQ==\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9v\", \"Y\", \"m\", \"F\", \"y\"]}\n");
+    t.push_str("{\"kind\": \"b64\", \"chunks\": [\"Zm9=v\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"a=3Db\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"a=\", \"3Db\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"a=3\", \"Db\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"line=\\r\\nnext\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"soft=\", \"\\r\\nbreak\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"=E2=82=AC\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"=e2=82=ac\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"bad=zz\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"end=\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"x==y\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"tail=4\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"a=\\rb\\nc\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"=\", \"=\", \"4\", \"1\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"plain\"]}\n");
+    t.push_str("{\"kind\": \"qp\", \"chunks\": [\"\"]}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"login.bin\", \"chunk\": 13, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=\\\"----WebKitFormBoundary7MA4YWxkTrZu0gW\\\"\"}, \"file\": \"upload.bin\", \"chunk\": 100, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"upload.bin\", \"chunk\": 100, \"config\": {\"MAX_MEMORY_FILE_SIZE\": 64}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=------------------------d74496d66958873e\"}, \"file\": \"multi.bin\", \"chunk\": 9, \"config\": {\"MAX_MEMORY_FILE_SIZE\": 10, \"UPLOAD_DIR\": \"data/uploads\", \"UPLOAD_KEEP_FILENAME\": true, \"UPLOAD_KEEP_EXTENSIONS\": true}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"names.bin\", \"chunk\": 17, \"config\": {\"MAX_MEMORY_FILE_SIZE\": 1, \"UPLOAD_DIR\": \"data/uploads\", \"UPLOAD_KEEP_FILENAME\": true, \"UPLOAD_KEEP_EXTENSIONS\": true}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"names.bin\", \"chunk\": 17, \"config\": {\"MAX_MEMORY_FILE_SIZE\": 1, \"UPLOAD_DIR\": \"data/uploads\", \"UPLOAD_KEEP_FILENAME\": true}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"b64.bin\", \"chunk\": 7, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"b64.bin\", \"chunk\": 76, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"b64.bin\", \"chunk\": 78, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"b64.bin\", \"chunk\": 1000000, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"qp.bin\", \"chunk\": 11, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"cte.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"cte.bin\", \"chunk\": 50, \"config\": {\"UPLOAD_ERROR_ON_BAD_CTE\": true}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"noname.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"nodisp.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\", \"Content-Length\": \"120\"}, \"file\": \"login.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"login.bin\", \"chunk\": 50, \"config\": {\"MAX_BODY_SIZE\": 200}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data\"}, \"file\": \"login.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"text/plain\"}, \"file\": \"login.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {}, \"file\": \"login.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}, \"file\": \"form.txt\", \"chunk\": 6, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"application/x-url-encoded\", \"Content-Length\": \"20\"}, \"file\": \"form.txt\", \"chunk\": 6, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}, \"file\": \"form.txt\", \"chunk\": 6, \"config\": {\"MAX_BODY_SIZE\": 25}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"application/octet-stream\"}, \"file\": \"upload.bin\", \"chunk\": 333, \"config\": {\"MAX_MEMORY_FILE_SIZE\": 500}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"application/octet-stream\", \"Content-Length\": \"-1\"}, \"file\": \"login.bin\", \"chunk\": 50, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"form\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\"}, \"file\": \"login.bin\", \"chunk\": 0, \"config\": {}}\n");
+    t.push_str("{\"kind\": \"server\", \"dir\": \"requests\"}\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("504f5354202f75706c6f616420485454502f312e310d0a486f73743a2066696c65732e6578616d706c650d0a436f6e74");
+    t.push_str("656e742d547970653a206d756c7469706172742f666f726d2d646174613b20626f756e646172793d2d2d2d2d5765624b");
+    t.push_str("6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d4c656e6774683a2038");
+    t.push_str("31330d0a0d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a43");
+    t.push_str("6f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d227469746c65220d0a0d0a51");
+    t.push_str("7561727465726c79207265706f72740d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d4134595778");
+    t.push_str("6b54725a753067570d0a436f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d22");
+    t.push_str("646f63223b2066696c656e616d653d227265706f72742e747874220d0a436f6e74656e742d547970653a20746578742f");
+    t.push_str("706c61696e0d0a0d0a6c696e65206f6e650d0a6c696e652074776f0d0a0d0a2d2d6e6f74206120626f756e646172790d");
+    t.push_str("0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067580d0a656e640d0a2d");
+    t.push_str("2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d");
+    t.push_str("446973706f736974696f6e3a20666f726d2d646174613b206e616d653d22696d616765223b2066696c656e616d653d22");
+    t.push_str("6c6f676f2e706e67220d0a436f6e74656e742d547970653a20696d6167652f706e670d0a0d0a89504e470d0a1a0a0000");
+    t.push_str("000d49484452000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526272829");
+    t.push_str("2a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50515253545556575859");
+    t.push_str("5a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283848586878889");
+    t.push_str("8a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9");
+    t.push_str("babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9");
+    t.push_str("eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0d0a2d2d2d2d2d2d5765624b69740d0a2d789ccb4e2c4acc1ec4");
+    t.push_str("180066bc40d90d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067572d");
+    t.push_str("2d0d0a");
+    v.push(DataFile { path: "requests/00.http".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("POST /upload HTTP/1.1\r\n");
+    t.push_str("Host: files.example\r\n");
+    t.push_str("Content-Type: multipart/form-data; boundary=------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Length: 591\r\n");
+    t.push_str("User-Agent: curl/8.5.0\r\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"files\"; filename=\"a.csv\"\r\n");
+    t.push_str("Content-Type: text/csv\r\n");
+    t.push_str("\r\n");
+    t.push_str("id,name\n");
+    t.push_str("1,ada\n");
+    t.push_str("2,grace\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"files\"; filename=\"b.csv\"\r\n");
+    t.push_str("Content-Type: text/csv\r\n");
+    t.push_str("\r\n");
+    t.push_str("id,name\n");
+    t.push_str("3,linus\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"files\"; filename=\"empty.txt\"\r\n");
+    t.push_str("Content-Type: text/plain\r\n");
+    t.push_str("\r\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"note\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("\r\n");
+    t.push_str("--------------------------d74496d66958873e--\r\n");
+    v.push(DataFile { path: "requests/01.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("504f5354202f61766174617220485454502f312e310d0a486f73743a2066696c65732e6578616d706c650d0a436f6e74");
+    t.push_str("656e742d547970653a206170706c69636174696f6e2f6f637465742d73747265616d0d0a436f6e74656e742d4c656e67");
+    t.push_str("74683a203330300d0a582d46696c652d4e616d653a206d652e706e670d0a0d0a89504e470d0a1a0a0000000d49484452");
+    t.push_str("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f");
+    t.push_str("303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f");
+    t.push_str("606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f");
+    t.push_str("909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf");
+    t.push_str("c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef");
+    t.push_str("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0d0a2d2d2d2d2d2d5765624b69740d0a2d789ccb4e2c4acc1ec41800");
+    v.push(DataFile { path: "requests/02.http".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("POST /search HTTP/1.1\r\n");
+    t.push_str("Host: files.example\r\n");
+    t.push_str("Content-Type: application/x-www-form-urlencoded\r\n");
+    t.push_str("Content-Length: 33\r\n");
+    t.push_str("\r\n");
+    t.push_str("q=multipart&lang=kara&lang=python");
+    v.push(DataFile { path: "requests/03.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("504f5354202f75706c6f616420485454502f312e310d0a486f73743a2066696c65732e6578616d706c650d0a436f6e74");
+    t.push_str("656e742d547970653a206d756c7469706172742f666f726d2d646174613b20626f756e646172793d2d2d2d2d5765624b");
+    t.push_str("6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d4c656e6774683a2039");
+    t.push_str("35320d0a0d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a43");
+    t.push_str("6f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d226965223b2066696c656e61");
+    t.push_str("6d653d22433a5c55736572735c6d655c7265706f72742e706466220d0a0d0a255044462d312e340d0a2d2d2d2d2d2d57");
+    t.push_str("65624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d446973706f73");
+    t.push_str("6974696f6e3a20666f726d2d646174613b206e616d653d22756e63223b2066696c656e616d653d225c5c736572766572");
+    t.push_str("5c73686172655c782e646f63220d0a0d0a646f630d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d");
+    t.push_str("41345957786b54725a753067570d0a436f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e");
+    t.push_str("616d653d2274726176223b2066696c656e616d653d222e2e2f2e2e2f6574632f706173737764220d0a0d0a726f6f743a");
+    t.push_str("783a303a300d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a");
+    t.push_str("436f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d2271223b2066696c656e61");
+    t.push_str("6d653d227765205c2271756f74655c223b20616e643b2073656d69732e747874220d0a0d0a710d0a2d2d2d2d2d2d5765");
+    t.push_str("624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a436f6e74656e742d446973706f7369");
+    t.push_str("74696f6e3a20666f726d2d646174613b206e616d653d2273746172223b2066696c656e616d652a3d5554462d3827276e");
+    t.push_str("6125433325414676652e7478743b2066696c656e616d653d226e616976652e747874220d0a0d0a737461720d0a2d2d2d");
+    t.push_str("2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067570d0a434f4e54454e542d4449");
+    t.push_str("53504f534954494f4e3a20466f726d2d446174613b4e616d653d706c61696e203b202046696c654e616d65203d202e62");
+    t.push_str("61736872630d0a0d0a616c696173206c6c3d276c73202d6c270d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64");
+    t.push_str("617279374d41345957786b54725a753067570d0a436f6e74656e742d446973706f736974696f6e3a20666f726d2d6461");
+    t.push_str("74613b206e616d653d2261726368223b2066696c656e616d653d226261636b75702e7461722e677a220d0a0d0a1f8b08");
+    t.push_str("000d0a2d2d2d2d2d2d5765624b6974466f726d426f756e64617279374d41345957786b54725a753067572d2d0d0a");
+    v.push(DataFile { path: "requests/04.http".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("POST /upload HTTP/1.1\r\n");
+    t.push_str("Host: files.example\r\n");
+    t.push_str("Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Length: 144\r\n");
+    t.push_str("\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"h\"\r\n");
+    t.push_str("Bad Name: v\r\n");
+    t.push_str("\r\n");
+    t.push_str("x\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "requests/05.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /upload HTTP/1.1\r\n");
+    t.push_str("Host: files.example\r\n");
+    t.push_str("Content-Type: text/csv\r\n");
+    t.push_str("Content-Length: 8\r\n");
+    t.push_str("\r\n");
+    t.push_str("a,b\n");
+    t.push_str("1,2\n");
+    v.push(DataFile { path: "requests/06.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("POST /upload HTTP/1.1\r\n");
+    t.push_str("Host: files.example\r\n");
+    t.push_str("Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Length: 1158\r\n");
+    t.push_str("\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"blob\"; filename=\"blob.bin\"\r\n");
+    t.push_str("Content-Transfer-Encoding: base64\r\n");
+    t.push_str("\r\n");
+    t.push_str("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\r\n");
+    t.push_str("OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\r\n");
+    t.push_str("cnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmq\r\n");
+    t.push_str("q6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxscAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob\r\n");
+    t.push_str("HB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNU\r\n");
+    t.push_str("VVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yN\r\n");
+    t.push_str("jo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXG\r\n");
+    t.push_str("xwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3\r\n");
+    t.push_str("ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9w\r\n");
+    t.push_str("cXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ip\r\n");
+    t.push_str("qqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbH\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW\r\n");
+    t.push_str("Content-Disposition: form-data; name=\"flat\"\r\n");
+    t.push_str("Content-Transfer-Encoding: BASE64\r\n");
+    t.push_str("\r\n");
+    t.push_str("ZmxhdCBiYXNlNjQgZmllbGQh\r\n");
+    t.push_str("------WebKitFormBoundary7MA4YWxkTrZu0gW--\r\n");
+    v.push(DataFile { path: "requests/07.http".to_string(), hex: false, body: t });
+}

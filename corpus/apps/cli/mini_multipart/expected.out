@@ -1,0 +1,2165 @@
+== {"kind": "mp", "file": "login.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 26 b'form-data; name="username"'
+  header_end
+  headers_finished
+  part_data 3 b'ada'
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 26 b'form-data; name="password"'
+  header_end
+  headers_finished
+  part_data 11 b's3cr3t pass'
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 26 b'form-data; name="remember"'
+  header_end
+  headers_finished
+  part_data 2 b'on'
+  part_end
+  end
+  wrote 341
+== {"kind": "mp", "file": "login.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 10 b'form-data; name="username"'
+  header_end
+  headers_finished
+  part_data 2 b'ada'
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 9 b'form-data; name="password"'
+  header_end
+  headers_finished
+  part_data 4 b's3cr3t pass'
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 9 b'form-data; name="remember"'
+  header_end
+  headers_finished
+  part_data 1 b'on'
+  part_end
+  end
+  wrote 341
+== {"kind": "mp", "file": "login.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 5 b'form-data; name="username"'
+  header_end
+  headers_finished
+  part_data 1 b'ada'
+  part_end
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 5 b'form-data; name="password"'
+  header_end
+  headers_finished
+  part_data 2 b's3cr3t pass'
+  part_end
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 5 b'form-data; name="remember"'
+  header_end
+  headers_finished
+  part_data 1 b'on'
+  part_end
+  end
+  wrote 341
+== {"kind": "mp", "file": "login.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="username"'
+  header_end
+  headers_finished
+  part_data 1 b'ada'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="password"'
+  header_end
+  headers_finished
+  part_data 2 b's3cr3t pass'
+  part_end
+  part_begin
+  header_begin
+  header_field 2 b'Content-Disposition'
+  header_value 1 b'form-data; name="remember"'
+  header_end
+  headers_finished
+  part_data 1 b'on'
+  part_end
+  end
+  wrote 341
+== {"kind": "mp", "file": "login.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="username"'
+  header_end
+  headers_finished
+  part_data 1 b'ada'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="password"'
+  header_end
+  headers_finished
+  part_data 1 b's3cr3t pass'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="remember"'
+  header_end
+  headers_finished
+  part_data 1 b'on'
+  part_end
+  end
+  wrote 341
+== {"kind": "mp", "file": "upload.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 23 b'form-data; name="title"'
+  header_end
+  headers_finished
+  part_data 16 b'Quarterly report'
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 44 b'form-data; name="doc"; filename="report.txt"'
+  header_end
+  header_begin
+  header_field 12 b'Content-Type'
+  header_value 10 b'text/plain'
+  header_end
+  headers_finished
+  part_data 39 b'line one\r\nline two\r\n\r\n--not a boundary\r\n------WebKitFormBoundary7MA4YWxkTrZu0gX\r\nend'
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 44 b'form-data; name="image"; filename="logo.png"'
+  header_end
+  header_begin
+  header_field 12 b'Content-Type'
+  header_value 9 b'image/png'
+  header_end
+  headers_finished
+  part_data 288 b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff\r\n------WebKit\r\n-x\x9c\xcbN,J\xcc\x1e\xc4\x18\x00f\xbc@\xd9'
+  part_end
+  end
+  wrote 813
+== {"kind": "mp", "file": "upload.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 9 b'form-data; name="title"'
+  header_end
+  headers_finished
+  part_data 6 b'Quarterly report'
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 15 b'form-data; name="doc"; filename="report.txt"'
+  header_end
+  header_begin
+  header_field 5 b'Content-Type'
+  header_value 4 b'text/plain'
+  header_end
+  headers_finished
+  part_data 18 b'line one\r\nline two\r\n\r\n--not a boundary\r\n------WebKitFormBoundary7MA4YWxkTrZu0gX\r\nend'
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 15 b'form-data; name="image"; filename="logo.png"'
+  header_end
+  header_begin
+  header_field 5 b'Content-Type'
+  header_value 4 b'image/png'
+  header_end
+  headers_finished
+  part_data 99 b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff\r\n------WebKit\r\n-x\x9c\xcbN,J\xcc\x1e\xc4\x18\x00f\xbc@\xd9'
+  part_end
+  end
+  wrote 813
+== {"kind": "mp", "file": "upload.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 5 b'form-data; name="title"'
+  header_end
+  headers_finished
+  part_data 3 b'Quarterly report'
+  part_end
+  part_begin
+  header_begin
+  header_field 3 b'Content-Disposition'
+  header_value 7 b'form-data; name="doc"; filename="report.txt"'
+  header_end
+  header_begin
+  header_field 3 b'Content-Type'
+  header_value 3 b'text/plain'
+  header_end
+  headers_finished
+  part_data 12 b'line one\r\nline two\r\n\r\n--not a boundary\r\n------WebKitFormBoundary7MA4YWxkTrZu0gX\r\nend'
+  part_end
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 8 b'form-data; name="image"; filename="logo.png"'
+  header_end
+  header_begin
+  header_field 3 b'Content-Type'
+  header_value 2 b'image/png'
+  header_end
+  headers_finished
+  part_data 46 b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff\r\n------WebKit\r\n-x\x9c\xcbN,J\xcc\x1e\xc4\x18\x00f\xbc@\xd9'
+  part_end
+  end
+  wrote 813
+== {"kind": "mp", "file": "upload.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="title"'
+  header_end
+  headers_finished
+  part_data 1 b'Quarterly report'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="doc"; filename="report.txt"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'text/plain'
+  header_end
+  headers_finished
+  part_data 4 b'line one\r\nline two\r\n\r\n--not a boundary\r\n------WebKitFormBoundary7MA4YWxkTrZu0gX\r\nend'
+  part_end
+  part_begin
+  header_begin
+  header_field 2 b'Content-Disposition'
+  header_value 1 b'form-data; name="image"; filename="logo.png"'
+  header_end
+  header_begin
+  header_field 2 b'Content-Type'
+  header_value 1 b'image/png'
+  header_end
+  headers_finished
+  part_data 5 b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff\r\n------WebKit\r\n-x\x9c\xcbN,J\xcc\x1e\xc4\x18\x00f\xbc@\xd9'
+  part_end
+  end
+  wrote 813
+== {"kind": "mp", "file": "upload.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="title"'
+  header_end
+  headers_finished
+  part_data 1 b'Quarterly report'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="doc"; filename="report.txt"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'text/plain'
+  header_end
+  headers_finished
+  part_data 1 b'line one\r\nline two\r\n\r\n--not a boundary\r\n------WebKitFormBoundary7MA4YWxkTrZu0gX\r\nend'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="image"; filename="logo.png"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'image/png'
+  header_end
+  headers_finished
+  part_data 1 b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff\r\n------WebKit\r\n-x\x9c\xcbN,J\xcc\x1e\xc4\x18\x00f\xbc@\xd9'
+  part_end
+  end
+  wrote 813
+== {"kind": "mp", "file": "multi.bin", "boundary": "------------------------d74496d66958873e", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 41 b'form-data; name="files"; filename="a.csv"'
+  header_end
+  header_begin
+  header_field 12 b'Content-Type'
+  header_value 8 b'text/csv'
+  header_end
+  headers_finished
+  part_data 22 b'id,name\n1,ada\n2,grace\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 41 b'form-data; name="files"; filename="b.csv"'
+  header_end
+  header_begin
+  header_field 12 b'Content-Type'
+  header_value 8 b'text/csv'
+  header_end
+  headers_finished
+  part_data 16 b'id,name\n3,linus\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 45 b'form-data; name="files"; filename="empty.txt"'
+  header_end
+  header_begin
+  header_field 12 b'Content-Type'
+  header_value 10 b'text/plain'
+  header_end
+  headers_finished
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 22 b'form-data; name="note"'
+  header_end
+  headers_finished
+  part_end
+  end
+  wrote 591
+== {"kind": "mp", "file": "multi.bin", "boundary": "------------------------d74496d66958873e", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 15 b'form-data; name="files"; filename="a.csv"'
+  header_end
+  header_begin
+  header_field 4 b'Content-Type'
+  header_value 4 b'text/csv'
+  header_end
+  headers_finished
+  part_data 8 b'id,name\n1,ada\n2,grace\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 14 b'form-data; name="files"; filename="b.csv"'
+  header_end
+  header_begin
+  header_field 5 b'Content-Type'
+  header_value 3 b'text/csv'
+  header_end
+  headers_finished
+  part_data 6 b'id,name\n3,linus\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 15 b'form-data; name="files"; filename="empty.txt"'
+  header_end
+  header_begin
+  header_field 5 b'Content-Type'
+  header_value 4 b'text/plain'
+  header_end
+  headers_finished
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 8 b'form-data; name="note"'
+  header_end
+  headers_finished
+  part_end
+  end
+  wrote 591
+== {"kind": "mp", "file": "multi.bin", "boundary": "------------------------d74496d66958873e", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 3 b'Content-Disposition'
+  header_value 7 b'form-data; name="files"; filename="a.csv"'
+  header_end
+  header_begin
+  header_field 3 b'Content-Type'
+  header_value 2 b'text/csv'
+  header_end
+  headers_finished
+  part_data 4 b'id,name\n1,ada\n2,grace\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 7 b'form-data; name="files"; filename="b.csv"'
+  header_end
+  header_begin
+  header_field 2 b'Content-Type'
+  header_value 2 b'text/csv'
+  header_end
+  headers_finished
+  part_data 3 b'id,name\n3,linus\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 7 b'form-data; name="files"; filename="empty.txt"'
+  header_end
+  header_begin
+  header_field 2 b'Content-Type'
+  header_value 2 b'text/plain'
+  header_end
+  headers_finished
+  part_end
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 4 b'form-data; name="note"'
+  header_end
+  headers_finished
+  part_end
+  end
+  wrote 591
+== {"kind": "mp", "file": "multi.bin", "boundary": "------------------------d74496d66958873e", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="files"; filename="a.csv"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 2 b'text/csv'
+  header_end
+  headers_finished
+  part_data 1 b'id,name\n1,ada\n2,grace\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="files"; filename="b.csv"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'text/csv'
+  header_end
+  headers_finished
+  part_data 1 b'id,name\n3,linus\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="files"; filename="empty.txt"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'text/plain'
+  header_end
+  headers_finished
+  part_end
+  part_begin
+  header_begin
+  header_field 2 b'Content-Disposition'
+  header_value 1 b'form-data; name="note"'
+  header_end
+  headers_finished
+  part_end
+  end
+  wrote 591
+== {"kind": "mp", "file": "multi.bin", "boundary": "------------------------d74496d66958873e", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="files"; filename="a.csv"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'text/csv'
+  header_end
+  headers_finished
+  part_data 1 b'id,name\n1,ada\n2,grace\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="files"; filename="b.csv"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'text/csv'
+  header_end
+  headers_finished
+  part_data 1 b'id,name\n3,linus\n'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="files"; filename="empty.txt"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Type'
+  header_value 1 b'text/plain'
+  header_end
+  headers_finished
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="note"'
+  header_end
+  headers_finished
+  part_end
+  end
+  wrote 591
+== {"kind": "mp", "file": "b64.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 43 b'form-data; name="blob"; filename="blob.bin"'
+  header_end
+  header_begin
+  header_field 25 b'Content-Transfer-Encoding'
+  header_value 6 b'base64'
+  header_end
+  headers_finished
+  part_data 810 b'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\r\nOTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\r\ncnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmq\r\nq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxscAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob\r\nHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNU\r\nVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yN\r\njo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXG\r\nxwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3\r\nODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9w\r\ncXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ip\r\nqqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbH'
+  part_end
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 22 b'form-data; name="flat"'
+  header_end
+  header_begin
+  header_field 25 b'Content-Transfer-Encoding'
+  header_value 6 b'BASE64'
+  header_end
+  headers_finished
+  part_data 24 b'ZmxhdCBiYXNlNjQgZmllbGQh'
+  part_end
+  end
+  wrote 1158
+== {"kind": "mp", "file": "b64.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 15 b'form-data; name="blob"; filename="blob.bin"'
+  header_end
+  header_begin
+  header_field 9 b'Content-Transfer-Encoding'
+  header_value 3 b'base64'
+  header_end
+  headers_finished
+  part_data 284 b'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\r\nOTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\r\ncnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmq\r\nq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxscAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob\r\nHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNU\r\nVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yN\r\njo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXG\r\nxwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3\r\nODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9w\r\ncXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ip\r\nqqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbH'
+  part_end
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 8 b'form-data; name="flat"'
+  header_end
+  header_begin
+  header_field 9 b'Content-Transfer-Encoding'
+  header_value 3 b'BASE64'
+  header_end
+  headers_finished
+  part_data 8 b'ZmxhdCBiYXNlNjQgZmllbGQh'
+  part_end
+  end
+  wrote 1158
+== {"kind": "mp", "file": "b64.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 7 b'form-data; name="blob"; filename="blob.bin"'
+  header_end
+  header_begin
+  header_field 4 b'Content-Transfer-Encoding'
+  header_value 1 b'base64'
+  header_end
+  headers_finished
+  part_data 121 b'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\r\nOTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\r\ncnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmq\r\nq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxscAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob\r\nHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNU\r\nVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yN\r\njo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXG\r\nxwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3\r\nODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9w\r\ncXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ip\r\nqqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbH'
+  part_end
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 4 b'form-data; name="flat"'
+  header_end
+  header_begin
+  header_field 4 b'Content-Transfer-Encoding'
+  header_value 1 b'BASE64'
+  header_end
+  headers_finished
+  part_data 4 b'ZmxhdCBiYXNlNjQgZmllbGQh'
+  part_end
+  end
+  wrote 1158
+== {"kind": "mp", "file": "b64.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="blob"; filename="blob.bin"'
+  header_end
+  header_begin
+  header_field 2 b'Content-Transfer-Encoding'
+  header_value 1 b'base64'
+  header_end
+  headers_finished
+  part_data 15 b'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\r\nOTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\r\ncnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmq\r\nq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxscAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob\r\nHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNU\r\nVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yN\r\njo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXG\r\nxwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3\r\nODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9w\r\ncXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ip\r\nqqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbH'
+  part_end
+  part_begin
+  header_begin
+  header_field 2 b'Content-Disposition'
+  header_value 1 b'form-data; name="flat"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Transfer-Encoding'
+  header_value 1 b'BASE64'
+  header_end
+  headers_finished
+  part_data 1 b'ZmxhdCBiYXNlNjQgZmllbGQh'
+  part_end
+  end
+  wrote 1158
+== {"kind": "mp", "file": "b64.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="blob"; filename="blob.bin"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Transfer-Encoding'
+  header_value 1 b'base64'
+  header_end
+  headers_finished
+  part_data 1 b'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\r\nOTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3Bx\r\ncnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmq\r\nq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxscAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob\r\nHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNU\r\nVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yN\r\njo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXG\r\nxwABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3\r\nODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9w\r\ncXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ip\r\nqqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbH'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="flat"'
+  header_end
+  header_begin
+  header_field 1 b'Content-Transfer-Encoding'
+  header_value 1 b'BASE64'
+  header_end
+  headers_finished
+  part_data 1 b'ZmxhdCBiYXNlNjQgZmllbGQh'
+  part_end
+  end
+  wrote 1158
+== {"kind": "mp", "file": "nearmiss.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 19 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 7 b'\r\n------WebKitFormBoundary7MA4YWxkTrZu0gWx\r\n------WebKitFormBoundary7MA4YWxkTrZu0gW-y\r\n-\r\n--\r'
+  part_end
+  end
+  wrote 223
+== {"kind": "mp", "file": "nearmiss.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 7 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 8 b'\r\n------WebKitFormBoundary7MA4YWxkTrZu0gWx\r\n------WebKitFormBoundary7MA4YWxkTrZu0gW-y\r\n-\r\n--\r'
+  part_end
+  end
+  wrote 223
+== {"kind": "mp", "file": "nearmiss.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 4 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 6 b'\r\n------WebKitFormBoundary7MA4YWxkTrZu0gWx\r\n------WebKitFormBoundary7MA4YWxkTrZu0gW-y\r\n-\r\n--\r'
+  part_end
+  end
+  wrote 223
+== {"kind": "mp", "file": "nearmiss.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 3 b'\r\n------WebKitFormBoundary7MA4YWxkTrZu0gWx\r\n------WebKitFormBoundary7MA4YWxkTrZu0gW-y\r\n-\r\n--\r'
+  part_end
+  end
+  wrote 223
+== {"kind": "mp", "file": "nearmiss.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'\r\n------WebKitFormBoundary7MA4YWxkTrZu0gWx\r\n------WebKitFormBoundary7MA4YWxkTrZu0gW-y\r\n-\r\n--\r'
+  part_end
+  end
+  wrote 223
+== {"kind": "mp", "file": "spaces.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'content-disposition'
+  header_value 18 b'form-data; name=sp'
+  header_end
+  header_begin
+  header_field 7 b'x-empty'
+  header_end
+  headers_finished
+  part_data 1 b'v'
+  part_end
+  end
+  wrote 145
+== {"kind": "mp", "file": "spaces.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'content-disposition'
+  header_value 7 b'form-data; name=sp'
+  header_end
+  header_begin
+  header_field 3 b'x-empty'
+  header_end
+  headers_finished
+  part_data 1 b'v'
+  part_end
+  end
+  wrote 145
+== {"kind": "mp", "file": "spaces.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 4 b'content-disposition'
+  header_value 4 b'form-data; name=sp'
+  header_end
+  header_begin
+  header_field 2 b'x-empty'
+  header_end
+  headers_finished
+  part_data 1 b'v'
+  part_end
+  end
+  wrote 145
+== {"kind": "mp", "file": "spaces.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'content-disposition'
+  header_value 1 b'form-data; name=sp'
+  header_end
+  header_begin
+  header_field 1 b'x-empty'
+  header_end
+  headers_finished
+  part_data 1 b'v'
+  part_end
+  end
+  wrote 145
+== {"kind": "mp", "file": "spaces.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'content-disposition'
+  header_value 1 b'form-data; name=sp'
+  header_end
+  header_begin
+  header_field 1 b'x-empty'
+  header_end
+  headers_finished
+  part_data 1 b'v'
+  part_end
+  end
+  wrote 145
+== {"kind": "mp", "file": "epilogue.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 19 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 189
+== {"kind": "mp", "file": "epilogue.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 7 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 189
+== {"kind": "mp", "file": "epilogue.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 4 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 189
+== {"kind": "mp", "file": "epilogue.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 2 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 189
+== {"kind": "mp", "file": "epilogue.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 189
+== {"kind": "mp", "file": "crlfpre.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1}
+  part_begin
+  header_begin
+  header_field 19 b'Content-Disposition'
+  header_value 19 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 135
+== {"kind": "mp", "file": "crlfpre.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 3}
+  part_begin
+  header_begin
+  header_field 7 b'Content-Disposition'
+  header_value 7 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 135
+== {"kind": "mp", "file": "crlfpre.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 7}
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 4 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 135
+== {"kind": "mp", "file": "crlfpre.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 64}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 135
+== {"kind": "mp", "file": "crlfpre.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  end
+  wrote 135
+== {"kind": "mp", "file": "truncated.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'Content-Disposition'
+  header_value 10 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  part_begin
+  header_begin
+  header_field 10 b'Content-Disposition'
+  header_value 10 b'form-data; name="b"'
+  header_end
+  headers_finished
+  part_data 7 b'never closed'
+  wrote 185
+== {"kind": "mp", "file": "truncated.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="a"'
+  header_end
+  headers_finished
+  part_data 1 b'1'
+  part_end
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="b"'
+  header_end
+  headers_finished
+  part_data 1 b'never closed'
+  wrote 185
+== {"kind": "mp", "file": "empty.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  end
+  wrote 43
+== {"kind": "mp", "file": "empty.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  end
+  wrote 43
+== {"kind": "mp", "file": "badend.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  error MultipartParseError: Did not find - at end of boundary (0) offset=0
+== {"kind": "mp", "file": "badend.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  error MultipartParseError: Did not find - at end of boundary (40) offset=40
+== {"kind": "mp", "file": "noLF.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'content-disposition'
+  header_value 9 b'form-data; name=a'
+  header_end
+  error MultipartParseError: Did not find LF character at end of header (found 88) offset=0
+== {"kind": "mp", "file": "noLF.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'content-disposition'
+  header_value 1 b'form-data; name=a'
+  header_end
+  error MultipartParseError: Did not find LF character at end of header (found 88) offset=80
+== {"kind": "mp", "file": "nohdrLF.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'content-disposition'
+  header_value 9 b'form-data; name=a'
+  header_end
+  error MultipartParseError: Did not find LF at end of headers (found 88) offset=0
+== {"kind": "mp", "file": "nohdrLF.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'content-disposition'
+  header_value 1 b'form-data; name=a'
+  header_end
+  error MultipartParseError: Did not find LF at end of headers (found 88) offset=82
+== {"kind": "mp", "file": "wrongb.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  error MultipartParseError: Expected boundary character 48, got 122 at index 38 offset=0
+== {"kind": "mp", "file": "wrongb.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  error MultipartParseError: Expected boundary character 48, got 122 at index 38 offset=36
+== {"kind": "mp", "file": "preamble.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  error MultipartParseError: Expected boundary character 45, got 84 at index 2 offset=0
+== {"kind": "mp", "file": "preamble.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  error MultipartParseError: Expected boundary character 45, got 84 at index 2 offset=0
+== {"kind": "mp", "file": "lf.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  error MultipartParseError: Did not find CR at end of boundary (1) offset=1
+== {"kind": "mp", "file": "lf.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  error MultipartParseError: Did not find CR at end of boundary (39) offset=39
+== {"kind": "mp", "file": "badheader.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'Content-Disposition'
+  header_value 10 b'form-data; name="h"'
+  header_end
+  header_begin
+  header_field 2 b'Bad'
+  error MultipartParseError: Found invalid character 32 in header at 0 offset=0
+== {"kind": "mp", "file": "badheader.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="h"'
+  header_end
+  header_begin
+  error MultipartParseError: Found invalid character 32 in header at 86 offset=86
+== {"kind": "mp", "file": "zeroheader.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  error MultipartParseError: Found 0-length header at 1 offset=1
+== {"kind": "mp", "file": "zeroheader.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  error MultipartParseError: Found 0-length header at 41 offset=41
+== {"kind": "mp", "file": "manyheaders.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'Content-Disposition'
+  header_value 10 b'form-data; name="h"'
+  header_end
+  header_begin
+  header_field 3 b'X-H0'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 2 b'X-H1'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 3 b'X-H2'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 2 b'X-H3'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 3 b'X-H4'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 2 b'X-H5'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 3 b'X-H6'
+  header_value 1 b'v'
+  header_end
+  error MultipartParseError: Maximum header count exceeded offset=0
+== {"kind": "mp", "file": "manyheaders.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="h"'
+  header_end
+  header_begin
+  header_field 1 b'X-H0'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H1'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H2'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H3'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H4'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H5'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H6'
+  header_value 1 b'v'
+  header_end
+  error MultipartParseError: Maximum header count exceeded offset=146
+== {"kind": "mp", "file": "eightheaders.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'Content-Disposition'
+  header_value 10 b'form-data; name="h"'
+  header_end
+  header_begin
+  header_field 3 b'X-H0'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 2 b'X-H1'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 3 b'X-H2'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 2 b'X-H3'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 3 b'X-H4'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 2 b'X-H5'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 3 b'X-H6'
+  header_value 1 b'v'
+  header_end
+  headers_finished
+  part_data 1 b'x'
+  part_end
+  end
+  wrote 194
+== {"kind": "mp", "file": "eightheaders.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="h"'
+  header_end
+  header_begin
+  header_field 1 b'X-H0'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H1'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H2'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H3'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H4'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H5'
+  header_value 1 b'v'
+  header_end
+  header_begin
+  header_field 1 b'X-H6'
+  header_value 1 b'v'
+  header_end
+  headers_finished
+  part_data 1 b'x'
+  part_end
+  end
+  wrote 194
+== {"kind": "mp", "file": "bigheader.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'Content-Disposition'
+  header_value 10 b'form-data; name="h"'
+  header_end
+  header_begin
+  header_field 3 b'X-Big'
+  header_value 2108 b'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy'
+  error MultipartParseError: Maximum header size exceeded offset=0
+== {"kind": "mp", "file": "bigheader.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data; name="h"'
+  header_end
+  header_begin
+  header_field 1 b'X-Big'
+  error MultipartParseError: Maximum header size exceeded offset=90
+== {"kind": "mp", "file": "noname.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 2}
+  part_begin
+  header_begin
+  header_field 10 b'Content-Disposition'
+  header_value 5 b'form-data'
+  header_end
+  headers_finished
+  part_data 1 b'x'
+  part_end
+  end
+  wrote 121
+== {"kind": "mp", "file": "noname.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 1000000}
+  part_begin
+  header_begin
+  header_field 1 b'Content-Disposition'
+  header_value 1 b'form-data'
+  header_end
+  headers_finished
+  part_data 1 b'x'
+  part_end
+  end
+  wrote 121
+== {"kind": "mp", "file": "login.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 5, "max_size": 100}
+  part_begin
+  header_begin
+  header_field 4 b'Content-Disposition'
+  header_value 6 b'form-data; name="username"'
+  header_end
+  headers_finished
+  part_data 1 b'ada'
+  wrote 100
+== {"kind": "mp", "file": "upload.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 50, "max_header_count": 1}
+  part_begin
+  header_begin
+  header_field 2 b'Content-Disposition'
+  header_value 1 b'form-data; name="title"'
+  header_end
+  headers_finished
+  part_data 2 b'Quarterly report'
+  part_end
+  part_begin
+  header_begin
+  header_field 2 b'Content-Disposition'
+  header_value 2 b'form-data; name="doc"; filename="report.txt"'
+  header_end
+  error MultipartParseError: Maximum header count exceeded offset=15
+== {"kind": "mp", "file": "upload.bin", "boundary": "----WebKitFormBoundary7MA4YWxkTrZu0gW", "chunk": 50, "max_header_size": 40}
+  part_begin
+  header_begin
+  header_field 2 b'Content-Disposition'
+  error MultipartParseError: Maximum header size exceeded offset=12
+== {"kind": "mp", "file": "login.bin", "boundary": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "chunk": 5}
+  error FormParserError: Boundary length 257 exceeds maximum of 256
+== {"kind": "mp", "file": "login.bin", "boundary": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "chunk": 5}
+  error MultipartParseError: Expected boundary character 120, got 45 at index 4 offset=2
+== {"kind": "qs", "body": "a=1&b=2", "chunk": 1}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1&b=2", "chunk": 4}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1&b=2", "chunk": 1000}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1&b=2", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1&b=2", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1&&b=2", "chunk": 1}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 8
+== {"kind": "qs", "body": "a=1&&b=2", "chunk": 4}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 8
+== {"kind": "qs", "body": "a=1&&b=2", "chunk": 1000}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_data 1 b'2'
+  field_end
+  end
+  wrote 8
+== {"kind": "qs", "body": "a=1&&b=2", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  error QuerystringParseError: Skipping duplicate ampersand at 4 offset=4
+== {"kind": "qs", "body": "a=1&&b=2", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  error QuerystringParseError: Skipping duplicate ampersand at 0 offset=0
+== {"kind": "qs", "body": "&a=1", "chunk": 1}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "&a=1", "chunk": 4}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "&a=1", "chunk": 1000}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "&a=1", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "&a=1", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "a&b=", "chunk": 1}
+  field_start
+  field_name 1 b'a'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "a&b=", "chunk": 4}
+  field_start
+  field_name 1 b'a'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "a&b=", "chunk": 1000}
+  field_start
+  field_name 1 b'a'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 4
+== {"kind": "qs", "body": "a&b=", "chunk": 1000, "strict": true}
+  field_start
+  error QuerystringParseError: When strict_parsing is True, we require an equals sign in all field chunks. Did not find one in the chunk that starts at 0 offset=0
+== {"kind": "qs", "body": "a&b=", "chunk": 2, "strict": true}
+  field_start
+  error QuerystringParseError: When strict_parsing is True, we require an equals sign in all field chunks. Did not find one in the chunk that starts at 0 offset=0
+== {"kind": "qs", "body": "=x", "chunk": 1}
+  field_start
+  field_data 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "=x", "chunk": 4}
+  field_start
+  field_data 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "=x", "chunk": 1000}
+  field_start
+  field_data 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "=x", "chunk": 1000, "strict": true}
+  field_start
+  field_data 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "=x", "chunk": 2, "strict": true}
+  field_start
+  field_data 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "a=1&b", "chunk": 1}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 5
+== {"kind": "qs", "body": "a=1&b", "chunk": 4}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 5
+== {"kind": "qs", "body": "a=1&b", "chunk": 1000}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 5
+== {"kind": "qs", "body": "a=1&b", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 5
+== {"kind": "qs", "body": "a=1&b", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1'
+  field_end
+  field_start
+  field_name 1 b'b'
+  field_end
+  end
+  wrote 5
+== {"kind": "qs", "body": "a=b=c&d", "chunk": 1}
+  field_start
+  field_name 1 b'a'
+  field_data 3 b'b=c'
+  field_end
+  field_start
+  field_name 1 b'd'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=b=c&d", "chunk": 4}
+  field_start
+  field_name 1 b'a'
+  field_data 2 b'b=c'
+  field_end
+  field_start
+  field_name 1 b'd'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=b=c&d", "chunk": 1000}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'b=c'
+  field_end
+  field_start
+  field_name 1 b'd'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=b=c&d", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'b=c'
+  field_end
+  field_start
+  field_name 1 b'd'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=b=c&d", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 2 b'b=c'
+  field_end
+  field_start
+  field_name 1 b'd'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "", "chunk": 1}
+  end
+  wrote 0
+== {"kind": "qs", "body": "", "chunk": 4}
+  end
+  wrote 0
+== {"kind": "qs", "body": "", "chunk": 1000}
+  end
+  wrote 0
+== {"kind": "qs", "body": "", "chunk": 1000, "strict": true}
+  end
+  wrote 0
+== {"kind": "qs", "body": "", "chunk": 2, "strict": true}
+  end
+  wrote 0
+== {"kind": "qs", "body": "&", "chunk": 1}
+  end
+  wrote 1
+== {"kind": "qs", "body": "&", "chunk": 4}
+  end
+  wrote 1
+== {"kind": "qs", "body": "&", "chunk": 1000}
+  end
+  wrote 1
+== {"kind": "qs", "body": "&", "chunk": 1000, "strict": true}
+  end
+  wrote 1
+== {"kind": "qs", "body": "&", "chunk": 2, "strict": true}
+  end
+  wrote 1
+== {"kind": "qs", "body": "&&", "chunk": 1}
+  end
+  wrote 2
+== {"kind": "qs", "body": "&&", "chunk": 4}
+  end
+  wrote 2
+== {"kind": "qs", "body": "&&", "chunk": 1000}
+  end
+  wrote 2
+== {"kind": "qs", "body": "&&", "chunk": 1000, "strict": true}
+  error QuerystringParseError: Skipping duplicate ampersand at 1 offset=1
+== {"kind": "qs", "body": "&&", "chunk": 2, "strict": true}
+  error QuerystringParseError: Skipping duplicate ampersand at 1 offset=1
+== {"kind": "qs", "body": "name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry", "chunk": 1}
+  field_start
+  field_name 4 b'name'
+  field_data 12 b'Ada+Lovelace'
+  field_end
+  field_start
+  field_name 5 b'email'
+  field_data 17 b'ada%40example.com'
+  field_end
+  field_start
+  field_name 4 b'tags'
+  field_data 4 b'math'
+  field_end
+  field_start
+  field_name 4 b'tags'
+  field_data 6 b'poetry'
+  field_end
+  end
+  wrote 63
+== {"kind": "qs", "body": "name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry", "chunk": 4}
+  field_start
+  field_name 1 b'name'
+  field_data 4 b'Ada+Lovelace'
+  field_end
+  field_start
+  field_name 2 b'email'
+  field_data 5 b'ada%40example.com'
+  field_end
+  field_start
+  field_name 2 b'tags'
+  field_data 2 b'math'
+  field_end
+  field_start
+  field_name 1 b'tags'
+  field_data 2 b'poetry'
+  field_end
+  end
+  wrote 63
+== {"kind": "qs", "body": "name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry", "chunk": 1000}
+  field_start
+  field_name 1 b'name'
+  field_data 1 b'Ada+Lovelace'
+  field_end
+  field_start
+  field_name 1 b'email'
+  field_data 1 b'ada%40example.com'
+  field_end
+  field_start
+  field_name 1 b'tags'
+  field_data 1 b'math'
+  field_end
+  field_start
+  field_name 1 b'tags'
+  field_data 1 b'poetry'
+  field_end
+  end
+  wrote 63
+== {"kind": "qs", "body": "name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'name'
+  field_data 1 b'Ada+Lovelace'
+  field_end
+  field_start
+  field_name 1 b'email'
+  field_data 1 b'ada%40example.com'
+  field_end
+  field_start
+  field_name 1 b'tags'
+  field_data 1 b'math'
+  field_end
+  field_start
+  field_name 1 b'tags'
+  field_data 1 b'poetry'
+  field_end
+  end
+  wrote 63
+== {"kind": "qs", "body": "name=Ada+Lovelace&email=ada%40example.com&tags=math&tags=poetry", "chunk": 2, "strict": true}
+  field_start
+  field_name 2 b'name'
+  field_data 7 b'Ada+Lovelace'
+  field_end
+  field_start
+  field_name 3 b'email'
+  field_data 9 b'ada%40example.com'
+  field_end
+  field_start
+  field_name 2 b'tags'
+  field_data 3 b'math'
+  field_end
+  field_start
+  field_name 2 b'tags'
+  field_data 4 b'poetry'
+  field_end
+  end
+  wrote 63
+== {"kind": "qs", "body": "a=1;b=2", "chunk": 1}
+  field_start
+  field_name 1 b'a'
+  field_data 5 b'1;b=2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1;b=2", "chunk": 4}
+  field_start
+  field_name 1 b'a'
+  field_data 2 b'1;b=2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1;b=2", "chunk": 1000}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1;b=2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1;b=2", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 1 b'1;b=2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "a=1;b=2", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'a'
+  field_data 3 b'1;b=2'
+  field_end
+  end
+  wrote 7
+== {"kind": "qs", "body": "x", "chunk": 1}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 1
+== {"kind": "qs", "body": "x", "chunk": 4}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 1
+== {"kind": "qs", "body": "x", "chunk": 1000}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 1
+== {"kind": "qs", "body": "x", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 1
+== {"kind": "qs", "body": "x", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 1
+== {"kind": "qs", "body": "x&", "chunk": 1}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "x&", "chunk": 4}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "x&", "chunk": 1000}
+  field_start
+  field_name 1 b'x'
+  field_end
+  end
+  wrote 2
+== {"kind": "qs", "body": "x&", "chunk": 1000, "strict": true}
+  field_start
+  error QuerystringParseError: When strict_parsing is True, we require an equals sign in all field chunks. Did not find one in the chunk that starts at 0 offset=0
+== {"kind": "qs", "body": "x&", "chunk": 2, "strict": true}
+  field_start
+  error QuerystringParseError: When strict_parsing is True, we require an equals sign in all field chunks. Did not find one in the chunk that starts at 0 offset=0
+== {"kind": "qs", "body": "k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q", "chunk": 1}
+  field_start
+  field_name 1 b'k'
+  field_data 40 b'vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv'
+  field_end
+  field_start
+  field_name 1 b'q'
+  field_end
+  end
+  wrote 44
+== {"kind": "qs", "body": "k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q", "chunk": 4}
+  field_start
+  field_name 1 b'k'
+  field_data 11 b'vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv'
+  field_end
+  field_start
+  field_name 1 b'q'
+  field_end
+  end
+  wrote 44
+== {"kind": "qs", "body": "k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q", "chunk": 1000}
+  field_start
+  field_name 1 b'k'
+  field_data 1 b'vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv'
+  field_end
+  field_start
+  field_name 1 b'q'
+  field_end
+  end
+  wrote 44
+== {"kind": "qs", "body": "k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q", "chunk": 1000, "strict": true}
+  field_start
+  field_name 1 b'k'
+  field_data 1 b'vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv'
+  field_end
+  field_start
+  field_name 1 b'q'
+  field_end
+  end
+  wrote 44
+== {"kind": "qs", "body": "k=vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv&q", "chunk": 2, "strict": true}
+  field_start
+  field_name 1 b'k'
+  field_data 20 b'vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv'
+  field_end
+  field_start
+  field_name 1 b'q'
+  field_end
+  end
+  wrote 44
+== {"kind": "qs", "body": "aaaa=bbbb&cccc=dddd", "chunk": 3, "max_size": 10}
+  field_start
+  field_name 2 b'aaaa'
+  field_data 2 b'bbbb'
+  field_end
+  end
+  wrote 10
+== {"kind": "qs", "body": "aaaa=bbbb", "chunk": 3, "max_size": 0}
+  error ValueError: max_size must be a positive number, not 0
+== {"kind": "octet", "body": "hello octets", "chunk": 5}
+  start
+  data 3 b'hello octets'
+  end
+  wrote 12
+== {"kind": "octet", "body": "", "chunk": 4}
+  end
+  wrote 0
+== {"kind": "octet", "body": "0123456789", "chunk": 3, "max_size": 7}
+  start
+  data 3 b'0123456'
+  end
+  wrote 7
+== {"kind": "octet", "body": "abc", "chunk": 1, "max_size": 1}
+  start
+  data 1 b'a'
+  end
+  wrote 1
+== {"kind": "options", "value": ""}
+  (b'', {})
+== {"kind": "options", "value": "text/plain"}
+  (b'text/plain', {})
+== {"kind": "options", "value": "  TEXT/HTML  "}
+  (b'text/html', {})
+== {"kind": "options", "value": "form-data; name=\"a\""}
+  (b'form-data', {b'name': b'a'})
+== {"kind": "options", "value": "form-data; name=a; filename=b.txt"}
+  (b'form-data', {b'name': b'a', b'filename': b'b.txt'})
+== {"kind": "options", "value": "multipart/form-data; boundary=----x"}
+  (b'multipart/form-data', {b'boundary': b'----x'})
+== {"kind": "options", "value": "Multipart/Form-Data; Boundary=\"q;r\"; charset=utf-8"}
+  (b'Multipart/Form-Data', {b'boundary': b'q;r', b'charset': b'utf-8'})
+== {"kind": "options", "value": "form-data; name=\"a;b\"; filename=\"c\\\"d.txt\""}
+  (b'form-data', {b'name': b'a;b', b'filename': b'c"d.txt'})
+== {"kind": "options", "value": "form-data; filename*=UTF-8''x.txt; name=n"}
+  (b'form-data', {b'name': b'n'})
+== {"kind": "options", "value": "form-data; name=\"x\"; filename=\"C:\\\\dir\\\\f.txt\""}
+  (b'form-data', {b'name': b'x', b'filename': b'f.txt'})
+== {"kind": "options", "value": "form-data; name=\"x\"; filename=\"C:\\dir\\f.txt\""}
+  (b'form-data', {b'name': b'x', b'filename': b'f.txt'})
+== {"kind": "options", "value": "form-data; name=\"x\"; filename=\"\\\\\\\\host\\\\f\""}
+  (b'form-data', {b'name': b'x', b'filename': b'f'})
+== {"kind": "options", "value": "a;b;c"}
+  (b'a', {b'b': b'', b'c': b''})
+== {"kind": "options", "value": "a; =x"}
+  (b'a', {b'': b'x'})
+== {"kind": "options", "value": "a; x="}
+  (b'a', {b'x': b''})
+== {"kind": "options", "value": "a;;;b=1"}
+  (b'a', {b'': b'', b'b': b'1'})
+== {"kind": "options", "value": "a; b=\"unterminated; c=2"}
+  (b'a', {b'b': b'"unterminated; c=2'})
+== {"kind": "options", "value": "a; B = \"  spaced  \" "}
+  (b'a', {b'b': b'  spaced  '})
+== {"kind": "options", "value": "a; q=\"\""}
+  (b'a', {b'q': b''})
+== {"kind": "options", "value": "a; q=\""}
+  (b'a', {b'q': b'"'})
+== {"kind": "options", "value": "a; k=\"one\" two"}
+  (b'a', {b'k': b'"one" two'})
+== {"kind": "options", "value": "caf\u00e9; name=Zo\u00eb"}
+  (b'caf\xe9', {b'name': b'Zo\xeb'})
+== {"kind": "options", "value": "a; name=x; name=y"}
+  (b'a', {b'name': b'y'})
+== {"kind": "b64", "chunks": ["Zm9v", "YmFy"]}
+  write b'foo'
+  write b'bar'
+  finalize
+== {"kind": "b64", "chunks": ["Zm9", "vYm", "Fy"]}
+  write b'foo'
+  write b'bar'
+  finalize
+== {"kind": "b64", "chunks": ["Zm9vYg=="]}
+  write b'foob'
+  finalize
+== {"kind": "b64", "chunks": ["Zm9vYg"]}
+  write b'foo'
+  error DecodeError: There are 2 bytes remaining in the Base64Decoder cache when finalize() is called offset=-1
+== {"kind": "b64", "chunks": ["Zm9vY"]}
+  write b'foo'
+  error DecodeError: There are 1 bytes remaining in the Base64Decoder cache when finalize() is called offset=-1
+== {"kind": "b64", "chunks": ["Zm\r\n9v"]}
+  error DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+== {"kind": "b64", "chunks": ["Zm9v\r\n", "YmFy"]}
+  write b'foo'
+  error DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+== {"kind": "b64", "chunks": ["Z!m9v"]}
+  error DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+== {"kind": "b64", "chunks": ["Zg==Zm9v"]}
+  error DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+== {"kind": "b64", "chunks": ["====", "Zm9v"]}
+  write b''
+  write b'foo'
+  finalize
+== {"kind": "b64", "chunks": ["Zm9vYmFy\r\n"]}
+  write b'foobar'
+  error DecodeError: There are 2 bytes remaining in the Base64Decoder cache when finalize() is called offset=-1
+== {"kind": "b64", "chunks": [""]}
+  finalize
+== {"kind": "b64", "chunks": ["SGVsbG8sIHdvcmxkIQ=="]}
+  write b'Hello, world!'
+  finalize
+== {"kind": "b64", "chunks": ["Zm9v", "Y", "m", "F", "y"]}
+  write b'foo'
+  write b'bar'
+  finalize
+== {"kind": "b64", "chunks": ["Zm9=v"]}
+  write b'fo'
+  error DecodeError: There are 1 bytes remaining in the Base64Decoder cache when finalize() is called offset=-1
+== {"kind": "qp", "chunks": ["a=3Db"]}
+  write b'a=b'
+  finalize
+== {"kind": "qp", "chunks": ["a=", "3Db"]}
+  write b'a=b'
+  finalize
+== {"kind": "qp", "chunks": ["a=3", "Db"]}
+  write b'a'
+  write b'=b'
+  finalize
+== {"kind": "qp", "chunks": ["line=\r\nnext"]}
+  write b'linenext'
+  finalize
+== {"kind": "qp", "chunks": ["soft=", "\r\nbreak"]}
+  write b'sof'
+  write b'tbreak'
+  finalize
+== {"kind": "qp", "chunks": ["=E2=82=AC"]}
+  write b'\xe2\x82\xac'
+  finalize
+== {"kind": "qp", "chunks": ["=e2=82=ac"]}
+  write b'\xe2\x82\xac'
+  finalize
+== {"kind": "qp", "chunks": ["bad=zz"]}
+  write b'bad=zz'
+  finalize
+== {"kind": "qp", "chunks": ["end="]}
+  write b'en'
+  write b'd'
+  finalize
+== {"kind": "qp", "chunks": ["x==y"]}
+  write b'x'
+  write b'=y'
+  finalize
+== {"kind": "qp", "chunks": ["tail=4"]}
+  write b'tail'
+  write b'=4'
+  finalize
+== {"kind": "qp", "chunks": ["a=\rb\nc"]}
+  write b'ac'
+  finalize
+== {"kind": "qp", "chunks": ["=", "=", "4", "1"]}
+  write b''
+  write b'A'
+  finalize
+== {"kind": "qp", "chunks": ["plain"]}
+  write b'plain'
+  finalize
+== {"kind": "qp", "chunks": [""]}
+  finalize
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "login.bin", "chunk": 13, "config": {}}
+  field Field(field_name=b'username', value=b'ada') content_type=None
+  field Field(field_name=b'password', value=b's3cr3t pass') content_type=None
+  field Field(field_name=b'remember', value=b'on') content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=\"----WebKitFormBoundary7MA4YWxkTrZu0gW\""}, "file": "upload.bin", "chunk": 100, "config": {}}
+  field Field(field_name=b'title', value=b'Quarterly report') content_type=None
+  file File(file_name=b'report.txt', field_name=b'doc') size=84 in_memory=True content_type='text/plain'
+    data b'line one\r\nline two\r\n\r\n--not a boundary\r\n------WebKitFormBoun' (+24 more)
+  file File(file_name=b'logo.png', field_name=b'image') size=304 in_memory=True content_type='image/png'
+    data b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+' (+244 more)
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "upload.bin", "chunk": 100, "config": {"MAX_MEMORY_FILE_SIZE": 64}}
+  field Field(field_name=b'title', value=b'Quarterly report') content_type=None
+  file File(file_name=b'report.txt', field_name=b'doc') size=84 in_memory=False content_type='text/plain'
+    data b'line one\r\nline two\r\n\r\n--not a boundary\r\n------WebKitFormBoun' (+24 more)
+  file File(file_name=b'logo.png', field_name=b'image') size=304 in_memory=False content_type='image/png'
+    data b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+' (+244 more)
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=------------------------d74496d66958873e"}, "file": "multi.bin", "chunk": 9, "config": {"MAX_MEMORY_FILE_SIZE": 10, "UPLOAD_DIR": "data/uploads", "UPLOAD_KEEP_FILENAME": true, "UPLOAD_KEEP_EXTENSIONS": true}}
+  file File(file_name=b'a.csv', field_name=b'files') size=22 in_memory=False content_type='text/csv'
+    saved b'a.csv'
+    data b'id,name\n1,ada\n2,grace\n'
+  file File(file_name=b'b.csv', field_name=b'files') size=16 in_memory=False content_type='text/csv'
+    saved b'b.csv'
+    data b'id,name\n3,linus\n'
+  file File(file_name=b'empty.txt', field_name=b'files') size=0 in_memory=True content_type='text/plain'
+    data b''
+  field Field(field_name=b'note', value=b'') content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "names.bin", "chunk": 17, "config": {"MAX_MEMORY_FILE_SIZE": 1, "UPLOAD_DIR": "data/uploads", "UPLOAD_KEEP_FILENAME": true, "UPLOAD_KEEP_EXTENSIONS": true}}
+  file File(file_name=b'report.pdf', field_name=b'ie') size=8 in_memory=False content_type=None
+    saved b'report.pdf'
+    data b'%PDF-1.4'
+  file File(file_name=b'\\server\\share\\x.doc', field_name=b'unc') size=3 in_memory=False content_type=None
+    saved b'\\server\\share\\x.doc'
+    data b'doc'
+  file File(file_name=b'../../etc/passwd', field_name=b'trav') size=10 in_memory=False content_type=None
+    saved b'passwd'
+    data b'root:x:0:0'
+  file File(file_name=b'we "quote"; and; semis.txt', field_name=b'q') size=1 in_memory=True content_type=None
+    data b'q'
+  file File(file_name=b'naive.txt', field_name=b'star') size=4 in_memory=False content_type=None
+    saved b'naive.txt'
+    data b'star'
+  file File(file_name=b'.bashrc', field_name=b'plain') size=16 in_memory=False content_type=None
+    saved b'.bashrc'
+    data b"alias ll='ls -l'"
+  file File(file_name=b'backup.tar.gz', field_name=b'arch') size=4 in_memory=False content_type=None
+    saved b'backup.tar.gz'
+    data b'\x1f\x8b\x08\x00'
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "names.bin", "chunk": 17, "config": {"MAX_MEMORY_FILE_SIZE": 1, "UPLOAD_DIR": "data/uploads", "UPLOAD_KEEP_FILENAME": true}}
+  file File(file_name=b'report.pdf', field_name=b'ie') size=8 in_memory=False content_type=None
+    saved b'report'
+    data b'%PDF-1.4'
+  file File(file_name=b'\\server\\share\\x.doc', field_name=b'unc') size=3 in_memory=False content_type=None
+    saved b'\\server\\share\\x'
+    data b'doc'
+  file File(file_name=b'../../etc/passwd', field_name=b'trav') size=10 in_memory=False content_type=None
+    saved b'passwd'
+    data b'root:x:0:0'
+  file File(file_name=b'we "quote"; and; semis.txt', field_name=b'q') size=1 in_memory=True content_type=None
+    data b'q'
+  file File(file_name=b'naive.txt', field_name=b'star') size=4 in_memory=False content_type=None
+    saved b'naive'
+    data b'star'
+  file File(file_name=b'.bashrc', field_name=b'plain') size=16 in_memory=False content_type=None
+    saved b'.bashrc'
+    data b"alias ll='ls -l'"
+  file File(file_name=b'backup.tar.gz', field_name=b'arch') size=4 in_memory=False content_type=None
+    saved b'backup.tar'
+    data b'\x1f\x8b\x08\x00'
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "b64.bin", "chunk": 7, "config": {}}
+  error DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "b64.bin", "chunk": 76, "config": {}}
+  error DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "b64.bin", "chunk": 78, "config": {}}
+  error DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "b64.bin", "chunk": 1000000, "config": {}}
+  file File(file_name=b'blob.bin', field_name=b'blob') size=600 in_memory=True content_type=None
+    data b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;' (+540 more)
+  field Field(field_name=b'flat', value=b'flat base64 field!') content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "qp.bin", "chunk": 11, "config": {}}
+  field Field(field_name=b'letter', value=b'Gr\xc3\xbc\xc3\x9fe aus K\xc3\xb6ln \xe2\x80\x94 =C3\xa7a va? Line with = sign and a very long line that the encoder has to wra...') content_type='text/plain; charset=utf-8'
+  field Field(field_name=b'odd', value=b'a===zzb=c') content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "cte.bin", "chunk": 50, "config": {}}
+  field Field(field_name=b'x', value=b'begin 644 x\r\nend') content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "cte.bin", "chunk": 50, "config": {"UPLOAD_ERROR_ON_BAD_CTE": true}}
+  error FormParserError: Unknown Content-Transfer-Encoding "b'x-uuencode'"
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "noname.bin", "chunk": 50, "config": {}}
+  error FormParserError: Field name not found in Content-Disposition: "b'form-data'"
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "nodisp.bin", "chunk": 50, "config": {}}
+  error FormParserError: Field name not found in Content-Disposition: "None"
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW", "Content-Length": "120"}, "file": "login.bin", "chunk": 50, "config": {}}
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "login.bin", "chunk": 50, "config": {"MAX_BODY_SIZE": 200}}
+  field Field(field_name=b'username', value=b'ada') content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data"}, "file": "login.bin", "chunk": 50, "config": {}}
+  error FormParserError: No boundary given
+== {"kind": "form", "headers": {"Content-Type": "text/plain"}, "file": "login.bin", "chunk": 50, "config": {}}
+  error FormParserError: Unknown Content-Type: text/plain
+== {"kind": "form", "headers": {}, "file": "login.bin", "chunk": 50, "config": {}}
+  error ValueError: No Content-Type header given!
+== {"kind": "form", "headers": {"Content-Type": "application/x-www-form-urlencoded"}, "file": "form.txt", "chunk": 6, "config": {}}
+  field Field(field_name=b'q', value=b'kara+lang') content_type=None
+  field Field(field_name=b'page', value=b'2') content_type=None
+  field Field(field_name=b'flag', value=None) content_type=None
+  field Field(field_name=b'empty', value=None) content_type=None
+  field Field(field_name=b'x', value=b'1=2') content_type=None
+  field Field(field_name=b'last', value=b'end') content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "application/x-url-encoded", "Content-Length": "20"}, "file": "form.txt", "chunk": 6, "config": {}}
+  field Field(field_name=b'q', value=b'kara+lang') content_type=None
+  field Field(field_name=b'page', value=b'2') content_type=None
+  field Field(field_name=b'f', value=None) content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "application/x-www-form-urlencoded"}, "file": "form.txt", "chunk": 6, "config": {"MAX_BODY_SIZE": 25}}
+  field Field(field_name=b'q', value=b'kara+lang') content_type=None
+  field Field(field_name=b'page', value=b'2') content_type=None
+  field Field(field_name=b'flag', value=None) content_type=None
+  done
+== {"kind": "form", "headers": {"Content-Type": "application/octet-stream"}, "file": "upload.bin", "chunk": 333, "config": {"MAX_MEMORY_FILE_SIZE": 500}}
+  file File(file_name=None, field_name=None) size=813 in_memory=False content_type=None
+    data b'------WebKitFormBoundary7MA4YWxkTrZu0gW\r\nContent-Disposition' (+753 more)
+  done
+== {"kind": "form", "headers": {"Content-Type": "application/octet-stream", "Content-Length": "-1"}, "file": "login.bin", "chunk": 50, "config": {}}
+  error ValueError: Content-Length must be non-negative
+== {"kind": "form", "headers": {"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW"}, "file": "login.bin", "chunk": 0, "config": {}}
+  error ValueError: chunk_size must be a positive number, not 0
+== {"kind": "server", "dir": "requests"}
+  00.http POST /upload (multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW)
+    field title = b'Quarterly report'
+    file doc b'report.txt' 84 bytes -> data/uploads/report.txt
+    file image b'logo.png' 304 bytes -> logo.png
+    200 1 fields, 2 files
+  01.http POST /upload (multipart/form-data; boundary=------------------------d74496d66958873e)
+    file files b'a.csv' 22 bytes -> data/uploads/a.csv
+    file files b'b.csv' 16 bytes -> data/uploads/b.csv
+    file files b'empty.txt' 0 bytes -> data/uploads/empty.txt
+    field note = b''
+    200 1 fields, 3 files
+  02.http POST /avatar (application/octet-stream)
+    500 AttributeError: 'File' object has no attribute '_file_base'
+  03.http POST /search (application/x-www-form-urlencoded)
+    field q = b'multipart'
+    field lang = b'kara'
+    field lang = b'python'
+    200 3 fields, 0 files
+  04.http POST /upload (multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW)
+    file ie b'report.pdf' 8 bytes -> data/uploads/report.pdf
+    file unc b'\\server\\share\\x.doc' 3 bytes -> data/uploads/\server\share\x.doc
+    file trav b'../../etc/passwd' 10 bytes -> data/uploads/passwd
+    file q b'we "quote"; and; semis.txt' 1 bytes -> data/uploads/we "quote"; and; semis.txt
+    file star b'naive.txt' 4 bytes -> data/uploads/naive.txt
+    file plain b'.bashrc' 16 bytes -> data/uploads/.bashrc
+    file arch b'backup.tar.gz' 4 bytes -> data/uploads/backup.tar.gz
+    200 0 fields, 7 files
+  05.http POST /upload (multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW)
+    400 MultipartParseError: Found invalid character 32 in header at 22 offset=22
+  06.http POST /upload (text/csv)
+    400 FormParserError: Unknown Content-Type: text/csv
+  07.http POST /upload (multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW)
+    400 DecodeError: There was an error raised while decoding base64-encoded data. offset=-1
+  uploads:
+    .bashrc 16
+    \server\share\x 3
+    \server\share\x.doc 3
+    a.csv 22
+    b.csv 16
+    backup.tar 4
+    backup.tar.gz 4
+    empty.txt 0
+    logo.png 304
+    naive 4
+    naive.txt 4
+    passwd 10
+    report 8
+    report.pdf 8
+    report.txt 84
+    we "quote"; and; semis.txt 1
