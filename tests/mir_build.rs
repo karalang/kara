@@ -5409,3 +5409,51 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_value_fallback_of_an_optional_reference_is_borrowed() {
+    // B-2026-10-18-53: `opt ?? ""` with `opt: Option[ref String]` is a
+    // `ref String`, and the literal fallback was stored where the reference
+    // belongs, so a `None` crashed at the first read on every MIR surface
+    // ("deref of non-reference" on the interpreter, SEGV at 0x8 when built).
+    // The fallback is now held in a temporary the result borrows, which a
+    // `let` keeps to the end of its block.
+    let src = r#"
+fn count(tops: ref Map[String, String], key: String) -> i64 {
+    let choices = tops.get(key) ?? "";
+    let mut n = 0;
+    for c in choices.chars() {
+        n += 1;
+    }
+    n
+}
+fn show(o: Option[ref String]) {
+    println(f"<{o ?? "zz"}>");
+}
+fn main() {
+    let none: Option[ref String] = None;
+    let s = none ?? "";
+    println(f"[{s}] {s.len()}");
+    let mut tops: Map[String, String] = Map.new();
+    tops.insert("AB", "CD");
+    println(f"{count(tops, "AB")} {count(tops, "XY")}");
+    let mut i = 0;
+    while i < 2 {
+        let t = tops.get("Q") ?? "n";
+        println(f"{t}{i}");
+        i += 1;
+    }
+    show(None);
+    let w = "w".to_string();
+    show(Some(w));
+}
+"#;
+    let want = "[] 0\n2 0\nn0\nn1\n<zz>\n<w>\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

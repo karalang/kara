@@ -1836,6 +1836,10 @@ struct Bx<'l, 'a> {
     /// `mut ref`s, with no `mut ref` binding asking for it: their `Copy`
     /// parts bind by copy (B-2026-10-18-41).
     writable_reborrows: FxHashSet<Local>,
+    /// The scope of the block a `let` binding being lowered belongs to: a
+    /// value its initializer borrows lives to that block's end
+    /// (B-2026-10-18-53).
+    let_scope: Option<usize>,
     /// The closure being lowered is a library sort's key function.
     closure_key: bool,
     /// The closure being lowered is a task handed to `TaskGroup.spawn`,
@@ -1891,6 +1895,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             closure_ref_params: false,
             copy_views: FxHashMap::default(),
             writable_reborrows: FxHashSet::default(),
+            let_scope: None,
             closure_key: false,
             closure_task: false,
             closure_escapes: false,
@@ -3305,6 +3310,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         }
                     }
                     let l = self.user_local(name, t, pattern.id);
+                    let outer = self.let_scope.replace(self.scopes.len() - 1);
                     self.push_scope();
                     // `let idx: i64 = m.get(k).unwrap()` reads the `ref i64`
                     // (core semantics §5.10), as does `let mut t = since` of a
@@ -3319,6 +3325,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.expr_into(value, Place::local(l))?;
                     }
                     self.pop_scope()?;
+                    self.let_scope = outer;
                     self.declare(l, t);
                     return Ok(());
                 }
@@ -14445,9 +14452,46 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         self.goto(join);
         self.cur = other;
-        self.push_scope();
-        self.expr_into(right, dest)?;
-        self.pop_scope()?;
+        // B-2026-10-18-53 — `opt ?? ""` with `opt: Option[ref String]` is a
+        // `ref String`, so a fallback that is a value is held in a temporary
+        // the result borrows. It lives as long as a `let` binding of the
+        // result, else to the end of the statement.
+        let dt = self.place_type(&dest);
+        let fallback_value = match self.tys().tcx().kind(dt) {
+            HK::Ref(inner) | HK::MutRef(inner) => {
+                let rt = self.expr_ty(right)?;
+                let literal = matches!(
+                    right.kind,
+                    ExprKind::StringLit(_) | ExprKind::InterpolatedStringLit(_)
+                );
+                (literal || !self.is_reference(rt)).then_some(inner)
+            }
+            _ => None,
+        };
+        match fallback_value {
+            Some(inner) => {
+                let mutable = matches!(self.tys().tcx().kind(dt), HK::MutRef(_));
+                let l = self.temp(inner);
+                self.push_scope();
+                self.expr_into(right, Place::local(l))?;
+                self.pop_scope()?;
+                if self.needs_drop(inner) {
+                    let at = self.let_scope.unwrap_or(self.scopes.len() - 1);
+                    self.scopes[at].push(ScopeEntry::Drop(Place::local(l)));
+                }
+                let kind = if mutable {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Shared
+                };
+                self.assign(dest, Rvalue::Ref(kind, Place::local(l)));
+            }
+            None => {
+                self.push_scope();
+                self.expr_into(right, dest)?;
+                self.pop_scope()?;
+            }
+        }
         self.goto(join);
         self.cur = join;
         Ok(())
