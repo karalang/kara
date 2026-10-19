@@ -5893,3 +5893,89 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_closure_through_a_mut_ref_function_parameter_keeps_its_writes() {
+    // B-2026-10-19-68: a `mut ref MutFn()` parameter is specialised to the
+    // closure it is handed, which it takes by the reference its body wants.
+    for (src, want) in [
+        (
+            r#"fn twice(f: mut ref MutFn()) {
+    f();
+    f();
+}
+
+fn main() {
+    let mut n = 0;
+    twice(mut || { n += 1; });
+    println(f"{n}");
+}
+"#,
+            "2\n",
+        ),
+        (
+            r#"struct Acc {
+    total: i64,
+}
+
+impl Acc {
+    fn run(mut ref self, f: mut ref MutFn(i64) -> i64) {
+        self.total += f(self.total);
+    }
+}
+
+fn twice(f: mut ref MutFn()) {
+    f();
+    f();
+}
+
+fn thrice(f: mut ref MutFn()) {
+    twice(mut f);
+    f();
+}
+
+fn sum(f: ref Fn(i64) -> i64) -> i64 {
+    f(1) + f(2)
+}
+
+fn main() {
+    let mut count = 0;
+    let mut c = || { count += 1; };
+    twice(mut c);
+    thrice(mut c);
+    c();
+    println(f"{count}");
+
+    let mut v: Vec[i64] = Vec.new();
+    twice(mut || { v.push(v.len() as i64); });
+    println(f"{v.len()} {v[1]}");
+
+    let k = 10;
+    let g = |x: i64| x * k;
+    println(f"{sum(g)} {sum(|x: i64| x + k)}");
+
+    let mut calls = 0;
+    let mut h: MutFn() = || { calls += 1; };
+    twice(mut h);
+    h();
+    println(f"{calls}");
+
+    let mut a = Acc { total: 1 };
+    let mut seen = 0;
+    a.run(mut |t: i64| { seen += t; t * 2 });
+    a.run(mut |t: i64| { seen += t; t * 2 });
+    println(f"{a.total} {seen}");
+}
+"#,
+            "6\n2 1\n30 23\n3\n9 4\n",
+        ),
+    ] {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want);
+        for opt in [0, 2] {
+            if let Some(out) = build_and_run(src, opt) {
+                assert_eq!(out, want, "at -O{opt}");
+            }
+        }
+    }
+}

@@ -11018,7 +11018,9 @@ impl<'l, 'a> Bx<'l, 'a> {
         let mut ops = Vec::new();
         let mut fn_tys: Vec<Option<Ty>> = Vec::new();
         for (a, p) in args.iter().zip(&f.params) {
-            if self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p) {
+            if (self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p))
+                || self.ref_fn_param_takes_closure(&a.value, p)?
+            {
                 let want = self.generic_fn_param_want(&a.value, p, &inst_args)?;
                 let (op, t) = self.fn_arg(&a.value, want)?;
                 ops.push(PendingRecv::Ready(op));
@@ -13077,7 +13079,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                     // A function-typed parameter takes the closure or function
                     // item itself, and the instance is specialised to it, as
                     // for a free function's call.
-                    if self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p) {
+                    if (self.is_fn_typed(p.pattern.id) && !self.fn_param_owned(p))
+                        || self.ref_fn_param_takes_closure(&a.value, p)?
+                    {
                         let want = self.generic_fn_param_want(&a.value, p, &inst_args)?;
                         let (op, t) = self.fn_arg(&a.value, want)?;
                         rest.push(PendingRecv::Ready(op));
@@ -13316,6 +13320,31 @@ impl<'l, 'a> Bx<'l, 'a> {
             .node_types
             .get(&id)
             .is_some_and(|&t| matches!(self.tys().tcx().kind(t), HK::Fn { .. }))
+    }
+
+    /// Whether the parameter `p` takes its function by reference (`f: mut
+    /// ref MutFn()`) and the argument `a` is a closure, which the instance
+    /// is then specialised to, taking the closure by the reference its body
+    /// wants (B-2026-10-19-68). An erased `Fn` argument keeps the call
+    /// through the erased value.
+    fn ref_fn_param_takes_closure(&mut self, a: &'a Expr, p: &ast::Param) -> R<bool> {
+        let tcx = self.tys().tcx();
+        let by_ref = self.lcx.node_types.get(&p.pattern.id).is_some_and(|&t| {
+            matches!(tcx.kind(t), HK::Ref(i) | HK::MutRef(i) if matches!(tcx.kind(i), HK::Fn { .. }))
+        });
+        if !by_ref {
+            return Ok(false);
+        }
+        if matches!(a.kind, ExprKind::Closure { .. }) {
+            return Ok(true);
+        }
+        let at = self.expr_ty(a)?;
+        let tcx = self.tys().tcx();
+        let inner = match tcx.kind(at) {
+            HK::Ref(i) | HK::MutRef(i) => i,
+            _ => at,
+        };
+        Ok(matches!(tcx.kind(inner), HK::Closure { .. }))
     }
 
     /// A function item as a value: a constant of its `FnDef` type.
@@ -14280,9 +14309,13 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::Closure { def, .. } => {
                 let env = self.lcx.closures.get(&def).map(|c| c.1);
                 match (env, tcx.kind(t)) {
-                    // Already a reference of the right kind: pass it on.
-                    (Some(EnvMode::Ref), HK::Ref(_)) | (Some(EnvMode::Mut), HK::MutRef(_)) => {
-                        Ok((Operand::Copy(op), t))
+                    // Already a reference of the right kind: pass it on, a
+                    // `mut ref` reborrowed (B-2026-10-19-68).
+                    (Some(EnvMode::Ref), HK::Ref(_)) => Ok((Operand::Copy(op), t)),
+                    (Some(EnvMode::Mut), HK::MutRef(_)) => {
+                        let r = self.temp(t);
+                        self.assign(r, Rvalue::Ref(BorrowKind::Mut, op.project(ProjElem::Deref)));
+                        Ok((Operand::Move(Place::local(r)), t))
                     }
                     (Some(EnvMode::Value), _) => Ok((self.use_place(op, t), t)),
                     (Some(mode), _) => {
