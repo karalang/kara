@@ -101,9 +101,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 241 |
 | perf | 175 |
 | other | 175 |
-| diagnostics | 169 |
+| diagnostics | 171 |
 | crash | 124 |
-| soundness | 117 |
+| soundness | 118 |
 | use-after-free | 91 |
 
 ### By surface
@@ -112,9 +112,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2948 |
 | interp | 964 |
-| typecheck | 486 |
+| typecheck | 487 |
+| ownership | 116 |
 | other | 115 |
-| ownership | 114 |
 | runtime | 78 |
 | cli | 78 |
 | parser | 69 |
@@ -168,6 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-12 | 2026-10-19 | typecheck | low | A misspelled `Vec` method (`v.lenn()`, `v.length()`, `v.size()`) gets no did-you-mean: the Vec surface has no name list for the suggestion to search | — |
 | B-2026-10-19-13 | 2026-10-19 | typecheck+interp | low | An owned local assigned to a local bound to a borrow (`let mut out = s; out = t;` with `s` a borrowed param and `t` an owned `String`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR); `out = ref t` works | — |
 | B-2026-10-19-14 | 2026-10-19 | typecheck | low | A closure over a NAMED value iterator still takes `*c` on a Copy item: `let it = w.chars(); it.filter(|c| *c == 'Q')` checks and prints 2, though core-semantics.md §5.10 makes `c` a copy; 448e8fb927 keys the copy rule on the receiver chain's syntax (a range, `chars()`, `map`, ...), which a variable does not show | — |
+| B-2026-10-19-15 | 2026-10-19 | ownership | medium | `let v = r;` with `r: mut ref i64` passes `karac check`, and every MIR surface refuses it at borrow check: `fn take(counter: mut ref i64) -> i64 { let v = counter; *counter += 1; v }` is `All checks passed.` and then E0516 "read of (*_1) while it is borrowed mutably" on `__mir-run` and `__mir-llvm-run` | — |
+| B-2026-10-19-16 | 2026-10-19 | typecheck | low | Plain `=` to a `mut ref i64` binding writes through on every surface, where design.md says it does not: `fn inc(counter: mut ref i64) { counter = counter + 1; }` passes `karac check` and leaves the caller's value at 1 on `__mir-run` and `__mir-llvm-run`, against design.md "Plain `=` does not auto-deref: write `*x = v`" | — |
+| B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
 
 ### Relocated
 
