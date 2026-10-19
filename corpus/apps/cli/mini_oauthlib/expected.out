@@ -1,0 +1,665 @@
+== oauth1 escape
+-- {"op": "escape", "s": "Ladies + Gentlemen"}
+   'Ladies + Gentlemen' -> 'Ladies%20%2B%20Gentlemen' -> 'Ladies + Gentlemen'
+-- {"op": "escape", "s": "An encoded string!"}
+   'An encoded string!' -> 'An%20encoded%20string%21' -> 'An encoded string!'
+-- {"op": "escape", "s": "Dogs, Cats & Mice"}
+   'Dogs, Cats & Mice' -> 'Dogs%2C%20Cats%20%26%20Mice' -> 'Dogs, Cats & Mice'
+-- {"op": "escape", "s": "☃"}
+   '☃' -> '%E2%98%83' -> '☃'
+-- {"op": "escape", "s": "-._~"}
+   '-._~' -> '-._~' -> '-._~'
+-- {"op": "escape", "s": "a/b?c=d#e"}
+   'a/b?c=d#e' -> 'a%2Fb%3Fc%3Dd%23e' -> 'a/b?c=d#e'
+-- {"op": "escape", "s": ""}
+   '' -> '' -> ''
+-- {"op": "escape", "s": "100%"}
+   '100%' -> '100%25' -> '100%'
+-- {"op": "escape", "s": "日本語 text"}
+   '日本語 text' -> '%E6%97%A5%E6%9C%AC%E8%AA%9E%20text' -> '日本語 text'
+-- {"op": "escape", "s": "oauth_token=x&y"}
+   'oauth_token=x&y' -> 'oauth_token%3Dx%26y' -> 'oauth_token=x&y'
+-- {"op": "unescape", "s": "%7E%2f%2F"}
+   '%7E%2f%2F' -> '~//'
+-- {"op": "unescape", "s": "a+b"}
+   'a+b' -> 'a+b'
+-- {"op": "unescape", "s": "%E2%98%83"}
+   '%E2%98%83' -> '☃'
+-- {"op": "unescape", "s": "%zz"}
+   '%zz' -> '%zz'
+-- {"op": "unescape", "s": "%"}
+   '%' -> '%'
+-- {"op": "unescape", "s": "caf%C3%A9"}
+   'caf%C3%A9' -> 'café'
+== oauth1 urldecode
+-- {"op": "urldecode", "q": "a=1&b=2"}
+   [('a', '1'), ('b', '2')]
+-- {"op": "urldecode", "q": "c2&a3=2+q"}
+   [('c2', ''), ('a3', '2 q')]
+-- {"op": "urldecode", "q": "a=%20&b="}
+   [('a', ' '), ('b', '')]
+-- {"op": "urldecode", "q": "x=1;y=2"}
+   [('x', '1;y=2')]
+-- {"op": "urldecode", "q": "a=1&&b=2"}
+   [('a', '1'), ('b', '2')]
+-- {"op": "urldecode", "q": "name=caf%C3%A9"}
+   [('name', 'café')]
+-- {"op": "urldecode", "q": "q=hello world"}
+   raised ValueError: Error trying to decode a non urlencoded string. Found invalid characters: {' '} in the string: 'q=hello world'. Please ensure the request/response body is x-www-form-urlencoded.
+-- {"op": "urldecode", "q": "a=<b"}
+   raised ValueError: Error trying to decode a non urlencoded string. Found invalid characters: {'<'} in the string: 'a=<b'. Please ensure the request/response body is x-www-form-urlencoded.
+-- {"op": "urldecode", "q": "a=%zz"}
+   raised ValueError: Invalid hex encoding in query string.
+-- {"op": "urldecode", "q": "a=%4"}
+   [('a', '%4')]
+-- {"op": "urldecode", "q": "a=%4G"}
+   raised ValueError: Invalid hex encoding in query string.
+-- {"op": "urldecode", "q": "a=%"}
+   [('a', '%')]
+-- {"op": "urldecode", "q": ""}
+   []
+-- {"op": "urldecode", "q": "=v&k="}
+   [('', 'v'), ('k', '')]
+-- {"op": "urldecode", "q": "a=1&a=2"}
+   [('a', '1'), ('a', '2')]
+-- {"op": "urldecode", "q": "path=/x/y?z"}
+   [('path', '/x/y?z')]
+-- {"op": "urldecode", "q": "a=é"}
+   raised ValueError: Error trying to decode a non urlencoded string. Found invalid characters: {'é'} in the string: 'a=é'. Please ensure the request/response body is x-www-form-urlencoded.
+-- {"op": "urldecode", "q": "tilde=~&star=*"}
+   [('tilde', '~'), ('star', '*')]
+== oauth1 authorization header
+-- {"op": "authheader", "h": "OAuth realm=\"Example\", oauth_consumer_key=\"9djdj82h48djs9d2\", oauth_token=\"kkk9d7dh3k39sjv7\""}
+   [('realm', 'Example'), ('oauth_consumer_key', '9djdj82h48djs9d2'), ('oauth_token', 'kkk9d7dh3k39sjv7')]
+-- {"op": "authheader", "h": "oauth oauth_nonce=\"7d8f3e4a\", oauth_version=\"1.0\""}
+   [('oauth_nonce', '7d8f3e4a'), ('oauth_version', '1.0')]
+-- {"op": "authheader", "h": "OAuth oauth_callback=\"http%3A%2F%2Fprinter.example.com%2Fready\""}
+   [('oauth_callback', 'http%3A%2F%2Fprinter.example.com%2Fready')]
+-- {"op": "authheader", "h": "OAuth a=\"1,2\", b=\"x\\\"y\""}
+   [('a', '1,2'), ('b', 'x"y')]
+-- {"op": "authheader", "h": "OAuth a=plain, b=\"quoted\""}
+   [('a', 'plain'), ('b', 'quoted')]
+-- {"op": "authheader", "h": "OAuth a=\"1\", a=\"2\""}
+   [('a', '2')]
+-- {"op": "authheader", "h": "OAuth a="}
+   raised ValueError: Malformed authorization header
+-- {"op": "authheader", "h": "OAuth novalue"}
+   raised ValueError: Malformed authorization header
+-- {"op": "authheader", "h": "Bearer abc"}
+   raised ValueError: Malformed authorization header
+-- {"op": "authheader", "h": "OAuth "}
+   []
+-- {"op": "authheader", "h": "OAuth a=\"1\",,b=\"2\""}
+   raised ValueError: Malformed authorization header
+-- {"op": "authheader", "h": "OAUTH x=\"y\""}
+   [('x', 'y')]
+== oauth1 base string URI
+-- {"op": "bsuri", "uri": "http://EXAMPLE.COM:80/r%20v/X?id=123"}
+   'http://example.com/r%20v/X'
+-- {"op": "bsuri", "uri": "https://www.example.net:8080/?q=1"}
+   'https://www.example.net:8080/'
+-- {"op": "bsuri", "uri": "https://api.example.com:443/1/statuses"}
+   'https://api.example.com/1/statuses'
+-- {"op": "bsuri", "uri": "http://api.example.com:443/1/statuses"}
+   'http://api.example.com:443/1/statuses'
+-- {"op": "bsuri", "uri": "HTTPS://Example.com"}
+   'https://example.com/'
+-- {"op": "bsuri", "uri": "https://example.com/a b;p=1?x#frag"}
+   'https://example.com/a%20b;p=1'
+-- {"op": "bsuri", "uri": "http://[2001:DB8:0:0:0:0:0:1]:8000/v1"}
+   'http://[2001:db8::1]:8000/v1'
+-- {"op": "bsuri", "uri": "http://[::FFFF:0:0:1]/"}
+   'http://[::ffff:0:0:1]/'
+-- {"op": "bsuri", "uri": "http://[fe80:0:0:0:200:f8ff:fe21:67cf]:80/"}
+   'http://[fe80::200:f8ff:fe21:67cf]/'
+-- {"op": "bsuri", "uri": "http://192.168.000.001/x"}
+   'http://192.168.000.001/x'
+-- {"op": "bsuri", "uri": "http://10.0.0.1:0/x"}
+   raised ValueError: port out of range
+-- {"op": "bsuri", "uri": "http://example.com:99999/x"}
+   raised ValueError: Port out of range 0-65535
+-- {"op": "bsuri", "uri": "http://example.com:8x/x"}
+   raised ValueError: Port could not be cast to integer value as '8x'
+-- {"op": "bsuri", "uri": "/relative/path"}
+   raised ValueError: missing scheme
+-- {"op": "bsuri", "uri": "http:///nohost"}
+   raised ValueError: missing host
+-- {"op": "bsuri", "uri": "https://internal:8443/token", "host": "api.Example.com"}
+   'https://api.example.com/token'
+-- {"op": "bsuri", "uri": "https://internal:8443/token", "host": "api.example.com:9000"}
+   'https://api.example.com:9000/token'
+-- {"op": "bsuri", "uri": "http://internal/token", "host": "proxy.example.com:80"}
+   'http://proxy.example.com/token'
+-- {"op": "bsuri", "uri": "https://internal/token", "host": "[::1]:8443"}
+   'https://[::1]:8443/token'
+-- {"op": "bsuri", "uri": "mailto:someone@example.com"}
+   raised ValueError: missing host
+== oauth1 collect and normalize
+-- {"op": "collect", "query": "b5=%3D%253D&a3=a&c%40=&a2=r%20b", "body": "c2&a3=2+q", "headers": {"Authorization": "OAuth realm=\"Example\", oauth_consumer_key=\"9djdj82h48djs9d2\", oauth_token=\"kkk9d7dh3k39sjv7\", oauth_signature_method=\"HMAC-SHA1\", oauth_timestamp=\"137131201\", oauth_nonce=\"7d8f3e4a\", oauth_signature=\"djosJKDKJSD8743243%2Fjdk33klY%3D\""}}
+   [('b5', '=%3D'), ('a3', 'a'), ('c@', ''), ('a2', 'r b'), ('oauth_consumer_key', '9djdj82h48djs9d2'), ('oauth_token', 'kkk9d7dh3k39sjv7'), ('oauth_signature_method', 'HMAC-SHA1'), ('oauth_timestamp', '137131201'), ('oauth_nonce', '7d8f3e4a'), ('c2', ''), ('a3', '2 q')]
+-- {"op": "collect", "query": "b5=%3D%253D&a3=a&c%40=&a2=r%20b", "body": "c2&a3=2+q", "headers": {"authorization": "OAuth realm=\"Example\", oauth_consumer_key=\"9djdj82h48djs9d2\", oauth_token=\"kkk9d7dh3k39sjv7\", oauth_signature_method=\"HMAC-SHA1\", oauth_timestamp=\"137131201\", oauth_nonce=\"7d8f3e4a\", oauth_signature=\"djosJKDKJSD8743243%2Fjdk33klY%3D\""}, "with_realm": true, "exclude_sig": false}
+   [('b5', '=%3D'), ('a3', 'a'), ('c@', ''), ('a2', 'r b'), ('realm', 'Example'), ('oauth_consumer_key', '9djdj82h48djs9d2'), ('oauth_token', 'kkk9d7dh3k39sjv7'), ('oauth_signature_method', 'HMAC-SHA1'), ('oauth_timestamp', '137131201'), ('oauth_nonce', '7d8f3e4a'), ('oauth_signature', 'djosJKDKJSD8743243/jdk33klY='), ('c2', ''), ('a3', '2 q')]
+-- {"op": "collect", "query": "", "body": [["a", "1"], ["oauth_x", "%41"]], "headers": {}}
+   [('a', '1'), ('oauth_x', 'A')]
+-- {"op": "collect", "query": "oauth_extra=%2541", "body": null, "headers": {"Content-Type": "text/plain"}}
+   [('oauth_extra', 'A')]
+-- {"op": "collect", "query": "", "body": "{\"json\": true}", "headers": {}}
+   []
+-- {"op": "collect", "query": "a=1", "body": "", "headers": {"Authorization": "Basic Zm9vOmJhcg=="}}
+   raised ValueError: Malformed authorization header
+-- {"op": "normalize", "params": [["b5", "=%3D"], ["a3", "a"], ["c@", ""], ["a2", "r b"], ["oauth_consumer_key", "9djdj82h48djs9d2"], ["oauth_token", "kkk9d7dh3k39sjv7"], ["oauth_signature_method", "HMAC-SHA1"], ["oauth_timestamp", "137131201"], ["oauth_nonce", "7d8f3e4a"], ["c2", ""], ["a3", "2 q"]]}
+   'a2=r%20b&a3=2%20q&a3=a&b5=%3D%253D&c%40=&c2=&oauth_consumer_key=9djdj82h48djs9d2&oauth_nonce=7d8f3e4a&oauth_signature_method=HMAC-SHA1&oauth_timestamp=137131201&oauth_token=kkk9d7dh3k39sjv7'
+-- {"op": "normalize", "params": [["z", "1"], ["a", "2"], ["a", "10"], ["A", "1"], ["é", "x"], ["a b", "~"]]}
+   '%C3%A9=x&A=1&a=10&a=2&a%20b=~&z=1'
+-- {"op": "normalize", "params": []}
+   ''
+-- {"op": "basestring", "method": "post", "uri": "http://example.com/request", "params": "a2=r%20b&a3=2%20q&a3=a&b5=%3D%253D&c%40=&c2=&oauth_consumer_key=9djdj82h48djs9d2"}
+   'POST&http%3A%2F%2Fexample.com%2Frequest&a2%3Dr%2520b%26a3%3D2%2520q%26a3%3Da%26b5%3D%253D%25253D%26c%2540%3D%26c2%3D%26oauth_consumer_key%3D9djdj82h48djs9d2'
+== oauth1 signing
+-- {"op": "sign1", "client": {"client_key": "xvz1evFS4wEEPTGEFPHBog", "client_secret": "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "resource_owner_key": "370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb", "resource_owner_secret": "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE", "nonce": "kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg", "timestamp": "1318622958"}, "uri": "https://api.twitter.com/1.1/statuses/update.json?include_entities=true", "method": "POST", "body": "status=Hello%20Ladies%20%2b%20Gentlemen%2c%20a%20signed%20OAuth%20request%21", "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+   uri     'https://api.twitter.com/1.1/statuses/update.json?include_entities=true'
+   headers {'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': 'OAuth oauth_nonce="kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg", oauth_timestamp="1318622958", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="xvz1evFS4wEEPTGEFPHBog", oauth_token="370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb", oauth_signature="hCtSmYh%2BiHYCEqBWrE7C7hYmtUk%3D"'}
+   body    'status=Hello%20Ladies%20%2b%20Gentlemen%2c%20a%20signed%20OAuth%20request%21'
+-- {"op": "verify1", "cs": "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "rs": "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE"}
+   HMAC-SHA1 valid
+-- {"op": "verify1", "cs": "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "rs": "wrong-secret"}
+   HMAC-SHA1 INVALID
+-- {"op": "verify1", "cs": "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "rs": "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE", "method": "PUT"}
+   HMAC-SHA1 INVALID
+-- {"op": "verify1", "cs": "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "rs": "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE", "add": ["status", "Goodbye"]}
+   HMAC-SHA1 INVALID
+-- {"op": "sign1", "client": {"client_key": "xvz1evFS4wEEPTGEFPHBog", "client_secret": "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "resource_owner_key": "370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb", "resource_owner_secret": "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE", "nonce": "kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg", "timestamp": "1318622958", "realm": "Twitter API"}, "uri": "https://api.twitter.com/1.1/statuses/update.json?include_entities=true", "method": "POST", "body": [["status", "Hello Ladies + Gentlemen, a signed OAuth request!"]], "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+   uri     'https://api.twitter.com/1.1/statuses/update.json?include_entities=true'
+   headers {'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': 'OAuth realm="Twitter API", oauth_nonce="kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg", oauth_timestamp="1318622958", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="xvz1evFS4wEEPTGEFPHBog", oauth_token="370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb", oauth_signature="hCtSmYh%2BiHYCEqBWrE7C7hYmtUk%3D"'}
+   body    {'status': 'Hello Ladies + Gentlemen, a signed OAuth request!'}
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "HMAC-SHA1", "signature_type": "AUTH_HEADER"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original'
+   headers {'Authorization': 'OAuth oauth_nonce="kllo9940pd9333jh", oauth_timestamp="1191242096", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="dpf43f3p2l4k3l03", oauth_token="nnch734d00sl2jdk", oauth_signature="tR3%2BTy81lMeYAr%2FFid0kMTYa%2FWM%3D"'}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   HMAC-SHA1 valid
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "HMAC-SHA1", "signature_type": "QUERY"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original&oauth_nonce=kllo9940pd9333jh&oauth_timestamp=1191242096&oauth_version=1.0&oauth_signature_method=HMAC-SHA1&oauth_consumer_key=dpf43f3p2l4k3l03&oauth_token=nnch734d00sl2jdk&oauth_signature=tR3%2BTy81lMeYAr%2FFid0kMTYa%2FWM%3D'
+   headers {}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   HMAC-SHA1 valid
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "HMAC-SHA256", "signature_type": "AUTH_HEADER"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original'
+   headers {'Authorization': 'OAuth oauth_nonce="kllo9940pd9333jh", oauth_timestamp="1191242096", oauth_version="1.0", oauth_signature_method="HMAC-SHA256", oauth_consumer_key="dpf43f3p2l4k3l03", oauth_token="nnch734d00sl2jdk", oauth_signature="WVPzl1j6ZsnkIjWr7e3OZ3jkenL57KwaLFhYsroX1hg%3D"'}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   HMAC-SHA256 valid
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "HMAC-SHA256", "signature_type": "QUERY"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original&oauth_nonce=kllo9940pd9333jh&oauth_timestamp=1191242096&oauth_version=1.0&oauth_signature_method=HMAC-SHA256&oauth_consumer_key=dpf43f3p2l4k3l03&oauth_token=nnch734d00sl2jdk&oauth_signature=WVPzl1j6ZsnkIjWr7e3OZ3jkenL57KwaLFhYsroX1hg%3D'
+   headers {}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   HMAC-SHA256 valid
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "HMAC-SHA512", "signature_type": "AUTH_HEADER"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original'
+   headers {'Authorization': 'OAuth oauth_nonce="kllo9940pd9333jh", oauth_timestamp="1191242096", oauth_version="1.0", oauth_signature_method="HMAC-SHA512", oauth_consumer_key="dpf43f3p2l4k3l03", oauth_token="nnch734d00sl2jdk", oauth_signature="nQYVqZl8EkEH4fThSn%2B25i1gc68aX%2BFHTHSAXrxIl2ixdAofXM%2Fpq2x90UaOFIZQxvkzE5VRZpPbjo6i%2Bfe6rg%3D%3D"'}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   HMAC-SHA512 valid
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "HMAC-SHA512", "signature_type": "QUERY"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original&oauth_nonce=kllo9940pd9333jh&oauth_timestamp=1191242096&oauth_version=1.0&oauth_signature_method=HMAC-SHA512&oauth_consumer_key=dpf43f3p2l4k3l03&oauth_token=nnch734d00sl2jdk&oauth_signature=nQYVqZl8EkEH4fThSn%2B25i1gc68aX%2BFHTHSAXrxIl2ixdAofXM%2Fpq2x90UaOFIZQxvkzE5VRZpPbjo6i%2Bfe6rg%3D%3D'
+   headers {}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   HMAC-SHA512 valid
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "PLAINTEXT", "signature_type": "AUTH_HEADER"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original'
+   headers {'Authorization': 'OAuth oauth_nonce="kllo9940pd9333jh", oauth_timestamp="1191242096", oauth_version="1.0", oauth_signature_method="PLAINTEXT", oauth_consumer_key="dpf43f3p2l4k3l03", oauth_token="nnch734d00sl2jdk", oauth_signature="kd94hf93k423kf44%26pfkkdhi9sl3r4s00"'}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   PLAINTEXT valid
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_method": "PLAINTEXT", "signature_type": "QUERY"}, "uri": "http://photos.example.net/photos?file=vacation.jpg&size=original", "method": "GET", "body": null, "headers": {}}
+   uri     'http://photos.example.net/photos?file=vacation.jpg&size=original&oauth_nonce=kllo9940pd9333jh&oauth_timestamp=1191242096&oauth_version=1.0&oauth_signature_method=PLAINTEXT&oauth_consumer_key=dpf43f3p2l4k3l03&oauth_token=nnch734d00sl2jdk&oauth_signature=kd94hf93k423kf44%26pfkkdhi9sl3r4s00'
+   headers {}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   PLAINTEXT valid
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": ""}
+   PLAINTEXT INVALID
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_type": "BODY"}, "uri": "http://photos.example.net/photos", "method": "POST", "body": "file=vacation.jpg&size=original&tags=", "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+   uri     'http://photos.example.net/photos'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'file=vacation.jpg&size=original&tags=&oauth_nonce=kllo9940pd9333jh&oauth_timestamp=1191242096&oauth_version=1.0&oauth_signature_method=HMAC-SHA1&oauth_consumer_key=dpf43f3p2l4k3l03&oauth_token=nnch734d00sl2jdk&oauth_signature=hmLMcH1ITr%2Bs38aLuoRah65OvSY%3D'
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00"}
+   HMAC-SHA1 valid
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "pfkkdhi9sl3r4s00", "uri": "http://photos.example.net/photos2"}
+   HMAC-SHA1 INVALID
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "nnch734d00sl2jdk", "resource_owner_secret": "pfkkdhi9sl3r4s00", "nonce": "kllo9940pd9333jh", "timestamp": "1191242096", "signature_type": "BODY"}, "uri": "http://photos.example.net/photos", "method": "POST", "body": "file=a.jpg", "headers": {"content-type": "application/x-www-form-urlencoded"}}
+   uri     'http://photos.example.net/photos'
+   headers {'content-type': 'application/x-www-form-urlencoded', 'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'file=a.jpg&oauth_nonce=kllo9940pd9333jh&oauth_timestamp=1191242096&oauth_version=1.0&oauth_signature_method=HMAC-SHA1&oauth_consumer_key=dpf43f3p2l4k3l03&oauth_token=nnch734d00sl2jdk&oauth_signature=Kfq7Q5olHUC1hTl2HlrfOkDoJsU%3D'
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "callback_uri": "http://printer.example.com/ready", "signature_method": "PLAINTEXT", "nonce": "wIjqoS", "timestamp": "137131200", "realm": "Photos"}, "uri": "https://photos.example.net/initiate", "method": "POST", "body": null, "headers": {}}
+   uri     'https://photos.example.net/initiate'
+   headers {'Authorization': 'OAuth realm="Photos", oauth_nonce="wIjqoS", oauth_timestamp="137131200", oauth_version="1.0", oauth_signature_method="PLAINTEXT", oauth_consumer_key="dpf43f3p2l4k3l03", oauth_callback="http%3A%2F%2Fprinter.example.com%2Fready", oauth_signature="kd94hf93k423kf44%26"'}
+   body    None
+-- {"op": "sign1", "client": {"client_key": "dpf43f3p2l4k3l03", "client_secret": "kd94hf93k423kf44", "resource_owner_key": "hh5s93j4hdidpola", "resource_owner_secret": "hdhd0244k9j7ao03", "verifier": "hfdp7dh39dks9884", "nonce": "walatlh", "timestamp": "137131201"}, "uri": "https://photos.example.net/token", "method": "POST", "body": null, "headers": {}}
+   uri     'https://photos.example.net/token'
+   headers {'Authorization': 'OAuth oauth_nonce="walatlh", oauth_timestamp="137131201", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="dpf43f3p2l4k3l03", oauth_token="hh5s93j4hdidpola", oauth_verifier="hfdp7dh39dks9884", oauth_signature="TTfFVvlRAvmVe2B4CvOBMQlgJNw%3D"'}
+   body    None
+-- {"op": "verify1", "cs": "kd94hf93k423kf44", "rs": "hdhd0244k9j7ao03"}
+   HMAC-SHA1 valid
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/items", "method": "POST", "body": "{\"name\": \"lamp\", \"qty\": 2}", "headers": {"Content-Type": "application/json", "Accept": "application/json"}}
+   uri     'https://api.example.com/v2/items'
+   headers {'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': 'OAuth oauth_nonce="n0nce", oauth_timestamp="1700000000", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="ck-demo", oauth_token="tok%2F42", oauth_body_hash="7pQ9mGsNiIon0ISDsY6uV8OSaKk%3D", oauth_signature="MLpq24fQDmPcpDKCzNrWbR8KOUU%3D"'}
+   body    '{"name": "lamp", "qty": 2}'
+-- {"op": "verify1", "cs": "cs&demo secret", "rs": "ts~42"}
+   HMAC-SHA1 valid
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000", "signature_method": "HMAC-SHA256"}, "uri": "https://api.example.com/v2/items/7", "method": "PUT", "body": "raw text body", "headers": {"Content-Type": "text/plain"}}
+   uri     'https://api.example.com/v2/items/7'
+   headers {'Content-Type': 'text/plain', 'Authorization': 'OAuth oauth_nonce="n0nce", oauth_timestamp="1700000000", oauth_version="1.0", oauth_signature_method="HMAC-SHA256", oauth_consumer_key="ck-demo", oauth_token="tok%2F42", oauth_body_hash="Y%2BxXrykES2OuA9zfbyTUi%2B1qiAc%3D", oauth_signature="gFbuwf4J8YG7pEHE6TkliGZL1uSnNIZ4yl%2F4TtuQoP4%3D"'}
+   body    'raw text body'
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/search?q=caf%C3%A9&page=2&sort=", "method": "get", "body": null, "headers": {"Host": "public.example.com"}}
+   uri     'https://api.example.com/v2/search?q=caf%C3%A9&page=2&sort='
+   headers {'Host': 'public.example.com', 'Authorization': 'OAuth oauth_nonce="n0nce", oauth_timestamp="1700000000", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="ck-demo", oauth_token="tok%2F42", oauth_signature="%2FzWBoqM2jBz5KUI%2FicEsGK5LIMc%3D"'}
+   body    None
+-- {"op": "verify1", "cs": "cs&demo secret", "rs": "ts~42"}
+   HMAC-SHA1 INVALID
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000", "signature_type": "QUERY"}, "uri": "https://internal:8443/v2/search?q=x", "method": "GET", "body": null, "headers": {"host": "public.example.com"}}
+   uri     'https://internal:8443/v2/search?q=x&oauth_nonce=n0nce&oauth_timestamp=1700000000&oauth_version=1.0&oauth_signature_method=HMAC-SHA1&oauth_consumer_key=ck-demo&oauth_token=tok%2F42&oauth_signature=yxUfhn9K9WKvMJ5rOJitp%2B%2FlICk%3D'
+   headers {'host': 'public.example.com'}
+   body    None
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://internal:8443/v2/search?q=x", "method": "GET", "body": null, "headers": {"host": "public.example.com"}}
+   uri     'https://internal:8443/v2/search?q=x'
+   headers {'host': 'public.example.com', 'Authorization': 'OAuth oauth_nonce="n0nce", oauth_timestamp="1700000000", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="ck-demo", oauth_token="tok%2F42", oauth_signature="ovC7cBAqPvSKuVRMxyBjf40FIfg%3D"'}
+   body    None
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/upload", "method": "POST", "body": "a=1", "headers": {"Content-Type": "multipart/form-data; boundary=xyz"}}
+   raised ValueError: Headers indicate a multipart body but body contains parameters.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/upload", "method": "POST", "body": "--xyz--", "headers": {"Content-Type": "multipart/form-data; boundary=xyz"}}
+   raised ValueError: Headers indicate a multipart body but body contains parameters.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/form", "method": "POST", "body": "{\"a\": 1}", "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+   raised ValueError: Headers indicate a formencoded body but body was not decodable.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/form", "method": "POST", "body": "a=1&b=2", "headers": {}}
+   raised ValueError: Body contains parameters but Content-Type header was not set instead of application/x-www-form-urlencoded
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/form", "method": "POST", "body": "", "headers": {"Content-Type": "text/plain"}}
+   raised ValueError: Body contains parameters but Content-Type header was text/plain instead of application/x-www-form-urlencoded
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/form", "method": "POST", "body": "token", "headers": {"Content-Type": "application/json"}}
+   raised ValueError: Body contains parameters but Content-Type header was application/json instead of application/x-www-form-urlencoded
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000", "signature_type": "BODY"}, "uri": "https://api.example.com/v2/form", "method": "POST", "body": "{\"a\": 1}", "headers": {"Content-Type": "application/json", "Accept": "application/json"}}
+   raised ValueError: Body signatures may only be used with form-urlencoded content
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/form", "method": "GET", "body": "a=1", "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+   raised ValueError: GET/HEAD requests should not include body.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/form", "method": "HEAD", "body": [["a", "1"]], "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+   raised ValueError: GET/HEAD requests should not include body.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000", "signature_method": "HMAC-MD5"}, "uri": "https://api.example.com/v2/x", "method": "GET", "body": null, "headers": {}}
+   raised ValueError: Invalid signature method.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000", "signature_type": "COOKIE"}, "uri": "https://api.example.com/v2/x", "method": "GET", "body": null, "headers": {}}
+   raised ValueError: Unknown signature type specified.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/x?q=a b", "method": "GET", "body": null, "headers": {}}
+   raised ValueError: Error trying to decode a non urlencoded string. Found invalid characters: {' '} in the string: 'q=a b'. Please ensure the request/response body is x-www-form-urlencoded.
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000"}, "uri": "https://api.example.com/v2/x?q=%zz", "method": "GET", "body": null, "headers": {}}
+   raised ValueError: Invalid hex encoding in query string.
+-- {"op": "sign1", "client": {"client_key": "only-key", "nonce": "1", "timestamp": "2"}, "uri": "http://[2001:db8::1]:8080/a;b?c=d", "method": "DELETE", "body": null, "headers": {}}
+   uri     'http://[2001:db8::1]:8080/a;b?c=d'
+   headers {'Authorization': 'OAuth oauth_nonce="1", oauth_timestamp="2", oauth_version="1.0", oauth_signature_method="HMAC-SHA1", oauth_consumer_key="only-key", oauth_signature="fnsdPhY74cm3WXt5cC%2FGlSb5%2Bk0%3D"'}
+   body    None
+-- {"op": "verify1", "cs": "", "rs": ""}
+   HMAC-SHA1 valid
+-- {"op": "verify1", "cs": null, "rs": null}
+   HMAC-SHA1 valid
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000", "signature_type": "QUERY"}, "uri": "https://api.example.com/v2/x?a=1#top", "method": "GET", "body": null, "headers": {}}
+   uri     'https://api.example.com/v2/x?a=1&oauth_nonce=n0nce&oauth_timestamp=1700000000&oauth_version=1.0&oauth_signature_method=HMAC-SHA1&oauth_consumer_key=ck-demo&oauth_token=tok%2F42&oauth_signature=TnaR9sx48QtD3TT0qV%2FeH38AdHw%3D#top'
+   headers {}
+   body    None
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "cs&demo secret", "resource_owner_key": "tok/42", "resource_owner_secret": "ts~42", "nonce": "n0nce", "timestamp": "1700000000", "signature_type": "QUERY"}, "uri": "https://api.example.com/v2/x?b=2&a=1", "method": "POST", "body": "z=9", "headers": {"Content-Type": "application/x-www-form-urlencoded"}}
+   uri     'https://api.example.com/v2/x?b=2&a=1&oauth_nonce=n0nce&oauth_timestamp=1700000000&oauth_version=1.0&oauth_signature_method=HMAC-SHA1&oauth_consumer_key=ck-demo&oauth_token=tok%2F42&oauth_signature=Bh0UK%2FUCCdWgn4YZ4t0p5Iqy0AM%3D'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'z=9'
+-- {"op": "verify1", "cs": "cs&demo secret", "rs": "ts~42"}
+   HMAC-SHA1 valid
+-- {"op": "sign1", "client": {"client_key": "ck-demo", "client_secret": "", "resource_owner_key": "tok/42", "resource_owner_secret": null, "nonce": "n0nce", "timestamp": "1700000000", "signature_method": "PLAINTEXT"}, "uri": "https://api.example.com/", "method": "GET", "body": null, "headers": {}, "realm": "override"}
+   uri     'https://api.example.com/'
+   headers {'Authorization': 'OAuth realm="override", oauth_nonce="n0nce", oauth_timestamp="1700000000", oauth_version="1.0", oauth_signature_method="PLAINTEXT", oauth_consumer_key="ck-demo", oauth_token="tok%2F42", oauth_signature="%26"'}
+   body    None
+== oauth2 errors
+-- {"op": "error", "error": "access_denied", "description": "The user denied the request.", "uri": null, "state": "xyz"}
+   AccessDeniedError status 400: (access_denied) The user denied the request.
+   twotuples  [('error', 'access_denied'), ('error_description', 'The user denied the request.'), ('state', 'xyz')]
+   urlencoded error=access_denied&error_description=The+user+denied+the+request.&state=xyz
+   json       {"error": "access_denied", "error_description": "The user denied the request.", "state": "xyz"}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=access_denied&error_description=The+user+denied+the+request.&state=xyz
+-- {"op": "error", "error": "invalid_request", "description": null, "uri": null, "state": null}
+   InvalidClientIdError status 400: (invalid_request) Invalid client_id parameter value.
+   twotuples  [('error', 'invalid_request'), ('error_description', 'Invalid client_id parameter value.')]
+   urlencoded error=invalid_request&error_description=Invalid+client_id+parameter+value.
+   json       {"error": "invalid_request", "error_description": "Invalid client_id parameter value."}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=invalid_request&error_description=Invalid+client_id+parameter+value.
+-- {"op": "error", "error": "invalid_client", "description": "Client authentication failed.", "uri": "https://example.com/docs/errors#client", "state": null}
+   InvalidClientError status 401: (invalid_client) Client authentication failed.
+   twotuples  [('error', 'invalid_client'), ('error_description', 'Client authentication failed.'), ('error_uri', 'https://example.com/docs/errors#client')]
+   urlencoded error=invalid_client&error_description=Client+authentication+failed.&error_uri=https%3A%2F%2Fexample.com%2Fdocs%2Ferrors%23client
+   json       {"error": "invalid_client", "error_description": "Client authentication failed.", "error_uri": "https://example.com/docs/errors#client"}
+   headers    {'WWW-Authenticate': 'Bearer error="invalid_client", error_description="Client authentication failed.", error_uri="https://example.com/docs/errors#client"'}
+   in_uri     https://client.example.com/cb?lang=en&error=invalid_client&error_description=Client+authentication+failed.&error_uri=https%3A%2F%2Fexample.com%2Fdocs%2Ferrors%23client
+-- {"op": "error", "error": "invalid_grant", "description": "Code expired", "uri": null, "state": null}
+   InvalidGrantError status 400: (invalid_grant) Code expired
+   twotuples  [('error', 'invalid_grant'), ('error_description', 'Code expired')]
+   urlencoded error=invalid_grant&error_description=Code+expired
+   json       {"error": "invalid_grant", "error_description": "Code expired"}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=invalid_grant&error_description=Code+expired
+-- {"op": "error", "error": "invalid_token", "description": null, "uri": null, "state": "s t"}
+   InvalidTokenError status 401: (invalid_token) The access token provided is expired, revoked, malformed, or invalid for other reasons.
+   twotuples  [('error', 'invalid_token'), ('error_description', 'The access token provided is expired, revoked, malformed, or invalid for other reasons.'), ('state', 's t')]
+   urlencoded error=invalid_token&error_description=The+access+token+provided+is+expired%2C+revoked%2C+malformed%2C+or+invalid+for+other+reasons.&state=s+t
+   json       {"error": "invalid_token", "error_description": "The access token provided is expired, revoked, malformed, or invalid for other reasons.", "state": "s t"}
+   headers    {'WWW-Authenticate': 'Bearer error="invalid_token", error_description="The access token provided is expired, revoked, malformed, or invalid for other reasons."'}
+   in_uri     https://client.example.com/cb?lang=en&error=invalid_token&error_description=The+access+token+provided+is+expired%2C+revoked%2C+malformed%2C+or+invalid+for+other+reasons.&state=s+t
+-- {"op": "error", "error": "insufficient_scope", "description": "", "uri": null, "state": null}
+   InsufficientScopeError status 403: (insufficient_scope) 
+   twotuples  [('error', 'insufficient_scope')]
+   urlencoded error=insufficient_scope
+   json       {"error": "insufficient_scope"}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=insufficient_scope
+-- {"op": "error", "error": "slow_down", "description": "Polling too fast", "uri": null, "state": null}
+   CustomOAuth2Error status 400: (slow_down) Polling too fast
+   twotuples  [('error', 'slow_down'), ('error_description', 'Polling too fast')]
+   urlencoded error=slow_down&error_description=Polling+too+fast
+   json       {"error": "slow_down", "error_description": "Polling too fast"}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=slow_down&error_description=Polling+too+fast
+-- {"op": "error", "error": "temporarily_unavailable", "description": "Back in 5 minutes & counting", "uri": null, "state": "ab/cd"}
+   TemporarilyUnavailableError status 400: (temporarily_unavailable) Back in 5 minutes & counting
+   twotuples  [('error', 'temporarily_unavailable'), ('error_description', 'Back in 5 minutes & counting'), ('state', 'ab/cd')]
+   urlencoded error=temporarily_unavailable&error_description=Back+in+5+minutes+%26+counting&state=ab%2Fcd
+   json       {"error": "temporarily_unavailable", "error_description": "Back in 5 minutes & counting", "state": "ab/cd"}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=temporarily_unavailable&error_description=Back+in+5+minutes+%26+counting&state=ab%2Fcd
+-- {"op": "error", "error": "unsupported_grant_type", "description": "grant_type=password is disabled", "uri": null, "state": null}
+   UnsupportedGrantTypeError status 400: (unsupported_grant_type) grant_type=password is disabled
+   twotuples  [('error', 'unsupported_grant_type'), ('error_description', 'grant_type=password is disabled')]
+   urlencoded error=unsupported_grant_type&error_description=grant_type%3Dpassword+is+disabled
+   json       {"error": "unsupported_grant_type", "error_description": "grant_type=password is disabled"}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=unsupported_grant_type&error_description=grant_type%3Dpassword+is+disabled
+-- {"op": "error", "error": "server_error", "description": "Ünïcode \"quoted\"", "uri": null, "state": null}
+   ServerError status 400: (server_error) Ünïcode "quoted"
+   twotuples  [('error', 'server_error'), ('error_description', 'Ünïcode "quoted"')]
+   urlencoded error=server_error&error_description=%C3%9Cn%C3%AFcode+%22quoted%22
+   json       {"error": "server_error", "error_description": "\u00dcn\u00efcode \"quoted\""}
+   headers    {}
+   in_uri     https://client.example.com/cb?lang=en&error=server_error&error_description=%C3%9Cn%C3%AFcode+%22quoted%22
+== oauth2 web application flow
+-- {"op": "client2", "kind": "web", "args": {"client_id": "s6BhdRkqt3", "scope": ["openid", "profile"], "redirect_url": "https://client.example.com/cb"}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code=None state=None
+-- {"op": "auth_request", "args": {"authorization_url": "https://server.example.com/authorize", "state": "xyz"}}
+   uri     'https://server.example.com/authorize?response_type=code&client_id=s6BhdRkqt3&redirect_uri=https%3A%2F%2Fclient.example.com%2Fcb&scope=openid+profile&state=xyz'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    ''
+-- {"op": "auth_request", "args": {"authorization_url": "https://server.example.com/authorize?audience=api", "state": "st-2", "scope": "email", "prompt": "consent", "login_hint": "", "access_type": "offline"}}
+   uri     'https://server.example.com/authorize?audience=api&response_type=code&client_id=s6BhdRkqt3&redirect_uri=https%3A%2F%2Fclient.example.com%2Fcb&scope=email&state=st-2&prompt=consent&access_type=offline'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    ''
+-- {"op": "auth_request", "args": {"authorization_url": "http://server.example.com/authorize", "state": "x"}}
+   raised InsecureTransportError: (insecure_transport) OAuth 2 MUST utilize https.
+-- {"op": "challenge", "verifier": "dBjftJeZ4CVP-1JzbJyiE3BXlqBFOrk_7wRxJhN6oBQ", "method": "S256"}
+   returned 'L0Kgu1Uur_rwnQxX4bJRsHfv0P-6U0OhpSWjk7BU0Mc'; code_challenge='L0Kgu1Uur_rwnQxX4bJRsHfv0P-6U0OhpSWjk7BU0Mc' code_challenge_method=None
+-- {"op": "challenge", "verifier": "dBjftJeZ4CVP-1JzbJyiE3BXlqBFOrk_7wRxJhN6oBQ", "method": null}
+   returned 'dBjftJeZ4CVP-1JzbJyiE3BXlqBFOrk_7wRxJhN6oBQ'; code_challenge='dBjftJeZ4CVP-1JzbJyiE3BXlqBFOrk_7wRxJhN6oBQ' code_challenge_method='plain'
+-- {"op": "challenge", "verifier": "plain-verifier-value", "method": "plain"}
+   returned None; code_challenge='dBjftJeZ4CVP-1JzbJyiE3BXlqBFOrk_7wRxJhN6oBQ' code_challenge_method='plain'
+-- {"op": "challenge", "verifier": null, "method": "S256"}
+   raised ValueError: Invalid code_verifier
+-- {"op": "request_uri", "args": {"uri": "https://server.example.com/authorize", "state": "pkce-1", "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", "code_challenge_method": "S256", "redirect_uri": "https://client.example.com/cb"}}
+   'https://server.example.com/authorize?response_type=code&client_id=s6BhdRkqt3&redirect_uri=https%3A%2F%2Fclient.example.com%2Fcb&scope=openid+profile&state=pkce-1&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256'
+-- {"op": "request_uri", "args": {"uri": "https://server.example.com/authorize#frag", "scope": [], "state": null, "nonce": "n-0S6_WzA2Mj", "max_age": 0, "display": "page"}}
+   'https://server.example.com/authorize?response_type=code&client_id=s6BhdRkqt3&nonce=n-0S6_WzA2Mj&display=page#frag'
+-- {"op": "parse_callback", "args": {"uri": "https://client.example.com/cb?code=SplxlOBeZQQYbYS6WxSbIA&state=xyz", "state": "xyz"}}
+   {'code': 'SplxlOBeZQQYbYS6WxSbIA', 'state': 'xyz'}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "parse_callback", "args": {"uri": "https://client.example.com/cb?code=abc&state=other", "state": "xyz"}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised MismatchingStateError: (mismatching_state) CSRF Warning! State not equal in request and response.
+-- {"op": "parse_callback", "args": {"uri": "https://client.example.com/cb?state=xyz", "state": "xyz"}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised MissingCodeError: (missing_code) Missing code parameter in response.
+-- {"op": "parse_callback", "args": {"uri": "https://client.example.com/cb?error=access_denied&error_description=User+said+no&state=xyz", "state": "xyz"}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised AccessDeniedError: (access_denied) User said no
+-- {"op": "parse_callback", "args": {"uri": "https://client.example.com/cb?error=invalid_scope", "state": null}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised InvalidScopeError: (invalid_scope) 
+-- {"op": "parse_callback", "args": {"uri": "http://client.example.com/cb?code=x", "state": null}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised InsecureTransportError: (insecure_transport) OAuth 2 MUST utilize https.
+-- {"op": "parse_callback", "args": {"uri": "https://client.example.com/cb?code=c1&code=c2&extra=&state=xyz"}}
+   {'code': 'c2', 'state': 'xyz'}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='c2' state='st-2'
+-- {"op": "token_request", "args": {"token_url": "https://server.example.com/token", "authorization_response": "https://client.example.com/cb?code=SplxlOBeZQQYbYS6WxSbIA&state=xyz", "state": "xyz", "client_secret": "7Fjfp0ZBr1KtDRbnfVdmIw"}}
+   uri     'https://server.example.com/token'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'grant_type=authorization_code&client_id=s6BhdRkqt3&client_secret=7Fjfp0ZBr1KtDRbnfVdmIw&code=SplxlOBeZQQYbYS6WxSbIA&redirect_uri=https%3A%2F%2Fclient.example.com%2Fcb'
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "token_request", "args": {"token_url": "https://server.example.com/token", "code_verifier": "ver-1", "include_client_id": false, "audience": "api", "empty": ""}}
+   uri     'https://server.example.com/token'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'grant_type=authorization_code&code_verifier=ver-1&code=SplxlOBeZQQYbYS6WxSbIA&redirect_uri=https%3A%2F%2Fclient.example.com%2Fcb&audience=api'
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "token_request", "args": {"token_url": "https://server.example.com/token", "body": "a=1&b=", "redirect_url": "https://client.example.com/other", "code": "explicit"}}
+   uri     'https://server.example.com/token'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'a=1&b=&grant_type=authorization_code&client_id=s6BhdRkqt3&code=explicit&redirect_uri=https%3A%2F%2Fclient.example.com%2Fother'
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "token_request", "args": {"token_url": "https://server.example.com/token", "authorization_response": "https://client.example.com/cb?code=zzz&state=bad"}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised MismatchingStateError: (mismatching_state) CSRF Warning! State not equal in request and response.
+-- {"op": "request_body", "args": {"client_id": "someone-else"}}
+   raised ValueError: `client_id` was supplied as an argument, but it does not match `self.client_id`
+-- {"op": "request_body", "args": {"client_id": "s6BhdRkqt3", "scope": ["a", "b"], "count": 3}}
+   'grant_type=authorization_code&client_id=s6BhdRkqt3&code=SplxlOBeZQQYbYS6WxSbIA&scope=a+b&count=3'
+-- {"op": "parse_token", "args": {"body": "{\"access_token\": \"2YotnFZFEjr1zCsicMWpAA\", \"token_type\": \"Bearer\", \"expires_in\": 3600, \"refresh_token\": \"tGzv3JOkF0XG5Qx2TlKWIA\", \"scope\": \"openid profile\"}"}}
+   {'access_token': '2YotnFZFEjr1zCsicMWpAA', 'token_type': 'Bearer', 'expires_in': 3600, 'refresh_token': 'tGzv3JOkF0XG5Qx2TlKWIA', 'scope': ['openid', 'profile'], 'expires_at': 1700003600.0}
+   client access_token='2YotnFZFEjr1zCsicMWpAA' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='Bearer' expires_in=3600 expires_at=1700003600 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/me"}}
+   uri     'https://api.example.com/me'
+   headers {'Authorization': 'Bearer 2YotnFZFEjr1zCsicMWpAA'}
+   body    None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/me?fields=name", "token_placement": "query"}}
+   uri     'https://api.example.com/me?fields=name&access_token=2YotnFZFEjr1zCsicMWpAA'
+   headers None
+   body    None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/me", "http_method": "POST", "body": "a=1", "headers": {"Accept": "*/*"}, "token_placement": "body"}}
+   uri     'https://api.example.com/me'
+   headers {'Accept': '*/*'}
+   body    'a=1&access_token=2YotnFZFEjr1zCsicMWpAA'
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/me", "token_placement": "cookie"}}
+   raised ValueError: Invalid token placement.
+-- {"op": "add_token", "args": {"uri": "http://api.example.com/me"}}
+   raised InsecureTransportError: (insecure_transport) OAuth 2 MUST utilize https.
+-- {"op": "parse_token", "args": {"body": "{\"access_token\": \"x\", \"token_type\": \"Bearer\", \"scope\": \"profile openid\"}"}}
+   {'access_token': 'x', 'token_type': 'Bearer', 'scope': ['profile', 'openid']}
+   client access_token='x' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='Bearer' expires_in=3600 expires_at=1700003600 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "parse_token", "args": {"body": "{\"access_token\": \"x\", \"token_type\": \"Bearer\", \"scope\": \"email\"}", "scope": "profile"}}
+   client access_token='x' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='Bearer' expires_in=3600 expires_at=1700003600 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised Warning: Scope has changed from "profile" to "email".
+-- {"op": "parse_token", "args": {"body": "{\"access_token\": \"y\", \"token_type\": \"bearer\"}", "scope": "admin"}}
+   {'access_token': 'y', 'token_type': 'bearer'}
+   client access_token='y' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=3600 expires_at=1700003600 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "parse_token", "args": {"body": "access_token=z1&token_type=bearer&expires_in=120&scope=write+read&blank=", "scope": "read write"}}
+   {'access_token': 'z1', 'token_type': 'bearer', 'expires_in': 120, 'scope': ['write', 'read'], 'expires_at': 1700000120.0}
+   client access_token='z1' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "parse_token", "args": {"body": "access_token=z1&expires_in=soon"}}
+   client access_token='z1' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised ValueError: invalid literal for int() with base 10: 'soon'
+-- {"op": "parse_token", "args": {"body": "{\"error\": \"invalid_grant\", \"error_description\": \"Code was already redeemed.\"}"}}
+   client access_token='z1' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised InvalidGrantError: (invalid_grant) Code was already redeemed.
+-- {"op": "parse_token", "args": {"body": "{\"error\": \"invalid_request\"}"}}
+   client access_token='z1' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised InvalidClientIdError: (invalid_request) Invalid client_id parameter value.
+-- {"op": "parse_token", "args": {"body": "{\"error\": \"authorization_pending\", \"interval\": 5}"}}
+   client access_token='z1' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised CustomOAuth2Error: (authorization_pending) 
+-- {"op": "parse_token", "args": {"body": "{\"token_type\": \"Bearer\"}"}}
+   client access_token='z1' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised MissingTokenError: (missing_token) Missing access token parameter.
+-- {"op": "parse_token", "args": {"body": ""}}
+   client access_token='z1' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+   raised MissingTokenError: (missing_token) Missing access token parameter.
+-- {"op": "parse_token", "args": {"body": "{\"access_token\": \"nested\", \"token_type\": \"Bearer\", \"expires_in\": null, \"id_token\": \"eyJ.x.y\", \"aud\": [\"a\", \"b\"], \"ok\": true, \"meta\": {\"region\": \"eu\", \"n\": 2}, \"ratio\": null}"}}
+   {'access_token': 'nested', 'token_type': 'Bearer', 'id_token': 'eyJ.x.y', 'aud': ['a', 'b'], 'ok': True, 'meta': {'region': 'eu', 'n': 2}, 'ratio': None}
+   client access_token='nested' refresh_token='tGzv3JOkF0XG5Qx2TlKWIA' token_type='Bearer' expires_in=120 expires_at=1700000120 code='SplxlOBeZQQYbYS6WxSbIA' state='st-2'
+-- {"op": "refresh", "args": {"token_url": "https://server.example.com/token"}}
+   uri     'https://server.example.com/token'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'grant_type=refresh_token&scope=openid+profile&refresh_token=tGzv3JOkF0XG5Qx2TlKWIA'
+-- {"op": "refresh", "args": {"token_url": "https://server.example.com/token", "refresh_token": "override", "scope": ["openid"], "client_id": "s6BhdRkqt3", "client_secret": "sec"}}
+   uri     'https://server.example.com/token'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'grant_type=refresh_token&client_id=s6BhdRkqt3&client_secret=sec&scope=openid&refresh_token=override'
+-- {"op": "refresh", "args": {"token_url": "http://server.example.com/token"}}
+   raised InsecureTransportError: (insecure_transport) OAuth 2 MUST utilize https.
+-- {"op": "revoke", "args": {"revocation_url": "https://server.example.com/revoke", "token": "2YotnFZFEjr1zCsicMWpAA"}}
+   uri     'https://server.example.com/revoke'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'token=2YotnFZFEjr1zCsicMWpAA&token_type_hint=access_token'
+-- {"op": "revoke", "args": {"revocation_url": "https://server.example.com/revoke", "token": "tGzv3JOkF0XG5Qx2TlKWIA", "token_type_hint": "refresh_token", "body": "client_id=s6BhdRkqt3"}}
+   uri     'https://server.example.com/revoke'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'client_id=s6BhdRkqt3&token=tGzv3JOkF0XG5Qx2TlKWIA&token_type_hint=refresh_token'
+-- {"op": "revoke", "args": {"revocation_url": "https://server.example.com/revoke?x=1", "token": "t", "token_type_hint": null, "callback": "package.myCallback", "extra": "1"}}
+   uri     'https://server.example.com/revoke?x=1&token=t&extra=1&callback=package.myCallback'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    ''
+-- {"op": "revoke", "args": {"revocation_url": "http://server.example.com/revoke", "token": "t"}}
+   raised InsecureTransportError: (insecure_transport) OAuth 2 MUST utilize https.
+== oauth2 backend application flow
+-- {"op": "client2", "kind": "backend", "args": {"client_id": "svc-reporting"}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code=None state=None
+-- {"op": "request_body", "args": {}}
+   'grant_type=client_credentials'
+-- {"op": "request_body", "args": {"scope": "metrics.read", "include_client_id": true, "client_secret": "s3cr3t-value"}}
+   'grant_type=client_credentials&client_id=svc-reporting&client_secret=s3cr3t-value&scope=metrics.read'
+-- {"op": "token_request", "args": {"token_url": "https://auth.example.com/oauth/token", "scope": ["a", "b"], "audience": "https://api.example.com"}}
+   uri     'https://auth.example.com/oauth/token'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'grant_type=client_credentials&scope=a+b&audience=https%3A%2F%2Fapi.example.com'
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code=None state=None
+-- {"op": "parse_token", "args": {"body": "{\"access_token\": \"svc-tok\", \"token_type\": \"Bearer\", \"expires_in\": \"900\"}"}}
+   {'access_token': 'svc-tok', 'token_type': 'Bearer', 'expires_in': '900', 'expires_at': 1700000900.0}
+   client access_token='svc-tok' refresh_token=None token_type='Bearer' expires_in='900' expires_at=1700000900 code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/reports", "headers": {"X-Trace": "1"}}}
+   uri     'https://api.example.com/reports'
+   headers {'X-Trace': '1', 'Authorization': 'Bearer svc-tok'}
+   body    None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/reports", "token_placement": "body"}}
+   uri     'https://api.example.com/reports'
+   headers None
+   body    'access_token=svc-tok'
+== oauth2 clients built from saved tokens
+-- {"op": "client2", "kind": "web", "args": {"client_id": "c", "token": {"access_token": "old", "expires_at": 1600000000, "token_type": "Bearer"}}}
+   client access_token='old' refresh_token=None token_type='Bearer' expires_in=None expires_at=1600000000 code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/x"}}
+   raised TokenExpiredError: (token_expired) 
+-- {"op": "client2", "kind": "web", "args": {"client_id": "c", "token": {"access_token": "fresh", "expires_at": "1800000000"}}}
+   client access_token='fresh' refresh_token=None token_type='Bearer' expires_in=None expires_at=1800000000 code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/x"}}
+   uri     'https://api.example.com/x'
+   headers {'Authorization': 'Bearer fresh'}
+   body    None
+-- {"op": "client2", "kind": "web", "args": {"client_id": "c", "token": {"access_token": "odd", "expires_at": "tomorrow"}}}
+   client access_token='odd' refresh_token=None token_type='Bearer' expires_in=None expires_at=None code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/x"}}
+   uri     'https://api.example.com/x'
+   headers {'Authorization': 'Bearer odd'}
+   body    None
+-- {"op": "client2", "kind": "web", "args": {"client_id": "c", "token_type": "JWT", "access_token": "j"}}
+   client access_token='j' refresh_token=None token_type='JWT' expires_in=None expires_at=None code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/x"}}
+   raised ValueError: Unsupported token type: JWT
+-- {"op": "client2", "kind": "web", "args": {"client_id": "c"}}
+   client access_token=None refresh_token=None token_type='Bearer' expires_in=None expires_at=None code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/x"}}
+   raised ValueError: Missing access token.
+-- {"op": "client2", "kind": "web", "args": {"client_id": "c", "default_token_placement": "query", "token": {"access_token": "q-tok", "refresh_token": "r", "expires_in": 60}}}
+   client access_token='q-tok' refresh_token='r' token_type='Bearer' expires_in=60 expires_at=1700000060.0 code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://api.example.com/x?y=1"}}
+   uri     'https://api.example.com/x?y=1&access_token=q-tok'
+   headers None
+   body    None
+-- {"op": "refresh", "args": {"token_url": "https://server.example.com/token", "body": "keep=1"}}
+   uri     'https://server.example.com/token'
+   headers {'Content-Type': 'application/x-www-form-urlencoded'}
+   body    'keep=1&grant_type=refresh_token&refresh_token=r'
+-- {"op": "client2", "kind": "web", "args": {"client_id": "mac-client", "token": {"access_token": "h480djs93hd8", "token_type": "MAC", "mac_key": "489dks293j39", "mac_algorithm": "hmac-sha-1"}}}
+   client access_token='h480djs93hd8' refresh_token=None token_type='MAC' expires_in=None expires_at=None code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://example.com:8443/resource/1?b=1&a=2", "nonce": "264095:dj83hs9s", "ext": "a,b,c"}}
+   uri     'https://example.com:8443/resource/1?b=1&a=2'
+   headers {'Authorization': 'MAC id="h480djs93hd8", nonce="264095:dj83hs9s", ext="a,b,c", mac="7W+SyNDOStKAC9d/1emY7yxxgK0="'}
+   body    None
+-- {"op": "add_token", "args": {"uri": "https://example.com/resource/1", "http_method": "post", "body": "hello=world", "nonce": "264095:7d8f3e4a"}}
+   uri     'https://example.com/resource/1'
+   headers {'Authorization': 'MAC id="h480djs93hd8", nonce="264095:7d8f3e4a", bodyhash="LWDU4SmkpUBi2PmCw5f1bRHXqbk=", mac="9EFTdu2rj9ynBpKczVotRGFJLpE="'}
+   body    'hello=world'
+-- {"op": "add_token", "args": {"uri": "https://example.com/resource/1", "token_placement": "query", "nonce": "1:2"}}
+   raised ValueError: Invalid token placement.
+-- {"op": "client2", "kind": "web", "args": {"client_id": "mac-client", "token": {"access_token": "h480djs93hd8", "token_type": "mac", "mac_key": "489dks293j39", "mac_algorithm": "hmac-sha-256"}}}
+   client access_token='h480djs93hd8' refresh_token=None token_type='mac' expires_in=None expires_at=None code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://example.com/resource/1", "nonce": "264095:dj83hs9s", "headers": {"Accept": "text/html"}}}
+   uri     'https://example.com/resource/1'
+   headers {'Accept': 'text/html', 'Authorization': 'MAC id="h480djs93hd8", nonce="264095:dj83hs9s", mac="EKR2cLHEHpF5oBLsJY/KOVq5Wrf7TZIFlUnT2K8lo6k="'}
+   body    None
+-- {"op": "client2", "kind": "web", "args": {"client_id": "mac-client", "token": {"access_token": "h", "token_type": "MAC", "mac_key": "k", "mac_algorithm": "hmac-md5"}}}
+   client access_token='h' refresh_token=None token_type='MAC' expires_in=None expires_at=None code=None state=None
+-- {"op": "add_token", "args": {"uri": "https://example.com/resource/1", "nonce": "1:2"}}
+   raised ValueError: unknown hash algorithm
+== request audit
+-- {"op": "audit", "log": "requests.log", "consumers": "consumers.tsv", "now": 1700000000, "window": 600}
+    1 GET    /v1/orders             ck-mobile   ok
+    2 POST   /v1/orders/1187        ck-partner  ok
+    3 GET    /v1/users/me           ck-cron     ok
+    4 DELETE /v1/search             ck-mobile   ok
+    5 GET    /v1/inventory          ck-partner  bad signature: HMAC-SHA512
+    6 PUT    /v1/reports/daily      ck-cron     ok
+    7 GET    /v1/orders             ck-mobile   ok
+    8 POST   /v1/orders/1187        ck-partner  bad signature: HMAC-SHA256
+    9 GET    /v1/users/me           ck-cron     ok
+   10 DELETE /v1/search             ck-mobile   ok
+   11 GET    /v1/inventory          ck-partner  ok
+   12 PUT    /v1/reports/daily      ck-cron     ok
+   13 GET    /v1/orders             ck-mobile   ok
+   14 POST   /v1/orders/1187        ck-partner  ok
+   15 GET    /v1/users/me           ck-cron     ok
+   16 DELETE /v1/search             ck-mobile   bad signature: PLAINTEXT
+   17 GET    /v1/inventory          ck-partner  ok
+   18 PUT    /v1/reports/daily      ck-cron     ok
+   19 GET    /v1/orders             ck-mobile   ok
+   20 POST   /v1/orders/1187        ck-partner  ok
+   21 GET    /v1/users/me           ck-unknown  unknown consumer: ck-unknown
+   22 DELETE /v1/search             ck-mobile   ok
+   23 GET    /v1/inventory          ck-partner  ok
+   24 PUT    /v1/reports/daily      ck-cron     ok
+   25 GET    /v1/orders             ck-mobile   ok
+   26 POST   /v1/orders/1187        ck-partner  stale timestamp: 3875 s
+   27 GET    /v1/users/me           ck-cron     bad signature: HMAC-SHA1
+   28 DELETE /v1/search             ck-mobile   ok
+   29 GET    /v1/inventory          ck-partner  ok
+   30 PUT    /v1/reports/daily      ck-cron     ok
+   31 GET    /v1/users/me           ck-cron     replayed nonce: n8323
+   32 GET    /v1/orders             ck-mobile   ok
+   33 POST   /v1/orders/1187        ck-partner  ok
+   34 GET    /v1/users/me           ck-cron     ok
+   35 DELETE /v1/search             ck-mobile   missing parameter: oauth_nonce
+   36 GET    /v1/inventory          ck-partner  ok
+   37 PUT    /v1/reports/daily      ck-cron     ok
+   38 GET    /v1/health             -           malformed header: Malformed authorization header
+   39 GET    /v1/x                  -           malformed header: Malformed authorization header
+   -            0 accepted  2 rejected
+   ck-cron     10 accepted  2 rejected
+   ck-mobile   10 accepted  2 rejected
+   ck-partner   9 accepted  3 rejected
+   ck-unknown   0 accepted  1 rejected
+   bad signature               4
+   malformed header            2
+   missing parameter           1
+   replayed nonce              1
+   stale timestamp             1
+   unknown consumer            1

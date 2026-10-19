@@ -1,0 +1,4464 @@
+// mini_oauthlib: oauthlib 3.2.2 as Ubuntu 24.04 ships it, the library
+// behind requests-oauthlib that signs API requests with OAuth 1 and runs
+// the client side of OAuth 2.
+//
+// OAuth 1 (RFC 5849): escape and unescape, urldecode with its checks,
+// the Authorization header parser, the base string URI (default ports,
+// a Host override, IPv6 hosts as ipaddress prints them), parameter
+// collection and normalization, the signature base string, HMAC-SHA1,
+// HMAC-SHA256, HMAC-SHA512 and PLAINTEXT signatures and their
+// verification, and Client.sign with its sanity checks, oauth_body_hash,
+// and the header, query and body signature types.
+//
+// OAuth 2 (RFC 6749): WebApplicationClient and BackendApplicationClient
+// with the authorization request, the callback, the token request, token
+// responses in JSON or form encoding (expiry, scope changes, errors),
+// bearer and MAC tokens, refresh and revocation requests and PKCE
+// challenges; the error classes with their JSON, form, header and
+// redirect forms.
+//
+// Underneath are urllib.parse, urllib.request's parse_http_list,
+// ipaddress, hmac with SHA-1 and SHA-2, base64 and json. On top is an
+// audit of a day of signed API calls from a server's log: consumer and
+// token lookup, the timestamp window, replayed nonces and signatures.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through oauthlib itself.
+
+// ------------------------------------------------------------ bytes and text
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+// becomes one U+FFFD, as CPython's decoder does it.
+fn utf8_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let mut need: i64 = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            }
+            if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            }
+            if c == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_str_bytes(mut out, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut ok = true;
+        for k in 0..need {
+            if j >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[j];
+            let (l, h) = if k == 0 { (lo, hi) } else { (0x80 as u8, 0xBF as u8) };
+            if d < l or d > h {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            for k in i..j {
+                out.push(b[k]);
+            }
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ ipaddress
+
+// IPv4Address's parser: four decimal octets, no leading zeros.
+fn is_ipv4(s: Str) -> bool {
+    let parts = split_on(s, b'.');
+    if parts.len() != 4 {
+        return false;
+    }
+    for i in 0..parts.len() {
+        let b = to_bytes(parts[i]);
+        if b.len() == 0 or b.len() > 3 {
+            return false;
+        }
+        let mut n: i64 = 0;
+        for k in 0..b.len() {
+            if not is_digit(b[k]) {
+                return false;
+            }
+            n = n * 10 + (b[k] - b'0') as i64;
+        }
+        if n > 255 or (b.len() > 1 and b[0] == b'0') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_hextet(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 or b.len() > 4 {
+        return false;
+    }
+    for k in 0..b.len() {
+        if not is_hex(b[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+// IPv6Address's parser: at most one `::`, eight hextets in all, an IPv4
+// tail, and a `%scope`.
+fn is_ipv6(s: Str) -> bool {
+    let (addr, has_scope, scope) = partition(s, b'%');
+    if has_scope and (scope.len() == 0 or has_byte(scope, b'%')) {
+        return false;
+    }
+    let mut parts = split_on(addr, b':');
+    if parts.len() < 3 {
+        return false;
+    }
+    let last = parts[parts.len() - 1].clone();
+    if has_byte(last, b'.') {
+        if not is_ipv4(last) {
+            return false;
+        }
+        parts.pop();
+        parts.push("0".to_string());
+        parts.push("0".to_string());
+    }
+    if parts.len() > 9 {
+        return false;
+    }
+    let n = parts.len();
+    let mut skip: i64 = -1;
+    for i in 1..n - 1 {
+        if parts[i].len() == 0 {
+            if skip >= 0 {
+                return false;
+            }
+            skip = i;
+        }
+    }
+    let mut hi = n;
+    let mut lo: i64 = 0;
+    if skip >= 0 {
+        hi = skip;
+        lo = n - skip - 1;
+        if parts[0].len() == 0 {
+            hi -= 1;
+            if hi > 0 {
+                return false;
+            }
+        }
+        if parts[n - 1].len() == 0 {
+            lo -= 1;
+            if lo > 0 {
+                return false;
+            }
+        }
+        if 8 - (hi + lo) < 1 {
+            return false;
+        }
+    } else if n != 8 or parts[0].len() == 0 or parts[n - 1].len() == 0 {
+        return false;
+    }
+    for i in 0..hi {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    for i in n - lo..n {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// urllib.parse's _check_bracketed_host.
+fn check_bracketed_host(host: Str) -> Result[(), String] {
+    let b = to_bytes(host);
+    if b.len() > 0 and (b[0] == b'v' or b[0] == b'V') {
+        // \A[vV][a-fA-F0-9]+\..+\Z
+        let mut i: i64 = 1;
+        while i < b.len() and is_hex(b[i]) {
+            i += 1;
+        }
+        if i == 1 or i >= b.len() or b[i] != b'.' or i + 1 >= b.len() {
+            return Err("IPvFuture address is invalid".to_string());
+        }
+        return Ok(());
+    }
+    if is_ipv4(host) {
+        return Err("An IPv4 address cannot be in brackets".to_string());
+    }
+    if not is_ipv6(host) {
+        return Err(f"{py_repr(host.to_string())} does not appear to be an IPv4 or IPv6 address");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ split and parse
+
+fn uses_relative(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss"], s)
+}
+
+fn uses_netloc(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file", "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtsps", "rtspu", "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss", "itms-services"], s)
+}
+
+fn uses_params(s: Str) -> bool {
+    contains_str(["", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu", "sip", "sips", "mms", "sftp", "tel"], s)
+}
+
+fn is_scheme_char(c: u8) -> bool {
+    is_alnum(c) or c == b'+' or c == b'-' or c == b'.'
+}
+
+#[derive(Clone)]
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+#[derive(Clone)]
+struct Parsed {
+    scheme: String,
+    netloc: String,
+    path: String,
+    params: String,
+    query: String,
+    fragment: String,
+}
+
+impl Split {
+    // _userinfo
+    fn username(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (user, _, _) = partition(userinfo, b':');
+        Some(user)
+    }
+
+    fn password(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (_, have_password, password) = partition(userinfo, b':');
+        if have_password { Some(password) } else { None }
+    }
+
+    // _hostinfo: the host and the port as written.
+    fn hostinfo(ref self) -> (String, Option[String]) {
+        let (_, _, hostinfo) = rpartition(self.netloc, b'@');
+        let (_, have_open_br, bracketed) = partition(hostinfo, b'[');
+        let mut host = String.new();
+        let mut port = String.new();
+        if have_open_br {
+            let (h, _, rest) = partition(bracketed, b']');
+            let (_, _, p) = partition(rest, b':');
+            host = h;
+            port = p;
+        } else {
+            let (h, _, p) = partition(hostinfo, b':');
+            host = h;
+            port = p;
+        }
+        if port.len() == 0 { (host, None) } else { (host, Some(port)) }
+    }
+
+    fn hostname(ref self) -> Option[String] {
+        let (host, _) = self.hostinfo();
+        if host.len() == 0 {
+            return None;
+        }
+        // a scope's zone keeps its case
+        let (h, percent, zone) = partition(host, b'%');
+        if percent { Some(f"{lower(h)}%{zone}") } else { Some(lower(h)) }
+    }
+
+    fn port(ref self) -> Result[Option[i64], String] {
+        let (_, port) = self.hostinfo();
+        let p = match port {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let b = to_bytes(p);
+        let mut n: i64 = 0;
+        for i in 0..b.len() {
+            if not is_digit(b[i]) {
+                return Err(f"Port could not be cast to integer value as {py_repr(p)}");
+            }
+            if n <= 1000000 {
+                n = n * 10 + (b[i] - b'0') as i64;
+            }
+        }
+        if n > 65535 {
+            return Err("Port out of range 0-65535".to_string());
+        }
+        Ok(Some(n))
+    }
+}
+
+// _splitnetloc: the netloc runs to the first of / ? #.
+fn split_netloc(url: Str, start: i64) -> (String, String) {
+    let b = to_bytes(url);
+    let mut delim = b.len();
+    for i in start..b.len() {
+        if b[i] == b'/' or b[i] == b'?' or b[i] == b'#' {
+            delim = i;
+            break;
+        }
+    }
+    (byte_str(b, start, delim), byte_str(b, delim, b.len()))
+}
+
+fn check_bracketed_netloc(netloc: Str) -> Result[(), String] {
+    let (_, _, host_and_port) = rpartition(netloc, b'@');
+    let (before, have_open_br, bracketed) = partition(host_and_port, b'[');
+    if have_open_br {
+        if before.len() > 0 {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        let (host, _, port) = partition(bracketed, b']');
+        if port.len() > 0 and first_byte(port) != b':' {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        return check_bracketed_host(host);
+    }
+    let (host, _, _) = partition(host_and_port, b':');
+    check_bracketed_host(host)
+}
+
+fn urlsplit(url_in: Str, scheme_in: Str) -> Result[Split, String] {
+    // lstrip the C0 controls and space, then drop every tab and line end
+    let ub = to_bytes(url_in);
+    let mut st: i64 = 0;
+    while st < ub.len() and ub[st] <= 32 {
+        st += 1;
+    }
+    let mut kept: Vec[u8] = Vec.new();
+    for i in st..ub.len() {
+        let c = ub[i];
+        if c != b'\t' and c != b'\r' and c != b'\n' {
+            kept.push(c);
+        }
+    }
+    let mut url = from_bytes(kept);
+    let mut scheme = strip_scheme(scheme_in);
+    let mut netloc = String.new();
+    let mut query = String.new();
+    let mut fragment = String.new();
+    let i = find_byte(url, b':');
+    if i > 0 and is_alpha(first_byte(url)) {
+        let b = to_bytes(url);
+        let mut all = true;
+        for k in 0..i {
+            if not is_scheme_char(b[k]) {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            scheme = lower(byte_str(b, 0, i));
+            url = byte_str(b, i + 1, b.len());
+        }
+    }
+    if starts_with(url, "//") {
+        let (n, rest) = split_netloc(url, 2);
+        netloc = n;
+        url = rest;
+        let open = has_byte(netloc, b'[');
+        let close = has_byte(netloc, b']');
+        if open != close {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        if open and close {
+            check_bracketed_netloc(netloc)?;
+        }
+    }
+    if has_byte(url, b'#') {
+        let (u, _, f) = partition(url, b'#');
+        url = u;
+        fragment = f;
+    }
+    if has_byte(url, b'?') {
+        let (u, _, q) = partition(url, b'?');
+        url = u;
+        query = q;
+    }
+    Ok(Split { scheme: scheme, netloc: netloc, path: url, query: query, fragment: fragment })
+}
+
+// The scheme argument: C0 controls and space stripped at both ends, tabs
+// and line ends dropped.
+fn strip_scheme(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and b[st] <= 32 {
+        st += 1;
+    }
+    while en > st and b[en - 1] <= 32 {
+        en -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in st..en {
+        if b[i] != b'\t' and b[i] != b'\r' and b[i] != b'\n' {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+// _splitparams: the params follow the `;` in the last segment.
+fn split_params(url: Str) -> (String, String) {
+    let i = if has_byte(url, b'/') {
+        let b = to_bytes(url);
+        let mut at: i64 = -1;
+        for k in rfind_byte(url, b'/')..b.len() {
+            if b[k] == b';' {
+                at = k;
+                break;
+            }
+        }
+        if at < 0 {
+            return (url.to_string(), String.new());
+        }
+        at
+    } else {
+        find_byte(url, b';')
+    };
+    (slice(url, 0, i), slice_from(url, i + 1))
+}
+
+fn urlparse(url: Str, scheme: Str) -> Result[Parsed, String] {
+    let s = urlsplit(url, scheme)?;
+    let mut path = s.path.clone();
+    let mut params = String.new();
+    if uses_params(s.scheme) and has_byte(path, b';') {
+        let (p, a) = split_params(path);
+        path = p;
+        params = a;
+    }
+    Ok(Parsed { scheme: s.scheme, netloc: s.netloc, path: path, params: params, query: s.query, fragment: s.fragment })
+}
+
+fn urlunsplit(scheme: Str, netloc: Str, path: Str, query: Str, fragment: Str) -> String {
+    let mut url = path.to_string();
+    if netloc.len() > 0 {
+        if url.len() > 0 and first_byte(url) != b'/' {
+            url = f"/{url}";
+        }
+        url = f"//{netloc}{url}";
+    } else if starts_with(url, "//") {
+        url = f"//{url}";
+    } else if scheme.len() > 0 and uses_netloc(scheme) and (url.len() == 0 or first_byte(url) == b'/') {
+        url = f"//{url}";
+    }
+    if scheme.len() > 0 {
+        url = f"{scheme}:{url}";
+    }
+    if query.len() > 0 {
+        url = f"{url}?{query}";
+    }
+    if fragment.len() > 0 {
+        url = f"{url}#{fragment}";
+    }
+    url
+}
+
+fn unsplit(s: ref Split) -> String {
+    urlunsplit(s.scheme, s.netloc, s.path, s.query, s.fragment)
+}
+
+fn urlunparse(p: ref Parsed) -> String {
+    let path = if p.params.len() > 0 { f"{p.path};{p.params}" } else { p.path.clone() };
+    urlunsplit(p.scheme, p.netloc, path, p.query, p.fragment)
+}
+
+// ------------------------------------------------------------ quoting
+
+fn always_safe(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+// quote: every byte of the UTF-8 that is neither always safe nor in
+// `safe` becomes %XX.
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    let sb = to_bytes(safe);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        let mut ok = c < 128 and always_safe(c);
+        for k in 0..sb.len() {
+            if sb[k] < 128 and sb[k] == c {
+                ok = true;
+            }
+        }
+        if ok {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn quote_plus(s: Str, safe: Str) -> String {
+    if not has_byte(s, b' ') {
+        return quote(s, safe);
+    }
+    replace_byte(quote(s, f"{safe} "), b' ', "+")
+}
+
+// _unquote_impl on ASCII: %XX with two hex digits is a byte, anything
+// else stays as written.
+fn unquote_bytes(b: ref Vec[u8], from: i64, to: i64, out: mut ref Vec[u8]) {
+    let mut i = from;
+    while i < to {
+        if b[i] == b'%' and i + 2 < to and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push(hex_val(b[i + 1]) * 16 + hex_val(b[i + 2]));
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+}
+
+// unquote: the ASCII runs are unquoted and decoded as UTF-8 one run at a
+// time; the rest is kept as it is.
+fn unquote(s: Str) -> String {
+    if not has_byte(s, b'%') {
+        return s.to_string();
+    }
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let st = i;
+        if b[i] < 128 {
+            while i < b.len() and b[i] < 128 {
+                i += 1;
+            }
+            let mut run: Vec[u8] = Vec.new();
+            unquote_bytes(b, st, i, mut run);
+            push_str_bytes(mut out, utf8_replace(run));
+        } else {
+            while i < b.len() and b[i] >= 128 {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    from_bytes(out)
+}
+
+fn unquote_plus(s: Str) -> String {
+    unquote(replace_byte(s, b'+', " "))
+}
+
+// ------------------------------------------------------------ queries
+
+#[derive(Clone)]
+struct Pair {
+    name: String,
+    value: String,
+}
+
+fn parse_qsl(qs: Str, keep_blank: bool, strict: bool, sep: Str) -> Result[Vec[Pair], String] {
+    let mut r: Vec[Pair] = Vec.new();
+    if qs.len() == 0 {
+        return Ok(r);
+    }
+    let fields = split_on(qs, first_byte(sep));
+    for i in 0..fields.len() {
+        let nv = fields[i].clone();
+        if nv.len() == 0 and not strict {
+            continue;
+        }
+        let (name, has_eq, value) = partition(nv, b'=');
+        if not has_eq and strict {
+            return Err(f"bad query field: {py_repr(nv)}");
+        }
+        if value.len() > 0 or keep_blank {
+            r.push(Pair { name: unquote_plus(name), value: unquote_plus(value) });
+        }
+    }
+    Ok(r)
+}
+
+// urlencode over pairs, with quote_plus or quote.
+fn urlencode(pairs: ref Vec[Pair], safe: Str, plus: bool) -> String {
+    let mut l: Vec[String] = Vec.new();
+    for i in 0..pairs.len() {
+        let k = if plus { quote_plus(pairs[i].name, safe) } else { quote(pairs[i].name, safe) };
+        let v = if plus { quote_plus(pairs[i].value, safe) } else { quote(pairs[i].value, safe) };
+        l.push(f"{k}={v}");
+    }
+    join(l, "&")
+}
+
+// ------------------------------------------------------------ the files
+
+
+// ---------------------------------------------------------------- chars
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn is_digit_c(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ident_start(c: char) -> bool {
+    c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_ident(c: char) -> bool {
+    is_ident_start(c) or is_digit_c(c)
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn repeat(c: char, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(c);
+        k += 1;
+    }
+    s
+}
+
+// n >= 0 in the given base, with lower- or upper-case letters.
+fn to_base(n: i64, base: i64, upper: bool) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        let d = m % base;
+        if d < 10 {
+            rev.push(chr(48 + d));
+        } else if upper {
+            rev.push(chr(55 + d));
+        } else {
+            rev.push(chr(87 + d));
+        }
+        m = m / base;
+    }
+    let mut s = String.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 {
+        s.push(rev[k]);
+        k -= 1;
+    }
+    s
+}
+
+// Lower-case hex, zero-padded to at least width digits.
+fn hex(n: i64, width: i64) -> String {
+    let h = to_base(n, 16, false);
+    let n_digits = char_count(h);
+    if n_digits >= width {
+        h
+    } else {
+        f"{repeat('0', width - n_digits)}{h}"
+    }
+}
+
+fn is_hex_char(c: char) -> bool {
+    is_digit_c(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' { chr(c as i64 + 32) } else { c }
+}
+
+// ---------------------------------------------------------------- Python's str
+
+// str.isspace, the set str.strip() and int() skip.
+fn is_py_space(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0
+        or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028
+        or n == 0x2029 or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+// str.isprintable, for repr: everything but controls, separators other
+// than the space, and format characters.
+fn is_py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 32 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x2064) or n == 0x3000 or n == 0xfeff {
+        return false;
+    }
+    true
+}
+
+fn py_strip(s: ref String) -> String {
+    let cs = to_chars(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    text(cs, a, b)
+}
+
+fn has_space(s: ref String) -> bool {
+    for c in s.chars() {
+        if is_py_space(c) {
+            return true;
+        }
+    }
+    false
+}
+
+// repr(s).
+fn py_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if is_py_printable(c) {
+            out.push(c);
+        } else if (c as i64) < 0x100 {
+            out.push_str(f"\\x{hex(c as i64, 2)}");
+        } else if (c as i64) < 0x10000 {
+            out.push_str(f"\\u{hex(c as i64, 4)}");
+        } else {
+            out.push_str(f"\\U{hex(c as i64, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+// int(s) for a str: white space around, a sign, then decimal digits with
+// single underscores between them. None where int() raises ValueError.
+fn py_int(s: ref String) -> Option[i64] {
+    let t = to_chars(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v: i64 = 0;
+    let mut prev_digit = false;
+    while i < t.len() {
+        if t[i] == '_' {
+            if not prev_digit or i + 1 == t.len() {
+                return None;
+            }
+            prev_digit = false;
+        } else if is_digit_c(t[i]) {
+            v = v * 10 + (t[i] as i64 - 48);
+            prev_digit = true;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// s.strip(chars): the characters of `chars` cut from both ends.
+fn strip_chars(s: ref String, chars: ref String) -> String {
+    let cs = to_chars(s);
+    let set = to_chars(chars);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and set.contains(cs[a]) {
+        a += 1;
+    }
+    while b > a and set.contains(cs[b - 1]) {
+        b -= 1;
+    }
+    text(cs, a, b)
+}
+
+// s.rsplit(sep, 1) for a one-character sep, None if sep is not in s.
+fn rsplit1(s: ref String, sep: ref String) -> Option[(String, String)] {
+    let cs = to_chars(s);
+    let sc = to_chars(sep);
+    if sc.len() == 0 {
+        return None;
+    }
+    let n = sc.len();
+    let mut k = cs.len() - n;
+    while k >= 0 {
+        let mut ok = true;
+        for j in 0..n {
+            if cs[k + j] != sc[j] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return Some((text(cs, 0, k), text(cs, k + n, cs.len())));
+        }
+        k -= 1;
+    }
+    None
+}
+
+// s[n:] in characters.
+fn drop_chars(s: ref String, n: i64) -> String {
+    let cs = to_chars(s);
+    if n >= cs.len() {
+        return String.new();
+    }
+    text(cs, n, cs.len())
+}
+
+// ---------------------------------------------------------------- values
+
+// A Python value as json.loads reads it, or as oauthlib keeps it. A
+// Dict keeps its keys in insertion order, as dict does.
+#[derive(Clone)]
+enum Val {
+    Null,
+    Bool(bool),
+    Int(i64),
+    // a float, as repr() writes it
+    Raw(String),
+    Str(String),
+    List(Vec[Val]),
+    Dict(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: Val,
+}
+
+fn sv(s: ref String) -> Val {
+    Val.Str(s.clone())
+}
+
+fn key_index(ms: ref Vec[Member], key: ref String) -> i64 {
+    for k in 0..ms.len() {
+        if ms[k].key == key {
+            return k;
+        }
+    }
+    -1
+}
+
+// d[key] = val: a new key goes at the end, an old one keeps its place.
+fn dict_set(ms: mut ref Vec[Member], key: ref String, val: own Val) {
+    let k = key_index(ms, key);
+    if k >= 0 {
+        ms[k].val = val;
+    } else {
+        ms.push(Member { key: key.clone(), val: val });
+    }
+}
+
+fn dict_get(ms: ref Vec[Member], key: ref String) -> Option[Val] {
+    let k = key_index(ms, key);
+    if k >= 0 { Some(ms[k].val.clone()) } else { None }
+}
+
+fn get(v: ref Val, key: Str) -> Option[Val] {
+    match v {
+        Val.Dict(ms) => dict_get(ms, key.to_string()),
+        _ => None,
+    }
+}
+
+fn get_str(v: ref Val, key: Str) -> String {
+    match get(v, key) {
+        Some(Val.Str(s)) => s,
+        _ => String.new(),
+    }
+}
+
+// The value, or the items of a list: what code that does not know
+// whether an element repeats does with it.
+fn as_list(v: ref Option[Val]) -> Vec[Val] {
+    match v {
+        None => Vec.new(),
+        Some(Val.Null) => Vec.new(),
+        Some(Val.List(items)) => items.clone(),
+        Some(x) => {
+            let mut one: Vec[Val] = Vec.new();
+            one.push(x.clone());
+            one
+        }
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Null => false,
+        Val.Bool(b) => *b,
+        Val.Int(n) => *n != 0,
+        Val.Raw(_) => true,
+        Val.Str(s) => s.len() > 0,
+        Val.List(items) => items.len() > 0,
+        Val.Dict(ms) => ms.len() > 0,
+    }
+}
+
+fn type_name(v: ref Val) -> String {
+    match v {
+        Val.Null => "NoneType".to_string(),
+        Val.Bool(_) => "bool".to_string(),
+        Val.Int(_) => "int".to_string(),
+        Val.Raw(_) => "float".to_string(),
+        Val.Str(_) => "str".to_string(),
+        Val.List(_) => "list".to_string(),
+        Val.Dict(_) => "dict".to_string(),
+    }
+}
+
+// repr(v); `ordered` writes dicts the way OrderedDict prints itself.
+fn repr_val(v: ref Val, ordered: bool) -> String {
+    match v {
+        Val.Null => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Raw(r) => r.clone(),
+        Val.Str(s) => py_repr(s),
+        Val.List(items) => {
+            let mut out = "[".to_string();
+            for k in 0..items.len() {
+                if k > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(repr_val(items[k], ordered));
+            }
+            out.push(']');
+            out
+        }
+        Val.Dict(ms) => {
+            if ordered and ms.len() == 0 {
+                return "OrderedDict()".to_string();
+            }
+            let mut out = if ordered { "OrderedDict({".to_string() } else { "{".to_string() };
+            for k in 0..ms.len() {
+                if k > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(py_repr(ms[k].key));
+                out.push_str(": ");
+                out.push_str(repr_val(ms[k].val, ordered));
+            }
+            out.push('}');
+            if ordered {
+                out.push(')');
+            }
+            out
+        }
+    }
+}
+
+// str(v): a str is itself, everything else its repr.
+fn str_val(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => repr_val(v, false),
+    }
+}
+
+// json.dumps(s) with ensure_ascii: everything outside ' '..'~' escaped,
+// astral characters as a surrogate pair.
+fn json_quote(s: ref String) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n >= 32 and n < 127 {
+            out.push(c);
+        } else if n < 0x10000 {
+            out.push_str(f"\\u{hex(n, 4)}");
+        } else {
+            let v = n - 0x10000;
+            out.push_str(f"\\u{hex(0xD800 + (v >> 10), 4)}\\u{hex(0xDC00 + (v & 0x3FF), 4)}");
+        }
+    }
+    out.push('"');
+    out
+}
+
+// json.dumps(v, indent=2), at the given depth.
+fn json_dump(v: ref Val, depth: i64, out: mut ref String) {
+    match v {
+        Val.Null => out.push_str("null"),
+        Val.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Val.Int(n) => out.push_str(f"{n}"),
+        Val.Raw(r) => out.push_str(r),
+        Val.Str(s) => out.push_str(json_quote(s)),
+        Val.List(items) => {
+            if items.len() == 0 {
+                out.push_str("[]");
+                return;
+            }
+            out.push('[');
+            for k in 0..items.len() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                out.push_str(repeat(' ', 2 * (depth + 1)));
+                json_dump(items[k], depth + 1, mut out);
+            }
+            out.push('\n');
+            out.push_str(repeat(' ', 2 * depth));
+            out.push(']');
+        }
+        Val.Dict(ms) => {
+            if ms.len() == 0 {
+                out.push_str("{}");
+                return;
+            }
+            out.push('{');
+            for k in 0..ms.len() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                out.push_str(repeat(' ', 2 * (depth + 1)));
+                out.push_str(json_quote(ms[k].key));
+                out.push_str(": ");
+                json_dump(ms[k].val, depth + 1, mut out);
+            }
+            out.push('\n');
+            out.push_str(repeat(' ', 2 * depth));
+            out.push('}');
+        }
+    }
+}
+
+// ---------------------------------------------------------------- json.load
+
+struct JsonReader {
+    cs: Vec[char],
+    i: i64,
+}
+
+fn json_parse(s: ref String) -> Result[Val, String] {
+    let mut p = JsonReader { cs: to_chars(s), i: 0 };
+    let v = json_value(mut p)?;
+    json_ws(mut p);
+    if p.i != p.cs.len() {
+        return Err(f"extra data at {p.i}");
+    }
+    Ok(v)
+}
+
+fn json_ws(p: mut ref JsonReader) {
+    while p.i < p.cs.len() {
+        let c = p.cs[p.i];
+        if c == ' ' or c == '\n' or c == '\t' or c == '\r' {
+            p.i += 1;
+        } else {
+            break;
+        }
+    }
+}
+
+fn json_word(p: mut ref JsonReader, w: Str) -> bool {
+    let ws = to_chars(w.to_string());
+    for k in 0..ws.len() {
+        if p.i + k >= p.cs.len() or p.cs[p.i + k] != ws[k] {
+            return false;
+        }
+    }
+    p.i += ws.len();
+    true
+}
+
+fn json_value(p: mut ref JsonReader) -> Result[Val, String] {
+    json_ws(mut p);
+    if p.i >= p.cs.len() {
+        return Err("unexpected end".to_string());
+    }
+    let c = p.cs[p.i];
+    if c == '{' {
+        p.i += 1;
+        let mut members: Vec[Member] = Vec.new();
+        json_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == '}' {
+            p.i += 1;
+            return Ok(Val.Dict(members));
+        }
+        loop {
+            json_ws(mut p);
+            let key = json_string(mut p)?;
+            json_ws(mut p);
+            if p.i >= p.cs.len() or p.cs[p.i] != ':' {
+                return Err(f"expected ':' at {p.i}");
+            }
+            p.i += 1;
+            let val = json_value(mut p)?;
+            dict_set(mut members, key, val);
+            json_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+            } else if p.i < p.cs.len() and p.cs[p.i] == '}' {
+                p.i += 1;
+                break;
+            } else {
+                return Err(f"expected ',' or '}}' at {p.i}");
+            }
+        }
+        return Ok(Val.Dict(members));
+    }
+    if c == '[' {
+        p.i += 1;
+        let mut items: Vec[Val] = Vec.new();
+        json_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == ']' {
+            p.i += 1;
+            return Ok(Val.List(items));
+        }
+        loop {
+            items.push(json_value(mut p)?);
+            json_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+            } else if p.i < p.cs.len() and p.cs[p.i] == ']' {
+                p.i += 1;
+                break;
+            } else {
+                return Err(f"expected ',' or ']' at {p.i}");
+            }
+        }
+        return Ok(Val.List(items));
+    }
+    if c == '"' {
+        return Ok(Val.Str(json_string(mut p)?));
+    }
+    if json_word(mut p, "true") {
+        return Ok(Val.Bool(true));
+    }
+    if json_word(mut p, "false") {
+        return Ok(Val.Bool(false));
+    }
+    if json_word(mut p, "null") {
+        return Ok(Val.Null);
+    }
+    let start = p.i;
+    if p.i < p.cs.len() and p.cs[p.i] == '-' {
+        p.i += 1;
+    }
+    while p.i < p.cs.len() and is_digit_c(p.cs[p.i]) {
+        p.i += 1;
+    }
+    let t = text(p.cs, start, p.i);
+    match py_int(t) {
+        Some(n) => Ok(Val.Int(n)),
+        None => Err(f"bad value at {start}"),
+    }
+}
+
+fn hex_digit(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 97 {
+        n - 87
+    } else if n >= 65 {
+        n - 55
+    } else {
+        n - 48
+    }
+}
+
+fn json_hex4(p: mut ref JsonReader) -> i64 {
+    let mut v = 0;
+    for k in 0..4 {
+        v = v * 16 + hex_digit(p.cs[p.i + k]);
+    }
+    p.i += 4;
+    v
+}
+
+fn json_string(p: mut ref JsonReader) -> Result[String, String] {
+    if p.i >= p.cs.len() or p.cs[p.i] != '"' {
+        return Err(f"expected a string at {p.i}");
+    }
+    p.i += 1;
+    let mut out = String.new();
+    loop {
+        if p.i >= p.cs.len() {
+            return Err("unterminated string".to_string());
+        }
+        let c = p.cs[p.i];
+        if c == '"' {
+            p.i += 1;
+            return Ok(out);
+        }
+        if c != '\\' {
+            out.push(c);
+            p.i += 1;
+            continue;
+        }
+        let e = p.cs[p.i + 1];
+        p.i += 2;
+        if e == 'n' {
+            out.push('\n');
+        } else if e == 't' {
+            out.push('\t');
+        } else if e == 'r' {
+            out.push('\r');
+        } else if e == 'b' {
+            out.push(chr(8));
+        } else if e == 'f' {
+            out.push(chr(12));
+        } else if e == 'u' {
+            let mut v = json_hex4(mut p);
+            if v >= 0xd800 and v < 0xdc00 and p.i + 1 < p.cs.len() and p.cs[p.i] == '\\' and p.cs[p.i + 1] == 'u' {
+                p.i += 2;
+                let lo = json_hex4(mut p);
+                v = 0x10000 + (v - 0xd800) * 1024 + (lo - 0xdc00);
+            }
+            out.push(chr(v));
+        } else {
+            out.push(e);
+        }
+    }
+}
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+// ------------------------------------------------------------ SHA-1 and SHA-2 (FIPS 180-4)
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let mut f: u32 = 0;
+            let mut k: u32 = 0;
+            if t < 20 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                k = 0x5A827999u32;
+            } else if t < 40 {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1u32;
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCu32;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6u32;
+            }
+            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[t]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// SHA-256, or SHA-224 with its own initial values and a shorter result.
+fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    if is224 {
+        for x in [0xc1059ed8u32, 0x367cd507u32, 0x3070dd17u32, 0xf70e5939u32, 0xffc00b31u32, 0x68581511u32, 0x64f98fa7u32, 0xbefa4fa4u32] {
+            h.push(x);
+        }
+    } else {
+        for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+            h.push(x);
+        }
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u32] = h.clone();
+        for t in 0..64 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFu32) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is224 { 7 } else { 8 };
+    for i in 0..n {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SHA384_IV: Array[u64, 8] = [
+    0xcbbb9d5dc1059ed8u64, 0x629a292a367cd507u64, 0x9159015a3070dd17u64, 0x152fecd8f70e5939u64,
+    0x67332667ffc00b31u64, 0x8eb44a8768581511u64, 0xdb0c2e0d64f98fa7u64, 0x47b5481dbefa4fa4u64,
+];
+
+// SHA-512, or SHA-384 with its own initial values and a shorter result.
+fn sha512_family(msg: ref Vec[u8], is384: bool) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if is384 { SHA384_IV[i] } else { SHA512_IV[i] });
+    }
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        for t in 16..80 {
+            let s0 = w[t - 15].rotate_right(1) ^ w[t - 15].rotate_right(8) ^ (w[t - 15] >> 7u64);
+            let s1 = w[t - 2].rotate_right(19) ^ w[t - 2].rotate_right(61) ^ (w[t - 2] >> 6u64);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u64] = h.clone();
+        for t in 0..80 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is384 { 6 } else { 8 };
+    for i in 0..n {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ HMAC (RFC 2104)
+
+fn digest_of(name: Str, msg: ref Vec[u8]) -> Vec[u8] {
+    if name == "sha256" {
+        return sha256_family(msg, false);
+    }
+    if name == "sha512" {
+        return sha512_family(msg, false);
+    }
+    sha1(msg)
+}
+
+fn block_of(name: Str) -> i64 {
+    if name == "sha512" { 128 } else { 64 }
+}
+
+fn hmac(name: Str, key: ref Vec[u8], msg: ref Vec[u8]) -> Vec[u8] {
+    let block = block_of(name);
+    let mut k = if key.len() > block { digest_of(name, key) } else { key.clone() };
+    while k.len() < block {
+        k.push(0);
+    }
+    let mut inner: Vec[u8] = Vec.new();
+    let mut outer: Vec[u8] = Vec.new();
+    for i in 0..block {
+        inner.push(k[i] ^ 0x36);
+        outer.push(k[i] ^ 0x5c);
+    }
+    for b in msg.iter() {
+        inner.push(*b);
+    }
+    let ih = digest_of(name, inner);
+    for b in ih.iter() {
+        outer.push(*b);
+    }
+    digest_of(name, outer)
+}
+
+
+// ------------------------------------------------------------ base64 and ipaddress
+
+// binascii.b2a_base64 without its newline, or base64.urlsafe_b64encode.
+fn b64(data: ref Vec[u8], urlsafe: bool) -> String {
+    let abc = if urlsafe {
+        to_bytes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+    } else {
+        to_bytes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+    };
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < data.len() {
+        let a = data[i] as i64;
+        let b = if i + 1 < data.len() { data[i + 1] as i64 } else { 0 };
+        let c = if i + 2 < data.len() { data[i + 2] as i64 } else { 0 };
+        let n = a * 65536 + b * 256 + c;
+        out.push(abc[(n / 262144) % 64]);
+        out.push(abc[(n / 4096) % 64]);
+        out.push(if i + 1 < data.len() { abc[(n / 64) % 64] } else { b'=' });
+        out.push(if i + 2 < data.len() { abc[n % 64] } else { b'=' });
+        i += 3;
+    }
+    from_bytes(out)
+}
+
+fn hex_of(n: i64) -> String {
+    let digits = to_bytes("0123456789abcdef");
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut v = n;
+    while v > 0 {
+        out.insert(0, digits[v % 16]);
+        v = v / 16;
+    }
+    from_bytes(out)
+}
+
+fn hextet_val(s: Str) -> i64 {
+    let b = to_bytes(s);
+    let mut n: i64 = 0;
+    for k in 0..b.len() {
+        n = n * 16 + hex_val(b[k]) as i64;
+    }
+    n
+}
+
+// The eight hextets of an address is_ipv6 accepted (without its scope).
+fn ipv6_hextets(addr: Str) -> Vec[i64] {
+    let mut parts = split_on(addr, b':');
+    let mut tail: Vec[i64] = Vec.new();
+    let last = parts[parts.len() - 1].clone();
+    if has_byte(last, b'.') {
+        let octets = split_on(last, b'.');
+        let mut o: Vec[i64] = Vec.new();
+        for k in 0..octets.len() {
+            let ob = to_bytes(octets[k]);
+            let mut n: i64 = 0;
+            for j in 0..ob.len() {
+                n = n * 10 + (ob[j] - b'0') as i64;
+            }
+            o.push(n);
+        }
+        tail.push(o[0] * 256 + o[1]);
+        tail.push(o[2] * 256 + o[3]);
+        parts.pop();
+        parts.push("0".to_string());
+        parts.push("0".to_string());
+    }
+    let n = parts.len();
+    let mut out: Vec[i64] = Vec.new();
+    let mut skip: i64 = -1;
+    for i in 1..n - 1 {
+        if parts[i].len() == 0 {
+            skip = i;
+        }
+    }
+    if skip < 0 {
+        for i in 0..n {
+            out.push(hextet_val(parts[i]));
+        }
+    } else {
+        let mut hi = skip;
+        let mut lo = n - skip - 1;
+        if parts[0].len() == 0 {
+            hi -= 1;
+        }
+        if parts[n - 1].len() == 0 {
+            lo -= 1;
+        }
+        for i in 0..hi {
+            out.push(hextet_val(parts[i]));
+        }
+        for _ in 0..8 - hi - lo {
+            out.push(0);
+        }
+        for i in n - lo..n {
+            out.push(hextet_val(parts[i]));
+        }
+    }
+    if tail.len() == 2 {
+        out[6] = tail[0];
+        out[7] = tail[1];
+    }
+    out
+}
+
+// str(IPv6Address(addr)): the longest run of zero hextets (the first of
+// equal runs, and only a run of two or more) becomes `::`, and an
+// IPv4-mapped address keeps its dotted tail.
+fn ipv6_str(addr: Str) -> String {
+    let (a, has_scope, scope) = partition(addr, b'%');
+    let h = ipv6_hextets(a);
+    let suffix = if has_scope { f"%{scope}" } else { String.new() };
+    let mut mapped = h[5] == 0xffff;
+    for k in 0..5 {
+        if h[k] != 0 {
+            mapped = false;
+        }
+    }
+    if mapped {
+        return f"::ffff:{h[6] / 256}.{h[6] % 256}.{h[7] / 256}.{h[7] % 256}{suffix}";
+    }
+    let mut best_start: i64 = -1;
+    let mut best_len: i64 = 0;
+    let mut start: i64 = -1;
+    let mut run: i64 = 0;
+    for k in 0..8 {
+        if h[k] == 0 {
+            run += 1;
+            if start == -1 {
+                start = k;
+            }
+            if run > best_len {
+                best_len = run;
+                best_start = start;
+            }
+        } else {
+            run = 0;
+            start = -1;
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    if best_len > 1 {
+        for k in 0..best_start {
+            parts.push(hex_of(h[k]));
+        }
+        if best_start == 0 {
+            parts.push(String.new());
+        }
+        parts.push(String.new());
+        if best_start + best_len == 8 {
+            parts.push(String.new());
+        }
+        for k in best_start + best_len..8 {
+            parts.push(hex_of(h[k]));
+        }
+    } else {
+        for k in 0..8 {
+            parts.push(hex_of(h[k]));
+        }
+    }
+    f"{join(parts, ":")}{suffix}"
+}
+
+// ------------------------------------------------------------ oauthlib.common
+
+fn pair(name: Str, value: Str) -> Pair {
+    Pair { name: name.to_string(), value: value.to_string() }
+}
+
+// repr() of a list of 2-tuples.
+fn tuples_repr(v: ref Vec[Pair]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for p in v.iter() {
+        parts.push(f"({py_repr(p.name)}, {py_repr(p.value)})");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// repr() of a dict of strings.
+fn pairs_dict_repr(v: ref Vec[Pair]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for p in v.iter() {
+        parts.push(f"{py_repr(p.name)}: {py_repr(p.value)}");
+    }
+    f"{{{join(parts, ", ")}}}"
+}
+
+// d[k] = v on a dict kept as pairs.
+fn pairs_set(v: mut ref Vec[Pair], name: Str, value: Str) {
+    for k in 0..v.len() {
+        if v[k].name == name {
+            v[k].value = value.to_string();
+            return;
+        }
+    }
+    v.push(pair(name, value));
+}
+
+fn pairs_get(v: ref Vec[Pair], name: Str) -> Option[String] {
+    for p in v.iter() {
+        if p.name == name {
+            return Some(p.value.clone());
+        }
+    }
+    None
+}
+
+// dict(pairs): the first place of each name, its last value.
+fn to_dict(v: ref Vec[Pair]) -> Vec[Pair] {
+    let mut out: Vec[Pair] = Vec.new();
+    for p in v.iter() {
+        pairs_set(mut out, p.name, p.value);
+    }
+    out
+}
+
+// The characters a urlencoded string may contain.
+fn is_urlencoded_char(c: char) -> bool {
+    let n = c as i64;
+    if n >= 128 {
+        return false;
+    }
+    let b = n as u8;
+    is_alnum(b) or "_.-=&;:%+~,*@!()/?'$".contains(c.to_string())
+}
+
+fn is_hex_at(cs: ref Vec[char], i: i64) -> bool {
+    i < cs.len() and is_hex_char(cs[i])
+}
+
+// common.urldecode: validated, then parse_qsl with blank values kept.
+fn urldecode(query: Str) -> Result[Vec[Pair], String] {
+    let q = query.to_string();
+    let cs = to_chars(q);
+    let mut bad: Vec[char] = Vec.new();
+    for c in cs.iter() {
+        if not is_urlencoded_char(*c) and not bad.contains(c) {
+            bad.push(*c);
+        }
+    }
+    if bad.len() > 0 {
+        let mut shown: Vec[String] = Vec.new();
+        for c in bad.iter() {
+            shown.push(py_repr(c.to_string()));
+        }
+        return Err(f"ValueError: Error trying to decode a non urlencoded string. Found invalid characters: {{{join(shown, ", ")}}} in the string: '{q}'. Please ensure the request/response body is x-www-form-urlencoded.");
+    }
+    for i in 0..cs.len() {
+        if cs[i] == '%' and i + 1 < cs.len() {
+            if not is_hex_at(cs, i + 1) or (i + 2 < cs.len() and not is_hex_at(cs, i + 2)) {
+                return Err("ValueError: Invalid hex encoding in query string.".to_string());
+            }
+        }
+    }
+    parse_qsl(q, true, false, "&")
+}
+
+// A request or response body: absent, a string, a dict (what a list of
+// pairs becomes in a Request) or a list of pairs.
+#[derive(Clone)]
+enum Body {
+    Absent,
+    Text(String),
+    Dict(Vec[Pair]),
+    List(Vec[Pair]),
+}
+
+fn body_repr(b: ref Body) -> String {
+    match b {
+        Body.Absent => "None".to_string(),
+        Body.Text(s) => py_repr(s),
+        Body.Dict(ps) => pairs_dict_repr(ps),
+        Body.List(ps) => tuples_repr(ps),
+    }
+}
+
+// common.extract_params.
+fn extract_params(b: ref Body) -> Option[Vec[Pair]] {
+    match b {
+        Body.Absent => None,
+        Body.Text(s) => match urldecode(s) {
+            Ok(ps) => Some(ps),
+            Err(_) => None,
+        },
+        Body.Dict(ps) => Some(ps.clone()),
+        Body.List(ps) => Some(ps.clone()),
+    }
+}
+
+// Headers as a dict, or as the CaseInsensitiveDict a Request keeps:
+// lookups ignore case, but setting a key in another case adds it.
+#[derive(Clone)]
+struct Hdrs {
+    items: Vec[Pair],
+    ci: bool,
+}
+
+impl Hdrs {
+    fn get(ref self, name: Str) -> Option[String] {
+        if not self.ci {
+            return pairs_get(self.items, name);
+        }
+        // the proxy points at the key last set in this case
+        let want = lower(name);
+        let mut found: Option[String] = None;
+        for p in self.items.iter() {
+            if lower(p.name) == want {
+                found = Some(p.value.clone());
+            }
+        }
+        found
+    }
+
+    fn set(mut ref self, name: Str, value: Str) {
+        pairs_set(mut self.items, name, value);
+    }
+
+    fn repr(ref self) -> String {
+        pairs_dict_repr(self.items)
+    }
+}
+
+// ------------------------------------------------------------ oauth1 utils
+
+fn escape(s: Str) -> String {
+    quote(s, "~")
+}
+
+fn str_pairs_repr(v: ref Vec[Pair]) -> String {
+    tuples_repr(v)
+}
+
+// urllib.request.parse_http_list.
+fn parse_http_list(s: ref String) -> Vec[String] {
+    let mut res: Vec[String] = Vec.new();
+    let mut part = String.new();
+    let mut esc = false;
+    let mut quoted = false;
+    for cur in s.chars() {
+        if esc {
+            part.push(cur);
+            esc = false;
+            continue;
+        }
+        if quoted {
+            if cur == '\\' {
+                esc = true;
+                continue;
+            } else if cur == '"' {
+                quoted = false;
+            }
+            part.push(cur);
+            continue;
+        }
+        if cur == ',' {
+            res.push(part);
+            part = String.new();
+            continue;
+        }
+        if cur == '"' {
+            quoted = true;
+        }
+        part.push(cur);
+    }
+    if part.len() > 0 {
+        res.push(part);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for p in res.iter() {
+        out.push(py_strip(p));
+    }
+    out
+}
+
+// utils.parse_authorization_header: parse_keqv_list over the items, so
+// an item without `=`, or with nothing after it, is malformed.
+fn parse_authorization_header(h: Str) -> Result[Vec[Pair], String] {
+    let malformed = "ValueError: Malformed authorization header".to_string();
+    let cs = to_chars(h.to_string());
+    if cs.len() < 6 {
+        return Err(malformed);
+    }
+    let mut scheme = String.new();
+    for k in 0..6 {
+        scheme.push(ascii_lower(cs[k]));
+    }
+    if scheme != "oauth " {
+        return Err(malformed);
+    }
+    let items = parse_http_list(text(cs, 6, cs.len()));
+    let mut parsed: Vec[Pair] = Vec.new();
+    for elt in items.iter() {
+        let ec = to_chars(elt);
+        let mut eq: i64 = -1;
+        for k in 0..ec.len() {
+            if ec[k] == '=' {
+                eq = k;
+                break;
+            }
+        }
+        if eq < 0 or eq + 1 >= ec.len() {
+            return Err(malformed);
+        }
+        let k = text(ec, 0, eq);
+        let mut v = text(ec, eq + 1, ec.len());
+        let vc = to_chars(v);
+        if vc[0] == '"' and vc[vc.len() - 1] == '"' {
+            v = if vc.len() >= 2 { text(vc, 1, vc.len() - 1) } else { String.new() };
+        }
+        pairs_set(mut parsed, k, v);
+    }
+    Ok(parsed)
+}
+
+// ------------------------------------------------------------ oauth1 signature
+
+// The netloc's host and port, as ParseResult.hostname and .port give them.
+fn host_and_port(netloc: Str) -> Result[(Option[String], Option[i64]), String] {
+    let s = Split { scheme: String.new(), netloc: netloc.to_string(), path: String.new(), query: String.new(), fragment: String.new() };
+    let h = s.hostname();
+    let p = match s.port() {
+        Ok(p) => p,
+        Err(e) => return Err(f"ValueError: {e}"),
+    };
+    Ok((h, p))
+}
+
+fn parse_url(uri: Str) -> Result[Parsed, String] {
+    match urlparse(uri, "") {
+        Ok(p) => Ok(p),
+        Err(e) => Err(f"ValueError: {e}"),
+    }
+}
+
+// signature.base_string_uri.
+fn base_string_uri(uri: Str, host: ref Option[String]) -> Result[String, String] {
+    let output = parse_url(uri)?;
+    let (h, p) = host_and_port(output.netloc)?;
+    let mut hostname = h;
+    let mut port = p;
+    let mut path = output.path.clone();
+    if output.scheme.len() == 0 {
+        return Err("ValueError: missing scheme".to_string());
+    }
+    if path.len() == 0 {
+        path = "/".to_string();
+    }
+    let scheme = lower(output.scheme);
+    if let Some(hn) = hostname.clone() {
+        hostname = Some(to_lower_py(hn));
+    }
+    if let Some(given) = host {
+        let over = parse_url(f"{scheme}://{to_lower_py(given)}")?;
+        let (h2, p2) = host_and_port(over.netloc)?;
+        hostname = h2;
+        port = p2;
+    }
+    let mut hn = match hostname {
+        Some(x) => x,
+        None => return Err("ValueError: missing host".to_string()),
+    };
+    if is_ipv4(hn) {
+        // IPv4Address prints itself as given
+    } else if is_ipv6(hn) {
+        hn = f"[{ipv6_str(hn)}]";
+    }
+    if let Some(n) = port {
+        if not (0 < n and n <= 65535) {
+            return Err("ValueError: port out of range".to_string());
+        }
+    }
+    let netloc = match port {
+        Some(n) => {
+            if (scheme == "http" and n == 80) or (scheme == "https" and n == 443) {
+                hn
+            } else {
+                f"{hn}:{n}"
+            }
+        }
+        None => hn,
+    };
+    let v = urlunparse(Parsed { scheme: scheme, netloc: netloc, path: path, params: output.params.clone(), query: String.new(), fragment: String.new() });
+    Ok(replace_byte(v, b' ', "%20"))
+}
+
+// str.lower().
+fn to_lower_py(s: ref String) -> String {
+    s.to_lowercase()
+}
+
+// signature.collect_parameters.
+fn collect_parameters(query: Str, body: ref Body, headers: ref Hdrs, exclude_sig: bool, with_realm: bool) -> Result[Vec[Pair], String] {
+    let mut params: Vec[Pair] = Vec.new();
+    if query.len() > 0 {
+        for p in urldecode(query)?.into_iter() {
+            params.push(p);
+        }
+    }
+    if headers.items.len() > 0 {
+        let mut lowered: Vec[Pair] = Vec.new();
+        for p in headers.items.iter() {
+            pairs_set(mut lowered, lower(p.name), p.value);
+        }
+        if let Some(auth) = pairs_get(lowered, "authorization") {
+            for p in parse_authorization_header(auth)?.into_iter() {
+                if with_realm or p.name != "realm" {
+                    params.push(p);
+                }
+            }
+        }
+    }
+    if let Some(bp) = extract_params(body) {
+        for p in bp.into_iter() {
+            params.push(p);
+        }
+    }
+    let mut out: Vec[Pair] = Vec.new();
+    for p in params.into_iter() {
+        let v = if starts_with(p.name, "oauth_") { unquote(p.value) } else { p.value.clone() };
+        if exclude_sig and p.name == "oauth_signature" {
+            continue;
+        }
+        out.push(Pair { name: p.name, value: v });
+    }
+    Ok(out)
+}
+
+fn pair_less(a: ref Pair, b: ref Pair) -> bool {
+    a.name < b.name or (a.name == b.name and a.value < b.value)
+}
+
+// signature.normalize_parameters: escaped, sorted, joined.
+fn normalize_parameters(params: ref Vec[Pair]) -> String {
+    let mut kv: Vec[Pair] = Vec.new();
+    for p in params.iter() {
+        kv.push(Pair { name: escape(p.name), value: escape(p.value) });
+    }
+    for i in 1..kv.len() {
+        let mut j = i;
+        while j > 0 and pair_less(kv[j], kv[j - 1]) {
+            kv.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for p in kv.iter() {
+        parts.push(f"{p.name}={p.value}");
+    }
+    join(parts, "&")
+}
+
+fn signature_base_string(method: Str, uri: Str, params: Str) -> String {
+    f"{escape(upper(method))}&{escape(uri)}&{escape(params)}"
+}
+
+fn opt_or_empty(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => s.clone(),
+        None => String.new(),
+    }
+}
+
+fn hmac_name(method: Str) -> String {
+    if method == "HMAC-SHA256" {
+        "sha256".to_string()
+    } else if method == "HMAC-SHA512" {
+        "sha512".to_string()
+    } else {
+        "sha1".to_string()
+    }
+}
+
+fn sign_hmac(method: Str, base: Str, cs: ref Option[String], rs: ref Option[String]) -> String {
+    let key = f"{escape(opt_or_empty(cs))}&{escape(opt_or_empty(rs))}";
+    b64(hmac(hmac_name(method), to_bytes(key), to_bytes(base)), false)
+}
+
+fn sign_plaintext(cs: ref Option[String], rs: ref Option[String]) -> String {
+    f"{escape(opt_or_empty(cs))}&{escape(opt_or_empty(rs))}"
+}
+
+// The verify_* functions over a request's uri, method, params and
+// signature.
+fn verify(method: Str, uri: Str, http_method: Str, params: ref Vec[Pair], sig: Str, cs: ref Option[String], rs: ref Option[String]) -> Result[bool, String] {
+    if method == "PLAINTEXT" {
+        return Ok(sign_plaintext(cs, rs) == sig);
+    }
+    let base = signature_base_string(http_method, base_string_uri(uri, None)?, normalize_parameters(params));
+    Ok(sign_hmac(method, base, cs, rs) == sig)
+}
+
+fn is_hmac(method: Str) -> bool {
+    method == "HMAC-SHA1" or method == "HMAC-SHA256" or method == "HMAC-SHA512"
+}
+
+// ------------------------------------------------------------ oauth1 Client
+
+#[derive(Clone)]
+struct O1Client {
+    client_key: String,
+    client_secret: Option[String],
+    resource_owner_key: Option[String],
+    resource_owner_secret: Option[String],
+    callback_uri: Option[String],
+    signature_method: String,
+    signature_type: String,
+    verifier: Option[String],
+    realm: Option[String],
+    nonce: String,
+    timestamp: String,
+}
+
+fn opt_str(v: ref Val, key: Str) -> Option[String] {
+    match get(v, key) {
+        Some(Val.Str(s)) => Some(s),
+        _ => None,
+    }
+}
+
+fn str_or(v: ref Val, key: Str, dflt: Str) -> String {
+    match opt_str(v, key) {
+        Some(s) => s,
+        None => dflt.to_string(),
+    }
+}
+
+fn o1_client(v: ref Val) -> O1Client {
+    O1Client {
+        client_key: str_or(v, "client_key", ""),
+        client_secret: opt_str(v, "client_secret"),
+        resource_owner_key: opt_str(v, "resource_owner_key"),
+        resource_owner_secret: opt_str(v, "resource_owner_secret"),
+        callback_uri: opt_str(v, "callback_uri"),
+        signature_method: str_or(v, "signature_method", "HMAC-SHA1"),
+        signature_type: str_or(v, "signature_type", "AUTH_HEADER"),
+        verifier: opt_str(v, "verifier"),
+        realm: opt_str(v, "realm"),
+        nonce: str_or(v, "nonce", ""),
+        timestamp: str_or(v, "timestamp", ""),
+    }
+}
+
+fn nonempty(v: ref Option[String]) -> bool {
+    match v {
+        Some(s) => s.len() > 0,
+        None => false,
+    }
+}
+
+// common.Request, as far as signing reads it.
+struct O1Request {
+    uri: String,
+    http_method: String,
+    headers: Hdrs,
+    body: Body,
+    decoded_body: Option[Vec[Pair]],
+    oauth_params: Vec[Pair],
+}
+
+fn new_request(uri: Str, method: Str, body: own Body, headers: own Hdrs) -> Result[O1Request, String] {
+    let p = parse_url(uri)?;
+    urldecode(p.query)?;
+    let decoded = extract_params(body);
+    Ok(O1Request { uri: uri.to_string(), http_method: method.to_string(), headers: Hdrs { items: headers.items, ci: true }, body: body, decoded_body: decoded, oauth_params: Vec.new() })
+}
+
+// parameters._append_params: the request's own parameters first.
+fn append_params(oauth: ref Vec[Pair], params: ref Vec[Pair]) -> Vec[Pair] {
+    let mut merged: Vec[Pair] = Vec.new();
+    for want in [false, true] {
+        for p in params.iter() {
+            if starts_with(p.name, "oauth_") == want {
+                merged.push(p.clone());
+            }
+        }
+        for p in oauth.iter() {
+            if starts_with(p.name, "oauth_") == want {
+                merged.push(p.clone());
+            }
+        }
+    }
+    merged
+}
+
+// parameters.prepare_headers.
+fn prepare_headers(oauth: ref Vec[Pair], headers: ref Hdrs, realm: ref Option[String]) -> Hdrs {
+    let mut parts: Vec[String] = Vec.new();
+    for p in oauth.iter() {
+        if starts_with(p.name, "oauth_") {
+            parts.push(f"{escape(p.name)}=\"{escape(p.value)}\"");
+        }
+    }
+    let mut value = join(parts, ", ");
+    if nonempty(realm) {
+        value = f"realm=\"{opt_or_empty(realm)}\", {value}";
+    }
+    let mut full = Hdrs { items: headers.items.clone(), ci: false };
+    full.set("Authorization", f"OAuth {value}");
+    full
+}
+
+fn prepare_request_uri_query(oauth: ref Vec[Pair], uri: Str) -> Result[String, String] {
+    let mut p = parse_url(uri)?;
+    let existing = match extract_params(Body.Text(p.query.clone())) {
+        Some(ps) => ps,
+        None => Vec.new(),
+    };
+    p.query = urlencode(append_params(oauth, existing), "", true);
+    Ok(urlunparse(p))
+}
+
+// Client._render.
+fn render(c: ref O1Client, req: mut ref O1Request, formencode: bool, realm: ref Option[String]) -> Result[(String, Hdrs, Body), String] {
+    if c.signature_type == "AUTH_HEADER" {
+        return Ok((req.uri.clone(), prepare_headers(req.oauth_params, req.headers, realm), req.body.clone()));
+    }
+    if c.signature_type == "BODY" {
+        if let Some(decoded) = req.decoded_body.clone() {
+            let merged = append_params(req.oauth_params, decoded);
+            let body = if formencode { Body.Text(urlencode(merged, "", true)) } else { Body.List(merged) };
+            req.headers.set("Content-Type", "application/x-www-form-urlencoded");
+            return Ok((req.uri.clone(), req.headers.clone(), body));
+        }
+    }
+    if c.signature_type == "QUERY" {
+        return Ok((prepare_request_uri_query(req.oauth_params, req.uri)?, req.headers.clone(), req.body.clone()));
+    }
+    Err("ValueError: Unknown signature type specified.".to_string())
+}
+
+fn get_oauth_signature(c: ref O1Client, req: mut ref O1Request) -> Result[String, String] {
+    if c.signature_method == "PLAINTEXT" {
+        return Ok(sign_plaintext(c.client_secret, c.resource_owner_secret));
+    }
+    let (uri, headers, body) = render(c, mut req, false, None)?;
+    let q = parse_url(uri)?.query;
+    let collected = collect_parameters(q, body, headers, true, false)?;
+    let normalized = normalize_parameters(collected);
+    let bs_uri = base_string_uri(uri, headers.get("Host"))?;
+    let base = signature_base_string(req.http_method, bs_uri, normalized);
+    if not is_hmac(c.signature_method) {
+        return Err("ValueError: Invalid signature method.".to_string());
+    }
+    Ok(sign_hmac(c.signature_method, base, c.client_secret, c.resource_owner_secret))
+}
+
+fn get_oauth_params(c: ref O1Client, req: ref O1Request) -> Vec[Pair] {
+    let mut params: Vec[Pair] = Vec.new();
+    params.push(pair("oauth_nonce", c.nonce));
+    params.push(pair("oauth_timestamp", c.timestamp));
+    params.push(pair("oauth_version", "1.0"));
+    params.push(pair("oauth_signature_method", c.signature_method));
+    params.push(pair("oauth_consumer_key", c.client_key));
+    if nonempty(c.resource_owner_key) {
+        params.push(pair("oauth_token", opt_or_empty(c.resource_owner_key)));
+    }
+    if nonempty(c.callback_uri) {
+        params.push(pair("oauth_callback", opt_or_empty(c.callback_uri)));
+    }
+    if nonempty(c.verifier) {
+        params.push(pair("oauth_verifier", opt_or_empty(c.verifier)));
+    }
+    let ct = req.headers.get("Content-Type");
+    let eligible = match ct {
+        Some(t) => t.len() > 0 and not t.contains("application/x-www-form-urlencoded"),
+        None => false,
+    };
+    if eligible {
+        if let Body.Text(s) = req.body.clone() {
+            params.push(pair("oauth_body_hash", b64(sha1(to_bytes(s)), false)));
+        }
+    }
+    params
+}
+
+// Client.sign.
+fn sign(c: ref O1Client, uri: Str, method: Str, body: own Body, headers: own Hdrs, realm: ref Option[String]) -> Result[(String, Hdrs, Body), String] {
+    let mut req = new_request(uri, method, body, headers)?;
+    let ct = req.headers.get("Content-Type");
+    let multipart = match ct.clone() {
+        Some(t) => starts_with(t, "multipart/"),
+        None => false,
+    };
+    let should_have_params = match ct.clone() {
+        Some(t) => t == "application/x-www-form-urlencoded",
+        None => false,
+    };
+    let has_params = req.decoded_body.is_some();
+    let m = upper(method);
+    if multipart and has_params {
+        return Err("ValueError: Headers indicate a multipart body but body contains parameters.".to_string());
+    } else if should_have_params and not has_params {
+        return Err("ValueError: Headers indicate a formencoded body but body was not decodable.".to_string());
+    } else if not should_have_params and has_params {
+        let shown = match ct {
+            Some(t) => if t.len() > 0 { t } else { "not set".to_string() },
+            None => "not set".to_string(),
+        };
+        return Err(f"ValueError: Body contains parameters but Content-Type header was {shown} instead of application/x-www-form-urlencoded");
+    } else if c.signature_type == "BODY" and not (should_have_params and has_params and not multipart) {
+        return Err("ValueError: Body signatures may only be used with form-urlencoded content".to_string());
+    } else if (m == "GET" or m == "HEAD") and has_params {
+        return Err("ValueError: GET/HEAD requests should not include body.".to_string());
+    }
+    req.oauth_params = get_oauth_params(c, req);
+    let sig = get_oauth_signature(c, mut req)?;
+    req.oauth_params.push(pair("oauth_signature", sig));
+    let r = if nonempty(realm) { realm.clone() } else { c.realm.clone() };
+    render(c, mut req, true, r)
+}
+
+// ------------------------------------------------------------ oauth2 errors
+
+// time.time() during the run.
+const NOW: i64 = 1700000000;
+
+struct O2Err {
+    class: String,
+    error: String,
+    description: String,
+    uri: Option[String],
+    state: Option[String],
+    status: i64,
+}
+
+// The class raise_from_error picks for an error code (the first, by
+// name, whose `error` matches), its default description and status.
+fn error_class(code: Str) -> (String, String, i64) {
+    let table: Vec[(String, String)] = [
+        ("access_denied".to_string(), "AccessDeniedError".to_string()),
+        ("consent_required".to_string(), "ConsentRequired".to_string()),
+        ("insecure_transport".to_string(), "InsecureTransportError".to_string()),
+        ("insufficient_scope".to_string(), "InsufficientScopeError".to_string()),
+        ("invalid_client".to_string(), "InvalidClientError".to_string()),
+        ("invalid_request".to_string(), "InvalidClientIdError".to_string()),
+        ("invalid_grant".to_string(), "InvalidGrantError".to_string()),
+        ("invalid_scope".to_string(), "InvalidScopeError".to_string()),
+        ("invalid_token".to_string(), "InvalidTokenError".to_string()),
+        ("login_required".to_string(), "LoginRequired".to_string()),
+        ("mismatching_state".to_string(), "MismatchingStateError".to_string()),
+        ("missing_code".to_string(), "MissingCodeError".to_string()),
+        ("missing_token".to_string(), "MissingTokenError".to_string()),
+        ("missing_token_type".to_string(), "MissingTokenTypeError".to_string()),
+        ("server_error".to_string(), "ServerError".to_string()),
+        ("temporarily_unavailable".to_string(), "TemporarilyUnavailableError".to_string()),
+        ("token_expired".to_string(), "TokenExpiredError".to_string()),
+        ("unauthorized_client".to_string(), "UnauthorizedClientError".to_string()),
+        ("unsupported_grant_type".to_string(), "UnsupportedGrantTypeError".to_string()),
+        ("unsupported_response_type".to_string(), "UnsupportedResponseTypeError".to_string()),
+        ("unsupported_token_type".to_string(), "UnsupportedTokenTypeError".to_string()),
+    ];
+    let mut class = "CustomOAuth2Error".to_string();
+    for k in 0..table.len() {
+        if table[k].0 == code {
+            class = table[k].1.clone();
+        }
+    }
+    let desc = if class == "InsecureTransportError" {
+        "OAuth 2 MUST utilize https."
+    } else if class == "InvalidClientIdError" {
+        "Invalid client_id parameter value."
+    } else if class == "MismatchingStateError" {
+        "CSRF Warning! State not equal in request and response."
+    } else if class == "InvalidTokenError" {
+        "The access token provided is expired, revoked, malformed, or invalid for other reasons."
+    } else if class == "InsufficientScopeError" {
+        "The request requires higher privileges than provided by the access token."
+    } else {
+        ""
+    };
+    let status = if class == "InvalidClientError" or class == "InvalidTokenError" {
+        401
+    } else if class == "InsufficientScopeError" {
+        403
+    } else {
+        400
+    };
+    (class, desc.to_string(), status)
+}
+
+fn opt_val_str(v: ref Option[Val]) -> Option[String] {
+    match v {
+        None => None,
+        Some(Val.Null) => None,
+        Some(x) => Some(str_val(x)),
+    }
+}
+
+fn o2_error(code: Str, description: ref Option[Val], uri: ref Option[Val], state: ref Option[Val]) -> O2Err {
+    let (class, dflt, status) = error_class(code);
+    let desc = match opt_val_str(description) {
+        Some(d) => d,
+        None => dflt,
+    };
+    O2Err { class: class, error: code.to_string(), description: desc, uri: opt_val_str(uri), state: opt_val_str(state), status: status }
+}
+
+impl O2Err {
+    fn message(ref self) -> String {
+        f"{self.class}: ({self.error}) {self.description}"
+    }
+
+    fn twotuples(ref self) -> Vec[Pair] {
+        let mut out: Vec[Pair] = Vec.new();
+        out.push(pair("error", self.error));
+        if self.description.len() > 0 {
+            out.push(pair("error_description", self.description));
+        }
+        if nonempty(self.uri) {
+            out.push(pair("error_uri", opt_or_empty(self.uri)));
+        }
+        if nonempty(self.state) {
+            out.push(pair("state", opt_or_empty(self.state)));
+        }
+        out
+    }
+
+    fn json(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for p in to_dict(self.twotuples()).iter() {
+            parts.push(f"{json_quote(p.name)}: {json_quote(p.value)}");
+        }
+        f"{{{join(parts, ", ")}}}"
+    }
+
+    fn headers(ref self) -> String {
+        if self.status != 401 {
+            return "{}".to_string();
+        }
+        let mut vals: Vec[String] = Vec.new();
+        vals.push(f"error=\"{self.error}\"");
+        if self.description.len() > 0 {
+            vals.push(f"error_description=\"{self.description}\"");
+        }
+        if nonempty(self.uri) {
+            vals.push(f"error_uri=\"{opt_or_empty(self.uri)}\"");
+        }
+        let mut h: Vec[Pair] = Vec.new();
+        h.push(pair("WWW-Authenticate", f"Bearer {join(vals, ", ")}"));
+        pairs_dict_repr(h)
+    }
+}
+
+fn raise(code: Str, description: Str) -> String {
+    o2_error(code, Some(Val.Str(description.to_string())), None, None).message()
+}
+
+fn raise_default(code: Str) -> String {
+    o2_error(code, None, None, None).message()
+}
+
+fn raise_from_error(params: ref Vec[Member]) -> String {
+    let code = match dict_get(params, "error".to_string()) {
+        Some(v) => str_val(v),
+        None => String.new(),
+    };
+    o2_error(code, dict_get(params, "error_description".to_string()), dict_get(params, "error_uri".to_string()), dict_get(params, "state".to_string())).message()
+}
+
+fn is_secure_transport(uri: ref String) -> bool {
+    starts_with(to_lower_py(uri), "https://")
+}
+
+fn insecure() -> String {
+    raise_default("insecure_transport")
+}
+
+// ------------------------------------------------------------ oauth2 helpers
+
+// common.add_params_to_qs.
+fn add_params_to_qs(query: Str, params: ref Vec[Pair]) -> String {
+    let mut all = match parse_qsl(query, true, false, "&") {
+        Ok(ps) => ps,
+        Err(_) => Vec.new(),
+    };
+    for p in params.iter() {
+        all.push(p.clone());
+    }
+    urlencode(all, "", true)
+}
+
+fn add_params_to_uri(uri: Str, params: ref Vec[Pair], fragment: bool) -> Result[String, String] {
+    let mut p = parse_url(uri)?;
+    if fragment {
+        p.fragment = add_params_to_qs(p.fragment, params);
+    } else {
+        p.query = add_params_to_qs(p.query, params);
+    }
+    Ok(urlunparse(p))
+}
+
+fn list_to_scope(v: ref Val) -> Val {
+    match v {
+        Val.List(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in items.iter() {
+                parts.push(str_val(x));
+            }
+            Val.Str(join(parts, " "))
+        }
+        _ => v.clone(),
+    }
+}
+
+fn split_space(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == ' ' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn scope_to_list(v: ref Val) -> Val {
+    match v {
+        Val.List(items) => {
+            let mut out: Vec[Val] = Vec.new();
+            for x in items.iter() {
+                out.push(Val.Str(str_val(x)));
+            }
+            Val.List(out)
+        }
+        Val.Null => Val.Null,
+        _ => {
+            let mut out: Vec[Val] = Vec.new();
+            for w in split_space(py_strip(str_val(v))).into_iter() {
+                out.push(Val.Str(w));
+            }
+            Val.List(out)
+        }
+    }
+}
+
+// set(scope_to_list(v)), first occurrences kept in order.
+fn scope_set(v: ref Val) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    if let Val.List(items) = scope_to_list(v) {
+        for x in items.iter() {
+            let s = str_val(x);
+            if not out.contains(s) {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
+fn same_set(a: ref Vec[String], b: ref Vec[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for x in a.iter() {
+        if not b.contains(x) {
+            return false;
+        }
+    }
+    true
+}
+
+// int(v) as populate_token_attributes and parse_token_response call it.
+fn py_int_val(v: ref Val) -> Result[i64, String] {
+    match v {
+        Val.Int(n) => Ok(*n),
+        Val.Bool(b) => Ok(if *b { 1 } else { 0 }),
+        Val.Raw(r) => {
+            let (whole, _, _) = partition(r, b'.');
+            match py_int(whole) {
+                Some(n) => Ok(n),
+                None => Err(f"ValueError: cannot convert float {r} to integer"),
+            }
+        }
+        Val.Str(s) => match py_int(s) {
+            Some(n) => Ok(n),
+            None => Err(f"ValueError: invalid literal for int() with base 10: {py_repr(s)}"),
+        },
+        _ => Err(f"TypeError: int() argument must be a string, a bytes-like object or a real number, not '{type_name(v)}'"),
+    }
+}
+
+fn float_of(n: i64) -> Val {
+    Val.Raw(f"{n}.0")
+}
+
+// ------------------------------------------------------------ oauth2 clients
+
+#[derive(Clone)]
+struct Client2 {
+    web: bool,
+    client_id: Val,
+    default_token_placement: Val,
+    token_type: Val,
+    access_token: Val,
+    refresh_token: Val,
+    mac_key: Val,
+    mac_algorithm: Val,
+    token: Vec[Member],
+    scope: Val,
+    state: Val,
+    redirect_url: Val,
+    code_verifier: Val,
+    code_challenge: Val,
+    code_challenge_method: Val,
+    code: Val,
+    expires_in: Val,
+    expires_at: Val,
+}
+
+// Pops a keyword argument, or gives its default.
+fn take(args: mut ref Vec[Member], name: Str, dflt: own Val) -> Val {
+    let k = key_index(args, name.to_string());
+    if k < 0 {
+        return dflt;
+    }
+    let m = args.remove(k);
+    m.val
+}
+
+fn put(args: mut ref Vec[Member], name: Str, v: own Val) {
+    dict_set(mut args, name.to_string(), v);
+}
+
+fn has_key(args: ref Vec[Member], name: Str) -> bool {
+    key_index(args, name.to_string()) >= 0
+}
+
+fn sv_str(s: Str) -> Val {
+    Val.Str(s.to_string())
+}
+
+fn new_client2(web: bool, given: ref Vec[Member]) -> Result[Client2, String] {
+    let mut a = given.clone();
+    let client_id = take(mut a, "client_id", Val.Null);
+    let code = if web { take(mut a, "code", Val.Null) } else { Val.Null };
+    let tok = take(mut a, "token", Val.Null);
+    let token = match tok {
+        Val.Dict(ms) => ms,
+        _ => Vec.new(),
+    };
+    let mut c = Client2 {
+        web: web,
+        client_id: client_id,
+        default_token_placement: take(mut a, "default_token_placement", sv_str("auth_header")),
+        token_type: take(mut a, "token_type", sv_str("Bearer")),
+        access_token: take(mut a, "access_token", Val.Null),
+        refresh_token: take(mut a, "refresh_token", Val.Null),
+        mac_key: take(mut a, "mac_key", Val.Null),
+        mac_algorithm: take(mut a, "mac_algorithm", Val.Null),
+        token: token,
+        scope: take(mut a, "scope", Val.Null),
+        state: take(mut a, "state", Val.Null),
+        redirect_url: take(mut a, "redirect_url", Val.Null),
+        code_verifier: take(mut a, "code_verifier", Val.Null),
+        code_challenge: take(mut a, "code_challenge", Val.Null),
+        code_challenge_method: take(mut a, "code_challenge_method", Val.Null),
+        code: Val.Null,
+        expires_in: Val.Null,
+        expires_at: Val.Null,
+    };
+    let t = c.token.clone();
+    populate_token_attributes(mut c, t)?;
+    c.code = code;
+    Ok(c)
+}
+
+fn populate_token_attributes(c: mut ref Client2, r: ref Vec[Member]) -> Result[(), String] {
+    if let Some(v) = dict_get(r, "access_token".to_string()) {
+        c.access_token = v;
+    }
+    if let Some(v) = dict_get(r, "refresh_token".to_string()) {
+        c.refresh_token = v;
+    }
+    if let Some(v) = dict_get(r, "token_type".to_string()) {
+        c.token_type = v;
+    }
+    if let Some(v) = dict_get(r, "expires_in".to_string()) {
+        let n = py_int_val(v)?;
+        c.expires_in = v;
+        c.expires_at = float_of(NOW + n);
+    }
+    if let Some(v) = dict_get(r, "expires_at".to_string()) {
+        c.expires_at = match py_int_val(v) {
+            Ok(n) => Val.Int(n),
+            Err(_) => Val.Null,
+        };
+    }
+    if let Some(v) = dict_get(r, "mac_key".to_string()) {
+        c.mac_key = v;
+    }
+    if let Some(v) = dict_get(r, "mac_algorithm".to_string()) {
+        c.mac_algorithm = v;
+    }
+    Ok(())
+}
+
+fn client_line(c: ref Client2) -> String {
+    f"   client access_token={repr_val(c.access_token, false)} refresh_token={repr_val(c.refresh_token, false)} token_type={repr_val(c.token_type, false)} expires_in={repr_val(c.expires_in, false)} expires_at={repr_val(c.expires_at, false)} code={repr_val(c.code, false)} state={repr_val(c.state, false)}"
+}
+
+fn push_if(params: mut ref Vec[Pair], name: Str, v: ref Val) {
+    if truthy(v) {
+        params.push(pair(name, str_val(v)));
+    }
+}
+
+fn push_kwargs(params: mut ref Vec[Pair], kwargs: ref Vec[Member]) {
+    for m in kwargs.iter() {
+        push_if(mut params, m.key, m.val);
+    }
+}
+
+// parameters.prepare_grant_uri.
+fn prepare_grant_uri(uri: ref String, client_id: ref Val, response_type: Str, redirect_uri: ref Val, scope: ref Val, state: ref Val, code_challenge: ref Val, method: ref Val, kwargs: ref Vec[Member]) -> Result[String, String] {
+    if not is_secure_transport(uri) {
+        return Err(insecure());
+    }
+    let mut params: Vec[Pair] = Vec.new();
+    params.push(pair("response_type", response_type));
+    params.push(pair("client_id", str_val(client_id)));
+    push_if(mut params, "redirect_uri", redirect_uri);
+    if truthy(scope) {
+        params.push(pair("scope", str_val(list_to_scope(scope))));
+    }
+    push_if(mut params, "state", state);
+    if not is_null(code_challenge) {
+        params.push(pair("code_challenge", str_val(code_challenge)));
+        params.push(pair("code_challenge_method", str_val(method)));
+    }
+    push_kwargs(mut params, kwargs);
+    add_params_to_uri(uri, params, false)
+}
+
+fn is_null(v: ref Val) -> bool {
+    match v {
+        Val.Null => true,
+        _ => false,
+    }
+}
+
+// parameters.prepare_token_request.
+fn prepare_token_request(grant_type: Str, body: ref Val, include_client_id: ref Val, code_verifier: ref Val, given: ref Vec[Member]) -> String {
+    let mut kwargs = given.clone();
+    let mut params: Vec[Pair] = Vec.new();
+    params.push(pair("grant_type", grant_type));
+    if let Some(s) = dict_get(kwargs, "scope".to_string()) {
+        put(mut kwargs, "scope", list_to_scope(s));
+    }
+    let client_id = take(mut kwargs, "client_id", Val.Null);
+    if truthy(include_client_id) and not is_null(client_id) {
+        params.push(pair("client_id", str_val(client_id)));
+    }
+    if not is_null(code_verifier) {
+        params.push(pair("code_verifier", str_val(code_verifier)));
+    }
+    let client_secret = take(mut kwargs, "client_secret", Val.Null);
+    if not is_null(client_secret) {
+        params.push(pair("client_secret", str_val(client_secret)));
+    }
+    push_kwargs(mut params, kwargs);
+    add_params_to_qs(str_val(body), params)
+}
+
+fn prepend(first: own Vec[Member], rest: ref Vec[Member]) -> Vec[Member] {
+    let mut out = first;
+    for m in rest.iter() {
+        out.push(m.clone());
+    }
+    out
+}
+
+fn member(key: Str, val: own Val) -> Member {
+    Member { key: key.to_string(), val: val }
+}
+
+// WebApplicationClient.prepare_request_uri.
+fn prepare_request_uri(c: ref Client2, given: ref Vec[Member]) -> Result[String, String] {
+    let mut a = given.clone();
+    let uri = str_val(take(mut a, "uri", Val.Null));
+    let redirect_uri = take(mut a, "redirect_uri", Val.Null);
+    let mut scope = take(mut a, "scope", Val.Null);
+    let state = take(mut a, "state", Val.Null);
+    let code_challenge = take(mut a, "code_challenge", Val.Null);
+    let method = take(mut a, "code_challenge_method", sv_str("plain"));
+    if is_null(scope) {
+        scope = c.scope.clone();
+    }
+    prepare_grant_uri(uri, c.client_id, "code", redirect_uri, scope, state, code_challenge, method, a)
+}
+
+// prepare_request_body of either client.
+fn prepare_request_body(c: ref Client2, given: ref Vec[Member]) -> Result[String, String] {
+    let mut a = given.clone();
+    if c.web {
+        let mut code = take(mut a, "code", Val.Null);
+        let redirect_uri = take(mut a, "redirect_uri", Val.Null);
+        let body = take(mut a, "body", sv_str(""));
+        let include_client_id = take(mut a, "include_client_id", Val.Bool(true));
+        let code_verifier = take(mut a, "code_verifier", Val.Null);
+        if not truthy(code) {
+            code = c.code.clone();
+        }
+        if let Some(given_id) = dict_get(a, "client_id".to_string()) {
+            if repr_val(given_id, false) != repr_val(c.client_id, false) {
+                return Err("ValueError: `client_id` was supplied as an argument, but it does not match `self.client_id`".to_string());
+            }
+        }
+        put(mut a, "client_id", c.client_id.clone());
+        let mut first: Vec[Member] = Vec.new();
+        first.push(member("code", code));
+        first.push(member("redirect_uri", redirect_uri));
+        return Ok(prepare_token_request("authorization_code", body, include_client_id, code_verifier, prepend(first, a)));
+    }
+    let body = take(mut a, "body", sv_str(""));
+    let mut scope = take(mut a, "scope", Val.Null);
+    let include_client_id = take(mut a, "include_client_id", Val.Bool(false));
+    put(mut a, "client_id", c.client_id.clone());
+    if is_null(scope) {
+        scope = c.scope.clone();
+    }
+    let code_verifier = take(mut a, "code_verifier", Val.Null);
+    let mut first: Vec[Member] = Vec.new();
+    first.push(member("scope", scope));
+    Ok(prepare_token_request("client_credentials", body, include_client_id, code_verifier, prepend(first, a)))
+}
+
+fn dict_of_pairs(ps: ref Vec[Pair]) -> Vec[Member] {
+    let mut out: Vec[Member] = Vec.new();
+    for p in ps.iter() {
+        dict_set(mut out, p.name, Val.Str(p.value.clone()));
+    }
+    out
+}
+
+// WebApplicationClient.parse_request_uri_response.
+fn parse_request_uri_response(c: mut ref Client2, uri: ref String, state: ref Val) -> Result[Vec[Member], String] {
+    if not is_secure_transport(uri) {
+        return Err(insecure());
+    }
+    let q = parse_url(uri)?.query;
+    let params = dict_of_pairs(parse_qsl(q, false, false, "&")?);
+    if truthy(state) {
+        let got = match dict_get(params, "state".to_string()) {
+            Some(v) => repr_val(v, false),
+            None => "None".to_string(),
+        };
+        if got != repr_val(state, false) {
+            return Err(raise_default("mismatching_state"));
+        }
+    }
+    if has_key(params, "error") {
+        return Err(raise_from_error(params));
+    }
+    if not has_key(params, "code") {
+        return Err(raise("missing_code", "Missing code parameter in response."));
+    }
+    if let Some(code) = dict_get(params, "code".to_string()) {
+        c.code = code;
+    }
+    Ok(params)
+}
+
+fn scope_str(v: ref Option[Vec[String]]) -> String {
+    match v {
+        Some(items) => join(items, " "),
+        None => "None".to_string(),
+    }
+}
+
+fn parse_token_response(body: ref String, scope: ref Val) -> Result[Vec[Member], String] {
+    let mut params = match json_parse(body) {
+        Ok(Val.Dict(ms)) => ms,
+        Ok(_) => return Err("TypeError: the response body is not a JSON object".to_string()),
+        Err(_) => {
+            let mut ps = dict_of_pairs(parse_qsl(body, false, false, "&")?);
+            if let Some(v) = dict_get(ps, "expires_in".to_string()) {
+                let n = py_int_val(v)?;
+                put(mut ps, "expires_in", Val.Int(n));
+            }
+            ps
+        }
+    };
+    if let Some(s) = dict_get(params, "scope".to_string()) {
+        put(mut params, "scope", scope_to_list(s));
+    }
+    if let Some(e) = dict_get(params, "expires_in".to_string()) {
+        if is_null(e) {
+            take(mut params, "expires_in", Val.Null);
+        } else {
+            let n = py_int_val(e)?;
+            put(mut params, "expires_at", float_of(NOW + n));
+        }
+    }
+    // OAuth2Token's scopes, then validate_token_parameters
+    let mut new_scope: Option[Vec[String]] = None;
+    if let Some(s) = dict_get(params, "scope".to_string()) {
+        if truthy(s) {
+            new_scope = Some(scope_set(s));
+        }
+    }
+    let mut old_scope = new_scope.clone();
+    if not is_null(scope) {
+        let old = scope_set(scope);
+        if new_scope.is_none() {
+            new_scope = Some(old.clone());
+        }
+        old_scope = Some(old);
+    }
+    if has_key(params, "error") {
+        return Err(raise_from_error(params));
+    }
+    if not has_key(params, "access_token") {
+        return Err(raise("missing_token", "Missing access token parameter."));
+    }
+    let changed = match (old_scope.clone(), new_scope.clone()) {
+        (Some(a), Some(b)) => not same_set(a, b),
+        (None, None) => false,
+        _ => true,
+    };
+    if changed {
+        return Err(f"Warning: Scope has changed from \"{scope_str(old_scope)}\" to \"{scope_str(new_scope)}\".");
+    }
+    Ok(params)
+}
+
+// Client.parse_request_body_response.
+fn parse_request_body_response(c: mut ref Client2, given: ref Vec[Member]) -> Result[Vec[Member], String] {
+    let mut a = given.clone();
+    let body = str_val(take(mut a, "body", Val.Null));
+    let mut scope = take(mut a, "scope", Val.Null);
+    if is_null(scope) {
+        scope = c.scope.clone();
+    }
+    let token = parse_token_response(body, scope)?;
+    c.token = token.clone();
+    populate_token_attributes(mut c, token)?;
+    Ok(token)
+}
+
+fn triple(uri: Str, headers: Str, body: Str) -> String {
+    f"   uri     {uri}\n   headers {headers}\n   body    {body}"
+}
+
+fn form_headers() -> String {
+    "{'Content-Type': 'application/x-www-form-urlencoded'}".to_string()
+}
+
+fn headers_of(v: ref Val) -> Option[Vec[Pair]] {
+    match v {
+        Val.Dict(ms) => {
+            let mut out: Vec[Pair] = Vec.new();
+            for m in ms.iter() {
+                out.push(pair(m.key, str_val(m.val)));
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+fn opt_pairs_repr(v: ref Option[Vec[Pair]]) -> String {
+    match v {
+        Some(ps) => pairs_dict_repr(ps),
+        None => "None".to_string(),
+    }
+}
+
+// tokens.prepare_mac_header.
+fn prepare_mac_header(c: ref Client2, uri: ref String, http_method: ref String, headers: ref Val, body: ref Val, ext: ref Val, nonce: ref Val) -> Result[Vec[Pair], String] {
+    let method = upper(http_method);
+    let p = parse_url(uri)?;
+    let (host, port) = if has_byte(p.netloc, b':') {
+        let (h, _, rest) = partition(p.netloc, b':');
+        (h, rest)
+    } else if upper(p.scheme) == "HTTPS" {
+        (p.netloc.clone(), "443".to_string())
+    } else {
+        (p.netloc.clone(), "80".to_string())
+    };
+    let alg = match c.mac_algorithm.clone() {
+        Val.Str(s) => to_lower_py(s),
+        _ => String.new(),
+    };
+    let name = if alg == "hmac-sha-1" {
+        "sha1"
+    } else if alg == "hmac-sha-256" {
+        "sha256"
+    } else {
+        return Err("ValueError: unknown hash algorithm".to_string());
+    };
+    let request_uri = if p.query.len() > 0 { f"{p.path}?{p.query}" } else { p.path.clone() };
+    let bodyhash = match body {
+        Val.Null => String.new(),
+        _ => b64(digest_of(name, to_bytes(str_val(body))), false),
+    };
+    let ext_s = if truthy(ext) { str_val(ext) } else { String.new() };
+    let nonce_s = str_val(nonce);
+    let base = f"{nonce_s}\n{method}\n{request_uri}\n{host}\n{port}\n{bodyhash}\n{ext_s}\n";
+    let sign = b64(hmac(name, to_bytes(str_val(c.mac_key)), to_bytes(base)), false);
+    let mut parts: Vec[String] = Vec.new();
+    parts.push(f"MAC id=\"{str_val(c.access_token)}\"");
+    parts.push(f"nonce=\"{nonce_s}\"");
+    if bodyhash.len() > 0 {
+        parts.push(f"bodyhash=\"{bodyhash}\"");
+    }
+    if ext_s.len() > 0 {
+        parts.push(f"ext=\"{ext_s}\"");
+    }
+    parts.push(f"mac=\"{sign}\"");
+    let mut h = match headers_of(headers) {
+        Some(ps) => ps,
+        None => Vec.new(),
+    };
+    pairs_set(mut h, "Authorization", join(parts, ", "));
+    Ok(h)
+}
+
+fn opt_body_repr(v: ref Val) -> String {
+    repr_val(v, false)
+}
+
+// Client.add_token.
+fn add_token(c: ref Client2, given: ref Vec[Member]) -> Result[String, String] {
+    let mut a = given.clone();
+    let uri = str_val(take(mut a, "uri", Val.Null));
+    let http_method = str_val(take(mut a, "http_method", sv_str("GET")));
+    let body = take(mut a, "body", Val.Null);
+    let headers = take(mut a, "headers", Val.Null);
+    let mut placement = take(mut a, "token_placement", Val.Null);
+    if not is_secure_transport(uri) {
+        return Err(insecure());
+    }
+    if not truthy(placement) {
+        placement = c.default_token_placement.clone();
+    }
+    let placement_s = str_val(placement);
+    let tt = to_lower_py(str_val(c.token_type));
+    if tt != "bearer" and tt != "mac" {
+        return Err(f"ValueError: Unsupported token type: {str_val(c.token_type)}");
+    }
+    let has_token = truthy(c.access_token) or match dict_get(c.token, "access_token".to_string()) {
+        Some(v) => truthy(v),
+        None => false,
+    };
+    if not has_token {
+        return Err("ValueError: Missing access token.".to_string());
+    }
+    let expired = match c.expires_at.clone() {
+        Val.Int(n) => n != 0 and n < NOW,
+        Val.Raw(r) => {
+            let (whole, _, _) = partition(r, b'.');
+            match py_int(whole) {
+                Some(n) => n < NOW,
+                None => false,
+            }
+        }
+        _ => false,
+    };
+    if expired {
+        return Err(raise_default("token_expired"));
+    }
+    let token = str_val(c.access_token);
+    if tt == "mac" {
+        let ext = take(mut a, "ext", Val.Null);
+        let nonce = take(mut a, "nonce", Val.Null);
+        if placement_s != "auth_header" {
+            return Err("ValueError: Invalid token placement.".to_string());
+        }
+        let h = prepare_mac_header(c, uri, http_method, headers, body, ext, nonce)?;
+        return Ok(triple(py_repr(uri), pairs_dict_repr(h), opt_body_repr(body)));
+    }
+    let mut tp: Vec[Pair] = Vec.new();
+    tp.push(pair("access_token", token));
+    if placement_s == "auth_header" {
+        let mut h = match headers_of(headers) {
+            Some(ps) => ps,
+            None => Vec.new(),
+        };
+        pairs_set(mut h, "Authorization", f"Bearer {token}");
+        return Ok(triple(py_repr(uri), pairs_dict_repr(h), opt_body_repr(body)));
+    }
+    if placement_s == "query" {
+        let u = add_params_to_uri(uri, tp, false)?;
+        return Ok(triple(py_repr(u), opt_pairs_repr(headers_of(headers)), opt_body_repr(body)));
+    }
+    if placement_s == "body" {
+        let b = match body {
+            Val.Null => String.new(),
+            _ => str_val(body),
+        };
+        return Ok(triple(py_repr(uri), opt_pairs_repr(headers_of(headers)), py_repr(add_params_to_qs(b, tp))));
+    }
+    Err("ValueError: Invalid token placement.".to_string())
+}
+
+// Client.prepare_authorization_request.
+fn prepare_authorization_request(c: mut ref Client2, given: ref Vec[Member]) -> Result[String, String] {
+    let mut a = given.clone();
+    let url = str_val(take(mut a, "authorization_url", Val.Null));
+    let state = take(mut a, "state", Val.Null);
+    let redirect_url = take(mut a, "redirect_url", Val.Null);
+    let mut scope = take(mut a, "scope", Val.Null);
+    if not is_secure_transport(url) {
+        return Err(insecure());
+    }
+    c.state = if truthy(state) { state } else { sv_str("generated-state") };
+    if truthy(redirect_url) {
+        c.redirect_url = redirect_url;
+    }
+    if is_null(scope) {
+        scope = c.scope.clone();
+    }
+    let mut args: Vec[Member] = Vec.new();
+    args.push(member("uri", Val.Str(url)));
+    args.push(member("redirect_uri", c.redirect_url.clone()));
+    args.push(member("scope", scope));
+    args.push(member("state", c.state.clone()));
+    let auth_url = prepare_request_uri(c, prepend(args, a))?;
+    Ok(triple(py_repr(auth_url), form_headers(), "''"))
+}
+
+// Client.prepare_token_request.
+fn client_token_request(c: mut ref Client2, given: ref Vec[Member]) -> Result[String, String] {
+    let mut a = given.clone();
+    let url = str_val(take(mut a, "token_url", Val.Null));
+    let auth_response = take(mut a, "authorization_response", Val.Null);
+    let redirect_url = take(mut a, "redirect_url", Val.Null);
+    let mut state = take(mut a, "state", Val.Null);
+    let body = take(mut a, "body", sv_str(""));
+    if not is_secure_transport(url) {
+        return Err(insecure());
+    }
+    if not truthy(state) {
+        state = c.state.clone();
+    }
+    if truthy(auth_response) {
+        parse_request_uri_response(mut c, str_val(auth_response), state)?;
+    }
+    if truthy(redirect_url) {
+        c.redirect_url = redirect_url;
+    }
+    let mut args: Vec[Member] = Vec.new();
+    args.push(member("body", body));
+    args.push(member("redirect_uri", c.redirect_url.clone()));
+    let b = prepare_request_body(c, prepend(args, a))?;
+    Ok(triple(py_repr(url), form_headers(), py_repr(b)))
+}
+
+// Client.prepare_refresh_token_request.
+fn refresh_request(c: ref Client2, given: ref Vec[Member]) -> Result[String, String] {
+    let mut a = given.clone();
+    let url = str_val(take(mut a, "token_url", Val.Null));
+    let mut refresh_token = take(mut a, "refresh_token", Val.Null);
+    let body = take(mut a, "body", sv_str(""));
+    let mut scope = take(mut a, "scope", Val.Null);
+    if not is_secure_transport(url) {
+        return Err(insecure());
+    }
+    if is_null(scope) {
+        scope = c.scope.clone();
+    }
+    if not truthy(refresh_token) {
+        refresh_token = c.refresh_token.clone();
+    }
+    let mut first: Vec[Member] = Vec.new();
+    first.push(member("scope", scope));
+    first.push(member("refresh_token", refresh_token));
+    let b = prepare_token_request("refresh_token", body, Val.Bool(true), Val.Null, prepend(first, a));
+    Ok(triple(py_repr(url), form_headers(), py_repr(b)))
+}
+
+// prepare_token_revocation_request.
+fn revocation_request(given: ref Vec[Member]) -> Result[String, String] {
+    let mut a = given.clone();
+    let url = str_val(take(mut a, "revocation_url", Val.Null));
+    let token = take(mut a, "token", Val.Null);
+    let hint = take(mut a, "token_type_hint", sv_str("access_token"));
+    let body = str_val(take(mut a, "body", sv_str("")));
+    let callback = take(mut a, "callback", Val.Null);
+    if not is_secure_transport(url) {
+        return Err(insecure());
+    }
+    let mut params: Vec[Pair] = Vec.new();
+    params.push(pair("token", str_val(token)));
+    push_if(mut params, "token_type_hint", hint);
+    push_kwargs(mut params, a);
+    if truthy(callback) {
+        params.push(pair("callback", str_val(callback)));
+        let u = add_params_to_uri(url, params, false)?;
+        return Ok(triple(py_repr(u), form_headers(), py_repr(body)));
+    }
+    Ok(triple(py_repr(url), form_headers(), py_repr(add_params_to_qs(body, params))))
+}
+
+// Client.create_code_challenge.
+fn create_code_challenge(c: mut ref Client2, verifier: ref Val, method: ref Val) -> Result[Val, String] {
+    if is_null(verifier) {
+        return Err("ValueError: Invalid code_verifier".to_string());
+    }
+    let mut out = Val.Null;
+    let mut m = method.clone();
+    if is_null(m) {
+        m = sv_str("plain");
+        c.code_challenge_method = m.clone();
+        out = verifier.clone();
+        c.code_challenge = out.clone();
+    }
+    if str_val(m) == "S256" and not is_null(method) {
+        let enc = b64(sha256_family(to_bytes(str_val(verifier)), false), true);
+        out = Val.Str(replace_byte(enc, b'=', ""));
+        c.code_challenge = out.clone();
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ jobs
+
+fn read_data(path: Str) -> Result[String, String] {
+    match fs.read_to_string(f"data/{path}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn ljust(s: Str, n: i64) -> String {
+    let w = char_count(s.to_string());
+    if w >= n { s.to_string() } else { f"{s}{spaces(n - w)}" }
+}
+
+fn rjust(s: Str, n: i64) -> String {
+    let w = char_count(s.to_string());
+    if w >= n { s.to_string() } else { f"{spaces(n - w)}{s}" }
+}
+
+fn val_pairs(v: ref Val) -> Vec[Pair] {
+    let mut out: Vec[Pair] = Vec.new();
+    if let Val.List(items) = v {
+        for it in items.iter() {
+            if let Val.List(kv) = it {
+                out.push(Pair { name: str_val(kv[0]), value: str_val(kv[1]) });
+            }
+        }
+    }
+    out
+}
+
+// A job's body: null, a string, or a list of pairs (which a Request
+// turns into a dict, and collect_parameters takes as it is).
+fn job_body(v: ref Option[Val], request: bool) -> Body {
+    match v {
+        Some(Val.Str(s)) => Body.Text(s.clone()),
+        Some(Val.List(items)) => {
+            let ps = val_pairs(Val.List(items.clone()));
+            if request { Body.Dict(to_dict(ps)) } else { Body.List(ps) }
+        }
+        _ => Body.Absent,
+    }
+}
+
+fn job_headers(v: ref Option[Val]) -> Hdrs {
+    let mut items: Vec[Pair] = Vec.new();
+    if let Some(Val.Dict(ms)) = v {
+        for m in ms.iter() {
+            items.push(Pair { name: m.key.clone(), value: str_val(m.val) });
+        }
+    }
+    Hdrs { items: items, ci: false }
+}
+
+fn opt_job_str(j: ref Val, key: Str) -> Option[String] {
+    match get(j, key) {
+        Some(Val.Str(s)) => Some(s),
+        _ => None,
+    }
+}
+
+fn job_bool(j: ref Val, key: Str, dflt: bool) -> bool {
+    match get(j, key) {
+        Some(Val.Bool(b)) => b,
+        _ => dflt,
+    }
+}
+
+// What the last signing produced, for verify1.
+#[derive(Clone)]
+struct Signed {
+    uri: String,
+    headers: Hdrs,
+    body: Body,
+    method: String,
+}
+
+struct State {
+    last: Option[Signed],
+    client: Option[Client2],
+}
+
+fn sign_job(j: ref Val, st: mut ref State) {
+    let c = o1_client(get(j, "client").unwrap());
+    let uri = get_str(j, "uri");
+    let method = get_str(j, "method");
+    let realm = opt_job_str(j, "realm");
+    match sign(c, uri, method, job_body(get(j, "body"), true), job_headers(get(j, "headers")), realm) {
+        Ok((u, h, b)) => {
+            println(f"   uri     {py_repr(u)}");
+            println(f"   headers {h.repr()}");
+            println(f"   body    {body_repr(b)}");
+            st.last = Some(Signed { uri: u, headers: h, body: b, method: method });
+        }
+        Err(e) => {
+            println(f"   raised {e}");
+            st.last = None;
+        }
+    }
+}
+
+fn verify_job(j: ref Val, st: ref State) -> Result[(), String] {
+    let last = match st.last.clone() {
+        Some(l) => l,
+        None => {
+            println("   nothing to verify");
+            return Ok(());
+        }
+    };
+    let uri = match opt_job_str(j, "uri") {
+        Some(u) => u,
+        None => last.uri.clone(),
+    };
+    let q = parse_url(uri)?.query;
+    let mut params = collect_parameters(q, last.body, last.headers, true, false)?;
+    let every = to_dict(collect_parameters(q, last.body, last.headers, false, false)?);
+    if let Some(add) = get(j, "add") {
+        for p in val_pairs(Val.List([add])).into_iter() {
+            params.push(p);
+        }
+    }
+    let http_method = match opt_job_str(j, "method") {
+        Some(m) => m,
+        None => last.method.clone(),
+    };
+    let sig = opt_or_empty(pairs_get(every, "oauth_signature"));
+    let method = opt_or_empty(pairs_get(every, "oauth_signature_method"));
+    let ok = verify(method, uri, http_method, params, sig, opt_job_str(j, "cs"), opt_job_str(j, "rs"))?;
+    println(f"   {method} {if ok { "valid" } else { "INVALID" }}");
+    Ok(())
+}
+
+fn error_job(j: ref Val) -> Result[(), String] {
+    let e = o2_error(get_str(j, "error"), get(j, "description"), get(j, "uri"), get(j, "state"));
+    println(f"   {e.class} status {e.status}: ({e.error}) {e.description}");
+    let tt = e.twotuples();
+    println(f"   twotuples  {tuples_repr(tt)}");
+    println(f"   urlencoded {urlencode(tt, "", true)}");
+    println(f"   json       {e.json()}");
+    println(f"   headers    {e.headers()}");
+    println(f"   in_uri     {add_params_to_uri("https://client.example.com/cb?lang=en", tt, false)?}");
+    Ok(())
+}
+
+fn args_of(j: ref Val) -> Vec[Member] {
+    match get(j, "args") {
+        Some(Val.Dict(ms)) => ms,
+        _ => Vec.new(),
+    }
+}
+
+fn client2_job(op: Str, j: ref Val, st: mut ref State) -> Result[(), String] {
+    let args = args_of(j);
+    if op == "client2" {
+        let c = new_client2(get_str(j, "kind") == "web", args)?;
+        println(client_line(c));
+        st.client = Some(c);
+        return Ok(());
+    }
+    let mut c = match st.client.clone() {
+        Some(c) => c,
+        None => return Err("no client".to_string()),
+    };
+    if op == "challenge" {
+        let verifier = match get(j, "verifier") {
+            Some(v) => v,
+            None => Val.Null,
+        };
+        let method = match get(j, "method") {
+            Some(v) => v,
+            None => Val.Null,
+        };
+        let out = create_code_challenge(mut c, verifier, method);
+        st.client = Some(c.clone());
+        let r = out?;
+        println(f"   returned {repr_val(r, false)}; code_challenge={repr_val(c.code_challenge, false)} code_challenge_method={repr_val(c.code_challenge_method, false)}");
+        return Ok(());
+    }
+    if op == "auth_request" {
+        let r = prepare_authorization_request(mut c, args);
+        st.client = Some(c);
+        println(r?);
+    } else if op == "request_uri" {
+        println(f"   {py_repr(prepare_request_uri(c, args)?)}");
+    } else if op == "parse_callback" {
+        let mut a = args.clone();
+        let uri = str_val(take(mut a, "uri", Val.Null));
+        let state = take(mut a, "state", Val.Null);
+        let r = parse_request_uri_response(mut c, uri, state);
+        st.client = Some(c.clone());
+        match r {
+            Ok(params) => {
+                println(f"   {repr_val(Val.Dict(params), false)}");
+                println(client_line(c));
+            }
+            Err(e) => {
+                println(client_line(c));
+                return Err(e);
+            }
+        }
+    } else if op == "token_request" {
+        let r = client_token_request(mut c, args);
+        st.client = Some(c.clone());
+        match r {
+            Ok(params) => {
+                println(params);
+                println(client_line(c));
+            }
+            Err(e) => {
+                println(client_line(c));
+                return Err(e);
+            }
+        }
+    } else if op == "request_body" {
+        println(f"   {py_repr(prepare_request_body(c, args)?)}");
+    } else if op == "parse_token" {
+        let r = parse_request_body_response(mut c, args);
+        st.client = Some(c.clone());
+        match r {
+            Ok(params) => {
+                println(f"   {repr_val(Val.Dict(params), false)}");
+                println(client_line(c));
+            }
+            Err(e) => {
+                println(client_line(c));
+                return Err(e);
+            }
+        }
+    } else if op == "add_token" {
+        println(add_token(c, args)?);
+    } else if op == "refresh" {
+        println(refresh_request(c, args)?);
+    } else if op == "revoke" {
+        println(revocation_request(args)?);
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the request audit
+
+struct Account {
+    key: String,
+    secret: String,
+    token: String,
+    token_secret: String,
+}
+
+struct Tally {
+    names: Vec[String],
+    counts: Vec[i64],
+}
+
+fn bump(t: mut ref Tally, name: Str) {
+    for k in 0..t.names.len() {
+        if t.names[k] == name {
+            t.counts[k] += 1;
+            return;
+        }
+    }
+    t.names.push(name.to_string());
+    t.counts.push(1);
+}
+
+fn count_of(t: ref Tally, name: Str) -> i64 {
+    for k in 0..t.names.len() {
+        if t.names[k] == name {
+            return t.counts[k];
+        }
+    }
+    0
+}
+
+fn verify_method(method: Str) -> bool {
+    is_hmac(method) or method == "PLAINTEXT"
+}
+
+// One logged request: the verdict and the consumer it names.
+fn check(method: Str, uri: Str, auth: Str, body: ref Body, accounts: ref Vec[Account], seen: mut ref Vec[String], now: i64, window: i64) -> Result[(String, String), String] {
+    let given = match parse_authorization_header(auth) {
+        Ok(g) => g,
+        Err(e) => {
+            let (_, _, msg) = partition(e, b':');
+            return Ok((f"malformed header: {strip(msg)}", "-".to_string()));
+        }
+    };
+    let key = match pairs_get(given, "oauth_consumer_key") {
+        Some(k) => k,
+        None => "-".to_string(),
+    };
+    for name in ["oauth_consumer_key", "oauth_signature_method", "oauth_signature", "oauth_nonce", "oauth_timestamp"] {
+        if pairs_get(given, name).is_none() {
+            return Ok((f"missing parameter: {name}", key));
+        }
+    }
+    let mut secret: Option[String] = None;
+    for a in accounts.iter() {
+        if a.key == key {
+            secret = Some(a.secret.clone());
+        }
+    }
+    if secret.is_none() {
+        return Ok((f"unknown consumer: {key}", key));
+    }
+    let mut token_secret: Option[String] = None;
+    if let Some(tok) = pairs_get(given, "oauth_token") {
+        for a in accounts.iter() {
+            if a.key == key and a.token == tok {
+                token_secret = Some(a.token_secret.clone());
+            }
+        }
+        if token_secret.is_none() {
+            return Ok((f"unknown token: {tok}", key));
+        }
+    }
+    let stamp = opt_or_empty(pairs_get(given, "oauth_timestamp"));
+    let ts = match py_int(stamp) {
+        Some(n) => n,
+        None => return Err(f"ValueError: invalid literal for int() with base 10: {py_repr(stamp)}"),
+    };
+    let age = now - ts;
+    if age > window or -age > window {
+        return Ok((f"stale timestamp: {age} s", key));
+    }
+    let nonce = opt_or_empty(pairs_get(given, "oauth_nonce"));
+    let mark = f"{key} {nonce} {stamp}";
+    if seen.contains(mark) {
+        return Ok((f"replayed nonce: {nonce}", key));
+    }
+    let mut headers = Hdrs { items: Vec.new(), ci: false };
+    headers.set("Authorization", auth);
+    let q = parse_url(uri)?.query;
+    let params = collect_parameters(q, body, headers, true, false)?;
+    let sig = unquote(opt_or_empty(pairs_get(given, "oauth_signature")));
+    let sm = opt_or_empty(pairs_get(given, "oauth_signature_method"));
+    if not verify_method(sm) {
+        return Ok((f"unsupported method: {sm}", key));
+    }
+    if not verify(sm, uri, method, params, sig, secret, token_secret)? {
+        return Ok((f"bad signature: {sm}", key));
+    }
+    seen.push(mark);
+    Ok(("ok".to_string(), key))
+}
+
+fn audit(j: ref Val) -> Result[(), String] {
+    let mut accounts: Vec[Account] = Vec.new();
+    for line in lines_of(read_data(get_str(j, "consumers"))?).iter() {
+        if line.len() == 0 or starts_with(line, "#") {
+            continue;
+        }
+        let f = split_on(line, b'\t');
+        accounts.push(Account { key: f[0].clone(), secret: f[1].clone(), token: f[2].clone(), token_secret: f[3].clone() });
+    }
+    let now = match get(j, "now") {
+        Some(Val.Int(n)) => n,
+        _ => 0,
+    };
+    let window = match get(j, "window") {
+        Some(Val.Int(n)) => n,
+        _ => 0,
+    };
+    let mut seen: Vec[String] = Vec.new();
+    let mut ok = Tally { names: Vec.new(), counts: Vec.new() };
+    let mut bad = Tally { names: Vec.new(), counts: Vec.new() };
+    let mut reasons = Tally { names: Vec.new(), counts: Vec.new() };
+    let lines = lines_of(read_data(get_str(j, "log"))?);
+    let mut n: i64 = 0;
+    for line in lines.iter() {
+        if line.len() == 0 {
+            continue;
+        }
+        n += 1;
+        let f = split_on(line, b'\t');
+        let body = if f[3] == "-" { Body.Absent } else { Body.Text(f[3].clone()) };
+        let path = parse_url(f[1])?.path;
+        let (verdict, who) = check(f[0], f[1], f[2], body, accounts, mut seen, now, window)?;
+        println(f"   {rjust(f"{n}", 2)} {ljust(f[0], 6)} {ljust(path, 22)} {ljust(who, 11)} {verdict}");
+        if verdict == "ok" {
+            bump(mut ok, who);
+        } else {
+            bump(mut bad, who);
+            let (reason, _, _) = partition(verdict, b':');
+            bump(mut reasons, reason);
+        }
+    }
+    let mut who_all: Vec[String] = Vec.new();
+    for w in ok.names.iter() {
+        if not who_all.contains(w) {
+            who_all.push(w.clone());
+        }
+    }
+    for w in bad.names.iter() {
+        if not who_all.contains(w) {
+            who_all.push(w.clone());
+        }
+    }
+    for w in sort_strings(who_all).iter() {
+        println(f"   {ljust(w, 11)} {rjust(f"{count_of(ok, w)}", 2)} accepted {rjust(f"{count_of(bad, w)}", 2)} rejected");
+    }
+    for r in sort_strings(reasons.names.clone()).iter() {
+        println(f"   {ljust(r, 26)} {rjust(f"{count_of(reasons, r)}", 2)}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ run
+
+fn run_job(op: Str, j: ref Val, st: mut ref State) -> Result[(), String] {
+    if op == "escape" {
+        let s = get_str(j, "s");
+        let e = escape(s);
+        println(f"   {py_repr(s)} -> {py_repr(e)} -> {py_repr(unquote(e))}");
+    } else if op == "unescape" {
+        let s = get_str(j, "s");
+        println(f"   {py_repr(s)} -> {py_repr(unquote(s))}");
+    } else if op == "urldecode" {
+        println(f"   {tuples_repr(urldecode(get_str(j, "q"))?)}");
+    } else if op == "authheader" {
+        println(f"   {tuples_repr(parse_authorization_header(get_str(j, "h"))?)}");
+    } else if op == "bsuri" {
+        println(f"   {py_repr(base_string_uri(get_str(j, "uri"), opt_job_str(j, "host"))?)}");
+    } else if op == "collect" {
+        let params = collect_parameters(get_str(j, "query"), job_body(get(j, "body"), false), job_headers(get(j, "headers")), job_bool(j, "exclude_sig", true), job_bool(j, "with_realm", false))?;
+        println(f"   {tuples_repr(params)}");
+    } else if op == "normalize" {
+        println(f"   {py_repr(normalize_parameters(val_pairs(get(j, "params").unwrap())))}");
+    } else if op == "basestring" {
+        println(f"   {py_repr(signature_base_string(get_str(j, "method"), get_str(j, "uri"), get_str(j, "params")))}");
+    } else if op == "sign1" {
+        sign_job(j, mut st);
+    } else if op == "verify1" {
+        verify_job(j, st)?;
+    } else if op == "error" {
+        error_job(j)?;
+    } else if op == "audit" {
+        audit(j)?;
+    } else {
+        client2_job(op, j, mut st)?;
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    let text = read_data("jobs.jsonl")?;
+    let mut st = State { last: None, client: None };
+    for line in lines_of(text).iter() {
+        if line.len() == 0 {
+            continue;
+        }
+        if starts_with(line, "== ") {
+            println(line);
+            continue;
+        }
+        let j = json_parse(line)?;
+        let op = get_str(j, "op");
+        println(f"-- {line}");
+        if let Err(e) = run_job(op, j, mut st) {
+            println(f"   raised {e}");
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    let mut t0 = String.new();
+    data_file_0_0(mut t0);
+    v.push(DataFile { path: "consumers.tsv".to_string(), hex: false, body: t0 });
+    let mut t1 = String.new();
+    data_file_1_0(mut t1);
+    data_file_1_1(mut t1);
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t1 });
+    let mut t2 = String.new();
+    data_file_2_0(mut t2);
+    v.push(DataFile { path: "requests.log".to_string(), hex: false, body: t2 });
+    v
+}
+
+fn data_file_0_0(t: mut ref String) {
+    t.push_str("# consumer key\tconsumer secret\ttoken\ttoken secret\n");
+    t.push_str("ck-mobile\tm0b1le-s3cret\tu-1001\tu1001-ts\n");
+    t.push_str("ck-mobile\tm0b1le-s3cret\tu-1002\tu1002-ts\n");
+    t.push_str("ck-partner\tp@rtner~key\tp-77\tp77/ts\n");
+    t.push_str("ck-cron\tcr0n\t-\t-\n");
+}
+
+fn data_file_1_0(t: mut ref String) {
+    t.push_str("== oauth1 escape\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"Ladies + Gentlemen\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"An encoded string!\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"Dogs, Cats & Mice\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"☃\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"-._~\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"a/b?c=d#e\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"100%\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"日本語 text\"}\n");
+    t.push_str("{\"op\": \"escape\", \"s\": \"oauth_token=x&y\"}\n");
+    t.push_str("{\"op\": \"unescape\", \"s\": \"%7E%2f%2F\"}\n");
+    t.push_str("{\"op\": \"unescape\", \"s\": \"a+b\"}\n");
+    t.push_str("{\"op\": \"unescape\", \"s\": \"%E2%98%83\"}\n");
+    t.push_str("{\"op\": \"unescape\", \"s\": \"%zz\"}\n");
+    t.push_str("{\"op\": \"unescape\", \"s\": \"%\"}\n");
+    t.push_str("{\"op\": \"unescape\", \"s\": \"caf%C3%A9\"}\n");
+    t.push_str("== oauth1 urldecode\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=1&b=2\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"c2&a3=2+q\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=%20&b=\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"x=1;y=2\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=1&&b=2\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"name=caf%C3%A9\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"q=hello world\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=<b\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=%zz\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=%4\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=%4G\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=%\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"=v&k=\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=1&a=2\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"path=/x/y?z\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"a=é\"}\n");
+    t.push_str("{\"op\": \"urldecode\", \"q\": \"tilde=~&star=*\"}\n");
+    t.push_str("== oauth1 authorization header\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth realm=\\\"Example\\\", oauth_consumer_key=\\\"9djdj82h48djs9d2\\\", oauth_token=\\\"kkk9d7dh3k39sjv7\\\"\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"oauth oauth_nonce=\\\"7d8f3e4a\\\", oauth_version=\\\"1.0\\\"\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth oauth_callback=\\\"http%3A%2F%2Fprinter.example.com%2Fready\\\"\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth a=\\\"1,2\\\", b=\\\"x\\\\\\\"y\\\"\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth a=plain, b=\\\"quoted\\\"\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth a=\\\"1\\\", a=\\\"2\\\"\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth a=\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth novalue\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"Bearer abc\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth \"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAuth a=\\\"1\\\",,b=\\\"2\\\"\"}\n");
+    t.push_str("{\"op\": \"authheader\", \"h\": \"OAUTH x=\\\"y\\\"\"}\n");
+    t.push_str("== oauth1 base string URI\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://EXAMPLE.COM:80/r%20v/X?id=123\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"https://www.example.net:8080/?q=1\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"https://api.example.com:443/1/statuses\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://api.example.com:443/1/statuses\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"HTTPS://Example.com\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"https://example.com/a b;p=1?x#frag\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://[2001:DB8:0:0:0:0:0:1]:8000/v1\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://[::FFFF:0:0:1]/\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://[fe80:0:0:0:200:f8ff:fe21:67cf]:80/\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://192.168.000.001/x\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://10.0.0.1:0/x\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://example.com:99999/x\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://example.com:8x/x\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"/relative/path\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http:///nohost\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"https://internal:8443/token\", \"host\": \"api.Example.com\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"https://internal:8443/token\", \"host\": \"api.example.com:9000\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"http://internal/token\", \"host\": \"proxy.example.com:80\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"https://internal/token\", \"host\": \"[::1]:8443\"}\n");
+    t.push_str("{\"op\": \"bsuri\", \"uri\": \"mailto:someone@example.com\"}\n");
+    t.push_str("== oauth1 collect and normalize\n");
+    t.push_str("{\"op\": \"collect\", \"query\": \"b5=%3D%253D&a3=a&c%40=&a2=r%20b\", \"body\": \"c2&a3=2+q\", \"headers\": {\"Authorization\": \"OAuth realm=\\\"Example\\\", oauth_consumer_key=\\\"9djdj82h48djs9d2\\\", oauth_token=\\\"kkk9d7dh3k39sjv7\\\", oauth_signature_method=\\\"HMAC-SHA1\\\", oauth_timestamp=\\\"137131201\\\", oauth_nonce=\\\"7d8f3e4a\\\", oauth_signature=\\\"djosJKDKJSD8743243%2Fjdk33klY%3D\\\"\"}}\n");
+    t.push_str("{\"op\": \"collect\", \"query\": \"b5=%3D%253D&a3=a&c%40=&a2=r%20b\", \"body\": \"c2&a3=2+q\", \"headers\": {\"authorization\": \"OAuth realm=\\\"Example\\\", oauth_consumer_key=\\\"9djdj82h48djs9d2\\\", oauth_token=\\\"kkk9d7dh3k39sjv7\\\", oauth_signature_method=\\\"HMAC-SHA1\\\", oauth_timestamp=\\\"137131201\\\", oauth_nonce=\\\"7d8f3e4a\\\", oauth_signature=\\\"djosJKDKJSD8743243%2Fjdk33klY%3D\\\"\"}, \"with_realm\": true, \"exclude_sig\": false}\n");
+    t.push_str("{\"op\": \"collect\", \"query\": \"\", \"body\": [[\"a\", \"1\"], [\"oauth_x\", \"%41\"]], \"headers\": {}}\n");
+    t.push_str("{\"op\": \"collect\", \"query\": \"oauth_extra=%2541\", \"body\": null, \"headers\": {\"Content-Type\": \"text/plain\"}}\n");
+    t.push_str("{\"op\": \"collect\", \"query\": \"\", \"body\": \"{\\\"json\\\": true}\", \"headers\": {}}\n");
+    t.push_str("{\"op\": \"collect\", \"query\": \"a=1\", \"body\": \"\", \"headers\": {\"Authorization\": \"Basic Zm9vOmJhcg==\"}}\n");
+    t.push_str("{\"op\": \"normalize\", \"params\": [[\"b5\", \"=%3D\"], [\"a3\", \"a\"], [\"c@\", \"\"], [\"a2\", \"r b\"], [\"oauth_consumer_key\", \"9djdj82h48djs9d2\"], [\"oauth_token\", \"kkk9d7dh3k39sjv7\"], [\"oauth_signature_method\", \"HMAC-SHA1\"], [\"oauth_timestamp\", \"137131201\"], [\"oauth_nonce\", \"7d8f3e4a\"], [\"c2\", \"\"], [\"a3\", \"2 q\"]]}\n");
+    t.push_str("{\"op\": \"normalize\", \"params\": [[\"z\", \"1\"], [\"a\", \"2\"], [\"a\", \"10\"], [\"A\", \"1\"], [\"é\", \"x\"], [\"a b\", \"~\"]]}\n");
+    t.push_str("{\"op\": \"normalize\", \"params\": []}\n");
+    t.push_str("{\"op\": \"basestring\", \"method\": \"post\", \"uri\": \"http://example.com/request\", \"params\": \"a2=r%20b&a3=2%20q&a3=a&b5=%3D%253D&c%40=&c2=&oauth_consumer_key=9djdj82h48djs9d2\"}\n");
+    t.push_str("== oauth1 signing\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"xvz1evFS4wEEPTGEFPHBog\", \"client_secret\": \"kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw\", \"resource_owner_key\": \"370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb\", \"resource_owner_secret\": \"LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE\", \"nonce\": \"kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg\", \"timestamp\": \"1318622958\"}, \"uri\": \"https://api.twitter.com/1.1/statuses/update.json?include_entities=true\", \"method\": \"POST\", \"body\": \"status=Hello%20Ladies%20%2b%20Gentlemen%2c%20a%20signed%20OAuth%20request%21\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw\", \"rs\": \"LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE\"}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw\", \"rs\": \"wrong-secret\"}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw\", \"rs\": \"LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE\", \"method\": \"PUT\"}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw\", \"rs\": \"LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE\", \"add\": [\"status\", \"Goodbye\"]}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"xvz1evFS4wEEPTGEFPHBog\", \"client_secret\": \"kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw\", \"resource_owner_key\": \"370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb\", \"resource_owner_secret\": \"LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE\", \"nonce\": \"kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg\", \"timestamp\": \"1318622958\", \"realm\": \"Twitter API\"}, \"uri\": \"https://api.twitter.com/1.1/statuses/update.json?include_entities=true\", \"method\": \"POST\", \"body\": [[\"status\", \"Hello Ladies + Gentlemen, a signed OAuth request!\"]], \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"HMAC-SHA1\", \"signature_type\": \"AUTH_HEADER\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"HMAC-SHA1\", \"signature_type\": \"QUERY\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"HMAC-SHA256\", \"signature_type\": \"AUTH_HEADER\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"HMAC-SHA256\", \"signature_type\": \"QUERY\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"HMAC-SHA512\", \"signature_type\": \"AUTH_HEADER\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"HMAC-SHA512\", \"signature_type\": \"QUERY\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"PLAINTEXT\", \"signature_type\": \"AUTH_HEADER\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_method\": \"PLAINTEXT\", \"signature_type\": \"QUERY\"}, \"uri\": \"http://photos.example.net/photos?file=vacation.jpg&size=original\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_type\": \"BODY\"}, \"uri\": \"http://photos.example.net/photos\", \"method\": \"POST\", \"body\": \"file=vacation.jpg&size=original&tags=\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\"}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"pfkkdhi9sl3r4s00\", \"uri\": \"http://photos.example.net/photos2\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"nnch734d00sl2jdk\", \"resource_owner_secret\": \"pfkkdhi9sl3r4s00\", \"nonce\": \"kllo9940pd9333jh\", \"timestamp\": \"1191242096\", \"signature_type\": \"BODY\"}, \"uri\": \"http://photos.example.net/photos\", \"method\": \"POST\", \"body\": \"file=a.jpg\", \"headers\": {\"content-type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"callback_uri\": \"http://printer.example.com/ready\", \"signature_method\": \"PLAINTEXT\", \"nonce\": \"wIjqoS\", \"timestamp\": \"137131200\", \"realm\": \"Photos\"}, \"uri\": \"https://photos.example.net/initiate\", \"method\": \"POST\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"dpf43f3p2l4k3l03\", \"client_secret\": \"kd94hf93k423kf44\", \"resource_owner_key\": \"hh5s93j4hdidpola\", \"resource_owner_secret\": \"hdhd0244k9j7ao03\", \"verifier\": \"hfdp7dh39dks9884\", \"nonce\": \"walatlh\", \"timestamp\": \"137131201\"}, \"uri\": \"https://photos.example.net/token\", \"method\": \"POST\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"kd94hf93k423kf44\", \"rs\": \"hdhd0244k9j7ao03\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/items\", \"method\": \"POST\", \"body\": \"{\\\"name\\\": \\\"lamp\\\", \\\"qty\\\": 2}\", \"headers\": {\"Content-Type\": \"application/json\", \"Accept\": \"application/json\"}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"cs&demo secret\", \"rs\": \"ts~42\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_method\": \"HMAC-SHA256\"}, \"uri\": \"https://api.example.com/v2/items/7\", \"method\": \"PUT\", \"body\": \"raw text body\", \"headers\": {\"Content-Type\": \"text/plain\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/search?q=caf%C3%A9&page=2&sort=\", \"method\": \"get\", \"body\": null, \"headers\": {\"Host\": \"public.example.com\"}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"cs&demo secret\", \"rs\": \"ts~42\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_type\": \"QUERY\"}, \"uri\": \"https://internal:8443/v2/search?q=x\", \"method\": \"GET\", \"body\": null, \"headers\": {\"host\": \"public.example.com\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://internal:8443/v2/search?q=x\", \"method\": \"GET\", \"body\": null, \"headers\": {\"host\": \"public.example.com\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/upload\", \"method\": \"POST\", \"body\": \"a=1\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=xyz\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/upload\", \"method\": \"POST\", \"body\": \"--xyz--\", \"headers\": {\"Content-Type\": \"multipart/form-data; boundary=xyz\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/form\", \"method\": \"POST\", \"body\": \"{\\\"a\\\": 1}\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/form\", \"method\": \"POST\", \"body\": \"a=1&b=2\", \"headers\": {}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/form\", \"method\": \"POST\", \"body\": \"\", \"headers\": {\"Content-Type\": \"text/plain\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/form\", \"method\": \"POST\", \"body\": \"token\", \"headers\": {\"Content-Type\": \"application/json\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_type\": \"BODY\"}, \"uri\": \"https://api.example.com/v2/form\", \"method\": \"POST\", \"body\": \"{\\\"a\\\": 1}\", \"headers\": {\"Content-Type\": \"application/json\", \"Accept\": \"application/json\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/form\", \"method\": \"GET\", \"body\": \"a=1\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/form\", \"method\": \"HEAD\", \"body\": [[\"a\", \"1\"]], \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_method\": \"HMAC-MD5\"}, \"uri\": \"https://api.example.com/v2/x\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_type\": \"COOKIE\"}, \"uri\": \"https://api.example.com/v2/x\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/x?q=a b\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\"}, \"uri\": \"https://api.example.com/v2/x?q=%zz\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"only-key\", \"nonce\": \"1\", \"timestamp\": \"2\"}, \"uri\": \"http://[2001:db8::1]:8080/a;b?c=d\", \"method\": \"DELETE\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"\", \"rs\": \"\"}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": null, \"rs\": null}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_type\": \"QUERY\"}, \"uri\": \"https://api.example.com/v2/x?a=1#top\", \"method\": \"GET\", \"body\": null, \"headers\": {}}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"cs&demo secret\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": \"ts~42\", \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_type\": \"QUERY\"}, \"uri\": \"https://api.example.com/v2/x?b=2&a=1\", \"method\": \"POST\", \"body\": \"z=9\", \"headers\": {\"Content-Type\": \"application/x-www-form-urlencoded\"}}\n");
+    t.push_str("{\"op\": \"verify1\", \"cs\": \"cs&demo secret\", \"rs\": \"ts~42\"}\n");
+    t.push_str("{\"op\": \"sign1\", \"client\": {\"client_key\": \"ck-demo\", \"client_secret\": \"\", \"resource_owner_key\": \"tok/42\", \"resource_owner_secret\": null, \"nonce\": \"n0nce\", \"timestamp\": \"1700000000\", \"signature_method\": \"PLAINTEXT\"}, \"uri\": \"https://api.example.com/\", \"method\": \"GET\", \"body\": null, \"headers\": {}, \"realm\": \"override\"}\n");
+    t.push_str("== oauth2 errors\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"access_denied\", \"description\": \"The user denied the request.\", \"uri\": null, \"state\": \"xyz\"}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"invalid_request\", \"description\": null, \"uri\": null, \"state\": null}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"invalid_client\", \"description\": \"Client authentication failed.\", \"uri\": \"https://example.com/docs/errors#client\", \"state\": null}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"invalid_grant\", \"description\": \"Code expired\", \"uri\": null, \"state\": null}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"invalid_token\", \"description\": null, \"uri\": null, \"state\": \"s t\"}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"insufficient_scope\", \"description\": \"\", \"uri\": null, \"state\": null}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"slow_down\", \"description\": \"Polling too fast\", \"uri\": null, \"state\": null}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"temporarily_unavailable\", \"description\": \"Back in 5 minutes & counting\", \"uri\": null, \"state\": \"ab/cd\"}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"unsupported_grant_type\", \"description\": \"grant_type=password is disabled\", \"uri\": null, \"state\": null}\n");
+    t.push_str("{\"op\": \"error\", \"error\": \"server_error\", \"description\": \"Ünïcode \\\"quoted\\\"\", \"uri\": null, \"state\": null}\n");
+    t.push_str("== oauth2 web application flow\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"s6BhdRkqt3\", \"scope\": [\"openid\", \"profile\"], \"redirect_url\": \"https://client.example.com/cb\"}}\n");
+    t.push_str("{\"op\": \"auth_request\", \"args\": {\"authorization_url\": \"https://server.example.com/authorize\", \"state\": \"xyz\"}}\n");
+    t.push_str("{\"op\": \"auth_request\", \"args\": {\"authorization_url\": \"https://server.example.com/authorize?audience=api\", \"state\": \"st-2\", \"scope\": \"email\", \"prompt\": \"consent\", \"login_hint\": \"\", \"access_type\": \"offline\"}}\n");
+    t.push_str("{\"op\": \"auth_request\", \"args\": {\"authorization_url\": \"http://server.example.com/authorize\", \"state\": \"x\"}}\n");
+    t.push_str("{\"op\": \"challenge\", \"verifier\": \"dBjftJeZ4CVP-1JzbJyiE3BXlqBFOrk_7wRxJhN6oBQ\", \"method\": \"S256\"}\n");
+    t.push_str("{\"op\": \"challenge\", \"verifier\": \"dBjftJeZ4CVP-1JzbJyiE3BXlqBFOrk_7wRxJhN6oBQ\", \"method\": null}\n");
+    t.push_str("{\"op\": \"challenge\", \"verifier\": \"plain-verifier-value\", \"method\": \"plain\"}\n");
+    t.push_str("{\"op\": \"challenge\", \"verifier\": null, \"method\": \"S256\"}\n");
+    t.push_str("{\"op\": \"request_uri\", \"args\": {\"uri\": \"https://server.example.com/authorize\", \"state\": \"pkce-1\", \"code_challenge\": \"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM\", \"code_challenge_method\": \"S256\", \"redirect_uri\": \"https://client.example.com/cb\"}}\n");
+    t.push_str("{\"op\": \"request_uri\", \"args\": {\"uri\": \"https://server.example.com/authorize#frag\", \"scope\": [], \"state\": null, \"nonce\": \"n-0S6_WzA2Mj\", \"max_age\": 0, \"display\": \"page\"}}\n");
+    t.push_str("{\"op\": \"parse_callback\", \"args\": {\"uri\": \"https://client.example.com/cb?code=SplxlOBeZQQYbYS6WxSbIA&state=xyz\", \"state\": \"xyz\"}}\n");
+    t.push_str("{\"op\": \"parse_callback\", \"args\": {\"uri\": \"https://client.example.com/cb?code=abc&state=other\", \"state\": \"xyz\"}}\n");
+    t.push_str("{\"op\": \"parse_callback\", \"args\": {\"uri\": \"https://client.example.com/cb?state=xyz\", \"state\": \"xyz\"}}\n");
+    t.push_str("{\"op\": \"parse_callback\", \"args\": {\"uri\": \"https://client.example.com/cb?error=access_denied&error_description=User+said+no&state=xyz\", \"state\": \"xyz\"}}\n");
+    t.push_str("{\"op\": \"parse_callback\", \"args\": {\"uri\": \"https://client.example.com/cb?error=invalid_scope\", \"state\": null}}\n");
+    t.push_str("{\"op\": \"parse_callback\", \"args\": {\"uri\": \"http://client.example.com/cb?code=x\", \"state\": null}}\n");
+    t.push_str("{\"op\": \"parse_callback\", \"args\": {\"uri\": \"https://client.example.com/cb?code=c1&code=c2&extra=&state=xyz\"}}\n");
+    t.push_str("{\"op\": \"token_request\", \"args\": {\"token_url\": \"https://server.example.com/token\", \"authorization_response\": \"https://client.example.com/cb?code=SplxlOBeZQQYbYS6WxSbIA&state=xyz\", \"state\": \"xyz\", \"client_secret\": \"7Fjfp0ZBr1KtDRbnfVdmIw\"}}\n");
+    t.push_str("{\"op\": \"token_request\", \"args\": {\"token_url\": \"https://server.example.com/token\", \"code_verifier\": \"ver-1\", \"include_client_id\": false, \"audience\": \"api\", \"empty\": \"\"}}\n");
+    t.push_str("{\"op\": \"token_request\", \"args\": {\"token_url\": \"https://server.example.com/token\", \"body\": \"a=1&b=\", \"redirect_url\": \"https://client.example.com/other\", \"code\": \"explicit\"}}\n");
+    t.push_str("{\"op\": \"token_request\", \"args\": {\"token_url\": \"https://server.example.com/token\", \"authorization_response\": \"https://client.example.com/cb?code=zzz&state=bad\"}}\n");
+    t.push_str("{\"op\": \"request_body\", \"args\": {\"client_id\": \"someone-else\"}}\n");
+    t.push_str("{\"op\": \"request_body\", \"args\": {\"client_id\": \"s6BhdRkqt3\", \"scope\": [\"a\", \"b\"], \"count\": 3}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"access_token\\\": \\\"2YotnFZFEjr1zCsicMWpAA\\\", \\\"token_type\\\": \\\"Bearer\\\", \\\"expires_in\\\": 3600, \\\"refresh_token\\\": \\\"tGzv3JOkF0XG5Qx2TlKWIA\\\", \\\"scope\\\": \\\"openid profile\\\"}\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/me\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/me?fields=name\", \"token_placement\": \"query\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/me\", \"http_method\": \"POST\", \"body\": \"a=1\", \"headers\": {\"Accept\": \"*/*\"}, \"token_placement\": \"body\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/me\", \"token_placement\": \"cookie\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"http://api.example.com/me\"}}\n");
+}
+
+fn data_file_1_1(t: mut ref String) {
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"access_token\\\": \\\"x\\\", \\\"token_type\\\": \\\"Bearer\\\", \\\"scope\\\": \\\"profile openid\\\"}\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"access_token\\\": \\\"x\\\", \\\"token_type\\\": \\\"Bearer\\\", \\\"scope\\\": \\\"email\\\"}\", \"scope\": \"profile\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"access_token\\\": \\\"y\\\", \\\"token_type\\\": \\\"bearer\\\"}\", \"scope\": \"admin\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"access_token=z1&token_type=bearer&expires_in=120&scope=write+read&blank=\", \"scope\": \"read write\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"access_token=z1&expires_in=soon\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"error\\\": \\\"invalid_grant\\\", \\\"error_description\\\": \\\"Code was already redeemed.\\\"}\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"error\\\": \\\"invalid_request\\\"}\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"error\\\": \\\"authorization_pending\\\", \\\"interval\\\": 5}\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"token_type\\\": \\\"Bearer\\\"}\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"access_token\\\": \\\"nested\\\", \\\"token_type\\\": \\\"Bearer\\\", \\\"expires_in\\\": null, \\\"id_token\\\": \\\"eyJ.x.y\\\", \\\"aud\\\": [\\\"a\\\", \\\"b\\\"], \\\"ok\\\": true, \\\"meta\\\": {\\\"region\\\": \\\"eu\\\", \\\"n\\\": 2}, \\\"ratio\\\": null}\"}}\n");
+    t.push_str("{\"op\": \"refresh\", \"args\": {\"token_url\": \"https://server.example.com/token\"}}\n");
+    t.push_str("{\"op\": \"refresh\", \"args\": {\"token_url\": \"https://server.example.com/token\", \"refresh_token\": \"override\", \"scope\": [\"openid\"], \"client_id\": \"s6BhdRkqt3\", \"client_secret\": \"sec\"}}\n");
+    t.push_str("{\"op\": \"refresh\", \"args\": {\"token_url\": \"http://server.example.com/token\"}}\n");
+    t.push_str("{\"op\": \"revoke\", \"args\": {\"revocation_url\": \"https://server.example.com/revoke\", \"token\": \"2YotnFZFEjr1zCsicMWpAA\"}}\n");
+    t.push_str("{\"op\": \"revoke\", \"args\": {\"revocation_url\": \"https://server.example.com/revoke\", \"token\": \"tGzv3JOkF0XG5Qx2TlKWIA\", \"token_type_hint\": \"refresh_token\", \"body\": \"client_id=s6BhdRkqt3\"}}\n");
+    t.push_str("{\"op\": \"revoke\", \"args\": {\"revocation_url\": \"https://server.example.com/revoke?x=1\", \"token\": \"t\", \"token_type_hint\": null, \"callback\": \"package.myCallback\", \"extra\": \"1\"}}\n");
+    t.push_str("{\"op\": \"revoke\", \"args\": {\"revocation_url\": \"http://server.example.com/revoke\", \"token\": \"t\"}}\n");
+    t.push_str("== oauth2 backend application flow\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"backend\", \"args\": {\"client_id\": \"svc-reporting\"}}\n");
+    t.push_str("{\"op\": \"request_body\", \"args\": {}}\n");
+    t.push_str("{\"op\": \"request_body\", \"args\": {\"scope\": \"metrics.read\", \"include_client_id\": true, \"client_secret\": \"s3cr3t-value\"}}\n");
+    t.push_str("{\"op\": \"token_request\", \"args\": {\"token_url\": \"https://auth.example.com/oauth/token\", \"scope\": [\"a\", \"b\"], \"audience\": \"https://api.example.com\"}}\n");
+    t.push_str("{\"op\": \"parse_token\", \"args\": {\"body\": \"{\\\"access_token\\\": \\\"svc-tok\\\", \\\"token_type\\\": \\\"Bearer\\\", \\\"expires_in\\\": \\\"900\\\"}\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/reports\", \"headers\": {\"X-Trace\": \"1\"}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/reports\", \"token_placement\": \"body\"}}\n");
+    t.push_str("== oauth2 clients built from saved tokens\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"c\", \"token\": {\"access_token\": \"old\", \"expires_at\": 1600000000, \"token_type\": \"Bearer\"}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/x\"}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"c\", \"token\": {\"access_token\": \"fresh\", \"expires_at\": \"1800000000\"}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/x\"}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"c\", \"token\": {\"access_token\": \"odd\", \"expires_at\": \"tomorrow\"}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/x\"}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"c\", \"token_type\": \"JWT\", \"access_token\": \"j\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/x\"}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"c\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/x\"}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"c\", \"default_token_placement\": \"query\", \"token\": {\"access_token\": \"q-tok\", \"refresh_token\": \"r\", \"expires_in\": 60}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://api.example.com/x?y=1\"}}\n");
+    t.push_str("{\"op\": \"refresh\", \"args\": {\"token_url\": \"https://server.example.com/token\", \"body\": \"keep=1\"}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"mac-client\", \"token\": {\"access_token\": \"h480djs93hd8\", \"token_type\": \"MAC\", \"mac_key\": \"489dks293j39\", \"mac_algorithm\": \"hmac-sha-1\"}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://example.com:8443/resource/1?b=1&a=2\", \"nonce\": \"264095:dj83hs9s\", \"ext\": \"a,b,c\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://example.com/resource/1\", \"http_method\": \"post\", \"body\": \"hello=world\", \"nonce\": \"264095:7d8f3e4a\"}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://example.com/resource/1\", \"token_placement\": \"query\", \"nonce\": \"1:2\"}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"mac-client\", \"token\": {\"access_token\": \"h480djs93hd8\", \"token_type\": \"mac\", \"mac_key\": \"489dks293j39\", \"mac_algorithm\": \"hmac-sha-256\"}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://example.com/resource/1\", \"nonce\": \"264095:dj83hs9s\", \"headers\": {\"Accept\": \"text/html\"}}}\n");
+    t.push_str("{\"op\": \"client2\", \"kind\": \"web\", \"args\": {\"client_id\": \"mac-client\", \"token\": {\"access_token\": \"h\", \"token_type\": \"MAC\", \"mac_key\": \"k\", \"mac_algorithm\": \"hmac-md5\"}}}\n");
+    t.push_str("{\"op\": \"add_token\", \"args\": {\"uri\": \"https://example.com/resource/1\", \"nonce\": \"1:2\"}}\n");
+    t.push_str("== request audit\n");
+    t.push_str("{\"op\": \"audit\", \"log\": \"requests.log\", \"consumers\": \"consumers.tsv\", \"now\": 1700000000, \"window\": 600}\n");
+}
+
+fn data_file_2_0(t: mut ref String) {
+    t.push_str("GET\thttps://api.shop.example/v1/orders\tOAuth oauth_nonce=\"n5168\", oauth_timestamp=\"1699999700\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1001\", oauth_signature=\"fGD8taPY%2BHhHZx%2BeWRRGL%2BVLnAI%3D\"\t-\n");
+    t.push_str("POST\thttps://api.shop.example/v1/orders/1187\tOAuth oauth_nonce=\"n6102\", oauth_timestamp=\"1699999717\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA256\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"if2ZKQplfMb3f24libp4BOo6bh3O%2B9xZ2eoo1leqGLo%3D\"\tqty=1&note=rush+order\n");
+    t.push_str("GET\thttps://api.shop.example/v1/users/me\tOAuth oauth_nonce=\"n8323\", oauth_timestamp=\"1699999734\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"bOLQN7WW68nhXMeL846nUFcZMqg%3D\"\t-\n");
+    t.push_str("DELETE\thttps://api.shop.example/v1/search?q=red+shoes&page=2\tOAuth oauth_nonce=\"n1435\", oauth_timestamp=\"1699999751\", oauth_version=\"1.0\", oauth_signature_method=\"PLAINTEXT\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1002\", oauth_signature=\"m0b1le-s3cret%26u1002-ts\"\t-\n");
+    t.push_str("GET\thttps://api.shop.example/v1/inventory?sku=A-12&sku=A-13\tOAuth oauth_nonce=\"n6437\", oauth_timestamp=\"1699999768\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA512\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"Xivp5FjY1%2FAmpk%2F7j0Nv2bPek1aldnGNFHnfwJf7FOkADzAI%2FoRHTu6uJeigUrIW0e2ZqXa65zouHUEnqTUx2lA%3D%3D\"\t-\n");
+    t.push_str("PUT\thttps://api.shop.example/v1/reports/daily\tOAuth oauth_nonce=\"n4699\", oauth_timestamp=\"1699999785\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"jROGl4rGiCrTiLilW6rBOnSx%2BJM%3D\"\tqty=5&note=rush+order\n");
+    t.push_str("GET\thttps://api.shop.example/v1/orders\tOAuth oauth_nonce=\"n0278\", oauth_timestamp=\"1699999802\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1001\", oauth_signature=\"cQw7J%2BuZ%2FmsAyjgum3tPYlbAg6M%3D\"\t-\n");
+    t.push_str("POST\thttps://api.shop.example/v1/orders/1187\tOAuth oauth_nonce=\"n6397\", oauth_timestamp=\"1699999819\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA256\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"T2e%2B7RznHANgSD4o803uBhICX69mKO%2FyGDYKKMJC0FU%3D\"\tqty=7&note=a%2Fb&qty=999\n");
+    t.push_str("GET\thttps://api.shop.example/v1/users/me\tOAuth oauth_nonce=\"n2018\", oauth_timestamp=\"1699999836\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"6DzfuBHm96n4i3cIz9mrXLbKcjA%3D\"\t-\n");
+    t.push_str("DELETE\thttps://api.shop.example/v1/search?q=red+shoes&page=2\tOAuth oauth_nonce=\"n5703\", oauth_timestamp=\"1699999853\", oauth_version=\"1.0\", oauth_signature_method=\"PLAINTEXT\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1002\", oauth_signature=\"m0b1le-s3cret%26u1002-ts\"\t-\n");
+    t.push_str("GET\thttps://api.shop.example/v1/inventory?sku=A-12&sku=A-13\tOAuth oauth_nonce=\"n9257\", oauth_timestamp=\"1699999870\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA512\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"UVo213%2FM3SpznG2OBs3CuoCtlOVjNW6EII%2FwhTZlz9w9udHjgJQI2kpfBFs1VxZJqJTYUf4u4DqcIB%2BQYj354A%3D%3D\"\t-\n");
+    t.push_str("PUT\thttps://api.shop.example/v1/reports/daily\tOAuth oauth_nonce=\"n9729\", oauth_timestamp=\"1699999887\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"fPlZJvt3G6ZErR6Y2CHdttEWqug%3D\"\tqty=11&note=a%2Fb\n");
+    t.push_str("GET\thttps://api.shop.example/v1/orders\tOAuth oauth_nonce=\"n1643\", oauth_timestamp=\"1699999904\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1001\", oauth_signature=\"gpw%2B3mqp5ZRFsLK5AkfRvea1wOc%3D\"\t-\n");
+    t.push_str("POST\thttps://api.shop.example/v1/orders/1187\tOAuth oauth_nonce=\"n2815\", oauth_timestamp=\"1699999921\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA256\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"Bmpib89dXw2469smTz3LerrWly0dFmFf9ljZTsf5oms%3D\"\tqty=13&note=rush+order\n");
+    t.push_str("GET\thttps://api.shop.example/v1/users/me\tOAuth oauth_nonce=\"n3639\", oauth_timestamp=\"1699999938\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"48L0kZhGa3BMxQZLU3Su27difOo%3D\"\t-\n");
+    t.push_str("DELETE\thttps://api.shop.example/v1/search?q=red+shoes&page=2\tOAuth oauth_nonce=\"n9060\", oauth_timestamp=\"1699999955\", oauth_version=\"1.0\", oauth_signature_method=\"PLAINTEXT\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1002\", oauth_signature=\"Xm0b1le-s3cret%26u1002-ts\"\t-\n");
+    t.push_str("GET\thttps://api.shop.example/v1/inventory?sku=A-12&sku=A-13\tOAuth oauth_nonce=\"n7237\", oauth_timestamp=\"1699999972\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA512\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"OTx7JeBcKhSjQ1641ckq7UW8dXAdMG9h5G8yyn3D7jkErEL6pbqXM55erVaEP%2BPJY%2BOiGE0TXD1a%2FXjqcZpqfw%3D%3D\"\t-\n");
+    t.push_str("PUT\thttps://api.shop.example/v1/reports/daily\tOAuth oauth_nonce=\"n8011\", oauth_timestamp=\"1699999989\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"r1Dkogys1j%2FJtZAR1GMXTlf7KnA%3D\"\tqty=17&note=rush+order\n");
+    t.push_str("GET\thttps://api.shop.example/v1/orders\tOAuth oauth_nonce=\"n3284\", oauth_timestamp=\"1700000006\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1001\", oauth_signature=\"X1QEJpBi4gjVx7U0C%2FsHhJT7188%3D\"\t-\n");
+    t.push_str("POST\thttps://api.shop.example/v1/orders/1187\tOAuth oauth_nonce=\"n3660\", oauth_timestamp=\"1700000023\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA256\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"U8Xm13n6ckTi6rtzuejojzi5kRFn7Qw58%2BCxBFDMmzI%3D\"\tqty=19&note=a%2Fb\n");
+    t.push_str("GET\thttps://api.shop.example/v1/users/me\tOAuth oauth_nonce=\"n8914\", oauth_timestamp=\"1700000040\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-unknown\", oauth_signature=\"erh0pfjvTl5Pjs3d1ec6IoINiX8%3D\"\t&qty=999\n");
+    t.push_str("DELETE\thttps://api.shop.example/v1/search?q=red+shoes&page=2\tOAuth oauth_nonce=\"n0833\", oauth_timestamp=\"1700000057\", oauth_version=\"1.0\", oauth_signature_method=\"PLAINTEXT\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1002\", oauth_signature=\"m0b1le-s3cret%26u1002-ts\"\t-\n");
+    t.push_str("GET\thttps://api.shop.example/v1/inventory?sku=A-12&sku=A-13\tOAuth oauth_nonce=\"n2749\", oauth_timestamp=\"1700000074\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA512\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"gjpUWV%2FgAPPUZcQlZerT0kLL9AA5Pis0Syw1hOsh5ANVhaNVAt7x1hPLXcjU70KKN1OC%2BMqgG4RWL8p7B%2Bl2qA%3D%3D\"\t-\n");
+    t.push_str("PUT\thttps://api.shop.example/v1/reports/daily\tOAuth oauth_nonce=\"n7383\", oauth_timestamp=\"1700000091\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"TnW%2BYd%2F1Cb%2FQ0B0VvawbVgQzxe4%3D\"\tqty=23&note=a%2Fb\n");
+    t.push_str("GET\thttps://api.shop.example/v1/orders\tOAuth oauth_nonce=\"n9695\", oauth_timestamp=\"1700000108\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1001\", oauth_signature=\"8oyvN0O%2BWOuLl%2BFjdeEz4GTFuXY%3D\"\t-\n");
+    t.push_str("POST\thttps://api.shop.example/v1/orders/1187\tOAuth oauth_nonce=\"n3391\", oauth_timestamp=\"1699996125\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA256\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"XbTtjQEBKa8LH8ae73cCKljqQehl2RLxQZtByxYoP5I%3D\"\tqty=25&note=rush+order\n");
+    t.push_str("GET\thttps://api.shop.example/v1/users/me\tOAuth oauth_nonce=\"n7105\", oauth_timestamp=\"1700000142\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"XxHmRwp1LCYvMSFY47vIgtkzg2f0%3D\"\t-\n");
+    t.push_str("DELETE\thttps://api.shop.example/v1/search?q=red+shoes&page=2\tOAuth oauth_nonce=\"n1080\", oauth_timestamp=\"1700000159\", oauth_version=\"1.0\", oauth_signature_method=\"PLAINTEXT\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1002\", oauth_signature=\"m0b1le-s3cret%26u1002-ts\"\t-\n");
+    t.push_str("GET\thttps://api.shop.example/v1/inventory?sku=A-12&sku=A-13\tOAuth oauth_nonce=\"n0143\", oauth_timestamp=\"1700000176\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA512\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"xdjfqZuenAMyjuaFW9TUgLdhTjvT5bz5m5hGcxlW4puFucK2cu46q4iZsIv%2FjcLUDpcVIOi6587IeUED1XK5yw%3D%3D\"\t-\n");
+    t.push_str("PUT\thttps://api.shop.example/v1/reports/daily\tOAuth oauth_nonce=\"n8140\", oauth_timestamp=\"1700000193\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"1Z9DcuaEAL2Bzsh0da4wCvfilDs%3D\"\tqty=29&note=rush+order\n");
+    t.push_str("GET\thttps://api.shop.example/v1/users/me\tOAuth oauth_nonce=\"n8323\", oauth_timestamp=\"1699999734\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"bOLQN7WW68nhXMeL846nUFcZMqg%3D\"\t-\n");
+    t.push_str("GET\thttps://api.shop.example/v1/orders\tOAuth oauth_nonce=\"n4332\", oauth_timestamp=\"1700000210\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1001\", oauth_signature=\"JExRp4%2BUTTmz%2BQxy%2Bm6QLAID3Lw%3D\"\t-\n");
+    t.push_str("POST\thttps://api.shop.example/v1/orders/1187\tOAuth oauth_nonce=\"n7137\", oauth_timestamp=\"1700000227\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA256\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"NpHz%2BaSG%2FqUkMrGZSfDTobE81hvuIJDtjJzoCgEtjno%3D\"\tqty=31&note=a%2Fb\n");
+    t.push_str("GET\thttps://api.shop.example/v1/users/me\tOAuth oauth_nonce=\"n1435\", oauth_timestamp=\"1700000244\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"JOGJg1%2BFvf9ZgXzUZ9istF606Y4%3D\"\t-\n");
+    t.push_str("DELETE\thttps://api.shop.example/v1/search?q=red+shoes&page=2\tOAuth oauth_nonse=\"n2511\", oauth_timestamp=\"1700000261\", oauth_version=\"1.0\", oauth_signature_method=\"PLAINTEXT\", oauth_consumer_key=\"ck-mobile\", oauth_token=\"u-1002\", oauth_signature=\"m0b1le-s3cret%26u1002-ts\"\t&qty=999\n");
+    t.push_str("GET\thttps://api.shop.example/v1/inventory?sku=A-12&sku=A-13\tOAuth oauth_nonce=\"n1081\", oauth_timestamp=\"1700000278\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA512\", oauth_consumer_key=\"ck-partner\", oauth_token=\"p-77\", oauth_signature=\"fnbp03kxdg1VDW5%2Bzrkgg9YOzIQTKafbbMmCVHibEz5hVAE3n3daL2nywRTe4by2G6C13O5VT7yuqEJFc933cg%3D%3D\"\t-\n");
+    t.push_str("PUT\thttps://api.shop.example/v1/reports/daily\tOAuth oauth_nonce=\"n2713\", oauth_timestamp=\"1700000295\", oauth_version=\"1.0\", oauth_signature_method=\"HMAC-SHA1\", oauth_consumer_key=\"ck-cron\", oauth_signature=\"o7NkQHfmUxYp%2BjtRUX2iXBamDug%3D\"\tqty=35&note=a%2Fb\n");
+    t.push_str("GET\thttps://api.shop.example/v1/health\tBasic Zm9vOmJhcg==\t-\n");
+    t.push_str("GET\thttps://api.shop.example/v1/x\tOAuth broken\t-\n");
+}
