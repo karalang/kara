@@ -1,0 +1,1201 @@
+== parse 01.eml
+  unixfrom 'From ana.lima@example.org Mon Oct 19 14:30:02 2026'
+  headers [('Return-Path', '<ana.lima@example.org>'), ('Received', 'from mail.example.org (mail.example.org [192.0.2.10])\n\tby mx.example.net (Postfix) with ESMTPS id 4F2A31C0042\n\tfor <ben@example.net>; Mon, 19 Oct 2026 14:30:02 +0000 (UTC)'), ('Received', 'from [10.0.0.7] (unknown [198.51.100.23]) by mail.example.org with ESMTPSA id abc123; Mon, 19 Oct 2026 14:30:01 +0000'), ('From', '"Ana Lima" <ana.lima@example.org>'), ('To', 'Ben Okafor <ben@example.net>'), ('Subject', 'Quarterly report draft, with a subject line long enough that a mail client would fold it'), ('Date', 'Mon, 19 Oct 2026 09:30:00 -0500'), ('Message-ID', '<r1@example.org>'), ('References', '<a1@example.org> <a2@example.org> <a3@example.org> <a4@example.org> <a5@example.org>')]
+  [0] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload 'Hi Ben,\n\nThe draft is attached to the next mail.\nFrom now on I will send them weekly.\n>From the last meeting: nothing new.\n\nAna\n'
+      decoded b'Hi Ben,\n\nThe draft is attached to the next mail.\nFrom now on I will send them weekly.\n>From the last meeting: nothing new.\n\nAna\n'
+      text 'Hi Ben,\n\nThe draft is attached to the next mail.\nFrom now on I will send them weekly.\n>From the last meeting: nothing new.\n\nAna\n'
+  charsets [None]
+  as_string:
+    | 'Return-Path: <ana.lima@example.org>\n'
+    | 'Received: from mail.example.org (mail.example.org [192.0.2.10])\n'
+    | '\tby mx.example.net (Postfix) with ESMTPS id 4F2A31C0042\n'
+    | '\tfor <ben@example.net>; Mon, 19 Oct 2026 14:30:02 +0000 (UTC)\n'
+    | 'Received: from [10.0.0.7] (unknown [198.51.100.23]) by mail.example.org with ESMTPSA id abc123; Mon, 19 Oct 2026 14:30:01 +0000\n'
+    | 'From: "Ana Lima" <ana.lima@example.org>\n'
+    | 'To: Ben Okafor <ben@example.net>\n'
+    | 'Subject: Quarterly report draft, with a subject line long enough that a mail client would fold it\n'
+    | 'Date: Mon, 19 Oct 2026 09:30:00 -0500\n'
+    | 'Message-ID: <r1@example.org>\n'
+    | 'References: <a1@example.org> <a2@example.org> <a3@example.org> <a4@example.org> <a5@example.org>\n'
+    | '\n'
+    | 'Hi Ben,\n'
+    | '\n'
+    | 'The draft is attached to the next mail.\n'
+    | 'From now on I will send them weekly.\n'
+    | '>From the last meeting: nothing new.\n'
+    | '\n'
+    | 'Ana\n'
+  folded at 40, From_ lines mangled:
+    | 'Return-Path: <ana.lima@example.org>\n'
+    | 'Received: from mail.example.org\n'
+    | ' (mail.example.org [192.0.2.10])\n'
+    | '\tby mx.example.net (Postfix) with ESMTPS\n'
+    | ' id 4F2A31C0042\n'
+    | '\tfor <ben@example.net>;\n'
+    | ' Mon, 19 Oct 2026 14:30:02 +0000 (UTC)\n'
+    | 'Received: from [10.0.0.7] (unknown\n'
+    | ' [198.51.100.23]) by mail.example.org\n'
+    | ' with ESMTPSA id abc123;\n'
+    | ' Mon, 19 Oct 2026 14:30:01 +0000\n'
+    | 'From: "Ana Lima" <ana.lima@example.org>\n'
+    | 'To: Ben Okafor <ben@example.net>\n'
+    | 'Subject: Quarterly report draft,\n'
+    | ' with a subject line long enough that a\n'
+    | ' mail client would fold it\n'
+    | 'Date: Mon, 19 Oct 2026 09:30:00 -0500\n'
+    | 'Message-ID: <r1@example.org>\n'
+    | 'References: <a1@example.org>\n'
+    | ' <a2@example.org> <a3@example.org>\n'
+    | ' <a4@example.org> <a5@example.org>\n'
+    | '\n'
+    | 'Hi Ben,\n'
+    | '\n'
+    | 'The draft is attached to the next mail.\n'
+    | '>From now on I will send them weekly.\n'
+    | '>From the last meeting: nothing new.\n'
+    | '\n'
+    | 'Ana\n'
+== parse 02.eml
+  unixfrom None
+  headers [('From', 'Support Desk <support@example.com>'), ('To', 'dana@example.gov'), ('Subject', '=?utf-8?q?Your_ticket_=E2=80=94_resolved?='), ('Date', 'Tue, 20 Oct 2026 10:00:00 +0000'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/alternative; boundary="alt-7f3a"')]
+  [0] multipart/alternative default=text/plain multipart=True
+      params [('multipart/alternative', ''), ('boundary', 'alt-7f3a')]
+      filename None charset None disposition None
+      preamble 'This is a multi-part message in MIME format.\n' epilogue '\nEpilogue text after the close boundary.\n'
+  [1] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'utf-8')]
+      filename None charset 'utf-8' disposition None
+      payload 'Hello Dana,\n\nYour ticket #4411 =E2=80=94 =E2=80=9Cprinter offline=E2=80=9D =E2=80=94 is =\nresolved.\nA very long line that quoted-printable has to break with a soft line break =\nbecause it runs past seventy-six characters.\n\nRegards, Support\n'
+      decoded b'Hello Dana,\n\nYour ticket #4411 \xe2\x80\x94 \xe2\x80\x9cprinter offline\xe2\x80\x9d \xe2\x80\x94 is resolved.\nA very long line that quoted-printable has to break with a soft line break because it runs past seventy-six characters.\n\nRegards, Support\n'
+      text 'Hello Dana,\n\nYour ticket #4411 — “printer offline” — is resolved.\nA very long line that quoted-printable has to break with a soft line break because it runs past seventy-six characters.\n\nRegards, Support\n'
+  [2] text/html default=text/plain multipart=False
+      params [('text/html', ''), ('charset', 'utf-8')]
+      filename None charset 'utf-8' disposition None
+      payload 'PHA+SGVsbG8gRGFuYSw8L3A+PHA+WW91ciB0aWNrZXQgPGI+IzQ0MTE8L2I+IOKAlCByZXNvbHZl\nZC48L3A+Cg==\n'
+      decoded b'<p>Hello Dana,</p><p>Your ticket <b>#4411</b> \xe2\x80\x94 resolved.</p>\n'
+      text '<p>Hello Dana,</p><p>Your ticket <b>#4411</b> — resolved.</p>\n'
+  charsets [None, 'utf-8', 'utf-8']
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: Support Desk <support@example.com>\n'
+    | 'To: dana@example.gov\n'
+    | 'Subject: \n'
+    | ' =?utf-8?q?Your_ticket_=E2=80=94_resolved?=\n'
+    | 'Date: Tue, 20 Oct 2026 10:00:00 +0000\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/alternative;\n'
+    | ' boundary="alt-7f3a"\n'
+    | '\n'
+    | 'This is a multi-part message in MIME format.\n'
+    | '\n'
+    | '--alt-7f3a\n'
+    | 'Content-Type: text/plain; charset=utf-8\n'
+    | 'Content-Transfer-Encoding: \n'
+    | ' quoted-printable\n'
+    | '\n'
+    | 'Hello Dana,\n'
+    | '\n'
+    | 'Your ticket #4411 =E2=80=94 =E2=80=9Cprinter offline=E2=80=9D =E2=80=94 is =\n'
+    | 'resolved.\n'
+    | 'A very long line that quoted-printable has to break with a soft line break =\n'
+    | 'because it runs past seventy-six characters.\n'
+    | '\n'
+    | 'Regards, Support\n'
+    | '\n'
+    | '--alt-7f3a\n'
+    | 'Content-Type: text/html; charset="utf-8"\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'PHA+SGVsbG8gRGFuYSw8L3A+PHA+WW91ciB0aWNrZXQgPGI+IzQ0MTE8L2I+IOKAlCByZXNvbHZl\n'
+    | 'ZC48L3A+Cg==\n'
+    | '\n'
+    | '--alt-7f3a--\n'
+    | '\n'
+    | 'Epilogue text after the close boundary.\n'
+== parse 03.eml
+  unixfrom None
+  headers [('From', '=?utf-8?q?Jos=C3=A9_Mart=C3=ADnez?= <jose@example.es>'), ('To', 'Fox Mulder <fox@example.gov>'), ('Subject', 'Informe trimestral'), ('Date', 'Wed, 21 Oct 2026 08:15:00 +0200'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed;\n boundary="==outer==";\n report-type=quarterly')]
+  [0] multipart/mixed default=text/plain multipart=True
+      params [('multipart/mixed', ''), ('boundary', '==outer=='), ('report-type', 'quarterly')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [1] multipart/alternative default=text/plain multipart=True
+      params [('multipart/alternative', ''), ('boundary', 'inner')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [2] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'iso-8859-1')]
+      filename None charset 'iso-8859-1' disposition None
+      payload 'Adjunto el informe. Saludos, Jos=E9'
+      decoded b'Adjunto el informe. Saludos, Jos\xe9'
+      text 'Adjunto el informe. Saludos, José'
+  [3] text/html default=text/plain multipart=False
+      params [('text/html', ''), ('charset', 'iso-8859-1')]
+      filename None charset 'iso-8859-1' disposition None
+      payload '<p>Adjunto el informe.</p>'
+      decoded b'<p>Adjunto el informe.</p>'
+      text '<p>Adjunto el informe.</p>'
+  [4] application/pdf default=text/plain multipart=False
+      params [('application/pdf', ''), ('name', 'informe.pdf')]
+      filename 'Informe trimestral — Q3.pdf' charset None disposition 'attachment'
+      payload 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\nOTo7PD0+P0BBQkNERUZHSElKS0xNTk8lUERGLTEuNAolIGZha2UgcmVwb3J0CgD/gAoNAP+ACg0A\n/4AKDQD/gAoNAP+ACg0A/4AKDQ=='
+      decoded b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNO%PDF-1.4\n% fake report\n\x00\xff\x80\n\r\x00\xff\x80\n\r\x00\xff\x80\n\r\x00\xff\x80\n\r\x00\xff\x80\n\r\x00\xff\x80\n\r'
+  [5] image/png default=text/plain multipart=False
+      params [('image/png', '')]
+      filename 'chart.png' charset None disposition 'inline'
+      payload 'iVBORw0KGgoAJUpvlLneAyhNcpe84QYrUHWav+QJLlN4ncLnDDFWe6DF6g80WX6jyO0SN1yBpsvw\nFTpfhKnO8xg9Yoc='
+      decoded b'\x89PNG\r\n\x1a\n\x00%Jo\x94\xb9\xde\x03(Mr\x97\xbc\xe1\x06+Pu\x9a\xbf\xe4\t.Sx\x9d\xc2\xe7\x0c1V{\xa0\xc5\xea\x0f4Y~\xa3\xc8\xed\x127\\\x81\xa6\xcb\xf0\x15:_\x84\xa9\xce\xf3\x18=b\x87'
+  charsets [None, None, 'iso-8859-1', 'iso-8859-1', None, None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: \n'
+    | ' =?utf-8?q?Jos=C3=A9_Mart=C3=ADnez?=\n'
+    | ' <jose@example.es>\n'
+    | 'To: Fox Mulder <fox@example.gov>\n'
+    | 'Subject: Informe trimestral\n'
+    | 'Date: Wed, 21 Oct 2026 08:15:00 +0200\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed;\n'
+    | ' boundary="==outer==";\n'
+    | ' report-type=quarterly\n'
+    | '\n'
+    | '--==outer==\n'
+    | 'Content-Type: multipart/alternative;\n'
+    | ' boundary=inner\n'
+    | '\n'
+    | '--inner\n'
+    | 'Content-Type: text/plain;\n'
+    | ' charset=iso-8859-1\n'
+    | 'Content-Transfer-Encoding: \n'
+    | ' quoted-printable\n'
+    | '\n'
+    | 'Adjunto el informe. Saludos, Jos=E9\n'
+    | '--inner\n'
+    | 'Content-Type: text/html;\n'
+    | ' charset=iso-8859-1\n'
+    | 'Content-Transfer-Encoding: 8bit\n'
+    | '\n'
+    | '<p>Adjunto el informe.</p>\n'
+    | '--inner--\n'
+    | '\n'
+    | '--==outer==\n'
+    | 'Content-Type: application/pdf;\n'
+    | ' name="informe.pdf"\n'
+    | 'Content-Disposition: attachment;\n'
+    | " filename*0*=utf-8''Informe%20trimestral%20;\n"
+    | ' filename*1*=%E2%80%94%20Q3.pdf\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4\n'
+    | 'OTo7PD0+P0BBQkNERUZHSElKS0xNTk8lUERGLTEuNAolIGZha2UgcmVwb3J0CgD/gAoNAP+ACg0A\n'
+    | '/4AKDQD/gAoNAP+ACg0A/4AKDQ==\n'
+    | '--==outer==\n'
+    | 'Content-Type: image/png\n'
+    | 'Content-Disposition: inline;\n'
+    | ' filename="chart.png"\n'
+    | 'Content-ID: <chart@example.es>\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'iVBORw0KGgoAJUpvlLneAyhNcpe84QYrUHWav+QJLlN4ncLnDDFWe6DF6g80WX6jyO0SN1yBpsvw\n'
+    | 'FTpfhKnO8xg9Yoc=\n'
+    | '--==outer==--\n'
+== parse 04.eml
+  unixfrom None
+  headers [('From', 'ops@example.com'), ('To', 'oncall@example.com'), ('Subject', 'Disk alert'), ('Date', 'Thu, 22 Oct 2026 03:00:00 +0000'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed; boundary="crlf-b"')]
+  [0] multipart/mixed default=text/plain multipart=True
+      params [('multipart/mixed', ''), ('boundary', 'crlf-b')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [1] text/plain default=text/plain multipart=False
+      params [('text/plain', '')]
+      filename None charset None disposition None
+      payload '/var is at 91%.'
+      decoded b'/var is at 91%.'
+      text '/var is at 91%.'
+  [2] text/csv default=text/plain multipart=False
+      params [('text/csv', ''), ('name', 'usage.csv')]
+      filename 'usage.csv' charset None disposition 'attachment'
+      payload 'mount,used\r\n/var,91'
+      decoded b'mount,used\r\n/var,91'
+      text 'mount,used\r\n/var,91'
+  charsets [None, None, None]
+  as_string:
+    | 'From: ops@example.com\n'
+    | 'To: oncall@example.com\n'
+    | 'Subject: Disk alert\n'
+    | 'Date: Thu, 22 Oct 2026 03:00:00 +0000\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed; boundary="crlf-b"\n'
+    | '\n'
+    | '--crlf-b\n'
+    | 'Content-Type: text/plain\n'
+    | '\n'
+    | '/var is at 91%.\n'
+    | '--crlf-b\n'
+    | 'Content-Type: text/csv; name=usage.csv\n'
+    | 'Content-Disposition: attachment; filename=usage.csv\n'
+    | '\n'
+    | 'mount,used\n'
+    | '/var,91\n'
+    | '--crlf-b--\n'
+  folded at 40, From_ lines mangled:
+    | 'From: ops@example.com\n'
+    | 'To: oncall@example.com\n'
+    | 'Subject: Disk alert\n'
+    | 'Date: Thu, 22 Oct 2026 03:00:00 +0000\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed;\n'
+    | ' boundary="crlf-b"\n'
+    | '\n'
+    | '--crlf-b\n'
+    | 'Content-Type: text/plain\n'
+    | '\n'
+    | '/var is at 91%.\n'
+    | '--crlf-b\n'
+    | 'Content-Type: text/csv; name=usage.csv\n'
+    | 'Content-Disposition: attachment;\n'
+    | ' filename=usage.csv\n'
+    | '\n'
+    | 'mount,used\n'
+    | '/var,91\n'
+    | '--crlf-b--\n'
+== parse 05.eml
+  unixfrom None
+  headers [('From', 'Eve <eve@example.com>'), ('To', 'carol@example.com'), ('Subject', 'Fwd: Lunch?'), ('Date', 'Fri, 23 Oct 2026 12:00:00 +0100'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed; boundary="fwd"')]
+  [0] multipart/mixed default=text/plain multipart=True
+      params [('multipart/mixed', ''), ('boundary', 'fwd')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [1] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'us-ascii')]
+      filename None charset 'us-ascii' disposition None
+      payload 'See below.\n'
+      decoded b'See below.\n'
+      text 'See below.\n'
+  [2] message/rfc822 default=text/plain multipart=True
+      params [('message/rfc822', '')]
+      filename None charset None disposition 'inline'
+  [3] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload 'Noon at the usual place?'
+      decoded b'Noon at the usual place?'
+      text 'Noon at the usual place?'
+  charsets [None, 'us-ascii', None, None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: Eve <eve@example.com>\n'
+    | 'To: carol@example.com\n'
+    | 'Subject: Fwd: Lunch?\n'
+    | 'Date: Fri, 23 Oct 2026 12:00:00 +0100\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed;\n'
+    | ' boundary="fwd"\n'
+    | '\n'
+    | '--fwd\n'
+    | 'Content-Type: text/plain;\n'
+    | ' charset=us-ascii\n'
+    | '\n'
+    | 'See below.\n'
+    | '\n'
+    | '--fwd\n'
+    | 'Content-Type: message/rfc822\n'
+    | 'Content-Disposition: inline\n'
+    | '\n'
+    | 'From: Bob <bob@example.com>\n'
+    | 'To: Eve <eve@example.com>\n'
+    | 'Subject: Lunch?\n'
+    | 'Date: Fri, 23 Oct 2026 11:00:00 +0100\n'
+    | '\n'
+    | 'Noon at the usual place?\n'
+    | '--fwd--\n'
+== parse 06.eml
+  unixfrom None
+  headers [('From', 'list@example.org'), ('To', 'readers@example.org'), ('Subject', 'Weekly digest, issue 12'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/digest; boundary="dg"')]
+  [0] multipart/digest default=text/plain multipart=True
+      params [('multipart/digest', ''), ('boundary', 'dg')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [1] message/rfc822 default=message/rfc822 multipart=True
+      params None
+      filename None charset None disposition None
+  [2] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload 'Hello list.\n'
+      decoded b'Hello list.\n'
+      text 'Hello list.\n'
+  [3] text/plain default=message/rfc822 multipart=False
+      params [('text/plain', '')]
+      filename None charset None disposition None
+      payload 'Not a message, a note.'
+      decoded b'Not a message, a note.'
+      text 'Not a message, a note.'
+  [4] message/rfc822 default=message/rfc822 multipart=True
+      params None
+      filename None charset None disposition None
+  [5] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload 'Hi again.'
+      decoded b'Hi again.'
+      text 'Hi again.'
+  charsets [None, None, None, None, None, None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: list@example.org\n'
+    | 'To: readers@example.org\n'
+    | 'Subject: Weekly digest, issue 12\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/digest;\n'
+    | ' boundary="dg"\n'
+    | '\n'
+    | '--dg\n'
+    | '\n'
+    | 'From: alice@example.com\n'
+    | 'Subject: First post\n'
+    | '\n'
+    | 'Hello list.\n'
+    | '\n'
+    | '--dg\n'
+    | 'Content-Type: text/plain\n'
+    | '\n'
+    | 'Not a message, a note.\n'
+    | '--dg\n'
+    | '\n'
+    | 'From: bob@example.com\n'
+    | 'Subject: Second post\n'
+    | '\n'
+    | 'Hi again.\n'
+    | '--dg--\n'
+== parse 07.eml
+  unixfrom None
+  headers [('From', 'hr@example.com'), ('To', 'all@example.com'), ('Subject', 'No boundary'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed')]
+  [0] multipart/mixed default=text/plain multipart=False
+      params [('multipart/mixed', '')]
+      filename None charset None disposition None
+      defects [NoBoundaryInMultipartDefect, MultipartInvariantViolationDefect]
+      payload '--anything\nContent-Type: text/plain\n\nbody\n--anything--\n'
+      decoded b'--anything\nContent-Type: text/plain\n\nbody\n--anything--\n'
+      defects after decode [NoBoundaryInMultipartDefect, MultipartInvariantViolationDefect]
+  charsets [None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: hr@example.com\n'
+    | 'To: all@example.com\n'
+    | 'Subject: No boundary\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed\n'
+    | '\n'
+    | '--anything\n'
+    | 'Content-Type: text/plain\n'
+    | '\n'
+    | 'body\n'
+    | '--anything--\n'
+== parse 08.eml
+  unixfrom None
+  headers [('From', 'hr@example.com'), ('To', 'all@example.com'), ('Subject', 'Truncated upload'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed; boundary="cut"')]
+  [0] multipart/mixed default=text/plain multipart=True
+      params [('multipart/mixed', ''), ('boundary', 'cut')]
+      filename None charset None disposition None
+      defects [CloseBoundaryNotFoundDefect]
+      preamble 'preamble line' epilogue None
+  [1] text/plain default=text/plain multipart=False
+      params [('text/plain', '')]
+      filename None charset None disposition None
+      payload 'first part'
+      decoded b'first part'
+      text 'first part'
+  [2] application/octet-stream default=text/plain multipart=False
+      params [('application/octet-stream', '')]
+      filename None charset None disposition None
+      payload 'AAECAwQFBgcICQ=='
+      decoded b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t'
+  charsets [None, None, None]
+  as_string:
+    | 'From: hr@example.com\n'
+    | 'To: all@example.com\n'
+    | 'Subject: Truncated upload\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed; boundary="cut"\n'
+    | '\n'
+    | 'preamble line\n'
+    | '--cut\n'
+    | 'Content-Type: text/plain\n'
+    | '\n'
+    | 'first part\n'
+    | '--cut\n'
+    | 'Content-Type: application/octet-stream\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'AAECAwQFBgcICQ==\n'
+    | '--cut--\n'
+  folded at 40, From_ lines mangled:
+    | 'From: hr@example.com\n'
+    | 'To: all@example.com\n'
+    | 'Subject: Truncated upload\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed;\n'
+    | ' boundary="cut"\n'
+    | '\n'
+    | 'preamble line\n'
+    | '--cut\n'
+    | 'Content-Type: text/plain\n'
+    | '\n'
+    | 'first part\n'
+    | '--cut\n'
+    | 'Content-Type: application/octet-stream\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'AAECAwQFBgcICQ==\n'
+    | '--cut--\n'
+== parse 09.eml
+  unixfrom None
+  headers [('From', 'x@example.com'), ('Subject', 'Never starts'), ('Content-Type', 'multipart/mixed; boundary="nope"')]
+  [0] multipart/mixed default=text/plain multipart=False
+      params [('multipart/mixed', ''), ('boundary', 'nope')]
+      filename None charset None disposition None
+      defects [StartBoundaryNotFoundDefect, MultipartInvariantViolationDefect]
+      preamble None epilogue ''
+      payload 'There is no boundary here,\nonly text.\n'
+      decoded b'There is no boundary here,\nonly text.\n'
+      defects after decode [StartBoundaryNotFoundDefect, MultipartInvariantViolationDefect]
+  charsets [None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: x@example.com\n'
+    | 'Subject: Never starts\n'
+    | 'Content-Type: multipart/mixed;\n'
+    | ' boundary="nope"\n'
+    | '\n'
+    | 'There is no boundary here,\n'
+    | 'only text.\n'
+== parse 10.eml
+  unixfrom None
+  headers [('From', 'x@example.com'), ('Subject', 'Odd headers'), ('X-Empty', ''), ('X-Folded', 'one\n  two\n\tthree')]
+  [0] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      defects [MissingHeaderBodySeparatorDefect, FirstHeaderLineIsContinuationDefect(' leading continuation line\n'), InvalidHeaderDefect('Missing header name.'), MisplacedEnvelopeHeaderDefect('From misplaced@example.com Fri Oct 23 00:00:00 2026\n')]
+      payload 'This line has no colon, so the body starts here\nand continues.\n'
+      decoded b'This line has no colon, so the body starts here\nand continues.\n'
+      defects after decode [MissingHeaderBodySeparatorDefect, FirstHeaderLineIsContinuationDefect(' leading continuation line\n'), InvalidHeaderDefect('Missing header name.'), MisplacedEnvelopeHeaderDefect('From misplaced@example.com Fri Oct 23 00:00:00 2026\n')]
+      text 'This line has no colon, so the body starts here\nand continues.\n'
+  charsets [None]
+  as_string:
+    | 'From: x@example.com\n'
+    | 'Subject: Odd headers\n'
+    | 'X-Empty: \n'
+    | 'X-Folded: one\n'
+    | '  two\n'
+    | '\tthree\n'
+    | '\n'
+    | 'This line has no colon, so the body starts here\n'
+    | 'and continues.\n'
+  folded at 40, From_ lines mangled:
+    | 'From: x@example.com\n'
+    | 'Subject: Odd headers\n'
+    | 'X-Empty: \n'
+    | 'X-Folded: one\n'
+    | '  two\n'
+    | '\tthree\n'
+    | '\n'
+    | 'This line has no colon, so the body starts here\n'
+    | 'and continues.\n'
+== parse 11.eml
+  unixfrom None
+  headers [('From', 'bad@example.com'), ('Subject', 'Bad base64 and a uuencoded file'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/mixed; boundary=b')]
+  [0] multipart/mixed default=text/plain multipart=True
+      params [('multipart/mixed', ''), ('boundary', 'b')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [1] text/plain default=text/plain multipart=False
+      params [('text/plain', '')]
+      filename None charset None disposition None
+      payload 'SGVsbG8gd29ybGQ'
+      decoded b'Hello world'
+      defects after decode [InvalidBase64PaddingDefect]
+      text 'Hello world'
+  [2] text/plain default=text/plain multipart=False
+      params [('text/plain', '')]
+      filename None charset None disposition None
+      payload 'SGVs*bG8g!d29y\nbGQh'
+      decoded b'Hello world!'
+      defects after decode [InvalidBase64CharactersDefect]
+      text 'Hello world!'
+  [3] application/octet-stream default=text/plain multipart=False
+      params [('application/octet-stream', '')]
+      filename None charset None disposition None
+      payload 'begin 644 notes.txt\nM5&AI<R!I<R!A(\'5U96YC;V1E9"!F:6QE+B!)="!H87,@;6]R92!T:&%N(&]N\n\'92!L:6YE+@H`\n`\nend'
+      decoded b'This is a uuencoded file. It has more than one line.'
+  [4] application/octet-stream default=text/plain multipart=False
+      params [('application/octet-stream', '')]
+      filename None charset None disposition None
+      payload 'no begin line here'
+      decoded b'no begin line here'
+  [5] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'utf-8')]
+      filename None charset 'utf-8' disposition None
+      payload 'Soft=20break=\n here, a =3D sign, a bad =ZZ escape, trailing space=20\n=E2=82=AC done'
+      decoded b'Soft break here, a = sign, a bad =ZZ escape, trailing space \n\xe2\x82\xac done'
+      text 'Soft break here, a = sign, a bad =ZZ escape, trailing space \n€ done'
+  charsets [None, None, None, None, None, 'utf-8']
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: bad@example.com\n'
+    | 'Subject: Bad base64 and a uuencoded file\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/mixed;\n'
+    | ' boundary=b\n'
+    | '\n'
+    | '--b\n'
+    | 'Content-Type: text/plain\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'SGVsbG8gd29ybGQ\n'
+    | '--b\n'
+    | 'Content-Type: text/plain\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'SGVs*bG8g!d29y\n'
+    | 'bGQh\n'
+    | '--b\n'
+    | 'Content-Type: application/octet-stream\n'
+    | 'Content-Transfer-Encoding: x-uuencode\n'
+    | '\n'
+    | 'begin 644 notes.txt\n'
+    | 'M5&AI<R!I<R!A(\'5U96YC;V1E9"!F:6QE+B!)="!H87,@;6]R92!T:&%N(&]N\n'
+    | "'92!L:6YE+@H`\n"
+    | '`\n'
+    | 'end\n'
+    | '--b\n'
+    | 'Content-Type: application/octet-stream\n'
+    | 'Content-Transfer-Encoding: uuencode\n'
+    | '\n'
+    | 'no begin line here\n'
+    | '--b\n'
+    | 'Content-Type: text/plain; charset=utf-8\n'
+    | 'Content-Transfer-Encoding: \n'
+    | ' quoted-printable\n'
+    | '\n'
+    | 'Soft=20break=\n'
+    | ' here, a =3D sign, a bad =ZZ escape, trailing space=20\n'
+    | '=E2=82=AC done\n'
+    | '--b--\n'
+== parse 12.eml
+  unixfrom None
+  headers [('From', 'Dörte <doerte@example.de>'), ('To', 'Grüße Team <gruesse@example.de>'), ('Subject', 'Grüße aus Köln'), ('MIME-Version', '1.0'), ('Content-Type', 'text/plain; charset=utf-8'), ('Content-Transfer-Encoding', '8bit')]
+  [0] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'utf-8')]
+      filename None charset 'utf-8' disposition None
+      payload 'Liebe Grüße, Dörte — bis bald! 🙂\n'
+      decoded b'Liebe Gr\xfc\xdfe, D\xf6rte \\u2014 bis bald! \\U0001f642\n'
+      text 'Liebe Gr��e, D�rte \\u2014 bis bald! \\U0001f642\n'
+  charsets ['utf-8']
+  as_string:
+    | 'From: =?utf-8?b?RMO2cnRlIDxkb2VydGVAZXhhbXBsZS5kZT4=?=\n'
+    | 'To: =?utf-8?b?R3LDvMOfZSBUZWFtIDxncnVlc3NlQGV4YW1wbGUuZGU+?=\n'
+    | 'Subject: =?utf-8?b?R3LDvMOfZSBhdXMgS8O2bG4=?=\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: text/plain; charset=utf-8\n'
+    | 'Content-Transfer-Encoding: 8bit\n'
+    | '\n'
+    | 'Liebe Grüße, Dörte — bis bald! 🙂\n'
+  folded at 40, From_ lines mangled:
+    | 'From: =?utf-8?b?RMO2cnRlIDxkb2VydGVA?=\n'
+    | ' =?utf-8?b?ZXhhbXBsZS5kZT4=?=\n'
+    | 'To: =?utf-8?b?R3LDvMOfZSBUZWFtIDxncnVl?=\n'
+    | ' =?utf-8?b?c3NlQGV4YW1wbGUuZGU+?=\n'
+    | 'Subject: =?utf-8?b?R3LDvMOfZSBhdXMg?=\n'
+    | ' =?utf-8?b?S8O2bG4=?=\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: text/plain; charset=utf-8\n'
+    | 'Content-Transfer-Encoding: 8bit\n'
+    | '\n'
+    | 'Liebe Grüße, Dörte — bis bald! 🙂\n'
+== parse 13.eml
+  unixfrom None
+  headers [('From', 'MAILER-DAEMON@mx.example.net'), ('To', 'ana.lima@example.org'), ('Subject', 'Undelivered Mail Returned to Sender'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/report; report-type=delivery-status; boundary="dsn"')]
+  [0] multipart/report default=text/plain multipart=True
+      params [('multipart/report', ''), ('report-type', 'delivery-status'), ('boundary', 'dsn')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [1] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'us-ascii')]
+      filename None charset 'us-ascii' disposition None
+      payload "I'm sorry to have to inform you that your message could not\nbe delivered to one or more recipients.\n"
+      decoded b"I'm sorry to have to inform you that your message could not\nbe delivered to one or more recipients.\n"
+      text "I'm sorry to have to inform you that your message could not\nbe delivered to one or more recipients.\n"
+  [2] message/delivery-status default=text/plain multipart=True
+      params [('message/delivery-status', '')]
+      filename None charset None disposition None
+  [3] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload ''
+      decoded b''
+      text ''
+  [4] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload ''
+      decoded b''
+      text ''
+  [5] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload ''
+      decoded b''
+      text ''
+  [6] text/rfc822-headers default=text/plain multipart=False
+      params [('text/rfc822-headers', '')]
+      filename None charset None disposition None
+      payload 'Subject: Quarterly report draft\nMessage-ID: <r1@example.org>\n'
+      decoded b'Subject: Quarterly report draft\nMessage-ID: <r1@example.org>\n'
+      text 'Subject: Quarterly report draft\nMessage-ID: <r1@example.org>\n'
+  charsets [None, 'us-ascii', None, None, None, None, None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: MAILER-DAEMON@mx.example.net\n'
+    | 'To: ana.lima@example.org\n'
+    | 'Subject: Undelivered Mail Returned to\n'
+    | ' Sender\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/report;\n'
+    | ' report-type=delivery-status;\n'
+    | ' boundary="dsn"\n'
+    | '\n'
+    | '--dsn\n'
+    | 'Content-Description: Notification\n'
+    | 'Content-Type: text/plain;\n'
+    | ' charset=us-ascii\n'
+    | '\n'
+    | "I'm sorry to have to inform you that your message could not\n"
+    | 'be delivered to one or more recipients.\n'
+    | '\n'
+    | '--dsn\n'
+    | 'Content-Description: Delivery report\n'
+    | 'Content-Type: message/delivery-status\n'
+    | '\n'
+    | 'Reporting-MTA: dns; mx.example.net\n'
+    | 'Arrival-Date: Mon,\n'
+    | ' 19 Oct 2026 14:30:02 +0000\n'
+    | '\n'
+    | 'Final-Recipient: rfc822;\n'
+    | ' nobody@example.net\n'
+    | 'Action: failed\n'
+    | 'Status: 5.1.1\n'
+    | '\n'
+    | 'Final-Recipient: rfc822;\n'
+    | ' other@example.net\n'
+    | 'Action: delayed\n'
+    | 'Status: 4.4.1\n'
+    | '\n'
+    | '--dsn\n'
+    | 'Content-Description: Undelivered Message\n'
+    | ' Headers\n'
+    | 'Content-Type: text/rfc822-headers\n'
+    | '\n'
+    | 'Subject: Quarterly report draft\n'
+    | 'Message-ID: <r1@example.org>\n'
+    | '\n'
+    | '--dsn--\n'
+== parse 14.eml
+  unixfrom None
+  headers [('From', 'signer@example.com'), ('To', 'you@example.com'), ('Subject', 'Signed note'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/signed; protocol="application/pgp-signature"; micalg=pgp-sha256; boundary="sig"')]
+  [0] multipart/signed default=text/plain multipart=True
+      params [('multipart/signed', ''), ('protocol', 'application/pgp-signature'), ('micalg', 'pgp-sha256'), ('boundary', 'sig')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [1] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'us-ascii')]
+      filename None charset 'us-ascii' disposition None
+      payload 'Signed text.'
+      decoded b'Signed text.'
+      text 'Signed text.'
+  [2] application/pgp-signature default=text/plain multipart=False
+      params [('application/pgp-signature', ''), ('name', 'signature.asc')]
+      filename 'signature.asc' charset None disposition None
+      payload '-----BEGIN PGP SIGNATURE-----\niQEzBAEBCAAdFiEEexampleexampleexampleexample\n-----END PGP SIGNATURE-----'
+      decoded b'-----BEGIN PGP SIGNATURE-----\niQEzBAEBCAAdFiEEexampleexampleexampleexample\n-----END PGP SIGNATURE-----'
+  charsets [None, 'us-ascii', None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: signer@example.com\n'
+    | 'To: you@example.com\n'
+    | 'Subject: Signed note\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/signed;\n'
+    | ' protocol="application/pgp-signature";\n'
+    | ' micalg=pgp-sha256; boundary="sig"\n'
+    | '\n'
+    | '--sig\n'
+    | 'Content-Type: text/plain; charset=us-ascii\n'
+    | 'X-Long: aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh\n'
+    | '\n'
+    | 'Signed text.\n'
+    | '--sig\n'
+    | 'Content-Type: application/pgp-signature; name="signature.asc"\n'
+    | '\n'
+    | '-----BEGIN PGP SIGNATURE-----\n'
+    | 'iQEzBAEBCAAdFiEEexampleexampleexampleexample\n'
+    | '-----END PGP SIGNATURE-----\n'
+    | '--sig--\n'
+== parse 15.eml
+  unixfrom None
+  headers [('From', 'weird@example.com'), ('Subject', 'Strange content types'), ('Content-Type', 'multipart/mixed; boundary="w"; charset=utf-8'), ('Content-Transfer-Encoding', 'base64')]
+  [0] multipart/mixed default=text/plain multipart=True
+      params [('multipart/mixed', ''), ('boundary', 'w'), ('charset', 'utf-8')]
+      filename None charset 'utf-8' disposition None
+      defects [InvalidMultipartContentTransferEncodingDefect]
+      preamble None epilogue ''
+  [1] text/plain default=text/plain multipart=False
+      params [('text', '')]
+      filename None charset None disposition None
+      payload 'no slash'
+      decoded b'no slash'
+      text 'no slash'
+  [2] text/html default=text/plain multipart=False
+      params [('TEXT/HTML', ''), ('charset', 'ISO-8859-1'), ('name', 'a;b.html')]
+      filename 'a;b.html' charset 'iso-8859-1' disposition None
+      payload '<b>caps</b>'
+      decoded b'<b>caps</b>'
+      text '<b>caps</b>'
+  [3] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('title', 'semi;colon'), ('note', 'say "hi"'), ('flag', ''), ('empty', ''), ('x', '1')]
+      filename None charset None disposition None
+      payload 'params'
+      decoded b'params'
+      text 'params'
+  [4] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', ('us-ascii', 'en', 'ABC')), ('title', 'part one and two')]
+      filename None charset 'abc' disposition None
+      payload 'rfc 2231'
+      decoded b'rfc 2231'
+      text LookupError: unknown encoding: abc
+  [5] application/x-thing default=text/plain multipart=False
+      params [('application/x-thing', ''), ('name', ('utf-8', '', 'â\x82¬ euro.txt'))]
+      filename '€ euro.txt' charset None disposition 'attachment'
+      payload 'euro'
+      decoded b'euro'
+  charsets ['utf-8', None, 'iso-8859-1', None, 'abc', None]
+  as_string: same as the file
+  folded at 40, From_ lines mangled:
+    | 'From: weird@example.com\n'
+    | 'Subject: Strange content types\n'
+    | 'Content-Type: multipart/mixed;\n'
+    | ' boundary="w"; charset=utf-8\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | '--w\n'
+    | 'Content-Type: text\n'
+    | '\n'
+    | 'no slash\n'
+    | '--w\n'
+    | 'Content-Type: TEXT/HTML;\n'
+    | ' CHARSET="ISO-8859-1"; Name="a;b.html"\n'
+    | '\n'
+    | '<b>caps</b>\n'
+    | '--w\n'
+    | 'Content-Type: text/plain;\n'
+    | ' title="semi;colon"; note="say \\"hi\\"";\n'
+    | ' flag; empty=; x=1\n'
+    | '\n'
+    | 'params\n'
+    | '--w\n'
+    | 'Content-Type: text/plain;\n'
+    | " charset*=us-ascii'en'%41%42C;\n"
+    | ' title*0="part one "; title*1="and two"\n'
+    | '\n'
+    | 'rfc 2231\n'
+    | '--w\n'
+    | 'Content-Type: application/x-thing;\n'
+    | " name*=utf-8''%E2%82%AC%20euro.txt\n"
+    | 'Content-Disposition: ATTACHMENT\n'
+    | '\n'
+    | 'euro\n'
+    | '--w--\n'
+== parse 16.eml
+  unixfrom 'From nobody Sat Oct 24 09:00:00 2026'
+  headers [('From', 'poet@example.com'), ('Subject', 'From lines')]
+  [0] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload 'From here the poem starts.\n From with a space is fine.\nFrom the end.\n'
+      decoded b'From here the poem starts.\n From with a space is fine.\nFrom the end.\n'
+      text 'From here the poem starts.\n From with a space is fine.\nFrom the end.\n'
+  charsets [None]
+  as_string:
+    | 'From: poet@example.com\n'
+    | 'Subject: From lines\n'
+    | '\n'
+    | 'From here the poem starts.\n'
+    | ' From with a space is fine.\n'
+    | 'From the end.\n'
+  folded at 40, From_ lines mangled:
+    | 'From: poet@example.com\n'
+    | 'Subject: From lines\n'
+    | '\n'
+    | '>From here the poem starts.\n'
+    | ' From with a space is fine.\n'
+    | '>From the end.\n'
+== edit 02.eml part 0
+  get_param ['boundary', {}] -> 'alt-7f3a'
+  get_params [{}] -> [('multipart/alternative', ''), ('boundary', 'alt-7f3a')]
+  set_param ['charset', 'utf-8', {}] -> None
+  get_params [{}] -> [('multipart/alternative', ''), ('boundary', 'alt-7f3a'), ('charset', 'utf-8')]
+  set_boundary ['new-b'] -> None
+  get_boundary [] -> 'new-b'
+  headers [('From', 'Support Desk <support@example.com>'), ('To', 'dana@example.gov'), ('Subject', '=?utf-8?q?Your_ticket_=E2=80=94_resolved?='), ('Date', 'Tue, 20 Oct 2026 10:00:00 +0000'), ('MIME-Version', '1.0'), ('Content-Type', 'multipart/alternative; boundary="new-b"; charset="utf-8"')]
+  header block:
+    | 'From: Support Desk <support@example.com>\n'
+    | 'To: dana@example.gov\n'
+    | 'Subject: =?utf-8?q?Your_ticket_=E2=80=94_resolved?=\n'
+    | 'Date: Tue, 20 Oct 2026 10:00:00 +0000\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: multipart/alternative; boundary="new-b"; charset="utf-8"\n'
+== edit 02.eml part 1
+  set_type ['text/markdown'] -> None
+  del_param ['charset', {}] -> None
+  set_param ['format', 'flowed', {'requote': False}] -> None
+  set_param ['charset', 'latin-1', {'replace': True}] -> None
+  headers [('Content-Transfer-Encoding', 'quoted-printable'), ('MIME-Version', '1.0'), ('Content-Type', 'text/markdown; format=flowed; charset="latin-1"')]
+  header block:
+    | 'Content-Transfer-Encoding: quoted-printable\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: text/markdown; format=flowed; charset="latin-1"\n'
+== edit 03.eml part 4
+  get_filename [] -> 'Informe trimestral — Q3.pdf'
+  get_param ['filename', {'header': 'content-disposition'}] -> ('utf-8', '', 'Informe trimestral â\x80\x94 Q3.pdf')
+  get_param ['filename', {'header': 'content-disposition', 'unquote': False}] -> ('utf-8', '', '"Informe trimestral â\x80\x94 Q3.pdf"')
+  get_params [{'header': 'content-disposition'}] -> [('attachment', ''), ('filename', ('utf-8', '', 'Informe trimestral â\x80\x94 Q3.pdf'))]
+  set_param ['filename', 'Résumé.pdf', {'header': 'Content-Disposition'}] -> None
+  get_filename [] -> 'Résumé.pdf'
+  set_param ['filename', 'plain.pdf', {'header': 'Content-Disposition', 'charset': 'utf-8', 'language': 'en'}] -> None
+  get_filename [] -> 'plain.pdf'
+  headers [('Content-Type', 'application/pdf; name="informe.pdf"'), ('Content-Transfer-Encoding', 'base64'), ('Content-Disposition', "attachment; filename*=utf-8'en'plain.pdf")]
+  header block:
+    | 'Content-Type: application/pdf; name="informe.pdf"\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | "Content-Disposition: attachment; filename*=utf-8'en'plain.pdf\n"
+== edit 03.eml part 0
+  get_param ['report-type', {}] -> 'quarterly'
+  set_boundary ['renamed'] -> None
+  get_boundary [] -> 'renamed'
+  del_param ['report-type', {}] -> None
+  get_params [{}] -> [('multipart/mixed', ''), ('boundary', 'renamed')]
+  headers [('From', '=?utf-8?q?Jos=C3=A9_Mart=C3=ADnez?= <jose@example.es>'), ('To', 'Fox Mulder <fox@example.gov>'), ('Subject', 'Informe trimestral'), ('Date', 'Wed, 21 Oct 2026 08:15:00 +0200'), ('MIME-Version', '1.0'), ('content-type', 'multipart/mixed; boundary="renamed"')]
+  header block:
+    | 'From: =?utf-8?q?Jos=C3=A9_Mart=C3=ADnez?= <jose@example.es>\n'
+    | 'To: Fox Mulder <fox@example.gov>\n'
+    | 'Subject: Informe trimestral\n'
+    | 'Date: Wed, 21 Oct 2026 08:15:00 +0200\n'
+    | 'MIME-Version: 1.0\n'
+    | 'content-type: multipart/mixed; boundary="renamed"\n'
+== edit 15.eml part 2
+  get_params [{}] -> [('TEXT/HTML', ''), ('charset', 'ISO-8859-1'), ('name', 'a;b.html')]
+  get_params [{'unquote': False}] -> [('TEXT/HTML', ''), ('charset', '"ISO-8859-1"'), ('name', '"a;b.html"')]
+  get_content_charset [] -> 'iso-8859-1'
+  get_param ['name', {}] -> 'a;b.html'
+  get_filename [] -> 'a;b.html'
+  headers [('Content-Type', 'TEXT/HTML; CHARSET="ISO-8859-1"; Name="a;b.html"')]
+  header block:
+    | 'Content-Type: TEXT/HTML; CHARSET="ISO-8859-1"; Name="a;b.html"\n'
+== edit 15.eml part 3
+  get_params [{}] -> [('text/plain', ''), ('title', 'semi;colon'), ('note', 'say "hi"'), ('flag', ''), ('empty', ''), ('x', '1')]
+  get_param ['flag', {}] -> ''
+  get_param ['empty', {}] -> ''
+  get_param ['note', {}] -> 'say "hi"'
+  set_param ['x', '2', {}] -> None
+  del_param ['flag', {}] -> None
+  del_param ['missing', {}] -> None
+  headers [('content-type', 'text/plain; title="semi;colon"; note="say \\"hi\\""; empty; x="2"')]
+  header block:
+    | 'content-type: text/plain; title="semi;colon"; note="say \\"hi\\""; empty; x="2"\n'
+== edit 15.eml part 4
+  get_params [{}] -> [('text/plain', ''), ('charset', ('us-ascii', 'en', 'ABC')), ('title', 'part one and two')]
+  get_content_charset [] -> 'abc'
+  get_param ['title', {}] -> 'part one and two'
+  set_param ['title', 'new', {}] -> None
+  headers [('Content-Type', 'text/plain; charset*=us-ascii\'en\'ABC; title="new"')]
+  header block:
+    | 'Content-Type: text/plain; charset*=us-ascii\'en\'ABC; title="new"\n'
+== edit 15.eml part 5
+  get_filename [] -> '€ euro.txt'
+  get_content_disposition [] -> 'attachment'
+  get_param ['name', {}] -> ('utf-8', '', 'â\x82¬ euro.txt')
+  headers [('Content-Type', "application/x-thing; name*=utf-8''%E2%82%AC%20euro.txt"), ('Content-Disposition', 'ATTACHMENT')]
+  header block:
+    | "Content-Type: application/x-thing; name*=utf-8''%E2%82%AC%20euro.txt\n"
+    | 'Content-Disposition: ATTACHMENT\n'
+== edit 01.eml part 0
+  get_all ['received'] -> ['from mail.example.org (mail.example.org [192.0.2.10])\n\tby mx.example.net (Postfix) with ESMTPS id 4F2A31C0042\n\tfor <ben@example.net>; Mon, 19 Oct 2026 14:30:02 +0000 (UTC)', 'from [10.0.0.7] (unknown [198.51.100.23]) by mail.example.org with ESMTPSA id abc123; Mon, 19 Oct 2026 14:30:01 +0000']
+  replace_header ['subject', 'Short'] -> None
+  replace_header ['x-missing', 'v'] -> KeyError: 'x-missing'
+  add_header ['Content-Disposition', 'attachment', {'filename': 'a b.txt'}] -> None
+  add_header ['X-Flags', None, {'seen': None, 'size': '10'}] -> None
+  add_header ['Content-Disposition', 'inline', {'filename': ['iso-8859-1', 'fr', 'été.txt']}] -> None
+  add_header ['Content-Disposition', 'inline', {'filename': 'Grüße.txt'}] -> None
+  set ['X-New', 'Grüße'] -> None
+  del ['received'] -> None
+  get_all ['received'] -> None
+  get_all ['content-disposition'] -> ['attachment; filename="a b.txt"', "inline; filename*=iso-8859-1'fr'%E9t%E9.txt", "inline; filename*=utf-8''Gr%C3%BC%C3%9Fe.txt"]
+  set_param ['charset', 'utf-8', {}] -> None
+  get_content_type [] -> 'text/plain'
+  set_type ['nonsense'] -> ValueError: 
+  set_type ['text/x-note'] -> None
+  headers [('Return-Path', '<ana.lima@example.org>'), ('From', '"Ana Lima" <ana.lima@example.org>'), ('To', 'Ben Okafor <ben@example.net>'), ('Subject', 'Short'), ('Date', 'Mon, 19 Oct 2026 09:30:00 -0500'), ('Message-ID', '<r1@example.org>'), ('References', '<a1@example.org> <a2@example.org> <a3@example.org> <a4@example.org> <a5@example.org>'), ('Content-Disposition', 'attachment; filename="a b.txt"'), ('X-Flags', 'seen; size="10"'), ('Content-Disposition', "inline; filename*=iso-8859-1'fr'%E9t%E9.txt"), ('Content-Disposition', "inline; filename*=utf-8''Gr%C3%BC%C3%9Fe.txt"), ('X-New', 'Grüße'), ('MIME-Version', '1.0'), ('Content-Type', 'text/x-note; charset="utf-8"')]
+  header block:
+    | 'Return-Path: <ana.lima@example.org>\n'
+    | 'From: "Ana Lima" <ana.lima@example.org>\n'
+    | 'To: Ben Okafor <ben@example.net>\n'
+    | 'Subject: Short\n'
+    | 'Date: Mon, 19 Oct 2026 09:30:00 -0500\n'
+    | 'Message-ID: <r1@example.org>\n'
+    | 'References: <a1@example.org> <a2@example.org> <a3@example.org> <a4@example.org> <a5@example.org>\n'
+    | 'Content-Disposition: attachment; filename="a b.txt"\n'
+    | 'X-Flags: seen; size="10"\n'
+    | "Content-Disposition: inline; filename*=iso-8859-1'fr'%E9t%E9.txt\n"
+    | "Content-Disposition: inline; filename*=utf-8''Gr%C3%BC%C3%9Fe.txt\n"
+    | 'X-New: =?utf-8?b?R3LDvMOfZQ==?=\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Type: text/x-note; charset="utf-8"\n'
+== edit 10.eml part 0
+  set_boundary ['x'] -> HeaderParseError: No Content-Type header found
+  del_param ['charset', {}] -> None
+  set_param ['a', 'b', {'header': 'X-Custom'}] -> None
+  set_param ['a', 'c', {'header': 'X-Custom'}] -> None
+  get ['x-custom'] -> 'a="c"'
+  get ['x-empty'] -> ''
+  get ['x-folded'] -> 'one\n  two\n\tthree'
+  get_content_type [] -> 'text/plain'
+  headers [('From', 'x@example.com'), ('Subject', 'Odd headers'), ('X-Empty', ''), ('X-Folded', 'one\n  two\n\tthree'), ('X-Custom', 'a="c"')]
+  header block:
+    | 'From: x@example.com\n'
+    | 'Subject: Odd headers\n'
+    | 'X-Empty: \n'
+    | 'X-Folded: one\n'
+    | '  two\n'
+    | '\tthree\n'
+    | 'X-Custom: a="c"\n'
+== edit 12.eml part 0
+  get_content_charset [] -> 'utf-8'
+  set_param ['charset', 'iso-8859-1', {}] -> None
+  get_charsets [] -> ['iso-8859-1']
+  set ['Subject', 'second'] -> None
+  get_all ['subject'] -> ['Grüße aus Köln', 'second']
+  headers [('From', 'Dörte <doerte@example.de>'), ('To', 'Grüße Team <gruesse@example.de>'), ('Subject', 'Grüße aus Köln'), ('MIME-Version', '1.0'), ('Content-Transfer-Encoding', '8bit'), ('Content-Type', 'text/plain; charset="iso-8859-1"'), ('Subject', 'second')]
+  header block:
+    | 'From: =?utf-8?b?RMO2cnRlIDxkb2VydGVAZXhhbXBsZS5kZT4=?=\n'
+    | 'To: =?utf-8?b?R3LDvMOfZSBUZWFtIDxncnVlc3NlQGV4YW1wbGUuZGU+?=\n'
+    | 'Subject: =?utf-8?b?R3LDvMOfZSBhdXMgS8O2bG4=?=\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: 8bit\n'
+    | 'Content-Type: text/plain; charset="iso-8859-1"\n'
+    | 'Subject: second\n'
+== compose
+  MIMEText 'Plain ASCII note.\n' 'plain' None
+    | 'Content-Type: text/plain; charset="us-ascii"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: 7bit\n'
+    | '\n'
+    | 'Plain ASCII note.\n'
+  MIMEText 'Grüße aus Köln — bis bald!\n' 'plain' None
+    | 'Content-Type: text/plain; charset="utf-8"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'R3LDvMOfZSBhdXMgS8O2bG4g4oCUIGJpcyBiYWxkIQo=\n'
+  MIMEText 'Résumé attached, café at noon.\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxé\nend' 'plain' 'iso-8859-1'
+    | 'Content-Type: text/plain; charset="iso-8859-1"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: quoted-printable\n'
+    | '\n'
+    | 'R=E9sum=E9 attached, caf=E9 at noon.\n'
+    | 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=\n'
+    | 'xxxxxxxxxxxxxxx=E9\n'
+    | 'end'
+  MIMEText 'Price: 10 € = 10 euros\n' 'plain' 'iso-8859-15'
+    | 'Content-Type: text/plain; charset="iso-8859-15"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: quoted-printable\n'
+    | '\n'
+    | 'Price: 10 =A4 =3D 10 euros\n'
+  MIMEText '<p>Grüße</p>' 'html' 'utf-8'
+    | 'Content-Type: text/html; charset="utf-8"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'PHA+R3LDvMOfZTwvcD4=\n'
+  MIMEText 'Grüße' 'plain' 'us-ascii' -> UnicodeEncodeError: 'ascii' codec can't encode characters in position 2-3: ordinal not in range(128)
+  MIMEText '' 'plain' 'utf-8'
+    | 'Content-Type: text/plain; charset="utf-8"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+  multipart:
+    | 'Content-Type: multipart/mixed; boundary="===============1234567890=="\n'
+    | 'MIME-Version: 1.0\n'
+    | 'From: =?utf-8?b?RMO2cnRlIE3DvGxsZXI=?= <doerte@example.de>\n'
+    | 'To: Ben Okafor <ben@example.net>, "Chen, Wei" <wei.chen@example.com>\n'
+    | 'Subject: =?utf-8?q?Agenda_f=C3=BCr_Montag_=E2=80=94_please_review_the_attached_files_before_the_meeting_starts?=\n'
+    | 'Date: Mon, 26 Oct 2026 09:00:00 +0100\n'
+    | '\n'
+    | 'You will not see this in a MIME-aware mail reader.\n'
+    | '\n'
+    | '--===============1234567890==\n'
+    | 'Content-Type: multipart/alternative; boundary="alt-b"\n'
+    | 'MIME-Version: 1.0\n'
+    | '\n'
+    | '--alt-b\n'
+    | 'Content-Type: text/plain; charset="us-ascii"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: 7bit\n'
+    | '\n'
+    | 'Hi all,\n'
+    | 'see the agenda.\n'
+    | '\n'
+    | '--alt-b\n'
+    | 'Content-Type: text/html; charset="utf-8"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | '\n'
+    | 'PHA+SGkgYWxsLDwvcD48cD5zZWUgdGhlIDxpPmFnZW5kYTwvaT4uPC9wPg==\n'
+    | '\n'
+    | '--alt-b--\n'
+    | '\n'
+    | '--===============1234567890==\n'
+    | 'Content-Type: text/plain; charset="utf-8"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | 'Content-Disposition: attachment; filename="agenda.txt"\n'
+    | '\n'
+    | 'QWdlbmRhCjEuIEJ1ZGdldAoyLiBIaXJpbmcKMy4gUsOpc3Vtw6kgcmV2aWV3Cg==\n'
+    | '\n'
+    | '--===============1234567890==\n'
+    | 'Content-Type: application/octet-stream; Name="logo.bin"\n'
+    | 'MIME-Version: 1.0\n'
+    | 'Content-Transfer-Encoding: base64\n'
+    | "Content-Disposition: attachment; filename*=utf-8''Logo%20f%C3%BCr%20Pr%C3%A4sentation.bin\n"
+    | '\n'
+    | 'AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4/wYNFBsiKTA3PkVMU1phaG92fYSL\n'
+    | 'kpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuA==\n'
+    | '\n'
+    | '--===============1234567890==\n'
+    | 'Content-Type: message/rfc822\n'
+    | 'MIME-Version: 1.0\n'
+    | '\n'
+    | 'From: Bob <bob@example.com>\n'
+    | 'To: Eve <eve@example.com>\n'
+    | 'Subject: Lunch?\n'
+    | 'Date: Fri, 23 Oct 2026 11:00:00 +0100\n'
+    | '\n'
+    | 'Noon at the usual place?\n'
+    | '--===============1234567890==--\n'
+  parsed back:
+  [0] multipart/mixed default=text/plain multipart=True
+      params [('multipart/mixed', ''), ('boundary', '===============1234567890==')]
+      filename None charset None disposition None
+      preamble 'You will not see this in a MIME-aware mail reader.\n' epilogue ''
+  [1] multipart/alternative default=text/plain multipart=True
+      params [('multipart/alternative', ''), ('boundary', 'alt-b')]
+      filename None charset None disposition None
+      preamble None epilogue ''
+  [2] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'us-ascii')]
+      filename None charset 'us-ascii' disposition None
+      payload 'Hi all,\nsee the agenda.\n'
+      decoded b'Hi all,\nsee the agenda.\n'
+      text 'Hi all,\nsee the agenda.\n'
+  [3] text/html default=text/plain multipart=False
+      params [('text/html', ''), ('charset', 'utf-8')]
+      filename None charset 'utf-8' disposition None
+      payload 'PHA+SGkgYWxsLDwvcD48cD5zZWUgdGhlIDxpPmFnZW5kYTwvaT4uPC9wPg==\n'
+      decoded b'<p>Hi all,</p><p>see the <i>agenda</i>.</p>'
+      text '<p>Hi all,</p><p>see the <i>agenda</i>.</p>'
+  [4] text/plain default=text/plain multipart=False
+      params [('text/plain', ''), ('charset', 'utf-8')]
+      filename 'agenda.txt' charset 'utf-8' disposition 'attachment'
+      payload 'QWdlbmRhCjEuIEJ1ZGdldAoyLiBIaXJpbmcKMy4gUsOpc3Vtw6kgcmV2aWV3Cg==\n'
+      decoded b'Agenda\n1. Budget\n2. Hiring\n3. R\xc3\xa9sum\xc3\xa9 review\n'
+      text 'Agenda\n1. Budget\n2. Hiring\n3. Résumé review\n'
+  [5] application/octet-stream default=text/plain multipart=False
+      params [('application/octet-stream', ''), ('name', 'logo.bin')]
+      filename 'Logo für Präsentation.bin' charset None disposition 'attachment'
+      payload 'AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4/wYNFBsiKTA3PkVMU1phaG92fYSL\nkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuA==\n'
+      decoded b'\x03\n\x11\x18\x1f&-4;BIPW^elsz\x81\x88\x8f\x96\x9d\xa4\xab\xb2\xb9\xc0\xc7\xce\xd5\xdc\xe3\xea\xf1\xf8\xff\x06\r\x14\x1b")07>ELSZahov}\x84\x8b\x92\x99\xa0\xa7\xae\xb5\xbc\xc3\xca\xd1\xd8\xdf\xe6\xed\xf4\xfb\x02\t\x10\x17\x1e%,3:AHOV]dkry\x80\x87\x8e\x95\x9c\xa3\xaa\xb1\xb8'
+  [6] message/rfc822 default=text/plain multipart=True
+      params [('message/rfc822', '')]
+      filename None charset None disposition None
+  [7] text/plain default=text/plain multipart=False
+      params None
+      filename None charset None disposition None
+      payload 'Noon at the usual place?'
+      decoded b'Noon at the usual place?'
+      text 'Noon at the usual place?'
+  same again: True
+== mailbox report
+  01.eml from ('Ana Lima', 'ana.lima@example.org') subject 'Quarterly report draft, with a subject line long enough that a mail client would fold it' parts 1 defects 0
+    first line 'Hi Ben,'
+    recipients [('Ben Okafor', 'ben@example.net')]
+  02.eml from ('Support Desk', 'support@example.com') subject 'Your ticket — resolved' parts 3 defects 0
+    first line 'Hello Dana,'
+    recipients [('', 'dana@example.gov')]
+  03.eml from ('=?utf-8?q?Jos=C3=A9_Mart=C3=ADnez?=', 'jose@example.es') subject 'Informe trimestral' parts 6 defects 0
+    saved data/saved/03-Informe_trimestral___Q3.pdf 133 bytes crc32 8545aaab
+    saved data/saved/03-chart.png 68 bytes crc32 e633a53a
+    first line 'Adjunto el informe. Saludos, José'
+    recipients [('Fox Mulder', 'fox@example.gov')]
+  04.eml from ('', 'ops@example.com') subject 'Disk alert' parts 3 defects 0
+    saved data/saved/04-usage.csv 19 bytes crc32 f79bfa86
+    first line '/var is at 91%.'
+    recipients [('', 'oncall@example.com')]
+  05.eml from ('Eve', 'eve@example.com') subject 'Fwd: Lunch?' parts 4 defects 0
+    first line 'See below.'
+    recipients [('', 'carol@example.com')]
+  06.eml from ('', 'list@example.org') subject 'Weekly digest, issue 12' parts 6 defects 0
+    first line 'Hello list.'
+    recipients [('', 'readers@example.org')]
+  07.eml from ('', 'hr@example.com') subject 'No boundary' parts 1 defects 2
+    first line None
+    recipients [('', 'all@example.com')]
+  08.eml from ('', 'hr@example.com') subject 'Truncated upload' parts 3 defects 1
+    first line 'first part'
+    recipients [('', 'all@example.com')]
+  09.eml from ('', 'x@example.com') subject 'Never starts' parts 1 defects 2
+    first line None
+    recipients []
+  10.eml from ('', 'x@example.com') subject 'Odd headers' parts 1 defects 4
+    first line 'This line has no colon, so the body starts here'
+    recipients []
+  11.eml from ('', 'bad@example.com') subject 'Bad base64 and a uuencoded file' parts 6 defects 0
+    first line 'Hello world'
+    recipients []
+  12.eml from ('Dörte', 'doerte@example.de') subject 'Grüße aus Köln' parts 1 defects 0
+    first line 'Liebe Gr��e, D�rte \\u2014 bis bald! \\U0001f642'
+    recipients [('Grüße Team', 'gruesse@example.de')]
+  13.eml from ('', 'MAILER-DAEMON@mx.example.net') subject 'Undelivered Mail Returned to Sender' parts 7 defects 0
+    first line "I'm sorry to have to inform you that your message could not"
+    recipients [('', 'ana.lima@example.org')]
+  14.eml from ('', 'signer@example.com') subject 'Signed note' parts 3 defects 0
+    saved data/saved/14-signature.asc 102 bytes crc32 0d2e656b
+    first line 'Signed text.'
+    recipients [('', 'you@example.com')]
+  15.eml from ('', 'weird@example.com') subject 'Strange content types' parts 6 defects 1
+    saved data/saved/15-a_b.html 11 bytes crc32 a3a582a7
+    saved data/saved/15-__euro.txt 4 bytes crc32 bf82152b
+    first line 'no slash'
+    recipients []
+  16.eml from ('', 'poet@example.com') subject 'From lines' parts 1 defects 0
+    first line 'From here the poem starts.'
+    recipients []
+  saved files:
+    03-Informe_trimestral___Q3.pdf 133
+    03-chart.png 68
+    04-usage.csv 19
+    14-signature.asc 102
+    15-__euro.txt 4
+    15-a_b.html 11
