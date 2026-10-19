@@ -16130,6 +16130,8 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     let popcount = std::env::var("KARAC_MIR_POPCOUNT").as_deref() != Ok("0");
     // `KARAC_MIR_PRESIZE=0` leaves counting loops' pushes unreserved.
     let presize = std::env::var("KARAC_MIR_PRESIZE").as_deref() != Ok("0");
+    // `KARAC_MIR_CONCAT=0` copies every `String.add`'s left side (`concat`).
+    let concat = std::env::var("KARAC_MIR_CONCAT").as_deref() != Ok("0");
     let coroutines = crate::mir::coroutine::coroutines(lowered.program.bodies.values());
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {
@@ -16160,6 +16162,9 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
         }
         if presize {
             crate::mir::presize::presize_pushes(body, &lowered.tys);
+        }
+        if concat && !coroutines.contains(&body.instance.name) {
+            crate::mir::concat::take_concat_lefts(body, &lowered.tys);
         }
         if dump.as_deref() == Some("elaborated") {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));

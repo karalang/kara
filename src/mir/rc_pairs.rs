@@ -200,7 +200,7 @@ fn mut_borrowed_locals(body: &Body) -> Vec<bool> {
     out
 }
 
-fn predecessors(body: &Body) -> Vec<Vec<usize>> {
+pub(super) fn predecessors(body: &Body) -> Vec<Vec<usize>> {
     let mut preds = vec![Vec::new(); body.blocks.len()];
     for (i, b) in body.blocks.iter().enumerate() {
         for s in b.terminator.kind.successors() {
