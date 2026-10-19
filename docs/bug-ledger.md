@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 282 |
 | codegen-gap | 275 |
 | false-positive | 241 |
-| perf | 177 |
+| perf | 178 |
 | other | 175 |
 | diagnostics | 172 |
 | crash | 124 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2950 |
+| codegen | 2951 |
 | interp | 968 |
 | typecheck | 492 |
 | ownership | 116 |
 | other | 115 |
+| runtime | 79 |
 | cli | 79 |
-| runtime | 78 |
 | parser | 69 |
 | autopar | 59 |
 | resolver | 47 |
@@ -167,6 +167,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-23 | 2026-10-19 | codegen+interp | high | A `Mutex` does not exclude across a suspension: four tasks each running `lock m x { let v = x; sleep(Duration.ms(2)); x = v + 1; }` leave `m` at 1, not 4, on `__mir-run` and `__mir-llvm-run`; `lock` takes no lock at all (MIR lowers it to `Mutex.get_mut`, which only hands back the cell's address), and exclusion holds today only because tasks run one at a time and switch only at a suspension | — |
 | B-2026-10-19-24 | 2026-10-19 | typecheck+interp | low | An `own` parameter, or a local made by an `if`/`match`, stored by value into a local bound to a borrow (`let mut out = s; out = t;`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR) | — |
 | B-2026-10-19-25 | 2026-10-19 | typecheck+interp | medium | On MIR, a bare `collect()` as the tail of one branch of an un-annotated `let x = if .. { .. } else { .. }` does not lower (`UnsolvedParam("C")`) when the target type comes only from the OTHER branch; `karac check` passes | — |
+| B-2026-10-19-26 | 2026-10-19 | runtime+codegen | medium | On the MIR compiled backend, `String.contains` goes to Rust `str::contains` (two-way search with per-call setup), which makes kata 796's bench 5.7x the legacy build (2.3 s vs 0.405 s); legacy's naive memcmp scan and C `strstr` (0.21 s) are far faster on short needles | — |
 
 ### Relocated
 
