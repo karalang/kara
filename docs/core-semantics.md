@@ -200,13 +200,13 @@ This replaces D3.4 of the drop judgment (the caller dropping the argument when t
 
 Pins: `drop_callee_owns`, `drop_callee_returns`.
 
-**4.3 Receivers on shared types.** A `shared` type's methods take a borrowed `self` only. This is unchanged apart from the spelling.
+**4.3 Receivers on shared types.** A `shared` type's methods take a borrowed `self` only. This is unchanged apart from the spelling. The one exception is `impl Drop` (§7.11): its `fn drop(mut ref self)` runs once, when the last handle goes and nothing else can reach the value, so the unique borrow cannot alias. (Clarified 2026-10-19, B-2026-10-19-65.)
 
 **4.4 Return values** move to the caller.
 
 **4.5 Argument evaluation.** Arguments are evaluated left to right, after the callee expression and the receiver (§8).
 
-**4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
+**4.6 Pattern binding modes.** This covers `match`, `if let`, `while let`, `let` destructuring and `for` patterns. A `let` whose pattern is a single identifier, such as `let s = h.name;`, is not destructuring: its initializer is a move (§3.1), so on a `shared` or borrowed place it is the §3.7 error, fixed by `.clone()` or `let s = ref h.name;` (§5.1). (Clarified 2026-10-19, B-2026-10-19-62.) The mode of every binding is decided by the pattern and the scrutinee's type, never by how the arm uses the binding.
 
 - **A `ref` or view scrutinee:** a binding of a non-`Copy` part is a `ref` into it, and moving it is an error (§3.7). A binding of a `Copy` part copies it, so `match shape { Circle { radius } => radius * radius, … }` on a borrowed `shape` needs no `*`.
 - **A `shared` scrutinee** (a handle, or any place reached through one) counts as a `ref` scrutinee. A shared value's contents are only ever reached through a handle (§6.1), so nothing can move out of them. A plain binding of a part is therefore a `ref` automatically, and moving it is an error whose fix is `.clone()`. A binding that covers the whole handle copies the handle (§6.1). This is unlike a type with a `Drop` body (below), where a plain binding of a part still needs an explicit `ref`. A `mut` field of `Copy` or handle-aggregate type is the exception: it is read as a value (§6.2), so the scrutinee is a temporary.
@@ -401,7 +401,7 @@ Pins: `drop_defer`, `drop_callee_owns`, `drop_shadowing`.
 | `return e` | after `e` is computed, before the function's locals and defers |
 | `for` iterator | at loop exit |
 
-Several temporaries that drop at the same point drop in reverse order of creation. Literal fields are not temporaries: they move into the literal.
+When a temporary matches two rows, the row for the narrower construct wins: an argument to a borrowed parameter inside an `if` or `while` condition, a `match` guard, a `let … else` initializer or a brace-less arm drops where that construct's row says, not at the end of the enclosing statement. (Clarified 2026-10-19, B-2026-10-19-64.) Several temporaries that drop at the same point drop in reverse order of creation. Literal fields are not temporaries: they move into the literal.
 
 Pins: `drop_temp_stmt`, `drop_match_scrutinee`.
 
@@ -484,7 +484,7 @@ Reordering that cannot be observed is allowed.
 
 ## 9. Closures
 
-**9.1 Capture modes** are inferred per captured place, with disjoint field capture as in `design.md` Rule 2¼:
+**9.1 Capture modes** are inferred per captured place, with disjoint field capture as in `design.md` § Captures ("Disjoint capture: closures capture places, not whole bindings"):
 - **by `ref`** if the body only reads the place;
 - **by `mut ref`** if the body mutates it;
 - **by move** if the body moves it, if the closure escapes (§9.3), or if the place dies while the closure's borrow of it is still live (below).

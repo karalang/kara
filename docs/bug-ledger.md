@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 747 |
+| miscompile | 748 |
 | run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2966 |
-| interp | 983 |
+| codegen | 2967 |
+| interp | 984 |
 | typecheck | 502 |
 | ownership | 123 |
 | other | 121 |
@@ -197,6 +197,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-65 | 2026-10-19 | other | low | SPEC: §4.3 says a shared type's methods take a borrowed `self` only, and §7.11 makes `Drop` `fn drop(mut ref self)`, without stating that `impl Drop` on a shared type is the exception | — |
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
 | B-2026-10-19-67 | 2026-10-19 | other | low | LIBRARY DOC: docs/library/concurrency.md declares `Atomic` operations without a `MemoryOrdering` argument (`fn load(self) -> T`, `fn fetch_add(self, n: T) -> T`), but every surface requires one (E0270) | — |
+| B-2026-10-19-68 | 2026-10-19 | interp+codegen | high | Calling a closure through a `mut ref MutFn()` parameter is broken on both MIR backends: a temporary closure argument `twice(mut || { n += 1; })` runs but its writes are lost (prints 0, expected 2), and a named one `twice(mut c)` stops mir-interp ('call through Agg([Ref(..)]), which is not a function value') and overflows the stack in mir-llvm; `karac check` accepts both | — |
 
 ### Relocated
 
