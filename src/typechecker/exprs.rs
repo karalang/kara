@@ -1140,6 +1140,36 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// [`Self::iter_yields_values`] for an iterator held in a variable
+    /// (`let it = w.chars(); it.filter(..)`), read from its type: a range,
+    /// `chars()` and `map` yield values, and the adaptors that pass their
+    /// items through yield what their source does (B-2026-10-19-14).
+    fn named_iter_yields_values(&self, e: &Expr) -> bool {
+        let ExprKind::Identifier(n) = &e.kind else {
+            return false;
+        };
+        let Some(ty) = self.local_scope.lookup(n) else {
+            return false;
+        };
+        let mut ty = resolve_type_var_top(ty, &self.env.substitutions);
+        loop {
+            let Type::Named { name, args } = &ty else {
+                return false;
+            };
+            match name.as_str() {
+                "Range" | "RangeInclusive" | "StrChars" | "IterMap" => return true,
+                "IterEnumerate" | "IterRev" | "IterSkip" | "IterTake" | "IterStepBy"
+                | "IterFilter" | "Peekable" | "IterSkipWhile" | "IterTakeWhile" | "IterInspect" => {
+                    match args.first() {
+                        Some(a) => ty = resolve_type_var_top(a, &self.env.substitutions),
+                        None => return false,
+                    }
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// core-semantics.md §5.10: a closure parameter takes its type from the
     /// function type it is checked against and is then an ordinary bare
     /// parameter, so over an iterator of `Copy` values it is a copy:
@@ -7575,7 +7605,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 if (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
-                    && Self::iter_yields_values(object)
+                    && (Self::iter_yields_values(object) || self.named_iter_yields_values(object))
                 {
                     if let Some(i) = Self::adaptor_item_param(method) {
                         for a in args {

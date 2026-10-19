@@ -5288,6 +5288,40 @@ fn main() {
     );
 }
 
+/// B-2026-10-19-14: an iterator held in a variable gets §5.10's copy rule
+/// from its type, as the same chain written inline does, so `*c` over a named
+/// `chars()` is refused with the drop-the-`*` fix. A named `v.iter()` still
+/// lends `ref` items.
+#[test]
+fn a_named_value_iterator_closure_parameter_is_a_copy() {
+    rejected_then_fixed_by(
+        "named-chars-deref",
+        r#"fn main() {
+    let w = "QqqQ";
+    let it = w.chars();
+    println(f"{it.filter(|c| *c == 'Q').count()}");
+}
+"#,
+        "a 'char' is copied, so drop the `*`",
+        "it.filter(|c| c == 'Q')",
+    );
+    accepted_and_runs(
+        "named-iters",
+        r#"fn main() {
+    let w = "QqqQ";
+    let it = w.chars();
+    println(f"{it.filter(|c| c == 'Q').count()}");
+    let r = (0..10).rev();
+    println(f"{r.filter(|j| j % 2 == 0).count()}");
+    let v = vec![1, 2, 3];
+    let vi = v.iter();
+    println(f"{vi.filter(|x| *x > 1).count()}");
+}
+"#,
+        "2\n5\n2\n",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.
