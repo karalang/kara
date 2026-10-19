@@ -9038,3 +9038,29 @@ fn string_pop_and_truncate_need_a_mut_binding() {
         );
     }
 }
+
+/// B-2026-10-19-12: a misspelled `Vec` method names the nearest one, and a
+/// known one called with the wrong arguments says so rather than that it
+/// does not exist.
+#[test]
+fn an_unknown_vec_method_names_the_nearest() {
+    for (tag, call, want) in [
+        (
+            "lenn",
+            "v.lenn()",
+            "no method 'lenn' on type 'Vec', did you mean 'len'?",
+        ),
+        ("pushh", "v.pushh(1)", "did you mean 'push'?"),
+        ("length", "v.length()", "did you mean 'len'?"),
+        ("size", "v.size()", "did you mean 'len'?"),
+        ("push-arity", "v.push()", "`push` takes arguments"),
+    ] {
+        rejected(
+            &format!("vec-method-typo-{tag}"),
+            &format!(
+                "fn main() {{\n    let mut v: Vec[i64] = Vec.new();\n    let _ = {call};\n}}\n"
+            ),
+            want,
+        );
+    }
+}

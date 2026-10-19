@@ -1810,3 +1810,98 @@ mod number_method_table_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod vec_method_table_tests {
+    //! B-2026-10-19-12: every name the `Vec` did-you-mean can suggest is a
+    //! method the checker accepts.
+    use super::super::expr_method_call::VEC_METHOD_NAMES;
+
+    /// A call of each listed method: `v`, `w: Vec[i64]`, `s: Vec[String]`,
+    /// `vv: Vec[Vec[i64]]`.
+    const CALLS: &[(&str, &str)] = &[
+        ("as_slice", "v.as_slice()"),
+        ("as_slice_mut", "v.as_slice_mut()"),
+        ("binary_search", "v.binary_search(1)"),
+        ("capacity", "v.capacity()"),
+        ("chunks", "v.chunks(2)"),
+        ("clear", "v.clear()"),
+        ("clone", "v.clone()"),
+        ("concat", "vv.concat()"),
+        ("contains", "v.contains(1)"),
+        ("dedup", "v.dedup()"),
+        ("extend", "v.extend(w.clone())"),
+        ("extend_from_slice", "v.extend_from_slice(w.as_slice())"),
+        ("fill", "v.fill(0)"),
+        ("first", "v.first()"),
+        ("get", "v.get(0)"),
+        ("insert", "v.insert(0, 5)"),
+        ("into_iter", "v.clone().into_iter()"),
+        ("is_empty", "v.is_empty()"),
+        ("is_sorted", "v.is_sorted()"),
+        ("iter", "v.iter()"),
+        ("iter_mut", "v.iter_mut()"),
+        ("join", "s.join(\",\")"),
+        ("last", "v.last()"),
+        ("len", "v.len()"),
+        ("max", "v.max()"),
+        ("min", "v.min()"),
+        ("pop", "v.pop()"),
+        ("product", "v.product()"),
+        ("push", "v.push(1)"),
+        ("remove", "v.remove(0)"),
+        ("reserve", "v.reserve(4)"),
+        ("reserve_exact", "v.reserve_exact(4)"),
+        ("resize", "v.resize(4, 0)"),
+        ("retain", "v.retain(|x| x > 0)"),
+        ("reverse", "v.reverse()"),
+        ("sort", "v.sort()"),
+        ("sort_by", "v.sort_by(|a, b| a.cmp(b))"),
+        ("sort_by_key", "v.sort_by_key(|x| x)"),
+        ("sorted", "v.sorted()"),
+        ("sorted_by", "v.sorted_by(|a, b| a.cmp(b))"),
+        ("split_at", "v.split_at(1)"),
+        ("split_off", "v.split_off(1)"),
+        ("sum", "v.sum()"),
+        ("swap", "v.swap(0, 0)"),
+        ("swap_remove", "v.swap_remove(0)"),
+        ("to_string", "v.to_string()"),
+        ("truncate", "v.truncate(1)"),
+        (
+            "try_extend_from_slice",
+            "v.try_extend_from_slice(w.as_slice())",
+        ),
+        ("try_insert", "v.try_insert(0, 1)"),
+        ("try_push", "v.try_push(1)"),
+        ("try_reserve", "v.try_reserve(1)"),
+        ("try_resize", "v.try_resize(2, 0)"),
+        ("windows", "v.windows(2)"),
+    ];
+
+    #[test]
+    fn every_listed_vec_method_checks() {
+        let mut body = String::new();
+        for (i, name) in VEC_METHOD_NAMES.iter().enumerate() {
+            let call = CALLS
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("no call of `{name}` in CALLS"))
+                .1;
+            assert!(call.contains(&format!(".{name}(")), "CALLS `{name}`");
+            body.push_str(&format!("    let _{i} = {call};\n"));
+        }
+        let src = format!(
+            "fn main() {{\n    let mut v: Vec[i64] = Vec.new();\n    \
+             let w: Vec[i64] = Vec.new();\n    let s: Vec[String] = Vec.new();\n    \
+             let vv: Vec[Vec[i64]] = Vec.new();\n{body}}}\n"
+        );
+        let parsed = crate::parse(&src);
+        let resolved = crate::resolve(&parsed.program);
+        let result = crate::typecheck(&parsed.program, &resolved);
+        assert!(
+            result.errors.is_empty(),
+            "{:?}\n{src}",
+            result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}

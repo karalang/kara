@@ -1467,9 +1467,27 @@ impl<'a> super::TypeChecker<'a> {
                         ));
                     } else {
                         let candidates = self.env.collect_method_names(&type_name, &[]);
-                        let candidate_refs: Vec<&str> =
+                        let mut candidate_refs: Vec<&str> =
                             candidates.iter().map(String::as_str).collect();
-                        if let Some(suggestion) =
+                        // B-2026-10-19-12: most of `Vec`'s methods are
+                        // builtin arms, not impl-table entries.
+                        if type_name == "Vec" {
+                            candidate_refs.extend(super::expr_method_call::VEC_METHOD_NAMES);
+                        }
+                        if type_name == "Vec"
+                            && super::expr_method_call::VEC_METHOD_NAMES.contains(&method)
+                        {
+                            // A guarded arm refused the call's shape, not
+                            // the name (`v.push()`).
+                            msg.push_str(&format!(
+                                " taking these arguments: `{method}` takes {}",
+                                if args.is_empty() {
+                                    "arguments"
+                                } else {
+                                    "other arguments"
+                                }
+                            ));
+                        } else if let Some(suggestion) =
                             crate::edit_distance::suggest_method(method, &candidate_refs)
                         {
                             msg.push_str(&format!(", did you mean '{}'?", suggestion));
