@@ -607,7 +607,7 @@ fn run_with(
             .map_or(0, |d| d.as_nanos() as u64)
             | 1,
         sorted_tables: Default::default(),
-        table_cmp: Default::default(),
+        table_key_ty: Default::default(),
         table_holes: Default::default(),
         deque_front: Default::default(),
         flags: Vec::new(),
@@ -935,9 +935,11 @@ struct Interp<'a> {
     rand: u64,
     /// The tables a `Vacant` entry was made from that keep key order.
     sorted_tables: rustc_hash::FxHashSet<AllocId>,
-    /// The user `Ord.cmp` body a sorted table's keys are kept in order by,
-    /// for the inserts that do not know the key type (B-2026-10-06-109).
-    table_cmp: rustc_hash::FxHashMap<AllocId, String>,
+    /// The key type of a table a `Vacant` entry was made from, for the
+    /// insert that does not know it: a sorted table orders its keys by
+    /// the type's own `cmp` (B-2026-10-06-109), or a `u128` key unsigned
+    /// (B-2026-10-19-22).
+    table_key_ty: rustc_hash::FxHashMap<AllocId, Ty>,
     /// The borrow flags currently held, by field address.
     flags: Vec<(Addr, Flag)>,
     /// Resumes of a pending task root.
@@ -2254,6 +2256,17 @@ impl<'a> Interp<'a> {
                         .collect(),
                     _ => args,
                 };
+                // A `u128` is held as its bits, so it is compared with the
+                // sign bit flipped, and the pick flipped back
+                // (B-2026-10-19-22).
+                if ty_name == "u128" && matches!(method, "min" | "max" | "clamp") {
+                    let flip = |v: Value| match v {
+                        Value::Int(n) => Value::Int(n ^ i128::MIN),
+                        v => v,
+                    };
+                    let flipped: Vec<Value> = args.into_iter().map(flip).collect();
+                    return Ok(flip(self.scalar_method(name, method, &flipped, ret)?));
+                }
                 self.scalar_method(name, method, &args, ret)
             }
             (t, "to_f64" | "to_f32") if int_width(t).is_some() => match args.as_slice() {
@@ -2588,7 +2601,7 @@ impl<'a> Interp<'a> {
                 let elems = self.vec_elems(id)?.clone();
                 let mut keys = Vec::with_capacity(elems.len());
                 for x in &elems {
-                    keys.push(self.key_form(x)?);
+                    keys.push(self.order_form(x, et)?);
                 }
                 let order =
                     self.merge_order(elems.len(), &mut |_, a, b| Ok(cmp_key(&keys[a], &keys[b])))?;
@@ -2599,7 +2612,7 @@ impl<'a> Interp<'a> {
                 let elems = self.vec_elems(id)?.clone();
                 let mut prev: Option<Value> = None;
                 for x in &elems {
-                    let k = self.key_form(x)?;
+                    let k = self.order_form(x, e)?;
                     if prev.as_ref().is_some_and(|p| cmp_key(p, &k).is_gt()) {
                         return Ok(Value::Bool(false));
                     }
@@ -2633,7 +2646,7 @@ impl<'a> Interp<'a> {
                 let mut keys = Vec::with_capacity(n);
                 for i in 0..n {
                     let k = self.call_callee(&mut f, vec![Value::Ref(elem(i))])?;
-                    keys.push(self.key_form(&k)?);
+                    keys.push(self.order_form(&k, key_ty)?);
                     owned.push(k);
                 }
                 self.release_callee(f, fty)?;
@@ -3783,8 +3796,10 @@ impl<'a> Interp<'a> {
                 };
                 let id = self.box_behind(map)?;
                 let sorted = self.sorted_tables.contains(&id);
-                let cmp = self.table_cmp.get(&id).cloned();
-                let at = self.insert_at(id, key, true, sorted, cmp)?;
+                let Some(&key_ty) = self.table_key_ty.get(&id) else {
+                    return err(format!("{name}: an entry of a table with no key type"));
+                };
+                let at = self.insert_at(id, key, true, sorted, key_ty)?;
                 self.table_insert(id, at, Value::Agg(vec![key.clone(), v]), key)?;
                 Ok(Value::Ref(Addr {
                     root: Root::Heap(id),
@@ -5713,8 +5728,6 @@ impl<'a> Interp<'a> {
                 kv
             }
         };
-        // A sorted table of keys with a user `Ord` keeps them in its order.
-        let sorted_cmp = if sorted { self.user_cmp(key_ty) } else { None };
         match (method, &args[1..]) {
             ("len", []) => Ok(Value::Int(self.table_len(id)? as i128)),
             ("is_empty", []) => Ok(Value::Bool(self.table_len(id)? == 0)),
@@ -5766,7 +5779,7 @@ impl<'a> Interp<'a> {
                     }
                     (true, None, [val]) => {
                         let entry = Value::Agg(vec![key.clone(), val.clone()]);
-                        let at = self.insert_at(id, key, is_map, sorted, sorted_cmp.clone())?;
+                        let at = self.insert_at(id, key, is_map, sorted, key_ty)?;
                         self.table_insert(id, at, entry, key)?;
                         if ret == self.tys.unit() {
                             return Ok(Value::Unit);
@@ -5778,7 +5791,7 @@ impl<'a> Interp<'a> {
                         Ok(Value::Bool(false))
                     }
                     (false, None, []) => {
-                        let at = self.insert_at(id, key, is_map, sorted, sorted_cmp.clone())?;
+                        let at = self.insert_at(id, key, is_map, sorted, key_ty)?;
                         self.table_insert(id, at, key.clone(), key)?;
                         Ok(Value::Bool(true))
                     }
@@ -5900,10 +5913,7 @@ impl<'a> Interp<'a> {
                     });
                     return self.variant_named(ret, None, "Occupied", vec![at]);
                 }
-                match self.user_cmp(key_ty) {
-                    Some(cmp) if sorted => self.table_cmp.insert(id, cmp),
-                    _ => self.table_cmp.remove(&id),
-                };
+                self.table_key_ty.insert(id, key_ty);
                 if sorted {
                     self.sorted_tables.insert(id);
                 } else {
@@ -5924,7 +5934,7 @@ impl<'a> Interp<'a> {
                         i
                     }
                     None => {
-                        let at = self.insert_at(id, key, true, sorted, sorted_cmp.clone())?;
+                        let at = self.insert_at(id, key, true, sorted, key_ty)?;
                         let v = if method == "entry_or_insert_with" {
                             let fty = *arg_tys.get(2).ok_or_else(|| {
                                 Stop::Error(format!("{name} needs its closure's type"))
@@ -6194,13 +6204,13 @@ impl<'a> Interp<'a> {
         key: &Value,
         is_map: bool,
         sorted: bool,
-        cmp: Option<String>,
+        key_ty: Ty,
     ) -> R<usize> {
         let n = self.vec_elems(id)?.len();
         if !sorted {
             return Ok(n);
         }
-        if let Some(cmp) = cmp {
+        if let Some(cmp) = self.user_cmp(key_ty) {
             // By the key type's own `cmp` (B-2026-10-06-109).
             let (mut lo, mut hi) = (0, n);
             while lo < hi {
@@ -6216,12 +6226,12 @@ impl<'a> Interp<'a> {
         }
         // The first entry whose key is larger, by binary search: the
         // entries are in key order.
-        let want = self.key_form(key)?;
+        let want = self.order_form(key, key_ty)?;
         let (mut lo, mut hi) = (0, n);
         while lo < hi {
             let mid = (lo + hi) / 2;
             let k = self.entry_key(id, mid, is_map)?;
-            if key_order(&self.key_form(&k)?, &want) == std::cmp::Ordering::Greater {
+            if key_order(&self.order_form(&k, key_ty)?, &want) == std::cmp::Ordering::Greater {
                 hi = mid;
             } else {
                 lo = mid + 1;
@@ -6938,7 +6948,7 @@ impl<'a> Interp<'a> {
     /// (B-2026-10-06-109). Equal values share a rank.
     fn order_forms(&mut self, vals: &[Value], ty: Ty) -> R<Vec<Value>> {
         let Some(cmp) = self.user_cmp(ty) else {
-            return vals.iter().map(|v| self.key_form(v)).collect();
+            return vals.iter().map(|v| self.order_form(v, ty)).collect();
         };
         let order = self.merge_order(vals.len(), &mut |me, a, b| {
             me.call_cmp(&cmp, &vals[a], &vals[b])
@@ -7057,6 +7067,56 @@ impl<'a> Interp<'a> {
             ),
             other => other.clone(),
         })
+    }
+
+    /// The key form of `v`, a value of type `ty`, for ORDERING. A `u128` is
+    /// held as its bits in an `i128`, so its form has the sign bit flipped:
+    /// the signed order of the forms is then the unsigned order of the
+    /// values (B-2026-10-19-22). The flip is a bijection, so two forms are
+    /// equal exactly when the values are.
+    fn order_form(&mut self, v: &Value, ty: Ty) -> R<Value> {
+        let form = self.key_form(v)?;
+        Ok(self.unsigned_order(form, ty))
+    }
+
+    /// [`Self::order_form`]'s flip, through the parts of a key form of type
+    /// `ty`.
+    fn unsigned_order(&self, form: Value, ty: Ty) -> Value {
+        let each = |me: &Self, fs: Vec<Value>, t: &dyn Fn(u32) -> Option<Ty>| {
+            fs.into_iter()
+                .enumerate()
+                .map(|(i, f)| match t(i as u32) {
+                    Some(t) => me.unsigned_order(f, t),
+                    None => f,
+                })
+                .collect()
+        };
+        match (self.tys.kind(ty), form) {
+            (TyKind::Int(IntTy::U128), Value::Int(x)) => Value::Int(x ^ i128::MIN),
+            (TyKind::Ref(t) | TyKind::MutRef(t), f) => self.unsigned_order(f, t),
+            (TyKind::Tuple(ts), Value::Agg(fs)) => {
+                Value::Agg(each(self, fs, &|i| ts.get(i as usize).copied()))
+            }
+            (
+                TyKind::Array(e, _)
+                | TyKind::Slice(e)
+                | TyKind::Intrinsic(
+                    IntrinsicTy::Vec(e)
+                    | IntrinsicTy::VecDeque(e)
+                    | IntrinsicTy::Set(e)
+                    | IntrinsicTy::SortedSet(e),
+                ),
+                Value::Agg(fs),
+            ) => Value::Agg(each(self, fs, &|_| Some(e))),
+            (TyKind::Adt(_) | TyKind::Shared(_), Value::Agg(fs)) => {
+                Value::Agg(each(self, fs, &|i| self.tys.field_ty(ty, None, i)))
+            }
+            (TyKind::Adt(_) | TyKind::Shared(_), Value::Variant(k, fs)) => {
+                let fs = each(self, fs, &|i| self.tys.field_ty(ty, Some(k), i));
+                Value::Variant(k, fs)
+            }
+            (_, f) => f,
+        }
     }
 
     /// A copy of `v`, a value of type `ty`, for `Clone` on the library
@@ -7334,6 +7394,9 @@ impl<'a> Interp<'a> {
             }
         };
         let a = at_width(int(0)?, bits, signed);
+        if !signed && bits == 128 {
+            return self.u128_family_op(name, family, op, a as u128, args, ret);
+        }
         // The wrapped result, and the exact one when it is in range.
         let (wrapped, exact): (i128, Option<i128>) = match op {
             "div" | "rem" => {
@@ -7394,6 +7457,60 @@ impl<'a> Interp<'a> {
         }
     }
 
+    /// [`Self::int_family_op`] on a `u128`, whose values are held as their
+    /// bits in an `i128` and so are out of reach of its `i128` arithmetic:
+    /// Rust's own `u128` methods (B-2026-10-19-22).
+    fn u128_family_op(
+        &mut self,
+        name: &str,
+        family: &str,
+        op: &str,
+        x: u128,
+        args: &[Value],
+        ret: Ty,
+    ) -> R<Value> {
+        let arg = || match args.get(1) {
+            Some(Value::Int(n)) => Ok(*n),
+            other => err(format!("{name}: argument 1 is {other:?}")),
+        };
+        let (wrapped, over) = match op {
+            "div" | "rem" => {
+                let y = arg()? as u128;
+                if y == 0 {
+                    if family == "checked" {
+                        return self.option(ret, None);
+                    }
+                    if self.trace {
+                        self.events.push(Event::Abort(AbortReason::DivByZero));
+                    }
+                    return Err(Stop::Abort(AbortReason::DivByZero));
+                }
+                (if op == "div" { x / y } else { x % y }, false)
+            }
+            "neg" => x.overflowing_neg(),
+            "shl" | "shr" => {
+                let n = arg()?;
+                let k = n.rem_euclid(128) as u32;
+                let w = if op == "shl" { x << k } else { x >> k };
+                (w, !(0..128).contains(&n))
+            }
+            _ => {
+                let n = arg()?;
+                let Ok(e) = u32::try_from(n) else {
+                    return err(format!("{name}: exponent {n}"));
+                };
+                x.overflowing_pow(e)
+            }
+        };
+        let w = Value::Int(wrapped as i128);
+        match family {
+            "checked" => self.option(ret, (!over).then_some(w)),
+            "overflowing" => Ok(Value::Agg(vec![w, Value::Bool(over)])),
+            "saturating" if over => Ok(Value::Int(u128::MAX as i128)),
+            _ => Ok(w),
+        }
+    }
+
     fn int_method(
         &mut self,
         name: &str,
@@ -7429,6 +7546,49 @@ impl<'a> Interp<'a> {
                 other => err(format!("{name} of {other:?}")),
             })
             .collect::<R<_>>()?;
+        // A `u128` is held as its bits, past the reach of the `i128`
+        // arithmetic below: its ordered and overflowing methods run on
+        // `u128` itself (B-2026-10-19-22).
+        if !signed && bits == 128 {
+            let u: Vec<u128> = ints.iter().map(|&n| n as u128).collect();
+            let int = |v: u128| Value::Int(v as i128);
+            match (method, u.as_slice()) {
+                ("abs_diff", [a, b]) => return Ok(int(a.abs_diff(*b))),
+                ("clamp", [a, l, h]) => {
+                    return Ok(int(if a < l {
+                        *l
+                    } else if a > h {
+                        *h
+                    } else {
+                        *a
+                    }))
+                }
+                ("overflowing_add" | "overflowing_sub" | "overflowing_mul", [a, b]) => {
+                    let (r, of) = match method {
+                        "overflowing_add" => a.overflowing_add(*b),
+                        "overflowing_sub" => a.overflowing_sub(*b),
+                        _ => a.overflowing_mul(*b),
+                    };
+                    return Ok(Value::Agg(vec![int(r), Value::Bool(of)]));
+                }
+                ("checked_add" | "checked_sub" | "checked_mul", [a, b]) => {
+                    let r = match method {
+                        "checked_add" => a.checked_add(*b),
+                        "checked_sub" => a.checked_sub(*b),
+                        _ => a.checked_mul(*b),
+                    };
+                    return self.option(ret, r.map(int));
+                }
+                ("saturating_add" | "saturating_sub" | "saturating_mul", [a, b]) => {
+                    return Ok(int(match method {
+                        "saturating_add" => a.saturating_add(*b),
+                        "saturating_sub" => a.saturating_sub(*b),
+                        _ => a.saturating_mul(*b),
+                    }))
+                }
+                _ => {}
+            }
+        }
         let raw = |v: i128| -> u128 {
             let shift = 128 - bits;
             (v as u128) << shift >> shift

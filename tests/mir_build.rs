@@ -5457,3 +5457,45 @@ fn main() {
         }
     }
 }
+
+/// A `u128` past `i128::MAX` orders unsigned on the interpreter, as on the
+/// compiled backend: `sort`, `sort_by_key`, a tuple sort, `is_sorted`,
+/// `binary_search`, a `SortedSet`, `max` / `min`, and the checked,
+/// saturating, overflowing and `abs_diff` methods. The expected output is
+/// what Rust prints for the same program (B-2026-10-19-22).
+#[test]
+fn mir_u128_orders_unsigned() {
+    const SRC: &str = r#"fn main() {
+    let big: u128 = 1u128 << 127;
+    let one: u128 = 1;
+    let mut v: Vec[u128] = vec![5, big, 1];
+    v.sort();
+    println(f"{v[0]} {v[1]} {v[2]} {v.is_sorted()} {v.binary_search(big).unwrap()}");
+    let mut w: Vec[u128] = vec![5, big, 1];
+    w.sort_by_key(|k| k);
+    let mut t: Vec[(u128, i64)] = vec![(big, 1), (3, 2)];
+    t.sort();
+    println(f"{w[0]} {w[2]} {t[0].0} {t[1].0}");
+    let mut s: SortedSet[u128] = SortedSet.new();
+    s.insert(big);
+    s.insert(7);
+    s.insert(big + 1);
+    for x in s.iter() {
+        print(f"{x} ");
+    }
+    println("");
+    println(f"{big.max(5)} {big.min(5)} {v.iter().max().unwrap()} {v.iter().min().unwrap()}");
+    println(f"{big.checked_add(one).unwrap()} {big.checked_sub(one).unwrap()} {big.checked_mul(2).is_none()} {big.saturating_add(big)} {one.saturating_sub(big)}");
+    println(f"{big.abs_diff(one)} {one.abs_diff(big)} {big.overflowing_add(big)} {big.overflowing_mul(3)}");
+    println(f"{big.checked_div(2).unwrap()} {big.wrapping_shl(1)} {big.overflowing_neg()} {big.saturating_pow(2)} {(3u128).wrapping_pow(81)}");
+}
+"#;
+    let want = "1 5 170141183460469231731687303715884105728 true 2\n1 170141183460469231731687303715884105728 3 170141183460469231731687303715884105728\n7 170141183460469231731687303715884105728 170141183460469231731687303715884105729 \n170141183460469231731687303715884105728 5 170141183460469231731687303715884105728 1\n170141183460469231731687303715884105729 170141183460469231731687303715884105727 true 340282366920938463463374607431768211455 0\n170141183460469231731687303715884105727 170141183460469231731687303715884105727 (0, true) (170141183460469231731687303715884105728, true)\n85070591730234615865843651857942052864 0 (170141183460469231731687303715884105728, true) 340282366920938463463374607431768211455 103144121322099306484875023187381681347\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
