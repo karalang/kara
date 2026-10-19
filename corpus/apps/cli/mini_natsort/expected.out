@@ -1,0 +1,617 @@
+== everyday lists
+-- natsorted DEFAULT
+['IMG_1.jpg', 'IMG_2 (1).jpg', 'IMG_2.jpg', 'IMG_02.jpg', 'IMG_10.jpg', 'IMG_20.png', 'IMG_100.jpg', 'img_3.JPG']
+-- natsorted IGNORECASE
+['IMG_1.jpg', 'IMG_2 (1).jpg', 'IMG_2.jpg', 'IMG_02.jpg', 'img_3.JPG', 'IMG_10.jpg', 'IMG_20.png', 'IMG_100.jpg']
+-- natsorted DEFAULT reverse
+['img_3.JPG', 'IMG_100.jpg', 'IMG_20.png', 'IMG_10.jpg', 'IMG_2.jpg', 'IMG_02.jpg', 'IMG_2 (1).jpg', 'IMG_1.jpg']
+-- natsorted DEFAULT
+['0.9.99', '1.2', '1.2.0', '1.2.9', '1.2.10', '1.2.10-beta.2', '1.2.10rc1', '1.10.0', '2.0', '10.0.1', 'v1.9']
+-- natsorted FLOAT
+['0.9.99', '1.10.0', '1.2', '1.2.0', '1.2.10', '1.2.10-beta.2', '1.2.10rc1', '1.2.9', '2.0', '10.0.1', 'v1.9']
+-- natsorted DEFAULT
+['app.log', 'app.log.1', 'app.log.2.gz', 'app.log.3.gz', 'app.log.9.gz', 'app.log.10.gz', 'app.log.11.gz']
+-- natsorted PATH
+['app.log', 'app.log.1', 'app.log.2.gz', 'app.log.3.gz', 'app.log.9.gz', 'app.log.10.gz', 'app.log.11.gz']
+-- natsorted DEFAULT
+['Appendix A', 'Appendix B 2', 'Chapter 1: Begin', 'Chapter 1a', 'Chapter 1b', 'Chapter 2: Rising', 'Chapter 10: The End', 'Chapter 11', 'chapter 1: Begin']
+-- natsorted IGNORECASE
+['Appendix A', 'Appendix B 2', 'chapter 1: Begin', 'Chapter 1: Begin', 'Chapter 1a', 'Chapter 1b', 'Chapter 2: Rising', 'Chapter 10: The End', 'Chapter 11']
+-- natsorted LOWERCASEFIRST
+['chapter 1: Begin', 'Appendix A', 'Appendix B 2', 'Chapter 1: Begin', 'Chapter 1a', 'Chapter 1b', 'Chapter 2: Rising', 'Chapter 10: The End', 'Chapter 11']
+-- natsorted GROUPLETTERS
+['Appendix A', 'Appendix B 2', 'Chapter 1: Begin', 'Chapter 1a', 'Chapter 1b', 'Chapter 2: Rising', 'Chapter 10: The End', 'Chapter 11', 'chapter 1: Begin']
+-- natsorted DEFAULT
+['2 Main St', '2 Main Street', '2A Main St', '2B Main St', '10 Main St', '100 Main St', 'Apt 3, 2 Main St', 'Apt 12, 2 Main St']
+-- natsorted NUMAFTER
+['Apt 3, 2 Main St', 'Apt 12, 2 Main St', '2 Main St', '2 Main Street', '2A Main St', '2B Main St', '10 Main St', '100 Main St']
+-- natsorted DEFAULT
+['0.75 GB', '1.5 GB', '1.25 GB', '5. TB', '9.5 MB', '10 MB', '100 KB', '750 MB', '.5 TB']
+-- natsorted FLOAT
+['.5 TB', '0.75 GB', '1.25 GB', '1.5 GB', '5. TB', '9.5 MB', '10 MB', '100 KB', '750 MB']
+-- natsorted FLOAT|NOEXP
+['.5 TB', '0.75 GB', '1.25 GB', '1.5 GB', '5. TB', '9.5 MB', '10 MB', '100 KB', '750 MB']
+== signs and exponents
+-- natsorted DEFAULT
+['0 C', '1e2 C', '12.75 C', '+1.5E-1 C', '+3 C', '-0.5 C', '-2.5 C', '-3.25e1 C', '-10 C']
+-- natsorted SIGNED
+['-10 C', '-3.25e1 C', '-2.5 C', '0 C', '-0.5 C', '+1.5E-1 C', '1e2 C', '+3 C', '12.75 C']
+-- natsorted FLOAT
+['0 C', '12.75 C', '1e2 C', '+1.5E-1 C', '+3 C', '-0.5 C', '-2.5 C', '-10 C', '-3.25e1 C']
+-- natsorted REAL
+['-3.25e1 C', '-10 C', '-2.5 C', '-0.5 C', '0 C', '+1.5E-1 C', '+3 C', '12.75 C', '1e2 C']
+-- natsorted REAL|NOEXP
+['-10 C', '-3.25e1 C', '-2.5 C', '-0.5 C', '0 C', '1e2 C', '+1.5E-1 C', '+3 C', '12.75 C']
+-- realsorted DEFAULT
+['-3.25e1 C', '-10 C', '-2.5 C', '-0.5 C', '0 C', '+1.5E-1 C', '+3 C', '12.75 C', '1e2 C']
+-- realsorted DEFAULT reverse
+['1e2 C', '12.75 C', '+3 C', '+1.5E-1 C', '0 C', '-0.5 C', '-2.5 C', '-10 C', '-3.25e1 C']
+-- natsorted REAL
+['-inf', 'nan', 'inf', ' infinity', '+infinity x', 'a-10', 'a-5', 'a-0', 'a+0', 'a+3', 'a5', 'a-inf', 'b inf', 'b nan', 'b+inf', 'b-nan', 'binf']
+-- natsorted FLOAT
+['x1e-400', 'x1e-5', 'x.5', 'x5.', 'x0.5e1', 'x5e', 'x5e+', 'x1e5', 'x1E400', 'xe5']
+-- natsorted FLOAT|NOEXP
+['x.5', 'x0.5e1', 'x1E400', 'x1e5', 'x1e-5', 'x1e-400', 'x5.', 'x5e', 'x5e+', 'xe5']
+-- natsorted FLOAT
+['v2.4e-324', 'v4.9e-324', 'v2.5e-324', 'v2.2250738585072011e-308', 'v0.01', 'v0.1', 'v0.10', 'v0.100', 'v0.1000000000000000055511151231257827', 'v0.1000000000000000055511151231257828', 'v0.3', 'v0.30000000000000004', 'v9007199254740993', 'v9007199254740992', 'v123456789012345678901234567890e-10']
+-- natsorted SIGNED
+['n-100000000000000000000', 'n-99999999999999999999', 'n0', 'n-0', 'n9', 'n12345678901234567890123', 'n0012345678901234567890123', 'n12345678901234567890124']
+== accents and case
+-- natsorted DEFAULT
+['Apple', 'Eclair', 'Éclair', 'STRASSE', 'Straße', 'Zebra', 'a la carte', 'apple', 'à la carte', 'eclair', 'éclair', 'naive', 'naïve', 'oz', 'őz', 'strasse', 'zebra']
+-- natsorted IGNORECASE
+['a la carte', 'apple', 'Apple', 'à la carte', 'eclair', 'Eclair', 'éclair', 'Éclair', 'naive', 'naïve', 'oz', 'őz', 'Straße', 'STRASSE', 'strasse', 'zebra', 'Zebra']
+-- natsorted LOWERCASEFIRST
+['a la carte', 'apple', 'à la carte', 'eclair', 'éclair', 'naive', 'naïve', 'oz', 'őz', 'strasse', 'zebra', 'Apple', 'Eclair', 'Éclair', 'Straße', 'STRASSE', 'Zebra']
+-- natsorted GROUPLETTERS
+['Apple', 'a la carte', 'apple', 'à la carte', 'Eclair', 'Éclair', 'eclair', 'éclair', 'naive', 'naïve', 'oz', 'őz', 'STRASSE', 'Straße', 'strasse', 'Zebra', 'zebra']
+-- natsorted IGNORECASE|LOWERCASEFIRST
+['a la carte', 'apple', 'Apple', 'à la carte', 'eclair', 'Eclair', 'éclair', 'Éclair', 'naive', 'naïve', 'oz', 'őz', 'Straße', 'STRASSE', 'strasse', 'zebra', 'Zebra']
+-- natsorted COMPATIBILITYNORMALIZE|IGNORECASE
+['a la carte', 'apple', 'Apple', 'à la carte', 'eclair', 'Eclair', 'éclair', 'Éclair', 'naive', 'naïve', 'oz', 'őz', 'Straße', 'STRASSE', 'strasse', 'zebra', 'Zebra']
+-- natsorted DEFAULT
+['alpha 3', 'ạ 5', 'ạ 6', 'ệ 1', 'ệ 2', 'ệ 3', 'Αλφα 1', 'αλφα 4', 'Алфа 10', 'алфа 2', 'бета 1']
+-- natsorted IGNORECASE
+['ệ 0', 'ệ 1', 'ệ 2', 'ệ 3']
+-- natsorted DEFAULT
+['file\t7', 'file 9', 'file\xa010', 'file\u200910', 'file\u3000 8']
+-- natsorted COMPATIBILITYNORMALIZE
+['ﬁle 1', 'ﬁle 2', 'file 10']
+-- natsorted DEFAULT
+['file 10', 'ﬁle 1', 'ﬁle 2']
+== unicode numbers
+-- natsorted DEFAULT
+['item²', 'item٣', 'item³', 'item１０', 'item٢٠', 'item ①', 'item 4', 'item 5', 'item ½', 'item ⅓', 'item Ⅶ']
+-- natsorted FLOAT
+['item²', 'item٣', 'item³', 'item１０', 'item٢٠', 'item ⅓', 'item ½', 'item ①', 'item 4', 'item 5', 'item Ⅶ']
+-- natsorted REAL
+['item²', 'item٣', 'item³', 'item１０', 'item٢٠', 'item ⅓', 'item ½', 'item ①', 'item 4', 'item 5', 'item Ⅶ']
+-- natsorted COMPATIBILITYNORMALIZE
+['item²', 'item٣', 'item³', 'item１０', 'item٢٠', 'item ①', 'item ½', 'item ⅓', 'item 4', 'item 5', 'item Ⅶ']
+-- natsorted IGNORECASE
+['item²', 'item٣', 'item³', 'item１０', 'item٢٠', 'item ①', 'item 4', 'item 5', 'item ½', 'item ⅓', 'item Ⅶ']
+-- natsorted FLOAT
+['x⅕', 'x¼', 'x¾', 'x१२', 'x12.4', 'x١٢.٥', 'x১২.৫০']
+-- natsorted DEFAULT
+['x१२', 'x12.4', 'x١٢.٥', 'x১২.৫০']
+-- key DEFAULT 'item٣٢ ²'
+('item', 32, ' ', 2)
+-- key FLOAT 'item ½'
+('item ', 0.5)
+-- key DEFAULT 'item ½'
+('item ½',)
+-- key IGNORECASE 'ⅦⅧ'
+('ⅶⅷ',)
+== paths
+-- natsorted DEFAULT
+['./notes.md', '.bashrc', '.env.local', '//srv/x', '/var/log/a.log', 'Folder (1)/file.txt', 'Folder (2)/file.txt', 'Folder (10)/file.txt', 'Folder/file2.txt', 'Folder/file10.txt', 'Folder/file.txt', 'a..b', 'data/run.1.tar.gz', 'data/run.2.tar.gz', 'data/run.10.tar.gz', 'data/run.tar.gz', 'folder/File2.txt']
+-- natsorted PATH
+['.bashrc', '.env.local', '/var/log/a.log', '//srv/x', 'Folder/file.txt', 'Folder/file2.txt', 'Folder/file10.txt', 'Folder (1)/file.txt', 'Folder (2)/file.txt', 'Folder (10)/file.txt', 'a..b', 'data/run.tar.gz', 'data/run.1.tar.gz', 'data/run.2.tar.gz', 'data/run.10.tar.gz', 'folder/File2.txt', './notes.md']
+-- natsorted PATH|IGNORECASE
+['.bashrc', '.env.local', '/var/log/a.log', '//srv/x', 'a..b', 'data/run.tar.gz', 'data/run.1.tar.gz', 'data/run.2.tar.gz', 'data/run.10.tar.gz', 'Folder/file.txt', 'folder/File2.txt', 'Folder/file2.txt', 'Folder/file10.txt', 'Folder (1)/file.txt', 'Folder (2)/file.txt', 'Folder (10)/file.txt', './notes.md']
+-- natsorted PATH|FLOAT
+['.bashrc', '.env.local', '/var/log/a.log', '//srv/x', 'Folder/file.txt', 'Folder/file2.txt', 'Folder/file10.txt', 'Folder (1)/file.txt', 'Folder (2)/file.txt', 'Folder (10)/file.txt', 'a..b', 'data/run.tar.gz', 'data/run.1.tar.gz', 'data/run.10.tar.gz', 'data/run.2.tar.gz', 'folder/File2.txt', './notes.md']
+-- natsorted PATH
+['', '.', '/', 'a/.b', 'a/./b', 'a//b/', 'a/b..gz', 'a/b.tar.gz', 'a/b.tar.gz.tar.gz', 'a/b.tgz', 'a/b.x.y', 'a/b.', 'a/b.1.tar.gz', 'a/b.toolong.gz', 'a/b.v1.2.tar.gz', 'a/b.x.y.z']
+-- key PATH 'Folder (1)/file.10.tar.gz'
+(('Folder (', 1, ')'), ('file.', 10), ('.tar',), ('.gz',))
+-- key PATH '/var/log/syslog.2.gz'
+(('/',), ('var',), ('log',), ('syslog.', 2), ('.gz',))
+-- key PATH 'a/b.tar.gz.tar.gz'
+(('a',), ('b',), ('.tar',), ('.gz',))
+-- key PATH ''
+(('.',),)
+-- key PATH 5
+(('', 5),)
+-- key PATH None
+(('', -inf, '2'),)
+== numbers and none
+-- natsorted DEFAULT
+[None, -1, 2, 2.5, '3', 7, 10, 'nan-skip', 'x']
+-- natsorted DEFAULT
+[None, -1e+300, -2, 0, -0.0, 1.5, 2, 3, 1e+300]
+-- natsorted NANLAST
+[-2, 0, 1.5, 2, 3, None]
+-- natsorted DEFAULT reverse
+[3, 2, 1.5, 0, -2, None]
+-- natsorted NANLAST reverse
+[None, 3, 2, 1.5, 0, -2]
+-- natsorted FLOAT
+['', None, 5, '5', 5.0, '5.0', 'a', 'a5']
+-- natsorted DEFAULT
+['', None, 5, '5', 5.0, 'a', 'a5']
+-- natsorted DEFAULT
+[1.2345678901234567e+19, 12345678901234567889, 12345678901234567890, '12345678901234567891', 'x']
+-- natsorted DEFAULT
+['1', 1, 1.0, '01', '1.0']
+-- natsorted FLOAT
+['1', 1, 1.0, '01', '1.0']
+-- natsorted REAL|NANLAST
+['-inf', 'inf', 'nan', 'x']
+-- natsorted REAL
+['-inf', 'nan', 'inf', 'x']
+-- natsorted REAL
+['nan', '-inf', None, 'x']
+-- natsorted REAL|NANLAST
+['-inf', 'nan', None, 'x']
+-- key DEFAULT None
+('', -inf, '2')
+-- key NANLAST None
+('', inf, '2')
+-- key DEFAULT 3.5
+('', 3.5)
+-- key REAL 'a10b2.5c'
+('a', 10.0, 'b', 2.5, 'c')
+-- key DEFAULT 'a10b2.5c'
+('a', 10, 'b', 2, '.', 5, 'c')
+-- key REAL '-12-3.5e2'
+('', -12.0, '', -350.0)
+-- key NUMAFTER 'x'
+('x',)
+-- key NUMAFTER '10x'
+('\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff\U0010ffff', 10, 'x')
+== keys, nesting and presort
+-- natsorted DEFAULT key=name
+[{'name': 'Report 1.pdf', 'size': 40}, {'name': 'report 2.PDF', 'size': 7}, {'name': 'report 2.pdf', 'size': 1200}, {'name': 'report 10.pdf', 'size': 300}]
+-- natsorted IGNORECASE key=name
+[{'name': 'Report 1.pdf', 'size': 40}, {'name': 'report 2.pdf', 'size': 1200}, {'name': 'report 2.PDF', 'size': 7}, {'name': 'report 10.pdf', 'size': 300}]
+-- natsorted DEFAULT key=ip
+[{'host': 'web9', 'ip': '10.0.0.9'}, {'host': 'web10', 'ip': '10.0.0.10'}, {'host': 'web10', 'ip': '10.0.0.100'}, {'host': 'db2', 'ip': '10.0.1.2'}]
+-- natsorted DEFAULT
+[['u', '2'], ['v', '1.9'], ['v', '1.9a'], ['v', '1.10']]
+-- natsorted FLOAT
+[['u', '2'], ['v', '1.10'], ['v', '1.9'], ['v', '1.9a']]
+-- natsorted PRESORT
+['A2', 'a001', 'a01', 'a1', 'a2', 'a10']
+-- natsorted DEFAULT
+['A2', 'a1', 'a01', 'a001', 'a2', 'a10']
+-- natsorted PRESORT|IGNORECASE
+['a001', 'a01', 'a1', 'A2', 'a2', 'a10']
+-- natsorted PRESORT reverse
+['a10', 'a2', 'a1', 'a01', 'a001', 'A2']
+-- index_natsorted DEFAULT
+[2, 6, 1, 7, 0, 5, 3, 4]
+-- order_by_index DEFAULT
+['IMG_1.jpg', 'IMG_2 (1).jpg', 'IMG_2.jpg', 'IMG_02.jpg', 'IMG_10.jpg', 'IMG_20.png', 'IMG_100.jpg', 'img_3.JPG']
+-- index_realsorted DEFAULT reverse
+[7, 5, 1, 8, 3, 4, 0, 2, 6]
+-- natsorted UNGROUPLETTERS
+['0.9.99', '1.2', '1.2.0', '1.2.9', '1.2.10', '1.2.10-beta.2', '1.2.10rc1', '1.10.0', '2.0', '10.0.1', 'v1.9']
+-- natsorted BAD
+error: TypeError: unsupported operand type(s) for &: 'str' and 'ns'
+== command line
+-- cli 'photo10.jpg' 'photo2.jpg' 'photo1.jpg' 'photo11.jpg'
+photo1.jpg
+photo2.jpg
+photo10.jpg
+photo11.jpg
+-- cli '-r' 'photo10.jpg' 'photo2.jpg' 'photo1.jpg'
+photo10.jpg
+photo2.jpg
+photo1.jpg
+-- cli '-f' '2' '10' 'photo10.jpg' 'photo2.jpg' 'photo1.jpg' 'photo11.jpg'
+photo2.jpg
+photo10.jpg
+-- cli '-F' '2' '10' 'photo10.jpg' 'photo2.jpg' 'photo1.jpg' 'photo11.jpg'
+photo1.jpg
+photo11.jpg
+-- cli '-e' '2' '-e' '11' 'photo10.jpg' 'photo2.jpg' 'photo1.jpg' 'photo11.jpg'
+photo1.jpg
+photo10.jpg
+-- cli '-t' 'real' '-f' '-5' '5' 't-10 C' 't-2.5 C' 't+3 C' 't7 C'
+t-2.5 C
+t+3 C
+-- cli '-t' 'float' '-f' '-5' '5' 't-10 C' 't-2.5 C' 't+3 C' 't7 C'
+t+3 C
+t-2.5 C
+-- cli '-t' 'f' '-s' 't-10 C' 't-2.5 C' 't+3 C' 't7 C'
+t-10 C
+t-2.5 C
+t+3 C
+t7 C
+-- cli '-t' 'r' '--noexp' 'x1e3' 'x5' 'x1e2'
+x1e2
+x1e3
+x5
+-- cli '-t' 'r' 'x1e3' 'x5' 'x1e2'
+x5
+x1e2
+x1e3
+-- cli '-p' 'Folder (1)/a' 'Folder/a' 'Folder (10)/a' 'Folder (2)/b'
+Folder/a
+Folder (1)/a
+Folder (2)/b
+Folder (10)/a
+-- cli 'Folder (1)/a' 'Folder/a' 'Folder (10)/a' 'Folder (2)/b'
+Folder (1)/a
+Folder (2)/b
+Folder (10)/a
+Folder/a
+-- cli '-f' '5' '2' 'a1' 'a3'
+exit: Error in --filter: low >= high
+-- cli '-F' '5' '5' 'a1' 'a3'
+exit: Error in --filter: low >= high
+-- cli '-f' '1' '3' '-f' '8' '9' 'a1' 'a3' 'a5' 'a8' 'a10'
+a1
+a3
+a8
+-- cli '-f' '1' '3' 'a²' 'a3'
+exit: could not convert string to float: '²'
+-- cli '-e' '3' 'a²' 'a4'
+exit: could not convert string to float: '²'
+-- cli '-e' '3' 'a٣' 'a4' 'a3.0'
+a4
+-- cli '-t' 'f' '-e' '3' 'a٣' 'a4' 'a3.0'
+a4
+-- cli '  spaced 10  ' '\u3000spaced 9' 'spaced 1\n'
+spaced 1
+spaced 9
+spaced 10
+== random floats 1
+-- key FLOAT 'x.37844052'
+('x', 0.37844052)
+-- key FLOAT 'x7485116437126508542'
+('x', 7.485116437126509e+18)
+-- key FLOAT 'x90960557948.4549127713360'
+('x', 90960557948.45491)
+-- key FLOAT 'x30936415086299481843571524953496405.085'
+('x', 3.093641508629948e+34)
+-- key FLOAT 'x8167473943'
+('x', 8167473943.0)
+-- key FLOAT 'x05.214'
+('x', 5.214)
+-- key FLOAT 'x32395823278071295'
+('x', 3.2395823278071296e+16)
+-- key FLOAT 'x0519e-23'
+('x', 5.19e-21)
+-- key FLOAT 'x2087869588742735272589591120983e-18'
+('x', 2087869588742.7354)
+-- key FLOAT 'x3906791140017827467046934994245784e312'
+('x', inf)
+-- key FLOAT 'x923095218505759986823654030155'
+('x', 9.2309521850576e+29)
+-- key FLOAT 'x4134896138370640894281.4'
+('x', 4.134896138370641e+21)
+-- key FLOAT 'x969005456103645261049023666812757'
+('x', 9.690054561036452e+32)
+-- key FLOAT 'x3986583897441310018268073934118660438'
+('x', 3.98658389744131e+36)
+-- key FLOAT 'x7432874923503'
+('x', 7432874923503.0)
+-- key FLOAT 'x4136'
+('x', 4136.0)
+-- key FLOAT 'x537296969697000134210715'
+('x', 5.372969696970002e+23)
+-- key FLOAT 'x8152261609633969969e-336'
+('x', 8.15226e-318)
+-- key FLOAT 'x473040789641'
+('x', 473040789641.0)
+-- key FLOAT 'x8.7'
+('x', 8.7)
+-- key FLOAT 'x7751938029'
+('x', 7751938029.0)
+-- key FLOAT 'x526434190130e306'
+('x', inf)
+-- key FLOAT 'x4303404331319651e-335'
+('x', 4.3033e-320)
+-- key FLOAT 'x11466432.59'
+('x', 11466432.59)
+-- key FLOAT 'x92996121366343064985935455'
+('x', 9.299612136634306e+25)
+== random floats 2
+-- key FLOAT 'x68179639756328059114784314'
+('x', 6.817963975632806e+25)
+-- key FLOAT 'x93265814340273854'
+('x', 9.326581434027386e+16)
+-- key FLOAT 'x979136126e-336'
+('x', 0.0)
+-- key FLOAT 'x47644386572069991688879e28'
+('x', 4.764438657206999e+50)
+-- key FLOAT 'x86623682792738485004818863e-336'
+('x', 8.662368279274e-311)
+-- key FLOAT 'x0324216118393050'
+('x', 324216118393050.0)
+-- key FLOAT 'x76884805419118310846578871701156'
+('x', 7.688480541911831e+31)
+-- key FLOAT 'x0626'
+('x', 626.0)
+-- key FLOAT 'x041024578343700698387e-335'
+('x', 4.10245784e-316)
+-- key FLOAT 'x3.803751372979867372628'
+('x', 3.8037513729798675)
+-- key FLOAT 'x8459842066174363938903346735022366e27'
+('x', 8.459842066174364e+60)
+-- key FLOAT 'x7160660425e-329'
+('x', 7.1605e-320)
+-- key FLOAT 'x718638.9334001308142362'
+('x', 718638.9334001308)
+-- key FLOAT 'x699643216716215927062e-301'
+('x', 6.99643216716216e-281)
+-- key FLOAT 'x4777856028978451630029919843139'
+('x', 4.777856028978452e+30)
+-- key FLOAT 'x12834251891775770479983370352038e-334'
+('x', 1.283425189177577e-303)
+-- key FLOAT 'x5127121.9'
+('x', 5127121.9)
+-- key FLOAT 'x010.0319273199'
+('x', 10.0319273199)
+-- key FLOAT 'x8758292978739780032792'
+('x', 8.75829297873978e+21)
+-- key FLOAT 'x5780510705605024234973345407.17829956'
+('x', 5.780510705605024e+27)
+-- key FLOAT 'x92'
+('x', 92.0)
+-- key FLOAT 'x522795'
+('x', 522795.0)
+-- key FLOAT 'x8913'
+('x', 8913.0)
+-- key FLOAT 'x8'
+('x', 8.0)
+-- key FLOAT 'x4465369774225114727094381980095879450339'
+('x', 4.465369774225115e+39)
+== random floats 3
+-- key FLOAT 'x840158409363569735088693645706149827e-326'
+('x', 8.401584093635697e-291)
+-- key FLOAT 'x265684'
+('x', 265684.0)
+-- key FLOAT 'x00132762636'
+('x', 132762636.0)
+-- key FLOAT 'x62.66840'
+('x', 62.6684)
+-- key FLOAT 'x66308'
+('x', 66308.0)
+-- key FLOAT 'x5860987553776781598180002e-4'
+('x', 5.860987553776782e+20)
+-- key FLOAT 'x849120390050697204578184622840313'
+('x', 8.491203900506972e+32)
+-- key FLOAT 'x94714339579925344682e307'
+('x', inf)
+-- key FLOAT 'x.3'
+('x', 0.3)
+-- key FLOAT 'x53619567193801408158056896758138781412'
+('x', 5.361956719380141e+37)
+-- key FLOAT 'x11963'
+('x', 11963.0)
+-- key FLOAT 'x4'
+('x', 4.0)
+-- key FLOAT 'x341774308851420647701136033789916e311'
+('x', inf)
+-- key FLOAT 'x105469213952020780388'
+('x', 1.0546921395202077e+20)
+-- key FLOAT 'x.500729919'
+('x', 0.500729919)
+-- key FLOAT 'x615.71520341364'
+('x', 615.71520341364)
+-- key FLOAT 'x3550111469'
+('x', 3550111469.0)
+-- key FLOAT 'x05675868777185311451617759142765'
+('x', 5.675868777185311e+30)
+-- key FLOAT 'x3590103030'
+('x', 3590103030.0)
+-- key FLOAT 'x1389831130038811860496'
+('x', 1.3898311300388118e+21)
+-- key FLOAT 'x92470855925845'
+('x', 92470855925845.0)
+-- key FLOAT 'x107127586877429648765728582044916797822.1'
+('x', 1.0712758687742966e+38)
+-- key FLOAT 'x269430768256100158.516623732526936747'
+('x', 2.6943076825610016e+17)
+-- key FLOAT 'x93428014597545e290'
+('x', 9.3428014597545e+303)
+-- key FLOAT 'x233105141937559832887588862'
+('x', 2.3310514193755984e+26)
+== random ints and floats 1
+-- natsorted DEFAULT
+[-1e+22, -1e+22, -1e+22, -1e+22, -9999999999999999999997, -9999999999999999999995, -12157665459056928801, -1.152921504606847e+18, -1152921504606846976, -1.152921504606847e+18, -1e+17, -1e+17, -1e+17, -1e+17, -99999999999999999, -9007199254740996.0, -9007199254740996.0, -9007199254740996.0, -9007199254740996.0, -9007199254740992.0, -9007199254740992.0, 9007199254740992, 9007199254740995, 9007199254740996, 100000000000000001, 1.2157665459056929e+19, 1.2157665459056929e+19, 9999999999999999999998, 1e+22, 1e+22]
+-- natsorted DEFAULT reverse
+[1e+22, 1e+22, 9999999999999999999998, 1.2157665459056929e+19, 1.2157665459056929e+19, 100000000000000001, 9007199254740996, 9007199254740995, 9007199254740992, -9007199254740992.0, -9007199254740992.0, -9007199254740996.0, -9007199254740996.0, -9007199254740996.0, -9007199254740996.0, -99999999999999999, -1e+17, -1e+17, -1e+17, -1e+17, -1.152921504606847e+18, -1152921504606846976, -1.152921504606847e+18, -12157665459056928801, -9999999999999999999995, -9999999999999999999997, -1e+22, -1e+22, -1e+22, -1e+22]
+== random ints and floats 2
+-- natsorted DEFAULT
+[-10000000000000000000004, -12157665459056928803, -1.2157665459056929e+19, -1.2157665459056929e+19, -1152921504606846979, -1.152921504606847e+18, -1.152921504606847e+18, -1.152921504606847e+18, -1.152921504606847e+18, -1152921504606846975, -1152921504606846973, -9007199254740992.0, -9007199254740992.0, 9007199254740992, 1152921504606846971, 1152921504606846973, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1.2157665459056929e+19, 1.2157665459056929e+19, 12157665459056928799, 9999999999999999999999, 1e+22, 1e+22, 1e+22, 1e+22]
+-- natsorted DEFAULT reverse
+[1e+22, 1e+22, 1e+22, 1e+22, 9999999999999999999999, 12157665459056928799, 1.2157665459056929e+19, 1.2157665459056929e+19, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1.152921504606847e+18, 1152921504606846973, 1152921504606846971, 9007199254740992, -9007199254740992.0, -9007199254740992.0, -1152921504606846973, -1152921504606846975, -1.152921504606847e+18, -1.152921504606847e+18, -1.152921504606847e+18, -1.152921504606847e+18, -1152921504606846979, -1.2157665459056929e+19, -1.2157665459056929e+19, -12157665459056928803, -10000000000000000000004]
+== random ints and floats 3
+-- natsorted DEFAULT
+[-1e+22, -1e+22, -9999999999999999999997, -12157665459056928801, -12157665459056928799, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -100000000000000002, -1e+17, -1e+17, -9007199254740992.0, -9007199254740992.0, -9007199254740990, 9007199254740990.0, 9007199254740990.0, 9007199254740992, 1.152921504606847e+18, 1.152921504606847e+18, 1152921504606846979, 12157665459056928802, 9999999999999999999996, 1e+22, 1e+22, 1e+22, 1e+22, 10000000000000000000001]
+-- natsorted DEFAULT reverse
+[10000000000000000000001, 1e+22, 1e+22, 1e+22, 1e+22, 9999999999999999999996, 12157665459056928802, 1152921504606846979, 1.152921504606847e+18, 1.152921504606847e+18, 9007199254740992, 9007199254740990.0, 9007199254740990.0, -9007199254740990, -9007199254740992.0, -9007199254740992.0, -1e+17, -1e+17, -100000000000000002, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -1.2157665459056929e+19, -12157665459056928799, -12157665459056928801, -9999999999999999999997, -1e+22, -1e+22]
+== random 1
+-- natsorted NUMAFTER reverse
+['v007IMG_-.tar.gz', 'v1Ete.JPG', 'fileEte_', 'été2_-3e5', 'a b/.tar.gz', 'IMG_File9e5', 'Ete9 99.JPG']
+-- natsorted DEFAULT
+['Ete-30.25_-rc1', 'IMG_010 .txt', 'IMG_100Ete.txt', 'IMG_-39.5', 'a bx-data..tar.gz', 'data.90-rc1', 'étéfile-007e5', 'file .5', 'filefile 007.txt', 'log9loge5', 'logEte 2.tar.gz', 'x- 0079.JPG']
+-- natsorted SIGNED
+['IMG_+4.-.txt', 'a b-IMG_.tar.gz', 'file007Ete-rc1', 'x--3log.tar.gz']
+-- natsorted REAL
+['Ete1.txt', 'Filea blog11-rc1', 'a b.Ete.tar.gz', 'data.0.5', 'data.9999.5', 'file100', 'v0 0.25.JPG', 'v0.25110-rc1', 'x-Filedata.100.JPG']
+== random 2
+-- natsorted NUMAFTER
+['Etex-e5', 'File9.txt', 'File+4e5', 'a b/IMG_', 'data.10.5', 'data.+4999-rc1', 'été990.txt', 'log990-rc1', 'x-1000-311-rc1']
+-- natsorted FLOAT
+['Ete99e5', 'IMG_v-3100-rc1', 'a b10e5', 'a blog.tar.gz', 'file100filee5', 'fileEteloge5', 'filedata.1.5a b.tar.gz', 'loglog1e5', 'logx-1e5', 'logx--31.5.5', 'vvv (1)']
+-- natsorted DEFAULT
+['Ete+4.txt', 'File991.5.JPG', 'IMG_0EteIMG_.JPG', 'v007.tar.gz', 'x-été..5']
+-- natsorted REAL
+['EteIMG_1.5/ (1)', 'File11e5', 'a b0/007.tar.gz', 'a b9/a be5', 'a b10 (1)', 'a bEte-e5', 'a b_-3.tar.gz', 'étéFile.', 'log2.JPG', 'v.100été (1)', 'v10-rc1']
+== random 3
+-- natsorted GROUPLETTERS
+['a bfile100.5', 'été1110.5', 'File99 File (1)', 'IMG_2.IMG_.JPG', 'log2..txt', 'log9v100.JPG', 'v99 (1)', 'v910.txt', 'x-2Ete.txt', 'x-11Ete-rc1', 'x-File-3data.']
+-- natsorted REAL|NANLAST
+['a b+4.JPG', 'a b99v.JPG', 'a bFile/.txt', 'data.100file-rc1', 'été10 .txt', 'file_/IMG_.txt', 'v11-rc1', 'x-9 (1)', 'x--+4.tar.gz']
+-- natsorted PATH|IGNORECASE
+['a b1001.50.25.5', 'data.10Ete100 (1)', 'Ete100e5', 'file1.txt', 'File99.', 'file11007', 'File -rc1', 'fileIMG_9été.JPG', 'log109', 'v/1', 'v9', 'v-3log_ (1)']
+-- natsorted FLOAT|NOEXP
+['Etedata./v-rc1', 'IMG_IMG_.JPG', 'IMG_IMG_.txt', 'été1.51000e5', 'été9007.txt', 'été-.txt', 'étéétéétée5', 'log10IMG_100e5', 'log-11.5', 'loga b .JPG', 'x-0.25.JPG', 'x-_2']
+== random 4
+-- natsorted REAL
+['File-_.txt', 'File/101000-rc1', 'a b91-rc1', 'a b_IMG_.e5', 'été0.JPG', 'été199.txt', 'étéfile.txt', 'étéx-file10e5', 'fileEtee5', 'filefilee5']
+-- natsorted IGNORECASE
+['a b-311e5', 'File1110.JPG', 'filea b1000-rc1', 'IMG_.. (1)', 'log109v.txt']
+-- natsorted FLOAT reverse
+['x-v_e5', 'v0e5', 'file.0.25.txt', 'été/File.JPG', 'été1.5.tar.gz', 'data.file (1)', 'data.1000.tar.gz', 'a b .5', 'IMG_data./', 'IMG_1.5.txt', 'Ete...txt']
+-- natsorted REAL|NANLAST reverse
+['log1100a b-rc1', 'a b2 (1)', 'IMG_IMG_1', 'File0.251.5/.tar.gz', 'Etex-.100.txt']
+== random 5
+-- natsorted FLOAT
+['Ete-IMG_', 'a blog0.txt', 'data.11Ete.tar.gz', 'data.IMG_91.5-rc1', 'été1.599.JPG', 'été111+4.tar.gz', 'été/_11', 'file007..tar.gz', 'file_IMG_.JPG', 'log007/1.tar.gz', 'log 9filee5', 'x-logvFile-rc1']
+-- natsorted PATH
+['Etevdata.-e5', 'a bEte-rc1', 'a bx-100', 'data.__11-rc1', 'file0', 'log0.25-rc1', 'log1.599/.txt', 'log2e5', 'v-logIMG_.tar.gz', 'vfilea b (1)']
+-- natsorted SIGNED reverse
+['x-été2 (1)', 'x- .JPG', 'filex-filea b.JPG', 'data.007.5', 'a b_11v.JPG', 'Filedata.-30.tar.gz', 'Ete.e5', 'Ete10.txt']
+-- natsorted DEFAULT
+['Ete99-39', 'EteFile007.5', 'File10e5', 'File .5', 'Filefile', 'IMG_x- (1)', 'a b+4-', 'data.+41001.5', 'data..007-.JPG', 'file0', 'v1.5été  (1)']
+== random 6
+-- natsorted NUMAFTER
+['Ete1IMG_10 (1)', 'Ete0079-rc1', 'EteFile.tar.gz', 'été1.5']
+-- natsorted PATH
+['Etevvv.5', 'File étéEte.tar.gz', 'data.2v (1)', 'étéété991.5', 'log9x-.tar.gz', 'log.9-rc1', 'vFile007-.JPG']
+-- natsorted DEFAULT
+['Ete/-rc1', 'File100IMG_IMG_.tar.gz', 'IMG_data.Ete1000.5', 'data.99_ (1)', 'data. _1.5.tar.gz', 'étéa b1.txt', 'file09log.txt', 'fileFile-rc1', 'x--été10.5', 'x-_']
+-- natsorted SIGNED
+['File9990.JPG', 'a blog/.txt', 'a bx-x-1e5', 'data.1.51000.txt', 'file-007.tar.gz', 'x-10.tar.gz', 'x-IMG_-0.25-rc1', 'x-_été.tar.gz', 'x-a b.JPG']
+== random 7
+-- natsorted LOWERCASEFIRST reverse
+['IMG_filefileFile-rc1', 'File0079.5', 'étéété', 'data.1.5-rc1', 'a bEte-.JPG']
+-- natsorted FLOAT|NOEXP
+['IMG_100.-rc1', 'data. x-.JPG', 'étéEtelog .5', 'file1011.JPG', 'filea bfile.JPG', 'v0.25data.-rc1', 'v99 .tar.gz']
+-- natsorted REAL
+['File100 (1)', 'File210.txt', 'a b/-rc1', 'été0vétée5', 'v1.5-3.tar.gz']
+-- natsorted IGNORECASE
+['a bIMG_.txt', 'data.log0.25.tar.gz', 'EteEte0.250.25', 'file007a b.5', 'file11-399-rc1', 'filea b-.txt', 'IMG_007e5', 'IMG_1000.txt', 'v1010.JPG', 'x-1.5_/ (1)']
+== random 8
+-- natsorted PATH|IGNORECASE
+['a b99.tar.gz', 'data.9_-rc1', 'Ete9e5', 'Etev10e5', 'file/été.-rc1', 'File0e5', 'filefilex-log.JPG', 'IMG_file-rc1', 'IMG_v007.JPG', 'log-0.25.5', 'x--- (1)', 'x-.été1000 (1)']
+-- natsorted PATH|IGNORECASE reverse
+['x-2log1 (1)', 'va b11-.tar.gz', 'v-1000', 'v+4 (1)', 'filea bx-file', 'été-x-9.txt', 'été.e5', 'data.10.JPG', 'a b_0.25.txt', 'a b-3x-Ete.tar.gz']
+-- natsorted PATH|IGNORECASE
+['data.10001 .txt', 'data.  007.tar.gz', 'data.v.5', 'File/-rc1', 'Fileété2.txt', 'IMG_211 .tar.gz', 'logdata.-3-rc1', 'loglog1000-rc1', 'v-FileIMG_.5']
+-- natsorted REAL|NANLAST
+['FileEte2 (1)', 'IMG_/0.25007 (1)', 'IMG_Filea b.txt', 'IMG_IMG__ (1)', 'a bFile0.25.5', 'data.100été', 'étéFileEte (1)', 'filex-_11.txt', 'x-100..txt']
+== random 9
+-- natsorted SIGNED
+['File.101', 'File/.JPG', 'IMG_1.tar.gz', 'IMG_+4.JPG', 'data.9.JPG', 'file0.25x-été']
+-- natsorted FLOAT|NOEXP
+['File99', 'a bva b0', 'data.1.5', 'data.2Etex- (1)', 'data.IMG_ (1)', 'été1 (1)', 'été_11.5', 'log-3IMG__.5', 'x-1.5.JPG', 'x-.-.5']
+-- natsorted NUMAFTER
+['a b11', 'a bIMG_.5', 'a ba b.JPG', 'a bdata.1000007.txt', 'data.100_.5', 'data. .txt', 'été1.5e5', 'v0.2511']
+-- natsorted FLOAT
+['File2', 'File007.txt', 'IMG_a b.JPG', 'a b99-.tar.gz', 'a bv1.50.25.JPG', 'file//. (1)', 'log.Etex-.txt', 'v1.5.txt', 'vx-e5', 'x-0.25e5']
+== random 10
+-- natsorted GROUPLETTERS reverse
+['log-3.tar.gz', 'log1000-rc1', 'file9.-.JPG', 'File1000100099.txt', 'Ete-3-rc1', 'Ete0']
+-- natsorted FLOAT
+['Ete1000-rc1', 'Etex-11e5', 'IMG_IMG_100.tar.gz', 'IMG_log -rc1', 'a bété11.JPG', 'été9-31', 'étédata.-3 (1)', 'log0.25.JPG', 'logfile1011', 'v-1000.JPG', 'x-data..tar.gz']
+-- natsorted FLOAT|NOEXP reverse
+['x-a b (1)', 'v.2 .txt', 'été10..txt', 'Filex-.tar.gz']
+-- natsorted FLOAT|NOEXP
+['a ba b (1)', 'été1été007.JPG', 'été-3filee5', 'étédata./', 'x-1000Ete.txt', 'x-a b.tar.gz']
+== random 11
+-- natsorted FLOAT|NOEXP reverse
+['x-file12.JPG', 'v-.tar.gz', 'v+4a b.tar.gz', 'v10002 (1)', 'étélogx-.JPG', 'data. .txt', 'a b9.5', 'IMG_1000.a b.txt', 'File+40.25v.JPG', 'Ete1.51.5.5']
+-- natsorted LOWERCASEFIRST
+['a b/-rc1', 'data.--rc1', 'data.IMG_-3', 'file0.25data.file.JPG', 'log_ .txt', 'x-99IMG_a b.txt', 'x-110.5', 'x--3data.-e5', 'Ete-99-3 (1)', 'File11.5', 'Fileété100--rc1', 'IMG_9x-']
+-- natsorted REAL|NANLAST reverse
+['filex-data..JPG', 'file299 (1)', 'été10Ete (1)', 'été2+4-rc1', 'data.a b1.5-rc1', 'data.1.txt', 'IMG_IMG_9e5', 'IMG_10loge5', 'IMG_0.5', 'Filea b007-rc1', 'File99log.5', 'Etefile10007']
+-- natsorted GROUPLETTERS
+['data.10.tar.gz', 'Ete90.25 (1)', 'été01', 'étéfile.5', 'file1.5e5', 'IMG_11-rc1', 'IMG_Ete.5', 'log9e5', 'log-2', 'v2e5']
+== random 12
+-- natsorted REAL|NANLAST
+['IMG_1x-.tar.gz', 'IMG_007  (1)', 'file-3File (1)', 'log+4007.JPG', 'loga b.JPG', 'logvEtee5', 'vEte2 (1)', 'vfile', 'x-data.+40']
+-- natsorted PATH reverse
+['v-.tar.gz', 'étéIMG_0e5', 'été11.txt', 'data.Etee5', 'a bdata.-rc1', 'a ba b.JPG', 'a bFile-rc1']
+-- natsorted REAL
+['File10099.JPG', 'Filedata.007.JPG', 'IMG__ (1)', 'a b/2-rc1', 'data.2-31000e5', 'file1.5file', 'v1000007/-rc1']
+-- natsorted NUMAFTER
+['Ete1 ', 'IMG_+4.5', 'a b+4.tar.gz', 'data.10e5', 'été-007.5', 'fileété100File.txt']
+== random 13
+-- natsorted DEFAULT reverse
+['x-1000070.25.5', 'v0.25 ', 'été10_9e5', 'data.File10e5', 'IMG_+4-rc1', 'IMG_1.5log-rc1', 'FileIMG_.5', 'File.-rc1', 'Etea b.tar.gz', 'Ete100v (1)', 'Ete99.txt']
+-- natsorted LOWERCASEFIRST
+['data./99.txt', 'fileFile.5', 'logdata.-rc1', 'x-file.JPG', 'Ete-.5']
+-- natsorted GROUPLETTERS
+['Ete 1000.JPG', 'File-3a b.5', 'IMG_+4e5', 'log 1.5', 'x-007vv.txt']
+-- natsorted NUMAFTER
+['File__.JPG', 'a b1.5007-3.txt', 'v9-rc1', 'v99.txt', 'v1000Ete10.tar.gz']
+== random 14
+-- natsorted NUMAFTER
+['File-31.tar.gz', 'IMG_100100.25 (1)', 'IMG_-11.txt', 'IMG_x-11.txt', 'fileFile9-3 (1)', 'fileIMG_2.JPG', 'v10v.tar.gz', 'vété0.25.tar.gz']
+-- natsorted FLOAT
+['Ete-3_.tar.gz', 'IMG_x-Ete.tar.gz', 'data.100a b.tar.gz', 'été__. (1)', 'étéété.5']
+-- natsorted NUMAFTER reverse
+['x-Ete99.tar.gz', 'x-1000.txt', 'v110002.txt', 'log100 (1)', 'data.data..tar.gz', 'data._e5', 'a bfile2-rc1', 'a b/ x-.txt', 'IMG_100099 (1)', 'File .txt']
+-- natsorted LOWERCASEFIRST reverse
+['IMG_.21e5', 'Etea bfileété (1)', 'étéIMG_.JPG', 'été_.0.JPG', 'été.e5']
+== random 15
+-- natsorted LOWERCASEFIRST
+['data.-logfile.txt', 'été007.tar.gz', 'log1.510-rc1', 'log_x-.5', 'x-1000-3e5', 'Ete1000v', 'File.été.tar.gz', 'Filevv007.tar.gz', 'IMG_File- (1)']
+-- natsorted GROUPLETTERS reverse
+['x-x-', 'vFile-e5', 'IMG_-1.tar.gz', 'été.100e5', 'Ete100.-rc1', 'Ete007-rc1', 'data.Ete11.txt', 'a b+4']
+-- natsorted FLOAT|NOEXP
+['Ete007.tar.gz', 'EteFile1.5.5', 'Filea b_.JPG', 'IMG__data.', 'data.100.25filee5', 'été1000100file.tar.gz', 'étévdata.File.txt', 'étéx-e5', 'file.a bv.5', 'v007e5', 'v10']
+-- natsorted REAL reverse
+['x-00.tar.gz', 'x-09.5', 'étélog1011 (1)', 'a b-31-.JPG']
+== random 16
+-- natsorted IGNORECASE
+['data.x-.tar.gz', 'Etedata.007.5', 'File1.5 (1)', 'file .tar.gz', 'IMG_-3v+4-rc1', 'IMG_/x-.5', 'log.v9.5', 'v11.5été.5', 'x-a b (1)']
+-- natsorted PATH|IGNORECASE
+['data.0-3_e5', 'data.100 (1)', 'x-10.txt', 'x-1100.tar.gz']
+-- natsorted REAL
+['IMG_+4log.JPG', 'file1.520', 'log100file', 'logIMG_e5', 'v22filee5', 'x-9910IMG_ (1)', 'x- /IMG_e5', 'x-file10000-rc1']
+-- natsorted PATH|IGNORECASE
+['File11-3-3 (1)', 'IMG_100.5', 'logvIMG_.txt', 'logx-.JPG', 'v/101000.tar.gz', 'v2v.5', 'x-data.data.-rc1']
+== random 17
+-- natsorted REAL|NANLAST
+['Ete11000été-rc1', 'File1.5.txt', 'File10-rc1', 'a b100 (1)', 'a b100data..tar.gz', 'file1.5 (1)', 'file/.tar.gz', 'file_e5', 'va b-10.tar.gz', 'x-99étée5', 'x-1', 'x-_.JPG']
+-- natsorted PATH|IGNORECASE
+['été0x-v.JPG', 'File1000.JPG', 'file-étée5', 'x-007/+4 (1)']
+-- natsorted PATH reverse
+['v1file+4.5', 'v0.2599v.5', 'log0.25.JPG', 'étédata.IMG_-e5', 'data.IMG_.tar.gz', 'data.Filex-.tar.gz', 'data.9v10 (1)', 'data.v.txt', 'File-3']
+-- natsorted LOWERCASEFIRST
+['été1.5.5', 'étéfile.tar.gz', 'log99e5', 'log100_e5', 'vIMG_1.5-rc1', 'x--3_-rc1', 'File99-e5', 'IMG_File100  (1)']
+== random 18
+-- natsorted DEFAULT
+['Ete..JPG', 'IMG_..txt', 'IMG__--rc1', 'v/_.tar.gz', 'v/logEte-rc1']
+-- natsorted IGNORECASE reverse
+['logété.5', 'logEte10-rc1', 'File+4x-', 'Eteété-rc1', 'a b10-3File-rc1']
+-- natsorted PATH reverse
+['vEteIMG_.', 'v-3.JPG', 'log+4. .JPG', 'a b_.txt', 'a b007100e5', 'IMG_data._007', 'IMG_1.5.5', 'File e5', 'Ete100 (1)']
+-- natsorted FLOAT reverse
+['x--été2 (1)', 'x-00710file.txt', 'x-1.5.txt', 'v0.250e5', 'logété', 'loga b.0.25.tar.gz', 'log/-rc1', 'file/', 'été007IMG_.JPG', 'IMG_100']
+== random 19
+-- natsorted NUMAFTER
+['data.-logIMG_e5', 'data.IMG_e5', 'été .txt', 'étéx-.txt', 'file/_IMG_-rc1', 'v10.5', 'v1000+4/.JPG']
+-- natsorted NUMAFTER reverse
+['x-_-3filee5', 'x- .JPG', 'vdata.1.5log-rc1', 'v+4 (1)', 'file+49999.5', 'été10 .txt', 'été0.25.5', 'a bEte.JPG', 'File00 .tar.gz']
+-- natsorted GROUPLETTERS
+['data.-3.JPG', 'FileIMG_', 'Filelog', 'IMG_Ete0.25x--rc1']
+-- natsorted FLOAT|NOEXP
+['File1000071-rc1', 'Filea b.tar.gz', 'IMG_+4v1000e5', 'IMG_/v1.5 (1)', 'a b1.txt', 'a b10001.JPG', 'été100.JPG', 'été101.5.5', 'été-Ete (1)', 'file 11.txt', 'x-1.5vIMG_.txt']
+== random 20
+-- natsorted FLOAT|NOEXP reverse
+['v00710001.5 (1)', 'log2Ete-3e5', 'fileEte-3 e5', 'file/ (1)', 'file .tar.gz', 'data.IMG_1000.5', 'data.1.JPG', 'IMG_a b.txt']
+-- natsorted FLOAT
+['EteFile/+4.txt', 'IMG_0log (1)', 'IMG_10data...txt', 'IMG_0072a b-rc1', 'data.10+49 (1)', 'data.IMG_.txt', 'été/-rc1', 'log0e5', 'log9./.txt', 'v.0.tar.gz']
+-- natsorted SIGNED
+['Ete0étée5', 'File_1000007.5', 'IMG_+4data..tar.gz', 'a b007File.JPG', 'file.12.tar.gz', 'log0.25.txt', 'log.0File.5']
+-- natsorted PATH|IGNORECASE
+['a b10.JPG', 'data.100 (1)', 'data.+499e5', 'Ete99+42', 'été+4+41000.5', 'file+4.5', 'Filedata.1.511.5', 'Fileétéx-data.', 'x-v.txt']
