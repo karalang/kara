@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 282 |
 | codegen-gap | 276 |
 | false-positive | 243 |
-| perf | 178 |
+| perf | 179 |
 | other | 175 |
 | diagnostics | 173 |
 | crash | 125 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2953 |
+| codegen | 2954 |
 | interp | 971 |
 | typecheck | 495 |
 | ownership | 116 |
@@ -163,6 +163,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-31 | 2026-10-19 | interp+codegen | medium | When a user enum has a variant named `None` (enum V { None, Int(i64) }), a bare `None` passed to a `ref Option[T]` parameter lowers to `Option.Some {}` in MIR, and both MIR backends refuse the program: `invalid MIR: main: bb0[0]: Option takes 1 fields, got 0`. `karac check` and legacy `karac run` accept it and print -1. | — |
 | B-2026-10-19-32 | 2026-10-19 | typecheck | low | A list literal passed to a method of a generic receiver does not take the parameter's type as its expected type: `best.push([0, 1])` on a `Vec[Array[i64, 2]]` is refused with "expected 'Array[i64, 2]', found 'Vec[i64]'", while the same literal passed to a free function taking `Array[i64, 2]` is accepted | — |
 | B-2026-10-19-33 | 2026-10-19 | typecheck | low | `karac check` accepts `v.extend(rest)` where `rest` is a bare (borrowed) `Vec[T]` parameter, which the MIR builder then refuses ("cannot move a non-`Copy` value out of a borrowed place"); `v.push(rest)` and `take(rest)` are refused by check itself | — |
+| B-2026-10-19-34 | 2026-10-19 | codegen | medium | On the MIR compiled backend, an array of string literals in a function body (`let codes = [".-", "-...", ...]`, 26 entries) is built as 26 heap Strings through `karac_mir_string_from` on every call, which makes kata 804's bench 2.63x the legacy build (8.50 s vs 3.23 s, medians of five interleaved runs) and slower than Python (7.19 to 7.57 s); hoisting the table out of the function brings v2 to 2.46 s | ../kara-katas/leetcode/801-900/804-unique-morse-code-words |
 
 ### Relocated
 
