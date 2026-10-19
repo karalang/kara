@@ -218,7 +218,8 @@ pub fn check_borrows(
         has_receiver,
     };
     let origins = origins_dataflow(&cx, entry);
-    let live_out = liveness(body);
+    let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
+    let live_out = liveness_with(body, &drop_uses);
     let view = body.arg_count > 0 && has_receiver(&body.instance) == ResultBorrows::ReceiverValue;
 
     for (bi, block) in body.blocks.iter().enumerate() {
@@ -229,7 +230,7 @@ pub fn check_borrows(
         let n = block.statements.len();
         let mut live_before = vec![Vec::new(); n + 1];
         let mut live = live_out[bi].clone();
-        let (u, d) = terminator_use_def(&block.terminator.kind);
+        let (u, d) = terminator_use_def_with(&block.terminator.kind, &drop_uses);
         transfer_live(&mut live, &u, &d);
         live_before[n] = live.clone();
         for si in (0..n).rev() {
@@ -335,7 +336,8 @@ pub(super) fn loan_liveness(
         has_receiver,
     };
     let origins = origins_dataflow(&cx, entry);
-    let live_out = liveness(body);
+    let drop_uses = |p: &Place| drop_reads_borrows(body, tys, p);
+    let live_out = liveness_with(body, &drop_uses);
     let mut out = Vec::with_capacity(body.blocks.len());
     for (bi, block) in body.blocks.iter().enumerate() {
         let n = block.statements.len();
@@ -345,7 +347,7 @@ pub(super) fn loan_liveness(
         };
         let mut live_before = vec![Vec::new(); n + 1];
         let mut live = live_out[bi].clone();
-        let (u, d) = terminator_use_def(&block.terminator.kind);
+        let (u, d) = terminator_use_def_with(&block.terminator.kind, &drop_uses);
         transfer_live(&mut live, &u, &d);
         live_before[n] = live.clone();
         for si in (0..n).rev() {
@@ -775,6 +777,33 @@ fn clear_moved<'o>(o: &mut Origins, ops: impl IntoIterator<Item = &'o Operand>) 
     }
 }
 
+/// Whether dropping `place` may read a borrow its value holds, so the drop
+/// keeps those borrows live. Freeing a `Vec[Str]`, a `String` or a tuple of
+/// references reads no view it holds (Rust's `#[may_dangle]` case,
+/// B-2026-10-19-6); anything with a struct or enum in it may run a user
+/// `Drop` and is taken to.
+fn drop_reads_borrows(body: &Body, tys: &TyInterner, place: &Place) -> bool {
+    fn go(tys: &TyInterner, ty: Ty) -> bool {
+        match tys.kind(ty) {
+            TyKind::Int(_)
+            | TyKind::Float(_)
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::Unit
+            | TyKind::Str
+            | TyKind::Ref(_)
+            | TyKind::MutRef(_)
+            | TyKind::Slice(_)
+            | TyKind::Intrinsic(IntrinsicTy::String) => false,
+            TyKind::Tuple(ts) => ts.iter().any(|t| go(tys, *t)),
+            TyKind::Array(t, _)
+            | TyKind::Intrinsic(IntrinsicTy::Vec(t) | IntrinsicTy::VecDeque(t)) => go(tys, t),
+            _ => true,
+        }
+    }
+    place_ty(body, tys, place).map_or(true, |pt| go(tys, pt.ty))
+}
+
 /// Can a value of type `ty` hold a borrow? References and slices can, and
 /// so can anything with a part that can; a `shared` handle cannot (§5.7).
 /// A type MIR cannot see into is assumed to, and so is `TaskGroup`.
@@ -912,7 +941,12 @@ fn statement_use_def(s: &StatementKind) -> (Vec<Local>, Vec<Local>) {
     (uses, defs)
 }
 
-fn terminator_use_def(t: &TerminatorKind) -> (Vec<Local>, Vec<Local>) {
+/// The locals a terminator uses and defines, where a `Drop` of `place` is
+/// a use only when `drop_uses(place)`.
+fn terminator_use_def_with(
+    t: &TerminatorKind,
+    drop_uses: &dyn Fn(&Place) -> bool,
+) -> (Vec<Local>, Vec<Local>) {
     let mut uses = Vec::new();
     let mut defs = Vec::new();
     match t {
@@ -938,7 +972,7 @@ fn terminator_use_def(t: &TerminatorKind) -> (Vec<Local>, Vec<Local>) {
                 place_uses(p, &mut uses);
             }
         }
-        TerminatorKind::Drop { place, .. } => place_uses(place, &mut uses),
+        TerminatorKind::Drop { place, .. } if drop_uses(place) => place_uses(place, &mut uses),
         TerminatorKind::Return => uses.push(Local::RETURN_PLACE),
         _ => {}
     }
@@ -957,6 +991,12 @@ fn transfer_live(live: &mut Vec<Local>, uses: &[Local], defs: &[Local]) {
 
 /// The locals live at the end of each block.
 pub(super) fn liveness(body: &Body) -> Vec<Vec<Local>> {
+    liveness_with(body, &|_| true)
+}
+
+/// [`liveness`], where a `Drop` of `place` keeps it live only when
+/// `drop_uses(place)`.
+fn liveness_with(body: &Body, drop_uses: &dyn Fn(&Place) -> bool) -> Vec<Vec<Local>> {
     let n = body.blocks.len();
     let mut live_in: Vec<Vec<Local>> = vec![Vec::new(); n];
     let mut live_out: Vec<Vec<Local>> = vec![Vec::new(); n];
@@ -974,7 +1014,7 @@ pub(super) fn liveness(body: &Body) -> Vec<Vec<Local>> {
                 }
             }
             let mut live = out.clone();
-            let (u, d) = terminator_use_def(&block.terminator.kind);
+            let (u, d) = terminator_use_def_with(&block.terminator.kind, drop_uses);
             transfer_live(&mut live, &u, &d);
             for s in block.statements.iter().rev() {
                 let (u, d) = statement_use_def(&s.kind);
@@ -1943,6 +1983,56 @@ fn main() {
     let gone = owned;
     println(w);
     println(gone);
+}
+"#,
+        ] {
+            let err = run(bad).expect_err(bad);
+            assert!(err.contains("[E0516]"), "{bad}: {err}");
+        }
+    }
+    /// B-2026-10-19-6: dropping a `Vec[Str]` reads none of its views, so a
+    /// `String` split into one can be reassigned while it is still in scope.
+    /// A use of the views after the write, and a drop that runs user code
+    /// with a view in hand, are still refused.
+    #[test]
+    fn mir_borrowck_a_dead_vec_of_views_does_not_pin_its_string() {
+        let run = crate::mir::lower::tests::run_source;
+        let ok = r#"fn main() {
+    let mut s = "a-b".to_string();
+    let parts: Vec[Str] = s.split("-").collect();
+    let n = parts.len();
+    s = "c".to_string();
+    println(f"{n} {s}");
+    let mut t = "x,y,z".to_string();
+    let pairs: Vec[(Str, i64)] = t.split(",").map(|p| (p, 1)).collect();
+    let m = pairs.len();
+    t = "w".to_string();
+    println(f"{m} {t}");
+}
+"#;
+        assert_eq!(run(ok).unwrap(), ("2 c\n3 w\n".into(), Some(0)));
+        for bad in [
+            r#"fn main() {
+    let mut s = "a-b".to_string();
+    let parts: Vec[Str] = s.split("-").collect();
+    s = "c".to_string();
+    println(parts[0]);
+    println(s);
+}
+"#,
+            r#"struct Holder {
+    v: Str,
+}
+impl Drop for Holder {
+    fn drop(mut ref self) {
+        println(self.v);
+    }
+}
+fn main() {
+    let mut s = "a-b".to_string();
+    let h = Holder { v: s.as_str() };
+    s = "c".to_string();
+    println(s);
 }
 "#,
         ] {
