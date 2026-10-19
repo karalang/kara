@@ -9578,4 +9578,54 @@ fn main() {
 "#,
         "3 2\n",
     );
+    // B-2026-10-19-24: an `own` parameter owns its value, and so does a
+    // local made by an `if` whose branches each make a fresh value; a
+    // `match` whose arms borrow is a borrow and stays legal.
+    for (tag, src) in [
+        (
+            "own-param-into-ref-local",
+            r#"fn f(s: String, t: own String) -> i64 {
+    let mut out = s;
+    out = t;
+    out.len()
+}
+fn main() { println(f"{f("ab".to_string(), "xyz".to_string())}"); }
+"#,
+        ),
+        (
+            "if-local-into-ref-local",
+            r#"fn f(s: String, c: bool) -> i64 {
+    let t = if c { "xyz".to_string() } else { "q".to_string() };
+    let mut out = s;
+    out = t;
+    out.len()
+}
+fn main() { println(f"{f("ab".to_string(), true)}"); }
+"#,
+        ),
+    ] {
+        rejected_then_fixed_by(
+            tag,
+            src,
+            "`out` is a `ref String` (it was bound to a borrow), so it cannot take `t` by value; write `out = ref t`",
+            "out = ref t;",
+        );
+    }
+    accepted_and_runs(
+        "borrowing-match-into-ref-local",
+        r#"fn f(s: String, v: Vec[String], c: bool) -> i64 {
+    let mut out = s;
+    let u = match c { true => ref v[0], false => ref v[1] };
+    out = u;
+    out.len()
+}
+fn g(s: String, t: own String) -> i64 {
+    let mut out = s;
+    out = ref t;
+    out.len()
+}
+fn main() { println(f"{f("ab".to_string(), vec!["xyz".to_string(), "q".to_string()], true)} {g("ab".to_string(), "xyz".to_string())}"); }
+"#,
+        "3 3\n",
+    );
 }

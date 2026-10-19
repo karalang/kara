@@ -2161,6 +2161,12 @@ impl<'a> super::TypeChecker<'a> {
             }
             self.check_param_irrefutable(param, &ty);
             self.bind_pattern_types(&param.pattern, &ty);
+            // An `own` parameter owns its value, as a `let` of a fresh value
+            // does (B-2026-10-19-24).
+            if param.is_own && matches!(param.pattern.kind, PatternKind::Binding(_)) {
+                self.owned_let_bindings
+                    .insert(SpanKey::from_span(&param.pattern.span));
+            }
         }
 
         // B-2026-08-18-50 — the PARTITION KEY of every `writes(R[k])` in this
@@ -8711,6 +8717,26 @@ impl<'a> super::TypeChecker<'a> {
     /// Whether `value` makes a value nothing else holds: a call, a method
     /// call or a literal (B-2026-10-19-13).
     fn is_fresh_owned_value(value: &Expr) -> bool {
+        // An `if` or `match` whose every branch makes a fresh value makes
+        // one; a branch that names a binding (a view of a borrowed
+        // scrutinee, perhaps) does not (B-2026-10-19-24).
+        let block_fresh = |b: &Block| {
+            b.final_expr
+                .as_deref()
+                .is_some_and(Self::is_fresh_owned_value)
+        };
+        match &value.kind {
+            ExprKind::If {
+                then_block,
+                else_branch: Some(e),
+                ..
+            } => return block_fresh(then_block) && Self::is_fresh_owned_value(e),
+            ExprKind::Block(b) => return block_fresh(b),
+            ExprKind::Match { arms, .. } => {
+                return !arms.is_empty() && arms.iter().all(|a| Self::is_fresh_owned_value(&a.body))
+            }
+            _ => {}
+        }
         matches!(
             &value.kind,
             ExprKind::Call { .. }
