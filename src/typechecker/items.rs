@@ -3822,6 +3822,14 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     lowered.clone()
                 }
+                // The library's `impl[T] Mutex[T]`, on the MIR pipeline: its
+                // `lock` stores `ref self` in a `MutexGuard[T]`, which an
+                // erased `Mutex` does not match (B-2026-10-19-23).
+                Type::Named { name, args }
+                    if self.library_methods_from_source && name == "Mutex" && !args.is_empty() =>
+                {
+                    lowered.clone()
+                }
                 // B-2026-09-27-115 / B-2026-10-01-48 — a CONCRETE impl on a
                 // user generic type (`impl G[String]`, `impl Bx[R]`) keeps
                 // its args on the v2 pipelines. There is no impl param for

@@ -4501,7 +4501,8 @@ fn library_module_paths_resolve() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 
-    let src = "import std.sync.{MutexGuard, Mutx};\n\
+    let src = "import std.sync.{Mutx};\n\
+               import std.iter.{Extend};\n\
                import std.io.{File as F};\n\
                fn main() {}\n";
     let (dir, path) = fixture("library-paths-bad", src);
@@ -4509,7 +4510,7 @@ fn library_module_paths_resolve() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     for want in [
-        "`std.sync.MutexGuard` is in the library spec (docs/library) but not implemented yet",
+        "`std.iter.Extend` is in the library spec (docs/library) but not implemented yet",
         "`std.sync` has no item `Mutx`, did you mean `Mutex`?",
         "`std.io.File` cannot be renamed (`as F`) yet",
     ] {
@@ -5460,6 +5461,111 @@ fn plain_assign_does_not_write_through_a_mut_ref() {
          }\n",
         "2 12\n",
     );
+}
+
+/// B-2026-10-19-23: `m.lock()` returns a `MutexGuard` that releases the
+/// mutex when it drops, and a `lock` block is one in a scope of its own.
+/// Four tasks that hold the mutex across a sleep end at 4 (plus the 100 a
+/// `lock` body adds after an early `return` released it), and
+/// docs/library/concurrency.md's `g.value.count += 1` through a `let g`
+/// guard checks and runs, on both MIR backends.
+#[test]
+fn a_mutex_guard_excludes_and_releases_on_every_exit() {
+    for (tag, src, want) in [
+        (
+            "guard-across-sleep",
+            r#"import std.time.{sleep, Duration};
+fn bump(m: Mutex[i64]) {
+    let g = m.lock();
+    let v = *g.value;
+    sleep(Duration.ms(2));
+    *g.value = v + 1;
+}
+fn early(m: Mutex[i64], stop: bool) -> i64 {
+    lock m x {
+        if stop { return 9; }
+        x += 100;
+    }
+    0
+}
+fn main() {
+    let m = Mutex.new(0);
+    {
+        let g = TaskGroup.new();
+        for _ in 0..4 {
+            g.spawn(|| bump(m));
+        }
+    }
+    let a = early(m, true);
+    let b = early(m, false);
+    let g = m.lock();
+    println(f"{*g.value} {a} {b}");
+}
+"#,
+            "104 9 0
+",
+        ),
+        (
+            "guard-doc-example",
+            r#"struct Totals { count: i64, sum: i64 }
+
+sync struct Tally {
+    name: String,
+    totals: Mutex[Totals],
+}
+
+impl Tally {
+    fn record(self, n: i64) {
+        let g = self.totals.lock();
+        g.value.count += 1;
+        g.value.sum += n;
+    }
+}
+
+fn first_even(m: Mutex[Vec[i64]]) -> Option[i64] {
+    lock m v {
+        for x in v.iter() {
+            if *x % 2 == 0 { return Some(*x); }
+        }
+    }
+    None
+}
+
+fn main() {
+    let s = Tally { name: "s", totals: Mutex.new(Totals { count: 0, sum: 0 }) };
+    s.record(3);
+    s.record(4);
+    let g = s.totals.lock();
+    println(f"{s.name} {g.value.count} {g.value.sum}");
+    let m = Mutex.new(vec![1, 3, 4, 5]);
+    let a = first_even(m);
+    let b = first_even(m);
+    println(f"{a} {b}");
+}
+"#,
+            "s 2 7
+Some(4) Some(4)
+",
+        ),
+    ] {
+        accepted(tag, src);
+        let (dir, path) = fixture(tag, src);
+        let runners: &[&str] = if cfg!(feature = "llvm") {
+            &["__mir-run", "__mir-llvm-run"]
+        } else {
+            &["__mir-run"]
+        };
+        for runner in runners {
+            let out = karac().arg(runner).arg(&path).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                want,
+                "{tag} {runner}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
@@ -8101,16 +8207,16 @@ fn std_time_reports_unknown_and_missing_items() {
         "import std.time.{Duration, Bogus};\nfn main() { println(f\"{Duration.ms(2).as_ms()}\"); }\n",
         "`std.time` has no item `Bogus`",
     );
-    // `Instant` landed (B-2026-10-15-112); `MutexGuard` keeps the missing
-    // case covered.
+    // `Instant` landed (B-2026-10-15-112), and `MutexGuard`
+    // (B-2026-10-19-23); `Extend` keeps the missing case covered.
     accepted(
         "std-time-instant",
         "import std.time.{Instant};\nfn main() { let i = Instant.now(); println(f\"{i.elapsed().as_ms() >= 0}\"); }\n",
     );
     rejected(
-        "std-sync-mutex-guard",
-        "import std.sync.{MutexGuard};\nfn main() { }\n",
-        "`std.sync.MutexGuard` is in the library spec (docs/library) but not implemented yet",
+        "std-iter-extend",
+        "import std.iter.{Extend};\nfn main() { }\n",
+        "`std.iter.Extend` is in the library spec (docs/library) but not implemented yet",
     );
 }
 

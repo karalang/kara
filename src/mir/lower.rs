@@ -2513,9 +2513,10 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// End the current block with a terminator that does not fall through,
     /// and continue in a fresh (unreachable) block.
     /// `lock m x { body }`: the body, with `x` naming the value the
-    /// `Mutex` `m` holds (`m` itself when there is no alias). The value is
-    /// reached through the library's `get_mut`, which writes through a
-    /// shared borrow as every cell does (core semantics §6.3).
+    /// `Mutex` `m` holds (`m` itself when there is no alias). It is
+    /// `m.lock()`'s guard in a scope of its own: `acquire` waits until no
+    /// other task holds `m`, `x` is the guard's `value`, and the guard's
+    /// drop releases `m` on every exit from the body (B-2026-10-19-23).
     fn lock_block(
         &mut self,
         e: &'a Expr,
@@ -2544,13 +2545,37 @@ impl<'l, 'a> Bx<'l, 'a> {
         self.assign(r, Rvalue::Ref(BorrowKind::Shared, mp));
         let gt = self.tys().tcx().reference(inner, true);
         let g = self.temp(gt);
-        let get = format!("{}.get_mut", self.tys().display(mt));
-        self.call_native(&get, vec![Operand::Move(Place::local(r))], Place::local(g));
-        self.captured
-            .insert(sym, Place::local(g).project(ProjElem::Deref));
-        let r = self.block_into(body, dest);
+        let Some(guard_t) = self.library_struct("MutexGuard", &[inner]) else {
+            return self.unsupported(e.span, "a `lock` without the library's `MutexGuard`");
+        };
+        let acquire = format!("{}.acquire", self.tys().display(mt));
+        self.call_native(
+            &acquire,
+            vec![Operand::Copy(Place::local(r))],
+            Place::local(g),
+        );
+        self.push_scope();
+        let guard = self.temp(guard_t);
+        let kind = self.adt_aggregate(guard_t, 0);
+        self.assign(
+            guard,
+            Rvalue::Aggregate(
+                kind,
+                vec![
+                    Operand::Move(Place::local(g)),
+                    Operand::Copy(Place::local(r)),
+                ],
+            ),
+        );
+        self.schedule(ScopeEntry::Drop(Place::local(guard)));
+        self.captured.insert(
+            sym,
+            Place::local(guard).field(0, gt).project(ProjElem::Deref),
+        );
+        let res = self.block_into(body, dest);
         self.captured.remove(&sym);
-        r
+        res?;
+        self.pop_scope()
     }
 
     /// `o?.f`: `f` of the value `o` holds, or `None` when it holds none.
@@ -3721,10 +3746,21 @@ impl<'l, 'a> Bx<'l, 'a> {
 
     /// The enum named `name`, applied to `args`.
     fn enum_of(&mut self, name: &str, args: &[Ty]) -> Option<Ty> {
+        self.adt_named(DefKind::Enum, name, args)
+    }
+
+    /// The library's struct `name` at `args` (`MutexGuard[T]`), with its
+    /// `Drop` body registered for this instance.
+    fn library_struct(&mut self, name: &str, args: &[Ty]) -> Option<Ty> {
+        let t = self.adt_named(DefKind::Struct, name, args)?;
+        self.lcx.convert(t).ok()
+    }
+
+    fn adt_named(&mut self, kind: DefKind, name: &str, args: &[Ty]) -> Option<Ty> {
         let table = &self.lcx.defs.table;
         let d = (0..table.len() as u32).map(DefId).find(|&d| {
             let e = table.get(d);
-            e.kind == DefKind::Enum && e.path.segments.last().is_some_and(|s| s == name)
+            e.kind == kind && e.path.segments.last().is_some_and(|s| s == name)
         })?;
         self.lcx.register_adt(d).ok()?;
         Some(self.tys().tcx().adt(d, args))

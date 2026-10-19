@@ -2614,6 +2614,11 @@ impl<'a> OwnershipChecker<'a> {
     /// objects under the final field / index / tuple-index access), so a
     /// shared hop anywhere along the path exempts the write, not just the
     /// last one.
+    ///
+    /// A `mut ref` hop exempts it the same way: `*g.value = v` and
+    /// `g.value.count += 1`, with `g` a `let` binding of a `MutexGuard[T]`
+    /// whose `value` is a `mut ref T`, write the value the field borrows,
+    /// and `g` names the same guard afterwards (B-2026-10-19-23).
     fn place_writes_through_shared(&self, target: &Expr) -> bool {
         let mut cursor = target;
         loop {
@@ -2621,15 +2626,31 @@ impl<'a> OwnershipChecker<'a> {
                 ExprKind::FieldAccess { object, .. }
                 | ExprKind::Index { object, .. }
                 | ExprKind::TupleIndex { object, .. } => object,
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } if self.expr_is_mut_ref_field(operand) => return true,
                 _ => return false,
             };
             // The type of this prefix — if it is a `shared` struct/enum, the
             // access that sits on top of it writes through the handle.
-            if self.expr_is_shared_handle(object) {
+            if self.expr_is_shared_handle(object) || self.expr_is_mut_ref_field(object) {
                 return true;
             }
             cursor = object;
         }
+    }
+
+    /// Whether `expr` is a field (or tuple field) whose type is a `mut ref`.
+    fn expr_is_mut_ref_field(&self, expr: &Expr) -> bool {
+        matches!(
+            expr.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) && self
+            .typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(&expr.span))
+            .is_some_and(|t| matches!(t, Type::MutRef(_)))
     }
 
     /// Whether a method-call receiver is (or is reached through) a `shared`

@@ -3,10 +3,10 @@
 //! "no task holds the mutex", so a task that holds it across a pause keeps
 //! the others out.
 //!
-//! No surface syntax reaches the pair yet (the `lock` block lowers to
-//! `get_mut`; its guard is B-2026-10-15-10), so each test lowers a program
-//! whose `bump` is one `lock` block and rewrites that body: the `get_mut`
-//! becomes an `acquire`, and a `release` goes before its return.
+//! A `lock` block lowers to an `acquire` and a `MutexGuard` whose drop
+//! releases the mutex. The second test lowers a program whose `bump` is one
+//! `lock` block and adds a `release` before its return, so the guard's own
+//! release finds the mutex free.
 #![cfg(feature = "llvm")]
 
 mod common;
@@ -36,8 +36,8 @@ fn main() {
 }
 "#;
 
-/// `SRC` lowered, with `bump`'s `get_mut` turned into an `acquire` and
-/// `releases` calls of `release` before its return.
+/// `SRC` lowered, with `releases` more calls of `release` before `bump`'s
+/// return.
 fn lowered(releases: usize) -> karac::mir::lower::Lowered {
     let mut lowered = karac::mir::lower::build_source(SRC).expect("MIR");
     let body = lowered
@@ -58,20 +58,18 @@ fn lowered(releases: usize) -> karac::mir::lower::Lowered {
             ..
         } = &mut b.terminator.kind
         {
-            if let Some(ty) = inst.name.strip_suffix(".get_mut").map(str::to_string) {
-                inst.name = format!("{ty}.acquire");
+            if let Some(ty) = inst.name.strip_suffix(".acquire").map(str::to_string) {
                 let r = match &args[0] {
                     Operand::Move(p) | Operand::Copy(p) => p.clone(),
-                    other => panic!("get_mut of {other:?}"),
+                    other => panic!("acquire of {other:?}"),
                 };
-                args[0] = Operand::Copy(r.clone());
                 let mut release = inst.clone();
                 release.name = format!("{ty}.release");
                 recv = Some((release, r));
             }
         }
     }
-    let (inst, r) = recv.expect("bump's get_mut");
+    let (inst, r) = recv.expect("bump's acquire");
     let release = Operand::Const(Const {
         ty: lowered.tys.unit(),
         kind: ConstKind::FnDef(inst),
@@ -135,10 +133,10 @@ fn compiled(releases: usize) -> Option<(String, String, bool)> {
 
 #[test]
 fn mir_mutex_excludes_across_a_pause() {
-    let (out, error) = interp(1);
+    let (out, error) = interp(0);
     assert_eq!(error, None);
     assert_eq!(out, "4\n");
-    if let Some((out, err, ok)) = compiled(1) {
+    if let Some((out, err, ok)) = compiled(0) {
         assert!(ok, "{err}");
         assert_eq!(out, "4\n");
     }
@@ -146,13 +144,13 @@ fn mir_mutex_excludes_across_a_pause() {
 
 #[test]
 fn mir_mutex_release_of_a_free_mutex_stops_the_run() {
-    let (_, error) = interp(2);
+    let (_, error) = interp(1);
     let error = error.expect("a second release fails");
     assert!(
         error.contains("unlock of a mutex that is not held"),
         "{error}"
     );
-    if let Some((_, err, ok)) = compiled(2) {
+    if let Some((_, err, ok)) = compiled(1) {
         assert!(!ok);
         assert!(err.contains("unlock of a mutex that is not held"), "{err}");
     }

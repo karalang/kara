@@ -2050,8 +2050,9 @@ pub const LIBRARY_GLOBAL_MODULES: &[(&[&str], &[&str], &[&str])] = &[
             "Channel",
             "BoundedChannel",
             "channel",
+            "MutexGuard",
         ],
-        &["MutexGuard"],
+        &[],
     ),
     (&["std", "time"], &["Clock", "sleep_ms"], &[]),
     (

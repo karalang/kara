@@ -36,3 +36,37 @@ impl[T] Receiver[T] {
     }
 }
 
+
+/// What `m.lock()` returns (docs/library/concurrency.md § `Mutex[T]`):
+/// `value` is the protected value, and the guard releases the mutex when
+/// it drops, so every exit from its scope (`return`, `break`, `?`)
+/// releases it. A `lock m x { ... }` block is a guard in a scope of its
+/// own.
+pub struct MutexGuard[T] {
+    pub value: mut ref T,
+    mutex: ref Mutex[T],
+}
+
+impl[T] Mutex[T] {
+    /// Waits until no other task holds the mutex, then returns its guard.
+    fn lock(ref self) -> MutexGuard[T] with blocks {
+        MutexGuard { value: self.acquire(), mutex: self }
+    }
+
+    // Waits until no other task holds the mutex, marks it held and returns
+    // the protected value. A native of each MIR backend.
+    #[compiler_builtin]
+    fn acquire(ref self) -> mut ref T with blocks {
+        self.acquire()
+    }
+
+    // Clears the mark `acquire` set, for the next waiting task.
+    #[compiler_builtin]
+    fn release(ref self) {}
+}
+
+impl[T] Drop for MutexGuard[T] {
+    fn drop(mut ref self) {
+        self.mutex.release();
+    }
+}
