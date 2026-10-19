@@ -5670,3 +5670,113 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_function_typed_field_over_a_projection_is_normalized() {
+    // B-2026-10-18-49: `f: Fn(own I.Item) -> I.Item` in a struct over
+    // `I: Iterator` kept `VecIter[i64].Item` unnormalized in the field's
+    // instance type (the projection search did not look inside function
+    // types), so building the struct cast the closure to it: invalid MIR.
+    let src = r#"
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct MapIt[I: Iterator] {
+    it: I,
+    f: Fn(own I.Item) -> I.Item,
+}
+
+impl[I: Iterator] Iterator for MapIt[I] {
+    type Item = I.Item;
+    fn next(mut ref self) -> Option[I.Item] {
+        let x = self.it.next()?;
+        Some((self.f)(x))
+    }
+}
+
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let mut m = MapIt { it: VecIter { items: v, pos: 0 }, f: |x: i64| x * 10 };
+    while let Some(x) = m.next() {
+        println(f"{x}");
+    }
+}
+"#;
+    let want = "10\n20\n30\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+    // A predicate over `ref I.Item` beside an `Option[I.Item]` field.
+    let src = r#"
+struct VecIter[T] {
+    items: Vec[T],
+    pos: i64,
+}
+
+impl[T: Clone] Iterator for VecIter[T] {
+    type Item = T;
+    fn next(mut ref self) -> Option[T] {
+        if self.pos >= self.items.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.items[self.pos - 1].clone())
+    }
+}
+
+struct Filt[I: Iterator] {
+    it: I,
+    keep: Fn(ref I.Item) -> bool,
+    last: Option[I.Item],
+}
+
+impl[I: Iterator] Iterator for Filt[I] {
+    type Item = I.Item;
+    fn next(mut ref self) -> Option[I.Item] {
+        while let Some(x) = self.it.next() {
+            if (self.keep)(x) {
+                return Some(x);
+            }
+        }
+        None
+    }
+}
+
+fn main() {
+    let words: Vec[String] = vec!["a".to_string(), "bb".to_string(), "ccc".to_string()];
+    let mut f = Filt { it: VecIter { items: words, pos: 0 }, keep: |s: ref String| s.len() != 2, last: None };
+    while let Some(w) = f.next() {
+        println(w);
+    }
+    let mut g = Filt { it: VecIter { items: vec![1, 2, 3, 4], pos: 0 }, keep: |n: ref i64| *n % 2 == 0, last: None };
+    while let Some(n) = g.next() {
+        println(f"{n}");
+    }
+}
+"#;
+    let want = "a\nccc\n2\n4\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

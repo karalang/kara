@@ -1755,6 +1755,13 @@ fn collect_param_projs(tys: &TyInterner, t: Ty, out: &mut Vec<Ty>) {
         HK::Array { elem, .. } | HK::Slice { elem, .. } | HK::Vector { elem, .. } => {
             collect_param_projs(tys, elem, out)
         }
+        // B-2026-10-18-49: `f: Fn(own I.Item) -> I.Item`.
+        HK::Fn { params, ret, .. } => {
+            for a in tcx.list(params) {
+                collect_param_projs(tys, a, out);
+            }
+            collect_param_projs(tys, ret, out);
+        }
         _ => {}
     }
 }
@@ -1773,6 +1780,9 @@ fn has_param(tys: &TyInterner, t: Ty) -> bool {
             has_param(tys, elem)
         }
         HK::Proj { base, .. } => has_param(tys, base),
+        HK::Fn { params, ret, .. } => {
+            tcx.list(params).into_iter().any(|a| has_param(tys, a)) || has_param(tys, ret)
+        }
         _ => false,
     }
 }
