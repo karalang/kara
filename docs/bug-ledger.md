@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 282 |
 | codegen-gap | 276 |
-| false-positive | 242 |
+| false-positive | 243 |
 | perf | 178 |
 | other | 175 |
 | diagnostics | 172 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2953 |
 | interp | 971 |
-| typecheck | 493 |
+| typecheck | 494 |
 | ownership | 116 |
 | other | 115 |
 | runtime | 79 |
@@ -164,6 +164,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-26 | 2026-10-19 | runtime+codegen | medium | On the MIR compiled backend, `String.contains` goes to Rust `str::contains` (two-way search), which makes kata 796's bench 4.6x the legacy build (2.03 s vs 0.44 s, medians of five interleaved runs; first filed as 5.7x from spot runs); legacy's naive memcmp scan and C `strstr` (0.20 s) are far faster on short needles | — |
 | B-2026-10-19-27 | 2026-10-19 | interp+codegen | medium | At 128 bits, 12 integer methods are refused by the MIR compiled backend with "native `u128.<m>` is not lowered yet" (the same for i128): clamp, leading_zeros, trailing_zeros, count_ones, count_zeros, to_ne_bytes, pow, to_f64, swap_bytes, reverse_bits, is_power_of_two and next_power_of_two. The MIR interpreter also refuses swap_bytes, reverse_bits and next_power_of_two with "call of unknown function" | — |
 | B-2026-10-19-31 | 2026-10-19 | interp+codegen | medium | When a user enum has a variant named `None` (enum V { None, Int(i64) }), a bare `None` passed to a `ref Option[T]` parameter lowers to `Option.Some {}` in MIR, and both MIR backends refuse the program: `invalid MIR: main: bb0[0]: Option takes 1 fields, got 0`. `karac check` and legacy `karac run` accept it and print -1. | — |
+| B-2026-10-19-32 | 2026-10-19 | typecheck | low | A list literal passed to a method of a generic receiver does not take the parameter's type as its expected type: `best.push([0, 1])` on a `Vec[Array[i64, 2]]` is refused with "expected 'Array[i64, 2]', found 'Vec[i64]'", while the same literal passed to a free function taking `Array[i64, 2]` is accepted | — |
 
 ### Relocated
 
