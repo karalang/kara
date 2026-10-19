@@ -7326,6 +7326,63 @@ impl<'a> super::TypeChecker<'a> {
         self.core_expr_is_temp(d).then_some(d.span)
     }
 
+    /// B-2026-10-19-19: one edit that makes a `let`'s view of a temporary
+    /// an owned value, when there is one. A default the `unwrap_or` (or
+    /// `??`) makes a view of is avoided by copying the item out first
+    /// (`m.get(k).cloned().unwrap_or(Vec.new())`), and a `Str` read from a
+    /// temporary is kept as its own `String` (`s.substring(0, p).trim()
+    /// .to_string()`).
+    fn core_temp_view_fix(
+        &self,
+        value: &Expr,
+        temp: &Span,
+        kept: &Type,
+    ) -> Option<(&'static str, FixIt)> {
+        let after = |e: &Expr| Span {
+            offset: e.span.offset + e.span.length,
+            length: 0,
+            line: e.span.line,
+            column: e.span.column,
+        };
+        let opt = match &value.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "unwrap_or" && args.len() == 1 => Some((&**object, &args[0].value)),
+            ExprKind::NilCoalesce { left, right } => Some((&**left, &**right)),
+            _ => None,
+        };
+        if let Some((opt, default)) = opt {
+            let Type::Ref(item) = kept else {
+                return None;
+            };
+            if default.span.offset != temp.offset || !self.type_supports_clone(item) {
+                return None;
+            }
+            return Some((
+                ", or copy the item out with `.cloned()` so the default is not borrowed",
+                FixIt {
+                    span: after(opt),
+                    replacement: ".cloned()".to_string(),
+                },
+            ));
+        }
+        let str_view =
+            matches!(kept, Type::Named { name, args } if name == "StringSlice" && args.is_empty());
+        if str_view && matches!(value.kind, ExprKind::MethodCall { .. }) {
+            return Some((
+                ", or keep an owned copy with `.to_string()`",
+                FixIt {
+                    span: after(value),
+                    replacement: ".to_string()".to_string(),
+                },
+            ));
+        }
+        None
+    }
+
     /// v2 core §5.5: whether `e` produces a temporary that owns its value
     /// (one with no named place), as opposed to a place or a view.
     /// v2 core §5.5: a `ref` binding in a `let` (or `let … else`) pattern
@@ -8173,7 +8230,15 @@ impl<'a> super::TypeChecker<'a> {
                                     replacement: "\"\"".to_string(),
                                 },
                             ),
-                            None => self.type_error(message, temp, TypeErrorKind::TypeMismatch),
+                            None => match self.core_temp_view_fix(value, &temp, &expected_ty) {
+                                Some((note, fix)) => self.type_error_with_fix_it(
+                                    message + note,
+                                    temp,
+                                    TypeErrorKind::TypeMismatch,
+                                    fix,
+                                ),
+                                None => self.type_error(message, temp, TypeErrorKind::TypeMismatch),
+                            },
                         }
                     }
                 }

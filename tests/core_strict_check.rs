@@ -5148,6 +5148,48 @@ fn main() {
     );
 }
 
+/// B-2026-10-19-19: a `let` that keeps a view of a temporary gets a machine
+/// fix where one edit makes the value owned: `.to_string()` after a `Str` read
+/// from a temporary `String`, and `.cloned()` before an `unwrap_or` whose
+/// default is the temporary. Each fixed program runs.
+#[test]
+fn a_view_of_a_temporary_is_fixed_by_owning_it() {
+    let want = "a reference to a temporary outlives its statement";
+    let str_view = r#"fn main() {
+    let line = "key = value".to_string();
+    let pos = 4;
+    let name = line.substring(0, pos).trim();
+    println(name);
+}
+"#;
+    rejected_then_fixed_by("temp-str-view", str_view, want, ".trim().to_string();");
+    accepted_and_runs(
+        "temp-str-view-fixed",
+        &str_view.replace(".trim();", ".trim().to_string();"),
+        "key\n",
+    );
+    let default = r#"fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    m.insert("a".to_string(), vec![3, 1, 2]);
+    let k = "a".to_string();
+    let mut samples = m.get(k).unwrap_or(Vec.new());
+    samples.sort();
+    println(f"{samples.len()}");
+}
+"#;
+    rejected_then_fixed_by(
+        "temp-default",
+        default,
+        want,
+        "m.get(k).cloned().unwrap_or(Vec.new())",
+    );
+    accepted_and_runs(
+        "temp-default-fixed",
+        &default.replace(".get(k).unwrap_or", ".get(k).cloned().unwrap_or"),
+        "3\n",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.
