@@ -6090,7 +6090,34 @@ impl<'a> TypeChecker<'a> {
         {
             let mut subs = self.env.substitutions.clone();
             let mut const_subs = self.env.const_substitutions.clone();
-            if inference::unify_types(expected, found, &mut subs, &mut const_subs) {
+            // A `Slice[T]` slot takes a `Vec` by coercion, so it pins the
+            // `Vec`'s element (`take(Vec.new())`, B-2026-10-19-1).
+            let peel = |t: &Type| match t {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref().clone(),
+                t => t.clone(),
+            };
+            let vec_of_slice = match (peel(expected), peel(found)) {
+                (Type::Slice { element, .. }, Type::Named { name, args })
+                    if name == "Vec" && args.len() == 1 =>
+                {
+                    Some((
+                        Type::Named {
+                            name,
+                            args: vec![*element],
+                        },
+                        Type::Named {
+                            name: "Vec".into(),
+                            args,
+                        },
+                    ))
+                }
+                _ => None,
+            };
+            let (want, have) = match &vec_of_slice {
+                Some((want, have)) => (want, have),
+                None => (expected, found),
+            };
+            if inference::unify_types(want, have, &mut subs, &mut const_subs) {
                 self.env.substitutions = subs;
                 self.env.const_substitutions = const_subs;
                 let resolved = inference::resolve_type_vars(

@@ -1633,6 +1633,12 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         .filter(|ii| ii.alias.is_none())
         .map(|ii| ii.name.clone())
         .collect();
+    // An aliased item names its own original name in its source text; that is
+    // the item itself, not a helper to splice beside it under the old name.
+    let aliased_from: std::collections::HashMap<&String, &String> = items
+        .iter()
+        .filter_map(|ii| ii.alias.as_ref().map(|a| (a, &ii.name)))
+        .collect();
     let mut pending: Vec<Item> = out.clone();
     for item in &program.items {
         if let Item::ImplBlock(imp) = item {
@@ -1646,8 +1652,9 @@ pub fn gated_items_for_import(path: &[String], items: &[ImportItem]) -> Option<V
         }
     }
     while let Some(item) = pending.pop() {
+        let own = module_item_name(&item).and_then(|n| aliased_from.get(&n).map(|o| (*o).clone()));
         for name in names_in_item_source(&item, src, base) {
-            if !included.insert(name.clone()) {
+            if own.as_ref() == Some(&name) || !included.insert(name.clone()) {
                 continue;
             }
             let Some(found) = program
@@ -1968,6 +1975,8 @@ pub fn library_module_item_error(
 }
 
 pub fn expand_gated_stdlib_imports(program: &mut Program) {
+    // `import std.path;` + `path.f(..)` → `import std.path.{f};` + `f(..)`.
+    crate::module_binding::expand_single_file_std_module_bindings(program);
     let mut appended: Vec<Item> = Vec::new();
     // A program's own items and its explicit imports beat a wildcard
     // (design.md § Wildcards).

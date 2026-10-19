@@ -294,11 +294,15 @@ fn test_valid_std_and_user_imports_still_accepted() {
 
 #[test]
 fn test_bare_gated_module_import_says_how_to_import() {
-    // `import std.path;` bound a `path` that no backend could run: check
-    // passed, and MIR and the interpreter failed on the first `path.parent`.
+    // `import std.path;` is desugared to item imports before resolution
+    // (B-2026-10-15-105), except when the program declares an item named
+    // `path` itself; the import the resolver then sees says how to import.
     for (src, module) in [
-        ("import std.path;\nfn main() { }", "std.path"),
-        ("import std.web.net;\nfn main() { }", "std.web.net"),
+        ("import std.path;\nfn path() { }\nfn main() { }", "std.path"),
+        (
+            "import std.web.net;\nfn net() { }\nfn main() { }",
+            "std.web.net",
+        ),
     ] {
         let errors = resolve_errors(src);
         assert!(

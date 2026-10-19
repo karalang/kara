@@ -8621,3 +8621,79 @@ fn priority_queue_pop_discard_is_not_must_use() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-15-105: `import std.path;` binds the module as `path` in a single
+/// file (design.md § Imports), and a parameter or `let` named `path` shadows it
+/// only where it is in scope.
+#[test]
+fn a_gated_module_binds_as_a_module_in_a_single_file() {
+    accepted_and_runs(
+        "std-path-module-binding",
+        r#"import std.path;
+
+fn show(path: Str) {
+    println(path.len());
+}
+
+fn main() {
+    let p = "/a/b/c.txt";
+    println(path.parent(p) ?? "none");
+    println(path.file_name(p) ?? "none");
+    show(p);
+    let path = "x";
+    println(path.len());
+}
+"#,
+        "/a/b\nc.txt\n10\n1\n",
+    );
+    // A member the program also declares takes an alias, not its bare name.
+    accepted_and_runs(
+        "std-path-module-binding-contested",
+        r#"import std.path;
+
+fn parent(n: i64) -> i64 {
+    n - 1
+}
+
+fn main() {
+    println(path.parent("/a/b") ?? "none");
+    println(parent(3));
+}
+"#,
+        "/a\n2\n",
+    );
+    // A type reached through the binding, and its associated functions.
+    accepted_and_runs(
+        "std-time-module-binding",
+        r#"import std.time;
+
+fn main() {
+    let d = time.Duration.ms(1500);
+    println(d.as_ms());
+    time.sleep(time.Duration.ms(1));
+    println("ok");
+}
+"#,
+        "1500\nok\n",
+    );
+}
+
+/// B-2026-10-19-1: an unsolved `Vec.new()` handed to a `Slice[T]` parameter is
+/// pinned by it, as a `Vec[T]` parameter pins it.
+#[test]
+fn a_slice_slot_pins_an_unsolved_vec() {
+    accepted_and_runs(
+        "slice-slot-pins-vec",
+        r#"fn take(b: ref Slice[u8]) -> i64 {
+    b.len()
+}
+
+fn main() {
+    println(f"{take(Vec.new())}");
+    let v: Vec[u8] = Vec.new();
+    println(f"{take(v)}");
+}
+"#,
+        "0\n0\n",
+    );
+}

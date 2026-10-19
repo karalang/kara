@@ -1749,16 +1749,19 @@ impl<'a> super::Resolver<'a> {
         // `imp.path`; a bare import (`import std.web;` / `import std.web.net;`)
         // references `imp.path ++ [item]`. Accept if EITHER shape resolves to
         // an importable module.
-        // `import std.path;` would bind the module as `path`, and a gated
-        // module has no module value in a single file yet: say how to import
-        // from it, rather than accept a name that no backend can run.
+        // `import std.path;` binding the module as `path` is desugared to
+        // item imports before resolution
+        // (`module_binding::expand_single_file_std_module_bindings`), except
+        // when the program declares an item of the bound name itself.
         for it in &imp.items {
             let mut full = imp.path.clone();
             full.push(it.name.clone());
             if crate::prelude::is_gated_stdlib_module(&full) {
+                let bound = it.alias.as_deref().unwrap_or(&it.name);
                 self.errors.push(ResolveError {
                     message: format!(
-                        "`{m}` is imported by item for now: `import {m}.{{..}};` or `import {m}.*;`",
+                        "`import {m};` binds `{bound}`, which this program also declares: \
+                         import from the module by item, `import {m}.{{..}};` or `import {m}.*;`",
                         m = full.join(".")
                     ),
                     span: imp.span,

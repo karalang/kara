@@ -87,6 +87,7 @@ pub(crate) fn strip_module_bindings(
         binds,
         aliases,
         refs: ModuleRefs::new(),
+        locals: Vec::new(),
     };
     if !binds.is_empty() {
         for item in items.iter_mut() {
@@ -94,6 +95,174 @@ pub(crate) fn strip_module_bindings(
         }
     }
     s.refs
+}
+
+/// Single-file mode: `import std.path;` binds `path` to the library module
+/// (design.md § Imports), which has no module value in a single file — the
+/// gated library modules are spliced in item by item. So the binding is
+/// desugared exactly as project mode desugars one (see the module docs):
+/// `path.parent(p)` becomes `parent(p)`, and the binding becomes
+/// `import std.path.{parent};`, which the gated splice then expands
+/// (B-2026-10-15-105).
+///
+/// Unlike project mode, which declines a binding whose name is bound as a
+/// value ANYWHERE in the module, the walk here is scope-aware: a
+/// `let path = ..` shadows the module only where it is in scope, which is the
+/// common shape in a program that uses `std.path` at all. A member name that
+/// the program also declares, binds, or imports takes an alias instead of its
+/// bare name, as in project mode ([`crate::module_rename::qualified_name`]).
+///
+/// A binding whose own name is an item of the program is left alone, so the
+/// resolver still reports it.
+pub fn expand_single_file_std_module_bindings(program: &mut Program) {
+    let declared = crate::import_alias::declared_names(&program.items);
+    let mut binds: HashMap<String, Vec<String>> = HashMap::new();
+    // Bound module path -> the declaration that bound it (directly, or as the
+    // head of a chain like `web.net.f()`).
+    let mut origin: HashMap<Vec<String>, usize> = HashMap::new();
+    for (idx, item) in program.items.iter().enumerate() {
+        let Item::Import(imp) = item else { continue };
+        if imp.is_wildcard || imp.path.first().map(String::as_str) != Some("std") {
+            continue;
+        }
+        for it in &imp.items {
+            let mut full = imp.path.clone();
+            full.push(it.name.clone());
+            let bound = it.alias.clone().unwrap_or_else(|| it.name.clone());
+            if crate::prelude::is_gated_stdlib_module(&full) && !declared.contains(&bound) {
+                origin.insert(full.clone(), idx);
+                binds.insert(bound, full);
+            }
+        }
+    }
+    if binds.is_empty() {
+        return;
+    }
+
+    let pristine = program.items.clone();
+    let no_aliases = MemberAliases::new();
+    let mut refs = single_file_fixpoint(&mut program.items, &binds, &no_aliases, &mut origin);
+
+    // A member is contested when its bare name is spoken for elsewhere.
+    let mut spoken: HashSet<String> = shadowed_names(&mut program.items);
+    let has_wildcard = program
+        .items
+        .iter()
+        .any(|it| matches!(it, Item::Import(imp) if imp.is_wildcard));
+    for it in &program.items {
+        let Item::Import(imp) = it else { continue };
+        for ii in &imp.items {
+            spoken.insert(ii.alias.clone().unwrap_or_else(|| ii.name.clone()));
+        }
+    }
+    let mut providers: HashMap<String, usize> = HashMap::new();
+    for names in refs.values() {
+        for name in names.keys() {
+            *providers.entry(name.clone()).or_default() += 1;
+        }
+    }
+    let mut taken = spoken.clone();
+    taken.extend(providers.keys().cloned());
+    let mut aliases = MemberAliases::new();
+    let mut paths: Vec<&Vec<String>> = refs.keys().collect();
+    paths.sort();
+    for path in paths {
+        for name in refs[path].keys() {
+            if has_wildcard || providers[name] > 1 || spoken.contains(name) {
+                let alias = crate::module_rename::qualified_name(name, path, &mut taken);
+                aliases.insert((path.clone(), name.clone()), alias);
+            }
+        }
+    }
+    if !aliases.is_empty() {
+        program.items = pristine;
+        refs = single_file_fixpoint(&mut program.items, &binds, &aliases, &mut origin);
+    }
+
+    // Each binding becomes the item import of what was reached through it; a
+    // binding nothing reached (unused, or shadowed at every use) binds nothing.
+    let bound_names: HashSet<&String> = binds.keys().collect();
+    let mut spliced: Vec<(usize, Item)> = Vec::new();
+    for (path, names) in refs {
+        let Some(&idx) = origin.get(&path) else {
+            continue;
+        };
+        let Item::Import(at) = &program.items[idx] else {
+            continue;
+        };
+        let span = at.span;
+        let items = names
+            .into_iter()
+            .map(|(name, span)| {
+                let alias = aliases.get(&(path.clone(), name.clone())).cloned();
+                ImportItem { span, name, alias }
+            })
+            .collect();
+        spliced.push((
+            idx,
+            Item::Import(ImportDecl {
+                span,
+                is_pub: false,
+                is_wildcard: false,
+                path_spans: vec![span; path.len()],
+                path,
+                items,
+            }),
+        ));
+    }
+    for item in program.items.iter_mut() {
+        let Item::Import(imp) = item else { continue };
+        if imp.is_wildcard || imp.path.first().map(String::as_str) != Some("std") {
+            continue;
+        }
+        let path = imp.path.clone();
+        imp.items.retain(|it| {
+            let mut full = path.clone();
+            full.push(it.name.clone());
+            let bound = it.alias.as_ref().unwrap_or(&it.name);
+            !(bound_names.contains(bound) && binds.get(bound) == Some(&full))
+        });
+    }
+    spliced.sort_by_key(|a| std::cmp::Reverse(a.0));
+    for (idx, item) in spliced {
+        program.items.insert(idx + 1, item);
+    }
+    // A declaration left with no items is dropped by the gated splice.
+}
+
+/// [`strip_module_bindings`] to a fixpoint over the gated library modules:
+/// `web.net.fetch(u)` strips to `net.fetch(u)`, which is itself a binding.
+fn single_file_fixpoint(
+    items: &mut [Item],
+    binds: &HashMap<String, Vec<String>>,
+    aliases: &MemberAliases,
+    origin: &mut HashMap<Vec<String>, usize>,
+) -> ModuleRefs {
+    let mut refs = ModuleRefs::new();
+    let mut round = binds.clone();
+    while !round.is_empty() {
+        let found = strip_module_bindings(items, &round, aliases);
+        let mut next: HashMap<String, Vec<String>> = HashMap::new();
+        for (path, names) in found {
+            for (name, span) in names {
+                let mut full = path.clone();
+                full.push(name.clone());
+                if crate::prelude::is_gated_stdlib_module(&full) && !binds.contains_key(&name) {
+                    if let Some(&idx) = origin.get(&path) {
+                        origin.entry(full.clone()).or_insert(idx);
+                        next.insert(name, full);
+                        continue;
+                    }
+                }
+                refs.entry(path.clone())
+                    .or_default()
+                    .entry(name)
+                    .or_insert(span);
+            }
+        }
+        round = next;
+    }
+    refs
 }
 
 /// The set of names a module must not have a module binding rewritten for:
@@ -104,13 +273,99 @@ pub(crate) fn shadowed_names(items: &mut [Item]) -> HashSet<String> {
     out
 }
 
+/// `Type.m(args)` / `Type.X` in the shape the parser gives them when written
+/// bare — a call of the two-segment path — once the walk has stripped the
+/// module off `<bound>.Type.m(args)`, which parsed as a method call on a field.
+fn type_member(e: &mut Expr) -> Option<ExprKind> {
+    let is_type = |n: &str| n.chars().next().is_some_and(char::is_uppercase);
+    match &mut e.kind {
+        ExprKind::MethodCall {
+            object,
+            method,
+            turbofish,
+            args,
+            ..
+        } => {
+            let ExprKind::Identifier(ty) = &object.kind else {
+                return None;
+            };
+            if !is_type(ty) {
+                return None;
+            }
+            let segments = vec![ty.clone(), method.clone()];
+            let generic_args = turbofish
+                .take()
+                .map(|tf| tf.into_iter().map(GenericArg::Type).collect());
+            Some(ExprKind::Call {
+                callee: Box::new(Expr {
+                    id: crate::ids::NodeId::DUMMY,
+                    kind: ExprKind::Path {
+                        segments,
+                        generic_args,
+                    },
+                    span: object.span,
+                }),
+                args: std::mem::take(args),
+            })
+        }
+        ExprKind::FieldAccess { object, field } => {
+            let ExprKind::Identifier(ty) = &object.kind else {
+                return None;
+            };
+            if !is_type(ty) {
+                return None;
+            }
+            Some(ExprKind::Path {
+                segments: vec![ty.clone(), field.clone()],
+                generic_args: None,
+            })
+        }
+        _ => None,
+    }
+}
+
 struct Stripper<'a> {
     binds: &'a HashMap<String, Vec<String>>,
     aliases: &'a MemberAliases,
     refs: ModuleRefs,
+    /// The value names bound by the scopes enclosing the walk, innermost
+    /// last. A `<bound>.x` whose root is one of them reaches a local, not the
+    /// module. Project mode never needs it (its bindings are already dropped
+    /// for any name bound as a value anywhere, see [`shadowed_names`]); the
+    /// single-file desugar ([`expand_single_file_std_module_bindings`]) does.
+    locals: Vec<Vec<String>>,
 }
 
 impl Stripper<'_> {
+    /// The module path `name` is bound to, unless a local shadows it here.
+    fn bound_module(&self, name: &str) -> Option<Vec<String>> {
+        if self
+            .locals
+            .iter()
+            .any(|scope| scope.iter().any(|n| n == name))
+        {
+            return None;
+        }
+        self.binds.get(name).cloned()
+    }
+
+    fn push_scope(&mut self, names: Vec<String>) {
+        self.locals.push(names);
+    }
+
+    fn pop_scope(&mut self) {
+        self.locals.pop();
+    }
+
+    /// Bind `names` in the innermost scope, for a `let` that binds them from
+    /// its statement onward.
+    fn bind_here(&mut self, names: Vec<String>) {
+        match self.locals.last_mut() {
+            Some(scope) => scope.extend(names),
+            None => self.locals.push(names),
+        }
+    }
+
     /// Record that `name` was reached through the module at `path`.
     fn note(&mut self, path: &[String], name: &str, span: Span) {
         self.refs
@@ -137,7 +392,7 @@ impl Stripper<'_> {
         if segments.len() < 2 {
             return;
         }
-        let Some(path) = self.binds.get(&segments[0]).cloned() else {
+        let Some(path) = self.bound_module(&segments[0]) else {
             return;
         };
         segments.remove(0);
@@ -267,7 +522,10 @@ impl Stripper<'_> {
         if let Some(rt) = f.return_type.as_mut() {
             self.ty(rt);
         }
+        let params = f.params.iter().flat_map(|p| p.pattern.binding_names());
+        self.push_scope(params.collect());
         self.block(&mut f.body);
+        self.pop_scope();
     }
 
     fn trait_method(&mut self, m: &mut TraitMethod) {
@@ -280,7 +538,10 @@ impl Stripper<'_> {
             self.ty(rt);
         }
         if let Some(b) = m.body.as_mut() {
+            let params = m.params.iter().flat_map(|p| p.pattern.binding_names());
+            self.push_scope(params.collect());
             self.block(b);
+            self.pop_scope();
         }
     }
 
@@ -452,12 +713,14 @@ impl Stripper<'_> {
     // ── Statements and blocks ────────────────────────────────────
 
     fn block(&mut self, b: &mut Block) {
+        self.push_scope(Vec::new());
         for stmt in &mut b.stmts {
             self.stmt(stmt);
         }
         if let Some(e) = b.final_expr.as_mut() {
             self.expr(e);
         }
+        self.pop_scope();
     }
 
     fn stmt(&mut self, stmt: &mut Stmt) {
@@ -470,8 +733,12 @@ impl Stripper<'_> {
                     self.ty(t);
                 }
                 self.expr(value);
+                self.bind_here(pattern.binding_names());
             }
-            StmtKind::LetUninit { ty, .. } => self.ty(ty),
+            StmtKind::LetUninit { name, ty, .. } => {
+                self.ty(ty);
+                self.bind_here(vec![name.clone()]);
+            }
             StmtKind::LetElse {
                 pattern,
                 ty,
@@ -485,6 +752,7 @@ impl Stripper<'_> {
                 }
                 self.expr(value);
                 self.block(else_block);
+                self.bind_here(pattern.binding_names());
             }
             StmtKind::Defer { body } => self.block(body),
             StmtKind::ErrDefer { body, .. } => self.block(body),
@@ -510,10 +778,28 @@ impl Stripper<'_> {
         // method call can see a module-rooted receiver. Walking the receiver
         // first costs nothing — a bare `Identifier` has no children and is
         // never rewritten on its own.
+        let type_rooted = self.reaches_through_binding(e);
         self.expr_children(e);
         if let Some(kind) = self.rooted_rewrite(e) {
             e.kind = kind;
+        } else if type_rooted {
+            if let Some(kind) = type_member(e) {
+                e.kind = kind;
+            }
         }
+    }
+
+    /// `<bound>.Type.m(..)` / `<bound>.Type.X`: a member of a type reached
+    /// through a binding, which the walk turns into `Type.m(..)` / `Type.X`.
+    fn reaches_through_binding(&self, e: &Expr) -> bool {
+        let (ExprKind::MethodCall { object, .. } | ExprKind::FieldAccess { object, .. }) = &e.kind
+        else {
+            return false;
+        };
+        let ExprKind::FieldAccess { object: root, .. } = &object.kind else {
+            return false;
+        };
+        matches!(&root.kind, ExprKind::Identifier(r) if self.bound_module(r).is_some())
     }
 
     /// `<bound>.NAME` and `<bound>.NAME(args)` → `NAME` / `NAME(args)`.
@@ -530,7 +816,7 @@ impl Stripper<'_> {
                 let ExprKind::Identifier(recv) = &object.kind else {
                     return None;
                 };
-                let path = self.binds.get(recv)?.clone();
+                let path = self.bound_module(recv)?;
                 let local = self.resolved(&path, method, object.span);
                 let callee_kind = match turbofish.take() {
                     Some(tf) => ExprKind::Path {
@@ -552,7 +838,7 @@ impl Stripper<'_> {
                 let ExprKind::Identifier(recv) = &object.kind else {
                     return None;
                 };
-                let path = self.binds.get(recv)?.clone();
+                let path = self.bound_module(recv)?;
                 let local = self.resolved(&path, field, object.span);
                 Some(ExprKind::Identifier(local))
             }
@@ -628,7 +914,9 @@ impl Stripper<'_> {
             } => {
                 self.pattern(pattern);
                 self.expr(value);
+                self.push_scope(pattern.binding_names());
                 self.block(then_block);
+                self.pop_scope();
                 if let Some(x) = else_branch.as_mut() {
                     self.expr(x);
                 }
@@ -647,7 +935,9 @@ impl Stripper<'_> {
             } => {
                 self.pattern(pattern);
                 self.expr(value);
+                self.push_scope(pattern.binding_names());
                 self.block(body);
+                self.pop_scope();
             }
             ExprKind::For {
                 pattern,
@@ -657,16 +947,20 @@ impl Stripper<'_> {
             } => {
                 self.pattern(pattern);
                 self.expr(iterable);
+                self.push_scope(pattern.binding_names());
                 self.block(body);
+                self.pop_scope();
             }
             ExprKind::Match { scrutinee, arms } => {
                 self.expr(scrutinee);
                 for arm in arms.iter_mut() {
                     self.pattern(&mut arm.pattern);
+                    self.push_scope(arm.pattern.binding_names());
                     if let Some(g) = arm.guard.as_mut() {
                         self.expr(g);
                     }
                     self.expr(&mut arm.body);
+                    self.pop_scope();
                 }
             }
             ExprKind::MethodCall {
@@ -725,7 +1019,10 @@ impl Stripper<'_> {
                         self.ty(t);
                     }
                 }
+                let names = params.iter().flat_map(|p| p.pattern.binding_names());
+                self.push_scope(names.collect());
                 self.expr(body);
+                self.pop_scope();
             }
             ExprKind::Return(opt) | ExprKind::Break { value: opt, .. } => {
                 if let Some(inner) = opt.as_mut() {
