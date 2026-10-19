@@ -5463,6 +5463,39 @@ fn plain_assign_does_not_write_through_a_mut_ref() {
     );
 }
 
+/// B-2026-10-19-33: `extend` consumes its argument, so a bare (borrowed)
+/// `Vec` parameter is refused there as it is by `push`, with `.clone()` as
+/// the fix; an owned one is accepted.
+#[test]
+fn extend_cannot_consume_a_borrowed_collection() {
+    rejected_then_fixed(
+        "extend-borrowed-param",
+        "fn tagged(tag: Str, rest: Vec[String]) -> Vec[String] {\n\
+             let mut v = vec![tag.to_string()];\n\
+             v.extend(rest);\n\
+             v\n\
+         }\n\
+         fn main() {\n\
+             let r = tagged(\"a\", vec![\"b\".to_string()]);\n\
+             println(f\"{r.len()}\");\n\
+         }\n",
+        "`extend` consumes its argument, and this is a borrowed 'Vec[String]'",
+    );
+    accepted_and_runs(
+        "extend-owned-param",
+        "fn tagged(tag: Str, rest: own Vec[String]) -> Vec[String] {\n\
+             let mut v = vec![tag.to_string()];\n\
+             v.extend(rest);\n\
+             v\n\
+         }\n\
+         fn main() {\n\
+             let r = tagged(\"a\", vec![\"b\".to_string()]);\n\
+             println(f\"{r.len()} {r[1]}\");\n\
+         }\n",
+        "2 b\n",
+    );
+}
+
 /// B-2026-10-15-106 (design.md § Collection literals): a bare `[v; n]` always
 /// builds an `Array`. A constant count gives an `Array[T, n]`; a count that is
 /// not a constant, and a `[v; n]` where a `Vec` is wanted, are refused with

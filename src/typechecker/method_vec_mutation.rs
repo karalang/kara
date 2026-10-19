@@ -23,7 +23,8 @@ use crate::ast::*;
 
 use super::inference::{resolve_type_var_top, resolve_type_vars, unify_types};
 use super::types::{type_display, IntSize, Type};
-use super::TypeErrorKind;
+use super::{FixIt, TypeErrorKind};
+use crate::token::Span;
 use std::collections::HashMap;
 
 impl<'a> super::TypeChecker<'a> {
@@ -379,6 +380,17 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = element_ty {
                 let arg_ty = self.infer_expr(&args[0].value);
+                // B-2026-10-19-33 — `extend` consumes its argument, so a
+                // borrowed collection (a bare `Vec[T]` parameter, D5) cannot
+                // be handed to it, as it cannot be to `push`.
+                if method == "extend" && self.cli_lint_overrides.strict_core {
+                    if let Type::Ref(inner) | Type::MutRef(inner) = &arg_ty {
+                        if self.type_cannot_leave_a_borrowed_place(inner) {
+                            self.reject_extend_from_a_borrow(&args[0].value, inner);
+                            return Some(Type::Unit);
+                        }
+                    }
+                }
                 // Peel one layer of Ref/MutRef from the source — the
                 // arg may arrive as `ref Slice[T]` / `ref Vec[T]` /
                 // `mut Slice[T]` depending on the call site.
@@ -630,6 +642,45 @@ impl<'a> super::TypeChecker<'a> {
     /// an iterator chain (`v.iter().cloned()`), a range, a library
     /// collection (`Set`, `VecDeque`, a map's `(K, V)` entries), or a type
     /// with its own `Iterator` impl. `None` when the source is none of those.
+    /// `v.extend(rest)` with `rest` borrowed: refused, with `.clone()` as the
+    /// fix where the collection can be copied (B-2026-10-19-33).
+    fn reject_extend_from_a_borrow(&mut self, arg: &Expr, inner: &Type) {
+        let shown = type_display(inner);
+        let postfix = matches!(
+            arg.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::Path { .. }
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::TupleIndex { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+        );
+        let message = format!(
+            "`extend` consumes its argument, and this is a borrowed '{shown}': a borrowed \
+             value cannot be moved out of what it borrows. Take an owned copy with \
+             `.clone()`, or take the parameter by value with `own`"
+        );
+        if postfix && self.type_supports_clone(inner) {
+            self.type_error_with_fix_it(
+                message,
+                arg.span,
+                TypeErrorKind::TypeMismatch,
+                FixIt {
+                    span: Span {
+                        line: arg.span.line,
+                        column: arg.span.column,
+                        offset: arg.span.offset + arg.span.length,
+                        length: 0,
+                    },
+                    replacement: ".clone()".to_string(),
+                },
+            );
+        } else {
+            self.type_error(message, arg.span, TypeErrorKind::TypeMismatch);
+        }
+    }
+
     fn extend_item_type(&mut self, src: &Type) -> Option<Type> {
         match src {
             Type::Named { name, args } if name == "Iterator" && args.len() == 1 => {
