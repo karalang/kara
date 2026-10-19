@@ -314,6 +314,10 @@ pub struct TyCtxt {
     /// Each return-position `impl Trait`'s one concrete type, by the
     /// existential's origin: the type a value of it lowers to.
     witnesses: RefCell<FxHashMap<crate::resolver::SpanKey, Type>>,
+    /// Each concrete projection the MIR builder has normalized
+    /// (`VecIter[i64].Item` → `i64`), so a generic ADT's field typed
+    /// `I.Item` instantiates to the binding (B-2026-10-18-23).
+    projs: RefCell<FxHashMap<Ty, Ty>>,
 }
 
 impl Default for TyCtxt {
@@ -329,7 +333,14 @@ impl TyCtxt {
             names: Interner::new(),
             adts: RefCell::new(FxHashMap::default()),
             witnesses: RefCell::new(FxHashMap::default()),
+            projs: RefCell::new(FxHashMap::default()),
         }
+    }
+
+    /// Record that the projection `proj` normalizes to `to`; `subst`
+    /// then answers it with `to`.
+    pub fn record_proj(&self, proj: Ty, to: Ty) {
+        self.projs.borrow_mut().insert(proj, to);
     }
 
     /// Record the concrete types return-position `impl Trait`s stand for.
@@ -570,11 +581,14 @@ impl TyCtxt {
                 base,
                 assoc,
                 trait_,
-            } => TyKind::Proj {
-                base: self.subst(base, args, const_args),
-                assoc,
-                trait_,
-            },
+            } => {
+                let p = self.intern(TyKind::Proj {
+                    base: self.subst(base, args, const_args),
+                    assoc,
+                    trait_,
+                });
+                return self.projs.borrow().get(&p).copied().unwrap_or(p);
+            }
             _ => return ty,
         };
         self.intern(new)

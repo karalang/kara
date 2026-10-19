@@ -218,6 +218,9 @@ pub fn lower_program_with_library<'a>(
         variants: FxHashMap::default(),
         generic_drops: FxHashMap::default(),
         registered: FxHashSet::default(),
+        proj_adts: FxHashSet::default(),
+        proj_instances: FxHashSet::default(),
+        keep_param_projs: false,
         capture_modes,
         next_closure: defs.table.len() as u32,
         closures: FxHashMap::default(),
@@ -531,6 +534,14 @@ struct Lcx<'a> {
     variants: FxHashMap<DefId, (DefId, u32)>,
     /// ADTs whose definition (and `Drop` body) has been registered.
     registered: FxHashSet<DefId>,
+    /// Generic ADTs with a field typed by a projection of a parameter
+    /// (`prev: Option[I.Item]`), whose instances normalize it, and the
+    /// instances done (B-2026-10-18-23).
+    proj_adts: FxHashSet<DefId>,
+    proj_instances: FxHashSet<Ty>,
+    /// Registering an ADT's fields: a projection of a parameter stays
+    /// one, to be normalized at each instance.
+    keep_param_projs: bool,
     /// The `drop` method of each generic ADT with a `Drop` body, which is
     /// instantiated for each instance of the type.
     generic_drops: FxHashMap<DefId, DefId>,
@@ -1335,6 +1346,16 @@ impl<'a> Lcx<'a> {
                     } else {
                         HK::Adt { def, args }
                     };
+                    // Its fields typed by a projection, normalized for
+                    // this instance (B-2026-10-18-23).
+                    if self.proj_adts.contains(&def)
+                        && !targs.iter().any(|&t| has_param(&self.tys, t))
+                    {
+                        let ty = self.tys.tcx().intern(new);
+                        if self.proj_instances.insert(ty) {
+                            self.normalize_field_projs(def, &targs)?;
+                        }
+                    }
                     // A generic type's `Drop` body, for this instance.
                     if let Some(&d) = self.generic_drops.get(&def) {
                         let concrete = !targs.iter().any(|&t| has_param(&self.tys, t));
@@ -1374,11 +1395,20 @@ impl<'a> Lcx<'a> {
             HK::Ref(t) => HK::Ref(self.convert(t)?),
             HK::MutRef(t) => HK::MutRef(self.convert(t)?),
             HK::Opaque { .. } => return Err("an iterator value".into()),
+            HK::Proj { base, .. } if self.keep_param_projs && has_param(&self.tys, base) => {
+                return Ok(ty)
+            }
             HK::Proj {
                 base,
                 assoc,
                 trait_,
-            } => return self.normalize_proj(base, assoc, trait_),
+            } => {
+                let to = self.normalize_proj(base, assoc, trait_)?;
+                if !has_param(&self.tys, base) {
+                    self.tys.tcx().record_proj(ty, to);
+                }
+                return Ok(to);
+            }
             HK::Error => return Err("a type that failed to check".into()),
             HK::Weak(t) => HK::Weak(self.convert(t)?),
             HK::Fn {
@@ -1402,6 +1432,27 @@ impl<'a> Lcx<'a> {
             other => other,
         };
         Ok(self.tys.tcx().intern(new))
+    }
+
+    /// Normalize each projection in `def`'s field types at `args`, so
+    /// `field_ty` answers with its binding (B-2026-10-18-23).
+    fn normalize_field_projs(&mut self, def: DefId, args: &[Ty]) -> Result<(), String> {
+        let Some(adt) = self.tys.tcx().adt_def(def) else {
+            return Ok(());
+        };
+        let mut projs = Vec::new();
+        for v in &adt.variants {
+            for &(_, t) in &v.fields {
+                collect_param_projs(&self.tys, t, &mut projs);
+            }
+        }
+        for p in projs {
+            let p = self.tys.tcx().subst(p, args, &[]);
+            if matches!(self.tys.tcx().kind(p), HK::Proj { .. }) {
+                self.convert(p)?;
+            }
+        }
+        Ok(())
     }
 
     /// `base.assoc` at an instance: the binding of `assoc` in the impl for
@@ -1563,7 +1614,14 @@ impl<'a> Lcx<'a> {
             let mut fs = Vec::new();
             for (fname, fty) in fields {
                 let hir = self.lower_legacy(fty, &generics, None)?;
-                fs.push((fname.clone(), self.convert(hir)?));
+                let keep = std::mem::replace(&mut self.keep_param_projs, true);
+                let t = self.convert(hir);
+                self.keep_param_projs = keep;
+                let t = t?;
+                if has_param_proj(&self.tys, t) {
+                    self.proj_adts.insert(def);
+                }
+                fs.push((fname.clone(), t));
             }
             if is_enum {
                 if let Some(v) = self.defs.variant(def, vname) {
@@ -1645,6 +1703,40 @@ impl<'a> Lcx<'a> {
     }
 }
 
+/// Whether `t` holds a projection of a generic parameter (`I.Item`).
+fn has_param_proj(tys: &TyInterner, t: Ty) -> bool {
+    let mut v = Vec::new();
+    collect_param_projs(tys, t, &mut v);
+    !v.is_empty()
+}
+
+/// The projections of a generic parameter in `t`, innermost last.
+fn collect_param_projs(tys: &TyInterner, t: Ty, out: &mut Vec<Ty>) {
+    let tcx = tys.tcx();
+    match tcx.kind(t) {
+        HK::Proj { base, .. } => {
+            if has_param(tys, base) {
+                out.push(t);
+            }
+        }
+        HK::Adt { args, .. } | HK::Shared { args, .. } | HK::Intrinsic { args, .. } => {
+            for a in tcx.list(args) {
+                collect_param_projs(tys, a, out);
+            }
+        }
+        HK::Tuple(l) => {
+            for a in tcx.list(l) {
+                collect_param_projs(tys, a, out);
+            }
+        }
+        HK::Ref(i) | HK::MutRef(i) | HK::Weak(i) => collect_param_projs(tys, i, out),
+        HK::Array { elem, .. } | HK::Slice { elem, .. } | HK::Vector { elem, .. } => {
+            collect_param_projs(tys, elem, out)
+        }
+        _ => {}
+    }
+}
+
 /// Whether `t` still names a generic parameter.
 fn has_param(tys: &TyInterner, t: Ty) -> bool {
     let tcx = tys.tcx();
@@ -1658,6 +1750,7 @@ fn has_param(tys: &TyInterner, t: Ty) -> bool {
         HK::Array { elem, .. } | HK::Slice { elem, .. } | HK::Vector { elem, .. } => {
             has_param(tys, elem)
         }
+        HK::Proj { base, .. } => has_param(tys, base),
         _ => false,
     }
 }
