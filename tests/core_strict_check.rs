@@ -5463,6 +5463,47 @@ fn plain_assign_does_not_write_through_a_mut_ref() {
     );
 }
 
+/// B-2026-10-19-42 (core-semantics §4.6): a struct pattern over a `shared
+/// struct` is irrefutable, as over a plain one, and a binding through the
+/// handle borrows rather than moves.
+#[test]
+fn a_shared_struct_pattern_is_exhaustive() {
+    accepted_and_runs(
+        "shared-struct-pattern-exhaustive",
+        "shared struct H { name: String, n: i64 }\n\
+         fn main() {\n\
+             let h = H { name: \"n\".to_string(), n: 2 };\n\
+             match h {\n\
+                 H { name, n } => println(f\"{name} {n}\"),\n\
+             }\n\
+         }\n",
+        "n 2\n",
+    );
+    rejected(
+        "shared-struct-pattern-refutable",
+        "shared struct H { name: String, n: i64 }\n\
+         fn main() {\n\
+             let h = H { name: \"n\".to_string(), n: 2 };\n\
+             match h {\n\
+                 H { n: 1, .. } => println(\"one\"),\n\
+             }\n\
+         }\n",
+        "non-exhaustive match",
+    );
+    rejected(
+        "shared-struct-pattern-move",
+        "shared struct H { name: String }\n\
+         fn take(s: own String) { println(s); }\n\
+         fn main() {\n\
+             let h = H { name: \"n\".to_string() };\n\
+             match h {\n\
+                 H { name } => take(name),\n\
+             }\n\
+         }\n",
+        "cannot move 'name'",
+    );
+}
+
 /// B-2026-10-19-60 (design.md § Collection literals): `[:]` is the empty
 /// map, typed from what is expected, and a map literal is a `SortedMap`
 /// where one is expected.

@@ -1385,6 +1385,11 @@ fn enumerate_ctors(ty: &Type, env: &TypeEnv) -> Option<Vec<PatCtor>> {
         // Exhaustiveness > Array[T, N]. Non-literal N is rejected upstream
         // (typechecker) and routes through the default-matrix path.
         Type::Array { size, .. } => size.as_usize().map(|n| vec![PatCtor::Array(n)]),
+        // A `shared struct` has the one constructor a plain struct has
+        // (core-semantics §4.6, B-2026-10-19-42).
+        Type::Shared(name) if env.structs.contains_key(name) => {
+            Some(vec![PatCtor::Struct(name.clone())])
+        }
         Type::Named { name, .. } => {
             if let Some(info) = env.enums.get(name) {
                 Some(
