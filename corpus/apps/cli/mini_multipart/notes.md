@@ -65,7 +65,8 @@ Compiler gaps:
 - `fs.write_bytes(path, Vec.new())` is refused with "expected
   'Slice[u8]', found 'Vec[?T]'": an unsolved `Vec.new()` is not pinned by
   a `Slice[T]` parameter, although B-2026-10-06-124 made a `Vec[T]`
-  parameter pin it (B-2026-10-19-1, Thread A). Worked around with an
-  annotated `let empty: Vec[u8]`.
+  parameter pin it (B-2026-10-19-1, Thread A). This was worked around with
+  an annotated `let empty: Vec[u8]` until ecb1a0322e fixed it; the program
+  now passes `Vec.new()` directly.
 
 Written 2026-10-19 by the real-world apps thread; karac at b6761f33ac.

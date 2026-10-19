@@ -1675,8 +1675,7 @@ impl Upload {
             };
             let fname = if keep_ext { concat(base, ext) } else { base };
             let path = path_join(dir, fname);
-            let empty: Vec[u8] = Vec.new();
-            if let Err(_) = fs.write_bytes(from_latin1(path), empty) {
+            if let Err(_) = fs.write_bytes(from_latin1(path), Vec.new()) {
                 return Err(py_err("FileError", f"Error opening temporary file: {bytes_repr(path)}"));
             }
             self.actual_file_name = Some(fname);
@@ -1695,8 +1694,7 @@ impl Upload {
             None => "data/tmp".to_string(),
         };
         let path = f"{dir}/tmp{self.tmp_id}{suffix}";
-        let empty: Vec[u8] = Vec.new();
-        if let Err(_) = fs.write_bytes(path.clone(), empty) {
+        if let Err(_) = fs.write_bytes(path.clone(), Vec.new()) {
             return Err(py_err("FileError", "Error creating named temporary file".to_string()));
         }
         self.temporary = true;
