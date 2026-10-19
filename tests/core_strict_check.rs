@@ -4931,6 +4931,47 @@ fn a_library_helper_does_not_meet_a_program_item_of_its_name() {
     );
 }
 
+/// B-2026-10-19-4: a nested `if` (or `match`) made only of string literals
+/// takes the `Str` of a sibling arm or branch, as a bare literal does.
+#[test]
+fn a_literal_only_nested_if_takes_a_sibling_str() {
+    accepted_and_runs(
+        "literal-nested-if-str",
+        r#"fn step(b: u8) -> Str { "x" }
+fn pair(b: u8) -> (i64, Str) { (0, "y") }
+fn main() {
+    let x = "hello".to_string();
+    for b in [0u8, 5u8, 200u8] {
+        let reason = match b { 0 => step(b), _ => if b < 128 { "" } else { "bad" } };
+        let t = match b { 0 => pair(b), _ => if b < 128 { (1, "") } else { (-1, "bad") } };
+        let r2 = if b > 3 { x.as_str() } else if b > 2 { "a" } else { "b" };
+        println(f"[{reason}] {t.0} [{t.1}] {r2}");
+    }
+}
+"#,
+        "[x] 0 [y] b\n[] 1 [] hello\n[bad] -1 [bad] hello\n",
+    );
+}
+
+/// B-2026-10-19-5: `Vec.join` takes a `Str` separator, as
+/// docs/library/collections.md gives it.
+#[test]
+fn vec_join_takes_a_str_separator() {
+    accepted_and_runs(
+        "vec-join-str-sep",
+        r#"fn glue(lines: ref Vec[String], sep: Str) -> String { lines.join(sep) }
+fn main() {
+    let v = vec!["a".to_string(), "b".to_string()];
+    println(glue(v, ", "));
+    let s = "+".to_string();
+    let parts: Vec[Str] = "x,y".split(",").collect();
+    println(parts.join(s.as_str()));
+}
+"#,
+        "a, b\nx+y\n",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.

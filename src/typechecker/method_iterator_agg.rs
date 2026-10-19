@@ -292,8 +292,12 @@ impl<'a> super::TypeChecker<'a> {
                     return Some(Type::Str);
                 }
                 if method == "join" {
+                    // `sep: Str`, as docs/library/collections.md gives it; a
+                    // `String` lends one (B-2026-10-19-5).
                     let sep_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&Type::Str, &sep_ty, args[0].value.span);
+                    if !super::stdlib_seq::is_str_like(&sep_ty) {
+                        self.check_assignable(&Type::Str, &sep_ty, args[0].value.span);
+                    }
                 }
                 return Some(Type::Str);
             }

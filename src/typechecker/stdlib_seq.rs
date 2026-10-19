@@ -21,7 +21,7 @@ use super::TypeErrorKind;
 /// lexer's natural call sites (surfaced by kata-katas #722 remove-comments,
 /// whose `buffer.push_str(name)` with `name: ref String` was rejected by
 /// `karac build` while `karac run` only warned).
-fn is_str_like(ty: &Type) -> bool {
+pub(super) fn is_str_like(ty: &Type) -> bool {
     match ty {
         Type::Str | Type::Error => true,
         // `StringSlice` is a borrowed view over a `String`'s UTF-8 bytes

@@ -3835,6 +3835,26 @@ fn literal_slots_fit(expr: &Expr, ty: &Type, want: &Type) -> bool {
             .final_expr
             .as_deref()
             .is_some_and(|f| literal_slots_fit(f, ty, want)),
+        // A nested `if` or `match` made of literals is one too: `_ => if c {
+        // "" } else { "bad" }` beside a `Str` arm (B-2026-10-19-4).
+        (
+            ExprKind::If {
+                then_block,
+                else_branch: Some(else_expr),
+                ..
+            },
+            _,
+            _,
+        ) => {
+            then_block
+                .final_expr
+                .as_deref()
+                .is_some_and(|f| literal_slots_fit(f, ty, want))
+                && literal_slots_fit(else_expr, ty, want)
+        }
+        (ExprKind::Match { arms, .. }, _, _) => {
+            !arms.is_empty() && arms.iter().all(|a| literal_slots_fit(&a.body, ty, want))
+        }
         _ => false,
     }
 }
@@ -3920,6 +3940,26 @@ impl<'a> super::TypeChecker<'a> {
             (ExprKind::Block(b), _, _) => {
                 if let Some(f) = b.final_expr.as_deref() {
                     self.retype_literal_slots(f, ty, want);
+                }
+            }
+            (
+                ExprKind::If {
+                    then_block,
+                    else_branch: Some(else_expr),
+                    ..
+                },
+                _,
+                _,
+            ) => {
+                if let Some(f) = then_block.final_expr.as_deref() {
+                    self.retype_literal_slots(f, ty, want);
+                }
+                self.record_expr_type(&then_block.span, want);
+                self.retype_literal_slots(else_expr, ty, want);
+            }
+            (ExprKind::Match { arms, .. }, _, _) => {
+                for arm in arms {
+                    self.retype_literal_slots(&arm.body, ty, want);
                 }
             }
             _ => {}
