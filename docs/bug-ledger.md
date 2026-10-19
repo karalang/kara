@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 282 |
 | codegen-gap | 274 |
 | false-positive | 241 |
-| perf | 176 |
+| perf | 177 |
 | other | 175 |
 | diagnostics | 172 |
 | crash | 124 |
@@ -112,11 +112,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2949 |
 | interp | 964 |
-| typecheck | 489 |
+| typecheck | 490 |
 | ownership | 116 |
 | other | 115 |
+| cli | 79 |
 | runtime | 78 |
-| cli | 78 |
 | parser | 69 |
 | autopar | 59 |
 | resolver | 47 |
@@ -160,14 +160,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-18-51 | 2026-10-18 | codegen | medium | The MIR pre-size pass (`src/mir/presize.rs`) reserves room only for a `while i < n` counting loop, not a `for` loop: `let mut v: Vec[i64] = Vec.new(); for _ in 0..26 { v.push(0); }` allocates four times (4, 8, 16, 32 elements) under `karac build --mir` where the `while` spelling and legacy `karac build` allocate once (26), so kata 748's bench, which builds a 26-slot count this way per word, is 3.3x legacy | — |
 | B-2026-10-18-52 | 2026-10-18 | codegen | medium | A bare list literal used only to be walked or read, `for step in [1, 9] { .. }` or `let steps = [1, 9]; steps[0] + steps[1]`, heap-allocates a `Vec` every time it is evaluated under `karac build --mir`, where legacy `karac build` keeps it on the stack (B-2026-10-02-70's fix): 1,000,008 allocations against 9 for a million evaluations, so kata 752's bench, which walks `[1, 9]` four times per visited lock setting, is 2.5x legacy | — |
 | B-2026-10-18-53 | 2026-10-18 | interp+codegen | high | `opt ?? ""` with `opt: Option[ref String]` (a `Map[String, String].get(k)`) takes the literal fallback as the reference itself rather than a reference to it: when `opt` is `None`, the first read of the result crashes on every MIR surface, `deref of non-reference Box` under `__mir-run` and a SEGV at address 0x8 under `build --mir` and `__mir-llvm-asan`; `karac check` passes it and suggests exactly this spelling for the empty default, and `.unwrap_or("")` is right | — |
-| B-2026-10-19-7 | 2026-10-19 | ownership | medium | `karac check` passes a `ref` copied out of a collection and used after that collection is mutated, which every MIR surface refuses as a borrow conflict: `let before = m.get(1).unwrap_or(0); m.insert(1, 6); println(f"{before}")` over a `Map[i64, i64]`, and `match v.last() { Some(top) => { let largest = top; v.pop(); v.push(largest); } None => {} }` over a `Vec[i64]`. Both bindings are `ref i64` (design.md line 397 and core-semantics.md §5.10: an unannotated `let` keeps the reference), so the MIR borrow checker is right and check is the one that misses it; the MIR message also names the collection `_1` rather than `m` or `v` | — |
 | B-2026-10-19-10 | 2026-10-19 | resolver | low | A gated library module's TYPE the import did not list still collides with a program's own type of the same name: `import std.time.{sleep};` beside a program's `struct Duration { n: i64 }` is refused with "'Duration' is already defined in this scope", because the splice copies `sleep`'s `Duration` into the program's scope under its own name; B-2026-10-18-54 made unlisted helper FUNCTIONS private and left types out | — |
 | B-2026-10-19-13 | 2026-10-19 | typecheck+interp | low | An owned local assigned to a local bound to a borrow (`let mut out = s; out = t;` with `s` a borrowed param and `t` an owned `String`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR); `out = ref t` works | — |
 | B-2026-10-19-14 | 2026-10-19 | typecheck | low | A closure over a NAMED value iterator still takes `*c` on a Copy item: `let it = w.chars(); it.filter(|c| *c == 'Q')` checks and prints 2, though core-semantics.md §5.10 makes `c` a copy; 448e8fb927 keys the copy rule on the receiver chain's syntax (a range, `chars()`, `map`, ...), which a variable does not show | — |
 | B-2026-10-19-15 | 2026-10-19 | ownership | medium | `let v = r;` with `r: mut ref i64` passes `karac check`, and every MIR surface refuses it at borrow check: `fn take(counter: mut ref i64) -> i64 { let v = counter; *counter += 1; v }` is `All checks passed.` and then E0516 "read of (*_1) while it is borrowed mutably" on `__mir-run` and `__mir-llvm-run` | — |
 | B-2026-10-19-16 | 2026-10-19 | typecheck | low | Plain `=` to a `mut ref i64` binding writes through on every surface, where design.md says it does not: `fn inc(counter: mut ref i64) { counter = counter + 1; }` passes `karac check` and leaves the caller's value at 1 on `__mir-run` and `__mir-llvm-run`, against design.md "Plain `=` does not auto-deref: write `*x = v`" | — |
 | B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
-| B-2026-10-19-18 | 2026-10-19 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program (E0516) | — |
+| B-2026-10-19-21 | 2026-10-19 | typecheck+cli | low | `karac check` typechecks the Kāra library's bodies a second time for its MIR borrow check (9ee80c0104), so a small program's check takes about 1.1 s instead of 0.2 s in a debug build; lowering the program's own bodies against the library's signatures, or reusing check's typecheck, would avoid it | — |
 
 ### Relocated
 
@@ -4196,10 +4195,12 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-4 | typecheck | low | A literal-only nested if (or else-if chain) is not coerced to Str when unified with a Str arm or branch: `match b { 0 => step(b), _ => if b < 128 { "… | f5161d0f48 |
 | B-2026-10-19-5 | typecheck | low | Vec[String].join refuses a Str separator ('expected String, found Str'), though docs/library/collections.md gives `fn join(self, sep: Str)`; a String… | f5161d0f48 |
 | B-2026-10-19-6 | interp+codegen | medium | MIR borrowck keeps a Vec[Str] collected from s.split(..) borrowing s until scope end, so a later `s = ...` is refused (E0516 'drop of _1 while it is… | f14ea9ac21 |
+| B-2026-10-19-7 | ownership | medium | `karac check` passes a `ref` copied out of a collection and used after that collection is mutated, which every MIR surface refuses as a borrow confli… | 9ee80c0104 |
 | B-2026-10-19-8 | typecheck | medium | `x.clone()` on a value of a projection type (`x: I.Item` under `where I.Item: Clone`) is typed as an error type that check accepts: `let p: bool = x.… | 1d29b085c3 |
 | B-2026-10-19-9 | typecheck | low | A `Vec.new()` inside a struct literal passed to a generic function is not pinned by the expected type of the call: `let h: Holder[Bag[String]] = hold… | b115567cf2 |
 | B-2026-10-19-11 | typecheck+interp | medium | docs/library/core-types.md promises checked/wrapping/saturating/overflowing integer methods for div, rem, neg, shl, shr and pow, and a method `x.tota… | 741dfefc06 |
 | B-2026-10-19-12 | typecheck | low | A misspelled `Vec` method (`v.lenn()`, `v.length()`, `v.size()`) gets no did-you-mean: the Vec surface has no name list for the suggestion to search | ae3b8d5e51 |
+| B-2026-10-19-18 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program… | 9ee80c0104 |
 | B-2026-10-19-19 | typecheck | low | "a reference to a temporary outlives its statement" has no `karac fix` edit for `let n = s.substring(..).trim();` or `m.get(k).unwrap_or(Vec.new())`,… | 5d124b94d3 |
 
 </details>
