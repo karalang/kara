@@ -986,6 +986,14 @@ impl<'a> super::TypeChecker<'a> {
             if span.length == 0 || span.column == 0 || span.offset < span.column - 1 {
                 continue;
             }
+            // A type of the appended library or a spliced library module is
+            // not the program's to edit: its span lies past the program's
+            // text, so the edit would land in some other file
+            // (B-2026-10-19-17).
+            let library = self.program.library_start.unwrap_or(usize::MAX);
+            if span.offset >= library.min(crate::prelude::gated_span_base(0)) {
+                continue;
+            }
             let may_copy = !generic && !drops.contains(name);
             cands.push((
                 name,

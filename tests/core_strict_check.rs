@@ -5358,6 +5358,65 @@ fn a_library_type_does_not_meet_a_program_type_of_its_name() {
     );
 }
 
+/// B-2026-10-19-15: `let v = counter;` with `counter: mut ref i64` reborrows
+/// (a `mut ref` is not `Copy`, core-semantics.md §1.1), so a use of
+/// `counter` while `v` is live is refused, and the error names the use's
+/// line rather than the `let`'s.
+#[test]
+fn a_use_of_a_reborrowed_mut_ref_is_refused_at_the_use() {
+    rejected(
+        "reborrowed-mut-ref-use",
+        "fn take(counter: mut ref i64) -> i64 {\n\
+             let v = counter;\n\
+             *counter += 1;\n\
+             v\n\
+         }\n\
+         fn main() {\n\
+             let mut c = 5;\n\
+             let got = take(mut c);\n\
+             println(f\"{got} {c}\");\n\
+         }\n",
+        ":3:1: cannot read `counter` while `v` still holds a borrow of it, taken at 2:9",
+    );
+    accepted_and_runs(
+        "reborrowed-mut-ref-copy",
+        "fn take(counter: mut ref i64) -> i64 {\n\
+             let v = *counter;\n\
+             *counter += 1;\n\
+             v\n\
+         }\n\
+         fn main() {\n\
+             let mut c = 5;\n\
+             let got = take(mut c);\n\
+             println(f\"{got} {c}\");\n\
+         }\n",
+        "5 6\n",
+    );
+}
+
+/// B-2026-10-19-17: a library type is not offered a `#[derive(Clone)]`, whose
+/// edit would land outside the program's file, so `karac fix` applies the
+/// `.collect()` fixes of an uncollected iterator reused in a loop instead of
+/// aborting the whole file.
+#[test]
+fn fix_collects_an_iterator_reused_in_a_loop() {
+    rejected_then_fixed_by(
+        "fix-library-derive",
+        "fn main() {\n\
+             let text = String.from(\"zero one two\");\n\
+             let names = text.split_whitespace();\n\
+             for i in 0..2 {\n\
+                 println(f\"{names[i]}\");\n\
+                 for w in names {\n\
+                     println(f\"{w}\");\n\
+                 }\n\
+             }\n\
+         }\n",
+        "is moved inside a loop",
+        "let names: Vec[Str] = text.split_whitespace().collect();",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.

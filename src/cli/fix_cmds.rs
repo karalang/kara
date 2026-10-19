@@ -265,7 +265,26 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
         println!("(no fixable diagnostics in {filename})");
         return;
     }
-    let deduped = dedupe_fixes(fixes.edits);
+    let mut deduped = dedupe_fixes(fixes.edits);
+    // An edit that points past the end of this file belongs to no text here;
+    // it is skipped, and the file's other edits still apply (B-2026-10-19-17).
+    deduped.retain(|(_, e)| {
+        let inside = e
+            .offset
+            .checked_add(e.length)
+            .is_some_and(|end| end <= source.len());
+        if !inside {
+            eprintln!(
+                "warning: skipping a fix at byte {} that lies outside {filename}",
+                e.offset
+            );
+        }
+        inside
+    });
+    if deduped.is_empty() {
+        println!("(no fixable diagnostics in {filename})");
+        return;
+    }
 
     if dry_run {
         println!("would apply {} fix(es) to {filename}:", deduped.len());
