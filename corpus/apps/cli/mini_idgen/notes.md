@@ -64,10 +64,6 @@ printable except U+00AD, which is right for every string the jobs print
 but is not Python's full `isprintable` table. A hashids decode that would
 need a number above the i128 range gives `()`; no job reaches it.
 
-One workaround: the MIR interpreter orders u128 values as if they were
-signed (B-2026-10-19-22), so the sort job sorts UUIDs with its own
-insertion sort on `<`.
-
 ## License
 
 hashids is under the MIT license in `LICENSE-hashids`:

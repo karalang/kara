@@ -1936,19 +1936,7 @@ fn run_sort(j: ref J) {
     for u in us.iter() {
         ints.push(u.int);
     }
-    // An insertion sort on `<`, because the MIR interpreter sorts u128
-    // values as if they were signed (B-2026-10-19-22).
-    let mut i = 1;
-    while i < ints.len() {
-        let x = ints[i];
-        let mut k = i;
-        while k > 0 and x < ints[k - 1] {
-            ints[k] = ints[k - 1];
-            k -= 1;
-        }
-        ints[k] = x;
-        i += 1;
-    }
+    ints.sort();
     let mut distinct = 0;
     let mut k = 0;
     while k < ints.len() {
