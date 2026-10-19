@@ -345,6 +345,40 @@ impl super::Parser {
                     continue;
                 }
                 Token::QuestionDot => {
+                    // B-2026-10-19-30 — `?` is postfix, so `f()?.0` is
+                    // `(f()?).0` (design.md § Results and propagation). The
+                    // lexer makes one `?.` token, and a plain name after it
+                    // stays a chain step that `question_chain` splits for
+                    // the v2 pipeline. Anything else (a tuple index, a
+                    // keyword member such as `.await`) is split here: the
+                    // `?` becomes its node and the token a `.` that the
+                    // `Dot` arm then reads.
+                    let named = matches!(
+                        self.tokens.get(self.pos + 1).map(|t| &t.token),
+                        Some(Token::Identifier { .. })
+                    );
+                    if !named {
+                        let q_span = self.current_span();
+                        let end = q_span.offset + 1;
+                        lhs = Expr {
+                            id: crate::ids::NodeId::DUMMY,
+                            span: Span {
+                                line: lhs.span.line,
+                                column: lhs.span.column,
+                                offset: lhs.span.offset,
+                                length: end.saturating_sub(lhs.span.offset),
+                            },
+                            kind: ExprKind::Question(Box::new(lhs)),
+                        };
+                        self.tokens[self.pos].token = Token::Dot;
+                        self.tokens[self.pos].span = Span {
+                            column: q_span.column + 1,
+                            offset: end,
+                            length: 1,
+                            ..q_span
+                        };
+                        continue;
+                    }
                     self.advance();
                     let member_span = self.current_span();
                     let field_or_method = self.expect_identifier()?;

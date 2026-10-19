@@ -5632,3 +5632,41 @@ fn main() {
         }
     }
 }
+
+/// `?` is postfix, so a tuple index straight after it reads the
+/// propagated value: `h()?.1.0` is `(h()?).1.0`, on a `Result` and an
+/// `Option`, and a `None` returns early (B-2026-10-19-30). It was a parse
+/// error, "Expected identifier, found Integer(0, None)".
+#[test]
+fn mir_question_then_tuple_index() {
+    const SRC: &str = r#"fn h() -> Result[(i64, (i64, i64)), String] { Ok((4, (5, 6))) }
+fn k() -> Option[(String, i64)] { Some(("ab".to_string(), 2)) }
+fn run() -> Result[i64, String] {
+    let y = h()?.1.0;
+    let z = h()?.0;
+    Ok(y * 10 + z)
+}
+fn opt() -> Option[i64] {
+    let n = k()?.1;
+    let w = k()?.0.len();
+    Some(n * 10 + w as i64)
+}
+fn none() -> Option[i64] {
+    let p: Option[(i64, i64)] = None;
+    let n = p?.0;
+    Some(n + 100)
+}
+fn main() {
+    match run() { Ok(v) => println(f"{v}"), Err(e) => println(e) }
+    println(f"{opt().unwrap_or(-1)} {none().is_none()}");
+}
+"#;
+    let want = "54\n22 true\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

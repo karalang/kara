@@ -16556,3 +16556,42 @@ fn postfix_on_a_parenthesized_block_like_statement() {
         .errors
         .is_empty());
 }
+
+/// B-2026-10-19-30 — `?.` followed by a tuple index is the `?` and then a
+/// `.`: `f()?.0` is `TupleIndex(Question(f()), 0)`, the `?` spanning
+/// `f()?` and the projection the whole text. A name after `?.` still parses
+/// as the chain step the v2 pipeline splits.
+#[test]
+fn test_question_then_tuple_index() {
+    let source = "fn m() {\n    let a = f()?.0;\n    let b = f()?.1.0;\n    let c = f()?.x;\n}";
+    let prog = parse_ok(source);
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected a function")
+    };
+    let value = |i: usize| match &f.body.stmts[i].kind {
+        StmtKind::Let { value, .. } => value.clone(),
+        other => panic!("expected a let, got {other:?}"),
+    };
+    let text = |s: &karac::token::Span| source[s.offset..s.offset + s.length].to_string();
+    let a = value(0);
+    let ExprKind::TupleIndex { object, index: 0 } = &a.kind else {
+        panic!("expected a tuple index, got {:?}", a.kind)
+    };
+    assert!(matches!(object.kind, ExprKind::Question(_)));
+    assert_eq!(text(&object.span), "f()?");
+    assert_eq!(text(&a.span), "f()?.0");
+    let b = value(1);
+    let ExprKind::TupleIndex { object, index: 0 } = &b.kind else {
+        panic!("expected a tuple index, got {:?}", b.kind)
+    };
+    let ExprKind::TupleIndex {
+        object: inner,
+        index: 1,
+    } = &object.kind
+    else {
+        panic!("expected a tuple index, got {:?}", object.kind)
+    };
+    assert!(matches!(inner.kind, ExprKind::Question(_)));
+    assert_eq!(text(&b.span), "f()?.1.0");
+    assert!(matches!(value(2).kind, ExprKind::OptionalChain { .. }));
+}
