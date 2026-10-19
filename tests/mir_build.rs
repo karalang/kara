@@ -5845,3 +5845,51 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_a_none_borrowed_for_a_ref_option_parameter_is_option_none() {
+    // B-2026-10-19-31: a user enum with a `None` variant made the bare
+    // `None` handed to a `ref Option[T]` parameter build `Option.Some {}`.
+    let src = r#"
+enum V {
+    None,
+    Int(i64),
+}
+
+fn f(x: ref Option[i64]) -> i64 {
+    match x {
+        Some(n) => *n,
+        None => -1,
+    }
+}
+
+fn name(x: ref Option[String]) -> String {
+    match x {
+        Some(s) => s.clone(),
+        None => "none".to_string(),
+    }
+}
+
+fn v(x: ref V) -> i64 {
+    match x {
+        V.None => 0,
+        V.Int(n) => *n,
+    }
+}
+
+fn main() {
+    println(f"{f(None)} {f(Some(4))}");
+    println(name(None));
+    println(name(Some("w".to_string())));
+    println(f"{v(V.None)} {v(V.Int(7))}");
+}
+"#;
+    let want = "-1 4\nnone\nw\n0 7\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

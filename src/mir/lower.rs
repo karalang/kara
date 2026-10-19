@@ -5713,7 +5713,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 t = dt;
                             }
                         }
-                        let idx = self.variant_at(d, t).unwrap_or(idx);
+                        // A `None` handed to a `ref Option[T]` parameter is
+                        // typed by the reference; the enum it names decides
+                        // its variant (B-2026-10-19-31).
+                        let et = match self.tys().tcx().kind(t) {
+                            HK::Ref(inner) | HK::MutRef(inner) => inner,
+                            _ => t,
+                        };
+                        let idx = self.variant_at(d, et).unwrap_or(idx);
                         self.build_variant(t, idx, Vec::new(), dest);
                         Ok(())
                     }
