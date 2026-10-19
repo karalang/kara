@@ -1,0 +1,3691 @@
+// mini_xmltodict: xmltodict 0.13.0 as Ubuntu 24.04 ships it, the library
+// that turns XML into dicts and back for API clients, config loaders and
+// feed readers ("makes working with XML feel like you are working with
+// JSON"). It covers parse() with every option (attribute and text keys,
+// force_cdata, cdata_separator, strip_whitespace, namespace processing and
+// namespace maps, force_list as a tuple, a flag or a function,
+// postprocessors, comments, disable_entities, OrderedDict) and the
+// streaming mode with item_depth and a callback, and unparse() with
+// pretty printing, short empty elements, namespace maps, expand_iter,
+// preprocessors and its name checks.
+//
+// Underneath are the parts of Python and expat it rests on: expat's
+// well-formedness checks with its messages and positions, its namespace
+// processing, its character-data buffering, which is split wherever the
+// default handler xmltodict installs sees markup, and which entities it
+// expands; xml.sax.saxutils' XMLGenerator with escape and quoteattr;
+// repr() of dicts, lists and strings; int(); and json.dumps(indent=2).
+//
+// On top are reports over an S3 bucket listing, an RSS feed, a GPX ride
+// read item by item, a SOAP response and an Android manifest.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through xmltodict itself.
+
+// ---------------------------------------------------------------- chars
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ident_start(c: char) -> bool {
+    c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_ident(c: char) -> bool {
+    is_ident_start(c) or is_digit(c)
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn repeat(c: char, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(c);
+        k += 1;
+    }
+    s
+}
+
+// n >= 0 in the given base, with lower- or upper-case letters.
+fn to_base(n: i64, base: i64, upper: bool) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        let d = m % base;
+        if d < 10 {
+            rev.push(chr(48 + d));
+        } else if upper {
+            rev.push(chr(55 + d));
+        } else {
+            rev.push(chr(87 + d));
+        }
+        m = m / base;
+    }
+    let mut s = String.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 {
+        s.push(rev[k]);
+        k -= 1;
+    }
+    s
+}
+
+// Lower-case hex, zero-padded to at least width digits.
+fn hex(n: i64, width: i64) -> String {
+    let h = to_base(n, 16, false);
+    let n_digits = char_count(h);
+    if n_digits >= width {
+        h
+    } else {
+        f"{repeat('0', width - n_digits)}{h}"
+    }
+}
+
+fn is_hex_char(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' { chr(c as i64 + 32) } else { c }
+}
+
+// ---------------------------------------------------------------- Python's str
+
+// str.isspace, the set str.strip() and int() skip.
+fn is_py_space(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0
+        or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028
+        or n == 0x2029 or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+// str.isprintable, for repr: everything but controls, separators other
+// than the space, and format characters.
+fn is_py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 32 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x2064) or n == 0x3000 or n == 0xfeff {
+        return false;
+    }
+    true
+}
+
+fn py_strip(s: ref String) -> String {
+    let cs = to_chars(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    text(cs, a, b)
+}
+
+fn has_space(s: ref String) -> bool {
+    for c in s.chars() {
+        if is_py_space(c) {
+            return true;
+        }
+    }
+    false
+}
+
+// repr(s).
+fn py_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if is_py_printable(c) {
+            out.push(c);
+        } else if (c as i64) < 0x100 {
+            out.push_str(f"\\x{hex(c as i64, 2)}");
+        } else if (c as i64) < 0x10000 {
+            out.push_str(f"\\u{hex(c as i64, 4)}");
+        } else {
+            out.push_str(f"\\U{hex(c as i64, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+// int(s) for a str: white space around, a sign, then decimal digits with
+// single underscores between them. None where int() raises ValueError.
+fn py_int(s: ref String) -> Option[i64] {
+    let t = to_chars(py_strip(s));
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v: i64 = 0;
+    let mut prev_digit = false;
+    while i < t.len() {
+        if t[i] == '_' {
+            if not prev_digit or i + 1 == t.len() {
+                return None;
+            }
+            prev_digit = false;
+        } else if is_digit(t[i]) {
+            v = v * 10 + (t[i] as i64 - 48);
+            prev_digit = true;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -v } else { v })
+}
+
+fn starts_with(s: ref String, p: ref String) -> bool {
+    s.starts_with(p.as_str())
+}
+
+// s.strip(chars): the characters of `chars` cut from both ends.
+fn strip_chars(s: ref String, chars: ref String) -> String {
+    let cs = to_chars(s);
+    let set = to_chars(chars);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and set.contains(cs[a]) {
+        a += 1;
+    }
+    while b > a and set.contains(cs[b - 1]) {
+        b -= 1;
+    }
+    text(cs, a, b)
+}
+
+// s.rsplit(sep, 1) for a one-character sep, None if sep is not in s.
+fn rsplit1(s: ref String, sep: ref String) -> Option[(String, String)] {
+    let cs = to_chars(s);
+    let sc = to_chars(sep);
+    if sc.len() == 0 {
+        return None;
+    }
+    let n = sc.len();
+    let mut k = cs.len() - n;
+    while k >= 0 {
+        let mut ok = true;
+        for j in 0..n {
+            if cs[k + j] != sc[j] {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return Some((text(cs, 0, k), text(cs, k + n, cs.len())));
+        }
+        k -= 1;
+    }
+    None
+}
+
+// s[n:] in characters.
+fn drop_chars(s: ref String, n: i64) -> String {
+    let cs = to_chars(s);
+    if n >= cs.len() {
+        return String.new();
+    }
+    text(cs, n, cs.len())
+}
+
+// ---------------------------------------------------------------- values
+
+// A Python value as xmltodict builds it, or as json.load reads it. A
+// Dict keeps its keys in insertion order, as dict does.
+#[derive(Clone)]
+enum Val {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Str(String),
+    List(Vec[Val]),
+    Dict(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: Val,
+}
+
+fn sv(s: ref String) -> Val {
+    Val.Str(s.clone())
+}
+
+fn key_index(ms: ref Vec[Member], key: ref String) -> i64 {
+    for k in 0..ms.len() {
+        if ms[k].key == key {
+            return k;
+        }
+    }
+    -1
+}
+
+// d[key] = val: a new key goes at the end, an old one keeps its place.
+fn dict_set(ms: mut ref Vec[Member], key: ref String, val: own Val) {
+    let k = key_index(ms, key);
+    if k >= 0 {
+        ms[k].val = val;
+    } else {
+        ms.push(Member { key: key.clone(), val: val });
+    }
+}
+
+fn dict_get(ms: ref Vec[Member], key: ref String) -> Option[Val] {
+    let k = key_index(ms, key);
+    if k >= 0 { Some(ms[k].val.clone()) } else { None }
+}
+
+fn get(v: ref Val, key: Str) -> Option[Val] {
+    match v {
+        Val.Dict(ms) => dict_get(ms, key.to_string()),
+        _ => None,
+    }
+}
+
+fn get_str(v: ref Val, key: Str) -> String {
+    match get(v, key) {
+        Some(Val.Str(s)) => s,
+        _ => String.new(),
+    }
+}
+
+// The value, or the items of a list: what code that does not know
+// whether an element repeats does with it.
+fn as_list(v: ref Option[Val]) -> Vec[Val] {
+    match v {
+        None => Vec.new(),
+        Some(Val.Null) => Vec.new(),
+        Some(Val.List(items)) => items.clone(),
+        Some(x) => {
+            let mut one: Vec[Val] = Vec.new();
+            one.push(x.clone());
+            one
+        }
+    }
+}
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Null => false,
+        Val.Bool(b) => *b,
+        Val.Int(n) => *n != 0,
+        Val.Str(s) => s.len() > 0,
+        Val.List(items) => items.len() > 0,
+        Val.Dict(ms) => ms.len() > 0,
+    }
+}
+
+fn type_name(v: ref Val) -> String {
+    match v {
+        Val.Null => "NoneType".to_string(),
+        Val.Bool(_) => "bool".to_string(),
+        Val.Int(_) => "int".to_string(),
+        Val.Str(_) => "str".to_string(),
+        Val.List(_) => "list".to_string(),
+        Val.Dict(_) => "dict".to_string(),
+    }
+}
+
+// repr(v); `ordered` writes dicts the way OrderedDict prints itself.
+fn repr_val(v: ref Val, ordered: bool) -> String {
+    match v {
+        Val.Null => "None".to_string(),
+        Val.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Val.Int(n) => f"{n}",
+        Val.Str(s) => py_repr(s),
+        Val.List(items) => {
+            let mut out = "[".to_string();
+            for k in 0..items.len() {
+                if k > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(repr_val(items[k], ordered));
+            }
+            out.push(']');
+            out
+        }
+        Val.Dict(ms) => {
+            if ordered and ms.len() == 0 {
+                return "OrderedDict()".to_string();
+            }
+            let mut out = if ordered { "OrderedDict({".to_string() } else { "{".to_string() };
+            for k in 0..ms.len() {
+                if k > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(py_repr(ms[k].key));
+                out.push_str(": ");
+                out.push_str(repr_val(ms[k].val, ordered));
+            }
+            out.push('}');
+            if ordered {
+                out.push(')');
+            }
+            out
+        }
+    }
+}
+
+// str(v): a str is itself, everything else its repr.
+fn str_val(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => repr_val(v, false),
+    }
+}
+
+// json.dumps(s) with ensure_ascii: everything outside ' '..'~' escaped,
+// astral characters as a surrogate pair.
+fn json_quote(s: ref String) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n >= 32 and n < 127 {
+            out.push(c);
+        } else if n < 0x10000 {
+            out.push_str(f"\\u{hex(n, 4)}");
+        } else {
+            let v = n - 0x10000;
+            out.push_str(f"\\u{hex(0xD800 + (v >> 10), 4)}\\u{hex(0xDC00 + (v & 0x3FF), 4)}");
+        }
+    }
+    out.push('"');
+    out
+}
+
+// json.dumps(v, indent=2), at the given depth.
+fn json_dump(v: ref Val, depth: i64, out: mut ref String) {
+    match v {
+        Val.Null => out.push_str("null"),
+        Val.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Val.Int(n) => out.push_str(f"{n}"),
+        Val.Str(s) => out.push_str(json_quote(s)),
+        Val.List(items) => {
+            if items.len() == 0 {
+                out.push_str("[]");
+                return;
+            }
+            out.push('[');
+            for k in 0..items.len() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                out.push_str(repeat(' ', 2 * (depth + 1)));
+                json_dump(items[k], depth + 1, mut out);
+            }
+            out.push('\n');
+            out.push_str(repeat(' ', 2 * depth));
+            out.push(']');
+        }
+        Val.Dict(ms) => {
+            if ms.len() == 0 {
+                out.push_str("{}");
+                return;
+            }
+            out.push('{');
+            for k in 0..ms.len() {
+                if k > 0 {
+                    out.push(',');
+                }
+                out.push('\n');
+                out.push_str(repeat(' ', 2 * (depth + 1)));
+                out.push_str(json_quote(ms[k].key));
+                out.push_str(": ");
+                json_dump(ms[k].val, depth + 1, mut out);
+            }
+            out.push('\n');
+            out.push_str(repeat(' ', 2 * depth));
+            out.push('}');
+        }
+    }
+}
+
+// ---------------------------------------------------------------- json.load
+
+struct JsonReader {
+    cs: Vec[char],
+    i: i64,
+}
+
+fn json_parse(s: ref String) -> Result[Val, String] {
+    let mut p = JsonReader { cs: to_chars(s), i: 0 };
+    let v = json_value(mut p)?;
+    json_ws(mut p);
+    if p.i != p.cs.len() {
+        return Err(f"extra data at {p.i}");
+    }
+    Ok(v)
+}
+
+fn json_ws(p: mut ref JsonReader) {
+    while p.i < p.cs.len() {
+        let c = p.cs[p.i];
+        if c == ' ' or c == '\n' or c == '\t' or c == '\r' {
+            p.i += 1;
+        } else {
+            break;
+        }
+    }
+}
+
+fn json_word(p: mut ref JsonReader, w: Str) -> bool {
+    let ws = to_chars(w.to_string());
+    for k in 0..ws.len() {
+        if p.i + k >= p.cs.len() or p.cs[p.i + k] != ws[k] {
+            return false;
+        }
+    }
+    p.i += ws.len();
+    true
+}
+
+fn json_value(p: mut ref JsonReader) -> Result[Val, String] {
+    json_ws(mut p);
+    if p.i >= p.cs.len() {
+        return Err("unexpected end".to_string());
+    }
+    let c = p.cs[p.i];
+    if c == '{' {
+        p.i += 1;
+        let mut members: Vec[Member] = Vec.new();
+        json_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == '}' {
+            p.i += 1;
+            return Ok(Val.Dict(members));
+        }
+        loop {
+            json_ws(mut p);
+            let key = json_string(mut p)?;
+            json_ws(mut p);
+            if p.i >= p.cs.len() or p.cs[p.i] != ':' {
+                return Err(f"expected ':' at {p.i}");
+            }
+            p.i += 1;
+            let val = json_value(mut p)?;
+            dict_set(mut members, key, val);
+            json_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+            } else if p.i < p.cs.len() and p.cs[p.i] == '}' {
+                p.i += 1;
+                break;
+            } else {
+                return Err(f"expected ',' or '}}' at {p.i}");
+            }
+        }
+        return Ok(Val.Dict(members));
+    }
+    if c == '[' {
+        p.i += 1;
+        let mut items: Vec[Val] = Vec.new();
+        json_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == ']' {
+            p.i += 1;
+            return Ok(Val.List(items));
+        }
+        loop {
+            items.push(json_value(mut p)?);
+            json_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+            } else if p.i < p.cs.len() and p.cs[p.i] == ']' {
+                p.i += 1;
+                break;
+            } else {
+                return Err(f"expected ',' or ']' at {p.i}");
+            }
+        }
+        return Ok(Val.List(items));
+    }
+    if c == '"' {
+        return Ok(Val.Str(json_string(mut p)?));
+    }
+    if json_word(mut p, "true") {
+        return Ok(Val.Bool(true));
+    }
+    if json_word(mut p, "false") {
+        return Ok(Val.Bool(false));
+    }
+    if json_word(mut p, "null") {
+        return Ok(Val.Null);
+    }
+    let start = p.i;
+    if p.i < p.cs.len() and p.cs[p.i] == '-' {
+        p.i += 1;
+    }
+    while p.i < p.cs.len() and is_digit(p.cs[p.i]) {
+        p.i += 1;
+    }
+    let t = text(p.cs, start, p.i);
+    match py_int(t) {
+        Some(n) => Ok(Val.Int(n)),
+        None => Err(f"bad value at {start}"),
+    }
+}
+
+fn hex_digit(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 97 {
+        n - 87
+    } else if n >= 65 {
+        n - 55
+    } else {
+        n - 48
+    }
+}
+
+fn json_hex4(p: mut ref JsonReader) -> i64 {
+    let mut v = 0;
+    for k in 0..4 {
+        v = v * 16 + hex_digit(p.cs[p.i + k]);
+    }
+    p.i += 4;
+    v
+}
+
+fn json_string(p: mut ref JsonReader) -> Result[String, String] {
+    if p.i >= p.cs.len() or p.cs[p.i] != '"' {
+        return Err(f"expected a string at {p.i}");
+    }
+    p.i += 1;
+    let mut out = String.new();
+    loop {
+        if p.i >= p.cs.len() {
+            return Err("unterminated string".to_string());
+        }
+        let c = p.cs[p.i];
+        if c == '"' {
+            p.i += 1;
+            return Ok(out);
+        }
+        if c != '\\' {
+            out.push(c);
+            p.i += 1;
+            continue;
+        }
+        let e = p.cs[p.i + 1];
+        p.i += 2;
+        if e == 'n' {
+            out.push('\n');
+        } else if e == 't' {
+            out.push('\t');
+        } else if e == 'r' {
+            out.push('\r');
+        } else if e == 'b' {
+            out.push(chr(8));
+        } else if e == 'f' {
+            out.push(chr(12));
+        } else if e == 'u' {
+            let mut v = json_hex4(mut p);
+            if v >= 0xd800 and v < 0xdc00 and p.i + 1 < p.cs.len() and p.cs[p.i] == '\\' and p.cs[p.i + 1] == 'u' {
+                p.i += 2;
+                let lo = json_hex4(mut p);
+                v = 0x10000 + (v - 0xd800) * 1024 + (lo - 0xdc00);
+            }
+            out.push(chr(v));
+        } else {
+            out.push(e);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- expat
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn b_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn b_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn b_lower(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+const XML_NS: Str = "http://www.w3.org/XML/1998/namespace";
+
+// What the parser tells its handlers, in order. Chars is one run of
+// character data as expat's buffer_text hands it over: a run ends at any
+// other event, and at any markup the default handler sees.
+#[derive(Clone)]
+enum Ev {
+    Start(String, Vec[String], Vec[String]),
+    End(String),
+    Chars(String),
+    Ns(String, String),
+    Comment(String),
+}
+
+// An error as expat reports it: the message and the byte offset.
+struct XErr {
+    msg: String,
+    pos: i64,
+}
+
+fn xerr(msg: Str, pos: i64) -> XErr {
+    XErr { msg: msg.to_string(), pos: pos }
+}
+
+fn is_xml_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r'
+}
+
+fn is_name_start(c: u8) -> bool {
+    b_alpha(c) or c == b'_' or c == b':' or c >= 128
+}
+
+fn is_name_char(c: u8) -> bool {
+    is_name_start(c) or b_digit(c) or c == b'-' or c == b'.'
+}
+
+fn valid_char(cp: i64) -> bool {
+    if cp == 9 or cp == 10 or cp == 13 {
+        return true;
+    }
+    if cp < 32 {
+        return false;
+    }
+    if cp >= 0xD800 and cp <= 0xDFFF {
+        return false;
+    }
+    cp != 0xFFFE and cp != 0xFFFF and cp <= 0x10FFFF
+}
+
+// How xmltodict set the parser up.
+#[derive(Clone)]
+struct XmlMode {
+    // namespace processing, and the separator expat puts between a URI
+    // and a local name
+    ns: bool,
+    sep: String,
+    // disable_entities: the default handler is set, so internal entities
+    // are not expanded, and markup it sees ends a run of character data
+    dflt: bool,
+    // process_comments: comments are reported
+    comments: bool,
+}
+
+struct XmlParser {
+    b: Vec[u8],
+    i: i64,
+    mode: XmlMode,
+    evs: Vec[Ev],
+    buf: String,
+    // the open elements, as written and as reported, and where each
+    // one's namespace declarations start
+    raw: Vec[String],
+    names: Vec[String],
+    marks: Vec[i64],
+    ns_prefix: Vec[String],
+    ns_uri: Vec[String],
+    ent_names: Vec[String],
+    ent_values: Vec[String],
+    // the DOCTYPE names an external subset, so an undeclared entity may
+    // be declared there and is skipped rather than refused
+    external: bool,
+}
+
+impl XmlParser {
+    fn at(ref self, s: Str) -> bool {
+        let t = to_bytes(s);
+        if self.i + t.len() > self.b.len() {
+            return false;
+        }
+        for k in 0..t.len() {
+            if self.b[self.i + k] != t[k] {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn eof(ref self) -> bool {
+        self.i >= self.b.len()
+    }
+
+    fn skip_ws(mut ref self) -> bool {
+        let st = self.i;
+        while not self.eof() and is_xml_ws(self.b[self.i]) {
+            self.i += 1;
+        }
+        self.i > st
+    }
+
+    fn chars(mut ref self, s: ref String) {
+        self.buf.push_str(s);
+    }
+
+    // Hands over the buffered character data, if there is any.
+    fn flush(mut ref self) {
+        if self.buf.len() > 0 {
+            let t = self.buf.clone();
+            self.evs.push(Ev.Chars(t));
+            self.buf = String.new();
+        }
+    }
+
+    // Markup only the default handler sees.
+    fn markup(mut ref self) {
+        if self.mode.dflt {
+            self.flush();
+        }
+    }
+
+    fn emit(mut ref self, ev: own Ev) {
+        self.flush();
+        self.evs.push(ev);
+    }
+
+    // A name at the current position; an invalid token if there is none.
+    fn name(mut ref self) -> Result[String, XErr] {
+        if self.eof() {
+            return Err(xerr("unclosed token", self.i));
+        }
+        if not is_name_start(self.b[self.i]) {
+            return Err(xerr("not well-formed (invalid token)", self.i));
+        }
+        let st = self.i;
+        while not self.eof() and is_name_char(self.b[self.i]) {
+            self.i += 1;
+        }
+        Ok(byte_str(self.b, st, self.i))
+    }
+
+    // Skips to just after `end`; an unclosed token at `start` if it never
+    // comes.
+    fn skip_past(mut ref self, end: Str, start: i64) -> Result[(), XErr] {
+        while not self.eof() {
+            if self.at(end) {
+                self.i += end.len();
+                return Ok(());
+            }
+            self.i += 1;
+        }
+        Err(xerr("unclosed token", start))
+    }
+
+    // A comment: reported when comments are processed, otherwise markup.
+    fn comment(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 4;
+        let from = self.i;
+        self.skip_past("-->", st)?;
+        if self.mode.comments {
+            let t = byte_str(self.b, from, self.i - 3);
+            self.emit(Ev.Comment(t));
+        } else {
+            self.markup();
+        }
+        Ok(())
+    }
+
+    fn pi(mut ref self, first: bool) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 2;
+        let target = self.name()?;
+        if target == "xml" and not first {
+            return Err(xerr("XML or text declaration not at start of entity", st));
+        }
+        self.skip_past("?>", st)?;
+        self.markup();
+        Ok(())
+    }
+
+    // A character reference after `&#`, as the character.
+    fn char_ref(mut ref self, amp: i64) -> Result[String, XErr] {
+        self.i += 1;
+        let hex = not self.eof() and self.b[self.i] == b'x';
+        if hex {
+            self.i += 1;
+        }
+        let st = self.i;
+        let mut v: i64 = 0;
+        while not self.eof() {
+            let c = self.b[self.i];
+            let d = if b_digit(c) {
+                (c - b'0') as i64
+            } else if hex and b_lower(c) >= b'a' and b_lower(c) <= b'f' {
+                (b_lower(c) - b'a') as i64 + 10
+            } else {
+                break;
+            };
+            if v < 0x110000 {
+                v = v * (if hex { 16 } else { 10 }) + d;
+            }
+            self.i += 1;
+        }
+        if self.eof() {
+            return Err(xerr("unclosed token", amp));
+        }
+        if self.i == st or self.b[self.i] != b';' {
+            return Err(xerr("not well-formed (invalid token)", self.i));
+        }
+        self.i += 1;
+        if not valid_char(v) {
+            return Err(xerr("reference to invalid character number", amp));
+        }
+        Ok(chr(v).to_string())
+    }
+
+    // The name of an entity reference after `&`, up to its `;`.
+    fn ref_name(mut ref self, amp: i64) -> Result[String, XErr] {
+        let name = self.name()?;
+        if self.eof() {
+            return Err(xerr("unclosed token", amp));
+        }
+        if self.b[self.i] != b';' {
+            return Err(xerr("not well-formed (invalid token)", self.i));
+        }
+        self.i += 1;
+        Ok(name)
+    }
+
+    // A reference in an attribute value, where entities are always
+    // expanded.
+    fn attr_reference(mut ref self) -> Result[String, XErr] {
+        let amp = self.i;
+        self.i += 1;
+        if self.eof() {
+            return Err(xerr("unclosed token", amp));
+        }
+        if self.b[self.i] == b'#' {
+            return self.char_ref(amp);
+        }
+        let name = self.ref_name(amp)?;
+        match self.entity(name, 0) {
+            Some(t) => Ok(t),
+            None => if self.external { Ok(String.new()) } else { Err(xerr("undefined entity", amp)) },
+        }
+    }
+
+    // A reference in content. Character references and the five
+    // predefined entities are character data; a declared entity is
+    // expanded only when there is no default handler, which otherwise
+    // swallows the reference.
+    fn content_reference(mut ref self) -> Result[(), XErr] {
+        let amp = self.i;
+        self.i += 1;
+        if self.eof() {
+            return Err(xerr("unclosed token", amp));
+        }
+        if self.b[self.i] == b'#' {
+            let t = self.char_ref(amp)?;
+            self.chars(t);
+            return Ok(());
+        }
+        let name = self.ref_name(amp)?;
+        let predefined = name == "lt" or name == "gt" or name == "amp" or name == "quot" or name == "apos";
+        match self.entity(name, 0) {
+            Some(t) => {
+                if predefined or not self.mode.dflt {
+                    self.chars(t);
+                } else {
+                    self.markup();
+                }
+                Ok(())
+            }
+            None => {
+                if self.external {
+                    self.markup();
+                    Ok(())
+                } else {
+                    Err(xerr("undefined entity", amp))
+                }
+            }
+        }
+    }
+
+    // A named entity's text, with the references in it expanded.
+    fn entity(ref self, name: ref String, depth: i64) -> Option[String] {
+        if name == "lt" {
+            return Some("<".to_string());
+        }
+        if name == "gt" {
+            return Some(">".to_string());
+        }
+        if name == "amp" {
+            return Some("&".to_string());
+        }
+        if name == "quot" {
+            return Some("\"".to_string());
+        }
+        if name == "apos" {
+            return Some("'".to_string());
+        }
+        if depth > 20 {
+            return None;
+        }
+        for k in 0..self.ent_names.len() {
+            if self.ent_names[k] == name {
+                let v = to_bytes(self.ent_values[k]);
+                let mut out = String.new();
+                let mut j: i64 = 0;
+                while j < v.len() {
+                    if v[j] == b'&' {
+                        let mut e = j + 1;
+                        while e < v.len() and v[e] != b';' {
+                            e += 1;
+                        }
+                        let inner = byte_str(v, j + 1, e);
+                        out.push_str(self.entity(inner, depth + 1).unwrap_or(String.new()));
+                        j = e + 1;
+                        continue;
+                    }
+                    let mut e = j;
+                    while e < v.len() and v[e] != b'&' {
+                        e += 1;
+                    }
+                    out.push_str(byte_str(v, j, e));
+                    j = e;
+                }
+                return Some(out);
+            }
+        }
+        None
+    }
+
+    // A quoted value in a DTD declaration, with character references
+    // expanded and other references kept for when the entity is used.
+    fn entity_value(mut ref self, start: i64) -> Result[String, XErr] {
+        let q = self.b[self.i];
+        self.i += 1;
+        let mut out = String.new();
+        loop {
+            if self.eof() {
+                return Err(xerr("unclosed token", start));
+            }
+            let c = self.b[self.i];
+            if c == q {
+                self.i += 1;
+                return Ok(out);
+            }
+            if c == b'&' and self.i + 1 < self.b.len() and self.b[self.i + 1] == b'#' {
+                let amp = self.i;
+                self.i += 1;
+                out.push_str(self.char_ref(amp)?);
+                continue;
+            }
+            let st = self.i;
+            self.i += 1;
+            while not self.eof() and self.b[self.i] != q and self.b[self.i] != b'&' {
+                self.i += 1;
+            }
+            out.push_str(byte_str(self.b, st, self.i));
+        }
+    }
+
+    // Skips a declaration to its `>`, stepping over quoted strings.
+    fn skip_decl(mut ref self, start: i64) -> Result[(), XErr] {
+        loop {
+            if self.eof() {
+                return Err(xerr("unclosed token", start));
+            }
+            let c = self.b[self.i];
+            self.i += 1;
+            if c == b'>' {
+                return Ok(());
+            }
+            if c == b'"' or c == b'\'' {
+                while not self.eof() and self.b[self.i] != c {
+                    self.i += 1;
+                }
+                self.i += 1;
+            }
+        }
+    }
+
+    fn doctype(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 9;
+        self.skip_ws();
+        self.name()?;
+        loop {
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            let c = self.b[self.i];
+            if c == b'>' {
+                self.i += 1;
+                return Ok(());
+            }
+            if c == b'"' or c == b'\'' {
+                // a system or public id: the DTD has an external subset
+                self.external = true;
+                self.i += 1;
+                while not self.eof() and self.b[self.i] != c {
+                    self.i += 1;
+                }
+                self.i += 1;
+                continue;
+            }
+            if c != b'[' {
+                self.i += 1;
+                continue;
+            }
+            self.i += 1;
+            loop {
+                self.skip_ws();
+                if self.eof() {
+                    return Err(xerr("unclosed token", st));
+                }
+                if self.b[self.i] == b']' {
+                    self.i += 1;
+                    break;
+                }
+                if self.at("<!--") {
+                    let cs = self.i;
+                    self.i += 4;
+                    self.skip_past("-->", cs)?;
+                } else if self.at("<?") {
+                    self.pi(false)?;
+                } else if self.at("<!ENTITY") {
+                    let ds = self.i;
+                    self.i += 8;
+                    self.skip_ws();
+                    if not self.eof() and self.b[self.i] == b'%' {
+                        self.skip_decl(ds)?;
+                        continue;
+                    }
+                    let name = self.name()?;
+                    self.skip_ws();
+                    if not self.eof() and (self.b[self.i] == b'"' or self.b[self.i] == b'\'') {
+                        let v = self.entity_value(ds)?;
+                        if not self.ent_names.contains(name) {
+                            self.ent_names.push(name);
+                            self.ent_values.push(v);
+                        }
+                    }
+                    self.skip_decl(ds)?;
+                } else if self.at("<!") {
+                    let ds = self.i;
+                    self.skip_decl(ds)?;
+                } else {
+                    self.i += 1;
+                }
+            }
+        }
+    }
+
+    fn lookup_ns(ref self, prefix: ref String) -> Option[String] {
+        if prefix == "xml" {
+            return Some(XML_NS.to_string());
+        }
+        let mut k = self.ns_prefix.len();
+        while k > 0 {
+            k -= 1;
+            if self.ns_prefix[k] == prefix {
+                return Some(self.ns_uri[k].clone());
+            }
+        }
+        None
+    }
+
+    // A qualified name as expat reports it with namespace processing on:
+    // the URI, the separator and the local name, or the local name alone
+    // when there is no namespace.
+    fn expand(ref self, raw: ref String, is_attr: bool) -> Option[String] {
+        let b = to_bytes(raw);
+        let mut colon: i64 = -1;
+        for k in 0..b.len() {
+            if b[k] == b':' {
+                colon = k;
+                break;
+            }
+        }
+        if colon < 0 {
+            if is_attr {
+                return Some(raw.clone());
+            }
+            let uri = self.lookup_ns(String.new()).unwrap_or(String.new());
+            return Some(if uri.len() > 0 { f"{uri}{self.mode.sep}{raw}" } else { raw.clone() });
+        }
+        let prefix = byte_str(b, 0, colon);
+        let local = byte_str(b, colon + 1, b.len());
+        match self.lookup_ns(prefix) {
+            Some(uri) => Some(f"{uri}{self.mode.sep}{local}"),
+            None => None,
+        }
+    }
+
+    // A start tag, after which the element is open (or already closed,
+    // for `<a/>`).
+    fn start_tag(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 1;
+        let raw = self.name()?;
+        let mut names: Vec[String] = Vec.new();
+        let mut values: Vec[String] = Vec.new();
+        let mut empty = false;
+        loop {
+            let had_ws = self.skip_ws();
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            let c = self.b[self.i];
+            if c == b'>' {
+                self.i += 1;
+                break;
+            }
+            if c == b'/' {
+                if self.i + 1 >= self.b.len() {
+                    return Err(xerr("unclosed token", st));
+                }
+                if self.b[self.i + 1] != b'>' {
+                    return Err(xerr("not well-formed (invalid token)", self.i + 1));
+                }
+                self.i += 2;
+                empty = true;
+                break;
+            }
+            if not had_ws or not is_name_start(c) {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            let np = self.i;
+            let an = self.name()?;
+            self.skip_ws();
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            if self.b[self.i] != b'=' {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            self.i += 1;
+            self.skip_ws();
+            if self.eof() {
+                return Err(xerr("unclosed token", st));
+            }
+            let q = self.b[self.i];
+            if q != b'"' and q != b'\'' {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            self.i += 1;
+            let mut v = String.new();
+            loop {
+                if self.eof() {
+                    return Err(xerr("unclosed token", st));
+                }
+                let ch = self.b[self.i];
+                if ch == q {
+                    self.i += 1;
+                    break;
+                }
+                if ch == b'<' {
+                    return Err(xerr("not well-formed (invalid token)", self.i));
+                }
+                if ch == b'&' {
+                    let t = self.attr_reference()?;
+                    v.push_str(t);
+                    continue;
+                }
+                if is_xml_ws(ch) {
+                    v.push_str(" ");
+                    self.i += 1;
+                    continue;
+                }
+                let s0 = self.i;
+                while not self.eof() and self.b[self.i] != q and self.b[self.i] != b'<' and self.b[self.i] != b'&' and not is_xml_ws(self.b[self.i]) {
+                    self.i += 1;
+                }
+                v.push_str(byte_str(self.b, s0, self.i));
+            }
+            if names.contains(an) {
+                return Err(xerr("duplicate attribute", np));
+            }
+            names.push(an);
+            values.push(v);
+        }
+        if not self.mode.ns {
+            self.emit(Ev.Start(raw.clone(), names, values));
+            if empty {
+                self.emit(Ev.End(raw));
+            } else {
+                self.raw.push(raw.clone());
+                self.names.push(raw);
+            }
+            return Ok(());
+        }
+        // namespace declarations first, then the names
+        self.marks.push(self.ns_prefix.len());
+        let mut decls: Vec[Ev] = Vec.new();
+        for k in 0..names.len() {
+            if names[k] == "xmlns" {
+                self.ns_prefix.push(String.new());
+                self.ns_uri.push(values[k].clone());
+                decls.push(Ev.Ns(String.new(), values[k].clone()));
+            } else if names[k].starts_with("xmlns:") {
+                let p = byte_str(to_bytes(names[k]), 6, names[k].len());
+                self.ns_prefix.push(p.clone());
+                self.ns_uri.push(values[k].clone());
+                decls.push(Ev.Ns(p, values[k].clone()));
+            }
+        }
+        let tag = match self.expand(raw, false) {
+            Some(t) => t,
+            None => return Err(xerr("unbound prefix", st)),
+        };
+        let mut keys: Vec[String] = Vec.new();
+        let mut vals: Vec[String] = Vec.new();
+        for k in 0..names.len() {
+            if names[k] == "xmlns" or names[k].starts_with("xmlns:") {
+                continue;
+            }
+            match self.expand(names[k], true) {
+                Some(key) => {
+                    if keys.contains(key) {
+                        return Err(xerr("duplicate attribute", st));
+                    }
+                    keys.push(key);
+                }
+                None => return Err(xerr("unbound prefix", st)),
+            }
+            vals.push(values[k].clone());
+        }
+        for d in decls.into_iter() {
+            self.emit(d);
+        }
+        self.emit(Ev.Start(tag.clone(), keys, vals));
+        if empty {
+            self.emit(Ev.End(tag));
+            let m = self.marks.pop().unwrap();
+            self.ns_prefix.truncate(m);
+            self.ns_uri.truncate(m);
+        } else {
+            self.raw.push(raw);
+            self.names.push(tag);
+        }
+        Ok(())
+    }
+
+    fn end_tag(mut ref self) -> Result[(), XErr] {
+        let st = self.i;
+        self.i += 2;
+        let np = self.i;
+        let name = self.name()?;
+        self.skip_ws();
+        if self.eof() {
+            return Err(xerr("unclosed token", st));
+        }
+        if self.b[self.i] != b'>' {
+            return Err(xerr("not well-formed (invalid token)", self.i));
+        }
+        self.i += 1;
+        if name != self.raw[self.raw.len() - 1] {
+            return Err(xerr("mismatched tag", np));
+        }
+        self.raw.pop();
+        let tag = self.names.pop().unwrap();
+        self.emit(Ev.End(tag));
+        if self.mode.ns {
+            let m = self.marks.pop().unwrap();
+            self.ns_prefix.truncate(m);
+            self.ns_uri.truncate(m);
+        }
+        Ok(())
+    }
+
+    // The root element and everything in it.
+    fn content(mut ref self) -> Result[(), XErr] {
+        self.start_tag()?;
+        while self.raw.len() > 0 {
+            if self.eof() {
+                return Err(xerr("no element found", self.i));
+            }
+            let c = self.b[self.i];
+            if c == b'<' {
+                if self.at("</") {
+                    self.end_tag()?;
+                } else if self.at("<!--") {
+                    self.comment()?;
+                } else if self.at("<![CDATA[") {
+                    let st = self.i;
+                    self.i += 9;
+                    let from = self.i;
+                    self.skip_past("]]>", st)?;
+                    let t = byte_str(self.b, from, self.i - 3);
+                    self.markup();
+                    self.chars(t);
+                    self.markup();
+                } else if self.at("<?") {
+                    self.pi(false)?;
+                } else if self.i + 1 < self.b.len() and is_name_start(self.b[self.i + 1]) {
+                    self.start_tag()?;
+                } else if self.i + 1 >= self.b.len() {
+                    return Err(xerr("unclosed token", self.i));
+                } else {
+                    return Err(xerr("not well-formed (invalid token)", self.i + 1));
+                }
+                continue;
+            }
+            if c == b'&' {
+                self.content_reference()?;
+                continue;
+            }
+            if self.at("]]>") {
+                return Err(xerr("not well-formed (invalid token)", self.i + 2));
+            }
+            if c < 32 and not is_xml_ws(c) {
+                return Err(xerr("not well-formed (invalid token)", self.i));
+            }
+            let st = self.i;
+            self.i += 1;
+            while not self.eof() and self.b[self.i] != b'<' and self.b[self.i] != b'&' and self.b[self.i] != b']' and (self.b[self.i] >= 32 or is_xml_ws(self.b[self.i])) {
+                self.i += 1;
+            }
+            let t = byte_str(self.b, st, self.i);
+            self.chars(t);
+        }
+        Ok(())
+    }
+
+    fn document(mut ref self) -> Result[(), XErr] {
+        if self.at("\u{feff}") {
+            self.i += 3;
+        }
+        if self.at("<?xml") and self.i + 5 < self.b.len() and is_xml_ws(self.b[self.i + 5]) {
+            let st = self.i;
+            self.i += 2;
+            self.skip_past("?>", st)?;
+        }
+        loop {
+            self.skip_ws();
+            if self.eof() {
+                return Err(xerr("no element found", self.i));
+            }
+            if self.at("<!--") {
+                self.comment()?;
+            } else if self.at("<?") {
+                self.pi(false)?;
+            } else if self.at("<!DOCTYPE") {
+                self.doctype()?;
+            } else if self.b[self.i] == b'<' {
+                if self.i + 1 < self.b.len() and is_name_start(self.b[self.i + 1]) {
+                    break;
+                }
+                return Err(xerr("not well-formed (invalid token)", self.i + 1));
+            } else {
+                return Err(xerr("syntax error", self.i));
+            }
+        }
+        self.content()?;
+        loop {
+            self.skip_ws();
+            if self.eof() {
+                return Ok(());
+            }
+            if self.at("<!--") {
+                self.comment()?;
+            } else if self.at("<?") {
+                self.pi(false)?;
+            } else {
+                return Err(xerr("junk after document element", self.i));
+            }
+        }
+    }
+}
+
+// Parses a document into the events its handlers would see, and the
+// error that stopped it, as ExpatError prints it: the message, the line
+// and the column.
+fn parse_events(text: ref String, mode: ref XmlMode) -> (Vec[Ev], Option[String]) {
+    // expat reads \r\n and a lone \r as \n
+    let raw = to_bytes(text);
+    let mut b: Vec[u8] = Vec.new();
+    for k in 0..raw.len() {
+        if raw[k] == b'\r' {
+            if k + 1 < raw.len() and raw[k + 1] == b'\n' {
+                continue;
+            }
+            b.push(b'\n');
+        } else {
+            b.push(raw[k]);
+        }
+    }
+    let mut p = XmlParser { b: b, i: 0, mode: mode.clone(), evs: Vec.new(), buf: String.new(), raw: Vec.new(), names: Vec.new(), marks: Vec.new(), ns_prefix: Vec.new(), ns_uri: Vec.new(), ent_names: Vec.new(), ent_values: Vec.new(), external: false };
+    match p.document() {
+        Ok(_) => (p.evs, None),
+        Err(e) => {
+            let mut line: i64 = 1;
+            let mut col: i64 = 0;
+            for k in 0..e.pos {
+                if p.b[k] == b'\n' {
+                    line += 1;
+                    col = 0;
+                } else if p.b[k] < 128 or p.b[k] >= 192 {
+                    col += 1;
+                }
+            }
+            (p.evs, Some(f"{e.msg}: line {line}, column {col}"))
+        }
+    }
+}
+
+// ---------------------------------------------------------------- parse
+
+// force_list: off, every key, a tuple of keys, or the "deep" function.
+#[derive(Clone)]
+enum ForceList {
+    Off,
+    All,
+    Names(Vec[String]),
+    Deep,
+}
+
+#[derive(Clone)]
+struct ParseOpts {
+    xml_attribs: bool,
+    attr_prefix: String,
+    cdata_key: String,
+    force_cdata: bool,
+    cdata_separator: String,
+    strip_whitespace: bool,
+    process_namespaces: bool,
+    namespace_separator: String,
+    // the namespaces mapping, with None as Val.Null; None when not given
+    namespaces: Option[Vec[Member]],
+    force_list: ForceList,
+    postprocessor: String,
+    disable_entities: bool,
+    process_comments: bool,
+    comment_key: String,
+    ordered: bool,
+    item_depth: i64,
+    // in streaming mode, how many items the callback takes before it
+    // returns False; 0 for no limit
+    limit: i64,
+}
+
+fn parse_defaults() -> ParseOpts {
+    ParseOpts {
+        xml_attribs: true,
+        attr_prefix: "@".to_string(),
+        cdata_key: "#text".to_string(),
+        force_cdata: false,
+        cdata_separator: String.new(),
+        strip_whitespace: true,
+        process_namespaces: false,
+        namespace_separator: ":".to_string(),
+        namespaces: None,
+        force_list: ForceList.Off,
+        postprocessor: String.new(),
+        disable_entities: true,
+        process_comments: false,
+        comment_key: "#comment".to_string(),
+        ordered: false,
+        item_depth: 0,
+        limit: 0,
+    }
+}
+
+// One step of the path xmltodict keeps: an element's name and its
+// attributes as expat gave them, None when it has none.
+#[derive(Clone)]
+struct Step {
+    name: String,
+    attrs: Val,
+}
+
+fn path_repr(path: ref Vec[Step], ordered: bool) -> String {
+    let mut out = "[".to_string();
+    for k in 0..path.len() {
+        if k > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(f"({py_repr(path[k].name)}, {repr_val(path[k].attrs, ordered)})");
+    }
+    out.push(']');
+    out
+}
+
+// What the item callback was handed: the path and the item.
+struct Called {
+    path: Vec[Step],
+    item: Val,
+}
+
+// The postprocessors a job can name; None drops the key.
+fn postprocess(name: ref String, key: ref String, value: ref Val) -> Option[(String, Val)] {
+    if name == "int" or name == "typed" {
+        if let Val.Str(s) = value {
+            if let Some(n) = py_int(s) {
+                return Some((key.clone(), Val.Int(n)));
+            }
+            if name == "typed" and s == "true" {
+                return Some((key.clone(), Val.Bool(true)));
+            }
+            if name == "typed" and s == "false" {
+                return Some((key.clone(), Val.Bool(false)));
+            }
+        }
+        return Some((key.clone(), value.clone()));
+    }
+    if name == "drop" {
+        if key.starts_with("@x") or key == "guid" or key == "#comment" {
+            return None;
+        }
+        return Some((key.clone(), value.clone()));
+    }
+    if name == "lower" {
+        return Some((key.to_lowercase(), value.clone()));
+    }
+    Some((key.clone(), value.clone()))
+}
+
+// _DictSAXHandler.
+struct Handler {
+    o: ParseOpts,
+    path: Vec[Step],
+    stack: Vec[(Val, Vec[String])],
+    data: Vec[String],
+    item: Val,
+    ns_decls: Vec[Member],
+    called: Vec[Called],
+    interrupted: bool,
+}
+
+impl Handler {
+    fn build_name(ref self, full: ref String) -> String {
+        let ms = match self.o.namespaces {
+            Some(m) => m.clone(),
+            None => return full.clone(),
+        };
+        let (ns, name) = match rsplit1(full, self.o.namespace_separator) {
+            Some(p) => p,
+            None => return full.clone(),
+        };
+        let short = match dict_get(ms, ns) {
+            Some(v) => v,
+            None => Val.Str(ns.clone()),
+        };
+        if not truthy(short) {
+            return name;
+        }
+        f"{str_val(short)}{self.o.namespace_separator}{name}"
+    }
+
+    fn should_force_list(ref self, key: ref String, value: ref Val) -> bool {
+        match self.o.force_list {
+            ForceList.Off => false,
+            ForceList.All => true,
+            ForceList.Names(ns) => ns.contains(key.clone()),
+            ForceList.Deep => {
+                let is_str = match value {
+                    Val.Str(_) => true,
+                    _ => false,
+                };
+                self.path.len() - 1 >= 2 and not is_str
+            }
+        }
+    }
+
+    fn push_data(ref self, item: own Val, key0: ref String, data0: own Val) -> Val {
+        let mut key = key0.clone();
+        let mut data = data0;
+        if self.o.postprocessor.len() > 0 {
+            match postprocess(self.o.postprocessor, key, data) {
+                None => return item,
+                Some((k, d)) => {
+                    key = k;
+                    data = d;
+                }
+            }
+        }
+        let mut ms = match item {
+            Val.Dict(m) => m,
+            _ => Vec.new(),
+        };
+        let at = key_index(ms, key);
+        if at >= 0 {
+            let old = ms[at].val.clone();
+            match old {
+                Val.List(items) => {
+                    let mut more = items;
+                    more.push(data);
+                    ms[at].val = Val.List(more);
+                }
+                other => {
+                    let mut pair: Vec[Val] = Vec.new();
+                    pair.push(other);
+                    pair.push(data);
+                    ms[at].val = Val.List(pair);
+                }
+            }
+        } else if self.should_force_list(key, data) {
+            let mut one: Vec[Val] = Vec.new();
+            one.push(data);
+            ms.push(Member { key: key, val: Val.List(one) });
+        } else {
+            ms.push(Member { key: key, val: data });
+        }
+        Val.Dict(ms)
+    }
+
+    fn start_ns(mut ref self, prefix: ref String, uri: ref String) {
+        dict_set(mut self.ns_decls, prefix, sv(uri));
+    }
+
+    fn start_element(mut ref self, full: ref String, keys: ref Vec[String], vals: ref Vec[String]) {
+        let name = self.build_name(full);
+        let mut attrs: Vec[Member] = Vec.new();
+        for k in 0..keys.len() {
+            dict_set(mut attrs, keys[k], sv(vals[k]));
+        }
+        if attrs.len() > 0 and self.ns_decls.len() > 0 {
+            let decls = self.ns_decls.clone();
+            dict_set(mut attrs, "xmlns".to_string(), Val.Dict(decls));
+            self.ns_decls = Vec.new();
+        }
+        let shown = if attrs.len() > 0 { Val.Dict(attrs.clone()) } else { Val.Null };
+        self.path.push(Step { name: name, attrs: shown });
+        if self.path.len() > self.o.item_depth {
+            let saved_item = self.item.clone();
+            let saved_data = self.data.clone();
+            self.stack.push((saved_item, saved_data));
+            let mut kept: Vec[Member] = Vec.new();
+            if self.o.xml_attribs {
+                for m in attrs {
+                    let key = f"{self.o.attr_prefix}{self.build_name(m.key)}";
+                    if self.o.postprocessor.len() > 0 {
+                        if let Some((k, v)) = postprocess(self.o.postprocessor, key, m.val) {
+                            dict_set(mut kept, k, v);
+                        }
+                    } else {
+                        dict_set(mut kept, key, m.val.clone());
+                    }
+                }
+            }
+            self.item = if kept.len() > 0 { Val.Dict(kept) } else { Val.Null };
+            self.data = Vec.new();
+        }
+    }
+
+    fn joined(ref self) -> Val {
+        if self.data.len() == 0 {
+            return Val.Null;
+        }
+        let mut s = String.new();
+        for k in 0..self.data.len() {
+            if k > 0 {
+                s.push_str(self.o.cdata_separator);
+            }
+            s.push_str(self.data[k]);
+        }
+        Val.Str(s)
+    }
+
+    fn end_element(mut ref self, full: ref String) {
+        let name = self.build_name(full);
+        if self.path.len() == self.o.item_depth {
+            let item = match self.item {
+                Val.Null => self.joined(),
+                _ => self.item.clone(),
+            };
+            let snapshot = self.path.clone();
+            self.called.push(Called { path: snapshot, item: item });
+            if self.o.limit > 0 and self.called.len() >= self.o.limit {
+                self.interrupted = true;
+                return;
+            }
+        }
+        if self.stack.len() > 0 {
+            let mut data = self.joined();
+            let item = self.item.clone();
+            let (it, d) = self.stack.pop().unwrap();
+            self.item = it;
+            self.data = d;
+            if self.o.strip_whitespace and truthy(data) {
+                let s = py_strip(str_val(data));
+                data = if s.len() > 0 { Val.Str(s) } else { Val.Null };
+            }
+            let mut item2 = item;
+            if truthy(data) and self.o.force_cdata and not truthy_item(item2) {
+                item2 = Val.Dict(Vec.new());
+            }
+            let is_none = match item2 {
+                Val.Null => true,
+                _ => false,
+            };
+            let cur = self.item.clone();
+            if not is_none {
+                if truthy(data) {
+                    item2 = self.push_data(item2, self.o.cdata_key, data);
+                }
+                self.item = self.push_data(cur, name, item2);
+            } else {
+                self.item = self.push_data(cur, name, data);
+            }
+        } else {
+            self.item = Val.Null;
+            self.data = Vec.new();
+        }
+        self.path.pop();
+    }
+
+    fn characters(mut ref self, s: ref String) {
+        self.data.push(s.clone());
+    }
+
+    fn comment(mut ref self, s: ref String) {
+        let t = if self.o.strip_whitespace { py_strip(s) } else { s.clone() };
+        let cur = self.item.clone();
+        self.item = self.push_data(cur, self.o.comment_key, sv(t));
+    }
+}
+
+// `item is not None` for an item the handler built: only None is None.
+fn truthy_item(v: ref Val) -> bool {
+    match v {
+        Val.Null => false,
+        _ => true,
+    }
+}
+
+// What parse() did: its result, the callback's calls, and the exception
+// it raised, if any.
+struct Parsed {
+    result: Val,
+    called: Vec[Called],
+    error: Option[String],
+}
+
+fn xml_parse(text: ref String, o: ref ParseOpts) -> Parsed {
+    let mode = XmlMode { ns: o.process_namespaces, sep: o.namespace_separator.clone(), dflt: o.disable_entities, comments: o.process_comments };
+    let (evs, err) = parse_events(text, mode);
+    let mut h = Handler { o: o.clone(), path: Vec.new(), stack: Vec.new(), data: Vec.new(), item: Val.Null, ns_decls: Vec.new(), called: Vec.new(), interrupted: false };
+    for ev in evs {
+        match ev {
+            Ev.Start(name, keys, vals) => h.start_element(name, keys, vals),
+            Ev.End(name) => h.end_element(name),
+            Ev.Chars(s) => h.characters(s),
+            Ev.Ns(p, u) => h.start_ns(p, u),
+            Ev.Comment(s) => h.comment(s),
+        }
+        if h.interrupted {
+            return Parsed { result: Val.Null, called: h.called, error: Some("ParsingInterrupted: ".to_string()) };
+        }
+    }
+    match err {
+        Some(e) => Parsed { result: Val.Null, called: h.called, error: Some(f"ExpatError: {e}") },
+        None => Parsed { result: h.item, called: h.called, error: None },
+    }
+}
+
+// ---------------------------------------------------------------- unparse
+
+#[derive(Clone)]
+struct UnparseOpts {
+    encoding: String,
+    full_document: bool,
+    short_empty_elements: bool,
+    attr_prefix: String,
+    cdata_key: String,
+    pretty: bool,
+    newl: String,
+    indent: String,
+    namespace_separator: String,
+    namespaces: Vec[Member],
+    expand_iter: String,
+    preprocessor: String,
+}
+
+fn unparse_defaults() -> UnparseOpts {
+    UnparseOpts {
+        encoding: "utf-8".to_string(),
+        full_document: true,
+        short_empty_elements: false,
+        attr_prefix: "@".to_string(),
+        cdata_key: "#text".to_string(),
+        pretty: false,
+        newl: "\n".to_string(),
+        indent: "\t".to_string(),
+        namespace_separator: ":".to_string(),
+        namespaces: Vec.new(),
+        expand_iter: String.new(),
+        preprocessor: String.new(),
+    }
+}
+
+// xml.sax.saxutils.escape.
+fn xml_escape(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '&' {
+            out.push_str("&amp;");
+        } else if c == '>' {
+            out.push_str("&gt;");
+        } else if c == '<' {
+            out.push_str("&lt;");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// xml.sax.saxutils.quoteattr: escaped, with line ends and tabs as
+// character references, in double quotes unless only single ones fit.
+fn quoteattr(s: ref String) -> String {
+    let mut data = String.new();
+    for c in xml_escape(s).chars() {
+        if c == '\n' {
+            data.push_str("&#10;");
+        } else if c == '\r' {
+            data.push_str("&#13;");
+        } else if c == '\t' {
+            data.push_str("&#9;");
+        } else {
+            data.push(c);
+        }
+    }
+    if data.contains("\"") {
+        if data.contains("'") {
+            return f"\"{data.replace("\"", "&quot;")}\"";
+        }
+        return f"'{data}'";
+    }
+    f"\"{data}\""
+}
+
+// XMLGenerator writing into a string.
+struct Gen {
+    out: String,
+    short: bool,
+    pending: bool,
+}
+
+impl Gen {
+    fn finish_pending(mut ref self) {
+        if self.pending {
+            self.out.push('>');
+            self.pending = false;
+        }
+    }
+
+    fn start(mut ref self, name: ref String, attrs: ref Vec[Member]) {
+        self.finish_pending();
+        self.out.push('<');
+        self.out.push_str(name);
+        for m in attrs {
+            self.out.push_str(f" {m.key}={quoteattr(str_val(m.val))}");
+        }
+        if self.short {
+            self.pending = true;
+        } else {
+            self.out.push('>');
+        }
+    }
+
+    fn end(mut ref self, name: ref String) {
+        if self.pending {
+            self.out.push_str("/>");
+            self.pending = false;
+        } else {
+            self.out.push_str(f"</{name}>");
+        }
+    }
+
+    fn characters(mut ref self, content: ref Val) -> Result[(), String] {
+        if not truthy(content) {
+            return Ok(());
+        }
+        match content {
+            Val.Str(s) => {
+                self.finish_pending();
+                self.out.push_str(xml_escape(s));
+                Ok(())
+            }
+            other => Err(f"TypeError: decoding to str: need a bytes-like object, {type_name(other)} found"),
+        }
+    }
+
+    fn whitespace(mut ref self, s: ref String) {
+        if s.len() > 0 {
+            self.finish_pending();
+            self.out.push_str(s);
+        }
+    }
+}
+
+fn validate_name(value: ref String, kind: Str) -> Result[(), String] {
+    if value.starts_with("?") or value.starts_with("!") {
+        return Err(f"ValueError: Invalid {kind} name: cannot start with \"?\" or \"!\"");
+    }
+    if value.contains("<") or value.contains(">") {
+        return Err(f"ValueError: Invalid {kind} name: \"<\" or \">\" not allowed");
+    }
+    if value.contains("/") {
+        return Err(f"ValueError: Invalid {kind} name: \"/\" not allowed");
+    }
+    if has_space(value) {
+        return Err(f"ValueError: Invalid {kind} name: whitespace not allowed");
+    }
+    Ok(())
+}
+
+// _process_namespace: a prefix the map knows becomes its URI; one it
+// does not know is dropped, along with anything before it.
+fn process_namespace(name: ref String, o: ref UnparseOpts) -> String {
+    if o.namespaces.len() == 0 {
+        return name.clone();
+    }
+    let (ns, local) = match rsplit1(name, o.namespace_separator) {
+        Some(p) => p,
+        None => return name.clone(),
+    };
+    match dict_get(o.namespaces, strip_chars(ns, o.attr_prefix)) {
+        Some(res) => {
+            if not truthy(res) {
+                return local;
+            }
+            let lead = if ns.starts_with(o.attr_prefix.as_str()) { o.attr_prefix.clone() } else { String.new() };
+            f"{lead}{str_val(res)}{o.namespace_separator}{local}"
+        }
+        None => local,
+    }
+}
+
+fn preprocess(name: ref String, key: ref String, value: ref Val) -> Option[(String, Val)] {
+    if name == "skip_admins" and key == "admins" {
+        return None;
+    }
+    if name == "upper" {
+        return Some((key.to_uppercase(), value.clone()));
+    }
+    Some((key.clone(), value.clone()))
+}
+
+fn emit(key0: ref String, value0: ref Val, depth: i64, full_document: bool, o: ref UnparseOpts, g: mut ref Gen) -> Result[(), String] {
+    let mut key = process_namespace(key0, o);
+    let mut value = value0.clone();
+    if o.preprocessor.len() > 0 {
+        match preprocess(o.preprocessor, key, value) {
+            None => return Ok(()),
+            Some((k, v)) => {
+                key = k;
+                value = v;
+            }
+        }
+    }
+    validate_name(key, "element")?;
+    let values = match value {
+        Val.List(items) => items,
+        other => {
+            let mut one: Vec[Val] = Vec.new();
+            one.push(other);
+            one
+        }
+    };
+    for index in 0..values.len() {
+        if full_document and depth == 0 and index > 0 {
+            return Err("ValueError: document with multiple roots".to_string());
+        }
+        let mut v = values[index].clone();
+        v = match v {
+            Val.Null => Val.Dict(Vec.new()),
+            Val.Bool(b) => Val.Str(if b { "true".to_string() } else { "false".to_string() }),
+            Val.Dict(ms) => Val.Dict(ms),
+            Val.List(items) => {
+                if o.expand_iter.len() > 0 {
+                    let mut ms: Vec[Member] = Vec.new();
+                    ms.push(Member { key: o.expand_iter.clone(), val: Val.List(items) });
+                    Val.Dict(ms)
+                } else {
+                    Val.Str(repr_val(Val.List(items), false))
+                }
+            }
+            other => Val.Str(str_val(other)),
+        };
+        if let Val.Str(s) = v {
+            let mut ms: Vec[Member] = Vec.new();
+            ms.push(Member { key: o.cdata_key.clone(), val: Val.Str(s) });
+            v = Val.Dict(ms);
+        }
+        let members = match v {
+            Val.Dict(ms) => ms,
+            _ => Vec.new(),
+        };
+        let mut cdata: Option[Val] = None;
+        let mut attrs: Vec[Member] = Vec.new();
+        let mut children: Vec[Member] = Vec.new();
+        for m in members {
+            if m.key == o.cdata_key {
+                cdata = Some(m.val.clone());
+                continue;
+            }
+            if m.key.starts_with(o.attr_prefix.as_str()) {
+                let ik = process_namespace(m.key, o);
+                if ik == "@xmlns" {
+                    if let Val.Dict(decls) = m.val {
+                        for d in decls {
+                            validate_name(d.key, "attribute")?;
+                            let attr = if d.key.len() > 0 { f"xmlns:{d.key}" } else { "xmlns".to_string() };
+                            dict_set(mut attrs, attr, Val.Str(str_val(d.val)));
+                        }
+                        continue;
+                    }
+                }
+                let attr_name = drop_chars(ik, char_count(o.attr_prefix));
+                validate_name(attr_name, "attribute")?;
+                dict_set(mut attrs, attr_name, Val.Str(str_val(m.val)));
+                continue;
+            }
+            children.push(m.clone());
+        }
+        if o.pretty {
+            g.whitespace(repeat_str(o.indent, depth));
+        }
+        g.start(key, attrs);
+        if o.pretty and children.len() > 0 {
+            g.whitespace(o.newl);
+        }
+        for c in children {
+            emit(c.key, c.val, depth + 1, true, o, mut g)?;
+        }
+        if let Some(c) = cdata {
+            g.characters(c)?;
+        }
+        if o.pretty and children.len() > 0 {
+            g.whitespace(repeat_str(o.indent, depth));
+        }
+        g.end(key);
+        if o.pretty and depth > 0 {
+            g.whitespace(o.newl);
+        }
+    }
+    Ok(())
+}
+
+fn repeat_str(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    for _k in 0..n {
+        out.push_str(s);
+    }
+    out
+}
+
+fn xml_unparse(input: ref Val, o: ref UnparseOpts) -> Result[String, String] {
+    let members = match input {
+        Val.Dict(ms) => ms.clone(),
+        _ => Vec.new(),
+    };
+    if o.full_document and members.len() != 1 {
+        return Err("ValueError: Document must have exactly one root.".to_string());
+    }
+    let mut g = Gen { out: String.new(), short: o.short_empty_elements, pending: false };
+    if o.full_document {
+        g.out.push_str(f"<?xml version=\"1.0\" encoding=\"{o.encoding}\"?>\n");
+    }
+    for m in members {
+        emit(m.key, m.val, 0, o.full_document, o, mut g)?;
+    }
+    Ok(g.out)
+}
+
+// ---------------------------------------------------------------- jobs
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur.clone());
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn read_data(path: ref String) -> Result[String, String] {
+    match fs.read_to_string(f"data/{path}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+fn show(text: ref String) {
+    for line in split_on(text, '\n') {
+        println(f"   | {line}");
+    }
+}
+
+fn opt_bool(o: ref Val, key: Str, dflt: bool) -> bool {
+    match get(o, key) {
+        Some(Val.Bool(b)) => b,
+        _ => dflt,
+    }
+}
+
+fn opt_str(o: ref Val, key: Str, dflt: Str) -> String {
+    match get(o, key) {
+        Some(Val.Str(s)) => s,
+        _ => dflt.to_string(),
+    }
+}
+
+fn opt_dict(o: ref Val, key: Str) -> Option[Vec[Member]] {
+    match get(o, key) {
+        Some(Val.Dict(ms)) => Some(ms),
+        _ => None,
+    }
+}
+
+// xmltodict.parse's keyword arguments from a job's JSON.
+fn parse_opts(o: ref Val) -> ParseOpts {
+    let d = parse_defaults();
+    let force_list = match get(o, "force_list") {
+        Some(Val.Bool(true)) => ForceList.All,
+        Some(Val.List(items)) => {
+            let mut names: Vec[String] = Vec.new();
+            for it in items {
+                names.push(str_val(it));
+            }
+            ForceList.Names(names)
+        }
+        Some(Val.Str(s)) => if s == "deep" { ForceList.Deep } else { ForceList.Off },
+        _ => ForceList.Off,
+    };
+    ParseOpts {
+        xml_attribs: opt_bool(o, "xml_attribs", d.xml_attribs),
+        attr_prefix: opt_str(o, "attr_prefix", "@"),
+        cdata_key: opt_str(o, "cdata_key", "#text"),
+        force_cdata: opt_bool(o, "force_cdata", d.force_cdata),
+        cdata_separator: opt_str(o, "cdata_separator", ""),
+        strip_whitespace: opt_bool(o, "strip_whitespace", d.strip_whitespace),
+        process_namespaces: opt_bool(o, "process_namespaces", d.process_namespaces),
+        namespace_separator: opt_str(o, "namespace_separator", ":"),
+        namespaces: opt_dict(o, "namespaces"),
+        force_list: force_list,
+        postprocessor: opt_str(o, "postprocessor", ""),
+        disable_entities: opt_bool(o, "disable_entities", d.disable_entities),
+        process_comments: opt_bool(o, "process_comments", d.process_comments),
+        comment_key: opt_str(o, "comment_key", "#comment"),
+        ordered: opt_str(o, "dict_constructor", "") == "OrderedDict",
+        item_depth: 0,
+        limit: 0,
+    }
+}
+
+// xmltodict.unparse's keyword arguments from a job's JSON.
+fn unparse_opts(o: ref Val) -> UnparseOpts {
+    let d = unparse_defaults();
+    UnparseOpts {
+        encoding: opt_str(o, "encoding", "utf-8"),
+        full_document: opt_bool(o, "full_document", d.full_document),
+        short_empty_elements: opt_bool(o, "short_empty_elements", d.short_empty_elements),
+        attr_prefix: opt_str(o, "attr_prefix", "@"),
+        cdata_key: opt_str(o, "cdata_key", "#text"),
+        pretty: opt_bool(o, "pretty", d.pretty),
+        newl: opt_str(o, "newl", "\n"),
+        indent: opt_str(o, "indent", "\t"),
+        namespace_separator: opt_str(o, "namespace_separator", ":"),
+        namespaces: opt_dict(o, "namespaces").unwrap_or(Vec.new()),
+        expand_iter: opt_str(o, "expand_iter", ""),
+        preprocessor: opt_str(o, "preprocessor", ""),
+    }
+}
+
+fn json_opts(s: ref String) -> Result[Val, String] {
+    json_parse(s)
+}
+
+fn do_parse(path: ref String, o: ref ParseOpts) -> Result[(), String] {
+    let text = read_data(path)?;
+    let p = xml_parse(text, o);
+    match p.error {
+        Some(e) => println(f"   raised {e}"),
+        None => println(f"   {repr_val(p.result, o.ordered)}"),
+    }
+    Ok(())
+}
+
+fn do_json(path: ref String, o: ref ParseOpts) -> Result[(), String] {
+    let text = read_data(path)?;
+    let p = xml_parse(text, o);
+    match p.error {
+        Some(e) => println(f"   raised {e}"),
+        None => {
+            let mut out = String.new();
+            json_dump(p.result, 0, mut out);
+            show(out);
+        }
+    }
+    Ok(())
+}
+
+fn do_stream(path: ref String, depth: i64, limit: i64) -> Result[(), String] {
+    let text = read_data(path)?;
+    let mut o = parse_defaults();
+    o.item_depth = depth;
+    o.limit = limit;
+    let p = xml_parse(text, o);
+    for c in p.called {
+        println(f"   path:{path_repr(c.path, false)} item:{str_val(c.item)}");
+    }
+    match p.error {
+        Some(e) => println(f"   raised {e} after {p.called.len()} items"),
+        None => println(f"   {p.called.len()} items, result {repr_val(p.result, false)}"),
+    }
+    Ok(())
+}
+
+fn do_unparse(d: ref Val, o: ref UnparseOpts) {
+    match xml_unparse(d, o) {
+        Ok(out) => show(out),
+        Err(e) => println(f"   raised {e}"),
+    }
+}
+
+// ---------------------------------------------------------------- reports
+
+fn ljust(s: ref String, w: i64) -> String {
+    let n = char_count(s);
+    if n >= w { s.clone() } else { f"{s}{repeat(' ', w - n)}" }
+}
+
+fn rjust(s: ref String, w: i64) -> String {
+    let n = char_count(s);
+    if n >= w { s.clone() } else { f"{repeat(' ', w - n)}{s}" }
+}
+
+fn int_of(v: ref Option[Val]) -> i64 {
+    match v {
+        Some(Val.Int(n)) => *n,
+        _ => 0,
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn opt_text(v: ref Option[Val]) -> String {
+    match v {
+        Some(x) => str_val(x),
+        None => "None".to_string(),
+    }
+}
+
+fn parsed(path: ref String, o: ref ParseOpts) -> Result[Val, String] {
+    let text = read_data(path)?;
+    let p = xml_parse(text, o);
+    match p.error {
+        Some(e) => Err(e),
+        None => Ok(p.result),
+    }
+}
+
+// A tally by key, printed in key order.
+struct Tally {
+    keys: Vec[String],
+    counts: Vec[i64],
+    totals: Vec[i64],
+}
+
+impl Tally {
+    fn add(mut ref self, key: ref String, n: i64) {
+        for k in 0..self.keys.len() {
+            if self.keys[k] == key {
+                self.counts[k] += 1;
+                self.totals[k] += n;
+                return;
+            }
+        }
+        self.keys.push(key.clone());
+        self.counts.push(1);
+        self.totals.push(n);
+    }
+
+    fn sorted(ref self) -> Vec[i64] {
+        let mut order: Vec[i64] = Vec.new();
+        for k in 0..self.keys.len() {
+            let mut at = order.len();
+            while at > 0 and self.keys[order[at - 1]] > self.keys[k] {
+                at -= 1;
+            }
+            order.insert(at, k);
+        }
+        order
+    }
+}
+
+fn s3report(path: ref String) -> Result[(), String] {
+    let mut o = parse_defaults();
+    let mut fl: Vec[String] = Vec.new();
+    fl.push("Contents".to_string());
+    o.force_list = ForceList.Names(fl);
+    o.postprocessor = "typed".to_string();
+    let d = parsed(path, o)?;
+    let r = get(d, "ListBucketResult").unwrap_or(Val.Null);
+    let prefix = match get(r, "Prefix") {
+        Some(Val.Str(s)) => s,
+        _ => String.new(),
+    };
+    let truncated = match get(r, "IsTruncated") {
+        Some(Val.Bool(b)) => b,
+        _ => false,
+    };
+    println(f"   bucket {get_str(r, "Name")}, prefix {py_repr(prefix)}, {int_of(get(r, "KeyCount"))} keys, truncated {py_bool(truncated)}");
+    if truncated {
+        println(f"   continue with {opt_text(get(r, "NextContinuationToken"))}");
+    }
+    let mut by_dir = Tally { keys: Vec.new(), counts: Vec.new(), totals: Vec.new() };
+    let mut by_class = Tally { keys: Vec.new(), counts: Vec.new(), totals: Vec.new() };
+    let mut largest_key = String.new();
+    let mut largest: i64 = -1;
+    for c in as_list(get(r, "Contents")) {
+        let key = get_str(c, "Key");
+        let size = int_of(get(c, "Size"));
+        let top = match rsplit1(key, "/".to_string()) {
+            Some((head, _)) => f"{head}/",
+            None => "(root)".to_string(),
+        };
+        by_dir.add(top, size);
+        let cls = match get(c, "StorageClass") {
+            Some(v) => str_val(v),
+            None => "STANDARD".to_string(),
+        };
+        by_class.add(cls, size);
+        if largest < 0 or size > largest {
+            largest = size;
+            largest_key = key;
+        }
+    }
+    for k in by_dir.sorted() {
+        println(f"     {ljust(by_dir.keys[k], 16)} {rjust(f"{by_dir.counts[k]}", 2)} objects {rjust(f"{by_dir.totals[k]}", 9)} bytes");
+    }
+    for k in by_class.sorted() {
+        println(f"     {ljust(by_class.keys[k], 12)} {rjust(f"{by_class.totals[k]}", 9)} bytes");
+    }
+    println(f"   largest {largest_key} ({largest} bytes)");
+    for p in as_list(get(r, "CommonPrefixes")) {
+        println(f"   common prefix {get_str(p, "Prefix")}");
+    }
+    Ok(())
+}
+
+fn feedreport(path: ref String) -> Result[(), String] {
+    let d = parsed(path, parse_defaults())?;
+    let ch = get(get(d, "rss").unwrap_or(Val.Null), "channel").unwrap_or(Val.Null);
+    let self_link = get(ch, "atom:link").unwrap_or(Val.Null);
+    println(f"   {get_str(ch, "title")} <{get_str(ch, "link")}> lang {get_str(ch, "language")}, self {get_str(self_link, "@href")}");
+    for it in as_list(get(ch, "item")) {
+        let (gid, perma) = match get(it, "guid") {
+            Some(Val.Dict(ms)) => {
+                let g = Val.Dict(ms);
+                let p = match get(g, "@isPermaLink") {
+                    Some(v) => str_val(v) == "true",
+                    None => true,
+                };
+                (get_str(g, "#text"), p)
+            }
+            Some(v) => (str_val(v), true),
+            None => ("None".to_string(), true),
+        };
+        let mut cats: Vec[String] = Vec.new();
+        for c in as_list(get(it, "category")) {
+            cats.push(str_val(c));
+        }
+        let mut body = String.new();
+        for key in ["content:encoded", "description"] {
+            if body.len() == 0 {
+                if let Some(v) = get(it, key) {
+                    if truthy(v) {
+                        body = str_val(v);
+                    }
+                }
+            }
+        }
+        println(f"   - {get_str(it, "title")}");
+        let by = match get(it, "dc:creator") {
+            Some(v) => str_val(v),
+            None => "unknown".to_string(),
+        };
+        let when = match get(it, "pubDate") {
+            Some(v) => str_val(v),
+            None => "undated".to_string(),
+        };
+        println(f"     by {by}, {when}");
+        let mut tags = String.new();
+        for k in 0..cats.len() {
+            if k > 0 {
+                tags.push_str(", ");
+            }
+            tags.push_str(cats[k]);
+        }
+        if tags.len() == 0 {
+            tags = "none".to_string();
+        }
+        let kind = if perma { "permalink" } else { "opaque" };
+        println(f"     tags {tags}; guid {gid} ({kind}); {char_count(body)} chars of body");
+        if let Some(enc) = get(it, "enclosure") {
+            if truthy(enc) {
+                println(f"     enclosure {get_str(enc, "@url")}, {get_str(enc, "@type")}, {get_str(enc, "@length")} bytes");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn gpxreport(path: ref String) -> Result[(), String] {
+    let text = read_data(path)?;
+    let mut o = parse_defaults();
+    o.item_depth = 4;
+    let p = xml_parse(text, o);
+    if let Some(e) = p.error {
+        return Err(e);
+    }
+    let mut lat: Vec[String] = Vec.new();
+    let mut lon: Vec[String] = Vec.new();
+    let mut ele: Vec[i64] = Vec.new();
+    let mut time: Vec[String] = Vec.new();
+    for c in p.called {
+        let attrs = c.path[c.path.len() - 1].attrs.clone();
+        lat.push(get_str(attrs, "lat"));
+        lon.push(get_str(attrs, "lon"));
+        ele.push(py_int(get_str(c.item, "ele")).unwrap_or(0));
+        time.push(get_str(c.item, "time"));
+    }
+    let mut climb = 0;
+    let mut descent = 0;
+    let mut high = ele[0];
+    for k in 1..ele.len() {
+        if ele[k] > ele[k - 1] {
+            climb += ele[k] - ele[k - 1];
+        } else {
+            descent += ele[k - 1] - ele[k];
+        }
+        if ele[k] > high {
+            high = ele[k];
+        }
+    }
+    let n = ele.len();
+    println(f"   {n} points from {time[0]} to {time[n - 1]}");
+    println(f"   start {lat[0]},{lon[0]} end {lat[n - 1]},{lon[n - 1]}");
+    println(f"   climbed {climb} m, descended {descent} m, highest {high} m");
+    Ok(())
+}
+
+fn ns_map(pairs: ref Vec[(String, String)]) -> Vec[Member] {
+    let mut ms: Vec[Member] = Vec.new();
+    for (k, v) in pairs {
+        let val = if v.len() == 0 { Val.Null } else { Val.Str(v.clone()) };
+        ms.push(Member { key: k.clone(), val: val });
+    }
+    ms
+}
+
+fn soapreport(path: ref String) -> Result[(), String] {
+    let mut o = parse_defaults();
+    o.process_namespaces = true;
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    pairs.push(("http://schemas.xmlsoap.org/soap/envelope/".to_string(), "soap".to_string()));
+    pairs.push(("https://www.example.org/stock".to_string(), "".to_string()));
+    pairs.push(("urn:example:tx".to_string(), "tx".to_string()));
+    o.namespaces = Some(ns_map(pairs));
+    let d = parsed(path, o)?;
+    let env = get(d, "soap:Envelope").unwrap_or(Val.Null);
+    let tx = get(get(env, "soap:Header").unwrap_or(Val.Null), "tx:Transaction").unwrap_or(Val.Null);
+    println(f"   transaction {get_str(tx, "#text")}, must understand {get_str(tx, "@soap:mustUnderstand")}");
+    let resp = get(get(env, "soap:Body").unwrap_or(Val.Null), "GetPriceResponse").unwrap_or(Val.Null);
+    for p in as_list(get(resp, "Price")) {
+        println(f"   {get_str(resp, "Symbol")} {get_str(p, "@currency")} {get_str(p, "#text")}");
+    }
+    Ok(())
+}
+
+fn names_of(v: ref Option[Val]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for x in as_list(v) {
+        out.push(get_str(x, "@android:name"));
+    }
+    out
+}
+
+fn manifestreport(path: ref String) -> Result[(), String] {
+    let mut o = parse_defaults();
+    o.process_namespaces = true;
+    let mut pairs: Vec[(String, String)] = Vec.new();
+    pairs.push(("http://schemas.android.com/apk/res/android".to_string(), "android".to_string()));
+    o.namespaces = Some(ns_map(pairs));
+    let mut fl: Vec[String] = Vec.new();
+    for n in ["uses-permission", "activity", "action", "category"] {
+        fl.push(n.to_string());
+    }
+    o.force_list = ForceList.Names(fl);
+    let d = parsed(path, o)?;
+    let m = get(d, "manifest").unwrap_or(Val.Null);
+    println(f"   package {get_str(m, "@package")} version {get_str(m, "@android:versionName")} ({get_str(m, "@android:versionCode")})");
+    for name in names_of(get(m, "uses-permission")) {
+        let short = match rsplit1(name, ".".to_string()) {
+            Some((_, last)) => last,
+            None => name.clone(),
+        };
+        println(f"   permission {short}");
+    }
+    let app = get(m, "application").unwrap_or(Val.Null);
+    for a in as_list(get(app, "activity")) {
+        let flt = get(a, "intent-filter").unwrap_or(Val.Null);
+        let acts = names_of(get(flt, "action"));
+        let cats = names_of(get(flt, "category"));
+        let launcher = acts.contains("android.intent.action.MAIN".to_string()) and cats.contains("android.intent.category.LAUNCHER".to_string());
+        let exported = match get(a, "@android:exported") {
+            Some(v) => str_val(v),
+            None => "false".to_string(),
+        };
+        println(f"   activity {get_str(a, "@android:name")} exported={exported} launcher={py_bool(launcher)}");
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    let jobs = read_data("jobs.tsv".to_string())?;
+    for line in split_on(jobs, '\n') {
+        if line.len() == 0 {
+            continue;
+        }
+        if line.starts_with("== ") {
+            println(line);
+            continue;
+        }
+        let f = split_on(line, '\t');
+        let mut head = "--".to_string();
+        for x in f {
+            head.push(' ');
+            head.push_str(x);
+        }
+        println(head);
+        if f[0] == "parse" {
+            do_parse(f[1], parse_opts(json_opts(f[2])?))?;
+        } else if f[0] == "json" {
+            do_json(f[1], parse_opts(json_opts(f[2])?))?;
+        } else if f[0] == "stream" {
+            do_stream(f[1], py_int(f[2]).unwrap_or(0), py_int(f[3]).unwrap_or(0))?;
+        } else if f[0] == "roundtrip" {
+            let po = parse_opts(json_opts(f[2])?);
+            let text = read_data(f[1])?;
+            let p = xml_parse(text, po);
+            match p.error {
+                Some(e) => println(f"   raised {e}"),
+                None => do_unparse(p.result, unparse_opts(json_opts(f[3])?)),
+            }
+        } else if f[0] == "unparse" {
+            let d = json_parse(read_data(f[1])?)?;
+            do_unparse(d, unparse_opts(json_opts(f[2])?));
+        } else if f[0] == "s3report" {
+            s3report(f[1])?;
+        } else if f[0] == "feedreport" {
+            feedreport(f[1])?;
+        } else if f[0] == "gpxreport" {
+            gpxreport(f[1])?;
+        } else if f[0] == "soapreport" {
+            soapreport(f[1])?;
+        } else if f[0] == "manifestreport" {
+            manifestreport(f[1])?;
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    let mut t0 = String.new();
+    data_file_0_0(mut t0);
+    v.push(DataFile { path: "bad/attrlt.xml".to_string(), hex: false, body: t0 });
+    let mut t1 = String.new();
+    data_file_1_0(mut t1);
+    v.push(DataFile { path: "bad/cdata-end.xml".to_string(), hex: false, body: t1 });
+    let mut t2 = String.new();
+    data_file_2_0(mut t2);
+    v.push(DataFile { path: "bad/charref.xml".to_string(), hex: false, body: t2 });
+    let mut t3 = String.new();
+    data_file_3_0(mut t3);
+    v.push(DataFile { path: "bad/decl.xml".to_string(), hex: false, body: t3 });
+    let mut t4 = String.new();
+    data_file_4_0(mut t4);
+    v.push(DataFile { path: "bad/dupattr.xml".to_string(), hex: false, body: t4 });
+    let mut t5 = String.new();
+    v.push(DataFile { path: "bad/empty.xml".to_string(), hex: false, body: t5 });
+    let mut t6 = String.new();
+    data_file_6_0(mut t6);
+    v.push(DataFile { path: "bad/junk.xml".to_string(), hex: false, body: t6 });
+    let mut t7 = String.new();
+    data_file_7_0(mut t7);
+    v.push(DataFile { path: "bad/mismatch.xml".to_string(), hex: false, body: t7 });
+    let mut t8 = String.new();
+    data_file_8_0(mut t8);
+    v.push(DataFile { path: "bad/nsdup.xml".to_string(), hex: false, body: t8 });
+    let mut t9 = String.new();
+    data_file_9_0(mut t9);
+    v.push(DataFile { path: "bad/prefix.xml".to_string(), hex: false, body: t9 });
+    let mut t10 = String.new();
+    data_file_10_0(mut t10);
+    v.push(DataFile { path: "bad/spaces.xml".to_string(), hex: false, body: t10 });
+    let mut t11 = String.new();
+    data_file_11_0(mut t11);
+    v.push(DataFile { path: "bad/text-before.xml".to_string(), hex: false, body: t11 });
+    let mut t12 = String.new();
+    data_file_12_0(mut t12);
+    v.push(DataFile { path: "bad/token.xml".to_string(), hex: false, body: t12 });
+    let mut t13 = String.new();
+    data_file_13_0(mut t13);
+    v.push(DataFile { path: "bad/unclosed.xml".to_string(), hex: false, body: t13 });
+    let mut t14 = String.new();
+    data_file_14_0(mut t14);
+    v.push(DataFile { path: "bad/undefined.xml".to_string(), hex: false, body: t14 });
+    let mut t15 = String.new();
+    data_file_15_0(mut t15);
+    data_file_15_1(mut t15);
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t15 });
+    let mut t16 = String.new();
+    data_file_16_0(mut t16);
+    v.push(DataFile { path: "json/bad-attr.json".to_string(), hex: false, body: t16 });
+    let mut t17 = String.new();
+    data_file_17_0(mut t17);
+    v.push(DataFile { path: "json/bad-name.json".to_string(), hex: false, body: t17 });
+    let mut t18 = String.new();
+    data_file_18_0(mut t18);
+    v.push(DataFile { path: "json/bad-nbsp.json".to_string(), hex: false, body: t18 });
+    let mut t19 = String.new();
+    data_file_19_0(mut t19);
+    v.push(DataFile { path: "json/bad-ns.json".to_string(), hex: false, body: t19 });
+    let mut t20 = String.new();
+    data_file_20_0(mut t20);
+    v.push(DataFile { path: "json/bad-q.json".to_string(), hex: false, body: t20 });
+    let mut t21 = String.new();
+    data_file_21_0(mut t21);
+    v.push(DataFile { path: "json/config.json".to_string(), hex: false, body: t21 });
+    let mut t22 = String.new();
+    data_file_22_0(mut t22);
+    v.push(DataFile { path: "json/list-root.json".to_string(), hex: false, body: t22 });
+    let mut t23 = String.new();
+    data_file_23_0(mut t23);
+    v.push(DataFile { path: "json/ns.json".to_string(), hex: false, body: t23 });
+    let mut t24 = String.new();
+    data_file_24_0(mut t24);
+    v.push(DataFile { path: "json/odd.json".to_string(), hex: false, body: t24 });
+    let mut t25 = String.new();
+    data_file_25_0(mut t25);
+    v.push(DataFile { path: "json/order.json".to_string(), hex: false, body: t25 });
+    let mut t26 = String.new();
+    data_file_26_0(mut t26);
+    v.push(DataFile { path: "json/text-int.json".to_string(), hex: false, body: t26 });
+    let mut t27 = String.new();
+    data_file_27_0(mut t27);
+    v.push(DataFile { path: "json/text-list.json".to_string(), hex: false, body: t27 });
+    let mut t28 = String.new();
+    data_file_28_0(mut t28);
+    v.push(DataFile { path: "json/two-roots.json".to_string(), hex: false, body: t28 });
+    let mut t29 = String.new();
+    data_file_29_0(mut t29);
+    v.push(DataFile { path: "xml/article.xml".to_string(), hex: false, body: t29 });
+    let mut t30 = String.new();
+    data_file_30_0(mut t30);
+    v.push(DataFile { path: "xml/external.xml".to_string(), hex: false, body: t30 });
+    let mut t31 = String.new();
+    data_file_31_0(mut t31);
+    v.push(DataFile { path: "xml/feed.xml".to_string(), hex: false, body: t31 });
+    let mut t32 = String.new();
+    data_file_32_0(mut t32);
+    v.push(DataFile { path: "xml/feeds-ns.xml".to_string(), hex: false, body: t32 });
+    let mut t33 = String.new();
+    data_file_33_0(mut t33);
+    v.push(DataFile { path: "xml/manifest.xml".to_string(), hex: false, body: t33 });
+    let mut t34 = String.new();
+    data_file_34_0(mut t34);
+    v.push(DataFile { path: "xml/opml.xml".to_string(), hex: false, body: t34 });
+    let mut t35 = String.new();
+    data_file_35_0(mut t35);
+    v.push(DataFile { path: "xml/pom.xml".to_string(), hex: false, body: t35 });
+    let mut t36 = String.new();
+    data_file_36_0(mut t36);
+    v.push(DataFile { path: "xml/ride.gpx".to_string(), hex: false, body: t36 });
+    let mut t37 = String.new();
+    data_file_37_0(mut t37);
+    v.push(DataFile { path: "xml/s3-list.xml".to_string(), hex: false, body: t37 });
+    let mut t38 = String.new();
+    data_file_38_0(mut t38);
+    v.push(DataFile { path: "xml/s3-one.xml".to_string(), hex: false, body: t38 });
+    let mut t39 = String.new();
+    data_file_39_0(mut t39);
+    v.push(DataFile { path: "xml/settings.xml".to_string(), hex: false, body: t39 });
+    let mut t40 = String.new();
+    data_file_40_0(mut t40);
+    v.push(DataFile { path: "xml/sitemap.xml".to_string(), hex: false, body: t40 });
+    let mut t41 = String.new();
+    data_file_41_0(mut t41);
+    v.push(DataFile { path: "xml/soap.xml".to_string(), hex: false, body: t41 });
+    let mut t42 = String.new();
+    data_file_42_0(mut t42);
+    v.push(DataFile { path: "xml/svg.xml".to_string(), hex: true, body: t42 });
+    let mut t43 = String.new();
+    data_file_43_0(mut t43);
+    v.push(DataFile { path: "xml/weird.xml".to_string(), hex: false, body: t43 });
+    v
+}
+
+fn data_file_0_0(t: mut ref String) {
+    t.push_str("<a href=\"x<y\"/>\n");
+}
+
+fn data_file_1_0(t: mut ref String) {
+    t.push_str("<a>x ]]> y</a>\n");
+}
+
+fn data_file_2_0(t: mut ref String) {
+    t.push_str("<a>&#1;</a>\n");
+}
+
+fn data_file_3_0(t: mut ref String) {
+    t.push_str("\n");
+    t.push_str("<?xml version=\"1.0\"?><a/>\n");
+}
+
+fn data_file_4_0(t: mut ref String) {
+    t.push_str("<a x=\"1\" x=\"2\"/>\n");
+}
+
+fn data_file_6_0(t: mut ref String) {
+    t.push_str("<a/>\n");
+    t.push_str("<b/>\n");
+}
+
+fn data_file_7_0(t: mut ref String) {
+    t.push_str("<a>\n");
+    t.push_str("  <b>text</c>\n");
+    t.push_str("</a>\n");
+}
+
+fn data_file_8_0(t: mut ref String) {
+    t.push_str("<r xmlns:a=\"u\" xmlns:b=\"u\" a:x=\"1\" b:x=\"2\"/>\n");
+}
+
+fn data_file_9_0(t: mut ref String) {
+    t.push_str("<x:a><x:b/></x:a>\n");
+}
+
+fn data_file_10_0(t: mut ref String) {
+    t.push_str("   \n");
+    t.push_str("  ");
+}
+
+fn data_file_11_0(t: mut ref String) {
+    t.push_str("hello <a/>\n");
+}
+
+fn data_file_12_0(t: mut ref String) {
+    t.push_str("<a>1 < 2</a>\n");
+}
+
+fn data_file_13_0(t: mut ref String) {
+    t.push_str("<config>\n");
+    t.push_str("  <db host=\"x\">\n");
+}
+
+fn data_file_14_0(t: mut ref String) {
+    t.push_str("<msg>Hello &name;!</msg>\n");
+}
+
+fn data_file_15_0(t: mut ref String) {
+    t.push_str("== every document with the defaults\n");
+    t.push_str("parse\txml/article.xml\t{}\n");
+    t.push_str("parse\txml/external.xml\t{}\n");
+    t.push_str("parse\txml/feed.xml\t{}\n");
+    t.push_str("parse\txml/feeds-ns.xml\t{}\n");
+    t.push_str("parse\txml/manifest.xml\t{}\n");
+    t.push_str("parse\txml/opml.xml\t{}\n");
+    t.push_str("parse\txml/pom.xml\t{}\n");
+    t.push_str("parse\txml/ride.gpx\t{}\n");
+    t.push_str("parse\txml/s3-list.xml\t{}\n");
+    t.push_str("parse\txml/s3-one.xml\t{}\n");
+    t.push_str("parse\txml/settings.xml\t{}\n");
+    t.push_str("parse\txml/sitemap.xml\t{}\n");
+    t.push_str("parse\txml/soap.xml\t{}\n");
+    t.push_str("parse\txml/svg.xml\t{}\n");
+    t.push_str("parse\txml/weird.xml\t{}\n");
+    t.push_str("== every broken document\n");
+    t.push_str("parse\tbad/attrlt.xml\t{}\n");
+    t.push_str("parse\tbad/cdata-end.xml\t{}\n");
+    t.push_str("parse\tbad/charref.xml\t{}\n");
+    t.push_str("parse\tbad/decl.xml\t{}\n");
+    t.push_str("parse\tbad/dupattr.xml\t{}\n");
+    t.push_str("parse\tbad/empty.xml\t{}\n");
+    t.push_str("parse\tbad/junk.xml\t{}\n");
+    t.push_str("parse\tbad/mismatch.xml\t{}\n");
+    t.push_str("parse\tbad/nsdup.xml\t{}\n");
+    t.push_str("parse\tbad/nsdup.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\tbad/prefix.xml\t{}\n");
+    t.push_str("parse\tbad/prefix.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\tbad/spaces.xml\t{}\n");
+    t.push_str("parse\tbad/text-before.xml\t{}\n");
+    t.push_str("parse\tbad/token.xml\t{}\n");
+    t.push_str("parse\tbad/unclosed.xml\t{}\n");
+    t.push_str("parse\tbad/undefined.xml\t{}\n");
+    t.push_str("== option sets\n");
+    t.push_str("parse\txml/feed.xml\t{\"xml_attribs\": false}\n");
+    t.push_str("parse\txml/feed.xml\t{\"attr_prefix\": \"\", \"cdata_key\": \"text\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"force_cdata\": true}\n");
+    t.push_str("parse\txml/feed.xml\t{\"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/feed.xml\t{\"cdata_separator\": \"|\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"cdata_separator\": \"|\", \"disable_entities\": false}\n");
+    t.push_str("parse\txml/feed.xml\t{\"process_comments\": true}\n");
+    t.push_str("parse\txml/feed.xml\t{\"process_comments\": true, \"comment_key\": \"//\", \"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/feed.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\txml/feed.xml\t{\"process_namespaces\": true, \"namespace_separator\": \"|\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"force_list\": true}\n");
+    t.push_str("parse\txml/feed.xml\t{\"force_list\": [\"item\", \"category\", \"Contents\", \"url\", \"outline\", \"p\"]}\n");
+    t.push_str("parse\txml/feed.xml\t{\"force_list\": \"deep\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"postprocessor\": \"int\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"postprocessor\": \"typed\", \"force_cdata\": true}\n");
+    t.push_str("parse\txml/feed.xml\t{\"postprocessor\": \"drop\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"postprocessor\": \"lower\", \"attr_prefix\": \"-\"}\n");
+    t.push_str("parse\txml/feed.xml\t{\"dict_constructor\": \"OrderedDict\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"xml_attribs\": false}\n");
+    t.push_str("parse\txml/settings.xml\t{\"attr_prefix\": \"\", \"cdata_key\": \"text\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"force_cdata\": true}\n");
+    t.push_str("parse\txml/settings.xml\t{\"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/settings.xml\t{\"cdata_separator\": \"|\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"cdata_separator\": \"|\", \"disable_entities\": false}\n");
+    t.push_str("parse\txml/settings.xml\t{\"process_comments\": true}\n");
+    t.push_str("parse\txml/settings.xml\t{\"process_comments\": true, \"comment_key\": \"//\", \"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/settings.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\txml/settings.xml\t{\"process_namespaces\": true, \"namespace_separator\": \"|\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"force_list\": true}\n");
+    t.push_str("parse\txml/settings.xml\t{\"force_list\": [\"item\", \"category\", \"Contents\", \"url\", \"outline\", \"p\"]}\n");
+    t.push_str("parse\txml/settings.xml\t{\"force_list\": \"deep\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"postprocessor\": \"int\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"postprocessor\": \"typed\", \"force_cdata\": true}\n");
+    t.push_str("parse\txml/settings.xml\t{\"postprocessor\": \"drop\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"postprocessor\": \"lower\", \"attr_prefix\": \"-\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"dict_constructor\": \"OrderedDict\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"xml_attribs\": false}\n");
+    t.push_str("parse\txml/article.xml\t{\"attr_prefix\": \"\", \"cdata_key\": \"text\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"force_cdata\": true}\n");
+    t.push_str("parse\txml/article.xml\t{\"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/article.xml\t{\"cdata_separator\": \"|\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"cdata_separator\": \"|\", \"disable_entities\": false}\n");
+    t.push_str("parse\txml/article.xml\t{\"process_comments\": true}\n");
+    t.push_str("parse\txml/article.xml\t{\"process_comments\": true, \"comment_key\": \"//\", \"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/article.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\txml/article.xml\t{\"process_namespaces\": true, \"namespace_separator\": \"|\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"force_list\": true}\n");
+    t.push_str("parse\txml/article.xml\t{\"force_list\": [\"item\", \"category\", \"Contents\", \"url\", \"outline\", \"p\"]}\n");
+    t.push_str("parse\txml/article.xml\t{\"force_list\": \"deep\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"postprocessor\": \"int\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"postprocessor\": \"typed\", \"force_cdata\": true}\n");
+    t.push_str("parse\txml/article.xml\t{\"postprocessor\": \"drop\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"postprocessor\": \"lower\", \"attr_prefix\": \"-\"}\n");
+    t.push_str("parse\txml/article.xml\t{\"dict_constructor\": \"OrderedDict\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"xml_attribs\": false}\n");
+    t.push_str("parse\txml/soap.xml\t{\"attr_prefix\": \"\", \"cdata_key\": \"text\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"force_cdata\": true}\n");
+    t.push_str("parse\txml/soap.xml\t{\"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/soap.xml\t{\"cdata_separator\": \"|\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"cdata_separator\": \"|\", \"disable_entities\": false}\n");
+    t.push_str("parse\txml/soap.xml\t{\"process_comments\": true}\n");
+    t.push_str("parse\txml/soap.xml\t{\"process_comments\": true, \"comment_key\": \"//\", \"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/soap.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\txml/soap.xml\t{\"process_namespaces\": true, \"namespace_separator\": \"|\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"force_list\": true}\n");
+    t.push_str("parse\txml/soap.xml\t{\"force_list\": [\"item\", \"category\", \"Contents\", \"url\", \"outline\", \"p\"]}\n");
+    t.push_str("parse\txml/soap.xml\t{\"force_list\": \"deep\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"postprocessor\": \"int\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"postprocessor\": \"typed\", \"force_cdata\": true}\n");
+    t.push_str("parse\txml/soap.xml\t{\"postprocessor\": \"drop\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"postprocessor\": \"lower\", \"attr_prefix\": \"-\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"dict_constructor\": \"OrderedDict\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"xml_attribs\": false}\n");
+    t.push_str("parse\txml/weird.xml\t{\"attr_prefix\": \"\", \"cdata_key\": \"text\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"force_cdata\": true}\n");
+    t.push_str("parse\txml/weird.xml\t{\"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/weird.xml\t{\"cdata_separator\": \"|\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"cdata_separator\": \"|\", \"disable_entities\": false}\n");
+    t.push_str("parse\txml/weird.xml\t{\"process_comments\": true}\n");
+    t.push_str("parse\txml/weird.xml\t{\"process_comments\": true, \"comment_key\": \"//\", \"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/weird.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\txml/weird.xml\t{\"process_namespaces\": true, \"namespace_separator\": \"|\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"force_list\": true}\n");
+    t.push_str("parse\txml/weird.xml\t{\"force_list\": [\"item\", \"category\", \"Contents\", \"url\", \"outline\", \"p\"]}\n");
+    t.push_str("parse\txml/weird.xml\t{\"force_list\": \"deep\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"postprocessor\": \"int\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"postprocessor\": \"typed\", \"force_cdata\": true}\n");
+    t.push_str("parse\txml/weird.xml\t{\"postprocessor\": \"drop\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"postprocessor\": \"lower\", \"attr_prefix\": \"-\"}\n");
+    t.push_str("parse\txml/weird.xml\t{\"dict_constructor\": \"OrderedDict\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"xml_attribs\": false}\n");
+    t.push_str("parse\txml/opml.xml\t{\"attr_prefix\": \"\", \"cdata_key\": \"text\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"force_cdata\": true}\n");
+    t.push_str("parse\txml/opml.xml\t{\"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/opml.xml\t{\"cdata_separator\": \"|\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"cdata_separator\": \"|\", \"disable_entities\": false}\n");
+    t.push_str("parse\txml/opml.xml\t{\"process_comments\": true}\n");
+    t.push_str("parse\txml/opml.xml\t{\"process_comments\": true, \"comment_key\": \"//\", \"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/opml.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\txml/opml.xml\t{\"process_namespaces\": true, \"namespace_separator\": \"|\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"force_list\": true}\n");
+    t.push_str("parse\txml/opml.xml\t{\"force_list\": [\"item\", \"category\", \"Contents\", \"url\", \"outline\", \"p\"]}\n");
+    t.push_str("parse\txml/opml.xml\t{\"force_list\": \"deep\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"postprocessor\": \"int\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"postprocessor\": \"typed\", \"force_cdata\": true}\n");
+    t.push_str("parse\txml/opml.xml\t{\"postprocessor\": \"drop\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"postprocessor\": \"lower\", \"attr_prefix\": \"-\"}\n");
+    t.push_str("parse\txml/opml.xml\t{\"dict_constructor\": \"OrderedDict\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"xml_attribs\": false}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"attr_prefix\": \"\", \"cdata_key\": \"text\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"force_cdata\": true}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"cdata_separator\": \"|\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"cdata_separator\": \"|\", \"disable_entities\": false}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"process_comments\": true}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"process_comments\": true, \"comment_key\": \"//\", \"strip_whitespace\": false}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"process_namespaces\": true}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"process_namespaces\": true, \"namespace_separator\": \"|\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"force_list\": true}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"force_list\": [\"item\", \"category\", \"Contents\", \"url\", \"outline\", \"p\"]}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"force_list\": \"deep\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"postprocessor\": \"int\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"postprocessor\": \"typed\", \"force_cdata\": true}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"postprocessor\": \"drop\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"postprocessor\": \"lower\", \"attr_prefix\": \"-\"}\n");
+    t.push_str("parse\txml/s3-one.xml\t{\"dict_constructor\": \"OrderedDict\"}\n");
+    t.push_str("parse\txml/soap.xml\t{\"process_namespaces\": true, \"namespaces\": {\"http://schemas.xmlsoap.org/soap/envelope/\": null, \"https://www.example.org/stock\": \"m\", \"urn:example:tx\": \"\"}}\n");
+    t.push_str("parse\txml/feeds-ns.xml\t{\"process_namespaces\": true, \"namespaces\": {\"http://www.w3.org/2005/Atom\": \"atom\", \"http://search.yahoo.com/mrss/\": \"media\", \"http://www.w3.org/1999/xhtml\": null}}\n");
+    t.push_str("parse\txml/pom.xml\t{\"process_namespaces\": true, \"namespaces\": {\"http://maven.apache.org/POM/4.0.0\": \"\", \"http://www.w3.org/2001/XMLSchema-instance\": \"xsi\"}}\n");
+    t.push_str("parse\txml/manifest.xml\t{\"process_namespaces\": true, \"namespaces\": {\"http://schemas.android.com/apk/res/android\": \"a\"}}\n");
+    t.push_str("parse\txml/svg.xml\t{\"process_namespaces\": true, \"namespaces\": {\"http://www.w3.org/2005/Atom\": \"atom\", \"http://search.yahoo.com/mrss/\": \"media\", \"http://www.w3.org/1999/xhtml\": null}}\n");
+    t.push_str("parse\txml/feeds-ns.xml\t{\"process_namespaces\": true, \"force_list\": true}\n");
+    t.push_str("parse\txml/manifest.xml\t{\"process_namespaces\": true, \"force_list\": true}\n");
+    t.push_str("parse\txml/svg.xml\t{\"process_namespaces\": true, \"force_list\": true}\n");
+    t.push_str("parse\txml/sitemap.xml\t{\"process_namespaces\": true, \"force_list\": true}\n");
+    t.push_str("parse\txml/external.xml\t{\"disable_entities\": false}\n");
+    t.push_str("parse\txml/external.xml\t{\"disable_entities\": false, \"cdata_separator\": \"+\"}\n");
+    t.push_str("parse\txml/settings.xml\t{\"disable_entities\": false}\n");
+}
+
+fn data_file_15_1(t: mut ref String) {
+    t.push_str("parse\txml/settings.xml\t{\"disable_entities\": false, \"cdata_separator\": \"+\"}\n");
+    t.push_str("== JSON output\n");
+    t.push_str("json\txml/feed.xml\t{}\n");
+    t.push_str("json\txml/s3-list.xml\t{}\n");
+    t.push_str("json\txml/settings.xml\t{}\n");
+    t.push_str("json\txml/weird.xml\t{}\n");
+    t.push_str("json\txml/svg.xml\t{}\n");
+    t.push_str("json\txml/s3-list.xml\t{\"postprocessor\": \"typed\", \"force_list\": [\"Contents\"]}\n");
+    t.push_str("== streaming\n");
+    t.push_str("stream\txml/feed.xml\t3\t0\n");
+    t.push_str("stream\txml/feed.xml\t2\t0\n");
+    t.push_str("stream\txml/s3-list.xml\t2\t0\n");
+    t.push_str("stream\txml/s3-list.xml\t2\t4\n");
+    t.push_str("stream\txml/ride.gpx\t4\t0\n");
+    t.push_str("stream\txml/opml.xml\t3\t2\n");
+    t.push_str("stream\txml/settings.xml\t3\t0\n");
+    t.push_str("stream\txml/article.xml\t2\t0\n");
+    t.push_str("stream\txml/soap.xml\t3\t0\n");
+    t.push_str("stream\txml/article.xml\t1\t0\n");
+    t.push_str("== round trips\n");
+    t.push_str("roundtrip\txml/feed.xml\t{}\t{}\n");
+    t.push_str("roundtrip\txml/feed.xml\t{}\t{\"pretty\": true}\n");
+    t.push_str("roundtrip\txml/settings.xml\t{}\t{\"pretty\": true, \"indent\": \"  \"}\n");
+    t.push_str("roundtrip\txml/settings.xml\t{}\t{\"short_empty_elements\": true}\n");
+    t.push_str("roundtrip\txml/settings.xml\t{\"force_cdata\": true}\t{\"pretty\": true, \"indent\": \"  \", \"short_empty_elements\": true}\n");
+    t.push_str("roundtrip\txml/weird.xml\t{}\t{}\n");
+    t.push_str("roundtrip\txml/article.xml\t{}\t{\"pretty\": true, \"newl\": \"\\n\", \"indent\": \"    \"}\n");
+    t.push_str("roundtrip\txml/opml.xml\t{}\t{\"pretty\": true, \"indent\": \" \", \"short_empty_elements\": true}\n");
+    t.push_str("roundtrip\txml/s3-one.xml\t{}\t{\"full_document\": false}\n");
+    t.push_str("roundtrip\txml/svg.xml\t{}\t{\"pretty\": true}\n");
+    t.push_str("roundtrip\txml/soap.xml\t{\"process_namespaces\": true}\t{\"pretty\": true, \"indent\": \"  \"}\n");
+    t.push_str("roundtrip\txml/soap.xml\t{\"process_namespaces\": true}\t{\"pretty\": true, \"indent\": \"  \", \"namespaces\": {\"soap\": \"http://schemas.xmlsoap.org/soap/envelope/\", \"m\": \"https://www.example.org/stock\"}}\n");
+    t.push_str("roundtrip\txml/manifest.xml\t{}\t{\"pretty\": true, \"indent\": \"    \", \"short_empty_elements\": true, \"encoding\": \"UTF-8\"}\n");
+    t.push_str("roundtrip\txml/feed.xml\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\"}\t{\"attr_prefix\": \"$\", \"cdata_key\": \"_\", \"pretty\": true}\n");
+    t.push_str("roundtrip\txml/ride.gpx\t{}\t{\"pretty\": true, \"newl\": \"\\r\\n\", \"indent\": \"\"}\n");
+    t.push_str("roundtrip\txml/feeds-ns.xml\t{}\t{\"full_document\": false, \"pretty\": true}\n");
+    t.push_str("== JSON documents to XML\n");
+    t.push_str("unparse\tjson/config.json\t{}\n");
+    t.push_str("unparse\tjson/config.json\t{\"pretty\": true, \"indent\": \"  \", \"short_empty_elements\": true}\n");
+    t.push_str("unparse\tjson/order.json\t{}\n");
+    t.push_str("unparse\tjson/order.json\t{\"pretty\": true, \"indent\": \"  \", \"short_empty_elements\": true}\n");
+    t.push_str("unparse\tjson/odd.json\t{}\n");
+    t.push_str("unparse\tjson/odd.json\t{\"pretty\": true, \"indent\": \"  \", \"short_empty_elements\": true}\n");
+    t.push_str("unparse\tjson/list-root.json\t{}\n");
+    t.push_str("unparse\tjson/list-root.json\t{\"pretty\": true, \"indent\": \"  \", \"short_empty_elements\": true}\n");
+    t.push_str("unparse\tjson/ns.json\t{}\n");
+    t.push_str("unparse\tjson/ns.json\t{\"pretty\": true, \"indent\": \"  \", \"short_empty_elements\": true}\n");
+    t.push_str("unparse\tjson/order.json\t{\"expand_iter\": \"item\", \"pretty\": true}\n");
+    t.push_str("unparse\tjson/odd.json\t{\"expand_iter\": \"v\", \"pretty\": true, \"indent\": \"  \"}\n");
+    t.push_str("unparse\tjson/ns.json\t{\"namespaces\": {\"a\": \"http://www.w3.org/2005/Atom\", \"b\": \"urn:lang\"}}\n");
+    t.push_str("unparse\tjson/ns.json\t{\"namespaces\": {\"a\": \"A\", \"b\": \"B\"}, \"namespace_separator\": \":\", \"pretty\": true}\n");
+    t.push_str("unparse\tjson/config.json\t{\"preprocessor\": \"skip_admins\", \"pretty\": true, \"indent\": \"  \"}\n");
+    t.push_str("unparse\tjson/config.json\t{\"preprocessor\": \"upper\"}\n");
+    t.push_str("unparse\tjson/list-root.json\t{\"full_document\": false}\n");
+    t.push_str("unparse\tjson/list-root.json\t{\"full_document\": false, \"pretty\": true}\n");
+    t.push_str("unparse\tjson/two-roots.json\t{}\n");
+    t.push_str("unparse\tjson/two-roots.json\t{\"full_document\": false, \"pretty\": true}\n");
+    t.push_str("unparse\tjson/bad-name.json\t{}\n");
+    t.push_str("unparse\tjson/bad-q.json\t{}\n");
+    t.push_str("unparse\tjson/bad-attr.json\t{}\n");
+    t.push_str("unparse\tjson/bad-nbsp.json\t{}\n");
+    t.push_str("unparse\tjson/bad-ns.json\t{}\n");
+    t.push_str("unparse\tjson/text-int.json\t{}\n");
+    t.push_str("unparse\tjson/text-list.json\t{}\n");
+    t.push_str("unparse\tjson/list-root.json\t{\"attr_prefix\": \"\", \"cdata_key\": \"item\"}\n");
+    t.push_str("== reports\n");
+    t.push_str("s3report\txml/s3-list.xml\n");
+    t.push_str("s3report\txml/s3-one.xml\n");
+    t.push_str("feedreport\txml/feed.xml\n");
+    t.push_str("gpxreport\txml/ride.gpx\n");
+    t.push_str("soapreport\txml/soap.xml\n");
+    t.push_str("manifestreport\txml/manifest.xml\n");
+}
+
+fn data_file_16_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"@a/b\": \"x\"}}\n");
+}
+
+fn data_file_17_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"bad name\": \"x\"}}\n");
+}
+
+fn data_file_18_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"a\\u00a0b\": \"x\"}}\n");
+}
+
+fn data_file_19_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"@xmlns\": {\"bad prefix\": \"u\"}}}\n");
+}
+
+fn data_file_20_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"?pi\": \"x\"}}\n");
+}
+
+fn data_file_21_0(t: mut ref String) {
+    t.push_str("{\n");
+    t.push_str("  \"service\": {\n");
+    t.push_str("    \"@name\": \"invoice-api\",\n");
+    t.push_str("    \"@version\": 3,\n");
+    t.push_str("    \"listen\": {\n");
+    t.push_str("      \"@host\": \"0.0.0.0\",\n");
+    t.push_str("      \"@port\": 8443,\n");
+    t.push_str("      \"tls\": true\n");
+    t.push_str("    },\n");
+    t.push_str("    \"database\": {\n");
+    t.push_str("      \"url\": \"postgres://db.internal:5432/invoices\",\n");
+    t.push_str("      \"pool\": 20,\n");
+    t.push_str("      \"replica\": null\n");
+    t.push_str("    },\n");
+    t.push_str("    \"feature\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"@name\": \"pdf-export\",\n");
+    t.push_str("        \"@enabled\": true\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"@name\": \"e-invoicing\",\n");
+    t.push_str("        \"@enabled\": false,\n");
+    t.push_str("        \"#text\": \"EU only\"\n");
+    t.push_str("      }\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"admins\": {\n");
+    t.push_str("      \"admin\": [\n");
+    t.push_str("        \"ana@example.org\",\n");
+    t.push_str("        \"sam@example.org\"\n");
+    t.push_str("      ]\n");
+    t.push_str("    },\n");
+    t.push_str("    \"motd\": \"Maintenance window: Sun 02:00–03:00 <UTC> & after\"\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+}
+
+fn data_file_22_0(t: mut ref String) {
+    t.push_str("{\"item\": [\"first\", \"second\"]}\n");
+}
+
+fn data_file_23_0(t: mut ref String) {
+    t.push_str("{\"a:feed\": {\"@xmlns:a\": \"http://www.w3.org/2005/Atom\", \"@b:lang\": \"en\", \"a:title\": \"Notes\", \"c:unknown\": \"dropped prefix\", \"@zz:attr\": \"empty name\"}}\n");
+}
+
+fn data_file_24_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"@q\": \"has \\\"double\\\" quotes\", \"@both\": \"it's \\\"both\\\"\", \"@ws\": \"line\\nbreak\\ttab\\rcr\", \"@list\": [1, 2], \"@none\": null, \"@flag\": true, \"nested\": [[\"a\", \"b\"], \"c\"], \"num\": 0, \"zero\": {\"#text\": 0}, \"neg\": -17, \"empty\": \"\", \"nothing\": null, \"deep\": {\"x\": {\"y\": {\"z\": \"leaf\"}}}}}\n");
+}
+
+fn data_file_25_0(t: mut ref String) {
+    t.push_str("{\n");
+    t.push_str("  \"order\": {\n");
+    t.push_str("    \"@id\": \"SO-1042\",\n");
+    t.push_str("    \"@xmlns\": {\n");
+    t.push_str("      \"\": \"urn:example:orders\",\n");
+    t.push_str("      \"x\": \"urn:example:ext\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"customer\": {\n");
+    t.push_str("      \"name\": \"Zoë Martin\",\n");
+    t.push_str("      \"email\": \"zoe@example.org\"\n");
+    t.push_str("    },\n");
+    t.push_str("    \"line\": [\n");
+    t.push_str("      {\n");
+    t.push_str("        \"sku\": \"PEN-01\",\n");
+    t.push_str("        \"qty\": 12,\n");
+    t.push_str("        \"price\": \"1.20\"\n");
+    t.push_str("      },\n");
+    t.push_str("      {\n");
+    t.push_str("        \"sku\": \"PAD-A4\",\n");
+    t.push_str("        \"qty\": 3,\n");
+    t.push_str("        \"price\": \"4.50\",\n");
+    t.push_str("        \"x:gift\": true\n");
+    t.push_str("      }\n");
+    t.push_str("    ],\n");
+    t.push_str("    \"notes\": [],\n");
+    t.push_str("    \"total\": {\n");
+    t.push_str("      \"@currency\": \"EUR\",\n");
+    t.push_str("      \"#text\": \"27.90\"\n");
+    t.push_str("    }\n");
+    t.push_str("  }\n");
+    t.push_str("}\n");
+}
+
+fn data_file_26_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"#text\": 5}}\n");
+}
+
+fn data_file_27_0(t: mut ref String) {
+    t.push_str("{\"r\": {\"#text\": [\"a\"]}}\n");
+}
+
+fn data_file_28_0(t: mut ref String) {
+    t.push_str("{\"a\": \"1\", \"b\": \"2\"}\n");
+}
+
+fn data_file_29_0(t: mut ref String) {
+    t.push_str("<article id=\"a7\">\n");
+    t.push_str("  <!-- lead paragraph -->\n");
+    t.push_str("  <p>Hello <b>world</b>, and <i>you</i>!</p>\n");
+    t.push_str("  <p>Second <!-- aside --> paragraph<br/>with a break.</p>\n");
+    t.push_str("  <note><?render inline?>tip: <code>x &lt; y</code></note>\n");
+    t.push_str("  <!-- trailing -->\n");
+    t.push_str("</article>\n");
+}
+
+fn data_file_30_0(t: mut ref String) {
+    t.push_str("<!DOCTYPE note SYSTEM \"note.dtd\">\n");
+    t.push_str("<note>Ship by &deadline; to &addr;.</note>\n");
+}
+
+fn data_file_31_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<?xml-stylesheet type=\"text/xsl\" href=\"/feed.xsl\"?>\n");
+    t.push_str("<rss version=\"2.0\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n");
+    t.push_str("     xmlns:content=\"http://purl.org/rss/1.0/modules/content/\"\n");
+    t.push_str("     xmlns:atom=\"http://www.w3.org/2005/Atom\">\n");
+    t.push_str("  <channel>\n");
+    t.push_str("    <title>Kitchen Notes &amp; Recipes</title>\n");
+    t.push_str("    <link>https://notes.example.org/</link>\n");
+    t.push_str("    <atom:link href=\"https://notes.example.org/feed.xml\" rel=\"self\" type=\"application/rss+xml\"/>\n");
+    t.push_str("    <description>Weeknight cooking, one pan at a time</description>\n");
+    t.push_str("    <language>en-gb</language>\n");
+    t.push_str("    <!-- generated by a static site builder -->\n");
+    t.push_str("    <item>\n");
+    t.push_str("      <title>Crème brûlée without a torch</title>\n");
+    t.push_str("      <link>https://notes.example.org/2024/creme-brulee</link>\n");
+    t.push_str("      <guid isPermaLink=\"false\">post-311</guid>\n");
+    t.push_str("      <dc:creator>Ana Ruiz</dc:creator>\n");
+    t.push_str("      <category>dessert</category>\n");
+    t.push_str("      <category>french</category>\n");
+    t.push_str("      <pubDate>Tue, 05 Mar 2024 18:00:00 +0000</pubDate>\n");
+    t.push_str("      <content:encoded><![CDATA[<p>Grill it <em>hot</em> &amp; fast.</p>]]></content:encoded>\n");
+    t.push_str("    </item>\n");
+    t.push_str("    <item>\n");
+    t.push_str("      <title>“Ten-minute” dal</title>\n");
+    t.push_str("      <link>https://notes.example.org/2024/dal</link>\n");
+    t.push_str("      <guid isPermaLink=\"true\">https://notes.example.org/2024/dal</guid>\n");
+    t.push_str("      <dc:creator>Sam Okafor</dc:creator>\n");
+    t.push_str("      <category>vegan</category>\n");
+    t.push_str("      <pubDate>Fri, 15 Mar 2024 07:30:00 +0000</pubDate>\n");
+    t.push_str("      <description>Red lentils, cumin, ginger &#8212; done.</description>\n");
+    t.push_str("    </item>\n");
+    t.push_str("    <item>\n");
+    t.push_str("      <title>Pan sizes, a table</title>\n");
+    t.push_str("      <link>https://notes.example.org/2024/pans?view=table&amp;units=cm</link>\n");
+    t.push_str("      <guid>post-318</guid>\n");
+    t.push_str("      <enclosure url=\"https://cdn.example.org/pans.png\" length=\"48213\" type=\"image/png\"/>\n");
+    t.push_str("    </item>\n");
+    t.push_str("  </channel>\n");
+    t.push_str("</rss>\n");
+}
+
+fn data_file_32_0(t: mut ref String) {
+    t.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:media=\"http://search.yahoo.com/mrss/\">\n");
+    t.push_str("  <title type=\"text\">Release notes</title>\n");
+    t.push_str("  <entry xml:lang=\"en\">\n");
+    t.push_str("    <title>v1.2</title>\n");
+    t.push_str("    <media:thumbnail url=\"https://cdn.example.org/1.2.png\" width=\"120\"/>\n");
+    t.push_str("    <content type=\"xhtml\"><div xmlns=\"http://www.w3.org/1999/xhtml\"><p>Faster <b>builds</b>.</p></div></content>\n");
+    t.push_str("  </entry>\n");
+    t.push_str("  <entry>\n");
+    t.push_str("    <title>v1.3</title>\n");
+    t.push_str("    <link rel=\"alternate\" href=\"https://example.org/1.3\"/>\n");
+    t.push_str("  </entry>\n");
+    t.push_str("</feed>\n");
+}
+
+fn data_file_33_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+    t.push_str("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\r\n");
+    t.push_str("    package=\"org.example.notes\" android:versionCode=\"42\" android:versionName=\"1.4.2\">\r\n");
+    t.push_str("    <uses-permission android:name=\"android.permission.INTERNET\"/>\r\n");
+    t.push_str("    <uses-permission android:name=\"android.permission.CAMERA\"/>\r\n");
+    t.push_str("    <application android:label=\"@string/app_name\" android:icon=\"@mipmap/ic_launcher\">\r\n");
+    t.push_str("        <activity android:name=\".MainActivity\" android:exported=\"true\">\r\n");
+    t.push_str("            <intent-filter>\r\n");
+    t.push_str("                <action android:name=\"android.intent.action.MAIN\"/>\r\n");
+    t.push_str("                <category android:name=\"android.intent.category.LAUNCHER\"/>\r\n");
+    t.push_str("            </intent-filter>\r\n");
+    t.push_str("        </activity>\r\n");
+    t.push_str("    </application>\r\n");
+    t.push_str("</manifest>\r\n");
+}
+
+fn data_file_34_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<opml version=\"2.0\">\n");
+    t.push_str("  <head><title>Subscriptions</title></head>\n");
+    t.push_str("  <body>\n");
+    t.push_str("    <outline text=\"Tech\" title=\"Tech\">\n");
+    t.push_str("      <outline type=\"rss\" text=\"LWN\" xmlUrl=\"https://lwn.net/headlines/rss\"/>\n");
+    t.push_str("      <outline type=\"rss\" text=\"Hacker News\" xmlUrl=\"https://news.ycombinator.com/rss\"/>\n");
+    t.push_str("    </outline>\n");
+    t.push_str("    <outline text=\"Food\">\n");
+    t.push_str("      <outline type=\"rss\" text=\"Kitchen Notes\" xmlUrl=\"https://notes.example.org/feed.xml\"/>\n");
+    t.push_str("    </outline>\n");
+    t.push_str("    <outline type=\"rss\" text=\"Ünïcödé Weekly\" xmlUrl=\"https://weekly.example.de/rss\"/>\n");
+    t.push_str("  </body>\n");
+    t.push_str("</opml>\n");
+}
+
+fn data_file_35_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n");
+    t.push_str("         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
+    t.push_str("         xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd\">\n");
+    t.push_str("  <modelVersion>4.0.0</modelVersion>\n");
+    t.push_str("  <groupId>org.example.billing</groupId>\n");
+    t.push_str("  <artifactId>invoice-service</artifactId>\n");
+    t.push_str("  <version>2.4.1-SNAPSHOT</version>\n");
+    t.push_str("  <packaging>jar</packaging>\n");
+    t.push_str("  <properties>\n");
+    t.push_str("    <java.version>17</java.version>\n");
+    t.push_str("    <jackson.version>2.17.0</jackson.version>\n");
+    t.push_str("  </properties>\n");
+    t.push_str("  <dependencies>\n");
+    t.push_str("    <dependency>\n");
+    t.push_str("      <groupId>com.fasterxml.jackson.core</groupId>\n");
+    t.push_str("      <artifactId>jackson-databind</artifactId>\n");
+    t.push_str("      <version>${jackson.version}</version>\n");
+    t.push_str("    </dependency>\n");
+    t.push_str("    <dependency>\n");
+    t.push_str("      <groupId>org.junit.jupiter</groupId>\n");
+    t.push_str("      <artifactId>junit-jupiter</artifactId>\n");
+    t.push_str("      <version>5.10.2</version>\n");
+    t.push_str("      <scope>test</scope>\n");
+    t.push_str("    </dependency>\n");
+    t.push_str("  </dependencies>\n");
+    t.push_str("  <build>\n");
+    t.push_str("    <plugins>\n");
+    t.push_str("      <plugin>\n");
+    t.push_str("        <artifactId>maven-compiler-plugin</artifactId>\n");
+    t.push_str("        <configuration><release>17</release></configuration>\n");
+    t.push_str("      </plugin>\n");
+    t.push_str("    </plugins>\n");
+    t.push_str("  </build>\n");
+    t.push_str("</project>\n");
+}
+
+fn data_file_36_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<gpx version=\"1.1\" creator=\"BikeComputer 3\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n");
+    t.push_str("  <metadata><name>Saturday loop</name><time>2024-05-11T08:00:00Z</time></metadata>\n");
+    t.push_str("  <trk>\n");
+    t.push_str("    <name>Loop</name>\n");
+    t.push_str("    <trkseg>\n");
+    t.push_str("      <trkpt lat=\"51.5000\" lon=\"-0.1200\"><ele>109</ele><time>2024-05-11T08:00:00Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5007\" lon=\"-0.1211\"><ele>111</ele><time>2024-05-11T08:00:31Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5014\" lon=\"-0.1222\"><ele>106</ele><time>2024-05-11T08:01:02Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5021\" lon=\"-0.1233\"><ele>111</ele><time>2024-05-11T08:01:33Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5028\" lon=\"-0.1244\"><ele>119</ele><time>2024-05-11T08:02:04Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5035\" lon=\"-0.1255\"><ele>121</ele><time>2024-05-11T08:02:35Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5042\" lon=\"-0.1266\"><ele>120</ele><time>2024-05-11T08:03:06Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5049\" lon=\"-0.1277\"><ele>125</ele><time>2024-05-11T08:03:37Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5056\" lon=\"-0.1288\"><ele>134</ele><time>2024-05-11T08:04:08Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5063\" lon=\"-0.1299\"><ele>133</ele><time>2024-05-11T08:04:39Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5070\" lon=\"-0.1310\"><ele>134</ele><time>2024-05-11T08:05:10Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5077\" lon=\"-0.1321\"><ele>140</ele><time>2024-05-11T08:05:41Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5084\" lon=\"-0.1332\"><ele>138</ele><time>2024-05-11T08:06:12Z</time></trkpt>\n");
+    t.push_str("      <trkpt lat=\"51.5091\" lon=\"-0.1343\"><ele>137</ele><time>2024-05-11T08:06:43Z</time></trkpt>\n");
+    t.push_str("    </trkseg>\n");
+    t.push_str("  </trk>\n");
+    t.push_str("</gpx>\n");
+}
+
+fn data_file_37_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n");
+    t.push_str("  <Name>acme-archive</Name>\n");
+    t.push_str("  <Prefix></Prefix>\n");
+    t.push_str("  <KeyCount>9</KeyCount>\n");
+    t.push_str("  <MaxKeys>1000</MaxKeys>\n");
+    t.push_str("  <IsTruncated>false</IsTruncated>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>img/api-000.tar</Key>\n");
+    t.push_str("    <LastModified>2024-04-21T14:01:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;80aaa49523797a0324b3f47437924d40&quot;</ETag>\n");
+    t.push_str("    <Size>692267</Size>\n");
+    t.push_str("    <StorageClass>STANDARD_IA</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>logs/2024/04/db-001.png</Key>\n");
+    t.push_str("    <LastModified>2024-04-22T16:56:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;d00eb64a8bd709e1c52804fc579effb0&quot;</ETag>\n");
+    t.push_str("    <Size>232694</Size>\n");
+    t.push_str("    <StorageClass>GLACIER</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>logs/2024/03/db-002.tar</Key>\n");
+    t.push_str("    <LastModified>2024-03-27T11:01:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;bb7c59449cd3f05abb4fb31873103f55&quot;</ETag>\n");
+    t.push_str("    <Size>685098</Size>\n");
+    t.push_str("    <StorageClass>STANDARD_IA</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>logs/2024/03/api-003.gz</Key>\n");
+    t.push_str("    <LastModified>2024-04-28T13:21:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;c8c30bb3861a9d4ecfea1c473ac99510&quot;</ETag>\n");
+    t.push_str("    <Size>28925</Size>\n");
+    t.push_str("    <StorageClass>STANDARD_IA</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>img/api-004.gz</Key>\n");
+    t.push_str("    <LastModified>2024-03-18T17:33:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;dd84e0f195ded97fcccb9d5a24dee354&quot;</ETag>\n");
+    t.push_str("    <Size>695816</Size>\n");
+    t.push_str("    <StorageClass>GLACIER</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>logs/2024/04/db-005.tar</Key>\n");
+    t.push_str("    <LastModified>2024-04-04T04:53:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;5ab5b3dfcf2b26e30a302c494d45f25c&quot;</ETag>\n");
+    t.push_str("    <Size>135849</Size>\n");
+    t.push_str("    <StorageClass>STANDARD</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>logs/2024/03/api-006.png</Key>\n");
+    t.push_str("    <LastModified>2024-04-14T13:52:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;fd38c0050d8b6a3d0a3d23098073ea5b&quot;</ETag>\n");
+    t.push_str("    <Size>108500</Size>\n");
+    t.push_str("    <StorageClass>STANDARD</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>backups/db-007.gz</Key>\n");
+    t.push_str("    <LastModified>2024-04-04T08:27:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;7a4432005245750f6bc88df19ea453f6&quot;</ETag>\n");
+    t.push_str("    <Size>162058</Size>\n");
+    t.push_str("    <StorageClass>GLACIER</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>img/web-008.tar</Key>\n");
+    t.push_str("    <LastModified>2024-04-14T20:49:00.000Z</LastModified>\n");
+    t.push_str("    <ETag>&quot;9534dbbe1715bc378f74a8d276c5b44e&quot;</ETag>\n");
+    t.push_str("    <Size>458370</Size>\n");
+    t.push_str("    <StorageClass>STANDARD</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("  <CommonPrefixes><Prefix>logs/</Prefix></CommonPrefixes>\n");
+    t.push_str("</ListBucketResult>\n");
+}
+
+fn data_file_38_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n");
+    t.push_str("  <Name>acme-archive</Name>\n");
+    t.push_str("  <Prefix>img/</Prefix>\n");
+    t.push_str("  <KeyCount>1</KeyCount>\n");
+    t.push_str("  <IsTruncated>true</IsTruncated>\n");
+    t.push_str("  <NextContinuationToken>1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=</NextContinuationToken>\n");
+    t.push_str("  <Contents>\n");
+    t.push_str("    <Key>img/logo.png</Key>\n");
+    t.push_str("    <Size>18233</Size>\n");
+    t.push_str("    <StorageClass>STANDARD</StorageClass>\n");
+    t.push_str("  </Contents>\n");
+    t.push_str("</ListBucketResult>\n");
+}
+
+fn data_file_39_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    t.push_str("<!DOCTYPE settings [\n");
+    t.push_str("  <!ENTITY company \"Acme &amp; Sons\">\n");
+    t.push_str("  <!ENTITY support \"support@acme.example\">\n");
+    t.push_str("  <!ENTITY footer \"&#169; &company;\">\n");
+    t.push_str("]>\n");
+    t.push_str("<settings env=\"prod\" owner=\"&company;\">\n");
+    t.push_str("  <app name=\"billing\">\n");
+    t.push_str("    <banner>Welcome to &company;!</banner>\n");
+    t.push_str("    <contact>Write to &support; or call &#x2B;44 20 7946 0000</contact>\n");
+    t.push_str("    <footer>&footer;</footer>\n");
+    t.push_str("    <query><![CDATA[SELECT * FROM t WHERE a < 3 AND b > 4]]></query>\n");
+    t.push_str("    <motd>  line one\n");
+    t.push_str("  line two  </motd>\n");
+    t.push_str("    <empty></empty>\n");
+    t.push_str("    <selfclosed/>\n");
+    t.push_str("    <spaces>   </spaces>\n");
+    t.push_str("  </app>\n");
+    t.push_str("  <feature name=\"beta-search\" enabled=\"true\"/>\n");
+    t.push_str("  <feature name=\"dark-mode\" enabled=\"false\">off by default</feature>\n");
+    t.push_str("</settings>\n");
+}
+
+fn data_file_40_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"\n");
+    t.push_str("        xmlns:image=\"http://www.google.com/schemas/sitemap-image/1.1\">\n");
+    t.push_str("  <url>\n");
+    t.push_str("    <loc>https://shop.example.com/</loc>\n");
+    t.push_str("    <lastmod>2024-04-01</lastmod>\n");
+    t.push_str("    <priority>1.0</priority>\n");
+    t.push_str("  </url>\n");
+    t.push_str("  <url>\n");
+    t.push_str("    <loc>https://shop.example.com/search?q=red+shoes&amp;sort=price</loc>\n");
+    t.push_str("    <changefreq>weekly</changefreq>\n");
+    t.push_str("    <image:image><image:loc>https://shop.example.com/i/shoe.jpg</image:loc></image:image>\n");
+    t.push_str("    <image:image><image:loc>https://shop.example.com/i/shoe-2.jpg</image:loc></image:image>\n");
+    t.push_str("  </url>\n");
+    t.push_str("</urlset>\n");
+}
+
+fn data_file_41_0(t: mut ref String) {
+    t.push_str("<?xml version=\"1.0\"?>\n");
+    t.push_str("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"\n");
+    t.push_str("               soap:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\n");
+    t.push_str("  <soap:Header>\n");
+    t.push_str("    <t:Transaction xmlns:t=\"urn:example:tx\" soap:mustUnderstand=\"1\">5</t:Transaction>\n");
+    t.push_str("  </soap:Header>\n");
+    t.push_str("  <soap:Body>\n");
+    t.push_str("    <m:GetPriceResponse xmlns:m=\"https://www.example.org/stock\">\n");
+    t.push_str("      <m:Price currency=\"EUR\">34.50</m:Price>\n");
+    t.push_str("      <m:Price currency=\"USD\">37.10</m:Price>\n");
+    t.push_str("      <m:Symbol>ACME</m:Symbol>\n");
+    t.push_str("    </m:GetPriceResponse>\n");
+    t.push_str("  </soap:Body>\n");
+    t.push_str("</soap:Envelope>\n");
+}
+
+fn data_file_42_0(t: mut ref String) {
+    t.push_str("efbbbf3c73766720786d6c6e733d22687474703a2f2f7777772e77332e6f72672f323030302f7376672220786d6c6e73");
+    t.push_str("3a786c696e6b3d22687474703a2f2f7777772e77332e6f72672f313939392f786c696e6b222076696577426f783d2230");
+    t.push_str("2030203234203234223e0a20203c7469746c653e536e6f7720e2988320616e6420726f636b657420f09f9a803c2f7469");
+    t.push_str("746c653e0a20203c646566733e3c706174682069643d22702220643d224d3220324c3232203232222f3e3c2f64656673");
+    t.push_str("3e0a20203c75736520786c696e6b3a687265663d22237022207374726f6b653d22626c61636b222f3e0a20203c746578");
+    t.push_str("7420783d22322220793d2232302220786d6c3a73706163653d227072657365727665223e61c2a06209633c2f74657874");
+    t.push_str("3e0a3c2f7376673e0a");
+}
+
+fn data_file_43_0(t: mut ref String) {
+    t.push_str("<r a=\"x\ty\n");
+    t.push_str("z\" b='say \"hi\"' c=\"it&apos;s\" d=\" &#10;&#9;&#13; \">\n");
+    t.push_str("  <k>tab\there</k>\n");
+    t.push_str("  <k>nul-free \\ backslash</k>\n");
+    t.push_str("  <zw>zero​width and line ");
+    t.push_str("sep</zw>\n");
+    t.push_str("  <cr>a&#13;b</cr>\n");
+    t.push_str("  <ent>&lt;&gt;&amp;&quot;&apos;</ent>\n");
+    t.push_str("</r>\n");
+}

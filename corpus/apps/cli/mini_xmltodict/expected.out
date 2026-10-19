@@ -1,0 +1,1246 @@
+== every document with the defaults
+-- parse xml/article.xml {}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/external.xml {}
+   {'note': 'Ship by  to .'}
+-- parse xml/feed.xml {}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}}}
+-- parse xml/feeds-ns.xml {}
+   {'feed': {'@xmlns': 'http://www.w3.org/2005/Atom', '@xmlns:media': 'http://search.yahoo.com/mrss/', 'title': {'@type': 'text', '#text': 'Release notes'}, 'entry': [{'@xml:lang': 'en', 'title': 'v1.2', 'media:thumbnail': {'@url': 'https://cdn.example.org/1.2.png', '@width': '120'}, 'content': {'@type': 'xhtml', 'div': {'@xmlns': 'http://www.w3.org/1999/xhtml', 'p': {'b': 'builds', '#text': 'Faster .'}}}}, {'title': 'v1.3', 'link': {'@rel': 'alternate', '@href': 'https://example.org/1.3'}}]}}
+-- parse xml/manifest.xml {}
+   {'manifest': {'@xmlns:android': 'http://schemas.android.com/apk/res/android', '@package': 'org.example.notes', '@android:versionCode': '42', '@android:versionName': '1.4.2', 'uses-permission': [{'@android:name': 'android.permission.INTERNET'}, {'@android:name': 'android.permission.CAMERA'}], 'application': {'@android:label': '@string/app_name', '@android:icon': '@mipmap/ic_launcher', 'activity': {'@android:name': '.MainActivity', '@android:exported': 'true', 'intent-filter': {'action': {'@android:name': 'android.intent.action.MAIN'}, 'category': {'@android:name': 'android.intent.category.LAUNCHER'}}}}}}
+-- parse xml/opml.xml {}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/pom.xml {}
+   {'project': {'@xmlns': 'http://maven.apache.org/POM/4.0.0', '@xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance', '@xsi:schemaLocation': 'http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd', 'modelVersion': '4.0.0', 'groupId': 'org.example.billing', 'artifactId': 'invoice-service', 'version': '2.4.1-SNAPSHOT', 'packaging': 'jar', 'properties': {'java.version': '17', 'jackson.version': '2.17.0'}, 'dependencies': {'dependency': [{'groupId': 'com.fasterxml.jackson.core', 'artifactId': 'jackson-databind', 'version': '${jackson.version}'}, {'groupId': 'org.junit.jupiter', 'artifactId': 'junit-jupiter', 'version': '5.10.2', 'scope': 'test'}]}, 'build': {'plugins': {'plugin': {'artifactId': 'maven-compiler-plugin', 'configuration': {'release': '17'}}}}}}
+-- parse xml/ride.gpx {}
+   {'gpx': {'@version': '1.1', '@creator': 'BikeComputer 3', '@xmlns': 'http://www.topografix.com/GPX/1/1', 'metadata': {'name': 'Saturday loop', 'time': '2024-05-11T08:00:00Z'}, 'trk': {'name': 'Loop', 'trkseg': {'trkpt': [{'@lat': '51.5000', '@lon': '-0.1200', 'ele': '109', 'time': '2024-05-11T08:00:00Z'}, {'@lat': '51.5007', '@lon': '-0.1211', 'ele': '111', 'time': '2024-05-11T08:00:31Z'}, {'@lat': '51.5014', '@lon': '-0.1222', 'ele': '106', 'time': '2024-05-11T08:01:02Z'}, {'@lat': '51.5021', '@lon': '-0.1233', 'ele': '111', 'time': '2024-05-11T08:01:33Z'}, {'@lat': '51.5028', '@lon': '-0.1244', 'ele': '119', 'time': '2024-05-11T08:02:04Z'}, {'@lat': '51.5035', '@lon': '-0.1255', 'ele': '121', 'time': '2024-05-11T08:02:35Z'}, {'@lat': '51.5042', '@lon': '-0.1266', 'ele': '120', 'time': '2024-05-11T08:03:06Z'}, {'@lat': '51.5049', '@lon': '-0.1277', 'ele': '125', 'time': '2024-05-11T08:03:37Z'}, {'@lat': '51.5056', '@lon': '-0.1288', 'ele': '134', 'time': '2024-05-11T08:04:08Z'}, {'@lat': '51.5063', '@lon': '-0.1299', 'ele': '133', 'time': '2024-05-11T08:04:39Z'}, {'@lat': '51.5070', '@lon': '-0.1310', 'ele': '134', 'time': '2024-05-11T08:05:10Z'}, {'@lat': '51.5077', '@lon': '-0.1321', 'ele': '140', 'time': '2024-05-11T08:05:41Z'}, {'@lat': '51.5084', '@lon': '-0.1332', 'ele': '138', 'time': '2024-05-11T08:06:12Z'}, {'@lat': '51.5091', '@lon': '-0.1343', 'ele': '137', 'time': '2024-05-11T08:06:43Z'}]}}}}
+-- parse xml/s3-list.xml {}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': None, 'KeyCount': '9', 'MaxKeys': '1000', 'IsTruncated': 'false', 'Contents': [{'Key': 'img/api-000.tar', 'LastModified': '2024-04-21T14:01:00.000Z', 'ETag': '"80aaa49523797a0324b3f47437924d40"', 'Size': '692267', 'StorageClass': 'STANDARD_IA'}, {'Key': 'logs/2024/04/db-001.png', 'LastModified': '2024-04-22T16:56:00.000Z', 'ETag': '"d00eb64a8bd709e1c52804fc579effb0"', 'Size': '232694', 'StorageClass': 'GLACIER'}, {'Key': 'logs/2024/03/db-002.tar', 'LastModified': '2024-03-27T11:01:00.000Z', 'ETag': '"bb7c59449cd3f05abb4fb31873103f55"', 'Size': '685098', 'StorageClass': 'STANDARD_IA'}, {'Key': 'logs/2024/03/api-003.gz', 'LastModified': '2024-04-28T13:21:00.000Z', 'ETag': '"c8c30bb3861a9d4ecfea1c473ac99510"', 'Size': '28925', 'StorageClass': 'STANDARD_IA'}, {'Key': 'img/api-004.gz', 'LastModified': '2024-03-18T17:33:00.000Z', 'ETag': '"dd84e0f195ded97fcccb9d5a24dee354"', 'Size': '695816', 'StorageClass': 'GLACIER'}, {'Key': 'logs/2024/04/db-005.tar', 'LastModified': '2024-04-04T04:53:00.000Z', 'ETag': '"5ab5b3dfcf2b26e30a302c494d45f25c"', 'Size': '135849', 'StorageClass': 'STANDARD'}, {'Key': 'logs/2024/03/api-006.png', 'LastModified': '2024-04-14T13:52:00.000Z', 'ETag': '"fd38c0050d8b6a3d0a3d23098073ea5b"', 'Size': '108500', 'StorageClass': 'STANDARD'}, {'Key': 'backups/db-007.gz', 'LastModified': '2024-04-04T08:27:00.000Z', 'ETag': '"7a4432005245750f6bc88df19ea453f6"', 'Size': '162058', 'StorageClass': 'GLACIER'}, {'Key': 'img/web-008.tar', 'LastModified': '2024-04-14T20:49:00.000Z', 'ETag': '"9534dbbe1715bc378f74a8d276c5b44e"', 'Size': '458370', 'StorageClass': 'STANDARD'}], 'CommonPrefixes': {'Prefix': 'logs/'}}}
+-- parse xml/s3-one.xml {}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}}}
+-- parse xml/settings.xml {}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/sitemap.xml {}
+   {'urlset': {'@xmlns': 'http://www.sitemaps.org/schemas/sitemap/0.9', '@xmlns:image': 'http://www.google.com/schemas/sitemap-image/1.1', 'url': [{'loc': 'https://shop.example.com/', 'lastmod': '2024-04-01', 'priority': '1.0'}, {'loc': 'https://shop.example.com/search?q=red+shoes&sort=price', 'changefreq': 'weekly', 'image:image': [{'image:loc': 'https://shop.example.com/i/shoe.jpg'}, {'image:loc': 'https://shop.example.com/i/shoe-2.jpg'}]}]}}
+-- parse xml/soap.xml {}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/svg.xml {}
+   {'svg': {'@xmlns': 'http://www.w3.org/2000/svg', '@xmlns:xlink': 'http://www.w3.org/1999/xlink', '@viewBox': '0 0 24 24', 'title': 'Snow ☃ and rocket 🚀', 'defs': {'path': {'@id': 'p', '@d': 'M2 2L22 22'}}, 'use': {'@xlink:href': '#p', '@stroke': 'black'}, 'text': {'@x': '2', '@y': '20', '@xml:space': 'preserve', '#text': 'a\xa0b\tc'}}}
+-- parse xml/weird.xml {}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+== every broken document
+-- parse bad/attrlt.xml {}
+   raised ExpatError: not well-formed (invalid token): line 1, column 10
+-- parse bad/cdata-end.xml {}
+   raised ExpatError: not well-formed (invalid token): line 1, column 7
+-- parse bad/charref.xml {}
+   raised ExpatError: reference to invalid character number: line 1, column 3
+-- parse bad/decl.xml {}
+   raised ExpatError: XML or text declaration not at start of entity: line 2, column 0
+-- parse bad/dupattr.xml {}
+   raised ExpatError: duplicate attribute: line 1, column 9
+-- parse bad/empty.xml {}
+   raised ExpatError: no element found: line 1, column 0
+-- parse bad/junk.xml {}
+   raised ExpatError: junk after document element: line 2, column 0
+-- parse bad/mismatch.xml {}
+   raised ExpatError: mismatched tag: line 2, column 11
+-- parse bad/nsdup.xml {}
+   {'r': {'@xmlns:a': 'u', '@xmlns:b': 'u', '@a:x': '1', '@b:x': '2'}}
+-- parse bad/nsdup.xml {"process_namespaces": true}
+   raised ExpatError: duplicate attribute: line 1, column 0
+-- parse bad/prefix.xml {}
+   {'x:a': {'x:b': None}}
+-- parse bad/prefix.xml {"process_namespaces": true}
+   raised ExpatError: unbound prefix: line 1, column 0
+-- parse bad/spaces.xml {}
+   raised ExpatError: no element found: line 2, column 2
+-- parse bad/text-before.xml {}
+   raised ExpatError: syntax error: line 1, column 0
+-- parse bad/token.xml {}
+   raised ExpatError: not well-formed (invalid token): line 1, column 6
+-- parse bad/unclosed.xml {}
+   raised ExpatError: no element found: line 3, column 0
+-- parse bad/undefined.xml {}
+   raised ExpatError: undefined entity: line 1, column 11
+== option sets
+-- parse xml/feed.xml {"xml_attribs": false}
+   {'rss': {'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': None, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': 'post-311', 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': 'https://notes.example.org/2024/dal', 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': None}]}}}
+-- parse xml/feed.xml {"attr_prefix": "", "cdata_key": "text"}
+   {'rss': {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'href': 'https://notes.example.org/feed.xml', 'rel': 'self', 'type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'isPermaLink': 'false', 'text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'isPermaLink': 'true', 'text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'url': 'https://cdn.example.org/pans.png', 'length': '48213', 'type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"attr_prefix": "$", "cdata_key": "_"}
+   {'rss': {'$version': '2.0', '$xmlns:dc': 'http://purl.org/dc/elements/1.1/', '$xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '$xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'$href': 'https://notes.example.org/feed.xml', '$rel': 'self', '$type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'$isPermaLink': 'false', '_': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'$isPermaLink': 'true', '_': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'$url': 'https://cdn.example.org/pans.png', '$length': '48213', '$type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"force_cdata": true}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': {'#text': 'Kitchen Notes & Recipes'}, 'link': {'#text': 'https://notes.example.org/'}, 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': {'#text': 'Weeknight cooking, one pan at a time'}, 'language': {'#text': 'en-gb'}, 'item': [{'title': {'#text': 'Crème brûlée without a torch'}, 'link': {'#text': 'https://notes.example.org/2024/creme-brulee'}, 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': {'#text': 'Ana Ruiz'}, 'category': [{'#text': 'dessert'}, {'#text': 'french'}], 'pubDate': {'#text': 'Tue, 05 Mar 2024 18:00:00 +0000'}, 'content:encoded': {'#text': '<p>Grill it <em>hot</em> &amp; fast.</p>'}}, {'title': {'#text': '“Ten-minute” dal'}, 'link': {'#text': 'https://notes.example.org/2024/dal'}, 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': {'#text': 'Sam Okafor'}, 'category': {'#text': 'vegan'}, 'pubDate': {'#text': 'Fri, 15 Mar 2024 07:30:00 +0000'}, 'description': {'#text': 'Red lentils, cumin, ginger — done.'}}, {'title': {'#text': 'Pan sizes, a table'}, 'link': {'#text': 'https://notes.example.org/2024/pans?view=table&units=cm'}, 'guid': {'#text': 'post-318'}, 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"strip_whitespace": false}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>', '#text': '\n      \n      \n      \n      \n      \n      \n      \n      \n    '}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.', '#text': '\n      \n      \n      \n      \n      \n      \n      \n    '}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}, '#text': '\n      \n      \n      \n      \n    '}], '#text': '\n    \n    \n    \n    \n    \n    \n    \n    \n    \n  '}, '#text': '\n  \n'}}
+-- parse xml/feed.xml {"cdata_separator": "|"}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>', '#text': '|\n      |\n      |\n      |\n      |\n      |\n      |\n      |'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.', '#text': '|\n      |\n      |\n      |\n      |\n      |\n      |'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}, '#text': '|\n      |\n      |\n      |'}], '#text': '|\n    |\n    |\n    |\n    |\n    |\n    |\n    |\n    |'}, '#text': '|'}}
+-- parse xml/feed.xml {"cdata_separator": "|", "disable_entities": false}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>', '#text': '|\n      |\n      |\n      |\n      |\n      |\n      |\n      |'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.', '#text': '|\n      |\n      |\n      |\n      |\n      |\n      |'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}, '#text': '|\n      |\n      |\n      |'}], '#text': '|\n    |\n    |\n    |\n    |\n    \n    |\n    |\n    |'}, '#text': '|'}}
+-- parse xml/feed.xml {"process_comments": true}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', '#comment': 'generated by a static site builder', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"process_comments": true, "comment_key": "//", "strip_whitespace": false}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', '//': ' generated by a static site builder ', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>', '#text': '\n      \n      \n      \n      \n      \n      \n      \n      \n    '}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.', '#text': '\n      \n      \n      \n      \n      \n      \n      \n    '}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}, '#text': '\n      \n      \n      \n      \n    '}], '#text': '\n    \n    \n    \n    \n    \n    \n    \n    \n    \n  '}, '#text': '\n  \n'}}
+-- parse xml/feed.xml {"process_namespaces": true}
+   {'rss': {'@version': '2.0', '@xmlns': {'dc': 'http://purl.org/dc/elements/1.1/', 'content': 'http://purl.org/rss/1.0/modules/content/', 'atom': 'http://www.w3.org/2005/Atom'}, 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'http://www.w3.org/2005/Atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'http://purl.org/dc/elements/1.1/:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'http://purl.org/rss/1.0/modules/content/:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'http://purl.org/dc/elements/1.1/:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"process_namespaces": true, "namespace_separator": "|"}
+   {'rss': {'@version': '2.0', '@xmlns': {'dc': 'http://purl.org/dc/elements/1.1/', 'content': 'http://purl.org/rss/1.0/modules/content/', 'atom': 'http://www.w3.org/2005/Atom'}, 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'http://www.w3.org/2005/Atom|link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'http://purl.org/dc/elements/1.1/|creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'http://purl.org/rss/1.0/modules/content/|encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'http://purl.org/dc/elements/1.1/|creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"force_list": true}
+   {'rss': [{'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': [{'title': ['Kitchen Notes & Recipes'], 'link': ['https://notes.example.org/'], 'atom:link': [{'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}], 'description': ['Weeknight cooking, one pan at a time'], 'language': ['en-gb'], 'item': [{'title': ['Crème brûlée without a torch'], 'link': ['https://notes.example.org/2024/creme-brulee'], 'guid': [{'@isPermaLink': 'false', '#text': ['post-311']}], 'dc:creator': ['Ana Ruiz'], 'category': ['dessert', 'french'], 'pubDate': ['Tue, 05 Mar 2024 18:00:00 +0000'], 'content:encoded': ['<p>Grill it <em>hot</em> &amp; fast.</p>']}, {'title': ['“Ten-minute” dal'], 'link': ['https://notes.example.org/2024/dal'], 'guid': [{'@isPermaLink': 'true', '#text': ['https://notes.example.org/2024/dal']}], 'dc:creator': ['Sam Okafor'], 'category': ['vegan'], 'pubDate': ['Fri, 15 Mar 2024 07:30:00 +0000'], 'description': ['Red lentils, cumin, ginger — done.']}, {'title': ['Pan sizes, a table'], 'link': ['https://notes.example.org/2024/pans?view=table&units=cm'], 'guid': ['post-318'], 'enclosure': [{'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}]}]}]}]}
+-- parse xml/feed.xml {"force_list": ["item", "category", "Contents", "url", "outline", "p"]}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': ['vegan'], 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"force_list": "deep"}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': [{'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}], 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': [{'@isPermaLink': 'false', '#text': 'post-311'}], 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': [{'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}], 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': [{'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}]}]}}}
+-- parse xml/feed.xml {"postprocessor": "int"}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': 48213, '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"postprocessor": "typed", "force_cdata": true}
+   {'rss': {'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': {'#text': 'Kitchen Notes & Recipes'}, 'link': {'#text': 'https://notes.example.org/'}, 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': {'#text': 'Weeknight cooking, one pan at a time'}, 'language': {'#text': 'en-gb'}, 'item': [{'title': {'#text': 'Crème brûlée without a torch'}, 'link': {'#text': 'https://notes.example.org/2024/creme-brulee'}, 'guid': {'@isPermaLink': False, '#text': 'post-311'}, 'dc:creator': {'#text': 'Ana Ruiz'}, 'category': [{'#text': 'dessert'}, {'#text': 'french'}], 'pubDate': {'#text': 'Tue, 05 Mar 2024 18:00:00 +0000'}, 'content:encoded': {'#text': '<p>Grill it <em>hot</em> &amp; fast.</p>'}}, {'title': {'#text': '“Ten-minute” dal'}, 'link': {'#text': 'https://notes.example.org/2024/dal'}, 'guid': {'@isPermaLink': True, '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': {'#text': 'Sam Okafor'}, 'category': {'#text': 'vegan'}, 'pubDate': {'#text': 'Fri, 15 Mar 2024 07:30:00 +0000'}, 'description': {'#text': 'Red lentils, cumin, ginger — done.'}}, {'title': {'#text': 'Pan sizes, a table'}, 'link': {'#text': 'https://notes.example.org/2024/pans?view=table&units=cm'}, 'guid': {'#text': 'post-318'}, 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': 48213, '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"postprocessor": "drop"}
+   {'rss': {'@version': '2.0', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"postprocessor": "lower", "attr_prefix": "-"}
+   {'rss': {'-version': '2.0', '-xmlns:dc': 'http://purl.org/dc/elements/1.1/', '-xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '-xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': {'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'-href': 'https://notes.example.org/feed.xml', '-rel': 'self', '-type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'-ispermalink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubdate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'-ispermalink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubdate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'-url': 'https://cdn.example.org/pans.png', '-length': '48213', '-type': 'image/png'}}]}}}
+-- parse xml/feed.xml {"dict_constructor": "OrderedDict"}
+   OrderedDict({'rss': OrderedDict({'@version': '2.0', '@xmlns:dc': 'http://purl.org/dc/elements/1.1/', '@xmlns:content': 'http://purl.org/rss/1.0/modules/content/', '@xmlns:atom': 'http://www.w3.org/2005/Atom', 'channel': OrderedDict({'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': OrderedDict({'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}), 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [OrderedDict({'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': OrderedDict({'@isPermaLink': 'false', '#text': 'post-311'}), 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}), OrderedDict({'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': OrderedDict({'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}), 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}), OrderedDict({'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': OrderedDict({'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'})})]})})})
+-- parse xml/settings.xml {"xml_attribs": false}
+   {'settings': {'app': {'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [None, 'off by default']}}
+-- parse xml/settings.xml {"attr_prefix": "", "cdata_key": "text"}
+   {'settings': {'env': 'prod', 'owner': 'Acme & Sons', 'app': {'name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'name': 'beta-search', 'enabled': 'true'}, {'name': 'dark-mode', 'enabled': 'false', 'text': 'off by default'}]}}
+-- parse xml/settings.xml {"attr_prefix": "$", "cdata_key": "_"}
+   {'settings': {'$env': 'prod', '$owner': 'Acme & Sons', 'app': {'$name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'$name': 'beta-search', '$enabled': 'true'}, {'$name': 'dark-mode', '$enabled': 'false', '_': 'off by default'}]}}
+-- parse xml/settings.xml {"force_cdata": true}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': {'#text': 'Welcome to !'}, 'contact': {'#text': 'Write to  or call +44 20 7946 0000'}, 'footer': None, 'query': {'#text': 'SELECT * FROM t WHERE a < 3 AND b > 4'}, 'motd': {'#text': 'line one\n  line two'}, 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"strip_whitespace": false}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': '  line one\n  line two  ', 'empty': None, 'selfclosed': None, 'spaces': '   ', '#text': '\n    \n    \n    \n    \n    \n    \n    \n    \n  '}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}], '#text': '\n  \n  \n  \n'}}
+-- parse xml/settings.xml {"cdata_separator": "|"}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to |!', 'contact': 'Write to | or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None, '#text': '|\n    |\n    |\n    |\n    |\n    |\n    |\n    |'}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}], '#text': '|\n  |\n  |'}}
+-- parse xml/settings.xml {"cdata_separator": "|", "disable_entities": false}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to Acme & Sons!', 'contact': 'Write to support@acme.example or call +44 20 7946 0000', 'footer': '© Acme & Sons', 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None, '#text': '|\n    |\n    |\n    |\n    |\n    |\n    |\n    |'}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}], '#text': '|\n  |\n  |'}}
+-- parse xml/settings.xml {"process_comments": true}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"process_comments": true, "comment_key": "//", "strip_whitespace": false}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': '  line one\n  line two  ', 'empty': None, 'selfclosed': None, 'spaces': '   ', '#text': '\n    \n    \n    \n    \n    \n    \n    \n    \n  '}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}], '#text': '\n  \n  \n  \n'}}
+-- parse xml/settings.xml {"process_namespaces": true}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"process_namespaces": true, "namespace_separator": "|"}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"force_list": true}
+   {'settings': [{'@env': 'prod', '@owner': 'Acme & Sons', 'app': [{'@name': 'billing', 'banner': ['Welcome to !'], 'contact': ['Write to  or call +44 20 7946 0000'], 'footer': [None], 'query': ['SELECT * FROM t WHERE a < 3 AND b > 4'], 'motd': ['line one\n  line two'], 'empty': [None], 'selfclosed': [None], 'spaces': [None]}], 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': ['off by default']}]}]}
+-- parse xml/settings.xml {"force_list": ["item", "category", "Contents", "url", "outline", "p"]}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"force_list": "deep"}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': [None], 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': [None], 'selfclosed': [None], 'spaces': [None]}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"postprocessor": "int"}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"postprocessor": "typed", "force_cdata": true}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': {'#text': 'Welcome to !'}, 'contact': {'#text': 'Write to  or call +44 20 7946 0000'}, 'footer': None, 'query': {'#text': 'SELECT * FROM t WHERE a < 3 AND b > 4'}, 'motd': {'#text': 'line one\n  line two'}, 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': True}, {'@name': 'dark-mode', '@enabled': False, '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"postprocessor": "drop"}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"postprocessor": "lower", "attr_prefix": "-"}
+   {'settings': {'-env': 'prod', '-owner': 'Acme & Sons', 'app': {'-name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'-name': 'beta-search', '-enabled': 'true'}, {'-name': 'dark-mode', '-enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"dict_constructor": "OrderedDict"}
+   OrderedDict({'settings': OrderedDict({'@env': 'prod', '@owner': 'Acme & Sons', 'app': OrderedDict({'@name': 'billing', 'banner': 'Welcome to !', 'contact': 'Write to  or call +44 20 7946 0000', 'footer': None, 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}), 'feature': [OrderedDict({'@name': 'beta-search', '@enabled': 'true'}), OrderedDict({'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'})]})})
+-- parse xml/article.xml {"xml_attribs": false}
+   {'article': {'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"attr_prefix": "", "cdata_key": "text"}
+   {'article': {'id': 'a7', 'p': [{'b': 'world', 'i': 'you', 'text': 'Hello , and !'}, {'br': None, 'text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', 'text': 'tip:'}}}
+-- parse xml/article.xml {"attr_prefix": "$", "cdata_key": "_"}
+   {'article': {'$id': 'a7', 'p': [{'b': 'world', 'i': 'you', '_': 'Hello , and !'}, {'br': None, '_': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '_': 'tip:'}}}
+-- parse xml/article.xml {"force_cdata": true}
+   {'article': {'@id': 'a7', 'p': [{'b': {'#text': 'world'}, 'i': {'#text': 'you'}, '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': {'#text': 'x < y'}, '#text': 'tip:'}}}
+-- parse xml/article.xml {"strip_whitespace": false}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip: '}, '#text': '\n  \n  \n  \n  \n  \n'}}
+-- parse xml/article.xml {"cdata_separator": "|"}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello |, and |!'}, {'br': None, '#text': 'Second | paragraph|with a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}, '#text': '|\n  |\n  |\n  |\n  |'}}
+-- parse xml/article.xml {"cdata_separator": "|", "disable_entities": false}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello |, and |!'}, {'br': None, '#text': 'Second  paragraph|with a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}, '#text': '|\n  |\n  |'}}
+-- parse xml/article.xml {"process_comments": true}
+   {'article': {'@id': 'a7', '#comment': ['lead paragraph', 'trailing'], 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'#comment': 'aside', 'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"process_comments": true, "comment_key": "//", "strip_whitespace": false}
+   {'article': {'@id': 'a7', '//': [' lead paragraph ', ' trailing '], 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'//': ' aside ', 'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip: '}, '#text': '\n  \n  \n  \n  \n  \n'}}
+-- parse xml/article.xml {"process_namespaces": true}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"process_namespaces": true, "namespace_separator": "|"}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"force_list": true}
+   {'article': [{'@id': 'a7', 'p': [{'b': ['world'], 'i': ['you'], '#text': ['Hello , and !']}, {'br': [None], '#text': ['Second  paragraphwith a break.']}], 'note': [{'code': ['x < y'], '#text': ['tip:']}]}]}
+-- parse xml/article.xml {"force_list": ["item", "category", "Contents", "url", "outline", "p"]}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"force_list": "deep"}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': [None], '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"postprocessor": "int"}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"postprocessor": "typed", "force_cdata": true}
+   {'article': {'@id': 'a7', 'p': [{'b': {'#text': 'world'}, 'i': {'#text': 'you'}, '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': {'#text': 'x < y'}, '#text': 'tip:'}}}
+-- parse xml/article.xml {"postprocessor": "drop"}
+   {'article': {'@id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"postprocessor": "lower", "attr_prefix": "-"}
+   {'article': {'-id': 'a7', 'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}}
+-- parse xml/article.xml {"dict_constructor": "OrderedDict"}
+   OrderedDict({'article': OrderedDict({'@id': 'a7', 'p': [OrderedDict({'b': 'world', 'i': 'you', '#text': 'Hello , and !'}), OrderedDict({'br': None, '#text': 'Second  paragraphwith a break.'})], 'note': OrderedDict({'code': 'x < y', '#text': 'tip:'})})})
+-- parse xml/soap.xml {"xml_attribs": false}
+   {'soap:Envelope': {'soap:Header': {'t:Transaction': '5'}, 'soap:Body': {'m:GetPriceResponse': {'m:Price': ['34.50', '37.10'], 'm:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"attr_prefix": "", "cdata_key": "text"}
+   {'soap:Envelope': {'xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', 'soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'xmlns:t': 'urn:example:tx', 'soap:mustUnderstand': '1', 'text': '5'}}, 'soap:Body': {'m:GetPriceResponse': {'xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'currency': 'EUR', 'text': '34.50'}, {'currency': 'USD', 'text': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"attr_prefix": "$", "cdata_key": "_"}
+   {'soap:Envelope': {'$xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '$soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'$xmlns:t': 'urn:example:tx', '$soap:mustUnderstand': '1', '_': '5'}}, 'soap:Body': {'m:GetPriceResponse': {'$xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'$currency': 'EUR', '_': '34.50'}, {'$currency': 'USD', '_': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"force_cdata": true}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': {'#text': 'ACME'}}}}}
+-- parse xml/soap.xml {"strip_whitespace": false}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}, '#text': '\n    \n  '}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME', '#text': '\n      \n      \n      \n    '}, '#text': '\n    \n  '}, '#text': '\n  \n  \n'}}
+-- parse xml/soap.xml {"cdata_separator": "|"}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}, '#text': '|'}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME', '#text': '|\n      |\n      |'}, '#text': '|'}, '#text': '|\n  |'}}
+-- parse xml/soap.xml {"cdata_separator": "|", "disable_entities": false}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}, '#text': '|'}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME', '#text': '|\n      |\n      |'}, '#text': '|'}, '#text': '|\n  |'}}
+-- parse xml/soap.xml {"process_comments": true}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"process_comments": true, "comment_key": "//", "strip_whitespace": false}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}, '#text': '\n    \n  '}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME', '#text': '\n      \n      \n      \n    '}, '#text': '\n    \n  '}, '#text': '\n  \n  \n'}}
+-- parse xml/soap.xml {"process_namespaces": true}
+   {'http://schemas.xmlsoap.org/soap/envelope/:Envelope': {'@http://schemas.xmlsoap.org/soap/envelope/:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', '@xmlns': {'soap': 'http://schemas.xmlsoap.org/soap/envelope/'}, 'http://schemas.xmlsoap.org/soap/envelope/:Header': {'urn:example:tx:Transaction': {'@http://schemas.xmlsoap.org/soap/envelope/:mustUnderstand': '1', '@xmlns': {'t': 'urn:example:tx'}, '#text': '5'}}, 'http://schemas.xmlsoap.org/soap/envelope/:Body': {'https://www.example.org/stock:GetPriceResponse': {'https://www.example.org/stock:Price': [{'@currency': 'EUR', '@xmlns': {'m': 'https://www.example.org/stock'}, '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'https://www.example.org/stock:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"process_namespaces": true, "namespace_separator": "|"}
+   {'http://schemas.xmlsoap.org/soap/envelope/|Envelope': {'@http://schemas.xmlsoap.org/soap/envelope/|encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', '@xmlns': {'soap': 'http://schemas.xmlsoap.org/soap/envelope/'}, 'http://schemas.xmlsoap.org/soap/envelope/|Header': {'urn:example:tx|Transaction': {'@http://schemas.xmlsoap.org/soap/envelope/|mustUnderstand': '1', '@xmlns': {'t': 'urn:example:tx'}, '#text': '5'}}, 'http://schemas.xmlsoap.org/soap/envelope/|Body': {'https://www.example.org/stock|GetPriceResponse': {'https://www.example.org/stock|Price': [{'@currency': 'EUR', '@xmlns': {'m': 'https://www.example.org/stock'}, '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'https://www.example.org/stock|Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"force_list": true}
+   {'soap:Envelope': [{'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': [{'t:Transaction': [{'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': ['5']}]}], 'soap:Body': [{'m:GetPriceResponse': [{'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': ['34.50']}, {'@currency': 'USD', '#text': ['37.10']}], 'm:Symbol': ['ACME']}]}]}]}
+-- parse xml/soap.xml {"force_list": ["item", "category", "Contents", "url", "outline", "p"]}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"force_list": "deep"}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': [{'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'}]}, 'soap:Body': {'m:GetPriceResponse': [{'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}]}}}
+-- parse xml/soap.xml {"postprocessor": "int"}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': 1, '#text': 5}}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"postprocessor": "typed", "force_cdata": true}
+   {'soap:Envelope': {'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': 1, '#text': 5}}, 'soap:Body': {'m:GetPriceResponse': {'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': {'#text': 'ACME'}}}}}
+-- parse xml/soap.xml {"postprocessor": "drop"}
+   {'soap:Envelope': {'@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': {'t:Transaction': {'@soap:mustUnderstand': '1', '#text': '5'}}, 'soap:Body': {'m:GetPriceResponse': {'m:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"postprocessor": "lower", "attr_prefix": "-"}
+   {'soap:envelope': {'-xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '-soap:encodingstyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:header': {'t:transaction': {'-xmlns:t': 'urn:example:tx', '-soap:mustunderstand': '1', '#text': '5'}}, 'soap:body': {'m:getpriceresponse': {'-xmlns:m': 'https://www.example.org/stock', 'm:price': [{'-currency': 'EUR', '#text': '34.50'}, {'-currency': 'USD', '#text': '37.10'}], 'm:symbol': 'ACME'}}}}
+-- parse xml/soap.xml {"dict_constructor": "OrderedDict"}
+   OrderedDict({'soap:Envelope': OrderedDict({'@xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', '@soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', 'soap:Header': OrderedDict({'t:Transaction': OrderedDict({'@xmlns:t': 'urn:example:tx', '@soap:mustUnderstand': '1', '#text': '5'})}), 'soap:Body': OrderedDict({'m:GetPriceResponse': OrderedDict({'@xmlns:m': 'https://www.example.org/stock', 'm:Price': [OrderedDict({'@currency': 'EUR', '#text': '34.50'}), OrderedDict({'@currency': 'USD', '#text': '37.10'})], 'm:Symbol': 'ACME'})})})})
+-- parse xml/weird.xml {"xml_attribs": false}
+   {'r': {'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"attr_prefix": "", "cdata_key": "text"}
+   {'r': {'a': 'x y z', 'b': 'say "hi"', 'c': "it's", 'd': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"attr_prefix": "$", "cdata_key": "_"}
+   {'r': {'$a': 'x y z', '$b': 'say "hi"', '$c': "it's", '$d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"force_cdata": true}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': [{'#text': 'tab\there'}, {'#text': 'nul-free \\ backslash'}], 'zw': {'#text': 'zero\u200bwidth and line\u2028sep'}, 'cr': {'#text': 'a\rb'}, 'ent': {'#text': '<>&"\''}}}
+-- parse xml/weird.xml {"strip_whitespace": false}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\'', '#text': '\n  \n  \n  \n  \n  \n'}}
+-- parse xml/weird.xml {"cdata_separator": "|"}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\'', '#text': '|\n  |\n  |\n  |\n  |'}}
+-- parse xml/weird.xml {"cdata_separator": "|", "disable_entities": false}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\'', '#text': '|\n  |\n  |\n  |\n  |'}}
+-- parse xml/weird.xml {"process_comments": true}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"process_comments": true, "comment_key": "//", "strip_whitespace": false}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\'', '#text': '\n  \n  \n  \n  \n  \n'}}
+-- parse xml/weird.xml {"process_namespaces": true}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"process_namespaces": true, "namespace_separator": "|"}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"force_list": true}
+   {'r': [{'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': ['zero\u200bwidth and line\u2028sep'], 'cr': ['a\rb'], 'ent': ['<>&"\'']}]}
+-- parse xml/weird.xml {"force_list": ["item", "category", "Contents", "url", "outline", "p"]}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"force_list": "deep"}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"postprocessor": "int"}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"postprocessor": "typed", "force_cdata": true}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': [{'#text': 'tab\there'}, {'#text': 'nul-free \\ backslash'}], 'zw': {'#text': 'zero\u200bwidth and line\u2028sep'}, 'cr': {'#text': 'a\rb'}, 'ent': {'#text': '<>&"\''}}}
+-- parse xml/weird.xml {"postprocessor": "drop"}
+   {'r': {'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"postprocessor": "lower", "attr_prefix": "-"}
+   {'r': {'-a': 'x y z', '-b': 'say "hi"', '-c': "it's", '-d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''}}
+-- parse xml/weird.xml {"dict_constructor": "OrderedDict"}
+   OrderedDict({'r': OrderedDict({'@a': 'x y z', '@b': 'say "hi"', '@c': "it's", '@d': ' \n\t\r ', 'k': ['tab\there', 'nul-free \\ backslash'], 'zw': 'zero\u200bwidth and line\u2028sep', 'cr': 'a\rb', 'ent': '<>&"\''})})
+-- parse xml/opml.xml {"xml_attribs": false}
+   {'opml': {'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'outline': [None, None]}, {'outline': None}, None]}}}
+-- parse xml/opml.xml {"attr_prefix": "", "cdata_key": "text"}
+   {'opml': {'version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'text': 'Tech', 'title': 'Tech', 'outline': [{'type': 'rss', 'text': 'LWN', 'xmlUrl': 'https://lwn.net/headlines/rss'}, {'type': 'rss', 'text': 'Hacker News', 'xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'text': 'Food', 'outline': {'type': 'rss', 'text': 'Kitchen Notes', 'xmlUrl': 'https://notes.example.org/feed.xml'}}, {'type': 'rss', 'text': 'Ünïcödé Weekly', 'xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"attr_prefix": "$", "cdata_key": "_"}
+   {'opml': {'$version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'$text': 'Tech', '$title': 'Tech', 'outline': [{'$type': 'rss', '$text': 'LWN', '$xmlUrl': 'https://lwn.net/headlines/rss'}, {'$type': 'rss', '$text': 'Hacker News', '$xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'$text': 'Food', 'outline': {'$type': 'rss', '$text': 'Kitchen Notes', '$xmlUrl': 'https://notes.example.org/feed.xml'}}, {'$type': 'rss', '$text': 'Ünïcödé Weekly', '$xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"force_cdata": true}
+   {'opml': {'@version': '2.0', 'head': {'title': {'#text': 'Subscriptions'}}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"strip_whitespace": false}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}], '#text': '\n      \n      \n    '}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}, '#text': '\n      \n    '}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}], '#text': '\n    \n    \n    \n  '}, '#text': '\n  \n  \n'}}
+-- parse xml/opml.xml {"cdata_separator": "|"}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}], '#text': '|\n      |'}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}, '#text': '|'}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}], '#text': '|\n    |\n    |'}, '#text': '|\n  |'}}
+-- parse xml/opml.xml {"cdata_separator": "|", "disable_entities": false}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}], '#text': '|\n      |'}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}, '#text': '|'}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}], '#text': '|\n    |\n    |'}, '#text': '|\n  |'}}
+-- parse xml/opml.xml {"process_comments": true}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"process_comments": true, "comment_key": "//", "strip_whitespace": false}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}], '#text': '\n      \n      \n    '}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}, '#text': '\n      \n    '}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}], '#text': '\n    \n    \n    \n  '}, '#text': '\n  \n  \n'}}
+-- parse xml/opml.xml {"process_namespaces": true}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"process_namespaces": true, "namespace_separator": "|"}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"force_list": true}
+   {'opml': [{'@version': '2.0', 'head': [{'title': ['Subscriptions']}], 'body': [{'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': [{'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}]}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}]}]}
+-- parse xml/opml.xml {"force_list": ["item", "category", "Contents", "url", "outline", "p"]}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': [{'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}]}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"force_list": "deep"}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': [{'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}]}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"postprocessor": "int"}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"postprocessor": "typed", "force_cdata": true}
+   {'opml': {'@version': '2.0', 'head': {'title': {'#text': 'Subscriptions'}}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"postprocessor": "drop"}
+   {'opml': {'@version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'@text': 'Tech', '@title': 'Tech', 'outline': [{'@type': 'rss', '@text': 'LWN'}, {'@type': 'rss', '@text': 'Hacker News'}]}, {'@text': 'Food', 'outline': {'@type': 'rss', '@text': 'Kitchen Notes'}}, {'@type': 'rss', '@text': 'Ünïcödé Weekly'}]}}}
+-- parse xml/opml.xml {"postprocessor": "lower", "attr_prefix": "-"}
+   {'opml': {'-version': '2.0', 'head': {'title': 'Subscriptions'}, 'body': {'outline': [{'-text': 'Tech', '-title': 'Tech', 'outline': [{'-type': 'rss', '-text': 'LWN', '-xmlurl': 'https://lwn.net/headlines/rss'}, {'-type': 'rss', '-text': 'Hacker News', '-xmlurl': 'https://news.ycombinator.com/rss'}]}, {'-text': 'Food', 'outline': {'-type': 'rss', '-text': 'Kitchen Notes', '-xmlurl': 'https://notes.example.org/feed.xml'}}, {'-type': 'rss', '-text': 'Ünïcödé Weekly', '-xmlurl': 'https://weekly.example.de/rss'}]}}}
+-- parse xml/opml.xml {"dict_constructor": "OrderedDict"}
+   OrderedDict({'opml': OrderedDict({'@version': '2.0', 'head': OrderedDict({'title': 'Subscriptions'}), 'body': OrderedDict({'outline': [OrderedDict({'@text': 'Tech', '@title': 'Tech', 'outline': [OrderedDict({'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}), OrderedDict({'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'})]}), OrderedDict({'@text': 'Food', 'outline': OrderedDict({'@type': 'rss', '@text': 'Kitchen Notes', '@xmlUrl': 'https://notes.example.org/feed.xml'})}), OrderedDict({'@type': 'rss', '@text': 'Ünïcödé Weekly', '@xmlUrl': 'https://weekly.example.de/rss'})]})})})
+-- parse xml/s3-one.xml {"xml_attribs": false}
+   {'ListBucketResult': {'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"attr_prefix": "", "cdata_key": "text"}
+   {'ListBucketResult': {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"attr_prefix": "$", "cdata_key": "_"}
+   {'ListBucketResult': {'$xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"force_cdata": true}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': {'#text': 'acme-archive'}, 'Prefix': {'#text': 'img/'}, 'KeyCount': {'#text': '1'}, 'IsTruncated': {'#text': 'true'}, 'NextContinuationToken': {'#text': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM='}, 'Contents': {'Key': {'#text': 'img/logo.png'}, 'Size': {'#text': '18233'}, 'StorageClass': {'#text': 'STANDARD'}}}}
+-- parse xml/s3-one.xml {"strip_whitespace": false}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD', '#text': '\n    \n    \n    \n  '}, '#text': '\n  \n  \n  \n  \n  \n  \n'}}
+-- parse xml/s3-one.xml {"cdata_separator": "|"}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD', '#text': '|\n    |\n    |'}, '#text': '|\n  |\n  |\n  |\n  |\n  |'}}
+-- parse xml/s3-one.xml {"cdata_separator": "|", "disable_entities": false}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD', '#text': '|\n    |\n    |'}, '#text': '|\n  |\n  |\n  |\n  |\n  |'}}
+-- parse xml/s3-one.xml {"process_comments": true}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"process_comments": true, "comment_key": "//", "strip_whitespace": false}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD', '#text': '\n    \n    \n    \n  '}, '#text': '\n  \n  \n  \n  \n  \n  \n'}}
+-- parse xml/s3-one.xml {"process_namespaces": true}
+   {'http://s3.amazonaws.com/doc/2006-03-01/:ListBucketResult': {'http://s3.amazonaws.com/doc/2006-03-01/:Name': 'acme-archive', 'http://s3.amazonaws.com/doc/2006-03-01/:Prefix': 'img/', 'http://s3.amazonaws.com/doc/2006-03-01/:KeyCount': '1', 'http://s3.amazonaws.com/doc/2006-03-01/:IsTruncated': 'true', 'http://s3.amazonaws.com/doc/2006-03-01/:NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'http://s3.amazonaws.com/doc/2006-03-01/:Contents': {'http://s3.amazonaws.com/doc/2006-03-01/:Key': 'img/logo.png', 'http://s3.amazonaws.com/doc/2006-03-01/:Size': '18233', 'http://s3.amazonaws.com/doc/2006-03-01/:StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"process_namespaces": true, "namespace_separator": "|"}
+   {'http://s3.amazonaws.com/doc/2006-03-01/|ListBucketResult': {'http://s3.amazonaws.com/doc/2006-03-01/|Name': 'acme-archive', 'http://s3.amazonaws.com/doc/2006-03-01/|Prefix': 'img/', 'http://s3.amazonaws.com/doc/2006-03-01/|KeyCount': '1', 'http://s3.amazonaws.com/doc/2006-03-01/|IsTruncated': 'true', 'http://s3.amazonaws.com/doc/2006-03-01/|NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'http://s3.amazonaws.com/doc/2006-03-01/|Contents': {'http://s3.amazonaws.com/doc/2006-03-01/|Key': 'img/logo.png', 'http://s3.amazonaws.com/doc/2006-03-01/|Size': '18233', 'http://s3.amazonaws.com/doc/2006-03-01/|StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"force_list": true}
+   {'ListBucketResult': [{'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': ['acme-archive'], 'Prefix': ['img/'], 'KeyCount': ['1'], 'IsTruncated': ['true'], 'NextContinuationToken': ['1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM='], 'Contents': [{'Key': ['img/logo.png'], 'Size': ['18233'], 'StorageClass': ['STANDARD']}]}]}
+-- parse xml/s3-one.xml {"force_list": ["item", "category", "Contents", "url", "outline", "p"]}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': [{'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}]}}
+-- parse xml/s3-one.xml {"force_list": "deep"}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"postprocessor": "int"}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': 1, 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': 18233, 'StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"postprocessor": "typed", "force_cdata": true}
+   {'ListBucketResult': {'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': {'#text': 'acme-archive'}, 'Prefix': {'#text': 'img/'}, 'KeyCount': {'#text': 1}, 'IsTruncated': {'#text': True}, 'NextContinuationToken': {'#text': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM='}, 'Contents': {'Key': {'#text': 'img/logo.png'}, 'Size': {'#text': 18233}, 'StorageClass': {'#text': 'STANDARD'}}}}
+-- parse xml/s3-one.xml {"postprocessor": "drop"}
+   {'ListBucketResult': {'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': {'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"postprocessor": "lower", "attr_prefix": "-"}
+   {'listbucketresult': {'-xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'name': 'acme-archive', 'prefix': 'img/', 'keycount': '1', 'istruncated': 'true', 'nextcontinuationtoken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'contents': {'key': 'img/logo.png', 'size': '18233', 'storageclass': 'STANDARD'}}}
+-- parse xml/s3-one.xml {"dict_constructor": "OrderedDict"}
+   OrderedDict({'ListBucketResult': OrderedDict({'@xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/', 'Name': 'acme-archive', 'Prefix': 'img/', 'KeyCount': '1', 'IsTruncated': 'true', 'NextContinuationToken': '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', 'Contents': OrderedDict({'Key': 'img/logo.png', 'Size': '18233', 'StorageClass': 'STANDARD'})})})
+-- parse xml/soap.xml {"process_namespaces": true, "namespaces": {"http://schemas.xmlsoap.org/soap/envelope/": null, "https://www.example.org/stock": "m", "urn:example:tx": ""}}
+   {'Envelope': {'@encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/', '@xmlns': {'soap': 'http://schemas.xmlsoap.org/soap/envelope/'}, 'Header': {'Transaction': {'@mustUnderstand': '1', '@xmlns': {'t': 'urn:example:tx'}, '#text': '5'}}, 'Body': {'m:GetPriceResponse': {'m:Price': [{'@currency': 'EUR', '@xmlns': {'m': 'https://www.example.org/stock'}, '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}}}}
+-- parse xml/feeds-ns.xml {"process_namespaces": true, "namespaces": {"http://www.w3.org/2005/Atom": "atom", "http://search.yahoo.com/mrss/": "media", "http://www.w3.org/1999/xhtml": null}}
+   {'atom:feed': {'atom:title': {'@type': 'text', '@xmlns': {'': 'http://www.w3.org/2005/Atom', 'media': 'http://search.yahoo.com/mrss/'}, '#text': 'Release notes'}, 'atom:entry': [{'@http://www.w3.org/XML/1998/namespace:lang': 'en', 'atom:title': 'v1.2', 'media:thumbnail': {'@url': 'https://cdn.example.org/1.2.png', '@width': '120'}, 'atom:content': {'@type': 'xhtml', 'div': {'p': {'b': 'builds', '#text': 'Faster .'}}}}, {'atom:title': 'v1.3', 'atom:link': {'@rel': 'alternate', '@href': 'https://example.org/1.3', '@xmlns': {'': 'http://www.w3.org/1999/xhtml'}}}]}}
+-- parse xml/pom.xml {"process_namespaces": true, "namespaces": {"http://maven.apache.org/POM/4.0.0": "", "http://www.w3.org/2001/XMLSchema-instance": "xsi"}}
+   {'project': {'@xsi:schemaLocation': 'http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd', '@xmlns': {'': 'http://maven.apache.org/POM/4.0.0', 'xsi': 'http://www.w3.org/2001/XMLSchema-instance'}, 'modelVersion': '4.0.0', 'groupId': 'org.example.billing', 'artifactId': 'invoice-service', 'version': '2.4.1-SNAPSHOT', 'packaging': 'jar', 'properties': {'java.version': '17', 'jackson.version': '2.17.0'}, 'dependencies': {'dependency': [{'groupId': 'com.fasterxml.jackson.core', 'artifactId': 'jackson-databind', 'version': '${jackson.version}'}, {'groupId': 'org.junit.jupiter', 'artifactId': 'junit-jupiter', 'version': '5.10.2', 'scope': 'test'}]}, 'build': {'plugins': {'plugin': {'artifactId': 'maven-compiler-plugin', 'configuration': {'release': '17'}}}}}}
+-- parse xml/manifest.xml {"process_namespaces": true, "namespaces": {"http://schemas.android.com/apk/res/android": "a"}}
+   {'manifest': {'@package': 'org.example.notes', '@a:versionCode': '42', '@a:versionName': '1.4.2', '@xmlns': {'android': 'http://schemas.android.com/apk/res/android'}, 'uses-permission': [{'@a:name': 'android.permission.INTERNET'}, {'@a:name': 'android.permission.CAMERA'}], 'application': {'@a:label': '@string/app_name', '@a:icon': '@mipmap/ic_launcher', 'activity': {'@a:name': '.MainActivity', '@a:exported': 'true', 'intent-filter': {'action': {'@a:name': 'android.intent.action.MAIN'}, 'category': {'@a:name': 'android.intent.category.LAUNCHER'}}}}}}
+-- parse xml/svg.xml {"process_namespaces": true, "namespaces": {"http://www.w3.org/2005/Atom": "atom", "http://search.yahoo.com/mrss/": "media", "http://www.w3.org/1999/xhtml": null}}
+   {'http://www.w3.org/2000/svg:svg': {'@viewBox': '0 0 24 24', '@xmlns': {'': 'http://www.w3.org/2000/svg', 'xlink': 'http://www.w3.org/1999/xlink'}, 'http://www.w3.org/2000/svg:title': 'Snow ☃ and rocket 🚀', 'http://www.w3.org/2000/svg:defs': {'http://www.w3.org/2000/svg:path': {'@id': 'p', '@d': 'M2 2L22 22'}}, 'http://www.w3.org/2000/svg:use': {'@http://www.w3.org/1999/xlink:href': '#p', '@stroke': 'black'}, 'http://www.w3.org/2000/svg:text': {'@x': '2', '@y': '20', '@http://www.w3.org/XML/1998/namespace:space': 'preserve', '#text': 'a\xa0b\tc'}}}
+-- parse xml/feeds-ns.xml {"process_namespaces": true, "force_list": true}
+   {'http://www.w3.org/2005/Atom:feed': [{'http://www.w3.org/2005/Atom:title': [{'@type': 'text', '@xmlns': {'': 'http://www.w3.org/2005/Atom', 'media': 'http://search.yahoo.com/mrss/'}, '#text': ['Release notes']}], 'http://www.w3.org/2005/Atom:entry': [{'@http://www.w3.org/XML/1998/namespace:lang': 'en', 'http://www.w3.org/2005/Atom:title': ['v1.2'], 'http://search.yahoo.com/mrss/:thumbnail': [{'@url': 'https://cdn.example.org/1.2.png', '@width': '120'}], 'http://www.w3.org/2005/Atom:content': [{'@type': 'xhtml', 'http://www.w3.org/1999/xhtml:div': [{'http://www.w3.org/1999/xhtml:p': [{'http://www.w3.org/1999/xhtml:b': ['builds'], '#text': ['Faster .']}]}]}]}, {'http://www.w3.org/2005/Atom:title': ['v1.3'], 'http://www.w3.org/2005/Atom:link': [{'@rel': 'alternate', '@href': 'https://example.org/1.3', '@xmlns': {'': 'http://www.w3.org/1999/xhtml'}}]}]}]}
+-- parse xml/manifest.xml {"process_namespaces": true, "force_list": true}
+   {'manifest': [{'@package': 'org.example.notes', '@http://schemas.android.com/apk/res/android:versionCode': '42', '@http://schemas.android.com/apk/res/android:versionName': '1.4.2', '@xmlns': {'android': 'http://schemas.android.com/apk/res/android'}, 'uses-permission': [{'@http://schemas.android.com/apk/res/android:name': 'android.permission.INTERNET'}, {'@http://schemas.android.com/apk/res/android:name': 'android.permission.CAMERA'}], 'application': [{'@http://schemas.android.com/apk/res/android:label': '@string/app_name', '@http://schemas.android.com/apk/res/android:icon': '@mipmap/ic_launcher', 'activity': [{'@http://schemas.android.com/apk/res/android:name': '.MainActivity', '@http://schemas.android.com/apk/res/android:exported': 'true', 'intent-filter': [{'action': [{'@http://schemas.android.com/apk/res/android:name': 'android.intent.action.MAIN'}], 'category': [{'@http://schemas.android.com/apk/res/android:name': 'android.intent.category.LAUNCHER'}]}]}]}]}]}
+-- parse xml/svg.xml {"process_namespaces": true, "force_list": true}
+   {'http://www.w3.org/2000/svg:svg': [{'@viewBox': '0 0 24 24', '@xmlns': {'': 'http://www.w3.org/2000/svg', 'xlink': 'http://www.w3.org/1999/xlink'}, 'http://www.w3.org/2000/svg:title': ['Snow ☃ and rocket 🚀'], 'http://www.w3.org/2000/svg:defs': [{'http://www.w3.org/2000/svg:path': [{'@id': 'p', '@d': 'M2 2L22 22'}]}], 'http://www.w3.org/2000/svg:use': [{'@http://www.w3.org/1999/xlink:href': '#p', '@stroke': 'black'}], 'http://www.w3.org/2000/svg:text': [{'@x': '2', '@y': '20', '@http://www.w3.org/XML/1998/namespace:space': 'preserve', '#text': ['a\xa0b\tc']}]}]}
+-- parse xml/sitemap.xml {"process_namespaces": true, "force_list": true}
+   {'http://www.sitemaps.org/schemas/sitemap/0.9:urlset': [{'http://www.sitemaps.org/schemas/sitemap/0.9:url': [{'http://www.sitemaps.org/schemas/sitemap/0.9:loc': ['https://shop.example.com/'], 'http://www.sitemaps.org/schemas/sitemap/0.9:lastmod': ['2024-04-01'], 'http://www.sitemaps.org/schemas/sitemap/0.9:priority': ['1.0']}, {'http://www.sitemaps.org/schemas/sitemap/0.9:loc': ['https://shop.example.com/search?q=red+shoes&sort=price'], 'http://www.sitemaps.org/schemas/sitemap/0.9:changefreq': ['weekly'], 'http://www.google.com/schemas/sitemap-image/1.1:image': [{'http://www.google.com/schemas/sitemap-image/1.1:loc': ['https://shop.example.com/i/shoe.jpg']}, {'http://www.google.com/schemas/sitemap-image/1.1:loc': ['https://shop.example.com/i/shoe-2.jpg']}]}]}]}
+-- parse xml/external.xml {"disable_entities": false}
+   {'note': 'Ship by  to .'}
+-- parse xml/external.xml {"disable_entities": false, "cdata_separator": "+"}
+   {'note': 'Ship by  to .'}
+-- parse xml/settings.xml {"disable_entities": false}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to Acme & Sons!', 'contact': 'Write to support@acme.example or call +44 20 7946 0000', 'footer': '© Acme & Sons', 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}]}}
+-- parse xml/settings.xml {"disable_entities": false, "cdata_separator": "+"}
+   {'settings': {'@env': 'prod', '@owner': 'Acme & Sons', 'app': {'@name': 'billing', 'banner': 'Welcome to Acme & Sons!', 'contact': 'Write to support@acme.example or call +44 20 7946 0000', 'footer': '© Acme & Sons', 'query': 'SELECT * FROM t WHERE a < 3 AND b > 4', 'motd': 'line one\n  line two', 'empty': None, 'selfclosed': None, 'spaces': None, '#text': '+\n    +\n    +\n    +\n    +\n    +\n    +\n    +'}, 'feature': [{'@name': 'beta-search', '@enabled': 'true'}, {'@name': 'dark-mode', '@enabled': 'false', '#text': 'off by default'}], '#text': '+\n  +\n  +'}}
+== JSON output
+-- json xml/feed.xml {}
+   | {
+   |   "rss": {
+   |     "@version": "2.0",
+   |     "@xmlns:dc": "http://purl.org/dc/elements/1.1/",
+   |     "@xmlns:content": "http://purl.org/rss/1.0/modules/content/",
+   |     "@xmlns:atom": "http://www.w3.org/2005/Atom",
+   |     "channel": {
+   |       "title": "Kitchen Notes & Recipes",
+   |       "link": "https://notes.example.org/",
+   |       "atom:link": {
+   |         "@href": "https://notes.example.org/feed.xml",
+   |         "@rel": "self",
+   |         "@type": "application/rss+xml"
+   |       },
+   |       "description": "Weeknight cooking, one pan at a time",
+   |       "language": "en-gb",
+   |       "item": [
+   |         {
+   |           "title": "Cr\u00e8me br\u00fbl\u00e9e without a torch",
+   |           "link": "https://notes.example.org/2024/creme-brulee",
+   |           "guid": {
+   |             "@isPermaLink": "false",
+   |             "#text": "post-311"
+   |           },
+   |           "dc:creator": "Ana Ruiz",
+   |           "category": [
+   |             "dessert",
+   |             "french"
+   |           ],
+   |           "pubDate": "Tue, 05 Mar 2024 18:00:00 +0000",
+   |           "content:encoded": "<p>Grill it <em>hot</em> &amp; fast.</p>"
+   |         },
+   |         {
+   |           "title": "\u201cTen-minute\u201d dal",
+   |           "link": "https://notes.example.org/2024/dal",
+   |           "guid": {
+   |             "@isPermaLink": "true",
+   |             "#text": "https://notes.example.org/2024/dal"
+   |           },
+   |           "dc:creator": "Sam Okafor",
+   |           "category": "vegan",
+   |           "pubDate": "Fri, 15 Mar 2024 07:30:00 +0000",
+   |           "description": "Red lentils, cumin, ginger \u2014 done."
+   |         },
+   |         {
+   |           "title": "Pan sizes, a table",
+   |           "link": "https://notes.example.org/2024/pans?view=table&units=cm",
+   |           "guid": "post-318",
+   |           "enclosure": {
+   |             "@url": "https://cdn.example.org/pans.png",
+   |             "@length": "48213",
+   |             "@type": "image/png"
+   |           }
+   |         }
+   |       ]
+   |     }
+   |   }
+   | }
+-- json xml/s3-list.xml {}
+   | {
+   |   "ListBucketResult": {
+   |     "@xmlns": "http://s3.amazonaws.com/doc/2006-03-01/",
+   |     "Name": "acme-archive",
+   |     "Prefix": null,
+   |     "KeyCount": "9",
+   |     "MaxKeys": "1000",
+   |     "IsTruncated": "false",
+   |     "Contents": [
+   |       {
+   |         "Key": "img/api-000.tar",
+   |         "LastModified": "2024-04-21T14:01:00.000Z",
+   |         "ETag": "\"80aaa49523797a0324b3f47437924d40\"",
+   |         "Size": "692267",
+   |         "StorageClass": "STANDARD_IA"
+   |       },
+   |       {
+   |         "Key": "logs/2024/04/db-001.png",
+   |         "LastModified": "2024-04-22T16:56:00.000Z",
+   |         "ETag": "\"d00eb64a8bd709e1c52804fc579effb0\"",
+   |         "Size": "232694",
+   |         "StorageClass": "GLACIER"
+   |       },
+   |       {
+   |         "Key": "logs/2024/03/db-002.tar",
+   |         "LastModified": "2024-03-27T11:01:00.000Z",
+   |         "ETag": "\"bb7c59449cd3f05abb4fb31873103f55\"",
+   |         "Size": "685098",
+   |         "StorageClass": "STANDARD_IA"
+   |       },
+   |       {
+   |         "Key": "logs/2024/03/api-003.gz",
+   |         "LastModified": "2024-04-28T13:21:00.000Z",
+   |         "ETag": "\"c8c30bb3861a9d4ecfea1c473ac99510\"",
+   |         "Size": "28925",
+   |         "StorageClass": "STANDARD_IA"
+   |       },
+   |       {
+   |         "Key": "img/api-004.gz",
+   |         "LastModified": "2024-03-18T17:33:00.000Z",
+   |         "ETag": "\"dd84e0f195ded97fcccb9d5a24dee354\"",
+   |         "Size": "695816",
+   |         "StorageClass": "GLACIER"
+   |       },
+   |       {
+   |         "Key": "logs/2024/04/db-005.tar",
+   |         "LastModified": "2024-04-04T04:53:00.000Z",
+   |         "ETag": "\"5ab5b3dfcf2b26e30a302c494d45f25c\"",
+   |         "Size": "135849",
+   |         "StorageClass": "STANDARD"
+   |       },
+   |       {
+   |         "Key": "logs/2024/03/api-006.png",
+   |         "LastModified": "2024-04-14T13:52:00.000Z",
+   |         "ETag": "\"fd38c0050d8b6a3d0a3d23098073ea5b\"",
+   |         "Size": "108500",
+   |         "StorageClass": "STANDARD"
+   |       },
+   |       {
+   |         "Key": "backups/db-007.gz",
+   |         "LastModified": "2024-04-04T08:27:00.000Z",
+   |         "ETag": "\"7a4432005245750f6bc88df19ea453f6\"",
+   |         "Size": "162058",
+   |         "StorageClass": "GLACIER"
+   |       },
+   |       {
+   |         "Key": "img/web-008.tar",
+   |         "LastModified": "2024-04-14T20:49:00.000Z",
+   |         "ETag": "\"9534dbbe1715bc378f74a8d276c5b44e\"",
+   |         "Size": "458370",
+   |         "StorageClass": "STANDARD"
+   |       }
+   |     ],
+   |     "CommonPrefixes": {
+   |       "Prefix": "logs/"
+   |     }
+   |   }
+   | }
+-- json xml/settings.xml {}
+   | {
+   |   "settings": {
+   |     "@env": "prod",
+   |     "@owner": "Acme & Sons",
+   |     "app": {
+   |       "@name": "billing",
+   |       "banner": "Welcome to !",
+   |       "contact": "Write to  or call +44 20 7946 0000",
+   |       "footer": null,
+   |       "query": "SELECT * FROM t WHERE a < 3 AND b > 4",
+   |       "motd": "line one\n  line two",
+   |       "empty": null,
+   |       "selfclosed": null,
+   |       "spaces": null
+   |     },
+   |     "feature": [
+   |       {
+   |         "@name": "beta-search",
+   |         "@enabled": "true"
+   |       },
+   |       {
+   |         "@name": "dark-mode",
+   |         "@enabled": "false",
+   |         "#text": "off by default"
+   |       }
+   |     ]
+   |   }
+   | }
+-- json xml/weird.xml {}
+   | {
+   |   "r": {
+   |     "@a": "x y z",
+   |     "@b": "say \"hi\"",
+   |     "@c": "it's",
+   |     "@d": " \n\t\r ",
+   |     "k": [
+   |       "tab\there",
+   |       "nul-free \\ backslash"
+   |     ],
+   |     "zw": "zero\u200bwidth and line\u2028sep",
+   |     "cr": "a\rb",
+   |     "ent": "<>&\"'"
+   |   }
+   | }
+-- json xml/svg.xml {}
+   | {
+   |   "svg": {
+   |     "@xmlns": "http://www.w3.org/2000/svg",
+   |     "@xmlns:xlink": "http://www.w3.org/1999/xlink",
+   |     "@viewBox": "0 0 24 24",
+   |     "title": "Snow \u2603 and rocket \ud83d\ude80",
+   |     "defs": {
+   |       "path": {
+   |         "@id": "p",
+   |         "@d": "M2 2L22 22"
+   |       }
+   |     },
+   |     "use": {
+   |       "@xlink:href": "#p",
+   |       "@stroke": "black"
+   |     },
+   |     "text": {
+   |       "@x": "2",
+   |       "@y": "20",
+   |       "@xml:space": "preserve",
+   |       "#text": "a\u00a0b\tc"
+   |     }
+   |   }
+   | }
+-- json xml/s3-list.xml {"postprocessor": "typed", "force_list": ["Contents"]}
+   | {
+   |   "ListBucketResult": {
+   |     "@xmlns": "http://s3.amazonaws.com/doc/2006-03-01/",
+   |     "Name": "acme-archive",
+   |     "Prefix": null,
+   |     "KeyCount": 9,
+   |     "MaxKeys": 1000,
+   |     "IsTruncated": false,
+   |     "Contents": [
+   |       {
+   |         "Key": "img/api-000.tar",
+   |         "LastModified": "2024-04-21T14:01:00.000Z",
+   |         "ETag": "\"80aaa49523797a0324b3f47437924d40\"",
+   |         "Size": 692267,
+   |         "StorageClass": "STANDARD_IA"
+   |       },
+   |       {
+   |         "Key": "logs/2024/04/db-001.png",
+   |         "LastModified": "2024-04-22T16:56:00.000Z",
+   |         "ETag": "\"d00eb64a8bd709e1c52804fc579effb0\"",
+   |         "Size": 232694,
+   |         "StorageClass": "GLACIER"
+   |       },
+   |       {
+   |         "Key": "logs/2024/03/db-002.tar",
+   |         "LastModified": "2024-03-27T11:01:00.000Z",
+   |         "ETag": "\"bb7c59449cd3f05abb4fb31873103f55\"",
+   |         "Size": 685098,
+   |         "StorageClass": "STANDARD_IA"
+   |       },
+   |       {
+   |         "Key": "logs/2024/03/api-003.gz",
+   |         "LastModified": "2024-04-28T13:21:00.000Z",
+   |         "ETag": "\"c8c30bb3861a9d4ecfea1c473ac99510\"",
+   |         "Size": 28925,
+   |         "StorageClass": "STANDARD_IA"
+   |       },
+   |       {
+   |         "Key": "img/api-004.gz",
+   |         "LastModified": "2024-03-18T17:33:00.000Z",
+   |         "ETag": "\"dd84e0f195ded97fcccb9d5a24dee354\"",
+   |         "Size": 695816,
+   |         "StorageClass": "GLACIER"
+   |       },
+   |       {
+   |         "Key": "logs/2024/04/db-005.tar",
+   |         "LastModified": "2024-04-04T04:53:00.000Z",
+   |         "ETag": "\"5ab5b3dfcf2b26e30a302c494d45f25c\"",
+   |         "Size": 135849,
+   |         "StorageClass": "STANDARD"
+   |       },
+   |       {
+   |         "Key": "logs/2024/03/api-006.png",
+   |         "LastModified": "2024-04-14T13:52:00.000Z",
+   |         "ETag": "\"fd38c0050d8b6a3d0a3d23098073ea5b\"",
+   |         "Size": 108500,
+   |         "StorageClass": "STANDARD"
+   |       },
+   |       {
+   |         "Key": "backups/db-007.gz",
+   |         "LastModified": "2024-04-04T08:27:00.000Z",
+   |         "ETag": "\"7a4432005245750f6bc88df19ea453f6\"",
+   |         "Size": 162058,
+   |         "StorageClass": "GLACIER"
+   |       },
+   |       {
+   |         "Key": "img/web-008.tar",
+   |         "LastModified": "2024-04-14T20:49:00.000Z",
+   |         "ETag": "\"9534dbbe1715bc378f74a8d276c5b44e\"",
+   |         "Size": 458370,
+   |         "StorageClass": "STANDARD"
+   |       }
+   |     ],
+   |     "CommonPrefixes": {
+   |       "Prefix": "logs/"
+   |     }
+   |   }
+   | }
+== streaming
+-- stream xml/feed.xml 3 0
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('title', None)] item:
+  
+    Kitchen Notes & Recipes
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('link', None)] item:
+    https://notes.example.org/
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('atom:link', {'href': 'https://notes.example.org/feed.xml', 'rel': 'self', 'type': 'application/rss+xml'})] item:
+    
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('description', None)] item:
+    Weeknight cooking, one pan at a time
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('language', None)] item:
+    en-gb
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('item', None)] item:{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('item', None)] item:{'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None), ('item', None)] item:{'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}
+   8 items, result None
+-- stream xml/feed.xml 2 0
+   path:[('rss', {'version': '2.0', 'xmlns:dc': 'http://purl.org/dc/elements/1.1/', 'xmlns:content': 'http://purl.org/rss/1.0/modules/content/', 'xmlns:atom': 'http://www.w3.org/2005/Atom'}), ('channel', None)] item:{'title': 'Kitchen Notes & Recipes', 'link': 'https://notes.example.org/', 'atom:link': {'@href': 'https://notes.example.org/feed.xml', '@rel': 'self', '@type': 'application/rss+xml'}, 'description': 'Weeknight cooking, one pan at a time', 'language': 'en-gb', 'item': [{'title': 'Crème brûlée without a torch', 'link': 'https://notes.example.org/2024/creme-brulee', 'guid': {'@isPermaLink': 'false', '#text': 'post-311'}, 'dc:creator': 'Ana Ruiz', 'category': ['dessert', 'french'], 'pubDate': 'Tue, 05 Mar 2024 18:00:00 +0000', 'content:encoded': '<p>Grill it <em>hot</em> &amp; fast.</p>'}, {'title': '“Ten-minute” dal', 'link': 'https://notes.example.org/2024/dal', 'guid': {'@isPermaLink': 'true', '#text': 'https://notes.example.org/2024/dal'}, 'dc:creator': 'Sam Okafor', 'category': 'vegan', 'pubDate': 'Fri, 15 Mar 2024 07:30:00 +0000', 'description': 'Red lentils, cumin, ginger — done.'}, {'title': 'Pan sizes, a table', 'link': 'https://notes.example.org/2024/pans?view=table&units=cm', 'guid': 'post-318', 'enclosure': {'@url': 'https://cdn.example.org/pans.png', '@length': '48213', '@type': 'image/png'}}]}
+   1 items, result None
+-- stream xml/s3-list.xml 2 0
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Name', None)] item:
+  acme-archive
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Prefix', None)] item:
+  
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('KeyCount', None)] item:
+  9
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('MaxKeys', None)] item:
+  1000
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('IsTruncated', None)] item:
+  false
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'img/api-000.tar', 'LastModified': '2024-04-21T14:01:00.000Z', 'ETag': '"80aaa49523797a0324b3f47437924d40"', 'Size': '692267', 'StorageClass': 'STANDARD_IA'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'logs/2024/04/db-001.png', 'LastModified': '2024-04-22T16:56:00.000Z', 'ETag': '"d00eb64a8bd709e1c52804fc579effb0"', 'Size': '232694', 'StorageClass': 'GLACIER'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'logs/2024/03/db-002.tar', 'LastModified': '2024-03-27T11:01:00.000Z', 'ETag': '"bb7c59449cd3f05abb4fb31873103f55"', 'Size': '685098', 'StorageClass': 'STANDARD_IA'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'logs/2024/03/api-003.gz', 'LastModified': '2024-04-28T13:21:00.000Z', 'ETag': '"c8c30bb3861a9d4ecfea1c473ac99510"', 'Size': '28925', 'StorageClass': 'STANDARD_IA'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'img/api-004.gz', 'LastModified': '2024-03-18T17:33:00.000Z', 'ETag': '"dd84e0f195ded97fcccb9d5a24dee354"', 'Size': '695816', 'StorageClass': 'GLACIER'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'logs/2024/04/db-005.tar', 'LastModified': '2024-04-04T04:53:00.000Z', 'ETag': '"5ab5b3dfcf2b26e30a302c494d45f25c"', 'Size': '135849', 'StorageClass': 'STANDARD'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'logs/2024/03/api-006.png', 'LastModified': '2024-04-14T13:52:00.000Z', 'ETag': '"fd38c0050d8b6a3d0a3d23098073ea5b"', 'Size': '108500', 'StorageClass': 'STANDARD'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'backups/db-007.gz', 'LastModified': '2024-04-04T08:27:00.000Z', 'ETag': '"7a4432005245750f6bc88df19ea453f6"', 'Size': '162058', 'StorageClass': 'GLACIER'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Contents', None)] item:{'Key': 'img/web-008.tar', 'LastModified': '2024-04-14T20:49:00.000Z', 'ETag': '"9534dbbe1715bc378f74a8d276c5b44e"', 'Size': '458370', 'StorageClass': 'STANDARD'}
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('CommonPrefixes', None)] item:{'Prefix': 'logs/'}
+   15 items, result None
+-- stream xml/s3-list.xml 2 4
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Name', None)] item:
+  acme-archive
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('Prefix', None)] item:
+  
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('KeyCount', None)] item:
+  9
+   path:[('ListBucketResult', {'xmlns': 'http://s3.amazonaws.com/doc/2006-03-01/'}), ('MaxKeys', None)] item:
+  1000
+   raised ParsingInterrupted:  after 4 items
+-- stream xml/ride.gpx 4 0
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5000', 'lon': '-0.1200'})] item:{'ele': '109', 'time': '2024-05-11T08:00:00Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5007', 'lon': '-0.1211'})] item:{'ele': '111', 'time': '2024-05-11T08:00:31Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5014', 'lon': '-0.1222'})] item:{'ele': '106', 'time': '2024-05-11T08:01:02Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5021', 'lon': '-0.1233'})] item:{'ele': '111', 'time': '2024-05-11T08:01:33Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5028', 'lon': '-0.1244'})] item:{'ele': '119', 'time': '2024-05-11T08:02:04Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5035', 'lon': '-0.1255'})] item:{'ele': '121', 'time': '2024-05-11T08:02:35Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5042', 'lon': '-0.1266'})] item:{'ele': '120', 'time': '2024-05-11T08:03:06Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5049', 'lon': '-0.1277'})] item:{'ele': '125', 'time': '2024-05-11T08:03:37Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5056', 'lon': '-0.1288'})] item:{'ele': '134', 'time': '2024-05-11T08:04:08Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5063', 'lon': '-0.1299'})] item:{'ele': '133', 'time': '2024-05-11T08:04:39Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5070', 'lon': '-0.1310'})] item:{'ele': '134', 'time': '2024-05-11T08:05:10Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5077', 'lon': '-0.1321'})] item:{'ele': '140', 'time': '2024-05-11T08:05:41Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5084', 'lon': '-0.1332'})] item:{'ele': '138', 'time': '2024-05-11T08:06:12Z'}
+   path:[('gpx', {'version': '1.1', 'creator': 'BikeComputer 3', 'xmlns': 'http://www.topografix.com/GPX/1/1'}), ('trk', None), ('trkseg', None), ('trkpt', {'lat': '51.5091', 'lon': '-0.1343'})] item:{'ele': '137', 'time': '2024-05-11T08:06:43Z'}
+   14 items, result None
+-- stream xml/opml.xml 3 2
+   path:[('opml', {'version': '2.0'}), ('head', None), ('title', None)] item:
+  Subscriptions
+   path:[('opml', {'version': '2.0'}), ('body', None), ('outline', {'text': 'Tech', 'title': 'Tech'})] item:{'outline': [{'@type': 'rss', '@text': 'LWN', '@xmlUrl': 'https://lwn.net/headlines/rss'}, {'@type': 'rss', '@text': 'Hacker News', '@xmlUrl': 'https://news.ycombinator.com/rss'}]}
+   raised ParsingInterrupted:  after 2 items
+-- stream xml/settings.xml 3 0
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('banner', None)] item:
+  
+    Welcome to !
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('contact', None)] item:
+    Write to  or call +44 20 7946 0000
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('footer', None)] item:
+    
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('query', None)] item:
+    SELECT * FROM t WHERE a < 3 AND b > 4
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('motd', None)] item:
+      line one
+  line two  
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('empty', None)] item:
+    
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('selfclosed', None)] item:
+    
+   path:[('settings', {'env': 'prod', 'owner': 'Acme & Sons'}), ('app', {'name': 'billing'}), ('spaces', None)] item:
+       
+   8 items, result None
+-- stream xml/article.xml 2 0
+   path:[('article', {'id': 'a7'}), ('p', None)] item:{'b': 'world', 'i': 'you'}
+   path:[('article', {'id': 'a7'}), ('p', None)] item:{'br': None}
+   path:[('article', {'id': 'a7'}), ('note', None)] item:{'code': 'x < y'}
+   3 items, result None
+-- stream xml/soap.xml 3 0
+   path:[('soap:Envelope', {'xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', 'soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/'}), ('soap:Header', None), ('t:Transaction', {'xmlns:t': 'urn:example:tx', 'soap:mustUnderstand': '1'})] item:
+  
+    5
+   path:[('soap:Envelope', {'xmlns:soap': 'http://schemas.xmlsoap.org/soap/envelope/', 'soap:encodingStyle': 'http://schemas.xmlsoap.org/soap/encoding/'}), ('soap:Body', None), ('m:GetPriceResponse', {'xmlns:m': 'https://www.example.org/stock'})] item:{'m:Price': [{'@currency': 'EUR', '#text': '34.50'}, {'@currency': 'USD', '#text': '37.10'}], 'm:Symbol': 'ACME'}
+   2 items, result None
+-- stream xml/article.xml 1 0
+   path:[('article', {'id': 'a7'})] item:{'p': [{'b': 'world', 'i': 'you', '#text': 'Hello , and !'}, {'br': None, '#text': 'Second  paragraphwith a break.'}], 'note': {'code': 'x < y', '#text': 'tip:'}}
+   1 items, result None
+== round trips
+-- roundtrip xml/feed.xml {} {}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Kitchen Notes &amp; Recipes</title><link>https://notes.example.org/</link><atom:link href="https://notes.example.org/feed.xml" rel="self" type="application/rss+xml"></atom:link><description>Weeknight cooking, one pan at a time</description><language>en-gb</language><item><title>Crème brûlée without a torch</title><link>https://notes.example.org/2024/creme-brulee</link><guid isPermaLink="false">post-311</guid><dc:creator>Ana Ruiz</dc:creator><category>dessert</category><category>french</category><pubDate>Tue, 05 Mar 2024 18:00:00 +0000</pubDate><content:encoded>&lt;p&gt;Grill it &lt;em&gt;hot&lt;/em&gt; &amp;amp; fast.&lt;/p&gt;</content:encoded></item><item><title>“Ten-minute” dal</title><link>https://notes.example.org/2024/dal</link><guid isPermaLink="true">https://notes.example.org/2024/dal</guid><dc:creator>Sam Okafor</dc:creator><category>vegan</category><pubDate>Fri, 15 Mar 2024 07:30:00 +0000</pubDate><description>Red lentils, cumin, ginger — done.</description></item><item><title>Pan sizes, a table</title><link>https://notes.example.org/2024/pans?view=table&amp;units=cm</link><guid>post-318</guid><enclosure url="https://cdn.example.org/pans.png" length="48213" type="image/png"></enclosure></item></channel></rss>
+-- roundtrip xml/feed.xml {} {"pretty": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">
+   | 	<channel>
+   | 		<title>Kitchen Notes &amp; Recipes</title>
+   | 		<link>https://notes.example.org/</link>
+   | 		<atom:link href="https://notes.example.org/feed.xml" rel="self" type="application/rss+xml"></atom:link>
+   | 		<description>Weeknight cooking, one pan at a time</description>
+   | 		<language>en-gb</language>
+   | 		<item>
+   | 			<title>Crème brûlée without a torch</title>
+   | 			<link>https://notes.example.org/2024/creme-brulee</link>
+   | 			<guid isPermaLink="false">post-311</guid>
+   | 			<dc:creator>Ana Ruiz</dc:creator>
+   | 			<category>dessert</category>
+   | 			<category>french</category>
+   | 			<pubDate>Tue, 05 Mar 2024 18:00:00 +0000</pubDate>
+   | 			<content:encoded>&lt;p&gt;Grill it &lt;em&gt;hot&lt;/em&gt; &amp;amp; fast.&lt;/p&gt;</content:encoded>
+   | 		</item>
+   | 		<item>
+   | 			<title>“Ten-minute” dal</title>
+   | 			<link>https://notes.example.org/2024/dal</link>
+   | 			<guid isPermaLink="true">https://notes.example.org/2024/dal</guid>
+   | 			<dc:creator>Sam Okafor</dc:creator>
+   | 			<category>vegan</category>
+   | 			<pubDate>Fri, 15 Mar 2024 07:30:00 +0000</pubDate>
+   | 			<description>Red lentils, cumin, ginger — done.</description>
+   | 		</item>
+   | 		<item>
+   | 			<title>Pan sizes, a table</title>
+   | 			<link>https://notes.example.org/2024/pans?view=table&amp;units=cm</link>
+   | 			<guid>post-318</guid>
+   | 			<enclosure url="https://cdn.example.org/pans.png" length="48213" type="image/png"></enclosure>
+   | 		</item>
+   | 	</channel>
+   | </rss>
+-- roundtrip xml/settings.xml {} {"pretty": true, "indent": "  "}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <settings env="prod" owner="Acme &amp; Sons">
+   |   <app name="billing">
+   |     <banner>Welcome to !</banner>
+   |     <contact>Write to  or call +44 20 7946 0000</contact>
+   |     <footer></footer>
+   |     <query>SELECT * FROM t WHERE a &lt; 3 AND b &gt; 4</query>
+   |     <motd>line one
+   |   line two</motd>
+   |     <empty></empty>
+   |     <selfclosed></selfclosed>
+   |     <spaces></spaces>
+   |   </app>
+   |   <feature name="beta-search" enabled="true"></feature>
+   |   <feature name="dark-mode" enabled="false">off by default</feature>
+   | </settings>
+-- roundtrip xml/settings.xml {} {"short_empty_elements": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <settings env="prod" owner="Acme &amp; Sons"><app name="billing"><banner>Welcome to !</banner><contact>Write to  or call +44 20 7946 0000</contact><footer/><query>SELECT * FROM t WHERE a &lt; 3 AND b &gt; 4</query><motd>line one
+   |   line two</motd><empty/><selfclosed/><spaces/></app><feature name="beta-search" enabled="true"/><feature name="dark-mode" enabled="false">off by default</feature></settings>
+-- roundtrip xml/settings.xml {"force_cdata": true} {"pretty": true, "indent": "  ", "short_empty_elements": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <settings env="prod" owner="Acme &amp; Sons">
+   |   <app name="billing">
+   |     <banner>Welcome to !</banner>
+   |     <contact>Write to  or call +44 20 7946 0000</contact>
+   |     <footer/>
+   |     <query>SELECT * FROM t WHERE a &lt; 3 AND b &gt; 4</query>
+   |     <motd>line one
+   |   line two</motd>
+   |     <empty/>
+   |     <selfclosed/>
+   |     <spaces/>
+   |   </app>
+   |   <feature name="beta-search" enabled="true"/>
+   |   <feature name="dark-mode" enabled="false">off by default</feature>
+   | </settings>
+-- roundtrip xml/weird.xml {} {}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <r a="x y z" b='say "hi"' c="it's" d=" &#10;&#9;&#13; "><k>tab	here</k><k>nul-free \ backslash</k><zw>zero​width and line sep</zw><cr>ab</cr><ent>&lt;&gt;&amp;"'</ent></r>
+-- roundtrip xml/article.xml {} {"pretty": true, "newl": "\n", "indent": "    "}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <article id="a7">
+   |     <p>
+   |         <b>world</b>
+   |         <i>you</i>
+   | Hello , and !    </p>
+   |     <p>
+   |         <br></br>
+   | Second  paragraphwith a break.    </p>
+   |     <note>
+   |         <code>x &lt; y</code>
+   | tip:    </note>
+   | </article>
+-- roundtrip xml/opml.xml {} {"pretty": true, "indent": " ", "short_empty_elements": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <opml version="2.0">
+   |  <head>
+   |   <title>Subscriptions</title>
+   |  </head>
+   |  <body>
+   |   <outline text="Tech" title="Tech">
+   |    <outline type="rss" text="LWN" xmlUrl="https://lwn.net/headlines/rss"/>
+   |    <outline type="rss" text="Hacker News" xmlUrl="https://news.ycombinator.com/rss"/>
+   |   </outline>
+   |   <outline text="Food">
+   |    <outline type="rss" text="Kitchen Notes" xmlUrl="https://notes.example.org/feed.xml"/>
+   |   </outline>
+   |   <outline type="rss" text="Ünïcödé Weekly" xmlUrl="https://weekly.example.de/rss"/>
+   |  </body>
+   | </opml>
+-- roundtrip xml/s3-one.xml {} {"full_document": false}
+   | <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>acme-archive</Name><Prefix>img/</Prefix><KeyCount>1</KeyCount><IsTruncated>true</IsTruncated><NextContinuationToken>1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=</NextContinuationToken><Contents><Key>img/logo.png</Key><Size>18233</Size><StorageClass>STANDARD</StorageClass></Contents></ListBucketResult>
+-- roundtrip xml/svg.xml {} {"pretty": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">
+   | 	<title>Snow ☃ and rocket 🚀</title>
+   | 	<defs>
+   | 		<path id="p" d="M2 2L22 22"></path>
+   | 	</defs>
+   | 	<use xlink:href="#p" stroke="black"></use>
+   | 	<text x="2" y="20" xml:space="preserve">a b	c</text>
+   | </svg>
+-- roundtrip xml/soap.xml {"process_namespaces": true} {"pretty": true, "indent": "  "}
+   raised ValueError: Invalid element name: "/" not allowed
+-- roundtrip xml/soap.xml {"process_namespaces": true} {"pretty": true, "indent": "  ", "namespaces": {"soap": "http://schemas.xmlsoap.org/soap/envelope/", "m": "https://www.example.org/stock"}}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <Envelope ncodingStyle="http://schemas.xmlsoap.org/soap/encoding/" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+   |   <Header>
+   |     <Transaction ustUnderstand="1" xmlns:t="urn:example:tx">5</Transaction>
+   |   </Header>
+   |   <Body>
+   |     <GetPriceResponse>
+   |       <Price currency="EUR" xmlns:m="https://www.example.org/stock">34.50</Price>
+   |       <Price currency="USD">37.10</Price>
+   |       <Symbol>ACME</Symbol>
+   |     </GetPriceResponse>
+   |   </Body>
+   | </Envelope>
+-- roundtrip xml/manifest.xml {} {"pretty": true, "indent": "    ", "short_empty_elements": true, "encoding": "UTF-8"}
+   | <?xml version="1.0" encoding="UTF-8"?>
+   | <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.example.notes" android:versionCode="42" android:versionName="1.4.2">
+   |     <uses-permission android:name="android.permission.INTERNET"/>
+   |     <uses-permission android:name="android.permission.CAMERA"/>
+   |     <application android:label="@string/app_name" android:icon="@mipmap/ic_launcher">
+   |         <activity android:name=".MainActivity" android:exported="true">
+   |             <intent-filter>
+   |                 <action android:name="android.intent.action.MAIN"/>
+   |                 <category android:name="android.intent.category.LAUNCHER"/>
+   |             </intent-filter>
+   |         </activity>
+   |     </application>
+   | </manifest>
+-- roundtrip xml/feed.xml {"attr_prefix": "$", "cdata_key": "_"} {"attr_prefix": "$", "cdata_key": "_", "pretty": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">
+   | 	<channel>
+   | 		<title>Kitchen Notes &amp; Recipes</title>
+   | 		<link>https://notes.example.org/</link>
+   | 		<atom:link href="https://notes.example.org/feed.xml" rel="self" type="application/rss+xml"></atom:link>
+   | 		<description>Weeknight cooking, one pan at a time</description>
+   | 		<language>en-gb</language>
+   | 		<item>
+   | 			<title>Crème brûlée without a torch</title>
+   | 			<link>https://notes.example.org/2024/creme-brulee</link>
+   | 			<guid isPermaLink="false">post-311</guid>
+   | 			<dc:creator>Ana Ruiz</dc:creator>
+   | 			<category>dessert</category>
+   | 			<category>french</category>
+   | 			<pubDate>Tue, 05 Mar 2024 18:00:00 +0000</pubDate>
+   | 			<content:encoded>&lt;p&gt;Grill it &lt;em&gt;hot&lt;/em&gt; &amp;amp; fast.&lt;/p&gt;</content:encoded>
+   | 		</item>
+   | 		<item>
+   | 			<title>“Ten-minute” dal</title>
+   | 			<link>https://notes.example.org/2024/dal</link>
+   | 			<guid isPermaLink="true">https://notes.example.org/2024/dal</guid>
+   | 			<dc:creator>Sam Okafor</dc:creator>
+   | 			<category>vegan</category>
+   | 			<pubDate>Fri, 15 Mar 2024 07:30:00 +0000</pubDate>
+   | 			<description>Red lentils, cumin, ginger — done.</description>
+   | 		</item>
+   | 		<item>
+   | 			<title>Pan sizes, a table</title>
+   | 			<link>https://notes.example.org/2024/pans?view=table&amp;units=cm</link>
+   | 			<guid>post-318</guid>
+   | 			<enclosure url="https://cdn.example.org/pans.png" length="48213" type="image/png"></enclosure>
+   | 		</item>
+   | 	</channel>
+   | </rss>
+-- roundtrip xml/ride.gpx {} {"pretty": true, "newl": "\r\n", "indent": ""}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <gpx version="1.1" creator="BikeComputer 3" xmlns="http://www.topografix.com/GPX/1/1">
+   | <metadata>
+   | <name>Saturday loop</name>
+   | <time>2024-05-11T08:00:00Z</time>
+   | </metadata>
+   | <trk>
+   | <name>Loop</name>
+   | <trkseg>
+   | <trkpt lat="51.5000" lon="-0.1200">
+   | <ele>109</ele>
+   | <time>2024-05-11T08:00:00Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5007" lon="-0.1211">
+   | <ele>111</ele>
+   | <time>2024-05-11T08:00:31Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5014" lon="-0.1222">
+   | <ele>106</ele>
+   | <time>2024-05-11T08:01:02Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5021" lon="-0.1233">
+   | <ele>111</ele>
+   | <time>2024-05-11T08:01:33Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5028" lon="-0.1244">
+   | <ele>119</ele>
+   | <time>2024-05-11T08:02:04Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5035" lon="-0.1255">
+   | <ele>121</ele>
+   | <time>2024-05-11T08:02:35Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5042" lon="-0.1266">
+   | <ele>120</ele>
+   | <time>2024-05-11T08:03:06Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5049" lon="-0.1277">
+   | <ele>125</ele>
+   | <time>2024-05-11T08:03:37Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5056" lon="-0.1288">
+   | <ele>134</ele>
+   | <time>2024-05-11T08:04:08Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5063" lon="-0.1299">
+   | <ele>133</ele>
+   | <time>2024-05-11T08:04:39Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5070" lon="-0.1310">
+   | <ele>134</ele>
+   | <time>2024-05-11T08:05:10Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5077" lon="-0.1321">
+   | <ele>140</ele>
+   | <time>2024-05-11T08:05:41Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5084" lon="-0.1332">
+   | <ele>138</ele>
+   | <time>2024-05-11T08:06:12Z</time>
+   | </trkpt>
+   | <trkpt lat="51.5091" lon="-0.1343">
+   | <ele>137</ele>
+   | <time>2024-05-11T08:06:43Z</time>
+   | </trkpt>
+   | </trkseg>
+   | </trk>
+   | </gpx>
+-- roundtrip xml/feeds-ns.xml {} {"full_document": false, "pretty": true}
+   | <feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+   | 	<title type="text">Release notes</title>
+   | 	<entry xml:lang="en">
+   | 		<title>v1.2</title>
+   | 		<media:thumbnail url="https://cdn.example.org/1.2.png" width="120"></media:thumbnail>
+   | 		<content type="xhtml">
+   | 			<div xmlns="http://www.w3.org/1999/xhtml">
+   | 				<p>
+   | 					<b>builds</b>
+   | Faster .				</p>
+   | 			</div>
+   | 		</content>
+   | 	</entry>
+   | 	<entry>
+   | 		<title>v1.3</title>
+   | 		<link rel="alternate" href="https://example.org/1.3"></link>
+   | 	</entry>
+   | </feed>
+== JSON documents to XML
+-- unparse json/config.json {}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <service name="invoice-api" version="3"><listen host="0.0.0.0" port="8443"><tls>true</tls></listen><database><url>postgres://db.internal:5432/invoices</url><pool>20</pool><replica></replica></database><feature name="pdf-export" enabled="True"></feature><feature name="e-invoicing" enabled="False">EU only</feature><admins><admin>ana@example.org</admin><admin>sam@example.org</admin></admins><motd>Maintenance window: Sun 02:00–03:00 &lt;UTC&gt; &amp; after</motd></service>
+-- unparse json/config.json {"pretty": true, "indent": "  ", "short_empty_elements": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <service name="invoice-api" version="3">
+   |   <listen host="0.0.0.0" port="8443">
+   |     <tls>true</tls>
+   |   </listen>
+   |   <database>
+   |     <url>postgres://db.internal:5432/invoices</url>
+   |     <pool>20</pool>
+   |     <replica/>
+   |   </database>
+   |   <feature name="pdf-export" enabled="True"/>
+   |   <feature name="e-invoicing" enabled="False">EU only</feature>
+   |   <admins>
+   |     <admin>ana@example.org</admin>
+   |     <admin>sam@example.org</admin>
+   |   </admins>
+   |   <motd>Maintenance window: Sun 02:00–03:00 &lt;UTC&gt; &amp; after</motd>
+   | </service>
+-- unparse json/order.json {}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <order id="SO-1042" xmlns="urn:example:orders" xmlns:x="urn:example:ext"><customer><name>Zoë Martin</name><email>zoe@example.org</email></customer><line><sku>PEN-01</sku><qty>12</qty><price>1.20</price></line><line><sku>PAD-A4</sku><qty>3</qty><price>4.50</price><x:gift>true</x:gift></line><total currency="EUR">27.90</total></order>
+-- unparse json/order.json {"pretty": true, "indent": "  ", "short_empty_elements": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <order id="SO-1042" xmlns="urn:example:orders" xmlns:x="urn:example:ext">
+   |   <customer>
+   |     <name>Zoë Martin</name>
+   |     <email>zoe@example.org</email>
+   |   </customer>
+   |   <line>
+   |     <sku>PEN-01</sku>
+   |     <qty>12</qty>
+   |     <price>1.20</price>
+   |   </line>
+   |   <line>
+   |     <sku>PAD-A4</sku>
+   |     <qty>3</qty>
+   |     <price>4.50</price>
+   |     <x:gift>true</x:gift>
+   |   </line>
+   |   <total currency="EUR">27.90</total>
+   | </order>
+-- unparse json/odd.json {}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <r q='has "double" quotes' both="it's &quot;both&quot;" ws="line&#10;break&#9;tab&#13;cr" list="[1, 2]" none="None" flag="True"><nested>['a', 'b']</nested><nested>c</nested><num>0</num><zero></zero><neg>-17</neg><empty></empty><nothing></nothing><deep><x><y><z>leaf</z></y></x></deep></r>
+-- unparse json/odd.json {"pretty": true, "indent": "  ", "short_empty_elements": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <r q='has "double" quotes' both="it's &quot;both&quot;" ws="line&#10;break&#9;tab&#13;cr" list="[1, 2]" none="None" flag="True">
+   |   <nested>['a', 'b']</nested>
+   |   <nested>c</nested>
+   |   <num>0</num>
+   |   <zero/>
+   |   <neg>-17</neg>
+   |   <empty/>
+   |   <nothing/>
+   |   <deep>
+   |     <x>
+   |       <y>
+   |         <z>leaf</z>
+   |       </y>
+   |     </x>
+   |   </deep>
+   | </r>
+-- unparse json/list-root.json {}
+   raised ValueError: document with multiple roots
+-- unparse json/list-root.json {"pretty": true, "indent": "  ", "short_empty_elements": true}
+   raised ValueError: document with multiple roots
+-- unparse json/ns.json {}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <a:feed xmlns:a="http://www.w3.org/2005/Atom" b:lang="en" zz:attr="empty name"><a:title>Notes</a:title><c:unknown>dropped prefix</c:unknown></a:feed>
+-- unparse json/ns.json {"pretty": true, "indent": "  ", "short_empty_elements": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <a:feed xmlns:a="http://www.w3.org/2005/Atom" b:lang="en" zz:attr="empty name">
+   |   <a:title>Notes</a:title>
+   |   <c:unknown>dropped prefix</c:unknown>
+   | </a:feed>
+-- unparse json/order.json {"expand_iter": "item", "pretty": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <order id="SO-1042" xmlns="urn:example:orders" xmlns:x="urn:example:ext">
+   | 	<customer>
+   | 		<name>Zoë Martin</name>
+   | 		<email>zoe@example.org</email>
+   | 	</customer>
+   | 	<line>
+   | 		<sku>PEN-01</sku>
+   | 		<qty>12</qty>
+   | 		<price>1.20</price>
+   | 	</line>
+   | 	<line>
+   | 		<sku>PAD-A4</sku>
+   | 		<qty>3</qty>
+   | 		<price>4.50</price>
+   | 		<x:gift>true</x:gift>
+   | 	</line>
+   | 	<total currency="EUR">27.90</total>
+   | </order>
+-- unparse json/odd.json {"expand_iter": "v", "pretty": true, "indent": "  "}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <r q='has "double" quotes' both="it's &quot;both&quot;" ws="line&#10;break&#9;tab&#13;cr" list="[1, 2]" none="None" flag="True">
+   |   <nested>
+   |     <v>a</v>
+   |     <v>b</v>
+   |   </nested>
+   |   <nested>c</nested>
+   |   <num>0</num>
+   |   <zero></zero>
+   |   <neg>-17</neg>
+   |   <empty></empty>
+   |   <nothing></nothing>
+   |   <deep>
+   |     <x>
+   |       <y>
+   |         <z>leaf</z>
+   |       </y>
+   |     </x>
+   |   </deep>
+   | </r>
+-- unparse json/ns.json {"namespaces": {"a": "http://www.w3.org/2005/Atom", "b": "urn:lang"}}
+   raised ValueError: Invalid element name: "/" not allowed
+-- unparse json/ns.json {"namespaces": {"a": "A", "b": "B"}, "namespace_separator": ":", "pretty": true}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <A:feed ="http://www.w3.org/2005/Atom" B:lang="en" ttr="empty name">
+   | 	<A:title>Notes</A:title>
+   | 	<unknown>dropped prefix</unknown>
+   | </A:feed>
+-- unparse json/config.json {"preprocessor": "skip_admins", "pretty": true, "indent": "  "}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <service name="invoice-api" version="3">
+   |   <listen host="0.0.0.0" port="8443">
+   |     <tls>true</tls>
+   |   </listen>
+   |   <database>
+   |     <url>postgres://db.internal:5432/invoices</url>
+   |     <pool>20</pool>
+   |     <replica></replica>
+   |   </database>
+   |   <feature name="pdf-export" enabled="True"></feature>
+   |   <feature name="e-invoicing" enabled="False">EU only</feature>
+   |   <motd>Maintenance window: Sun 02:00–03:00 &lt;UTC&gt; &amp; after</motd>
+   | </service>
+-- unparse json/config.json {"preprocessor": "upper"}
+   | <?xml version="1.0" encoding="utf-8"?>
+   | <SERVICE name="invoice-api" version="3"><LISTEN host="0.0.0.0" port="8443"><TLS>true</TLS></LISTEN><DATABASE><URL>postgres://db.internal:5432/invoices</URL><POOL>20</POOL><REPLICA></REPLICA></DATABASE><FEATURE name="pdf-export" enabled="True"></FEATURE><FEATURE name="e-invoicing" enabled="False">EU only</FEATURE><ADMINS><ADMIN>ana@example.org</ADMIN><ADMIN>sam@example.org</ADMIN></ADMINS><MOTD>Maintenance window: Sun 02:00–03:00 &lt;UTC&gt; &amp; after</MOTD></SERVICE>
+-- unparse json/list-root.json {"full_document": false}
+   | <item>first</item><item>second</item>
+-- unparse json/list-root.json {"full_document": false, "pretty": true}
+   | <item>first</item><item>second</item>
+-- unparse json/two-roots.json {}
+   raised ValueError: Document must have exactly one root.
+-- unparse json/two-roots.json {"full_document": false, "pretty": true}
+   | <a>1</a><b>2</b>
+-- unparse json/bad-name.json {}
+   raised ValueError: Invalid element name: whitespace not allowed
+-- unparse json/bad-q.json {}
+   raised ValueError: Invalid element name: cannot start with "?" or "!"
+-- unparse json/bad-attr.json {}
+   raised ValueError: Invalid attribute name: "/" not allowed
+-- unparse json/bad-nbsp.json {}
+   raised ValueError: Invalid element name: whitespace not allowed
+-- unparse json/bad-ns.json {}
+   raised ValueError: Invalid attribute name: whitespace not allowed
+-- unparse json/text-int.json {}
+   raised TypeError: decoding to str: need a bytes-like object, int found
+-- unparse json/text-list.json {}
+   raised TypeError: decoding to str: need a bytes-like object, list found
+-- unparse json/list-root.json {"attr_prefix": "", "cdata_key": "item"}
+   raised ValueError: document with multiple roots
+== reports
+-- s3report xml/s3-list.xml
+   bucket acme-archive, prefix '', 9 keys, truncated False
+     backups/          1 objects    162058 bytes
+     img/              3 objects   1846453 bytes
+     logs/2024/03/     3 objects    822523 bytes
+     logs/2024/04/     2 objects    368543 bytes
+     GLACIER        1090568 bytes
+     STANDARD        702719 bytes
+     STANDARD_IA    1406290 bytes
+   largest img/api-004.gz (695816 bytes)
+   common prefix logs/
+-- s3report xml/s3-one.xml
+   bucket acme-archive, prefix 'img/', 1 keys, truncated True
+   continue with 1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=
+     img/              1 objects     18233 bytes
+     STANDARD         18233 bytes
+   largest img/logo.png (18233 bytes)
+-- feedreport xml/feed.xml
+   Kitchen Notes & Recipes <https://notes.example.org/> lang en-gb, self https://notes.example.org/feed.xml
+   - Crème brûlée without a torch
+     by Ana Ruiz, Tue, 05 Mar 2024 18:00:00 +0000
+     tags dessert, french; guid post-311 (opaque); 40 chars of body
+   - “Ten-minute” dal
+     by Sam Okafor, Fri, 15 Mar 2024 07:30:00 +0000
+     tags vegan; guid https://notes.example.org/2024/dal (permalink); 34 chars of body
+   - Pan sizes, a table
+     by unknown, undated
+     tags none; guid post-318 (permalink); 0 chars of body
+     enclosure https://cdn.example.org/pans.png, image/png, 48213 bytes
+-- gpxreport xml/ride.gpx
+   14 points from 2024-05-11T08:00:00Z to 2024-05-11T08:06:43Z
+   start 51.5000,-0.1200 end 51.5091,-0.1343
+   climbed 38 m, descended 10 m, highest 140 m
+-- soapreport xml/soap.xml
+   transaction 5, must understand 1
+   ACME EUR 34.50
+   ACME USD 37.10
+-- manifestreport xml/manifest.xml
+   package org.example.notes version 1.4.2 (42)
+   permission INTERNET
+   permission CAMERA
+   activity .MainActivity exported=true launcher=True
