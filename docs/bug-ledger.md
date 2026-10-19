@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 175 |
 | diagnostics | 169 |
 | crash | 124 |
-| soundness | 116 |
+| soundness | 117 |
 | use-after-free | 91 |
 
 ### By surface
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2948 |
-| interp | 963 |
-| typecheck | 484 |
+| interp | 964 |
+| typecheck | 485 |
 | other | 115 |
 | ownership | 114 |
 | runtime | 78 |
@@ -157,7 +157,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-15-112 | 2026-10-15 | runtime | low | `std.time.Instant` is only half the spec: it ships as `Instant.now()` with `duration_since`, `add` and `elapsed` methods, but docs/library/time-random-env.md has `Clock.now()` return an `Instant` (the library's is a `#[compiler_builtin]` returning Unix SECONDS as `i64`) and compares instants with `later - earlier` / `i + d`, which needs an `Output` on the library `Sub`/`Add` traits (`fn sub(own self, rhs: own Self) -> Self` has none) | — |
 | B-2026-10-18-30 | 2026-10-18 | interp+codegen | medium | Every MIR surface binds the parts of a `shared enum` pattern BY VALUE, so `match list { List.Cons(v, rest) => *v .. }` is refused with "unary '*' requires 'ref T' .. found 'i64'" (and `*rest` with "found 'List'"), although design.md § Patterns says a shared scrutinee binds its parts as `ref`; `karac check` accepts both `*v` and `v`, the MIR surfaces only `v` | — |
 | B-2026-10-18-39 | 2026-10-18 | typecheck+interp+codegen | low | `Map.get_mut(k)` with a `Str` key on a `Map[String, V]` is refused ("expected 'ref String', found 'Str'"), though `get`, `remove` and `contains_key` take a `Str` there. CORRECTION (Thread A, 10-18): accepting the view in `karac check` is easy, but MIR then needs a `get_mut` instance whose key parameter is the view; without it `__mir-llvm-run` passes a `Str` where the instance reads `ref String` | — |
-| B-2026-10-18-40 | 2026-10-18 | interp+codegen | medium | On MIR, `let mut out = s; out = " " + out;` with `s` a bare (borrowed) `String` param builds invalid MIR ("assigning String to _3 of type ref String"); check passes | — |
 | B-2026-10-18-48 | 2026-10-18 | interp+codegen | medium | The MIR instance of an impl method binds the impl's type parameters to the target's arguments by POSITION: `impl[T: Clone, I: Iterator] Iterator for Tagged[I, T]` instantiates as `Tagged[String, VecIter[i64]].next` for a `Tagged[VecIter[i64], String]`, and `__mir-run` stops with 'clone of VecIter[i64] needs its Clone body' | — |
 | B-2026-10-18-49 | 2026-10-18 | interp+codegen | medium | The MIR builder does not lower a struct field typed by an associated-type projection of the struct's parameter: `struct MapIt[I: Iterator] { it: I, f: Fn(own I.Item) -> I.Item }` built as `MapIt { it: VecIter {..}, f: |x: i64| x * 10 }` checks, and `__mir-run` stops with 'an associated type of `I` is not lowered yet' | — |
 | B-2026-10-18-51 | 2026-10-18 | codegen | medium | The MIR pre-size pass (`src/mir/presize.rs`) reserves room only for a `while i < n` counting loop, not a `for` loop: `let mut v: Vec[i64] = Vec.new(); for _ in 0..26 { v.push(0); }` allocates four times (4, 8, 16, 32 elements) under `karac build --mir` where the `while` spelling and legacy `karac build` allocate once (26), so kata 748's bench, which builds a 26-slot count this way per word, is 3.3x legacy | — |
@@ -170,6 +169,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-10 | 2026-10-19 | resolver | low | A gated library module's TYPE the import did not list still collides with a program's own type of the same name: `import std.time.{sleep};` beside a program's `struct Duration { n: i64 }` is refused with "'Duration' is already defined in this scope", because the splice copies `sleep`'s `Duration` into the program's scope under its own name; B-2026-10-18-54 made unlisted helper FUNCTIONS private and left types out | — |
 | B-2026-10-19-11 | 2026-10-19 | typecheck+interp | medium | docs/library/core-types.md promises checked/wrapping/saturating/overflowing integer methods for div, rem, neg, shl, shr and pow, and a method `x.total_cmp(y)` on floats, but `karac check` refuses all of them: only the add, sub and mul variants exist | — |
 | B-2026-10-19-12 | 2026-10-19 | typecheck | low | A misspelled `Vec` method (`v.lenn()`, `v.length()`, `v.size()`) gets no did-you-mean: the Vec surface has no name list for the suggestion to search | — |
+| B-2026-10-19-13 | 2026-10-19 | typecheck+interp | low | An owned local assigned to a local bound to a borrow (`let mut out = s; out = t;` with `s` a borrowed param and `t` an owned `String`) passes check, and the MIR builder stores the `String` into the `ref String` local (invalid MIR); `out = ref t` works | — |
 
 ### Relocated
 
@@ -4179,6 +4179,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-18-36 | ownership | medium | `karac check` accepts walking a lazy `split` iterator inside an outer loop (`for g in given` where `given = a.split(",")` is moved on the first outer… | e5c2afdba5 |
 | B-2026-10-18-37 | interp+codegen | medium | On MIR, `Ok(s.split_whitespace().map(\|p\| p.to_string()).collect())` as the tail of a `Result[Vec[String], String]` fn does not lower (`UnsolvedParam(… | 4655692faa |
 | B-2026-10-18-38 | typecheck | medium | A string literal passed to a view parameter is treated as a temporary: `fn tail(line: Str) -> Str { line }` then `let g = tail("abc");` is refused wi… | e3120f62bd |
+| B-2026-10-18-40 | interp+codegen | medium | On MIR, `let mut out = s; out = " " + out;` with `s` a bare (borrowed) `String` param builds invalid MIR ("assigning String to _3 of type ref String"… | a085806287 |
 | B-2026-10-18-41 | interp+codegen | medium | On MIR, `match it.value { V.List(q) => q.push(..) }` with `it` from `m.get_mut(k).unwrap()` is refused by the borrow checker ("mutable borrow of (*_1… | 687f262fb6 |
 | B-2026-10-18-42 | typecheck | low | An `if` whose branches are both unsuffixed integer literals is typed `i64` when it is a call argument, so `v.push(if c { 9 } else { 8 })` on a `Vec[u… | c287c03cec |
 | B-2026-10-18-43 | typecheck | low | `W { v: V { x: 1 } } + W { v: V { x: 9 } }` on a generic `impl[T: Add] Add for W[T]` is refused with "cannot infer type parameter 'T'; add a type ann… | 7d736aae75 |
