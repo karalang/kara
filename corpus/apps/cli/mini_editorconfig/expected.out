@@ -1,0 +1,1059 @@
+== $ editorconfig /web/index.html
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=4
+== $ editorconfig /web/src/app.js
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/src/App.tsx
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/src/components/Button.tsx
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+quote_type=single
+spelling_language=en-US
+tab_width=2
+== $ editorconfig /web/package.json
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/.travis.yml
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/Makefile
+charset=utf-8
+end_of_line=lf
+indent_style=tab
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=4
+== $ editorconfig /web/src/Makefile
+charset=utf-8
+end_of_line=lf
+indent_style=tab
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=4
+== $ editorconfig /web/lib/util.js
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/lib/deep/er/util.js
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/docs/index.rst
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=3
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=3
+== $ editorconfig /web/docs/api/index.rst
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=4
+== $ editorconfig /web/README.md
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=false
+max_line_length=off
+tab_width=4
+== $ editorconfig /web/tools/build.py
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=88
+tab_width=4
+== $ editorconfig /web/dist/app.min.js
+charset=utf-8
+end_of_line=lf
+indent_style=unset
+indent_size=2
+insert_final_newline=unset
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/dist/app.min.css
+charset=utf-8
+end_of_line=lf
+indent_style=unset
+indent_size=4
+insert_final_newline=unset
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=4
+== $ editorconfig /web/legacy/jquery.js
+charset=utf-8
+end_of_line=lf
+indent_style=tab
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=8
+== $ editorconfig /web/legacy/vendor/plugin.js
+indent_style=space
+indent_size=3
+tab_width=3
+== $ editorconfig /web/legacy/vendor/deep/x.css
+indent_style=space
+indent_size=3
+tab_width=3
+== $ editorconfig /web/legacy/notes.md
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=false
+max_line_length=off
+tab_width=4
+== $ editorconfig /web/src/../lib/x.js
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web//src///app.js
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+== $ editorconfig /web/./README.md
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=false
+max_line_length=off
+tab_width=4
+== $ editorconfig /web/src/app.js /web/README.md /web/Makefile
+[/web/src/app.js]
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+[/web/README.md]
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=false
+max_line_length=off
+tab_width=4
+[/web/Makefile]
+charset=utf-8
+end_of_line=lf
+indent_style=tab
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=4
+== $ editorconfig /mono/packages/core/src/index.ts
+end_of_line=lf
+insert_final_newline=true
+indent_style=space
+indent_size=2
+max_line_length=100
+tab_width=2
+== $ editorconfig /mono/packages/core/src/a/b/c.tsx
+end_of_line=lf
+insert_final_newline=true
+indent_style=space
+indent_size=2
+max_line_length=100
+tab_width=2
+== $ editorconfig /mono/packages/core/lib/x.ts
+end_of_line=lf
+insert_final_newline=true
+max_line_length=100
+== $ editorconfig /mono/packages/cli/src/commands/init.ts
+end_of_line=lf
+insert_final_newline=true
+indent_style=space
+indent_size=4
+max_line_length=100
+tab_width=4
+== $ editorconfig /mono/packages/cli/README.md
+end_of_line=lf
+insert_final_newline=true
+max_line_length=100
+indent_size=8
+indent_style=space
+tab_width=8
+== $ editorconfig /mono/packages/web/src/x.ts
+end_of_line=lf
+insert_final_newline=true
+indent_style=space
+indent_size=2
+tab_width=2
+== $ editorconfig /mono/test/fixtures/a.txt
+end_of_line=lf
+insert_final_newline=false
+trim_trailing_whitespace=false
+nested=yes
+== $ editorconfig /mono/packages/core/test/fixtures/deep/b.json
+end_of_line=lf
+insert_final_newline=false
+max_line_length=100
+trim_trailing_whitespace=false
+== $ editorconfig /mono/migrations/1_init.sql
+end_of_line=lf
+insert_final_newline=true
+indent_size=4
+tab_width=4
+== $ editorconfig /mono/migrations/07_users.sql
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/migrations/20_x.sql
+end_of_line=lf
+insert_final_newline=true
+indent_size=4
+tab_width=4
+== $ editorconfig /mono/migrations/21_x.sql
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/migrations/0_zero.sql
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/migrations/+5_plus.sql
+end_of_line=lf
+insert_final_newline=true
+indent_size=4
+tab_width=4
+== $ editorconfig /mono/logs/app-01.log
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/logs/app-1.log
+end_of_line=lf
+insert_final_newline=true
+charset=utf-8-bom
+== $ editorconfig /mono/logs/app-12.log
+end_of_line=lf
+insert_final_newline=true
+charset=utf-8-bom
+== $ editorconfig /mono/logs/app-13.log
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/shard-3.conf
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=tab
+== $ editorconfig /mono/shard0.conf
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/shard+2.conf
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=tab
+== $ editorconfig /mono/shard4.conf
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/shard-0.conf
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=tab
+== $ editorconfig /mono/yarn.lock
+end_of_line=lf
+insert_final_newline=true
+generated_code=true
+== $ editorconfig /mono/go.sum
+end_of_line=lf
+insert_final_newline=true
+generated_code=true
+== $ editorconfig /mono/docs/guide/intro.md
+end_of_line=lf
+insert_final_newline=true
+indent_size=2
+tab_width=2
+== $ editorconfig /mono/docs/intro.md
+end_of_line=lf
+insert_final_newline=true
+indent_size=2
+tab_width=2
+== $ editorconfig /mono/style.css
+end_of_line=lf
+insert_final_newline=true
+indent_size=2
+tab_width=2
+== $ editorconfig /mono/style.scss
+end_of_line=lf
+insert_final_newline=true
+indent_size=2
+tab_width=2
+== $ editorconfig /mono/style.sss
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/a.txt
+end_of_line=lf
+insert_final_newline=true
+nested=yes
+== $ editorconfig /mono/bc.txt
+end_of_line=lf
+insert_final_newline=true
+nested=yes
+== $ editorconfig /mono/bd.txt
+end_of_line=lf
+insert_final_newline=true
+nested=yes
+== $ editorconfig /mono/b.txt
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/2/notes.txt
+end_of_line=lf
+insert_final_newline=true
+numbered=dir
+== $ editorconfig /mono/4/notes.txt
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /mono/x/2/notes.txt
+end_of_line=lf
+insert_final_newline=true
+== $ editorconfig /kernel/kernel/sched/core.c
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/include/linux/sched.h
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/Makefile
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/arch/x86/Makefile.um
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/Kconfig
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/scripts/checkpatch.pl
+indent_style=tab
+tab_width=8
+indent_size=8
+== $ editorconfig /kernel/tools/perf/util.py
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=space
+indent_size=4
+tab_width=4
+== $ editorconfig /kernel/rust/kernel/lib.rs
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=space
+indent_size=4
+tab_width=4
+== $ editorconfig /kernel/Documentation/process/coding-style.rst
+indent_style=space
+indent_size=3
+tab_width=3
+== $ editorconfig /kernel/arch/arm64/boot/dts/x.dts
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/x.S
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/arch/x86/entry/entry_64.s
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/scripts/gdb/x.awk
+charset=utf-8
+end_of_line=lf
+insert_final_newline=true
+indent_style=tab
+indent_size=8
+tab_width=8
+== $ editorconfig /kernel/Documentation/devicetree/bindings/a.yaml
+indent_style=space
+indent_size=2
+tab_width=2
+== $ editorconfig /odd/readme.txt
+indent_size=2
+tab_width=2
+== $ editorconfig /odd/#notes.txt
+indent_size=2
+comment_char=\#
+tab_width=2
+== $ editorconfig /odd/a;b.txt
+indent_size=2
+semi=no
+tab_width=2
+== $ editorconfig /odd/setup.ini
+value=
+note=keep
+spaced=a
+hashed=x
+colon=works too
+leading=whitespace
+== $ editorconfig /odd/app.conf
+unicode=naïve café
+empty=
+eq=a=b=c
+== $ editorconfig /odd/weird]]name
+bracket=yes
+== $ editorconfig /odd/[x].dat
+== $ editorconfig /odd/x.dat
+brackets=nested
+== $ editorconfig /odd/old-mac/a.txt
+indent_size=6
+cr_only=true
+tab_width=6
+== $ editorconfig /broken/main.c
+Source contains parsing errors: '/broken/.editorconfig'
+	[line  4]: "'this line has no separator\\n'"
+	[line  6]: "'= no name\\n'"
+	[line  8]: "'  just words\\n'"
+	[line  9]: "'[*.h\\n'"
+exit 2
+== $ editorconfig /broken/x.h /web/README.md
+Source contains parsing errors: '/broken/.editorconfig'
+	[line  4]: "'this line has no separator\\n'"
+	[line  6]: "'= no name\\n'"
+	[line  8]: "'  just words\\n'"
+	[line  9]: "'[*.h\\n'"
+exit 2
+== $ editorconfig /regex/a.txt
+uncaught PatternError: bad character range z-a at position 13
+exit 1
+== $ editorconfig /regex2/x.txt
+== $ editorconfig /numgroup/a.txt
+uncaught TypeError: 'NoneType' object is not subscriptable
+exit 1
+== $ editorconfig /numgroup/2.txt
+picked=yes
+== $ editorconfig /numgroup/7.txt
+== $ editorconfig -f .ec /alt/x.txt
+alt=file
+indent_style=tab
+indent_size=tab
+== $ editorconfig /alt/x.txt
+alt=no
+== $ editorconfig -f nothing-here /alt/x.txt
+== $ editorconfig -b 0.9.0 /version/main.go /version/rules.mk /version/data.tsv
+[/version/main.go]
+indent_style=tab
+[/version/rules.mk]
+indent_style=tab
+indent_size=4
+tab_width=4
+[/version/data.tsv]
+indent_size=tab
+== $ editorconfig -b 0.10.0 /version/main.go /version/rules.mk /version/data.tsv
+[/version/main.go]
+indent_style=tab
+indent_size=tab
+[/version/rules.mk]
+indent_style=tab
+indent_size=4
+tab_width=4
+[/version/data.tsv]
+indent_size=tab
+== $ editorconfig -b 0.17.1 /version/main.go /version/rules.mk /version/data.tsv
+[/version/main.go]
+indent_style=tab
+indent_size=tab
+[/version/rules.mk]
+indent_style=tab
+indent_size=4
+tab_width=4
+[/version/data.tsv]
+indent_size=tab
+== $ editorconfig -b 0.17.1.dev /version/main.go /version/rules.mk /version/data.tsv
+[/version/main.go]
+indent_style=tab
+indent_size=tab
+[/version/rules.mk]
+indent_style=tab
+indent_size=4
+tab_width=4
+[/version/data.tsv]
+indent_size=tab
+== $ editorconfig -b 0.18.0 /version/main.go /version/rules.mk /version/data.tsv
+Required version is greater than the current version.
+exit 2
+== $ editorconfig -b 1.0.0 /version/main.go /version/rules.mk /version/data.tsv
+Required version is greater than the current version.
+exit 2
+== $ editorconfig -b 0.9 /version/main.go /version/rules.mk /version/data.tsv
+stderr: Invalid version number: 0.9
+exit 1
+== $ editorconfig -b v1.0.0 /version/main.go /version/rules.mk /version/data.tsv
+stderr: Invalid version number: v1.0.0
+exit 1
+== $ editorconfig -b 0.17.0-beta /version/main.go /version/rules.mk /version/data.tsv
+stderr: Invalid version number: 0.17.0-beta
+exit 1
+== $ editorconfig /version/main.go /version/data.tsv
+[/version/main.go]
+indent_style=tab
+indent_size=tab
+[/version/data.tsv]
+indent_size=tab
+== $ editorconfig /latin/x.txt
+name=café
+== $ editorconfig /dironly/sub/x.c
+from=sub
+== $ editorconfig relative/path.c
+Input file must be a full path name.
+exit 2
+== $ editorconfig /web/src/app.js relative.c
+[/web/src/app.js]
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=2
+insert_final_newline=true
+trim_trailing_whitespace=true
+max_line_length=120
+tab_width=2
+Input file must be a full path name.
+exit 2
+== $ editorconfig 
+stderr: editorconfig [OPTIONS] FILENAME
+stderr: -f                 Specify conf filename other than ".editorconfig".
+stderr: -b                 Specify version (used by devs to test compatibility).
+stderr: -h OR --help       Print this help message.
+stderr: -v OR --version    Display version information.
+exit 2
+== $ editorconfig -v
+EditorConfig Python Core Version 0.17.1
+== $ editorconfig --version
+EditorConfig Python Core Version 0.17.1
+== $ editorconfig -h
+editorconfig [OPTIONS] FILENAME
+-f                 Specify conf filename other than ".editorconfig".
+-b                 Specify version (used by devs to test compatibility).
+-h OR --help       Print this help message.
+-v OR --version    Display version information.
+== $ editorconfig --help /web/x
+editorconfig [OPTIONS] FILENAME
+-f                 Specify conf filename other than ".editorconfig".
+-b                 Specify version (used by devs to test compatibility).
+-h OR --help       Print this help message.
+-v OR --version    Display version information.
+== $ editorconfig -x /web/x
+option -x not recognized
+stderr: editorconfig [OPTIONS] FILENAME
+stderr: -f                 Specify conf filename other than ".editorconfig".
+stderr: -b                 Specify version (used by devs to test compatibility).
+stderr: -h OR --help       Print this help message.
+stderr: -v OR --version    Display version information.
+exit 2
+== $ editorconfig -f
+option -f requires argument
+stderr: editorconfig [OPTIONS] FILENAME
+stderr: -f                 Specify conf filename other than ".editorconfig".
+stderr: -b                 Specify version (used by devs to test compatibility).
+stderr: -h OR --help       Print this help message.
+stderr: -v OR --version    Display version information.
+exit 2
+== $ editorconfig --verbose
+option --verbose not recognized
+stderr: editorconfig [OPTIONS] FILENAME
+stderr: -f                 Specify conf filename other than ".editorconfig".
+stderr: -b                 Specify version (used by devs to test compatibility).
+stderr: -h OR --help       Print this help message.
+stderr: -v OR --version    Display version information.
+exit 2
+== $ editorconfig --version=2
+option --version must not have an argument
+stderr: editorconfig [OPTIONS] FILENAME
+stderr: -f                 Specify conf filename other than ".editorconfig".
+stderr: -b                 Specify version (used by devs to test compatibility).
+stderr: -h OR --help       Print this help message.
+stderr: -v OR --version    Display version information.
+exit 2
+== $ editorconfig -b
+option -b requires argument
+stderr: editorconfig [OPTIONS] FILENAME
+stderr: -f                 Specify conf filename other than ".editorconfig".
+stderr: -b                 Specify version (used by devs to test compatibility).
+stderr: -h OR --help       Print this help message.
+stderr: -v OR --version    Display version information.
+exit 2
+== $ editorconfig -fx /alt/x.txt
+== $ editorconfig -b0.9.0 /version/main.go
+indent_style=tab
+== $ editorconfig -- /web/README.md
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=false
+max_line_length=off
+tab_width=4
+== $ editorconfig /web/README.md -v
+[/web/README.md]
+charset=utf-8
+end_of_line=lf
+indent_style=space
+indent_size=4
+insert_final_newline=true
+trim_trailing_whitespace=false
+max_line_length=off
+tab_width=4
+Input file must be a full path name.
+exit 2
+== $ editorconfig -v -h
+EditorConfig Python Core Version 0.17.1
+== glob "*.py"
+regex: (?s)[^/]*\.py\Z
+  "a.py" -> yes
+  "dir/a.py" -> no
+  ".py" -> yes
+  "a.pyc" -> no
+== glob "**.py"
+regex: (?s).*[^/]*\.py\Z
+  "a.py" -> yes
+  "dir/a.py" -> yes
+  "x/y/z.py" -> yes
+== glob "**/*.py"
+regex: (?s).*[^/]*/[^/]*\.py\Z
+  "a.py" -> no
+  "/a.py" -> yes
+  "dir/a.py" -> yes
+== glob "a/**/b"
+regex: (?s)a(?:/|/.*/)b\Z
+  "a/b" -> yes
+  "a/x/b" -> yes
+  "a/x/y/b" -> yes
+  "ab" -> no
+== glob "?.txt"
+regex: (?s)[^/]\.txt\Z
+  "a.txt" -> yes
+  "ab.txt" -> no
+  "/.txt" -> no
+== glob "[abc].txt"
+regex: (?s)[abc]\.txt\Z
+  "a.txt" -> yes
+  "d.txt" -> no
+  "[abc].txt" -> no
+== glob "[!abc].txt"
+regex: (?s)[^abc]\.txt\Z
+  "a.txt" -> no
+  "d.txt" -> yes
+  "!.txt" -> yes
+== glob "[^abc].txt"
+regex: (?s)[^abc]\.txt\Z
+  "d.txt" -> yes
+  "^.txt" -> yes
+== glob "[a-c]x"
+regex: (?s)[a-c]x\Z
+  "bx" -> yes
+  "-x" -> no
+  "dx" -> no
+== glob "[a/b]c"
+regex: (?s)\[a/b]c\Z
+  "[a/b]c" -> yes
+  "a/bc" -> no
+  "ac" -> no
+== glob "[*]"
+regex: (?s)[[^/]*]\Z
+  "*" -> no
+  "x" -> no
+  "]" -> yes
+  "*]" -> no
+  "xx]" -> no
+== glob "[?*]"
+regex: (?s)[[^/][^/]*]\Z
+  "?" -> no
+  "a" -> no
+  "ab]" -> no
+  "[ab]" -> yes
+== glob "{a,b}.c"
+regex: (?s)(?:a|b)\.c\Z
+  "a.c" -> yes
+  "b.c" -> yes
+  "ab.c" -> no
+  "{a,b}.c" -> no
+== glob "{a}.c"
+regex: (?s)\{a\}\.c\Z
+  "a.c" -> no
+  "{a}.c" -> yes
+== glob "{a,b.c"
+regex: (?s)\{a\,b\.c\Z
+  "{a,b.c" -> yes
+  "a" -> no
+== glob "a,b"
+regex: (?s)a\,b\Z
+  "a,b" -> yes
+  "a" -> no
+== glob "{a\\,b,c}"
+regex: (?s)(?:a\,b|c)\Z
+  "a,b" -> yes
+  "c" -> yes
+  "a" -> no
+== glob "\\*.txt"
+regex: (?s)[^/]*\.txt\Z
+  "*.txt" -> yes
+  "a.txt" -> yes
+== glob "\\\\x"
+regex: (?s)\\x\Z
+  "\\x" -> yes
+== glob "{1..5}"
+regex: (?s)([+-]?\d+)\Z
+ranges: 1..5
+  "1" -> yes
+  "5" -> yes
+  "6" -> no
+  "0" -> no
+  "03" -> no
+  "-1" -> no
+  "+3" -> yes
+== glob "{-10..-5}"
+regex: (?s)([+-]?\d+)\Z
+ranges: -10..-5
+  "-7" -> yes
+  "-11" -> no
+  "-5" -> yes
+== glob "{5..1}"
+regex: (?s)([+-]?\d+)\Z
+ranges: 5..1
+  "3" -> no
+== glob "{1..3x}"
+regex: (?s)([+-]?\d+)\Z
+ranges: 1..3
+  "2" -> yes
+== glob "{a,{1..3}}"
+regex: (?s)(?:a|([+-]?\d+))\Z
+ranges: 1..3
+  "a" -> TypeError: 'NoneType' object is not subscriptable
+  "2" -> yes
+== glob "{}.c"
+regex: (?s)\{\}\.c\Z
+  "{}.c" -> yes
+  ".c" -> no
+== glob "{,a}.c"
+regex: (?s)(?:|a)\.c\Z
+  ".c" -> yes
+  "a.c" -> yes
+== glob "{a,b}{1..2}"
+regex: (?s)(?:a|b)([+-]?\d+)\Z
+ranges: 1..2
+  "a1" -> yes
+  "b2" -> yes
+  "c1" -> no
+== glob "a-b"
+regex: (?s)a\-b\Z
+  "a-b" -> yes
+== glob "[a-]"
+regex: (?s)[a-]\Z
+  "a" -> yes
+  "-" -> yes
+  "b" -> no
+== glob "[]a]"
+regex: (?s)[]a]\Z
+  "]" -> yes
+  "a" -> yes
+== glob "[a\\]b]"
+regex: (?s)[a\]b]\Z
+  "]" -> yes
+  "b" -> yes
+  "a" -> yes
+== glob "x["
+regex: (?s)x[\Z
+  "x[" -> PatternError: bad escape \Z at position 6
+== glob "x]"
+regex: (?s)x]\Z
+  "x]" -> yes
+== glob "[z-a]"
+regex: (?s)[z-a]\Z
+  "a" -> PatternError: bad character range z-a at position 5
+== glob "[{a,b}]"
+regex: (?s)[(?:a|b)]\Z
+  "a" -> yes
+  "(" -> yes
+  "|" -> yes
+== glob "{[a,b]}"
+regex: (?s)(?:[a|b])\Z
+  "[a" -> no
+  "b]" -> no
+== glob "a.{c,cpp,h}"
+regex: (?s)a\.(?:c|cpp|h)\Z
+  "a.c" -> yes
+  "a.cpp" -> yes
+  "a.hpp" -> no
+== glob "**"
+regex: (?s).*[^/]*\Z
+  "a/b/c" -> yes
+  "" -> yes
+== glob "*"
+regex: (?s)[^/]*\Z
+  "a/b" -> no
+  "ab" -> yes
+  "" -> yes
+== glob "/a"
+regex: (?s)/a\Z
+  "/a" -> yes
+  "a" -> no
+== glob "a//b"
+regex: (?s)a//b\Z
+  "a//b" -> no
+== glob "a/**/"
+regex: (?s)a(?:/|/.*/)\Z
+  "a/" -> no
+  "a/b/" -> no
+== glob "$^+()|.&~# "
+regex: (?s)\$\^\+\(\)\|\.\&\~\#\ \Z
+  "$^+()|.&~# " -> yes
+== glob "é?"
+regex: (?s)é[^/]\Z
+  "éa" -> yes
+  "e" -> no
+== glob "{a,b"
+regex: (?s)\{a\,b\Z
+  "{a,b" -> yes
+== glob "a}"
+regex: (?s)a\}\Z
+  "a}" -> yes
+== glob "{{a,b},c}"
+regex: (?s)(?:(?:a|b)|c)\Z
+  "a" -> yes
+  "b" -> yes
+  "c" -> yes
+  "{a" -> no
+== glob "[a,b]"
+regex: (?s)[a\,b]\Z
+  "a" -> yes
+  "," -> yes
+  "|" -> no
+== glob "[\\-]"
+regex: (?s)[-]\Z
+  "-" -> yes
+  "\\" -> no
+== glob "[\\d]"
+regex: (?s)[d]\Z
+  "d" -> yes
+  "1" -> no
+== glob "?/lib/*"
+regex: (?s)[^/]/lib/[^/]*\Z
+  1 of 44 match: a/lib/12.txt
+== glob "/a/[a-z]*"
+regex: (?s)/a/[a-z][^/]*\Z
+  0 of 44 match
+== glob "test/{a,b}/*.py"
+regex: (?s)test/(?:a|b)/[^/]*\.py\Z
+  0 of 44 match
+== glob "lib/x?/Makefile"
+regex: (?s)lib/x[^/]/Makefile\Z
+  0 of 44 match
+== glob "?/[!a]*/*.c"
+regex: (?s)[^/]/[^a][^/]*/[^/]*\.c\Z
+  0 of 44 match
+== glob "{src,lib}/Makefile"
+regex: (?s)(?:src|lib)/Makefile\Z
+  1 of 44 match: src/Makefile
+== glob "?/?.py"
+regex: (?s)[^/]/[^/]\.py\Z
+  0 of 44 match
+== glob "/*.c"
+regex: (?s)/[^/]*\.c\Z
+  0 of 44 match
+== glob "/*.py"
+regex: (?s)/[^/]*\.py\Z
+  0 of 44 match
+== glob "/test/*/*"
+regex: (?s)/test/[^/]*/[^/]*\Z
+  0 of 44 match
+== glob "/[a-z]*/*.py"
+regex: (?s)/[a-z][^/]*/[^/]*\.py\Z
+  0 of 44 match
+== glob "/{1..20}.txt"
+regex: (?s)/([+-]?\d+)\.txt\Z
+ranges: 1..20
+  0 of 44 match
+== glob "x?/*.py"
+regex: (?s)x[^/]/[^/]*\.py\Z
+  0 of 44 match
+== glob "src/**/[a-z]*"
+regex: (?s)src(?:/|/.*/)[a-z][^/]*\Z
+  4 of 44 match: src/a.py; src/src/a.min.js; src/src/x.md; src/x1/x.md
+== glob "*"
+regex: (?s)[^/]*\Z
+  9 of 44 match: 1.txt; 12.txt; Makefile; a.min.js; a.py; b.py; main.c; util.h; x.md
+== glob "*.py"
+regex: (?s)[^/]*\.py\Z
+  2 of 44 match: a.py; b.py
+== glob "/?/{,x}1*"
+regex: (?s)/[^/]/(?:|x)1[^/]*\Z
+  0 of 44 match
+== glob "*.h"
+regex: (?s)[^/]*\.h\Z
+  1 of 44 match: util.h
+== glob "{a,b}.py"
+regex: (?s)(?:a|b)\.py\Z
+  2 of 44 match: a.py; b.py
+== glob "*.min.*"
+regex: (?s)[^/]*\.min\.[^/]*\Z
+  1 of 44 match: a.min.js
+== glob "**/**/?.py"
+regex: (?s).*[^/]*(?:/|/.*/)[^/]\.py\Z
+  5 of 44 match: b/test/b.py; b/x1/b.py; lib/b.py; src/a.py; x2/x1/a.py
+== glob "{src,lib}/x[12]/?.py"
+regex: (?s)(?:src|lib)/x[12]/[^/]\.py\Z
+  0 of 44 match
+== glob "[!a]*/x[12]/**.md"
+regex: (?s)[^a][^/]*/x[12]/.*[^/]*\.md\Z
+  1 of 44 match: src/x1/x.md
+== glob "[a-z]*/[a-z]*/?.py"
+regex: (?s)[a-z][^/]*/[a-z][^/]*/[^/]\.py\Z
+  3 of 44 match: b/test/b.py; b/x1/b.py; x2/x1/a.py
+== glob "/*.h"
+regex: (?s)/[^/]*\.h\Z
+  0 of 44 match
+== glob "/{,x}1*"
+regex: (?s)/(?:|x)1[^/]*\Z
+  0 of 44 match
+== glob "{a,b}/lib/*.min.*"
+regex: (?s)(?:a|b)/lib/[^/]*\.min\.[^/]*\Z
+  0 of 44 match
+== glob "x[12]/[!a]*/{,x}1*"
+regex: (?s)x[12]/[^a][^/]*/(?:|x)1[^/]*\Z
+  0 of 44 match
+== glob "*.py"
+regex: (?s)[^/]*\.py\Z
+  2 of 44 match: a.py; b.py
+== glob "x.md"
+regex: (?s)x\.md\Z
+  1 of 44 match: x.md
+== glob "/x[12]/{a,b}.py"
+regex: (?s)/x[12]/(?:a|b)\.py\Z
+  0 of 44 match
+== glob "/x[12]/{,x}1*"
+regex: (?s)/x[12]/(?:|x)1[^/]*\Z
+  0 of 44 match
+== glob "/[!a]*/[a-z]*"
+regex: (?s)/[^a][^/]*/[a-z][^/]*\Z
+  0 of 44 match
+== glob "/Makefile"
+regex: (?s)/Makefile\Z
+  0 of 44 match
+== glob "a/?.py"
+regex: (?s)a/[^/]\.py\Z
+  0 of 44 match
+== glob "x[12]/*.py"
+regex: (?s)x[12]/[^/]*\.py\Z
+  0 of 44 match
+== glob "?/*.py"
+regex: (?s)[^/]/[^/]*\.py\Z
+  0 of 44 match
+== glob "*.py"
+regex: (?s)[^/]*\.py\Z
+  2 of 44 match: a.py; b.py
+== glob "/x?/x.md"
+regex: (?s)/x[^/]/x\.md\Z
+  0 of 44 match
+== glob "{a,b}/x.md"
+regex: (?s)(?:a|b)/x\.md\Z
+  2 of 44 match: a/x.md; b/x.md

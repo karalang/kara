@@ -1,0 +1,2285 @@
+// mini_editorconfig: the EditorConfig core as the Python package
+// `editorconfig` 0.17.1 runs it on Python 3.13, the library behind the
+// `editorconfig` command that editor plugins call. It ports the INI parser
+// with its section and option rules, the walk up the tree that merges every
+// .editorconfig until one says `root = true`, the post-processing of
+// indent_size and tab_width, the getopt command line, and the glob module
+// that turns a section name into a Python regular expression. That regex is
+// then compiled and matched by a small port of Python's `re`, so the errors
+// a bad section name raises come out as Python reports them.
+//
+// The jobs in data/jobs.jsonl run the command line over a web app, a
+// monorepo, a C project and some broken or awkward files under data/root,
+// which stands in for /, and translate and match a list of glob patterns.
+
+// ------------------------------------------------------------ text helpers
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(v: ref Vec[char]) -> String {
+    v.iter().collect()
+}
+
+fn slice(v: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    let mut i = a;
+    while i < b and i < v.len() {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+// str.isspace() for one character, which is also what `\s` matches.
+fn py_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or (n >= 0x1C and n <= 0x20) or n == 0x85 or n == 0xA0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200A) or n == 0x2028 or n == 0x2029 or n == 0x202F or n == 0x205F
+        or n == 0x3000
+}
+
+fn py_strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut a = 0;
+    let mut b = v.len();
+    while a < b and py_space(v[a]) {
+        a += 1;
+    }
+    while b > a and py_space(v[b - 1]) {
+        b -= 1;
+    }
+    slice(v, a, b)
+}
+
+fn py_rstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut b = v.len();
+    while b > 0 and py_space(v[b - 1]) {
+        b -= 1;
+    }
+    slice(v, 0, b)
+}
+
+fn py_lstrip(s: ref String) -> String {
+    let v = chars(s);
+    let mut a = 0;
+    while a < v.len() and py_space(v[a]) {
+        a += 1;
+    }
+    slice(v, a, v.len())
+}
+
+fn hex_digits(n: u32, width: i64) -> String {
+    let digits = chars("0123456789abcdef".to_string());
+    let mut out: Vec[char] = Vec.new();
+    let mut k = 0;
+    let mut x = n;
+    while k < width {
+        out.push(digits[(x % 16) as i64]);
+        x = x / 16;
+        k += 1;
+    }
+    out.reverse();
+    text(out)
+}
+
+// Whether repr() prints a character as it is.
+fn printable(c: char) -> bool {
+    let n = c as u32;
+    if n < 0x20 or (n >= 0x7F and n <= 0xA0) or n == 0xAD {
+        return false;
+    }
+    if (n >= 0x2000 and n <= 0x200F) or (n >= 0x2028 and n <= 0x202F) or (n >= 0x205F and n <= 0x2064) {
+        return false;
+    }
+    not (n == 0x1680 or n == 0x3000 or n == 0xFEFF or (n >= 0xD800 and n <= 0xDFFF))
+}
+
+// repr() of a str.
+fn py_repr(s: ref String) -> String {
+    let quote = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if printable(c) {
+            out.push(c);
+        } else {
+            let n = c as u32;
+            if n < 0x100 {
+                out.push_str("\\x");
+                out.push_str(hex_digits(n, 2).as_str());
+            } else if n < 0x10000 {
+                out.push_str("\\u");
+                out.push_str(hex_digits(n, 4).as_str());
+            } else {
+                out.push_str("\\U");
+                out.push_str(hex_digits(n, 8).as_str());
+            }
+        }
+    }
+    out.push(quote);
+    out
+}
+
+// str.splitlines(keepends=True), which is how codecs' readline cuts a file.
+fn split_lines(s: ref String) -> Vec[String] {
+    let v = chars(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let c = v[i];
+        cur.push(c);
+        let n = c as u32;
+        let mut ends = (n >= 10 and n <= 13) or (n >= 0x1C and n <= 0x1E) or n == 0x85 or n == 0x2028
+            or n == 0x2029;
+        if c == '\r' and i + 1 < v.len() and v[i + 1] == '\n' {
+            cur.push('\n');
+            i += 1;
+            ends = true;
+        }
+        if ends {
+            out.push(cur.clone());
+            cur = String.new();
+        }
+        i += 1;
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// ------------------------------------------------------------ posixpath
+
+fn path_join(a: ref String, b: ref String) -> String {
+    if b.starts_with("/") {
+        return b.clone();
+    }
+    if a.is_empty() or a.ends_with("/") {
+        return f"{a}{b}";
+    }
+    f"{a}/{b}"
+}
+
+// posixpath.split(): the head loses its trailing slashes unless it is all
+// slashes.
+fn path_split(p: ref String) -> (String, String) {
+    let v = chars(p);
+    let mut i = v.len();
+    while i > 0 and v[i - 1] != '/' {
+        i -= 1;
+    }
+    let head = slice(v, 0, i);
+    let tail = slice(v, i, v.len());
+    let hv = chars(head);
+    let mut j = hv.len();
+    while j > 0 and hv[j - 1] == '/' {
+        j -= 1;
+    }
+    if j == 0 {
+        return (head, tail);
+    }
+    (slice(hv, 0, j), tail)
+}
+
+fn path_dirname(p: ref String) -> String {
+    let (head, _) = path_split(p);
+    head
+}
+
+fn path_normpath(p: ref String) -> String {
+    if p.is_empty() {
+        return ".".to_string();
+    }
+    let mut initial = 0;
+    if p.starts_with("/") {
+        initial = 1;
+        if p.starts_with("//") and not p.starts_with("///") {
+            initial = 2;
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for comp in p.split("/") {
+        if comp.is_empty() or comp == "." {
+            continue;
+        }
+        if comp != ".." or (initial == 0 and parts.is_empty()) or (not parts.is_empty() and parts[parts.len() - 1] == "..") {
+            parts.push(comp.to_string());
+        } else if not parts.is_empty() {
+            parts.pop();
+        }
+    }
+    let mut out = String.new();
+    let mut k = 0;
+    while k < initial {
+        out.push('/');
+        k += 1;
+    }
+    out.push_str(parts.join("/").as_str());
+    if out.is_empty() {
+        return ".".to_string();
+    }
+    out
+}
+
+// ------------------------------------------------------------ JSON in
+
+// The jobs file holds arrays of strings and of arrays of strings.
+#[derive(Clone)]
+enum J {
+    S(String),
+    A(Vec[J]),
+}
+
+struct JsonIn {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl JsonIn {
+    fn ws(mut ref self) {
+        while self.pos < self.cs.len() and py_space(self.cs[self.pos]) {
+            self.pos += 1;
+        }
+    }
+
+    fn hex4(mut ref self) -> u32 {
+        let mut n: u32 = 0;
+        let mut k = 0;
+        while k < 4 {
+            let c = self.cs[self.pos];
+            let d = if c >= '0' and c <= '9' {
+                (c as u32) - ('0' as u32)
+            } else if c >= 'a' and c <= 'f' {
+                (c as u32) - ('a' as u32) + 10
+            } else {
+                (c as u32) - ('A' as u32) + 10
+            };
+            n = n * 16 + d;
+            self.pos += 1;
+            k += 1;
+        }
+        n
+    }
+
+    fn value(mut ref self) -> Result[J, String] {
+        self.ws();
+        if self.pos >= self.cs.len() {
+            return Err("unexpected end of JSON".to_string());
+        }
+        let c = self.cs[self.pos];
+        if c == '[' {
+            self.pos += 1;
+            let mut items: Vec[J] = Vec.new();
+            self.ws();
+            if self.pos < self.cs.len() and self.cs[self.pos] == ']' {
+                self.pos += 1;
+                return Ok(J.A(items));
+            }
+            loop {
+                items.push(self.value()?);
+                self.ws();
+                if self.pos >= self.cs.len() {
+                    return Err("unterminated JSON array".to_string());
+                }
+                let d = self.cs[self.pos];
+                self.pos += 1;
+                if d == ']' {
+                    return Ok(J.A(items));
+                }
+                if d != ',' {
+                    return Err(f"bad JSON array separator {d}");
+                }
+            }
+        }
+        if c != '"' {
+            return Err(f"unexpected JSON character {c}");
+        }
+        self.pos += 1;
+        let mut s = String.new();
+        while self.pos < self.cs.len() {
+            let d = self.cs[self.pos];
+            self.pos += 1;
+            if d == '"' {
+                return Ok(J.S(s));
+            }
+            if d != '\\' {
+                s.push(d);
+                continue;
+            }
+            let e = self.cs[self.pos];
+            self.pos += 1;
+            if e == 'n' {
+                s.push('\n');
+            } else if e == 't' {
+                s.push('\t');
+            } else if e == 'r' {
+                s.push('\r');
+            } else if e == 'b' {
+                s.push('\u{8}');
+            } else if e == 'f' {
+                s.push('\u{c}');
+            } else if e == 'u' {
+                let mut n = self.hex4();
+                if n >= 0xD800 and n < 0xDC00 {
+                    self.pos += 2;
+                    let lo = self.hex4();
+                    n = 0x10000 + ((n - 0xD800) << 10) + (lo - 0xDC00);
+                }
+                s.push(char.try_from(n).unwrap_or('?'));
+            } else {
+                s.push(e);
+            }
+        }
+        Err("unterminated JSON string".to_string())
+    }
+}
+
+fn json_line(l: ref String) -> Result[J, String] {
+    let mut p = JsonIn { cs: chars(l), pos: 0 };
+    p.value()
+}
+
+fn j_str(j: ref J) -> String {
+    match j {
+        J.S(s) => s.clone(),
+        J.A(_) => String.new(),
+    }
+}
+
+fn j_strs(j: ref J) -> Vec[String] {
+    match j {
+        J.A(items) => items.iter().map(|x| j_str(x)).collect(),
+        J.S(_) => Vec.new(),
+    }
+}
+
+// json.dumps(s, ensure_ascii=False)
+fn json_quote(s: ref String) -> String {
+    let mut out = String.new();
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if (c as u32) < 0x20 {
+            out.push_str("\\u");
+            out.push_str(hex_digits(c as u32, 4).as_str());
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
+// ------------------------------------------------------------ glob to regex
+
+fn esc_special(c: char) -> bool {
+    has_char("()[]{}?*+-|^$\\.&~# \t\n\r\u{b}\u{c}", c)
+}
+
+// re.escape() of one character.
+fn re_escape(c: char) -> String {
+    if esc_special(c) { f"\\{c}" } else { f"{c}" }
+}
+
+fn has_char(s: Str, c: char) -> bool {
+    for d in s.chars() {
+        if d == c {
+            return true;
+        }
+    }
+    false
+}
+
+// int() of `[+-]?\d+`.
+fn py_int(s: ref String) -> i64 {
+    let mut n: i64 = 0;
+    let mut neg = false;
+    for c in s.chars() {
+        if c == '-' {
+            neg = true;
+        } else if c != '+' {
+            n = n * 10 + ((c as u32) - ('0' as u32)) as i64;
+        }
+    }
+    if neg { -n } else { n }
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+// NUMERIC_RANGE.match(s): `[+-]?\d+\.\.[+-]?\d+` at the start of s.
+fn numeric_range(s: ref String) -> Option[(i64, i64)] {
+    let v = chars(s);
+    let mut i = 0;
+    let mut nums: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 2 {
+        let start = i;
+        if i < v.len() and (v[i] == '+' or v[i] == '-') {
+            i += 1;
+        }
+        let d0 = i;
+        while i < v.len() and is_digit(v[i]) {
+            i += 1;
+        }
+        if i == d0 {
+            return None;
+        }
+        nums.push(py_int(slice(v, start, i)));
+        if k == 0 {
+            if i + 1 < v.len() and v[i] == '.' and v[i + 1] == '.' {
+                i += 2;
+            } else {
+                return None;
+            }
+        }
+        k += 1;
+    }
+    Some((nums[0], nums[1]))
+}
+
+fn count_unescaped(v: ref Vec[char], want: char) -> i64 {
+    let mut n = 0;
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == want and (i == 0 or v[i - 1] != '\\') {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+}
+
+// editorconfig.fnmatch.translate(): the regex for a glob and the ranges of
+// its numeric groups.
+fn translate(pat_s: ref String, nested: bool) -> (String, Vec[(i64, i64)]) {
+    let pat = chars(pat_s);
+    let length = pat.len();
+    let mut index = 0;
+    let mut brace_level = 0;
+    let mut in_brackets = false;
+    let mut result = String.new();
+    let mut is_escaped = false;
+    let matching_braces = count_unescaped(pat, '{') == count_unescaped(pat, '}');
+    let mut groups: Vec[(i64, i64)] = Vec.new();
+    while index < length {
+        let current = pat[index];
+        index += 1;
+        if current == '*' {
+            if index < length and pat[index] == '*' {
+                result.push_str(".*");
+            } else {
+                result.push_str("[^/]*");
+            }
+        } else if current == '?' {
+            result.push_str("[^/]");
+        } else if current == '[' {
+            if in_brackets {
+                result.push_str("\\[");
+            } else {
+                let mut pos = index;
+                let mut has_slash = false;
+                while pos < length and pat[pos] != ']' {
+                    if pat[pos] == '/' and pat[pos - 1] != '\\' {
+                        has_slash = true;
+                        break;
+                    }
+                    pos += 1;
+                }
+                if has_slash {
+                    result.push_str("\\[");
+                    result.push_str(slice(pat, index, pos + 1).as_str());
+                    index = pos + 1;
+                } else {
+                    if index < length and (pat[index] == '!' or pat[index] == '^') {
+                        index += 1;
+                        result.push_str("[^");
+                    } else {
+                        result.push('[');
+                    }
+                    in_brackets = true;
+                }
+            }
+        } else if current == '-' {
+            if in_brackets {
+                result.push('-');
+            } else {
+                result.push_str("\\-");
+            }
+        } else if current == ']' {
+            // pat[index - 2] is pat[-1], the last character, when the
+            // pattern starts with `]`.
+            let back = if index >= 2 { pat[index - 2] } else { pat[length - 1] };
+            if in_brackets and back == '\\' {
+                result.push_str("\\]");
+            } else {
+                result.push(']');
+                in_brackets = false;
+            }
+        } else if current == '{' {
+            let mut pos = index;
+            let mut has_comma = false;
+            while pos < length and (pat[pos] != '}' or is_escaped) {
+                if pat[pos] == ',' and not is_escaped {
+                    has_comma = true;
+                    break;
+                }
+                is_escaped = pat[pos] == '\\' and not is_escaped;
+                pos += 1;
+            }
+            if not has_comma and pos < length {
+                let inner = slice(pat, index, pos);
+                match numeric_range(inner) {
+                    Some(g) => {
+                        groups.push(g);
+                        result.push_str("([+-]?\\d+)");
+                    }
+                    None => {
+                        let (inner_result, inner_groups) = translate(inner, true);
+                        result.push_str("\\{");
+                        result.push_str(inner_result.as_str());
+                        result.push_str("\\}");
+                        for g in inner_groups.iter() {
+                            groups.push(*g);
+                        }
+                    }
+                }
+                index = pos + 1;
+            } else if matching_braces {
+                result.push_str("(?:");
+                brace_level += 1;
+            } else {
+                result.push_str("\\{");
+            }
+        } else if current == ',' {
+            if brace_level > 0 and not is_escaped {
+                result.push('|');
+            } else {
+                result.push_str("\\,");
+            }
+        } else if current == '}' {
+            if brace_level > 0 and not is_escaped {
+                result.push(')');
+                brace_level -= 1;
+            } else {
+                result.push_str("\\}");
+            }
+        } else if current == '/' {
+            if slice(pat, index, index + 3) == "**/" {
+                result.push_str("(?:/|/.*/)");
+                index += 3;
+            } else {
+                result.push('/');
+            }
+        } else if current != '\\' {
+            result.push_str(re_escape(current).as_str());
+        }
+        if current == '\\' {
+            if is_escaped {
+                result.push_str(re_escape(current).as_str());
+            }
+            is_escaped = not is_escaped;
+        } else {
+            is_escaped = false;
+        }
+    }
+    if not nested {
+        result = f"(?s){result}\\Z";
+    }
+    (result, groups)
+}
+
+// ------------------------------------------------------------ a small `re`
+
+// A Python exception: its class name and str().
+struct PyErr {
+    cls: String,
+    msg: String,
+}
+
+fn re_err(msg: own String, pos: i64) -> PyErr {
+    PyErr { cls: "PatternError".to_string(), msg: f"{msg} at position {pos}" }
+}
+
+// One item of a character set.
+#[derive(Clone)]
+enum SetItem {
+    Range(u32, u32),
+    Cat(char),
+}
+
+#[derive(Clone)]
+enum Node {
+    Lit(char),
+    Any,
+    Cat(char),
+    Set(bool, Vec[SetItem]),
+    Begin,
+    Dollar,
+    End,
+    // a capturing group (its number) or not (-1), and its alternatives
+    Group(i64, Vec[Vec[Node]]),
+    // min, max (-1 for no limit), greedy, and the item
+    Repeat(i64, i64, bool, Vec[Node]),
+}
+
+struct ReParser {
+    cs: Vec[char],
+    pos: i64,
+    groups: i64,
+    dotall: bool,
+}
+
+fn letter(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn cat_match(cat: char, c: char) -> bool {
+    let word = letter(c) or is_digit(c) or c == '_' or (c as u32) > 0x7F;
+    if cat == 'd' {
+        is_digit(c)
+    } else if cat == 'D' {
+        not is_digit(c)
+    } else if cat == 's' {
+        py_space(c)
+    } else if cat == 'S' {
+        not py_space(c)
+    } else if cat == 'w' {
+        word
+    } else {
+        not word
+    }
+}
+
+fn class_escape_code(c: char) -> Option[u32] {
+    if c == 'a' {
+        Some(7)
+    } else if c == 'b' {
+        Some(8)
+    } else if c == 'f' {
+        Some(12)
+    } else if c == 'n' {
+        Some(10)
+    } else if c == 'r' {
+        Some(13)
+    } else if c == 't' {
+        Some(9)
+    } else if c == 'v' {
+        Some(11)
+    } else {
+        None
+    }
+}
+
+impl ReParser {
+    // The next token: a character or a backslash escape, as text.
+    fn peek(ref self) -> Result[Option[String], PyErr] {
+        if self.pos >= self.cs.len() {
+            return Ok(None);
+        }
+        let c = self.cs[self.pos];
+        if c != '\\' {
+            return Ok(Some(f"{c}"));
+        }
+        if self.pos + 1 >= self.cs.len() {
+            return Err(PyErr { cls: "PatternError".to_string(),
+                               msg: f"bad escape (end of pattern) at position {self.pos}" });
+        }
+        let d = self.cs[self.pos + 1];
+        Ok(Some(f"\\{d}"))
+    }
+
+    fn get(mut ref self) -> Result[Option[String], PyErr] {
+        let t = self.peek()?;
+        if let Some(s) = t.clone() {
+            self.pos += s.chars().count();
+        }
+        Ok(t)
+    }
+
+    fn eat(mut ref self, s: Str) -> Result[bool, PyErr] {
+        let t = self.peek()?;
+        if let Some(x) = t {
+            if x == s {
+                self.pos += x.chars().count();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn class_item(ref self, tok: ref String) -> Result[SetItem, PyErr] {
+        let v = chars(tok);
+        if v[0] != '\\' {
+            return Ok(SetItem.Range(v[0] as u32, v[0] as u32));
+        }
+        let c = v[1];
+        if let Some(n) = class_escape_code(c) {
+            return Ok(SetItem.Range(n, n));
+        }
+        if has_char("dDsSwW", c) {
+            return Ok(SetItem.Cat(c));
+        }
+        if letter(c) or is_digit(c) {
+            return Err(re_err(f"bad escape \\{c}", self.pos - 2));
+        }
+        Ok(SetItem.Range(c as u32, c as u32))
+    }
+
+    fn parse_set(mut ref self, here: i64) -> Result[Node, PyErr] {
+        let negate = self.eat("^")?;
+        let mut items: Vec[SetItem] = Vec.new();
+        loop {
+            let this = match self.get()? {
+                Some(t) => t,
+                None => return Err(re_err("unterminated character set".to_string(), here)),
+            };
+            if this == "]" and not items.is_empty() {
+                break;
+            }
+            let code1 = self.class_item(this)?;
+            if self.eat("-")? {
+                let that = match self.get()? {
+                    Some(t) => t,
+                    None => return Err(re_err("unterminated character set".to_string(), here)),
+                };
+                if that == "]" {
+                    items.push(code1);
+                    items.push(SetItem.Range('-' as u32, '-' as u32));
+                    break;
+                }
+                let code2 = self.class_item(that)?;
+                let start = self.pos - this.chars().count() - 1 - that.chars().count();
+                let msg = f"bad character range {this}-{that}";
+                match (code1, code2) {
+                    (SetItem.Range(lo, _), SetItem.Range(hi, _)) => {
+                        if hi < lo {
+                            return Err(re_err(msg, start));
+                        }
+                        items.push(SetItem.Range(lo, hi));
+                    }
+                    _ => return Err(re_err(msg, start)),
+                }
+            } else {
+                items.push(code1);
+            }
+        }
+        Ok(Node.Set(negate, items))
+    }
+
+    fn parse_alts(mut ref self) -> Result[Vec[Vec[Node]], PyErr] {
+        let mut alts: Vec[Vec[Node]] = Vec.new();
+        loop {
+            alts.push(self.parse_seq()?);
+            if not self.eat("|")? {
+                break;
+            }
+        }
+        Ok(alts)
+    }
+
+    fn parse_seq(mut ref self) -> Result[Vec[Node], PyErr] {
+        let mut seq: Vec[Node] = Vec.new();
+        loop {
+            let this = match self.peek()? {
+                Some(t) => t,
+                None => break,
+            };
+            if this == "|" or this == ")" {
+                break;
+            }
+            let _ = self.get()?;
+            let v = chars(this);
+            if v[0] == '\\' {
+                let c = v[1];
+                if c == 'Z' {
+                    seq.push(Node.End);
+                } else if c == 'A' {
+                    seq.push(Node.Begin);
+                } else if has_char("dDsSwW", c) {
+                    seq.push(Node.Cat(c));
+                } else if let Some(n) = class_escape_code(c) {
+                    if c == 'b' {
+                        return Err(re_err("word boundaries are not supported".to_string(), self.pos - 2));
+                    }
+                    seq.push(Node.Lit(char.try_from(n).unwrap_or(' ')));
+                } else if letter(c) or is_digit(c) {
+                    return Err(re_err(f"bad escape \\{c}", self.pos - 2));
+                } else {
+                    seq.push(Node.Lit(c));
+                }
+            } else if this == "[" {
+                let here = self.pos - 1;
+                seq.push(self.parse_set(here)?);
+            } else if this == "." {
+                seq.push(Node.Any);
+            } else if this == "^" {
+                seq.push(Node.Begin);
+            } else if this == "$" {
+                seq.push(Node.Dollar);
+            } else if this == "?" or this == "*" or this == "+" {
+                let at = self.pos - 1;
+                let (lo, hi) = if this == "?" { (0, 1) } else if this == "*" { (0, -1) } else { (1, -1) };
+                let item = match seq.pop() {
+                    Some(n) => n,
+                    None => return Err(re_err("nothing to repeat".to_string(), at)),
+                };
+                match item {
+                    Node.Begin => return Err(re_err("nothing to repeat".to_string(), at)),
+                    Node.Dollar => return Err(re_err("nothing to repeat".to_string(), at)),
+                    Node.End => return Err(re_err("nothing to repeat".to_string(), at)),
+                    Node.Repeat(_, _, _, _) => return Err(re_err("multiple repeat".to_string(), at)),
+                    _ => {}
+                }
+                let greedy = not self.eat("?")?;
+                if greedy {
+                    self.eat("+")?;
+                }
+                seq.push(Node.Repeat(lo, hi, greedy, vec![item]));
+            } else if this == "(" {
+                let start = self.pos - 1;
+                let mut group = -1;
+                if self.eat("?")? {
+                    let c = match self.get()? {
+                        Some(t) => t,
+                        None => return Err(re_err("unexpected end of pattern".to_string(), self.pos)),
+                    };
+                    if c == "s" and self.eat(")")? {
+                        self.dotall = true;
+                        continue;
+                    }
+                    if c != ":" {
+                        return Err(re_err(f"unknown extension ?{c}", self.pos - 2));
+                    }
+                } else {
+                    self.groups += 1;
+                    group = self.groups;
+                }
+                let alts = self.parse_alts()?;
+                if not self.eat(")")? {
+                    return Err(re_err("missing ), unterminated subpattern".to_string(), start));
+                }
+                seq.push(Node.Group(group, alts));
+            } else {
+                seq.push(Node.Lit(v[0]));
+            }
+        }
+        Ok(seq)
+    }
+}
+
+#[derive(Clone)]
+enum Inst {
+    Ch(char),
+    Any(bool),
+    Cat(char),
+    Set(bool, i64),
+    Begin,
+    Dollar,
+    End,
+    Split(i64, i64),
+    Jmp(i64),
+    Save(i64),
+    Match,
+}
+
+struct ReProg {
+    prog: Vec[Inst],
+    sets: Vec[Vec[SetItem]],
+    groups: i64,
+}
+
+fn emit_seq(prog: mut ref Vec[Inst], sets: mut ref Vec[Vec[SetItem]], seq: ref Vec[Node], dotall: bool) {
+    for n in seq.iter() {
+        emit(mut prog, mut sets, n, dotall);
+    }
+}
+
+fn emit(prog: mut ref Vec[Inst], sets: mut ref Vec[Vec[SetItem]], n: ref Node, dotall: bool) {
+    match n {
+        Node.Lit(c) => prog.push(Inst.Ch(*c)),
+        Node.Any => prog.push(Inst.Any(dotall)),
+        Node.Cat(c) => prog.push(Inst.Cat(*c)),
+        Node.Set(neg, items) => {
+            prog.push(Inst.Set(*neg, sets.len()));
+            sets.push(items.clone());
+        }
+        Node.Begin => prog.push(Inst.Begin),
+        Node.Dollar => prog.push(Inst.Dollar),
+        Node.End => prog.push(Inst.End),
+        Node.Group(g, alts) => {
+            if *g > 0 {
+                prog.push(Inst.Save(*g * 2));
+            }
+            // Split to each alternative in turn; each one jumps past the rest.
+            let mut jumps: Vec[i64] = Vec.new();
+            let mut k = 0;
+            while k < alts.len() {
+                if k + 1 < alts.len() {
+                    let split_at = prog.len();
+                    prog.push(Inst.Split(split_at + 1, 0));
+                    emit_seq(mut prog, mut sets, alts[k], dotall);
+                    jumps.push(prog.len());
+                    prog.push(Inst.Jmp(0));
+                    let next = prog.len();
+                    prog[split_at] = Inst.Split(split_at + 1, next);
+                } else {
+                    emit_seq(mut prog, mut sets, alts[k], dotall);
+                }
+                k += 1;
+            }
+            let end = prog.len();
+            for j in jumps.iter() {
+                prog[*j] = Inst.Jmp(end);
+            }
+            if *g > 0 {
+                prog.push(Inst.Save(*g * 2 + 1));
+            }
+        }
+        Node.Repeat(lo, hi, greedy, item) => {
+            let mut k = 0;
+            while k < *lo {
+                emit(mut prog, mut sets, item[0], dotall);
+                k += 1;
+            }
+            if *hi < 0 {
+                let top = prog.len();
+                prog.push(Inst.Split(0, 0));
+                emit(mut prog, mut sets, item[0], dotall);
+                prog.push(Inst.Jmp(top));
+                let out = prog.len();
+                prog[top] = if *greedy { Inst.Split(top + 1, out) } else { Inst.Split(out, top + 1) };
+            } else {
+                let mut holes: Vec[i64] = Vec.new();
+                while k < *hi {
+                    holes.push(prog.len());
+                    prog.push(Inst.Split(0, 0));
+                    emit(mut prog, mut sets, item[0], dotall);
+                    k += 1;
+                }
+                let out = prog.len();
+                for h in holes.iter() {
+                    let h = *h;
+                    prog[h] = if *greedy { Inst.Split(h + 1, out) } else { Inst.Split(out, h + 1) };
+                }
+            }
+        }
+    }
+}
+
+// re.compile()
+fn re_compile(pattern: ref String) -> Result[ReProg, PyErr] {
+    let mut p = ReParser { cs: chars(pattern), pos: 0, groups: 0, dotall: false };
+    let alts = p.parse_alts()?;
+    if p.pos < p.cs.len() {
+        return Err(re_err("unbalanced parenthesis".to_string(), p.pos));
+    }
+    let mut prog: Vec[Inst] = Vec.new();
+    let mut sets: Vec[Vec[SetItem]] = Vec.new();
+    emit(mut prog, mut sets, Node.Group(0, alts), p.dotall);
+    prog.push(Inst.Match);
+    Ok(ReProg { prog: prog, sets: sets, groups: p.groups })
+}
+
+fn set_has(neg: bool, items: ref Vec[SetItem], c: char) -> bool {
+    let n = c as u32;
+    let mut hit = false;
+    for it in items.iter() {
+        let yes = match it {
+            SetItem.Range(lo, hi) => n >= *lo and n <= *hi,
+            SetItem.Cat(k) => cat_match(*k, c),
+        };
+        if yes {
+            hit = true;
+            break;
+        }
+    }
+    hit != neg
+}
+
+struct Run {
+    prog: Vec[Inst],
+    sets: Vec[Vec[SetItem]],
+    s: Vec[char],
+    // (pc, pos) branch points already known to fail
+    dead: Set[i64],
+    caps: Vec[i64],
+}
+
+impl Run {
+    // Backtracking in priority order, the first success wins as in sre.
+    // A state that failed once fails again (there are no backreferences),
+    // so each branch point is tried at most once at each position.
+    fn go(mut ref self, start_pc: i64, start_pos: i64) -> bool {
+        let mut pc = start_pc;
+        let mut pos = start_pos;
+        let n = self.s.len();
+        loop {
+            let inst = self.prog[pc].clone();
+            match inst {
+                Inst.Ch(c) => {
+                    if pos < n and self.s[pos] == c {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        return false;
+                    }
+                }
+                Inst.Any(dotall) => {
+                    if pos < n and (dotall or self.s[pos] != '\n') {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        return false;
+                    }
+                }
+                Inst.Cat(k) => {
+                    if pos < n and cat_match(k, self.s[pos]) {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        return false;
+                    }
+                }
+                Inst.Set(neg, items) => {
+                    if pos < n and set_has(neg, self.sets[items], self.s[pos]) {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        return false;
+                    }
+                }
+                Inst.Begin => {
+                    if pos != 0 {
+                        return false;
+                    }
+                    pc += 1;
+                }
+                Inst.Dollar => {
+                    if pos == n or (pos == n - 1 and self.s[pos] == '\n') {
+                        pc += 1;
+                    } else {
+                        return false;
+                    }
+                }
+                Inst.End => {
+                    if pos != n {
+                        return false;
+                    }
+                    pc += 1;
+                }
+                Inst.Jmp(t) => pc = t,
+                Inst.Split(a, b) => {
+                    let key = pc * (n + 1) + pos;
+                    if self.dead.contains(key) {
+                        return false;
+                    }
+                    self.dead.insert(key);
+                    if self.go(a, pos) {
+                        return true;
+                    }
+                    pc = b;
+                }
+                Inst.Save(slot) => {
+                    let old = self.caps[slot];
+                    self.caps[slot] = pos;
+                    if self.go(pc + 1, pos) {
+                        return true;
+                    }
+                    self.caps[slot] = old;
+                    return false;
+                }
+                Inst.Match => return true,
+            }
+        }
+    }
+}
+
+// regex.match(s).groups(): None when there is no match, else each group's
+// text or None.
+fn re_match(re: ref ReProg, s: ref String) -> Option[Vec[Option[String]]] {
+    let cs = chars(s);
+    let dead: Set[i64] = Set.new();
+    let mut caps: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < (re.groups + 1) * 2 {
+        caps.push(-1);
+        k += 1;
+    }
+    let mut run = Run { prog: re.prog.clone(), sets: re.sets.clone(), s: cs, dead: dead, caps: caps };
+    if not run.go(0, 0) {
+        return None;
+    }
+    let mut out: Vec[Option[String]] = Vec.new();
+    let mut g = 1;
+    while g <= re.groups {
+        let a = run.caps[g * 2];
+        let b = run.caps[g * 2 + 1];
+        if a < 0 or b < 0 {
+            out.push(None);
+        } else {
+            out.push(Some(slice(run.s, a, b)));
+        }
+        g += 1;
+    }
+    Some(out)
+}
+
+// editorconfig.fnmatch.fnmatch(name, pat)
+fn fnmatch(name: ref String, pat: ref String) -> Result[bool, PyErr] {
+    let name = path_normpath(name);
+    let (res, ranges) = translate(pat, false);
+    let re = re_compile(res)?;
+    let groups = match re_match(re, name) {
+        Some(g) => g,
+        None => return Ok(false),
+    };
+    let mut k = 0;
+    while k < groups.len() and k < ranges.len() {
+        let num = match groups[k].clone() {
+            Some(t) => t,
+            None => return Err(PyErr { cls: "TypeError".to_string(),
+                                       msg: "'NoneType' object is not subscriptable".to_string() }),
+        };
+        if num.starts_with("0") {
+            return Ok(false);
+        }
+        let value = py_int(num);
+        let (lo, hi) = ranges[k];
+        if not (lo <= value and value <= hi) {
+            return Ok(false);
+        }
+        k += 1;
+    }
+    Ok(true)
+}
+
+// ------------------------------------------------------------ the INI parser
+
+fn opt_get(m: ref Vec[(String, String)], key: Str) -> Option[String] {
+    for (k, v) in m.iter() {
+        if k == key {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+// d[key] = value: a new key goes last, an old one keeps its place.
+fn opt_set(m: mut ref Vec[(String, String)], key: ref String, value: ref String) {
+    let mut i = 0;
+    while i < m.len() {
+        if m[i].0 == key {
+            m[i].1 = value.clone();
+            return;
+        }
+        i += 1;
+    }
+    m.push((key.clone(), value.clone()));
+}
+
+fn replace_text(s: ref String, from: Str, to: Str) -> String {
+    let v = chars(s);
+    let f = chars(from.to_string());
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        let mut hit = i + f.len() <= v.len();
+        let mut k = 0;
+        while hit and k < f.len() {
+            if v[i + k] != f[k] {
+                hit = false;
+            }
+            k += 1;
+        }
+        if hit {
+            out.push_str(to);
+            i += f.len();
+        } else {
+            out.push(v[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// SECTCRE.match(line): optional whitespace, `[`, then the longest run of
+// characters other than unescaped `#` and `;` that ends just before a `]`.
+fn section_header(line: ref String) -> Option[String] {
+    let v = chars(line);
+    let mut i = 0;
+    while i < v.len() and py_space(v[i]) {
+        i += 1;
+    }
+    if i >= v.len() or v[i] != '[' {
+        return None;
+    }
+    let start = i + 1;
+    let mut end = start;
+    while end < v.len() {
+        let c = v[end];
+        if (c == '#' or c == ';') and not (end > start and v[end - 1] == '\\') {
+            break;
+        }
+        end += 1;
+    }
+    let mut k = end - 1;
+    while k > start {
+        if v[k] == ']' {
+            return Some(slice(v, start, k));
+        }
+        k -= 1;
+    }
+    None
+}
+
+// OPTCRE.match(line): the option name up to the first `:` or `=`, and the
+// value after it.
+fn option_line(line: ref String) -> Option[(String, String)] {
+    let v = chars(line);
+    let mut i = 0;
+    while i < v.len() and py_space(v[i]) {
+        i += 1;
+    }
+    if i >= v.len() or v[i] == ':' or v[i] == '=' {
+        return None;
+    }
+    let mut j = i;
+    while j < v.len() and v[j] != ':' and v[j] != '=' {
+        j += 1;
+    }
+    if j >= v.len() {
+        return None;
+    }
+    let mut value = py_lstrip(slice(v, j + 1, v.len()));
+    if value.ends_with("\n") {
+        let w = chars(value);
+        value = slice(w, 0, w.len() - 1);
+    }
+    Some((slice(v, i, j), value))
+}
+
+// The value before the first ` ;` or ` #`.
+fn cut_comment(value: ref String) -> String {
+    let v = chars(value);
+    let mut i = 0;
+    while i + 1 < v.len() {
+        if v[i] == ' ' and (v[i + 1] == ';' or v[i + 1] == '#') {
+            return slice(v, 0, i);
+        }
+        i += 1;
+    }
+    value.clone()
+}
+
+struct ConfFile {
+    options: Vec[(String, String)],
+    root: bool,
+}
+
+// EditorConfigParser.matches_filename()
+fn matches_filename(filename: ref String, config_filename: ref String, glob: ref String) -> Result[bool, PyErr] {
+    let config_dirname = path_normpath(path_dirname(config_filename));
+    let mut g = replace_text(glob, "\\#", "#");
+    g = replace_text(g, "\\;", ";");
+    if g.contains("/") {
+        if g.starts_with("/") {
+            let w = chars(g);
+            g = slice(w, 1, w.len());
+        }
+        g = path_join(config_dirname, g);
+    } else {
+        g = f"**/{g}";
+    }
+    fnmatch(filename, g)
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f" {n}" } else { f"{n}" }
+}
+
+// EditorConfigParser.read(): None when the file cannot be opened.
+fn read_conf(filename: ref String, fpname: ref String) -> Result[Option[ConfFile], PyErr] {
+    let body = match fs.read_to_string(f"data/root{fpname}") {
+        Ok(t) => t,
+        Err(_) => return Ok(None),
+    };
+    let mut conf = ConfFile { options: Vec.new(), root: false };
+    let mut in_section = false;
+    let mut matching = false;
+    let mut lineno = 0;
+    let mut errors = String.new();
+    for raw in split_lines(body).iter() {
+        let mut line = raw.clone();
+        if lineno == 0 and line.starts_with("\u{feff}") {
+            let w = chars(line);
+            line = slice(w, 1, w.len());
+        }
+        lineno += 1;
+        if py_strip(line).is_empty() or line.starts_with("#") or line.starts_with(";") {
+            continue;
+        }
+        if let Some(header) = section_header(line) {
+            in_section = true;
+            matching = matches_filename(filename, fpname, header)?;
+            continue;
+        }
+        match option_line(line) {
+            Some((name, value)) => {
+                let mut optval = value;
+                if optval.contains(";") or optval.contains("#") {
+                    optval = cut_comment(optval);
+                }
+                optval = py_strip(optval);
+                if optval == "\"\"" {
+                    optval = String.new();
+                }
+                let optname = py_rstrip(name).to_lowercase();
+                if not in_section and optname == "root" {
+                    conf.root = optval.to_lowercase() == "true";
+                }
+                if matching {
+                    opt_set(mut conf.options, optname, optval);
+                }
+            }
+            None => {
+                let shown = py_repr(py_repr(line));
+                let n = pad2(lineno);
+                errors.push_str(f"\n\t[line {n}]: {shown}");
+            }
+        }
+    }
+    if not errors.is_empty() {
+        let src = py_repr(fpname);
+        return Err(PyErr { cls: "ParsingError".to_string(),
+                           msg: f"Source contains parsing errors: {src}{errors}" });
+    }
+    Ok(Some(conf))
+}
+
+// ------------------------------------------------------------ the handler
+
+fn version_gt(a: (i64, i64, i64), b: (i64, i64, i64)) -> bool {
+    if a.0 != b.0 {
+        return a.0 > b.0;
+    }
+    if a.1 != b.1 {
+        return a.1 > b.1;
+    }
+    a.2 > b.2
+}
+
+// EditorConfigHandler.get_configurations()
+fn get_configurations(filepath: ref String, conf_filename: ref String, version: (i64, i64, i64))
+    -> Result[Vec[(String, String)], PyErr] {
+    if not filepath.starts_with("/") {
+        return Err(PyErr { cls: "PathError".to_string(), msg: "Input file must be a full path name.".to_string() });
+    }
+    if version_gt(version, (0, 17, 1)) {
+        return Err(PyErr { cls: "VersionError".to_string(),
+                           msg: "Required version is greater than the current version.".to_string() });
+    }
+    let (start, _) = path_split(filepath);
+    let mut conf_files: Vec[String] = Vec.new();
+    let mut path = start;
+    loop {
+        conf_files.push(path_join(path, conf_filename));
+        let up = path_dirname(path);
+        if up == path {
+            break;
+        }
+        path = up;
+    }
+    let mut options: Vec[(String, String)] = Vec.new();
+    for name in conf_files.iter() {
+        let parsed = match read_conf(filepath, name)? {
+            Some(c) => c,
+            None => ConfFile { options: Vec.new(), root: false },
+        };
+        let mut merged = parsed.options.clone();
+        for (k, v) in options.iter() {
+            opt_set(mut merged, k, v);
+        }
+        options = merged;
+        if parsed.root {
+            break;
+        }
+    }
+    preprocess(mut options, version);
+    Ok(options)
+}
+
+fn preprocess(opts: mut ref Vec[(String, String)], version: (i64, i64, i64)) {
+    for name in ["end_of_line", "indent_style", "indent_size", "insert_final_newline",
+                 "trim_trailing_whitespace", "charset"] {
+        if let Some(v) = opt_get(opts, name) {
+            opt_set(mut opts, name.to_string(), v.to_lowercase());
+        }
+    }
+    let style = opt_get(opts, "indent_style");
+    let size = opt_get(opts, "indent_size");
+    if style == Some("tab".to_string()) and size.is_none() and not version_gt((0, 10, 0), version) {
+        opt_set(mut opts, "indent_size".to_string(), "tab".to_string());
+    }
+    let size = opt_get(opts, "indent_size");
+    let width = opt_get(opts, "tab_width");
+    if let Some(s) = size.clone() {
+        if width.is_none() and s != "tab" {
+            opt_set(mut opts, "tab_width".to_string(), s);
+        }
+    }
+    let size = opt_get(opts, "indent_size");
+    let width = opt_get(opts, "tab_width");
+    if let Some(s) = size {
+        if let Some(w) = width {
+            if s == "tab" {
+                opt_set(mut opts, "indent_size".to_string(), w);
+            }
+        }
+    }
+}
+
+// split_version(): `^(\d+)\.(\d+)\.(\d+)(\..*)?$`
+fn split_version(s: ref String) -> Option[(i64, i64, i64)] {
+    let v = chars(s);
+    let mut i = 0;
+    let mut nums: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 3 {
+        let d0 = i;
+        while i < v.len() and is_digit(v[i]) {
+            i += 1;
+        }
+        if i == d0 {
+            return None;
+        }
+        nums.push(py_int(slice(v, d0, i)));
+        if k < 2 {
+            if i < v.len() and v[i] == '.' {
+                i += 1;
+            } else {
+                return None;
+            }
+        }
+        k += 1;
+    }
+    // The rest is empty or `.` and anything without a newline, before an
+    // optional final newline.
+    let mut rest = slice(v, i, v.len());
+    if rest.ends_with("\n") {
+        let w = chars(rest);
+        rest = slice(w, 0, w.len() - 1);
+    }
+    if not rest.is_empty() and (not rest.starts_with(".") or rest.contains("\n")) {
+        return None;
+    }
+    Some((nums[0], nums[1], nums[2]))
+}
+
+// ------------------------------------------------------------ the command line
+
+struct Out {
+    lines: Vec[String],
+}
+
+impl Out {
+    fn out(mut ref self, s: ref String) {
+        self.lines.push(s.clone());
+    }
+
+    fn err(mut ref self, s: ref String) {
+        self.lines.push(f"stderr: {s}");
+    }
+
+    fn usage(mut ref self, error: bool) {
+        let text = vec![
+            "editorconfig [OPTIONS] FILENAME",
+            "-f                 Specify conf filename other than \".editorconfig\".",
+            "-b                 Specify version (used by devs to test compatibility).",
+            "-h OR --help       Print this help message.",
+            "-v OR --version    Display version information.",
+        ];
+        for t in text {
+            if error {
+                self.err(t.to_string());
+            } else {
+                self.out(t.to_string());
+            }
+        }
+    }
+}
+
+fn long_has_args(opt: ref String) -> Result[(bool, String), String] {
+    let longopts = vec!["version", "help"];
+    let mut possible: Vec[String] = Vec.new();
+    for o in longopts {
+        if o.starts_with(opt.as_str()) {
+            possible.push(o.to_string());
+        }
+    }
+    if possible.is_empty() {
+        return Err(f"option --{opt} not recognized");
+    }
+    for p in possible.iter() {
+        if p == opt {
+            return Ok((false, opt.clone()));
+        }
+    }
+    if possible.len() > 1 {
+        return Err(f"option --{opt} not a unique prefix");
+    }
+    Ok((false, possible[0].clone()))
+}
+
+// getopt.getopt(args, "vhb:f:", ["version", "help"])
+fn getopt(argv: ref Vec[String]) -> Result[(Vec[(String, String)], Vec[String]), String] {
+    let mut opts: Vec[(String, String)] = Vec.new();
+    let mut i = 0;
+    while i < argv.len() and argv[i].starts_with("-") and argv[i] != "-" {
+        let a = argv[i].clone();
+        i += 1;
+        if a == "--" {
+            break;
+        }
+        let w = chars(a);
+        if a.starts_with("--") {
+            let body = slice(w, 2, w.len());
+            let bv = chars(body);
+            let mut name = body.clone();
+            let mut optarg: Option[String] = None;
+            let mut k = 0;
+            while k < bv.len() {
+                if bv[k] == '=' {
+                    name = slice(bv, 0, k);
+                    optarg = Some(slice(bv, k + 1, bv.len()));
+                    break;
+                }
+                k += 1;
+            }
+            let (has_arg, full) = long_has_args(name)?;
+            if not has_arg and optarg.is_some() {
+                return Err(f"option --{full} must not have an argument");
+            }
+            opts.push((f"--{full}", optarg.unwrap_or(String.new())));
+            continue;
+        }
+        let mut j = 1;
+        while j < w.len() {
+            let c = w[j];
+            j += 1;
+            let takes = if c == 'v' or c == 'h' {
+                false
+            } else if c == 'b' or c == 'f' {
+                true
+            } else {
+                return Err(f"option -{c} not recognized");
+            };
+            if not takes {
+                opts.push((f"-{c}", String.new()));
+                continue;
+            }
+            let mut optarg = slice(w, j, w.len());
+            if j >= w.len() {
+                if i >= argv.len() {
+                    return Err(f"option -{c} requires argument");
+                }
+                optarg = argv[i].clone();
+                i += 1;
+            }
+            opts.push((f"-{c}", optarg));
+            break;
+        }
+    }
+    let mut rest: Vec[String] = Vec.new();
+    while i < argv.len() {
+        rest.push(argv[i].clone());
+        i += 1;
+    }
+    Ok((opts, rest))
+}
+
+// editorconfig/__main__.py main(); the exit status.
+fn cli_main(argv: ref Vec[String], o: mut ref Out) -> i64 {
+    let (opts, args) = match getopt(argv) {
+        Ok(r) => r,
+        Err(msg) => {
+            o.out(msg);
+            o.usage(true);
+            return 2;
+        }
+    };
+    let mut version = (0, 17, 1);
+    let mut conf_filename = ".editorconfig".to_string();
+    for (option, arg) in opts.iter() {
+        if option == "-h" or option == "--help" {
+            o.usage(false);
+            return 0;
+        }
+        if option == "-v" or option == "--version" {
+            o.out("EditorConfig Python Core Version 0.17.1".to_string());
+            return 0;
+        }
+        if option == "-f" {
+            conf_filename = arg.clone();
+        }
+        if option == "-b" {
+            match split_version(arg) {
+                Some(t) => version = t,
+                None => {
+                    o.err(f"Invalid version number: {arg}");
+                    return 1;
+                }
+            }
+        }
+    }
+    if args.is_empty() {
+        o.usage(true);
+        return 2;
+    }
+    let multiple = args.len() > 1;
+    for filename in args.iter() {
+        let options = match get_configurations(filename, conf_filename, version) {
+            Ok(r) => r,
+            Err(e) => {
+                if e.cls == "ParsingError" or e.cls == "PathError" or e.cls == "VersionError" {
+                    o.out(e.msg);
+                    return 2;
+                }
+                let cls = e.cls.clone();
+                let msg = e.msg.clone();
+                o.out(f"uncaught {cls}: {msg}");
+                return 1;
+            }
+        };
+        if multiple {
+            o.out(f"[{filename}]");
+        }
+        for (k, v) in options.iter() {
+            o.out(f"{k}={v}");
+        }
+    }
+    0
+}
+
+// ------------------------------------------------------------ jobs
+
+fn job_ec(argv: ref Vec[String], out: mut ref Vec[String]) {
+    let joined = argv.join(" ");
+    out.push(f"== $ editorconfig {joined}");
+    let mut o = Out { lines: Vec.new() };
+    let code = cli_main(argv, mut o);
+    for l in o.lines.iter() {
+        out.push(l.clone());
+    }
+    if code != 0 {
+        out.push(f"exit {code}");
+    }
+}
+
+fn job_glob(pat: ref String, names: ref Vec[String], out: mut ref Vec[String]) {
+    let q = json_quote(pat);
+    out.push(f"== glob {q}");
+    let (res, ranges) = translate(pat, false);
+    out.push(f"regex: {res}");
+    if not ranges.is_empty() {
+        let parts: Vec[String] = ranges.iter().map(|r| f"{r.0}..{r.1}").collect();
+        let joined = parts.join(" ");
+        out.push(f"ranges: {joined}");
+    }
+    let mut hits: Vec[String] = Vec.new();
+    for n in names.iter() {
+        let r = match fnmatch(n, pat) {
+            Ok(true) => "yes".to_string(),
+            Ok(false) => "no".to_string(),
+            Err(e) => {
+                let cls = e.cls.clone();
+                let msg = e.msg.clone();
+                f"{cls}: {msg}"
+            }
+        };
+        if names.len() <= 8 {
+            let qn = json_quote(n);
+            out.push(f"  {qn} -> {r}");
+        } else if r != "no" {
+            if r == "yes" {
+                hits.push(n.clone());
+            } else {
+                hits.push(f"{n} ({r})");
+            }
+        }
+    }
+    if names.len() > 8 {
+        let mut line = f"  {hits.len()} of {names.len()} match";
+        let mut k = 0;
+        while k < hits.len() {
+            line.push_str(if k == 0 { ": " } else { "; " });
+            line.push_str(hits[k].as_str());
+            k += 1;
+        }
+        out.push(line);
+    }
+}
+
+fn run() -> Result[(), String] {
+    let jobs = match fs.read_to_string("data/jobs.jsonl") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read jobs.jsonl: {e}"),
+    };
+    let mut out: Vec[String] = Vec.new();
+    for l in jobs.lines() {
+        if l.trim().is_empty() {
+            continue;
+        }
+        let items = match json_line(l.to_string())? {
+            J.A(items) => items,
+            J.S(_) => return Err(f"bad job line: {l}"),
+        };
+        let kind = j_str(items[0]);
+        if kind == "ec" {
+            job_ec(j_strs(items[1]), mut out);
+        } else {
+            job_glob(j_str(items[1]), j_strs(items[2]), mut out);
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    print(text);
+    Ok(())
+}
+
+// ------------------------------------------------------------ data
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_dir(dir: ref String) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    make_dir(dir)
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    // A directory where a config file would be, which the walk skips.
+    make_dir("data/root/dironly/.editorconfig".to_string())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("[\"ec\", [\"/web/index.html\"]]\n");
+    t.push_str("[\"ec\", [\"/web/src/app.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web/src/App.tsx\"]]\n");
+    t.push_str("[\"ec\", [\"/web/src/components/Button.tsx\"]]\n");
+    t.push_str("[\"ec\", [\"/web/package.json\"]]\n");
+    t.push_str("[\"ec\", [\"/web/.travis.yml\"]]\n");
+    t.push_str("[\"ec\", [\"/web/Makefile\"]]\n");
+    t.push_str("[\"ec\", [\"/web/src/Makefile\"]]\n");
+    t.push_str("[\"ec\", [\"/web/lib/util.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web/lib/deep/er/util.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web/docs/index.rst\"]]\n");
+    t.push_str("[\"ec\", [\"/web/docs/api/index.rst\"]]\n");
+    t.push_str("[\"ec\", [\"/web/README.md\"]]\n");
+    t.push_str("[\"ec\", [\"/web/tools/build.py\"]]\n");
+    t.push_str("[\"ec\", [\"/web/dist/app.min.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web/dist/app.min.css\"]]\n");
+    t.push_str("[\"ec\", [\"/web/legacy/jquery.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web/legacy/vendor/plugin.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web/legacy/vendor/deep/x.css\"]]\n");
+    t.push_str("[\"ec\", [\"/web/legacy/notes.md\"]]\n");
+    t.push_str("[\"ec\", [\"/web/src/../lib/x.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web//src///app.js\"]]\n");
+    t.push_str("[\"ec\", [\"/web/./README.md\"]]\n");
+    t.push_str("[\"ec\", [\"/web/src/app.js\", \"/web/README.md\", \"/web/Makefile\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/packages/core/src/index.ts\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/packages/core/src/a/b/c.tsx\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/packages/core/lib/x.ts\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/packages/cli/src/commands/init.ts\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/packages/cli/README.md\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/packages/web/src/x.ts\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/test/fixtures/a.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/packages/core/test/fixtures/deep/b.json\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/migrations/1_init.sql\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/migrations/07_users.sql\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/migrations/20_x.sql\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/migrations/21_x.sql\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/migrations/0_zero.sql\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/migrations/+5_plus.sql\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/logs/app-01.log\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/logs/app-1.log\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/logs/app-12.log\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/logs/app-13.log\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/shard-3.conf\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/shard0.conf\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/shard+2.conf\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/shard4.conf\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/shard-0.conf\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/yarn.lock\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/go.sum\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/docs/guide/intro.md\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/docs/intro.md\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/style.css\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/style.scss\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/style.sss\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/a.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/bc.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/bd.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/b.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/2/notes.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/4/notes.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/mono/x/2/notes.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/kernel/sched/core.c\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/include/linux/sched.h\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/Makefile\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/arch/x86/Makefile.um\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/Kconfig\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/scripts/checkpatch.pl\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/tools/perf/util.py\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/rust/kernel/lib.rs\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/Documentation/process/coding-style.rst\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/arch/arm64/boot/dts/x.dts\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/x.S\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/arch/x86/entry/entry_64.s\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/scripts/gdb/x.awk\"]]\n");
+    t.push_str("[\"ec\", [\"/kernel/Documentation/devicetree/bindings/a.yaml\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/readme.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/#notes.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/a;b.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/setup.ini\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/app.conf\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/weird]]name\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/[x].dat\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/x.dat\"]]\n");
+    t.push_str("[\"ec\", [\"/odd/old-mac/a.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/broken/main.c\"]]\n");
+    t.push_str("[\"ec\", [\"/broken/x.h\", \"/web/README.md\"]]\n");
+    t.push_str("[\"ec\", [\"/regex/a.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/regex2/x.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/numgroup/a.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/numgroup/2.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/numgroup/7.txt\"]]\n");
+    t.push_str("[\"ec\", [\"-f\", \".ec\", \"/alt/x.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/alt/x.txt\"]]\n");
+    t.push_str("[\"ec\", [\"-f\", \"nothing-here\", \"/alt/x.txt\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"0.9.0\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"0.10.0\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"0.17.1\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"0.17.1.dev\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"0.18.0\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"1.0.0\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"0.9\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"v1.0.0\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"-b\", \"0.17.0-beta\", \"/version/main.go\", \"/version/rules.mk\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"/version/main.go\", \"/version/data.tsv\"]]\n");
+    t.push_str("[\"ec\", [\"/latin/x.txt\"]]\n");
+    t.push_str("[\"ec\", [\"/dironly/sub/x.c\"]]\n");
+    t.push_str("[\"ec\", [\"relative/path.c\"]]\n");
+    t.push_str("[\"ec\", [\"/web/src/app.js\", \"relative.c\"]]\n");
+    t.push_str("[\"ec\", []]\n");
+    t.push_str("[\"ec\", [\"-v\"]]\n");
+    t.push_str("[\"ec\", [\"--version\"]]\n");
+    t.push_str("[\"ec\", [\"-h\"]]\n");
+    t.push_str("[\"ec\", [\"--help\", \"/web/x\"]]\n");
+    t.push_str("[\"ec\", [\"-x\", \"/web/x\"]]\n");
+    t.push_str("[\"ec\", [\"-f\"]]\n");
+    t.push_str("[\"ec\", [\"--verbose\"]]\n");
+    t.push_str("[\"ec\", [\"--version=2\"]]\n");
+    t.push_str("[\"ec\", [\"-b\"]]\n");
+    t.push_str("[\"ec\", [\"-fx\", \"/alt/x.txt\"]]\n");
+    t.push_str("[\"ec\", [\"-b0.9.0\", \"/version/main.go\"]]\n");
+    t.push_str("[\"ec\", [\"--\", \"/web/README.md\"]]\n");
+    t.push_str("[\"ec\", [\"/web/README.md\", \"-v\"]]\n");
+    t.push_str("[\"ec\", [\"-v\", \"-h\"]]\n");
+    t.push_str("[\"glob\", \"*.py\", [\"a.py\", \"dir/a.py\", \".py\", \"a.pyc\"]]\n");
+    t.push_str("[\"glob\", \"**.py\", [\"a.py\", \"dir/a.py\", \"x/y/z.py\"]]\n");
+    t.push_str("[\"glob\", \"**/*.py\", [\"a.py\", \"/a.py\", \"dir/a.py\"]]\n");
+    t.push_str("[\"glob\", \"a/**/b\", [\"a/b\", \"a/x/b\", \"a/x/y/b\", \"ab\"]]\n");
+    t.push_str("[\"glob\", \"?.txt\", [\"a.txt\", \"ab.txt\", \"/.txt\"]]\n");
+    t.push_str("[\"glob\", \"[abc].txt\", [\"a.txt\", \"d.txt\", \"[abc].txt\"]]\n");
+    t.push_str("[\"glob\", \"[!abc].txt\", [\"a.txt\", \"d.txt\", \"!.txt\"]]\n");
+    t.push_str("[\"glob\", \"[^abc].txt\", [\"d.txt\", \"^.txt\"]]\n");
+    t.push_str("[\"glob\", \"[a-c]x\", [\"bx\", \"-x\", \"dx\"]]\n");
+    t.push_str("[\"glob\", \"[a/b]c\", [\"[a/b]c\", \"a/bc\", \"ac\"]]\n");
+    t.push_str("[\"glob\", \"[*]\", [\"*\", \"x\", \"]\", \"*]\", \"xx]\"]]\n");
+    t.push_str("[\"glob\", \"[?*]\", [\"?\", \"a\", \"ab]\", \"[ab]\"]]\n");
+    t.push_str("[\"glob\", \"{a,b}.c\", [\"a.c\", \"b.c\", \"ab.c\", \"{a,b}.c\"]]\n");
+    t.push_str("[\"glob\", \"{a}.c\", [\"a.c\", \"{a}.c\"]]\n");
+    t.push_str("[\"glob\", \"{a,b.c\", [\"{a,b.c\", \"a\"]]\n");
+    t.push_str("[\"glob\", \"a,b\", [\"a,b\", \"a\"]]\n");
+    t.push_str("[\"glob\", \"{a\\\\,b,c}\", [\"a,b\", \"c\", \"a\"]]\n");
+    t.push_str("[\"glob\", \"\\\\*.txt\", [\"*.txt\", \"a.txt\"]]\n");
+    t.push_str("[\"glob\", \"\\\\\\\\x\", [\"\\\\x\"]]\n");
+    t.push_str("[\"glob\", \"{1..5}\", [\"1\", \"5\", \"6\", \"0\", \"03\", \"-1\", \"+3\"]]\n");
+    t.push_str("[\"glob\", \"{-10..-5}\", [\"-7\", \"-11\", \"-5\"]]\n");
+    t.push_str("[\"glob\", \"{5..1}\", [\"3\"]]\n");
+    t.push_str("[\"glob\", \"{1..3x}\", [\"2\"]]\n");
+    t.push_str("[\"glob\", \"{a,{1..3}}\", [\"a\", \"2\"]]\n");
+    t.push_str("[\"glob\", \"{}.c\", [\"{}.c\", \".c\"]]\n");
+    t.push_str("[\"glob\", \"{,a}.c\", [\".c\", \"a.c\"]]\n");
+    t.push_str("[\"glob\", \"{a,b}{1..2}\", [\"a1\", \"b2\", \"c1\"]]\n");
+    t.push_str("[\"glob\", \"a-b\", [\"a-b\"]]\n");
+    t.push_str("[\"glob\", \"[a-]\", [\"a\", \"-\", \"b\"]]\n");
+    t.push_str("[\"glob\", \"[]a]\", [\"]\", \"a\"]]\n");
+    t.push_str("[\"glob\", \"[a\\\\]b]\", [\"]\", \"b\", \"a\"]]\n");
+    t.push_str("[\"glob\", \"x[\", [\"x[\"]]\n");
+    t.push_str("[\"glob\", \"x]\", [\"x]\"]]\n");
+    t.push_str("[\"glob\", \"[z-a]\", [\"a\"]]\n");
+    t.push_str("[\"glob\", \"[{a,b}]\", [\"a\", \"(\", \"|\"]]\n");
+    t.push_str("[\"glob\", \"{[a,b]}\", [\"[a\", \"b]\"]]\n");
+    t.push_str("[\"glob\", \"a.{c,cpp,h}\", [\"a.c\", \"a.cpp\", \"a.hpp\"]]\n");
+    t.push_str("[\"glob\", \"**\", [\"a/b/c\", \"\"]]\n");
+    t.push_str("[\"glob\", \"*\", [\"a/b\", \"ab\", \"\"]]\n");
+    t.push_str("[\"glob\", \"/a\", [\"/a\", \"a\"]]\n");
+    t.push_str("[\"glob\", \"a//b\", [\"a//b\"]]\n");
+    t.push_str("[\"glob\", \"a/**/\", [\"a/\", \"a/b/\"]]\n");
+    t.push_str("[\"glob\", \"$^+()|.&~# \", [\"$^+()|.&~# \"]]\n");
+    t.push_str("[\"glob\", \"é?\", [\"éa\", \"e\"]]\n");
+    t.push_str("[\"glob\", \"{a,b\", [\"{a,b\"]]\n");
+    t.push_str("[\"glob\", \"a}\", [\"a}\"]]\n");
+    t.push_str("[\"glob\", \"{{a,b},c}\", [\"a\", \"b\", \"c\", \"{a\"]]\n");
+    t.push_str("[\"glob\", \"[a,b]\", [\"a\", \",\", \"|\"]]\n");
+    t.push_str("[\"glob\", \"[\\\\-]\", [\"-\", \"\\\\\"]]\n");
+    t.push_str("[\"glob\", \"[\\\\d]\", [\"d\", \"1\"]]\n");
+    t.push_str("[\"glob\", \"?/lib/*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/a/[a-z]*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"test/{a,b}/*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"lib/x?/Makefile\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"?/[!a]*/*.c\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"{src,lib}/Makefile\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"?/?.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/*.c\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/test/*/*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/[a-z]*/*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/{1..20}.txt\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"x?/*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"src/**/[a-z]*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/?/{,x}1*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"*.h\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"{a,b}.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"*.min.*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"**/**/?.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"{src,lib}/x[12]/?.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"[!a]*/x[12]/**.md\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"[a-z]*/[a-z]*/?.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/*.h\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/{,x}1*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"{a,b}/lib/*.min.*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"x[12]/[!a]*/{,x}1*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"x.md\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/x[12]/{a,b}.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/x[12]/{,x}1*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/[!a]*/[a-z]*\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/Makefile\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"a/?.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"x[12]/*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"?/*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"*.py\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"/x?/x.md\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    t.push_str("[\"glob\", \"{a,b}/x.md\", [\"1.txt\", \"12.txt\", \"Makefile\", \"a.min.js\", \"a.py\", \"b.py\", \"main.c\", \"util.h\", \"x.md\", \"a/a/12.txt\", \"a/lib/12.txt\", \"a/main.c\", \"a/src/util.h\", \"a/x.md\", \"a/x2/x.md\", \"b/Makefile\", \"b/a.min.js\", \"b/test/b.py\", \"b/util.h\", \"b/x.md\", \"b/x1/12.txt\", \"b/x1/b.py\", \"lib/1.txt\", \"lib/12.txt\", \"lib/a/main.c\", \"lib/b.py\", \"lib/lib/Makefile\", \"lib/x.md\", \"src/Makefile\", \"src/a.py\", \"src/src/a.min.js\", \"src/src/x.md\", \"src/x1/x.md\", \"test/12.txt\", \"test/lib/1.txt\", \"test/util.h\", \"test/x.md\", \"x1/Makefile\", \"x1/a/1.txt\", \"x1/a/main.c\", \"x1/x.md\", \"x2/1.txt\", \"x2/12.txt\", \"x2/x1/a.py\"]]\n");
+    v.push(DataFile { path: "jobs.jsonl".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[*]\n");
+    t.push_str("alt = file\n");
+    t.push_str("indent_style = tab\n");
+    v.push(DataFile { path: "root/alt/.ec".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[*]\n");
+    t.push_str("alt = no\n");
+    v.push(DataFile { path: "root/alt/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[*]\n");
+    t.push_str("indent_size = 4\n");
+    t.push_str("this line has no separator\n");
+    t.push_str("[*.c]\n");
+    t.push_str("= no name\n");
+    t.push_str("indent_style = tab\n");
+    t.push_str("  just words\n");
+    t.push_str("[*.h\n");
+    t.push_str("tab_width = 4\n");
+    v.push(DataFile { path: "root/broken/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[*]\n");
+    t.push_str("from = sub\n");
+    v.push(DataFile { path: "root/dironly/sub/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# SPDX-style header comment\n");
+    t.push_str("root = true\n");
+    t.push_str("\n");
+    t.push_str("[{*.{awk,c,dts,dtsi,dtso,h,mk,s,S},Kconfig,Makefile,Makefile.*}]\n");
+    t.push_str("charset = utf-8\n");
+    t.push_str("end_of_line = lf\n");
+    t.push_str("insert_final_newline = true\n");
+    t.push_str("indent_style = tab\n");
+    t.push_str("indent_size = 8\n");
+    t.push_str("\n");
+    t.push_str("[*.{json,py,rs}]\n");
+    t.push_str("charset = utf-8\n");
+    t.push_str("end_of_line = lf\n");
+    t.push_str("insert_final_newline = true\n");
+    t.push_str("indent_style = space\n");
+    t.push_str("indent_size = 4\n");
+    t.push_str("\n");
+    t.push_str("[*.yaml]\n");
+    t.push_str("indent_style = space\n");
+    t.push_str("indent_size = 2\n");
+    t.push_str("\n");
+    t.push_str("[scripts/checkpatch.pl]\n");
+    t.push_str("indent_style = tab\n");
+    t.push_str("tab_width = 8\n");
+    t.push_str("\n");
+    t.push_str("[Documentation/**.rst]\n");
+    t.push_str("indent_style = space\n");
+    t.push_str("indent_size = 3\n");
+    v.push(DataFile { path: "root/kernel/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[*.txt]\n");
+    t.push_str("name = café\n");
+    v.push(DataFile { path: "root/latin/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("\n");
+    t.push_str("[*]\n");
+    t.push_str("end_of_line = lf\n");
+    t.push_str("insert_final_newline = true\n");
+    t.push_str("\n");
+    t.push_str("[packages/*/src/**.{ts,tsx}]\n");
+    t.push_str("indent_style = space\n");
+    t.push_str("indent_size = 2\n");
+    t.push_str("\n");
+    t.push_str("[packages/{core,cli}/**]\n");
+    t.push_str("max_line_length = 100\n");
+    t.push_str("\n");
+    t.push_str("[**/test/fixtures/**]\n");
+    t.push_str("trim_trailing_whitespace = false\n");
+    t.push_str("insert_final_newline = false\n");
+    t.push_str("\n");
+    t.push_str("[migrations/{1..20}_*.sql]\n");
+    t.push_str("indent_size = 4\n");
+    t.push_str("\n");
+    t.push_str("[logs/app-{01..12}.log]\n");
+    t.push_str("charset = utf-8-bom\n");
+    t.push_str("\n");
+    t.push_str("[shard{-3..3}.conf]\n");
+    t.push_str("indent_style = tab\n");
+    t.push_str("\n");
+    t.push_str("[{*.lock,go.sum}]\n");
+    t.push_str("generated_code = true\n");
+    t.push_str("\n");
+    t.push_str("[docs/**/*.md]\n");
+    t.push_str("indent_size = 2\n");
+    t.push_str("\n");
+    t.push_str("[*.{,s}css]\n");
+    t.push_str("indent_size = 2\n");
+    t.push_str("\n");
+    t.push_str("[{a,b{c,d}}.txt]\n");
+    t.push_str("nested = yes\n");
+    t.push_str("\n");
+    t.push_str("[{1..3}/notes.txt]\n");
+    t.push_str("numbered = dir\n");
+    v.push(DataFile { path: "root/mono/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[*]\n");
+    t.push_str("INDENT_SIZE = 8\n");
+    t.push_str("Indent_Style = SPACE\n");
+    t.push_str("\n");
+    t.push_str("[src/commands/*.ts]\n");
+    t.push_str("indent_size = 4\n");
+    v.push(DataFile { path: "root/mono/packages/cli/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[{a,{1..3}}.txt]\n");
+    t.push_str("picked = yes\n");
+    v.push(DataFile { path: "root/numgroup/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("efbbbf726f6f74203d20747275650d0a5b2a2e7478745d0d0a696e64656e745f73697a65203d20320d0a0d0a5b5c236e");
+    t.push_str("6f7465732e7478745d0d0a636f6d6d656e745f63686172203d205c230d0a5b615c3b622e7478745d0d0a73656d69203d");
+    t.push_str("206e6f0d0a5b2a2e696e695d203b20747261696c696e6720636f6d6d656e740d0a76616c7565203d2022220d0a6e6f74");
+    t.push_str("65203d206b6565702023746869733b20616e64203b7468697320746f6f0d0a737061636564203d2061203b620d0a6861");
+    t.push_str("73686564203d20782023790d0a636f6c6f6e3a20776f726b7320746f6f0d0a2020206c656164696e67203d2077686974");
+    t.push_str("6573706163652020200d0a5b2a2e636f6e665d0d0a556e69636f6465203d206e61c3af766520636166c3a90d0a656d70");
+    t.push_str("7479203d0d0a6571203d20613d623d630d0a5b77656972645d5d6e616d655d0d0a627261636b6574203d207965730d0a");
+    t.push_str("5b5b785d2e6461745d0d0a627261636b657473203d206e65737465640d0a");
+    v.push(DataFile { path: "root/odd/.editorconfig".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("[*]\r");
+    t.push_str("indent_size = 6\r");
+    t.push_str("cr_only = true\r");
+    v.push(DataFile { path: "root/odd/old-mac/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[*]\n");
+    t.push_str("base = yes\n");
+    t.push_str("[[z-a].txt]\n");
+    t.push_str("never = reached\n");
+    v.push(DataFile { path: "root/regex/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[{x,[}]y}.txt]\n");
+    t.push_str("paren = unbalanced\n");
+    v.push(DataFile { path: "root/regex2/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root = true\n");
+    t.push_str("[*.go]\n");
+    t.push_str("indent_style = tab\n");
+    t.push_str("[*.mk]\n");
+    t.push_str("indent_style = tab\n");
+    t.push_str("indent_size = 4\n");
+    t.push_str("[*.tsv]\n");
+    t.push_str("indent_size = tab\n");
+    v.push(DataFile { path: "root/version/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# EditorConfig is awesome: https://editorconfig.org\n");
+    t.push_str("root = true\n");
+    t.push_str("\n");
+    t.push_str("[*]\n");
+    t.push_str("charset = utf-8\n");
+    t.push_str("end_of_line = LF\n");
+    t.push_str("indent_style = space\n");
+    t.push_str("indent_size = 4\n");
+    t.push_str("insert_final_newline = true\n");
+    t.push_str("trim_trailing_whitespace = true\n");
+    t.push_str("max_line_length = 120\n");
+    t.push_str("\n");
+    t.push_str("[*.{js,jsx,ts,tsx,json,yml,yaml}]\n");
+    t.push_str("indent_size = 2\n");
+    t.push_str("\n");
+    t.push_str("[*.md]\n");
+    t.push_str("trim_trailing_whitespace = false\n");
+    t.push_str("max_line_length = off\n");
+    t.push_str("\n");
+    t.push_str("[Makefile]\n");
+    t.push_str("indent_style = Tab\n");
+    t.push_str("\n");
+    t.push_str("[{package.json,.travis.yml}]\n");
+    t.push_str("indent_size = 2\n");
+    t.push_str("\n");
+    t.push_str("[lib/**.js]\n");
+    t.push_str("indent_style = space ; old code\n");
+    t.push_str("indent_size = 2\n");
+    t.push_str("\n");
+    t.push_str("[/docs/*.rst]\n");
+    t.push_str("indent_size = 3\n");
+    t.push_str("\n");
+    t.push_str("[*.py]\n");
+    t.push_str("max_line_length = 88  # black's default\n");
+    t.push_str("\n");
+    t.push_str("[*.min.{js,css}]\n");
+    t.push_str("indent_style = unset\n");
+    t.push_str("insert_final_newline = unset\n");
+    v.push(DataFile { path: "root/web/.editorconfig".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("; the old jQuery code base keeps its tabs\n");
+    t.push_str("[*.js]\n");
+    t.push_str("indent_style = tab\n");
+    t.push_str("tab_width = 8\n");
+    t.push_str("\n");
+    t.push_str("[vendor/**]\n");
+    t.push_str("charset = latin1\n");
+    v.push(DataFile { path: "root/web/legacy/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("root=TRUE\n");
+    t.push_str("[*]\n");
+    t.push_str("indent_style=space\n");
+    t.push_str("indent_size=tab\n");
+    t.push_str("tab_width=3\n");
+    v.push(DataFile { path: "root/web/legacy/vendor/.editorconfig".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[*.tsx]\n");
+    t.push_str("quote_type = single\n");
+    t.push_str("spelling_language = en-US\n");
+    v.push(DataFile { path: "root/web/src/components/.editorconfig".to_string(), hex: false, body: t });
+}
