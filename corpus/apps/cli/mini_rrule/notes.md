@@ -31,3 +31,8 @@ exclusions, 17 malformed rules, and two that fail only when queried.
 
 `oracle.py` runs the same files through the real dateutil
 (`pip install python-dateutil`) and wrote `expected.out`.
+
+Compiler gaps:
+- a `Str` copied out of a local `Vec[Str]` stayed borrowed from the Vec on
+  MIR (B-2026-10-18-50, drop schedule). It was fixed at af93af3805, and the
+  two places that worked around it are back to their original code.

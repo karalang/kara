@@ -1337,15 +1337,9 @@ fn parse_byday(value: Str, a: mut ref RuleArgs) -> bool {
         let mut w = wday;
         let mut n: i64 = 0;
         if wday.contains("(") {
-            // WORKAROUND B-2026-10-18-50: `w = splt[0]` from a local
-            // `splt: Vec[Str]` is refused by the MIR borrow checker.
-            let p = wday.find("(").unwrap_or(0);
-            w = wday[0..p];
-            let rest = wday[p + 1..];
-            let inner = match rest.find("(") {
-                Some(q) => rest[0..q],
-                None => rest,
-            };
+            let splt: Vec[Str] = wday.split("(").collect();
+            w = splt[0];
+            let inner = splt[1];
             if inner.len() == 0 {
                 return false;
             }
@@ -1462,9 +1456,7 @@ fn parse_rrule(line: Str, dtstart: Option[i64]) -> Result[Rule, String] {
         if parts[0] != "RRULE" {
             return Err("unknown parameter name".to_string());
         }
-        // WORKAROUND B-2026-10-18-50: `value = parts[1]` is refused by the
-        // MIR borrow checker.
-        value = line[parts[0].len() + 1..];
+        value = parts[1];
     }
     let mut a = new_args();
     for pair in value.split(";") {
