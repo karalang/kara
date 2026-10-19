@@ -317,6 +317,8 @@ Pins: `err_write_through_ref`, `ok_shared_field_through_ref`.
 
 **5.10 Reading a `Copy` value through a reference.** A `ref T` or `mut ref T` whose `T` is `Copy` is read as a `T` wherever a `T` is expected: an operator operand, an argument, a `let` with a `T` annotation, a field or element of a literal, a return value. Nothing is moved and the reference stays usable. `*r` writes the read explicitly. So `for x in v { total += x }` over a `Vec[i64]` needs no `*`, and neither does a bare parameter of a `Copy` type, which is already a copy (§4.1).
 
+**A closure's parameters follow the same rule.** A closure parameter takes its type from the function type it is checked against, after substitution, and is then an ordinary bare parameter. So when the item is `Copy`, a predicate gets a copy: in `(1..n).find(|j| w[j] == 13)` and `s.chars().filter(|c| c == 'Q')`, `j` is an `i64` and `c` is a `char`. Writing `*j` or `*c` there is an error, as it is on a named function's `c: char`, and its machine-applicable fix removes the `*`. When the item is already a `ref T`, as with `v.iter().filter(|x| …)`, `*x` is the explicit read and `x` alone also works. The library declares every predicate with a bare `Self.Item` (`docs/library/iterators.md`); `ref Self.Item` would mean the same thing (§4.1). The type of a closure parameter never depends on which backend or pipeline checks it. (Decided 2026-10-19 by the review thread, on Gowtham's instruction to make the call. B-2026-10-13-6 and B-2026-10-13-32.)
+
 ---
 
 ## 6. Sharing (C7)
