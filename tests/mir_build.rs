@@ -5375,3 +5375,37 @@ fn main() {
         }
     }
 }
+
+/// `{v:N}` and `{v:0N}` on integers take the runtime's fast path; the
+/// text is the general `FormatSpec`'s, on both backends, for negatives,
+/// widths narrower than the number and unsigned extremes.
+#[test]
+fn mir_build_padded_integers_agree_with_the_interpreter() {
+    let src = r#"
+fn main() {
+    let xs: Vec[i64] = vec![0, 7, -7, 42, -12345, 9223372036854775807];
+    for x in xs.iter() {
+        println(f"[{x:5}] [{x:05}] [{x:2}] [{x:02}] [{x:0}]");
+    }
+    let u: u64 = 18446744073709551615;
+    let z: u8 = 3;
+    println(f"[{u:03}] [{z:03}] [{z:3}] [{-3:010}]");
+}
+"#;
+    let want = karac::mir::lower::run_source(src).expect("interp").output;
+    assert_eq!(
+        want,
+        "[    0] [00000] [ 0] [00] [0]\n\
+         [    7] [00007] [ 7] [07] [7]\n\
+         [   -7] [-0007] [-7] [-7] [-7]\n\
+         [   42] [00042] [42] [42] [42]\n\
+         [-12345] [-12345] [-12345] [-12345] [-12345]\n\
+         [9223372036854775807] [9223372036854775807] [9223372036854775807] [9223372036854775807] [9223372036854775807]\n\
+         [18446744073709551615] [003] [  3] [-000000003]\n"
+    );
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

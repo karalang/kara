@@ -246,7 +246,15 @@ pub unsafe extern "C" fn karac_mir_fmt_spec(
 ) {
     use crate::fmt::format_spec::FormatSpec;
     // SAFETY: the caller's contract.
-    let raw = String::from_utf8_lossy(unsafe { bytes(spec, spec_len) }).into_owned();
+    let spec_bytes = unsafe { bytes(spec, spec_len) };
+    if kind == 0 || kind == 1 {
+        if let Some(text) = padded_int(spec_bytes, lo, kind == 0) {
+            // SAFETY: the caller's contract.
+            unsafe { string_of(out, &text) };
+            return;
+        }
+    }
+    let raw = String::from_utf8_lossy(spec_bytes).into_owned();
     let wide = (u128::from(hi) << 64) | u128::from(lo);
     let text = match FormatSpec::parse(&raw) {
         Err(e) => format!("<bad format spec: {e}>"),
@@ -264,6 +272,41 @@ pub unsafe extern "C" fn karac_mir_fmt_spec(
     };
     // SAFETY: the caller's contract.
     unsafe { string_of(out, text.as_bytes()) };
+}
+
+/// `{v:N}` and `{v:0N}` for a 64-bit integer (`signed` says how to
+/// read `v`), without parsing a `FormatSpec`: right-aligned in `N`
+/// columns, padded with spaces, or with zeros after the sign. `None`
+/// for any other spec, which takes the general path.
+fn padded_int(spec: &[u8], v: u64, signed: bool) -> Option<Vec<u8>> {
+    if spec.is_empty() || spec.len() > 3 || !spec.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let zero = spec.len() > 1 && spec[0] == b'0';
+    let width = spec
+        .iter()
+        .fold(0usize, |w, c| w * 10 + usize::from(c - b'0'));
+    let neg = signed && (v as i64) < 0;
+    let mag = if signed { (v as i64).unsigned_abs() } else { v };
+    let mut d = [0u8; 20];
+    let i = digits(mag, &mut d);
+    let body = &d[i..];
+    let len = body.len() + usize::from(neg);
+    let pad = width.saturating_sub(len);
+    let mut t = Vec::with_capacity(len + pad);
+    if zero {
+        if neg {
+            t.push(b'-');
+        }
+        t.resize(t.len() + pad, b'0');
+    } else {
+        t.resize(pad, b' ');
+        if neg {
+            t.push(b'-');
+        }
+    }
+    t.extend_from_slice(body);
+    Some(t)
 }
 
 /// Writes a fresh `String` holding `b` at `out`.
@@ -2995,6 +3038,29 @@ pub unsafe extern "C" fn karac_mir_pool_drop(h: *mut MirPool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn padded_int_agrees_with_format_spec() {
+        use crate::fmt::format_spec::FormatSpec;
+        for spec in ["0", "1", "2", "02", "5", "05", "010", "20", "021"] {
+            for v in [0i64, 7, -7, 42, -42, 12345, -12345, i64::MIN, i64::MAX] {
+                let fast = super::padded_int(spec.as_bytes(), v as u64, true).unwrap();
+                let slow = FormatSpec::parse(spec).unwrap().apply_int(v);
+                assert_eq!(String::from_utf8(fast).unwrap(), slow, "{{{v}:{spec}}}");
+            }
+            for v in [0u64, 9, u64::MAX] {
+                let fast = super::padded_int(spec.as_bytes(), v, false).unwrap();
+                let slow = FormatSpec::parse(spec).unwrap().apply_uint(v);
+                assert_eq!(String::from_utf8(fast).unwrap(), slow, "{{{v}:{spec}}}");
+            }
+        }
+        for spec in ["", "x", "<5", "+5", "0005", ">05", ".2"] {
+            assert!(
+                super::padded_int(spec.as_bytes(), 1, true).is_none(),
+                "{spec}"
+            );
+        }
+    }
+
     use super::{
         karac_mir_fmt_begin, karac_mir_fmt_char, karac_mir_fmt_end_string, karac_mir_fmt_i64,
         karac_mir_fmt_str, karac_mir_fmt_u64, karac_mir_parse_int, merge_sort, RawVec,
