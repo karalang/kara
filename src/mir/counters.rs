@@ -63,7 +63,7 @@ const UNROLL_FULL_MAX_STATEMENTS: usize = 48;
 /// marks `llvm.loop.unroll.full`: a guard `i < K` with `K` a constant of
 /// at most 32, `i` set to a constant `>= 0` just before the loop and grown
 /// by a constant `>= 1` once per trip, and a body of scalar statements
-/// with no call, no drop and no loop inside it. `default<O2>`'s unroller
+/// and element accesses with no other call, no drop and no loop inside it. `default<O2>`'s unroller
 /// declines a 32-trip loop a little over its cost threshold (kata 190's
 /// bit reversal, which unrolled becomes one `llvm.bitreverse`); the hint
 /// is advisory, so a loop LLVM cannot count stays as it was.
@@ -78,6 +78,8 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
     let writes = local_writes(body);
     let scalar = |t: super::ty::Ty| match tys.kind(t) {
         TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Float(_) | TyKind::Unit => true,
+        // A borrow, which an element access takes of its sequence.
+        TyKind::Ref(_) | TyKind::MutRef(_) => true,
         TyKind::Never => true,
         TyKind::Tuple(ts) => ts.iter().all(|t| {
             matches!(
@@ -103,15 +105,27 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
             .all(|(b, _)| {
                 let data = &body.blocks[b];
                 statements += data.statements.len();
-                let term = matches!(
-                    data.terminator.kind,
+                let term = match &data.terminator.kind {
                     TerminatorKind::Goto { .. }
-                        | TerminatorKind::SwitchInt { .. }
-                        | TerminatorKind::Abort { .. }
-                        | TerminatorKind::Unreachable
-                );
+                    | TerminatorKind::SwitchInt { .. }
+                    | TerminatorKind::Abort { .. }
+                    | TerminatorKind::Unreachable => true,
+                    // An element access, which codegen open-codes as a
+                    // bounds check and an address (kata 265's rows).
+                    TerminatorKind::Call {
+                        func,
+                        destination,
+                        target: Some(_),
+                        ..
+                    } => element_access(func) && scalar(body.local(destination.local).ty),
+                    _ => false,
+                };
                 term && data.statements.iter().all(|s| match &s.kind {
-                    StatementKind::Assign(p, _) => scalar(body.local(p.local).ty),
+                    // A store into a scalar element (`cur[t] = ..`) is as
+                    // cheap to replicate as one into a scalar local.
+                    StatementKind::Assign(p, _) => {
+                        super::place_ty::place_ty(body, tys, p).is_ok_and(|pt| scalar(pt.ty))
+                    }
                     StatementKind::StorageLive(_)
                     | StatementKind::StorageDead(_)
                     | StatementKind::Nop => true,
@@ -162,6 +176,24 @@ pub fn unroll_full_latches(body: &Body, tys: &TyInterner) -> Vec<usize> {
         }
     }
     out
+}
+
+/// Whether `func` is a `Vec`'s, slice's or array's element access.
+fn element_access(func: &Operand) -> bool {
+    let Operand::Const(Const {
+        kind: ConstKind::FnDef(inst),
+        ..
+    }) = func
+    else {
+        return false;
+    };
+    let Some((ty, method)) = inst.name.rsplit_once('.') else {
+        return false;
+    };
+    matches!(method, "index" | "index_mut")
+        && ["Vec[", "Slice[", "MutSlice[", "Array["]
+            .iter()
+            .any(|p| ty.starts_with(p))
 }
 
 /// The constant `K` of guard block `gb`'s `i < K`: a literal, or a local
