@@ -1,0 +1,2619 @@
+// mini_uritemplate: uritemplate 4.1.1, the RFC 6570 URI Template library
+// that API clients use to turn hypermedia link templates such as
+// "/repos/{owner}/{repo}/issues{/number}{?state,page}" into URLs. The port
+// follows uritemplate's own code: URIVariable's parsing of an expression
+// (operator, names, explode, prefix and default), the four expansion
+// methods for the string, label/path, path-parameter and query operators,
+// urllib.parse.quote with its safe sets, URITemplate's expand and
+// partial, and the variables() ordered set, with the Python behaviour it
+// leans on: str() of numbers and booleans, truthiness, slicing, int() for
+// prefixes, sorted dict items and the errors all of these raise.
+//
+// It runs the RFC 6570 test suite (the uritemplate-test fixtures, the
+// suite's variables read as JSON), edge cases the suite does not reach, and
+// an API client report: calls through a forge's link templates, each URL
+// expanded at once and again through a client that bound some variables
+// first with partial(), with the calls where that changes the URL.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through uritemplate itself.
+
+// ---------------------------------------------------------------- chars
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ident_start(c: char) -> bool {
+    c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_ident(c: char) -> bool {
+    is_ident_start(c) or is_digit(c)
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn repeat(c: char, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(c);
+        k += 1;
+    }
+    s
+}
+
+// n >= 0 in the given base, with lower- or upper-case letters.
+fn to_base(n: i64, base: i64, upper: bool) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        let d = m % base;
+        if d < 10 {
+            rev.push(chr(48 + d));
+        } else if upper {
+            rev.push(chr(55 + d));
+        } else {
+            rev.push(chr(87 + d));
+        }
+        m = m / base;
+    }
+    let mut s = String.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 {
+        s.push(rev[k]);
+        k -= 1;
+    }
+    s
+}
+
+// Lower-case hex, zero-padded to at least width digits.
+fn hex(n: i64, width: i64) -> String {
+    let h = to_base(n, 16, false);
+    let n_digits = char_count(h);
+    if n_digits >= width {
+        h
+    } else {
+        f"{repeat('0', width - n_digits)}{h}"
+    }
+}
+
+fn is_hex(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' { chr(c as i64 + 32) } else { c }
+}
+
+
+// ------------------------------------------------------------ big integers
+
+// Magnitudes as 32-bit limbs, least significant first, with no high
+// zero limbs (zero is the empty vector).
+fn big_trim(a: mut ref Vec[u32]) {
+    while a.len() > 0 and a[a.len() - 1] == 0 {
+        a.pop();
+    }
+}
+
+fn big_mul_add(a: mut ref Vec[u32], m: u64, add: u64) {
+    let mut carry = add;
+    for i in 0..a.len() {
+        let t = (a[i] as u64) * m + carry;
+        a[i] = (t & 4294967295) as u32;
+        carry = t >> 32;
+    }
+    while carry > 0 {
+        a.push((carry & 4294967295) as u32);
+        carry = carry >> 32;
+    }
+}
+
+fn big_from_digits(ds: ref Vec[u8]) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    for d in ds.iter() {
+        big_mul_add(mut a, 10, *d as u64);
+    }
+    big_trim(mut a);
+    a
+}
+
+fn big_pow10(n: i64) -> Vec[u32] {
+    let mut a: Vec[u32] = [1];
+    let mut k = n;
+    while k >= 9 {
+        big_mul_add(mut a, 1000000000, 0);
+        k -= 9;
+    }
+    while k > 0 {
+        big_mul_add(mut a, 10, 0);
+        k -= 1;
+    }
+    a
+}
+
+fn big_mul(a: ref Vec[u32], b: ref Vec[u32]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (a[i] as u64) * (b[j] as u64) + (out[i + j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_bitlen(a: ref Vec[u32]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n: i64 = 0;
+    while top > 0 {
+        n += 1;
+        top = top >> 1;
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn big_shl(a: ref Vec[u32], bits: i64) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(bits / 32) {
+        out.push(0);
+    }
+    let s = bits % 32;
+    let mut carry: u64 = 0;
+    for i in 0..a.len() {
+        let t = ((a[i] as u64) << s) | carry;
+        out.push((t & 4294967295) as u32);
+        carry = t >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_shr1(a: mut ref Vec[u32]) {
+    let mut i = 0;
+    while i < a.len() {
+        let hi: u32 = if i + 1 < a.len() { a[i + 1] & 1 } else { 0 };
+        a[i] = (a[i] >> 1) | (hi << 31);
+        i += 1;
+    }
+    big_trim(mut a);
+}
+
+fn big_cmp(a: ref Vec[u32], b: ref Vec[u32]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+// a -= b, where a >= b.
+fn big_sub(a: mut ref Vec[u32], b: ref Vec[u32]) {
+    let mut borrow: i64 = 0;
+    for i in 0..a.len() {
+        let bv: i64 = if i < b.len() { b[i] as i64 } else { 0 };
+        let mut t = (a[i] as i64) - bv - borrow;
+        if t < 0 {
+            t += 4294967296;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        a[i] = t as u32;
+    }
+    big_trim(mut a);
+}
+
+// ------------------------------------------------------------ decimal to float
+
+// The f64 nearest to digits * 10**exp10, ties to even, as CPython's
+// float() gives it. digits holds the digit values without leading zeros.
+fn decimal_to_f64(digits: ref Vec[u8], exp10: i64, neg: bool) -> f64 {
+    let mut ds = digits.clone();
+    let mut e10 = exp10;
+    while ds.len() > 0 and ds[ds.len() - 1] == 0 {
+        ds.pop();
+        e10 += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if ds.len() == 0 {
+        return sign * 0.0;
+    }
+    let n = ds.len();
+    if n + e10 > 310 {
+        return sign * f64.INFINITY;
+    }
+    if n + e10 < -330 {
+        return sign * 0.0;
+    }
+    // The digits and the power of ten are exact, so one operation
+    // rounds correctly.
+    if n <= 15 and e10 >= -22 and e10 <= 22 {
+        let mut m: f64 = 0.0;
+        for d in ds.iter() {
+            m = m * 10.0 + (*d as f64);
+        }
+        let mut p: f64 = 1.0;
+        let mut k = if e10 < 0 { -e10 } else { e10 };
+        while k > 0 {
+            p *= 10.0;
+            k -= 1;
+        }
+        return sign * (if e10 < 0 { m / p } else { m * p });
+    }
+    let mut num = big_from_digits(ds);
+    let mut den: Vec[u32] = [1];
+    if e10 >= 0 {
+        num = big_mul(num, big_pow10(e10));
+    } else {
+        den = big_pow10(-e10);
+    }
+    // q = floor(num * 2**s / den) with 54 bits: the 53 of the result
+    // and one to round on.
+    let mut s = 54 - (big_bitlen(num) - big_bitlen(den));
+    if s > 1075 {
+        s = 1075;
+    }
+    let mut q: u64 = 0;
+    let mut rem: Vec[u32] = Vec.new();
+    let mut tries = 0;
+    while tries < 2 {
+        let mut n2 = if s > 0 { big_shl(num, s) } else { num.clone() };
+        let d2 = if s < 0 { big_shl(den, -s) } else { den.clone() };
+        let mut dd = big_shl(d2, 55);
+        q = 0;
+        let mut bit = 55;
+        while bit >= 0 {
+            if big_cmp(n2, dd) >= 0 {
+                big_sub(mut n2, dd);
+                q = q | ((1 as u64) << bit);
+            }
+            big_shr1(mut dd);
+            bit -= 1;
+        }
+        rem = n2;
+        if q >= ((1 as u64) << 54) and s < 1075 {
+            s -= 1;
+            tries += 1;
+            continue;
+        }
+        if q < ((1 as u64) << 53) and s < 1075 {
+            s += 1;
+            tries += 1;
+            continue;
+        }
+        break;
+    }
+    let mut mant = q >> 1;
+    let round = (q & 1) == 1;
+    let sticky = rem.len() > 0;
+    if round and (sticky or (mant & 1) == 1) {
+        mant += 1;
+    }
+    // The value is mant * 2**(1 - s).
+    let mut e2 = 1 - s;
+    if mant == ((1 as u64) << 53) {
+        mant = mant >> 1;
+        e2 += 1;
+    }
+    let bits: u64 = if mant < ((1 as u64) << 52) {
+        // Subnormal: s is 1075 and the exponent field is zero.
+        mant
+    } else {
+        let biased = e2 + 1075;
+        if biased >= 2047 {
+            return sign * f64.INFINITY;
+        }
+        ((biased as u64) << 52) | (mant & (((1 as u64) << 52) - 1))
+    };
+    sign * bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ float to decimal
+
+fn big_to_digits(a: ref Vec[u32]) -> Vec[char] {
+    if a.len() == 0 {
+        return ['0'];
+    }
+    let mut x = a.clone();
+    let mut chunks: Vec[u64] = Vec.new();
+    while x.len() > 0 {
+        let mut rem: u64 = 0;
+        let mut i = x.len() - 1;
+        while i >= 0 {
+            let cur = (rem << 32) | (x[i] as u64);
+            x[i] = (cur / 1000000000) as u32;
+            rem = cur % 1000000000;
+            i -= 1;
+        }
+        big_trim(mut x);
+        chunks.push(rem);
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut k = chunks.len() - 1;
+    while k >= 0 {
+        let s = chunks[k].to_string();
+        if k < chunks.len() - 1 {
+            for _ in 0..(9 - s.len()) {
+                out.push('0');
+            }
+        }
+        for c in s.chars() {
+            out.push(c);
+        }
+        k -= 1;
+    }
+    out
+}
+
+// The exact decimal value of a finite, non-negative x: its digits with no
+// leading zeros (none for zero) and the decimal exponent of the first.
+fn exact_digits(x: f64) -> (Vec[char], i64) {
+    let bits = x.to_bits();
+    let biased = ((bits >> 52) & 2047) as i64;
+    let frac = bits & ((1 as u64 << 52) - 1);
+    let m: u64 = if biased == 0 { frac } else { frac | (1 as u64 << 52) };
+    let q = if biased == 0 { -1074 } else { biased - 1075 };
+    if m == 0 {
+        return (Vec.new(), 0);
+    }
+    let mut a: Vec[u32] = Vec.new();
+    big_mul_add(mut a, 1, m);
+    let mut e10 = 0;
+    if q >= 0 {
+        a = big_shl(a, q);
+    } else {
+        // m * 2**q == m * 5**-q * 10**q
+        let mut k = 0;
+        while k < -q {
+            big_mul_add(mut a, 5, 0);
+            k += 1;
+        }
+        e10 = q;
+    }
+    let mut d = big_to_digits(a);
+    while d.len() > 1 and d[d.len() - 1] == '0' {
+        d.pop();
+        e10 += 1;
+    }
+    let n = d.len();
+    (d, e10 + n - 1)
+}
+
+// The exact digits (d, e) rounded half-to-even to keep the digits whose
+// place is at least 10**place: the kept digits (possibly empty when all
+// round away) and the exponent of the first.
+fn round_place(d: ref Vec[char], e: i64, place: i64) -> (Vec[char], i64) {
+    let n = e - place + 1;
+    if n >= d.len() {
+        return (d.clone(), e);
+    }
+    if n < 0 {
+        return (Vec.new(), place);
+    }
+    let mut keep: Vec[char] = Vec.new();
+    for k in 0..n {
+        keep.push(d[k]);
+    }
+    let first = d[n];
+    let mut rest = false;
+    for k in (n + 1)..d.len() {
+        if d[k] != '0' {
+            rest = true;
+        }
+    }
+    let odd = n > 0 and (d[n - 1] as i64 - 48) % 2 == 1;
+    let up = first > '5' or (first == '5' and (rest or odd));
+    if not up {
+        while keep.len() > 0 and keep[keep.len() - 1] == '0' {
+            keep.pop();
+        }
+        if keep.len() == 0 {
+            return (Vec.new(), place);
+        }
+        return (keep, e);
+    }
+    let mut j = keep.len() - 1;
+    while j >= 0 and keep[j] == '9' {
+        keep.pop();
+        j -= 1;
+    }
+    if j < 0 {
+        return (['1'], e + 1);
+    }
+    keep[j] = chr(keep[j] as i64 + 1);
+    (keep, e)
+}
+
+fn digit_vals(d: ref Vec[char]) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for c in d.iter() {
+        v.push((*c as i64 - 48) as u8);
+    }
+    v
+}
+
+// The shortest digits that read back as x (x finite and non-negative).
+// A rounding that reads back keeps reading back with more digits, so the
+// count is found by bisection.
+fn shortest_digits(x: f64) -> (Vec[char], i64) {
+    let (d, e) = exact_digits(x);
+    if d.len() == 0 {
+        return (['0'], 0);
+    }
+    let mut lo = 1;
+    let mut hi = 17;
+    while lo < hi {
+        let p = (lo + hi) / 2;
+        let (r, re) = round_place(d, e, e - p + 1);
+        if r.len() > 0 and decimal_to_f64(digit_vals(r), re - r.len() + 1, false) == x {
+            hi = p;
+        } else {
+            lo = p + 1;
+        }
+    }
+    round_place(d, e, e - lo + 1)
+}
+
+fn exp_text(e: i64, upper: bool) -> String {
+    let mark = if upper { 'E' } else { 'e' };
+    let sign = if e < 0 { '-' } else { '+' };
+    let a = if e < 0 { -e } else { e };
+    if a < 10 {
+        f"{mark}{sign}0{a}"
+    } else {
+        f"{mark}{sign}{a}"
+    }
+}
+
+fn is_neg(x: f64) -> bool {
+    (x.to_bits() >> 63) == 1
+}
+
+// repr(float).
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    let sign = if is_neg(x) { "-" } else { "" };
+    let a = if is_neg(x) { -x } else { x };
+    if a == f64.INFINITY {
+        return f"{sign}inf";
+    }
+    let (d, e) = shortest_digits(a);
+    let decpt = e + 1;
+    let mut s = sign.to_string();
+    if decpt <= -4 or decpt > 16 {
+        s.push(d[0]);
+        if d.len() > 1 {
+            s.push('.');
+            s.push_str(text(d, 1, d.len()));
+        }
+        s.push_str(exp_text(e, false));
+    } else if decpt <= 0 {
+        s.push_str("0.");
+        s.push_str(repeat('0', -decpt));
+        s.push_str(text(d, 0, d.len()));
+    } else if decpt >= d.len() {
+        s.push_str(text(d, 0, d.len()));
+        s.push_str(repeat('0', decpt - d.len()));
+        s.push_str(".0");
+    } else {
+        s.push_str(text(d, 0, decpt));
+        s.push('.');
+        s.push_str(text(d, decpt, d.len()));
+    }
+    s
+}
+
+// x (finite, non-negative) with `precision` digits after the point, as
+// '%.Nf' writes it: the integer digits and the fraction (with its point).
+fn fixed_text(x: f64, precision: i64, alt: bool) -> (String, String) {
+    let (d, e) = exact_digits(x);
+    let (r, re) = if d.len() == 0 { (Vec.new(), 0) } else { round_place(d, e, -precision) };
+    // the digit at place p (0 when outside r)
+    let mut int_part = String.new();
+    if r.len() == 0 or re < 0 {
+        int_part.push('0');
+    } else {
+        for i in 0..(re + 1) {
+            int_part.push(if i < r.len() { r[i] } else { '0' });
+        }
+    }
+    let mut frac = String.new();
+    if precision > 0 or alt {
+        frac.push('.');
+    }
+    for p in 1..(precision + 1) {
+        let k = re + p;
+        frac.push(if r.len() > 0 and k >= 0 and k < r.len() { r[k] } else { '0' });
+    }
+    (int_part, frac)
+}
+
+// x (finite, non-negative) as '%.Ne' writes it.
+fn sci_text(x: f64, precision: i64, alt: bool, upper: bool) -> (String, String) {
+    let (d, e) = exact_digits(x);
+    let (r, re) = if d.len() == 0 { (['0'], 0) } else { round_place(d, e, e - precision) };
+    let mut frac = String.new();
+    if precision > 0 or alt {
+        frac.push('.');
+    }
+    for k in 1..(precision + 1) {
+        frac.push(if k < r.len() { r[k] } else { '0' });
+    }
+    frac.push_str(exp_text(re, upper));
+    (r[0].to_string(), frac)
+}
+
+// ------------------------------------------------------------ float() and int() of a str
+
+// A float literal's text (digits, a point, an exponent) to the nearest
+// f64.
+fn parse_float_text(t: ref Vec[char], neg: bool) -> f64 {
+    let mut digits: Vec[u8] = Vec.new();
+    let mut exp10: i64 = 0;
+    let mut i = 0;
+    let mut point = false;
+    while i < t.len() {
+        let c = t[i];
+        if is_digit(c) {
+            let d = (c as i64 - 48) as u8;
+            if digits.len() > 0 or d != 0 {
+                digits.push(d);
+            }
+            if point {
+                exp10 -= 1;
+            }
+        } else if c == '.' {
+            point = true;
+        } else if c == 'e' or c == 'E' {
+            let mut j = i + 1;
+            let mut eneg = false;
+            if j < t.len() and (t[j] == '+' or t[j] == '-') {
+                eneg = t[j] == '-';
+                j += 1;
+            }
+            let mut ev = 0;
+            while j < t.len() {
+                ev = ev * 10 + (t[j] as i64 - 48);
+                if ev > 100000 {
+                    ev = 100000;
+                }
+                j += 1;
+            }
+            exp10 += if eneg { -ev } else { ev };
+            break;
+        }
+        i += 1;
+    }
+    decimal_to_f64(digits, exp10, neg)
+}
+
+fn strip_py_space(s: ref String) -> Vec[char] {
+    let cs = to_chars(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out: Vec[char] = Vec.new();
+    for k in a..b {
+        out.push(cs[k]);
+    }
+    out
+}
+
+// int(s): whitespace, a sign, digits with single underscores between.
+fn py_int_str(s: ref String) -> Option[i64] {
+    let t = strip_py_space(s);
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v = 0;
+    let mut prev_digit = false;
+    while i < t.len() {
+        let c = t[i];
+        if c == '_' {
+            if not prev_digit or i + 1 == t.len() {
+                return None;
+            }
+            prev_digit = false;
+        } else if is_digit(c) {
+            v = v * 10 + (c as i64 - 48);
+            prev_digit = true;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// float(s): whitespace, a sign, then inf, infinity, nan, or a decimal
+// number with single underscores between digits.
+fn py_float_str(s: ref String) -> Option[f64] {
+    let t = strip_py_space(s);
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let mut word = String.new();
+    for k in i..t.len() {
+        word.push(ascii_lower(t[k]));
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if word == "inf" or word == "infinity" {
+        return Some(sign * f64.INFINITY);
+    }
+    if word == "nan" {
+        return Some(f64.INFINITY - f64.INFINITY);
+    }
+    let mut body: Vec[char] = Vec.new();
+    let mut seen = false;
+    let mut point = false;
+    let mut exp = false;
+    let mut exp_digit = false;
+    while i < t.len() {
+        let c = t[i];
+        if is_digit(c) {
+            if exp {
+                exp_digit = true;
+            } else {
+                seen = true;
+            }
+        } else if c == '.' and not point and not exp {
+            point = true;
+        } else if (c == 'e' or c == 'E') and seen and not exp {
+            exp = true;
+        } else if (c == '+' or c == '-') and exp and (t[i - 1] == 'e' or t[i - 1] == 'E') {
+        } else if c == '_' and i > 0 and i + 1 < t.len() and is_digit(t[i - 1]) and is_digit(t[i + 1]) {
+            i += 1;
+            continue;
+        } else {
+            return None;
+        }
+        body.push(c);
+        i += 1;
+    }
+    if not seen or (exp and not exp_digit) {
+        return None;
+    }
+    Some(parse_float_text(body, neg))
+}
+
+// ---------------------------------------------------------------- Python's str
+
+// str.isspace, the set str.strip(), int() and float() skip.
+fn is_py_space(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0
+        or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028
+        or n == 0x2029 or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+// str.isprintable, for repr: everything but controls, separators other
+// than the space, and format characters.
+fn is_py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 32 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x2064) or n == 0x3000 or n == 0xfeff {
+        return false;
+    }
+    true
+}
+
+fn py_strip(s: ref String) -> String {
+    let cs = to_chars(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    text(cs, a, b)
+}
+
+// repr(s).
+fn py_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if is_py_printable(c) {
+            out.push(c);
+        } else if (c as i64) < 0x100 {
+            out.push_str(f"\\x{hex(c as i64, 2)}");
+        } else if (c as i64) < 0x10000 {
+            out.push_str(f"\\u{hex(c as i64, 4)}");
+        } else {
+            out.push_str(f"\\U{hex(c as i64, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn py_list_repr(items: ref Vec[String]) -> String {
+    let mut out = "[".to_string();
+    for k in 0..items.len() {
+        if k > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(items[k]));
+    }
+    out.push(']');
+    out
+}
+
+// int(s), with ValueError's message.
+fn py_int(s: ref String) -> Result[i64, String] {
+    match py_int_str(s) {
+        Some(v) => Ok(v),
+        None => Err(f"invalid literal for int() with base 10: {py_repr(s)}"),
+    }
+}
+
+// float(s), with ValueError's message.
+fn py_float(s: ref String) -> Result[f64, String] {
+    match py_float_str(s) {
+        Some(v) => Ok(v),
+        None => Err(f"could not convert string to float: {py_repr(s)}"),
+    }
+}
+
+// round(x) for a float: to the nearest integer, ties to even.
+fn py_round(x: f64) -> Result[i64, String] {
+    if x != x {
+        return Err("cannot convert float NaN to integer".to_string());
+    }
+    if x == f64.INFINITY or x == -f64.INFINITY {
+        return Err("cannot convert float infinity to integer".to_string());
+    }
+    let fl = x.floor();
+    let diff = x - fl;
+    let base = fl as i64;
+    if diff > 0.5 {
+        Ok(base + 1)
+    } else if diff < 0.5 {
+        Ok(base)
+    } else if base % 2 == 0 {
+        Ok(base)
+    } else {
+        Ok(base + 1)
+    }
+}
+
+// a % b for floats, with the sign of b.
+fn py_fmod(a: f64, b: f64) -> f64 {
+    let r = a % b;
+    if r != 0.0 and ((r < 0.0) != (b < 0.0)) { r + b } else { r }
+}
+
+// f"{x:.Nf}" for x >= 0.
+fn fixed(x: f64, places: i64) -> String {
+    let (i, f) = fixed_text(x, places, false);
+    f"{i}{f}"
+}
+
+// The text of s before the first `sep`, as s.split(sep)[0].
+fn before(s: ref String, sep: char) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == sep {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+// ---------------------------------------------------------------- JSON values
+
+// A value as json.loads gives it to uritemplate. Pairs is a list of
+// (key, value) tuples, which JSON cannot spell: the jobs write it as an
+// object whose only key is "__pairs__".
+#[derive(Clone)]
+enum Val {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[Val]),
+    Dict(Vec[Member]),
+    Pairs(Vec[Member]),
+}
+
+#[derive(Clone)]
+struct Member {
+    key: String,
+    val: Val,
+}
+
+struct JsonReader {
+    cs: Vec[char],
+    i: i64,
+}
+
+fn json_parse(s: ref String) -> Result[Val, String] {
+    let mut p = JsonReader { cs: to_chars(s), i: 0 };
+    let v = json_value(mut p)?;
+    json_ws(mut p);
+    if p.i != p.cs.len() {
+        return Err(f"extra data at {p.i}");
+    }
+    Ok(v)
+}
+
+fn json_ws(p: mut ref JsonReader) {
+    while p.i < p.cs.len() {
+        let c = p.cs[p.i];
+        if c == ' ' or c == '\n' or c == '\t' or c == '\r' {
+            p.i += 1;
+        } else {
+            break;
+        }
+    }
+}
+
+fn json_word(p: mut ref JsonReader, w: ref String) -> bool {
+    let ws = to_chars(w);
+    for k in 0..ws.len() {
+        if p.i + k >= p.cs.len() or p.cs[p.i + k] != ws[k] {
+            return false;
+        }
+    }
+    p.i += ws.len();
+    true
+}
+
+fn json_value(p: mut ref JsonReader) -> Result[Val, String] {
+    json_ws(mut p);
+    if p.i >= p.cs.len() {
+        return Err("unexpected end".to_string());
+    }
+    let c = p.cs[p.i];
+    if c == '{' {
+        p.i += 1;
+        let mut members: Vec[Member] = Vec.new();
+        json_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == '}' {
+            p.i += 1;
+            return Ok(Val.Dict(members));
+        }
+        loop {
+            json_ws(mut p);
+            let key = json_string(mut p)?;
+            json_ws(mut p);
+            if p.i >= p.cs.len() or p.cs[p.i] != ':' {
+                return Err(f"expected ':' at {p.i}");
+            }
+            p.i += 1;
+            let val = json_value(mut p)?;
+            members.push(Member { key: key, val: val });
+            json_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+            } else if p.i < p.cs.len() and p.cs[p.i] == '}' {
+                p.i += 1;
+                break;
+            } else {
+                return Err(f"expected ',' or '}}' at {p.i}");
+            }
+        }
+        return Ok(object_val(members));
+    }
+    if c == '[' {
+        p.i += 1;
+        let mut items: Vec[Val] = Vec.new();
+        json_ws(mut p);
+        if p.i < p.cs.len() and p.cs[p.i] == ']' {
+            p.i += 1;
+            return Ok(Val.List(items));
+        }
+        loop {
+            items.push(json_value(mut p)?);
+            json_ws(mut p);
+            if p.i < p.cs.len() and p.cs[p.i] == ',' {
+                p.i += 1;
+            } else if p.i < p.cs.len() and p.cs[p.i] == ']' {
+                p.i += 1;
+                break;
+            } else {
+                return Err(f"expected ',' or ']' at {p.i}");
+            }
+        }
+        return Ok(Val.List(items));
+    }
+    if c == '"' {
+        return Ok(Val.Str(json_string(mut p)?));
+    }
+    if json_word(mut p, "true") {
+        return Ok(Val.Bool(true));
+    }
+    if json_word(mut p, "false") {
+        return Ok(Val.Bool(false));
+    }
+    if json_word(mut p, "null") {
+        return Ok(Val.Null);
+    }
+    let start = p.i;
+    let mut is_float = false;
+    while p.i < p.cs.len() {
+        let d = p.cs[p.i];
+        if is_digit(d) or d == '-' or d == '+' {
+            p.i += 1;
+        } else if d == '.' or d == 'e' or d == 'E' {
+            is_float = true;
+            p.i += 1;
+        } else {
+            break;
+        }
+    }
+    let t = text(p.cs, start, p.i);
+    if t.len() == 0 {
+        return Err(f"unexpected {py_repr(c.to_string())} at {start}");
+    }
+    if is_float {
+        match py_float_str(t) {
+            Some(f) => Ok(Val.Float(f)),
+            None => Err(f"bad number {t}"),
+        }
+    } else {
+        match py_int_str(t) {
+            Some(n) => Ok(Val.Int(n)),
+            None => Err(f"bad number {t}"),
+        }
+    }
+}
+
+// An object, or the list of tuples spelled {"__pairs__": [[k, v], ...]}.
+fn object_val(members: own Vec[Member]) -> Val {
+    if members.len() == 1 and members[0].key == "__pairs__" {
+        let mut out: Vec[Member] = Vec.new();
+        if let Val.List(items) = members[0].val.clone() {
+            for item in items {
+                if let Val.List(kv) = item {
+                    let key = match kv[0].clone() {
+                        Val.Str(k) => k,
+                        _ => String.new(),
+                    };
+                    out.push(Member { key: key, val: kv[1].clone() });
+                }
+            }
+        }
+        if out.len() == 0 {
+            return Val.List(Vec.new());
+        }
+        return Val.Pairs(out);
+    }
+    Val.Dict(members)
+}
+
+fn hex_digit(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 97 {
+        n - 87
+    } else if n >= 65 {
+        n - 55
+    } else {
+        n - 48
+    }
+}
+
+fn json_hex4(p: mut ref JsonReader) -> i64 {
+    let mut v = 0;
+    for k in 0..4 {
+        v = v * 16 + hex_digit(p.cs[p.i + k]);
+    }
+    p.i += 4;
+    v
+}
+
+fn json_string(p: mut ref JsonReader) -> Result[String, String] {
+    if p.i >= p.cs.len() or p.cs[p.i] != '"' {
+        return Err(f"expected a string at {p.i}");
+    }
+    p.i += 1;
+    let mut out = String.new();
+    loop {
+        if p.i >= p.cs.len() {
+            return Err("unterminated string".to_string());
+        }
+        let c = p.cs[p.i];
+        if c == '"' {
+            p.i += 1;
+            return Ok(out);
+        }
+        if c != '\\' {
+            out.push(c);
+            p.i += 1;
+            continue;
+        }
+        let e = p.cs[p.i + 1];
+        p.i += 2;
+        if e == 'n' {
+            out.push('\n');
+        } else if e == 't' {
+            out.push('\t');
+        } else if e == 'r' {
+            out.push('\r');
+        } else if e == 'b' {
+            out.push(chr(8));
+        } else if e == 'f' {
+            out.push(chr(12));
+        } else if e == 'u' {
+            let mut v = json_hex4(mut p);
+            if v >= 0xd800 and v < 0xdc00 and p.i + 1 < p.cs.len() and p.cs[p.i] == '\\' and p.cs[p.i + 1] == 'u' {
+                p.i += 2;
+                let lo = json_hex4(mut p);
+                v = 0x10000 + (v - 0xd800) * 1024 + (lo - 0xdc00);
+            }
+            out.push(chr(v));
+        } else {
+            out.push(e);
+        }
+    }
+}
+
+// The member named `key`, the last one if a name repeats, as a dict keeps it.
+fn member(ms: ref Vec[Member], key: ref String) -> Option[Val] {
+    let mut found: Option[Val] = None;
+    for m in ms {
+        if m.key == key {
+            found = Some(m.val.clone());
+        }
+    }
+    found
+}
+
+fn json_text(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => s.clone(),
+        _ => String.new(),
+    }
+}
+
+// ---------------------------------------------------------------- Python's view of a value
+
+fn truthy(v: ref Val) -> bool {
+    match v {
+        Val.Null => false,
+        Val.Bool(b) => *b,
+        Val.Int(n) => *n != 0,
+        Val.Float(f) => *f != 0.0,
+        Val.Str(s) => s.len() > 0,
+        Val.List(xs) => xs.len() > 0,
+        Val.Dict(ms) => ms.len() > 0,
+        Val.Pairs(ms) => ms.len() > 0,
+    }
+}
+
+fn type_name(v: ref Val) -> String {
+    let t = match v {
+        Val.Null => "NoneType",
+        Val.Bool(_) => "bool",
+        Val.Int(_) => "int",
+        Val.Float(_) => "float",
+        Val.Str(_) => "str",
+        Val.List(_) => "list",
+        Val.Dict(_) => "dict",
+        Val.Pairs(_) => "list",
+    };
+    t.to_string()
+}
+
+fn bool_text(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// repr() of a value.
+fn val_repr(v: ref Val) -> String {
+    match v {
+        Val.Str(s) => py_repr(s),
+        Val.List(xs) => {
+            let mut parts: Vec[String] = Vec.new();
+            for x in xs {
+                parts.push(val_repr(x));
+            }
+            f"[{parts.join(", ")}]"
+        }
+        Val.Dict(ms) => {
+            let mut parts: Vec[String] = Vec.new();
+            for m in ms {
+                parts.push(f"{py_repr(m.key)}: {val_repr(m.val)}");
+            }
+            f"{{{parts.join(", ")}}}"
+        }
+        Val.Pairs(ms) => {
+            let mut parts: Vec[String] = Vec.new();
+            for m in ms {
+                parts.push(f"({py_repr(m.key)}, {val_repr(m.val)})");
+            }
+            f"[{parts.join(", ")}]"
+        }
+        _ => py_str(v),
+    }
+}
+
+// str() of a value.
+fn py_str(v: ref Val) -> String {
+    match v {
+        Val.Null => "None".to_string(),
+        Val.Bool(b) => bool_text(*b),
+        Val.Int(n) => f"{n}",
+        Val.Float(f) => float_repr(*f),
+        Val.Str(s) => s.clone(),
+        _ => val_repr(v),
+    }
+}
+
+// ---------------------------------------------------------------- urllib.parse.quote
+
+fn is_always_safe(b: u8) -> bool {
+    (b >= b'a' and b <= b'z') or (b >= b'A' and b <= b'Z') or (b >= b'0' and b <= b'9')
+        or b == b'_' or b == b'.' or b == b'-' or b == b'~'
+}
+
+// The reserved set, safe for the + and # operators.
+fn is_reserved(b: u8) -> bool {
+    let r = ":/?#[]@!$&'()*+,;=".bytes().to_vec();
+    for x in r {
+        if x == b {
+            return true;
+        }
+    }
+    false
+}
+
+fn hex_upper(n: u8) -> char {
+    let d = "0123456789ABCDEF".bytes().to_vec();
+    d[n as i64] as char
+}
+
+// variable.quote: str() of the value, as UTF-8, percent-encoded but for
+// the always-safe bytes and, when `reserved`, the reserved set.
+fn quote(v: ref Val, reserved: bool) -> String {
+    let s = py_str(v);
+    let mut out = String.new();
+    for b in s.bytes() {
+        if is_always_safe(b) or (reserved and is_reserved(b)) {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(hex_upper(b / 16));
+            out.push(hex_upper(b % 16));
+        }
+    }
+    out
+}
+
+// `value[:prefix] if prefix else value`.
+fn truncate(v: ref Val, prefix: Option[i64]) -> Result[Val, String] {
+    let p = match prefix {
+        Some(p) => p,
+        None => return Ok(v.clone()),
+    };
+    if p == 0 {
+        return Ok(v.clone());
+    }
+    match v {
+        Val.Str(s) => {
+            let cs = to_chars(s);
+            let n = cs.len();
+            let mut end = if p < 0 { n + p } else { p };
+            if end < 0 {
+                end = 0;
+            }
+            if end > n {
+                end = n;
+            }
+            Ok(Val.Str(text(cs, 0, end)))
+        }
+        _ => Err(f"TypeError: '{type_name(v)}' object is not subscriptable"),
+    }
+}
+
+// ---------------------------------------------------------------- URIVariable
+
+struct VarSpec {
+    name: String,
+    explode: bool,
+    prefix: Option[i64],
+}
+
+struct UriVar {
+    original: String,
+    operator: String,
+    start: String,
+    join_str: String,
+    safe: bool,
+    specs: Vec[VarSpec],
+    default_names: Vec[String],
+    default_vals: Vec[String],
+}
+
+fn is_operator(c: char) -> bool {
+    c == '+' or c == '#' or c == '.' or c == '/' or c == ';' or c == '?' or c == '&' or c == '|'
+        or c == '!' or c == '@'
+}
+
+// s.split(sep, 1), for an s that holds sep.
+fn split_once(s: ref String, sep: char) -> (String, String) {
+    let cs = to_chars(s);
+    let mut k = 0;
+    while cs[k] != sep {
+        k += 1;
+    }
+    (text(cs, 0, k), text(cs, k + 1, cs.len()))
+}
+
+fn uri_var(var: ref String) -> Result[UriVar, String] {
+    let cs = to_chars(var);
+    let mut operator = String.new();
+    let mut list_str = var.clone();
+    if is_operator(cs[0]) {
+        operator.push(cs[0]);
+        list_str = text(cs, 1, cs.len());
+    }
+    let mut specs: Vec[VarSpec] = Vec.new();
+    let mut default_names: Vec[String] = Vec.new();
+    let mut default_vals: Vec[String] = Vec.new();
+    for part in list_str.split(",") {
+        let one = part.to_string();
+        let mut name = one.clone();
+        let mut default_val = String.new();
+        if one.contains("=") {
+            let (n, d) = split_once(one, '=');
+            name = n;
+            default_val = d;
+        }
+        let mut explode = false;
+        if name.ends_with("*") {
+            explode = true;
+            let ncs = to_chars(name);
+            name = text(ncs, 0, ncs.len() - 1);
+        }
+        let mut prefix: Option[i64] = None;
+        if name.contains(":") {
+            let (n, ps) = split_once(name, ':');
+            name = n;
+            match py_int(ps) {
+                Ok(p) => prefix = Some(p),
+                Err(e) => return Err(f"ValueError: {e}"),
+            }
+        }
+        if default_val.len() > 0 {
+            let mut found = false;
+            for k in 0..default_names.len() {
+                if default_names[k] == name {
+                    default_vals[k] = default_val.clone();
+                    found = true;
+                }
+            }
+            if not found {
+                default_names.push(name.clone());
+                default_vals.push(default_val.clone());
+            }
+        }
+        specs.push(VarSpec { name: name, explode: explode, prefix: prefix });
+    }
+    // post_parse
+    let mut start = operator.clone();
+    let mut join_str = operator.clone();
+    if operator == "+" {
+        start = String.new();
+    }
+    if operator == "+" or operator == "#" or operator == "" {
+        join_str = ",".to_string();
+    }
+    if operator == "#" {
+        start = "#".to_string();
+    }
+    if operator == "?" {
+        start = "?".to_string();
+        join_str = "&".to_string();
+    }
+    let safe = operator == "+" or operator == "#";
+    Ok(UriVar {
+        original: var.clone(),
+        operator: operator,
+        start: start,
+        join_str: join_str,
+        safe: safe,
+        specs: specs,
+        default_names: default_names,
+        default_vals: default_vals,
+    })
+}
+
+fn default_of(u: ref UriVar, name: ref String) -> Option[String] {
+    for k in 0..u.default_names.len() {
+        if u.default_names[k] == name {
+            return Some(u.default_vals[k].clone());
+        }
+    }
+    None
+}
+
+// The items of a dict, sorted, or a list of tuples as it stands.
+fn items_of(v: ref Val) -> Vec[Member] {
+    match v {
+        Val.Dict(ms) => {
+            let mut out = ms.clone();
+            out.sort_by(|a, b| a.key.cmp(b.key));
+            out
+        }
+        Val.Pairs(ms) => ms.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn is_none(v: ref Val) -> bool {
+    match v {
+        Val.Null => true,
+        _ => false,
+    }
+}
+
+fn is_scalar(v: ref Val) -> bool {
+    match v {
+        Val.Bool(_) => true,
+        Val.Int(_) => true,
+        Val.Float(_) => true,
+        Val.Str(_) => true,
+        _ => false,
+    }
+}
+
+fn is_mapping(v: ref Val) -> bool {
+    match v {
+        Val.Dict(_) => true,
+        Val.Pairs(_) => true,
+        _ => false,
+    }
+}
+
+fn list_items(v: ref Val) -> Vec[Val] {
+    match v {
+        Val.List(xs) => xs.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn is_list(v: ref Val) -> bool {
+    match v {
+        Val.List(_) => true,
+        _ => false,
+    }
+}
+
+fn container_len(v: ref Val) -> i64 {
+    match v {
+        Val.List(xs) => xs.len(),
+        Val.Dict(ms) => ms.len(),
+        Val.Pairs(ms) => ms.len(),
+        _ => 1,
+    }
+}
+
+// URIVariable._query_expansion, for ? and &.
+fn query_expansion(u: ref UriVar, name: ref String, value: ref Val, explode: bool, prefix: Option[i64]) -> Result[Option[String], String] {
+    let safe = u.safe;
+    if is_list(value) {
+        let xs = list_items(value);
+        if xs.len() == 0 {
+            return Ok(None);
+        }
+        let mut parts: Vec[String] = Vec.new();
+        if explode {
+            for x in xs {
+                parts.push(f"{name}={quote(x, safe)}");
+            }
+            return Ok(Some(parts.join(u.join_str)));
+        }
+        for x in xs {
+            parts.push(quote(x, safe));
+        }
+        return Ok(Some(f"{name}={parts.join(",")}"));
+    }
+    if is_mapping(value) {
+        if container_len(value) == 0 {
+            return Ok(None);
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for m in items_of(value) {
+            if explode {
+                parts.push(f"{quote(Val.Str(m.key.clone()), safe)}={quote(m.val, safe)}");
+            } else {
+                parts.push(f"{quote(Val.Str(m.key.clone()), safe)},{quote(m.val, safe)}");
+            }
+        }
+        if explode {
+            return Ok(Some(parts.join(u.join_str)));
+        }
+        return Ok(Some(f"{name}={parts.join(",")}"));
+    }
+    if truthy(value) {
+        let t = truncate(value, prefix)?;
+        return Ok(Some(f"{name}={quote(t, safe)}"));
+    }
+    Ok(Some(f"{name}="))
+}
+
+// URIVariable._label_path_expansion, for / and .
+fn label_path_expansion(u: ref UriVar, value: ref Val, explode: bool, prefix: Option[i64]) -> Result[Option[String], String] {
+    let mut join_str = u.join_str.clone();
+    let safe = u.safe;
+    if is_none(value) or (not is_scalar(value) and container_len(value) == 0) {
+        return Ok(None);
+    }
+    if is_list(value) {
+        if not explode {
+            join_str = ",".to_string();
+        }
+        let mut frags: Vec[String] = Vec.new();
+        for x in list_items(value) {
+            if not is_none(x) {
+                frags.push(quote(x, safe));
+            }
+        }
+        if frags.len() == 0 {
+            return Ok(None);
+        }
+        return Ok(Some(frags.join(join_str)));
+    }
+    if is_mapping(value) {
+        let sep = if explode { "=" } else { "," };
+        if not explode {
+            join_str = ",".to_string();
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for m in items_of(value) {
+            if not is_none(m.val) {
+                parts.push(f"{quote(Val.Str(m.key.clone()), safe)}{sep}{quote(m.val, safe)}");
+            }
+        }
+        let expanded = parts.join(join_str);
+        if expanded.len() == 0 {
+            return Ok(None);
+        }
+        return Ok(Some(expanded));
+    }
+    let t = truncate(value, prefix)?;
+    Ok(Some(quote(t, safe)))
+}
+
+// URIVariable._semi_path_expansion, for ;
+fn semi_path_expansion(u: ref UriVar, name: ref String, value: ref Val, explode: bool, prefix: Option[i64]) -> Result[Option[String], String] {
+    let mut join_str = u.join_str.clone();
+    let safe = u.safe;
+    if is_none(value) {
+        return Ok(None);
+    }
+    if u.operator == "?" {
+        join_str = "&".to_string();
+    }
+    if is_list(value) {
+        let mut parts: Vec[String] = Vec.new();
+        if explode {
+            for x in list_items(value) {
+                if not is_none(x) {
+                    parts.push(f"{name}={quote(x, safe)}");
+                }
+            }
+            let expanded = parts.join(join_str);
+            if expanded.len() == 0 {
+                return Ok(None);
+            }
+            return Ok(Some(expanded));
+        }
+        for x in list_items(value) {
+            parts.push(quote(x, safe));
+        }
+        return Ok(Some(f"{name}={parts.join(",")}"));
+    }
+    if is_mapping(value) {
+        let mut parts: Vec[String] = Vec.new();
+        for m in items_of(value) {
+            if not is_none(m.val) {
+                let sep = if explode { "=" } else { "," };
+                parts.push(f"{quote(Val.Str(m.key.clone()), safe)}{sep}{quote(m.val, safe)}");
+            }
+        }
+        if explode {
+            return Ok(Some(parts.join(join_str)));
+        }
+        return Ok(Some(f"{name}={parts.join(",")}"));
+    }
+    let t = truncate(value, prefix)?;
+    if truthy(t) {
+        return Ok(Some(f"{name}={quote(t, safe)}"));
+    }
+    Ok(Some(name.clone()))
+}
+
+// URIVariable._string_expansion, for no operator, +, #, |, ! and @.
+fn string_expansion(u: ref UriVar, value: ref Val, explode: bool, prefix: Option[i64]) -> Result[Option[String], String] {
+    let safe = u.safe;
+    if is_none(value) {
+        return Ok(None);
+    }
+    if is_list(value) {
+        let mut parts: Vec[String] = Vec.new();
+        for x in list_items(value) {
+            parts.push(quote(x, safe));
+        }
+        return Ok(Some(parts.join(",")));
+    }
+    if is_mapping(value) {
+        let sep = if explode { "=" } else { "," };
+        let mut parts: Vec[String] = Vec.new();
+        for m in items_of(value) {
+            parts.push(f"{quote(Val.Str(m.key.clone()), safe)}{sep}{quote(m.val, safe)}");
+        }
+        return Ok(Some(parts.join(",")));
+    }
+    let t = truncate(value, prefix)?;
+    Ok(Some(quote(t, safe)))
+}
+
+// URIVariable.expand: the expression's text once its variables are filled.
+fn expand_var(u: ref UriVar, vars: ref Vec[Member]) -> Result[String, String] {
+    let mut values: Vec[String] = Vec.new();
+    for spec in u.specs {
+        let mut value = match member(vars, spec.name) {
+            Some(v) => v,
+            None => Val.Null,
+        };
+        let is_empty_str = match value {
+            Val.Str(ref s) => s.len() == 0,
+            _ => false,
+        };
+        if not truthy(value) and not is_empty_str {
+            if let Some(d) = default_of(u, spec.name) {
+                value = Val.Str(d);
+            }
+        }
+        if is_none(value) {
+            continue;
+        }
+        let op = u.operator.clone();
+        let expanded = if op == "/" or op == "." {
+            label_path_expansion(u, value, spec.explode, spec.prefix)?
+        } else if op == "?" or op == "&" {
+            query_expansion(u, spec.name, value, spec.explode, spec.prefix)?
+        } else if op == ";" {
+            semi_path_expansion(u, spec.name, value, spec.explode, spec.prefix)?
+        } else {
+            string_expansion(u, value, spec.explode, spec.prefix)?
+        };
+        if let Some(e) = expanded {
+            values.push(e);
+        }
+    }
+    if values.len() == 0 {
+        return Ok(String.new());
+    }
+    Ok(f"{u.start}{values.join(u.join_str)}")
+}
+
+// ---------------------------------------------------------------- URITemplate
+
+// A match of template_re, "{([^}]+)}": where it starts and ends in the
+// template's characters, and the expression inside the braces.
+struct Expr {
+    lo: i64,
+    hi: i64,
+    body: String,
+}
+
+struct Template {
+    uri: String,
+    exprs: Vec[Expr],
+    vars: Vec[UriVar],
+}
+
+fn find_exprs(cs: ref Vec[char]) -> Vec[Expr] {
+    let mut out: Vec[Expr] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '{' {
+            let mut j = i + 1;
+            while j < cs.len() and cs[j] != '}' {
+                j += 1;
+            }
+            if j < cs.len() and j > i + 1 {
+                out.push(Expr { lo: i, hi: j + 1, body: text(cs, i + 1, j) });
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn template(uri: ref String) -> Result[Template, String] {
+    let exprs = find_exprs(to_chars(uri));
+    let mut vars: Vec[UriVar] = Vec.new();
+    for e in exprs {
+        vars.push(uri_var(e.body)?);
+    }
+    Ok(Template { uri: uri.clone(), exprs: exprs, vars: vars })
+}
+
+// The variable names, in order, each once: the OrderedSet.
+fn variable_names(t: ref Template) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for v in t.vars {
+        for spec in v.specs {
+            if not out.contains(spec.name) {
+                out.push(spec.name.clone());
+            }
+        }
+    }
+    out
+}
+
+// URITemplate._expand: every expression replaced by its expansion, or,
+// for partial(), kept as it was when that expansion is empty.
+fn expand_template(t: ref Template, vars: ref Vec[Member], partial: bool) -> Result[String, String] {
+    if t.vars.len() == 0 {
+        return Ok(t.uri.clone());
+    }
+    let mut keys: Vec[String] = Vec.new();
+    let mut vals: Vec[String] = Vec.new();
+    for v in t.vars {
+        let e = expand_var(v, vars)?;
+        let mut found = false;
+        for k in 0..keys.len() {
+            if keys[k] == v.original {
+                vals[k] = e.clone();
+                found = true;
+            }
+        }
+        if not found {
+            keys.push(v.original.clone());
+            vals.push(e);
+        }
+    }
+    let cs = to_chars(t.uri);
+    let mut out = String.new();
+    let mut at = 0;
+    for e in t.exprs {
+        out.push_str(text(cs, at, e.lo));
+        let mut got = String.new();
+        for k in 0..keys.len() {
+            if keys[k] == e.body {
+                got = vals[k].clone();
+            }
+        }
+        if partial and got.len() == 0 {
+            out.push_str(f"{{{e.body}}}");
+        } else {
+            out.push_str(got);
+        }
+        at = e.hi;
+    }
+    out.push_str(text(cs, at, cs.len()));
+    Ok(out)
+}
+
+fn uri_expand(uri: ref String, vars: ref Vec[Member]) -> Result[String, String] {
+    let t = template(uri)?;
+    expand_template(t, vars, false)
+}
+
+// partial(): the new template's text.
+fn uri_partial(uri: ref String, vars: ref Vec[Member]) -> Result[String, String] {
+    let t = template(uri)?;
+    let s = expand_template(t, vars, true)?;
+    let checked = template(s)?;
+    Ok(checked.uri)
+}
+
+fn ordered_set_repr(names: ref Vec[String]) -> String {
+    if names.len() == 0 {
+        return "OrderedSet()".to_string();
+    }
+    f"OrderedSet({py_list_repr(names)})"
+}
+
+// ---------------------------------------------------------------- the API client report
+
+fn host_of(url: ref String) -> String {
+    let cs = to_chars(url);
+    let mut start = 0;
+    let mut k = 0;
+    while k + 2 < cs.len() {
+        if cs[k] == ':' and cs[k + 1] == '/' and cs[k + 2] == '/' {
+            start = k + 3;
+            break;
+        }
+        k += 1;
+    }
+    let mut end = start;
+    while end < cs.len() and cs[end] != '/' and cs[end] != '?' and cs[end] != '#' {
+        end += 1;
+    }
+    text(cs, start, end)
+}
+
+fn members_of(v: own Val) -> Vec[Member] {
+    match v {
+        Val.Dict(ms) => ms,
+        _ => Vec.new(),
+    }
+}
+
+struct Count {
+    key: String,
+    n: i64,
+}
+
+fn bump(counts: mut ref Vec[Count], key: ref String) {
+    for c in counts.iter_mut() {
+        if c.key == key {
+            c.n += 1;
+            return;
+        }
+    }
+    counts.push(Count { key: key.clone(), n: 1 });
+}
+
+fn api_report(api_path: ref String, req_path: ref String) -> Result[(), String] {
+    let api_text = match fs.read_to_string(api_path.clone()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {api_path}: {e}"),
+    };
+    let api = members_of(json_parse(api_text)?);
+    let service = match member(api, "service") {
+        Some(v) => json_text(v),
+        None => String.new(),
+    };
+    let links = match member(api, "links") {
+        Some(v) => members_of(v),
+        None => Vec.new(),
+    };
+    println(f"   service {service}, {links.len()} links");
+    let reqs = match fs.read_to_string(req_path.clone()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {req_path}: {e}"),
+    };
+    let mut by_link: Vec[Count] = Vec.new();
+    let mut by_host: Vec[Count] = Vec.new();
+    let mut seen: Vec[String] = Vec.new();
+    let mut longest = String.new();
+    let mut longest_len = 0;
+    let mut calls = 0;
+    let mut differ = 0;
+    for line in reqs.lines() {
+        if line.starts_with("#") {
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        calls += 1;
+        let ctx = members_of(json_parse(f[2])?);
+        let call = members_of(json_parse(f[3])?);
+        let t = match member(links, f[1]) {
+            Some(v) => json_text(v),
+            None => return Err(f"no link {f[1]}"),
+        };
+        let mut merged = ctx.clone();
+        for m in call {
+            merged.push(m.clone());
+        }
+        let url = uri_expand(t, merged)?;
+        println(f"   {f[0]} {f[1]}: {url}");
+        let bound = uri_partial(t, ctx)?;
+        let via = uri_expand(bound, call)?;
+        if via != url {
+            differ += 1;
+            println(f"     bound first: URITemplate(\"{bound}\")");
+            println(f"     then expanded: {via}");
+        }
+        bump(mut by_link, f[1]);
+        bump(mut by_host, host_of(url));
+        if not seen.contains(url) {
+            seen.push(url.clone());
+        }
+        let n = char_count(url);
+        if n > longest_len {
+            longest_len = n;
+            longest = url.clone();
+        }
+    }
+    by_link.sort_by(|a, b| a.key.cmp(b.key));
+    by_host.sort_by(|a, b| a.key.cmp(b.key));
+    println("   calls per link:");
+    for c in by_link {
+        let t = match member(links, c.key) {
+            Some(v) => json_text(v),
+            None => String.new(),
+        };
+        let names = variable_names(template(t)?);
+        println(f"     {c.key} {c.n} ({names.join(", ")})");
+    }
+    println("   calls per host:");
+    for c in by_host {
+        println(f"     {c.key} {c.n}");
+    }
+    println(f"   {calls} calls, {seen.len()} distinct URLs, {differ} where binding first changed the URL");
+    println(f"   longest ({longest_len} chars): {longest}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------- jobs
+
+fn describe(t: ref String) -> Result[(), String] {
+    let tpl = template(t)?;
+    if tpl.vars.len() == 0 {
+        println("   no variables");
+    }
+    for v in tpl.vars {
+        let safe = if v.safe { "reserved" } else { "unreserved" };
+        println(f"   {py_repr(v.original)}: operator {py_repr(v.operator)}, start {py_repr(v.start)}, join {py_repr(v.join_str)}, {safe}");
+        for s in v.specs {
+            let prefix = match s.prefix {
+                Some(p) => f"{p}",
+                None => "None".to_string(),
+            };
+            println(f"     {py_repr(s.name)} explode={bool_text(s.explode)} prefix={prefix}");
+        }
+        if v.default_names.len() > 0 {
+            let mut parts: Vec[String] = Vec.new();
+            for k in 0..v.default_names.len() {
+                parts.push(f"{py_repr(v.default_names[k])}: {py_repr(v.default_vals[k])}");
+            }
+            println(f"     defaults {{{parts.join(", ")}}}");
+        }
+    }
+    Ok(())
+}
+
+struct Tally {
+    cases: i64,
+    matched: i64,
+    one_of: i64,
+    failure: i64,
+    mismatch: i64,
+}
+
+fn run_case(tally: mut ref Tally, tpl: ref String, want: ref Val, vars: ref Vec[Member]) {
+    tally.cases += 1;
+    let fails = match want {
+        Val.Bool(false) => true,
+        _ => false,
+    };
+    let got = match uri_expand(tpl, vars) {
+        Ok(g) => g,
+        Err(e) => {
+            if fails {
+                tally.failure += 1;
+                println(f"   error: {e} [failure expected]");
+            } else {
+                tally.mismatch += 1;
+                println(f"   error: {e} [mismatch]");
+            }
+            return;
+        }
+    };
+    let note = match want {
+        Val.Bool(_) => {
+            tally.failure += 1;
+            "expanded, failure expected".to_string()
+        }
+        Val.List(xs) => {
+            let mut hit = false;
+            for x in xs {
+                if json_text(x) == got {
+                    hit = true;
+                }
+            }
+            if hit {
+                tally.one_of += 1;
+                f"one of {xs.len()}"
+            } else {
+                tally.mismatch += 1;
+                "mismatch".to_string()
+            }
+        }
+        _ => {
+            if json_text(want) == got {
+                tally.matched += 1;
+                "match".to_string()
+            } else {
+                tally.mismatch += 1;
+                "mismatch".to_string()
+            }
+        }
+    };
+    println(f"   {py_repr(got)} [{note}]");
+}
+
+fn run() -> Result[(), String] {
+    let jobs = match fs.read_to_string("data/jobs.tsv") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.tsv: {e}"),
+    };
+    let mut cur: Vec[Member] = Vec.new();
+    let mut tally = Tally { cases: 0, matched: 0, one_of: 0, failure: 0, mismatch: 0 };
+    for line in jobs.lines() {
+        if line.starts_with("== ") {
+            println(line);
+            continue;
+        }
+        let f: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        let op = f[0].clone();
+        if op == "vars" {
+            cur = members_of(json_parse(f[1])?);
+            let mut keys: Vec[String] = Vec.new();
+            for m in cur {
+                keys.push(m.key.clone());
+            }
+            keys.sort();
+            println(f"-- vars {keys.join(", ")}");
+            continue;
+        }
+        println(f"-- {op} {py_repr(f[1])}");
+        if op == "case" {
+            let want = json_parse(f[2])?;
+            run_case(mut tally, f[1], want, cur);
+        } else if op == "expand" {
+            match uri_expand(f[1], cur) {
+                Ok(s) => println(f"   {py_repr(s)}"),
+                Err(e) => println(f"   error: {e}"),
+            }
+        } else if op == "partial" {
+            match uri_partial(f[1], cur) {
+                Ok(s) => println(f"   URITemplate(\"{s}\")"),
+                Err(e) => println(f"   error: {e}"),
+            }
+        } else if op == "variables" {
+            match template(f[1]) {
+                Ok(t) => println(f"   {ordered_set_repr(variable_names(t))}"),
+                Err(e) => println(f"   error: {e}"),
+            }
+        } else if op == "parse" {
+            if let Err(e) = describe(f[1]) {
+                println(f"   error: {e}");
+            }
+        } else if op == "api" {
+            api_report(f"data/{f[1]}", f"data/{f[2]}")?;
+        }
+    }
+    println(f"== suite: {tally.cases} cases, {tally.matched} match, {tally.one_of} one of several, {tally.failure} failure expected, {tally.mismatch} mismatch");
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("{\n");
+    t.push_str(" \"service\": \"forge.example.org\",\n");
+    t.push_str(" \"links\": {\n");
+    t.push_str("  \"user\": \"https://api.forge.example.org/users/{user}\",\n");
+    t.push_str("  \"repo\": \"https://api.forge.example.org/repos/{owner}/{repo}\",\n");
+    t.push_str("  \"issues\": \"https://api.forge.example.org/repos/{owner}/{repo}/issues{/number}{?state,labels,page,per_page}\",\n");
+    t.push_str("  \"contents\": \"https://api.forge.example.org/repos/{owner}/{repo}/contents/{+path}{?ref}\",\n");
+    t.push_str("  \"compare\": \"https://api.forge.example.org/repos/{owner}/{repo}/compare/{base}...{head}\",\n");
+    t.push_str("  \"archive\": \"https://api.forge.example.org/repos/{owner}/{repo}/{archive_format}{/ref}\",\n");
+    t.push_str("  \"search\": \"https://api.forge.example.org/search/code{?q}{&sort,order,page}\",\n");
+    t.push_str("  \"tiles\": \"https://tiles.forge.example.org/{z}/{x}/{y}.png{?style}\",\n");
+    t.push_str("  \"matrix\": \"https://api.forge.example.org/builds{;os,arch*}{?env*}\",\n");
+    t.push_str("  \"docs\": \"https://docs.forge.example.org{/section*}{#anchor}\",\n");
+    t.push_str("  \"events\": \"https://events.forge.example.org/{org}{.format}{?since,types}\"\n");
+    t.push_str(" }\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "api.json".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("== spec-examples: Level 1 Examples\n");
+    t.push_str("vars\t{\"var\": \"value\", \"hello\": \"Hello World!\"}\n");
+    t.push_str("case\t{var}\t\"value\"\n");
+    t.push_str("case\t{hello}\t\"Hello%20World%21\"\n");
+    t.push_str("== spec-examples: Level 2 Examples\n");
+    t.push_str("vars\t{\"var\": \"value\", \"hello\": \"Hello World!\", \"path\": \"/foo/bar\"}\n");
+    t.push_str("case\t{+var}\t\"value\"\n");
+    t.push_str("case\t{+hello}\t\"Hello%20World!\"\n");
+    t.push_str("case\t{+path}/here\t\"/foo/bar/here\"\n");
+    t.push_str("case\there?ref={+path}\t\"here?ref=/foo/bar\"\n");
+    t.push_str("== spec-examples: Level 3 Examples\n");
+    t.push_str("vars\t{\"var\": \"value\", \"hello\": \"Hello World!\", \"empty\": \"\", \"path\": \"/foo/bar\", \"x\": \"1024\", \"y\": \"768\"}\n");
+    t.push_str("case\tmap?{x,y}\t\"map?1024,768\"\n");
+    t.push_str("case\t{x,hello,y}\t\"1024,Hello%20World%21,768\"\n");
+    t.push_str("case\t{+x,hello,y}\t\"1024,Hello%20World!,768\"\n");
+    t.push_str("case\t{+path,x}/here\t\"/foo/bar,1024/here\"\n");
+    t.push_str("case\t{#x,hello,y}\t\"#1024,Hello%20World!,768\"\n");
+    t.push_str("case\t{#path,x}/here\t\"#/foo/bar,1024/here\"\n");
+    t.push_str("case\tX{.var}\t\"X.value\"\n");
+    t.push_str("case\tX{.x,y}\t\"X.1024.768\"\n");
+    t.push_str("case\t{/var}\t\"/value\"\n");
+    t.push_str("case\t{/var,x}/here\t\"/value/1024/here\"\n");
+    t.push_str("case\t{;x,y}\t\";x=1024;y=768\"\n");
+    t.push_str("case\t{;x,y,empty}\t\";x=1024;y=768;empty\"\n");
+    t.push_str("case\t{?x,y}\t\"?x=1024&y=768\"\n");
+    t.push_str("case\t{?x,y,empty}\t\"?x=1024&y=768&empty=\"\n");
+    t.push_str("case\t?fixed=yes{&x}\t\"?fixed=yes&x=1024\"\n");
+    t.push_str("case\t{&x,y,empty}\t\"&x=1024&y=768&empty=\"\n");
+    t.push_str("== spec-examples: Level 4 Examples\n");
+    t.push_str("vars\t{\"var\": \"value\", \"hello\": \"Hello World!\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}}\n");
+    t.push_str("case\t{var:3}\t\"val\"\n");
+    t.push_str("case\t{var:30}\t\"value\"\n");
+    t.push_str("case\t{list}\t\"red,green,blue\"\n");
+    t.push_str("case\t{list*}\t\"red,green,blue\"\n");
+    t.push_str("case\t{keys}\t[\"comma,%2C,dot,.,semi,%3B\", \"comma,%2C,semi,%3B,dot,.\", \"dot,.,comma,%2C,semi,%3B\", \"dot,.,semi,%3B,comma,%2C\", \"semi,%3B,comma,%2C,dot,.\", \"semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{keys*}\t[\"comma=%2C,dot=.,semi=%3B\", \"comma=%2C,semi=%3B,dot=.\", \"dot=.,comma=%2C,semi=%3B\", \"dot=.,semi=%3B,comma=%2C\", \"semi=%3B,comma=%2C,dot=.\", \"semi=%3B,dot=.,comma=%2C\"]\n");
+    t.push_str("case\t{+path:6}/here\t\"/foo/b/here\"\n");
+    t.push_str("case\t{+list}\t\"red,green,blue\"\n");
+    t.push_str("case\t{+list*}\t\"red,green,blue\"\n");
+    t.push_str("case\t{+keys}\t[\"comma,,,dot,.,semi,;\", \"comma,,,semi,;,dot,.\", \"dot,.,comma,,,semi,;\", \"dot,.,semi,;,comma,,\", \"semi,;,comma,,,dot,.\", \"semi,;,dot,.,comma,,\"]\n");
+    t.push_str("case\t{+keys*}\t[\"comma=,,dot=.,semi=;\", \"comma=,,semi=;,dot=.\", \"dot=.,comma=,,semi=;\", \"dot=.,semi=;,comma=,\", \"semi=;,comma=,,dot=.\", \"semi=;,dot=.,comma=,\"]\n");
+    t.push_str("case\t{#path:6}/here\t\"#/foo/b/here\"\n");
+    t.push_str("case\t{#list}\t\"#red,green,blue\"\n");
+    t.push_str("case\t{#list*}\t\"#red,green,blue\"\n");
+    t.push_str("case\t{#keys}\t[\"#comma,,,dot,.,semi,;\", \"#comma,,,semi,;,dot,.\", \"#dot,.,comma,,,semi,;\", \"#dot,.,semi,;,comma,,\", \"#semi,;,comma,,,dot,.\", \"#semi,;,dot,.,comma,,\"]\n");
+    t.push_str("case\t{#keys*}\t[\"#comma=,,dot=.,semi=;\", \"#comma=,,semi=;,dot=.\", \"#dot=.,comma=,,semi=;\", \"#dot=.,semi=;,comma=,\", \"#semi=;,comma=,,dot=.\", \"#semi=;,dot=.,comma=,\"]\n");
+    t.push_str("case\tX{.var:3}\t\"X.val\"\n");
+    t.push_str("case\tX{.list}\t\"X.red,green,blue\"\n");
+    t.push_str("case\tX{.list*}\t\"X.red.green.blue\"\n");
+    t.push_str("case\tX{.keys}\t[\"X.comma,%2C,dot,.,semi,%3B\", \"X.comma,%2C,semi,%3B,dot,.\", \"X.dot,.,comma,%2C,semi,%3B\", \"X.dot,.,semi,%3B,comma,%2C\", \"X.semi,%3B,comma,%2C,dot,.\", \"X.semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{/var:1,var}\t\"/v/value\"\n");
+    t.push_str("case\t{/list}\t\"/red,green,blue\"\n");
+    t.push_str("case\t{/list*}\t\"/red/green/blue\"\n");
+    t.push_str("case\t{/list*,path:4}\t\"/red/green/blue/%2Ffoo\"\n");
+    t.push_str("case\t{/keys}\t[\"/comma,%2C,dot,.,semi,%3B\", \"/comma,%2C,semi,%3B,dot,.\", \"/dot,.,comma,%2C,semi,%3B\", \"/dot,.,semi,%3B,comma,%2C\", \"/semi,%3B,comma,%2C,dot,.\", \"/semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{/keys*}\t[\"/comma=%2C/dot=./semi=%3B\", \"/comma=%2C/semi=%3B/dot=.\", \"/dot=./comma=%2C/semi=%3B\", \"/dot=./semi=%3B/comma=%2C\", \"/semi=%3B/comma=%2C/dot=.\", \"/semi=%3B/dot=./comma=%2C\"]\n");
+    t.push_str("case\t{;hello:5}\t\";hello=Hello\"\n");
+    t.push_str("case\t{;list}\t\";list=red,green,blue\"\n");
+    t.push_str("case\t{;list*}\t\";list=red;list=green;list=blue\"\n");
+    t.push_str("case\t{;keys}\t[\";keys=comma,%2C,dot,.,semi,%3B\", \";keys=comma,%2C,semi,%3B,dot,.\", \";keys=dot,.,comma,%2C,semi,%3B\", \";keys=dot,.,semi,%3B,comma,%2C\", \";keys=semi,%3B,comma,%2C,dot,.\", \";keys=semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{;keys*}\t[\";comma=%2C;dot=.;semi=%3B\", \";comma=%2C;semi=%3B;dot=.\", \";dot=.;comma=%2C;semi=%3B\", \";dot=.;semi=%3B;comma=%2C\", \";semi=%3B;comma=%2C;dot=.\", \";semi=%3B;dot=.;comma=%2C\"]\n");
+    t.push_str("case\t{?var:3}\t\"?var=val\"\n");
+    t.push_str("case\t{?list}\t\"?list=red,green,blue\"\n");
+    t.push_str("case\t{?list*}\t\"?list=red&list=green&list=blue\"\n");
+    t.push_str("case\t{?keys}\t[\"?keys=comma,%2C,dot,.,semi,%3B\", \"?keys=comma,%2C,semi,%3B,dot,.\", \"?keys=dot,.,comma,%2C,semi,%3B\", \"?keys=dot,.,semi,%3B,comma,%2C\", \"?keys=semi,%3B,comma,%2C,dot,.\", \"?keys=semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{?keys*}\t[\"?comma=%2C&dot=.&semi=%3B\", \"?comma=%2C&semi=%3B&dot=.\", \"?dot=.&comma=%2C&semi=%3B\", \"?dot=.&semi=%3B&comma=%2C\", \"?semi=%3B&comma=%2C&dot=.\", \"?semi=%3B&dot=.&comma=%2C\"]\n");
+    t.push_str("case\t{&var:3}\t\"&var=val\"\n");
+    t.push_str("case\t{&list}\t\"&list=red,green,blue\"\n");
+    t.push_str("case\t{&list*}\t\"&list=red&list=green&list=blue\"\n");
+    t.push_str("case\t{&keys}\t[\"&keys=comma,%2C,dot,.,semi,%3B\", \"&keys=comma,%2C,semi,%3B,dot,.\", \"&keys=dot,.,comma,%2C,semi,%3B\", \"&keys=dot,.,semi,%3B,comma,%2C\", \"&keys=semi,%3B,comma,%2C,dot,.\", \"&keys=semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{&keys*}\t[\"&comma=%2C&dot=.&semi=%3B\", \"&comma=%2C&semi=%3B&dot=.\", \"&dot=.&comma=%2C&semi=%3B\", \"&dot=.&semi=%3B&comma=%2C\", \"&semi=%3B&comma=%2C&dot=.\", \"&semi=%3B&dot=.&comma=%2C\"]\n");
+    t.push_str("== spec-examples-by-section: 3.2.1 Variable Expansion\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{count}\t\"one,two,three\"\n");
+    t.push_str("case\t{count*}\t\"one,two,three\"\n");
+    t.push_str("case\t{/count}\t\"/one,two,three\"\n");
+    t.push_str("case\t{/count*}\t\"/one/two/three\"\n");
+    t.push_str("case\t{;count}\t\";count=one,two,three\"\n");
+    t.push_str("case\t{;count*}\t\";count=one;count=two;count=three\"\n");
+    t.push_str("case\t{?count}\t\"?count=one,two,three\"\n");
+    t.push_str("case\t{?count*}\t\"?count=one&count=two&count=three\"\n");
+    t.push_str("case\t{&count*}\t\"&count=one&count=two&count=three\"\n");
+    t.push_str("== spec-examples-by-section: 3.2.2 Simple String Expansion\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{var}\t\"value\"\n");
+    t.push_str("case\t{hello}\t\"Hello%20World%21\"\n");
+    t.push_str("case\t{half}\t\"50%25\"\n");
+    t.push_str("case\tO{empty}X\t\"OX\"\n");
+    t.push_str("case\tO{undef}X\t\"OX\"\n");
+    t.push_str("case\t{x,y}\t\"1024,768\"\n");
+    t.push_str("case\t{x,hello,y}\t\"1024,Hello%20World%21,768\"\n");
+    t.push_str("case\t?{x,empty}\t\"?1024,\"\n");
+    t.push_str("case\t?{x,undef}\t\"?1024\"\n");
+    t.push_str("case\t?{undef,y}\t\"?768\"\n");
+    t.push_str("case\t{var:3}\t\"val\"\n");
+    t.push_str("case\t{var:30}\t\"value\"\n");
+    t.push_str("case\t{list}\t\"red,green,blue\"\n");
+    t.push_str("case\t{list*}\t\"red,green,blue\"\n");
+    t.push_str("case\t{keys}\t[\"comma,%2C,dot,.,semi,%3B\", \"comma,%2C,semi,%3B,dot,.\", \"dot,.,comma,%2C,semi,%3B\", \"dot,.,semi,%3B,comma,%2C\", \"semi,%3B,comma,%2C,dot,.\", \"semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{keys*}\t[\"comma=%2C,dot=.,semi=%3B\", \"comma=%2C,semi=%3B,dot=.\", \"dot=.,comma=%2C,semi=%3B\", \"dot=.,semi=%3B,comma=%2C\", \"semi=%3B,comma=%2C,dot=.\", \"semi=%3B,dot=.,comma=%2C\"]\n");
+    t.push_str("== spec-examples-by-section: 3.2.3 Reserved Expansion\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{+var}\t\"value\"\n");
+    t.push_str("case\t{/var,empty}\t\"/value/\"\n");
+    t.push_str("case\t{/var,undef}\t\"/value\"\n");
+    t.push_str("case\t{+hello}\t\"Hello%20World!\"\n");
+    t.push_str("case\t{+half}\t\"50%25\"\n");
+    t.push_str("case\t{base}index\t\"http%3A%2F%2Fexample.com%2Fhome%2Findex\"\n");
+    t.push_str("case\t{+base}index\t\"http://example.com/home/index\"\n");
+    t.push_str("case\tO{+empty}X\t\"OX\"\n");
+    t.push_str("case\tO{+undef}X\t\"OX\"\n");
+    t.push_str("case\t{+path}/here\t\"/foo/bar/here\"\n");
+    t.push_str("case\t{+path:6}/here\t\"/foo/b/here\"\n");
+    t.push_str("case\there?ref={+path}\t\"here?ref=/foo/bar\"\n");
+    t.push_str("case\tup{+path}{var}/here\t\"up/foo/barvalue/here\"\n");
+    t.push_str("case\t{+x,hello,y}\t\"1024,Hello%20World!,768\"\n");
+    t.push_str("case\t{+path,x}/here\t\"/foo/bar,1024/here\"\n");
+    t.push_str("case\t{+list}\t\"red,green,blue\"\n");
+    t.push_str("case\t{+list*}\t\"red,green,blue\"\n");
+    t.push_str("case\t{+keys}\t[\"comma,,,dot,.,semi,;\", \"comma,,,semi,;,dot,.\", \"dot,.,comma,,,semi,;\", \"dot,.,semi,;,comma,,\", \"semi,;,comma,,,dot,.\", \"semi,;,dot,.,comma,,\"]\n");
+    t.push_str("case\t{+keys*}\t[\"comma=,,dot=.,semi=;\", \"comma=,,semi=;,dot=.\", \"dot=.,comma=,,semi=;\", \"dot=.,semi=;,comma=,\", \"semi=;,comma=,,dot=.\", \"semi=;,dot=.,comma=,\"]\n");
+    t.push_str("== spec-examples-by-section: 3.2.4 Fragment Expansion\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{#var}\t\"#value\"\n");
+    t.push_str("case\t{#hello}\t\"#Hello%20World!\"\n");
+    t.push_str("case\t{#half}\t\"#50%25\"\n");
+    t.push_str("case\tfoo{#empty}\t\"foo#\"\n");
+    t.push_str("case\tfoo{#undef}\t\"foo\"\n");
+    t.push_str("case\t{#x,hello,y}\t\"#1024,Hello%20World!,768\"\n");
+    t.push_str("case\t{#path,x}/here\t\"#/foo/bar,1024/here\"\n");
+    t.push_str("case\t{#path:6}/here\t\"#/foo/b/here\"\n");
+    t.push_str("case\t{#list}\t\"#red,green,blue\"\n");
+    t.push_str("case\t{#list*}\t\"#red,green,blue\"\n");
+    t.push_str("case\t{#keys}\t[\"#comma,,,dot,.,semi,;\", \"#comma,,,semi,;,dot,.\", \"#dot,.,comma,,,semi,;\", \"#dot,.,semi,;,comma,,\", \"#semi,;,comma,,,dot,.\", \"#semi,;,dot,.,comma,,\"]\n");
+    t.push_str("== spec-examples-by-section: 3.2.5 Label Expansion with Dot-Prefix\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{.who}\t\".fred\"\n");
+    t.push_str("case\t{.who,who}\t\".fred.fred\"\n");
+    t.push_str("case\t{.half,who}\t\".50%25.fred\"\n");
+    t.push_str("case\twww{.dom*}\t\"www.example.com\"\n");
+    t.push_str("case\tX{.var}\t\"X.value\"\n");
+    t.push_str("case\tX{.var:3}\t\"X.val\"\n");
+    t.push_str("case\tX{.empty}\t\"X.\"\n");
+    t.push_str("case\tX{.undef}\t\"X\"\n");
+    t.push_str("case\tX{.list}\t\"X.red,green,blue\"\n");
+    t.push_str("case\tX{.list*}\t\"X.red.green.blue\"\n");
+    t.push_str("case\t{#keys}\t[\"#comma,,,dot,.,semi,;\", \"#comma,,,semi,;,dot,.\", \"#dot,.,comma,,,semi,;\", \"#dot,.,semi,;,comma,,\", \"#semi,;,comma,,,dot,.\", \"#semi,;,dot,.,comma,,\"]\n");
+    t.push_str("case\t{#keys*}\t[\"#comma=,,dot=.,semi=;\", \"#comma=,,semi=;,dot=.\", \"#dot=.,comma=,,semi=;\", \"#dot=.,semi=;,comma=,\", \"#semi=;,comma=,,dot=.\", \"#semi=;,dot=.,comma=,\"]\n");
+    t.push_str("case\tX{.empty_keys}\t\"X\"\n");
+    t.push_str("case\tX{.empty_keys*}\t\"X\"\n");
+    t.push_str("== spec-examples-by-section: 3.2.6 Path Segment Expansion\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{/who}\t\"/fred\"\n");
+    t.push_str("case\t{/who,who}\t\"/fred/fred\"\n");
+    t.push_str("case\t{/half,who}\t\"/50%25/fred\"\n");
+    t.push_str("case\t{/who,dub}\t\"/fred/me%2Ftoo\"\n");
+    t.push_str("case\t{/var}\t\"/value\"\n");
+    t.push_str("case\t{/var,empty}\t\"/value/\"\n");
+    t.push_str("case\t{/var,undef}\t\"/value\"\n");
+    t.push_str("case\t{/var,x}/here\t\"/value/1024/here\"\n");
+    t.push_str("case\t{/var:1,var}\t\"/v/value\"\n");
+    t.push_str("case\t{/list}\t\"/red,green,blue\"\n");
+    t.push_str("case\t{/list*}\t\"/red/green/blue\"\n");
+    t.push_str("case\t{/list*,path:4}\t\"/red/green/blue/%2Ffoo\"\n");
+    t.push_str("case\t{/keys}\t[\"/comma,%2C,dot,.,semi,%3B\", \"/comma,%2C,semi,%3B,dot,.\", \"/dot,.,comma,%2C,semi,%3B\", \"/dot,.,semi,%3B,comma,%2C\", \"/semi,%3B,comma,%2C,dot,.\", \"/semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{/keys*}\t[\"/comma=%2C/dot=./semi=%3B\", \"/comma=%2C/semi=%3B/dot=.\", \"/dot=./comma=%2C/semi=%3B\", \"/dot=./semi=%3B/comma=%2C\", \"/semi=%3B/comma=%2C/dot=.\", \"/semi=%3B/dot=./comma=%2C\"]\n");
+    t.push_str("== spec-examples-by-section: 3.2.7 Path-Style Parameter Expansion\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{;who}\t\";who=fred\"\n");
+    t.push_str("case\t{;half}\t\";half=50%25\"\n");
+    t.push_str("case\t{;empty}\t\";empty\"\n");
+    t.push_str("case\t{;hello:5}\t\";hello=Hello\"\n");
+    t.push_str("case\t{;v,empty,who}\t\";v=6;empty;who=fred\"\n");
+    t.push_str("case\t{;v,bar,who}\t\";v=6;who=fred\"\n");
+    t.push_str("case\t{;x,y}\t\";x=1024;y=768\"\n");
+    t.push_str("case\t{;x,y,empty}\t\";x=1024;y=768;empty\"\n");
+    t.push_str("case\t{;x,y,undef}\t\";x=1024;y=768\"\n");
+    t.push_str("case\t{;list}\t\";list=red,green,blue\"\n");
+    t.push_str("case\t{;list*}\t\";list=red;list=green;list=blue\"\n");
+    t.push_str("case\t{;keys}\t[\";keys=comma,%2C,dot,.,semi,%3B\", \";keys=comma,%2C,semi,%3B,dot,.\", \";keys=dot,.,comma,%2C,semi,%3B\", \";keys=dot,.,semi,%3B,comma,%2C\", \";keys=semi,%3B,comma,%2C,dot,.\", \";keys=semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{;keys*}\t[\";comma=%2C;dot=.;semi=%3B\", \";comma=%2C;semi=%3B;dot=.\", \";dot=.;comma=%2C;semi=%3B\", \";dot=.;semi=%3B;comma=%2C\", \";semi=%3B;comma=%2C;dot=.\", \";semi=%3B;dot=.;comma=%2C\"]\n");
+    t.push_str("== spec-examples-by-section: 3.2.8 Form-Style Query Expansion\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{?who}\t\"?who=fred\"\n");
+    t.push_str("case\t{?half}\t\"?half=50%25\"\n");
+    t.push_str("case\t{?x,y}\t\"?x=1024&y=768\"\n");
+    t.push_str("case\t{?x,y,empty}\t\"?x=1024&y=768&empty=\"\n");
+    t.push_str("case\t{?x,y,undef}\t\"?x=1024&y=768\"\n");
+    t.push_str("case\t{?var:3}\t\"?var=val\"\n");
+    t.push_str("case\t{?list}\t\"?list=red,green,blue\"\n");
+    t.push_str("case\t{?list*}\t\"?list=red&list=green&list=blue\"\n");
+    t.push_str("case\t{?keys}\t[\"?keys=comma,%2C,dot,.,semi,%3B\", \"?keys=comma,%2C,semi,%3B,dot,.\", \"?keys=dot,.,comma,%2C,semi,%3B\", \"?keys=dot,.,semi,%3B,comma,%2C\", \"?keys=semi,%3B,comma,%2C,dot,.\", \"?keys=semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{?keys*}\t[\"?comma=%2C&dot=.&semi=%3B\", \"?comma=%2C&semi=%3B&dot=.\", \"?dot=.&comma=%2C&semi=%3B\", \"?dot=.&semi=%3B&comma=%2C\", \"?semi=%3B&comma=%2C&dot=.\", \"?semi=%3B&dot=.&comma=%2C\"]\n");
+    t.push_str("== spec-examples-by-section: 3.2.9 Form-Style Query Continuation\n");
+    t.push_str("vars\t{\"count\": [\"one\", \"two\", \"three\"], \"dom\": [\"example\", \"com\"], \"dub\": \"me/too\", \"hello\": \"Hello World!\", \"half\": \"50%\", \"var\": \"value\", \"who\": \"fred\", \"base\": \"http://example.com/home/\", \"path\": \"/foo/bar\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"v\": \"6\", \"x\": \"1024\", \"y\": \"768\", \"empty\": \"\", \"empty_keys\": [], \"undef\": null}\n");
+    t.push_str("case\t{&who}\t\"&who=fred\"\n");
+    t.push_str("case\t{&half}\t\"&half=50%25\"\n");
+    t.push_str("case\t?fixed=yes{&x}\t\"?fixed=yes&x=1024\"\n");
+    t.push_str("case\t{&var:3}\t\"&var=val\"\n");
+    t.push_str("case\t{&x,y,empty}\t\"&x=1024&y=768&empty=\"\n");
+    t.push_str("case\t{&x,y,undef}\t\"&x=1024&y=768\"\n");
+    t.push_str("case\t{&list}\t\"&list=red,green,blue\"\n");
+    t.push_str("case\t{&list*}\t\"&list=red&list=green&list=blue\"\n");
+    t.push_str("case\t{&keys}\t[\"&keys=comma,%2C,dot,.,semi,%3B\", \"&keys=comma,%2C,semi,%3B,dot,.\", \"&keys=dot,.,comma,%2C,semi,%3B\", \"&keys=dot,.,semi,%3B,comma,%2C\", \"&keys=semi,%3B,comma,%2C,dot,.\", \"&keys=semi,%3B,dot,.,comma,%2C\"]\n");
+    t.push_str("case\t{&keys*}\t[\"&comma=%2C&dot=.&semi=%3B\", \"&comma=%2C&semi=%3B&dot=.\", \"&dot=.&comma=%2C&semi=%3B\", \"&dot=.&semi=%3B&comma=%2C\", \"&semi=%3B&comma=%2C&dot=.\", \"&semi=%3B&dot=.&comma=%2C\"]\n");
+    t.push_str("== extended-tests: Additional Examples 1\n");
+    t.push_str("vars\t{\"id\": \"person\", \"token\": \"12345\", \"fields\": [\"id\", \"name\", \"picture\"], \"format\": \"json\", \"q\": \"URI Templates\", \"page\": \"5\", \"lang\": \"en\", \"geocode\": [\"37.76\", \"-122.427\"], \"first_name\": \"John\", \"last.name\": \"Doe\", \"Some%20Thing\": \"foo\", \"number\": 6, \"long\": 37.76, \"lat\": -122.427, \"group_id\": \"12345\", \"query\": \"PREFIX dc: <http://purl.org/dc/elements/1.1/> SELECT ?book ?who WHERE { ?book dc:creator ?who }\", \"uri\": \"http://example.org/?uri=http%3A%2F%2Fexample.org%2F\", \"word\": \"drücken\", \"Stra%C3%9Fe\": \"Grüner Weg\", \"random\": \"šöäŸœñê€£¥‡ÑÒÓÔÕÖ×ØÙÚàáâãäåæçÿ\", \"assoc_special_chars\": {\"šöäŸœñê€£¥‡ÑÒÓÔÕ\": \"Ö×ØÙÚàáâãäåæçÿ\"}}\n");
+    t.push_str("case\t{/id*}\t\"/person\"\n");
+    t.push_str("case\t{/id*}{?fields,first_name,last.name,token}\t[\"/person?fields=id,name,picture&first_name=John&last.name=Doe&token=12345\", \"/person?fields=id,picture,name&first_name=John&last.name=Doe&token=12345\", \"/person?fields=picture,name,id&first_name=John&last.name=Doe&token=12345\", \"/person?fields=picture,id,name&first_name=John&last.name=Doe&token=12345\", \"/person?fields=name,picture,id&first_name=John&last.name=Doe&token=12345\", \"/person?fields=name,id,picture&first_name=John&last.name=Doe&token=12345\"]\n");
+    t.push_str("case\t/search.{format}{?q,geocode,lang,locale,page,result_type}\t[\"/search.json?q=URI%20Templates&geocode=37.76,-122.427&lang=en&page=5\", \"/search.json?q=URI%20Templates&geocode=-122.427,37.76&lang=en&page=5\"]\n");
+    t.push_str("case\t/test{/Some%20Thing}\t\"/test/foo\"\n");
+    t.push_str("case\t/set{?number}\t\"/set?number=6\"\n");
+    t.push_str("case\t/loc{?long,lat}\t\"/loc?long=37.76&lat=-122.427\"\n");
+    t.push_str("case\t/base{/group_id,first_name}/pages{/page,lang}{?format,q}\t\"/base/12345/John/pages/5/en?format=json&q=URI%20Templates\"\n");
+    t.push_str("case\t/sparql{?query}\t\"/sparql?query=PREFIX%20dc%3A%20%3Chttp%3A%2F%2Fpurl.org%2Fdc%2Felements%2F1.1%2F%3E%20SELECT%20%3Fbook%20%3Fwho%20WHERE%20%7B%20%3Fbook%20dc%3Acreator%20%3Fwho%20%7D\"\n");
+    t.push_str("case\t/go{?uri}\t\"/go?uri=http%3A%2F%2Fexample.org%2F%3Furi%3Dhttp%253A%252F%252Fexample.org%252F\"\n");
+    t.push_str("case\t/service{?word}\t\"/service?word=dr%C3%BCcken\"\n");
+    t.push_str("case\t/lookup{?Stra%C3%9Fe}\t\"/lookup?Stra%C3%9Fe=Gr%C3%BCner%20Weg\"\n");
+    t.push_str("case\t{random}\t\"%C5%A1%C3%B6%C3%A4%C5%B8%C5%93%C3%B1%C3%AA%E2%82%AC%C2%A3%C2%A5%E2%80%A1%C3%91%C3%92%C3%93%C3%94%C3%95%C3%96%C3%97%C3%98%C3%99%C3%9A%C3%A0%C3%A1%C3%A2%C3%A3%C3%A4%C3%A5%C3%A6%C3%A7%C3%BF\"\n");
+    t.push_str("case\t{?assoc_special_chars*}\t\"?%C5%A1%C3%B6%C3%A4%C5%B8%C5%93%C3%B1%C3%AA%E2%82%AC%C2%A3%C2%A5%E2%80%A1%C3%91%C3%92%C3%93%C3%94%C3%95=%C3%96%C3%97%C3%98%C3%99%C3%9A%C3%A0%C3%A1%C3%A2%C3%A3%C3%A4%C3%A5%C3%A6%C3%A7%C3%BF\"\n");
+    t.push_str("== extended-tests: Additional Examples 2\n");
+    t.push_str("vars\t{\"id\": [\"person\", \"albums\"], \"token\": \"12345\", \"fields\": [\"id\", \"name\", \"picture\"], \"format\": \"atom\", \"q\": \"URI Templates\", \"page\": \"10\", \"start\": \"5\", \"lang\": \"en\", \"geocode\": [\"37.76\", \"-122.427\"]}\n");
+    t.push_str("case\t{/id*}\t[\"/person/albums\", \"/albums/person\"]\n");
+    t.push_str("case\t{/id*}{?fields,token}\t[\"/person/albums?fields=id,name,picture&token=12345\", \"/person/albums?fields=id,picture,name&token=12345\", \"/person/albums?fields=picture,name,id&token=12345\", \"/person/albums?fields=picture,id,name&token=12345\", \"/person/albums?fields=name,picture,id&token=12345\", \"/person/albums?fields=name,id,picture&token=12345\", \"/albums/person?fields=id,name,picture&token=12345\", \"/albums/person?fields=id,picture,name&token=12345\", \"/albums/person?fields=picture,name,id&token=12345\", \"/albums/person?fields=picture,id,name&token=12345\", \"/albums/person?fields=name,picture,id&token=12345\", \"/albums/person?fields=name,id,picture&token=12345\"]\n");
+    t.push_str("== extended-tests: Additional Examples 3: Empty Variables\n");
+    t.push_str("vars\t{\"empty_list\": [], \"empty_assoc\": {}}\n");
+    t.push_str("case\t{/empty_list}\t[\"\"]\n");
+    t.push_str("case\t{/empty_list*}\t[\"\"]\n");
+    t.push_str("case\t{?empty_list}\t[\"\"]\n");
+    t.push_str("case\t{?empty_list*}\t[\"\"]\n");
+    t.push_str("case\t{?empty_assoc}\t[\"\"]\n");
+    t.push_str("case\t{?empty_assoc*}\t[\"\"]\n");
+    t.push_str("== extended-tests: Additional Examples 4: Numeric Keys\n");
+    t.push_str("vars\t{\"42\": \"The Answer to the Ultimate Question of Life, the Universe, and Everything\", \"1337\": [\"leet\", \"as\", \"it\", \"can\", \"be\"], \"german\": {\"11\": \"elf\", \"12\": \"zwölf\"}}\n");
+    t.push_str("case\t{42}\t\"The%20Answer%20to%20the%20Ultimate%20Question%20of%20Life%2C%20the%20Universe%2C%20and%20Everything\"\n");
+    t.push_str("case\t{?42}\t\"?42=The%20Answer%20to%20the%20Ultimate%20Question%20of%20Life%2C%20the%20Universe%2C%20and%20Everything\"\n");
+    t.push_str("case\t{1337}\t\"leet,as,it,can,be\"\n");
+    t.push_str("case\t{?1337*}\t\"?1337=leet&1337=as&1337=it&1337=can&1337=be\"\n");
+    t.push_str("case\t{?german*}\t[\"?11=elf&12=zw%C3%B6lf\", \"?12=zw%C3%B6lf&11=elf\"]\n");
+    t.push_str("== negative-tests: Failure Tests\n");
+    t.push_str("vars\t{\"id\": \"thing\", \"var\": \"value\", \"hello\": \"Hello World!\", \"with space\": \"fail\", \" leading_space\": \"Hi!\", \"trailing_space \": \"Bye!\", \"empty\": \"\", \"path\": \"/foo/bar\", \"x\": \"1024\", \"y\": \"768\", \"list\": [\"red\", \"green\", \"blue\"], \"keys\": {\"semi\": \";\", \"dot\": \".\", \"comma\": \",\"}, \"example\": \"red\", \"searchTerms\": \"uri templates\", \"~thing\": \"some-user\", \"default-graph-uri\": [\"http://www.example/book/\", \"http://www.example/papers/\"], \"query\": \"PREFIX dc: <http://purl.org/dc/elements/1.1/> SELECT ?book ?who WHERE { ?book dc:creator ?who }\"}\n");
+    t.push_str("case\t{/id*\tfalse\n");
+    t.push_str("case\t/id*}\tfalse\n");
+    t.push_str("case\t{/?id}\tfalse\n");
+    t.push_str("case\t{var:prefix}\tfalse\n");
+    t.push_str("case\t{hello:2*}\tfalse\n");
+    t.push_str("case\t{??hello}\tfalse\n");
+    t.push_str("case\t{!hello}\tfalse\n");
+    t.push_str("case\t{with space}\tfalse\n");
+    t.push_str("case\t{ leading_space}\tfalse\n");
+    t.push_str("case\t{trailing_space }\tfalse\n");
+    t.push_str("case\t{=path}\tfalse\n");
+    t.push_str("case\t{$var}\tfalse\n");
+    t.push_str("case\t{|var*}\tfalse\n");
+    t.push_str("case\t{*keys?}\tfalse\n");
+    t.push_str("case\t{?empty=default,var}\tfalse\n");
+    t.push_str("case\t{var}{-prefix|/-/|var}\tfalse\n");
+    t.push_str("case\t?q={searchTerms}&amp;c={example:color?}\tfalse\n");
+    t.push_str("case\tx{?empty|foo=none}\tfalse\n");
+    t.push_str("case\t/h{#hello+}\tfalse\n");
+    t.push_str("case\t/h#{hello+}\tfalse\n");
+    t.push_str("case\t{keys:1}\tfalse\n");
+    t.push_str("case\t{+keys:1}\tfalse\n");
+    t.push_str("case\t{;keys:1*}\tfalse\n");
+    t.push_str("case\t?{-join|&|var,list}\tfalse\n");
+    t.push_str("case\t/people/{~thing}\tfalse\n");
+    t.push_str("case\t/{default-graph-uri}\tfalse\n");
+    t.push_str("case\t/sparql{?query,default-graph-uri}\tfalse\n");
+    t.push_str("case\t/sparql{?query){&default-graph-uri*}\tfalse\n");
+    t.push_str("case\t/resolution{?x, y}\tfalse\n");
+    t.push_str("== edge cases\n");
+    t.push_str("vars\t{\"n\": 42, \"zero\": 0, \"neg\": -7, \"f\": 2.5, \"big\": 1e+22, \"tiny\": 0.0001, \"whole\": 3.0, \"t\": true, \"no\": false, \"nothing\": null, \"empty\": \"\", \"word\": \"drücken\", \"emoji\": \"a😀b\", \"pct\": \"50%\", \"path\": \"/a b/c\", \"list\": [\"x\", \"y z\", null, 3], \"nums\": [1, 2.5, true], \"dict\": {\"b\": \"2\", \"a\": \"1\", \"c\": null}, \"pairs\": {\"__pairs__\": [[\"z\", 1], [\"a\", \"x y\"]]}, \"empty_list\": [], \"empty_dict\": {}, \"q\": \"a&b=c\", \"long\": \"abcdefghij\"}\n");
+    t.push_str("expand\t{n}\n");
+    t.push_str("expand\t{zero}\n");
+    t.push_str("expand\t{neg}\n");
+    t.push_str("expand\t{f}\n");
+    t.push_str("expand\t{big}\n");
+    t.push_str("expand\t{tiny}\n");
+    t.push_str("expand\t{whole}\n");
+    t.push_str("expand\t{t}\n");
+    t.push_str("expand\t{no}\n");
+    t.push_str("expand\t{nothing}\n");
+    t.push_str("expand\t{empty}\n");
+    t.push_str("expand\t{?empty}\n");
+    t.push_str("expand\t{;empty}\n");
+    t.push_str("expand\t{/empty}\n");
+    t.push_str("expand\t{.empty}\n");
+    t.push_str("expand\t{&empty}\n");
+    t.push_str("expand\t{word}\n");
+    t.push_str("expand\t{+word}\n");
+    t.push_str("expand\t{emoji}\n");
+    t.push_str("expand\t{emoji:2}\n");
+    t.push_str("expand\t{pct}\n");
+    t.push_str("expand\t{+pct}\n");
+    t.push_str("expand\t{#pct}\n");
+    t.push_str("expand\t{path}\n");
+    t.push_str("expand\t{+path}\n");
+    t.push_str("expand\t{/path}\n");
+    t.push_str("expand\t{list}\n");
+    t.push_str("expand\t{list*}\n");
+    t.push_str("expand\t{/list}\n");
+    t.push_str("expand\t{/list*}\n");
+    t.push_str("expand\t{?list}\n");
+    t.push_str("expand\t{?list*}\n");
+    t.push_str("expand\t{;list}\n");
+    t.push_str("expand\t{;list*}\n");
+    t.push_str("expand\t{.list}\n");
+    t.push_str("expand\t{#list*}\n");
+    t.push_str("expand\t{nums}\n");
+    t.push_str("expand\t{dict}\n");
+    t.push_str("expand\t{dict*}\n");
+    t.push_str("expand\t{/dict}\n");
+    t.push_str("expand\t{/dict*}\n");
+    t.push_str("expand\t{?dict}\n");
+    t.push_str("expand\t{?dict*}\n");
+    t.push_str("expand\t{;dict}\n");
+    t.push_str("expand\t{;dict*}\n");
+    t.push_str("expand\t{.dict*}\n");
+    t.push_str("expand\t{pairs}\n");
+    t.push_str("expand\t{pairs*}\n");
+    t.push_str("expand\t{?pairs*}\n");
+    t.push_str("expand\t{;pairs}\n");
+    t.push_str("expand\t{/pairs*}\n");
+    t.push_str("expand\t{empty_list}\n");
+    t.push_str("expand\t{?empty_list}\n");
+    t.push_str("expand\t{/empty_list}\n");
+    t.push_str("expand\t{;empty_list}\n");
+    t.push_str("expand\t{empty_dict}\n");
+    t.push_str("expand\t{?empty_dict*}\n");
+    t.push_str("expand\t{;empty_dict}\n");
+    t.push_str("expand\t{.empty_dict}\n");
+    t.push_str("expand\t{long:3}\n");
+    t.push_str("expand\t{long:0}\n");
+    t.push_str("expand\t{long:-3}\n");
+    t.push_str("expand\t{long: 4}\n");
+    t.push_str("expand\t{long:+2}\n");
+    t.push_str("expand\t{long:1_0}\n");
+    t.push_str("expand\t{long:30}\n");
+    t.push_str("expand\t{?long:5}\n");
+    t.push_str("expand\t{;long:2}\n");
+    t.push_str("expand\t{/long:2,word:3}\n");
+    t.push_str("expand\t{long:3*}\n");
+    t.push_str("expand\t{long*:3}\n");
+    t.push_str("expand\t{n:2}\n");
+    t.push_str("expand\t{?f:1}\n");
+    t.push_str("expand\t{t:1}\n");
+    t.push_str("expand\t{zero:1}\n");
+    t.push_str("expand\t{list:2}\n");
+    t.push_str("expand\t{dict:1}\n");
+    t.push_str("expand\t{missing=fallback}\n");
+    t.push_str("expand\t{missing=a b}\n");
+    t.push_str("expand\t{zero=dflt}\n");
+    t.push_str("expand\t{no=dflt}\n");
+    t.push_str("expand\t{empty=dflt}\n");
+    t.push_str("expand\t{empty_list=dflt}\n");
+    t.push_str("expand\t{n=dflt}\n");
+    t.push_str("expand\t{?missing=1,n}\n");
+    t.push_str("expand\t{/missing=x,y=}\n");
+    t.push_str("expand\t{|list}\n");
+    t.push_str("expand\t{!n,word}\n");
+    t.push_str("expand\t{@dict*}\n");
+    t.push_str("expand\t{|nothing}\n");
+    t.push_str("expand\t{&q}\n");
+    t.push_str("expand\t{?q}\n");
+    t.push_str("expand\t{+q}\n");
+    t.push_str("expand\t{a{b}\n");
+    t.push_str("expand\tx}y{n}\n");
+    t.push_str("expand\t{n}{n}{?n}\n");
+    t.push_str("expand\t{,}\n");
+    t.push_str("expand\t{,n}\n");
+    t.push_str("expand\t{missing:x}\n");
+    t.push_str("expand\t{n:}\n");
+    t.push_str("expand\t{n:3.5}\n");
+    t.push_str("expand\t{=n}\n");
+    t.push_str("expand\t{??n}\n");
+    t.push_str("expand\t/{n}/{word}{?list*,dict*}{#q}\n");
+    t.push_str("parse\t{a,b:3,c*}{?d=x,e}{+f}\n");
+    t.push_str("variables\t{a,b:3,c*}{?d=x,e}{+f}\n");
+    t.push_str("parse\t{/list*,n}{.x:2}\n");
+    t.push_str("variables\t{/list*,n}{.x:2}\n");
+    t.push_str("parse\t{,}{=n}\n");
+    t.push_str("variables\t{,}{=n}\n");
+    t.push_str("parse\t{a:1}{b:x}\n");
+    t.push_str("variables\t{a:1}{b:x}\n");
+    t.push_str("parse\tno templates\n");
+    t.push_str("variables\tno templates\n");
+    t.push_str("parse\t{m*:2}{n:2*}\n");
+    t.push_str("variables\t{m*:2}{n:2*}\n");
+    t.push_str("parse\t{?a}{?a}{&b,a}\n");
+    t.push_str("variables\t{?a}{?a}{&b,a}\n");
+    t.push_str("partial\t{n}{missing}{/list*}\n");
+    t.push_str("partial\t{?n,missing}\n");
+    t.push_str("partial\t{?missing,n}\n");
+    t.push_str("partial\t{+path}{#missing}\n");
+    t.push_str("partial\thttps://x.test{/word,missing}\n");
+    t.push_str("partial\t{nothing}{empty}{?empty}\n");
+    t.push_str("== api client\n");
+    t.push_str("api\tapi.json\trequests.tsv\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# client\tlink\tbound by the client\tper call\n");
+    t.push_str("cli\ttiles\t{\"z\": 4}\t{\"x\": 193, \"y\": 244, \"style\": \"dark\"}\n");
+    t.push_str("cli\tevents\t{\"org\": \"ops\", \"format\": \"ndjson\"}\t{\"types\": [\"release\", \"push\"]}\n");
+    t.push_str("web\tcompare\t{\"owner\": \"acme\", \"repo\": \"rocket\"}\t{\"base\": \"v1.0\", \"head\": \"fix/#12\"}\n");
+    t.push_str("cli\tcontents\t{\"owner\": \"ops\", \"repo\": \"infra\"}\t{\"path\": \"x/y?z#w\"}\n");
+    t.push_str("cli\tevents\t{\"org\": \"acme\", \"format\": \"\"}\t{\"since\": \"2024-01-01T00:00:00Z\", \"types\": [\"release\", \"push\"]}\n");
+    t.push_str("cli\tmatrix\t{\"os\": \"macos\"}\t{\"arch\": [\"arm64\", \"x86_64\", \"riscv64\"]}\n");
+    t.push_str("web\ttiles\t{\"z\": 8}\t{\"x\": 1840, \"y\": 3613, \"style\": \"dark\"}\n");
+    t.push_str("bot\tsearch\t{\"sort\": \"indexed\"}\t{\"q\": \"TODO in:file\", \"page\": 4}\n");
+    t.push_str("bot\tmatrix\t{\"os\": \"macos\"}\t{\"arch\": [\"riscv64\"]}\n");
+    t.push_str("web\tarchive\t{\"owner\": \"ops\", \"repo\": \"infra\", \"archive_format\": \"zipball\"}\t{\"ref\": \"main\"}\n");
+    t.push_str("bot\tevents\t{\"org\": \"acme\", \"format\": \"json\"}\t{\"since\": \"1700000000\", \"types\": [\"release\", \"push\"]}\n");
+    t.push_str("web\tmatrix\t{\"os\": \"macos\"}\t{\"arch\": [\"arm64\", \"riscv64\"], \"env\": {\"__pairs__\": [[\"RUST_LOG\", \"debug\"], [\"CI\", \"true\"]]}}\n");
+    t.push_str("web\tsearch\t{\"sort\": \"indexed\"}\t{\"q\": \"TODO in:file\", \"order\": \"asc\"}\n");
+    t.push_str("bot\tissues\t{\"owner\": \"ünïcode\", \"repo\": \"naïve repo\"}\t{\"state\": \"all\", \"page\": 3}\n");
+    t.push_str("web\tarchive\t{\"owner\": \"ünïcode\", \"repo\": \"naïve repo\", \"archive_format\": \"tarball\"}\t{\"ref\": \"main\"}\n");
+    t.push_str("cli\ttiles\t{\"z\": 13}\t{\"x\": 2223, \"y\": 230}\n");
+    t.push_str("web\trepo\t{\"owner\": \"ops\", \"repo\": \"infra\"}\t{}\n");
+    t.push_str("web\tevents\t{\"org\": \"ops\", \"format\": \"\"}\t{\"types\": [\"push\", \"pr\"]}\n");
+    t.push_str("cli\tsearch\t{\"sort\": \"indexed\"}\t{\"q\": \"a+b=c\", \"page\": 4}\n");
+    t.push_str("cli\tevents\t{\"org\": \"ops\", \"format\": \"ndjson\"}\t{\"types\": [\"pr\", \"push\"]}\n");
+    t.push_str("bot\tcontents\t{\"owner\": \"ops\", \"repo\": \"infra\"}\t{\"path\": \"README.md\"}\n");
+    t.push_str("cli\tdocs\t{}\t{\"section\": [\"guide\", \"install\"]}\n");
+    t.push_str("bot\ttiles\t{\"z\": 4}\t{\"x\": 2087, \"y\": 1721}\n");
+    t.push_str("web\tissues\t{\"owner\": \"ünïcode\", \"repo\": \"naïve repo\"}\t{\"number\": 640}\n");
+    t.push_str("bot\trepo\t{\"owner\": \"ops\", \"repo\": \"infra\"}\t{}\n");
+    t.push_str("cli\tsearch\t{\"sort\": \"indexed\"}\t{\"q\": \"fn main\", \"page\": 3, \"order\": \"desc\"}\n");
+    t.push_str("web\tissues\t{\"owner\": \"dev-tools\", \"repo\": \"lint\"}\t{\"number\": 377}\n");
+    t.push_str("web\trepo\t{\"owner\": \"dev-tools\", \"repo\": \"lint\"}\t{}\n");
+    t.push_str("cli\trepo\t{\"owner\": \"acme\", \"repo\": \"rocket\"}\t{}\n");
+    t.push_str("bot\trepo\t{\"owner\": \"ops\", \"repo\": \"infra\"}\t{}\n");
+    t.push_str("web\tcontents\t{\"owner\": \"ünïcode\", \"repo\": \"naïve repo\"}\t{\"path\": \"src/main.rs\", \"ref\": \"main\"}\n");
+    t.push_str("bot\tsearch\t{\"sort\": \"indexed\"}\t{\"q\": \"TODO in:file\"}\n");
+    t.push_str("cli\tdocs\t{}\t{\"section\": [\"guide\", \"install\"], \"anchor\": \"§3.2\"}\n");
+    t.push_str("cli\tcompare\t{\"owner\": \"acme\", \"repo\": \"rocket\"}\t{\"base\": \"main\", \"head\": \"fix/#12\"}\n");
+    t.push_str("web\tcontents\t{\"owner\": \"ops\", \"repo\": \"infra\"}\t{\"path\": \"docs/a b/guide.md\"}\n");
+    t.push_str("cli\tevents\t{\"org\": \"ops\", \"format\": \"\"}\t{}\n");
+    t.push_str("web\tevents\t{\"org\": \"acme\", \"format\": \"json\"}\t{\"since\": \"1700000000\"}\n");
+    t.push_str("web\tcompare\t{\"owner\": \"ünïcode\", \"repo\": \"naïve repo\"}\t{\"base\": \"v1.0\", \"head\": \"fix/#12\"}\n");
+    t.push_str("cli\tissues\t{\"owner\": \"acme\", \"repo\": \"rocket\"}\t{\"number\": 181}\n");
+    t.push_str("bot\tcompare\t{\"owner\": \"ünïcode\", \"repo\": \"naïve repo\"}\t{\"base\": \"main\", \"head\": \"user:branch\"}\n");
+    t.push_str("web\ttiles\t{\"z\": 14}\t{\"x\": 3946, \"y\": 4980}\n");
+    t.push_str("web\tcompare\t{\"owner\": \"dev-tools\", \"repo\": \"lint\"}\t{\"base\": \"v1.0\", \"head\": \"user:branch\"}\n");
+    t.push_str("cli\tcompare\t{\"owner\": \"ops\", \"repo\": \"infra\"}\t{\"base\": \"v1.0\", \"head\": \"fix/#12\"}\n");
+    t.push_str("bot\tarchive\t{\"owner\": \"ünïcode\", \"repo\": \"naïve repo\", \"archive_format\": \"tarball\"}\t{\"ref\": \"v2.0.1\"}\n");
+    v.push(DataFile { path: "requests.tsv".to_string(), hex: false, body: t });
+}

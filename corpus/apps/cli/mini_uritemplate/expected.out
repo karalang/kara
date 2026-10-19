@@ -1,0 +1,861 @@
+== spec-examples: Level 1 Examples
+-- vars hello, var
+-- case '{var}'
+   'value' [match]
+-- case '{hello}'
+   'Hello%20World%21' [match]
+== spec-examples: Level 2 Examples
+-- vars hello, path, var
+-- case '{+var}'
+   'value' [match]
+-- case '{+hello}'
+   'Hello%20World!' [match]
+-- case '{+path}/here'
+   '/foo/bar/here' [match]
+-- case 'here?ref={+path}'
+   'here?ref=/foo/bar' [match]
+== spec-examples: Level 3 Examples
+-- vars empty, hello, path, var, x, y
+-- case 'map?{x,y}'
+   'map?1024,768' [match]
+-- case '{x,hello,y}'
+   '1024,Hello%20World%21,768' [match]
+-- case '{+x,hello,y}'
+   '1024,Hello%20World!,768' [match]
+-- case '{+path,x}/here'
+   '/foo/bar,1024/here' [match]
+-- case '{#x,hello,y}'
+   '#1024,Hello%20World!,768' [match]
+-- case '{#path,x}/here'
+   '#/foo/bar,1024/here' [match]
+-- case 'X{.var}'
+   'X.value' [match]
+-- case 'X{.x,y}'
+   'X.1024.768' [match]
+-- case '{/var}'
+   '/value' [match]
+-- case '{/var,x}/here'
+   '/value/1024/here' [match]
+-- case '{;x,y}'
+   ';x=1024;y=768' [match]
+-- case '{;x,y,empty}'
+   ';x=1024;y=768;empty' [match]
+-- case '{?x,y}'
+   '?x=1024&y=768' [match]
+-- case '{?x,y,empty}'
+   '?x=1024&y=768&empty=' [match]
+-- case '?fixed=yes{&x}'
+   '?fixed=yes&x=1024' [match]
+-- case '{&x,y,empty}'
+   '&x=1024&y=768&empty=' [match]
+== spec-examples: Level 4 Examples
+-- vars hello, keys, list, path, var
+-- case '{var:3}'
+   'val' [match]
+-- case '{var:30}'
+   'value' [match]
+-- case '{list}'
+   'red,green,blue' [match]
+-- case '{list*}'
+   'red,green,blue' [match]
+-- case '{keys}'
+   'comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{keys*}'
+   'comma=%2C,dot=.,semi=%3B' [one of 6]
+-- case '{+path:6}/here'
+   '/foo/b/here' [match]
+-- case '{+list}'
+   'red,green,blue' [match]
+-- case '{+list*}'
+   'red,green,blue' [match]
+-- case '{+keys}'
+   'comma,,,dot,.,semi,;' [one of 6]
+-- case '{+keys*}'
+   'comma=,,dot=.,semi=;' [one of 6]
+-- case '{#path:6}/here'
+   '#/foo/b/here' [match]
+-- case '{#list}'
+   '#red,green,blue' [match]
+-- case '{#list*}'
+   '#red,green,blue' [match]
+-- case '{#keys}'
+   '#comma,,,dot,.,semi,;' [one of 6]
+-- case '{#keys*}'
+   '#comma=,,dot=.,semi=;' [one of 6]
+-- case 'X{.var:3}'
+   'X.val' [match]
+-- case 'X{.list}'
+   'X.red,green,blue' [match]
+-- case 'X{.list*}'
+   'X.red.green.blue' [match]
+-- case 'X{.keys}'
+   'X.comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{/var:1,var}'
+   '/v/value' [match]
+-- case '{/list}'
+   '/red,green,blue' [match]
+-- case '{/list*}'
+   '/red/green/blue' [match]
+-- case '{/list*,path:4}'
+   '/red/green/blue/%2Ffoo' [match]
+-- case '{/keys}'
+   '/comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{/keys*}'
+   '/comma=%2C/dot=./semi=%3B' [one of 6]
+-- case '{;hello:5}'
+   ';hello=Hello' [match]
+-- case '{;list}'
+   ';list=red,green,blue' [match]
+-- case '{;list*}'
+   ';list=red;list=green;list=blue' [match]
+-- case '{;keys}'
+   ';keys=comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{;keys*}'
+   ';comma=%2C;dot=.;semi=%3B' [one of 6]
+-- case '{?var:3}'
+   '?var=val' [match]
+-- case '{?list}'
+   '?list=red,green,blue' [match]
+-- case '{?list*}'
+   '?list=red&list=green&list=blue' [match]
+-- case '{?keys}'
+   '?keys=comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{?keys*}'
+   '?comma=%2C&dot=.&semi=%3B' [one of 6]
+-- case '{&var:3}'
+   '&var=val' [match]
+-- case '{&list}'
+   '&list=red,green,blue' [match]
+-- case '{&list*}'
+   '&list=red&list=green&list=blue' [match]
+-- case '{&keys}'
+   '&keys=comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{&keys*}'
+   '&comma=%2C&dot=.&semi=%3B' [one of 6]
+== spec-examples-by-section: 3.2.1 Variable Expansion
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{count}'
+   'one,two,three' [match]
+-- case '{count*}'
+   'one,two,three' [match]
+-- case '{/count}'
+   '/one,two,three' [match]
+-- case '{/count*}'
+   '/one/two/three' [match]
+-- case '{;count}'
+   ';count=one,two,three' [match]
+-- case '{;count*}'
+   ';count=one;count=two;count=three' [match]
+-- case '{?count}'
+   '?count=one,two,three' [match]
+-- case '{?count*}'
+   '?count=one&count=two&count=three' [match]
+-- case '{&count*}'
+   '&count=one&count=two&count=three' [match]
+== spec-examples-by-section: 3.2.2 Simple String Expansion
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{var}'
+   'value' [match]
+-- case '{hello}'
+   'Hello%20World%21' [match]
+-- case '{half}'
+   '50%25' [match]
+-- case 'O{empty}X'
+   'OX' [match]
+-- case 'O{undef}X'
+   'OX' [match]
+-- case '{x,y}'
+   '1024,768' [match]
+-- case '{x,hello,y}'
+   '1024,Hello%20World%21,768' [match]
+-- case '?{x,empty}'
+   '?1024,' [match]
+-- case '?{x,undef}'
+   '?1024' [match]
+-- case '?{undef,y}'
+   '?768' [match]
+-- case '{var:3}'
+   'val' [match]
+-- case '{var:30}'
+   'value' [match]
+-- case '{list}'
+   'red,green,blue' [match]
+-- case '{list*}'
+   'red,green,blue' [match]
+-- case '{keys}'
+   'comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{keys*}'
+   'comma=%2C,dot=.,semi=%3B' [one of 6]
+== spec-examples-by-section: 3.2.3 Reserved Expansion
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{+var}'
+   'value' [match]
+-- case '{/var,empty}'
+   '/value/' [match]
+-- case '{/var,undef}'
+   '/value' [match]
+-- case '{+hello}'
+   'Hello%20World!' [match]
+-- case '{+half}'
+   '50%25' [match]
+-- case '{base}index'
+   'http%3A%2F%2Fexample.com%2Fhome%2Findex' [match]
+-- case '{+base}index'
+   'http://example.com/home/index' [match]
+-- case 'O{+empty}X'
+   'OX' [match]
+-- case 'O{+undef}X'
+   'OX' [match]
+-- case '{+path}/here'
+   '/foo/bar/here' [match]
+-- case '{+path:6}/here'
+   '/foo/b/here' [match]
+-- case 'here?ref={+path}'
+   'here?ref=/foo/bar' [match]
+-- case 'up{+path}{var}/here'
+   'up/foo/barvalue/here' [match]
+-- case '{+x,hello,y}'
+   '1024,Hello%20World!,768' [match]
+-- case '{+path,x}/here'
+   '/foo/bar,1024/here' [match]
+-- case '{+list}'
+   'red,green,blue' [match]
+-- case '{+list*}'
+   'red,green,blue' [match]
+-- case '{+keys}'
+   'comma,,,dot,.,semi,;' [one of 6]
+-- case '{+keys*}'
+   'comma=,,dot=.,semi=;' [one of 6]
+== spec-examples-by-section: 3.2.4 Fragment Expansion
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{#var}'
+   '#value' [match]
+-- case '{#hello}'
+   '#Hello%20World!' [match]
+-- case '{#half}'
+   '#50%25' [match]
+-- case 'foo{#empty}'
+   'foo#' [match]
+-- case 'foo{#undef}'
+   'foo' [match]
+-- case '{#x,hello,y}'
+   '#1024,Hello%20World!,768' [match]
+-- case '{#path,x}/here'
+   '#/foo/bar,1024/here' [match]
+-- case '{#path:6}/here'
+   '#/foo/b/here' [match]
+-- case '{#list}'
+   '#red,green,blue' [match]
+-- case '{#list*}'
+   '#red,green,blue' [match]
+-- case '{#keys}'
+   '#comma,,,dot,.,semi,;' [one of 6]
+== spec-examples-by-section: 3.2.5 Label Expansion with Dot-Prefix
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{.who}'
+   '.fred' [match]
+-- case '{.who,who}'
+   '.fred.fred' [match]
+-- case '{.half,who}'
+   '.50%25.fred' [match]
+-- case 'www{.dom*}'
+   'www.example.com' [match]
+-- case 'X{.var}'
+   'X.value' [match]
+-- case 'X{.var:3}'
+   'X.val' [match]
+-- case 'X{.empty}'
+   'X.' [match]
+-- case 'X{.undef}'
+   'X' [match]
+-- case 'X{.list}'
+   'X.red,green,blue' [match]
+-- case 'X{.list*}'
+   'X.red.green.blue' [match]
+-- case '{#keys}'
+   '#comma,,,dot,.,semi,;' [one of 6]
+-- case '{#keys*}'
+   '#comma=,,dot=.,semi=;' [one of 6]
+-- case 'X{.empty_keys}'
+   'X' [match]
+-- case 'X{.empty_keys*}'
+   'X' [match]
+== spec-examples-by-section: 3.2.6 Path Segment Expansion
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{/who}'
+   '/fred' [match]
+-- case '{/who,who}'
+   '/fred/fred' [match]
+-- case '{/half,who}'
+   '/50%25/fred' [match]
+-- case '{/who,dub}'
+   '/fred/me%2Ftoo' [match]
+-- case '{/var}'
+   '/value' [match]
+-- case '{/var,empty}'
+   '/value/' [match]
+-- case '{/var,undef}'
+   '/value' [match]
+-- case '{/var,x}/here'
+   '/value/1024/here' [match]
+-- case '{/var:1,var}'
+   '/v/value' [match]
+-- case '{/list}'
+   '/red,green,blue' [match]
+-- case '{/list*}'
+   '/red/green/blue' [match]
+-- case '{/list*,path:4}'
+   '/red/green/blue/%2Ffoo' [match]
+-- case '{/keys}'
+   '/comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{/keys*}'
+   '/comma=%2C/dot=./semi=%3B' [one of 6]
+== spec-examples-by-section: 3.2.7 Path-Style Parameter Expansion
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{;who}'
+   ';who=fred' [match]
+-- case '{;half}'
+   ';half=50%25' [match]
+-- case '{;empty}'
+   ';empty' [match]
+-- case '{;hello:5}'
+   ';hello=Hello' [match]
+-- case '{;v,empty,who}'
+   ';v=6;empty;who=fred' [match]
+-- case '{;v,bar,who}'
+   ';v=6;who=fred' [match]
+-- case '{;x,y}'
+   ';x=1024;y=768' [match]
+-- case '{;x,y,empty}'
+   ';x=1024;y=768;empty' [match]
+-- case '{;x,y,undef}'
+   ';x=1024;y=768' [match]
+-- case '{;list}'
+   ';list=red,green,blue' [match]
+-- case '{;list*}'
+   ';list=red;list=green;list=blue' [match]
+-- case '{;keys}'
+   ';keys=comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{;keys*}'
+   ';comma=%2C;dot=.;semi=%3B' [one of 6]
+== spec-examples-by-section: 3.2.8 Form-Style Query Expansion
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{?who}'
+   '?who=fred' [match]
+-- case '{?half}'
+   '?half=50%25' [match]
+-- case '{?x,y}'
+   '?x=1024&y=768' [match]
+-- case '{?x,y,empty}'
+   '?x=1024&y=768&empty=' [match]
+-- case '{?x,y,undef}'
+   '?x=1024&y=768' [match]
+-- case '{?var:3}'
+   '?var=val' [match]
+-- case '{?list}'
+   '?list=red,green,blue' [match]
+-- case '{?list*}'
+   '?list=red&list=green&list=blue' [match]
+-- case '{?keys}'
+   '?keys=comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{?keys*}'
+   '?comma=%2C&dot=.&semi=%3B' [one of 6]
+== spec-examples-by-section: 3.2.9 Form-Style Query Continuation
+-- vars base, count, dom, dub, empty, empty_keys, half, hello, keys, list, path, undef, v, var, who, x, y
+-- case '{&who}'
+   '&who=fred' [match]
+-- case '{&half}'
+   '&half=50%25' [match]
+-- case '?fixed=yes{&x}'
+   '?fixed=yes&x=1024' [match]
+-- case '{&var:3}'
+   '&var=val' [match]
+-- case '{&x,y,empty}'
+   '&x=1024&y=768&empty=' [match]
+-- case '{&x,y,undef}'
+   '&x=1024&y=768' [match]
+-- case '{&list}'
+   '&list=red,green,blue' [match]
+-- case '{&list*}'
+   '&list=red&list=green&list=blue' [match]
+-- case '{&keys}'
+   '&keys=comma,%2C,dot,.,semi,%3B' [one of 6]
+-- case '{&keys*}'
+   '&comma=%2C&dot=.&semi=%3B' [one of 6]
+== extended-tests: Additional Examples 1
+-- vars Some%20Thing, Stra%C3%9Fe, assoc_special_chars, fields, first_name, format, geocode, group_id, id, lang, last.name, lat, long, number, page, q, query, random, token, uri, word
+-- case '{/id*}'
+   '/person' [match]
+-- case '{/id*}{?fields,first_name,last.name,token}'
+   '/person?fields=id,name,picture&first_name=John&last.name=Doe&token=12345' [one of 6]
+-- case '/search.{format}{?q,geocode,lang,locale,page,result_type}'
+   '/search.json?q=URI%20Templates&geocode=37.76,-122.427&lang=en&page=5' [one of 2]
+-- case '/test{/Some%20Thing}'
+   '/test/foo' [match]
+-- case '/set{?number}'
+   '/set?number=6' [match]
+-- case '/loc{?long,lat}'
+   '/loc?long=37.76&lat=-122.427' [match]
+-- case '/base{/group_id,first_name}/pages{/page,lang}{?format,q}'
+   '/base/12345/John/pages/5/en?format=json&q=URI%20Templates' [match]
+-- case '/sparql{?query}'
+   '/sparql?query=PREFIX%20dc%3A%20%3Chttp%3A%2F%2Fpurl.org%2Fdc%2Felements%2F1.1%2F%3E%20SELECT%20%3Fbook%20%3Fwho%20WHERE%20%7B%20%3Fbook%20dc%3Acreator%20%3Fwho%20%7D' [match]
+-- case '/go{?uri}'
+   '/go?uri=http%3A%2F%2Fexample.org%2F%3Furi%3Dhttp%253A%252F%252Fexample.org%252F' [match]
+-- case '/service{?word}'
+   '/service?word=dr%C3%BCcken' [match]
+-- case '/lookup{?Stra%C3%9Fe}'
+   '/lookup?Stra%C3%9Fe=Gr%C3%BCner%20Weg' [match]
+-- case '{random}'
+   '%C5%A1%C3%B6%C3%A4%C5%B8%C5%93%C3%B1%C3%AA%E2%82%AC%C2%A3%C2%A5%E2%80%A1%C3%91%C3%92%C3%93%C3%94%C3%95%C3%96%C3%97%C3%98%C3%99%C3%9A%C3%A0%C3%A1%C3%A2%C3%A3%C3%A4%C3%A5%C3%A6%C3%A7%C3%BF' [match]
+-- case '{?assoc_special_chars*}'
+   '?%C5%A1%C3%B6%C3%A4%C5%B8%C5%93%C3%B1%C3%AA%E2%82%AC%C2%A3%C2%A5%E2%80%A1%C3%91%C3%92%C3%93%C3%94%C3%95=%C3%96%C3%97%C3%98%C3%99%C3%9A%C3%A0%C3%A1%C3%A2%C3%A3%C3%A4%C3%A5%C3%A6%C3%A7%C3%BF' [match]
+== extended-tests: Additional Examples 2
+-- vars fields, format, geocode, id, lang, page, q, start, token
+-- case '{/id*}'
+   '/person/albums' [one of 2]
+-- case '{/id*}{?fields,token}'
+   '/person/albums?fields=id,name,picture&token=12345' [one of 12]
+== extended-tests: Additional Examples 3: Empty Variables
+-- vars empty_assoc, empty_list
+-- case '{/empty_list}'
+   '' [one of 1]
+-- case '{/empty_list*}'
+   '' [one of 1]
+-- case '{?empty_list}'
+   '' [one of 1]
+-- case '{?empty_list*}'
+   '' [one of 1]
+-- case '{?empty_assoc}'
+   '' [one of 1]
+-- case '{?empty_assoc*}'
+   '' [one of 1]
+== extended-tests: Additional Examples 4: Numeric Keys
+-- vars 1337, 42, german
+-- case '{42}'
+   'The%20Answer%20to%20the%20Ultimate%20Question%20of%20Life%2C%20the%20Universe%2C%20and%20Everything' [match]
+-- case '{?42}'
+   '?42=The%20Answer%20to%20the%20Ultimate%20Question%20of%20Life%2C%20the%20Universe%2C%20and%20Everything' [match]
+-- case '{1337}'
+   'leet,as,it,can,be' [match]
+-- case '{?1337*}'
+   '?1337=leet&1337=as&1337=it&1337=can&1337=be' [match]
+-- case '{?german*}'
+   '?11=elf&12=zw%C3%B6lf' [one of 2]
+== negative-tests: Failure Tests
+-- vars  leading_space, default-graph-uri, empty, example, hello, id, keys, list, path, query, searchTerms, trailing_space , var, with space, x, y, ~thing
+-- case '{/id*'
+   '{/id*' [expanded, failure expected]
+-- case '/id*}'
+   '/id*}' [expanded, failure expected]
+-- case '{/?id}'
+   '' [expanded, failure expected]
+-- case '{var:prefix}'
+   error: ValueError: invalid literal for int() with base 10: 'prefix' [failure expected]
+-- case '{hello:2*}'
+   'He' [expanded, failure expected]
+-- case '{??hello}'
+   '' [expanded, failure expected]
+-- case '{!hello}'
+   '!Hello%20World%21' [expanded, failure expected]
+-- case '{with space}'
+   'fail' [expanded, failure expected]
+-- case '{ leading_space}'
+   'Hi%21' [expanded, failure expected]
+-- case '{trailing_space }'
+   'Bye%21' [expanded, failure expected]
+-- case '{=path}'
+   'path' [expanded, failure expected]
+-- case '{$var}'
+   '' [expanded, failure expected]
+-- case '{|var*}'
+   '|value' [expanded, failure expected]
+-- case '{*keys?}'
+   '' [expanded, failure expected]
+-- case '{?empty=default,var}'
+   '?empty=&var=value' [expanded, failure expected]
+-- case '{var}{-prefix|/-/|var}'
+   'value' [expanded, failure expected]
+-- case '?q={searchTerms}&amp;c={example:color?}'
+   error: ValueError: invalid literal for int() with base 10: 'color?' [failure expected]
+-- case 'x{?empty|foo=none}'
+   'x?empty|foo=none' [expanded, failure expected]
+-- case '/h{#hello+}'
+   '/h' [expanded, failure expected]
+-- case '/h#{hello+}'
+   '/h#' [expanded, failure expected]
+-- case '{keys:1}'
+   'comma,%2C,dot,.,semi,%3B' [expanded, failure expected]
+-- case '{+keys:1}'
+   'comma,,,dot,.,semi,;' [expanded, failure expected]
+-- case '{;keys:1*}'
+   ';comma=%2C;dot=.;semi=%3B' [expanded, failure expected]
+-- case '?{-join|&|var,list}'
+   '?red,green,blue' [expanded, failure expected]
+-- case '/people/{~thing}'
+   '/people/some-user' [expanded, failure expected]
+-- case '/{default-graph-uri}'
+   '/http%3A%2F%2Fwww.example%2Fbook%2F,http%3A%2F%2Fwww.example%2Fpapers%2F' [expanded, failure expected]
+-- case '/sparql{?query,default-graph-uri}'
+   '/sparql?query=PREFIX%20dc%3A%20%3Chttp%3A%2F%2Fpurl.org%2Fdc%2Felements%2F1.1%2F%3E%20SELECT%20%3Fbook%20%3Fwho%20WHERE%20%7B%20%3Fbook%20dc%3Acreator%20%3Fwho%20%7D&default-graph-uri=http%3A%2F%2Fwww.example%2Fbook%2F,http%3A%2F%2Fwww.example%2Fpapers%2F' [expanded, failure expected]
+-- case '/sparql{?query){&default-graph-uri*}'
+   '/sparql' [expanded, failure expected]
+-- case '/resolution{?x, y}'
+   '/resolution?x=1024' [expanded, failure expected]
+== edge cases
+-- vars big, dict, emoji, empty, empty_dict, empty_list, f, list, long, n, neg, no, nothing, nums, pairs, path, pct, q, t, tiny, whole, word, zero
+-- expand '{n}'
+   '42'
+-- expand '{zero}'
+   '0'
+-- expand '{neg}'
+   '-7'
+-- expand '{f}'
+   '2.5'
+-- expand '{big}'
+   '1e%2B22'
+-- expand '{tiny}'
+   '0.0001'
+-- expand '{whole}'
+   '3.0'
+-- expand '{t}'
+   'True'
+-- expand '{no}'
+   'False'
+-- expand '{nothing}'
+   ''
+-- expand '{empty}'
+   ''
+-- expand '{?empty}'
+   '?empty='
+-- expand '{;empty}'
+   ';empty'
+-- expand '{/empty}'
+   '/'
+-- expand '{.empty}'
+   '.'
+-- expand '{&empty}'
+   '&empty='
+-- expand '{word}'
+   'dr%C3%BCcken'
+-- expand '{+word}'
+   'dr%C3%BCcken'
+-- expand '{emoji}'
+   'a%F0%9F%98%80b'
+-- expand '{emoji:2}'
+   'a%F0%9F%98%80'
+-- expand '{pct}'
+   '50%25'
+-- expand '{+pct}'
+   '50%25'
+-- expand '{#pct}'
+   '#50%25'
+-- expand '{path}'
+   '%2Fa%20b%2Fc'
+-- expand '{+path}'
+   '/a%20b/c'
+-- expand '{/path}'
+   '/%2Fa%20b%2Fc'
+-- expand '{list}'
+   'x,y%20z,None,3'
+-- expand '{list*}'
+   'x,y%20z,None,3'
+-- expand '{/list}'
+   '/x,y%20z,3'
+-- expand '{/list*}'
+   '/x/y%20z/3'
+-- expand '{?list}'
+   '?list=x,y%20z,None,3'
+-- expand '{?list*}'
+   '?list=x&list=y%20z&list=None&list=3'
+-- expand '{;list}'
+   ';list=x,y%20z,None,3'
+-- expand '{;list*}'
+   ';list=x;list=y%20z;list=3'
+-- expand '{.list}'
+   '.x,y%20z,3'
+-- expand '{#list*}'
+   '#x,y%20z,None,3'
+-- expand '{nums}'
+   '1,2.5,True'
+-- expand '{dict}'
+   'a,1,b,2,c,None'
+-- expand '{dict*}'
+   'a=1,b=2,c=None'
+-- expand '{/dict}'
+   '/a,1,b,2'
+-- expand '{/dict*}'
+   '/a=1/b=2'
+-- expand '{?dict}'
+   '?dict=a,1,b,2,c,None'
+-- expand '{?dict*}'
+   '?a=1&b=2&c=None'
+-- expand '{;dict}'
+   ';dict=a,1,b,2'
+-- expand '{;dict*}'
+   ';a=1;b=2'
+-- expand '{.dict*}'
+   '.a=1.b=2'
+-- expand '{pairs}'
+   'z,1,a,x%20y'
+-- expand '{pairs*}'
+   'z=1,a=x%20y'
+-- expand '{?pairs*}'
+   '?z=1&a=x%20y'
+-- expand '{;pairs}'
+   ';pairs=z,1,a,x%20y'
+-- expand '{/pairs*}'
+   '/z=1/a=x%20y'
+-- expand '{empty_list}'
+   ''
+-- expand '{?empty_list}'
+   ''
+-- expand '{/empty_list}'
+   ''
+-- expand '{;empty_list}'
+   ';empty_list='
+-- expand '{empty_dict}'
+   ''
+-- expand '{?empty_dict*}'
+   ''
+-- expand '{;empty_dict}'
+   ';empty_dict='
+-- expand '{.empty_dict}'
+   ''
+-- expand '{long:3}'
+   'abc'
+-- expand '{long:0}'
+   'abcdefghij'
+-- expand '{long:-3}'
+   'abcdefg'
+-- expand '{long: 4}'
+   'abcd'
+-- expand '{long:+2}'
+   'ab'
+-- expand '{long:1_0}'
+   'abcdefghij'
+-- expand '{long:30}'
+   'abcdefghij'
+-- expand '{?long:5}'
+   '?long=abcde'
+-- expand '{;long:2}'
+   ';long=ab'
+-- expand '{/long:2,word:3}'
+   '/ab/dr%C3%BC'
+-- expand '{long:3*}'
+   'abc'
+-- expand '{long*:3}'
+   ''
+-- expand '{n:2}'
+   error: TypeError: 'int' object is not subscriptable
+-- expand '{?f:1}'
+   error: TypeError: 'float' object is not subscriptable
+-- expand '{t:1}'
+   error: TypeError: 'bool' object is not subscriptable
+-- expand '{zero:1}'
+   error: TypeError: 'int' object is not subscriptable
+-- expand '{list:2}'
+   'x,y%20z,None,3'
+-- expand '{dict:1}'
+   'a,1,b,2,c,None'
+-- expand '{missing=fallback}'
+   'fallback'
+-- expand '{missing=a b}'
+   'a%20b'
+-- expand '{zero=dflt}'
+   'dflt'
+-- expand '{no=dflt}'
+   'dflt'
+-- expand '{empty=dflt}'
+   ''
+-- expand '{empty_list=dflt}'
+   'dflt'
+-- expand '{n=dflt}'
+   '42'
+-- expand '{?missing=1,n}'
+   '?missing=1&n=42'
+-- expand '{/missing=x,y=}'
+   '/x'
+-- expand '{|list}'
+   '|x,y%20z,None,3'
+-- expand '{!n,word}'
+   '!42!dr%C3%BCcken'
+-- expand '{@dict*}'
+   '@a=1,b=2,c=None'
+-- expand '{|nothing}'
+   ''
+-- expand '{&q}'
+   '&q=a%26b%3Dc'
+-- expand '{?q}'
+   '?q=a%26b%3Dc'
+-- expand '{+q}'
+   'a&b=c'
+-- expand '{a{b}'
+   ''
+-- expand 'x}y{n}'
+   'x}y42'
+-- expand '{n}{n}{?n}'
+   '4242?n=42'
+-- expand '{,}'
+   ''
+-- expand '{,n}'
+   '42'
+-- expand '{missing:x}'
+   error: ValueError: invalid literal for int() with base 10: 'x'
+-- expand '{n:}'
+   error: ValueError: invalid literal for int() with base 10: ''
+-- expand '{n:3.5}'
+   error: ValueError: invalid literal for int() with base 10: '3.5'
+-- expand '{=n}'
+   'n'
+-- expand '{??n}'
+   ''
+-- expand '/{n}/{word}{?list*,dict*}{#q}'
+   '/42/dr%C3%BCcken?list=x&list=y%20z&list=None&list=3&a=1&b=2&c=None#a&b=c'
+-- parse '{a,b:3,c*}{?d=x,e}{+f}'
+   'a,b:3,c*': operator '', start '', join ',', unreserved
+     'a' explode=False prefix=None
+     'b' explode=False prefix=3
+     'c' explode=True prefix=None
+   '?d=x,e': operator '?', start '?', join '&', unreserved
+     'd' explode=False prefix=None
+     'e' explode=False prefix=None
+     defaults {'d': 'x'}
+   '+f': operator '+', start '', join ',', reserved
+     'f' explode=False prefix=None
+-- variables '{a,b:3,c*}{?d=x,e}{+f}'
+   OrderedSet(['a', 'b', 'c', 'd', 'e', 'f'])
+-- parse '{/list*,n}{.x:2}'
+   '/list*,n': operator '/', start '/', join '/', unreserved
+     'list' explode=True prefix=None
+     'n' explode=False prefix=None
+   '.x:2': operator '.', start '.', join '.', unreserved
+     'x' explode=False prefix=2
+-- variables '{/list*,n}{.x:2}'
+   OrderedSet(['list', 'n', 'x'])
+-- parse '{,}{=n}'
+   ',': operator '', start '', join ',', unreserved
+     '' explode=False prefix=None
+     '' explode=False prefix=None
+   '=n': operator '', start '', join ',', unreserved
+     '' explode=False prefix=None
+     defaults {'': 'n'}
+-- variables '{,}{=n}'
+   OrderedSet([''])
+-- parse '{a:1}{b:x}'
+   error: ValueError: invalid literal for int() with base 10: 'x'
+-- variables '{a:1}{b:x}'
+   error: ValueError: invalid literal for int() with base 10: 'x'
+-- parse 'no templates'
+   no variables
+-- variables 'no templates'
+   OrderedSet()
+-- parse '{m*:2}{n:2*}'
+   'm*:2': operator '', start '', join ',', unreserved
+     'm*' explode=False prefix=2
+   'n:2*': operator '', start '', join ',', unreserved
+     'n' explode=True prefix=2
+-- variables '{m*:2}{n:2*}'
+   OrderedSet(['m*', 'n'])
+-- parse '{?a}{?a}{&b,a}'
+   '?a': operator '?', start '?', join '&', unreserved
+     'a' explode=False prefix=None
+   '?a': operator '?', start '?', join '&', unreserved
+     'a' explode=False prefix=None
+   '&b,a': operator '&', start '&', join '&', unreserved
+     'b' explode=False prefix=None
+     'a' explode=False prefix=None
+-- variables '{?a}{?a}{&b,a}'
+   OrderedSet(['a', 'b'])
+-- partial '{n}{missing}{/list*}'
+   URITemplate("42{missing}/x/y%20z/3")
+-- partial '{?n,missing}'
+   URITemplate("?n=42")
+-- partial '{?missing,n}'
+   URITemplate("?n=42")
+-- partial '{+path}{#missing}'
+   URITemplate("/a%20b/c{#missing}")
+-- partial 'https://x.test{/word,missing}'
+   URITemplate("https://x.test/dr%C3%BCcken")
+-- partial '{nothing}{empty}{?empty}'
+   URITemplate("{nothing}{empty}?empty=")
+== api client
+-- api 'api.json'
+   service forge.example.org, 11 links
+   cli tiles: https://tiles.forge.example.org/4/193/244.png?style=dark
+   cli events: https://events.forge.example.org/ops.ndjson?types=release,push
+   web compare: https://api.forge.example.org/repos/acme/rocket/compare/v1.0...fix%2F%2312
+   cli contents: https://api.forge.example.org/repos/ops/infra/contents/x/y?z#w
+   cli events: https://events.forge.example.org/acme.?since=2024-01-01T00%3A00%3A00Z&types=release,push
+   cli matrix: https://api.forge.example.org/builds;os=macos;arch=arm64;arch=x86_64;arch=riscv64
+     bound first: URITemplate("https://api.forge.example.org/builds;os=macos{?env*}")
+     then expanded: https://api.forge.example.org/builds;os=macos
+   web tiles: https://tiles.forge.example.org/8/1840/3613.png?style=dark
+   bot search: https://api.forge.example.org/search/code?q=TODO%20in%3Afile&sort=indexed&page=4
+     bound first: URITemplate("https://api.forge.example.org/search/code{?q}&sort=indexed")
+     then expanded: https://api.forge.example.org/search/code?q=TODO%20in%3Afile&sort=indexed
+   bot matrix: https://api.forge.example.org/builds;os=macos;arch=riscv64
+     bound first: URITemplate("https://api.forge.example.org/builds;os=macos{?env*}")
+     then expanded: https://api.forge.example.org/builds;os=macos
+   web archive: https://api.forge.example.org/repos/ops/infra/zipball/main
+   bot events: https://events.forge.example.org/acme.json?since=1700000000&types=release,push
+   web matrix: https://api.forge.example.org/builds;os=macos;arch=arm64;arch=riscv64?RUST_LOG=debug&CI=true
+     bound first: URITemplate("https://api.forge.example.org/builds;os=macos{?env*}")
+     then expanded: https://api.forge.example.org/builds;os=macos?RUST_LOG=debug&CI=true
+   web search: https://api.forge.example.org/search/code?q=TODO%20in%3Afile&sort=indexed&order=asc
+     bound first: URITemplate("https://api.forge.example.org/search/code{?q}&sort=indexed")
+     then expanded: https://api.forge.example.org/search/code?q=TODO%20in%3Afile&sort=indexed
+   bot issues: https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/issues?state=all&page=3
+   web archive: https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/tarball/main
+   cli tiles: https://tiles.forge.example.org/13/2223/230.png
+   web repo: https://api.forge.example.org/repos/ops/infra
+   web events: https://events.forge.example.org/ops.?types=push,pr
+   cli search: https://api.forge.example.org/search/code?q=a%2Bb%3Dc&sort=indexed&page=4
+     bound first: URITemplate("https://api.forge.example.org/search/code{?q}&sort=indexed")
+     then expanded: https://api.forge.example.org/search/code?q=a%2Bb%3Dc&sort=indexed
+   cli events: https://events.forge.example.org/ops.ndjson?types=pr,push
+   bot contents: https://api.forge.example.org/repos/ops/infra/contents/README.md
+   cli docs: https://docs.forge.example.org/guide/install
+   bot tiles: https://tiles.forge.example.org/4/2087/1721.png
+   web issues: https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/issues/640
+   bot repo: https://api.forge.example.org/repos/ops/infra
+   cli search: https://api.forge.example.org/search/code?q=fn%20main&sort=indexed&order=desc&page=3
+     bound first: URITemplate("https://api.forge.example.org/search/code{?q}&sort=indexed")
+     then expanded: https://api.forge.example.org/search/code?q=fn%20main&sort=indexed
+   web issues: https://api.forge.example.org/repos/dev-tools/lint/issues/377
+   web repo: https://api.forge.example.org/repos/dev-tools/lint
+   cli repo: https://api.forge.example.org/repos/acme/rocket
+   bot repo: https://api.forge.example.org/repos/ops/infra
+   web contents: https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/contents/src/main.rs?ref=main
+   bot search: https://api.forge.example.org/search/code?q=TODO%20in%3Afile&sort=indexed
+   cli docs: https://docs.forge.example.org/guide/install#%C2%A73.2
+   cli compare: https://api.forge.example.org/repos/acme/rocket/compare/main...fix%2F%2312
+   web contents: https://api.forge.example.org/repos/ops/infra/contents/docs/a%20b/guide.md
+   cli events: https://events.forge.example.org/ops.
+   web events: https://events.forge.example.org/acme.json?since=1700000000
+   web compare: https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/compare/v1.0...fix%2F%2312
+   cli issues: https://api.forge.example.org/repos/acme/rocket/issues/181
+   bot compare: https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/compare/main...user%3Abranch
+   web tiles: https://tiles.forge.example.org/14/3946/4980.png
+   web compare: https://api.forge.example.org/repos/dev-tools/lint/compare/v1.0...user%3Abranch
+   cli compare: https://api.forge.example.org/repos/ops/infra/compare/v1.0...fix%2F%2312
+   bot archive: https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/tarball/v2.0.1
+   calls per link:
+     archive 3 (owner, repo, archive_format, ref)
+     compare 6 (owner, repo, base, head)
+     contents 4 (owner, repo, path, ref)
+     docs 2 (section, anchor)
+     events 7 (org, format, since, types)
+     issues 4 (owner, repo, number, state, labels, page, per_page)
+     matrix 3 (os, arch, env)
+     repo 5 (owner, repo)
+     search 5 (q, sort, order, page)
+     tiles 5 (z, x, y, style)
+   calls per host:
+     api.forge.example.org 30
+     docs.forge.example.org 2
+     events.forge.example.org 7
+     tiles.forge.example.org 5
+   44 calls, 42 distinct URLs, 7 where binding first changed the URL
+   longest (101 chars): https://api.forge.example.org/repos/%C3%BCn%C3%AFcode/na%C3%AFve%20repo/contents/src/main.rs?ref=main
+== suite: 234 cases, 164 match, 41 one of several, 29 failure expected, 0 mismatch
