@@ -1,0 +1,2483 @@
+// mini_webcolors: webcolors 24.11.1, the library for the color names and
+// value formats of HTML and CSS. The port covers the four specifications'
+// named colors (HTML 4, CSS2, CSS2.1 and CSS3, with CSS3's gray/grey
+// spellings), every conversion between names, hex, integer rgb() and
+// percentage rgb() triplets, the normalization functions with Python's
+// int(), float(), round() and float repr underneath them, and the HTML5
+// simple and legacy color algorithms.
+//
+// On top of it is a stylesheet audit: it reads data/site.css, finds the
+// colors in each rule's declarations (hex, rgb(), percentages, names and
+// custom properties), describes each with colorsys's HLS, checks every
+// foreground/background pair against WCAG's contrast ratio, and lists the
+// palette with the nearest CSS3 name for colors without one.
+// expected.out is the output of oracle.py, which runs the same jobs
+// through webcolors itself.
+
+// ---------------------------------------------------------------- chars
+
+fn to_chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn text(raw: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut k = lo;
+    while k < hi {
+        s.push(raw[k]);
+        k += 1;
+    }
+    s
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ident_start(c: char) -> bool {
+    c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_ident(c: char) -> bool {
+    is_ident_start(c) or is_digit(c)
+}
+
+fn chr(n: i64) -> char {
+    match char.try_from(n) {
+        Ok(c) => c,
+        Err(_) => '?',
+    }
+}
+
+fn repeat(c: char, n: i64) -> String {
+    let mut s = String.new();
+    let mut k = 0;
+    while k < n {
+        s.push(c);
+        k += 1;
+    }
+    s
+}
+
+// n >= 0 in the given base, with lower- or upper-case letters.
+fn to_base(n: i64, base: i64, upper: bool) -> String {
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut rev: Vec[char] = Vec.new();
+    let mut m = n;
+    while m > 0 {
+        let d = m % base;
+        if d < 10 {
+            rev.push(chr(48 + d));
+        } else if upper {
+            rev.push(chr(55 + d));
+        } else {
+            rev.push(chr(87 + d));
+        }
+        m = m / base;
+    }
+    let mut s = String.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 {
+        s.push(rev[k]);
+        k -= 1;
+    }
+    s
+}
+
+// Lower-case hex, zero-padded to at least width digits.
+fn hex(n: i64, width: i64) -> String {
+    let h = to_base(n, 16, false);
+    let n_digits = char_count(h);
+    if n_digits >= width {
+        h
+    } else {
+        f"{repeat('0', width - n_digits)}{h}"
+    }
+}
+
+fn is_hex(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' { chr(c as i64 + 32) } else { c }
+}
+
+
+// ------------------------------------------------------------ big integers
+
+// Magnitudes as 32-bit limbs, least significant first, with no high
+// zero limbs (zero is the empty vector).
+fn big_trim(a: mut ref Vec[u32]) {
+    while a.len() > 0 and a[a.len() - 1] == 0 {
+        a.pop();
+    }
+}
+
+fn big_mul_add(a: mut ref Vec[u32], m: u64, add: u64) {
+    let mut carry = add;
+    for i in 0..a.len() {
+        let t = (a[i] as u64) * m + carry;
+        a[i] = (t & 4294967295) as u32;
+        carry = t >> 32;
+    }
+    while carry > 0 {
+        a.push((carry & 4294967295) as u32);
+        carry = carry >> 32;
+    }
+}
+
+fn big_from_digits(ds: ref Vec[u8]) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    for d in ds.iter() {
+        big_mul_add(mut a, 10, *d as u64);
+    }
+    big_trim(mut a);
+    a
+}
+
+fn big_pow10(n: i64) -> Vec[u32] {
+    let mut a: Vec[u32] = [1];
+    let mut k = n;
+    while k >= 9 {
+        big_mul_add(mut a, 1000000000, 0);
+        k -= 9;
+    }
+    while k > 0 {
+        big_mul_add(mut a, 10, 0);
+        k -= 1;
+    }
+    a
+}
+
+fn big_mul(a: ref Vec[u32], b: ref Vec[u32]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (a[i] as u64) * (b[j] as u64) + (out[i + j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_bitlen(a: ref Vec[u32]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n: i64 = 0;
+    while top > 0 {
+        n += 1;
+        top = top >> 1;
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn big_shl(a: ref Vec[u32], bits: i64) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(bits / 32) {
+        out.push(0);
+    }
+    let s = bits % 32;
+    let mut carry: u64 = 0;
+    for i in 0..a.len() {
+        let t = ((a[i] as u64) << s) | carry;
+        out.push((t & 4294967295) as u32);
+        carry = t >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_shr1(a: mut ref Vec[u32]) {
+    let mut i = 0;
+    while i < a.len() {
+        let hi: u32 = if i + 1 < a.len() { a[i + 1] & 1 } else { 0 };
+        a[i] = (a[i] >> 1) | (hi << 31);
+        i += 1;
+    }
+    big_trim(mut a);
+}
+
+fn big_cmp(a: ref Vec[u32], b: ref Vec[u32]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+// a -= b, where a >= b.
+fn big_sub(a: mut ref Vec[u32], b: ref Vec[u32]) {
+    let mut borrow: i64 = 0;
+    for i in 0..a.len() {
+        let bv: i64 = if i < b.len() { b[i] as i64 } else { 0 };
+        let mut t = (a[i] as i64) - bv - borrow;
+        if t < 0 {
+            t += 4294967296;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        a[i] = t as u32;
+    }
+    big_trim(mut a);
+}
+
+// ------------------------------------------------------------ decimal to float
+
+// The f64 nearest to digits * 10**exp10, ties to even, as CPython's
+// float() gives it. digits holds the digit values without leading zeros.
+fn decimal_to_f64(digits: ref Vec[u8], exp10: i64, neg: bool) -> f64 {
+    let mut ds = digits.clone();
+    let mut e10 = exp10;
+    while ds.len() > 0 and ds[ds.len() - 1] == 0 {
+        ds.pop();
+        e10 += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if ds.len() == 0 {
+        return sign * 0.0;
+    }
+    let n = ds.len();
+    if n + e10 > 310 {
+        return sign * f64.INFINITY;
+    }
+    if n + e10 < -330 {
+        return sign * 0.0;
+    }
+    // The digits and the power of ten are exact, so one operation
+    // rounds correctly.
+    if n <= 15 and e10 >= -22 and e10 <= 22 {
+        let mut m: f64 = 0.0;
+        for d in ds.iter() {
+            m = m * 10.0 + (*d as f64);
+        }
+        let mut p: f64 = 1.0;
+        let mut k = if e10 < 0 { -e10 } else { e10 };
+        while k > 0 {
+            p *= 10.0;
+            k -= 1;
+        }
+        return sign * (if e10 < 0 { m / p } else { m * p });
+    }
+    let mut num = big_from_digits(ds);
+    let mut den: Vec[u32] = [1];
+    if e10 >= 0 {
+        num = big_mul(num, big_pow10(e10));
+    } else {
+        den = big_pow10(-e10);
+    }
+    // q = floor(num * 2**s / den) with 54 bits: the 53 of the result
+    // and one to round on.
+    let mut s = 54 - (big_bitlen(num) - big_bitlen(den));
+    if s > 1075 {
+        s = 1075;
+    }
+    let mut q: u64 = 0;
+    let mut rem: Vec[u32] = Vec.new();
+    let mut tries = 0;
+    while tries < 2 {
+        let mut n2 = if s > 0 { big_shl(num, s) } else { num.clone() };
+        let d2 = if s < 0 { big_shl(den, -s) } else { den.clone() };
+        let mut dd = big_shl(d2, 55);
+        q = 0;
+        let mut bit = 55;
+        while bit >= 0 {
+            if big_cmp(n2, dd) >= 0 {
+                big_sub(mut n2, dd);
+                q = q | ((1 as u64) << bit);
+            }
+            big_shr1(mut dd);
+            bit -= 1;
+        }
+        rem = n2;
+        if q >= ((1 as u64) << 54) and s < 1075 {
+            s -= 1;
+            tries += 1;
+            continue;
+        }
+        if q < ((1 as u64) << 53) and s < 1075 {
+            s += 1;
+            tries += 1;
+            continue;
+        }
+        break;
+    }
+    let mut mant = q >> 1;
+    let round = (q & 1) == 1;
+    let sticky = rem.len() > 0;
+    if round and (sticky or (mant & 1) == 1) {
+        mant += 1;
+    }
+    // The value is mant * 2**(1 - s).
+    let mut e2 = 1 - s;
+    if mant == ((1 as u64) << 53) {
+        mant = mant >> 1;
+        e2 += 1;
+    }
+    let bits: u64 = if mant < ((1 as u64) << 52) {
+        // Subnormal: s is 1075 and the exponent field is zero.
+        mant
+    } else {
+        let biased = e2 + 1075;
+        if biased >= 2047 {
+            return sign * f64.INFINITY;
+        }
+        ((biased as u64) << 52) | (mant & (((1 as u64) << 52) - 1))
+    };
+    sign * bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ float to decimal
+
+fn big_to_digits(a: ref Vec[u32]) -> Vec[char] {
+    if a.len() == 0 {
+        return ['0'];
+    }
+    let mut x = a.clone();
+    let mut chunks: Vec[u64] = Vec.new();
+    while x.len() > 0 {
+        let mut rem: u64 = 0;
+        let mut i = x.len() - 1;
+        while i >= 0 {
+            let cur = (rem << 32) | (x[i] as u64);
+            x[i] = (cur / 1000000000) as u32;
+            rem = cur % 1000000000;
+            i -= 1;
+        }
+        big_trim(mut x);
+        chunks.push(rem);
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut k = chunks.len() - 1;
+    while k >= 0 {
+        let s = chunks[k].to_string();
+        if k < chunks.len() - 1 {
+            for _ in 0..(9 - s.len()) {
+                out.push('0');
+            }
+        }
+        for c in s.chars() {
+            out.push(c);
+        }
+        k -= 1;
+    }
+    out
+}
+
+// The exact decimal value of a finite, non-negative x: its digits with no
+// leading zeros (none for zero) and the decimal exponent of the first.
+fn exact_digits(x: f64) -> (Vec[char], i64) {
+    let bits = x.to_bits();
+    let biased = ((bits >> 52) & 2047) as i64;
+    let frac = bits & ((1 as u64 << 52) - 1);
+    let m: u64 = if biased == 0 { frac } else { frac | (1 as u64 << 52) };
+    let q = if biased == 0 { -1074 } else { biased - 1075 };
+    if m == 0 {
+        return (Vec.new(), 0);
+    }
+    let mut a: Vec[u32] = Vec.new();
+    big_mul_add(mut a, 1, m);
+    let mut e10 = 0;
+    if q >= 0 {
+        a = big_shl(a, q);
+    } else {
+        // m * 2**q == m * 5**-q * 10**q
+        let mut k = 0;
+        while k < -q {
+            big_mul_add(mut a, 5, 0);
+            k += 1;
+        }
+        e10 = q;
+    }
+    let mut d = big_to_digits(a);
+    while d.len() > 1 and d[d.len() - 1] == '0' {
+        d.pop();
+        e10 += 1;
+    }
+    let n = d.len();
+    (d, e10 + n - 1)
+}
+
+// The exact digits (d, e) rounded half-to-even to keep the digits whose
+// place is at least 10**place: the kept digits (possibly empty when all
+// round away) and the exponent of the first.
+fn round_place(d: ref Vec[char], e: i64, place: i64) -> (Vec[char], i64) {
+    let n = e - place + 1;
+    if n >= d.len() {
+        return (d.clone(), e);
+    }
+    if n < 0 {
+        return (Vec.new(), place);
+    }
+    let mut keep: Vec[char] = Vec.new();
+    for k in 0..n {
+        keep.push(d[k]);
+    }
+    let first = d[n];
+    let mut rest = false;
+    for k in (n + 1)..d.len() {
+        if d[k] != '0' {
+            rest = true;
+        }
+    }
+    let odd = n > 0 and (d[n - 1] as i64 - 48) % 2 == 1;
+    let up = first > '5' or (first == '5' and (rest or odd));
+    if not up {
+        while keep.len() > 0 and keep[keep.len() - 1] == '0' {
+            keep.pop();
+        }
+        if keep.len() == 0 {
+            return (Vec.new(), place);
+        }
+        return (keep, e);
+    }
+    let mut j = keep.len() - 1;
+    while j >= 0 and keep[j] == '9' {
+        keep.pop();
+        j -= 1;
+    }
+    if j < 0 {
+        return (['1'], e + 1);
+    }
+    keep[j] = chr(keep[j] as i64 + 1);
+    (keep, e)
+}
+
+fn digit_vals(d: ref Vec[char]) -> Vec[u8] {
+    let mut v: Vec[u8] = Vec.new();
+    for c in d.iter() {
+        v.push((*c as i64 - 48) as u8);
+    }
+    v
+}
+
+// The shortest digits that read back as x (x finite and non-negative).
+// A rounding that reads back keeps reading back with more digits, so the
+// count is found by bisection.
+fn shortest_digits(x: f64) -> (Vec[char], i64) {
+    let (d, e) = exact_digits(x);
+    if d.len() == 0 {
+        return (['0'], 0);
+    }
+    let mut lo = 1;
+    let mut hi = 17;
+    while lo < hi {
+        let p = (lo + hi) / 2;
+        let (r, re) = round_place(d, e, e - p + 1);
+        if r.len() > 0 and decimal_to_f64(digit_vals(r), re - r.len() + 1, false) == x {
+            hi = p;
+        } else {
+            lo = p + 1;
+        }
+    }
+    round_place(d, e, e - lo + 1)
+}
+
+fn exp_text(e: i64, upper: bool) -> String {
+    let mark = if upper { 'E' } else { 'e' };
+    let sign = if e < 0 { '-' } else { '+' };
+    let a = if e < 0 { -e } else { e };
+    if a < 10 {
+        f"{mark}{sign}0{a}"
+    } else {
+        f"{mark}{sign}{a}"
+    }
+}
+
+fn is_neg(x: f64) -> bool {
+    (x.to_bits() >> 63) == 1
+}
+
+// repr(float).
+fn float_repr(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    let sign = if is_neg(x) { "-" } else { "" };
+    let a = if is_neg(x) { -x } else { x };
+    if a == f64.INFINITY {
+        return f"{sign}inf";
+    }
+    let (d, e) = shortest_digits(a);
+    let decpt = e + 1;
+    let mut s = sign.to_string();
+    if decpt <= -4 or decpt > 16 {
+        s.push(d[0]);
+        if d.len() > 1 {
+            s.push('.');
+            s.push_str(text(d, 1, d.len()));
+        }
+        s.push_str(exp_text(e, false));
+    } else if decpt <= 0 {
+        s.push_str("0.");
+        s.push_str(repeat('0', -decpt));
+        s.push_str(text(d, 0, d.len()));
+    } else if decpt >= d.len() {
+        s.push_str(text(d, 0, d.len()));
+        s.push_str(repeat('0', decpt - d.len()));
+        s.push_str(".0");
+    } else {
+        s.push_str(text(d, 0, decpt));
+        s.push('.');
+        s.push_str(text(d, decpt, d.len()));
+    }
+    s
+}
+
+// x (finite, non-negative) with `precision` digits after the point, as
+// '%.Nf' writes it: the integer digits and the fraction (with its point).
+fn fixed_text(x: f64, precision: i64, alt: bool) -> (String, String) {
+    let (d, e) = exact_digits(x);
+    let (r, re) = if d.len() == 0 { (Vec.new(), 0) } else { round_place(d, e, -precision) };
+    // the digit at place p (0 when outside r)
+    let mut int_part = String.new();
+    if r.len() == 0 or re < 0 {
+        int_part.push('0');
+    } else {
+        for i in 0..(re + 1) {
+            int_part.push(if i < r.len() { r[i] } else { '0' });
+        }
+    }
+    let mut frac = String.new();
+    if precision > 0 or alt {
+        frac.push('.');
+    }
+    for p in 1..(precision + 1) {
+        let k = re + p;
+        frac.push(if r.len() > 0 and k >= 0 and k < r.len() { r[k] } else { '0' });
+    }
+    (int_part, frac)
+}
+
+// x (finite, non-negative) as '%.Ne' writes it.
+fn sci_text(x: f64, precision: i64, alt: bool, upper: bool) -> (String, String) {
+    let (d, e) = exact_digits(x);
+    let (r, re) = if d.len() == 0 { (['0'], 0) } else { round_place(d, e, e - precision) };
+    let mut frac = String.new();
+    if precision > 0 or alt {
+        frac.push('.');
+    }
+    for k in 1..(precision + 1) {
+        frac.push(if k < r.len() { r[k] } else { '0' });
+    }
+    frac.push_str(exp_text(re, upper));
+    (r[0].to_string(), frac)
+}
+
+// ------------------------------------------------------------ float() and int() of a str
+
+// A float literal's text (digits, a point, an exponent) to the nearest
+// f64.
+fn parse_float_text(t: ref Vec[char], neg: bool) -> f64 {
+    let mut digits: Vec[u8] = Vec.new();
+    let mut exp10: i64 = 0;
+    let mut i = 0;
+    let mut point = false;
+    while i < t.len() {
+        let c = t[i];
+        if is_digit(c) {
+            let d = (c as i64 - 48) as u8;
+            if digits.len() > 0 or d != 0 {
+                digits.push(d);
+            }
+            if point {
+                exp10 -= 1;
+            }
+        } else if c == '.' {
+            point = true;
+        } else if c == 'e' or c == 'E' {
+            let mut j = i + 1;
+            let mut eneg = false;
+            if j < t.len() and (t[j] == '+' or t[j] == '-') {
+                eneg = t[j] == '-';
+                j += 1;
+            }
+            let mut ev = 0;
+            while j < t.len() {
+                ev = ev * 10 + (t[j] as i64 - 48);
+                if ev > 100000 {
+                    ev = 100000;
+                }
+                j += 1;
+            }
+            exp10 += if eneg { -ev } else { ev };
+            break;
+        }
+        i += 1;
+    }
+    decimal_to_f64(digits, exp10, neg)
+}
+
+fn strip_py_space(s: ref String) -> Vec[char] {
+    let cs = to_chars(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut out: Vec[char] = Vec.new();
+    for k in a..b {
+        out.push(cs[k]);
+    }
+    out
+}
+
+// int(s): whitespace, a sign, digits with single underscores between.
+fn py_int_str(s: ref String) -> Option[i64] {
+    let t = strip_py_space(s);
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i >= t.len() {
+        return None;
+    }
+    let mut v = 0;
+    let mut prev_digit = false;
+    while i < t.len() {
+        let c = t[i];
+        if c == '_' {
+            if not prev_digit or i + 1 == t.len() {
+                return None;
+            }
+            prev_digit = false;
+        } else if is_digit(c) {
+            v = v * 10 + (c as i64 - 48);
+            prev_digit = true;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    Some(if neg { -v } else { v })
+}
+
+// float(s): whitespace, a sign, then inf, infinity, nan, or a decimal
+// number with single underscores between digits.
+fn py_float_str(s: ref String) -> Option[f64] {
+    let t = strip_py_space(s);
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let mut word = String.new();
+    for k in i..t.len() {
+        word.push(ascii_lower(t[k]));
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if word == "inf" or word == "infinity" {
+        return Some(sign * f64.INFINITY);
+    }
+    if word == "nan" {
+        return Some(f64.INFINITY - f64.INFINITY);
+    }
+    let mut body: Vec[char] = Vec.new();
+    let mut seen = false;
+    let mut point = false;
+    let mut exp = false;
+    let mut exp_digit = false;
+    while i < t.len() {
+        let c = t[i];
+        if is_digit(c) {
+            if exp {
+                exp_digit = true;
+            } else {
+                seen = true;
+            }
+        } else if c == '.' and not point and not exp {
+            point = true;
+        } else if (c == 'e' or c == 'E') and seen and not exp {
+            exp = true;
+        } else if (c == '+' or c == '-') and exp and (t[i - 1] == 'e' or t[i - 1] == 'E') {
+        } else if c == '_' and i > 0 and i + 1 < t.len() and is_digit(t[i - 1]) and is_digit(t[i + 1]) {
+            i += 1;
+            continue;
+        } else {
+            return None;
+        }
+        body.push(c);
+        i += 1;
+    }
+    if not seen or (exp and not exp_digit) {
+        return None;
+    }
+    Some(parse_float_text(body, neg))
+}
+
+// ---------------------------------------------------------------- Python's str
+
+// str.isspace, the set str.strip(), int() and float() skip.
+fn is_py_space(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0
+        or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028
+        or n == 0x2029 or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+// str.isprintable, for repr: everything but controls, separators other
+// than the space, and format characters.
+fn is_py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 32 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x2064) or n == 0x3000 or n == 0xfeff {
+        return false;
+    }
+    true
+}
+
+fn py_strip(s: ref String) -> String {
+    let cs = to_chars(s);
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    text(cs, a, b)
+}
+
+// repr(s).
+fn py_repr(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let quote = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if is_py_printable(c) {
+            out.push(c);
+        } else if (c as i64) < 0x100 {
+            out.push_str(f"\\x{hex(c as i64, 2)}");
+        } else if (c as i64) < 0x10000 {
+            out.push_str(f"\\u{hex(c as i64, 4)}");
+        } else {
+            out.push_str(f"\\U{hex(c as i64, 8)}");
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn py_list_repr(items: ref Vec[String]) -> String {
+    let mut out = "[".to_string();
+    for k in 0..items.len() {
+        if k > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(items[k]));
+    }
+    out.push(']');
+    out
+}
+
+// int(s), with ValueError's message.
+fn py_int(s: ref String) -> Result[i64, String] {
+    match py_int_str(s) {
+        Some(v) => Ok(v),
+        None => Err(f"invalid literal for int() with base 10: {py_repr(s)}"),
+    }
+}
+
+// float(s), with ValueError's message.
+fn py_float(s: ref String) -> Result[f64, String] {
+    match py_float_str(s) {
+        Some(v) => Ok(v),
+        None => Err(f"could not convert string to float: {py_repr(s)}"),
+    }
+}
+
+// round(x) for a float: to the nearest integer, ties to even.
+fn py_round(x: f64) -> Result[i64, String] {
+    if x != x {
+        return Err("cannot convert float NaN to integer".to_string());
+    }
+    if x == f64.INFINITY or x == -f64.INFINITY {
+        return Err("cannot convert float infinity to integer".to_string());
+    }
+    let fl = x.floor();
+    let diff = x - fl;
+    let base = fl as i64;
+    if diff > 0.5 {
+        Ok(base + 1)
+    } else if diff < 0.5 {
+        Ok(base)
+    } else if base % 2 == 0 {
+        Ok(base)
+    } else {
+        Ok(base + 1)
+    }
+}
+
+// a % b for floats, with the sign of b.
+fn py_fmod(a: f64, b: f64) -> f64 {
+    let r = a % b;
+    if r != 0.0 and ((r < 0.0) != (b < 0.0)) { r + b } else { r }
+}
+
+// f"{x:.Nf}" for x >= 0.
+fn fixed(x: f64, places: i64) -> String {
+    let (i, f) = fixed_text(x, places, false);
+    f"{i}{f}"
+}
+
+// The text of s before the first `sep`, as s.split(sep)[0].
+fn before(s: ref String, sep: char) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == sep {
+            break;
+        }
+        out.push(c);
+    }
+    out
+}
+
+// ---------------------------------------------------------------- definitions
+
+// webcolors/_definitions.py: the named colors of each specification, in
+// the order the module lists them.
+fn html4_names_to_hex() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("aqua".to_string(), "#00ffff".to_string()));
+    v.push(("black".to_string(), "#000000".to_string()));
+    v.push(("blue".to_string(), "#0000ff".to_string()));
+    v.push(("fuchsia".to_string(), "#ff00ff".to_string()));
+    v.push(("green".to_string(), "#008000".to_string()));
+    v.push(("gray".to_string(), "#808080".to_string()));
+    v.push(("lime".to_string(), "#00ff00".to_string()));
+    v.push(("maroon".to_string(), "#800000".to_string()));
+    v.push(("navy".to_string(), "#000080".to_string()));
+    v.push(("olive".to_string(), "#808000".to_string()));
+    v.push(("purple".to_string(), "#800080".to_string()));
+    v.push(("red".to_string(), "#ff0000".to_string()));
+    v.push(("silver".to_string(), "#c0c0c0".to_string()));
+    v.push(("teal".to_string(), "#008080".to_string()));
+    v.push(("white".to_string(), "#ffffff".to_string()));
+    v.push(("yellow".to_string(), "#ffff00".to_string()));
+    v
+}
+
+fn css3_names_to_hex() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("aliceblue".to_string(), "#f0f8ff".to_string()));
+    v.push(("antiquewhite".to_string(), "#faebd7".to_string()));
+    v.push(("aqua".to_string(), "#00ffff".to_string()));
+    v.push(("aquamarine".to_string(), "#7fffd4".to_string()));
+    v.push(("azure".to_string(), "#f0ffff".to_string()));
+    v.push(("beige".to_string(), "#f5f5dc".to_string()));
+    v.push(("bisque".to_string(), "#ffe4c4".to_string()));
+    v.push(("black".to_string(), "#000000".to_string()));
+    v.push(("blanchedalmond".to_string(), "#ffebcd".to_string()));
+    v.push(("blue".to_string(), "#0000ff".to_string()));
+    v.push(("blueviolet".to_string(), "#8a2be2".to_string()));
+    v.push(("brown".to_string(), "#a52a2a".to_string()));
+    v.push(("burlywood".to_string(), "#deb887".to_string()));
+    v.push(("cadetblue".to_string(), "#5f9ea0".to_string()));
+    v.push(("chartreuse".to_string(), "#7fff00".to_string()));
+    v.push(("chocolate".to_string(), "#d2691e".to_string()));
+    v.push(("coral".to_string(), "#ff7f50".to_string()));
+    v.push(("cornflowerblue".to_string(), "#6495ed".to_string()));
+    v.push(("cornsilk".to_string(), "#fff8dc".to_string()));
+    v.push(("crimson".to_string(), "#dc143c".to_string()));
+    v.push(("cyan".to_string(), "#00ffff".to_string()));
+    v.push(("darkblue".to_string(), "#00008b".to_string()));
+    v.push(("darkcyan".to_string(), "#008b8b".to_string()));
+    v.push(("darkgoldenrod".to_string(), "#b8860b".to_string()));
+    v.push(("darkgray".to_string(), "#a9a9a9".to_string()));
+    v.push(("darkgrey".to_string(), "#a9a9a9".to_string()));
+    v.push(("darkgreen".to_string(), "#006400".to_string()));
+    v.push(("darkkhaki".to_string(), "#bdb76b".to_string()));
+    v.push(("darkmagenta".to_string(), "#8b008b".to_string()));
+    v.push(("darkolivegreen".to_string(), "#556b2f".to_string()));
+    v.push(("darkorange".to_string(), "#ff8c00".to_string()));
+    v.push(("darkorchid".to_string(), "#9932cc".to_string()));
+    v.push(("darkred".to_string(), "#8b0000".to_string()));
+    v.push(("darksalmon".to_string(), "#e9967a".to_string()));
+    v.push(("darkseagreen".to_string(), "#8fbc8f".to_string()));
+    v.push(("darkslateblue".to_string(), "#483d8b".to_string()));
+    v.push(("darkslategray".to_string(), "#2f4f4f".to_string()));
+    v.push(("darkslategrey".to_string(), "#2f4f4f".to_string()));
+    v.push(("darkturquoise".to_string(), "#00ced1".to_string()));
+    v.push(("darkviolet".to_string(), "#9400d3".to_string()));
+    v.push(("deeppink".to_string(), "#ff1493".to_string()));
+    v.push(("deepskyblue".to_string(), "#00bfff".to_string()));
+    v.push(("dimgray".to_string(), "#696969".to_string()));
+    v.push(("dimgrey".to_string(), "#696969".to_string()));
+    v.push(("dodgerblue".to_string(), "#1e90ff".to_string()));
+    v.push(("firebrick".to_string(), "#b22222".to_string()));
+    v.push(("floralwhite".to_string(), "#fffaf0".to_string()));
+    v.push(("forestgreen".to_string(), "#228b22".to_string()));
+    v.push(("fuchsia".to_string(), "#ff00ff".to_string()));
+    v.push(("gainsboro".to_string(), "#dcdcdc".to_string()));
+    v.push(("ghostwhite".to_string(), "#f8f8ff".to_string()));
+    v.push(("gold".to_string(), "#ffd700".to_string()));
+    v.push(("goldenrod".to_string(), "#daa520".to_string()));
+    v.push(("gray".to_string(), "#808080".to_string()));
+    v.push(("grey".to_string(), "#808080".to_string()));
+    v.push(("green".to_string(), "#008000".to_string()));
+    v.push(("greenyellow".to_string(), "#adff2f".to_string()));
+    v.push(("honeydew".to_string(), "#f0fff0".to_string()));
+    v.push(("hotpink".to_string(), "#ff69b4".to_string()));
+    v.push(("indianred".to_string(), "#cd5c5c".to_string()));
+    v.push(("indigo".to_string(), "#4b0082".to_string()));
+    v.push(("ivory".to_string(), "#fffff0".to_string()));
+    v.push(("khaki".to_string(), "#f0e68c".to_string()));
+    v.push(("lavender".to_string(), "#e6e6fa".to_string()));
+    v.push(("lavenderblush".to_string(), "#fff0f5".to_string()));
+    v.push(("lawngreen".to_string(), "#7cfc00".to_string()));
+    v.push(("lemonchiffon".to_string(), "#fffacd".to_string()));
+    v.push(("lightblue".to_string(), "#add8e6".to_string()));
+    v.push(("lightcoral".to_string(), "#f08080".to_string()));
+    v.push(("lightcyan".to_string(), "#e0ffff".to_string()));
+    v.push(("lightgoldenrodyellow".to_string(), "#fafad2".to_string()));
+    v.push(("lightgray".to_string(), "#d3d3d3".to_string()));
+    v.push(("lightgrey".to_string(), "#d3d3d3".to_string()));
+    v.push(("lightgreen".to_string(), "#90ee90".to_string()));
+    v.push(("lightpink".to_string(), "#ffb6c1".to_string()));
+    v.push(("lightsalmon".to_string(), "#ffa07a".to_string()));
+    v.push(("lightseagreen".to_string(), "#20b2aa".to_string()));
+    v.push(("lightskyblue".to_string(), "#87cefa".to_string()));
+    v.push(("lightslategray".to_string(), "#778899".to_string()));
+    v.push(("lightslategrey".to_string(), "#778899".to_string()));
+    v.push(("lightsteelblue".to_string(), "#b0c4de".to_string()));
+    v.push(("lightyellow".to_string(), "#ffffe0".to_string()));
+    v.push(("lime".to_string(), "#00ff00".to_string()));
+    v.push(("limegreen".to_string(), "#32cd32".to_string()));
+    v.push(("linen".to_string(), "#faf0e6".to_string()));
+    v.push(("magenta".to_string(), "#ff00ff".to_string()));
+    v.push(("maroon".to_string(), "#800000".to_string()));
+    v.push(("mediumaquamarine".to_string(), "#66cdaa".to_string()));
+    v.push(("mediumblue".to_string(), "#0000cd".to_string()));
+    v.push(("mediumorchid".to_string(), "#ba55d3".to_string()));
+    v.push(("mediumpurple".to_string(), "#9370db".to_string()));
+    v.push(("mediumseagreen".to_string(), "#3cb371".to_string()));
+    v.push(("mediumslateblue".to_string(), "#7b68ee".to_string()));
+    v.push(("mediumspringgreen".to_string(), "#00fa9a".to_string()));
+    v.push(("mediumturquoise".to_string(), "#48d1cc".to_string()));
+    v.push(("mediumvioletred".to_string(), "#c71585".to_string()));
+    v.push(("midnightblue".to_string(), "#191970".to_string()));
+    v.push(("mintcream".to_string(), "#f5fffa".to_string()));
+    v.push(("mistyrose".to_string(), "#ffe4e1".to_string()));
+    v.push(("moccasin".to_string(), "#ffe4b5".to_string()));
+    v.push(("navajowhite".to_string(), "#ffdead".to_string()));
+    v.push(("navy".to_string(), "#000080".to_string()));
+    v.push(("oldlace".to_string(), "#fdf5e6".to_string()));
+    v.push(("olive".to_string(), "#808000".to_string()));
+    v.push(("olivedrab".to_string(), "#6b8e23".to_string()));
+    v.push(("orange".to_string(), "#ffa500".to_string()));
+    v.push(("orangered".to_string(), "#ff4500".to_string()));
+    v.push(("orchid".to_string(), "#da70d6".to_string()));
+    v.push(("palegoldenrod".to_string(), "#eee8aa".to_string()));
+    v.push(("palegreen".to_string(), "#98fb98".to_string()));
+    v.push(("paleturquoise".to_string(), "#afeeee".to_string()));
+    v.push(("palevioletred".to_string(), "#db7093".to_string()));
+    v.push(("papayawhip".to_string(), "#ffefd5".to_string()));
+    v.push(("peachpuff".to_string(), "#ffdab9".to_string()));
+    v.push(("peru".to_string(), "#cd853f".to_string()));
+    v.push(("pink".to_string(), "#ffc0cb".to_string()));
+    v.push(("plum".to_string(), "#dda0dd".to_string()));
+    v.push(("powderblue".to_string(), "#b0e0e6".to_string()));
+    v.push(("purple".to_string(), "#800080".to_string()));
+    v.push(("red".to_string(), "#ff0000".to_string()));
+    v.push(("rosybrown".to_string(), "#bc8f8f".to_string()));
+    v.push(("royalblue".to_string(), "#4169e1".to_string()));
+    v.push(("saddlebrown".to_string(), "#8b4513".to_string()));
+    v.push(("salmon".to_string(), "#fa8072".to_string()));
+    v.push(("sandybrown".to_string(), "#f4a460".to_string()));
+    v.push(("seagreen".to_string(), "#2e8b57".to_string()));
+    v.push(("seashell".to_string(), "#fff5ee".to_string()));
+    v.push(("sienna".to_string(), "#a0522d".to_string()));
+    v.push(("silver".to_string(), "#c0c0c0".to_string()));
+    v.push(("skyblue".to_string(), "#87ceeb".to_string()));
+    v.push(("slateblue".to_string(), "#6a5acd".to_string()));
+    v.push(("slategray".to_string(), "#708090".to_string()));
+    v.push(("slategrey".to_string(), "#708090".to_string()));
+    v.push(("snow".to_string(), "#fffafa".to_string()));
+    v.push(("springgreen".to_string(), "#00ff7f".to_string()));
+    v.push(("steelblue".to_string(), "#4682b4".to_string()));
+    v.push(("tan".to_string(), "#d2b48c".to_string()));
+    v.push(("teal".to_string(), "#008080".to_string()));
+    v.push(("thistle".to_string(), "#d8bfd8".to_string()));
+    v.push(("tomato".to_string(), "#ff6347".to_string()));
+    v.push(("turquoise".to_string(), "#40e0d0".to_string()));
+    v.push(("violet".to_string(), "#ee82ee".to_string()));
+    v.push(("wheat".to_string(), "#f5deb3".to_string()));
+    v.push(("white".to_string(), "#ffffff".to_string()));
+    v.push(("whitesmoke".to_string(), "#f5f5f5".to_string()));
+    v.push(("yellow".to_string(), "#ffff00".to_string()));
+    v.push(("yellowgreen".to_string(), "#9acd32".to_string()));
+    v
+}
+
+// ---------------------------------------------------------------- webcolors
+
+struct IntegerRgb {
+    red: i64,
+    green: i64,
+    blue: i64,
+}
+
+struct PercentRgb {
+    red: String,
+    green: String,
+    blue: String,
+}
+
+fn rgb_repr(kind: ref String, c: ref IntegerRgb) -> String {
+    f"{kind}(red={c.red}, green={c.green}, blue={c.blue})"
+}
+
+fn pct_repr(c: ref PercentRgb) -> String {
+    f"PercentRGB(red={py_repr(c.red)}, green={py_repr(c.green)}, blue={py_repr(c.blue)})"
+}
+
+// One specification's names: name to hex, hex to name, and the names in
+// alphabetical order.
+struct Spec {
+    name: String,
+    to_hex: Map[String, String],
+    to_name: Map[String, String],
+    names: Vec[String],
+}
+
+struct Colors {
+    specs: Vec[Spec],
+}
+
+// _reversedict: for a value two names share, the later name wins.
+fn make_spec(name: ref String, list: ref Vec[(String, String)]) -> Spec {
+    let mut to_hex: Map[String, String] = Map.new();
+    let mut to_name: Map[String, String] = Map.new();
+    let mut names: Vec[String] = Vec.new();
+    for (n, h) in list {
+        to_hex.insert(n.clone(), h.clone());
+        to_name.insert(h.clone(), n.clone());
+        names.push(n.clone());
+    }
+    names.sort();
+    Spec { name: name.clone(), to_hex: to_hex, to_name: to_name, names: names }
+}
+
+fn colors() -> Colors {
+    let html4 = html4_names_to_hex();
+    let mut css21: Vec[(String, String)] = Vec.new();
+    css21.push(("orange".to_string(), "#ffa500".to_string()));
+    for (n, h) in html4 {
+        css21.push((n.clone(), h.clone()));
+    }
+    let mut css3 = make_spec("css3".to_string(), css3_names_to_hex());
+    // "gray" was the only spelling in HTML 4, CSS1 and CSS2.
+    css3.to_name.insert("#a9a9a9".to_string(), "darkgray".to_string());
+    css3.to_name.insert("#2f4f4f".to_string(), "darkslategray".to_string());
+    css3.to_name.insert("#696969".to_string(), "dimgray".to_string());
+    css3.to_name.insert("#808080".to_string(), "gray".to_string());
+    css3.to_name.insert("#d3d3d3".to_string(), "lightgray".to_string());
+    css3.to_name.insert("#778899".to_string(), "lightslategray".to_string());
+    css3.to_name.insert("#708090".to_string(), "slategray".to_string());
+    let mut specs: Vec[Spec] = Vec.new();
+    specs.push(make_spec("html4".to_string(), html4));
+    specs.push(make_spec("css2".to_string(), html4));
+    specs.push(make_spec("css21".to_string(), css21));
+    specs.push(css3);
+    Colors { specs: specs }
+}
+
+impl Colors {
+    // The index of the named specification.
+    fn spec(ref self, spec: ref String) -> Result[i64, String] {
+        for k in 0..self.specs.len() {
+            if self.specs[k].name == spec {
+                return Ok(k);
+            }
+        }
+        Err(f"{spec} is not a supported specification for color name lookups; supported specifications are: ('html4', 'css2', 'css21', 'css3').")
+    }
+
+    fn names(ref self, spec: ref String) -> Result[Vec[String], String] {
+        let k = self.spec(spec)?;
+        Ok(self.specs[k].names.clone())
+    }
+
+    fn name_to_hex(ref self, name: ref String, spec: ref String) -> Result[String, String] {
+        let k = self.spec(spec)?;
+        match self.specs[k].to_hex.get(name.to_lowercase()) {
+            Some(h) => Ok(h.clone()),
+            None => Err(f"\"{name}\" is not defined as a named color in {spec}"),
+        }
+    }
+
+    fn name_to_rgb(ref self, name: ref String, spec: ref String) -> Result[IntegerRgb, String] {
+        hex_to_rgb(self.name_to_hex(name, spec)?)
+    }
+
+    fn name_to_rgb_percent(ref self, name: ref String, spec: ref String) -> Result[PercentRgb, String] {
+        Ok(rgb_to_rgb_percent(self.name_to_rgb(name, spec)?))
+    }
+
+    fn hex_to_name(ref self, hex_value: ref String, spec: ref String) -> Result[String, String] {
+        let k = self.spec(spec)?;
+        match self.specs[k].to_name.get(normalize_hex(hex_value)?) {
+            Some(n) => Ok(n.clone()),
+            None => Err(f"\"{hex_value}\" has no defined color name in {spec}."),
+        }
+    }
+
+    fn rgb_to_name(ref self, c: ref IntegerRgb, spec: ref String) -> Result[String, String] {
+        self.hex_to_name(rgb_to_hex(normalize_integer_triplet(c)), spec)
+    }
+
+    fn rgb_percent_to_name(ref self, c: ref PercentRgb, spec: ref String) -> Result[String, String] {
+        let rgb = rgb_percent_to_rgb(normalize_percent_triplet(c)?)?;
+        self.rgb_to_name(rgb, spec)
+    }
+}
+
+// _HEX_COLOR_RE.match: "#" and three or six ASCII hex digits, then the
+// end, where `$` also matches before a final newline.
+fn normalize_hex(hex_value: ref String) -> Result[String, String] {
+    let mut cs = to_chars(hex_value);
+    if cs.len() > 0 and cs[cs.len() - 1] == '\n' {
+        cs.pop();
+    }
+    let n = cs.len() - 1;
+    let mut ok = cs.len() > 0 and cs[0] == '#' and (n == 3 or n == 6);
+    if ok {
+        for k in 1..cs.len() {
+            if not is_hex(cs[k]) {
+                ok = false;
+            }
+        }
+    }
+    if not ok {
+        return Err(f"\"{hex_value}\" is not a valid hexadecimal color value.");
+    }
+    let mut out = "#".to_string();
+    for k in 1..cs.len() {
+        let c = ascii_lower(cs[k]);
+        out.push(c);
+        if n == 3 {
+            out.push(c);
+        }
+    }
+    Ok(out)
+}
+
+fn hex_digit(c: char) -> i64 {
+    let l = ascii_lower(c);
+    if l >= 'a' { l as i64 - 87 } else { l as i64 - 48 }
+}
+
+// int(s, 16) for ASCII hex digits.
+fn hex_int(s: ref String) -> i64 {
+    let mut v = 0;
+    for c in s.chars() {
+        v = v * 16 + hex_digit(c);
+    }
+    v
+}
+
+fn clip_int(v: i64) -> i64 {
+    if v < 0 { 0 } else if v > 255 { 255 } else { v }
+}
+
+fn normalize_integer_triplet(c: ref IntegerRgb) -> IntegerRgb {
+    IntegerRgb { red: clip_int(c.red), green: clip_int(c.green), blue: clip_int(c.blue) }
+}
+
+fn normalize_percent(value: ref String) -> Result[String, String] {
+    let v = before(value, '%');
+    if v.contains(".") {
+        let p = py_float(v)?;
+        if p < 0.0 {
+            Ok("0%".to_string())
+        } else if p > 100.0 {
+            Ok("100%".to_string())
+        } else {
+            Ok(f"{float_repr(p)}%")
+        }
+    } else {
+        let p = py_int(v)?;
+        if p < 0 {
+            Ok("0%".to_string())
+        } else if p > 100 {
+            Ok("100%".to_string())
+        } else {
+            Ok(f"{p}%")
+        }
+    }
+}
+
+fn normalize_percent_triplet(c: ref PercentRgb) -> Result[PercentRgb, String] {
+    let red = normalize_percent(c.red)?;
+    let green = normalize_percent(c.green)?;
+    let blue = normalize_percent(c.blue)?;
+    Ok(PercentRgb { red: red, green: green, blue: blue })
+}
+
+fn percent_to_integer(percent: ref String) -> Result[i64, String] {
+    let p = py_float(before(percent, '%'))?;
+    py_round(p / 100.0 * 255.0)
+}
+
+fn hex_to_rgb(hex_value: ref String) -> Result[IntegerRgb, String] {
+    let h = normalize_hex(hex_value)?;
+    let cs = to_chars(h);
+    let v = hex_int(text(cs, 1, cs.len()));
+    Ok(IntegerRgb { red: v >> 16, green: (v >> 8) & 0xff, blue: v & 0xff })
+}
+
+fn hex_to_rgb_percent(hex_value: ref String) -> Result[PercentRgb, String] {
+    Ok(rgb_to_rgb_percent(hex_to_rgb(hex_value)?))
+}
+
+fn rgb_to_hex(c: ref IntegerRgb) -> String {
+    let n = normalize_integer_triplet(c);
+    f"#{hex(n.red, 2)}{hex(n.green, 2)}{hex(n.blue, 2)}"
+}
+
+fn channel_percent(d: i64) -> String {
+    if d == 255 {
+        "100%".to_string()
+    } else if d == 128 {
+        "50%".to_string()
+    } else if d == 64 {
+        "25%".to_string()
+    } else if d == 32 {
+        "12.5%".to_string()
+    } else if d == 16 {
+        "6.25%".to_string()
+    } else if d == 0 {
+        "0%".to_string()
+    } else {
+        f"{fixed(d as f64 / 255.0 * 100.0, 2)}%"
+    }
+}
+
+fn rgb_to_rgb_percent(c: ref IntegerRgb) -> PercentRgb {
+    let n = normalize_integer_triplet(c);
+    PercentRgb { red: channel_percent(n.red), green: channel_percent(n.green), blue: channel_percent(n.blue) }
+}
+
+fn rgb_percent_to_rgb(c: ref PercentRgb) -> Result[IntegerRgb, String] {
+    let n = normalize_percent_triplet(c)?;
+    let red = percent_to_integer(n.red)?;
+    let green = percent_to_integer(n.green)?;
+    let blue = percent_to_integer(n.blue)?;
+    Ok(IntegerRgb { red: red, green: green, blue: blue })
+}
+
+fn rgb_percent_to_hex(c: ref PercentRgb) -> Result[String, String] {
+    Ok(rgb_to_hex(rgb_percent_to_rgb(normalize_percent_triplet(c)?)?))
+}
+
+// ---------------------------------------------------------------- HTML5
+
+fn all_hex(cs: ref Vec[char], lo: i64) -> bool {
+    for k in lo..cs.len() {
+        if not is_hex(cs[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn html5_parse_simple_color(value: ref String) -> Result[IntegerRgb, String] {
+    let cs = to_chars(value);
+    if cs.len() != 7 {
+        return Err("An HTML5 simple color must be a Unicode string seven characters long.".to_string());
+    }
+    if cs[0] != '#' {
+        return Err("An HTML5 simple color must begin with the character '#' (U+0023).".to_string());
+    }
+    if not all_hex(cs, 1) {
+        return Err("An HTML5 simple color must contain exactly six ASCII hex digits.".to_string());
+    }
+    Ok(IntegerRgb { red: hex_int(text(cs, 1, 3)), green: hex_int(text(cs, 3, 5)), blue: hex_int(text(cs, 5, 7)) })
+}
+
+fn html5_serialize_simple_color(c: ref IntegerRgb) -> String {
+    let mut result = "#".to_string();
+    result.push_str(hex(c.red, 2));
+    result.push_str(hex(c.green, 2));
+    result.push_str(hex(c.blue, 2));
+    result
+}
+
+fn html5_parse_legacy_color(colors: ref Colors, raw: ref String) -> Result[IntegerRgb, String] {
+    if raw == "" {
+        return Err("HTML5 legacy color parsing forbids empty string as a value.".to_string());
+    }
+    let value = py_strip(raw);
+    if value.to_lowercase() == "transparent" {
+        return Err("HTML5 legacy color parsing forbids \"transparent\" as a value.".to_string());
+    }
+    if let Ok(keyword_hex) = colors.name_to_hex(value, "css3".to_string()) {
+        return html5_parse_simple_color(keyword_hex);
+    }
+    let cs = to_chars(value);
+    if cs.len() == 4 and cs[0] == '#' and all_hex(cs, 1) {
+        return Ok(IntegerRgb { red: hex_digit(cs[1]) * 17, green: hex_digit(cs[2]) * 17, blue: hex_digit(cs[3]) * 17 });
+    }
+    // Characters outside the BMP become "00".
+    let mut v: Vec[char] = Vec.new();
+    for c in cs {
+        if (c as i64) > 0xffff {
+            v.push('0');
+            v.push('0');
+        } else {
+            v.push(c);
+        }
+    }
+    if v.len() > 128 {
+        v.truncate(128);
+    }
+    let start = if v.len() > 0 and v[0] == '#' { 1 } else { 0 };
+    let mut d: Vec[char] = Vec.new();
+    for k in start..v.len() {
+        d.push(if is_hex(v[k]) { v[k] } else { '0' });
+    }
+    while d.len() == 0 or d.len() % 3 != 0 {
+        d.push('0');
+    }
+    let mut length = d.len() / 3;
+    let mut red = text(d, 0, length);
+    let mut green = text(d, length, length * 2);
+    let mut blue = text(d, length * 2, d.len());
+    if length > 8 {
+        red = tail_chars(red, length - 8);
+        green = tail_chars(green, length - 8);
+        blue = tail_chars(blue, length - 8);
+        length = 8;
+    }
+    while length > 2 and red.starts_with("0") and green.starts_with("0") and blue.starts_with("0") {
+        red = tail_chars(red, 1);
+        green = tail_chars(green, 1);
+        blue = tail_chars(blue, 1);
+        length -= 1;
+    }
+    if length > 2 {
+        red = head_chars(red, 2);
+        green = head_chars(green, 2);
+        blue = head_chars(blue, 2);
+    }
+    Ok(IntegerRgb { red: hex_int(red), green: hex_int(green), blue: hex_int(blue) })
+}
+
+// s[k:]
+fn tail_chars(s: ref String, k: i64) -> String {
+    let cs = to_chars(s);
+    text(cs, k, cs.len())
+}
+
+// s[:k]
+fn head_chars(s: ref String, k: i64) -> String {
+    let cs = to_chars(s);
+    text(cs, 0, k)
+}
+
+// ---------------------------------------------------------------- the audit
+
+fn is_color_prop(p: ref String) -> bool {
+    p == "color" or p == "background-color" or p == "background" or p == "border"
+        or p == "border-color" or p == "border-top" or p == "border-bottom"
+        or p == "outline" or p == "fill" or p == "stroke"
+}
+
+fn strip_comments(css: ref Vec[char]) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    let mut i = 0;
+    while i < css.len() {
+        if css[i] == '/' and i + 1 < css.len() and css[i + 1] == '*' {
+            let mut j = i + 2;
+            while j + 1 < css.len() and not (css[j] == '*' and css[j + 1] == '/') {
+                j += 1;
+            }
+            i = if j + 1 < css.len() { j + 2 } else { css.len() };
+        } else {
+            out.push(css[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn find_char(cs: ref Vec[char], c: char, from: i64) -> i64 {
+    let mut k = from;
+    while k < cs.len() {
+        if cs[k] == c {
+            return k;
+        }
+        k += 1;
+    }
+    -1
+}
+
+struct Rule {
+    selector: String,
+    decls: Vec[(String, String)],
+}
+
+fn rules(css: ref String) -> Vec[Rule] {
+    let cs = strip_comments(to_chars(css));
+    let mut out: Vec[Rule] = Vec.new();
+    let mut i = 0;
+    loop {
+        let a = find_char(cs, '{', i);
+        if a < 0 {
+            return out;
+        }
+        let b = find_char(cs, '}', a);
+        let selector = py_strip(text(cs, i, a));
+        let mut decls: Vec[(String, String)] = Vec.new();
+        for d in text(cs, a + 1, b).split(";") {
+            let dc = to_chars(d.to_string());
+            let colon = find_char(dc, ':', 0);
+            if colon < 0 {
+                continue;
+            }
+            let prop = py_strip(text(dc, 0, colon)).to_lowercase();
+            let value = py_strip(text(dc, colon + 1, dc.len()));
+            decls.push((prop, value));
+        }
+        out.push(Rule { selector: selector, decls: decls });
+        i = b + 1;
+    }
+}
+
+fn tokens(value: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut depth = 0;
+    for c in value.chars() {
+        if depth == 0 and (c == ' ' or c == '\t' or c == '\n' or c == ',') {
+            if cur.len() > 0 {
+                out.push(cur.clone());
+            }
+            cur = String.new();
+            continue;
+        }
+        if c == '(' {
+            depth += 1;
+        } else if c == ')' {
+            depth -= 1;
+        }
+        cur.push(c);
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// A token's color as a normalized hex, None when the token is not meant
+// as a color, or the error when it is a broken one.
+fn parse_color(colors: ref Colors, tok: ref String, custom: ref Map[String, String]) -> Result[Option[String], String] {
+    let low = tok.to_lowercase();
+    let cs = to_chars(tok);
+    if tok.starts_with("#") {
+        return Ok(Some(normalize_hex(tok)?));
+    }
+    if low.starts_with("rgb(") and tok.ends_with(")") {
+        let mut args: Vec[String] = Vec.new();
+        for a in text(cs, 4, cs.len() - 1).split(",") {
+            args.push(py_strip(a.to_string()));
+        }
+        if args.len() != 3 {
+            return Err(f"rgb() takes three values, not {args.len()}");
+        }
+        if args[0].ends_with("%") and args[1].ends_with("%") and args[2].ends_with("%") {
+            let p = PercentRgb { red: args[0].clone(), green: args[1].clone(), blue: args[2].clone() };
+            return Ok(Some(rgb_percent_to_hex(p)?));
+        }
+        let c = IntegerRgb { red: py_int(args[0])?, green: py_int(args[1])?, blue: py_int(args[2])? };
+        return Ok(Some(rgb_to_hex(c)));
+    }
+    if low.starts_with("var(") and tok.ends_with(")") {
+        let name = py_strip(text(cs, 4, cs.len() - 1));
+        return match custom.get(name) {
+            Some(h) => Ok(Some(h.clone())),
+            None => Err(f"{name} is not defined"),
+        };
+    }
+    match colors.name_to_hex(tok, "css3".to_string()) {
+        Ok(h) => Ok(Some(h)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn chan(v: i64) -> f64 {
+    let c = v as f64 / 255.0;
+    if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).pow(2.4) }
+}
+
+fn luminance(c: ref IntegerRgb) -> f64 {
+    0.2126 * chan(c.red) + 0.7152 * chan(c.green) + 0.0722 * chan(c.blue)
+}
+
+fn fmax(a: f64, b: f64) -> f64 {
+    if a >= b { a } else { b }
+}
+
+fn fmin(a: f64, b: f64) -> f64 {
+    if a <= b { a } else { b }
+}
+
+// colorsys.rgb_to_hls.
+fn rgb_to_hls(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let maxc = fmax(fmax(r, g), b);
+    let minc = fmin(fmin(r, g), b);
+    let sumc = maxc + minc;
+    let rangec = maxc - minc;
+    let l = sumc / 2.0;
+    if minc == maxc {
+        return (0.0, l, 0.0);
+    }
+    let s = if l <= 0.5 { rangec / sumc } else { rangec / (2.0 - maxc - minc) };
+    let rc = (maxc - r) / rangec;
+    let gc = (maxc - g) / rangec;
+    let bc = (maxc - b) / rangec;
+    let h = if r == maxc { bc - gc } else if g == maxc { 2.0 + rc - bc } else { 4.0 + gc - rc };
+    (py_fmod(h / 6.0, 1.0), l, s)
+}
+
+fn describe(colors: ref Colors, h: ref String) -> Result[String, String] {
+    let rgb = hex_to_rgb(h)?;
+    let name = match colors.hex_to_name(h, "css3".to_string()) {
+        Ok(n) => n,
+        Err(_) => "-".to_string(),
+    };
+    let pct = rgb_to_rgb_percent(rgb);
+    let (hh, ll, ss) = rgb_to_hls(rgb.red as f64 / 255.0, rgb.green as f64 / 255.0, rgb.blue as f64 / 255.0);
+    Ok(f"{h} {name} rgb({rgb.red}, {rgb.green}, {rgb.blue}) rgb({pct.red}, {pct.green}, {pct.blue}) hsl({fixed(hh * 360.0, 0)}, {fixed(ss * 100.0, 1)}%, {fixed(ll * 100.0, 1)}%)")
+}
+
+fn nearest(colors: ref Colors, h: ref String) -> Result[(String, i64), String] {
+    let rgb = hex_to_rgb(h)?;
+    let mut best = String.new();
+    let mut best_d = -1;
+    let css3 = "css3".to_string();
+    for n in colors.names(css3)? {
+        let o = colors.name_to_rgb(n, css3)?;
+        let dr = o.red - rgb.red;
+        let dg = o.green - rgb.green;
+        let db = o.blue - rgb.blue;
+        let d = dr * dr + dg * dg + db * db;
+        if best_d < 0 or d < best_d {
+            best = n.clone();
+            best_d = d;
+        }
+    }
+    Ok((best, best_d))
+}
+
+fn audit(colors: ref Colors, path: ref String) -> Result[(), String] {
+    let css = match fs.read_to_string(path.clone()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read {path}: {e}"),
+    };
+    let mut custom: Map[String, String] = Map.new();
+    let mut uses: Map[String, i64] = Map.new();
+    let mut n_rules = 0;
+    let mut n_decls = 0;
+    let mut n_bad = 0;
+    let mut n_pairs = 0;
+    let mut n_fail = 0;
+    for rule in rules(css) {
+        n_rules += 1;
+        println(f"   {rule.selector}");
+        let mut resolved: Map[String, String] = Map.new();
+        for (prop, value) in rule.decls {
+            if not (is_color_prop(prop) or prop.starts_with("--")) {
+                continue;
+            }
+            n_decls += 1;
+            let mut found: Vec[(String, String)] = Vec.new();
+            let mut bad: Option[String] = None;
+            for tok in tokens(value) {
+                match parse_color(colors, tok, custom) {
+                    Ok(Some(h)) => found.push((tok.clone(), h)),
+                    Ok(None) => {}
+                    Err(e) => {
+                        bad = Some(e);
+                        break;
+                    }
+                }
+            }
+            if let Some(e) = bad {
+                n_bad += 1;
+                println(f"     {prop}: {value} -> invalid: {e}");
+                continue;
+            }
+            if found.len() == 0 {
+                if prop == "color" or prop == "background-color" {
+                    n_bad += 1;
+                    println(f"     {prop}: {value} -> not a color");
+                }
+                continue;
+            }
+            for (tok, h) in found {
+                println(f"     {prop}: {tok} -> {describe(colors, h)?}");
+                let n = match uses.get(h) {
+                    Some(k) => *k,
+                    None => 0,
+                };
+                uses.insert(h.clone(), n + 1);
+            }
+            let first = found[0].1.clone();
+            if prop.starts_with("--") {
+                custom.insert(prop.clone(), first.clone());
+            }
+            if prop == "background" and not resolved.contains_key("background-color".to_string()) {
+                resolved.insert("background-color".to_string(), first.clone());
+            }
+            resolved.insert(prop.clone(), first);
+        }
+        if let (Some(fg_hex), Some(bg_hex)) = (resolved.get("color".to_string()), resolved.get("background-color".to_string())) {
+            n_pairs += 1;
+            let fg = luminance(hex_to_rgb(fg_hex)?);
+            let bg = luminance(hex_to_rgb(bg_hex)?);
+            let ratio = (fmax(fg, bg) + 0.05) / (fmin(fg, bg) + 0.05);
+            let grade = if ratio >= 7.0 {
+                "AAA"
+            } else if ratio >= 4.5 {
+                "AA"
+            } else if ratio >= 3.0 {
+                "AA large text only"
+            } else {
+                n_fail += 1;
+                "fails"
+            };
+            println(f"     contrast {fixed(ratio, 2)}:1 (L {fixed(fg, 4)} on {fixed(bg, 4)}) {grade}");
+        }
+    }
+    println("   palette:");
+    let mut hexes: Vec[String] = Vec.new();
+    for (h, _n) in uses {
+        hexes.push(h.clone());
+    }
+    hexes.sort();
+    for h in hexes {
+        let name = match colors.hex_to_name(h, "css3".to_string()) {
+            Ok(n) => n,
+            Err(_) => {
+                let (n, d) = nearest(colors, h)?;
+                f"~{n} (distance^2 {d})"
+            }
+        };
+        let count = match uses.get(h) {
+            Some(k) => *k,
+            None => 0,
+        };
+        println(f"     {h} x{count} {name}");
+    }
+    println(f"   {n_rules} rules, {n_decls} color declarations, {n_bad} invalid, {uses.len()} distinct colors, {n_pairs} contrast pairs, {n_fail} failing");
+    Ok(())
+}
+
+// ---------------------------------------------------------------- jobs
+
+fn unesc(s: ref String) -> String {
+    let cs = to_chars(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '\\' and i + 1 < cs.len() {
+            let n = cs[i + 1];
+            out.push(if n == 't' { '\t' } else if n == 'n' { '\n' } else { '\\' });
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn triple(args: ref Vec[String]) -> Result[IntegerRgb, String] {
+    Ok(IntegerRgb { red: py_int(args[0])?, green: py_int(args[1])?, blue: py_int(args[2])? })
+}
+
+fn ptriple(args: ref Vec[String]) -> PercentRgb {
+    PercentRgb { red: args[0].clone(), green: args[1].clone(), blue: args[2].clone() }
+}
+
+fn percent_roundtrip(colors: ref Colors) -> Result[(), String] {
+    let mut same = 0;
+    for d in 0..256 {
+        let p = rgb_to_rgb_percent(IntegerRgb { red: d, green: d, blue: d });
+        let back = rgb_percent_to_rgb(p)?;
+        if back.red == d {
+            same += 1;
+        } else {
+            println(f"   {d} -> {p.red} -> {back.red}");
+        }
+    }
+    println(f"   {same} of 256 come back");
+    Ok(())
+}
+
+fn name_roundtrip(colors: ref Colors, spec: ref String) -> Result[(), String] {
+    let all_names = colors.names(spec)?;
+    let mut same = 0;
+    for n in all_names {
+        let h = colors.name_to_hex(n, spec)?;
+        let p = rgb_to_rgb_percent(hex_to_rgb(h)?);
+        let h2 = rgb_percent_to_hex(p)?;
+        let n2 = colors.hex_to_name(h2, spec)?;
+        if n2 == n {
+            same += 1;
+        } else {
+            println(f"   {n} -> {h} -> {p.red} {p.green} {p.blue} -> {h2} -> {n2}");
+        }
+    }
+    println(f"   {all_names.len()} names, {same} come back as themselves");
+    Ok(())
+}
+
+fn str_ok(r: own Result[String, String]) -> Result[String, String] {
+    Ok(py_repr(r?))
+}
+
+// The operation's result as repr() shows it, or ValueError's message.
+fn eval_op(colors: ref Colors, op: ref String, args: ref Vec[String]) -> Result[String, String] {
+    let rgb_kind = "IntegerRGB".to_string();
+    if op == "names" {
+        Ok(py_list_repr(colors.names(args[0])?))
+    } else if op == "name_to_hex" {
+        str_ok(colors.name_to_hex(args[0], args[1]))
+    } else if op == "name_to_rgb" {
+        Ok(rgb_repr(rgb_kind, colors.name_to_rgb(args[0], args[1])?))
+    } else if op == "name_to_rgb_percent" {
+        Ok(pct_repr(colors.name_to_rgb_percent(args[0], args[1])?))
+    } else if op == "normalize_hex" {
+        str_ok(normalize_hex(args[0]))
+    } else if op == "hex_to_name" {
+        str_ok(colors.hex_to_name(args[0], args[1]))
+    } else if op == "hex_to_rgb" {
+        Ok(rgb_repr(rgb_kind, hex_to_rgb(args[0])?))
+    } else if op == "hex_to_rgb_percent" {
+        Ok(pct_repr(hex_to_rgb_percent(args[0])?))
+    } else if op == "normalize_integer_triplet" {
+        Ok(rgb_repr(rgb_kind, normalize_integer_triplet(triple(args)?)))
+    } else if op == "rgb_to_hex" {
+        Ok(py_repr(rgb_to_hex(triple(args)?)))
+    } else if op == "rgb_to_rgb_percent" {
+        Ok(pct_repr(rgb_to_rgb_percent(triple(args)?)))
+    } else if op == "rgb_to_name" {
+        str_ok(colors.rgb_to_name(triple(args)?, args[3]))
+    } else if op == "html5_serialize_simple_color" {
+        Ok(py_repr(html5_serialize_simple_color(triple(args)?)))
+    } else if op == "normalize_percent_triplet" {
+        Ok(pct_repr(normalize_percent_triplet(ptriple(args))?))
+    } else if op == "rgb_percent_to_rgb" {
+        Ok(rgb_repr(rgb_kind, rgb_percent_to_rgb(ptriple(args))?))
+    } else if op == "rgb_percent_to_hex" {
+        str_ok(rgb_percent_to_hex(ptriple(args)))
+    } else if op == "rgb_percent_to_name" {
+        str_ok(colors.rgb_percent_to_name(ptriple(args), args[3]))
+    } else if op == "html5_parse_simple_color" {
+        Ok(rgb_repr("HTML5SimpleColor".to_string(), html5_parse_simple_color(args[0])?))
+    } else if op == "html5_parse_legacy_color" {
+        Ok(rgb_repr("HTML5SimpleColor".to_string(), html5_parse_legacy_color(colors, args[0])?))
+    } else {
+        Err(f"unknown op {op}")
+    }
+}
+
+fn run_op(colors: ref Colors, fields: ref Vec[String]) -> Result[(), String] {
+    let op = fields[0].clone();
+    let mut args: Vec[String] = Vec.new();
+    for k in 1..fields.len() {
+        args.push(fields[k].clone());
+    }
+    if op == "audit" {
+        println(f"-- audit {py_repr(args[0])}");
+        return audit(colors, f"data/{args[0]}");
+    }
+    let mut head = f"-- {op}";
+    for a in args {
+        head.push(' ');
+        head.push_str(py_repr(a));
+    }
+    println(head);
+    if op == "percent_roundtrip" {
+        return percent_roundtrip(colors);
+    }
+    if op == "name_roundtrip" {
+        return name_roundtrip(colors, args[0]);
+    }
+    match eval_op(colors, op, args) {
+        Ok(r) => println(f"   {r}"),
+        Err(e) => println(f"   error: ValueError: {e}"),
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    let colors = colors();
+    let jobs = match fs.read_to_string("data/jobs.tsv") {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/jobs.tsv: {e}"),
+    };
+    for line in jobs.lines() {
+        if line.starts_with("== ") {
+            println(line);
+            continue;
+        }
+        let mut fields: Vec[String] = Vec.new();
+        for f in line.split("\t") {
+            fields.push(unesc(f.to_string()));
+        }
+        run_op(colors, fields)?;
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn hex_val(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    out
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ data
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("3d3d206e616d65730a6e616d65730968746d6c340a6e616d657309637373320a6e616d65730963737332310a6e616d65");
+    t.push_str("7309637373330a6e616d657309435353330a6e616d6573097376670a6e616d655f746f5f686578097768697465096373");
+    t.push_str("73330a6e616d655f746f5f6865780977686974650963737332310a6e616d655f746f5f6865780977686974650968746d");
+    t.push_str("6c340a6e616d655f746f5f686578094e61767909637373330a6e616d655f746f5f686578094e6176790963737332310a");
+    t.push_str("6e616d655f746f5f686578094e6176790968746d6c340a6e616d655f746f5f68657809474f4c44454e524f4409637373");
+    t.push_str("330a6e616d655f746f5f68657809474f4c44454e524f440963737332310a6e616d655f746f5f68657809474f4c44454e");
+    t.push_str("524f440968746d6c340a6e616d655f746f5f686578096f72616e676509637373330a6e616d655f746f5f686578096f72");
+    t.push_str("616e67650963737332310a6e616d655f746f5f686578096f72616e67650968746d6c340a6e616d655f746f5f68657809");
+    t.push_str("72656265636361707572706c6509637373330a6e616d655f746f5f6865780972656265636361707572706c6509637373");
+    t.push_str("32310a6e616d655f746f5f6865780972656265636361707572706c650968746d6c340a6e616d655f746f5f6865780967");
+    t.push_str("72657909637373330a6e616d655f746f5f68657809677265790963737332310a6e616d655f746f5f6865780967726579");
+    t.push_str("0968746d6c340a6e616d655f746f5f686578094461726b536c6174654772657909637373330a6e616d655f746f5f6865");
+    t.push_str("78094461726b536c617465477265790963737332310a6e616d655f746f5f686578094461726b536c6174654772657909");
+    t.push_str("68746d6c340a6e616d655f746f5f686578096379616e09637373330a6e616d655f746f5f686578096379616e09637373");
+    t.push_str("32310a6e616d655f746f5f686578096379616e0968746d6c340a6e616d655f746f5f686578096d6167656e7461096373");
+    t.push_str("73330a6e616d655f746f5f686578096d6167656e74610963737332310a6e616d655f746f5f686578096d6167656e7461");
+    t.push_str("0968746d6c340a6e616d655f746f5f686578096171756109637373330a6e616d655f746f5f6865780961717561096373");
+    t.push_str("7332310a6e616d655f746f5f68657809617175610968746d6c340a6e616d655f746f5f68657809667563687369610963");
+    t.push_str("7373330a6e616d655f746f5f68657809667563687369610963737332310a6e616d655f746f5f68657809667563687369");
+    t.push_str("610968746d6c340a6e616d655f746f5f686578092072656409637373330a6e616d655f746f5f68657809207265640963");
+    t.push_str("737332310a6e616d655f746f5f68657809207265640968746d6c340a6e616d655f746f5f6865780909637373330a6e61");
+    t.push_str("6d655f746f5f686578090963737332310a6e616d655f746f5f686578090968746d6c340a6e616d655f746f5f68657809");
+    t.push_str("7472616e73706172656e7409637373330a6e616d655f746f5f686578097472616e73706172656e740963737332310a6e");
+    t.push_str("616d655f746f5f686578097472616e73706172656e740968746d6c340a6e616d655f746f5f686578096c69676874676f");
+    t.push_str("6c64656e726f6479656c6c6f7709637373330a6e616d655f746f5f686578096c69676874676f6c64656e726f6479656c");
+    t.push_str("6c6f770963737332310a6e616d655f746f5f686578096c69676874676f6c64656e726f6479656c6c6f770968746d6c34");
+    t.push_str("0a6e616d655f746f5f726762097465616c09637373330a6e616d655f746f5f7267625f70657263656e74097465616c09");
+    t.push_str("637373330a6e616d655f746f5f7267620953696c76657209637373330a6e616d655f746f5f7267625f70657263656e74");
+    t.push_str("0953696c76657209637373330a6e616d655f746f5f726762096f72616e676509637373330a6e616d655f746f5f726762");
+    t.push_str("5f70657263656e74096f72616e676509637373330a6e616d655f746f5f72676209506170617961576869700963737333");
+    t.push_str("0a6e616d655f746f5f7267625f70657263656e74095061706179615768697009637373330a6e616d655f746f5f726762");
+    t.push_str("096e6f7375636809637373330a6e616d655f746f5f7267625f70657263656e74096e6f7375636809637373330a6e616d");
+    t.push_str("655f746f5f68657809776869746509637373310a6e616d655f746f5f726762096f72616e676509637373320a3d3d2068");
+    t.push_str("65780a6e6f726d616c697a655f68657809233030393963630a6865785f746f5f6e616d65092330303939636309637373");
+    t.push_str("330a6865785f746f5f6e616d6509233030393963630968746d6c340a6865785f746f5f72676209233030393963630a68");
+    t.push_str("65785f746f5f7267625f70657263656e7409233030393963630a6e6f726d616c697a655f68657809233030393943430a");
+    t.push_str("6865785f746f5f6e616d65092330303939434309637373330a6865785f746f5f6e616d6509233030393943430968746d");
+    t.push_str("6c340a6865785f746f5f72676209233030393943430a6865785f746f5f7267625f70657263656e740923303039394343");
+    t.push_str("0a6e6f726d616c697a655f68657809233039630a6865785f746f5f6e616d65092330396309637373330a6865785f746f");
+    t.push_str("5f6e616d6509233039630968746d6c340a6865785f746f5f72676209233039630a6865785f746f5f7267625f70657263");
+    t.push_str("656e7409233039630a6e6f726d616c697a655f68657809233039430a6865785f746f5f6e616d65092330394309637373");
+    t.push_str("330a6865785f746f5f6e616d6509233039430968746d6c340a6865785f746f5f72676209233039430a6865785f746f5f");
+    t.push_str("7267625f70657263656e7409233039430a6e6f726d616c697a655f68657809233030393967670a6865785f746f5f6e61");
+    t.push_str("6d65092330303939676709637373330a6865785f746f5f6e616d6509233030393967670968746d6c340a6865785f746f");
+    t.push_str("5f72676209233030393967670a6865785f746f5f7267625f70657263656e7409233030393967670a6e6f726d616c697a");
+    t.push_str("655f686578093030393963630a6865785f746f5f6e616d650930303939636309637373330a6865785f746f5f6e616d65");
+    t.push_str("093030393963630968746d6c340a6865785f746f5f726762093030393963630a6865785f746f5f7267625f7065726365");
+    t.push_str("6e74093030393963630a6e6f726d616c697a655f68657809230a6865785f746f5f6e616d65092309637373330a686578");
+    t.push_str("5f746f5f6e616d6509230968746d6c340a6865785f746f5f72676209230a6865785f746f5f7267625f70657263656e74");
+    t.push_str("09230a6e6f726d616c697a655f6865780923313233340a6865785f746f5f6e616d6509233132333409637373330a6865");
+    t.push_str("785f746f5f6e616d650923313233340968746d6c340a6865785f746f5f7267620923313233340a6865785f746f5f7267");
+    t.push_str("625f70657263656e740923313233340a6e6f726d616c697a655f686578092331323334350a6865785f746f5f6e616d65");
+    t.push_str("0923313233343509637373330a6865785f746f5f6e616d65092331323334350968746d6c340a6865785f746f5f726762");
+    t.push_str("092331323334350a6865785f746f5f7267625f70657263656e74092331323334350a6e6f726d616c697a655f68657809");
+    t.push_str("23313233343536370a6865785f746f5f6e616d6509233132333435363709637373330a6865785f746f5f6e616d650923");
+    t.push_str("313233343536370968746d6c340a6865785f746f5f7267620923313233343536370a6865785f746f5f7267625f706572");
+    t.push_str("63656e740923313233343536370a6e6f726d616c697a655f68657809234646460a6865785f746f5f6e616d6509234646");
+    t.push_str("4609637373330a6865785f746f5f6e616d6509234646460968746d6c340a6865785f746f5f72676209234646460a6865");
+    t.push_str("785f746f5f7267625f70657263656e7409234646460a6e6f726d616c697a655f68657809236666666666660a6865785f");
+    t.push_str("746f5f6e616d65092366666666666609637373330a6865785f746f5f6e616d6509236666666666660968746d6c340a68");
+    t.push_str("65785f746f5f72676209236666666666660a6865785f746f5f7267625f70657263656e7409236666666666660a6e6f72");
+    t.push_str("6d616c697a655f68657809236142634465460a6865785f746f5f6e616d65092361426344654609637373330a6865785f");
+    t.push_str("746f5f6e616d6509236142634465460968746d6c340a6865785f746f5f72676209236142634465460a6865785f746f5f");
+    t.push_str("7267625f70657263656e7409236142634465460a6e6f726d616c697a655f68657809233030666666660a6865785f746f");
+    t.push_str("5f6e616d65092330306666666609637373330a6865785f746f5f6e616d6509233030666666660968746d6c340a686578");
+    t.push_str("5f746f5f72676209233030666666660a6865785f746f5f7267625f70657263656e7409233030666666660a6e6f726d61");
+    t.push_str("6c697a655f68657809236666303066660a6865785f746f5f6e616d65092366663030666609637373330a6865785f746f");
+    t.push_str("5f6e616d6509236666303066660968746d6c340a6865785f746f5f72676209236666303066660a6865785f746f5f7267");
+    t.push_str("625f70657263656e7409236666303066660a6e6f726d616c697a655f68657809233830383038300a6865785f746f5f6e");
+    t.push_str("616d65092338303830383009637373330a6865785f746f5f6e616d6509233830383038300968746d6c340a6865785f74");
+    t.push_str("6f5f72676209233830383038300a6865785f746f5f7267625f70657263656e7409233830383038300a6e6f726d616c69");
+    t.push_str("7a655f68657809236433643364330a6865785f746f5f6e616d65092364336433643309637373330a6865785f746f5f6e");
+    t.push_str("616d6509236433643364330968746d6c340a6865785f746f5f72676209236433643364330a6865785f746f5f7267625f");
+    t.push_str("70657263656e7409236433643364330a6e6f726d616c697a655f68657809233636333339390a6865785f746f5f6e616d");
+    t.push_str("65092336363333393909637373330a6865785f746f5f6e616d6509233636333339390968746d6c340a6865785f746f5f");
+    t.push_str("72676209233636333339390a6865785f746f5f7267625f70657263656e7409233636333339390a6e6f726d616c697a65");
+    t.push_str("5f6865780920236666660a6865785f746f5f6e616d6509202366666609637373330a6865785f746f5f6e616d65092023");
+    t.push_str("6666660968746d6c340a6865785f746f5f7267620920236666660a6865785f746f5f7267625f70657263656e74092023");
+    t.push_str("6666660a6e6f726d616c697a655f68657809236666665c6e0a6865785f746f5f6e616d6509236666665c6e0963737333");
+    t.push_str("0a6865785f746f5f6e616d6509236666665c6e0968746d6c340a6865785f746f5f72676209236666665c6e0a6865785f");
+    t.push_str("746f5f7267625f70657263656e7409236666665c6e0a6e6f726d616c697a655f6865780923efbca1efbca2efbca30a68");
+    t.push_str("65785f746f5f6e616d650923efbca1efbca2efbca309637373330a6865785f746f5f6e616d650923efbca1efbca2efbc");
+    t.push_str("a30968746d6c340a6865785f746f5f7267620923efbca1efbca2efbca30a6865785f746f5f7267625f70657263656e74");
+    t.push_str("0923efbca1efbca2efbca30a6e6f726d616c697a655f68657809236139613961390a6865785f746f5f6e616d65092361");
+    t.push_str("396139613909637373330a6865785f746f5f6e616d6509236139613961390968746d6c340a6865785f746f5f72676209");
+    t.push_str("236139613961390a6865785f746f5f7267625f70657263656e7409236139613961390a6865785f746f5f6e616d650923");
+    t.push_str("6666613530300963737332310a6865785f746f5f6e616d65092366666135303009637373320a6865785f746f5f6e616d");
+    t.push_str("6509236666660943535332310a3d3d207267620a6e6f726d616c697a655f696e74656765725f747269706c6574093235");
+    t.push_str("3509323535093235350a7267625f746f5f6865780932353509323535093235350a7267625f746f5f7267625f70657263");
+    t.push_str("656e740932353509323535093235350a7267625f746f5f6e616d6509323535093235350932353509637373330a726762");
+    t.push_str("5f746f5f6e616d650932353509323535093235350968746d6c340a6e6f726d616c697a655f696e74656765725f747269");
+    t.push_str("706c657409300930093132380a7267625f746f5f68657809300930093132380a7267625f746f5f7267625f7065726365");
+    t.push_str("6e7409300930093132380a7267625f746f5f6e616d65093009300931323809637373330a7267625f746f5f6e616d6509");
+    t.push_str("300930093132380968746d6c340a6e6f726d616c697a655f696e74656765725f747269706c6574093231380931363509");
+    t.push_str("33320a7267625f746f5f68657809323138093136350933320a7267625f746f5f7267625f70657263656e740932313809");
+    t.push_str("3136350933320a7267625f746f5f6e616d65093231380931363509333209637373330a7267625f746f5f6e616d650932");
+    t.push_str("3138093136350933320968746d6c340a6e6f726d616c697a655f696e74656765725f747269706c657409323730092d32");
+    t.push_str("3009300a7267625f746f5f68657809323730092d323009300a7267625f746f5f7267625f70657263656e740932373009");
+    t.push_str("2d323009300a7267625f746f5f6e616d6509323730092d3230093009637373330a7267625f746f5f6e616d6509323730");
+    t.push_str("092d323009300968746d6c340a6e6f726d616c697a655f696e74656765725f747269706c65740931093209330a726762");
+    t.push_str("5f746f5f6865780931093209330a7267625f746f5f7267625f70657263656e740931093209330a7267625f746f5f6e61");
+    t.push_str("6d6509310932093309637373330a7267625f746f5f6e616d650931093209330968746d6c340a6e6f726d616c697a655f");
+    t.push_str("696e74656765725f747269706c6574093132380936340933320a7267625f746f5f686578093132380936340933320a72");
+    t.push_str("67625f746f5f7267625f70657263656e74093132380936340933320a7267625f746f5f6e616d65093132380936340933");
+    t.push_str("3209637373330a7267625f746f5f6e616d65093132380936340933320968746d6c340a6e6f726d616c697a655f696e74");
+    t.push_str("656765725f747269706c65740931360932353509300a7267625f746f5f6865780931360932353509300a7267625f746f");
+    t.push_str("5f7267625f70657263656e740931360932353509300a7267625f746f5f6e616d6509313609323535093009637373330a");
+    t.push_str("7267625f746f5f6e616d650931360932353509300968746d6c340a6e6f726d616c697a655f696e74656765725f747269");
+    t.push_str("706c65740933303009333030093330300a7267625f746f5f6865780933303009333030093330300a7267625f746f5f72");
+    t.push_str("67625f70657263656e740933303009333030093330300a7267625f746f5f6e616d650933303009333030093330300963");
+    t.push_str("7373330a7267625f746f5f6e616d650933303009333030093330300968746d6c340a6e6f726d616c697a655f696e7465");
+    t.push_str("6765725f747269706c6574092d31092d31092d310a7267625f746f5f686578092d31092d31092d310a7267625f746f5f");
+    t.push_str("7267625f70657263656e74092d31092d31092d310a7267625f746f5f6e616d65092d31092d31092d3109637373330a72");
+    t.push_str("67625f746f5f6e616d65092d31092d31092d310968746d6c340a6e6f726d616c697a655f696e74656765725f74726970");
+    t.push_str("6c657409313032093531093135330a7267625f746f5f68657809313032093531093135330a7267625f746f5f7267625f");
+    t.push_str("70657263656e7409313032093531093135330a7267625f746f5f6e616d65093130320935310931353309637373330a72");
+    t.push_str("67625f746f5f6e616d6509313032093531093135330968746d6c340a6e6f726d616c697a655f696e74656765725f7472");
+    t.push_str("69706c6574093009323535093235350a7267625f746f5f686578093009323535093235350a7267625f746f5f7267625f");
+    t.push_str("70657263656e74093009323535093235350a7267625f746f5f6e616d650930093235350932353509637373330a726762");
+    t.push_str("5f746f5f6e616d65093009323535093235350968746d6c340a6e6f726d616c697a655f696e74656765725f747269706c");
+    t.push_str("65740931393209313932093139320a7267625f746f5f6865780931393209313932093139320a7267625f746f5f726762");
+    t.push_str("5f70657263656e740931393209313932093139320a7267625f746f5f6e616d6509313932093139320931393209637373");
+    t.push_str("330a7267625f746f5f6e616d650931393209313932093139320968746d6c340a6e6f726d616c697a655f696e74656765");
+    t.push_str("725f747269706c65740931323709313239093235340a7267625f746f5f6865780931323709313239093235340a726762");
+    t.push_str("5f746f5f7267625f70657263656e740931323709313239093235340a7267625f746f5f6e616d65093132370931323909");
+    t.push_str("32353409637373330a7267625f746f5f6e616d650931323709313239093235340968746d6c340a6e6f726d616c697a65");
+    t.push_str("5f696e74656765725f747269706c65740932353009323335093231350a7267625f746f5f686578093235300932333509");
+    t.push_str("3231350a7267625f746f5f7267625f70657263656e740932353009323335093231350a7267625f746f5f6e616d650932");
+    t.push_str("3530093233350932313509637373330a7267625f746f5f6e616d650932353009323335093231350968746d6c340a6e6f");
+    t.push_str("726d616c697a655f696e74656765725f747269706c65740931303030303030093709380a7267625f746f5f6865780931");
+    t.push_str("303030303030093709380a7267625f746f5f7267625f70657263656e740931303030303030093709380a7267625f746f");
+    t.push_str("5f6e616d6509313030303030300937093809637373330a7267625f746f5f6e616d650931303030303030093709380968");
+    t.push_str("746d6c340a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209300932353509300a68746d6c355f");
+    t.push_str("73657269616c697a655f73696d706c655f636f6c6f720933093235320932310a68746d6c355f73657269616c697a655f");
+    t.push_str("73696d706c655f636f6c6f720936093234390934320a68746d6c355f73657269616c697a655f73696d706c655f636f6c");
+    t.push_str("6f720939093234360936330a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720931320932343309");
+    t.push_str("38340a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209313509323430093130350a68746d6c35");
+    t.push_str("5f73657269616c697a655f73696d706c655f636f6c6f7209313809323337093132360a68746d6c355f73657269616c69");
+    t.push_str("7a655f73696d706c655f636f6c6f7209323109323334093134370a68746d6c355f73657269616c697a655f73696d706c");
+    t.push_str("655f636f6c6f7209323409323331093136380a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209");
+    t.push_str("323709323238093138390a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093330093232350932");
+    t.push_str("31300a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209333309323232093233310a68746d6c35");
+    t.push_str("5f73657269616c697a655f73696d706c655f636f6c6f7209333609323139093235320a68746d6c355f73657269616c69");
+    t.push_str("7a655f73696d706c655f636f6c6f72093339093231360931370a68746d6c355f73657269616c697a655f73696d706c65");
+    t.push_str("5f636f6c6f72093432093231330933380a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093435");
+    t.push_str("093231300935390a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093438093230370938300a68");
+    t.push_str("746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209353109323034093130310a68746d6c355f736572");
+    t.push_str("69616c697a655f73696d706c655f636f6c6f7209353409323031093132320a68746d6c355f73657269616c697a655f73");
+    t.push_str("696d706c655f636f6c6f7209353709313938093134330a68746d6c355f73657269616c697a655f73696d706c655f636f");
+    t.push_str("6c6f7209363009313935093136340a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720936330931");
+    t.push_str("3932093138350a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209363609313839093230360a68");
+    t.push_str("746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209363909313836093232370a68746d6c355f736572");
+    t.push_str("69616c697a655f73696d706c655f636f6c6f7209373209313833093234380a68746d6c355f73657269616c697a655f73");
+    t.push_str("696d706c655f636f6c6f72093735093138300931330a68746d6c355f73657269616c697a655f73696d706c655f636f6c");
+    t.push_str("6f72093738093137370933340a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209383109313734");
+    t.push_str("0935350a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093834093137310937360a68746d6c35");
+    t.push_str("5f73657269616c697a655f73696d706c655f636f6c6f72093837093136380939370a68746d6c355f73657269616c697a");
+    t.push_str("655f73696d706c655f636f6c6f7209393009313635093131380a68746d6c355f73657269616c697a655f73696d706c65");
+    t.push_str("5f636f6c6f7209393309313632093133390a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720939");
+    t.push_str("3609313539093136300a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209393909313536093138");
+    t.push_str("310a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720931303209313533093230320a68746d6c35");
+    t.push_str("5f73657269616c697a655f73696d706c655f636f6c6f720931303509313530093232330a68746d6c355f73657269616c");
+    t.push_str("697a655f73696d706c655f636f6c6f720931303809313437093234340a68746d6c355f73657269616c697a655f73696d");
+    t.push_str("706c655f636f6c6f72093131310931343409390a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72");
+    t.push_str("09313134093134310933300a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720931313709313338");
+    t.push_str("0935310a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209313230093133350937320a68746d6c");
+    t.push_str("355f73657269616c697a655f73696d706c655f636f6c6f7209313233093133320939330a68746d6c355f73657269616c");
+    t.push_str("697a655f73696d706c655f636f6c6f720931323609313239093131340a68746d6c355f73657269616c697a655f73696d");
+    t.push_str("706c655f636f6c6f720931323909313236093133350a68746d6c355f73657269616c697a655f73696d706c655f636f6c");
+    t.push_str("6f720931333209313233093135360a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720931333509");
+    t.push_str("313230093137370a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093133380931313709313938");
+    t.push_str("0a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720931343109313134093231390a68746d6c355f");
+    t.push_str("73657269616c697a655f73696d706c655f636f6c6f720931343409313131093234300a68746d6c355f73657269616c69");
+    t.push_str("7a655f73696d706c655f636f6c6f72093134370931303809350a68746d6c355f73657269616c697a655f73696d706c65");
+    t.push_str("5f636f6c6f7209313530093130350932360a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720931");
+    t.push_str("3533093130320934370a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209313536093939093638");
+    t.push_str("0a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093135390939360938390a68746d6c355f7365");
+    t.push_str("7269616c697a655f73696d706c655f636f6c6f7209313632093933093131300a68746d6c355f73657269616c697a655f");
+    t.push_str("73696d706c655f636f6c6f7209313635093930093133310a68746d6c355f73657269616c697a655f73696d706c655f63");
+    t.push_str("6f6c6f7209313638093837093135320a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209313731");
+    t.push_str("093834093137330a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209313734093831093139340a");
+    t.push_str("68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209313737093738093231350a68746d6c355f7365");
+    t.push_str("7269616c697a655f73696d706c655f636f6c6f7209313830093735093233360a68746d6c355f73657269616c697a655f");
+    t.push_str("73696d706c655f636f6c6f720931383309373209310a68746d6c355f73657269616c697a655f73696d706c655f636f6c");
+    t.push_str("6f72093138360936390932320a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209313839093636");
+    t.push_str("0934330a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093139320936330936340a68746d6c35");
+    t.push_str("5f73657269616c697a655f73696d706c655f636f6c6f72093139350936300938350a68746d6c355f73657269616c697a");
+    t.push_str("655f73696d706c655f636f6c6f7209313938093537093130360a68746d6c355f73657269616c697a655f73696d706c65");
+    t.push_str("5f636f6c6f7209323031093534093132370a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720932");
+    t.push_str("3034093531093134380a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209323037093438093136");
+    t.push_str("390a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209323130093435093139300a68746d6c355f");
+    t.push_str("73657269616c697a655f73696d706c655f636f6c6f7209323133093432093231310a68746d6c355f73657269616c697a");
+    t.push_str("655f73696d706c655f636f6c6f7209323136093339093233320a68746d6c355f73657269616c697a655f73696d706c65");
+    t.push_str("5f636f6c6f7209323139093336093235330a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f720932");
+    t.push_str("32320933330931380a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093232350933300933390a");
+    t.push_str("68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093232380932370936300a68746d6c355f736572");
+    t.push_str("69616c697a655f73696d706c655f636f6c6f72093233310932340938310a68746d6c355f73657269616c697a655f7369");
+    t.push_str("6d706c655f636f6c6f7209323334093231093130320a68746d6c355f73657269616c697a655f73696d706c655f636f6c");
+    t.push_str("6f7209323337093138093132330a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f72093234300931");
+    t.push_str("35093134340a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209323433093132093136350a6874");
+    t.push_str("6d6c355f73657269616c697a655f73696d706c655f636f6c6f72093234360939093138360a68746d6c355f7365726961");
+    t.push_str("6c697a655f73696d706c655f636f6c6f72093234390936093230370a68746d6c355f73657269616c697a655f73696d70");
+    t.push_str("6c655f636f6c6f72093235320933093232380a68746d6c355f73657269616c697a655f73696d706c655f636f6c6f7209");
+    t.push_str("3235350930093234390a3d3d2070657263656e740a6e6f726d616c697a655f70657263656e745f747269706c65740935");
+    t.push_str("302509353025093530250a7267625f70657263656e745f746f5f7267620935302509353025093530250a7267625f7065");
+    t.push_str("7263656e745f746f5f6865780935302509353025093530250a7267625f70657263656e745f746f5f6e616d6509353025");
+    t.push_str("093530250935302509637373330a6e6f726d616c697a655f70657263656e745f747269706c6574093025093130302509");
+    t.push_str("30250a7267625f70657263656e745f746f5f72676209302509313030250930250a7267625f70657263656e745f746f5f");
+    t.push_str("68657809302509313030250930250a7267625f70657263656e745f746f5f6e616d650930250931303025093025096373");
+    t.push_str("73330a6e6f726d616c697a655f70657263656e745f747269706c6574092d313025092d302509353030250a7267625f70");
+    t.push_str("657263656e745f746f5f726762092d313025092d302509353030250a7267625f70657263656e745f746f5f686578092d");
+    t.push_str("313025092d302509353030250a7267625f70657263656e745f746f5f6e616d65092d313025092d302509353030250963");
+    t.push_str("7373330a6e6f726d616c697a655f70657263656e745f747269706c65740938352e3439250936342e3731250931322e35");
+    t.push_str("250a7267625f70657263656e745f746f5f7267620938352e3439250936342e3731250931322e35250a7267625f706572");
+    t.push_str("63656e745f746f5f6865780938352e3439250936342e3731250931322e35250a7267625f70657263656e745f746f5f6e");
+    t.push_str("616d650938352e3439250936342e3731250931322e352509637373330a6e6f726d616c697a655f70657263656e745f74");
+    t.push_str("7269706c6574093130302509313030250930250a7267625f70657263656e745f746f5f72676209313030250931303025");
+    t.push_str("0930250a7267625f70657263656e745f746f5f686578093130302509313030250930250a7267625f70657263656e745f");
+    t.push_str("746f5f6e616d650931303025093130302509302509637373330a6e6f726d616c697a655f70657263656e745f74726970");
+    t.push_str("6c65740931322e352509362e323525093235250a7267625f70657263656e745f746f5f7267620931322e352509362e32");
+    t.push_str("3525093235250a7267625f70657263656e745f746f5f6865780931322e352509362e323525093235250a7267625f7065");
+    t.push_str("7263656e745f746f5f6e616d650931322e352509362e3235250932352509637373330a6e6f726d616c697a655f706572");
+    t.push_str("63656e745f747269706c65740933332e33250936362e36250939392e39250a7267625f70657263656e745f746f5f7267");
+    t.push_str("620933332e33250936362e36250939392e39250a7267625f70657263656e745f746f5f6865780933332e33250936362e");
+    t.push_str("36250939392e39250a7267625f70657263656e745f746f5f6e616d650933332e33250936362e36250939392e39250963");
+    t.push_str("7373330a6e6f726d616c697a655f70657263656e745f747269706c657409316532250930250930250a7267625f706572");
+    t.push_str("63656e745f746f5f72676209316532250930250930250a7267625f70657263656e745f746f5f68657809316532250930");
+    t.push_str("250930250a7267625f70657263656e745f746f5f6e616d65093165322509302509302509637373330a6e6f726d616c69");
+    t.push_str("7a655f70657263656e745f747269706c657409312e6532250930250930250a7267625f70657263656e745f746f5f7267");
+    t.push_str("6209312e6532250930250930250a7267625f70657263656e745f746f5f68657809312e6532250930250930250a726762");
+    t.push_str("5f70657263656e745f746f5f6e616d6509312e65322509302509302509637373330a6e6f726d616c697a655f70657263");
+    t.push_str("656e745f747269706c65740920372025092b352509303037250a7267625f70657263656e745f746f5f72676209203720");
+    t.push_str("25092b352509303037250a7267625f70657263656e745f746f5f6865780920372025092b352509303037250a7267625f");
+    t.push_str("70657263656e745f746f5f6e616d650920372025092b3525093030372509637373330a6e6f726d616c697a655f706572");
+    t.push_str("63656e745f747269706c657409315f302509325f302e35250933250a7267625f70657263656e745f746f5f7267620931");
+    t.push_str("5f302509325f302e35250933250a7267625f70657263656e745f746f5f68657809315f302509325f302e35250933250a");
+    t.push_str("7267625f70657263656e745f746f5f6e616d6509315f302509325f302e352509332509637373330a6e6f726d616c697a");
+    t.push_str("655f70657263656e745f747269706c6574096e616e2e250930250930250a7267625f70657263656e745f746f5f726762");
+    t.push_str("096e616e2e250930250930250a7267625f70657263656e745f746f5f686578096e616e2e250930250930250a7267625f");
+    t.push_str("70657263656e745f746f5f6e616d65096e616e2e2509302509302509637373330a6e6f726d616c697a655f7065726365");
+    t.push_str("6e745f747269706c657409696e662e25092d696e662e250930250a7267625f70657263656e745f746f5f72676209696e");
+    t.push_str("662e25092d696e662e250930250a7267625f70657263656e745f746f5f68657809696e662e25092d696e662e25093025");
+    t.push_str("0a7267625f70657263656e745f746f5f6e616d6509696e662e25092d696e662e2509302509637373330a6e6f726d616c");
+    t.push_str("697a655f70657263656e745f747269706c657409616263250930250930250a7267625f70657263656e745f746f5f7267");
+    t.push_str("6209616263250930250930250a7267625f70657263656e745f746f5f68657809616263250930250930250a7267625f70");
+    t.push_str("657263656e745f746f5f6e616d65096162632509302509302509637373330a6e6f726d616c697a655f70657263656e74");
+    t.push_str("5f747269706c657409350931300931350a7267625f70657263656e745f746f5f72676209350931300931350a7267625f");
+    t.push_str("70657263656e745f746f5f68657809350931300931350a7267625f70657263656e745f746f5f6e616d65093509313009");
+    t.push_str("313509637373330a6e6f726d616c697a655f70657263656e745f747269706c657409302e352509302e32352509302e31");
+    t.push_str("3235250a7267625f70657263656e745f746f5f72676209302e352509302e32352509302e313235250a7267625f706572");
+    t.push_str("63656e745f746f5f68657809302e352509302e32352509302e313235250a7267625f70657263656e745f746f5f6e616d");
+    t.push_str("6509302e352509302e32352509302e3132352509637373330a6e6f726d616c697a655f70657263656e745f747269706c");
+    t.push_str("65740939392e393939393925093130302e303030303125092d302e30250a7267625f70657263656e745f746f5f726762");
+    t.push_str("0939392e393939393925093130302e303030303125092d302e30250a7267625f70657263656e745f746f5f6865780939");
+    t.push_str("392e393939393925093130302e303030303125092d302e30250a7267625f70657263656e745f746f5f6e616d65093939");
+    t.push_str("2e393939393925093130302e303030303125092d302e302509637373330a6e6f726d616c697a655f70657263656e745f");
+    t.push_str("747269706c657409312e25092e35250935302e250a7267625f70657263656e745f746f5f72676209312e25092e352509");
+    t.push_str("35302e250a7267625f70657263656e745f746f5f68657809312e25092e35250935302e250a7267625f70657263656e74");
+    t.push_str("5f746f5f6e616d6509312e25092e35250935302e2509637373330a6e6f726d616c697a655f70657263656e745f747269");
+    t.push_str("706c657409302e31393630373834332509302e322509302e3231250a7267625f70657263656e745f746f5f7267620930");
+    t.push_str("2e31393630373834332509302e322509302e3231250a7267625f70657263656e745f746f5f68657809302e3139363037");
+    t.push_str("3834332509302e322509302e3231250a7267625f70657263656e745f746f5f6e616d6509302e31393630373834332509");
+    t.push_str("302e322509302e32312509637373330a6e6f726d616c697a655f70657263656e745f747269706c657409250930250930");
+    t.push_str("250a7267625f70657263656e745f746f5f72676209250930250930250a7267625f70657263656e745f746f5f68657809");
+    t.push_str("250930250930250a7267625f70657263656e745f746f5f6e616d65092509302509302509637373330a6e6f726d616c69");
+    t.push_str("7a655f70657263656e745f747269706c657409323025780930250930250a7267625f70657263656e745f746f5f726762");
+    t.push_str("09323025780930250930250a7267625f70657263656e745f746f5f68657809323025780930250930250a7267625f7065");
+    t.push_str("7263656e745f746f5f6e616d65093230257809302509302509637373330a6e6f726d616c697a655f70657263656e745f");
+    t.push_str("747269706c657409312e3565312509322e3545312509332e35652d31250a7267625f70657263656e745f746f5f726762");
+    t.push_str("09312e3565312509322e3545312509332e35652d31250a7267625f70657263656e745f746f5f68657809312e35653125");
+    t.push_str("09322e3545312509332e35652d31250a7267625f70657263656e745f746f5f6e616d6509312e3565312509322e354531");
+    t.push_str("2509332e35652d312509637373330a6e6f726d616c697a655f70657263656e745f747269706c65740935302e30250935");
+    t.push_str("302e3030250934392e3939250a7267625f70657263656e745f746f5f7267620935302e30250935302e3030250934392e");
+    t.push_str("3939250a7267625f70657263656e745f746f5f6865780935302e30250935302e3030250934392e3939250a7267625f70");
+    t.push_str("657263656e745f746f5f6e616d650935302e30250935302e3030250934392e39392509637373330a6e6f726d616c697a");
+    t.push_str("655f70657263656e745f747269706c657409302e312509302e322509302e33250a7267625f70657263656e745f746f5f");
+    t.push_str("72676209302e312509302e322509302e33250a7267625f70657263656e745f746f5f68657809302e312509302e322509");
+    t.push_str("302e33250a7267625f70657263656e745f746f5f6e616d6509302e312509302e322509302e332509637373330a726762");
+    t.push_str("5f70657263656e745f746f5f7267620939342e30250938362e31323733250932382e31250a7267625f70657263656e74");
+    t.push_str("5f746f5f7267620933332e36313735250932392509332e33250a7267625f70657263656e745f746f5f7267620934362e");
+    t.push_str("363439250936342e3933250932372e323936250a7267625f70657263656e745f746f5f7267620939332e393636250939");
+    t.push_str("38250932352e35353639250a7267625f70657263656e745f746f5f7267620936342e35383625092d312e393430342509");
+    t.push_str("36352e34250a7267625f70657263656e745f746f5f7267620938392509312e31353831250938312e343432250a726762");
+    t.push_str("5f70657263656e745f746f5f7267620934362e3133383225092d312e32250936332e3632250a7267625f70657263656e");
+    t.push_str("745f746f5f7267620935372e33393025093739250934312e39323839250a7267625f70657263656e745f746f5f726762");
+    t.push_str("0932312e3731250936372e3039343825093130312e313630250a7267625f70657263656e745f746f5f7267620936312e");
+    t.push_str("34323439250932342e393633250935332e3239250a7267625f70657263656e745f746f5f7267620935332509362e3033");
+    t.push_str("32250932332e373336250a7267625f70657263656e745f746f5f7267620936322e36250934342e353733250931332e33");
+    t.push_str("31250a7267625f70657263656e745f746f5f72676209372e34250936302e3338250939372e37343437250a7267625f70");
+    t.push_str("657263656e745f746f5f726762093337250932312e3225093136250a7267625f70657263656e745f746f5f7267620934");
+    t.push_str("362e32383932250931362e3232250937302e3634250a7267625f70657263656e745f746f5f7267620938362e35393033");
+    t.push_str("250933302e34333037250934342e393637250a7267625f70657263656e745f746f5f7267620939382e33343525093138");
+    t.push_str("2e35363237250931372e363931250a7267625f70657263656e745f746f5f7267620935322e393725093130332e342509");
+    t.push_str("313031250a7267625f70657263656e745f746f5f726762093130322e343131250934302e32250936322e30373933250a");
+    t.push_str("7267625f70657263656e745f746f5f7267620936312e332509332e323736250938322e303236250a7267625f70657263");
+    t.push_str("656e745f746f5f726762093434250939332e303332250933372e363631250a7267625f70657263656e745f746f5f7267");
+    t.push_str("620933332e35373725093937250938302e333132250a7267625f70657263656e745f746f5f7267620938332509393225");
+    t.push_str("0935392e3638250a7267625f70657263656e745f746f5f726762093437250939362509352e3833250a7267625f706572");
+    t.push_str("63656e745f746f5f7267620934342e35250934332e373830372509342e32250a7267625f70657263656e745f746f5f72");
+    t.push_str("6762092d302e303538250932312e3336250936322e383235250a7267625f70657263656e745f746f5f72676209313033");
+    t.push_str("2e32250933382e363839250938392e35343339250a7267625f70657263656e745f746f5f7267620934302e3225092d32");
+    t.push_str("2e36303525093531250a7267625f70657263656e745f746f5f7267620934312509313225093738250a7267625f706572");
+    t.push_str("63656e745f746f5f7267620935302e38250938392e343537250938250a7267625f70657263656e745f746f5f72676209");
+    t.push_str("34332e35342509323925093836250a7267625f70657263656e745f746f5f72676209332e32393539250938372e383230");
+    t.push_str("250936372e38250a7267625f70657263656e745f746f5f7267620933312e32250936392e3730250931392e3732343925");
+    t.push_str("0a7267625f70657263656e745f746f5f7267620931382e31343025092d312e353834392509313030250a7267625f7065");
+    t.push_str("7263656e745f746f5f7267620931312e37250931392e33250937352e34250a7267625f70657263656e745f746f5f7267");
+    t.push_str("620931362e33250936312e3030323225092d312e33250a7267625f70657263656e745f746f5f7267620938332e303535");
+    t.push_str("39250939372e3832250934392e363331250a7267625f70657263656e745f746f5f7267620933332e333238250935352e");
+    t.push_str("3836323125092d31250a7267625f70657263656e745f746f5f7267620936362e303525093539250932392e38250a7267");
+    t.push_str("625f70657263656e745f746f5f7267620931312e3936250939382e3839250933322e333633250a3d3d20726f756e6474");
+    t.push_str("7269700a70657263656e745f726f756e64747269700a6e616d655f726f756e64747269700968746d6c340a6e616d655f");
+    t.push_str("726f756e647472697009637373320a6e616d655f726f756e64747269700963737332310a6e616d655f726f756e647472");
+    t.push_str("697009637373330a3d3d2068746d6c350a68746d6c355f70617273655f73696d706c655f636f6c6f7209236666666666");
+    t.push_str("660a68746d6c355f70617273655f73696d706c655f636f6c6f7209236666660a68746d6c355f70617273655f73696d70");
+    t.push_str("6c655f636f6c6f7209666666666666370a68746d6c355f70617273655f73696d706c655f636f6c6f7209236666666666");
+    t.push_str("670a68746d6c355f70617273655f73696d706c655f636f6c6f7209234666456544640a68746d6c355f70617273655f73");
+    t.push_str("696d706c655f636f6c6f7209233030303030300a68746d6c355f70617273655f73696d706c655f636f6c6f720923efbc");
+    t.push_str("a1efbca2efbca3efbca4efbca5efbca60a68746d6c355f70617273655f73696d706c655f636f6c6f72090a68746d6c35");
+    t.push_str("5f70617273655f73696d706c655f636f6c6f720923313233343536370a68746d6c355f70617273655f6c65676163795f");
+    t.push_str("636f6c6f7209626c61636b0a68746d6c355f70617273655f6c65676163795f636f6c6f7209636875636b6e6f72726973");
+    t.push_str("0a68746d6c355f70617273655f6c65676163795f636f6c6f720957696e646f770a68746d6c355f70617273655f6c6567");
+    t.push_str("6163795f636f6c6f72097472616e73706172656e740a68746d6c355f70617273655f6c65676163795f636f6c6f720920");
+    t.push_str("5472616e73706172656e74200a68746d6c355f70617273655f6c65676163795f636f6c6f72090a68746d6c355f706172");
+    t.push_str("73655f6c65676163795f636f6c6f72092020200a68746d6c355f70617273655f6c65676163795f636f6c6f7209236666");
+    t.push_str("660a68746d6c355f70617273655f6c65676163795f636f6c6f7209234646460a68746d6c355f70617273655f6c656761");
+    t.push_str("63795f636f6c6f720923666666660a68746d6c355f70617273655f6c65676163795f636f6c6f7209236162636465660a");
+    t.push_str("68746d6c355f70617273655f6c65676163795f636f6c6f720923310a68746d6c355f70617273655f6c65676163795f63");
+    t.push_str("6f6c6f72092331320a68746d6c355f70617273655f6c65676163795f636f6c6f7209233132330a68746d6c355f706172");
+    t.push_str("73655f6c65676163795f636f6c6f72097265640a68746d6c355f70617273655f6c65676163795f636f6c6f720920204c");
+    t.push_str("69676874476f6c64656e726f6459656c6c6f775c6e0a68746d6c355f70617273655f6c65676163795f636f6c6f720923");
+    t.push_str("3030393963630a68746d6c355f70617273655f6c65676163795f636f6c6f72093030393963630a68746d6c355f706172");
+    t.push_str("73655f6c65676163795f636f6c6f7209637261700a68746d6c355f70617273655f6c65676163795f636f6c6f72096e69");
+    t.push_str("6e6a61747572746c650a68746d6c355f70617273655f6c65676163795f636f6c6f72097369636b0a68746d6c355f7061");
+    t.push_str("7273655f6c65676163795f636f6c6f720967726173730a68746d6c355f70617273655f6c65676163795f636f6c6f7209");
+    t.push_str("2366663030303066660a68746d6c355f70617273655f6c65676163795f636f6c6f72092331323334353637380a68746d");
+    t.push_str("6c355f70617273655f6c65676163795f636f6c6f720923313233343536373839616263646566300a68746d6c355f7061");
+    t.push_str("7273655f6c65676163795f636f6c6f72097267622831302c2032302c203330290a68746d6c355f70617273655f6c6567");
+    t.push_str("6163795f636f6c6f720968736c28302c20313030252c20353025290a68746d6c355f70617273655f6c65676163795f63");
+    t.push_str("6f6c6f7209f09f9880f09f9880f09f98800a68746d6c355f70617273655f6c65676163795f636f6c6f720961f09f9880");
+    t.push_str("620a68746d6c355f70617273655f6c65676163795f636f6c6f720923f09f98800a68746d6c355f70617273655f6c6567");
+    t.push_str("6163795f636f6c6f72097a7a7a7a7a7a0a68746d6c355f70617273655f6c65676163795f636f6c6f7209303030303030");
+    t.push_str("30303030303030303030303030310a68746d6c355f70617273655f6c65676163795f636f6c6f72093030303066663030");
+    t.push_str("30303030666630303030303066660a68746d6c355f70617273655f6c65676163795f636f6c6f72092361616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161");
+    t.push_str("610a68746d6c355f70617273655f6c65676163795f636f6c6f7209787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("7878787878787878787878786666660a68746d6c355f70617273655f6c65676163795f636f6c6f7209e38080626c7565");
+    t.push_str("e380800a68746d6c355f70617273655f6c65676163795f636f6c6f7209c2a077686974650a68746d6c355f7061727365");
+    t.push_str("5f6c65676163795f636f6c6f72091c7265641f0a68746d6c355f70617273655f6c65676163795f636f6c6f7209637961");
+    t.push_str("6ec2850a68746d6c355f70617273655f6c65676163795f636f6c6f7209310a68746d6c355f70617273655f6c65676163");
+    t.push_str("795f636f6c6f720931320a68746d6c355f70617273655f6c65676163795f636f6c6f7209313233340a68746d6c355f70");
+    t.push_str("617273655f6c65676163795f636f6c6f720931323334350a68746d6c355f70617273655f6c65676163795f636f6c6f72");
+    t.push_str("093132333435360a68746d6c355f70617273655f6c65676163795f636f6c6f720923616263200a68746d6c355f706172");
+    t.push_str("73655f6c65676163795f636f6c6f72092361206220630a68746d6c355f70617273655f6c65676163795f636f6c6f7209");
+    t.push_str("643231342365790a68746d6c355f70617273655f6c65676163795f636f6c6f7209370a68746d6c355f70617273655f6c");
+    t.push_str("65676163795f636f6c6f7209434123632044682d206169452566f09f98800a68746d6c355f70617273655f6c65676163");
+    t.push_str("795f636f6c6f720935790a68746d6c355f70617273655f6c65676163795f636f6c6f720937443042383636336946f09f");
+    t.push_str("9880350a68746d6c355f70617273655f6c65676163795f636f6c6f720931662e78373561682578653568436462360a68");
+    t.push_str("746d6c355f70617273655f6c65676163795f636f6c6f720935364120790a68746d6c355f70617273655f6c6567616379");
+    t.push_str("5f636f6c6f720963356a784536364235c2a06a6765c3a9396a374320c3a90a68746d6c355f70617273655f6c65676163");
+    t.push_str("795f636f6c6f7209412d68334438677934376768c2a04569782e6ac3a9f09f9880623562632367420a68746d6c355f70");
+    t.push_str("617273655f6c65676163795f636f6c6f72096a2d3725692538313365336a3964256a613923c3a92d25332378f09f9880");
+    t.push_str("386a68627a350a68746d6c355f70617273655f6c65676163795f636f6c6f7209627a30382b393066630a68746d6c355f");
+    t.push_str("70617273655f6c65676163795f636f6c6f7209254564314662423232393731237a30f09f988067643564616a0a68746d");
+    t.push_str("6c355f70617273655f6c65676163795f636f6c6f72092d44393667c3a9f09f9880614366200a68746d6c355f70617273");
+    t.push_str("655f6c65676163795f636f6c6f72093046626736334345203666c2a03033c2a00a68746d6c355f70617273655f6c6567");
+    t.push_str("6163795f636f6c6f72097a7944417a2ec3a92544f09f9880696566672b687a2537c3a9362e42f09f988043630a68746d");
+    t.push_str("6c355f70617273655f6c65676163795f636f6c6f720936234162313032454467683067376838346a253839386178636a");
+    t.push_str("f09f9880440a68746d6c355f70617273655f6c65676163795f636f6c6f7209200a68746d6c355f70617273655f6c6567");
+    t.push_str("6163795f636f6c6f720969252337327843612e4664202d673066636a2563667a613631364625c2a0420a68746d6c355f");
+    t.push_str("70617273655f6c65676163795f636f6c6f720964347939362d2d302b794623f09f98806a2042377a7a643663c3a94538");
+    t.push_str("37300a68746d6c355f70617273655f6c65676163795f636f6c6f7209644369340a68746d6c355f70617273655f6c6567");
+    t.push_str("6163795f636f6c6f7209c2a02e64636446417a206a2b4263f09f9880643064446479356265314563370a68746d6c355f");
+    t.push_str("70617273655f6c65676163795f636f6c6f72093337c3a931c3a9f09f9880676278393933c2a030f09f988044317a4365");
+    t.push_str("f09f98802e420a68746d6c355f70617273655f6c65676163795f636f6c6f7209462b2d65f09f98807862632e0a68746d");
+    t.push_str("6c355f70617273655f6c65676163795f636f6c6f72093569c3a943643131646168304120370a68746d6c355f70617273");
+    t.push_str("655f6c65676163795f636f6c6f7209447a33356a342523f09f988069643135390a68746d6c355f70617273655f6c6567");
+    t.push_str("6163795f636f6c6f72094665f09f9880c3a945332b35386430676a2e34302331433461302d42447a35f09f9880394136");
+    t.push_str("65370a68746d6c355f70617273655f6c65676163795f636f6c6f72092d37616565614420437842660a68746d6c355f70");
+    t.push_str("617273655f6c65676163795f636f6c6f7209674469234530612d332d30412e2dc2a020c3a96a2d7a64352d36256425c3");
+    t.push_str("a90a68746d6c355f70617273655f6c65676163795f636f6c6f7209c3a931644666203536686af09f9880306636624332");
+    t.push_str("35f09f98802b6a2b6369342035640a68746d6c355f70617273655f6c65676163795f636f6c6f720964667830430a6874");
+    t.push_str("6d6c355f70617273655f6c65676163795f636f6c6f72093734434445453566693779663037352b3378c2a06433694442");
+    t.push_str("39336a422333c2a0f09f98802334680a68746d6c355f70617273655f6c65676163795f636f6c6f72092b37373530326a");
+    t.push_str("792b35410a68746d6c355f70617273655f6c65676163795f636f6c6f72097864353043f09f9880344468463168304565");
+    t.push_str("690a68746d6c355f70617273655f6c65676163795f636f6c6f72092b2b2d392b3237456345c3a9663223682039656939");
+    t.push_str("450a68746d6c355f70617273655f6c65676163795f636f6c6f72093469620a68746d6c355f70617273655f6c65676163");
+    t.push_str("795f636f6c6f7209354623f09f988034232d6a410a68746d6c355f70617273655f6c65676163795f636f6c6f72094120");
+    t.push_str("30432e304568334279683437614341360a68746d6c355f70617273655f6c65676163795f636f6c6f720937c3a9382e39");
+    t.push_str("36412e79456866306745c3a933787a3768453739354444303366663839640a68746d6c355f70617273655f6c65676163");
+    t.push_str("795f636f6c6f7209392d2b327825667af09f988023356879392b656639416423234463462e0a68746d6c355f70617273");
+    t.push_str("655f6c65676163795f636f6c6f7209624444696a2b0a68746d6c355f70617273655f6c65676163795f636f6c6f7209c3");
+    t.push_str("a9672567c2a0256942673743334537416664386179c3a9614335642563c2a037c2a044382e69650a68746d6c355f7061");
+    t.push_str("7273655f6c65676163795f636f6c6f7209f09f9880322d0a68746d6c355f70617273655f6c65676163795f636f6c6f72");
+    t.push_str("0966462b442e65392d663566344537336520787a2e207a6a66356a352b2b0a68746d6c355f70617273655f6c65676163");
+    t.push_str("795f636f6c6f7209676836416a366533c2a02d3543317864450a68746d6c355f70617273655f6c65676163795f636f6c");
+    t.push_str("6f72092b38692543306142236537693523432043614466207968786237350a68746d6c355f70617273655f6c65676163");
+    t.push_str("795f636f6c6f720936656146392b67616369377a303643383641642d2bc2a039c2a030436a443363f09f98806a6a3368");
+    t.push_str("69670a68746d6c355f70617273655f6c65676163795f636f6c6f7209c3a9316a3967780a68746d6c355f70617273655f");
+    t.push_str("6c65676163795f636f6c6f72096332c2a078796144397a377838423238306a686431c3a9c2a041376ac3a9387a0a6874");
+    t.push_str("6d6c355f70617273655f6c65676163795f636f6c6f72093336357868633841c3a9624525612d36c3a965206936382d66");
+    t.push_str("66367943446233c2a0662020457a0a68746d6c355f70617273655f6c65676163795f636f6c6f7209350a68746d6c355f");
+    t.push_str("70617273655f6c65676163795f636f6c6f720966c2a0c2a044332046782e4664c2a06223c3a967312ec2a062252546c2");
+    t.push_str("a036693563336a0a68746d6c355f70617273655f6c65676163795f636f6c6f7209300a68746d6c355f70617273655f6c");
+    t.push_str("65676163795f636f6c6f720979457825232346663667427a460a68746d6c355f70617273655f6c65676163795f636f6c");
+    t.push_str("6f7209416266667932c3a96741c3a931684462c3a96a4663637a23f09f9880f09f988062c2a063c3a930666244423230");
+    t.push_str("0a68746d6c355f70617273655f6c65676163795f636f6c6f7209692d322d623831666539353723c2a065c3a9c3a96a2e");
+    t.push_str("232e32233842350a68746d6c355f70617273655f6c65676163795f636f6c6f7209f09f988020796144342d656a436743");
+    t.push_str("2e3779c2a02e2338346323687923c3a96520467a6a3742350a68746d6c355f70617273655f6c65676163795f636f6c6f");
+    t.push_str("720969c3a90a68746d6c355f70617273655f6c65676163795f636f6c6f720935394541c2a079433641792b6166686579");
+    t.push_str("c2a07a357a6478450a68746d6c355f70617273655f6c65676163795f636f6c6f72096761253379623678257a46634237");
+    t.push_str("4561252320c2a0676265632d3462363236310a68746d6c355f70617273655f6c65676163795f636f6c6f720935437925");
+    t.push_str("2e6741446836617a352334207a257a20f09f988039322d0a3d3d2061756469740a617564697409736974652e6373730a");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: true, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("/* Main stylesheet for the shop front. */\n");
+    t.push_str(":root {\n");
+    t.push_str("  --brand: #3366CC;\n");
+    t.push_str("  --accent: rgb(255, 102, 0);\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("body {\n");
+    t.push_str("  color: #333;\n");
+    t.push_str("  background-color: White;\n");
+    t.push_str("  font-family: Georgia, serif;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("header, .masthead {\n");
+    t.push_str("  color: rgb(255, 255, 255);\n");
+    t.push_str("  background-color: var(--brand);\n");
+    t.push_str("  background: #3366cc url(header.png) no-repeat;\n");
+    t.push_str("  border-bottom: 3px solid #224488;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("nav a {\n");
+    t.push_str("  color: navy;\n");
+    t.push_str("  background-color: #f0f0f0;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("nav a:hover {\n");
+    t.push_str("  color: rgb(100%, 40%, 0%);\n");
+    t.push_str("  background-color: #FFFFF0;\n");
+    t.push_str("  text-decoration: underline;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".button-primary {\n");
+    t.push_str("  color: #fff;\n");
+    t.push_str("  background-color: rgb(51, 102, 204);\n");
+    t.push_str("  border: 1px solid DarkSlateGrey;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".button-muted {\n");
+    t.push_str("  color: silver;\n");
+    t.push_str("  background-color: whitesmoke;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".alert-warning {\n");
+    t.push_str("  color: #8a6d3b;\n");
+    t.push_str("  background-color: #FCF8E3;\n");
+    t.push_str("  border-color: #faebcc;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".alert-danger {\n");
+    t.push_str("  color: rgb(169,68,66);\n");
+    t.push_str("  background-color: rgb(242, 222, 222);\n");
+    t.push_str("  outline: 2px dashed crimson;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".price {\n");
+    t.push_str("  color: rgb(85.49%, 64.71%, 12.5%);\n");
+    t.push_str("  background-color: black;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".sale-banner {\n");
+    t.push_str("  color: yellow;\n");
+    t.push_str("  background-color: #ff0;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str("footer {\n");
+    t.push_str("  color: GRAY;\n");
+    t.push_str("  background-color: #222;\n");
+    t.push_str("  border-top: 1px solid rgb(300, -20, 128);\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".legal {\n");
+    t.push_str("  color: #777777;\n");
+    t.push_str("  background-color: #333333;\n");
+    t.push_str("  font-size: 0.75em;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".badge {\n");
+    t.push_str("  color: Teal;\n");
+    t.push_str("  background-color: #e0f2f1;\n");
+    t.push_str("  border: thin dotted #0099cc;\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".code {\n");
+    t.push_str("  color: rebeccapurple;\n");
+    t.push_str("  background-color: oldlace;\n");
+    t.push_str("  fill: #ABCDEF;\n");
+    t.push_str("  stroke: rgb(18, 52, 86);\n");
+    t.push_str("}\n");
+    t.push_str("\n");
+    t.push_str(".oops {\n");
+    t.push_str("  color: #ggg;\n");
+    t.push_str("  background-color: notacolor;\n");
+    t.push_str("  border-color: #12345;\n");
+    t.push_str("}\n");
+    v.push(DataFile { path: "site.css".to_string(), hex: false, body: t });
+}

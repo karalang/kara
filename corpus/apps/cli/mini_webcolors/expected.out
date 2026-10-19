@@ -1,0 +1,1306 @@
+== names
+-- names 'html4'
+   ['aqua', 'black', 'blue', 'fuchsia', 'gray', 'green', 'lime', 'maroon', 'navy', 'olive', 'purple', 'red', 'silver', 'teal', 'white', 'yellow']
+-- names 'css2'
+   ['aqua', 'black', 'blue', 'fuchsia', 'gray', 'green', 'lime', 'maroon', 'navy', 'olive', 'purple', 'red', 'silver', 'teal', 'white', 'yellow']
+-- names 'css21'
+   ['aqua', 'black', 'blue', 'fuchsia', 'gray', 'green', 'lime', 'maroon', 'navy', 'olive', 'orange', 'purple', 'red', 'silver', 'teal', 'white', 'yellow']
+-- names 'css3'
+   ['aliceblue', 'antiquewhite', 'aqua', 'aquamarine', 'azure', 'beige', 'bisque', 'black', 'blanchedalmond', 'blue', 'blueviolet', 'brown', 'burlywood', 'cadetblue', 'chartreuse', 'chocolate', 'coral', 'cornflowerblue', 'cornsilk', 'crimson', 'cyan', 'darkblue', 'darkcyan', 'darkgoldenrod', 'darkgray', 'darkgreen', 'darkgrey', 'darkkhaki', 'darkmagenta', 'darkolivegreen', 'darkorange', 'darkorchid', 'darkred', 'darksalmon', 'darkseagreen', 'darkslateblue', 'darkslategray', 'darkslategrey', 'darkturquoise', 'darkviolet', 'deeppink', 'deepskyblue', 'dimgray', 'dimgrey', 'dodgerblue', 'firebrick', 'floralwhite', 'forestgreen', 'fuchsia', 'gainsboro', 'ghostwhite', 'gold', 'goldenrod', 'gray', 'green', 'greenyellow', 'grey', 'honeydew', 'hotpink', 'indianred', 'indigo', 'ivory', 'khaki', 'lavender', 'lavenderblush', 'lawngreen', 'lemonchiffon', 'lightblue', 'lightcoral', 'lightcyan', 'lightgoldenrodyellow', 'lightgray', 'lightgreen', 'lightgrey', 'lightpink', 'lightsalmon', 'lightseagreen', 'lightskyblue', 'lightslategray', 'lightslategrey', 'lightsteelblue', 'lightyellow', 'lime', 'limegreen', 'linen', 'magenta', 'maroon', 'mediumaquamarine', 'mediumblue', 'mediumorchid', 'mediumpurple', 'mediumseagreen', 'mediumslateblue', 'mediumspringgreen', 'mediumturquoise', 'mediumvioletred', 'midnightblue', 'mintcream', 'mistyrose', 'moccasin', 'navajowhite', 'navy', 'oldlace', 'olive', 'olivedrab', 'orange', 'orangered', 'orchid', 'palegoldenrod', 'palegreen', 'paleturquoise', 'palevioletred', 'papayawhip', 'peachpuff', 'peru', 'pink', 'plum', 'powderblue', 'purple', 'red', 'rosybrown', 'royalblue', 'saddlebrown', 'salmon', 'sandybrown', 'seagreen', 'seashell', 'sienna', 'silver', 'skyblue', 'slateblue', 'slategray', 'slategrey', 'snow', 'springgreen', 'steelblue', 'tan', 'teal', 'thistle', 'tomato', 'turquoise', 'violet', 'wheat', 'white', 'whitesmoke', 'yellow', 'yellowgreen']
+-- names 'CSS3'
+   error: ValueError: CSS3 is not a supported specification for color name lookups; supported specifications are: ('html4', 'css2', 'css21', 'css3').
+-- names 'svg'
+   error: ValueError: svg is not a supported specification for color name lookups; supported specifications are: ('html4', 'css2', 'css21', 'css3').
+-- name_to_hex 'white' 'css3'
+   '#ffffff'
+-- name_to_hex 'white' 'css21'
+   '#ffffff'
+-- name_to_hex 'white' 'html4'
+   '#ffffff'
+-- name_to_hex 'Navy' 'css3'
+   '#000080'
+-- name_to_hex 'Navy' 'css21'
+   '#000080'
+-- name_to_hex 'Navy' 'html4'
+   '#000080'
+-- name_to_hex 'GOLDENROD' 'css3'
+   '#daa520'
+-- name_to_hex 'GOLDENROD' 'css21'
+   error: ValueError: "GOLDENROD" is not defined as a named color in css21
+-- name_to_hex 'GOLDENROD' 'html4'
+   error: ValueError: "GOLDENROD" is not defined as a named color in html4
+-- name_to_hex 'orange' 'css3'
+   '#ffa500'
+-- name_to_hex 'orange' 'css21'
+   '#ffa500'
+-- name_to_hex 'orange' 'html4'
+   error: ValueError: "orange" is not defined as a named color in html4
+-- name_to_hex 'rebeccapurple' 'css3'
+   error: ValueError: "rebeccapurple" is not defined as a named color in css3
+-- name_to_hex 'rebeccapurple' 'css21'
+   error: ValueError: "rebeccapurple" is not defined as a named color in css21
+-- name_to_hex 'rebeccapurple' 'html4'
+   error: ValueError: "rebeccapurple" is not defined as a named color in html4
+-- name_to_hex 'grey' 'css3'
+   '#808080'
+-- name_to_hex 'grey' 'css21'
+   error: ValueError: "grey" is not defined as a named color in css21
+-- name_to_hex 'grey' 'html4'
+   error: ValueError: "grey" is not defined as a named color in html4
+-- name_to_hex 'DarkSlateGrey' 'css3'
+   '#2f4f4f'
+-- name_to_hex 'DarkSlateGrey' 'css21'
+   error: ValueError: "DarkSlateGrey" is not defined as a named color in css21
+-- name_to_hex 'DarkSlateGrey' 'html4'
+   error: ValueError: "DarkSlateGrey" is not defined as a named color in html4
+-- name_to_hex 'cyan' 'css3'
+   '#00ffff'
+-- name_to_hex 'cyan' 'css21'
+   error: ValueError: "cyan" is not defined as a named color in css21
+-- name_to_hex 'cyan' 'html4'
+   error: ValueError: "cyan" is not defined as a named color in html4
+-- name_to_hex 'magenta' 'css3'
+   '#ff00ff'
+-- name_to_hex 'magenta' 'css21'
+   error: ValueError: "magenta" is not defined as a named color in css21
+-- name_to_hex 'magenta' 'html4'
+   error: ValueError: "magenta" is not defined as a named color in html4
+-- name_to_hex 'aqua' 'css3'
+   '#00ffff'
+-- name_to_hex 'aqua' 'css21'
+   '#00ffff'
+-- name_to_hex 'aqua' 'html4'
+   '#00ffff'
+-- name_to_hex 'fuchsia' 'css3'
+   '#ff00ff'
+-- name_to_hex 'fuchsia' 'css21'
+   '#ff00ff'
+-- name_to_hex 'fuchsia' 'html4'
+   '#ff00ff'
+-- name_to_hex ' red' 'css3'
+   error: ValueError: " red" is not defined as a named color in css3
+-- name_to_hex ' red' 'css21'
+   error: ValueError: " red" is not defined as a named color in css21
+-- name_to_hex ' red' 'html4'
+   error: ValueError: " red" is not defined as a named color in html4
+-- name_to_hex '' 'css3'
+   error: ValueError: "" is not defined as a named color in css3
+-- name_to_hex '' 'css21'
+   error: ValueError: "" is not defined as a named color in css21
+-- name_to_hex '' 'html4'
+   error: ValueError: "" is not defined as a named color in html4
+-- name_to_hex 'transparent' 'css3'
+   error: ValueError: "transparent" is not defined as a named color in css3
+-- name_to_hex 'transparent' 'css21'
+   error: ValueError: "transparent" is not defined as a named color in css21
+-- name_to_hex 'transparent' 'html4'
+   error: ValueError: "transparent" is not defined as a named color in html4
+-- name_to_hex 'lightgoldenrodyellow' 'css3'
+   '#fafad2'
+-- name_to_hex 'lightgoldenrodyellow' 'css21'
+   error: ValueError: "lightgoldenrodyellow" is not defined as a named color in css21
+-- name_to_hex 'lightgoldenrodyellow' 'html4'
+   error: ValueError: "lightgoldenrodyellow" is not defined as a named color in html4
+-- name_to_rgb 'teal' 'css3'
+   IntegerRGB(red=0, green=128, blue=128)
+-- name_to_rgb_percent 'teal' 'css3'
+   PercentRGB(red='0%', green='50%', blue='50%')
+-- name_to_rgb 'Silver' 'css3'
+   IntegerRGB(red=192, green=192, blue=192)
+-- name_to_rgb_percent 'Silver' 'css3'
+   PercentRGB(red='75.29%', green='75.29%', blue='75.29%')
+-- name_to_rgb 'orange' 'css3'
+   IntegerRGB(red=255, green=165, blue=0)
+-- name_to_rgb_percent 'orange' 'css3'
+   PercentRGB(red='100%', green='64.71%', blue='0%')
+-- name_to_rgb 'PapayaWhip' 'css3'
+   IntegerRGB(red=255, green=239, blue=213)
+-- name_to_rgb_percent 'PapayaWhip' 'css3'
+   PercentRGB(red='100%', green='93.73%', blue='83.53%')
+-- name_to_rgb 'nosuch' 'css3'
+   error: ValueError: "nosuch" is not defined as a named color in css3
+-- name_to_rgb_percent 'nosuch' 'css3'
+   error: ValueError: "nosuch" is not defined as a named color in css3
+-- name_to_hex 'white' 'css1'
+   error: ValueError: css1 is not a supported specification for color name lookups; supported specifications are: ('html4', 'css2', 'css21', 'css3').
+-- name_to_rgb 'orange' 'css2'
+   error: ValueError: "orange" is not defined as a named color in css2
+== hex
+-- normalize_hex '#0099cc'
+   '#0099cc'
+-- hex_to_name '#0099cc' 'css3'
+   error: ValueError: "#0099cc" has no defined color name in css3.
+-- hex_to_name '#0099cc' 'html4'
+   error: ValueError: "#0099cc" has no defined color name in html4.
+-- hex_to_rgb '#0099cc'
+   IntegerRGB(red=0, green=153, blue=204)
+-- hex_to_rgb_percent '#0099cc'
+   PercentRGB(red='0%', green='60.00%', blue='80.00%')
+-- normalize_hex '#0099CC'
+   '#0099cc'
+-- hex_to_name '#0099CC' 'css3'
+   error: ValueError: "#0099CC" has no defined color name in css3.
+-- hex_to_name '#0099CC' 'html4'
+   error: ValueError: "#0099CC" has no defined color name in html4.
+-- hex_to_rgb '#0099CC'
+   IntegerRGB(red=0, green=153, blue=204)
+-- hex_to_rgb_percent '#0099CC'
+   PercentRGB(red='0%', green='60.00%', blue='80.00%')
+-- normalize_hex '#09c'
+   '#0099cc'
+-- hex_to_name '#09c' 'css3'
+   error: ValueError: "#09c" has no defined color name in css3.
+-- hex_to_name '#09c' 'html4'
+   error: ValueError: "#09c" has no defined color name in html4.
+-- hex_to_rgb '#09c'
+   IntegerRGB(red=0, green=153, blue=204)
+-- hex_to_rgb_percent '#09c'
+   PercentRGB(red='0%', green='60.00%', blue='80.00%')
+-- normalize_hex '#09C'
+   '#0099cc'
+-- hex_to_name '#09C' 'css3'
+   error: ValueError: "#09C" has no defined color name in css3.
+-- hex_to_name '#09C' 'html4'
+   error: ValueError: "#09C" has no defined color name in html4.
+-- hex_to_rgb '#09C'
+   IntegerRGB(red=0, green=153, blue=204)
+-- hex_to_rgb_percent '#09C'
+   PercentRGB(red='0%', green='60.00%', blue='80.00%')
+-- normalize_hex '#0099gg'
+   error: ValueError: "#0099gg" is not a valid hexadecimal color value.
+-- hex_to_name '#0099gg' 'css3'
+   error: ValueError: "#0099gg" is not a valid hexadecimal color value.
+-- hex_to_name '#0099gg' 'html4'
+   error: ValueError: "#0099gg" is not a valid hexadecimal color value.
+-- hex_to_rgb '#0099gg'
+   error: ValueError: "#0099gg" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent '#0099gg'
+   error: ValueError: "#0099gg" is not a valid hexadecimal color value.
+-- normalize_hex '0099cc'
+   error: ValueError: "0099cc" is not a valid hexadecimal color value.
+-- hex_to_name '0099cc' 'css3'
+   error: ValueError: "0099cc" is not a valid hexadecimal color value.
+-- hex_to_name '0099cc' 'html4'
+   error: ValueError: "0099cc" is not a valid hexadecimal color value.
+-- hex_to_rgb '0099cc'
+   error: ValueError: "0099cc" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent '0099cc'
+   error: ValueError: "0099cc" is not a valid hexadecimal color value.
+-- normalize_hex '#'
+   error: ValueError: "#" is not a valid hexadecimal color value.
+-- hex_to_name '#' 'css3'
+   error: ValueError: "#" is not a valid hexadecimal color value.
+-- hex_to_name '#' 'html4'
+   error: ValueError: "#" is not a valid hexadecimal color value.
+-- hex_to_rgb '#'
+   error: ValueError: "#" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent '#'
+   error: ValueError: "#" is not a valid hexadecimal color value.
+-- normalize_hex '#1234'
+   error: ValueError: "#1234" is not a valid hexadecimal color value.
+-- hex_to_name '#1234' 'css3'
+   error: ValueError: "#1234" is not a valid hexadecimal color value.
+-- hex_to_name '#1234' 'html4'
+   error: ValueError: "#1234" is not a valid hexadecimal color value.
+-- hex_to_rgb '#1234'
+   error: ValueError: "#1234" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent '#1234'
+   error: ValueError: "#1234" is not a valid hexadecimal color value.
+-- normalize_hex '#12345'
+   error: ValueError: "#12345" is not a valid hexadecimal color value.
+-- hex_to_name '#12345' 'css3'
+   error: ValueError: "#12345" is not a valid hexadecimal color value.
+-- hex_to_name '#12345' 'html4'
+   error: ValueError: "#12345" is not a valid hexadecimal color value.
+-- hex_to_rgb '#12345'
+   error: ValueError: "#12345" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent '#12345'
+   error: ValueError: "#12345" is not a valid hexadecimal color value.
+-- normalize_hex '#1234567'
+   error: ValueError: "#1234567" is not a valid hexadecimal color value.
+-- hex_to_name '#1234567' 'css3'
+   error: ValueError: "#1234567" is not a valid hexadecimal color value.
+-- hex_to_name '#1234567' 'html4'
+   error: ValueError: "#1234567" is not a valid hexadecimal color value.
+-- hex_to_rgb '#1234567'
+   error: ValueError: "#1234567" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent '#1234567'
+   error: ValueError: "#1234567" is not a valid hexadecimal color value.
+-- normalize_hex '#FFF'
+   '#ffffff'
+-- hex_to_name '#FFF' 'css3'
+   'white'
+-- hex_to_name '#FFF' 'html4'
+   'white'
+-- hex_to_rgb '#FFF'
+   IntegerRGB(red=255, green=255, blue=255)
+-- hex_to_rgb_percent '#FFF'
+   PercentRGB(red='100%', green='100%', blue='100%')
+-- normalize_hex '#ffffff'
+   '#ffffff'
+-- hex_to_name '#ffffff' 'css3'
+   'white'
+-- hex_to_name '#ffffff' 'html4'
+   'white'
+-- hex_to_rgb '#ffffff'
+   IntegerRGB(red=255, green=255, blue=255)
+-- hex_to_rgb_percent '#ffffff'
+   PercentRGB(red='100%', green='100%', blue='100%')
+-- normalize_hex '#aBcDeF'
+   '#abcdef'
+-- hex_to_name '#aBcDeF' 'css3'
+   error: ValueError: "#aBcDeF" has no defined color name in css3.
+-- hex_to_name '#aBcDeF' 'html4'
+   error: ValueError: "#aBcDeF" has no defined color name in html4.
+-- hex_to_rgb '#aBcDeF'
+   IntegerRGB(red=171, green=205, blue=239)
+-- hex_to_rgb_percent '#aBcDeF'
+   PercentRGB(red='67.06%', green='80.39%', blue='93.73%')
+-- normalize_hex '#00ffff'
+   '#00ffff'
+-- hex_to_name '#00ffff' 'css3'
+   'cyan'
+-- hex_to_name '#00ffff' 'html4'
+   'aqua'
+-- hex_to_rgb '#00ffff'
+   IntegerRGB(red=0, green=255, blue=255)
+-- hex_to_rgb_percent '#00ffff'
+   PercentRGB(red='0%', green='100%', blue='100%')
+-- normalize_hex '#ff00ff'
+   '#ff00ff'
+-- hex_to_name '#ff00ff' 'css3'
+   'magenta'
+-- hex_to_name '#ff00ff' 'html4'
+   'fuchsia'
+-- hex_to_rgb '#ff00ff'
+   IntegerRGB(red=255, green=0, blue=255)
+-- hex_to_rgb_percent '#ff00ff'
+   PercentRGB(red='100%', green='0%', blue='100%')
+-- normalize_hex '#808080'
+   '#808080'
+-- hex_to_name '#808080' 'css3'
+   'gray'
+-- hex_to_name '#808080' 'html4'
+   'gray'
+-- hex_to_rgb '#808080'
+   IntegerRGB(red=128, green=128, blue=128)
+-- hex_to_rgb_percent '#808080'
+   PercentRGB(red='50%', green='50%', blue='50%')
+-- normalize_hex '#d3d3d3'
+   '#d3d3d3'
+-- hex_to_name '#d3d3d3' 'css3'
+   'lightgray'
+-- hex_to_name '#d3d3d3' 'html4'
+   error: ValueError: "#d3d3d3" has no defined color name in html4.
+-- hex_to_rgb '#d3d3d3'
+   IntegerRGB(red=211, green=211, blue=211)
+-- hex_to_rgb_percent '#d3d3d3'
+   PercentRGB(red='82.75%', green='82.75%', blue='82.75%')
+-- normalize_hex '#663399'
+   '#663399'
+-- hex_to_name '#663399' 'css3'
+   error: ValueError: "#663399" has no defined color name in css3.
+-- hex_to_name '#663399' 'html4'
+   error: ValueError: "#663399" has no defined color name in html4.
+-- hex_to_rgb '#663399'
+   IntegerRGB(red=102, green=51, blue=153)
+-- hex_to_rgb_percent '#663399'
+   PercentRGB(red='40.00%', green='20.00%', blue='60.00%')
+-- normalize_hex ' #fff'
+   error: ValueError: " #fff" is not a valid hexadecimal color value.
+-- hex_to_name ' #fff' 'css3'
+   error: ValueError: " #fff" is not a valid hexadecimal color value.
+-- hex_to_name ' #fff' 'html4'
+   error: ValueError: " #fff" is not a valid hexadecimal color value.
+-- hex_to_rgb ' #fff'
+   error: ValueError: " #fff" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent ' #fff'
+   error: ValueError: " #fff" is not a valid hexadecimal color value.
+-- normalize_hex '#fff\n'
+   '#ffffff'
+-- hex_to_name '#fff\n' 'css3'
+   'white'
+-- hex_to_name '#fff\n' 'html4'
+   'white'
+-- hex_to_rgb '#fff\n'
+   IntegerRGB(red=255, green=255, blue=255)
+-- hex_to_rgb_percent '#fff\n'
+   PercentRGB(red='100%', green='100%', blue='100%')
+-- normalize_hex '#ＡＢＣ'
+   error: ValueError: "#ＡＢＣ" is not a valid hexadecimal color value.
+-- hex_to_name '#ＡＢＣ' 'css3'
+   error: ValueError: "#ＡＢＣ" is not a valid hexadecimal color value.
+-- hex_to_name '#ＡＢＣ' 'html4'
+   error: ValueError: "#ＡＢＣ" is not a valid hexadecimal color value.
+-- hex_to_rgb '#ＡＢＣ'
+   error: ValueError: "#ＡＢＣ" is not a valid hexadecimal color value.
+-- hex_to_rgb_percent '#ＡＢＣ'
+   error: ValueError: "#ＡＢＣ" is not a valid hexadecimal color value.
+-- normalize_hex '#a9a9a9'
+   '#a9a9a9'
+-- hex_to_name '#a9a9a9' 'css3'
+   'darkgray'
+-- hex_to_name '#a9a9a9' 'html4'
+   error: ValueError: "#a9a9a9" has no defined color name in html4.
+-- hex_to_rgb '#a9a9a9'
+   IntegerRGB(red=169, green=169, blue=169)
+-- hex_to_rgb_percent '#a9a9a9'
+   PercentRGB(red='66.27%', green='66.27%', blue='66.27%')
+-- hex_to_name '#ffa500' 'css21'
+   'orange'
+-- hex_to_name '#ffa500' 'css2'
+   error: ValueError: "#ffa500" has no defined color name in css2.
+-- hex_to_name '#fff' 'CSS21'
+   error: ValueError: CSS21 is not a supported specification for color name lookups; supported specifications are: ('html4', 'css2', 'css21', 'css3').
+== rgb
+-- normalize_integer_triplet '255' '255' '255'
+   IntegerRGB(red=255, green=255, blue=255)
+-- rgb_to_hex '255' '255' '255'
+   '#ffffff'
+-- rgb_to_rgb_percent '255' '255' '255'
+   PercentRGB(red='100%', green='100%', blue='100%')
+-- rgb_to_name '255' '255' '255' 'css3'
+   'white'
+-- rgb_to_name '255' '255' '255' 'html4'
+   'white'
+-- normalize_integer_triplet '0' '0' '128'
+   IntegerRGB(red=0, green=0, blue=128)
+-- rgb_to_hex '0' '0' '128'
+   '#000080'
+-- rgb_to_rgb_percent '0' '0' '128'
+   PercentRGB(red='0%', green='0%', blue='50%')
+-- rgb_to_name '0' '0' '128' 'css3'
+   'navy'
+-- rgb_to_name '0' '0' '128' 'html4'
+   'navy'
+-- normalize_integer_triplet '218' '165' '32'
+   IntegerRGB(red=218, green=165, blue=32)
+-- rgb_to_hex '218' '165' '32'
+   '#daa520'
+-- rgb_to_rgb_percent '218' '165' '32'
+   PercentRGB(red='85.49%', green='64.71%', blue='12.5%')
+-- rgb_to_name '218' '165' '32' 'css3'
+   'goldenrod'
+-- rgb_to_name '218' '165' '32' 'html4'
+   error: ValueError: "#daa520" has no defined color name in html4.
+-- normalize_integer_triplet '270' '-20' '0'
+   IntegerRGB(red=255, green=0, blue=0)
+-- rgb_to_hex '270' '-20' '0'
+   '#ff0000'
+-- rgb_to_rgb_percent '270' '-20' '0'
+   PercentRGB(red='100%', green='0%', blue='0%')
+-- rgb_to_name '270' '-20' '0' 'css3'
+   'red'
+-- rgb_to_name '270' '-20' '0' 'html4'
+   'red'
+-- normalize_integer_triplet '1' '2' '3'
+   IntegerRGB(red=1, green=2, blue=3)
+-- rgb_to_hex '1' '2' '3'
+   '#010203'
+-- rgb_to_rgb_percent '1' '2' '3'
+   PercentRGB(red='0.39%', green='0.78%', blue='1.18%')
+-- rgb_to_name '1' '2' '3' 'css3'
+   error: ValueError: "#010203" has no defined color name in css3.
+-- rgb_to_name '1' '2' '3' 'html4'
+   error: ValueError: "#010203" has no defined color name in html4.
+-- normalize_integer_triplet '128' '64' '32'
+   IntegerRGB(red=128, green=64, blue=32)
+-- rgb_to_hex '128' '64' '32'
+   '#804020'
+-- rgb_to_rgb_percent '128' '64' '32'
+   PercentRGB(red='50%', green='25%', blue='12.5%')
+-- rgb_to_name '128' '64' '32' 'css3'
+   error: ValueError: "#804020" has no defined color name in css3.
+-- rgb_to_name '128' '64' '32' 'html4'
+   error: ValueError: "#804020" has no defined color name in html4.
+-- normalize_integer_triplet '16' '255' '0'
+   IntegerRGB(red=16, green=255, blue=0)
+-- rgb_to_hex '16' '255' '0'
+   '#10ff00'
+-- rgb_to_rgb_percent '16' '255' '0'
+   PercentRGB(red='6.25%', green='100%', blue='0%')
+-- rgb_to_name '16' '255' '0' 'css3'
+   error: ValueError: "#10ff00" has no defined color name in css3.
+-- rgb_to_name '16' '255' '0' 'html4'
+   error: ValueError: "#10ff00" has no defined color name in html4.
+-- normalize_integer_triplet '300' '300' '300'
+   IntegerRGB(red=255, green=255, blue=255)
+-- rgb_to_hex '300' '300' '300'
+   '#ffffff'
+-- rgb_to_rgb_percent '300' '300' '300'
+   PercentRGB(red='100%', green='100%', blue='100%')
+-- rgb_to_name '300' '300' '300' 'css3'
+   'white'
+-- rgb_to_name '300' '300' '300' 'html4'
+   'white'
+-- normalize_integer_triplet '-1' '-1' '-1'
+   IntegerRGB(red=0, green=0, blue=0)
+-- rgb_to_hex '-1' '-1' '-1'
+   '#000000'
+-- rgb_to_rgb_percent '-1' '-1' '-1'
+   PercentRGB(red='0%', green='0%', blue='0%')
+-- rgb_to_name '-1' '-1' '-1' 'css3'
+   'black'
+-- rgb_to_name '-1' '-1' '-1' 'html4'
+   'black'
+-- normalize_integer_triplet '102' '51' '153'
+   IntegerRGB(red=102, green=51, blue=153)
+-- rgb_to_hex '102' '51' '153'
+   '#663399'
+-- rgb_to_rgb_percent '102' '51' '153'
+   PercentRGB(red='40.00%', green='20.00%', blue='60.00%')
+-- rgb_to_name '102' '51' '153' 'css3'
+   error: ValueError: "#663399" has no defined color name in css3.
+-- rgb_to_name '102' '51' '153' 'html4'
+   error: ValueError: "#663399" has no defined color name in html4.
+-- normalize_integer_triplet '0' '255' '255'
+   IntegerRGB(red=0, green=255, blue=255)
+-- rgb_to_hex '0' '255' '255'
+   '#00ffff'
+-- rgb_to_rgb_percent '0' '255' '255'
+   PercentRGB(red='0%', green='100%', blue='100%')
+-- rgb_to_name '0' '255' '255' 'css3'
+   'cyan'
+-- rgb_to_name '0' '255' '255' 'html4'
+   'aqua'
+-- normalize_integer_triplet '192' '192' '192'
+   IntegerRGB(red=192, green=192, blue=192)
+-- rgb_to_hex '192' '192' '192'
+   '#c0c0c0'
+-- rgb_to_rgb_percent '192' '192' '192'
+   PercentRGB(red='75.29%', green='75.29%', blue='75.29%')
+-- rgb_to_name '192' '192' '192' 'css3'
+   'silver'
+-- rgb_to_name '192' '192' '192' 'html4'
+   'silver'
+-- normalize_integer_triplet '127' '129' '254'
+   IntegerRGB(red=127, green=129, blue=254)
+-- rgb_to_hex '127' '129' '254'
+   '#7f81fe'
+-- rgb_to_rgb_percent '127' '129' '254'
+   PercentRGB(red='49.80%', green='50.59%', blue='99.61%')
+-- rgb_to_name '127' '129' '254' 'css3'
+   error: ValueError: "#7f81fe" has no defined color name in css3.
+-- rgb_to_name '127' '129' '254' 'html4'
+   error: ValueError: "#7f81fe" has no defined color name in html4.
+-- normalize_integer_triplet '250' '235' '215'
+   IntegerRGB(red=250, green=235, blue=215)
+-- rgb_to_hex '250' '235' '215'
+   '#faebd7'
+-- rgb_to_rgb_percent '250' '235' '215'
+   PercentRGB(red='98.04%', green='92.16%', blue='84.31%')
+-- rgb_to_name '250' '235' '215' 'css3'
+   'antiquewhite'
+-- rgb_to_name '250' '235' '215' 'html4'
+   error: ValueError: "#faebd7" has no defined color name in html4.
+-- normalize_integer_triplet '1000000' '7' '8'
+   IntegerRGB(red=255, green=7, blue=8)
+-- rgb_to_hex '1000000' '7' '8'
+   '#ff0708'
+-- rgb_to_rgb_percent '1000000' '7' '8'
+   PercentRGB(red='100%', green='2.75%', blue='3.14%')
+-- rgb_to_name '1000000' '7' '8' 'css3'
+   error: ValueError: "#ff0708" has no defined color name in css3.
+-- rgb_to_name '1000000' '7' '8' 'html4'
+   error: ValueError: "#ff0708" has no defined color name in html4.
+-- html5_serialize_simple_color '0' '255' '0'
+   '#00ff00'
+-- html5_serialize_simple_color '3' '252' '21'
+   '#03fc15'
+-- html5_serialize_simple_color '6' '249' '42'
+   '#06f92a'
+-- html5_serialize_simple_color '9' '246' '63'
+   '#09f63f'
+-- html5_serialize_simple_color '12' '243' '84'
+   '#0cf354'
+-- html5_serialize_simple_color '15' '240' '105'
+   '#0ff069'
+-- html5_serialize_simple_color '18' '237' '126'
+   '#12ed7e'
+-- html5_serialize_simple_color '21' '234' '147'
+   '#15ea93'
+-- html5_serialize_simple_color '24' '231' '168'
+   '#18e7a8'
+-- html5_serialize_simple_color '27' '228' '189'
+   '#1be4bd'
+-- html5_serialize_simple_color '30' '225' '210'
+   '#1ee1d2'
+-- html5_serialize_simple_color '33' '222' '231'
+   '#21dee7'
+-- html5_serialize_simple_color '36' '219' '252'
+   '#24dbfc'
+-- html5_serialize_simple_color '39' '216' '17'
+   '#27d811'
+-- html5_serialize_simple_color '42' '213' '38'
+   '#2ad526'
+-- html5_serialize_simple_color '45' '210' '59'
+   '#2dd23b'
+-- html5_serialize_simple_color '48' '207' '80'
+   '#30cf50'
+-- html5_serialize_simple_color '51' '204' '101'
+   '#33cc65'
+-- html5_serialize_simple_color '54' '201' '122'
+   '#36c97a'
+-- html5_serialize_simple_color '57' '198' '143'
+   '#39c68f'
+-- html5_serialize_simple_color '60' '195' '164'
+   '#3cc3a4'
+-- html5_serialize_simple_color '63' '192' '185'
+   '#3fc0b9'
+-- html5_serialize_simple_color '66' '189' '206'
+   '#42bdce'
+-- html5_serialize_simple_color '69' '186' '227'
+   '#45bae3'
+-- html5_serialize_simple_color '72' '183' '248'
+   '#48b7f8'
+-- html5_serialize_simple_color '75' '180' '13'
+   '#4bb40d'
+-- html5_serialize_simple_color '78' '177' '34'
+   '#4eb122'
+-- html5_serialize_simple_color '81' '174' '55'
+   '#51ae37'
+-- html5_serialize_simple_color '84' '171' '76'
+   '#54ab4c'
+-- html5_serialize_simple_color '87' '168' '97'
+   '#57a861'
+-- html5_serialize_simple_color '90' '165' '118'
+   '#5aa576'
+-- html5_serialize_simple_color '93' '162' '139'
+   '#5da28b'
+-- html5_serialize_simple_color '96' '159' '160'
+   '#609fa0'
+-- html5_serialize_simple_color '99' '156' '181'
+   '#639cb5'
+-- html5_serialize_simple_color '102' '153' '202'
+   '#6699ca'
+-- html5_serialize_simple_color '105' '150' '223'
+   '#6996df'
+-- html5_serialize_simple_color '108' '147' '244'
+   '#6c93f4'
+-- html5_serialize_simple_color '111' '144' '9'
+   '#6f9009'
+-- html5_serialize_simple_color '114' '141' '30'
+   '#728d1e'
+-- html5_serialize_simple_color '117' '138' '51'
+   '#758a33'
+-- html5_serialize_simple_color '120' '135' '72'
+   '#788748'
+-- html5_serialize_simple_color '123' '132' '93'
+   '#7b845d'
+-- html5_serialize_simple_color '126' '129' '114'
+   '#7e8172'
+-- html5_serialize_simple_color '129' '126' '135'
+   '#817e87'
+-- html5_serialize_simple_color '132' '123' '156'
+   '#847b9c'
+-- html5_serialize_simple_color '135' '120' '177'
+   '#8778b1'
+-- html5_serialize_simple_color '138' '117' '198'
+   '#8a75c6'
+-- html5_serialize_simple_color '141' '114' '219'
+   '#8d72db'
+-- html5_serialize_simple_color '144' '111' '240'
+   '#906ff0'
+-- html5_serialize_simple_color '147' '108' '5'
+   '#936c05'
+-- html5_serialize_simple_color '150' '105' '26'
+   '#96691a'
+-- html5_serialize_simple_color '153' '102' '47'
+   '#99662f'
+-- html5_serialize_simple_color '156' '99' '68'
+   '#9c6344'
+-- html5_serialize_simple_color '159' '96' '89'
+   '#9f6059'
+-- html5_serialize_simple_color '162' '93' '110'
+   '#a25d6e'
+-- html5_serialize_simple_color '165' '90' '131'
+   '#a55a83'
+-- html5_serialize_simple_color '168' '87' '152'
+   '#a85798'
+-- html5_serialize_simple_color '171' '84' '173'
+   '#ab54ad'
+-- html5_serialize_simple_color '174' '81' '194'
+   '#ae51c2'
+-- html5_serialize_simple_color '177' '78' '215'
+   '#b14ed7'
+-- html5_serialize_simple_color '180' '75' '236'
+   '#b44bec'
+-- html5_serialize_simple_color '183' '72' '1'
+   '#b74801'
+-- html5_serialize_simple_color '186' '69' '22'
+   '#ba4516'
+-- html5_serialize_simple_color '189' '66' '43'
+   '#bd422b'
+-- html5_serialize_simple_color '192' '63' '64'
+   '#c03f40'
+-- html5_serialize_simple_color '195' '60' '85'
+   '#c33c55'
+-- html5_serialize_simple_color '198' '57' '106'
+   '#c6396a'
+-- html5_serialize_simple_color '201' '54' '127'
+   '#c9367f'
+-- html5_serialize_simple_color '204' '51' '148'
+   '#cc3394'
+-- html5_serialize_simple_color '207' '48' '169'
+   '#cf30a9'
+-- html5_serialize_simple_color '210' '45' '190'
+   '#d22dbe'
+-- html5_serialize_simple_color '213' '42' '211'
+   '#d52ad3'
+-- html5_serialize_simple_color '216' '39' '232'
+   '#d827e8'
+-- html5_serialize_simple_color '219' '36' '253'
+   '#db24fd'
+-- html5_serialize_simple_color '222' '33' '18'
+   '#de2112'
+-- html5_serialize_simple_color '225' '30' '39'
+   '#e11e27'
+-- html5_serialize_simple_color '228' '27' '60'
+   '#e41b3c'
+-- html5_serialize_simple_color '231' '24' '81'
+   '#e71851'
+-- html5_serialize_simple_color '234' '21' '102'
+   '#ea1566'
+-- html5_serialize_simple_color '237' '18' '123'
+   '#ed127b'
+-- html5_serialize_simple_color '240' '15' '144'
+   '#f00f90'
+-- html5_serialize_simple_color '243' '12' '165'
+   '#f30ca5'
+-- html5_serialize_simple_color '246' '9' '186'
+   '#f609ba'
+-- html5_serialize_simple_color '249' '6' '207'
+   '#f906cf'
+-- html5_serialize_simple_color '252' '3' '228'
+   '#fc03e4'
+-- html5_serialize_simple_color '255' '0' '249'
+   '#ff00f9'
+== percent
+-- normalize_percent_triplet '50%' '50%' '50%'
+   PercentRGB(red='50%', green='50%', blue='50%')
+-- rgb_percent_to_rgb '50%' '50%' '50%'
+   IntegerRGB(red=128, green=128, blue=128)
+-- rgb_percent_to_hex '50%' '50%' '50%'
+   '#808080'
+-- rgb_percent_to_name '50%' '50%' '50%' 'css3'
+   'gray'
+-- normalize_percent_triplet '0%' '100%' '0%'
+   PercentRGB(red='0%', green='100%', blue='0%')
+-- rgb_percent_to_rgb '0%' '100%' '0%'
+   IntegerRGB(red=0, green=255, blue=0)
+-- rgb_percent_to_hex '0%' '100%' '0%'
+   '#00ff00'
+-- rgb_percent_to_name '0%' '100%' '0%' 'css3'
+   'lime'
+-- normalize_percent_triplet '-10%' '-0%' '500%'
+   PercentRGB(red='0%', green='0%', blue='100%')
+-- rgb_percent_to_rgb '-10%' '-0%' '500%'
+   IntegerRGB(red=0, green=0, blue=255)
+-- rgb_percent_to_hex '-10%' '-0%' '500%'
+   '#0000ff'
+-- rgb_percent_to_name '-10%' '-0%' '500%' 'css3'
+   'blue'
+-- normalize_percent_triplet '85.49%' '64.71%' '12.5%'
+   PercentRGB(red='85.49%', green='64.71%', blue='12.5%')
+-- rgb_percent_to_rgb '85.49%' '64.71%' '12.5%'
+   IntegerRGB(red=218, green=165, blue=32)
+-- rgb_percent_to_hex '85.49%' '64.71%' '12.5%'
+   '#daa520'
+-- rgb_percent_to_name '85.49%' '64.71%' '12.5%' 'css3'
+   'goldenrod'
+-- normalize_percent_triplet '100%' '100%' '0%'
+   PercentRGB(red='100%', green='100%', blue='0%')
+-- rgb_percent_to_rgb '100%' '100%' '0%'
+   IntegerRGB(red=255, green=255, blue=0)
+-- rgb_percent_to_hex '100%' '100%' '0%'
+   '#ffff00'
+-- rgb_percent_to_name '100%' '100%' '0%' 'css3'
+   'yellow'
+-- normalize_percent_triplet '12.5%' '6.25%' '25%'
+   PercentRGB(red='12.5%', green='6.25%', blue='25%')
+-- rgb_percent_to_rgb '12.5%' '6.25%' '25%'
+   IntegerRGB(red=32, green=16, blue=64)
+-- rgb_percent_to_hex '12.5%' '6.25%' '25%'
+   '#201040'
+-- rgb_percent_to_name '12.5%' '6.25%' '25%' 'css3'
+   error: ValueError: "#201040" has no defined color name in css3.
+-- normalize_percent_triplet '33.3%' '66.6%' '99.9%'
+   PercentRGB(red='33.3%', green='66.6%', blue='99.9%')
+-- rgb_percent_to_rgb '33.3%' '66.6%' '99.9%'
+   IntegerRGB(red=85, green=170, blue=255)
+-- rgb_percent_to_hex '33.3%' '66.6%' '99.9%'
+   '#55aaff'
+-- rgb_percent_to_name '33.3%' '66.6%' '99.9%' 'css3'
+   error: ValueError: "#55aaff" has no defined color name in css3.
+-- normalize_percent_triplet '1e2%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: '1e2'
+-- rgb_percent_to_rgb '1e2%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: '1e2'
+-- rgb_percent_to_hex '1e2%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: '1e2'
+-- rgb_percent_to_name '1e2%' '0%' '0%' 'css3'
+   error: ValueError: invalid literal for int() with base 10: '1e2'
+-- normalize_percent_triplet '1.e2%' '0%' '0%'
+   PercentRGB(red='100.0%', green='0%', blue='0%')
+-- rgb_percent_to_rgb '1.e2%' '0%' '0%'
+   IntegerRGB(red=255, green=0, blue=0)
+-- rgb_percent_to_hex '1.e2%' '0%' '0%'
+   '#ff0000'
+-- rgb_percent_to_name '1.e2%' '0%' '0%' 'css3'
+   'red'
+-- normalize_percent_triplet ' 7 %' '+5%' '007%'
+   PercentRGB(red='7%', green='5%', blue='7%')
+-- rgb_percent_to_rgb ' 7 %' '+5%' '007%'
+   IntegerRGB(red=18, green=13, blue=18)
+-- rgb_percent_to_hex ' 7 %' '+5%' '007%'
+   '#120d12'
+-- rgb_percent_to_name ' 7 %' '+5%' '007%' 'css3'
+   error: ValueError: "#120d12" has no defined color name in css3.
+-- normalize_percent_triplet '1_0%' '2_0.5%' '3%'
+   PercentRGB(red='10%', green='20.5%', blue='3%')
+-- rgb_percent_to_rgb '1_0%' '2_0.5%' '3%'
+   IntegerRGB(red=26, green=52, blue=8)
+-- rgb_percent_to_hex '1_0%' '2_0.5%' '3%'
+   '#1a3408'
+-- rgb_percent_to_name '1_0%' '2_0.5%' '3%' 'css3'
+   error: ValueError: "#1a3408" has no defined color name in css3.
+-- normalize_percent_triplet 'nan.%' '0%' '0%'
+   error: ValueError: could not convert string to float: 'nan.'
+-- rgb_percent_to_rgb 'nan.%' '0%' '0%'
+   error: ValueError: could not convert string to float: 'nan.'
+-- rgb_percent_to_hex 'nan.%' '0%' '0%'
+   error: ValueError: could not convert string to float: 'nan.'
+-- rgb_percent_to_name 'nan.%' '0%' '0%' 'css3'
+   error: ValueError: could not convert string to float: 'nan.'
+-- normalize_percent_triplet 'inf.%' '-inf.%' '0%'
+   error: ValueError: could not convert string to float: 'inf.'
+-- rgb_percent_to_rgb 'inf.%' '-inf.%' '0%'
+   error: ValueError: could not convert string to float: 'inf.'
+-- rgb_percent_to_hex 'inf.%' '-inf.%' '0%'
+   error: ValueError: could not convert string to float: 'inf.'
+-- rgb_percent_to_name 'inf.%' '-inf.%' '0%' 'css3'
+   error: ValueError: could not convert string to float: 'inf.'
+-- normalize_percent_triplet 'abc%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: 'abc'
+-- rgb_percent_to_rgb 'abc%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: 'abc'
+-- rgb_percent_to_hex 'abc%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: 'abc'
+-- rgb_percent_to_name 'abc%' '0%' '0%' 'css3'
+   error: ValueError: invalid literal for int() with base 10: 'abc'
+-- normalize_percent_triplet '5' '10' '15'
+   PercentRGB(red='5%', green='10%', blue='15%')
+-- rgb_percent_to_rgb '5' '10' '15'
+   IntegerRGB(red=13, green=26, blue=38)
+-- rgb_percent_to_hex '5' '10' '15'
+   '#0d1a26'
+-- rgb_percent_to_name '5' '10' '15' 'css3'
+   error: ValueError: "#0d1a26" has no defined color name in css3.
+-- normalize_percent_triplet '0.5%' '0.25%' '0.125%'
+   PercentRGB(red='0.5%', green='0.25%', blue='0.125%')
+-- rgb_percent_to_rgb '0.5%' '0.25%' '0.125%'
+   IntegerRGB(red=1, green=1, blue=0)
+-- rgb_percent_to_hex '0.5%' '0.25%' '0.125%'
+   '#010100'
+-- rgb_percent_to_name '0.5%' '0.25%' '0.125%' 'css3'
+   error: ValueError: "#010100" has no defined color name in css3.
+-- normalize_percent_triplet '99.99999%' '100.00001%' '-0.0%'
+   PercentRGB(red='99.99999%', green='100%', blue='-0.0%')
+-- rgb_percent_to_rgb '99.99999%' '100.00001%' '-0.0%'
+   IntegerRGB(red=255, green=255, blue=0)
+-- rgb_percent_to_hex '99.99999%' '100.00001%' '-0.0%'
+   '#ffff00'
+-- rgb_percent_to_name '99.99999%' '100.00001%' '-0.0%' 'css3'
+   'yellow'
+-- normalize_percent_triplet '1.%' '.5%' '50.%'
+   PercentRGB(red='1.0%', green='0.5%', blue='50.0%')
+-- rgb_percent_to_rgb '1.%' '.5%' '50.%'
+   IntegerRGB(red=3, green=1, blue=128)
+-- rgb_percent_to_hex '1.%' '.5%' '50.%'
+   '#030180'
+-- rgb_percent_to_name '1.%' '.5%' '50.%' 'css3'
+   error: ValueError: "#030180" has no defined color name in css3.
+-- normalize_percent_triplet '0.19607843%' '0.2%' '0.21%'
+   PercentRGB(red='0.19607843%', green='0.2%', blue='0.21%')
+-- rgb_percent_to_rgb '0.19607843%' '0.2%' '0.21%'
+   IntegerRGB(red=0, green=1, blue=1)
+-- rgb_percent_to_hex '0.19607843%' '0.2%' '0.21%'
+   '#000101'
+-- rgb_percent_to_name '0.19607843%' '0.2%' '0.21%' 'css3'
+   error: ValueError: "#000101" has no defined color name in css3.
+-- normalize_percent_triplet '%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: ''
+-- rgb_percent_to_rgb '%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: ''
+-- rgb_percent_to_hex '%' '0%' '0%'
+   error: ValueError: invalid literal for int() with base 10: ''
+-- rgb_percent_to_name '%' '0%' '0%' 'css3'
+   error: ValueError: invalid literal for int() with base 10: ''
+-- normalize_percent_triplet '20%x' '0%' '0%'
+   PercentRGB(red='20%', green='0%', blue='0%')
+-- rgb_percent_to_rgb '20%x' '0%' '0%'
+   IntegerRGB(red=51, green=0, blue=0)
+-- rgb_percent_to_hex '20%x' '0%' '0%'
+   '#330000'
+-- rgb_percent_to_name '20%x' '0%' '0%' 'css3'
+   error: ValueError: "#330000" has no defined color name in css3.
+-- normalize_percent_triplet '1.5e1%' '2.5E1%' '3.5e-1%'
+   PercentRGB(red='15.0%', green='25.0%', blue='0.35%')
+-- rgb_percent_to_rgb '1.5e1%' '2.5E1%' '3.5e-1%'
+   IntegerRGB(red=38, green=64, blue=1)
+-- rgb_percent_to_hex '1.5e1%' '2.5E1%' '3.5e-1%'
+   '#264001'
+-- rgb_percent_to_name '1.5e1%' '2.5E1%' '3.5e-1%' 'css3'
+   error: ValueError: "#264001" has no defined color name in css3.
+-- normalize_percent_triplet '50.0%' '50.00%' '49.99%'
+   PercentRGB(red='50.0%', green='50.0%', blue='49.99%')
+-- rgb_percent_to_rgb '50.0%' '50.00%' '49.99%'
+   IntegerRGB(red=128, green=128, blue=127)
+-- rgb_percent_to_hex '50.0%' '50.00%' '49.99%'
+   '#80807f'
+-- rgb_percent_to_name '50.0%' '50.00%' '49.99%' 'css3'
+   error: ValueError: "#80807f" has no defined color name in css3.
+-- normalize_percent_triplet '0.1%' '0.2%' '0.3%'
+   PercentRGB(red='0.1%', green='0.2%', blue='0.3%')
+-- rgb_percent_to_rgb '0.1%' '0.2%' '0.3%'
+   IntegerRGB(red=0, green=1, blue=1)
+-- rgb_percent_to_hex '0.1%' '0.2%' '0.3%'
+   '#000101'
+-- rgb_percent_to_name '0.1%' '0.2%' '0.3%' 'css3'
+   error: ValueError: "#000101" has no defined color name in css3.
+-- rgb_percent_to_rgb '94.0%' '86.1273%' '28.1%'
+   IntegerRGB(red=240, green=220, blue=72)
+-- rgb_percent_to_rgb '33.6175%' '29%' '3.3%'
+   IntegerRGB(red=86, green=74, blue=8)
+-- rgb_percent_to_rgb '46.649%' '64.93%' '27.296%'
+   IntegerRGB(red=119, green=166, blue=70)
+-- rgb_percent_to_rgb '93.966%' '98%' '25.5569%'
+   IntegerRGB(red=240, green=250, blue=65)
+-- rgb_percent_to_rgb '64.586%' '-1.9404%' '65.4%'
+   IntegerRGB(red=165, green=0, blue=167)
+-- rgb_percent_to_rgb '89%' '1.1581%' '81.442%'
+   IntegerRGB(red=227, green=3, blue=208)
+-- rgb_percent_to_rgb '46.1382%' '-1.2%' '63.62%'
+   IntegerRGB(red=118, green=0, blue=162)
+-- rgb_percent_to_rgb '57.390%' '79%' '41.9289%'
+   IntegerRGB(red=146, green=201, blue=107)
+-- rgb_percent_to_rgb '21.71%' '67.0948%' '101.160%'
+   IntegerRGB(red=55, green=171, blue=255)
+-- rgb_percent_to_rgb '61.4249%' '24.963%' '53.29%'
+   IntegerRGB(red=157, green=64, blue=136)
+-- rgb_percent_to_rgb '53%' '6.032%' '23.736%'
+   IntegerRGB(red=135, green=15, blue=61)
+-- rgb_percent_to_rgb '62.6%' '44.573%' '13.31%'
+   IntegerRGB(red=160, green=114, blue=34)
+-- rgb_percent_to_rgb '7.4%' '60.38%' '97.7447%'
+   IntegerRGB(red=19, green=154, blue=249)
+-- rgb_percent_to_rgb '37%' '21.2%' '16%'
+   IntegerRGB(red=94, green=54, blue=41)
+-- rgb_percent_to_rgb '46.2892%' '16.22%' '70.64%'
+   IntegerRGB(red=118, green=41, blue=180)
+-- rgb_percent_to_rgb '86.5903%' '30.4307%' '44.967%'
+   IntegerRGB(red=221, green=78, blue=115)
+-- rgb_percent_to_rgb '98.345%' '18.5627%' '17.691%'
+   IntegerRGB(red=251, green=47, blue=45)
+-- rgb_percent_to_rgb '52.97%' '103.4%' '101%'
+   IntegerRGB(red=135, green=255, blue=255)
+-- rgb_percent_to_rgb '102.411%' '40.2%' '62.0793%'
+   IntegerRGB(red=255, green=103, blue=158)
+-- rgb_percent_to_rgb '61.3%' '3.276%' '82.026%'
+   IntegerRGB(red=156, green=8, blue=209)
+-- rgb_percent_to_rgb '44%' '93.032%' '37.661%'
+   IntegerRGB(red=112, green=237, blue=96)
+-- rgb_percent_to_rgb '33.577%' '97%' '80.312%'
+   IntegerRGB(red=86, green=247, blue=205)
+-- rgb_percent_to_rgb '83%' '92%' '59.68%'
+   IntegerRGB(red=212, green=235, blue=152)
+-- rgb_percent_to_rgb '47%' '96%' '5.83%'
+   IntegerRGB(red=120, green=245, blue=15)
+-- rgb_percent_to_rgb '44.5%' '43.7807%' '4.2%'
+   IntegerRGB(red=113, green=112, blue=11)
+-- rgb_percent_to_rgb '-0.058%' '21.36%' '62.825%'
+   IntegerRGB(red=0, green=54, blue=160)
+-- rgb_percent_to_rgb '103.2%' '38.689%' '89.5439%'
+   IntegerRGB(red=255, green=99, blue=228)
+-- rgb_percent_to_rgb '40.2%' '-2.605%' '51%'
+   IntegerRGB(red=103, green=0, blue=130)
+-- rgb_percent_to_rgb '41%' '12%' '78%'
+   IntegerRGB(red=105, green=31, blue=199)
+-- rgb_percent_to_rgb '50.8%' '89.457%' '8%'
+   IntegerRGB(red=130, green=228, blue=20)
+-- rgb_percent_to_rgb '43.54%' '29%' '86%'
+   IntegerRGB(red=111, green=74, blue=219)
+-- rgb_percent_to_rgb '3.2959%' '87.820%' '67.8%'
+   IntegerRGB(red=8, green=224, blue=173)
+-- rgb_percent_to_rgb '31.2%' '69.70%' '19.7249%'
+   IntegerRGB(red=80, green=178, blue=50)
+-- rgb_percent_to_rgb '18.140%' '-1.5849%' '100%'
+   IntegerRGB(red=46, green=0, blue=255)
+-- rgb_percent_to_rgb '11.7%' '19.3%' '75.4%'
+   IntegerRGB(red=30, green=49, blue=192)
+-- rgb_percent_to_rgb '16.3%' '61.0022%' '-1.3%'
+   IntegerRGB(red=42, green=156, blue=0)
+-- rgb_percent_to_rgb '83.0559%' '97.82%' '49.631%'
+   IntegerRGB(red=212, green=249, blue=127)
+-- rgb_percent_to_rgb '33.328%' '55.8621%' '-1%'
+   IntegerRGB(red=85, green=142, blue=0)
+-- rgb_percent_to_rgb '66.05%' '59%' '29.8%'
+   IntegerRGB(red=168, green=150, blue=76)
+-- rgb_percent_to_rgb '11.96%' '98.89%' '32.363%'
+   IntegerRGB(red=30, green=252, blue=83)
+== roundtrip
+-- percent_roundtrip
+   256 of 256 come back
+-- name_roundtrip 'html4'
+   16 names, 16 come back as themselves
+-- name_roundtrip 'css2'
+   16 names, 16 come back as themselves
+-- name_roundtrip 'css21'
+   17 names, 17 come back as themselves
+-- name_roundtrip 'css3'
+   aqua -> #00ffff -> 0% 100% 100% -> #00ffff -> cyan
+   darkgrey -> #a9a9a9 -> 66.27% 66.27% 66.27% -> #a9a9a9 -> darkgray
+   darkslategrey -> #2f4f4f -> 18.43% 30.98% 30.98% -> #2f4f4f -> darkslategray
+   dimgrey -> #696969 -> 41.18% 41.18% 41.18% -> #696969 -> dimgray
+   fuchsia -> #ff00ff -> 100% 0% 100% -> #ff00ff -> magenta
+   grey -> #808080 -> 50% 50% 50% -> #808080 -> gray
+   lightgrey -> #d3d3d3 -> 82.75% 82.75% 82.75% -> #d3d3d3 -> lightgray
+   lightslategrey -> #778899 -> 46.67% 53.33% 60.00% -> #778899 -> lightslategray
+   slategrey -> #708090 -> 43.92% 50% 56.47% -> #708090 -> slategray
+   147 names, 138 come back as themselves
+== html5
+-- html5_parse_simple_color '#ffffff'
+   HTML5SimpleColor(red=255, green=255, blue=255)
+-- html5_parse_simple_color '#fff'
+   error: ValueError: An HTML5 simple color must be a Unicode string seven characters long.
+-- html5_parse_simple_color 'ffffff7'
+   error: ValueError: An HTML5 simple color must begin with the character '#' (U+0023).
+-- html5_parse_simple_color '#fffffg'
+   error: ValueError: An HTML5 simple color must contain exactly six ASCII hex digits.
+-- html5_parse_simple_color '#FfEeDd'
+   HTML5SimpleColor(red=255, green=238, blue=221)
+-- html5_parse_simple_color '#000000'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_simple_color '#ＡＢＣＤＥＦ'
+   error: ValueError: An HTML5 simple color must contain exactly six ASCII hex digits.
+-- html5_parse_simple_color ''
+   error: ValueError: An HTML5 simple color must be a Unicode string seven characters long.
+-- html5_parse_simple_color '#1234567'
+   error: ValueError: An HTML5 simple color must be a Unicode string seven characters long.
+-- html5_parse_legacy_color 'black'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color 'chucknorris'
+   HTML5SimpleColor(red=192, green=0, blue=0)
+-- html5_parse_legacy_color 'Window'
+   HTML5SimpleColor(red=0, green=13, blue=0)
+-- html5_parse_legacy_color 'transparent'
+   error: ValueError: HTML5 legacy color parsing forbids "transparent" as a value.
+-- html5_parse_legacy_color ' Transparent '
+   error: ValueError: HTML5 legacy color parsing forbids "transparent" as a value.
+-- html5_parse_legacy_color ''
+   error: ValueError: HTML5 legacy color parsing forbids empty string as a value.
+-- html5_parse_legacy_color '   '
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color '#fff'
+   HTML5SimpleColor(red=255, green=255, blue=255)
+-- html5_parse_legacy_color '#FFF'
+   HTML5SimpleColor(red=255, green=255, blue=255)
+-- html5_parse_legacy_color '#ffff'
+   HTML5SimpleColor(red=255, green=255, blue=0)
+-- html5_parse_legacy_color '#abcdef'
+   HTML5SimpleColor(red=171, green=205, blue=239)
+-- html5_parse_legacy_color '#1'
+   HTML5SimpleColor(red=1, green=0, blue=0)
+-- html5_parse_legacy_color '#12'
+   HTML5SimpleColor(red=1, green=2, blue=0)
+-- html5_parse_legacy_color '#123'
+   HTML5SimpleColor(red=17, green=34, blue=51)
+-- html5_parse_legacy_color 'red'
+   HTML5SimpleColor(red=255, green=0, blue=0)
+-- html5_parse_legacy_color '  LightGoldenrodYellow\n'
+   HTML5SimpleColor(red=250, green=250, blue=210)
+-- html5_parse_legacy_color '#0099cc'
+   HTML5SimpleColor(red=0, green=153, blue=204)
+-- html5_parse_legacy_color '0099cc'
+   HTML5SimpleColor(red=0, green=153, blue=204)
+-- html5_parse_legacy_color 'crap'
+   HTML5SimpleColor(red=192, green=160, blue=0)
+-- html5_parse_legacy_color 'ninjaturtle'
+   HTML5SimpleColor(red=0, green=160, blue=0)
+-- html5_parse_legacy_color 'sick'
+   HTML5SimpleColor(red=0, green=192, blue=0)
+-- html5_parse_legacy_color 'grass'
+   HTML5SimpleColor(red=0, green=160, blue=0)
+-- html5_parse_legacy_color '#ff0000ff'
+   HTML5SimpleColor(red=255, green=0, blue=255)
+-- html5_parse_legacy_color '#12345678'
+   HTML5SimpleColor(red=18, green=69, blue=120)
+-- html5_parse_legacy_color '#123456789abcdef0'
+   HTML5SimpleColor(red=18, green=120, blue=222)
+-- html5_parse_legacy_color 'rgb(10, 20, 30)'
+   HTML5SimpleColor(red=176, green=2, blue=48)
+-- html5_parse_legacy_color 'hsl(0, 100%, 50%)'
+   HTML5SimpleColor(red=0, green=16, blue=80)
+-- html5_parse_legacy_color '😀😀😀'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color 'a😀b'
+   HTML5SimpleColor(red=160, green=11, blue=0)
+-- html5_parse_legacy_color '#😀'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color 'zzzzzz'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color '00000000000000000001'
+   HTML5SimpleColor(red=0, green=0, blue=16)
+-- html5_parse_legacy_color '0000ff000000ff000000ff'
+   HTML5SimpleColor(red=255, green=255, blue=255)
+-- html5_parse_legacy_color '#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+   HTML5SimpleColor(red=170, green=170, blue=170)
+-- html5_parse_legacy_color 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxfff'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color '\u3000blue\u3000'
+   HTML5SimpleColor(red=0, green=0, blue=255)
+-- html5_parse_legacy_color '\xa0white'
+   HTML5SimpleColor(red=255, green=255, blue=255)
+-- html5_parse_legacy_color '\x1cred\x1f'
+   HTML5SimpleColor(red=255, green=0, blue=0)
+-- html5_parse_legacy_color 'cyan\x85'
+   HTML5SimpleColor(red=0, green=255, blue=255)
+-- html5_parse_legacy_color '1'
+   HTML5SimpleColor(red=1, green=0, blue=0)
+-- html5_parse_legacy_color '12'
+   HTML5SimpleColor(red=1, green=2, blue=0)
+-- html5_parse_legacy_color '1234'
+   HTML5SimpleColor(red=18, green=52, blue=0)
+-- html5_parse_legacy_color '12345'
+   HTML5SimpleColor(red=18, green=52, blue=80)
+-- html5_parse_legacy_color '123456'
+   HTML5SimpleColor(red=18, green=52, blue=86)
+-- html5_parse_legacy_color '#abc '
+   HTML5SimpleColor(red=170, green=187, blue=204)
+-- html5_parse_legacy_color '#a b c'
+   HTML5SimpleColor(red=160, green=176, blue=192)
+-- html5_parse_legacy_color 'd214#ey'
+   HTML5SimpleColor(red=210, green=64, blue=0)
+-- html5_parse_legacy_color '7'
+   HTML5SimpleColor(red=7, green=0, blue=0)
+-- html5_parse_legacy_color 'CA#c Dh- aiE%f😀'
+   HTML5SimpleColor(red=202, green=0, blue=15)
+-- html5_parse_legacy_color '5y'
+   HTML5SimpleColor(red=5, green=0, blue=0)
+-- html5_parse_legacy_color '7D0B8663iF😀5'
+   HTML5SimpleColor(red=125, green=102, blue=0)
+-- html5_parse_legacy_color '1f.x75ah%xe5hCdb6'
+   HTML5SimpleColor(red=31, green=160, blue=12)
+-- html5_parse_legacy_color '56A y'
+   HTML5SimpleColor(red=86, green=160, blue=0)
+-- html5_parse_legacy_color 'c5jxE66B5\xa0jgeé9j7C é'
+   HTML5SimpleColor(red=197, green=181, blue=144)
+-- html5_parse_legacy_color 'A-h3D8gy47gh\xa0Eix.jé😀b5bc#gB'
+   HTML5SimpleColor(red=3, green=14, blue=91)
+-- html5_parse_legacy_color 'j-7%i%813e3j9d%ja9#é-%3#x😀8jhbz5'
+   HTML5SimpleColor(red=8, green=169, blue=128)
+-- html5_parse_legacy_color 'bz08+90fc'
+   HTML5SimpleColor(red=176, green=128, blue=15)
+-- html5_parse_legacy_color '%Ed1FbB22971#z0😀gd5daj'
+   HTML5SimpleColor(red=14, green=41, blue=0)
+-- html5_parse_legacy_color '-D96gé😀aCf '
+   HTML5SimpleColor(red=13, green=0, blue=172)
+-- html5_parse_legacy_color '0Fbg63CE 6f\xa003\xa0'
+   HTML5SimpleColor(red=15, green=60, blue=240)
+-- html5_parse_legacy_color 'zyDAz.é%D😀iefg+hz%7é6.B😀Cc'
+   HTML5SimpleColor(red=218, green=239, blue=11)
+-- html5_parse_legacy_color '6#Ab102EDgh0g7h84j%898axcj😀D'
+   HTML5SimpleColor(red=171, green=7, blue=160)
+-- html5_parse_legacy_color ' '
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color 'i%#72xCa.Fd -g0fcj%cfza616F%\xa0B'
+   HTML5SimpleColor(red=7, green=0, blue=166)
+-- html5_parse_legacy_color 'd4y96--0+yF#😀j B7zzd6céE870'
+   HTML5SimpleColor(red=9, green=0, blue=192)
+-- html5_parse_legacy_color 'dCi4'
+   HTML5SimpleColor(red=220, green=4, blue=0)
+-- html5_parse_legacy_color '\xa0.dcdFAz j+Bc😀d0dDdy5be1Ec7'
+   HTML5SimpleColor(red=220, green=188, blue=5)
+-- html5_parse_legacy_color '37é1é😀gbx993\xa00😀D1zCe😀.B'
+   HTML5SimpleColor(red=112, green=153, blue=12)
+-- html5_parse_legacy_color 'F+-e😀xbc.'
+   HTML5SimpleColor(red=240, green=0, blue=192)
+-- html5_parse_legacy_color '5iéCd11dah0A 7'
+   HTML5SimpleColor(red=80, green=17, blue=10)
+-- html5_parse_legacy_color 'Dz35j4%#😀id159'
+   HTML5SimpleColor(red=208, green=64, blue=13)
+-- html5_parse_legacy_color 'Fe😀éE3+58d0gj.40#1C4a0-BDz5😀9A6e7'
+   HTML5SimpleColor(red=227, green=1, blue=9)
+-- html5_parse_legacy_color '-7aeeaD CxBf'
+   HTML5SimpleColor(red=7, green=234, blue=192)
+-- html5_parse_legacy_color 'gDi#E0a-3-0A.-\xa0 éj-zd5-6%d%é'
+   HTML5SimpleColor(red=14, green=0, blue=96)
+-- html5_parse_legacy_color 'é1dFf 56hj😀0f6bC25😀+j+ci4 5d'
+   HTML5SimpleColor(red=223, green=15, blue=0)
+-- html5_parse_legacy_color 'dfx0C'
+   HTML5SimpleColor(red=223, green=0, blue=192)
+-- html5_parse_legacy_color '74CDEE5fi7yf075+3x\xa0d3iDB93jB#3\xa0😀#4h'
+   HTML5SimpleColor(red=238, green=48, blue=3)
+-- html5_parse_legacy_color '+77502jy+5A'
+   HTML5SimpleColor(red=119, green=32, blue=90)
+-- html5_parse_legacy_color 'xd50C😀4DhF1h0Eei'
+   HTML5SimpleColor(red=213, green=77, blue=14)
+-- html5_parse_legacy_color '++-9+27EcEéf2#h 9ei9E'
+   HTML5SimpleColor(red=0, green=236, blue=0)
+-- html5_parse_legacy_color '4ib'
+   HTML5SimpleColor(red=4, green=0, blue=11)
+-- html5_parse_legacy_color '5F#😀4#-jA'
+   HTML5SimpleColor(red=95, green=4, blue=10)
+-- html5_parse_legacy_color 'A 0C.0Eh3Byh47aCA6'
+   HTML5SimpleColor(red=160, green=224, blue=71)
+-- html5_parse_legacy_color '7é8.96A.yEhf0gEé3xz7hE795DD03ff89d'
+   HTML5SimpleColor(red=150, green=48, blue=63)
+-- html5_parse_legacy_color '9-+2x%fz😀#5hy9+ef9Ad##DcF.'
+   HTML5SimpleColor(red=0, green=5, blue=173)
+-- html5_parse_legacy_color 'bDDij+'
+   HTML5SimpleColor(red=189, green=208, blue=0)
+-- html5_parse_legacy_color 'ég%g\xa0%iBg7C3E7Afd8ayéaC5d%c\xa07\xa0D8.ie'
+   HTML5SimpleColor(red=0, green=216, blue=112)
+-- html5_parse_legacy_color '😀2-'
+   HTML5SimpleColor(red=0, green=32, blue=0)
+-- html5_parse_legacy_color 'fF+D.e9-f5f4E73e xz. zjf5j5++'
+   HTML5SimpleColor(red=13, green=231, blue=15)
+-- html5_parse_legacy_color 'gh6Aj6e3\xa0-5C1xdE'
+   HTML5SimpleColor(red=0, green=227, blue=16)
+-- html5_parse_legacy_color '+8i%C0aB#e7i5#C CaDf yhxb75'
+   HTML5SimpleColor(red=128, green=112, blue=240)
+-- html5_parse_legacy_color '6eaF9+gaci7z06C86Ad-+\xa09\xa00CjD3c😀jj3hig'
+   HTML5SimpleColor(red=0, green=208, blue=0)
+-- html5_parse_legacy_color 'é1j9gx'
+   HTML5SimpleColor(red=1, green=9, blue=0)
+-- html5_parse_legacy_color 'c2\xa0xyaD9z7x8B280jhd1é\xa0A7jé8z'
+   HTML5SimpleColor(red=0, green=178, blue=167)
+-- html5_parse_legacy_color '365xhc8AébE%a-6ée i68-ff6yCDb3\xa0f  Ez'
+   HTML5SimpleColor(red=12, green=224, blue=179)
+-- html5_parse_legacy_color '5'
+   HTML5SimpleColor(red=5, green=0, blue=0)
+-- html5_parse_legacy_color 'f\xa0\xa0D3 Fx.Fd\xa0b#ég1.\xa0b%%F\xa06i5c3j'
+   HTML5SimpleColor(red=13, green=176, blue=240)
+-- html5_parse_legacy_color '0'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color 'yEx%##Ff6gBzF'
+   HTML5SimpleColor(red=14, green=15, blue=176)
+-- html5_parse_legacy_color 'Abffy2égAé1hDbéjFccz#😀😀b\xa0cé0fbDB20'
+   HTML5SimpleColor(red=2, green=252, blue=0)
+-- html5_parse_legacy_color 'i-2-b81fe957#\xa0eééj.#.2#8B5'
+   HTML5SimpleColor(red=2, green=87, blue=0)
+-- html5_parse_legacy_color '😀 yaD4-ejCgC.7y\xa0.#84c#hy#ée Fzj7B5'
+   HTML5SimpleColor(red=173, green=0, blue=15)
+-- html5_parse_legacy_color 'ié'
+   HTML5SimpleColor(red=0, green=0, blue=0)
+-- html5_parse_legacy_color '59EA\xa0yC6Ay+afhey\xa0z5zdxE'
+   HTML5SimpleColor(red=89, green=160, blue=0)
+-- html5_parse_legacy_color 'ga%3yb6x%zFcB7Ea%# \xa0gbec-4b6261'
+   HTML5SimpleColor(red=48, green=234, blue=75)
+-- html5_parse_legacy_color '5Cy%.gADh6az5#4 z%z 😀92-'
+   HTML5SimpleColor(red=192, green=160, blue=0)
+== audit
+-- audit 'site.css'
+   :root
+     --brand: #3366CC -> #3366cc - rgb(51, 102, 204) rgb(20.00%, 40.00%, 80.00%) hsl(220, 60.0%, 50.0%)
+     --accent: rgb(255, 102, 0) -> #ff6600 - rgb(255, 102, 0) rgb(100%, 40.00%, 0%) hsl(24, 100.0%, 50.0%)
+   body
+     color: #333 -> #333333 - rgb(51, 51, 51) rgb(20.00%, 20.00%, 20.00%) hsl(0, 0.0%, 20.0%)
+     background-color: White -> #ffffff white rgb(255, 255, 255) rgb(100%, 100%, 100%) hsl(0, 0.0%, 100.0%)
+     contrast 12.63:1 (L 0.0331 on 1.0000) AAA
+   header, .masthead
+     color: rgb(255, 255, 255) -> #ffffff white rgb(255, 255, 255) rgb(100%, 100%, 100%) hsl(0, 0.0%, 100.0%)
+     background-color: var(--brand) -> #3366cc - rgb(51, 102, 204) rgb(20.00%, 40.00%, 80.00%) hsl(220, 60.0%, 50.0%)
+     background: #3366cc -> #3366cc - rgb(51, 102, 204) rgb(20.00%, 40.00%, 80.00%) hsl(220, 60.0%, 50.0%)
+     border-bottom: #224488 -> #224488 - rgb(34, 68, 136) rgb(13.33%, 26.67%, 53.33%) hsl(220, 60.0%, 33.3%)
+     contrast 5.37:1 (L 1.0000 on 0.1457) AA
+   nav a
+     color: navy -> #000080 navy rgb(0, 0, 128) rgb(0%, 0%, 50%) hsl(240, 100.0%, 25.1%)
+     background-color: #f0f0f0 -> #f0f0f0 - rgb(240, 240, 240) rgb(94.12%, 94.12%, 94.12%) hsl(0, 0.0%, 94.1%)
+     contrast 14.05:1 (L 0.0156 on 0.8714) AAA
+   nav a:hover
+     color: rgb(100%, 40%, 0%) -> #ff6600 - rgb(255, 102, 0) rgb(100%, 40.00%, 0%) hsl(24, 100.0%, 50.0%)
+     background-color: #FFFFF0 -> #fffff0 ivory rgb(255, 255, 240) rgb(100%, 100%, 94.12%) hsl(60, 100.0%, 97.1%)
+     contrast 2.91:1 (L 0.3076 on 0.9907) fails
+   .button-primary
+     color: #fff -> #ffffff white rgb(255, 255, 255) rgb(100%, 100%, 100%) hsl(0, 0.0%, 100.0%)
+     background-color: rgb(51, 102, 204) -> #3366cc - rgb(51, 102, 204) rgb(20.00%, 40.00%, 80.00%) hsl(220, 60.0%, 50.0%)
+     border: DarkSlateGrey -> #2f4f4f darkslategray rgb(47, 79, 79) rgb(18.43%, 30.98%, 30.98%) hsl(180, 25.4%, 24.7%)
+     contrast 5.37:1 (L 1.0000 on 0.1457) AA
+   .button-muted
+     color: silver -> #c0c0c0 silver rgb(192, 192, 192) rgb(75.29%, 75.29%, 75.29%) hsl(0, 0.0%, 75.3%)
+     background-color: whitesmoke -> #f5f5f5 whitesmoke rgb(245, 245, 245) rgb(96.08%, 96.08%, 96.08%) hsl(0, 0.0%, 96.1%)
+     contrast 1.67:1 (L 0.5271 on 0.9131) fails
+   .alert-warning
+     color: #8a6d3b -> #8a6d3b - rgb(138, 109, 59) rgb(54.12%, 42.75%, 23.14%) hsl(38, 40.1%, 38.6%)
+     background-color: #FCF8E3 -> #fcf8e3 - rgb(252, 248, 227) rgb(98.82%, 97.25%, 89.02%) hsl(50, 80.6%, 93.9%)
+     border-color: #faebcc -> #faebcc - rgb(250, 235, 204) rgb(98.04%, 92.16%, 80.00%) hsl(40, 82.1%, 89.0%)
+     contrast 4.54:1 (L 0.1666 on 0.9338) AA
+   .alert-danger
+     color: rgb(169,68,66) -> #a94442 - rgb(169, 68, 66) rgb(66.27%, 26.67%, 25.88%) hsl(1, 43.8%, 46.1%)
+     background-color: rgb(242, 222, 222) -> #f2dede - rgb(242, 222, 222) rgb(94.90%, 87.06%, 87.06%) hsl(0, 43.5%, 91.0%)
+     outline: crimson -> #dc143c crimson rgb(220, 20, 60) rgb(86.27%, 7.84%, 23.53%) hsl(348, 83.3%, 47.1%)
+     contrast 4.53:1 (L 0.1296 on 0.7639) AA
+   .price
+     color: rgb(85.49%, 64.71%, 12.5%) -> #daa520 goldenrod rgb(218, 165, 32) rgb(85.49%, 64.71%, 12.5%) hsl(43, 74.4%, 49.0%)
+     background-color: black -> #000000 black rgb(0, 0, 0) rgb(0%, 0%, 0%) hsl(0, 0.0%, 0.0%)
+     contrast 9.38:1 (L 0.4192 on 0.0000) AAA
+   .sale-banner
+     color: yellow -> #ffff00 yellow rgb(255, 255, 0) rgb(100%, 100%, 0%) hsl(60, 100.0%, 50.0%)
+     background-color: #ff0 -> #ffff00 yellow rgb(255, 255, 0) rgb(100%, 100%, 0%) hsl(60, 100.0%, 50.0%)
+     contrast 1.00:1 (L 0.9278 on 0.9278) fails
+   footer
+     color: GRAY -> #808080 gray rgb(128, 128, 128) rgb(50%, 50%, 50%) hsl(0, 0.0%, 50.2%)
+     background-color: #222 -> #222222 - rgb(34, 34, 34) rgb(13.33%, 13.33%, 13.33%) hsl(0, 0.0%, 13.3%)
+     border-top: rgb(300, -20, 128) -> #ff0080 - rgb(255, 0, 128) rgb(100%, 0%, 50%) hsl(330, 100.0%, 50.0%)
+     contrast 4.03:1 (L 0.2159 on 0.0160) AA large text only
+   .legal
+     color: #777777 -> #777777 - rgb(119, 119, 119) rgb(46.67%, 46.67%, 46.67%) hsl(0, 0.0%, 46.7%)
+     background-color: #333333 -> #333333 - rgb(51, 51, 51) rgb(20.00%, 20.00%, 20.00%) hsl(0, 0.0%, 20.0%)
+     contrast 2.82:1 (L 0.1845 on 0.0331) fails
+   .badge
+     color: Teal -> #008080 teal rgb(0, 128, 128) rgb(0%, 50%, 50%) hsl(180, 100.0%, 25.1%)
+     background-color: #e0f2f1 -> #e0f2f1 - rgb(224, 242, 241) rgb(87.84%, 94.90%, 94.51%) hsl(177, 40.9%, 91.4%)
+     border: #0099cc -> #0099cc - rgb(0, 153, 204) rgb(0%, 60.00%, 80.00%) hsl(195, 100.0%, 40.0%)
+     contrast 4.12:1 (L 0.1700 on 0.8570) AA large text only
+   .code
+     color: rebeccapurple -> not a color
+     background-color: oldlace -> #fdf5e6 oldlace rgb(253, 245, 230) rgb(99.22%, 96.08%, 90.20%) hsl(39, 85.2%, 94.7%)
+     fill: #ABCDEF -> #abcdef - rgb(171, 205, 239) rgb(67.06%, 80.39%, 93.73%) hsl(210, 68.0%, 80.4%)
+     stroke: rgb(18, 52, 86) -> #123456 - rgb(18, 52, 86) rgb(7.06%, 20.39%, 33.73%) hsl(210, 65.4%, 20.4%)
+   .oops
+     color: #ggg -> invalid: "#ggg" is not a valid hexadecimal color value.
+     background-color: notacolor -> not a color
+     border-color: #12345 -> invalid: "#12345" is not a valid hexadecimal color value.
+   palette:
+     #000000 x1 black
+     #000080 x1 navy
+     #008080 x1 teal
+     #0099cc x1 ~lightseagreen (distance^2 2805)
+     #123456 x1 ~midnightblue (distance^2 1454)
+     #222222 x1 ~black (distance^2 3468)
+     #224488 x1 ~darkslateblue (distance^2 1502)
+     #2f4f4f x1 darkslategray
+     #333333 x2 ~darkslategray (distance^2 1584)
+     #3366cc x4 ~royalblue (distance^2 646)
+     #777777 x1 ~gray (distance^2 243)
+     #808080 x1 gray
+     #8a6d3b x1 ~sienna (distance^2 1409)
+     #a94442 x1 ~sienna (distance^2 718)
+     #abcdef x1 ~lightblue (distance^2 206)
+     #c0c0c0 x1 silver
+     #daa520 x1 goldenrod
+     #dc143c x1 crimson
+     #e0f2f1 x1 ~lavender (distance^2 261)
+     #f0f0f0 x1 ~whitesmoke (distance^2 75)
+     #f2dede x1 ~mistyrose (distance^2 214)
+     #f5f5f5 x1 whitesmoke
+     #faebcc x1 ~blanchedalmond (distance^2 26)
+     #fcf8e3 x1 ~oldlace (distance^2 19)
+     #fdf5e6 x1 oldlace
+     #ff0080 x1 ~deeppink (distance^2 761)
+     #ff6600 x2 ~orangered (distance^2 1089)
+     #ffff00 x2 yellow
+     #fffff0 x1 ivory
+     #ffffff x3 white
+   16 rules, 42 color declarations, 4 invalid, 30 distinct colors, 13 contrast pairs, 4 failing
