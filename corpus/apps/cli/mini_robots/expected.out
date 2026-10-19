@@ -1,0 +1,1171 @@
+== {"kind": "new", "name": "fresh", "url": "http://shop.test/robots.txt"}
+  ok
+== {"kind": "check", "name": "fresh", "agents": ["KaraBot/1.0"], "urls": ["/", "/cart"]}
+  'KaraBot/1.0': nn
+== {"kind": "show", "name": "fresh", "agents": ["KaraBot/1.0"]}
+  str:
+
+  site_maps: None
+  disallow_all=False allow_all=False read=False
+  'KaraBot/1.0': delay None, rate None
+== {"kind": "load", "name": "shop", "url": "http://shop.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "blog", "url": "http://blog.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "private", "url": "http://private.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "flaky", "url": "http://flaky.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "gone", "url": "http://gone.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "empty", "url": "http://empty.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "intl", "url": "http://intl.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "cr", "url": "http://cr.test/robots.txt"}
+  ok
+== {"kind": "load", "name": "nohost", "url": "http://nohost.test/robots.txt"}
+  URLError: <urlopen error [Errno -2] Name or service not known>
+== {"kind": "parse", "name": "bom", "file": "robots/bom.txt"}
+  ok
+== {"kind": "parse", "name": "agents", "file": "robots/agents.txt"}
+  ok
+== {"kind": "parse", "name": "agents_star", "file": "robots/agents_star.txt"}
+  ok
+== {"kind": "parse", "name": "rules", "file": "robots/rules.txt"}
+  ok
+== {"kind": "parse", "name": "fields", "file": "robots/fields.txt"}
+  ok
+== {"kind": "parse", "name": "empty_rules", "file": "robots/empty_rules.txt"}
+  ok
+== {"kind": "parse", "name": "crlf", "file": "robots/crlf.txt"}
+  ok
+== {"kind": "show", "name": "shop", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: *
+    Crawl-delay: 2
+    Request-rate: 3/10
+    Disallow: /cart
+    Disallow: /checkout/
+    Allow: /checkout/help
+    Disallow: /*?sessionid=
+    Disallow: /*.pdf$
+    Disallow: /search
+    Allow: /search/about$
+
+    User-agent: KaraBot
+    User-agent: OtherBot
+    Crawl-delay: 1
+    Disallow: /private
+    Allow: /private/press
+    Disallow: /tmp/*/cache
+
+    User-agent: BadBot
+    Disallow: /
+
+    User-agent: karabot
+    Disallow: /drafts
+  site_maps: ['https://shop.test/sitemap.xml', 'https://shop.test/sitemap-products.xml']
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay 1, rate None
+  'karabot': delay 1, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay 2, rate RequestRate(requests=3, seconds=10)
+  'OtherBot': delay 1, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay 2, rate RequestRate(requests=3, seconds=10)
+  'Googlebot-News': delay 2, rate RequestRate(requests=3, seconds=10)
+  'googlebot-news/1.0': delay 2, rate RequestRate(requests=3, seconds=10)
+  'Bingbot': delay 2, rate RequestRate(requests=3, seconds=10)
+  '': delay 2, rate RequestRate(requests=3, seconds=10)
+  '*': delay 2, rate RequestRate(requests=3, seconds=10)
+  'Bad Bot/1': delay 2, rate RequestRate(requests=3, seconds=10)
+  'a': delay 2, rate RequestRate(requests=3, seconds=10)
+  'B': delay 2, rate RequestRate(requests=3, seconds=10)
+  'c/2': delay 2, rate RequestRate(requests=3, seconds=10)
+  'dbot': delay 2, rate RequestRate(requests=3, seconds=10)
+  'E': delay 2, rate RequestRate(requests=3, seconds=10)
+  'lonely': delay 2, rate RequestRate(requests=3, seconds=10)
+== {"kind": "check", "name": "shop", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnYnYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYnYnYnYYnYYYYYYYY
+== {"kind": "show", "name": "blog", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+
+  site_maps: None
+  disallow_all=False allow_all=True read=False
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "blog", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "private", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+
+  site_maps: None
+  disallow_all=True allow_all=False read=False
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "private", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'karabot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'OtherBot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'BadBot/3': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Googlebot/2.1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Googlebot-News': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'googlebot-news/1.0': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Bingbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  '': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  '*': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Bad Bot/1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'a': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'B': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'c/2': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'dbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'E': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'lonely': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+== {"kind": "show", "name": "flaky", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+
+  site_maps: None
+  disallow_all=True allow_all=False read=False
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "flaky", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'karabot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'OtherBot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'BadBot/3': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Googlebot/2.1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Googlebot-News': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'googlebot-news/1.0': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Bingbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  '': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  '*': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Bad Bot/1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'a': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'B': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'c/2': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'dbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'E': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'lonely': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+== {"kind": "show", "name": "gone", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+
+  site_maps: None
+  disallow_all=False allow_all=True read=False
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "gone", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "empty", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+
+  site_maps: None
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "empty", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "intl", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: *
+    Crawl-delay: 3
+    Disallow: /caf%C3%A9
+    Disallow: /caf%C3%A9-menu
+    Disallow: /~user/
+    Allow: /~user/public
+    Disallow: /a/b
+    Disallow: /raw%FF%FE
+    Disallow: /percent%25zz
+    Disallow: /q?x=a%20b&y=%C3%BC
+    Disallow: /%E6%97%A5%E6%9C%AC/
+    Disallow: /path%3Bx
+    Disallow: /*%2A
+  site_maps: ['https://intl.test/sitemap-ü.xml']
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay 3, rate None
+  'karabot': delay 3, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay 3, rate None
+  'OtherBot': delay 3, rate None
+  'BadBot/3': delay 3, rate None
+  'Googlebot/2.1': delay 3, rate None
+  'Googlebot-News': delay 3, rate None
+  'googlebot-news/1.0': delay 3, rate None
+  'Bingbot': delay 3, rate None
+  '': delay 3, rate None
+  '*': delay 3, rate None
+  'Bad Bot/1': delay 3, rate None
+  'a': delay 3, rate None
+  'B': delay 3, rate None
+  'c/2': delay 3, rate None
+  'dbot': delay 3, rate None
+  'E': delay 3, rate None
+  'lonely': delay 3, rate None
+== {"kind": "check", "name": "intl", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYnYYYYYYYYYnnnnnYnnnnnnnnnYYYYYYYYYYYY!YYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYnnn
+== {"kind": "show", "name": "cr", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: KaraBot
+    Crawl-delay: 5
+    Request-rate: 1/5
+    Disallow: /secret
+
+    User-agent: *
+    Disallow: /
+    Allow: /pub
+    Disallow: /pub/x
+  site_maps: ['https://cr.test/map.xml']
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay 5, rate RequestRate(requests=1, seconds=5)
+  'karabot': delay 5, rate RequestRate(requests=1, seconds=5)
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "cr", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnYnnnnnYYnnnY!nnnnnnnnnnnnnnnYnYnnnnnnnnnnnnnnnnnn
+== {"kind": "show", "name": "nohost", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+
+  site_maps: None
+  disallow_all=False allow_all=False read=False
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "nohost", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'karabot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'OtherBot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'BadBot/3': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Googlebot/2.1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Googlebot-News': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'googlebot-news/1.0': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Bingbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  '': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  '*': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'Bad Bot/1': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'a': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'B': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'c/2': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'dbot': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'E': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+  'lonely': nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn
+== {"kind": "show", "name": "bom", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+
+  site_maps: None
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "bom", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "agents", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: Googlebot-News
+    Disallow: /news-only
+
+    User-agent: googlebot
+    Disallow: /g
+
+    User-agent: 
+    Disallow: /blank
+
+    User-agent: *
+    Disallow: /star
+
+    User-agent: Bad Bot
+    Disallow: /space
+  site_maps: None
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "agents", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "agents_star", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: Googlebot-News
+    Disallow: /news-only
+
+    User-agent: *
+    Disallow: /star
+
+    User-agent: googlebot
+    Disallow: /g
+  site_maps: None
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "agents_star", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "rules", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: *
+    Disallow: /fish*
+    Allow: /fish*.html$
+    Disallow: /*.php$
+    Allow: /*.php?
+    Disallow: /a*b
+    Disallow: /end$
+    Disallow: /x$
+    Allow: /
+    Disallow: /long/path
+    Allow: /long/
+    Allow: 
+    Disallow: /same
+    Allow: /same
+    Disallow: /*/*/deep
+    Disallow: *nolead
+    Allow: /p*q*r
+    Disallow: /p*q*r*$
+    Disallow: /search?q=*&page=
+    Disallow: /*?
+    Allow: /*?ok
+  site_maps: None
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "rules", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYnYYYnYnYnnnYnYnnYYnYnYnYnnYnYYYYYYnnYYYYnnYYnYYYYYYYYYY!nYYYYYYYYYYYYYYYYYYYYYYnYnYYYYYYYYnY
+== {"kind": "show", "name": "fields", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: a
+    User-agent: b
+    Disallow: /x
+
+    User-agent: c
+    Crawl-delay: 7
+    Request-rate: 1/0
+    Disallow: /c-only
+
+    User-agent: d
+    Crawl-delay: 123456789012345678901234567890
+    Request-rate: 0/7
+    Allow:
+
+    User-agent: e
+    User-agent: A
+    Crawl-delay: 3
+    Disallow: /e
+
+    User-agent: a
+    Crawl-delay: 5
+    Disallow: /a2
+
+    User-agent: B
+    Request-rate: 4/5
+    Disallow: /b2
+  site_maps: ['http://early.test/map.xml']
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay 3, rate None
+  'karabot': delay 3, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay 3, rate None
+  'OtherBot': delay 3, rate None
+  'BadBot/3': delay 123456789012345678901234567890, rate RequestRate(requests=0, seconds=7)
+  'Googlebot/2.1': delay 3, rate None
+  'Googlebot-News': delay 3, rate None
+  'googlebot-news/1.0': delay 3, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay 123456789012345678901234567890, rate RequestRate(requests=0, seconds=7)
+  'a': delay 5, rate None
+  'B': delay None, rate RequestRate(requests=4, seconds=5)
+  'c/2': delay 7, rate RequestRate(requests=1, seconds=0)
+  'dbot': delay 123456789012345678901234567890, rate RequestRate(requests=0, seconds=7)
+  'E': delay 3, rate None
+  'lonely': delay 3, rate None
+== {"kind": "check", "name": "fields", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYnYYYYnnnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!nYYYYYYYYYnnYnYYYYYYYYYYYYYYYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYnYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!nYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYnnYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYnYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "empty_rules", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: *
+    User-agent: lonely
+    Allow:
+  site_maps: None
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "empty_rules", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
+== {"kind": "show", "name": "crlf", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"]}
+  str:
+    User-agent: *
+    Disallow: /dir/
+    Allow: /dir/ok
+  site_maps: None
+  disallow_all=False allow_all=False read=True
+  'KaraBot/1.0': delay None, rate None
+  'karabot': delay None, rate None
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': delay None, rate None
+  'OtherBot': delay None, rate None
+  'BadBot/3': delay None, rate None
+  'Googlebot/2.1': delay None, rate None
+  'Googlebot-News': delay None, rate None
+  'googlebot-news/1.0': delay None, rate None
+  'Bingbot': delay None, rate None
+  '': delay None, rate None
+  '*': delay None, rate None
+  'Bad Bot/1': delay None, rate None
+  'a': delay None, rate None
+  'B': delay None, rate None
+  'c/2': delay None, rate None
+  'dbot': delay None, rate None
+  'E': delay None, rate None
+  'lonely': delay None, rate None
+== {"kind": "check", "name": "crlf", "agents": ["KaraBot/1.0", "karabot", "Mozilla/5.0 (compatible; KaraBot/1.0)", "OtherBot", "BadBot/3", "Googlebot/2.1", "Googlebot-News", "googlebot-news/1.0", "Bingbot", "", "*", "Bad Bot/1", "a", "B", "c/2", "dbot", "E", "lonely"], "urls": ["/", "", "http://h/fish", "/fish.html", "/fish/salmon.html", "/fishheads/yummy.html", "/fish.php", "/x.php?y", "/index.php", "/index.php5", "/ab", "/a123b", "/end", "/end$", "/x", "/x$", "/long/path", "/long/pathx", "/long/", "/same", "/a/b/deep", "/a/deep", "/some/nolead", "/pXqYr", "/pXqYrZ", "/p/q", "/search?q=x&page=2", "/search?q=x", "/y?ok", "/y?no", "http://h/café", "/caf%c3%a9", "/caf%C3%A9-menu", "/%7Euser/x", "/~user/x", "/~user/public/x", "/a/b", "/a%2Fb", "/raw%FF%FE", "/raw%ff%fe", "/percent%zz", "/percent%25zz", "/q?x=a%20b&y=%C3%BC", "/q?x=a b&y=ü", "/日本/x", "/robots.txt", "/robots.txt?x", "//double", "http://h", "/path#frag", "/path?#", "?only", "#only", " /lead", "/tab\there", "HTTP://H/UPPER", "mailto:x", "http://[::1/x", "/x?a=1&a=2&b", "/%", "/%2", "/path;x", "/news-only", "/g", "/blank", "/star", "/space", "/c-only", "/e", "/a2", "/b2", "/x#frag", "/secret", "/pub", "/pub/x", "/pub/y", "/dir/ok", "/dir/no", "/cart", "/checkout/help", "/checkout/pay", "/item?id=3&sessionid=9", "/docs/a.pdf", "/docs/a.pdf?v", "/search/about", "/search/about/x", "/private/press", "/private/x", "/tmp/q/cache", "/tmp/cache", "/drafts", "/*", "/a*b", "/A%2a"]}
+  'KaraBot/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'KaraBot/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'karabot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'karabot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'Mozilla/5.0 (compatible; KaraBot/1.0)' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Mozilla/5.0 (compatible; KaraBot/1.0)': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'OtherBot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'OtherBot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'BadBot/3' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'BadBot/3': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'Googlebot/2.1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot/2.1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'Googlebot-News' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Googlebot-News': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'googlebot-news/1.0' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'googlebot-news/1.0': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'Bingbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bingbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  '' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  '*' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  '*': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'Bad Bot/1' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'Bad Bot/1': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'a' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'a': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'B' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'B': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'c/2' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'c/2': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'dbot' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'dbot': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'E' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'E': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+  'lonely' 'http://[::1/x': ValueError: Invalid IPv6 URL
+  'lonely': YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY!YYYYYYYYYYYYYYYYYYYnYYYYYYYYYYYYYYYY
+== {"kind": "load", "name": "relative", "url": "/robots.txt"}
+  ValueError: unknown url type: '/robots.txt'
+== {"kind": "load", "name": "shop2", "url": "HTTP://shop.test/robots.txt?x#y"}
+  ok
+== {"kind": "check", "name": "shop2", "agents": ["KaraBot/1.0"], "urls": ["/cart", "/private/x"]}
+  'KaraBot/1.0': Yn
+== {"kind": "crawl", "agent": "KaraBot/1.0 (+https://kara.test/bot)", "start": ["http://shop.test/"], "max": 60}
+  crawl as 'KaraBot/1.0 (+https://kara.test/bot)'
+  robots http://shop.test: 4 groups, delay 1, rate None, sitemaps ['https://shop.test/sitemap.xml', 'https://shop.test/sitemap-products.xml']
+  get http://shop.test/: 200, 22 new links
+  wait 1s
+  get http://shop.test/products: 200, 3 new links
+  wait 1s
+  get http://shop.test/cart: 404
+  wait 1s
+  get http://shop.test/checkout/help: 200, 1 new links
+  wait 1s
+  get http://shop.test/checkout/pay: 404
+  wait 1s
+  get http://shop.test/search?q=lamp: 404
+  wait 1s
+  get http://shop.test/search/about: 200, 1 new links
+  wait 1s
+  get http://shop.test/private/press: 200, 1 new links
+  blocked http://shop.test/private/stock
+  wait 1s
+  get http://shop.test/docs/manual.pdf: 404
+  wait 1s
+  get http://shop.test/docs/manual.pdf?v=2: 200, 0 new links
+  wait 1s
+  get http://shop.test/item?id=3&sessionid=9: 404
+  wait 1s
+  get http://shop.test/item?id=3: 200, 0 new links
+  blocked http://shop.test/tmp/a/cache/x
+  wait 1s
+  get http://shop.test/drafts/summer: 200, 0 new links
+  robots http://blog.test: allow all, delay None, rate None, sitemaps None
+  get http://blog.test/: 200, 5 new links
+  robots http://private.test: disallow all, delay None, rate None, sitemaps None
+  blocked http://private.test/
+  robots http://nohost.test: URLError: <urlopen error [Errno -2] Name or service not known>
+  skip http://nohost.test/
+  robots http://flaky.test: disallow all, delay None, rate None, sitemaps None
+  blocked http://flaky.test/
+  robots http://gone.test: allow all, delay None, rate None, sitemaps None
+  get http://gone.test/: 200, 1 new links
+  robots http://empty.test: 0 groups, delay None, rate None, sitemaps None
+  get http://empty.test/: 200, 1 new links
+  wait 1s
+  get http://shop.test/robots.txt: 200, 0 new links
+  wait 1s
+  get http://shop.test/missing: 404
+  wait 1s
+  get http://shop.test/item?id=1: 200, 0 new links
+  wait 1s
+  get http://shop.test/item?id=2: 200, 1 new links
+  wait 1s
+  get http://shop.test/products?page=2: 200, 1 new links
+  wait 1s
+  get http://shop.test/checkout/help/returns: 200, 0 new links
+  wait 1s
+  get http://shop.test/search/about/more: 404
+  wait 1s
+  get http://shop.test/private/press/2026: 200, 0 new links
+  get http://blog.test/2026/10/hello: 200, 0 new links
+  get http://blog.test/2026/10/robots: 200, 0 new links
+  get http://blog.test/tag/kara: 200, 0 new links
+  robots https://blog.test: allow all, delay None, rate None, sitemaps None
+  get https://blog.test/secure: 404
+  get http://blog.test/feed.xml: 200, 0 new links
+  get http://gone.test/old: 200, 0 new links
+  get http://empty.test/a: 200, 0 new links
+  wait 1s
+  get http://shop.test/item?id=2&sessionid=abc: 404
+  wait 1s
+  get http://shop.test/item?id=4: 500
+  33 fetched, 4 blocked, 1 skipped, 0 left, 22s waited
+== {"kind": "crawl", "agent": "Mozilla/5.0 (compatible; KaraBot/1.0)", "start": ["http://shop.test/"], "max": 12}
+  crawl as 'Mozilla/5.0 (compatible; KaraBot/1.0)'
+  robots http://shop.test: 4 groups, delay 2, rate RequestRate(requests=3, seconds=10), sitemaps ['https://shop.test/sitemap.xml', 'https://shop.test/sitemap-products.xml']
+  get http://shop.test/: 200, 22 new links
+  wait 2s
+  get http://shop.test/products: 200, 3 new links
+  blocked http://shop.test/cart
+  wait 2s
+  get http://shop.test/checkout/help: 200, 1 new links
+  blocked http://shop.test/checkout/pay
+  blocked http://shop.test/search?q=lamp
+  wait 2s
+  get http://shop.test/search/about: 200, 1 new links
+  wait 2s
+  get http://shop.test/private/press: 200, 1 new links
+  wait 2s
+  get http://shop.test/private/stock: 404
+  blocked http://shop.test/docs/manual.pdf
+  wait 2s
+  get http://shop.test/docs/manual.pdf?v=2: 200, 0 new links
+  wait 2s
+  get http://shop.test/item?id=3&sessionid=9: 404
+  wait 2s
+  get http://shop.test/item?id=3: 200, 0 new links
+  wait 2s
+  get http://shop.test/tmp/a/cache/x: 200, 0 new links
+  wait 2s
+  get http://shop.test/drafts/summer: 200, 0 new links
+  robots http://blog.test: allow all, delay None, rate None, sitemaps None
+  get http://blog.test/: 200, 5 new links
+  12 fetched, 4 blocked, 0 skipped, 18 left, 20s waited
+== {"kind": "crawl", "agent": "BadBot/3", "start": ["http://shop.test/", "http://blog.test/"], "max": 20}
+  crawl as 'BadBot/3'
+  robots http://shop.test: 4 groups, delay None, rate None, sitemaps ['https://shop.test/sitemap.xml', 'https://shop.test/sitemap-products.xml']
+  blocked http://shop.test/
+  robots http://blog.test: allow all, delay None, rate None, sitemaps None
+  get http://blog.test/: 200, 6 new links
+  get http://blog.test/2026/10/hello: 200, 0 new links
+  get http://blog.test/2026/10/robots: 200, 0 new links
+  get http://blog.test/tag/kara: 200, 0 new links
+  blocked http://shop.test/products
+  robots https://blog.test: allow all, delay None, rate None, sitemaps None
+  get https://blog.test/secure: 404
+  get http://blog.test/feed.xml: 200, 0 new links
+  6 fetched, 2 blocked, 0 skipped, 0 left, 0s waited
+== {"kind": "crawl", "agent": "KaraBot", "start": ["http://intl.test/", "http://cr.test/", "http://gone.test/"], "max": 40}
+  crawl as 'KaraBot'
+  robots http://intl.test: 1 groups, delay 3, rate None, sitemaps ['https://intl.test/sitemap-ü.xml']
+  get http://intl.test/: 200, 10 new links
+  robots http://cr.test: 2 groups, delay 5, rate RequestRate(requests=1, seconds=5), sitemaps ['https://cr.test/map.xml']
+  get http://cr.test/: 200, 3 new links
+  robots http://gone.test: allow all, delay None, rate None, sitemaps None
+  get http://gone.test/: 200, 1 new links
+  blocked http://intl.test/café
+  blocked http://intl.test/caf%c3%a9
+  blocked http://intl.test/caf%C3%A9-menu
+  blocked http://intl.test/%7Euser/x
+  wait 3s
+  get http://intl.test/~user/public/x: 404
+  blocked http://intl.test/a/b
+  blocked http://intl.test/raw%FF%FE
+  blocked http://intl.test/percent%zz
+  blocked http://intl.test/日本/x
+  wait 3s
+  get http://intl.test/ok: 200, 0 new links
+  blocked http://cr.test/secret
+  get http://cr.test/nocolon: 200, 0 new links
+  wait 5s
+  get http://cr.test/pub/a: 200, 0 new links
+  get http://gone.test/old: 200, 0 new links
+  8 fetched, 9 blocked, 0 skipped, 0 left, 11s waited
