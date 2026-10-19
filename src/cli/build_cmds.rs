@@ -4230,6 +4230,29 @@ pub(super) fn cmd_build_mir(
             emit_build_error(&msg, output);
             process::exit(1);
         };
+        // The same CPU baseline as `karac build` (`KARAC_TARGET_CPU` >
+        // the manifest's `[release] target-cpu` > its `cpu-baseline`,
+        // `v3` when absent), so the two backends compile for one machine.
+        let (baseline_cpu, baseline_features) = resolve_native_cpu_baseline(
+            manifest_release_field_for(filename, output, |m| m.release_cpu_baseline.clone())
+                .as_deref(),
+        );
+        apply_target_cpu_override(
+            read_target_cpu_env()
+                .or_else(|| {
+                    manifest_release_field_for(filename, output, |m| m.release_target_cpu.clone())
+                })
+                .or(baseline_cpu),
+        );
+        apply_target_features_override(
+            read_target_features_env()
+                .or_else(|| {
+                    manifest_release_field_for(filename, output, |m| {
+                        m.release_target_features.clone()
+                    })
+                })
+                .or(baseline_features),
+        );
         let src = std::fs::read_to_string(filename)
             .unwrap_or_else(|e| fail(format!("error: {filename}: {e}")));
         crate::mir::interp::set_source_name(filename);

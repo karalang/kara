@@ -5178,3 +5178,50 @@ fn main() {
         }
     }
 }
+
+/// `karac build --mir` compiles for the CPU baseline `karac build` does
+/// (`KARAC_TARGET_CPU`, then the manifest, then `v3`), not LLVM's bare
+/// `x86-64`: a bogus `KARAC_TARGET_CPU` is refused by name, and a valid
+/// one builds a binary that runs.
+#[test]
+fn mir_build_takes_the_cpu_baseline_of_karac_build() {
+    let dir = Scratch::new();
+    let src = dir.path().join("cpu.kara");
+    std::fs::write(&src, PROGRAM).unwrap();
+    let exe = dir.path().join("cpu");
+    let build = |cpu: &str| {
+        Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args([
+                "build",
+                "--mir",
+                src.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .env("KARAC_TARGET_CPU", cpu)
+            .output()
+            .unwrap()
+    };
+    let bad = build("mir-bogus-cpu");
+    assert!(!bad.status.success());
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(stderr.contains("unknown CPU 'mir-bogus-cpu'"), "{stderr}");
+    let cpu = if cfg!(target_arch = "x86_64") {
+        "x86-64"
+    } else {
+        "generic"
+    };
+    let good = build(cpu);
+    let stderr = String::from_utf8_lossy(&good.stderr);
+    if common::link_or_skip(if good.status.success() {
+        Ok(())
+    } else {
+        Err(stderr.to_string())
+    })
+    .is_none()
+    {
+        return;
+    }
+    let run = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "hello 30 5 p3\n");
+}
