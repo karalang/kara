@@ -1,0 +1,1081 @@
+# parse
+-- parse | div
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='div', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | DIV.Product#Main
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='DIV', prefix=None), ids=('Main',), classes=('Product',), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | *
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | *|*
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='*'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | |p
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=''), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | ns|p
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix='ns'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | a[href]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='href', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | a[href='/x']
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='href', prefix='', pattern=re.compile('^/x$', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | a[ href = "/x" i ]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='href', prefix='', pattern=re.compile('^/x$', re.IGNORECASE|re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | a[href^=https]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='href', prefix='', pattern=re.compile('^https.*', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | a[href$='.pdf' s]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='href', prefix='', pattern=re.compile('.*?\\.pdf$', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | a[href*=example]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='href', prefix='', pattern=re.compile('.*?example.*', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | a[rel~=next]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='rel', prefix='', pattern=re.compile('.*?(?:(?<=^)|(?<=[ \\t\\r\\n\\f]))next(?=(?:[ \\t\\r\\n\\f]|$)).*', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | a[rel~='a b']
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='rel', prefix='', pattern=re.compile('.*?(?:(?<=^)|(?<=[ \\t\\r\\n\\f]))(?!)(?=(?:[ \\t\\r\\n\\f]|$)).*', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | [lang|=en]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='lang', prefix='', pattern=re.compile('^en(?:-.*)?$', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | [data-x!=y]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(SelectorAttribute(attribute='data-x', prefix='', pattern=re.compile('^y$', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=True, is_html=False, count=0),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | [title^='']
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='title', prefix='', pattern=re.compile('^(?!).*', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | [type=TEXT]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='type', prefix='', pattern=re.compile('^TEXT$', re.IGNORECASE|re.DOTALL), xml_type_pattern=re.compile('^TEXT$')),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | [TYPE=text i]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='TYPE', prefix='', pattern=re.compile('^text$', re.IGNORECASE|re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | p:first-child:last-of-type
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=1, n=False, b=0, of_type=False, last=False, selectors=SelectorList(selectors=(), is_not=False, is_html=False, count=0)), SelectorNth(a=1, n=False, b=0, of_type=True, last=True, selectors=SelectorList(selectors=(), is_not=False, is_html=False, count=0))), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | li:nth-child(2n+1)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=2, n=True, b=1, of_type=False, last=False, selectors=SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='*'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | li:nth-child(-n+3)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=-1, n=True, b=3, of_type=False, last=False, selectors=SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='*'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | li:nth-last-child(odd)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=2, n=True, b=1, of_type=False, last=True, selectors=SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='*'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | li:NTH-OF-TYPE(  3  )
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=3, n=False, b=0, of_type=True, last=False, selectors=SelectorList(selectors=(), is_not=False, is_html=False, count=0)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | li:nth-child(-2n - 4)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=-2, n=True, b=-4, of_type=False, last=False, selectors=SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='*'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | li:nth-child(n)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=1, n=True, b=0, of_type=False, last=False, selectors=SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='*'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | li:nth-child(+5)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=5, n=False, b=0, of_type=False, last=False, selectors=SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='*'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | li:nth-child(2n+1 of .x, p)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=2, n=True, b=1, of_type=False, last=False, selectors=SelectorList(selectors=(Selector(tag=None, ids=(), classes=('x',), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=2)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=4)
+-- parse | li:nth-last-of-type(even)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='li', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=2, n=True, b=0, of_type=True, last=True, selectors=SelectorList(selectors=(), is_not=False, is_html=False, count=0)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | div > p + ul ~ span
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='span', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='ul', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='div', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type='>', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type='+', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type='~', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=4)
+-- parse | div    p
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='div', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=' ', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | div /* c */ > /* d */ p
+   raised SelectorSyntaxError: The combinator '>' at position 12, must have a selector before it
+  line 1:
+div /* c */ > /* d */ p
+            ^
+-- parse | a, b ,c
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='b', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='c', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=3)
+-- parse | :is(h1, h2) > a
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='h1', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='h2', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=2),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type='>', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=4)
+-- parse | :is()
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(SelectorNull(),), is_not=False, is_html=False, count=1),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | :where(, .x)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=('x',), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | :not(.a, .b)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=('a',), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=None, ids=(), classes=('b',), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=True, is_html=False, count=2),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | :has(> img)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='img', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=':>', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | :has(+ p, ~ ul)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=':+', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='ul', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=':~', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=2),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=3)
+-- parse | div:has(p span)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='div', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='span', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=': ', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=': ', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=4)
+-- parse | :root
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=2),), is_not=False, is_html=False, count=1)
+-- parse | :scope > p
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type='>', contains=(), lang=(), flags=16),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | & > p
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type='>', contains=(), lang=(), flags=16),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | :empty
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=1),), is_not=False, is_html=False, count=1)
+-- parse | :defined
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=512),), is_not=False, is_html=True, count=1)
+-- parse | :-soup-contains('a b', "c")
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(SelectorContains(text=('a b', 'c'), own=False),), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | :-soup-contains-own(x)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(SelectorContains(text=('x',), own=True),), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | :lang(de, '*-CH')
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(SelectorLang(languages=('de', '*-CH')),), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | :dir(rtl)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=64),), is_not=False, is_html=True, count=1)
+-- parse | :dir(LTR)
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=32),), is_not=False, is_html=True, count=1)
+-- parse | :hover
+   SelectorList(selectors=(SelectorNull(),), is_not=False, is_html=False, count=1)
+-- parse | :host(div)
+   SelectorList(selectors=(SelectorNull(),), is_not=False, is_html=False, count=2)
+-- parse | :link
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='html'), ids=(), classes=(), attributes=(SelectorAttribute(attribute='href', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='a', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='area', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=2),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=True, count=5),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=6)
+-- parse | :checked
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='html'), ids=(), classes=(), attributes=(SelectorAttribute(attribute='checked', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='input', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='type', prefix='', pattern=re.compile('^checkbox$', re.IGNORECASE|re.DOTALL), xml_type_pattern=re.compile('^checkbox$')),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='input', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='type', prefix='', pattern=re.compile('^radio$', re.IGNORECASE|re.DOTALL), xml_type_pattern=re.compile('^radio$')),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=4),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='option', prefix='html'), ids=(), classes=(), attributes=(SelectorAttribute(attribute='selected', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=True, count=9),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=10)
+-- parse | :disabled
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='html'), ids=(), classes=(), attributes=(SelectorAttribute(attribute='disabled', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='input', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(SelectorAttribute(attribute='type', prefix='', pattern=re.compile('^hidden$', re.IGNORECASE|re.DOTALL), xml_type_pattern=re.compile('^hidden$')),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=True, is_html=False, count=1),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='button', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='select', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='textarea', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='fieldset', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='optgroup', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='option', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='fieldset', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=10),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='option', prefix='html'), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='optgroup', prefix='html'), ids=(), classes=(), attributes=(SelectorAttribute(attribute='disabled', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type='>', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='*', prefix='html'), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='input', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(SelectorAttribute(attribute='type', prefix='', pattern=re.compile('^hidden$', re.IGNORECASE|re.DOTALL), xml_type_pattern=re.compile('^hidden$')),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=True, is_html=False, count=1),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='button', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='select', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='textarea', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='fieldset', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=7),), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='fieldset', prefix='html'), ids=(), classes=(), attributes=(SelectorAttribute(attribute='disabled', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type='>', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='*', prefix='html'), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='input', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(SelectorAttribute(attribute='type', prefix='', pattern=re.compile('^hidden$', re.IGNORECASE|re.DOTALL), xml_type_pattern=re.compile('^hidden$')),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=True, is_html=False, count=1),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='button', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='select', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='textarea', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0), Selector(tag=SelectorTag(name='fieldset', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=False, count=7),), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix='html'), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='legend', prefix=None), ids=(), classes=(), attributes=(), nth=(SelectorNth(a=1, n=False, b=0, of_type=True, last=False, selectors=SelectorList(selectors=(), is_not=False, is_html=False, count=0)),), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=True, is_html=False, count=2),), relation=SelectorList(selectors=(Selector(tag=SelectorTag(name='fieldset', prefix='html'), ids=(), classes=(), attributes=(SelectorAttribute(attribute='disabled', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type='>', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=' ', contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0)), is_not=False, is_html=True, count=42),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=43)
+-- parse | #\31 23
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=('123',), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | .a\.b
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=('a.b',), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | \@foo
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='@foo', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | #\0 x
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=('�x',), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | [x='a\⏎b']
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='x', prefix='', pattern=re.compile('^ab$', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | [x='\41 BC']
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='*', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='x', prefix='', pattern=re.compile('^ABC$', re.DOTALL), xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | d\69 v
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='div', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | --custom-el
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='--custom-el', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | my-widget[data-state]
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='my-widget', prefix=None), ids=(), classes=(), attributes=(SelectorAttribute(attribute='data-state', prefix='', pattern=None, xml_type_pattern=None),), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=2)
+-- parse | p⏎ ⇥> span
+   raised SelectorSyntaxError: The combinator '>' at position 4, must have a selector before it
+  line 2:
+    p
+-->  	> span
+      ^
+-- parse |   p  
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | /* only */ p /* tail */
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | div:not(:not(p))
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='div', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=None, ids=(), classes=(), attributes=(), nth=(), selectors=(SelectorList(selectors=(Selector(tag=SelectorTag(name='p', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=True, is_html=False, count=1),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=True, is_html=False, count=2),), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=4)
+# errors
+-- parse | ∅
+   raised SelectorSyntaxError: Expected a selector at position 0
+  line 1:
+
+^
+-- parse | div,
+   raised SelectorSyntaxError: Expected a selector at position 4
+  line 1:
+div,
+    ^
+-- parse | ,div
+   raised SelectorSyntaxError: The combinator ',' at position 0, must have a selector before it
+  line 1:
+,div
+^
+-- parse | div >
+   raised SelectorSyntaxError: Expected a selector at position 5
+  line 1:
+div >
+     ^
+-- parse | > div
+   raised SelectorSyntaxError: The combinator '>' at position 0, must have a selector before it
+  line 1:
+> div
+^
+-- parse | div > > p
+   raised SelectorSyntaxError: The combinator '>' at position 6, must have a selector before it
+  line 1:
+div > > p
+      ^
+-- parse | div[
+   raised SelectorSyntaxError: Malformed attribute selector at position 3
+  line 1:
+div[
+   ^
+-- parse | div[x=]
+   raised SelectorSyntaxError: Malformed attribute selector at position 3
+  line 1:
+div[x=]
+   ^
+-- parse | div[x='a]
+   raised SelectorSyntaxError: Malformed attribute selector at position 3
+  line 1:
+div[x='a]
+   ^
+-- parse | div.
+   raised SelectorSyntaxError: Malformed class selector at position 3
+  line 1:
+div.
+   ^
+-- parse | #
+   raised SelectorSyntaxError: Malformed id selector at position 0
+  line 1:
+#
+^
+-- parse | div#
+   raised SelectorSyntaxError: Malformed id selector at position 3
+  line 1:
+div#
+   ^
+-- parse | ::before
+   raised NotImplementedError: Pseudo-element found at position 0
+-- parse | p::first-line
+   raised NotImplementedError: Pseudo-element found at position 1
+-- parse | @page
+   raised NotImplementedError: At-rules found at position 0
+-- parse | :unknown
+   raised SelectorSyntaxError: ':unknown' was detected as a pseudo-class and is either unsupported or invalid. If the syntax was not intended to be recognized as a pseudo-class, please escape the colon.
+  line 1:
+:unknown
+^
+-- parse | :nth-child(x)
+   raised SelectorSyntaxError: Invalid syntax for pseudo class ':nth-child'
+  line 1:
+:nth-child(x)
+^
+-- parse | :nth-child
+   raised SelectorSyntaxError: Invalid syntax for pseudo class ':nth-child'
+  line 1:
+:nth-child
+^
+-- parse | :first-child(2)
+   raised SelectorSyntaxError: Invalid syntax for pseudo class ':first-child'
+  line 1:
+:first-child(2)
+^
+-- parse | :not()
+   raised SelectorSyntaxError: Expected a selector at position 5
+  line 1:
+:not()
+     ^
+-- parse | :not(div
+   raised SelectorSyntaxError: Unclosed pseudo-class at position 8
+  line 1:
+:not(div
+        ^
+-- parse | :is(div))
+   raised SelectorSyntaxError: Unmatched pseudo-class close at position 8
+  line 1:
+:is(div))
+        ^
+-- parse | )
+   raised SelectorSyntaxError: Expected a selector at position 0
+  line 1:
+)
+^
+-- parse | div p)
+   raised SelectorSyntaxError: Unmatched pseudo-class close at position 5
+  line 1:
+div p)
+     ^
+-- parse | :has()
+   raised SelectorSyntaxError: Expected a selector at position 5
+  line 1:
+:has()
+     ^
+-- parse | :has(> )
+   raised SelectorSyntaxError: Expected a selector at position 7
+  line 1:
+:has(> )
+       ^
+-- parse | div span:has(
+   raised SelectorSyntaxError: Unclosed pseudo-class at position 13
+  line 1:
+div span:has(
+             ^
+-- parse | :lang()
+   raised SelectorSyntaxError: Invalid syntax for pseudo class ':lang'
+  line 1:
+:lang()
+^
+-- parse | :dir(up)
+   raised SelectorSyntaxError: Invalid syntax for pseudo class ':dir'
+  line 1:
+:dir(up)
+^
+-- parse | div$
+   raised SelectorSyntaxError: Invalid character '$' position 3
+  line 1:
+div$
+   ^
+-- parse | a ! b
+   raised SelectorSyntaxError: Invalid character '!' position 2
+  line 1:
+a ! b
+  ^
+-- parse | p⏎> ⏎
+   raised SelectorSyntaxError: Expected a selector at position 5
+  line 1:
+    p
+    > 
+    
+-- parse | div⏎  p >⏎⏎  > span
+   raised SelectorSyntaxError: The combinator '>' at position 13, must have a selector before it
+  line 4:
+    div
+      p >
+    
+-->   > span
+      ^
+-- parse | div\
+   SelectorList(selectors=(Selector(tag=SelectorTag(name='div�', prefix=None), ids=(), classes=(), attributes=(), nth=(), selectors=(), relation=SelectorList(selectors=(), is_not=False, is_html=False, count=0), rel_type=None, contains=(), lang=(), flags=0),), is_not=False, is_html=False, count=1)
+-- parse | p[a=b c]
+   raised SelectorSyntaxError: Malformed attribute selector at position 1
+  line 1:
+p[a=b c]
+ ^
+-- parse | div span|
+   raised SelectorSyntaxError: Invalid character '|' position 8
+  line 1:
+div span|
+        ^
+-- parse | :-soup-contains()
+   raised SelectorSyntaxError: Expected a selector at position 16
+  line 1:
+:-soup-contains()
+                ^
+-- parse | :contains(x
+   raised SelectorSyntaxError: Unclosed pseudo-class at position 11
+  line 1:
+:contains(x
+           ^
+-- parse | #\110000
+   raised ValueError: chr() arg not in range(0x110000)
+-- parse | :read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only:read-only
+   raised ValueError: Selector exceeds pseudo-class nesting limit of 8192
+# escape
+-- escape | abc
+   'abc'
+-- escape | -
+   '\\-'
+-- escape | -1x
+   '-\\31 x'
+-- escape | 1x
+   '\\31 x'
+-- escape | a b
+   'a\\ b'
+-- escape | a.b#c
+   'a\\.b\\#c'
+-- escape | ∅
+   ''
+-- escape | ␁z
+   '\\1 z'
+-- escape | ␡
+   '\\7f '
+-- escape | é
+   'é'
+-- escape | --x
+   '--x'
+-- escape | _y
+   '_y'
+-- escape | a␀b
+   'a�b'
+-- escape | 1
+   '\\31 '
+-- escape | -a
+   '-a'
+-- escape | a1-_
+   'a1-_'
+-- escape | a␉b
+   'a\\9 b'
+# shop.html
+-- select | shop.html | - | 0 | .product | - | -
+   6: 34:article.product.card 43:article.product.card.featured 52:article.product.card.sold-out 59:article.product.card 66:article.product.card.featured 76:article.product.card
+-- select | shop.html | - | 0 | article.product.featured | - | -
+   2: 43:article.product.card.featured 66:article.product.card.featured
+-- select | shop.html | - | 0 | .card:not(.sold-out) | - | -
+   5: 34:article.product.card 43:article.product.card.featured 59:article.product.card 66:article.product.card.featured 76:article.product.card
+-- select | shop.html | - | 0 | [data-sku^=NP] | - | -
+   5: 34:article.product.card 43:article.product.card.featured 52:article.product.card.sold-out 59:article.product.card 66:article.product.card.featured
+-- select | shop.html | - | 0 | [data-sku^=np i] | - | -
+   6: 34:article.product.card 43:article.product.card.featured 52:article.product.card.sold-out 59:article.product.card 66:article.product.card.featured 76:article.product.card
+-- select | shop.html | - | 0 | [data-sku$=6] | - | -
+   raised SelectorSyntaxError: Malformed attribute selector at position 0
+  line 1:
+[data-sku$=6]
+^
+-- select | shop.html | - | 0 | [data-rating] | - | -
+   5: 34:article.product.card 43:article.product.card.featured 59:article.product.card 66:article.product.card.featured 76:article.product.card
+-- select | shop.html | - | 0 | [data-rating=''] | - | -
+   1: 76:article.product.card
+-- select | shop.html | - | 0 | [data-rating^=''] | - | -
+   0: 
+-- select | shop.html | - | 0 | [data-price*='.9'] | - | -
+   2: 34:article.product.card 59:article.product.card
+-- select | shop.html | - | 0 | .product:has(ins) | - | -
+   1: 43:article.product.card.featured
+-- select | shop.html | - | 0 | .product:has(> ul.tags > li) | - | -
+   3: 34:article.product.card 43:article.product.card.featured 66:article.product.card.featured
+-- select | shop.html | - | 0 | .product:not(:has(.tags li)) | - | -
+   3: 52:article.product.card.sold-out 59:article.product.card 76:article.product.card
+-- select | shop.html | - | 0 | .tags:empty | - | -
+   1: 64:ul.tags
+-- select | shop.html | - | 0 | .tags > li:only-child | - | -
+   1: 50:li
+-- select | shop.html | - | 0 | .tags > li:first-child | - | -
+   3: 40:li 50:li 72:li
+-- select | shop.html | - | 0 | .tags > li:last-child:not(:first-child) | - | -
+   2: 41:li 74:li
+-- select | shop.html | - | 0 | article:nth-child(2n) | - | -
+   3: 43:article.product.card.featured 59:article.product.card 76:article.product.card
+-- select | shop.html | - | 0 | article:nth-of-type(3n+1) | - | -
+   2: 34:article.product.card 59:article.product.card
+-- select | shop.html | - | 0 | article:nth-last-child(-n+2) | - | -
+   2: 66:article.product.card.featured 76:article.product.card
+-- select | shop.html | - | 0 | .grid > :nth-child(2 of .featured) | - | -
+   1: 66:article.product.card.featured
+-- select | shop.html | - | 0 | .grid > :nth-child(1 of :not(.featured)) | - | -
+   1: 34:article.product.card
+-- select | shop.html | - | 0 | h2 > a[title] | - | -
+   1: 68:a
+-- select | shop.html | - | 0 | a[href^='/c/'] | - | -
+   4: 14:a 16:a 18:a.sale.hot 31:a
+-- select | shop.html | - | 0 | a:not([href]) | - | -
+   1: 20:a
+-- select | shop.html | - | 0 | a[rel~=next] | - | -
+   1: 87:a
+-- select | shop.html | - | 0 | a[rel~=nofollow] | - | -
+   1: 87:a
+-- select | shop.html | - | 0 | link[rel~=preload] | - | -
+   1: 4:link
+-- select | shop.html | - | 0 | link[rel='stylesheet preload'] | - | -
+   1: 4:link
+-- select | shop.html | - | 0 | [class='catalog theme-dark'] | - | -
+   1: 7:body.catalog.theme-dark
+-- select | shop.html | - | 0 | body.catalog | - | -
+   1: 7:body.catalog.theme-dark
+-- select | shop.html | - | 0 | a[aria-current=page], li[aria-current=page] | - | -
+   2: 32:li 85:a.current
+-- select | shop.html | - | 0 | .pagination a.current ~ a | - | -
+   2: 86:a 87:a
+-- select | shop.html | - | 0 | .pagination a.current + a | - | -
+   1: 86:a
+-- select | shop.html | - | 0 | .pagination a ~ a[rel] | - | -
+   1: 87:a
+-- select | shop.html | - | 0 | li.active + li | - | -
+   1: 15:li
+-- select | shop.html | - | 0 | header nav li a.sale.hot | - | -
+   1: 18:a.sale.hot
+-- select | shop.html | - | 0 | :is(.sale, .logo) | - | -
+   2: 12:a.logo 18:a.sale.hot
+-- select | shop.html | - | 0 | :where(header, footer) a | - | -
+   7: 12:a.logo 14:a 16:a 18:a.sale.hot 20:a 90:a 91:a
+-- select | shop.html | - | 0 | button:disabled | - | -
+   1: 58:button.add
+-- select | shop.html | - | 0 | button:enabled | - | -
+   6: 23:button 42:button.add 51:button.add 65:button.add 75:button.add 81:button.add
+-- select | shop.html | - | 0 | button[data-action=cart-add]:not(:disabled) | - | -
+   5: 42:button.add 51:button.add 65:button.add 75:button.add 81:button.add
+-- select | shop.html | - | 0 | input:placeholder-shown | - | -
+   1: 22:input
+-- select | shop.html | - | 0 | :link | - | -
+   19: 12:a.logo 14:a 16:a 18:a.sale.hot 29:a 31:a 36:a 45:a 54:a 61:a 68:a 78:a 83:a 84:a 85:a.current 86:a 87:a 90:a 91:a
+-- select | shop.html | - | 0 | :any-link:not(.logo) | - | -
+   18: 14:a 16:a 18:a.sale.hot 29:a 31:a 36:a 45:a 54:a 61:a 68:a 78:a 83:a 84:a 85:a.current 86:a 87:a 90:a 91:a
+-- select | shop.html | - | 0 | :root | - | -
+   1: 0:html
+-- select | shop.html | - | 0 | html | - | -
+   1: 0:html
+-- select | shop.html | - | 0 | :root > body | - | -
+   1: 7:body.catalog.theme-dark
+-- select | shop.html | - | 0 | main h1 small | - | -
+   1: 26:small
+-- select | shop.html | - | 0 | del + ins | - | -
+   1: 48:ins
+-- select | shop.html | - | 0 | .price:-soup-contains('149') | - | -
+   1: 55:p.price
+-- select | shop.html | - | 0 | .product:-soup-contains(waterproof) | - | -
+   2: 34:article.product.card 66:article.product.card.featured
+-- select | shop.html | - | 0 | li:-soup-contains-own(wide) | - | -
+   1: 41:li
+-- select | shop.html | - | 0 | li:-soup-contains(Sale) | - | -
+   1: 17:li
+-- select | shop.html | - | 0 | h1:-soup-contains-own('6 products') | - | -
+   0: 
+-- select | shop.html | - | 0 | h1:-soup-contains('6 products') | - | -
+   1: 25:h1
+-- select | shop.html | - | 0 | :lang(en) | - | -
+   92: 0:html 1:head 2:meta 3:title 4:link 5:link 6:link 7:body.catalog.theme-dark 8:header#top 9:nav 10:ul.menu 11:li 12:a.logo 13:li.active 14:a 15:li 16:a 17:li 18:a.sale.hot 19:li 20:a 21:form#search 22:input 23:button 24:main 25:h1 26:small 27:ul.breadcrumb 28:li 29:a 30:li 31:a 32:li 33:section.grid 34:article.product.card 35:h2.title 36:a 37:p.price 38:span.currency 39:ul.tags 40:li 41:li 42:button.add 43:article.product.card.featured 44:h2.title 45:a 46:p.price 47:del 48:ins 49:ul.tags 50:li 51:button.add 52:article.product.card.sold-out 53:h2.title 54:a 55:p.price 56:span.currency 57:p.stock 58:button.add 59:article.product.card 60:h2.title 61:a 62:p.price 63:span.currency 64:ul.tags 65:button.add 66:article.product.card.featured 67:h2.title 68:a 69:p.price 70:span.currency 71:ul.tags 72:li 73:li 74:li 75:button.add 76:article.product.card 77:h2.title 78:a 79:p.price 80:span.currency 81:button.add 82:nav.pagination 83:a 84:a 85:a.current 86:a 87:a 88:footer 89:p 90:a 91:a
+-- select | shop.html | - | 0 | :lang(en-GB) | - | -
+   1: 91:a
+-- select | shop.html | - | 0 | a:lang('*-GB') | - | -
+   1: 91:a
+-- select | shop.html | - | 0 | head > * | - | -
+   5: 2:meta 3:title 4:link 5:link 6:link
+-- select | shop.html | - | 0 | *:not(li) > a | - | -
+   13: 36:a 45:a 54:a 61:a 68:a 78:a 83:a 84:a 85:a.current 86:a 87:a 90:a 91:a
+-- select | shop.html | - | 0 | footer a:last-of-type | - | -
+   1: 91:a
+-- select | shop.html | - | 0 | p:has(+ ul.tags), p:has(~ p.stock) | - | -
+   5: 37:p.price 46:p.price 55:p.price 62:p.price 69:p.price
+-- select | shop.html | - | 0 | .grid > article:first-of-type .title | - | -
+   1: 35:h2.title
+-- select | shop.html | - | 0 | section[data-columns='3'] > * | - | -
+   6: 34:article.product.card 43:article.product.card.featured 52:article.product.card.sold-out 59:article.product.card 66:article.product.card.featured 76:article.product.card
+-- select | shop.html | - | 0 | :is(h1, h2):has(a) | - | -
+   6: 35:h2.title 44:h2.title 53:h2.title 60:h2.title 67:h2.title 77:h2.title
+-- select | shop.html | - | 0 | h2:not(:has(a[title])) | - | -
+   5: 35:h2.title 44:h2.title 53:h2.title 60:h2.title 77:h2.title
+-- select | shop.html | - | 0 | article > :is(p, ul):nth-child(3) | - | -
+   5: 39:ul.tags 49:ul.tags 57:p.stock 64:ul.tags 71:ul.tags
+-- select | shop.html | - | 0 | html|a | - | -
+   0: 
+-- select | shop.html | - | 0 | svg|a | - | -
+   0: 
+-- select | shop.html | - | 0 | ns|a | - | -
+   0: 
+-- select | shop.html | - | 0 | |a | - | -
+   0: 
+-- select | shop.html | - | 0 | * > html | - | -
+   1: 0:html
+-- select | shop.html | - | 0 | :not(body) > :root | - | -
+   1: 0:html
+-- select | shop.html | - | 0 | * > * > * > body | - | -
+   0: 
+-- select | shop.html | - | 3 | .product | - | -
+   3: 34:article.product.card 43:article.product.card.featured 52:article.product.card.sold-out
+-- select | shop.html | - | 1 | .featured .title a | - | -
+   1: 45:a
+-- select | shop.html | - | 0 | html|a.sale | html=http://www.w3.org/1999/xhtml | -
+   1: 18:a.sale.hot
+-- select | shop.html | - | 0 | a.logo | ∅=http://www.w3.org/1999/xhtml¦svg=http://www.w3.org/2000/svg | -
+   1: 12:a.logo
+-- select | shop.html | - | 0 | svg|* | ∅=http://www.w3.org/1999/xhtml¦svg=http://www.w3.org/2000/svg | -
+   0: 
+-- select | shop.html | - | 0 | a.logo | ∅=urn:other | -
+   0: 
+-- select | shop.html | - | 0 | *|a.logo | ∅=urn:other | -
+   1: 12:a.logo
+-- select | shop.html | - | 0 | :--heading | - | :--heading=h1, h2, h3, h4, h5, h6¦:--body-text=p:not(.lead)
+   7: 25:h1 35:h2.title 44:h2.title 53:h2.title 60:h2.title 67:h2.title 77:h2.title
+-- select | shop.html | - | 0 | article :--body-text | - | :--heading=h1, h2, h3, h4, h5, h6¦:--body-text=p:not(.lead)
+   7: 37:p.price 46:p.price 55:p.price 57:p.stock 62:p.price 69:p.price 79:p.price
+-- select | shop.html | - | 0 | :--b > li | - | :--a=:--b .x¦:--b=ul
+   14: 11:li 13:li.active 15:li 17:li 19:li 28:li 30:li 32:li 40:li 41:li 50:li 72:li 73:li 74:li
+-- helper | shop.html | - | :--heading | :--heading=h1, h2, h3, h4, h5, h6¦:--body-text=p:not(.lead)
+   raised SelectorSyntaxError: Undefined custom selector ':--heading' found at position 10
+  line 1:
+:--heading
+          ^
+-- one | shop.html | - | .product.featured
+   43:article.product.card.featured
+-- one | shop.html | - | .nothing-here
+   None
+-- one | shop.html | - | a[rel]
+   83:a
+-- attr | shop.html | .product:not(.sold-out) | data-sku
+   34:article.product.card='NP-1001' 43:article.product.card.featured='NP-1002' 59:article.product.card='NP-1004' 66:article.product.card.featured='NP-1005' 76:article.product.card='np-1006'
+-- attr | shop.html | .product[data-rating]:not([data-rating='']) | data-rating
+   34:article.product.card='4.6' 43:article.product.card.featured='4.1' 59:article.product.card='3.8' 66:article.product.card.featured='4.9'
+-- attr | shop.html | .title a | href
+   36:a='/p/np-1001' 45:a='/p/np-1002' 54:a='/p/np-1003' 61:a='/p/np-1004' 68:a='/p/np-1005' 78:a='/p/np-1006'
+-- attr | shop.html | link | rel
+   4:link='stylesheet preload' 5:link='canonical' 6:link='alternate'
+-- attr | shop.html | a[rel] | rel
+   83:a='prev' 87:a='next nofollow'
+# signup.html
+-- select | signup.html | - | 0 | :checked | - | -
+   3: 27:input 34:input 49:option
+-- select | signup.html | - | 0 | :default | - | -
+   4: 27:input 34:input 49:option 92:button
+-- select | signup.html | - | 0 | :indeterminate | - | -
+   7: 31:input 39:input 41:input 43:input 45:input 52:progress 95:input
+-- select | signup.html | - | 0 | :disabled | - | -
+   6: 50:optgroup 51:option 54:fieldset#billing 58:input 61:input 62:button
+-- select | signup.html | - | 0 | :enabled | - | -
+   47: 5:fieldset#who 8:input 10:input 12:input 14:input 16:input 18:textarea 20:textarea 22:textarea 24:fieldset#prefs 27:input 29:input 31:input 34:input 36:input 39:input 41:input 43:input 45:input 46:select 47:optgroup 48:option 49:option 56:input 63:fieldset#schedule 65:input 66:input 67:input 68:input 69:input 70:input 71:input 72:input 73:input 74:input 75:input 76:input 77:input 78:input 79:input 80:input 84:input 91:button 92:button 93:input 95:input 96:button
+-- select | signup.html | - | 0 | :required | - | -
+   3: 8:input 10:input 12:input
+-- select | signup.html | - | 0 | :optional | - | -
+   38: 14:input 16:input 18:textarea 20:textarea 22:textarea 23:input 27:input 29:input 31:input 34:input 36:input 39:input 41:input 43:input 45:input 46:select 56:input 58:input 61:input 65:input 66:input 67:input 68:input 69:input 70:input 71:input 72:input 73:input 74:input 75:input 76:input 77:input 78:input 79:input 80:input 84:input 93:input 95:input
+-- select | signup.html | - | 0 | :placeholder-shown | - | -
+   4: 8:input 14:input 18:textarea 20:textarea
+-- select | signup.html | - | 0 | :read-write | - | -
+   25: 8:input 10:input 12:input 14:input 16:input 18:textarea 20:textarea 22:textarea 65:input 66:input 67:input 68:input 69:input 70:input 71:input 72:input 73:input 74:input 75:input 76:input 77:input 79:input 80:input 81:p 82:p
+-- select | signup.html | - | 0 | :read-only | - | -
+   76: 0:html 1:head 2:title 3:body 4:form#signup 5:fieldset#who 6:legend 7:label 9:label 11:label 13:label 15:label 17:label 19:label 21:label 23:input 24:fieldset#prefs 25:legend 26:label 27:input 28:label 29:input 30:label 31:input 32:p 33:label 34:input 35:label 36:input 37:p 38:label 39:input 40:label 41:input 42:label 43:input 44:label 45:input 46:select 47:optgroup 48:option 49:option 50:optgroup 51:option 52:progress 53:progress 54:fieldset#billing 55:legend 56:input 57:label 58:input 59:div 60:label 61:input 62:button 63:fieldset#schedule 64:legend 78:input 83:p 84:input 85:details 86:summary 87:p 88:details 89:summary 90:p 91:button 92:button 93:input 94:form#lone 95:input 96:button 97:dialog 98:p 99:video 100:audio
+-- select | signup.html | - | 0 | input:read-only | - | -
+   17: 23:input 27:input 29:input 31:input 34:input 36:input 39:input 41:input 43:input 45:input 56:input 58:input 61:input 78:input 84:input 93:input 95:input
+-- select | signup.html | - | 0 | p:read-write | - | -
+   2: 81:p 82:p
+-- select | signup.html | - | 0 | :in-range | - | -
+   7: 65:input 67:input 68:input 70:input 72:input 73:input 76:input
+-- select | signup.html | - | 0 | :out-of-range | - | -
+   8: 61:input 66:input 69:input 71:input 74:input 75:input 78:input 79:input
+-- select | signup.html | - | 0 | :open | - | -
+   2: 85:details 97:dialog
+-- select | signup.html | - | 0 | :muted | - | -
+   1: 99:video
+-- select | signup.html | - | 0 | input:not([type]) | - | -
+   0: 
+-- select | signup.html | - | 0 | input[type=CHECKBOX] | - | -
+   4: 27:input 29:input 31:input 56:input
+-- select | signup.html | - | 0 | input[type='Radio' s] | - | -
+   0: 
+-- select | signup.html | - | 0 | [name=''] | - | -
+   1: 43:input
+-- select | signup.html | - | 0 | [name]:not([name='']) | - | -
+   39: 8:input 10:input 12:input 14:input 16:input 18:textarea 20:textarea 22:textarea 23:input 27:input 29:input 31:input 34:input 36:input 39:input 41:input 46:select 56:input 58:input 61:input 65:input 66:input 67:input 68:input 69:input 70:input 71:input 72:input 73:input 74:input 75:input 76:input 77:input 78:input 79:input 80:input 84:input 92:button 95:input
+-- select | signup.html | - | 0 | fieldset:disabled legend input | - | -
+   1: 56:input
+-- select | signup.html | - | 0 | fieldset[disabled] > legend:first-of-type input | - | -
+   1: 56:input
+-- select | signup.html | - | 0 | optgroup:disabled option | - | -
+   1: 51:option
+-- select | signup.html | - | 0 | option:checked | - | -
+   1: 49:option
+-- select | signup.html | - | 0 | label:has(> input:checked) | - | -
+   2: 26:label 33:label
+-- select | signup.html | - | 0 | label:has(:required) | - | -
+   3: 7:label 9:label 11:label
+-- select | signup.html | - | 0 | textarea:placeholder-shown | - | -
+   2: 18:textarea 20:textarea
+-- select | signup.html | - | 0 | fieldset > legend:-soup-contains-own(Pref) | - | -
+   1: 25:legend
+-- select | signup.html | - | 0 | form > button:last-of-type | - | -
+   2: 92:button 96:button
+-- select | signup.html | - | 0 | form#lone :default | - | -
+   0: 
+-- select | signup.html | - | 0 | form#lone :indeterminate | - | -
+   1: 95:input
+-- select | signup.html | - | 0 | :is(input, button)[type=submit] | - | -
+   2: 92:button 93:input
+-- select | signup.html | - | 0 | input[type=hidden] | - | -
+   1: 23:input
+-- select | signup.html | - | 0 | progress:indeterminate | - | -
+   1: 52:progress
+-- select | signup.html | - | 0 | #schedule > :nth-child(odd of :out-of-range) | - | -
+   4: 66:input 71:input 75:input 79:input
+-- select | signup.html | - | 0 | [contenteditable] | - | -
+   3: 81:p 82:p 83:p
+-- select | signup.html | - | 0 | details[open] > summary | - | -
+   1: 86:summary
+-- select | signup.html | - | 0 | :root:has(dialog[open]) | - | -
+   1: 0:html
+-- select | signup.html | - | 0 | :target, :hover, :focus, :visited | - | -
+   0: 
+-- select | signup.html | - | 0 | :is(:hover, .x) | - | -
+   0: 
+-- select | signup.html | - | 0 | :is(:hover, input):first-child | - | -
+   18: 8:input 10:input 12:input 14:input 16:input 27:input 29:input 31:input 34:input 36:input 39:input 41:input 43:input 45:input 56:input 58:input 61:input 95:input
+-- select | signup.html | - | 0 | :not(:hover) | - | -
+   101: 0:html 1:head 2:title 3:body 4:form#signup 5:fieldset#who 6:legend 7:label 8:input 9:label 10:input 11:label 12:input 13:label 14:input 15:label 16:input 17:label 18:textarea 19:label 20:textarea 21:label 22:textarea 23:input 24:fieldset#prefs 25:legend 26:label 27:input 28:label 29:input 30:label 31:input 32:p 33:label 34:input 35:label 36:input 37:p 38:label 39:input 40:label 41:input 42:label 43:input 44:label 45:input 46:select 47:optgroup 48:option 49:option 50:optgroup 51:option 52:progress 53:progress 54:fieldset#billing 55:legend 56:input 57:label 58:input 59:div 60:label 61:input 62:button 63:fieldset#schedule 64:legend 65:input 66:input 67:input 68:input 69:input 70:input 71:input 72:input 73:input 74:input 75:input 76:input 77:input 78:input 79:input 80:input 81:p 82:p 83:p 84:input 85:details 86:summary 87:p 88:details 89:summary 90:p 91:button 92:button 93:input 94:form#lone 95:input 96:button 97:dialog 98:p 99:video 100:audio
+-- match | signup.html | 75 | :out-of-range
+   75:input True
+-- match | signup.html | 75 | :in-range
+   75:input False
+-- closest | signup.html | 75 | fieldset
+   75:input -> 63:fieldset#schedule
+-- closest | signup.html | 75 | form > *
+   75:input -> 63:fieldset#schedule
+-- closest | signup.html | 75 | body > *
+   75:input -> 4:form#signup
+-- closest | signup.html | 75 | input
+   75:input -> 75:input
+-- closest | signup.html | 75 | table
+   75:input -> None
+-- filter | signup.html | - | *
+   [document]: 1: 0:html
+-- filter | signup.html | 5 | :not(legend)
+   5:fieldset#who: 9: 7:label 9:label 11:label 13:label 15:label 17:label 19:label 21:label 23:input
+-- filter | signup.html | 5 | label:has(input[required])
+   5:fieldset#who: 3: 7:label 9:label 11:label
+-- attr | signup.html | :out-of-range | name
+   61:input='exp' 66:input='late' 69:input='slot' 71:input='noon' 74:input='at' 75:input='qty' 78:input='vol' 79:input='neg'
+-- attr | signup.html | :in-range | name
+   65:input='day' 67:input='bad' 68:input='leap' 70:input='night' 72:input='wk' 73:input='wk2' 76:input='tip'
+-- attr | signup.html | input:checked | name
+   27:input='news' 34:input='plan'
+# article.html
+-- select | article.html | - | 0 | :lang(en) | - | -
+   48: 0:html 1:head 2:meta 3:title 4:body 5:article#main 6:h1 7:p.lead 16:blockquote#quote 17:p#ar 18:p#mixed 19:bdi 20:div#auto-he 21:div#auto-en 22:div#auto-none 23:div#ltr-box 24:span#inner 25:div#upper-rtl 26:p 27:input#in-he 28:input#in-en 29:input#in-empty 30:input#phone 31:textarea#ta 32:bdi#bdi-ar 33:bdi#bdi-en 34:section 35:h2 36:iframe 37:p 38:ul#steps 39:li 40:li.x 41:li 42:li.x 43:li 44:li.x 45:li 46:p 47:b 48:i 49:code 50:p 51:p.empty 52:p.empty 53:p.empty 54:p.empty 55:span
+-- select | article.html | - | 0 | :lang(en-US) | - | -
+   48: 0:html 1:head 2:meta 3:title 4:body 5:article#main 6:h1 7:p.lead 16:blockquote#quote 17:p#ar 18:p#mixed 19:bdi 20:div#auto-he 21:div#auto-en 22:div#auto-none 23:div#ltr-box 24:span#inner 25:div#upper-rtl 26:p 27:input#in-he 28:input#in-en 29:input#in-empty 30:input#phone 31:textarea#ta 32:bdi#bdi-ar 33:bdi#bdi-en 34:section 35:h2 36:iframe 37:p 38:ul#steps 39:li 40:li.x 41:li 42:li.x 43:li 44:li.x 45:li 46:p 47:b 48:i 49:code 50:p 51:p.empty 52:p.empty 53:p.empty 54:p.empty 55:span
+-- select | article.html | - | 0 | :lang(de) | - | -
+   3: 8:p#ch 9:p#de96 10:p#latn
+-- select | article.html | - | 0 | :lang(de-CH) | - | -
+   1: 8:p#ch
+-- select | article.html | - | 0 | :lang(de-DE) | - | -
+   2: 9:p#de96 10:p#latn
+-- select | article.html | - | 0 | :lang('*-DE') | - | -
+   2: 9:p#de96 10:p#latn
+-- select | article.html | - | 0 | :lang('*-Latn') | - | -
+   1: 10:p#latn
+-- select | article.html | - | 0 | :lang(de-*-DE) | - | -
+   raised SelectorSyntaxError: Invalid syntax for pseudo class ':lang'
+  line 1:
+:lang(de-*-DE)
+^
+-- select | article.html | - | 0 | :lang("de-*") | - | -
+   0: 
+-- select | article.html | - | 0 | :lang(fr, zh) | - | -
+   3: 11:p#fr 12:span 13:p#tw
+-- select | article.html | - | 0 | :lang(zh-TW) | - | -
+   1: 13:p#tw
+-- select | article.html | - | 0 | :lang(zh-Hant) | - | -
+   1: 13:p#tw
+-- select | article.html | - | 0 | :lang(i-klingon) | - | -
+   1: 14:p#tlh
+-- select | article.html | - | 0 | :lang(x) | - | -
+   1: 15:p#priv
+-- select | article.html | - | 0 | :lang('') | - | -
+   0: 
+-- select | article.html | - | 0 | :lang(ja) | - | -
+   0: 
+-- select | article.html | - | 0 | p:lang('*') | - | -
+   18: 7:p.lead 8:p#ch 9:p#de96 10:p#latn 11:p#fr 13:p#tw 14:p#tlh 15:p#priv 17:p#ar 18:p#mixed 26:p 37:p 46:p 50:p 51:p.empty 52:p.empty 53:p.empty 54:p.empty
+-- select | article.html | - | 0 | :dir(ltr) | - | -
+   48: 0:html 1:head 2:meta 3:title 4:body 5:article#main 6:h1 7:p.lead 8:p#ch 9:p#de96 10:p#latn 11:p#fr 12:span 13:p#tw 14:p#tlh 15:p#priv 19:bdi 21:div#auto-en 22:div#auto-none 23:div#ltr-box 24:span#inner 26:p 28:input#in-en 29:input#in-empty 30:input#phone 33:bdi#bdi-en 34:section 35:h2 36:iframe 37:p 38:ul#steps 39:li 40:li.x 41:li 42:li.x 43:li 44:li.x 45:li 46:p 47:b 48:i 49:code 50:p 51:p.empty 52:p.empty 53:p.empty 54:p.empty 55:span
+-- select | article.html | - | 0 | :dir(rtl) | - | -
+   8: 16:blockquote#quote 17:p#ar 18:p#mixed 20:div#auto-he 25:div#upper-rtl 27:input#in-he 31:textarea#ta 32:bdi#bdi-ar
+-- select | article.html | - | 0 | p:dir(rtl) | - | -
+   2: 17:p#ar 18:p#mixed
+-- select | article.html | - | 0 | div:dir(rtl) | - | -
+   2: 20:div#auto-he 25:div#upper-rtl
+-- select | article.html | - | 0 | input:dir(rtl) | - | -
+   1: 27:input#in-he
+-- select | article.html | - | 0 | input:dir(ltr) | - | -
+   3: 28:input#in-en 29:input#in-empty 30:input#phone
+-- select | article.html | - | 0 | textarea:dir(rtl) | - | -
+   1: 31:textarea#ta
+-- select | article.html | - | 0 | bdi:dir(rtl) | - | -
+   1: 32:bdi#bdi-ar
+-- select | article.html | - | 0 | span:dir(ltr) | - | -
+   3: 12:span 24:span#inner 55:span
+-- select | article.html | - | 0 | :root | - | -
+   1: 0:html
+-- select | article.html | - | 0 | iframe :root | - | -
+   0: 
+-- select | article.html | - | 0 | iframe p | - | -
+   0: 
+-- select | article.html | - | 0 | iframe > * | - | -
+   0: 
+-- select | article.html | - | 0 | section > p | - | -
+   1: 37:p
+-- select | article.html | - | 0 | #steps > li:nth-child(3n) | - | -
+   2: 41:li 44:li.x
+-- select | article.html | - | 0 | #steps > li:nth-child(n+3):nth-child(-n+5) | - | -
+   3: 41:li 42:li.x 43:li
+-- select | article.html | - | 0 | #steps > li:nth-last-child(2n+1) | - | -
+   4: 39:li 41:li 43:li 45:li
+-- select | article.html | - | 0 | #steps > li:nth-child(2 of .x) | - | -
+   1: 42:li.x
+-- select | article.html | - | 0 | #steps > li:nth-last-child(1 of .x) | - | -
+   1: 44:li.x
+-- select | article.html | - | 0 | #steps > li:nth-child(-n+3 of :not(.x)) | - | -
+   3: 39:li 41:li 43:li
+-- select | article.html | - | 0 | #steps > li:nth-child(0n+2) | - | -
+   1: 40:li.x
+-- select | article.html | - | 0 | #steps > li:nth-child(-n) | - | -
+   0: 
+-- select | article.html | - | 0 | #steps > li:nth-child(n-2) | - | -
+   7: 39:li 40:li.x 41:li 42:li.x 43:li 44:li.x 45:li
+-- select | article.html | - | 0 | #steps > li:nth-child(-3n+7) | - | -
+   3: 39:li 42:li.x 45:li
+-- select | article.html | - | 0 | #steps > li:nth-of-type(-2n+5) | - | -
+   3: 39:li 41:li 43:li
+-- select | article.html | - | 0 | #steps > li:nth-child(10) | - | -
+   0: 
+-- select | article.html | - | 0 | #steps > .x:nth-last-of-type(2) | - | -
+   1: 44:li.x
+-- select | article.html | - | 0 | p:-soup-contains(nested) | - | -
+   1: 46:p
+-- select | article.html | - | 0 | p:-soup-contains-own(nested) | - | -
+   0: 
+-- select | article.html | - | 0 | b:-soup-contains-own(bold) | - | -
+   1: 47:b
+-- select | article.html | - | 0 | p:-soup-contains('hidden words') | - | -
+   0: 
+-- select | article.html | - | 0 | p:-soup-contains-own(here) | - | -
+   1: 50:p
+-- select | article.html | - | 0 | p:-soup-contains(nested):-soup-contains-own(xt) | - | -
+   0: 
+-- select | article.html | - | 0 | p:-soup-contains(nested):-soup-contains-own(x) | - | -
+   1: 46:p
+-- select | article.html | - | 0 | p:-soup-contains-own('Contains '):-soup-contains('Contains ') | - | -
+   1: 46:p
+-- select | article.html | - | 0 | p:-soup-contains-own('Contains '):-soup-contains(Contains) | - | -
+   0: 
+-- select | article.html | - | 0 | :contains(Grüezi) | - | -
+   4: 0:html 4:body 5:article#main 8:p#ch
+-- select | article.html | - | 0 | p.empty:empty | - | -
+   3: 51:p.empty 52:p.empty 53:p.empty
+-- select | article.html | - | 0 | p:empty | - | -
+   3: 51:p.empty 52:p.empty 53:p.empty
+-- select | article.html | - | 0 | :empty:not(input, meta, p) | - | -
+   1: 55:span
+-- select | article.html | - | 0 | blockquote > p:only-of-type | - | -
+   0: 
+-- select | article.html | - | 0 | blockquote > p:first-child:not(:last-child) | - | -
+   1: 17:p#ar
+-- select | article.html | - | 0 | article > p:has(> b > i) | - | -
+   1: 46:p
+-- select | article.html | - | 0 | p:has(code):has(b) | - | -
+   1: 46:p
+-- select | article.html | - | 0 | h1 ~ p[lang]:not([lang|=de]) | - | -
+   4: 11:p#fr 13:p#tw 14:p#tlh 15:p#priv
+-- select | article.html | - | 0 | [lang|=de] | - | -
+   3: 8:p#ch 9:p#de96 10:p#latn
+-- select | article.html | - | 0 | [lang|=''] | - | -
+   1: 12:span
+-- select | article.html | - | 0 | [dir=auto] | - | -
+   8: 5:article#main 20:div#auto-he 21:div#auto-en 22:div#auto-none 27:input#in-he 28:input#in-en 29:input#in-empty 31:textarea#ta
+-- select | article.html | - | 0 | [dir=RTL] | - | -
+   1: 25:div#upper-rtl
+-- select | article.html | - | 0 | [dir=RTL i] | - | -
+   2: 16:blockquote#quote 25:div#upper-rtl
+-- select | article.html | - | 0 | [id*=auto-] | - | -
+   3: 20:div#auto-he 21:div#auto-en 22:div#auto-none
+-- select | article.html | - | 0 | [id$=-en] | - | -
+   3: 21:div#auto-en 28:input#in-en 33:bdi#bdi-en
+-- select | article.html | 16 | 0 | p | - | -
+   2: 17:p#ar 18:p#mixed
+-- select | article.html | 16 | 0 | :scope > p | - | -
+   2: 17:p#ar 18:p#mixed
+-- select | article.html | 16 | 0 | :root | - | -
+   0: 
+-- match | article.html | 16 | :dir(ltr)
+   16:blockquote#quote False
+-- closest | article.html | 42 | [lang]
+   42:li.x -> 0:html
+-- closest | article.html | 42 | :dir(ltr)
+   42:li.x -> 42:li.x
+# report.html
+-- select | report.html | - | 0 | tbody > tr:nth-child(odd) > td:first-child | - | -
+   3: 15:td 27:td 39:td
+-- select | report.html | - | 0 | tr:not(.ok) > td:nth-child(5) | - | -
+   3: 25:td 37:td 49:td
+-- select | report.html | - | 0 | tr.bad td:nth-last-child(-n+3) | - | -
+   3: 35:td 36:td 37:td
+-- select | report.html | - | 0 | thead th:nth-of-type(n+3) | - | -
+   3: 10:th 11:th 12:th
+-- select | report.html | - | 0 | td[colspan] | - | -
+   1: 52:td
+-- select | report.html | - | 0 | tfoot td:not([colspan]) | - | -
+   3: 53:td 54:td 55:td
+-- select | report.html | - | 0 | table > * | - | -
+   4: 5:caption 6:thead 13:tbody 50:tfoot
+-- select | report.html | - | 0 | caption + thead | - | -
+   1: 6:thead
+-- select | report.html | - | 0 | tbody tr:has(> td:-soup-contains-own(eu-west)) | - | -
+   2: 14:tr.ok 20:tr.warn
+-- select | report.html | - | 0 | tr:has(td:-soup-contains(ap)) + tr | - | -
+   1: 44:tr.warn
+-- select | report.html | - | 0 | li:has(.sev-1) time | - | -
+   1: 62:time
+-- select | report.html | - | 0 | .sev:not([class~=sev-1]):not([class~=sev-2]) | - | -
+   1: 66:span.sev
+-- select | report.html | - | 0 | [class|=sev] | - | -
+   1: 66:span.sev
+-- select | report.html | - | 0 | time[datetime^='2024-0'] | - | -
+   3: 59:time 62:time 65:time
+-- select | report.html | - | 0 | time:not([datetime]) | - | -
+   1: 78:time
+-- select | report.html | - | 0 | dl.owners > dt + dd | - | -
+   3: 69:dd 72:dd 74:dd
+-- select | report.html | - | 0 | dl.owners > dt ~ dt | - | -
+   3: 70:dt 71:dt 73:dt
+-- select | report.html | - | 0 | dl.owners > dd + dd | - | -
+   1: 75:dd
+-- select | report.html | - | 0 | dt:-soup-contains(search) ~ dd | - | -
+   3: 72:dd 74:dd 75:dd
+-- select | report.html | - | 0 | ol[start] > li:nth-child(2) | - | -
+   1: 61:li
+-- select | report.html | - | 0 | a[href^=mailto] | - | -
+   1: 76:a
+-- select | report.html | - | 0 | :root body > p > a | - | -
+   1: 79:a
+-- select | report.html | - | 0 | td:nth-child(3):-soup-contains-own('5') | - | -
+   3: 29:td 47:td 54:td
+-- select | report.html | - | 0 | :is(th, td):nth-child(1):not(:has(*)) | - | -
+   8: 8:th 15:td 21:td 27:td 33:td 39:td 45:td 52:td
+-- attr | report.html | tr.warn > td:first-child, tr.bad > td:first-child | class
+   21:td=None 33:td=None 45:td=None
+-- filter | report.html | 13 | tr.ok
+   13:tbody: 3: 14:tr.ok 26:tr.ok 38:tr.ok
+# edge.html
+-- select | edge.html | - | 0 | :root | - | -
+   1: 0:html
+-- select | edge.html | - | 0 | :defined | - | -
+   38: 0:html 1:body 4:svg:rect#r1 5:x-y:z#xyz 6:div#Upper.MiXed.case 7:div#pad.pad.ded 8:div#noclass 9:div#dup.b 10:div#1st 11:div#a.b.c:d 12:div#uni.café.naïve 13:div#emoji 14:div#nl 15:p#ws 16:p#cdata 17:p#pi 18:p#decl 19:span#lonely 20:div#nest 21:div 22:div 23:span.deep 24:a#anchor-only 25:a#real-link 26:area#map-area 27:area#dead-area 28:ul#mixed 29:li 30:li 31:li 32:table#t 33:tr 34:td 35:p#caps-lang 36:div#scope-root 37:p.s 38:div 39:p.s
+-- select | edge.html | - | 0 | :not(:defined) | - | -
+   2: 2:my-widget#w1 3:slot-item
+-- select | edge.html | - | 0 | my-widget | - | -
+   1: 2:my-widget#w1
+-- select | edge.html | - | 0 | MY-WIDGET | - | -
+   1: 2:my-widget#w1
+-- select | edge.html | - | 0 | slot-item | - | -
+   1: 3:slot-item
+-- select | edge.html | - | 0 | svg\:rect | - | -
+   1: 4:svg:rect#r1
+-- select | edge.html | - | 0 | [id=r1] | - | -
+   1: 4:svg:rect#r1
+-- select | edge.html | - | 0 | x-y\:z | - | -
+   1: 5:x-y:z#xyz
+-- select | edge.html | - | 0 | #Upper | - | -
+   1: 6:div#Upper.MiXed.case
+-- select | edge.html | - | 0 | [id=upper] | - | -
+   0: 
+-- select | edge.html | - | 0 | [ID=Upper] | - | -
+   1: 6:div#Upper.MiXed.case
+-- select | edge.html | - | 0 | div[class~=mixed] | - | -
+   0: 
+-- select | edge.html | - | 0 | div[class~=MiXed] | - | -
+   1: 6:div#Upper.MiXed.case
+-- select | edge.html | - | 0 | div[class~=mixed i] | - | -
+   1: 6:div#Upper.MiXed.case
+-- select | edge.html | - | 0 | .MiXed.case | - | -
+   1: 6:div#Upper.MiXed.case
+-- select | edge.html | - | 0 | [title=shout i] | - | -
+   1: 6:div#Upper.MiXed.case
+-- select | edge.html | - | 0 | .pad.ded | - | -
+   1: 7:div#pad.pad.ded
+-- select | edge.html | - | 0 | [class='pad ded'] | - | -
+   1: 7:div#pad.pad.ded
+-- select | edge.html | - | 0 | [class=' pad  ded '] | - | -
+   0: 
+-- select | edge.html | - | 0 | [class] | - | -
+   9: 6:div#Upper.MiXed.case 7:div#pad.pad.ded 8:div#noclass 9:div#dup.b 11:div#a.b.c:d 12:div#uni.café.naïve 23:span.deep 37:p.s 39:p.s
+-- select | edge.html | - | 0 | [class=''] | - | -
+   1: 8:div#noclass
+-- select | edge.html | - | 0 | #dup | - | -
+   1: 9:div#dup.b
+-- select | edge.html | - | 0 | #dup.b | - | -
+   1: 9:div#dup.b
+-- select | edge.html | - | 0 | #dup.a | - | -
+   0: 
+-- select | edge.html | - | 0 | #\31 st | - | -
+   1: 10:div#1st
+-- select | edge.html | - | 0 | [id='1st'] | - | -
+   1: 10:div#1st
+-- select | edge.html | - | 0 | #a\.b | - | -
+   1: 11:div#a.b.c:d
+-- select | edge.html | - | 0 | .c\:d | - | -
+   1: 11:div#a.b.c:d
+-- select | edge.html | - | 0 | .café | - | -
+   1: 12:div#uni.café.naïve
+-- select | edge.html | - | 0 | .naïve | - | -
+   1: 12:div#uni.café.naïve
+-- select | edge.html | - | 0 | [data-mood~=happy] | - | -
+   1: 13:div#emoji
+-- select | edge.html | - | 0 | [data-mood*='😀'] | - | -
+   1: 13:div#emoji
+-- select | edge.html | - | 0 | [title*='one\a line'] | - | -
+   1: 14:div#nl
+-- select | edge.html | - | 0 | [title$='two'] | - | -
+   1: 14:div#nl
+-- select | edge.html | - | 0 | [title~=one] | - | -
+   1: 14:div#nl
+-- select | edge.html | - | 0 | #ws:empty | - | -
+   1: 15:p#ws
+-- select | edge.html | - | 0 | #cdata:empty | - | -
+   1: 16:p#cdata
+-- select | edge.html | - | 0 | #pi:empty | - | -
+   1: 17:p#pi
+-- select | edge.html | - | 0 | #decl:empty | - | -
+   1: 18:p#decl
+-- select | edge.html | - | 0 | #lonely:empty | - | -
+   1: 19:span#lonely
+-- select | edge.html | - | 0 | #mixed > li:nth-child(2) | - | -
+   1: 30:li
+-- select | edge.html | - | 0 | #mixed > li:nth-of-type(3) | - | -
+   1: 31:li
+-- select | edge.html | - | 0 | #mixed > li:last-child | - | -
+   1: 31:li
+-- select | edge.html | - | 0 | #mixed > :not(li) | - | -
+   0: 
+-- select | edge.html | - | 0 | #nest div | - | -
+   2: 21:div 22:div
+-- select | edge.html | - | 0 | #nest > div > div > span.deep | - | -
+   1: 23:span.deep
+-- select | edge.html | - | 0 | #nest span:only-child | - | -
+   1: 23:span.deep
+-- select | edge.html | - | 0 | :link | - | -
+   2: 25:a#real-link 26:area#map-area
+-- select | edge.html | - | 0 | :any-link | - | -
+   2: 25:a#real-link 26:area#map-area
+-- select | edge.html | - | 0 | a:not(:link) | - | -
+   1: 24:a#anchor-only
+-- select | edge.html | - | 0 | area:not(:any-link) | - | -
+   1: 27:area#dead-area
+-- select | edge.html | - | 0 | td | - | -
+   1: 34:td
+-- select | edge.html | - | 0 | tbody | - | -
+   0: 
+-- select | edge.html | - | 0 | table > tr | - | -
+   1: 33:tr
+-- select | edge.html | - | 0 | :lang(en-US) | - | -
+   1: 35:p#caps-lang
+-- select | edge.html | - | 0 | :lang(EN) | - | -
+   1: 35:p#caps-lang
+-- select | edge.html | - | 0 | #scope-root .s | - | -
+   2: 37:p.s 39:p.s
+-- select | edge.html | - | 0 | body > :last-child .s | - | -
+   2: 37:p.s 39:p.s
+-- select | edge.html | - | 0 | :--a | - | :--a=:--b¦:--b=:--a
+   raised SelectorSyntaxError: Undefined custom selector ':--a' found at position 4
+  line 1:
+:--a
+    ^
+-- select | edge.html | - | 0 | p | - | :bad=div
+   raised SelectorSyntaxError: The name ':bad' is not a valid custom pseudo-class name
+-- select | edge.html | - | 0 | p | - | :--Head=h1¦:--head=h2
+   raised KeyError: "The custom selector ':--head' has already been registered"
+-- select | edge.html | - | 0 | :--a | - | :--a=:--nope
+   raised SelectorSyntaxError: Undefined custom selector ':--nope' found at position 7
+  line 1:
+:--nope
+       ^
+-- select | edge.html | - | 0 | :--zzz | - | -
+   raised SelectorSyntaxError: Undefined custom selector ':--zzz' found at position 6
+  line 1:
+:--zzz
+      ^
+-- select | edge.html | 36 | 0 | :scope .s | - | -
+   2: 37:p.s 39:p.s
+-- select | edge.html | 36 | 0 | :scope > .s | - | -
+   1: 37:p.s
+-- select | edge.html | 36 | 0 | & > div > .s | - | -
+   1: 39:p.s
+-- select | edge.html | 36 | 0 | :root .s | - | -
+   2: 37:p.s 39:p.s
+-- one | edge.html | 36 | p:nth-child(1)
+   37:p.s
+-- match | edge.html | 36 | :scope
+   36:div#scope-root True
+-- match | edge.html | 0 | html
+   0:html True
+-- match | edge.html | - | *
+   [document] False
+-- closest | edge.html | 37 | :scope
+   37:p.s -> 37:p.s
+-- closest | edge.html | 37 | #scope-root
+   37:p.s -> 36:div#scope-root
+-- closest | edge.html | 37 | div:has(> p)
+   37:p.s -> 36:div#scope-root
+-- filter | edge.html | 28 | li
+   28:ul#mixed: 3: 29:li 30:li 31:li
+-- filter | edge.html | 28 | :nth-child(2)
+   28:ul#mixed: 1: 30:li
+# fragment.html
+-- select | fragment.html | - | 0 | :root | - | -
+   0: 
+-- select | fragment.html | - | 0 | p | - | -
+   2: 0:p#f1 1:p#f2.note
+-- select | fragment.html | - | 0 | p:first-child | - | -
+   1: 0:p#f1
+-- select | fragment.html | - | 0 | p:nth-child(2) | - | -
+   1: 1:p#f2.note
+-- select | fragment.html | - | 0 | p:last-of-type | - | -
+   1: 1:p#f2.note
+-- select | fragment.html | - | 0 | ul > li:last-child | - | -
+   1: 5:li
+-- select | fragment.html | - | 0 | p:only-of-type | - | -
+   0: 
+-- select | fragment.html | - | 0 | body | - | -
+   0: 
+-- select | fragment.html | - | 0 | * + ul | - | -
+   1: 3:ul#f3
+-- match | fragment.html | 0 | :first-child
+   0:p#f1 True
+# lonely.html
+-- select | lonely.html | - | 0 | :root | - | -
+   1: 0:main#only
+-- select | lonely.html | - | 0 | :root > p | - | -
+   1: 1:p#kid
+-- select | lonely.html | - | 0 | main:only-child | - | -
+   1: 0:main#only
+-- select | lonely.html | - | 0 | p:only-child | - | -
+   1: 1:p#kid
+-- select | lonely.html | - | 0 | main:first-of-type:last-of-type | - | -
+   1: 0:main#only
+-- match | lonely.html | 1 | :root
+   1:p#kid False
+-- closest | lonely.html | 1 | :root
+   1:p#kid -> 0:main#only
