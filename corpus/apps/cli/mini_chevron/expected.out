@@ -1,0 +1,433 @@
+== interpolation: no tags
+  |Hello from {Mustache}!
+== interpolation: basic
+  |Hello, world!
+== interpolation: escaping
+  |These characters should be HTML escaped: &amp; &quot; &lt; &gt; '
+== interpolation: triple mustache and ampersand
+  |& " < > ' | & " < > ' | & " < > '
+== interpolation: numbers, booleans and null
+  |int 85, float 1.21, big 12345678901234567, exp 1000.0, true True, false False, zero 0, fzero 0.0, negzero -0.0, null []
+== interpolation: lists and dicts print as Python values
+  |[1, 'two', 3.5, None, True, [&quot;it's&quot;], {'q': '&quot;x&quot;'}] / {'a': 1, 'b': [], 'c': 'line\nbreak'} / {'a': 1, 'b': [], 'c': 'line\nbreak'}
+== interpolation: empty values
+  |[] [] []
+== interpolation: missing key warns
+  ? Could not find key 'cannot'
+  ? Could not find key 'nested.missing'
+  |I () be seen! 
+== interpolation: dotted names
+  |"Joe" == "Joe" / Phil
+== interpolation: a dotted name that breaks part way tries the next scope
+  |ERROR
+== interpolation: list indexes and string indexes
+  ? Could not find key 'items.9'
+  ? Could not find key 'items.x'
+  |first last second ka [] []
+== interpolation: attributes of numbers
+  |7 0 7 1 2.5 0.0 1
+== interpolation: whitespace around the key
+  ||---|---|---|
+== interpolation: standalone tags are not trimmed
+  |  ---
+  |  ---
+  |
+== interpolation: the implicit iterator at the top
+  |{'a': 1}
+== sections: truthy and falsy
+  |"This should be rendered." "" "" "" ""
+== sections: a context
+  |"Hi Joe."
+== sections: parent contexts
+  |"foo, bar, baz"
+== sections: deeply nested contexts
+  |1
+  |121
+  |12321
+  |
+== sections: lists
+  |"123"
+== sections: the implicit iterator
+  |"(a)(1)(2.5)({'list': ['a', 1, 2.5, True, '&amp;'], 'nested': [[1, 2], [3]]})(&amp;)" "(12)(3)"
+== sections: falsy list items are skipped
+  |1,2,3, [x]
+== sections: an empty list
+  |""
+== sections: doubled
+  |* first
+  |* second
+  |* third
+  |
+== sections: nested sections with the same name
+  |<ab><>
+== sections: a string is a scope, not a list
+  |[Kara] K
+== sections: dotted names
+  ? Could not find key 'a.b.x'
+  |"Here" == "Here" / "" == ""
+== sections: standalone lines
+  || This Is
+  ||
+  || A Line
+  |
+== sections: indented standalone lines
+  || This Is
+  ||
+  || A Line
+  |
+== sections: standalone with a tab before and after
+  || A
+  |	| B
+  |	| C
+== sections: standalone at the end without a newline
+  |#
+  |/
+  |  
+== sections: not standalone when text follows
+  | YES
+  | GOOD
+  |
+== sections: CRLF line ends
+  ||\r
+  ||\r
+== inverted: falsy values
+  ? Could not find key 'missing'
+  |"This should be rendered." "" "zero" "empty" "null" "missing"
+== inverted: lists
+  |"" "Yay lists!"
+== inverted: the implicit iterator inside reads the parent
+  ? Could not find key 'flag'
+  |<b {'name': 'b'}>
+== inverted: dotted names and context
+  ? Could not find key 'a.b.x'
+  ? Could not find key 'ctx'
+  |"" "Not Here" "outer"
+== inverted: standalone lines
+  || This Is
+  ||
+  || A Line
+  |
+== comments: inline and standalone
+  |1234567890
+  |Begin.
+  |End.
+  |Middle.
+  |Done.
+  |
+== comments: not standalone with text around
+  |  12 
+  | 12345  67890
+== delimiters: pair behavior
+  |(Hey!) {{text}} (Hey!)
+== delimiters: special characters and spaces
+  |(It worked!) ({{=| |=}}|text|)
+== delimiters: sections and inverted sections
+  |[
+  |  I got interpolated.
+  |  |data|
+  |  {{data}}
+  |  I got interpolated.
+  |  I got interpolated.
+  |]
+== delimiters: standalone set-delimiter tags
+  |Begin.
+  |End !.
+  |Back !.
+  |
+== delimiters: the triple mustache only works with braces
+  ||<b>|&lt;b&gt;
+== delimiters: chosen by the caller
+  |{{ kept }} Ada [1][2]
+== partials: basic and missing
+  |"from partial" ""
+== partials: context and recursion
+  |X<Y<>Z<W<>>>
+== partials: standalone indentation
+  |\
+  | |
+  | <
+  |->
+  | |
+  |/
+  |
+== partials: inline partials are not indented
+  |  |  >
+  |>
+  |
+== partials: the partial's own delimiters reset
+  |T|text| T
+== partials: indentation inside a list
+  |items:
+  |  - name: bolt
+  |    qty: 4
+  |  - name: nut
+  |    qty: 0
+  |
+== partials: a tab before a standalone partial
+  |>
+  |	a
+  |	b
+  |<
+== quirks: a lone opening delimiter at the end vanishes
+  |price: 10
+== quirks: an empty tag
+  ! IndexError: string index out of range
+== quirks: a triple mustache that is not closed by three braces
+  |[] [x]
+== quirks: a falsy section skips the rest of a scope
+  |AC
+== quirks: a number that is subscripted
+  ! TypeError: 'int' object is not subscriptable
+== quirks: a null that is subscripted
+  |found
+== quirks: the implicit iterator on true at the top
+  |{'t': True}
+== quirks: set delimiter with no right delimiter
+  ! ChevronError: unclosed tag at line 1
+== quirks: an empty left delimiter
+  |ab {{x}}
+== errors: unclosed tag
+  ! ChevronError: unclosed tag at line 2
+== errors: unclosed set delimiter
+  ! ChevronError: unclosed set delimiter tag
+  !   at line 3
+== errors: closing a section that was not opened
+  ! ChevronError: Trying to close tag "b"
+  !   Looks like it was not opened.
+  !   line 4
+== errors: closing the wrong section
+  ? Could not find key 'a'
+  ! ChevronError: Trying to close tag "a"
+  !   last open tag is "b"
+  !   line 2
+== errors: a section never closed
+  ? Could not find key 'b'
+  ! ChevronError: Unexpected EOF
+  !   the tag "a" was never closed
+  !   was opened at line 1
+== errors: the warnings before an error stay
+  ? Could not find key 'missing1'
+  ? Could not find key 'missing2'
+  ! ChevronError: Trying to close tag "x"
+  !   Looks like it was not opened.
+  !   line 3
+== errors: a partial resets the line count
+  ! ChevronError: Trying to close tag "x"
+  !   Looks like it was not opened.
+  !   line 3
+== errors: an error inside a partial
+  ? Could not find key 'open'
+  ! ChevronError: Unexpected EOF
+  !   the tag "open" was never closed
+  !   was opened at line 1
+== quirks: an inverted section with the same name ends a list early
+  ! IndexError: list index out of range
+== quirks: duplicate keys keep the first place and the last value
+  |{'a': 3, 'b': 2} 3
+== interpolation: JSON escapes and non-ASCII
+  |tab	here é中😀 \ /  | {'s': 'tab\there é中😀 \\ / \x07', 'kéy': '\u2028'}
+== job: nginx
+  ? Could not find key 'sites.length'
+  ? Could not find key 'backup'
+  ? Could not find key 'backup'
+  ? Could not find key 'weight'
+  ? Could not find key 'weight'
+  ? Could not find key 'backup'
+  ? Could not find key 'root'
+  ? Could not find key 'deny'
+  ? Could not find key 'proxy'
+  ? Could not find key 'deny'
+  ? Could not find key 'proxy'
+  ? Could not find key 'root'
+  ? Could not find key 'root'
+  ? Could not find key 'deny'
+  | -- do not edit by hand }}
+  |# production:  sites
+  |user  www-data;
+  |worker_processes  auto;
+  |
+  |events {
+  |    worker_connections  1024;
+  |}
+  |
+  |http {
+  |    include       mime.types;
+  |    sendfile      on;
+  |    gzip          on;
+  |    gzip_types    text/css application/json application/javascript;
+  |
+  |    upstream app {
+  |        server 10.0.1.11:8000 weight=3;
+  |        server 10.0.1.12:8000 weight=1;
+  |        server 10.0.1.13:8000 backup;
+  |    }
+  |
+  |    upstream metrics {
+  |        server 127.0.0.1:9100;
+  |    }
+  |
+  |    server {
+  |        listen       443 ssl;
+  |        server_name  shop.example.org www.shop.example.org;
+  |        ssl_certificate      /etc/ssl/shop.pem;
+  |        ssl_certificate_key  /etc/ssl/shop.key;
+  |        location / {
+  |            proxy_pass http://app;
+  |            proxy_set_header Host $host;
+  |        }
+  |        location /static/ {
+  |            root /srv/shop;
+  |            index index.html;
+  |        }
+  |        location /.git {
+  |            deny all;
+  |        }
+  |            }
+  |
+  |    server {
+  |        listen       8080;
+  |        server_name  status.internal;
+  |        location /metrics {
+  |            proxy_pass http://metrics;
+  |            proxy_set_header Host $host;
+  |        }
+  |            }
+  |
+  |}
+  |
+== job: nginx without data
+  | -- do not edit by hand }}
+  |# :  sites
+  |user  ;
+  |worker_processes  ;
+  |
+  |events {
+  |    worker_connections  ;
+  |}
+  |
+  |http {
+  |    include       mime.types;
+  |    sendfile      on;
+  |    # gzip is off
+  |
+  |}
+  |
+== job: email
+  ? Could not find key 'options'
+  |<!DOCTYPE html>
+  |<html><head><title>Tom &amp; Jerry's Tea: order 10442</title></head>
+  |<body>
+  |<p>Hi Zoë &quot;Z&quot; &lt;O'Brien&gt;,</p>
+  |<p>Thanks for your order <b>#10442</b> placed on 2024-11-03.</p>
+  |<table class="items">
+  |  <tr><th>Item</th><th>Qty</th><th>Price</th></tr>
+  |  <tr><td>Sencha (100 g) (loose leaf)</td><td>2</td><td>€12.5</td></tr>
+  |  <tr><td>Kyusu teapot</td><td>1</td><td>€48.0</td></tr>
+  |  <tr><td>Gift card</td><td>1</td><td>€25</td></tr>
+  |</table>
+  |<p>Tip: sign up for our newsletter to get 10% off.</p>
+  |<p>Total: <b>€98.0</b> (gift wrapped)</p>
+  |<p>Ship to:<br>
+  |Hauptstraße 5<br>
+  |
+  |Wien 1010, AT
+  |</p>
+  |<blockquote>Please <em>leave</em> it at the door & ring twice</blockquote>
+  |<hr>
+  |<p class="small">Tom &amp; Jerry's Tea &middot; help@tea.example</p>
+  |</body></html>
+  |
+== job: k8s
+  ? Could not find key 'ports.0'
+  ? Could not find key 'env.0'
+  ? Could not find key 'env'
+  |apiVersion: apps/v1
+  |kind: Deployment
+  |metadata:
+  |  name: billing-api
+  |  namespace: payments
+  |  labels:
+  |    app: billing-api
+  |    team: "payments"
+  |    tier: "backend"
+  |spec:
+  |  replicas: 3
+  |  selector:
+  |    matchLabels:
+  |      app: billing-api
+  |  template:
+  |    metadata:
+  |      labels:
+  |        app: billing-api
+  |    spec:
+  |      containers:
+  |        - name: api
+  |image: registry.example.com/billing-api:2.14.1
+  |ports:
+  |  - containerPort: 8080
+  |  - containerPort: 9090
+  |env:
+  |  - name: LOG_LEVEL
+  |    value: "info"
+  |  - name: DB_POOL
+  |    value: "20"
+  |resources:
+  |  limits: {cpu: "500m", memory: "512Mi"}
+  |
+  |        - name: proxy
+  |image: envoyproxy/envoy:v1.31.0
+  |resources:
+  |  limits: {cpu: "100m", memory: "128Mi"}
+  |
+  |      volumes:
+  |        - name: envoy-config
+  |          configMap:
+  |            name: billing-envoy
+  |
+== job: ci
+  ? Could not find key 'if'
+  ? Could not find key 'env'
+  ? Could not find key 'if'
+  ? Could not find key 'env'
+  ? Could not find key 'toolchains.0'
+  ? Could not find key 'if'
+  ? Could not find key 'env'
+  |name: CI
+  |
+  |on:
+  |  push:
+  |    branches: [main]
+  |  pull_request:
+  |
+  |jobs:
+  |  test:
+  |    runs-on: ${{ matrix.os }}
+  |    strategy:
+  |      matrix:
+  |        os: [ubuntu-latest, macos-latest]
+  |        toolchain: [stable, beta]
+  |    steps:
+  |      - uses: actions/checkout@v4
+  |      - name: Build
+  |        run: cargo build --locked
+  |      - name: Test
+  |        run: cargo test -- --nocapture
+  |      - name: Upload coverage
+  |        if: github.ref == 'refs/heads/main' && success()
+  |        run: ./upload.sh
+  |        env:
+  |          TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  |  lint:
+  |    runs-on: ${{ matrix.os }}
+  |    strategy:
+  |      matrix:
+  |        os: [ubuntu-latest]
+  |    steps:
+  |      - uses: actions/checkout@v4
+  |      - name: Clippy
+  |        run: cargo clippy -- -D warnings
+  |
+== job: broken
+  ! ChevronError: Trying to close tag "item"
+  !   last open tag is "items"
+  !   line 4

@@ -1,0 +1,1628 @@
+// mini_chevron: a port of chevron 0.14.0 (MIT, see LICENSE-chevron), the
+// Mustache template renderer for Python, and of its `chevron` command.
+//
+// - the tokenizer, a generator in chevron that keeps the current line in
+//   module globals: standalone lines, set-delimiter tags, the triple
+//   mustache, and its error messages with their line numbers;
+// - the renderer: the scope stack, dotted names looked up by subscript,
+//   then attribute, then list index, sections over lists, scopes and
+//   falsy values, inverted sections, partials from a dictionary or from
+//   files with the indentation of a standalone partial;
+// - Python's str() and repr() of the values json.load gives.
+//
+// The run writes data/ (the cases and the site files from mk.py), then
+// renders each case with its JSON data and partials, and runs a set of
+// jobs the way the `chevron` command would: a template file, a JSON data
+// file and a directory of partials. Each prints the warnings chevron
+// writes to stderr, then the output or the error. expected.out is the
+// output of oracle.py, which does the same with chevron itself.
+
+// ---------------------------------------------------------------- strings
+
+fn is_py_space(c: char) -> bool {
+    let o = c as i64;
+    (o >= 9 and o <= 13) or (o >= 0x1C and o <= 0x20) or o == 0x85 or o == 0xA0 or o == 0x1680
+        or (o >= 0x2000 and o <= 0x200A) or o == 0x2028 or o == 0x2029 or o == 0x202F or o == 0x205F or o == 0x3000
+}
+
+fn slice_chars(cs: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut i = lo;
+    while i < hi {
+        s.push(cs[i]);
+        i += 1;
+    }
+    s
+}
+
+// str.isspace(): false for the empty string
+fn py_isspace(s: ref String) -> bool {
+    let mut any = false;
+    for c in s.chars() {
+        if not is_py_space(c) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
+// str.strip()
+fn py_strip(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and is_py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and is_py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    slice_chars(cs, a, b)
+}
+
+// str.rstrip(chars)
+fn rstrip_any(s: ref String, chars: Str) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let set: Vec[char] = chars.chars().collect();
+    let mut b = cs.len();
+    while b > 0 and set.contains(cs[b - 1]) {
+        b -= 1;
+    }
+    slice_chars(cs, 0, b)
+}
+
+// The index of `pat` in `cs` at or after `from`, or -1; `pat` is not empty.
+fn find_at(cs: ref Vec[char], from: i64, pat: ref Vec[char]) -> i64 {
+    let n = pat.len();
+    let mut i = from;
+    while i + n <= cs.len() {
+        let mut j = 0;
+        while j < n and cs[i + j] == pat[j] {
+            j += 1;
+        }
+        if j == n {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+// str.split(c) with a one-character separator
+fn split_char(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// s.rpartition('\n')[2], which is also s.split('\n')[-1]
+fn after_last_newline(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = cs.len();
+    while i > 0 and cs[i - 1] != '\n' {
+        i -= 1;
+    }
+    slice_chars(cs, i, cs.len())
+}
+
+fn hex_digits(v: i64, n: i64) -> String {
+    let ds: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    let mut k = (n - 1) * 4;
+    while k >= 0 {
+        s.push(ds[(v >> k) & 15]);
+        k -= 4;
+    }
+    s
+}
+
+// str.isprintable() for one character, for the characters JSON data can
+// hold: controls, the Latin-1 gap, separators and format characters are
+// not printable.
+fn is_printable(c: char) -> bool {
+    let o = c as i64;
+    if o < 0x20 or (o >= 0x7F and o <= 0xA0) or o == 0xAD {
+        return false;
+    }
+    if o == 0x1680 or (o >= 0x2000 and o <= 0x200F) or (o >= 0x2028 and o <= 0x202F) or (o >= 0x205F and o <= 0x2064) {
+        return false;
+    }
+    not (o == 0x3000 or o == 0xFEFF or (o >= 0xD800 and o <= 0xDFFF) or (o >= 0xE000 and o <= 0xF8FF))
+}
+
+// repr() of a str
+fn py_repr_str(s: ref String) -> String {
+    let has_single = s.contains("'");
+    let has_double = s.contains("\"");
+    let q = if has_single and not has_double { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if is_printable(c) {
+            out.push(c);
+        } else if o < 0x100 {
+            out.push_str("\\x");
+            out.push_str(hex_digits(o, 2));
+        } else if o < 0x10000 {
+            out.push_str("\\u");
+            out.push_str(hex_digits(o, 4));
+        } else {
+            out.push_str("\\U");
+            out.push_str(hex_digits(o, 8));
+        }
+    }
+    out.push(q);
+    out
+}
+
+// int(s) on a key: surrounding whitespace, a sign, digits with single
+// underscores between them. (true, Some(n)) is an int, (true, None) an
+// int too big for an index, (false, None) a ValueError.
+fn py_int(s: ref String) -> (bool, Option[i64]) {
+    let t = py_strip(s);
+    let cs: Vec[char] = t.chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    if i >= cs.len() {
+        return (false, None);
+    }
+    let mut digits = String.new();
+    let mut prev_digit = false;
+    while i < cs.len() {
+        let c = cs[i];
+        if c >= '0' and c <= '9' {
+            digits.push(c);
+            prev_digit = true;
+        } else if c == '_' and prev_digit and i + 1 < cs.len() and cs[i + 1] >= '0' and cs[i + 1] <= '9' {
+            prev_digit = false;
+        } else {
+            return (false, None);
+        }
+        i += 1;
+    }
+    if digits.len() > 18 {
+        return (true, None);
+    }
+    let v = match i64.parse(digits) {
+        Ok(v) => v,
+        Err(_) => return (false, None),
+    };
+    (true, Some(if neg { -v } else { v }))
+}
+
+// chevron's _html_escape: & first, then " < >; the single quote stays
+fn html_escape(s: ref String) -> String {
+    s.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+// Python's universal newlines, as open() reads text.
+fn universal_newlines(s: ref String) -> String {
+    s.replace("\r\n", "\n").replace("\r", "\n")
+}
+
+// ---------------------------------------------------------------- values
+
+// What json.load gives, kept in an arena: lists and dicts hold node ids.
+enum Node {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    List(Vec[i64]),
+    Dict(Vec[(String, i64)]),
+}
+
+// Nodes every arena starts with: False, True and the '' that _get_key
+// returns for a falsy value.
+const FALSE_ID: i64 = 0;
+const TRUE_ID: i64 = 1;
+const EMPTY_ID: i64 = 2;
+
+fn new_arena() -> Vec[Node] {
+    let mut a: Vec[Node] = Vec.new();
+    a.push(Node.Bool(false));
+    a.push(Node.Bool(true));
+    a.push(Node.Str(String.new()));
+    a
+}
+
+fn add_node(arena: mut ref Vec[Node], n: own Node) -> i64 {
+    arena.push(n);
+    arena.len() - 1
+}
+
+fn truthy(arena: ref Vec[Node], id: i64) -> bool {
+    match ref arena[id] {
+        Node.Null => false,
+        Node.Bool(b) => *b,
+        Node.Int(i) => *i != 0,
+        Node.Float(x) => *x != 0.0,
+        Node.Str(s) => s.len() > 0,
+        Node.List(v) => v.len() > 0,
+        Node.Dict(v) => v.len() > 0,
+    }
+}
+
+// `x in (0, False)`: 0, 0.0, -0.0 and False
+fn zero_or_false(arena: ref Vec[Node], id: i64) -> bool {
+    match ref arena[id] {
+        Node.Bool(b) => not *b,
+        Node.Int(i) => *i == 0,
+        Node.Float(x) => *x == 0.0,
+        _ => false,
+    }
+}
+
+// `x is True`
+fn is_true(arena: ref Vec[Node], id: i64) -> bool {
+    match ref arena[id] {
+        Node.Bool(b) => *b,
+        _ => false,
+    }
+}
+
+// str()
+fn py_str(arena: ref Vec[Node], id: i64) -> String {
+    match ref arena[id] {
+        Node.Str(s) => s.clone(),
+        _ => py_repr(arena, id),
+    }
+}
+
+// repr()
+fn py_repr(arena: ref Vec[Node], id: i64) -> String {
+    match ref arena[id] {
+        Node.Null => "None".to_string(),
+        Node.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        Node.Int(i) => f"{i}",
+        Node.Float(x) => f"{x}",
+        Node.Str(s) => py_repr_str(s),
+        Node.List(items) => {
+            let mut parts: Vec[String] = Vec.new();
+            for item in items.iter() {
+                parts.push(py_repr(arena, *item));
+            }
+            f"[{parts.join(", ")}]"
+        }
+        Node.Dict(entries) => {
+            let mut parts: Vec[String] = Vec.new();
+            for (k, v) in entries.iter() {
+                parts.push(f"{py_repr_str(k)}: {py_repr(arena, *v)}");
+            }
+            let mut out = String.new();
+            out.push('{');
+            out.push_str(parts.join(", "));
+            out.push('}');
+            out
+        }
+    }
+}
+
+// ---------------------------------------------------------------- JSON
+
+struct JsonParser {
+    cs: Vec[char],
+    pos: i64,
+}
+
+impl JsonParser {
+    fn ws(mut ref self) {
+        while self.pos < self.cs.len() {
+            let c = self.cs[self.pos];
+            if c == ' ' or c == '\t' or c == '\n' or c == '\r' {
+                self.pos += 1;
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn peek(ref self) -> char {
+        if self.pos < self.cs.len() { self.cs[self.pos] } else { '\u{0}' }
+    }
+
+    fn expect(mut ref self, c: char) -> Result[(), String] {
+        if self.peek() != c {
+            return Err(f"expected '{c}' at char {self.pos}");
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let mut i = self.pos;
+        for c in w.chars() {
+            if i >= self.cs.len() or self.cs[i] != c {
+                return false;
+            }
+            i += 1;
+        }
+        self.pos = i;
+        true
+    }
+
+    fn hex4(mut ref self) -> Result[i64, String] {
+        let mut v = 0;
+        let mut k = 0;
+        while k < 4 {
+            let c = self.peek();
+            let d = if c >= '0' and c <= '9' {
+                c as i64 - '0' as i64
+            } else if c >= 'a' and c <= 'f' {
+                c as i64 - 'a' as i64 + 10
+            } else if c >= 'A' and c <= 'F' {
+                c as i64 - 'A' as i64 + 10
+            } else {
+                return Err(f"invalid \\uXXXX escape at char {self.pos}");
+            };
+            v = v * 16 + d;
+            self.pos += 1;
+            k += 1;
+        }
+        Ok(v)
+    }
+
+    fn string(mut ref self) -> Result[String, String] {
+        self.expect('"')?;
+        let mut out = String.new();
+        loop {
+            if self.pos >= self.cs.len() {
+                return Err("unterminated string".to_string());
+            }
+            let c = self.cs[self.pos];
+            self.pos += 1;
+            if c == '"' {
+                return Ok(out);
+            }
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            let e = self.peek();
+            self.pos += 1;
+            if e == 'n' {
+                out.push('\n');
+            } else if e == 't' {
+                out.push('\t');
+            } else if e == 'r' {
+                out.push('\r');
+            } else if e == 'b' {
+                out.push('\u{8}');
+            } else if e == 'f' {
+                out.push('\u{c}');
+            } else if e == '"' or e == '\\' or e == '/' {
+                out.push(e);
+            } else if e == 'u' {
+                let mut v = self.hex4()?;
+                // a surrogate pair is one character
+                if v >= 0xD800 and v <= 0xDBFF and self.peek() == '\\' and self.pos + 1 < self.cs.len() and self.cs[self.pos + 1] == 'u' {
+                    let back = self.pos;
+                    self.pos += 2;
+                    let lo = self.hex4()?;
+                    if lo >= 0xDC00 and lo <= 0xDFFF {
+                        v = 0x10000 + ((v - 0xD800) << 10) + (lo - 0xDC00);
+                    } else {
+                        self.pos = back;
+                    }
+                }
+                match char.try_from(v as u32) {
+                    Ok(ch) => out.push(ch),
+                    _ => return Err(f"unpaired surrogate at char {self.pos}"),
+                }
+            } else {
+                return Err(f"invalid escape at char {self.pos}");
+            }
+        }
+    }
+
+    fn number(mut ref self, arena: mut ref Vec[Node]) -> Result[i64, String] {
+        let from = self.pos;
+        let mut is_float = false;
+        if self.peek() == '-' {
+            self.pos += 1;
+        }
+        while self.peek() >= '0' and self.peek() <= '9' {
+            self.pos += 1;
+        }
+        if self.peek() == '.' {
+            is_float = true;
+            self.pos += 1;
+            while self.peek() >= '0' and self.peek() <= '9' {
+                self.pos += 1;
+            }
+        }
+        if self.peek() == 'e' or self.peek() == 'E' {
+            is_float = true;
+            self.pos += 1;
+            if self.peek() == '+' or self.peek() == '-' {
+                self.pos += 1;
+            }
+            while self.peek() >= '0' and self.peek() <= '9' {
+                self.pos += 1;
+            }
+        }
+        let text = slice_chars(self.cs, from, self.pos);
+        if is_float {
+            match f64.parse(text.clone()) {
+                Ok(x) => Ok(add_node(mut arena, Node.Float(x))),
+                Err(_) => Err(f"bad number {text}"),
+            }
+        } else {
+            match i64.parse(text.clone()) {
+                Ok(i) => Ok(add_node(mut arena, Node.Int(i))),
+                Err(_) => Err(f"bad number {text}"),
+            }
+        }
+    }
+
+    fn value(mut ref self, arena: mut ref Vec[Node]) -> Result[i64, String] {
+        self.ws();
+        let c = self.peek();
+        if c == '{' {
+            self.pos += 1;
+            let mut entries: Vec[(String, i64)] = Vec.new();
+            self.ws();
+            if self.peek() == '}' {
+                self.pos += 1;
+                return Ok(add_node(mut arena, Node.Dict(entries)));
+            }
+            loop {
+                self.ws();
+                let k = self.string()?;
+                self.ws();
+                self.expect(':')?;
+                let v = self.value(mut arena)?;
+                // a repeated key keeps its first place and takes the last value
+                let mut found = false;
+                for e in entries.iter_mut() {
+                    if e.0 == k {
+                        e.1 = v;
+                        found = true;
+                    }
+                }
+                if not found {
+                    entries.push((k, v));
+                }
+                self.ws();
+                if self.peek() == ',' {
+                    self.pos += 1;
+                } else {
+                    self.expect('}')?;
+                    return Ok(add_node(mut arena, Node.Dict(entries)));
+                }
+            }
+        }
+        if c == '[' {
+            self.pos += 1;
+            let mut items: Vec[i64] = Vec.new();
+            self.ws();
+            if self.peek() == ']' {
+                self.pos += 1;
+                return Ok(add_node(mut arena, Node.List(items)));
+            }
+            loop {
+                items.push(self.value(mut arena)?);
+                self.ws();
+                if self.peek() == ',' {
+                    self.pos += 1;
+                } else {
+                    self.expect(']')?;
+                    return Ok(add_node(mut arena, Node.List(items)));
+                }
+            }
+        }
+        if c == '"' {
+            let s = self.string()?;
+            return Ok(add_node(mut arena, Node.Str(s)));
+        }
+        if self.word("null") {
+            return Ok(add_node(mut arena, Node.Null));
+        }
+        if self.word("true") {
+            return Ok(TRUE_ID);
+        }
+        if self.word("false") {
+            return Ok(FALSE_ID);
+        }
+        if c == '-' or (c >= '0' and c <= '9') {
+            return self.number(mut arena);
+        }
+        Err(f"Expecting value at char {self.pos}")
+    }
+}
+
+// json.loads
+fn parse_json(text: ref String, arena: mut ref Vec[Node]) -> Result[i64, String] {
+    let mut p = JsonParser { cs: text.chars().collect(), pos: 0 };
+    let id = p.value(mut arena)?;
+    p.ws();
+    if p.pos != p.cs.len() {
+        return Err(f"Extra data at char {p.pos}");
+    }
+    Ok(id)
+}
+
+// ---------------------------------------------------------------- errors
+
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: own String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg }
+}
+
+fn chevron_error(msg: own String) -> PyErr {
+    py_err("ChevronError", msg)
+}
+
+// What chevron keeps in module globals, and what it writes to stderr.
+struct Ctx {
+    arena: Vec[Node],
+    // tokenizer._CURRENT_LINE and _LAST_TAG_LINE (-1 for None). Every
+    // tokenize() resets them when it starts, so a partial rendered while
+    // the outer template is still being tokenized moves the outer count.
+    cur_line: i64,
+    last_tag_line: i64,
+    warnings: Vec[String],
+}
+
+fn new_ctx() -> Ctx {
+    Ctx { arena: new_arena(), cur_line: 1, last_tag_line: -1, warnings: Vec.new() }
+}
+
+// ---------------------------------------------------------------- tokenizer
+
+const T_LITERAL: i64 = 0;
+const T_VARIABLE: i64 = 1;
+const T_NO_ESCAPE: i64 = 2;
+const T_NO_ESCAPE_Q: i64 = 3; // a '{' tag that was not a triple mustache
+const T_SECTION: i64 = 4;
+const T_INVERTED: i64 = 5;
+const T_END: i64 = 6;
+const T_PARTIAL: i64 = 7;
+const T_SET_DELIMITER: i64 = 8;
+const T_COMMENT: i64 = 9;
+
+#[derive(Clone)]
+struct Tok {
+    kind: i64,
+    key: String,
+}
+
+fn tag_kind(c: char) -> i64 {
+    if c == '!' {
+        T_COMMENT
+    } else if c == '#' {
+        T_SECTION
+    } else if c == '^' {
+        T_INVERTED
+    } else if c == '/' {
+        T_END
+    } else if c == '>' {
+        T_PARTIAL
+    } else if c == '=' {
+        T_SET_DELIMITER
+    } else if c == '{' {
+        T_NO_ESCAPE_Q
+    } else if c == '&' {
+        T_NO_ESCAPE
+    } else {
+        T_VARIABLE
+    }
+}
+
+// tokenize(): one turn of its loop at a time, the tokens of a turn in a
+// queue, so the renderer pulls them as lazily as from the generator.
+struct Tokenizer {
+    cs: Vec[char],
+    pos: i64,
+    l_del: Vec[char],
+    r_del: Vec[char],
+    is_standalone: bool,
+    open_sections: Vec[String],
+    queue: Vec[Tok],
+    qpos: i64,
+    started: bool,
+    finished: bool,
+    eof_check: bool,
+}
+
+fn new_tokenizer(template: ref String, l_del: ref String, r_del: ref String) -> Tokenizer {
+    Tokenizer {
+        cs: template.chars().collect(),
+        pos: 0,
+        l_del: l_del.chars().collect(),
+        r_del: r_del.chars().collect(),
+        is_standalone: true,
+        open_sections: Vec.new(),
+        queue: Vec.new(),
+        qpos: 0,
+        started: false,
+        finished: false,
+        eof_check: false,
+    }
+}
+
+fn is_braces(d: ref Vec[char], c: char) -> bool {
+    d.len() == 2 and d[0] == c and d[1] == c
+}
+
+impl Tokenizer {
+    fn next(mut ref self, ctx: mut ref Ctx) -> Result[Option[Tok], PyErr] {
+        loop {
+            if self.qpos < self.queue.len() {
+                let t = self.queue[self.qpos].clone();
+                self.qpos += 1;
+                return Ok(Some(t));
+            }
+            self.queue = Vec.new();
+            self.qpos = 0;
+            if self.finished {
+                if self.eof_check {
+                    self.eof_check = false;
+                    if self.open_sections.len() > 0 {
+                        let last = self.open_sections[self.open_sections.len() - 1].clone();
+                        let line = if ctx.last_tag_line < 0 { "None".to_string() } else { f"{ctx.last_tag_line}" };
+                        return Err(chevron_error(f"Unexpected EOF\nthe tag \"{last}\" was never closed\nwas opened at line {line}"));
+                    }
+                }
+                return Ok(None);
+            }
+            if not self.started {
+                self.started = true;
+                ctx.cur_line = 1;
+                ctx.last_tag_line = -1;
+            }
+            if let Err(e) = self.step(mut ctx) {
+                self.finished = true;
+                return Err(e);
+            }
+        }
+    }
+
+    fn finish(mut ref self) {
+        self.finished = true;
+        self.eof_check = true;
+    }
+
+    fn step(mut ref self, ctx: mut ref Ctx) -> Result[(), PyErr] {
+        let n = self.cs.len();
+        if self.pos >= n {
+            self.finish();
+            return Ok(());
+        }
+
+        // grab_literal: str.split(l_del, 1), the rest a literal when the
+        // delimiter is missing (or empty, which split refuses)
+        let found = if self.l_del.len() == 0 { -1 } else { find_at(self.cs, self.pos, self.l_del) };
+        let mut literal = String.new();
+        if found < 0 {
+            literal = slice_chars(self.cs, self.pos, n);
+            self.pos = n;
+        } else {
+            literal = slice_chars(self.cs, self.pos, found);
+            for c in literal.chars() {
+                if c == '\n' {
+                    ctx.cur_line += 1;
+                }
+            }
+            self.pos = found + self.l_del.len();
+        }
+        if self.pos >= n {
+            // a tag opener at the very end is dropped with the empty rest
+            self.queue.push(Tok { kind: T_LITERAL, key: literal });
+            self.finish();
+            return Ok(());
+        }
+
+        // l_sa_check
+        if literal.contains("\n") or self.is_standalone {
+            let padding = after_last_newline(literal);
+            self.is_standalone = padding.len() == 0 or py_isspace(padding);
+        } else {
+            self.is_standalone = false;
+        }
+
+        // parse_tag
+        let close = if self.r_del.len() == 0 { -1 } else { find_at(self.cs, self.pos, self.r_del) };
+        if close < 0 {
+            return Err(chevron_error(f"unclosed tag at line {ctx.cur_line}"));
+        }
+        let mut tag: Vec[char] = Vec.new();
+        let mut i = self.pos;
+        while i < close {
+            tag.push(self.cs[i]);
+            i += 1;
+        }
+        self.pos = close + self.r_del.len();
+        if tag.len() == 0 {
+            return Err(py_err("IndexError", "string index out of range".to_string()));
+        }
+        let mut kind = tag_kind(tag[0]);
+        let mut body = if kind == T_VARIABLE { slice_chars(tag, 0, tag.len()) } else { slice_chars(tag, 1, tag.len()) };
+        if kind == T_SET_DELIMITER {
+            if body.ends_with("=") {
+                let bc: Vec[char] = body.chars().collect();
+                body = slice_chars(bc, 0, bc.len() - 1);
+            } else {
+                return Err(chevron_error(f"unclosed set delimiter tag\nat line {ctx.cur_line}"));
+            }
+        } else if kind == T_NO_ESCAPE_Q {
+            if is_braces(self.l_del, '{') and is_braces(self.r_del, '}') and self.pos < n and self.cs[self.pos] == '}' {
+                self.pos += 1;
+                kind = T_NO_ESCAPE;
+            }
+        }
+        let key = py_strip(body);
+
+        if kind == T_SET_DELIMITER {
+            let dels = split_char(py_strip(key), ' ');
+            self.l_del = dels[0].chars().collect();
+            self.r_del = dels[dels.len() - 1].chars().collect();
+        } else if kind == T_SECTION or kind == T_INVERTED {
+            self.open_sections.push(key.clone());
+            ctx.last_tag_line = ctx.cur_line;
+        } else if kind == T_END {
+            if self.open_sections.len() == 0 {
+                return Err(chevron_error(f"Trying to close tag \"{key}\"\nLooks like it was not opened.\nline {ctx.cur_line + 1}"));
+            }
+            let last = match self.open_sections.pop() {
+                Some(s) => s,
+                None => String.new(),
+            };
+            if key != last {
+                return Err(chevron_error(f"Trying to close tag \"{key}\"\nlast open tag is \"{last}\"\nline {ctx.cur_line + 1}"));
+            }
+        }
+
+        // r_sa_check: the rest of the line must be blank
+        if self.is_standalone and kind != T_VARIABLE and kind != T_NO_ESCAPE {
+            let mut j = self.pos;
+            let mut blank = true;
+            while j < n and self.cs[j] != '\n' {
+                if not is_py_space(self.cs[j]) {
+                    blank = false;
+                }
+                j += 1;
+            }
+            self.is_standalone = blank;
+        } else {
+            self.is_standalone = false;
+        }
+        if self.is_standalone {
+            // drop the rest of the line, newline included, when there is one
+            let mut j = self.pos;
+            while j < n and self.cs[j] != '\n' {
+                j += 1;
+            }
+            if j < n {
+                self.pos = j + 1;
+            }
+            if kind != T_PARTIAL {
+                literal = rstrip_any(literal, " ");
+            }
+        }
+
+        if literal.len() > 0 {
+            self.queue.push(Tok { kind: T_LITERAL, key: literal });
+        }
+        if kind != T_COMMENT {
+            self.queue.push(Tok { kind: kind, key: key });
+        }
+        Ok(())
+    }
+}
+
+// The tokens a render() reads: from a tokenizer, or the list a section
+// collected for its items.
+struct Source {
+    lazy: bool,
+    tz: Tokenizer,
+    list: Vec[Tok],
+    pos: i64,
+}
+
+fn lazy_source(template: ref String, l_del: ref String, r_del: ref String) -> Source {
+    Source { lazy: true, tz: new_tokenizer(template, l_del, r_del), list: Vec.new(), pos: 0 }
+}
+
+fn list_source(tags: own Vec[Tok]) -> Source {
+    let empty = String.new();
+    Source { lazy: false, tz: new_tokenizer(empty, empty, empty), list: tags, pos: 0 }
+}
+
+impl Source {
+    fn next(mut ref self, ctx: mut ref Ctx) -> Result[Option[Tok], PyErr] {
+        if self.lazy {
+            return self.tz.next(mut ctx);
+        }
+        if self.pos < self.list.len() {
+            let t = self.list[self.pos].clone();
+            self.pos += 1;
+            return Ok(Some(t));
+        }
+        Ok(None)
+    }
+}
+
+// ---------------------------------------------------------------- renderer
+
+struct Opts {
+    partials: Vec[(String, String)],
+    // None for render(partials_path=None): partials only from the dict
+    partials_path: Option[String],
+    partials_ext: String,
+    l_del: String,
+    r_del: String,
+    warn: bool,
+}
+
+// One step of a dotted lookup, worked out before the arena is changed.
+enum Step {
+    To(i64),
+    NewInt(i64),
+    NewFloat(f64),
+    NewStr(String),
+    Miss,
+    Crash(String),
+}
+
+// Number attributes getattr finds: int and bool have real, imag,
+// numerator and denominator, float only real and imag.
+fn number_attr(child: ref String, value: f64, is_float: bool) -> Option[f64] {
+    if child == "real" {
+        return Some(value);
+    }
+    if child == "imag" {
+        return Some(0.0);
+    }
+    if is_float {
+        return None;
+    }
+    if child == "numerator" {
+        return Some(value);
+    }
+    if child == "denominator" {
+        return Some(1.0);
+    }
+    None
+}
+
+// A subscript that failed on a value that cannot be subscripted:
+// int(child) is a ValueError (the next scope) or the TypeError of
+// value[int(child)].
+fn not_subscriptable(child: ref String, type_name: Str) -> Step {
+    let (is_int, _) = py_int(child);
+    if is_int {
+        Step.Crash(f"'{type_name}' object is not subscriptable")
+    } else {
+        Step.Miss
+    }
+}
+
+fn index_of(child: ref String, len: i64) -> Option[i64] {
+    match py_int(child) {
+        (true, Some(i)) => {
+            let j = if i < 0 { i + len } else { i };
+            if j >= 0 and j < len { Some(j) } else { None }
+        }
+        _ => None,
+    }
+}
+
+fn lookup_step(arena: ref Vec[Node], at: i64, child: ref String) -> Step {
+    match ref arena[at] {
+        Node.Dict(entries) => {
+            for (k, v) in entries.iter() {
+                if k == child {
+                    return Step.To(*v);
+                }
+            }
+            Step.Miss
+        }
+        Node.List(items) => match index_of(child, items.len()) {
+            Some(j) => Step.To(items[j]),
+            None => Step.Miss,
+        },
+        Node.Str(s) => {
+            let cs: Vec[char] = s.chars().collect();
+            match index_of(child, cs.len()) {
+                Some(j) => {
+                    let mut one = String.new();
+                    one.push(cs[j]);
+                    Step.NewStr(one)
+                }
+                None => Step.Miss,
+            }
+        }
+        Node.Int(i) => match number_attr(child, 0.0, false) {
+            Some(_) => {
+                if child == "imag" {
+                    Step.NewInt(0)
+                } else if child == "denominator" {
+                    Step.NewInt(1)
+                } else {
+                    Step.To(at)
+                }
+            }
+            None => not_subscriptable(child, "int"),
+        },
+        Node.Bool(b) => match number_attr(child, 0.0, false) {
+            Some(_) => {
+                if child == "imag" {
+                    Step.NewInt(0)
+                } else if child == "denominator" {
+                    Step.NewInt(1)
+                } else {
+                    Step.NewInt(if *b { 1 } else { 0 })
+                }
+            }
+            None => not_subscriptable(child, "bool"),
+        },
+        Node.Float(x) => match number_attr(child, *x, true) {
+            Some(v) => Step.NewFloat(v),
+            None => not_subscriptable(child, "float"),
+        },
+        Node.Null => not_subscriptable(child, "NoneType"),
+    }
+}
+
+// _get_key: the scopes from the innermost (the end of the vec) out
+fn get_key(key: ref String, scopes: ref Vec[i64], warn: bool, ctx: mut ref Ctx) -> Result[i64, PyErr] {
+    if key == "." {
+        return Ok(scopes[scopes.len() - 1]);
+    }
+    let children = split_char(key, '.');
+    let mut si = scopes.len() - 1;
+    while si >= 0 {
+        let mut at = scopes[si];
+        let mut found = true;
+        for child in children.iter() {
+            let step = lookup_step(ctx.arena, at, child);
+            match step {
+                Step.To(id) => at = id,
+                Step.NewInt(i) => at = add_node(mut ctx.arena, Node.Int(i)),
+                Step.NewFloat(x) => at = add_node(mut ctx.arena, Node.Float(x)),
+                Step.NewStr(s) => at = add_node(mut ctx.arena, Node.Str(s)),
+                Step.Miss => {
+                    found = false;
+                    break;
+                }
+                Step.Crash(msg) => return Err(py_err("TypeError", msg)),
+            }
+        }
+        if found {
+            if zero_or_false(ctx.arena, at) or truthy(ctx.arena, at) {
+                return Ok(at);
+            }
+            return Ok(EMPTY_ID);
+        }
+        si -= 1;
+    }
+    if warn {
+        ctx.warnings.push(f"Could not find key '{key}'");
+    }
+    Ok(EMPTY_ID)
+}
+
+fn is_list(arena: ref Vec[Node], id: i64) -> Option[Vec[i64]] {
+    match ref arena[id] {
+        Node.List(items) => Some(items.clone()),
+        _ => None,
+    }
+}
+
+// os.path.join
+fn path_join(dir: ref String, name: ref String) -> String {
+    if name.starts_with("/") {
+        name.clone()
+    } else if dir.len() == 0 or dir.ends_with("/") {
+        f"{dir}{name}"
+    } else {
+        f"{dir}/{name}"
+    }
+}
+
+// _get_partial: the dict first, then a file (read with universal
+// newlines), else ''
+fn get_partial(name: ref String, o: ref Opts) -> String {
+    for (k, v) in o.partials.iter() {
+        if k == name {
+            return v.clone();
+        }
+    }
+    let dir = match o.partials_path.clone() {
+        Some(d) => d,
+        None => return String.new(),
+    };
+    if dir.len() == 0 {
+        return String.new();
+    }
+    let file = if o.partials_ext.len() > 0 { f"{name}.{o.partials_ext}" } else { name.clone() };
+    let path = path_join(dir, file);
+    match fs.read_to_string(f"data/{path}") {
+        Ok(t) => universal_newlines(t),
+        Err(_) => String.new(),
+    }
+}
+
+fn index_error() -> PyErr {
+    py_err("IndexError", "list index out of range".to_string())
+}
+
+// render(): `scopes` is chevron's scope list with scopes[0] at the end
+fn render(src: mut ref Source, scopes: mut ref Vec[i64], padding: ref String, o: ref Opts, ctx: mut ref Ctx) -> Result[String, PyErr] {
+    let mut output = String.new();
+    loop {
+        let tok = match src.next(mut ctx)? {
+            Some(t) => t,
+            None => break,
+        };
+        if scopes.len() == 0 {
+            return Err(index_error());
+        }
+        let current = scopes[scopes.len() - 1];
+        let kind = tok.kind;
+        if kind == T_END {
+            scopes.pop();
+        } else if not truthy(ctx.arena, current) and scopes.len() != 1 {
+            // inside a falsy scope only the sections count, to keep the
+            // ends balanced
+            if kind == T_SECTION or kind == T_INVERTED {
+                scopes.push(FALSE_ID);
+            }
+        } else if kind == T_LITERAL {
+            output.push_str(tok.key.replace("\n", f"\n{padding}"));
+        } else if kind == T_VARIABLE {
+            let mut thing = get_key(tok.key, scopes, o.warn, mut ctx)?;
+            if is_true(ctx.arena, thing) and tok.key == "." {
+                // an inverted section's True: the scope under it
+                if scopes.len() < 2 {
+                    return Err(index_error());
+                }
+                thing = scopes[scopes.len() - 2];
+            }
+            output.push_str(html_escape(py_str(ctx.arena, thing)));
+        } else if kind == T_NO_ESCAPE {
+            let thing = get_key(tok.key, scopes, o.warn, mut ctx)?;
+            output.push_str(py_str(ctx.arena, thing));
+        } else if kind == T_SECTION {
+            let scope = get_key(tok.key, scopes, o.warn, mut ctx)?;
+            match is_list(ctx.arena, scope) {
+                Some(items) => {
+                    // the tags up to the matching end (counting nested
+                    // sections with the same key, but not inverted ones)
+                    let mut tags: Vec[Tok] = Vec.new();
+                    let mut same = 0;
+                    loop {
+                        let t = match src.next(mut ctx)? {
+                            Some(t) => t,
+                            None => break,
+                        };
+                        if t.kind == T_SECTION and t.key == tok.key {
+                            same += 1;
+                        }
+                        if t.kind == T_END and t.key == tok.key {
+                            same -= 1;
+                            if same < 0 {
+                                break;
+                            }
+                        }
+                        tags.push(t);
+                    }
+                    for item in items.iter() {
+                        let mut inner = scopes.clone();
+                        inner.push(*item);
+                        let mut sub = list_source(tags.clone());
+                        let rend = render(mut sub, mut inner, padding, o, mut ctx)?;
+                        output.push_str(rend);
+                    }
+                }
+                None => scopes.push(scope),
+            }
+        } else if kind == T_INVERTED {
+            let scope = get_key(tok.key, scopes, o.warn, mut ctx)?;
+            scopes.push(if truthy(ctx.arena, scope) { FALSE_ID } else { TRUE_ID });
+        } else if kind == T_PARTIAL {
+            let partial = get_partial(tok.key, o);
+            let left = after_last_newline(output);
+            let indented = py_isspace(left);
+            let part_padding = if indented { f"{padding}{left}" } else { padding.clone() };
+            let mut psrc = lazy_source(partial, o.l_del, o.r_del);
+            let part_out = render(mut psrc, mut scopes, part_padding, o, mut ctx)?;
+            if indented {
+                output.push_str(rstrip_any(part_out, " \t"));
+            } else {
+                output.push_str(part_out);
+            }
+        }
+        // set delimiter and an unfinished '{' tag render nothing
+    }
+    Ok(output)
+}
+
+// ---------------------------------------------------------------- the run
+
+struct Case {
+    name: String,
+    template: String,
+    data: String,
+    partials: Vec[(String, String)],
+    delims: Option[(String, String)],
+}
+
+// cases.txt: `=== name` starts a case, `~~~ kind` a block of it, the
+// block the lines up to the next marker joined with newlines.
+fn parse_cases(text: ref String) -> Vec[Case] {
+    let mut cases: Vec[Case] = Vec.new();
+    let mut kind = String.new();
+    let mut lines: Vec[String] = Vec.new();
+    let mut in_block = false;
+    for line in split_char(text, '\n').into_iter() {
+        let is_case = line.starts_with("=== ");
+        let is_block = line.starts_with("~~~ ");
+        if (is_case or is_block) and in_block and cases.len() > 0 {
+            let last = cases.len() - 1;
+            set_block(mut cases[last], kind, lines.join("\n"));
+            in_block = false;
+        }
+        let cs: Vec[char] = line.chars().collect();
+        if is_case {
+            cases.push(Case {
+                name: slice_chars(cs, 4, cs.len()),
+                template: String.new(),
+                data: "{}".to_string(),
+                partials: Vec.new(),
+                delims: None,
+            });
+        } else if cases.len() == 0 {
+            continue;
+        } else if is_block {
+            kind = slice_chars(cs, 4, cs.len());
+            lines = Vec.new();
+            in_block = true;
+        } else if in_block {
+            lines.push(line);
+        }
+    }
+    if in_block and cases.len() > 0 {
+        let last = cases.len() - 1;
+        set_block(mut cases[last], kind, lines.join("\n"));
+    }
+    cases
+}
+
+fn set_block(c: mut ref Case, kind: ref String, body: own String) {
+    if kind == "template" {
+        c.template = body;
+    } else if kind == "data" {
+        c.data = body;
+    } else if kind == "delimiters" {
+        let d = split_char(body, ' ');
+        c.delims = Some((d[0].clone(), d[1].clone()));
+    } else if kind.starts_with("partial ") {
+        let kc: Vec[char] = kind.chars().collect();
+        let name = slice_chars(kc, 8, kc.len());
+        for p in c.partials.iter_mut() {
+            if p.0 == name {
+                p.1 = body;
+                return;
+            }
+        }
+        c.partials.push((name, body));
+    }
+}
+
+fn show(ctx: ref Ctx, result: ref Result[String, PyErr]) {
+    for w in ctx.warnings.iter() {
+        println(f"  ? {w}");
+    }
+    match result {
+        Ok(out) => {
+            for line in split_char(out, '\n').iter() {
+                println(f"  |{line.replace("\r", "\\r")}");
+            }
+        }
+        Err(e) => {
+            let lines = split_char(e.msg, '\n');
+            println(f"  ! {e.kind}: {lines[0]}");
+            let mut i = 1;
+            while i < lines.len() {
+                println(f"  !   {lines[i]}");
+                i += 1;
+            }
+        }
+    }
+}
+
+fn render_template(template: ref String, data: i64, o: ref Opts, ctx: mut ref Ctx) -> Result[String, PyErr] {
+    let mut scopes: Vec[i64] = vec![data];
+    let mut src = lazy_source(template, o.l_del, o.r_del);
+    let padding = String.new();
+    render(mut src, mut scopes, padding, o, mut ctx)
+}
+
+fn run_case(c: ref Case) {
+    println(f"== {c.name}");
+    let mut ctx = new_ctx();
+    let data = match parse_json(c.data, mut ctx.arena) {
+        Ok(id) => id,
+        Err(e) => {
+            println(f"  ! bad data: {e}");
+            return;
+        }
+    };
+    let (l_del, r_del) = match c.delims.clone() {
+        Some(d) => d,
+        None => ("{{".to_string(), "}}".to_string()),
+    };
+    let o = Opts {
+        partials: c.partials.clone(),
+        partials_path: None,
+        partials_ext: "mustache".to_string(),
+        l_del: l_del,
+        r_del: r_del,
+        warn: true,
+    };
+    let result = render_template(c.template, data, o, mut ctx);
+    show(ctx, result);
+}
+
+struct Job {
+    name: String,
+    template: String,
+    data: Option[String],
+    partials_path: String,
+    partials_ext: String,
+    l_del: String,
+    r_del: String,
+    warn: bool,
+}
+
+fn job(name: Str, template: Str, data: Str, path: Str, ext: Str, l_del: Str, r_del: Str, warn: bool) -> Job {
+    Job {
+        name: name.to_string(),
+        template: template.to_string(),
+        data: if data.len() > 0 { Some(data.to_string()) } else { None },
+        partials_path: path.to_string(),
+        partials_ext: ext.to_string(),
+        l_del: l_del.to_string(),
+        r_del: r_del.to_string(),
+        warn: warn,
+    }
+}
+
+// The same jobs as oracle.py: (name, template, data, partials path,
+// partials extension, delimiters, warn)
+fn jobs() -> Vec[Job] {
+    vec![
+        job("nginx", "site/nginx/nginx.conf.mustache", "site/nginx/sites.json", "site/nginx/partials", "mustache", "{{", "}}", true),
+        job("nginx without data", "site/nginx/nginx.conf.mustache", "", "site/nowhere", "mustache", "{{", "}}", false),
+        job("email", "site/email/order.html.mustache", "site/email/order.json", "site/email", "html", "{{", "}}", true),
+        job("k8s", "site/k8s/deployment.yaml.mustache", "site/k8s/values.json", "site/k8s", "tpl", "{{", "}}", true),
+        job("ci", "site/ci/workflow.yml.tmpl", "site/ci/ci.json", "site/ci", "", "<%", "%>", true),
+        job("broken", "site/broken/page.mustache", "site/broken/page.json", ".", "mustache", "{{", "}}", true),
+    ]
+}
+
+fn read_text(path: ref String) -> Result[String, String] {
+    match fs.read_to_string(f"data/{path}") {
+        Ok(t) => Ok(universal_newlines(t)),
+        Err(e) => Err(f"cannot read {path}: {e}"),
+    }
+}
+
+// chevron.main.main: the template file, the JSON data file (or {}), and
+// render() with the rest of the arguments
+fn run_job(j: ref Job) -> Result[(), String] {
+    println(f"== job: {j.name}");
+    let template = read_text(j.template)?;
+    let mut ctx = new_ctx();
+    let data = match j.data.clone() {
+        Some(path) => parse_json(read_text(path)?, mut ctx.arena)?,
+        None => add_node(mut ctx.arena, Node.Dict(Vec.new())),
+    };
+    let o = Opts {
+        partials: Vec.new(),
+        partials_path: Some(j.partials_path.clone()),
+        partials_ext: j.partials_ext.clone(),
+        l_del: j.l_del.clone(),
+        r_del: j.r_del.clone(),
+        warn: j.warn,
+    };
+    let result = render_template(template, data, o, mut ctx);
+    show(ctx, result);
+    Ok(())
+}
+
+fn parent_dir(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut i = cs.len();
+    while i > 0 and cs[i - 1] != '/' {
+        i -= 1;
+    }
+    if i == 0 { String.new() } else { slice_chars(cs, 0, i - 1) }
+}
+
+fn write_data() -> Result[(), String] {
+    for (name, text) in data_files().into_iter() {
+        let path = f"data/{name}";
+        let dir = parent_dir(path);
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let text = match fs.read_to_string("data/cases.txt".to_string()) {
+        Ok(t) => t,
+        Err(e) => return Err(f"cannot read data/cases.txt: {e}"),
+    };
+    for c in parse_cases(text).iter() {
+        run_case(c);
+    }
+    for j in jobs().iter() {
+        run_job(j)?;
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
+// ---------------------------------------------------------------- data
+// Generated by gen_kara.py.
+
+fn file_0_0(out: mut ref String) {
+    out.push_str("# Mustache cases: each runs chevron.render(template, data, partials_dict,\u{a}# partials_path=None, warn=True). A block is the lines up to the next\u{a}# marker, joined with newlines; an empty last line gives a final newline.\u{a}=== interpolation: no tags\u{a}~~~ template\u{a}Hello from {Mustache}!\u{a}~~~ data\u{a}{}\u{a}=== interpolation: basic\u{a}~~~ template\u{a}Hello, {{subject}}!\u{a}~~~ data\u{a}{\"subject\": \"world\"}\u{a}=== interpolation: ");
+    out.push_str("escaping\u{a}~~~ template\u{a}These characters should be HTML escaped: {{forbidden}}\u{a}~~~ data\u{a}{\"forbidden\": \"& \\\" < > '\"}\u{a}=== interpolation: triple mustache and ampersand\u{a}~~~ template\u{a}{{{forbidden}}} | {{&forbidden}} | {{& forbidden }}\u{a}~~~ data\u{a}{\"forbidden\": \"& \\\" < > '\"}\u{a}=== interpolation: numbers, booleans and null\u{a}~~~ template\u{a}int {{i}}, float {{f}}, big {{big}}, exp {{e}}, true {{t}}, false {{no}}, ze");
+    out.push_str("ro {{zero}}, fzero {{fz}}, negzero {{nz}}, null [{{nil}}]\u{a}~~~ data\u{a}{\"i\": 85, \"f\": 1.21, \"big\": 12345678901234567, \"e\": 1e3, \"t\": true, \"no\": false, \"zero\": 0, \"fz\": 0.0, \"nz\": -0.0, \"nil\": null}\u{a}=== interpolation: lists and dicts print as Python values\u{a}~~~ template\u{a}{{list}} / {{dict}} / {{{dict}}}\u{a}~~~ data\u{a}{\"list\": [1, \"two\", 3.5, null, true, [\"it's\"], {\"q\": \"\\\"x\\\"\"}], \"dict\": {\"a\": 1, \"b\": [], \"c");
+    out.push_str("\": \"line\\nbreak\"}}\u{a}=== interpolation: empty values\u{a}~~~ template\u{a}[{{empty}}] [{{list}}] [{{dict}}]\u{a}~~~ data\u{a}{\"empty\": \"\", \"list\": [], \"dict\": {}}\u{a}=== interpolation: missing key warns\u{a}~~~ template\u{a}I ({{cannot}}) be seen! {{nested.missing}}\u{a}~~~ data\u{a}{\"nested\": {}}\u{a}=== interpolation: dotted names\u{a}~~~ template\u{a}\"{{person.name}}\" == \"{{#person}}{{name}}{{/person}}\" / {{a.b.c.d.e.name}}\u{a}~~~ data\u{a}{\"person\"");
+    out.push_str(": {\"name\": \"Joe\"}, \"a\": {\"b\": {\"c\": {\"d\": {\"e\": {\"name\": \"Phil\"}}}}}}\u{a}=== interpolation: a dotted name that breaks part way tries the next scope\u{a}~~~ template\u{a}{{#a}}{{b.c}}{{/a}}\u{a}~~~ data\u{a}{\"a\": {\"b\": {}}, \"b\": {\"c\": \"ERROR\"}}\u{a}=== interpolation: list indexes and string indexes\u{a}~~~ template\u{a}{{items.0}} {{items.-1}} {{items.+1}} {{word.0}}{{word.-1}} [{{items.9}}] [{{items.x}}]\u{a}~~~ data\u{a}{\"items\": [\"fi");
+    out.push_str("rst\", \"second\", \"last\"], \"word\": \"kara\"}\u{a}=== interpolation: attributes of numbers\u{a}~~~ template\u{a}{{n.real}} {{n.imag}} {{n.numerator}} {{n.denominator}} {{x.real}} {{x.imag}} {{yes.real}}\u{a}~~~ data\u{a}{\"n\": 7, \"x\": 2.5, \"yes\": true}\u{a}=== interpolation: whitespace around the key\u{a}~~~ template\u{a}|{{ string }}|{{{ string }}}|{{&  string  }}|\u{a}~~~ data\u{a}{\"string\": \"---\"}\u{a}=== interpolation: standalone tags are not");
+    out.push_str(" trimmed\u{a}~~~ template\u{a}  {{string}}\u{a}  {{{string}}}\u{a}\u{a}~~~ data\u{a}{\"string\": \"---\"}\u{a}=== interpolation: the implicit iterator at the top\u{a}~~~ template\u{a}{{.}}\u{a}~~~ data\u{a}{\"a\": 1}\u{a}=== sections: truthy and falsy\u{a}~~~ template\u{a}\"{{#t}}This should be rendered.{{/t}}\" \"{{#f}}This should not be rendered.{{/f}}\" \"{{#z}}zero{{/z}}\" \"{{#s}}empty string{{/s}}\" \"{{#n}}null{{/n}}\"\u{a}~~~ data\u{a}{\"t\": true, \"f\": false, \"z\": 0, \"");
+    out.push_str("s\": \"\", \"n\": null}\u{a}=== sections: a context\u{a}~~~ template\u{a}\"{{#context}}Hi {{name}}.{{/context}}\"\u{a}~~~ data\u{a}{\"context\": {\"name\": \"Joe\"}}\u{a}=== sections: parent contexts\u{a}~~~ template\u{a}\"{{#sec}}{{a}}, {{b}}, {{c.d}}{{/sec}}\"\u{a}~~~ data\u{a}{\"a\": \"foo\", \"b\": \"wrong\", \"sec\": {\"b\": \"bar\"}, \"c\": {\"d\": \"baz\"}}\u{a}=== sections: deeply nested contexts\u{a}~~~ template\u{a}{{#a}}\u{a}{{one}}\u{a}{{#b}}\u{a}{{one}}{{two}}{{one}}\u{a}{{#c}}\u{a}{{one}}");
+    out.push_str("{{two}}{{three}}{{two}}{{one}}\u{a}{{/c}}\u{a}{{/b}}\u{a}{{/a}}\u{a}\u{a}~~~ data\u{a}{\"a\": {\"one\": 1}, \"b\": {\"two\": 2}, \"c\": {\"three\": 3}}\u{a}=== sections: lists\u{a}~~~ template\u{a}\"{{#list}}{{item}}{{/list}}\"\u{a}~~~ data\u{a}{\"list\": [{\"item\": 1}, {\"item\": 2}, {\"item\": 3}]}\u{a}=== sections: the implicit iterator\u{a}~~~ template\u{a}\"{{#list}}({{.}}){{/list}}\" \"{{#nested}}({{#.}}{{.}}{{/.}}){{/nested}}\"\u{a}~~~ data\u{a}{\"list\": [\"a\", 1, 2.5, true, \"&\"]");
+    out.push_str(", \"nested\": [[1, 2], [3]]}\u{a}=== sections: falsy list items are skipped\u{a}~~~ template\u{a}{{#nums}}{{.}},{{/nums}} {{#mixed}}[{{.}}]{{/mixed}}\u{a}~~~ data\u{a}{\"nums\": [1, 0, 2, 0.0, 3], \"mixed\": [\"\", null, false, [], {}, \"x\"]}\u{a}=== sections: an empty list\u{a}~~~ template\u{a}\"{{#list}}Yay lists!{{/list}}\"\u{a}~~~ data\u{a}{\"list\": []}\u{a}=== sections: doubled\u{a}~~~ template\u{a}{{#bool}}\u{a}* first\u{a}{{/bool}}\u{a}* {{two}}\u{a}{{#bool}}\u{a}* third\u{a}{");
+    out.push_str("{/bool}}\u{a}\u{a}~~~ data\u{a}{\"bool\": true, \"two\": \"second\"}\u{a}=== sections: nested sections with the same name\u{a}~~~ template\u{a}{{#list}}<{{#list}}{{.}}{{/list}}>{{/list}}\u{a}~~~ data\u{a}{\"list\": [{\"list\": [\"a\", \"b\"]}, {\"list\": []}]}\u{a}=== sections: a string is a scope, not a list\u{a}~~~ template\u{a}{{#name}}[{{.}}] {{0}}{{/name}}\u{a}~~~ data\u{a}{\"name\": \"Kara\"}\u{a}=== sections: dotted names\u{a}~~~ template\u{a}\"{{#a.b.c}}Here{{/a.b.c}}\" == ");
+    out.push_str("\"Here\" / \"{{#a.b.x}}Here{{/a.b.x}}\" == \"\"\u{a}~~~ data\u{a}{\"a\": {\"b\": {\"c\": true}}}\u{a}=== sections: standalone lines\u{a}~~~ template\u{a}| This Is\u{a}{{#boolean}}\u{a}|\u{a}{{/boolean}}\u{a}| A Line\u{a}\u{a}~~~ data\u{a}{\"boolean\": true}\u{a}=== sections: indented standalone lines\u{a}~~~ template\u{a}| This Is\u{a}  {{#boolean}}\u{a}|\u{a}  {{/boolean}}\u{a}| A Line\u{a}\u{a}~~~ data\u{a}{\"boolean\": true}\u{a}=== sections: standalone with a tab before and after\u{a}~~~ template\u{a}| A\u{a}\u{9}{");
+    out.push_str("{#b}}\u{9}\u{a}| B\u{a}\u{9}{{/b}}\u{9}\u{a}| C\u{a}~~~ data\u{a}{\"b\": true}\u{a}=== sections: standalone at the end without a newline\u{a}~~~ template\u{a}#{{#boolean}}\u{a}/\u{a}  {{/boolean}}  \u{a}~~~ data\u{a}{\"boolean\": true}\u{a}=== sections: not standalone when text follows\u{a}~~~ template\u{a} {{#boolean}}YES{{/boolean}}\u{a} {{#boolean}}GOOD{{/boolean}}\u{a}\u{a}~~~ data\u{a}{\"boolean\": true}\u{a}=== sections: CRLF line ends\u{a}~~~ template\u{a}|\u{d}\u{a}{{#boolean}}\u{d}\u{a}{{/boolean}}\u{d}\u{a}|\u{d}\u{a}~~~ d");
+    out.push_str("ata\u{a}{\"boolean\": true}\u{a}=== inverted: falsy values\u{a}~~~ template\u{a}\"{{^f}}This should be rendered.{{/f}}\" \"{{^t}}no{{/t}}\" \"{{^z}}zero{{/z}}\" \"{{^s}}empty{{/s}}\" \"{{^n}}null{{/n}}\" \"{{^missing}}missing{{/missing}}\"\u{a}~~~ data\u{a}{\"t\": true, \"f\": false, \"z\": 0, \"s\": \"\", \"n\": null}\u{a}=== inverted: lists\u{a}~~~ template\u{a}\"{{^list}}{{n}}{{/list}}\" \"{{^empty}}Yay lists!{{/empty}}\"\u{a}~~~ data\u{a}{\"list\": [{\"n\": 1}, {\"n\": 2}");
+    out.push_str("], \"empty\": []}\u{a}=== inverted: the implicit iterator inside reads the parent\u{a}~~~ template\u{a}{{#items}}{{^flag}}<{{name}} {{.}}>{{/flag}}{{/items}}\u{a}~~~ data\u{a}{\"items\": [{\"name\": \"a\", \"flag\": true}, {\"name\": \"b\"}]}\u{a}=== inverted: dotted names and context\u{a}~~~ template\u{a}\"{{^a.b.c}}Not Here{{/a.b.c}}\" \"{{^a.b.x}}Not Here{{/a.b.x}}\" \"{{^ctx}}{{name}}{{/ctx}}\"\u{a}~~~ data\u{a}{\"a\": {\"b\": {\"c\": true}}, \"name\": \"outer\"");
+    out.push_str("}\u{a}=== inverted: standalone lines\u{a}~~~ template\u{a}| This Is\u{a}{{^boolean}}\u{a}|\u{a}{{/boolean}}\u{a}| A Line\u{a}\u{a}~~~ data\u{a}{\"boolean\": false}\u{a}=== comments: inline and standalone\u{a}~~~ template\u{a}12345{{! Comment Block! }}67890\u{a}Begin.\u{a}{{! Comment Block! }}\u{a}End.\u{a}  {{! Indented Comment Block! }}\u{a}Middle.\u{a}{{!\u{a}  Something's going on here...\u{a}}}\u{a}Done.\u{a}\u{a}~~~ data\u{a}{}\u{a}=== comments: not standalone with text around\u{a}~~~ template\u{a}  12 {");
+    out.push_str("{! 34 }}\u{a} 12345 {{! Comment Block! }} 67890\u{a}~~~ data\u{a}{}\u{a}=== delimiters: pair behavior\u{a}~~~ template\u{a}{{=<% %>=}}(<%text%>) {{text}} <%={{ }}=%>({{text}})\u{a}~~~ data\u{a}{\"text\": \"Hey!\"}\u{a}=== delimiters: special characters and spaces\u{a}~~~ template\u{a}({{=[   ]=}}[text]) ({{=| |=}}|text|)\u{a}~~~ data\u{a}{\"text\": \"It worked!\"}\u{a}=== delimiters: sections and inverted sections\u{a}~~~ template\u{a}[\u{a}{{#section}}\u{a}  {{data}}\u{a}  |data");
+    out.push_str("|\u{a}{{/section}}\u{a}{{= | | =}}\u{a}|#section|\u{a}  {{data}}\u{a}  |data|\u{a}|/section|\u{a}|^nope|\u{a}  |data|\u{a}|/nope|\u{a}]\u{a}~~~ data\u{a}{\"section\": true, \"data\": \"I got interpolated.\", \"nope\": false}\u{a}=== delimiters: standalone set-delimiter tags\u{a}~~~ template\u{a}Begin.\u{a}{{=@ @=}}\u{a}End @x@.\u{a}  @={{ }}=@\u{a}Back {{x}}.\u{a}\u{a}~~~ data\u{a}{\"x\": \"!\"}\u{a}=== delimiters: the triple mustache only works with braces\u{a}~~~ template\u{a}{{=<% %>=}}<%{a}%>|<%&a%>|<%a");
+    out.push_str("%>\u{a}~~~ data\u{a}{\"a\": \"<b>\"}\u{a}=== delimiters: chosen by the caller\u{a}~~~ delimiters\u{a}<% %>\u{a}~~~ template\u{a}{{ kept }} <%name%> <%#list%>[<%.%>]<%/list%>\u{a}~~~ data\u{a}{\"name\": \"Ada\", \"list\": [1, 2]}\u{a}=== partials: basic and missing\u{a}~~~ template\u{a}\"{{>text}}\" \"{{>missing}}\"\u{a}~~~ partial text\u{a}from partial\u{a}~~~ data\u{a}{}\u{a}=== partials: context and recursion\u{a}~~~ template\u{a}{{>node}}\u{a}~~~ partial node\u{a}{{content}}<{{#nodes}}{{>no");
+    out.push_str("de}}{{/nodes}}>\u{a}~~~ data\u{a}{\"content\": \"X\", \"nodes\": [{\"content\": \"Y\", \"nodes\": []}, {\"content\": \"Z\", \"nodes\": [{\"content\": \"W\", \"nodes\": []}]}]}\u{a}=== partials: standalone indentation\u{a}~~~ template\u{a}\\\u{a} {{>partial}}\u{a}/\u{a}\u{a}~~~ partial partial\u{a}|\u{a}{{{content}}}\u{a}|\u{a}\u{a}~~~ data\u{a}{\"content\": \"<\\n->\"}\u{a}=== partials: inline partials are not indented\u{a}~~~ template\u{a}  {{data}}  {{> partial}}\u{a}\u{a}~~~ partial partial\u{a}>\u{a}>\u{a}~~~ dat");
+    out.push_str("a\u{a}{\"data\": \"|\"}\u{a}=== partials: the partial's own delimiters reset\u{a}~~~ template\u{a}{{=| |=}}|>p| |text|\u{a}~~~ partial p\u{a}{{text}}|text|\u{a}~~~ data\u{a}{\"text\": \"T\"}\u{a}=== partials: indentation inside a list\u{a}~~~ template\u{a}items:\u{a}{{#items}}\u{a}  {{>item}}\u{a}{{/items}}\u{a}~~~ partial item\u{a}- name: {{name}}\u{a}  qty: {{qty}}\u{a}\u{a}~~~ data\u{a}{\"items\": [{\"name\": \"bolt\", \"qty\": 4}, {\"name\": \"nut\", \"qty\": 0}]}\u{a}=== partials: a tab before a ");
+    out.push_str("standalone partial\u{a}~~~ template\u{a}>\u{a}\u{9}{{>p}}\u{a}<\u{a}~~~ partial p\u{a}a\u{a}b\u{a}\u{a}~~~ data\u{a}{}\u{a}=== quirks: a lone opening delimiter at the end vanishes\u{a}~~~ template\u{a}price: 10{{\u{a}~~~ data\u{a}{}\u{a}=== quirks: an empty tag\u{a}~~~ template\u{a}before {{}} after\u{a}~~~ data\u{a}{}\u{a}=== quirks: a triple mustache that is not closed by three braces\u{a}~~~ template\u{a}[{{{a}}] [{{{ a }}}]\u{a}~~~ data\u{a}{\"a\": \"x\"}\u{a}=== quirks: a falsy section skips the rest o");
+    out.push_str("f a scope\u{a}~~~ template\u{a}{{#outer}}A{{#zero}}B{{/zero}}C{{/outer}}\u{a}~~~ data\u{a}{\"outer\": {\"zero\": 0}}\u{a}=== quirks: a number that is subscripted\u{a}~~~ template\u{a}{{#n}}{{0}}{{/n}}\u{a}~~~ data\u{a}{\"n\": 5}\u{a}=== quirks: a null that is subscripted\u{a}~~~ template\u{a}{{#items}}{{1}}{{/items}}\u{a}~~~ data\u{a}{\"items\": [null, {\"1\": \"found\"}]}\u{a}=== quirks: the implicit iterator on true at the top\u{a}~~~ template\u{a}{{#t}}{{.}}{{/t}}\u{a}~~~ data");
+    out.push_str("\u{a}{\"t\": true}\u{a}=== quirks: set delimiter with no right delimiter\u{a}~~~ template\u{a}{{=<%=}}<%x\u{a}~~~ data\u{a}{\"x\": 1}\u{a}=== quirks: an empty left delimiter\u{a}~~~ template\u{a}a{{= =}}b {{x}}\u{a}~~~ data\u{a}{\"x\": 1}\u{a}=== errors: unclosed tag\u{a}~~~ template\u{a}line one\u{a}line two {{name\u{a}~~~ data\u{a}{}\u{a}=== errors: unclosed set delimiter\u{a}~~~ template\u{a}one\u{a}two\u{a}{{=<% %>}}\u{a}~~~ data\u{a}{}\u{a}=== errors: closing a section that was not opened\u{a}~~~ tem");
+    out.push_str("plate\u{a}a\u{a}{{#a}}b{{/a}}\u{a}{{/b}}\u{a}~~~ data\u{a}{\"a\": 1}\u{a}=== errors: closing the wrong section\u{a}~~~ template\u{a}{{#a}}\u{a}  {{#b}}\u{a}  {{/a}}\u{a}{{/b}}\u{a}~~~ data\u{a}{}\u{a}=== errors: a section never closed\u{a}~~~ template\u{a}{{#a}}\u{a}{{#b}}{{/b}}\u{a}text\u{a}~~~ data\u{a}{\"a\": true}\u{a}=== errors: the warnings before an error stay\u{a}~~~ template\u{a}{{missing1}} {{missing2}}\u{a}{{/x}}\u{a}~~~ data\u{a}{}\u{a}=== errors: a partial resets the line count\u{a}~~~ template\u{a}one");
+    out.push_str("\u{a}two\u{a}{{>p}}\u{a}four\u{a}{{/x}}\u{a}~~~ partial p\u{a}just one line\u{a}~~~ data\u{a}{}\u{a}=== errors: an error inside a partial\u{a}~~~ template\u{a}before {{>p}} after\u{a}~~~ partial p\u{a}{{#open}}\u{a}~~~ data\u{a}{}\u{a}=== quirks: an inverted section with the same name ends a list early\u{a}~~~ template\u{a}{{#list}}{{^list}}x{{/list}}{{/list}}after\u{a}~~~ data\u{a}{\"list\": [1]}\u{a}=== quirks: duplicate keys keep the first place and the last value\u{a}~~~ template\u{a}{");
+    out.push_str("{.}} {{a}}\u{a}~~~ data\u{a}{\"a\": 1, \"b\": 2, \"a\": 3}\u{a}=== interpolation: JSON escapes and non-ASCII\u{a}~~~ template\u{a}{{s}} | {{.}}\u{a}~~~ data\u{a}{\"s\": \"tab\\there \\u00e9\\u4e2d\\ud83d\\ude00 \\\\ \\/ \\u0007\", \"k\\u00e9y\": \"\\u2028\"}\u{a}");
+}
+
+fn file_0() -> String {
+    let mut out = String.new();
+    file_0_0(mut out);
+    out
+}
+
+fn file_1_0(out: mut ref String) {
+    out.push_str("{\"items\": [{\"name\": \"a\"}]}\u{a}");
+}
+
+fn file_1() -> String {
+    let mut out = String.new();
+    file_1_0(mut out);
+    out
+}
+
+fn file_2_0(out: mut ref String) {
+    out.push_str("<ul>\u{a}{{#items}}\u{a}  <li>{{name}}</li>\u{a}{{/item}}\u{a}</ul>\u{a}");
+}
+
+fn file_2() -> String {
+    let mut out = String.new();
+    file_2_0(mut out);
+    out
+}
+
+fn file_3_0(out: mut ref String) {
+    out.push_str("{\u{a}  \"name\": \"CI\",\u{a}  \"branch\": \"main\",\u{a}  \"jobs\": [\u{a}    {\"id\": \"test\", \"os\": \"ubuntu-latest, macos-latest\", \"toolchains\": \"stable, beta\",\u{a}     \"steps\": [\u{a}       {\"name\": \"Build\", \"run\": \"cargo build --locked\"},\u{a}       {\"name\": \"Test\", \"run\": \"cargo test -- --nocapture\"},\u{a}       {\"name\": \"Upload coverage\", \"if\": \"github.ref == 'refs/heads/main' && success()\", \"run\": \"./upload.sh\", \"env\": \"CODECOV_TOK");
+    out.push_str("EN\"}\u{a}     ]},\u{a}    {\"id\": \"lint\", \"os\": \"ubuntu-latest\", \"toolchains\": \"\",\u{a}     \"steps\": [{\"name\": \"Clippy\", \"run\": \"cargo clippy -- -D warnings\"}]}\u{a}  ]\u{a}}\u{a}");
+}
+
+fn file_3() -> String {
+    let mut out = String.new();
+    file_3_0(mut out);
+    out
+}
+
+fn file_4_0(out: mut ref String) {
+    out.push_str("- name: <% name %>\u{a}<%#if%>\u{a}  if: <%& if %>\u{a}<%/if%>\u{a}  run: <% run %>\u{a}<%#env%>\u{a}  env:\u{a}    TOKEN: ${{ secrets.<% env %> }}\u{a}<%/env%>\u{a}");
+}
+
+fn file_4() -> String {
+    let mut out = String.new();
+    file_4_0(mut out);
+    out
+}
+
+fn file_5_0(out: mut ref String) {
+    out.push_str("name: <% name %>\u{d}\u{a}\u{d}\u{a}on:\u{d}\u{a}  push:\u{d}\u{a}    branches: [<% branch %>]\u{d}\u{a}  pull_request:\u{d}\u{a}\u{d}\u{a}jobs:\u{d}\u{a}<%#jobs%>\u{d}\u{a}  <% id %>:\u{d}\u{a}    runs-on: ${{ matrix.os }}\u{d}\u{a}    strategy:\u{d}\u{a}      matrix:\u{d}\u{a}        os: [<% os %>]\u{d}\u{a}<%#toolchains.0%>\u{d}\u{a}        toolchain: [<% toolchains %>]\u{d}\u{a}<%/toolchains.0%>\u{d}\u{a}    steps:\u{d}\u{a}      - uses: actions/checkout@v4\u{d}\u{a}<%#steps%>\u{d}\u{a}      <%>step%>\u{d}\u{a}<%/steps%>\u{d}\u{a}<%/jobs%>\u{d}\u{a}");
+}
+
+fn file_5() -> String {
+    let mut out = String.new();
+    file_5_0(mut out);
+    out
+}
+
+fn file_6_0(out: mut ref String) {
+    out.push_str("<hr>\u{a}<p class=\"small\">{{shop}} &middot; {{support}}</p>\u{a}</body></html>\u{a}");
+}
+
+fn file_6() -> String {
+    let mut out = String.new();
+    file_6_0(mut out);
+    out
+}
+
+fn file_7_0(out: mut ref String) {
+    out.push_str("<!DOCTYPE html>\u{a}<html><head><title>{{shop}}: order {{order.number}}</title></head>\u{a}<body>\u{a}");
+}
+
+fn file_7() -> String {
+    let mut out = String.new();
+    file_7_0(mut out);
+    out
+}
+
+fn file_8_0(out: mut ref String) {
+    out.push_str("{{> header}}\u{a}<p>Hi {{customer.first_name}},</p>\u{a}<p>Thanks for your order <b>#{{order.number}}</b> placed on {{order.date}}.</p>\u{a}<table class=\"items\">\u{a}  <tr><th>Item</th><th>Qty</th><th>Price</th></tr>\u{a}  {{#order.items}}\u{a}  <tr><td>{{name}}{{#options}} ({{.}}){{/options}}</td><td>{{qty}}</td><td>{{currency}}{{price}}</td></tr>\u{a}  {{/order.items}}\u{a}</table>\u{a}{{#order.discount}}\u{a}<p>Discount code <code>{{");
+    out.push_str("code}}</code> saved you {{currency}}{{amount}}.</p>\u{a}{{/order.discount}}\u{a}{{^order.discount}}\u{a}<p>Tip: sign up for our newsletter to get 10% off.</p>\u{a}{{/order.discount}}\u{a}<p>Total: <b>{{currency}}{{order.total}}</b>{{#order.gift}} (gift wrapped){{/order.gift}}</p>\u{a}<p>Ship to:<br>\u{a}{{#customer.address}}\u{a}{{line1}}<br>\u{a}{{#line2}}{{line2}}<br>{{/line2}}\u{a}{{city}} {{zip}}, {{country}}\u{a}{{/customer.address}}\u{a}<");
+    out.push_str("/p>\u{a}{{#customer.note}}\u{a}<blockquote>{{{customer.note}}}</blockquote>\u{a}{{/customer.note}}\u{a}{{> footer}}\u{a}");
+}
+
+fn file_8() -> String {
+    let mut out = String.new();
+    file_8_0(mut out);
+    out
+}
+
+fn file_9_0(out: mut ref String) {
+    out.push_str("{\u{a}  \"shop\": \"Tom & Jerry's Tea\",\u{a}  \"support\": \"help@tea.example\",\u{a}  \"currency\": \"€\",\u{a}  \"customer\": {\u{a}    \"first_name\": \"Zoë \\\"Z\\\" <O'Brien>\",\u{a}    \"address\": {\"line1\": \"Hauptstraße 5\", \"line2\": \"\", \"city\": \"Wien\", \"zip\": \"1010\", \"country\": \"AT\"},\u{a}    \"note\": \"Please <em>leave</em> it at the door & ring twice\"\u{a}  },\u{a}  \"order\": {\u{a}    \"number\": 10442,\u{a}    \"date\": \"2024-11-03\",\u{a}    \"items\": [\u{a}      {\"na");
+    out.push_str("me\": \"Sencha\", \"qty\": 2, \"price\": 12.5, \"options\": [\"100 g\", \"loose leaf\"]},\u{a}      {\"name\": \"Kyusu teapot\", \"qty\": 1, \"price\": 48.0},\u{a}      {\"name\": \"Gift card\", \"qty\": 1, \"price\": 25, \"options\": []}\u{a}    ],\u{a}    \"discount\": null,\u{a}    \"total\": 98.0,\u{a}    \"gift\": true\u{a}  }\u{a}}\u{a}");
+}
+
+fn file_9() -> String {
+    let mut out = String.new();
+    file_9_0(mut out);
+    out
+}
+
+fn file_10_0(out: mut ref String) {
+    out.push_str("name: {{name}}\u{a}image: {{image}}:{{tag}}\u{a}{{#ports.0}}\u{a}ports:\u{a}{{/ports.0}}\u{a}{{#ports}}\u{a}  - containerPort: {{.}}\u{a}{{/ports}}\u{a}{{#env.0}}\u{a}env:\u{a}{{/env.0}}\u{a}{{#env}}\u{a}  - name: {{name}}\u{a}    value: \"{{value}}\"\u{a}{{/env}}\u{a}resources:\u{a}  limits: {cpu: \"{{limits.cpu}}\", memory: \"{{limits.memory}}\"}\u{a}");
+}
+
+fn file_10() -> String {
+    let mut out = String.new();
+    file_10_0(mut out);
+    out
+}
+
+fn file_11_0(out: mut ref String) {
+    out.push_str("apiVersion: apps/v1\u{a}kind: Deployment\u{a}metadata:\u{a}  name: {{app}}\u{a}  namespace: {{namespace}}\u{a}  labels:\u{a}    app: {{app}}\u{a}{{#labels}}\u{a}    {{key}}: \"{{value}}\"\u{a}{{/labels}}\u{a}spec:\u{a}  replicas: {{replicas}}\u{a}  selector:\u{a}    matchLabels:\u{a}      app: {{app}}\u{a}  template:\u{a}    metadata:\u{a}      labels:\u{a}        app: {{app}}\u{a}    spec:\u{a}      containers:\u{a}{{#containers}}\u{a}        - {{>container}}\u{a}{{/containers}}\u{a}{{#volume");
+    out.push_str("s.0}}\u{a}      volumes:\u{a}{{/volumes.0}}\u{a}{{#volumes}}\u{a}        - name: {{name}}\u{a}          configMap:\u{a}            name: {{config}}\u{a}{{/volumes}}\u{a}");
+}
+
+fn file_11() -> String {
+    let mut out = String.new();
+    file_11_0(mut out);
+    out
+}
+
+fn file_12_0(out: mut ref String) {
+    out.push_str("{\u{a}  \"app\": \"billing-api\",\u{a}  \"namespace\": \"payments\",\u{a}  \"replicas\": 3,\u{a}  \"labels\": [{\"key\": \"team\", \"value\": \"payments\"}, {\"key\": \"tier\", \"value\": \"backend\"}],\u{a}  \"containers\": [\u{a}    {\"name\": \"api\", \"image\": \"registry.example.com/billing-api\", \"tag\": \"2.14.1\",\u{a}     \"ports\": [8080, 9090],\u{a}     \"env\": [{\"name\": \"LOG_LEVEL\", \"value\": \"info\"}, {\"name\": \"DB_POOL\", \"value\": 20}],\u{a}     \"limits\": {\"cpu\": \"5");
+    out.push_str("00m\", \"memory\": \"512Mi\"}},\u{a}    {\"name\": \"proxy\", \"image\": \"envoyproxy/envoy\", \"tag\": \"v1.31.0\",\u{a}     \"ports\": [],\u{a}     \"limits\": {\"cpu\": \"100m\", \"memory\": \"128Mi\"}}\u{a}  ],\u{a}  \"volumes\": [{\"name\": \"envoy-config\", \"config\": \"billing-envoy\"}]\u{a}}\u{a}");
+}
+
+fn file_12() -> String {
+    let mut out = String.new();
+    file_12_0(mut out);
+    out
+}
+
+fn file_13_0(out: mut ref String) {
+    out.push_str("{{! Generated for {{env}} -- do not edit by hand }}\u{a}# {{env}}: {{sites.length}} sites\u{a}user  {{user}};\u{a}worker_processes  {{workers}};\u{a}\u{a}events {\u{a}    worker_connections  {{connections}};\u{a}}\u{a}\u{a}http {\u{a}    include       mime.types;\u{a}    sendfile      on;\u{a}{{#gzip}}\u{a}    gzip          on;\u{a}    gzip_types    {{types}};\u{a}{{/gzip}}\u{a}{{^gzip}}\u{a}    # gzip is off\u{a}{{/gzip}}\u{a}\u{a}{{#upstreams}}\u{a}    upstream {{name}} {\u{a}{{#se");
+    out.push_str("rvers}}\u{a}        server {{host}}:{{port}}{{#weight}} weight={{weight}}{{/weight}}{{#backup}} backup{{/backup}};\u{a}{{/servers}}\u{a}    }\u{a}\u{a}{{/upstreams}}\u{a}{{#sites}}\u{a}    server {\u{a}        listen       {{port}}{{#tls}} ssl{{/tls}};\u{a}        server_name  {{names}};\u{a}{{#tls}}\u{a}        ssl_certificate      /etc/ssl/{{cert}}.pem;\u{a}        ssl_certificate_key  /etc/ssl/{{cert}}.key;\u{a}{{/tls}}\u{a}{{#locations}}\u{a}        {{");
+    out.push_str("> location}}\u{a}{{/locations}}\u{a}        {{>error_pages}}\u{a}    }\u{a}\u{a}{{/sites}}\u{a}}\u{a}");
+}
+
+fn file_13() -> String {
+    let mut out = String.new();
+    file_13_0(mut out);
+    out
+}
+
+fn file_14_0(out: mut ref String) {
+    out.push_str("location {{path}} {\u{a}{{#proxy}}\u{a}    proxy_pass http://{{proxy}};\u{a}    proxy_set_header Host $host;\u{a}{{/proxy}}\u{a}{{#root}}\u{a}    root {{root}};\u{a}    {{#files}}index {{files}};{{/files}}\u{a}{{/root}}\u{a}{{#deny}}\u{a}    deny all;\u{a}{{/deny}}\u{a}}\u{a}");
+}
+
+fn file_14() -> String {
+    let mut out = String.new();
+    file_14_0(mut out);
+    out
+}
+
+fn file_15_0(out: mut ref String) {
+    out.push_str("{\u{a}  \"env\": \"production\",\u{a}  \"user\": \"www-data\",\u{a}  \"workers\": \"auto\",\u{a}  \"connections\": 1024,\u{a}  \"gzip\": {\"types\": \"text/css application/json application/javascript\"},\u{a}  \"upstreams\": [\u{a}    {\"name\": \"app\", \"servers\": [\u{a}      {\"host\": \"10.0.1.11\", \"port\": 8000, \"weight\": 3},\u{a}      {\"host\": \"10.0.1.12\", \"port\": 8000, \"weight\": 1},\u{a}      {\"host\": \"10.0.1.13\", \"port\": 8000, \"backup\": true}\u{a}    ]},\u{a}    {\"na");
+    out.push_str("me\": \"metrics\", \"servers\": [{\"host\": \"127.0.0.1\", \"port\": 9100}]}\u{a}  ],\u{a}  \"sites\": [\u{a}    {\"port\": 443, \"names\": \"shop.example.org www.shop.example.org\", \"tls\": true, \"cert\": \"shop\",\u{a}     \"locations\": [\u{a}       {\"path\": \"/\", \"proxy\": \"app\"},\u{a}       {\"path\": \"/static/\", \"root\": \"/srv/shop\", \"files\": \"index.html\"},\u{a}       {\"path\": \"/.git\", \"deny\": true}\u{a}     ]},\u{a}    {\"port\": 8080, \"names\": \"status.inte");
+    out.push_str("rnal\", \"tls\": false,\u{a}     \"locations\": [{\"path\": \"/metrics\", \"proxy\": \"metrics\"}]}\u{a}  ]\u{a}}\u{a}");
+}
+
+fn file_15() -> String {
+    let mut out = String.new();
+    file_15_0(mut out);
+    out
+}
+
+// (path under data/, contents)
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("cases.txt".to_string(), file_0()));
+    v.push(("site/broken/page.json".to_string(), file_1()));
+    v.push(("site/broken/page.mustache".to_string(), file_2()));
+    v.push(("site/ci/ci.json".to_string(), file_3()));
+    v.push(("site/ci/step".to_string(), file_4()));
+    v.push(("site/ci/workflow.yml.tmpl".to_string(), file_5()));
+    v.push(("site/email/footer.html".to_string(), file_6()));
+    v.push(("site/email/header.html".to_string(), file_7()));
+    v.push(("site/email/order.html.mustache".to_string(), file_8()));
+    v.push(("site/email/order.json".to_string(), file_9()));
+    v.push(("site/k8s/container.tpl".to_string(), file_10()));
+    v.push(("site/k8s/deployment.yaml.mustache".to_string(), file_11()));
+    v.push(("site/k8s/values.json".to_string(), file_12()));
+    v.push(("site/nginx/nginx.conf.mustache".to_string(), file_13()));
+    v.push(("site/nginx/partials/location.mustache".to_string(), file_14()));
+    v.push(("site/nginx/sites.json".to_string(), file_15()));
+    v
+}
