@@ -44,7 +44,7 @@ fn build_inorder(lo: i64, hi: i64, cur: mut ref Option[ListNode]) -> Option[Tree
         None => {}
         Some(n) => {
             v = n.val;
-            cur = n.next;
+            *cur = n.next;
         }
     }
     let node = TreeNode { val: v, left: left, right: None };
@@ -60,9 +60,9 @@ fn sorted_list_to_bst(head: Option[ListNode]) -> Option[TreeNode] {
 
 fn ser(node: Option[TreeNode], acc: mut ref i64) {
     match node {
-        None => { acc = (acc * 131 + 1) % 1000000007; }
+        None => { *acc = (acc * 131 + 1) % 1000000007; }
         Some(n) => {
-            acc = (acc * 131 + (n.val + 2)) % 1000000007;
+            *acc = (acc * 131 + (n.val + 2)) % 1000000007;
             ser(n.left, mut acc);
             ser(n.right, mut acc);
         }

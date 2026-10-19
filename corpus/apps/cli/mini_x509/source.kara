@@ -1932,7 +1932,7 @@ fn eku_allows(c: ref Cert, oid: Str) -> bool {
 // Reports an error at depth i, and whether the check goes on.
 fn report(job: mut ref Job, failed: mut ref bool, c: ref Cert, i: i64, code: i64) -> bool {
     job.err.push_str(f"{c.subject}\nerror {code} at {i} depth lookup: {error_text(code)}\n");
-    failed = true;
+    *failed = true;
     continues(code)
 }
 

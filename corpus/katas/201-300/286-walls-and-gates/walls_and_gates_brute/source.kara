@@ -107,7 +107,7 @@ fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64
     let mut j = 0;
     while j < r * c {
         if source[j] == inf() {
-            if answers[j] != inf() { relaxations = relaxations + 1; }
+            if answers[j] != inf() { *relaxations = relaxations + 1; }
         }
         g[j] = answers[j];
         j = j + 1;

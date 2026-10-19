@@ -101,7 +101,7 @@ fn report(n: i64, acc: mut ref i64) {
         a = (a * 131 + 7) % 1000000007;
         t = t + 1;
     }
-    acc = a;
+    *acc = a;
 }
 
 fn main() {

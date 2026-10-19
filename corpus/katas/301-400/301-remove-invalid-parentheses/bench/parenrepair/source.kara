@@ -84,8 +84,8 @@ fn repair(
             h = (h * 31 + (scratch[child + t] as i64)) % 1000000007;
             t = t + 1;
         }
-        results = results + 1;
-        checksum = (checksum + h) % 1000000007;
+        *results = results + 1;
+        *checksum = (checksum + h) % 1000000007;
     }
 }
 

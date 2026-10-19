@@ -77,7 +77,7 @@ fn is_uni(nodes: ref Vec[Node], node: i64, total: mut ref i64) -> bool {
         ok = false;
     }
     if ok {
-        total = total + 1;
+        *total = total + 1;
     }
     return ok;
 }

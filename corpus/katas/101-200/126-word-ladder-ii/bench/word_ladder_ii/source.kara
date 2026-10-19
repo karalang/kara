@@ -122,8 +122,8 @@ fn dfs(
 ) {
     if word == begin {
         let m = modulus();
-        digest = (digest + path_digest(path)) % m;
-        count = count + 1;
+        *digest = (digest + path_digest(path)) % m;
+        *count = count + 1;
         return;
     }
     match preds.get(word.clone()) {

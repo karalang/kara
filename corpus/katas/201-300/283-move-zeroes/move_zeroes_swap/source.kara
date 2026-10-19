@@ -31,7 +31,7 @@ fn move_zeroes(a: mut ref Vec[i64], stores: mut ref i64) {
                 let t = a[write];
                 a[write] = a[i];
                 a[i] = t;
-                stores = stores + 2;
+                *stores = stores + 2;
             }
             write = write + 1;
         }

@@ -26,7 +26,7 @@ fn move_zeroes(a: mut ref Vec[i64], stores: mut ref i64) {
     let mut j = 0;
     while j < a.len() {
         a[j] = out[j];
-        stores = stores + 1;
+        *stores = stores + 1;
         j = j + 1;
     }
 }

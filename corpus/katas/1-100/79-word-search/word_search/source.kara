@@ -96,7 +96,7 @@ fn report(rows: ref Vec[String], word: String, acc: mut ref i64) {
     // Fold the boolean result (1/0) into a running hash so the sink is outcome-sensitive.
     let bit = if found { 1 } else { 0 };
     let a = acc;
-    acc = (a * 131 + bit + 1) % 1000000007;
+    *acc = (a * 131 + bit + 1) % 1000000007;
 }
 
 fn main() {

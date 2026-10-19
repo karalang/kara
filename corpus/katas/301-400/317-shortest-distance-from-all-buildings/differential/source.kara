@@ -349,7 +349,7 @@ fn has_empty_neighbour(grid: ref Vec[i64], rows: i64, cols: i64, cell: i64) -> b
 // --------------------------------------------------------- generator ---
 
 fn next(seed: mut ref i64) -> i64 {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     return seed / 65536;
 }
 

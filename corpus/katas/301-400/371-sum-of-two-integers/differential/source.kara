@@ -65,9 +65,9 @@ fn name(arm: i64) -> String {
 // A draw in [-span, span]. One step of the generator gives 15 good bits, so
 // a wide span joins two steps.
 fn draw(seed: mut ref i64, span: i64) -> i64 {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     let high = seed / 65536;
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     (high * 32768 + seed / 65536) % (2 * span + 1) - span
 }
 

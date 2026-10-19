@@ -7,7 +7,7 @@ fn sw(h: mut ref H, o: own String) -> String { let mut q = o; swap(mut h.name, m
 fn repv(h: mut ref H, v: own Vec[String]) -> Vec[String] { return replace(mut h.tags, v) }
 fn deep(w: mut ref W, v: own String) -> String { return replace(mut w.h.name, v) }
 fn px(h: mut ref H) -> i64 { return replace(mut h.p.x, 77) }
-fn bump(v: mut ref i64) { v = v + 1; }
+fn bump(v: mut ref i64) { *v = v + 1; }
 fn go(w: mut ref W) { bump(mut w.h.n); bump(mut w.h.p.x); }
 fn main() {
     let mut h = H { name: "heap-string-longer-than-sso-0".to_string(), n: 1, tags: vec!["t1".to_string()], p: P { x: 3 } };

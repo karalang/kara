@@ -3,7 +3,7 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}-heap-string-long-enough-to-al
 enum E { X(R), Y }
 struct S { e: E }
 impl E { fn clear(mut ref self) { self = E.Y; } fn k(ref self) -> i64 { match self { E.X(r) => r.id, E.Y => 0 } } }
-fn clr(e: mut ref E) { e = E.Y; }
+fn clr(e: mut ref E) { *e = E.Y; }
 fn c1() { let mut g = E.X(mk(20)); match g { E.X(t) => { g = E.X(mk(3)); println(f"x{t.tag}") } E.Y => { println("x0") } } }
 fn c2() { let mut g = E.X(mk(21)); match g { E.X(t) => { g = E.Y; println(f"x{t.tag}") } E.Y => { println("x0") } } }
 fn c3() { let mut g = E.X(mk(22)); match g { E.X(t) => { println(f"x{t.tag}"); g = E.X(mk(4)); } E.Y => { println("x0") } }; match g { E.X(t) => println(t.id), E.Y => println(0) } }

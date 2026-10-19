@@ -48,7 +48,7 @@ fn inorder_fold(node: Option[TreeNode], acc: mut ref i64) {
         None => {}
         Some(n) => {
             inorder_fold(n.left, mut acc);
-            acc = (acc * 131 + (n.val + 1)) % 1000000007;
+            *acc = (acc * 131 + (n.val + 1)) % 1000000007;
             inorder_fold(n.right, mut acc);
         }
     }

@@ -49,7 +49,7 @@ fn build(counts: mut ref Vec[i64], half: mut ref Vec[i64], half_len: i64,
         }
         let mut k = 0;
         while k < n {
-            acc = (acc * 31 + buf[k]) % 1000000007;
+            *acc = (acc * 31 + buf[k]) % 1000000007;
             k = k + 1;
         }
         return;

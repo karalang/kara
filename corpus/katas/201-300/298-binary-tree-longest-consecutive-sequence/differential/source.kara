@@ -82,7 +82,7 @@ fn a_down(t: Option[TreeNode], best: mut ref i64) -> i64 {
                     if c.val == n.val + 1 and r + 1 > run { run = r + 1; }
                 }
             }
-            if run > best { best = run; }
+            if run > best { *best = run; }
             return run;
         }
     }
@@ -102,7 +102,7 @@ fn b_visit(t: Option[TreeNode], has_parent: bool, parent_val: i64, arriving: i64
         Some(n) => {
             let mut run = 1;
             if has_parent and n.val == parent_val + 1 { run = arriving + 1; }
-            if run > best { best = run; }
+            if run > best { *best = run; }
             b_visit(n.left, true, n.val, run, mut best);
             b_visit(n.right, true, n.val, run, mut best);
         }
@@ -242,11 +242,11 @@ fn grow(n: i64, spread: i64, base: i64, seed: mut ref i64) -> Option[TreeNode] {
     if n <= 0 {
         return None;
     }
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    *seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     let left_size = seed % n;
     let right_size = n - 1 - left_size;
 
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    *seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     let delta = seed % spread - 1;
 
     let v = base + delta;

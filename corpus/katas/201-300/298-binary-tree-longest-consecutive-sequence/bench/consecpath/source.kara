@@ -39,7 +39,7 @@ fn build(depth: i64, parent_val: i64, seed: mut ref i64) -> Option[TreeNode] {
     if depth <= 0 {
         return None;
     }
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    *seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     let v = parent_val + seed % 3 - 1;
     let l = build(depth - 1, v, mut seed);
     let r = build(depth - 1, v, mut seed);
@@ -69,7 +69,7 @@ fn down(t: Option[TreeNode], step: i64, best: mut ref i64) -> i64 {
                     if c.val == n.val + step and r + 1 > run { run = r + 1; }
                 }
             }
-            if run > best { best = run; }
+            if run > best { *best = run; }
             return run;
         }
     }

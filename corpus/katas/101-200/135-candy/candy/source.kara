@@ -59,7 +59,7 @@ fn report(ratings: Vec[i64], sink: mut ref i64) {
     let n = ratings.len();
     let v = candy(ratings);
     println(f"n={n}: {v}");
-    sink = (sink * 1000003 + v) % m;
+    *sink = (sink * 1000003 + v) % m;
 }
 
 fn main() {

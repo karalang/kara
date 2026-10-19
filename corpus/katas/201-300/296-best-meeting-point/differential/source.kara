@@ -231,7 +231,7 @@ fn gen_grid(state: mut ref i64, h: i64, w: i64, pct: i64) -> Grid {
     let mut data: Vec[u8] = Vec.new();
     let mut i = 0;
     while i < h * w {
-        state = lcg(state);
+        *state = lcg(state);
         if (state / 65536) % 100 < pct { data.push(1u8); } else { data.push(0u8); }
         i = i + 1;
     }

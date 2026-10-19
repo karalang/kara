@@ -48,7 +48,7 @@ fn flood(g: mut ref Vec[i64], r: i64, c: i64, cell: i64, d: i64, relaxations: mu
     if g[cell] < d { return; }
 
     g[cell] = d;
-    relaxations = relaxations + 1;
+    *relaxations = relaxations + 1;
 
     let row = cell / c;
     let col = cell % c;

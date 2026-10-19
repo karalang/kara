@@ -92,7 +92,7 @@ fn down(t: Option[TreeNode], best: mut ref i64) -> i64 {
             }
 
             if run > best {
-                best = run;
+                *best = run;
             }
             return run;
         }

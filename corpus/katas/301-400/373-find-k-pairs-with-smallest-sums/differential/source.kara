@@ -181,11 +181,11 @@ fn sums(pairs: ref Vec[(i64, i64)]) -> Vec[i64] {
 
 fn random_sorted(seed: mut ref i64, n: i64, narrow: bool) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     let mut v = if narrow { (seed / 65536) % 7 - 3 } else { (seed / 65536) % 2001 - 1000 };
     for _ in 0..n {
         out.push(v);
-        seed = (seed * 1103515245 + 12345) % 2147483648;
+        *seed = (seed * 1103515245 + 12345) % 2147483648;
         v += if narrow { (seed / 65536) % 3 } else { (seed / 65536) % 200 };
     }
     out

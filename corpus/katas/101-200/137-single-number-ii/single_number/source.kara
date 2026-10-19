@@ -59,8 +59,8 @@ fn report(nums: Vec[i64], sink_a: mut ref i64, sink_b: mut ref i64) {
     let a = single_ones_twos(nums);
     let b = single_bitcount(nums);
     println(f"n={n}: {a}");
-    sink_a = (sink_a * 1000003 + (a + 1000)) % m;
-    sink_b = (sink_b * 1000003 + (b + 1000)) % m;
+    *sink_a = (sink_a * 1000003 + (a + 1000)) % m;
+    *sink_b = (sink_b * 1000003 + (b + 1000)) % m;
 }
 
 fn main() {

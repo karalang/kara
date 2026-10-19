@@ -130,7 +130,7 @@ fn walls_and_gates(g: mut ref Vec[i64], r: i64, c: i64, relaxations: mut ref i64
 fn relax(cells: mut ref Vec[Cell], n: i64, d: i64, q: mut ref VecDeque[i64], relaxations: mut ref i64) {
     if is_unreached_room(cells, n) {
         cells[n] = Cell.Reached(d);
-        relaxations = relaxations + 1;
+        *relaxations = relaxations + 1;
         q.push_back(n);
     }
 }

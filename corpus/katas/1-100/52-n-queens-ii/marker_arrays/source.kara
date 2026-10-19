@@ -33,7 +33,7 @@ fn count(
     total: mut ref i64,
 ) {
     if row == n {
-        total = total + 1;           // a full board — tally one solution
+        *total = total + 1;           // a full board — tally one solution
         return;
     }
     let mut c = 0;

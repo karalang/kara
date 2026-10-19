@@ -178,7 +178,7 @@ fn witness(words: ref Vec[String]) -> (i64, i64, i64) {
 // --------------------------------------------------------- generator ---
 
 fn next(seed: mut ref i64) -> i64 {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     return seed / 65536;
 }
 

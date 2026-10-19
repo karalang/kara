@@ -67,7 +67,7 @@ fn report(root: Option[TreeNode], acc: mut ref i64) {
         a = (a * 131 + (vals[i] + 1000)) % 1000000007;
         i = i + 1;
     }
-    acc = a;
+    *acc = a;
 }
 
 fn main() {

@@ -1,6 +1,6 @@
 
 struct Box { name: String }
-fn free_app(s: mut ref String) { s = s + "!"; }
+fn free_app(s: mut ref String) { *s = s + "!"; }
 fn main() {
     let mut i = 0i64;
     let mut last: String = "";

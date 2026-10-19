@@ -232,7 +232,7 @@ fn make_board(rows: i64, cols: i64, density: i64, seed: mut ref i64) -> Vec[Vec[
         let mut row: Vec[i64] = Vec.new();
         let mut c = 0;
         while c < cols {
-            seed = next_rand(seed);
+            *seed = next_rand(seed);
             let roll = (seed / 65536) % 100;
             if roll < density { row.push(1); } else { row.push(0); }
             c = c + 1;

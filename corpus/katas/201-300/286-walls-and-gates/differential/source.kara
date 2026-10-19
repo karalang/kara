@@ -111,7 +111,7 @@ fn bfs(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
 fn bfs_relax(g: mut ref Vec[i64], n: i64, d: i64, q: mut ref VecDeque[i64], relax: mut ref i64) {
     if g[n] == inf() {
         g[n] = d;
-        relax = relax + 1;
+        *relax = relax + 1;
         q.push_back(n);
     }
 }
@@ -188,7 +188,7 @@ fn enum_solver(g: mut ref Vec[i64], r: i64, c: i64) -> i64 {
 fn enum_relax(cells: mut ref Vec[Cell], n: i64, d: i64, q: mut ref VecDeque[i64], relax: mut ref i64) {
     if is_unreached_room(cells, n) {
         cells[n] = Cell.Reached(d);
-        relax = relax + 1;
+        *relax = relax + 1;
         q.push_back(n);
     }
 }
@@ -199,7 +199,7 @@ fn flood(g: mut ref Vec[i64], r: i64, c: i64, cell: i64, d: i64, relax: mut ref 
     if g[cell] == -1 { return; }
     if g[cell] < d { return; }
     g[cell] = d;
-    relax = relax + 1;
+    *relax = relax + 1;
 
     let row = cell / c;
     let col = cell % c;

@@ -72,7 +72,7 @@ fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
         return None;
     }
     let tok = ref tokens[i];
-    i = i + 1;
+    *i = i + 1;
     if tok == "#" {
         return None;
     }
@@ -336,9 +336,9 @@ fn grow(n: i64, spread: i64, seed: mut ref i64) -> Option[TreeNode] {
     if n <= 0 {
         return None;
     }
-    seed = lcg(seed);
+    *seed = lcg(seed);
     let v = seed % spread - spread / 2;
-    seed = lcg(seed);
+    *seed = lcg(seed);
     // Split the remaining nodes between the two sides; a skewed split makes a
     // spine, an even one makes a bush.
     let left_n = if n <= 1 { 0 } else { seed % n };

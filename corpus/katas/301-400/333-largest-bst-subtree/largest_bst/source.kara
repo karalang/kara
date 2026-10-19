@@ -58,7 +58,7 @@ fn visit(nodes: ref Vec[Node], node: i64, best: mut ref i64) -> Info {
         }
     }
     if bst and size > best {
-        best = size;
+        *best = size;
     }
     return Info { bst: bst, size: size, lo: lo, hi: hi };
 }
@@ -107,7 +107,7 @@ fn build(vals: Slice[i64]) -> Vec[Node] {
 }
 
 fn next(seed: mut ref i64) -> i64 {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     return seed / 65536;
 }
 

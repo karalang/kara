@@ -19,7 +19,7 @@
 // gets wrong, and they are the overwhelming majority of the space.
 
 fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
-    calls = calls + 1;
+    *calls = calls + 1;
     return m[a][b];
 }
 

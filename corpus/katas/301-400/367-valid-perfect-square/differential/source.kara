@@ -97,9 +97,9 @@ fn next(seed: i64) -> i64 {
 // A draw in [0, n) for n up to 2^30. One step of the generator gives only
 // 15 good bits, so two steps are joined.
 fn below(seed: mut ref i64, n: i64) -> i64 {
-    seed = next(seed);
+    *seed = next(seed);
     let high = seed / 65536;
-    seed = next(seed);
+    *seed = next(seed);
     (high * 32768 + seed / 65536) % n
 }
 

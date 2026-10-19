@@ -91,7 +91,7 @@ fn report(str: String, acc: mut ref i64) {
         a = (a * 131 + 7) % 1000000007;      // separator marker
         i = i + 1;
     }
-    acc = a;
+    *acc = a;
 }
 
 fn main() {

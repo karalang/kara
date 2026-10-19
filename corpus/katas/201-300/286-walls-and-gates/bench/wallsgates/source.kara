@@ -91,7 +91,7 @@ fn solve(template: ref Vec[i64], r: i64, c: i64, out_unreachable: mut ref i64) -
         else if g[j] > 0 { total = total + g[j]; }
         j = j + 1;
     }
-    out_unreachable = unreachable;
+    *out_unreachable = unreachable;
     return total;
 }
 

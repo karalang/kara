@@ -63,7 +63,7 @@ fn report(nums: Slice[i64], len: i64, target: i64, acc: mut ref i64) {
     let found = search(nums, len, target);
     println(f"{fmt(nums, len)} target={target} -> {found}");
     let bit = if found { 1 } else { 0 };
-    acc = (acc * 131 + (target + 1000) * 2 + bit) % 1000000007;
+    *acc = (acc * 131 + (target + 1000) * 2 + bit) % 1000000007;
 }
 
 fn main() {

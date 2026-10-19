@@ -88,7 +88,7 @@ fn de_at(tokens: ref Vec[String], i: mut ref i64) -> Option[TreeNode] {
         return None;
     }
     let tok = ref tokens[i];
-    i = i + 1;
+    *i = i + 1;
     if tok == "#" {
         return None;
     }

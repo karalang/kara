@@ -22,7 +22,7 @@ fn max_gain(node: Option[TreeNode], best: mut ref i64) -> i64 {
             let right_gain = if rg > 0 { rg } else { 0 };
             let through = n.val + left_gain + right_gain;
             if through > best {
-                best = through;
+                *best = through;
             }
             let branch = if left_gain > right_gain { left_gain } else { right_gain };
             n.val + branch

@@ -45,8 +45,8 @@ fn search(num: ref String, target: i64, pos: i64, expr: own String, cur: i64, la
           found: mut ref i64, hash: mut ref i64) {
     if pos == num.len() {
         if cur == target {
-            found = found + 1;
-            hash = (hash * 31 + expr.len()) % 1000000007;
+            *found = found + 1;
+            *hash = (hash * 31 + expr.len()) % 1000000007;
         }
         return;
     }

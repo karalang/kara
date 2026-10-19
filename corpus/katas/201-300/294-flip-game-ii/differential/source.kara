@@ -83,7 +83,7 @@ fn next_states(s: ref String) -> Vec[String] {
 // ---- arm A: search + memo, with a call counter ----------------------------
 
 fn can_win_memo(s: ref String, memo: mut ref Map[String, bool], calls: mut ref i64) -> bool {
-    calls = calls + 1;
+    *calls = calls + 1;
     match memo.get(s) {
         Some(v) => { return v; }
         None => {}
@@ -109,7 +109,7 @@ fn arm_memo(s: ref String, calls: mut ref i64) -> bool {
 // ---- arm B: the same search with no memo ----------------------------------
 
 fn can_win_naive(s: ref String, calls: mut ref i64) -> bool {
-    calls = calls + 1;
+    *calls = calls + 1;
     let states = next_states(s);
     let mut i = 0;
     while i < states.len() {

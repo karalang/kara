@@ -24,8 +24,8 @@ fn count(
     sink: mut ref i64,
 ) {
     if row == n {
-        acc = acc + 1;
-        sink = sink + partial;
+        *acc = acc + 1;
+        *sink = sink + partial;
         return;
     }
     let mut c = 0;

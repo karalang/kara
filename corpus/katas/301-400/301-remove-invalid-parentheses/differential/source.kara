@@ -389,7 +389,7 @@ fn gen_case(state: mut ref i64, len: i64, shape: i64) -> String {
     let mut out = String.new();
     let mut i = 0;
     while i < len {
-        state = lcg(state);
+        *state = lcg(state);
         let r = (state / 65536) % 3;
         let mut c = b'a';
         if shape == 0 {

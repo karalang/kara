@@ -86,7 +86,7 @@ fn show(grid: ref Vec[i64], rows: i64, cols: i64) -> String {
 
 fn report(tag: i64, grid: Vec[i64], rows: i64, cols: i64, acc: mut ref i64) {
     let ans = shortest_distance(grid, rows, cols);
-    acc = (acc * 131 + ans + 2) % 1000000007;
+    *acc = (acc * 131 + ans + 2) % 1000000007;
     println(f"case {tag}: {show(grid, rows, cols)} -> {ans}");
 }
 

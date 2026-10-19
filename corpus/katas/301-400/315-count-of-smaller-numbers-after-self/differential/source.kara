@@ -192,7 +192,7 @@ fn tie_broken(v: ref Vec[i64]) -> Vec[i64] {
 fn random_case(n: i64, spread: i64, offset: i64, seed: mut ref i64) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     for i in 0..n {
-        seed = lcg(seed);
+        *seed = lcg(seed);
         out.push(seed % spread + offset);
     }
     return out;

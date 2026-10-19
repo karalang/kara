@@ -38,9 +38,9 @@ fn lcg(state: i64) -> i64 {
 
 fn grow(n: i64, seed: mut ref i64) -> Option[TreeNode] {
     if n <= 0 { return None; }
-    seed = lcg(seed);
+    *seed = lcg(seed);
     let v = seed % 1000 - 500;
-    seed = lcg(seed);
+    *seed = lcg(seed);
     let left_n = if n <= 1 { 0 } else { seed % n };
     let right_n = n - 1 - left_n;
     let l = grow(left_n, mut seed);
@@ -52,8 +52,8 @@ fn extent(t: Option[TreeNode], col: i64, lo: mut ref i64, hi: mut ref i64) {
     match t {
         None => {}
         Some(n) => {
-            if col < lo { lo = col; }
-            if col > hi { hi = col; }
+            if col < lo { *lo = col; }
+            if col > hi { *hi = col; }
             extent(n.left, col - 1, mut lo, mut hi);
             extent(n.right, col + 1, mut lo, mut hi);
         }

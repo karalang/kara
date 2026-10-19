@@ -35,12 +35,12 @@ fn grow(n: i64, seed: mut ref i64, counter: mut ref i64, labelled: bool) -> Opti
     if n <= 0 {
         return None;
     }
-    seed = lcg(seed);
+    *seed = lcg(seed);
     // Distinct values are a PERMUTATION of the preorder numbering (37 is
     // coprime to 97), so value order says nothing about position -- a tie
     // broken by value instead of position would otherwise be equivalent here.
-    let v = if labelled { counter = counter + 1; (counter * 37) % 97 - 50 } else { seed % 3 };
-    seed = lcg(seed);
+    let v = if labelled { *counter = counter + 1; (counter * 37) % 97 - 50 } else { seed % 3 };
+    *seed = lcg(seed);
     let left_n = if n <= 1 { 0 } else { seed % n };
     let right_n = n - 1 - left_n;
     let l = grow(left_n, mut seed, mut counter, labelled);

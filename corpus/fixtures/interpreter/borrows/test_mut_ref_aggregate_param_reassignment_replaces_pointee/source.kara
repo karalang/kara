@@ -7,11 +7,11 @@ fn mkv(k: i64) -> Vec[i64] {
     return v;
 }
 
-fn reps(x: mut ref String, k: i64) { x = f"fresh-{k}-payload"; }
-fn repsc(x: mut ref String) { x = x + "tail"; }
-fn repbind(x: mut ref String, k: i64) { let t: String = f"bind-{k}-payload"; x = t; }
-fn repv(v: mut ref Vec[i64], k: i64) { v = mkv(k); }
-fn repq(q: mut ref Q, k: i64) { q = Q { s: f"q-{k}-payload", v: mkv(k) }; }
+fn reps(x: mut ref String, k: i64) { *x = f"fresh-{k}-payload"; }
+fn repsc(x: mut ref String) { *x = x + "tail"; }
+fn repbind(x: mut ref String, k: i64) { let t: String = f"bind-{k}-payload"; *x = t; }
+fn repv(v: mut ref Vec[i64], k: i64) { *v = mkv(k); }
+fn repq(q: mut ref Q, k: i64) { *q = Q { s: f"q-{k}-payload", v: mkv(k) }; }
 
 fn main() {
     let n: i64 = 1i64;

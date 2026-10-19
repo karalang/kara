@@ -28,14 +28,14 @@ fn move_zeroes(a: mut ref Vec[i64], stores: mut ref i64) {
     while i < a.len() {
         if a[i] != 0 {
             a[write] = a[i];
-            stores = stores + 1;
+            *stores = stores + 1;
             write = write + 1;
         }
         i = i + 1;
     }
     while write < a.len() {
         a[write] = 0;
-        stores = stores + 1;
+        *stores = stores + 1;
         write = write + 1;
     }
 }

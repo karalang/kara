@@ -272,7 +272,7 @@ fn interleave(a: ref Vec[i64], i: i64, b: ref Vec[i64], j: i64,
         if not have or greater_brute(cur, best) {
             best.clear();
             for x in 0..cur.len() { best.push(cur[x]); }
-            have = true;
+            *have = true;
         }
         return;
     }
@@ -478,7 +478,7 @@ fn without(v: ref Vec[i64], skip: i64) -> Vec[i64] {
 // --------------------------------------------------------- generator ---
 
 fn next(seed: mut ref i64) -> i64 {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     return seed / 65536;
 }
 

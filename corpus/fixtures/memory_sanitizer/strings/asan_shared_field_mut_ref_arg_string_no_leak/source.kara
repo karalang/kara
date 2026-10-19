@@ -1,6 +1,6 @@
 
 shared struct T { mut s: String }
-fn app(x: mut ref String, tag: String) { x = x + tag; }
+fn app(x: mut ref String, tag: String) { *x = x + tag; }
 fn main() {
     let n = env.args().len() as i64;
     let mut acc: i64 = 0;

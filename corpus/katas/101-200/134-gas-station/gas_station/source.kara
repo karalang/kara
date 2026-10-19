@@ -45,7 +45,7 @@ fn report(gas: Vec[i64], cost: Vec[i64], sink: mut ref i64) {
     let n = gas.len();
     let r = can_complete(gas, cost);
     println(f"n={n}: {r}");
-    sink = (sink * 1000003 + (r + 2)) % m;
+    *sink = (sink * 1000003 + (r + 2)) % m;
 }
 
 fn main() {

@@ -1765,7 +1765,7 @@ fn list_one(t: ref Crcs, job: mut ref Job, tot: mut ref Totals, f: Str, k: i64, 
     if verbose == 0 {
         if not shown {
             job.out.push_str("Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename\n");
-            shown = true;
+            *shown = true;
         }
         job.out.push_str(f"{nstreams:5}  {nblocks:6}  {rjust(nice(csize, false), 11)}  {rjust(nice(usize, false), 11)}  {rjust(ratio(csize, usize), 5)}  {ljust(check_names(checks, ","), 7)} {f}\n");
         return;

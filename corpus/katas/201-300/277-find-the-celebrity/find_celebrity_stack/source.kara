@@ -18,7 +18,7 @@
 // elimination is what differs, and the proof obligation afterwards does not.
 
 fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
-    calls = calls + 1;
+    *calls = calls + 1;
     return m[a][b];
 }
 

@@ -33,7 +33,7 @@ fn visit(node: Option[TreeNode], best: mut ref i64) -> (i64, i64, i64) {
             }
             let size = ls + 1 + rs;
             if size > best {
-                best = size;
+                *best = size;
             }
             let lo = if ls > 0 { llo } else { n.val };
             let hi = if rs > 0 { rhi } else { n.val };
@@ -91,7 +91,7 @@ fn build(vals: Slice[i64]) -> Vec[Node] {
 }
 
 fn next(seed: mut ref i64) -> i64 {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
+    *seed = (seed * 1103515245 + 12345) % 2147483648;
     return seed / 65536;
 }
 

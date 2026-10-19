@@ -108,7 +108,7 @@ fn report(s1: String, s2: String, acc: mut ref i64) {
     };
     println(f"{s1} ~ {s2}: {found}");
     let bit = if found { 1 } else { 0 };
-    acc = (acc * 131 + bit + 1) % 1000000007;
+    *acc = (acc * 131 + bit + 1) % 1000000007;
 }
 
 fn main() {

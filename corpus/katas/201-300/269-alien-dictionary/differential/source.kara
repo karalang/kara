@@ -169,7 +169,7 @@ fn visit(u: i64, adj: ref Vec[Vec[bool]], state: mut ref Vec[i64],
     let mut v = 0;
     while v < 26 {
         if adj[u][v] {
-            if state[v] == 1 { ok = false; }
+            if state[v] == 1 { *ok = false; }
             else { if state[v] == 0 { visit(v, adj, mut state, mut order, mut ok); } }
         }
         v = v + 1;

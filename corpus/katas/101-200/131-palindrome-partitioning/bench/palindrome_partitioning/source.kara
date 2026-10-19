@@ -71,8 +71,8 @@ fn backtrack(
 ) {
     if start == n {
         let m = modulus();
-        digest = (digest + part_hash(path)) % m;
-        count = count + 1;
+        *digest = (digest + part_hash(path)) % m;
+        *count = count + 1;
         return;
     }
     let mut end = start;

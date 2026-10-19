@@ -36,7 +36,7 @@
 // calls, which is the thing the problem is actually asking you not to do.
 
 fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
-    calls = calls + 1;
+    *calls = calls + 1;
     return m[a][b];
 }
 

@@ -200,7 +200,7 @@ fn gen_str(state: mut ref i64, len: i64, alphabet: i64) -> String {
     let mut out = String.new();
     let mut i = 0;
     while i < len {
-        state = lcg(state);
+        *state = lcg(state);
         let d = (state / 65536) % alphabet;
         out.push(char.try_from((('0' as i64) + d) as u32).unwrap());
         i = i + 1;
@@ -215,7 +215,7 @@ fn shuffled(state: mut ref i64, s: ref String) -> String {
     if n > 1 {
         let mut i = n - 1;
         while i > 0 {
-            state = lcg(state);
+            *state = lcg(state);
             let j = (state / 65536) % (i + 1);
             let t = cs[i];
             cs[i] = cs[j];

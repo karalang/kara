@@ -32,7 +32,7 @@
 // Testing only the first would look thorough and cover half the problem.
 
 fn knows(m: ref Vec[Vec[bool]], a: i64, b: i64, calls: mut ref i64) -> bool {
-    calls = calls + 1;
+    *calls = calls + 1;
     return m[a][b];
 }
 

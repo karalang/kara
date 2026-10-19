@@ -125,7 +125,7 @@ fn gen_arr(state: mut ref i64, len: i64, spread: i64) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     let mut i = 0;
     while i < len {
-        state = lcg(state);
+        *state = lcg(state);
         out.push((state / 65536) % spread - spread / 2);
         i = i + 1;
     }
