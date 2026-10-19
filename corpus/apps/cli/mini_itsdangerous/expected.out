@@ -1,0 +1,1117 @@
+== signer basics
+1. sign s -> b'hello.WFYt_Bzvt1B_SMCJOQtATArWQaQ'
+2. unsign s -> b'hello'
+3. validate s -> True
+4. unsign s -> BadSignature: Signature b'WFYt_Bzvt1B_SMCJOQtATArWQaA' does not match payload=b'hello'
+5. unsign s -> BadSignature: Signature b'WFYt_Bzvt1B_SMCJOQtATArWQaQ' does not match payload=b'Aello'
+6. unsign s -> BadSignature: Signature b'WFYt_Bzvt1B_SMCJOQtATArWQa' does not match payload=b'hello'
+7. unsign s -> b'hello'
+8. unsign s -> BadSignature: Signature b'WFYt_Bzvt1B_SMCJOQtATArWQaQx' does not match payload=b'hello'
+9. unsign s -> BadSignature: No b'.' found in value payload=None
+10. unsign s -> BadSignature: Signature b'' does not match payload=b'hello'
+11. unsign s -> BadSignature: Signature b'' does not match payload=b''
+12. unsign s -> BadSignature: No b'.' found in value payload=None
+13. validate s -> False
+14. get_signature s -> b'WFYt_Bzvt1B_SMCJOQtATArWQaQ'
+15. derive_key s -> bc080386387bdcd0c1655a18f473de6dc3d18283
+16. sign s -> b'a.b.c.tEnf-2scCrCKpMzg1-Du8kKRMS4'
+17. unsign s -> b'a.b.c'
+18. sign s -> b'.Mt3cnIgDEA9MESNHfYJnLIJs4Co'
+19. unsign s -> b''
+20. sign s -> b'caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x98\x80.GxG8T3l1uMOgFwHI3fhF0M0oQFE'
+21. unsign s -> b'caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x98\x80'
+22. sign s -> b'\x00\xff\x80\xfe.A.XXd6f4P_macDNqpqJbSUt13Vx_M'
+23. unsign s -> b'\x00\xff\x80\xfe.A'
+24. unsign s -> b'\x00\xff\x80\xfe.A'
+25. unsign s -> b'\x00\xff\x80\xfe.A'
+== signature encodings
+1. sign s -> b'x.XE-P2dW-YQWmR7c7d5AojJtRG8c'
+2. unsign s -> b'x'
+3. unsign s -> b'x'
+4. unsign s -> b'x'
+5. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJtRG8c!' does not match payload=b'x'
+6. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJtRG8cA' does not match payload=b'x'
+7. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJtRG8cAA' does not match payload=b'x'
+8. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJtR=G8c' does not match payload=b'x'
+9. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJ=tRG8c' does not match payload=b'x'
+10. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJ tRG8c' does not match payload=b'x'
+11. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d\n5AojJtRG8c' does not match payload=b'x'
+12. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJtRG' does not match payload=b'x'
+13. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJtR' does not match payload=b'x'
+14. unsign s -> BadSignature: Signature b'XE-P2dW-YQWmR7c7d5AojJt' does not match payload=b'x'
+15. unsign s -> BadSignature: Signature b'' does not match payload=b'x'
+16. unsign s -> BadSignature: No b'.' found in value payload=None
+== derivation concat with sha1
+1. derive_key s -> 084babc02642ed0499bde7ee79a26101303f62f7
+2. sign s -> b'payload-concat.j2Ct5N_H8DNtoFHgDYWR-xC_GqM'
+3. unsign s -> b'payload-concat'
+4. unsign s -> BadSignature: Signature b'j2Ct5N_H8DNtoFHgDYWR-xC_GAM' does not match payload=b'payload-concat'
+== derivation concat with sha256
+1. derive_key s -> 190e9dd16fac5f3c2ec3b76736bc0b2154316e1fbc8a6f981a76e11349d22e9a
+2. sign s -> b'payload-concat.n0Xv_hiXOoxT4vaUbCicBhcSYNdZGg3xlGqNMcX7Jq8'
+3. unsign s -> b'payload-concat'
+4. unsign s -> BadSignature: Signature b'n0Xv_hiXOoxT4vaUbCicBhcSYNdZGg3xlGqNMcX7JA8' does not match payload=b'payload-concat'
+== derivation concat with sha512
+1. derive_key s -> 9e2787cf85922a59aeade4b057790d8a09c8f250bc842a70d3bb0091802579c164a4670f048bea9617ba6cd491fdc94702a68ae050fa0355db23c6ab2b395082
+2. sign s -> b'payload-concat.BnxsXCYNomf7Gm3QNlhs_tlMHgRi4sZ5dQmpBlBFUsx9jzet1_KNYL4O4QRhwcK_2TjHLxA8DW-MBgiqkVIPAg'
+3. unsign s -> b'payload-concat'
+4. unsign s -> BadSignature: Signature b'BnxsXCYNomf7Gm3QNlhs_tlMHgRi4sZ5dQmpBlBFUsx9jzet1_KNYL4O4QRhwcK_2TjHLxA8DW-MBgiqkVIPBg' does not match payload=b'payload-concat'
+== derivation concat with md5
+1. derive_key s -> 4537b73ce0f7c5ec800d1c1f67b5425e
+2. sign s -> b'payload-concat.sr4r_bvbE43k5_-1iVLNGA'
+3. unsign s -> b'payload-concat'
+4. unsign s -> BadSignature: Signature b'sr4r_bvbE43k5_-1iVLNAA' does not match payload=b'payload-concat'
+== derivation django-concat with sha1
+1. derive_key s -> e31ca17d4115d9c600b0c07da9cd62c61ff5f42d
+2. sign s -> b'payload-django-concat.TSlbFPrewZOndhKbHGC8GdHsRFA'
+3. unsign s -> b'payload-django-concat'
+4. unsign s -> BadSignature: Signature b'TSlbFPrewZOndhKbHGC8GdHsRAA' does not match payload=b'payload-django-concat'
+== derivation django-concat with sha256
+1. derive_key s -> cb5b098599d1cfb3a99460668de01cd96a3b0f06e51aaf49cf0f862eb0818c3e
+2. sign s -> b'payload-django-concat.ocLMqAY2s932v4y7LAURDOEyqreLpRglg1RiIWMXMrc'
+3. unsign s -> b'payload-django-concat'
+4. unsign s -> BadSignature: Signature b'ocLMqAY2s932v4y7LAURDOEyqreLpRglg1RiIWMXMAc' does not match payload=b'payload-django-concat'
+== derivation django-concat with sha512
+1. derive_key s -> 6aa1d079cc3ec00683583d2c43b6b6743afaff5dc06655524f3999165f2a8a0275faeab05fbad24872b874d2c1eac85edd90da7d64b5f63744369ae4a621e193
+2. sign s -> b'payload-django-concat.slQsZyaOqXMEt0nfR5Zf163ANbYCTaKcA2Wx9gULPF2Dt2R-nBka1F-eyobhcMVpuWxIbPJ9JZLPL98zOiLJOA'
+3. unsign s -> b'payload-django-concat'
+4. unsign s -> BadSignature: Signature b'slQsZyaOqXMEt0nfR5Zf163ANbYCTaKcA2Wx9gULPF2Dt2R-nBka1F-eyobhcMVpuWxIbPJ9JZLPL98zOiLJAA' does not match payload=b'payload-django-concat'
+== derivation django-concat with md5
+1. derive_key s -> c28dab03fd1fd45e8cd5bf9b68c7fb77
+2. sign s -> b'payload-django-concat.1zM3CSaaALYWizxDD1uh2g'
+3. unsign s -> b'payload-django-concat'
+4. unsign s -> BadSignature: Signature b'1zM3CSaaALYWizxDD1uhAg' does not match payload=b'payload-django-concat'
+== derivation hmac with sha1
+1. derive_key s -> 1e72f4adfefbd3347833b5ef441122f21a3a498b
+2. sign s -> b'payload-hmac.Ay6gbMmuaarkr7YfdQiuGsKaRek'
+3. unsign s -> b'payload-hmac'
+4. unsign s -> BadSignature: Signature b'Ay6gbMmuaarkr7YfdQiuGsKaRAk' does not match payload=b'payload-hmac'
+== derivation hmac with sha256
+1. derive_key s -> 169b88b8ce4b25652568a93a18c4efb0441aed4d7b87e9659d4256440c9f8113
+2. sign s -> b'payload-hmac.xvk7e3ja4b2x8X5oxRIW-v5IvHa3zGGu9z48Ny0Ct0Q'
+3. unsign s -> b'payload-hmac'
+4. unsign s -> BadSignature: Signature b'xvk7e3ja4b2x8X5oxRIW-v5IvHa3zGGu9z48Ny0CtAQ' does not match payload=b'payload-hmac'
+== derivation hmac with sha512
+1. derive_key s -> 4a70103949736d620782a37d9ce85571a651bc1ca4634a46681f2fa1e61612aad20e9270ee059065cee9862d938d8348f44789edb0b54662b7690b85d11193bd
+2. sign s -> b'payload-hmac.Z5RBvhSb6z8QHeTwJQ_uGXxpqnKq04BLOzNHWMwlWKHayGufXYzvX9hKt5i-_pwiJICpBhJw_V5mOW_8ln310g'
+3. unsign s -> b'payload-hmac'
+4. unsign s -> BadSignature: Signature b'Z5RBvhSb6z8QHeTwJQ_uGXxpqnKq04BLOzNHWMwlWKHayGufXYzvX9hKt5i-_pwiJICpBhJw_V5mOW_8ln31Ag' does not match payload=b'payload-hmac'
+== derivation hmac with md5
+1. derive_key s -> 69746b2ca204a599525ce176b5b33c1c
+2. sign s -> b'payload-hmac.lEmr6IfXLalcuX1mw_TjiA'
+3. unsign s -> b'payload-hmac'
+4. unsign s -> BadSignature: Signature b'lEmr6IfXLalcuX1mw_TjAA' does not match payload=b'payload-hmac'
+== derivation none with sha1
+1. derive_key s -> 646572697665206d6520646572697665206d6520646572697665206d6520646572697665206d6520646572697665206d6520646572697665206d6520
+2. sign s -> b'payload-none.5DIAK0_MaVF49MfpE7FUWgN75ko'
+3. unsign s -> b'payload-none'
+4. unsign s -> BadSignature: Signature b'5DIAK0_MaVF49MfpE7FUWgN75Ao' does not match payload=b'payload-none'
+== derivation none with sha256
+1. derive_key s -> 646572697665206d6520
+2. sign s -> b'payload-none.zsh6HbiGnH8f1LcY6CGRTVmFRMOyRHVH8gBhgtqm1RU'
+3. unsign s -> b'payload-none'
+4. unsign s -> BadSignature: Signature b'zsh6HbiGnH8f1LcY6CGRTVmFRMOyRHVH8gBhgtqm1AU' does not match payload=b'payload-none'
+== derivation none with sha512
+1. derive_key s -> 646572697665206d6520
+2. sign s -> b'payload-none.z88Xq4JsSdxy5fIxyqxcI8KAaXs_SyblsmmPLH4T0H5JYreGBLlKltjXq6p57MahTZuoElsri2AwnDp3hkpOwg'
+3. unsign s -> b'payload-none'
+4. unsign s -> BadSignature: Signature b'z88Xq4JsSdxy5fIxyqxcI8KAaXs_SyblsmmPLH4T0H5JYreGBLlKltjXq6p57MahTZuoElsri2AwnDp3hkpOAg' does not match payload=b'payload-none'
+== derivation none with md5
+1. derive_key s -> 646572697665206d6520
+2. sign s -> b'payload-none.1V5xqXRsjx1yjz_1YJx-Ww'
+3. unsign s -> b'payload-none'
+4. unsign s -> BadSignature: Signature b'1V5xqXRsjx1yjz_1YJx-Aw' does not match payload=b'payload-none'
+== derivation sha1-ish with sha1
+1. derive_key s -> TypeError: Unknown key derivation method
+2. sign s -> TypeError: Unknown key derivation method
+3. unsign s -> BadSignature: No b'.' found in value payload=None
+4. unsign s -> BadSignature: No b'.' found in value payload=None
+== derivation sha1-ish with sha256
+1. derive_key s -> TypeError: Unknown key derivation method
+2. sign s -> TypeError: Unknown key derivation method
+3. unsign s -> BadSignature: No b'.' found in value payload=None
+4. unsign s -> BadSignature: No b'.' found in value payload=None
+== derivation sha1-ish with sha512
+1. derive_key s -> TypeError: Unknown key derivation method
+2. sign s -> TypeError: Unknown key derivation method
+3. unsign s -> BadSignature: No b'.' found in value payload=None
+4. unsign s -> BadSignature: No b'.' found in value payload=None
+== derivation sha1-ish with md5
+1. derive_key s -> TypeError: Unknown key derivation method
+2. sign s -> TypeError: Unknown key derivation method
+3. unsign s -> BadSignature: No b'.' found in value payload=None
+4. unsign s -> BadSignature: No b'.' found in value payload=None
+== salts and separators
+1. sign a -> b'user:7._8OBAqGEjmU6DeKS_0b3PX9KLa0'
+2. unsign b -> BadSignature: Signature b'_8OBAqGEjmU6DeKS_0b3PX9KLa0' does not match payload=b'user:7'
+3. unsign a -> b'user:7'
+4. sign n -> b'user:7.ycBGu0iGDsXgzFre2YhMMwjELwc'
+5. unsign d -> b'user:7'
+6. sign c -> b'user:7:ycBGu0iGDsXgzFre2YhMMwjELwc'
+7. unsign c -> b'user:7'
+8. unsign d -> BadSignature: No b'.' found in value payload=None
+9. sign w -> b'x--fy2j8jIjwXgqlqPYhSrNE72KUvg'
+10. sign x -> ValueError: The given separator cannot be used because it may be contained in the signature itself. ASCII letters, digits, and '-_=' must not be used.
+11. sign y -> b'lazyaz79fOjpFFVH2j5IXPGlBc68wMe-8'
+12. unsign y -> b'lazy'
+13. sign y -> b'qazZY5XxfP9AKoe-C7-EzfD6ONx_qI'
+14. unsign y -> b'q'
+15. sign z -> ValueError: The given separator cannot be used because it may be contained in the signature itself. ASCII letters, digits, and '-_=' must not be used.
+16. sign u -> b's\xc2\xa7t\xc2\xa7JQakgW60qizzPzt2nteI8hHOMXY'
+17. unsign u -> b's\xc2\xa7t'
+18. sign m -> b'a::b::SA4xCb3KCRjx4LYjdK9DNf3wBp4'
+19. unsign m -> b'a::b'
+20. unsign m -> BadSignature: Signature b'SA4xCb3KCRjx4LYjdK9DNf3wBp4' does not match payload=b'a:b'
+== key rotation
+1. sign old -> b'ticket-1.yUMZL3_J8u-Zw_AEWJu4fNbVA00'
+2. sign both -> b'ticket-2.ycLGeyWN56gEs5hxFpLn2npL4QQ'
+3. unsign both -> b'ticket-1'
+4. unsign both -> b'ticket-2'
+5. unsign new -> BadSignature: Signature b'yUMZL3_J8u-Zw_AEWJu4fNbVA00' does not match payload=b'ticket-1'
+6. unsign new -> b'ticket-2'
+7. unsign old -> BadSignature: Signature b'ycLGeyWN56gEs5hxFpLn2npL4QQ' does not match payload=b'ticket-2'
+8. sign none -> IndexError: list index out of range
+9. unsign none -> BadSignature: Signature b'yUMZL3_J8u-Zw_AEWJu4fNbVA00' does not match payload=b'ticket-1'
+10. derive_key none -> IndexError: list index out of range
+== no algorithm
+1. sign s -> b'open.'
+2. unsign s -> b'open'
+3. unsign s -> b'anything'
+4. unsign s -> BadSignature: Signature b'AA' does not match payload=b'anything'
+5. unsign s -> BadSignature: Signature b'A' does not match payload=b'anything'
+6. unsign s -> b'anything'
+7. unsign h -> BadSignature: Signature b'' does not match payload=b'open'
+8. get_signature s -> b''
+== timestamp signer
+1. sign t -> b'session-9.ZVPxAA.szJWFTFv32ADsMz9Z86ARU47Q4o'
+2. unsign t -> b'session-9'
+3. unsign t -> b'session-9' @ 2023-11-14 22:13:20+00:00
+4. unsign t -> b'session-9'
+5. unsign t -> b'session-9'
+6. unsign t -> SignatureExpired: Signature age 61 > 60 seconds payload=b'session-9' date=2023-11-14 22:13:20+00:00
+7. validate t -> False
+8. unsign t -> SignatureExpired: Signature age -1 < 0 seconds payload=b'session-9' date=2023-11-14 22:13:20+00:00
+9. validate t -> True
+10. unsign t -> b'session-9' @ 2023-11-14 22:13:20+00:00
+11. unsign t -> BadTimeSignature: Signature b'szJWFTFv32ADsMz9Z86ARU47Q4A' does not match payload=b'session-9' date=2023-11-14 22:13:20+00:00
+12. unsign t -> BadTimeSignature: Signature b'szJWFTFv32ADsMz9Z86ARU47Q4o' does not match payload=b'session-9' date=2023-11-14 22:13:24+00:00
+13. unsign t -> BadTimeSignature: Signature b'szJWFTFv32ADsMz9Z86ARU47Q4o' does not match payload=b'session-9' date=2023-11-14 22:13:24+00:00
+14. unsign t -> BadSignature: No b'.' found in value payload=None
+15. unsign t -> BadSignature: Signature b'sig' does not match payload=b'plain'
+16. unsign t -> BadTimeSignature: Signature b'c' does not match payload=b'a' date=None
+17. sign t -> b'zero..uSB_yPLl7MoGWhvHKSLKlMYfUo0'
+18. unsign t -> b'zero' @ 1970-01-01 00:00:00+00:00
+19. unsign t -> b'zero'
+20. unsign t -> SignatureExpired: Signature age 11 > 10 seconds payload=b'zero' date=1970-01-01 00:00:00+00:00
+21. sign t -> error: 'Q' format requires 0 <= number <= 18446744073709551615
+22. sign t -> b'far.AQAAAAAA._LbIAdUeTIV6PpD03YIl9sh6ttY'
+23. unsign t -> b'far'
+24. unsign t -> ValueError: year 36812 is out of range
+25. unsign t -> ValueError: year 36812 is out of range
+26. unsign t -> BadTimeSignature: Malformed timestamp payload=b'far' date=None
+27. sign t -> b'y9999.Ov_0QX8.XIOwWteD8eL56Gr-BcZSINHwRmM'
+28. unsign t -> b'y9999' @ 9999-12-31 23:59:59+00:00
+29. sign t -> b'y10000.Ov_0QYA.jNSCJUFQ2HCCTXEozeVs6DPcPkE'
+30. unsign t -> ValueError: year 10000 is out of range
+31. unsign t -> BadTimeSignature: Malformed timestamp payload=b'y10000' date=None
+32. sign t -> b'wrap.8MKrfFSpfw.LKFc71W_-ijatx8h6fiGPxiZHNc'
+33. unsign t -> ValueError: year -2147481749 is out of range
+34. sign t -> b'eov.8MKrfFSpgA.McULLEFrzwDaXLCSCPPKeDqda4g'
+35. unsign t -> OSError: [Errno 75] Value too large for defined data type
+36. unsign t -> BadTimeSignature: Malformed timestamp payload=b'eov' date=None
+37. sign t -> b'max.f_________8.55wqvXfyee6t2L_bDqnQppRuQmo'
+38. unsign t -> OSError: [Errno 75] Value too large for defined data type
+39. sign t -> b'big.gAAAAAAAAAA.iK5FcgBjBVlQXLutjMYqMqSeC8I'
+40. unsign t -> OverflowError: timestamp out of range for platform time_t
+41. unsign t -> b'big'
+42. unsign t -> BadTimeSignature: Malformed timestamp payload=b'big' date=None
+43. sign t -> b'top.__________8.-Nahe0j47OuBrVX068q9dqMsOO0'
+44. unsign t -> OverflowError: timestamp out of range for platform time_t
+45. sign t -> error: 'Q' format requires 0 <= number <= 18446744073709551615
+46. validate t -> False
+47. unsign t -> BadTimeSignature: Signature b'sig' does not match payload=b'x' date=None
+48. unsign t -> BadTimeSignature: Signature b'sig' does not match payload=b'x' date=1970-01-01 00:00:00+00:00
+49. unsign t -> BadTimeSignature: Signature b'sig' does not match payload=b'x' date=None
+50. unsign t -> BadTimeSignature: Signature b'sig' does not match payload=b'x' date=1970-01-01 00:00:00+00:00
+51. unsign t -> BadTimeSignature: Signature b'sig' does not match payload=b'x' date=None
+== timestamp edges
+1. sign p -> b'nostamp|0F4fQ2DKzOI1nYqA5eMlFK8XQa8'
+2. unsign t -> BadTimeSignature: timestamp missing payload=b'nostamp' date=None
+3. sign p -> b'v|AAAAAAAAAAAA|ck8N66rsGkVAd223AVa7-cPplGo'
+4. unsign t -> BadTimeSignature: Malformed timestamp payload=b'v' date=None
+5. unsign t -> BadTimeSignature: Malformed timestamp payload=b'v' date=None
+6. sign p -> b'v|_____w|S8u6T0e26cUUqm9Fr9zzfF7822Y'
+7. unsign t -> b'v' @ 2106-02-07 06:28:15+00:00
+8. sign p -> b'v|AQIDBAUGBwgJ|7ailymhftsVc_Gs75v6lXFd0a1k'
+9. unsign t -> BadTimeSignature: Malformed timestamp payload=b'v' date=None
+10. sign p -> b'v||w2bcEgMpeG97hAMLVhOMMoMpEMg'
+11. unsign t -> b'v' @ 1970-01-01 00:00:00+00:00
+12. sign p -> b'v|A|ZghFZIucUAQsA7EuESvACygLCIo'
+13. unsign t -> BadTimeSignature: Malformed timestamp payload=b'v' date=None
+14. sign p -> b'v|AAAAAAABAAAA|WxqLLoj4PDxSg59pp8CULELp3F8'
+15. unsign t -> BadTimeSignature: Malformed timestamp payload=b'v' date=None
+16. sign t -> b'a|b|ZVPxAA|Uaw9poZ2q3i1aKzWKmm2JuQ5PY4'
+17. unsign t -> b'a|b' @ 2023-11-14 22:13:20+00:00
+18. unsign p -> b'a|b|ZVPxAA'
+== json serializer
+1. dumps s -> '{"id": 42, "email": "ada@example.org", "roles": ["admin", "ops"], "active": true}.2Io9CmVmCXH7Wyy9ZM6C7zzbjUA'
+2. loads s -> {'id': 42, 'email': 'ada@example.org', 'roles': ['admin', 'ops'], 'active': True}
+3. loads o -> BadSignature: Signature b'2Io9CmVmCXH7Wyy9ZM6C7zzbjUA' does not match payload=b'{"id": 42, "email": "ada@example.org", "roles": ["admin", "ops"], "active": true}'
+4. loads_unsafe o -> (False, {'id': 42, 'email': 'ada@example.org', 'roles': ['admin', 'ops'], 'active': True})
+5. loads s -> BadSignature: Signature b'2Io9CmVmCXH7Wyy9ZM6C7zzbjUA' does not match payload=b'{"id": 42, "email": "ada@example.org", "roles": ["admin", "ops"], "active": true}'
+6. dumps s -> '{"id": 42, "email": "ada@example.org", "roles": ["admin", "ops"], "active": true}.XyYwAxRiCreNKKyE3Y-mp82huEg'
+7. loads o -> {'id': 42, 'email': 'ada@example.org', 'roles': ['admin', 'ops'], 'active': True}
+8. dumps s -> '{"name": "Zo\\u00eb \\u00c5ngstr\\u00f6m", "city": "\\u6771\\u4eac", "mood": "\\ud83d\\ude42", "q": "say \\"hi\\"\\\\", "ctl": "a\\tb\\nc\\u0001\\u007f"}.bpymqTE5PODIz7nLL-73igrWGwQ'
+9. loads s -> {'name': 'Zoë Ångström', 'city': '東京', 'mood': '🙂', 'q': 'say "hi"\\', 'ctl': 'a\tb\nc\x01\x7f'}
+10. dumps s -> '[1, -2, 0, null, false, "", [], {}, [[{"a": []}]]].Gftft33NlWxjAUTK2qf3qOsO4ZQ'
+11. loads s -> [1, -2, 0, None, False, '', [], {}, [[{'a': []}]]]
+12. dumps s -> '"just a string".hvyC4xxC7aXfIKKrXxiRdXXUA_s'
+13. loads s -> 'just a string'
+14. dumps s -> '9007199254740993.r9TcZv3c4LVCBd6i8Oqa7Hkso9s'
+15. loads s -> 9007199254740993
+16. dumps n -> '{"k": 1}.ZOC8MekU_aXn7P0eEvnuJJOUuQw'
+17. loads n -> {'k': 1}
+18. loads s -> BadSignature: Signature b'ZOC8MekU_aXn7P0eEvnuJJOUuQw' does not match payload=b'{"k": 1}'
+19. loads_unsafe s -> (False, {'k': 1})
+20. loads_unsafe s -> (False, None)
+21. loads_unsafe s -> (False, {'a': 1})
+22. loads_unsafe s -> (False, None)
+23. loads s -> BadSignature: Signature b'bad' does not match payload=b'{"a": 1}'
+24. sign sg -> b'{"a": 1, "a": 2, "b": [true , null] }.GBWdxmpLDD9hToz7ctyFrOX6yaE'
+25. loads s -> {'a': 2, 'b': [True, None]}
+26. sign sg -> b' \t\n["\\ud83d\\ude00", "\\udc80", "\\u00E9\\/"]\r\n.Imfz5KqO6NHZZ726FNsajmi0nw8'
+27. loads s -> ['😀', '\udc80', 'é/']
+28. sign sg -> b'[1,].fJdzo3OEWZtfRATw8r6n1BMJ4Oo'
+29. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+30. loads_unsafe s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+31. sign sg -> b'"tab\there".YKod2iREwpdFN7SQoMTg3rewtt0'
+32. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+33. sign sg -> b'01.7MxPvmXpKQLJ9S7rLsSCW3d270s'
+34. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+35. sign sg -> b'-0.IciExAOGXxOsTDPTnAkSOrPwbNM'
+36. loads s -> 0
+37. sign sg -> b'"\xc3(.tNA6rZ4aduVqESXjeuuf7QXv_4Y'
+38. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=UnicodeDecodeError
+39. loads_unsafe s -> (False, None)
+40. sign sg -> b'\xef\xbb\xbf{}.crDqvqJI1aEmPcvw2W9Tuo23jb4'
+41. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+42. sign sg -> b'{"x": "\\q"}.Ym8RnK8d6CAmjm3-RQS7jMTYliU'
+43. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+44. sign sg -> b'["\\ud83d", "\\ude00\\ud83d"].G9LFBHoAPsDVWi6gJm2FP9kqsVE'
+45. loads s -> ['\ud83d', '\ude00\ud83d']
+46. sign sg -> b'{"a":{"b":{"c":[-12345678901234,"\xc3\xa9"]}}}.mJck1hki8rXYDGqi0FRvRyQhdk0'
+47. loads s -> {'a': {'b': {'c': [-12345678901234, 'é']}}}
+48. sign sg -> b'truex.0rr7i-gR44sDcDrT4rl_sc460lE'
+49. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+50. sign sg -> b'{1: 2}.G46BuNo9x2U6RbsQqQ-Bc3y3Xro'
+51. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+52. sign sg -> b'.0O41C-_1YWKpyRugAS0hnCG5rfs'
+53. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+== timed serializer
+1. dumps s -> '{"cart": [3, 5, 8]}.ZVPxAA.w6t6T9pl1yV9sn1ZgZ0qAF4HR5g'
+2. loads s -> {'cart': [3, 5, 8]}
+3. loads s -> {'cart': [3, 5, 8]}
+4. loads s -> SignatureExpired: Signature age 101 > 100 seconds payload=b'{"cart": [3, 5, 8]}' date=2023-11-14 22:13:20+00:00
+5. loads s -> SignatureExpired: Signature age -1000 < 0 seconds payload=b'{"cart": [3, 5, 8]}' date=2023-11-14 22:13:20+00:00
+6. loads s -> {'cart': [3, 5, 8]} @ 2023-11-14 22:13:20+00:00
+7. loads s -> BadTimeSignature: Signature b'w6t6T9pl1yV9sn1ZgZ0qAF4HR5g' does not match payload=b'{"cart": [3, 5, 8]}' date=2023-11-14 22:13:20+00:00
+8. loads_unsafe s -> (False, {'cart': [3, 5, 8]})
+9. loads_unsafe s -> (False, {'cart': [3, 5, 8]})
+10. loads_unsafe s -> (False, {'cart': [3, 5, 8]})
+11. loads_unsafe s -> (False, {'cart': [3, 5, 8]})
+12. loads_unsafe s -> (False, None)
+13. loads_unsafe s -> (False, {})
+14. loads s -> BadSignature: Signature b'sig' does not match payload=b'{}'
+15. dumps s -> '[].AQAAAAAA.2NE-DhP_MPcP-tjrXWNPNqrNUYA'
+16. loads s -> ValueError: year 36812 is out of range
+17. loads_unsafe s -> ValueError: year 36812 is out of range
+18. loads s -> ValueError: year 36812 is out of range
+19. dumps s -> '[].gAAAAAAAAAA.epUPAkjdGoyzHLlsdI85dMIk3x0'
+20. loads s -> OverflowError: timestamp out of range for platform time_t
+21. loads s -> OverflowError: timestamp out of range for platform time_t
+== url-safe serializer
+1. dumps s -> 'eyJsaXN0IjoibmV3cyIsInVzZXIiOjd9.jI12dd8mF0gwHuOfkqiACpilPoo'
+2. loads s -> {'list': 'news', 'user': 7}
+3. dumps s -> '.eJyNz8sKgCAQheF3OWs3XVa-SoRIjRRJ2aiLiN49JSRo1Vl-zL-YE8ow-QkycCQBNY-QMD8HgeiJn6iqmzbB4NmosC20Jht-LneaA2R3wi8xldo5S4n3cEDWlyjuSHPh6uXPeS9grM5vdf11A4qqTWM.nZ_j8U-U0iB088-Y0CpuCCh5UPw'
+4. loads s -> {'_fresh': True, '_id': 'ffffffffffffffffffffffffffffffffffffffff', 'user_id': '1234', 'csrf_token': 'cccccccccccccccccccccccccccccccccccccccc', 'cart': [{'sku': 'apple', 'qty': 2}, {'sku': 'pear', 'qty': 1}, {'sku': 'apple', 'qty': 2}], 'flash': []}
+5. loads_unsafe s -> (False, {'_fresh': True, '_id': 'ffffffffffffffffffffffffffffffffffffffff', 'user_id': '1234', 'csrf_token': 'cccccccccccccccccccccccccccccccccccccccc', 'cart': [{'sku': 'apple', 'qty': 2}, {'sku': 'pear', 'qty': 1}, {'sku': 'apple', 'qty': 2}], 'flash': []})
+6. loads_unsafe s -> (False, None)
+7. loads_unsafe s -> (False, None)
+8. dumps s -> 'eyJuYW1lIjoiWm_DqyDDhW5nc3Ryw7ZtIiwiY2l0eSI6IuadseS6rCIsIm1vb2QiOiLwn5mCIiwicSI6InNheSBcImhpXCJcXCIsImN0bCI6ImFcdGJcbmNcdTAwMDF_In0.XQyIF_nWhkW72Xa7gZU-g7huCbw'
+9. loads s -> {'name': 'Zoë Ångström', 'city': '東京', 'mood': '🙂', 'q': 'say "hi"\\', 'ctl': 'a\tb\nc\x01\x7f'}
+10. dumps s -> '.eJxTSsQLlADAEQuj._UOuP09xVkfGb9XoBqPy8G6ZJes'
+11. loads s -> 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+12. dumps s -> '.eJxTSkxChkoAL6EFmg.akAMq_p1hhSO2nv3rHgBuTaqwEo'
+13. dumps s -> '.eJxTSkxKRkNKAEssByk.23_7mh_SFQUpkQMMqPUhrG6R1ec'
+14. dumps s -> 'WzAsMCwwLDAsMF0.b1VkpLPH3vKujCavQeS9nm3FlSQ'
+15. dumps s -> 'WzAsMCwwLDAsMCwwXQ.pWktKkSPuoiJ2U9COUEKtybWd3U'
+16. dumps s -> '.eJyLNtBBgrEAGIEDEQ.GClZdQE2VWIIpetXl-ewRUxxo1E'
+17. dumps s -> 'W10.EEx4w8UqebkZ2Q7uhf5A-P-iBpc'
+18. loads s -> []
+19. sign sg -> b'!!!.QjsRghaGxn6Fd92ubujhJidqAwU'
+20. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+21. sign sg -> b'.!!!.AxE4cCkipJKOvA8RJa1INzoBGgM'
+22. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+23. sign sg -> b'.eJyrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.HVnXvFhHR30j8it-2oHvymhtQCA'
+24. loads s -> {'user': 'ada', 'roles': ['admin', 'admin', 'admin', 'admin']}
+25. sign sg -> b'.eAEBOADH_3sidXNlciI6ImFkYSIsInJvbGVzIjpbImFkbWluIiwiYWRtaW4iLCJhZG1pbiIsImFkbWluIl19-hgR3w.mv-l6ujAK6rdL84tjcySGs7zgxA'
+26. loads s -> {'user': 'ada', 'roles': ['admin', 'admin', 'admin', 'admin']}
+27. sign sg -> b'.eAGrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.sVcMrgkO0kGdWYDHpk4v_8cGcmo'
+28. loads s -> {'user': 'ada', 'roles': ['admin', 'admin', 'admin', 'admin']}
+29. sign sg -> b'.eAGrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.sVcMrgkO0kGdWYDHpk4v_8cGcmo'
+30. loads s -> {'user': 'ada', 'roles': ['admin', 'admin', 'admin', 'admin']}
+31. sign sg -> b'.eNqrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.9BTLn92uM6HPiwtKkv1llsNeZRQ'
+32. loads s -> {'user': 'ada', 'roles': ['admin', 'admin', 'admin', 'admin']}
+33. sign sg -> b'.eJyrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEQ.ovFSRggIroe0qTXwM79lN934Beo'
+34. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+35. sign sg -> b'.eJyrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAA.xTY6s1wbW9oXphaNGzg4ZD4_NcQ'
+36. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+37. sign sg -> b'.eJw.GC7gia6KhnNAjs0iSlVAJ5ToifU'
+38. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+39. sign sg -> b'.eJyrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAAAAAAA._GdAPwX60zV2ZgzmP7CmG1BNioU'
+40. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+41. sign sg -> b'.eJyrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd9qdW5r.utsD6NHTxEChg_r-LxR73YzDIeg'
+42. loads s -> {'user': 'ada', 'roles': ['admin', 'admin', 'admin', 'admin']}
+43. sign sg -> b'.eA.soILxn9mARP4dC9JkgEUgL373Zc'
+44. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+45. sign sg -> b'.eJ2rViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.7Zn7pMKvQheBWQy3BWftRVAFGYQ'
+46. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+47. sign sg -> b'.iJyrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.PVuHQg-LXmAsNlfvzo4n1uOCnmo'
+48. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+49. sign sg -> b'.eLurViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.YcydiGHP_d0KoUd1P9z3Wi4FyUE'
+50. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+51. sign sg -> b'.eZWrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8.8VWvgQmltckyDmACn6q07NBXxyw'
+52. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+53. sign sg -> b'.eJyvViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dhaAPoYEd8._ECh9OP4V7-k1Li2ulyaiTmEn8k'
+54. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+55. sign sg -> b'.eAEBOQDH_3sidXNlciI6ImFkYSIsInJvbGVzIjpbImFkbWluIiwiYWRtaW4iLCJhZG1pbiIsImFkbWluIl19-hgR3w.rFdpuxKInOgUVNpS9kj0FC9p8CI'
+56. loads s -> BadPayload: Could not zlib decompress the payload before decoding the payload orig=error
+57. sign sg -> b'.eJz7_w8AAv4B_g.HC24Af5bFN-ubzhfAUNgxzJREf8'
+58. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=UnicodeDecodeError
+59. sign sg -> b'.eJyLNtQx0jEGAATuAUo.Mmqc1kwBGJJ3yaBL89QOwfZaX_E'
+60. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+61. sign sg -> b'.eJwDAAAAAAE.Shl_tgqruObIa_tdzPp3EH6f7bg'
+62. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+63. sign sg -> b'.eJyrViotTi1SslJKTElU0lEqys9JLVayigZyczPzgALY6dja6lF9o_pG9Y3qG9U3qm9U36i-AdIHAF9wys8.yTqzi3HYYnmJ-VwF5rI9vJGgN20'
+64. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+65. sign sg -> b'eyJhIjoxfQ.5juJlWnZyyMsIUY7wZamTxJ2Ei8'
+66. loads s -> {'a': 1}
+67. sign sg -> b'eyJhIjoxfQ==.er_Tar3VmPwwhj4_bN5YiQ6H2aU'
+68. loads s -> {'a': 1}
+69. sign sg -> b'e-yJh_Ijo+xf/Q.RkCfjvi5VbhLdzZmbRWoD_DhV4E'
+70. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=UnicodeDecodeError
+71. sign sg -> b'eyJhIjoxf.8Z1uv53QGug8jKIrxX0HNRilZT0'
+72. loads s -> BadPayload: Could not base64 decode the payload because of an exception orig=BadData
+73. sign sg -> b'eyJhIjox.hSe270InSaKDhnWZ_gyJYPFvGfk'
+74. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=JSONDecodeError
+75. sign sg -> b'_w.gcYE1Mpl7_WftYJ-fuXOgJrM5VI'
+76. loads s -> BadPayload: Could not load the payload because an exception occurred on unserializing the data. orig=UnicodeDecodeError
+== password reset
+1. dumps s -> 'eyJ1c2VyIjo0MiwicHciOiI1ZjRkY2MzYiJ9.ZVPxAA.i1Dh29uESdi9ak-R39MD_3Ep9ms'
+2. loads s -> {'user': 42, 'pw': '5f4dcc3b'}
+3. loads s -> {'user': 42, 'pw': '5f4dcc3b'}
+4. loads s -> SignatureExpired: Signature age 3601 > 3600 seconds payload=b'eyJ1c2VyIjo0MiwicHciOiI1ZjRkY2MzYiJ9' date=2023-11-14 22:13:20+00:00
+5. loads s -> {'user': 42, 'pw': '5f4dcc3b'} @ 2023-11-14 22:13:20+00:00
+6. loads e -> BadTimeSignature: Signature b'i1Dh29uESdi9ak-R39MD_3Ep9ms' does not match payload=b'eyJ1c2VyIjo0MiwicHciOiI1ZjRkY2MzYiJ9' date=2023-11-14 22:13:20+00:00
+7. loads_unsafe e -> (False, {'user': 42, 'pw': '5f4dcc3b'})
+8. loads s -> SignatureExpired: Signature age -100000000 < 0 seconds payload=b'eyJ1c2VyIjo0MiwicHciOiI1ZjRkY2MzYiJ9' date=2023-11-14 22:13:20+00:00
+9. loads_unsafe s -> (False, {'user': 42, 'pw': '5f4dcc3b'})
+10. dumps e -> 'ImFkYUBleGFtcGxlLm9yZyI.a0nSAA.GtRGHyWi2Q-t0LuAjwy__TkB0vU'
+11. loads e -> SignatureExpired: Signature age -99950000 < 0 seconds payload=b'ImFkYUBleGFtcGxlLm9yZyI' date=2027-01-15 08:00:00+00:00
+12. dumps s -> '.eJyNz8sKgCAQheF3OWs3XVa-SoRIjRRJ2aiLiN49JSRo1Vl-zL-YE8ow-QkycCQBNY-QMD8HgeiJn6iqmzbB4NmosC20Jht-LneaA2R3wi8xldo5S4n3cEDWlyjuSHPh6uXPeS9grM5vdf11A4qqTWM.ZVPxew.pe7pQhfBl_A85aP1szcWnjldyCQ'
+13. loads s -> {'_fresh': True, '_id': 'ffffffffffffffffffffffffffffffffffffffff', 'user_id': '1234', 'csrf_token': 'cccccccccccccccccccccccccccccccccccccccc', 'cart': [{'sku': 'apple', 'qty': 2}, {'sku': 'pear', 'qty': 1}, {'sku': 'apple', 'qty': 2}], 'flash': []} @ 2023-11-14 22:15:23+00:00
+14. loads_unsafe s -> (False, None)
+== flask session
+1. dumps s -> 'e30.ZVPxAA.G9CsbqNauYyuVcGETViEUblgw6A'
+2. loads s -> {}
+3. dumps s -> '.eJyNz8sKgCAQheF3OWs3XVa-SoRIjRRJ2aiLiN49JSRo1Vl-zL-YE8ow-QkycCQBNY-QMD8HgeiJn6iqmzbB4NmosC20Jht-LneaA2R3wi8xldo5S4n3cEDWlyjuSHPh6uXPeS9grM5vdf11A4qqTWM.ZVPxAA.9HzunbadjFNpELxuaK0vwB4Ga94'
+4. loads s -> {'_fresh': True, '_id': 'ffffffffffffffffffffffffffffffffffffffff', 'user_id': '1234', 'csrf_token': 'cccccccccccccccccccccccccccccccccccccccc', 'cart': [{'sku': 'apple', 'qty': 2}, {'sku': 'pear', 'qty': 1}, {'sku': 'apple', 'qty': 2}], 'flash': []}
+5. loads s -> SignatureExpired: Signature age 2678401 > 2678400 seconds payload=b'.eJyNz8sKgCAQheF3OWs3XVa-SoRIjRRJ2aiLiN49JSRo1Vl-zL-YE8ow-QkycCQBNY-QMD8HgeiJn6iqmzbB4NmosC20Jht-LneaA2R3wi8xldo5S4n3cEDWlyjuSHPh6uXPeS9grM5vdf11A4qqTWM' date=2023-11-14 22:13:20+00:00
+6. dumps s -> '.eJyrVopPy0kszkgtVrKKjlbKTS0uTkxPVdJRCk4sS03RU4rViVZKLSrKL4IJ2YOFqKouthYAdAMq_g.ZXzPgQ.bR09Ge9Exc_QiiQFaOn0i4XQgH0'
+7. loads s -> {'_flashes': [['message', 'Saved.'], ['error', 'Saved?'], ['message', 'Saved.'], ['error', 'Saved?'], ['message', 'Saved.'], ['error', 'Saved?']]}
+== fallback signers
+1. dumps old -> 'eyJzY29wZSI6InJlYWQifQ.3JC-jDUCKwFBL68h-ki0SBW8FAs'
+2. dumps only -> 'eyJzY29wZSI6IndyaXRlIn0.vQJIhTzp4fqiAhxPLH25JdG3BOo'
+3. loads new -> {'scope': 'read'}
+4. loads new -> {'scope': 'write'}
+5. loads tup -> {'scope': 'read'}
+6. loads tup -> {'scope': 'write'}
+7. dumps new -> 'eyJzY29wZSI6ImFkbWluIn0.Erc-F4SyETnkkxIHSplxZaRqFx0UB1-KQ0P8tfHgKD8'
+8. loads old -> BadSignature: Signature b'Erc-F4SyETnkkxIHSplxZaRqFx0UB1-KQ0P8tfHgKD8' does not match payload=b'eyJzY29wZSI6ImFkbWluIn0'
+9. loads tup -> BadSignature: Signature b'Erc-F4SyETnkkxIHSplxZaRqFx0UB1-KQ0P8tfHgKD8' does not match payload=b'eyJzY29wZSI6ImFkbWluIn0'
+10. loads new -> {'scope': 'admin'}
+11. loads new -> BadSignature: Signature b'3JC-jDUCKwFBL68h-ki0SBW8FAA' does not match payload=b'eyJzY29wZSI6InJlYWQifQ'
+12. loads_unsafe tup -> (False, {'scope': 'read'})
+13. sign tsg -> b'eyJ4IjoxfQ.ZVPy9A.2-pN_e86jLPcQa5iKSWADfgIzPk'
+14. loads t -> {'x': 1}
+15. loads t -> SignatureExpired: Signature age 50 > 10 seconds payload=b'eyJ4IjoxfQ' date=2023-11-14 22:21:40+00:00
+16. loads t -> BadTimeSignature: Signature b'2-pN_e86jLPcQa5iKSWADfgIzPA' does not match payload=b'eyJ4IjoxfQ' date=2023-11-14 22:21:40+00:00
+17. loads_unsafe t -> (False, {'x': 1})
+== constructor errors
+1. sign bad -> ValueError: The given separator cannot be used because it may be contained in the signature itself. ASCII letters, digits, and '-_=' must not be used.
+2. sign eq -> ValueError: The given separator cannot be used because it may be contained in the signature itself. ASCII letters, digits, and '-_=' must not be used.
+3. sign kd -> TypeError: Unknown key derivation method
+4. unsign kd -> TypeError: Unknown key derivation method
+5. unsign kd -> BadSignature: Signature b'a' does not match payload=b'x'
+6. validate kd -> TypeError: Unknown key derivation method
+7. dumps ser -> ValueError: The given separator cannot be used because it may be contained in the signature itself. ASCII letters, digits, and '-_=' must not be used.
+8. loads ser -> ValueError: The given separator cannot be used because it may be contained in the signature itself. ASCII letters, digits, and '-_=' must not be used.
+9. dumps ok -> '[1, 2]~U1rGJAT_bVCE7YHdRg5vHRiBrZ0'
+10. loads ok -> [1, 2]
+11. dumps kds -> TypeError: Unknown key derivation method
+12. loads kds -> TypeError: Unknown key derivation method
+== random 0 Serializer
+1. dumps s -> '"tab\\t cart"~tWfyvHp-Awa_N84Y7lw14Pmy6dQ'
+2. loads_unsafe s -> (True, 'tab\t cart')
+3. loads s -> BadSignature: No b'.' found in value payload=None
+4. loads_unsafe s -> (False, None)
+5. dumps s -> '{"ken_id": {"viewer": ["\\u65e5\\u672c nl\\n", 69, 77, "nl\\n"], "adas": false, "ken2": "grace", "barbara": {"linuss": -108678769771, "edsger_id": 103532567623, "barbara_id": "", "edsger": "\\u65e5\\u672c admin cart a\\"b"}, "barbara_id": ["edsger linus x\\\\y", "cart", true, true, 32, null]}}~_2ypq8f3JP8VSrUcvOau3OBt13E'
+6. loads s -> BadSignature: No b'.' found in value payload=None
+7. loads s -> BadSignature: No b'.' found in value payload=None
+8. loads_unsafe s -> (True, {'ken_id': {'viewer': ['日本 nl\n', 69, 77, 'nl\n'], 'adas': False, 'ken2': 'grace', 'barbara': {'linuss': -108678769771, 'edsger_id': 103532567623, 'barbara_id': '', 'edsger': '日本 admin cart a"b'}, 'barbara_id': ['edsger linus x\\y', 'cart', True, True, 32, None]}})
+9. loads_unsafe s -> (False, None)
+10. dumps s -> '[{"kens": false, "carts": false, "grace": [true, true, true, null, 75428122031], "viewer_id": -747951560095, "barbara2": [444192809462, "\\u00e9t\\u00e9", "barbara cart"], "adas": ["tab\\t barbara", "\\u65e5\\u672c barbara ken \\u65e5\\u672c"], "grace_id": ["edsger admin x\\\\y \\u65e5\\u672c", 547040785747, 45, 33]}, {"linus_id": {"edsger": -941266749016, "cart": 20, "barbaras": "x\\\\y ada ada", "ada_id": "", "linus2": 84}, "edsgers": [false, "barbara viewer x\\\\y \\u65e5\\u672c", "tab\\t"], "admin": {"grace_id": -918370301930}, "edsger_id": {"grace": false, "cart_id": "ada cart admin", "linus2": 29}}, {"admin2": {"edsger": "", "admins": "a\\"b", "viewer_id": null}, "grace2": [-888079051392, false, 567724839282, -219258101769], "barbara_id": "", "admin": "", "edsger": ["viewer", "x\\\\y edsger cart", "\\u00e9t\\u00e9", "grace", 39183856125, "ken a\\"b"]}, [{"cart": "\\ud83d\\ude80 ken viewer", "linuss": null, "grace": true, "edsger_id": -478364447382, "adas": false, "ken": 566393287556}, ["", false, true], "cart admin edsger"]]~UhokI5vEC02pJ6IB6j2ilEFzxkk'
+11. loads s -> BadSignature: No b'.' found in value payload=None
+12. loads_unsafe s -> (True, [{'kens': False, 'carts': False, 'grace': [True, True, True, None, 75428122031], 'viewer_id': -747951560095, 'barbara2': [444192809462, 'été', 'barbara cart'], 'adas': ['tab\t barbara', '日本 barbara ken 日本'], 'grace_id': ['edsger admin x\\y 日本', 547040785747, 45, 33]}, {'linus_id': {'edsger': -941266749016, 'cart': 20, 'barbaras': 'x\\y ada ada', 'ada_id': '', 'linus2': 84}, 'edsgers': [False, 'barbara viewer x\\y 日本', 'tab\t'], 'admin': {'grace_id': -918370301930}, 'edsger_id': {'grace': False, 'cart_id': 'ada cart admin', 'linus2': 29}}, {'admin2': {'edsger': '', 'admins': 'a"b', 'viewer_id': None}, 'grace2': [-888079051392, False, 567724839282, -219258101769], 'barbara_id': '', 'admin': '', 'edsger': ['viewer', 'x\\y edsger cart', 'été', 'grace', 39183856125, 'ken a"b']}, [{'cart': '🚀 ken viewer', 'linuss': None, 'grace': True, 'edsger_id': -478364447382, 'adas': False, 'ken': 566393287556}, ['', False, True], 'cart admin edsger']])
+13. loads_unsafe s -> (True, [{'kens': False, 'carts': False, 'grace': [True, True, True, None, 75428122031], 'viewer_id': -747951560095, 'barbara2': [444192809462, 'été', 'barbara cart'], 'adas': ['tab\t barbara', '日本 barbara ken 日本'], 'grace_id': ['edsger admin x\\y 日本', 547040785747, 45, 33]}, {'linus_id': {'edsger': -941266749016, 'cart': 20, 'barbaras': 'x\\y ada ada', 'ada_id': '', 'linus2': 84}, 'edsgers': [False, 'barbara viewer x\\y 日本', 'tab\t'], 'admin': {'grace_id': -918370301930}, 'edsger_id': {'grace': False, 'cart_id': 'ada cart admin', 'linus2': 29}}, {'admin2': {'edsger': '', 'admins': 'a"b', 'viewer_id': None}, 'grace2': [-888079051392, False, 567724839282, -219258101769], 'barbara_id': '', 'admin': '', 'edsger': ['viewer', 'x\\y edsger cart', 'été', 'grace', 39183856125, 'ken a"b']}, [{'cart': '🚀 ken viewer', 'linuss': None, 'grace': True, 'edsger_id': -478364447382, 'adas': False, 'ken': 566393287556}, ['', False, True], 'cart admin edsger']])
+14. dumps s -> '"\\u65e5\\u672c viewer"~oG2xmhz-shxjIjbMjbj6NPl2HxE'
+15. loads_unsafe s -> (True, '日本 viewer')
+16. loads_unsafe s -> (False, None)
+17. loads_unsafe s -> (True, '日本 viewer')
+18. dumps s -> '"barbara"~MszK7IiCvODQFJGeJYkw-IezFG0'
+19. loads s -> 'barbara'
+20. dumps s -> '"\\u00e9t\\u00e9 viewer ken cart"~9Foy6NF-ldKooysz3ANlF8gQFjY'
+21. loads s -> 'été viewer ken cart'
+22. loads_unsafe s -> (False, None)
+== random 1 TimedSerializer
+1. dumps s -> '[[{"linus2": ""}, {"carts": 22, "cart2": "\\u00e9t\\u00e9 admin"}, "barbara grace x\\\\y", [182780462741, "ken a\\"b grace edsger", "a\\"b a\\"b edsger viewer", false]], {"linus2": [1, 67, 196298701750, false], "cart": [true, "edsger ken", 164406917150, true, "tab\\t x\\\\y cart"]}, 699013319463, {"adas": true}].ZV-jfQ.yvaVN5dJX8Py56MSGdhYD0fZv_c'
+2. loads s -> BadTimeSignature: Signature b'yvaVN5dJX8Py56MSGdhYD0fZv_c' does not match payload=b'A[{"l-inus2": ""}, {"carts": 22, "cart2": "\\u00e9t\\u00e9 admin"}, "barbara grace x\\\\y", [182780462741, "ken a\\"b grace edsger", "a\\"b a\\"b edsger viewer", false]], {"linus2": [1, 67, 196298701750, false], "cart": [true, "edsger ken", 164406917150, true, "tab\\t x\\\\y cart"]}, 699013319463, {"adas": true}]' date=2023-11-23 19:09:49+00:00
+3. loads_unsafe s -> (True, [[{'linus2': ''}, {'carts': 22, 'cart2': 'été admin'}, 'barbara grace x\\y', [182780462741, 'ken a"b grace edsger', 'a"b a"b edsger viewer', False]], {'linus2': [1, 67, 196298701750, False], 'cart': [True, 'edsger ken', 164406917150, True, 'tab\t x\\y cart']}, 699013319463, {'adas': True}])
+4. loads_unsafe s -> (True, [[{'linus2': ''}, {'carts': 22, 'cart2': 'été admin'}, 'barbara grace x\\y', [182780462741, 'ken a"b grace edsger', 'a"b a"b edsger viewer', False]], {'linus2': [1, 67, 196298701750, False], 'cart': [True, 'edsger ken', 164406917150, True, 'tab\t x\\y cart']}, 699013319463, {'adas': True}])
+5. loads s -> [[{'linus2': ''}, {'carts': 22, 'cart2': 'été admin'}, 'barbara grace x\\y', [182780462741, 'ken a"b grace edsger', 'a"b a"b edsger viewer', False]], {'linus2': [1, 67, 196298701750, False], 'cart': [True, 'edsger ken', 164406917150, True, 'tab\t x\\y cart']}, 699013319463, {'adas': True}] @ 2023-11-23 19:09:49+00:00
+6. dumps s -> '{"admin": {"ken2": {"cart_id": 311762776984, "admin_id": null, "cart": null}, "viewer_id": null, "ada2": ["viewer nl\\n barbara", "barbara grace ken", "\\u00e9t\\u00e9 \\u65e5\\u672c cart edsger"]}, "ken_id": {"admin_id": true}, "ken": -759257968471, "admin2": 86}.ZV-jfQ.VprZjnFcwhUBDOGY46K_jfimqMs'
+7. loads_unsafe s -> (False, {'admin': {'ken2': {'cart_id': 311762776984, 'admin_id': None, 'cart': None}, 'viewer_id': None, 'ada2': ['viewer nl\n barbara', 'barbara grace ken', 'été 日本 cart edsger']}, 'ken_id': {'admin_id': True}, 'ken': -759257968471, 'admin2': 86})
+8. loads s -> BadTimeSignature: Signature b'VprZjnFcwhUBAOGYA6K_jfimqMs' does not match payload=b'{"admin": {"ken2": {"cart_id": 311762776984, "admin_id": null, "cart": null}, "viewer_id": null, "ada2": ["viewer nl\\n barbara", "barbara grace ken", "\\u00e9t\\u00e9 \\u65e5\\u672c cart edsger"]}, "ken_id": {"admin_id": true}, "ken": -759257968471, "admin2": 86}' date=2023-11-23 19:09:49+00:00
+9. loads s -> BadTimeSignature: Signature b'VprZjnFcw-hUBDOGY46K_jfimqMsx' does not match payload=b'{"admin": {"ken2": {"cart_id": 311762776984, "admin_id": null, "cart": null}, "viewer_id": null, "ada2": ["viewer nl\\n barbara", "barbara grace ken", "\\u00e9t\\u00e9 \\u65e5\\u672c cart edsger"]}, "ken_id": {"admin_id": true}, "ken": -759257968471, "admin2": 86}' date=2023-11-23 19:09:49+00:00
+10. dumps s -> '[{"ada_id": "grace", "carts": [], "grace2": null, "barbara2": {"barbara": 18, "viewer2": ""}}, [{"viewer": "admin", "kens": "grace", "graces": 62, "grace_id": 834792335348, "ada": "x\\\\y x\\\\y admin", "ken": ""}, {"viewer2": "barbara", "linus2": "grace ada admin", "grace": "\\u65e5\\u672c tab\\t grace \\ud83d\\ude80", "adas": -92193357445, "linus_id": "\\u00e9t\\u00e9", "edsgers": "admin", "viewer_id": ""}], [["ada barbara", 854213229427, "edsger"], ["", ""], 913597388649, {"ken2": 81, "barbara": "edsger barbara", "edsger_id": "edsger tab\\t ada", "edsgers": "grace ada \\u65e5\\u672c nl\\n"}], {}].ZV-jfQ.MF8LA11XSAJozSuI2wB_Naglut0'
+11. loads s -> [{'ada_id': 'grace', 'carts': [], 'grace2': None, 'barbara2': {'barbara': 18, 'viewer2': ''}}, [{'viewer': 'admin', 'kens': 'grace', 'graces': 62, 'grace_id': 834792335348, 'ada': 'x\\y x\\y admin', 'ken': ''}, {'viewer2': 'barbara', 'linus2': 'grace ada admin', 'grace': '日本 tab\t grace 🚀', 'adas': -92193357445, 'linus_id': 'été', 'edsgers': 'admin', 'viewer_id': ''}], [['ada barbara', 854213229427, 'edsger'], ['', ''], 913597388649, {'ken2': 81, 'barbara': 'edsger barbara', 'edsger_id': 'edsger tab\t ada', 'edsgers': 'grace ada 日本 nl\n'}], {}]
+12. loads s -> SignatureExpired: Signature age 31 > 30 seconds payload=b'[{"ada_id": "grace", "carts": [], "grace2": null, "barbara2": {"barbara": 18, "viewer2": ""}}, [{"viewer": "admin", "kens": "grace", "graces": 62, "grace_id": 834792335348, "ada": "x\\\\y x\\\\y admin", "ken": ""}, {"viewer2": "barbara", "linus2": "grace ada admin", "grace": "\\u65e5\\u672c tab\\t grace \\ud83d\\ude80", "adas": -92193357445, "linus_id": "\\u00e9t\\u00e9", "edsgers": "admin", "viewer_id": ""}], [["ada barbara", 854213229427, "edsger"], ["", ""], 913597388649, {"ken2": 81, "barbara": "edsger barbara", "edsger_id": "edsger tab\\t ada", "edsgers": "grace ada \\u65e5\\u672c nl\\n"}], {}]' date=2023-11-23 19:09:49+00:00
+13. dumps s -> '"x\\\\y".ZV-jfQ.kud1i2F9nKoT0jz8geO18eSzPj0'
+14. loads_unsafe s -> (False, 'x\\y')
+15. loads_unsafe s -> (False, 'x\\y')
+16. dumps s -> '"barbara tab\\t \\u00e9t\\u00e9 \\u00e9t\\u00e9".ZV-jfQ.CrmgnuGMBGevuBA3GswJbnoD_OE'
+17. loads_unsafe s -> (True, 'barbara tab\t été été')
+18. dumps s -> '[-711362725408].ZV-jfQ.7YRsCWlNl4Wg2d5VAe6owuT8XoQ'
+19. loads s -> BadTimeSignature: Signature b'' does not match payload=b'[-711362725408].ZV-jfQ' date=None
+20. loads_unsafe s -> (True, [-711362725408])
+21. loads s -> [-711362725408]
+22. loads_unsafe s -> (False, [-711362725408])
+== random 2 URLSafeSerializer
+1. dumps s -> 'WzY2MDYzMTgwODcyNCx7fSxmYWxzZSx7ImNhcnRzIjo2NCwiYWRhMiI6eyJhZGFzIjoiZ3JhY2UifX1d.wKfHeCSpjasGvPsSrKNntQ'
+2. loads_unsafe s -> (True, [660631808724, {}, False, {'carts': 64, 'ada2': {'adas': 'grace'}}])
+3. loads s -> [660631808724, {}, False, {'carts': 64, 'ada2': {'adas': 'grace'}}]
+4. loads_unsafe s -> (False, [660031808724, {}, False, {'carts': 64, 'ada2': {'adas': 'grace'}}])
+5. loads s -> BadSignature: Signature b'wKfHeCSpjasGvPsSrKNntQ' does not match payload=b'WzY2MDYzMTgwODcyNCx7fSxmYWxzZSx7ImNhcnRzIAo2NCwiYWRhMiI6eyJhZGFzIjoiZ3JhY2UifX1d'
+6. dumps s -> 'Nzk.Rmb2AZW3YrZHJ2MXQlZLTQ'
+7. loads_unsafe s -> (False, None)
+8. loads_unsafe s -> (False, 79)
+9. loads_unsafe s -> (True, 79)
+10. dumps s -> 'eyJiYXJiYXJhX2lkIjoiIn0.zK2Alh7O7ucNXSqOkWa14Q'
+11. loads_unsafe s -> (True, {'barbara_id': ''})
+12. loads s -> {'barbara_id': ''}
+13. loads s -> BadSignature: Signature b'zA2Alh7O7ucNXSqOkWa14Q' does not match payload=b'eyJiYXJiYXJhX2lkIjoiIn0'
+14. loads_unsafe s -> (False, {'barbara_id': ''})
+15. dumps s -> '.eJxVkUtqwzAQhq8iZq2ALCmW7avYpSixGkxdL2S7D4KhtyiUQlddBHqL3CXrHqFjaeym4Iekmfn0zz9HeGzck_NQJJkUwqhcmK3mYOuHprttaiiOcPB276AAmDi4uj84HwPrFoqyhL31Awtl-LXA4d517Hwazie44TDYXTWwrq064Eek24C4s23vppj6XFUvbF7E6_hGZlpmqcm1MCnWYKhHEfhD9iJ68KObxVqMzHBmK9ixqIr9fL6_Yi7J78a2pU1PN_NVyMYkuU6kEkprOaHetunGPoToLmplxZWYtLMeH9tfmRR6w4NU8eCIREDsfVYT5MFaGPiZEWkqRK7U1pDvWHN5-7p8fLMgA0jOzAoLNpP_MHgc4NQ2eRNtvR4T1pfRBcJu8kQJLbf4ZiZOIfKDizQHKqbR0sD_Nb-IXeRM0y8jqceI.MbTqIC2Q5uQk5ONfyO_WTQ'
+16. loads s -> {'viewer': 182007390754, 'admin_id': {'grace': ''}, 'edsger_id': {}, 'edsger': [['cart admin ada', 'ken été'], 'tab\t nl\n', {'ada_id': False}, 'ken x\\y ken grace', -284286794076, {'kens': 'ken', 'viewer': True, 'ada': 'nl\n a"b edsger 🚀', 'grace': None, 'graces': False, 'ada_id': -719412303442}], 'linus_id': 'viewer été', 'grace': [], 'barbaras': {'grace': {'adas': 63, 'cart2': 'tab\t 🚀 a"b', 'barbara_id': 870660093357, 'admin': '日本 linus', 'linus2': 'linus cart', 'barbara': '🚀 edsger viewer'}, 'ken': {}, 'edsger2': [None, 'linus', -913042504287, 'ken linus a"b grace', 'edsger admin edsger'], 'barbaras': '日本 barbara'}}
+17. dumps s -> '.eJxdUkFugzAQ_Iq150QCbDDwlRBVTnAjVMrBJm2qCKnv6KXnvCMf6hO6ttdOqYTAWu_MzsxyhaMys4X2CuMwnW0BLUxjNzH_cnewgYMy-KinoU99iCibDZyMOmrEbIXIhKi4lKKs1gDQvT1pw6jGPBxJVa8QWFTu9DpM0D6r0eqExQHbOs-lrAXPBce2Fz2tCN8G_Y4fJxQWf104eaFsE1_oDsj7bb7fmBfN_FQiAXKCKMAzFVufDfv5_vqEP-MvXfcR3UDkd2p5nmWN4HVZcNTjsB4gpQf7jCnsFQeb1aGbg6p_YZc8pTObs36oJG_Bs6jDNGh5HfW4PbpUiM0nExKHaDa4SXtOiwlUTWSy1OTY4uqBAqc_giTu9o_onNxl-QXBAcN9.7GjbUetXYsrKwhCsVJ60Sw'
+18. loads_unsafe s -> (False, {'carts': {'linus2': 'nl\n nl\n cart', 'barbara_id': {'linuss': 59, 'grace2': -440446377456, 'barbara_id': 'edsger barbara linus', 'ada2': 26, 'admin': False, 'barbaras': -811778431436, 'ken_id': 'edsger viewer nl\n'}, 'ken2': {'viewers': False, 'edsger_id': 'été grace admin viewer', 'graces': '', 'viewer': 'cart 🚀', 'ken_id': 'x\\y barbara', 'edsger': -831009438523}, 'cart_id': 77, 'kens': {'carts': 'x\\y barbara tab\t grace', 'barbara_id': 53, 'admin': True, 'graces': False, 'ken2': 48, 'cart': 38, 'edsger2': ''}, 'barbara2': {'ada2': '', 'grace_id': 'nl\n cart linus', 'cart': 9, 'edsgers': 'nl\n'}, 'linuss': ''}, 'ken_id': {'admin': [], 'viewer': True}})
+19. loads s -> BadSignature: Signature b'7GjbUetXYsrKwhCsVJ60SwAA' does not match payload=b'.eJxAUkFugzAQ_Iq150QCbDDwlRBVTnAjVMrBJm2qCKnv6KXnvCMf6hO6ttdOqYTAWu_MzsxyhaMys4X2CuMwnW0BLUxjNzH_cnewgYMy-KinoU99iCibDZyMOmrEbIXIhKi4lKKs1gDQvT1pw6jGPBxJVa8QWFTu9DpM0D6r0eqExQHbOs-lrAXPBce2Fz2tCN8G_Y4fJxQWf104eaFsE1_oDsj7bb7fmBfN_FQiAXKCKMAzFVufDfv5_vqEP-MvXfcR3UDkd2p5nmWN4HVZcNTjsB4gpQf7jCnsFQeb1aGbg6p_YZc8pTObs36oJG_Bs6jDNGh5HfW4PbpUiM0nExKHaDa4SXtOiwlUTWSy1OTY4uqBAqc_giTu9o_onNxl-QXBAcN9'
+20. dumps s -> 'Mg.lu5BzPac1OFzN0nB2qP-XQ'
+21. loads_unsafe s -> (True, 2)
+22. loads s -> BadSignature: Signature b'luABzPac1OFzN0nB2qP-XQ' does not match payload=b'Mg'
+23. loads s -> BadSignature: Signature b'lu5BzPac1OFzN0nB2qP-XQ' does not match payload=b'MgA'
+24. dumps s -> 'eyJ2aWV3ZXIyIjoiYWRhIPCfmoAifQ.a6ZEvCYUgDVMX2ABfBIoiw'
+25. loads s -> BadSignature: Signature b'a6ZEvCYUgDVMX2ABfB' does not match payload=b'eyJ2aAV3ZXIyIjoiYWRhIPCfmoAifQ'
+== random 3 URLSafeTimedSerializer
+1. dumps s -> '.eJxFj1GKwjAQhq8S_ucRNDa16VXaItFGKcY8pO2uIsLeYmFZ2Kd9ELyFd_HZI5iOBSEwk8w330-KoiLYut3aIMayNqETpsQK5HvnCIeyPIptMGsrdtaL26W7XUAnDOCyqZEXk0Rmi0wqpaZzwgCZet94VoFmquLHCHaht6TSREudKKnkYowAbYxrbeR4ka0nrEyIx0jkPCW4xvdtvMqpVjrJ0jR6CB-N_bQBObwrvbh__99_rxhhNs304DXcv_LeKfrMs7jN_xKPv58vMYhwrp7aql8X.ZVsyDg.4m9z0IHZVOwVFTnla2nqRtcU-EQ'
+2. loads s -> BadTimeSignature: Signature b'4m9z0IHZVOwVFTnla2nqRtcU-EQ' does not match payload=b'.eJxFj1GKwjAQhq8S_ucRNDa16VXaItFGKcYApO2uIsLeYmFZ2Kd9ELyFd_HZI5iOBSEwk8w330-KoiLYut3aIMayNqETpsQK5HvnCIeyPIptMGsrdtaL26W7XUAnDOCyqZEXk0Rmi0wqpaZzwgCZet94VoFmquLHCHaht6TSREudKKnkYowAbYxrbeR4ka0nrEyIx0jkPCW4xvdtvMqpVjrJ0jR6CB-N_bQBObwrvbh__99_rxhhNs304DXcv_LeKfrMs7jN_xKPv58vMYhwrp7aql8X' date=2023-11-20 10:16:46+00:00
+3. loads_unsafe s -> (True, [[], 'edsger edsger cart a"b', None, 'x\\y grace ken été', {'cart_id': [-42878255503, 'ken admin cart', 15], 'ken': [True, 564929452527, None, '', False], 'admin_id': {'barbara2': False, 'linus2': 209594866929, 'viewer': 'nl\n 日本', 'linus_id': 19, 'ada_id': None, 'admin_id': 9}, 'ada': 'été 🚀 nl\n'}])
+4. loads_unsafe s -> (False, None)
+5. dumps s -> 'InRhYlx0IHZpZXdlciI.ZVsyDg.YasHcCIRXaeeJueScOR5vtz8itk'
+6. loads s -> BadTimeSignature: Signature b'YasHcCIRXaeeJueScOR5vtz8itk' does not match payload=b'InRhYlx0IHZpZXdlciI' date=2023-11-12 02:01:50+00:00
+7. loads_unsafe s -> (False, 'tab\t viewer')
+8. loads s -> BadTimeSignature: Signature b'YasHcCIRXaeeJueScOR5vtz8itk' does not match payload=b'InRhYAx0IHZpZXdlciI' date=2023-11-20 10:16:46+00:00
+9. loads s -> SignatureExpired: Signature age -5 < 0 seconds payload=b'InRhYlx0IHZpZXdlciI' date=2023-11-20 10:16:46+00:00
+10. dumps s -> '.eJyrVkpOLCqJz0xRsqoGM42UrHQNjYzNTczNjEwMjXSQ5csyU8tTi4qVrEqKSlN1lBJTcjPzgDylipiYSiUdqDSQnxijlKSkAzMuLTGnGKw60QimMyczr7QYak6tjlJ2ah6SC8BMpfSixORUBaAmhQ_zZzUogfUDhQ-vLDm8UgFsYW1tLQCgej_L.ZVsyDg.D2Zy809a3KgceqeaYZW9Q_AF9OY'
+11. loads_unsafe s -> (False, None)
+12. dumps s -> 'IiI.ZVsyDg.DPsMWuD_QQgggOmSrD0eyzKhHBc'
+13. loads s -> BadTimeSignature: Signature b'DPsMWuDBQQgggOmSrD0eyzKhHBc' does not match payload=b'IiI' date=2023-11-20 10:16:46+00:00
+14. dumps s -> 'LTM1OTc0NzIzMDUyNw.ZVsyDg.DaGPaPekRSArLaCAPGJCS-ffedc'
+15. loads_unsafe s -> (False, -359747230527)
+16. dumps s -> '.eJxVkU9qhDAUxq8iWaeQvBiNXkVDiWM6SK0LdaYtEugtCqXQVRcDvcXcZdY9Ql9inKGQRfK97_3enyzEttPejhMpq4XszDjjLWrJ5f378vmTHDv7jK--Gw4ToaQxIx6DtjWAkmmfugETC-loBZT8fn28JUHEoIeuySgZor3dJEGNdfaj2VlCl5UDSI5pvpehr4drbQ8oSYTVpEFpDZVcKpCyUAK4CL77rvUgR3MhRF6AZDwVW401-FLXr8mjHTYKYmRG4_Sr5Xyaz6dkG9npf9GqejD9ZOk8HqzWcQ2kXNx1SeBNKgOV58AVy_hmCjlUAcpCpEpKRrNCKM5Ehi-hsdEbgsymqa_bCi3d_iF0AgVLFeCAXICjd8AlKOQxpnLt_gCS25qx.ZVsyDg.9Y8A0zGhQj4g2crmx82rDaWhrFA'
+17. loads_unsafe s -> (False, {'edsgers': [{'carts': 'edsger 日本 viewer linus', 'barbara': 'viewer', 'admins': 95}, [2, '🚀 admin', 'cart linus ada'], 'ada cart edsger grace', {'admin2': '', 'carts': 'nl\n linus', 'ada': 'linus a"b', 'linus': 158255983213, 'ada_id': ''}, 733379250143, {'admin_id': 'x\\y ken', 'linuss': 56, 'edsger_id': 'été barbara'}], 'edsger_id': [[False, True]], 'admin': {}, 'barbara2': [[862877218061, 'admin', True, 827213348550, 693810364853], {'barbara2': 'tab\t edsger été', 'barbara_id': 290482143132}, -215286930087]})
+18. loads s -> {'edsgers': [{'carts': 'edsger 日本 viewer linus', 'barbara': 'viewer', 'admins': 95}, [2, '🚀 admin', 'cart linus ada'], 'ada cart edsger grace', {'admin2': '', 'carts': 'nl\n linus', 'ada': 'linus a"b', 'linus': 158255983213, 'ada_id': ''}, 733379250143, {'admin_id': 'x\\y ken', 'linuss': 56, 'edsger_id': 'été barbara'}], 'edsger_id': [[False, True]], 'admin': {}, 'barbara2': [[862877218061, 'admin', True, 827213348550, 693810364853], {'barbara2': 'tab\t edsger été', 'barbara_id': 290482143132}, -215286930087]} @ 2023-11-20 10:16:46+00:00
+19. loads s -> {'edsgers': [{'carts': 'edsger 日本 viewer linus', 'barbara': 'viewer', 'admins': 95}, [2, '🚀 admin', 'cart linus ada'], 'ada cart edsger grace', {'admin2': '', 'carts': 'nl\n linus', 'ada': 'linus a"b', 'linus': 158255983213, 'ada_id': ''}, 733379250143, {'admin_id': 'x\\y ken', 'linuss': 56, 'edsger_id': 'été barbara'}], 'edsger_id': [[False, True]], 'admin': {}, 'barbara2': [[862877218061, 'admin', True, 827213348550, 693810364853], {'barbara2': 'tab\t edsger été', 'barbara_id': 290482143132}, -215286930087]} @ 2023-11-20 10:16:46+00:00
+20. dumps s -> 'InZpZXdlciI.ZVsyDg.9tkRhTlNF2JJ83TndAXt01q84eo'
+21. loads_unsafe s -> (False, None)
+== random 4 Serializer
+1. dumps s -> '-611667011336|v2mzBOvz3UArthzgUzRzn4pLllNoWJQfSQwGqgEfjOKmhyinu16wVEsR1hkfj2aTnWv-cVpkp8bowLsf3Pj58w'
+2. loads s -> BadSignature: No b'.' found in value payload=None
+3. loads_unsafe s -> (False, None)
+4. dumps s -> '{"edsger": 404976389208, "graces": [{"admin_id": "tab\\t tab\\t tab\\t"}, {"linus": "admin", "viewers": "viewer a\\"b", "kens": "ken"}], "viewers": ["grace \\ud83d\\ude80 \\ud83d\\ude80 \\u00e9t\\u00e9", "ken viewer admin", {"cart_id": 17, "viewers": "barbara viewer", "viewer2": -33608086926}, ["", "cart tab\\t \\u65e5\\u672c \\u00e9t\\u00e9"], 92], "ada": {"cart": {"edsger_id": "\\u65e5\\u672c ken", "barbaras": "x\\\\y \\ud83d\\ude80"}, "kens": {"ada_id": "\\ud83d\\ude80"}, "barbaras": [-720124272545, "", "a\\"b \\u00e9t\\u00e9 viewer", 361903249166]}, "viewer2": null, "admins": 185706901832}|QxOUzOd6scei8kzPl1LVEHITX2yro5GPkKccQwV9hJemE17Bcbro-M44s-QNkSGBlzXdpd5hg2bwD3g-75M8FA'
+5. loads s -> BadSignature: No b'.' found in value payload=None
+6. loads s -> BadSignature: No b'.' found in value payload=None
+7. loads s -> BadSignature: No b'.' found in value payload=None
+8. loads s -> BadSignature: No b'.' found in value payload=None
+9. dumps s -> '{"admin_id": {"edsger2": ["tab\\t linus"], "linus2": "viewer tab\\t", "ada": null, "linus_id": {}}, "carts": {"adas": "linus linus edsger ken", "barbara2": "", "ada_id": "x\\\\y \\u00e9t\\u00e9 grace", "edsger": 877364347867, "ada": null, "cart_id": "\\u65e5\\u672c grace"}, "ada_id": [true, ["viewer x\\\\y", true, 86], [652478668020], {"linus_id": 95, "admins": "edsger linus \\u00e9t\\u00e9 \\ud83d\\ude80"}, {"edsger2": "x\\\\y \\u00e9t\\u00e9 \\u00e9t\\u00e9", "linus": "viewer", "ken_id": 75, "kens": "ken", "linuss": true, "cart2": "nl\\n nl\\n \\ud83d\\ude80 x\\\\y"}], "grace": [[false, 92], [-329374619324, "a\\"b a\\"b tab\\t tab\\t", 49]], "admin": "", "edsgers": ["x\\\\y \\ud83d\\ude80", {"viewer": null, "viewer2": 206474546121, "ada": -64939996673, "ken_id": 4, "adas": 362553036776}, false, "ken edsger a\\"b \\u00e9t\\u00e9"]}|LvreoMMSy46fXKnEX5jiNvf_3IrHmtijvi80Z5OxRpo9Wjt3boguyhVyaMtiI9wMrtpXQxnb9L5a72YR0wBtbw'
+10. loads_unsafe s -> (False, None)
+11. loads s -> BadSignature: No b'.' found in value payload=None
+12. loads_unsafe s -> (True, {'admin_id': {'edsger2': ['tab\t linus'], 'linus2': 'viewer tab\t', 'ada': None, 'linus_id': {}}, 'carts': {'adas': 'linus linus edsger ken', 'barbara2': '', 'ada_id': 'x\\y été grace', 'edsger': 877364347867, 'ada': None, 'cart_id': '日本 grace'}, 'ada_id': [True, ['viewer x\\y', True, 86], [652478668020], {'linus_id': 95, 'admins': 'edsger linus été 🚀'}, {'edsger2': 'x\\y été été', 'linus': 'viewer', 'ken_id': 75, 'kens': 'ken', 'linuss': True, 'cart2': 'nl\n nl\n 🚀 x\\y'}], 'grace': [[False, 92], [-329374619324, 'a"b a"b tab\t tab\t', 49]], 'admin': '', 'edsgers': ['x\\y 🚀', {'viewer': None, 'viewer2': 206474546121, 'ada': -64939996673, 'ken_id': 4, 'adas': 362553036776}, False, 'ken edsger a"b été']})
+13. dumps s -> '"ken ken \\ud83d\\ude80"|33el3Uw21mvxqCni9JgdiUXuCtU7BqvsZ7pWunzXszyV-dqPzTh-XW8A6YgnpzHeJLUaFsSVfJ02Nekersn5-A'
+14. loads s -> BadSignature: No b'.' found in value payload=None
+15. dumps s -> '""|ybmuHcLYfPy-bHcd7wYbmz07oHXrHju88RZrZNy6EamT47W3f5SLQ9pW6BGBxD86SHmjwWQykLkaY5l7UKtJIw'
+16. loads_unsafe s -> (True, '')
+17. dumps s -> '""|ybmuHcLYfPy-bHcd7wYbmz07oHXrHju88RZrZNy6EamT47W3f5SLQ9pW6BGBxD86SHmjwWQykLkaY5l7UKtJIw'
+18. loads_unsafe s -> (True, '')
+19. loads_unsafe s -> (False, None)
+20. loads s -> BadSignature: No b'.' found in value payload=None
+21. loads s -> ''
+22. dumps s -> '{}|3zYOhhQIuDta2G1l98MBMbjbgX4IlCoN1v5VPtUhemJk5mlu-XoLPRgDg3JlyfdxMe66lY2b2X2yjhTOTcBamg'
+23. loads_unsafe s -> (False, None)
+24. dumps s -> '[true, {"ada": [78, -601535600101], "grace": ["\\u00e9t\\u00e9 \\u65e5\\u672c", "", 53, "grace edsger edsger x\\\\y", true], "barbara2": -800756862948}, {"cart_id": [null, "", "viewer"], "admin": {}, "ken": "\\ud83d\\ude80 edsger \\u65e5\\u672c \\u65e5\\u672c", "barbara2": "", "linus2": ["ada", "barbara", "admin barbara", "\\u65e5\\u672c nl\\n"]}, [-621770651472, true], {}]|2kxdvz7hUUo6pSwK6Pj1pz9ghE10o5TVpv21JKW4AmfEQCdB7aVxrDxtoK73quwVZpOAltvJ6_uIeUSyziXWlA'
+25. loads_unsafe s -> (False, None)
+26. loads_unsafe s -> (False, None)
+27. dumps s -> '{"grace2": [], "ada_id": {"linuss": 56370909659}, "edsger": [{"ada": "barbara tab\\t", "kens": "\\u65e5\\u672c viewer viewer ada", "edsger": 773781476343, "ada2": ""}, {"cart": "ada barbara x\\\\y admin", "admin": true, "barbaras": "tab\\t x\\\\y ken a\\"b", "admin_id": true}, [true, -595480340548, "\\ud83d\\ude80 \\ud83d\\ude80", "\\u65e5\\u672c barbara \\u00e9t\\u00e9", null]]}|t3cytAfndn2u93rtGIk3-w40q_YiFIpDe3IspmY0mQgbRj7TDfGa_mmSOyAbqLvuRtDepDOosV2aYD0xKAjTHw'
+28. loads_unsafe s -> (False, None)
+== random 5 TimedSerializer
+1. dumps s -> '{"edsger2": {"viewer_id": {"carts": "grace", "linus_id": ""}, "viewers": ["\\u00e9t\\u00e9", "edsger nl\\n grace grace"], "kens": true}, "edsger": "tab\\t", "barbara2": {}, "viewer2": [{"grace2": 98, "ada2": "", "edsger": "a\\"b x\\\\y"}, 972473764637, {}, {"edsger2": "cart linus viewer ada", "ada": -752108449011, "cart_id": true, "ken": 692244478862, "viewer2": 9, "linus2": "linus"}]}.ZVgSxw.d8nn4yfSy_c_Cy0XdV09lBlxsK0'
+2. loads_unsafe s -> (False, {'edsgAr2': {'viewer_id': {'carts': 'grace', 'linus_id': ''}, 'viewers': ['été', 'edsger nl\n grace grace'], 'kens': True}, 'edsger': 'tab\t', 'barbara2': {}, 'viewer2': [{'grace2': 98, 'ada2': '', 'edsger': 'a"b x\\y'}, 972473764637, {}, {'edsger2': 'cart linus viewer ada', 'ada': -752108449011, 'cart_id': True, 'ken': 692244478862, 'viewer2': 9, 'linus2': 'linus'}]})
+3. dumps s -> 'false.ZVgSxw.gR7xW-2lPQ5yMzzekZij4daB8WE'
+4. loads s -> BadTimeSignature: Signature b'g-R7xW-2lPQ5yMzzekZij4daB8WE' does not match payload=b'false' date=2023-11-18 01:26:31+00:00
+5. loads s -> BadTimeSignature: Signature b'gR7xW-2lAQ5yMzzekZij4daB8WE' does not match payload=b'false' date=2023-11-18 01:26:31+00:00
+6. loads_unsafe s -> (False, False)
+7. dumps s -> '{"linus": {"admins": {"carts": false, "barbaras": null, "ada2": -93309460190, "linus_id": 488705104391}, "ada2": {"viewer": "ken ken tab\\t", "admins": "barbara"}, "linus": 292920676182, "grace": [null]}, "admin_id": ["tab\\t", ["linus barbara ada", 20, "", false], [64, true, false, "ken x\\\\y a\\"b nl\\n"], {"barbaras": 428129126977, "ada_id": -665362628693}, 92], "graces": [], "carts": -456382435168}.ZVgSxw.3g4Lsxt_UyB6FutfXRl07Az8MrY'
+8. loads s -> BadTimeSignature: Signature b'3g4Lsxt_UyB6FutfXRl07Az8Mr' does not match payload=b'{"linus": {"admins": {"carts": false, "barbaras": null, "ada2": -93309460190, "linus_id": 488705104391}, "ada2": {"viewer": "ken ken tab\\t", "admins": "barbara"}, "linus": 292920676182, "grace": [null]}, "admin_id": ["tab\\t", ["linus barbara ada", 20, "", false], [64, true, false, "ken x\\\\y a\\"b nl\\n"], {"barbaras": 428129126977, "ada_id": -665362628693}, 92], "graces": [], "carts": -45-6382435168}' date=2023-11-18 01:26:31+00:00
+9. loads_unsafe s -> (True, {'linus': {'admins': {'carts': False, 'barbaras': None, 'ada2': -93309460190, 'linus_id': 488705104391}, 'ada2': {'viewer': 'ken ken tab\t', 'admins': 'barbara'}, 'linus': 292920676182, 'grace': [None]}, 'admin_id': ['tab\t', ['linus barbara ada', 20, '', False], [64, True, False, 'ken x\\y a"b nl\n'], {'barbaras': 428129126977, 'ada_id': -665362628693}, 92], 'graces': [], 'carts': -456382435168})
+10. loads s -> BadTimeSignature: Signature b'3g4Lsxt_UyB6FutfXRl07Az8MrYAA' does not match payload=b'{"linus": {"admins": {"carts": false, "barbaras": null, "ada2": -93309460190, "linus_id": 488705104391}, "ada2": {"viewer": "ken ken tab\\t", "admins": "barbara"}, "linus": 292920676182, "grace": [null]}, "admin_id": ["tab\\t", ["linus barbara ada", 20, "", false], [64, true, false, "ken x\\\\y a\\"b nl\\n"], {"barbaras": 428129126977, "ada_id": -665362628693}, 92], "graces": [], "carts": -456382435168}' date=2023-11-18 01:26:31+00:00
+11. dumps s -> '"x\\\\y admin grace".ZVgSxw.e2mq06T7FPVULYCrJZTqm2Qztd4'
+12. loads_unsafe s -> (False, 'x\\y admin grace')
+13. dumps s -> '{"barbara_id": [{"linus2": "\\u00e9t\\u00e9 admin viewer", "ada": -30520897722, "barbara2": "\\u00e9t\\u00e9", "admin": 931996756618, "cart_id": 18, "viewers": null}, true, null, {}, "\\u65e5\\u672c admin grace nl\\n", 63], "admins": {"edsger2": [null, 822334636454, "viewer linus edsger admin", "x\\\\y nl\\n barbara tab\\t", -962122214625], "grace_id": ["cart a\\"b", "edsger a\\"b nl\\n admin", "nl\\n nl\\n linus ken", "ada", 38, "ada viewer ada \\u65e5\\u672c"], "grace2": ["cart", false, 35]}}.ZVgSxw.2DVrflYZJDuaMfok3zOdGmF5b5w'
+14. loads_unsafe s -> (False, None)
+15. loads s -> {'barbara_id': [{'linus2': 'été admin viewer', 'ada': -30520897722, 'barbara2': 'été', 'admin': 931996756618, 'cart_id': 18, 'viewers': None}, True, None, {}, '日本 admin grace nl\n', 63], 'admins': {'edsger2': [None, 822334636454, 'viewer linus edsger admin', 'x\\y nl\n barbara tab\t', -962122214625], 'grace_id': ['cart a"b', 'edsger a"b nl\n admin', 'nl\n nl\n linus ken', 'ada', 38, 'ada viewer ada 日本'], 'grace2': ['cart', False, 35]}} @ 2023-11-18 01:26:31+00:00
+16. dumps s -> '{"barbara": ""}.ZVgSxw.QsKE6OUAeQX0RO1LZblVi58BP5M'
+17. loads_unsafe s -> (False, {'barbara': ''})
+18. loads_unsafe s -> (False, {'barbara': ''})
+19. dumps s -> '{}.ZVgSxw.BNGmTpGqM_2MNzXHPXeO06ImllI'
+20. loads_unsafe s -> (False, {})
+21. loads s -> SignatureExpired: Signature age -5 < 0 seconds payload=b'{}' date=2023-11-18 01:26:31+00:00
+22. loads s -> BadTimeSignature: Signature b'BNAGmTpGqM_2MNzXHPXeO06ImllI' does not match payload=b'{}' date=2023-11-18 01:26:31+00:00
+== random 6 URLSafeSerializer
+1. dumps s -> 'ImNhcnQgY2FydCBncmFjZSB2aWV3ZXIi.tQTOOsS3S_Eebf7rNogbSnN80A8'
+2. loads s -> BadSignature: No b'.' found in value payload=None
+3. loads_unsafe s -> (False, 'cart cart grace viewer')
+4. dumps s -> 'e30.n7Sx6Y1mBo6Vf1-b1pLuDAv-qQg'
+5. loads_unsafe s -> (False, {})
+6. loads s -> BadSignature: Signature b'n7Sx6Y1mBo6Vf1-b1ALuDAv-qQg' does not match payload=b'e30'
+7. loads_unsafe s -> (True, {})
+8. loads s -> {}
+9. dumps s -> '.eJyLjlbKy4nJU9KJLikqTdVR-jB_VoNCcmJRiUJiSqKSjlJijFKSAlgQTCQlFgERUAKs2tgiVkcpJzOvtFgpNhYAEO4bcg.TSseroWLdg1okdyoUMcaR30sw-k'
+10. loads s -> BadSignature: Signature b'TSseroWLdg1okdyoUMcaR30sw-k' does not match payload=b'.JyLjlbKy4nJU9KJLikqTdVR-jB_VoNCcmJRiUJiSqKSjlJijFKSAlgQTCQlFgERUAKs2tgiVkcpJzOvtAgpNhYAEO4bcg'
+11. dumps s -> 'MjY2NjAzNTI3OTQ5.nKg08KbEKoDEmnPAiSlkWFBS7Kc'
+12. loads s -> BadSignature: No b'.' found in value payload=None
+13. loads s -> BadSignature: Signature b'nKg08KbEKoDEmnPAiSlkWFBS7K' does not match payload=b'MjY2NjAzNTI3OTQA'
+14. loads_unsafe s -> (True, 266603527949)
+15. dumps s -> '.eJxNjk0OgjAQha9C3npWRsPPVZrGVKiksWFRQBeEc7Bx64LEW3AXzuFYBmPSRTvv9ftmQGlChyI9Em62QZGnhDqY0h5QXI1vLeFiAh_DAzXEOt-wTq_1-U5s1dY2JN41fQv5eXYVFyRZ5m6Zk7uzD358DeLJcsI25a7EsYufcONgFCwHUbM7ZQMpgxT-l9njqDxlmpreexpGvdOYLMDoUXr8AO_dYM8.lEWi-CadnsUabw9Cx96RNp2mhIY'
+16. loads s -> {'cart': 74, 'ken': 97, 'grace2': False, 'barbara2': [{'cart2': '日本 edsger linus', 'grace_id': 'edsger été viewer ken', 'ken': 89, 'viewer': 'viewer été', 'barbara_id': ''}, 'grace', 'linus edsger 日本 barbara', ['edsger linus 日本 ken', 58], None, {}], 'grace': '', 'linus_id': []}
+17. dumps s -> '.eJyrVirLTC1PLSpWsoqO1YFy4jNTlKyqldKLEpNTQeK1Oko5mXmlxUYQRYkpiUCGromlsZmRoYWBmbmRmU60iSlYQuHZ9KXP5qxRSE0pTk8tUgKq_jB_VoNCYoxSklJsLQDfjSUd.-ij8CVh9FuGu1oSzAWjsFzw_ILQ'
+18. loads s -> BadSignature: Signature b'-ij8CVh9FuGu1oSz/WjsFzw_ILQ' does not match payload=b'.eJyrVirLTC1PLSpWsoqO1YFy4jNTlKyqldKLEpNTQeK1Oko5mXmlxUYQRYkpiUCGromlsZmRoYWBmbmRmU60iSlYQuHZ9KXP5qxRSE0pTk8tUgKq_jB_VoNCYoxSklJsLQDfjSUd'
+19. loads s -> {'viewers': [], 'viewer_id': {'grace': []}, 'linus2': [], 'ada': [-493621806726, [45, 'ada 日本 edsger'], '🚀 a"b']}
+20. dumps s -> 'IsOpdMOpIg.MJzYcqzWhAU08sBZHbeAuAlvydU'
+21. loads_unsafe s -> (True, 'été')
+22. dumps s -> 'LTcyODgyMjU4MTcyOA.6pHG4AlSDJmgjcIGFNGLVgOy7K4'
+23. loads s -> BadSignature: Signature b'6pHG4AlSDJmgjcIGFNGAVgOy7K4' does not match payload=b'LTcyODgyMjU4MTcyOA'
+24. loads s -> -728822581728
+== random 7 URLSafeTimedSerializer
+1. dumps s -> '.eJxVUV1qg0AQvsoyzxPIRrOrXkWlbOI2SK0Pq0lbROgtCqXQpz4EeovcJc89Qmdntaag7DD7zXw_O4CpzAayYUSwVXewroMsh7YpWpg7Yjqei-JFhJtVlK61lGodqRRhZxx9RkwnYF7iQIsf6_auriBLEPbG9UTzB_35fH8V17ev68c38TzYFrLeHS3CqbZP1nkoNSfEvFhczv3lDGOJcHBmb3l5PvByrmHe5QvfhSzdLORkVfAgWyFIU7fHLkx6jDAF7NihICiMSKlIzAMsXIYyiAQMknnUq_U_s-K9aTq64ZE5lZJk32SipU5lGsVqG-PiIFeJ1FupY60kDpOHlY42SaIVhR3L-VW8oWAmaFrIg96ODRPd__SWR7p1H3LjEZJMCY-_lumxnA.ZVa-bw.MTu8Oy0MgEr6A5eKKNWyuneTiE4'
+2. loads_unsafe s -> (False, {'ada2': {}, 'edsgers': ['nl\n', 'edsger edsger x\\y nl\n', -39071160369, 'barbara barbara', [], {'admin_id': 8, 'cart2': 'barbara 🚀 日本', 'ken': True, 'viewer2': 'ken 日本 barbara été'}], 'grace_id': [{'cart_id': '', 'ken': '', 'cart': 92, 'cart2': 'ada grace x\\y', 'linus_id': 'cart a"b nl\n ada'}, {}, 1, ['linus a"b linus viewer', True, 'cart ken ken cart', False, 'a"b barbara']], 'admin_id': 871791934654, 'cart_id': [68175174761, {'cart': -732887636941, 'edsger2': 'grace linus ken cart', 'linuss': 'admin barbara été barbara', 'linus_id': '', 'kens': 'a"b'}]})
+3. loads_unsafe s -> (False, None)
+4. dumps s -> 'e30.ZVa-bw._u4tDkkaOdIF3J4Hw9Pf6jVdbo4'
+5. loads s -> BadTimeSignature: Signature b'_u4tDkkaOdIF3J4Hw9Pf6jVdboA' does not match payload=b'e30' date=2023-11-17 01:14:23+00:00
+6. loads s -> BadTimeSignature: Signature b'u4tDkkaOdIF3J4Hw9Pf6jVdbo4' does not match payload=b'+30.ZVa-bw' date=1970-01-01 00:00:00+00:00
+7. loads s -> {} @ 2023-11-17 01:14:23+00:00
+8. dumps s -> '.eJxNUEtugzAUvIo1a1cqEEjNVTCqHsGNUF0vMJFaIc6RTbZdROotcpeco882oZW8wJ4v08yg_mNwHnWpJEzvj2bMUTetxIHG6XXoUc_oaORDzML9_H2__IioEu_G8RdBsgtFLkijS3e2eSrUXpWlyp93OdsfRzoY1G9kvZEpGLU7WbvIR0Q0Cel2cCfPFmsn4ax22ERr7YCvwpTJDfNyX2VZoapqpzZbJhYvyyLZuWmy7VmEtuJ2nW5XkcpJYM2OGNooSWmxg0hgGCeQWznHobhIAibq9PSAeR__9wsx7FPrL_xbeuu_tMHuF5AAgJ8.ZVa-bw.gTSuU1nJTWqDOm7cfOAj1k_0EUg'
+9. loads_unsafe s -> (False, [{'admins': 59, 'edsger2': [], 'cart_id': {'barbaras': '日本 admin ken ada', 'ada_id': 'a"b', 'ada2': -397955920429, 'grace': False, 'admin': None}, 'barbara_id': [], 'linus2': 'edsger nl\n', 'admin': {'admin2': 'barbara', 'adas': 257611396649, 'barbara2': 38}}, [], [[1, 'barbara a"b été grace', '', 'linus a"b'], [], ['admin nl\n linus cart', ''], {'cart': 'linus tab\t cart', 'kens': 'edsger a"b x\\y', 'edsger2': 'barbara'}], ''])
+10. loads s -> SignatureExpired: Signature age 30 > 0 seconds payload=b'.eJxNUEtugzAUvIo1a1cqEEjNVTCqHsGNUF0vMJFaIc6RTbZdROotcpeco882oZW8wJ4v08yg_mNwHnWpJEzvj2bMUTetxIHG6XXoUc_oaORDzML9_H2__IioEu_G8RdBsgtFLkijS3e2eSrUXpWlyp93OdsfRzoY1G9kvZEpGLU7WbvIR0Q0Cel2cCfPFmsn4ax22ERr7YCvwpTJDfNyX2VZoapqpzZbJhYvyyLZuWmy7VmEtuJ2nW5XkcpJYM2OGNooSWmxg0hgGCeQWznHobhIAibq9PSAeR__9wsx7FPrL_xbeuu_tMHuF5AAgJ8' date=2023-11-17 01:14:23+00:00
+11. loads_unsafe s -> (False, [{'admins': 59, 'edsger2': [], 'cart_id': {'barbaras': '日本 admin ken ada', 'ada_id': 'a"b', 'ada2': -397955920429, 'grace': False, 'admin': None}, 'barbara_id': [], 'linus2': 'edsger nl\n', 'admin': {'admin2': 'barbara', 'adas': 257611396649, 'barbara2': 38}}, [], [[1, 'barbara a"b été grace', '', 'linus a"b'], [], ['admin nl\n linus cart', ''], {'cart': 'linus tab\t cart', 'kens': 'edsger a"b x\\y', 'edsger2': 'barbara'}], ''])
+12. dumps s -> 'eyJjYXJ0Ijpbe30sIsOpdMOpIPCfmoAiLFsiYWRtaW4gYVwiYiB4XFx5IGFcImIiLG51bGwsImFcImIiLHRydWUsMTkzMjc3OTI3NjkzXSwi5pel5pysIix7fV19.ZVa-bw.7-KaixlOJtykrXYmFaBukPoSn0g'
+13. loads_unsafe s -> (False, None)
+14. dumps s -> '.eJxNkEtqwzAQhq9iZq2CHpGs0VWSUNRYDaauF3bSBybQWxRKoasuAr1F7pJ1j1A9xmnAyB5r5v_--ScIzbgNA7gJntrwHIbbtknFnR_i40dw8BD66vz-ff78qX6_Pt7oGxgNgDOKY21Rc1NzBr5JU9owkk4SNE6v8r_qu1UPBwYbP-wkuOWNWAishdRKaWT3vhsDk5wZRFQ66qNi_b7r1rMwOS0uIkUVOLjdsA8s2Y6qQhcAuCJI9owQttaWo11c--zafj8mTxfRJeSd8_GyWr3mA1hCrLOYTB4KiwhlNtYAM45utoPfhHiB9j-8OenYW-iutFVXsZ-Ou9Mx2bo4ncqmKQ-ay2noheCKW4MSkXDjP6KKMxVxr2yWuHzz2KYllCLBtACBD_Me08WDLEXuTDHFMIiSjRguFGqJQkl7-AMpVtBZ.ZVa-bw.sfT_-EvLUPdsIX7IicH0eQ60IqI'
+15. loads_unsafe s -> (True, {'edsger': {'viewer_id': {'barbaras': 'ken 日本 🚀 日本', 'viewer': 630978950670, 'adas': 56, 'edsgers': '日本 日本 edsger nl\n'}, 'cart2': [-141971253359, False, 20, 69993578993, None], 'edsger_id': {'viewers': 30, 'ada': True, 'ken2': 15, 'cart': False, 'adas': 61187580984, 'edsgers': 'linus'}, 'viewers': ['🚀 🚀 x\\y x\\y', True], 'ada2': {'ken2': False, 'viewer2': '', 'adas': False, 'grace2': 98, 'viewer': 'barbara', 'linus': 'grace ken 日本 été'}, 'edsgers': {'ada': None, 'linus_id': 541030869299, 'graces': 'barbara ada viewer', 'viewer2': True, 'admin2': 33, 'linus2': 'été'}}, 'adas': {}, 'edsger2': {}, 'linuss': [], 'barbara_id': 601395291328})
+16. dumps s -> 'eyJrZW5faWQiOmZhbHNlfQ.ZVa-bw.VqoGTGUsKaJ3WFRskhIS_Z9ADco'
+17. loads_unsafe s -> (False, None)
+18. dumps s -> 'ImNhcnQgdGFiXHQgeFxceSB2aWV3ZXIi.ZVa-bw.L0D-sedkRcpS0QEJyOQZH6UbZZ8'
+19. loads_unsafe s -> (False, '`!rt tab\t x\\y viewer')
+20. loads s -> BadTimeSignature: Signature b'L0D-sedkRcpS0Q=EJyOQZH6UbZZ8' does not match payload=b'ImNhcnQgdGFiXHQgeFxceSB2aWV3ZXIi' date=2023-11-17 01:14:23+00:00
+== random 8 Serializer
+1. dumps s -> '{"admin": null, "edsger_id": false, "viewer": [], "linus2": [[null, "linus tab\\t viewer", null, "admin", "ken nl\\n", "viewer viewer grace"], [true, "", "edsger"], 92, ["", "", "viewer", "nl\\n \\u00e9t\\u00e9 linus", "grace admin \\u00e9t\\u00e9"]]}|Fc76-YrItjqPwu_Cvpd4AQ'
+2. loads_unsafe s -> (False, {'admin': None, 'edsger_id': False, 'viewer': [], 'linus2': [[None, 'linus tab\t viewer', None, 'admin', 'ken nl\n', 'viewer viewer grace'], [True, '', 'edsger'], 92, ['', '', 'viewer', 'nl\n été linus', 'grace admin été']]})
+3. loads s -> BadSignature: Signature b'Fc76-YrItjqPwu_Cvpd4AQ=' does not match payload=b'{"admin": null, "edsger/id": false, "viewer": [], "linus2": [[null, "linus tab\\t viewer", null, "admin", "ken nl\\n", "viewer viewer grace"], [true, "", "edsger"], 92, ["", "", "viewer", "nl\\n \\u00e9t\\u00e9 linus", "grace admin \\u00e9t\\u00e9"]]}'
+4. loads_unsafe s -> (False, None)
+5. dumps s -> '["a\\"b tab\\t", {"linus_id": -193217147870, "adas": ["tab\\t tab\\t tab\\t \\ud83d\\ude80", "\\u00e9t\\u00e9 edsger", -513676560993, 9]}, true, "\\u00e9t\\u00e9 \\ud83d\\ude80", "ada x\\\\y grace \\u00e9t\\u00e9"]|xB4mnGC5I-ujWWoSnVWq_w'
+6. loads s -> BadSignature: Signature b'xB4mnGC5I-ujWWoSAVWq_w' does not match payload=b'["a\\"b tab\\t", {"linus_id": -193217147870, "adas": ["tab\\t tab\\t tab\\t \\ud83d\\ude80", "\\u00e9t\\u00e9 edsger", -513676560993, 9]}, true, "\\u00e9t\\u00e9 \\ud83d\\ude80", "ada x\\\\y grace \\u00e9t\\u00e9"]'
+7. loads s -> ['a"b tab\t', {'linus_id': -193217147870, 'adas': ['tab\t tab\t tab\t 🚀', 'été edsger', -513676560993, 9]}, True, 'été 🚀', 'ada x\\y grace été']
+8. loads s -> BadSignature: Signature b'xB4mnGC5I-ujWWoSnVWq_w' does not match payload=b'["=a\\"b tab\\t", {"linus_id": -193217147870, "adas": ["tAb\\t tab\\t tab\\t \\ud83d\\ude80", "\\u00e9t\\u00e9 edsger", -513676560993, 9]}, true, "\\u00e9t\\u00e9 \\ud83d\\ude80", "ada x\\\\y grace \\u00e9t\\u00e9"]'
+9. loads_unsafe s -> (False, ['a"b tab\t', {'linus/id': -193217147870, 'adas': ['tab\t tab\t tab\t 🚀', 'été edsger', -513676560993, 9]}, True, 'été 🚀', 'ada x\\y grace été'])
+10. dumps s -> '{"edsger2": [], "kens": 5, "linuss": {"admins": true}}|TWf6AleX8sSEximmm3T_Kg'
+11. loads s -> BadSignature: Signature b'TWf6AleX8sSEximmm3T_' does not match payload=b'{"edsger2": [], "kens": 5, "linuAs": {"admins": true}}'
+12. loads_unsafe s -> (False, {'edsger2': [], 'kens': 5, 'linuss': {'admins': True}})
+13. loads s -> BadSignature: Signature b'TWf6AleX8sSEximmm3T_Kg.' does not match payload=b'{"edsger2": [], "kens": 5, "linuss": {"admins": true}}'
+14. dumps s -> 'false|3NoE70l6ENrrjiY5L3efeQ'
+15. loads s -> BadSignature: Signature b'3NoE70l6ENrrjiYAL3AfeQ' does not match payload=b'false'
+16. loads s -> BadSignature: Signature b'3NoE70l6ENrrjiY5L3efe-Q' does not match payload=b'false'
+17. loads_unsafe s -> (True, False)
+18. dumps s -> '{"ada": [null, {"edsger_id": false}, 47, 13, "a\\"b x\\\\y barbara"], "edsger": true, "viewer2": {"graces": true, "linus": "linus edsger"}, "ken_id": {"edsger_id": [52, 84], "barbara_id": "viewer", "viewer_id": ["linus admin ken a\\"b", "a\\"b \\u65e5\\u672c cart barbara", "linus tab\\t", "", "edsger nl\\n \\u00e9t\\u00e9 edsger"], "ada": ["tab\\t barbara a\\"b cart"], "viewer2": {"linus2": "linus \\u65e5\\u672c", "ada": 470026428688, "linus": "", "admin2": null, "cart": "\\u65e5\\u672c"}}, "linus": null, "admin_id": [[-556665367320, "cart edsger cart \\u00e9t\\u00e9", -134193676196, 72, 406332127757, "linus cart \\u65e5\\u672c grace"], "ken \\u00e9t\\u00e9 a\\"b edsger", -89667202694, ["\\u00e9t\\u00e9"], [81, "", "cart \\ud83d\\ude80 ken"], ""], "admin": [true, {"viewer_id": "x\\\\y \\u65e5\\u672c"}, true, ["", "cart", 760687827601, "a\\"b barbara", 29, false]]}|fzeUaTmQ1zY3NYlYOP7CpA'
+19. loads_unsafe s -> (False, None)
+20. loads s -> BadSignature: Signature b'fzeUaTmQ1zY3NYlYOP7CpA' does not match payload=b'{"ada": [null, {"Adsger_id": false},A 47, 13, "a\\"b x\\\\y barbara"], "edsger": true, "viewer2": {"graces": true, "linus": "linus edsger"}, "ken_id": {"edsger_id": [52, 84], "barbara_id": "viewer", "viewer_id": ["linus admin ken a\\"b", "a\\"b \\u65e5\\u672c cart barbara", "linus tab\\t", "", "edsger nl\\n \\u00e9t\\u00e9 edsger"], "ada": ["tab\\t barbara a\\"b cart"], "viewer2": {"linus2": "linus \\u65e5\\u672c", "ada": 470026428688, "linus": "", "admin2": null, "cart": "\\u65e5\\u672c"}}, "linus": null, "admin_id": [[-556665367320, "cart edsger cart \\u00e9t\\u00e9", -134193676196, 72, 406332127757, "linus cart \\u65e5\\u672c grace"], "ken \\u00e9t\\u00e9 a\\"b edsger", -89667202694, ["\\u00e9t\\u00e9"], [81, "", "cart \\ud83d\\ude80 ken"], ""], "admin": [true, {"viewer_id": "x\\\\y \\u65e5\\u672c"}, true, ["", "cart", 760687827601, "a\\"b barbara", 29, false]]}'
+21. loads_unsafe s -> (False, {'ada': [None, {'+dsger_id': False}, 47, 13, 'a"b x\\y barbara'], 'edsger': True, 'viewer2': {'graces': True, 'linus': 'linus edsger'}, 'ken_id': {'edsger_id': [52, 84], 'barbara_id': 'viewer', 'viewer_id': ['linus admin ken a"b', 'a"b 日本 cart barbara', 'linus tab\t', '', 'edsger nl\n été edsger'], 'ada': ['tab\t barbara a"b cart'], 'viewer2': {'linus2': 'linus 日本', 'ada': 470026428688, 'linus': '', 'admin2': None, 'cart': '日本'}}, 'linus': None, 'admin_id': [[-556665367320, 'cart edsger cart été', -134193676196, 72, 406332127757, 'linus cart 日本 grace'], 'ken été a"b edsger', -89667202694, ['été'], [81, '', 'cart 🚀 ken'], ''], 'admin': [True, {'viewer_id': 'x\\y 日本'}, True, ['', 'cart', 760687827601, 'a"b Aarbara', 29, False]]})
+22. dumps s -> '[-293763905789, ["barbara tab\\t edsger", -393792035796], []]|5TsN0ilnEfIuutSzLI_8Gg'
+23. loads_unsafe s -> (False, None)
+24. dumps s -> '{"grace2": 93, "graces": "ada \\u00e9t\\u00e9 \\u65e5\\u672c \\u65e5\\u672c", "barbara_id": {"cart_id": "ada grace viewer", "viewer2": "a\\"b tab\\t ada", "graces": {"edsger": "edsger barbara"}, "viewers": {"cart2": 82, "admin_id": true}, "admin": [74, ""]}, "viewer": [{"barbara_id": null, "kens": "linus \\u00e9t\\u00e9", "ken": "\\u00e9t\\u00e9", "grace_id": 56, "barbaras": 60, "ada": "ada cart", "carts": "\\u00e9t\\u00e9"}, {"viewer": -86501482073}, {"ada": null, "graces": "\\u00e9t\\u00e9 \\ud83d\\ude80", "ada2": "grace", "admin2": "\\u65e5\\u672c ada linus x\\\\y", "admin": 20}], "barbara2": -239159131482, "ken2": ["ken x\\\\y", 86]}|XQmZ0zOhBOTUSrsoLII44w'
+25. loads s -> {'grace2': 93, 'graces': 'ada été 日本 日本', 'barbara_id': {'cart_id': 'ada grace viewer', 'viewer2': 'a"b tab\t ada', 'graces': {'edsger': 'edsger barbara'}, 'viewers': {'cart2': 82, 'admin_id': True}, 'admin': [74, '']}, 'viewer': [{'barbara_id': None, 'kens': 'linus été', 'ken': 'été', 'grace_id': 56, 'barbaras': 60, 'ada': 'ada cart', 'carts': 'été'}, {'viewer': -86501482073}, {'ada': None, 'graces': 'été 🚀', 'ada2': 'grace', 'admin2': '日本 ada linus x\\y', 'admin': 20}], 'barbara2': -239159131482, 'ken2': ['ken x\\y', 86]}
+26. loads s -> BadSignature: Signature b'XQmZ0zOhBOAUSrsoLII44w' does not match payload=b'{"grace2": 93, "graces": "ada \\u00e9t\\u00e9 \\u65e5\\u672c \\u65e5\\u672c", "barbara_id": {"cart_id": "ada grace viewer", "viewer2": "a\\"b tab\\t ada", "graces": {"edsger": "edsger barbara"}, "viewers": {"cart2": 82, "admin_id": true}, "admin": [74, ""]}, "viewer": [{"barbara_id": null, "kens": "linus \\u00e9t\\u00e9", "ken": "\\u00e9t\\u00e9", "grace_id": 56, "barbaras": 60, "ada": "ada cart", "carts": "\\u00e9t\\u00e9"}, {"viewer": -86501482073}, {"ada": null, "graces": "\\u00e9t\\u00e9 \\ud83d\\ude80", "ada2": "grace", "admin2": "\\u65e5\\u672c ada linus x\\\\y", "admin": 20}], "barbara2": -239159131482, "ken2": ["ken x\\\\y", 86]}'
+27. loads_unsafe s -> (True, {'grace2': 93, 'graces': 'ada été 日本 日本', 'barbara_id': {'cart_id': 'ada grace viewer', 'viewer2': 'a"b tab\t ada', 'graces': {'edsger': 'edsger barbara'}, 'viewers': {'cart2': 82, 'admin_id': True}, 'admin': [74, '']}, 'viewer': [{'barbara_id': None, 'kens': 'linus été', 'ken': 'été', 'grace_id': 56, 'barbaras': 60, 'ada': 'ada cart', 'carts': 'été'}, {'viewer': -86501482073}, {'ada': None, 'graces': 'été 🚀', 'ada2': 'grace', 'admin2': '日本 ada linus x\\y', 'admin': 20}], 'barbara2': -239159131482, 'ken2': ['ken x\\y', 86]})
+28. dumps s -> '{}|b2O_r0b7vEjzdUjUcGCa1w'
+29. loads s -> {}
+30. loads s -> BadSignature: Signature b'bAO_r0b7vEjzdUjUcGAa1w' does not match payload=b'{}'
+31. dumps s -> '[874939498304]|YqHsSC3oHgtON1yOUZArJQ'
+32. loads s -> [874939498304]
+== random 9 TimedSerializer
+1. dumps s -> '78!ZV8A8Q!VteUNkCF9bpss-ytoEltNSgS-H0'
+2. loads_unsafe s -> (False, 78)
+3. dumps s -> '[]!ZV8A8Q!_rZFvqHUhUn_ryv5GmhRZiP-W5Y'
+4. loads_unsafe s -> (True, [])
+5. loads_unsafe s -> (True, [])
+6. dumps s -> '14!ZV8A8Q!FgmHOdRLAmjxlynARPaFCmuD1j4'
+7. loads_unsafe s -> (True, 14)
+8. loads s -> 14
+9. dumps s -> '[{"cart_id": [], "edsgers": [false, true, 46, "\\u65e5\\u672c", "\\u00e9t\\u00e9 cart a\\"b", "x\\\\y"], "barbara": "nl\\n barbara tab\\t edsger", "grace_id": -940255976563, "admin2": -756840632167}, "\\u00e9t\\u00e9 x\\\\y x\\\\y", ["", 181870268091, [-747446489363, "a\\"b \\u65e5\\u672c", 53805539393]], {"viewer2": {"ken": true, "barbara2": -401301028427, "linus": 165564646721, "edsger_id": 21}, "cart": "a\\"b \\u65e5\\u672c cart", "grace_id": [42, "", false, 36, true], "edsger_id": [-764528809426, null, "linus nl\\n"]}, {"grace": {"cart_id": "", "edsger_id": "a\\"b"}, "cart": "", "linuss": [19, "", "", -158007054721, false]}, "admin cart \\u65e5\\u672c"]!ZV8A8Q!27Wm6WPMxwtbKfPzhJnkRiBRlFE'
+10. loads_unsafe s -> (False, [{'cart_id': [], 'edsgers': [False, True, 46, '日本', 'été cart a"b', 'x\\y'], 'barbara': 'nl\n barbara tab\t edsger', 'grace_id': -940255976563, 'admin2': -756840632167}, 'été x\\y x\\y', ['', 181870268091, [-747446489363, 'a"b 日本', 53805539393]], {'viewer2': {'ken': True, 'barbara2': -401301028427, 'linus': 165564646721, 'edsger_id': 21}, 'cart': 'a"b 日本 cart', 'grace_id': [42, '', False, 36, True], 'edsger_id': [-764528809426, None, 'linus nl\n']}, {'grace': {'cart_id': '', 'edsger_id': 'a"b'}, 'cart': '', 'linuss': [19, '', '', -158007054721, False]}, 'admin cart 日本'])
+11. loads_unsafe s -> (True, [{'cart_id': [], 'edsgers': [False, True, 46, '日本', 'été cart a"b', 'x\\y'], 'barbara': 'nl\n barbara tab\t edsger', 'grace_id': -940255976563, 'admin2': -756840632167}, 'été x\\y x\\y', ['', 181870268091, [-747446489363, 'a"b 日本', 53805539393]], {'viewer2': {'ken': True, 'barbara2': -401301028427, 'linus': 165564646721, 'edsger_id': 21}, 'cart': 'a"b 日本 cart', 'grace_id': [42, '', False, 36, True], 'edsger_id': [-764528809426, None, 'linus nl\n']}, {'grace': {'cart_id': '', 'edsger_id': 'a"b'}, 'cart': '', 'linuss': [19, '', '', -158007054721, False]}, 'admin cart 日本'])
+12. loads_unsafe s -> (True, [{'cart_id': [], 'edsgers': [False, True, 46, '日本', 'été cart a"b', 'x\\y'], 'barbara': 'nl\n barbara tab\t edsger', 'grace_id': -940255976563, 'admin2': -756840632167}, 'été x\\y x\\y', ['', 181870268091, [-747446489363, 'a"b 日本', 53805539393]], {'viewer2': {'ken': True, 'barbara2': -401301028427, 'linus': 165564646721, 'edsger_id': 21}, 'cart': 'a"b 日本 cart', 'grace_id': [42, '', False, 36, True], 'edsger_id': [-764528809426, None, 'linus nl\n']}, {'grace': {'cart_id': '', 'edsger_id': 'a"b'}, 'cart': '', 'linuss': [19, '', '', -158007054721, False]}, 'admin cart 日本'])
+13. dumps s -> '-384796193146!ZV8A8Q!3nA0R7iaMWOMXfZSCwFJCePBfrg'
+14. loads s -> BadTimeSignature: Signature b'3nA0R7iaMWOMXfZSAwFJCePBfrg' does not match payload=b'-384796193146' date=2023-11-23 07:36:17+00:00
+15. loads_unsafe s -> (False, -384796193146)
+16. loads_unsafe s -> (False, -384796193146)
+17. loads_unsafe s -> (False, -384796193146)
+18. dumps s -> '"ada nl\\n nl\\n"!ZV8A8Q!62OJ-jK7Oi2qAiWJwj5hjJ8MncU'
+19. loads_unsafe s -> (False, 'ada nl\n nl\n')
+20. loads_unsafe s -> (False, 'ada nl\n nl\n')
+21. dumps s -> '{"ada2": [{"linus2": false, "graces": "", "viewer_id": "", "cart": "nl\\n a\\"b"}, ["ada nl\\n", "barbara", "viewer a\\"b \\u00e9t\\u00e9"], [null, null, "\\ud83d\\ude80 tab\\t tab\\t linus", -313529872862, "ken"]], "cart": null, "admin2": false, "carts": "ken linus", "admins": [{"cart_id": 10, "ada": 323593731646, "graces": "grace admin ada cart", "admin_id": null, "ken2": "barbara ada"}, "", [], ["cart", -510925282934], {}], "edsger": [[]]}!ZV8A8Q!bGvobBRljE3KCAAOyCQDszdyr2U'
+22. loads s -> BadTimeSignature: Signature b'bGvobBRljE3KCAAOyCQDszdyr2U' does not match payload=b'{"ada2": [{"linus2": false, "graces": "", "viewer_id": "", "cart": "nl\\n a\\"b"}, ["ada nl\\n", "barbara", "viewer a\\"b \\u00e9t\\u00e9"], [null, null, "\\ud83d\\ude80 tab\\t tab\\t linus", -313529872862, "ken"]], "cart": null, "admin2": false, "carts": "ken linus", "admins": [{"cart_id": 10, "ada": 323593731646, "graces": "grace admin ada cart", "admin_id": null, "ken2": "barbara ada"}, "", [], ["cart", -510925282934], {}], "edsger": [[]]}' date=2023-11-23 12:05:05+00:00
+== random 10 URLSafeSerializer
+1. dumps s -> 'LTY3Mzk3NzMwOTA2OQ.fXG9Agm26v2CBSb73etE-F2h4bo'
+2. loads s -> -673977309069
+3. loads s -> BadSignature: Signature b'fXG9Agm26v2CBSb73etE-F2h' does not match payload=b'LTY3Mzk3NzMwOTA2OQ'
+4. loads_unsafe s -> (True, -673977309069)
+5. loads s -> BadSignature: No b'.' found in value payload=None
+6. dumps s -> '.eJxNkttqhDAQhl9F5joLOagx-ypRSnZNF6n1Qt0eEKFvUSiFXvWuz7XXfYROTloQD8nk_7_5xwXOZpwnOELfDdcpc19A4Kmzz3aEo15WAr9fH2_Z7f379vmTzeZUz5lpDTQEHuxw17VwXAAXUENLRQ6cVaVSFWOU01DDYwWaRF0S3PxhsO10saPTzAKDaR-7AWv8Ew-DqeGUncyIl_HeCBVOoankjEmlaJEz5u2c22U0ZxvkvUrC9-tJwve6ocWKZL4DzuPVRhiXEyTv8O7rELIqc1bmSpa8lDu64AQiOJb78JwzOvpQtibgpa5fM3dDSQ-5hZXQQzZJLFrs8YXtmO-6phH6DvTyD4jRilEMTBUr0TD09RCG3pDEw0NnYaaCCiFkLnIpVIiMb6b7HLZgXdZO0_0eQWBJ_eiDLArKVFWWNFdkuPY9uTf9ZMlBMS4qgRtMiWaNU9QaKYTimCtuSV4RgKZZ_wCmVd2-.O4kDf58jdkQcean6u_Jk2gO7tvc'
+7. loads s -> {'carts': 'linus cart', 'viewer': [{}, '🚀 日本 tab\t ada'], 'ken_id': {'adas': [79, -218699811020], 'ken2': {'ada': 'viewer', 'linus_id': 'edsger ada linus admin', 'admin2': 'a"b barbara ada'}, 'edsgers': 721179905411, 'ken': {'grace_id': 'admin 日本 grace ada'}, 'cart': {'ada': '日本 admin', 'linus_id': True, 'admins': '', 'edsger': '', 'linus2': 864164976267, 'admin2': 32, 'barbara': 'tab\t'}, 'ada2': {'edsgers': 'x\\y x\\y', 'grace': 'viewer 日本 linus barbara', 'admin': 'edsger linus viewer'}}, 'viewer_id': [{'admin2': 321081079995}, ['nl\n cart'], {'edsger2': '', 'adas': 303337434739, 'cart2': 'edsger'}, 'edsger grace admin nl\n'], 'adas': {'grace': [-755019866049, None, False, -912383866193]}, 'ken': [['', 392416386728, '']]}
+8. loads s -> BadSignature: Signature b'O4kDf58jdkQcean6u_Jk2gO7tvc' does not match payload=b'.eJxNkttqhDAQhl9F5joLOagx-ypRSnZNF6n1Qt0eEKFvUSiFXvWuz7XXfYROTloQD8nk_7_5xwXOZpwnOELfDdcpc19A4Kmzz3aEo15WAr9fH2_Z7f379vmTzeZUz5lpDTQEHuxw17VwXAAXUENLRQ6cVaVSFWOU01DDYwWaRF0S3PxhsO10saPTzAKDaR-7AWv8Ew-DqeGUncyIl_HeCBVOoankjEmlaJEz5u2c22U0ZxvkvUrC9-tJwve6ocWKZL4DzuPVRhiXEyTv8O7rELIqc1bmSpa8lDu64AQiOJb78JwzOvpQtibgpa5fM3dDSQ-5hZXQQzZJLFrs8YXtmO-6phH6DvTyD4jRilEMTBUr0TD09RCG3pDEw0NnYaaCCiFkLnIpVIiMb6b7HLZgXdZO0_0eQWBJ_eiDLArKVFWWNFdkuPY9uTf9ZMlBMS4qgRtMiWaNU9QaKYAimCtuSV4RgKZZ_wCmVd2-'
+9. dumps s -> 'IiI.99QsgcBG-U9_0EqqSIQ5h0JffCk'
+10. loads_unsafe s -> (True, '')
+11. loads s -> BadSignature: Signature b'99QsgcBG-U9_0EqqASIQ5h0JffC' does not match payload=b'IiI'
+12. loads s -> ''
+13. loads s -> BadSignature: Signature b'99AsgcBG-U9/0EqqSIQ5h0JffCk' does not match payload=b'IiI'
+14. dumps s -> '.eJxVkE1qwzAQha8i3lqByJIl2VdxTZnEajBNvbD7szCG3qJQCl1113Nl3SN0NBGFgjajN-97j-lW0PAwTrfjgHbFeZyelgptNBr3aVrQ7nwVnHfBN7WJGgea-ZGsA7KE9o7OS9I4zXRMohi2NLa2MTiz6StVhA50g4N6HtNLmlU2C0LRQHlSl7evy8c39M65aKqmtta40G96xZHmRy4mfpSsPP98vr-qNCwn5jGFpbx57Zc1_O_c-VDMJUui5YNT7b6OhmvHffC9_rtGqchnUoXFVJkZGL2xrvHeWVv1W_8LCxFrKA.bV__eSfLKQD0keYxCmYQ_44-NXQ'
+15. loads s -> [{'admin_id': {'linus2': 81, 'kens': -627464769518, 'barbara_id': '', 'ken': False, 'grace_id': 174693538741}, 'linus_id': ['a"b viewer ken', 'ken ada ken 日本', -448129533147]}, {'cart2': 'a"b', 'grace2': '🚀 edsger ada', 'cart_id': '🚀', 'barbara_id': [67, 'grace 日本 ada grace', -305815388076], 'linus2': 'ken admin barbara', 'admin': [861349664332]}]
+16. loads_unsafe s -> (False, [{'admin_id': {'linus2': 81, 'kens': -627464769518, 'barbara_id': '', 'ken': False, 'grace_id': 174693538741}, 'linus_id': ['a"b viewer ken', 'ken ada ken 日本', -448129533147]}, {'cart2': 'a"b', 'grace2': '🚀 edsger ada', 'cart_id': '🚀', 'barbara_id': [67, 'grace 日本 ada grace', -305815388076], 'linus2': 'ken admin barbara', 'admin': [861349664332]}])
+17. loads s -> [{'admin_id': {'linus2': 81, 'kens': -627464769518, 'barbara_id': '', 'ken': False, 'grace_id': 174693538741}, 'linus_id': ['a"b viewer ken', 'ken ada ken 日本', -448129533147]}, {'cart2': 'a"b', 'grace2': '🚀 edsger ada', 'cart_id': '🚀', 'barbara_id': [67, 'grace 日本 ada grace', -305815388076], 'linus2': 'ken admin barbara', 'admin': [861349664332]}]
+18. loads s -> BadSignature: Signature b'bV_-_eSfLKQD0keYxCmYQ_44-NXQ' does not match payload=b'.eJxVkE1qwzAQha8i3lqByJIl2VdxTZnEajBNvbD7szCG3qJQCl1113Nl3AN0NBGFgjajN-97j-lW0PAwTrfjgHbFeZyelgptNBr3aVrQ7nwVnHfBN7WJGgea-ZGsA7KE9o7OS9I4zXRMohi2NLa2MTiz6StVhA50g4N6HtNLmlU2C0LRQHlSl7evy8c39M65aKqmtta40G96xZHmRy4mfpSsPP98vr-qNCwn5jGFpbx57Zc1_O_c-VDMJUui5YNT7b6OhmvHffC9_rtGqchnUoXFVJkZGL2xrvHeWVv1W_8LCxFrKA'
+19. dumps s -> 'eyJiYXJiYXJhcyI6ImdyYWNlIMOpdMOpIiwiZWRzZ2VyMiI6eyJjYXJ0MiI6eyJ2aWV3ZXJzIjoia2VuIGFcImIifSwiYWRtaW4yIjo1NzkzNzYwMjkzMjh9fQ.HYLqrZ4OlUjZ-J-9G3y3QBBxK9c'
+20. loads_unsafe s -> (False, None)
+21. loads s -> BadSignature: Signature b'HYLqrZ4OlUjZ-J-9G3y3QBBxK9c' does not match payload=b'eyJiYXJiYXJhcyI6ImdyYWNlIMOpdAMOpIiwiZWRzZ2VyMiI6eyJjYXJ0MiI6eyJ2aWV3ZXJzIjoia2VuIGFcImIifSwiYWRtaW4yIjo1NzkzNzYwMjkzMjh9fQ'
+22. loads s -> {'barbaras': 'grace été', 'edsger2': {'cart2': {'viewers': 'ken a"b'}, 'admin2': 579376029328}}
+23. dumps s -> 'W3siY2FydDIiOnsiY2FydHMiOiLwn5qAIiwia2VuIjoxNywiZWRzZ2VycyI6MTA3NjMzMzUyNDUyfX1d.1msBW3KwqC2Qkt8WEkYcLr7Iy4M'
+24. loads_unsafe s -> (True, [{'cart2': {'carts': '🚀', 'ken': 17, 'edsgers': 107633352452}}])
+25. loads s -> BadSignature: Signature b'1msBW3KwqC2Qkt8WEkYcLr7Iy4MAA' does not match payload=b'W3siY2FydDIiOnsiY2FydHMiOiLwn5qAIiwia2VuIjoxNywiZWRzZ2VycyI6MTA3NjMzMzUyNDUyfX1d'
+26. dumps s -> 'WzE2NDM3NDEyODI3M10.WMlceg0ykcPVLBuDA36zXxD3lWY'
+27. loads_unsafe s -> (True, [164374128273])
+28. loads s -> BadSignature: Signature b'DA36zAxD3lWY' does not match payload=b'WzE2NDM3NDEyODI3M10.WMlceg0ykcPVLBu'
+29. loads_unsafe s -> (True, [164374128273])
+30. loads s -> BadSignature: Signature b'WMlcBg0ykcPVLBuDA36zXxD3lWY' does not match payload=b'Wz-E2NDM3NDEyODI3M10'
+31. dumps s -> 'eyJhZG1pbnMiOiLwn5qAIHhcXHkifQ.UdxbeCCx1gqIcG4aMUxNtbdvNOc'
+32. loads_unsafe s -> (True, {'admins': '🚀 x\\y'})
+33. loads s -> {'admins': '🚀 x\\y'}
+34. loads_unsafe s -> (False, {'admins': '🚀 x\\y'})
+35. loads_unsafe s -> (False, {'admins': '🚀 x\\y'})
+== random 11 URLSafeTimedSerializer
+1. dumps s -> '.eJxVjk0KgzAQha8is46QGPPnVaqUsaZFCC5MbBfiObrptruey3M0KFYLsxjmzfveG6HGPg5CcaoIYIPnton7CLbxN9tnUMD8fM-vT4Il1EDAtd3gPRTCMGWU0FJIuRtTLTRnOZVaqYxs8EhJGaU5N5wZlq3_kcE41UZyJagWExGahH6w1dG2xsHv9N8uIiBq99Y-lqrd4Nze8IrOWwIX7IPftCNmUZKVlASsywBTNX0BKcZWGQ.ZVWgjQ.1z49YKb4yZCiy6OU4f_ec53aDmNjlHTxkzvCuYiI3GA'
+2. loads_unsafe s -> (False, {'barbara': [], 'ada_id': [{'edsger2': '日本 a"b', 'linuss': 591797586566, 'ada_id': -858314068772, 'barbara2': -100439319126, 'adas': 130896375085}, 58, True], 'barbara2': 'linus', 'barbara_id': [{'edsgers': '', 'viewer2': None, 'linuss': False, 'carts': None, 'barbara_id': 'cart edsger tab\t'}]})
+3. dumps s -> 'ImdyYWNlIGtlbiI.ZVWgjQ.RFSZT6YOoK2kOt7XnOy4OC6fVHo9vjf7w7rS_KoJw40'
+4. loads s -> BadTimeSignature: Signature b'RFSZT6YOoK2kOt7XnOy4OC6fVHo9vjf7w7rS_KoJw40_-' does not match payload=b'ImdyYWNlIGtlbiI' date=2023-11-16 04:54:37+00:00
+5. loads_unsafe s -> (False, 'grace ken')
+6. dumps s -> '.eJxNUUtugzAQvYo1ayNhjO1xrgIoMsGNUCkLPv0o4hzZdNtdz5VzdPxpVckSw7zx-4ybGzz7uYLTDfywXv0CJ7gu7uLZ5vp2Aw69W-g4GoH3tv2gjhvCX204TOO8ryshcZgRE3PDyziHCo6Mn8ch0EeAZtEScHHLFvvbsnsOr6N_i9KhnyhIJxkiqaYyykirsC6x5k9uWj2f92niKKxV2ghV1hySM-gS-xo0Ey-VhVAWBcpKS_3fdyxYyJXyssBwHDzbjRYbeNy_Hp_fAWN5BelTiBorgUpYLTD7ihBzLfRsnlqKISsrSddaNGX3t04SjwnyMuMrRLVCoEZjpZVaCR7av4vPtsJVhUqVFBuFMjxZJZJo4Oh-AF3BkEs.ZVWgjQ.2uP8kvadxnJGuqRdMdGi5Jfd8FemP8FHJ-ciMzv7p38'
+7. loads s -> [{'ken2': {'edsger': 'grace tab\t', 'barbara2': 'x\\y', 'ada2': 47, 'linuss': 'tab\t ken admin ken'}, 'linus_id': {'admins': 89}, 'cart_id': True, 'viewer': 'cart admin', 'edsger2': [275739584084, False, None, 81995671504, '', 'ada'], 'carts': {'viewers': -159818326367, 'linuss': 'linus x\\y tab\t ada'}}, {'admin_id': ['日本 ada x\\y', 'x\\y', -148218519618, False, 'x\\y a"b nl\n', 329332699870], 'barbaras': None, 'ada2': {'ken_id': -186879393651, 'ken': 'x\\y'}}, {'adas': 585507158157, 'admin2': False}]
+8. dumps s -> 'WyJ2aWV3ZXIiLCJlZHNnZXIiLFt0cnVlXV0.ZVWgjQ.fq-Fu_EsdLJsV2JEk-Noq_CcfGG4rfbkvMVfMOrtKo4'
+9. loads s -> BadTimeSignature: Signature b'fq-Fu_EsdLJsV2JEk-Noq_CcfGG4rfbkvMVfMOrtKo4' does not match payload=b'WyJ2aWV3ZXIiLCJlZHNnZXIiLAt0cnVlXV0' date=2023-11-16 04:54:37+00:00
+10. loads_unsafe s -> (False, ['viewer', 'edsger', [True]])
+11. dumps s -> '.eJxdkUFugzAQRa-CZj2RwLHB4SoEVSa4ESplYZt2gZB6jm66zjlyoR6htsdx1UqW0Ax_vt8fdxtcjbpoC23HS-QVHo5NxUreCMHKEkGP9qoN9AhqVAzaLX0BEN4m_a7N0zRSGY1itazzjPCil1gdai5ZdWLyKEUZ2_42Z1aNcFHG-WHfKpwazg52hEEZfxTZBkERfkfzIuppLLG8TsEN7jd3vwFSIxMlqyCgHNHq--vzo5inZbWQ87Wi_pOHEpCo5Y3kJy5kIyu2_-YCT7uRJsI8-s9qtvqRE9QZhrwraOVO-DZMJD6WZJEsM4UuLQXzJbQ1egFZ_2NJuNhte9__AC7Blgc.ZVWgjQ.SSEg3oXEn5q3OUn-pkrsJ6m4QeasxE-qc33j6vermhU'
+12. loads_unsafe s -> (True, [{'graces': [40, 41, -371204755200, 'edsger'], 'ada2': {'ada2': '', 'viewer_id': '', 'grace_id': None, 'ken_id': -648219283850, 'kens': True, 'cart': 'ken tab\t'}, 'barbara_id': 'cart ken grace cart', 'cart2': {'admins': 'été', 'admin_id': '', 'barbaras': 'edsger ken 🚀 linus', 'edsger': 56, 'viewer_id': None, 'linus': 478494587812}, 'ken_id': ''}, {'linus2': {'ken_id': False, 'kens': 'a"b', 'viewer': 8}, 'carts': {'barbara2': 'a"b 🚀', 'edsger2': 'tab\t', 'linus2': True, 'ada2': 86}, 'ken_id': ''}, 'linus', [{}]])
+13. loads_unsafe s -> (False, None)
+14. loads s -> BadTimeSignature: Signature b'SSEg3oXEn5q3OUn-pkrsJ6m4QeasxE-qc33j6vermhU' does not match payload=b'.eJxdkUFugzAQRa-CZj2RwLHB4SoEVSa4ESplYZt-2gZB6jm66zjlyoR6htsdx1UqW0Ax_vt8fdxtcjbpoC23HS-QVHo5NxUreCMHKEkGP9qoN9AhqVAzaLX0BEN4m_a7N0zRSGY1itazzjPCil1gdai5ZdWLyKEUZ2_42Z1aNcFHG-WHfKpwazg52hEEZfxTZBkERfkfzIuppLLG8TsEN7jd3vwFSIxMlqyCgHNHq--vzo5inZbWQ87Wi_pOHEpCo5Y3kJy5kIyu2_-YCT7uRJsI8-s9qtvqRE9QZhrwraOVO-DZMJD6WZJEsM4UuLQXzJbQ1egFZ_2NJuNhte9__AC7Blgc' date=2023-11-16 04:54:37+00:00
+15. loads_unsafe s -> (False, [{'graces': [40, 41, -371204755200, 'edsger'], 'ada2': {'ada2': '', 'viewer_id': '', 'grace_id': None, 'ken_id': -648219283850, 'kens': True, 'cart': 'ken tab\t'}, 'barbara_id': 'cart ken grace cart', 'cart2': {'admins': 'été', 'admin_id': '', 'barbaras': 'edsger ken 🚀 linus', 'edsger': 56, 'viewer_id': None, 'linus': 478494587812}, 'ken_id': ''}, {'linus2': {'ken_id': False, 'kens': 'a"b', 'viewer': 8}, 'carts': {'barbara2': 'a"b 🚀', 'edsger2': 'tab\t', 'linus2': True, 'ada2': 86}, 'ken_id': ''}, 'linus', [{}]])
+16. dumps s -> 'W10.ZVWgjQ.foOQE8_W9bnZzpcr0YGFcjCHCWQLWWMRJgy0pXSzJic'
+17. loads s -> []
+18. loads_unsafe s -> (True, [])
+19. dumps s -> 'IuaXpeacrCBjYXJ0IMOpdMOpIGtlbiI.ZVWgjQ.kPIw9CQjGXtYLRsYC4JL5oT-gy6u8P72P6leiUgAthw'
+20. loads s -> BadTimeSignature: Signature b'kPIw9CQjGAXtYLRsYC4JL5oT-gy6u8P72P6leiUgAthw' does not match payload=b'IuaXpeacrCBjYXJ0IMOpdMOpIGtlbiI' date=2023-11-16 04:54:37+00:00
+21. loads_unsafe s -> (False, '日本 cart été ken')
+22. dumps s -> 'LTUwNzU0NjQzMTgwNg.ZVWgjQ.MX-ur2Oqp5Wfm2wIaADT9U2vkW-KJRNblFl3qUeX1_4'
+23. loads_unsafe s -> (False, -507546431806)
+24. loads_unsafe s -> (True, -507546431806)
+== random 12 Serializer
+1. dumps s -> '["a\\"b \\ud83d\\ude80", "\\u65e5\\u672c ada \\u00e9t\\u00e9 ada", {"edsger2": {"viewer2": 393816341652, "linus_id": "admin \\u00e9t\\u00e9", "barbaras": 853533850514, "edsger": false, "cart_id": "ken a\\"b \\u65e5\\u672c \\u00e9t\\u00e9"}, "ada": ["cart linus"], "barbara": ["edsger \\u00e9t\\u00e9 a\\"b linus", null, null], "viewer2": [-618326740245, -62096172801, "nl\\n ada", -356303298081, "barbara", "viewer"], "viewer_id": {"ada": "grace", "grace_id": "x\\\\y \\u65e5\\u672c edsger"}, "admin2": 972853592770}, ""]|N9Idt0T5ZBWLWnS6Jw0Z6WrN_oc'
+2. loads s -> BadSignature: Signature b'N9Idt0T5ZBWLWnS6Jw0Z6Wr' does not match payload=b'["a\\"b \\ud83d\\ude80.", "\\u65e5\\u672c ada \\u00e9t\\u00e9 ada", {"edsger2": {"viewer2": 393816341652, "linus_id": "admin \\u00e9t\\u00e9", "barbaras": 853533850514, "edsger": false, "cart_id": "ken a\\"b \\u65e5\\u672c \\u00e9t\\u00e9"}, "ada": ["cart linus"], "barbara": ["edsger \\u00e9t\\u00e9 a\\"b linus", null, null], "viewer2": [-618326740245, -62096172801, "nl\\n ada", -356303298081, "barbara", "viewer"], "viewer_id": {"ada": "grace", "grace_id": "x\\\\y \\u65e5\\u672c edsger"}, "admin2": 972853592770}, ""]'
+3. dumps s -> '"nl\\n a\\"b a\\"b"|WlEqA9fY-ns1iLVt4gN_uz2eEwI'
+4. loads_unsafe s -> (False, 'nl\n a"b a"b')
+5. loads_unsafe s -> (False, 'nl\n a"b a"b')
+6. loads_unsafe s -> (False, 'nl\n a"b a"b')
+7. dumps s -> '["admin barbara", [{}, -564666763112, [], {"linus": "\\u65e5\\u672c nl\\n x\\\\y edsger"}], {"grace2": 59, "graces": "barbara linus linus ada", "linus2": "viewer edsger"}, true]|8dwYcYNK1VAOK5zZC5YoL6z26AU'
+8. loads_unsafe s -> (True, ['admin barbara', [{}, -564666763112, [], {'linus': '日本 nl\n x\\y edsger'}], {'grace2': 59, 'graces': 'barbara linus linus ada', 'linus2': 'viewer edsger'}, True])
+9. loads_unsafe s -> (True, ['admin barbara', [{}, -564666763112, [], {'linus': '日本 nl\n x\\y edsger'}], {'grace2': 59, 'graces': 'barbara linus linus ada', 'linus2': 'viewer edsger'}, True])
+10. loads_unsafe s -> (True, ['admin barbara', [{}, -564666763112, [], {'linus': '日本 nl\n x\\y edsger'}], {'grace2': 59, 'graces': 'barbara linus linus ada', 'linus2': 'viewer edsger'}, True])
+11. dumps s -> '"cart cart x\\\\y grace"|HuCv2qpT9D1K0F-1Nf3sQKc-Q6c'
+12. loads s -> 'cart cart x\\y grace'
+13. loads s -> 'cart cart x\\y grace'
+14. loads_unsafe s -> (True, 'cart cart x\\y grace')
+15. dumps s -> 'null|jt5M_2ojWuimMSAH6wgDoLRwYVg'
+16. loads_unsafe s -> (False, None)
+17. dumps s -> 'false|bF26GU0Qe2cxqrzWCNZFvRAdUf8'
+18. loads s -> False
+19. loads_unsafe s -> (False, False)
+20. loads s -> False
+21. dumps s -> '[{"admin": []}, [""], {"barbaras": 28}, [[929782644557, -860534253352, 0, -48703514923, "x\\\\y admin"]]]|DmUU0TVHdjPbtw-LAEUmLqFzQUY'
+22. loads_unsafe s -> (False, [{'admin': []}, [''], {'barbaras': 28}, [[929782644557, -860534253352, 0, -48703514923, 'x\\y admin']]])
+23. loads s -> [{'admin': []}, [''], {'barbaras': 28}, [[929782644557, -860534253352, 0, -48703514923, 'x\\y admin']]]
+24. loads s -> BadSignature: Signature b'DmUU0TVHdjPbtw-LAEUmLqFzQUY' does not match payload=b'[{Aadmin": []}, [""], {"barbaras": 28}, [[929=782644557, -860534253352, 0, -48703514923, "x\\\\y admin"]]]'
+25. loads_unsafe s -> (True, [{'admin': []}, [''], {'barbaras': 28}, [[929782644557, -860534253352, 0, -48703514923, 'x\\y admin']]])
+26. dumps s -> '{"ken": {"barbara_id": {"viewers": "\\ud83d\\ude80 ada barbara barbara", "carts": "admin nl\\n cart", "viewer_id": 72, "cart2": "admin cart", "viewer2": -307941929886, "edsger_id": "cart"}, "graces": {"grace_id": false}, "linus_id": 803439876311, "linuss": 93, "barbara2": 21, "adas": {"viewers": 74, "edsgers": "barbara", "cart_id": "\\u65e5\\u672c a\\"b \\ud83d\\ude80 ken", "graces": null, "grace": -661808851367, "cart": "tab\\t \\ud83d\\ude80 cart"}, "ada2": 72}, "edsger_id": "\\u00e9t\\u00e9 a\\"b linus ken"}|rt7xvHY__Nx0YVai57-KIG5xktU'
+27. loads_unsafe s -> (True, {'ken': {'barbara_id': {'viewers': '🚀 ada barbara barbara', 'carts': 'admin nl\n cart', 'viewer_id': 72, 'cart2': 'admin cart', 'viewer2': -307941929886, 'edsger_id': 'cart'}, 'graces': {'grace_id': False}, 'linus_id': 803439876311, 'linuss': 93, 'barbara2': 21, 'adas': {'viewers': 74, 'edsgers': 'barbara', 'cart_id': '日本 a"b 🚀 ken', 'graces': None, 'grace': -661808851367, 'cart': 'tab\t 🚀 cart'}, 'ada2': 72}, 'edsger_id': 'été a"b linus ken'})
+28. loads s -> {'ken': {'barbara_id': {'viewers': '🚀 ada barbara barbara', 'carts': 'admin nl\n cart', 'viewer_id': 72, 'cart2': 'admin cart', 'viewer2': -307941929886, 'edsger_id': 'cart'}, 'graces': {'grace_id': False}, 'linus_id': 803439876311, 'linuss': 93, 'barbara2': 21, 'adas': {'viewers': 74, 'edsgers': 'barbara', 'cart_id': '日本 a"b 🚀 ken', 'graces': None, 'grace': -661808851367, 'cart': 'tab\t 🚀 cart'}, 'ada2': 72}, 'edsger_id': 'été a"b linus ken'}
+29. loads s -> {'ken': {'barbara_id': {'viewers': '🚀 ada barbara barbara', 'carts': 'admin nl\n cart', 'viewer_id': 72, 'cart2': 'admin cart', 'viewer2': -307941929886, 'edsger_id': 'cart'}, 'graces': {'grace_id': False}, 'linus_id': 803439876311, 'linuss': 93, 'barbara2': 21, 'adas': {'viewers': 74, 'edsgers': 'barbara', 'cart_id': '日本 a"b 🚀 ken', 'graces': None, 'grace': -661808851367, 'cart': 'tab\t 🚀 cart'}, 'ada2': 72}, 'edsger_id': 'été a"b linus ken'}
+30. loads s -> BadSignature: Signature b'rt7xvHY__Nx0YVai57-KIG5xktU' does not match payload=b'{"ken": {"barbarAa_id": {"viewers": "\\ud83d\\ude80 ada barbara barbara", "carts": "admin nl\\n cart", "viewer_id": 72, "cart2": "admin cart", "viewer2": -307941929886, "edsger_id": "cart"}, "graces": {"grace_id": false}, "linus_id": 803439876311, "linuss": 93, "barbara2": 21, "adas": {"viewers": 74, "edsgers": "barbara", "cart_id": "\\u65e5\\u672c a\\"b \\ud83d\\ude80 ken", "graces": null, "grace": -661808851367, "cart": "tab\\t \\ud83d\\ude80 cart"}, "ada2": 72}, "edsger_id": "\\u00e9t\\u00e9 a\\"b linus ken"}'
+== random 13 TimedSerializer
+1. dumps s -> '93.ZVnAyQ.4hnTHUAGxi0618Y9OWkiuh5_a4h1YcoVPz9YhJj4b30'
+2. loads_unsafe s -> (False, 93)
+3. loads s -> 93 @ 2023-11-19 08:01:13+00:00
+4. dumps s -> '"barbara edsger \\u65e5\\u672c cart".ZVnAyQ.hFKRMfZjtKvIh7hKtKwwJloXtXI-vukAoe9qkUI9XO8'
+5. loads_unsafe s -> (False, 'barbara Adsger 日本 cart')
+6. loads s -> BadTimeSignature: Signature b'hFKRMfZjtKvIh7hKtKwwJloXtXI-vukAoe9AkUI9XO8' does not match payload=b'"barbara edsger \\u65e5\\u672c cart"' date=2023-11-19 08:01:13+00:00
+7. loads_unsafe s -> (False, 'barbara edsger 日本 cart')
+8. dumps s -> '"\\u65e5\\u672c".ZVnAyQ.u94fsYWLCFG3XRS2oEiArht2qTvw_kfMfaAVtK2-41E'
+9. loads s -> BadTimeSignature: Signature b'u94fsYWLCFG3XRS2oEiArht2qTvw_kfMfaAVt' does not match payload=b'"\\u65e5\\u672c"' date=2023-11-19 08:01:13+00:00
+10. dumps s -> '{"linus2": "nl\\n grace ken cart", "viewer_id": {"edsger": {"viewer": "edsger", "ken_id": true}, "cart_id": ["grace barbara \\u00e9t\\u00e9 \\u00e9t\\u00e9", "ken linus ken barbara", "\\ud83d\\ude80 a\\"b", "ada", "barbara cart cart x\\\\y"], "ada": ["x\\\\y ada linus", true, 928630464808, "admin barbara", "a\\"b"], "linus": "grace", "barbara_id": ["ada cart tab\\t"], "viewers": {}, "admin_id": null}, "ken": [63, {"grace_id": -922590010295, "linuss": "grace a\\"b", "admin_id": -969713430154, "linus_id": "admin ken viewer admin"}, ["admin x\\\\y viewer grace", "", 68, 10, 687128979185, "ada admin \\u65e5\\u672c admin"]], "admin_id": "\\u65e5\\u672c admin viewer \\u00e9t\\u00e9", "kens": [], "grace2": false, "barbara2": ""}.ZVnAyQ.CzkqU_Ynj5f4hmUsAvy9YQPZaSOi-JOcVklwoGtfD3I'
+11. loads_unsafe s -> (False, None)
+12. loads s -> BadTimeSignature: Signature b'CzkqU_Ynj5f4hmUsAvy9YQPZaSOi-JOcVklwoGtfD3I\xc3\xa9' does not match payload=b'{"linus2": "nl\\n grace ken cart", "viewAr_id": {"edsger": {"viewer": "edsger", "ken_id": true}, "cart_id": ["grace barbara \\u00e9t\\u00e9 \\u00e9t\\u00e9", "ken linus ken barbara", "\\ud83d\\ude80 a\\"b", "ada", "barbara cart cart x\\\\y"], "ada": ["x\\\\y ada linus", true, 928630464808, "admin barbara", "a\\"b"], "linus": "grace", "barbara_id": ["ada cart tab\\t"], "viewers": {}, "admin_id": null}, "ken": [63, {"grace_id": -922590010295, "linuss": "grace a\\"b", "admin_id": -969713430154, "linus_id": "admin ken viewer admin"}, ["admin x\\\\y viewer grace", "", 68, 10, 687128979185, "ada admin \\u65e5\\u672c admin"]], "admin_id": "\\u65e5\\u672c admin viewer \\u00e9t\\u00e9", "kens": [], "grace2": false, "barbara2": ""}' date=2023-11-19 08:01:13+00:00
+13. loads s -> BadTimeSignature: Signature b'CzkqU_Ynj5f4hmUsAvy9YQPZaSOi-JOcVkAwoGtfD3I' does not match payload=b'{"linus2": "nl\\n grace ken cart", ."viewer_id": {"edsger": {"viewer": "edsger", "ken_id": true}, "cart_id": ["grace barbara \\u00e9t\\u00e9 \\u00e9t\\u00e9", "ken linus ken barbara", "\\ud83d\\ude80 a\\"b", "ada", "barbara cart cart x\\\\y"], "ada": ["x\\\\y ada linus", true, 928630464808, "admin barbara", "a\\"b"], "linus": "grace", "barbara_id": ["ada cart tab\\t"], "viewers": {}, "admin_id": null}, "ken": [63, {"grace_id": -922590010295, "linuss": "grace a\\"b", "admin_id": -969713430154, "linus_id": "admin ken viewer admin"}, ["admin x\\\\y viewer grace", "", 68, 10, 687128979185, "ada admin \\u65e5\\u672c admin"]], "admin_id": "\\u65e5\\u672c admin viewer \\u00e9t\\u00e9", "kens": [], "grace2": false, "barbara2": ""}' date=2023-11-19 08:01:13+00:00
+14. dumps s -> '["", "linus edsger", 24, "nl\\n nl\\n", "nl\\n nl\\n tab\\t cart"].ZVnAyQ.6U0V5tY4GPlbWmO50tatZKEF7ucp2EnIdc-EBZ6wypE'
+15. loads_unsafe s -> (False, ['', 'linus edsger', 24, 'nl\n nl\n', 'nl\n nl\n tab\t cart'])
+16. loads s -> BadTimeSignature: Signature b'6U0V5tY4GAlbWmO50tatZKEF7ucp2EnIdc-EBZ6wypE' does not match payload=b'["", "linus edsger", 24, "nl\\n nl\\n", "nl\\n nl\\n tab\\t cart"]' date=2023-11-19 08:01:13+00:00
+17. loads_unsafe s -> (False, ['', 'linus /dsger', 24, 'nl\n nl\n', 'nl\n nl\n tab\t cart'])
+18. loads s -> BadTimeSignature: Signature b'6U0V5tY4GPlbWmO50AatZKEF7ucp2EnIdc-EBZ6wypE_-' does not match payload=b'["", "linus edsger", 24, "nl\\n nl\\n", "nl\\n nl\\n tab\\t cart"]' date=2023-11-19 08:01:13+00:00
+19. dumps s -> '{"admins": "ada admin x\\\\y", "barbara_id": {"kens": {"linuss": null, "barbara_id": false}, "admin": ["viewer ada nl\\n a\\"b"], "admin_id": 81, "edsger2": "", "ada_id": "ken", "graces": -921090687001, "edsger": 70}, "kens": "grace barbara nl\\n", "viewer": false, "ada2": [{"ken2": null, "grace": 969818223528, "carts": null}, [true, "a\\"b admin \\ud83d\\ude80"], {}, 41928325339], "edsgers": {"linus": null, "edsger": "nl\\n ada", "ken": {"carts": 569152907791}, "barbara2": "", "cart": ["a\\"b admin \\ud83d\\ude80 ada"]}}.ZVnAyQ.K_0YDBcrV9yk_wKsrjeBoFPMfIY05cmJikqKX-_nx3Y'
+20. loads s -> SignatureExpired: Signature age 30 > 0 seconds payload=b'{"admins": "ada admin x\\\\y", "barbara_id": {"kens": {"linuss": null, "barbara_id": false}, "admin": ["viewer ada nl\\n a\\"b"], "admin_id": 81, "edsger2": "", "ada_id": "ken", "graces": -921090687001, "edsger": 70}, "kens": "grace barbara nl\\n", "viewer": false, "ada2": [{"ken2": null, "grace": 969818223528, "carts": null}, [true, "a\\"b admin \\ud83d\\ude80"], {}, 41928325339], "edsgers": {"linus": null, "edsger": "nl\\n ada", "ken": {"carts": 569152907791}, "barbara2": "", "cart": ["a\\"b admin \\ud83d\\ude80 ada"]}}' date=2023-11-19 08:01:13+00:00
+21. loads_unsafe s -> (True, {'admins': 'ada admin x\\y', 'barbara_id': {'kens': {'linuss': None, 'barbara_id': False}, 'admin': ['viewer ada nl\n a"b'], 'admin_id': 81, 'edsger2': '', 'ada_id': 'ken', 'graces': -921090687001, 'edsger': 70}, 'kens': 'grace barbara nl\n', 'viewer': False, 'ada2': [{'ken2': None, 'grace': 969818223528, 'carts': None}, [True, 'a"b admin 🚀'], {}, 41928325339], 'edsgers': {'linus': None, 'edsger': 'nl\n ada', 'ken': {'carts': 569152907791}, 'barbara2': '', 'cart': ['a"b admin 🚀 ada']}})
+22. dumps s -> '{"edsger2": {"viewer2": [null, 700770525828, "\\ud83d\\ude80 nl\\n grace", "", "ken", -361152946771], "grace2": true, "cart": 85}, "linus": [], "barbara_id": {"ada": {"viewers": null, "edsger": 634656554238, "ken2": true, "barbara2": true, "barbara": -739850504791, "admin": "\\ud83d\\ude80 \\ud83d\\ude80"}, "viewer2": [false, true], "viewer_id": 501644005042, "barbara": [-237323259991, "ada barbara"], "viewers": {"edsger_id": 90, "barbara2": "barbara ada x\\\\y tab\\t", "edsger": "a\\"b", "barbara_id": "\\u65e5\\u672c \\ud83d\\ude80"}, "admin_id": {"edsger_id": 653555882819, "barbara2": "linus linus viewer", "adas": "\\u65e5\\u672c ada", "grace_id": "viewer linus edsger", "admins": true, "barbaras": true, "linus_id": "cart a\\"b ada"}, "admin2": -534983450888}, "cart2": [{"viewers": 345218913925, "ken": false, "barbara": -131399523090, "linus_id": "admin x\\\\y", "edsger": -799498931286, "linus2": null}, [], 66, {"carts": "\\ud83d\\ude80", "admin": "barbara \\u00e9t\\u00e9 x\\\\y grace", "grace_id": "\\ud83d\\ude80 nl\\n ken"}, {"barbara2": "\\u00e9t\\u00e9 viewer"}, 579689822961], "viewer": {"admin": 48, "cart_id": "a\\"b", "linuss": [null], "barbara": [19]}, "edsgers": "tab\\t cart ada"}.ZVnAyQ.E3zfkaQUmweC1D0n3RlOpZEu3GtwYsP094QY7zi5bXE'
+23. loads_unsafe s -> (False, {'edsger2': {'viewer2': [None, 700770525828, '🚀 nl\n grace', '', 'ken', -361152946771], 'grace2': True, 'cart': 85}, 'linus': [], 'barbara_id': {'ada': {'viewers': None, 'edsger': 634656554238, 'ken2': True, 'barbara2': True, 'barbara': -739850504791, 'admin': '🚀 🚀'}, 'viewer2': [False, True], 'viewer_id': 501644005042, 'barbara': [-237323259991, 'ada barbara'], 'viewers': {'edsger_id': 90, 'barbara2': 'barbara ada x\\y tab\t', 'edsger': 'a"b', 'barbara_id': '日本 🚀'}, 'admin_id': {'edsger_id': 653555882819, 'barbara2': 'linus linus viewer', 'adas': '日本 ada', 'grace_id': 'viewer linus edsger', 'admins': True, 'barbaras': True, 'linus_id': 'cart a"b ada'}, 'admin2': -534983450888}, 'cart2': [{'viewers': 345218913925, 'ken': False, 'barbara': -131399523090, 'linus_id': 'admin x\\y', 'edsger': -799498931286, 'linus2': None}, [], 66, {'carts': '🚀', 'admin': 'barbara été x\\y grace', 'grace_id': '🚀 nl\n ken'}, {'barbara2': 'été viewer'}, 579689822961], 'viewer': {'admin': 48, 'cart_id': 'a"b', 'linuss': [None], 'barbara': [19]}, 'edsgers': 'tab\t cart ada'})
+24. dumps s -> '{"cart2": null, "edsger2": [[-307507619150, "x\\\\y ken", -632684578161], "\\ud83d\\ude80 ken x\\\\y"], "edsger": "barbara"}.ZVnAyQ.dyNNNGJgOAH8oWaCmjsfGFFiOik8O0xPZGQUZGXW5nk'
+25. loads s -> BadTimeSignature: Signature b'dyNNNGJgOAH8oWaCmjsfGFFiOik8O0xAPZGQUZGXW5nkx' does not match payload=b'{"cart2": null, "edsger2": [[-307507619150, "x\\\\y ken", -632684578161], "\\ud83d\\ude80 ken x\\\\y"], "edsger": "barbara"}' date=2023-11-19 08:01:13+00:00
+26. dumps s -> '{"edsgers": [{"cart_id": "", "ada_id": "cart", "admin2": -250983969091}, "a\\"b ada \\u65e5\\u672c", null], "cart": 374371334452, "linus": [["barbara \\u65e5\\u672c barbara", 830207453639, "x\\\\y a\\"b"], "a\\"b ada \\u65e5\\u672c ken", ["", "viewer nl\\n ada tab\\t", "cart admin barbara \\u00e9t\\u00e9", "\\u00e9t\\u00e9 ken cart"], true, [42, "ada nl\\n tab\\t", "", 836287661807, null]], "linuss": [{"adas": "\\ud83d\\ude80 nl\\n", "cart_id": "linus cart", "ken2": -613839963303, "admin": 994735748129}, ["", "barbara \\u00e9t\\u00e9", "tab\\t ken linus", null, null, 33], {"barbara2": 355191729292, "edsgers": 90, "ken2": "\\u00e9t\\u00e9 tab\\t \\u65e5\\u672c", "adas": 69, "barbara": 352347389200}], "grace": true}.ZVnAyQ._EioDNQTXdA9VfP6hIIziXYw6enyLKcTILg9SGCEOwg'
+27. loads s -> BadTimeSignature: Signature b'_EioDNQTXdA9VfP6hIIziXYw6enyLKcTILg9SGCEAwg' does not match payload=b'{"edsgers": [{"cart_id": "", "ada_id": "cart", "admin2": -250983969091}, "a\\"b ada \\u65e5\\u672c", null], "cart": 374371334452, "linus": [["barbara \\u65e5\\u672c barbara", 830207453639, "x\\\\y a\\"b"], "a\\"b ada \\u65e5\\u672c ken", ["", "viewer nl\\n ada tab\\t", "cart admin barbara \\u00e9t\\u00e9", "\\u00e9t\\u00e9 ken cart"], true, [42, "ada nl\\n tab\\t", "", 836287661807, null]], "linuss": [{"adas": "\\ud83d\\ude80 nl\\n", "cart_id": "linus cart", "ken2": -613839963303, "admin": 994735748129}, ["", "barbara \\u00e9t\\u00e9", "tab\\t ken linus", null, null, 33], {"barbara2": 355191729292, "edsgers": 90, "ken2": "\\u00e9t\\u00e9 tab\\t \\u65e5\\u672c", "adas": 69, "barbara": 352347389200}], "grace": true}' date=2023-11-19 08:01:13+00:00
+== random 14 URLSafeSerializer
+1. dumps s -> '.eJw9UVuOwyAMvAryN5UCTQLkKkm0og2qou3yQdKXohyo5-jF1mCoxAeMZ8Zj0wPwfgM3LRcXoIPnMLyYvw6eZYjDJdizk1izk2W_ziN0n93DhQU6Ve98AwRjHQvX2d8WxE3L4WzDuhCMyngjGUuGzA5wYp_3-nnDPpJJZlNnfPRa8YOp5VEqKYQSNTdizE2gO4hGSKONUG1lUg8ZJYYfG1E1WjfSVC3XIpb-Zs-oOxSDmPhkAx7LYtQ8cMoFlB4pG4l_5gnpGJGomfPdWvFJk5WVkSZNmEem5ZUd5Vik2fdix75fAOM_tgKB1g.bhNHIj3XWjfpJU7L1pfDoxFdQHI'
+2. loads s -> BadSignature: Signature b'bhNHIj3XWjfpJU7L1pfDoxFdQHI' does not match payload=b'.eJw9UVuOByAMvAryN5UCTQLkKkm0og2qou3yQdKXohyo5-jF1mCoxAeMZ8Zj0wPwfgM3LRcXoIPnMLyYvw6eZYjDJdizk1izk2W_ziN0n93DhQU6Ve98AwRjHQvX2d8WxE3L4WzDuhCMyngjGUuGzA5wYp_3-nnDPpJJZlNnfPRa8YOp5VEqKYQSNTdizE2gO4hGSKONUG1lUg8ZJYYfG1E1WjfSVC3XIpb-Zs-oOxSDmPhkAx7LYtQ8cMoFlB4pG4l_5gnpGJGomfPdWvFJk5WVkSZNmEem5ZUd5Vik2fdix75fAOM_tgKB1g'
+3. dumps s -> 'LTU1MzYyMTM4NTIyNg.mVuAzRbQ8w9rEzw7-ECoWQpqG-A'
+4. loads_unsafe s -> (False, -553621385226)
+5. loads_unsafe s -> (True, -553621385226)
+6. loads s -> -553621385226
+7. loads_unsafe s -> (True, -553621385226)
+8. dumps s -> 'MTY5MzcwNzIyODM2.NM9QVGWK_zn8SDnxhyORxhiV2wA'
+9. loads_unsafe s -> (True, 169370722836)
+10. loads_unsafe s -> (True, 169370722836)
+11. dumps s -> 'NDk3NDUzOTcyNTEy.a34M5ehyfDjCzkT23TyD5sSQsyo'
+12. loads s -> BadSignature: Signature b'a34M5ehyfDjCzkT23TyD5sSQ-syo_-' does not match payload=b'NDk3NDUzOTcyNTEy'
+13. loads_unsafe s -> (False, None)
+14. dumps s -> '.eJxFj0sKwjAQhq8SZj0LqyU-rpIGmdoowZhFm_pABG8hiODKheAtvItrj2AeVSFkMfP9jxEAKMCawgLuYVHTTPVh0g2gpNo_8pM5mUYhrLXaqDoQ7-v5yOI3o9oxo23bwEGiSKSwrTEIVBGjaqWD2fPunneQOOTZKMsz3uNjjOmAUSN9Ac9PdeXtt0WxY7EOc1QWjr1Ot9fl8e_kmbQIEbHCdxFSfWLjiT8eXfN-KAjJqvP9qQYcRQ9HvJOzdCpbKgtSyg_CeWXT.qGufEyRBj6e5L8fVztJWEhVCFdE'
+15. loads_unsafe s -> (False, None)
+16. loads s -> BadSignature: Signature b'qGufEyRBj6e5L8fVztJWE' does not match payload=b'.eJxFj0sKwjAQhq8SZj0LqyU-rpIGmdoowZhFm_pABG8hiODKheAtvItrj2AeVSFkMfP9jxEAKMCawgLuYVHTTPVh0g2gpNo_8pM5mUYhrLXaqDoQ7-v5yOI3o9oxo23bwEGiSKSwrTEIVBGjaqWD2fPunneQOOTZKMsz3uNjjOmAUSN9Ac9PdeXtt0WxY7EOc1QWjr1Ot9fl8e_kmbQIEbHCdxFSfWLjiT8eXfN-KAjJqvP9qQYcRQ9HvJOzdCpbKgtSyg_CeWXT'
+17. loads_unsafe s -> (True, ['', ['nl\n', {'grace2': 'nl\n', 'barbara2': False, 'viewer2': '🚀 🚀 cart linus'}], [False, [None, 'ada admin', 'été'], 76181416069, '', ['', False], {'ada_id': 'x\\y grace tab\t 日本', 'barbara': 'tab\t ada cart barbara', 'admins': '', 'barbara_id': 42}], ['日本 tab\t barbara', 36, [0, 86, 'admin viewer ken']]])
+18. dumps s -> '.eJw1kEtqxDAQRK9iet0G_aX2VWwTNGNlMHG08CcfjCHnyCbrOcdcKEeILDsgkFB1vSppBd-99hEq-Giaz-IlxCIOTSwufkzLAx76U99BZTXC_30Vl2FAuI3-GqCq1w3XNOnz3H6ADet5XALC78_3F-CzH6aApRRaMaHJSeZQyhYBju3qxxmqhIG3PryHMTFrY09bBqIh5NRinSw5_NQAc44Tu3T0QUpN8zOGPi5TMftLMxeP-_y4AwrHiawhrbjDkhiXxBUJpnd2aSS3RirFeEJkR5GrYamEVY6IacMsqvNfzoDQTbfUOfdq2-0PgG1pGg.xAtbwIbq-GsTm7ibC9tZ1ikNhRk'
+19. loads s -> BadSignature: Signature b'xAtbwIbq-GsTm7ibC9t-Z1ikNhRk' does not match payload=b'.eJw1kEtqxDAQRK9iet0G_aX2VWwTNGNlMHG08CcfjCHnyCbrOcdcKEeILDsgkFB1vSppBd-99hEq-Giaz-IlxCIOTSwufkzLAx76U99BZTXC_30Vl2FAuI3-GqCq1w3XNOnz3H6ADet5XALC78_3F-CzH6aApRRaMaHJSeZQyhYBju3qxxmqhIG3PryHMTFrY09bBqIh5NRinSw5_NQAc44Tu3T0QUpN8zOGPi5TMftLMxeP-_y4AwrHiawhrbjDkhiXxBUJpnd2aSS3RirFeEJkR5GrYamEVY6IacMsqvNfzoDQTbfUOfdq2-0PgG1pGg'
+20. dumps s -> 'LTU3ODgxNTI0NjIyOA.ioIyvGqUeaXPPPISHKVxaLllMNU'
+21. loads_unsafe s -> (False, -578815246228)
+22. loads_unsafe s -> (True, -578815246228)
+23. loads_unsafe s -> (False, -578815246228)
+24. loads_unsafe s -> (True, -578815246228)
+== random 15 URLSafeTimedSerializer
+1. dumps s -> '.eJw9j00OgyAQha9CZm2TioqUq4hpsBJDalmA9ieNSc_RTdeewwv1CAXBJrOYPN775lE94arkTRoMDAbR8AEt87DMqDPiJNFZakhAtALYjhCMCU5zisvcaxelj6oFVpVlkaV0nxb0QOoE1mR4oVkCvdKjRd_P--VJHJp4wK-w2Z23jkxgWyXrKt05f7icbG0nzQqFRhg3AiI6iKGl_0SoHE1O0GPfT9Nfidc9F615qH8S5VZN.ZVmumQ.Jqyp1C7Ly6PWNOwykRsUz2f1Hvw'
+2. loads_unsafe s -> (True, [{'viewer2': 'tab\t été grace ken', 'ada': -662262148274, 'admin_id': [775318015896], 'grace_id': [83, 'linus 🚀', 'a"b été a"b'], 'grace': [], 'admin': {'viewers': 'x\\y', 'edsger_id': 'barbara', 'linus_id': '', 'ada2': 'ken', 'barbara2': None}}, 'barbara été x\\y linus'])
+3. dumps s -> 'ImJhcmJhcmEgdGFiXHQgeFxceSI.ZVmumQ.OJRYLeOvUDGLkjIqrGxLqR37P0k'
+4. loads s -> SignatureExpired: Signature age 700 > 600 seconds payload=b'ImJhcmJhcmEgdGFiXHQgeFxceSI' date=2023-11-19 06:43:37+00:00
+5. loads_unsafe s -> (False, 'barbara tab\t x\\y')
+6. loads s -> 'barbara tab\t x\\y'
+7. dumps s -> 'InRhYlx0Ig.ZVmumQ.kg1h_5DtM8YcFBJgYypNiiNPRh8'
+8. loads_unsafe s -> (False, 'tab\t')
+9. dumps s -> '.eJxVkEkOwjAMRa8SeZ0VQ6v2KgQhtw2oonSRhElRJM7BhjXn6IU4Ak7cMkiRnOH7vx97wAah9FQObW-hXGWZhItSV5FugA9UHFbKCd3YnTZieLrhKWo0DuR8ucyLIl_M8sV8LWGv-xmUQB2s3bRN9N8ZrDXdV2hooRgrBAmnVp-1ITa8HvebQAXVCOg7FROkXsspcTRP7DL7o0BqJc3HfYrjzFF_fXgjmDuiYivJ0zQ4R4RP_2UpvzOqa_ujjemTFyF8CFMYOwHTCJN-i53VP1_1QX5Hvg5v772Eog.ZVmumQ.mFeWBNRe3wauw0xHklwC6qE0C5M'
+10. loads s -> {'ada': {'admins': [66, 'x\\y admin', 'x\\y', 'tab\t edsger été cart', 355799742743], 'ken2': '', 'edsger_id': {'grace': 'barbara barbara'}, 'viewers': '🚀 a"b été nl\n', 'graces': {'ada2': '', 'cart': 6, 'edsger_id': 'a"b ada barbara', 'ken2': True, 'graces': 'grace viewer été a"b', 'ada': '🚀 nl\n edsger viewer', 'ada_id': 'linus'}, 'grace2': {}}, 'edsgers': True, 'admin_id': False, 'viewers': {}, 'admins': []}
+11. dumps s -> 'InhcXHki.ZVmumQ.Cap91hb-NVUGt6JEUFmRmjpGNQE'
+12. loads_unsafe s -> (False, 'x\\y')
+13. dumps s -> 'LTcyODg4MTAxNDc5MA.ZVmumQ.1BwKgmNYiQHTmeJdNbPk-X4Pj0w'
+14. loads s -> SignatureExpired: Signature age 700 > 0 seconds payload=b'LTcyODg4MTAxNDc5MA' date=2023-11-19 06:43:37+00:00
+15. dumps s -> '.eJxVj0FqwzAQRa8iZj0FSZYsqVexTZFjEUxdLRS5XZRAbxEIha6yCOQWuUvWOULGMi0UZjOjN19vmjhPE37CNMZ5B8-N5JjTHFBqJ43g2igtsDAAHcJriC_jQJy2Smhdc8eFRSsR3sfwERIjgGXft5ldz_l6BlrDJ2erqrbC1ZUyCBufMtsmvwns_nP8WmLDsNuGRLFEw_q05sFqA71PVJ75Fnr22xSQFv4Nl2aJ9INf8laX8qUf3sYI3Z6uJUs6Fm6H0-37UpxLRtHZYwMFZXFq45-Hk5XS3BjJueq6B4VaZJ0.ZVmumQ.NF5hkaYWZQVmxVqOb3pWe0hVWlE'
+16. loads_unsafe s -> (True, [None, {'linus': [20, True, 259271057451, None, ''], 'ken_id': [584155609018, 82, 'viewer ken tab\t été', '', -983368196347, 'cart grace 🚀'], 'edsger': ['', 'grace viewer', True, 'barbara a"b barbara grace', 'a"b barbara a"b'], 'ada': ['tab\t cart admin']}, {'kens': '日本 ken a"b 🚀'}, ['admin nl\n viewer', 923450772004]])
+17. loads s -> BadTimeSignature: Signature b'NF5hkaYWZQVmxVqOb3pWe0' does not match payload=b'.eJxVj0FqwzAQRa8iZj0FSZYsqVexTZFjEUxdLRS5XZRAbxEIha6yCOQWuUvWOULGMi0UZjOjN19vmjhPE37CNMZ5B8-N5JjTHFBqJ43g2igtsDAAHcJriC_jQJy2Smhdc8eFRSsR3sfwERIjgGXft5ldz_l6BlrDJ2erqrbC1ZUyCBufMtsmvwns_nP8WmLDsNuGRLFEw_q05sFqA71PVJ75Fnr22xSQFv4Nl2aJ9INf8laX8qUf3sYI3Z6uJUs6Fm6H0-37UpxLRtHZYwMFZXFq45-Hk5XS3BjJueq6B4VaZJ0' date=2023-11-19 06:43:37+00:00
+18. loads s -> [None, {'linus': [20, True, 259271057451, None, ''], 'ken_id': [584155609018, 82, 'viewer ken tab\t été', '', -983368196347, 'cart grace 🚀'], 'edsger': ['', 'grace viewer', True, 'barbara a"b barbara grace', 'a"b barbara a"b'], 'ada': ['tab\t cart admin']}, {'kens': '日本 ken a"b 🚀'}, ['admin nl\n viewer', 923450772004]]
+19. loads s -> [None, {'linus': [20, True, 259271057451, None, ''], 'ken_id': [584155609018, 82, 'viewer ken tab\t été', '', -983368196347, 'cart grace 🚀'], 'edsger': ['', 'grace viewer', True, 'barbara a"b barbara grace', 'a"b barbara a"b'], 'ada': ['tab\t cart admin']}, {'kens': '日本 ken a"b 🚀'}, ['admin nl\n viewer', 923450772004]]
+20. dumps s -> 'e30.ZVmumQ.4L6jBMonO3K4IMPxQpYRPQQd-Xg'
+21. loads_unsafe s -> (False, None)
+22. loads_unsafe s -> (False, {})
+23. loads_unsafe s -> (False, {})
+== random 16 Serializer
+1. dumps s -> 'true~lWVxDnARTyISnEeclcI9wtRIOWK3Yx_0N5sYXOHt_Y07l4pnblVXV1-cTRdSHaj8XtQJlYJeOiLhdk97R7ve8g'
+2. loads_unsafe s -> (True, True)
+3. loads s -> BadSignature: Signature b'lWVxDnARTyISnEeclcI9wtRIOWK3Yx_0N5sYXOHt_Y07l4pnblVXV1BcTRdSHaj8XtQJlYJeOiLhdk97R7ve8g' does not match payload=b'true'
+4. loads_unsafe s -> (False, True)
+5. dumps s -> '[{"edsger2": 323822136594}, {"ken": []}, [-122431830927, {"admin_id": true, "admin2": false}, ""]]~83AjhzbUydyJCGDiYggU0rkTf6XijsT_UjO_tBc6gPIMPUXUZOmDFgswMa9q7pirTo2gS5TAsCGWFr1m_t2Pkg'
+6. loads s -> BadSignature: Signature b'83AjhzbUydyJCGDiYggU0rkTf6XijsT_UjO_tBc6gPIMPUXUZOmDFgswMa9q7pirTo2gS5TAsCGWFr1m_t2Pkgx' does not match payload=b'[{"edsAer2": 323822136594}, {"ken": []}, [-122431830927, {"admin_id": true, "admin2": false}, ""]]'
+7. dumps s -> '"cart ada"~I9Psv8Sry5uS121_DMTBHt8csAR_bs_z6bXoVOpIJ1YFDmE33O5QYWFzEgY6sVdxX9E1s-PwRRGz4XVcOyZSDQ'
+8. loads_unsafe s -> (False, 'cart ada')
+9. loads s -> BadSignature: Signature b'I9Psv8Sry5uS121.DMTBHt8csAR_bs_z6bXoVOpIJ1YFDmE33O5QYWFzEgY6sVdxX9E1s-PwRRGz4XVcOyZSDQ' does not match payload=b'"cart ada"'
+10. loads s -> 'cart ada'
+11. loads_unsafe s -> (True, 'cart ada')
+12. dumps s -> '[[{"admin2": -590869597127}, {"edsgers": "\\u65e5\\u672c cart nl\\n \\u00e9t\\u00e9", "viewers": "ken \\ud83d\\ude80 admin", "edsger": 21}, "\\ud83d\\ude80 admin admin"], {"graces": [739413530871, "edsger", "a\\"b barbara", "grace x\\\\y"], "cart2": {"admins": "nl\\n ada \\u00e9t\\u00e9", "viewers": ""}}, false, {"graces": {"grace": "\\ud83d\\ude80 tab\\t a\\"b", "viewers": "\\ud83d\\ude80 a\\"b nl\\n", "cart": "a\\"b admin ken"}, "barbaras": [37, "", 63, true, "", 80], "admins": {"linus": "x\\\\y a\\"b", "linus_id": "tab\\t viewer \\ud83d\\ude80", "viewer_id": 33, "ken_id": 9, "ken2": -347586142581, "grace": true, "admin_id": ""}, "admin2": [73, "\\ud83d\\ude80 \\u65e5\\u672c"], "cart2": "edsger", "ada2": ["edsger \\ud83d\\ude80 admin", "barbara cart viewer", 459387563793]}]~oYx56P6ji44WUcQdrgMvtBpihgG-lyNP2cJnHTWkRup97m_jWIJF8MeyJHI-u2O6BoVNiPcuJLHY3zqFbTJ_BQ'
+13. loads_unsafe s -> (False, [[{'admin2': -590869597127}, {'edsgers': '日本 cart nl\n été', 'viewers': 'ken 🚀 admin', 'edsger': 21}, '🚀 admin admin'], {'graces': [739413530871, 'edsger', 'a"b barbara', 'grace x\\y'], 'cart2': {'admins': 'nl\n ada été', 'viewers': ''}}, False, {'graces': {'grace': '🚀 tab\t a"b', 'viewers': '🚀 a"b nl\n', 'cart': 'a"b admin ken'}, 'barbaras': [37, '', 63, True, '', 80], 'admins': {'linus': 'x\\y a"b', 'linus_id': 'tab\t viewer 🚀', 'viewer_id': 33, 'ken_id': 9, 'ken2': -347586142581, 'grace': True, 'admin_id': ''}, 'admin2': [73, '🚀 日本'], 'cart2': 'edsger', 'ada2': ['edsger 🚀 admin', 'barbara cart viewer', 459387563793]}])
+14. dumps s -> '{"ken": {"ken": "\\u00e9t\\u00e9 ken ken barbara", "linuss": "edsger"}, "cart_id": "grace edsger a\\"b nl\\n", "grace2": {"ada": {"carts": true, "ada2": "", "admin_id": "viewer edsger \\ud83d\\ude80 tab\\t"}, "ada_id": "cart", "linuss": -270937171878, "grace_id": "edsger grace ada"}, "linus": "ken tab\\t", "viewer2": [{"ken2": "\\u65e5\\u672c grace nl\\n ken", "linuss": "", "admin": -566766188676, "viewer_id": false}, ["ada"], {"linus": null, "cart": "", "linus_id": "\\ud83d\\ude80 viewer edsger ken", "carts": "grace", "barbara2": "viewer viewer"}, true, [""]]}~vKtP2JCyLajk2_O--_qqqV-OZebrgXtE4V8FvK8kRocrbr0DAqDPy6N-5cFQ-KXDnl8rbPnNiLPi1-iJh0obYw'
+15. loads s -> BadSignature: Signature b'vKtP2JCyLajk2_O--_qqqV-OZebrgXtE4V8FvK8kRocrbr0DAqDPy6N-5cFQ-KXDnl8rbPnNiLPi1-iJh0obYwAA' does not match payload=b'{"ken": {"ken": "\\u00e9t\\u00e9 ken ken barbara", "linuss": "edsger"}, "cart_id": "grace edsger a\\"b nl\\n", "grace2": {"ada": {"carts": true, "ada2": "", "admin_id": "viewer edsger \\ud83d\\ude80 tab\\t"}, "ada_id": "cart", "linuss": -270937171878, "grace_id": "edsger grace ada"}, "linus": "ken tab\\t", "viewer2": [{"ken2": "\\u65e5\\u672c grace nl\\n ken", "linuss": "", "admin": -566766188676, "viewer_id": false}, ["ada"], {"linus": null, "cart": "", "linus_id": "\\ud83d\\ude80 viewer edsger ken", "carts": "grace", "barbara2": "viewer viewer"}, true, [""]]}'
+16. loads s -> {'ken': {'ken': 'été ken ken barbara', 'linuss': 'edsger'}, 'cart_id': 'grace edsger a"b nl\n', 'grace2': {'ada': {'carts': True, 'ada2': '', 'admin_id': 'viewer edsger 🚀 tab\t'}, 'ada_id': 'cart', 'linuss': -270937171878, 'grace_id': 'edsger grace ada'}, 'linus': 'ken tab\t', 'viewer2': [{'ken2': '日本 grace nl\n ken', 'linuss': '', 'admin': -566766188676, 'viewer_id': False}, ['ada'], {'linus': None, 'cart': '', 'linus_id': '🚀 viewer edsger ken', 'carts': 'grace', 'barbara2': 'viewer viewer'}, True, ['']]}
+17. dumps s -> '"\\u65e5\\u672c grace ken ada"~xLzpp-vkfBsUToIhOtny9-REotVe-Gag3Rk-3kJ8ngjwIwkt5a_DHnSEC3DluvkSDfJkMOlSGtair2OmpG4RdA'
+18. loads_unsafe s -> (False, '日本 grace ken ada')
+19. loads s -> BadSignature: Signature b'xLzpp-vkfBsUToIhOtny9-REotVe-Gag3Rk-3kJ8ngjwIwkt5a_DHnSEC3DluvkSDfJkMOlSGtair2OmpG4R' does not match payload=b'"\\u65e5\\u672c grace ken ada"'
+20. loads s -> '日本 grace ken ada'
+== random 17 TimedSerializer
+1. dumps s -> '-216841325485.ZVTgaQ.SFx6suI2fDrcrWk5M5Kljw'
+2. loads_unsafe s -> (False, None)
+3. loads s -> -216841325485 @ 2023-11-15 15:14:49+00:00
+4. dumps s -> '[[{"viewers": "edsger linus", "graces": "admin cart", "viewer": 44}, "barbara barbara", [31]], [{"linus_id": "\\u65e5\\u672c x\\\\y nl\\n \\u65e5\\u672c"}, "linus", {"barbaras": "admin \\ud83d\\ude80 tab\\t"}], 823867528845, [false], "\\u65e5\\u672c", -593651164215].ZVTgaQ.5oeJ4HtOPMlUqozWx5HmSA'
+5. loads s -> BadTimeSignature: Signature b'5oeJ4HtOPMlUqozWx5HmS' does not match payload=b'[[{"viewers": "edsger linus", "graces": "admin cart", "viewer": 44}, "barbara barbara", [31]], [{"linus_id": "\\u65e5\\u672c x\\\\y nl\\n \\u65e5\\u672c"}, "linus", {"barbaras": "admin \\ud83d\\ude80 tab\\t"}], 823867528845, [false], "\\u65e5\\u672c", -593651164215]' date=2023-11-15 15:14:49+00:00
+6. loads s -> BadTimeSignature: Signature b'5oeJ4HtOPMlUqozWx5Hm' does not match payload=b'[[{"viewers": "edsger linus", "graces": "admin cart", "viewer": 44}, "barbara barbara", [31]], [{"linus_id": "\\u65e5\\u672c x\\\\y nl\\n \\u65e5\\u672c"}, "linus", {"barbaras": "admin \\ud83d\\ude80 tab\\t"}], 823867528845, [false], "\\u65e5\\u672c", -593651164215]' date=2023-11-15 15:14:49+00:00
+7. dumps s -> '[{"admin2": ["cart \\u00e9t\\u00e9 edsger", "cart x\\\\y", 84, "ada a\\"b \\u00e9t\\u00e9 \\u65e5\\u672c"], "linus_id": 19, "linuss": 20, "cart_id": {"ada2": false, "ken2": true, "admin2": 60, "viewer_id": "nl\\n admin", "linus2": 897249936143, "admin": "tab\\t edsger", "grace": null}, "viewers": 611287963736}, {"linus": {"grace2": "tab\\t", "linus2": "", "viewer_id": "\\ud83d\\ude80 grace"}, "viewers": [51, 76], "ada2": {"grace2": null, "ken_id": "", "barbara": "", "carts": true, "linus2": "ken linus a\\"b ada", "linus_id": "linus ada", "grace": 9}, "graces": 775311482907, "edsgers": "grace \\u65e5\\u672c nl\\n"}, [80, [53, -809173605903, "viewer linus ada ken", 395439094062, 35], 94], {"grace_id": {"admin_id": "grace ada admin", "viewer2": 2}, "viewers": "cart a\\"b viewer", "grace2": "", "barbaras": {"viewer": -204783398234, "linus_id": null}, "linus": ["", 30, "nl\\n ada", "ada \\ud83d\\ude80 tab\\t"]}, [{"viewer_id": true, "cart": "\\ud83d\\ude80 \\u65e5\\u672c edsger ada", "grace2": "\\u00e9t\\u00e9 \\u65e5\\u672c linus", "viewers": "\\ud83d\\ude80 edsger grace", "barbaras": "cart x\\\\y x\\\\y linus"}, {"ken": 85, "admin": null, "ada2": "", "edsger_id": true}, [true, 8837947856, 1, "viewer", 13, "nl\\n"]]].ZVTgaQ.GJeK4kKfxNOXlpRWtaPnvQ'
+8. loads s -> BadTimeSignature: Signature b'GJeK4kKfxNOXlpRWta' does not match payload=b'[{"admin2": ["cart \\u00e9t\\u00e9 edsger", "cart x\\\\y", 84, "ada a\\"b \\u00e9t\\u00e9 \\u65e5\\u672c"], "linus_id": 19, "linuss": 20, "cart_id": {"ada2": false, "ken2": true, "admin2": 60, "viewer_id": "nl\\n admin", "linus2": 897249936143, "admin": "tab\\t edsger", "grace": null}, "viewers": 611287963736}, {"linus": {"grace2": "tab\\t", "linus2": "", "viewer_id": "\\ud83d\\ude80 grace"}, "viewers": [51, 76], "ada2": {"grace2": null, "ken_id": "", "barbara": "", "carts": true, "linus2": "ken linus a\\"b ada", "linus_id": "linus ada", "grace": 9}, "graces": 775311482907, "edsgers": "grace \\u65e5\\u672c nl\\n"}, [80, [53, -809173605903, "viewer linus ada ken", 395439094062, 35], 94], {"grace_id": {"admin_id": "grace ada admin", "viewer2": 2}, "viewers": "cart a\\"b viewer", "grace2": "", "barbaras": {"viewer": -204783398234, "linus_id": null}, "linus": ["", 30, "nl\\n ada", "ada \\ud83d\\ude80 tab\\t"]}, [{"viewer_id": true, "cart": "\\ud83d\\ude80 \\u65e5\\u672c edsger ada", "grace2": "\\u00e9t\\u00e9 \\u65e5\\u672c linus", "viewers": "\\ud83d\\ude80 edsger grace", "barbaras": "cart x\\\\y x\\\\y linus"}, {"ken": 85, "admin": null, "ada2": "", "edsger_id": true}, [true, 8837947856, 1, "viewer", 13, "nl\\n"]]]' date=2023-11-15 15:14:49+00:00
+9. loads_unsafe s -> (False, [{'admin2': ['cart été edsger', 'cart x\\y', 84, 'ada a"b été 日本'], 'linus_id': 19, 'linuss': 20, 'cart_id': {'ada2': False, 'ken2': True, 'admin2': 60, 'viewer_id': 'nl\n admin', 'linus2': 897249936143, 'admin': 'tab\t edsger', 'grace': None}, 'viewers': 611287963736}, {'linus': {'grace2': 'tab\t', 'linus2': '', 'viewer_id': '🚀 grace'}, 'viewers': [51, 76], 'ada2': {'grace2': None, 'ken_id': '', 'barbara': '', 'carts': True, 'linus2': 'ken linus a"b ada', 'linus_id': 'linus ada', 'grace': 9}, 'graces': 775311482907, 'edsgers': 'grace 日本 nl\n'}, [80, [53, -809173605903, 'viewer linus ada ken', 395439094062, 35], 94], {'grace_id': {'admin_id': 'grace ada admin', 'viewer2': 2}, 'viewers': 'cart a"b viewer', 'grace2': '', 'barbaras': {'viewer': -204783398234, 'linus_id': None}, 'linus': ['', 30, 'nl\n ada', 'ada 🚀 tab\t']}, [{'viewer_id': True, 'cart': '🚀 日本 edsger ada', 'grace2': 'été 日本 linus', 'viewers': '🚀 edsger grace', 'barbaras': 'cart x\\y x\\y linus'}, {'ken': 85, 'admin': None, 'ada2': '', 'edsger_id': True}, [True, 8837947856, 1, 'viewer', 13, 'nl\n']]])
+10. loads s -> [{'admin2': ['cart été edsger', 'cart x\\y', 84, 'ada a"b été 日本'], 'linus_id': 19, 'linuss': 20, 'cart_id': {'ada2': False, 'ken2': True, 'admin2': 60, 'viewer_id': 'nl\n admin', 'linus2': 897249936143, 'admin': 'tab\t edsger', 'grace': None}, 'viewers': 611287963736}, {'linus': {'grace2': 'tab\t', 'linus2': '', 'viewer_id': '🚀 grace'}, 'viewers': [51, 76], 'ada2': {'grace2': None, 'ken_id': '', 'barbara': '', 'carts': True, 'linus2': 'ken linus a"b ada', 'linus_id': 'linus ada', 'grace': 9}, 'graces': 775311482907, 'edsgers': 'grace 日本 nl\n'}, [80, [53, -809173605903, 'viewer linus ada ken', 395439094062, 35], 94], {'grace_id': {'admin_id': 'grace ada admin', 'viewer2': 2}, 'viewers': 'cart a"b viewer', 'grace2': '', 'barbaras': {'viewer': -204783398234, 'linus_id': None}, 'linus': ['', 30, 'nl\n ada', 'ada 🚀 tab\t']}, [{'viewer_id': True, 'cart': '🚀 日本 edsger ada', 'grace2': 'été 日本 linus', 'viewers': '🚀 edsger grace', 'barbaras': 'cart x\\y x\\y linus'}, {'ken': 85, 'admin': None, 'ada2': '', 'edsger_id': True}, [True, 8837947856, 1, 'viewer', 13, 'nl\n']]] @ 2023-11-15 15:14:49+00:00
+11. dumps s -> '{"grace_id": {"cart": 10, "grace_id": ["admin", false, true, "\\u00e9t\\u00e9 x\\\\y \\u00e9t\\u00e9", ""], "viewers": {"barbara_id": 76, "edsger": "", "ada": "\\u65e5\\u672c"}, "edsger": {"admins": null}}, "ada": {"ken_id": "", "admin2": [], "barbaras": [92, "edsger \\u00e9t\\u00e9 viewer cart", "\\ud83d\\ude80 edsger a\\"b admin", 86, "nl\\n nl\\n barbara"], "linus_id": "ken \\u65e5\\u672c barbara barbara", "viewer": 25}, "barbara2": "ada linus", "admins": {"barbara_id": ["admin nl\\n tab\\t tab\\t", 233641935196], "ada_id": 978150688252, "graces": {}, "carts": "ken \\u00e9t\\u00e9 x\\\\y", "ada2": [-326067032523, 86, 58, "linus", null, ""], "linuss": 845029938927}, "ken2": [41, {}, -616067131075, {"linuss": false, "admins": "nl\\n", "edsgers": "ada nl\\n ada", "adas": 251997308275}], "edsgers": "tab\\t", "graces": {"ken_id": {"viewer": "ken nl\\n \\u00e9t\\u00e9 viewer", "ada": "", "barbara2": 45, "cart_id": "\\u00e9t\\u00e9 \\u00e9t\\u00e9 \\u65e5\\u672c tab\\t", "ada2": true, "adas": 864375796468}, "grace": ["viewer \\u00e9t\\u00e9 viewer linus"], "ada2": false, "ada": "nl\\n tab\\t grace a\\"b"}}.ZVTgaQ.fDodnAgZry18d4_-UAf1UQ'
+12. loads s -> BadTimeSignature: Signature b'fDodnAgZry18d4_-UAf1UQ' does not match payload=b'{"grace_iAA: {"cart": 10, "grace_id": ["admin", false, true, "\\u00e9t\\u00e9 x\\\\y \\u00e9t\\u00e9", ""], "viewers": {"barbara_id": 76, "edsger": "", "ada": "\\u65e5\\u672c"}, "edsger": {"admins": null}}, "ada": {"ken_id": "", "admin2": [], "barbaras": [92, "edsger \\u00e9t\\u00e9 viewer cart", "\\ud83d\\ude80 edsger a\\"b admin", 86, "nl\\n nl\\n barbara"], "linus_id": "ken \\u65e5\\u672c barbara barbara", "viewer": 25}, "barbara2": "ada linus", "admins": {"barbara_id": ["admin nl\\n tab\\t tab\\t", 233641935196], "ada_id": 978150688252, "graces": {}, "carts": "ken \\u00e9t\\u00e9 x\\\\y", "ada2": [-326067032523, 86, 58, "linus", null, ""], "linuss": 845029938927}, "ken2": [41, {}, -616067131075, {"linuss": false, "admins": "nl\\n", "edsgers": "ada nl\\n ada", "adas": 251997308275}], "edsgers": "tab\\t", "graces": {"ken_id": {"viewer": "ken nl\\n \\u00e9t\\u00e9 viewer", "ada": "", "barbara2": 45, "cart_id": "\\u00e9t\\u00e9 \\u00e9t\\u00e9 \\u65e5\\u672c tab\\t", "ada2": true, "adas": 864375796468}, "grace": ["viewer \\u00e9t\\u00e9 viewer linus"], "ada2": false, "ada": "nl\\n tab\\t grace a\\"b"}}' date=2023-11-15 15:14:49+00:00
+13. dumps s -> '{"edsger2": [{"edsger_id": "\\u65e5\\u672c", "edsger2": -378929002835, "ada": "grace admin viewer", "graces": 675057458187}, 50, {"edsger": null, "cart2": 463225838956, "admins": "admin edsger", "barbara2": "admin x\\\\y \\u00e9t\\u00e9 viewer"}, 498676427533], "graces": [], "cart": {"adas": "", "viewer": [54, 57, "", "a\\"b x\\\\y ken", "barbara a\\"b linus", 214527107218], "ken": 79, "linus_id": {"grace_id": 690763239981, "barbara_id": "a\\"b", "admin": null, "linuss": 77253894276, "admins": 57}, "edsger2": {"linuss": null, "viewer2": 452654696169, "admin": "cart"}, "admin2": "", "barbara_id": {"barbara2": 582834605215, "linus2": "tab\\t"}}, "admin_id": [12, 845330602717], "ada_id": "viewer nl\\n", "linus_id": [[true, 20, "ken linus", false, 449763814959, "cart grace tab\\t cart"], {}, {"viewer_id": "\\u65e5\\u672c edsger linus", "linuss": 58, "cart2": -709217382038, "barbara2": "nl\\n viewer edsger", "ken": 61, "ada_id": "tab\\t"}, {"grace_id": -833412558818, "carts": -551072888907, "adas": 85, "admin": null}, [14, "barbara ken", null, 3, "edsger x\\\\y linus admin", false], [25, "", "\\u00e9t\\u00e9 cart", "\\u00e9t\\u00e9 nl\\n", -80795697566, true]], "grace_id": "x\\\\y linus nl\\n nl\\n"}.ZVTgaQ.nuUYm5WeiRq2YUHX0IH-Ig'
+14. loads s -> BadTimeSignature: Signature b'nuUYm5WeiRq2YUHX0IH-Igx' does not match payload=b'{"edsger2": [{"edsger_id": "\\u65e5\\u672c", "edsger2": -378929002835, "ada": "grace admin viewer", "graces": 675057458187}, 50, {"edsger": null, "cart2": 463225838956, "admins": "admin edsger", "barbara2": "admin x\\\\y \\u00e9t\\u00e9 viewer"}, 498676427533], "graces": [], "cart": {"adas": "", "viewer": [54, 57, "", "a\\"b x\\\\y ken", "barbara a\\"b linus", 214527107218], "ken": 79, "linus_id": {"grace_id": 690763239981, "barbara_id": "a\\"b", "admin": null, "linuss": 77253894276, "admins": 57}, "edsger2": {"linuss": null, "viewer2": 452654696169, "admin": "cart"}, "admin2": "", "barbara_id": {"barbara2": 582834605215, "linus2": "tab\\t"}}, "admin_id": [12, 845330602717], "ada_id": "viewer nl\\n", "linus_id": [[true, 20, "ken linus", false, 449763814959, "cart grace tab\\t cart"], {}, {"viewer_id": "\\u65e5\\u672c edsger linus", "linuss": 58, "cart2": -709217382038, "barbara2": "nl\\n viewer edsger", "ken": 61, "ada_id": "tab\\t"}, {"grace_id": -833412558818, "carts": -551072888907, "adas": 85, "admin": null}, [14, "barbara ken", null, 3, "edsger x\\\\y linus admin", false], [25, "", "\\u00e9t\\u00e9 cart", "\\u00e9t\\u00e9 nl\\n", -80795697566, true]], "grace_id": "x\\\\y linus nl\\n nl\\n"}' date=2023-11-15 15:14:49+00:00
+15. loads s -> {'edsger2': [{'edsger_id': '日本', 'edsger2': -378929002835, 'ada': 'grace admin viewer', 'graces': 675057458187}, 50, {'edsger': None, 'cart2': 463225838956, 'admins': 'admin edsger', 'barbara2': 'admin x\\y été viewer'}, 498676427533], 'graces': [], 'cart': {'adas': '', 'viewer': [54, 57, '', 'a"b x\\y ken', 'barbara a"b linus', 214527107218], 'ken': 79, 'linus_id': {'grace_id': 690763239981, 'barbara_id': 'a"b', 'admin': None, 'linuss': 77253894276, 'admins': 57}, 'edsger2': {'linuss': None, 'viewer2': 452654696169, 'admin': 'cart'}, 'admin2': '', 'barbara_id': {'barbara2': 582834605215, 'linus2': 'tab\t'}}, 'admin_id': [12, 845330602717], 'ada_id': 'viewer nl\n', 'linus_id': [[True, 20, 'ken linus', False, 449763814959, 'cart grace tab\t cart'], {}, {'viewer_id': '日本 edsger linus', 'linuss': 58, 'cart2': -709217382038, 'barbara2': 'nl\n viewer edsger', 'ken': 61, 'ada_id': 'tab\t'}, {'grace_id': -833412558818, 'carts': -551072888907, 'adas': 85, 'admin': None}, [14, 'barbara ken', None, 3, 'edsger x\\y linus admin', False], [25, '', 'été cart', 'été nl\n', -80795697566, True]], 'grace_id': 'x\\y linus nl\n nl\n'}
+16. loads_unsafe s -> (False, {'edsger2': [{'edsger_id': '日Ꜫ', 'edsger2': -378929002835, 'ada': 'grace admin viewer', 'graces': 675057458187}, 50, {'edsger': None, 'cart2': 463225838956, 'admins': 'admin edsger', 'barbara2': 'admin x\\y été viewer'}, 498676427533], 'graces': [], 'cart': {'adas': '', 'viewer': [54, 57, '', 'a"b x\\y ken', 'barbara a"b linus', 214527107218], 'ken': 79, 'linus_id': {'grace_id': 690763239981, 'barbara_id': 'a"b', 'admin': None, 'linuss': 77253894276, 'admins': 57}, 'edsger2': {'linuss': None, 'viewer2': 452654696169, 'admin': 'cart'}, 'admin2': '', 'barbara_id': {'barbara2': 582834605215, 'linus2': 'tab\t'}}, 'admin_id': [12, 845330602717], 'ada_id': 'viewer nl\n', 'linus_id': [[True, 20, 'ken linus', False, 449763814959, 'cart grace tab\t cart'], {}, {'viewer_id': '日本 edsger linus', 'linuss': 58, 'cart2': -709217382038, 'barbara2': 'nl\n viewer edsger', 'ken': 61, 'ada_id': 'tab\t'}, {'grace_id': -833412558818, 'carts': -551072888907, 'adas': 85, 'admin': None}, [14, 'barbara ken', None, 3, 'edsger x\\y linus admin', False], [25, '', 'été cart', 'été nl\n', -80795697566, True]], 'grace_id': 'x\\y linus nl\n nl\n'})
+17. loads_unsafe s -> (True, {'edsger2': [{'edsger_id': '日本', 'edsger2': -378929002835, 'ada': 'grace admin viewer', 'graces': 675057458187}, 50, {'edsger': None, 'cart2': 463225838956, 'admins': 'admin edsger', 'barbara2': 'admin x\\y été viewer'}, 498676427533], 'graces': [], 'cart': {'adas': '', 'viewer': [54, 57, '', 'a"b x\\y ken', 'barbara a"b linus', 214527107218], 'ken': 79, 'linus_id': {'grace_id': 690763239981, 'barbara_id': 'a"b', 'admin': None, 'linuss': 77253894276, 'admins': 57}, 'edsger2': {'linuss': None, 'viewer2': 452654696169, 'admin': 'cart'}, 'admin2': '', 'barbara_id': {'barbara2': 582834605215, 'linus2': 'tab\t'}}, 'admin_id': [12, 845330602717], 'ada_id': 'viewer nl\n', 'linus_id': [[True, 20, 'ken linus', False, 449763814959, 'cart grace tab\t cart'], {}, {'viewer_id': '日本 edsger linus', 'linuss': 58, 'cart2': -709217382038, 'barbara2': 'nl\n viewer edsger', 'ken': 61, 'ada_id': 'tab\t'}, {'grace_id': -833412558818, 'carts': -551072888907, 'adas': 85, 'admin': None}, [14, 'barbara ken', None, 3, 'edsger x\\y linus admin', False], [25, '', 'été cart', 'été nl\n', -80795697566, True]], 'grace_id': 'x\\y linus nl\n nl\n'})
+18. dumps s -> 'false.ZVTgaQ.4edMouWciIb4FTtud7ewHw'
+19. loads_unsafe s -> (False, False)
+20. loads s -> BadTimeSignature: Signature b'4edMouWciIb4FTtud7ewHw' does not match payload=b'Aalse' date=2023-11-15 15:14:49+00:00
+21. loads s -> BadTimeSignature: Signature b'4edMouWciIb4FTtud7ewHw' does not match payload=b'fals.' date=2023-11-15 15:14:49+00:00
+22. dumps s -> '{"carts": "\\ud83d\\ude80 barbara", "barbara": {"grace2": "", "admin_id": {"admins": "tab\\t", "barbara_id": "\\ud83d\\ude80", "barbaras": 71}, "carts": -818491261908, "viewer": {"linuss": "ada nl\\n ken cart", "admins": 195091525938, "edsger2": "\\u65e5\\u672c \\u65e5\\u672c viewer", "linus_id": 64, "ken": "edsger grace grace", "graces": 682158811246}, "viewer_id": "x\\\\y", "cart": []}, "viewers": {"edsgers": null, "viewer_id": [966870351710, 603209058457, "", "nl\\n edsger \\u65e5\\u672c"], "linus": ["barbara"], "cart_id": {}, "edsger": 67, "barbara_id": ""}, "ada_id": [], "kens": {}}.ZVTgaQ.CHbHDkpYFjE9bSmFMxaRPw'
+23. loads_unsafe s -> (False, {'carts': '🚀 barbara', 'barbara': {'grace2': '', 'admin_id': {'admins': 'tab\t', 'barbara_id': '🚀', 'barbaras': 71}, 'carts': -818491261908, 'viewer': {'linuss': 'ada nl\n ken cart', 'admins': 195091525938, 'edsger2': '日本 日本 viewer', 'linus_id': 64, 'ken': 'edsger grace grace', 'graces': 682158811246}, 'viewer_id': 'x\\y', 'cart': []}, 'viewers': {'edsgers': None, 'viewer_id': [966870351710, 603209058457, '', 'nl\n edsger 日本'], 'linus': ['barbara'], 'cart_id': {}, 'edsger': 67, 'barbara_id': ''}, 'ada_id': [], 'kens': {}})
+24. loads s -> BadTimeSignature: Signature b'CHbHDkpYFjE9bSmFMxaRPw' does not match payload=b'{"carts":. "\\ud83d\\ude80 barbara", "barbara": {"grace2": "", "admin_id": {"admins": "tab\\t", "barbara_id": "\\ud83d\\ude80", "barbaras": 71}, "carts": -818491261908, "viewer": {"linuss": "ada nl\\n ken cart", "admins": 195091525938, "edsger2": "\\u65e5\\u672c \\u65e5\\u672c viewer", "linus_id": 64, "ken": "edsger grace grace", "graces": 682158811246}, "viewer_id": "x\\\\y", "cart": []}, "viewers": {"edsgers": null, "viewer_id": [966870351710, 603209058457, "", "nl\\n edsger \\u65e5\\u672c"], "linus": ["barbara"], "cart_id": {}, "edsger": 67, "barbara_id": ""}, "ada_id": [], "kens": {}}' date=2023-11-15 15:14:49+00:00
+25. loads s -> BadTimeSignature: Signature b'CHbHDkpYFjE9bSmFMxaRP' does not match payload=b'{"carts": "\\ud83d\\ude80 barbara", "barbara": {"grace2": "", "admin_id": {"admins": "tab\\t", "barbara_id": "\\ud83d\\ude80", "barbaras": 71}, "carts": -818491261908, "viewer": {"linuss": "ada nl\\n ken cart", "admins": 195091525938, "edsger2": "\\u65e5\\u672c \\u65e5\\u672c viewer", "linus_id": 64, "ken": "edsger grace grace", "graces": 682158811246}, "viewer_id": "x\\\\y", "cart": []}, "viewers": {"edsgers": null, "viewer_id": [966870351710, 603209058457, "", "nl\\n edsger \\u65e5\\u672c"], "linus": ["barbara"], "cart_id": {}, "edsger": 67, "barbara_id": ""}, "ada_id": [], "kens": {}}' date=2023-11-15 15:14:49+00:00
+26. dumps s -> '-612326710467.ZVTgaQ.8qvdnOZlQ1ARwq1IKMzDOw'
+27. loads_unsafe s -> (False, None)
+28. loads_unsafe s -> (False, -612326710467)
+29. dumps s -> '"admin \\u00e9t\\u00e9 \\ud83d\\ude80".ZVTgaQ.An2MZbmJGQrOa5KoO7jKPQ'
+30. loads s -> 'admin été 🚀'
+31. loads s -> 'admin été 🚀'
+== random 18 URLSafeSerializer
+1. dumps s -> 'NjQ._t5xpqn4Wea1o6T_pNWPlw'
+2. loads s -> BadSignature: Signature b'_t5xpqn4WBa1o6T_ANWPlw' does not match payload=b'NjQ'
+3. loads s -> 64
+4. dumps s -> 'NDQwNDY1ODUxODcw.msHaZ07cmqcCPWyFqC2psA'
+5. loads_unsafe s -> (False, 440465851870)
+6. loads_unsafe s -> (False, 440465851870)
+7. loads s -> 440465851870
+8. dumps s -> '.eJxVUl1qg0AQvorM8wrruO6PVzGhbKMEqfVBk_4gQm9RKIU-9SHQW-Quee4Ruju7mhRFVuf7mxknaOpx3wwjlNPM4os7w84OB4RSocgEKim0lgye2ubZl-Fls3lN-m7Th8dD0wODru2PYxSy9WPboxcKkndtDWVhGNzbwd3WKWdCSYO5RswZ2UGZKQb7we4aVzZRxAlKF0KKQhsjTAS4r4Ezr5LODWOVjG3tXOB8OpxPSYDOsUxhiB6Tk5HnRCmvHnpNiBBhIeS05uqPXXfN4xPTCBz59-vjLYnTomlY8qwKI7nhkqtMKubp2yt_dSdo0Ha-uJxjyBQ1dypC5go1ux1vgFEERyr4si8qplKgFJwLd2k_iXWXQYEWCeTooyy7vO0kCQlYnGwUuK6pSvPCaKE5GqGLLeHG1QCWbqrUL14JzLTMc0Il9D9Fl8v79-XzB7bzv-amef4DqDfaBw.Rs5SoVBPmIhCQHHURfKKVA'
+9. loads_unsafe s -> (False, None)
+10. loads_unsafe s -> (False, None)
+11. dumps s -> '.eJxNUEtugzAQvQqa9SD5CzZXIahyghWhUhYE2gXiHN1020Wk3iJ3yTk6toFW8mL83ps3b6YG1zrABfpumG9QwdCfBsCA0m-B6-guHirDMJVBEum3bhBQDXPfI7x3_sOPL11L5OM-Pe6wrmSZYOqYxtnvKpK8-v8TLm6cUmsSZL69XUmHQRfGPT-_n18_WdBlW72FJEHstHxFOLuRnotAzgVTXFlupCCuXnb2iBzcyNyU-Bcz17Kw3FpWFoa6iKtzzWRRSsuE1nSCdKSYPYvnyCZ3Pk1wTN_CZ_GonKFgDdawgalj2zJtsnnF3UJxoAEB1KLB3AgmbalpFcUwl4UySihuhGpwd45Hj0ObXz-jmcw.PDVqTcotgjj_4H23bjXHmQ'
+12. loads_unsafe s -> (True, ['ada', {'linus': 'nl\n', 'adas': {'grace': 80, 'graces': '', 'admin2': None, 'viewer_id': 'été'}}, {'viewers': True, 'viewer': 'ken', 'adas': {'cart_id': 'viewer edsger', 'kens': '日本 cart 日本 nl\n', 'ken_id': 91}, 'barbara_id': -120414918321}, [{'barbara2': None, 'carts': 87, 'viewers': -536919907681}, 87, [-503673902550, 'linus', 'ada grace tab\t', 'barbara edsger ada', 10, 20], ['edsger grace viewer 日本', 'ada cart ada 日本', 'cart', 52], -820397583240, -36484241824], 'edsger été ada'])
+13. loads s -> BadSignature: Signature b'' does not match payload=b'.eJxAUEtugzAQvQqa9SD5CzZXIahyghWhUhYE2gXiHN1020Wk3iJ3yTk6toFW8mL83ps3b6YG1zrABfpumG9QwdCfBsCA0m-B6-guHirDMJVBEum3bhBQDXPfI7x3_sOPL11L5OM-Pe6wrmSZYOqYxtnvKpK8-v8TLm6cUmsSZL69XUmHQRfGPT-_n18_WdBlW72FJEHstHxFOLuRnotAzgVTXFlupCCuXnb2iBzcyNyU-Bcz17Kw3FpWFoa6iKtzzWRRSsuE1nSCdKSYPYvnyCZ3Pk1wTN_CZ_GonKFgDdawgalj2zJtsnnF3UJxoAEB1KLB3AgmbalpFcUwl4UySihuhGpwd45Hj0ObXz-jmcw.PDVqTcotgjj_4H23bjXHmQ'
+14. loads_unsafe s -> (True, ['ada', {'linus': 'nl\n', 'adas': {'grace': 80, 'graces': '', 'admin2': None, 'viewer_id': 'été'}}, {'viewers': True, 'viewer': 'ken', 'adas': {'cart_id': 'viewer edsger', 'kens': '日本 cart 日本 nl\n', 'ken_id': 91}, 'barbara_id': -120414918321}, [{'barbara2': None, 'carts': 87, 'viewers': -536919907681}, 87, [-503673902550, 'linus', 'ada grace tab\t', 'barbara edsger ada', 10, 20], ['edsger grace viewer 日本', 'ada cart ada 日本', 'cart', 52], -820397583240, -36484241824], 'edsger été ada'])
+15. loads_unsafe s -> (False, None)
+16. dumps s -> '.eJxVUE1KxDAUvkp46ye0L6lpe5W2SDqNQ7Fm0Z9RKQVvIYjgysWAt5i7zNojmKSNM0IWycv3vr8ZVKMGyAsABFVCDRVCrXp7FOQz7Hu10-6yze7aBvIbIeM0o0hyzjME3Qx73UOe8gUdHTl8GDrebdfOY_KQx9bYh9djpisNs1sXnLUz9pO2yJ3qRwssCpFyScRjQTJFM3UdUoUFnI7j6ciey_IFgg02qrocmde4DH8-319tsvlP23NcGbtX3aARDq1-8q6dK7vetWYavNVGeZLVrvNlfx-0cQEXDHF9O5TISAhK44QTbvWu1WKoU9Itj0RMJDNxJRp6D7bdopNa07Dz29f545v50P9aTZKlCjRuZ715lxt6-QU7Bp8Y.Uout-Aet4lDy7SOkJXnSiA'
+17. loads_unsafe s -> (True, {'adas': ['', 'a"b'], 'barbara': {'grace': {'barbara_id': -471892073339, 'edsger': 83}, 'ada2': {'edsger': '', 'barbara2': 12}, 'admin2': 'a"b nl\n ada', 'barbaras': True}, 'cart2': [[483722314278, None, 2], ['été x\\y', 'edsger tab\t admin', 'edsger 🚀'], {'admin2': None, 'barbara2': False, 'viewer': 'nl\n', 'linus2': 'ada 🚀 nl\n cart', 'ken': ''}, {'edsger_id': 257044281532, 'adas': 'a"b', 'grace': 726304122794, 'viewer': 'barbara', 'edsgers': 'cart admin 日本 été', 'barbara2': 55}], 'viewers': 'viewer cart été'})
+18. dumps s -> 'ImtlbiDml6XmnKwi.i66r4Go6XMndPGIHjRG8gw'
+19. loads s -> BadSignature: Signature b'i=66r4Go6XMndPGIHjRG8gw' does not match payload=b'ImtlbiDml6XmnKwi'
+20. loads_unsafe s -> (False, 'ken 日本')
+21. loads_unsafe s -> (True, 'ken 日本')
+22. loads s -> 'ken 日本'
+23. dumps s -> 'InRhYlx0IGVkc2dlciDDqXTDqSBhZGEi.3XPL1G4r_B74DdDbctzj2A'
+24. loads_unsafe s -> (True, 'tab\t edsger été ada')
+25. dumps s -> 'LTY5MDk5OTUzMDkwMA.9sZiVVY37PfetokejGXHCA'
+26. loads s -> -690999530900
+27. loads_unsafe s -> (True, -690999530900)
+28. dumps s -> '.eJxVkE0OgjAQha_SzLompS2tcBU0pkpDiMiigD9pOIcbty5MvIV38RwOFiQmXTTzpu99rx5s3hTWcUg97Ixr8QLn1eoCFLbG4THNIJncDMr7en_fnuT1aF8PUpV11-Be4czOomjyQ1mTwWQa4tO6qyo6hkC64FopruJIMM16CsfSnoa5h68Z7i9EpBLNeCyl0PSLhMNIqpgzrbVirO9_aJByJhLBhdTLWM6hmQ8wmzJHrhBOQlagDg0mTGzGJbr-1crW61luXWcp7O3oOH5DKN5_AOrFbMM.TM1w4VTXA3krb7mt4Hq8jQ'
+29. loads_unsafe s -> (False, None)
+== random 19 URLSafeTimedSerializer
+1. dumps s -> '.eJxNUEtqwzAQvYqYtQr6WD9fJQlFidVg6mphJe3CGHqLQil01UWgt8hdsu4ROpZstyA0I82bN2_eAMfeH8J920A9QGjSMfQC6k35JuXu2nhO5Ho5XS9ABePMKO2UVIo6azhjXGru9I7CY4iZaQO-eWojUOcQwqTShleC891I4bkNL3nGAAffn_Kwve_xeECKJa2RwpMiiNzevm4f3_ML6FQSZYonP5_vr2TpoqjpTmrLhRRKW2MoIHzizYIS1IblduyWuIOunK1s5aiWmDLDMDo6Lx-7bSQTlmali4oS_tOiFuG0YlpprpRdl0h_nmZbYLawCIjnrluhpQ7ZQkyKAMyJ38Ie5jkFsRr44LsUxnH8BaKYj0M~ZVsbzg~X1ByBcwEwerbdbDRpX2fmAjI150'
+2. loads s -> BadSignature: Signature b'eJxNUEtqwzAQvYqYtQr6WD9fJQlFidVg6mphJe3CGHqLQAl01UWgt8hdsu4ROpZstyA0I82bN2_eAMfeH8J920A9QGjSMfQC6k35JuXu2nhO5Ho5XS9ABePMKO2UVIo6azhjXGru9I7CY4iZaQO-eWojUOcQwqTShleC891I4bkNL3nGAAffn_Kwve_xeECKJa2RwpMiiNzevm4f3_ML6FQSZYonP5_vr2TpoqjpTmrLhRRKW2MoIHzizYIS1IblduyWuIOunK1s5aiWmDLDMDo6Lx-7bSQTlmali4oS_tOiFuG0YlpprpRdl0h_nmZbYLawCIjnrluhpQ7ZQkyKAMyJ38Ie5jkFsRr44LsUxnH8BaKYj0M~ZVsbzg~X1ByBcwEwerbdbDRpX2fmAjI150x' does not match payload=b''
+3. loads s -> BadSignature: Signature b'eJxNUEtqwzAQvYqYtQr6WD9fJQlFidVg6mphJe3CGHqLQil01UWgt8hdsu4ROpZstyA0I82bN2+eAMfeH8J920A9QGjSMfQC6k35JuXu2nhO5Ho5XS9ABePMKO2UVIo6azhjXGru9I7CY4iZaQO-eWojUOcQwqTShleC891I4bkNL3nGAAffn_Kwve_xeECKJa2RwpMiiNzevm4f3_ML6FQSZYonP5_vr2TpoqjpTmrLhRRKW2MoIHzizYIS1IblduyWuIOunK1s5aiWmDLDMDo6Lx-7bSQTlmali4oS_tOiFuG0YlpprpRdl0h_nmZbYLawCIjnrluhpQ7ZQkyKAMyJ38Ie5jkFsRr44LsUxnH8BaKYj0M~ZVsbzg~X1ByBcwEwerbdbDRpX2fmAjI150' does not match payload=b''
+4. loads s -> BadSignature: Signature b'eJxNUEtqwzAQvYqYtQr6WD9fJQlFidAg6mphJe3CGHqLQil01UWgt8hdsu4ROpZstyA0I82bN2_eAMfeH8J920A9QGjSMfQC6k35JuXu2nhO5Ho5XS9ABePMKO2UVIo6azhjXGru9I7CY4iZaQO-eWojUOcQwqTShleC891I4bkNL3nGAAffn_Kwve_xeECKJa2RwpMiiNzevm4f3_ML6FQSZYonP5_vr2TpoqjpTmrLhRRKW2MoIHzizYIS1IblduyWuIOunK1s5aiWmDLDMDo6Lx-7bSQTlmali4oS_tOiFuG0YlpprpRdl0h_nmZbYLawCIjnrluhpQ7ZQkyKAMyJ38Ie5jkFsRr44LsUxnH8BaKYj0M~ZVsbzg~X1ByBcwEwerbdbDRpX2fmAjI150A' does not match payload=b''
+5. loads s -> {'grace_id': {'edsger2': ['grace grace linus été', 201075695355, 987100136196], 'ken_id': ['admin', 99, 980356714211]}, 'viewer2': {'cart2': ['barbara'], 'barbara': 'ada edsger 日本 edsger', 'ada2': ['ada 🚀 barbara', 55, -368123256877, '', ''], 'admins': 70, 'ada': [369564984849, 636490706369, 'grace nl\n ada', 'cart 日本 日本', ''], 'admin2': 296506561558, 'barbaras': {'edsger_id': 'été', 'ada': None, 'barbara_id': '', 'ken': 'grace ken a"b', 'admin': '', 'viewer2': False}}}
+6. dumps s -> '.eJxNUEFqwzAQ_IrYswKyZVm2v2KLosRqMHV9kO20xQj6i0Ip9NRDoL_IX3LuE7qSHBPQYXe0MzuzC-j2uRtSqBY4Wn0wD10LVZnRiIducRT22uLTI1SPuh8Nhb4b5hHbOmWcc5lJwQtOw6fC-YO2E4rWUQboZGckvTbNGwkIeTKI1hG5fvxcv36J5wAd5r5XikY3XkKtXrzFVXaXc86KMhEsxaVw6syLsTgauBRMOx6NDZliiT53pZRSJGWCDBb9eZSXaZokLC8y6ddoqG5RiW5gD87dydUhxbJlF2Kztnogf9-f72seuBkLR8zZ_UljSVbS5TxdzsRv3w5XCKfcP25siH8~ZVsbzg~e5qkJ9AJzSCULMj_Y6f15UGfb8c'
+7. loads_unsafe s -> (True, {'admin2': {'grace_id': 94, 'admin_id': {}, 'barbaras': False, 'linuss': [203337475383, False]}, 'cart2': ['admin', True, 'x\\y admin ken', ['x\\y 日本 cart', None]], 'grace2': [], 'admin': {'cart2': -633089150283, 'viewer': [None], 'edsger2': {'edsgers': -977751912830, 'carts': -39221106847, 'ada': 'barbara a"b'}}, 'edsger2': [True, {'linuss': 55, 'admin': 'viewer 🚀 日本', 'viewer_id': 60, 'admin_id': 'admin viewer été ada', 'cart2': 85}]})
+8. loads s -> SignatureExpired: Signature age 31 > 30 seconds payload=b'.eJxNUEFqwzAQ_IrYswKyZVm2v2KLosRqMHV9kO20xQj6i0Ip9NRDoL_IX3LuE7qSHBPQYXe0MzuzC-j2uRtSqBY4Wn0wD10LVZnRiIducRT22uLTI1SPuh8Nhb4b5hHbOmWcc5lJwQtOw6fC-YO2E4rWUQboZGckvTbNGwkIeTKI1hG5fvxcv36J5wAd5r5XikY3XkKtXrzFVXaXc86KMhEsxaVw6syLsTgauBRMOx6NDZliiT53pZRSJGWCDBb9eZSXaZokLC8y6ddoqG5RiW5gD87dydUhxbJlF2Kztnogf9-f72seuBkLR8zZ_UljSVbS5TxdzsRv3w5XCKfcP25siH8' date=2023-11-20 08:41:50+00:00
+9. loads_unsafe s -> (False, None)
+10. dumps s -> '.eJxFT0sOgjAQvUrz1l1QEEGuUhpToCGNyqIUPyGcw41bd56LczgUP8ls5s37jZQSB9MxXaIC924wHNeyvLGzNRfjmG5OtgNHpR2NZkfbDX1gM6-r0kMpLjMRR5GgyZM0eCgO8BGt07XpUYxLRIyCQJimb43b2wbFmlZr5-k035_z40WENZhUq5wa6E-Z3zGoF89_MXIX2Wa7S6I0ywVH6LmYhGfChumbTrhUk3oDjTBSXw~ZVsbzg~elpjoQltyD573bt2Ltrxhrfto04'
+11. loads s -> BadTimeSignature: Signature b'x' does not match payload=b'' date=None
+12. loads s -> BadSignature: Signature b'eJxFT0sOgjAQvUrz1l1QEEGuUhpToCGNyqIUPyGcw41bd56LczgUP8ls5s37jZQSB9MxXaIC924wHNeyvLGzNRfjmG5OtgNHpR2NZkfbDX1gM6-r0kMpLjMRR5GgyZM0eCgO8BGt07XpUYxLRIyCQJimb43b2wbFmlZr5-k035_z40WENZhUq5wa6E-Z3zGoF89_MXIX2Wa7S6I0ywVH6LmYhGfChumbTrhUk3oDjTBSXwAZVsbzg~elpjoQltyD573bt2Ltrxh' does not match payload=b''
+13. loads s -> SignatureExpired: Signature age 31 > 0 seconds payload=b'.eJxFT0sOgjAQvUrz1l1QEEGuUhpToCGNyqIUPyGcw41bd56LczgUP8ls5s37jZQSB9MxXaIC924wHNeyvLGzNRfjmG5OtgNHpR2NZkfbDX1gM6-r0kMpLjMRR5GgyZM0eCgO8BGt07XpUYxLRIyCQJimb43b2wbFmlZr5-k035_z40WENZhUq5wa6E-Z3zGoF89_MXIX2Wa7S6I0ywVH6LmYhGfChumbTrhUk3oDjTBSXw' date=2023-11-20 08:41:50+00:00
+14. loads_unsafe s -> (True, [[['ken a"b', True, 'x\\y viewer admin', 'barbara linus a"b tab\t']], [712001001835, True], '', {'graces': {'ken2': '', 'edsger_id': True, 'cart': '日本', 'viewers': 'grace ada viewer', 'viewer_id': 'ken', 'barbara2': 17469305781, 'linuss': 'x\\y linus'}, 'edsgers': []}])
+15. dumps s -> '.eJw1j00KwjAQha8S3jqrgptepRGZtmMpahdp8YdQ8BaCCK7cea6uPYKTSQrDg8xk3vcmgFoaUVZoyE8mCmyQ5qkfCpTAbPF7P--m89SwuTp3U8HWgtuxY7_rW5QB554v7MVIBrqd-zV5KYpeE9VuMknTrtGfkXHgQVMsj8_y-moOky0tFGjXmQSWR6o1SqYos9oUawaBJlBE6AUC2dNx5PkPQqRWmw~ZVsbzg~5gqx0TVatzeKh-NSdYAB0jBDWi4'
+16. loads s -> {'adas': ['cart cart', {'admin2': ''}, '🚀 grace x\\y x\\y'], 'edsger_id': {'viewer': [], 'admin_id': {'barbara2': 'tab\t tab\t edsger admin'}, 'kens': ['日本 cart viewer', 'x\\y', '日本 ada', '', '', 'x\\y'], 'barbara_id': [52], 'admin': 'edsger'}, 'graces': False}
+17. loads s -> BadSignature: Signature b'eJw1j00KwjAQha8S3jqrgptepRGZtmMpahdp8YdQ8BaCCK7cea6uPYKTSQrDg8xk3vcmgFoaUVZoyE8mCmyQ5qkfCpTAbPF7P--m89SwuTp3U8HWgtuxY7_rW5QB554v7MVIBrqd-zV5KYpeE9VuMknTrtGfkXHgQVMsj8_y-moOky0tFGjXmQSWR6o1SqYos9oUawaBJlBE6AUC2dNx5PkPQqRWmw~ZVsbzg~5gqx0TVatzeKh-NSdYAA0jBDWi4=' does not match payload=b''
+18. loads s -> BadSignature: Signature b'eJw1j00KwjAQhA8S3jqrgptepRGZtmMpahdp8YdA8BaCCK7cea6uPYKTSQrDg8xk3vcmgFoaUVZoyE8mCmyQ5qkfCpTAbPF7P--m89SwuTp3U8HWgtuxY7_rW5QB554v7MVIBrqd-zV5KYpeE9VuMknTrtGfkXHgQVMsj8_y-moOky0tFGjXmQSWR6o1SqYos9oUawaBJlBE6AUC2dNx5PkPQqRWmw~ZVsbzg~5gqx0TVatzeKh-NSdYAB0jBDWi4' does not match payload=b''
+19. dumps s -> '.eJxNT1sKwyAQvIrsdwpqNWrOIhTTSJCmfpg-CYGeoz-9Yo9QHwkpyOLOzs7OTNAHc7QjNBO0JsRnDq6DhqiqTHIHpjs7jx5aP5Htxt4GqODm7N0GCg1XXGEpa6IEqf708o-mbQ0tuphWX9ByY1NZgETLfFTqyXqU1iIj346C4Aft0VYG56_jOs82a0aw4pgQwXjCS5Qdo7LmFKuaCL7aLrG-n_cL5gqKm-hBUhZTiD0XmEc8ushEyuYf9Fdcbw~ZVsbzg~3Q_ulRiQZ8n7zgx7N4b-ojvjh-E'
+20. loads_unsafe s -> (True, {'graces': {'barbara_id': 19, 'grace_id': 'admin x\\y edsger', 'viewer2': 595908861971, 'graces': {'grace2': 'a"b tab\t barbara edsger', 'barbara2': 'grace grace ken a"b', 'admins': 'nl\n nl\n nl\n linus', 'admin_id': 641095011745, 'ada_id': -428652096175, 'viewer_id': '🚀'}, 'edsger2': 824197735705}, 'ken_id': 24})
+21. loads_unsafe s -> (True, {'graces': {'barbara_id': 19, 'grace_id': 'admin x\\y edsger', 'viewer2': 595908861971, 'graces': {'grace2': 'a"b tab\t barbara edsger', 'barbara2': 'grace grace ken a"b', 'admins': 'nl\n nl\n nl\n linus', 'admin_id': 641095011745, 'ada_id': -428652096175, 'viewer_id': '🚀'}, 'edsger2': 824197735705}, 'ken_id': 24})
+22. loads_unsafe s -> (True, {'graces': {'barbara_id': 19, 'grace_id': 'admin x\\y edsger', 'viewer2': 595908861971, 'graces': {'grace2': 'a"b tab\t barbara edsger', 'barbara2': 'grace grace ken a"b', 'admins': 'nl\n nl\n nl\n linus', 'admin_id': 641095011745, 'ada_id': -428652096175, 'viewer_id': '🚀'}, 'edsger2': 824197735705}, 'ken_id': 24})
+23. dumps s -> '.eJw9jkEKAjEMRa9Ssu5CK9LBq8wUSW0YirWLTsdZiOA53Liec8yFPIJpC0IISf77Sfr-AWPCC01wApBwpdgKi4kDFXffz_slcAAryE0jJYHu5iMz1Xj2jpnik3D3tFAqHnTYMNEUzjzOaaan7Kua0Q5ZxDBEBpGREobF4OM8iW3N2_q_VJcctVSqO6hOaa13eyOhPlVXVCDOIUjVGfMD1NBDkQ~ZVsbzg~DOf0zYusKI59FWUk5GTfCBLKj-M'
+24. loads_unsafe s -> (True, [[{'graces': '', 'ken': '', 'barbara2': '🚀 a"b edsger admin', 'grace_id': 'ken', 'viewer2': 'ada admin ken', 'ken2': True}, ['ada tab\t nl\n ada', '', ''], ['linus été admin', 'ken', 57, 228328277701], 'a"b nl\n ken', None, 28]])
+25. loads_unsafe s -> (True, [[{'graces': '', 'ken': '', 'barbara2': '🚀 a"b edsger admin', 'grace_id': 'ken', 'viewer2': 'ada admin ken', 'ken2': True}, ['ada tab\t nl\n ada', '', ''], ['linus été admin', 'ken', 57, 228328277701], 'a"b nl\n ken', None, 28]])
+26. dumps s -> '.eJxNUUFugzAQ_Iq1Z0cyNgbMVwiq3OBGqJSDgbQVQso7euk578iH-oTuGocg-zBez8yO1zO4Zjg7_9I2UM77Q2X4IZVFnuZGJkLw0U-OZ7rm0LX9NAxQvtlucAuHs7cnByV8HY_fzDaWEQAOl9Z9Ok-2QUHg1XrcNjRItcGVZNpk6kFGEpysH1kksr_fnytavbteQmmEEbooMFDKY1TkRypgEtt8tH1oRCaoANQSJN8oWJ7BKrqG-lGQJNwgEJO0VA3GUKpkLYX8WLRbNHLCMyKllh2JWuSax2sWRhVmtDpyaXRmCpWkRsh6eb6qmrfHrCH4_m_6qev2SShqmHEYPbvfxvsN6uUfL7-VXQ~ZVsbzg~y4nen2lHMKJBE_SF5RRWMHWvCgY'
+27. loads s -> BadSignature: Signature b'eJxNUUFugzAQ_Iq1Z0cyNgbMVwiq3OBGqAJSDgbQVQso7euk578iH-oTuGocg-zBez8yO1zO4Zjg7_9I2UM77Q2X4IZVFnuZGJkLw0U-OZ7rm0LX9NAxQvtlucAuHs7cnByV8HY_fzDaWEQAOl9Z9Ok-2QUHg1XrcNjRItcGVZNpk6kFGEpysH1kksr_fnytavbteQmmEEbooMFDKY1TkRypgEtt8tH1oRCaoANQSJN8oWJ7BKrqG-lGQJNwgEJO0VA3GUKpkLYX8WLRbNHLCMyKllh2JWuSax2sWRhVmtDpyaXRmCpWkRsh6eb6qmrfHrCH4_m_6qev2SShqmHEYPbvfxvsN6uUfL7-VXQ~ZVsbzg~y4nen2lHMKJBE_SF5RRWMHW' does not match payload=b''
+28. loads s -> BadSignature: Signature b'eJxNUUFugAAQ_Iq1Z0cyNgbMVwiq3OBGqJSDgbQVQso7euk578AH-oTuGocg-zBez8yO1zO4Zjg7_9I2UM77Q2X4IZVFnuZGJkLw0U-OZ7rm0LX9NAxQvtlucAuHs7cnByV8HY_fzDaWEQAOl9Z9Ok-2QUHg1XrcNjRItcGVZNpk6kFGEpysH1kksr_fnytavbteQmmEEbooMFDKY1TkRypgEtt8tH1oRCaoANQSJN8oWJ7BKrqG-lGQJNwgEJO0VA3GUKpkLYX8WLRbNHLCMyKllh2JWuSax2sWRhVmtDpyaXRmCpWkRsh6eb6qmrfHrCH4_m_6qev2SShqmHEYPbvfxvsN6uUfL7-VXQ~ZVsbzg~y4nen2lHMKJBE_SF5RRWMHWvCgY' does not match payload=b''
+29. loads_unsafe s -> (True, {'edsger_id': {'edsger_id': [9, -42874792100, True, 65], 'linuss': False}, 'grace': 'x\\y ada x\\y', 'viewer': {'linus': {'barbara_id': 459595165963, 'viewers': 'cart barbara 🚀', 'ken2': 90905887924, 'edsger': 'barbara'}, 'admins': {'cart2': '', 'carts': 'edsger'}, 'viewer': ['', ''], 'viewer2': {'viewer2': ''}, 'cart': {'admin': 31, 'cart_id': 'ada', 'ken2': '', 'ada2': 33}, 'cart_id': ['', 75, '', 'ada grace ada admin', 295698314902]}, 'edsger': [{'admins': 'cart', 'edsger_id': None, 'cart_id': ''}, 'linus x\\y été']})
+30. dumps s -> 'Mzg~ZVsbzg~Bv7Y7c1fEOl4bxxFWtNv4chTlmc'
+31. loads s -> SignatureExpired: Signature age 700 > 30 seconds payload=b'Mzg' date=2023-11-20 08:41:50+00:00
+32. loads_unsafe s -> (False, 38)
+33. loads s -> BadSignature: No b'.' found in value payload=None
+== random 20 Serializer
+1. dumps s -> '[[575085419900, 17, {"linus2": 60, "admins": "\\ud83d\\ude80 barbara tab\\t", "grace_id": -835229957475, "ada_id": "ada", "grace2": 25, "ken2": "ken cart grace barbara"}]].UL-eayVwfHZMw4Vc_B5iT38Z5Pw'
+2. loads s -> [[575085419900, 17, {'linus2': 60, 'admins': '🚀 barbara tab\t', 'grace_id': -835229957475, 'ada_id': 'ada', 'grace2': 25, 'ken2': 'ken cart grace barbara'}]]
+3. loads_unsafe s -> (True, [[575085419900, 17, {'linus2': 60, 'admins': '🚀 barbara tab\t', 'grace_id': -835229957475, 'ada_id': 'ada', 'grace2': 25, 'ken2': 'ken cart grace barbara'}]])
+4. loads_unsafe s -> (True, [[575085419900, 17, {'linus2': 60, 'admins': '🚀 barbara tab\t', 'grace_id': -835229957475, 'ada_id': 'ada', 'grace2': 25, 'ken2': 'ken cart grace barbara'}]])
+5. loads s -> BadSignature: Signature b'UL-eayVwfHZMw4Vc_B5iT3' does not match payload=b'[[575085419900, 17, {"linus2": 60, "admins": "\\ud83d\\ude80 barbara tab\\t", "grace_id": -835229957475, "ada_id": "ada", "grace2": 25, "ken2": "ken cart grace barbara"}]]'
+6. dumps s -> '[[], false].ZRnYd-HAck1QUC3D2-n0Lm_bDAo'
+7. loads_unsafe s -> (False, None)
+8. loads_unsafe s -> (False, [[], False])
+9. loads_unsafe s -> (False, None)
+10. loads s -> BadSignature: No b'.' found in value payload=None
+11. dumps s -> '[{"viewer2": {"viewer2": "", "edsgers": 48}, "admin2": [""], "linuss": ["", 98, 462817111429], "grace_id": {"ken_id": "\\ud83d\\ude80", "grace_id": "viewer grace", "barbara": 217553746727, "ada": "", "admin": ""}, "edsger_id": []}, [], {"barbara": 91, "edsger": [17, "\\ud83d\\ude80 admin", -774300712605, 92, -747226134986, 14], "ada": [], "viewer2": [], "ken2": {"graces": 5}, "edsger2": ""}, [[], {"linuss": null, "ken2": "admin x\\\\y", "cart2": "viewer nl\\n viewer edsger"}, {"cart2": 768356429912, "edsgers": 391499658690, "admin": -331878769465, "barbara_id": "cart \\ud83d\\ude80 linus ada"}, [true, "\\ud83d\\ude80 barbara grace tab\\t", "\\ud83d\\ude80 \\ud83d\\ude80", "\\u65e5\\u672c viewer", "cart admin cart cart", ""], ["x\\\\y \\u00e9t\\u00e9 cart cart", 17, ""], [-218856424961, "\\u65e5\\u672c \\u00e9t\\u00e9"]], ["barbara tab\\t", "grace \\u65e5\\u672c", ["grace cart \\u00e9t\\u00e9 linus", "x\\\\y viewer barbara", "nl\\n x\\\\y"], [true, -935344141245, "\\ud83d\\ude80 edsger tab\\t \\u65e5\\u672c", true, "grace"]]].J_DdT8yysjkBe-JYmk602uFlJVM'
+12. loads s -> BadSignature: Signature b'J_DdT8yysjkBe-JYmk602uFlJVMA' does not match payload=b'[{"viewer2": {"viewer2": "", "edsgers": 48}, "admin2": [""], "linuss": ["", 98, 462817111429], "grace_id": {"ken_id": "\\ud83d\\ude80", "grace_id": "viewer grace", "barbara": 217553746727, "ada": "", "admin": ""}, "edsger_id": []}, [], {"barbara": 91, "edsger": [17, "\\ud83d\\ude80 admin", -774300712605, 92, -747226134986, 14], "ada": [], "viewer2": [], "ken2": {"graces": 5}, "edsger2": ""}, [[], {"linuss": null, "ken2": "admin x\\\\y", "cart2": "viewer nl\\n viewer edsger"}, {"cart2": 768356429912, "edsgers": 391499658690, "admin": -331878769465, "barbara_id": "cart \\ud83d\\ude80 linus ada"}, [true, "\\ud83d\\ude80 barbara grace tab\\t", "\\ud83d\\ude80 \\ud83d\\ude80", "\\u65e5\\u672c viewer", "cart admin cart cart", ""], ["x\\\\y \\u00e9t\\u00e9 cart cart", 17, ""], [-218856424961, "\\u65e5\\u672c \\u00e9t\\u00e9"]], ["barbara tab\\t", "grace \\u65e5\\u672c", ["grace cart \\u00e9t\\u00e9 linus", "x\\\\y viewer barbara", "nl\\n x\\\\y"], [true, -935344141245, "\\ud83d\\ude80 edsger tab\\t \\u65e5\\u672c", true, "grace"]]]'
+13. loads_unsafe s -> (False, None)
+14. dumps s -> 'null.DWEh2ph3Ttwu9GWCtUUiD4zxyQ4'
+15. loads s -> None
+16. loads_unsafe s -> (True, None)
+17. loads s -> BadSignature: Signature b'DWEh2ph3Ttwu9GWCtUUiD4zxyQ4_-' does not match payload=b'null'
+18. loads s -> BadSignature: No b'.' found in value payload=None
+19. dumps s -> '"ada barbara".l48utYW2UjYLKW_KKgfE9LcPGRA'
+20. loads s -> BadSignature: Signature b'l48utYW2UjYLKW_KKgfE9LAPGRA' does not match payload=b'"ada barbara"'
+21. loads_unsafe s -> (True, 'ada barbara')
+22. loads_unsafe s -> (True, 'ada barbara')
+23. loads_unsafe s -> (True, 'ada barbara')
+24. dumps s -> '{"admin": "ken"}.zhj2PUYnG9pdNAL2KdhKSSQ3UPQ'
+25. loads s -> {'admin': 'ken'}
+26. loads s -> BadSignature: Signature b'zhj2PUYnG9pdNAL2KdhKSSQ3UPQ' does not match payload=b'A"admin": "ken"}'
+27. loads_unsafe s -> (False, {'admin': 'ken'})
+28. dumps s -> '["linus grace tab\\t a\\"b", "admin a\\"b ada", "", "admin edsger a\\"b", "", "barbara"].TdmkcSdrxtX69y_M2HQEiy0oEYk'
+29. loads_unsafe s -> (False, ['linus grace tab\t a"b', 'admin a"b ada', '', 'admin edsger a"b', '', 'barbara'])
+30. dumps s -> '-163666714134.Q8-hdfcAXWMhdfqy42LiBogtjMU'
+31. loads s -> -163666714134
+32. loads s -> BadSignature: Signature b'Q8-hdfcXWMhdfqy42LiBogtjMU' does not match payload=b'-163666714134'
+33. loads_unsafe s -> (True, -163666714134)
+34. loads_unsafe s -> (False, -163666714134)
+== random 21 TimedSerializer
+1. dumps s -> '{"cart": {"linus2": [66, 59, ""], "grace": {"linus2": 807973756093, "ada_id": 55593703068, "linus": "", "linus_id": true, "adas": "edsger"}, "ada_id": {"admin_id": 98, "admins": false}, "admins": ["admin", -831433357495, "nl\\n grace", -310361739832]}, "admins": {"cart": {"ada_id": 65, "viewer2": false, "grace_id": 72, "ken_id": true, "edsgers": -335402318882}, "linus_id": false}, "admin2": 58}.ZV1bQg.dkvmm1X3PXqpy6kXPcYFKDUk7etbb6g2QUCHGAbtxao'
+2. loads_unsafe s -> (True, {'cart': {'linus2': [66, 59, ''], 'grace': {'linus2': 807973756093, 'ada_id': 55593703068, 'linus': '', 'linus_id': True, 'adas': 'edsger'}, 'ada_id': {'admin_id': 98, 'admins': False}, 'admins': ['admin', -831433357495, 'nl\n grace', -310361739832]}, 'admins': {'cart': {'ada_id': 65, 'viewer2': False, 'grace_id': 72, 'ken_id': True, 'edsgers': -335402318882}, 'linus_id': False}, 'admin2': 58})
+3. loads_unsafe s -> (False, {'cart': {'linus2': [66, 59, ''], 'grace': {'linus2': 807973756093, 'ada_id': 55593703068, 'linus': '', 'linus_id': True, 'adas': 'edsger'}, 'ada_id': {'admin_id': 98, 'admins': False}, 'admins': ['admin', -831433357495, 'nl\n grace', -310361739832]}, 'admins': {'cart': {'ada_id': 65, 'viewer2': False, 'grace_id': 72, 'ken_id': True, 'edsgers': -335402318882}, 'linus_id': False}, 'admin2': 58})
+4. dumps s -> '["tab\\t a\\"b cart", [{"adas": "", "barbaras": false, "graces": ""}, ["", null, 25, -883482973685]], 832591119515, [["", "\\u00e9t\\u00e9 edsger \\u65e5\\u672c \\ud83d\\ude80", "cart ada", 40, "admin", null]], [[], -524147833885]].ZV1bQg.yQr-e-vHJw_9e-Eomw8NFNI5n3-USocZawcj0UmxpzU'
+5. loads s -> BadTimeSignature: Signature b'yQr-e-vHJw_9e-Eomw8NFNI5n3-USocZawcj0UmxpzU' does not match payload=b'["tab\\t a\\"b cart", [{"adas": "", "barbar-as": false, "graces": ""}, ["", null, 25, -883482973685]], 832591119515, [["", "\\u00e9t\\u00e9 edsger \\u65e5\\u672c \\ud83d\\ude80", "cart ada", 40, "admin", null]], [[], -524147833885]]' date=2023-11-22 01:37:06+00:00
+6. loads s -> ['tab\t a"b cart', [{'adas': '', 'barbaras': False, 'graces': ''}, ['', None, 25, -883482973685]], 832591119515, [['', 'été edsger 日本 🚀', 'cart ada', 40, 'admin', None]], [[], -524147833885]]
+7. loads s -> SignatureExpired: Signature age -5 < 0 seconds payload=b'["tab\\t a\\"b cart", [{"adas": "", "barbaras": false, "graces": ""}, ["", null, 25, -883482973685]], 832591119515, [["", "\\u00e9t\\u00e9 edsger \\u65e5\\u672c \\ud83d\\ude80", "cart ada", 40, "admin", null]], [[], -524147833885]]' date=2023-11-22 01:37:06+00:00
+8. loads s -> BadTimeSignature: Signature b'yQr-e-vHJw_9e-Eomw8NFNI5n3-USocZawcj0UmxpzU\xc3\xa9' does not match payload=b'["tab\\t a\\"b cart", [{"adas": "", "bar=baras": false, "graces": ""}, ["", null, 25, -883482973685]], 832591119515, [["", "\\u00e9t\\u00e9 edsger \\u65e5\\u672c \\ud83d\\ude80", "cart ada", 40, "admin", null]], [[], -524147833885]]' date=2023-11-22 01:37:06+00:00
+9. dumps s -> '[].ZV1bQg.AYKTEVHV3SEmIrWAkhcy9vHRfVdsHNhMaqID_FpmJNI'
+10. loads s -> BadSignature: Signature b'AYKTEVHV3SEmIrWAkhcy9vHRfVdsHNhMaqID_FpmJNI' does not match payload=b'[]/ZV1bQg'
+11. dumps s -> '[[[1, 76], {"edsger2": "barbara barbara", "cart": "ken linus x\\\\y"}, [], ["x\\\\y", 54, 83], ["a\\"b linus", 8, true], 57]].ZV1bQg.RbLpj5RfyuNHJGvz49gtkCkeRbl-JQx0TySOpRkYQFc'
+12. loads s -> [[[1, 76], {'edsger2': 'barbara barbara', 'cart': 'ken linus x\\y'}, [], ['x\\y', 54, 83], ['a"b linus', 8, True], 57]]
+13. loads s -> [[[1, 76], {'edsger2': 'barbara barbara', 'cart': 'ken linus x\\y'}, [], ['x\\y', 54, 83], ['a"b linus', 8, True], 57]]
+14. loads s -> BadTimeSignature: Signature b'x0TySOpRkYQFc' does not match payload=b'[[[1, 76], {"edsger2": "barbara barbara", "cart": "ken linus x\\\\y"}, [], ["x\\\\y", 54, 83], ["a\\"b linus", 8, true], 57]].ZV1bQg' date=None
+15. loads_unsafe s -> (False, [[[1, 76], {'edsger2': 'barAara barbara', 'cart': 'ken linus x\\y'}, [], ['x\\y', 54, 83], ['a"b linus', 8, True], 57]])
+16. dumps s -> '"".ZV1bQg.6JXa7hwOCkednaqIVibCbqFvN5q6AelDBN0Xa_JEySs'
+17. loads s -> BadTimeSignature: Signature b'6JXa7hwOCkednaqIVibCbqFvN5q6AelDBN0Xa_JAySs' does not match payload=b'""' date=2023-11-22 01:37:06+00:00
+18. dumps s -> '502020793370.ZV1bQg.PjG4euTfvrclbLiZrdZK5DoWs4zyz2ydpuaS0YkSaD8'
+19. loads_unsafe s -> (True, 502020793370)
+20. dumps s -> '[[{"kens": "", "barbaras": "\\u00e9t\\u00e9 x\\\\y viewer", "cart2": "tab\\t linus ada", "linus_id": "ada edsger", "edsger_id": false, "barbara_id": "viewer \\u00e9t\\u00e9 ada"}, [61, "viewer cart", "cart grace ken", "\\u00e9t\\u00e9 viewer ken", "ken grace a\\"b"], true, true, {"barbaras": "\\ud83d\\ude80", "barbara": null, "viewer_id": "tab\\t ken", "grace_id": false, "ada_id": "\\u00e9t\\u00e9 cart ken cart", "linus": null, "carts": "admin"}], [{"admin_id": null}, [-177110971519, 169191404858]], [[35], [""]], {"ada": {"linus_id": "viewer \\u00e9t\\u00e9 linus"}}, "grace", [-376198980351, ["", "a\\"b", -403438795457, false]]].ZV1bQg.dhr_44vtUNCXJmqlVGkeM4P_e82ERnglEzrB3WWWz4I'
+21. loads s -> SignatureExpired: Signature age 30 > 0 seconds payload=b'[[{"kens": "", "barbaras": "\\u00e9t\\u00e9 x\\\\y viewer", "cart2": "tab\\t linus ada", "linus_id": "ada edsger", "edsger_id": false, "barbara_id": "viewer \\u00e9t\\u00e9 ada"}, [61, "viewer cart", "cart grace ken", "\\u00e9t\\u00e9 viewer ken", "ken grace a\\"b"], true, true, {"barbaras": "\\ud83d\\ude80", "barbara": null, "viewer_id": "tab\\t ken", "grace_id": false, "ada_id": "\\u00e9t\\u00e9 cart ken cart", "linus": null, "carts": "admin"}], [{"admin_id": null}, [-177110971519, 169191404858]], [[35], [""]], {"ada": {"linus_id": "viewer \\u00e9t\\u00e9 linus"}}, "grace", [-376198980351, ["", "a\\"b", -403438795457, false]]]' date=2023-11-22 01:37:06+00:00
+22. loads_unsafe s -> (True, [[{'kens': '', 'barbaras': 'été x\\y viewer', 'cart2': 'tab\t linus ada', 'linus_id': 'ada edsger', 'edsger_id': False, 'barbara_id': 'viewer été ada'}, [61, 'viewer cart', 'cart grace ken', 'été viewer ken', 'ken grace a"b'], True, True, {'barbaras': '🚀', 'barbara': None, 'viewer_id': 'tab\t ken', 'grace_id': False, 'ada_id': 'été cart ken cart', 'linus': None, 'carts': 'admin'}], [{'admin_id': None}, [-177110971519, 169191404858]], [[35], ['']], {'ada': {'linus_id': 'viewer été linus'}}, 'grace', [-376198980351, ['', 'a"b', -403438795457, False]]])
+23. loads_unsafe s -> (False, [[{'kens': '', 'barbaras': 'été x\\y viewer', 'cart2': 'tab\t linus ada', 'linus_id': 'ada edsger', 'edsger_id': False, 'barbara_id': 'viewer été ada'}, [61, 'viewer cart', 'cart grace ken', 'été viewer ken', 'ken grace a"b'], True, True, {'barbaras': '🚀', 'barbara': None, 'viewer_id': 'tab\t ken', 'grace_id': False, 'ada_id': 'été cart ken cart', 'linus': None, 'carts': 'admin'}], [{'admin_id': None}, [-177110971519, 169191404858]], [[35], ['']], {'ada': {'linus_id': 'viewer été linus'}}, 'grace', [-376198980351, ['', 'a"b', -403438795457, False]]])
+24. loads s -> [[{'kens': '', 'barbaras': 'été x\\y viewer', 'cart2': 'tab\t linus ada', 'linus_id': 'ada edsger', 'edsger_id': False, 'barbara_id': 'viewer été ada'}, [61, 'viewer cart', 'cart grace ken', 'été viewer ken', 'ken grace a"b'], True, True, {'barbaras': '🚀', 'barbara': None, 'viewer_id': 'tab\t ken', 'grace_id': False, 'ada_id': 'été cart ken cart', 'linus': None, 'carts': 'admin'}], [{'admin_id': None}, [-177110971519, 169191404858]], [[35], ['']], {'ada': {'linus_id': 'viewer été linus'}}, 'grace', [-376198980351, ['', 'a"b', -403438795457, False]]] @ 2023-11-22 01:37:06+00:00
+25. dumps s -> '[627275780802, {"linus": "linus \\u00e9t\\u00e9", "barbara": [], "viewer2": ["cart edsger \\ud83d\\ude80 x\\\\y", 87, "viewer", "barbara"], "edsger": {"kens": 696036969843, "admin_id": 249323417271, "carts": "\\u00e9t\\u00e9", "admin": 17}}, [{"linuss": "", "barbara_id": "linus \\u65e5\\u672c \\ud83d\\ude80 a\\"b", "edsger_id": "admin", "ken_id": "nl\\n \\u00e9t\\u00e9 \\u65e5\\u672c"}, "admin barbara ken x\\\\y"]].ZV1bQg.oAylOle2UkFfJV1VJmBVfJZ02L6W6ycWVxiCQd5L7sU'
+26. loads s -> SignatureExpired: Signature age 700 > 0 seconds payload=b'[627275780802, {"linus": "linus \\u00e9t\\u00e9", "barbara": [], "viewer2": ["cart edsger \\ud83d\\ude80 x\\\\y", 87, "viewer", "barbara"], "edsger": {"kens": 696036969843, "admin_id": 249323417271, "carts": "\\u00e9t\\u00e9", "admin": 17}}, [{"linuss": "", "barbara_id": "linus \\u65e5\\u672c \\ud83d\\ude80 a\\"b", "edsger_id": "admin", "ken_id": "nl\\n \\u00e9t\\u00e9 \\u65e5\\u672c"}, "admin barbara ken x\\\\y"]]' date=2023-11-22 01:37:06+00:00
+27. loads_unsafe s -> (False, [627275780802, {'linus': 'linus été', 'barbara': [], 'viewer2': ['cart edsger 🚀 x\\y', 87, 'viewer', 'barbara'], 'edsger': {'kens': 696036969843, 'admin_id': 249323417271, 'carts': 'été', 'admin': 17}}, [{'linuss': '', 'barbara_id': 'linus 日本 🚀 a"b', 'edsger_id': 'admin', 'ken_id': 'nl\n été 日本'}, 'admin barbara ken x\\y']])
+== random 22 URLSafeSerializer
+1. dumps s -> '.eJxdkEFugzAQRa9i_fUsEkoh5iokiyFYEQplYUy7iCzlHNl0nXPkQj1CB9tAVcmyPOP5M-_PDZ-d-TJ2RFUXmmpczaBMO16MVWe2TvXdMI04nSgVZqhuaNjKYRFleZmX-93hoN81IQrniovls5F_BL36-X7cFbcf3YClShrh9XSvp3LcHB08LW3lp9ZZkedylWWxI4CyN8LMAwHhltcRqJydDK3zCu23YJj6XsKAELijGXmIyxkuEEWuSKHm3ptiIcLKJrlkcnMbdha3ozbBvw2EcKmKHN4nL4kjrZ2PaEAx9wfB_wJ0eI0E.2q52Chuf2l6CpLxeHkEjEBVuHxk'
+2. loads_unsafe s -> (False, None)
+3. loads s -> {'viewers': [69, ['ken edsger cart linus']], 'viewer2': {'barbaras': 247471088959, 'edsger': {'graces': 'linus 🚀 admin', 'edsger2': 'été tab\t'}, 'barbara2': [926449267760, '', 23, 'cart'], 'ada': {'grace': True, 'graces': 69}, 'graces': None}, 'linus2': {'linus': {'kens': 'admin admin tab\t ada', 'linus2': 'barbara', 'barbara': 'edsger', 'edsger': 'ken viewer barbara', 'graces': 'linus grace viewer linus'}}, 'ada': 'admin edsger a"b', 'admin': 'barbara'}
+4. loads_unsafe s -> (False, {'viewers': [69, ['ken edsger cart linus']], 'viewer2': {'barbaras': 247471088959, 'edsger': {'graces': 'linus 🚀 admin', 'edsger2': 'été tab\t'}, 'barbara2': [926449267760, '', 23, 'cart'], 'ada': {'grace': True, 'graces': 69}, 'graces': None}, 'linus2': {'linus': {'kens': 'admin admin tab\t ada', 'linus2': 'barbara', 'barbara': 'edsger', 'edsger': 'ken viewer barbara', 'graces': 'linus grace viewer linus'}}, 'ada': 'admin edsger a"b', 'admin': 'barbara'})
+5. dumps s -> 'MTI.AoBl-Djn4-_9gwXXSi2_O6oEf8Q'
+6. loads s -> 12
+7. dumps s -> 'OTk3MDYwMjYwMTMy.JbJgXN9CkGTSRiNI8GBIoCJ0F2M'
+8. loads s -> BadSignature: Signature b'JbJgXN9CkGTSRiNI8GBIoCJ0F2Mx' does not match payload=b'OTk3MDYwMjYwMTMy'
+9. loads_unsafe s -> (True, 997060260132)
+10. loads_unsafe s -> (False, None)
+11. loads s -> BadSignature: No b'.' found in value payload=None
+12. dumps s -> '.eJxVkEtuhDAQRK9i9dpIxsYN5iqAIjNYIxTCAswkERop58gm6znHXChHiH_zieSFXW69qq4mR8EE4yiZ5BSA7vBqZg5101E4LvpgoN7j5WUcoAbdQk-mcd5WEq6_P99fQOGgF7vevpPmQE6Js0nSw9vo6TBP7XwTw4QXrxd7vZBgRk6jeTcL8YxzGlnvUaCWGD1jqChS6PXijnasjDOhVClZgaJygIgL0_vd0C6bSZkcxOPCTiGnhyAm5-hidd9aEkO6XCki_IPP2zQlZHhnUinXb1GpUsn04fbgmDNEFBzZI13Yz6d47ie2_NG2n76Hx4JNxgvJFRZKsioEJmZYj66yVEZYLsTJUAheolKilIqWefdUXeMnunP3B-0Gp-8.wuLv0NOST3T9Yf5OZmWEmmwYMRI'
+13. loads_unsafe s -> (False, None)
+14. loads s -> [163030265052, '', {'ken2': [], 'grace': {'grace_id': 'a"b linus a"b 🚀', 'carts': 'a"b 🚀', 'ken': 'linus 🚀', 'admin2': 'nl\n 🚀', 'linus2': 'été grace viewer ken'}, 'linuss': {'grace': 56, 'cart_id': 'grace', 'barbara2': -203997504638}, 'viewer_id': {'linus2': True, 'admin': 'cart a"b', 'ada2': 66, 'linus_id': 'tab\t été ken viewer', 'viewer_id': None, 'admin_id': -599030489795, 'admins': 261066632608}, 'viewers': {'cart': 'nl\n 🚀 a"b x\\y'}, 'barbara2': [-24529649508, 'ada edsger grace', True, None, -633276993759, 71], 'cart_id': [None]}]
+15. loads s -> BadSignature: Signature b'wuLv0NOST3T9Yf5OZmWEmmw' does not match payload=b'.eJxVkEtuhDAQRK9i9dpIxsYN5iqAIjNYIxTCAswkERop58gm6znHXChHiH_zieSFXW69qq4mR8EE4yiZ5BSA7vBqZg5101E4LvpgoN7j5WUcoAbdQk-mcd5WEq6_P99fQOGgF7vevpPmQE6Js0nSw9vo6TBP7XwTw4QXrxd7vZBgRk6jeTcL8YxzGlnvUaCWGD1jqChS6PXijnasjDOhVClZgaJygIgL0_vd0C6bSZkcxOPCTiGnhyAm5-hidd9aEkO6XCki_IPP2zQlZHhnUinXb1GpUsn04fbgmDNEFBzZI13Yz6d47ie2_NG2n76Hx4JNxgvJFRZKsioEJmZYj66yVEZYLsTJUAheolKilIqWefdUXeMnunP3B-0Gp-8'
+16. dumps s -> '.eJxNjk0KAjEMha9S3jrCTFqtM1dxBqlOkUHtov4z9Bxu3LrzXJ7DTisiBJK8JF_eANPte3dAPeQK9SIXwnaHjfVoA-Hc24v1nGYNVuLaNDfQgJXxMcyy71DzjLDr3SmisLUO325s3a5xCLSQiiThfX--Hy-RmWKciSyhbQlr44_JTWTwmP9_qKKqWGqWXERQNhiXlKbo2cSzidK6UFM1Z5YlYePN2o7yXHNZcTnlma5-P4B0lshJQwjhA7jTVz8.sZf8Yh1I663kYY7yfopT3ttxcQo'
+17. loads_unsafe s -> (True, {'admins': {'admin': ['admin edsger']}, 'viewer2': ['a"b x\\y', {'barbara_id': 26, 'linus': 'ken', 'linuss': 'nl\n'}, [34, 3, '日本 viewer nl\n 日本']], 'carts': {'ken2': {'barbara_id': 409923723203, 'edsger2': 47, 'adas': -477045482231, 'graces': -872192152679, 'carts': '', 'ada_id': 'cart'}}})
+18. dumps s -> '.eJxNj01ugzAQRq9izdpItjH-4SqAKhPcCIWwsEFqhZB6jmxyxRwhg92klVh8YuZ789xscA7u5AXUTWXovE5TR-HiZ_yxwTTOa4xQF1paUTFprVSMQu8Cfg5XwA3XcSZpj6QMNAOxlQPxQzz7QBbXtwskNs6WsHqa24ni8pw87ref3wbu5vAxDlAfZkfhuFpwoTTqCK602t-YptBMGlsyJoyUNJ1414hroc_4l8lX236TkwsLdP_flNWSe7q8ZX7Kn26K_uUV_6xwjk1rKCRereW-00KX3PDS8MoaTXnFFGMK1U3ZPQHw5HWo.XVurASP8YqB-Sp8atC-BeQmeXNw'
+19. loads s -> [{'grace2': [58, None], 'ken2': {'linuss': -749250499460, 'barbara2': 'admin linus admin', 'graces': 'grace edsger tab\t', 'kens': True, 'admin': 'ada tab\t 🚀 edsger', 'edsger_id': None, 'ada2': -126750421676}, 'admin': [-704893002844, True, None, 'ada a"b 🚀 tab\t', 'x\\y cart'], 'barbara2': True, 'grace_id': {'admin_id': False, 'edsgers': None, 'admin2': 98, 'cart': 74}}, -731813815987, 150600612683]
+20. loads s -> [{'grace2': [58, None], 'ken2': {'linuss': -749250499460, 'barbara2': 'admin linus admin', 'graces': 'grace edsger tab\t', 'kens': True, 'admin': 'ada tab\t 🚀 edsger', 'edsger_id': None, 'ada2': -126750421676}, 'admin': [-704893002844, True, None, 'ada a"b 🚀 tab\t', 'x\\y cart'], 'barbara2': True, 'grace_id': {'admin_id': False, 'edsgers': None, 'admin2': 98, 'cart': 74}}, -731813815987, 150600612683]
+21. loads s -> [{'grace2': [58, None], 'ken2': {'linuss': -749250499460, 'barbara2': 'admin linus admin', 'graces': 'grace edsger tab\t', 'kens': True, 'admin': 'ada tab\t 🚀 edsger', 'edsger_id': None, 'ada2': -126750421676}, 'admin': [-704893002844, True, None, 'ada a"b 🚀 tab\t', 'x\\y cart'], 'barbara2': True, 'grace_id': {'admin_id': False, 'edsgers': None, 'admin2': 98, 'cart': 74}}, -731813815987, 150600612683]
+22. dumps s -> 'ZmFsc2U.6BmX0erxqt1KgCSgSseVWpDBNuU'
+23. loads_unsafe s -> (True, False)
+24. loads_unsafe s -> (False, None)
+25. dumps s -> '.eJxTSkosAqJEhcQUCIbylQBuywiH.FHtEZ1qk9wlarUp7ZDdjtd9pflM'
+26. loads_unsafe s -> (True, 'barbara ada ada barbara')
+27. loads_unsafe s -> (True, 'barbara ada ada barbara')
+28. loads s -> BadSignature: Signature b'FHtEZ1qk9wlarUp7ZDAdjtd9pflM' does not match payload=b'.eJxTSkosAqJEhcQUCIbylQBuywiH'
+29. loads s -> BadSignature: Signature b'FHtEZ1qk9wlarUp7ZDdjtd9pflM' does not match payload=b'.eJATSkosAqJEhcQUCIbylQBuywiH'
+== random 23 URLSafeTimedSerializer
+1. dumps s -> 'W3siYmFyYmFyYSI6NjI5NTgzNjQzMDk1fV0.ZV2LCQ.XY778WeHbLbjQUfJlyMM3Cu66ZB6euYPEz_FBuG-SICTWv_MyFfWoQ8kN82gMjukSE3Y9AgCpn0eAaDq0ofSxA'
+2. loads_unsafe s -> (True, [{'barbara': 629583643095}])
+3. loads_unsafe s -> (False, [{'barbara': 629583643095}])
+4. loads_unsafe s -> (True, [{'barbara': 629583643095}])
+5. dumps s -> '.eJyLVkpMSVTSiY4G0rmZeUo6EL65iZGhiaWpiaWZmYmOhZGO0of5sxqAkulFicmpCmBOrE60ElBESSevNCcnNjYWAC1eFrQ.ZV2LCQ.xkNtIIAfJih--XHbrvznYgrmAFun8iAV2K_T7CnteEfWtRSmDG2hdf4rWcTio-t5LtidZTSPFhRKx1wdDTR-iQ'
+6. loads s -> ['ada', [['admin', 'ada', 742149549664, 82, '🚀', 'grace 🚀'], ['', '', None]]]
+7. loads s -> BadTimeSignature: Signature b'xkNtIIAfJih--XHbrvznYgrmAFun8iAV2K_T7CnteEfWtRSmDG2hdf4rWcTio-t5LtidZTSPFhRKx1wdDx' does not match payload=b'.eJyLVkpMSVTSiY4G0rmZeUo6EL65iZGhiaWpiaWZmYmOhZGO0of5sxqAkulFicmpCmBOrE60ElBESSevNCcnNjYWAC1eFrQ' date=2023-11-22 05:00:57+00:00
+8. loads_unsafe s -> (False, ['ada', [['admin', 'ada', 742149549664, 82, '🚀', 'grace 🚀'], ['', '', None]]])
+9. dumps s -> 'InRhYlx0Ig.ZV2LCQ.IuGrmkiKjFcYt3cs1c4aUm2PImj7CevXST4PSKxylOInry-LqCWjDRbL4LFGzMRdG_4R464q-3OphEjmq0hkgA'
+10. loads s -> 'tab\t' @ 2023-11-22 05:00:57+00:00
+11. loads_unsafe s -> (False, None)
+12. loads_unsafe s -> (True, 'tab\t')
+13. loads s -> BadTimeSignature: Signature b'IuGrmkiKjFcYt3cs1c4aUm2PImj7CevXST4PSKxylOInry-LqCWjDRbL4LFGzMRdG_4R464q-3OphEjm' does not match payload=b'InRhYlx0Ig' date=2023-11-22 05:00:57+00:00
+14. dumps s -> '.eJxVUEtqwzAQvYqYtQKOZMmWr2KZIscimLpayHY_hEBvUSiFrrrrubLuEToaq20KNtLMvNH7tCfww3z0EZq249C7iJ8T0JzADemEY3QHz7BIP_AMx4mQZw63PswIArqlN868Tat3I1bbSbvbFju4uCD2fvQPPt6MA2IuLx-Xt09sImzrhMkGtrjeLoAMqcIpdJwkIVtryn1dybKoC2n4TtdaGq0rKeuCl3scGCFKXVToh_ga7P-jfLT2iaFe5iz0memPP6zTRHYohWkM6zz_qLqyknbhN4Dc_Hp_fc45kXccGbHJwOsSV8-zCUjeKNtN03WyO6UqJY1SUokCYSSThBABdN-vPokP.ZV2LCQ.Vxy5OPXlWn-lsyNkJFE1E4m6SBdEAoUx-d8g_pVkGkFYxHGROZqAZDhyMnTnx3nKVNYu1a7_P6ZMPVpTM6tUgA'
+15. loads_unsafe s -> (False, None)
+16. dumps s -> '.eJwtjkEOgjAQRa_SzLomgqLAVYCYgVbSiF20VRekiedw45pzcCGP4LQlmWRm8d7_05Qn3oDDvnXsqeRLGobirjT7fT9v6PgMUthRGgs1gOcbmZCb1JsDxI0GB0nYDCgw4HpqNVsXty5sQONSIgeyLkpAvSvKIsuORbU_nCvvKaFHQ4M5uakgRjJsoWeT0g9LdtyBoDtCeWhMP0J9xclKDqEudkB0t9zwL3jf_QEY5FJ3.ZV2LCQ.weka3ydaBkdW-erQOLflcTFYXy8shR_CFIa4Gc2dMPTq-PfI-Y3BUblhA0XzrbfQU_qEawkmcKUDr4RX92Eckw'
+17. loads_unsafe s -> (False, [86, ['tab\t viewer admin 🚀'], {'edsgers': ''}, 'tab\t admin ken viewer', {'graces': {'adas': 'nl\n été cart 🚀', 'ken_id': -585114590379}}, {'barbara2': 'admin grace a"b linus', 'linus2': '', 'admin2': {'edsger': False, 'cart_id': 'a"b barbara ken'}}])
+18. loads s -> [86, ['tab\t viewer admin 🚀'], {'edsgers': ''}, 'tab\t admin ken viewer', {'graces': {'adas': 'nl\n été cart 🚀', 'ken_id': -585114590379}}, {'barbara2': 'admin grace a"b linus', 'linus2': '', 'admin2': {'edsger': False, 'cart_id': 'a"b barbara ken'}}] @ 2023-11-22 05:00:57+00:00
+19. loads_unsafe s -> (True, [86, ['tab\t viewer admin 🚀'], {'edsgers': ''}, 'tab\t admin ken viewer', {'graces': {'adas': 'nl\n été cart 🚀', 'ken_id': -585114590379}}, {'barbara2': 'admin grace a"b linus', 'linus2': '', 'admin2': {'edsger': False, 'cart_id': 'a"b barbara ken'}}])
+20. loads_unsafe s -> (False, [86, ['tab\t viewer admin 🚀'], {'edsgers': ''}, 'tab\t admin ken viewer', {'graces': {'adas': 'nl\n été cart 🚀', 'ken_id': -585114590379}}, {'barbara2': 'admin grace a"b linus', 'linus2': '', 'admin2': {'edsger': False, 'cart_id': 'a"b barbara ken'}}])
+21. dumps s -> 'Njc.ZV2LCQ.ND4C1HM-LKgNU2SSCU6WVoyEUBOGTsS-nF4BYrjYyeSHAHg3nUxgvotTvHHiGnqMY8tue1JGheF_FIP6U7gJvg'
+22. loads_unsafe s -> (False, 67)
+23. dumps s -> '.eJwVjc0KwyAQBt_lO29AVtefvIoJxTRSpKmHtDmJ7x4Lc5rDTMM71y_m1glbOgfpUXbMEaA4MTvWImK9KPqdVybUY6mgwMYZ61l5rwhp_5QhbVip4XWmZx7FSQftma04EUM4Sr2GNZ0i0oIN9D9jXfsNpQsk2Q.ZV2LCQ.yoff-k7-A-UWbEW_qaYrtt0TVAW5_i7y7PzwONzr90ot6fXqsBjaWdx0ZP76uUD2mel0pCvrj4qlbgj7D1QAFQ'
+24. loads_unsafe s -> (False, None)
+25. loads_unsafe s -> (False, None)
+26. loads s -> {'kens': {}, 'barbara_id': ['', [-227235556850, True, 'nl\n', 924746820880, 'admin', 69], {'graces': -393822657554, 'linus': 4}, ['a"b', 'ken']]}
+27. loads_unsafe s -> (False, None)
