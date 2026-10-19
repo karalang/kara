@@ -342,6 +342,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_bf16_from,
         mir_map::karac_mir_map_find,
         mir_map::karac_mir_map_insert,
+        mir_map::karac_mir_map_find_hv,
+        mir_map::karac_mir_map_insert_hv,
         mir_map::karac_mir_map_at,
         mir_map::karac_mir_map_len,
         mir_map::karac_mir_map_remove,

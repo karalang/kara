@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::module::Linkage;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
@@ -279,13 +280,19 @@ impl<'ctx> Cx<'ctx, '_> {
         self.ord_of(is_less, is_greater)
     }
 
-    fn hash_call(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<IntValue<'ctx>> {
+    pub(super) fn hash_call(&mut self, p: PointerValue<'ctx>, ty: Ty) -> R<IntValue<'ctx>> {
         if self.is_scalar_key(ty) {
             return self.hash_value(p, ty);
         }
         let f = self.key_fn(KeyOp::Hash, ty);
         let v = self.builder.build_call(f, &[p.into()], "").map_err(e)?;
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
+    }
+
+    /// Whether `ty`'s key glue only reads: a scalar or text, whose
+    /// comparisons run no user code.
+    pub(super) fn plain_key(&self, ty: Ty) -> bool {
+        self.is_scalar_key(ty) || self.seq_elem(ty) == Some(None)
     }
 
     fn is_scalar_key(&self, ty: Ty) -> bool {
@@ -362,6 +369,16 @@ impl<'ctx> Cx<'ctx, '_> {
         let i64t = self.llcx.i64_type();
         let f = self.extern_fn("karac_hash_word", i64t.fn_type(&[i64t.into()], false));
         let v = self.builder.build_call(f, &[v.into()], "").map_err(e)?;
+        // The seed is fixed for the process, so the hash is a pure function
+        // of `v` to compiled code, and a `get` and an `insert` of one key
+        // share it (kata 219).
+        for name in ["memory", "nounwind", "willreturn"] {
+            v.add_attribute(
+                AttributeLoc::Function,
+                self.llcx
+                    .create_enum_attribute(Attribute::get_named_enum_kind_id(name), 0),
+            );
+        }
         Ok(v.try_as_basic_value().unwrap_basic().into_int_value())
     }
 

@@ -3,7 +3,8 @@
 //! (`runtime/src/mir_map.rs`), whose order is the interpreter's: entries
 //! in insertion order, or in key order for the sorted kinds.
 
-use inkwell::values::{BasicMetadataValueEnum, IntValue, PointerValue};
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::values::{BasicMetadataValueEnum, CallSiteValue, IntValue, PointerValue};
 use inkwell::IntPredicate;
 
 use super::key::KeyOp;
@@ -109,11 +110,41 @@ impl<'ctx> Cx<'ctx, '_> {
         key: PointerValue<'ctx>,
         t: Table,
     ) -> R<IntValue<'ctx>> {
+        Ok(self.find_hashed(h, key, t)?.0)
+    }
+
+    /// [`Cx::find`], and for a hashed table the key's hash, hashed here
+    /// rather than by the runtime so a scalar key is hashed inline and
+    /// once for a `get` and the `insert` that follows it.
+    fn find_hashed(
+        &mut self,
+        h: PointerValue<'ctx>,
+        key: PointerValue<'ctx>,
+        t: Table,
+    ) -> R<(IntValue<'ctx>, Option<IntValue<'ctx>>)> {
         let [hf, ef, cf] = self.glue_ptrs(t);
-        self.mrt_i64(
-            "map_find",
-            &[h.into(), key.into(), hf.into(), ef.into(), cf.into()],
-        )
+        if t.sorted {
+            let i = self.mrt_i64(
+                "map_find",
+                &[h.into(), key.into(), hf.into(), ef.into(), cf.into()],
+            )?;
+            return Ok((i, None));
+        }
+        let hv = self.hash_call(key, t.key)?;
+        let args: [BasicMetadataValueEnum<'ctx>; 4] = [h.into(), key.into(), hv.into(), ef.into()];
+        let tys = self.arg_tys(&args);
+        let f = self.extern_fn(
+            "karac_mir_map_find_hv",
+            self.llcx.i64_type().fn_type(&tys, false),
+        );
+        let call = self.builder.build_call(f, &args, "").map_err(e)?;
+        // A search with glue that runs no user code only reads, so the
+        // key's slot and the table's handle are not reloaded after it.
+        if self.plain_key(t.key) {
+            self.read_only(call);
+        }
+        let i = call.try_as_basic_value().unwrap_basic().into_int_value();
+        Ok((i, Some(hv)))
     }
 
     /// Adds the entry at `entry` to the table whose handle is at `hp`.
@@ -123,23 +154,61 @@ impl<'ctx> Cx<'ctx, '_> {
         entry: PointerValue<'ctx>,
         t: Table,
     ) -> R<()> {
-        let [hf, _, cf] = self.glue_ptrs(t);
-        let size = self.layout(t.entry)?.size.max(1);
+        self.insert_hashed(hp, entry, t, None)
+    }
+
+    /// [`Cx::insert_entry`], with the key's hash `hv` when the caller has it.
+    fn insert_hashed(
+        &mut self,
+        hp: PointerValue<'ctx>,
+        entry: PointerValue<'ctx>,
+        t: Table,
+        hv: Option<IntValue<'ctx>>,
+    ) -> R<()> {
+        let size = self.i64(self.layout(t.entry)?.size.max(1));
+        if t.sorted {
+            let [hf, _, cf] = self.glue_ptrs(t);
+            self.mrt_i64(
+                "map_insert",
+                &[hp.into(), size.into(), entry.into(), hf.into(), cf.into()],
+            )?;
+            return Ok(());
+        }
+        let hv = match hv {
+            Some(hv) => hv,
+            None => self.hash_call(entry, t.key)?,
+        };
         self.mrt_i64(
-            "map_insert",
-            &[
-                hp.into(),
-                self.i64(size).into(),
-                entry.into(),
-                hf.into(),
-                cf.into(),
-            ],
+            "map_insert_hv",
+            &[hp.into(), size.into(), entry.into(), hv.into()],
         )?;
         Ok(())
     }
 
     fn entry_at(&self, h: PointerValue<'ctx>, i: IntValue<'ctx>) -> R<PointerValue<'ctx>> {
-        self.mrt_ptr("map_at", &[h.into(), i.into()])
+        let args: [BasicMetadataValueEnum<'ctx>; 2] = [h.into(), i.into()];
+        let tys = self.arg_tys(&args);
+        let f = self.extern_fn("karac_mir_map_at", self.ptr_ty().fn_type(&tys, false));
+        let call = self.builder.build_call(f, &args, "").map_err(e)?;
+        self.read_only(call);
+        Ok(call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value())
+    }
+
+    /// Marks a call into the runtime that only reads memory, so loads
+    /// around it are not repeated.
+    fn read_only(&self, call: CallSiteValue<'ctx>) {
+        let attr = |name, v| {
+            self.llcx
+                .create_enum_attribute(Attribute::get_named_enum_kind_id(name), v)
+        };
+        // `memory(read)`: argmem, inaccessible and other memory, 2 bits
+        // each, read only.
+        call.add_attribute(AttributeLoc::Function, attr("memory", 0b01_01_01));
+        call.add_attribute(AttributeLoc::Function, attr("nounwind", 0));
+        call.add_attribute(AttributeLoc::Function, attr("willreturn", 0));
     }
 
     /// Where a key argument's bytes are, in the key type's layout: a `str`
@@ -695,7 +764,7 @@ impl<'ctx> Cx<'ctx, '_> {
     ) -> R<()> {
         let h = self.load_ptr(hp)?;
         let kp = self.key_arg(k, t.key)?;
-        let i = self.find(h, kp, t)?;
+        let (i, hv) = self.find_hashed(h, kp, t)?;
         let found = self.found(i)?;
         let f = self.cur_fn()?;
         let (old, new, done) = (
@@ -752,7 +821,7 @@ impl<'ctx> Cx<'ctx, '_> {
             let slot = self.offset(tmp, self.val_off(t)?)?;
             self.store_operand(slot, val)?;
         }
-        self.insert_entry(hp, tmp, t)?;
+        self.insert_hashed(hp, tmp, t, hv)?;
         match (d, t.val) {
             (Some(d), Some(_)) => {
                 let (_, none) = self.option_variants(dty)?;

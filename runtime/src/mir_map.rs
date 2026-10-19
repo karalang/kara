@@ -31,8 +31,10 @@ pub struct MirMap {
     hashes: Vec<u64>,
     /// An open-addressing table of the live slots, by hash, for the
     /// hashed kinds: a power of two long (or empty), at most half full
-    /// counting [`TOMB`]s, probed linearly.
-    index: Vec<usize>,
+    /// counting [`TOMB`]s, probed linearly. A cell holds a slot in its low
+    /// half and the top half of the slot's hash in its high half, so a
+    /// probe reads neither `hashes` nor `buf` for a key it passes over.
+    index: Vec<u64>,
     /// The cells of `index` that are not [`EMPTY`].
     index_used: usize,
     /// Which slots are holes, and how many.
@@ -44,9 +46,19 @@ pub struct MirMap {
 }
 
 /// An `index` cell that never held a slot: a probe stops here.
-const EMPTY: usize = usize::MAX;
+const EMPTY: u64 = u32::MAX as u64;
 /// An `index` cell whose slot was removed: a probe goes on past it.
-const TOMB: usize = usize::MAX - 1;
+const TOMB: u64 = (u32::MAX - 1) as u64;
+
+/// The `index` cell of slot `sl`, whose hash is `hv`.
+fn cell(hv: u64, sl: usize) -> u64 {
+    (hv & !0xFFFF_FFFF) | sl as u64
+}
+
+/// The slot an `index` cell holds, or [`EMPTY`] or [`TOMB`].
+fn cell_slot(c: u64) -> u64 {
+    c & 0xFFFF_FFFF
+}
 
 impl MirMap {
     /// Where the probe for `hv` starts in an `index` of `mask + 1` cells.
@@ -64,13 +76,18 @@ impl MirMap {
         }
         let mask = self.index.len() - 1;
         let mut i = Self::home(hv, mask);
+        let tag = hv >> 32;
         loop {
-            match self.index[i] {
+            let c = self.index[i];
+            match cell_slot(c) {
                 EMPTY => return None,
                 TOMB => {}
-                // SAFETY: the caller's contract; `sl < slots`.
-                sl if self.hashes[sl] == hv && unsafe { eq(self.slot_ptr(sl), key) } => {
-                    return Some(sl)
+                sl if c >> 32 == tag => {
+                    let sl = sl as usize;
+                    // SAFETY: the caller's contract; `sl < slots`.
+                    if unsafe { eq(self.slot_ptr(sl), key) } {
+                        return Some(sl);
+                    }
                 }
                 _ => {}
             }
@@ -103,14 +120,14 @@ impl MirMap {
         let mask = self.index.len() - 1;
         let mut i = Self::home(hv, mask);
         loop {
-            match self.index[i] {
+            match cell_slot(self.index[i]) {
                 EMPTY => {
-                    self.index[i] = sl;
+                    self.index[i] = cell(hv, sl);
                     self.index_used += 1;
                     return;
                 }
                 TOMB => {
-                    self.index[i] = sl;
+                    self.index[i] = cell(hv, sl);
                     return;
                 }
                 _ => i = (i + 1) & mask,
@@ -122,9 +139,9 @@ impl MirMap {
     fn index_take(&mut self, hv: u64, sl: usize) {
         let mask = self.index.len() - 1;
         let mut i = Self::home(hv, mask);
-        while self.index[i] != sl {
+        while cell_slot(self.index[i]) != sl as u64 {
             debug_assert!(
-                self.index[i] != EMPTY,
+                cell_slot(self.index[i]) != EMPTY,
                 "a live slot is missing from the index"
             );
             i = (i + 1) & mask;
@@ -280,6 +297,28 @@ pub unsafe extern "C" fn karac_mir_map_find(
     // SAFETY: as above.
     let hv = unsafe { hash(key) };
     // SAFETY: as above.
+    unsafe { karac_mir_map_find_hv(h, key, hv, eq) }
+}
+
+/// [`karac_mir_map_find`] on a hashed table, with the key's hash `hv`
+/// computed by the caller: compiled code hashes a scalar key inline, so
+/// a `get` and the `insert` after it hash it once.
+///
+/// # Safety
+/// As [`karac_mir_map_find`]; `hv` is `key`'s hash under the table's glue.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_find_hv(
+    h: *const MirMap,
+    key: *const u8,
+    hv: u64,
+    eq: EqFn,
+) -> i64 {
+    if h.is_null() {
+        return -1;
+    }
+    // SAFETY: the caller's contract.
+    let m = unsafe { &*h };
+    // SAFETY: as above.
     match unsafe { m.find_slot(hv, key, eq) } {
         Some(sl) => m.index_of(sl) as i64,
         None => -1,
@@ -316,6 +355,37 @@ pub unsafe extern "C" fn karac_mir_map_insert(
     entry_size: usize,
     entry: *const u8,
     hash: Option<HashFn>,
+    cmp: Option<CmpFn>,
+) -> i64 {
+    // SAFETY: the caller's contract.
+    let hv = hash.map(|hash| unsafe { hash(entry) });
+    // SAFETY: as above.
+    unsafe { insert(hp, entry_size, entry, hv, cmp) }
+}
+
+/// [`karac_mir_map_insert`] into a hashed table, with the key's hash `hv`
+/// computed by the caller, as for [`karac_mir_map_find_hv`].
+///
+/// # Safety
+/// As [`karac_mir_map_insert`]; `hv` is the entry key's hash.
+#[no_mangle]
+pub unsafe extern "C" fn karac_mir_map_insert_hv(
+    hp: *mut *mut MirMap,
+    entry_size: usize,
+    entry: *const u8,
+    hv: u64,
+) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { insert(hp, entry_size, entry, Some(hv), None) }
+}
+
+/// # Safety
+/// As [`karac_mir_map_insert`], with `hv` the hash for a hashed table.
+unsafe fn insert(
+    hp: *mut *mut MirMap,
+    entry_size: usize,
+    entry: *const u8,
+    hash: Option<u64>,
     cmp: Option<CmpFn>,
 ) -> i64 {
     // SAFETY: the caller's contract.
@@ -359,9 +429,9 @@ pub unsafe extern "C" fn karac_mir_map_insert(
     if m.holes > 0 {
         m.add_live(at, 1);
     }
-    if let Some(hash) = hash {
-        // SAFETY: as above.
-        let hv = unsafe { hash(entry) };
+    if let Some(hv) = hash {
+        // A slot must fit the low half of an `index` cell.
+        assert!((at as u64) < TOMB, "a hashed table of 2^32 entries");
         m.hashes.push(hv);
         m.index_place(hv, at);
     }
