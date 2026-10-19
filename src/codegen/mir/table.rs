@@ -288,7 +288,7 @@ impl<'ctx> Cx<'ctx, '_> {
                 self.store_bool(dest, found)?;
                 self.drop_moved(&args[1..])?;
             }
-            ("get", [k]) if is_map => {
+            ("get" | "get_mut_by_view", [k]) if is_map => {
                 let h = self.load_ptr(hp)?;
                 let kp = self.key_arg(k, t.key)?;
                 let i = self.find(h, kp, t)?;

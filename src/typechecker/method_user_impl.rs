@@ -20,7 +20,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::env::{FunctionSig, ImplInfo};
-use super::inference::substitute_type_params;
+use super::inference::{resolve_type_var_top, substitute_type_params};
 use super::types::{method_callee_type_name, type_display, IntSize, SubstValue, Type};
 use super::{FixIt, TypeErrorKind};
 use crate::typechecker::type_to_concrete_or_param_name;
@@ -1063,6 +1063,14 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     params
                 };
+                // B-2026-10-18-39: `get_mut` takes the key's view, as the
+                // other lookups do (docs/library/collections.md, "Lookup by
+                // view").
+                if let Some(ret) =
+                    self.get_mut_by_key_view(&type_name, method, args, &recv_subs, &return_type)
+                {
+                    return ret;
+                }
                 // Check argument count (excluding self)
                 if args.len() != params.len() {
                     // A defaulted method's expectation is a RANGE, phrased the
@@ -1536,6 +1544,37 @@ impl<'a> super::TypeChecker<'a> {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// A `Map`/`SortedMap` `get_mut` whose key argument is the key's view
+    /// (`Str` for a `String` key): the lookup is checked as `get`'s is, and
+    /// the call returns `Option[mut ref V]`. `None` for every other call.
+    fn get_mut_by_key_view(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: &[CallArg],
+        recv_subs: &HashMap<String, SubstValue>,
+        return_type: &Type,
+    ) -> Option<Type> {
+        if method != "get_mut" || !matches!(type_name, "Map" | "SortedMap") || args.len() != 1 {
+            return None;
+        }
+        let Some(SubstValue::Type(key)) = recv_subs.get("K") else {
+            return None;
+        };
+        let key = resolve_type_var_top(key, &self.env.substitutions);
+        let errors = self.errors.len();
+        let arg_ty = self.infer_expr(&args[0].value);
+        let arg_ty = match arg_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => *inner,
+            t => t,
+        };
+        if !self.is_key_view(&key, &arg_ty) {
+            self.errors.truncate(errors);
+            return None;
+        }
+        Some(return_type.clone())
+    }
+
     /// The fix-it that derives the trait a missing method belongs to, on a
     /// struct or enum this program declares (B-2026-10-18-32). Appends the
     /// explanation to `msg`.

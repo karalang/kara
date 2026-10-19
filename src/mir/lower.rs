@@ -12994,6 +12994,14 @@ impl<'l, 'a> Bx<'l, 'a> {
         args: &'a [CallArg],
         dest: Place,
     ) -> R<()> {
+        if let ExprKind::MethodCall { method, .. } = &e.kind {
+            if self.get_mut_by_key_view(object, method, args)? {
+                // Named apart from the library's own `get_mut` instance,
+                // which shares the native's name.
+                let key = format!("{}.{method}", self.lcx.def_name(d));
+                return self.builtin_method(e, &key, object, "get_mut_by_view", args, dest);
+            }
+        }
         // The argument list the typechecker completed: defaults filled in
         // and named arguments in declaration order (the legacy pipeline's
         // `lowering` splices the same list into the tree).
@@ -14693,6 +14701,43 @@ impl<'l, 'a> Bx<'l, 'a> {
         Ok(true)
     }
 
+    /// The library's `get_mut` on a `Map` or `SortedMap`, called with the
+    /// key's view (a `Str` for a `String` key, a `Slice` for a `Vec` key):
+    /// the native `get_mut_by_view`, which reads either form as `get` does,
+    /// rather than the library instance, whose key parameter is `ref K`
+    /// (B-2026-10-18-39).
+    fn get_mut_by_key_view(
+        &mut self,
+        object: &'a Expr,
+        method: &str,
+        args: &'a [CallArg],
+    ) -> R<bool> {
+        let [k] = args else {
+            return Ok(false);
+        };
+        // The receiver is the library's own type, so the method is the
+        // library's.
+        if method != "get_mut" {
+            return Ok(false);
+        }
+        let ot = self.expr_ty(object)?;
+        let (_, base) = self.strip_ty_full(ot);
+        let key = match self.tys().tcx().kind(base) {
+            HK::Intrinsic {
+                kind: IntrinsicKind::Map | IntrinsicKind::SortedMap,
+                args,
+            } => self.tys().tcx().list(args)[0],
+            _ => return Ok(false),
+        };
+        let at = self.expr_ty(&k.value)?;
+        let (_, arg) = self.strip_ty_full(at);
+        Ok(arg != key
+            && matches!(
+                self.tys().tcx().kind(arg),
+                HK::Str | HK::StaticStr | HK::Slice { .. }
+            ))
+    }
+
     fn builtin_method(
         &mut self,
         e: &'a Expr,
@@ -14858,6 +14903,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                                 method,
                                 "push_str"
                                     | "set"
+                                    | "get_mut_by_view"
                                     | "sort_unstable"
                                     | "sort_unstable_by"
                                     | "entry"

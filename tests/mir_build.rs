@@ -5780,3 +5780,68 @@ fn main() {
         }
     }
 }
+
+/// `get_mut` on a `Map` or `SortedMap` takes the key's view, as `get` does:
+/// a `Str` for a `String` key (a literal, a `Str` parameter, `as_str()` of
+/// a temporary that reads the map) and a `Slice` for a `Vec` key, with an
+/// owned key still the library's `get_mut`. The compiled backend looked the
+/// view up as if it were a `String` (B-2026-10-18-39).
+#[test]
+fn mir_get_mut_takes_the_keys_view() {
+    const SRC: &str = r#"fn bump(m: mut ref Map[String, i64], k: Str) {
+    if let Some(v) = m.get_mut(k) {
+        *v = *v + 1;
+    }
+}
+
+fn add(m: mut ref SortedMap[String, Vec[i64]], k: Str, x: i64) {
+    match m.get_mut(k) {
+        Some(v) => v.push(x),
+        None => {}
+    }
+}
+
+fn first(m: Map[String, i64]) -> String {
+    "a".to_string()
+}
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a".to_string(), 1);
+    bump(mut m, "a");
+    bump(mut m, "zz");
+    let s = "a".to_string();
+    bump(mut m, s.as_str());
+    if let Some(v) = m.get_mut(first(m).as_str()) {
+        *v += 40;
+    }
+    let missing = m.get_mut("q").is_none();
+    println(f"{m.get("a").unwrap_or(0)} {m.len()} {missing}");
+    let mut sm: SortedMap[String, Vec[i64]] = SortedMap.new();
+    sm.insert("k".to_string(), vec![1]);
+    add(mut sm, "k", 2);
+    add(mut sm, "j", 3);
+    println(f"{sm.get("k").unwrap().len()} {sm.len()}");
+    let mut vm: Map[Vec[i64], i64] = Map.new();
+    vm.insert(vec![1, 2], 10);
+    let w: Vec[i64] = vec![0, 1, 2];
+    if let Some(n) = vm.get_mut(w[1..3]) {
+        *n += 5;
+    }
+    let mut own: Map[String, i64] = Map.new();
+    own.insert("o".to_string(), 7);
+    if let Some(n) = own.get_mut("o".to_string()) {
+        *n *= 2;
+    }
+    println(f"{vm.get(w[1..3]).unwrap_or(0)} {own.get("o").unwrap_or(0)}");
+}
+"#;
+    let want = "43 1 true\n2 1\n15 14\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

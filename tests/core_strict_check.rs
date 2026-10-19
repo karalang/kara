@@ -9629,3 +9629,19 @@ fn main() { println(f"{f("ab".to_string(), vec!["xyz".to_string(), "q".to_string
         "3 3\n",
     );
 }
+
+/// `get_mut` takes the key's view, as `get` does: a `Str` on a `String`
+/// key and a `Slice` on a `Vec` key are accepted, and a key of another
+/// type is still refused (B-2026-10-18-39).
+#[test]
+fn get_mut_takes_the_keys_view() {
+    accepted(
+        "get-mut-key-view",
+        "fn bump(m: mut ref Map[String, i64], k: Str) {\n    if let Some(v) = m.get_mut(k) {\n        *v = *v + 1;\n    }\n}\nfn main() {\n    let mut m: Map[String, i64] = Map.new();\n    m.insert(\"a\".to_string(), 1);\n    bump(mut m, \"a\");\n    let mut s: SortedMap[Vec[i64], i64] = SortedMap.new();\n    s.insert(vec![1], 2);\n    let w: Vec[i64] = vec![1, 2];\n    if let Some(n) = s.get_mut(w[0..1]) { *n += 1; }\n    println(f\"{m.get(\"a\").unwrap_or(0)}\");\n}\n",
+    );
+    rejected(
+        "get-mut-key-of-another-type",
+        "fn main() {\n    let mut m: Map[String, i64] = Map.new();\n    m.insert(\"a\".to_string(), 1);\n    if let Some(v) = m.get_mut(5) { *v += 1; }\n}\n",
+        "expected 'ref String', found 'i64'",
+    );
+}

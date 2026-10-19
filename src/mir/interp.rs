@@ -5744,9 +5744,9 @@ impl<'a> Interp<'a> {
         match (method, &args[1..]) {
             ("len", []) => Ok(Value::Int(self.table_len(id)? as i128)),
             ("is_empty", []) => Ok(Value::Bool(self.table_len(id)? == 0)),
-            ("get" | "contains_key" | "contains", [key]) => {
+            ("get" | "get_mut_by_view" | "contains_key" | "contains", [key]) => {
                 let found = self.find_key(id, key, key_ty, is_map)?;
-                if method != "get" {
+                if !matches!(method, "get" | "get_mut_by_view") {
                     return Ok(Value::Bool(found.is_some()));
                 }
                 let at = found.map(|i| {
