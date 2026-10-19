@@ -101,9 +101,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 241 |
 | perf | 175 |
 | other | 175 |
-| diagnostics | 171 |
+| diagnostics | 172 |
 | crash | 124 |
-| soundness | 118 |
+| soundness | 119 |
 | use-after-free | 91 |
 
 ### By surface
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2948 |
 | interp | 964 |
-| typecheck | 487 |
+| typecheck | 489 |
 | ownership | 116 |
 | other | 115 |
 | runtime | 78 |
@@ -170,6 +170,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-15 | 2026-10-19 | ownership | medium | `let v = r;` with `r: mut ref i64` passes `karac check`, and every MIR surface refuses it at borrow check: `fn take(counter: mut ref i64) -> i64 { let v = counter; *counter += 1; v }` is `All checks passed.` and then E0516 "read of (*_1) while it is borrowed mutably" on `__mir-run` and `__mir-llvm-run` | — |
 | B-2026-10-19-16 | 2026-10-19 | typecheck | low | Plain `=` to a `mut ref i64` binding writes through on every surface, where design.md says it does not: `fn inc(counter: mut ref i64) { counter = counter + 1; }` passes `karac check` and leaves the caller's value at 1 on `__mir-run` and `__mir-llvm-run`, against design.md "Plain `=` does not auto-deref: write `*x = v`" | — |
 | B-2026-10-19-17 | 2026-10-19 | ownership | medium | `karac fix` applies nothing to a file whose ownership error suggests `#[derive(Clone)]` on a stdlib type: the fix-it's offset points into the stdlib's source (56696 in a 221-byte program), so fix aborts with "fix would write past end of file" and drops the good `.collect()` edits with it | — |
+| B-2026-10-19-18 | 2026-10-19 | typecheck | medium | `karac check` accepts a `mut ref self` method call while a local still holds a borrow from `self.index.get(k)`; every MIR surface refuses the program (E0516) | — |
+| B-2026-10-19-19 | 2026-10-19 | typecheck | low | "a reference to a temporary outlives its statement" has no `karac fix` edit for `let n = s.substring(..).trim();` or `m.get(k).unwrap_or(Vec.new())`, though the `unwrap_or(String.new())` shape gets one (B-2026-10-15-16) | — |
 
 ### Relocated
 
