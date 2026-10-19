@@ -17183,8 +17183,8 @@ fn low(fail: bool) -> Result[i64, Low] { if fail { Err(Low { n: 4 }) } else { Ok
 fn high(fail: bool) -> Result[i64, High] { let v = low(fail)?; Ok(v + 1) }
 fn at(v: ref Vec[i64], i: mut ref i64, seen: mut ref bool) -> i64 {
     let x = v[i];
-    i = i + 1;
-    if not seen { seen = true; }
+    *i = i + 1;
+    if not seen { *seen = true; }
     x
 }
 fn main() {
@@ -17828,7 +17828,7 @@ fn main() {
         let src = r#"
 fn bump(acc: mut ref i64) {
     let a = acc;
-    acc = a * 2 + 1;
+    *acc = a * 2 + 1;
 }
 fn main() {
     let mut x = 3;
@@ -17866,7 +17866,7 @@ fn report(xs: Slice[i64]) {
 }
 
 fn grow(x: mut ref String) {
-    x = x + "tail";
+    *x = x + "tail";
 }
 
 fn main() {
@@ -18154,8 +18154,8 @@ fn main() {
     #[test]
     fn variant_constructors_stored_through_mut_ref() {
         let src = r#"
-fn gr(x: mut ref Result[String, i64]) { x = Err(7); }
-fn gn(x: mut ref Option[String]) { x = None; }
+fn gr(x: mut ref Result[String, i64]) { *x = Err(7); }
+fn gn(x: mut ref Option[String]) { *x = None; }
 fn main() {
     let mut r: Result[String, i64] = Ok("a");
     gr(mut r);

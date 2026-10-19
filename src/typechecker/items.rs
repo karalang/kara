@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use super::const_eval::{
     apply_binary, apply_unary, const_value_type, infer_operand_target_ty, integer_to_const_value,
 };
-use super::inference::{find_unbound_const_param, find_unbound_type_param};
+use super::inference::{find_unbound_const_param, find_unbound_type_param, resolve_type_var_top};
 use super::types::{
     type_display, type_is_fully_concrete, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo,
 };
@@ -8171,8 +8171,19 @@ impl<'a> super::TypeChecker<'a> {
                 // counter, not a reference: a `mut` binding of a reference to a
                 // `Copy` value reads the value, as `let mut t: i64 = since`
                 // would, so `t = t + 1` assigns an `i64` (B-2026-10-15-22).
+                // A borrow written with its operator is kept as a borrow:
+                // `let mut r = mut ref a;` lets `r` be rebound, and `r += 1`
+                // still writes `a` (§5.1; B-2026-10-19-29).
+                let borrow_op = matches!(
+                    value.kind,
+                    ExprKind::Unary {
+                        op: UnaryOp::Ref | UnaryOp::MutRef,
+                        ..
+                    }
+                );
                 if *is_mut
                     && ty.is_none()
+                    && !borrow_op
                     && (self.cli_lint_overrides.strict_core || self.library_methods_from_source)
                     && matches!(pattern.kind, PatternKind::Binding(_))
                 {
@@ -8574,6 +8585,7 @@ impl<'a> super::TypeChecker<'a> {
                     rhs_ty
                 };
                 self.reject_owned_value_into_ref_local(target, value, &rhs_ty);
+                self.reject_plain_assign_through_mut_ref(target, &rhs_ty);
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
                 if let ExprKind::Unary {
                     op: UnaryOp::Deref,
@@ -8765,6 +8777,48 @@ impl<'a> super::TypeChecker<'a> {
             ),
             value.span,
             TypeErrorKind::TypeMismatch,
+        );
+    }
+
+    /// B-2026-10-19-16 — plain `=` does not write through a `mut ref` binding
+    /// (design.md § auto-deref: "Plain `=` does not auto-deref: write `*x =
+    /// v`"). `x = v` with `x: mut ref T` and `v` a `T` names the binding,
+    /// which a value cannot rebind, so it is refused with the `*x = v` fix-it.
+    /// A `mut ref` on the right rebinds a `let mut` binding and is left to
+    /// the ownership check.
+    fn reject_plain_assign_through_mut_ref(&mut self, target: &Expr, rhs_ty: &Type) {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return;
+        }
+        let ExprKind::Identifier(name) = &target.kind else {
+            return;
+        };
+        let Some(Type::MutRef(inner)) = self.local_scope.lookup(name.as_str()).cloned() else {
+            return;
+        };
+        let rhs = resolve_type_var_top(rhs_ty, &self.env.substitutions);
+        if matches!(
+            rhs,
+            Type::Ref(_) | Type::MutRef(_) | Type::Error | Type::Never | Type::TypeVar(_)
+        ) {
+            return;
+        }
+        self.type_error_with_fix_it(
+            format!(
+                "`{name}` is a `mut ref {}`, and plain `=` does not write through it: \
+                 write `*{name} = ...` to store into the value it borrows (design.md \
+                 § Auto-deref)",
+                type_display(&inner)
+            ),
+            target.span,
+            TypeErrorKind::TypeMismatch,
+            super::FixIt {
+                span: Span {
+                    length: 0,
+                    ..target.span
+                },
+                replacement: "*".to_string(),
+            },
         );
     }
 

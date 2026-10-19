@@ -5417,6 +5417,51 @@ fn fix_collects_an_iterator_reused_in_a_loop() {
     );
 }
 
+/// B-2026-10-19-16: plain `=` does not write through a `mut ref` binding
+/// (design.md § Auto-deref), so `counter = counter + 1` is refused and
+/// `karac fix` writes `*counter = counter + 1`. A `let mut` binding of an
+/// explicit `mut ref` stays a borrow (B-2026-10-19-29): `r += 1` writes the
+/// place it borrows, and `r = mut ref b` rebinds it.
+#[test]
+fn plain_assign_does_not_write_through_a_mut_ref() {
+    rejected_then_fixed_by(
+        "plain-assign-mut-ref",
+        "fn inc(counter: mut ref i64) {\n\
+             counter = counter + 1;\n\
+         }\n\
+         fn main() {\n\
+             let mut c = 0;\n\
+             inc(mut c);\n\
+             println(f\"{c}\");\n\
+         }\n",
+        "plain `=` does not write through it",
+        "*counter = counter + 1;",
+    );
+    rejected(
+        "plain-assign-mut-ref-variant",
+        "fn set(x: mut ref Result[i64, i64]) { x = Err(7); }\n\
+         fn main() {\n\
+             let mut r: Result[i64, i64] = Ok(1);\n\
+             set(mut r);\n\
+             println(f\"{r.is_err()}\");\n\
+         }\n",
+        "`x` is a `mut ref Result[i64, i64]`, and plain `=` does not write through it",
+    );
+    accepted_and_runs(
+        "let-mut-mut-ref-rebinds",
+        "fn main() {\n\
+             let mut a = 1;\n\
+             let mut b = 2;\n\
+             let mut r = mut ref a;\n\
+             r += 1;\n\
+             r = mut ref b;\n\
+             r += 10;\n\
+             println(f\"{a} {b}\");\n\
+         }\n",
+        "2 12\n",
+    );
+}
+
 /// B-2026-10-18-44, B-2026-10-18-43: a caller's `T.Output` passed to a
 /// generic call is not projected again, and `W { .. } + W { .. }` on
 /// `impl[T: Add] Add for W[T]` reads the impl's `T` at the operands'.

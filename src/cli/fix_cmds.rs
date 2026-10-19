@@ -261,6 +261,15 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             .retain(|(_, e)| e.length == 0 && e.replacement == "mut ");
     }
 
+    // Plain `=` through a `mut ref` migration (design.md § Auto-deref,
+    // B-2026-10-19-16): with `KARAC_DEREF_MIGRATE` set, `karac fix` writes
+    // only the `*` the rule inserts, so the rewrite is one reviewable change.
+    if std::env::var_os("KARAC_DEREF_MIGRATE").is_some() {
+        fixes
+            .edits
+            .retain(|(_, e)| e.length == 0 && e.replacement == "*");
+    }
+
     if fixes.edits.is_empty() {
         println!("(no fixable diagnostics in {filename})");
         return;
