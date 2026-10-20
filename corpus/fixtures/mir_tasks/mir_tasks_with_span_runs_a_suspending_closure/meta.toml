@@ -1,0 +1,4 @@
+source = "tests/mir_tasks.rs::mir_tasks_with_span_runs_a_suspending_closure"
+dedup_of = []
+tags = []
+extracted_src = "327ba972"

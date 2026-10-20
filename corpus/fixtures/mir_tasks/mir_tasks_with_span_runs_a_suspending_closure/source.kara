@@ -1,0 +1,19 @@
+
+struct Noisy { id: i64 }
+impl Drop for Noisy { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn take(n: own Noisy) -> i64 { n.id + 1 }
+fn pause_then_log(n: i64) -> i64 {
+    sleep_ms(1);
+    Log.info("after-resume");
+    n * 2
+}
+fn main() {
+    let s = Span.root("req", 7);
+    let r = with_span(s, || pause_then_log(21));
+    Log.info("outside");
+    println(r);
+    let t = Span.root("own", 9);
+    let noisy = Noisy { id: 1 };
+    let k = with_span(t, || { sleep_ms(1); Log.info("owned"); take(noisy) });
+    println(k);
+}
