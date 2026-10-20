@@ -34,6 +34,7 @@ mod clone;
 mod debug;
 mod deque;
 mod drop;
+mod flag;
 mod fmt;
 mod io;
 mod key;
@@ -158,6 +159,10 @@ pub struct Cx<'ctx, 'p> {
     /// How the body being lowered returns: `Some` when by value, with the
     /// result's register type (`None` for nothing).
     ret_by_value: Option<Option<BasicTypeEnum<'ctx>>>,
+    /// The borrow flags the body being lowered can hold (`flag.rs`).
+    flags: Vec<flag::FlagSlot<'ctx>>,
+    /// `KARAC_MIR_FLAGS=0` emits no borrow flags.
+    flags_on: bool,
     /// The global holding each static, by index.
     statics: HashMap<u32, PointerValue<'ctx>>,
     /// Line tables, when the program has a source file (`debug.rs`).
@@ -191,6 +196,8 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             vfns: HashMap::new(),
             wrap_todo: Vec::new(),
             ret_by_value: None,
+            flags: Vec::new(),
+            flags_on: std::env::var("KARAC_MIR_FLAGS").as_deref() != Ok("0"),
             statics: HashMap::new(),
             debug: None,
             site: crate::token::Span::default(),
@@ -714,6 +721,7 @@ impl<'ctx, 'p> Cx<'ctx, 'p> {
             self.locals.push(slot);
         }
         self.assume_ref_params(body)?;
+        self.flag_slots()?;
         self.blocks = (0..body.blocks.len())
             .map(|i| self.llcx.append_basic_block(f, &format!("bb{i}")))
             .collect();

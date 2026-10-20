@@ -16527,6 +16527,7 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             .map_err(|e| format!("elaborate {}: {e}", body.instance.name))?;
         // §6.2's run-time borrow flags, on the elaborated body.
         crate::mir::insert_borrow_flags(body, &lowered.tys, &has_receiver);
+        crate::mir::flags::narrow_call_flags(body, &lowered.tys, &|n| !names.contains(n));
         if rc_pairs && !coroutines.contains(&body.instance.name) {
             crate::mir::rc_pairs::elide_retains(body, &lowered.tys);
         }

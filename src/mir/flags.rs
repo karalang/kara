@@ -29,7 +29,7 @@ use super::borrowck::{
 };
 use super::place_ty::place_ty;
 use super::syntax::*;
-use super::ty::{Ty, TyInterner, TyKind};
+use super::ty::{IntrinsicTy, Ty, TyInterner, TyKind};
 
 /// Inserts the borrow-flag operations into an elaborated `body`.
 /// `has_receiver` is the borrow checker's.
@@ -127,6 +127,165 @@ pub fn insert_borrow_flags(
                 source_info: info,
             });
         }
+    }
+}
+
+/// A flag held only across one library call is narrowed to a check: a loan
+/// whose every `Acquire` sits just before a call to a native, with no
+/// function value or user `Drop` in reach of its arguments, and whose
+/// every `Release` opens that call's target block. Nothing can touch the
+/// flag while it is held, so taking it is the check it would make (§6.2):
+/// `b.items.push(x)` checks `b.items` once instead of taking and giving
+/// back its flag. `is_native` says which callees have no body.
+pub fn narrow_call_flags(body: &mut Body, tys: &TyInterner, is_native: &dyn Fn(&str) -> bool) {
+    let n = body.blocks.len();
+    let preds = predecessors(body);
+    let mut narrow: Vec<(u32, usize, usize)> = Vec::new();
+    for bi in 0..n {
+        let block = &body.blocks[bi];
+        let TerminatorKind::Call {
+            func:
+                Operand::Const(Const {
+                    kind: ConstKind::FnDef(callee),
+                    ..
+                }),
+            args,
+            target: Some(target),
+            ..
+        } = &block.terminator.kind
+        else {
+            continue;
+        };
+        if !is_native(&callee.name) || preds[target.index()].len() != 1 {
+            continue;
+        }
+        let plain_args = args.iter().all(|a| match a {
+            Operand::Copy(p) | Operand::Move(p) => {
+                place_ty(body, tys, p).is_ok_and(|pt| plain(tys, pt.ty, &mut Vec::new()))
+            }
+            Operand::Const(c) => plain(tys, c.ty, &mut Vec::new()),
+        });
+        if !plain_args {
+            continue;
+        }
+        // The trailing acquires, all of one loan.
+        let mut loan = None;
+        let mut first = block.statements.len();
+        for (si, st) in block.statements.iter().enumerate().rev() {
+            match &st.kind {
+                StatementKind::BorrowFlag(FlagOp::Acquire { loan: l, .. })
+                    if loan.is_none_or(|x| x == *l) =>
+                {
+                    loan = Some(*l);
+                    first = si;
+                }
+                _ => break,
+            }
+        }
+        let Some(loan) = loan else { continue };
+        // The target's leading releases include this loan's.
+        let releases_here = body.blocks[target.index()]
+            .statements
+            .iter()
+            .take_while(|st| matches!(st.kind, StatementKind::BorrowFlag(FlagOp::Release { .. })))
+            .any(|st| matches!(st.kind, StatementKind::BorrowFlag(FlagOp::Release { loan: l }) if l == loan));
+        if releases_here {
+            narrow.push((loan, bi, first));
+        }
+    }
+    for (loan, bi, first) in narrow {
+        // The loan is acquired nowhere else and released nowhere else.
+        let elsewhere = body.blocks.iter().enumerate().any(|(b, block)| {
+            block
+                .statements
+                .iter()
+                .enumerate()
+                .any(|(si, st)| match &st.kind {
+                    StatementKind::BorrowFlag(FlagOp::Acquire { loan: l, .. }) => {
+                        *l == loan && !(b == bi && si >= first)
+                    }
+                    _ => false,
+                })
+        });
+        if elsewhere {
+            continue;
+        }
+        let target = match &body.blocks[bi].terminator.kind {
+            TerminatorKind::Call {
+                target: Some(t), ..
+            } => t.index(),
+            _ => continue,
+        };
+        let only_there = body.blocks.iter().enumerate().all(|(b, block)| {
+            b == target
+                || !block.statements.iter().any(|st| {
+                    matches!(st.kind, StatementKind::BorrowFlag(FlagOp::Release { loan: l }) if l == loan)
+                })
+        });
+        if !only_there {
+            continue;
+        }
+        for st in &mut body.blocks[bi].statements[first..] {
+            if let StatementKind::BorrowFlag(FlagOp::Acquire { place, kind, .. }) = &st.kind {
+                st.kind = StatementKind::BorrowFlag(FlagOp::Check {
+                    place: place.clone(),
+                    kind: *kind,
+                });
+            }
+        }
+        for st in &mut body.blocks[target].statements {
+            if matches!(st.kind, StatementKind::BorrowFlag(FlagOp::Release { loan: l }) if l == loan)
+            {
+                st.kind = StatementKind::Nop;
+            }
+        }
+    }
+}
+
+/// A type a native can be handed without running user code: no function
+/// value and no type whose drop may run a user `Drop`.
+fn plain(tys: &TyInterner, t: Ty, seen: &mut Vec<Ty>) -> bool {
+    if seen.contains(&t) {
+        return true;
+    }
+    seen.push(t);
+    match tys.kind(t) {
+        TyKind::Int(_)
+        | TyKind::Float(_)
+        | TyKind::Bool
+        | TyKind::Char
+        | TyKind::Unit
+        | TyKind::Str
+        | TyKind::Intrinsic(IntrinsicTy::String) => true,
+        TyKind::Ref(t) | TyKind::MutRef(t) | TyKind::Slice(t) | TyKind::Array(t, _) => {
+            plain(tys, t, seen)
+        }
+        TyKind::Tuple(ts) => ts.iter().all(|&t| plain(tys, t, seen)),
+        TyKind::Intrinsic(
+            IntrinsicTy::Vec(e)
+            | IntrinsicTy::Set(e)
+            | IntrinsicTy::VecDeque(e)
+            | IntrinsicTy::SortedSet(e),
+        ) => plain(tys, e, seen),
+        TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+            plain(tys, k, seen) && plain(tys, v, seen)
+        }
+        TyKind::Weak(_) => true,
+        TyKind::Adt(a) | TyKind::Shared(a) => {
+            if tys.has_drop_impl(t) {
+                return false;
+            }
+            let adt = tys.adt(a);
+            let is_enum = adt.is_enum;
+            let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
+            counts.iter().enumerate().all(|(v, n)| {
+                (0..*n as u32).all(|f| {
+                    tys.field_ty(t, is_enum.then_some(v as u32), f)
+                        .is_some_and(|ft| plain(tys, ft, seen))
+                })
+            })
+        }
+        _ => false,
     }
 }
 

@@ -120,6 +120,7 @@ pub mod interner;
 pub mod lazy;
 pub mod map;
 pub mod mir;
+pub mod mir_flags;
 pub mod mir_io;
 pub mod mir_map;
 pub mod mir_process;
@@ -340,6 +341,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         mir::karac_mir_f16_from,
         mir::karac_mir_f16_to,
         mir::karac_mir_bf16_from,
+        mir_flags::karac_mir_flag_acquire,
+        mir_flags::karac_mir_flag_release,
+        mir_flags::karac_mir_flag_check,
         mir_map::karac_mir_map_find,
         mir_map::karac_mir_map_insert,
         mir_map::karac_mir_map_find_hv,

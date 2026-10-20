@@ -36,14 +36,13 @@ impl<'ctx> Cx<'ctx, '_> {
                 let dst = self.place_ptr(place)?;
                 self.store_tag(dst, ty, v.0)
             }
-            // Storage is the function's for its whole life, and the borrow
-            // flags are the interpreter's dynamic check of what the borrow
-            // checker proved; neither emits anything.
+            // Storage is the function's for its whole life, so it emits
+            // nothing.
             StatementKind::FreeBox(place) => self.free_box_of(place),
-            StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
-            | StatementKind::BorrowFlag(_)
-            | StatementKind::Nop => Ok(()),
+            StatementKind::BorrowFlag(op) => self.borrow_flag(op),
+            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) | StatementKind::Nop => {
+                Ok(())
+            }
         }
     }
 
@@ -76,18 +75,21 @@ impl<'ctx> Cx<'ctx, '_> {
                     .build_switch(v, self.blocks[targets.otherwise.index()], &cases)
                     .map_err(e)?;
             }
-            TerminatorKind::Return => match self.ret_by_value {
-                Some(Some(t)) => {
-                    let v = self.builder.build_load(t, self.locals[0], "").map_err(e)?;
-                    if let Some(i) = v.as_instruction_value() {
-                        let _ = i.set_alignment(1);
+            TerminatorKind::Return => {
+                self.give_back_all()?;
+                match self.ret_by_value {
+                    Some(Some(t)) => {
+                        let v = self.builder.build_load(t, self.locals[0], "").map_err(e)?;
+                        if let Some(i) = v.as_instruction_value() {
+                            let _ = i.set_alignment(1);
+                        }
+                        self.builder.build_return(Some(&v)).map_err(e)?;
                     }
-                    self.builder.build_return(Some(&v)).map_err(e)?;
+                    _ => {
+                        self.builder.build_return(None).map_err(e)?;
+                    }
                 }
-                _ => {
-                    self.builder.build_return(None).map_err(e)?;
-                }
-            },
+            }
             TerminatorKind::Call {
                 func,
                 args,
