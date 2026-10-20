@@ -114,6 +114,46 @@ fn karac_build_mir_writes_the_executable() {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "hello 30 5 p3\n");
 }
 
+/// A program cut into codegen units (`KARAC_MIR_CODEGEN_UNITS`, which a
+/// large program gets by default) runs as the whole one does: each unit
+/// keeps its own bodies and declares the rest, and the objects are merged.
+#[test]
+fn karac_build_mir_in_codegen_units_matches_one_unit() {
+    let dir = Scratch::new();
+    let src = dir.path().join("hello.kara");
+    std::fs::write(&src, PROGRAM).unwrap();
+    for units in ["1", "2", "3", "5"] {
+        let exe = dir.path().join(format!("hello{units}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .env("KARAC_MIR_CODEGEN_UNITS", units)
+            .args([
+                "build",
+                "--mir",
+                src.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if common::link_or_skip(if out.status.success() {
+            Ok(())
+        } else {
+            Err(stderr.to_string())
+        })
+        .is_none()
+        {
+            return;
+        }
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "hello 30 5 p3\n",
+            "in {units} units"
+        );
+    }
+}
+
 /// `#[derive(Serialize, Deserialize)]` and `Json` compiled: the same text
 /// as on the MIR interpreter (`tests/mir_serde.rs`), at -O0 and -O2.
 const SERDE_PROGRAM: &str = r#"

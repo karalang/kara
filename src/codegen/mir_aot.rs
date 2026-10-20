@@ -12,10 +12,12 @@ use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::Module;
 use inkwell::passes::PassBuilderOptions;
-use inkwell::targets::FileType;
+use inkwell::targets::{FileType, TargetMachine};
 use inkwell::types::BasicTypeEnum;
 use inkwell::AddressSpace;
 use std::path::Path;
+
+mod split;
 
 /// Compile `ir` to a native object at `obj`.
 ///
@@ -86,6 +88,43 @@ fn compile_module<'ctx>(
     );
     empty_global(module, "KARAC_SPAWN_SITES", entry.into());
 
+    if let Some(plan) = split::plan(module.as_mut_ptr()) {
+        crate::mir::lower::phase_time("plan codegen units", &mut t);
+        let units = plan.units();
+        let r = split::compile_units(module.as_mut_ptr(), &plan, obj, &|m, part| {
+            optimize_and_emit(m, part, opt, &super::create_target_machine()?)
+        });
+        crate::mir::lower::phase_time(&format!("opt + emission, {units} units"), &mut t);
+        return r;
+    }
+    optimize_and_emit_timed(module, obj, opt, &tm)
+}
+
+fn optimize_and_emit_timed(
+    module: &Module<'_>,
+    obj: &Path,
+    opt: u8,
+    tm: &TargetMachine,
+) -> Result<(), String> {
+    let mut t = std::time::Instant::now();
+    run_passes(module, opt, tm)?;
+    crate::mir::lower::phase_time("opt passes", &mut t);
+    let r = emit(module, obj, tm);
+    crate::mir::lower::phase_time("object emission", &mut t);
+    r
+}
+
+fn optimize_and_emit(
+    module: &Module<'_>,
+    obj: &Path,
+    opt: u8,
+    tm: &TargetMachine,
+) -> Result<(), String> {
+    run_passes(module, opt, tm)?;
+    emit(module, obj, tm)
+}
+
+fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), String> {
     if opt > 0 {
         let mut passes = format!("default<O{}>", opt.min(3));
         // Every argument is passed by pointer; `default<O2>` has no
@@ -97,15 +136,15 @@ fn compile_module<'ctx>(
             passes.push_str(",cgscc(argpromotion),function(sroa,instcombine,simplifycfg)");
         }
         module
-            .run_passes(&passes, &tm, PassBuilderOptions::create())
+            .run_passes(&passes, tm, PassBuilderOptions::create())
             .map_err(|e| format!("{passes}: {}", e.to_string()))?;
     }
-    crate::mir::lower::phase_time("opt passes", &mut t);
-    let r = tm
-        .write_to_file(module, FileType::Object, obj)
-        .map_err(|e| format!("write {}: {}", obj.display(), e.to_string()));
-    crate::mir::lower::phase_time("object emission", &mut t);
-    r
+    Ok(())
+}
+
+fn emit(module: &Module<'_>, obj: &Path, tm: &TargetMachine) -> Result<(), String> {
+    tm.write_to_file(module, FileType::Object, obj)
+        .map_err(|e| format!("write {}: {}", obj.display(), e.to_string()))
 }
 
 /// Define `name` as a zero constant of `ty`, unless the module already has it.
