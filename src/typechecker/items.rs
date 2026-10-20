@@ -8728,7 +8728,7 @@ impl<'a> super::TypeChecker<'a> {
         // one; a branch that names a binding (a view of a borrowed
         // scrutinee, perhaps) does not (B-2026-10-19-24). A branch that
         // leaves (`return`, `break`, `continue`) makes no value, so it does
-        // not count against the others (B-2026-10-20-1).
+        // not count against the others (B-2026-10-20-12).
         let leaves = |e: &Expr| {
             matches!(
                 &e.kind,

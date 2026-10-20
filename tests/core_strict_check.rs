@@ -10158,7 +10158,7 @@ fn main() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// B-2026-10-20-1: an `if` or `match` local with a branch that leaves
+/// B-2026-10-20-12: an `if` or `match` local with a branch that leaves
 /// (`return`) still owns what its other branches make.
 #[test]
 fn a_branch_made_local_with_a_leaving_branch_cannot_be_stored_into_a_borrow() {

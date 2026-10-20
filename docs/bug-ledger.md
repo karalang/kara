@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 180 |
 | diagnostics | 176 |
 | crash | 125 |
-| soundness | 123 |
+| soundness | 124 |
 | use-after-free | 92 |
 
 ### By surface
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2970 |
-| interp | 988 |
-| typecheck | 507 |
+| interp | 989 |
+| typecheck | 508 |
 | ownership | 124 |
 | other | 121 |
 | runtime | 81 |
@@ -161,19 +161,16 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-27 | 2026-10-19 | interp+codegen | medium | At 128 bits, 12 integer methods are refused by the MIR compiled backend with "native `u128.<m>` is not lowered yet" (the same for i128): clamp, leading_zeros, trailing_zeros, count_ones, count_zeros, to_ne_bytes, pow, to_f64, swap_bytes, reverse_bits, is_power_of_two and next_power_of_two. The MIR interpreter also refuses swap_bytes, reverse_bits and next_power_of_two with "call of unknown function" | — |
 | B-2026-10-19-32 | 2026-10-19 | typecheck | low | A list literal passed to a method of a generic receiver does not take the parameter's type as its expected type: `best.push([0, 1])` on a `Vec[Array[i64, 2]]` is refused with "expected 'Array[i64, 2]', found 'Vec[i64]'", while the same literal passed to a free function taking `Array[i64, 2]` is accepted | — |
 | B-2026-10-19-34 | 2026-10-19 | codegen | medium | On the MIR compiled backend, an array of string literals in a function body (`let codes = [".-", "-...", ...]`, 26 entries) is built as 26 heap Strings through `karac_mir_string_from` on every call, which makes kata 804's bench 2.63x the legacy build (8.50 s vs 3.23 s, medians of five interleaved runs) and slower than Python (7.19 to 7.57 s); hoisting the table out of the function brings v2 to 2.46 s | ../kara-katas/leetcode/801-900/804-unique-morse-code-words |
-| B-2026-10-19-35 | 2026-10-19 | cli | low | `karac check` shows the program's text with its own type renamed apart in every diagnostic's source excerpt: a user `struct Field` prints as `Fiel_`, `IoError` as `IoErro_` | — |
 | B-2026-10-19-43 | 2026-10-19 | ownership+typecheck | medium | §5.7's 'where a view may not go' is not enforced: a view stored in a shared field, sent through a channel, or captured by a closure stored in a struct or a shared field is accepted by `karac check` and both MIR backends (when the origin outlives it); §5.8's instance check is also absent from check | — |
 | B-2026-10-19-46 | 2026-10-19 | ownership+effect+interp+codegen | medium | SOUNDNESS: a plain `shared` handle enters `par` branches with no E_NOT_CROSS_TASK on `karac check` or either MIR backend, including a branch that counts it into an `own` parameter while a sibling writes its `mut` field | — |
 | B-2026-10-19-48 | 2026-10-19 | ownership+interp+codegen | medium | Disjoint field capture is not implemented: a closure reading `p.a` holds a borrow that blocks writing `p.b` (E0516) on `karac check` and the MIR borrow checker, for String and for Copy fields | — |
 | B-2026-10-19-52 | 2026-10-19 | interp+codegen | medium | On both MIR backends a `let ... else` initializer's temporaries drop after the else block runs instead of before it | — |
-| B-2026-10-19-53 | 2026-10-19 | interp+codegen | medium | On both MIR backends a nested index read `v[p(1)][p(0)]` evaluates the outer index `p(0)` before the inner one `p(1)`; the same place as an assignment target is evaluated in order | — |
 | B-2026-10-19-54 | 2026-10-19 | interp+codegen | medium | On both MIR backends `?` in one `par` branch skips the later sibling branch: `par { fail(1)?, work()? }` never runs `work()` | — |
 | B-2026-10-19-55 | 2026-10-19 | codegen | medium | `__mir-llvm-run` has no §6.2 runtime borrow flag: iterating `src.items` while pushing to `dst.items`, where `src` and `dst` are the same shared object, runs to completion and prints `unreachable`; `__mir-run` panics as specified | — |
 | B-2026-10-19-57 | 2026-10-19 | interp+codegen | medium | The MIR pipeline (`karac build --mir`, `__mir-run`, `__mir-llvm-run`) accepts programs `karac check` refuses, because it does not run those rules itself: `mut ref self` on a shared type, `mut ref name` from an immutable scrutinee, an impl mode stronger than its trait's, a generic call checked with the impl's modes, `mut ref` of a non-`let mut` place, `own ||` capture prefixes, a MutFn passed for Fn, and free `spawn` | — |
 | B-2026-10-19-58 | 2026-10-19 | interp+codegen | medium | A generic `shared struct Slot[T] { mut items: Vec[T] }` does not lower on MIR: `put(s, 5)` then `s.items.len()` on a `Slot[i64]` is refused with 'an expression whose type does not lower (Type(UnknownParam("T"))) is not lowered yet'; `karac check` passes | — |
 | B-2026-10-19-59 | 2026-10-19 | resolver+typecheck+runtime | medium | `#[panic_handler]` is not implemented: `karac check` and both MIR backends reject it as an unknown attribute and `PanicInfo` as an undefined type | — |
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
-| B-2026-10-19-70 | 2026-10-19 | interp | medium | `karac __mir-run` copies a whole `Array` on each index or `len()`: a loop over `[0i64; 50000]` takes 25 s, against 0.95 s for `Vec.filled(50000, 0i64)` | — |
 | B-2026-10-20-1 | 2026-10-20 | typecheck | low | A tuple literal that holds a string literal, passed to a method or generic-function parameter whose type is a tuple with a `Str` slot, is still typed `(String, ...)`: `let mut v: Vec[(Str, Str)] = Vec.new(); v.push(("a", "b"));` is refused with "expected '(StringSlice, StringSlice)', found '(String, String)'" (remainder of B-2026-10-14-68) | — |
 | B-2026-10-20-2 | 2026-10-20 | parser+typecheck | low | `par struct` and `par enum` are still accepted although Amendment 6 renamed them `sync struct` and `sync enum`, and E0257 about a `sync struct` still calls it a `par struct` (the remainder of B-2026-10-19-50 once its `with _` half was fixed) | — |
 | B-2026-10-20-3 | 2026-10-20 | interp+codegen | low | The MIR backends accept assigning a bare `for` item (`for x in v { x += 1; }` over a `Vec[i64]`) and run it changing nothing; `karac check` refuses it since 6b623ebd27, so only programs run without check reach this | — |
@@ -4239,6 +4236,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-30 | parser | low | A tuple index straight after `?` (`f()?.0`) does not parse: `Expected identifier, found Integer(0, None)` | 8d175b71da |
 | B-2026-10-19-31 | interp+codegen | medium | When a user enum has a variant named `None` (enum V { None, Int(i64) }), a bare `None` passed to a `ref Option[T]` parameter lowers to `Option.Some {… | 9164527fff |
 | B-2026-10-19-33 | typecheck | low | `karac check` accepts `v.extend(rest)` where `rest` is a bare (borrowed) `Vec[T]` parameter, which the MIR builder then refuses ("cannot move a non-`… | bf39a5b5e3 |
+| B-2026-10-19-35 | cli | low | `karac check` shows the program's text with its own type renamed apart in every diagnostic's source excerpt: a user `struct Field` prints as `Fiel_`,… | bcf118e513 |
 | B-2026-10-19-36 | ownership | low | `karac check` accepts copying a MutFn closure: `let mut f = \|\| { n += 1; }; let mut g = f; f();` has no E0500, although a MutFn is never Copy; both M… | e8446554af |
 | B-2026-10-19-37 | ownership | medium | `karac check` refuses ref-returning methods §5.4 allows: `fn first(self\|ref self) -> ref String { self.items[0] }` is E0515 and `m.get(k).unwrap_or("… | 6025b74a66 |
 | B-2026-10-19-38 | typecheck | low | `karac check` refuses calling a returned capturing closure directly as a call result, `(pick(10))(p(4))` ('a returned capturing closure can currently… | 6025b74a66 |
@@ -4252,6 +4250,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-49 | typecheck+ownership | low | A MutFn is callable through a bare (borrowed) parameter: `fn call(f: MutFn()) { f(); }` is accepted by `karac check` and both MIR backends, although… | 6b623ebd27 |
 | B-2026-10-19-50 | parser+typecheck | low | Removed spellings are still accepted: `par struct` (renamed `sync struct`) and the `with _` annotation compile and run on every surface, and diagnost… | ffb21df474 |
 | B-2026-10-19-51 | interp+codegen | medium | On both MIR backends an argument moved through a trait bound into an impl that borrows it drops at the end of the generic function, not at the end of… | 0a4c6cfe4b |
+| B-2026-10-19-53 | interp+codegen | medium | On both MIR backends a nested index read `v[p(1)][p(0)]` evaluates the outer index `p(0)` before the inner one `p(1)`; the same place as an assignmen… | c1cd8dba18 |
 | B-2026-10-19-56 | interp | low | `__mir-run` reports a channel deadlock as a run error with exit 3 instead of a panic with exit 101 (`__mir-llvm-run` exits 101) | 39c49483ba |
 | B-2026-10-19-60 | parser | low | The empty-map literal `[:]` does not parse: `let mut m: Map[String, String] = [:];` is E0002 'Expected expression, found Colon' on every surface | 3818051dfc |
 | B-2026-10-19-61 | typecheck | low | Diagnostic codes for two core-semantics errors are not the codes the spec names: an index move reports JSON code E0285 with `E_INDEX_MOVE_NON_COPY` o… | 3528457fdc |
@@ -4262,7 +4261,9 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-67 | other | low | Atomic operations require a `MemoryOrdering` argument (B-2026-06-30-5, legacy era) although docs/library/concurrency.md and deferred.md say v1 atomic… | 29625c1f21 |
 | B-2026-10-19-68 | interp+codegen | high | Calling a closure through a `mut ref MutFn()` parameter is broken on both MIR backends: a temporary closure argument `twice(mut \|\| { n += 1; })` runs… | 59eea721e4 |
 | B-2026-10-19-69 | cli | high | `karac fmt` and every fix-it that renders an expression drop the parentheses an operand needs: `(a + 1) * b` is written `a + 1 * b`, a different prog… | e41316d49f |
+| B-2026-10-19-70 | interp | medium | `karac __mir-run` copies a whole `Array` on each index or `len()`: a loop over `[0i64; 50000]` takes 25 s, against 0.95 s for `Vec.filled(50000, 0i64… | 25e4c66881 |
 | B-2026-10-19-71 | typecheck | medium | `cmp` and `partial_cmp` on an `i128` or `u128` are refused ("no method 'cmp' on type 'u128'"), and a 128-bit value does not meet an `Ord`, `Eq` or `A… | da5f25cf67 |
+| B-2026-10-20-12 | typecheck+interp | low | A local made by an `if`/`match` with a branch that leaves (`return`) is not seen as owning its value, so storing it by value into a local bound to a… | 61a9b3a27f |
 
 </details>
 
