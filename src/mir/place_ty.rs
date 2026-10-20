@@ -27,7 +27,7 @@ pub fn place_ty(body: &Body, tys: &TyInterner, place: &Place) -> Result<PlaceTy,
     Ok(cur)
 }
 
-fn project(
+pub(super) fn project(
     body: &Body,
     tys: &TyInterner,
     cur: PlaceTy,

@@ -16311,6 +16311,15 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
             eprintln!("{}", crate::mir::pretty::pretty_body(body, &lowered.tys));
         }
     }
+    // `KARAC_MIR_RC_BORROW=0` counts every handle read out of a borrowed
+    // parameter (`rc_borrow`).
+    if std::env::var("KARAC_MIR_RC_BORROW").as_deref() != Ok("0") {
+        crate::mir::rc_borrow::elide_borrowed_retains(
+            &mut lowered.program,
+            &lowered.tys,
+            &coroutines,
+        );
+    }
     phase_time(
         &format!("finish_build ({} bodies)", lowered.program.bodies.len()),
         &mut t,
