@@ -1,10 +1,12 @@
-const TBL: Array[u8, 3] = [1, 2, 3];
+enum NetE { A, B(i32) }
+type OldE = NetE;
+
+fn f(x: i64) -> Result[i64, OldE] {
+    if x > 0 { Ok(x) } else { Err(OldE.B(7)) }
+}
 
 fn main() {
-    let a: Array[i64, 3] = [4, 5, 6];
-    let mut v = a.to_vec();
-    v.push(7);
-    let s: Array[String, 2] = ["x".to_string(), "yz".to_string()];
-    let t = s.to_vec();
-    println(f"{v} {TBL.to_vec()} {a[0]} {t} {s[1]}");
+    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
+    let u = OldE.A;
+    match u { NetE.A => println("a"), _ => println("x") }
 }

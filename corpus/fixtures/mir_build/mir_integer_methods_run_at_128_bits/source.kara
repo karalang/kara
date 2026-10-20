@@ -1,0 +1,39 @@
+
+fn main() {
+    let a: i128 = -170141183460469231731687303715884105728;
+    let b: i128 = -5;
+    println(b.clamp(-3, 7));
+    println(a.clamp(-10, 10));
+    println(b.leading_zeros());
+    println(b.trailing_zeros());
+    println(a.count_ones());
+    println(b.count_zeros());
+    println(b.pow(3));
+    println(b.to_f64());
+    println(b.swap_bytes());
+    println(b.reverse_bits());
+    let bb = b.to_ne_bytes();
+    println(bb[0]);
+    println(bb[15]);
+    let m: u128 = 340282366920938463463374607431768211455u128;
+    println(m.to_f64());
+    println(m.count_ones());
+    println(m.leading_zeros());
+    let h: u128 = 170141183460469231731687303715884105728u128;
+    println(h.is_power_of_two());
+    println(h.next_power_of_two());
+    let k: u128 = 170141183460469231731687303715884105727;
+    println(k.next_power_of_two());
+    let one: u128 = 1;
+    println(one.next_power_of_two());
+    let s: i32 = -2;
+    println(s.swap_bytes());
+    println(s.reverse_bits());
+    let c: u8 = 0x81;
+    println(c.swap_bytes());
+    println(c.reverse_bits());
+    let t: u16 = 0x1234;
+    println(t.swap_bytes());
+    let two: u128 = 2;
+    println(two.pow(127));
+}

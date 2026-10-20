@@ -1,0 +1,6 @@
+shared struct Slot[T] { mut items: Vec[T], name: String }
+fn main() {
+    let s: Slot[i64] = Slot { items: Vec.new(), name: "n".to_string() };
+    s.name = "m".to_string();
+    println(s.name);
+}

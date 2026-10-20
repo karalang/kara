@@ -331,7 +331,7 @@ def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template,
         if spec is not None:
             return {**res, "class": "e", "bucket": "e-both-differ-from-spec"}
         return {**res, "class": sub or "a", "bucket": f"{sub + '->' if sub else ''}a", "expected": got}
-    if spec is None and legacy is not None and ({"drop", "shared"} & set(tags)) \
+    if spec is None and legacy is not None and ({"drop", "shared"} & set(out["tags"])) \
             and lines(got) == lines(legacy) and code == legacy_exit:
         return {**res, "class": sub or "c", "bucket": f"{sub + '->' if sub else ''}c-unreviewed", "expected": got}
     why = "exit" if legacy is not None and got == legacy else "stdout"

@@ -1,9 +1,9 @@
+import std.time.{Duration, Instant, sleep};
+
 fn main() {
-    let c: u8 = 20;
-    let d: u8 = 0xC0 ^ c;
-    let g: u8 = (c >> 2) | 0x80;
-    let x: u8 = 0x80 | (c & 0x3F);
-    let mut out: Vec[u8] = Vec.new();
-    out.push(0xC0 | (c >> 6));
-    println(f"{d} {g} {x} {out[0]}");
+    let i0 = Instant.now();
+    sleep(Duration.ms(2));
+    let i1 = Instant.now();
+    let later = i0.add(Duration.ms(5));
+    println(f"{i1.duration_since(i0).as_ms() >= 2} {i0 < i1} {later.duration_since(i0).as_ms()} {i0.elapsed().as_ms() >= 2}");
 }

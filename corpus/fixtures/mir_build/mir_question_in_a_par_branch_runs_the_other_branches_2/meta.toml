@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::mir_question_in_a_par_branch_runs_the_other_branches"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["par", "post-m1:par"]
+class = "a"
+expected_from = "assert"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "491112bd5"
+extracted_src = "92a2f65d"
+model_rev = "583cfb0d"
+model_src = "92a2f65d"

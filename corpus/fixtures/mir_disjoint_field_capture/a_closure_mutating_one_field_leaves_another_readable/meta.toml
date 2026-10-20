@@ -1,0 +1,4 @@
+source = "tests/mir_disjoint_field_capture.rs::a_closure_mutating_one_field_leaves_another_readable"
+dedup_of = []
+tags = []
+extracted_src = "12d88d2b"

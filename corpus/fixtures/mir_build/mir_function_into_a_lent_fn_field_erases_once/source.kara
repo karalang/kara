@@ -1,0 +1,3 @@
+struct Keyed[V, K] { key: Fn(V) -> K }
+fn neg(x: i64) -> i64 { -x }
+fn main() { let k = Keyed { key: neg }; println(f"{(k.key)(7)}"); }

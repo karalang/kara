@@ -1,8 +1,9 @@
 fn main() {
-    let s = "abc".to_string();
-    let t: (Vec[char], i64) = (s.chars().collect(), 1);
-    let mut pairs: Vec[(Vec[char], i64)] = Vec.new();
-    pairs.push((s.chars().collect(), 2));
-    let u: (String, i64) = (s.chars().rev().collect(), 3);
-    println(f"{t.0.len()} {pairs[0].0.len()} {pairs[0].1} {u.0} {u.1}");
+    let words: Vec[String] = vec!["ab".to_string(), "cd".to_string()];
+    let r: Vec[Vec[char]] = words.iter().map(|w| w.chars().rev().collect()).collect();
+    println(f"{r}");
+    let s: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();
+    println(f"{s}");
+    let t: Vec[String] = words.iter().map(|w| { let n = w.len(); w.chars().take(n - 1).collect() }).collect();
+    println(f"{t}");
 }

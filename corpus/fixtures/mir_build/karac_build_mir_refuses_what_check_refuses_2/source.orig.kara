@@ -1,0 +1,5 @@
+fn main() {
+    let s = "a".to_string();
+    let f = own || s.len();
+    println(f"{f()}");
+}

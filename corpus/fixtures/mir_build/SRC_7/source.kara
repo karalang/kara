@@ -1,34 +1,18 @@
-shared struct Node {
-    mut val: i64,
-    mut next: Option[Node],
+fn dist(a: (i64, i64), b: (i64, i64)) -> i64 {
+    (a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)
 }
-
-struct Holder {
-    mut ns: Vec[Node],
+fn mid(a: (i64, i64), b: (i64, i64)) -> (i64, i64) {
+    ((a.0 + b.0) / 2, (a.1 + b.1) / 2)
 }
-
-fn set(nodes: Vec[Node]) {
-    nodes[1].val = 5;
-    nodes[0].val += 10;
-}
-
-fn bump(h: ref Holder) {
-    h.ns[0].val = 40;
-}
-
+fn square(x: i64) -> i64 { x * x }
 fn main() {
-    let nodes: Vec[Node] = vec![Node { val: 1, next: None }, Node { val: 2, next: None }];
-    set(nodes);
-    println(f"{nodes[0].val} {nodes[1].val}");
-    let lists: Vec[Vec[Node]] = vec![vec![Node { val: 7, next: None }]];
-    let ns = ref lists[0];
-    ns[0].val = 8;
-    ns[0].next = Some(Node { val: 9, next: None });
-    println(f"{lists[0][0].val} {lists[0][0].next.unwrap().val}");
-    let h = Holder { ns: vec![Node { val: 3, next: None }] };
-    bump(h);
-    println(f"{h.ns[0].val}");
-    let mut owned: Vec[Node] = vec![Node { val: 1, next: None }];
-    owned[0].val = 2;
-    println(f"{owned[0].val}");
+    let ps: Vec[(i64, i64)] = vec![(0, 0), (3, 4), (-6, 8)];
+    let mut total = 0;
+    for i in 0..ps.len() {
+        for j in 0..ps.len() {
+            total += dist(ps[i], ps[j]);
+        }
+    }
+    let m = mid(ps[1], ps[2]);
+    println(f"{total} {m.0} {m.1} {square(-7)}");
 }

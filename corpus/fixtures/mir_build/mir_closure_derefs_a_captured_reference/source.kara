@@ -1,0 +1,7 @@
+fn has(v: ref Vec[(String, i64)], key: ref String) -> bool {
+    v.iter().any(|t| t.0 == *key)
+}
+fn main() {
+    let v = vec![("a".to_string(), 1), ("b".to_string(), 2)];
+    println(f"{has(v, "b".to_string())} {has(v, "c".to_string())}");
+}

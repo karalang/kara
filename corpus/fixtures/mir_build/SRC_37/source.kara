@@ -1,15 +1,24 @@
-import std.time.{Clock, Duration, SystemTime, sleep};
-import std.random.{next_u64};
-import std.uuid.{v4};
+struct D { a: i64, name: String, c: bool }
+
+fn base() -> D {
+    println("base");
+    D { a: 1, name: "b".to_string(), c: true }
+}
+
+fn five() -> i64 {
+    println("five");
+    5
+}
+
+struct H { d: D }
 
 fn main() {
-    let d = Duration.ms(1500);
-    println(f"{d.as_ms()} {Duration.secs(2).as_ms()} {d < Duration.secs(2)} {d == Duration.ms(1500)}");
-    let t0 = SystemTime.now();
-    sleep(Duration.ms(2));
-    let t1 = SystemTime.now();
-    println(f"{t0.since_epoch().as_ms() > 1700000000000} {t0 < t1}");
-    let u = v4();
-    let parts: Vec[Str] = u.split("-").collect();
-    println(f"{u.len()} {parts.len()} {parts[2].slice(0, 1)} {next_u64() != next_u64()} {Clock.now() > 0}");
+    let d = D { a: five(), ..base() };
+    println(f"{d.a} {d.name} {d.c}");
+    let e = D { c: false, ..base() };
+    println(f"{e.a} {e.name} {e.c}");
+    let h = H { d: D { a: 2, ..base() } };
+    println(f"{h.d.a} {h.d.name}");
+    let v = [D { a: 9, ..base() }, D { name: "x".to_string(), ..base() }];
+    println(f"{v[0].a} {v[1].name} {v[1].a}");
 }

@@ -1,14 +1,17 @@
+
+fn first[T: Clone](s: Slice[T]) -> T { s[0].clone() }
+fn count[T](s: Slice[T]) -> i64 { s.len() }
+fn bump[T](s: mut Slice[T], v: own T) { s[0] = v; }
+
 fn main() {
-    let f: f64 = 1e22;
-    let w = f as i128;
-    println(f"{w}");
-    let g: f64 = -1e40;
-    println(f"{g as i128} {1e40 as i128} {(0.0 / 0.0) as i128}");
-    let z: f32 = 0.1;
-    println(f"{z}");
-    println(z.to_string());
-    let v: Vec[f32] = vec![0.1, 2.5, 1.0e-7];
-    println(f"{v}");
-    let d: f64 = 0.1;
-    println(f"{d} {z as f64}");
+    let vi: Vec[i64] = [10, 20, 30];
+    println(first(vi));
+    println(count(vi));
+    let vs: Vec[String] = ["a".to_string(), "b".to_string()];
+    println(first(vs));
+    let a: Array[f64, 2] = [1.5, 2.5];
+    println(first(a));
+    let mut w: Vec[i64] = [1, 2];
+    bump(mut w, 7);
+    println(w[0]);
 }

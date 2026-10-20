@@ -1,0 +1,8 @@
+struct P { a: Vec[i64], b: i64 }
+fn show(p: ref P) -> i64 { p.b }
+fn main() {
+    let mut p = P { a: Vec.new(), b: 1 };
+    let mut push = |x: i64| { p.a.push(x); show(p) };
+    p.b = 3;
+    println(f"{push(1)}");
+}

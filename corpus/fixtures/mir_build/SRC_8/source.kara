@@ -1,14 +1,34 @@
+shared struct Node {
+    mut val: i64,
+    mut next: Option[Node],
+}
+
+struct Holder {
+    mut ns: Vec[Node],
+}
+
+fn set(nodes: Vec[Node]) {
+    nodes[1].val = 5;
+    nodes[0].val += 10;
+}
+
+fn bump(h: ref Holder) {
+    h.ns[0].val = 40;
+}
+
 fn main() {
-    let days: Vec[char] = vec!['a', 'b', ','];
-    let mut s = String.new();
-    for c in days.iter() {
-        s.push(c);
-    }
-    println(s);
-    let t = "x,y,ab";
-    let owned = String.from("ba,c");
-    for c in days.iter() {
-        let sep = c.to_string();
-        println(f"{t.find(c)} {t.split(sep.as_str()).count()} {owned.find(c)} {owned.split(sep.as_str()).count()}");
-    }
+    let nodes: Vec[Node] = vec![Node { val: 1, next: None }, Node { val: 2, next: None }];
+    set(nodes);
+    println(f"{nodes[0].val} {nodes[1].val}");
+    let lists: Vec[Vec[Node]] = vec![vec![Node { val: 7, next: None }]];
+    let ns = ref lists[0];
+    ns[0].val = 8;
+    ns[0].next = Some(Node { val: 9, next: None });
+    println(f"{lists[0][0].val} {lists[0][0].next.unwrap().val}");
+    let h = Holder { ns: vec![Node { val: 3, next: None }] };
+    bump(h);
+    println(f"{h.ns[0].val}");
+    let mut owned: Vec[Node] = vec![Node { val: 1, next: None }];
+    owned[0].val = 2;
+    println(f"{owned[0].val}");
 }

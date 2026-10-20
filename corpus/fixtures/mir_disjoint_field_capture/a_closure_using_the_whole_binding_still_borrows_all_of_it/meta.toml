@@ -1,0 +1,4 @@
+source = "tests/mir_disjoint_field_capture.rs::a_closure_using_the_whole_binding_still_borrows_all_of_it"
+dedup_of = []
+tags = []
+extracted_src = "501c5111"

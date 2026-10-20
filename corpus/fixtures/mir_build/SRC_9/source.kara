@@ -1,12 +1,14 @@
 fn main() {
-    let parts: Vec[String] = vec![String.from("a"), String.from("b"), String.from("c")];
-    let rest = parts[1..].join("/");
-    println(f"{rest}");
-    println(parts.as_slice().join(", "));
-    println(parts[1..].concat());
-    let sep = String.from("-");
-    println(parts[..2].join(sep.as_str()));
-    println(parts.join("|"));
-    let empty: Vec[String] = Vec.new();
-    println(f"[{empty[..].join(",")}]");
+    let days: Vec[char] = vec!['a', 'b', ','];
+    let mut s = String.new();
+    for c in days.iter() {
+        s.push(c);
+    }
+    println(s);
+    let t = "x,y,ab";
+    let owned = String.from("ba,c");
+    for c in days.iter() {
+        let sep = c.to_string();
+        println(f"{t.find(c)} {t.split(sep.as_str()).count()} {owned.find(c)} {owned.split(sep.as_str()).count()}");
+    }
 }

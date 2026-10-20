@@ -1,11 +1,12 @@
 fn main() {
-    let mut nums: Vec[i64] = vec![1, 4, 3, 2];
-    nums.sort();
-    let s: i64 = nums.chunks(2).iter().map(|pair| pair[0]).sum();
-    let v = vec![1, 2, 3, 4, 5];
-    let c = v.chunks(2);
-    for w in v.windows(2) {
-        println(f"{w[0]} {w[1]}");
-    }
-    println(f"{s} {c.len()} {c[2].len()} {v.windows(6).len()}");
+    let v: Vec[i64] = vec![3, 1, 2, 3];
+    let ss: SortedSet[i64] = v.iter().map(|x| x * 2).collect();
+    let sm: SortedMap[i64, i64] = v.iter().map(|x| (x * 1, x * 10)).collect();
+    let words: Vec[String] = vec!["b".to_string(), "a".to_string(), "b".to_string()];
+    let ws: SortedSet[String] = words.iter().map(|w| w.to_uppercase()).collect();
+    let mut keys: Vec[i64] = Vec.new();
+    for k in ss.iter() { keys.push(*k); }
+    let mut names: Vec[String] = Vec.new();
+    for w in ws.iter() { names.push(w.clone()); }
+    println(f"{keys} {sm.len()} {sm.get(2)} {names}");
 }

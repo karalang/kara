@@ -1,28 +1,9 @@
-a/b/c.txt: [a/b] [c.txt] [txt] [c] false
-a: [] [a] none [a] false
-/a: [/] [a] none [a] true
-/: none none none none true
-: none none none none false
-a/b/: [a] [b] none [b] false
-a//b: [a] [b] none [b] false
-../x: [..] [x] none [x] false
-dir/.bashrc: [dir] [.bashrc] none [.bashrc] false
-f.tar.gz: [] [f.tar.gz] [gz] [f.tar] false
-f.: [] [f.] [] [f] false
-a/..: [a] none none none false
-a/b
-a/b
-/etc
-b
-a/../../x
-a/./b/../c -> a/c
-/../a -> /a
-../../a/.. -> ../..
-a/b/../.. -> .
-/ -> /
- -> .
-.//x// -> x
-/usr//lib/./x: </><usr><lib><x>
-./a/b: <.><a><b>
-a/../b: <a><..><b>
-.: <.>
+Some(3) Some(7) Some(9) Some(2)
+[a|b/c.txt] [a/b|c.txt] none
+Some(b/c.txt) Some(a/b/c) None
+2 a b/c.txt
+3 [] [a] [bc]
+0 a/b/c.txt 3 c.txt
+key value=x
+Some(9) Some(=value=x) key=value=x
+value=x

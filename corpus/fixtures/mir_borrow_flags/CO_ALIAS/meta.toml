@@ -1,0 +1,17 @@
+source = "tests/mir_borrow_flags.rs::CO_ALIAS"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "e-differs:stdout"
+classified_with = "491112bd5"
+extracted_src = "26ff2bb9"
+model_rev = "583cfb0d"
+model_src = "26ff2bb9"

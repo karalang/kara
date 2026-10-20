@@ -1,0 +1,20 @@
+struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}{self.s}"); } }
+fn make(id: i64) -> R { R { id: id, s: f"s{id}" } }
+fn find(r: R) -> Option[String] { if r.id > 5 { Some(r.s.clone()) } else { None } }
+fn pick(v: ref Vec[String], i: i64) -> Option[String] { if i < v.len() { Some(v[i].clone()) } else { None } }
+fn main() {
+    let names: Vec[String] = ["a".to_string(), "b".to_string()];
+    for i in 0..4 {
+        let Some(v) = find(make(i * 3)) else {
+            println("skip");
+            continue;
+        };
+        println(f"got {v}");
+        let Some(n) = pick(names, i) else {
+            println("no name");
+            break;
+        };
+        println(f"name {n}");
+    }
+}

@@ -1,0 +1,11 @@
+trait Show { fn show(own self) -> String; }
+struct N { s: String }
+impl Show for N { fn show(self) -> String { self.s.clone() } }
+fn twice[T: Show](x: own T) -> String {
+    let a = x.show();
+    let b = x.show();
+    a + b
+}
+fn main() {
+    println(twice(N { s: "a".to_string() }));
+}

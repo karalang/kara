@@ -1,0 +1,7 @@
+struct P { a: String, b: String }
+fn main() {
+    let mut p = P { a: "a".to_string(), b: "b".to_string() };
+    let c = || p.a.len();
+    p.b.push_str("x");
+    println(f"{c()} {p.b}");
+}

@@ -1,13 +1,15 @@
-fn f(o: mut ref Option[i64]) -> i64 { o ?? 5 }
+
+fn mk() -> Array[i64, 3] { return [10, 20, 30]; }
+
 fn main() {
-    let values: Vec[Option[i64]] = vec![Some(3), None, Some(4)];
-    let mut sum = 0;
-    for v in values.iter() { sum += v ?? 0; }
-    let r = ref values[0];
-    sum += r ?? 0;
-    let rs: Vec[Result[i64, i64]] = vec![Ok(7), Err(1)];
-    for x in rs.iter() { sum += x ?? 100; }
-    let mut o: Option[i64] = None;
-    sum += f(mut o);
-    println(f"{sum}");
+    let m = mk();
+    println(m.iter().count());
+    let s: i64 = m.iter().sum();
+    println(s);
+    println(mk().iter().count());
+    let t: i64 = mk().iter().map(|x| x * 2).sum();
+    println(t);
+    for x in mk().iter() {
+        println(x);
+    }
 }

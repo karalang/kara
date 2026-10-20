@@ -1,0 +1,22 @@
+shared struct Slot[T] { mut items: Vec[T], name: String }
+impl[T] Slot[T] {
+    fn add(self, x: own T) { self.items.push(x); }
+    fn count(self) -> i64 { self.items.len() }
+}
+fn put[T](s: Slot[T], x: own T) { s.items.push(x); }
+fn fill(s: Slot[String]) {
+    s.add("b".to_string());
+}
+fn main() {
+    let s: Slot[i64] = Slot { items: Vec.new(), name: "n".to_string() };
+    put(s, 5);
+    s.add(6);
+    let t = s;
+    t.add(7);
+    println(f"{s.items.len()} {t.count()} {s.name}");
+    let w: Slot[String] = Slot { items: Vec.new(), name: "w".to_string() };
+    w.add("a".to_string());
+    fill(w);
+    let v: Vec[Slot[String]] = [w];
+    println(f"{v[0].count()} {w.items[1]}");
+}

@@ -1,12 +1,44 @@
+struct Node {
+    val: i64,
+    children: Vec[Node],
+}
+
+fn mk(v: i64) -> Node {
+    Node { val: v, children: vec![Node { val: v + 1, children: Vec.new() }, Node { val: v + 2, children: Vec.new() }] }
+}
+
+fn depth(root: ref Node) -> i64 {
+    let mut level: Vec[ref Node] = Vec.new();
+    level.push(root);
+    let mut d = 0;
+    while level.len() > 0 {
+        d += 1;
+        let mut next: Vec[ref Node] = Vec.new();
+        for node in level {
+            for child in node.children.iter() {
+                next.push(child);
+            }
+        }
+        level = next;
+    }
+    d
+}
+
 fn main() {
-    let v: Vec[i64] = vec![3, 1, 2, 3];
-    let ss: SortedSet[i64] = v.iter().map(|x| x * 2).collect();
-    let sm: SortedMap[i64, i64] = v.iter().map(|x| (x * 1, x * 10)).collect();
-    let words: Vec[String] = vec!["b".to_string(), "a".to_string(), "b".to_string()];
-    let ws: SortedSet[String] = words.iter().map(|w| w.to_uppercase()).collect();
-    let mut keys: Vec[i64] = Vec.new();
-    for k in ss.iter() { keys.push(*k); }
-    let mut names: Vec[String] = Vec.new();
-    for w in ws.iter() { names.push(w.clone()); }
-    println(f"{keys} {sm.len()} {sm.get(2)} {names}");
+    let roots = vec![mk(1), mk(10)];
+    let mut v: Vec[ref Node] = Vec.new();
+    for r in roots.iter() {
+        v.push(r);
+    }
+    let mut total = 0;
+    for n in v {
+        total += n.val;
+    }
+    for n in v.iter() {
+        total += n.children.len();
+    }
+    for (i, n) in v.iter().enumerate() {
+        total += i * n.val;
+    }
+    println(f"{total} {depth(roots[0])}");
 }

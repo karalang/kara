@@ -1,0 +1,12 @@
+fn none(n: i64) -> Option[i64] { if n > 0 { None } else { Some(n) } }
+fn some(n: i64) -> Option[i64] {
+    println(f"some {n}");
+    Some(n)
+}
+fn h(k: i64) -> Option[i64] {
+    let (a, b) = par { none(k)?, some(5)? };
+    Some(a + b)
+}
+fn main() {
+    println(f"{h(1)} {h(0)}");
+}

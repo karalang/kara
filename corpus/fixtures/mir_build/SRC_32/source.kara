@@ -1,28 +1,28 @@
-import std.path.{parent, file_name, extension, stem, join, normalize, is_absolute, components};
-fn show(o: Option[Str]) -> String {
+fn show(o: Option[(Str, Str)]) -> String {
     match o {
-        Some(s) => f"[{s}]",
+        Some((a, b)) => f"[{a}|{b}]",
         None => "none",
     }
 }
 fn main() {
-    for p in ["a/b/c.txt", "a", "/a", "/", "", "a/b/", "a//b", "../x", "dir/.bashrc", "f.tar.gz", "f.", "a/.."].iter() {
-        println(f"{p}: {show(parent(p))} {show(file_name(p))} {show(extension(p))} {show(stem(p))} {is_absolute(p)}");
+    let s = "a/b/c.txt";
+    println(f"{s.rfind("/")} {s.rfind("x")} {s.rfind("")} {"ééa".rfind("é")}");
+    println(f"{show(s.split_once("/"))} {show(s.rsplit_once("/"))} {show(s.split_once("?"))}");
+    println(f"{s.strip_prefix("a/")} {s.strip_suffix(".txt")} {s.strip_prefix("z")}");
+    let parts: Vec[Str] = s.splitn(2, "/").collect();
+    println(f"{parts.len()} {parts[0]} {parts[1]}");
+    let e: Vec[Str] = "abc".splitn(3, "").collect();
+    println(f"{e.len()} [{e[0]}] [{e[1]}] [{e[2]}]");
+    let z: Vec[Str] = s.splitn(0, "/").collect();
+    let one: Vec[Str] = s.splitn(1, "/").collect();
+    let many: Vec[Str] = s.splitn(9, "/").collect();
+    println(f"{z.len()} {one[0]} {many.len()} {many[2]}");
+    let owned = "key=value=x".to_string();
+    match owned.split_once("=") {
+        Some((k, v)) => println(f"{k} {v}"),
+        None => println("none"),
     }
-    println(join("a", "b"));
-    println(join("a/", "b"));
-    println(join("a", "/etc"));
-    println(join("", "b"));
-    println(join("a", "../../x"));
-    for p in ["a/./b/../c", "/../a", "../../a/..", "a/b/../..", "/", "", ".//x//"].iter() {
-        println(f"{p} -> {normalize(p)}");
-    }
-    for p in ["/usr//lib/./x", "./a/b", "a/../b", "."].iter() {
-        let cs = components(p);
-        let mut line = String.new();
-        for c in cs.iter() {
-            line.push_str(f"<{c}>");
-        }
-        println(f"{p}: {line}");
-    }
+    println(f"{owned.rfind("=")} {owned.strip_prefix("key")} {owned.trim_end()}");
+    let w: Vec[Str] = owned.splitn(2, "=").collect();
+    println(f"{w[1]}");
 }

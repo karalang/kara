@@ -47,6 +47,13 @@ fn main() {
         Ok(r) => println(f"empty {r.status()} [{r.body()}]"),
         Err(e) => println(f"empty failed: {e.message()}"),
     }
+    match c.get(f"{base}/binary") {
+        Ok(r) => {
+            let b = r.bytes();
+            println(f"binary {b.len()} bytes, {b[0]} {b[1]} {b[2]} {b[3]}");
+        }
+        Err(e) => println(f"binary failed: {e.message()}"),
+    }
     match c.get("http://127.0.0.1:1/") {
         Ok(r) => println(f"refused? {r.status()}"),
         Err(e) => println(f"refused: {e.message()}"),

@@ -1,0 +1,16 @@
+
+fn main() {
+    match env.var("KARA_DEFINITELY_UNSET_XYZ") {
+        Ok(s) => println(s),
+        Err(_) => println("unset"),
+    }
+    Env.set("KARA_MIR_IO_DEFAULT_PATH", "set");
+    match Env.var("KARA_MIR_IO_DEFAULT_PATH") {
+        Ok(s) => println(s),
+        Err(_) => println("lost"),
+    }
+    println(env.args().len());
+    println(Clock.wall_ns() > 0);
+    println(clock.monotonic_ns() >= 0);
+    println(rand.next_u64() != RandomSource.next_u64());
+}

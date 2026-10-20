@@ -1,0 +1,9 @@
+
+shared struct H { mut r: Option[ref String] }
+fn main() {
+    let s = "a".to_string();
+    let h = H { r: None };
+    let r = ref s;
+    h.r = Some(r);
+    println("x");
+}

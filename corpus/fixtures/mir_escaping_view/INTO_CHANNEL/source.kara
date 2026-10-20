@@ -1,0 +1,8 @@
+
+fn main() {
+    let s = "a".to_string();
+    let (tx, rx): (Sender[ref String], Receiver[ref String]) = channel(1);
+    let r = ref s;
+    let _ = tx.send(r);
+    println("x");
+}

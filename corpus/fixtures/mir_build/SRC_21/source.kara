@@ -1,15 +1,36 @@
 
-fn mk() -> Array[i64, 3] { return [10, 20, 30]; }
+struct User {
+    name: String,
+    age: i64,
+}
+
+struct Node { val: i64, next: Option[Node] }
+
+struct List { head: Node }
+
+impl List {
+    fn head(self) -> ref Node { ref self.head }
+    fn last(self) -> ref Node {
+        let mut node = ref self.head;
+        while let Some(n) = node.next {
+            node = n;
+        }
+        node
+    }
+}
+
+fn name(user: User) -> ref String {
+    ref user.name
+}
 
 fn main() {
-    let m = mk();
-    println(m.iter().count());
-    let s: i64 = m.iter().sum();
-    println(s);
-    println(mk().iter().count());
-    let t: i64 = mk().iter().map(|x| x * 2).sum();
-    println(t);
-    for x in mk().iter() {
-        println(x);
-    }
+    let u = User { name: "ada".to_string(), age: 36 };
+    println(f"{name(u)} {u.age}");
+    let h = ref u.name;
+    println(f"{h} {h.len()} {u.age}");
+    let l = List { head: Node { val: 1, next: Some(Node { val: 2, next: Some(Node { val: 3, next: None }) }) } };
+    println(f"{l.head().val} {l.last().val}");
+    let p = (u, 5);
+    let q = ref p.0.name;
+    println(f"{q} {p.1}");
 }

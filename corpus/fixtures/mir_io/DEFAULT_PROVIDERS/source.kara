@@ -1,7 +1,7 @@
 
 struct FakeEnv {}
 impl EnvProvider for FakeEnv {
-    fn var(self, name: Str) -> Result[String, VarError] { Ok("fake") }
+    fn var(ref self, name: Str) -> Result[String, VarError] { Ok("fake") }
 }
 fn main() {
     let e = OsEnv {};
@@ -18,7 +18,7 @@ fn main() {
     println(c.now() > 0);
     println(c.wall_ns() > 0);
     println(c.monotonic_ns() >= 0);
-    let r = OsRandom {};
+    let mut r = OsRandom {};
     println(r.next_u64() != r.next_u64());
     let f = FakeEnv {};
     match f.var("X") {

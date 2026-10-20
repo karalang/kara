@@ -1,20 +1,15 @@
 
-fn dbl(n: i64) -> i64 { n * 2 }
-fn inc(n: i64) -> i64 { n + 1 }
-fn apply(f: ref Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+const AA: Array[i64, 3] = [1, 2, 3];
+const PS: Array[(Str, i64), 2] = [("a", 1), ("b", 2)];
 
 fn main() {
-    let fs: Vec[Fn(i64) -> i64] = vec![dbl, inc];
-    let mut t = 0;
-    for f in fs.iter() {
-        t += f(10);
+    let mut s = 0;
+    for x in AA.iter() {
+        s += *x;
     }
-    println(f"{t}");
-    let k = 3;
-    let gs: Vec[Fn(i64) -> i64] = vec![|x| x + k, dbl];
-    let mut u = 0;
-    for g in gs.iter() {
-        u += g(1);
+    println(f"{s}");
+    println(AA.iter().count());
+    for (k, v) in PS.iter() {
+        println(f"{k}={v}");
     }
-    println(f"{u} {apply(fs[0], 7)}");
 }

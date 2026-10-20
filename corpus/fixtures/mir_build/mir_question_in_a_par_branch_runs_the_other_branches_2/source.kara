@@ -1,0 +1,33 @@
+fn fail(n: i64) -> Result[String, String] { Err(f"e{n}") }
+fn work(n: i64) -> Result[String, String] {
+    Ok(f"v{n}")
+}
+fn one() -> Result[String, String] {
+    let (x, y, z) = par { work(1)?, fail(2)?, fail(3)? };
+    Ok(f"{x}{y}{z}")
+}
+fn nested() -> Result[String, String] {
+    let (x, y) = par {
+        {
+            let (a, b) = par { fail(4)?, work(5)? };
+            f"{a}{b}"
+        },
+        work(6)?,
+    };
+    Ok(f"{x}{y}")
+}
+fn fine() -> Result[String, String] {
+    let (x, y) = par { work(9)?, work(10)? };
+    Ok(f"{x}{y}")
+}
+fn show(r: Result[String, String]) {
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(e) => println(f"err {e}"),
+    }
+}
+fn main() {
+    show(one());
+    show(nested());
+    show(fine());
+}

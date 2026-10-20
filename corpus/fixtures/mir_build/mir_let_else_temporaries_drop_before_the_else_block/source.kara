@@ -1,0 +1,15 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+fn make(id: i64) -> R { R { id: id } }
+fn find(r: R) -> Option[i64] { if r.id > 5 { Some(r.id) } else { None } }
+fn f(id: i64) {
+    let Some(v) = find(make(id)) else {
+        println("else");
+        return;
+    };
+    println(f"got{v}");
+}
+fn main() {
+    f(1);
+    f(9);
+}

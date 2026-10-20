@@ -1,8 +1,10 @@
-fn g() -> Option[(Str, Str)] { Some(("a", "b")) }
-fn h() -> Result[(Str, (i64, Str)), String] { Ok(("c", (1, "d"))) }
+const TBL: Array[u8, 3] = [1, 2, 3];
 
 fn main() {
-    let (x, y) = g().unwrap();
-    let (z, (n, w)) = h().unwrap();
-    println(f"{x}{y}{z}{n}{w}");
+    let a: Array[i64, 3] = [4, 5, 6];
+    let mut v = a.to_vec();
+    v.push(7);
+    let s: Array[String, 2] = ["x".to_string(), "yz".to_string()];
+    let t = s.to_vec();
+    println(f"{v} {TBL.to_vec()} {a[0]} {t} {s[1]}");
 }

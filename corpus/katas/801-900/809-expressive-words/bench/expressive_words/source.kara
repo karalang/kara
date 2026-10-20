@@ -1,0 +1,114 @@
+// LeetCode 809 — Expressive Words, two pointers over the groups.
+//
+// A word is stretchy when s can be made from it by making some of its
+// groups of one letter longer, each to three letters or more. Walk s and
+// the word together a group at a time: the two groups must be of the
+// same letter, and the group in s must be as long as the word's, or
+// longer and three letters at least. O(|s| + the words' lengths).
+fn expressive_words(s: String, words: Vec[String]) -> i64 {
+    let mut count = 0;
+    for k in 0..words.len() {
+        if stretchy(s, words[k]) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn stretchy(s: String, word: String) -> bool {
+    let a = s.bytes();
+    let b = word.bytes();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() and j < b.len() {
+        let c = a[i];
+        if b[j] != c {
+            return false;
+        }
+        let from_i = i;
+        while i < a.len() and a[i] == c {
+            i += 1;
+        }
+        let from_j = j;
+        while j < b.len() and b[j] == c {
+            j += 1;
+        }
+        let in_s = i - from_i;
+        let in_word = j - from_j;
+        if in_s < in_word or (in_s > in_word and in_s < 3) {
+            return false;
+        }
+    }
+    i == a.len() and j == b.len()
+}
+
+// ---- bench ----------------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn spell(groups: Vec[(u8, i64)]) -> String {
+    let mut out = String.new();
+    for (c, n) in groups {
+        for _ in 0..n {
+            out.push(c as char);
+        }
+    }
+    out
+}
+
+fn main() {
+    // 64 cases made once: s of 25 groups of 1 to 4 letters from a to e,
+    // and 100 words, three in four of them s with its groups shrunk as far
+    // as they may be, a third of those with one group then made one letter
+    // too long, and the rest random strings of up to 100 letters.
+    let mut seed = 809;
+    let mut texts: Vec[String] = Vec.new();
+    let mut lists: Vec[Vec[String]] = Vec.new();
+    for _ in 0..64 {
+        let mut groups: Vec[(u8, i64)] = Vec.new();
+        let mut last = 26;
+        for _ in 0..25 {
+            let mut c = next_random(mut seed) % 5;
+            if c == last {
+                c = (c + 1) % 5;
+            }
+            last = c;
+            groups.push(((97 + c) as u8, 1 + next_random(mut seed) % 4));
+        }
+        let mut words: Vec[String] = Vec.new();
+        for _ in 0..100 {
+            if next_random(mut seed) % 4 == 0 {
+                let n = 1 + next_random(mut seed) % 100;
+                let mut word = String.new();
+                for _ in 0..n {
+                    word.push((97 + next_random(mut seed) % 5) as u8 as char);
+                }
+                words.push(word);
+            } else {
+                let mut shrunk: Vec[(u8, i64)] = Vec.new();
+                for (c, n) in groups {
+                    shrunk.push((c, if n >= 3 { 1 + next_random(mut seed) % n } else { n }));
+                }
+                if next_random(mut seed) % 3 == 0 {
+                    let g = next_random(mut seed) % 25;
+                    shrunk[g].1 = groups[g].1 + 1;
+                }
+                words.push(spell(shrunk));
+            }
+        }
+        texts.push(spell(groups));
+        lists.push(words);
+    }
+    let rounds = 200000;
+    let mut total = 0;
+    let mut check = 0;
+    for r in 0..rounds {
+        let n = expressive_words(texts[r % 64], lists[r % 64]);
+        total += n;
+        check = (check * 131 + n + r) % 1000000007;
+    }
+    println(f"{rounds} rounds of 100 words: {total} stretchy, checksum {check}");
+}

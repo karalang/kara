@@ -1,12 +1,15 @@
-enum NetE { A, B(i32) }
-type OldE = NetE;
+fn f(c: bool, y: u128) -> u128 {
+    let x = if c { 0 } else { y };
+    x
+}
 
-fn f(x: i64) -> Result[i64, OldE] {
-    if x > 0 { Ok(x) } else { Err(OldE.B(7)) }
+fn g(k: i64, y: u8) -> u8 {
+    let z = match k { 0 => 255, 1 => y, _ => { 7 } };
+    z
 }
 
 fn main() {
-    match f(0) { Ok(_) => println("ok"), Err(NetE.B(n)) => println(f"b {n}"), Err(_) => println("other") }
-    let u = OldE.A;
-    match u { NetE.A => println("a"), _ => println("x") }
+    let y: u8 = 7;
+    let z: u8 = if true { 1 } else { y };
+    println(f"{f(true, 5)} {f(false, 5)} {z} {g(0, 3)} {g(1, 3)} {g(2, 3)}");
 }

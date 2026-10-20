@@ -1,0 +1,9 @@
+s = "heeellooo", words = [hello, hi, helo] -> 1
+s = "zzzzzyyyyy", words = [zzyy, zy, zyy] -> 3
+s = "dddiiiinnssssssoooo", words = [dinnssoo, ddinso, ddiinnso, ddiinnssoo, ddiinso, dinsoo, ddiinsso, dinssoo, dinso] -> 3
+s = "abcd", words = [abc, abcd, abcde, abdc] -> 1
+s = "aaa", words = [a, aa, aaa, aaaa, b] -> 3
+s = "aa", words = [a, aa, aaa] -> 1
+s = "a", words = [a, b, aa] -> 1
+100 letters, 100 words -> 67
+300 random rounds of 8 words: 482 stretchy, checksum 246567122

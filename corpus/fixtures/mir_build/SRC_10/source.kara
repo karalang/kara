@@ -1,7 +1,12 @@
 fn main() {
-    let v: Vec[i64] = vec![3, 1, 2, 3];
-    let d: VecDeque[i64] = v.iter().map(|x| x * 2).collect();
-    let words: Vec[String] = vec!["b".to_string(), "a".to_string()];
-    let ds: VecDeque[String] = words.iter().map(|w| w.to_uppercase()).collect();
-    println(f"{d.len()} {d.front()} {d.back()} {ds.front()} {ds.back()}");
+    let parts: Vec[String] = vec![String.from("a"), String.from("b"), String.from("c")];
+    let rest = parts[1..].join("/");
+    println(f"{rest}");
+    println(parts.as_slice().join(", "));
+    println(parts[1..].concat());
+    let sep = String.from("-");
+    println(parts[..2].join(sep.as_str()));
+    println(parts.join("|"));
+    let empty: Vec[String] = Vec.new();
+    println(f"[{empty[..].join(",")}]");
 }

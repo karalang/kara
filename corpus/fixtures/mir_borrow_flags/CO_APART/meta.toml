@@ -1,0 +1,17 @@
+source = "tests/mir_borrow_flags.rs::CO_APART"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["shared"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "491112bd5"
+extracted_src = "396cbbee"
+model_rev = "583cfb0d"
+model_src = "396cbbee"

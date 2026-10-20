@@ -1,0 +1,24 @@
+enum E { Bad(i64) }
+fn fail(n: i64) -> Result[i64, E] { Err(E.Bad(n)) }
+fn work() -> Result[i64, E] {
+    println("work done");
+    Ok(7)
+}
+fn one() -> Result[i64, E] {
+    let (x, y) = par { fail(1)?, work()? };
+    Ok(x + y)
+}
+fn two() -> Result[i64, E] {
+    let (x, y) = par { fail(1)?, fail(2)? };
+    Ok(x + y)
+}
+fn show(r: Result[i64, E]) {
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(E.Bad(n)) => println(f"err {n}"),
+    }
+}
+fn main() {
+    show(one());
+    show(two());
+}

@@ -1,4 +1,16 @@
-a
-x+y
-a/c
-41
+[]   ok: ok: 
+[f] Zg== Zg ok:f ok:f 66
+[fo] Zm8= Zm8 ok:fo ok:fo 666f
+[foo] Zm9v Zm9v ok:foo ok:foo 666f6f
+[foob] Zm9vYg== Zm9vYg ok:foob ok:foob 666f6f62
+[fooba] Zm9vYmE= Zm9vYmE ok:fooba ok:fooba 666f6f6261
+[foobar] Zm9vYmFy Zm9vYmFy ok:foobar ok:foobar 666f6f626172
++/+/
+-_-_
+err:invalid byte at offset 4
+err:invalid length
+err:invalid byte at offset 5
+ok:foob
+ok:foo
+err:invalid length
+err:invalid byte at offset 1

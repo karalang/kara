@@ -1,0 +1,9 @@
+
+shared struct H { mut f: Option[Fn() -> i64] }
+fn main() {
+    let s = "abc".to_string();
+    let r = ref s;
+    let h = H { f: None };
+    h.f = Some(|| r.len());
+    println("x");
+}

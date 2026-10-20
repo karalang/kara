@@ -1,0 +1,17 @@
+source = "tests/mir_build.rs::mir_generic_shared_struct_lowers"
+dedup_of = []
+expect = "error:codegen"
+exit = 0
+tags = ["panic", "shared"]
+class = "a"
+expected_from = "legacy-interp"
+legacy_backend = "legacy-build"
+legacy_exit = 101
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "491112bd5"
+extracted_src = "398fdb79"
+model_rev = "583cfb0d"
+model_src = "398fdb79"

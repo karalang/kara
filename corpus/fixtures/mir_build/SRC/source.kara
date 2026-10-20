@@ -1,14 +1,21 @@
-struct P { name: Str, n: i64 }
-fn f(s: Str) -> i64 { s.len() }
-fn g() -> Str { "abc" }
-fn pick(b: bool) -> Str { match b { true => "yes", false => "no" } }
+
+fn morse(word: String) -> String {
+    let codes = [".-", "-...", "-.-.", "-.."];
+    let mut out = String.new();
+    for b in word.bytes() { out.push_str(codes[(b - 97) as i64]); }
+    out
+}
+fn step(k: i64) -> i64 {
+    let d = [1, 0, -1, 0];
+    d[k] + d.len() as i64
+}
+fn grown() -> Vec[String] {
+    let mut t = ["x", "y"];
+    t.push("z".to_string());
+    t
+}
 fn main() {
-    let x: Str = "abc";
-    let v: Vec[Str] = vec!["ab", "c"];
-    let t: (Str, i64) = ("ab", 1);
-    let mut y: Str = "a";
-    y = "bc";
-    let p = P { name: "lbl", n: 2 };
-    println(f"{f(x)} {x} {v[0]} {f(v[1])} {t.0} {f(t.0)} {g()} {y} {f(y)}");
-    println(f"{p.name} {p.n} {pick(true)} {pick(false)}");
+    let mut n = 0;
+    for i in 0..1000 { n = n + morse("abcd".to_string()).len() + step(i % 4); }
+    println(f"{n} {morse("dcba".to_string())} {grown().len()}");
 }

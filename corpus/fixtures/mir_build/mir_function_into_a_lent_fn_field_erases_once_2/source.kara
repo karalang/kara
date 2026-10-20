@@ -1,0 +1,11 @@
+fn bump(out: mut ref Vec[i64], xs: ref Vec[i64]) {
+    xs.iter().for_each(|x| out.push(*x + 1));
+}
+struct Keyed[V, K] { key: Fn(V) -> K }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    bump(mut v, vec![1, 2]);
+    println(f"{v.len()} {v[1]}");
+    let k = Keyed { key: |x: i64| x * 2 };
+    println(f"{(k.key)(21)}");
+}

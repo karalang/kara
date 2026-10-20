@@ -1,16 +1,28 @@
-[]   ok: ok: 
-[f] Zg== Zg ok:f ok:f 66
-[fo] Zm8= Zm8 ok:fo ok:fo 666f
-[foo] Zm9v Zm9v ok:foo ok:foo 666f6f
-[foob] Zm9vYg== Zm9vYg ok:foob ok:foob 666f6f62
-[fooba] Zm9vYmE= Zm9vYmE ok:fooba ok:fooba 666f6f6261
-[foobar] Zm9vYmFy Zm9vYmFy ok:foobar ok:foobar 666f6f626172
-+/+/
--_-_
-err:invalid byte at offset 4
-err:invalid length
-err:invalid byte at offset 5
-ok:foob
-ok:foo
-err:invalid length
-err:invalid byte at offset 1
+a/b/c.txt: [a/b] [c.txt] [txt] [c] false
+a: [] [a] none [a] false
+/a: [/] [a] none [a] true
+/: none none none none true
+: none none none none false
+a/b/: [a] [b] none [b] false
+a//b: [a] [b] none [b] false
+../x: [..] [x] none [x] false
+dir/.bashrc: [dir] [.bashrc] none [.bashrc] false
+f.tar.gz: [] [f.tar.gz] [gz] [f.tar] false
+f.: [] [f.] [] [f] false
+a/..: [a] none none none false
+a/b
+a/b
+/etc
+b
+a/../../x
+a/./b/../c -> a/c
+/../a -> /a
+../../a/.. -> ../..
+a/b/../.. -> .
+/ -> /
+ -> .
+.//x// -> x
+/usr//lib/./x: </><usr><lib><x>
+./a/b: <.><a><b>
+a/../b: <a><..><b>
+.: <.>

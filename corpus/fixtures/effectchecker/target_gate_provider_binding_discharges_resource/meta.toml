@@ -14,5 +14,5 @@ note = "migrated to a trait-bound resource (core-semantics §14.1 refuses a trai
 bucket = "mir-gap:the expression kind `Providers`"
 classified_with = "80ced416a+local"
 extracted_src = "25f158f5"
-model_rev = "1aa23105"
-model_src = "25f158f5"
+model_rev = "583cfb0d"
+model_src = "b71124aa"

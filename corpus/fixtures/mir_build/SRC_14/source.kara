@@ -1,9 +1,11 @@
 fn main() {
-    let words: Vec[String] = vec!["ab".to_string(), "cd".to_string()];
-    let r: Vec[Vec[char]] = words.iter().map(|w| w.chars().rev().collect()).collect();
-    println(f"{r}");
-    let s: Vec[String] = words.iter().map(|w| w.chars().rev().collect()).collect();
-    println(f"{s}");
-    let t: Vec[String] = words.iter().map(|w| { let n = w.len(); w.chars().take(n - 1).collect() }).collect();
-    println(f"{t}");
+    let mut nums: Vec[i64] = vec![1, 4, 3, 2];
+    nums.sort();
+    let s: i64 = nums.chunks(2).iter().map(|pair| pair[0]).sum();
+    let v = vec![1, 2, 3, 4, 5];
+    let c = v.chunks(2);
+    for w in v.windows(2) {
+        println(f"{w[0]} {w[1]}");
+    }
+    println(f"{s} {c.len()} {c[2].len()} {v.windows(6).len()}");
 }

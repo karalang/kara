@@ -1,0 +1,11 @@
+fn main() {
+    let k = "b".to_string();
+    let key = ref k;
+    let v = vec!["a".to_string(), "b".to_string()];
+    println(f"{v.iter().any(|t| *t == *key)}");
+    let pending = vec![("a".to_string(), 1), ("c".to_string(), 3)];
+    let names = vec!["c".to_string(), "z".to_string()];
+    for s in names.iter() {
+        println(f"{pending.iter().any(|t| t.0 == *s)}");
+    }
+}

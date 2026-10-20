@@ -1,0 +1,8 @@
+fn apply_g[V, K](f: Fn(V) -> K, x: V) -> K { f(x) }
+fn neg(x: i64) -> i64 { -x }
+fn main() {
+    println(f"{apply_g(neg, 4)}");
+    println(f"{apply_g(|x: i64| x * 2, 5)}");
+    let g: Fn(ref i64) -> i64 = neg;
+    println(f"{g(3)}");
+}

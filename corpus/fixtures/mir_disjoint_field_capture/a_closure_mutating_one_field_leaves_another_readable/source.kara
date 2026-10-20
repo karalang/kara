@@ -1,0 +1,11 @@
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}"); } }
+struct P { a: Vec[i64], b: R, n: i64 }
+fn main() {
+    let mut p = P { a: Vec.new(), b: R { id: 7 }, n: 1 };
+    let mut push = |x: i64| p.a.push(x + p.n);
+    push(1);
+    push(2);
+    println(f"{p.b.id}");
+    println(f"{p.a.len()}");
+}

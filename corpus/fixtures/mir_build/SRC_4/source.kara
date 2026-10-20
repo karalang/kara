@@ -1,22 +1,21 @@
-#[derive(Default)]
-struct Config { names: Vec[String], count: i64, title: String, tags: Map[String, i64], best: Option[String], pair: (i64, String), q: VecDeque[u8], seen: Set[i64] }
-#[derive(Default)]
-struct Outer { c: Config, on: bool }
+fn e(w: Str) { for (i, c) in w.chars().enumerate() { print(f"{i}{c} "); } println(""); }
+fn fc(w: Str) -> i64 { w.chars().filter(|c| c.is_ascii_uppercase()).count() }
+fn r(w: Str) { for c in w.chars().rev() { print(f"{c} "); } println(""); }
+fn a(w: Str) -> bool { w.chars().all(|c| c.is_ascii_uppercase()) }
+fn n(w: Str) -> Option[char] { let mut it = w.chars(); it.next() }
+fn m(w: Str) -> String { let s: String = w.chars().map(|c| c.to_ascii_lowercase()).collect(); s }
+fn plain(w: Str) -> i64 { let mut k = 0; for c in w.chars() { if c == 'é' { k += 10; } k += 1; } k }
+fn v(w: Str) -> Vec[char] { w.chars().collect() }
 fn main() {
-    let c = Config.default();
-    println(f"{c.names.len()} {c.count} [{c.title}] {c.tags.len()} {c.best} {c.pair.0} [{c.pair.1}] {c.q.len()} {c.seen.len()}");
-    let o = Outer.default();
-    let inner = o.c;
-    println(f"{inner.names.len()} {o.on}");
-    let mut w: Vec[Vec[i64]] = vec![vec![1, 2], vec![3]];
-    let t = take(mut w[0]);
-    let s = String.default();
-    let v: Vec[i64] = Vec.default();
-    println(f"{t.len()} {w[0].len()} [{s}] {v.len()}");
-    let x = i64.default();
-    let b = bool.default();
-    let f = f64.default();
-    let ch = char.default();
-    let u = u8.default();
-    println(f"{x} {b} {f} {ch as u32} {u}");
+    e("Ab");
+    println(f"{fc("Ab")} {a("Ab")} {n("Ab")} {n("")}");
+    r("Ab");
+    println(m("Ab"));
+    let owned = String.from("xé€y");
+    e(owned.as_str());
+    r(owned.as_str());
+    println(f"{plain(owned.as_str())} {v("hé")}");
+    let s: Str = "QRS";
+    let back: String = s.chars().rev().collect();
+    println(back);
 }

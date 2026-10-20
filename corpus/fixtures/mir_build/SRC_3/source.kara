@@ -1,21 +1,17 @@
-fn e(w: Str) { for (i, c) in w.chars().enumerate() { print(f"{i}{c} "); } println(""); }
-fn fc(w: Str) -> i64 { w.chars().filter(|c| c.is_ascii_uppercase()).count() }
-fn r(w: Str) { for c in w.chars().rev() { print(f"{c} "); } println(""); }
-fn a(w: Str) -> bool { w.chars().all(|c| c.is_ascii_uppercase()) }
-fn n(w: Str) -> Option[char] { let mut it = w.chars(); it.next() }
-fn m(w: Str) -> String { let s: String = w.chars().map(|c| c.to_ascii_lowercase()).collect(); s }
-fn plain(w: Str) -> i64 { let mut k = 0; for c in w.chars() { if c == 'é' { k += 10; } k += 1; } k }
-fn v(w: Str) -> Vec[char] { w.chars().collect() }
 fn main() {
-    e("Ab");
-    println(f"{fc("Ab")} {a("Ab")} {n("Ab")} {n("")}");
-    r("Ab");
-    println(m("Ab"));
-    let owned = String.from("xé€y");
-    e(owned.as_str());
-    r(owned.as_str());
-    println(f"{plain(owned.as_str())} {v("hé")}");
-    let s: Str = "QRS";
-    let back: String = s.chars().rev().collect();
-    println(back);
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(String.from("a"), 1);
+    m.insert(String.from("b"), 2);
+    match (m.get("a"), m.get("b")) {
+        (Some(i), Some(j)) => println(f"{*i + *j}"),
+        _ => println("none"),
+    }
+    match (m.get("a"), m.get("q")) {
+        (Some(i), None) | (None, Some(i)) => println(f"{*i}"),
+        _ => println("both or none"),
+    }
+    match ((m.get("b"), 1), 2) {
+        ((Some(i), k), l) => println(f"{*i + k + l}"),
+        _ => println("none"),
+    }
 }

@@ -1,12 +1,71 @@
+struct Duration {
+    ns: i64,
+}
+
+struct Instant {
+    ns: i64,
+}
+
+impl Sub for Instant {
+    type Output = Duration;
+    fn sub(own self, rhs: own Instant) -> Duration {
+        Duration { ns: self.ns - rhs.ns }
+    }
+}
+
+impl Add[Duration] for Instant {
+    type Output = Instant;
+    fn add(own self, rhs: own Duration) -> Instant {
+        Instant { ns: self.ns + rhs.ns }
+    }
+}
+
+impl Mul for Duration {
+    type Output = Duration;
+    fn mul(own self, rhs: own Duration) -> Self.Output {
+        Duration { ns: self.ns * rhs.ns }
+    }
+}
+
+impl Mul[i64] for Duration {
+    type Output = Duration;
+    fn mul(own self, rhs: own i64) -> Duration {
+        Duration { ns: self.ns * rhs }
+    }
+}
+
+struct V {
+    x: i64,
+}
+
+impl Add for V {
+    type Output = V;
+    fn add(own self, rhs: own V) -> Self.Output {
+        V { x: self.x + rhs.x }
+    }
+}
+
+impl Mul for V {
+    type Output = i64;
+    fn mul(own self, rhs: own V) -> Self.Output {
+        self.x * rhs.x
+    }
+}
+
+fn sum2[T: Add](a: own T, b: own T) -> T.Output {
+    a + b
+}
+
 fn main() {
-    let c = 5;
-    let mut best = 0;
-    if let Some(below) = None {
-        best = c + below;
-    }
-    let o = if let Some(b) = None { c + b } else { 1 };
-    while let Some(b) = None {
-        best = c + b;
-    }
-    println(f"{best} {o}");
+    let later = Instant { ns: 50 };
+    let d = later - Instant { ns: 20 };
+    let dn = d.ns;
+    let mut t = Instant { ns: 1 } + d;
+    t += Duration { ns: 4 };
+    let e = Duration { ns: 3 } * 4;
+    let f = Duration { ns: 5 } * Duration { ns: 6 };
+    println(f"{dn} {t.ns} {e.ns} {f.ns}");
+    let v = V { x: 2 } + V { x: 3 };
+    let n = V { x: 2 } * V { x: 3 };
+    println(f"{v.x} {n} {sum2(3, 4)} {sum2(1.5, 2.0)}");
 }
