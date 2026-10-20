@@ -1,0 +1,3515 @@
+// ------------------------------------------------------------ text
+
+fn codepoints(b: ref Slice[u8]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | ((b[i + 1] as i64) & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | (((b[i + 1] as i64) & 0x3F) << 6) | ((b[i + 2] as i64) & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | (((b[i + 1] as i64) & 0x3F) << 12) | (((b[i + 2] as i64) & 0x3F) << 6) | ((b[i + 3] as i64) & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn cp(s: Str) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+fn cps(s: ref String) -> Vec[i64] {
+    codepoints(s.bytes())
+}
+
+// Text with no surrogates in it, as a String.
+fn to_string(s: ref Vec[i64]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    for c in s {
+        if c < 0x80 {
+            out.push(c as u8);
+        } else if c < 0x800 {
+            out.push((0xC0 | (c >> 6)) as u8);
+            out.push((0x80 | (c & 0x3F)) as u8);
+        } else if c < 0x10000 {
+            out.push((0xE0 | (c >> 12)) as u8);
+            out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (c & 0x3F)) as u8);
+        } else {
+            out.push((0xF0 | (c >> 18)) as u8);
+            out.push((0x80 | ((c >> 12) & 0x3F)) as u8);
+            out.push((0x80 | ((c >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (c & 0x3F)) as u8);
+        }
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn push_ascii(out: mut ref Vec[i64], s: Str) {
+    for b in s.bytes() {
+        out.push(b as i64);
+    }
+}
+
+fn push_all(out: mut ref Vec[i64], s: ref Vec[i64]) {
+    for c in s {
+        out.push(c);
+    }
+}
+
+fn slice(s: ref Vec[i64], start: i64, end: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut i = start;
+    while i < end {
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+fn same(a: ref Vec[i64], b: ref Vec[i64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn starts_with(s: ref Vec[i64], p: ref Vec[i64]) -> bool {
+    if p.len() > s.len() {
+        return false;
+    }
+    for i in 0..p.len() {
+        if s[i] != p[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn hex_n(c: i64, width: i64) -> String {
+    let digits = "0123456789abcdef".bytes();
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift = (width - 1) * 4;
+    while shift >= 0 {
+        out.push(digits[(c >> shift) & 15]);
+        shift -= 4;
+    }
+    String.from_utf8(out).unwrap()
+}
+
+fn hex_val(c: i64) -> i64 {
+    if c >= 48 and c <= 57 {
+        return c - 48;
+    }
+    if c >= 97 and c <= 102 {
+        return c - 87;
+    }
+    if c >= 65 and c <= 70 {
+        return c - 55;
+    }
+    -1
+}
+
+fn split_cp(s: ref Vec[i64], sep: i64) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut cur: Vec[i64] = Vec.new();
+    for c in s {
+        if c == sep {
+            out.push(cur);
+            cur = Vec.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn split_tabs(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == '\t' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// the lines of a file, without their \n, as Python's iteration gives
+// them
+fn text_lines(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn sort_strings(v: mut ref Vec[String]) {
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and v[j] < v[j - 1] {
+            let t = v[j].clone();
+            v[j] = v[j - 1].clone();
+            v[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn is_surrogate(c: i64) -> bool {
+    c >= 0xD800 and c <= 0xDFFF
+}
+
+// ------------------------------------------------------------ reprs
+
+// str.isprintable outside ASCII, for repr: controls, format characters,
+// separators other than space, surrogates and private use are not.
+fn is_printable(c: i64) -> bool {
+    if c < 0x20 or (c >= 0x7F and c <= 0xA0) or c == 0xAD {
+        return false;
+    }
+    if (c >= 0x600 and c <= 0x605) or c == 0x61C or c == 0x6DD or c == 0x70F or c == 0x180E {
+        return false;
+    }
+    if c == 0x1680 or (c >= 0x2000 and c <= 0x200F) or (c >= 0x2028 and c <= 0x202F) {
+        return false;
+    }
+    if (c >= 0x205F and c <= 0x206F) or c == 0x3000 or (c >= 0xD800 and c <= 0xF8FF) {
+        return false;
+    }
+    if c == 0xFEFF or (c >= 0xFFF9 and c <= 0xFFFB) or c >= 0xF0000 {
+        return false;
+    }
+    true
+}
+
+// repr() of a str
+fn repr_of(s: ref Vec[i64]) -> String {
+    let mut has_single = false;
+    let mut has_double = false;
+    for c in s {
+        if c == 39 {
+            has_single = true;
+        } else if c == 34 {
+            has_double = true;
+        }
+    }
+    let quote = if has_single and not has_double { 34 } else { 39 };
+    let mut out: Vec[i64] = Vec.new();
+    out.push(quote);
+    for c in s {
+        if c == quote or c == 92 {
+            out.push(92);
+            out.push(c);
+        } else if c == 9 {
+            push_ascii(mut out, "\\t");
+        } else if c == 10 {
+            push_ascii(mut out, "\\n");
+        } else if c == 13 {
+            push_ascii(mut out, "\\r");
+        } else if c < 0x20 or c == 0x7F {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c < 0x7F or is_printable(c) {
+            out.push(c);
+        } else if c <= 0xFF {
+            push_ascii(mut out, "\\x");
+            push_ascii(mut out, hex_n(c, 2));
+        } else if c <= 0xFFFF {
+            push_ascii(mut out, "\\u");
+            push_ascii(mut out, hex_n(c, 4));
+        } else {
+            push_ascii(mut out, "\\U");
+            push_ascii(mut out, hex_n(c, 8));
+        }
+    }
+    out.push(quote);
+    to_string(out)
+}
+
+fn pr(s: ref String) -> String {
+    repr_of(cps(s))
+}
+
+// ------------------------------------------------------------ the tree
+
+// The XPath data model over a parsed document. Every node is in one
+// arena; `order` is its place in document order. An element is
+// followed by its namespace nodes, then its attributes, then its
+// children.
+const N_DOC: i64 = 0;
+const N_ELEM: i64 = 1;
+const N_ATTR: i64 = 2;
+const N_TEXT: i64 = 3;
+const N_COMMENT: i64 = 4;
+const N_PI: i64 = 5;
+const N_NS: i64 = 6;
+
+const XML_NS: Str = "http://www.w3.org/XML/1998/namespace";
+
+#[derive(Clone)]
+struct XNode {
+    kind: i64,
+    parent: i64,
+    kids: Vec[i64],
+    attrs: Vec[i64],
+    nss: Vec[i64],
+    // element and attribute names as written, and the namespace the
+    // prefix stands for; a PI's target is `local`, a namespace node's
+    // prefix is `local` ("" for the default namespace)
+    local: String,
+    prefix: String,
+    uri: String,
+    value: String,
+    decl_p: Vec[String],
+    decl_u: Vec[String],
+    order: i64,
+}
+
+struct Doc {
+    nodes: Vec[XNode],
+}
+
+fn new_node(kind: i64, parent: i64) -> XNode {
+    XNode { kind: kind, parent: parent, kids: Vec.new(), attrs: Vec.new(), nss: Vec.new(), local: String.new(), prefix: String.new(), uri: String.new(), value: String.new(), decl_p: Vec.new(), decl_u: Vec.new(), order: 0 }
+}
+
+fn add(d: mut ref Doc, n: own XNode) -> i64 {
+    d.nodes.push(n);
+    d.nodes.len() - 1
+}
+
+// ------------------------------------------------------------ parsing
+
+struct Px {
+    s: Vec[i64],
+    i: i64,
+}
+
+fn at(p: ref Px, k: i64) -> i64 {
+    if p.i + k < p.s.len() { p.s[p.i + k] } else { -1 }
+}
+
+fn looking_at(p: ref Px, lit: Str) -> bool {
+    let v = cp(lit);
+    let mut k = 0;
+    while k < v.len() {
+        if at(p, k) != v[k] {
+            return false;
+        }
+        k += 1;
+    }
+    true
+}
+
+fn is_ws(c: i64) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13
+}
+
+fn skip_ws(p: mut ref Px) {
+    while is_ws(at(p, 0)) {
+        p.i += 1;
+    }
+}
+
+fn is_name_char(c: i64) -> bool {
+    c >= 0 and not is_ws(c) and c != 61 and c != 62 and c != 47 and c != 60 and c != 63 and c != 34 and c != 39 and c != 59 and c != 38
+}
+
+fn read_name(p: mut ref Px) -> String {
+    let start = p.i;
+    while is_name_char(at(p, 0)) {
+        p.i += 1;
+    }
+    to_string(slice(p.s, start, p.i))
+}
+
+// A reference after the `&`: a character reference or one of the five
+// predefined entities.
+fn read_ref(p: mut ref Px, out: mut ref Vec[i64]) {
+    p.i += 1;
+    if at(p, 0) == 35 {
+        p.i += 1;
+        let mut base = 10;
+        if at(p, 0) == 120 {
+            base = 16;
+            p.i += 1;
+        }
+        let mut v = 0;
+        while at(p, 0) != 59 {
+            v = v * base + hex_val(at(p, 0));
+            p.i += 1;
+        }
+        p.i += 1;
+        out.push(v);
+        return;
+    }
+    let name = read_name(mut p);
+    p.i += 1;
+    let c = match name.as_str() {
+        "lt" => 60,
+        "gt" => 62,
+        "amp" => 38,
+        "quot" => 34,
+        _ => 39,
+    };
+    out.push(c);
+}
+
+fn split_qname(q: ref String) -> (String, String) {
+    let v = cps(q);
+    let mut k = 0;
+    while k < v.len() {
+        if v[k] == 58 {
+            return (to_string(slice(v, 0, k)), to_string(slice(v, k + 1, v.len())));
+        }
+        k += 1;
+    }
+    (String.new(), q.clone())
+}
+
+// The namespace a prefix stands for at an element, or None.
+fn lookup_ns(d: ref Doc, el: i64, prefix: ref String) -> Option[String] {
+    if prefix == "xml" {
+        return Some(XML_NS.to_string());
+    }
+    let mut e = el;
+    while e >= 0 and d.nodes[e].kind == N_ELEM {
+        let n = ref d.nodes[e];
+        let mut k = 0;
+        while k < n.decl_p.len() {
+            if n.decl_p[k] == prefix {
+                return Some(n.decl_u[k].clone());
+            }
+            k += 1;
+        }
+        e = n.parent;
+    }
+    None
+}
+
+fn add_text(d: mut ref Doc, parent: i64, text: ref Vec[i64]) {
+    if text.len() == 0 {
+        return;
+    }
+    let kids = ref d.nodes[parent].kids;
+    if kids.len() > 0 {
+        let last = kids[kids.len() - 1];
+        if d.nodes[last].kind == N_TEXT {
+            d.nodes[last].value.push_str(to_string(text).as_str());
+            return;
+        }
+    }
+    let mut n = new_node(N_TEXT, parent);
+    n.value = to_string(text);
+    let id = add(mut d, n);
+    d.nodes[parent].kids.push(id);
+}
+
+fn parse_attr_value(p: mut ref Px) -> String {
+    let q = at(p, 0);
+    p.i += 1;
+    let mut out: Vec[i64] = Vec.new();
+    while at(p, 0) != q {
+        let c = at(p, 0);
+        if c == 38 {
+            read_ref(mut p, mut out);
+        } else {
+            out.push(if is_ws(c) { 32 } else { c });
+            p.i += 1;
+        }
+    }
+    p.i += 1;
+    to_string(out)
+}
+
+fn parse_pi(d: mut ref Doc, p: mut ref Px, parent: i64) {
+    p.i += 2;
+    let target = read_name(mut p);
+    skip_ws(mut p);
+    let start = p.i;
+    while not looking_at(p, "?>") {
+        p.i += 1;
+    }
+    let data = to_string(slice(p.s, start, p.i));
+    p.i += 2;
+    if target == "xml" {
+        return;
+    }
+    let mut n = new_node(N_PI, parent);
+    n.local = target;
+    n.value = data;
+    let id = add(mut d, n);
+    d.nodes[parent].kids.push(id);
+}
+
+fn parse_comment(d: mut ref Doc, p: mut ref Px, parent: i64) {
+    p.i += 4;
+    let start = p.i;
+    while not looking_at(p, "-->") {
+        p.i += 1;
+    }
+    let mut n = new_node(N_COMMENT, parent);
+    n.value = to_string(slice(p.s, start, p.i));
+    p.i += 3;
+    let id = add(mut d, n);
+    d.nodes[parent].kids.push(id);
+}
+
+fn parse_element(d: mut ref Doc, p: mut ref Px, parent: i64) {
+    p.i += 1;
+    let qn = read_name(mut p);
+    let mut el = new_node(N_ELEM, parent);
+    let mut names: Vec[String] = Vec.new();
+    let mut values: Vec[String] = Vec.new();
+    loop {
+        skip_ws(mut p);
+        let c = at(p, 0);
+        if c == 47 or c == 62 {
+            break;
+        }
+        let an = read_name(mut p);
+        skip_ws(mut p);
+        p.i += 1;
+        skip_ws(mut p);
+        let v = parse_attr_value(mut p);
+        if an == "xmlns" {
+            el.decl_p.push(String.new());
+            el.decl_u.push(v);
+        } else if an.starts_with("xmlns:") {
+            let (_, local) = split_qname(an);
+            el.decl_p.push(local);
+            el.decl_u.push(v);
+        } else {
+            names.push(an);
+            values.push(v);
+        }
+    }
+    let (prefix, local) = split_qname(qn);
+    el.prefix = prefix;
+    el.local = local;
+    let id = add(mut d, el);
+    d.nodes[parent].kids.push(id);
+    let pfx = d.nodes[id].prefix.clone();
+    d.nodes[id].uri = match lookup_ns(d, id, pfx) {
+        Some(u) => u,
+        None => String.new(),
+    };
+    let mut k = 0;
+    while k < names.len() {
+        let (ap, al) = split_qname(names[k]);
+        let mut a = new_node(N_ATTR, id);
+        if ap.len() > 0 {
+            a.uri = match lookup_ns(d, id, ap) {
+                Some(u) => u,
+                None => String.new(),
+            };
+        }
+        a.prefix = ap;
+        a.local = al;
+        a.value = values[k].clone();
+        let aid = add(mut d, a);
+        d.nodes[id].attrs.push(aid);
+        k += 1;
+    }
+    if at(p, 0) == 47 {
+        p.i += 2;
+        return;
+    }
+    p.i += 1;
+    parse_content(mut d, mut p, id);
+    p.i += 2;
+    read_name(mut p);
+    skip_ws(mut p);
+    p.i += 1;
+}
+
+fn parse_content(d: mut ref Doc, p: mut ref Px, parent: i64) {
+    let mut text: Vec[i64] = Vec.new();
+    loop {
+        let c = at(p, 0);
+        if c < 0 or looking_at(p, "</") {
+            break;
+        }
+        if looking_at(p, "<![CDATA[") {
+            p.i += 9;
+            while not looking_at(p, "]]>") {
+                text.push(at(p, 0));
+                p.i += 1;
+            }
+            p.i += 3;
+        } else if looking_at(p, "<!--") {
+            add_text(mut d, parent, text);
+            text = Vec.new();
+            parse_comment(mut d, mut p, parent);
+        } else if looking_at(p, "<?") {
+            add_text(mut d, parent, text);
+            text = Vec.new();
+            parse_pi(mut d, mut p, parent);
+        } else if c == 60 {
+            add_text(mut d, parent, text);
+            text = Vec.new();
+            parse_element(mut d, mut p, parent);
+        } else if c == 38 {
+            read_ref(mut p, mut text);
+        } else {
+            text.push(c);
+            p.i += 1;
+        }
+    }
+    add_text(mut d, parent, text);
+}
+
+// Line ends become \n, as the XML spec asks of a parser.
+fn normalize_newlines(s: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < s.len() {
+        if s[k] == 13 {
+            out.push(10);
+            if k + 1 < s.len() and s[k + 1] == 10 {
+                k += 1;
+            }
+        } else {
+            out.push(s[k]);
+        }
+        k += 1;
+    }
+    out
+}
+
+fn parse_doc(text: ref Vec[i64]) -> Doc {
+    let mut d = Doc { nodes: Vec.new() };
+    add(mut d, new_node(N_DOC, -1));
+    let mut p = Px { s: normalize_newlines(text), i: 0 };
+    loop {
+        skip_ws(mut p);
+        if at(p, 0) < 0 {
+            break;
+        }
+        if looking_at(p, "<?") {
+            parse_pi(mut d, mut p, 0);
+        } else if looking_at(p, "<!--") {
+            parse_comment(mut d, mut p, 0);
+        } else {
+            parse_element(mut d, mut p, 0);
+        }
+    }
+    build_ns_nodes(mut d, 0);
+    let mut next = 0;
+    number_nodes(mut d, 0, mut next);
+    d
+}
+
+// The namespace axis as libxml2 walks it: the xml namespace, then the
+// namespaces in scope (nearest declaration of each prefix first) in
+// reverse.
+fn build_ns_nodes(d: mut ref Doc, id: i64) {
+    let kids = d.nodes[id].kids.clone();
+    if d.nodes[id].kind == N_ELEM {
+        let mut ps: Vec[String] = Vec.new();
+        let mut us: Vec[String] = Vec.new();
+        let mut e = id;
+        while e >= 0 and d.nodes[e].kind == N_ELEM {
+            let mut k = 0;
+            while k < d.nodes[e].decl_p.len() {
+                let pfx = d.nodes[e].decl_p[k].clone();
+                if not ps.contains(pfx) {
+                    ps.push(pfx);
+                    us.push(d.nodes[e].decl_u[k].clone());
+                }
+                k += 1;
+            }
+            e = d.nodes[e].parent;
+        }
+        let mut x = new_node(N_NS, id);
+        x.local = "xml".to_string();
+        x.value = XML_NS.to_string();
+        let xid = add(mut d, x);
+        d.nodes[id].nss.push(xid);
+        let mut k = ps.len() - 1;
+        while k >= 0 {
+            let mut n = new_node(N_NS, id);
+            n.local = ps[k].clone();
+            n.value = us[k].clone();
+            let nid = add(mut d, n);
+            d.nodes[id].nss.push(nid);
+            k -= 1;
+        }
+    }
+    for c in kids {
+        build_ns_nodes(mut d, c);
+    }
+}
+
+fn number_nodes(d: mut ref Doc, id: i64, next: mut ref i64) {
+    d.nodes[id].order = next;
+    next += 1;
+    for x in d.nodes[id].nss.clone() {
+        d.nodes[x].order = next;
+        next += 1;
+    }
+    for x in d.nodes[id].attrs.clone() {
+        d.nodes[x].order = next;
+        next += 1;
+    }
+    for c in d.nodes[id].kids.clone() {
+        number_nodes(mut d, c, mut next);
+    }
+}
+
+// The string-value of a node.
+fn string_value(d: ref Doc, id: i64) -> String {
+    let n = ref d.nodes[id];
+    if n.kind == N_ELEM or n.kind == N_DOC {
+        let mut out = String.new();
+        collect_text(d, id, mut out);
+        return out;
+    }
+    n.value.clone()
+}
+
+fn collect_text(d: ref Doc, id: i64, out: mut ref String) {
+    for c in d.nodes[id].kids.iter() {
+        let k = d.nodes[c].kind;
+        if k == N_TEXT {
+            out.push_str(d.nodes[c].value.as_str());
+        } else if k == N_ELEM {
+            collect_text(d, c, mut out);
+        }
+    }
+}
+
+fn qname_of(d: ref Doc, id: i64) -> String {
+    let n = ref d.nodes[id];
+    if n.prefix.len() > 0 { f"{n.prefix}:{n.local}" } else { n.local.clone() }
+}
+
+// ------------------------------------------------------------ numbers
+
+// xmlXPathStringEvalNumber: blanks, an optional minus, digits with an
+// optional fraction and exponent, blanks. The digits are summed in
+// doubles the way libxml2 does it, which is not always the nearest
+// double.
+fn xp_number(s: ref Vec[i64]) -> f64 {
+    let nan = 0.0 / 0.0;
+    let mut i = 0;
+    while i < s.len() and is_ws(s[i]) {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < s.len() and s[i] == 45 {
+        neg = true;
+        i += 1;
+    }
+    if i >= s.len() or (s[i] != 46 and (s[i] < 48 or s[i] > 57)) {
+        return nan;
+    }
+    let mut ret = 0.0;
+    let mut ok = false;
+    while i < s.len() and s[i] >= 48 and s[i] <= 57 {
+        ret = ret * 10.0 + ((s[i] - 48) as f64);
+        ok = true;
+        i += 1;
+    }
+    if i < s.len() and s[i] == 46 {
+        i += 1;
+        if (i >= s.len() or s[i] < 48 or s[i] > 57) and not ok {
+            return nan;
+        }
+        let mut frac = 0;
+        let mut fraction = 0.0;
+        while i < s.len() and s[i] == 48 {
+            frac += 1;
+            i += 1;
+        }
+        let max = frac + 20;
+        while i < s.len() and s[i] >= 48 and s[i] <= 57 and frac < max {
+            fraction = fraction * 10.0 + ((s[i] - 48) as f64);
+            frac += 1;
+            i += 1;
+        }
+        fraction = fraction / (10.0).pow(frac as f64);
+        ret = ret + fraction;
+        while i < s.len() and s[i] >= 48 and s[i] <= 57 {
+            i += 1;
+        }
+    }
+    let mut exponent = 0;
+    let mut exp_neg = false;
+    if i < s.len() and (s[i] == 101 or s[i] == 69) {
+        i += 1;
+        if i < s.len() and s[i] == 45 {
+            exp_neg = true;
+            i += 1;
+        } else if i < s.len() and s[i] == 43 {
+            i += 1;
+        }
+        while i < s.len() and s[i] >= 48 and s[i] <= 57 {
+            if exponent < 1000000 {
+                exponent = exponent * 10 + (s[i] - 48);
+            }
+            i += 1;
+        }
+    }
+    while i < s.len() and is_ws(s[i]) {
+        i += 1;
+    }
+    if i != s.len() {
+        return nan;
+    }
+    if neg {
+        ret = -ret;
+    }
+    if exp_neg {
+        exponent = -exponent;
+    }
+    ret * (10.0).pow(exponent as f64)
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn is_inf(x: f64) -> bool {
+    not is_nan(x) and (x - x) != 0.0
+}
+
+// Rounds a string of decimal digits at `keep` digits, half to even on
+// the digits given; returns the digits and whether a carry made the
+// number one digit longer.
+fn round_digits(digits: ref Vec[i64], keep: i64) -> (Vec[i64], bool) {
+    if keep >= digits.len() {
+        let mut out = digits.clone();
+        while out.len() < keep {
+            out.push(48);
+        }
+        return (out, false);
+    }
+    let mut out = slice(digits, 0, keep);
+    let first = digits[keep];
+    let mut rest_zero = true;
+    let mut k = keep + 1;
+    while k < digits.len() {
+        if digits[k] != 48 {
+            rest_zero = false;
+        }
+        k += 1;
+    }
+    let last_odd = keep > 0 and (out[keep - 1] - 48) % 2 == 1;
+    let up = first > 53 or (first == 53 and (not rest_zero or last_odd));
+    if not up {
+        return (out, false);
+    }
+    let mut j = keep - 1;
+    while j >= 0 {
+        if out[j] == 57 {
+            out[j] = 48;
+            j -= 1;
+        } else {
+            out[j] += 1;
+            return (out, false);
+        }
+    }
+    let mut grown: Vec[i64] = vec![49];
+    push_all(mut grown, out);
+    (grown, true)
+}
+
+// The digits of |x| exactly enough for printf: the integer part and 45
+// places of fraction.
+fn exact_digits(x: f64) -> (Vec[i64], Vec[i64]) {
+    let a = if x < 0.0 { -x } else { x };
+    let s = cps(f"{a:.45}");
+    let mut k = 0;
+    while s[k] != 46 {
+        k += 1;
+    }
+    (slice(s, 0, k), slice(s, k + 1, s.len()))
+}
+
+// printf("%.*f", p, x)
+fn fixed(x: f64, p: i64) -> String {
+    let (int_part, frac) = exact_digits(x);
+    let mut all = int_part.clone();
+    push_all(mut all, frac);
+    let (r, grew) = round_digits(all, int_part.len() + p);
+    let ilen = if grew { int_part.len() + 1 } else { int_part.len() };
+    let mut out: Vec[i64] = Vec.new();
+    if x < 0.0 or (x == 0.0 and float_text(x).starts_with("-")) {
+        out.push(45);
+    }
+    push_all(mut out, slice(r, 0, ilen));
+    if p > 0 {
+        out.push(46);
+        push_all(mut out, slice(r, ilen, r.len()));
+    }
+    to_string(out)
+}
+
+// printf("%.*e", p, x) for a finite non-zero x
+fn sci(x: f64, p: i64) -> String {
+    let (int_part, frac) = exact_digits(x);
+    let mut all = int_part.clone();
+    push_all(mut all, frac);
+    let mut lead = 0;
+    while lead < all.len() and all[lead] == 48 {
+        lead += 1;
+    }
+    let mut exp = int_part.len() - 1 - lead;
+    let sig = slice(all, lead, all.len());
+    let (r, grew) = round_digits(sig, p + 1);
+    if grew {
+        exp += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    if x < 0.0 {
+        out.push(45);
+    }
+    out.push(r[0]);
+    if p > 0 {
+        out.push(46);
+        push_all(mut out, slice(r, 1, p + 1));
+    }
+    out.push(101);
+    out.push(if exp < 0 { 45 } else { 43 });
+    let e = if exp < 0 { -exp } else { exp };
+    if e < 10 {
+        out.push(48);
+    }
+    push_ascii(mut out, e.to_string().as_str());
+    to_string(out)
+}
+
+// Trailing zeros of a fraction go, and the point with them.
+fn trim_fraction(s: ref Vec[i64]) -> Vec[i64] {
+    let mut has_point = false;
+    for c in s {
+        if c == 46 {
+            has_point = true;
+        }
+    }
+    if not has_point {
+        return s.clone();
+    }
+    let mut end = s.len();
+    while end > 0 and s[end - 1] == 48 {
+        end -= 1;
+    }
+    if end > 0 and s[end - 1] == 46 {
+        end -= 1;
+    }
+    slice(s, 0, end)
+}
+
+// xmlXPathFormatNumber: the string() of a number.
+fn number_string(x: f64) -> String {
+    if is_nan(x) {
+        return "NaN".to_string();
+    }
+    if is_inf(x) {
+        return if x > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() };
+    }
+    if x == 0.0 {
+        return "0".to_string();
+    }
+    if x > -2147483648.0 and x < 2147483647.0 and x == x.floor() {
+        return (x as i64).to_string();
+    }
+    let a = if x < 0.0 { -x } else { x };
+    if a > 1000000000.0 or a < 0.00001 {
+        let s = cps(sci(x, 14));
+        let mut k = 0;
+        while s[k] != 101 {
+            k += 1;
+        }
+        let mut m = trim_fraction(slice(s, 0, k));
+        push_all(mut m, slice(s, k, s.len()));
+        return to_string(m);
+    }
+    let ip = a.log10() as i64;
+    let fp = if ip > 0 { 15 - ip - 1 } else { 15 - ip };
+    to_string(trim_fraction(cps(fixed(x, fp))))
+}
+
+// A float as Python's repr writes it.
+fn float_text(x: f64) -> String {
+    if is_nan(x) {
+        return "nan".to_string();
+    }
+    f"{x}"
+}
+
+// ------------------------------------------------------------ tokens
+
+const T_END: i64 = 0;
+const T_NUM: i64 = 1;
+const T_LIT: i64 = 2;
+const T_NAME: i64 = 3;
+const T_PSTAR: i64 = 4;
+const T_STAR: i64 = 5;
+const T_MUL: i64 = 6;
+const T_OPNAME: i64 = 7;
+const T_FUNC: i64 = 8;
+const T_NODETYPE: i64 = 9;
+const T_AXIS: i64 = 10;
+const T_VAR: i64 = 11;
+const T_SYM: i64 = 12;
+
+#[derive(Clone)]
+struct Tk {
+    k: i64,
+    s: String,
+    n: f64,
+}
+
+struct XErr {
+    msg: String,
+}
+
+fn xerr(msg: Str) -> XErr {
+    XErr { msg: msg.to_string() }
+}
+
+fn is_ncname_start(c: i64) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or c >= 0xC0
+}
+
+fn is_ncname_char(c: i64) -> bool {
+    is_ncname_start(c) or (c >= 48 and c <= 57) or c == 46 or c == 45 or c == 0xB7
+}
+
+fn is_digit(c: i64) -> bool {
+    c >= 48 and c <= 57
+}
+
+// Whether the token before lets the next one be an operand, which
+// decides `*` and the operator names (XPath 1.0 section 3.7).
+fn operand_next(prev: ref Option[Tk]) -> bool {
+    match prev {
+        None => true,
+        Some(t) => {
+            if t.k == T_AXIS or t.k == T_MUL or t.k == T_OPNAME {
+                return true;
+            }
+            if t.k == T_SYM {
+                return t.s != ")" and t.s != "]" and t.s != "." and t.s != "..";
+            }
+            false
+        }
+    }
+}
+
+fn skip_blank(s: ref Vec[i64], i: i64) -> i64 {
+    let mut j = i;
+    while j < s.len() and is_ws(s[j]) {
+        j += 1;
+    }
+    j
+}
+
+fn ncname_end(s: ref Vec[i64], i: i64) -> i64 {
+    let mut j = i;
+    while j < s.len() and is_ncname_char(s[j]) {
+        j += 1;
+    }
+    j
+}
+
+fn is_axis_name(n: ref String) -> bool {
+    n == "child" or n == "descendant" or n == "descendant-or-self" or n == "parent" or n == "ancestor" or n == "ancestor-or-self" or n == "following-sibling" or n == "preceding-sibling" or n == "following" or n == "preceding" or n == "attribute" or n == "namespace" or n == "self"
+}
+
+fn tokenize(src: ref Vec[i64]) -> Result[Vec[Tk], XErr] {
+    let mut out: Vec[Tk] = Vec.new();
+    let mut prev: Option[Tk] = None;
+    let mut i = 0;
+    loop {
+        i = skip_blank(src, i);
+        if i >= src.len() {
+            break;
+        }
+        let c = src[i];
+        let c1 = if i + 1 < src.len() { src[i + 1] } else { -1 };
+        let mut t = Tk { k: T_SYM, s: String.new(), n: 0.0 };
+        if c == 34 or c == 39 {
+            let mut j = i + 1;
+            while j < src.len() and src[j] != c {
+                j += 1;
+            }
+            if j >= src.len() {
+                return Err(xerr("Unfinished literal"));
+            }
+            t.k = T_LIT;
+            t.s = to_string(slice(src, i + 1, j));
+            i = j + 1;
+        } else if is_digit(c) or (c == 46 and is_digit(c1)) {
+            let mut j = i;
+            while j < src.len() and is_digit(src[j]) {
+                j += 1;
+            }
+            if j < src.len() and src[j] == 46 {
+                j += 1;
+                while j < src.len() and is_digit(src[j]) {
+                    j += 1;
+                }
+            }
+            if j < src.len() and (src[j] == 101 or src[j] == 69) {
+                let mut e = j + 1;
+                if e < src.len() and (src[e] == 43 or src[e] == 45) {
+                    e += 1;
+                }
+                if e < src.len() and is_digit(src[e]) {
+                    j = e;
+                    while j < src.len() and is_digit(src[j]) {
+                        j += 1;
+                    }
+                }
+            }
+            t.k = T_NUM;
+            t.n = xp_number(slice(src, i, j));
+            i = j;
+        } else if c == 46 and c1 == 46 {
+            t.s = "..".to_string();
+            i += 2;
+        } else if c == 47 and c1 == 47 {
+            t.s = "//".to_string();
+            i += 2;
+        } else if c == 33 and c1 == 61 {
+            t.s = "!=".to_string();
+            i += 2;
+        } else if (c == 60 or c == 62) and c1 == 61 {
+            t.s = to_string(slice(src, i, i + 2));
+            i += 2;
+        } else if c == 40 or c == 41 or c == 91 or c == 93 or c == 46 or c == 64 or c == 44 or c == 47 or c == 124 or c == 43 or c == 45 or c == 61 or c == 60 or c == 62 {
+            t.s = to_string(slice(src, i, i + 1));
+            i += 1;
+        } else if c == 42 {
+            t.k = if operand_next(prev) { T_STAR } else { T_MUL };
+            t.s = "*".to_string();
+            i += 1;
+        } else if c == 36 {
+            let j = ncname_end(src, i + 1);
+            if j == i + 1 {
+                return Err(xerr("Invalid expression"));
+            }
+            let mut end = j;
+            if end + 1 < src.len() and src[end] == 58 and is_ncname_start(src[end + 1]) {
+                end = ncname_end(src, end + 1);
+            }
+            t.k = T_VAR;
+            t.s = to_string(slice(src, i + 1, end));
+            i = end;
+        } else if is_ncname_start(c) {
+            let j = ncname_end(src, i);
+            let name = to_string(slice(src, i, j));
+            if not operand_next(prev) {
+                if name != "and" and name != "or" and name != "mod" and name != "div" {
+                    return Err(xerr("Invalid expression"));
+                }
+                t.k = T_OPNAME;
+                t.s = name;
+                i = j;
+            } else {
+                let after = skip_blank(src, j);
+                if after + 1 < src.len() and src[after] == 58 and src[after + 1] == 58 {
+                    if not is_axis_name(name) {
+                        return Err(xerr("Invalid expression"));
+                    }
+                    t.k = T_AXIS;
+                    t.s = name;
+                    i = after + 2;
+                } else if j + 1 < src.len() and src[j] == 58 and src[j + 1] == 42 {
+                    t.k = T_PSTAR;
+                    t.s = name;
+                    i = j + 2;
+                } else {
+                    let mut end = j;
+                    if j + 1 < src.len() and src[j] == 58 and is_ncname_start(src[j + 1]) {
+                        end = ncname_end(src, j + 1);
+                    }
+                    let full = to_string(slice(src, i, end));
+                    let after2 = skip_blank(src, end);
+                    if after2 < src.len() and src[after2] == 40 {
+                        if full == "comment" or full == "text" or full == "node" or full == "processing-instruction" {
+                            t.k = T_NODETYPE;
+                        } else {
+                            t.k = T_FUNC;
+                        }
+                    } else {
+                        t.k = T_NAME;
+                    }
+                    t.s = full;
+                    i = end;
+                }
+            }
+        } else {
+            return Err(xerr("Invalid expression"));
+        }
+        prev = Some(t.clone());
+        out.push(t);
+    }
+    out.push(Tk { k: T_END, s: String.new(), n: 0.0 });
+    Ok(out)
+}
+
+// ------------------------------------------------------------ the parsed expression
+
+const X_OR: i64 = 1;
+const X_AND: i64 = 2;
+const X_EQ: i64 = 3;
+const X_NE: i64 = 4;
+const X_LT: i64 = 5;
+const X_LE: i64 = 6;
+const X_GT: i64 = 7;
+const X_GE: i64 = 8;
+const X_ADD: i64 = 9;
+const X_SUB: i64 = 10;
+const X_MUL: i64 = 11;
+const X_DIV: i64 = 12;
+const X_MOD: i64 = 13;
+const X_NEG: i64 = 14;
+const X_UNION: i64 = 15;
+const X_NUM: i64 = 16;
+const X_STR: i64 = 17;
+const X_VAR: i64 = 18;
+const X_FUNC: i64 = 19;
+const X_FILTER: i64 = 20;
+const X_PATH: i64 = 21;
+const X_STEP: i64 = 22;
+
+const AX_CHILD: i64 = 0;
+const AX_DESC: i64 = 1;
+const AX_DESC_SELF: i64 = 2;
+const AX_PARENT: i64 = 3;
+const AX_ANC: i64 = 4;
+const AX_ANC_SELF: i64 = 5;
+const AX_FOLL_SIB: i64 = 6;
+const AX_PREC_SIB: i64 = 7;
+const AX_FOLL: i64 = 8;
+const AX_PREC: i64 = 9;
+const AX_ATTR: i64 = 10;
+const AX_NS: i64 = 11;
+const AX_SELF: i64 = 12;
+
+const TK_STAR: i64 = 0;
+const TK_PSTAR: i64 = 1;
+const TK_NAME: i64 = 2;
+const TK_NODE: i64 = 3;
+const TK_TEXT: i64 = 4;
+const TK_COMMENT: i64 = 5;
+const TK_PI: i64 = 6;
+
+#[derive(Clone)]
+struct Ex {
+    op: i64,
+    a: i64,
+    b: i64,
+    kids: Vec[i64],
+    s: String,
+    s2: String,
+    n: f64,
+    axis: i64,
+    tk: i64,
+}
+
+struct Xp {
+    toks: Vec[Tk],
+    pos: i64,
+    ex: Vec[Ex],
+}
+
+fn new_ex(op: i64) -> Ex {
+    Ex { op: op, a: -1, b: -1, kids: Vec.new(), s: String.new(), s2: String.new(), n: 0.0, axis: 0, tk: 0 }
+}
+
+fn push_ex(p: mut ref Xp, e: own Ex) -> i64 {
+    p.ex.push(e);
+    p.ex.len() - 1
+}
+
+fn binary_ex(p: mut ref Xp, op: i64, a: i64, b: i64) -> i64 {
+    let mut e = new_ex(op);
+    e.a = a;
+    e.b = b;
+    push_ex(mut p, e)
+}
+
+fn peek(p: ref Xp) -> Tk {
+    p.toks[p.pos].clone()
+}
+
+fn is_sym(p: ref Xp, s: Str) -> bool {
+    p.toks[p.pos].k == T_SYM and p.toks[p.pos].s == s
+}
+
+fn is_opname(p: ref Xp, s: Str) -> bool {
+    p.toks[p.pos].k == T_OPNAME and p.toks[p.pos].s == s
+}
+
+fn expect_sym(p: mut ref Xp, s: Str) -> Result[(), XErr] {
+    if not is_sym(p, s) {
+        return Err(xerr("Invalid expression"));
+    }
+    p.pos += 1;
+    Ok(())
+}
+
+fn compile(src: ref String) -> Result[Xp, XErr] {
+    let toks = tokenize(cps(src))?;
+    let mut p = Xp { toks: toks, pos: 0, ex: Vec.new() };
+    let root = or_expr(mut p)?;
+    if p.toks[p.pos].k != T_END {
+        return Err(xerr("Invalid expression"));
+    }
+    let mut top = new_ex(0);
+    top.a = root;
+    push_ex(mut p, top);
+    Ok(p)
+}
+
+fn or_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut a = and_expr(mut p)?;
+    while is_opname(p, "or") {
+        p.pos += 1;
+        let b = and_expr(mut p)?;
+        a = binary_ex(mut p, X_OR, a, b);
+    }
+    Ok(a)
+}
+
+fn and_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut a = eq_expr(mut p)?;
+    while is_opname(p, "and") {
+        p.pos += 1;
+        let b = eq_expr(mut p)?;
+        a = binary_ex(mut p, X_AND, a, b);
+    }
+    Ok(a)
+}
+
+fn eq_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut a = rel_expr(mut p)?;
+    loop {
+        let op = if is_sym(p, "=") { X_EQ } else if is_sym(p, "!=") { X_NE } else { 0 };
+        if op == 0 {
+            break;
+        }
+        p.pos += 1;
+        let b = rel_expr(mut p)?;
+        a = binary_ex(mut p, op, a, b);
+    }
+    Ok(a)
+}
+
+fn rel_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut a = add_expr(mut p)?;
+    loop {
+        let op = if is_sym(p, "<") { X_LT } else if is_sym(p, "<=") { X_LE } else if is_sym(p, ">") { X_GT } else if is_sym(p, ">=") { X_GE } else { 0 };
+        if op == 0 {
+            break;
+        }
+        p.pos += 1;
+        let b = add_expr(mut p)?;
+        a = binary_ex(mut p, op, a, b);
+    }
+    Ok(a)
+}
+
+fn add_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut a = mul_expr(mut p)?;
+    loop {
+        let op = if is_sym(p, "+") { X_ADD } else if is_sym(p, "-") { X_SUB } else { 0 };
+        if op == 0 {
+            break;
+        }
+        p.pos += 1;
+        let b = mul_expr(mut p)?;
+        a = binary_ex(mut p, op, a, b);
+    }
+    Ok(a)
+}
+
+fn mul_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut a = unary_expr(mut p)?;
+    loop {
+        let t = peek(p);
+        let op = if t.k == T_MUL { X_MUL } else if t.k == T_OPNAME and t.s == "div" { X_DIV } else if t.k == T_OPNAME and t.s == "mod" { X_MOD } else { 0 };
+        if op == 0 {
+            break;
+        }
+        p.pos += 1;
+        let b = unary_expr(mut p)?;
+        a = binary_ex(mut p, op, a, b);
+    }
+    Ok(a)
+}
+
+fn unary_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    if is_sym(p, "-") {
+        p.pos += 1;
+        let a = unary_expr(mut p)?;
+        return Ok(binary_ex(mut p, X_NEG, a, -1));
+    }
+    union_expr(mut p)
+}
+
+fn union_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut a = path_expr(mut p)?;
+    while is_sym(p, "|") {
+        p.pos += 1;
+        let b = path_expr(mut p)?;
+        a = binary_ex(mut p, X_UNION, a, b);
+    }
+    Ok(a)
+}
+
+fn starts_step(t: ref Tk) -> bool {
+    if t.k == T_SYM {
+        return t.s == "." or t.s == ".." or t.s == "@";
+    }
+    t.k == T_AXIS or t.k == T_STAR or t.k == T_PSTAR or t.k == T_NAME or t.k == T_NODETYPE
+}
+
+fn desc_self_step(p: mut ref Xp) -> i64 {
+    let mut e = new_ex(X_STEP);
+    e.axis = AX_DESC_SELF;
+    e.tk = TK_NODE;
+    push_ex(mut p, e)
+}
+
+fn path_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let t = peek(p);
+    let filter = t.k == T_NUM or t.k == T_LIT or t.k == T_VAR or t.k == T_FUNC or (t.k == T_SYM and t.s == "(");
+    let mut path = new_ex(X_PATH);
+    if filter {
+        let f = filter_expr(mut p)?;
+        if not is_sym(p, "/") and not is_sym(p, "//") {
+            return Ok(f);
+        }
+        path.a = f;
+        let mut steps: Vec[i64] = Vec.new();
+        relative_path(mut p, mut steps, true)?;
+        path.kids = steps;
+        return Ok(push_ex(mut p, path));
+    }
+    let mut steps: Vec[i64] = Vec.new();
+    if is_sym(p, "/") {
+        path.b = 1;
+        p.pos += 1;
+        if starts_step(peek(p)) {
+            relative_path(mut p, mut steps, false)?;
+        }
+    } else if is_sym(p, "//") {
+        path.b = 1;
+        p.pos += 1;
+        steps.push(desc_self_step(mut p));
+        relative_path(mut p, mut steps, false)?;
+    } else {
+        relative_path(mut p, mut steps, false)?;
+    }
+    path.kids = steps;
+    Ok(push_ex(mut p, path))
+}
+
+// Steps separated by `/` and `//`; `lead` says a separator comes first.
+fn relative_path(p: mut ref Xp, steps: mut ref Vec[i64], lead: bool) -> Result[(), XErr] {
+    let mut need_sep = lead;
+    loop {
+        if need_sep {
+            if is_sym(p, "/") {
+                p.pos += 1;
+            } else if is_sym(p, "//") {
+                p.pos += 1;
+                steps.push(desc_self_step(mut p));
+            } else {
+                return Ok(());
+            }
+        }
+        let s = step(mut p)?;
+        steps.push(s);
+        need_sep = true;
+    }
+}
+
+fn step(p: mut ref Xp) -> Result[i64, XErr] {
+    let mut e = new_ex(X_STEP);
+    if is_sym(p, ".") {
+        p.pos += 1;
+        e.axis = AX_SELF;
+        e.tk = TK_NODE;
+        return Ok(push_ex(mut p, e));
+    }
+    if is_sym(p, "..") {
+        p.pos += 1;
+        e.axis = AX_PARENT;
+        e.tk = TK_NODE;
+        return Ok(push_ex(mut p, e));
+    }
+    e.axis = AX_CHILD;
+    let t = peek(p);
+    if t.k == T_SYM and t.s == "@" {
+        e.axis = AX_ATTR;
+        p.pos += 1;
+    } else if t.k == T_AXIS {
+        e.axis = match t.s.as_str() {
+            "child" => AX_CHILD,
+            "descendant" => AX_DESC,
+            "descendant-or-self" => AX_DESC_SELF,
+            "parent" => AX_PARENT,
+            "ancestor" => AX_ANC,
+            "ancestor-or-self" => AX_ANC_SELF,
+            "following-sibling" => AX_FOLL_SIB,
+            "preceding-sibling" => AX_PREC_SIB,
+            "following" => AX_FOLL,
+            "preceding" => AX_PREC,
+            "attribute" => AX_ATTR,
+            "namespace" => AX_NS,
+            _ => AX_SELF,
+        };
+        p.pos += 1;
+    }
+    let t = peek(p);
+    if t.k == T_STAR {
+        e.tk = TK_STAR;
+        p.pos += 1;
+    } else if t.k == T_PSTAR {
+        e.tk = TK_PSTAR;
+        e.s = t.s.clone();
+        p.pos += 1;
+    } else if t.k == T_NAME {
+        e.tk = TK_NAME;
+        let (pfx, local) = split_qname(t.s);
+        e.s = pfx;
+        e.s2 = local;
+        p.pos += 1;
+    } else if t.k == T_NODETYPE {
+        p.pos += 1;
+        expect_sym(mut p, "(")?;
+        e.tk = match t.s.as_str() {
+            "node" => TK_NODE,
+            "text" => TK_TEXT,
+            "comment" => TK_COMMENT,
+            _ => TK_PI,
+        };
+        if e.tk == TK_PI and p.toks[p.pos].k == T_LIT {
+            e.s2 = p.toks[p.pos].s.clone();
+            e.n = 1.0;
+            p.pos += 1;
+        }
+        expect_sym(mut p, ")")?;
+    } else {
+        return Err(xerr("Invalid expression"));
+    }
+    let mut preds: Vec[i64] = Vec.new();
+    while is_sym(p, "[") {
+        p.pos += 1;
+        preds.push(or_expr(mut p)?);
+        expect_sym(mut p, "]")?;
+    }
+    e.kids = preds;
+    Ok(push_ex(mut p, e))
+}
+
+fn filter_expr(p: mut ref Xp) -> Result[i64, XErr] {
+    let prim = primary(mut p)?;
+    if not is_sym(p, "[") {
+        return Ok(prim);
+    }
+    let mut preds: Vec[i64] = Vec.new();
+    while is_sym(p, "[") {
+        p.pos += 1;
+        preds.push(or_expr(mut p)?);
+        expect_sym(mut p, "]")?;
+    }
+    let mut e = new_ex(X_FILTER);
+    e.a = prim;
+    e.kids = preds;
+    Ok(push_ex(mut p, e))
+}
+
+fn primary(p: mut ref Xp) -> Result[i64, XErr] {
+    let t = peek(p);
+    p.pos += 1;
+    if t.k == T_NUM {
+        let mut e = new_ex(X_NUM);
+        e.n = t.n;
+        return Ok(push_ex(mut p, e));
+    }
+    if t.k == T_LIT {
+        let mut e = new_ex(X_STR);
+        e.s = t.s;
+        return Ok(push_ex(mut p, e));
+    }
+    if t.k == T_VAR {
+        let mut e = new_ex(X_VAR);
+        e.s = t.s;
+        return Ok(push_ex(mut p, e));
+    }
+    if t.k == T_FUNC {
+        expect_sym(mut p, "(")?;
+        let mut args: Vec[i64] = Vec.new();
+        if not is_sym(p, ")") {
+            args.push(or_expr(mut p)?);
+            while is_sym(p, ",") {
+                p.pos += 1;
+                args.push(or_expr(mut p)?);
+            }
+        }
+        expect_sym(mut p, ")")?;
+        let mut e = new_ex(X_FUNC);
+        e.s = t.s;
+        e.kids = args;
+        return Ok(push_ex(mut p, e));
+    }
+    // `(` expr `)`
+    let e = or_expr(mut p)?;
+    expect_sym(mut p, ")")?;
+    Ok(e)
+}
+// ------------------------------------------------------------ values
+
+const V_SET: i64 = 0;
+const V_NUM: i64 = 1;
+const V_STR: i64 = 2;
+const V_BOOL: i64 = 3;
+
+// An XPath value; a node-set holds node ids in document order.
+#[derive(Clone)]
+struct Val {
+    k: i64,
+    set: Vec[i64],
+    n: f64,
+    s: String,
+    b: bool,
+}
+
+fn v_set(set: own Vec[i64]) -> Val {
+    Val { k: V_SET, set: set, n: 0.0, s: String.new(), b: false }
+}
+
+fn v_num(n: f64) -> Val {
+    Val { k: V_NUM, set: Vec.new(), n: n, s: String.new(), b: false }
+}
+
+fn v_str(s: own String) -> Val {
+    Val { k: V_STR, set: Vec.new(), n: 0.0, s: s, b: false }
+}
+
+fn v_bool(b: bool) -> Val {
+    Val { k: V_BOOL, set: Vec.new(), n: 0.0, s: String.new(), b: b }
+}
+
+// What an expression is evaluated against: the namespaces and
+// variables the caller bound, and two indexes over the document.
+struct Env {
+    by_order: Vec[i64],
+    last: Vec[i64],
+    ns_p: Vec[String],
+    ns_u: Vec[String],
+    var_n: Vec[String],
+    var_v: Vec[Val],
+}
+
+fn new_env(d: ref Doc) -> Env {
+    let mut by_order: Vec[i64] = Vec.new();
+    let mut last: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < d.nodes.len() {
+        by_order.push(0);
+        last.push(0);
+        k += 1;
+    }
+    k = 0;
+    while k < d.nodes.len() {
+        by_order[d.nodes[k].order] = k;
+        k += 1;
+    }
+    fill_last(d, 0, mut last);
+    Env { by_order: by_order, last: last, ns_p: Vec.new(), ns_u: Vec.new(), var_n: Vec.new(), var_v: Vec.new() }
+}
+
+// The highest document order inside each node's subtree.
+fn fill_last(d: ref Doc, id: i64, last: mut ref Vec[i64]) -> i64 {
+    let n = ref d.nodes[id];
+    let mut hi = n.order;
+    for x in n.nss.iter() {
+        if d.nodes[x].order > hi {
+            hi = d.nodes[x].order;
+        }
+    }
+    for x in n.attrs.iter() {
+        if d.nodes[x].order > hi {
+            hi = d.nodes[x].order;
+        }
+    }
+    for c in n.kids.iter() {
+        let h = fill_last(d, c, mut last);
+        if h > hi {
+            hi = h;
+        }
+    }
+    last[id] = hi;
+    hi
+}
+
+struct Cx {
+    node: i64,
+    pos: i64,
+    size: i64,
+}
+
+// Node ids in document order, each once.
+fn doc_order(d: ref Doc, env: ref Env, ids: ref Vec[i64]) -> Vec[i64] {
+    let mut os: Vec[i64] = Vec.new();
+    for id in ids.iter() {
+        os.push(d.nodes[id].order);
+    }
+    os.sort();
+    let mut out: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < os.len() {
+        if k == 0 or os[k] != os[k - 1] {
+            out.push(env.by_order[os[k]]);
+        }
+        k += 1;
+    }
+    out
+}
+
+// ------------------------------------------------------------ conversions
+
+fn str_of(d: ref Doc, v: ref Val) -> String {
+    if v.k == V_SET {
+        if v.set.len() == 0 {
+            return String.new();
+        }
+        return string_value(d, v.set[0]);
+    }
+    if v.k == V_NUM {
+        return number_string(v.n);
+    }
+    if v.k == V_BOOL {
+        return if v.b { "true".to_string() } else { "false".to_string() };
+    }
+    v.s.clone()
+}
+
+fn num_of(d: ref Doc, v: ref Val) -> f64 {
+    if v.k == V_NUM {
+        return v.n;
+    }
+    if v.k == V_BOOL {
+        return if v.b { 1.0 } else { 0.0 };
+    }
+    xp_number(cps(str_of(d, v)))
+}
+
+fn bool_of(v: ref Val) -> bool {
+    if v.k == V_SET {
+        return v.set.len() > 0;
+    }
+    if v.k == V_NUM {
+        return v.n == v.n and v.n != 0.0;
+    }
+    if v.k == V_STR {
+        return v.s.len() > 0;
+    }
+    v.b
+}
+
+// ------------------------------------------------------------ axes
+
+fn is_tree_node(d: ref Doc, id: i64) -> bool {
+    let k = d.nodes[id].kind;
+    k == N_ELEM or k == N_TEXT or k == N_COMMENT or k == N_PI
+}
+
+fn descendants(d: ref Doc, id: i64, out: mut ref Vec[i64]) {
+    for c in d.nodes[id].kids.iter() {
+        out.push(c);
+        descendants(d, c, mut out);
+    }
+}
+
+// The nodes on an axis from `id`, in the axis's own order (nearest
+// first on a reverse axis).
+fn axis_nodes(d: ref Doc, env: ref Env, ax: i64, id: i64) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let n = ref d.nodes[id];
+    let attached = n.kind == N_ATTR or n.kind == N_NS;
+    if ax == AX_CHILD {
+        return n.kids.clone();
+    }
+    if ax == AX_DESC or ax == AX_DESC_SELF {
+        if ax == AX_DESC_SELF {
+            out.push(id);
+        }
+        descendants(d, id, mut out);
+        return out;
+    }
+    if ax == AX_PARENT {
+        if n.parent >= 0 {
+            out.push(n.parent);
+        }
+        return out;
+    }
+    if ax == AX_ANC or ax == AX_ANC_SELF {
+        if ax == AX_ANC_SELF {
+            out.push(id);
+        }
+        let mut p = n.parent;
+        while p >= 0 {
+            out.push(p);
+            p = d.nodes[p].parent;
+        }
+        return out;
+    }
+    if ax == AX_FOLL_SIB or ax == AX_PREC_SIB {
+        if attached or n.parent < 0 {
+            return out;
+        }
+        let sibs = ref d.nodes[n.parent].kids;
+        let mut k = 0;
+        while sibs[k] != id {
+            k += 1;
+        }
+        if ax == AX_FOLL_SIB {
+            let mut j = k + 1;
+            while j < sibs.len() {
+                out.push(sibs[j]);
+                j += 1;
+            }
+        } else {
+            let mut j = k - 1;
+            while j >= 0 {
+                out.push(sibs[j]);
+                j -= 1;
+            }
+        }
+        return out;
+    }
+    if ax == AX_FOLL or ax == AX_PREC {
+        let from = if attached { n.parent } else { id };
+        let at_order = d.nodes[from].order;
+        let end = env.last[from];
+        if ax == AX_FOLL {
+            let mut o = end + 1;
+            while o < env.by_order.len() {
+                let m = env.by_order[o];
+                if is_tree_node(d, m) {
+                    out.push(m);
+                }
+                o += 1;
+            }
+        } else {
+            let mut o = at_order - 1;
+            while o >= 0 {
+                let m = env.by_order[o];
+                if is_tree_node(d, m) and env.last[m] < at_order {
+                    out.push(m);
+                }
+                o -= 1;
+            }
+        }
+        return out;
+    }
+    if ax == AX_ATTR {
+        return n.attrs.clone();
+    }
+    if ax == AX_NS {
+        return n.nss.clone();
+    }
+    out.push(id);
+    out
+}
+
+fn test_ok(d: ref Doc, e: ref Ex, ax: i64, id: i64, uri: ref String) -> bool {
+    let n = ref d.nodes[id];
+    let principal = if ax == AX_ATTR { N_ATTR } else if ax == AX_NS { N_NS } else { N_ELEM };
+    if e.tk == TK_NODE {
+        return true;
+    }
+    if e.tk == TK_TEXT {
+        return n.kind == N_TEXT;
+    }
+    if e.tk == TK_COMMENT {
+        return n.kind == N_COMMENT;
+    }
+    if e.tk == TK_PI {
+        return n.kind == N_PI and (e.n == 0.0 or n.local == e.s2);
+    }
+    if n.kind != principal {
+        return false;
+    }
+    if e.tk == TK_STAR {
+        return true;
+    }
+    if principal == N_NS {
+        return e.tk == TK_NAME and e.s.len() == 0 and n.local == e.s2;
+    }
+    if e.tk == TK_PSTAR {
+        return n.uri == uri;
+    }
+    n.local == e.s2 and n.uri == uri
+}
+
+fn ns_uri(env: ref Env, prefix: ref String) -> Result[String, XErr] {
+    if prefix.len() == 0 {
+        return Ok(String.new());
+    }
+    if prefix == "xml" {
+        return Ok(XML_NS.to_string());
+    }
+    let mut k = 0;
+    while k < env.ns_p.len() {
+        if env.ns_p[k] == prefix {
+            return Ok(env.ns_u[k].clone());
+        }
+        k += 1;
+    }
+    Err(xerr("Undefined namespace prefix"))
+}
+
+// ------------------------------------------------------------ evaluation
+
+fn pred_true(v: ref Val, pos: i64) -> bool {
+    if v.k == V_NUM {
+        return v.n == pos as f64;
+    }
+    bool_of(v)
+}
+
+// Keeps the nodes of `list` that every predicate accepts, positions
+// counted in the list's own order.
+fn apply_preds(d: ref Doc, x: ref Xp, env: ref Env, preds: ref Vec[i64], list: own Vec[i64]) -> Result[Vec[i64], XErr] {
+    let mut cur = list;
+    for p in preds.iter() {
+        let mut keep: Vec[i64] = Vec.new();
+        let size = cur.len();
+        let mut k = 0;
+        while k < size {
+            let c = Cx { node: cur[k], pos: k + 1, size: size };
+            let v = eval(d, x, env, p, c)?;
+            if pred_true(v, k + 1) {
+                keep.push(cur[k]);
+            }
+            k += 1;
+        }
+        cur = keep;
+    }
+    Ok(cur)
+}
+
+fn eval_step(d: ref Doc, x: ref Xp, env: ref Env, sid: i64, input: ref Vec[i64]) -> Result[Vec[i64], XErr] {
+    let e = ref x.ex[sid];
+    let uri = if e.tk == TK_NAME or e.tk == TK_PSTAR { ns_uri(env, e.s)? } else { String.new() };
+    let mut all: Vec[i64] = Vec.new();
+    for n in input.iter() {
+        let mut list: Vec[i64] = Vec.new();
+        for m in axis_nodes(d, env, e.axis, n).iter() {
+            if test_ok(d, e, e.axis, m, uri) {
+                list.push(m);
+            }
+        }
+        let kept = apply_preds(d, x, env, e.kids, list)?;
+        for m in kept.iter() {
+            all.push(m);
+        }
+    }
+    Ok(doc_order(d, env, all))
+}
+
+fn need_set(v: ref Val) -> Result[(), XErr] {
+    if v.k != V_SET {
+        return Err(xerr("Invalid type"));
+    }
+    Ok(())
+}
+
+fn flip(op: i64) -> i64 {
+    if op == X_LT { X_GT } else if op == X_GT { X_LT } else if op == X_LE { X_GE } else if op == X_GE { X_LE } else { op }
+}
+
+fn num_cmp(op: i64, a: f64, b: f64) -> bool {
+    if op == X_LT { a < b } else if op == X_LE { a <= b } else if op == X_GT { a > b } else { a >= b }
+}
+
+fn set_numbers(d: ref Doc, v: ref Val) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    for id in v.set.iter() {
+        out.push(xp_number(cps(string_value(d, id))));
+    }
+    out
+}
+
+fn equals(d: ref Doc, a: ref Val, b: ref Val, neq: bool) -> bool {
+    if a.k == V_SET and b.k == V_SET {
+        let mut bs: Vec[String] = Vec.new();
+        for id in b.set.iter() {
+            bs.push(string_value(d, id));
+        }
+        for id in a.set.iter() {
+            let sa = string_value(d, id);
+            for sb in bs.iter() {
+                if (sa == sb) != neq {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if a.k == V_SET or b.k == V_SET {
+        let s = if a.k == V_SET { ref a } else { ref b };
+        let o = if a.k == V_SET { ref b } else { ref a };
+        if o.k == V_BOOL {
+            return ((s.set.len() > 0) == o.b) != neq;
+        }
+        if o.k == V_NUM {
+            for f in set_numbers(d, s).iter() {
+                if (f == o.n) != neq {
+                    return true;
+                }
+            }
+            return false;
+        }
+        for id in s.set.iter() {
+            if (string_value(d, id) == o.s) != neq {
+                return true;
+            }
+        }
+        return false;
+    }
+    if a.k == V_BOOL or b.k == V_BOOL {
+        return (bool_of(a) == bool_of(b)) != neq;
+    }
+    if a.k == V_NUM or b.k == V_NUM {
+        return (num_of(d, a) == num_of(d, b)) != neq;
+    }
+    (a.s == b.s) != neq
+}
+
+fn relational(d: ref Doc, op: i64, a: ref Val, b: ref Val) -> bool {
+    if a.k == V_SET and b.k == V_SET {
+        let bs = set_numbers(d, b);
+        for x in set_numbers(d, a).iter() {
+            for y in bs.iter() {
+                if num_cmp(op, x, y) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if b.k == V_SET {
+        return relational(d, flip(op), b, a);
+    }
+    if a.k == V_SET {
+        if b.k == V_BOOL {
+            let x = if a.set.len() > 0 { 1.0 } else { 0.0 };
+            return num_cmp(op, x, num_of(d, b));
+        }
+        let y = num_of(d, b);
+        for x in set_numbers(d, a).iter() {
+            if num_cmp(op, x, y) {
+                return true;
+            }
+        }
+        return false;
+    }
+    num_cmp(op, num_of(d, a), num_of(d, b))
+}
+
+fn eval(d: ref Doc, x: ref Xp, env: ref Env, id: i64, c: ref Cx) -> Result[Val, XErr] {
+    let e = ref x.ex[id];
+    let op = e.op;
+    if op == X_OR {
+        if bool_of(eval(d, x, env, e.a, c)?) {
+            return Ok(v_bool(true));
+        }
+        return Ok(v_bool(bool_of(eval(d, x, env, e.b, c)?)));
+    }
+    if op == X_AND {
+        if not bool_of(eval(d, x, env, e.a, c)?) {
+            return Ok(v_bool(false));
+        }
+        return Ok(v_bool(bool_of(eval(d, x, env, e.b, c)?)));
+    }
+    if op >= X_EQ and op <= X_GE {
+        let a = eval(d, x, env, e.a, c)?;
+        let b = eval(d, x, env, e.b, c)?;
+        if op == X_EQ or op == X_NE {
+            return Ok(v_bool(equals(d, a, b, op == X_NE)));
+        }
+        return Ok(v_bool(relational(d, op, a, b)));
+    }
+    if op >= X_ADD and op <= X_MOD {
+        let a = num_of(d, eval(d, x, env, e.a, c)?);
+        let b = num_of(d, eval(d, x, env, e.b, c)?);
+        let r = if op == X_ADD { a + b } else if op == X_SUB { a - b } else if op == X_MUL { a * b } else if op == X_DIV { a / b } else { a % b };
+        return Ok(v_num(r));
+    }
+    if op == X_NEG {
+        return Ok(v_num(-num_of(d, eval(d, x, env, e.a, c)?)));
+    }
+    if op == X_UNION {
+        let a = eval(d, x, env, e.a, c)?;
+        let b = eval(d, x, env, e.b, c)?;
+        need_set(a)?;
+        need_set(b)?;
+        let mut all = a.set.clone();
+        for n in b.set.iter() {
+            all.push(n);
+        }
+        return Ok(v_set(doc_order(d, env, all)));
+    }
+    if op == X_NUM {
+        return Ok(v_num(e.n));
+    }
+    if op == X_STR {
+        return Ok(v_str(e.s.clone()));
+    }
+    if op == X_VAR {
+        let mut k = 0;
+        while k < env.var_n.len() {
+            if env.var_n[k] == e.s {
+                return Ok(env.var_v[k].clone());
+            }
+            k += 1;
+        }
+        return Err(xerr("Undefined variable"));
+    }
+    if op == X_FUNC {
+        let mut args: Vec[Val] = Vec.new();
+        for a in e.kids.iter() {
+            args.push(eval(d, x, env, a, c)?);
+        }
+        return call(d, env, e.s, args, c);
+    }
+    if op == X_FILTER {
+        let v = eval(d, x, env, e.a, c)?;
+        need_set(v)?;
+        return Ok(v_set(apply_preds(d, x, env, e.kids, v.set.clone())?));
+    }
+    if op == X_PATH {
+        let mut cur: Vec[i64] = Vec.new();
+        if e.a >= 0 {
+            let v = eval(d, x, env, e.a, c)?;
+            need_set(v)?;
+            cur = v.set.clone();
+        } else if e.b == 1 {
+            cur.push(0);
+        } else {
+            cur.push(c.node);
+        }
+        for s in e.kids.iter() {
+            cur = eval_step(d, x, env, s, cur)?;
+        }
+        return Ok(v_set(cur));
+    }
+    if op == X_STEP {
+        let mut one: Vec[i64] = Vec.new();
+        one.push(c.node);
+        return Ok(v_set(eval_step(d, x, env, id, one)?));
+    }
+    eval(d, x, env, e.a, c)
+}
+
+// Runs a compiled expression against a context node.
+fn evaluate(d: ref Doc, x: ref Xp, env: ref Env, node: i64) -> Result[Val, XErr] {
+    let c = Cx { node: node, pos: 1, size: 1 };
+    eval(d, x, env, x.ex.len() - 1, c)
+}
+
+// ------------------------------------------------------------ functions
+
+fn arity(args: ref Vec[Val], lo: i64, hi: i64) -> Result[(), XErr] {
+    if args.len() < lo or args.len() > hi {
+        return Err(xerr("Invalid number of arguments"));
+    }
+    Ok(())
+}
+
+// The argument, or the context node as a node-set when it is left out.
+fn arg_or_self(args: ref Vec[Val], c: ref Cx) -> Val {
+    if args.len() > 0 {
+        return args[0].clone();
+    }
+    let mut one: Vec[i64] = Vec.new();
+    one.push(c.node);
+    v_set(one)
+}
+
+fn round_half_up(x: f64) -> f64 {
+    let f = x.floor();
+    if x - f >= 0.5 { f + 1.0 } else { f }
+}
+
+fn find_cp(s: ref Vec[i64], t: ref Vec[i64]) -> i64 {
+    if t.len() == 0 {
+        return 0;
+    }
+    let mut i = 0;
+    while i + t.len() <= s.len() {
+        let mut j = 0;
+        while j < t.len() and s[i + j] == t[j] {
+            j += 1;
+        }
+        if j == t.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn is_blank(c: i64) -> bool {
+    c == 32 or c == 9 or c == 10 or c == 13
+}
+
+fn normalize_space(s: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    let mut gap = false;
+    for ch in s.iter() {
+        if is_blank(ch) {
+            gap = out.len() > 0;
+        } else {
+            if gap {
+                out.push(32);
+                gap = false;
+            }
+            out.push(ch);
+        }
+    }
+    to_string(out)
+}
+
+fn substring(s: ref Vec[i64], start: f64, len: f64, has_len: bool) -> String {
+    let int_max = 2147483647.0;
+    let mut i: i64 = 1;
+    let mut j: i64 = 2147483647;
+    if not (start < int_max) {
+        i = 2147483647;
+    } else if start >= 1.0 {
+        i = start as i64;
+        if start - start.floor() >= 0.5 {
+            i += 1;
+        }
+    }
+    if has_len {
+        let end = round_half_up(start) + round_half_up(len);
+        if not (end >= 1.0) {
+            j = 1;
+        } else if end < int_max {
+            j = end as i64;
+        }
+    }
+    i -= 1;
+    j -= 1;
+    if i < j and i < s.len() {
+        let stop = if j < s.len() { j } else { s.len() };
+        return to_string(slice(s, i, stop));
+    }
+    String.new()
+}
+
+fn translate(s: ref Vec[i64], from: ref Vec[i64], to: ref Vec[i64]) -> String {
+    let mut out: Vec[i64] = Vec.new();
+    for ch in s.iter() {
+        let mut k = 0;
+        while k < from.len() and from[k] != ch {
+            k += 1;
+        }
+        if k == from.len() {
+            out.push(ch);
+        } else if k < to.len() {
+            out.push(to[k]);
+        }
+    }
+    to_string(out)
+}
+
+fn upper_ascii(c: i64) -> i64 {
+    if c >= 97 and c <= 122 { c - 32 } else { c }
+}
+
+fn lang_matches(d: ref Doc, node: i64, want: ref Vec[i64]) -> bool {
+    let mut e = node;
+    while e >= 0 {
+        if d.nodes[e].kind == N_ELEM {
+            for a in d.nodes[e].attrs.iter() {
+                let an = ref d.nodes[a];
+                if an.uri == XML_NS and an.local == "lang" {
+                    let have = cps(an.value);
+                    let mut i = 0;
+                    while i < want.len() {
+                        if i >= have.len() or upper_ascii(want[i]) != upper_ascii(have[i]) {
+                            return false;
+                        }
+                        i += 1;
+                    }
+                    return i == have.len() or have[i] == 45;
+                }
+            }
+        }
+        e = d.nodes[e].parent;
+    }
+    false
+}
+
+fn local_name(d: ref Doc, id: i64) -> String {
+    let n = ref d.nodes[id];
+    if n.kind == N_ELEM or n.kind == N_ATTR or n.kind == N_PI or n.kind == N_NS {
+        return n.local.clone();
+    }
+    String.new()
+}
+
+fn call(d: ref Doc, env: ref Env, name: ref String, args: ref Vec[Val], c: ref Cx) -> Result[Val, XErr] {
+    let f = name.as_str();
+    if f == "last" {
+        arity(args, 0, 0)?;
+        return Ok(v_num(c.size as f64));
+    }
+    if f == "position" {
+        arity(args, 0, 0)?;
+        return Ok(v_num(c.pos as f64));
+    }
+    if f == "count" {
+        arity(args, 1, 1)?;
+        need_set(args[0])?;
+        return Ok(v_num(args[0].set.len() as f64));
+    }
+    if f == "id" {
+        arity(args, 1, 1)?;
+        return Ok(v_set(Vec.new()));
+    }
+    if f == "local-name" or f == "namespace-uri" or f == "name" {
+        arity(args, 0, 1)?;
+        let v = arg_or_self(args, c);
+        need_set(v)?;
+        if v.set.len() == 0 {
+            return Ok(v_str(String.new()));
+        }
+        let id = v.set[0];
+        let n = ref d.nodes[id];
+        if f == "local-name" {
+            return Ok(v_str(local_name(d, id)));
+        }
+        if f == "namespace-uri" {
+            let u = if n.kind == N_ELEM or n.kind == N_ATTR { n.uri.clone() } else { String.new() };
+            return Ok(v_str(u));
+        }
+        if n.kind == N_ELEM or n.kind == N_ATTR {
+            return Ok(v_str(qname_of(d, id)));
+        }
+        return Ok(v_str(local_name(d, id)));
+    }
+    if f == "string" {
+        arity(args, 0, 1)?;
+        return Ok(v_str(str_of(d, arg_or_self(args, c))));
+    }
+    if f == "concat" {
+        if args.len() < 2 {
+            return Err(xerr("Invalid number of arguments"));
+        }
+        let mut out = String.new();
+        for a in args.iter() {
+            out.push_str(str_of(d, a).as_str());
+        }
+        return Ok(v_str(out));
+    }
+    if f == "starts-with" or f == "contains" or f == "substring-before" or f == "substring-after" {
+        arity(args, 2, 2)?;
+        let s = cps(str_of(d, args[0]));
+        let t = cps(str_of(d, args[1]));
+        if f == "starts-with" {
+            return Ok(v_bool(starts_with(s, t)));
+        }
+        let at = find_cp(s, t);
+        if f == "contains" {
+            return Ok(v_bool(at >= 0));
+        }
+        if at < 0 {
+            return Ok(v_str(String.new()));
+        }
+        if f == "substring-before" {
+            return Ok(v_str(to_string(slice(s, 0, at))));
+        }
+        return Ok(v_str(to_string(slice(s, at + t.len(), s.len()))));
+    }
+    if f == "substring" {
+        arity(args, 2, 3)?;
+        let s = cps(str_of(d, args[0]));
+        let start = num_of(d, args[1]);
+        let len = if args.len() == 3 { num_of(d, args[2]) } else { 0.0 };
+        return Ok(v_str(substring(s, start, len, args.len() == 3)));
+    }
+    if f == "string-length" {
+        arity(args, 0, 1)?;
+        return Ok(v_num(cps(str_of(d, arg_or_self(args, c))).len() as f64));
+    }
+    if f == "normalize-space" {
+        arity(args, 0, 1)?;
+        return Ok(v_str(normalize_space(cps(str_of(d, arg_or_self(args, c))))));
+    }
+    if f == "translate" {
+        arity(args, 3, 3)?;
+        return Ok(v_str(translate(cps(str_of(d, args[0])), cps(str_of(d, args[1])), cps(str_of(d, args[2])))));
+    }
+    if f == "boolean" {
+        arity(args, 1, 1)?;
+        return Ok(v_bool(bool_of(args[0])));
+    }
+    if f == "not" {
+        arity(args, 1, 1)?;
+        return Ok(v_bool(not bool_of(args[0])));
+    }
+    if f == "true" or f == "false" {
+        arity(args, 0, 0)?;
+        return Ok(v_bool(f == "true"));
+    }
+    if f == "lang" {
+        arity(args, 1, 1)?;
+        return Ok(v_bool(lang_matches(d, c.node, cps(str_of(d, args[0])))));
+    }
+    if f == "number" {
+        arity(args, 0, 1)?;
+        return Ok(v_num(num_of(d, arg_or_self(args, c))));
+    }
+    if f == "sum" {
+        arity(args, 1, 1)?;
+        need_set(args[0])?;
+        let mut t = 0.0;
+        for x in set_numbers(d, args[0]).iter() {
+            t += x;
+        }
+        return Ok(v_num(t));
+    }
+    if f == "floor" or f == "ceiling" or f == "round" {
+        arity(args, 1, 1)?;
+        let x = num_of(d, args[0]);
+        if f == "floor" {
+            return Ok(v_num(x.floor()));
+        }
+        if f == "ceiling" {
+            return Ok(v_num(x.ceil()));
+        }
+        if x >= -0.5 and x < 0.5 {
+            return Ok(v_num(x * 0.0));
+        }
+        return Ok(v_num(round_half_up(x)));
+    }
+    Err(xerr("Unregistered function"))
+}
+// ------------------------------------------------------------ files
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let d = cps(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < d.len() {
+        out.push((hex_val(d[i]) * 16 + hex_val(d[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn write_data() -> Result[(), String] {
+    if fs.create_dir_all("data/docs".to_string()).is_err() {
+        return Err("cannot create data/docs".to_string());
+    }
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        let r = if file.hex { fs.write_bytes(p.clone(), unhex(file.body)) } else { fs.write(p.clone(), file.body.clone()) };
+        if r.is_err() {
+            return Err(f"cannot write {p}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(path: ref String) -> Result[String, String] {
+    match fs.read_to_string(path.clone()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(f"cannot read {path}"),
+    }
+}
+
+fn load_doc(name: ref String) -> Result[Doc, String] {
+    let t = read_text(f"data/docs/{name}")?;
+    Ok(parse_doc(cps(t)))
+}
+
+// The text before the first space, and the rest.
+fn split_word(s: ref String) -> (String, String) {
+    let v = cps(s);
+    let mut k = 0;
+    while k < v.len() and v[k] != 32 {
+        k += 1;
+    }
+    if k == v.len() {
+        return (s.clone(), String.new());
+    }
+    (to_string(slice(v, 0, k)), to_string(slice(v, k + 1, v.len())))
+}
+
+fn root_element(d: ref Doc) -> i64 {
+    for c in d.nodes[0].kids.iter() {
+        if d.nodes[c].kind == N_ELEM {
+            return c;
+        }
+    }
+    0
+}
+
+// ------------------------------------------------------------ showing nodes
+
+// An element as its ancestors' names and its own, each with its place
+// among the earlier siblings of the same name.
+fn path_of(d: ref Doc, id: i64) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    let mut e = id;
+    while e >= 0 and d.nodes[e].kind == N_ELEM {
+        let n = ref d.nodes[e];
+        let mut k = 1;
+        for s in d.nodes[n.parent].kids.iter() {
+            if s == e {
+                break;
+            }
+            let m = ref d.nodes[s];
+            if m.kind == N_ELEM and m.local == n.local and m.uri == n.uri {
+                k += 1;
+            }
+        }
+        parts.push(f"{qname_of(d, e)}[{k}]");
+        e = n.parent;
+    }
+    let mut out = String.new();
+    let mut k = parts.len() - 1;
+    while k >= 0 {
+        out.push_str("/");
+        out.push_str(parts[k].as_str());
+        k -= 1;
+    }
+    out
+}
+
+// An attribute's name as lxml spells it: through a prefix the element
+// sees, else in Clark notation.
+fn attr_name(d: ref Doc, el: i64, a: i64) -> String {
+    let n = ref d.nodes[a];
+    if n.uri.len() == 0 {
+        return n.local.clone();
+    }
+    if n.uri == XML_NS {
+        return f"xml:{n.local}";
+    }
+    let mut seen: Vec[String] = Vec.new();
+    let mut e = el;
+    while e >= 0 and d.nodes[e].kind == N_ELEM {
+        let m = ref d.nodes[e];
+        let mut k = 0;
+        while k < m.decl_p.len() {
+            let p = m.decl_p[k].clone();
+            if not seen.contains(p) {
+                if p.len() > 0 and m.decl_u[k] == n.uri {
+                    return f"{p}:{n.local}";
+                }
+                seen.push(p);
+            }
+            k += 1;
+        }
+        e = m.parent;
+    }
+    let mut out = "{".to_string();
+    out.push_str(n.uri.as_str());
+    out.push_str("}");
+    out.push_str(n.local.as_str());
+    out
+}
+
+fn show(d: ref Doc, id: i64) -> String {
+    let n = ref d.nodes[id];
+    if n.kind == N_COMMENT {
+        return f"comment {repr_of(cps(n.value))}";
+    }
+    if n.kind == N_PI {
+        let text = if n.value.len() == 0 { "None".to_string() } else { repr_of(cps(n.value)) };
+        return f"pi {n.local} {text}";
+    }
+    if n.kind == N_ELEM {
+        return f"<{path_of(d, id)}>";
+    }
+    if n.kind == N_NS {
+        let p = if n.local.len() == 0 { "None".to_string() } else { repr_of(cps(n.local)) };
+        return f"ns ({p}, {repr_of(cps(n.value))})";
+    }
+    if n.kind == N_ATTR {
+        return f"@{attr_name(d, n.parent, id)}={repr_of(cps(n.value))} on <{path_of(d, n.parent)}>";
+    }
+    f"text {repr_of(cps(n.value))} in <{path_of(d, n.parent)}>"
+}
+
+fn show_value(d: ref Doc, v: ref Val) {
+    if v.k == V_SET {
+        let mut any = false;
+        for id in v.set.iter() {
+            if d.nodes[id].kind != N_DOC {
+                println(f"  {show(d, id)}");
+                any = true;
+            }
+        }
+        if not any {
+            println("  []");
+        }
+    } else if v.k == V_BOOL {
+        println(f"  {py_bool(v.b)}");
+    } else if v.k == V_NUM {
+        println(f"  {float_text(v.n)}");
+    } else {
+        println(f"  {repr_of(cps(v.s))}");
+    }
+}
+
+// ------------------------------------------------------------ queries
+
+fn run_queries() -> Result[(), String] {
+    println("== queries");
+    let text = read_text("data/queries.txt".to_string())?;
+    let mut d = parse_doc(cp(""));
+    let mut env = new_env(d);
+    for line in text_lines(text).iter() {
+        let (kind, rest) = split_word(line);
+        if kind == "doc" {
+            println(f"doc {rest}");
+            d = load_doc(rest)?;
+            env = new_env(d);
+        } else if kind == "ns" {
+            let (p, u) = split_word(rest);
+            env.ns_p.push(p);
+            env.ns_u.push(u);
+        } else if kind == "var" {
+            let (t, more) = split_word(rest);
+            let (name, value) = split_word(more);
+            let v = if t == "bool" { v_bool(value == "True") } else if t == "num" { v_num(xp_number(cps(value))) } else { v_str(value) };
+            env.var_n.push(name);
+            env.var_v.push(v);
+        } else {
+            println(f"q {rest}");
+            let r = match compile(rest) {
+                Ok(x) => evaluate(d, x, env, root_element(d)),
+                Err(e) => Err(e),
+            };
+            match r {
+                Ok(v) => show_value(d, v),
+                Err(e) => println(f"  ! XPathEvalError: {e.msg}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ xmlstarlet sel
+
+const I_ROOT: i64 = 0;
+const I_EACH: i64 = 1;
+const I_IF: i64 = 2;
+const I_VAL: i64 = 3;
+const I_COPY: i64 = 4;
+const I_TEXT: i64 = 5;
+
+// One instruction of the template xmlstarlet builds; `xp` indexes the
+// compiled expressions, and a for-each carries its sort keys.
+struct Ins {
+    op: i64,
+    xp: i64,
+    s: String,
+    body: Vec[i64],
+    keys: Vec[i64],
+    desc: Vec[bool],
+    numeric: Vec[bool],
+}
+
+fn new_ins(op: i64, xp: i64) -> Ins {
+    Ins { op: op, xp: xp, s: String.new(), body: Vec.new(), keys: Vec.new(), desc: Vec.new(), numeric: Vec.new() }
+}
+
+struct Prog {
+    ins: Vec[Ins],
+    xps: Vec[Xp],
+}
+
+fn add_xp(p: mut ref Prog, src: ref String) -> Result[i64, String] {
+    match compile(src) {
+        Ok(x) => {
+            p.xps.push(x);
+            Ok(p.xps.len() - 1)
+        }
+        Err(e) => Err(f"{src}: {e.msg}"),
+    }
+}
+
+fn add_ins(p: mut ref Prog, open: ref Vec[i64], i: own Ins) -> i64 {
+    p.ins.push(i);
+    let id = p.ins.len() - 1;
+    let parent = open[open.len() - 1];
+    p.ins[parent].body.push(id);
+    id
+}
+
+fn parse_sel(args: ref Vec[String], env: mut ref Env) -> Result[Prog, String] {
+    let mut p = Prog { ins: Vec.new(), xps: Vec.new() };
+    p.ins.push(new_ins(I_ROOT, -1));
+    let mut open: Vec[i64] = Vec.new();
+    open.push(0);
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "-N" {
+            let v = cps(args[i + 1]);
+            let mut k = 0;
+            while v[k] != 61 {
+                k += 1;
+            }
+            env.ns_p.push(to_string(slice(v, 0, k)));
+            env.ns_u.push(to_string(slice(v, k + 1, v.len())));
+            i += 2;
+        } else if a == "-t" {
+            i += 1;
+        } else if a == "-m" or a == "-i" {
+            let x = add_xp(mut p, args[i + 1])?;
+            let id = add_ins(mut p, open, new_ins(if a == "-m" { I_EACH } else { I_IF }, x));
+            open.push(id);
+            i += 2;
+        } else if a == "-s" {
+            let spec = cps(args[i + 1]);
+            let x = add_xp(mut p, args[i + 2])?;
+            let top = open[open.len() - 1];
+            p.ins[top].keys.push(x);
+            p.ins[top].desc.push(spec[0] == 68);
+            p.ins[top].numeric.push(spec[2] == 78);
+            i += 3;
+        } else if a == "-b" {
+            open.pop();
+            i += 1;
+        } else if a == "-v" or a == "-c" {
+            let x = add_xp(mut p, args[i + 1])?;
+            add_ins(mut p, open, new_ins(if a == "-v" { I_VAL } else { I_COPY }, x));
+            i += 2;
+        } else if a == "-o" or a == "-n" {
+            let mut t = new_ins(I_TEXT, -1);
+            t.s = if a == "-o" { args[i + 1].clone() } else { "\n".to_string() };
+            add_ins(mut p, open, t);
+            i += if a == "-o" { 2 } else { 1 };
+        } else {
+            return Err(f"unknown option {a}");
+        }
+    }
+    Ok(p)
+}
+
+fn eval_at(d: ref Doc, p: ref Prog, env: ref Env, xp: i64, c: ref Cx) -> Result[Val, XErr] {
+    let x = ref p.xps[xp];
+    eval(d, x, env, x.ex.len() - 1, c)
+}
+
+// What copy-of puts in a text-method result: the text in the copied
+// nodes.
+fn copy_text(d: ref Doc, v: ref Val) -> String {
+    if v.k != V_SET {
+        return str_of(d, v);
+    }
+    let mut out = String.new();
+    for id in v.set.iter() {
+        let k = d.nodes[id].kind;
+        if k == N_ELEM or k == N_DOC or k == N_TEXT {
+            out.push_str(string_value(d, id).as_str());
+        }
+    }
+    out
+}
+
+fn cmp_text(a: ref String, b: ref String) -> i64 {
+    if a < b { -1 } else if b < a { 1 } else { 0 }
+}
+
+fn cmp_num(a: f64, b: f64) -> i64 {
+    if is_nan(a) {
+        return if is_nan(b) { 0 } else { -1 };
+    }
+    if is_nan(b) {
+        return 1;
+    }
+    if a < b { -1 } else if b < a { 1 } else { 0 }
+}
+
+// The nodes of a for-each in xsl:sort order: each key in turn, then
+// document order.
+fn sorted_nodes(d: ref Doc, p: ref Prog, env: ref Env, ins: ref Ins, nodes: ref Vec[i64]) -> Result[Vec[i64], XErr] {
+    let size = nodes.len();
+    let mut nums: Vec[Vec[f64]] = Vec.new();
+    let mut strs: Vec[Vec[String]] = Vec.new();
+    let mut i = 0;
+    while i < size {
+        let c = Cx { node: nodes[i], pos: i + 1, size: size };
+        let mut nk: Vec[f64] = Vec.new();
+        let mut sk: Vec[String] = Vec.new();
+        for x in ins.keys.iter() {
+            let v = eval_at(d, p, env, x, c)?;
+            nk.push(num_of(d, v));
+            sk.push(str_of(d, v));
+        }
+        nums.push(nk);
+        strs.push(sk);
+        i += 1;
+    }
+    let mut idx: Vec[i64] = Vec.new();
+    i = 0;
+    while i < size {
+        idx.push(i);
+        i += 1;
+    }
+    i = 1;
+    while i < size {
+        let mut j = i;
+        while j > 0 and key_cmp(ins, nums, strs, idx[j - 1], idx[j]) > 0 {
+            let t = idx[j];
+            idx[j] = idx[j - 1];
+            idx[j - 1] = t;
+            j -= 1;
+        }
+        i += 1;
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for k in idx.iter() {
+        out.push(nodes[k]);
+    }
+    Ok(out)
+}
+
+fn key_cmp(ins: ref Ins, nums: ref Vec[Vec[f64]], strs: ref Vec[Vec[String]], a: i64, b: i64) -> i64 {
+    let mut k = 0;
+    while k < ins.keys.len() {
+        let mut t = if ins.numeric[k] { cmp_num(nums[a][k], nums[b][k]) } else { cmp_text(strs[a][k], strs[b][k]) };
+        if ins.desc[k] {
+            t = -t;
+        }
+        if t != 0 {
+            return t;
+        }
+        k += 1;
+    }
+    if a < b { -1 } else if a > b { 1 } else { 0 }
+}
+
+fn run_body(d: ref Doc, p: ref Prog, env: ref Env, id: i64, c: ref Cx, out: mut ref String) -> Result[(), XErr] {
+    for k in p.ins[id].body.iter() {
+        run_ins(d, p, env, k, c, mut out)?;
+    }
+    Ok(())
+}
+
+fn run_ins(d: ref Doc, p: ref Prog, env: ref Env, id: i64, c: ref Cx, out: mut ref String) -> Result[(), XErr] {
+    let ins = ref p.ins[id];
+    if ins.op == I_TEXT {
+        out.push_str(ins.s.as_str());
+        return Ok(());
+    }
+    let v = eval_at(d, p, env, ins.xp, c)?;
+    if ins.op == I_VAL {
+        if v.k == V_SET {
+            let mut k = 0;
+            while k < v.set.len() {
+                if k > 0 {
+                    out.push_str("\n");
+                }
+                out.push_str(string_value(d, v.set[k]).as_str());
+                k += 1;
+            }
+        } else {
+            out.push_str(str_of(d, v).as_str());
+        }
+    } else if ins.op == I_COPY {
+        out.push_str(copy_text(d, v).as_str());
+    } else if ins.op == I_IF {
+        if bool_of(v) {
+            run_body(d, p, env, id, c, mut out)?;
+        }
+    } else {
+        need_set(v)?;
+        let nodes = if ins.keys.len() > 0 { sorted_nodes(d, p, env, ins, v.set)? } else { v.set.clone() };
+        let size = nodes.len();
+        let mut k = 0;
+        while k < size {
+            let inner = Cx { node: nodes[k], pos: k + 1, size: size };
+            run_body(d, p, env, id, inner, mut out)?;
+            k += 1;
+        }
+    }
+    Ok(())
+}
+
+fn join_args(args: ref Vec[String]) -> String {
+    let mut out = String.new();
+    let mut k = 0;
+    while k < args.len() {
+        if k > 0 {
+            out.push_str(" ");
+        }
+        out.push_str(args[k].as_str());
+        k += 1;
+    }
+    out
+}
+
+fn run_sel() -> Result[(), String] {
+    let text = read_text("data/sel.tsv".to_string())?;
+    for line in text_lines(text).iter() {
+        let f = split_tabs(line);
+        let mut args: Vec[String] = Vec.new();
+        let mut k = 1;
+        while k < f.len() {
+            args.push(f[k].clone());
+            k += 1;
+        }
+        println(f"== xmlstarlet sel {join_args(args)} {f[0]}");
+        let d = load_doc(f[0])?;
+        let mut env = new_env(d);
+        let prog = parse_sel(args, mut env)?;
+        let mut out = String.new();
+        let c = Cx { node: 0, pos: 1, size: 1 };
+        if let Err(e) = run_body(d, prog, env, 0, c, mut out) {
+            return Err(f"xpath error: {e.msg}");
+        }
+        for piece in split_cp(cps(out), 10).iter() {
+            println(f"| {to_string(piece)}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    run_queries()?;
+    run_sel()?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<!-- A small shop's catalogue. -->\n");
+    t.push_str("<catalog updated=\"2026-03-01\">\n");
+    t.push_str("  <book id=\"bk101\" category=\"programming\" lang=\"en\">\n");
+    t.push_str("    <title>Structure and Interpretation of Computer Programs</title>\n");
+    t.push_str("    <author>Harold Abelson</author>\n");
+    t.push_str("    <author>Gerald Jay Sussman</author>\n");
+    t.push_str("    <year>1985</year>\n");
+    t.push_str("    <price currency=\"EUR\">45.50</price>\n");
+    t.push_str("    <stock>3</stock>\n");
+    t.push_str("  </book>\n");
+    t.push_str("  <book id=\"bk102\" category=\"programming\" lang=\"en\">\n");
+    t.push_str("    <title>The C Programming Language</title>\n");
+    t.push_str("    <author>Brian Kernighan</author>\n");
+    t.push_str("    <author>Dennis Ritchie</author>\n");
+    t.push_str("    <year>1978</year>\n");
+    t.push_str("    <price currency=\"EUR\">39.99</price>\n");
+    t.push_str("    <stock>0</stock>\n");
+    t.push_str("  </book>\n");
+    t.push_str("  <book id=\"bk103\" category=\"fiction\" lang=\"fr\">\n");
+    t.push_str("    <title>L'Étranger</title>\n");
+    t.push_str("    <author>Albert Camus</author>\n");
+    t.push_str("    <year>1942</year>\n");
+    t.push_str("    <price currency=\"EUR\">8.90</price>\n");
+    t.push_str("    <stock>12</stock>\n");
+    t.push_str("  </book>\n");
+    t.push_str("  <book id=\"bk104\" category=\"fiction\" lang=\"de\">\n");
+    t.push_str("    <title>Der Prozeß</title>\n");
+    t.push_str("    <author>Franz Kafka</author>\n");
+    t.push_str("    <year>1925</year>\n");
+    t.push_str("    <price currency=\"CHF\">11</price>\n");
+    t.push_str("    <stock>5</stock>\n");
+    t.push_str("    <!-- out of print in this edition -->\n");
+    t.push_str("  </book>\n");
+    t.push_str("  <book id=\"bk105\" category=\"reference\">\n");
+    t.push_str("    <title>  The   Chicago Manual\n");
+    t.push_str("      of Style  </title>\n");
+    t.push_str("    <year>2017</year>\n");
+    t.push_str("    <price currency=\"USD\">n/a</price>\n");
+    t.push_str("  </book>\n");
+    t.push_str("  <magazine id=\"mg1\" category=\"programming\">\n");
+    t.push_str("    <title>Linux Journal</title>\n");
+    t.push_str("    <issue>2026-02</issue>\n");
+    t.push_str("    <price currency=\"EUR\">6.5</price>\n");
+    t.push_str("  </magazine>\n");
+    t.push_str("</catalog>\n");
+    v.push(DataFile { path: "docs/books.xml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    t.push_str("<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n");
+    t.push_str("      xmlns:media=\"http://search.yahoo.com/mrss/\" xml:lang=\"en\">\n");
+    t.push_str("  <title type=\"text\">Example Engineering Blog</title>\n");
+    t.push_str("  <link rel=\"self\" href=\"https://blog.example.org/feed.xml\"/>\n");
+    t.push_str("  <link rel=\"alternate\" type=\"text/html\" href=\"https://blog.example.org/\"/>\n");
+    t.push_str("  <updated>2026-03-02T09:00:00Z</updated>\n");
+    t.push_str("  <entry>\n");
+    t.push_str("    <title>Shipping a parser</title>\n");
+    t.push_str("    <link href=\"https://blog.example.org/posts/parser\"/>\n");
+    t.push_str("    <id>tag:blog.example.org,2026:1</id>\n");
+    t.push_str("    <dc:creator>Ana Lima</dc:creator>\n");
+    t.push_str("    <dc:subject>compilers</dc:subject>\n");
+    t.push_str("    <dc:subject>testing</dc:subject>\n");
+    t.push_str("    <updated>2026-03-01T12:00:00Z</updated>\n");
+    t.push_str("    <media:thumbnail url=\"https://cdn.example.org/1.png\" width=\"320\" height=\"180\"/>\n");
+    t.push_str("    <content type=\"html\">&lt;p&gt;We rewrote the parser.&lt;/p&gt;</content>\n");
+    t.push_str("  </entry>\n");
+    t.push_str("  <entry xml:lang=\"pt-BR\">\n");
+    t.push_str("    <title>Notas de versão</title>\n");
+    t.push_str("    <link href=\"https://blog.example.org/posts/notas\"/>\n");
+    t.push_str("    <id>tag:blog.example.org,2026:2</id>\n");
+    t.push_str("    <dc:creator>João Silva</dc:creator>\n");
+    t.push_str("    <dc:subject>releases</dc:subject>\n");
+    t.push_str("    <updated>2026-02-20T08:30:00Z</updated>\n");
+    t.push_str("    <media:thumbnail url=\"https://cdn.example.org/2.png\" width=\"640\" height=\"360\"/>\n");
+    t.push_str("  </entry>\n");
+    t.push_str("  <entry>\n");
+    t.push_str("    <title>On-call, a year later</title>\n");
+    t.push_str("    <link href=\"https://blog.example.org/posts/oncall\"/>\n");
+    t.push_str("    <id>tag:blog.example.org,2026:3</id>\n");
+    t.push_str("    <dc:creator>Ana Lima</dc:creator>\n");
+    t.push_str("    <updated>2026-01-15T17:45:00Z</updated>\n");
+    t.push_str("  </entry>\n");
+    t.push_str("</feed>\n");
+    v.push(DataFile { path: "docs/feed.xml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\"?>\n");
+    t.push_str("<?xml-stylesheet type=\"text/xsl\" href=\"report.xsl\"?>\n");
+    t.push_str("<inventory xmlns:w=\"urn:example:warehouse\" w:site=\"DUB-2\">\n");
+    t.push_str("  <w:bin code=\"A-01\" w:zone=\"cold\">\n");
+    t.push_str("    <item sku=\"MILK-1L\" qty=\"40\" unit-price=\"1.15\"/>\n");
+    t.push_str("    <item sku=\"YOG-500\" qty=\"12\" unit-price=\"2.4\"/>\n");
+    t.push_str("  </w:bin>\n");
+    t.push_str("  <w:bin code=\"A-02\" w:zone=\"cold\">\n");
+    t.push_str("    <item sku=\"BUT-250\" qty=\"0\" unit-price=\"2.95\"/>\n");
+    t.push_str("  </w:bin>\n");
+    t.push_str("  <w:bin code=\"B-07\" w:zone=\"dry\">\n");
+    t.push_str("    <item sku=\"RICE-5K\" qty=\"7\" unit-price=\"9.99\"/>\n");
+    t.push_str("    <item sku=\"OATS-1K\" qty=\"25\" unit-price=\"3\"/>\n");
+    t.push_str("    <item sku=\"SALT-1K\" qty=\"-2\" unit-price=\"0.5\"/>\n");
+    t.push_str("    <item sku=\"SUGAR-1K\" unit-price=\"1.1\"/>\n");
+    t.push_str("  </w:bin>\n");
+    t.push_str("  <note xml:lang=\"en\">Counted on <date>2026-03-01</date>; recount B-07.</note>\n");
+    t.push_str("</inventory>\n");
+    v.push(DataFile { path: "docs/inventory.xml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<html xmlns=\"http://www.w3.org/1999/xhtml\" lang=\"en\">\n");
+    t.push_str("<head>\n");
+    t.push_str("  <title>Status - Example Services</title>\n");
+    t.push_str("  <meta name=\"description\" content=\"Service status and incidents\"/>\n");
+    t.push_str("  <link rel=\"stylesheet\" href=\"/static/site.css\"/>\n");
+    t.push_str("</head>\n");
+    t.push_str("<body class=\"status page\">\n");
+    t.push_str("  <nav><a href=\"/\">Home</a> | <a href=\"/incidents\">Incidents</a> | <a href=\"https://docs.example.org/\">Docs</a></nav>\n");
+    t.push_str("  <h1>All systems <em>mostly</em> operational</h1>\n");
+    t.push_str("  <table id=\"services\">\n");
+    t.push_str("    <tr><th>Service</th><th>Region</th><th>Uptime</th></tr>\n");
+    t.push_str("    <tr class=\"ok\"><td>api</td><td>eu-west</td><td>99.98</td></tr>\n");
+    t.push_str("    <tr class=\"ok\"><td>api</td><td>us-east</td><td>99.95</td></tr>\n");
+    t.push_str("    <tr class=\"degraded\"><td>search</td><td>eu-west</td><td>97.20</td></tr>\n");
+    t.push_str("    <tr class=\"ok\"><td>billing</td><td>eu-west</td><td>100</td></tr>\n");
+    t.push_str("    <tr class=\"down\"><td>reports</td><td>us-east</td><td>88.5</td></tr>\n");
+    t.push_str("  </table>\n");
+    t.push_str("  <form action=\"/subscribe\" method=\"post\">\n");
+    t.push_str("    <input type=\"email\" name=\"email\" required=\"required\"/>\n");
+    t.push_str("    <input type=\"hidden\" name=\"token\" value=\"form-1234\"/>\n");
+    t.push_str("    <select name=\"freq\"><option value=\"d\">daily</option><option value=\"w\" selected=\"selected\">weekly</option></select>\n");
+    t.push_str("    <button type=\"submit\">Subscribe</button>\n");
+    t.push_str("  </form>\n");
+    t.push_str("  <p>Last checked <time datetime=\"2026-03-02T10:15:00Z\">10:15</time>. <!-- generated --><?render cache=\"5m\"?>See <a href=\"/history\">history</a>.</p>\n");
+    t.push_str("</body>\n");
+    t.push_str("</html>\n");
+    v.push(DataFile { path: "docs/page.xhtml".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    t.push_str("<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n");
+    t.push_str("         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
+    t.push_str("         xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd\">\n");
+    t.push_str("  <modelVersion>4.0.0</modelVersion>\n");
+    t.push_str("  <groupId>org.example</groupId>\n");
+    t.push_str("  <artifactId>orders-service</artifactId>\n");
+    t.push_str("  <version>2.4.1-SNAPSHOT</version>\n");
+    t.push_str("  <packaging>jar</packaging>\n");
+    t.push_str("  <properties>\n");
+    t.push_str("    <java.version>21</java.version>\n");
+    t.push_str("    <jackson.version>2.17.0</jackson.version>\n");
+    t.push_str("  </properties>\n");
+    t.push_str("  <dependencies>\n");
+    t.push_str("    <dependency>\n");
+    t.push_str("      <groupId>com.fasterxml.jackson.core</groupId>\n");
+    t.push_str("      <artifactId>jackson-databind</artifactId>\n");
+    t.push_str("      <version>${jackson.version}</version>\n");
+    t.push_str("    </dependency>\n");
+    t.push_str("    <dependency>\n");
+    t.push_str("      <groupId>org.postgresql</groupId>\n");
+    t.push_str("      <artifactId>postgresql</artifactId>\n");
+    t.push_str("      <version>42.7.3</version>\n");
+    t.push_str("      <scope>runtime</scope>\n");
+    t.push_str("    </dependency>\n");
+    t.push_str("    <dependency>\n");
+    t.push_str("      <groupId>org.junit.jupiter</groupId>\n");
+    t.push_str("      <artifactId>junit-jupiter</artifactId>\n");
+    t.push_str("      <version>5.10.2</version>\n");
+    t.push_str("      <scope>test</scope>\n");
+    t.push_str("    </dependency>\n");
+    t.push_str("    <dependency>\n");
+    t.push_str("      <groupId>org.mockito</groupId>\n");
+    t.push_str("      <artifactId>mockito-core</artifactId>\n");
+    t.push_str("      <version>5.11.0</version>\n");
+    t.push_str("      <scope>test</scope>\n");
+    t.push_str("      <optional>true</optional>\n");
+    t.push_str("    </dependency>\n");
+    t.push_str("  </dependencies>\n");
+    t.push_str("  <build>\n");
+    t.push_str("    <plugins>\n");
+    t.push_str("      <plugin>\n");
+    t.push_str("        <artifactId>maven-surefire-plugin</artifactId>\n");
+    t.push_str("        <version>3.2.5</version>\n");
+    t.push_str("        <configuration><skipTests>false</skipTests></configuration>\n");
+    t.push_str("      </plugin>\n");
+    t.push_str("    </plugins>\n");
+    t.push_str("  </build>\n");
+    t.push_str("</project>\n");
+    v.push(DataFile { path: "docs/pom.xml".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("doc books.xml\n");
+    t.push_str("var num min 10\n");
+    t.push_str("var str cat fiction\n");
+    t.push_str("var bool flag True\n");
+    t.push_str("q /catalog/book/title\n");
+    t.push_str("q //book[@category='fiction']/title/text()\n");
+    t.push_str("q //book[price > 20]/@id\n");
+    t.push_str("q //book[not(price > 20)]/@id\n");
+    t.push_str("q //book[price != 11]/@id\n");
+    t.push_str("q count(//book)\n");
+    t.push_str("q count(//author)\n");
+    t.push_str("q count(//*)\n");
+    t.push_str("q count(//node())\n");
+    t.push_str("q count(//text())\n");
+    t.push_str("q sum(//book/stock)\n");
+    t.push_str("q sum(//price)\n");
+    t.push_str("q sum(//book[stock]/price)\n");
+    t.push_str("q string(sum(//book[number(price) = number(price)]/price))\n");
+    t.push_str("q //book[last()]/title\n");
+    t.push_str("q //book[position() = last() - 1]/@id\n");
+    t.push_str("q //book[2]\n");
+    t.push_str("q (//author)[2]\n");
+    t.push_str("q //book/author[2]\n");
+    t.push_str("q //book[author[2]]/@id\n");
+    t.push_str("q //book[count(author) = 1]/title\n");
+    t.push_str("q //book[@lang]/@lang\n");
+    t.push_str("q //book[not(@lang)]/@id\n");
+    t.push_str("q //*[@category='programming'][self::magazine]/title\n");
+    t.push_str("q //book[year < 1950][price < 10]/@id\n");
+    t.push_str("q //book[year < 1950 and price < 10]/@id\n");
+    t.push_str("q //book[year > 2000 or stock = 0]/@id\n");
+    t.push_str("q //book[stock > 4 or not(stock)]/@id\n");
+    t.push_str("q name(/*)\n");
+    t.push_str("q local-name(//book[1]/@*[2])\n");
+    t.push_str("q //book[1]/@*\n");
+    t.push_str("q //title[contains(., 'Program')]\n");
+    t.push_str("q //title[starts-with(., 'The')]/../@id\n");
+    t.push_str("q normalize-space(//book[@id='bk105']/title)\n");
+    t.push_str("q string-length(//book[@id='bk103']/title)\n");
+    t.push_str("q substring-before(//book[1]/author[2], ' ')\n");
+    t.push_str("q substring-after(//book[1]/author[2], ' ')\n");
+    t.push_str("q substring(//book[2]/title, 5)\n");
+    t.push_str("q substring(//book[2]/title, 5, 3)\n");
+    t.push_str("q translate(//book[3]/title, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')\n");
+    t.push_str("q concat(//book[1]/@id, ':', //book[1]/year, ':', //book[1]/price)\n");
+    t.push_str("q //book[1]/year + 1\n");
+    t.push_str("q //book[1]/year - //book[2]/year\n");
+    t.push_str("q //book[1]/price * 2\n");
+    t.push_str("q //book[1]/price div 4\n");
+    t.push_str("q //book[1]/year mod 100\n");
+    t.push_str("q -//book[1]/year\n");
+    t.push_str("q //book[@id='bk105']/price * 1\n");
+    t.push_str("q number(//book[@id='bk105']/price) = number(//book[@id='bk105']/price)\n");
+    t.push_str("q //price[. = 39.99]/../@id\n");
+    t.push_str("q //price[. = '6.5']/..\n");
+    t.push_str("q //book/stock[. = 0] | //magazine/title\n");
+    t.push_str("q //magazine | //book[1] | //book[1]/title\n");
+    t.push_str("q //book[1]/following-sibling::book/@id\n");
+    t.push_str("q //book[3]/preceding-sibling::*/@id\n");
+    t.push_str("q //book[3]/preceding-sibling::*[1]/@id\n");
+    t.push_str("q //book[3]/following-sibling::*[last()]/@id\n");
+    t.push_str("q //year[. = 1942]/ancestor::*\n");
+    t.push_str("q //year[. = 1942]/ancestor-or-self::*/@id\n");
+    t.push_str("q //book[4]/descendant::node()\n");
+    t.push_str("q //book[4]/descendant-or-self::comment()\n");
+    t.push_str("q //comment()\n");
+    t.push_str("q /comment()\n");
+    t.push_str("q /node()\n");
+    t.push_str("q //book[2]/price/following::title\n");
+    t.push_str("q //book[4]/title/preceding::author\n");
+    t.push_str("q //book[4]/title/preceding::author[1]\n");
+    t.push_str("q //stock/parent::book/@id\n");
+    t.push_str("q //title/..[self::magazine]/@id\n");
+    t.push_str("q //book[1]/title/self::node()\n");
+    t.push_str("q //book[1]/child::*[3]\n");
+    t.push_str("q //book[1]/attribute::category\n");
+    t.push_str("q boolean(//book[stock > 100])\n");
+    t.push_str("q boolean(//book[stock > 10])\n");
+    t.push_str("q not(//magazine)\n");
+    t.push_str("q //book[@category = $cat]/@id\n");
+    t.push_str("q //book[stock > $min]/@id\n");
+    t.push_str("q $flag and $min > 5\n");
+    t.push_str("q concat($cat, '-', $min)\n");
+    t.push_str("q $missing\n");
+    t.push_str("q //book[lang('en')]/@id\n");
+    t.push_str("q //*[@id][position() mod 2 = 0]/@id\n");
+    t.push_str("q //book[position() > 2 and position() < 5]/@id\n");
+    t.push_str("q //book/@id[. = 'bk102' or . = 'bk104']\n");
+    t.push_str("q count(//book[@category='programming']) * 10 div count(//book)\n");
+    t.push_str("q round(//book[1]/price)\n");
+    t.push_str("q floor(//book[1]/price)\n");
+    t.push_str("q ceiling(//book[1]/price)\n");
+    t.push_str("q round(-2.5)\n");
+    t.push_str("q round(0.5)\n");
+    t.push_str("q round(-0.4)\n");
+    t.push_str("q 1 div 3\n");
+    t.push_str("q 2 div 3\n");
+    t.push_str("q string(1 div 3)\n");
+    t.push_str("q string(100 div 7)\n");
+    t.push_str("q string(2 div 3 * 1000000)\n");
+    t.push_str("q string(123456789.123)\n");
+    t.push_str("q string(1234567890)\n");
+    t.push_str("q string(1234567890.5)\n");
+    t.push_str("q string(12345678901234567)\n");
+    t.push_str("q string(0.00001)\n");
+    t.push_str("q string(0.000012345)\n");
+    t.push_str("q string(0.000001)\n");
+    t.push_str("q string(-0.25)\n");
+    t.push_str("q string(3.0)\n");
+    t.push_str("q string(-0)\n");
+    t.push_str("q string(1 div 0)\n");
+    t.push_str("q string(-1 div 0)\n");
+    t.push_str("q string(0 div 0)\n");
+    t.push_str("q 1 div 0\n");
+    t.push_str("q 0 div 0\n");
+    t.push_str("q -0\n");
+    t.push_str("q number('  12  ')\n");
+    t.push_str("q number('12px')\n");
+    t.push_str("q number('-.5')\n");
+    t.push_str("q number('')\n");
+    t.push_str("q number(true())\n");
+    t.push_str("q number(//book[1]/@id)\n");
+    t.push_str("q string(true())\n");
+    t.push_str("q string(//nothing)\n");
+    t.push_str("q boolean('')\n");
+    t.push_str("q boolean('0')\n");
+    t.push_str("q boolean(0)\n");
+    t.push_str("q boolean(0 div 0)\n");
+    t.push_str("q true() = 'x'\n");
+    t.push_str("q 1 = '1.0'\n");
+    t.push_str("q '1' = '1.0'\n");
+    t.push_str("q //year = 1978\n");
+    t.push_str("q //year != 1978\n");
+    t.push_str("q //year > //stock\n");
+    t.push_str("q //book[1]/author = //book[2]/author\n");
+    t.push_str("q //book[1]/author != //book[1]/author\n");
+    t.push_str("q //nothing = //nothing\n");
+    t.push_str("q //nothing != 1\n");
+    t.push_str("q not(//nothing = 1)\n");
+    t.push_str("q 1 < 2 < 3\n");
+    t.push_str("q 3 > 2 > 1\n");
+    t.push_str("q 2 = 2 = 1\n");
+    t.push_str("q 1 - - 1\n");
+    t.push_str("q - - 3\n");
+    t.push_str("q 1 -1\n");
+    t.push_str("q 5 mod -3\n");
+    t.push_str("q -5 mod 3\n");
+    t.push_str("q 5.5 mod 2\n");
+    t.push_str("q 7 div 2 * 2\n");
+    t.push_str("q 2 + 3 * 4 - 1\n");
+    t.push_str("q (2 + 3) * 4\n");
+    t.push_str("q concat('a', 1, true(), 1 div 0)\n");
+    t.push_str("q translate('banana', 'an', 'A')\n");
+    t.push_str("q translate('--x--', '-', '')\n");
+    t.push_str("q substring('12345', 1.5, 2.6)\n");
+    t.push_str("q substring('12345', 0, 3)\n");
+    t.push_str("q substring('12345', 0 div 0, 3)\n");
+    t.push_str("q substring('12345', 1, 0 div 0)\n");
+    t.push_str("q substring('12345', -42, 1 div 0)\n");
+    t.push_str("q substring('12345', -1 div 0, 1 div 0)\n");
+    t.push_str("q substring('été', 2, 1)\n");
+    t.push_str("q string-length('naïve')\n");
+    t.push_str("q string-length()\n");
+    t.push_str("q normalize-space()\n");
+    t.push_str("q normalize-space('\t a \t b  ')\n");
+    t.push_str("q starts-with('abc', '')\n");
+    t.push_str("q contains('', '')\n");
+    t.push_str("q substring-before('abc', '')\n");
+    t.push_str("q substring-after('abc', '')\n");
+    t.push_str("q substring-after('a=b=c', '=')\n");
+    t.push_str("q name(//book[1]/title/text())\n");
+    t.push_str("q name()\n");
+    t.push_str("q local-name()\n");
+    t.push_str("q namespace-uri()\n");
+    t.push_str("q count(//book[1]/node())\n");
+    t.push_str("q count(//book[1]/text())\n");
+    t.push_str("q //book[1]/text()[1]\n");
+    t.push_str("q //book[4]/comment()/preceding-sibling::text()[1]\n");
+    t.push_str("q //title/text()[contains(., 'Style')]\n");
+    t.push_str("q //*[text()[. = 'Franz Kafka']]\n");
+    t.push_str("q //*[.='1985']\n");
+    t.push_str("q //book[title = 'The C Programming Language']/author[last()]\n");
+    t.push_str("q //book[.//price/@currency = 'CHF']/@id\n");
+    t.push_str("q //price/@currency[. != 'EUR']\n");
+    t.push_str("q //@currency[../../@lang = 'fr']\n");
+    t.push_str("q //book//text()[normalize-space()][1]\n");
+    t.push_str("q .\n");
+    t.push_str("q ..\n");
+    t.push_str("q /\n");
+    t.push_str("q /*/*[1]/@*[last()]\n");
+    t.push_str("q *[2]/title\n");
+    t.push_str("q book[@id='bk104']/descendant::*\n");
+    t.push_str("q @updated\n");
+    t.push_str("q ./@updated\n");
+    t.push_str("q id('bk101')\n");
+    t.push_str("q count(1)\n");
+    t.push_str("q //book[\n");
+    t.push_str("q //book[@id='x']]\n");
+    t.push_str("q 1 +\n");
+    t.push_str("q foo()\n");
+    t.push_str("q count()\n");
+    t.push_str("q concat('a')\n");
+    t.push_str("q //x:book\n");
+    t.push_str("q //book/@\n");
+    t.push_str("q 'unterminated\n");
+    t.push_str("q //book[1]/title/nonsense::x\n");
+    t.push_str("q 2 ** 3\n");
+    t.push_str("q //book[@id=\"bk101\"]/title\n");
+    t.push_str("q //*[contains(name(), 'a')][1]\n");
+    t.push_str("doc feed.xml\n");
+    t.push_str("ns a http://www.w3.org/2005/Atom\n");
+    t.push_str("ns dc http://purl.org/dc/elements/1.1/\n");
+    t.push_str("ns m http://search.yahoo.com/mrss/\n");
+    t.push_str("q /a:feed/a:title\n");
+    t.push_str("q string(/a:feed/a:title)\n");
+    t.push_str("q /feed/title\n");
+    t.push_str("q //a:entry/a:title/text()\n");
+    t.push_str("q //a:entry[dc:creator = 'Ana Lima']/a:id/text()\n");
+    t.push_str("q //a:entry[not(dc:subject)]/a:title/text()\n");
+    t.push_str("q count(//dc:subject)\n");
+    t.push_str("q //a:link[@rel='self']/@href\n");
+    t.push_str("q //a:link[not(@rel)]/@href\n");
+    t.push_str("q //a:entry[a:updated > '2026-02']/a:title/text()\n");
+    t.push_str("q //a:entry[starts-with(a:updated, '2026-02')]/a:title/text()\n");
+    t.push_str("q //m:thumbnail[@width > 400]/@url\n");
+    t.push_str("q sum(//m:thumbnail/@width) div count(//m:thumbnail)\n");
+    t.push_str("q //a:entry[lang('pt')]/a:id/text()\n");
+    t.push_str("q //a:entry[lang('en')]/a:id/text()\n");
+    t.push_str("q //a:entry[lang('EN')]/a:id/text()\n");
+    t.push_str("q //dc:*\n");
+    t.push_str("q //a:*[local-name() = 'id']/text()\n");
+    t.push_str("q name(//dc:creator)\n");
+    t.push_str("q local-name(//dc:creator)\n");
+    t.push_str("q namespace-uri(//dc:creator)\n");
+    t.push_str("q namespace-uri(/*)\n");
+    t.push_str("q name(/*)\n");
+    t.push_str("q //*[namespace-uri() = 'http://search.yahoo.com/mrss/']/@height\n");
+    t.push_str("q //a:entry[1]/namespace::*\n");
+    t.push_str("q count(/*/namespace::*)\n");
+    t.push_str("q //a:content/text()\n");
+    t.push_str("q string-length(//a:content)\n");
+    t.push_str("q //@xml:lang\n");
+    t.push_str("q //a:entry[@xml:lang]/a:title/text()\n");
+    t.push_str("q //a:entry/a:title[../dc:subject = 'testing']/text()\n");
+    t.push_str("q //a:entry[last()]/preceding-sibling::a:entry[1]/a:id/text()\n");
+    t.push_str("q //a:entry[dc:creator = //a:entry[2]/dc:creator]/a:id/text()\n");
+    t.push_str("q //a:entry[dc:creator = preceding-sibling::a:entry/dc:creator]/a:title/text()\n");
+    t.push_str("q //xx:entry\n");
+    t.push_str("doc page.xhtml\n");
+    t.push_str("ns h http://www.w3.org/1999/xhtml\n");
+    t.push_str("var str region eu-west\n");
+    t.push_str("q string(//h:title)\n");
+    t.push_str("q //h:meta[@name='description']/@content\n");
+    t.push_str("q //h:a/@href\n");
+    t.push_str("q //h:a[starts-with(@href, 'http')]/@href\n");
+    t.push_str("q //h:a[not(starts-with(@href, 'http'))]/text()\n");
+    t.push_str("q //h:nav/text()\n");
+    t.push_str("q normalize-space(//h:h1)\n");
+    t.push_str("q //h:h1/node()\n");
+    t.push_str("q //h:tr[h:td]/h:td[1]/text()\n");
+    t.push_str("q //h:tr[@class != 'ok']/h:td[1]/text()\n");
+    t.push_str("q //h:tr[h:td[3] < 99]/h:td[1]/text()\n");
+    t.push_str("q count(//h:tr[h:td[2] = $region])\n");
+    t.push_str("q //h:tr[h:td[2] = $region][h:td[3] >= 99]/h:td[1]/text()\n");
+    t.push_str("q sum(//h:tr/h:td[3]) div count(//h:tr/h:td[3])\n");
+    t.push_str("q //h:td[. = 'api']/following-sibling::h:td[2]/text()\n");
+    t.push_str("q //h:tr[last()]/h:td[position() > 1]/text()\n");
+    t.push_str("q //h:th[2]/following-sibling::*\n");
+    t.push_str("q //h:tr[2]/@class | //h:tr[4]/@class\n");
+    t.push_str("q //h:body/@class\n");
+    t.push_str("q //*[contains(concat(' ', normalize-space(@class), ' '), ' page ')]\n");
+    t.push_str("q //h:input[@type='hidden']/@value\n");
+    t.push_str("q //h:input[@required]/@name\n");
+    t.push_str("q //h:option[@selected]/@value\n");
+    t.push_str("q string(//h:option[@selected])\n");
+    t.push_str("q //h:form/@*\n");
+    t.push_str("q //h:p/node()\n");
+    t.push_str("q //h:p/comment()\n");
+    t.push_str("q //h:p/processing-instruction()\n");
+    t.push_str("q //processing-instruction('render')\n");
+    t.push_str("q string(//processing-instruction())\n");
+    t.push_str("q name(//processing-instruction())\n");
+    t.push_str("q //h:p/text()[2]\n");
+    t.push_str("q //h:time/@datetime\n");
+    t.push_str("q //h:p/h:a/preceding-sibling::node()[1]\n");
+    t.push_str("q count(//h:p/node()[self::text()])\n");
+    t.push_str("q //h:td[not(. = preceding::h:td)][parent::h:tr/h:td[1] = .]/text()\n");
+    t.push_str("q count(//*)\n");
+    t.push_str("q count(//@*)\n");
+    t.push_str("q /h:html/@lang\n");
+    t.push_str("doc pom.xml\n");
+    t.push_str("ns p http://maven.apache.org/POM/4.0.0\n");
+    t.push_str("ns xsi http://www.w3.org/2001/XMLSchema-instance\n");
+    t.push_str("q concat(/p:project/p:groupId, ':', /p:project/p:artifactId, ':', /p:project/p:version)\n");
+    t.push_str("q //p:dependency/p:artifactId/text()\n");
+    t.push_str("q //p:dependency[p:scope = 'test']/p:artifactId/text()\n");
+    t.push_str("q //p:dependency[not(p:scope)]/p:artifactId/text()\n");
+    t.push_str("q //p:dependency[p:optional = 'true']/p:artifactId/text()\n");
+    t.push_str("q count(//p:dependency)\n");
+    t.push_str("q //p:dependency[starts-with(p:version, '${')]/p:version/text()\n");
+    t.push_str("q //p:properties/*\n");
+    t.push_str("q name(//p:properties/*[1])\n");
+    t.push_str("q local-name(//p:properties/*[2])\n");
+    t.push_str("q /p:project/@xsi:schemaLocation\n");
+    t.push_str("q substring-before(/p:project/@xsi:schemaLocation, ' ')\n");
+    t.push_str("q //p:plugin[p:artifactId = 'maven-surefire-plugin']/p:configuration/p:skipTests/text()\n");
+    t.push_str("q contains(/p:project/p:version, 'SNAPSHOT')\n");
+    t.push_str("q //p:dependency[p:version > 5]/p:artifactId/text()\n");
+    t.push_str("q //p:dependency[number(substring-before(p:version, '.')) >= 5]/p:artifactId/text()\n");
+    t.push_str("q //p:*[not(*)][normalize-space() = '']\n");
+    t.push_str("q //p:version\n");
+    t.push_str("doc inventory.xml\n");
+    t.push_str("ns w urn:example:warehouse\n");
+    t.push_str("var str zone cold\n");
+    t.push_str("q //w:bin/@code\n");
+    t.push_str("q //w:bin[@w:zone = $zone]/item/@sku\n");
+    t.push_str("q sum(//item/@qty)\n");
+    t.push_str("q sum(//w:bin[@w:zone='cold']/item/@qty)\n");
+    t.push_str("q count(//item[@qty > 0])\n");
+    t.push_str("q count(//item[not(@qty)])\n");
+    t.push_str("q //item[@qty < 1]/@sku\n");
+    t.push_str("q //item[@qty * @unit-price > 30]/@sku\n");
+    t.push_str("q //item[not(@qty * @unit-price > 30)]/@sku\n");
+    t.push_str("q //w:bin[sum(item/@qty) > 20]/@code\n");
+    t.push_str("q //w:bin[count(item) = 1]/@code\n");
+    t.push_str("q //w:bin[item[@qty = 0]]/@code\n");
+    t.push_str("q //item[@sku = 'OATS-1K']/@unit-price * 2\n");
+    t.push_str("q //item[@sku = 'SUGAR-1K']/@qty * 2\n");
+    t.push_str("q sum(//item/@unit-price)\n");
+    t.push_str("q round(sum(//item/@unit-price) * 100) div 100\n");
+    t.push_str("q /processing-instruction()\n");
+    t.push_str("q name(/processing-instruction())\n");
+    t.push_str("q string(/processing-instruction('xml-stylesheet'))\n");
+    t.push_str("q /inventory/@w:site\n");
+    t.push_str("q //@w:*\n");
+    t.push_str("q name(//@w:zone)\n");
+    t.push_str("q //w:bin[1]/@*\n");
+    t.push_str("q //note/text()\n");
+    t.push_str("q //note/node()\n");
+    t.push_str("q string(//note)\n");
+    t.push_str("q //note[lang('en-US')]\n");
+    t.push_str("q //note[lang('en')]/date/text()\n");
+    t.push_str("q //date[lang('en')]\n");
+    t.push_str("q //item[1]/namespace::w\n");
+    t.push_str("q //*[@code = 'B-07']/item[last()]/@sku\n");
+    t.push_str("q //item[@sku][@qty][2]/@sku\n");
+    t.push_str("q (//item[@qty])[last()]/@sku\n");
+    t.push_str("q //w:bin[2]/following-sibling::*/@code | //w:bin[2]/preceding-sibling::*/@code\n");
+    t.push_str("q //item[@qty = //item/@qty[. > 30]]/@sku\n");
+    t.push_str("q //item[@qty > //item[@sku='OATS-1K']/@qty]/@sku\n");
+    v.push(DataFile { path: "queries.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("books.xml\t-t\t-m\t//book\t-v\t@id\t-o\t: \t-v\ttitle\t-n\n");
+    t.push_str("books.xml\t-t\t-m\t//book\t-s\tD:N:-\tprice\t-v\tprice\t-o\t \t-v\t@id\t-n\n");
+    t.push_str("books.xml\t-t\t-m\t//book\t-s\tA:T:-\ttitle\t-v\tposition()\t-o\t/\t-v\tlast()\t-o\t \t-v\tnormalize-space(title)\t-n\n");
+    t.push_str("books.xml\t-t\t-m\t//book[author]\t-v\t@id\t-o\t:\t-m\tauthor\t-o\t \t-v\tposition()\t-o\t=\t-v\t.\t-b\t-n\n");
+    t.push_str("books.xml\t-t\t-m\t//book\t-i\tstock = 0\t-v\t@id\t-o\t sold out\t-n\t-b\t-i\tnot(stock)\t-v\t@id\t-o\t no stock line\t-n\n");
+    t.push_str("books.xml\t-t\t-v\tcount(//book)\t-o\t books, \t-v\tsum(//stock)\t-o\t copies\t-n\n");
+    t.push_str("books.xml\t-t\t-m\t//book\t-s\tA:T:-\t@category\t-s\tD:N:-\tyear\t-v\t@category\t-o\t \t-v\tyear\t-n\n");
+    t.push_str("books.xml\t-t\t-c\t//book[1]/title\t-n\t-c\t//book[4]/comment()\t-n\n");
+    t.push_str("feed.xml\t-N\ta=http://www.w3.org/2005/Atom\t-N\tdc=http://purl.org/dc/elements/1.1/\t-t\t-m\t//a:entry\t-s\tA:T:-\ta:updated\t-v\tsubstring(a:updated, 1, 10)\t-o\t \t-v\ta:title\t-o\t (\t-v\tcount(dc:subject)\t-o\t tags)\t-n\n");
+    t.push_str("feed.xml\t-N\ta=http://www.w3.org/2005/Atom\t-t\t-m\t//a:entry[position() = last()]\t-v\ta:link/@href\t-n\n");
+    t.push_str("page.xhtml\t-N\th=http://www.w3.org/1999/xhtml\t-t\t-m\t//h:tr[h:td]\t-s\tA:N:-\th:td[3]\t-v\th:td[1]\t-o\t@\t-v\th:td[2]\t-o\t \t-v\th:td[3]\t-i\t@class != 'ok'\t-o\t !\t-b\t-n\n");
+    t.push_str("page.xhtml\t-N\th=http://www.w3.org/1999/xhtml\t-t\t-m\t//h:a\t-v\tconcat(position(), ' ', @href)\t-n\n");
+    t.push_str("pom.xml\t-N\tp=http://maven.apache.org/POM/4.0.0\t-t\t-m\t//p:dependency\t-s\tA:T:-\tp:scope\t-v\tp:groupId\t-o\t:\t-v\tp:artifactId\t-o\t:\t-v\tp:version\t-i\tp:scope\t-o\t [\t-v\tp:scope\t-o\t]\t-b\t-n\n");
+    t.push_str("inventory.xml\t-N\tw=urn:example:warehouse\t-t\t-m\t//w:bin\t-v\t@code\t-o\t \t-v\tsum(item/@qty)\t-o\t units, value \t-v\tround(sum(item/@qty) * 100) div 100\t-n\t-m\titem\t-s\tD:N:-\t@qty\t-o\t  \t-v\t@sku\t-o\t x\t-v\t@qty\t-n\n");
+    v.push(DataFile { path: "sel.tsv".to_string(), hex: false, body: t });
+}

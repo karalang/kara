@@ -1,0 +1,939 @@
+== queries
+doc books.xml
+q /catalog/book/title
+  </catalog[1]/book[1]/title[1]>
+  </catalog[1]/book[2]/title[1]>
+  </catalog[1]/book[3]/title[1]>
+  </catalog[1]/book[4]/title[1]>
+  </catalog[1]/book[5]/title[1]>
+q //book[@category='fiction']/title/text()
+  text "L'Étranger" in </catalog[1]/book[3]/title[1]>
+  text 'Der Prozeß' in </catalog[1]/book[4]/title[1]>
+q //book[price > 20]/@id
+  @id='bk101' on </catalog[1]/book[1]>
+  @id='bk102' on </catalog[1]/book[2]>
+q //book[not(price > 20)]/@id
+  @id='bk103' on </catalog[1]/book[3]>
+  @id='bk104' on </catalog[1]/book[4]>
+  @id='bk105' on </catalog[1]/book[5]>
+q //book[price != 11]/@id
+  @id='bk101' on </catalog[1]/book[1]>
+  @id='bk102' on </catalog[1]/book[2]>
+  @id='bk103' on </catalog[1]/book[3]>
+  @id='bk105' on </catalog[1]/book[5]>
+q count(//book)
+  5.0
+q count(//author)
+  6.0
+q count(//*)
+  35.0
+q count(//node())
+  107.0
+q count(//text())
+  70.0
+q sum(//book/stock)
+  20.0
+q sum(//price)
+  nan
+q sum(//book[stock]/price)
+  105.39000000000001
+q string(sum(//book[number(price) = number(price)]/price))
+  '105.39'
+q //book[last()]/title
+  </catalog[1]/book[5]/title[1]>
+q //book[position() = last() - 1]/@id
+  @id='bk104' on </catalog[1]/book[4]>
+q //book[2]
+  </catalog[1]/book[2]>
+q (//author)[2]
+  </catalog[1]/book[1]/author[2]>
+q //book/author[2]
+  </catalog[1]/book[1]/author[2]>
+  </catalog[1]/book[2]/author[2]>
+q //book[author[2]]/@id
+  @id='bk101' on </catalog[1]/book[1]>
+  @id='bk102' on </catalog[1]/book[2]>
+q //book[count(author) = 1]/title
+  </catalog[1]/book[3]/title[1]>
+  </catalog[1]/book[4]/title[1]>
+q //book[@lang]/@lang
+  @lang='en' on </catalog[1]/book[1]>
+  @lang='en' on </catalog[1]/book[2]>
+  @lang='fr' on </catalog[1]/book[3]>
+  @lang='de' on </catalog[1]/book[4]>
+q //book[not(@lang)]/@id
+  @id='bk105' on </catalog[1]/book[5]>
+q //*[@category='programming'][self::magazine]/title
+  </catalog[1]/magazine[1]/title[1]>
+q //book[year < 1950][price < 10]/@id
+  @id='bk103' on </catalog[1]/book[3]>
+q //book[year < 1950 and price < 10]/@id
+  @id='bk103' on </catalog[1]/book[3]>
+q //book[year > 2000 or stock = 0]/@id
+  @id='bk102' on </catalog[1]/book[2]>
+  @id='bk105' on </catalog[1]/book[5]>
+q //book[stock > 4 or not(stock)]/@id
+  @id='bk103' on </catalog[1]/book[3]>
+  @id='bk104' on </catalog[1]/book[4]>
+  @id='bk105' on </catalog[1]/book[5]>
+q name(/*)
+  'catalog'
+q local-name(//book[1]/@*[2])
+  'category'
+q //book[1]/@*
+  @id='bk101' on </catalog[1]/book[1]>
+  @category='programming' on </catalog[1]/book[1]>
+  @lang='en' on </catalog[1]/book[1]>
+q //title[contains(., 'Program')]
+  </catalog[1]/book[1]/title[1]>
+  </catalog[1]/book[2]/title[1]>
+q //title[starts-with(., 'The')]/../@id
+  @id='bk102' on </catalog[1]/book[2]>
+q normalize-space(//book[@id='bk105']/title)
+  'The Chicago Manual of Style'
+q string-length(//book[@id='bk103']/title)
+  10.0
+q substring-before(//book[1]/author[2], ' ')
+  'Gerald'
+q substring-after(//book[1]/author[2], ' ')
+  'Jay Sussman'
+q substring(//book[2]/title, 5)
+  'C Programming Language'
+q substring(//book[2]/title, 5, 3)
+  'C P'
+q translate(//book[3]/title, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+  "L'ÉTRANGER"
+q concat(//book[1]/@id, ':', //book[1]/year, ':', //book[1]/price)
+  'bk101:1985:45.50'
+q //book[1]/year + 1
+  1986.0
+q //book[1]/year - //book[2]/year
+  7.0
+q //book[1]/price * 2
+  91.0
+q //book[1]/price div 4
+  11.375
+q //book[1]/year mod 100
+  85.0
+q -//book[1]/year
+  -1985.0
+q //book[@id='bk105']/price * 1
+  nan
+q number(//book[@id='bk105']/price) = number(//book[@id='bk105']/price)
+  False
+q //price[. = 39.99]/../@id
+  @id='bk102' on </catalog[1]/book[2]>
+q //price[. = '6.5']/..
+  </catalog[1]/magazine[1]>
+q //book/stock[. = 0] | //magazine/title
+  </catalog[1]/book[2]/stock[1]>
+  </catalog[1]/magazine[1]/title[1]>
+q //magazine | //book[1] | //book[1]/title
+  </catalog[1]/book[1]>
+  </catalog[1]/book[1]/title[1]>
+  </catalog[1]/magazine[1]>
+q //book[1]/following-sibling::book/@id
+  @id='bk102' on </catalog[1]/book[2]>
+  @id='bk103' on </catalog[1]/book[3]>
+  @id='bk104' on </catalog[1]/book[4]>
+  @id='bk105' on </catalog[1]/book[5]>
+q //book[3]/preceding-sibling::*/@id
+  @id='bk101' on </catalog[1]/book[1]>
+  @id='bk102' on </catalog[1]/book[2]>
+q //book[3]/preceding-sibling::*[1]/@id
+  @id='bk102' on </catalog[1]/book[2]>
+q //book[3]/following-sibling::*[last()]/@id
+  @id='mg1' on </catalog[1]/magazine[1]>
+q //year[. = 1942]/ancestor::*
+  </catalog[1]>
+  </catalog[1]/book[3]>
+q //year[. = 1942]/ancestor-or-self::*/@id
+  @id='bk103' on </catalog[1]/book[3]>
+q //book[4]/descendant::node()
+  text '\n    ' in </catalog[1]/book[4]>
+  </catalog[1]/book[4]/title[1]>
+  text 'Der Prozeß' in </catalog[1]/book[4]/title[1]>
+  text '\n    ' in </catalog[1]/book[4]>
+  </catalog[1]/book[4]/author[1]>
+  text 'Franz Kafka' in </catalog[1]/book[4]/author[1]>
+  text '\n    ' in </catalog[1]/book[4]>
+  </catalog[1]/book[4]/year[1]>
+  text '1925' in </catalog[1]/book[4]/year[1]>
+  text '\n    ' in </catalog[1]/book[4]>
+  </catalog[1]/book[4]/price[1]>
+  text '11' in </catalog[1]/book[4]/price[1]>
+  text '\n    ' in </catalog[1]/book[4]>
+  </catalog[1]/book[4]/stock[1]>
+  text '5' in </catalog[1]/book[4]/stock[1]>
+  text '\n    ' in </catalog[1]/book[4]>
+  comment ' out of print in this edition '
+  text '\n  ' in </catalog[1]/book[4]>
+q //book[4]/descendant-or-self::comment()
+  comment ' out of print in this edition '
+q //comment()
+  comment " A small shop's catalogue. "
+  comment ' out of print in this edition '
+q /comment()
+  comment " A small shop's catalogue. "
+q /node()
+  comment " A small shop's catalogue. "
+  </catalog[1]>
+q //book[2]/price/following::title
+  </catalog[1]/book[3]/title[1]>
+  </catalog[1]/book[4]/title[1]>
+  </catalog[1]/book[5]/title[1]>
+  </catalog[1]/magazine[1]/title[1]>
+q //book[4]/title/preceding::author
+  </catalog[1]/book[1]/author[1]>
+  </catalog[1]/book[1]/author[2]>
+  </catalog[1]/book[2]/author[1]>
+  </catalog[1]/book[2]/author[2]>
+  </catalog[1]/book[3]/author[1]>
+q //book[4]/title/preceding::author[1]
+  </catalog[1]/book[3]/author[1]>
+q //stock/parent::book/@id
+  @id='bk101' on </catalog[1]/book[1]>
+  @id='bk102' on </catalog[1]/book[2]>
+  @id='bk103' on </catalog[1]/book[3]>
+  @id='bk104' on </catalog[1]/book[4]>
+q //title/..[self::magazine]/@id
+  ! XPathEvalError: Invalid expression
+q //book[1]/title/self::node()
+  </catalog[1]/book[1]/title[1]>
+q //book[1]/child::*[3]
+  </catalog[1]/book[1]/author[2]>
+q //book[1]/attribute::category
+  @category='programming' on </catalog[1]/book[1]>
+q boolean(//book[stock > 100])
+  False
+q boolean(//book[stock > 10])
+  True
+q not(//magazine)
+  False
+q //book[@category = $cat]/@id
+  @id='bk103' on </catalog[1]/book[3]>
+  @id='bk104' on </catalog[1]/book[4]>
+q //book[stock > $min]/@id
+  @id='bk103' on </catalog[1]/book[3]>
+q $flag and $min > 5
+  True
+q concat($cat, '-', $min)
+  'fiction-10'
+q $missing
+  ! XPathEvalError: Undefined variable
+q //book[lang('en')]/@id
+  []
+q //*[@id][position() mod 2 = 0]/@id
+  @id='bk102' on </catalog[1]/book[2]>
+  @id='bk104' on </catalog[1]/book[4]>
+  @id='mg1' on </catalog[1]/magazine[1]>
+q //book[position() > 2 and position() < 5]/@id
+  @id='bk103' on </catalog[1]/book[3]>
+  @id='bk104' on </catalog[1]/book[4]>
+q //book/@id[. = 'bk102' or . = 'bk104']
+  @id='bk102' on </catalog[1]/book[2]>
+  @id='bk104' on </catalog[1]/book[4]>
+q count(//book[@category='programming']) * 10 div count(//book)
+  4.0
+q round(//book[1]/price)
+  46.0
+q floor(//book[1]/price)
+  45.0
+q ceiling(//book[1]/price)
+  46.0
+q round(-2.5)
+  -2.0
+q round(0.5)
+  1.0
+q round(-0.4)
+  -0.0
+q 1 div 3
+  0.3333333333333333
+q 2 div 3
+  0.6666666666666666
+q string(1 div 3)
+  '0.333333333333333'
+q string(100 div 7)
+  '14.2857142857143'
+q string(2 div 3 * 1000000)
+  '666666.666666667'
+q string(123456789.123)
+  '123456789.123'
+q string(1234567890)
+  '1234567890'
+q string(1234567890.5)
+  '1.2345678905e+09'
+q string(12345678901234567)
+  '1.23456789012346e+16'
+q string(0.00001)
+  '0.00001'
+q string(0.000012345)
+  '0.000012345'
+q string(0.000001)
+  '1e-06'
+q string(-0.25)
+  '-0.25'
+q string(3.0)
+  '3'
+q string(-0)
+  '0'
+q string(1 div 0)
+  'Infinity'
+q string(-1 div 0)
+  '-Infinity'
+q string(0 div 0)
+  'NaN'
+q 1 div 0
+  inf
+q 0 div 0
+  nan
+q -0
+  -0.0
+q number('  12  ')
+  12.0
+q number('12px')
+  nan
+q number('-.5')
+  -0.5
+q number('')
+  nan
+q number(true())
+  1.0
+q number(//book[1]/@id)
+  nan
+q string(true())
+  'true'
+q string(//nothing)
+  ''
+q boolean('')
+  False
+q boolean('0')
+  True
+q boolean(0)
+  False
+q boolean(0 div 0)
+  False
+q true() = 'x'
+  True
+q 1 = '1.0'
+  True
+q '1' = '1.0'
+  False
+q //year = 1978
+  True
+q //year != 1978
+  True
+q //year > //stock
+  True
+q //book[1]/author = //book[2]/author
+  False
+q //book[1]/author != //book[1]/author
+  True
+q //nothing = //nothing
+  False
+q //nothing != 1
+  False
+q not(//nothing = 1)
+  True
+q 1 < 2 < 3
+  True
+q 3 > 2 > 1
+  False
+q 2 = 2 = 1
+  True
+q 1 - - 1
+  2.0
+q - - 3
+  3.0
+q 1 -1
+  0.0
+q 5 mod -3
+  2.0
+q -5 mod 3
+  -2.0
+q 5.5 mod 2
+  1.5
+q 7 div 2 * 2
+  7.0
+q 2 + 3 * 4 - 1
+  13.0
+q (2 + 3) * 4
+  20.0
+q concat('a', 1, true(), 1 div 0)
+  'a1trueInfinity'
+q translate('banana', 'an', 'A')
+  'bAAA'
+q translate('--x--', '-', '')
+  'x'
+q substring('12345', 1.5, 2.6)
+  '234'
+q substring('12345', 0, 3)
+  '12'
+q substring('12345', 0 div 0, 3)
+  ''
+q substring('12345', 1, 0 div 0)
+  ''
+q substring('12345', -42, 1 div 0)
+  '12345'
+q substring('12345', -1 div 0, 1 div 0)
+  ''
+q substring('été', 2, 1)
+  't'
+q string-length('naïve')
+  5.0
+q string-length()
+  467.0
+q normalize-space()
+  "Structure and Interpretation of Computer Programs Harold Abelson Gerald Jay Sussman 1985 45.50 3 The C Programming Language Brian Kernighan Dennis Ritchie 1978 39.99 0 L'Étranger Albert Camus 1942 8.90 12 Der Prozeß Franz Kafka 1925 11 5 The Chicago Manual of Style 2017 n/a Linux Journal 2026-02 6.5"
+q normalize-space('	 a 	 b  ')
+  'a b'
+q starts-with('abc', '')
+  True
+q contains('', '')
+  True
+q substring-before('abc', '')
+  ''
+q substring-after('abc', '')
+  'abc'
+q substring-after('a=b=c', '=')
+  'b=c'
+q name(//book[1]/title/text())
+  ''
+q name()
+  'catalog'
+q local-name()
+  'catalog'
+q namespace-uri()
+  ''
+q count(//book[1]/node())
+  13.0
+q count(//book[1]/text())
+  7.0
+q //book[1]/text()[1]
+  text '\n    ' in </catalog[1]/book[1]>
+q //book[4]/comment()/preceding-sibling::text()[1]
+  text '\n    ' in </catalog[1]/book[4]>
+q //title/text()[contains(., 'Style')]
+  text '  The   Chicago Manual\n      of Style  ' in </catalog[1]/book[5]/title[1]>
+q //*[text()[. = 'Franz Kafka']]
+  </catalog[1]/book[4]/author[1]>
+q //*[.='1985']
+  </catalog[1]/book[1]/year[1]>
+q //book[title = 'The C Programming Language']/author[last()]
+  </catalog[1]/book[2]/author[2]>
+q //book[.//price/@currency = 'CHF']/@id
+  @id='bk104' on </catalog[1]/book[4]>
+q //price/@currency[. != 'EUR']
+  @currency='CHF' on </catalog[1]/book[4]/price[1]>
+  @currency='USD' on </catalog[1]/book[5]/price[1]>
+q //@currency[../../@lang = 'fr']
+  @currency='EUR' on </catalog[1]/book[3]/price[1]>
+q //book//text()[normalize-space()][1]
+  text 'Structure and Interpretation of Computer Programs' in </catalog[1]/book[1]/title[1]>
+  text 'Harold Abelson' in </catalog[1]/book[1]/author[1]>
+  text 'Gerald Jay Sussman' in </catalog[1]/book[1]/author[2]>
+  text '1985' in </catalog[1]/book[1]/year[1]>
+  text '45.50' in </catalog[1]/book[1]/price[1]>
+  text '3' in </catalog[1]/book[1]/stock[1]>
+  text 'The C Programming Language' in </catalog[1]/book[2]/title[1]>
+  text 'Brian Kernighan' in </catalog[1]/book[2]/author[1]>
+  text 'Dennis Ritchie' in </catalog[1]/book[2]/author[2]>
+  text '1978' in </catalog[1]/book[2]/year[1]>
+  text '39.99' in </catalog[1]/book[2]/price[1]>
+  text '0' in </catalog[1]/book[2]/stock[1]>
+  text "L'Étranger" in </catalog[1]/book[3]/title[1]>
+  text 'Albert Camus' in </catalog[1]/book[3]/author[1]>
+  text '1942' in </catalog[1]/book[3]/year[1]>
+  text '8.90' in </catalog[1]/book[3]/price[1]>
+  text '12' in </catalog[1]/book[3]/stock[1]>
+  text 'Der Prozeß' in </catalog[1]/book[4]/title[1]>
+  text 'Franz Kafka' in </catalog[1]/book[4]/author[1]>
+  text '1925' in </catalog[1]/book[4]/year[1]>
+  text '11' in </catalog[1]/book[4]/price[1]>
+  text '5' in </catalog[1]/book[4]/stock[1]>
+  text '  The   Chicago Manual\n      of Style  ' in </catalog[1]/book[5]/title[1]>
+  text '2017' in </catalog[1]/book[5]/year[1]>
+  text 'n/a' in </catalog[1]/book[5]/price[1]>
+q .
+  </catalog[1]>
+q ..
+  []
+q /
+  []
+q /*/*[1]/@*[last()]
+  @lang='en' on </catalog[1]/book[1]>
+q *[2]/title
+  </catalog[1]/book[2]/title[1]>
+q book[@id='bk104']/descendant::*
+  </catalog[1]/book[4]/title[1]>
+  </catalog[1]/book[4]/author[1]>
+  </catalog[1]/book[4]/year[1]>
+  </catalog[1]/book[4]/price[1]>
+  </catalog[1]/book[4]/stock[1]>
+q @updated
+  @updated='2026-03-01' on </catalog[1]>
+q ./@updated
+  @updated='2026-03-01' on </catalog[1]>
+q id('bk101')
+  []
+q count(1)
+  ! XPathEvalError: Invalid type
+q //book[
+  ! XPathEvalError: Invalid expression
+q //book[@id='x']]
+  ! XPathEvalError: Invalid expression
+q 1 +
+  ! XPathEvalError: Invalid expression
+q foo()
+  ! XPathEvalError: Unregistered function
+q count()
+  ! XPathEvalError: Invalid number of arguments
+q concat('a')
+  ! XPathEvalError: Invalid number of arguments
+q //x:book
+  ! XPathEvalError: Undefined namespace prefix
+q //book/@
+  ! XPathEvalError: Invalid expression
+q 'unterminated
+  ! XPathEvalError: Unfinished literal
+q //book[1]/title/nonsense::x
+  ! XPathEvalError: Invalid expression
+q 2 ** 3
+  ! XPathEvalError: Invalid expression
+q //book[@id="bk101"]/title
+  </catalog[1]/book[1]/title[1]>
+q //*[contains(name(), 'a')][1]
+  </catalog[1]>
+  </catalog[1]/book[1]/author[1]>
+  </catalog[1]/book[2]/author[1]>
+  </catalog[1]/book[3]/author[1]>
+  </catalog[1]/book[4]/author[1]>
+  </catalog[1]/book[5]/year[1]>
+  </catalog[1]/magazine[1]>
+doc feed.xml
+q /a:feed/a:title
+  </feed[1]/title[1]>
+q string(/a:feed/a:title)
+  'Example Engineering Blog'
+q /feed/title
+  []
+q //a:entry/a:title/text()
+  text 'Shipping a parser' in </feed[1]/entry[1]/title[1]>
+  text 'Notas de versão' in </feed[1]/entry[2]/title[1]>
+  text 'On-call, a year later' in </feed[1]/entry[3]/title[1]>
+q //a:entry[dc:creator = 'Ana Lima']/a:id/text()
+  text 'tag:blog.example.org,2026:1' in </feed[1]/entry[1]/id[1]>
+  text 'tag:blog.example.org,2026:3' in </feed[1]/entry[3]/id[1]>
+q //a:entry[not(dc:subject)]/a:title/text()
+  text 'On-call, a year later' in </feed[1]/entry[3]/title[1]>
+q count(//dc:subject)
+  3.0
+q //a:link[@rel='self']/@href
+  @href='https://blog.example.org/feed.xml' on </feed[1]/link[1]>
+q //a:link[not(@rel)]/@href
+  @href='https://blog.example.org/posts/parser' on </feed[1]/entry[1]/link[1]>
+  @href='https://blog.example.org/posts/notas' on </feed[1]/entry[2]/link[1]>
+  @href='https://blog.example.org/posts/oncall' on </feed[1]/entry[3]/link[1]>
+q //a:entry[a:updated > '2026-02']/a:title/text()
+  []
+q //a:entry[starts-with(a:updated, '2026-02')]/a:title/text()
+  text 'Notas de versão' in </feed[1]/entry[2]/title[1]>
+q //m:thumbnail[@width > 400]/@url
+  @url='https://cdn.example.org/2.png' on </feed[1]/entry[2]/media:thumbnail[1]>
+q sum(//m:thumbnail/@width) div count(//m:thumbnail)
+  480.0
+q //a:entry[lang('pt')]/a:id/text()
+  text 'tag:blog.example.org,2026:2' in </feed[1]/entry[2]/id[1]>
+q //a:entry[lang('en')]/a:id/text()
+  text 'tag:blog.example.org,2026:1' in </feed[1]/entry[1]/id[1]>
+  text 'tag:blog.example.org,2026:3' in </feed[1]/entry[3]/id[1]>
+q //a:entry[lang('EN')]/a:id/text()
+  text 'tag:blog.example.org,2026:1' in </feed[1]/entry[1]/id[1]>
+  text 'tag:blog.example.org,2026:3' in </feed[1]/entry[3]/id[1]>
+q //dc:*
+  </feed[1]/entry[1]/dc:creator[1]>
+  </feed[1]/entry[1]/dc:subject[1]>
+  </feed[1]/entry[1]/dc:subject[2]>
+  </feed[1]/entry[2]/dc:creator[1]>
+  </feed[1]/entry[2]/dc:subject[1]>
+  </feed[1]/entry[3]/dc:creator[1]>
+q //a:*[local-name() = 'id']/text()
+  text 'tag:blog.example.org,2026:1' in </feed[1]/entry[1]/id[1]>
+  text 'tag:blog.example.org,2026:2' in </feed[1]/entry[2]/id[1]>
+  text 'tag:blog.example.org,2026:3' in </feed[1]/entry[3]/id[1]>
+q name(//dc:creator)
+  'dc:creator'
+q local-name(//dc:creator)
+  'creator'
+q namespace-uri(//dc:creator)
+  'http://purl.org/dc/elements/1.1/'
+q namespace-uri(/*)
+  'http://www.w3.org/2005/Atom'
+q name(/*)
+  'feed'
+q //*[namespace-uri() = 'http://search.yahoo.com/mrss/']/@height
+  @height='180' on </feed[1]/entry[1]/media:thumbnail[1]>
+  @height='360' on </feed[1]/entry[2]/media:thumbnail[1]>
+q //a:entry[1]/namespace::*
+  ns ('xml', 'http://www.w3.org/XML/1998/namespace')
+  ns ('media', 'http://search.yahoo.com/mrss/')
+  ns ('dc', 'http://purl.org/dc/elements/1.1/')
+  ns (None, 'http://www.w3.org/2005/Atom')
+q count(/*/namespace::*)
+  4.0
+q //a:content/text()
+  text '<p>We rewrote the parser.</p>' in </feed[1]/entry[1]/content[1]>
+q string-length(//a:content)
+  29.0
+q //@xml:lang
+  @xml:lang='en' on </feed[1]>
+  @xml:lang='pt-BR' on </feed[1]/entry[2]>
+q //a:entry[@xml:lang]/a:title/text()
+  text 'Notas de versão' in </feed[1]/entry[2]/title[1]>
+q //a:entry/a:title[../dc:subject = 'testing']/text()
+  text 'Shipping a parser' in </feed[1]/entry[1]/title[1]>
+q //a:entry[last()]/preceding-sibling::a:entry[1]/a:id/text()
+  text 'tag:blog.example.org,2026:2' in </feed[1]/entry[2]/id[1]>
+q //a:entry[dc:creator = //a:entry[2]/dc:creator]/a:id/text()
+  text 'tag:blog.example.org,2026:2' in </feed[1]/entry[2]/id[1]>
+q //a:entry[dc:creator = preceding-sibling::a:entry/dc:creator]/a:title/text()
+  text 'On-call, a year later' in </feed[1]/entry[3]/title[1]>
+q //xx:entry
+  ! XPathEvalError: Undefined namespace prefix
+doc page.xhtml
+q string(//h:title)
+  'Status - Example Services'
+q //h:meta[@name='description']/@content
+  @content='Service status and incidents' on </html[1]/head[1]/meta[1]>
+q //h:a/@href
+  @href='/' on </html[1]/body[1]/nav[1]/a[1]>
+  @href='/incidents' on </html[1]/body[1]/nav[1]/a[2]>
+  @href='https://docs.example.org/' on </html[1]/body[1]/nav[1]/a[3]>
+  @href='/history' on </html[1]/body[1]/p[1]/a[1]>
+q //h:a[starts-with(@href, 'http')]/@href
+  @href='https://docs.example.org/' on </html[1]/body[1]/nav[1]/a[3]>
+q //h:a[not(starts-with(@href, 'http'))]/text()
+  text 'Home' in </html[1]/body[1]/nav[1]/a[1]>
+  text 'Incidents' in </html[1]/body[1]/nav[1]/a[2]>
+  text 'history' in </html[1]/body[1]/p[1]/a[1]>
+q //h:nav/text()
+  text ' | ' in </html[1]/body[1]/nav[1]>
+  text ' | ' in </html[1]/body[1]/nav[1]>
+q normalize-space(//h:h1)
+  'All systems mostly operational'
+q //h:h1/node()
+  text 'All systems ' in </html[1]/body[1]/h1[1]>
+  </html[1]/body[1]/h1[1]/em[1]>
+  text ' operational' in </html[1]/body[1]/h1[1]>
+q //h:tr[h:td]/h:td[1]/text()
+  text 'api' in </html[1]/body[1]/table[1]/tr[2]/td[1]>
+  text 'api' in </html[1]/body[1]/table[1]/tr[3]/td[1]>
+  text 'search' in </html[1]/body[1]/table[1]/tr[4]/td[1]>
+  text 'billing' in </html[1]/body[1]/table[1]/tr[5]/td[1]>
+  text 'reports' in </html[1]/body[1]/table[1]/tr[6]/td[1]>
+q //h:tr[@class != 'ok']/h:td[1]/text()
+  text 'search' in </html[1]/body[1]/table[1]/tr[4]/td[1]>
+  text 'reports' in </html[1]/body[1]/table[1]/tr[6]/td[1]>
+q //h:tr[h:td[3] < 99]/h:td[1]/text()
+  text 'search' in </html[1]/body[1]/table[1]/tr[4]/td[1]>
+  text 'reports' in </html[1]/body[1]/table[1]/tr[6]/td[1]>
+q count(//h:tr[h:td[2] = $region])
+  3.0
+q //h:tr[h:td[2] = $region][h:td[3] >= 99]/h:td[1]/text()
+  text 'api' in </html[1]/body[1]/table[1]/tr[2]/td[1]>
+  text 'billing' in </html[1]/body[1]/table[1]/tr[5]/td[1]>
+q sum(//h:tr/h:td[3]) div count(//h:tr/h:td[3])
+  97.126
+q //h:td[. = 'api']/following-sibling::h:td[2]/text()
+  text '99.98' in </html[1]/body[1]/table[1]/tr[2]/td[3]>
+  text '99.95' in </html[1]/body[1]/table[1]/tr[3]/td[3]>
+q //h:tr[last()]/h:td[position() > 1]/text()
+  text 'us-east' in </html[1]/body[1]/table[1]/tr[6]/td[2]>
+  text '88.5' in </html[1]/body[1]/table[1]/tr[6]/td[3]>
+q //h:th[2]/following-sibling::*
+  </html[1]/body[1]/table[1]/tr[1]/th[3]>
+q //h:tr[2]/@class | //h:tr[4]/@class
+  @class='ok' on </html[1]/body[1]/table[1]/tr[2]>
+  @class='degraded' on </html[1]/body[1]/table[1]/tr[4]>
+q //h:body/@class
+  @class='status page' on </html[1]/body[1]>
+q //*[contains(concat(' ', normalize-space(@class), ' '), ' page ')]
+  </html[1]/body[1]>
+q //h:input[@type='hidden']/@value
+  @value='form-1234' on </html[1]/body[1]/form[1]/input[2]>
+q //h:input[@required]/@name
+  @name='email' on </html[1]/body[1]/form[1]/input[1]>
+q //h:option[@selected]/@value
+  @value='w' on </html[1]/body[1]/form[1]/select[1]/option[2]>
+q string(//h:option[@selected])
+  'weekly'
+q //h:form/@*
+  @action='/subscribe' on </html[1]/body[1]/form[1]>
+  @method='post' on </html[1]/body[1]/form[1]>
+q //h:p/node()
+  text 'Last checked ' in </html[1]/body[1]/p[1]>
+  </html[1]/body[1]/p[1]/time[1]>
+  text '. ' in </html[1]/body[1]/p[1]>
+  comment ' generated '
+  pi render 'cache="5m"'
+  text 'See ' in </html[1]/body[1]/p[1]>
+  </html[1]/body[1]/p[1]/a[1]>
+  text '.' in </html[1]/body[1]/p[1]>
+q //h:p/comment()
+  comment ' generated '
+q //h:p/processing-instruction()
+  pi render 'cache="5m"'
+q //processing-instruction('render')
+  pi render 'cache="5m"'
+q string(//processing-instruction())
+  'cache="5m"'
+q name(//processing-instruction())
+  'render'
+q //h:p/text()[2]
+  text '. ' in </html[1]/body[1]/p[1]>
+q //h:time/@datetime
+  @datetime='2026-03-02T10:15:00Z' on </html[1]/body[1]/p[1]/time[1]>
+q //h:p/h:a/preceding-sibling::node()[1]
+  text 'See ' in </html[1]/body[1]/p[1]>
+q count(//h:p/node()[self::text()])
+  4.0
+q //h:td[not(. = preceding::h:td)][parent::h:tr/h:td[1] = .]/text()
+  text 'api' in </html[1]/body[1]/table[1]/tr[2]/td[1]>
+  text 'search' in </html[1]/body[1]/table[1]/tr[4]/td[1]>
+  text 'billing' in </html[1]/body[1]/table[1]/tr[5]/td[1]>
+  text 'reports' in </html[1]/body[1]/table[1]/tr[6]/td[1]>
+q count(//*)
+  47.0
+q count(//@*)
+  30.0
+q /h:html/@lang
+  @lang='en' on </html[1]>
+doc pom.xml
+q concat(/p:project/p:groupId, ':', /p:project/p:artifactId, ':', /p:project/p:version)
+  'org.example:orders-service:2.4.1-SNAPSHOT'
+q //p:dependency/p:artifactId/text()
+  text 'jackson-databind' in </project[1]/dependencies[1]/dependency[1]/artifactId[1]>
+  text 'postgresql' in </project[1]/dependencies[1]/dependency[2]/artifactId[1]>
+  text 'junit-jupiter' in </project[1]/dependencies[1]/dependency[3]/artifactId[1]>
+  text 'mockito-core' in </project[1]/dependencies[1]/dependency[4]/artifactId[1]>
+q //p:dependency[p:scope = 'test']/p:artifactId/text()
+  text 'junit-jupiter' in </project[1]/dependencies[1]/dependency[3]/artifactId[1]>
+  text 'mockito-core' in </project[1]/dependencies[1]/dependency[4]/artifactId[1]>
+q //p:dependency[not(p:scope)]/p:artifactId/text()
+  text 'jackson-databind' in </project[1]/dependencies[1]/dependency[1]/artifactId[1]>
+q //p:dependency[p:optional = 'true']/p:artifactId/text()
+  text 'mockito-core' in </project[1]/dependencies[1]/dependency[4]/artifactId[1]>
+q count(//p:dependency)
+  4.0
+q //p:dependency[starts-with(p:version, '${')]/p:version/text()
+  text '${jackson.version}' in </project[1]/dependencies[1]/dependency[1]/version[1]>
+q //p:properties/*
+  </project[1]/properties[1]/java.version[1]>
+  </project[1]/properties[1]/jackson.version[1]>
+q name(//p:properties/*[1])
+  'java.version'
+q local-name(//p:properties/*[2])
+  'jackson.version'
+q /p:project/@xsi:schemaLocation
+  @xsi:schemaLocation='http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd' on </project[1]>
+q substring-before(/p:project/@xsi:schemaLocation, ' ')
+  'http://maven.apache.org/POM/4.0.0'
+q //p:plugin[p:artifactId = 'maven-surefire-plugin']/p:configuration/p:skipTests/text()
+  text 'false' in </project[1]/build[1]/plugins[1]/plugin[1]/configuration[1]/skipTests[1]>
+q contains(/p:project/p:version, 'SNAPSHOT')
+  True
+q //p:dependency[p:version > 5]/p:artifactId/text()
+  []
+q //p:dependency[number(substring-before(p:version, '.')) >= 5]/p:artifactId/text()
+  text 'postgresql' in </project[1]/dependencies[1]/dependency[2]/artifactId[1]>
+  text 'junit-jupiter' in </project[1]/dependencies[1]/dependency[3]/artifactId[1]>
+  text 'mockito-core' in </project[1]/dependencies[1]/dependency[4]/artifactId[1]>
+q //p:*[not(*)][normalize-space() = '']
+  []
+q //p:version
+  </project[1]/version[1]>
+  </project[1]/dependencies[1]/dependency[1]/version[1]>
+  </project[1]/dependencies[1]/dependency[2]/version[1]>
+  </project[1]/dependencies[1]/dependency[3]/version[1]>
+  </project[1]/dependencies[1]/dependency[4]/version[1]>
+  </project[1]/build[1]/plugins[1]/plugin[1]/version[1]>
+doc inventory.xml
+q //w:bin/@code
+  @code='A-01' on </inventory[1]/w:bin[1]>
+  @code='A-02' on </inventory[1]/w:bin[2]>
+  @code='B-07' on </inventory[1]/w:bin[3]>
+q //w:bin[@w:zone = $zone]/item/@sku
+  @sku='MILK-1L' on </inventory[1]/w:bin[1]/item[1]>
+  @sku='YOG-500' on </inventory[1]/w:bin[1]/item[2]>
+  @sku='BUT-250' on </inventory[1]/w:bin[2]/item[1]>
+q sum(//item/@qty)
+  82.0
+q sum(//w:bin[@w:zone='cold']/item/@qty)
+  52.0
+q count(//item[@qty > 0])
+  4.0
+q count(//item[not(@qty)])
+  1.0
+q //item[@qty < 1]/@sku
+  @sku='BUT-250' on </inventory[1]/w:bin[2]/item[1]>
+  @sku='SALT-1K' on </inventory[1]/w:bin[3]/item[3]>
+q //item[@qty * @unit-price > 30]/@sku
+  @sku='MILK-1L' on </inventory[1]/w:bin[1]/item[1]>
+  @sku='RICE-5K' on </inventory[1]/w:bin[3]/item[1]>
+  @sku='OATS-1K' on </inventory[1]/w:bin[3]/item[2]>
+q //item[not(@qty * @unit-price > 30)]/@sku
+  @sku='YOG-500' on </inventory[1]/w:bin[1]/item[2]>
+  @sku='BUT-250' on </inventory[1]/w:bin[2]/item[1]>
+  @sku='SALT-1K' on </inventory[1]/w:bin[3]/item[3]>
+  @sku='SUGAR-1K' on </inventory[1]/w:bin[3]/item[4]>
+q //w:bin[sum(item/@qty) > 20]/@code
+  @code='A-01' on </inventory[1]/w:bin[1]>
+  @code='B-07' on </inventory[1]/w:bin[3]>
+q //w:bin[count(item) = 1]/@code
+  @code='A-02' on </inventory[1]/w:bin[2]>
+q //w:bin[item[@qty = 0]]/@code
+  @code='A-02' on </inventory[1]/w:bin[2]>
+q //item[@sku = 'OATS-1K']/@unit-price * 2
+  6.0
+q //item[@sku = 'SUGAR-1K']/@qty * 2
+  nan
+q sum(//item/@unit-price)
+  21.090000000000003
+q round(sum(//item/@unit-price) * 100) div 100
+  21.09
+q /processing-instruction()
+  pi xml-stylesheet 'type="text/xsl" href="report.xsl"'
+q name(/processing-instruction())
+  'xml-stylesheet'
+q string(/processing-instruction('xml-stylesheet'))
+  'type="text/xsl" href="report.xsl"'
+q /inventory/@w:site
+  @w:site='DUB-2' on </inventory[1]>
+q //@w:*
+  @w:site='DUB-2' on </inventory[1]>
+  @w:zone='cold' on </inventory[1]/w:bin[1]>
+  @w:zone='cold' on </inventory[1]/w:bin[2]>
+  @w:zone='dry' on </inventory[1]/w:bin[3]>
+q name(//@w:zone)
+  'w:zone'
+q //w:bin[1]/@*
+  @code='A-01' on </inventory[1]/w:bin[1]>
+  @w:zone='cold' on </inventory[1]/w:bin[1]>
+q //note/text()
+  text 'Counted on ' in </inventory[1]/note[1]>
+  text '; recount B-07.' in </inventory[1]/note[1]>
+q //note/node()
+  text 'Counted on ' in </inventory[1]/note[1]>
+  </inventory[1]/note[1]/date[1]>
+  text '; recount B-07.' in </inventory[1]/note[1]>
+q string(//note)
+  'Counted on 2026-03-01; recount B-07.'
+q //note[lang('en-US')]
+  []
+q //note[lang('en')]/date/text()
+  text '2026-03-01' in </inventory[1]/note[1]/date[1]>
+q //date[lang('en')]
+  </inventory[1]/note[1]/date[1]>
+q //item[1]/namespace::w
+  ns ('w', 'urn:example:warehouse')
+  ns ('w', 'urn:example:warehouse')
+  ns ('w', 'urn:example:warehouse')
+q //*[@code = 'B-07']/item[last()]/@sku
+  @sku='SUGAR-1K' on </inventory[1]/w:bin[3]/item[4]>
+q //item[@sku][@qty][2]/@sku
+  @sku='YOG-500' on </inventory[1]/w:bin[1]/item[2]>
+  @sku='OATS-1K' on </inventory[1]/w:bin[3]/item[2]>
+q (//item[@qty])[last()]/@sku
+  @sku='SALT-1K' on </inventory[1]/w:bin[3]/item[3]>
+q //w:bin[2]/following-sibling::*/@code | //w:bin[2]/preceding-sibling::*/@code
+  @code='A-01' on </inventory[1]/w:bin[1]>
+  @code='B-07' on </inventory[1]/w:bin[3]>
+q //item[@qty = //item/@qty[. > 30]]/@sku
+  @sku='MILK-1L' on </inventory[1]/w:bin[1]/item[1]>
+q //item[@qty > //item[@sku='OATS-1K']/@qty]/@sku
+  @sku='MILK-1L' on </inventory[1]/w:bin[1]/item[1]>
+== xmlstarlet sel -t -m //book -v @id -o :  -v title -n books.xml
+| bk101: Structure and Interpretation of Computer Programs
+| bk102: The C Programming Language
+| bk103: L'Étranger
+| bk104: Der Prozeß
+| bk105:   The   Chicago Manual
+|       of Style  
+| 
+== xmlstarlet sel -t -m //book -s D:N:- price -v price -o   -v @id -n books.xml
+| 45.50 bk101
+| 39.99 bk102
+| 11 bk104
+| 8.90 bk103
+| n/a bk105
+| 
+== xmlstarlet sel -t -m //book -s A:T:- title -v position() -o / -v last() -o   -v normalize-space(title) -n books.xml
+| 1/5 The Chicago Manual of Style
+| 2/5 Der Prozeß
+| 3/5 L'Étranger
+| 4/5 Structure and Interpretation of Computer Programs
+| 5/5 The C Programming Language
+| 
+== xmlstarlet sel -t -m //book[author] -v @id -o : -m author -o   -v position() -o = -v . -b -n books.xml
+| bk101: 1=Harold Abelson 2=Gerald Jay Sussman
+| bk102: 1=Brian Kernighan 2=Dennis Ritchie
+| bk103: 1=Albert Camus
+| bk104: 1=Franz Kafka
+| 
+== xmlstarlet sel -t -m //book -i stock = 0 -v @id -o  sold out -n -b -i not(stock) -v @id -o  no stock line -n books.xml
+| bk102 sold out
+| bk105 no stock line
+| 
+== xmlstarlet sel -t -v count(//book) -o  books,  -v sum(//stock) -o  copies -n books.xml
+| 5 books, 20 copies
+| 
+== xmlstarlet sel -t -m //book -s A:T:- @category -s D:N:- year -v @category -o   -v year -n books.xml
+| fiction 1942
+| fiction 1925
+| programming 1985
+| programming 1978
+| reference 2017
+| 
+== xmlstarlet sel -t -c //book[1]/title -n -c //book[4]/comment() -n books.xml
+| Structure and Interpretation of Computer Programs
+| 
+| 
+== xmlstarlet sel -N a=http://www.w3.org/2005/Atom -N dc=http://purl.org/dc/elements/1.1/ -t -m //a:entry -s A:T:- a:updated -v substring(a:updated, 1, 10) -o   -v a:title -o  ( -v count(dc:subject) -o  tags) -n feed.xml
+| 2026-01-15 On-call, a year later (0 tags)
+| 2026-02-20 Notas de versão (1 tags)
+| 2026-03-01 Shipping a parser (2 tags)
+| 
+== xmlstarlet sel -N a=http://www.w3.org/2005/Atom -t -m //a:entry[position() = last()] -v a:link/@href -n feed.xml
+| https://blog.example.org/posts/oncall
+| 
+== xmlstarlet sel -N h=http://www.w3.org/1999/xhtml -t -m //h:tr[h:td] -s A:N:- h:td[3] -v h:td[1] -o @ -v h:td[2] -o   -v h:td[3] -i @class != 'ok' -o  ! -b -n page.xhtml
+| reports@us-east 88.5 !
+| search@eu-west 97.20 !
+| api@us-east 99.95
+| api@eu-west 99.98
+| billing@eu-west 100
+| 
+== xmlstarlet sel -N h=http://www.w3.org/1999/xhtml -t -m //h:a -v concat(position(), ' ', @href) -n page.xhtml
+| 1 /
+| 2 /incidents
+| 3 https://docs.example.org/
+| 4 /history
+| 
+== xmlstarlet sel -N p=http://maven.apache.org/POM/4.0.0 -t -m //p:dependency -s A:T:- p:scope -v p:groupId -o : -v p:artifactId -o : -v p:version -i p:scope -o  [ -v p:scope -o ] -b -n pom.xml
+| com.fasterxml.jackson.core:jackson-databind:${jackson.version}
+| org.postgresql:postgresql:42.7.3 [runtime]
+| org.junit.jupiter:junit-jupiter:5.10.2 [test]
+| org.mockito:mockito-core:5.11.0 [test]
+| 
+== xmlstarlet sel -N w=urn:example:warehouse -t -m //w:bin -v @code -o   -v sum(item/@qty) -o  units, value  -v round(sum(item/@qty) * 100) div 100 -n -m item -s D:N:- @qty -o    -v @sku -o  x -v @qty -n inventory.xml
+| A-01 52 units, value 52
+|   MILK-1L x40
+|   YOG-500 x12
+| A-02 0 units, value 0
+|   BUT-250 x0
+| B-07 30 units, value 30
+|   OATS-1K x25
+|   RICE-5K x7
+|   SALT-1K x-2
+|   SUGAR-1K x
+| 
