@@ -1,0 +1,120 @@
+// LeetCode 816 — Ambiguous Coordinates, numbers that print as themselves.
+//
+// Put the comma at every place and a point at every place in each half,
+// or none, and keep the coordinate when each half is exactly how its
+// value prints at its shortest: an integer n with k digits after the
+// point, its trailing zeros dropped, written with no leading zero but
+// the one before a point. Extra zeros are just what the shortest form
+// leaves out. O(n^3) candidates, each checked in O(n).
+
+fn ambiguous_coordinates(s: String) -> Vec[String] {
+    let digits = s[1..s.len() - 1];
+    let n = digits.len();
+    let mut out: Vec[String] = Vec.new();
+    for cut in 1..n {
+        for p in 1..cut + 1 {
+            let x = with_point(digits[0..cut], p);
+            if not prints_as_itself(x) {
+                continue;
+            }
+            for q in 1..n - cut + 1 {
+                let y = with_point(digits[cut..n], q);
+                if prints_as_itself(y) {
+                    out.push(f"({x}, {y})");
+                }
+            }
+        }
+    }
+    out
+}
+
+// The digits with a point after the first p of them, none if p is all.
+fn with_point(part: Str, p: i64) -> String {
+    if p == part.len() {
+        part.to_string()
+    } else {
+        f"{part[0..p]}.{part[p..part.len()]}"
+    }
+}
+
+// Whether a number written with at most one point is its own shortest
+// form.
+fn prints_as_itself(text: String) -> bool {
+    let mut (n, k) = match text.find('.') {
+        Some(at) => (i64.parse(f"{text[0..at]}{text[at + 1..text.len()]}").unwrap(), text.len() - at - 1),
+        None => (i64.parse(text).unwrap(), 0),
+    };
+    while k > 0 and n % 10 == 0 {
+        n /= 10;
+        k -= 1;
+    }
+    let mut shortest = f"{n}";
+    while shortest.len() <= k {
+        shortest = f"0{shortest}";
+    }
+    if k > 0 {
+        let at = shortest.len() - k;
+        shortest = f"{shortest[0..at]}.{shortest[at..shortest.len()]}";
+    }
+    shortest == text
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    let mut answer = ambiguous_coordinates(s.clone());
+    answer.sort();
+    let list = if answer.is_empty() { "".to_string() } else { f": {answer.join(" ")}" };
+    println(f"s = {s} -> {answer.len()}{list}");
+}
+
+// The number of coordinates and a checksum of them, sorted.
+fn summary(s: String) -> (i64, i64) {
+    let mut answer = ambiguous_coordinates(s);
+    answer.sort();
+    let mut check = 0;
+    for c in answer.iter() {
+        for b in c.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    (answer.len(), check)
+}
+
+fn main() {
+    show("(123)".to_string());
+    show("(0123)".to_string());
+    show("(00011)".to_string());
+    show("(100)".to_string());
+    show("(00)".to_string());
+    show("(000)".to_string());
+    show("(10)".to_string());
+    show("(1010)".to_string());
+    show("(0010)".to_string());
+    // LeetCode's longest, ten digits.
+    for s in ["(1234567891)", "(1000000000)", "(0000000001)", "(1010101010)"] {
+        let (count, check) = summary(s.to_string());
+        println(f"s = {s} -> {count}, checksum {check}");
+    }
+    let mut seed = 816;
+    let mut total = 0;
+    let mut all = 0;
+    for r in 0..300 {
+        let len = 2 + next_random(mut seed) % 9;
+        let mut s = "(".to_string();
+        for _ in 0..len {
+            let d = if next_random(mut seed) % (2 + r % 3) == 0 { 0 } else { next_random(mut seed) % 10 };
+            s.push_str(f"{d}");
+        }
+        s.push_str(")");
+        let (count, check) = summary(s);
+        total += count;
+        all = (all * 131 + check) % 1000000007;
+    }
+    println(f"300 random rounds of 2 to 10 digits: {total} coordinates, checksum {all}");
+}

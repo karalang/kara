@@ -1,0 +1,16 @@
+source = "kara-katas/leetcode/801-900/816-ambiguous-coordinates/bench/ambiguous_coordinates.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "unknown"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+note = ""
+extracted_src = "ee9bb204"
+model_rev = "583cfb0d"
+model_src = "ee9bb204"

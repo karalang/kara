@@ -1,0 +1,96 @@
+// LeetCode 816 — Ambiguous Coordinates, as iterators.
+//
+// Every candidate is a triple (cut, p, q): the comma after `cut` digits,
+// and a point after p digits of the left part and q of the right, or
+// none when p or q takes the whole part. One `filter_map` over all the
+// triples keeps those whose two halves are both numbers, by the ★ arm's
+// test. O(n^3).
+
+fn ambiguous_coordinates(s: String) -> Vec[String] {
+    let digits = s[1..s.len() - 1];
+    let n = digits.len();
+    (0..n * n * n)
+        .map(|code| (code / (n * n), code / n % n, code % n))
+        .filter(|(cut, p, q)| cut >= 1 and 1 <= p and p <= cut and 1 <= q and q <= n - cut)
+        .filter_map(|(cut, p, q)| {
+            let x = number(digits[0..cut], p)?;
+            let y = number(digits[cut..n], q)?;
+            Some(f"({x}, {y})")
+        })
+        .collect()
+}
+
+// The digits with a point after the first p of them, none if p is all,
+// if that is a number: no leading 0 unless the whole part is just "0",
+// and no trailing 0 after the point.
+fn number(part: Str, p: i64) -> Option[String] {
+    let whole = part[0..p];
+    let fraction = part[p..part.len()];
+    if whole.len() > 1 and whole.starts_with("0") or fraction.ends_with("0") {
+        None
+    } else if fraction.is_empty() {
+        Some(whole.to_string())
+    } else {
+        Some(f"{whole}.{fraction}")
+    }
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(s: String) {
+    let mut answer = ambiguous_coordinates(s.clone());
+    answer.sort();
+    let list = if answer.is_empty() { "".to_string() } else { f": {answer.join(" ")}" };
+    println(f"s = {s} -> {answer.len()}{list}");
+}
+
+// The number of coordinates and a checksum of them, sorted.
+fn summary(s: String) -> (i64, i64) {
+    let mut answer = ambiguous_coordinates(s);
+    answer.sort();
+    let mut check = 0;
+    for c in answer.iter() {
+        for b in c.bytes() {
+            check = (check * 131 + b as i64) % 1000000007;
+        }
+    }
+    (answer.len(), check)
+}
+
+fn main() {
+    show("(123)".to_string());
+    show("(0123)".to_string());
+    show("(00011)".to_string());
+    show("(100)".to_string());
+    show("(00)".to_string());
+    show("(000)".to_string());
+    show("(10)".to_string());
+    show("(1010)".to_string());
+    show("(0010)".to_string());
+    // LeetCode's longest, ten digits.
+    for s in ["(1234567891)", "(1000000000)", "(0000000001)", "(1010101010)"] {
+        let (count, check) = summary(s.to_string());
+        println(f"s = {s} -> {count}, checksum {check}");
+    }
+    let mut seed = 816;
+    let mut total = 0;
+    let mut all = 0;
+    for r in 0..300 {
+        let len = 2 + next_random(mut seed) % 9;
+        let mut s = "(".to_string();
+        for _ in 0..len {
+            let d = if next_random(mut seed) % (2 + r % 3) == 0 { 0 } else { next_random(mut seed) % 10 };
+            s.push_str(f"{d}");
+        }
+        s.push_str(")");
+        let (count, check) = summary(s);
+        total += count;
+        all = (all * 131 + check) % 1000000007;
+    }
+    println(f"300 random rounds of 2 to 10 digits: {total} coordinates, checksum {all}");
+}

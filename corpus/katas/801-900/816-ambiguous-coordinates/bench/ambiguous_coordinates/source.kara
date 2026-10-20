@@ -1,0 +1,81 @@
+// Benchmark for #816: Ambiguous Coordinates -- the ★ arm (every split and
+// every point).
+//
+// Strip the brackets, cut the digits in two at every place, and pair
+// every number the left part can spell with every number the right part
+// can. A part spells a number for each place to put a point, or none:
+// the whole part must not start with 0 unless it is just "0", and the
+// part after a point must not end with 0. O(n^3) candidates for n digits.
+
+fn ambiguous_coordinates(s: String) -> Vec[String] {
+    let digits = s[1..s.len() - 1];
+    let mut out: Vec[String] = Vec.new();
+    for cut in 1..digits.len() {
+        let lefts = numbers(digits[0..cut]);
+        let rights = numbers(digits[cut..digits.len()]);
+        for x in lefts.iter() {
+            for y in rights.iter() {
+                out.push(f"({x}, {y})");
+            }
+        }
+    }
+    out
+}
+// Every number a run of digits can spell with at most one point.
+fn numbers(part: Str) -> Vec[String] {
+    let mut found: Vec[String] = Vec.new();
+    for point in 1..part.len() + 1 {
+        let whole = part[0..point];
+        let fraction = part[point..part.len()];
+        if (whole == "0" or not whole.starts_with("0")) and not fraction.ends_with("0") {
+            if fraction.is_empty() {
+                found.push(whole.to_string());
+            } else {
+                found.push(f"{whole}.{fraction}");
+            }
+        }
+    }
+    found
+}
+
+// ---- benchmark --------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 strings of 10 digits (LeetCode's longest), a 0 one time in four,
+    // drawn once. Each round sets one digit of the next string afresh and
+    // lists its coordinates, folding the length of each into a checksum.
+    let count = 64;
+    let rounds = 400000;
+    let mut seed: i64 = 816;
+    let mut strings: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut digits: Vec[i64] = Vec.new();
+        for _ in 0..10 {
+            digits.push(if next_random(mut seed) % 4 == 0 { 0 } else { next_random(mut seed) % 10 });
+        }
+        strings.push(digits);
+    }
+    let mut total: i64 = 0;
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let at = next_random(mut seed) % 10;
+        strings[g][at] = if next_random(mut seed) % 4 == 0 { 0 } else { next_random(mut seed) % 10 };
+        let mut s = "(".to_string();
+        for d in strings[g].iter() {
+            s.push_str(f"{d}");
+        }
+        s.push_str(")");
+        let answer = ambiguous_coordinates(s);
+        total += answer.len();
+        for c in answer.iter() {
+            checksum = (checksum * 131 + c.len()) % 1000000007;
+        }
+    }
+    println(f"{rounds} rounds of 10 digits: {total} coordinates, checksum {checksum}");
+}

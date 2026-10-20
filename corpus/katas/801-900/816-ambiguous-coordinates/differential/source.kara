@@ -1,0 +1,327 @@
+// LeetCode #816: differential -- the four arms against the statement.
+//
+// Copies of the four arms, held to four properties on random digits,
+// against every way to put back a comma and points.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn ambiguous_coordinates_star(s: String) -> Vec[String] {
+    let digits = s[1..s.len() - 1];
+    let mut out: Vec[String] = Vec.new();
+    for cut in 1..digits.len() {
+        let lefts = numbers_star(digits[0..cut]);
+        let rights = numbers_star(digits[cut..digits.len()]);
+        for x in lefts.iter() {
+            for y in rights.iter() {
+                out.push(f"({x}, {y})");
+            }
+        }
+    }
+    out
+}
+
+// Every number a run of digits can spell with at most one point.
+fn numbers_star(part: Str) -> Vec[String] {
+    let mut found: Vec[String] = Vec.new();
+    for point in 1..part.len() + 1 {
+        let whole = part[0..point];
+        let fraction = part[point..part.len()];
+        if (whole == "0" or not whole.starts_with("0")) and not fraction.ends_with("0") {
+            if fraction.is_empty() {
+                found.push(whole.to_string());
+            } else {
+                found.push(f"{whole}.{fraction}");
+            }
+        }
+    }
+    found
+}
+
+// ---- rules arm ------------------------------------------------------
+
+fn ambiguous_coordinates_rules(s: String) -> Vec[String] {
+    let digits = s[1..s.len() - 1];
+    let mut out: Vec[String] = Vec.new();
+    for cut in 1..digits.len() {
+        let lefts = numbers_rules(digits[0..cut]);
+        let rights = numbers_rules(digits[cut..digits.len()]);
+        for x in lefts.iter() {
+            for y in rights.iter() {
+                out.push(f"({x}, {y})");
+            }
+        }
+    }
+    out
+}
+
+// Every number a run of digits can spell with at most one point.
+fn numbers_rules(part: Str) -> Vec[String] {
+    let n = part.len();
+    if n == 1 {
+        return vec![part.to_string()];
+    }
+    let lead = part.starts_with("0");
+    let trail = part.ends_with("0");
+    if lead and trail {
+        return Vec.new();
+    }
+    if lead {
+        return vec![f"0.{part[1..n]}"];
+    }
+    if trail {
+        return vec![part.to_string()];
+    }
+    let mut found = vec![part.to_string()];
+    for point in 1..n {
+        found.push(f"{part[0..point]}.{part[point..n]}");
+    }
+    found
+}
+
+// ---- shortest-form arm ----------------------------------------------
+
+fn ambiguous_coordinates_canon(s: String) -> Vec[String] {
+    let digits = s[1..s.len() - 1];
+    let n = digits.len();
+    let mut out: Vec[String] = Vec.new();
+    for cut in 1..n {
+        for p in 1..cut + 1 {
+            let x = with_point_canon(digits[0..cut], p);
+            if not prints_as_itself_canon(x) {
+                continue;
+            }
+            for q in 1..n - cut + 1 {
+                let y = with_point_canon(digits[cut..n], q);
+                if prints_as_itself_canon(y) {
+                    out.push(f"({x}, {y})");
+                }
+            }
+        }
+    }
+    out
+}
+
+// The digits with a point after the first p of them, none if p is all.
+fn with_point_canon(part: Str, p: i64) -> String {
+    if p == part.len() {
+        part.to_string()
+    } else {
+        f"{part[0..p]}.{part[p..part.len()]}"
+    }
+}
+
+// Whether a number written with at most one point is its own shortest
+// form.
+fn prints_as_itself_canon(text: String) -> bool {
+    let mut (n, k) = match text.find('.') {
+        Some(at) => (i64.parse(f"{text[0..at]}{text[at + 1..text.len()]}").unwrap(), text.len() - at - 1),
+        None => (i64.parse(text).unwrap(), 0),
+    };
+    while k > 0 and n % 10 == 0 {
+        n /= 10;
+        k -= 1;
+    }
+    let mut shortest = f"{n}";
+    while shortest.len() <= k {
+        shortest = f"0{shortest}";
+    }
+    if k > 0 {
+        let at = shortest.len() - k;
+        shortest = f"{shortest[0..at]}.{shortest[at..shortest.len()]}";
+    }
+    shortest == text
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn ambiguous_coordinates_iter(s: String) -> Vec[String] {
+    let digits = s[1..s.len() - 1];
+    let n = digits.len();
+    (0..n * n * n)
+        .map(|code| (code / (n * n), code / n % n, code % n))
+        .filter(|(cut, p, q)| cut >= 1 and 1 <= p and p <= cut and 1 <= q and q <= n - cut)
+        .filter_map(|(cut, p, q)| {
+            let x = number_iter(digits[0..cut], p)?;
+            let y = number_iter(digits[cut..n], q)?;
+            Some(f"({x}, {y})")
+        })
+        .collect()
+}
+
+// The digits with a point after the first p of them, none if p is all,
+// if that is a number: no leading 0 unless the whole part is just "0",
+// and no trailing 0 after the point.
+fn number_iter(part: Str, p: i64) -> Option[String] {
+    let whole = part[0..p];
+    let fraction = part[p..part.len()];
+    if whole.len() > 1 and whole.starts_with("0") or fraction.ends_with("0") {
+        None
+    } else if fraction.is_empty() {
+        Some(whole.to_string())
+    } else {
+        Some(f"{whole}.{fraction}")
+    }
+}
+
+// ---- the definition -------------------------------------------------------
+
+// The statement played out: put the comma in one gap between digits and
+// points in any set of the other gaps, and keep each string whose two
+// numbers could have been written: at most one point, digits on both
+// sides of it, no 0 leading a whole part longer than "0", and no 0
+// ending a fraction.
+fn coordinates_by_definition(digits: String) -> Vec[String] {
+    let n = digits.len();
+    let mut out: Vec[String] = Vec.new();
+    for comma in 1..n {
+        for points in 0..(1 << (n - 1)) {
+            if (points >> (comma - 1)) & 1 == 1 {
+                continue;
+            }
+            let mut x = "".to_string();
+            let mut y = "".to_string();
+            for k in 0..n {
+                let d = digits[k..k + 1];
+                if k < comma {
+                    x.push_str(d);
+                } else {
+                    y.push_str(d);
+                }
+                if k < n - 1 and (points >> k) & 1 == 1 {
+                    if k < comma {
+                        x.push_str(".");
+                    } else {
+                        y.push_str(".");
+                    }
+                }
+            }
+            if could_be_written(x) and could_be_written(y) {
+                out.push(f"({x}, {y})");
+            }
+        }
+    }
+    out
+}
+
+fn could_be_written(number: String) -> bool {
+    let pieces: Vec[Str] = number.split(".").collect();
+    if pieces.len() > 2 {
+        return false;
+    }
+    let whole = pieces[0];
+    if whole.len() > 1 and whole.starts_with("0") {
+        return false;
+    }
+    pieces.len() == 1 or not pieces[1].ends_with("0")
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, s: String) -> Vec[String] {
+    if which == 0 {
+        ambiguous_coordinates_star(s)
+    } else if which == 1 {
+        ambiguous_coordinates_rules(s)
+    } else if which == 2 {
+        ambiguous_coordinates_canon(s)
+    } else {
+        ambiguous_coordinates_iter(s)
+    }
+}
+
+// How many numbers a run of digits can spell, counted from its ends.
+fn spellings(part: Str) -> i64 {
+    let n = part.len();
+    let lead = part.starts_with("0");
+    let trail = part.ends_with("0");
+    if n == 1 {
+        1
+    } else if lead and trail {
+        0
+    } else if lead or trail {
+        1
+    } else {
+        n
+    }
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8160;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut empty = 0;
+    let mut most = 0;
+    for case in 0..cases {
+        // kind 0: any digits; kind 1: a 0 one time in two; kind 2: a 0
+        // four times in five; kind 3: only 0s and 1s.
+        let kind = case % 4;
+        let n = 2 + next_random(mut seed) % 9;
+        let mut digits = "".to_string();
+        for _ in 0..n {
+            let d = if kind == 0 {
+                next_random(mut seed) % 10
+            } else if kind == 1 {
+                if next_random(mut seed) % 2 == 0 { 0 } else { 1 + next_random(mut seed) % 9 }
+            } else if kind == 2 {
+                if next_random(mut seed) % 5 > 0 { 0 } else { 1 + next_random(mut seed) % 9 }
+            } else {
+                next_random(mut seed) % 2
+            };
+            digits.push_str(f"{d}");
+        }
+        let s = f"({digits})";
+        let mut want = coordinates_by_definition(digits.clone());
+        want.sort();
+        if want.is_empty() {
+            empty += 1;
+        }
+        if want.len() > most {
+            most = want.len();
+        }
+        let mut counted = 0;
+        for cut in 1..n {
+            counted += spellings(digits[0..cut]) * spellings(digits[cut..n]);
+        }
+        for which in 0..arms {
+            // 1: the statement's list.
+            // 2: each coordinate gives back the digits with its comma,
+            //    points and space taken out.
+            // 3: no coordinate twice.
+            // 4: as many as the parts' spellings multiply to.
+            let got = arm(which, s.clone());
+            let mut sorted = got.clone();
+            sorted.sort();
+            let mut gives_back = true;
+            let mut twice = false;
+            for k in 0..sorted.len() {
+                let c = ref sorted[k];
+                if c.replace("(", "").replace(")", "").replace(", ", "").replace(".", "") != digits {
+                    gives_back = false;
+                }
+                if k > 0 and sorted[k - 1] == c {
+                    twice = true;
+                }
+            }
+            let ok = [sorted == want, gives_back, not twice, got.len() == counted];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    fails[which] += 1;
+                    by_property[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases ({empty} with no coordinates, at most {most}), {checks} checks over {arms} arms: {total} failures");
+    println(f"by arm: star {fails[0]}, rules {fails[1]}, canon {fails[2]}, iter {fails[3]}");
+    println(f"by property: list {by_property[0]}, digits {by_property[1]}, once {by_property[2]}, count {by_property[3]}");
+}
