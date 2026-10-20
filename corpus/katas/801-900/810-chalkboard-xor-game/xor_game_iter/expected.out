@@ -1,0 +1,13 @@
+nums = [1, 1, 2] -> false
+nums = [0, 1] -> true
+nums = [1, 2, 3] -> true
+nums = [5] -> false
+nums = [0] -> true
+nums = [7, 7, 7] -> false
+nums = [3, 3] -> true
+nums = [1, 2, 4, 8] -> true
+nums = [1, 2, 3, 4, 5] -> false
+1000 numbers -> true
+999 numbers, XOR 15281 -> false
+999 numbers, XOR 0 -> true
+2000 random boards of 1 to 9 numbers: 1028 won by Alice, checksum 800313548

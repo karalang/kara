@@ -1,0 +1,78 @@
+// LeetCode 810 — Chalkboard XOR Game, the XOR by halves.
+//
+// The XOR of a stretch of the board is the XOR of its two halves, down to
+// a single number or none. Alice wins when the whole board's is 0 or its
+// count is even. O(n), O(log n) deep.
+fn xor_game(nums: Vec[i64]) -> bool {
+    xor_of(nums) == 0 or nums.len() % 2 == 0
+}
+
+fn xor_of(part: Slice[i64]) -> i64 {
+    if part.len() == 0 {
+        return 0;
+    }
+    if part.len() == 1 {
+        return part[0];
+    }
+    let mid = part.len() / 2;
+    xor_of(part[0..mid]) ^ xor_of(part[mid..part.len()])
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(nums: Vec[i64]) {
+    println(f"nums = {nums} -> {xor_game(nums)}");
+}
+
+fn main() {
+    show(vec![1, 1, 2]);
+    show(vec![0, 1]);
+    show(vec![1, 2, 3]);
+    show(vec![5]);
+    show(vec![0]);
+    show(vec![7, 7, 7]);
+    show(vec![3, 3]);
+    show(vec![1, 2, 4, 8]);
+    show(vec![1, 2, 3, 4, 5]);
+    // LeetCode's largest: 1000 numbers below 65536; the first 999 of
+    // them, whose XOR is not 0; and 998 of them with their XOR added.
+    let mut big: Vec[i64] = Vec.new();
+    for i in 0..1000 {
+        big.push(i * 7919 % 65536);
+    }
+    println(f"1000 numbers -> {xor_game(big)}");
+    let mut odd: Vec[i64] = Vec.new();
+    let mut x = 0;
+    for i in 0..999 {
+        odd.push(big[i]);
+        x ^= big[i];
+    }
+    println(f"999 numbers, XOR {x} -> {xor_game(odd)}");
+    let mut zero: Vec[i64] = Vec.new();
+    x = 0;
+    for i in 0..998 {
+        zero.push(big[i]);
+        x ^= big[i];
+    }
+    zero.push(x);
+    println(f"999 numbers, XOR 0 -> {xor_game(zero)}");
+    let mut seed = 810;
+    let mut wins = 0;
+    let mut check = 0;
+    for r in 0..2000 {
+        let n = 1 + next_random(mut seed) % 9;
+        let mut nums: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            nums.push(next_random(mut seed) % 8);
+        }
+        let win = if xor_game(nums) { 1 } else { 0 };
+        wins += win;
+        check = (check * 131 + win * (n + 1) + r) % 1000000007;
+    }
+    println(f"2000 random boards of 1 to 9 numbers: {wins} won by Alice, checksum {check}");
+}

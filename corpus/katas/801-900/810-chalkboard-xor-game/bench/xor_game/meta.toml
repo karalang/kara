@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/810-chalkboard-xor-game/bench/xor_game.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "f6f2efb14"
+extracted_src = "9fc14dfc"
+model_rev = "583cfb0d"
+model_src = "9fc14dfc"

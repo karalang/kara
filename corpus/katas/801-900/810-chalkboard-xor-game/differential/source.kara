@@ -1,0 +1,218 @@
+// LeetCode #810: differential -- the four arms against the game itself.
+//
+// Copies of the four arms, held to four properties on random boards,
+// against the game played out over every board it can reach.
+
+// ---- ★ arm ----------------------------------------------------------
+
+fn xor_game_star(nums: Vec[i64]) -> bool {
+    let mut x = 0;
+    for i in 0..nums.len() {
+        x ^= nums[i];
+    }
+    x == 0 or nums.len() % 2 == 0
+}
+
+// ---- bit-count arm --------------------------------------------------
+
+fn xor_game_bits(nums: Vec[i64]) -> bool {
+    if nums.len() % 2 == 0 {
+        return true;
+    }
+    let mut ones = [0; 16];
+    for v in nums.iter() {
+        for b in 0..16 {
+            if (*v >> b) & 1 == 1 {
+                ones[b] += 1;
+            }
+        }
+    }
+    ones.iter().all(|c| c % 2 == 0)
+}
+
+// ---- recursive arm --------------------------------------------------
+
+fn xor_game_recursive(nums: Vec[i64]) -> bool {
+    xor_of_recursive(nums) == 0 or nums.len() % 2 == 0
+}
+
+fn xor_of_recursive(part: Slice[i64]) -> i64 {
+    if part.len() == 0 {
+        return 0;
+    }
+    if part.len() == 1 {
+        return part[0];
+    }
+    let mid = part.len() / 2;
+    xor_of_recursive(part[0..mid]) ^ xor_of_recursive(part[mid..part.len()])
+}
+
+// ---- iterator arm ---------------------------------------------------
+
+fn xor_game_iter(nums: Vec[i64]) -> bool {
+    nums.iter().fold(0, |x, v| x ^ *v) == 0 or nums.len() % 2 == 0
+}
+
+// ---- the definition -------------------------------------------------------
+
+// The game played out: `wins(mask)` says whether the player to move wins
+// with the numbers in `mask` left on the board. A turn that starts at XOR
+// 0 is a win; otherwise the player wins by erasing a number that does not
+// leave 0 and leaves the other player a losing board. Memoized over the
+// 2^n boards, 0 unknown, 1 a win, 2 a loss.
+fn wins(nums: Vec[i64], mask: i64, memo: mut ref Vec[i64]) -> bool {
+    if memo[mask] != 0 {
+        return memo[mask] == 1;
+    }
+    let mut x = 0;
+    for i in 0..nums.len() {
+        if (mask >> i) & 1 == 1 {
+            x ^= nums[i];
+        }
+    }
+    let mut win = x == 0;
+    let mut i = 0;
+    while not win and i < nums.len() {
+        if (mask >> i) & 1 == 1 and nums[i] != x and not wins(nums, mask ^ (1 << i), mut memo) {
+            win = true;
+        }
+        i += 1;
+    }
+    memo[mask] = if win { 1 } else { 2 };
+    win
+}
+
+fn alice_wins(nums: Vec[i64]) -> bool {
+    let full = (1 << nums.len()) - 1;
+    let mut memo = Vec.filled(full + 1, 0);
+    wins(nums, full, mut memo)
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, nums: Vec[i64]) -> bool {
+    if which == 0 {
+        xor_game_star(nums)
+    } else if which == 1 {
+        xor_game_bits(nums)
+    } else if which == 2 {
+        xor_game_recursive(nums)
+    } else {
+        xor_game_iter(nums)
+    }
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8100;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut won = 0;
+    for case in 0..cases {
+        // kind 0: 1 to 12 numbers below 8; kind 1: below 4, so that the
+        // XOR is often 0; kind 2: multiples of 16384, so that the top bit
+        // of a number below 65536 decides; kind 3: one number repeated
+        // with one other, so that most moves leave 0.
+        let kind = case % 4;
+        let n = 1 + next_random(mut seed) % 12;
+        let mut nums: Vec[i64] = Vec.new();
+        let common = next_random(mut seed) % 8;
+        for i in 0..n {
+            let v = if kind == 0 {
+                next_random(mut seed) % 8
+            } else if kind == 1 {
+                next_random(mut seed) % 4
+            } else if kind == 2 {
+                next_random(mut seed) % 4 * 16384
+            } else if i == 0 {
+                next_random(mut seed) % 8
+            } else {
+                common
+            };
+            nums.push(v);
+        }
+        let truth = alice_wins(nums);
+        if truth {
+            won += 1;
+        }
+        // P1: every arm gives the game's answer.
+        for a in 0..arms {
+            checks += 1;
+            if arm(a, nums) != truth {
+                fails[a] += 1;
+                by_property[0] += 1;
+                if fails[a] <= 3 {
+                    println(f"P1 arm {a} nums {nums}: got {arm(a, nums)}, game {truth}");
+                }
+            }
+        }
+        // P2: the order of the board does not matter; reversed and
+        // rotated by one, every arm gives the same answer.
+        let mut reversed = nums.clone();
+        reversed.reverse();
+        let mut rotated: Vec[i64] = Vec.new();
+        for i in 1..n {
+            rotated.push(nums[i]);
+        }
+        rotated.push(nums[0]);
+        for a in 0..arms {
+            checks += 1;
+            if arm(a, reversed) != truth or arm(a, rotated) != truth {
+                fails[a] += 1;
+                by_property[1] += 1;
+                if fails[a] <= 3 {
+                    println(f"P2 arm {a} nums {nums}: reversed {arm(a, reversed)}, rotated {arm(a, rotated)}, game {truth}");
+                }
+            }
+        }
+        // P3: two more of the same number change neither the XOR nor the
+        // count's parity, and so not the answer.
+        let mut padded = nums.clone();
+        let extra = next_random(mut seed) % 8;
+        padded.push(extra);
+        padded.push(extra);
+        for a in 0..arms {
+            checks += 1;
+            if arm(a, padded) != truth {
+                fails[a] += 1;
+                by_property[2] += 1;
+                if fails[a] <= 3 {
+                    println(f"P3 arm {a} nums {padded}: got {arm(a, padded)}, game {truth}");
+                }
+            }
+        }
+        // P4: one more number makes an even board a win, and an odd board
+        // one Alice wins just when its XOR is that number.
+        let mut grown = nums.clone();
+        let added = next_random(mut seed) % 8;
+        grown.push(added);
+        let grown_truth = alice_wins(grown);
+        if n % 2 == 1 and not grown_truth {
+            println(f"P4 game nums {grown}: even board lost");
+        }
+        for a in 0..arms {
+            checks += 1;
+            if arm(a, grown) != grown_truth {
+                fails[a] += 1;
+                by_property[3] += 1;
+                if fails[a] <= 3 {
+                    println(f"P4 arm {a} nums {grown}: got {arm(a, grown)}, game {grown_truth}");
+                }
+            }
+        }
+    }
+    for q in 0..4 {
+        if by_property[q] > 0 {
+            println(f"P{q + 1}: {by_property[q]} failures");
+        }
+    }
+    let failures = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases ({won} won by Alice), {arms} arms, {checks} checks, {failures} failures");
+}
