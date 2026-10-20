@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 608 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 293 |
+| missing-feature | 298 |
 | codegen-gap | 277 |
 | false-positive | 251 |
 | other | 185 |
@@ -110,17 +110,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2969 |
-| interp | 987 |
-| typecheck | 506 |
-| ownership | 123 |
+| codegen | 2970 |
+| interp | 988 |
+| typecheck | 507 |
+| ownership | 124 |
 | other | 121 |
+| runtime | 81 |
 | cli | 81 |
-| runtime | 80 |
 | parser | 74 |
 | autopar | 59 |
 | resolver | 48 |
-| effect | 37 |
+| effect | 38 |
 | lexer | 12 |
 ## Current state
 
@@ -180,6 +180,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-4 | 2026-10-20 | interp+codegen | low | The MIR backends accept calling a `MutFn` through a bare (borrowed) parameter, `fn call(f: MutFn()) { f(); }`; `karac check` refuses it since 6b623ebd27, so only programs run without check reach this | — |
 | B-2026-10-20-5 | 2026-10-20 | parser | medium | The `matches!(x, P)` diagnostic's machine-applicable fix rewrites it to `matches(x, P)`, a name that does not exist: `karac fix` applies it and the file then fails with "undefined name 'matches'" | — |
 | B-2026-10-20-6 | 2026-10-20 | typecheck | low | A `Vec` literal of string literals passed to a method whose slot is `Vec[Str]` is typed `Vec[String]`: `v.extend(vec!["c", "d"])` on a `Vec[Str]` is refused with "expected 'StringSlice', found 'String'" (sibling of B-2026-10-20-1) | — |
+| B-2026-10-20-7 | 2026-10-20 | effect | medium | Providers (§14.3, §14.6): effect inference must decide exactly which functions take a hidden provider parameter for each provider-rooted resource, read or write, through callees and recursion, and report `E_NO_PROVIDER` at a call nothing supplies | — |
+| B-2026-10-20-8 | 2026-10-20 | typecheck+ownership | medium | Providers (§14.1, §14.2, §14.4, §14.5, §14.9) in `karac check`: resource declarations and bounds, `R.m()` resolved against the bounds only, receiver-to-verb rule, `with_provider` / `providers {} in {}` / `#[with_provider]` typing, escape through the view rules naming `R`, `CrossTask` on shared providers; migrate the 8 trait-less corpus provider programs | — |
+| B-2026-10-20-9 | 2026-10-20 | interp | medium | Providers (§14.3, §14.4, §14.8) in the MIR builder and interpreter: hidden `ref P` / `mut ref P` parameters, specialisation of each function per provider type, `with_provider` owning and dropping `p`, `providers {} in {}` evaluate-then-nest, `#[with_provider]` on tests | — |
+| B-2026-10-20-10 | 2026-10-20 | codegen | medium | Providers on mir-llvm and `karac build --mir`: compile the specialised instances and hidden parameters §14.3 introduces, with ASAN-clean provider drops at `with_provider` exit | — |
+| B-2026-10-20-11 | 2026-10-20 | runtime | medium | Providers (§14.7): library traits and static default providers for `Env`, `Clock` and `RandomSource` (now bare `effect resource` declarations in runtime/stdlib/wasi.kara), so a program can override them; migrate the 18 corpus programs that override one to implement the trait | — |
 
 ### Relocated
 
