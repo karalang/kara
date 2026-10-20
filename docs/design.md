@@ -60,7 +60,7 @@ Features outside the v1 core return as named tracks. A track enters this specifi
 
 | Track | Brings | When |
 |---|---|---|
-| **Services (M4a)** | Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, providers for test doubles, effect variables for stored callbacks, `dyn`, and effect groups if the services programs show they are needed. Gate: the services programs in the corpus, plus a load test of connections and tail latency. Blocking-I/O services already run in v1. | Before the v1 release |
+| **Services (M4a)** | Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, effect variables for stored callbacks, `dyn`, and effect groups if the services programs show they are needed. Gate: the services programs in the corpus, plus a load test of connections and tail latency. Blocking-I/O services already run in v1. | Before the v1 release |
 | **Automatic parallelism (M4b)** | Loop and statement auto-parallelism as compiler passes under the proof bar, and `seq {}` to keep code in order. Gate: measured speedup with zero output changes across the whole corpus. | Before the v1 release |
 | **Data (M4c)** | The `kara-data` package: Tensor, Column, DataFrame, statistics, autograd, Arrow. | After v1 |
 | **Later tracks** | Systems (profiles, interrupts, volatile access, inline assembly, linker control, exported C ABI, SIMD), layout blocks, verification (predicates on distinct types, contracts), effect expressiveness (other named effect variables, parameterized resources), interactive (REPL, notebooks, playground), web (browser glue, component model), `comptime`, GPU, self-hosting. | Ordered in the roadmap |
@@ -5547,9 +5547,11 @@ The diagnostic points at the impl method, names the extra effect and quotes the 
 
 ### Deferred
 
+Providers (`effect resource R: Trait`, `with_provider`, `providers {} in {}`, `#[with_provider]`) are in v1, brought forward from the services track on 2026-10-20: [core-semantics.md §14](core-semantics.md). Overriding `FileSystem`, `Network` and the standard streams stays with the services track.
+
 These return with later tracks:
 - effect groups, `stable` groups and effect semver rules; parameterized resources (`UserDb[id]`) with `alias` and `independent` ([effects expressiveness](deferred.md#effects-expressiveness));
-- providers, `with_provider` and `providers {} in {}`; `suspends`; effect variables for stored callbacks (`with E`) ([M4a services](deferred.md#m4a-services));
+- `suspends`; effect variables for stored callbacks (`with E`) ([M4a services](deferred.md#m4a-services));
 - the web and host effect vocabulary ([web](deferred.md#web));
 - `seq {}` ([M4b auto-par](deferred.md#m4b-auto-par));
 - trait-level ceilings and `dyn Trait` effects ([`dyn`](deferred.md#dyn));

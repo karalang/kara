@@ -664,6 +664,30 @@ Plain `wasm32` targets stay.
 
 ---
 
+## 14. Providers (brought forward from M4a, 2026-10-20)
+
+Gowtham moved providers before M3 on 2026-10-20 ("Providers first") and chose their mechanism the same day (review-thread card, "Hidden parameter"; the options are in the shared folder's `review/providers-v2-design.md`). The surface is the one `deferred.md` describes. The mechanism replaces its counted handle and vtable, which v2 cannot have (§6, §13).
+
+**14.1 Declarations.** `effect resource R: T1 + T2;` declares a provider-rooted resource whose providers must implement every bound. `effect resource R;` with no bound is annotation-only: it takes part in effects and conflicts but cannot be bound with `with_provider` (an error naming the missing bound). Program-rooted resources (`Env`, `Clock`, `RandomSource`) are declared by the library with a library trait each, and have a default provider (14.7).
+
+**14.2 Calls on a resource.** `R.m(args)` calls the trait method `m` on the provider bound to `R`. The receiver decides the verb: a bare `self` is `reads(R)`, a `mut ref self` is `writes(R)`, and an `own self` method cannot be called through a resource (a provider is lent, never given). A method that no bound declares is an error at the call, even when the provider type in some binding has it: the bound is the interface, so a program is checked once, not per provider.
+
+**14.3 The provider is a hidden borrowed parameter.** Every function whose effects include `reads(R)` or `writes(R)` takes one hidden parameter for `R`: `ref P` if it only reads, `mut ref P` if it writes. A function that reaches `R` only through callees takes it too, and passes it on. Private functions get this from effect inference (§12); a public function's declared effects are part of its calling convention, so an undeclared `R` is the usual effect mismatch. Each function is specialised for each provider type the program binds to `R`, as a generic is (§12, "computed on the monomorphised instance"). Taking such a function as a value captures the provider in scope, as a closure would (14.5).
+
+**14.4 `with_provider[R](p, f)`.** `p` moves into the call, which owns it. `f` is a non-escaping closure. Inside `f`, `R` is bound to `p`, borrowed as 14.3 says, and the call supplies the hidden argument, so `R` is not among the enclosing function's effects. The value of the call is `f`'s value. `p` drops when the call returns, after `f`'s value is computed (§7). `P` must implement every bound of `R`. An inner `with_provider[R]` shadows an outer one for its extent.
+
+**14.5 A provider cannot leave its scope.** A closure that uses `R` captures the hidden reference, which is a view of `p` (§5). So returning it, storing it, sending it, or handing it to a task that may outlive the call is the §5.7 / §9.1 error, and the diagnostic names `R` and the `with_provider` that bound it. Plain data computed from `R` leaves freely.
+
+**14.6 No provider is a compile error.** A call that needs `R` where nothing supplies it is an error at that call (`E_NO_PROVIDER`), naming `R` and suggesting `with_provider[R]` or declaring the effect. This replaces `deferred.md`'s runtime panic. For a provider-rooted `R`, `main` and a `test` body supply nothing unless they enter a `with_provider[R]` (or `#[with_provider]`, 14.8). A function value whose type declares no effects has every effect (§12 default 1) except provider-rooted resources: by 14.5 no such value can carry a provider, so a call through it never needs one.
+
+**14.7 Program-rooted resources.** `Env`, `Clock` and `RandomSource` have a default provider, a static value of a library type, in scope everywhere. A program that never overrides one compiles every function against that default only and pays nothing. Inside `with_provider[Env](fake, || ..)` the override is an ordinary provider: a closure that uses `Env` there captures `ref fake` and cannot escape (14.5). Overriding `FileSystem`, `Network` and the standard streams stays in M4a.
+
+**14.8 Sugar.** `providers { R1 => e1, R2 => e2 } in { body }` evaluates `e1`, `e2`, ... in order (a `?` among them propagates), then nests `with_provider[R1]` outermost; it is an expression whose value is `body`'s. `#[with_provider(R, ctor)]` on a `test` runs the body inside `with_provider[R](ctor(), || body)`, with a fresh provider for each test.
+
+**14.9 Concurrency.** Branches and tasks inside the call borrow the provider like any captured place. Several that only read `R` share a `ref P`, which requires `P` to be `CrossTask` (`E_NOT_CROSS_TASK` at the `with_provider`). A branch that writes `R` conflicts with any other that uses it (§11.2), with `R` as the place.
+
+---
+
 ## Appendix A — Where legacy differs (measured on the pins, `karac run --interp`)
 
 | Pin | v2 (this file) | Legacy today |

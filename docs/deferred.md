@@ -27,7 +27,7 @@ Each track opens with what it brings. Within a track, each feature has its own s
 
 ## M4a services
 
-Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, providers for test doubles, effect variables for stored callbacks, and effect groups if the services programs show they are needed. The track comes before the v1 release. Its gate is the services programs in the corpus plus a load test of connections and tail latency; blocking-I/O services already run in v1.
+Coroutines and the `suspends` effect, non-blocking networking, one scheduler and reactor, cooperative cancellation and deadlines, channel `select` with timeouts, task-level failure isolation, the provider work core-semantics §14 leaves out (overriding `FileSystem`, `Network` and the standard streams; `#[test(requires: ..)]`), effect variables for stored callbacks, and effect groups if the services programs show they are needed. The track comes before the v1 release. Its gate is the services programs in the corpus plus a load test of connections and tail latency; blocking-I/O services already run in v1.
 
 ### Execution Effects (`blocks` / `suspends`)
 
@@ -516,7 +516,7 @@ Task spawn where the task's live range outlasts the spawning function. Kāra's v
 
 ### Provider-Rooted Resources (trait-based injection)
 
-> Providers return with this track, redesigned without an implicit shared handle and without `dyn` dispatch ([design.md §12](design.md#deferred)). The handle and vtable mechanics below are the previous design and are reworked when the track returns.
+> **Superseded for v1 (2026-10-20).** Providers were brought forward to v1 and their rules are now [core-semantics.md §14](core-semantics.md): the provider is a hidden borrowed parameter, specialised per provider type, so there is no shared handle, no vtable and no per-task provider stack, and a missing provider is a compile error rather than the runtime panic below. Trait-less provider use is not v1: a resource needs a trait bound to be bound. This section stays as the record of the earlier design and of the parts still on this track (`#[test(requires: ..)]`, deterministic-replay tooling, overriding `FileSystem`, `Network` and the standard streams).
 
 Resources are backed by swappable trait implementations. No algebraic effect handlers:
 
