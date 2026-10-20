@@ -1,0 +1,4986 @@
+// mini_intervaltree: intervaltree 3.1.0, Chaim Halbert's mutable,
+// self-balancing interval tree, as genome annotation lookups, calendars,
+// IP allowlists and media timelines in Python use it. It reads the job
+// list from data/jobs.tsv: command traces that drive IntervalTree and
+// Interval through their API, and four programs built on them.
+//
+// The tree is intervaltree's: AVL-balanced nodes, each holding the
+// intervals that contain its center point, with a SortedDict of interval
+// boundaries beside it. An IntervalTree is a set, so every set of
+// intervals prints sorted, in Interval's own order.
+//
+// Python's exceptions are Exc values: the class name and str(exc).
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+// An interval's data: None, an int or a str.
+#[derive(Clone, PartialEq)]
+enum Data {
+    Nil,
+    Int(i64),
+    Text(String),
+}
+
+fn data_str(d: ref Data) -> String {
+    match d {
+        Data.Nil => "None".to_string(),
+        Data.Int(n) => f"{n}",
+        Data.Text(ref s) => s.clone(),
+    }
+}
+
+fn data_repr(d: ref Data) -> String {
+    match d {
+        Data.Nil => "None".to_string(),
+        Data.Int(n) => f"{n}",
+        Data.Text(ref s) => str_repr(s),
+    }
+}
+
+// Where a type's name falls among NoneType, int and str: what
+// Interval.__cmp__ compares when the data themselves cannot be.
+fn data_rank(d: ref Data) -> i64 {
+    match d {
+        Data.Nil => 0,
+        Data.Int(_) => 1,
+        Data.Text(_) => 2,
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct Interval {
+    begin: i64,
+    end: i64,
+    data: Data,
+}
+
+fn ivl(begin: i64, end: i64, data: own Data) -> Interval {
+    Interval { begin: begin, end: end, data: data }
+}
+
+impl Interval {
+    fn contains_point(ref self, p: i64) -> bool {
+        self.begin <= p and p < self.end
+    }
+
+    fn overlaps_range(ref self, begin: i64, end: i64) -> bool {
+        begin < self.end and end > self.begin
+    }
+
+    fn is_null(ref self) -> bool {
+        self.begin >= self.end
+    }
+
+    fn length(ref self) -> i64 {
+        if self.is_null() { 0 } else { self.end - self.begin }
+    }
+
+    fn range_matches(ref self, other: ref Interval) -> bool {
+        self.begin == other.begin and self.end == other.end
+    }
+
+    fn contains_interval(ref self, other: ref Interval) -> bool {
+        self.begin <= other.begin and self.end >= other.end
+    }
+
+    fn repr(ref self) -> String {
+        match self.data {
+            Data.Nil => f"Interval({self.begin}, {self.end})",
+            _ => f"Interval({self.begin}, {self.end}, {data_repr(self.data)})",
+        }
+    }
+}
+
+// Interval.__cmp__: the range, then the data, then the data's type name.
+fn iv_cmp(a: ref Interval, b: ref Interval) -> i64 {
+    if a.begin != b.begin {
+        return if a.begin < b.begin { -1 } else { 1 };
+    }
+    if a.end != b.end {
+        return if a.end < b.end { -1 } else { 1 };
+    }
+    if a.data == b.data {
+        return 0;
+    }
+    let ra = data_rank(a.data);
+    let rb = data_rank(b.data);
+    if ra != rb {
+        return if ra < rb { -1 } else { 1 };
+    }
+    match a.data {
+        Data.Int(x) => match b.data {
+            Data.Int(y) => if x < y { -1 } else { 1 },
+            _ => 0,
+        },
+        Data.Text(ref x) => match b.data {
+            Data.Text(ref y) => if x < y { -1 } else { 1 },
+            _ => 0,
+        },
+        Data.Nil => 0,
+    }
+}
+
+// sorted(intervals).
+fn sort_ivs(v: ref Vec[Interval]) -> Vec[Interval] {
+    let mut keyed: Vec[(i64, i64, i64, i64, String, i64)] = Vec.new();
+    let mut i = 0;
+    while i < v.len() {
+        let iv = v[i].clone();
+        let (n, s) = match iv.data {
+            Data.Int(x) => (x, "".to_string()),
+            Data.Text(ref t) => (0, t.clone()),
+            Data.Nil => (0, "".to_string()),
+        };
+        keyed.push((iv.begin, iv.end, data_rank(iv.data), n, s, i));
+        i += 1;
+    }
+    keyed.sort();
+    let mut out: Vec[Interval] = Vec.new();
+    for k in keyed {
+        out.push(v[k.5].clone());
+    }
+    out
+}
+
+fn ivs_repr(v: ref Vec[Interval]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for iv in sort_ivs(v) {
+        parts.push(iv.repr());
+    }
+    f"[{parts.join(", ")}]"
+}
+
+fn has_iv(v: ref Vec[Interval], iv: ref Interval) -> bool {
+    for x in v {
+        if x == iv {
+            return true;
+        }
+    }
+    false
+}
+
+// set.add.
+fn set_add(v: mut ref Vec[Interval], iv: ref Interval) {
+    if not has_iv(v, iv) {
+        v.push(iv.clone());
+    }
+}
+
+// set.remove: whether it was there.
+fn set_remove(v: mut ref Vec[Interval], iv: ref Interval) -> bool {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == iv {
+            v.remove(i);
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn same_set(a: ref Vec[Interval], b: ref Vec[Interval]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for x in a {
+        if not has_iv(b, x) {
+            return false;
+        }
+    }
+    true
+}
+
+fn null_error(iv: ref Interval) -> Exc {
+    exc("ValueError", f"IntervalTree: Null Interval objects not allowed in IntervalTree: {iv.repr()}")
+}
+
+// --------------------------------------------- Interval with an argument
+
+// The `other` of Interval's methods: a point or an interval.
+#[derive(Clone)]
+enum Other {
+    Point(i64),
+    Iv(Interval),
+}
+
+fn compare_null(a: ref Interval, b: ref Other) -> Result[(), Exc] {
+    let bad = exc("ValueError", "Cannot compare null Intervals!".to_string());
+    if a.is_null() {
+        return Err(bad);
+    }
+    if let Other.Iv(ref o) = b {
+        if o.is_null() {
+            return Err(bad);
+        }
+    }
+    Ok(())
+}
+
+fn arg_overlaps(a: ref Interval, b: ref Other) -> bool {
+    match b {
+        Other.Point(p) => a.contains_point(p),
+        Other.Iv(ref o) => a.overlaps_range(o.begin, o.end),
+    }
+}
+
+fn no_begin() -> Exc {
+    exc("AttributeError", "'int' object has no attribute 'begin'".to_string())
+}
+
+fn max_i(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn min_i(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn iv_op(op: ref String, a: ref Interval, b: ref Option[Other]) -> Result[String, Exc] {
+    if op == "length" {
+        return Ok(f"{a.length()}");
+    }
+    if op == "is_null" {
+        return Ok(bool_repr(a.is_null()));
+    }
+    if op == "repr" {
+        return Ok(a.repr());
+    }
+    let other = match b {
+        Some(ref x) => x.clone(),
+        None => Other.Point(0),
+    };
+    if op == "overlaps" {
+        return Ok(bool_repr(arg_overlaps(a, other)));
+    }
+    if op == "overlap_size" {
+        if not arg_overlaps(a, other) {
+            return Ok("0".to_string());
+        }
+        return match other {
+            Other.Iv(ref o) => Ok(f"{min_i(a.end, o.end) - max_i(a.begin, o.begin)}"),
+            Other.Point(_) => Err(no_begin()),
+        };
+    }
+    if op == "distance_to" {
+        if arg_overlaps(a, other) {
+            return Ok("0".to_string());
+        }
+        let d = match other {
+            Other.Iv(ref o) => if a.begin < o.begin { o.begin - a.end } else { a.begin - o.end },
+            Other.Point(p) => if a.end <= p { p - a.end } else { a.begin - p },
+        };
+        return Ok(f"{d}");
+    }
+    if op == "contains_point" {
+        return match other {
+            Other.Point(p) => Ok(bool_repr(a.contains_point(p))),
+            Other.Iv(_) => Ok(bool_repr(false)),
+        };
+    }
+    if op == "contains_interval" or op == "range_matches" or op == "==" {
+        return match other {
+            Other.Iv(ref o) => {
+                let r = if op == "contains_interval" {
+                    a.contains_interval(o)
+                } else if op == "range_matches" {
+                    a.range_matches(o)
+                } else {
+                    a == o
+                };
+                Ok(bool_repr(r))
+            }
+            Other.Point(_) => Ok(bool_repr(false)),
+        };
+    }
+    if op == "lt" or op == "le" or op == "gt" or op == "ge" {
+        compare_null(a, other)?;
+        let r = match other {
+            Other.Point(p) => {
+                if op == "lt" {
+                    a.end <= p
+                } else if op == "le" {
+                    a.end <= p
+                } else if op == "gt" {
+                    a.begin > p
+                } else {
+                    a.begin >= p
+                }
+            }
+            Other.Iv(ref o) => {
+                if op == "lt" {
+                    a.end <= o.begin
+                } else if op == "le" {
+                    a.end <= o.end
+                } else if op == "gt" {
+                    a.begin >= o.end
+                } else {
+                    a.begin >= o.begin
+                }
+            }
+        };
+        return Ok(bool_repr(r));
+    }
+    // < and >: __cmp__, where a point compares as the tuple (p,).
+    let c = match other {
+        Other.Iv(ref o) => iv_cmp(a, o),
+        Other.Point(p) => if a.begin < p { -1 } else { 1 },
+    };
+    Ok(bool_repr(if op == "<" { c < 0 } else { c > 0 }))
+}
+
+// --------------------------------------------------------------- Node
+
+// intervaltree.node.Node. The nodes live in the tree's `nodes`, and a
+// node is its index there; -1 is None.
+struct Node {
+    x: i64,
+    s: Vec[Interval],
+    left: i64,
+    right: i64,
+    depth: i64,
+    balance: i64,
+}
+
+struct IntervalTree {
+    nodes: Vec[Node],
+    top: i64,
+    all: Vec[Interval],
+    bounds: Vec[i64],
+    counts: Map[i64, i64],
+}
+
+impl IntervalTree {
+    fn child(ref self, n: i64, right: bool) -> i64 {
+        if right { self.nodes[n].right } else { self.nodes[n].left }
+    }
+
+    fn set_child(mut ref self, n: i64, right: bool, c: i64) {
+        if right {
+            self.nodes[n].right = c;
+        } else {
+            self.nodes[n].left = c;
+        }
+    }
+
+    // Node(x_center, s_center): a leaf, balanced as __init__ leaves it.
+    fn new_node(mut ref self, x: i64, s: own Vec[Interval]) -> i64 {
+        self.nodes.push(Node { x: x, s: s, left: -1, right: -1, depth: 0, balance: 0 });
+        let n = self.nodes.len() - 1;
+        self.refresh_balance(n);
+        n
+    }
+
+    fn depth_of(ref self, n: i64) -> i64 {
+        if n < 0 { 0 } else { self.nodes[n].depth }
+    }
+
+    fn refresh_balance(mut ref self, n: i64) {
+        let l = self.depth_of(self.nodes[n].left);
+        let r = self.depth_of(self.nodes[n].right);
+        self.nodes[n].depth = 1 + max_i(l, r);
+        self.nodes[n].balance = r - l;
+    }
+
+    fn center_hit(ref self, n: i64, iv: ref Interval) -> bool {
+        iv.contains_point(self.nodes[n].x)
+    }
+
+    fn from_sorted(mut ref self, ivs: ref Vec[Interval]) -> i64 {
+        if ivs.len() == 0 {
+            return -1;
+        }
+        let x = ivs[ivs.len() / 2].begin;
+        let mut center: Vec[Interval] = Vec.new();
+        let mut left: Vec[Interval] = Vec.new();
+        let mut right: Vec[Interval] = Vec.new();
+        for k in ivs {
+            if k.end <= x {
+                left.push(k.clone());
+            } else if k.begin > x {
+                right.push(k.clone());
+            } else {
+                set_add(mut center, k);
+            }
+        }
+        let n = self.new_node(x, center);
+        let l = self.from_sorted(left);
+        let r = self.from_sorted(right);
+        self.nodes[n].left = l;
+        self.nodes[n].right = r;
+        self.rotate(n)
+    }
+
+    fn rotate(mut ref self, n: i64) -> i64 {
+        self.refresh_balance(n);
+        let bal = self.nodes[n].balance;
+        if bal < 2 and bal > -2 {
+            return n;
+        }
+        let my_heavy = bal > 0;
+        let c = self.child(n, my_heavy);
+        let child_heavy = self.nodes[c].balance > 0;
+        if my_heavy == child_heavy or self.nodes[c].balance == 0 {
+            self.srotate(n)
+        } else {
+            self.drotate(n)
+        }
+    }
+
+    fn srotate(mut ref self, n: i64) -> i64 {
+        let heavy = self.nodes[n].balance > 0;
+        let light = not heavy;
+        let save = self.child(n, heavy);
+        let moved = self.child(save, light);
+        self.set_child(n, heavy, moved);
+        let r = self.rotate(n);
+        self.set_child(save, light, r);
+        let lighter = self.child(save, light);
+        let mut promotees: Vec[Interval] = Vec.new();
+        for iv in self.nodes[lighter].s.clone() {
+            if self.center_hit(save, iv) {
+                promotees.push(iv.clone());
+            }
+        }
+        if promotees.len() > 0 {
+            for iv in promotees {
+                let c = self.child(save, light);
+                let mut done = false;
+                let next = match self.remove_helper(c, iv, mut done, true) {
+                    Ok(m) => m,
+                    Err(_) => c,
+                };
+                self.set_child(save, light, next);
+            }
+            for iv in promotees {
+                set_add(mut self.nodes[save].s, iv);
+            }
+        }
+        self.refresh_balance(save);
+        save
+    }
+
+    fn drotate(mut ref self, n: i64) -> i64 {
+        let my_heavy = self.nodes[n].balance > 0;
+        let c = self.child(n, my_heavy);
+        let r = self.srotate(c);
+        self.set_child(n, my_heavy, r);
+        self.refresh_balance(n);
+        self.srotate(n)
+    }
+
+    fn node_add(mut ref self, n: i64, iv: ref Interval) -> i64 {
+        if self.center_hit(n, iv) {
+            set_add(mut self.nodes[n].s, iv);
+            return n;
+        }
+        let dir = iv.begin > self.nodes[n].x;
+        let c = self.child(n, dir);
+        if c < 0 {
+            let mut s: Vec[Interval] = Vec.new();
+            s.push(iv.clone());
+            let leaf = self.new_node(iv.begin, s);
+            self.set_child(n, dir, leaf);
+            self.refresh_balance(n);
+            n
+        } else {
+            let r = self.node_add(c, iv);
+            self.set_child(n, dir, r);
+            self.rotate(n)
+        }
+    }
+
+    fn remove_helper(mut ref self, n: i64, iv: ref Interval, done: mut ref bool, raise: bool) -> Result[i64, Exc] {
+        if self.center_hit(n, iv) {
+            if not raise and not has_iv(self.nodes[n].s, iv) {
+                *done = true;
+                return Ok(n);
+            }
+            if not set_remove(mut self.nodes[n].s, iv) {
+                return Err(exc("KeyError", iv.repr()));
+            }
+            if self.nodes[n].s.len() > 0 {
+                *done = true;
+                return Ok(n);
+            }
+            return Ok(self.prune(n));
+        }
+        let dir = iv.begin > self.nodes[n].x;
+        let c = self.child(n, dir);
+        if c < 0 {
+            if raise {
+                return Err(exc("ValueError", "".to_string()));
+            }
+            *done = true;
+            return Ok(n);
+        }
+        let r = self.remove_helper(c, iv, mut done, raise)?;
+        self.set_child(n, dir, r);
+        if not *done {
+            return Ok(self.rotate(n));
+        }
+        Ok(n)
+    }
+
+    fn search_point(ref self, n: i64, p: i64, result: mut ref Vec[Interval]) {
+        for k in self.nodes[n].s {
+            if k.begin <= p and p < k.end {
+                set_add(mut result, k);
+            }
+        }
+        let x = self.nodes[n].x;
+        if p < x and self.nodes[n].left >= 0 {
+            self.search_point(self.nodes[n].left, p, mut result);
+        } else if p > x and self.nodes[n].right >= 0 {
+            self.search_point(self.nodes[n].right, p, mut result);
+        }
+    }
+
+    fn prune(mut ref self, n: i64) -> i64 {
+        let l = self.nodes[n].left;
+        let r = self.nodes[n].right;
+        if l < 0 or r < 0 {
+            return if l < 0 { r } else { l };
+        }
+        let (heir, new_left) = self.pop_greatest_child(l);
+        self.nodes[n].left = new_left;
+        self.nodes[heir].left = self.nodes[n].left;
+        self.nodes[heir].right = self.nodes[n].right;
+        self.refresh_balance(heir);
+        self.rotate(heir)
+    }
+
+    fn pop_greatest_child(mut ref self, n: i64) -> (i64, i64) {
+        if self.nodes[n].right < 0 {
+            let mut ends: Vec[i64] = Vec.new();
+            for iv in self.nodes[n].s {
+                ends.push(iv.end);
+            }
+            ends.sort();
+            let max_end = ends[ends.len() - 1];
+            let mut new_x = self.nodes[n].x;
+            for e in ends {
+                if e != max_end and e > new_x {
+                    new_x = e;
+                }
+            }
+            let mut moved: Vec[Interval] = Vec.new();
+            let mut kept: Vec[Interval] = Vec.new();
+            for iv in self.nodes[n].s.clone() {
+                if iv.contains_point(new_x) {
+                    moved.push(iv.clone());
+                } else {
+                    kept.push(iv.clone());
+                }
+            }
+            let child = self.new_node(new_x, moved);
+            let empty = kept.len() == 0;
+            self.nodes[n].s = kept;
+            if not empty {
+                (child, n)
+            } else {
+                (child, self.nodes[n].left)
+            }
+        } else {
+            let (gc, new_right) = self.pop_greatest_child(self.nodes[n].right);
+            self.nodes[n].right = new_right;
+            let gx = self.nodes[gc].x;
+            for iv in self.nodes[n].s.clone() {
+                if iv.contains_point(gx) {
+                    set_remove(mut self.nodes[n].s, iv);
+                    let _ = self.node_add(gc, iv);
+                }
+            }
+            if self.nodes[n].s.len() > 0 {
+                self.refresh_balance(n);
+                let ns = self.rotate(n);
+                (gc, ns)
+            } else {
+                let ns = self.prune(n);
+                (gc, ns)
+            }
+        }
+    }
+
+    fn node_contains_point(ref self, n: i64, p: i64) -> bool {
+        for iv in self.nodes[n].s {
+            if iv.contains_point(p) {
+                return true;
+            }
+        }
+        let b = self.child(n, p > self.nodes[n].x);
+        b >= 0 and self.node_contains_point(b, p)
+    }
+
+    fn all_children(ref self, n: i64, out: mut ref Vec[Interval]) {
+        for iv in self.nodes[n].s {
+            set_add(mut out, iv);
+        }
+        if self.nodes[n].left >= 0 {
+            self.all_children(self.nodes[n].left, mut out);
+        }
+        if self.nodes[n].right >= 0 {
+            self.all_children(self.nodes[n].right, mut out);
+        }
+    }
+
+    // Node.verify, as a yes or no.
+    fn node_verify(mut ref self, n: i64, parents: ref Vec[i64]) -> bool {
+        let bal = self.nodes[n].balance;
+        if bal >= 2 or bal <= -2 {
+            return false;
+        }
+        self.refresh_balance(n);
+        if bal != self.nodes[n].balance or self.nodes[n].s.len() == 0 {
+            return false;
+        }
+        let x = self.nodes[n].x;
+        for iv in self.nodes[n].s {
+            if iv.begin >= iv.end or not iv.contains_point(x) {
+                return false;
+            }
+            for p in parents {
+                if iv.contains_point(p) {
+                    return false;
+                }
+            }
+        }
+        let mut below = parents.clone();
+        below.push(x);
+        let l = self.nodes[n].left;
+        if l >= 0 {
+            if self.nodes[l].x >= x or not self.node_verify(l, below) {
+                return false;
+            }
+        }
+        let r = self.nodes[n].right;
+        if r >= 0 {
+            if self.nodes[r].x <= x or not self.node_verify(r, below) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+// ------------------------------------------------------- IntervalTree
+
+// How merge_overlaps and merge_equals combine data: not at all, by
+// joining them with "+", or by counting them from 0.
+enum Reducer {
+    Plain,
+    Join,
+    Count,
+}
+
+fn reduce_data(r: ref Reducer, a: ref Data, b: ref Data) -> Data {
+    match r {
+        Reducer.Join => Data.Text(f"{data_str(a)}+{data_str(b)}"),
+        Reducer.Count => match a {
+            Data.Int(n) => Data.Int(n + 1),
+            _ => Data.Int(1),
+        },
+        Reducer.Plain => Data.Nil,
+    }
+}
+
+impl IntervalTree {
+    fn new() -> IntervalTree {
+        IntervalTree { nodes: Vec.new(), top: -1, all: Vec.new(), bounds: Vec.new(), counts: Map.new() }
+    }
+
+    // IntervalTree(intervals).
+    fn of(ivs: ref Vec[Interval]) -> Result[IntervalTree, Exc] {
+        let mut t = IntervalTree.new();
+        t.reinit(ivs)?;
+        Ok(t)
+    }
+
+    fn reinit(mut ref self, ivs: ref Vec[Interval]) -> Result[(), Exc] {
+        let mut set: Vec[Interval] = Vec.new();
+        for iv in ivs {
+            set_add(mut set, iv);
+        }
+        for iv in set {
+            if iv.is_null() {
+                return Err(null_error(iv));
+            }
+        }
+        self.nodes = Vec.new();
+        self.bounds = Vec.new();
+        self.counts = Map.new();
+        let sorted = sort_ivs(set);
+        self.top = self.from_sorted(sorted);
+        self.all = set;
+        for iv in self.all.clone() {
+            self.add_boundaries(iv);
+        }
+        Ok(())
+    }
+
+    fn len(ref self) -> i64 {
+        self.all.len()
+    }
+
+    fn contains(ref self, iv: ref Interval) -> bool {
+        has_iv(self.all, iv)
+    }
+
+    fn bump(mut ref self, k: i64, by: i64) {
+        let old = match self.counts.get(k) {
+            Some(c) => *c,
+            None => 0,
+        };
+        if old == 0 {
+            let i = bisect_left(self.bounds, k);
+            self.bounds.insert(i, k);
+        }
+        if old + by == 0 {
+            self.counts.remove(k);
+            let i = bisect_left(self.bounds, k);
+            self.bounds.remove(i);
+        } else {
+            self.counts.insert(k, old + by);
+        }
+    }
+
+    fn add_boundaries(mut ref self, iv: ref Interval) {
+        self.bump(iv.begin, 1);
+        self.bump(iv.end, 1);
+    }
+
+    fn remove_boundaries(mut ref self, iv: ref Interval) {
+        self.bump(iv.begin, -1);
+        self.bump(iv.end, -1);
+    }
+
+    fn add(mut ref self, iv: ref Interval) -> Result[(), Exc] {
+        if self.contains(iv) {
+            return Ok(());
+        }
+        if iv.is_null() {
+            return Err(null_error(iv));
+        }
+        if self.top < 0 {
+            let mut s: Vec[Interval] = Vec.new();
+            s.push(iv.clone());
+            self.top = self.new_node(iv.begin, s);
+        } else {
+            self.top = self.node_add(self.top, iv);
+        }
+        self.all.push(iv.clone());
+        self.add_boundaries(iv);
+        Ok(())
+    }
+
+    fn update(mut ref self, ivs: ref Vec[Interval]) -> Result[(), Exc] {
+        for iv in ivs {
+            self.add(iv)?;
+        }
+        Ok(())
+    }
+
+    fn remove(mut ref self, iv: ref Interval) -> Result[(), Exc] {
+        if not self.contains(iv) {
+            return Err(exc("ValueError", "".to_string()));
+        }
+        let mut done = false;
+        self.top = self.remove_helper(self.top, iv, mut done, true)?;
+        set_remove(mut self.all, iv);
+        self.remove_boundaries(iv);
+        Ok(())
+    }
+
+    fn discard(mut ref self, iv: ref Interval) {
+        if not self.contains(iv) {
+            return;
+        }
+        set_remove(mut self.all, iv);
+        let mut done = false;
+        self.top = match self.remove_helper(self.top, iv, mut done, false) {
+            Ok(n) => n,
+            Err(_) => self.top,
+        };
+        self.remove_boundaries(iv);
+    }
+
+    fn discard_all(mut ref self, ivs: ref Vec[Interval]) {
+        for iv in ivs {
+            self.discard(iv);
+        }
+    }
+
+    fn remove_all(mut ref self, ivs: ref Vec[Interval]) -> Result[(), Exc] {
+        for iv in ivs {
+            self.remove(iv)?;
+        }
+        Ok(())
+    }
+
+    fn at(ref self, p: i64) -> Vec[Interval] {
+        let mut out: Vec[Interval] = Vec.new();
+        if self.top >= 0 {
+            self.search_point(self.top, p, mut out);
+        }
+        out
+    }
+
+    fn overlap(ref self, begin: i64, end: i64) -> Vec[Interval] {
+        let mut out: Vec[Interval] = Vec.new();
+        if self.top < 0 or begin >= end {
+            return out;
+        }
+        self.search_point(self.top, begin, mut out);
+        let lo = bisect_left(self.bounds, begin);
+        let hi = bisect_left(self.bounds, end);
+        let mut i = lo;
+        while i < hi {
+            self.search_point(self.top, self.bounds[i], mut out);
+            i += 1;
+        }
+        out
+    }
+
+    fn envelop(ref self, begin: i64, end: i64) -> Vec[Interval] {
+        let mut out: Vec[Interval] = Vec.new();
+        for iv in self.overlap(begin, end) {
+            if iv.begin >= begin and iv.end <= end {
+                out.push(iv.clone());
+            }
+        }
+        out
+    }
+
+    fn overlaps_point(ref self, p: i64) -> bool {
+        self.len() > 0 and self.node_contains_point(self.top, p)
+    }
+
+    fn overlaps_range(ref self, begin: i64, end: i64) -> bool {
+        if self.len() == 0 or begin >= end {
+            return false;
+        }
+        if self.overlaps_point(begin) {
+            return true;
+        }
+        for b in self.bounds {
+            if begin < b and b < end and self.overlaps_point(b) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn remove_overlap(mut ref self, begin: i64, end: Option[i64]) -> Result[(), Exc] {
+        let hits = match end {
+            None => self.at(begin),
+            Some(e) => self.overlap(begin, e),
+        };
+        self.remove_all(hits)
+    }
+
+    fn remove_envelop(mut ref self, begin: i64, end: i64) -> Result[(), Exc] {
+        let hits = self.envelop(begin, end);
+        self.remove_all(hits)
+    }
+
+    // chop, with datafunc marking the two halves or not.
+    fn chop(mut ref self, begin: i64, end: i64, mark: ref Fn(ref Interval, bool) -> Data) -> Result[(), Exc] {
+        let mut begin_hits: Vec[Interval] = Vec.new();
+        for iv in self.at(begin) {
+            if iv.begin < begin {
+                begin_hits.push(iv.clone());
+            }
+        }
+        let mut end_hits: Vec[Interval] = Vec.new();
+        for iv in self.at(end) {
+            if iv.end > end {
+                end_hits.push(iv.clone());
+            }
+        }
+        let mut insertions: Vec[Interval] = Vec.new();
+        for iv in begin_hits {
+            set_add(mut insertions, ivl(iv.begin, begin, mark(iv, true)));
+        }
+        for iv in end_hits {
+            set_add(mut insertions, ivl(end, iv.end, mark(iv, false)));
+        }
+        self.remove_envelop(begin, end)?;
+        self.discard_all(begin_hits);
+        self.discard_all(end_hits);
+        self.update(insertions)
+    }
+
+    fn slice(mut ref self, point: i64, mark: ref Fn(ref Interval, bool) -> Data) -> Result[(), Exc] {
+        let mut hits: Vec[Interval] = Vec.new();
+        for iv in self.at(point) {
+            if iv.begin < point {
+                hits.push(iv.clone());
+            }
+        }
+        let mut insertions: Vec[Interval] = Vec.new();
+        for iv in hits {
+            set_add(mut insertions, ivl(iv.begin, point, mark(iv, true)));
+            set_add(mut insertions, ivl(point, iv.end, mark(iv, false)));
+        }
+        self.discard_all(hits);
+        self.update(insertions)
+    }
+
+    fn split_overlaps(mut ref self) -> Result[(), Exc] {
+        if self.len() == 0 or self.bounds.len() == 2 {
+            return Ok(());
+        }
+        let bounds = self.bounds.clone();
+        let mut new_ivs: Vec[Interval] = Vec.new();
+        let mut i = 0;
+        while i + 1 < bounds.len() {
+            for iv in self.at(bounds[i]) {
+                set_add(mut new_ivs, ivl(bounds[i], bounds[i + 1], iv.data.clone()));
+            }
+            i += 1;
+        }
+        self.reinit(new_ivs)
+    }
+
+    // merge_overlaps (equals: false) and merge_equals (equals: true).
+    fn merge(mut ref self, r: ref Reducer, equals: bool, strict: bool) -> Result[(), Exc] {
+        if self.len() == 0 {
+            return Ok(());
+        }
+        let mut merged: Vec[Interval] = Vec.new();
+        let mut current = Data.Nil;
+        for higher in sort_ivs(self.all) {
+            let joins = if merged.len() > 0 {
+                let lower = merged[merged.len() - 1].clone();
+                if equals {
+                    higher.range_matches(lower)
+                } else {
+                    higher.begin < lower.end or (not strict and higher.begin == lower.end)
+                }
+            } else {
+                false
+            };
+            if joins {
+                let lower = merged[merged.len() - 1].clone();
+                let upper = max_i(lower.end, higher.end);
+                current = match r {
+                    Reducer.Plain => Data.Nil,
+                    _ => reduce_data(r, current, higher.data),
+                };
+                let last = merged.len() - 1;
+                merged[last] = ivl(lower.begin, upper, current.clone());
+            } else {
+                match r {
+                    Reducer.Count => {
+                        current = reduce_data(r, Data.Int(0), higher.data);
+                        merged.push(ivl(higher.begin, higher.end, current.clone()));
+                    }
+                    _ => {
+                        current = higher.data.clone();
+                        merged.push(higher.clone());
+                    }
+                }
+            }
+        }
+        self.reinit(merged)
+    }
+
+    fn begin(ref self) -> i64 {
+        if self.bounds.len() == 0 { 0 } else { self.bounds[0] }
+    }
+
+    fn end(ref self) -> i64 {
+        if self.bounds.len() == 0 { 0 } else { self.bounds[self.bounds.len() - 1] }
+    }
+
+    fn span(ref self) -> i64 {
+        if self.len() == 0 { 0 } else { self.end() - self.begin() }
+    }
+
+    // tree[start:stop].
+    fn get_slice(ref self, start: Option[i64], stop: Option[i64]) -> Vec[Interval] {
+        let s = match start {
+            Some(x) => x,
+            None => {
+                if stop.is_none() {
+                    return self.all.clone();
+                }
+                self.begin()
+            }
+        };
+        let e = match stop {
+            Some(x) => x,
+            None => self.end(),
+        };
+        self.overlap(s, e)
+    }
+
+    fn copy(ref self) -> IntervalTree {
+        match IntervalTree.of(self.all) {
+            Ok(t) => t,
+            Err(_) => IntervalTree.new(),
+        }
+    }
+
+    fn repr(ref self) -> String {
+        if self.len() == 0 {
+            "IntervalTree()".to_string()
+        } else {
+            f"IntervalTree({ivs_repr(self.all)})"
+        }
+    }
+
+    // IntervalTree.verify, as a yes or no.
+    fn verify(mut ref self) -> bool {
+        if self.len() == 0 {
+            return self.bounds.len() == 0 and self.top < 0;
+        }
+        let mut kids: Vec[Interval] = Vec.new();
+        self.all_children(self.top, mut kids);
+        if not same_set(kids, self.all) {
+            return false;
+        }
+        let mut check: Map[i64, i64] = Map.new();
+        for iv in self.all {
+            if iv.is_null() {
+                return false;
+            }
+            for k in [iv.begin, iv.end] {
+                let c = match check.get(k) {
+                    Some(c) => *c,
+                    None => 0,
+                };
+                check.insert(k, c + 1);
+            }
+        }
+        if check.len() != self.bounds.len() {
+            return false;
+        }
+        for b in self.bounds {
+            let want = match check.get(b) {
+                Some(c) => *c,
+                None => 0,
+            };
+            let got = match self.counts.get(b) {
+                Some(c) => *c,
+                None => 0,
+            };
+            if want != got {
+                return false;
+            }
+        }
+        let none: Vec[i64] = Vec.new();
+        self.node_verify(self.top, none)
+    }
+}
+
+fn bisect_left(v: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if v[mid] < x {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+fn keep_data(iv: ref Interval, lower: bool) -> Data {
+    iv.data.clone()
+}
+
+// ------------------------------------------------------------- traces
+
+fn none_repr() -> String {
+    "None".to_string()
+}
+
+fn num(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Ok(n) => n,
+        Err(_) => 0,
+    }
+}
+
+fn arg(s: ref String) -> Option[i64] {
+    if s == "_" { None } else { Some(num(s)) }
+}
+
+fn data_of(s: ref String) -> Data {
+    if s == "_" {
+        Data.Nil
+    } else if s.starts_with("#") {
+        Data.Int(num(s[1..].to_string()))
+    } else {
+        Data.Text(s.clone())
+    }
+}
+
+fn iv_of(tok: ref String) -> Interval {
+    let f: Vec[String] = tok.split(":").map(|p| p.to_string()).collect();
+    let d = if f.len() > 2 { data_of(f[2]) } else { Data.Nil };
+    ivl(num(f[0]), num(f[1]), d)
+}
+
+fn ivs_of(a: ref Vec[String]) -> Vec[Interval] {
+    let mut out: Vec[Interval] = Vec.new();
+    for t in a {
+        out.push(iv_of(t));
+    }
+    out
+}
+
+fn words(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for w in s.split(" ") {
+        if w.len() > 0 {
+            out.push(w.to_string());
+        }
+    }
+    out
+}
+
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1].len() == 0 {
+        out.pop();
+    }
+    out
+}
+
+fn str_repr(s: ref String) -> String {
+    let mut out = String.new();
+    let q = if s.contains("'") and not s.contains("\"") { "\"" } else { "'" };
+    out.push_str(q);
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\'' and q == "'" {
+            out.push_str("\\'");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push_str(q);
+    out
+}
+
+fn bool_repr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// The trace's datafunc: the data, then < for the lower half or > for
+// the upper.
+fn mark_halves(iv: ref Interval, lower: bool) -> Data {
+    Data.Text(f"{data_str(iv.data)}{if lower { "<" } else { ">" }}")
+}
+
+fn tree_repr(r: ref Result[IntervalTree, Exc]) -> Result[String, Exc] {
+    match r {
+        Ok(t) => Ok(t.repr()),
+        Err(e) => Err(e.clone()),
+    }
+}
+
+fn reducer_of(name: ref String) -> Reducer {
+    if name.ends_with("join") {
+        Reducer.Join
+    } else if name.ends_with("count") {
+        Reducer.Count
+    } else {
+        Reducer.Plain
+    }
+}
+
+fn tree_cmd(t: mut ref IntervalTree, c: ref String, a: ref Vec[String]) -> Result[String, Exc] {
+    if c == "add" {
+        t.add(iv_of(a[0]))?;
+        return Ok(none_repr());
+    }
+    if c == "set" {
+        t.add(ivl(num(a[0]), num(a[1]), data_of(a[2])))?;
+        return Ok(none_repr());
+    }
+    if c == "update" {
+        t.update(ivs_of(a))?;
+        return Ok(none_repr());
+    }
+    if c == "remove" {
+        t.remove(iv_of(a[0]))?;
+        return Ok(none_repr());
+    }
+    if c == "discard" {
+        t.discard(iv_of(a[0]));
+        return Ok(none_repr());
+    }
+    if c == "at" {
+        return Ok(ivs_repr(t.at(num(a[0]))));
+    }
+    if c == "overlap" {
+        return Ok(ivs_repr(t.overlap(num(a[0]), num(a[1]))));
+    }
+    if c == "envelop" {
+        return Ok(ivs_repr(t.envelop(num(a[0]), num(a[1]))));
+    }
+    if c == "overlaps" {
+        let r = if a.len() == 1 { t.overlaps_point(num(a[0])) } else { t.overlaps_range(num(a[0]), num(a[1])) };
+        return Ok(bool_repr(r));
+    }
+    if c == "contains" {
+        return Ok(bool_repr(t.contains(iv_of(a[0]))));
+    }
+    if c == "get" {
+        return Ok(ivs_repr(t.get_slice(arg(a[0]), arg(a[1]))));
+    }
+    if c == "del" {
+        t.remove_overlap(num(a[0]), None)?;
+        return Ok(none_repr());
+    }
+    if c == "remove_overlap" {
+        let end = if a.len() > 1 { Some(num(a[1])) } else { None };
+        t.remove_overlap(num(a[0]), end)?;
+        return Ok(none_repr());
+    }
+    if c == "remove_envelop" {
+        t.remove_envelop(num(a[0]), num(a[1]))?;
+        return Ok(none_repr());
+    }
+    if c == "chop" or c == "chopf" {
+        if c == "chop" {
+            t.chop(num(a[0]), num(a[1]), keep_data)?;
+        } else {
+            t.chop(num(a[0]), num(a[1]), mark_halves)?;
+        }
+        return Ok(none_repr());
+    }
+    if c == "slice" or c == "slicef" {
+        if c == "slice" {
+            t.slice(num(a[0]), keep_data)?;
+        } else {
+            t.slice(num(a[0]), mark_halves)?;
+        }
+        return Ok(none_repr());
+    }
+    if c == "split_overlaps" {
+        t.split_overlaps()?;
+        return Ok(none_repr());
+    }
+    if c.starts_with("merge_equals") {
+        t.merge(reducer_of(c), true, true)?;
+        return Ok(none_repr());
+    }
+    if c.starts_with("merge") {
+        t.merge(reducer_of(c), false, a[0] == "1")?;
+        return Ok(none_repr());
+    }
+    if c == "begin" {
+        return Ok(f"{t.begin()}");
+    }
+    if c == "end" {
+        return Ok(f"{t.end()}");
+    }
+    if c == "span" {
+        return Ok(f"{t.span()}");
+    }
+    if c == "range" {
+        return Ok(ivl(t.begin(), t.end(), Data.Nil).repr());
+    }
+    if c == "len" {
+        return Ok(f"{t.len()}");
+    }
+    if c == "is_empty" {
+        return Ok(bool_repr(t.len() == 0));
+    }
+    let other = ivs_of(a);
+    if c == "union" {
+        let mut all = t.all.clone();
+        for iv in other {
+            all.push(iv.clone());
+        }
+        return tree_repr(IntervalTree.of(all));
+    }
+    if c == "intersection" {
+        let mut both: Vec[Interval] = Vec.new();
+        for iv in t.all {
+            if has_iv(other, iv) {
+                both.push(iv.clone());
+            }
+        }
+        return tree_repr(IntervalTree.of(both));
+    }
+    if c == "difference" {
+        let mut left: Vec[Interval] = Vec.new();
+        for iv in t.all {
+            if not has_iv(other, iv) {
+                left.push(iv.clone());
+            }
+        }
+        return tree_repr(IntervalTree.of(left));
+    }
+    if c == "symmetric_difference" {
+        let mut out: Vec[Interval] = Vec.new();
+        for iv in t.all {
+            if not has_iv(other, iv) {
+                out.push(iv.clone());
+            }
+        }
+        for iv in other {
+            if not t.contains(iv) {
+                out.push(iv.clone());
+            }
+        }
+        return tree_repr(IntervalTree.of(out));
+    }
+    if c == "difference_update" {
+        t.discard_all(other);
+        return Ok(none_repr());
+    }
+    if c == "intersection_update" {
+        for iv in t.all.clone() {
+            if not has_iv(other, iv) {
+                t.remove(iv)?;
+            }
+        }
+        return Ok(none_repr());
+    }
+    if c == "symmetric_difference_update" {
+        let mut rest: Vec[Interval] = Vec.new();
+        for iv in other {
+            set_add(mut rest, iv);
+        }
+        for iv in t.all.clone() {
+            if has_iv(rest, iv) {
+                t.remove(iv)?;
+                set_remove(mut rest, iv);
+            }
+        }
+        t.update(rest)?;
+        return Ok(none_repr());
+    }
+    if c == "eq" {
+        let u = IntervalTree.of(other)?;
+        return Ok(bool_repr(same_set(u.all, t.all)));
+    }
+    if c == "copy" {
+        let u = t.copy();
+        return Ok(f"{bool_repr(same_set(u.all, t.all))} {u.repr()}");
+    }
+    if c == "clear" {
+        *t = IntervalTree.new();
+        return Ok(none_repr());
+    }
+    tree_repr(IntervalTree.of(other))
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+fn trace_job(rel: ref String, out: mut ref String) {
+    let mut t = IntervalTree.new();
+    for line in lines_of(read_text(rel)) {
+        let f = words(line);
+        let c = f[0].clone();
+        let a = f[1..].to_vec();
+        if c == "verify" {
+            emit(mut out, if t.verify() { "verify: ok" } else { "verify: FAILED" });
+            continue;
+        }
+        if c == "repr" {
+            emit(mut out, f"repr: {t.repr()}");
+            continue;
+        }
+        if c == "items" {
+            emit(mut out, f"items: {ivs_repr(t.all)}");
+            continue;
+        }
+        let r = if c == "iv" {
+            let b = if a.len() > 2 {
+                if a[2].contains(":") { Some(Other.Iv(iv_of(a[2]))) } else { Some(Other.Point(num(a[2]))) }
+            } else {
+                None
+            };
+            iv_op(a[0], iv_of(a[1]), b)
+        } else {
+            tree_cmd(mut t, c, a)
+        };
+        match r {
+            Ok(s) => emit(mut out, f"{line}: {s}"),
+            Err(e) => emit(mut out, f"{line}: error: {e.kind}: {e.msg}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------- scenarios
+
+fn text_of(d: ref Data) -> String {
+    data_str(d)
+}
+
+fn names(v: ref Vec[Interval]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for iv in sort_ivs(v) {
+        parts.push(text_of(iv.data));
+    }
+    if parts.len() == 0 { "-".to_string() } else { parts.join(" ") }
+}
+
+fn tabs(line: ref String) -> Vec[String] {
+    line.split("\t").map(|p| p.to_string()).collect()
+}
+
+fn count_of(d: ref Data) -> i64 {
+    match d {
+        Data.Int(n) => n,
+        _ => 0,
+    }
+}
+
+// find_nested: each interval that contains others, with what it holds.
+fn find_nested(t: ref IntervalTree) -> Vec[(Interval, Vec[Interval])] {
+    let mut keyed: Vec[(i64, i64)] = Vec.new();
+    let mut i = 0;
+    while i < t.all.len() {
+        keyed.push((-t.all[i].length(), i));
+        i += 1;
+    }
+    keyed.sort();
+    let mut long: Vec[Interval] = Vec.new();
+    for k in keyed {
+        long.push(t.all[k.1].clone());
+    }
+    let mut found: Vec[(Interval, Vec[Interval])] = Vec.new();
+    let mut p = 0;
+    while p < long.len() {
+        let mut kids: Vec[Interval] = Vec.new();
+        let mut c = p + 1;
+        while c < long.len() {
+            if long[p].contains_interval(long[c]) {
+                set_add(mut kids, long[c]);
+            }
+            c += 1;
+        }
+        if kids.len() > 0 {
+            found.push((long[p].clone(), kids));
+        }
+        p += 1;
+    }
+    found
+}
+
+fn genome_job(genes_rel: ref String, variants_rel: ref String, reads_rel: ref String, out: mut ref String) {
+    let mut chroms: Vec[String] = Vec.new();
+    let mut genes: Map[String, Vec[Interval]] = Map.new();
+    for line in lines_of(read_text(genes_rel)) {
+        let f = tabs(line);
+        if not genes.contains_key(f[0]) {
+            genes.insert(f[0].clone(), Vec.new());
+            chroms.push(f[0].clone());
+        }
+        if let Some(v) = genes.get_mut(f[0]) {
+            v.push(ivl(num(f[1]), num(f[2]), Data.Text(f"{f[3]}({f[4]})")));
+        }
+    }
+    chroms.sort();
+    let mut trees: Map[String, IntervalTree] = Map.new();
+    for chrom in chroms {
+        let ivs = match genes.get(chrom) {
+            Some(v) => v.clone(),
+            None => Vec.new(),
+        };
+        let mut t = match IntervalTree.of(ivs) {
+            Ok(t) => t,
+            Err(_) => IntervalTree.new(),
+        };
+        if not t.verify() {
+            emit(mut out, "verify FAILED");
+        }
+        emit(mut out, f"{chrom}: {t.len()} genes, {t.begin()}..{t.end()}, span {t.span()}");
+        let mut cover = t.copy();
+        let _ = cover.merge(Reducer.Count, false, false);
+        let mut total = 0;
+        let mut multi: Vec[Interval] = Vec.new();
+        for iv in cover.all {
+            total += iv.length();
+            if count_of(iv.data) > 1 {
+                multi.push(iv.clone());
+            }
+        }
+        let mut shown: Vec[String] = Vec.new();
+        for iv in sort_ivs(multi) {
+            if shown.len() < 6 {
+                shown.push(f"{iv.begin}-{iv.end}({count_of(iv.data)})");
+            }
+        }
+        let blocks = if shown.len() == 0 { "-".to_string() } else { shown.join(" ") };
+        emit(mut out, f"  covered {total} bp in {cover.len()} blocks; blocks of 2 or more genes: {blocks}");
+        let mut parents: Vec[Interval] = Vec.new();
+        let found = find_nested(t);
+        for (p, _) in found {
+            parents.push(p.clone());
+        }
+        let mut k = 0;
+        for p in sort_ivs(parents) {
+            if k < 5 {
+                for (q, kids) in found {
+                    if q == p {
+                        emit(mut out, f"  inside {text_of(p.data)}: {names(kids)}");
+                    }
+                }
+            }
+            k += 1;
+        }
+        trees.insert(chrom.clone(), t);
+    }
+    for line in lines_of(read_text(variants_rel)) {
+        let f = tabs(line);
+        let chrom = f[0].clone();
+        let pos = num(f[1]);
+        let head = f"{f[2]} {chrom}:{pos} {f[3]}";
+        match trees.get(chrom) {
+            None => emit(mut out, f"{head}: no annotation for {chrom}"),
+            Some(t) => {
+                let hits = t.at(pos);
+                if hits.len() > 0 {
+                    emit(mut out, f"{head}: in {names(hits)}");
+                } else {
+                    let mut best: Option[(i64, Interval)] = None;
+                    for iv in sort_ivs(t.all) {
+                        let d = if iv.end <= pos { pos - iv.end } else { iv.begin - pos };
+                        let better = match best {
+                            None => true,
+                            Some((bd, _)) => d < bd,
+                        };
+                        if better {
+                            best = Some((d, iv.clone()));
+                        }
+                    }
+                    if let Some((d, iv)) = best {
+                        emit(mut out, f"{head}: intergenic, nearest {text_of(iv.data)} at {d} bp");
+                    }
+                }
+            }
+        }
+    }
+    for line in lines_of(read_text(reads_rel)) {
+        let f = tabs(line);
+        let s = num(f[1]);
+        let e = num(f[2]);
+        if let Some(t) = trees.get(f[0]) {
+            emit(mut out, f"{f[3]} {f[0]}:{s}-{e}: overlaps {names(t.overlap(s, e))}; contains {names(t.envelop(s, e))}");
+        }
+    }
+}
+
+// -------------------------------------------------------------- calendar
+
+fn two(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+fn hm(m: i64) -> String {
+    f"{two(m / 60)}:{two(m % 60)}"
+}
+
+fn part(iv: ref Interval, lower: bool) -> Data {
+    Data.Text(f"{data_str(iv.data)} ({if lower { "before" } else { "after" }})")
+}
+
+fn slots(v: ref Vec[Interval]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for iv in sort_ivs(v) {
+        parts.push(f"{hm(iv.begin)}-{hm(iv.end)} {text_of(iv.data)}");
+    }
+    parts.join(", ")
+}
+
+// A day's calendars: atlas, then boreal.
+struct Day {
+    name: String,
+    rooms: Vec[IntervalTree],
+}
+
+fn day_index(days: mut ref Vec[Day], name: ref String) -> i64 {
+    let mut i = 0;
+    while i < days.len() {
+        if days[i].name == name {
+            return i;
+        }
+        i += 1;
+    }
+    let mut rooms: Vec[IntervalTree] = Vec.new();
+    rooms.push(IntervalTree.new());
+    rooms.push(IntervalTree.new());
+    days.push(Day { name: name.clone(), rooms: rooms });
+    days.len() - 1
+}
+
+fn room_index(room: ref String) -> i64 {
+    if room == "atlas" { 0 } else { 1 }
+}
+
+fn calendar_job(rel: ref String, out: mut ref String) {
+    let mut days: Vec[Day] = Vec.new();
+    let rooms = ["atlas".to_string(), "boreal".to_string()];
+    for line in lines_of(read_text(rel)) {
+        let f = words(line);
+        if f[0] == "block" {
+            let di = day_index(mut days, f[1]);
+            let s = num(f[2]);
+            let e = num(f[3]);
+            for room in rooms {
+                let ri = room_index(room);
+                let hit = days[di].rooms[ri].overlap(s, e).len();
+                let _ = days[di].rooms[ri].chop(s, e, part);
+                let now = slots(days[di].rooms[ri].overlap(s - 60, e + 60));
+                emit(mut out, f"block {f[1]} {room} {hm(s)}-{hm(e)} {f[4]}: moved {hit}, now {if now.len() == 0 { "-".to_string() } else { now }}");
+            }
+        } else if f[0] == "cancel" {
+            let di = day_index(mut days, f[1]);
+            let s = num(f[2]);
+            for room in rooms {
+                let ri = room_index(room);
+                let hit = slots(days[di].rooms[ri].at(s));
+                let _ = days[di].rooms[ri].remove_overlap(s, None);
+                emit(mut out, f"cancel {f[1]} {room} {hm(s)}: {if hit.len() == 0 { "nothing".to_string() } else { hit }}");
+            }
+        } else if f[0] == "free" {
+            let di = day_index(mut days, f[1]);
+            let need = num(f[2]);
+            let mut all = days[di].rooms[0].all.clone();
+            for iv in days[di].rooms[1].all {
+                all.push(iv.clone());
+            }
+            let mut busy = match IntervalTree.of(all) {
+                Ok(t) => t,
+                Err(_) => IntervalTree.new(),
+            };
+            let _ = busy.merge(Reducer.Plain, false, false);
+            let mut gaps: Vec[String] = Vec.new();
+            let mut t = 480;
+            for iv in sort_ivs(busy.all) {
+                if iv.begin - t >= need {
+                    gaps.push(f"{hm(t)}-{hm(iv.begin)}");
+                }
+                t = max_i(t, iv.end);
+            }
+            if 1080 - t >= need {
+                gaps.push(f"{hm(t)}-{hm(1080)}");
+            }
+            let shown = if gaps.len() == 0 { "none".to_string() } else { gaps.join(" ") };
+            emit(mut out, f"free {f[1]} {need} min in both rooms: {shown}");
+        } else {
+            let di = day_index(mut days, f[0]);
+            let s = num(f[2]);
+            let e = num(f[3]);
+            let ri = room_index(f[1]);
+            let head = f"{f[0]} {f[1]} {hm(s)}-{hm(e)} {f[4]}";
+            if days[di].rooms[ri].overlaps_range(s, e) {
+                emit(mut out, f"{head}: clashes with {slots(days[di].rooms[ri].get_slice(Some(s), Some(e)))}");
+            } else {
+                let _ = days[di].rooms[ri].add(ivl(s, e, Data.Text(f[4].clone())));
+                emit(mut out, f"{head}: booked");
+            }
+        }
+    }
+    let mut order: Vec[String] = Vec.new();
+    for d in days {
+        order.push(d.name.clone());
+    }
+    order.sort();
+    for name in order {
+        let di = day_index(mut days, name);
+        for room in rooms {
+            let ri = room_index(room);
+            if not days[di].rooms[ri].verify() {
+                emit(mut out, "verify FAILED");
+            }
+            emit(mut out, f"agenda {name} {room} ({days[di].rooms[ri].len()})");
+            for iv in sort_ivs(days[di].rooms[ri].all) {
+                emit(mut out, f"  {hm(iv.begin)}-{hm(iv.end)} {text_of(iv.data)}");
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------- allowlist
+
+fn ip_num(s: ref String) -> i64 {
+    let mut n = 0;
+    for p in s.split(".") {
+        n = n * 256 + num(p.to_string());
+    }
+    n
+}
+
+fn ip_str(n: i64) -> String {
+    f"{n >> 24}.{(n >> 16) & 255}.{(n >> 8) & 255}.{n & 255}"
+}
+
+fn cidr(s: ref String) -> (i64, i64) {
+    let f: Vec[String] = s.split("/").map(|p| p.to_string()).collect();
+    let start = ip_num(f[0]);
+    (start, start + (1 << (32 - num(f[1]))))
+}
+
+fn span_str(iv: ref Interval) -> String {
+    f"{ip_str(iv.begin)}-{ip_str(iv.end - 1)}"
+}
+
+fn ranges(v: ref Vec[Interval]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for iv in sort_ivs(v) {
+        parts.push(f"{span_str(iv)} {text_of(iv.data)}");
+    }
+    parts.join(", ")
+}
+
+fn allowlist_job(rel: ref String, out: mut ref String) {
+    let mut t = IntervalTree.new();
+    for line in lines_of(read_text(rel)) {
+        let f = words(line);
+        if f[0] == "allow" {
+            let (s, e) = cidr(f[1]);
+            let _ = t.add(ivl(s, e, Data.Text(f[2].clone())));
+        } else if f[0] == "deny" {
+            let (s, e) = cidr(f[1]);
+            let cut = ranges(t.overlap(s, e));
+            let _ = t.chop(s, e, keep_data);
+            emit(mut out, f"deny {f[1]}: cut {if cut.len() == 0 { "nothing".to_string() } else { cut }}");
+        } else {
+            let hit = t.at(ip_num(f[1]));
+            if hit.len() > 0 {
+                emit(mut out, f"check {f[1]}: allowed by {ranges(hit)}");
+            } else {
+                emit(mut out, f"check {f[1]}: refused");
+            }
+        }
+    }
+    if not t.verify() {
+        emit(mut out, "verify FAILED");
+    }
+    emit(mut out, f"ranges: {t.len()}, {ip_str(t.begin())} to {ip_str(t.end() - 1)}");
+    let mut flat = t.copy();
+    let _ = flat.split_overlaps();
+    let _ = flat.merge(Reducer.Join, true, true);
+    emit(mut out, f"disjoint ranges: {flat.len()}");
+    for iv in sort_ivs(flat.all) {
+        emit(mut out, f"  {span_str(iv)} {text_of(iv.data)}");
+    }
+}
+
+// ------------------------------------------------------------- subtitles
+
+fn pad3(n: i64) -> String {
+    if n < 10 { f"00{n}" } else if n < 100 { f"0{n}" } else { f"{n}" }
+}
+
+fn ts(ms: i64) -> String {
+    f"{two(ms / 60000)}:{two(ms / 1000 % 60)}.{pad3(ms % 1000)}"
+}
+
+fn cue_part(iv: ref Interval, lower: bool) -> Data {
+    Data.Text(f"{data_str(iv.data)}{if lower { " [a]" } else { " [b]" }}")
+}
+
+fn subtitles_job(rel: ref String, out: mut ref String) {
+    let mut t = IntervalTree.new();
+    for line in lines_of(read_text(rel)) {
+        if line.starts_with("cut ") {
+            let p = num(words(line)[1]);
+            let mut hit: Vec[String] = Vec.new();
+            for iv in sort_ivs(t.at(p)) {
+                hit.push(text_of(iv.data));
+            }
+            let _ = t.slice(p, cue_part);
+            emit(mut out, f"cut at {ts(p)} splits {if hit.len() == 0 { "nothing".to_string() } else { hit.join(", ") }}");
+            continue;
+        }
+        let f = tabs(line);
+        let _ = t.add(ivl(num(f[1]), num(f[2]), Data.Text(f"{f[0]} {f[3]}")));
+    }
+    if not t.verify() {
+        emit(mut out, "verify FAILED");
+    }
+    emit(mut out, f"cues: {t.len()}, {ts(t.begin())} to {ts(t.end())}");
+    let mut stacked = t.copy();
+    let _ = stacked.split_overlaps();
+    let _ = stacked.merge(Reducer.Join, true, true);
+    let mut shown = 0;
+    for iv in sort_ivs(stacked.all) {
+        let d = text_of(iv.data);
+        if d.contains("+") {
+            shown += 1;
+            if shown <= 12 {
+                emit(mut out, f"  {ts(iv.begin)}-{ts(iv.end)} stacked: {d}");
+            }
+        }
+    }
+    emit(mut out, f"stacked stretches: {shown}");
+    let mut single = t.copy();
+    let _ = single.merge(Reducer.Count, false, true);
+    let mut longest = 0;
+    for iv in single.all {
+        longest = max_i(longest, iv.length());
+    }
+    emit(mut out, f"on-screen blocks: {single.len()}, longest {longest}");
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        emit(mut out, f"== {job.join(" ")}");
+        if job[0] == "trace" {
+            trace_job(job[1], mut out);
+        } else if job[0] == "genome" {
+            genome_job(job[1], job[2], job[3], mut out);
+        } else if job[0] == "calendar" {
+            calendar_job(job[1], mut out);
+        } else if job[0] == "allowlist" {
+            allowlist_job(job[1], mut out);
+        } else {
+            subtitles_job(job[1], mut out);
+        }
+    }
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    data_part_5(mut v);
+    data_part_6(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("allow 203.0.114.246/32 vpn\n");
+    t.push_str("allow 192.168.60.156/30 office\n");
+    t.push_str("allow 192.168.0.0/16 partner\n");
+    t.push_str("allow 203.0.0.0/16 lab\n");
+    t.push_str("allow 10.0.25.48/28 lab\n");
+    t.push_str("allow 192.168.23.41/32 lab\n");
+    t.push_str("allow 192.168.60.16/28 lab\n");
+    t.push_str("allow 10.0.12.146/32 lab\n");
+    t.push_str("allow 192.168.45.0/24 vpn\n");
+    t.push_str("allow 172.16.58.240/28 office\n");
+    t.push_str("allow 10.0.8.0/24 lab\n");
+    t.push_str("allow 172.16.5.44/30 lab\n");
+    t.push_str("allow 172.16.0.0/16 lab\n");
+    t.push_str("allow 172.16.54.76/32 lab\n");
+    t.push_str("allow 203.0.176.0/24 lab\n");
+    t.push_str("allow 203.0.120.0/24 ci\n");
+    t.push_str("allow 192.168.0.0/20 ci\n");
+    t.push_str("allow 203.0.171.132/30 office\n");
+    t.push_str("allow 203.0.160.0/20 lab\n");
+    t.push_str("allow 192.168.0.0/16 vpn\n");
+    t.push_str("allow 10.0.0.0/16 vpn\n");
+    t.push_str("allow 172.16.17.72/30 vpn\n");
+    t.push_str("allow 172.16.47.222/32 vpn\n");
+    t.push_str("allow 172.16.57.216/30 partner\n");
+    t.push_str("allow 192.168.63.0/24 ci\n");
+    t.push_str("allow 203.0.167.0/24 ci\n");
+    t.push_str("allow 203.0.177.0/24 office\n");
+    t.push_str("allow 192.168.40.0/24 office\n");
+    t.push_str("allow 172.16.2.0/28 vpn\n");
+    t.push_str("allow 192.168.14.48/28 partner\n");
+    t.push_str("deny 10.0.16.0/24\n");
+    t.push_str("deny 10.0.83.0/24\n");
+    t.push_str("deny 10.0.138.0/24\n");
+    t.push_str("deny 10.0.163.0/24\n");
+    t.push_str("deny 10.0.51.0/28\n");
+    t.push_str("deny 10.0.79.0/28\n");
+    t.push_str("check 172.16.35.9\n");
+    t.push_str("check 10.0.11.227\n");
+    t.push_str("check 172.16.21.237\n");
+    t.push_str("check 10.0.9.150\n");
+    t.push_str("check 10.0.41.201\n");
+    t.push_str("check 172.16.29.117\n");
+    t.push_str("check 192.168.9.139\n");
+    t.push_str("check 10.0.15.181\n");
+    t.push_str("check 192.168.3.170\n");
+    t.push_str("check 8.0.37.11\n");
+    t.push_str("check 192.168.36.90\n");
+    t.push_str("check 192.168.35.12\n");
+    t.push_str("check 10.0.20.59\n");
+    t.push_str("check 192.168.55.226\n");
+    t.push_str("check 10.0.39.85\n");
+    t.push_str("check 10.0.36.181\n");
+    t.push_str("check 10.0.18.87\n");
+    t.push_str("check 192.168.61.11\n");
+    t.push_str("check 10.0.30.63\n");
+    t.push_str("check 8.0.57.152\n");
+    t.push_str("check 192.168.6.83\n");
+    t.push_str("check 192.168.57.81\n");
+    t.push_str("check 192.168.39.73\n");
+    t.push_str("check 172.16.46.22\n");
+    t.push_str("check 8.0.8.249\n");
+    t.push_str("check 172.16.6.171\n");
+    t.push_str("check 10.0.16.178\n");
+    t.push_str("check 8.0.1.142\n");
+    t.push_str("check 172.16.17.205\n");
+    t.push_str("check 10.0.40.43\n");
+    t.push_str("check 192.168.5.221\n");
+    t.push_str("check 10.0.47.254\n");
+    t.push_str("check 10.0.14.93\n");
+    t.push_str("check 10.0.14.193\n");
+    t.push_str("check 8.0.7.100\n");
+    t.push_str("check 10.0.10.214\n");
+    t.push_str("check 172.16.8.117\n");
+    t.push_str("check 8.0.22.214\n");
+    t.push_str("check 8.0.34.88\n");
+    t.push_str("check 172.16.49.116\n");
+    t.push_str("check 192.168.14.204\n");
+    t.push_str("check 10.0.10.69\n");
+    t.push_str("check 192.168.25.247\n");
+    t.push_str("check 172.16.9.178\n");
+    t.push_str("check 8.0.12.158\n");
+    t.push_str("check 8.0.8.111\n");
+    t.push_str("check 172.16.48.245\n");
+    t.push_str("check 172.16.16.238\n");
+    t.push_str("check 172.16.36.2\n");
+    t.push_str("check 8.0.54.184\n");
+    v.push(DataFile { path: "allowlist.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("chr1\t702\t8050\tAPO10\t-\n");
+    t.push_str("chr1\t5551\t9590\tCDK11\t+\n");
+    t.push_str("chr1\t10826\t19969\tKRA12\t+\n");
+    t.push_str("chr1\t8057\t14636\tAPO13\t+\n");
+    t.push_str("chr1\t7431\t11736\tKRA14\t+\n");
+    t.push_str("chr1\t11588\t18752\tCDK15\t+\n");
+    t.push_str("chr1\t13977\t23326\tCDK16\t+\n");
+    t.push_str("chr1\t21607\t28143\tBRC17\t+\n");
+    t.push_str("chr1\t20056\t22601\tBRC18\t-\n");
+    t.push_str("chr1\t19695\t29239\tPTE19\t-\n");
+    t.push_str("chr1\t24636\t27611\tMYC110\t+\n");
+    t.push_str("chr1\t29335\t33683\tTP111\t+\n");
+    t.push_str("chr1\t29752\t41291\tTP112\t+\n");
+    t.push_str("chr1\t35929\t44233\tAPO113\t+\n");
+    t.push_str("chr1\t38519\t41413\tAPO114\t-\n");
+    t.push_str("chr1\t41502\t49396\tAPO115\t-\n");
+    t.push_str("chr1\t46439\t53272\tEGF116\t+\n");
+    t.push_str("chr1\t44967\t48071\tCDK117\t+\n");
+    t.push_str("chr1\t50020\t51668\tKRA118\t-\n");
+    t.push_str("chr1\t56137\t66838\tTP119\t+\n");
+    t.push_str("chr1\t64108\t67394\tPTE120\t-\n");
+    t.push_str("chr1\t66786\t77071\tEGF121\t+\n");
+    t.push_str("chr1\t65478\t68741\tTP122\t+\n");
+    t.push_str("chr1\t69502\t76143\tMYC123\t+\n");
+    t.push_str("chr1\t77575\t86589\tKRA124\t-\n");
+    t.push_str("chr1\t77247\t87422\tBRC125\t-\n");
+    t.push_str("chr1\t82290\t91082\tAPO126\t+\n");
+    t.push_str("chr1\t83318\t86477\tTP127\t-\n");
+    t.push_str("chr1\t86993\t95409\tBRC128\t-\n");
+    t.push_str("chr1\t84847\t89573\tEGF129\t+\n");
+    t.push_str("chr1\t88720\t93292\tMYC130\t-\n");
+    t.push_str("chr1\t86857\t92896\tMYC131\t+\n");
+    t.push_str("chr1\t95792\t104139\tBRC132\t-\n");
+    t.push_str("chr1\t95079\t106232\tCDK133\t+\n");
+    t.push_str("chr1\t95553\t102045\tMYC134\t-\n");
+    t.push_str("chr1\t102405\t109885\tCDK135\t-\n");
+    t.push_str("chr1\t104450\t107224\tEGF136\t+\n");
+    t.push_str("chr1\t113259\t113926\tAPO137\t+\n");
+    t.push_str("chr1\t121984\t122869\tEGF138\t-\n");
+    t.push_str("chr1\t129532\t134124\tAPO139\t-\n");
+    t.push_str("chr2\t9192\t16337\tMYC20\t+\n");
+    t.push_str("chr2\t8517\t10570\tAPO21\t+\n");
+    t.push_str("chr2\t8575\t9489\tCDK22\t+\n");
+    t.push_str("chr2\t6752\t9202\tEGF23\t+\n");
+    t.push_str("chr2\t8733\t18058\tPTE24\t-\n");
+    t.push_str("chr2\t13824\t17922\tMYC25\t+\n");
+    t.push_str("chr2\t13837\t20527\tKRA26\t+\n");
+    t.push_str("chr2\t20731\t29502\tBRC27\t+\n");
+    t.push_str("chr2\t24082\t32182\tTP28\t-\n");
+    t.push_str("chr2\t30370\t33742\tKRA29\t-\n");
+    t.push_str("chr2\t38785\t49200\tPTE210\t+\n");
+    t.push_str("chr2\t39794\t46665\tMYC211\t-\n");
+    t.push_str("chr2\t48691\t54024\tCDK212\t+\n");
+    t.push_str("chr2\t54627\t64976\tBRC213\t-\n");
+    t.push_str("chr2\t60095\t65676\tEGF214\t+\n");
+    t.push_str("chr2\t58139\t68739\tPTE215\t+\n");
+    t.push_str("chr2\t60959\t62529\tPTE216\t-\n");
+    t.push_str("chr2\t59722\t61468\tTP217\t-\n");
+    t.push_str("chr2\t64996\t75676\tBRC218\t-\n");
+    t.push_str("chr2\t69710\t78687\tAPO219\t-\n");
+    t.push_str("chr2\t67862\t72056\tBRC220\t+\n");
+    t.push_str("chr2\t75700\t83309\tBRC221\t+\n");
+    t.push_str("chr2\t77215\t87371\tAPO222\t-\n");
+    t.push_str("chr2\t81685\t86058\tAPO223\t-\n");
+    t.push_str("chr2\t84050\t92525\tKRA224\t+\n");
+    t.push_str("chr2\t81663\t90022\tMYC225\t-\n");
+    t.push_str("chr2\t84774\t95179\tKRA226\t-\n");
+    t.push_str("chr2\t92043\t102907\tEGF227\t+\n");
+    t.push_str("chr2\t96926\t105596\tAPO228\t-\n");
+    t.push_str("chr2\t103997\t110753\tBRC229\t+\n");
+    t.push_str("chr2\t106118\t109928\tEGF230\t-\n");
+    t.push_str("chr2\t114855\t117737\tTP231\t+\n");
+    t.push_str("chr2\t113157\t122215\tEGF232\t-\n");
+    t.push_str("chr2\t117732\t120005\tMYC233\t-\n");
+    t.push_str("chr2\t118104\t129723\tPTE234\t-\n");
+    t.push_str("chr2\t125615\t135645\tKRA235\t-\n");
+    t.push_str("chr2\t123958\t124926\tPTE236\t-\n");
+    t.push_str("chr2\t123471\t135131\tKRA237\t+\n");
+    t.push_str("chr2\t130268\t142042\tEGF238\t-\n");
+    t.push_str("chr2\t129842\t136775\tCDK239\t-\n");
+    t.push_str("chrX\t5157\t13205\tEGFX0\t+\n");
+    t.push_str("chrX\t13096\t19897\tEGFX1\t+\n");
+    t.push_str("chrX\t13183\t17208\tBRCX2\t-\n");
+    t.push_str("chrX\t20496\t27020\tBRCX3\t+\n");
+    t.push_str("chrX\t25707\t35710\tBRCX4\t-\n");
+    t.push_str("chrX\t32666\t40395\tCDKX5\t+\n");
+    t.push_str("chrX\t29790\t39209\tMYCX6\t+\n");
+    t.push_str("chrX\t31852\t35469\tCDKX7\t-\n");
+    t.push_str("chrX\t28901\t35463\tMYCX8\t+\n");
+    t.push_str("chrX\t35252\t42832\tBRCX9\t-\n");
+    t.push_str("chrX\t35325\t42659\tAPOX10\t+\n");
+    t.push_str("chrX\t36013\t45931\tCDKX11\t+\n");
+    t.push_str("chrX\t43805\t53841\tTPX12\t+\n");
+    t.push_str("chrX\t47944\t59226\tKRAX13\t+\n");
+    t.push_str("chrX\t45921\t54569\tCDKX14\t-\n");
+    t.push_str("chrX\t54049\t65626\tPTEX15\t+\n");
+    t.push_str("chrX\t55468\t58482\tPTEX16\t-\n");
+    t.push_str("chrX\t57350\t68335\tBRCX17\t+\n");
+    t.push_str("chrX\t65297\t66905\tMYCX18\t+\n");
+    t.push_str("chrX\t73405\t77014\tPTEX19\t-\n");
+    t.push_str("chrX\t76178\t77640\tMYCX20\t+\n");
+    t.push_str("chrX\t82767\t91378\tEGFX21\t-\n");
+    t.push_str("chrX\t82358\t83389\tTPX22\t+\n");
+    t.push_str("chrX\t85233\t94556\tEGFX23\t-\n");
+    t.push_str("chrX\t85492\t97311\tKRAX24\t-\n");
+    t.push_str("chrX\t83775\t89593\tKRAX25\t+\n");
+    t.push_str("chrX\t89012\t90175\tPTEX26\t+\n");
+    t.push_str("chrX\t86356\t92893\tCDKX27\t-\n");
+    t.push_str("chrX\t86010\t93743\tBRCX28\t-\n");
+    t.push_str("chrX\t94142\t95553\tKRAX29\t+\n");
+    t.push_str("chrX\t96228\t103120\tKRAX30\t-\n");
+    t.push_str("chrX\t104643\t111155\tBRCX31\t-\n");
+    t.push_str("chrX\t104483\t115036\tEGFX32\t+\n");
+    t.push_str("chrX\t107645\t118743\tMYCX33\t+\n");
+    t.push_str("chrX\t113430\t122130\tAPOX34\t+\n");
+    t.push_str("chrX\t114138\t123070\tEGFX35\t-\n");
+    t.push_str("chrX\t117074\t118930\tKRAX36\t-\n");
+    t.push_str("chrX\t123894\t127314\tPTEX37\t-\n");
+    t.push_str("chrX\t130280\t132927\tBRCX38\t-\n");
+    t.push_str("chrX\t136789\t137719\tKRAX39\t+\n");
+    v.push(DataFile { path: "genes.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("trace\ttraces/small.txt\n");
+    t.push_str("trace\ttraces/wide.txt\n");
+    t.push_str("trace\ttraces/dense.txt\n");
+    t.push_str("genome\tgenes.tsv\tvariants.tsv\treads.tsv\n");
+    t.push_str("calendar\tmeetings.txt\n");
+    t.push_str("allowlist\tallowlist.txt\n");
+    t.push_str("subtitles\tsubtitles.tsv\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("mon boreal 1035 1065 review\n");
+    t.push_str("mon atlas 660 690 sync\n");
+    t.push_str("mon atlas 615 735 1on1\n");
+    t.push_str("mon atlas 900 960 sync\n");
+    t.push_str("mon atlas 495 585 review\n");
+    t.push_str("mon boreal 900 1020 1on1\n");
+    t.push_str("mon boreal 555 675 1on1\n");
+    t.push_str("mon atlas 780 825 standup\n");
+    t.push_str("mon boreal 510 540 1on1\n");
+    t.push_str("mon boreal 540 585 standup\n");
+    t.push_str("mon atlas 1050 1080 planning\n");
+    t.push_str("mon boreal 735 825 sync\n");
+    t.push_str("mon boreal 660 675 interview\n");
+    t.push_str("mon boreal 615 735 review\n");
+    t.push_str("mon boreal 930 960 sync\n");
+    t.push_str("mon atlas 930 1020 1on1\n");
+    t.push_str("mon atlas 990 1020 standup\n");
+    t.push_str("mon atlas 720 765 sync\n");
+    t.push_str("block mon 720 780 lunch\n");
+    t.push_str("cancel mon 990\n");
+    t.push_str("free mon 30\n");
+    t.push_str("tue boreal 675 720 planning\n");
+    t.push_str("tue atlas 930 975 1on1\n");
+    t.push_str("tue boreal 645 765 interview\n");
+    t.push_str("tue boreal 795 825 1on1\n");
+    t.push_str("tue atlas 525 585 sync\n");
+    t.push_str("tue boreal 900 960 standup\n");
+    t.push_str("tue atlas 555 600 sync\n");
+    t.push_str("tue boreal 840 930 planning\n");
+    t.push_str("tue boreal 855 885 1on1\n");
+    t.push_str("tue boreal 825 870 review\n");
+    t.push_str("tue boreal 540 630 sync\n");
+    t.push_str("tue atlas 720 810 standup\n");
+    t.push_str("tue boreal 855 975 planning\n");
+    t.push_str("tue boreal 735 795 planning\n");
+    t.push_str("tue boreal 780 900 standup\n");
+    t.push_str("tue boreal 495 555 planning\n");
+    t.push_str("tue atlas 630 660 review\n");
+    t.push_str("tue atlas 900 930 review\n");
+    t.push_str("block tue 720 780 lunch\n");
+    t.push_str("cancel tue 525\n");
+    t.push_str("free tue 30\n");
+    t.push_str("wed atlas 525 555 standup\n");
+    t.push_str("wed boreal 525 555 1on1\n");
+    t.push_str("wed boreal 570 600 standup\n");
+    t.push_str("wed atlas 960 975 interview\n");
+    t.push_str("wed boreal 975 1095 1on1\n");
+    t.push_str("wed boreal 915 975 sync\n");
+    t.push_str("wed boreal 870 990 sync\n");
+    t.push_str("wed atlas 795 810 review\n");
+    t.push_str("wed atlas 645 675 planning\n");
+    t.push_str("wed boreal 750 780 sync\n");
+    t.push_str("wed atlas 705 720 1on1\n");
+    t.push_str("wed atlas 735 795 standup\n");
+    t.push_str("wed atlas 675 735 interview\n");
+    t.push_str("wed boreal 1035 1080 planning\n");
+    t.push_str("wed atlas 510 540 review\n");
+    t.push_str("wed atlas 690 705 review\n");
+    t.push_str("wed boreal 765 825 sync\n");
+    t.push_str("wed atlas 795 840 review\n");
+    t.push_str("block wed 720 780 lunch\n");
+    t.push_str("cancel wed 750\n");
+    t.push_str("free wed 60\n");
+    v.push(DataFile { path: "meetings.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("chr2\t22402\t22552\tread0\n");
+    t.push_str("chrX\t80911\t82911\tread1\n");
+    t.push_str("chr2\t139459\t139759\tread2\n");
+    t.push_str("chr1\t190804\t190954\tread3\n");
+    t.push_str("chr2\t117042\t117192\tread4\n");
+    t.push_str("chr1\t163071\t165071\tread5\n");
+    t.push_str("chr1\t28260\t28410\tread6\n");
+    t.push_str("chrX\t131110\t133110\tread7\n");
+    t.push_str("chr1\t134883\t136883\tread8\n");
+    t.push_str("chr2\t15587\t15737\tread9\n");
+    t.push_str("chr1\t154935\t155235\tread10\n");
+    t.push_str("chrX\t45570\t54570\tread11\n");
+    t.push_str("chr1\t193231\t193531\tread12\n");
+    t.push_str("chrX\t199673\t199973\tread13\n");
+    t.push_str("chrX\t74234\t74534\tread14\n");
+    t.push_str("chrX\t22975\t24975\tread15\n");
+    t.push_str("chr1\t188696\t190696\tread16\n");
+    t.push_str("chrX\t117796\t117946\tread17\n");
+    t.push_str("chr1\t47303\t56303\tread18\n");
+    t.push_str("chr2\t177019\t186019\tread19\n");
+    t.push_str("chr1\t153145\t153295\tread20\n");
+    t.push_str("chr1\t26348\t28348\tread21\n");
+    t.push_str("chr1\t149400\t149700\tread22\n");
+    t.push_str("chrX\t74052\t83052\tread23\n");
+    t.push_str("chr2\t29085\t29385\tread24\n");
+    t.push_str("chr2\t142623\t142923\tread25\n");
+    t.push_str("chr2\t144415\t144565\tread26\n");
+    t.push_str("chr2\t39699\t39849\tread27\n");
+    t.push_str("chrX\t31798\t33798\tread28\n");
+    t.push_str("chr1\t86551\t95551\tread29\n");
+    t.push_str("chr1\t195879\t204879\tread30\n");
+    t.push_str("chr1\t100910\t101060\tread31\n");
+    t.push_str("chr2\t9355\t9505\tread32\n");
+    t.push_str("chrX\t109610\t111610\tread33\n");
+    t.push_str("chr1\t43116\t43266\tread34\n");
+    t.push_str("chrX\t3838\t3988\tread35\n");
+    t.push_str("chrX\t15409\t24409\tread36\n");
+    t.push_str("chr2\t196849\t196999\tread37\n");
+    t.push_str("chr2\t4686\t6686\tread38\n");
+    t.push_str("chr2\t51176\t51326\tread39\n");
+    t.push_str("chr1\t69789\t71789\tread40\n");
+    t.push_str("chrX\t52049\t54049\tread41\n");
+    t.push_str("chr2\t57110\t57260\tread42\n");
+    t.push_str("chr1\t146341\t155341\tread43\n");
+    t.push_str("chrX\t44980\t53980\tread44\n");
+    t.push_str("chrX\t63057\t63357\tread45\n");
+    t.push_str("chr1\t111059\t111209\tread46\n");
+    t.push_str("chr1\t117073\t117373\tread47\n");
+    t.push_str("chrX\t109147\t109297\tread48\n");
+    t.push_str("chrX\t180788\t182788\tread49\n");
+    t.push_str("chr1\t182171\t182321\tread50\n");
+    t.push_str("chrX\t77898\t79898\tread51\n");
+    t.push_str("chr2\t78843\t87843\tread52\n");
+    t.push_str("chrX\t144662\t144812\tread53\n");
+    t.push_str("chr2\t28928\t29078\tread54\n");
+    t.push_str("chrX\t36993\t37293\tread55\n");
+    t.push_str("chrX\t191535\t193535\tread56\n");
+    t.push_str("chr1\t43839\t43989\tread57\n");
+    t.push_str("chr2\t147830\t156830\tread58\n");
+    t.push_str("chr1\t62124\t71124\tread59\n");
+    v.push(DataFile { path: "reads.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\t3260\t5720\tRun!\n");
+    t.push_str("2\t5231\t6495\t[music]\n");
+    t.push_str("3\t8610\t13319\tHello.\n");
+    t.push_str("4\t11800\t16718\t[music]\n");
+    t.push_str("5\t14602\t18921\tRun!\n");
+    t.push_str("6\t17864\t22015\tRun!\n");
+    t.push_str("7\t21284\t22319\tRun!\n");
+    t.push_str("8\t22074\t23934\tRun!\n");
+    t.push_str("9\t24721\t29479\tNo.\n");
+    t.push_str("10\t26413\t29208\tHello.\n");
+    t.push_str("11\t26737\t29941\tWhere were you?\n");
+    t.push_str("12\t29023\t30182\tHello.\n");
+    t.push_str("13\t31124\t34493\t[door slams]\n");
+    t.push_str("14\t34052\t38320\tNo.\n");
+    t.push_str("15\t37090\t39534\tHello.\n");
+    t.push_str("16\t38316\t40732\tNo.\n");
+    t.push_str("17\t40269\t42346\tHello.\n");
+    t.push_str("18\t40876\t42289\t[music]\n");
+    t.push_str("19\t43308\t44474\tHello.\n");
+    t.push_str("20\t45174\t47760\t[door slams]\n");
+    t.push_str("21\t47815\t49357\t[door slams]\n");
+    t.push_str("22\t48441\t52577\tHello.\n");
+    t.push_str("23\t50363\t54909\tWhere were you?\n");
+    t.push_str("24\t50728\t54413\tWhere were you?\n");
+    t.push_str("25\t53694\t56457\tWhere were you?\n");
+    t.push_str("26\t54441\t57505\t[door slams]\n");
+    t.push_str("27\t57757\t62130\t[door slams]\n");
+    t.push_str("28\t60091\t64738\tNo.\n");
+    t.push_str("29\t63203\t64267\tHello.\n");
+    t.push_str("30\t64025\t64891\tWhere were you?\n");
+    t.push_str("31\t66767\t71470\tHello.\n");
+    t.push_str("32\t69350\t71649\tHello.\n");
+    t.push_str("33\t72395\t73351\tNo.\n");
+    t.push_str("34\t72794\t75987\tNo.\n");
+    t.push_str("35\t73665\t74989\tI told you.\n");
+    t.push_str("36\t74556\t76162\tWhere were you?\n");
+    t.push_str("37\t77249\t78319\tHello.\n");
+    t.push_str("38\t80237\t84504\tHello.\n");
+    t.push_str("39\t83736\t86802\tLook out!\n");
+    t.push_str("40\t85253\t89290\tHello.\n");
+    t.push_str("41\t85865\t87573\tRun!\n");
+    t.push_str("42\t87865\t90613\tI told you.\n");
+    t.push_str("43\t89024\t91015\tNo.\n");
+    t.push_str("44\t90869\t94260\tWhere were you?\n");
+    t.push_str("45\t93178\t94518\t[music]\n");
+    t.push_str("46\t96199\t97360\tHello.\n");
+    t.push_str("47\t96988\t101040\tRun!\n");
+    t.push_str("48\t98512\t99863\tRun!\n");
+    t.push_str("49\t99863\t103315\tNo.\n");
+    t.push_str("50\t101989\t104577\tLook out!\n");
+    t.push_str("51\t103169\t104024\tWhere were you?\n");
+    t.push_str("52\t103793\t104783\tRun!\n");
+    t.push_str("53\t104860\t106475\t[music]\n");
+    t.push_str("54\t107334\t109234\tHello.\n");
+    t.push_str("55\t110081\t112234\t[music]\n");
+    t.push_str("56\t112425\t113678\tHello.\n");
+    t.push_str("57\t114214\t118983\tWhere were you?\n");
+    t.push_str("58\t116122\t118608\t[door slams]\n");
+    t.push_str("59\t117009\t119698\tHello.\n");
+    t.push_str("60\t119452\t120379\tI told you.\n");
+    t.push_str("cut 30000\n");
+    t.push_str("cut 61000\n");
+    v.push(DataFile { path: "subtitles.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("set -1 20 _\n");
+    t.push_str("slicef -3\n");
+    t.push_str("update 8:24:_ 2:10:c 8:21:a 10:35:b 2:27:a\n");
+    t.push_str("discard 9:33:_\n");
+    t.push_str("overlap 9 15\n");
+    t.push_str("iv < 31:53:_ 51\n");
+    t.push_str("chop 13 37\n");
+    t.push_str("iv contains_interval 38:44:#2 13:32:#1\n");
+    t.push_str("discard 1:13:b\n");
+    t.push_str("iv overlap_size 26:28:a 37:46:x\n");
+    t.push_str("discard 3:17:#1\n");
+    t.push_str("add 5:18\n");
+    t.push_str("del 15\n");
+    t.push_str("slice 11\n");
+    t.push_str("iv gt 35:49:#2 39:44:a\n");
+    t.push_str("contains 0:19:a\n");
+    t.push_str("iv le 40:59:#2 11:23:#1\n");
+    t.push_str("copy\n");
+    t.push_str("discard 5:18\n");
+    t.push_str("merge_join 1\n");
+    t.push_str("len\n");
+    t.push_str("add 4:8:a\n");
+    t.push_str("del 1\n");
+    t.push_str("iv == 39:44 22:32:_\n");
+    t.push_str("add 0:20:_\n");
+    t.push_str("iv contains_interval 29:51:#1 15:40:x\n");
+    t.push_str("iv contains_interval 0:4:c 21:39:_\n");
+    t.push_str("add 8:12:c\n");
+    t.push_str("set -1 -3 _\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("slice 7\n");
+    t.push_str("update 7:18:a\n");
+    t.push_str("iv ge 3:5:b 31:42:b\n");
+    t.push_str("overlap 13 30\n");
+    t.push_str("overlap 5 30\n");
+    t.push_str("add 12:18:a\n");
+    t.push_str("overlap 15 37\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("add 6:20\n");
+    t.push_str("add 12:26:c\n");
+    t.push_str("iv contains_interval 7:11:_ 37:53:c\n");
+    t.push_str("set -4 -1 b\n");
+    t.push_str("merge_join 1\n");
+    t.push_str("iv is_null 30:40:#1 2\n");
+    t.push_str("add 8:27:c\n");
+    t.push_str("iv > 29:54 22:25:_\n");
+    t.push_str("iv distance_to 9:14:c 30:47:_\n");
+    t.push_str("add 5:28:#1\n");
+    t.push_str("len\n");
+    t.push_str("iv > 30:37:c 15:40:c\n");
+    t.push_str("iv == 29:50:a 14:35:b\n");
+    t.push_str("iv distance_to 16:36:a 30\n");
+    t.push_str("iv overlaps 5:8:b 18:32:#2\n");
+    t.push_str("add 7:28\n");
+    t.push_str("remove_overlap 3 5\n");
+    t.push_str("add 8:20:#2\n");
+    t.push_str("intersection 12:26:c 8:27:c 5:28:#1 7:28 10:31:c\n");
+    t.push_str("add 1:6:#2\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("remove_envelop 0 27\n");
+    t.push_str("get 17 19\n");
+    t.push_str("span\n");
+    t.push_str("add 2:18:#1\n");
+    t.push_str("set 6 25 _\n");
+    t.push_str("overlaps 6 35\n");
+    t.push_str("add 10:35:b\n");
+    t.push_str("add 10:34:c\n");
+    t.push_str("chop 7 17\n");
+    t.push_str("remove_envelop 3 24\n");
+    t.push_str("copy\n");
+    t.push_str("iv overlaps 40:57:#1 59\n");
+    t.push_str("slice 15\n");
+    t.push_str("get _ 42\n");
+    t.push_str("add 8:23:b\n");
+    t.push_str("remove_envelop -1 5\n");
+    t.push_str("contains 8:27:c\n");
+    t.push_str("get 12 _\n");
+    t.push_str("at 6\n");
+    t.push_str("add 11:18:b\n");
+    t.push_str("iv > 31:33 10:26:b\n");
+    t.push_str("add 7:30\n");
+    t.push_str("overlaps 3 24\n");
+    t.push_str("overlaps 6\n");
+    t.push_str("add 2:20:x\n");
+    t.push_str("add 8:9:c\n");
+    t.push_str("add 2:3\n");
+    t.push_str("envelop 17 18\n");
+    t.push_str("set 7 36 a\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv le 24:30:#2 22:42:a\n");
+    t.push_str("update 8:17:a 5:26:#2\n");
+    t.push_str("remove 9:29:a\n");
+    t.push_str("add 8:9:x\n");
+    t.push_str("merge_join 1\n");
+    t.push_str("iv < 24:44 26:39:#2\n");
+    t.push_str("add 2:16\n");
+    t.push_str("difference 8:23:b 2:3 8:9:x 1:26:b 5:13:a 9:11\n");
+    t.push_str("iv is_null 0:13:b 19:22:x\n");
+    t.push_str("len\n");
+    t.push_str("chopf -2 10\n");
+    t.push_str("iv length 26:46:#2 66\n");
+    t.push_str("contains 1:21:a\n");
+    t.push_str("iv repr 5:18:x 11\n");
+    t.push_str("eq 11:18:b 2:20:x 8:9:c 2:3 8:9:x 2:16\n");
+    t.push_str("at 1\n");
+    t.push_str("iv length 4:11:x 3:17\n");
+    t.push_str("at 1\n");
+    t.push_str("iv overlap_size 12:26:_ 58\n");
+    t.push_str("discard 12:18:a\n");
+    t.push_str("get 15 43\n");
+    t.push_str("add 6:20:x\n");
+    t.push_str("eq 11:18:b 7:30 2:20:x 8:9:c 2:16:#1 7:23:x\n");
+    t.push_str("at 4\n");
+    t.push_str("contains 8:9:a\n");
+    t.push_str("add 2:3:x\n");
+    t.push_str("iv == 35:40:x 19:41\n");
+    t.push_str("update 10:32:c\n");
+    t.push_str("iv == 26:37:c 29:54\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("len\n");
+    t.push_str("difference_update 7:30 8:9:c 2:3 8:9:x 2:16 0:11:b 7:12:#1\n");
+    t.push_str("copy\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("iv gt 19:25:_ 3:5:#2\n");
+    t.push_str("slice 12\n");
+    t.push_str("envelop -3 26\n");
+    t.push_str("set -3 2 b\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("overlaps 10\n");
+    t.push_str("remove_envelop 2 31\n");
+    t.push_str("iv le 29:50:a 3:24:c\n");
+    t.push_str("add 8:26:x\n");
+    t.push_str("overlap 8 30\n");
+    t.push_str("add 2:12:c\n");
+    t.push_str("overlap -3 7\n");
+    t.push_str("add 3:21\n");
+    t.push_str("iv le 33:48 28:43\n");
+    t.push_str("iv overlaps 20:27:c 3:9:b\n");
+    t.push_str("add 8:17:b\n");
+    t.push_str("contains 8:9:c\n");
+    t.push_str("add 10:22:#2\n");
+    t.push_str("iv is_null 17:37:x 41\n");
+    t.push_str("remove 7:30\n");
+    t.push_str("iv contains_point 39:53:_ 44\n");
+    t.push_str("del -4\n");
+    t.push_str("iv repr 0:17:#2 23:45:b\n");
+    t.push_str("add 1:6:b\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 0:23:#2\n");
+    t.push_str("remove_overlap 6\n");
+    t.push_str("chopf 7 19\n");
+    t.push_str("add 1:21:b\n");
+    t.push_str("overlaps 6\n");
+    t.push_str("iv > 24:45:_ 36\n");
+    t.push_str("remove 2:3\n");
+    t.push_str("iv < 40:62:#2 37:48:x\n");
+    t.push_str("iv == 32:51:b 33:52:#1\n");
+    t.push_str("at 13\n");
+    t.push_str("slicef 6\n");
+    t.push_str("add 7:14:c\n");
+    t.push_str("iv repr 25:36:c 39\n");
+    t.push_str("set -4 9 _\n");
+    t.push_str("overlap 0 16\n");
+    t.push_str("update 1:8:x 4:19:c 9:15:x 7:30:x 3:25:#2 9:17:c\n");
+    t.push_str("len\n");
+    t.push_str("chopf 4 30\n");
+    t.push_str("add 0:9:_\n");
+    t.push_str("set 10 30 _\n");
+    t.push_str("iv repr 26:50:c 6:11:#1\n");
+    t.push_str("slicef -1\n");
+    t.push_str("add 9:34:#1\n");
+    t.push_str("chopf 4 22\n");
+    t.push_str("iv length 27:51:#2 23:31:#1\n");
+    t.push_str("remove_envelop 17 22\n");
+    t.push_str("at 0\n");
+    t.push_str("add 6:18:b\n");
+    t.push_str("difference 10:22:#2 1:6:b 0:23:#2 1:21:b 9:34:#1 6:18:b\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("contains 1:8:b\n");
+    t.push_str("contains 1:6:#2\n");
+    t.push_str("update 4:16:#2 1:5:c\n");
+    t.push_str("intersection 10:22:#2 0:23:#2 7:14:c 0:9:_ 9:34:#1 8:27:_ 6:15:#1 8:17\n");
+    t.push_str("add 3:8:x\n");
+    t.push_str("iv repr 2:21:#2 10:34:b\n");
+    t.push_str("envelop -1 4\n");
+    t.push_str("remove_overlap 16\n");
+    t.push_str("add 1:3:_\n");
+    t.push_str("remove_envelop 14 40\n");
+    t.push_str("update 10:33 0:11:#2 5:9:a\n");
+    t.push_str("iv gt 20:35 13:27\n");
+    t.push_str("iv < 18:31:a 14:33:#1\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("discard 12:26:c\n");
+    t.push_str("iv repr 28:38:c 33:37:b\n");
+    t.push_str("add 0:19:a\n");
+    t.push_str("add 0:10:#1\n");
+    t.push_str("iv is_null 8:27:b 2:24:x\n");
+    t.push_str("add 2:5:#1\n");
+    t.push_str("del 11\n");
+    t.push_str("add 6:17\n");
+    t.push_str("at -5\n");
+    t.push_str("get 3 _\n");
+    t.push_str("add 11:25:_\n");
+    t.push_str("len\n");
+    t.push_str("add 2:23:c\n");
+    t.push_str("iv is_null 26:37 25:49\n");
+    t.push_str("add 10:14\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlap 12 37\n");
+    t.push_str("slice 10\n");
+    t.push_str("iv > 8:25:b 38:48:c\n");
+    t.push_str("overlaps 0 11\n");
+    t.push_str("slice 10\n");
+    t.push_str("update 8:21:x 1:11:x 1:8\n");
+    t.push_str("set 2 5 #2\n");
+    t.push_str("remove_envelop 12 23\n");
+    t.push_str("remove_envelop -5 25\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("iv contains_interval 13:25:x 29:31\n");
+    t.push_str("remove 4:16:b\n");
+    t.push_str("envelop 17 37\n");
+    t.push_str("clear\n");
+    t.push_str("union 5:17:c\n");
+    t.push_str("set -2 16 b\n");
+    t.push_str("envelop 12 28\n");
+    t.push_str("add 12:13:b\n");
+    t.push_str("copy\n");
+    t.push_str("overlap 1 28\n");
+    t.push_str("overlap 17 38\n");
+    t.push_str("eq 12:13:b\n");
+    t.push_str("contains 12:13:b\n");
+    t.push_str("merge_join 1\n");
+    t.push_str("add 5:25:a\n");
+    t.push_str("iv contains_point 28:44:a 11\n");
+    t.push_str("iv length 12:21:b 1:3\n");
+    t.push_str("at 9\n");
+    t.push_str("union 12:13:b 5:25:a 11:23:_\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("envelop -1 16\n");
+    t.push_str("iv distance_to 10:21:_ 34:45:#2\n");
+    t.push_str("discard 9:24:_\n");
+    t.push_str("iv repr 0:12:_ 29:49:#1\n");
+    t.push_str("remove_overlap 10\n");
+    t.push_str("is_empty\n");
+    t.push_str("add 8:17:a\n");
+    t.push_str("iv overlaps 29:33:#1 12:34:b\n");
+    t.push_str("at 4\n");
+    t.push_str("iv gt 11:30 58\n");
+    t.push_str("set 12 12 #2\n");
+    t.push_str("iv overlap_size 11:16:#2 23:31:_\n");
+    t.push_str("add 2:20:x\n");
+    t.push_str("at 6\n");
+    t.push_str("add 0:13:a\n");
+    t.push_str("iv > 17:29:b 6:8:_\n");
+    t.push_str("union 8:17:a 0:13:a 11:12:x 11:31:#2 8:16\n");
+    t.push_str("at 14\n");
+    t.push_str("overlap 2 10\n");
+    t.push_str("get _ _\n");
+    t.push_str("iv ge 24:37:b 6:31:#2\n");
+    t.push_str("update 8:33 5:22:b 4:15:#1 11:18:x 11:34:_ 3:24:x\n");
+    t.push_str("del 6\n");
+    t.push_str("overlaps -2 3\n");
+    t.push_str("iv lt 2:22:#1 22:39:c\n");
+    t.push_str("iv repr 16:22 -1\n");
+    t.push_str("iv contains_point 7:18:_ 30\n");
+    t.push_str("overlaps 3 5\n");
+    t.push_str("chopf 3 16\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv < 9:17:b 10:13:c\n");
+    t.push_str("iv length 20:34:x 5:23:#1\n");
+    t.push_str("add 1:18:c\n");
+    t.push_str("add 4:26:a\n");
+    t.push_str("iv contains_interval 22:43:c 11:29:#2\n");
+    t.push_str("span\n");
+    t.push_str("add 3:22:c\n");
+    t.push_str("set 3 7 c\n");
+    t.push_str("contains 2:20:x\n");
+    t.push_str("remove_overlap -3 -1\n");
+    t.push_str("add 9:20:_\n");
+    t.push_str("overlaps -2 18\n");
+    t.push_str("add 1:5:a\n");
+    t.push_str("iv gt 40:53 35:56:b\n");
+    t.push_str("copy\n");
+    t.push_str("add 7:10\n");
+    t.push_str("add 10:18\n");
+    t.push_str("merge 0\n");
+    t.push_str("end\n");
+    t.push_str("add 9:33:_\n");
+    t.push_str("remove 4:7:#2\n");
+    t.push_str("add 4:14:b\n");
+    t.push_str("iv le 10:29:_ 28:52:#1\n");
+    t.push_str("add 0:17:_\n");
+    t.push_str("overlap -5 2\n");
+    t.push_str("intersection 3:22:c 10:18 9:33:_ 10:11:#1 5:26:a\n");
+    t.push_str("merge_join 1\n");
+    t.push_str("difference_update 9:20:_ 1:5:a 7:10 10:18 9:33:_ 4:14:b 0:17:_\n");
+    t.push_str("remove 4:26:a\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 3:14:_\n");
+    t.push_str("add 1:24:x\n");
+    t.push_str("overlap 0 20\n");
+    t.push_str("overlap -2 7\n");
+    t.push_str("overlaps 5\n");
+    t.push_str("iv lt 39:49:b 12:15:x\n");
+    t.push_str("remove 1:24:x\n");
+    t.push_str("is_empty\n");
+    t.push_str("iv ge 25:33:#1 4\n");
+    t.push_str("overlaps 6\n");
+    t.push_str("chop -2 17\n");
+    t.push_str("end\n");
+    t.push_str("remove_envelop 17 27\n");
+    t.push_str("begin\n");
+    t.push_str("del 16\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("update 2:22:_ 2:13:#2 9:27:x\n");
+    t.push_str("range\n");
+    t.push_str("set -2 12 b\n");
+    t.push_str("iv contains_interval 28:39:#1 27:44:c\n");
+    t.push_str("symmetric_difference 1:5:a 9:33:_ 4:14:b 0:17:_ 3:14:_ 1:24:x 2:14:a 3:27:b\n");
+    t.push_str("add 6:19\n");
+    t.push_str("at 11\n");
+    t.push_str("del -5\n");
+    t.push_str("remove_envelop 13 39\n");
+    t.push_str("slicef 15\n");
+    t.push_str("contains 5:6:#1\n");
+    t.push_str("overlaps 5 26\n");
+    t.push_str("add 12:16:#1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlaps 4\n");
+    t.push_str("update 3:24:#2 2:10 5:8:a\n");
+    t.push_str("add 4:28:_\n");
+    t.push_str("overlap 9 10\n");
+    t.push_str("iv gt 11:16:#2 12:29\n");
+    t.push_str("len\n");
+    t.push_str("overlaps 13 30\n");
+    t.push_str("overlaps -2\n");
+    t.push_str("add 8:23\n");
+    t.push_str("add 5:17:x\n");
+    t.push_str("overlap -1 15\n");
+    t.push_str("iv == 26:41 28:48\n");
+    t.push_str("iv gt 10:14:a 18:35:_\n");
+    t.push_str("add 9:19\n");
+    t.push_str("iv length 40:62:x 62\n");
+    t.push_str("add 11:21:c\n");
+    t.push_str("get _ _\n");
+    t.push_str("range\n");
+    t.push_str("add 11:12\n");
+    t.push_str("overlap 17 18\n");
+    t.push_str("iv lt 40:42:#1 38:57:#2\n");
+    t.push_str("iv overlaps 33:36 34:56:b\n");
+    t.push_str("remove 11:21:c\n");
+    t.push_str("remove 8:23:b\n");
+    t.push_str("del 13\n");
+    t.push_str("iv contains_interval 13:38:x 38:61:x\n");
+    t.push_str("remove_envelop 8 28\n");
+    t.push_str("overlap 7 9\n");
+    t.push_str("symmetric_difference 6:19 12:16:#1 4:28:_ 9:19 11:21:c 11:12 8:32\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("chopf 6 26\n");
+    t.push_str("iv < 38:44:_ 67\n");
+    t.push_str("get 4 3\n");
+    t.push_str("overlaps 12\n");
+    t.push_str("iv repr 13:17:_ 34:51:#1\n");
+    t.push_str("iv range_matches 12:26:#2 20:43:#2\n");
+    t.push_str("iv < 32:35:b 24:35:x\n");
+    t.push_str("iv contains_interval 39:59:#2 4:28:#2\n");
+    t.push_str("add 4:7:x\n");
+    t.push_str("add 1:22:b\n");
+    t.push_str("add 7:28:#2\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("iv ge 26:28 69\n");
+    t.push_str("iv contains_interval 11:20:c 34:40:#1\n");
+    t.push_str("slicef 11\n");
+    t.push_str("iv gt 32:55:x 4:17:#1\n");
+    t.push_str("iv length 7:10:b 13:30:_\n");
+    t.push_str("iv length 36:39:c 9:11:a\n");
+    t.push_str("iv overlaps 21:41:#1 2:3:#2\n");
+    t.push_str("overlap 0 8\n");
+    t.push_str("slice -1\n");
+    t.push_str("slice -2\n");
+    t.push_str("chopf -2 -1\n");
+    t.push_str("add 9:11:x\n");
+    t.push_str("update 12:18:#2 8:14:x 9:22:c 6:28:b\n");
+    t.push_str("get _ 26\n");
+    t.push_str("iv overlaps 32:51:c 17:27:x\n");
+    t.push_str("discard 6:19\n");
+    t.push_str("overlap 5 17\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("intersection_update 11:21:c 4:7:x\n");
+    t.push_str("add 3:27:a\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("from_tuples 4:15:#2 2:26:_ 8:17:x 10:16:#1 1:7 9:31:#2 10:35 11:24:#2 5:11:a 6:22:#1\n");
+    t.push_str("overlap -3 5\n");
+    t.push_str("chop 17 18\n");
+    t.push_str("add 4:14:c\n");
+    t.push_str("intersection_update 11:21:c 11:12 3:27:a 4:14:c 8:27 1:7:a 11:25:c\n");
+    t.push_str("chop 7 23\n");
+    t.push_str("set 17 29 #2\n");
+    t.push_str("add 2:19:x\n");
+    t.push_str("add 7:23:#1\n");
+    t.push_str("clear\n");
+    t.push_str("add 9:32:#1\n");
+    t.push_str("update 0:8:c 3:19 12:34:c 5:24 6:29:b 7:28:x\n");
+    t.push_str("set 16 27 b\n");
+    t.push_str("add 5:11:c\n");
+    t.push_str("set -1 21 #1\n");
+    t.push_str("remove_envelop -1 9\n");
+    t.push_str("iv > 15:18 28:32:#1\n");
+    t.push_str("add 12:20:#2\n");
+    t.push_str("add 7:22:b\n");
+    t.push_str("iv lt 3:26:_ 32:38:#1\n");
+    t.push_str("set 10 31 #2\n");
+    t.push_str("iv ge 27:46:_ 36:46:b\n");
+    t.push_str("slicef 8\n");
+    t.push_str("iv is_null 28:44 23:43\n");
+    t.push_str("add 12:22:c\n");
+    t.push_str("iv lt 7:9:x 10:29:#2\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv < 7:21:#1 32:55:#2\n");
+    t.push_str("iv == 27:33:b 30:53\n");
+    t.push_str("add 2:14:c\n");
+    t.push_str("add 9:16:#2\n");
+    t.push_str("at 6\n");
+    t.push_str("range\n");
+    t.push_str("overlaps 7 14\n");
+    t.push_str("iv lt 28:38:#1 34\n");
+    t.push_str("overlaps -3\n");
+    t.push_str("add 4:12:x\n");
+    t.push_str("envelop 5 32\n");
+    t.push_str("update 8:18:a 8:12:#2 10:15:#2\n");
+    t.push_str("add 10:11:_\n");
+    t.push_str("add 9:13:a\n");
+    t.push_str("iv range_matches 28:35:#1 25:42:b\n");
+    t.push_str("remove_envelop 3 31\n");
+    t.push_str("iv ge 35:50:#2 45\n");
+    t.push_str("update 3:25 5:23:c\n");
+    t.push_str("discard 9:16:#2\n");
+    t.push_str("del 17\n");
+    t.push_str("remove 2:19:#1\n");
+    t.push_str("iv overlap_size 1:17 36:59:c\n");
+    t.push_str("overlaps 10\n");
+    t.push_str("add 12:18:_\n");
+    t.push_str("set 13 27 x\n");
+    t.push_str("del 3\n");
+    t.push_str("add 12:18:a\n");
+    t.push_str("del 1\n");
+    t.push_str("envelop 12 30\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv > 17:36:c 33:41:#2\n");
+    t.push_str("add 0:16:c\n");
+    t.push_str("iv contains_interval 31:33 22:32:#1\n");
+    t.push_str("add 5:25:x\n");
+    t.push_str("iv length 13:34:a 21\n");
+    t.push_str("add 9:15:#2\n");
+    t.push_str("envelop 7 33\n");
+    t.push_str("overlap 15 31\n");
+    t.push_str("iv contains_interval 0:5:_ 7:20:#2\n");
+    t.push_str("iv contains_point 40:42:a 52\n");
+    t.push_str("chopf 11 35\n");
+    t.push_str("get _ _\n");
+    t.push_str("chop -5 -4\n");
+    t.push_str("discard 9:13:a\n");
+    t.push_str("discard 5:11:c\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("at 1\n");
+    t.push_str("envelop 0 4\n");
+    t.push_str("iv contains_point 7:31:a 39\n");
+    t.push_str("add 6:10:b\n");
+    t.push_str("add 2:12:c\n");
+    t.push_str("add 0:1:c\n");
+    t.push_str("update 5:24:b 5:14:c 0:16:_ 11:24:_ 4:17:#2\n");
+    t.push_str("remove_overlap -1\n");
+    t.push_str("overlap 6 26\n");
+    t.push_str("update 10:19:x 12:37:a 12:22:#2\n");
+    t.push_str("len\n");
+    t.push_str("add 4:26:_\n");
+    t.push_str("overlap 6 29\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("envelop 8 34\n");
+    t.push_str("at 2\n");
+    t.push_str("add 12:19:c\n");
+    t.push_str("get 10 32\n");
+    t.push_str("get _ _\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("add 4:12:#2\n");
+    t.push_str("iv repr 3:12:#2 15\n");
+    t.push_str("get _ _\n");
+    t.push_str("merge_count 0\n");
+    t.push_str("remove_overlap 6 25\n");
+    t.push_str("merge_equals\n");
+    t.push_str("add 5:13:x\n");
+    t.push_str("iv le 20:30:c 2:3:#1\n");
+    t.push_str("add 9:17:_\n");
+    t.push_str("iv le 33:52:#1 54\n");
+    t.push_str("overlap 1 20\n");
+    t.push_str("add 12:20:#1\n");
+    t.push_str("iv contains_point 21:33:c 47\n");
+    t.push_str("overlap 17 44\n");
+    t.push_str("len\n");
+    t.push_str("remove 12:18:_\n");
+    t.push_str("set -5 17 x\n");
+    t.push_str("del -2\n");
+    t.push_str("update 0:5:#1\n");
+    t.push_str("discard 5:13:x\n");
+    t.push_str("add 12:25:x\n");
+    t.push_str("iv gt 1:17:#2 14:18:x\n");
+    t.push_str("iv == 10:34:b 32:48:#1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("at 2\n");
+    t.push_str("overlaps -1\n");
+    t.push_str("difference_update 0:1:c 12:19:c 4:12:#2 5:13:x 9:17:_ 12:25:x\n");
+    t.push_str("add 8:28:a\n");
+    t.push_str("iv is_null 12:14:_ 42\n");
+    t.push_str("envelop 13 35\n");
+    t.push_str("add 9:20:a\n");
+    t.push_str("add 7:30:c\n");
+    t.push_str("iv overlap_size 7:8:b 11:25:_\n");
+    t.push_str("iv ge 40:52:c 54\n");
+    t.push_str("envelop 12 25\n");
+    t.push_str("intersection 12:25:x 8:28:a 9:20:a 7:30:c 9:23:c 9:18:x\n");
+    t.push_str("union 5:13:x 9:17:_ 12:25:x 8:28:a 9:20:a 7:30:c 2:10:#2 2:7:c\n");
+    t.push_str("len\n");
+    t.push_str("slice 4\n");
+    t.push_str("update 11:18:b 2:16 8:22:x 5:6:c 4:18:#1 4:29:#1\n");
+    t.push_str("slicef 5\n");
+    t.push_str("add 12:37:x\n");
+    t.push_str("overlap -4 20\n");
+    t.push_str("set -2 15 x\n");
+    t.push_str("symmetric_difference 5:13:x 12:20:#1 8:28:a 7:30:c 12:15:_ 3:7:a 8:17:c\n");
+    t.push_str("iv < 21:22:c 24:44:a\n");
+    t.push_str("add 10:26:x\n");
+    t.push_str("copy\n");
+    t.push_str("iv lt 22:24:#2 11:24\n");
+    t.push_str("discard 6:22\n");
+    t.push_str("overlap 8 31\n");
+    t.push_str("overlap 7 9\n");
+    t.push_str("iv le 18:20:_ 60\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv repr 33:43:x 18\n");
+    t.push_str("overlap 13 25\n");
+    t.push_str("remove 10:11:#2\n");
+    t.push_str("range\n");
+    t.push_str("iv < 6:10:#2 12\n");
+    t.push_str("intersection_update 12:20:#1 12:25:x 9:20:a 4:24:x\n");
+    t.push_str("add 8:12:#2\n");
+    t.push_str("discard 5:7:_\n");
+    t.push_str("iv overlaps 10:14:_ 16:19:b\n");
+    t.push_str("del 4\n");
+    t.push_str("envelop 2 10\n");
+    t.push_str("remove_overlap 12 29\n");
+    t.push_str("add 10:18:b\n");
+    t.push_str("add 10:26:#2\n");
+    t.push_str("overlap -2 26\n");
+    t.push_str("iv < 19:36:#2 4:11:#2\n");
+    t.push_str("from_tuples 8:30:b 6:14:c 8:22 7:15:#2 2:12:x\n");
+    t.push_str("from_tuples 9:28:c\n");
+    t.push_str("end\n");
+    t.push_str("at 4\n");
+    t.push_str("add 5:17:#2\n");
+    t.push_str("add 12:27:#1\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("add 12:27:b\n");
+    t.push_str("union 12:37:x 8:12:#2 10:26:#2 12:27:#1 12:27:b 11:29:#2 10:15:x\n");
+    t.push_str("remove_envelop 4 10\n");
+    t.push_str("iv is_null 24:38:_ 14:33:#2\n");
+    t.push_str("add 11:35:b\n");
+    t.push_str("remove 9:32:#1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv is_null 25:44:#2 18\n");
+    t.push_str("iv repr 31:43:#2 14:20\n");
+    t.push_str("overlap -4 12\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("add 12:15:#2\n");
+    t.push_str("get 15 35\n");
+    t.push_str("iv overlaps 32:53:b 5:13\n");
+    t.push_str("set 9 27 x\n");
+    t.push_str("iv contains_point 19:41:#1 4\n");
+    t.push_str("iv contains_interval 31:53:#2 5:9:_\n");
+    t.push_str("add 6:19\n");
+    t.push_str("overlaps 4 28\n");
+    t.push_str("at 17\n");
+    t.push_str("chopf 1 6\n");
+    t.push_str("add 10:32:b\n");
+    t.push_str("iv length 6:7 22:26:a\n");
+    t.push_str("iv == 8:21:#2 8:32:c\n");
+    t.push_str("add 6:8:#2\n");
+    t.push_str("remove_envelop -1 3\n");
+    t.push_str("merge_equals\n");
+    t.push_str("add 4:15:#1\n");
+    t.push_str("at 14\n");
+    t.push_str("set 12 27 b\n");
+    t.push_str("add 1:14:_\n");
+    t.push_str("symmetric_difference_update 12:27:b 6:19 10:32:b 6:8:#2 1:14:_ 2:13:x 1:21:a\n");
+    t.push_str("overlap 12 34\n");
+    t.push_str("iv le 7:29:_ 4\n");
+    t.push_str("contains 1:10:b\n");
+    t.push_str("add 11:30\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("items\n");
+    v.push(DataFile { path: "traces/dense.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("iv overlap_size 5:10:a 7\n");
+    t.push_str("iv overlap_size 5:10:a 12\n");
+    t.push_str("iv lt 5:5 7\n");
+    t.push_str("iv ge 3:9 4:4:x\n");
+    t.push_str("iv le 3:9 4:4:x\n");
+    t.push_str("iv gt 3:9 9\n");
+    t.push_str("iv gt 3:9 2:3\n");
+    t.push_str("iv distance_to 3:9 12\n");
+    t.push_str("iv distance_to 3:9 1\n");
+    t.push_str("iv distance_to 3:9 5\n");
+    t.push_str("iv < 3:9 3\n");
+    t.push_str("iv > 3:9 3\n");
+    t.push_str("iv == 3:9:a 3:9:#1\n");
+    t.push_str("iv < 3:9:a 3:9:#1\n");
+    t.push_str("iv > 3:9:a 3:9:#1\n");
+    t.push_str("iv < 3:9 3:9:a\n");
+    t.push_str("iv < 3:9:b 3:9:a\n");
+    t.push_str("iv < 3:9:#2 3:9:#10\n");
+    t.push_str("iv repr 3:9:a\n");
+    t.push_str("iv repr -4:-1:#7\n");
+    t.push_str("iv length 9:3\n");
+    t.push_str("add 4:4\n");
+    t.push_str("add 4:2:a\n");
+    t.push_str("add 1:5:a\n");
+    t.push_str("add 1:5:a\n");
+    t.push_str("add 1:5:#1\n");
+    t.push_str("add 1:5\n");
+    t.push_str("remove 1:5:b\n");
+    t.push_str("len\n");
+    t.push_str("at 1\n");
+    t.push_str("at 5\n");
+    t.push_str("remove 1:5:#1\n");
+    t.push_str("discard 1:5:#1\n");
+    t.push_str("remove 1:5:#1\n");
+    t.push_str("span\n");
+    t.push_str("range\n");
+    t.push_str("clear\n");
+    t.push_str("begin\n");
+    t.push_str("end\n");
+    t.push_str("span\n");
+    t.push_str("range\n");
+    t.push_str("at 3\n");
+    t.push_str("overlap 1 2\n");
+    t.push_str("overlaps 3\n");
+    t.push_str("overlaps 3 1\n");
+    t.push_str("remove 0:1\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("merge 1\n");
+    t.push_str("repr\n");
+    t.push_str("verify\n");
+    t.push_str("add 7:22:_\n");
+    t.push_str("copy\n");
+    t.push_str("iv overlaps 28:36:b 1\n");
+    t.push_str("add 13:37:a\n");
+    t.push_str("del 43\n");
+    t.push_str("remove_envelop 9 21\n");
+    t.push_str("intersection 7:22:_ 7:31:#2 32:46:x\n");
+    t.push_str("discard 7:22:_\n");
+    t.push_str("set 21 30 #2\n");
+    t.push_str("remove_overlap 39\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("iv is_null 30:52:_ 14:39:x\n");
+    t.push_str("envelop 31 51\n");
+    t.push_str("overlaps 12\n");
+    t.push_str("iv ge 33:40:_ 23:30\n");
+    t.push_str("envelop 29 48\n");
+    t.push_str("overlaps 9 18\n");
+    t.push_str("add 2:24:b\n");
+    t.push_str("add 17:21:c\n");
+    t.push_str("at -1\n");
+    t.push_str("update 18:33:#2 31:47:b 1:11 12:21:b 16:40:x 38:52:a\n");
+    t.push_str("set 4 4 c\n");
+    t.push_str("overlaps 38 63\n");
+    t.push_str("set 39 65 x\n");
+    t.push_str("del -4\n");
+    t.push_str("merge 0\n");
+    t.push_str("iv length 4:14:c 16:34:a\n");
+    t.push_str("iv repr 39:52:x 13:27:x\n");
+    t.push_str("add 32:43:_\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 21:30:b\n");
+    t.push_str("iv lt 34:58:a 10:28:x\n");
+    t.push_str("intersection_update 7:22:_ 13:37:a 2:24:b 8:27:b 20:22 9:14:#2\n");
+    t.push_str("add 4:12:b\n");
+    t.push_str("iv overlaps 29:33:a -1\n");
+    t.push_str("add 12:31\n");
+    t.push_str("overlaps 10 18\n");
+    t.push_str("add 35:51:#2\n");
+    t.push_str("add 1:10:#2\n");
+    t.push_str("overlaps 15\n");
+    t.push_str("discard 1:10:#2\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("add 5:20:b\n");
+    t.push_str("merge_join 0\n");
+    t.push_str("iv is_null 20:39:#1 6:25:b\n");
+    t.push_str("set 20 22 #1\n");
+    t.push_str("remove_envelop 41 43\n");
+    t.push_str("add 31:36:b\n");
+    t.push_str("get _ 17\n");
+    t.push_str("add 19:36:#1\n");
+    t.push_str("add 20:40:x\n");
+    t.push_str("add 3:25:x\n");
+    t.push_str("update 35:44:_ 29:30:_ 10:19 26:45:a\n");
+    t.push_str("add 37:46:#1\n");
+    t.push_str("overlap 6 9\n");
+    t.push_str("set 6 24 _\n");
+    t.push_str("iv lt 15:37:_ 41\n");
+    t.push_str("iv ge 32:44:c 13:36:#1\n");
+    t.push_str("add 38:42\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("update 25:48:#2 24:41:c 34:58:a 33:36:#1\n");
+    t.push_str("slice 12\n");
+    t.push_str("iv distance_to 28:36:_ 48\n");
+    t.push_str("iv length 13:33:_ 17:41:a\n");
+    t.push_str("del 32\n");
+    t.push_str("slice 33\n");
+    t.push_str("add 17:42:#1\n");
+    t.push_str("iv length 34:48:b 47\n");
+    t.push_str("discard 7:22:_\n");
+    t.push_str("iv contains_interval 4:23:#1 28:40:#1\n");
+    t.push_str("remove_overlap 16\n");
+    t.push_str("iv > 17:41:x 57\n");
+    t.push_str("iv gt 28:45:x 0:19:_\n");
+    t.push_str("iv distance_to 31:39:#1 26:31:_\n");
+    t.push_str("intersection_update 19:36:#1 3:25:x 37:46:#1 38:42 17:42:#1\n");
+    t.push_str("update 22:25\n");
+    t.push_str("get _ _\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("add 17:40:#2\n");
+    t.push_str("contains 17:42:#1\n");
+    t.push_str("update 35:48:c 30:39:#2 14:23:x 1:21\n");
+    t.push_str("overlaps 43\n");
+    t.push_str("slice 5\n");
+    t.push_str("slice 11\n");
+    t.push_str("difference_update 19:36:#1 37:46:#1 38:42 17:42:#1 17:40:#2\n");
+    t.push_str("iv distance_to 13:29 13\n");
+    t.push_str("add 28:34:x\n");
+    t.push_str("set 24 46 x\n");
+    t.push_str("overlaps 16 45\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv overlaps 0:11:_ 12:37:c\n");
+    t.push_str("add 36:41:b\n");
+    t.push_str("contains 38:42\n");
+    t.push_str("iv == 27:28:_ 24:33:#1\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("chopf 32 41\n");
+    t.push_str("envelop 30 31\n");
+    t.push_str("iv lt 34:56:b 7\n");
+    t.push_str("add 13:15:a\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("overlap -3 3\n");
+    t.push_str("remove_overlap 37 43\n");
+    t.push_str("intersection 3:25:x 37:46:#1 38:42 17:40:#2 28:34:x 13:15:a 7:29:#1 6:20:x 32:50:x\n");
+    t.push_str("at 16\n");
+    t.push_str("iv distance_to 8:23:a 35\n");
+    t.push_str("add 6:11:b\n");
+    t.push_str("add 26:38:#1\n");
+    t.push_str("at 42\n");
+    t.push_str("add 20:39:b\n");
+    t.push_str("overlaps 25 52\n");
+    t.push_str("iv ge 8:23:#1 41\n");
+    t.push_str("iv contains_interval 19:30:c 11:35:a\n");
+    t.push_str("iv distance_to 6:9:b 25\n");
+    t.push_str("del 22\n");
+    t.push_str("iv == 14:34:_ 23:30:_\n");
+    t.push_str("iv == 0:25:_ 0:10:a\n");
+    t.push_str("remove_overlap 27 45\n");
+    t.push_str("remove_overlap 30 46\n");
+    t.push_str("remove_overlap 21 38\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 35:41:#1\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("overlap 13 12\n");
+    t.push_str("iv distance_to 17:29:_ 7:12\n");
+    t.push_str("iv > 26:43:#1 33\n");
+    t.push_str("at 26\n");
+    t.push_str("iv contains_interval 5:12:c 25:31:a\n");
+    t.push_str("add 34:36:b\n");
+    t.push_str("difference_update 36:41:b 26:38:#1 20:39:b\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("iv repr 6:26:x 16:34:#1\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("iv is_null 17:38 10\n");
+    t.push_str("get _ _\n");
+    t.push_str("add 35:37:c\n");
+    t.push_str("iv == 19:26 34:51:#2\n");
+    t.push_str("del 3\n");
+    t.push_str("discard 32:43:_\n");
+    t.push_str("set 29 30 c\n");
+    t.push_str("len\n");
+    t.push_str("get 14 _\n");
+    t.push_str("add 5:14:#2\n");
+    t.push_str("update 7:18:#2\n");
+    t.push_str("add 36:38:b\n");
+    t.push_str("symmetric_difference 6:11:b 26:38:#1 20:39:b 35:41:#1 34:36:b 36:38:b 17:18:#2 7:19:c\n");
+    t.push_str("slicef 12\n");
+    t.push_str("remove_envelop 20 37\n");
+    t.push_str("iv lt 3:7:c 27:28:#1\n");
+    t.push_str("iv le 25:49:#2 34:52:a\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlaps 4 6\n");
+    t.push_str("add 23:29:c\n");
+    t.push_str("iv range_matches 7:12:#1 24:28\n");
+    t.push_str("overlaps 22 37\n");
+    t.push_str("envelop 24 25\n");
+    t.push_str("add 2:21:c\n");
+    t.push_str("remove_overlap 17 32\n");
+    t.push_str("remove_envelop 17 45\n");
+    t.push_str("iv ge 6:18:c 2:13:_\n");
+    t.push_str("update 27:41 21:36:x 40:60:c 3:14:b 32:38:_\n");
+    t.push_str("eq 35:41:#1 35:37:c 36:38:b 23:29:c 29:53\n");
+    t.push_str("merge_join 0\n");
+    t.push_str("overlaps 2 31\n");
+    t.push_str("iv < 26:27:b 56\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("iv > 25:48:x 25:43:x\n");
+    t.push_str("iv overlap_size 15:33:c 37:43\n");
+    t.push_str("iv < 39:57:b 29:50:a\n");
+    t.push_str("add 2:10:a\n");
+    t.push_str("add 26:31:#2\n");
+    t.push_str("symmetric_difference_update 34:36:b 23:29:c 2:21:c 26:31:#2 11:36:b 23:34:c\n");
+    t.push_str("update 36:51:a 9:14:#1 14:21:b\n");
+    t.push_str("iv range_matches 34:42:c 3:15\n");
+    t.push_str("add 15:20:#1\n");
+    t.push_str("add 11:34:c\n");
+    t.push_str("at 29\n");
+    t.push_str("del 14\n");
+    t.push_str("add 39:54:#1\n");
+    t.push_str("slice -2\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv < 27:35:x 25:48:x\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("add 30:38:#1\n");
+    t.push_str("add 14:23\n");
+    t.push_str("get 3 12\n");
+    t.push_str("overlaps -3\n");
+    t.push_str("intersection 2:10:a 26:31:#2 15:20:#1 39:54:#1 30:38:#1 14:23 12:20:#2 37:62:b\n");
+    t.push_str("at -2\n");
+    t.push_str("iv < 30:46:b 70\n");
+    t.push_str("add 36:49:#1\n");
+    t.push_str("iv lt 1:20:#2 69\n");
+    t.push_str("add 26:43:a\n");
+    t.push_str("chop -3 -2\n");
+    t.push_str("iv distance_to 40:43:_ 34:51:a\n");
+    t.push_str("iv overlap_size 37:41 23:32:#2\n");
+    t.push_str("span\n");
+    t.push_str("intersection 26:31:#2 15:20:#1 39:54:#1 30:38:#1 14:23 26:43:a 6:15\n");
+    t.push_str("del 45\n");
+    t.push_str("remove_envelop 13 19\n");
+    t.push_str("add 1:15:c\n");
+    t.push_str("iv lt 11:18:x 8:25:b\n");
+    t.push_str("overlaps -2 19\n");
+    t.push_str("at 34\n");
+    t.push_str("add 31:39:a\n");
+    t.push_str("add 2:9:x\n");
+    t.push_str("overlaps 10\n");
+    t.push_str("overlap -1 9\n");
+    t.push_str("chopf 38 55\n");
+    t.push_str("slice 18\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv == 37:40 38:47:#1\n");
+    t.push_str("remove_envelop 33 47\n");
+    t.push_str("update 29:41:x 32:47:x 30:41:c 24:38:a\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("update 24:25:#2 21:31:a 13:36:b\n");
+    t.push_str("at 37\n");
+    t.push_str("add 38:39:c\n");
+    t.push_str("difference_update 30:38:#1 14:23 36:49:#1 26:43:a 31:39:a 2:9:x\n");
+    t.push_str("slicef 35\n");
+    t.push_str("overlap 4 21\n");
+    t.push_str("eq 30:38:#1 36:49:#1 26:43:a 1:15:c 2:9:x 38:39:c\n");
+    t.push_str("chopf 30 45\n");
+    t.push_str("add 40:57:x\n");
+    t.push_str("iv le 27:35:a 32:38:c\n");
+    t.push_str("iv overlaps 3:26:a 0:10:#2\n");
+    t.push_str("slice 30\n");
+    t.push_str("update 11:18:_ 15:33\n");
+    t.push_str("at 2\n");
+    t.push_str("get _ 52\n");
+    t.push_str("set 1 2 #2\n");
+    t.push_str("iv contains_point 9:33:#1 54\n");
+    t.push_str("add 7:9:b\n");
+    t.push_str("add 18:35:_\n");
+    t.push_str("intersection_update 26:43:a 1:15:c 7:9:b 18:35:_ 31:42:c\n");
+    t.push_str("slicef 2\n");
+    t.push_str("iv le 23:35:#2 30:42:c\n");
+    t.push_str("add 10:31:c\n");
+    t.push_str("add 15:26:c\n");
+    t.push_str("update 9:27:#2 28:32:c 20:23:c 30:48:a\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv lt 23:35:#2 7:20:a\n");
+    t.push_str("iv le 15:25:#2 15:17:x\n");
+    t.push_str("end\n");
+    t.push_str("set 12 19 c\n");
+    t.push_str("set 31 61 _\n");
+    t.push_str("iv range_matches 30:42:x 13:28:#2\n");
+    t.push_str("add 39:62:x\n");
+    t.push_str("add 38:57:a\n");
+    t.push_str("add 3:19:#2\n");
+    t.push_str("add 36:46:#2\n");
+    t.push_str("iv is_null 21:24:#1 20:25:#2\n");
+    t.push_str("discard 7:22:_\n");
+    t.push_str("add 27:47:x\n");
+    t.push_str("update 18:38:#1 11:22:c 22:26 36:59:x 25:40:c\n");
+    t.push_str("iv distance_to 40:64:b 32:48:#2\n");
+    t.push_str("remove_envelop 20 18\n");
+    t.push_str("overlap 30 56\n");
+    t.push_str("add 23:38:x\n");
+    t.push_str("len\n");
+    t.push_str("iv gt 12:27:a 70\n");
+    t.push_str("iv lt 30:37:a 10:23\n");
+    t.push_str("add 11:35:#1\n");
+    t.push_str("set 22 49 _\n");
+    t.push_str("del 14\n");
+    t.push_str("iv contains_interval 18:40:a 27:48:c\n");
+    t.push_str("slicef 23\n");
+    t.push_str("iv == 6:11 31:43:c\n");
+    t.push_str("iv is_null 35:57:b 68\n");
+    t.push_str("overlaps 23 42\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 17:32:#2\n");
+    t.push_str("get _ _\n");
+    t.push_str("get _ 24\n");
+    t.push_str("slicef 9\n");
+    t.push_str("merge_join 0\n");
+    t.push_str("add 17:30:_\n");
+    t.push_str("discard 10:31:c\n");
+    t.push_str("add 9:27:b\n");
+    t.push_str("remove_overlap 26 45\n");
+    t.push_str("remove 35:41:#1\n");
+    t.push_str("add 3:23:a\n");
+    t.push_str("at -4\n");
+    t.push_str("overlap 37 61\n");
+    t.push_str("add 25:38:c\n");
+    t.push_str("add 14:34:#2\n");
+    t.push_str("overlap 13 17\n");
+    t.push_str("overlaps 0 24\n");
+    t.push_str("add 21:35:#2\n");
+    t.push_str("remove_overlap 39 54\n");
+    t.push_str("add 9:28:c\n");
+    t.push_str("overlaps 33 51\n");
+    t.push_str("add 15:34\n");
+    t.push_str("merge_count 0\n");
+    t.push_str("iv length 17:29:b 1:8:x\n");
+    t.push_str("len\n");
+    t.push_str("add 6:31:b\n");
+    t.push_str("iv ge 36:57:_ 23:48\n");
+    t.push_str("iv overlap_size 9:10:x 29:44:b\n");
+    t.push_str("add 27:36\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("set 37 58 _\n");
+    t.push_str("eq 3:23:a 14:34:#2 21:35:#2 9:28:c 27:36 1:13:c\n");
+    t.push_str("add 30:49\n");
+    t.push_str("remove_overlap 1 7\n");
+    t.push_str("len\n");
+    t.push_str("set 19 47 #2\n");
+    t.push_str("overlaps -1\n");
+    t.push_str("at 7\n");
+    t.push_str("add 19:21:_\n");
+    t.push_str("overlap 37 36\n");
+    t.push_str("update 17:28 3:12:c\n");
+    t.push_str("difference 14:34:#2 9:28:c 30:49 19:21:_ 19:20:b\n");
+    t.push_str("iv == 16:26:#1 30:41:#2\n");
+    t.push_str("add 17:20\n");
+    t.push_str("merge_count 0\n");
+    t.push_str("envelop 38 56\n");
+    t.push_str("slice 35\n");
+    t.push_str("slice 28\n");
+    t.push_str("add 7:17:x\n");
+    t.push_str("add 5:28\n");
+    t.push_str("add 38:39:_\n");
+    t.push_str("remove 4:10:x\n");
+    t.push_str("iv is_null 22:39:c 26\n");
+    t.push_str("iv repr 28:35:x 33:49:a\n");
+    t.push_str("discard 13:18:_\n");
+    t.push_str("overlaps 3 15\n");
+    t.push_str("merge 0\n");
+    t.push_str("del 1\n");
+    t.push_str("get 6 _\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("range\n");
+    t.push_str("remove_envelop 43 42\n");
+    t.push_str("slice 4\n");
+    t.push_str("discard 15:20:#1\n");
+    t.push_str("chopf 27 31\n");
+    t.push_str("copy\n");
+    t.push_str("iv repr 23:48:b 5:18:a\n");
+    t.push_str("chopf 44 67\n");
+    t.push_str("iv overlap_size 1:3:_ 2:5:#1\n");
+    t.push_str("at -3\n");
+    t.push_str("iv ge 19:35:#2 19\n");
+    t.push_str("iv overlaps 15:38:x 19:30:#1\n");
+    t.push_str("merge 0\n");
+    t.push_str("iv < 25:31:b 13:28:x\n");
+    t.push_str("clear\n");
+    t.push_str("intersection_update \n");
+    t.push_str("add 35:55:c\n");
+    t.push_str("overlaps 29\n");
+    t.push_str("discard 16:28:#1\n");
+    t.push_str("add 2:13:_\n");
+    t.push_str("add 1:6:a\n");
+    t.push_str("overlaps -4 8\n");
+    t.push_str("add 8:13:#2\n");
+    t.push_str("iv distance_to 12:30:#1 34:47\n");
+    t.push_str("symmetric_difference 35:55:c 2:13:_ 8:13:#2 25:27:_ 37:53:b\n");
+    t.push_str("from_tuples 24:42:#1 37:39:x 12:22:_ 33:34:#1 12:30:c 14:17:x 30:36:a 25:35:a\n");
+    t.push_str("add 30:37:_\n");
+    t.push_str("iv == 4:21 16:28:_\n");
+    t.push_str("remove_envelop 34 38\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 4:22\n");
+    t.push_str("eq 35:55:c 2:13:_ 1:6:a 8:13:#2 4:22 8:27:c 27:49:#1\n");
+    t.push_str("is_empty\n");
+    t.push_str("overlap 11 16\n");
+    t.push_str("remove 30:37:_\n");
+    t.push_str("add 29:50:_\n");
+    t.push_str("len\n");
+    t.push_str("remove_envelop 0 0\n");
+    t.push_str("add 19:35:#2\n");
+    t.push_str("add 22:45:a\n");
+    t.push_str("add 9:17:b\n");
+    t.push_str("overlap 15 13\n");
+    t.push_str("overlaps 34\n");
+    t.push_str("envelop 38 64\n");
+    t.push_str("add 26:40:#1\n");
+    t.push_str("overlaps 31\n");
+    t.push_str("difference 30:37:_ 4:22 29:50:_ 19:35:#2 26:40:#1 29:42 22:40:x\n");
+    t.push_str("update 24:30:#1 37:46 30:34:x 9:13 4:8:_ 29:30:a\n");
+    t.push_str("update 38:53:b 21:32:_ 24:34:b\n");
+    t.push_str("set 23 43 _\n");
+    t.push_str("overlaps 42 67\n");
+    t.push_str("add 24:43:#2\n");
+    t.push_str("chop 4 9\n");
+    t.push_str("contains 40:63:c\n");
+    t.push_str("symmetric_difference_update 30:37:_ 4:22 19:35:#2 22:45:a 9:17:b 26:40:#1 24:43:#2 27:47:#2 30:41:b\n");
+    t.push_str("chopf 44 50\n");
+    t.push_str("iv < 1:8 17:39:#1\n");
+    t.push_str("iv le 15:39:#2 38:60:_\n");
+    t.push_str("at 37\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("discard 25:48:a\n");
+    t.push_str("iv distance_to 27:31:a 35:60:#2\n");
+    t.push_str("envelop 4 20\n");
+    t.push_str("del 34\n");
+    t.push_str("copy\n");
+    t.push_str("chopf 11 12\n");
+    t.push_str("remove_overlap 32\n");
+    t.push_str("overlaps 30 36\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("update 18:24:#1 24:33:b 16:17:b 6:21:c 29:37:x 2:10:b\n");
+    t.push_str("add 37:39:#1\n");
+    t.push_str("envelop 2 3\n");
+    t.push_str("iv gt 10:26:c 38:55:c\n");
+    t.push_str("remove_overlap 35 36\n");
+    t.push_str("iv le 5:26:a 68\n");
+    t.push_str("chopf 43 57\n");
+    t.push_str("overlap 9 26\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("get _ _\n");
+    t.push_str("add 17:26:x\n");
+    t.push_str("at 34\n");
+    t.push_str("iv le 22:36:#2 39:48:a\n");
+    t.push_str("end\n");
+    t.push_str("iv is_null 16:32:c 30:39:b\n");
+    t.push_str("add 28:50:x\n");
+    t.push_str("add 22:41:c\n");
+    t.push_str("add 21:46:c\n");
+    t.push_str("begin\n");
+    t.push_str("envelop 39 60\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("union 26:40:#1 24:43:#2 17:26:x 28:50:x 22:42:b 27:35:_\n");
+    t.push_str("union 9:17:b 37:39:#1 28:50:x 21:46:c 37:44:_\n");
+    t.push_str("overlap 21 29\n");
+    t.push_str("iv range_matches 19:44:a 16:33:#1\n");
+    t.push_str("contains 2:13:_\n");
+    t.push_str("discard 4:22\n");
+    t.push_str("update 28:50:_ 24:26:b 37:44:#2 3:20:#1\n");
+    t.push_str("add 8:20:x\n");
+    t.push_str("slice 28\n");
+    t.push_str("add 1:25:#1\n");
+    t.push_str("iv < 18:20:a 34:56:b\n");
+    t.push_str("discard 1:25:#1\n");
+    t.push_str("chopf 27 30\n");
+    t.push_str("from_tuples 15:32:_ 40:54 0:10:a 16:41:b 11:31:#1 28:51 19:21 16:34:x 8:10:_ 36:53:#1 0:24 16:22:x\n");
+    t.push_str("add 33:34:x\n");
+    t.push_str("iv is_null 33:53:c 25:32:c\n");
+    t.push_str("add 16:36:#1\n");
+    t.push_str("iv ge 39:62:c 32\n");
+    t.push_str("chop 27 39\n");
+    t.push_str("remove_overlap -4\n");
+    t.push_str("symmetric_difference 17:26:x 28:50:x 21:46:c 23:36:#2 39:46:#1\n");
+    t.push_str("iv overlap_size 37:50:a 4:11:_\n");
+    t.push_str("update 27:41:#2 38:62:_ 27:40:#1 6:9:c\n");
+    t.push_str("is_empty\n");
+    t.push_str("overlap -2 23\n");
+    t.push_str("slicef 2\n");
+    t.push_str("add 22:37:c\n");
+    t.push_str("overlap 31 40\n");
+    t.push_str("add 8:26:a\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 19:24:c\n");
+    t.push_str("add 17:22:b\n");
+    t.push_str("iv is_null 13:31 31:34:c\n");
+    t.push_str("iv lt 35:38:#2 43\n");
+    t.push_str("add 35:58:x\n");
+    t.push_str("iv overlap_size 27:39:x 35:46:c\n");
+    t.push_str("difference 33:34:x 16:36:#1 22:37:c 8:26:a 19:24:c 17:22:b 35:58:x 18:22:b\n");
+    t.push_str("merge_count 1\n");
+    t.push_str("iv == 24:47:a 20:41:b\n");
+    t.push_str("add 10:11:_\n");
+    t.push_str("overlap -4 21\n");
+    t.push_str("overlap 28 26\n");
+    t.push_str("remove_envelop 36 46\n");
+    t.push_str("merge_join 0\n");
+    t.push_str("iv overlap_size 9:26:_ 4:17\n");
+    t.push_str("del 9\n");
+    t.push_str("add 19:44:x\n");
+    t.push_str("union 8:26:a 19:24:c 17:22:b 35:58:x 10:11:_ 19:44:x\n");
+    t.push_str("clear\n");
+    t.push_str("iv overlaps 12:27:b 44\n");
+    t.push_str("discard 40:41:b\n");
+    t.push_str("from_tuples 11:21:x 21:32:x 2:4:a 11:31 2:11:#1 4:27:x 0:5 31:33 26:51:x 14:31:_ 0:1:c\n");
+    t.push_str("iv gt 22:42:x 35:40\n");
+    t.push_str("add 8:28:#1\n");
+    t.push_str("iv == 0:15:_ 22:38:c\n");
+    t.push_str("iv range_matches 3:4:b 25:49\n");
+    t.push_str("iv contains_point 13:24:#2 53\n");
+    t.push_str("chopf 6 10\n");
+    t.push_str("iv > 29:32:b 16:28:#2\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("del 33\n");
+    t.push_str("add 22:37:#2\n");
+    t.push_str("add 12:29:a\n");
+    t.push_str("add 7:26:b\n");
+    t.push_str("iv > 36:51 23:47:_\n");
+    t.push_str("add 27:46:#2\n");
+    t.push_str("remove_overlap 6\n");
+    t.push_str("at 10\n");
+    t.push_str("remove_envelop 45 58\n");
+    t.push_str("add 9:12:a\n");
+    t.push_str("add 21:26:b\n");
+    t.push_str("update 3:25 40:51:#1 19:41 24:40:#1 7:26:a\n");
+    t.push_str("begin\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("iv le 18:33:x 24:25:b\n");
+    t.push_str("difference_update 22:37:#2 12:29:a 9:12:a 14:22 17:33:_ 22:47:b\n");
+    t.push_str("chop 37 42\n");
+    t.push_str("len\n");
+    t.push_str("add 27:32:b\n");
+    t.push_str("iv ge 37:62:_ 30:53\n");
+    t.push_str("overlaps 18\n");
+    t.push_str("contains 27:32:b\n");
+    t.push_str("add 33:41:#2\n");
+    t.push_str("set 11 24 _\n");
+    t.push_str("iv < 14:17:c 24:32:#1\n");
+    t.push_str("update 27:37:#1 26:44:a 9:13:c 33:49 3:15:#2 19:21:#1\n");
+    t.push_str("iv overlap_size 35:44:#1 18:29:b\n");
+    t.push_str("add 21:37:c\n");
+    t.push_str("remove 21:37:c\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("envelop 44 43\n");
+    t.push_str("iv repr 7:26:a 9\n");
+    t.push_str("iv > 26:44:#2 0:16:#1\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("remove_envelop 45 48\n");
+    t.push_str("add 12:24:b\n");
+    t.push_str("chop 37 41\n");
+    t.push_str("slice 5\n");
+    t.push_str("add 31:48\n");
+    t.push_str("del 35\n");
+    t.push_str("iv contains_point 11:32:c 60\n");
+    t.push_str("get _ _\n");
+    t.push_str("contains 27:46:#2\n");
+    t.push_str("slice 3\n");
+    t.push_str("iv range_matches 22:44:c 38:62:b\n");
+    t.push_str("merge_equals\n");
+    t.push_str("add 5:10:#1\n");
+    t.push_str("add 22:44:c\n");
+    t.push_str("envelop 2 27\n");
+    t.push_str("overlaps 27 31\n");
+    t.push_str("iv == 38:45:b 32:54:#1\n");
+    t.push_str("merge 1\n");
+    t.push_str("add 39:44:#1\n");
+    t.push_str("add 31:34:c\n");
+    t.push_str("remove 9:12:a\n");
+    t.push_str("chop 1 2\n");
+    t.push_str("remove_envelop 35 43\n");
+    t.push_str("update 24:34:c 19:24:#1\n");
+    t.push_str("iv overlaps 33:58:x 40:41\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv length 23:39:x 34:39:_\n");
+    t.push_str("end\n");
+    t.push_str("iv ge 13:37 55\n");
+    t.push_str("add 33:37:_\n");
+    t.push_str("at -5\n");
+    t.push_str("add 19:29:#2\n");
+    t.push_str("iv range_matches 38:44:b 36:52:_\n");
+    t.push_str("len\n");
+    t.push_str("add 27:40:_\n");
+    t.push_str("iv ge 36:59:#2 40\n");
+    t.push_str("iv distance_to 19:21 27:46:x\n");
+    t.push_str("del 20\n");
+    t.push_str("discard 27:40:_\n");
+    t.push_str("slice 3\n");
+    t.push_str("range\n");
+    t.push_str("iv < 32:46:a 31:48:a\n");
+    t.push_str("add 29:47:_\n");
+    t.push_str("envelop 33 34\n");
+    t.push_str("remove 22:37:#2\n");
+    t.push_str("remove 33:58:c\n");
+    t.push_str("iv gt 27:48:c 49\n");
+    t.push_str("len\n");
+    t.push_str("del -4\n");
+    t.push_str("iv > 30:55:c 14\n");
+    t.push_str("difference_update 22:44:c 39:44:#1 31:34:c 33:37:_ 19:29:#2 8:31\n");
+    t.push_str("iv range_matches 38:54 14:17:#2\n");
+    t.push_str("add 19:39:a\n");
+    t.push_str("iv length 16:29:_ 31:42:c\n");
+    t.push_str("difference 22:44:c 39:44:#1 31:34:c 19:29:#2 27:40:_ 29:47:_ 19:39:a 21:42:#1 31:41:a 27:30:x\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 18:32:#2\n");
+    t.push_str("iv overlaps 7:9:#1 37:61:#1\n");
+    t.push_str("update 18:36:#1 23:28 24:39:#2 0:15:x\n");
+    t.push_str("add 10:22:x\n");
+    t.push_str("merge_count 0\n");
+    t.push_str("iv ge 29:41 26\n");
+    t.push_str("iv == 34:50:#2 20:23:_\n");
+    t.push_str("symmetric_difference_update 31:34:c 33:37:_ 27:40:_ 29:47:_ 18:32:#2 10:22:x\n");
+    t.push_str("iv > 7:25:#2 25:46\n");
+    t.push_str("iv contains_interval 29:42:b 10:12:a\n");
+    t.push_str("iv repr 26:27:_ 25:30:x\n");
+    t.push_str("merge_count 0\n");
+    t.push_str("add 9:33:x\n");
+    t.push_str("iv < 23:37:a 28\n");
+    t.push_str("iv lt 33:37:x 8:23:#2\n");
+    t.push_str("iv repr 22:34:_ 31:32:a\n");
+    t.push_str("iv distance_to 1:24:c 7:22:b\n");
+    t.push_str("slice 43\n");
+    t.push_str("set 36 62 _\n");
+    t.push_str("chopf -5 12\n");
+    t.push_str("add 4:10:_\n");
+    t.push_str("iv ge 29:42:b 43\n");
+    t.push_str("set 29 37 _\n");
+    t.push_str("slicef 13\n");
+    t.push_str("at -5\n");
+    t.push_str("update 2:17:#1 14:31:b 4:24:c 12:18:a 27:33:c 28:39:a\n");
+    t.push_str("overlaps 17 33\n");
+    t.push_str("iv > 15:31:x 7:12:#1\n");
+    t.push_str("update 11:13:#2 10:12:a 1:10:x 1:25:#1 30:54\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 23:30\n");
+    t.push_str("at 32\n");
+    t.push_str("set 0 17 #2\n");
+    t.push_str("add 15:40:#1\n");
+    t.push_str("iv contains_point 13:18:x 46\n");
+    t.push_str("add 38:62:_\n");
+    t.push_str("add 30:43:x\n");
+    t.push_str("chopf 35 50\n");
+    t.push_str("iv overlap_size 25:29:c 23:34:a\n");
+    t.push_str("len\n");
+    t.push_str("difference_update 18:32:#2 10:22:x 9:33:x 4:10:_ 23:30 15:40:#1 38:62:_ 30:43:x\n");
+    t.push_str("iv is_null 25:50:_ 9\n");
+    t.push_str("symmetric_difference_update 10:22:x 9:33:x 23:30 15:40:#1 1:14 39:48:b\n");
+    t.push_str("envelop 25 48\n");
+    t.push_str("iv is_null 14:27:#2 30\n");
+    t.push_str("iv contains_interval 25:49:a 13:30:#2\n");
+    t.push_str("iv ge 22:36:x 24:39:c\n");
+    t.push_str("slicef 18\n");
+    t.push_str("overlap -1 26\n");
+    t.push_str("contains 33:45:_\n");
+    t.push_str("iv contains_interval 28:29:c 14:22:c\n");
+    t.push_str("iv lt 11:23:#2 35:49:#1\n");
+    t.push_str("overlaps 1 16\n");
+    t.push_str("iv repr 15:29:_ 35\n");
+    t.push_str("iv contains_point 12:29:#2 2\n");
+    t.push_str("add 12:27:c\n");
+    t.push_str("add 9:32\n");
+    t.push_str("discard 12:29:a\n");
+    t.push_str("add 1:14:a\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 38:48:#2\n");
+    t.push_str("add 24:49:#1\n");
+    t.push_str("iv > 19:27 37:45:b\n");
+    t.push_str("iv repr 32:37 35:44:a\n");
+    t.push_str("slice 32\n");
+    t.push_str("discard 9:33:x\n");
+    t.push_str("iv contains_point 1:9:x 1\n");
+    t.push_str("symmetric_difference 15:40:#1 38:62:_ 30:43:x 12:27:c 1:14:a 24:49:#1 27:39:x 0:20:_\n");
+    t.push_str("add 16:41:x\n");
+    t.push_str("envelop 10 34\n");
+    t.push_str("iv contains_interval 36:42:a 3:21:_\n");
+    t.push_str("add 10:15:_\n");
+    t.push_str("add 17:25:a\n");
+    t.push_str("difference_update 12:27:c 17:25:a 26:33:_ 33:44:a 14:22:c\n");
+    t.push_str("envelop -1 23\n");
+    t.push_str("iv repr 6:8 53\n");
+    t.push_str("difference_update 12:27:c 1:14:a 38:48:#2 10:15:_\n");
+    t.push_str("iv < 14:23:a 42\n");
+    t.push_str("iv le 18:23:c 67\n");
+    t.push_str("slicef 32\n");
+    t.push_str("overlap 11 23\n");
+    t.push_str("overlaps 16 16\n");
+    t.push_str("add 40:52:c\n");
+    t.push_str("span\n");
+    t.push_str("iv contains_interval 20:33:x 8:21:b\n");
+    t.push_str("overlap 32 45\n");
+    t.push_str("contains 8:28:#1\n");
+    t.push_str("iv overlap_size 8:21:x 22\n");
+    t.push_str("at 25\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("remove_overlap 42 66\n");
+    t.push_str("add 4:5\n");
+    t.push_str("iv length 19:27:#1 55\n");
+    t.push_str("get _ _\n");
+    t.push_str("at 17\n");
+    t.push_str("difference 1:14:a 38:48:#2 24:49:#1 16:41:x 10:15:_ 17:25:a 40:52:c 34:39:x\n");
+    t.push_str("envelop -1 12\n");
+    t.push_str("update 40:55:a 31:54:_ 1:15\n");
+    t.push_str("remove_envelop 7 30\n");
+    t.push_str("iv gt 30:42 5\n");
+    t.push_str("add 15:35:a\n");
+    t.push_str("iv > 29:37 19:23:x\n");
+    t.push_str("iv overlap_size 19:34:c 19:37:#2\n");
+    t.push_str("discard 33:41:a\n");
+    t.push_str("iv == 22:27:#1 20:28\n");
+    t.push_str("envelop 2 19\n");
+    t.push_str("iv repr 10:24:_ 1\n");
+    t.push_str("chop 3 16\n");
+    t.push_str("iv distance_to 36:51:#1 35:47:a\n");
+    t.push_str("envelop 35 56\n");
+    t.push_str("merge 1\n");
+    t.push_str("slicef 13\n");
+    t.push_str("contains 37:54:x\n");
+    t.push_str("add 18:38:x\n");
+    t.push_str("chopf 4 29\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("merge_equals\n");
+    t.push_str("add 27:33:a\n");
+    t.push_str("iv contains_interval 25:37:c 20:21\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("envelop 22 44\n");
+    t.push_str("add 25:38:#2\n");
+    t.push_str("add 37:60:c\n");
+    t.push_str("at 4\n");
+    t.push_str("remove 9:33:x\n");
+    t.push_str("copy\n");
+    t.push_str("iv == 16:19:c 12:17:#1\n");
+    t.push_str("copy\n");
+    t.push_str("chop 35 40\n");
+    t.push_str("symmetric_difference 17:25:a 40:52:c 18:38:x 25:38:#2 37:60:c 35:50:_ 39:42:#2 6:16:x\n");
+    t.push_str("difference 40:52:c 15:35:a 18:38:x 27:33:a 25:38:#2 37:60:c 40:65:b\n");
+    t.push_str("overlap 37 36\n");
+    t.push_str("iv lt 3:13:c 30:41:b\n");
+    t.push_str("len\n");
+    t.push_str("iv contains_point 9:32:c 67\n");
+    t.push_str("overlap -2 0\n");
+    t.push_str("overlaps 31\n");
+    t.push_str("overlaps 17\n");
+    t.push_str("chop 20 30\n");
+    t.push_str("iv distance_to 33:49:b 67\n");
+    t.push_str("get 1 18\n");
+    t.push_str("iv le 34:58:#1 32:50:_\n");
+    t.push_str("chop 37 53\n");
+    t.push_str("remove_envelop 40 46\n");
+    t.push_str("get 44 _\n");
+    t.push_str("iv is_null 14:32:b 8:30:#1\n");
+    t.push_str("at 11\n");
+    t.push_str("add 26:43:_\n");
+    t.push_str("overlaps 31 45\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("union 18:38:x 27:33:a 25:38:#2 26:43:_ 28:48:x\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("update 38:56:b 33:53:_ 34:42:b 31:35:_ 10:14:#2\n");
+    t.push_str("del 45\n");
+    t.push_str("del 45\n");
+    t.push_str("add 16:26:a\n");
+    t.push_str("at 38\n");
+    t.push_str("set 27 53 b\n");
+    t.push_str("contains 24:28:#1\n");
+    t.push_str("overlap 0 20\n");
+    t.push_str("add 10:19:_\n");
+    t.push_str("overlap 40 53\n");
+    t.push_str("remove_overlap -1\n");
+    t.push_str("iv distance_to 12:25 2:16:c\n");
+    t.push_str("intersection 15:35:a 18:38:x 27:33:a 37:60:c 16:26:a 10:19:_ 18:20 10:34:_\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("envelop 44 45\n");
+    t.push_str("at 16\n");
+    t.push_str("add 9:25\n");
+    t.push_str("chop 10 17\n");
+    t.push_str("envelop 9 7\n");
+    t.push_str("chopf 30 48\n");
+    t.push_str("clear\n");
+    t.push_str("add 19:31\n");
+    t.push_str("iv gt 40:49:b 63\n");
+    t.push_str("set 34 46 #1\n");
+    t.push_str("union 19:31 39:47:#1\n");
+    t.push_str("union 19:31 31:52:#2 19:28:c 22:44:#2\n");
+    t.push_str("iv le 23:35:x 44\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 24:25:a\n");
+    t.push_str("chopf 1 12\n");
+    t.push_str("add 28:32:#1\n");
+    t.push_str("begin\n");
+    t.push_str("merge 0\n");
+    t.push_str("add 38:58:x\n");
+    t.push_str("add 39:44:#2\n");
+    t.push_str("overlap 1 11\n");
+    t.push_str("at 22\n");
+    t.push_str("add 14:17:b\n");
+    t.push_str("add 15:38:#2\n");
+    t.push_str("del -4\n");
+    t.push_str("add 26:48:_\n");
+    t.push_str("set 18 26 c\n");
+    t.push_str("overlaps 29\n");
+    t.push_str("difference_update 19:31 24:25:a 28:32:#1 38:58:x 39:44:#2 14:17:b 15:38:#2 26:48:_\n");
+    t.push_str("intersection_update 19:31 24:25:a 28:32:#1 38:58:x 15:38:#2 26:48:_ 6:28:x 11:32:#1 38:61:#1\n");
+    t.push_str("add 1:18:#2\n");
+    t.push_str("update 9:24:a 24:41 40:42:#1 22:30:x 29:47\n");
+    t.push_str("intersection_update 39:44:#2 37:46:#2 6:28:#2\n");
+    t.push_str("envelop 23 51\n");
+    t.push_str("set 28 54 _\n");
+    t.push_str("add 17:39:_\n");
+    t.push_str("iv distance_to 34:38:a 24:33:b\n");
+    t.push_str("overlap 45 46\n");
+    t.push_str("add 18:26:a\n");
+    t.push_str("envelop 4 10\n");
+    t.push_str("slicef 30\n");
+    t.push_str("merge_count 1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv < 32:53 17:42:#1\n");
+    t.push_str("remove_overlap 20\n");
+    t.push_str("update 29:36 28:51:b\n");
+    t.push_str("remove_envelop 14 38\n");
+    t.push_str("iv > 12:35:c 38:56:b\n");
+    t.push_str("add 8:27:b\n");
+    t.push_str("copy\n");
+    t.push_str("iv distance_to 3:11:a 9\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("slicef 34\n");
+    t.push_str("get _ 11\n");
+    t.push_str("merge_equals\n");
+    t.push_str("iv > 19:34:#2 31:55:c\n");
+    t.push_str("add 16:17\n");
+    t.push_str("add 11:13:c\n");
+    t.push_str("envelop 32 30\n");
+    t.push_str("add 4:21\n");
+    t.push_str("add 21:42:_\n");
+    t.push_str("add 22:43:_\n");
+    t.push_str("remove 10:27:c\n");
+    t.push_str("chopf 8 20\n");
+    t.push_str("add 33:57:c\n");
+    t.push_str("iv overlap_size 18:39:b 30:48\n");
+    t.push_str("add 28:38\n");
+    t.push_str("remove 5:19:_\n");
+    t.push_str("envelop 32 40\n");
+    t.push_str("range\n");
+    t.push_str("iv distance_to 15:33:x 17:42:_\n");
+    t.push_str("add 5:11:b\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("merge 0\n");
+    t.push_str("symmetric_difference 11:13:c 28:38\n");
+    t.push_str("add 27:44:a\n");
+    t.push_str("add 34:58:_\n");
+    t.push_str("add 36:59:#1\n");
+    t.push_str("add 18:43:a\n");
+    t.push_str("discard 22:43:_\n");
+    t.push_str("update 17:28:#2 15:40:#1 31:40:b 14:28 39:53\n");
+    t.push_str("overlaps 35 38\n");
+    t.push_str("overlap 7 13\n");
+    t.push_str("add 22:44:b\n");
+    t.push_str("update 16:30\n");
+    t.push_str("at 40\n");
+    t.push_str("is_empty\n");
+    t.push_str("iv contains_interval 39:40:x 12:20:a\n");
+    t.push_str("envelop 16 23\n");
+    t.push_str("union 27:44:a 34:58:_ 36:59:#1 18:43:a 22:44:b 25:35:c 38:48:#1\n");
+    t.push_str("update 24:29:#2\n");
+    t.push_str("iv is_null 3:6:_ 43\n");
+    t.push_str("iv > 33:39:c 39:47:#1\n");
+    t.push_str("envelop 27 48\n");
+    t.push_str("iv is_null 29:30:b 32:35:b\n");
+    t.push_str("overlap 37 53\n");
+    t.push_str("add 8:24:#2\n");
+    t.push_str("remove_overlap -3 -2\n");
+    t.push_str("add 5:24:c\n");
+    t.push_str("add 15:39:x\n");
+    t.push_str("add 8:31:c\n");
+    t.push_str("add 1:23\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 24:33:a\n");
+    t.push_str("add 14:24:b\n");
+    t.push_str("intersection 22:44:b 5:24:c 8:31:c 14:24:b 14:25:_\n");
+    t.push_str("remove_envelop 37 35\n");
+    t.push_str("remove_envelop 41 56\n");
+    t.push_str("chopf -5 16\n");
+    t.push_str("remove_envelop 35 33\n");
+    t.push_str("iv contains_interval 36:48 14:21:a\n");
+    t.push_str("len\n");
+    t.push_str("iv contains_point 24:46:a 11\n");
+    t.push_str("at 6\n");
+    t.push_str("contains 30:37:a\n");
+    t.push_str("get 7 16\n");
+    t.push_str("iv > 5:14:a 32\n");
+    t.push_str("iv length 7:14:x 26:42\n");
+    t.push_str("envelop 39 60\n");
+    t.push_str("overlap 38 65\n");
+    t.push_str("del 30\n");
+    t.push_str("add 12:26:#2\n");
+    t.push_str("overlap 33 59\n");
+    t.push_str("contains 35:60:a\n");
+    t.push_str("iv > 4:27:x 6:25:c\n");
+    t.push_str("overlap 45 62\n");
+    t.push_str("add 36:36:x\n");
+    t.push_str("iv range_matches 37:54:_ 34:52:b\n");
+    t.push_str("union 5:24:c 1:23 24:33:a 14:24:b 36:36:x\n");
+    t.push_str("intersection_update 15:39:x 1:23 24:33:a 12:26:#2\n");
+    t.push_str("copy\n");
+    t.push_str("remove 1:23\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("from_tuples \n");
+    t.push_str("split_overlaps\n");
+    t.push_str("get 19 31\n");
+    t.push_str("envelop 13 40\n");
+    t.push_str("add 13:19:x\n");
+    t.push_str("add 25:37:#2\n");
+    t.push_str("iv length 40:55:c 0:16:b\n");
+    t.push_str("overlap 21 26\n");
+    t.push_str("update 2:20:a 18:32:b\n");
+    t.push_str("at 32\n");
+    t.push_str("iv distance_to 13:27:a 26:44:a\n");
+    t.push_str("begin\n");
+    t.push_str("add 14:15:x\n");
+    t.push_str("iv length 31:37:x 8\n");
+    t.push_str("add 13:37:b\n");
+    t.push_str("overlaps 44\n");
+    t.push_str("add 4:22:c\n");
+    t.push_str("difference_update 12:26:#2 36:36:x 13:19:x 25:37:#2 14:15:x 13:37:b 10:34:#1 18:34:#2\n");
+    t.push_str("get 22 27\n");
+    t.push_str("add 24:43:b\n");
+    t.push_str("len\n");
+    t.push_str("envelop 45 59\n");
+    t.push_str("difference 12:26:#2 13:19:x 25:37:#2 14:15:x 24:43:b 24:28:c 33:57:_\n");
+    t.push_str("get 26 45\n");
+    t.push_str("at 1\n");
+    t.push_str("remove_envelop 10 39\n");
+    t.push_str("iv range_matches 0:22:#2 4:11:a\n");
+    t.push_str("add 27:36:x\n");
+    t.push_str("add 11:26:c\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("items\n");
+    v.push(DataFile { path: "traces/small.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_5(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("iv > 23:47:#1 13:32:c\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("remove_overlap 252 267\n");
+    t.push_str("iv distance_to 24:41:c 15:21:#2\n");
+    t.push_str("add 345:360:_\n");
+    t.push_str("iv == 23:38:c 33:42:_\n");
+    t.push_str("iv repr 29:53 20:26:#1\n");
+    t.push_str("discard 345:360:_\n");
+    t.push_str("intersection 371:372:x 381:385:a\n");
+    t.push_str("chop 134 146\n");
+    t.push_str("symmetric_difference \n");
+    t.push_str("envelop 383 383\n");
+    t.push_str("add 344:347:b\n");
+    t.push_str("add 130:136:c\n");
+    t.push_str("del -5\n");
+    t.push_str("clear\n");
+    t.push_str("add 146:147:#1\n");
+    t.push_str("overlaps 304 304\n");
+    t.push_str("eq \n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("copy\n");
+    t.push_str("get 68 _\n");
+    t.push_str("update 285:290:a 129:131:c 82:88:b 232:253:x 260:283:a 126:134\n");
+    t.push_str("add 131:140:a\n");
+    t.push_str("add 56:59:x\n");
+    t.push_str("add 53:70\n");
+    t.push_str("remove_overlap 103 114\n");
+    t.push_str("overlaps 5 6\n");
+    t.push_str("iv overlaps 30:47:b 18:30:#1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv > 19:44:a 5\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("add 370:395\n");
+    t.push_str("chop 361 388\n");
+    t.push_str("intersection 146:147:#1 56:59:x 53:70 370:395\n");
+    t.push_str("add 370:380:#2\n");
+    t.push_str("iv < 17:33:_ 35\n");
+    t.push_str("set 300 314 _\n");
+    t.push_str("begin\n");
+    t.push_str("at 274\n");
+    t.push_str("iv == 8:21:x 11:15:c\n");
+    t.push_str("remove_overlap 381\n");
+    t.push_str("set 126 134 c\n");
+    t.push_str("contains 183:208:c\n");
+    t.push_str("contains 92:105:a\n");
+    t.push_str("get _ _\n");
+    t.push_str("overlap 164 167\n");
+    t.push_str("symmetric_difference_update 131:140:a 370:395 370:380:#2 332:338:b 8:21:x 373:392:_\n");
+    t.push_str("iv distance_to 17:36:x 39:59\n");
+    t.push_str("contains 53:70\n");
+    t.push_str("remove_overlap 332 334\n");
+    t.push_str("get 166 _\n");
+    t.push_str("iv le 39:45 8:24:_\n");
+    t.push_str("add 0:18:_\n");
+    t.push_str("add 332:355:#1\n");
+    t.push_str("add 330:340:_\n");
+    t.push_str("iv lt 25:30:b 14:32:x\n");
+    t.push_str("add 186:198:b\n");
+    t.push_str("at 180\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlaps 231 237\n");
+    t.push_str("overlaps 322\n");
+    t.push_str("add 385:397:c\n");
+    t.push_str("at 402\n");
+    t.push_str("update 383:394:#1 368:388:#2 380:393:#1 272:292:b\n");
+    t.push_str("overlap 242 251\n");
+    t.push_str("update 95:106\n");
+    t.push_str("add 39:63\n");
+    t.push_str("at 299\n");
+    t.push_str("contains 332:355:#1\n");
+    t.push_str("add 169:183:#2\n");
+    t.push_str("update 122:146:a 172:184:a 73:79:b 220:235:#1 67:78:b 173:194\n");
+    t.push_str("add 317:335:b\n");
+    t.push_str("chopf 335 364\n");
+    t.push_str("iv contains_point 24:26:b 48\n");
+    t.push_str("discard 385:397:c\n");
+    t.push_str("set 70 95 b\n");
+    t.push_str("at 327\n");
+    t.push_str("iv gt 30:31:c 34:41:a\n");
+    t.push_str("len\n");
+    t.push_str("get _ 276\n");
+    t.push_str("add 315:328:#2\n");
+    t.push_str("slice 196\n");
+    t.push_str("del 72\n");
+    t.push_str("add 220:225\n");
+    t.push_str("discard 186:198:b\n");
+    t.push_str("iv overlaps 35:36:x 25:46:c\n");
+    t.push_str("union 385:397:c 39:63 169:183:#2 220:225 390:393:_\n");
+    t.push_str("iv overlaps 33:47:_ 19:23:#1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 303:310:_\n");
+    t.push_str("span\n");
+    t.push_str("overlap 125 135\n");
+    t.push_str("chopf 93 121\n");
+    t.push_str("discard 370:395\n");
+    t.push_str("iv gt 0:1:x 5\n");
+    t.push_str("remove_overlap 365 384\n");
+    t.push_str("add 144:149:x\n");
+    t.push_str("add 369:388:_\n");
+    t.push_str("merge 0\n");
+    t.push_str("remove_envelop 98 117\n");
+    t.push_str("chop 195 219\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("add 243:253:x\n");
+    t.push_str("set 267 270 a\n");
+    t.push_str("add 118:122:#2\n");
+    t.push_str("del 261\n");
+    t.push_str("chopf 230 242\n");
+    t.push_str("add 332:343:x\n");
+    t.push_str("remove_overlap 69 85\n");
+    t.push_str("add 347:361:c\n");
+    t.push_str("add 242:259:#2\n");
+    t.push_str("intersection 144:149:x 118:122:#2 332:343:x 347:361:c 13:15:#2\n");
+    t.push_str("overlaps -1 19\n");
+    t.push_str("iv ge 34:59 11:13:a\n");
+    t.push_str("len\n");
+    t.push_str("iv is_null 25:37:b 6\n");
+    t.push_str("set 47 45 _\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 26:43\n");
+    t.push_str("copy\n");
+    t.push_str("overlaps 22 31\n");
+    t.push_str("overlaps 218\n");
+    t.push_str("chop 174 181\n");
+    t.push_str("update 322:331 96:110 112:124:a 202:222:a 218:228:a\n");
+    t.push_str("iv is_null 17:40 57\n");
+    t.push_str("remove_envelop 76 103\n");
+    t.push_str("remove 332:343:x\n");
+    t.push_str("intersection 144:149:x 369:388:_ 243:253:x 118:122:#2 242:259:#2 285:297:c 75:83:c\n");
+    t.push_str("envelop 357 366\n");
+    t.push_str("envelop 287 310\n");
+    t.push_str("remove 332:343:x\n");
+    t.push_str("envelop 100 127\n");
+    t.push_str("add 309:322:c\n");
+    t.push_str("eq 369:388:_ 118:122:#2 332:343:x 347:361:c 242:259:#2 26:43\n");
+    t.push_str("add 246:265:x\n");
+    t.push_str("set 162 170 #2\n");
+    t.push_str("remove 330:340:_\n");
+    t.push_str("get 182 _\n");
+    t.push_str("iv distance_to 34:58:x 29:38:x\n");
+    t.push_str("add 332:339:c\n");
+    t.push_str("iv lt 13:20:a 29:36:c\n");
+    t.push_str("overlap 0 21\n");
+    t.push_str("iv contains_point 30:33 32\n");
+    t.push_str("add 269:279:#1\n");
+    t.push_str("iv == 4:9:c 3:11:#2\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("iv range_matches 20:24:#2 22:36:x\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("remove 370:395\n");
+    t.push_str("iv contains_interval 31:53:#2 0:5:#2\n");
+    t.push_str("iv gt 36:54:c 14:39:x\n");
+    t.push_str("iv > 13:35:a 40\n");
+    t.push_str("iv lt 11:15:a 24:49:x\n");
+    t.push_str("slice 354\n");
+    t.push_str("add 275:280:x\n");
+    t.push_str("set 339 362 _\n");
+    t.push_str("add 54:73:b\n");
+    t.push_str("intersection_update 242:259:#2 26:43 309:322:c 246:265:x 275:280:x 391:405 216:217:b\n");
+    t.push_str("iv lt 12:25:#2 20\n");
+    t.push_str("iv < 33:43:#1 31:44:#1\n");
+    t.push_str("add 269:292:#2\n");
+    t.push_str("remove_overlap -1 13\n");
+    t.push_str("iv length 32:49:#1 13:17:x\n");
+    t.push_str("overlaps 256\n");
+    t.push_str("iv > 9:12:#2 14:32:a\n");
+    t.push_str("remove_envelop 274 291\n");
+    t.push_str("set 367 390 x\n");
+    t.push_str("iv overlap_size 32:50:#1 10:29:_\n");
+    t.push_str("add 149:170:a\n");
+    t.push_str("contains 303:310:_\n");
+    t.push_str("iv le 16:26:a 14:37\n");
+    t.push_str("add 214:217:c\n");
+    t.push_str("add 220:245:#2\n");
+    t.push_str("add 11:36:a\n");
+    t.push_str("add 9:10:#2\n");
+    t.push_str("iv overlap_size 26:32:c 53\n");
+    t.push_str("chop 117 130\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 319:320:c\n");
+    t.push_str("iv ge 18:21:x 36:44:b\n");
+    t.push_str("get _ _\n");
+    t.push_str("discard 369:388:_\n");
+    t.push_str("iv > 5:22:c 22:42:_\n");
+    t.push_str("iv range_matches 38:58:c 24:36:c\n");
+    t.push_str("overlaps 97\n");
+    t.push_str("overlaps 121\n");
+    t.push_str("at -5\n");
+    t.push_str("add 226:251:x\n");
+    t.push_str("add 57:71:_\n");
+    t.push_str("iv contains_interval 11:18:x 11:21:x\n");
+    t.push_str("union 11:36:a 9:10:#2 226:251:x 358:369:b\n");
+    t.push_str("set 137 142 c\n");
+    t.push_str("iv is_null 31:40:c 46\n");
+    t.push_str("chopf 96 125\n");
+    t.push_str("add 365:380:a\n");
+    t.push_str("envelop 336 349\n");
+    t.push_str("iv distance_to 33:42:b 19:33:x\n");
+    t.push_str("iv overlap_size 17:22:_ 2:7:a\n");
+    t.push_str("iv distance_to 34:40:c 22:45:_\n");
+    t.push_str("add 323:332:a\n");
+    t.push_str("iv > 33:48:a 26:46:x\n");
+    t.push_str("add 285:305:c\n");
+    t.push_str("begin\n");
+    t.push_str("at 395\n");
+    t.push_str("slice 198\n");
+    t.push_str("remove_envelop 294 313\n");
+    t.push_str("end\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlap 390 419\n");
+    t.push_str("overlap 355 356\n");
+    t.push_str("chop 29 47\n");
+    t.push_str("remove_overlap 48 62\n");
+    t.push_str("update 372:379:#2 281:282:a 383:403:b 208:222:_\n");
+    t.push_str("iv le 16:21:#2 5:23:#2\n");
+    t.push_str("iv lt 21:31:c 16\n");
+    t.push_str("update 289:300 198:201 267:272:b\n");
+    t.push_str("at 242\n");
+    t.push_str("eq 11:36:a 9:10:#2 319:320:c 365:380:a 285:305:c 365:366:#1 17:39:_\n");
+    t.push_str("overlap 335 360\n");
+    t.push_str("iv length 25:34:c -2\n");
+    t.push_str("add 291:313:#2\n");
+    t.push_str("iv > 3:17:b 8:21:a\n");
+    t.push_str("iv > 28:51 26\n");
+    t.push_str("contains 54:73:b\n");
+    t.push_str("iv distance_to 33:43:#2 40:43:b\n");
+    t.push_str("iv length 34:41:b 16:27:c\n");
+    t.push_str("set 263 292 _\n");
+    t.push_str("overlaps 350\n");
+    t.push_str("iv gt 27:40:c 27\n");
+    t.push_str("del 140\n");
+    t.push_str("iv range_matches 2:14:x 19:27:b\n");
+    t.push_str("add 3:10:a\n");
+    t.push_str("add 202:221:#1\n");
+    t.push_str("iv == 33:48:a 13:16:#1\n");
+    t.push_str("add 356:379\n");
+    t.push_str("remove_envelop 241 252\n");
+    t.push_str("add 371:383\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("remove 319:320:c\n");
+    t.push_str("add 284:292:x\n");
+    t.push_str("difference 291:313:#2 202:221:#1 356:379 371:383 284:292:x\n");
+    t.push_str("iv contains_point 38:61:_ 61\n");
+    t.push_str("contains 378:390\n");
+    t.push_str("len\n");
+    t.push_str("chopf 365 392\n");
+    t.push_str("envelop 62 69\n");
+    t.push_str("add 53:66:b\n");
+    t.push_str("envelop 83 101\n");
+    t.push_str("overlap -3 -4\n");
+    t.push_str("envelop 71 80\n");
+    t.push_str("intersection 285:305:c 291:313:#2 202:221:#1 356:379 371:383 284:292:x 170:172:#1\n");
+    t.push_str("set 116 129 _\n");
+    t.push_str("add 359:361:c\n");
+    t.push_str("iv is_null 1:21:a 13\n");
+    t.push_str("overlap 351 379\n");
+    t.push_str("add 308:326:x\n");
+    t.push_str("add 314:329:#1\n");
+    t.push_str("add 157:161:a\n");
+    t.push_str("iv range_matches 20:44:a 5:9:b\n");
+    t.push_str("add 147:170:a\n");
+    t.push_str("overlap 153 182\n");
+    t.push_str("merge 0\n");
+    t.push_str("envelop 350 369\n");
+    t.push_str("add 41:51:x\n");
+    t.push_str("add 280:284:#2\n");
+    t.push_str("overlap 238 268\n");
+    t.push_str("add 360:366:#1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("update 64:77:_ 62:79:#2 208:219:#1 162:178:a\n");
+    t.push_str("remove 334:358\n");
+    t.push_str("iv overlaps 1:25:a 23\n");
+    t.push_str("add 125:143:x\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("copy\n");
+    t.push_str("add 247:250:c\n");
+    t.push_str("get 123 138\n");
+    t.push_str("iv ge 24:49:a 22:23:a\n");
+    t.push_str("envelop 255 268\n");
+    t.push_str("overlaps 389\n");
+    t.push_str("iv lt 28:48:#1 38:43\n");
+    t.push_str("merge_count 0\n");
+    t.push_str("iv lt 8:21:#2 4:13\n");
+    t.push_str("remove 308:322:a\n");
+    t.push_str("iv repr 20:35:#1 29:41\n");
+    t.push_str("set 95 121 x\n");
+    t.push_str("add 203:209:_\n");
+    t.push_str("union 157:161:a 147:170:a 280:284:#2 203:209:_ 353:376:_ 390:404:x\n");
+    t.push_str("add 288:313:c\n");
+    t.push_str("add 48:62:#1\n");
+    t.push_str("envelop 267 277\n");
+    t.push_str("slice 371\n");
+    t.push_str("merge 1\n");
+    t.push_str("envelop 336 338\n");
+    t.push_str("copy\n");
+    t.push_str("remove_overlap 309\n");
+    t.push_str("iv < 35:54 10:17:#1\n");
+    t.push_str("envelop 208 218\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv ge 31:56:x 8\n");
+    t.push_str("chop 53 59\n");
+    t.push_str("contains 303:314:a\n");
+    t.push_str("get _ 385\n");
+    t.push_str("add 96:120:#1\n");
+    t.push_str("copy\n");
+    t.push_str("iv == 26:47:_ 40:55\n");
+    t.push_str("overlap 274 303\n");
+    t.push_str("add 320:322:c\n");
+    t.push_str("add 260:272:#2\n");
+    t.push_str("add 208:217:x\n");
+    t.push_str("slice 23\n");
+    t.push_str("discard 359:361:c\n");
+    t.push_str("iv is_null 24:28 10\n");
+    t.push_str("get 122 _\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("iv contains_point 1:21:_ 41\n");
+    t.push_str("iv < 25:30:b 66\n");
+    t.push_str("intersection_update 247:250:c 203:209:_ 288:313:c 96:120:#1 320:322:c 260:272:#2 208:217:x 396:409:#2\n");
+    t.push_str("iv lt 40:65:a 18:40:a\n");
+    t.push_str("update 340:362:_ 365:368:_ 63:72:#2 265:269:#2 150:158:c\n");
+    t.push_str("add 216:222:c\n");
+    t.push_str("envelop 290 311\n");
+    t.push_str("iv > 21:24:b 26:44:#2\n");
+    t.push_str("iv lt 15:27:_ -1\n");
+    t.push_str("del 102\n");
+    t.push_str("span\n");
+    t.push_str("add 216:239:c\n");
+    t.push_str("add 260:268\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("remove_overlap 171 181\n");
+    t.push_str("iv le 35:56 37:62:x\n");
+    t.push_str("iv gt 38:55:_ 31:42:#1\n");
+    t.push_str("remove_overlap -4 22\n");
+    t.push_str("envelop 398 397\n");
+    t.push_str("from_tuples 111:113:_ 93:105 303:328:_ 8:15:x 171:175:x 82:90:x 399:409:b 272:277:a\n");
+    t.push_str("add 297:316:x\n");
+    t.push_str("at 180\n");
+    t.push_str("iv distance_to 40:58:_ 25:33:c\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("iv distance_to 13:37:b 7:19\n");
+    t.push_str("iv is_null 27:45:c 35\n");
+    t.push_str("len\n");
+    t.push_str("from_tuples 235:254:#2 164:178 95:120:b\n");
+    t.push_str("iv length 25:40:c 19:26\n");
+    t.push_str("set 395 409 _\n");
+    t.push_str("contains 25:33:#1\n");
+    t.push_str("add 381:392:_\n");
+    t.push_str("slicef 339\n");
+    t.push_str("iv repr 13:28:#1 21\n");
+    t.push_str("iv le 7:18 6:26:x\n");
+    t.push_str("iv contains_interval 39:54:x 5:23:#1\n");
+    t.push_str("difference_update 320:322:c 208:217:x 297:316:x 381:392:_\n");
+    t.push_str("at 236\n");
+    t.push_str("len\n");
+    t.push_str("len\n");
+    t.push_str("contains 330:340:_\n");
+    t.push_str("add 17:18:#1\n");
+    t.push_str("iv overlaps 8:20:x 30\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv le 22:36:_ 19:27:b\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("get 54 _\n");
+    t.push_str("chop 109 129\n");
+    t.push_str("iv range_matches 40:58:#1 3:25:b\n");
+    t.push_str("iv contains_interval 2:6:#1 2:7:_\n");
+    t.push_str("remove 3:10:a\n");
+    t.push_str("union 260:272:#2 208:217:x 216:239:c 297:316:x 17:18:#1\n");
+    t.push_str("add 141:150:x\n");
+    t.push_str("overlaps 346 359\n");
+    t.push_str("iv lt 12:29:#1 13\n");
+    t.push_str("union 216:239:c 381:392:_ 17:18:#1\n");
+    t.push_str("len\n");
+    t.push_str("set 141 157 c\n");
+    t.push_str("add 234:250:c\n");
+    t.push_str("chop -1 9\n");
+    t.push_str("iv contains_point 9:32:#2 46\n");
+    t.push_str("intersection 216:239:c 260:268 297:316:x 381:392:_ 17:18:#1 141:150:x 234:250:c\n");
+    t.push_str("overlap 270 299\n");
+    t.push_str("iv is_null 5:25:_ 16:39:_\n");
+    t.push_str("add 299:309:c\n");
+    t.push_str("iv lt 12:13:_ 62\n");
+    t.push_str("chopf 144 164\n");
+    t.push_str("remove 186:198:b\n");
+    t.push_str("at 324\n");
+    t.push_str("remove_overlap 11\n");
+    t.push_str("add 51:67:a\n");
+    t.push_str("del 256\n");
+    t.push_str("copy\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlap 104 130\n");
+    t.push_str("chopf 248 250\n");
+    t.push_str("remove_overlap 116\n");
+    t.push_str("remove_overlap 293 295\n");
+    t.push_str("remove_envelop 134 151\n");
+    t.push_str("remove 41:51:x\n");
+    t.push_str("add 14:32:c\n");
+    t.push_str("add 7:11:#2\n");
+    t.push_str("add 134:144:a\n");
+    t.push_str("iv contains_point 1:5:b 12\n");
+    t.push_str("remove 369:384\n");
+    t.push_str("union 141:150:x 14:32:c 7:11:#2 134:144:a 162:181:#2\n");
+    t.push_str("overlaps 189\n");
+    t.push_str("overlap 159 167\n");
+    t.push_str("contains 350:367:a\n");
+    t.push_str("len\n");
+    t.push_str("add 205:209:x\n");
+    t.push_str("set 20 23 _\n");
+    t.push_str("add 159:168:a\n");
+    t.push_str("iv range_matches 1:24 30:51:#1\n");
+    t.push_str("remove_overlap 46 54\n");
+    t.push_str("iv overlaps 5:26:#2 33\n");
+    t.push_str("set 111 109 x\n");
+    t.push_str("add 96:101:x\n");
+    t.push_str("set 306 336 _\n");
+    t.push_str("at 267\n");
+    t.push_str("remove 308:326:x\n");
+    t.push_str("contains 287:289:c\n");
+    t.push_str("chopf 253 283\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("remove_envelop 264 278\n");
+    t.push_str("add 154:169:#1\n");
+    t.push_str("iv > 27:43:x 39:40:x\n");
+    t.push_str("envelop 148 146\n");
+    t.push_str("remove 144:149:x\n");
+    t.push_str("chopf 354 368\n");
+    t.push_str("iv contains_point 29:48:#1 17\n");
+    t.push_str("set 238 244 c\n");
+    t.push_str("at 164\n");
+    t.push_str("at 106\n");
+    t.push_str("slicef 200\n");
+    t.push_str("contains 57:71:_\n");
+    t.push_str("overlaps 359\n");
+    t.push_str("union 51:67:a 7:11:#2 96:101:x 154:169:#1 87:88:c\n");
+    t.push_str("get _ 242\n");
+    t.push_str("remove_overlap 262\n");
+    t.push_str("overlap 289 293\n");
+    t.push_str("add 318:331\n");
+    t.push_str("slicef 178\n");
+    t.push_str("get _ 226\n");
+    t.push_str("add 327:350:b\n");
+    t.push_str("slicef 160\n");
+    t.push_str("iv < 25:49:a 6:22:b\n");
+    t.push_str("discard 381:392:_\n");
+    t.push_str("del 36\n");
+    t.push_str("copy\n");
+    t.push_str("add 196:215:b\n");
+    t.push_str("remove 280:284:#2\n");
+    t.push_str("add 358:382:#1\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlap 234 250\n");
+    t.push_str("update 99:120:_ 285:306:#2 6:20:x 383:401:b\n");
+    t.push_str("add 23:46:x\n");
+    t.push_str("add 10:24:b\n");
+    t.push_str("iv ge 35:50:#1 14:28:#2\n");
+    t.push_str("len\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("iv contains_interval 28:35:_ 2:17:x\n");
+    t.push_str("add 83:91:a\n");
+    t.push_str("add 23:46\n");
+    t.push_str("update 109:121:x\n");
+    t.push_str("at 5\n");
+    t.push_str("set 365 394 #1\n");
+    t.push_str("add 168:170:c\n");
+    t.push_str("iv gt 10:11:c 58\n");
+    t.push_str("remove 226:251:x\n");
+    t.push_str("add 288:293:x\n");
+    t.push_str("iv repr 23:27:x 29:39:b\n");
+    t.push_str("chopf 399 427\n");
+    t.push_str("add 86:106:a\n");
+    t.push_str("add 66:79:#1\n");
+    t.push_str("iv length 21:26:#1 29\n");
+    t.push_str("envelop 382 404\n");
+    t.push_str("is_empty\n");
+    t.push_str("update 187:191:a 294:303:x 376:389 326:350:#1 365:390:x 207:218:a\n");
+    t.push_str("chopf 349 375\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("add 20:32:#2\n");
+    t.push_str("add 154:167:_\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 15:21:#2\n");
+    t.push_str("add 287:300:c\n");
+    t.push_str("discard 66:79:#1\n");
+    t.push_str("chop 220 221\n");
+    t.push_str("difference 168:170:c 86:106:a 287:300:c 125:135:b 343:359:_ 359:368\n");
+    t.push_str("iv ge 31:43:x 41\n");
+    t.push_str("iv overlaps 40:48:a 7:21\n");
+    t.push_str("add 245:257:x\n");
+    t.push_str("del 144\n");
+    t.push_str("at 51\n");
+    t.push_str("remove_envelop 245 267\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("len\n");
+    t.push_str("set 337 339 _\n");
+    t.push_str("add 376:382:#2\n");
+    t.push_str("update 112:114:b\n");
+    t.push_str("iv overlap_size 38:46:_ 8\n");
+    t.push_str("discard 10:24:b\n");
+    t.push_str("add 391:405:x\n");
+    t.push_str("overlap 402 408\n");
+    t.push_str("at 299\n");
+    t.push_str("symmetric_difference_update 66:79:#1 245:257:x 376:382:#2 391:405:x 77:98:#2\n");
+    t.push_str("discard 157:166\n");
+    t.push_str("is_empty\n");
+    t.push_str("len\n");
+    t.push_str("slice 202\n");
+    t.push_str("intersection 66:79:#1 20:32:#2 15:21:#2 245:257:x 376:382:#2 391:405:x\n");
+    t.push_str("add 202:224:_\n");
+    t.push_str("slice 35\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("get 282 306\n");
+    t.push_str("overlap 174 193\n");
+    t.push_str("slicef 249\n");
+    t.push_str("add 400:412:x\n");
+    t.push_str("range\n");
+    t.push_str("add 14:23:#2\n");
+    t.push_str("remove 53:66:b\n");
+    t.push_str("update 389:393:c 44:49:x\n");
+    t.push_str("iv range_matches 9:26:#1 7:19:x\n");
+    t.push_str("set 112 141 #2\n");
+    t.push_str("add 108:130:#1\n");
+    t.push_str("iv range_matches 9:18:b 4:20:#2\n");
+    t.push_str("add 325:350:_\n");
+    t.push_str("difference_update 245:257:x 376:382:#2 202:224:_ 325:350:_ 26:48:#1 24:40\n");
+    t.push_str("update 304:319:x 306:318:a 399:404:a 246:260:c\n");
+    t.push_str("iv is_null 25:30:b 10\n");
+    t.push_str("get 159 171\n");
+    t.push_str("iv contains_interval 37:44:a 17:31\n");
+    t.push_str("add 131:138:x\n");
+    t.push_str("chop 11 24\n");
+    t.push_str("len\n");
+    t.push_str("add 257:265:a\n");
+    t.push_str("add 206:212:#1\n");
+    t.push_str("overlap 136 142\n");
+    t.push_str("envelop 75 96\n");
+    t.push_str("remove_overlap 199 223\n");
+    t.push_str("iv length 38:40:x 2:22\n");
+    t.push_str("remove 202:224:_\n");
+    t.push_str("envelop 21 29\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv lt 25:48 21:34:a\n");
+    t.push_str("discard 309:319:c\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("add 178:197:#1\n");
+    t.push_str("iv lt 40:49:x 66\n");
+    t.push_str("at 105\n");
+    t.push_str("len\n");
+    t.push_str("get _ 66\n");
+    t.push_str("add 278:298:a\n");
+    t.push_str("get _ 103\n");
+    t.push_str("iv == 40:53:a 8:31\n");
+    t.push_str("add 134:135\n");
+    t.push_str("add 285:289:#1\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("remove 385:397:c\n");
+    t.push_str("add 310:319:#2\n");
+    t.push_str("iv overlap_size 11:19:x 31:54\n");
+    t.push_str("add 327:349:b\n");
+    t.push_str("iv > 18:29:c 21:27:b\n");
+    t.push_str("remove_envelop 257 271\n");
+    t.push_str("iv overlap_size 14:27:a 37:40:#1\n");
+    t.push_str("add 58:65:x\n");
+    t.push_str("get _ 191\n");
+    t.push_str("chop 108 125\n");
+    t.push_str("len\n");
+    t.push_str("add 35:51:#2\n");
+    t.push_str("remove_envelop 89 115\n");
+    t.push_str("iv == 19:34:_ 27:28:_\n");
+    t.push_str("add 381:397:c\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv is_null 20:29:c 3:20:b\n");
+    t.push_str("iv > 30:42:#2 18:30:_\n");
+    t.push_str("add 113:117:_\n");
+    t.push_str("at 173\n");
+    t.push_str("remove_overlap 23 25\n");
+    t.push_str("add 124:147:b\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("add 376:383:a\n");
+    t.push_str("remove 134:135\n");
+    t.push_str("union 310:319:#2 327:349:b 58:65:x 35:51:#2 381:397:c 113:117:_ 376:383:a\n");
+    t.push_str("iv < 19:36 38:61:c\n");
+    t.push_str("add 11:30\n");
+    t.push_str("iv < 31:40 1:2:_\n");
+    t.push_str("add 50:52:_\n");
+    t.push_str("add 280:298:b\n");
+    t.push_str("add 361:368:b\n");
+    t.push_str("intersection 376:383:a 11:30 50:52:_ 350:358\n");
+    t.push_str("overlaps 86\n");
+    t.push_str("update 191:202:#1 85:88:x 321:346:#2 34:38:_ 20:45:_\n");
+    t.push_str("overlap 235 248\n");
+    t.push_str("iv == 7:17:#1 33:46:#2\n");
+    t.push_str("iv repr 21:35:c 21:24:c\n");
+    t.push_str("at -4\n");
+    t.push_str("get _ _\n");
+    t.push_str("add 399:411:#1\n");
+    t.push_str("set 379 404 _\n");
+    t.push_str("iv gt 7:8:#1 31:47:c\n");
+    t.push_str("overlaps 195\n");
+    t.push_str("iv > 2:26:b 63\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("slicef 22\n");
+    t.push_str("get 404 _\n");
+    t.push_str("get _ _\n");
+    t.push_str("intersection 124:147:b 280:298:b 361:368:b 399:411:#1\n");
+    t.push_str("add 169:192\n");
+    t.push_str("add 380:405:x\n");
+    t.push_str("get _ 357\n");
+    t.push_str("set 140 138 b\n");
+    t.push_str("slice 208\n");
+    t.push_str("iv < 3:16 37\n");
+    t.push_str("iv range_matches 23:45:a 8:26:a\n");
+    t.push_str("iv overlaps 30:46 23\n");
+    t.push_str("iv overlaps 40:62 12:36:#1\n");
+    t.push_str("add 27:52:a\n");
+    t.push_str("iv > 20:23:x 0\n");
+    t.push_str("add 9:32:#1\n");
+    t.push_str("overlap 14 20\n");
+    t.push_str("iv overlap_size 19:31:b 61\n");
+    t.push_str("at 101\n");
+    t.push_str("from_tuples 148:153:a 362:365:b 131:138:#1 1:16:x 54:72:x 177:197:a 135:158:b\n");
+    t.push_str("remove_envelop 200 206\n");
+    t.push_str("add 120:127:_\n");
+    t.push_str("iv contains_interval 37:57 27:35:x\n");
+    t.push_str("overlap 291 298\n");
+    t.push_str("remove_overlap 194\n");
+    t.push_str("add 248:266:c\n");
+    t.push_str("add 366:374:#2\n");
+    t.push_str("add 205:206:b\n");
+    t.push_str("add 35:53:#2\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("remove_overlap 176\n");
+    t.push_str("add 17:30\n");
+    t.push_str("contains 1:5:_\n");
+    t.push_str("add 322:346:#2\n");
+    t.push_str("iv repr 6:10 33:52:c\n");
+    t.push_str("add 77:94:_\n");
+    t.push_str("add 27:38:a\n");
+    t.push_str("remove 26:43\n");
+    t.push_str("add 338:352:#1\n");
+    t.push_str("add 4:16:b\n");
+    t.push_str("chopf 74 91\n");
+    t.push_str("del 368\n");
+    t.push_str("begin\n");
+    t.push_str("add 304:314:#2\n");
+    t.push_str("del 282\n");
+    t.push_str("remove_overlap 340\n");
+    t.push_str("iv contains_point 13:33:c -2\n");
+    t.push_str("set 294 310 c\n");
+    t.push_str("update 202:205:b\n");
+    t.push_str("set 332 354 a\n");
+    t.push_str("at 159\n");
+    t.push_str("remove 83:91:a\n");
+    t.push_str("len\n");
+    t.push_str("add 343:364:x\n");
+    t.push_str("chop 354 370\n");
+    t.push_str("iv overlap_size 29:52:#2 10:34:c\n");
+    t.push_str("iv contains_point 26:44:a -2\n");
+    t.push_str("del 211\n");
+    t.push_str("get 107 124\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("merge 0\n");
+    t.push_str("add 118:139:x\n");
+    t.push_str("iv length 12:25 3:4:a\n");
+    t.push_str("add 242:245:b\n");
+    t.push_str("at 219\n");
+    t.push_str("get _ _\n");
+    t.push_str("contains 346:362:b\n");
+    t.push_str("slicef 19\n");
+    t.push_str("add 305:307:c\n");
+    t.push_str("add 230:246\n");
+    t.push_str("iv contains_point 18:23:a 60\n");
+    t.push_str("eq 338:352:#1 4:16:b 304:314:#2 118:139:x 230:246 167:191:#1 72:84:x 326:338:#1\n");
+    t.push_str("contains 110:127:#1\n");
+    t.push_str("envelop 154 153\n");
+    t.push_str("del 244\n");
+    t.push_str("add 344:365:b\n");
+    t.push_str("symmetric_difference_update 304:314:#2 343:364:x 118:139:x 242:245:b 305:307:c 230:246 344:365:b\n");
+    t.push_str("is_empty\n");
+    t.push_str("del 168\n");
+    t.push_str("update 305:313:b 54:72:_ 359:380:c 107:126:#1 155:160:c 102:111:#1\n");
+    t.push_str("add 121:143:_\n");
+    t.push_str("overlap 401 421\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("difference_update 304:314:#2 343:364:x 305:307:c 230:246 121:143:_ 80:103 107:119\n");
+    t.push_str("slice 291\n");
+    t.push_str("get _ _\n");
+    t.push_str("add 275:293\n");
+    t.push_str("iv le 25:50:x 52\n");
+    t.push_str("intersection_update 343:364:x 305:307:c 230:246 344:365:b 275:293 231:241:b 317:321:#2\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("overlaps 37 48\n");
+    t.push_str("add 348:361:#1\n");
+    t.push_str("symmetric_difference_update 118:139:x 242:245:b 305:307:c 344:365:b 121:143:_ 246:260 12:13:_ 339:352:c\n");
+    t.push_str("set 18 19 _\n");
+    t.push_str("add 239:245\n");
+    t.push_str("iv distance_to 38:45:#1 24:38\n");
+    t.push_str("envelop 403 402\n");
+    t.push_str("envelop 321 323\n");
+    t.push_str("discard 315:328:#2\n");
+    t.push_str("from_tuples 134:144:b 260:261:c 112:133:c 117:126:b 191:199:b 315:340:#1 374:394:a 149:165 156:181:x 247:270:b 338:348:_ 93:118:a\n");
+    t.push_str("overlap 208 230\n");
+    t.push_str("iv == 35:48:#1 24:30:#1\n");
+    t.push_str("merge_join 0\n");
+    t.push_str("contains 320:330:a\n");
+    t.push_str("iv range_matches 29:33:#1 1:8:_\n");
+    t.push_str("add 160:181:x\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("merge 1\n");
+    t.push_str("iv == 25:41:#2 12:16:a\n");
+    t.push_str("symmetric_difference_update 305:307:c 344:365:b 348:361:#1\n");
+    t.push_str("difference_update 305:307:c 344:365:b 121:143:_ 348:361:#1 239:245 3:6:#2\n");
+    t.push_str("set 348 353 _\n");
+    t.push_str("overlaps 194 214\n");
+    t.push_str("get 340 _\n");
+    t.push_str("update 134:147:x 218:227:x 68:83:x 201:205:a 362:371:#2 236:261:a\n");
+    t.push_str("add 345:357\n");
+    t.push_str("add 233:252:b\n");
+    t.push_str("set 373 377 #2\n");
+    t.push_str("set 196 196 x\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("update 340:359:x 282:297:c\n");
+    t.push_str("overlaps 355 358\n");
+    t.push_str("len\n");
+    t.push_str("at 41\n");
+    t.push_str("add 230:252\n");
+    t.push_str("envelop 224 223\n");
+    t.push_str("iv le 37:53:#2 8:10:c\n");
+    t.push_str("del 8\n");
+    t.push_str("clear\n");
+    t.push_str("add 153:157:b\n");
+    t.push_str("iv == 0:11:c 4:23:x\n");
+    t.push_str("update 399:424:b 311:336:x 357:368:#1 25:37:a 338:343:_\n");
+    t.push_str("iv repr 35:42:b 43\n");
+    t.push_str("discard 243:258:a\n");
+    t.push_str("len\n");
+    t.push_str("iv gt 31:54:b 12:26:#1\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("chop 55 75\n");
+    t.push_str("envelop 385 387\n");
+    t.push_str("at 117\n");
+    t.push_str("update 83:90:#1 400:420:c 41:53:#1 38:55:#1 338:350:#1\n");
+    t.push_str("add 279:292:c\n");
+    t.push_str("chopf 200 226\n");
+    t.push_str("add 62:86:c\n");
+    t.push_str("iv range_matches 36:49:c 39:45:x\n");
+    t.push_str("set 129 152 a\n");
+    t.push_str("begin\n");
+    t.push_str("add 346:349:#2\n");
+    t.push_str("symmetric_difference 279:292:c 62:86:c 24:46:a 324:349:b 223:244:x\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("get _ _\n");
+    t.push_str("overlaps 41\n");
+    t.push_str("iv range_matches 4:29:x 3:21:_\n");
+    t.push_str("get _ 160\n");
+    t.push_str("range\n");
+    t.push_str("discard 299:312:_\n");
+    t.push_str("add 128:133:c\n");
+    t.push_str("overlaps 135 138\n");
+    t.push_str("discard 153:157:b\n");
+    t.push_str("iv == 27:43:_ 39:61:#1\n");
+    t.push_str("iv lt 28:48:#1 7:13:#2\n");
+    t.push_str("remove 153:157:b\n");
+    t.push_str("iv == 25:31:#2 3:16:_\n");
+    t.push_str("intersection_update 153:157:b 128:133:c\n");
+    t.push_str("add 333:344\n");
+    t.push_str("iv repr 9:29 3\n");
+    t.push_str("at 258\n");
+    t.push_str("merge_equals_count\n");
+    t.push_str("at 46\n");
+    t.push_str("overlap 373 386\n");
+    t.push_str("add 365:373:x\n");
+    t.push_str("iv distance_to 22:43 12:20:_\n");
+    t.push_str("add 76:81:x\n");
+    t.push_str("iv is_null 30:45:a 7\n");
+    t.push_str("iv is_null 33:41:#1 7:22:c\n");
+    t.push_str("iv contains_point 21:41 27\n");
+    t.push_str("at 247\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("remove 254:262:x\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("add 208:229:c\n");
+    t.push_str("discard 365:373:x\n");
+    t.push_str("intersection 279:292:c 333:344 365:373:x 76:81:x 208:229:c 389:390:#1 376:384:#2\n");
+    t.push_str("add 384:401\n");
+    t.push_str("iv distance_to 13:17 17\n");
+    t.push_str("at 268\n");
+    t.push_str("merge_join 1\n");
+    t.push_str("add 257:267:_\n");
+    t.push_str("at 4\n");
+    t.push_str("overlap 315 316\n");
+    t.push_str("overlap 77 94\n");
+    t.push_str("eq 128:133:c 365:373:x 208:229:c 384:401\n");
+    t.push_str("add 197:203:#2\n");
+    t.push_str("merge_equals_join\n");
+    t.push_str("remove_overlap 192\n");
+    t.push_str("begin\n");
+    t.push_str("add 138:141:c\n");
+    t.push_str("del 28\n");
+    t.push_str("add 399:424:a\n");
+    t.push_str("overlaps 60\n");
+    t.push_str("from_tuples \n");
+    t.push_str("add 136:155:b\n");
+    t.push_str("copy\n");
+    t.push_str("overlap 283 287\n");
+    t.push_str("overlap 66 68\n");
+    t.push_str("add 70:83:a\n");
+    t.push_str("iv overlaps 22:40:_ 21:26\n");
+    t.push_str("del 385\n");
+    t.push_str("iv lt 20:38:c 17:42:c\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv gt 24:29:a 2:27:x\n");
+    t.push_str("intersection 208:229:c 384:401 257:267:_ 138:141:c 399:424:a 136:155:b\n");
+    t.push_str("add 342:358:c\n");
+    t.push_str("range\n");
+    t.push_str("add 339:348:#1\n");
+    t.push_str("iv overlap_size 31:32:#2 41\n");
+    t.push_str("contains 197:203:#2\n");
+    t.push_str("add 198:210:#2\n");
+    t.push_str("iv lt 36:56:_ 65\n");
+    t.push_str("get _ 259\n");
+    t.push_str("add 348:366:#2\n");
+    t.push_str("set 66 94 c\n");
+    t.push_str("chopf 292 310\n");
+    t.push_str("del 383\n");
+    t.push_str("del 374\n");
+    t.push_str("iv overlaps 38:45:_ 9:31:#2\n");
+    t.push_str("iv le 11:23:#1 4:18:a\n");
+    t.push_str("contains 279:292:c\n");
+    t.push_str("iv overlap_size 22:41:b 50\n");
+    t.push_str("difference 399:424:a 70:83:a 339:348:#1 348:366:#2 136:145:b 59:79:a\n");
+    t.push_str("remove 399:424:a\n");
+    t.push_str("overlap 193 215\n");
+    t.push_str("slice 144\n");
+    t.push_str("iv length 4:5:c 35:39:x\n");
+    t.push_str("symmetric_difference 136:155:b 70:83:a 342:358:c 339:348:#1 348:366:#2 112:132:#1 22:44:a 300:316:b\n");
+    t.push_str("add 294:311:#1\n");
+    t.push_str("add 163:181:_\n");
+    t.push_str("add 255:275:b\n");
+    t.push_str("eq 342:358:c 339:348:#1 198:210:#2 348:366:#2 294:311:#1 163:181:_ 22:41\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv > 15:30:#1 31:49:#1\n");
+    t.push_str("iv lt 36:51:_ 16:37:a\n");
+    t.push_str("difference_update 70:83:a 339:348:#1 198:210:#2 211:213 298:310:c\n");
+    t.push_str("iv lt 24:26:_ 3:8:x\n");
+    t.push_str("set 346 374 _\n");
+    t.push_str("add 105:125:#1\n");
+    t.push_str("overlaps 185 207\n");
+    t.push_str("contains 294:311:#1\n");
+    t.push_str("span\n");
+    t.push_str("remove 333:344\n");
+    t.push_str("chopf 106 110\n");
+    t.push_str("add 25:30:_\n");
+    t.push_str("iv contains_interval 22:36:#1 4:27:b\n");
+    t.push_str("overlaps 244\n");
+    t.push_str("add 327:340:#1\n");
+    t.push_str("intersection 294:311:#1 163:181:_ 105:125:#1 25:30:_ 327:340:#1 103:112:x\n");
+    t.push_str("contains 380:383:_\n");
+    t.push_str("add 225:234:a\n");
+    t.push_str("slicef 180\n");
+    t.push_str("add 105:114:#1\n");
+    t.push_str("iv distance_to 29:33:x 25\n");
+    t.push_str("add 113:122:a\n");
+    t.push_str("add 304:305:#2\n");
+    t.push_str("contains 51:56:_\n");
+    t.push_str("iv overlaps 28:50:a 2:7:b\n");
+    t.push_str("remove_envelop 187 197\n");
+    t.push_str("add 64:74:a\n");
+    t.push_str("add 348:353:x\n");
+    t.push_str("del 170\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("iv == 21:36 25:38:c\n");
+    t.push_str("iv is_null 1:22:_ 25:29:#2\n");
+    t.push_str("union 327:340:#1 225:234:a 105:114:#1 304:305:#2 228:236:x\n");
+    t.push_str("update 104:120:_ 214:229:x\n");
+    t.push_str("split_overlaps\n");
+    t.push_str("chopf 367 368\n");
+    t.push_str("iv distance_to 39:51 40:65:#2\n");
+    t.push_str("at 182\n");
+    t.push_str("union 327:340:#1 225:234:a 105:114:#1 113:122:a 304:305:#2 348:353:x 194:207:#1\n");
+    t.push_str("difference 25:30:_ 327:340:#1 225:234:a 113:122:a 304:305:#2 64:74:a 348:353:x 101:124:_ 389:410:a\n");
+    t.push_str("iv length 35:40:#1 34:41:a\n");
+    t.push_str("add 2:26:#1\n");
+    t.push_str("envelop 28 54\n");
+    t.push_str("difference 327:340:#1 105:114:#1 304:305:#2 64:74:a 355:375:_ 378:393:c\n");
+    t.push_str("end\n");
+    t.push_str("add 26:36:a\n");
+    t.push_str("add 85:104:a\n");
+    t.push_str("get 266 287\n");
+    t.push_str("add 320:335:#1\n");
+    t.push_str("at 259\n");
+    t.push_str("iv < 2:6:#2 44\n");
+    t.push_str("overlap 316 339\n");
+    t.push_str("iv < 9:18:#2 22:39\n");
+    t.push_str("at 56\n");
+    t.push_str("del 109\n");
+    t.push_str("copy\n");
+    t.push_str("add 348:351:b\n");
+    t.push_str("overlaps 363 383\n");
+    t.push_str("add 268:280:a\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("verify\n");
+    t.push_str("repr\n");
+    t.push_str("items\n");
+    v.push(DataFile { path: "traces/wide.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_6(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("chr2\t161217\trs1000\tC>A\n");
+    t.push_str("chr3\t32112\trs1001\tC>T\n");
+    t.push_str("chrX\t71086\trs1002\tA>C\n");
+    t.push_str("chr1\t47459\trs1003\tG>T\n");
+    t.push_str("chr3\t6088\trs1004\tA>T\n");
+    t.push_str("chrX\t50342\trs1005\tG>C\n");
+    t.push_str("chr2\t139657\trs1006\tA>T\n");
+    t.push_str("chr1\t88269\trs1007\tG>T\n");
+    t.push_str("chrX\t82412\trs1008\tC>G\n");
+    t.push_str("chr2\t175481\trs1009\tG>C\n");
+    t.push_str("chr2\t90262\trs1010\tT>A\n");
+    t.push_str("chr1\t133218\trs1011\tT>C\n");
+    t.push_str("chrX\t173777\trs1012\tT>C\n");
+    t.push_str("chr2\t98483\trs1013\tG>T\n");
+    t.push_str("chr3\t151372\trs1014\tA>G\n");
+    t.push_str("chr3\t24241\trs1015\tT>A\n");
+    t.push_str("chr3\t113683\trs1016\tG>A\n");
+    t.push_str("chr3\t134716\trs1017\tA>C\n");
+    t.push_str("chr2\t25814\trs1018\tT>A\n");
+    t.push_str("chr3\t8404\trs1019\tC>A\n");
+    t.push_str("chr3\t86558\trs1020\tG>A\n");
+    t.push_str("chrX\t10192\trs1021\tC>G\n");
+    t.push_str("chr1\t194235\trs1022\tC>T\n");
+    t.push_str("chr2\t51632\trs1023\tA>C\n");
+    t.push_str("chr3\t154398\trs1024\tA>C\n");
+    t.push_str("chr3\t131187\trs1025\tA>C\n");
+    t.push_str("chr2\t195450\trs1026\tG>T\n");
+    t.push_str("chr3\t17765\trs1027\tT>G\n");
+    t.push_str("chrX\t68363\trs1028\tA>T\n");
+    t.push_str("chr1\t131574\trs1029\tA>C\n");
+    t.push_str("chrX\t25993\trs1030\tA>G\n");
+    t.push_str("chr2\t71015\trs1031\tT>G\n");
+    t.push_str("chr2\t50458\trs1032\tA>C\n");
+    t.push_str("chrX\t140594\trs1033\tA>C\n");
+    t.push_str("chrX\t47857\trs1034\tT>A\n");
+    t.push_str("chr1\t152785\trs1035\tG>A\n");
+    t.push_str("chr3\t90711\trs1036\tC>G\n");
+    t.push_str("chr1\t62811\trs1037\tC>A\n");
+    t.push_str("chr3\t53768\trs1038\tA>C\n");
+    t.push_str("chr3\t197184\trs1039\tT>A\n");
+    t.push_str("chr3\t65778\trs1040\tT>C\n");
+    t.push_str("chr2\t17593\trs1041\tA>G\n");
+    t.push_str("chr2\t84081\trs1042\tC>T\n");
+    t.push_str("chr1\t42012\trs1043\tA>G\n");
+    t.push_str("chrX\t184112\trs1044\tA>G\n");
+    t.push_str("chr1\t56948\trs1045\tG>A\n");
+    t.push_str("chr3\t140628\trs1046\tC>G\n");
+    t.push_str("chr3\t90229\trs1047\tC>G\n");
+    t.push_str("chrX\t100083\trs1048\tA>T\n");
+    t.push_str("chr1\t145045\trs1049\tC>T\n");
+    t.push_str("chrX\t69468\trs1050\tG>T\n");
+    t.push_str("chr2\t138235\trs1051\tG>C\n");
+    t.push_str("chr2\t130465\trs1052\tG>T\n");
+    t.push_str("chr3\t50437\trs1053\tC>T\n");
+    t.push_str("chr3\t20842\trs1054\tT>C\n");
+    t.push_str("chr3\t42901\trs1055\tC>T\n");
+    t.push_str("chr1\t89173\trs1056\tA>G\n");
+    t.push_str("chr2\t137973\trs1057\tA>T\n");
+    t.push_str("chr2\t95399\trs1058\tC>T\n");
+    t.push_str("chr1\t30230\trs1059\tG>A\n");
+    t.push_str("chr1\t150045\trs1060\tA>C\n");
+    t.push_str("chr1\t132825\trs1061\tC>G\n");
+    t.push_str("chrX\t151234\trs1062\tG>C\n");
+    t.push_str("chrX\t191067\trs1063\tG>T\n");
+    t.push_str("chr1\t171475\trs1064\tC>T\n");
+    t.push_str("chrX\t63015\trs1065\tG>A\n");
+    t.push_str("chr2\t82976\trs1066\tA>C\n");
+    t.push_str("chrX\t30053\trs1067\tA>G\n");
+    t.push_str("chr1\t46501\trs1068\tT>C\n");
+    t.push_str("chr2\t109249\trs1069\tT>C\n");
+    t.push_str("chr3\t106284\trs1070\tG>A\n");
+    t.push_str("chrX\t60106\trs1071\tC>T\n");
+    t.push_str("chrX\t73889\trs1072\tA>G\n");
+    t.push_str("chr2\t63153\trs1073\tA>C\n");
+    t.push_str("chrX\t13349\trs1074\tC>G\n");
+    t.push_str("chrX\t30206\trs1075\tC>A\n");
+    t.push_str("chr3\t132748\trs1076\tG>A\n");
+    t.push_str("chr3\t89536\trs1077\tA>T\n");
+    t.push_str("chr2\t175359\trs1078\tT>A\n");
+    t.push_str("chr3\t141708\trs1079\tT>G\n");
+    t.push_str("chr1\t120807\trs1080\tT>G\n");
+    t.push_str("chr3\t75467\trs1081\tG>A\n");
+    t.push_str("chr1\t41019\trs1082\tA>C\n");
+    t.push_str("chr3\t148191\trs1083\tA>C\n");
+    t.push_str("chr3\t33312\trs1084\tG>T\n");
+    t.push_str("chr1\t79994\trs1085\tC>T\n");
+    t.push_str("chr2\t194046\trs1086\tC>G\n");
+    t.push_str("chr3\t188222\trs1087\tT>G\n");
+    t.push_str("chr2\t118779\trs1088\tT>G\n");
+    t.push_str("chr3\t64544\trs1089\tG>A\n");
+    v.push(DataFile { path: "variants.tsv".to_string(), hex: false, body: t });
+}
