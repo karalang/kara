@@ -15618,6 +15618,21 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         &["TcpListener", "TcpStream", "UdpSocket"],
     ),
     (
+        // The program-rooted resources' default providers (§14.7,
+        // B-2026-10-20-11). Legacy keeps its ambient `Env` / `Clock` /
+        // `RandomSource`.
+        include_str!("../../runtime/stdlib/source/providers.kara"),
+        &[
+            "OsEnv",
+            "OsClock",
+            "OsRandom",
+            "EnvProvider",
+            "ClockProvider",
+            "RandomProvider",
+        ],
+        &["OsEnv", "OsClock", "OsRandom"],
+    ),
+    (
         // The v2 `std.regex` (B-2026-10-14-63); legacy keeps
         // runtime/stdlib/regex.kara.
         REGEX_SOURCE,

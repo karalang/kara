@@ -1,6 +1,6 @@
 
 struct FakeEnv {}
-impl FakeEnv { fn var(self, name: String) -> Result[String, VarError] { Ok("mocked") } }
+impl EnvProvider for FakeEnv { fn var(self, name: Str) -> Result[String, VarError] { Ok("mocked") } }
 fn rv() -> String reads(Env) {
     match env.var("ANYTHING") { Ok(s) => s, Err(e) => "missing" }
 }

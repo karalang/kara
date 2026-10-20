@@ -641,6 +641,10 @@ impl<'a> super::Resolver<'a> {
                 }
             }
         }
+        // The default provider (§14.7) is an ordinary expression.
+        if let Some(d) = &r.default {
+            self.resolve_expr(d);
+        }
     }
 
     fn resolve_effect_group_def(&mut self, g: &EffectGroupDecl) {

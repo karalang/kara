@@ -80,4 +80,40 @@ fn port() -> i64 {
 
 ## Testing with fixed values
 
-Supplying a fake `Clock`, `RandomSource` or `Env` to a test, so that the code under test runs deterministically, uses providers, which come with the services track (M4a); see [deferred.md](../deferred.md#m4a-services).
+`Env`, `Clock` and `RandomSource` are program-rooted resources ([core-semantics §14.7](../core-semantics.md)). Each has a default provider that asks the operating system, and a program replaces it for the extent of a call with `with_provider`. The replacement implements the resource's provider trait, whose methods are the resource's own (`std.time`, `std.random` and `env` are written on them):
+
+```kara
+trait EnvProvider {
+    fn args(self) -> Vec[String]
+    fn var(self, name: Str) -> Result[String, VarError]
+    fn set(mut ref self, name: Str, value: Str)
+}
+
+trait ClockProvider {
+    fn now(self) -> i64            // whole seconds since the Unix epoch
+    fn monotonic_ns(self) -> i64   // from an origin fixed for the process
+    fn wall_ns(self) -> i64        // since the Unix epoch; may jump
+}
+
+trait RandomProvider {
+    fn next_u64(self) -> u64
+}
+```
+
+Every method has a default body that panics, naming the resource and the method (`Env.var called on a provider that does not implement it`). So a fake states only the methods it uses, a test never reaches the real environment, clock or random source by accident, and a method added to a trait later breaks no existing fake.
+
+```kara
+struct FakeEnv {}
+
+impl EnvProvider for FakeEnv {
+    fn args(self) -> Vec[String] { ["prog", "--verbose"] }
+}
+
+fn main() {
+    with_provider[Env](FakeEnv {}, || {
+        println(env.args().len());   // 2
+    });
+}
+```
+
+Inside the closure every call on `Env`, including those in the functions it calls, uses the fake, which cannot leave the call. The library declares the defaults as `effect resource Env: EnvProvider = OsEnv {};`, `effect resource Clock: ClockProvider = OsClock {};` and `effect resource RandomSource: RandomProvider = OsRandom {};`. Overriding `FileSystem`, `Network` and the standard streams stays in M4a ([deferred.md](../deferred.md#m4a-services)).

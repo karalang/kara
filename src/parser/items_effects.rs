@@ -89,12 +89,19 @@ impl super::Parser {
         self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
         let key_param = self.parse_optional_resource_key_param();
         let provider_bounds = self.parse_provider_bounds()?;
+        // `= OsEnv {}` after the bounds: the default provider (§14.7).
+        let default = if self.eat(&Token::Equal) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
         self.expect(&Token::Semicolon)?;
         Some(Item::EffectResource(EffectResourceDecl {
             span: self.span_from(start),
             name,
             key_param,
             provider_bounds,
+            default,
             canonical_host_name: None,
         }))
     }

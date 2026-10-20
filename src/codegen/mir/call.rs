@@ -449,7 +449,7 @@ impl<'ctx> Cx<'ctx, '_> {
         Ok(v)
     }
 
-    fn native(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
+    pub(super) fn native(&mut self, name: &str, args: &[Operand], dest: &Place) -> R<()> {
         let (ty_name, method) = split_method(name);
         let base = ty_name.split('[').next().unwrap_or(ty_name);
         let dty = self.place_type(dest)?;

@@ -1,10 +1,11 @@
 source = "tests/codegen/io_runtime.rs::test_e2e_with_provider_override_env_var_result"
 dedup_of = []
+note = "Migrated 2026-10-20 to `impl EnvProvider for FakeEnv` (core-semantics §14.7, B-2026-10-20-11). The frozen legacy build refuses the migrated form (its override vtable passes the name as a String, the trait takes Str); legacy --interp prints this output, which is pinned here."
 expect = "stdout"
 exit = 0
 tags = ["closure", "post-m1:provider"]
 class = "e"
-expected_from = "assert"
+expected_from = "pin"
 legacy_backend = "legacy-build"
 legacy_exit = 0
 rules = []

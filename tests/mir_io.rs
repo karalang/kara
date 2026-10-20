@@ -1724,3 +1724,73 @@ fn buffered_io_over_a_childs_pipes() {
         assert_eq!(built, interp);
     }
 }
+
+/// The default providers of the program-rooted resources (core-semantics
+/// §14.7, B-2026-10-20-11) ask the operating system, as the ambient natives
+/// do, and a test double states only the methods it uses.
+const DEFAULT_PROVIDERS: &str = r#"
+struct FakeEnv {}
+impl EnvProvider for FakeEnv {
+    fn var(self, name: Str) -> Result[String, VarError] { Ok("fake") }
+}
+fn main() {
+    let e = OsEnv {};
+    match e.var("KARA_DEFINITELY_UNSET_XYZ") {
+        Ok(s) => println(s),
+        Err(_) => println("unset"),
+    }
+    match e.var("PATH") {
+        Ok(s) => println(s.len() > 0),
+        Err(_) => println("no path"),
+    }
+    println(e.args().len());
+    let c = OsClock {};
+    println(c.now() > 0);
+    println(c.wall_ns() > 0);
+    println(c.monotonic_ns() >= 0);
+    let r = OsRandom {};
+    println(r.next_u64() != r.next_u64());
+    let f = FakeEnv {};
+    match f.var("X") {
+        Ok(s) => println(s),
+        Err(_) => println("err"),
+    }
+}
+"#;
+
+/// A method the double leaves out panics, naming the resource and the method.
+const UNIMPLEMENTED_METHOD: &str = r#"
+struct FakeClock {}
+impl ClockProvider for FakeClock {
+    fn now(self) -> i64 { 42 }
+}
+fn main() {
+    let c = FakeClock {};
+    println(c.now());
+    println(c.wall_ns());
+}
+"#;
+
+#[test]
+fn default_providers_and_panicking_trait_defaults_match_on_both_backends() {
+    let dir = Scratch::new("providers");
+    let (interp, built) = interp_and_build(dir.path(), DEFAULT_PROVIDERS);
+    assert_eq!(interp, "unset\ntrue\n1\ntrue\ntrue\ntrue\ntrue\nfake\n");
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+    let file = dir.path().join("panics.kara");
+    std::fs::write(&file, UNIMPLEMENTED_METHOD).unwrap();
+    let karac = env!("CARGO_BIN_EXE_karac");
+    let want = "Clock.wall_ns called on a provider that does not implement it";
+    for mode in ["__mir-run", "__mir-llvm-run"] {
+        let out = Command::new(karac)
+            .args([mode, file.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{mode} should panic");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n", "{mode}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(want), "{mode}: {err}");
+    }
+}

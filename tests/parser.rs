@@ -1999,6 +1999,37 @@ fn test_effect_resource_no_provider() {
     }
 }
 
+/// B-2026-10-20-11 — core-semantics §14.7: a default provider follows the
+/// bounds, `effect resource Env: EnvProvider = OsEnv {};`, and the formatter
+/// writes it back.
+#[test]
+fn test_effect_resource_default_provider() {
+    let src = "effect resource Env: EnvProvider = OsEnv {};\n";
+    let prog = parse_ok(src);
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(bound_names(e), vec!["EnvProvider"]);
+    assert!(matches!(
+        e.default.as_ref().map(|d| &d.kind),
+        Some(karac::ast::ExprKind::StructLiteral { .. })
+    ));
+    // The formatter writes an empty struct literal's braces on two lines, as
+    // it does everywhere; what matters is that the default survives and the
+    // output is a fixed point.
+    let out = karac::formatter::format_program(&prog);
+    assert!(
+        out.starts_with("effect resource Env: EnvProvider = OsEnv {"),
+        "{out}"
+    );
+    assert_eq!(karac::formatter::format_program(&parse_ok(&out)), out);
+    let bare = parse_ok("effect resource Env: EnvProvider;");
+    let Item::EffectResource(e) = &bare.items[0] else {
+        panic!("expected an effect resource");
+    };
+    assert!(e.default.is_none());
+}
+
 /// B-2026-08-18-41 — design.md § Parameterized Resources declares
 /// `effect resource UserDB[user_id: i64];`, and it did not parse. The `[...]`
 /// went to `parse_optional_generic_params`, so the spec's own example failed

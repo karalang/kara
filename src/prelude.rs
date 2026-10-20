@@ -132,6 +132,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // variant and would otherwise need an import for a three-value enum.
     "SeekFrom",
     "VarError",
+    // The provider traits of `Env`, `Clock` and `RandomSource`
+    // (core-semantics §14.7), which a test double implements to be bound
+    // with `with_provider`. In `runtime/stdlib/io.kara`.
+    "EnvProvider",
+    "ClockProvider",
+    "RandomProvider",
     "AllocError",
     // `DiscriminantError` — the `Err` payload of the auto-generated
     // `TryFrom[intN]` on a C-like `#[repr(intN)]` enum (design.md § Enum

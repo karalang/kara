@@ -327,6 +327,54 @@ enum SeekFrom {
     End,
 }
 
+// The provider traits of the program-rooted resources (core-semantics
+// §14.7). The v2 library declares the resources with their defaults
+// (`effect resource Env: EnvProvider = OsEnv {};`, in
+// runtime/stdlib/source/providers.kara); a test double implements the
+// trait and is bound with `with_provider[Env](fake, || ..)`. Every method
+// has a body that panics naming the resource and the method, so a double
+// states only the methods it uses, a test never reaches the real
+// environment, clock or random source by accident, and a method added
+// here later breaks no existing double.
+trait EnvProvider {
+    // The program's arguments, the program's name first.
+    fn args(self) -> Vec[String] {
+        panic("Env.args called on a provider that does not implement it")
+    }
+
+    fn var(self, name: Str) -> Result[String, VarError] {
+        panic("Env.var called on a provider that does not implement it")
+    }
+
+    fn set(mut ref self, name: Str, value: Str) {
+        panic("Env.set called on a provider that does not implement it")
+    }
+}
+
+trait ClockProvider {
+    // Whole seconds since the Unix epoch.
+    fn now(self) -> i64 {
+        panic("Clock.now called on a provider that does not implement it")
+    }
+
+    // Nanoseconds from an origin fixed for the process; never goes
+    // backwards.
+    fn monotonic_ns(self) -> i64 {
+        panic("Clock.monotonic_ns called on a provider that does not implement it")
+    }
+
+    // Nanoseconds since the Unix epoch, from a clock that may jump.
+    fn wall_ns(self) -> i64 {
+        panic("Clock.wall_ns called on a provider that does not implement it")
+    }
+}
+
+trait RandomProvider {
+    fn next_u64(self) -> u64 {
+        panic("RandomSource.next_u64 called on a provider that does not implement it")
+    }
+}
+
 struct Env { }
 
 impl Env {

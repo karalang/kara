@@ -56,6 +56,17 @@ impl<'ctx> Cx<'ctx, '_> {
         dest: &Place,
     ) -> R<Option<()>> {
         match (base, method) {
+            // The default providers (§14.7) are the ambient resources'
+            // natives with a receiver, which carries nothing.
+            ("OsEnv" | "OsClock" | "OsRandom", _) if !args.is_empty() => {
+                let resource = match base {
+                    "OsEnv" => "Env",
+                    "OsClock" => "Clock",
+                    _ => "RandomSource",
+                };
+                self.native(&format!("{resource}.{method}"), &args[1..], dest)
+                    .map(Some)
+            }
             ("File", "options") => self.options_native(method, args, dest),
             ("File", _) => self.file_native(method, args, dest),
             ("OpenOptions", "open") => self.file_native("options_open", args, dest),

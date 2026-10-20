@@ -1,0 +1,48 @@
+// runtime/stdlib/source/providers.kara
+//
+// The program-rooted resources on the v2 pipeline (core-semantics §14.7,
+// B-2026-10-20-11): `Env`, `Clock` and `RandomSource`, each with a library
+// provider trait (runtime/stdlib/io.kara) and a default provider, a static
+// value of a type below. A call on a resource outside any `with_provider`
+// uses the default; inside `with_provider[Env](fake, || ..)` it uses `fake`.
+//
+// The defaults' methods are the operating system's. The interpreter keeps
+// them as natives of the ambient resource they serve (`Env.var`, ...); the
+// compiled backend reaches the same runtime calls.
+
+struct OsEnv {}
+
+impl EnvProvider for OsEnv {
+    #[compiler_builtin]
+    fn args(self) -> Vec[String] { Vec.new() }
+
+    #[compiler_builtin]
+    fn var(self, name: Str) -> Result[String, VarError] { Err(VarError.NotPresent) }
+
+    #[compiler_builtin]
+    fn set(mut ref self, name: Str, value: Str) { }
+}
+
+struct OsClock {}
+
+impl ClockProvider for OsClock {
+    #[compiler_builtin]
+    fn now(self) -> i64 { 0 }
+
+    #[compiler_builtin]
+    fn monotonic_ns(self) -> i64 { 0 }
+
+    #[compiler_builtin]
+    fn wall_ns(self) -> i64 { 0 }
+}
+
+struct OsRandom {}
+
+impl RandomProvider for OsRandom {
+    #[compiler_builtin]
+    fn next_u64(self) -> u64 { 0 }
+}
+
+effect resource Env: EnvProvider = OsEnv {};
+effect resource Clock: ClockProvider = OsClock {};
+effect resource RandomSource: RandomProvider = OsRandom {};

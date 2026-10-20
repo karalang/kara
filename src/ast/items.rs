@@ -949,6 +949,13 @@ pub struct EffectResourceDecl {
     /// generic arity and that the provider implements every one, and codegen
     /// lays their methods out end-to-end in one vtable.
     pub provider_bounds: Vec<ProviderBound>,
+    /// `effect resource Env: EnvProvider = OsEnv {};` — the DEFAULT provider
+    /// (core-semantics §14.7): a constant expression whose type implements
+    /// every bound. A resource with one is program-rooted (calls outside any
+    /// `with_provider` use it); one without is provider-rooted (§14.6).
+    /// `None` for every user declaration until M4a, when only the library
+    /// declares one.
+    pub default: Option<Expr>,
     /// Phase-10 target gate: when this declaration is an alias-renamed
     /// clone of a gated-stdlib HOST resource (`import std.web.Display
     /// as Screen;` in single-file mode), the canonical host name

@@ -180,6 +180,9 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
                     visit_generic_args(args, visit);
                 }
             }
+            if let Some(d) = &r.default {
+                visit_expr(d, visit);
+            }
         }
         Item::EffectGroup(g) => visit(&g.span),
         Item::EffectVerbDecl(v) => visit(&v.span),
@@ -1481,6 +1484,9 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
                         visit_generic_arg_mut(a, visit);
                     }
                 }
+            }
+            if let Some(d) = &mut r.default {
+                walk_expr_mut(d, visit);
             }
         }
         Item::EffectGroup(g) => visit.span(&mut g.span),

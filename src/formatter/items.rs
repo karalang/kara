@@ -753,6 +753,10 @@ impl super::Formatter {
             // (B-2026-08-18-41).
             self.format_generic_args_opt(&bound.args);
         }
+        if let Some(ref d) = e.default {
+            self.write_str(" = ");
+            self.format_expr(d);
+        }
         self.write_str(";\n");
     }
 
