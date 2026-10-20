@@ -6084,3 +6084,31 @@ fn main() {
         }
     }
 }
+
+#[test]
+fn mir_interp_reads_an_array_local_in_place() {
+    // B-2026-10-19-70: `Len` of an `Array` local copied the whole array, so
+    // a loop over `[false; 100001]` was quadratic (about 100 s). It runs in
+    // under a second now; the bound only catches the quadratic.
+    let src = r#"fn main() {
+    let mut seen = [false; 100001];
+    let mut n = 0;
+    for i in 0..100001 {
+        if i % 7 == 0 {
+            seen[i] = true;
+        }
+    }
+    for i in 0..100001 {
+        if seen[i] {
+            n += 1;
+        }
+    }
+    println(f"{n} {seen.len()}");
+}
+"#;
+    let start = std::time::Instant::now();
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, "14286 100001\n");
+    let took = start.elapsed();
+    assert!(took.as_secs() < 30, "took {took:?}");
+}

@@ -9583,13 +9583,14 @@ impl<'a> Interp<'a> {
             }
             Rvalue::Discriminant(p) => {
                 let (addr, _) = self.resolve_read(body, p)?;
-                let v = match self.slot(&addr)? {
+                // Read in place, as `Len` does: the payload is not copied.
+                let v = match self.slot_ref(&addr)? {
                     // A `shared enum`: the variant lives in the counted box.
-                    Value::Shared(id) => self.live(id)?.value.clone(),
+                    Value::Shared(id) => &self.live(*id)?.value,
                     v => v,
                 };
                 match v {
-                    Value::Variant(v, _) => Ok(Value::Int(v as i128)),
+                    Value::Variant(v, _) => Ok(Value::Int(*v as i128)),
                     _ => err("discriminant of a value that is not an initialized enum"),
                 }
             }
@@ -9601,8 +9602,10 @@ impl<'a> Interp<'a> {
                 None => err("layout of a type that has none"),
             },
             Rvalue::Len(p) => {
+                // Read in place: an `Array` local is not copied to count it
+                // (B-2026-10-19-70).
                 let (addr, _) = self.resolve_read(body, p)?;
-                match self.slot(&addr)? {
+                match self.slot_ref(&addr)? {
                     Value::Agg(fs) => Ok(Value::Int(fs.len() as i128)),
                     _ => err("Len of a non-array value"),
                 }
