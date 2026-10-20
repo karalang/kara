@@ -1,0 +1,1471 @@
+== structure badlabel.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'FROM alpine\n', 'value': 'alpine'}
+{'instruction': 'LABEL', 'startline': 1, 'endline': 1, 'content': 'LABEL a=1 b\n', 'value': 'a=1 b'}
+== structure continuation.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'FROM alpine\n', 'value': 'alpine'}
+{'instruction': 'RUN', 'startline': 1, 'endline': 3, 'content': 'RUN apk add --no-cache \\\n    curl \\\n\n', 'value': 'apk add --no-cache     curl '}
+{'instruction': 'GIT', 'startline': 4, 'endline': 4, 'content': '    git\n', 'value': ''}
+{'instruction': 'COMMENT', 'startline': 6, 'endline': 6, 'content': '# a comment inside\n', 'value': 'a comment inside'}
+{'instruction': 'RUN', 'startline': 5, 'endline': 7, 'content': 'RUN echo one \\\n    two\n', 'value': 'echo one     two'}
+{'instruction': 'RUN', 'startline': 8, 'endline': 9, 'content': 'RUN echo trailing \\\n    spaces\n', 'value': 'echo trailing     spaces'}
+{'instruction': 'LABEL', 'startline': 10, 'endline': 11, 'content': 'LABEL a=1 \\\n      b=2\n', 'value': 'a=1       b=2'}
+== structure crlf.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'FROM node:20\r\n', 'value': 'node:20'}
+{'instruction': 'WORKDIR', 'startline': 1, 'endline': 1, 'content': 'WORKDIR /app\r\n', 'value': '/app'}
+{'instruction': 'COPY', 'startline': 2, 'endline': 2, 'content': 'COPY package.json .\r\n', 'value': 'package.json .'}
+{'instruction': 'RUN', 'startline': 3, 'endline': 4, 'content': 'RUN npm ci \\\r\n    --omit=dev\r\n', 'value': 'npm ci     --omit=dev'}
+{'instruction': 'CMD', 'startline': 5, 'endline': 5, 'content': 'CMD ["node", "server.js"]\r\n', 'value': '["node", "server.js"]'}
+== structure edge.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'FROM\n', 'value': ''}
+{'instruction': 'RUN', 'startline': 1, 'endline': 1, 'content': 'RUN\n', 'value': ''}
+{'instruction': 'WORKDIR', 'startline': 3, 'endline': 3, 'content': '  WORKDIR   /tmp\n', 'value': '/tmp'}
+{'instruction': 'COMMENT', 'startline': 4, 'endline': 4, 'content': '#comment without space\n', 'value': 'comment without space'}
+{'instruction': 'COMMENT', 'startline': 5, 'endline': 5, 'content': '   # indented comment\n', 'value': 'indented comment'}
+{'instruction': 'ENTRYPOINT', 'startline': 6, 'endline': 6, 'content': 'ENTRYPOINT ["sh"]\n', 'value': '["sh"]'}
+{'instruction': 'FROM', 'startline': 7, 'endline': 7, 'content': 'FROM --platform=linux/amd64\n', 'value': '--platform=linux/amd64'}
+{'instruction': 'FROM', 'startline': 8, 'endline': 8, 'content': 'FROM --platform=linux/arm64 debian:12 AS base\n', 'value': '--platform=linux/arm64 debian:12 AS base'}
+{'instruction': 'FROM', 'startline': 9, 'endline': 9, 'content': 'FROM debian:12 as lower\n', 'value': 'debian:12 as lower'}
+{'instruction': 'CMD', 'startline': 10, 'endline': 10, 'content': 'CMD last', 'value': 'last'}
+== structure empty.Dockerfile
+== structure escapes.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'FROM busybox\n', 'value': 'busybox'}
+{'instruction': 'ENV', 'startline': 1, 'endline': 1, 'content': 'ENV A=one B="two words" C=\'single $A\' D=\\$A E=${A}-${B} F=$A$B G=${MISSING}x\n', 'value': 'A=one B="two words" C=\'single $A\' D=\\$A E=${A}-${B} F=$A$B G=${MISSING}x'}
+{'instruction': 'ENV', 'startline': 2, 'endline': 2, 'content': 'ENV H="say \\"hi\\"" I=back\\\\slash J=tab\\ sep K=${A\n', 'value': 'H="say \\"hi\\"" I=back\\\\slash J=tab\\ sep K=${A'}
+{'instruction': 'LABEL', 'startline': 3, 'endline': 3, 'content': 'LABEL "quoted key"=v1 plain=a\\ b\n', 'value': '"quoted key"=v1 plain=a\\ b'}
+{'instruction': 'ENV', 'startline': 4, 'endline': 4, 'content': 'ENV NAME first value\n', 'value': 'NAME first value'}
+{'instruction': 'ENV', 'startline': 5, 'endline': 5, 'content': 'ENV LONG  spaced   value\n', 'value': 'LONG  spaced   value'}
+{'instruction': 'RUN', 'startline': 6, 'endline': 6, 'content': 'RUN echo $A\n', 'value': 'echo $A'}
+== structure go.Dockerfile
+{'instruction': 'COMMENT', 'startline': 0, 'endline': 0, 'content': '# syntax=docker/dockerfile:1.4\n', 'value': 'syntax=docker/dockerfile:1.4'}
+{'instruction': 'ARG', 'startline': 1, 'endline': 1, 'content': 'ARG GO_VERSION=1.22\n', 'value': 'GO_VERSION=1.22'}
+{'instruction': 'ARG', 'startline': 2, 'endline': 2, 'content': 'ARG BASE=alpine:3.19\n', 'value': 'BASE=alpine:3.19'}
+{'instruction': 'FROM', 'startline': 3, 'endline': 3, 'content': 'FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build\n', 'value': '--platform=$BUILDPLATFORM golang:${GO_VERSION} AS build'}
+{'instruction': 'WORKDIR', 'startline': 4, 'endline': 4, 'content': 'WORKDIR /src\n', 'value': '/src'}
+{'instruction': 'COPY', 'startline': 5, 'endline': 5, 'content': 'COPY go.mod go.sum ./\n', 'value': 'go.mod go.sum ./'}
+{'instruction': 'RUN', 'startline': 6, 'endline': 6, 'content': 'RUN go mod download\n', 'value': 'go mod download'}
+{'instruction': 'COPY', 'startline': 7, 'endline': 7, 'content': 'COPY . .\n', 'value': '. .'}
+{'instruction': 'ARG', 'startline': 8, 'endline': 8, 'content': 'ARG VERSION=dev\n', 'value': 'VERSION=dev'}
+{'instruction': 'RUN', 'startline': 9, 'endline': 11, 'content': 'RUN CGO_ENABLED=0 go build \\\n    -ldflags "-X main.version=${VERSION}" \\\n    -o /out/app ./cmd/app\n', 'value': 'CGO_ENABLED=0 go build     -ldflags "-X main.version=${VERSION}"     -o /out/app ./cmd/app'}
+{'instruction': 'FROM', 'startline': 13, 'endline': 13, 'content': 'FROM ${BASE}\n', 'value': '${BASE}'}
+{'instruction': 'ARG', 'startline': 14, 'endline': 14, 'content': 'ARG VERSION\n', 'value': 'VERSION'}
+{'instruction': 'ARG', 'startline': 15, 'endline': 15, 'content': 'ARG BASE\n', 'value': 'BASE'}
+{'instruction': 'LABEL', 'startline': 16, 'endline': 17, 'content': 'LABEL org.opencontainers.image.title="billing api" \\\n      org.opencontainers.image.version=$VERSION maintainer=ops@example.com\n', 'value': 'org.opencontainers.image.title="billing api"       org.opencontainers.image.version=$VERSION maintainer=ops@example.com'}
+{'instruction': 'ENV', 'startline': 18, 'endline': 18, 'content': 'ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH\n', 'value': 'APP_HOME=/srv/app PATH=/srv/app/bin:$PATH'}
+{'instruction': 'COPY', 'startline': 19, 'endline': 19, 'content': 'COPY --from=build /out/app $APP_HOME/bin/app\n', 'value': '--from=build /out/app $APP_HOME/bin/app'}
+{'instruction': 'EXPOSE', 'startline': 20, 'endline': 20, 'content': 'EXPOSE 8080\n', 'value': '8080'}
+{'instruction': 'USER', 'startline': 21, 'endline': 21, 'content': 'USER 65534\n', 'value': '65534'}
+{'instruction': 'HEALTHCHECK', 'startline': 22, 'endline': 22, 'content': 'HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1\n', 'value': '--interval=30s CMD wget -qO- http://localhost:8080/health || exit 1'}
+{'instruction': 'CMD', 'startline': 23, 'endline': 23, 'content': 'CMD ["app", "--port", "8080"]\n', 'value': '["app", "--port", "8080"]'}
+== structure labelfirst.Dockerfile
+{'instruction': 'LABEL', 'startline': 0, 'endline': 0, 'content': 'LABEL first=yes\n', 'value': 'first=yes'}
+{'instruction': 'FROM', 'startline': 1, 'endline': 1, 'content': 'FROM alpine\n', 'value': 'alpine'}
+{'instruction': 'LABEL', 'startline': 2, 'endline': 2, 'content': 'LABEL second=yes\n', 'value': 'second=yes'}
+== structure legacy.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'from ubuntu:22.04\n', 'value': 'ubuntu:22.04'}
+{'instruction': 'MAINTAINER', 'startline': 1, 'endline': 1, 'content': 'maintainer Jane Doe <jane@example.com>\n', 'value': 'Jane Doe <jane@example.com>'}
+{'instruction': 'RUN', 'startline': 2, 'endline': 3, 'content': 'run apt-get update && \\\n    apt-get install -y curl\n', 'value': 'apt-get update &&     apt-get install -y curl'}
+{'instruction': 'ENV', 'startline': 5, 'endline': 5, 'content': 'env DEBIAN_FRONTEND noninteractive\n', 'value': 'DEBIAN_FRONTEND noninteractive'}
+{'instruction': 'LABEL', 'startline': 6, 'endline': 6, 'content': 'label release="2019.10" stage=old\n', 'value': 'release="2019.10" stage=old'}
+{'instruction': 'EXPOSE', 'startline': 7, 'endline': 7, 'content': 'Expose 22\n', 'value': '22'}
+{'instruction': 'CMD', 'startline': 8, 'endline': 8, 'content': 'cmd /usr/sbin/sshd -D\n', 'value': '/usr/sbin/sshd -D'}
+== structure nofrom.Dockerfile
+{'instruction': 'COMMENT', 'startline': 0, 'endline': 0, 'content': '# just notes\n', 'value': 'just notes'}
+{'instruction': 'RUN', 'startline': 1, 'endline': 1, 'content': 'RUN echo hi\n', 'value': 'echo hi'}
+== structure python.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'FROM python:3.12-slim\n', 'value': 'python:3.12-slim'}
+{'instruction': 'LABEL', 'startline': 2, 'endline': 2, 'content': 'LABEL description="Order service" version="2.1.0"\n', 'value': 'description="Order service" version="2.1.0"'}
+{'instruction': 'LABEL', 'startline': 3, 'endline': 3, 'content': 'LABEL "com.example.vendor"="ACME Inc." owner=\'Data Team\'\n', 'value': '"com.example.vendor"="ACME Inc." owner=\'Data Team\''}
+{'instruction': 'ENV', 'startline': 5, 'endline': 5, 'content': 'ENV PYTHONDONTWRITEBYTECODE 1\n', 'value': 'PYTHONDONTWRITEBYTECODE 1'}
+{'instruction': 'ENV', 'startline': 6, 'endline': 7, 'content': 'ENV PIP_NO_CACHE_DIR=off \\\n    APP_DIR=/app\n', 'value': 'PIP_NO_CACHE_DIR=off     APP_DIR=/app'}
+{'instruction': 'ENV', 'startline': 8, 'endline': 8, 'content': 'ENV GREETING hello world from $APP_DIR\n', 'value': 'GREETING hello world from $APP_DIR'}
+{'instruction': 'WORKDIR', 'startline': 10, 'endline': 10, 'content': 'WORKDIR $APP_DIR\n', 'value': '$APP_DIR'}
+{'instruction': 'COPY', 'startline': 11, 'endline': 11, 'content': 'COPY requirements.txt .\n', 'value': 'requirements.txt .'}
+{'instruction': 'COMMENT', 'startline': 13, 'endline': 13, 'content': '    # pinned in requirements.txt\n', 'value': 'pinned in requirements.txt'}
+{'instruction': 'RUN', 'startline': 12, 'endline': 14, 'content': 'RUN pip install -r requirements.txt \\\n    && rm -rf /root/.cache\n', 'value': 'pip install -r requirements.txt     && rm -rf /root/.cache'}
+{'instruction': 'COPY', 'startline': 16, 'endline': 16, 'content': 'COPY . .\n', 'value': '. .'}
+{'instruction': 'EXPOSE', 'startline': 17, 'endline': 17, 'content': 'EXPOSE 8000\n', 'value': '8000'}
+{'instruction': 'ENTRYPOINT', 'startline': 18, 'endline': 18, 'content': 'ENTRYPOINT ["gunicorn"]\n', 'value': '["gunicorn"]'}
+{'instruction': 'CMD', 'startline': 19, 'endline': 19, 'content': 'CMD ["-b", "0.0.0.0:8000", "app:wsgi"]\n', 'value': '["-b", "0.0.0.0:8000", "app:wsgi"]'}
+== structure stages.Dockerfile
+{'instruction': 'ARG', 'startline': 0, 'endline': 0, 'content': 'ARG PYTHON=3.11\n', 'value': 'PYTHON=3.11'}
+{'instruction': 'ARG', 'startline': 1, 'endline': 1, 'content': 'ARG REGISTRY=registry.example.com\n', 'value': 'REGISTRY=registry.example.com'}
+{'instruction': 'FROM', 'startline': 2, 'endline': 2, 'content': 'FROM $REGISTRY/python:$PYTHON AS deps\n', 'value': '$REGISTRY/python:$PYTHON AS deps'}
+{'instruction': 'ENV', 'startline': 3, 'endline': 3, 'content': 'ENV PIP_DISABLE_PIP_VERSION_CHECK=1\n', 'value': 'PIP_DISABLE_PIP_VERSION_CHECK=1'}
+{'instruction': 'ARG', 'startline': 4, 'endline': 4, 'content': 'ARG PYTHON\n', 'value': 'PYTHON'}
+{'instruction': 'RUN', 'startline': 5, 'endline': 5, 'content': 'RUN pip wheel -r requirements.txt -w /wheels\n', 'value': 'pip wheel -r requirements.txt -w /wheels'}
+{'instruction': 'CMD', 'startline': 6, 'endline': 6, 'content': 'CMD ["deps"]\n', 'value': '["deps"]'}
+{'instruction': 'FROM', 'startline': 8, 'endline': 8, 'content': 'FROM scratch AS assets\n', 'value': 'scratch AS assets'}
+{'instruction': 'COPY', 'startline': 9, 'endline': 9, 'content': 'COPY static /static\n', 'value': 'static /static'}
+{'instruction': 'FROM', 'startline': 11, 'endline': 11, 'content': 'FROM $REGISTRY/python:$PYTHON-slim\n', 'value': '$REGISTRY/python:$PYTHON-slim'}
+{'instruction': 'ARG', 'startline': 12, 'endline': 12, 'content': 'ARG PYTHON\n', 'value': 'PYTHON'}
+{'instruction': 'ARG', 'startline': 13, 'endline': 13, 'content': 'ARG EXTRA\n', 'value': 'EXTRA'}
+{'instruction': 'LABEL', 'startline': 14, 'endline': 14, 'content': 'LABEL python=$PYTHON extra=${EXTRA}\n', 'value': 'python=$PYTHON extra=${EXTRA}'}
+{'instruction': 'COPY', 'startline': 15, 'endline': 15, 'content': 'COPY --from=deps /wheels /wheels\n', 'value': '--from=deps /wheels /wheels'}
+{'instruction': 'COPY', 'startline': 16, 'endline': 16, 'content': 'COPY --from=assets /static /srv/static\n', 'value': '--from=assets /static /srv/static'}
+{'instruction': 'CMD', 'startline': 17, 'endline': 17, 'content': 'CMD python -m app\n', 'value': 'python -m app'}
+== structure unicode.Dockerfile
+{'instruction': 'FROM', 'startline': 0, 'endline': 0, 'content': 'FROM alpine\n', 'value': 'alpine'}
+{'instruction': 'LABEL', 'startline': 1, 'endline': 1, 'content': 'LABEL title="café ☕" author=Zoë\n', 'value': 'title="café ☕" author=Zoë'}
+{'instruction': 'ENV', 'startline': 2, 'endline': 2, 'content': 'ENV GREETING=héllo\n', 'value': 'GREETING=héllo'}
+== structure windows.Dockerfile
+{'instruction': 'COMMENT', 'startline': 0, 'endline': 0, 'content': '# escape=`\n', 'value': 'escape=`'}
+{'instruction': 'FROM', 'startline': 1, 'endline': 1, 'content': 'FROM mcr.microsoft.com/windows/servercore:ltsc2022\n', 'value': 'mcr.microsoft.com/windows/servercore:ltsc2022'}
+{'instruction': 'SHELL', 'startline': 2, 'endline': 2, 'content': 'SHELL ["powershell", "-Command"]\n', 'value': '["powershell", "-Command"]'}
+{'instruction': 'ENV', 'startline': 3, 'endline': 3, 'content': 'ENV TOOLS_DIR C:\\tools\n', 'value': 'TOOLS_DIR C:\\tools'}
+{'instruction': 'RUN', 'startline': 4, 'endline': 5, 'content': 'RUN New-Item -ItemType Directory -Path $env:TOOLS_DIR ; `\n    Invoke-WebRequest https://example.com/tool.zip -OutFile tool.zip\n', 'value': 'New-Item -ItemType Directory -Path $env:TOOLS_DIR ;     Invoke-WebRequest https://example.com/tool.zip -OutFile tool.zip'}
+{'instruction': 'COPY', 'startline': 6, 'endline': 6, 'content': 'COPY app\\ C:\\app\\\n', 'value': 'app\\ C:\\app\\'}
+{'instruction': 'WORKDIR', 'startline': 7, 'endline': 7, 'content': 'WORKDIR C:\\app\n', 'value': 'C:\\app'}
+{'instruction': 'CMD', 'startline': 8, 'endline': 8, 'content': 'CMD ["C:\\\\app\\\\server.exe"]\n', 'value': '["C:\\\\app\\\\server.exe"]'}
+== json badlabel.Dockerfile
+[{"FROM": "alpine"}, {"LABEL": "a=1 b"}]
+== json continuation.Dockerfile
+[{"FROM": "alpine"}, {"RUN": "apk add --no-cache     curl "}, {"GIT": ""}, {"COMMENT": "a comment inside"}, {"RUN": "echo one     two"}, {"RUN": "echo trailing     spaces"}, {"LABEL": "a=1       b=2"}]
+== json crlf.Dockerfile
+[{"FROM": "node:20"}, {"WORKDIR": "/app"}, {"COPY": "package.json ."}, {"RUN": "npm ci     --omit=dev"}, {"CMD": "[\"node\", \"server.js\"]"}]
+== json edge.Dockerfile
+[{"FROM": ""}, {"RUN": ""}, {"WORKDIR": "/tmp"}, {"COMMENT": "comment without space"}, {"COMMENT": "indented comment"}, {"ENTRYPOINT": "[\"sh\"]"}, {"FROM": "--platform=linux/amd64"}, {"FROM": "--platform=linux/arm64 debian:12 AS base"}, {"FROM": "debian:12 as lower"}, {"CMD": "last"}]
+== json empty.Dockerfile
+[]
+== json escapes.Dockerfile
+[{"FROM": "busybox"}, {"ENV": "A=one B=\"two words\" C='single $A' D=\\$A E=${A}-${B} F=$A$B G=${MISSING}x"}, {"ENV": "H=\"say \\\"hi\\\"\" I=back\\\\slash J=tab\\ sep K=${A"}, {"LABEL": "\"quoted key\"=v1 plain=a\\ b"}, {"ENV": "NAME first value"}, {"ENV": "LONG  spaced   value"}, {"RUN": "echo $A"}]
+== json go.Dockerfile
+[{"COMMENT": "syntax=docker/dockerfile:1.4"}, {"ARG": "GO_VERSION=1.22"}, {"ARG": "BASE=alpine:3.19"}, {"FROM": "--platform=$BUILDPLATFORM golang:${GO_VERSION} AS build"}, {"WORKDIR": "/src"}, {"COPY": "go.mod go.sum ./"}, {"RUN": "go mod download"}, {"COPY": ". ."}, {"ARG": "VERSION=dev"}, {"RUN": "CGO_ENABLED=0 go build     -ldflags \"-X main.version=${VERSION}\"     -o /out/app ./cmd/app"}, {"FROM": "${BASE}"}, {"ARG": "VERSION"}, {"ARG": "BASE"}, {"LABEL": "org.opencontainers.image.title=\"billing api\"       org.opencontainers.image.version=$VERSION maintainer=ops@example.com"}, {"ENV": "APP_HOME=/srv/app PATH=/srv/app/bin:$PATH"}, {"COPY": "--from=build /out/app $APP_HOME/bin/app"}, {"EXPOSE": "8080"}, {"USER": "65534"}, {"HEALTHCHECK": "--interval=30s CMD wget -qO- http://localhost:8080/health || exit 1"}, {"CMD": "[\"app\", \"--port\", \"8080\"]"}]
+== json labelfirst.Dockerfile
+[{"LABEL": "first=yes"}, {"FROM": "alpine"}, {"LABEL": "second=yes"}]
+== json legacy.Dockerfile
+[{"FROM": "ubuntu:22.04"}, {"MAINTAINER": "Jane Doe <jane@example.com>"}, {"RUN": "apt-get update &&     apt-get install -y curl"}, {"ENV": "DEBIAN_FRONTEND noninteractive"}, {"LABEL": "release=\"2019.10\" stage=old"}, {"EXPOSE": "22"}, {"CMD": "/usr/sbin/sshd -D"}]
+== json nofrom.Dockerfile
+[{"COMMENT": "just notes"}, {"RUN": "echo hi"}]
+== json python.Dockerfile
+[{"FROM": "python:3.12-slim"}, {"LABEL": "description=\"Order service\" version=\"2.1.0\""}, {"LABEL": "\"com.example.vendor\"=\"ACME Inc.\" owner='Data Team'"}, {"ENV": "PYTHONDONTWRITEBYTECODE 1"}, {"ENV": "PIP_NO_CACHE_DIR=off     APP_DIR=/app"}, {"ENV": "GREETING hello world from $APP_DIR"}, {"WORKDIR": "$APP_DIR"}, {"COPY": "requirements.txt ."}, {"COMMENT": "pinned in requirements.txt"}, {"RUN": "pip install -r requirements.txt     && rm -rf /root/.cache"}, {"COPY": ". ."}, {"EXPOSE": "8000"}, {"ENTRYPOINT": "[\"gunicorn\"]"}, {"CMD": "[\"-b\", \"0.0.0.0:8000\", \"app:wsgi\"]"}]
+== json stages.Dockerfile
+[{"ARG": "PYTHON=3.11"}, {"ARG": "REGISTRY=registry.example.com"}, {"FROM": "$REGISTRY/python:$PYTHON AS deps"}, {"ENV": "PIP_DISABLE_PIP_VERSION_CHECK=1"}, {"ARG": "PYTHON"}, {"RUN": "pip wheel -r requirements.txt -w /wheels"}, {"CMD": "[\"deps\"]"}, {"FROM": "scratch AS assets"}, {"COPY": "static /static"}, {"FROM": "$REGISTRY/python:$PYTHON-slim"}, {"ARG": "PYTHON"}, {"ARG": "EXTRA"}, {"LABEL": "python=$PYTHON extra=${EXTRA}"}, {"COPY": "--from=deps /wheels /wheels"}, {"COPY": "--from=assets /static /srv/static"}, {"CMD": "python -m app"}]
+== json unicode.Dockerfile
+[{"FROM": "alpine"}, {"LABEL": "title=\"caf\u00e9 \u2615\" author=Zo\u00eb"}, {"ENV": "GREETING=h\u00e9llo"}]
+== json windows.Dockerfile
+[{"COMMENT": "escape=`"}, {"FROM": "mcr.microsoft.com/windows/servercore:ltsc2022"}, {"SHELL": "[\"powershell\", \"-Command\"]"}, {"ENV": "TOOLS_DIR C:\\tools"}, {"RUN": "New-Item -ItemType Directory -Path $env:TOOLS_DIR ;     Invoke-WebRequest https://example.com/tool.zip -OutFile tool.zip"}, {"COPY": "app\\ C:\\app\\"}, {"WORKDIR": "C:\\app"}, {"CMD": "[\"C:\\\\app\\\\server.exe\"]"}]
+== info badlabel.Dockerfile
+parent_images: ['alpine']
+is_multistage: False
+baseimage: 'alpine'
+cmd: None
+labels: error: ValueError: Syntax error - can't find = in "b". Must be of the form: name=value
+envs: {}
+args: {}
+== info continuation.Dockerfile
+parent_images: ['alpine']
+is_multistage: False
+baseimage: 'alpine'
+cmd: None
+labels: {'a': '1', 'b': '2'}
+envs: {}
+args: {}
+== info crlf.Dockerfile
+parent_images: ['node:20']
+is_multistage: False
+baseimage: 'node:20'
+cmd: '["node", "server.js"]'
+labels: {}
+envs: {}
+args: {}
+== info edge.Dockerfile
+parent_images: ['4', 'debian:12', 'debian:12']
+is_multistage: True
+baseimage: 'debian:12'
+cmd: 'last'
+labels: {}
+envs: {}
+args: {}
+== info empty.Dockerfile
+parent_images: []
+is_multistage: False
+baseimage: None
+cmd: None
+labels: {}
+envs: {}
+args: {}
+== info escapes.Dockerfile
+parent_images: ['busybox']
+is_multistage: False
+baseimage: 'busybox'
+cmd: None
+labels: {'quoted key': 'v1', 'plain': 'a b'}
+envs: {'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one', 'NAME': 'first value', 'LONG': 'spaced   value'}
+args: {}
+== info go.Dockerfile
+parent_images: ['golang:1.22', 'alpine:3.19']
+is_multistage: True
+baseimage: 'alpine:3.19'
+cmd: '["app", "--port", "8080"]'
+labels: {'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+envs: {'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'}
+args: {'VERSION': '', 'BASE': 'alpine:3.19'}
+== info labelfirst.Dockerfile
+parent_images: ['alpine']
+is_multistage: False
+baseimage: 'alpine'
+cmd: None
+labels: {'second': 'yes'}
+envs: {}
+args: {}
+== info legacy.Dockerfile
+parent_images: ['ubuntu:22.04']
+is_multistage: False
+baseimage: 'ubuntu:22.04'
+cmd: '/usr/sbin/sshd -D'
+labels: {'release': '2019.10', 'stage': 'old'}
+envs: {'DEBIAN_FRONTEND': 'noninteractive'}
+args: {}
+== info nofrom.Dockerfile
+parent_images: []
+is_multistage: False
+baseimage: None
+cmd: None
+labels: {}
+envs: {}
+args: {}
+== info python.Dockerfile
+parent_images: ['python:3.12-slim']
+is_multistage: False
+baseimage: 'python:3.12-slim'
+cmd: '["-b", "0.0.0.0:8000", "app:wsgi"]'
+labels: {'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+envs: {'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'}
+args: {}
+== info stages.Dockerfile
+parent_images: ['registry.example.com/python:3.11', 'scratch', 'registry.example.com/python:3.11-slim']
+is_multistage: True
+baseimage: 'registry.example.com/python:3.11-slim'
+cmd: 'python -m app'
+labels: {'python': '3.11', 'extra': ''}
+envs: {}
+args: {'PYTHON': '3.11', 'EXTRA': ''}
+== info unicode.Dockerfile
+parent_images: ['alpine']
+is_multistage: False
+baseimage: 'alpine'
+cmd: None
+labels: {'title': 'café ☕', 'author': 'Zoë'}
+envs: {'GREETING': 'héllo'}
+args: {}
+== info windows.Dockerfile
+parent_images: ['mcr.microsoft.com/windows/servercore:ltsc2022']
+is_multistage: False
+baseimage: 'mcr.microsoft.com/windows/servercore:ltsc2022'
+cmd: '["C:\\\\app\\\\server.exe"]'
+labels: {}
+envs: {'TOOLS_DIR': 'C:tools'}
+args: {}
+== context badlabel.Dockerfile
+error: ValueError: Syntax error - can't find = in "b". Must be of the form: name=value
+== context continuation.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={'a': '1', 'b': '2'}
+  line_args={} line_envs={} line_labels={'a': '1', 'b': '2'}
+== context crlf.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+== context edge.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+== context empty.Dockerfile
+== context escapes.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x'} labels={}
+  line_args={} line_envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one'} labels={}
+  line_args={} line_envs={'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={} line_labels={'quoted key': 'v1', 'plain': 'a b'}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one', 'NAME': 'first value'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={'NAME': 'first value'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one', 'NAME': 'first value', 'LONG': 'spaced   value'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={'LONG': 'spaced   value'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one', 'NAME': 'first value', 'LONG': 'spaced   value'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={} line_labels={}
+== context go.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'GO_VERSION': '1.22'} envs={} labels={}
+  line_args={'GO_VERSION': '1.22'} line_envs={} line_labels={}
+args={'GO_VERSION': '1.22', 'BASE': 'alpine:3.19'} envs={} labels={}
+  line_args={'BASE': 'alpine:3.19'} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': 'dev'} envs={} labels={}
+  line_args={'VERSION': 'dev'} line_envs={} line_labels={}
+args={'VERSION': 'dev'} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': ''} envs={} labels={}
+  line_args={'VERSION': ''} line_envs={} line_labels={}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={} labels={}
+  line_args={'BASE': 'alpine:3.19'} line_envs={} line_labels={}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} line_labels={}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+== context labelfirst.Dockerfile
+args={} envs={} labels={'first': 'yes'}
+  line_args={} line_envs={} line_labels={'first': 'yes'}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={'second': 'yes'}
+  line_args={} line_envs={} line_labels={'second': 'yes'}
+== context legacy.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'DEBIAN_FRONTEND': 'noninteractive'} labels={}
+  line_args={} line_envs={'DEBIAN_FRONTEND': 'noninteractive'} line_labels={}
+args={} envs={'DEBIAN_FRONTEND': 'noninteractive'} labels={'release': '2019.10', 'stage': 'old'}
+  line_args={} line_envs={} line_labels={'release': '2019.10', 'stage': 'old'}
+args={} envs={'DEBIAN_FRONTEND': 'noninteractive'} labels={'release': '2019.10', 'stage': 'old'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'DEBIAN_FRONTEND': 'noninteractive'} labels={'release': '2019.10', 'stage': 'old'}
+  line_args={} line_envs={} line_labels={}
+== context nofrom.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+== context python.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={'description': 'Order service', 'version': '2.1.0'}
+  line_args={} line_envs={} line_labels={'description': 'Order service', 'version': '2.1.0'}
+args={} envs={} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={'PYTHONDONTWRITEBYTECODE': '1'} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app'} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={'GREETING': 'hello world from /app'} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+== context stages.Dockerfile
+args={'PYTHON': '3.11'} envs={} labels={}
+  line_args={'PYTHON': '3.11'} line_envs={} line_labels={}
+args={'PYTHON': '3.11', 'REGISTRY': 'registry.example.com'} envs={} labels={}
+  line_args={'REGISTRY': 'registry.example.com'} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={} line_envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} line_labels={}
+args={'PYTHON': '3.11'} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={'PYTHON': '3.11'} line_envs={} line_labels={}
+args={'PYTHON': '3.11'} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.11'} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.11'} envs={} labels={}
+  line_args={'PYTHON': '3.11'} line_envs={} line_labels={}
+args={'PYTHON': '3.11', 'EXTRA': ''} envs={} labels={}
+  line_args={'EXTRA': ''} line_envs={} line_labels={}
+args={'PYTHON': '3.11', 'EXTRA': ''} envs={} labels={'python': '3.11', 'extra': ''}
+  line_args={} line_envs={} line_labels={'python': '3.11', 'extra': ''}
+args={'PYTHON': '3.11', 'EXTRA': ''} envs={} labels={'python': '3.11', 'extra': ''}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.11', 'EXTRA': ''} envs={} labels={'python': '3.11', 'extra': ''}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.11', 'EXTRA': ''} envs={} labels={'python': '3.11', 'extra': ''}
+  line_args={} line_envs={} line_labels={}
+== context unicode.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={'title': 'café ☕', 'author': 'Zoë'}
+  line_args={} line_envs={} line_labels={'title': 'café ☕', 'author': 'Zoë'}
+args={} envs={'GREETING': 'héllo'} labels={'title': 'café ☕', 'author': 'Zoë'}
+  line_args={} line_envs={'GREETING': 'héllo'} line_labels={}
+== context windows.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'TOOLS_DIR': 'C:tools'} labels={}
+  line_args={} line_envs={'TOOLS_DIR': 'C:tools'} line_labels={}
+args={} envs={'TOOLS_DIR': 'C:tools'} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'TOOLS_DIR': 'C:tools'} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'TOOLS_DIR': 'C:tools'} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'TOOLS_DIR': 'C:tools'} labels={}
+  line_args={} line_envs={} line_labels={}
+== info go.Dockerfile --build-arg VERSION=1.4.2 --build-arg BASE=gcr.io/distroless/static
+parent_images: ['golang:1.22', 'gcr.io/distroless/static']
+is_multistage: True
+baseimage: 'gcr.io/distroless/static'
+cmd: '["app", "--port", "8080"]'
+labels: {'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+envs: {'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'}
+args: {'VERSION': '1.4.2', 'BASE': 'gcr.io/distroless/static'}
+== info go.Dockerfile --no-env-replace
+parent_images: ['golang:1.22', 'alpine:3.19']
+is_multistage: True
+baseimage: 'alpine:3.19'
+cmd: '["app", "--port", "8080"]'
+labels: {'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '$VERSION', 'maintainer': 'ops@example.com'}
+envs: {'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:$PATH'}
+args: {'VERSION': '', 'BASE': 'alpine:3.19'}
+== context go.Dockerfile --build-arg VERSION=1.4.2
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'GO_VERSION': '1.22'} envs={} labels={}
+  line_args={'GO_VERSION': '1.22'} line_envs={} line_labels={}
+args={'GO_VERSION': '1.22', 'BASE': 'alpine:3.19'} envs={} labels={}
+  line_args={'BASE': 'alpine:3.19'} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '1.4.2'} envs={} labels={}
+  line_args={'VERSION': '1.4.2'} line_envs={} line_labels={}
+args={'VERSION': '1.4.2'} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '1.4.2'} envs={} labels={}
+  line_args={'VERSION': '1.4.2'} line_envs={} line_labels={}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={} labels={}
+  line_args={'BASE': 'alpine:3.19'} line_envs={} line_labels={}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} line_labels={}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+args={'VERSION': '1.4.2', 'BASE': 'alpine:3.19'} envs={'APP_HOME': '/srv/app', 'PATH': '/srv/app/bin:'} labels={'org.opencontainers.image.title': 'billing api', 'org.opencontainers.image.version': '1.4.2', 'maintainer': 'ops@example.com'}
+  line_args={} line_envs={} line_labels={}
+== info python.Dockerfile --parent-env PATH=/usr/local/bin --parent-env APP_DIR=/srv
+parent_images: ['python:3.12-slim']
+is_multistage: False
+baseimage: 'python:3.12-slim'
+cmd: '["-b", "0.0.0.0:8000", "app:wsgi"]'
+labels: {'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+envs: {'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'}
+args: {}
+== context python.Dockerfile
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={'description': 'Order service', 'version': '2.1.0'}
+  line_args={} line_envs={} line_labels={'description': 'Order service', 'version': '2.1.0'}
+args={} envs={} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={'PYTHONDONTWRITEBYTECODE': '1'} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app'} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={'GREETING': 'hello world from /app'} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PYTHONDONTWRITEBYTECODE': '1', 'PIP_NO_CACHE_DIR': 'off', 'APP_DIR': '/app', 'GREETING': 'hello world from /app'} labels={'description': 'Order service', 'version': '2.1.0', 'com.example.vendor': 'ACME Inc.', 'owner': 'Data Team'}
+  line_args={} line_envs={} line_labels={}
+== info stages.Dockerfile --build-arg PYTHON=3.12 --build-arg EXTRA=gpu
+parent_images: ['registry.example.com/python:3.12', 'scratch', 'registry.example.com/python:3.12-slim']
+is_multistage: True
+baseimage: 'registry.example.com/python:3.12-slim'
+cmd: 'python -m app'
+labels: {'python': '3.12', 'extra': 'gpu'}
+envs: {}
+args: {'PYTHON': '3.12', 'EXTRA': 'gpu'}
+== context stages.Dockerfile --build-arg PYTHON=3.12
+args={'PYTHON': '3.12'} envs={} labels={}
+  line_args={'PYTHON': '3.12'} line_envs={} line_labels={}
+args={'PYTHON': '3.12', 'REGISTRY': 'registry.example.com'} envs={} labels={}
+  line_args={'REGISTRY': 'registry.example.com'} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={} line_envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} line_labels={}
+args={'PYTHON': '3.12'} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={'PYTHON': '3.12'} line_envs={} line_labels={}
+args={'PYTHON': '3.12'} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.12'} envs={'PIP_DISABLE_PIP_VERSION_CHECK': '1'} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.12'} envs={} labels={}
+  line_args={'PYTHON': '3.12'} line_envs={} line_labels={}
+args={'PYTHON': '3.12', 'EXTRA': ''} envs={} labels={}
+  line_args={'EXTRA': ''} line_envs={} line_labels={}
+args={'PYTHON': '3.12', 'EXTRA': ''} envs={} labels={'python': '3.12', 'extra': ''}
+  line_args={} line_envs={} line_labels={'python': '3.12', 'extra': ''}
+args={'PYTHON': '3.12', 'EXTRA': ''} envs={} labels={'python': '3.12', 'extra': ''}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.12', 'EXTRA': ''} envs={} labels={'python': '3.12', 'extra': ''}
+  line_args={} line_envs={} line_labels={}
+args={'PYTHON': '3.12', 'EXTRA': ''} envs={} labels={'python': '3.12', 'extra': ''}
+  line_args={} line_envs={} line_labels={}
+== info escapes.Dockerfile
+parent_images: ['busybox']
+is_multistage: False
+baseimage: 'busybox'
+cmd: None
+labels: {'quoted key': 'v1', 'plain': 'a b'}
+envs: {'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '-', 'F': '', 'G': 'x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': 'one', 'NAME': 'first value', 'LONG': 'spaced   value'}
+args: {}
+== context escapes.Dockerfile --no-env-replace
+args={} envs={} labels={}
+  line_args={} line_envs={} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '${A}-${B}', 'F': '$A$B', 'G': '${MISSING}x'} labels={}
+  line_args={} line_envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '${A}-${B}', 'F': '$A$B', 'G': '${MISSING}x'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '${A}-${B}', 'F': '$A$B', 'G': '${MISSING}x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': '${A'} labels={}
+  line_args={} line_envs={'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': '${A'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '${A}-${B}', 'F': '$A$B', 'G': '${MISSING}x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': '${A'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={} line_labels={'quoted key': 'v1', 'plain': 'a b'}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '${A}-${B}', 'F': '$A$B', 'G': '${MISSING}x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': '${A', 'NAME': 'first value'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={'NAME': 'first value'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '${A}-${B}', 'F': '$A$B', 'G': '${MISSING}x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': '${A', 'NAME': 'first value', 'LONG': 'spaced   value'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={'LONG': 'spaced   value'} line_labels={}
+args={} envs={'A': 'one', 'B': 'two words', 'C': 'single $A', 'D': '$A', 'E': '${A}-${B}', 'F': '$A$B', 'G': '${MISSING}x', 'H': 'say "hi"', 'I': 'back\\slash', 'J': 'tab sep', 'K': '${A', 'NAME': 'first value', 'LONG': 'spaced   value'} labels={'quoted key': 'v1', 'plain': 'a b'}
+  line_args={} line_envs={} line_labels={}
+== info unicode.Dockerfile
+parent_images: ['alpine']
+is_multistage: False
+baseimage: 'alpine'
+cmd: None
+labels: {'title': 'café ☕', 'author': 'Zoë'}
+envs: {'GREETING': 'héllo'}
+args: {}
+== baseimage go.Dockerfile alpine:3.20
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM alpine:3.20
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== parents go.Dockerfile golang:1.23 alpine:3.20
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM golang:1.23 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM alpine:3.20
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== parents go.Dockerfile golang:1.22 ${BASE}
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM golang:1.22 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== parents go.Dockerfile only-one
+error: RuntimeError: not enough parents to match build stages
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== parents stages.Dockerfile a b c d
+error: RuntimeError: trying to update too many parents for build stages
+ARG PYTHON=3.11
+ARG REGISTRY=registry.example.com
+FROM $REGISTRY/python:$PYTHON AS deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ARG PYTHON
+RUN pip wheel -r requirements.txt -w /wheels
+CMD ["deps"]
+
+FROM scratch AS assets
+COPY static /static
+
+FROM $REGISTRY/python:$PYTHON-slim
+ARG PYTHON
+ARG EXTRA
+LABEL python=$PYTHON extra=${EXTRA}
+COPY --from=deps /wheels /wheels
+COPY --from=assets /static /srv/static
+CMD python -m app
+== parents edge.Dockerfile x y z w
+error: RuntimeError: trying to update too many parents for build stages
+FROM
+RUN
+
+  WORKDIR   /tmp
+#comment without space
+   # indented comment
+ENTRYPOINT ["sh"]
+FROM --platform=linux/amd64
+FROM --platform=linux/arm64 debian:12 AS base
+FROM debian:12 as lower
+CMD last
+\ no newline at end
+== baseimage nofrom.Dockerfile alpine
+error: RuntimeError: No stage defined to set base image on
+# just notes
+RUN echo hi
+== cmd go.Dockerfile ["app", "--port", "9090"]
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "9090"]
+== cmd stages.Dockerfile python -m app --debug
+ARG PYTHON=3.11
+ARG REGISTRY=registry.example.com
+FROM $REGISTRY/python:$PYTHON AS deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ARG PYTHON
+RUN pip wheel -r requirements.txt -w /wheels
+CMD ["deps"]
+
+FROM scratch AS assets
+COPY static /static
+
+FROM $REGISTRY/python:$PYTHON-slim
+ARG PYTHON
+ARG EXTRA
+LABEL python=$PYTHON extra=${EXTRA}
+COPY --from=deps /wheels /wheels
+COPY --from=assets /static /srv/static
+CMD python -m app --debug
+== cmd nofrom.Dockerfile echo bye
+# just notes
+RUN echo hi
+CMD echo bye
+== cmd legacy.Dockerfile /bin/bash
+from ubuntu:22.04
+maintainer Jane Doe <jane@example.com>
+run apt-get update && \
+    apt-get install -y curl
+
+env DEBIAN_FRONTEND noninteractive
+label release="2019.10" stage=old
+Expose 22
+CMD /bin/bash
+== labels python.Dockerfile description=Order service team=payments com.example.vendor=ACME Inc.
+FROM python:3.12-slim
+
+LABEL description="Order service"
+LABEL "com.example.vendor"="ACME Inc."
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+LABEL team=payments
+== labels go.Dockerfile
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== labels stages.Dockerfile python=3.12 extra=
+ARG PYTHON=3.11
+ARG REGISTRY=registry.example.com
+FROM $REGISTRY/python:$PYTHON AS deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ARG PYTHON
+RUN pip wheel -r requirements.txt -w /wheels
+CMD ["deps"]
+
+FROM scratch AS assets
+COPY static /static
+
+FROM $REGISTRY/python:$PYTHON-slim
+ARG PYTHON
+ARG EXTRA
+LABEL python=3.12 extra=${EXTRA}
+COPY --from=deps /wheels /wheels
+COPY --from=assets /static /srv/static
+CMD python -m app
+== labels labelfirst.Dockerfile first=no
+LABEL first=yes
+FROM alpine
+LABEL first=no
+== envs python.Dockerfile APP_DIR=/srv/app NEW=it's new
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV APP_DIR=/srv/app
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+ENV NEW='it'"'"'s new'
+== envs windows.Dockerfile TOOLS_DIR=D:\tools
+# escape=`
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+SHELL ["powershell", "-Command"]
+ENV TOOLS_DIR 'D:\tools'
+RUN New-Item -ItemType Directory -Path $env:TOOLS_DIR ; `
+    Invoke-WebRequest https://example.com/tool.zip -OutFile tool.zip
+COPY app\ C:\app\
+WORKDIR C:\app
+CMD ["C:\\app\\server.exe"]
+== args stages.Dockerfile PYTHON=3.12
+ARG PYTHON=3.11
+ARG REGISTRY=registry.example.com
+FROM $REGISTRY/python:$PYTHON AS deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ARG PYTHON
+RUN pip wheel -r requirements.txt -w /wheels
+CMD ["deps"]
+
+FROM scratch AS assets
+COPY static /static
+
+FROM $REGISTRY/python:$PYTHON-slim
+ARG PYTHON 3.12
+LABEL python=$PYTHON extra=${EXTRA}
+COPY --from=deps /wheels /wheels
+COPY --from=assets /static /srv/static
+CMD python -m app
+== label python.Dockerfile version 2.2.0
+FROM python:3.12-slim
+
+LABEL description="Order service" version=2.2.0
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== label legacy.Dockerfile release 2020 final
+from ubuntu:22.04
+maintainer Jane Doe <jane@example.com>
+run apt-get update && \
+    apt-get install -y curl
+
+env DEBIAN_FRONTEND noninteractive
+LABEL release='2020 final' stage=old
+Expose 22
+cmd /usr/sbin/sshd -D
+== label empty.Dockerfile a b
+error: IndexError: list index out of range
+== unlabel python.Dockerfile owner
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc."
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== unlabel python.Dockerfile missing
+error: KeyError: 'missing'
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== unlabel continuation.Dockerfile a
+FROM alpine
+RUN apk add --no-cache \
+    curl \
+
+    git
+RUN echo one \
+# a comment inside
+    two
+RUN echo trailing \
+    spaces
+LABEL b=2
+== add go.Dockerfile -- USER root RUN apk add curl   
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+USER root
+RUN apk add curl
+== add go.Dockerfile all_stages -- LABEL stage=yes
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+LABEL stage=yes
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+LABEL stage=yes
+== add stages.Dockerfile all_stages skip_scratch -- ENV TZ=UTC
+ARG PYTHON=3.11
+ARG REGISTRY=registry.example.com
+FROM $REGISTRY/python:$PYTHON AS deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ARG PYTHON
+RUN pip wheel -r requirements.txt -w /wheels
+CMD ["deps"]
+
+ENV TZ=UTC
+FROM scratch AS assets
+COPY static /static
+
+FROM $REGISTRY/python:$PYTHON-slim
+ARG PYTHON
+ARG EXTRA
+LABEL python=$PYTHON extra=${EXTRA}
+COPY --from=deps /wheels /wheels
+COPY --from=assets /static /srv/static
+CMD python -m app
+ENV TZ=UTC
+== add stages.Dockerfile all_stages at_start -- ARG CACHE_BUST
+ARG PYTHON=3.11
+ARG REGISTRY=registry.example.com
+FROM $REGISTRY/python:$PYTHON AS deps
+ARG CACHE_BUST
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ARG PYTHON
+RUN pip wheel -r requirements.txt -w /wheels
+CMD ["deps"]
+
+FROM scratch AS assets
+ARG CACHE_BUST
+COPY static /static
+
+FROM $REGISTRY/python:$PYTHON-slim
+ARG CACHE_BUST
+ARG PYTHON
+ARG EXTRA
+LABEL python=$PYTHON extra=${EXTRA}
+COPY --from=deps /wheels /wheels
+COPY --from=assets /static /srv/static
+CMD python -m app
+== add nofrom.Dockerfile at_start -- FROM alpine
+FROM alpine
+# just notes
+RUN echo hi
+== add empty.Dockerfile -- FROM alpine
+FROM alpine
+== add edge.Dockerfile -- RUN true
+FROM
+RUN
+
+  WORKDIR   /tmp
+#comment without space
+   # indented comment
+ENTRYPOINT ["sh"]
+FROM --platform=linux/amd64
+FROM --platform=linux/arm64 debian:12 AS base
+FROM debian:12 as lower
+CMD last
+RUN true
+== add-at python.Dockerfile line 2 -- ARG BUILD_DATE
+FROM python:3.12-slim
+
+ARG BUILD_DATE
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== add-at python.Dockerfile line 2 replace -- LABEL replaced=yes
+FROM python:3.12-slim
+
+LABEL replaced=yes
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== add-at python.Dockerfile line 40 -- RUN false
+error: AssertionError: 
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== add-at python.Dockerfile insn 7 after -- RUN echo after
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN echo after
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== add-at python.Dockerfile insn 7 replace -- RUN pip install -r requirements.txt RUN rm -rf /root/.cache
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+RUN pip install -r requirements.txt
+RUN rm -rf /root/.cache
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== add-at go.Dockerfile text EXPOSE 8080 after -- EXPOSE 9090
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+EXPOSE 9090
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== add-at go.Dockerfile text COPY . . replace -- COPY src/ .
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY src/ .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== add-at go.Dockerfile text EXPOSE 1 -- EXPOSE 2
+error: RuntimeError: Cannot find line in the build file:
+EXPOSE 1
+
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== delete go.Dockerfile COPY
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+RUN go mod download
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== delete go.Dockerfile RUN go mod download
+# syntax=docker/dockerfile:1.4
+ARG GO_VERSION=1.22
+ARG BASE=alpine:3.19
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/app ./cmd/app
+
+FROM ${BASE}
+ARG VERSION
+ARG BASE
+LABEL org.opencontainers.image.title="billing api" \
+      org.opencontainers.image.version=$VERSION maintainer=ops@example.com
+ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH
+COPY --from=build /out/app $APP_HOME/bin/app
+EXPOSE 8080
+USER 65534
+HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1
+CMD ["app", "--port", "8080"]
+== delete python.Dockerfile LABEL owner
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc."
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PIP_NO_CACHE_DIR=off \
+    APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== delete python.Dockerfile ENV PIP_NO_CACHE_DIR
+FROM python:3.12-slim
+
+LABEL description="Order service" version="2.1.0"
+LABEL "com.example.vendor"="ACME Inc." owner='Data Team'
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV APP_DIR=/app
+ENV GREETING hello world from $APP_DIR
+
+WORKDIR $APP_DIR
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+    # pinned in requirements.txt
+    && rm -rf /root/.cache
+
+COPY . .
+EXPOSE 8000
+ENTRYPOINT ["gunicorn"]
+CMD ["-b", "0.0.0.0:8000", "app:wsgi"]
+== delete stages.Dockerfile ARG PYTHON
+ARG PYTHON=3.11
+ARG REGISTRY=registry.example.com
+FROM $REGISTRY/python:$PYTHON AS deps
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ARG PYTHON
+RUN pip wheel -r requirements.txt -w /wheels
+CMD ["deps"]
+
+FROM scratch AS assets
+COPY static /static
+
+FROM $REGISTRY/python:$PYTHON-slim
+ARG EXTRA
+LABEL python=$PYTHON extra=${EXTRA}
+COPY --from=deps /wheels /wheels
+COPY --from=assets /static /srv/static
+CMD python -m app
+== delete legacy.Dockerfile MAINTAINER
+from ubuntu:22.04
+run apt-get update && \
+    apt-get install -y curl
+
+env DEBIAN_FRONTEND noninteractive
+label release="2019.10" stage=old
+Expose 22
+cmd /usr/sbin/sshd -D
+== delete legacy.Dockerfile COMMENT
+from ubuntu:22.04
+maintainer Jane Doe <jane@example.com>
+run apt-get update && \
+    apt-get install -y curl
+
+env DEBIAN_FRONTEND noninteractive
+label release="2019.10" stage=old
+Expose 22
+cmd /usr/sbin/sshd -D

@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 252 |
 | other | 185 |
 | perf | 180 |
-| diagnostics | 176 |
+| diagnostics | 177 |
 | soundness | 125 |
 | crash | 125 |
 | use-after-free | 92 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2971 |
 | interp | 989 |
-| typecheck | 509 |
+| typecheck | 510 |
 | ownership | 124 |
 | other | 121 |
 | runtime | 81 |
@@ -181,6 +181,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-11 | 2026-10-20 | runtime | medium | Providers (§14.7): library traits and static default providers for `Env`, `Clock` and `RandomSource` (now bare `effect resource` declarations in runtime/stdlib/wasi.kara), so a program can override them; migrate the 18 corpus programs that override one to implement the trait | — |
 | B-2026-10-20-13 | 2026-10-20 | typecheck | medium | A generic `Fn(V) -> K` instantiated at V = i64 becomes `Fn(ref i64) -> K` and refuses `fn neg(x: i64)`, which the same type written as `Fn(i64) -> i64` accepts | — |
 | B-2026-10-20-14 | 2026-10-20 | codegen | low | mir-llvm takes no §6.2 borrow flag inside a coroutine's resume body, so a conflicting access through another handle while a coroutine holds a loan across a yield runs on mir-llvm and panics on mir-interp | — |
+| B-2026-10-20-15 | 2026-10-20 | typecheck | medium | `karac check` accepts storing an owned `String` into a `let mut` copy of a `for` item (`for s in v { let mut t = s; t = "z".to_string(); }`), and both MIR backends then stop with "invalid MIR: assigning String to _N of type ref String"; the same shape through a bare parameter gets the right diagnostic | — |
 
 ### Relocated
 

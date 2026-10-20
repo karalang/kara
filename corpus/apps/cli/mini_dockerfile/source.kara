@@ -1,0 +1,2254 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters subtitles hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+// ------------------------------------------------------------ regular expressions
+//
+// The part of Python's `re` that dockerfile-parse uses, as a backtracking
+// matcher with Python's leftmost,
+// priority-ordered semantics. A pattern compiles to a small program;
+// Split tries its first branch before its second, which is what makes
+// `*` greedy and `*?` lazy. It works on code points, as Python's str does.
+
+// Python's str.isspace(), which is also what `\s` matches.
+fn py_isspace(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 0x1c and n <= 0x20) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f or n == 0x205f
+        or n == 0x3000
+}
+
+#[derive(Clone)]
+struct Cls {
+    ranges: Vec[(i64, i64)],
+    space: bool,
+    neg: bool,
+}
+
+fn cls_has(k: ref Cls, c: char) -> bool {
+    let n = c as i64;
+    let mut hit = k.space and py_isspace(c);
+    for r in k.ranges {
+        if n >= r.0 and n <= r.1 {
+            hit = true;
+        }
+    }
+    hit != k.neg
+}
+
+#[derive(Clone)]
+enum Node {
+    Char(Cls),
+    Any,
+    Bol,
+    Eol,
+    EndZ,
+    Seq(Vec[Node]),
+    Alt(Vec[Node]),
+    Group(i64, Vec[Node]),
+    Look(Vec[Node]),
+    // body (one node), min, max (-1 for none), greedy
+    Rep(Vec[Node], i64, i64, bool),
+}
+
+#[derive(Clone)]
+enum Inst {
+    Char(Cls),
+    Any,
+    Bol,
+    Eol,
+    EndZ,
+    Split(i64, i64),
+    Jmp(i64),
+    Save(i64),
+    // the lookahead's program starts at the next instruction; matching
+    // goes on at the second
+    Look(i64),
+    Match,
+}
+
+struct Re {
+    prog: Vec[Inst],
+    groups: i64,
+    dotall: bool,
+}
+
+struct ReParser {
+    cs: Vec[char],
+    pos: i64,
+    groups: i64,
+}
+
+fn one(c: char) -> Cls {
+    let mut r: Vec[(i64, i64)] = Vec.new();
+    r.push((c as i64, c as i64));
+    Cls { ranges: r, space: false, neg: false }
+}
+
+impl ReParser {
+    fn peek(ref self) -> Option[char] {
+        if self.pos < self.cs.len() { Some(self.cs[self.pos]) } else { None }
+    }
+
+    fn eat(mut ref self, c: char) -> bool {
+        if self.pos < self.cs.len() and self.cs[self.pos] == c {
+            self.pos += 1;
+            return true;
+        }
+        false
+    }
+
+    fn alt(mut ref self) -> Node {
+        let mut arms: Vec[Node] = Vec.new();
+        arms.push(self.seq());
+        while self.eat('|') {
+            arms.push(self.seq());
+        }
+        if arms.len() == 1 { arms.remove(0) } else { Node.Alt(arms) }
+    }
+
+    fn seq(mut ref self) -> Node {
+        let mut items: Vec[Node] = Vec.new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some(c) => {
+                    if c == '|' or c == ')' {
+                        break;
+                    }
+                }
+            }
+            let atom = self.atom();
+            items.push(self.quantified(atom));
+        }
+        Node.Seq(items)
+    }
+
+    fn quantified(mut ref self, atom: own Node) -> Node {
+        let (lo, hi) = match self.peek() {
+            Some('*') => (0, -1),
+            Some('+') => (1, -1),
+            Some('?') => (0, 1),
+            _ => return atom,
+        };
+        self.pos += 1;
+        let greedy = not self.eat('?');
+        let mut body: Vec[Node] = Vec.new();
+        body.push(atom);
+        Node.Rep(body, lo, hi, greedy)
+    }
+
+    fn escape(mut ref self) -> Cls {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == 's' {
+            Cls { ranges: Vec.new(), space: true, neg: false }
+        } else if c == 'S' {
+            Cls { ranges: Vec.new(), space: true, neg: true }
+        } else if c == 'd' {
+            let mut r: Vec[(i64, i64)] = Vec.new();
+            r.push(('0' as i64, '9' as i64));
+            Cls { ranges: r, space: false, neg: false }
+        } else if c == 'n' {
+            one('\n')
+        } else if c == 'r' {
+            one('\r')
+        } else if c == 't' {
+            one('\t')
+        } else {
+            one(c)
+        }
+    }
+
+    fn class(mut ref self) -> Cls {
+        let neg = self.eat('^');
+        let mut k = Cls { ranges: Vec.new(), space: false, neg: neg };
+        let mut first = true;
+        while first or self.cs[self.pos] != ']' {
+            first = false;
+            let lo = if self.eat('\\') {
+                let e = self.escape();
+                if e.space {
+                    k.space = true;
+                    continue;
+                }
+                e.ranges[0].0
+            } else {
+                let c = self.cs[self.pos];
+                self.pos += 1;
+                c as i64
+            };
+            if self.cs[self.pos] == '-' and self.cs[self.pos + 1] != ']' {
+                self.pos += 1;
+                let hi = if self.eat('\\') {
+                    self.escape().ranges[0].0
+                } else {
+                    let c = self.cs[self.pos];
+                    self.pos += 1;
+                    c as i64
+                };
+                k.ranges.push((lo, hi));
+            } else {
+                k.ranges.push((lo, lo));
+            }
+        }
+        self.pos += 1;
+        k
+    }
+
+    fn atom(mut ref self) -> Node {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == '(' {
+            let mut capture = true;
+            let mut look = false;
+            if self.eat('?') {
+                capture = false;
+                if self.eat('=') {
+                    look = true;
+                } else {
+                    self.eat(':');
+                }
+            }
+            let mut idx = 0;
+            if capture {
+                self.groups += 1;
+                idx = self.groups;
+            }
+            let inner = self.alt();
+            self.eat(')');
+            let mut body: Vec[Node] = Vec.new();
+            body.push(inner);
+            if look {
+                Node.Look(body)
+            } else if capture {
+                Node.Group(idx, body)
+            } else {
+                Node.Seq(body)
+            }
+        } else if c == '[' {
+            Node.Char(self.class())
+        } else if c == '.' {
+            Node.Any
+        } else if c == '^' {
+            Node.Bol
+        } else if c == '$' {
+            Node.Eol
+        } else if c == '\\' {
+            if self.eat('Z') {
+                Node.EndZ
+            } else {
+                Node.Char(self.escape())
+            }
+        } else {
+            Node.Char(one(c))
+        }
+    }
+}
+
+fn emit_node(prog: mut ref Vec[Inst], n: ref Node) {
+    match n {
+        Node.Char(k) => prog.push(Inst.Char(k.clone())),
+        Node.Any => prog.push(Inst.Any),
+        Node.Bol => prog.push(Inst.Bol),
+        Node.Eol => prog.push(Inst.Eol),
+        Node.EndZ => prog.push(Inst.EndZ),
+        Node.Seq(items) => {
+            for x in items {
+                emit_node(mut prog, x);
+            }
+        }
+        Node.Alt(arms) => {
+            let mut jumps: Vec[i64] = Vec.new();
+            for i in 0..arms.len() {
+                if i + 1 < arms.len() {
+                    let split = prog.len();
+                    prog.push(Inst.Split(split + 1, 0));
+                    emit_node(mut prog, arms[i]);
+                    jumps.push(prog.len());
+                    prog.push(Inst.Jmp(0));
+                    prog[split] = Inst.Split(split + 1, prog.len());
+                } else {
+                    emit_node(mut prog, arms[i]);
+                }
+            }
+            let end = prog.len();
+            for j in jumps {
+                prog[j] = Inst.Jmp(end);
+            }
+        }
+        Node.Group(idx, body) => {
+            prog.push(Inst.Save(2 * idx));
+            emit_node(mut prog, body[0]);
+            prog.push(Inst.Save(2 * idx + 1));
+        }
+        Node.Look(body) => {
+            let at = prog.len();
+            prog.push(Inst.Look(0));
+            emit_node(mut prog, body[0]);
+            prog.push(Inst.Match);
+            prog[at] = Inst.Look(prog.len());
+        }
+        Node.Rep(body, lo, hi, greedy) => {
+            for _ in 0..*lo {
+                emit_node(mut prog, body[0]);
+            }
+            if *hi < 0 {
+                // x*: L: split(body, out); body; jmp L
+                let l = prog.len();
+                prog.push(Inst.Split(0, 0));
+                emit_node(mut prog, body[0]);
+                prog.push(Inst.Jmp(l));
+                let out = prog.len();
+                prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+            } else {
+                for _ in *lo..*hi {
+                    let l = prog.len();
+                    prog.push(Inst.Split(0, 0));
+                    emit_node(mut prog, body[0]);
+                    let out = prog.len();
+                    prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                }
+            }
+        }
+    }
+}
+
+fn re_compile(pattern: ref String, dotall: bool) -> Re {
+    let mut p = ReParser { cs: pattern.chars().collect(), pos: 0, groups: 0 };
+    let tree = p.alt();
+    let mut prog: Vec[Inst] = Vec.new();
+    prog.push(Inst.Save(0));
+    emit_node(mut prog, tree);
+    prog.push(Inst.Save(1));
+    prog.push(Inst.Match);
+    Re { prog: prog, groups: p.groups, dotall: dotall }
+}
+
+enum Bt {
+    Try(i64, i64),
+    Restore(i64, i64),
+}
+
+// Runs the program from `pc` at `pos`; the slots hold the group bounds
+// of the first way through that reaches Match.
+fn re_run(re: ref Re, s: ref Vec[char], pc0: i64, pos0: i64, slots: mut ref Vec[i64]) -> bool {
+    let mut stack: Vec[Bt] = Vec.new();
+    stack.push(Bt.Try(pc0, pos0));
+    while stack.len() > 0 {
+        let mut (pc, pos) = match stack.pop().unwrap() {
+            Bt.Restore(k, old) => {
+                slots[k] = old;
+                continue;
+            }
+            Bt.Try(pc, pos) => (pc, pos),
+        };
+        loop {
+            match re.prog[pc] {
+                Inst.Char(k) => {
+                    if pos < s.len() and cls_has(k, s[pos]) {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Any => {
+                    if pos < s.len() and (re.dotall or s[pos] != '\n') {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Bol => {
+                    if pos == 0 { pc += 1; } else { break; }
+                }
+                Inst.Eol => {
+                    if pos == s.len() or (pos + 1 == s.len() and s[pos] == '\n') { pc += 1; } else { break; }
+                }
+                Inst.EndZ => {
+                    if pos == s.len() { pc += 1; } else { break; }
+                }
+                Inst.Split(a, b) => {
+                    stack.push(Bt.Try(*b, pos));
+                    pc = *a;
+                }
+                Inst.Jmp(a) => pc = *a,
+                Inst.Save(k) => {
+                    stack.push(Bt.Restore(*k, slots[*k]));
+                    slots[*k] = pos;
+                    pc += 1;
+                }
+                Inst.Look(cont) => {
+                    let mut inner = slots.clone();
+                    if re_run(re, s, pc + 1, pos, mut inner) {
+                        pc = *cont;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Match => return true,
+            }
+        }
+    }
+    false
+}
+
+// re.match at `pos`: the group bounds (-1 for a group that took no
+// part), or None.
+fn re_match_at(re: ref Re, s: ref Vec[char], pos: i64) -> Option[Vec[i64]] {
+    let mut slots: Vec[i64] = Vec.new();
+    for _ in 0..(2 * re.groups + 2) {
+        slots.push(-1);
+    }
+    if re_run(re, s, 0, pos, mut slots) { Some(slots) } else { None }
+}
+
+fn re_search(re: ref Re, s: ref Vec[char], from: i64) -> Option[Vec[i64]] {
+    let mut pos = from;
+    while pos <= s.len() {
+        if let Some(m) = re_match_at(re, s, pos) {
+            return Some(m);
+        }
+        pos += 1;
+    }
+    None
+}
+
+// re.finditer: non-overlapping matches, left to right.
+fn re_finditer(re: ref Re, s: ref Vec[char]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut pos = 0;
+    while pos <= s.len() {
+        match re_search(re, s, pos) {
+            None => break,
+            Some(m) => {
+                pos = if m[1] == m[0] { m[1] + 1 } else { m[1] };
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
+fn chars_str(s: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    for i in a..b {
+        out.push(s[i]);
+    }
+    out
+}
+
+// re.sub with a literal replacement.
+fn re_sub(re: ref Re, repl: ref String, text: ref String) -> String {
+    let s: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    let mut last = 0;
+    for m in re_finditer(re, s) {
+        out.push_str(chars_str(s, last, m[0]));
+        out.push_str(repl);
+        last = m[1];
+    }
+    out.push_str(chars_str(s, last, s.len()));
+    out
+}
+// ------------------------------------------------------------ dicts, errors, words
+//
+// dockerfile_parse/util.py, and the pieces of Python it leans on.
+
+// A Python exception: its type and str().
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: ref String, msg: ref String) -> Exc {
+    Exc { kind: kind.clone(), msg: msg.clone() }
+}
+
+fn index_error() -> Exc {
+    exc("IndexError", "list index out of range")
+}
+
+// A Python dict of str to str: keys stay where they were first set.
+#[derive(Clone)]
+struct OMap {
+    keys: Vec[String],
+    vals: Vec[String],
+}
+
+fn om_new() -> OMap {
+    OMap { keys: Vec.new(), vals: Vec.new() }
+}
+
+impl OMap {
+    fn find(ref self, k: ref String) -> i64 {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == *k {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn has(ref self, k: ref String) -> bool {
+        self.find(k) >= 0
+    }
+
+    fn get(ref self, k: ref String) -> String {
+        let i = self.find(k);
+        if i < 0 { String.new() } else { self.vals[i].clone() }
+    }
+
+    fn set(mut ref self, k: ref String, v: ref String) {
+        let i = self.find(k);
+        if i < 0 {
+            self.keys.push(k.clone());
+            self.vals.push(v.clone());
+        } else {
+            self.vals[i] = v.clone();
+        }
+    }
+
+    fn remove(mut ref self, k: ref String) {
+        let i = self.find(k);
+        if i >= 0 {
+            self.keys.remove(i);
+            self.vals.remove(i);
+        }
+    }
+
+    fn update(mut ref self, o: ref OMap) {
+        for i in 0..o.keys.len() {
+            self.set(o.keys[i], o.vals[i]);
+        }
+    }
+
+    fn len(ref self) -> i64 {
+        self.keys.len()
+    }
+
+    fn repr(ref self) -> String {
+        let mut out = "{".to_string();
+        for i in 0..self.keys.len() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(py_repr_str(self.keys[i]));
+            out.push_str(": ");
+            out.push_str(py_repr_str(self.vals[i]));
+        }
+        out.push('}');
+        out
+    }
+}
+
+fn str_isspace(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if not py_isspace(c) {
+            return false;
+        }
+    }
+    true
+}
+
+fn py_rstrip(t: ref String) -> String {
+    let cs: Vec[char] = t.chars().collect();
+    let mut b = cs.len();
+    while b > 0 and py_isspace(cs[b - 1]) {
+        b -= 1;
+    }
+    chars_str(cs, 0, b)
+}
+
+fn py_lstrip(t: ref String) -> String {
+    let cs: Vec[char] = t.chars().collect();
+    let mut a = 0;
+    while a < cs.len() and py_isspace(cs[a]) {
+        a += 1;
+    }
+    chars_str(cs, a, cs.len())
+}
+
+fn is_alnum(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9')
+}
+
+// s.split(None, 1)
+fn split_ws_once(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < cs.len() and py_isspace(cs[i]) {
+        i += 1;
+    }
+    if i >= cs.len() {
+        return out;
+    }
+    let a = i;
+    while i < cs.len() and not py_isspace(cs[i]) {
+        i += 1;
+    }
+    out.push(chars_str(cs, a, i));
+    while i < cs.len() and py_isspace(cs[i]) {
+        i += 1;
+    }
+    if i < cs.len() {
+        out.push(chars_str(cs, i, cs.len()));
+    }
+    out
+}
+
+// k_v.split('=', 1)
+fn split_eq(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let cs: Vec[char] = s.chars().collect();
+    for i in 0..cs.len() {
+        if cs[i] == '=' {
+            out.push(chars_str(cs, 0, i));
+            out.push(chars_str(cs, i + 1, cs.len()));
+            return out;
+        }
+    }
+    out.push(s.clone());
+    out
+}
+
+// shlex.quote
+fn sh_quote(s: ref String) -> String {
+    if s.len() == 0 {
+        return "''".to_string();
+    }
+    let mut safe = true;
+    for c in s.chars() {
+        if not (is_alnum(c) or c == '_' or c == '@' or c == '%' or c == '+' or c == '=' or c == ':' or c == ','
+            or c == '.' or c == '/' or c == '-') {
+            safe = false;
+        }
+    }
+    if safe {
+        return s.clone();
+    }
+    f"'{s.replace("'", "'\"'\"'")}'"
+}
+
+// WordSplitter: splits at whitespace, honouring quotes and backslashes,
+// and substitutes $VAR and ${VAR} when it has args or envs.
+struct Words {
+    cs: Vec[char],
+    pos: i64,
+    args: Option[OMap],
+    envs: Option[OMap],
+    quotes: Option[char],
+    escaped: bool,
+}
+
+fn words_of(s: ref String, args: own Option[OMap], envs: own Option[OMap]) -> Words {
+    Words { cs: s.chars().collect(), pos: 0, args: args, envs: envs, quotes: None, escaped: false }
+}
+
+fn ch_is(ch: ref Option[char], c: char) -> bool {
+    match ch {
+        Some(x) => *x == c,
+        None => false,
+    }
+}
+
+fn ch_str(ch: ref Option[char]) -> String {
+    let mut s = String.new();
+    if let Some(c) = ch {
+        s.push(*c);
+    }
+    s
+}
+
+impl Words {
+    fn read1(mut ref self) -> Option[char] {
+        if self.pos < self.cs.len() {
+            self.pos += 1;
+            Some(self.cs[self.pos - 1])
+        } else {
+            None
+        }
+    }
+
+    fn in_squote(ref self) -> bool {
+        ch_is(self.quotes, '\'')
+    }
+
+    // _update_quoting_state: ch, or "" when it went to the quoting state.
+    fn update(mut ref self, ch: ref Option[char]) -> String {
+        let was = self.escaped;
+        self.escaped = not self.escaped and ch_is(ch, '\\') and not self.in_squote();
+        if self.escaped {
+            return String.new();
+        }
+        if was {
+            if ch_is(self.quotes, '"') {
+                if ch_is(ch, '"') {
+                    return "\"".to_string();
+                }
+                return f"\\{ch_str(ch)}";
+            }
+            return ch_str(ch);
+        }
+        match self.quotes {
+            None => {
+                if ch_is(ch, '\'') or ch_is(ch, '"') {
+                    self.quotes = if ch_is(ch, '\'') { Some('\'') } else { Some('"') };
+                    return String.new();
+                }
+            }
+            Some(q) => {
+                if ch_is(ch, q) {
+                    self.quotes = None;
+                    return String.new();
+                }
+            }
+        }
+        ch_str(ch)
+    }
+
+    fn lookup(ref self, name: ref String) -> Option[String] {
+        if let Some(e) = self.envs {
+            if e.has(name) {
+                return Some(e.get(name));
+            }
+        }
+        if let Some(a) = self.args {
+            if a.has(name) {
+                return Some(a.get(name));
+            }
+        }
+        None
+    }
+
+    // split(maxsplit, dequote); maxsplit < 0 for no limit
+    fn split(mut ref self, maxsplit: i64, dequote: bool) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut splits = 0;
+        let mut word: Option[String] = None;
+        let substitute = self.args.is_some() or self.envs.is_some();
+        loop {
+            let mut ch = self.read1();
+            if ch.is_none() {
+                if let Some(w) = word {
+                    out.push(w);
+                }
+                return out;
+            }
+            if not self.escaped and substitute and ch_is(ch, '$') and not self.in_squote() {
+                let mut braced = false;
+                loop {
+                    braced = false;
+                    let mut name = String.new();
+                    loop {
+                        ch = self.read1();
+                        if name.len() == 0 and ch_is(ch, '{') {
+                            braced = true;
+                            continue;
+                        }
+                        let c = match ch {
+                            None => break,
+                            Some(c) => c,
+                        };
+                        if braced and c == '}' {
+                            break;
+                        }
+                        if not is_alnum(c) and c != '_' {
+                            break;
+                        }
+                        name.push(c);
+                    }
+                    if let Some(v) = self.lookup(name) {
+                        let mut w = match word {
+                            Some(w) => w,
+                            None => String.new(),
+                        };
+                        w.push_str(v);
+                        word = Some(w);
+                    }
+                    if not ch_is(ch, '$') {
+                        break;
+                    }
+                }
+                if braced and ch_is(ch, '}') {
+                    continue;
+                }
+            }
+            let was = self.escaped;
+            let left = self.update(ch);
+            let piece = if dequote { left } else { ch_str(ch) };
+            let may_split = maxsplit != 0 and (maxsplit < 0 or splits < maxsplit);
+            if may_split and self.quotes.is_none() and not was and str_isspace(piece) {
+                if let Some(w) = word {
+                    splits += 1;
+                    out.push(w);
+                }
+                word = None;
+            } else {
+                let mut w = match word {
+                    Some(w) => w,
+                    None => String.new(),
+                };
+                w.push_str(piece);
+                word = Some(w);
+            }
+        }
+    }
+
+    fn dequote(mut ref self) -> String {
+        self.split(0, true).join("")
+    }
+}
+
+fn plain_words(s: ref String) -> Vec[String] {
+    let mut w = words_of(s, None, None);
+    w.split(-1, false)
+}
+
+fn plain_dequote(s: ref String) -> String {
+    let mut w = words_of(s, None, None);
+    w.dequote()
+}
+
+fn subst_vars(env_replace: bool, args: ref OMap, envs: ref OMap, val: ref String) -> String {
+    let mut w = if env_replace {
+        words_of(val, Some(args.clone()), Some(envs.clone()))
+    } else {
+        words_of(val, None, None)
+    };
+    w.dequote()
+}
+
+fn extract_key_values(env_replace: bool, args: ref OMap, envs: ref OMap, value: ref String) -> Result[Vec[(String, String)], Exc] {
+    let words = plain_words(value);
+    if words.len() == 0 {
+        return Err(index_error());
+    }
+    let mut out: Vec[(String, String)] = Vec.new();
+    if not words[0].contains("=") {
+        // LABEL/ENV name value
+        let mut kv: Vec[String] = Vec.new();
+        for x in split_ws_once(value) {
+            kv.push(subst_vars(env_replace, args, envs, x));
+        }
+        let key = kv[0].clone();
+        let val = if kv.len() > 1 { kv[1].clone() } else { String.new() };
+        out.push((key, val));
+    } else {
+        // LABEL/ENV name=value ...
+        for k_v in words {
+            if not k_v.contains("=") {
+                return Err(exc("ValueError", f"Syntax error - can't find = in \"{k_v}\". Must be of the form: name=value"));
+            }
+            let parts = split_eq(k_v);
+            out.push((subst_vars(env_replace, args, envs, parts[0]), subst_vars(env_replace, args, envs, parts[1])));
+        }
+    }
+    Ok(out)
+}
+
+fn key_val_dict(env_replace: bool, args: ref OMap, envs: ref OMap, value: ref String) -> Result[OMap, Exc] {
+    let mut d = om_new();
+    for (k, v) in extract_key_values(env_replace, args, envs, value)? {
+        d.set(k, v);
+    }
+    Ok(d)
+}
+
+// json.dumps for a string, ensure_ascii on.
+fn json_str(s: ref String) -> String {
+    let mut out = "\"".to_string();
+    for c in s.chars() {
+        let n = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if n == 8 {
+            out.push_str("\\b");
+        } else if n == 12 {
+            out.push_str("\\f");
+        } else if n >= 32 and n <= 126 {
+            out.push(c);
+        } else if n < 0x10000 {
+            out.push_str(f"\\u{hex_digits(n, 4)}");
+        } else {
+            let m = n - 0x10000;
+            out.push_str(f"\\u{hex_digits(0xd800 | ((m >> 10) & 0x3ff), 4)}");
+            out.push_str(f"\\u{hex_digits(0xdc00 | (m & 0x3ff), 4)}");
+        }
+    }
+    out.push('"');
+    out
+}
+// ------------------------------------------------------------ the parser
+//
+// dockerfile_parse/parser.py: DockerfileParser over a file on disk. Every
+// property reads the file again and every setter writes it, as the
+// Python does.
+
+#[derive(Clone)]
+struct Insn {
+    instruction: String,
+    startline: i64,
+    endline: i64,
+    content: String,
+    value: String,
+}
+
+fn insn_eq(a: ref Insn, b: ref Insn) -> bool {
+    a.instruction == b.instruction and a.startline == b.startline and a.endline == b.endline
+        and a.content == b.content and a.value == b.value
+}
+
+fn insn_repr(i: ref Insn) -> String {
+    f"{{'instruction': {py_repr_str(i.instruction)}, 'startline': {i.startline}, 'endline': {i.endline}, 'content': {py_repr_str(i.content)}, 'value': {py_repr_str(i.value)}}}"
+}
+
+struct Pats {
+    insn: Re,
+    cont_bs: Re,
+    cont_bt: Re,
+    comment: Re,
+    clean: Re,
+    escape_dir: Re,
+    syntax_dir: Re,
+    image: Re,
+}
+
+fn patterns() -> Pats {
+    Pats {
+        insn: re_compile("^\\s*(\\S+)\\s+(.*)$", false),
+        cont_bs: re_compile("^.*\\\\\\s*$", false),
+        cont_bt: re_compile("^.*`\\s*$", false),
+        comment: re_compile("^\\s*#", false),
+        clean: re_compile("^\\s*#\\s*", false),
+        // re.I: under Unicode case folding, s also matches U+017F
+        escape_dir: re_compile("^\\s*#\\s*[eE][sSſ][cC][aA][pP][eE]\\s*=\\s*(\\\\|`)\\s*$", false),
+        syntax_dir: re_compile("^\\s*#\\s*[sSſ][yY][nN][tT][aA][xX]\\s*=\\s*(.*)\\s*$", false),
+        image: re_compile("\\s*(--[pP][lL][aA][tT][fF][oO][rR][mM]=\\S+)?\\s*(\\S+)(?:\\s+[aA][sSſ]\\s+(\\S+))?", false),
+    }
+}
+
+fn group(cs: ref Vec[char], m: ref Vec[i64], g: i64) -> Option[String] {
+    if m[2 * g] < 0 { None } else { Some(chars_str(cs, m[2 * g], m[2 * g + 1])) }
+}
+
+fn re_ok(re: ref Re, s: ref String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    re_match_at(re, cs, 0).is_some()
+}
+
+fn rstrip_eol(text: ref String, cont: char) -> String {
+    let t = py_rstrip(text);
+    let cs: Vec[char] = t.chars().collect();
+    if cs.len() > 0 and cs[cs.len() - 1] == cont {
+        return chars_str(cs, 0, cs.len() - 1);
+    }
+    t
+}
+
+// image_from: the image and the stage name of a FROM value.
+fn image_from(p: ref Pats, value: ref String) -> (Option[String], Option[String]) {
+    let cs: Vec[char] = value.chars().collect();
+    match re_match_at(p.image, cs, 0) {
+        None => (None, None),
+        Some(m) => (group(cs, m, 2), group(cs, m, 3)),
+    }
+}
+
+// file.readlines() in binary mode: split after each \n.
+fn split_keep(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in text.chars() {
+        cur.push(c);
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+struct Df {
+    path: String,
+    env_replace: bool,
+    parent_env: OMap,
+    build_args: OMap,
+}
+
+struct Ctx {
+    args: OMap,
+    envs: OMap,
+    labels: OMap,
+    line_args: OMap,
+    line_envs: OMap,
+    line_labels: OMap,
+}
+
+fn new_ctx(args: ref OMap, envs: ref OMap, labels: ref OMap) -> Ctx {
+    Ctx { args: args.clone(), envs: envs.clone(), labels: labels.clone(), line_args: om_new(), line_envs: om_new(), line_labels: om_new() }
+}
+
+impl Df {
+    fn content(ref self) -> String {
+        match fs.read_to_string(self.path.clone()) {
+            Ok(s) => s,
+            Err(_) => String.new(),
+        }
+    }
+
+    fn lines(ref self) -> Vec[String] {
+        split_keep(self.content())
+    }
+
+    fn set_lines(ref self, lines: ref Vec[String]) {
+        let _ = fs.write(self.path.clone(), lines.join(""));
+    }
+
+    fn structure(ref self, p: ref Pats) -> Vec[Insn] {
+        let mut out: Vec[Insn] = Vec.new();
+        let mut lineno = -1;
+        let mut cont = '\\';
+        let mut use_bt = false;
+        let mut directive_possible = true;
+        let mut in_continuation = false;
+        let mut cur: Option[Insn] = None;
+        for line in self.lines() {
+            lineno += 1;
+            let cs: Vec[char] = line.chars().collect();
+            if directive_possible {
+                if let Some(m) = re_match_at(p.escape_dir, cs, 0) {
+                    cont = cs[m[2]];
+                    use_bt = cont == '`';
+                } else if re_match_at(p.syntax_dir, cs, 0).is_some() {
+                } else {
+                    directive_possible = false;
+                }
+            }
+            if re_match_at(p.comment, cs, 0).is_some() {
+                let value = re_sub(p.clean, "", line).replace("\n", "");
+                out.push(Insn { instruction: "COMMENT".to_string(), startline: lineno, endline: lineno, content: line.clone(), value: value });
+                continue;
+            }
+            if not in_continuation {
+                match re_match_at(p.insn, cs, 0) {
+                    None => continue,
+                    Some(m) => {
+                        let name = chars_str(cs, m[2], m[3]).to_uppercase();
+                        let value = rstrip_eol(chars_str(cs, m[4], m[5]), cont);
+                        cur = Some(Insn { instruction: name, startline: lineno, endline: lineno, content: line.clone(), value: value });
+                    }
+                }
+            } else if let Some(c) = cur.clone() {
+                let mut i = c;
+                i.content.push_str(line);
+                i.endline = lineno;
+                if i.value.len() > 0 {
+                    i.value.push_str(rstrip_eol(line, cont));
+                } else {
+                    i.value = rstrip_eol(py_lstrip(line), cont);
+                }
+                cur = Some(i);
+            }
+            in_continuation = if use_bt { re_match_at(p.cont_bt, cs, 0).is_some() } else { re_match_at(p.cont_bs, cs, 0).is_some() };
+            if not in_continuation {
+                if let Some(c) = cur.clone() {
+                    out.push(c);
+                }
+            }
+        }
+        out
+    }
+
+    fn json(ref self, p: ref Pats) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for i in self.structure(p) {
+            parts.push(f"{{{json_str(i.instruction)}: {json_str(i.value)}}}");
+        }
+        f"[{parts.join(", ")}]"
+    }
+
+    fn parent_images(ref self, p: ref Pats) -> Result[Vec[String], Exc] {
+        let mut in_stage = false;
+        let mut top_args = om_new();
+        let mut parents: Vec[String] = Vec.new();
+        let empty = om_new();
+        for instr in self.structure(p) {
+            if instr.instruction == "ARG" {
+                if not in_stage {
+                    for (key, value0) in extract_key_values(false, empty, empty, instr.value)? {
+                        let value = if self.build_args.has(key) { self.build_args.get(key) } else { value0.clone() };
+                        top_args.set(key, value);
+                    }
+                }
+            } else if instr.instruction == "FROM" {
+                in_stage = true;
+                let (image, _) = image_from(p, instr.value);
+                if let Some(im) = image {
+                    let mut w = words_of(im, Some(top_args.clone()), None);
+                    parents.push(w.dequote());
+                }
+            }
+        }
+        Ok(parents)
+    }
+
+    fn baseimage(ref self, p: ref Pats) -> Result[Option[String], Exc] {
+        let ps = self.parent_images(p)?;
+        if ps.len() == 0 {
+            return Ok(None);
+        }
+        Ok(Some(ps[ps.len() - 1].clone()))
+    }
+
+    fn cmd(ref self, p: ref Pats) -> Option[String] {
+        let mut value: Option[String] = None;
+        for i in self.structure(p) {
+            if i.instruction == "FROM" {
+                value = None;
+            } else if i.instruction == "CMD" {
+                value = Some(i.value.clone());
+            }
+        }
+        value
+    }
+
+    // _instruction_getter: LABEL, ENV or ARG values of the last stage.
+    fn getter(ref self, p: ref Pats, name: ref String) -> Result[OMap, Exc] {
+        let mut in_stage = false;
+        let mut top_args = om_new();
+        let mut instructions = om_new();
+        let mut args = om_new();
+        let mut envs = om_new();
+        for d in self.structure(p) {
+            let this = d.instruction.clone();
+            if this == "FROM" {
+                in_stage = true;
+                instructions = om_new();
+                args = om_new();
+                envs = self.parent_env.clone();
+            } else if this == *name or this == "ENV" or this == "ARG" {
+                let kvs = extract_key_values(this != "ARG" and self.env_replace, args, envs, d.value)?;
+                for (key, value0) in kvs {
+                    let mut value = value0.clone();
+                    if this == "ARG" {
+                        if in_stage {
+                            if top_args.has(key) {
+                                value = top_args.get(key);
+                            } else if self.build_args.has(key) {
+                                value = self.build_args.get(key);
+                            }
+                            args.set(key, value);
+                        } else {
+                            if self.build_args.has(key) {
+                                value = self.build_args.get(key);
+                            }
+                            top_args.set(key, value);
+                        }
+                    }
+                    if this == *name {
+                        instructions.set(key, value);
+                    }
+                    if this == "ENV" {
+                        envs.set(key, value);
+                    }
+                }
+            }
+        }
+        Ok(instructions)
+    }
+
+    fn context_structure(ref self, p: ref Pats) -> Result[Vec[Ctx], Exc] {
+        let mut in_stage = false;
+        let mut top_args = om_new();
+        let mut out: Vec[Ctx] = Vec.new();
+        let empty = om_new();
+        let mut last = new_ctx(empty, empty, empty);
+        for instr in self.structure(p) {
+            let t = instr.instruction.clone();
+            if t == "FROM" {
+                in_stage = true;
+                last = new_ctx(empty, self.parent_env, empty);
+            }
+            let mut ctx = new_ctx(last.args, last.envs, last.labels);
+            if t == "ARG" or t == "ENV" or t == "LABEL" {
+                let mut values = key_val_dict(t != "ARG" and self.env_replace, last.args, last.envs, instr.value)?;
+                if t == "ARG" and self.env_replace {
+                    if in_stage {
+                        for k in values.keys.clone() {
+                            if top_args.has(k) {
+                                values.set(k, top_args.get(k));
+                            } else if self.build_args.has(k) {
+                                values.set(k, self.build_args.get(k));
+                            }
+                        }
+                    } else {
+                        for i in 0..values.len() {
+                            let key = values.keys[i].clone();
+                            let mut value = values.vals[i].clone();
+                            if self.build_args.has(key) {
+                                value = self.build_args.get(key);
+                            }
+                            top_args.set(key, value);
+                            values.set(key, value);
+                        }
+                    }
+                }
+                if t == "ARG" {
+                    ctx.args.update(values);
+                    ctx.line_args = values;
+                } else if t == "ENV" {
+                    ctx.envs.update(values);
+                    ctx.line_envs = values;
+                } else {
+                    ctx.labels.update(values);
+                    ctx.line_labels = values;
+                }
+            }
+            last = Ctx {
+                args: ctx.args.clone(),
+                envs: ctx.envs.clone(),
+                labels: ctx.labels.clone(),
+                line_args: ctx.line_args.clone(),
+                line_envs: ctx.line_envs.clone(),
+                line_labels: ctx.line_labels.clone(),
+            };
+            out.push(ctx);
+        }
+        Ok(out)
+    }
+
+    fn set_parent_images(ref self, p: ref Pats, parents0: ref Vec[String]) -> Result[(), Exc] {
+        let mut parents = parents0.clone();
+        let mut changed: Vec[Insn] = Vec.new();
+        for instr in self.structure(p) {
+            if instr.instruction != "FROM" {
+                continue;
+            }
+            let (old, stage) = image_from(p, instr.value);
+            let old_image = match old {
+                None => continue,
+                Some(x) => x,
+            };
+            if parents.len() == 0 {
+                return Err(exc("RuntimeError", "not enough parents to match build stages"));
+            }
+            let image = parents.remove(0);
+            if image != old_image {
+                let mut i = instr.clone();
+                i.value = match stage {
+                    Some(s) => f"{image} AS {s}",
+                    None => image.clone(),
+                };
+                i.content = f"FROM {i.value}\n";
+                changed.push(i);
+            }
+        }
+        if parents.len() > 0 {
+            return Err(exc("RuntimeError", "trying to update too many parents for build stages"));
+        }
+        let mut lines = self.lines();
+        let mut k = changed.len();
+        while k > 0 {
+            k -= 1;
+            let i = changed[k].clone();
+            splice(mut lines, i.startline, i.endline + 1, vec_of(i.content));
+        }
+        self.set_lines(lines);
+        Ok(())
+    }
+
+    fn set_baseimage(ref self, p: ref Pats, new_image: ref String) -> Result[(), Exc] {
+        let mut images: Vec[String] = Vec.new();
+        for instr in self.structure(p) {
+            if instr.instruction == "FROM" {
+                let (image, _) = image_from(p, instr.value);
+                if let Some(im) = image {
+                    images.push(im);
+                }
+            }
+        }
+        if images.len() == 0 {
+            return Err(exc("RuntimeError", "No stage defined to set base image on"));
+        }
+        let last = images.len() - 1;
+        images[last] = new_image.clone();
+        self.set_parent_images(p, images)
+    }
+
+    fn set_cmd(ref self, p: ref Pats, value: ref String) -> Result[(), Exc] {
+        let mut cmd: Option[Insn] = None;
+        for i in self.structure(p) {
+            if i.instruction == "FROM" {
+                cmd = None;
+            } else if i.instruction == "CMD" {
+                cmd = Some(i.clone());
+            }
+        }
+        let new_cmd = vec_of(f"CMD {value}");
+        match cmd {
+            Some(c) => self.add_lines_at(p, Anchor.Insn(c), new_cmd, true, false),
+            None => self.add_lines(p, new_cmd, false, false, false),
+        }
+    }
+
+    fn set_instructions(ref self, p: ref Pats, name: ref String, want: ref OMap) -> Result[(), Exc] {
+        let existing = self.getter(p, name)?;
+        for k in existing.keys {
+            if not want.has(k) {
+                self.modify(p, name, k, None)?;
+            }
+        }
+        for i in 0..want.len() {
+            if not existing.has(want.keys[i]) {
+                self.add_instruction(name, want.keys[i], want.vals[i])?;
+            }
+        }
+        for i in 0..want.len() {
+            let k = want.keys[i].clone();
+            if existing.has(k) and want.vals[i] != existing.get(k) {
+                self.modify(p, name, k, Some(want.vals[i].clone()))?;
+            }
+        }
+        Ok(())
+    }
+
+    // _modify_instruction_label_env
+    fn modify(ref self, p: ref Pats, instruction: ref String, key: ref String, value: own Option[String]) -> Result[(), Exc] {
+        let instructions = self.getter(p, instruction)?;
+        if not instructions.has(key) {
+            return Err(exc("KeyError", py_repr_str(f"{key} not in {instruction}s")));
+        }
+        let mut candidates: Vec[Insn] = Vec.new();
+        for insn in self.structure(p) {
+            if insn.instruction == "FROM" {
+                candidates = Vec.new();
+            }
+            if insn.instruction == *instruction {
+                candidates.push(insn.clone());
+            }
+        }
+        let mut content: Option[String] = None;
+        let mut startline: Option[i64] = None;
+        let mut endline: Option[i64] = None;
+        for c in candidates {
+            let mut words = plain_words(c.value);
+            if words.len() == 0 {
+                return Err(index_error());
+            }
+            if not words[0].contains("=") {
+                // LABEL/ENV/ARG name value
+                if plain_dequote(words[0]) == *key {
+                    content = match value.clone() {
+                        None => None,
+                        Some(v) => {
+                            let mut ws: Vec[String] = Vec.new();
+                            ws.push(instruction.clone());
+                            ws.push(words[0].clone());
+                            ws.push(sh_quote(v));
+                            Some(f"{ws.join(" ")}\n")
+                        }
+                    };
+                    startline = Some(c.startline);
+                    endline = Some(c.endline);
+                    break;
+                }
+            } else {
+                // LABEL/ENV/ARG "name"="value"
+                for index in 0..words.len() {
+                    let parts = split_eq(words[index]);
+                    if parts.len() < 2 {
+                        return Err(exc("ValueError", "not enough values to unpack (expected 2, got 1)"));
+                    }
+                    let k = parts[0].clone();
+                    if plain_dequote(k) == *key {
+                        match value.clone() {
+                            None => {
+                                words.remove(index);
+                            }
+                            Some(v) => {
+                                words[index] = f"{k}={sh_quote(v)}";
+                            }
+                        }
+                        content = if words.len() == 0 {
+                            None
+                        } else {
+                            Some(f"{instruction} {words.join(" ")}\n")
+                        };
+                        startline = Some(c.startline);
+                        endline = Some(c.endline);
+                        break;
+                    }
+                }
+            }
+        }
+        let (s, e) = match (startline, endline) {
+            (Some(s), Some(e)) => (s, e),
+            _ => return Err(exc("AssertionError", "")),
+        };
+        if s == 0 or e == 0 {
+            return Err(exc("AssertionError", ""));
+        }
+        let mut lines = self.lines();
+        let none: Vec[String] = Vec.new();
+        splice(mut lines, s, e + 1, none);
+        if let Some(c) = content {
+            if c.len() > 0 {
+                splice(mut lines, s, s, vec_of(c));
+            }
+        }
+        self.set_lines(lines);
+        Ok(())
+    }
+
+    fn delete(ref self, p: ref Pats, instruction: ref String, value: ref Option[String]) -> Result[(), Exc] {
+        if let Some(v) = value {
+            if v.len() > 0 and (*instruction == "LABEL" or *instruction == "ENV" or *instruction == "ARG") {
+                return self.modify(p, instruction, v, None);
+            }
+        }
+        let mut lines = self.lines();
+        let mut deleted = false;
+        let st = self.structure(p);
+        let mut k = st.len();
+        while k > 0 {
+            k -= 1;
+            let insn = st[k].clone();
+            if insn.instruction == *instruction {
+                if let Some(v) = value {
+                    if v.len() > 0 and insn.value != *v {
+                        continue;
+                    }
+                }
+                deleted = true;
+                let none: Vec[String] = Vec.new();
+                splice(mut lines, insn.startline, insn.endline + 1, none);
+            }
+        }
+        if deleted {
+            self.set_lines(lines);
+        }
+        Ok(())
+    }
+
+    fn add_instruction(ref self, instruction: ref String, key: ref String, value: ref String) -> Result[(), Exc] {
+        let mut new_line = f"{instruction} {sh_quote(key)}={sh_quote(value)}\n";
+        let mut lines = self.lines();
+        if lines.len() == 0 {
+            return Err(index_error());
+        }
+        if not lines[lines.len() - 1].ends_with("\n") {
+            new_line = f"\n{new_line}";
+        }
+        lines.push(new_line);
+        self.set_lines(lines);
+        Ok(())
+    }
+
+    fn add_lines(ref self, p: ref Pats, lines0: ref Vec[String], all_stages: bool, at_start: bool, skip_scratch: bool) -> Result[(), Exc] {
+        let mut lines: Vec[String] = Vec.new();
+        for l in lines0 {
+            lines.push(endline(l));
+        }
+        // each stage: (start's endline, start's FROM value)
+        let mut froms: Vec[(i64, String)] = Vec.new();
+        let mut starts: Vec[i64] = Vec.new();
+        for i in self.structure(p) {
+            if i.instruction == "FROM" {
+                froms.push((i.endline, i.value.clone()));
+                starts.push(i.startline);
+            }
+        }
+        if froms.len() == 0 {
+            // no FROM: a fake one before the beginning
+            froms.push((-1, String.new()));
+            starts.push(0);
+        }
+        if not all_stages {
+            let last = froms.len() - 1;
+            let f = froms[last].clone();
+            let s = starts[last];
+            froms = Vec.new();
+            froms.push(f);
+            starts = Vec.new();
+            starts.push(s);
+        }
+        let mut df_lines = self.lines();
+        if df_lines.len() > 0 and not at_start {
+            let last = df_lines.len() - 1;
+            df_lines[last] = endline(df_lines[last]);
+        }
+        let end_start = df_lines.len() + 1;
+        let mut stage = froms.len();
+        while stage > 0 {
+            stage -= 1;
+            let finish_start = if stage + 1 < froms.len() { starts[stage + 1] } else { end_start };
+            let linenum = if at_start { froms[stage].0 + 1 } else { finish_start };
+            let (image, _) = image_from(p, froms[stage].1);
+            let is_scratch = match image {
+                Some(im) => im == "scratch",
+                None => false,
+            };
+            if skip_scratch and is_scratch {
+                continue;
+            }
+            splice(mut df_lines, linenum, linenum, lines);
+        }
+        self.set_lines(df_lines);
+        Ok(())
+    }
+
+    fn add_lines_at(ref self, p: ref Pats, anchor0: own Anchor, lines: ref Vec[String], replace: bool, after: bool) -> Result[(), Exc] {
+        let mut df_lines = self.lines();
+        let mut anchor = 0;
+        match anchor0 {
+            Anchor.Line(n) => {
+                if not (0 <= n and n < df_lines.len()) {
+                    return Err(exc("AssertionError", ""));
+                }
+                if replace {
+                    df_lines.remove(n);
+                }
+                anchor = n;
+            }
+            Anchor.Insn(i) => {
+                let mut found = false;
+                for s in self.structure(p) {
+                    if insn_eq(s, i) {
+                        found = true;
+                    }
+                }
+                if not found {
+                    return Err(exc("AssertionError", f"Current structure does not match: {insn_repr(i)}"));
+                }
+                if replace {
+                    let none: Vec[String] = Vec.new();
+                    splice(mut df_lines, i.startline, i.endline + 1, none);
+                }
+                anchor = if after { i.endline } else { i.startline };
+            }
+            Anchor.Text(t) => {
+                let mut last = -1;
+                for k in 0..df_lines.len() {
+                    if df_lines[k] == t {
+                        last = k;
+                    }
+                }
+                if last < 0 {
+                    return Err(exc("RuntimeError", f"Cannot find line in the build file:\n{t}"));
+                }
+                anchor = last;
+                if replace {
+                    df_lines.remove(anchor);
+                }
+            }
+        }
+        if after {
+            if anchor < 0 or anchor >= df_lines.len() {
+                return Err(index_error());
+            }
+            df_lines[anchor] = endline(df_lines[anchor]);
+            anchor += 1;
+        }
+        let mut new_lines: Vec[String] = Vec.new();
+        for l in lines {
+            new_lines.push(endline(l));
+        }
+        splice(mut df_lines, anchor, anchor, new_lines);
+        self.set_lines(df_lines);
+        Ok(())
+    }
+}
+
+enum Anchor {
+    Line(i64),
+    Insn(Insn),
+    Text(String),
+}
+
+fn endline(line: ref String) -> String {
+    f"{py_rstrip(line)}\n"
+}
+
+fn vec_of(s: ref String) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(s.clone());
+    v
+}
+
+// lines[a:b] = new, with Python's slice clipping.
+fn splice(lines: mut ref Vec[String], a0: i64, b0: i64, new: ref Vec[String]) {
+    let n = lines.len();
+    let a = if a0 < 0 { 0 } else if a0 > n { n } else { a0 };
+    let mut b = if b0 > n { n } else { b0 };
+    if b < a {
+        b = a;
+    }
+    for _ in a..b {
+        lines.remove(a);
+    }
+    let mut k = a;
+    for l in new {
+        lines.insert(k, l.clone());
+        k += 1;
+    }
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+// CR shows as <CR>, so expected.out stays a plain LF text file.
+fn raw(out: mut ref String, text0: ref String) {
+    let text = text0.replace("\r", "<CR>");
+    out.push_str(text);
+    if text.len() > 0 and not text.ends_with("\n") {
+        out.push_str("\n\\ no newline at end\n");
+    }
+}
+
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+fn pairs(words: ref Vec[String]) -> OMap {
+    let mut d = om_new();
+    for w in words {
+        let kv = split_eq(w);
+        d.set(kv[0], kv[1]);
+    }
+    d
+}
+
+// Copies the job's Dockerfile to data/work/Dockerfile and opens a parser
+// there, with --build-arg, --parent-env and --no-env-replace.
+fn open_work(name: ref String, words: ref Vec[String]) -> Df {
+    let _ = fs.create_dir_all("data/work");
+    let _ = fs.write("data/work/Dockerfile", read_text(name));
+    let mut build_args = om_new();
+    let mut parent_env = om_new();
+    let mut env_replace = true;
+    let mut i = 0;
+    while i < words.len() {
+        if words[i] == "--build-arg" {
+            build_args.update(pairs(vec_of(words[i + 1])));
+            i += 2;
+        } else if words[i] == "--parent-env" {
+            parent_env.update(pairs(vec_of(words[i + 1])));
+            i += 2;
+        } else {
+            env_replace = false;
+            i += 1;
+        }
+    }
+    Df { path: "data/work/Dockerfile".to_string(), env_replace: env_replace, parent_env: parent_env, build_args: build_args }
+}
+
+fn tail(args: ref Vec[String], from: i64) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in from..args.len() {
+        out.push(args[i].clone());
+    }
+    out
+}
+
+fn list_repr(xs: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in xs {
+        parts.push(py_repr_str(x));
+    }
+    f"[{parts.join(", ")}]"
+}
+
+fn opt_repr(x: ref Option[String]) -> String {
+    match x {
+        Some(s) => py_repr_str(s),
+        None => "None".to_string(),
+    }
+}
+
+fn info_job(p: ref Pats, d: ref Df, out: mut ref String) {
+    match d.parent_images(p) {
+        Ok(v) => emit(mut out, f"parent_images: {list_repr(v)}"),
+        Err(e) => emit(mut out, f"parent_images: {err_line(e)}"),
+    }
+    match d.parent_images(p) {
+        Ok(v) => emit(mut out, if v.len() > 1 { "is_multistage: True" } else { "is_multistage: False" }),
+        Err(e) => emit(mut out, f"is_multistage: {err_line(e)}"),
+    }
+    match d.baseimage(p) {
+        Ok(v) => emit(mut out, f"baseimage: {opt_repr(v)}"),
+        Err(e) => emit(mut out, f"baseimage: {err_line(e)}"),
+    }
+    emit(mut out, f"cmd: {opt_repr(d.cmd(p))}");
+    for name in ["LABEL", "ENV", "ARG"] {
+        let prop = if name == "LABEL" { "labels" } else if name == "ENV" { "envs" } else { "args" };
+        match d.getter(p, name.to_string()) {
+            Ok(m) => emit(mut out, f"{prop}: {m.repr()}"),
+            Err(e) => emit(mut out, f"{prop}: {err_line(e)}"),
+        }
+    }
+}
+
+fn read_only(p: ref Pats, op: ref String, args: ref Vec[String], out: mut ref String) {
+    let d = open_work(args[0], tail(args, 1));
+    if op == "structure" {
+        for i in d.structure(p) {
+            emit(mut out, insn_repr(i));
+        }
+    } else if op == "json" {
+        emit(mut out, d.json(p));
+    } else if op == "info" {
+        info_job(p, d, mut out);
+    } else {
+        match d.context_structure(p) {
+            Ok(cs) => {
+                for c in cs {
+                    emit(mut out, f"args={c.args.repr()} envs={c.envs.repr()} labels={c.labels.repr()}");
+                    emit(mut out, f"  line_args={c.line_args.repr()} line_envs={c.line_envs.repr()} line_labels={c.line_labels.repr()}");
+                }
+            }
+            Err(e) => emit(mut out, err_line(e)),
+        }
+    }
+}
+
+fn split_lines(words: ref Vec[String]) -> (Vec[String], Vec[String]) {
+    let mut opts: Vec[String] = Vec.new();
+    let mut lines: Vec[String] = Vec.new();
+    let mut seen = false;
+    for w in words {
+        if not seen and w == "--" {
+            seen = true;
+        } else if seen {
+            lines.push(w.clone());
+        } else {
+            opts.push(w.clone());
+        }
+    }
+    (opts, lines)
+}
+
+fn has(xs: ref Vec[String], s: Str) -> bool {
+    for x in xs {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn label_name(op: ref String) -> String {
+    if op == "labels" { "LABEL".to_string() } else if op == "envs" { "ENV".to_string() } else { "ARG".to_string() }
+}
+
+fn run_change(p: ref Pats, d: ref Df, op: ref String, rest: ref Vec[String]) -> Result[(), Exc] {
+    if op == "baseimage" {
+        d.set_baseimage(p, rest[0])
+    } else if op == "parents" {
+        d.set_parent_images(p, rest)
+    } else if op == "cmd" {
+        d.set_cmd(p, rest[0])
+    } else if op == "labels" or op == "envs" or op == "args" {
+        d.set_instructions(p, label_name(op), pairs(rest))
+    } else if op == "label" {
+        let mut m = d.getter(p, "LABEL")?;
+        m.set(rest[0], rest[1]);
+        d.set_instructions(p, "LABEL", m)
+    } else if op == "unlabel" {
+        let mut m = d.getter(p, "LABEL")?;
+        if not m.has(rest[0]) {
+            return Err(exc("KeyError", py_repr_str(rest[0])));
+        }
+        m.remove(rest[0]);
+        d.set_instructions(p, "LABEL", m)
+    } else if op == "add" {
+        let (opts, lines) = split_lines(rest);
+        d.add_lines(p, lines, has(opts, "all_stages"), has(opts, "at_start"), has(opts, "skip_scratch"))
+    } else if op == "add-at" {
+        let (opts, lines) = split_lines(rest);
+        let kind = opts[0].clone();
+        let n = match i64.parse(opts[1]) {
+            Ok(n) => n,
+            Err(_) => 0,
+        };
+        let anchor = if kind == "line" {
+            Anchor.Line(n)
+        } else if kind == "insn" {
+            let st = d.structure(p);
+            Anchor.Insn(st[n].clone())
+        } else {
+            Anchor.Text(f"{opts[1]}\n")
+        };
+        let flags = tail(opts, 2);
+        d.add_lines_at(p, anchor, lines, has(flags, "replace"), has(flags, "after"))
+    } else {
+        let value = if rest.len() > 1 { Some(rest[1].clone()) } else { None };
+        d.delete(p, rest[0], value)
+    }
+}
+
+fn change(p: ref Pats, op: ref String, args: ref Vec[String], out: mut ref String) {
+    let none: Vec[String] = Vec.new();
+    let d = open_work(args[0], none);
+    if let Err(e) = run_change(p, d, op, tail(args, 1)) {
+        emit(mut out, err_line(e));
+    }
+    raw(mut out, d.content());
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let p = patterns();
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|x| x.to_string()).collect();
+        emit(mut out, f"== {job.join(" ")}");
+        let op = job[0].clone();
+        let args = tail(job, 1);
+        if op == "structure" or op == "json" or op == "info" or op == "context" {
+            read_only(p, op, args, mut out);
+        } else {
+            change(p, op, args, mut out);
+        }
+    }
+    let _ = fs.remove_file("data/work/Dockerfile");
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("FROM alpine\n");
+    t.push_str("LABEL a=1 b\n");
+    v.push(DataFile { path: "badlabel.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("FROM alpine\n");
+    t.push_str("RUN apk add --no-cache \\\n");
+    t.push_str("    curl \\\n");
+    t.push_str("\n");
+    t.push_str("    git\n");
+    t.push_str("RUN echo one \\\n");
+    t.push_str("# a comment inside\n");
+    t.push_str("    two\n");
+    t.push_str("RUN echo trailing \\\n");
+    t.push_str("    spaces\n");
+    t.push_str("LABEL a=1 \\\n");
+    t.push_str("      b=2\n");
+    v.push(DataFile { path: "continuation.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("FROM node:20\r\n");
+    t.push_str("WORKDIR /app\r\n");
+    t.push_str("COPY package.json .\r\n");
+    t.push_str("RUN npm ci \\\r\n");
+    t.push_str("    --omit=dev\r\n");
+    t.push_str("CMD [\"node\", \"server.js\"]\r\n");
+    v.push(DataFile { path: "crlf.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("FROM\n");
+    t.push_str("RUN\n");
+    t.push_str("\n");
+    t.push_str("  WORKDIR   /tmp\n");
+    t.push_str("#comment without space\n");
+    t.push_str("   # indented comment\n");
+    t.push_str("ENTRYPOINT [\"sh\"]\n");
+    t.push_str("FROM --platform=linux/amd64\n");
+    t.push_str("FROM --platform=linux/arm64 debian:12 AS base\n");
+    t.push_str("FROM debian:12 as lower\n");
+    t.push_str("CMD last");
+    v.push(DataFile { path: "edge.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "empty.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("FROM busybox\n");
+    t.push_str("ENV A=one B=\"two words\" C='single $A' D=\\$A E=${A}-${B} F=$A$B G=${MISSING}x\n");
+    t.push_str("ENV H=\"say \\\"hi\\\"\" I=back\\\\slash J=tab\\ sep K=${A\n");
+    t.push_str("LABEL \"quoted key\"=v1 plain=a\\ b\n");
+    t.push_str("ENV NAME first value\n");
+    t.push_str("ENV LONG  spaced   value\n");
+    t.push_str("RUN echo $A\n");
+    v.push(DataFile { path: "escapes.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# syntax=docker/dockerfile:1.4\n");
+    t.push_str("ARG GO_VERSION=1.22\n");
+    t.push_str("ARG BASE=alpine:3.19\n");
+    t.push_str("FROM --platform=$BUILDPLATFORM golang:${GO_VERSION} AS build\n");
+    t.push_str("WORKDIR /src\n");
+    t.push_str("COPY go.mod go.sum ./\n");
+    t.push_str("RUN go mod download\n");
+    t.push_str("COPY . .\n");
+    t.push_str("ARG VERSION=dev\n");
+    t.push_str("RUN CGO_ENABLED=0 go build \\\n");
+    t.push_str("    -ldflags \"-X main.version=${VERSION}\" \\\n");
+    t.push_str("    -o /out/app ./cmd/app\n");
+    t.push_str("\n");
+    t.push_str("FROM ${BASE}\n");
+    t.push_str("ARG VERSION\n");
+    t.push_str("ARG BASE\n");
+    t.push_str("LABEL org.opencontainers.image.title=\"billing api\" \\\n");
+    t.push_str("      org.opencontainers.image.version=$VERSION maintainer=ops@example.com\n");
+    t.push_str("ENV APP_HOME=/srv/app PATH=/srv/app/bin:$PATH\n");
+    t.push_str("COPY --from=build /out/app $APP_HOME/bin/app\n");
+    t.push_str("EXPOSE 8080\n");
+    t.push_str("USER 65534\n");
+    t.push_str("HEALTHCHECK --interval=30s CMD wget -qO- http://localhost:8080/health || exit 1\n");
+    t.push_str("CMD [\"app\", \"--port\", \"8080\"]\n");
+    v.push(DataFile { path: "go.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("structure\tbadlabel.Dockerfile\n");
+    t.push_str("structure\tcontinuation.Dockerfile\n");
+    t.push_str("structure\tcrlf.Dockerfile\n");
+    t.push_str("structure\tedge.Dockerfile\n");
+    t.push_str("structure\tempty.Dockerfile\n");
+    t.push_str("structure\tescapes.Dockerfile\n");
+    t.push_str("structure\tgo.Dockerfile\n");
+    t.push_str("structure\tlabelfirst.Dockerfile\n");
+    t.push_str("structure\tlegacy.Dockerfile\n");
+    t.push_str("structure\tnofrom.Dockerfile\n");
+    t.push_str("structure\tpython.Dockerfile\n");
+    t.push_str("structure\tstages.Dockerfile\n");
+    t.push_str("structure\tunicode.Dockerfile\n");
+    t.push_str("structure\twindows.Dockerfile\n");
+    t.push_str("json\tbadlabel.Dockerfile\n");
+    t.push_str("json\tcontinuation.Dockerfile\n");
+    t.push_str("json\tcrlf.Dockerfile\n");
+    t.push_str("json\tedge.Dockerfile\n");
+    t.push_str("json\tempty.Dockerfile\n");
+    t.push_str("json\tescapes.Dockerfile\n");
+    t.push_str("json\tgo.Dockerfile\n");
+    t.push_str("json\tlabelfirst.Dockerfile\n");
+    t.push_str("json\tlegacy.Dockerfile\n");
+    t.push_str("json\tnofrom.Dockerfile\n");
+    t.push_str("json\tpython.Dockerfile\n");
+    t.push_str("json\tstages.Dockerfile\n");
+    t.push_str("json\tunicode.Dockerfile\n");
+    t.push_str("json\twindows.Dockerfile\n");
+    t.push_str("info\tbadlabel.Dockerfile\n");
+    t.push_str("info\tcontinuation.Dockerfile\n");
+    t.push_str("info\tcrlf.Dockerfile\n");
+    t.push_str("info\tedge.Dockerfile\n");
+    t.push_str("info\tempty.Dockerfile\n");
+    t.push_str("info\tescapes.Dockerfile\n");
+    t.push_str("info\tgo.Dockerfile\n");
+    t.push_str("info\tlabelfirst.Dockerfile\n");
+    t.push_str("info\tlegacy.Dockerfile\n");
+    t.push_str("info\tnofrom.Dockerfile\n");
+    t.push_str("info\tpython.Dockerfile\n");
+    t.push_str("info\tstages.Dockerfile\n");
+    t.push_str("info\tunicode.Dockerfile\n");
+    t.push_str("info\twindows.Dockerfile\n");
+    t.push_str("context\tbadlabel.Dockerfile\n");
+    t.push_str("context\tcontinuation.Dockerfile\n");
+    t.push_str("context\tcrlf.Dockerfile\n");
+    t.push_str("context\tedge.Dockerfile\n");
+    t.push_str("context\tempty.Dockerfile\n");
+    t.push_str("context\tescapes.Dockerfile\n");
+    t.push_str("context\tgo.Dockerfile\n");
+    t.push_str("context\tlabelfirst.Dockerfile\n");
+    t.push_str("context\tlegacy.Dockerfile\n");
+    t.push_str("context\tnofrom.Dockerfile\n");
+    t.push_str("context\tpython.Dockerfile\n");
+    t.push_str("context\tstages.Dockerfile\n");
+    t.push_str("context\tunicode.Dockerfile\n");
+    t.push_str("context\twindows.Dockerfile\n");
+    t.push_str("info\tgo.Dockerfile\t--build-arg\tVERSION=1.4.2\t--build-arg\tBASE=gcr.io/distroless/static\n");
+    t.push_str("info\tgo.Dockerfile\t--no-env-replace\n");
+    t.push_str("context\tgo.Dockerfile\t--build-arg\tVERSION=1.4.2\n");
+    t.push_str("info\tpython.Dockerfile\t--parent-env\tPATH=/usr/local/bin\t--parent-env\tAPP_DIR=/srv\n");
+    t.push_str("context\tpython.Dockerfile\n");
+    t.push_str("info\tstages.Dockerfile\t--build-arg\tPYTHON=3.12\t--build-arg\tEXTRA=gpu\n");
+    t.push_str("context\tstages.Dockerfile\t--build-arg\tPYTHON=3.12\n");
+    t.push_str("info\tescapes.Dockerfile\n");
+    t.push_str("context\tescapes.Dockerfile\t--no-env-replace\n");
+    t.push_str("info\tunicode.Dockerfile\n");
+    t.push_str("baseimage\tgo.Dockerfile\talpine:3.20\n");
+    t.push_str("parents\tgo.Dockerfile\tgolang:1.23\talpine:3.20\n");
+    t.push_str("parents\tgo.Dockerfile\tgolang:1.22\t${BASE}\n");
+    t.push_str("parents\tgo.Dockerfile\tonly-one\n");
+    t.push_str("parents\tstages.Dockerfile\ta\tb\tc\td\n");
+    t.push_str("parents\tedge.Dockerfile\tx\ty\tz\tw\n");
+    t.push_str("baseimage\tnofrom.Dockerfile\talpine\n");
+    t.push_str("cmd\tgo.Dockerfile\t[\"app\", \"--port\", \"9090\"]\n");
+    t.push_str("cmd\tstages.Dockerfile\tpython -m app --debug\n");
+    t.push_str("cmd\tnofrom.Dockerfile\techo bye\n");
+    t.push_str("cmd\tlegacy.Dockerfile\t/bin/bash\n");
+    t.push_str("labels\tpython.Dockerfile\tdescription=Order service\tteam=payments\tcom.example.vendor=ACME Inc.\n");
+    t.push_str("labels\tgo.Dockerfile\n");
+    t.push_str("labels\tstages.Dockerfile\tpython=3.12\textra=\n");
+    t.push_str("labels\tlabelfirst.Dockerfile\tfirst=no\n");
+    t.push_str("envs\tpython.Dockerfile\tAPP_DIR=/srv/app\tNEW=it's new\n");
+    t.push_str("envs\twindows.Dockerfile\tTOOLS_DIR=D:\\tools\n");
+    t.push_str("args\tstages.Dockerfile\tPYTHON=3.12\n");
+    t.push_str("label\tpython.Dockerfile\tversion\t2.2.0\n");
+    t.push_str("label\tlegacy.Dockerfile\trelease\t2020 final\n");
+    t.push_str("label\tempty.Dockerfile\ta\tb\n");
+    t.push_str("unlabel\tpython.Dockerfile\towner\n");
+    t.push_str("unlabel\tpython.Dockerfile\tmissing\n");
+    t.push_str("unlabel\tcontinuation.Dockerfile\ta\n");
+    t.push_str("add\tgo.Dockerfile\t--\tUSER root\tRUN apk add curl   \n");
+    t.push_str("add\tgo.Dockerfile\tall_stages\t--\tLABEL stage=yes\n");
+    t.push_str("add\tstages.Dockerfile\tall_stages\tskip_scratch\t--\tENV TZ=UTC\n");
+    t.push_str("add\tstages.Dockerfile\tall_stages\tat_start\t--\tARG CACHE_BUST\n");
+    t.push_str("add\tnofrom.Dockerfile\tat_start\t--\tFROM alpine\n");
+    t.push_str("add\tempty.Dockerfile\t--\tFROM alpine\n");
+    t.push_str("add\tedge.Dockerfile\t--\tRUN true\n");
+    t.push_str("add-at\tpython.Dockerfile\tline\t2\t--\tARG BUILD_DATE\n");
+    t.push_str("add-at\tpython.Dockerfile\tline\t2\treplace\t--\tLABEL replaced=yes\n");
+    t.push_str("add-at\tpython.Dockerfile\tline\t40\t--\tRUN false\n");
+    t.push_str("add-at\tpython.Dockerfile\tinsn\t7\tafter\t--\tRUN echo after\n");
+    t.push_str("add-at\tpython.Dockerfile\tinsn\t7\treplace\t--\tRUN pip install -r requirements.txt\tRUN rm -rf /root/.cache\n");
+    t.push_str("add-at\tgo.Dockerfile\ttext\tEXPOSE 8080\tafter\t--\tEXPOSE 9090\n");
+    t.push_str("add-at\tgo.Dockerfile\ttext\tCOPY . .\treplace\t--\tCOPY src/ .\n");
+    t.push_str("add-at\tgo.Dockerfile\ttext\tEXPOSE 1\t--\tEXPOSE 2\n");
+    t.push_str("delete\tgo.Dockerfile\tCOPY\n");
+    t.push_str("delete\tgo.Dockerfile\tRUN\tgo mod download\n");
+    t.push_str("delete\tpython.Dockerfile\tLABEL\towner\n");
+    t.push_str("delete\tpython.Dockerfile\tENV\tPIP_NO_CACHE_DIR\n");
+    t.push_str("delete\tstages.Dockerfile\tARG\tPYTHON\n");
+    t.push_str("delete\tlegacy.Dockerfile\tMAINTAINER\n");
+    t.push_str("delete\tlegacy.Dockerfile\tCOMMENT\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("LABEL first=yes\n");
+    t.push_str("FROM alpine\n");
+    t.push_str("LABEL second=yes\n");
+    v.push(DataFile { path: "labelfirst.Dockerfile".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("from ubuntu:22.04\n");
+    t.push_str("maintainer Jane Doe <jane@example.com>\n");
+    t.push_str("run apt-get update && \\\n");
+    t.push_str("    apt-get install -y curl\n");
+    t.push_str("\n");
+    t.push_str("env DEBIAN_FRONTEND noninteractive\n");
+    t.push_str("label release=\"2019.10\" stage=old\n");
+    t.push_str("Expose 22\n");
+    t.push_str("cmd /usr/sbin/sshd -D\n");
+    v.push(DataFile { path: "legacy.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# just notes\n");
+    t.push_str("RUN echo hi\n");
+    v.push(DataFile { path: "nofrom.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("FROM python:3.12-slim\n");
+    t.push_str("\n");
+    t.push_str("LABEL description=\"Order service\" version=\"2.1.0\"\n");
+    t.push_str("LABEL \"com.example.vendor\"=\"ACME Inc.\" owner='Data Team'\n");
+    t.push_str("\n");
+    t.push_str("ENV PYTHONDONTWRITEBYTECODE 1\n");
+    t.push_str("ENV PIP_NO_CACHE_DIR=off \\\n");
+    t.push_str("    APP_DIR=/app\n");
+    t.push_str("ENV GREETING hello world from $APP_DIR\n");
+    t.push_str("\n");
+    t.push_str("WORKDIR $APP_DIR\n");
+    t.push_str("COPY requirements.txt .\n");
+    t.push_str("RUN pip install -r requirements.txt \\\n");
+    t.push_str("    # pinned in requirements.txt\n");
+    t.push_str("    && rm -rf /root/.cache\n");
+    t.push_str("\n");
+    t.push_str("COPY . .\n");
+    t.push_str("EXPOSE 8000\n");
+    t.push_str("ENTRYPOINT [\"gunicorn\"]\n");
+    t.push_str("CMD [\"-b\", \"0.0.0.0:8000\", \"app:wsgi\"]\n");
+    v.push(DataFile { path: "python.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("ARG PYTHON=3.11\n");
+    t.push_str("ARG REGISTRY=registry.example.com\n");
+    t.push_str("FROM $REGISTRY/python:$PYTHON AS deps\n");
+    t.push_str("ENV PIP_DISABLE_PIP_VERSION_CHECK=1\n");
+    t.push_str("ARG PYTHON\n");
+    t.push_str("RUN pip wheel -r requirements.txt -w /wheels\n");
+    t.push_str("CMD [\"deps\"]\n");
+    t.push_str("\n");
+    t.push_str("FROM scratch AS assets\n");
+    t.push_str("COPY static /static\n");
+    t.push_str("\n");
+    t.push_str("FROM $REGISTRY/python:$PYTHON-slim\n");
+    t.push_str("ARG PYTHON\n");
+    t.push_str("ARG EXTRA\n");
+    t.push_str("LABEL python=$PYTHON extra=${EXTRA}\n");
+    t.push_str("COPY --from=deps /wheels /wheels\n");
+    t.push_str("COPY --from=assets /static /srv/static\n");
+    t.push_str("CMD python -m app\n");
+    v.push(DataFile { path: "stages.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("FROM alpine\n");
+    t.push_str("LABEL title=\"café ☕\" author=Zoë\n");
+    t.push_str("ENV GREETING=héllo\n");
+    v.push(DataFile { path: "unicode.Dockerfile".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# escape=`\n");
+    t.push_str("FROM mcr.microsoft.com/windows/servercore:ltsc2022\n");
+    t.push_str("SHELL [\"powershell\", \"-Command\"]\n");
+    t.push_str("ENV TOOLS_DIR C:\\tools\n");
+    t.push_str("RUN New-Item -ItemType Directory -Path $env:TOOLS_DIR ; `\n");
+    t.push_str("    Invoke-WebRequest https://example.com/tool.zip -OutFile tool.zip\n");
+    t.push_str("COPY app\\ C:\\app\\\n");
+    t.push_str("WORKDIR C:\\app\n");
+    t.push_str("CMD [\"C:\\\\app\\\\server.exe\"]\n");
+    v.push(DataFile { path: "windows.Dockerfile".to_string(), hex: false, body: t });
+}
