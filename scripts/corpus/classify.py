@@ -60,7 +60,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from corpus_lib import ROOT, entries, read_toml, write_toml  # noqa: E402
+from corpus_lib import ROOT, entries, execute, read_toml, write_toml  # noqa: E402
 
 PASSING = {"a", "b", "c"}
 # expected.out that states the spec rather than a legacy record: a core pin,
@@ -95,6 +95,15 @@ def sh(args, cwd, env, timeout):
     try:
         return subprocess.run(args, cwd=cwd, env=env, capture_output=True, timeout=timeout,
                               stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def mir_run(karac, d, env, timeout, driver):
+    """`karac __mir-run`, served through the entry's `driver.toml` when it has
+    one, as `run.py` does, so a server is judged on its transcript."""
+    try:
+        return execute([karac, "__mir-run", "source.kara"], d, env, timeout, driver)
     except subprocess.TimeoutExpired:
         return None
 
@@ -214,6 +223,7 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
         return {**out, "class": "unknown", "bucket": "skip:" + (meta.get("note", "")[:40] or "expect=skip")}
     env = dict(os.environ)
     env.update({"KARAC_HASH_SEED": str(args.seed), **{k: str(v) for k, v in meta.get("env", {}).items()}})
+    driver = read_toml(entry / "driver.toml") or None
     with tempfile.TemporaryDirectory(prefix="classify-") as tmp:
         d = Path(tmp)
         (d / "source.kara").write_text(src)
@@ -224,7 +234,7 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
             codes = [e.get("code") for e in errs]
             if errs and (want in ("", "codegen") or want in codes):
                 return {**out, "class": "a", "bucket": "a:refused"}
-            r = sh([args.karac, "__mir-run", "source.kara"], d, env, args.timeout)
+            r = mir_run(args.karac, d, env, args.timeout, driver)
             # A MIR refusal is a static check (move or borrow check), not a
             # construct the builder cannot lower or a run-time failure.
             if r is not None and r.returncode == 3 and b"error[mir]: build" not in r.stderr \
@@ -253,7 +263,7 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
             fixed = (d / "source.kara").read_text()
             if fixed == src:
                 return {**out, "class": "e", "bucket": "b-fix-noop:" + codes[0]}
-        r = sh([args.karac, "__mir-run", "source.kara"], d, env, args.timeout)
+        r = mir_run(args.karac, d, env, args.timeout, driver)
     res = {**out, "fixed": fixed}
     if r is None:
         return {**res, "class": "e", "bucket": "timeout"}
