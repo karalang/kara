@@ -6818,3 +6818,52 @@ fn main() {
     let run = Command::new(&exe).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
 }
+
+/// Float classification (B-2026-10-20-20), as Rust's `f64`/`f32`:
+/// `is_nan`, `is_infinite`, `is_finite`, `is_sign_negative` and
+/// `is_sign_positive` over a NaN, both infinities, both zeros and ordinary
+/// values, on the MIR interpreter and compiled at -O0 and -O2.
+#[test]
+fn mir_float_classification_matches_rust() {
+    const SRC: &str = r#"fn show(x: f64) -> String {
+    f"{x.is_nan()} {x.is_infinite()} {x.is_finite()} {x.is_sign_negative()} {x.is_sign_positive()}"
+}
+fn show32(x: f32) -> String {
+    f"{x.is_nan()} {x.is_infinite()} {x.is_finite()} {x.is_sign_negative()} {x.is_sign_positive()}"
+}
+fn main() {
+    let zero = 0.0;
+    let xs: Vec[f64] = vec![2.0, -3.5, f64.NAN, f64.INFINITY, -1.0 / zero, -0.0, 0.0];
+    for x in xs.iter() {
+        println(show(*x));
+    }
+    let ys: Vec[f32] = vec![1.5f32, f32.NAN, -f32.INFINITY, -0.0f32];
+    for y in ys.iter() {
+        println(show32(*y));
+    }
+    let bad = zero / zero;
+    if bad.is_nan() {
+        println("nan");
+    }
+}
+"#;
+    let want = "false false true false true\n\
+         false false true true false\n\
+         true false false false true\n\
+         false true false false true\n\
+         false true false true false\n\
+         false false true true false\n\
+         false false true false true\n\
+         false false true false true\n\
+         true false false false true\n\
+         false true false true false\n\
+         false false true true false\n\
+         nan\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

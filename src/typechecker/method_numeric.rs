@@ -49,6 +49,11 @@ pub(super) const FLOAT_METHODS: &[&str] = &[
     "floor",
     "fract",
     "hypot",
+    "is_finite",
+    "is_infinite",
+    "is_nan",
+    "is_sign_negative",
+    "is_sign_positive",
     "ln",
     "ln_1p",
     "log10",
@@ -340,6 +345,13 @@ impl<'a> super::TypeChecker<'a> {
         // `u32` (the value rounded to f32, then its 32-bit pattern). The width
         // is in the method name so no receiver-width recovery is needed.
         if args.is_empty() && matches!(receiver_for_lookup, Type::Float(_)) {
+            // IEEE-754 classification (B-2026-10-20-20), as Rust's.
+            if matches!(
+                method,
+                "is_nan" | "is_infinite" | "is_finite" | "is_sign_negative" | "is_sign_positive"
+            ) {
+                return Some(Type::Bool);
+            }
             if method == "to_bits" {
                 return Some(Type::UInt(UIntSize::U64));
             }

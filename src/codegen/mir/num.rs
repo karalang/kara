@@ -1619,6 +1619,51 @@ impl<'ctx> Cx<'ctx, '_> {
         })
     }
 
+    /// IEEE-754 classification (B-2026-10-20-20), as Rust's: NaN is the
+    /// unordered self-compare, infinity compares `|x|` with `inf`, and the
+    /// sign is the sign bit, so a NaN or a zero has one too.
+    fn float_class(&mut self, method: &str, x: FloatValue<'ctx>, dest: &Place) -> R<()> {
+        use inkwell::{FloatPredicate as F, IntPredicate as I};
+        let ft = x.get_type();
+        let inf = ft.const_float(f64::INFINITY);
+        let bit = match method {
+            "is_nan" => self
+                .builder
+                .build_float_compare(F::UNO, x, x, "")
+                .map_err(e)?,
+            "is_infinite" | "is_finite" => {
+                let a = self.float_intrinsic("fabs", &[x])?;
+                let p = if method == "is_infinite" {
+                    F::OEQ
+                } else {
+                    F::ONE
+                };
+                self.builder.build_float_compare(p, a, inf, "").map_err(e)?
+            }
+            _ => {
+                let it = if ft == self.llcx.f32_type() {
+                    self.llcx.i32_type()
+                } else {
+                    self.llcx.i64_type()
+                };
+                let n = self
+                    .builder
+                    .build_bit_cast(x, it, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let p = if method == "is_sign_negative" {
+                    I::SLT
+                } else {
+                    I::SGE
+                };
+                self.builder
+                    .build_int_compare(p, n, it.const_zero(), "")
+                    .map_err(e)?
+            }
+        };
+        self.store_bool(dest, bit)
+    }
+
     fn float_op(
         &mut self,
         ft: FloatTy,
@@ -1640,6 +1685,14 @@ impl<'ctx> Cx<'ctx, '_> {
                 return Ok(None);
             };
             return self.float_partial_cmp(x, y, dest).map(Some);
+        }
+        if args.len() == 1
+            && matches!(
+                method,
+                "is_nan" | "is_infinite" | "is_finite" | "is_sign_negative" | "is_sign_positive"
+            )
+        {
+            return self.float_class(method, x, dest).map(Some);
         }
         let f64t = self.llcx.f64_type();
         let f32t = self.llcx.f32_type();

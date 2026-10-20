@@ -2347,6 +2347,23 @@ impl<'a> Interp<'a> {
                     _ => err(format!("{name}: wrong arguments")),
                 }
             }
+            // IEEE-754 classification (B-2026-10-20-20). An `f32` is held
+            // widened, which keeps its NaN, infinity and sign.
+            (
+                _,
+                "is_nan" | "is_infinite" | "is_finite" | "is_sign_negative" | "is_sign_positive",
+            ) if matches!(args.as_slice(), [Value::Float(_)]) => {
+                let [Value::Float(f)] = args.as_slice() else {
+                    unreachable!()
+                };
+                Ok(Value::Bool(match method {
+                    "is_nan" => f.is_nan(),
+                    "is_infinite" => f.is_infinite(),
+                    "is_finite" => f.is_finite(),
+                    "is_sign_negative" => f.is_sign_negative(),
+                    _ => f.is_sign_positive(),
+                }))
+            }
             (_, m)
                 if matches!(args.first(), Some(Value::Float(_)))
                     && (float_unary(m, 0.0, true).is_some()
