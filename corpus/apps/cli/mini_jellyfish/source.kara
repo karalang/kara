@@ -1,0 +1,3345 @@
+// mini_jellyfish: jellyfish 0.11.2, James Turk's approximate and
+// phonetic string matching, as record linkage, search and "did you mean"
+// code in Python uses it. It reads the job list from data/jobs.tsv:
+// jellyfish's own test vectors, names to encode and pairs to compare, and
+// four programs built on it (a customer-record deduplicator, a command
+// suggester, a surname search and a fuzzy product lookup).
+//
+// The port follows jellyfish's pure-Python implementation, line for line,
+// on strings as lists of characters, the way Python indexes a str. NFKD
+// comes from nfkd_table(), generated from Python's unicodedata.
+
+fn chars_of(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn from_chars(c: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    for i in lo..hi {
+        s.push(c[i]);
+    }
+    s
+}
+
+fn str_of(c: ref Vec[char]) -> String {
+    from_chars(c, 0, c.len())
+}
+
+fn nfkd(t: ref Map[char, String], s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        match t.get(c) {
+            Some(d) => out.push_str(d),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
+fn in_set(c: char, set: Str) -> bool {
+    for x in set.chars() {
+        if x == c {
+            return true;
+        }
+    }
+    false
+}
+
+fn min_i(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn max_i(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+// ------------------------------------------------------------ distances
+
+fn levenshtein_distance(a: ref String, b: ref String) -> i64 {
+    if a == b {
+        return 0;
+    }
+    let s1 = chars_of(a);
+    let s2 = chars_of(b);
+    let rows = s1.len() + 1;
+    let cols = s2.len() + 1;
+    if s1.len() == 0 {
+        return cols - 1;
+    }
+    if s2.len() == 0 {
+        return rows - 1;
+    }
+    let mut cur: Vec[i64] = Vec.new();
+    for c in 0..cols {
+        cur.push(c);
+    }
+    for r in 1..rows {
+        let prev = cur.clone();
+        cur = Vec.new();
+        cur.push(r);
+        for _ in 1..cols {
+            cur.push(0);
+        }
+        for c in 1..cols {
+            let deletion = prev[c] + 1;
+            let insertion = cur[c - 1] + 1;
+            let edit = prev[c - 1] + (if s1[r - 1] == s2[c - 1] { 0 } else { 1 });
+            cur[c] = min_i(min_i(edit, deletion), insertion);
+        }
+    }
+    cur[cols - 1]
+}
+
+fn jaro_winkler_impl(a: ref String, b: ref String, long_tolerance: bool, winklerize: bool) -> f64 {
+    let s1 = chars_of(a);
+    let s2 = chars_of(b);
+    let s1_len = s1.len();
+    let s2_len = s2.len();
+    if s1_len == 0 or s2_len == 0 {
+        return 0.0;
+    }
+    let min_len = min_i(s1_len, s2_len);
+    let mut search_range = max_i(s1_len, s2_len);
+    search_range = search_range / 2 - 1;
+    if search_range < 0 {
+        search_range = 0;
+    }
+    let mut s1_flags: Vec[bool] = Vec.new();
+    for _ in 0..s1_len {
+        s1_flags.push(false);
+    }
+    let mut s2_flags: Vec[bool] = Vec.new();
+    for _ in 0..s2_len {
+        s2_flags.push(false);
+    }
+    let mut common: i64 = 0;
+    for i in 0..s1_len {
+        let low = max_i(0, i - search_range);
+        let hi = min_i(i + search_range, s2_len - 1);
+        let mut j = low;
+        while j <= hi {
+            if not s2_flags[j] and s2[j] == s1[i] {
+                s1_flags[i] = true;
+                s2_flags[j] = true;
+                common += 1;
+                break;
+            }
+            j += 1;
+        }
+    }
+    if common == 0 {
+        return 0.0;
+    }
+    let mut k = 0;
+    let mut trans_count = 0;
+    for i in 0..s1_len {
+        if s1_flags[i] {
+            let mut j = k;
+            while j < s2_len {
+                if s2_flags[j] {
+                    k = j + 1;
+                    break;
+                }
+                j += 1;
+            }
+            if s1[i] != s2[j] {
+                trans_count += 1;
+            }
+        }
+    }
+    trans_count = trans_count / 2;
+    let cc = common as f64;
+    let mut weight = (cc / (s1_len as f64) + cc / (s2_len as f64) + (cc - (trans_count as f64)) / cc) / 3.0;
+    if winklerize and weight > 0.7 {
+        let j = min_i(min_len, 4);
+        let mut i = 0;
+        while i < j and s1[i] == s2[i] {
+            i += 1;
+        }
+        if i > 0 {
+            weight += (i as f64) * 0.1 * (1.0 - weight);
+        }
+        if long_tolerance and min_len > 4 and common > i + 1 and 2 * common >= min_len + i {
+            weight += (1.0 - weight) * (((common - i - 1) as f64) / ((s1_len + s2_len - i * 2 + 2) as f64));
+        }
+    }
+    weight
+}
+
+fn jaro_similarity(a: ref String, b: ref String) -> f64 {
+    jaro_winkler_impl(a, b, false, false)
+}
+
+fn jaro_winkler_similarity(a: ref String, b: ref String, long_tolerance: bool) -> f64 {
+    jaro_winkler_impl(a, b, long_tolerance, true)
+}
+
+fn damerau_levenshtein_distance(a: ref String, b: ref String) -> i64 {
+    let s1 = chars_of(a);
+    let s2 = chars_of(b);
+    let len1 = s1.len();
+    let len2 = s2.len();
+    let infinite = len1 + len2;
+    let mut da: Map[char, i64] = Map.new();
+    let mut score: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..len1 + 2 {
+        let mut row: Vec[i64] = Vec.new();
+        for _ in 0..len2 + 2 {
+            row.push(0);
+        }
+        score.push(row);
+    }
+    score[0][0] = infinite;
+    for i in 0..len1 + 1 {
+        score[i + 1][0] = infinite;
+        score[i + 1][1] = i;
+    }
+    for i in 0..len2 + 1 {
+        score[0][i + 1] = infinite;
+        score[1][i + 1] = i;
+    }
+    for i in 1..len1 + 1 {
+        let mut db = 0;
+        for j in 1..len2 + 1 {
+            let i1 = match da.get(s2[j - 1]) {
+                Some(v) => *v,
+                None => 0,
+            };
+            let j1 = db;
+            let mut cost = 1;
+            if s1[i - 1] == s2[j - 1] {
+                cost = 0;
+                db = j;
+            }
+            let a1 = score[i][j] + cost;
+            let a2 = score[i + 1][j] + 1;
+            let a3 = score[i][j + 1] + 1;
+            let a4 = score[i1][j1] + (i - i1 - 1) + 1 + (j - j1 - 1);
+            score[i + 1][j + 1] = min_i(min_i(a1, a2), min_i(a3, a4));
+        }
+        da.insert(s1[i - 1], i);
+    }
+    score[len1 + 1][len2 + 1]
+}
+
+fn hamming_distance(a: ref String, b: ref String) -> i64 {
+    let mut s1 = chars_of(a);
+    let mut s2 = chars_of(b);
+    if s2.len() > s1.len() {
+        let t = s1;
+        s1 = s2;
+        s2 = t;
+    }
+    let mut distance = s1.len() - s2.len();
+    for i in 0..s2.len() {
+        if s2[i] != s1[i] {
+            distance += 1;
+        }
+    }
+    distance
+}
+
+// ------------------------------------------------------------- phonetic
+
+fn soundex_code(c: char) -> Option[char] {
+    if in_set(c, "BFPV") {
+        Some('1')
+    } else if in_set(c, "CGJKQSXZ") {
+        Some('2')
+    } else if in_set(c, "DT") {
+        Some('3')
+    } else if c == 'L' {
+        Some('4')
+    } else if in_set(c, "MN") {
+        Some('5')
+    } else if c == 'R' {
+        Some('6')
+    } else {
+        None
+    }
+}
+
+fn soundex(t: ref Map[char, String], input: ref String) -> String {
+    if input.len() == 0 {
+        return "".to_string();
+    }
+    let s = chars_of(nfkd(t, input).to_uppercase());
+    let mut result: Vec[char] = Vec.new();
+    result.push(s[0]);
+    let mut count = 1;
+    let mut last = soundex_code(s[0]);
+    for k in 1..s.len() {
+        let letter = s[k];
+        match soundex_code(letter) {
+            Some(sub) => {
+                if last != Some(sub) {
+                    result.push(sub);
+                    count += 1;
+                }
+                last = Some(sub);
+            }
+            None => {
+                if letter != 'H' and letter != 'W' {
+                    last = None;
+                }
+            }
+        }
+        if count == 4 {
+            break;
+        }
+    }
+    while count < 4 {
+        result.push('0');
+        count += 1;
+    }
+    str_of(result)
+}
+
+fn starts(s: ref Vec[char], p: Str) -> bool {
+    let q = chars_of(p.to_string());
+    if q.len() > s.len() {
+        return false;
+    }
+    for i in 0..q.len() {
+        if s[i] != q[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn ends(s: ref Vec[char], p: Str) -> bool {
+    let q = chars_of(p.to_string());
+    if q.len() > s.len() {
+        return false;
+    }
+    let off = s.len() - q.len();
+    for i in 0..q.len() {
+        if s[off + i] != q[i] {
+            return false;
+        }
+    }
+    true
+}
+
+fn with_prefix(p: Str, s: ref Vec[char], drop: i64) -> Vec[char] {
+    let mut out = chars_of(p.to_string());
+    for i in drop..s.len() {
+        out.push(s[i]);
+    }
+    out
+}
+
+fn with_suffix(s: ref Vec[char], drop: i64, p: Str) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for i in 0..s.len() - drop {
+        out.push(s[i]);
+    }
+    for c in p.chars() {
+        out.push(c);
+    }
+    out
+}
+
+fn last_char(s: ref String) -> char {
+    let c = chars_of(s);
+    c[c.len() - 1]
+}
+
+fn nysiis(input: ref String) -> String {
+    if input.len() == 0 {
+        return "".to_string();
+    }
+    let mut s = chars_of(input.to_uppercase());
+    if starts(s, "MAC") {
+        s = with_prefix("MCC", s, 3);
+    } else if starts(s, "KN") {
+        s = with_prefix("", s, 1);
+    } else if starts(s, "K") {
+        s = with_prefix("C", s, 1);
+    } else if starts(s, "PH") or starts(s, "PF") {
+        s = with_prefix("FF", s, 2);
+    } else if starts(s, "SCH") {
+        s = with_prefix("SSS", s, 3);
+    }
+    if ends(s, "IE") or ends(s, "EE") {
+        s = with_suffix(s, 2, "Y");
+    } else if ends(s, "DT") or ends(s, "RT") or ends(s, "RD") or ends(s, "NT") or ends(s, "ND") {
+        s = with_suffix(s, 2, "D");
+    }
+    let mut key: Vec[String] = Vec.new();
+    key.push(from_chars(s, 0, 1));
+    let mut i = 1;
+    let len_s = s.len();
+    while i < len_s {
+        let c = s[i];
+        let mut ch = from_chars(s, i, i + 1);
+        if c == 'E' and i + 1 < len_s and s[i + 1] == 'V' {
+            ch = "AF".to_string();
+            i += 1;
+        } else if in_set(c, "AEIOU") {
+            ch = "A".to_string();
+        } else if c == 'Q' {
+            ch = "G".to_string();
+        } else if c == 'Z' {
+            ch = "S".to_string();
+        } else if c == 'M' {
+            ch = "N".to_string();
+        } else if c == 'K' {
+            ch = if i + 1 < len_s and s[i + 1] == 'N' { "N".to_string() } else { "C".to_string() };
+        } else if c == 'S' and i + 2 < len_s and s[i + 1] == 'C' and s[i + 2] == 'H' {
+            ch = "SS".to_string();
+            i += 2;
+        } else if c == 'P' and i + 1 < len_s and s[i + 1] == 'H' {
+            ch = "F".to_string();
+            i += 1;
+        } else if c == 'H' and (not in_set(s[i - 1], "AEIOU") or (i + 1 < len_s and not in_set(s[i + 1], "AEIOU")) or i + 1 == len_s) {
+            ch = if in_set(s[i - 1], "AEIOU") { "A".to_string() } else { from_chars(s, i - 1, i) };
+        } else if c == 'W' and in_set(s[i - 1], "AEIOU") {
+            ch = from_chars(s, i - 1, i);
+        }
+        if last_char(ch) != last_char(key[key.len() - 1]) {
+            key.push(ch);
+        }
+        i += 1;
+    }
+    let mut k = chars_of(key.join(""));
+    if ends(k, "S") and not (k.len() == 1) {
+        k = with_suffix(k, 1, "");
+    }
+    if ends(k, "AY") {
+        k = with_suffix(k, 2, "Y");
+    }
+    if ends(k, "A") and not (k.len() == 1) {
+        k = with_suffix(k, 1, "");
+    }
+    str_of(k)
+}
+
+fn match_rating_codex(input: ref String) -> String {
+    let mut s: Vec[char] = Vec.new();
+    for c in input.to_uppercase().chars() {
+        if c != ' ' {
+            s.push(c);
+        }
+    }
+    let mut codex: Vec[char] = Vec.new();
+    let mut prev: Option[char] = None;
+    let mut first = true;
+    for c in s {
+        if first or (not in_set(c, "AEIOU") and prev != Some(c)) {
+            codex.push(c);
+        }
+        prev = Some(c);
+        first = false;
+    }
+    if codex.len() > 6 {
+        let mut out = from_chars(codex, 0, 3);
+        out.push_str(from_chars(codex, codex.len() - 3, codex.len()));
+        out
+    } else {
+        str_of(codex)
+    }
+}
+
+fn match_rating_comparison(a: ref String, b: ref String) -> Option[bool] {
+    let codex1 = chars_of(match_rating_codex(a));
+    let codex2 = chars_of(match_rating_codex(b));
+    let len1 = codex1.len();
+    let len2 = codex2.len();
+    if len1 - len2 >= 3 or len2 - len1 >= 3 {
+        return None;
+    }
+    let lensum = len1 + len2;
+    let min_rating = if lensum <= 4 {
+        5
+    } else if lensum <= 7 {
+        4
+    } else if lensum <= 11 {
+        3
+    } else {
+        2
+    };
+    let mut res1: Vec[char] = Vec.new();
+    let mut res2: Vec[char] = Vec.new();
+    for k in 0..max_i(len1, len2) {
+        let c1 = if k < len1 { Some(codex1[k]) } else { None };
+        let c2 = if k < len2 { Some(codex2[k]) } else { None };
+        if c1 != c2 {
+            if let Some(c) = c1 {
+                res1.push(c);
+            }
+            if let Some(c) = c2 {
+                res2.push(c);
+            }
+        }
+    }
+    let mut un1 = 0;
+    let mut un2 = 0;
+    let n1 = res1.len();
+    let n2 = res2.len();
+    for k in 0..max_i(n1, n2) {
+        let c1 = if k < n1 { Some(res1[n1 - 1 - k]) } else { None };
+        let c2 = if k < n2 { Some(res2[n2 - 1 - k]) } else { None };
+        if c1 != c2 {
+            if c1.is_some() {
+                un1 += 1;
+            }
+            if c2.is_some() {
+                un2 += 1;
+            }
+        }
+    }
+    Some(6 - max_i(un1, un2) >= min_rating)
+}
+
+// The '*****' metaphone uses past the end of the string: no character.
+fn at_or_none(s: ref Vec[char], i: i64) -> char {
+    if i < s.len() { s[i] } else { '\u{0}' }
+}
+
+fn metaphone(t: ref Map[char, String], input: ref String) -> String {
+    let mut result: Vec[char] = Vec.new();
+    let mut s = chars_of(nfkd(t, input.to_lowercase()));
+    if starts(s, "kn") or starts(s, "gn") or starts(s, "pn") or starts(s, "wr") or starts(s, "ae") {
+        s = with_prefix("", s, 1);
+    }
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i];
+        let next = at_or_none(s, i + 1);
+        let nextnext = at_or_none(s, i + 2);
+        if c == next and c != 'c' {
+            i += 1;
+            continue;
+        }
+        if in_set(c, "aeiou") {
+            if i == 0 or s[i - 1] == ' ' {
+                result.push(c);
+            }
+        } else if c == 'b' {
+            // `not (...) or next`: next is never empty, so always.
+            result.push('b');
+        } else if c == 'c' {
+            if (next == 'i' and nextnext == 'a') or next == 'h' {
+                result.push('x');
+                i += 1;
+            } else if in_set(next, "iey") {
+                result.push('s');
+                i += 1;
+            } else {
+                result.push('k');
+            }
+        } else if c == 'd' {
+            if next == 'g' and in_set(nextnext, "iey") {
+                result.push('j');
+                i += 2;
+            } else {
+                result.push('t');
+            }
+        } else if in_set(c, "fjlmnr") {
+            result.push(c);
+        } else if c == 'g' {
+            if in_set(next, "iey") {
+                result.push('j');
+            } else if next == 'h' and not in_set(nextnext, "aeiou") {
+                i += 1;
+            } else {
+                // `next == 'n' and not nextnext` never holds.
+                result.push('k');
+            }
+        } else if c == 'h' {
+            if i == 0 or in_set(next, "aeiou") or not in_set(s[i - 1], "aeiou") {
+                result.push('h');
+            }
+        } else if c == 'k' {
+            if i == 0 or s[i - 1] != 'c' {
+                result.push('k');
+            }
+        } else if c == 'p' {
+            if next == 'h' {
+                result.push('f');
+                i += 1;
+            } else {
+                result.push('p');
+            }
+        } else if c == 'q' {
+            result.push('k');
+        } else if c == 's' {
+            if next == 'h' {
+                result.push('x');
+                i += 1;
+            } else if next == 'i' and in_set(nextnext, "oa") {
+                result.push('x');
+                i += 2;
+            } else {
+                result.push('s');
+            }
+        } else if c == 't' {
+            if next == 'i' and in_set(nextnext, "oa") {
+                result.push('x');
+            } else if next == 'h' {
+                result.push('0');
+                i += 1;
+            } else if next != 'c' or nextnext != 'h' {
+                result.push('t');
+            }
+        } else if c == 'v' {
+            result.push('f');
+        } else if c == 'w' {
+            if i == 0 and next == 'h' {
+                i += 1;
+                result.push('w');
+            } else if in_set(next, "aeiou") {
+                result.push('w');
+            }
+        } else if c == 'x' {
+            if i == 0 {
+                if next == 'h' or (next == 'i' and in_set(nextnext, "oa")) {
+                    result.push('x');
+                } else {
+                    result.push('s');
+                }
+            } else {
+                result.push('k');
+                result.push('s');
+            }
+        } else if c == 'y' {
+            if in_set(next, "aeiou") {
+                result.push('y');
+            }
+        } else if c == 'z' {
+            result.push('s');
+        } else if c == ' ' {
+            if result.len() > 0 and result[result.len() - 1] != ' ' {
+                result.push(' ');
+            }
+        }
+        i += 1;
+    }
+    str_of(result).to_uppercase()
+}
+
+// ----------------------------------------------------------- printing
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let digits = chars_of("0123456789abcdef".to_string());
+    let mut out: Vec[char] = Vec.new();
+    let mut v = n;
+    for _ in 0..width {
+        out.push(digits[v % 16]);
+        v = v / 16;
+    }
+    out.reverse();
+    str_of(out)
+}
+
+// The characters Python's repr escapes, of those the data can hold:
+// controls, the spaces other than ' ', and the format characters.
+fn unprintable(c: char) -> bool {
+    let o = c as i64;
+    o < 0x20 or (o >= 0x7f and o <= 0xa0) or o == 0xad or (o >= 0x2000 and o <= 0x200f) or (o >= 0x2028 and o <= 0x202f) or (o >= 0x205f and o <= 0x2064) or o == 0x3000 or o == 0xfeff
+}
+
+// Python's repr of a str.
+fn str_repr(s: ref String) -> String {
+    let mut out = String.new();
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    out.push(q);
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if unprintable(c) {
+            let o = c as i64;
+            if o < 0x100 {
+                out.push_str(f"\\x{hex_digits(o, 2)}");
+            } else {
+                out.push_str(f"\\u{hex_digits(o, 4)}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn bool_repr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn opt_bool_repr(b: ref Option[bool]) -> String {
+    match b {
+        Some(v) => bool_repr(*v),
+        None => "None".to_string(),
+    }
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// csv.reader with the default dialect: quoted fields with "" inside.
+fn csv_rows(text: ref String) -> Vec[Vec[String]] {
+    let mut rows: Vec[Vec[String]] = Vec.new();
+    for line in lines_of(text) {
+        let c = chars_of(line);
+        let mut row: Vec[String] = Vec.new();
+        let mut field = String.new();
+        let mut quoted = false;
+        let mut i = 0;
+        while i < c.len() {
+            let ch = c[i];
+            if quoted {
+                if ch == '"' {
+                    if i + 1 < c.len() and c[i + 1] == '"' {
+                        field.push('"');
+                        i += 1;
+                    } else {
+                        quoted = false;
+                    }
+                } else {
+                    field.push(ch);
+                }
+            } else if ch == '"' {
+                quoted = true;
+            } else if ch == ',' {
+                row.push(field);
+                field = String.new();
+            } else {
+                field.push(ch);
+            }
+            i += 1;
+        }
+        row.push(field);
+        rows.push(row);
+    }
+    rows
+}
+
+// ------------------------------------------------------------ vectors
+
+fn base_name(rel: ref String) -> String {
+    let c = chars_of(rel);
+    let mut start = 0;
+    for i in 0..c.len() {
+        if c[i] == '/' {
+            start = i + 1;
+        }
+    }
+    from_chars(c, start, c.len() - 4)
+}
+
+fn vectors_job(t: ref Map[char, String], rel: ref String, out: mut ref String) {
+    let name = base_name(rel);
+    for row in csv_rows(read_text(rel)) {
+        let a = row[0].clone();
+        if name == "soundex" or name == "metaphone" or name == "nysiis" or name == "match_rating_codex" {
+            let got = if name == "soundex" {
+                soundex(t, a)
+            } else if name == "metaphone" {
+                metaphone(t, a)
+            } else if name == "nysiis" {
+                nysiis(a)
+            } else {
+                match_rating_codex(a)
+            };
+            emit(mut out, f"{name}({str_repr(a)}) = {str_repr(got)}, expected {str_repr(row[1])}");
+            continue;
+        }
+        let b = row[1].clone();
+        let got = if name == "levenshtein" or name == "wagner_fischer" {
+            f"{levenshtein_distance(a, b)}"
+        } else if name == "damerau_levenshtein" {
+            f"{damerau_levenshtein_distance(a, b)}"
+        } else if name == "hamming" {
+            f"{hamming_distance(a, b)}"
+        } else if name == "jaro_distance" {
+            f"{jaro_similarity(a, b)}"
+        } else if name == "jaro_winkler" {
+            f"{jaro_winkler_similarity(a, b, false)}"
+        } else if name == "jaro_winkler_longtol" {
+            f"{jaro_winkler_similarity(a, b, true)}"
+        } else {
+            opt_bool_repr(match_rating_comparison(a, b))
+        };
+        emit(mut out, f"{name}({str_repr(a)}, {str_repr(b)}) = {got}, expected {str_repr(row[2])}");
+    }
+}
+
+// ------------------------------------------------------ encode, compare
+
+fn encode_job(t: ref Map[char, String], rel: ref String, out: mut ref String) {
+    for name in lines_of(read_text(rel)) {
+        emit(mut out, f"{str_repr(name)}: soundex={str_repr(soundex(t, name))} metaphone={str_repr(metaphone(t, name))} nysiis={str_repr(nysiis(name))} mrc={str_repr(match_rating_codex(name))}");
+    }
+}
+
+fn split_tab(line: ref String) -> Vec[String] {
+    line.split("\t").map(|p| p.to_string()).collect()
+}
+
+fn compare_job(t: ref Map[char, String], rel: ref String, out: mut ref String) {
+    for line in lines_of(read_text(rel)) {
+        let f = split_tab(line);
+        let a = f[0].clone();
+        let b = f[1].clone();
+        emit(mut out, f"{str_repr(a)} {str_repr(b)}");
+        emit(mut out, f"  levenshtein={levenshtein_distance(a, b)} damerau={damerau_levenshtein_distance(a, b)} hamming={hamming_distance(a, b)}");
+        emit(mut out, f"  jaro={jaro_similarity(a, b)} jaro_winkler={jaro_winkler_similarity(a, b, false)} long={jaro_winkler_similarity(a, b, true)}");
+        let same_s = soundex(t, a) == soundex(t, b);
+        let same_m = metaphone(t, a) == metaphone(t, b);
+        let same_n = nysiis(a) == nysiis(b);
+        emit(mut out, f"  mra={opt_bool_repr(match_rating_comparison(a, b))} same_soundex={bool_repr(same_s)} same_metaphone={bool_repr(same_m)} same_nysiis={bool_repr(same_n)}");
+    }
+}
+
+// ------------------------------------------------------------- dedupe
+
+#[derive(Clone)]
+struct Rec {
+    id: i64,
+    first: String,
+    last: String,
+    email: String,
+    city: String,
+}
+
+fn find(parent: mut ref Vec[i64], x0: i64) -> i64 {
+    let mut x = x0;
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn local_part(email: ref String) -> String {
+    let parts: Vec[String] = email.split("@").map(|p| p.to_string()).collect();
+    parts[0].clone()
+}
+
+fn num(s: ref String) -> i64 {
+    match i64.parse(s.clone()) {
+        Ok(n) => n,
+        Err(_) => 0,
+    }
+}
+
+fn dedupe_job(t: ref Map[char, String], rel: ref String, out: mut ref String) {
+    let mut recs: Vec[Rec] = Vec.new();
+    let rows = csv_rows(read_text(rel));
+    for k in 1..rows.len() {
+        let r = rows[k].clone();
+        recs.push(Rec { id: num(r[0]), first: r[1].clone(), last: r[2].clone(), email: r[3].clone(), city: r[4].clone() });
+    }
+    recs.sort_by(|a, b| a.id.cmp(b.id));
+    let mut blocks: Map[String, Vec[i64]] = Map.new();
+    for i in 0..recs.len() {
+        let last = recs[i].last.trim().to_lowercase();
+        for key in [f"S:{soundex(t, last)}", f"M:{metaphone(t, last)}"] {
+            if not blocks.contains_key(key) {
+                blocks.insert(key.clone(), Vec.new());
+            }
+            match blocks.get_mut(key) {
+                Some(v) => v.push(i),
+                None => {}
+            }
+        }
+    }
+    let mut pairs: Vec[(i64, i64)] = Vec.new();
+    for (_, members) in blocks {
+        for x in 0..members.len() {
+            for y in x + 1..members.len() {
+                pairs.push((members[x], members[y]));
+            }
+        }
+    }
+    pairs.sort();
+    pairs.dedup();
+    emit(mut out, f"{recs.len()} records, {blocks.len()} blocks, {pairs.len()} candidate pairs");
+    let mut parent: Vec[i64] = Vec.new();
+    for i in 0..recs.len() {
+        parent.push(i);
+    }
+    for (i, j) in pairs {
+        let a = recs[i].clone();
+        let b = recs[j].clone();
+        let jl = jaro_winkler_similarity(a.last.to_lowercase(), b.last.to_lowercase(), false);
+        let jfi = jaro_winkler_similarity(a.first.to_lowercase(), b.first.to_lowercase(), false);
+        let ed = damerau_levenshtein_distance(local_part(a.email), local_part(b.email));
+        let mra = match_rating_comparison(a.last, b.last);
+        let score = (0.5 * jl + 0.35 * jfi) + 0.15 * (1.0 - (min_i(ed, 5) as f64) / 5.0);
+        let same = score >= 0.9 or (score >= 0.82 and mra == Some(true) and a.city == b.city);
+        if same {
+            let rj = find(mut parent, j);
+            let ri = find(mut parent, i);
+            parent[ri] = rj;
+        }
+        let verdict = if same { "MATCH" } else { "-" };
+        emit(mut out, f"  {a.id}~{b.id} last={jl} first={jfi} email={ed} mra={opt_bool_repr(mra)} score={score} {verdict}");
+    }
+    // The groups, each sorted, in order of their first id.
+    let mut groups: Vec[Vec[i64]] = Vec.new();
+    for i in 0..recs.len() {
+        if find(mut parent, i) != i {
+            continue;
+        }
+        let mut g: Vec[i64] = Vec.new();
+        for k in 0..recs.len() {
+            if find(mut parent, k) == i {
+                g.push(recs[k].id);
+            }
+        }
+        if g.len() > 1 {
+            g.sort();
+            groups.push(g);
+        }
+    }
+    groups.sort_by(|a, b| a[0].cmp(b[0]));
+    emit(mut out, f"{groups.len()} duplicate groups");
+    for g in groups {
+        let mut parts: Vec[String] = Vec.new();
+        for n in g {
+            for r in recs {
+                if r.id == n {
+                    parts.push(f"{r.id} {r.first} {r.last} <{r.email}>");
+                }
+            }
+        }
+        emit(mut out, f"  {parts.join("; ")}");
+    }
+}
+
+// ------------------------------------------------------------ suggest
+
+// Sorts (distance, similarity, name) as Python sorts (d, -sim, name).
+fn ranked_less(a: ref (i64, f64, String), b: ref (i64, f64, String)) -> bool {
+    if a.0 != b.0 {
+        return a.0 < b.0;
+    }
+    if a.1 != b.1 {
+        return a.1 > b.1;
+    }
+    a.2 < b.2
+}
+
+fn sort_ranked(v: mut ref Vec[(i64, f64, String)]) {
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and ranked_less(v[j], v[j - 1]) {
+            v.swap(j, j - 1);
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn suggest_job(cmds_rel: ref String, typos_rel: ref String, out: mut ref String) {
+    let cmds = lines_of(read_text(cmds_rel));
+    for t in lines_of(read_text(typos_rel)) {
+        if cmds.contains(t) {
+            emit(mut out, f"{t}: a command");
+            continue;
+        }
+        let low = t.to_lowercase();
+        let mut scored: Vec[(i64, f64, String)] = Vec.new();
+        for c in cmds {
+            let d = damerau_levenshtein_distance(low, c);
+            if d <= 2 {
+                scored.push((d, jaro_winkler_similarity(low, c, false), c.clone()));
+            }
+        }
+        sort_ranked(mut scored);
+        if scored.len() == 0 {
+            emit(mut out, f"git: '{t}' is not a git command. See 'git --help'.");
+            continue;
+        }
+        let tail = if scored.len() == 1 { " is" } else { "s are" };
+        emit(mut out, f"git: '{t}' is not a git command. The most similar command{tail}");
+        let mut k = 0;
+        while k < scored.len() and k < 4 {
+            let (d, s, c) = scored[k].clone();
+            emit(mut out, f"        {c} (distance {d}, similarity {s})");
+            k += 1;
+        }
+    }
+}
+
+// ------------------------------------------------------------- search
+
+// Sorts (similarity, name) as Python sorts (-sim, name).
+fn sort_by_sim(v: mut ref Vec[(f64, String)]) {
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and (v[j].0 > v[j - 1].0 or (v[j].0 == v[j - 1].0 and v[j].1 < v[j - 1].1)) {
+            v.swap(j, j - 1);
+            j -= 1;
+        }
+        i += 1;
+    }
+}
+
+fn joined_or_dash(v: ref Vec[String]) -> String {
+    if v.len() == 0 { "-".to_string() } else { v.join(", ") }
+}
+
+fn search_job(t: ref Map[char, String], names_rel: ref String, queries_rel: ref String, out: mut ref String) {
+    let names = lines_of(read_text(names_rel));
+    for q in lines_of(read_text(queries_rel)) {
+        emit(mut out, f"? {q}");
+        for label in ["soundex", "nysiis", "metaphone"] {
+            let code = if label == "soundex" { soundex(t, q) } else if label == "nysiis" { nysiis(q) } else { metaphone(t, q) };
+            let mut hits: Vec[String] = Vec.new();
+            for n in names {
+                let c = if label == "soundex" { soundex(t, n) } else if label == "nysiis" { nysiis(n) } else { metaphone(t, n) };
+                if c == code {
+                    hits.push(n.clone());
+                }
+            }
+            emit(mut out, f"  {label} {code}: {joined_or_dash(hits)}");
+        }
+        let mut mra: Vec[String] = Vec.new();
+        for n in names {
+            if match_rating_comparison(q, n) == Some(true) {
+                mra.push(n.clone());
+            }
+        }
+        emit(mut out, f"  match rating: {joined_or_dash(mra)}");
+        let mut best: Vec[(f64, String)] = Vec.new();
+        for n in names {
+            best.push((jaro_winkler_similarity(q.to_lowercase(), n.to_lowercase(), false), n.clone()));
+        }
+        sort_by_sim(mut best);
+        let mut parts: Vec[String] = Vec.new();
+        for k in 0..min_i(3, best.len()) {
+            parts.push(f"{best[k].1} {best[k].0}");
+        }
+        emit(mut out, f"  closest: {parts.join(", ")}");
+    }
+}
+
+// ------------------------------------------------------------- lookup
+
+fn tokens(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut word = String.new();
+    for ch in s.to_lowercase().chars() {
+        if ch.is_alphanumeric() {
+            word.push(ch);
+        } else if word.len() > 0 {
+            out.push(word);
+            word = String.new();
+        }
+    }
+    if word.len() > 0 {
+        out.push(word);
+    }
+    out
+}
+
+fn lookup_job(products_rel: ref String, queries_rel: ref String, out: mut ref String) {
+    let products = lines_of(read_text(products_rel));
+    for q in lines_of(read_text(queries_rel)) {
+        let qt = tokens(q);
+        let mut scored: Vec[(f64, String)] = Vec.new();
+        for p in products {
+            let pt = tokens(p);
+            let mut total = 0.0;
+            for w in qt {
+                let mut best = 0.0;
+                for v in pt {
+                    let s = jaro_winkler_similarity(w, v, false);
+                    if s > best {
+                        best = s;
+                    }
+                }
+                total += best;
+            }
+            let whole = jaro_winkler_similarity(qt.join(""), pt.join(""), false);
+            let avg = if qt.len() > 0 { total / (qt.len() as f64) } else { 0.0 };
+            let score = avg * 0.7 + whole * 0.3;
+            scored.push((score, p.clone()));
+        }
+        sort_by_sim(mut scored);
+        let mut top: Vec[String] = Vec.new();
+        for k in 0..min_i(3, scored.len()) {
+            if scored[k].0 >= 0.75 {
+                top.push(f"{scored[k].1} ({scored[k].0})");
+            }
+        }
+        let shown = if top.len() > 0 { top.join("; ") } else { "no match".to_string() };
+        emit(mut out, f"{str_repr(q)} -> {shown}");
+    }
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let t = nfkd_table();
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job = split_tab(line);
+        emit(mut out, f"== {job.join(" ")}");
+        let kind = job[0].clone();
+        if kind == "vectors" {
+            vectors_job(t, job[1], mut out);
+        } else if kind == "encode" {
+            encode_job(t, job[1], mut out);
+        } else if kind == "compare" {
+            compare_job(t, job[1], mut out);
+        } else if kind == "dedupe" {
+            dedupe_job(t, job[1], mut out);
+        } else if kind == "suggest" {
+            suggest_job(job[1], job[2], mut out);
+        } else if kind == "search" {
+            search_job(t, job[1], job[2], mut out);
+        } else {
+            lookup_job(job[1], job[2], mut out);
+        }
+    }
+    print(out);
+}
+
+// NFKD for the characters of tables.py's BLOCKS that it changes,
+// from Python's unicodedata.
+fn nfkd_table() -> Map[char, String] {
+    let mut m: Map[char, String] = Map.new();
+    nfkd_part_0(mut m);
+    nfkd_part_1(mut m);
+    nfkd_part_2(mut m);
+    nfkd_part_3(mut m);
+    nfkd_part_4(mut m);
+    nfkd_part_5(mut m);
+    nfkd_part_6(mut m);
+    nfkd_part_7(mut m);
+    nfkd_part_8(mut m);
+    m
+}
+
+fn nfkd_part_0(m: mut ref Map[char, String]) {
+    m.insert('\u{a0}', " ".to_string());
+    m.insert('\u{a8}', " \u{308}".to_string());
+    m.insert('\u{aa}', "a".to_string());
+    m.insert('\u{af}', " \u{304}".to_string());
+    m.insert('\u{b2}', "2".to_string());
+    m.insert('\u{b3}', "3".to_string());
+    m.insert('\u{b4}', " \u{301}".to_string());
+    m.insert('\u{b5}', "\u{3bc}".to_string());
+    m.insert('\u{b8}', " \u{327}".to_string());
+    m.insert('\u{b9}', "1".to_string());
+    m.insert('\u{ba}', "o".to_string());
+    m.insert('\u{bc}', "1\u{2044}4".to_string());
+    m.insert('\u{bd}', "1\u{2044}2".to_string());
+    m.insert('\u{be}', "3\u{2044}4".to_string());
+    m.insert('\u{c0}', "A\u{300}".to_string());
+    m.insert('\u{c1}', "A\u{301}".to_string());
+    m.insert('\u{c2}', "A\u{302}".to_string());
+    m.insert('\u{c3}', "A\u{303}".to_string());
+    m.insert('\u{c4}', "A\u{308}".to_string());
+    m.insert('\u{c5}', "A\u{30a}".to_string());
+    m.insert('\u{c7}', "C\u{327}".to_string());
+    m.insert('\u{c8}', "E\u{300}".to_string());
+    m.insert('\u{c9}', "E\u{301}".to_string());
+    m.insert('\u{ca}', "E\u{302}".to_string());
+    m.insert('\u{cb}', "E\u{308}".to_string());
+    m.insert('\u{cc}', "I\u{300}".to_string());
+    m.insert('\u{cd}', "I\u{301}".to_string());
+    m.insert('\u{ce}', "I\u{302}".to_string());
+    m.insert('\u{cf}', "I\u{308}".to_string());
+    m.insert('\u{d1}', "N\u{303}".to_string());
+    m.insert('\u{d2}', "O\u{300}".to_string());
+    m.insert('\u{d3}', "O\u{301}".to_string());
+    m.insert('\u{d4}', "O\u{302}".to_string());
+    m.insert('\u{d5}', "O\u{303}".to_string());
+    m.insert('\u{d6}', "O\u{308}".to_string());
+    m.insert('\u{d9}', "U\u{300}".to_string());
+    m.insert('\u{da}', "U\u{301}".to_string());
+    m.insert('\u{db}', "U\u{302}".to_string());
+    m.insert('\u{dc}', "U\u{308}".to_string());
+    m.insert('\u{dd}', "Y\u{301}".to_string());
+    m.insert('\u{e0}', "a\u{300}".to_string());
+    m.insert('\u{e1}', "a\u{301}".to_string());
+    m.insert('\u{e2}', "a\u{302}".to_string());
+    m.insert('\u{e3}', "a\u{303}".to_string());
+    m.insert('\u{e4}', "a\u{308}".to_string());
+    m.insert('\u{e5}', "a\u{30a}".to_string());
+    m.insert('\u{e7}', "c\u{327}".to_string());
+    m.insert('\u{e8}', "e\u{300}".to_string());
+    m.insert('\u{e9}', "e\u{301}".to_string());
+    m.insert('\u{ea}', "e\u{302}".to_string());
+    m.insert('\u{eb}', "e\u{308}".to_string());
+    m.insert('\u{ec}', "i\u{300}".to_string());
+    m.insert('\u{ed}', "i\u{301}".to_string());
+    m.insert('\u{ee}', "i\u{302}".to_string());
+    m.insert('\u{ef}', "i\u{308}".to_string());
+    m.insert('\u{f1}', "n\u{303}".to_string());
+    m.insert('\u{f2}', "o\u{300}".to_string());
+    m.insert('\u{f3}', "o\u{301}".to_string());
+    m.insert('\u{f4}', "o\u{302}".to_string());
+    m.insert('\u{f5}', "o\u{303}".to_string());
+    m.insert('\u{f6}', "o\u{308}".to_string());
+    m.insert('\u{f9}', "u\u{300}".to_string());
+    m.insert('\u{fa}', "u\u{301}".to_string());
+    m.insert('\u{fb}', "u\u{302}".to_string());
+    m.insert('\u{fc}', "u\u{308}".to_string());
+    m.insert('\u{fd}', "y\u{301}".to_string());
+    m.insert('\u{ff}', "y\u{308}".to_string());
+    m.insert('\u{100}', "A\u{304}".to_string());
+    m.insert('\u{101}', "a\u{304}".to_string());
+    m.insert('\u{102}', "A\u{306}".to_string());
+    m.insert('\u{103}', "a\u{306}".to_string());
+    m.insert('\u{104}', "A\u{328}".to_string());
+    m.insert('\u{105}', "a\u{328}".to_string());
+    m.insert('\u{106}', "C\u{301}".to_string());
+    m.insert('\u{107}', "c\u{301}".to_string());
+    m.insert('\u{108}', "C\u{302}".to_string());
+    m.insert('\u{109}', "c\u{302}".to_string());
+    m.insert('\u{10a}', "C\u{307}".to_string());
+    m.insert('\u{10b}', "c\u{307}".to_string());
+    m.insert('\u{10c}', "C\u{30c}".to_string());
+    m.insert('\u{10d}', "c\u{30c}".to_string());
+    m.insert('\u{10e}', "D\u{30c}".to_string());
+    m.insert('\u{10f}', "d\u{30c}".to_string());
+    m.insert('\u{112}', "E\u{304}".to_string());
+    m.insert('\u{113}', "e\u{304}".to_string());
+    m.insert('\u{114}', "E\u{306}".to_string());
+    m.insert('\u{115}', "e\u{306}".to_string());
+    m.insert('\u{116}', "E\u{307}".to_string());
+    m.insert('\u{117}', "e\u{307}".to_string());
+    m.insert('\u{118}', "E\u{328}".to_string());
+    m.insert('\u{119}', "e\u{328}".to_string());
+    m.insert('\u{11a}', "E\u{30c}".to_string());
+    m.insert('\u{11b}', "e\u{30c}".to_string());
+    m.insert('\u{11c}', "G\u{302}".to_string());
+    m.insert('\u{11d}', "g\u{302}".to_string());
+    m.insert('\u{11e}', "G\u{306}".to_string());
+    m.insert('\u{11f}', "g\u{306}".to_string());
+    m.insert('\u{120}', "G\u{307}".to_string());
+    m.insert('\u{121}', "g\u{307}".to_string());
+    m.insert('\u{122}', "G\u{327}".to_string());
+    m.insert('\u{123}', "g\u{327}".to_string());
+    m.insert('\u{124}', "H\u{302}".to_string());
+    m.insert('\u{125}', "h\u{302}".to_string());
+    m.insert('\u{128}', "I\u{303}".to_string());
+    m.insert('\u{129}', "i\u{303}".to_string());
+    m.insert('\u{12a}', "I\u{304}".to_string());
+    m.insert('\u{12b}', "i\u{304}".to_string());
+    m.insert('\u{12c}', "I\u{306}".to_string());
+    m.insert('\u{12d}', "i\u{306}".to_string());
+    m.insert('\u{12e}', "I\u{328}".to_string());
+    m.insert('\u{12f}', "i\u{328}".to_string());
+    m.insert('\u{130}', "I\u{307}".to_string());
+    m.insert('\u{132}', "IJ".to_string());
+    m.insert('\u{133}', "ij".to_string());
+    m.insert('\u{134}', "J\u{302}".to_string());
+    m.insert('\u{135}', "j\u{302}".to_string());
+    m.insert('\u{136}', "K\u{327}".to_string());
+    m.insert('\u{137}', "k\u{327}".to_string());
+    m.insert('\u{139}', "L\u{301}".to_string());
+    m.insert('\u{13a}', "l\u{301}".to_string());
+    m.insert('\u{13b}', "L\u{327}".to_string());
+    m.insert('\u{13c}', "l\u{327}".to_string());
+    m.insert('\u{13d}', "L\u{30c}".to_string());
+    m.insert('\u{13e}', "l\u{30c}".to_string());
+    m.insert('\u{13f}', "L\u{b7}".to_string());
+    m.insert('\u{140}', "l\u{b7}".to_string());
+    m.insert('\u{143}', "N\u{301}".to_string());
+    m.insert('\u{144}', "n\u{301}".to_string());
+    m.insert('\u{145}', "N\u{327}".to_string());
+    m.insert('\u{146}', "n\u{327}".to_string());
+    m.insert('\u{147}', "N\u{30c}".to_string());
+    m.insert('\u{148}', "n\u{30c}".to_string());
+    m.insert('\u{149}', "\u{2bc}n".to_string());
+    m.insert('\u{14c}', "O\u{304}".to_string());
+    m.insert('\u{14d}', "o\u{304}".to_string());
+    m.insert('\u{14e}', "O\u{306}".to_string());
+    m.insert('\u{14f}', "o\u{306}".to_string());
+    m.insert('\u{150}', "O\u{30b}".to_string());
+    m.insert('\u{151}', "o\u{30b}".to_string());
+    m.insert('\u{154}', "R\u{301}".to_string());
+    m.insert('\u{155}', "r\u{301}".to_string());
+    m.insert('\u{156}', "R\u{327}".to_string());
+    m.insert('\u{157}', "r\u{327}".to_string());
+    m.insert('\u{158}', "R\u{30c}".to_string());
+    m.insert('\u{159}', "r\u{30c}".to_string());
+    m.insert('\u{15a}', "S\u{301}".to_string());
+    m.insert('\u{15b}', "s\u{301}".to_string());
+    m.insert('\u{15c}', "S\u{302}".to_string());
+    m.insert('\u{15d}', "s\u{302}".to_string());
+    m.insert('\u{15e}', "S\u{327}".to_string());
+}
+
+fn nfkd_part_1(m: mut ref Map[char, String]) {
+    m.insert('\u{15f}', "s\u{327}".to_string());
+    m.insert('\u{160}', "S\u{30c}".to_string());
+    m.insert('\u{161}', "s\u{30c}".to_string());
+    m.insert('\u{162}', "T\u{327}".to_string());
+    m.insert('\u{163}', "t\u{327}".to_string());
+    m.insert('\u{164}', "T\u{30c}".to_string());
+    m.insert('\u{165}', "t\u{30c}".to_string());
+    m.insert('\u{168}', "U\u{303}".to_string());
+    m.insert('\u{169}', "u\u{303}".to_string());
+    m.insert('\u{16a}', "U\u{304}".to_string());
+    m.insert('\u{16b}', "u\u{304}".to_string());
+    m.insert('\u{16c}', "U\u{306}".to_string());
+    m.insert('\u{16d}', "u\u{306}".to_string());
+    m.insert('\u{16e}', "U\u{30a}".to_string());
+    m.insert('\u{16f}', "u\u{30a}".to_string());
+    m.insert('\u{170}', "U\u{30b}".to_string());
+    m.insert('\u{171}', "u\u{30b}".to_string());
+    m.insert('\u{172}', "U\u{328}".to_string());
+    m.insert('\u{173}', "u\u{328}".to_string());
+    m.insert('\u{174}', "W\u{302}".to_string());
+    m.insert('\u{175}', "w\u{302}".to_string());
+    m.insert('\u{176}', "Y\u{302}".to_string());
+    m.insert('\u{177}', "y\u{302}".to_string());
+    m.insert('\u{178}', "Y\u{308}".to_string());
+    m.insert('\u{179}', "Z\u{301}".to_string());
+    m.insert('\u{17a}', "z\u{301}".to_string());
+    m.insert('\u{17b}', "Z\u{307}".to_string());
+    m.insert('\u{17c}', "z\u{307}".to_string());
+    m.insert('\u{17d}', "Z\u{30c}".to_string());
+    m.insert('\u{17e}', "z\u{30c}".to_string());
+    m.insert('\u{17f}', "s".to_string());
+    m.insert('\u{1a0}', "O\u{31b}".to_string());
+    m.insert('\u{1a1}', "o\u{31b}".to_string());
+    m.insert('\u{1af}', "U\u{31b}".to_string());
+    m.insert('\u{1b0}', "u\u{31b}".to_string());
+    m.insert('\u{1c4}', "DZ\u{30c}".to_string());
+    m.insert('\u{1c5}', "Dz\u{30c}".to_string());
+    m.insert('\u{1c6}', "dz\u{30c}".to_string());
+    m.insert('\u{1c7}', "LJ".to_string());
+    m.insert('\u{1c8}', "Lj".to_string());
+    m.insert('\u{1c9}', "lj".to_string());
+    m.insert('\u{1ca}', "NJ".to_string());
+    m.insert('\u{1cb}', "Nj".to_string());
+    m.insert('\u{1cc}', "nj".to_string());
+    m.insert('\u{1cd}', "A\u{30c}".to_string());
+    m.insert('\u{1ce}', "a\u{30c}".to_string());
+    m.insert('\u{1cf}', "I\u{30c}".to_string());
+    m.insert('\u{1d0}', "i\u{30c}".to_string());
+    m.insert('\u{1d1}', "O\u{30c}".to_string());
+    m.insert('\u{1d2}', "o\u{30c}".to_string());
+    m.insert('\u{1d3}', "U\u{30c}".to_string());
+    m.insert('\u{1d4}', "u\u{30c}".to_string());
+    m.insert('\u{1d5}', "U\u{308}\u{304}".to_string());
+    m.insert('\u{1d6}', "u\u{308}\u{304}".to_string());
+    m.insert('\u{1d7}', "U\u{308}\u{301}".to_string());
+    m.insert('\u{1d8}', "u\u{308}\u{301}".to_string());
+    m.insert('\u{1d9}', "U\u{308}\u{30c}".to_string());
+    m.insert('\u{1da}', "u\u{308}\u{30c}".to_string());
+    m.insert('\u{1db}', "U\u{308}\u{300}".to_string());
+    m.insert('\u{1dc}', "u\u{308}\u{300}".to_string());
+    m.insert('\u{1de}', "A\u{308}\u{304}".to_string());
+    m.insert('\u{1df}', "a\u{308}\u{304}".to_string());
+    m.insert('\u{1e0}', "A\u{307}\u{304}".to_string());
+    m.insert('\u{1e1}', "a\u{307}\u{304}".to_string());
+    m.insert('\u{1e2}', "\u{c6}\u{304}".to_string());
+    m.insert('\u{1e3}', "\u{e6}\u{304}".to_string());
+    m.insert('\u{1e6}', "G\u{30c}".to_string());
+    m.insert('\u{1e7}', "g\u{30c}".to_string());
+    m.insert('\u{1e8}', "K\u{30c}".to_string());
+    m.insert('\u{1e9}', "k\u{30c}".to_string());
+    m.insert('\u{1ea}', "O\u{328}".to_string());
+    m.insert('\u{1eb}', "o\u{328}".to_string());
+    m.insert('\u{1ec}', "O\u{328}\u{304}".to_string());
+    m.insert('\u{1ed}', "o\u{328}\u{304}".to_string());
+    m.insert('\u{1ee}', "\u{1b7}\u{30c}".to_string());
+    m.insert('\u{1ef}', "\u{292}\u{30c}".to_string());
+    m.insert('\u{1f0}', "j\u{30c}".to_string());
+    m.insert('\u{1f1}', "DZ".to_string());
+    m.insert('\u{1f2}', "Dz".to_string());
+    m.insert('\u{1f3}', "dz".to_string());
+    m.insert('\u{1f4}', "G\u{301}".to_string());
+    m.insert('\u{1f5}', "g\u{301}".to_string());
+    m.insert('\u{1f8}', "N\u{300}".to_string());
+    m.insert('\u{1f9}', "n\u{300}".to_string());
+    m.insert('\u{1fa}', "A\u{30a}\u{301}".to_string());
+    m.insert('\u{1fb}', "a\u{30a}\u{301}".to_string());
+    m.insert('\u{1fc}', "\u{c6}\u{301}".to_string());
+    m.insert('\u{1fd}', "\u{e6}\u{301}".to_string());
+    m.insert('\u{1fe}', "\u{d8}\u{301}".to_string());
+    m.insert('\u{1ff}', "\u{f8}\u{301}".to_string());
+    m.insert('\u{200}', "A\u{30f}".to_string());
+    m.insert('\u{201}', "a\u{30f}".to_string());
+    m.insert('\u{202}', "A\u{311}".to_string());
+    m.insert('\u{203}', "a\u{311}".to_string());
+    m.insert('\u{204}', "E\u{30f}".to_string());
+    m.insert('\u{205}', "e\u{30f}".to_string());
+    m.insert('\u{206}', "E\u{311}".to_string());
+    m.insert('\u{207}', "e\u{311}".to_string());
+    m.insert('\u{208}', "I\u{30f}".to_string());
+    m.insert('\u{209}', "i\u{30f}".to_string());
+    m.insert('\u{20a}', "I\u{311}".to_string());
+    m.insert('\u{20b}', "i\u{311}".to_string());
+    m.insert('\u{20c}', "O\u{30f}".to_string());
+    m.insert('\u{20d}', "o\u{30f}".to_string());
+    m.insert('\u{20e}', "O\u{311}".to_string());
+    m.insert('\u{20f}', "o\u{311}".to_string());
+    m.insert('\u{210}', "R\u{30f}".to_string());
+    m.insert('\u{211}', "r\u{30f}".to_string());
+    m.insert('\u{212}', "R\u{311}".to_string());
+    m.insert('\u{213}', "r\u{311}".to_string());
+    m.insert('\u{214}', "U\u{30f}".to_string());
+    m.insert('\u{215}', "u\u{30f}".to_string());
+    m.insert('\u{216}', "U\u{311}".to_string());
+    m.insert('\u{217}', "u\u{311}".to_string());
+    m.insert('\u{218}', "S\u{326}".to_string());
+    m.insert('\u{219}', "s\u{326}".to_string());
+    m.insert('\u{21a}', "T\u{326}".to_string());
+    m.insert('\u{21b}', "t\u{326}".to_string());
+    m.insert('\u{21e}', "H\u{30c}".to_string());
+    m.insert('\u{21f}', "h\u{30c}".to_string());
+    m.insert('\u{226}', "A\u{307}".to_string());
+    m.insert('\u{227}', "a\u{307}".to_string());
+    m.insert('\u{228}', "E\u{327}".to_string());
+    m.insert('\u{229}', "e\u{327}".to_string());
+    m.insert('\u{22a}', "O\u{308}\u{304}".to_string());
+    m.insert('\u{22b}', "o\u{308}\u{304}".to_string());
+    m.insert('\u{22c}', "O\u{303}\u{304}".to_string());
+    m.insert('\u{22d}', "o\u{303}\u{304}".to_string());
+    m.insert('\u{22e}', "O\u{307}".to_string());
+    m.insert('\u{22f}', "o\u{307}".to_string());
+    m.insert('\u{230}', "O\u{307}\u{304}".to_string());
+    m.insert('\u{231}', "o\u{307}\u{304}".to_string());
+    m.insert('\u{232}', "Y\u{304}".to_string());
+    m.insert('\u{233}', "y\u{304}".to_string());
+    m.insert('\u{2b0}', "h".to_string());
+    m.insert('\u{2b1}', "\u{266}".to_string());
+    m.insert('\u{2b2}', "j".to_string());
+    m.insert('\u{2b3}', "r".to_string());
+    m.insert('\u{2b4}', "\u{279}".to_string());
+    m.insert('\u{2b5}', "\u{27b}".to_string());
+    m.insert('\u{2b6}', "\u{281}".to_string());
+    m.insert('\u{2b7}', "w".to_string());
+    m.insert('\u{2b8}', "y".to_string());
+    m.insert('\u{2d8}', " \u{306}".to_string());
+    m.insert('\u{2d9}', " \u{307}".to_string());
+    m.insert('\u{2da}', " \u{30a}".to_string());
+    m.insert('\u{2db}', " \u{328}".to_string());
+    m.insert('\u{2dc}', " \u{303}".to_string());
+    m.insert('\u{2dd}', " \u{30b}".to_string());
+    m.insert('\u{2e0}', "\u{263}".to_string());
+}
+
+fn nfkd_part_2(m: mut ref Map[char, String]) {
+    m.insert('\u{2e1}', "l".to_string());
+    m.insert('\u{2e2}', "s".to_string());
+    m.insert('\u{2e3}', "x".to_string());
+    m.insert('\u{2e4}', "\u{295}".to_string());
+    m.insert('\u{340}', "\u{300}".to_string());
+    m.insert('\u{341}', "\u{301}".to_string());
+    m.insert('\u{343}', "\u{313}".to_string());
+    m.insert('\u{344}', "\u{308}\u{301}".to_string());
+    m.insert('\u{374}', "\u{2b9}".to_string());
+    m.insert('\u{37a}', " \u{345}".to_string());
+    m.insert('\u{37e}', ";".to_string());
+    m.insert('\u{384}', " \u{301}".to_string());
+    m.insert('\u{385}', " \u{308}\u{301}".to_string());
+    m.insert('\u{386}', "\u{391}\u{301}".to_string());
+    m.insert('\u{387}', "\u{b7}".to_string());
+    m.insert('\u{388}', "\u{395}\u{301}".to_string());
+    m.insert('\u{389}', "\u{397}\u{301}".to_string());
+    m.insert('\u{38a}', "\u{399}\u{301}".to_string());
+    m.insert('\u{38c}', "\u{39f}\u{301}".to_string());
+    m.insert('\u{38e}', "\u{3a5}\u{301}".to_string());
+    m.insert('\u{38f}', "\u{3a9}\u{301}".to_string());
+    m.insert('\u{390}', "\u{3b9}\u{308}\u{301}".to_string());
+    m.insert('\u{3aa}', "\u{399}\u{308}".to_string());
+    m.insert('\u{3ab}', "\u{3a5}\u{308}".to_string());
+    m.insert('\u{3ac}', "\u{3b1}\u{301}".to_string());
+    m.insert('\u{3ad}', "\u{3b5}\u{301}".to_string());
+    m.insert('\u{3ae}', "\u{3b7}\u{301}".to_string());
+    m.insert('\u{3af}', "\u{3b9}\u{301}".to_string());
+    m.insert('\u{3b0}', "\u{3c5}\u{308}\u{301}".to_string());
+    m.insert('\u{3ca}', "\u{3b9}\u{308}".to_string());
+    m.insert('\u{3cb}', "\u{3c5}\u{308}".to_string());
+    m.insert('\u{3cc}', "\u{3bf}\u{301}".to_string());
+    m.insert('\u{3cd}', "\u{3c5}\u{301}".to_string());
+    m.insert('\u{3ce}', "\u{3c9}\u{301}".to_string());
+    m.insert('\u{3d0}', "\u{3b2}".to_string());
+    m.insert('\u{3d1}', "\u{3b8}".to_string());
+    m.insert('\u{3d2}', "\u{3a5}".to_string());
+    m.insert('\u{3d3}', "\u{3a5}\u{301}".to_string());
+    m.insert('\u{3d4}', "\u{3a5}\u{308}".to_string());
+    m.insert('\u{3d5}', "\u{3c6}".to_string());
+    m.insert('\u{3d6}', "\u{3c0}".to_string());
+    m.insert('\u{3f0}', "\u{3ba}".to_string());
+    m.insert('\u{3f1}', "\u{3c1}".to_string());
+    m.insert('\u{3f2}', "\u{3c2}".to_string());
+    m.insert('\u{3f4}', "\u{398}".to_string());
+    m.insert('\u{3f5}', "\u{3b5}".to_string());
+    m.insert('\u{3f9}', "\u{3a3}".to_string());
+    m.insert('\u{400}', "\u{415}\u{300}".to_string());
+    m.insert('\u{401}', "\u{415}\u{308}".to_string());
+    m.insert('\u{403}', "\u{413}\u{301}".to_string());
+    m.insert('\u{407}', "\u{406}\u{308}".to_string());
+    m.insert('\u{40c}', "\u{41a}\u{301}".to_string());
+    m.insert('\u{40d}', "\u{418}\u{300}".to_string());
+    m.insert('\u{40e}', "\u{423}\u{306}".to_string());
+    m.insert('\u{419}', "\u{418}\u{306}".to_string());
+    m.insert('\u{439}', "\u{438}\u{306}".to_string());
+    m.insert('\u{450}', "\u{435}\u{300}".to_string());
+    m.insert('\u{451}', "\u{435}\u{308}".to_string());
+    m.insert('\u{453}', "\u{433}\u{301}".to_string());
+    m.insert('\u{457}', "\u{456}\u{308}".to_string());
+    m.insert('\u{45c}', "\u{43a}\u{301}".to_string());
+    m.insert('\u{45d}', "\u{438}\u{300}".to_string());
+    m.insert('\u{45e}', "\u{443}\u{306}".to_string());
+    m.insert('\u{476}', "\u{474}\u{30f}".to_string());
+    m.insert('\u{477}', "\u{475}\u{30f}".to_string());
+    m.insert('\u{4c1}', "\u{416}\u{306}".to_string());
+    m.insert('\u{4c2}', "\u{436}\u{306}".to_string());
+    m.insert('\u{4d0}', "\u{410}\u{306}".to_string());
+    m.insert('\u{4d1}', "\u{430}\u{306}".to_string());
+    m.insert('\u{4d2}', "\u{410}\u{308}".to_string());
+    m.insert('\u{4d3}', "\u{430}\u{308}".to_string());
+    m.insert('\u{4d6}', "\u{415}\u{306}".to_string());
+    m.insert('\u{4d7}', "\u{435}\u{306}".to_string());
+    m.insert('\u{4da}', "\u{4d8}\u{308}".to_string());
+    m.insert('\u{4db}', "\u{4d9}\u{308}".to_string());
+    m.insert('\u{4dc}', "\u{416}\u{308}".to_string());
+    m.insert('\u{4dd}', "\u{436}\u{308}".to_string());
+    m.insert('\u{4de}', "\u{417}\u{308}".to_string());
+    m.insert('\u{4df}', "\u{437}\u{308}".to_string());
+    m.insert('\u{4e2}', "\u{418}\u{304}".to_string());
+    m.insert('\u{4e3}', "\u{438}\u{304}".to_string());
+    m.insert('\u{4e4}', "\u{418}\u{308}".to_string());
+    m.insert('\u{4e5}', "\u{438}\u{308}".to_string());
+    m.insert('\u{4e6}', "\u{41e}\u{308}".to_string());
+    m.insert('\u{4e7}', "\u{43e}\u{308}".to_string());
+    m.insert('\u{4ea}', "\u{4e8}\u{308}".to_string());
+    m.insert('\u{4eb}', "\u{4e9}\u{308}".to_string());
+    m.insert('\u{4ec}', "\u{42d}\u{308}".to_string());
+    m.insert('\u{4ed}', "\u{44d}\u{308}".to_string());
+    m.insert('\u{4ee}', "\u{423}\u{304}".to_string());
+    m.insert('\u{4ef}', "\u{443}\u{304}".to_string());
+    m.insert('\u{4f0}', "\u{423}\u{308}".to_string());
+    m.insert('\u{4f1}', "\u{443}\u{308}".to_string());
+    m.insert('\u{4f2}', "\u{423}\u{30b}".to_string());
+    m.insert('\u{4f3}', "\u{443}\u{30b}".to_string());
+    m.insert('\u{4f4}', "\u{427}\u{308}".to_string());
+    m.insert('\u{4f5}', "\u{447}\u{308}".to_string());
+    m.insert('\u{4f8}', "\u{42b}\u{308}".to_string());
+    m.insert('\u{4f9}', "\u{44b}\u{308}".to_string());
+    m.insert('\u{1e00}', "A\u{325}".to_string());
+    m.insert('\u{1e01}', "a\u{325}".to_string());
+    m.insert('\u{1e02}', "B\u{307}".to_string());
+    m.insert('\u{1e03}', "b\u{307}".to_string());
+    m.insert('\u{1e04}', "B\u{323}".to_string());
+    m.insert('\u{1e05}', "b\u{323}".to_string());
+    m.insert('\u{1e06}', "B\u{331}".to_string());
+    m.insert('\u{1e07}', "b\u{331}".to_string());
+    m.insert('\u{1e08}', "C\u{327}\u{301}".to_string());
+    m.insert('\u{1e09}', "c\u{327}\u{301}".to_string());
+    m.insert('\u{1e0a}', "D\u{307}".to_string());
+    m.insert('\u{1e0b}', "d\u{307}".to_string());
+    m.insert('\u{1e0c}', "D\u{323}".to_string());
+    m.insert('\u{1e0d}', "d\u{323}".to_string());
+    m.insert('\u{1e0e}', "D\u{331}".to_string());
+    m.insert('\u{1e0f}', "d\u{331}".to_string());
+    m.insert('\u{1e10}', "D\u{327}".to_string());
+    m.insert('\u{1e11}', "d\u{327}".to_string());
+    m.insert('\u{1e12}', "D\u{32d}".to_string());
+    m.insert('\u{1e13}', "d\u{32d}".to_string());
+    m.insert('\u{1e14}', "E\u{304}\u{300}".to_string());
+    m.insert('\u{1e15}', "e\u{304}\u{300}".to_string());
+    m.insert('\u{1e16}', "E\u{304}\u{301}".to_string());
+    m.insert('\u{1e17}', "e\u{304}\u{301}".to_string());
+    m.insert('\u{1e18}', "E\u{32d}".to_string());
+    m.insert('\u{1e19}', "e\u{32d}".to_string());
+    m.insert('\u{1e1a}', "E\u{330}".to_string());
+    m.insert('\u{1e1b}', "e\u{330}".to_string());
+    m.insert('\u{1e1c}', "E\u{327}\u{306}".to_string());
+    m.insert('\u{1e1d}', "e\u{327}\u{306}".to_string());
+    m.insert('\u{1e1e}', "F\u{307}".to_string());
+    m.insert('\u{1e1f}', "f\u{307}".to_string());
+    m.insert('\u{1e20}', "G\u{304}".to_string());
+    m.insert('\u{1e21}', "g\u{304}".to_string());
+    m.insert('\u{1e22}', "H\u{307}".to_string());
+    m.insert('\u{1e23}', "h\u{307}".to_string());
+    m.insert('\u{1e24}', "H\u{323}".to_string());
+    m.insert('\u{1e25}', "h\u{323}".to_string());
+    m.insert('\u{1e26}', "H\u{308}".to_string());
+    m.insert('\u{1e27}', "h\u{308}".to_string());
+    m.insert('\u{1e28}', "H\u{327}".to_string());
+    m.insert('\u{1e29}', "h\u{327}".to_string());
+    m.insert('\u{1e2a}', "H\u{32e}".to_string());
+    m.insert('\u{1e2b}', "h\u{32e}".to_string());
+    m.insert('\u{1e2c}', "I\u{330}".to_string());
+    m.insert('\u{1e2d}', "i\u{330}".to_string());
+    m.insert('\u{1e2e}', "I\u{308}\u{301}".to_string());
+    m.insert('\u{1e2f}', "i\u{308}\u{301}".to_string());
+    m.insert('\u{1e30}', "K\u{301}".to_string());
+    m.insert('\u{1e31}', "k\u{301}".to_string());
+    m.insert('\u{1e32}', "K\u{323}".to_string());
+}
+
+fn nfkd_part_3(m: mut ref Map[char, String]) {
+    m.insert('\u{1e33}', "k\u{323}".to_string());
+    m.insert('\u{1e34}', "K\u{331}".to_string());
+    m.insert('\u{1e35}', "k\u{331}".to_string());
+    m.insert('\u{1e36}', "L\u{323}".to_string());
+    m.insert('\u{1e37}', "l\u{323}".to_string());
+    m.insert('\u{1e38}', "L\u{323}\u{304}".to_string());
+    m.insert('\u{1e39}', "l\u{323}\u{304}".to_string());
+    m.insert('\u{1e3a}', "L\u{331}".to_string());
+    m.insert('\u{1e3b}', "l\u{331}".to_string());
+    m.insert('\u{1e3c}', "L\u{32d}".to_string());
+    m.insert('\u{1e3d}', "l\u{32d}".to_string());
+    m.insert('\u{1e3e}', "M\u{301}".to_string());
+    m.insert('\u{1e3f}', "m\u{301}".to_string());
+    m.insert('\u{1e40}', "M\u{307}".to_string());
+    m.insert('\u{1e41}', "m\u{307}".to_string());
+    m.insert('\u{1e42}', "M\u{323}".to_string());
+    m.insert('\u{1e43}', "m\u{323}".to_string());
+    m.insert('\u{1e44}', "N\u{307}".to_string());
+    m.insert('\u{1e45}', "n\u{307}".to_string());
+    m.insert('\u{1e46}', "N\u{323}".to_string());
+    m.insert('\u{1e47}', "n\u{323}".to_string());
+    m.insert('\u{1e48}', "N\u{331}".to_string());
+    m.insert('\u{1e49}', "n\u{331}".to_string());
+    m.insert('\u{1e4a}', "N\u{32d}".to_string());
+    m.insert('\u{1e4b}', "n\u{32d}".to_string());
+    m.insert('\u{1e4c}', "O\u{303}\u{301}".to_string());
+    m.insert('\u{1e4d}', "o\u{303}\u{301}".to_string());
+    m.insert('\u{1e4e}', "O\u{303}\u{308}".to_string());
+    m.insert('\u{1e4f}', "o\u{303}\u{308}".to_string());
+    m.insert('\u{1e50}', "O\u{304}\u{300}".to_string());
+    m.insert('\u{1e51}', "o\u{304}\u{300}".to_string());
+    m.insert('\u{1e52}', "O\u{304}\u{301}".to_string());
+    m.insert('\u{1e53}', "o\u{304}\u{301}".to_string());
+    m.insert('\u{1e54}', "P\u{301}".to_string());
+    m.insert('\u{1e55}', "p\u{301}".to_string());
+    m.insert('\u{1e56}', "P\u{307}".to_string());
+    m.insert('\u{1e57}', "p\u{307}".to_string());
+    m.insert('\u{1e58}', "R\u{307}".to_string());
+    m.insert('\u{1e59}', "r\u{307}".to_string());
+    m.insert('\u{1e5a}', "R\u{323}".to_string());
+    m.insert('\u{1e5b}', "r\u{323}".to_string());
+    m.insert('\u{1e5c}', "R\u{323}\u{304}".to_string());
+    m.insert('\u{1e5d}', "r\u{323}\u{304}".to_string());
+    m.insert('\u{1e5e}', "R\u{331}".to_string());
+    m.insert('\u{1e5f}', "r\u{331}".to_string());
+    m.insert('\u{1e60}', "S\u{307}".to_string());
+    m.insert('\u{1e61}', "s\u{307}".to_string());
+    m.insert('\u{1e62}', "S\u{323}".to_string());
+    m.insert('\u{1e63}', "s\u{323}".to_string());
+    m.insert('\u{1e64}', "S\u{301}\u{307}".to_string());
+    m.insert('\u{1e65}', "s\u{301}\u{307}".to_string());
+    m.insert('\u{1e66}', "S\u{30c}\u{307}".to_string());
+    m.insert('\u{1e67}', "s\u{30c}\u{307}".to_string());
+    m.insert('\u{1e68}', "S\u{323}\u{307}".to_string());
+    m.insert('\u{1e69}', "s\u{323}\u{307}".to_string());
+    m.insert('\u{1e6a}', "T\u{307}".to_string());
+    m.insert('\u{1e6b}', "t\u{307}".to_string());
+    m.insert('\u{1e6c}', "T\u{323}".to_string());
+    m.insert('\u{1e6d}', "t\u{323}".to_string());
+    m.insert('\u{1e6e}', "T\u{331}".to_string());
+    m.insert('\u{1e6f}', "t\u{331}".to_string());
+    m.insert('\u{1e70}', "T\u{32d}".to_string());
+    m.insert('\u{1e71}', "t\u{32d}".to_string());
+    m.insert('\u{1e72}', "U\u{324}".to_string());
+    m.insert('\u{1e73}', "u\u{324}".to_string());
+    m.insert('\u{1e74}', "U\u{330}".to_string());
+    m.insert('\u{1e75}', "u\u{330}".to_string());
+    m.insert('\u{1e76}', "U\u{32d}".to_string());
+    m.insert('\u{1e77}', "u\u{32d}".to_string());
+    m.insert('\u{1e78}', "U\u{303}\u{301}".to_string());
+    m.insert('\u{1e79}', "u\u{303}\u{301}".to_string());
+    m.insert('\u{1e7a}', "U\u{304}\u{308}".to_string());
+    m.insert('\u{1e7b}', "u\u{304}\u{308}".to_string());
+    m.insert('\u{1e7c}', "V\u{303}".to_string());
+    m.insert('\u{1e7d}', "v\u{303}".to_string());
+    m.insert('\u{1e7e}', "V\u{323}".to_string());
+    m.insert('\u{1e7f}', "v\u{323}".to_string());
+    m.insert('\u{1e80}', "W\u{300}".to_string());
+    m.insert('\u{1e81}', "w\u{300}".to_string());
+    m.insert('\u{1e82}', "W\u{301}".to_string());
+    m.insert('\u{1e83}', "w\u{301}".to_string());
+    m.insert('\u{1e84}', "W\u{308}".to_string());
+    m.insert('\u{1e85}', "w\u{308}".to_string());
+    m.insert('\u{1e86}', "W\u{307}".to_string());
+    m.insert('\u{1e87}', "w\u{307}".to_string());
+    m.insert('\u{1e88}', "W\u{323}".to_string());
+    m.insert('\u{1e89}', "w\u{323}".to_string());
+    m.insert('\u{1e8a}', "X\u{307}".to_string());
+    m.insert('\u{1e8b}', "x\u{307}".to_string());
+    m.insert('\u{1e8c}', "X\u{308}".to_string());
+    m.insert('\u{1e8d}', "x\u{308}".to_string());
+    m.insert('\u{1e8e}', "Y\u{307}".to_string());
+    m.insert('\u{1e8f}', "y\u{307}".to_string());
+    m.insert('\u{1e90}', "Z\u{302}".to_string());
+    m.insert('\u{1e91}', "z\u{302}".to_string());
+    m.insert('\u{1e92}', "Z\u{323}".to_string());
+    m.insert('\u{1e93}', "z\u{323}".to_string());
+    m.insert('\u{1e94}', "Z\u{331}".to_string());
+    m.insert('\u{1e95}', "z\u{331}".to_string());
+    m.insert('\u{1e96}', "h\u{331}".to_string());
+    m.insert('\u{1e97}', "t\u{308}".to_string());
+    m.insert('\u{1e98}', "w\u{30a}".to_string());
+    m.insert('\u{1e99}', "y\u{30a}".to_string());
+    m.insert('\u{1e9a}', "a\u{2be}".to_string());
+    m.insert('\u{1e9b}', "s\u{307}".to_string());
+    m.insert('\u{1ea0}', "A\u{323}".to_string());
+    m.insert('\u{1ea1}', "a\u{323}".to_string());
+    m.insert('\u{1ea2}', "A\u{309}".to_string());
+    m.insert('\u{1ea3}', "a\u{309}".to_string());
+    m.insert('\u{1ea4}', "A\u{302}\u{301}".to_string());
+    m.insert('\u{1ea5}', "a\u{302}\u{301}".to_string());
+    m.insert('\u{1ea6}', "A\u{302}\u{300}".to_string());
+    m.insert('\u{1ea7}', "a\u{302}\u{300}".to_string());
+    m.insert('\u{1ea8}', "A\u{302}\u{309}".to_string());
+    m.insert('\u{1ea9}', "a\u{302}\u{309}".to_string());
+    m.insert('\u{1eaa}', "A\u{302}\u{303}".to_string());
+    m.insert('\u{1eab}', "a\u{302}\u{303}".to_string());
+    m.insert('\u{1eac}', "A\u{323}\u{302}".to_string());
+    m.insert('\u{1ead}', "a\u{323}\u{302}".to_string());
+    m.insert('\u{1eae}', "A\u{306}\u{301}".to_string());
+    m.insert('\u{1eaf}', "a\u{306}\u{301}".to_string());
+    m.insert('\u{1eb0}', "A\u{306}\u{300}".to_string());
+    m.insert('\u{1eb1}', "a\u{306}\u{300}".to_string());
+    m.insert('\u{1eb2}', "A\u{306}\u{309}".to_string());
+    m.insert('\u{1eb3}', "a\u{306}\u{309}".to_string());
+    m.insert('\u{1eb4}', "A\u{306}\u{303}".to_string());
+    m.insert('\u{1eb5}', "a\u{306}\u{303}".to_string());
+    m.insert('\u{1eb6}', "A\u{323}\u{306}".to_string());
+    m.insert('\u{1eb7}', "a\u{323}\u{306}".to_string());
+    m.insert('\u{1eb8}', "E\u{323}".to_string());
+    m.insert('\u{1eb9}', "e\u{323}".to_string());
+    m.insert('\u{1eba}', "E\u{309}".to_string());
+    m.insert('\u{1ebb}', "e\u{309}".to_string());
+    m.insert('\u{1ebc}', "E\u{303}".to_string());
+    m.insert('\u{1ebd}', "e\u{303}".to_string());
+    m.insert('\u{1ebe}', "E\u{302}\u{301}".to_string());
+    m.insert('\u{1ebf}', "e\u{302}\u{301}".to_string());
+    m.insert('\u{1ec0}', "E\u{302}\u{300}".to_string());
+    m.insert('\u{1ec1}', "e\u{302}\u{300}".to_string());
+    m.insert('\u{1ec2}', "E\u{302}\u{309}".to_string());
+    m.insert('\u{1ec3}', "e\u{302}\u{309}".to_string());
+    m.insert('\u{1ec4}', "E\u{302}\u{303}".to_string());
+    m.insert('\u{1ec5}', "e\u{302}\u{303}".to_string());
+    m.insert('\u{1ec6}', "E\u{323}\u{302}".to_string());
+    m.insert('\u{1ec7}', "e\u{323}\u{302}".to_string());
+    m.insert('\u{1ec8}', "I\u{309}".to_string());
+    m.insert('\u{1ec9}', "i\u{309}".to_string());
+    m.insert('\u{1eca}', "I\u{323}".to_string());
+    m.insert('\u{1ecb}', "i\u{323}".to_string());
+    m.insert('\u{1ecc}', "O\u{323}".to_string());
+}
+
+fn nfkd_part_4(m: mut ref Map[char, String]) {
+    m.insert('\u{1ecd}', "o\u{323}".to_string());
+    m.insert('\u{1ece}', "O\u{309}".to_string());
+    m.insert('\u{1ecf}', "o\u{309}".to_string());
+    m.insert('\u{1ed0}', "O\u{302}\u{301}".to_string());
+    m.insert('\u{1ed1}', "o\u{302}\u{301}".to_string());
+    m.insert('\u{1ed2}', "O\u{302}\u{300}".to_string());
+    m.insert('\u{1ed3}', "o\u{302}\u{300}".to_string());
+    m.insert('\u{1ed4}', "O\u{302}\u{309}".to_string());
+    m.insert('\u{1ed5}', "o\u{302}\u{309}".to_string());
+    m.insert('\u{1ed6}', "O\u{302}\u{303}".to_string());
+    m.insert('\u{1ed7}', "o\u{302}\u{303}".to_string());
+    m.insert('\u{1ed8}', "O\u{323}\u{302}".to_string());
+    m.insert('\u{1ed9}', "o\u{323}\u{302}".to_string());
+    m.insert('\u{1eda}', "O\u{31b}\u{301}".to_string());
+    m.insert('\u{1edb}', "o\u{31b}\u{301}".to_string());
+    m.insert('\u{1edc}', "O\u{31b}\u{300}".to_string());
+    m.insert('\u{1edd}', "o\u{31b}\u{300}".to_string());
+    m.insert('\u{1ede}', "O\u{31b}\u{309}".to_string());
+    m.insert('\u{1edf}', "o\u{31b}\u{309}".to_string());
+    m.insert('\u{1ee0}', "O\u{31b}\u{303}".to_string());
+    m.insert('\u{1ee1}', "o\u{31b}\u{303}".to_string());
+    m.insert('\u{1ee2}', "O\u{31b}\u{323}".to_string());
+    m.insert('\u{1ee3}', "o\u{31b}\u{323}".to_string());
+    m.insert('\u{1ee4}', "U\u{323}".to_string());
+    m.insert('\u{1ee5}', "u\u{323}".to_string());
+    m.insert('\u{1ee6}', "U\u{309}".to_string());
+    m.insert('\u{1ee7}', "u\u{309}".to_string());
+    m.insert('\u{1ee8}', "U\u{31b}\u{301}".to_string());
+    m.insert('\u{1ee9}', "u\u{31b}\u{301}".to_string());
+    m.insert('\u{1eea}', "U\u{31b}\u{300}".to_string());
+    m.insert('\u{1eeb}', "u\u{31b}\u{300}".to_string());
+    m.insert('\u{1eec}', "U\u{31b}\u{309}".to_string());
+    m.insert('\u{1eed}', "u\u{31b}\u{309}".to_string());
+    m.insert('\u{1eee}', "U\u{31b}\u{303}".to_string());
+    m.insert('\u{1eef}', "u\u{31b}\u{303}".to_string());
+    m.insert('\u{1ef0}', "U\u{31b}\u{323}".to_string());
+    m.insert('\u{1ef1}', "u\u{31b}\u{323}".to_string());
+    m.insert('\u{1ef2}', "Y\u{300}".to_string());
+    m.insert('\u{1ef3}', "y\u{300}".to_string());
+    m.insert('\u{1ef4}', "Y\u{323}".to_string());
+    m.insert('\u{1ef5}', "y\u{323}".to_string());
+    m.insert('\u{1ef6}', "Y\u{309}".to_string());
+    m.insert('\u{1ef7}', "y\u{309}".to_string());
+    m.insert('\u{1ef8}', "Y\u{303}".to_string());
+    m.insert('\u{1ef9}', "y\u{303}".to_string());
+    m.insert('\u{1f00}', "\u{3b1}\u{313}".to_string());
+    m.insert('\u{1f01}', "\u{3b1}\u{314}".to_string());
+    m.insert('\u{1f02}', "\u{3b1}\u{313}\u{300}".to_string());
+    m.insert('\u{1f03}', "\u{3b1}\u{314}\u{300}".to_string());
+    m.insert('\u{1f04}', "\u{3b1}\u{313}\u{301}".to_string());
+    m.insert('\u{1f05}', "\u{3b1}\u{314}\u{301}".to_string());
+    m.insert('\u{1f06}', "\u{3b1}\u{313}\u{342}".to_string());
+    m.insert('\u{1f07}', "\u{3b1}\u{314}\u{342}".to_string());
+    m.insert('\u{1f08}', "\u{391}\u{313}".to_string());
+    m.insert('\u{1f09}', "\u{391}\u{314}".to_string());
+    m.insert('\u{1f0a}', "\u{391}\u{313}\u{300}".to_string());
+    m.insert('\u{1f0b}', "\u{391}\u{314}\u{300}".to_string());
+    m.insert('\u{1f0c}', "\u{391}\u{313}\u{301}".to_string());
+    m.insert('\u{1f0d}', "\u{391}\u{314}\u{301}".to_string());
+    m.insert('\u{1f0e}', "\u{391}\u{313}\u{342}".to_string());
+    m.insert('\u{1f0f}', "\u{391}\u{314}\u{342}".to_string());
+    m.insert('\u{1f10}', "\u{3b5}\u{313}".to_string());
+    m.insert('\u{1f11}', "\u{3b5}\u{314}".to_string());
+    m.insert('\u{1f12}', "\u{3b5}\u{313}\u{300}".to_string());
+    m.insert('\u{1f13}', "\u{3b5}\u{314}\u{300}".to_string());
+    m.insert('\u{1f14}', "\u{3b5}\u{313}\u{301}".to_string());
+    m.insert('\u{1f15}', "\u{3b5}\u{314}\u{301}".to_string());
+    m.insert('\u{1f18}', "\u{395}\u{313}".to_string());
+    m.insert('\u{1f19}', "\u{395}\u{314}".to_string());
+    m.insert('\u{1f1a}', "\u{395}\u{313}\u{300}".to_string());
+    m.insert('\u{1f1b}', "\u{395}\u{314}\u{300}".to_string());
+    m.insert('\u{1f1c}', "\u{395}\u{313}\u{301}".to_string());
+    m.insert('\u{1f1d}', "\u{395}\u{314}\u{301}".to_string());
+    m.insert('\u{1f20}', "\u{3b7}\u{313}".to_string());
+    m.insert('\u{1f21}', "\u{3b7}\u{314}".to_string());
+    m.insert('\u{1f22}', "\u{3b7}\u{313}\u{300}".to_string());
+    m.insert('\u{1f23}', "\u{3b7}\u{314}\u{300}".to_string());
+    m.insert('\u{1f24}', "\u{3b7}\u{313}\u{301}".to_string());
+    m.insert('\u{1f25}', "\u{3b7}\u{314}\u{301}".to_string());
+    m.insert('\u{1f26}', "\u{3b7}\u{313}\u{342}".to_string());
+    m.insert('\u{1f27}', "\u{3b7}\u{314}\u{342}".to_string());
+    m.insert('\u{1f28}', "\u{397}\u{313}".to_string());
+    m.insert('\u{1f29}', "\u{397}\u{314}".to_string());
+    m.insert('\u{1f2a}', "\u{397}\u{313}\u{300}".to_string());
+    m.insert('\u{1f2b}', "\u{397}\u{314}\u{300}".to_string());
+    m.insert('\u{1f2c}', "\u{397}\u{313}\u{301}".to_string());
+    m.insert('\u{1f2d}', "\u{397}\u{314}\u{301}".to_string());
+    m.insert('\u{1f2e}', "\u{397}\u{313}\u{342}".to_string());
+    m.insert('\u{1f2f}', "\u{397}\u{314}\u{342}".to_string());
+    m.insert('\u{1f30}', "\u{3b9}\u{313}".to_string());
+    m.insert('\u{1f31}', "\u{3b9}\u{314}".to_string());
+    m.insert('\u{1f32}', "\u{3b9}\u{313}\u{300}".to_string());
+    m.insert('\u{1f33}', "\u{3b9}\u{314}\u{300}".to_string());
+    m.insert('\u{1f34}', "\u{3b9}\u{313}\u{301}".to_string());
+    m.insert('\u{1f35}', "\u{3b9}\u{314}\u{301}".to_string());
+    m.insert('\u{1f36}', "\u{3b9}\u{313}\u{342}".to_string());
+    m.insert('\u{1f37}', "\u{3b9}\u{314}\u{342}".to_string());
+    m.insert('\u{1f38}', "\u{399}\u{313}".to_string());
+    m.insert('\u{1f39}', "\u{399}\u{314}".to_string());
+    m.insert('\u{1f3a}', "\u{399}\u{313}\u{300}".to_string());
+    m.insert('\u{1f3b}', "\u{399}\u{314}\u{300}".to_string());
+    m.insert('\u{1f3c}', "\u{399}\u{313}\u{301}".to_string());
+    m.insert('\u{1f3d}', "\u{399}\u{314}\u{301}".to_string());
+    m.insert('\u{1f3e}', "\u{399}\u{313}\u{342}".to_string());
+    m.insert('\u{1f3f}', "\u{399}\u{314}\u{342}".to_string());
+    m.insert('\u{1f40}', "\u{3bf}\u{313}".to_string());
+    m.insert('\u{1f41}', "\u{3bf}\u{314}".to_string());
+    m.insert('\u{1f42}', "\u{3bf}\u{313}\u{300}".to_string());
+    m.insert('\u{1f43}', "\u{3bf}\u{314}\u{300}".to_string());
+    m.insert('\u{1f44}', "\u{3bf}\u{313}\u{301}".to_string());
+    m.insert('\u{1f45}', "\u{3bf}\u{314}\u{301}".to_string());
+    m.insert('\u{1f48}', "\u{39f}\u{313}".to_string());
+    m.insert('\u{1f49}', "\u{39f}\u{314}".to_string());
+    m.insert('\u{1f4a}', "\u{39f}\u{313}\u{300}".to_string());
+    m.insert('\u{1f4b}', "\u{39f}\u{314}\u{300}".to_string());
+    m.insert('\u{1f4c}', "\u{39f}\u{313}\u{301}".to_string());
+    m.insert('\u{1f4d}', "\u{39f}\u{314}\u{301}".to_string());
+    m.insert('\u{1f50}', "\u{3c5}\u{313}".to_string());
+    m.insert('\u{1f51}', "\u{3c5}\u{314}".to_string());
+    m.insert('\u{1f52}', "\u{3c5}\u{313}\u{300}".to_string());
+    m.insert('\u{1f53}', "\u{3c5}\u{314}\u{300}".to_string());
+    m.insert('\u{1f54}', "\u{3c5}\u{313}\u{301}".to_string());
+    m.insert('\u{1f55}', "\u{3c5}\u{314}\u{301}".to_string());
+    m.insert('\u{1f56}', "\u{3c5}\u{313}\u{342}".to_string());
+    m.insert('\u{1f57}', "\u{3c5}\u{314}\u{342}".to_string());
+    m.insert('\u{1f59}', "\u{3a5}\u{314}".to_string());
+    m.insert('\u{1f5b}', "\u{3a5}\u{314}\u{300}".to_string());
+    m.insert('\u{1f5d}', "\u{3a5}\u{314}\u{301}".to_string());
+    m.insert('\u{1f5f}', "\u{3a5}\u{314}\u{342}".to_string());
+    m.insert('\u{1f60}', "\u{3c9}\u{313}".to_string());
+    m.insert('\u{1f61}', "\u{3c9}\u{314}".to_string());
+    m.insert('\u{1f62}', "\u{3c9}\u{313}\u{300}".to_string());
+    m.insert('\u{1f63}', "\u{3c9}\u{314}\u{300}".to_string());
+    m.insert('\u{1f64}', "\u{3c9}\u{313}\u{301}".to_string());
+    m.insert('\u{1f65}', "\u{3c9}\u{314}\u{301}".to_string());
+    m.insert('\u{1f66}', "\u{3c9}\u{313}\u{342}".to_string());
+    m.insert('\u{1f67}', "\u{3c9}\u{314}\u{342}".to_string());
+    m.insert('\u{1f68}', "\u{3a9}\u{313}".to_string());
+    m.insert('\u{1f69}', "\u{3a9}\u{314}".to_string());
+    m.insert('\u{1f6a}', "\u{3a9}\u{313}\u{300}".to_string());
+    m.insert('\u{1f6b}', "\u{3a9}\u{314}\u{300}".to_string());
+    m.insert('\u{1f6c}', "\u{3a9}\u{313}\u{301}".to_string());
+    m.insert('\u{1f6d}', "\u{3a9}\u{314}\u{301}".to_string());
+    m.insert('\u{1f6e}', "\u{3a9}\u{313}\u{342}".to_string());
+    m.insert('\u{1f6f}', "\u{3a9}\u{314}\u{342}".to_string());
+    m.insert('\u{1f70}', "\u{3b1}\u{300}".to_string());
+    m.insert('\u{1f71}', "\u{3b1}\u{301}".to_string());
+    m.insert('\u{1f72}', "\u{3b5}\u{300}".to_string());
+    m.insert('\u{1f73}', "\u{3b5}\u{301}".to_string());
+    m.insert('\u{1f74}', "\u{3b7}\u{300}".to_string());
+}
+
+fn nfkd_part_5(m: mut ref Map[char, String]) {
+    m.insert('\u{1f75}', "\u{3b7}\u{301}".to_string());
+    m.insert('\u{1f76}', "\u{3b9}\u{300}".to_string());
+    m.insert('\u{1f77}', "\u{3b9}\u{301}".to_string());
+    m.insert('\u{1f78}', "\u{3bf}\u{300}".to_string());
+    m.insert('\u{1f79}', "\u{3bf}\u{301}".to_string());
+    m.insert('\u{1f7a}', "\u{3c5}\u{300}".to_string());
+    m.insert('\u{1f7b}', "\u{3c5}\u{301}".to_string());
+    m.insert('\u{1f7c}', "\u{3c9}\u{300}".to_string());
+    m.insert('\u{1f7d}', "\u{3c9}\u{301}".to_string());
+    m.insert('\u{1f80}', "\u{3b1}\u{313}\u{345}".to_string());
+    m.insert('\u{1f81}', "\u{3b1}\u{314}\u{345}".to_string());
+    m.insert('\u{1f82}', "\u{3b1}\u{313}\u{300}\u{345}".to_string());
+    m.insert('\u{1f83}', "\u{3b1}\u{314}\u{300}\u{345}".to_string());
+    m.insert('\u{1f84}', "\u{3b1}\u{313}\u{301}\u{345}".to_string());
+    m.insert('\u{1f85}', "\u{3b1}\u{314}\u{301}\u{345}".to_string());
+    m.insert('\u{1f86}', "\u{3b1}\u{313}\u{342}\u{345}".to_string());
+    m.insert('\u{1f87}', "\u{3b1}\u{314}\u{342}\u{345}".to_string());
+    m.insert('\u{1f88}', "\u{391}\u{313}\u{345}".to_string());
+    m.insert('\u{1f89}', "\u{391}\u{314}\u{345}".to_string());
+    m.insert('\u{1f8a}', "\u{391}\u{313}\u{300}\u{345}".to_string());
+    m.insert('\u{1f8b}', "\u{391}\u{314}\u{300}\u{345}".to_string());
+    m.insert('\u{1f8c}', "\u{391}\u{313}\u{301}\u{345}".to_string());
+    m.insert('\u{1f8d}', "\u{391}\u{314}\u{301}\u{345}".to_string());
+    m.insert('\u{1f8e}', "\u{391}\u{313}\u{342}\u{345}".to_string());
+    m.insert('\u{1f8f}', "\u{391}\u{314}\u{342}\u{345}".to_string());
+    m.insert('\u{1f90}', "\u{3b7}\u{313}\u{345}".to_string());
+    m.insert('\u{1f91}', "\u{3b7}\u{314}\u{345}".to_string());
+    m.insert('\u{1f92}', "\u{3b7}\u{313}\u{300}\u{345}".to_string());
+    m.insert('\u{1f93}', "\u{3b7}\u{314}\u{300}\u{345}".to_string());
+    m.insert('\u{1f94}', "\u{3b7}\u{313}\u{301}\u{345}".to_string());
+    m.insert('\u{1f95}', "\u{3b7}\u{314}\u{301}\u{345}".to_string());
+    m.insert('\u{1f96}', "\u{3b7}\u{313}\u{342}\u{345}".to_string());
+    m.insert('\u{1f97}', "\u{3b7}\u{314}\u{342}\u{345}".to_string());
+    m.insert('\u{1f98}', "\u{397}\u{313}\u{345}".to_string());
+    m.insert('\u{1f99}', "\u{397}\u{314}\u{345}".to_string());
+    m.insert('\u{1f9a}', "\u{397}\u{313}\u{300}\u{345}".to_string());
+    m.insert('\u{1f9b}', "\u{397}\u{314}\u{300}\u{345}".to_string());
+    m.insert('\u{1f9c}', "\u{397}\u{313}\u{301}\u{345}".to_string());
+    m.insert('\u{1f9d}', "\u{397}\u{314}\u{301}\u{345}".to_string());
+    m.insert('\u{1f9e}', "\u{397}\u{313}\u{342}\u{345}".to_string());
+    m.insert('\u{1f9f}', "\u{397}\u{314}\u{342}\u{345}".to_string());
+    m.insert('\u{1fa0}', "\u{3c9}\u{313}\u{345}".to_string());
+    m.insert('\u{1fa1}', "\u{3c9}\u{314}\u{345}".to_string());
+    m.insert('\u{1fa2}', "\u{3c9}\u{313}\u{300}\u{345}".to_string());
+    m.insert('\u{1fa3}', "\u{3c9}\u{314}\u{300}\u{345}".to_string());
+    m.insert('\u{1fa4}', "\u{3c9}\u{313}\u{301}\u{345}".to_string());
+    m.insert('\u{1fa5}', "\u{3c9}\u{314}\u{301}\u{345}".to_string());
+    m.insert('\u{1fa6}', "\u{3c9}\u{313}\u{342}\u{345}".to_string());
+    m.insert('\u{1fa7}', "\u{3c9}\u{314}\u{342}\u{345}".to_string());
+    m.insert('\u{1fa8}', "\u{3a9}\u{313}\u{345}".to_string());
+    m.insert('\u{1fa9}', "\u{3a9}\u{314}\u{345}".to_string());
+    m.insert('\u{1faa}', "\u{3a9}\u{313}\u{300}\u{345}".to_string());
+    m.insert('\u{1fab}', "\u{3a9}\u{314}\u{300}\u{345}".to_string());
+    m.insert('\u{1fac}', "\u{3a9}\u{313}\u{301}\u{345}".to_string());
+    m.insert('\u{1fad}', "\u{3a9}\u{314}\u{301}\u{345}".to_string());
+    m.insert('\u{1fae}', "\u{3a9}\u{313}\u{342}\u{345}".to_string());
+    m.insert('\u{1faf}', "\u{3a9}\u{314}\u{342}\u{345}".to_string());
+    m.insert('\u{1fb0}', "\u{3b1}\u{306}".to_string());
+    m.insert('\u{1fb1}', "\u{3b1}\u{304}".to_string());
+    m.insert('\u{1fb2}', "\u{3b1}\u{300}\u{345}".to_string());
+    m.insert('\u{1fb3}', "\u{3b1}\u{345}".to_string());
+    m.insert('\u{1fb4}', "\u{3b1}\u{301}\u{345}".to_string());
+    m.insert('\u{1fb6}', "\u{3b1}\u{342}".to_string());
+    m.insert('\u{1fb7}', "\u{3b1}\u{342}\u{345}".to_string());
+    m.insert('\u{1fb8}', "\u{391}\u{306}".to_string());
+    m.insert('\u{1fb9}', "\u{391}\u{304}".to_string());
+    m.insert('\u{1fba}', "\u{391}\u{300}".to_string());
+    m.insert('\u{1fbb}', "\u{391}\u{301}".to_string());
+    m.insert('\u{1fbc}', "\u{391}\u{345}".to_string());
+    m.insert('\u{1fbd}', " \u{313}".to_string());
+    m.insert('\u{1fbe}', "\u{3b9}".to_string());
+    m.insert('\u{1fbf}', " \u{313}".to_string());
+    m.insert('\u{1fc0}', " \u{342}".to_string());
+    m.insert('\u{1fc1}', " \u{308}\u{342}".to_string());
+    m.insert('\u{1fc2}', "\u{3b7}\u{300}\u{345}".to_string());
+    m.insert('\u{1fc3}', "\u{3b7}\u{345}".to_string());
+    m.insert('\u{1fc4}', "\u{3b7}\u{301}\u{345}".to_string());
+    m.insert('\u{1fc6}', "\u{3b7}\u{342}".to_string());
+    m.insert('\u{1fc7}', "\u{3b7}\u{342}\u{345}".to_string());
+    m.insert('\u{1fc8}', "\u{395}\u{300}".to_string());
+    m.insert('\u{1fc9}', "\u{395}\u{301}".to_string());
+    m.insert('\u{1fca}', "\u{397}\u{300}".to_string());
+    m.insert('\u{1fcb}', "\u{397}\u{301}".to_string());
+    m.insert('\u{1fcc}', "\u{397}\u{345}".to_string());
+    m.insert('\u{1fcd}', " \u{313}\u{300}".to_string());
+    m.insert('\u{1fce}', " \u{313}\u{301}".to_string());
+    m.insert('\u{1fcf}', " \u{313}\u{342}".to_string());
+    m.insert('\u{1fd0}', "\u{3b9}\u{306}".to_string());
+    m.insert('\u{1fd1}', "\u{3b9}\u{304}".to_string());
+    m.insert('\u{1fd2}', "\u{3b9}\u{308}\u{300}".to_string());
+    m.insert('\u{1fd3}', "\u{3b9}\u{308}\u{301}".to_string());
+    m.insert('\u{1fd6}', "\u{3b9}\u{342}".to_string());
+    m.insert('\u{1fd7}', "\u{3b9}\u{308}\u{342}".to_string());
+    m.insert('\u{1fd8}', "\u{399}\u{306}".to_string());
+    m.insert('\u{1fd9}', "\u{399}\u{304}".to_string());
+    m.insert('\u{1fda}', "\u{399}\u{300}".to_string());
+    m.insert('\u{1fdb}', "\u{399}\u{301}".to_string());
+    m.insert('\u{1fdd}', " \u{314}\u{300}".to_string());
+    m.insert('\u{1fde}', " \u{314}\u{301}".to_string());
+    m.insert('\u{1fdf}', " \u{314}\u{342}".to_string());
+    m.insert('\u{1fe0}', "\u{3c5}\u{306}".to_string());
+    m.insert('\u{1fe1}', "\u{3c5}\u{304}".to_string());
+    m.insert('\u{1fe2}', "\u{3c5}\u{308}\u{300}".to_string());
+    m.insert('\u{1fe3}', "\u{3c5}\u{308}\u{301}".to_string());
+    m.insert('\u{1fe4}', "\u{3c1}\u{313}".to_string());
+    m.insert('\u{1fe5}', "\u{3c1}\u{314}".to_string());
+    m.insert('\u{1fe6}', "\u{3c5}\u{342}".to_string());
+    m.insert('\u{1fe7}', "\u{3c5}\u{308}\u{342}".to_string());
+    m.insert('\u{1fe8}', "\u{3a5}\u{306}".to_string());
+    m.insert('\u{1fe9}', "\u{3a5}\u{304}".to_string());
+    m.insert('\u{1fea}', "\u{3a5}\u{300}".to_string());
+    m.insert('\u{1feb}', "\u{3a5}\u{301}".to_string());
+    m.insert('\u{1fec}', "\u{3a1}\u{314}".to_string());
+    m.insert('\u{1fed}', " \u{308}\u{300}".to_string());
+    m.insert('\u{1fee}', " \u{308}\u{301}".to_string());
+    m.insert('\u{1fef}', "`".to_string());
+    m.insert('\u{1ff2}', "\u{3c9}\u{300}\u{345}".to_string());
+    m.insert('\u{1ff3}', "\u{3c9}\u{345}".to_string());
+    m.insert('\u{1ff4}', "\u{3c9}\u{301}\u{345}".to_string());
+    m.insert('\u{1ff6}', "\u{3c9}\u{342}".to_string());
+    m.insert('\u{1ff7}', "\u{3c9}\u{342}\u{345}".to_string());
+    m.insert('\u{1ff8}', "\u{39f}\u{300}".to_string());
+    m.insert('\u{1ff9}', "\u{39f}\u{301}".to_string());
+    m.insert('\u{1ffa}', "\u{3a9}\u{300}".to_string());
+    m.insert('\u{1ffb}', "\u{3a9}\u{301}".to_string());
+    m.insert('\u{1ffc}', "\u{3a9}\u{345}".to_string());
+    m.insert('\u{1ffd}', " \u{301}".to_string());
+    m.insert('\u{1ffe}', " \u{314}".to_string());
+    m.insert('\u{2000}', " ".to_string());
+    m.insert('\u{2001}', " ".to_string());
+    m.insert('\u{2002}', " ".to_string());
+    m.insert('\u{2003}', " ".to_string());
+    m.insert('\u{2004}', " ".to_string());
+    m.insert('\u{2005}', " ".to_string());
+    m.insert('\u{2006}', " ".to_string());
+    m.insert('\u{2007}', " ".to_string());
+    m.insert('\u{2008}', " ".to_string());
+    m.insert('\u{2009}', " ".to_string());
+    m.insert('\u{200a}', " ".to_string());
+    m.insert('\u{2011}', "\u{2010}".to_string());
+    m.insert('\u{2017}', " \u{333}".to_string());
+    m.insert('\u{2024}', ".".to_string());
+    m.insert('\u{2025}', "..".to_string());
+    m.insert('\u{2026}', "...".to_string());
+    m.insert('\u{202f}', " ".to_string());
+    m.insert('\u{2033}', "\u{2032}\u{2032}".to_string());
+    m.insert('\u{2034}', "\u{2032}\u{2032}\u{2032}".to_string());
+    m.insert('\u{2036}', "\u{2035}\u{2035}".to_string());
+    m.insert('\u{2037}', "\u{2035}\u{2035}\u{2035}".to_string());
+    m.insert('\u{203c}', "!!".to_string());
+}
+
+fn nfkd_part_6(m: mut ref Map[char, String]) {
+    m.insert('\u{203e}', " \u{305}".to_string());
+    m.insert('\u{2047}', "??".to_string());
+    m.insert('\u{2048}', "?!".to_string());
+    m.insert('\u{2049}', "!?".to_string());
+    m.insert('\u{2057}', "\u{2032}\u{2032}\u{2032}\u{2032}".to_string());
+    m.insert('\u{205f}', " ".to_string());
+    m.insert('\u{2070}', "0".to_string());
+    m.insert('\u{2071}', "i".to_string());
+    m.insert('\u{2074}', "4".to_string());
+    m.insert('\u{2075}', "5".to_string());
+    m.insert('\u{2076}', "6".to_string());
+    m.insert('\u{2077}', "7".to_string());
+    m.insert('\u{2078}', "8".to_string());
+    m.insert('\u{2079}', "9".to_string());
+    m.insert('\u{207a}', "+".to_string());
+    m.insert('\u{207b}', "\u{2212}".to_string());
+    m.insert('\u{207c}', "=".to_string());
+    m.insert('\u{207d}', "(".to_string());
+    m.insert('\u{207e}', ")".to_string());
+    m.insert('\u{207f}', "n".to_string());
+    m.insert('\u{2080}', "0".to_string());
+    m.insert('\u{2081}', "1".to_string());
+    m.insert('\u{2082}', "2".to_string());
+    m.insert('\u{2083}', "3".to_string());
+    m.insert('\u{2084}', "4".to_string());
+    m.insert('\u{2085}', "5".to_string());
+    m.insert('\u{2086}', "6".to_string());
+    m.insert('\u{2087}', "7".to_string());
+    m.insert('\u{2088}', "8".to_string());
+    m.insert('\u{2089}', "9".to_string());
+    m.insert('\u{208a}', "+".to_string());
+    m.insert('\u{208b}', "\u{2212}".to_string());
+    m.insert('\u{208c}', "=".to_string());
+    m.insert('\u{208d}', "(".to_string());
+    m.insert('\u{208e}', ")".to_string());
+    m.insert('\u{2090}', "a".to_string());
+    m.insert('\u{2091}', "e".to_string());
+    m.insert('\u{2092}', "o".to_string());
+    m.insert('\u{2093}', "x".to_string());
+    m.insert('\u{2094}', "\u{259}".to_string());
+    m.insert('\u{2095}', "h".to_string());
+    m.insert('\u{2096}', "k".to_string());
+    m.insert('\u{2097}', "l".to_string());
+    m.insert('\u{2098}', "m".to_string());
+    m.insert('\u{2099}', "n".to_string());
+    m.insert('\u{209a}', "p".to_string());
+    m.insert('\u{209b}', "s".to_string());
+    m.insert('\u{209c}', "t".to_string());
+    m.insert('\u{20a8}', "Rs".to_string());
+    m.insert('\u{2100}', "a/c".to_string());
+    m.insert('\u{2101}', "a/s".to_string());
+    m.insert('\u{2102}', "C".to_string());
+    m.insert('\u{2103}', "\u{b0}C".to_string());
+    m.insert('\u{2105}', "c/o".to_string());
+    m.insert('\u{2106}', "c/u".to_string());
+    m.insert('\u{2107}', "\u{190}".to_string());
+    m.insert('\u{2109}', "\u{b0}F".to_string());
+    m.insert('\u{210a}', "g".to_string());
+    m.insert('\u{210b}', "H".to_string());
+    m.insert('\u{210c}', "H".to_string());
+    m.insert('\u{210d}', "H".to_string());
+    m.insert('\u{210e}', "h".to_string());
+    m.insert('\u{210f}', "\u{127}".to_string());
+    m.insert('\u{2110}', "I".to_string());
+    m.insert('\u{2111}', "I".to_string());
+    m.insert('\u{2112}', "L".to_string());
+    m.insert('\u{2113}', "l".to_string());
+    m.insert('\u{2115}', "N".to_string());
+    m.insert('\u{2116}', "No".to_string());
+    m.insert('\u{2119}', "P".to_string());
+    m.insert('\u{211a}', "Q".to_string());
+    m.insert('\u{211b}', "R".to_string());
+    m.insert('\u{211c}', "R".to_string());
+    m.insert('\u{211d}', "R".to_string());
+    m.insert('\u{2120}', "SM".to_string());
+    m.insert('\u{2121}', "TEL".to_string());
+    m.insert('\u{2122}', "TM".to_string());
+    m.insert('\u{2124}', "Z".to_string());
+    m.insert('\u{2126}', "\u{3a9}".to_string());
+    m.insert('\u{2128}', "Z".to_string());
+    m.insert('\u{212a}', "K".to_string());
+    m.insert('\u{212b}', "A\u{30a}".to_string());
+    m.insert('\u{212c}', "B".to_string());
+    m.insert('\u{212d}', "C".to_string());
+    m.insert('\u{212f}', "e".to_string());
+    m.insert('\u{2130}', "E".to_string());
+    m.insert('\u{2131}', "F".to_string());
+    m.insert('\u{2133}', "M".to_string());
+    m.insert('\u{2134}', "o".to_string());
+    m.insert('\u{2135}', "\u{5d0}".to_string());
+    m.insert('\u{2136}', "\u{5d1}".to_string());
+    m.insert('\u{2137}', "\u{5d2}".to_string());
+    m.insert('\u{2138}', "\u{5d3}".to_string());
+    m.insert('\u{2139}', "i".to_string());
+    m.insert('\u{213b}', "FAX".to_string());
+    m.insert('\u{213c}', "\u{3c0}".to_string());
+    m.insert('\u{213d}', "\u{3b3}".to_string());
+    m.insert('\u{213e}', "\u{393}".to_string());
+    m.insert('\u{213f}', "\u{3a0}".to_string());
+    m.insert('\u{2140}', "\u{2211}".to_string());
+    m.insert('\u{2145}', "D".to_string());
+    m.insert('\u{2146}', "d".to_string());
+    m.insert('\u{2147}', "e".to_string());
+    m.insert('\u{2148}', "i".to_string());
+    m.insert('\u{2149}', "j".to_string());
+    m.insert('\u{2150}', "1\u{2044}7".to_string());
+    m.insert('\u{2151}', "1\u{2044}9".to_string());
+    m.insert('\u{2152}', "1\u{2044}10".to_string());
+    m.insert('\u{2153}', "1\u{2044}3".to_string());
+    m.insert('\u{2154}', "2\u{2044}3".to_string());
+    m.insert('\u{2155}', "1\u{2044}5".to_string());
+    m.insert('\u{2156}', "2\u{2044}5".to_string());
+    m.insert('\u{2157}', "3\u{2044}5".to_string());
+    m.insert('\u{2158}', "4\u{2044}5".to_string());
+    m.insert('\u{2159}', "1\u{2044}6".to_string());
+    m.insert('\u{215a}', "5\u{2044}6".to_string());
+    m.insert('\u{215b}', "1\u{2044}8".to_string());
+    m.insert('\u{215c}', "3\u{2044}8".to_string());
+    m.insert('\u{215d}', "5\u{2044}8".to_string());
+    m.insert('\u{215e}', "7\u{2044}8".to_string());
+    m.insert('\u{215f}', "1\u{2044}".to_string());
+    m.insert('\u{2160}', "I".to_string());
+    m.insert('\u{2161}', "II".to_string());
+    m.insert('\u{2162}', "III".to_string());
+    m.insert('\u{2163}', "IV".to_string());
+    m.insert('\u{2164}', "V".to_string());
+    m.insert('\u{2165}', "VI".to_string());
+    m.insert('\u{2166}', "VII".to_string());
+    m.insert('\u{2167}', "VIII".to_string());
+    m.insert('\u{2168}', "IX".to_string());
+    m.insert('\u{2169}', "X".to_string());
+    m.insert('\u{216a}', "XI".to_string());
+    m.insert('\u{216b}', "XII".to_string());
+    m.insert('\u{216c}', "L".to_string());
+    m.insert('\u{216d}', "C".to_string());
+    m.insert('\u{216e}', "D".to_string());
+    m.insert('\u{216f}', "M".to_string());
+    m.insert('\u{2170}', "i".to_string());
+    m.insert('\u{2171}', "ii".to_string());
+    m.insert('\u{2172}', "iii".to_string());
+    m.insert('\u{2173}', "iv".to_string());
+    m.insert('\u{2174}', "v".to_string());
+    m.insert('\u{2175}', "vi".to_string());
+    m.insert('\u{2176}', "vii".to_string());
+    m.insert('\u{2177}', "viii".to_string());
+    m.insert('\u{2178}', "ix".to_string());
+    m.insert('\u{2179}', "x".to_string());
+    m.insert('\u{217a}', "xi".to_string());
+    m.insert('\u{217b}', "xii".to_string());
+    m.insert('\u{217c}', "l".to_string());
+}
+
+fn nfkd_part_7(m: mut ref Map[char, String]) {
+    m.insert('\u{217d}', "c".to_string());
+    m.insert('\u{217e}', "d".to_string());
+    m.insert('\u{217f}', "m".to_string());
+    m.insert('\u{2189}', "0\u{2044}3".to_string());
+    m.insert('\u{fb00}', "ff".to_string());
+    m.insert('\u{fb01}', "fi".to_string());
+    m.insert('\u{fb02}', "fl".to_string());
+    m.insert('\u{fb03}', "ffi".to_string());
+    m.insert('\u{fb04}', "ffl".to_string());
+    m.insert('\u{fb05}', "st".to_string());
+    m.insert('\u{fb06}', "st".to_string());
+    m.insert('\u{fb13}', "\u{574}\u{576}".to_string());
+    m.insert('\u{fb14}', "\u{574}\u{565}".to_string());
+    m.insert('\u{fb15}', "\u{574}\u{56b}".to_string());
+    m.insert('\u{fb16}', "\u{57e}\u{576}".to_string());
+    m.insert('\u{fb17}', "\u{574}\u{56d}".to_string());
+    m.insert('\u{fb1d}', "\u{5d9}\u{5b4}".to_string());
+    m.insert('\u{fb1f}', "\u{5f2}\u{5b7}".to_string());
+    m.insert('\u{fb20}', "\u{5e2}".to_string());
+    m.insert('\u{fb21}', "\u{5d0}".to_string());
+    m.insert('\u{fb22}', "\u{5d3}".to_string());
+    m.insert('\u{fb23}', "\u{5d4}".to_string());
+    m.insert('\u{fb24}', "\u{5db}".to_string());
+    m.insert('\u{fb25}', "\u{5dc}".to_string());
+    m.insert('\u{fb26}', "\u{5dd}".to_string());
+    m.insert('\u{fb27}', "\u{5e8}".to_string());
+    m.insert('\u{fb28}', "\u{5ea}".to_string());
+    m.insert('\u{fb29}', "+".to_string());
+    m.insert('\u{fb2a}', "\u{5e9}\u{5c1}".to_string());
+    m.insert('\u{fb2b}', "\u{5e9}\u{5c2}".to_string());
+    m.insert('\u{fb2c}', "\u{5e9}\u{5bc}\u{5c1}".to_string());
+    m.insert('\u{fb2d}', "\u{5e9}\u{5bc}\u{5c2}".to_string());
+    m.insert('\u{fb2e}', "\u{5d0}\u{5b7}".to_string());
+    m.insert('\u{fb2f}', "\u{5d0}\u{5b8}".to_string());
+    m.insert('\u{fb30}', "\u{5d0}\u{5bc}".to_string());
+    m.insert('\u{fb31}', "\u{5d1}\u{5bc}".to_string());
+    m.insert('\u{fb32}', "\u{5d2}\u{5bc}".to_string());
+    m.insert('\u{fb33}', "\u{5d3}\u{5bc}".to_string());
+    m.insert('\u{fb34}', "\u{5d4}\u{5bc}".to_string());
+    m.insert('\u{fb35}', "\u{5d5}\u{5bc}".to_string());
+    m.insert('\u{fb36}', "\u{5d6}\u{5bc}".to_string());
+    m.insert('\u{fb38}', "\u{5d8}\u{5bc}".to_string());
+    m.insert('\u{fb39}', "\u{5d9}\u{5bc}".to_string());
+    m.insert('\u{fb3a}', "\u{5da}\u{5bc}".to_string());
+    m.insert('\u{fb3b}', "\u{5db}\u{5bc}".to_string());
+    m.insert('\u{fb3c}', "\u{5dc}\u{5bc}".to_string());
+    m.insert('\u{fb3e}', "\u{5de}\u{5bc}".to_string());
+    m.insert('\u{fb40}', "\u{5e0}\u{5bc}".to_string());
+    m.insert('\u{fb41}', "\u{5e1}\u{5bc}".to_string());
+    m.insert('\u{fb43}', "\u{5e3}\u{5bc}".to_string());
+    m.insert('\u{fb44}', "\u{5e4}\u{5bc}".to_string());
+    m.insert('\u{fb46}', "\u{5e6}\u{5bc}".to_string());
+    m.insert('\u{fb47}', "\u{5e7}\u{5bc}".to_string());
+    m.insert('\u{fb48}', "\u{5e8}\u{5bc}".to_string());
+    m.insert('\u{fb49}', "\u{5e9}\u{5bc}".to_string());
+    m.insert('\u{fb4a}', "\u{5ea}\u{5bc}".to_string());
+    m.insert('\u{fb4b}', "\u{5d5}\u{5b9}".to_string());
+    m.insert('\u{fb4c}', "\u{5d1}\u{5bf}".to_string());
+    m.insert('\u{fb4d}', "\u{5db}\u{5bf}".to_string());
+    m.insert('\u{fb4e}', "\u{5e4}\u{5bf}".to_string());
+    m.insert('\u{fb4f}', "\u{5d0}\u{5dc}".to_string());
+    m.insert('\u{ff01}', "!".to_string());
+    m.insert('\u{ff02}', "\u{22}".to_string());
+    m.insert('\u{ff03}', "#".to_string());
+    m.insert('\u{ff04}', "$".to_string());
+    m.insert('\u{ff05}', "%".to_string());
+    m.insert('\u{ff06}', "&".to_string());
+    m.insert('\u{ff07}', "\u{27}".to_string());
+    m.insert('\u{ff08}', "(".to_string());
+    m.insert('\u{ff09}', ")".to_string());
+    m.insert('\u{ff0a}', "*".to_string());
+    m.insert('\u{ff0b}', "+".to_string());
+    m.insert('\u{ff0c}', ",".to_string());
+    m.insert('\u{ff0d}', "-".to_string());
+    m.insert('\u{ff0e}', ".".to_string());
+    m.insert('\u{ff0f}', "/".to_string());
+    m.insert('\u{ff10}', "0".to_string());
+    m.insert('\u{ff11}', "1".to_string());
+    m.insert('\u{ff12}', "2".to_string());
+    m.insert('\u{ff13}', "3".to_string());
+    m.insert('\u{ff14}', "4".to_string());
+    m.insert('\u{ff15}', "5".to_string());
+    m.insert('\u{ff16}', "6".to_string());
+    m.insert('\u{ff17}', "7".to_string());
+    m.insert('\u{ff18}', "8".to_string());
+    m.insert('\u{ff19}', "9".to_string());
+    m.insert('\u{ff1a}', ":".to_string());
+    m.insert('\u{ff1b}', ";".to_string());
+    m.insert('\u{ff1c}', "<".to_string());
+    m.insert('\u{ff1d}', "=".to_string());
+    m.insert('\u{ff1e}', ">".to_string());
+    m.insert('\u{ff1f}', "?".to_string());
+    m.insert('\u{ff20}', "@".to_string());
+    m.insert('\u{ff21}', "A".to_string());
+    m.insert('\u{ff22}', "B".to_string());
+    m.insert('\u{ff23}', "C".to_string());
+    m.insert('\u{ff24}', "D".to_string());
+    m.insert('\u{ff25}', "E".to_string());
+    m.insert('\u{ff26}', "F".to_string());
+    m.insert('\u{ff27}', "G".to_string());
+    m.insert('\u{ff28}', "H".to_string());
+    m.insert('\u{ff29}', "I".to_string());
+    m.insert('\u{ff2a}', "J".to_string());
+    m.insert('\u{ff2b}', "K".to_string());
+    m.insert('\u{ff2c}', "L".to_string());
+    m.insert('\u{ff2d}', "M".to_string());
+    m.insert('\u{ff2e}', "N".to_string());
+    m.insert('\u{ff2f}', "O".to_string());
+    m.insert('\u{ff30}', "P".to_string());
+    m.insert('\u{ff31}', "Q".to_string());
+    m.insert('\u{ff32}', "R".to_string());
+    m.insert('\u{ff33}', "S".to_string());
+    m.insert('\u{ff34}', "T".to_string());
+    m.insert('\u{ff35}', "U".to_string());
+    m.insert('\u{ff36}', "V".to_string());
+    m.insert('\u{ff37}', "W".to_string());
+    m.insert('\u{ff38}', "X".to_string());
+    m.insert('\u{ff39}', "Y".to_string());
+    m.insert('\u{ff3a}', "Z".to_string());
+    m.insert('\u{ff3b}', "[".to_string());
+    m.insert('\u{ff3c}', "\u{5c}".to_string());
+    m.insert('\u{ff3d}', "]".to_string());
+    m.insert('\u{ff3e}', "^".to_string());
+    m.insert('\u{ff3f}', "_".to_string());
+    m.insert('\u{ff40}', "`".to_string());
+    m.insert('\u{ff41}', "a".to_string());
+    m.insert('\u{ff42}', "b".to_string());
+    m.insert('\u{ff43}', "c".to_string());
+    m.insert('\u{ff44}', "d".to_string());
+    m.insert('\u{ff45}', "e".to_string());
+    m.insert('\u{ff46}', "f".to_string());
+    m.insert('\u{ff47}', "g".to_string());
+    m.insert('\u{ff48}', "h".to_string());
+    m.insert('\u{ff49}', "i".to_string());
+    m.insert('\u{ff4a}', "j".to_string());
+    m.insert('\u{ff4b}', "k".to_string());
+    m.insert('\u{ff4c}', "l".to_string());
+    m.insert('\u{ff4d}', "m".to_string());
+    m.insert('\u{ff4e}', "n".to_string());
+    m.insert('\u{ff4f}', "o".to_string());
+    m.insert('\u{ff50}', "p".to_string());
+    m.insert('\u{ff51}', "q".to_string());
+    m.insert('\u{ff52}', "r".to_string());
+    m.insert('\u{ff53}', "s".to_string());
+    m.insert('\u{ff54}', "t".to_string());
+    m.insert('\u{ff55}', "u".to_string());
+    m.insert('\u{ff56}', "v".to_string());
+    m.insert('\u{ff57}', "w".to_string());
+    m.insert('\u{ff58}', "x".to_string());
+    m.insert('\u{ff59}', "y".to_string());
+}
+
+fn nfkd_part_8(m: mut ref Map[char, String]) {
+    m.insert('\u{ff5a}', "z".to_string());
+    m.insert('\u{ff5b}', "{".to_string());
+    m.insert('\u{ff5c}', "|".to_string());
+    m.insert('\u{ff5d}', "}".to_string());
+    m.insert('\u{ff5e}', "~".to_string());
+    m.insert('\u{ff5f}', "\u{2985}".to_string());
+    m.insert('\u{ff60}', "\u{2986}".to_string());
+    m.insert('\u{ff61}', "\u{3002}".to_string());
+    m.insert('\u{ff62}', "\u{300c}".to_string());
+    m.insert('\u{ff63}', "\u{300d}".to_string());
+    m.insert('\u{ff64}', "\u{3001}".to_string());
+    m.insert('\u{ff65}', "\u{30fb}".to_string());
+    m.insert('\u{ff66}', "\u{30f2}".to_string());
+    m.insert('\u{ff67}', "\u{30a1}".to_string());
+    m.insert('\u{ff68}', "\u{30a3}".to_string());
+    m.insert('\u{ff69}', "\u{30a5}".to_string());
+    m.insert('\u{ff6a}', "\u{30a7}".to_string());
+    m.insert('\u{ff6b}', "\u{30a9}".to_string());
+    m.insert('\u{ff6c}', "\u{30e3}".to_string());
+    m.insert('\u{ff6d}', "\u{30e5}".to_string());
+    m.insert('\u{ff6e}', "\u{30e7}".to_string());
+    m.insert('\u{ff6f}', "\u{30c3}".to_string());
+    m.insert('\u{ff70}', "\u{30fc}".to_string());
+    m.insert('\u{ff71}', "\u{30a2}".to_string());
+    m.insert('\u{ff72}', "\u{30a4}".to_string());
+    m.insert('\u{ff73}', "\u{30a6}".to_string());
+    m.insert('\u{ff74}', "\u{30a8}".to_string());
+    m.insert('\u{ff75}', "\u{30aa}".to_string());
+    m.insert('\u{ff76}', "\u{30ab}".to_string());
+    m.insert('\u{ff77}', "\u{30ad}".to_string());
+    m.insert('\u{ff78}', "\u{30af}".to_string());
+    m.insert('\u{ff79}', "\u{30b1}".to_string());
+    m.insert('\u{ff7a}', "\u{30b3}".to_string());
+    m.insert('\u{ff7b}', "\u{30b5}".to_string());
+    m.insert('\u{ff7c}', "\u{30b7}".to_string());
+    m.insert('\u{ff7d}', "\u{30b9}".to_string());
+    m.insert('\u{ff7e}', "\u{30bb}".to_string());
+    m.insert('\u{ff7f}', "\u{30bd}".to_string());
+    m.insert('\u{ff80}', "\u{30bf}".to_string());
+    m.insert('\u{ff81}', "\u{30c1}".to_string());
+    m.insert('\u{ff82}', "\u{30c4}".to_string());
+    m.insert('\u{ff83}', "\u{30c6}".to_string());
+    m.insert('\u{ff84}', "\u{30c8}".to_string());
+    m.insert('\u{ff85}', "\u{30ca}".to_string());
+    m.insert('\u{ff86}', "\u{30cb}".to_string());
+    m.insert('\u{ff87}', "\u{30cc}".to_string());
+    m.insert('\u{ff88}', "\u{30cd}".to_string());
+    m.insert('\u{ff89}', "\u{30ce}".to_string());
+    m.insert('\u{ff8a}', "\u{30cf}".to_string());
+    m.insert('\u{ff8b}', "\u{30d2}".to_string());
+    m.insert('\u{ff8c}', "\u{30d5}".to_string());
+    m.insert('\u{ff8d}', "\u{30d8}".to_string());
+    m.insert('\u{ff8e}', "\u{30db}".to_string());
+    m.insert('\u{ff8f}', "\u{30de}".to_string());
+    m.insert('\u{ff90}', "\u{30df}".to_string());
+    m.insert('\u{ff91}', "\u{30e0}".to_string());
+    m.insert('\u{ff92}', "\u{30e1}".to_string());
+    m.insert('\u{ff93}', "\u{30e2}".to_string());
+    m.insert('\u{ff94}', "\u{30e4}".to_string());
+    m.insert('\u{ff95}', "\u{30e6}".to_string());
+    m.insert('\u{ff96}', "\u{30e8}".to_string());
+    m.insert('\u{ff97}', "\u{30e9}".to_string());
+    m.insert('\u{ff98}', "\u{30ea}".to_string());
+    m.insert('\u{ff99}', "\u{30eb}".to_string());
+    m.insert('\u{ff9a}', "\u{30ec}".to_string());
+    m.insert('\u{ff9b}', "\u{30ed}".to_string());
+    m.insert('\u{ff9c}', "\u{30ef}".to_string());
+    m.insert('\u{ff9d}', "\u{30f3}".to_string());
+    m.insert('\u{ff9e}', "\u{3099}".to_string());
+    m.insert('\u{ff9f}', "\u{309a}".to_string());
+    m.insert('\u{ffa0}', "\u{1160}".to_string());
+    m.insert('\u{ffa1}', "\u{1100}".to_string());
+    m.insert('\u{ffa2}', "\u{1101}".to_string());
+    m.insert('\u{ffa3}', "\u{11aa}".to_string());
+    m.insert('\u{ffa4}', "\u{1102}".to_string());
+    m.insert('\u{ffa5}', "\u{11ac}".to_string());
+    m.insert('\u{ffa6}', "\u{11ad}".to_string());
+    m.insert('\u{ffa7}', "\u{1103}".to_string());
+    m.insert('\u{ffa8}', "\u{1104}".to_string());
+    m.insert('\u{ffa9}', "\u{1105}".to_string());
+    m.insert('\u{ffaa}', "\u{11b0}".to_string());
+    m.insert('\u{ffab}', "\u{11b1}".to_string());
+    m.insert('\u{ffac}', "\u{11b2}".to_string());
+    m.insert('\u{ffad}', "\u{11b3}".to_string());
+    m.insert('\u{ffae}', "\u{11b4}".to_string());
+    m.insert('\u{ffaf}', "\u{11b5}".to_string());
+    m.insert('\u{ffb0}', "\u{111a}".to_string());
+    m.insert('\u{ffb1}', "\u{1106}".to_string());
+    m.insert('\u{ffb2}', "\u{1107}".to_string());
+    m.insert('\u{ffb3}', "\u{1108}".to_string());
+    m.insert('\u{ffb4}', "\u{1121}".to_string());
+    m.insert('\u{ffb5}', "\u{1109}".to_string());
+    m.insert('\u{ffb6}', "\u{110a}".to_string());
+    m.insert('\u{ffb7}', "\u{110b}".to_string());
+    m.insert('\u{ffb8}', "\u{110c}".to_string());
+    m.insert('\u{ffb9}', "\u{110d}".to_string());
+    m.insert('\u{ffba}', "\u{110e}".to_string());
+    m.insert('\u{ffbb}', "\u{110f}".to_string());
+    m.insert('\u{ffbc}', "\u{1110}".to_string());
+    m.insert('\u{ffbd}', "\u{1111}".to_string());
+    m.insert('\u{ffbe}', "\u{1112}".to_string());
+    m.insert('\u{ffc2}', "\u{1161}".to_string());
+    m.insert('\u{ffc3}', "\u{1162}".to_string());
+    m.insert('\u{ffc4}', "\u{1163}".to_string());
+    m.insert('\u{ffc5}', "\u{1164}".to_string());
+    m.insert('\u{ffc6}', "\u{1165}".to_string());
+    m.insert('\u{ffc7}', "\u{1166}".to_string());
+    m.insert('\u{ffca}', "\u{1167}".to_string());
+    m.insert('\u{ffcb}', "\u{1168}".to_string());
+    m.insert('\u{ffcc}', "\u{1169}".to_string());
+    m.insert('\u{ffcd}', "\u{116a}".to_string());
+    m.insert('\u{ffce}', "\u{116b}".to_string());
+    m.insert('\u{ffcf}', "\u{116c}".to_string());
+    m.insert('\u{ffd2}', "\u{116d}".to_string());
+    m.insert('\u{ffd3}', "\u{116e}".to_string());
+    m.insert('\u{ffd4}', "\u{116f}".to_string());
+    m.insert('\u{ffd5}', "\u{1170}".to_string());
+    m.insert('\u{ffd6}', "\u{1171}".to_string());
+    m.insert('\u{ffd7}', "\u{1172}".to_string());
+    m.insert('\u{ffda}', "\u{1173}".to_string());
+    m.insert('\u{ffdb}', "\u{1174}".to_string());
+    m.insert('\u{ffdc}', "\u{1175}".to_string());
+    m.insert('\u{ffe0}', "\u{a2}".to_string());
+    m.insert('\u{ffe1}', "\u{a3}".to_string());
+    m.insert('\u{ffe2}', "\u{ac}".to_string());
+    m.insert('\u{ffe3}', " \u{304}".to_string());
+    m.insert('\u{ffe4}', "\u{a6}".to_string());
+    m.insert('\u{ffe5}', "\u{a5}".to_string());
+    m.insert('\u{ffe6}', "\u{20a9}".to_string());
+    m.insert('\u{ffe8}', "\u{2502}".to_string());
+    m.insert('\u{ffe9}', "\u{2190}".to_string());
+    m.insert('\u{ffea}', "\u{2191}".to_string());
+    m.insert('\u{ffeb}', "\u{2192}".to_string());
+    m.insert('\u{ffec}', "\u{2193}".to_string());
+    m.insert('\u{ffed}', "\u{25a0}".to_string());
+    m.insert('\u{ffee}', "\u{25cb}".to_string());
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("add\n");
+    t.push_str("am\n");
+    t.push_str("archive\n");
+    t.push_str("bisect\n");
+    t.push_str("blame\n");
+    t.push_str("branch\n");
+    t.push_str("checkout\n");
+    t.push_str("cherry-pick\n");
+    t.push_str("clean\n");
+    t.push_str("clone\n");
+    t.push_str("commit\n");
+    t.push_str("config\n");
+    t.push_str("describe\n");
+    t.push_str("diff\n");
+    t.push_str("fetch\n");
+    t.push_str("format-patch\n");
+    t.push_str("gc\n");
+    t.push_str("grep\n");
+    t.push_str("init\n");
+    t.push_str("log\n");
+    t.push_str("merge\n");
+    t.push_str("mv\n");
+    t.push_str("notes\n");
+    t.push_str("pull\n");
+    t.push_str("push\n");
+    t.push_str("range-diff\n");
+    t.push_str("rebase\n");
+    t.push_str("reflog\n");
+    t.push_str("remote\n");
+    t.push_str("reset\n");
+    t.push_str("restore\n");
+    t.push_str("revert\n");
+    t.push_str("rm\n");
+    t.push_str("shortlog\n");
+    t.push_str("show\n");
+    t.push_str("sparse-checkout\n");
+    t.push_str("stash\n");
+    t.push_str("status\n");
+    t.push_str("submodule\n");
+    t.push_str("switch\n");
+    t.push_str("tag\n");
+    t.push_str("worktree\n");
+    v.push(DataFile { path: "commands.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("id,first,last,email,city\n");
+    t.push_str("46,Zoe,Smith,zoe.smith9@mail.com,Lyon\n");
+    t.push_str("10,Stephen,Müller,step.mülle43@corp.io,Leeds\n");
+    t.push_str("16,Saa,Johnson,sara.johns43@corp.io,Lyon\n");
+    t.push_str("20,Michael,Andersson,mich.ander80@corp.io,Leeds\n");
+    t.push_str("19,François,MacDonald,fran.macdo24@corp.io,Kraków\n");
+    t.push_str("31,Sara,Johnson,sara.johns70@corp.io,Toronto\n");
+    t.push_str("32,Sara,Johnson,sara.johns70@corp.oi,Toronto\n");
+    t.push_str("4,Mohammed,O'Brien,moha.o'bri73@mail.com,Nairobi\n");
+    t.push_str("37,Kahtryn,Anderson,kath.ander64@mail.com,Lyon\n");
+    t.push_str("44,Louis,Rosi,loui.rossiu3@corp.io,Leeds\n");
+    t.push_str("42,Zoe,OBrien,zoe.obrie75@corp.io,Kraków\n");
+    t.push_str("6,François,Leefbvre,fran.lefeb9@corp.io,Lyon\n");
+    t.push_str("22,Muhammad,Andersson,muha.ander82@corp.io,Kraków\n");
+    t.push_str("43,Louis,Rossi,loui.rossi83@corp.io,Leeds\n");
+    t.push_str("38,Bjorn,Lefèvre,bjor.lefèv93@corp.io,Nairobi\n");
+    t.push_str("29,Siobhan,Anderson,siob.ander74@corp.io,Toronto\n");
+    t.push_str("9,Mikael,Jonson,mika.jonso19@corp.io,Austin\n");
+    t.push_str("40,Bjorn,Leaèvre,bjor.lefèv93@corp.io,Nairobi\n");
+    t.push_str("3,Bjjørn,Haddad,bjør.hadda91@mail.com,Porto\n");
+    t.push_str("35,Aysha,McDonald,ayesemcdon33@mail.com,Toronto\n");
+    t.push_str("41,Jon,Jonson,jon.jonso97@corp.io,Osaka\n");
+    t.push_str("8,Mikael,Jonson,mika.jonso19@corp.io,Austin\n");
+    t.push_str("13,Li,Thomson,li.thoms56@mail.com,Toronto\n");
+    t.push_str("17,SARA,Joenson,sara.johns43@corp.io,Lyon\n");
+    t.push_str("15,Sara,Johnson,sara.johns43@corp.io,Lyon\n");
+    t.push_str("39,Bjirn,Lefèvre,bjor.lefvè93@corp.io,Nairobi\n");
+    t.push_str("27,Jonathan,Anderson,jona.ander97@corp.io,Lyon\n");
+    t.push_str("12,Stephhen,Müller,step.mülle43@corp.io,Leeds\n");
+    t.push_str("45,LOUIS,Rsosi,loui.rossi83@cop.io,Leeds\n");
+    t.push_str("48,Zoe,Soith,zoe.smith9@mailcom,Lyon\n");
+    t.push_str("21,MICHAEL,Andeesson,mich.annder80@corp.io,Leeds\n");
+    t.push_str("7,Ann,Okafor,ann.okafo36@mail.com,Porto\n");
+    t.push_str("25,Zoë,Muller,zoë.muell88@mail.com,Osaka\n");
+    t.push_str("30,Sara,Johnson,sara.johns70@corp.io,Toronto\n");
+    t.push_str("14,Muhammad,Müller,muha.mülle67@corp.io,Kraków\n");
+    t.push_str("50,Jose,Okafur,jose.okafu28@mail.com,Lyon\n");
+    t.push_str("36,Kathryn,Anderson,kath.ander64@mail.com,Lyon\n");
+    t.push_str("18,François,MacDonald,fran.macdo24@corp.io,Kraków\n");
+    t.push_str("47,Zoe,Smith,zoe.smith9@mali.com,Lyon\n");
+    t.push_str("1,Bjørn,Haddad,bjør.hadda91@mail.com,Porto\n");
+    t.push_str("24,Zoë,Mueller,zoë.muell88@mail.com,Osaka\n");
+    t.push_str("34,Ayesha,McDonald,ayes.mcdon33@mail.com,Toronto\n");
+    t.push_str("23,Muhammmad,Andersson,muha.andea82@corp.io,Kraków\n");
+    t.push_str("5,François,Lefebvre,fran.lefeb9@corp.io,Lyon\n");
+    t.push_str("26,Zoë,Muelller,zoë.muell88@mail.com,Osaka\n");
+    t.push_str("2,Bjørn,Hddad,bjør.hadda91@mail.com,Porto\n");
+    t.push_str("11,Stephen,Müller,step.mülle43@corp.io,Leeds\n");
+    t.push_str("49,John,McDonald,john.mcdon88@corp.io,Austin\n");
+    t.push_str("28,Jonathan,Anderson,jona.ander97@corp.io,Lyon\n");
+    t.push_str("33,Michael,Johnson,mich.johns15@corp.io,Porto\n");
+    v.push(DataFile { path: "customers0.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("id,first,last,email,city\n");
+    t.push_str("39,Jose,Okafur,jose.okafu36@corp.io,Porto\n");
+    t.push_str("47,Zoë,Andersson,zoë.ander49@mail.com,Nairobi\n");
+    t.push_str("40,Joose,Okafur,jose.okafu3a@corp.io,Porto\n");
+    t.push_str("18,Luis,Anderosn,luis.ander1@1mail.com,Austin\n");
+    t.push_str("11,Ann,Johnson,ann.johns62@mail.com,Kraków\n");
+    t.push_str("35,Jonathan,Garcia,jona.garci6@corp.io,Porto\n");
+    t.push_str("17,Luis,Anderson,luis.ander11@mail.com,Austin\n");
+    t.push_str("36,Jonathan,Gracia,jona.garci6@corp.io,Porto\n");
+    t.push_str("6,Anne,Okafur,anne.okafu74@corp.io,Leeds\n");
+    t.push_str("29,John,Okafur,john.okafu45@mail.com,Osaka\n");
+    t.push_str("15,Joohn,Okafor,john.okafo30@mail.coom,Austin\n");
+    t.push_str("34,Katherine,Garcia,kath.garci26@corp.io,Leeds\n");
+    t.push_str("28,MUHAMMAD,Mueler,muha.muell17@corp.io,Porto\n");
+    t.push_str("25,Kathryn,Russo,kath.russo98@corp.io,Leeds\n");
+    t.push_str("12,Ann,Johnson,ann.johns62@mail.com,Kraków\n");
+    t.push_str("4,Michael,Müller,mich.mülle20@corp.io,Osaka\n");
+    t.push_str("19,Sara,Lefebvre,sara.lefeb40@mail.com,Kraków\n");
+    t.push_str("41,Kathryn,Thompson,kath.thomp79@corp.io,Kraków\n");
+    t.push_str("33,Jon,Nguyen,joi.nguye64@mail.com,Porto\n");
+    t.push_str("16,Jhon,Okafor,john.okafo30@mail.com,Austin\n");
+    t.push_str("43,Jose,Garcia,jose.garci41@corp.io,Leeds\n");
+    t.push_str("5,Michaeel,Müller,mich.müülle20@corp.io,Osaka\n");
+    t.push_str("46,Li,Haddad,li.hadda59@mail.com,Nairobi\n");
+    t.push_str("37,Sara,Okafur,sara.okafu97@corp.io,Porto\n");
+    t.push_str("13,Catherine,García,cath.garcí42@corp.io,Toronto\n");
+    t.push_str("8,Jonathan,Lefèvre,jona.lefèv46@mail.com,Austin\n");
+    t.push_str("24,Kathryn,Russo,kath.russo98@corp.io,Leeds\n");
+    t.push_str("10,Sara,Garcia,sara.garci76@mail.com,Lyon\n");
+    t.push_str("26,Bjørn,Nguyễn,bjør.nguyễ80@corp.io,Osaka\n");
+    t.push_str("9,Jonathan,Lefèvre,jona.lefèv46@mail.com,Austin\n");
+    t.push_str("32,Jno,Nguyen,jon.nguye64@mailcom,Porto\n");
+    t.push_str("45,Li,Haddad,li.hadda59@mail.com,Nairobi\n");
+    t.push_str("3,Jon,McDonald,jon.mcdon86@mail.com,Kraków\n");
+    t.push_str("22,Steven,McDonald,stev.mcdon88@corp.io,Osaka\n");
+    t.push_str("44,Li,Haddad,li.hadda59@mail.com,Nairobi\n");
+    t.push_str("7,Jonathan,Kowalsky,jona.kowal11@mail.com,Nairobi\n");
+    t.push_str("38,Sara,Okafru,sara.okafu97@corp.io,Porto\n");
+    t.push_str("42,Jose,Garcia,jose.garci41@corp.io,Leeds\n");
+    t.push_str("23,Stveen,McDonald,sev.mcdon88@corp.io,Osaka\n");
+    t.push_str("1,Sarah,Okafor,sara.okafo76@mail.com,Osaka\n");
+    t.push_str("2,Sarah,Okafor,sara.okafo76@mail.com,Osaka\n");
+    t.push_str("21,Saea,Lefebvre,sara.lefeb40@mail.com,Kraków\n");
+    t.push_str("20,Sara,Lefebvre,sara.lefeb40@mailicom,Kraków\n");
+    t.push_str("31,Jon,Nguyen,jon.nguye64@mail.com,Porto\n");
+    t.push_str("27,Muhammad,Mueller,muha.muell17@corp.io,Porto\n");
+    t.push_str("30,John,Okaafur,john.okafu45@mail.com,Osaka\n");
+    t.push_str("14,John,Okafor,john.okafo30@mail.com,Austin\n");
+    v.push(DataFile { path: "customers1.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("id,first,last,email,city\n");
+    t.push_str("30,Mikael,Smyth,mika.smyth78@corp.io,Lyon\n");
+    t.push_str("33,Li,Nguyen,li.nguye57@corp.io,Toronto\n");
+    t.push_str("38,ANN,Thompsoon,ann.homp78@mail.com,Nairobi\n");
+    t.push_str("40,Ayesha,Johnson,ayes.johns45@corp.io,Osaka\n");
+    t.push_str("1,John,McDonald,john.mcdon81@corp.io,Osaka\n");
+    t.push_str("3,Li,Kowalski,li.kowal65@corp.io,Nairobi\n");
+    t.push_str("10,François,Hadad,fran.hadad67@corp.io,Toronto\n");
+    t.push_str("14,Michael,Nguyễn,mich.nguyễ47@corp.io,Osaka\n");
+    t.push_str("5,François,Thompson,fran.thomp27@corp.io,Osaka\n");
+    t.push_str("37,Ann,Thompson,ann.thomp78@mail.com,Nairobi\n");
+    t.push_str("19,Muhammad,Hidad,muha.hadad43@corp.io,Osaka\n");
+    t.push_str("42,Sara,Kowalski,sara.kowal82@corp.io,Toronto\n");
+    t.push_str("8,Francois,Andersson,fran.ander85@corp.io,Austin\n");
+    t.push_str("44,Jesé,Thomson,josé.thoms42@corp.io,Leeds\n");
+    t.push_str("39,Ayesha,Johnson,ayes.johns45@corp.io,Osaka\n");
+    t.push_str("7,Bjøn,Okafor,bjør.okafo12@mail.com,Kraków\n");
+    t.push_str("2,Bjørn,Kowalsky,bjør.kowal15@corp.io,Leeds\n");
+    t.push_str("13,Michael,Neuyễn,mich.nguyễ47c@orp.io,Osaka\n");
+    t.push_str("31,Mohammed,Okafor,moha.okafo12@corp.io,Kraków\n");
+    t.push_str("20,Louis,Müller,loui.mülle8@mail.com,Leeds\n");
+    t.push_str("15,Zoë,Rossi,zoë.rossi11@corp.io,Osaka\n");
+    t.push_str("36,Jonathan,Thampson,jona.thomp86@mail.om,Porto\n");
+    t.push_str("23,Zoe,Müller,zoe.mülle52@corp.io,Austin\n");
+    t.push_str("24,Zoe,Müller,zoe.mülle52@corp.io,Austin\n");
+    t.push_str("16,Aisha,Schmidt,aish.schmi52@corp.io,Lyon\n");
+    t.push_str("26,Stephen,Rossi,step.rossi72@corp.io,Leeds\n");
+    t.push_str("9,Kathryn,Rossi,kath.rossi41@corp.io,Porto\n");
+    t.push_str("25,Sarah,Hadad,sara.hadad44@mail.com,Toronto\n");
+    t.push_str("12,Michael,Nguyễn,mich.nguyễ47@corp.io,Osaka\n");
+    t.push_str("28,Stephen,Rossi,step.rossi72@corp.io,Leeds\n");
+    t.push_str("34,Louis,OBrien,loui.obrie97@mail.com,Leeds\n");
+    t.push_str("27,STEPHEN,Rosi,step.rossi72@corp.io,Leeds\n");
+    t.push_str("45,José,Thomson,josé.thoms42@corp.io,Leeds\n");
+    t.push_str("18,Muhammad,Hadad,muha.hadad43@corp.io,Osaka\n");
+    t.push_str("4,Li,Kowalski,li.kowal65@corp.io,Nairobi\n");
+    t.push_str("21,Louis,Müller,loui.mülle8omail.com,Leeds\n");
+    t.push_str("35,Jonathan,Thompson,jona.thomp86@mail.com,Porto\n");
+    t.push_str("43,José,Thomson,josé.thoms42@corp.io,Leeds\n");
+    t.push_str("17,Muhammad,Hadad,muha.hadad43@corp.io,Osaka\n");
+    t.push_str("41,Zoe,Rossi,zoe.rossi12@mail.com,Nairobi\n");
+    t.push_str("32,Mohammmed,Okafor,moha.okafo12@corp.io,Kraków\n");
+    t.push_str("29,Mikael,Smyth,mika.smyth78@corp.io,Lyon\n");
+    t.push_str("22,Zoe,Müller,zoe.mülle52@corp.io,Austin\n");
+    t.push_str("6,Bjørn,Okafor,bjør.okafo12@mail.com,Kraków\n");
+    t.push_str("11,François,Hadad,fran.hadad67@corp.io,Toronto\n");
+    v.push(DataFile { path: "customers2.csv".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("vectors\ttestdata/damerau_levenshtein.csv\n");
+    t.push_str("vectors\ttestdata/hamming.csv\n");
+    t.push_str("vectors\ttestdata/jaro_distance.csv\n");
+    t.push_str("vectors\ttestdata/jaro_winkler.csv\n");
+    t.push_str("vectors\ttestdata/jaro_winkler_longtol.csv\n");
+    t.push_str("vectors\ttestdata/levenshtein.csv\n");
+    t.push_str("vectors\ttestdata/match_rating_codex.csv\n");
+    t.push_str("vectors\ttestdata/match_rating_comparison.csv\n");
+    t.push_str("vectors\ttestdata/metaphone.csv\n");
+    t.push_str("vectors\ttestdata/nysiis.csv\n");
+    t.push_str("vectors\ttestdata/soundex.csv\n");
+    t.push_str("vectors\ttestdata/wagner_fischer.csv\n");
+    t.push_str("encode\tnames.txt\n");
+    t.push_str("compare\tpairs.tsv\n");
+    t.push_str("dedupe\tcustomers0.csv\n");
+    t.push_str("dedupe\tcustomers1.csv\n");
+    t.push_str("dedupe\tcustomers2.csv\n");
+    t.push_str("suggest\tcommands.txt\ttypos.txt\n");
+    t.push_str("search\tsurnames.txt\tqueries.txt\n");
+    t.push_str("lookup\tproducts.txt\tproduct_queries.txt\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Robert\n");
+    t.push_str("Rupert\n");
+    t.push_str("Rubin\n");
+    t.push_str("Ashcraft\n");
+    t.push_str("Ashcroft\n");
+    t.push_str("Tymczak\n");
+    t.push_str("Pfister\n");
+    t.push_str("Honeyman\n");
+    t.push_str("Lee\n");
+    t.push_str("Gutierrez\n");
+    t.push_str("Jackson\n");
+    t.push_str("Washington\n");
+    t.push_str("O'Brien\n");
+    t.push_str("OBrien\n");
+    t.push_str("MacDonald\n");
+    t.push_str("McDonald\n");
+    t.push_str("Macintosh\n");
+    t.push_str("Knight\n");
+    t.push_str("Night\n");
+    t.push_str("Schmidt\n");
+    t.push_str("Schmitt\n");
+    t.push_str("Smith\n");
+    t.push_str("Smyth\n");
+    t.push_str("Schneider\n");
+    t.push_str("Snyder\n");
+    t.push_str("Müller\n");
+    t.push_str("Mueller\n");
+    t.push_str("Muller\n");
+    t.push_str("Möller\n");
+    t.push_str("José\n");
+    t.push_str("Jose\n");
+    t.push_str("García\n");
+    t.push_str("Garcia\n");
+    t.push_str("Núñez\n");
+    t.push_str("Nunez\n");
+    t.push_str("François\n");
+    t.push_str("Francois\n");
+    t.push_str("Lefèvre\n");
+    t.push_str("Lefebvre\n");
+    t.push_str("Wójcik\n");
+    t.push_str("Wojcik\n");
+    t.push_str("Ødegaard\n");
+    t.push_str("Øvrebø\n");
+    t.push_str("Yılmaz\n");
+    t.push_str("Nguyễn\n");
+    t.push_str("Nguyen\n");
+    t.push_str("Đặng\n");
+    t.push_str("Παπαδόπουλος\n");
+    t.push_str("Иванов\n");
+    t.push_str("王\n");
+    t.push_str("Smith-Jones\n");
+    t.push_str("van der Berg\n");
+    t.push_str("Van Der Berg\n");
+    t.push_str("D'Angelo\n");
+    t.push_str("DAngelo\n");
+    t.push_str("ﬁnn\n");
+    t.push_str("Ⅻ\n");
+    t.push_str("ＪＯＨＮ\n");
+    t.push_str("Phillips\n");
+    t.push_str("Philips\n");
+    t.push_str("Pfeiffer\n");
+    t.push_str("Kendrick\n");
+    t.push_str("Kenrick\n");
+    t.push_str("Thompson\n");
+    t.push_str("Thomson\n");
+    t.push_str("Xavier\n");
+    t.push_str("Ximenez\n");
+    t.push_str("Whitaker\n");
+    t.push_str("Wright\n");
+    t.push_str("Gnome\n");
+    t.push_str("Psmith\n");
+    t.push_str("Aeschylus\n");
+    t.push_str("Chiang\n");
+    t.push_str("Michael\n");
+    t.push_str("Mikhail\n");
+    t.push_str("Shaughnessy\n");
+    t.push_str("Schultz\n");
+    t.push_str("Schulz\n");
+    t.push_str("Evans\n");
+    t.push_str("Evens\n");
+    t.push_str("Catherine\n");
+    t.push_str("Kathryn\n");
+    t.push_str("Katherine\n");
+    t.push_str("Cathryn\n");
+    t.push_str("Haley\n");
+    t.push_str("Hayley\n");
+    t.push_str("Bailey\n");
+    t.push_str("Baily\n");
+    t.push_str("Dwight\n");
+    t.push_str("Hughes\n");
+    t.push_str("Hugh\n");
+    t.push_str("Zimmerman\n");
+    t.push_str("Szymański\n");
+    t.push_str("Straße\n");
+    t.push_str("Strasse\n");
+    t.push_str("Ängström\n");
+    t.push_str("Æsir\n");
+    t.push_str("Œuvre\n");
+    t.push_str("Łukasz\n");
+    t.push_str("Lukasz\n");
+    t.push_str("Ian\n");
+    t.push_str("Iain\n");
+    t.push_str("Ewan\n");
+    t.push_str("Euan\n");
+    t.push_str("Sean\n");
+    t.push_str("Shawn\n");
+    t.push_str("Shaun\n");
+    t.push_str("Zoë\n");
+    t.push_str("Chloé\n");
+    t.push_str("Renée\n");
+    t.push_str("Rene\n");
+    t.push_str("Kristin\n");
+    t.push_str("Christine\n");
+    t.push_str("Scherbatsky\n");
+    t.push_str("Tschaikowsky\n");
+    t.push_str("Ritchie\n");
+    t.push_str("Richey\n");
+    t.push_str("Gaston\n");
+    t.push_str("Ghislaine\n");
+    t.push_str("Sigh\n");
+    t.push_str("Dodge\n");
+    t.push_str("Judge\n");
+    t.push_str("Edge\n");
+    t.push_str("Science\n");
+    t.push_str("Tiara\n");
+    t.push_str("Nation\n");
+    t.push_str("Wheat\n");
+    t.push_str("Whale\n");
+    t.push_str("Moore\n");
+    t.push_str("Moor\n");
+    t.push_str("Matthews\n");
+    t.push_str("Mathews\n");
+    t.push_str("Kaye\n");
+    t.push_str("Kay\n");
+    t.push_str("Tchaikovsky\n");
+    t.push_str("  padded  \n");
+    t.push_str("\n");
+    t.push_str("a b c\n");
+    t.push_str("x\n");
+    t.push_str("AH\n");
+    t.push_str("ah\n");
+    v.push(DataFile { path: "names.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("martha\tmarhta\n");
+    t.push_str("dwayne\tduane\n");
+    t.push_str("dixon\tdicksonx\n");
+    t.push_str("jones\tjohnson\n");
+    t.push_str("abcvwxyz\tcabvwxyz\n");
+    t.push_str("jellyfish\tsmellyfish\n");
+    t.push_str("kitten\tsitting\n");
+    t.push_str("Saturday\tSunday\n");
+    t.push_str("José\tJose\n");
+    t.push_str("Müller\tMueller\n");
+    t.push_str("ca\tabc\n");
+    t.push_str("abcdef\tbadcfe\n");
+    t.push_str("\t\n");
+    t.push_str("a\t\n");
+    t.push_str("\tabc\n");
+    t.push_str("same\tsame\n");
+    t.push_str("Ølsen\tOlsen\n");
+    t.push_str("Straße\tStrasse\n");
+    t.push_str("123 Main St\t123 Main Street\n");
+    t.push_str("Apt 4B\tApartment 4-B\n");
+    t.push_str("Catherine\tKathryn\n");
+    t.push_str("Michael\tMikhail\n");
+    t.push_str("Smith\tSmyth\n");
+    t.push_str("Tim\tTimothy\n");
+    t.push_str("Marie Helene\tMaria Rio\n");
+    t.push_str("Shackleford\tShackelford\n");
+    t.push_str("Dunningham\tCunnigham\n");
+    t.push_str("Nichleson\tNichulson\n");
+    t.push_str("Massey\tMassie\n");
+    t.push_str("Abroms\tAbrams\n");
+    t.push_str("Hardin\tMartinez\n");
+    t.push_str("Itman\tSmith\n");
+    t.push_str("Jeraldine\tGeraldine\n");
+    t.push_str("Marhta\tMartha\n");
+    t.push_str("Michelle\tMichael\n");
+    t.push_str("Julies\tJulius\n");
+    t.push_str("Tanya\tTonya\n");
+    t.push_str("Dwayne\tDuane\n");
+    t.push_str("Sean\tSusan\n");
+    t.push_str("Jon\tJohn\n");
+    t.push_str("Jon\tJan\n");
+    t.push_str("Brookhaven\tBrrokhaven\n");
+    t.push_str("Brook Hallow\tBrook Hllw\n");
+    t.push_str("Decatur\tDecatir\n");
+    t.push_str("Fitzrureiter\tFitzenreiter\n");
+    t.push_str("Higbee\tHighee\n");
+    t.push_str("Higbee\tHigvee\n");
+    t.push_str("Lacura\tLocura\n");
+    t.push_str("Iowa\tIona\n");
+    t.push_str("1st\tIST\n");
+    t.push_str("Nguyễn\tNguyen\n");
+    t.push_str("北京\t北京市\n");
+    t.push_str("👍🏽ok\t👍ok\n");
+    t.push_str("orangutan-kumquat\torangutan kumquat\n");
+    t.push_str("aaaa\taaaaa\n");
+    t.push_str("pneumonoultramicroscopic\tpneumonoultramicroscopik\n");
+    v.push(DataFile { path: "pairs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("wireles mouse\n");
+    t.push_str("mechanicl keybord\n");
+    t.push_str("usb c hub\n");
+    t.push_str("hdmi\n");
+    t.push_str("cafe mug\n");
+    t.push_str("laptop stnd\n");
+    t.push_str("web cam\n");
+    t.push_str("headphone\n");
+    t.push_str("speeker\n");
+    t.push_str("chair\n");
+    t.push_str("desk\n");
+    t.push_str("monitr\n");
+    t.push_str("note book\n");
+    t.push_str("keyboard mechanical\n");
+    t.push_str("zzz\n");
+    v.push(DataFile { path: "product_queries.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Wireless Mouse\n");
+    t.push_str("Wired Mouse\n");
+    t.push_str("Mechanical Keyboard\n");
+    t.push_str("USB-C Hub\n");
+    t.push_str("USB-C Cable 2m\n");
+    t.push_str("HDMI Cable\n");
+    t.push_str("27\" Monitor\n");
+    t.push_str("Laptop Stand\n");
+    t.push_str("Webcam 1080p\n");
+    t.push_str("Noise-Cancelling Headphones\n");
+    t.push_str("Bluetooth Speaker\n");
+    t.push_str("Desk Lamp\n");
+    t.push_str("Ergonomic Chair\n");
+    t.push_str("Standing Desk\n");
+    t.push_str("Monitor Arm\n");
+    t.push_str("Café Mug\n");
+    t.push_str("Notebook A5\n");
+    v.push(DataFile { path: "products.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Smith\n");
+    t.push_str("Myller\n");
+    t.push_str("Garsia\n");
+    t.push_str("Nguyen\n");
+    t.push_str("Obrian\n");
+    t.push_str("Mcdonald\n");
+    t.push_str("Tomson\n");
+    t.push_str("Leferve\n");
+    t.push_str("Kovalski\n");
+    t.push_str("Ashcroft\n");
+    t.push_str("Zzyzx\n");
+    t.push_str("Rossi\n");
+    t.push_str("Knigt\n");
+    v.push(DataFile { path: "queries.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Anderson\n");
+    t.push_str("Andersson\n");
+    t.push_str("Ashcraft\n");
+    t.push_str("Ashcroft\n");
+    t.push_str("D'Angelo\n");
+    t.push_str("DAngelo\n");
+    t.push_str("Francois\n");
+    t.push_str("François\n");
+    t.push_str("Garcia\n");
+    t.push_str("García\n");
+    t.push_str("Gutierrez\n");
+    t.push_str("Hadad\n");
+    t.push_str("Haddad\n");
+    t.push_str("Honeyman\n");
+    t.push_str("Jackson\n");
+    t.push_str("Johnson\n");
+    t.push_str("Jonson\n");
+    t.push_str("Jose\n");
+    t.push_str("José\n");
+    t.push_str("Knight\n");
+    t.push_str("Kowalski\n");
+    t.push_str("Kowalsky\n");
+    t.push_str("Lee\n");
+    t.push_str("Lefebvre\n");
+    t.push_str("Lefèvre\n");
+    t.push_str("MacDonald\n");
+    t.push_str("Macintosh\n");
+    t.push_str("McDonald\n");
+    t.push_str("Mueller\n");
+    t.push_str("Muller\n");
+    t.push_str("Möller\n");
+    t.push_str("Müller\n");
+    t.push_str("Nguyen\n");
+    t.push_str("Nguyễn\n");
+    t.push_str("Night\n");
+    t.push_str("Nunez\n");
+    t.push_str("Núñez\n");
+    t.push_str("O'Brien\n");
+    t.push_str("OBrien\n");
+    t.push_str("Okafor\n");
+    t.push_str("Okafur\n");
+    t.push_str("Pfister\n");
+    t.push_str("Philips\n");
+    t.push_str("Phillips\n");
+    t.push_str("Robert\n");
+    t.push_str("Rossi\n");
+    t.push_str("Rubin\n");
+    t.push_str("Rupert\n");
+    t.push_str("Russo\n");
+    t.push_str("Schmidt\n");
+    t.push_str("Schmitt\n");
+    t.push_str("Schneider\n");
+    t.push_str("Smith\n");
+    t.push_str("Smith-Jones\n");
+    t.push_str("Smyth\n");
+    t.push_str("Snyder\n");
+    t.push_str("Thompson\n");
+    t.push_str("Thomson\n");
+    t.push_str("Tymczak\n");
+    t.push_str("Van Der Berg\n");
+    t.push_str("Washington\n");
+    t.push_str("Wojcik\n");
+    t.push_str("Wójcik\n");
+    t.push_str("Yılmaz\n");
+    t.push_str("van der Berg\n");
+    t.push_str("Ødegaard\n");
+    t.push_str("Øvrebø\n");
+    t.push_str("Đặng\n");
+    t.push_str("Παπαδόπουλος\n");
+    t.push_str("Иванов\n");
+    t.push_str("Ⅻ\n");
+    t.push_str("王\n");
+    t.push_str("ﬁnn\n");
+    t.push_str("ＪＯＨＮ\n");
+    v.push(DataFile { path: "surnames.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(",,0\n");
+    t.push_str("abc,,3\n");
+    t.push_str("bc,abc,1\n");
+    t.push_str("fuor,four,1\n");
+    t.push_str("abcd,acb,2\n");
+    t.push_str("cape sand recycling ,edith ann graham,17\n");
+    t.push_str("jellyifhs,jellyfish,2\n");
+    t.push_str("ifhs,fish,2\n");
+    t.push_str("\"Hello, world!\",\"Hello,Â world!\",2\n");
+    v.push(DataFile { path: "testdata/damerau_levenshtein.csv".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str(",,0\n");
+    t.push_str(",abc,3\n");
+    t.push_str("abc,abc,0\n");
+    t.push_str("acc,abc,1\n");
+    t.push_str("abcd,abc,1\n");
+    t.push_str("abc,abcd,1\n");
+    t.push_str("testing,this is a test,13\n");
+    t.push_str("Saturday,Sunday,7\n");
+    v.push(DataFile { path: "testdata/hamming.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("dixon,dicksonx,0.767\n");
+    t.push_str("martha,marhta,0.944\n");
+    t.push_str("dwayne,duane,0.822\n");
+    t.push_str("0ð00,0ð00,1\n");
+    t.push_str("\"Sint-Pietersplein 6, 9000 Gent\",\"Test 10, 1010 Brussel\",0.518\n");
+    v.push(DataFile { path: "testdata/jaro_distance.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("dixon,dicksonx,0.813\n");
+    t.push_str("martha,marhta,0.961\n");
+    t.push_str("dwayne,duane,0.84\n");
+    t.push_str("William,Williams,0.975\n");
+    t.push_str(",foo,0\n");
+    t.push_str("a,a,1\n");
+    t.push_str("abc,xyz,0\n");
+    t.push_str("aaaa,aaaaa,0.96\n");
+    t.push_str("orangutan-kumquat,orangutan kumquat,0.976\n");
+    t.push_str("jaz,jal,0.822\n");
+    t.push_str("@,@@,0.85\n");
+    t.push_str("0,0@,0.85\n");
+    t.push_str("a,ab,0.85\n");
+    t.push_str("012345,0123456,0.971\n");
+    t.push_str("012abc,012abcd,0.971\n");
+    t.push_str("012abc,013abcd,0.879\n");
+    t.push_str("a1bc,a1be,0.883\n");
+    v.push(DataFile { path: "testdata/jaro_winkler.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("dixon,dicksonx,0.830\n");
+    t.push_str("martha,marhta,0.971\n");
+    t.push_str("dwayne,duane,0.869\n");
+    t.push_str("William,Williams,0.980\n");
+    t.push_str(",foo,0\n");
+    t.push_str("a,a,1\n");
+    t.push_str("abc,xyz,0\n");
+    t.push_str("aaaa,aaaaa,0.96\n");
+    t.push_str("orangutan-kumquat,orangutan kumquat,0.986\n");
+    t.push_str("1abcdefg,1abcdefh,0.96\n");
+    v.push(DataFile { path: "testdata/jaro_winkler_longtol.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(",,0\n");
+    t.push_str("abc,,3\n");
+    t.push_str(",abc,3\n");
+    t.push_str("bc,abc,1\n");
+    t.push_str("kitten,sitting,3\n");
+    t.push_str("Saturday,Sunday,3\n");
+    v.push(DataFile { path: "testdata/levenshtein.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Byrne,BYRN\n");
+    t.push_str("Boern,BRN\n");
+    t.push_str("Smith,SMTH\n");
+    t.push_str("Smyth,SMYTH\n");
+    t.push_str("Catherine,CTHRN\n");
+    t.push_str("Kathryn,KTHRYN\n");
+    t.push_str("Kathrynoglin,KTHGLN\n");
+    t.push_str("Ad,AD\n");
+    t.push_str("Ed,ED\n");
+    t.push_str("William,WLM\n");
+    t.push_str("ä,Ä\n");
+    v.push(DataFile { path: "testdata/match_rating_codex.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Bryne,Boern,True\n");
+    t.push_str("Smith,Smyth,True\n");
+    t.push_str("Catherine,Kathryn,True\n");
+    t.push_str("Michael,Mike,False\n");
+    t.push_str("Tim,Timothy,None\n");
+    t.push_str("Ed,Ad,True\n");
+    t.push_str("Marie Helene,Maria Rio,True\n");
+    v.push(DataFile { path: "testdata/match_rating_comparison.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DGIB,JB\n");
+    t.push_str("metaphone,MTFN\n");
+    t.push_str("wHErE,WR\n");
+    t.push_str("shell,XL\n");
+    t.push_str("this is a difficult string,0S IS A TFKLT STRNK\n");
+    t.push_str("aeromancy,ERMNS\n");
+    t.push_str("Antidisestablishmentarianism,ANTTSSTBLXMNTRNSM\n");
+    t.push_str("sunlight labs,SNLT LBS\n");
+    t.push_str("sonlite laabz,SNLT LBS\n");
+    t.push_str("Çáŕẗéř,KRTR\n");
+    t.push_str("kentucky,KNTK\n");
+    t.push_str("KENTUCKY,KNTK\n");
+    t.push_str("NXNXNX,NKSNKSNKS\n");
+    t.push_str("Aapti,PT\n");
+    t.push_str("Aarti,RT\n");
+    t.push_str("CIAB,XB\n");
+    t.push_str("NQ,NK\n");
+    t.push_str("sian,XN\n");
+    t.push_str("gek,JK\n");
+    t.push_str("Hb,HB\n");
+    t.push_str("Bho,BH\n");
+    t.push_str("Tiavyi,XFY\n");
+    t.push_str("Xhot,XHT\n");
+    t.push_str("Xnot,SNT\n");
+    t.push_str("g,K\n");
+    t.push_str("8 queens,KNS\n");
+    t.push_str("Utah,UT\n");
+    t.push_str("WH,W\n");
+    t.push_str("walt,WLT\n");
+    t.push_str("ANDREW,ANTR\n");
+    t.push_str("why,W\n");
+    t.push_str("whynot,WNT\n");
+    t.push_str("acceptingness,AKSPTNKNS\n");
+    v.push(DataFile { path: "testdata/metaphone.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Worthy,WARTY\n");
+    t.push_str("Ogata,OGAT\n");
+    t.push_str("montgomery,MANTGANARY\n");
+    t.push_str("Costales,CASTAL\n");
+    t.push_str("Tu,T\n");
+    t.push_str("martincevic,MARTANCAFAC\n");
+    t.push_str("Catherine,CATARAN\n");
+    t.push_str("Katherine,CATARAN\n");
+    t.push_str("Katerina,CATARAN\n");
+    t.push_str("Johnathan,JANATAN\n");
+    t.push_str("Jonathan,JANATAN\n");
+    t.push_str("John,JAN\n");
+    t.push_str("Teresa,TARAS\n");
+    t.push_str("Theresa,TARAS\n");
+    t.push_str("Jessica,JASAC\n");
+    t.push_str("Joshua,JAS\n");
+    t.push_str("Bosch,BAS\n");
+    t.push_str("Lapher,LAFAR\n");
+    t.push_str("wiyh,WY\n");
+    t.push_str("MacArthur,MCARTAR\n");
+    t.push_str("Pheenard,FANAD\n");
+    t.push_str("Schmittie,SNATY\n");
+    t.push_str("Knaqze,NAGS\n");
+    t.push_str("Knokno,NAN\n");
+    t.push_str("Knoko,NAC\n");
+    t.push_str("Macaw,MC\n");
+    t.push_str(",\n");
+    t.push_str("T,T\n");
+    t.push_str("S,S\n");
+    t.push_str("P,P\n");
+    t.push_str("K,C\n");
+    t.push_str("M,M\n");
+    t.push_str("E,E\n");
+    t.push_str("PFEISTER,FASTAR\n");
+    t.push_str("SARAH,SAR\n");
+    t.push_str("ç,Ç");
+    v.push(DataFile { path: "testdata/nysiis.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Washington,W252\n");
+    t.push_str("Lee,L000\n");
+    t.push_str("Gutierrez,G362\n");
+    t.push_str("Pfister,P236\n");
+    t.push_str("Jackson,J250\n");
+    t.push_str("Tymczak,T522\n");
+    t.push_str(",\n");
+    t.push_str("A,A000\n");
+    t.push_str("Çáŕẗéř,C636\n");
+    t.push_str("Ashcroft,A261\n");
+    t.push_str("¿,¿000");
+    v.push(DataFile { path: "testdata/soundex.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(",,0,\n");
+    t.push_str("abc,,3,~~~\n");
+    t.push_str(",abc,3,~~~\n");
+    t.push_str("bc,abc,1,~bc\n");
+    t.push_str("kitten,sitting,3,~itt~n~\n");
+    t.push_str("Saturday,Sunday,3,s~~u~day\n");
+    v.push(DataFile { path: "testdata/wagner_fischer.csv".to_string(), hex: false, body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("stauts\n");
+    t.push_str("comit\n");
+    t.push_str("comitt\n");
+    t.push_str("psuh\n");
+    t.push_str("pul\n");
+    t.push_str("chekcout\n");
+    t.push_str("checkotu\n");
+    t.push_str("brnach\n");
+    t.push_str("rebse\n");
+    t.push_str("stsh\n");
+    t.push_str("lgo\n");
+    t.push_str("dif\n");
+    t.push_str("merg\n");
+    t.push_str("cloen\n");
+    t.push_str("fecth\n");
+    t.push_str("tga\n");
+    t.push_str("sttaus\n");
+    t.push_str("statsu\n");
+    t.push_str("cherrypick\n");
+    t.push_str("cherry_pick\n");
+    t.push_str("sparsecheckout\n");
+    t.push_str("xyzzy\n");
+    t.push_str("ad\n");
+    t.push_str("rm\n");
+    t.push_str("reflg\n");
+    t.push_str("blam\n");
+    t.push_str("submodlue\n");
+    t.push_str("worktee\n");
+    t.push_str("swich\n");
+    t.push_str("restroe\n");
+    t.push_str("resset\n");
+    t.push_str("bisec\n");
+    t.push_str("configure\n");
+    t.push_str("describ\n");
+    t.push_str("grpe\n");
+    t.push_str("initt\n");
+    t.push_str("a\n");
+    t.push_str("STATUS\n");
+    t.push_str("Push\n");
+    v.push(DataFile { path: "typos.txt".to_string(), hex: false, body: t });
+}

@@ -1,0 +1,1086 @@
+== vectors testdata/damerau_levenshtein.csv
+damerau_levenshtein('', '') = 0, expected '0'
+damerau_levenshtein('abc', '') = 3, expected '3'
+damerau_levenshtein('bc', 'abc') = 1, expected '1'
+damerau_levenshtein('fuor', 'four') = 1, expected '1'
+damerau_levenshtein('abcd', 'acb') = 2, expected '2'
+damerau_levenshtein('cape sand recycling ', 'edith ann graham') = 17, expected '17'
+damerau_levenshtein('jellyifhs', 'jellyfish') = 2, expected '2'
+damerau_levenshtein('ifhs', 'fish') = 2, expected '2'
+damerau_levenshtein('Hello, world!', 'Hello,Â\xa0world!') = 2, expected '2'
+== vectors testdata/hamming.csv
+hamming('', '') = 0, expected '0'
+hamming('', 'abc') = 3, expected '3'
+hamming('abc', 'abc') = 0, expected '0'
+hamming('acc', 'abc') = 1, expected '1'
+hamming('abcd', 'abc') = 1, expected '1'
+hamming('abc', 'abcd') = 1, expected '1'
+hamming('testing', 'this is a test') = 13, expected '13'
+hamming('Saturday', 'Sunday') = 7, expected '7'
+== vectors testdata/jaro_distance.csv
+jaro_distance('dixon', 'dicksonx') = 0.7666666666666666, expected '0.767'
+jaro_distance('martha', 'marhta') = 0.9444444444444445, expected '0.944'
+jaro_distance('dwayne', 'duane') = 0.8222222222222223, expected '0.822'
+jaro_distance('0ð00', '0ð00') = 1.0, expected '1'
+jaro_distance('Sint-Pietersplein 6, 9000 Gent', 'Test 10, 1010 Brussel') = 0.5182539682539683, expected '0.518'
+== vectors testdata/jaro_winkler.csv
+jaro_winkler('dixon', 'dicksonx') = 0.8133333333333332, expected '0.813'
+jaro_winkler('martha', 'marhta') = 0.9611111111111111, expected '0.961'
+jaro_winkler('dwayne', 'duane') = 0.8400000000000001, expected '0.84'
+jaro_winkler('William', 'Williams') = 0.975, expected '0.975'
+jaro_winkler('', 'foo') = 0.0, expected '0'
+jaro_winkler('a', 'a') = 1.0, expected '1'
+jaro_winkler('abc', 'xyz') = 0.0, expected '0'
+jaro_winkler('aaaa', 'aaaaa') = 0.96, expected '0.96'
+jaro_winkler('orangutan-kumquat', 'orangutan kumquat') = 0.9764705882352941, expected '0.976'
+jaro_winkler('jaz', 'jal') = 0.8222222222222222, expected '0.822'
+jaro_winkler('@', '@@') = 0.8500000000000001, expected '0.85'
+jaro_winkler('0', '0@') = 0.8500000000000001, expected '0.85'
+jaro_winkler('a', 'ab') = 0.8500000000000001, expected '0.85'
+jaro_winkler('012345', '0123456') = 0.9714285714285714, expected '0.971'
+jaro_winkler('012abc', '012abcd') = 0.9714285714285714, expected '0.971'
+jaro_winkler('012abc', '013abcd') = 0.8793650793650793, expected '0.879'
+jaro_winkler('a1bc', 'a1be') = 0.8833333333333334, expected '0.883'
+== vectors testdata/jaro_winkler_longtol.csv
+jaro_winkler_longtol('dixon', 'dicksonx') = 0.8303030303030302, expected '0.830'
+jaro_winkler_longtol('martha', 'marhta') = 0.9708333333333333, expected '0.971'
+jaro_winkler_longtol('dwayne', 'duane') = 0.8690909090909091, expected '0.869'
+jaro_winkler_longtol('William', 'Williams') = 0.9805555555555555, expected '0.980'
+jaro_winkler_longtol('', 'foo') = 0.0, expected '0'
+jaro_winkler_longtol('a', 'a') = 1.0, expected '1'
+jaro_winkler_longtol('abc', 'xyz') = 0.0, expected '0'
+jaro_winkler_longtol('aaaa', 'aaaaa') = 0.96, expected '0.96'
+jaro_winkler_longtol('orangutan-kumquat', 'orangutan kumquat') = 0.9857142857142857, expected '0.986'
+jaro_winkler_longtol('1abcdefg', '1abcdefh') = 0.96, expected '0.96'
+== vectors testdata/levenshtein.csv
+levenshtein('', '') = 0, expected '0'
+levenshtein('abc', '') = 3, expected '3'
+levenshtein('', 'abc') = 3, expected '3'
+levenshtein('bc', 'abc') = 1, expected '1'
+levenshtein('kitten', 'sitting') = 3, expected '3'
+levenshtein('Saturday', 'Sunday') = 3, expected '3'
+== vectors testdata/match_rating_codex.csv
+match_rating_codex('Byrne') = 'BYRN', expected 'BYRN'
+match_rating_codex('Boern') = 'BRN', expected 'BRN'
+match_rating_codex('Smith') = 'SMTH', expected 'SMTH'
+match_rating_codex('Smyth') = 'SMYTH', expected 'SMYTH'
+match_rating_codex('Catherine') = 'CTHRN', expected 'CTHRN'
+match_rating_codex('Kathryn') = 'KTHRYN', expected 'KTHRYN'
+match_rating_codex('Kathrynoglin') = 'KTHGLN', expected 'KTHGLN'
+match_rating_codex('Ad') = 'AD', expected 'AD'
+match_rating_codex('Ed') = 'ED', expected 'ED'
+match_rating_codex('William') = 'WLM', expected 'WLM'
+match_rating_codex('ä') = 'Ä', expected 'Ä'
+== vectors testdata/match_rating_comparison.csv
+match_rating_comparison('Bryne', 'Boern') = True, expected 'True'
+match_rating_comparison('Smith', 'Smyth') = True, expected 'True'
+match_rating_comparison('Catherine', 'Kathryn') = True, expected 'True'
+match_rating_comparison('Michael', 'Mike') = False, expected 'False'
+match_rating_comparison('Tim', 'Timothy') = None, expected 'None'
+match_rating_comparison('Ed', 'Ad') = True, expected 'True'
+match_rating_comparison('Marie Helene', 'Maria Rio') = True, expected 'True'
+== vectors testdata/metaphone.csv
+metaphone('DGIB') = 'JB', expected 'JB'
+metaphone('metaphone') = 'MTFN', expected 'MTFN'
+metaphone('wHErE') = 'WR', expected 'WR'
+metaphone('shell') = 'XL', expected 'XL'
+metaphone('this is a difficult string') = '0S IS A TFKLT STRNK', expected '0S IS A TFKLT STRNK'
+metaphone('aeromancy') = 'ERMNS', expected 'ERMNS'
+metaphone('Antidisestablishmentarianism') = 'ANTTSSTBLXMNTRNSM', expected 'ANTTSSTBLXMNTRNSM'
+metaphone('sunlight labs') = 'SNLT LBS', expected 'SNLT LBS'
+metaphone('sonlite laabz') = 'SNLT LBS', expected 'SNLT LBS'
+metaphone('Çáŕẗéř') = 'KRTR', expected 'KRTR'
+metaphone('kentucky') = 'KNTK', expected 'KNTK'
+metaphone('KENTUCKY') = 'KNTK', expected 'KNTK'
+metaphone('NXNXNX') = 'NKSNKSNKS', expected 'NKSNKSNKS'
+metaphone('Aapti') = 'PT', expected 'PT'
+metaphone('Aarti') = 'RT', expected 'RT'
+metaphone('CIAB') = 'XB', expected 'XB'
+metaphone('NQ') = 'NK', expected 'NK'
+metaphone('sian') = 'XN', expected 'XN'
+metaphone('gek') = 'JK', expected 'JK'
+metaphone('Hb') = 'HB', expected 'HB'
+metaphone('Bho') = 'BH', expected 'BH'
+metaphone('Tiavyi') = 'XFY', expected 'XFY'
+metaphone('Xhot') = 'XHT', expected 'XHT'
+metaphone('Xnot') = 'SNT', expected 'SNT'
+metaphone('g') = 'K', expected 'K'
+metaphone('8 queens') = 'KNS', expected 'KNS'
+metaphone('Utah') = 'UT', expected 'UT'
+metaphone('WH') = 'W', expected 'W'
+metaphone('walt') = 'WLT', expected 'WLT'
+metaphone('ANDREW') = 'ANTR', expected 'ANTR'
+metaphone('why') = 'W', expected 'W'
+metaphone('whynot') = 'WNT', expected 'WNT'
+metaphone('acceptingness') = 'AKSPTNKNS', expected 'AKSPTNKNS'
+== vectors testdata/nysiis.csv
+nysiis('Worthy') = 'WARTY', expected 'WARTY'
+nysiis('Ogata') = 'OGAT', expected 'OGAT'
+nysiis('montgomery') = 'MANTGANARY', expected 'MANTGANARY'
+nysiis('Costales') = 'CASTAL', expected 'CASTAL'
+nysiis('Tu') = 'T', expected 'T'
+nysiis('martincevic') = 'MARTANCAFAC', expected 'MARTANCAFAC'
+nysiis('Catherine') = 'CATARAN', expected 'CATARAN'
+nysiis('Katherine') = 'CATARAN', expected 'CATARAN'
+nysiis('Katerina') = 'CATARAN', expected 'CATARAN'
+nysiis('Johnathan') = 'JANATAN', expected 'JANATAN'
+nysiis('Jonathan') = 'JANATAN', expected 'JANATAN'
+nysiis('John') = 'JAN', expected 'JAN'
+nysiis('Teresa') = 'TARAS', expected 'TARAS'
+nysiis('Theresa') = 'TARAS', expected 'TARAS'
+nysiis('Jessica') = 'JASAC', expected 'JASAC'
+nysiis('Joshua') = 'JAS', expected 'JAS'
+nysiis('Bosch') = 'BAS', expected 'BAS'
+nysiis('Lapher') = 'LAFAR', expected 'LAFAR'
+nysiis('wiyh') = 'WY', expected 'WY'
+nysiis('MacArthur') = 'MCARTAR', expected 'MCARTAR'
+nysiis('Pheenard') = 'FANAD', expected 'FANAD'
+nysiis('Schmittie') = 'SNATY', expected 'SNATY'
+nysiis('Knaqze') = 'NAGS', expected 'NAGS'
+nysiis('Knokno') = 'NAN', expected 'NAN'
+nysiis('Knoko') = 'NAC', expected 'NAC'
+nysiis('Macaw') = 'MC', expected 'MC'
+nysiis('') = '', expected ''
+nysiis('T') = 'T', expected 'T'
+nysiis('S') = 'S', expected 'S'
+nysiis('P') = 'P', expected 'P'
+nysiis('K') = 'C', expected 'C'
+nysiis('M') = 'M', expected 'M'
+nysiis('E') = 'E', expected 'E'
+nysiis('PFEISTER') = 'FASTAR', expected 'FASTAR'
+nysiis('SARAH') = 'SAR', expected 'SAR'
+nysiis('ç') = 'Ç', expected 'Ç'
+== vectors testdata/soundex.csv
+soundex('Washington') = 'W252', expected 'W252'
+soundex('Lee') = 'L000', expected 'L000'
+soundex('Gutierrez') = 'G362', expected 'G362'
+soundex('Pfister') = 'P236', expected 'P236'
+soundex('Jackson') = 'J250', expected 'J250'
+soundex('Tymczak') = 'T522', expected 'T522'
+soundex('') = '', expected ''
+soundex('A') = 'A000', expected 'A000'
+soundex('Çáŕẗéř') = 'C636', expected 'C636'
+soundex('Ashcroft') = 'A261', expected 'A261'
+soundex('¿') = '¿000', expected '¿000'
+== vectors testdata/wagner_fischer.csv
+wagner_fischer('', '') = 0, expected '0'
+wagner_fischer('abc', '') = 3, expected '3'
+wagner_fischer('', 'abc') = 3, expected '3'
+wagner_fischer('bc', 'abc') = 1, expected '1'
+wagner_fischer('kitten', 'sitting') = 3, expected '3'
+wagner_fischer('Saturday', 'Sunday') = 3, expected '3'
+== encode names.txt
+'Robert': soundex='R163' metaphone='RBRT' nysiis='RABAD' mrc='RBRT'
+'Rupert': soundex='R163' metaphone='RPRT' nysiis='RAPAD' mrc='RPRT'
+'Rubin': soundex='R150' metaphone='RBN' nysiis='RABAN' mrc='RBN'
+'Ashcraft': soundex='A261' metaphone='AXKRFT' nysiis='ASCRAFT' mrc='ASHRFT'
+'Ashcroft': soundex='A261' metaphone='AXKRFT' nysiis='ASCRAFT' mrc='ASHRFT'
+'Tymczak': soundex='T522' metaphone='TMKSK' nysiis='TYNCSAC' mrc='TYMCZK'
+'Pfister': soundex='P236' metaphone='PFSTR' nysiis='FASTAR' mrc='PFSTR'
+'Honeyman': soundex='H555' metaphone='HNMN' nysiis='HANAYNAN' mrc='HNYMN'
+'Lee': soundex='L000' metaphone='L' nysiis='LY' mrc='L'
+'Gutierrez': soundex='G362' metaphone='KTRS' nysiis='GATAR' mrc='GTRZ'
+'Jackson': soundex='J250' metaphone='JKSN' nysiis='JACSAN' mrc='JCKSN'
+'Washington': soundex='W252' metaphone='WXNKTN' nysiis='WASANGTAN' mrc='WSHGTN'
+"O'Brien": soundex='O165' metaphone='OBRN' nysiis="O'BRAN" mrc="O'BRN"
+'OBrien': soundex='O165' metaphone='OBRN' nysiis='OBRAN' mrc='OBRN'
+'MacDonald': soundex='M235' metaphone='MKTNLT' nysiis='MCDANALD' mrc='MCDNLD'
+'McDonald': soundex='M235' metaphone='MKTNLT' nysiis='MCDANALD' mrc='MCDNLD'
+'Macintosh': soundex='M253' metaphone='MSNTX' nysiis='MCANT' mrc='MCNTSH'
+'Knight': soundex='K523' metaphone='NT' nysiis='NAGT' mrc='KNGHT'
+'Night': soundex='N230' metaphone='NT' nysiis='NAGT' mrc='NGHT'
+'Schmidt': soundex='S530' metaphone='SXMTT' nysiis='SNAD' mrc='SCHMDT'
+'Schmitt': soundex='S530' metaphone='SXMT' nysiis='SNAT' mrc='SCHMT'
+'Smith': soundex='S530' metaphone='SM0' nysiis='SNAT' mrc='SMTH'
+'Smyth': soundex='S530' metaphone='SM0' nysiis='SNYT' mrc='SMYTH'
+'Schneider': soundex='S536' metaphone='SXNTR' nysiis='SNADAR' mrc='SCHNDR'
+'Snyder': soundex='S536' metaphone='SNTR' nysiis='SNYDAR' mrc='SNYDR'
+'Müller': soundex='M460' metaphone='MLR' nysiis='MÜLAR' mrc='MÜLR'
+'Mueller': soundex='M460' metaphone='MLR' nysiis='MALAR' mrc='MLR'
+'Muller': soundex='M460' metaphone='MLR' nysiis='MALAR' mrc='MLR'
+'Möller': soundex='M460' metaphone='MLR' nysiis='MÖLAR' mrc='MÖLR'
+'José': soundex='J200' metaphone='JS' nysiis='JASÉ' mrc='JSÉ'
+'Jose': soundex='J200' metaphone='JS' nysiis='JAS' mrc='JS'
+'García': soundex='G620' metaphone='KRS' nysiis='GARCÍ' mrc='GRCÍ'
+'Garcia': soundex='G620' metaphone='KRX' nysiis='GARC' mrc='GRC'
+'Núñez': soundex='N520' metaphone='NNS' nysiis='NÚÑ' mrc='NÚÑZ'
+'Nunez': soundex='N520' metaphone='NNS' nysiis='NAN' mrc='NNZ'
+'François': soundex='F652' metaphone='FRNKS' nysiis='FRANÇ' mrc='FRNÇS'
+'Francois': soundex='F652' metaphone='FRNKS' nysiis='FRANC' mrc='FRNCS'
+'Lefèvre': soundex='L116' metaphone='LFFR' nysiis='LAFÈVR' mrc='LFÈVR'
+'Lefebvre': soundex='L116' metaphone='LFBFR' nysiis='LAFABVR' mrc='LFBVR'
+'Wójcik': soundex='W220' metaphone='WJSK' nysiis='WÓJCAC' mrc='WÓJCK'
+'Wojcik': soundex='W220' metaphone='WJSK' nysiis='WAJCAC' mrc='WJCK'
+'Ødegaard': soundex='Ø326' metaphone='TKRT' nysiis='ØDAGAD' mrc='ØDGRD'
+'Øvrebø': soundex='Ø161' metaphone='FRB' nysiis='ØVRABØ' mrc='ØVRBØ'
+'Yılmaz': soundex='Y452' metaphone='LMS' nysiis='YALN' mrc='YLMZ'
+'Nguyễn': soundex='N250' metaphone='NKYN' nysiis='NGAYỄN' mrc='NGYỄN'
+'Nguyen': soundex='N250' metaphone='NKYN' nysiis='NGAYAN' mrc='NGYN'
+'Đặng': soundex='Đ520' metaphone='NK' nysiis='ĐẶNG' mrc='ĐẶNG'
+'Παπαδόπουλος': soundex='Π000' metaphone='' nysiis='ΠΑΠΑΔΌΠΟΥΛΟΣ' mrc='ΠΑΠΛΟΣ'
+'Иванов': soundex='И000' metaphone='' nysiis='ИВАНОВ' mrc='ИВАНОВ'
+'王': soundex='王000' metaphone='' nysiis='王' mrc='王'
+'Smith-Jones': soundex='S532' metaphone='SM0JNS' nysiis='SNAT-JAN' mrc='SMTJNS'
+'van der Berg': soundex='V536' metaphone='FN TR BRK' nysiis='VAN DAR BARG' mrc='VNDBRG'
+'Van Der Berg': soundex='V536' metaphone='FN TR BRK' nysiis='VAN DAR BARG' mrc='VNDBRG'
+"D'Angelo": soundex='D524' metaphone='TNJL' nysiis="D'ANGAL" mrc="D'NGL"
+'DAngelo': soundex='D524' metaphone='TNJL' nysiis='DANGAL' mrc='DNGL'
+'ﬁnn': soundex='F500' metaphone='FN' nysiis='FAN' mrc='FN'
+'Ⅻ': soundex='X000' metaphone='S' nysiis='Ⅻ' mrc='Ⅻ'
+'ＪＯＨＮ': soundex='J500' metaphone='JN' nysiis='ＪＯＨＮ' mrc='ＪＯＨＮ'
+'Phillips': soundex='P412' metaphone='FLPS' nysiis='FALAP' mrc='PHLPS'
+'Philips': soundex='P412' metaphone='FLPS' nysiis='FALAP' mrc='PHLPS'
+'Pfeiffer': soundex='P160' metaphone='PFFR' nysiis='FAFAR' mrc='PFFR'
+'Kendrick': soundex='K536' metaphone='KNTRK' nysiis='CANDRAC' mrc='KNDRCK'
+'Kenrick': soundex='K562' metaphone='KNRK' nysiis='CANRAC' mrc='KNRCK'
+'Thompson': soundex='T512' metaphone='0MPSN' nysiis='TANPSAN' mrc='THMPSN'
+'Thomson': soundex='T525' metaphone='0MSN' nysiis='TANSAN' mrc='THMSN'
+'Xavier': soundex='X160' metaphone='SFR' nysiis='XAVAR' mrc='XVR'
+'Ximenez': soundex='X552' metaphone='SMNS' nysiis='XANAN' mrc='XMNZ'
+'Whitaker': soundex='W326' metaphone='WTKR' nysiis='WATACAR' mrc='WHTKR'
+'Wright': soundex='W623' metaphone='RT' nysiis='WRAGT' mrc='WRGHT'
+'Gnome': soundex='G550' metaphone='NM' nysiis='GNAN' mrc='GNM'
+'Psmith': soundex='P253' metaphone='PSM0' nysiis='PSNAT' mrc='PSMTH'
+'Aeschylus': soundex='A242' metaphone='ESXLS' nysiis='ASSYL' mrc='ASCYLS'
+'Chiang': soundex='C520' metaphone='XNK' nysiis='CANG' mrc='CHNG'
+'Michael': soundex='M240' metaphone='MXL' nysiis='MACAL' mrc='MCHL'
+'Mikhail': soundex='M240' metaphone='MKHL' nysiis='MACKAL' mrc='MKHL'
+'Shaughnessy': soundex='S252' metaphone='XNS' nysiis='SAGNASY' mrc='SHGNSY'
+'Schultz': soundex='S432' metaphone='SXLTS' nysiis='SALT' mrc='SCHLTZ'
+'Schulz': soundex='S420' metaphone='SXLS' nysiis='SAL' mrc='SCHLZ'
+'Evans': soundex='E152' metaphone='EFNS' nysiis='EVAN' mrc='EVNS'
+'Evens': soundex='E152' metaphone='EFNS' nysiis='EVAN' mrc='EVNS'
+'Catherine': soundex='C365' metaphone='K0RN' nysiis='CATARAN' mrc='CTHRN'
+'Kathryn': soundex='K365' metaphone='K0RN' nysiis='CATRYN' mrc='KTHRYN'
+'Katherine': soundex='K365' metaphone='K0RN' nysiis='CATARAN' mrc='KTHRN'
+'Cathryn': soundex='C365' metaphone='K0RN' nysiis='CATRYN' mrc='CTHRYN'
+'Haley': soundex='H400' metaphone='HL' nysiis='HALY' mrc='HLY'
+'Hayley': soundex='H400' metaphone='HL' nysiis='HAYLY' mrc='HYLY'
+'Bailey': soundex='B400' metaphone='BL' nysiis='BALY' mrc='BLY'
+'Baily': soundex='B400' metaphone='BL' nysiis='BALY' mrc='BLY'
+'Dwight': soundex='D230' metaphone='TWT' nysiis='DWAGT' mrc='DWGHT'
+'Hughes': soundex='H220' metaphone='HKHS' nysiis='HAG' mrc='HGHS'
+'Hugh': soundex='H200' metaphone='H' nysiis='HAG' mrc='HGH'
+'Zimmerman': soundex='Z565' metaphone='SMRMN' nysiis='ZANARNAN' mrc='ZMRMN'
+'Szymański': soundex='S552' metaphone='SSMNSK' nysiis='SYNAŃSC' mrc='SZYŃSK'
+'Straße': soundex='S362' metaphone='STR' nysiis='STRAS' mrc='STRS'
+'Strasse': soundex='S362' metaphone='STRS' nysiis='STRAS' mrc='STRS'
+'Ängström': soundex='A523' metaphone='ANKSTRM' nysiis='ÄNGSTRÖN' mrc='ÄNGRÖM'
+'Æsir': soundex='Æ260' metaphone='SR' nysiis='ÆSAR' mrc='ÆSR'
+'Œuvre': soundex='Œ160' metaphone='FR' nysiis='ŒAVR' mrc='ŒVR'
+'Łukasz': soundex='Ł220' metaphone='KSS' nysiis='ŁAC' mrc='ŁKSZ'
+'Lukasz': soundex='L220' metaphone='LKSS' nysiis='LAC' mrc='LKSZ'
+'Ian': soundex='I500' metaphone='IN' nysiis='IAN' mrc='IN'
+'Iain': soundex='I500' metaphone='IN' nysiis='IAN' mrc='IN'
+'Ewan': soundex='E500' metaphone='EWN' nysiis='EAN' mrc='EWN'
+'Euan': soundex='E500' metaphone='EN' nysiis='EAN' mrc='EN'
+'Sean': soundex='S500' metaphone='SN' nysiis='SAN' mrc='SN'
+'Shawn': soundex='S500' metaphone='XN' nysiis='SAN' mrc='SHWN'
+'Shaun': soundex='S500' metaphone='XN' nysiis='SAN' mrc='SHN'
+'Zoë': soundex='Z000' metaphone='S' nysiis='ZAË' mrc='ZË'
+'Chloé': soundex='C400' metaphone='XL' nysiis='CLAÉ' mrc='CHLÉ'
+'Renée': soundex='R500' metaphone='RN' nysiis='RANÉ' mrc='RNÉ'
+'Rene': soundex='R500' metaphone='RN' nysiis='RAN' mrc='RN'
+'Kristin': soundex='K623' metaphone='KRSTN' nysiis='CRASTAN' mrc='KRSTN'
+'Christine': soundex='C623' metaphone='XRSTN' nysiis='CRASTAN' mrc='CHRSTN'
+'Scherbatsky': soundex='S613' metaphone='SXRBTSK' nysiis='SARBATSCY' mrc='SCHSKY'
+'Tschaikowsky': soundex='T222' metaphone='TSXKSK' nysiis='TSSACAOSCY' mrc='TSCSKY'
+'Ritchie': soundex='R320' metaphone='RX' nysiis='RATCY' mrc='RTCH'
+'Richey': soundex='R200' metaphone='RX' nysiis='RACY' mrc='RCHY'
+'Gaston': soundex='G235' metaphone='KSTN' nysiis='GASTAN' mrc='GSTN'
+'Ghislaine': soundex='G245' metaphone='KHSLN' nysiis='GASLAN' mrc='GHSLN'
+'Sigh': soundex='S200' metaphone='S' nysiis='SAG' mrc='SGH'
+'Dodge': soundex='D320' metaphone='TJ' nysiis='DADG' mrc='DDG'
+'Judge': soundex='J320' metaphone='JJ' nysiis='JADG' mrc='JDG'
+'Edge': soundex='E320' metaphone='EJ' nysiis='EDG' mrc='EDG'
+'Science': soundex='S520' metaphone='SSNS' nysiis='SCANC' mrc='SCNC'
+'Tiara': soundex='T600' metaphone='XR' nysiis='TAR' mrc='TR'
+'Nation': soundex='N350' metaphone='NXN' nysiis='NATAN' mrc='NTN'
+'Wheat': soundex='W300' metaphone='WT' nysiis='WAT' mrc='WHT'
+'Whale': soundex='W400' metaphone='WL' nysiis='WAL' mrc='WHL'
+'Moore': soundex='M600' metaphone='MR' nysiis='MAR' mrc='MR'
+'Moor': soundex='M600' metaphone='MR' nysiis='MAR' mrc='MR'
+'Matthews': soundex='M320' metaphone='M0S' nysiis='MATAE' mrc='MTHWS'
+'Mathews': soundex='M320' metaphone='M0S' nysiis='MATAE' mrc='MTHWS'
+'Kaye': soundex='K000' metaphone='KY' nysiis='CAY' mrc='KY'
+'Kay': soundex='K000' metaphone='K' nysiis='CY' mrc='KY'
+'Tchaikovsky': soundex='T221' metaphone='XKFSK' nysiis='TCACAVSCY' mrc='TCHSKY'
+'  padded  ': soundex=' 133' metaphone='PTT ' nysiis=' PADAD ' mrc='PDD'
+'': soundex='' metaphone='' nysiis='' mrc=''
+'a b c': soundex='A120' metaphone='A B K' nysiis='A B C' mrc='ABC'
+'x': soundex='X000' metaphone='S' nysiis='X' mrc='X'
+'AH': soundex='A000' metaphone='A' nysiis='A' mrc='AH'
+'ah': soundex='A000' metaphone='A' nysiis='A' mrc='AH'
+== compare pairs.tsv
+'martha' 'marhta'
+  levenshtein=2 damerau=1 hamming=2
+  jaro=0.9444444444444445 jaro_winkler=0.9611111111111111 long=0.9708333333333333
+  mra=True same_soundex=True same_metaphone=False same_nysiis=True
+'dwayne' 'duane'
+  levenshtein=2 damerau=2 hamming=4
+  jaro=0.8222222222222223 jaro_winkler=0.8400000000000001 long=0.8690909090909091
+  mra=True same_soundex=True same_metaphone=False same_nysiis=False
+'dixon' 'dicksonx'
+  levenshtein=4 damerau=4 hamming=6
+  jaro=0.7666666666666666 jaro_winkler=0.8133333333333332 long=0.8303030303030302
+  mra=None same_soundex=False same_metaphone=False same_nysiis=False
+'jones' 'johnson'
+  levenshtein=4 damerau=4 hamming=4
+  jaro=0.7904761904761904 jaro_winkler=0.8323809523809523 long=0.8491428571428571
+  mra=False same_soundex=False same_metaphone=False same_nysiis=False
+'abcvwxyz' 'cabvwxyz'
+  levenshtein=2 damerau=2 hamming=3
+  jaro=0.9583333333333334 jaro_winkler=0.9583333333333334 long=0.9745370370370371
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'jellyfish' 'smellyfish'
+  levenshtein=2 damerau=2 hamming=9
+  jaro=0.8962962962962964 jaro_winkler=0.8962962962962964 long=0.9308641975308642
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'kitten' 'sitting'
+  levenshtein=3 damerau=3 hamming=3
+  jaro=0.746031746031746 jaro_winkler=0.746031746031746 long=0.7968253968253969
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Saturday' 'Sunday'
+  levenshtein=3 damerau=3 hamming=7
+  jaro=0.7527777777777779 jaro_winkler=0.7775000000000001 long=0.8251785714285715
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'José' 'Jose'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.8333333333333334 jaro_winkler=0.8833333333333334 long=0.8833333333333334
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'Müller' 'Mueller'
+  levenshtein=2 damerau=2 hamming=5
+  jaro=0.7825396825396825 jaro_winkler=0.8042857142857143 long=0.8494505494505494
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'ca' 'abc'
+  levenshtein=3 damerau=2 hamming=3
+  jaro=0.0 jaro_winkler=0.0 long=0.0
+  mra=False same_soundex=False same_metaphone=False same_nysiis=False
+'abcdef' 'badcfe'
+  levenshtein=4 damerau=3 hamming=6
+  jaro=0.8333333333333334 jaro_winkler=0.8333333333333334 long=0.8928571428571429
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'' ''
+  levenshtein=0 damerau=0 hamming=0
+  jaro=0.0 jaro_winkler=0.0 long=0.0
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'a' ''
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.0 jaro_winkler=0.0 long=0.0
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'' 'abc'
+  levenshtein=3 damerau=3 hamming=3
+  jaro=0.0 jaro_winkler=0.0 long=0.0
+  mra=None same_soundex=False same_metaphone=False same_nysiis=False
+'same' 'same'
+  levenshtein=0 damerau=0 hamming=0
+  jaro=1.0 jaro_winkler=1.0 long=1.0
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Ølsen' 'Olsen'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.8666666666666667 jaro_winkler=0.8666666666666667 long=0.9
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Straße' 'Strasse'
+  levenshtein=2 damerau=2 hamming=3
+  jaro=0.8492063492063492 jaro_winkler=0.9095238095238095 long=0.9095238095238095
+  mra=True same_soundex=True same_metaphone=False same_nysiis=True
+'123 Main St' '123 Main Street'
+  levenshtein=4 damerau=4 hamming=4
+  jaro=0.9111111111111111 jaro_winkler=0.9466666666666667 long=0.9626666666666667
+  mra=True same_soundex=True same_metaphone=False same_nysiis=False
+'Apt 4B' 'Apartment 4-B'
+  levenshtein=7 damerau=7 hamming=11
+  jaro=0.576923076923077 jaro_winkler=0.576923076923077 long=0.576923076923077
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Catherine' 'Kathryn'
+  levenshtein=4 damerau=4 hamming=6
+  jaro=0.7566137566137566 jaro_winkler=0.7566137566137566 long=0.8106995884773662
+  mra=True same_soundex=False same_metaphone=True same_nysiis=False
+'Michael' 'Mikhail'
+  levenshtein=2 damerau=2 hamming=2
+  jaro=0.8095238095238096 jaro_winkler=0.8476190476190477 long=0.8730158730158731
+  mra=True same_soundex=True same_metaphone=False same_nysiis=False
+'Smith' 'Smyth'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.8666666666666667 jaro_winkler=0.8933333333333333 long=0.9066666666666666
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'Tim' 'Timothy'
+  levenshtein=4 damerau=4 hamming=4
+  jaro=0.8095238095238096 jaro_winkler=0.8666666666666668 long=0.8666666666666668
+  mra=None same_soundex=False same_metaphone=False same_nysiis=False
+'Marie Helene' 'Maria Rio'
+  levenshtein=7 damerau=7 hamming=7
+  jaro=0.6574074074074074 jaro_winkler=0.6574074074074074 long=0.6574074074074074
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Shackleford' 'Shackelford'
+  levenshtein=2 damerau=1 hamming=2
+  jaro=0.9696969696969697 jaro_winkler=0.9818181818181818 long=0.9886363636363636
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'Dunningham' 'Cunnigham'
+  levenshtein=2 damerau=2 hamming=6
+  jaro=0.8962962962962964 jaro_winkler=0.8962962962962964 long=0.9308641975308642
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Nichleson' 'Nichulson'
+  levenshtein=2 damerau=2 hamming=2
+  jaro=0.9259259259259259 jaro_winkler=0.9555555555555556 long=0.9666666666666667
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'Massey' 'Massie'
+  levenshtein=2 damerau=2 hamming=2
+  jaro=0.888888888888889 jaro_winkler=0.9333333333333333 long=0.9333333333333333
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Abroms' 'Abrams'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.888888888888889 jaro_winkler=0.9222222222222223 long=0.9319444444444445
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Hardin' 'Martinez'
+  levenshtein=4 damerau=4 hamming=4
+  jaro=0.7222222222222222 jaro_winkler=0.7222222222222222 long=0.7743055555555556
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Itman' 'Smith'
+  levenshtein=5 damerau=5 hamming=5
+  jaro=0.4666666666666666 jaro_winkler=0.4666666666666666 long=0.4666666666666666
+  mra=False same_soundex=False same_metaphone=False same_nysiis=False
+'Jeraldine' 'Geraldine'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.9259259259259259 jaro_winkler=0.9259259259259259 long=0.9518518518518518
+  mra=True same_soundex=False same_metaphone=True same_nysiis=False
+'Marhta' 'Martha'
+  levenshtein=2 damerau=1 hamming=2
+  jaro=0.9444444444444445 jaro_winkler=0.9611111111111111 long=0.9708333333333333
+  mra=True same_soundex=True same_metaphone=False same_nysiis=True
+'Michelle' 'Michael'
+  levenshtein=3 damerau=3 hamming=3
+  jaro=0.8690476190476191 jaro_winkler=0.9214285714285715 long=0.9301587301587302
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Julies' 'Julius'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.888888888888889 jaro_winkler=0.9333333333333333 long=0.9333333333333333
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Tanya' 'Tonya'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.8666666666666667 jaro_winkler=0.88 long=0.904
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Dwayne' 'Duane'
+  levenshtein=2 damerau=2 hamming=4
+  jaro=0.8222222222222223 jaro_winkler=0.8400000000000001 long=0.8690909090909091
+  mra=True same_soundex=True same_metaphone=False same_nysiis=False
+'Sean' 'Susan'
+  levenshtein=2 damerau=2 hamming=4
+  jaro=0.7833333333333333 jaro_winkler=0.8049999999999999 long=0.8049999999999999
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Jon' 'John'
+  levenshtein=1 damerau=1 hamming=2
+  jaro=0.9166666666666666 jaro_winkler=0.9333333333333333 long=0.9333333333333333
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Jon' 'Jan'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.7777777777777777 jaro_winkler=0.7999999999999999 long=0.7999999999999999
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Brookhaven' 'Brrokhaven'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.9333333333333332 jaro_winkler=0.9466666666666665 long=0.9644444444444443
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Brook Hallow' 'Brook Hllw'
+  levenshtein=2 damerau=2 hamming=4
+  jaro=0.9444444444444445 jaro_winkler=0.9666666666666667 long=0.9770833333333333
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'Decatur' 'Decatir'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.9047619047619048 jaro_winkler=0.9428571428571428 long=0.95
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Fitzrureiter' 'Fitzenreiter'
+  levenshtein=2 damerau=2 hamming=2
+  jaro=0.8555555555555556 jaro_winkler=0.9133333333333333 long=0.9374074074074074
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Higbee' 'Highee'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.888888888888889 jaro_winkler=0.9222222222222223 long=0.9319444444444445
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Higbee' 'Higvee'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.888888888888889 jaro_winkler=0.9222222222222223 long=0.9319444444444445
+  mra=True same_soundex=True same_metaphone=False same_nysiis=False
+'Lacura' 'Locura'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.888888888888889 jaro_winkler=0.9 long=0.925
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'Iowa' 'Iona'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.8333333333333334 jaro_winkler=0.8666666666666667 long=0.8666666666666667
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'1st' 'IST'
+  levenshtein=3 damerau=3 hamming=3
+  jaro=0.0 jaro_winkler=0.0 long=0.0
+  mra=True same_soundex=False same_metaphone=False same_nysiis=False
+'Nguyễn' 'Nguyen'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.888888888888889 jaro_winkler=0.9333333333333333 long=0.9333333333333333
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'北京' '北京市'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.8888888888888888 jaro_winkler=0.9111111111111111 long=0.9111111111111111
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'👍🏽ok' '👍ok'
+  levenshtein=1 damerau=1 hamming=3
+  jaro=0.9166666666666666 jaro_winkler=0.9249999999999999 long=0.9249999999999999
+  mra=True same_soundex=True same_metaphone=True same_nysiis=False
+'orangutan-kumquat' 'orangutan kumquat'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.9607843137254902 jaro_winkler=0.9764705882352941 long=0.9857142857142857
+  mra=True same_soundex=True same_metaphone=False same_nysiis=False
+'aaaa' 'aaaaa'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.9333333333333332 jaro_winkler=0.96 long=0.96
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+'pneumonoultramicroscopic' 'pneumonoultramicroscopik'
+  levenshtein=1 damerau=1 hamming=1
+  jaro=0.9722222222222223 jaro_winkler=0.9833333333333334 long=0.9904761904761905
+  mra=True same_soundex=True same_metaphone=True same_nysiis=True
+== dedupe customers0.csv
+50 records, 31 blocks, 116 candidate pairs
+  1~2 last=0.8900000000000001 first=1.0 email=0 mra=True score=0.9450000000000001 MATCH
+  1~3 last=1.0 first=0.9555555555555556 email=0 mra=True score=0.9844444444444445 MATCH
+  2~3 last=0.8900000000000001 first=0.9555555555555556 email=0 mra=True score=0.9294444444444445 MATCH
+  4~42 last=0.9571428571428572 first=0.4861111111111111 email=6 mra=True score=0.6487103174603175 -
+  5~6 last=0.9666666666666667 first=1.0 email=0 mra=True score=0.9833333333333333 MATCH
+  5~38 last=0.8694444444444446 first=0.5472222222222222 email=7 mra=True score=0.62625 -
+  5~39 last=0.8694444444444446 first=0.5499999999999999 email=7 mra=True score=0.6272222222222222 -
+  6~40 last=0.8238095238095238 first=0.5472222222222222 email=7 mra=True score=0.6034325396825396 -
+  7~50 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  8~9 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  8~15 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  8~16 last=0.9619047619047619 first=0.5 email=7 mra=True score=0.655952380952381 -
+  8~17 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  8~30 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  8~31 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  8~32 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  8~33 last=0.9619047619047619 first=0.8793650793650793 email=5 mra=True score=0.7887301587301587 -
+  8~41 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  9~15 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  9~16 last=0.9619047619047619 first=0.5 email=7 mra=True score=0.655952380952381 -
+  9~17 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  9~30 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  9~31 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  9~32 last=0.9619047619047619 first=0.47222222222222215 email=7 mra=True score=0.6462301587301587 -
+  9~33 last=0.9619047619047619 first=0.8793650793650793 email=5 mra=True score=0.7887301587301587 -
+  9~41 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  10~11 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  10~12 last=1.0 first=0.975 email=0 mra=True score=0.9912500000000001 MATCH
+  10~14 last=1.0 first=0.4226190476190476 email=6 mra=True score=0.6479166666666667 -
+  10~24 last=0.8042857142857143 first=0.0 email=9 mra=True score=0.40214285714285714 -
+  10~25 last=0.9 first=0.0 email=9 mra=True score=0.45 -
+  10~26 last=0.7775000000000001 first=0.0 email=9 mra=True score=0.38875000000000004 -
+  11~12 last=1.0 first=0.975 email=0 mra=True score=0.9912500000000001 MATCH
+  11~14 last=1.0 first=0.4226190476190476 email=6 mra=True score=0.6479166666666667 -
+  11~24 last=0.8042857142857143 first=0.0 email=9 mra=True score=0.40214285714285714 -
+  11~25 last=0.9 first=0.0 email=9 mra=True score=0.45 -
+  11~26 last=0.7775000000000001 first=0.0 email=9 mra=True score=0.38875000000000004 -
+  12~14 last=1.0 first=0.4166666666666667 email=6 mra=True score=0.6458333333333334 -
+  12~24 last=0.8042857142857143 first=0.0 email=9 mra=True score=0.40214285714285714 -
+  12~25 last=0.9 first=0.0 email=9 mra=True score=0.45 -
+  12~26 last=0.7775000000000001 first=0.0 email=9 mra=True score=0.38875000000000004 -
+  14~24 last=0.8042857142857143 first=0.0 email=9 mra=True score=0.40214285714285714 -
+  14~25 last=0.9 first=0.0 email=9 mra=True score=0.45 -
+  14~26 last=0.7775000000000001 first=0.0 email=9 mra=True score=0.38875000000000004 -
+  15~16 last=1.0 first=0.9333333333333333 email=0 mra=True score=0.9766666666666667 MATCH
+  15~17 last=0.9238095238095239 first=1.0 email=0 mra=True score=0.9619047619047619 MATCH
+  15~30 last=1.0 first=1.0 email=2 mra=True score=0.94 MATCH
+  15~31 last=1.0 first=1.0 email=2 mra=True score=0.94 MATCH
+  15~32 last=1.0 first=1.0 email=2 mra=True score=0.94 MATCH
+  15~33 last=1.0 first=0.46428571428571425 email=6 mra=True score=0.6625 -
+  15~41 last=0.9619047619047619 first=0.0 email=8 mra=True score=0.48095238095238096 -
+  16~17 last=0.9238095238095239 first=0.9333333333333333 email=0 mra=True score=0.9385714285714286 MATCH
+  16~30 last=1.0 first=0.9333333333333333 email=2 mra=True score=0.9166666666666666 MATCH
+  16~31 last=1.0 first=0.9333333333333333 email=2 mra=True score=0.9166666666666666 MATCH
+  16~32 last=1.0 first=0.9333333333333333 email=2 mra=True score=0.9166666666666666 MATCH
+  16~33 last=1.0 first=0.4920634920634921 email=6 mra=True score=0.6722222222222223 -
+  16~41 last=0.9619047619047619 first=0.0 email=8 mra=True score=0.48095238095238096 -
+  17~30 last=0.9238095238095239 first=1.0 email=2 mra=True score=0.9019047619047619 MATCH
+  17~31 last=0.9238095238095239 first=1.0 email=2 mra=True score=0.9019047619047619 MATCH
+  17~32 last=0.9238095238095239 first=1.0 email=2 mra=True score=0.9019047619047619 MATCH
+  17~33 last=0.9238095238095239 first=0.46428571428571425 email=6 mra=True score=0.6244047619047619 -
+  17~41 last=0.9619047619047619 first=0.0 email=8 mra=True score=0.48095238095238096 -
+  18~19 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  18~34 last=0.9666666666666666 first=0.4305555555555555 email=8 mra=True score=0.6340277777777777 -
+  18~35 last=0.9666666666666666 first=0.44166666666666665 email=9 mra=True score=0.6379166666666666 -
+  18~49 last=0.9666666666666666 first=0.4583333333333333 email=7 mra=True score=0.6437499999999999 -
+  19~34 last=0.9666666666666666 first=0.4305555555555555 email=8 mra=True score=0.6340277777777777 -
+  19~35 last=0.9666666666666666 first=0.44166666666666665 email=9 mra=True score=0.6379166666666666 -
+  19~49 last=0.9666666666666666 first=0.4583333333333333 email=7 mra=True score=0.6437499999999999 -
+  20~22 last=1.0 first=0.6011904761904762 email=4 mra=True score=0.7404166666666667 -
+  20~23 last=1.0 first=0.5873015873015873 email=5 mra=True score=0.7055555555555555 -
+  20~27 last=0.9777777777777777 first=0.3452380952380952 email=6 mra=True score=0.6097222222222222 -
+  20~28 last=0.9777777777777777 first=0.3452380952380952 email=6 mra=True score=0.6097222222222222 -
+  20~29 last=0.9777777777777777 first=0.6190476190476191 email=5 mra=True score=0.7055555555555555 -
+  20~36 last=0.9777777777777777 first=0.42857142857142855 email=5 mra=True score=0.6388888888888888 -
+  20~37 last=0.9777777777777777 first=0.42857142857142855 email=5 mra=True score=0.6388888888888888 -
+  22~23 last=1.0 first=0.9777777777777777 email=1 mra=True score=0.9622222222222222 MATCH
+  22~27 last=0.9777777777777777 first=0.47222222222222215 email=5 mra=True score=0.6541666666666666 -
+  22~28 last=0.9777777777777777 first=0.47222222222222215 email=5 mra=True score=0.6541666666666666 -
+  22~29 last=0.9777777777777777 first=0.5119047619047619 email=6 mra=True score=0.6680555555555555 -
+  22~36 last=0.9777777777777777 first=0.3452380952380952 email=6 mra=True score=0.6097222222222222 -
+  22~37 last=0.9777777777777777 first=0.3452380952380952 email=6 mra=True score=0.6097222222222222 -
+  23~27 last=0.9777777777777777 first=0.4583333333333333 email=6 mra=True score=0.6493055555555556 -
+  23~28 last=0.9777777777777777 first=0.4583333333333333 email=6 mra=True score=0.6493055555555556 -
+  23~29 last=0.9777777777777777 first=0.5026455026455027 email=7 mra=True score=0.6648148148148147 -
+  23~36 last=0.9777777777777777 first=0.335978835978836 email=7 mra=True score=0.6064814814814814 -
+  23~37 last=0.9777777777777777 first=0.335978835978836 email=7 mra=True score=0.6064814814814814 -
+  24~25 last=0.9174603174603175 first=1.0 email=0 mra=True score=0.9587301587301588 MATCH
+  24~26 last=0.975 first=1.0 email=0 mra=True score=0.9874999999999999 MATCH
+  25~26 last=0.888888888888889 first=1.0 email=0 mra=True score=0.9444444444444445 MATCH
+  27~28 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  27~29 last=1.0 first=0.6071428571428571 email=6 mra=True score=0.7124999999999999 -
+  27~36 last=1.0 first=0.6904761904761904 email=6 mra=True score=0.7416666666666666 -
+  27~37 last=1.0 first=0.6071428571428571 email=6 mra=True score=0.7124999999999999 -
+  28~29 last=1.0 first=0.6071428571428571 email=6 mra=True score=0.7124999999999999 -
+  28~36 last=1.0 first=0.6904761904761904 email=6 mra=True score=0.7416666666666666 -
+  28~37 last=1.0 first=0.6071428571428571 email=6 mra=True score=0.7124999999999999 -
+  29~36 last=1.0 first=0.5238095238095238 email=5 mra=True score=0.6833333333333333 -
+  29~37 last=1.0 first=0.5238095238095238 email=5 mra=True score=0.6833333333333333 -
+  30~31 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  30~32 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  30~33 last=1.0 first=0.46428571428571425 email=6 mra=True score=0.6625 -
+  30~41 last=0.9619047619047619 first=0.0 email=8 mra=True score=0.48095238095238096 -
+  31~32 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  31~33 last=1.0 first=0.46428571428571425 email=6 mra=True score=0.6625 -
+  31~41 last=0.9619047619047619 first=0.0 email=8 mra=True score=0.48095238095238096 -
+  32~33 last=1.0 first=0.46428571428571425 email=6 mra=True score=0.6625 -
+  32~41 last=0.9619047619047619 first=0.0 email=8 mra=True score=0.48095238095238096 -
+  33~41 last=0.9619047619047619 first=0.0 email=8 mra=True score=0.48095238095238096 -
+  34~35 last=1.0 first=0.9555555555555556 email=1 mra=True score=0.9544444444444444 MATCH
+  34~49 last=1.0 first=0.47222222222222215 email=6 mra=True score=0.6652777777777777 -
+  35~49 last=1.0 first=0.48333333333333334 email=7 mra=True score=0.6691666666666667 -
+  36~37 last=1.0 first=0.9619047619047619 email=0 mra=True score=0.9866666666666667 MATCH
+  38~39 last=1.0 first=0.8933333333333333 email=1 mra=True score=0.9326666666666666 MATCH
+  43~44 last=0.9533333333333333 first=1.0 email=1 mra=True score=0.9466666666666667 MATCH
+  46~47 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+14 duplicate groups
+  1 Bjørn Haddad <bjør.hadda91@mail.com>; 2 Bjørn Hddad <bjør.hadda91@mail.com>; 3 Bjjørn Haddad <bjør.hadda91@mail.com>
+  5 François Lefebvre <fran.lefeb9@corp.io>; 6 François Leefbvre <fran.lefeb9@corp.io>
+  8 Mikael Jonson <mika.jonso19@corp.io>; 9 Mikael Jonson <mika.jonso19@corp.io>
+  10 Stephen Müller <step.mülle43@corp.io>; 11 Stephen Müller <step.mülle43@corp.io>; 12 Stephhen Müller <step.mülle43@corp.io>
+  15 Sara Johnson <sara.johns43@corp.io>; 16 Saa Johnson <sara.johns43@corp.io>; 17 SARA Joenson <sara.johns43@corp.io>; 30 Sara Johnson <sara.johns70@corp.io>; 31 Sara Johnson <sara.johns70@corp.io>; 32 Sara Johnson <sara.johns70@corp.oi>
+  18 François MacDonald <fran.macdo24@corp.io>; 19 François MacDonald <fran.macdo24@corp.io>
+  22 Muhammad Andersson <muha.ander82@corp.io>; 23 Muhammmad Andersson <muha.andea82@corp.io>
+  24 Zoë Mueller <zoë.muell88@mail.com>; 25 Zoë Muller <zoë.muell88@mail.com>; 26 Zoë Muelller <zoë.muell88@mail.com>
+  27 Jonathan Anderson <jona.ander97@corp.io>; 28 Jonathan Anderson <jona.ander97@corp.io>
+  34 Ayesha McDonald <ayes.mcdon33@mail.com>; 35 Aysha McDonald <ayesemcdon33@mail.com>
+  36 Kathryn Anderson <kath.ander64@mail.com>; 37 Kahtryn Anderson <kath.ander64@mail.com>
+  38 Bjorn Lefèvre <bjor.lefèv93@corp.io>; 39 Bjirn Lefèvre <bjor.lefvè93@corp.io>
+  43 Louis Rossi <loui.rossi83@corp.io>; 44 Louis Rosi <loui.rossiu3@corp.io>
+  46 Zoe Smith <zoe.smith9@mail.com>; 47 Zoe Smith <zoe.smith9@mali.com>
+== dedupe customers1.csv
+47 records, 26 blocks, 120 candidate pairs
+  1~2 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  1~6 last=0.9333333333333333 first=0.48333333333333334 email=6 mra=True score=0.6358333333333334 -
+  1~14 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  1~15 last=1.0 first=0.4666666666666666 email=6 mra=True score=0.6633333333333333 -
+  1~16 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  1~29 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  1~30 last=0.8944444444444445 first=0.0 email=7 mra=True score=0.44722222222222224 -
+  1~37 last=0.9333333333333333 first=0.96 email=3 mra=True score=0.8626666666666667 -
+  1~38 last=0.9333333333333333 first=0.96 email=3 mra=True score=0.8626666666666667 -
+  1~39 last=0.9333333333333333 first=0.0 email=6 mra=True score=0.4666666666666667 -
+  1~40 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  2~6 last=0.9333333333333333 first=0.48333333333333334 email=6 mra=True score=0.6358333333333334 -
+  2~14 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  2~15 last=1.0 first=0.4666666666666666 email=6 mra=True score=0.6633333333333333 -
+  2~16 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  2~29 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  2~30 last=0.8944444444444445 first=0.0 email=7 mra=True score=0.44722222222222224 -
+  2~37 last=0.9333333333333333 first=0.96 email=3 mra=True score=0.8626666666666667 -
+  2~38 last=0.9333333333333333 first=0.96 email=3 mra=True score=0.8626666666666667 -
+  2~39 last=0.9333333333333333 first=0.0 email=6 mra=True score=0.4666666666666667 -
+  2~40 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  3~22 last=1.0 first=0.0 email=5 mra=True score=0.5 -
+  3~23 last=1.0 first=0.0 email=4 mra=True score=0.53 -
+  4~5 last=1.0 first=0.975 email=1 mra=True score=0.96125 MATCH
+  4~27 last=0.8042857142857143 first=0.6011904761904762 email=8 mra=True score=0.6125595238095238 -
+  4~28 last=0.6944444444444443 first=0.6011904761904762 email=8 mra=True score=0.5576388888888888 -
+  5~27 last=0.8042857142857143 first=0.5833333333333334 email=8 mra=True score=0.6063095238095237 -
+  5~28 last=0.6944444444444443 first=0.5833333333333334 email=8 mra=True score=0.5513888888888888 -
+  6~14 last=0.9333333333333333 first=0.5 email=7 mra=True score=0.6416666666666666 -
+  6~15 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  6~16 last=0.9333333333333333 first=0.5 email=7 mra=True score=0.6416666666666666 -
+  6~29 last=1.0 first=0.5 email=6 mra=True score=0.675 -
+  6~30 last=0.9666666666666667 first=0.5 email=6 mra=True score=0.6583333333333333 -
+  6~37 last=1.0 first=0.5 email=6 mra=True score=0.675 -
+  6~38 last=0.9666666666666667 first=0.5 email=6 mra=True score=0.6583333333333333 -
+  6~39 last=1.0 first=0.5 email=5 mra=True score=0.675 -
+  6~40 last=1.0 first=0.48333333333333334 email=5 mra=True score=0.6691666666666667 -
+  8~9 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  8~19 last=0.8694444444444446 first=0.5833333333333334 email=6 mra=True score=0.638888888888889 -
+  8~20 last=0.8694444444444446 first=0.5833333333333334 email=6 mra=True score=0.638888888888889 -
+  8~21 last=0.8694444444444446 first=0.5833333333333334 email=6 mra=True score=0.638888888888889 -
+  9~19 last=0.8694444444444446 first=0.5833333333333334 email=6 mra=True score=0.638888888888889 -
+  9~20 last=0.8694444444444446 first=0.5833333333333334 email=6 mra=True score=0.638888888888889 -
+  9~21 last=0.8694444444444446 first=0.5833333333333334 email=6 mra=True score=0.638888888888889 -
+  10~13 last=0.9333333333333333 first=0.5740740740740741 email=6 mra=True score=0.6675925925925926 -
+  10~34 last=1.0 first=0.5740740740740741 email=4 mra=True score=0.730925925925926 -
+  10~35 last=1.0 first=0.5833333333333334 email=4 mra=True score=0.7341666666666666 -
+  10~36 last=0.9500000000000001 first=0.5833333333333334 email=4 mra=True score=0.7091666666666667 -
+  10~42 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  10~43 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  11~12 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  13~34 last=0.9333333333333333 first=0.9259259259259259 email=4 mra=True score=0.8207407407407408 -
+  13~35 last=0.9333333333333333 first=0.6481481481481481 email=7 mra=True score=0.6935185185185185 -
+  13~36 last=0.8400000000000001 first=0.6481481481481481 email=7 mra=True score=0.6468518518518519 -
+  13~42 last=0.9333333333333333 first=0.4537037037037037 email=6 mra=True score=0.625462962962963 -
+  13~43 last=0.9333333333333333 first=0.4537037037037037 email=6 mra=True score=0.625462962962963 -
+  14~15 last=1.0 first=0.9466666666666665 email=0 mra=True score=0.9813333333333333 MATCH
+  14~16 last=1.0 first=0.9249999999999999 email=0 mra=True score=0.97375 MATCH
+  14~29 last=0.9333333333333333 first=1.0 email=3 mra=True score=0.8766666666666667 -
+  14~30 last=0.8944444444444445 first=1.0 email=3 mra=True score=0.8572222222222223 -
+  14~37 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  14~38 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  14~39 last=0.9333333333333333 first=0.6666666666666666 email=4 mra=True score=0.73 -
+  14~40 last=0.9333333333333333 first=0.6333333333333333 email=4 mra=True score=0.7183333333333334 -
+  15~16 last=1.0 first=0.8049999999999999 email=0 mra=True score=0.93175 MATCH
+  15~29 last=0.9333333333333333 first=0.9466666666666665 email=3 mra=True score=0.8579999999999999 -
+  15~30 last=0.8944444444444445 first=0.9466666666666665 email=3 mra=True score=0.8385555555555555 -
+  15~37 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  15~38 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  15~39 last=0.9333333333333333 first=0.6333333333333333 email=4 mra=True score=0.7183333333333334 -
+  15~40 last=0.9333333333333333 first=0.8133333333333334 email=4 mra=True score=0.7813333333333334 -
+  16~29 last=0.9333333333333333 first=0.9249999999999999 email=3 mra=True score=0.8504166666666666 -
+  16~30 last=0.8944444444444445 first=0.9249999999999999 email=3 mra=True score=0.8309722222222222 -
+  16~37 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  16~38 last=0.9333333333333333 first=0.0 email=7 mra=True score=0.4666666666666667 -
+  16~39 last=0.9333333333333333 first=0.6666666666666666 email=4 mra=True score=0.73 -
+  16~40 last=0.9333333333333333 first=0.6333333333333333 email=4 mra=True score=0.7183333333333334 -
+  17~18 last=0.975 first=1.0 email=1 mra=True score=0.9574999999999999 MATCH
+  17~47 last=0.9777777777777777 first=0.0 email=6 mra=True score=0.4888888888888889 -
+  18~47 last=0.9527777777777777 first=0.0 email=6 mra=True score=0.47638888888888886 -
+  19~20 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  19~21 last=1.0 first=0.8666666666666667 email=0 mra=True score=0.9533333333333334 MATCH
+  20~21 last=1.0 first=0.8666666666666667 email=0 mra=True score=0.9533333333333334 MATCH
+  22~23 last=1.0 first=0.9555555555555556 email=1 mra=True score=0.9544444444444444 MATCH
+  24~25 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  26~31 last=0.9333333333333333 first=0.5111111111111111 email=6 mra=True score=0.6455555555555555 -
+  26~32 last=0.9333333333333333 first=0.5111111111111111 email=6 mra=True score=0.6455555555555555 -
+  26~33 last=0.9333333333333333 first=0.5111111111111111 email=6 mra=True score=0.6455555555555555 -
+  27~28 last=0.9714285714285714 first=1.0 email=0 mra=True score=0.9857142857142857 MATCH
+  29~30 last=0.9666666666666667 first=1.0 email=0 mra=True score=0.9833333333333333 MATCH
+  29~37 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  29~38 last=0.9666666666666667 first=0.0 email=6 mra=True score=0.48333333333333334 -
+  29~39 last=1.0 first=0.6666666666666666 email=4 mra=True score=0.7633333333333333 -
+  29~40 last=1.0 first=0.6333333333333333 email=4 mra=True score=0.7516666666666667 -
+  30~37 last=0.9666666666666667 first=0.0 email=6 mra=True score=0.48333333333333334 -
+  30~38 last=0.9277777777777778 first=0.0 email=6 mra=True score=0.4638888888888889 -
+  30~39 last=0.9666666666666667 first=0.6666666666666666 email=4 mra=True score=0.7466666666666667 -
+  30~40 last=0.9666666666666667 first=0.6333333333333333 email=4 mra=True score=0.735 -
+  31~32 last=1.0 first=0.5555555555555555 email=0 mra=True score=0.8444444444444444 MATCH
+  31~33 last=1.0 first=1.0 email=1 mra=True score=0.97 MATCH
+  32~33 last=1.0 first=0.5555555555555555 email=1 mra=True score=0.8144444444444444 -
+  34~35 last=1.0 first=0.6481481481481481 email=5 mra=True score=0.7268518518518519 -
+  34~36 last=0.9500000000000001 first=0.6481481481481481 email=5 mra=True score=0.7018518518518518 -
+  34~42 last=1.0 first=0.4537037037037037 email=6 mra=True score=0.6587962962962963 -
+  34~43 last=1.0 first=0.4537037037037037 email=6 mra=True score=0.6587962962962963 -
+  35~36 last=0.9500000000000001 first=1.0 email=0 mra=True score=0.975 MATCH
+  35~42 last=1.0 first=0.5833333333333334 email=4 mra=True score=0.7341666666666666 -
+  35~43 last=1.0 first=0.5833333333333334 email=4 mra=True score=0.7341666666666666 -
+  36~42 last=0.9500000000000001 first=0.5833333333333334 email=4 mra=True score=0.7091666666666667 -
+  36~43 last=0.9500000000000001 first=0.5833333333333334 email=4 mra=True score=0.7091666666666667 -
+  37~38 last=0.9666666666666667 first=1.0 email=0 mra=True score=0.9833333333333333 MATCH
+  37~39 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  37~40 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  38~39 last=0.9666666666666667 first=0.0 email=6 mra=True score=0.48333333333333334 -
+  38~40 last=0.9666666666666667 first=0.0 email=6 mra=True score=0.48333333333333334 -
+  39~40 last=1.0 first=0.9466666666666665 email=1 mra=True score=0.9513333333333333 MATCH
+  42~43 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  44~45 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  44~46 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  45~46 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+17 duplicate groups
+  1 Sarah Okafor <sara.okafo76@mail.com>; 2 Sarah Okafor <sara.okafo76@mail.com>
+  4 Michael Müller <mich.mülle20@corp.io>; 5 Michaeel Müller <mich.müülle20@corp.io>
+  8 Jonathan Lefèvre <jona.lefèv46@mail.com>; 9 Jonathan Lefèvre <jona.lefèv46@mail.com>
+  11 Ann Johnson <ann.johns62@mail.com>; 12 Ann Johnson <ann.johns62@mail.com>
+  14 John Okafor <john.okafo30@mail.com>; 15 Joohn Okafor <john.okafo30@mail.coom>; 16 Jhon Okafor <john.okafo30@mail.com>
+  17 Luis Anderson <luis.ander11@mail.com>; 18 Luis Anderosn <luis.ander1@1mail.com>
+  19 Sara Lefebvre <sara.lefeb40@mail.com>; 20 Sara Lefebvre <sara.lefeb40@mailicom>; 21 Saea Lefebvre <sara.lefeb40@mail.com>
+  22 Steven McDonald <stev.mcdon88@corp.io>; 23 Stveen McDonald <sev.mcdon88@corp.io>
+  24 Kathryn Russo <kath.russo98@corp.io>; 25 Kathryn Russo <kath.russo98@corp.io>
+  27 Muhammad Mueller <muha.muell17@corp.io>; 28 MUHAMMAD Mueler <muha.muell17@corp.io>
+  29 John Okafur <john.okafu45@mail.com>; 30 John Okaafur <john.okafu45@mail.com>
+  31 Jon Nguyen <jon.nguye64@mail.com>; 32 Jno Nguyen <jon.nguye64@mailcom>; 33 Jon Nguyen <joi.nguye64@mail.com>
+  35 Jonathan Garcia <jona.garci6@corp.io>; 36 Jonathan Gracia <jona.garci6@corp.io>
+  37 Sara Okafur <sara.okafu97@corp.io>; 38 Sara Okafru <sara.okafu97@corp.io>
+  39 Jose Okafur <jose.okafu36@corp.io>; 40 Joose Okafur <jose.okafu3a@corp.io>
+  42 Jose Garcia <jose.garci41@corp.io>; 43 Jose Garcia <jose.garci41@corp.io>
+  44 Li Haddad <li.hadda59@mail.com>; 45 Li Haddad <li.hadda59@mail.com>; 46 Li Haddad <li.hadda59@mail.com>
+== dedupe customers2.csv
+45 records, 29 blocks, 72 candidate pairs
+  2~3 last=0.95 first=0.0 email=5 mra=True score=0.475 -
+  2~4 last=0.95 first=0.0 email=5 mra=True score=0.475 -
+  2~42 last=0.95 first=0.48333333333333334 email=6 mra=True score=0.6441666666666667 -
+  3~4 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  3~42 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  4~42 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  5~35 last=1.0 first=0.3333333333333333 email=5 mra=True score=0.6166666666666667 -
+  5~36 last=0.9333333333333333 first=0.3333333333333333 email=5 mra=True score=0.5833333333333334 -
+  5~37 last=1.0 first=0.6388888888888888 email=5 mra=True score=0.7236111111111111 -
+  5~38 last=0.9777777777777777 first=0.6388888888888888 email=6 mra=True score=0.7124999999999999 -
+  6~7 last=1.0 first=0.9533333333333333 email=0 mra=True score=0.9836666666666666 MATCH
+  6~31 last=1.0 first=0.0 email=4 mra=True score=0.53 -
+  6~32 last=1.0 first=0.0 email=4 mra=True score=0.53 -
+  7~31 last=1.0 first=0.0 email=4 mra=True score=0.53 -
+  7~32 last=1.0 first=0.0 email=4 mra=True score=0.53 -
+  9~15 last=1.0 first=0.0 email=5 mra=True score=0.5 -
+  9~26 last=1.0 first=0.6190476190476191 email=6 mra=True score=0.7166666666666667 -
+  9~27 last=0.9533333333333333 first=0.6190476190476191 email=6 mra=True score=0.6933333333333334 -
+  9~28 last=1.0 first=0.6190476190476191 email=6 mra=True score=0.7166666666666667 -
+  9~41 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  10~11 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  10~17 last=1.0 first=0.4166666666666667 email=6 mra=True score=0.6458333333333334 -
+  10~18 last=1.0 first=0.4166666666666667 email=6 mra=True score=0.6458333333333334 -
+  10~19 last=0.88 first=0.4166666666666667 email=6 mra=True score=0.5858333333333333 -
+  10~25 last=1.0 first=0.3833333333333333 email=5 mra=True score=0.6341666666666667 -
+  11~17 last=1.0 first=0.4166666666666667 email=6 mra=True score=0.6458333333333334 -
+  11~18 last=1.0 first=0.4166666666666667 email=6 mra=True score=0.6458333333333334 -
+  11~19 last=0.88 first=0.4166666666666667 email=6 mra=True score=0.5858333333333333 -
+  11~25 last=1.0 first=0.3833333333333333 email=5 mra=True score=0.6341666666666667 -
+  12~14 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  12~33 last=0.9333333333333333 first=0.5476190476190476 email=5 mra=True score=0.6583333333333333 -
+  14~33 last=0.9333333333333333 first=0.5476190476190476 email=5 mra=True score=0.6583333333333333 -
+  15~26 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  15~27 last=0.9533333333333333 first=0.0 email=6 mra=True score=0.4766666666666666 -
+  15~28 last=1.0 first=0.0 email=6 mra=True score=0.5 -
+  15~41 last=1.0 first=0.8222222222222222 email=2 mra=True score=0.8777777777777777 -
+  16~29 last=0.565079365079365 first=0.5777777777777778 email=9 mra=False score=0.4847619047619047 -
+  16~30 last=0.565079365079365 first=0.5777777777777778 email=9 mra=False score=0.4847619047619047 -
+  17~18 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  17~19 last=0.88 first=1.0 email=0 mra=True score=0.9400000000000001 MATCH
+  17~25 last=1.0 first=0.5472222222222222 email=4 mra=True score=0.7215277777777778 -
+  18~19 last=0.88 first=1.0 email=0 mra=True score=0.9400000000000001 MATCH
+  18~25 last=1.0 first=0.5472222222222222 email=4 mra=True score=0.7215277777777778 -
+  19~25 last=0.88 first=0.5472222222222222 email=4 mra=True score=0.6615277777777777 -
+  20~21 last=1.0 first=1.0 email=9 mra=True score=0.85 MATCH
+  20~22 last=1.0 first=0.5111111111111111 email=5 mra=True score=0.6788888888888889 -
+  20~23 last=1.0 first=0.5111111111111111 email=5 mra=True score=0.6788888888888889 -
+  20~24 last=1.0 first=0.5111111111111111 email=5 mra=True score=0.6788888888888889 -
+  21~22 last=1.0 first=0.5111111111111111 email=13 mra=True score=0.6788888888888889 -
+  21~23 last=1.0 first=0.5111111111111111 email=13 mra=True score=0.6788888888888889 -
+  21~24 last=1.0 first=0.5111111111111111 email=13 mra=True score=0.6788888888888889 -
+  22~23 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  22~24 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  23~24 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  26~27 last=0.9533333333333333 first=1.0 email=0 mra=True score=0.9766666666666667 MATCH
+  26~28 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  26~41 last=1.0 first=0.4920634920634921 email=4 mra=True score=0.7022222222222223 -
+  27~28 last=0.9533333333333333 first=1.0 email=0 mra=True score=0.9766666666666667 MATCH
+  27~41 last=0.9533333333333333 first=0.4920634920634921 email=4 mra=True score=0.6788888888888889 -
+  28~41 last=1.0 first=0.4920634920634921 email=4 mra=True score=0.7022222222222223 -
+  29~30 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  31~32 last=1.0 first=0.9777777777777777 email=0 mra=True score=0.9922222222222222 MATCH
+  35~36 last=0.9333333333333333 first=1.0 email=0 mra=True score=0.9666666666666667 MATCH
+  35~37 last=1.0 first=0.47222222222222215 email=5 mra=True score=0.6652777777777777 -
+  35~38 last=0.9777777777777777 first=0.47222222222222215 email=6 mra=True score=0.6541666666666666 -
+  36~37 last=0.9333333333333333 first=0.47222222222222215 email=5 mra=True score=0.6319444444444444 -
+  36~38 last=0.9074074074074073 first=0.47222222222222215 email=6 mra=True score=0.6189814814814814 -
+  37~38 last=0.9777777777777777 first=1.0 email=1 mra=True score=0.9588888888888888 MATCH
+  39~40 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  43~44 last=1.0 first=0.8500000000000001 email=0 mra=True score=0.9475 MATCH
+  43~45 last=1.0 first=1.0 email=0 mra=True score=1.0 MATCH
+  44~45 last=1.0 first=0.8500000000000001 email=0 mra=True score=0.9475 MATCH
+14 duplicate groups
+  3 Li Kowalski <li.kowal65@corp.io>; 4 Li Kowalski <li.kowal65@corp.io>
+  6 Bjørn Okafor <bjør.okafo12@mail.com>; 7 Bjøn Okafor <bjør.okafo12@mail.com>
+  10 François Hadad <fran.hadad67@corp.io>; 11 François Hadad <fran.hadad67@corp.io>
+  12 Michael Nguyễn <mich.nguyễ47@corp.io>; 14 Michael Nguyễn <mich.nguyễ47@corp.io>
+  17 Muhammad Hadad <muha.hadad43@corp.io>; 18 Muhammad Hadad <muha.hadad43@corp.io>; 19 Muhammad Hidad <muha.hadad43@corp.io>
+  20 Louis Müller <loui.mülle8@mail.com>; 21 Louis Müller <loui.mülle8omail.com>
+  22 Zoe Müller <zoe.mülle52@corp.io>; 23 Zoe Müller <zoe.mülle52@corp.io>; 24 Zoe Müller <zoe.mülle52@corp.io>
+  26 Stephen Rossi <step.rossi72@corp.io>; 27 STEPHEN Rosi <step.rossi72@corp.io>; 28 Stephen Rossi <step.rossi72@corp.io>
+  29 Mikael Smyth <mika.smyth78@corp.io>; 30 Mikael Smyth <mika.smyth78@corp.io>
+  31 Mohammed Okafor <moha.okafo12@corp.io>; 32 Mohammmed Okafor <moha.okafo12@corp.io>
+  35 Jonathan Thompson <jona.thomp86@mail.com>; 36 Jonathan Thampson <jona.thomp86@mail.om>
+  37 Ann Thompson <ann.thomp78@mail.com>; 38 ANN Thompsoon <ann.homp78@mail.com>
+  39 Ayesha Johnson <ayes.johns45@corp.io>; 40 Ayesha Johnson <ayes.johns45@corp.io>
+  43 José Thomson <josé.thoms42@corp.io>; 44 Jesé Thomson <josé.thoms42@corp.io>; 45 José Thomson <josé.thoms42@corp.io>
+== suggest commands.txt typos.txt
+git: 'stauts' is not a git command. The most similar command is
+        status (distance 1, similarity 0.9611111111111111)
+git: 'comit' is not a git command. The most similar command is
+        commit (distance 1, similarity 0.9611111111111111)
+git: 'comitt' is not a git command. The most similar command is
+        commit (distance 2, similarity 0.9222222222222223)
+git: 'psuh' is not a git command. The most similar command is
+        push (distance 1, similarity 0.9249999999999999)
+git: 'pul' is not a git command. The most similar commands are
+        pull (distance 1, similarity 0.9416666666666667)
+        push (distance 2, similarity 0.7777777777777778)
+git: 'chekcout' is not a git command. The most similar command is
+        checkout (distance 1, similarity 0.9708333333333333)
+git: 'checkotu' is not a git command. The most similar command is
+        checkout (distance 1, similarity 0.975)
+git: 'brnach' is not a git command. The most similar command is
+        branch (distance 1, similarity 0.9555555555555556)
+git: 'rebse' is not a git command. The most similar commands are
+        rebase (distance 1, similarity 0.9611111111111111)
+        reset (distance 2, similarity 0.8933333333333333)
+git: 'stsh' is not a git command. The most similar commands are
+        stash (distance 1, similarity 0.9466666666666665)
+        push (distance 2, similarity 0.6666666666666666)
+git: 'lgo' is not a git command. The most similar commands are
+        log (distance 1, similarity 0.5555555555555555)
+        gc (distance 2, similarity 0.0)
+git: 'dif' is not a git command. The most similar command is
+        diff (distance 1, similarity 0.9416666666666667)
+git: 'merg' is not a git command. The most similar command is
+        merge (distance 1, similarity 0.96)
+git: 'cloen' is not a git command. The most similar commands are
+        clone (distance 1, similarity 0.9533333333333333)
+        clean (distance 2, similarity 0.8933333333333333)
+git: 'fecth' is not a git command. The most similar command is
+        fetch (distance 1, similarity 0.9466666666666665)
+git: 'tga' is not a git command. The most similar commands are
+        tag (distance 1, similarity 0.5555555555555555)
+        gc (distance 2, similarity 0.0)
+git: 'sttaus' is not a git command. The most similar command is
+        status (distance 1, similarity 0.9555555555555556)
+git: 'statsu' is not a git command. The most similar commands are
+        status (distance 1, similarity 0.9666666666666667)
+        stash (distance 2, similarity 0.8755555555555556)
+git: 'cherrypick' is not a git command. The most similar command is
+        cherry-pick (distance 1, similarity 0.9818181818181818)
+git: 'cherry_pick' is not a git command. The most similar command is
+        cherry-pick (distance 1, similarity 0.9636363636363636)
+git: 'sparsecheckout' is not a git command. The most similar command is
+        sparse-checkout (distance 1, similarity 0.9866666666666667)
+git: 'xyzzy' is not a git command. See 'git --help'.
+git: 'ad' is not a git command. The most similar commands are
+        add (distance 1, similarity 0.9111111111111111)
+        am (distance 1, similarity 0.6666666666666666)
+        gc (distance 2, similarity 0.0)
+        mv (distance 2, similarity 0.0)
+rm: a command
+git: 'reflg' is not a git command. The most similar command is
+        reflog (distance 1, similarity 0.9666666666666667)
+git: 'blam' is not a git command. The most similar commands are
+        blame (distance 1, similarity 0.96)
+        am (distance 2, similarity 0.0)
+git: 'submodlue' is not a git command. The most similar command is
+        submodule (distance 1, similarity 0.9777777777777777)
+git: 'worktee' is not a git command. The most similar command is
+        worktree (distance 1, similarity 0.975)
+git: 'swich' is not a git command. The most similar command is
+        switch (distance 1, similarity 0.9611111111111111)
+git: 'restroe' is not a git command. The most similar command is
+        restore (distance 1, similarity 0.9714285714285714)
+git: 'resset' is not a git command. The most similar command is
+        reset (distance 1, similarity 0.9611111111111111)
+git: 'bisec' is not a git command. The most similar command is
+        bisect (distance 1, similarity 0.9666666666666667)
+git: 'configure' is not a git command. See 'git --help'.
+git: 'describ' is not a git command. The most similar command is
+        describe (distance 1, similarity 0.975)
+git: 'grpe' is not a git command. The most similar command is
+        grep (distance 1, similarity 0.9333333333333333)
+git: 'initt' is not a git command. The most similar command is
+        init (distance 1, similarity 0.96)
+git: 'a' is not a git command. The most similar commands are
+        am (distance 1, similarity 0.8500000000000001)
+        add (distance 2, similarity 0.7999999999999999)
+        gc (distance 2, similarity 0.0)
+        mv (distance 2, similarity 0.0)
+git: 'STATUS' is not a git command. The most similar command is
+        status (distance 0, similarity 1.0)
+git: 'Push' is not a git command. The most similar commands are
+        push (distance 0, similarity 1.0)
+        pull (distance 2, similarity 0.6666666666666666)
+== search surnames.txt queries.txt
+? Smith
+  soundex S530: Schmidt, Schmitt, Smith, Smyth
+  nysiis SNAT: Schmitt, Smith
+  metaphone SM0: Smith, Smyth
+  match rating: Knight, Smith, Smith-Jones, Smyth
+  closest: Smith 1.0, Smyth 0.8933333333333333, Smith-Jones 0.890909090909091
+? Myller
+  soundex M460: Mueller, Muller, Möller, Müller
+  nysiis MYLAR: -
+  metaphone MLR: Mueller, Muller, Möller, Müller
+  match rating: Mueller, Muller, Möller, Müller, Okafor, Okafur, Smyth, Snyder
+  closest: Muller 0.9, Möller 0.9, Müller 0.9
+? Garsia
+  soundex G620: Garcia, García
+  nysiis GARS: -
+  metaphone KRX: Garcia
+  match rating: Francois, François, Garcia, García, Gutierrez, Jose, Pfister, Rossi, Russo, Ødegaard
+  closest: Garcia 0.9222222222222223, García 0.8444444444444443, Rossi 0.7000000000000001
+? Nguyen
+  soundex N250: Nguyen, Nguyễn
+  nysiis NGAYAN: Nguyen
+  metaphone NKYN: Nguyen, Nguyễn
+  match rating: Honeyman, Jonson, Knight, Nguyen, Nguyễn, Night, Núñez, OBrien, Snyder
+  closest: Nguyen 1.0, Nguyễn 0.9333333333333333, Nunez 0.7300000000000001
+? Obrian
+  soundex O165: O'Brien, OBrien
+  nysiis OBRAN: OBrien
+  metaphone OBRN: O'Brien, OBrien
+  match rating: Gutierrez, Jonson, Nguyen, O'Brien, OBrien, Okafor, Okafur, Robert, Rubin, Rupert, Øvrebø
+  closest: OBrien 0.9333333333333333, O'Brien 0.8642857142857143, Rubin 0.7388888888888889
+? Mcdonald
+  soundex M235: MacDonald, McDonald
+  nysiis MCDANALD: MacDonald, McDonald
+  metaphone MKTNLT: MacDonald, McDonald
+  match rating: MacDonald, Macintosh, McDonald, Schneider
+  closest: McDonald 1.0, MacDonald 0.9666666666666666, Hadad 0.6583333333333333
+? Tomson
+  soundex T525: Thomson
+  nysiis TANSAN: Thomson
+  metaphone TMSN: -
+  match rating: Jackson, Johnson, Jonson, Nguyen, OBrien, Smith, Thompson, Thomson
+  closest: Thomson 0.9571428571428572, Thompson 0.9249999999999999, Jonson 0.7777777777777777
+? Leferve
+  soundex L161: -
+  nysiis LAFARV: -
+  metaphone LFRF: -
+  match rating: Gutierrez, Lefebvre, Lefèvre, OBrien, Robert, Rupert
+  closest: Lefebvre 0.9464285714285714, Lefèvre 0.8944444444444445, Lee 0.8476190476190477
+? Kovalski
+  soundex K142: -
+  nysiis CAVALSC: -
+  metaphone KFLSK: -
+  match rating: Kowalski, Kowalsky
+  closest: Kowalski 0.9333333333333333, Kowalsky 0.8666666666666667, Rossi 0.6583333333333333
+? Ashcroft
+  soundex A261: Ashcraft, Ashcroft
+  nysiis ASCRAFT: Ashcraft, Ashcroft
+  metaphone AXKRFT: Ashcraft, Ashcroft
+  match rating: Anderson, Andersson, Ashcraft, Ashcroft, Schmidt, Schmitt, Washington
+  closest: Ashcroft 1.0, Ashcraft 0.95, Washington 0.6416666666666667
+? Zzyzx
+  soundex Z200: -
+  nysiis ZSYSX: -
+  metaphone SSKS: -
+  match rating: -
+  closest: Yılmaz 0.5777777777777778, Tymczak 0.5619047619047619, Nunez 0.4666666666666666
+? Rossi
+  soundex R200: Rossi, Russo
+  nysiis RAS: Rossi, Russo
+  metaphone RS: Rossi, Russo
+  match rating: Garcia, Jose, José, Rossi, Rubin, Russo
+  closest: Rossi 1.0, Russo 0.76, Kowalski 0.6583333333333333
+? Knigt
+  soundex K523: Knight
+  nysiis NAGT: Knight, Night
+  metaphone NKT: -
+  match rating: D'Angelo, DAngelo, Jonson, Knight, Night, Robert, Rupert
+  closest: Knight 0.9666666666666667, Night 0.8666666666666667, Washington 0.65
+== lookup products.txt product_queries.txt
+'wireles mouse' -> Wireless Mouse (0.9766346153846154); Wired Mouse (0.9216666666666666)
+'mechanicl keybord' -> Mechanical Keyboard (0.9775833333333334)
+'usb c hub' -> USB-C Hub (1.0); USB-C Cable 2m (0.8464261664261663)
+'hdmi' -> HDMI Cable (0.9666666666666666)
+'cafe mug' -> Café Mug (0.9391666666666665)
+'laptop stnd' -> Laptop Stand (0.9758787878787878)
+'web cam' -> no match
+'headphone' -> Noise-Cancelling Headphones (0.8266666666666667)
+'speeker' -> Bluetooth Speaker (0.7671825396825396)
+'chair' -> Ergonomic Chair (0.8042857142857143)
+'desk' -> Desk Lamp (0.97); Standing Desk (0.8166666666666667)
+'monitr' -> Monitor Arm (0.956); 27" Monitor (0.9466666666666665)
+'note book' -> Notebook A5 (0.8071666666666666)
+'keyboard mechanical' -> Mechanical Keyboard (0.8833333333333333)
+'zzz' -> no match
