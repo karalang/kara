@@ -1,0 +1,913 @@
+== load | config/renovate.json5
+  {'$schema': 'https://docs.renovatebot.com/renovate-schema.json', 'extends': ['config:recommended', ':semanticCommits', 'group:allNonMajor'], 'timezone': 'Europe/Berlin', 'schedule': ['before 6am on monday'], 'labels': ['dependencies'], 'prConcurrentLimit': 5, 'prHourlyLimit': 0, 'packageRules': [{'matchDepTypes': ['devDependencies'], 'automerge': True, 'automergeType': 'branch'}, {'matchPackageNames': ['pg'], 'allowedVersions': '<5.0.0'}, {'matchUpdateTypes': ['major'], 'dependencyDashboardApproval': True, 'minimumReleaseAge': '3 days'}], 'vulnerabilityAlerts': {'labels': ['security'], 'assignees': ['@example-org/platform']}}
+== load | config/package.json5
+  {'name': '@example/web-console', 'version': '2.14.0', 'private': True, 'description': "The operator's console for the fleet API", 'type': 'module', 'engines': {'node': '>=20.11'}, 'packageManager': 'pnpm@9.12.0', 'scripts': {'dev': 'vite --port 5173', 'build': 'tsc -b && vite build', 'test': 'vitest run --coverage', 'lint:css': 'stylelint "src/**/*.css"'}, 'dependencies': {'react': '^18.3.1', 'react-dom': '^18.3.1', 'zod': '^3.23.8'}, 'devDependencies': {'typescript': '~5.6.2', 'vite': '^5.4.8', 'vitest': '^2.1.2'}, 'pnpm': {'overrides': {'braces@<3.0.3': '>=3.0.3'}}}
+== load | config/runtime_enabled_features.json5
+  {'parameters': {'status': {'valid_values': ['stable', 'experimental', 'test']}, 'depends_on': {}, 'origin_trial_feature_name': {}, 'public': {'valid_type': 'bool'}}, 'data': [{'name': 'AccessibilityObjectModel', 'status': 'experimental'}, {'name': 'CSSAnchorPositioning', 'status': 'stable', 'public': True}, {'name': 'CSSScrollTimeline', 'status': 'experimental', 'depends_on': ['ScrollTimeline'], 'origin_trial_feature_name': 'ScrollTimeline'}, {'name': 'FencedFrames', 'status': {'Android': '', 'default': 'stable'}}, {'name': 'ScrollTimeline', 'status': 'test'}]}
+== load | config/babel.config.json5
+  {'presets': [['@babel/preset-env', {'targets': '> 0.5%, last 2 versions, not dead', 'useBuiltIns': 'usage', 'corejs': 3.38}], '@babel/preset-typescript'], 'plugins': [['@babel/plugin-proposal-decorators', {'version': '2023-11'}]], 'env': {'test': {'plugins': ['babel-plugin-istanbul']}}, 'ignore': ['**/*.d.ts', 'dist/**']}
+== load | config/inventory.json5
+  {'site': 'Rotterdam DC-2', 'updated': '2026-10-19T07:42:00Z', 'racks': [{'id': 'R14', 'units': 42, 'power_kw': 7.5, 'pdu_load': [0.62, 0.58, 0.7, 1.0], 'devices': [{'host': 'edge-r14-01', 'serial': 1514078402, 'mac': '3c:ec:ef:12:9a:01', 'role': 'router'}, {'host': 'stor-r14-07', 'serial': 16711935, 'disks': 24, 'raw_tb': 192.0}]}, {'id': 'R15', 'units': 48, 'power_kw': 11, 'pdu_load': [], 'devices': [], 'notes': 'decommission after the Q4 audit'}], 'limits': {'max_temp_c': 27.0, 'min_temp_c': 0, 'alarm_after_s': 300.0, 'budget': inf, 'drift': -inf, 'reading': nan, 'account_id': 18446744073709551617, 'rack_mask': 1208925819614629174706175, 'offset': -16}}
+== load | grammar/strings.json5
+  {'single': 'it\'s "quoted"', 'double': 'say "hi" and \'bye\'', 'escapes': '\x08\x0c\n\r\t\x0b\x00\\/', 'other': 'acdz%', 'hex': 'Alpha é', 'unicode': 'été ☃', 'pair': '\ud83d\ude00', 'lone': '\udc00 then \ud800', 'raw': 'café ☃ 😀 ال', 'separators': 'a\u2028b\u2029c', 'continued': 'one two three four', 'controls': 'tab\there', 'zwj': '\u200d\u200c\xad\ufeff'}
+== load | grammar/keys.json5
+  {'plain': 1, '$dollar': 2, '_under': 3, 'a$b_c9': 4, 'café': 5, '名前': 6, 'ǈex': 7, 'ⅠⅡ': 8, 'äo': 9, 'a٠': 10, 'a‿b': 11, 'abc': 12, 'xA': 13, '1x': 14, 'zw\u200cj\u200d': 15, 'while': 16, 'null': 17, 'true': 18, 'Infinity': 19, 'quoted key': 20, '': 21, '1abc': 22, 'new': 23, 'newbie': 24}
+== load | grammar/numbers.json5
+  [0, 0, 0, 7, -7, 7, 123456789012345678901234567890, -98765432109876543210, 0, 255, 255, -255, 255, 3735928559, 18446744073709551616, 1.5, -1.5, 1.5, 0.5, -0.5, 5.0, -5.0, 0.0, -0.0, 1000.0, 1000.0, 1000.0, 0.001, 25000000000.0, -2.5e-10, 5.0, 50.0, 1e+308, inf, -inf, 5e-324, 0.0, 1.7976931348623157e+308, 0.1, 0.30000000000000004, 1e+16, 1e-05, 123456789.12345679, inf, inf, -inf, nan, nan, nan]
+== load | grammar/whitespace.json5
+  {'a': 1, 'b': [2, 3], 'c': 'x'}
+== load | grammar/dupes.json5
+  {'host': 'b.example.com', 'port': 8080, 'nested': {'x': 3, 'y': 2}}
+== load | sample.json5
+  {'foo': 'bar', 'while': True, 'this': 'is a multi-line string', 'here': 'is another', 'hex': 3735928559, 'half': 0.5, 'delta': 10, 'to': inf, 'finally': 'a trailing comma', 'oh': ["we shouldn't forget", 'arrays can have', 'trailing commas too']}
+== load | grammar/dupes.json5 | dups=0
+  ValueError: Duplicate key "x" found in object
+== load | grammar/nonstrict.json5
+  ValueError: <string>:2 Unexpected "\n" at column 18
+== load | grammar/nonstrict.json5 | strict=0
+  {'sql': 'SELECT id\n  FROM users\r\n  WHERE active', 'bell': 'ding\x07 \x1b[0m'}
+== load | grammar/stream.json5
+  ValueError: <string>:2 Unexpected "{" at column 1
+== load | grammar/stream.json5 | trailing=0
+  {'event': 'deploy', 'id': 1}
+== load | broken/bad_exponent.json5
+  ValueError: could not convert string to float: '1e'
+== load | broken/bad_exponent_sign.json5
+  ValueError: could not convert string to float: '1.5e+'
+== load | broken/bare_word.json5
+  ValueError: <string>:1 Unexpected "h" at column 1
+== load | broken/comma_only.json5
+  ValueError: <string>:1 Unexpected "," at column 3
+== load | broken/control_key.json5
+  ValueError: <string>:1 Unexpected ":" at column 4
+== load | broken/deep_error.json5
+  ValueError: <string>:3 Unexpected "}" at column 22
+== load | broken/digit_escape.json5
+  ValueError: <string>:1 Unexpected "1" at column 3
+== load | broken/dot_exponent.json5
+  ValueError: could not convert string to float: '.e5'
+== load | broken/double_comma.json5
+  ValueError: <string>:1 Unexpected "," at column 4
+== load | broken/empty.json5
+  ValueError: Empty strings are not legal JSON5
+== load | broken/empty_comma.json5
+  ValueError: <string>:1 Unexpected "}" at column 3
+== load | broken/hex_float.json5
+  ValueError: <string>:1 Unexpected "." at column 5
+== load | broken/hyphen_key.json5
+  ValueError: <string>:2 Unexpected "a" at column 7
+== load | broken/leading_zero.json5
+  ValueError: <string>:1 Unexpected "0" at column 9
+== load | broken/lone_dot.json5
+  ValueError: could not convert string to float: '.'
+== load | broken/lone_plus.json5
+  ValueError: <string>:1 Unexpected "]" at column 3
+== load | broken/lowercase_nan.json5
+  ValueError: <string>:1 Unexpected "a" at column 3
+== load | broken/missing_colon.json5
+  ValueError: <string>:2 Unexpected "'" at column 8
+== load | broken/nul.json5
+  ValueError: <string>:1 Unexpected "]" at column 5
+== load | broken/number_key.json5
+  ValueError: <string>:1 Unexpected ":" at column 3
+== load | broken/only_comment.json5
+  ValueError: <string>:2 Unexpected end of input at column 1
+== load | broken/open_comment.json5
+  ValueError: <string>:2 Unexpected end of input at column 1
+== load | broken/raw_cr.json5
+  ValueError: <string>:1 Unexpected "\r" at column 4
+== load | broken/raw_newline.json5
+  ValueError: <string>:1 Unexpected "\n" at column 13
+== load | broken/short_hex.json5
+  ValueError: <string>:1 Unexpected "'" at column 5
+== load | broken/short_unicode.json5
+  ValueError: <string>:1 Unexpected "g" at column 6
+== load | broken/single_slash.json5
+  ValueError: <string>:1 Unexpected " " at column 9
+== load | broken/trailing.json5
+  ValueError: <string>:1 Unexpected "}" at column 7
+== load | broken/two_values.json5
+  ValueError: <string>:2 Unexpected "{" at column 1
+== load | broken/unclosed_array.json5
+  ValueError: <string>:2 Unexpected end of input at column 1
+== load | broken/undefined.json5
+  ValueError: <string>:1 Unexpected "u" at column 5
+== load | broken/units.json5
+  ValueError: <string>:1 Unexpected "p" at column 11
+== load | broken/unterminated.json5
+  ValueError: <string>:2 Unexpected "\n" at column 13
+== load | broken/whitespace.json5
+  ValueError: <string>:3 Unexpected end of input at column 1
+== load | broken/zero_digit.json5
+  ValueError: <string>:1 Unexpected "1" at column 4
+== load | broken/latin1.json5
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xfc in position 9: invalid start byte
+== load | broken/latin1_start.json5
+  UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 1: invalid continuation byte
+== load | broken/raw_newline.json5 | strict=0
+  {'key': 'value\nover two lines'}
+== load | broken/two_values.json5 | trailing=0
+  {'a': 1}
+== load | broken/trailing.json5 | trailing=0
+  {'a': 1}
+== parse | grammar/stream.json5
+  0..24: {'event': 'deploy', 'id': 1}
+  24..51: {'event': 'rollback', 'id': 2}
+  51..88: [1, 2, 3]
+  88..95: 'done'
+== parse | grammar/stream_comment.json5
+  0..1: 1
+  1..3: 2
+  3..5: 3
+  error at 13: <string>:2 Unexpected end of input at column 1
+== parse | grammar/stream_bad.json5
+  0..6: {'a': 1}
+  error at 14: <string>:1 Unexpected " " at column 15
+== parse | broken/two_values.json5
+  0..6: {'a': 1}
+  6..13: {'b': 2}
+== cases
+  - [] -> []
+  - [0,1] -> [0, 1]
+  - [ 0 , 1 ] -> [0, 1]
+  - true -> True
+  - false -> False
+  - null -> None
+  - {foo: 1, foo: 2} -> {'foo': 2}
+  dups=0 {foo: 1, foo: 2} -> ValueError: Duplicate key "foo" found in object
+  dups=0 {foo: 1, bar: 2} -> {'foo': 1, 'bar': 2}
+  - ' -> ValueError: <string>:1 Unexpected end of input at column 2
+  - 1 -> 1
+  - -1 -> -1
+  - +1 -> 1
+  - --6 -> ValueError: <string>:1 Unexpected "-" at column 2
+  - ++6 -> ValueError: <string>:1 Unexpected "+" at column 2
+  - +-6 -> ValueError: <string>:1 Unexpected "-" at column 2
+  - 0xf -> 15
+  - 0XABCD -> 43981
+  - 0x+ -> ValueError: <string>:1 Unexpected "+" at column 3
+  - +0xf -> 15
+  - -0x0 -> 0
+  - 1.5e3 -> 1500.0
+  - -0.5e-2 -> -0.005
+  - --6.0 -> ValueError: <string>:1 Unexpected "-" at column 2
+  - Infinity -> inf
+  - -NaN -> nan
+  - 14d -> ValueError: <string>:1 Unexpected "d" at column 3
+  - {$: 1} -> {'$': 1}
+  - {a$: 1} -> {'a$': 1}
+  - {1: 1} -> ValueError: <string>:1 Unexpected ":" at column 3
+  - {} -> {}
+  - {"foo":0,"bar":1} -> {'foo': 0, 'bar': 1}
+  - '\x66oo' -> 'foo'
+  - "\u0066oo" -> 'foo'
+  - '\x0' -> ValueError: <string>:1 Unexpected "'" at column 5
+  - '\xj' -> ValueError: <string>:1 Unexpected "j" at column 4
+  - '\u000j' -> ValueError: <string>:1 Unexpected "j" at column 7
+  - '\uj000' -> ValueError: <string>:1 Unexpected "j" at column 4
+  - "\/" -> '/'
+  - "\0" -> '\x00'
+  - 0 1 -> ValueError: <string>:1 Unexpected "1" at column 3
+  - 0 a -> ValueError: <string>:1 Unexpected "a" at column 3
+  - 4 x -> ValueError: <string>:1 Unexpected "x" at column 3
+  trailing=0 4 x -> 4
+  trailing=0 [1] [2] -> [1]
+  -   1 -> 1
+  - 1 // -> 1
+  - 1 /* -> ValueError: <string>:1 Unexpected end of input at column 5
+  - {a:1,} -> {'a': 1}
+  - [1,] -> [1]
+  - {a:1,,} -> ValueError: <string>:1 Unexpected "}" at column 7
+  - [1 2] -> ValueError: <string>:1 Unexpected "2" at column 4
+  - {a 1} -> ValueError: <string>:1 Unexpected "1" at column 4
+  - {'a' 1} -> ValueError: <string>:1 Unexpected "1" at column 6
+  - {a:} -> ValueError: <string>:1 Unexpected "}" at column 4
+  - Infinityx -> ValueError: <string>:1 Unexpected "x" at column 9
+  - NaN1 -> ValueError: <string>:1 Unexpected "1" at column 4
+  - 1Infinity -> ValueError: <string>:1 Unexpected "I" at column 2
+  - 0x -> ValueError: <string>:1 Unexpected end of input at column 3
+  - 0xg -> ValueError: <string>:1 Unexpected "g" at column 3
+  - 00 -> ValueError: <string>:1 Unexpected "0" at column 2
+  - 01.5 -> ValueError: <string>:1 Unexpected "1" at column 2
+  - - -> ValueError: <string>:1 Unexpected end of input at column 2
+  - -x -> ValueError: <string>:1 Unexpected "x" at column 2
+  - -Inf -> ValueError: <string>:1 Unexpected end of input at column 5
+  - tru -> ValueError: <string>:1 Unexpected end of input at column 4
+  - nulls -> ValueError: <string>:1 Unexpected "s" at column 5
+  - 'abc -> ValueError: <string>:1 Unexpected end of input at column 5
+  - "abc -> ValueError: <string>:1 Unexpected end of input at column 5
+  - "a'b" -> "a'b"
+  - {\u0061: 1} -> {'a': 1}
+  - {\u0031: 1} -> {'1': 1}
+  - {a\u0020b: 1} -> {'a b': 1}
+  - {\x41: 1} -> ValueError: <string>:1 Unexpected "x" at column 3
+  - [1e] -> ValueError: could not convert string to float: '1e'
+  - 1e+ -> ValueError: could not convert string to float: '1e+'
+  - . -> ValueError: could not convert string to float: '.'
+  - -. -> ValueError: could not convert string to float: '-.'
+  - 5.e3 -> 5000.0
+  - /* c */ 1 -> 1
+  - {/**/a/**/:/**/1/**/} -> {'a': 1}
+  dups=0 {a: {b: 1, b: 2}, a: 3} -> ValueError: Duplicate key "b" found in object
+  dups=0 {a: 1e, a: 2} -> ValueError: could not convert string to float: '1e'
+  dups=0 {"a": 1, a: 2} -> ValueError: Duplicate key "a" found in object
+== dump | config/renovate.json5
+  |{$schema: "https://docs.renovatebot.com/renovate-schema.json", "extends": ["config:recommended", ":semanticCommits", "group:allNonMajor"], timezone: "Europe/Berlin", schedule: ["before 6am on monday"], labels: ["dependencies"], prConcurrentLimit: 5, prHourlyLimit: 0, packageRules: [{matchDepTypes: ["devDependencies"], automerge: true, automergeType: "branch"}, {matchPackageNames: ["pg"], allowedVersions: "<5.0.0"}, {matchUpdateTypes: ["major"], dependencyDashboardApproval: true, minimumReleaseAge: "3 days"}], vulnerabilityAlerts: {labels: ["security"], assignees: ["@example-org/platform"]}}
+== dump | config/renovate.json5 | indent=2
+  |{
+  |  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  |  "extends": [
+  |    "config:recommended",
+  |    ":semanticCommits",
+  |    "group:allNonMajor",
+  |  ],
+  |  timezone: "Europe/Berlin",
+  |  schedule: [
+  |    "before 6am on monday",
+  |  ],
+  |  labels: [
+  |    "dependencies",
+  |  ],
+  |  prConcurrentLimit: 5,
+  |  prHourlyLimit: 0,
+  |  packageRules: [
+  |    {
+  |      matchDepTypes: [
+  |        "devDependencies",
+  |      ],
+  |      automerge: true,
+  |      automergeType: "branch",
+  |    },
+  |    {
+  |      matchPackageNames: [
+  |        "pg",
+  |      ],
+  |      allowedVersions: "<5.0.0",
+  |    },
+  |    {
+  |      matchUpdateTypes: [
+  |        "major",
+  |      ],
+  |      dependencyDashboardApproval: true,
+  |      minimumReleaseAge: "3 days",
+  |    },
+  |  ],
+  |  vulnerabilityAlerts: {
+  |    labels: [
+  |      "security",
+  |    ],
+  |    assignees: [
+  |      "@example-org/platform",
+  |    ],
+  |  },
+  |}
+== dump | config/package.json5 | indent=2 | quote_keys=1 | trailing_commas=0
+  |{
+  |  "name": "@example/web-console",
+  |  "version": "2.14.0",
+  |  "private": true,
+  |  "description": "The operator's console for the fleet API",
+  |  "type": "module",
+  |  "engines": {
+  |    "node": ">=20.11"
+  |  },
+  |  "packageManager": "pnpm@9.12.0",
+  |  "scripts": {
+  |    "dev": "vite --port 5173",
+  |    "build": "tsc -b && vite build",
+  |    "test": "vitest run --coverage",
+  |    "lint:css": "stylelint \"src/**/*.css\""
+  |  },
+  |  "dependencies": {
+  |    "react": "^18.3.1",
+  |    "react-dom": "^18.3.1",
+  |    "zod": "^3.23.8"
+  |  },
+  |  "devDependencies": {
+  |    "typescript": "~5.6.2",
+  |    "vite": "^5.4.8",
+  |    "vitest": "^2.1.2"
+  |  },
+  |  "pnpm": {
+  |    "overrides": {
+  |      "braces@<3.0.3": ">=3.0.3"
+  |    }
+  |  }
+  |}
+== dump | config/package.json5 | indent=4 | sort_keys=1 | quote_style=always_single
+  |{
+  |    dependencies: {
+  |        react: '^18.3.1',
+  |        'react-dom': '^18.3.1',
+  |        zod: '^3.23.8',
+  |    },
+  |    description: 'The operator\'s console for the fleet API',
+  |    devDependencies: {
+  |        typescript: '~5.6.2',
+  |        vite: '^5.4.8',
+  |        vitest: '^2.1.2',
+  |    },
+  |    engines: {
+  |        node: '>=20.11',
+  |    },
+  |    name: '@example/web-console',
+  |    packageManager: 'pnpm@9.12.0',
+  |    pnpm: {
+  |        overrides: {
+  |            'braces@<3.0.3': '>=3.0.3',
+  |        },
+  |    },
+  |    'private': true,
+  |    scripts: {
+  |        build: 'tsc -b && vite build',
+  |        dev: 'vite --port 5173',
+  |        'lint:css': 'stylelint "src/**/*.css"',
+  |        test: 'vitest run --coverage',
+  |    },
+  |    type: 'module',
+  |    version: '2.14.0',
+  |}
+== dump | config/runtime_enabled_features.json5 | indent=tab
+  |{
+  |	parameters: {
+  |		status: {
+  |			valid_values: [
+  |				"stable",
+  |				"experimental",
+  |				"test",
+  |			],
+  |		},
+  |		depends_on: {},
+  |		origin_trial_feature_name: {},
+  |		"public": {
+  |			valid_type: "bool",
+  |		},
+  |	},
+  |	data: [
+  |		{
+  |			name: "AccessibilityObjectModel",
+  |			status: "experimental",
+  |		},
+  |		{
+  |			name: "CSSAnchorPositioning",
+  |			status: "stable",
+  |			"public": true,
+  |		},
+  |		{
+  |			name: "CSSScrollTimeline",
+  |			status: "experimental",
+  |			depends_on: [
+  |				"ScrollTimeline",
+  |			],
+  |			origin_trial_feature_name: "ScrollTimeline",
+  |		},
+  |		{
+  |			name: "FencedFrames",
+  |			status: {
+  |				Android: "",
+  |				"default": "stable",
+  |			},
+  |		},
+  |		{
+  |			name: "ScrollTimeline",
+  |			status: "test",
+  |		},
+  |	],
+  |}
+== dump | config/runtime_enabled_features.json5 | compact=1
+  |{parameters:{status:{valid_values:["stable","experimental","test"]},depends_on:{},origin_trial_feature_name:{},"public":{valid_type:"bool"}},data:[{name:"AccessibilityObjectModel",status:"experimental"},{name:"CSSAnchorPositioning",status:"stable","public":true},{name:"CSSScrollTimeline",status:"experimental",depends_on:["ScrollTimeline"],origin_trial_feature_name:"ScrollTimeline"},{name:"FencedFrames",status:{Android:"","default":"stable"}},{name:"ScrollTimeline",status:"test"}]}
+== dump | config/babel.config.json5 | indent=0
+  |{
+  |presets: [
+  |[
+  |"@babel/preset-env",
+  |{
+  |targets: "> 0.5%, last 2 versions, not dead",
+  |useBuiltIns: "usage",
+  |corejs: 3.38,
+  |},
+  |],
+  |"@babel/preset-typescript",
+  |],
+  |plugins: [
+  |[
+  |"@babel/plugin-proposal-decorators",
+  |{
+  |version: "2023-11",
+  |},
+  |],
+  |],
+  |env: {
+  |test: {
+  |plugins: [
+  |"babel-plugin-istanbul",
+  |],
+  |},
+  |},
+  |ignore: [
+  |"**/*.d.ts",
+  |"dist/**",
+  |],
+  |}
+== dump | config/babel.config.json5 | indent=-3 | trailing_commas=0
+  |{
+  |presets: [
+  |[
+  |"@babel/preset-env",
+  |{
+  |targets: "> 0.5%, last 2 versions, not dead",
+  |useBuiltIns: "usage",
+  |corejs: 3.38
+  |}
+  |],
+  |"@babel/preset-typescript"
+  |],
+  |plugins: [
+  |[
+  |"@babel/plugin-proposal-decorators",
+  |{
+  |version: "2023-11"
+  |}
+  |]
+  |],
+  |env: {
+  |test: {
+  |plugins: [
+  |"babel-plugin-istanbul"
+  |]
+  |}
+  |},
+  |ignore: [
+  |"**/*.d.ts",
+  |"dist/**"
+  |]
+  |}
+== dump | config/inventory.json5 | indent=2
+  |{
+  |  site: "Rotterdam DC-2",
+  |  updated: "2026-10-19T07:42:00Z",
+  |  racks: [
+  |    {
+  |      id: "R14",
+  |      units: 42,
+  |      power_kw: 7.5,
+  |      pdu_load: [
+  |        0.62,
+  |        0.58,
+  |        0.7,
+  |        1.0,
+  |      ],
+  |      devices: [
+  |        {
+  |          host: "edge-r14-01",
+  |          serial: 1514078402,
+  |          mac: "3c:ec:ef:12:9a:01",
+  |          role: "router",
+  |        },
+  |        {
+  |          host: "stor-r14-07",
+  |          serial: 16711935,
+  |          disks: 24,
+  |          raw_tb: 192.0,
+  |        },
+  |      ],
+  |    },
+  |    {
+  |      id: "R15",
+  |      units: 48,
+  |      power_kw: 11,
+  |      pdu_load: [],
+  |      devices: [],
+  |      notes: "decommission after the Q4 audit",
+  |    },
+  |  ],
+  |  limits: {
+  |    max_temp_c: 27.0,
+  |    min_temp_c: 0,
+  |    alarm_after_s: 300.0,
+  |    budget: Infinity,
+  |    drift: -Infinity,
+  |    reading: NaN,
+  |    account_id: 18446744073709551617,
+  |    rack_mask: 1208925819614629174706175,
+  |    offset: -16,
+  |  },
+  |}
+== dump | config/inventory.json5 | allow_nan=0
+  ValueError: Illegal JSON5 value: inf
+== dump | grammar/strings.json5 | indent=2
+  |{
+  |  single: "it's \"quoted\"",
+  |  double: "say \"hi\" and 'bye'",
+  |  escapes: "\b\f\n\r\t\v\0\\/",
+  |  other: "acdz%",
+  |  hex: "Alpha \u00e9",
+  |  unicode: "\u00e9t\u00e9 \u2603",
+  |  pair: "\ud83d\ude00",
+  |  lone: "\udc00 then \ud800",
+  |  raw: "caf\u00e9 \u2603 \ud83d\ude00 \u0627\u0644",
+  |  separators: "a\u2028b\u2029c",
+  |  continued: "one two three four",
+  |  controls: "tab\there",
+  |  zwj: "\u200d\u200c\u00ad\ufeff",
+  |}
+== dump | grammar/strings.json5 | indent=2 | ensure_ascii=0
+  |{
+  |  single: "it's \"quoted\"",
+  |  double: "say \"hi\" and 'bye'",
+  |  escapes: "\b\f\n\r\t\v\0\\/",
+  |  other: "acdz%",
+  |  hex: "Alpha é",
+  |  unicode: "été ☃",
+  |  pair: "\ud83d\ude00",
+  |  lone: "\udc00 then \ud800",
+  |  raw: "café ☃ 😀 ال",
+  |  separators: "a\u2028b\u2029c",
+  |  continued: "one two three four",
+  |  controls: "tab\there",
+  |  zwj: "‍‌­﻿",
+  |}
+== dump | grammar/strings.json5 | indent=2 | quote_style=always_single
+  |{
+  |  single: 'it\'s "quoted"',
+  |  double: 'say "hi" and \'bye\'',
+  |  escapes: '\b\f\n\r\t\v\0\\/',
+  |  other: 'acdz%',
+  |  hex: 'Alpha \u00e9',
+  |  unicode: '\u00e9t\u00e9 \u2603',
+  |  pair: '\ud83d\ude00',
+  |  lone: '\udc00 then \ud800',
+  |  raw: 'caf\u00e9 \u2603 \ud83d\ude00 \u0627\u0644',
+  |  separators: 'a\u2028b\u2029c',
+  |  continued: 'one two three four',
+  |  controls: 'tab\there',
+  |  zwj: '\u200d\u200c\u00ad\ufeff',
+  |}
+== dump | grammar/strings.json5 | indent=2 | quote_style=prefer_double | ensure_ascii=0
+  |{
+  |  single: 'it\'s "quoted"',
+  |  double: "say \"hi\" and 'bye'",
+  |  escapes: "\b\f\n\r\t\v\0\\/",
+  |  other: "acdz%",
+  |  hex: "Alpha é",
+  |  unicode: "été ☃",
+  |  pair: "\ud83d\ude00",
+  |  lone: "\udc00 then \ud800",
+  |  raw: "café ☃ 😀 ال",
+  |  separators: "a\u2028b\u2029c",
+  |  continued: "one two three four",
+  |  controls: "tab\there",
+  |  zwj: "‍‌­﻿",
+  |}
+== dump | grammar/strings.json5 | indent=2 | quote_style=prefer_single | ensure_ascii=0
+  |{
+  |  single: 'it\'s "quoted"',
+  |  double: 'say "hi" and \'bye\'',
+  |  escapes: '\b\f\n\r\t\v\0\\/',
+  |  other: 'acdz%',
+  |  hex: 'Alpha é',
+  |  unicode: 'été ☃',
+  |  pair: '\ud83d\ude00',
+  |  lone: '\udc00 then \ud800',
+  |  raw: 'café ☃ 😀 ال',
+  |  separators: 'a\u2028b\u2029c',
+  |  continued: 'one two three four',
+  |  controls: 'tab\there',
+  |  zwj: '‍‌­﻿',
+  |}
+== dump | grammar/keys.json5 | indent=2
+  |{
+  |  plain: 1,
+  |  $dollar: 2,
+  |  _under: 3,
+  |  a$b_c9: 4,
+  |  café: 5,
+  |  名前: 6,
+  |  ǈex: 7,
+  |  ⅠⅡ: 8,
+  |  äo: 9,
+  |  a٠: 10,
+  |  a‿b: 11,
+  |  abc: 12,
+  |  xA: 13,
+  |  "1x": 14,
+  |  "zw\u200cj\u200d": 15,
+  |  "while": 16,
+  |  "null": 17,
+  |  "true": 18,
+  |  Infinity: 19,
+  |  "quoted key": 20,
+  |  "": 21,
+  |  "1abc": 22,
+  |  "new": 23,
+  |  newbie: 24,
+  |}
+== dump | grammar/keys.json5 | indent=2 | ensure_ascii=0 | sort_keys=1
+  |{
+  |  "": 21,
+  |  $dollar: 2,
+  |  "1abc": 22,
+  |  "1x": 14,
+  |  Infinity: 19,
+  |  _under: 3,
+  |  a$b_c9: 4,
+  |  abc: 12,
+  |  äo: 9,
+  |  a٠: 10,
+  |  a‿b: 11,
+  |  café: 5,
+  |  "new": 23,
+  |  newbie: 24,
+  |  "null": 17,
+  |  plain: 1,
+  |  "quoted key": 20,
+  |  "true": 18,
+  |  "while": 16,
+  |  xA: 13,
+  |  "zw‌j‍": 15,
+  |  ǈex: 7,
+  |  ⅠⅡ: 8,
+  |  名前: 6,
+  |}
+== dump | grammar/keys.json5 | quote_keys=1
+  |{"plain": 1, "$dollar": 2, "_under": 3, "a$b_c9": 4, "caf\u00e9": 5, "\u540d\u524d": 6, "\u01c8ex": 7, "\u2160\u2161": 8, "a\u0308o": 9, "a\u0660": 10, "a\u203fb": 11, "abc": 12, "xA": 13, "1x": 14, "zw\u200cj\u200d": 15, "while": 16, "null": 17, "true": 18, "Infinity": 19, "quoted key": 20, "": 21, "1abc": 22, "new": 23, "newbie": 24}
+== dump | grammar/numbers.json5
+  |[0, 0, 0, 7, -7, 7, 123456789012345678901234567890, -98765432109876543210, 0, 255, 255, -255, 255, 3735928559, 18446744073709551616, 1.5, -1.5, 1.5, 0.5, -0.5, 5.0, -5.0, 0.0, -0.0, 1000.0, 1000.0, 1000.0, 0.001, 25000000000.0, -2.5e-10, 5.0, 50.0, 1e+308, Infinity, -Infinity, 5e-324, 0.0, 1.7976931348623157e+308, 0.1, 0.30000000000000004, 1e+16, 1e-05, 123456789.12345679, Infinity, Infinity, -Infinity, NaN, NaN, NaN]
+== dump | grammar/numbers.json5 | allow_nan=0
+  ValueError: Illegal JSON5 value: inf
+== dump | grammar/whitespace.json5 | indent=s:--
+  |{
+  |--a: 1,
+  |--b: [
+  |----2,
+  |----3,
+  |--],
+  |--c: "x",
+  |}
+== dump | sample.json5 | indent=2 | quote_style=prefer_single
+  |{
+  |  foo: 'bar',
+  |  'while': true,
+  |  'this': 'is a multi-line string',
+  |  here: 'is another',
+  |  hex: 3735928559,
+  |  half: 0.5,
+  |  delta: 10,
+  |  to: Infinity,
+  |  'finally': 'a trailing comma',
+  |  oh: [
+  |    "we shouldn't forget",
+  |    'arrays can have',
+  |    'trailing commas too',
+  |  ],
+  |}
+== dump | sample.json5 | indent=s:
+  |{
+  |foo: "bar",
+  |"while": true,
+  |"this": "is a multi-line string",
+  |here: "is another",
+  |hex: 3735928559,
+  |half: 0.5,
+  |delta: 10,
+  |to: Infinity,
+  |"finally": "a trailing comma",
+  |oh: [
+  |"we shouldn't forget",
+  |"arrays can have",
+  |"trailing commas too",
+  |],
+  |}
+== roundtrip | config/renovate.json5
+  compact 597 chars, same again True; pretty 865 chars, same again True
+== roundtrip | config/inventory.json5
+  compact 609 chars, same again True; pretty 986 chars, same again True
+== roundtrip | grammar/strings.json5
+  compact 380 chars, same again True; pretty 343 chars, same again True
+== roundtrip | grammar/keys.json5
+  compact 262 chars, same again True; pretty 333 chars, same again True
+== roundtrip | grammar/numbers.json5
+  compact 421 chars, same again True; pretty 522 chars, same again True
+== roundtrip | sample.json5
+  compact 236 chars, same again True; pretty 290 chars, same again True
+== tool | data/sample.json5
+  stdout|{
+  stdout|    foo: "bar",
+  stdout|    "while": true,
+  stdout|    "this": "is a multi-line string",
+  stdout|    here: "is another",
+  stdout|    hex: 3735928559,
+  stdout|    half: 0.5,
+  stdout|    delta: 10,
+  stdout|    to: Infinity,
+  stdout|    "finally": "a trailing comma",
+  stdout|    oh: [
+  stdout|        "we shouldn't forget",
+  stdout|        "arrays can have",
+  stdout|        "trailing commas too",
+  stdout|    ],
+  stdout|}
+  -> 0
+== tool | --as-json | data/config/renovate.json5
+  stdout|{
+  stdout|    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  stdout|    "extends": [
+  stdout|        "config:recommended",
+  stdout|        ":semanticCommits",
+  stdout|        "group:allNonMajor"
+  stdout|    ],
+  stdout|    "timezone": "Europe/Berlin",
+  stdout|    "schedule": [
+  stdout|        "before 6am on monday"
+  stdout|    ],
+  stdout|    "labels": [
+  stdout|        "dependencies"
+  stdout|    ],
+  stdout|    "prConcurrentLimit": 5,
+  stdout|    "prHourlyLimit": 0,
+  stdout|    "packageRules": [
+  stdout|        {
+  stdout|            "matchDepTypes": [
+  stdout|                "devDependencies"
+  stdout|            ],
+  stdout|            "automerge": true,
+  stdout|            "automergeType": "branch"
+  stdout|        },
+  stdout|        {
+  stdout|            "matchPackageNames": [
+  stdout|                "pg"
+  stdout|            ],
+  stdout|            "allowedVersions": "<5.0.0"
+  stdout|        },
+  stdout|        {
+  stdout|            "matchUpdateTypes": [
+  stdout|                "major"
+  stdout|            ],
+  stdout|            "dependencyDashboardApproval": true,
+  stdout|            "minimumReleaseAge": "3 days"
+  stdout|        }
+  stdout|    ],
+  stdout|    "vulnerabilityAlerts": {
+  stdout|        "labels": [
+  stdout|            "security"
+  stdout|        ],
+  stdout|        "assignees": [
+  stdout|            "@example-org/platform"
+  stdout|        ]
+  stdout|    }
+  stdout|}
+  -> 0
+== tool | --indent | 2 | --quote-style | always_single | data/config/package.json5
+  stdout|{
+  stdout|  name: '@example/web-console',
+  stdout|  version: '2.14.0',
+  stdout|  'private': true,
+  stdout|  description: 'The operator\'s console for the fleet API',
+  stdout|  type: 'module',
+  stdout|  engines: {
+  stdout|    node: '>=20.11',
+  stdout|  },
+  stdout|  packageManager: 'pnpm@9.12.0',
+  stdout|  scripts: {
+  stdout|    dev: 'vite --port 5173',
+  stdout|    build: 'tsc -b && vite build',
+  stdout|    test: 'vitest run --coverage',
+  stdout|    'lint:css': 'stylelint "src/**/*.css"',
+  stdout|  },
+  stdout|  dependencies: {
+  stdout|    react: '^18.3.1',
+  stdout|    'react-dom': '^18.3.1',
+  stdout|    zod: '^3.23.8',
+  stdout|  },
+  stdout|  devDependencies: {
+  stdout|    typescript: '~5.6.2',
+  stdout|    vite: '^5.4.8',
+  stdout|    vitest: '^2.1.2',
+  stdout|  },
+  stdout|  pnpm: {
+  stdout|    overrides: {
+  stdout|      'braces@<3.0.3': '>=3.0.3',
+  stdout|    },
+  stdout|  },
+  stdout|}
+  -> 0
+== tool | --indent | None | data/config/babel.config.json5
+  stdout|{presets: [["@babel/preset-env", {targets: "> 0.5%, last 2 versions, not dead", useBuiltIns: "usage", corejs: 3.38}], "@babel/preset-typescript"], plugins: [["@babel/plugin-proposal-decorators", {version: "2023-11"}]], env: {test: {plugins: ["babel-plugin-istanbul"]}}, ignore: ["**/*.d.ts", "dist/**"]}
+  -> 0
+== tool | --indent | .. | --no-trailing-commas | data/config/babel.config.json5
+  stdout|{
+  stdout|..presets: [
+  stdout|....[
+  stdout|......"@babel/preset-env",
+  stdout|......{
+  stdout|........targets: "> 0.5%, last 2 versions, not dead",
+  stdout|........useBuiltIns: "usage",
+  stdout|........corejs: 3.38
+  stdout|......}
+  stdout|....],
+  stdout|...."@babel/preset-typescript"
+  stdout|..],
+  stdout|..plugins: [
+  stdout|....[
+  stdout|......"@babel/plugin-proposal-decorators",
+  stdout|......{
+  stdout|........version: "2023-11"
+  stdout|......}
+  stdout|....]
+  stdout|..],
+  stdout|..env: {
+  stdout|....test: {
+  stdout|......plugins: [
+  stdout|........"babel-plugin-istanbul"
+  stdout|......]
+  stdout|....}
+  stdout|..},
+  stdout|..ignore: [
+  stdout|...."**/*.d.ts",
+  stdout|...."dist/**"
+  stdout|..]
+  stdout|}
+  -> 0
+== tool | --indent | +1 | --quote-keys | data/grammar/keys.json5
+  stdout|{
+  stdout| "plain": 1,
+  stdout| "$dollar": 2,
+  stdout| "_under": 3,
+  stdout| "a$b_c9": 4,
+  stdout| "caf\u00e9": 5,
+  stdout| "\u540d\u524d": 6,
+  stdout| "\u01c8ex": 7,
+  stdout| "\u2160\u2161": 8,
+  stdout| "a\u0308o": 9,
+  stdout| "a\u0660": 10,
+  stdout| "a\u203fb": 11,
+  stdout| "abc": 12,
+  stdout| "xA": 13,
+  stdout| "1x": 14,
+  stdout| "zw\u200cj\u200d": 15,
+  stdout| "while": 16,
+  stdout| "null": 17,
+  stdout| "true": 18,
+  stdout| "Infinity": 19,
+  stdout| "quoted key": 20,
+  stdout| "": 21,
+  stdout| "1abc": 22,
+  stdout| "new": 23,
+  stdout| "newbie": 24,
+  stdout|}
+  -> 0
+== tool | --no-strict | data/grammar/nonstrict.json5
+  stdout|{
+  stdout|    sql: "SELECT id\n  FROM users\r\n  WHERE active",
+  stdout|    bell: "ding\u0007 \u001b[0m",
+  stdout|}
+  -> 0
+== tool | data/grammar/nonstrict.json5
+  -> ValueError: <string>:2 Unexpected "\n" at column 18
+== tool | --quote-style | prefer_single | data/grammar/strings.json5
+  stdout|{
+  stdout|    single: 'it\'s "quoted"',
+  stdout|    double: 'say "hi" and \'bye\'',
+  stdout|    escapes: '\b\f\n\r\t\v\0\\/',
+  stdout|    other: 'acdz%',
+  stdout|    hex: 'Alpha \u00e9',
+  stdout|    unicode: '\u00e9t\u00e9 \u2603',
+  stdout|    pair: '\ud83d\ude00',
+  stdout|    lone: '\udc00 then \ud800',
+  stdout|    raw: 'caf\u00e9 \u2603 \ud83d\ude00 \u0627\u0644',
+  stdout|    separators: 'a\u2028b\u2029c',
+  stdout|    continued: 'one two three four',
+  stdout|    controls: 'tab\there',
+  stdout|    zwj: '\u200d\u200c\u00ad\ufeff',
+  stdout|}
+  -> 0
+== tool | -c | {a: [1, 'two', {three: 3.0}], 'b c': null}
+  stdout|{
+  stdout|    a: [
+  stdout|        1,
+  stdout|        "two",
+  stdout|        {
+  stdout|            three: 3.0,
+  stdout|        },
+  stdout|    ],
+  stdout|    "b c": null,
+  stdout|}
+  -> 0
+== tool | -c | []
+  stdout|[]
+  -> 0
+== tool | -V
+  stdout|0.17.3
+  -> 0
+== tool | --quote-style | smart | -c | 1
+  stderr|usage: json5 [options] [FILE]
+  stderr|    -h/--help for help
+  stderr|
+  stderr|error: argument --quote-style: invalid choice: 'smart' (choose from 'always_double', 'always_single', 'prefer_double', 'prefer_single')
+  -> 2
+== tool | data/broken/units.json5
+  -> ValueError: <string>:1 Unexpected "p" at column 11
+== tool | data/broken/empty.json5
+  -> ValueError: Empty strings are not legal JSON5
+== tool | data/missing.json5
+  -> FileNotFoundError: [Errno 2] No such file or directory: 'data/missing.json5'
