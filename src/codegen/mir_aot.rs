@@ -134,6 +134,16 @@ fn run_passes(module: &Module<'_>, opt: u8, tm: &TargetMachine) -> Result<(), St
         // leaves for.
         if opt >= 2 && super::mir::noalias_flag() {
             passes.push_str(",cgscc(argpromotion),function(sroa,instcombine,simplifycfg)");
+            // Promoting once before `default<O2>` as well lets its inliner
+            // and loop passes see scalar parameters rather than pointers: a
+            // small function reached through a self-call (which the inliner
+            // costs as its pointer-heavy form) is inlined and its loads
+            // hoisted. `KARAC_MIR_EARLY_PROMOTE=0` leaves it out.
+            if std::env::var("KARAC_MIR_EARLY_PROMOTE").as_deref() != Ok("0") {
+                passes = format!(
+                    "function(sroa,instcombine<no-verify-fixpoint>),cgscc(argpromotion),{passes}"
+                );
+            }
         }
         module
             .run_passes(&passes, tm, PassBuilderOptions::create())
