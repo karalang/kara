@@ -54,6 +54,13 @@ ignore = [
     # rustls-pki-types. Waived until the rustls stack drops it upstream;
     # revisit when a rustls bump removes rustls-pemfile from the lockfile.
     "RUSTSEC-2025-0134",
+    # webpki-roots 0.26.11 is flagged because the advisory's range is
+    # "< 1.0.10", but 0.26.11 is a semver-trick shim that re-exports
+    # webpki-roots 1.x, and Cargo.lock resolves that to 1.0.10 (the fixed
+    # version; 2026-10-20). ureq 2.12 still depends on 0.26, so the shim stays
+    # in the tree. Revisit when ureq and our own `webpki-roots = "0.26"` lines
+    # (Cargo.toml, runtime/Cargo.toml) move to 1.x.
+    "RUSTSEC-2026-0381",
 ]
 
 [bans]
