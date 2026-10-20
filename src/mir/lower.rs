@@ -131,6 +131,38 @@ pub fn lower_program_with_library<'a>(
     hir: TypedHir,
     capture_modes: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
 ) -> Lowered {
+    lower_program_inner(
+        program,
+        source,
+        user_len,
+        tc,
+        defs,
+        res,
+        rr,
+        hir,
+        capture_modes,
+        None,
+    )
+}
+
+/// [`lower_program_with_library`], with the bodies of the functions from
+/// `signatures_only_from` on (the library's) left unlowered: each gets its
+/// parameters and nothing else. `karac check`'s MIR checks look only at the
+/// program's own bodies, and a call needs only its callee's signature
+/// (B-2026-10-19-21).
+#[allow(clippy::too_many_arguments)]
+fn lower_program_inner<'a>(
+    program: &'a ast::Program,
+    source: &'a str,
+    user_len: Option<usize>,
+    tc: &'a TypeCheckResult,
+    defs: &ProgramDefs,
+    res: &FxHashMap<NodeId, Res>,
+    rr: &ResolveResult,
+    hir: TypedHir,
+    capture_modes: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    signatures_only_from: Option<usize>,
+) -> Lowered {
     let user_types: FxHashSet<String> = match user_len {
         Some(n) => program
             .items
@@ -206,6 +238,7 @@ pub fn lower_program_with_library<'a>(
         bindings: FxHashMap::default(),
         statics: FxHashMap::default(),
         static_queue: Vec::new(),
+        signatures_only_from,
         literal_statics: FxHashMap::default(),
         literal_queue: Vec::new(),
         eq_queue: Vec::new(),
@@ -481,6 +514,9 @@ fn impl_arg_positions(b: &ast::ImplBlock) -> Option<Vec<usize>> {
 
 struct Lcx<'a> {
     tc: &'a TypeCheckResult,
+    /// Where the functions start whose bodies are not lowered, only their
+    /// parameters ([`lower_program_inner`]).
+    signatures_only_from: Option<usize>,
     /// The checked source text, for `dbg(e)`'s rendering of `e`.
     source: &'a str,
     /// The structs and enums the user's program declares, as opposed to
@@ -3126,6 +3162,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         self.bind_destructured(destructured)?;
+        if self
+            .lcx
+            .signatures_only_from
+            .is_some_and(|from| f.span.offset >= from)
+        {
+            // Parameters only: the body ends unreachable (`finish`).
+            self.scopes.clear();
+            return Ok(());
+        }
         self.contracts_on_entry(f)?;
         // The body's own scope sits inside the parameters' (D6). Falling
         // off the end is a return like any other, so a tail `Err(..)` runs
@@ -15707,6 +15752,53 @@ pub fn library_source(src: &str) -> (String, usize) {
     (format!("{src}{lib}"), user_len)
 }
 
+/// Empty the bodies of the library's functions and methods in `range` (the
+/// sources every program gets). A program is checked against their
+/// signatures; the bodies are the library's own concern, checked by its
+/// tests and by the MIR pipeline, and checking them again for every program
+/// cost most of a check's time (about 0.7 s of 0.8 s).
+pub fn library_bodies_unchecked(program: &mut crate::ast::Program, range: std::ops::Range<usize>) {
+    use crate::ast::{Block, ImplItem, Item, TraitItem};
+    let empty = |b: &mut Block| {
+        b.stmts.clear();
+        b.final_expr = None;
+    };
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) if range.contains(&f.span.offset) => empty(&mut f.body),
+            Item::TraitDef(t) if range.contains(&t.span.offset) => {
+                for it in &mut t.items {
+                    if let TraitItem::Method(m) = it {
+                        if let Some(b) = m.body.as_mut() {
+                            empty(b);
+                        }
+                    }
+                }
+            }
+            Item::ImplBlock(b) if range.contains(&b.span.offset) => {
+                for it in &mut b.items {
+                    if let ImplItem::Method(f) = it {
+                        empty(&mut f.body);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Where the always-appended library sources end in a [`library_source`]
+/// text whose program is `user_len` bytes: the baked modules after them
+/// keep their bodies, since a derive or `proto_schema` runs its `comptime`
+/// body at check.
+pub fn library_sources_end(user_len: usize) -> usize {
+    user_len
+        + crate::prelude::LIBRARY_SOURCES
+            .iter()
+            .map(|(_, lib)| 1 + lib.len())
+            .sum::<usize>()
+}
+
 /// Library types the compiler itself spells: a range literal is a `Range`,
 /// a failed file operation an `IoError`.
 const TYPES_THE_COMPILER_SPELLS: &[&str] = &[
@@ -15987,7 +16079,7 @@ pub fn build_source(src: &str) -> Result<Lowered, String> {
 }
 
 fn build_renamed_source(src: &str) -> Result<Lowered, String> {
-    let lowered = lower_source_for_checks(src)?;
+    let lowered = lower_source_for_checks(src, false)?;
     finish_build(lowered)
 }
 
@@ -16000,7 +16092,7 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
 /// `KARAC_MIR_BORROWCK=0` skips the borrow check, as it does for a run.
 pub fn source_borrow_errors(src: &str) -> Vec<SourceBorrowError> {
     let (_, renames) = rename_compiler_name_shadows(src);
-    let Ok(mut lowered) = lower_source_for_checks(src) else {
+    let Ok(mut lowered) = lower_source_for_checks(src, true) else {
         return Vec::new();
     };
     // The library follows the program's text, so its lines come after.
@@ -16126,7 +16218,7 @@ pub fn phase_time(label: &str, t: &mut std::time::Instant) {
     *t = std::time::Instant::now();
 }
 
-fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
+fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, String> {
     let mut t = std::time::Instant::now();
     let (src, user_len) = library_source(src);
     phase_time("library_source", &mut t);
@@ -16144,6 +16236,19 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
         Default::default()
     };
     mark_library_builtins(&mut program, user_len);
+    // `karac check` reports only the program's own errors, so the library is
+    // checked against its signatures, as check's own pipeline checks it, and
+    // its bodies are not lowered (B-2026-10-19-21).
+    if check_only {
+        library_bodies_unchecked(&mut program, user_len..library_sources_end(user_len));
+    }
+    // An error in the library's text is the library's, which check leaves out.
+    let first_error = |errors: &[crate::typechecker::TypeError]| {
+        errors
+            .iter()
+            .find(|e| !check_only || e.span.line == 0 || e.span.offset < user_len)
+            .map(typecheck_error)
+    };
     // `f()?.x` is `(f()?).x` (B-2026-10-14-50).
     crate::question_chain::postfix_question(&mut program);
     crate::desugar::with_collect_through_from_iterator(|| {
@@ -16171,8 +16276,8 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
     let mut r = r;
     let mut tc = crate::typecheck_with_pruned_library_source(&program, &r, pruned.clone());
     phase_time("typecheck", &mut t);
-    if !tc.errors.is_empty() {
-        return Err(typecheck_error(&tc.errors[0]));
+    if let Some(e) = first_error(&tc.errors) {
+        return Err(e);
     }
     // A `#[derive(X)]` backed by a `comptime fn derive_x` (`Message`'s
     // `encode` / `decode`) splices its items into the program; they are
@@ -16192,8 +16297,8 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
             return Err(format!("resolve: {err:?}"));
         }
         tc = crate::typecheck_with_pruned_library_source(&program, &r, pruned.clone());
-        if !tc.errors.is_empty() {
-            return Err(typecheck_error(&tc.errors[0]));
+        if let Some(e) = first_error(&tc.errors) {
+            return Err(e);
         }
     }
     phase_time("comptime", &mut t);
@@ -16204,7 +16309,7 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
     phase_time("typed_hir", &mut t);
     let own = crate::ownershipcheck(&program, &tc);
     phase_time("ownershipcheck", &mut t);
-    let mut lowered = lower_program_with_library(
+    let mut lowered = lower_program_inner(
         &program,
         &src,
         Some(user_len),
@@ -16214,6 +16319,7 @@ fn lower_source_for_checks(src: &str) -> Result<Lowered, String> {
         &r,
         hir,
         &own.closure_captures,
+        check_only.then_some(user_len),
     );
     lowered.program.user_source_len = Some(user_len);
     phase_time("mir_builder", &mut t);
