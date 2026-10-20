@@ -1368,8 +1368,9 @@ impl<'a> super::TypeChecker<'a> {
         // no `Type::Par` variant is needed. See design.md § Part 5b ("Passing
         // to functions"). The cross-task-safe pass keys off `Type::Shared` to
         // reject; Slice B teaches it to exempt `is_par` types.
-        if struct_info.is_shared || struct_info.is_par {
-            // Shared / `par` structs are non-generic at v1 (design.md § Part 5).
+        // A generic one stays `Named` with its arguments, as a generic
+        // `shared enum` does, so its `T` fields lower (B-2026-10-19-58).
+        if (struct_info.is_shared || struct_info.is_par) && struct_info.generic_params.is_empty() {
             Type::Shared(struct_name)
         } else if struct_info.generic_params.is_empty() {
             Type::Named {

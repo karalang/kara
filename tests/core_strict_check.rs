@@ -10352,3 +10352,27 @@ fn a_copy_parameter_is_the_same_lent_or_copied_in_a_function_type() {
     assert!(!out.status.success(), "check must reject: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-19-58: a generic `shared struct`'s field that is not `mut` is
+/// still refused a write through a handle.
+#[test]
+fn check_a_generic_shared_struct_keeps_its_field_rules() {
+    let (dir, path) = fixture(
+        "generic-shared-field",
+        r#"shared struct Slot[T] { mut items: Vec[T], name: String }
+fn main() {
+    let s: Slot[i64] = Slot { items: Vec.new(), name: "n".to_string() };
+    s.name = "m".to_string();
+    println(s.name);
+}
+"#,
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success()
+            && err.contains("shared struct field 'Slot.name' is not declared mut"),
+        "generic-shared-field: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

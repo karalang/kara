@@ -1544,7 +1544,10 @@ pub(crate) fn is_copy_type_in_scope(
                 return true;
             }
             if let Some(info) = tc.struct_info.get(name) {
-                info.derived_traits.contains("Copy")
+                // A generic `shared struct` reaches here as `Type::Named`,
+                // like a `shared enum` below (B-2026-10-19-58).
+                ((info.is_shared || info.is_par) && !info.generic_params.is_empty())
+                    || info.derived_traits.contains("Copy")
             } else if let Some(info) = tc.enum_info.get(name) {
                 // B-2026-10-02-59 — a `shared enum` / `par enum` is the same
                 // reference-counted handle as the `shared struct` arm above;

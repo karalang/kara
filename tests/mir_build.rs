@@ -6354,3 +6354,59 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
     }
 }
+
+/// B-2026-10-19-58: a generic `shared struct` keeps its type arguments, so
+/// a `Slot[i64]`'s `T` fields lower; handles alias and count like a
+/// non-generic shared struct's, on the interpreter and compiled alike.
+#[test]
+fn mir_generic_shared_struct_lowers() {
+    let cases = [
+        (
+            r#"shared struct Slot[T] { mut items: Vec[T] }
+fn put[T](s: Slot[T], x: own T) { s.items.push(x); }
+fn main() {
+    let s: Slot[i64] = Slot { items: Vec.new() };
+    put(s, 5);
+    println(f"{s.items.len()}");
+}
+"#,
+            "1\n",
+        ),
+        (
+            r#"shared struct Slot[T] { mut items: Vec[T], name: String }
+impl[T] Slot[T] {
+    fn add(self, x: own T) { self.items.push(x); }
+    fn count(self) -> i64 { self.items.len() }
+}
+fn put[T](s: Slot[T], x: own T) { s.items.push(x); }
+fn fill(s: Slot[String]) {
+    s.add("b".to_string());
+}
+fn main() {
+    let s: Slot[i64] = Slot { items: Vec.new(), name: "n".to_string() };
+    put(s, 5);
+    s.add(6);
+    let t = s;
+    t.add(7);
+    println(f"{s.items.len()} {t.count()} {s.name}");
+    let w: Slot[String] = Slot { items: Vec.new(), name: "w".to_string() };
+    w.add("a".to_string());
+    fill(w);
+    let v: Vec[Slot[String]] = [w];
+    println(f"{v[0].count()} {w.items[1]}");
+}
+"#,
+            "3 3 n\n2 b\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want, "__mir-run");
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
