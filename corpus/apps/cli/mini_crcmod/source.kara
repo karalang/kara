@@ -1,0 +1,1212 @@
+// mini_crcmod: crcmod 1.7, Ray Buvel and Craig McQueen's CRC generator,
+// as Python tools that check file formats, serial protocols and storage
+// use it (gsutil checks CRC-32C with it). It reads the job list from
+// data/jobs.tsv: crcmod's catalogue of predefined CRCs, custom and broken
+// definitions, streams fed in pieces, C code generation, and programs
+// that check the CRCs of real formats.
+//
+// CRC values and polynomials are u128, which holds the 65-bit
+// polynomials of the 64-bit CRCs; crcmod's Python ints never need more.
+// Python's exceptions are Exc values: the class name and str(exc).
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn hex_digit(v: u128, upper: bool) -> char {
+    let d = if upper { "0123456789ABCDEF" } else { "0123456789abcdef" };
+    let cs: Vec[char] = d.chars().collect();
+    cs[v as i64]
+}
+
+// '%0<width>X' (or x).
+fn hex_of(v: u128, width: i64, upper: bool) -> String {
+    let mut out: Vec[char] = Vec.new();
+    let mut x = v;
+    while x > 0 {
+        out.push(hex_digit(x % 16, upper));
+        x = x / 16;
+    }
+    while out.len() < width or out.len() == 0 {
+        out.push('0');
+    }
+    out.reverse();
+    let mut s = String.new();
+    for c in out {
+        s.push(c);
+    }
+    s
+}
+
+fn hx(v: u128) -> String {
+    hex_of(v, 0, true)
+}
+
+fn bytes_hex(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push_str(hex_of(*x as u128, 2, false));
+    }
+    s
+}
+
+fn bool_repr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// ------------------------------------------------------------- crcmod
+
+fn mask_of(n: i64) -> u128 {
+    (1 as u128 << n) - 1
+}
+
+fn verify_poly(poly: u128) -> Result[i64, Exc] {
+    for n in [8, 16, 24, 32, 64] {
+        let low = 1 as u128 << n;
+        let high = low * 2;
+        if low <= poly and poly < high {
+            return Ok(n);
+        }
+    }
+    Err(exc("ValueError", "The degree of the polynomial must be 8, 16, 24, 32 or 64".to_string()))
+}
+
+fn bitrev(x0: u128, n: i64) -> u128 {
+    let mut x = x0;
+    let mut y: u128 = 0;
+    for _ in 0..n {
+        y = (y << 1) | (x & 1);
+        x = x >> 1;
+    }
+    y
+}
+
+fn bytecrc(c0: u128, poly: u128, n: i64) -> u128 {
+    let mut crc = c0;
+    let top = 1 as u128 << (n - 1);
+    for _ in 0..8 {
+        if crc & top != 0 {
+            crc = (crc << 1) ^ poly;
+        } else {
+            crc = crc << 1;
+        }
+    }
+    crc & mask_of(n)
+}
+
+fn bytecrc_r(c0: u128, poly: u128, n: i64) -> u128 {
+    let mut crc = c0;
+    for _ in 0..8 {
+        if crc & 1 != 0 {
+            crc = (crc >> 1) ^ poly;
+        } else {
+            crc = crc >> 1;
+        }
+    }
+    crc & mask_of(n)
+}
+
+fn mk_table(poly: u128, n: i64) -> Vec[u128] {
+    let p = poly & mask_of(n);
+    let mut t: Vec[u128] = Vec.new();
+    for i in 0..256 {
+        t.push(bytecrc((i as u128) << (n - 8), p, n));
+    }
+    t
+}
+
+fn mk_table_r(poly: u128, n: i64) -> Vec[u128] {
+    let p = bitrev(poly & mask_of(n), n);
+    let mut t: Vec[u128] = Vec.new();
+    for i in 0..256 {
+        t.push(bytecrc_r(i as u128, p, n));
+    }
+    t
+}
+
+// _crcfunpy's _crc<n> and _crc<n>r.
+fn raw_crc(data: ref Vec[u8], c0: u128, table: ref Vec[u128], n: i64, rev: bool) -> u128 {
+    let m = mask_of(n);
+    let mut crc = c0 & m;
+    if n == 8 {
+        for x in data {
+            crc = table[((*x as u128) ^ crc) as i64];
+        }
+        return crc;
+    }
+    if rev {
+        for x in data {
+            crc = table[((*x as u128) ^ (crc & 255)) as i64] ^ (crc >> 8);
+        }
+    } else {
+        let keep = m - 255;
+        for x in data {
+            crc = table[((*x as u128) ^ ((crc >> (n - 8)) & 255)) as i64] ^ ((crc << 8) & keep);
+        }
+    }
+    crc
+}
+
+// A CRC function from mkCrcFun, and the state of a Crc object.
+#[derive(Clone)]
+struct Crc {
+    poly: u128,
+    size_bits: i64,
+    digest_size: i64,
+    init_crc: u128,
+    xor_out: u128,
+    reverse: bool,
+    table: Vec[u128],
+    crc_value: u128,
+}
+
+// initCrc and xorOut as Python ints: ~0 and other negatives are two's
+// complement, which the mask cuts down.
+fn new_crc(poly: u128, init: i128, rev: bool, xor_out: i128) -> Result[Crc, Exc] {
+    let size_bits = verify_poly(poly)?;
+    let m = mask_of(size_bits);
+    let init_crc = (init as u128) & m;
+    let xo = (xor_out as u128) & m;
+    let table = if rev { mk_table_r(poly, size_bits) } else { mk_table(poly, size_bits) };
+    Ok(Crc {
+        poly: poly,
+        size_bits: size_bits,
+        digest_size: size_bits / 8,
+        init_crc: init_crc,
+        xor_out: xo,
+        reverse: rev,
+        table: table,
+        crc_value: init_crc,
+    })
+}
+
+impl Crc {
+    // The function mkCrcFun returns, from a starting value.
+    fn fun_from(ref self, data: ref Vec[u8], crc: u128) -> u128 {
+        if self.xor_out == 0 {
+            raw_crc(data, crc, self.table, self.size_bits, self.reverse)
+        } else {
+            self.xor_out ^ raw_crc(data, self.xor_out ^ crc, self.table, self.size_bits, self.reverse)
+        }
+    }
+
+    fn fun(ref self, data: ref Vec[u8]) -> u128 {
+        self.fun_from(data, self.init_crc)
+    }
+
+    fn update(mut ref self, data: ref Vec[u8]) {
+        self.crc_value = self.fun_from(data, self.crc_value);
+    }
+
+    fn fresh(ref self) -> Crc {
+        let mut n = self.clone();
+        n.crc_value = self.init_crc;
+        n
+    }
+
+    fn copy(ref self) -> Crc {
+        self.clone()
+    }
+
+    fn digest(ref self) -> Vec[u8] {
+        let mut out: Vec[u8] = Vec.new();
+        let mut crc = self.crc_value;
+        for _ in 0..self.digest_size {
+            out.push((crc & 255) as u8);
+            crc = crc >> 8;
+        }
+        out.reverse();
+        out
+    }
+
+    fn hexdigest(ref self) -> String {
+        let mut s = String.new();
+        for b in self.digest() {
+            s.push_str(hex_of(b as u128, 2, true));
+        }
+        s
+    }
+
+    fn str(ref self) -> String {
+        let w = self.digest_size * 2;
+        let mut lines: Vec[String] = Vec.new();
+        lines.push(f"poly = 0x{hx(self.poly)}");
+        lines.push(f"reverse = {bool_repr(self.reverse)}");
+        lines.push(f"initCrc  = 0x{hex_of(self.init_crc, w, true)}");
+        lines.push(f"xorOut   = 0x{hex_of(self.xor_out, w, true)}");
+        lines.push(f"crcValue = 0x{hex_of(self.crc_value, w, true)}");
+        lines.join("\n")
+    }
+
+    fn generate_code(ref self, name: ref String, data_type: ref Option[String], crc_type: ref Option[String]) -> String {
+        let dt = match data_type {
+            Some(ref t) => t.clone(),
+            None => "UINT8".to_string(),
+        };
+        let ct = match crc_type {
+            Some(ref t) => t.clone(),
+            None => {
+                let size = if self.digest_size == 3 { 32 } else { 8 * self.digest_size };
+                f"UINT{size}"
+            }
+        };
+        let algor = if self.digest_size == 1 {
+            f"table[*data ^ ({dt})crc]"
+        } else if self.reverse {
+            f"table[*data ^ ({dt})crc] ^ (crc >> 8)"
+        } else {
+            f"table[*data ^ ({dt})(crc >> {8 * (self.digest_size - 1)})] ^ (crc << 8)"
+        };
+        let w = 2 * self.digest_size;
+        let suffix = if self.digest_size <= 4 { "U" } else { "ULL" };
+        let per_line = if self.digest_size <= 2 { 8 } else if self.digest_size <= 4 { 4 } else { 2 };
+        let mut table = String.new();
+        for i in 0..256 {
+            if i % per_line == 0 {
+                table.push_str("\n    ");
+            }
+            table.push_str(f"0x{hex_of(self.table[i], w, true)}{suffix},");
+        }
+        let mut poly = f"polynomial: 0x{hx(self.poly)}";
+        if self.reverse {
+            poly.push_str(", bit reverse algorithm");
+        }
+        let mut pre = String.new();
+        let mut post = String.new();
+        if self.xor_out != 0 {
+            pre = f"\n    crc = crc ^ 0x{hex_of(self.xor_out, w, true)}{suffix};";
+            post = pre.clone();
+        }
+        if self.digest_size == 3 {
+            if self.reverse {
+                pre.push_str("\n    crc = crc & 0xFFFFFFU;");
+            } else {
+                post.push_str("\n    crc = crc & 0xFFFFFFU;");
+            }
+        }
+        let mut out = String.new();
+        out.push_str(f"// Automatically generated CRC function\n// {poly}\n{ct}\n{name}({dt} *data, int len, {ct} crc)\n{{\n");
+        out.push_str(f"    static const {ct} table[256] = {{{table}\n    }};\n    {pre}\n");
+        out.push_str(f"    while (len > 0)\n    {{\n        crc = {algor};\n        data++;\n        len--;\n    }}{post}\n    return crc;\n}}\n");
+        out
+    }
+}
+
+// ------------------------------------------------------- predefined
+
+#[derive(Clone)]
+struct Def {
+    name: String,
+    identifier: String,
+    poly: u128,
+    reverse: bool,
+    init: u128,
+    xor_out: u128,
+    check: u128,
+}
+
+fn def(name: Str, identifier: Str, poly: u128, reverse: bool, init: u128, xor_out: u128, check: u128) -> Def {
+    Def {
+        name: name.to_string(),
+        identifier: identifier.to_string(),
+        poly: poly,
+        reverse: reverse,
+        init: init,
+        xor_out: xor_out,
+        check: check,
+    }
+}
+
+// predefined._crc_definitions_table.
+fn definitions() -> Vec[Def] {
+    let mut v: Vec[Def] = Vec.new();
+    v.push(def("crc-8", "Crc8", 263, false, 0, 0, 244));
+    v.push(def("crc-8-darc", "Crc8Darc", 313, true, 0, 0, 21));
+    v.push(def("crc-8-i-code", "Crc8ICode", 285, false, 253, 0, 126));
+    v.push(def("crc-8-itu", "Crc8Itu", 263, false, 85, 85, 161));
+    v.push(def("crc-8-maxim", "Crc8Maxim", 305, true, 0, 0, 161));
+    v.push(def("crc-8-rohc", "Crc8Rohc", 263, true, 255, 0, 208));
+    v.push(def("crc-8-wcdma", "Crc8Wcdma", 411, true, 0, 0, 37));
+    v.push(def("crc-16", "Crc16", 98309, true, 0, 0, 47933));
+    v.push(def("crc-16-buypass", "Crc16Buypass", 98309, false, 0, 0, 65256));
+    v.push(def("crc-16-dds-110", "Crc16Dds110", 98309, false, 32781, 0, 40655));
+    v.push(def("crc-16-dect", "Crc16Dect", 66953, false, 1, 1, 126));
+    v.push(def("crc-16-dnp", "Crc16Dnp", 81253, true, 65535, 65535, 60034));
+    v.push(def("crc-16-en-13757", "Crc16En13757", 81253, false, 65535, 65535, 49847));
+    v.push(def("crc-16-genibus", "Crc16Genibus", 69665, false, 0, 65535, 54862));
+    v.push(def("crc-16-maxim", "Crc16Maxim", 98309, true, 65535, 65535, 17602));
+    v.push(def("crc-16-mcrf4xx", "Crc16Mcrf4xx", 69665, true, 65535, 0, 28561));
+    v.push(def("crc-16-riello", "Crc16Riello", 69665, true, 21837, 0, 25552));
+    v.push(def("crc-16-t10-dif", "Crc16T10Dif", 101303, false, 0, 0, 53467));
+    v.push(def("crc-16-teledisk", "Crc16Teledisk", 106647, false, 0, 0, 4019));
+    v.push(def("crc-16-usb", "Crc16Usb", 98309, true, 0, 65535, 46280));
+    v.push(def("x-25", "CrcX25", 69665, true, 0, 65535, 36974));
+    v.push(def("xmodem", "CrcXmodem", 69665, false, 0, 0, 12739));
+    v.push(def("modbus", "CrcModbus", 98309, true, 65535, 0, 19255));
+    v.push(def("kermit", "CrcKermit", 69665, true, 0, 0, 8585));
+    v.push(def("crc-ccitt-false", "CrcCcittFalse", 69665, false, 65535, 0, 10673));
+    v.push(def("crc-aug-ccitt", "CrcAugCcitt", 69665, false, 7439, 0, 58828));
+    v.push(def("crc-24", "Crc24", 25578747, false, 11994318, 0, 2215682));
+    v.push(def("crc-24-flexray-a", "Crc24FlexrayA", 22900171, false, 16702650, 0, 7961021));
+    v.push(def("crc-24-flexray-b", "Crc24FlexrayB", 22900171, false, 11259375, 0, 2040760));
+    v.push(def("crc-32", "Crc32", 4374732215, true, 0, 4294967295, 3421780262));
+    v.push(def("crc-32-bzip2", "Crc32Bzip2", 4374732215, false, 0, 4294967295, 4236843288));
+    v.push(def("crc-32c", "Crc32C", 4812730177, true, 0, 4294967295, 3808858755));
+    v.push(def("crc-32d", "Crc32D", 7116920875, true, 0, 4294967295, 2268157302));
+    v.push(def("crc-32-mpeg", "Crc32Mpeg", 4374732215, false, 4294967295, 0, 58124007));
+    v.push(def("posix", "CrcPosix", 4374732215, false, 4294967295, 4294967295, 1985902208));
+    v.push(def("crc-32q", "Crc32Q", 6463504811, false, 0, 0, 806403967));
+    v.push(def("jamcrc", "CrcJamCrc", 4374732215, true, 4294967295, 0, 873187033));
+    v.push(def("xfer", "CrcXfer", 4294967471, false, 0, 0, 3171672888));
+    v.push(def("crc-64", "Crc64", 18446744073709551643, true, 0, 0, 5090661014116757502));
+    v.push(def("crc-64-we", "Crc64We", 23270347676907615891, false, 0, 18446744073709551615, 7128171145767219210));
+    v.push(def("crc-64-jones", "Crc64Jones", 30954315791418865065, true, 18446744073709551615, 0, 14602665702277640833));
+    v
+}
+
+fn simplify_name(name: ref String) -> String {
+    let n = name.to_lowercase().replace("-", "").replace(" ", "");
+    if n.starts_with("crc") { n[3..].to_string() } else { n }
+}
+
+// repr() of a str, as KeyError's str() shows its message.
+fn str_repr(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { "\"" } else { "'" };
+    f"{q}{s}{q}"
+}
+
+fn definition(name: ref String) -> Result[Def, Exc] {
+    let want = simplify_name(name);
+    let defs = definitions();
+    for d in defs {
+        if simplify_name(d.name) == want {
+            return Ok(d.clone());
+        }
+    }
+    for d in defs {
+        if d.identifier == name {
+            return Ok(d.clone());
+        }
+    }
+    Err(exc("KeyError", str_repr(f"Unkown CRC name '{name}'")))
+}
+
+fn predefined_crc(name: ref String) -> Result[Crc, Exc] {
+    let d = definition(name)?;
+    new_crc(d.poly, d.init as i128, d.reverse, d.xor_out as i128)
+}
+
+// mkPredefinedCrcFun, for names the jobs know are there.
+fn known(name: Str) -> Crc {
+    match predefined_crc(name.to_string()) {
+        Ok(c) => c,
+        Err(_) => panic("unknown CRC"),
+    }
+}
+
+// ------------------------------------------------------------ helpers
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// str.splitlines() for files whose lines end in \n.
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+fn read_bin(rel: ref String) -> Vec[u8] {
+    match fs.read_bytes(f"data/{rel}") {
+        Ok(b) => b,
+        Err(_) => Vec.new(),
+    }
+}
+
+// data[a:b], clamped the way Python slices are.
+fn sub(data: ref Vec[u8], a: i64, b: i64) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = a;
+    let end = if b > data.len() { data.len() } else { b };
+    while i < end {
+        out.push(data[i]);
+        i += 1;
+    }
+    out
+}
+
+fn str_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+// The \r \n \t \\ \xNN escapes of streams.txt.
+fn unesc(s: ref String) -> Vec[u8] {
+    let b = s.bytes().to_vec();
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' {
+            let n = b[i + 1];
+            if n == b'x' {
+                out.push((hex_val(b[i + 2]) * 16 + hex_val(b[i + 3])) as u8);
+                i += 4;
+                continue;
+            }
+            let v = if n == b'r' { 13 } else if n == b'n' { 10 } else if n == b't' { 9 } else { 92 };
+            out.push(v as u8);
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
+// int(s, 0), and ~0 for -1.
+fn num(s: ref String) -> i128 {
+    if s == "~0" {
+        return -1;
+    }
+    let neg = s.starts_with("-");
+    let t = if neg { s[1..].to_string() } else { s.clone() };
+    let mut v: i128 = 0;
+    if t.starts_with("0x") or t.starts_with("0X") {
+        for c in t[2..].bytes() {
+            v = v * 16 + hex_val(c) as i128;
+        }
+    } else {
+        for c in t.bytes() {
+            v = v * 10 + (c - b'0') as i128;
+        }
+    }
+    if neg { -v } else { v }
+}
+
+fn b64_val(c: u8) -> i64 {
+    if c >= b'A' and c <= b'Z' {
+        (c - b'A') as i64
+    } else if c >= b'a' and c <= b'z' {
+        (c - b'a') as i64 + 26
+    } else if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64 + 52
+    } else if c == b'+' {
+        62
+    } else if c == b'/' {
+        63
+    } else {
+        -1
+    }
+}
+
+// base64.b64decode of well-formed, padded input.
+fn b64decode(s: ref String) -> Vec[u8] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut acc: i64 = 0;
+    let mut bits = 0;
+    for c in s.bytes() {
+        let v = b64_val(c);
+        if v < 0 {
+            continue;
+        }
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 255) as u8);
+        }
+    }
+    out
+}
+
+fn be(data: ref Vec[u8], at: i64, n: i64) -> u128 {
+    let mut v: u128 = 0;
+    for k in 0..n {
+        v = (v << 8) | data[at + k] as u128;
+    }
+    v
+}
+
+fn le(data: ref Vec[u8], at: i64, n: i64) -> u128 {
+    let mut v: u128 = 0;
+    for k in 0..n {
+        v = (v << 8) | data[at + n - 1 - k] as u128;
+    }
+    v
+}
+
+fn latin1(b: ref Vec[u8]) -> String {
+    let mut s = String.new();
+    for x in b {
+        s.push(char.try_from(*x as u32).unwrap_or('?'));
+    }
+    s
+}
+
+// ------------------------------------------------------------ catalog
+
+fn catalog_job(out: mut ref String) {
+    let data = str_bytes("123456789");
+    for d in definitions() {
+        let mut crc = known(d.name);
+        crc.update(data);
+        let ok = if crc.crc_value == d.check { "ok" } else { "WRONG" };
+        emit(mut out, f"{d.name} ({d.identifier}): poly=0x{hx(d.poly)} reverse={bool_repr(d.reverse)} init=0x{hx(d.init)} xor_out=0x{hx(d.xor_out)} check=0x{hx(crc.crc_value)} {ok} digest={bytes_hex(crc.digest())}");
+    }
+}
+
+fn custom_job(rel: ref String, out: mut ref String) {
+    for line in lines_of(read_text(rel)) {
+        let p: Vec[String] = line.split(" ").map(|x| x.to_string()).collect();
+        emit(mut out, f"> {line}");
+        let made = new_crc(num(p[0]) as u128, num(p[1]), p[2] == "1", num(p[3]));
+        let mut crc = match made {
+            Ok(c) => c,
+            Err(e) => {
+                emit(mut out, f"  {err_line(e)}");
+                continue;
+            }
+        };
+        let fun = crc.fresh();
+        for s in crc.str().split("\n") {
+            emit(mut out, f"  {s}");
+        }
+        emit(mut out, f"  digest_size={crc.digest_size} table[1]=0x{hx(crc.table[1])} table[255]=0x{hx(crc.table[255])}");
+        crc.update(str_bytes("123456789"));
+        emit(mut out, f"  check=0x{hx(crc.crc_value)} fun=0x{hx(fun.fun(str_bytes("123456789")))} hexdigest={crc.hexdigest()}");
+        let first = fun.fun(str_bytes("1234"));
+        emit(mut out, f"  continued=0x{hx(fun.fun_from(str_bytes("56789"), first))} empty=0x{hx(fun.fun(Vec.new()))}");
+    }
+}
+
+fn streams_job(rel: ref String, out: mut ref String) {
+    for line in lines_of(read_text(rel)) {
+        let p: Vec[String] = line.split("|").map(|x| x.to_string()).collect();
+        let name = p[0].clone();
+        let data = unesc(p[1]);
+        let cuts = p[2].clone();
+        let shown = if cuts == "" { "-".to_string() } else { cuts.clone() };
+        emit(mut out, f"> {name} {data.len()} bytes, pieces {shown}");
+        let mut crc = match predefined_crc(name) {
+            Ok(c) => c,
+            Err(e) => {
+                emit(mut out, f"  {err_line(e)}");
+                continue;
+            }
+        };
+        let one = crc.fun(data);
+        let mut pos = 0;
+        let mut snaps: Vec[String] = Vec.new();
+        if cuts != "" {
+            for c in cuts.split(",") {
+                let n = num(c.to_string()) as i64;
+                crc.update(sub(data, pos, pos + n));
+                pos += n;
+                snaps.push(crc.copy().hexdigest());
+            }
+        }
+        crc.update(sub(data, pos, data.len()));
+        let mut fresh = crc.fresh();
+        fresh.update(data);
+        let same = if one == crc.crc_value and crc.crc_value == fresh.crc_value { "same" } else { "DIFFER" };
+        emit(mut out, f"  whole=0x{hx(one)} pieces=0x{hx(crc.crc_value)} new=0x{hx(fresh.crc_value)} {same}");
+        emit(mut out, f"  snapshots: {snaps.join(" ")}");
+        emit(mut out, f"  digest={bytes_hex(crc.digest())}");
+    }
+}
+
+fn opt(s: ref String) -> Option[String] {
+    if s == "-" { None } else { Some(s.clone()) }
+}
+
+fn code_job(crc: ref Crc, name: ref String, dt: ref String, ct: ref String, out: mut ref String) {
+    let code = crc.generate_code(name, opt(dt), opt(ct));
+    for line in code.split("\n") {
+        emit(mut out, f"| {line}");
+    }
+}
+
+// ------------------------------------------------------------ formats
+
+fn png_job(names: ref Vec[String], out: mut ref String) {
+    let crc32 = known("crc-32");
+    let magic: Vec[u8] = [137 as u8, 80, 78, 71, 13, 10, 26, 10];
+    for name in names {
+        let data = read_bin(name);
+        emit(mut out, f"{name}: {data.len()} bytes");
+        if sub(data, 0, 8) != magic {
+            emit(mut out, "  not a PNG");
+            continue;
+        }
+        let mut pos = 8;
+        let mut good = true;
+        while pos < data.len() {
+            if pos + 12 > data.len() {
+                emit(mut out, f"  truncated at {pos}");
+                good = false;
+                break;
+            }
+            let n = be(data, pos, 4) as i64;
+            let kind = latin1(sub(data, pos + 4, pos + 8));
+            if pos + 12 + n > data.len() {
+                emit(mut out, f"  {kind}: {n} bytes, truncated");
+                good = false;
+                break;
+            }
+            let stored = be(data, pos + 8 + n, 4);
+            let got = crc32.fun(sub(data, pos + 4, pos + 8 + n));
+            let verdict = if got == stored { "ok".to_string() } else { f"BAD (computed {hex_of(got, 8, false)})" };
+            emit(mut out, f"  {kind}: {n} bytes, crc {hex_of(stored, 8, false)} {verdict}");
+            good = good and got == stored;
+            pos += 12 + n;
+        }
+        emit(mut out, if good { "  ok" } else { "  CORRUPT" });
+    }
+}
+
+fn gzip_job(names: ref Vec[String], out: mut ref String) {
+    let crc32 = known("crc-32");
+    for name in names {
+        let data = read_bin(name);
+        let flags = data[3];
+        let mtime = le(data, 4, 4);
+        let mut pos = 10;
+        if flags & 8 != 0 {
+            while data[pos] != 0 {
+                pos += 1;
+            }
+            pos += 1;
+        }
+        let mut body: Vec[u8] = Vec.new();
+        let mut compressed = false;
+        loop {
+            let hdr = data[pos];
+            let last = hdr & 1;
+            if (hdr >> 1) & 3 != 0 {
+                emit(mut out, f"{name}: compressed blocks are not read here");
+                compressed = true;
+                break;
+            }
+            let n = le(data, pos + 1, 2) as i64;
+            for b in sub(data, pos + 5, pos + 5 + n) {
+                body.push(b);
+            }
+            pos += 5 + n;
+            if last != 0 {
+                break;
+            }
+        }
+        if compressed {
+            continue;
+        }
+        let stored = le(data, pos, 4);
+        let size = le(data, pos + 4, 4) as i64;
+        let got = crc32.fun(body);
+        let size_ok = if size == body.len() { "ok" } else { "WRONG" };
+        let crc_ok = if got == stored { "ok" } else { "CRC MISMATCH" };
+        emit(mut out, f"{name}: mtime={mtime} {body.len()} bytes, crc32 {hex_of(got, 8, false)}, stored {hex_of(stored, 8, false)}, size {size_ok}: {crc_ok}");
+    }
+}
+
+fn modbus_job(rel: ref String, out: mut ref String) {
+    let fun = known("modbus");
+    for line in lines_of(read_text(rel)) {
+        let frame = unhex(line);
+        if frame.len() < 4 {
+            emit(mut out, f"{line}: too short");
+            continue;
+        }
+        let body = sub(frame, 0, frame.len() - 2);
+        let got = fun.fun(body);
+        let stored = le(frame, frame.len() - 2, 2);
+        let kind = if body[1] & 128 != 0 {
+            f"exception {body[2]}"
+        } else {
+            f"function {body[1]}, {body.len() - 2} data bytes"
+        };
+        let verdict = if got == stored { "ok".to_string() } else { f"BAD (want {hex_of(got, 4, true)})" };
+        emit(mut out, f"{line}: unit {body[0]} {kind}, crc {hex_of(stored, 4, true)} {verdict}");
+    }
+}
+
+fn rstrip_pad(b: ref Vec[u8]) -> Vec[u8] {
+    let mut n = b.len();
+    while n > 0 and b[n - 1] == 26 {
+        n -= 1;
+    }
+    sub(b, 0, n)
+}
+
+fn xmodem_job(names: ref Vec[String], out: mut ref String) {
+    let fun = known("xmodem");
+    let crc32 = known("crc-32");
+    for name in names {
+        let data = read_bin(name);
+        let mut pos = 0;
+        let mut good = 0;
+        let mut received: Vec[u8] = Vec.new();
+        while pos < data.len() {
+            if data[pos] == 4 {
+                emit(mut out, f"{name}: EOT after {pos / 133} blocks, {good} good, {received.len()} bytes");
+                break;
+            }
+            let blk = data[pos + 1] as i64;
+            let comp = data[pos + 2] as i64;
+            let block = sub(data, pos + 3, pos + 131);
+            let stored = be(data, pos + 131, 2);
+            let got = fun.fun(block);
+            if blk + comp != 255 {
+                emit(mut out, f"  block {blk}: bad sequence complement");
+            } else if got != stored {
+                emit(mut out, f"  block {blk}: crc {hex_of(stored, 4, true)}, computed {hex_of(got, 4, true)}: NAK");
+            } else {
+                good += 1;
+                for b in block {
+                    received.push(b);
+                }
+                emit(mut out, f"  block {blk}: ok");
+            }
+            pos += 133;
+        }
+        let payload = rstrip_pad(received);
+        emit(mut out, f"  payload crc-32 {hex_of(crc32.fun(payload), 8, false)}, trailing pad {received.len() - payload.len()}");
+    }
+}
+
+fn armor_job(names: ref Vec[String], out: mut ref String) {
+    let fun = known("crc-24");
+    for name in names {
+        let lines = lines_of(read_text(name));
+        let first = lines[0].clone();
+        let kind = first["-----BEGIN PGP ".len()..first.len() - 5].to_string();
+        let mut i = 1;
+        let mut headers: Vec[String] = Vec.new();
+        while lines[i] != "" {
+            headers.push(lines[i].clone());
+            i += 1;
+        }
+        let mut body = String.new();
+        i += 1;
+        while not lines[i].starts_with("=") {
+            body.push_str(lines[i]);
+            i += 1;
+        }
+        let data = b64decode(body);
+        let sum = b64decode(lines[i][1..].to_string());
+        let stored = be(sum, 0, sum.len());
+        let got = fun.fun(data);
+        let verdict = if got == stored { "ok".to_string() } else { f"BAD (computed {hex_of(got, 6, true)})" };
+        emit(mut out, f"{name}: {kind}, {headers.join("; ")}, {data.len()} bytes, crc24 {hex_of(stored, 6, true)} {verdict}");
+    }
+}
+
+fn family(b: u8) -> String {
+    if b == 40 {
+        "DS18B20 thermometer".to_string()
+    } else if b == 16 {
+        "DS18S20 thermometer".to_string()
+    } else if b == 1 {
+        "DS2401 serial number".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+fn onewire_job(rel: ref String, out: mut ref String) {
+    let fun = known("crc-8-maxim");
+    for line in lines_of(read_text(rel)) {
+        let b = unhex(line);
+        let got = fun.fun(sub(b, 0, 7));
+        let mut serial = String.new();
+        let mut k = 6;
+        while k >= 1 {
+            serial.push_str(hex_of(b[k] as u128, 2, true));
+            k -= 1;
+        }
+        let ok = if got == b[7] as u128 { "ok" } else { "BAD" };
+        emit(mut out, f"{line}: family {hex_of(b[0] as u128, 2, true)} ({family(b[0])}) serial {serial} crc {hex_of(b[7] as u128, 2, true)} {ok}; whole code crc {hex_of(fun.fun(b), 2, true)}");
+    }
+}
+
+fn count_of(hay: ref Vec[u8], needle: ref Vec[u8]) -> i64 {
+    let mut n = 0;
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        if sub(hay, i, i + needle.len()) == *needle {
+            n += 1;
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    n
+}
+
+fn rdb_job(names: ref Vec[String], out: mut ref String) {
+    let fun = known("crc-64-jones");
+    let needle = str_bytes("user:");
+    for name in names {
+        let data = read_bin(name);
+        let body = sub(data, 0, data.len() - 8);
+        let stored = le(data, data.len() - 8, 8);
+        let got = fun.fun(body);
+        let keys = count_of(body, needle);
+        let verdict = if got == stored { "ok".to_string() } else { f"BAD (computed {hex_of(got, 16, false)})" };
+        emit(mut out, f"{name}: {latin1(sub(body, 0, 9))}, {keys} keys, crc64 {hex_of(stored, 16, false)} {verdict}");
+    }
+}
+
+fn rest(job: ref Vec[String]) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for k in 1..job.len() {
+        v.push(job[k].clone());
+    }
+    v
+}
+
+fn run_job(job: ref Vec[String], out: mut ref String) {
+    let k = job[0].clone();
+    if k == "catalog" {
+        catalog_job(mut out);
+    } else if k == "custom" {
+        custom_job(job[1], mut out);
+    } else if k == "streams" {
+        streams_job(job[1], mut out);
+    } else if k == "code" {
+        match predefined_crc(job[1]) {
+            Ok(c) => code_job(c, job[2], job[3], job[4], mut out),
+            Err(e) => emit(mut out, err_line(e)),
+        }
+    } else if k == "code_custom" {
+        match new_crc(num(job[1]) as u128, num(job[2]), job[3] == "1", num(job[4])) {
+            Ok(c) => code_job(c, job[5], job[6], job[7], mut out),
+            Err(e) => emit(mut out, err_line(e)),
+        }
+    } else if k == "png" {
+        png_job(rest(job), mut out);
+    } else if k == "gzip" {
+        gzip_job(rest(job), mut out);
+    } else if k == "modbus" {
+        modbus_job(job[1], mut out);
+    } else if k == "xmodem" {
+        xmodem_job(rest(job), mut out);
+    } else if k == "armor" {
+        armor_job(rest(job), mut out);
+    } else if k == "onewire" {
+        onewire_job(job[1], mut out);
+    } else {
+        rdb_job(rest(job), mut out);
+    }
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|p| p.to_string()).collect();
+        emit(mut out, f"== {job.join(" ")}");
+        run_job(job, mut out);
+    }
+    print(out);
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("-----BEGIN PGP PUBLIC KEY BLOCK-----\n");
+    t.push_str("Version: mk.py\n");
+    t.push_str("\n");
+    t.push_str("xFt6c7/sjQA7p6i6wmD2ef/CkqoPzsl7egOO17vtNrCul/2um1/TYDe6gc0bHWY7\n");
+    t.push_str("AtWNwooGg4/JqAAapKpiJPnjhehV9SQrDySioIUsqfISQb5AjO3BPUypqnsfkC49\n");
+    t.push_str("BJGny0XpgJCd5ublTv8pLx3Em2P0E1LNjzkJtB6wx1g9rMga6WijHPW+TJc=\n");
+    t.push_str("=oudB\n");
+    t.push_str("-----END PGP PUBLIC KEY BLOCK-----\n");
+    v.push(DataFile { path: "armor/0.asc".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("-----BEGIN PGP MESSAGE-----\n");
+    t.push_str("Version: mk.py\n");
+    t.push_str("\n");
+    t.push_str("gspLhjCRJnp7I7rEZZrQxC0SQWztO9TK5AfI/VxPnKn4NGR7owsfGeMzqabMQNV9\n");
+    t.push_str("0/qnNDmjJSQdiRN/3Q==\n");
+    t.push_str("=AgTb\n");
+    t.push_str("-----END PGP MESSAGE-----\n");
+    v.push(DataFile { path: "armor/1.asc".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("-----BEGIN PGP SIGNATURE-----\n");
+    t.push_str("Version: mk.py\n");
+    t.push_str("\n");
+    t.push_str("fb6mZscLTiujY0nNr5vZCFbnfbFNcZv2kVpFbTMk+ehhs8/9NzBthQvP23Rv78Kn\n");
+    t.push_str("IiEDbKEqPFdlYyHhH59rvXK+ZjnJhz/bK7d//AzYC7IjfmJj9vVOCg2vV3by3HQK\n");
+    t.push_str("4j3FhygWBshImVVRk95Y8Yr8Q3f3V1Y=\n");
+    t.push_str("=blUB\n");
+    t.push_str("-----END PGP SIGNATURE-----\n");
+    v.push(DataFile { path: "armor/2.asc".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("-----BEGIN PGP MESSAGE-----\n");
+    t.push_str("Version: mk.py\n");
+    t.push_str("\n");
+    t.push_str("wA==\n");
+    t.push_str("=S42l\n");
+    t.push_str("-----END PGP MESSAGE-----\n");
+    v.push(DataFile { path: "armor/3.asc".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0x185 ~0 0 0\n");
+    t.push_str("0x185 ~0 1 0\n");
+    t.push_str("0x11021 ~0 0 0\n");
+    t.push_str("0x11021 ~0 1 0\n");
+    t.push_str("0x15D6DCB ~0 0 0\n");
+    t.push_str("0x15D6DCB ~0 1 0\n");
+    t.push_str("0x104C11DB7 ~0 0 0\n");
+    t.push_str("0x104C11DB7 ~0 1 0\n");
+    t.push_str("0x142F0E1EBA9EA3693 ~0 0 0\n");
+    t.push_str("0x142F0E1EBA9EA3693 ~0 1 0\n");
+    t.push_str("0x11021 0 1 ~0\n");
+    t.push_str("0x15D6DCB 0 1 ~0\n");
+    t.push_str("0x104C11DB7 0 1 ~0\n");
+    t.push_str("0x142F0E1EBA9EA3693 0 1 ~0\n");
+    t.push_str("0x142F0E1EBA9EA3693 ~0 1 ~0\n");
+    t.push_str("0x11EDC6F41 ~0 1 ~0\n");
+    t.push_str("0x1814141AB 0 0 0\n");
+    t.push_str("0x18005 0x1234 0 -2\n");
+    t.push_str("0x107 -1 0 0x1FF\n");
+    t.push_str("0x8005 0 1 0\n");
+    t.push_str("0x1 0 1 0\n");
+    t.push_str("0x200000000000000000 0 1 0\n");
+    t.push_str("0x2000000 0 0 0\n");
+    t.push_str("0 0 1 0\n");
+    v.push(DataFile { path: "custom.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("5245444953303031310009757365723a33383939093836333632343537370009757365723a3233343909353830333831");
+    t.push_str("3037370009757365723a35313733093237333832373632370009757365723a3937323809313337313237313632000875");
+    t.push_str("7365723a39313609363833363331353139ff52c9c320bf977480");
+    v.push(DataFile { path: "dumps/a.rdb".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("5245444953303031310009755865723a39353237093330333034363932380009757365723a3330393408383637393133");
+    t.push_str("35390009757365723a33323639093531323437343330390009757365723a343831350937383735333134353500097573");
+    t.push_str("65723a37353934093535373233373137330009757365723a36303333093836383830373735310009757365723a363631");
+    t.push_str("39093135363432393933330009757365723a37333435093936303135363537350008757365723a313530093337323337");
+    t.push_str("383132300008757365723a363339093436343833313833390009757365723a3630333809353136393338383431000975");
+    t.push_str("7365723a3638363509353638323737383035ff987d9d5f01c9a794");
+    v.push(DataFile { path: "dumps/b.rdb".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524544495330303131ff7adbeccdebfe8e99");
+    v.push(DataFile { path: "dumps/c.rdb".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1f8b080000f1536504ff0164009bff302c7761726e0a312c6661696c0a322c7761726e0a332c7761726e0a342c776172");
+    t.push_str("6e0a352c7761726e0a362c6661696c0a372c6f6b0a382c6f6b0a392c7761726e0a31302c6f6b0a31312c6661696c0a31");
+    t.push_str("322c7761726e0a31332c7761726e0a31342c66795aa4b964000000");
+    v.push(DataFile { path: "gz/bad_crc.gz".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1f8b08000000000004ff010000ffff0000000000000000");
+    v.push(DataFile { path: "gz/empty.gz".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1f8b080000f1536504ff01d2002dff302c7761726e0a312c6661696c0a322c7761726e0a332c7761726e0a342c776172");
+    t.push_str("6e0a352c7761726e0a362c6661696c0a372c6f6b0a382c6f6b0a392c7761726e0a31302c6f6b0a31312c6661696c0a31");
+    t.push_str("322c7761726e0a31332c7761726e0a31342c6661696c0a31352c6661696c0a31362c7761726e0a31372c6f6b0a31382c");
+    t.push_str("6f6b0a31392c6661696c0a32302c6f6b0a32312c6661696c0a32322c6f6b0a32332c6661696c0a32342c6f6b0a32352c");
+    t.push_str("6661696c0a32362c6661696c0a32372c6661696c0a32382c6f6b0a32392c6f6b0ab8b06a45d2000000");
+    v.push(DataFile { path: "gz/log.csv.gz".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("catalog\n");
+    t.push_str("custom\tcustom.txt\n");
+    t.push_str("streams\tstreams.txt\n");
+    t.push_str("code_custom\t0x185\t~0\t0\t0\tcrc8\t-\t-\n");
+    t.push_str("code_custom\t0x185\t~0\t1\t0\tcrc8r\t-\t-\n");
+    t.push_str("code_custom\t0x11021\t~0\t0\t0\tcrc16\t-\t-\n");
+    t.push_str("code_custom\t0x15D6DCB\t~0\t1\t0\tcrc24r\t-\t-\n");
+    t.push_str("code_custom\t0x15D6DCB\t0\t1\t~0\tcrc24x\t-\t-\n");
+    t.push_str("code_custom\t0x104C11DB7\t0\t1\t~0\tcrc32x\t-\t-\n");
+    t.push_str("code_custom\t0x142F0E1EBA9EA3693\t~0\t0\t0\tcrc64\t-\t-\n");
+    t.push_str("code\tcrc-16-t10-dif\tt10dif_crc\tuint8_t\tuint16_t\n");
+    t.push_str("code\tcrc-32c\tcrc32c_sw\t-\t-\n");
+    t.push_str("code\tcrc-24-flexray-a\tflexray_a\t-\t-\n");
+    t.push_str("code\tcrc-64-jones\tredis_crc64\tunsigned char\t-\n");
+    t.push_str("png\tpng/0.png\tpng/1.png\tpng/2.png\tpng/3.png\tpng/4.png\n");
+    t.push_str("gzip\tgz/log.csv.gz\tgz/bad_crc.gz\tgz/empty.gz\n");
+    t.push_str("modbus\tmodbus.txt\n");
+    t.push_str("xmodem\txmodem/fw.bin.xmodem\txmodem/noisy.xmodem\n");
+    t.push_str("armor\tarmor/0.asc\tarmor/1.asc\tarmor/2.asc\tarmor/3.asc\n");
+    t.push_str("onewire\tonewire.txt\n");
+    t.push_str("rdb\tdumps/a.rdb\tdumps/b.rdb\tdumps/c.rdb\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("01 03 00 00 00 0a c5 cd\n");
+    t.push_str("01 03 14 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 09 13\n");
+    t.push_str("11 06 00 01 00 03 9a 9b\n");
+    t.push_str("02 83 02 30 f1\n");
+    t.push_str("05 10 00 11 00 02 04 00 0a 01 02 47 c0\n");
+    t.push_str("01 03\n");
+    v.push(DataFile { path: "modbus.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("28E892A436B2AA48\n");
+    t.push_str("10252D9A4D2D8AD3\n");
+    t.push_str("01990BA6250C4E7F\n");
+    t.push_str("28276BCBD06F3475\n");
+    t.push_str("2800000000000000\n");
+    t.push_str("0000000000000000\n");
+    v.push(DataFile { path: "onewire.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000020802000000f0caea340000000e74455874536f6674776172");
+    t.push_str("65006d6b2e707911e202f8000000234944415478da63389ca6c3616fcdbbe177f4ab5a860a956902b397be5ed69e775f");
+    t.push_str("100088460b4a50afc85e0000000049454e44ae426082");
+    v.push(DataFile { path: "png/0.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de0000000e74455874536f6674776172");
+    t.push_str("65006d6b2e707911e202f80000000c4944415478da63b0b05304000149009891c773130000000049454e44ae426082");
+    v.push(DataFile { path: "png/1.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d49484452000000020000000408020000002b8d796e0000000e74455874536f6674776172");
+    t.push_str("65006d6b2e707911e202f8000000254944415478da63b8c7b2f97492164361c2aa779cb60c4b562d2edd2dcdd0b9a9e4");
+    t.push_str("ede52900a97f0cdbc7d009d10000000049454e44ae426082");
+    v.push(DataFile { path: "png/2.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000003000000030802000000d94a22e80000000e74455874536f6774776172");
+    t.push_str("65006d6b2e707911e202f8000000274944415478da6330bbae5272b1e063ce6586485bff97d1254f943318969e65797f");
+    t.push_str("e038fbc7ff00d4490f06629ef66e0000000049454e44ae426082");
+    v.push(DataFile { path: "png/3.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000002000000030802000000368849d60000000e74455874536f6674776172");
+    t.push_str("65006d6b2e707911e202f80000001d4944415478da6338a3c0bf835f9be168");
+    v.push(DataFile { path: "png/4.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("crc-32|The quick brown fox jumps over the lazy dog|1,3,9,0,100\n");
+    t.push_str("crc-32c|\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00|32\n");
+    t.push_str("crc-32c|\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff|7,25\n");
+    t.push_str("crc-32c|\\x00\\x01\\x02\\x03\\x04\\x05\\x06\\x07\\x08\\t\\n\\x0b\\x0c\\r\\x0e\\x0f\\x10\\x11\\x12\\x13\\x14\\x15\\x16\\x17\\x18\\x19\\x1a\\x1b\\x1c\\x1d\\x1e\\x1f|5,5,5,17\n");
+    t.push_str("crc-32c|\\x1f\\x1e\\x1d\\x1c\\x1b\\x1a\\x19\\x18\\x17\\x16\\x15\\x14\\x13\\x12\\x11\\x10\\x0f\\x0e\\r\\x0c\\x0b\\n\\t\\x08\\x07\\x06\\x05\\x04\\x03\\x02\\x01\\x00|1\n");
+    t.push_str("crc-16-usb||\n");
+    t.push_str("modbus|\\x01\\x03\\x00\\x00\\x00\\n|2,2,2\n");
+    t.push_str("xmodem|123456789|4,5\n");
+    t.push_str("crc-64-jones|123456789|9\n");
+    t.push_str("crc-64-we|Kara compiles this|3,3,3,3\n");
+    t.push_str("crc-24|\\x14\\xfb\\x9c\\x03\\xd9~|6\n");
+    t.push_str("posix|hello world\\n|12\n");
+    t.push_str("crc-8-maxim|\\x02\\x1c\\xb8\\x01\\x00\\x00\\x00|1,1,1,1,1,1,1\n");
+    t.push_str("Crc16Mcrf4xx|RFID tag 0001|13\n");
+    t.push_str("CRC-16 DNP|\\x05d\\x05\\xc0\\x01\\x00\\x00\\x04|8\n");
+    t.push_str("crc-99|x|1\n");
+    t.push_str("crc32|spellings|9\n");
+    t.push_str("CRC-32|spellings|9\n");
+    t.push_str("Crc32|spellings|9\n");
+    t.push_str("crc_32|spellings|9\n");
+    v.push(DataFile { path: "streams.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0101fead81ae434faded47aad57fbce5a16caa70b55b006a4ff628b8f5f7d1f09d75d424fa5d46c3d76db1db4b629eab");
+    t.push_str("d73ef446c2d73b664ac38eff775ab611c4e3d30edbed7160527b9d29d55f98037838f1b02673e579eaa77d4fedc42220");
+    t.push_str("48ee1a776fabc3ff6f391c07706895626584b37d8a49af6ab179951d2b97c7c32e920066fb0102fd7866078753bbde3e");
+    t.push_str("768bfbe194ccb72fe9402d287bfa77f48f4849e9be730d8fee4dd7a81255736467d54bda6b8971ef7b1690eaff9c8644");
+    t.push_str("5c3fba11668d0c9fa1f17acb8231d14240d962a0d73194d92bacca5ff3688505ab781b03b7baa196db925ac391735d6a");
+    t.push_str("f04e6b5b4208c588ab083043aea15feac966503d2c5836d0e1ef0103fc25cbf95ef3493540945f4d78b777435184f6c4");
+    t.push_str("95c27163f1c0595e9f812f3d45ffc89fcd7cf3757f658f71541a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a");
+    t.push_str("1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a");
+    t.push_str("1a1a1a1a1a1a1a1a1a1a1a1a1a0a0f04");
+    v.push(DataFile { path: "xmodem/fw.bin.xmodem".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0101fead81ae434faded47aad57fbce5a16caa70b55b006a4ff628b8f5f7d1f09d75d424fa5d46c3d76db1db4b629eab");
+    t.push_str("d73ef446c2d73b664ac38eff775ab611c4e3d30edbed7160527b9d29d55f98037838f1b02673e579eaa77d4fedc42220");
+    t.push_str("48ee1a776fabc3ff6f391c07706895626584b37d8a49af6ab179951d2b97c7c32e920066fb0102fd78660787539bde3e");
+    t.push_str("768bfbe194ccb72fe9402d287bfa77f48f4849e9be730d8fee4dd7a81255736467d54bda6b8971ef7b1690eaff9c8644");
+    t.push_str("5c3fba11668d0c9fa1f17acb8231d14240d962a0d73194d92bacca5ff3688505ab781b03b7baa196db925ac391735d6a");
+    t.push_str("f04e6b5b4208c588ab083043aea15feac966503d2c5836d0e1ef0103fc25cbf95ef3493540945f4d78b777435184f6c4");
+    t.push_str("95c27163f1c0595e9f812f3d45ffc89fcd7cf3757f658f71541a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a");
+    t.push_str("1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a");
+    t.push_str("1a1a1a1a1a1a1a1a1a1a1a1a1a0a0f04");
+    v.push(DataFile { path: "xmodem/noisy.xmodem".to_string(), hex: true, body: t });
+}
