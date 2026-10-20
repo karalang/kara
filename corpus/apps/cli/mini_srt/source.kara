@@ -1,0 +1,2321 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters subtitles hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn is_line_break(c: char) -> bool {
+    let n = c as i64;
+    (n >= 10 and n <= 13) or (n >= 0x1c and n <= 0x1e) or n == 0x85 or n == 0x2028 or n == 0x2029
+}
+
+// str.splitlines().
+fn py_splitlines(s: ref String) -> Vec[String] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if is_line_break(c) {
+            out.push(cur);
+            cur = String.new();
+            if c == '\r' and i + 1 < cs.len() and cs[i + 1] == '\n' {
+                i += 1;
+            }
+        } else {
+            cur.push(c);
+        }
+        i += 1;
+    }
+    if cur.len() > 0 {
+        out.push(cur);
+    }
+    out
+}
+
+// str.isdigit() for ASCII and fullwidth digits.
+fn py_isdigit(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        let n = c as i64;
+        if not ((n >= 0x30 and n <= 0x39) or (n >= 0xff10 and n <= 0xff19)) {
+            return false;
+        }
+    }
+    true
+}
+
+// The utf-8-sig codec: UTF-8 with a leading BOM dropped.
+fn drop_bom(s: own String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    if cs.len() > 0 and cs[0] as i64 == 0xfeff {
+        return chars_str(cs, 1, cs.len());
+    }
+    s
+}
+
+fn latin1_decode(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        out.push(char.try_from(*x as u32).unwrap());
+    }
+    out
+}
+
+fn latin1_encode(s: ref String) -> Result[Vec[u8], Exc] {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    for c in s.chars() {
+        let n = c as i64;
+        if n > 255 {
+            return Err(Exc {
+                kind: "UnicodeEncodeError".to_string(),
+                msg: f"'latin-1' codec can't encode character '\\u{hex_digits(n, 4)}' in position {i}: ordinal not in range(256)",
+            });
+        }
+        out.push(n as u8);
+        i += 1;
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ regular expressions
+//
+// The part of Python's `re` that srt uses: SRT_REGEX needs lookaheads and
+// a lazy `.*?`, so this is a backtracking matcher with Python's leftmost,
+// priority-ordered semantics. A pattern compiles to a small program;
+// Split tries its first branch before its second, which is what makes
+// `*` greedy and `*?` lazy. It works on code points, as Python's str does.
+
+// Python's str.isspace(), which is also what `\s` matches.
+fn py_isspace(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 0x1c and n <= 0x20) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f or n == 0x205f
+        or n == 0x3000
+}
+
+#[derive(Clone)]
+struct Cls {
+    ranges: Vec[(i64, i64)],
+    space: bool,
+    neg: bool,
+}
+
+fn cls_has(k: ref Cls, c: char) -> bool {
+    let n = c as i64;
+    let mut hit = k.space and py_isspace(c);
+    for r in k.ranges {
+        if n >= r.0 and n <= r.1 {
+            hit = true;
+        }
+    }
+    hit != k.neg
+}
+
+#[derive(Clone)]
+enum Node {
+    Char(Cls),
+    Any,
+    Bol,
+    Eol,
+    EndZ,
+    Seq(Vec[Node]),
+    Alt(Vec[Node]),
+    Group(i64, Vec[Node]),
+    Look(Vec[Node]),
+    // body (one node), min, max (-1 for none), greedy
+    Rep(Vec[Node], i64, i64, bool),
+}
+
+#[derive(Clone)]
+enum Inst {
+    Char(Cls),
+    Any,
+    Bol,
+    Eol,
+    EndZ,
+    Split(i64, i64),
+    Jmp(i64),
+    Save(i64),
+    // the lookahead's program starts at the next instruction; matching
+    // goes on at the second
+    Look(i64),
+    Match,
+}
+
+struct Re {
+    prog: Vec[Inst],
+    groups: i64,
+    dotall: bool,
+}
+
+struct ReParser {
+    cs: Vec[char],
+    pos: i64,
+    groups: i64,
+}
+
+fn one(c: char) -> Cls {
+    let mut r: Vec[(i64, i64)] = Vec.new();
+    r.push((c as i64, c as i64));
+    Cls { ranges: r, space: false, neg: false }
+}
+
+impl ReParser {
+    fn peek(ref self) -> Option[char] {
+        if self.pos < self.cs.len() { Some(self.cs[self.pos]) } else { None }
+    }
+
+    fn eat(mut ref self, c: char) -> bool {
+        if self.pos < self.cs.len() and self.cs[self.pos] == c {
+            self.pos += 1;
+            return true;
+        }
+        false
+    }
+
+    fn alt(mut ref self) -> Node {
+        let mut arms: Vec[Node] = Vec.new();
+        arms.push(self.seq());
+        while self.eat('|') {
+            arms.push(self.seq());
+        }
+        if arms.len() == 1 { arms.remove(0) } else { Node.Alt(arms) }
+    }
+
+    fn seq(mut ref self) -> Node {
+        let mut items: Vec[Node] = Vec.new();
+        loop {
+            match self.peek() {
+                None => break,
+                Some(c) => {
+                    if c == '|' or c == ')' {
+                        break;
+                    }
+                }
+            }
+            let atom = self.atom();
+            items.push(self.quantified(atom));
+        }
+        Node.Seq(items)
+    }
+
+    fn quantified(mut ref self, atom: own Node) -> Node {
+        let (lo, hi) = match self.peek() {
+            Some('*') => (0, -1),
+            Some('+') => (1, -1),
+            Some('?') => (0, 1),
+            _ => return atom,
+        };
+        self.pos += 1;
+        let greedy = not self.eat('?');
+        let mut body: Vec[Node] = Vec.new();
+        body.push(atom);
+        Node.Rep(body, lo, hi, greedy)
+    }
+
+    fn escape(mut ref self) -> Cls {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == 's' {
+            Cls { ranges: Vec.new(), space: true, neg: false }
+        } else if c == 'n' {
+            one('\n')
+        } else if c == 'r' {
+            one('\r')
+        } else if c == 't' {
+            one('\t')
+        } else {
+            one(c)
+        }
+    }
+
+    fn class(mut ref self) -> Cls {
+        let neg = self.eat('^');
+        let mut k = Cls { ranges: Vec.new(), space: false, neg: neg };
+        let mut first = true;
+        while first or self.cs[self.pos] != ']' {
+            first = false;
+            let lo = if self.eat('\\') {
+                let e = self.escape();
+                if e.space {
+                    k.space = true;
+                    continue;
+                }
+                e.ranges[0].0
+            } else {
+                let c = self.cs[self.pos];
+                self.pos += 1;
+                c as i64
+            };
+            if self.cs[self.pos] == '-' and self.cs[self.pos + 1] != ']' {
+                self.pos += 1;
+                let hi = if self.eat('\\') {
+                    self.escape().ranges[0].0
+                } else {
+                    let c = self.cs[self.pos];
+                    self.pos += 1;
+                    c as i64
+                };
+                k.ranges.push((lo, hi));
+            } else {
+                k.ranges.push((lo, lo));
+            }
+        }
+        self.pos += 1;
+        k
+    }
+
+    fn atom(mut ref self) -> Node {
+        let c = self.cs[self.pos];
+        self.pos += 1;
+        if c == '(' {
+            let mut capture = true;
+            let mut look = false;
+            if self.eat('?') {
+                capture = false;
+                if self.eat('=') {
+                    look = true;
+                } else {
+                    self.eat(':');
+                }
+            }
+            let mut idx = 0;
+            if capture {
+                self.groups += 1;
+                idx = self.groups;
+            }
+            let inner = self.alt();
+            self.eat(')');
+            let mut body: Vec[Node] = Vec.new();
+            body.push(inner);
+            if look {
+                Node.Look(body)
+            } else if capture {
+                Node.Group(idx, body)
+            } else {
+                Node.Seq(body)
+            }
+        } else if c == '[' {
+            Node.Char(self.class())
+        } else if c == '.' {
+            Node.Any
+        } else if c == '^' {
+            Node.Bol
+        } else if c == '$' {
+            Node.Eol
+        } else if c == '\\' {
+            if self.eat('Z') {
+                Node.EndZ
+            } else {
+                Node.Char(self.escape())
+            }
+        } else {
+            Node.Char(one(c))
+        }
+    }
+}
+
+fn emit_node(prog: mut ref Vec[Inst], n: ref Node) {
+    match n {
+        Node.Char(k) => prog.push(Inst.Char(k.clone())),
+        Node.Any => prog.push(Inst.Any),
+        Node.Bol => prog.push(Inst.Bol),
+        Node.Eol => prog.push(Inst.Eol),
+        Node.EndZ => prog.push(Inst.EndZ),
+        Node.Seq(items) => {
+            for x in items {
+                emit_node(mut prog, x);
+            }
+        }
+        Node.Alt(arms) => {
+            let mut jumps: Vec[i64] = Vec.new();
+            for i in 0..arms.len() {
+                if i + 1 < arms.len() {
+                    let split = prog.len();
+                    prog.push(Inst.Split(split + 1, 0));
+                    emit_node(mut prog, arms[i]);
+                    jumps.push(prog.len());
+                    prog.push(Inst.Jmp(0));
+                    prog[split] = Inst.Split(split + 1, prog.len());
+                } else {
+                    emit_node(mut prog, arms[i]);
+                }
+            }
+            let end = prog.len();
+            for j in jumps {
+                prog[j] = Inst.Jmp(end);
+            }
+        }
+        Node.Group(idx, body) => {
+            prog.push(Inst.Save(2 * idx));
+            emit_node(mut prog, body[0]);
+            prog.push(Inst.Save(2 * idx + 1));
+        }
+        Node.Look(body) => {
+            let at = prog.len();
+            prog.push(Inst.Look(0));
+            emit_node(mut prog, body[0]);
+            prog.push(Inst.Match);
+            prog[at] = Inst.Look(prog.len());
+        }
+        Node.Rep(body, lo, hi, greedy) => {
+            for _ in 0..*lo {
+                emit_node(mut prog, body[0]);
+            }
+            if *hi < 0 {
+                // x*: L: split(body, out); body; jmp L
+                let l = prog.len();
+                prog.push(Inst.Split(0, 0));
+                emit_node(mut prog, body[0]);
+                prog.push(Inst.Jmp(l));
+                let out = prog.len();
+                prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+            } else {
+                for _ in *lo..*hi {
+                    let l = prog.len();
+                    prog.push(Inst.Split(0, 0));
+                    emit_node(mut prog, body[0]);
+                    let out = prog.len();
+                    prog[l] = if *greedy { Inst.Split(l + 1, out) } else { Inst.Split(out, l + 1) };
+                }
+            }
+        }
+    }
+}
+
+fn re_compile(pattern: ref String, dotall: bool) -> Re {
+    let mut p = ReParser { cs: pattern.chars().collect(), pos: 0, groups: 0 };
+    let tree = p.alt();
+    let mut prog: Vec[Inst] = Vec.new();
+    prog.push(Inst.Save(0));
+    emit_node(mut prog, tree);
+    prog.push(Inst.Save(1));
+    prog.push(Inst.Match);
+    Re { prog: prog, groups: p.groups, dotall: dotall }
+}
+
+enum Bt {
+    Try(i64, i64),
+    Restore(i64, i64),
+}
+
+// Runs the program from `pc` at `pos`; the slots hold the group bounds
+// of the first way through that reaches Match.
+fn re_run(re: ref Re, s: ref Vec[char], pc0: i64, pos0: i64, slots: mut ref Vec[i64]) -> bool {
+    let mut stack: Vec[Bt] = Vec.new();
+    stack.push(Bt.Try(pc0, pos0));
+    while stack.len() > 0 {
+        let mut (pc, pos) = match stack.pop().unwrap() {
+            Bt.Restore(k, old) => {
+                slots[k] = old;
+                continue;
+            }
+            Bt.Try(pc, pos) => (pc, pos),
+        };
+        loop {
+            match re.prog[pc] {
+                Inst.Char(k) => {
+                    if pos < s.len() and cls_has(k, s[pos]) {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Any => {
+                    if pos < s.len() and (re.dotall or s[pos] != '\n') {
+                        pc += 1;
+                        pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Bol => {
+                    if pos == 0 { pc += 1; } else { break; }
+                }
+                Inst.Eol => {
+                    if pos == s.len() or (pos + 1 == s.len() and s[pos] == '\n') { pc += 1; } else { break; }
+                }
+                Inst.EndZ => {
+                    if pos == s.len() { pc += 1; } else { break; }
+                }
+                Inst.Split(a, b) => {
+                    stack.push(Bt.Try(*b, pos));
+                    pc = *a;
+                }
+                Inst.Jmp(a) => pc = *a,
+                Inst.Save(k) => {
+                    stack.push(Bt.Restore(*k, slots[*k]));
+                    slots[*k] = pos;
+                    pc += 1;
+                }
+                Inst.Look(cont) => {
+                    let mut inner = slots.clone();
+                    if re_run(re, s, pc + 1, pos, mut inner) {
+                        pc = *cont;
+                    } else {
+                        break;
+                    }
+                }
+                Inst.Match => return true,
+            }
+        }
+    }
+    false
+}
+
+// re.match at `pos`: the group bounds (-1 for a group that took no
+// part), or None.
+fn re_match_at(re: ref Re, s: ref Vec[char], pos: i64) -> Option[Vec[i64]] {
+    let mut slots: Vec[i64] = Vec.new();
+    for _ in 0..(2 * re.groups + 2) {
+        slots.push(-1);
+    }
+    if re_run(re, s, 0, pos, mut slots) { Some(slots) } else { None }
+}
+
+fn re_search(re: ref Re, s: ref Vec[char], from: i64) -> Option[Vec[i64]] {
+    let mut pos = from;
+    while pos <= s.len() {
+        if let Some(m) = re_match_at(re, s, pos) {
+            return Some(m);
+        }
+        pos += 1;
+    }
+    None
+}
+
+// re.finditer: non-overlapping matches, left to right.
+fn re_finditer(re: ref Re, s: ref Vec[char]) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut pos = 0;
+    while pos <= s.len() {
+        match re_search(re, s, pos) {
+            None => break,
+            Some(m) => {
+                pos = if m[1] == m[0] { m[1] + 1 } else { m[1] };
+                out.push(m);
+            }
+        }
+    }
+    out
+}
+
+fn chars_str(s: ref Vec[char], a: i64, b: i64) -> String {
+    let mut out = String.new();
+    for i in a..b {
+        out.push(s[i]);
+    }
+    out
+}
+
+// re.sub with a literal replacement.
+fn re_sub(re: ref Re, repl: ref String, text: ref String) -> String {
+    let s: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    let mut last = 0;
+    for m in re_finditer(re, s) {
+        out.push_str(chars_str(s, last, m[0]));
+        out.push_str(repl);
+        last = m[1];
+    }
+    out.push_str(chars_str(s, last, s.len()));
+    out
+}
+// ------------------------------------------------------------ srt.py
+//
+// Times are datetime.timedelta values held as a count of microseconds.
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn floor_mod(a: i64, b: i64) -> i64 {
+    a - b * floor_div(a, b)
+}
+
+// timedelta's (days, seconds, microseconds).
+fn td_parts(us: i64) -> (i64, i64, i64) {
+    let days = floor_div(us, 86400000000);
+    let rest = floor_mod(us, 86400000000);
+    (days, rest / 1000000, rest % 1000000)
+}
+
+fn td_repr(us: i64) -> String {
+    let (d, s, u) = td_parts(us);
+    let mut parts: Vec[String] = Vec.new();
+    if d != 0 {
+        parts.push(f"days={d}");
+    }
+    if s != 0 {
+        parts.push(f"seconds={s}");
+    }
+    if u != 0 {
+        parts.push(f"microseconds={u}");
+    }
+    if parts.len() == 0 {
+        return "datetime.timedelta(0)".to_string();
+    }
+    f"datetime.timedelta({parts.join(", ")})"
+}
+
+// "%0<w>d": the sign counts towards the width.
+fn zpad(n: i64, w: i64) -> String {
+    let mut digits = if n < 0 { f"{-n}" } else { f"{n}" };
+    let room = if n < 0 { w - 1 } else { w };
+    while digits.len() < room {
+        digits = f"0{digits}";
+    }
+    if n < 0 { f"-{digits}" } else { digits }
+}
+
+// Python's round() for a float: halves go to the even neighbour.
+fn round_half_even(x: f64) -> i64 {
+    let f = x.floor();
+    let diff = x - f;
+    let fi = f as i64;
+    if diff > 0.5 {
+        fi + 1
+    } else if diff < 0.5 {
+        fi
+    } else if fi % 2 == 0 {
+        fi
+    } else {
+        fi + 1
+    }
+}
+
+// timedelta(seconds=x) for a float x.
+fn td_from_seconds(x: f64) -> i64 {
+    let ip = x.trunc();
+    (ip as i64) * 1000000 + round_half_even((x - ip) * 1000000.0)
+}
+
+fn timedelta_to_srt_timestamp(us: i64) -> String {
+    let (days, secs, micros) = td_parts(us);
+    let mut hrs = secs / 3600;
+    let rem = secs % 3600;
+    hrs += days * 24;
+    let mins = rem / 60;
+    let s = rem % 60;
+    let ms = micros / 1000;
+    f"{zpad(hrs, 2)}:{zpad(mins, 2)}:{zpad(s, 2)},{zpad(ms, 3)}"
+}
+
+struct Patterns {
+    ts: Re,
+    multi_ws: Re,
+    srt: Re,
+}
+
+fn patterns() -> Patterns {
+    let delim = "[,.:，．。：]";
+    let field = "[0-9]+";
+    let field_opt = "[0-9]*";
+    let rgx_ts = f"{field}{delim}{field}{delim}{field}{delim}?{field_opt}";
+    let g = f"({field})";
+    let rgx_parseable = f"^{g}{delim}{g}{delim}{g}{delim}?({field_opt})$";
+    let idx = "-?[0-9]+\\.?[0-9]*";
+    let prop = "[^\\r\\n]*";
+    let content = ".*?";
+    let eof = "\\r?\\n";
+    let mut p = f"\\s*(?:({idx})\\s*{eof})?({rgx_ts}) *-[ -] *> *({rgx_ts}) ?({prop})(?:{eof}|\\Z)({content})";
+    p.push_str(f"(?:{eof}|\\Z)(?:{eof}|\\Z|(?=(?:{idx}\\s*{eof}{rgx_ts})))");
+    p.push_str(f"(?=(?:(?:{idx}\\s*{eof})?{rgx_ts}|\\Z))");
+    Patterns {
+        ts: re_compile(rgx_parseable, false),
+        multi_ws: re_compile("\\n\\n+".to_string(), false),
+        srt: re_compile(p, true),
+    }
+}
+
+#[derive(Clone)]
+struct Subtitle {
+    index: Option[i64],
+    start: i64,
+    end: i64,
+    content: String,
+    proprietary: String,
+}
+
+fn opt_repr(i: ref Option[i64]) -> String {
+    match i {
+        Some(n) => f"{n}",
+        None => "None".to_string(),
+    }
+}
+
+fn sub_repr(s: ref Subtitle) -> String {
+    f"Subtitle(index={opt_repr(s.index)}, start={td_repr(s.start)}, end={td_repr(s.end)}, content={py_repr_str(s.content)}, proprietary={py_repr_str(s.proprietary)})"
+}
+
+// __lt__: (start, end, index); None against an int is a TypeError.
+fn sub_lt(a: ref Subtitle, b: ref Subtitle) -> Result[bool, Exc] {
+    if a.start != b.start {
+        return Ok(a.start < b.start);
+    }
+    if a.end != b.end {
+        return Ok(a.end < b.end);
+    }
+    match (a.index, b.index) {
+        (Some(x), Some(y)) => Ok(x < y),
+        (None, None) => Ok(false),
+        (None, Some(_)) => Err(exc("TypeError", "'<' not supported between instances of 'NoneType' and 'int'")),
+        (Some(_), None) => Err(exc("TypeError", "'<' not supported between instances of 'int' and 'NoneType'")),
+    }
+}
+
+// sorted(subs): stable.
+fn sorted_subs(subs: own Vec[Subtitle]) -> Result[Vec[Subtitle], Exc] {
+    let mut v = subs;
+    let mut i = 1;
+    while i < v.len() {
+        let mut j = i;
+        while j > 0 and sub_lt(v[j], v[j - 1])? {
+            v.swap(j, j - 1);
+            j -= 1;
+        }
+        i += 1;
+    }
+    Ok(v)
+}
+
+#[derive(Clone)]
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: Str) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+// What logging prints: LEVEL:logger:message.
+fn log(out: mut ref Vec[String], level: Str, name: Str, msg: ref String) {
+    out.push(f"! {level}:{name}:{msg}");
+}
+
+fn has_double_nl(s: ref String) -> bool {
+    s.contains("\n\n")
+}
+
+fn strip_nl(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and cs[a] == '\n' {
+        a += 1;
+    }
+    while b > a and cs[b - 1] == '\n' {
+        b -= 1;
+    }
+    chars_str(cs, a, b)
+}
+
+fn make_legal_content(p: ref Patterns, content: ref String, logs: mut ref Vec[String]) -> String {
+    if content.len() > 0 and not content.starts_with("\n") and not has_double_nl(content) {
+        return content.clone();
+    }
+    let legal = re_sub(p.multi_ws, "\n".to_string(), strip_nl(content));
+    log(mut logs, "INFO", "srt", f"Legalised content {py_repr_str(content)} to {py_repr_str(legal)}");
+    legal
+}
+
+fn to_srt(p: ref Patterns, s: ref Subtitle, strict: bool, eol: ref String, logs: mut ref Vec[String]) -> String {
+    let mut content = s.content.clone();
+    let mut prop = s.proprietary.clone();
+    if prop.len() > 0 {
+        prop = f" {prop}";
+    }
+    if strict {
+        content = make_legal_content(p, content, mut logs);
+    }
+    if eol != "\n" {
+        content = content.replace("\n", eol.as_str());
+    }
+    let idx = match s.index {
+        Some(n) => n,
+        None => 0,
+    };
+    f"{idx}{eol}{timedelta_to_srt_timestamp(s.start)} --> {timedelta_to_srt_timestamp(s.end)}{prop}{eol}{content}{eol}{eol}"
+}
+
+fn srt_timestamp_to_timedelta(p: ref Patterns, ts: ref String) -> Result[i64, Exc] {
+    let cs: Vec[char] = ts.chars().collect();
+    let m = match re_match_at(p.ts, cs, 0) {
+        Some(m) => m,
+        None => return Err(Exc { kind: "TimestampParseError".to_string(), msg: f"Unparseable timestamp: {ts}" }),
+    };
+    let mut f: Vec[i64] = Vec.new();
+    for g in 1..5 {
+        let mut n = 0;
+        for i in m[2 * g]..m[2 * g + 1] {
+            n = n * 10 + (cs[i] as i64 - '0' as i64);
+        }
+        f.push(n);
+    }
+    Ok(((f[0] * 60 + f[1]) * 60 + f[2]) * 1000000 + f[3] * 1000)
+}
+
+fn is_bom(s: ref String) -> bool {
+    let cs: Vec[char] = s.chars().collect();
+    cs.len() == 1 and cs[0] as i64 == 0xfeff
+}
+
+fn all_space(s: ref String) -> bool {
+    if s.len() == 0 {
+        return false;
+    }
+    for c in s.chars() {
+        if not py_isspace(c) {
+            return false;
+        }
+    }
+    true
+}
+
+// _check_contiguity: an error, or a warning when ignoring errors.
+fn check_contiguity(cs: ref Vec[char], expected: i64, actual: i64, warn_only: bool, logs: mut ref Vec[String]) -> Result[(), Exc] {
+    if expected == actual {
+        return Ok(());
+    }
+    let unmatched = chars_str(cs, expected, actual);
+    if expected == 0 and (all_space(unmatched) or is_bom(unmatched)) {
+        return Ok(());
+    }
+    if warn_only {
+        log(mut logs, "WARNING", "srt", f"Skipped unparseable SRT data: {py_repr_str(unmatched)}");
+        return Ok(());
+    }
+    Err(Exc {
+        kind: "SRTParseError".to_string(),
+        msg: f"Expected contiguous start of match or end of input at char {expected}, but started at char {actual} (unmatched content: {py_repr_str(unmatched)})",
+    })
+}
+
+// int() of an index such as "12" or "-3"; "12.5" and "12." keep the part
+// before the dot.
+fn index_of(raw: ref String) -> i64 {
+    let head: Vec[Str] = raw.split(".").collect();
+    let t = head[0];
+    let neg = t.starts_with("-");
+    let mut n = 0;
+    for c in t.chars() {
+        if c != '-' {
+            n = n * 10 + (c as i64 - '0' as i64);
+        }
+    }
+    if neg { -n } else { n }
+}
+
+// What srt.parse yields, in order: subtitles and the log lines written
+// between them, then the error that stopped it, if any.
+enum Ev {
+    Sub(Subtitle),
+    Log(String),
+}
+
+struct Parsed {
+    events: Vec[Ev],
+    error: Option[Exc],
+}
+
+fn parse(p: ref Patterns, text: ref String, ignore_errors: bool) -> Parsed {
+    let cs: Vec[char] = text.chars().collect();
+    let mut events: Vec[Ev] = Vec.new();
+    let mut expected = 0;
+    for m in re_finditer(p.srt, cs) {
+        let mut logs: Vec[String] = Vec.new();
+        let r = check_contiguity(cs, expected, m[0], ignore_errors, mut logs);
+        for l in logs {
+            events.push(Ev.Log(l.clone()));
+        }
+        if let Err(e) = r {
+            return Parsed { events: events, error: Some(e) };
+        }
+        let index = if m[2] < 0 { None } else { Some(index_of(chars_str(cs, m[2], m[3]))) };
+        let start = match srt_timestamp_to_timedelta(p, chars_str(cs, m[4], m[5])) {
+            Ok(t) => t,
+            Err(e) => return Parsed { events: events, error: Some(e) },
+        };
+        let end = match srt_timestamp_to_timedelta(p, chars_str(cs, m[6], m[7])) {
+            Ok(t) => t,
+            Err(e) => return Parsed { events: events, error: Some(e) },
+        };
+        events.push(Ev.Sub(Subtitle {
+            index: index,
+            start: start,
+            end: end,
+            content: chars_str(cs, m[10], m[11]).replace("\r\n", "\n"),
+            proprietary: chars_str(cs, m[8], m[9]),
+        }));
+        expected = m[1];
+    }
+    let mut logs: Vec[String] = Vec.new();
+    let r = check_contiguity(cs, expected, cs.len(), ignore_errors, mut logs);
+    for l in logs {
+        events.push(Ev.Log(l.clone()));
+    }
+    Parsed { events: events, error: r.err() }
+}
+
+// Consumes a parse the way sorted() or list() does: every subtitle, the
+// logs go out first, and an error stops everything.
+fn parse_all(p: ref Patterns, text: ref String, ignore_errors: bool, logs: mut ref Vec[String]) -> Result[Vec[Subtitle], Exc] {
+    let parsed = parse(p, text, ignore_errors);
+    let mut subs: Vec[Subtitle] = Vec.new();
+    for e in parsed.events {
+        match e {
+            Ev.Sub(s) => subs.push(s.clone()),
+            Ev.Log(l) => logs.push(l.clone()),
+        }
+    }
+    match parsed.error {
+        Some(e) => Err(e),
+        None => Ok(subs),
+    }
+}
+
+fn skip_reason(s: ref Subtitle) -> Option[Str] {
+    if all_space(s.content) or s.content.len() == 0 {
+        Some("No content")
+    } else if s.start < 0 {
+        Some("Start time < 0 seconds")
+    } else if s.start >= s.end {
+        Some("Subtitle start time >= end time")
+    } else {
+        None
+    }
+}
+
+struct ComposeOpts {
+    reindex: bool,
+    start_index: i64,
+    strict: bool,
+    eol: String,
+}
+
+fn compose_opts() -> ComposeOpts {
+    ComposeOpts { reindex: true, start_index: 1, strict: true, eol: "\n".to_string() }
+}
+
+// compose(): sort_and_reindex (skipping) then each to_srt, interleaved as
+// the generators run.
+fn compose(p: ref Patterns, subs: own Vec[Subtitle], o: ref ComposeOpts, logs: mut ref Vec[String]) -> Result[String, Exc] {
+    let mut out = String.new();
+    if not o.reindex {
+        for s in subs {
+            out.push_str(to_srt(p, s, o.strict, o.eol, mut logs));
+        }
+        return Ok(out);
+    }
+    let sorted = sorted_subs(subs)?;
+    let mut skipped = 0;
+    let mut num = o.start_index;
+    for s in sorted {
+        let mut sub = s.clone();
+        if let Some(why) = skip_reason(sub) {
+            match sub.index {
+                None => log(mut logs, "INFO", "srt", f"Skipped subtitle with no index: {why}"),
+                Some(n) => log(mut logs, "INFO", "srt", f"Skipped subtitle at index {n}: {why}"),
+            }
+            skipped += 1;
+            num += 1;
+            continue;
+        }
+        sub.index = Some(num - skipped);
+        num += 1;
+        out.push_str(to_srt(p, sub, o.strict, o.eol, mut logs));
+    }
+    Ok(out)
+}
+// ------------------------------------------------------------ srt_tools
+//
+// Each script's arguments, srt_tools.utils.set_basic_args, and the
+// script's main(). Reading and writing go through the codec the script
+// picks: utf-8-sig to read and utf-8 to write unless -e names one.
+
+struct ToolArgs {
+    tool: String,
+    inputs: Vec[String],
+    output: String,
+    inplace: bool,
+    strict: bool,
+    ignore: bool,
+    encoding: String,
+    seconds: f64,
+    stamps: Vec[String],
+    ms: i64,
+    width: i64,
+    top: bool,
+    no_tm: bool,
+    func: String,
+    invert: bool,
+    per_sub: bool,
+}
+
+fn parse_args(tool: ref String, argv: ref Vec[String]) -> ToolArgs {
+    let mut a = ToolArgs {
+        tool: tool.clone(),
+        inputs: Vec.new(),
+        output: "-".to_string(),
+        inplace: false,
+        strict: true,
+        ignore: false,
+        encoding: "".to_string(),
+        seconds: 0.0,
+        stamps: Vec.new(),
+        ms: if tool == "mux" { 600 } else { 5000 },
+        width: 5,
+        top: false,
+        no_tm: false,
+        func: "".to_string(),
+        invert: false,
+        per_sub: false,
+    };
+    for _ in 0..4 {
+        a.stamps.push("".to_string());
+    }
+    let mut i = 0;
+    while i < argv.len() {
+        let o = argv[i].clone();
+        let val = if i + 1 < argv.len() { argv[i + 1].clone() } else { "".to_string() };
+        let mut took = true;
+        if o == "-i" or o == "--input" {
+            a.inputs.push(val);
+        } else if o == "-o" or o == "--output" {
+            a.output = val;
+        } else if o == "-e" or o == "--encoding" {
+            a.encoding = val;
+        } else if o == "--seconds" {
+            a.seconds = f64.parse(val).unwrap();
+        } else if o == "--f1" or o == "--from-start" {
+            a.stamps[0] = val;
+        } else if o == "--t1" or o == "--to-start" {
+            a.stamps[1] = val;
+        } else if o == "--f2" or o == "--from-end" {
+            a.stamps[2] = val;
+        } else if o == "--t2" or o == "--to-end" {
+            a.stamps[3] = val;
+        } else if o == "--ms" or (o == "-t" and tool == "deduplicate") {
+            a.ms = i64.parse(val).unwrap();
+        } else if o == "-w" or o == "--width" {
+            a.width = i64.parse(val).unwrap();
+        } else if o == "-f" or o == "--func" {
+            a.func = val;
+        } else if o == "-m" or o == "--module" {
+            // the modules a lambda may use; re is the only one
+        } else {
+            took = false;
+            if o == "-p" or o == "--inplace" {
+                a.inplace = true;
+            } else if o == "--no-strict" {
+                a.strict = false;
+            } else if o == "-c" or o == "--ignore-parsing-errors" {
+                a.ignore = true;
+            } else if o == "-t" or o == "--top-and-bottom" {
+                a.top = true;
+            } else if o == "--no-time-matching" {
+                a.no_tm = true;
+            } else if o == "-v" or o == "--invert" {
+                a.invert = true;
+            } else if o == "-s" or o == "--per-subtitle" {
+                a.per_sub = true;
+            } else {
+                panic(f"unknown option {o}");
+            }
+        }
+        i += if took { 2 } else { 1 };
+    }
+    a
+}
+
+fn data_path(rel: ref String) -> String {
+    f"data/{rel}"
+}
+
+fn read_with(rel: ref String, encoding: ref String) -> Result[String, Exc] {
+    if encoding == "latin-1" {
+        match fs.read_bytes(data_path(rel)) {
+            Ok(b) => Ok(latin1_decode(b)),
+            Err(e) => Err(Exc { kind: "OSError".to_string(), msg: f"{e}" }),
+        }
+    } else {
+        match fs.read_to_string(data_path(rel)) {
+            Ok(s) => Ok(if encoding == "" { drop_bom(s) } else { s }),
+            Err(e) => Err(Exc { kind: "OSError".to_string(), msg: f"{e}" }),
+        }
+    }
+}
+
+fn write_with(rel: ref String, text: ref String, encoding: ref String) -> Result[(), Exc] {
+    let written = if encoding == "latin-1" {
+        fs.write_bytes(data_path(rel), latin1_encode(text)?)
+    } else {
+        fs.write(data_path(rel), text.clone())
+    };
+    match written {
+        Ok(_) => Ok(()),
+        Err(e) => Err(Exc { kind: "OSError".to_string(), msg: f"{e}" }),
+    }
+}
+
+fn ms_of(us: i64) -> f64 {
+    let (d, s, u) = td_parts(us);
+    (d * 86400000 + s * 1000) as f64 + (u as f64) / 1000.0
+}
+
+fn has_chinese(x: ref String) -> bool {
+    for c in x.chars() {
+        let n = c as i64;
+        if n >= 0x4e00 and n <= 0x9fff {
+            return true;
+        }
+    }
+    false
+}
+
+// The -f lambdas the jobs use; Python evaluates them, this knows them.
+fn line_func(f: ref String, x: ref String) -> bool {
+    if f == "lambda x: x.isdigit()" {
+        py_isdigit(x)
+    } else if f == "lambda x: any('一' <= c <= '鿿' for c in x)" {
+        has_chinese(x)
+    } else if f == "lambda x: 'Holmes' in x" {
+        x.contains("Holmes")
+    } else if f == "lambda x: x.startswith('-')" {
+        x.starts_with("-")
+    } else {
+        panic(f"unknown function {f}")
+    }
+}
+
+fn process_func(f: ref String, sub: ref String, tags: ref Re) -> String {
+    if f == "lambda sub: re.sub(\"<[^<]+?>\", \"\", sub)" {
+        re_sub(tags, "".to_string(), sub)
+    } else if f == "lambda sub: sub.upper()" {
+        sub.to_uppercase()
+    } else if f == "lambda sub: sub.replace(\"\\n\", \" / \")" {
+        sub.replace("\n", " / ")
+    } else if f == "lambda sub: \"\"" {
+        "".to_string()
+    } else {
+        panic(f"unknown function {f}")
+    }
+}
+
+// sliding_window(seq, width, inclusive), over positions in seq.
+fn sliding_window(n: i64, width: i64, inclusive: bool) -> Vec[Vec[i64]] {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut sliced: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < n and k < width {
+        sliced.push(k);
+        k += 1;
+    }
+    if not inclusive and sliced.len() != width {
+        return out;
+    }
+    out.push(sliced.clone());
+    while k < n {
+        sliced.remove(0);
+        sliced.push(k);
+        out.push(sliced.clone());
+        k += 1;
+    }
+    if inclusive {
+        for idx in 1..sliced.len() {
+            let mut tail: Vec[i64] = Vec.new();
+            for j in idx..sliced.len() {
+                tail.push(sliced[j]);
+            }
+            out.push(tail);
+        }
+    }
+    out
+}
+
+fn deduplicate_subs(subs: mut ref Vec[Subtitle], diff: i64) -> Result[(), Exc] {
+    // sorted(enumerate(subs), key=(content, start)): stable
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..subs.len() {
+        order.push(i);
+    }
+    let mut i = 1;
+    while i < order.len() {
+        let mut j = i;
+        loop {
+            if j == 0 {
+                break;
+            }
+            let a = subs[order[j]].clone();
+            let b = subs[order[j - 1]].clone();
+            if a.content < b.content or (a.content == b.content and a.start < b.start) {
+                order.swap(j, j - 1);
+                j -= 1;
+            } else {
+                break;
+            }
+        }
+        i += 1;
+    }
+    let mut remove: Vec[i64] = Vec.new();
+    for w in sliding_window(order.len(), 2, false) {
+        let cur = subs[order[w[0]]].clone();
+        let next = subs[order[w[1]]].clone();
+        if cur.content == next.content and (diff == 0 or cur.start + diff >= next.start) {
+            remove.push(order[w[1]]);
+        }
+    }
+    let mut offset = 0;
+    for idx in remove {
+        let mut k = idx - offset;
+        if k < 0 {
+            k += subs.len();
+        }
+        if k < 0 or k >= subs.len() {
+            return Err(exc("IndexError", "list assignment index out of range"));
+        }
+        subs.remove(k);
+        offset += 1;
+    }
+    Ok(())
+}
+
+fn attr_of(s: ref Subtitle, start: bool) -> i64 {
+    if start { s.start } else { s.end }
+}
+
+fn merge_subs(subs: mut ref Vec[Subtitle], diff: i64, start: bool, width: i64) -> Result[(), Exc] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..subs.len() {
+        order.push(i);
+    }
+    let mut i = 1;
+    while i < order.len() {
+        let mut j = i;
+        while j > 0 and attr_of(subs[order[j]], start) < attr_of(subs[order[j - 1]], start) {
+            order.swap(j, j - 1);
+            j -= 1;
+        }
+        i += 1;
+    }
+    for w in sliding_window(order.len(), width, true) {
+        if w.len() == 0 {
+            return Err(exc("IndexError", "tuple index out of range"));
+        }
+        let cur = attr_of(subs[order[w[0]]], start);
+        for k in 1..w.len() {
+            let f = order[w[k]];
+            if cur + diff > attr_of(subs[f], start) {
+                if start {
+                    subs[f].start = cur;
+                } else {
+                    subs[f].end = cur;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+// The script's work after set_basic_args: the subtitles to compose.
+fn tool_subs(p: ref Patterns, a: ref ToolArgs, texts: ref Vec[String], logs: mut ref Vec[String]) -> Result[Vec[Subtitle], Exc] {
+    let name = a.tool.clone();
+    if name == "mux" {
+        let mut muxed: Vec[Subtitle] = Vec.new();
+        for idx in 0..texts.len() {
+            for s in parse_all(p, texts[idx], a.ignore, mut logs)? {
+                let mut sub = s.clone();
+                if a.top {
+                    sub.content = if idx % 2 == 0 { f"{{\\an8}}{sub.content}" } else { f"{{\\an2}}{sub.content}" };
+                }
+                muxed.push(sub);
+            }
+        }
+        if a.no_tm or not a.top {
+            merge_subs(mut muxed, a.ms * 1000, true, a.width)?;
+            merge_subs(mut muxed, a.ms * 1000, false, a.width)?;
+        }
+        return Ok(muxed);
+    }
+    let mut subs = parse_all(p, texts[0], a.ignore, mut logs)?;
+    if name == "deduplicate" {
+        deduplicate_subs(mut subs, a.ms * 1000)?;
+    } else if name == "fixed-timeshift" {
+        let d = td_from_seconds(a.seconds);
+        for si in 0..subs.len() {
+            let mut s = subs[si].clone();
+            s.start += d;
+            s.end += d;
+            subs[si] = s;
+        }
+    } else if name == "linear-timeshift" {
+        // the correction was worked out before the input was read
+    } else if name == "lines-matching" {
+        for si in 0..subs.len() {
+            let mut s = subs[si].clone();
+            if a.per_sub {
+                if line_func(a.func, s.content) == a.invert {
+                    s.content = "".to_string();
+                }
+            } else {
+                let mut kept: Vec[String] = Vec.new();
+                for line in py_splitlines(s.content) {
+                    if line_func(a.func, line) != a.invert {
+                        kept.push(line.clone());
+                    }
+                }
+                s.content = kept.join("\n");
+            }
+            subs[si] = s;
+        }
+    } else if name == "process" {
+        let tags = re_compile("<[^<]+?>".to_string(), false);
+        for si in 0..subs.len() {
+            let mut s = subs[si].clone();
+            s.content = process_func(a.func, s.content, tags);
+            subs[si] = s;
+        }
+    }
+    Ok(subs)
+}
+
+// srt-<tool> with these arguments, as its main() runs.
+fn run_tool(p: ref Patterns, tool: ref String, argv: ref Vec[String], logs: mut ref Vec[String]) -> Result[(), Exc] {
+    let mut a = parse_args(tool, argv);
+    let mut angular = 0.0;
+    let mut linear = 0.0;
+    if tool == "linear-timeshift" {
+        let mut ms: Vec[f64] = Vec.new();
+        for s in a.stamps {
+            ms.push(ms_of(srt_timestamp_to_timedelta(p, s)?));
+        }
+        if ms[2] - ms[0] == 0.0 {
+            return Err(exc("ZeroDivisionError", "float division by zero"));
+        }
+        angular = (ms[3] - ms[1]) / (ms[2] - ms[0]);
+        linear = ms[3] - angular * ms[2];
+    }
+    // set_basic_args
+    if a.inplace {
+        a.output = a.inputs[0].clone();
+    }
+    let mut texts: Vec[String] = Vec.new();
+    for f in a.inputs {
+        texts.push(read_with(f, a.encoding)?);
+    }
+    let write_enc = if a.encoding == "" { "utf-8".to_string() } else { a.encoding.clone() };
+    write_with(a.output, "".to_string(), write_enc)?;
+    // parse() is lazy: these scripts read it inside compose()
+    let lazy = tool != "deduplicate" and tool != "mux";
+    let mut subs = match tool_subs(p, a, texts, mut logs) {
+        Ok(s) => s,
+        Err(e) => {
+            if lazy and e.kind == "SRTParseError" {
+                log(mut logs, "CRITICAL", "srt_tools.utils", "Parsing failed, maybe you need to pass a different encoding with --encoding?".to_string());
+            }
+            return Err(e);
+        }
+    };
+    if tool == "linear-timeshift" {
+        for si in 0..subs.len() {
+            let mut s = subs[si].clone();
+            s.start = round_half_even(ms_of(s.start) * angular + linear) * 1000;
+            s.end = round_half_even(ms_of(s.end) * angular + linear) * 1000;
+            subs[si] = s;
+        }
+    }
+    let mut o = compose_opts();
+    o.strict = a.strict;
+    let text = compose(p, subs, o, mut logs)?;
+    write_with(a.output, text, write_enc)
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+// CR shows as <CR>, so expected.out stays a plain LF text file.
+fn raw(out: mut ref String, text0: ref String) {
+    let text = text0.replace("\r", "<CR>");
+    out.push_str(text);
+    if text.len() > 0 and not text.ends_with("\n") {
+        out.push_str("\n\\ no newline at end\n");
+    }
+}
+
+fn emit_logs(out: mut ref String, logs: ref Vec[String]) {
+    for l in logs {
+        emit(mut out, l);
+    }
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// str.splitlines() for files whose lines end in \n.
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+fn read_srt(rel: ref String) -> String {
+    drop_bom(read_text(rel))
+}
+
+fn parse_job(p: ref Patterns, args: ref Vec[String], out: mut ref String) {
+    let ignore = args.len() > 1 and args[1] == "ignore";
+    let parsed = parse(p, read_srt(args[0]), ignore);
+    for e in parsed.events {
+        match e {
+            Ev.Sub(s) => emit(mut out, sub_repr(s)),
+            Ev.Log(l) => emit(mut out, l),
+        }
+    }
+    if let Some(e) = parsed.error {
+        emit(mut out, err_line(e));
+    }
+}
+
+fn compose_job(p: ref Patterns, args: ref Vec[String], out: mut ref String) {
+    let mut logs: Vec[String] = Vec.new();
+    let mut subs = match parse_all(p, read_srt(args[0]), false, mut logs) {
+        Ok(s) => s,
+        Err(e) => {
+            emit_logs(mut out, logs);
+            emit(mut out, err_line(e));
+            return;
+        }
+    };
+    let mut o = compose_opts();
+    for k in 1..args.len() {
+        let kv: Vec[Str] = args[k].splitn(2, "=").collect();
+        let key = kv[0];
+        let val = kv[1];
+        if key == "shift" {
+            let d = td_from_seconds(f64.parse(val).unwrap());
+            for i in 0..subs.len() {
+                subs[i].start += d;
+                subs[i].end += d;
+            }
+        } else if key == "reindex" {
+            o.reindex = val != "no";
+        } else if key == "start" {
+            o.start_index = i64.parse(val).unwrap();
+        } else if key == "strict" {
+            o.strict = val != "no";
+        } else if key == "eol" {
+            o.eol = if val == "crlf" { "\r\n".to_string() } else { "\n".to_string() };
+        }
+    }
+    let r = compose(p, subs, o, mut logs);
+    emit_logs(mut out, logs);
+    match r {
+        Ok(text) => raw(mut out, text),
+        Err(e) => emit(mut out, err_line(e)),
+    }
+}
+
+fn ts_job(p: ref Patterns, args: ref Vec[String], out: mut ref String) {
+    match srt_timestamp_to_timedelta(p, args[0]) {
+        Ok(d) => emit(mut out, f"{td_repr(d)} {timedelta_to_srt_timestamp(d)}"),
+        Err(e) => emit(mut out, err_line(e)),
+    }
+}
+
+fn legal_job(p: ref Patterns, args: ref Vec[String], out: mut ref String) {
+    let content = if args.len() > 0 { args[0].replace("\\n", "\n") } else { "".to_string() };
+    let mut logs: Vec[String] = Vec.new();
+    let legal = make_legal_content(p, content, mut logs);
+    emit_logs(mut out, logs);
+    emit(mut out, py_repr_str(legal));
+}
+
+fn tool_job(p: ref Patterns, args: ref Vec[String], out: mut ref String) {
+    let name = args[0].clone();
+    let mut argv: Vec[String] = Vec.new();
+    for i in 1..args.len() {
+        argv.push(args[i].clone());
+    }
+    let mut encoding = "utf-8".to_string();
+    let mut inplace = false;
+    let mut target = "out.srt".to_string();
+    for i in 0..argv.len() {
+        if argv[i] == "-e" {
+            encoding = argv[i + 1].clone();
+        }
+        if argv[i] == "-p" {
+            inplace = true;
+        }
+    }
+    if inplace {
+        for i in 0..argv.len() {
+            if argv[i] == "-i" {
+                target = argv[i + 1].clone();
+            }
+        }
+    } else {
+        argv.push("-o".to_string());
+        argv.push(target.clone());
+    }
+    let mut logs: Vec[String] = Vec.new();
+    let r = run_tool(p, name, argv, mut logs);
+    emit_logs(mut out, logs);
+    if let Err(e) = r {
+        emit(mut out, err_line(e));
+        return;
+    }
+    match read_with(target, if encoding == "latin-1" { encoding.clone() } else { "utf-8".to_string() }) {
+        Ok(text) => raw(mut out, text),
+        Err(e) => emit(mut out, err_line(e)),
+    }
+    if not inplace {
+        let _ = fs.remove_file(data_path(target));
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let p = patterns();
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|x| x.to_string()).collect();
+        emit(mut out, f"== {job.join(" ")}");
+        let mut args: Vec[String] = Vec.new();
+        for i in 1..job.len() {
+            args.push(job[i].clone());
+        }
+        let kind = job[0].clone();
+        if kind == "parse" {
+            parse_job(p, args, mut out);
+        } else if kind == "compose" {
+            compose_job(p, args, mut out);
+        } else if kind == "ts" {
+            ts_job(p, args, mut out);
+        } else if kind == "legal" {
+            legal_job(p, args, mut out);
+        } else {
+            tool_job(p, args, mut out);
+        }
+    }
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:03,500\n");
+    t.push_str("It is a capital mistake to theorise\n");
+    t.push_str("before one has data.\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:04,000 --> 00:00:06,250\n");
+    t.push_str("<i>Insensibly one begins to twist facts</i>\n");
+    t.push_str("to suit theories.\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:10,000 --> 00:00:12,000\n");
+    t.push_str("{\\an8}You see, but you do not observe.\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:07,000 --> 00:00:09,900\n");
+    t.push_str("The game is afoot, Watson!\n");
+    t.push_str("\n");
+    t.push_str("5\n");
+    t.push_str("00:01:02,003 --> 01:02:03,004\n");
+    t.push_str("- Holmes?\n");
+    t.push_str("- Yes?\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "basic.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("  \n");
+    v.push(DataFile { path: "blank.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("efbbbf310a30303a30303a30312c303030202d2d3e2030303a30303a30332c3030300a57686572652061726520796f75");
+    t.push_str("20676f696e673f0a0a320a30303a30303a30342c303030202d2d3e2030303a30303a30362c3030300a546f2042616b65");
+    t.push_str("72205374726565742e0a0a330a30303a30303a30382c303030202d2d3e2030303a30303a30392c3530300a436f6d6520");
+    t.push_str("6174206f6e636520696620636f6e76656e69656e742e0a0a340a30303a30303a31322c303030202d2d3e2030303a3030");
+    t.push_str("3a31342c3030300a496620696e636f6e76656e69656e742c20636f6d6520616c6c207468652073616d652e0a0a");
+    v.push(DataFile { path: "bom.srt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,200 --> 00:00:03,300\n");
+    t.push_str("你要去哪里？\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:04,500 --> 00:00:06,100\n");
+    t.push_str("去贝克街。\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:08,700 --> 00:00:09,400\n");
+    t.push_str("方便的话请马上来。\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:13,000 --> 00:00:14,400\n");
+    t.push_str("不方便也请来。\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "chs.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:02,000\n");
+    t.push_str("Ring ring.\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:02,500 --> 00:00:03,500\n");
+    t.push_str("Ring ring.\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:04,000 --> 00:00:05,000\n");
+    t.push_str("Hello?\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:09,000 --> 00:00:10,000\n");
+    t.push_str("Ring ring.\n");
+    t.push_str("\n");
+    t.push_str("5\n");
+    t.push_str("00:00:20,000 --> 00:00:21,000\n");
+    t.push_str("Hello?\n");
+    t.push_str("\n");
+    t.push_str("6\n");
+    t.push_str("00:00:21,400 --> 00:00:22,000\n");
+    t.push_str("Hello?\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "dupes.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "empty.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:03,000\n");
+    t.push_str("Where are you going?\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:04,000 --> 00:00:06,000\n");
+    t.push_str("To Baker Street.\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:08,000 --> 00:00:09,500\n");
+    t.push_str("Come at once if convenient.\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:12,000 --> 00:00:14,000\n");
+    t.push_str("If inconvenient, come all the same.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "eng.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:02,000\n");
+    t.push_str("Before the junk.\n");
+    t.push_str("\n");
+    t.push_str("this line is not a subtitle\n");
+    t.push_str("neither is this one\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:03,000 --> 00:00:04,000\n");
+    t.push_str("After the junk.\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:05,000 -> 00:00:06,000\n");
+    t.push_str("A broken arrow.\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:07,000 --> 00:00:08,000\n");
+    t.push_str("The last one.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "garbage.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\r\n");
+    t.push_str("00:00:01.500 --> 00:00:02.750\r\n");
+    t.push_str("Dots instead of commas.\r\n");
+    t.push_str("\r\n");
+    t.push_str("2\r\n");
+    t.push_str("00:00:03,000  -->  00:00:04,000\r\n");
+    t.push_str("Extra spaces around the arrow.\r\n");
+    t.push_str("\r\n");
+    t.push_str("00:00:05,000 --> 00:00:06,000\r\n");
+    t.push_str("No index at all.\r\n");
+    t.push_str("\r\n");
+    t.push_str("12.5\r\n");
+    t.push_str("00:00:07,000 - > 00:00:08,000 X1:100 X2:200 Y1:10 Y2:20\r\n");
+    t.push_str("A fractional index and a position.\r\n");
+    t.push_str("\r\n");
+    t.push_str("6\r\n");
+    t.push_str("00:00:09：000 --> 00:00:10，500\r\n");
+    t.push_str("全角の区切り。\r\n");
+    t.push_str("\r\n");
+    t.push_str("7\r\n");
+    t.push_str("00:00:11,000 --> 00:00:12\r\n");
+    t.push_str("A missing millisecond field.\r\n");
+    t.push_str("\r\n");
+    t.push_str("8\r\n");
+    t.push_str("00:00:13,000 --> 00:00:14,000\r\n");
+    t.push_str("A blank line\r\n");
+    t.push_str("\r\n");
+    t.push_str("inside the content.\r\n");
+    t.push_str("\r\n");
+    t.push_str("9\r\n");
+    t.push_str("00:00:15,000 --> 00:00:16,000\r\n");
+    t.push_str("No blank line at the end.");
+    v.push(DataFile { path: "inplace.srt".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("parse\tbasic.srt\n");
+    t.push_str("parse\tmessy.srt\n");
+    t.push_str("parse\tgarbage.srt\n");
+    t.push_str("parse\tgarbage.srt\tignore\n");
+    t.push_str("parse\tleading.srt\n");
+    t.push_str("parse\tleading.srt\tignore\n");
+    t.push_str("parse\tspaces.srt\n");
+    t.push_str("parse\tskips.srt\n");
+    t.push_str("parse\tlong.srt\n");
+    t.push_str("parse\tempty.srt\n");
+    t.push_str("parse\tblank.srt\n");
+    t.push_str("compose\tbasic.srt\n");
+    t.push_str("compose\tbasic.srt\treindex=no\n");
+    t.push_str("compose\tbasic.srt\tstart=100\n");
+    t.push_str("compose\tmessy.srt\tstrict=no\treindex=no\n");
+    t.push_str("compose\tmessy.srt\teol=crlf\n");
+    t.push_str("compose\tskips.srt\n");
+    t.push_str("compose\tskips.srt\treindex=no\n");
+    t.push_str("compose\tlong.srt\tshift=-3725.5\treindex=no\n");
+    t.push_str("compose\tlong.srt\tshift=86400\treindex=no\n");
+    t.push_str("ts\t01:23:04,000\n");
+    t.push_str("ts\t1:2:3\n");
+    t.push_str("ts\t00:00:01.5\n");
+    t.push_str("ts\t00:00:01,0005\n");
+    t.push_str("ts\t12：34：56，789\n");
+    t.push_str("ts\t00:01\n");
+    t.push_str("ts\taa:bb:cc,ddd\n");
+    t.push_str("ts\t999:59:59,999\n");
+    t.push_str("legal\tfoo\n");
+    t.push_str("legal\t\\nfoo\\n\\nbar\\n\n");
+    t.push_str("legal\ta\\n\\n\\n\\nb\n");
+    t.push_str("legal\t\\n\n");
+    t.push_str("legal\t\n");
+    t.push_str("tool\tnormalise\t-i\tbasic.srt\n");
+    t.push_str("tool\tnormalise\t-i\tmessy.srt\n");
+    t.push_str("tool\tnormalise\t-i\tmessy.srt\t--no-strict\n");
+    t.push_str("tool\tnormalise\t-i\tgarbage.srt\n");
+    t.push_str("tool\tnormalise\t-i\tgarbage.srt\t-c\n");
+    t.push_str("tool\tnormalise\t-i\tskips.srt\n");
+    t.push_str("tool\tnormalise\t-i\tbom.srt\n");
+    t.push_str("tool\tnormalise\t-i\tbom.srt\t-e\tutf-8\n");
+    t.push_str("tool\tnormalise\t-i\tlatin1.srt\t-e\tlatin-1\n");
+    t.push_str("tool\tnormalise\t-i\tempty.srt\n");
+    t.push_str("tool\tnormalise\t-i\tmany.srt\n");
+    t.push_str("tool\tfixed-timeshift\t-i\tbasic.srt\t--seconds\t2.5\n");
+    t.push_str("tool\tfixed-timeshift\t-i\tbasic.srt\t--seconds\t-1.75\n");
+    t.push_str("tool\tfixed-timeshift\t-i\tbasic.srt\t--seconds\t-5\n");
+    t.push_str("tool\tfixed-timeshift\t-i\tlong.srt\t--seconds\t0.0005\n");
+    t.push_str("tool\tfixed-timeshift\t-i\tmany.srt\t--seconds\t-30.1\n");
+    t.push_str("tool\tlinear-timeshift\t-i\tbasic.srt\t--f1\t00:00:01,000\t--t1\t00:00:01,000\t--f2\t00:00:02,000\t--t2\t00:00:03,000\n");
+    t.push_str("tool\tlinear-timeshift\t-i\tmany.srt\t--f1\t00:00:00,000\t--t1\t00:00:00,500\t--f2\t00:01:00,000\t--t2\t00:01:02,002\n");
+    t.push_str("tool\tlinear-timeshift\t-i\teng.srt\t--from-start\t00:00:01,000\t--to-start\t00:00:00,000\t--from-end\t00:00:12,000\t--to-end\t00:00:12,000\n");
+    t.push_str("tool\tlinear-timeshift\t-i\tbasic.srt\t--f1\t00:00:01,000\t--t1\t00:00:01,000\t--f2\t00:00:01,000\t--t2\t00:00:03,000\n");
+    t.push_str("tool\tdeduplicate\t-i\tdupes.srt\n");
+    t.push_str("tool\tdeduplicate\t-i\tdupes.srt\t-t\t500\n");
+    t.push_str("tool\tdeduplicate\t-i\tdupes.srt\t-t\t0\n");
+    t.push_str("tool\tdeduplicate\t-i\tdupes.srt\t--ms\t10000\n");
+    t.push_str("tool\tmux\t-i\teng.srt\t-i\tchs.srt\n");
+    t.push_str("tool\tmux\t-i\teng.srt\t-i\tchs.srt\t-t\n");
+    t.push_str("tool\tmux\t-i\teng.srt\t-i\tchs.srt\t-t\t--no-time-matching\n");
+    t.push_str("tool\tmux\t-i\teng.srt\t-i\tchs.srt\t--ms\t1000\t-w\t2\n");
+    t.push_str("tool\tmux\t-i\teng.srt\t-i\tchs.srt\t--no-time-matching\n");
+    t.push_str("tool\tmux\t-i\teng.srt\t-i\tchs.srt\t-i\tbasic.srt\t-t\n");
+    t.push_str("tool\tlines-matching\t-i\tmixed.srt\t-f\tlambda x: x.isdigit()\n");
+    t.push_str("tool\tlines-matching\t-i\tmixed.srt\t-f\tlambda x: x.isdigit()\t-v\n");
+    t.push_str("tool\tlines-matching\t-i\tmixed.srt\t-f\tlambda x: any('一' <= c <= '鿿' for c in x)\n");
+    t.push_str("tool\tlines-matching\t-i\tmixed.srt\t-f\tlambda x: any('一' <= c <= '鿿' for c in x)\t-v\n");
+    t.push_str("tool\tlines-matching\t-i\tmixed.srt\t-f\tlambda x: 'Holmes' in x\t-s\n");
+    t.push_str("tool\tlines-matching\t-i\tbasic.srt\t-f\tlambda x: x.startswith('-')\t-s\t-v\n");
+    t.push_str("tool\tlines-matching\t-i\tbasic.srt\t-f\tlambda x: x.startswith('-')\t--no-strict\n");
+    t.push_str("tool\tprocess\t-i\ttags.srt\t-m\tre\t-f\tlambda sub: re.sub(\"<[^<]+?>\", \"\", sub)\n");
+    t.push_str("tool\tprocess\t-i\tbasic.srt\t-m\tre\t-f\tlambda sub: re.sub(\"<[^<]+?>\", \"\", sub)\n");
+    t.push_str("tool\tprocess\t-i\tbasic.srt\t-f\tlambda sub: sub.upper()\n");
+    t.push_str("tool\tprocess\t-i\tmixed.srt\t-f\tlambda sub: sub.replace(\"\\n\", \" / \")\n");
+    t.push_str("tool\tprocess\t-i\teng.srt\t-f\tlambda sub: \"\"\n");
+    t.push_str("tool\tnormalise\t-i\tinplace.srt\t-p\n");
+    t.push_str("parse\tinplace.srt\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("310a30303a30303a30312c303030202d2d3e2030303a30303a30322c3030300a556e20636166e92c207327696c20766f");
+    t.push_str("757320706c61ee742e0a0a320a30303a30303a30332c303030202d2d3e2030303a30303a30342c3030300ac76120636f");
+    t.push_str("fb74652074726f6973206575726f732e2e2e206e6f6e2c20646575782e0a0a");
+    v.push(DataFile { path: "latin1.srt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("WEBVTT\n");
+    t.push_str("\n");
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:02,000\n");
+    t.push_str("A WebVTT header is not SRT.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "leading.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:59:58,000 --> 01:00:01,000\n");
+    t.push_str("Over the hour.\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("23:59:59,000 --> 24:00:01,500\n");
+    t.push_str("Over the day.\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("100:00:00,000 --> 100:00:02,000\n");
+    t.push_str("A hundred hours in.\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:00,000 --> 00:00:00,001\n");
+    t.push_str("One millisecond.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "long.srt".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:00,000 --> 00:00:01,500\n");
+    t.push_str("Line 1 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:02,037 --> 00:00:03,548\n");
+    t.push_str("Line 2 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:04,074 --> 00:00:05,596\n");
+    t.push_str("Line 3 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:06,111 --> 00:00:07,644\n");
+    t.push_str("Line 4 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("5\n");
+    t.push_str("00:00:08,148 --> 00:00:09,692\n");
+    t.push_str("Line 5 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("6\n");
+    t.push_str("00:00:10,185 --> 00:00:11,685\n");
+    t.push_str("Line 6 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("7\n");
+    t.push_str("00:00:12,222 --> 00:00:13,733\n");
+    t.push_str("Line 7 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("8\n");
+    t.push_str("00:00:14,000 --> 00:00:15,522\n");
+    t.push_str("Line 8 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("9\n");
+    t.push_str("00:00:16,037 --> 00:00:17,570\n");
+    t.push_str("Line 9 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("10\n");
+    t.push_str("00:00:18,074 --> 00:00:19,618\n");
+    t.push_str("Line 10 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("11\n");
+    t.push_str("00:00:20,111 --> 00:00:21,611\n");
+    t.push_str("Line 11 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("12\n");
+    t.push_str("00:00:22,148 --> 00:00:23,659\n");
+    t.push_str("Line 12 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("13\n");
+    t.push_str("00:00:24,185 --> 00:00:25,707\n");
+    t.push_str("Line 13 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("14\n");
+    t.push_str("00:00:26,222 --> 00:00:27,755\n");
+    t.push_str("Line 14 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("15\n");
+    t.push_str("00:00:28,000 --> 00:00:29,544\n");
+    t.push_str("Line 15 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("16\n");
+    t.push_str("00:00:30,037 --> 00:00:31,537\n");
+    t.push_str("Line 16 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("17\n");
+    t.push_str("00:00:32,074 --> 00:00:33,585\n");
+    t.push_str("Line 17 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("18\n");
+    t.push_str("00:00:34,111 --> 00:00:35,633\n");
+    t.push_str("Line 18 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("19\n");
+    t.push_str("00:00:36,148 --> 00:00:37,681\n");
+    t.push_str("Line 19 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("20\n");
+    t.push_str("00:00:38,185 --> 00:00:39,729\n");
+    t.push_str("Line 20 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("21\n");
+    t.push_str("00:00:40,222 --> 00:00:41,722\n");
+    t.push_str("Line 21 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("22\n");
+    t.push_str("00:00:42,000 --> 00:00:43,511\n");
+    t.push_str("Line 22 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("23\n");
+    t.push_str("00:00:44,037 --> 00:00:45,559\n");
+    t.push_str("Line 23 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("24\n");
+    t.push_str("00:00:46,074 --> 00:00:47,607\n");
+    t.push_str("Line 24 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("25\n");
+    t.push_str("00:00:48,111 --> 00:00:49,655\n");
+    t.push_str("Line 25 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("26\n");
+    t.push_str("00:00:50,148 --> 00:00:51,648\n");
+    t.push_str("Line 26 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("27\n");
+    t.push_str("00:00:52,185 --> 00:00:53,696\n");
+    t.push_str("Line 27 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("28\n");
+    t.push_str("00:00:54,222 --> 00:00:55,744\n");
+    t.push_str("Line 28 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("29\n");
+    t.push_str("00:00:56,000 --> 00:00:57,533\n");
+    t.push_str("Line 29 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("30\n");
+    t.push_str("00:00:58,037 --> 00:00:59,581\n");
+    t.push_str("Line 30 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("31\n");
+    t.push_str("00:01:00,074 --> 00:01:01,574\n");
+    t.push_str("Line 31 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("32\n");
+    t.push_str("00:01:02,111 --> 00:01:03,622\n");
+    t.push_str("Line 32 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("33\n");
+    t.push_str("00:01:04,148 --> 00:01:05,670\n");
+    t.push_str("Line 33 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("34\n");
+    t.push_str("00:01:06,185 --> 00:01:07,718\n");
+    t.push_str("Line 34 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("35\n");
+    t.push_str("00:01:08,222 --> 00:01:09,766\n");
+    t.push_str("Line 35 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("36\n");
+    t.push_str("00:01:10,000 --> 00:01:11,500\n");
+    t.push_str("Line 36 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("37\n");
+    t.push_str("00:01:12,037 --> 00:01:13,548\n");
+    t.push_str("Line 37 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("38\n");
+    t.push_str("00:01:14,074 --> 00:01:15,596\n");
+    t.push_str("Line 38 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("39\n");
+    t.push_str("00:01:16,111 --> 00:01:17,644\n");
+    t.push_str("Line 39 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("40\n");
+    t.push_str("00:01:18,148 --> 00:01:19,692\n");
+    t.push_str("Line 40 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("41\n");
+    t.push_str("00:01:20,185 --> 00:01:21,685\n");
+    t.push_str("Line 41 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("42\n");
+    t.push_str("00:01:22,222 --> 00:01:23,733\n");
+    t.push_str("Line 42 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("43\n");
+    t.push_str("00:01:24,000 --> 00:01:25,522\n");
+    t.push_str("Line 43 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("44\n");
+    t.push_str("00:01:26,037 --> 00:01:27,570\n");
+    t.push_str("Line 44 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("45\n");
+    t.push_str("00:01:28,074 --> 00:01:29,618\n");
+    t.push_str("Line 45 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("46\n");
+    t.push_str("00:01:30,111 --> 00:01:31,611\n");
+    t.push_str("Line 46 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("47\n");
+    t.push_str("00:01:32,148 --> 00:01:33,659\n");
+    t.push_str("Line 47 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("48\n");
+    t.push_str("00:01:34,185 --> 00:01:35,707\n");
+    t.push_str("Line 48 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("49\n");
+    t.push_str("00:01:36,222 --> 00:01:37,755\n");
+    t.push_str("Line 49 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("50\n");
+    t.push_str("00:01:38,000 --> 00:01:39,544\n");
+    t.push_str("Line 50 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("51\n");
+    t.push_str("00:01:40,037 --> 00:01:41,537\n");
+    t.push_str("Line 51 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("52\n");
+    t.push_str("00:01:42,074 --> 00:01:43,585\n");
+    t.push_str("Line 52 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("53\n");
+    t.push_str("00:01:44,111 --> 00:01:45,633\n");
+    t.push_str("Line 53 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("54\n");
+    t.push_str("00:01:46,148 --> 00:01:47,681\n");
+    t.push_str("Line 54 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("55\n");
+    t.push_str("00:01:48,185 --> 00:01:49,729\n");
+    t.push_str("Line 55 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("56\n");
+    t.push_str("00:01:50,222 --> 00:01:51,722\n");
+    t.push_str("Line 56 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("57\n");
+    t.push_str("00:01:52,000 --> 00:01:53,511\n");
+    t.push_str("Line 57 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("58\n");
+    t.push_str("00:01:54,037 --> 00:01:55,559\n");
+    t.push_str("Line 58 of the long file.\n");
+    t.push_str("Second line.\n");
+    t.push_str("\n");
+    t.push_str("59\n");
+    t.push_str("00:01:56,074 --> 00:01:57,607\n");
+    t.push_str("Line 59 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    t.push_str("60\n");
+    t.push_str("00:01:58,111 --> 00:01:59,655\n");
+    t.push_str("Line 60 of the long file.\n");
+    t.push_str("-\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "many.srt".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("efbbbf310d0a30303a30303a30312e353030202d2d3e2030303a30303a30322e3735300d0a446f747320696e73746561");
+    t.push_str("64206f6620636f6d6d61732e0d0a0d0a320d0a30303a30303a30332c30303020202d2d3e202030303a30303a30342c30");
+    t.push_str("30300d0a4578747261207370616365732061726f756e6420746865206172726f772e0d0a0d0a30303a30303a30352c30");
+    t.push_str("3030202d2d3e2030303a30303a30362c3030300d0a4e6f20696e64657820617420616c6c2e0d0a0d0a31322e350d0a30");
+    t.push_str("303a30303a30372c303030202d203e2030303a30303a30382c3030302058313a3130302058323a3230302059313a3130");
+    t.push_str("2059323a32300d0a41206672616374696f6e616c20696e64657820616e64206120706f736974696f6e2e0d0a0d0a360d");
+    t.push_str("0a30303a30303a3039efbc9a303030202d2d3e2030303a30303a3130efbc8c3530300d0ae585a8e8a792e381aee58cba");
+    t.push_str("e58887e3828ae380820d0a0d0a370d0a30303a30303a31312c303030202d2d3e2030303a30303a31320d0a41206d6973");
+    t.push_str("73696e67206d696c6c697365636f6e64206669656c642e0d0a0d0a380d0a30303a30303a31332c303030202d2d3e2030");
+    t.push_str("303a30303a31342c3030300d0a4120626c616e6b206c696e650d0a0d0a696e736964652074686520636f6e74656e742e");
+    t.push_str("0d0a0d0a390d0a30303a30303a31352c303030202d2d3e2030303a30303a31362c3030300d0a4e6f20626c616e6b206c");
+    t.push_str("696e652061742074686520656e642e");
+    v.push(DataFile { path: "messy.srt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:03,000\n");
+    t.push_str("你好\n");
+    t.push_str("Hello\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:04,000 --> 00:00:06,000\n");
+    t.push_str("2023\n");
+    t.push_str("Only a year.\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:07,000 --> 00:00:08,000\n");
+    t.push_str("- 走吧\n");
+    t.push_str("- Let's go.\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:09,000 --> 00:00:10,000\n");
+    t.push_str("１２３\n");
+    t.push_str("Holmes again.\n");
+    t.push_str("\n");
+    t.push_str("5\n");
+    t.push_str("00:00:11,000 --> 00:00:12,000\n");
+    t.push_str("Nothing to see here.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "mixed.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:02,000\n");
+    t.push_str("Kept.\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:03,000 --> 00:00:03,000\n");
+    t.push_str("Zero length.\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:05,000 --> 00:00:04,000\n");
+    t.push_str("Ends before it starts.\n");
+    t.push_str("\n");
+    t.push_str("4\n");
+    t.push_str("00:00:06,000 --> 00:00:07,000\n");
+    t.push_str("\n");
+    t.push_str("\n");
+    t.push_str("5\n");
+    t.push_str("00:00:08,000 --> 00:00:09,000\n");
+    t.push_str("\n");
+    t.push_str("6\n");
+    t.push_str("00:00:10,000 --> 00:00:11,000\n");
+    t.push_str("Kept too.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "skips.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\n");
+    t.push_str(" \n");
+    t.push_str("\t\n");
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:03,500\n");
+    t.push_str("It is a capital mistake to theorise\n");
+    t.push_str("before one has data.\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "spaces.srt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1\n");
+    t.push_str("00:00:01,000 --> 00:00:02,000\n");
+    t.push_str("<i>Italic</i> and <b>bold</b>.\n");
+    t.push_str("\n");
+    t.push_str("2\n");
+    t.push_str("00:00:03,000 --> 00:00:04,000\n");
+    t.push_str("<font color=\"#ffff00\">Yellow</font> <<odd>> tags\n");
+    t.push_str("\n");
+    t.push_str("3\n");
+    t.push_str("00:00:05,000 --> 00:00:06,000\n");
+    t.push_str("<i></i>\n");
+    t.push_str("\n");
+    v.push(DataFile { path: "tags.srt".to_string(), hex: false, body: t });
+}
