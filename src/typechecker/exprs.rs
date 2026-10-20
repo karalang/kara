@@ -9306,6 +9306,12 @@ impl<'a> super::TypeChecker<'a> {
                     for (e, t) in exprs.iter().zip(types.iter()) {
                         self.warn_partial_move_of_drop_struct(e, t);
                     }
+                    // B-2026-10-20-1: a later check may type its string
+                    // literals as `Str` (`check_assignable`).
+                    self.tuple_literal_spans.insert(
+                        crate::resolver::SpanKey::from_span(&expr.span),
+                        (expr.id, exprs.iter().map(|e| e.span).collect()),
+                    );
                     Type::Tuple(types)
                 }
             }

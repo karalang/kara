@@ -3049,6 +3049,10 @@ pub struct TypeChecker<'a> {
     /// (`String`), so a slot that wants a `Str` can still take one as a
     /// `Str` wherever its check is an infer-then-compare.
     pub(super) string_literal_spans: FxHashMap<SpanKey, crate::ids::NodeId>,
+    /// B-2026-10-20-1 — the tuple literals typed by synthesis, with their
+    /// elements' spans, so a slot that wants a tuple with a `Str` in it can
+    /// still take a literal there as a `Str`.
+    pub(super) tuple_literal_spans: FxHashMap<SpanKey, (crate::ids::NodeId, Vec<Span>)>,
     pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
     /// B-2026-08-26-21 — index expressions whose read produces a FRESH
     /// value rather than an alias of a stored element: a range slice
@@ -3486,6 +3490,7 @@ impl<'a> TypeChecker<'a> {
             cast_source_unsigned: FxHashSet::default(),
             weak_elem_store_sites: FxHashSet::default(),
             string_literal_spans: FxHashMap::default(),
+            tuple_literal_spans: FxHashMap::default(),
             weak_elem_read_sites: FxHashSet::default(),
             index_read_is_fresh_value: FxHashSet::default(),
             call_type_subs_mangle: FxHashMap::default(),
@@ -6087,6 +6092,64 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// B-2026-10-20-1 — a tuple literal checked against a tuple slot whose
+    /// check inferred it first (`v.push(("a", "b"))` on a `Vec[(Str, Str)]`,
+    /// a generic argument): each string literal under a `Str` slot is a
+    /// `Str`, as a bare one is. Taken only when every other element already
+    /// has its slot's type, so nothing else is accepted that was not before.
+    fn retype_tuple_literal(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        let Type::Tuple(fs) = found else {
+            return false;
+        };
+        let want = inference::resolve_type_var_top(expected, &self.env.substitutions);
+        let want = match want {
+            Type::Ref(inner) => *inner,
+            t => t,
+        };
+        let Type::Tuple(es) = &want else {
+            return false;
+        };
+        let Some((id, elems)) = self
+            .tuple_literal_spans
+            .get(&SpanKey::from_span(&span))
+            .cloned()
+        else {
+            return false;
+        };
+        if es.len() != fs.len() || elems.len() != fs.len() {
+            return false;
+        }
+        let mut retype = Vec::new();
+        for ((e, f), at) in es.iter().zip(fs).zip(&elems) {
+            let e = inference::resolve_type_var_top(e, &self.env.substitutions);
+            if &e == f {
+                continue;
+            }
+            let key = SpanKey::from_span(at);
+            match (f, &e) {
+                (Type::Str, view) if exprs::is_str_view(view) => {
+                    let Some(lit) = self.string_literal_spans.get(&key).copied() else {
+                        return false;
+                    };
+                    retype.push((*at, lit, e.clone()));
+                }
+                (Type::Tuple(_), Type::Tuple(_)) if self.tuple_literal_spans.contains_key(&key) => {
+                    if !self.retype_tuple_literal(&e, f, *at) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        for (at, lit, view) in retype {
+            self.record_expr_type(&at, &view);
+            self.record_node_type(lit, &view);
+        }
+        self.record_expr_type(&span, &want);
+        self.record_node_type(id, &want);
+        true
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         // design.md § String literals: a literal is a `Str` wherever a `Str`
         // is expected, including the slots whose check infers the argument
@@ -6111,6 +6174,9 @@ impl<'a> TypeChecker<'a> {
                 self.record_node_type(id, &view);
                 return true;
             }
+        }
+        if self.retype_tuple_literal(expected, found, span) {
+            return true;
         }
         // B-2026-10-01-53 — a `match` arm handing back a binding whose type
         // is a scrutinee param no argument fixed (`Err(e) => e` over

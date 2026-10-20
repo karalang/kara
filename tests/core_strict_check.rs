@@ -10199,3 +10199,42 @@ fn main() {
         "out = ref t;",
     );
 }
+
+/// B-2026-10-20-1: a tuple literal's string literals are `Str` under a
+/// tuple slot with `Str` in it, also where the slot's check infers the
+/// argument first: a method argument, a nested tuple, a user method and a
+/// generic call. A `String` value in that position is still refused.
+#[test]
+fn a_tuple_literal_takes_str_from_its_slot() {
+    accepted(
+        "tuple-literal-str-slot",
+        "fn take[T](x: own T) -> T { x }\n\
+         struct Z { names: Vec[(Str, i64)] }\n\
+         impl Z { fn add(mut ref self, p: own (Str, i64)) { self.names.push(p); } }\n\
+         fn main() {\n\
+             let mut v: Vec[(Str, Str)] = Vec.new();\n\
+             v.push((\"a\", \"b\"));\n\
+             let mut w: Vec[(Str, i64)] = Vec.new();\n\
+             w.push((\"e\", 1));\n\
+             let mut n: Vec[((Str, i64), Str)] = Vec.new();\n\
+             n.push(((\"x\", 2), \"y\"));\n\
+             let t: (Str, Str) = take((\"c\", \"d\"));\n\
+             let mut z = Z { names: Vec.new() };\n\
+             z.add((\"q\", 3));\n\
+             println(f\"{v[0].0} {w[0].1} {n[0].1} {t.0} {z.names[0].0}\");\n\
+         }\n",
+    );
+    let (dir, path) = fixture(
+        "tuple-literal-string-value",
+        "fn main() {\n    let s = \"x\".to_string();\n    \
+         let mut v: Vec[(Str, Str)] = Vec.new();\n    v.push((s, \"b\"));\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(
+        err.contains("expected '(StringSlice, StringSlice)'"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
