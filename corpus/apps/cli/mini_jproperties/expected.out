@@ -1,0 +1,593 @@
+== load application.properties utf-8
+22 properties
+'spring.application.name' = 'billing-service'
+'server.port' = '9443'
+'server.servlet.context-path' = '/api'
+'spring.datasource.url' = 'jdbc:postgresql://db.internal:5432/billing?sslmode=require'
+'spring.datasource.username' = 'billing'
+'spring.datasource.password' = ''
+'spring.jpa.properties.hibernate.dialect' = 'org.hibernate.dialect.PostgreSQLDialect'
+'management.endpoints.web.exposure.include' = 'health,info,prometheus,metrics'
+'logging.pattern.console' = '%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n'
+'app.greeting' = 'Grüße aus Köln'
+'app.windows-path' = 'C:\\billing\\data'
+'app.regex' = '^\\d{3}-\\d{4}$'
+'app.key with spaces' = 'spaced key'
+'app.equals=sign' = 'value with = inside'
+'app.colon:key' = 'value: with colon'
+'app.tab\tkey' = 'tab in key'
+'app.empty' = ''
+'app.indented' = 'leading spaces are dropped'
+'app.trailing' = 'trailing spaces kept   '
+'app.unicode' = 'café ☺ 😀'
+'app.newline' = 'first\nsecond\tthird\rfourth\x0cform'
+'app.literal-backslash' = 'qz'
+== load messages_de_utf8.properties utf-8
+3 properties
+'greeting' = 'Grüß Gott'
+'farewell' = 'Auf Wiedersehen, bis später!'
+'price' = 'Preis: 12,50 €'
+== load messages_ja.properties utf-8
+3 properties
+'greeting' = 'こんにちは'
+'farewell' = 'さようなら'
+'title' = '設定'
+== load gradle.properties utf-8
+5 properties
+'org.gradle.jvmargs' = '-Xmx2g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8'
+'org.gradle.parallel' = 'true'
+'org.gradle.caching' = 'true'
+'android.useAndroidX' = 'true'
+'kotlin.code.style' = 'official'
+== load log4j.properties utf-8
+9 properties
+'log4j.rootLogger' = 'INFO, stdout, R'
+'log4j.appender.stdout' = 'org.apache.log4j.ConsoleAppender'
+'log4j.appender.stdout.layout' = 'org.apache.log4j.PatternLayout'
+'log4j.appender.stdout.layout.ConversionPattern' = '%5p [%t] (%F:%L) - %m%n'
+'log4j.appender.R' = 'org.apache.log4j.RollingFileAppender'
+'log4j.appender.R.File' = '/var/log/app/app.log'
+'log4j.appender.R.MaxFileSize' = '100KB'
+'log4j.appender.R.MaxBackupIndex' = '5'
+'log4j.logger.com.example.db' = 'DEBUG'
+== load meta.properties utf-8
+3 properties
+'feature.checkout.enabled' = 'true'
+  meta {'owner': 'platform-team', 'since': '2.4'}
+'feature.search.enabled' = 'false'
+'feature.search.legacy' = 'true'
+  meta {'deprecated': 'yes', 'replacement': 'feature.search.v2'}
+== load edge.properties utf-8
+15 properties
+'key1' = 'value after tab'
+'key2' = 'value after form feed'
+'key3' = ''
+'key4' = ''
+'' = 'another empty key'
+'multi' = 'one two '
+'after' = 'blank line ended the continuation'
+'continuedkey' = 'continued key'
+'crlf' = 'line one line two'
+'cronly' = 'a'
+'next' = 'b'
+'dup' = 'second'
+'hexquirks' = 'ABКJ\x05'
+'bom' = 'ab\ufffec'
+'backslash-eof' = 'value'
+== load noeol.properties utf-8
+1 properties
+'no.newline.at.end' = 'yes'
+== load empty.properties utf-8
+0 properties
+== load truncated.properties utf-8
+1 properties
+'name' = 'caf'
+== load messages_de.properties iso-8859-1
+3 properties
+'greeting' = 'Grüß Gott'
+'farewell' = 'Auf Wiedersehen, bis später!'
+'price' = 'Preis: 12,50 EUR'
+== load messages_de.properties utf-8
+error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe4 in position 0: invalid continuation byte
+0 properties
+== load messages_de_utf8.properties iso-8859-1
+3 properties
+'greeting' = 'GrÃ¼Ã\x9f Gott'
+'farewell' = 'Auf Wiedersehen, bis spÃ¤ter!'
+'price' = 'Preis: 12,50 â\x82¬'
+== load badbyte.properties utf-8
+error: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+1 properties
+'name' = 'ok'
+== load badbyte.properties ascii
+error: UnicodeDecodeError: 'ascii' codec can't decode byte 0xff in position 0: ordinal not in range(128)
+1 properties
+'name' = 'ok'
+== load application.properties utf-8 noescape
+23 properties
+'spring.application.name' = 'billing-service'
+'server.port' = '9443'
+'server.servlet.context-path' = '/api'
+'spring.datasource.url' = 'jdbc:postgresql://db.internal:5432/billing?sslmode=require'
+'spring.datasource.username' = 'billing'
+'spring.datasource.password' = ''
+'spring.jpa.properties.hibernate.dialect' = 'org.hibernate.dialect.PostgreSQLDialect'
+'management.endpoints.web.exposure.include' = 'health,info,\\'
+'prometheus,metrics' = ''
+'logging.pattern.console' = '%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n'
+'app.greeting' = 'Grüße aus Köln'
+'app.windows-path' = 'C:\\\\billing\\\\data'
+'app.regex' = '^\\\\d{3}-\\\\d{4}$'
+'app.key with spaces' = 'spaced key'
+'app.equals=sign' = 'value with = inside'
+'app.colon:key' = 'value: with colon'
+'app.tab\tkey' = 'tab in key'
+'app.empty' = ''
+'app.indented' = 'leading spaces are dropped'
+'app.trailing' = 'trailing spaces kept   '
+'app.unicode' = 'caf\\u00e9 \\u263a \\uD83D\\uDE00'
+'app.newline' = 'first\\nsecond\\tthird\\rfourth\\fform'
+'app.literal-backslash' = '\\q\\z'
+== load edge.properties utf-8 noescape
+17 properties
+'key1' = 'value after tab'
+'key2' = 'value after form feed'
+'key3' = ''
+'key4' = ''
+'' = 'another empty key'
+'multi' = 'one \\'
+'two' = '\\'
+'after' = 'blank line ended the continuation'
+'continuedkey' = 'continued key'
+'crlf' = 'line one \\'
+'line' = 'two'
+'cronly' = 'a'
+'next' = 'b'
+'dup' = 'second'
+'hexquirks' = '\\u0x41\\u 42 \\u4_1a\\u+04a\\u0X_5'
+'bom' = 'a\\uFEFFb\\uFFFEc'
+'backslash-eof' = 'value\\'
+== load meta.properties utf-8 metadoc
+3 properties
+'feature.checkout.enabled' = 'true'
+  meta {'owner': 'platform-team', 'since': '2.4', '_doc': 'documentation for the checkout flag\n  indented doc line\n'}
+'feature.search.enabled' = 'false'
+'feature.search.legacy' = 'true'
+  meta {'deprecated': 'yes', 'replacement': 'feature.search.v2', '_doc': 'a bang comment after the legacy flag\n'}
+== load broken/badunicode.properties utf-8
+error: ParseError: Parse error in <unknown>:2: invalid literal for int() with base 16: '12g4'
+1 properties
+'a' = 'ok'
+== load broken/emptymeta.properties utf-8
+error: ParseError: Parse error in <unknown>:2: Empty key in metadata key-value pair
+0 properties
+== load broken/highbad.properties utf-8
+error: ParseError: Parse error in <unknown>:1: invalid literal for int() with base 16: 'ZZZZ'
+0 properties
+== load broken/highonly.properties utf-8
+error: ParseError: Parse error in <unknown>:1: High surrogate unicode escape sequence not followed by another (low surrogate) unicode escape sequence.
+0 properties
+== load broken/highthenhigh.properties utf-8
+error: ParseError: Parse error in <unknown>:1: Low surrogate unicode escape sequence expected after high surrogate escape sequence, but got a non-low-surrogate unicode escape sequence.
+0 properties
+== load broken/keyunicode.properties utf-8
+error: ParseError: Parse error in <unknown>:1: invalid literal for int() with base 16: 'XYZ1'
+0 properties
+== load broken/lowonly.properties utf-8
+error: ParseError: Parse error in <unknown>:1: 'utf-32-le' codec can't decode bytes in position 0-3: code point in surrogate code point range(0xd800, 0xe000)
+0 properties
+== load broken/shortunicode.properties utf-8
+error: ParseError: Parse error in <unknown>:1: 
+0 properties
+== load broken/udecode.properties utf-8
+error: ParseError: Parse error in <unknown>:1: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+0 properties
+== load broken/udecode2.properties utf-8
+error: ParseError: Parse error in <unknown>:1: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+0 properties
+== store application.properties utf-8 iso-8859-1 strict
+910 bytes
+| spring.application.name=billing-service
+| server.port=9443
+| server.servlet.context-path=/api
+| spring.datasource.url=jdbc\:postgresql\://db.internal\:5432/billing?sslmode\=require
+| spring.datasource.username=billing
+| spring.datasource.password=
+| spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+| management.endpoints.web.exposure.include=health,info,prometheus,metrics
+| logging.pattern.console=%d{HH\:mm\:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+| app.greeting=Gr\u00fc\u00dfe aus K\u00f6ln
+| app.windows-path=C\:\\billing\\data
+| app.regex=^\\d{3}-\\d{4}$
+| app.key\ with\ spaces=spaced key
+| app.equals\=sign=value with \= inside
+| app.colon\:key=value\: with colon
+| app.tab\tkey=tab in key
+| app.empty=
+| app.indented=leading spaces are dropped
+| app.trailing=trailing spaces kept   
+| app.unicode=caf\u00e9 \u263a \ud83d\ude00
+| app.newline=first\nsecond\tthird\rfourth\fform
+| app.literal-backslash=qz
+| 
+== store application.properties utf-8 utf-8 loose
+883 bytes
+| spring.application.name=billing-service
+| server.port=9443
+| server.servlet.context-path=/api
+| spring.datasource.url=jdbc\:postgresql\://db.internal\:5432/billing?sslmode\=require
+| spring.datasource.username=billing
+| spring.datasource.password=
+| spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+| management.endpoints.web.exposure.include=health,info,prometheus,metrics
+| logging.pattern.console=%d{HH\:mm\:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+| app.greeting=Grüße aus Köln
+| app.windows-path=C\:\\billing\\data
+| app.regex=^\\d{3}-\\d{4}$
+| app.key\ with\ spaces=spaced key
+| app.equals\=sign=value with \= inside
+| app.colon\:key=value\: with colon
+| app.tab\tkey=tab in key
+| app.empty=
+| app.indented=leading spaces are dropped
+| app.trailing=trailing spaces kept   
+| app.unicode=café ☺ 😀
+| app.newline=first\nsecond\tthird\rfourth\fform
+| app.literal-backslash=qz
+| 
+== store edge.properties utf-8 iso-8859-1 strict
+271 bytes
+| key1=value after tab
+| key2=value after form feed
+| key3=
+| key4=
+| =another empty key
+| multi=one two 
+| after=blank line ended the continuation
+| continuedkey=continued key
+| crlf=line one line two
+| cronly=a
+| next=b
+| dup=second
+| hexquirks=AB\u041aJ\u0005
+| bom=ab\ufffec
+| backslash-eof=value
+| 
+== store edge.properties utf-8 utf-8 loose
+259 bytes
+| key1=value after tab
+| key2=value after form feed
+| key3=
+| key4=
+| =another empty key
+| multi=one two 
+| after=blank line ended the continuation
+| continuedkey=continued key
+| crlf=line one line two
+| cronly=a
+| next=b
+| dup=second
+| hexquirks=ABКJ<x05>
+| bom=ab￾c
+| backslash-eof=value
+| 
+== store meta.properties utf-8 iso-8859-1 strict
+86 bytes
+| feature.checkout.enabled=true
+| feature.search.enabled=false
+| feature.search.legacy=true
+| 
+== store meta.properties utf-8 utf-8 loose
+86 bytes
+| feature.checkout.enabled=true
+| feature.search.enabled=false
+| feature.search.legacy=true
+| 
+== store messages_ja.properties utf-8 iso-8859-1 strict
+99 bytes
+| greeting=\u3053\u3093\u306b\u3061\u306f
+| farewell=\u3055\u3088\u3046\u306a\u3089
+| title=\u8a2d\u5b9a
+| 
+== store messages_ja.properties utf-8 utf-8 loose
+63 bytes
+| greeting=こんにちは
+| farewell=さようなら
+| title=設定
+| 
+== store application.properties utf-8 ascii loose
+910 bytes
+| spring.application.name=billing-service
+| server.port=9443
+| server.servlet.context-path=/api
+| spring.datasource.url=jdbc\:postgresql\://db.internal\:5432/billing?sslmode\=require
+| spring.datasource.username=billing
+| spring.datasource.password=
+| spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+| management.endpoints.web.exposure.include=health,info,prometheus,metrics
+| logging.pattern.console=%d{HH\:mm\:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+| app.greeting=Gr\u00fc\u00dfe aus K\u00f6ln
+| app.windows-path=C\:\\billing\\data
+| app.regex=^\\d{3}-\\d{4}$
+| app.key\ with\ spaces=spaced key
+| app.equals\=sign=value with \= inside
+| app.colon\:key=value\: with colon
+| app.tab\tkey=tab in key
+| app.empty=
+| app.indented=leading spaces are dropped
+| app.trailing=trailing spaces kept   
+| app.unicode=caf\u00e9 \u263a \ud83d\ude00
+| app.newline=first\nsecond\tthird\rfourth\fform
+| app.literal-backslash=qz
+| 
+== store application.properties utf-8 iso-8859-1 loose
+890 bytes
+| spring.application.name=billing-service
+| server.port=9443
+| server.servlet.context-path=/api
+| spring.datasource.url=jdbc\:postgresql\://db.internal\:5432/billing?sslmode\=require
+| spring.datasource.username=billing
+| spring.datasource.password=
+| spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+| management.endpoints.web.exposure.include=health,info,prometheus,metrics
+| logging.pattern.console=%d{HH\:mm\:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+| app.greeting=Grüße aus Köln
+| app.windows-path=C\:\\billing\\data
+| app.regex=^\\d{3}-\\d{4}$
+| app.key\ with\ spaces=spaced key
+| app.equals\=sign=value with \= inside
+| app.colon\:key=value\: with colon
+| app.tab\tkey=tab in key
+| app.empty=
+| app.indented=leading spaces are dropped
+| app.trailing=trailing spaces kept   
+| app.unicode=café \u263a \ud83d\ude00
+| app.newline=first\nsecond\tthird\rfourth\fform
+| app.literal-backslash=qz
+| 
+== store application.properties utf-8 utf-8 loose noescape
+894 bytes
+| spring.application.name=billing-service
+| server.port=9443
+| server.servlet.context-path=/api
+| spring.datasource.url=jdbc:postgresql://db.internal:5432/billing?sslmode=require
+| spring.datasource.username=billing
+| spring.datasource.password=
+| spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+| management.endpoints.web.exposure.include=health,info,\
+| prometheus,metrics=
+| logging.pattern.console=%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+| app.greeting=Grüße aus Köln
+| app.windows-path=C:\\billing\\data
+| app.regex=^\\d{3}-\\d{4}$
+| app.key\ with\ spaces=spaced key
+| app.equals\=sign=value with = inside
+| app.colon\:key=value: with colon
+| app.tab\tkey=tab in key
+| app.empty=
+| app.indented=leading spaces are dropped
+| app.trailing=trailing spaces kept   
+| app.unicode=caf\u00e9 \u263a \uD83D\uDE00
+| app.newline=first\nsecond\tthird\rfourth\fform
+| app.literal-backslash=\q\z
+| 
+== store edge.properties utf-8 utf-8 strict noescape
+298 bytes
+| key1=value after tab
+| key2=value after form feed
+| key3=
+| key4=
+| =another empty key
+| multi=one \
+| two=\
+| after=blank line ended the continuation
+| continuedkey=continued key
+| crlf=line one \
+| line=two
+| cronly=a
+| next=b
+| dup=second
+| hexquirks=\u0x41\u 42 \u4_1a\u+04a\u0X_5
+| bom=a\uFEFFb\uFFFEc
+| backslash-eof=value\
+| 
+== store meta.properties utf-8 utf-8 loose meta
+173 bytes
+| #: owner=platform-team
+| #: since=2.4
+| feature.checkout.enabled=true
+| feature.search.enabled=false
+| #: deprecated=yes
+| #: replacement=feature.search.v2
+| feature.search.legacy=true
+| 
+== store meta.properties utf-8 utf-8 loose meta metadoc
+287 bytes
+| #: _doc=documentation for the checkout flag\n  indented doc line\n
+| #: owner=platform-team
+| #: since=2.4
+| feature.checkout.enabled=true
+| feature.search.enabled=false
+| #: _doc=a bang comment after the legacy flag\n
+| #: deprecated=yes
+| #: replacement=feature.search.v2
+| feature.search.legacy=true
+| 
+== store gradle.properties utf-8 utf-8 loose comments=Built by CI\r\nDo not edit\n#keep\n:colon line\r!bang
+230 bytes
+| #Built by CI
+| #Do not edit
+| #keep
+| #\:colon line
+| !bang
+| org.gradle.jvmargs=-Xmx2g -XX\:MaxMetaspaceSize\=512m -Dfile.encoding\=UTF-8
+| org.gradle.parallel=true
+| org.gradle.caching=true
+| android.useAndroidX=true
+| kotlin.code.style=official
+| 
+== store log4j.properties utf-8 latin-1 strict comments=Logging für Prod
+438 bytes
+| #Logging für Prod
+| log4j.rootLogger=INFO, stdout, R
+| log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+| log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+| log4j.appender.stdout.layout.ConversionPattern=%5p [%t] (%F\:%L) - %m%n
+| log4j.appender.R=org.apache.log4j.RollingFileAppender
+| log4j.appender.R.File=/var/log/app/app.log
+| log4j.appender.R.MaxFileSize=100KB
+| log4j.appender.R.MaxBackupIndex=5
+| log4j.logger.com.example.db=DEBUG
+| 
+== edit application.properties set:server.port=10443 set:new.key=new value del:app.empty set:app.empty=back set:  spaced=  two leading meta:server.port:owner=ops,__runtime=hidden
+945 bytes
+| spring.application.name=billing-service
+| #: owner=ops
+| server.port=10443
+| server.servlet.context-path=/api
+| spring.datasource.url=jdbc\:postgresql\://db.internal\:5432/billing?sslmode\=require
+| spring.datasource.username=billing
+| spring.datasource.password=
+| spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+| management.endpoints.web.exposure.include=health,info,prometheus,metrics
+| logging.pattern.console=%d{HH\:mm\:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+| app.greeting=Grüße aus Köln
+| app.windows-path=C\:\\billing\\data
+| app.regex=^\\d{3}-\\d{4}$
+| app.key\ with\ spaces=spaced key
+| app.equals\=sign=value with \= inside
+| app.colon\:key=value\: with colon
+| app.tab\tkey=tab in key
+| app.indented=leading spaces are dropped
+| app.trailing=trailing spaces kept   
+| app.unicode=café ☺ 😀
+| app.newline=first\nsecond\tthird\rfourth\fform
+| app.literal-backslash=qz
+| \ \ spaced=\  two leading
+| app.empty=back
+| new.key=new value
+| 
+== edit meta.properties del:feature.search.legacy del:missing.key
+error: KeyError: 'Key not found'
+95 bytes
+| #: owner=platform-team
+| #: since=2.4
+| feature.checkout.enabled=true
+| feature.search.enabled=false
+| 
+== edit empty.properties set:z=last set:a=first set:m=middle
+24 bytes
+| a=first
+| m=middle
+| z=last
+| 
+== tool application.properties
+stdout 970 bytes
+| #File generated by jproperties (escapes in values: True)
+| #Sat Mar 09 14:05:07 UTC 2024
+| spring.application.name=billing-service
+| server.port=9443
+| server.servlet.context-path=/api
+| spring.datasource.url=jdbc\:postgresql\://db.internal\:5432/billing?sslmode\=require
+| spring.datasource.username=billing
+| spring.datasource.password=
+| spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+| management.endpoints.web.exposure.include=health,info,prometheus,metrics
+| logging.pattern.console=%d{HH\:mm\:ss.SSS} [%thread] %-5level %logger{36} - %msg%n
+| app.greeting=Grüße aus Köln
+| app.windows-path=C\:\\billing\\data
+| app.regex=^\\d{3}-\\d{4}$
+| app.key\ with\ spaces=spaced key
+| app.equals\=sign=value with \= inside
+| app.colon\:key=value\: with colon
+| app.tab\tkey=tab in key
+| app.empty=
+| app.indented=leading spaces are dropped
+| app.trailing=trailing spaces kept   
+| app.unicode=café ☺ 😀
+| app.newline=first\nsecond\tthird\rfourth\fform
+| app.literal-backslash=qz
+| 
+exit 0
+== tool messages_de.properties iso-8859-1 ascii
+stdout 184 bytes
+| #File generated by jproperties (escapes in values: True)
+| #Sat Mar 09 14:05:07 UTC 2024
+| greeting=Gr\u00fc\u00df Gott
+| farewell=Auf Wiedersehen, bis sp\u00e4ter\!
+| price=Preis\: 12,50 EUR
+| 
+exit 0
+== tool messages_ja.properties utf-8 iso-8859-1
+stdout 186 bytes
+| #File generated by jproperties (escapes in values: True)
+| #Sat Mar 09 14:05:07 UTC 2024
+| greeting=\u3053\u3093\u306b\u3061\u306f
+| farewell=\u3055\u3088\u3046\u306a\u3089
+| title=\u8a2d\u5b9a
+| 
+exit 0
+== tool edge.properties utf-8 utf-8 false
+stdout 386 bytes
+| #File generated by jproperties (escapes in values: False)
+| #Sat Mar 09 14:05:07 UTC 2024
+| key1=value after tab
+| key2=value after form feed
+| key3=
+| key4=
+| =another empty key
+| multi=one \
+| two=\
+| after=blank line ended the continuation
+| continuedkey=continued key
+| crlf=line one \
+| line=two
+| cronly=a
+| next=b
+| dup=second
+| hexquirks=\u0x41\u 42 \u4_1a\u+04a\u0X_5
+| bom=a\uFEFFb\uFFFEc
+| backslash-eof=value\
+| 
+exit 0
+== tool broken/highonly.properties
+! Error: Could not read input file: Parse error in <unknown>:1: High surrogate unicode escape sequence not followed by another (low surrogate) unicode escape sequence.
+exit 2
+== tool badbyte.properties
+! Error: Could not read input file: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+exit 2
+== tool gradle.properties nope
+! Error: Could not read input file: unknown encoding: nope
+exit 2
+== tool gradle.properties utf-8 nope
+! Error: Could not dump properties: unknown encoding: nope
+exit 3
+== tool missing.properties
+! Error: Could not read input file: [Errno 2] No such file or directory: 'missing.properties'
+exit 2
+== tool -h
+! Loads a property file and dumps it to stdout, optionally converting between encodings.
+! Escape sequence handling can also be disabled (it is enabled by default).
+! 
+! Usage:
+!  jproperties [-h] input_file [input_encoding [output_encoding [process_escapes]]]
+! 
+! The input and output encodings default to `utf-8'. If `false' is given for the
+! `process_escapes' parameter, then escape sequences in property values are taken
+! literally, i. e. they are treated like normal characters. This will also cause
+! the writer to try hard not to output any escape sequences in values and thus it
+! will output everything literally, as long as this does not lead to invalid output.
+exit 1
+== tool
+! Loads a property file and dumps it to stdout, optionally converting between encodings.
+! Escape sequence handling can also be disabled (it is enabled by default).
+! 
+! Usage:
+!  jproperties [-h] input_file [input_encoding [output_encoding [process_escapes]]]
+! 
+! The input and output encodings default to `utf-8'. If `false' is given for the
+! `process_escapes' parameter, then escape sequences in property values are taken
+! literally, i. e. they are treated like normal characters. This will also cause
+! the writer to try hard not to output any escape sequences in values and thus it
+! will output everything literally, as long as this does not lead to invalid output.
+exit 1

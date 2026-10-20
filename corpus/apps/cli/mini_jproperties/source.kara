@@ -1,0 +1,1494 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters property files hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or n == 0xfffe or n == 0xffff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+// ------------------------------------------------------------ dicts and errors
+//
+// The pieces of Python that jproperties leans on.
+
+// A Python exception: its type and str().
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: ref String, msg: ref String) -> Exc {
+    Exc { kind: kind.clone(), msg: msg.clone() }
+}
+
+
+// A Python dict of str to str: keys stay where they were first set.
+#[derive(Clone)]
+struct OMap {
+    keys: Vec[String],
+    vals: Vec[String],
+}
+
+fn om_new() -> OMap {
+    OMap { keys: Vec.new(), vals: Vec.new() }
+}
+
+impl OMap {
+    fn find(ref self, k: ref String) -> i64 {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == *k {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn has(ref self, k: ref String) -> bool {
+        self.find(k) >= 0
+    }
+
+    fn get(ref self, k: ref String) -> String {
+        let i = self.find(k);
+        if i < 0 { String.new() } else { self.vals[i].clone() }
+    }
+
+    fn set(mut ref self, k: ref String, v: ref String) {
+        let i = self.find(k);
+        if i < 0 {
+            self.keys.push(k.clone());
+            self.vals.push(v.clone());
+        } else {
+            self.vals[i] = v.clone();
+        }
+    }
+
+    fn remove(mut ref self, k: ref String) {
+        let i = self.find(k);
+        if i >= 0 {
+            self.keys.remove(i);
+            self.vals.remove(i);
+        }
+    }
+
+    fn update(mut ref self, o: ref OMap) {
+        for i in 0..o.keys.len() {
+            self.set(o.keys[i], o.vals[i]);
+        }
+    }
+
+    fn len(ref self) -> i64 {
+        self.keys.len()
+    }
+
+    fn repr(ref self) -> String {
+        let mut out = "{".to_string();
+        for i in 0..self.keys.len() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(py_repr_str(self.keys[i]));
+            out.push_str(": ");
+            out.push_str(py_repr_str(self.vals[i]));
+        }
+        out.push('}');
+        out
+    }
+}
+
+// ------------------------------------------------------------ codecs
+//
+// The three encodings property files come in, as Python's codecs gives
+// them: a StreamReader that hands out one character at a time, and the
+// encoder jproperties wraps around its output.
+
+enum Enc {
+    Utf8,
+    Latin1,
+    Ascii,
+}
+
+// codecs.lookup(): the name, lower-cased with '-' and ' ' as '_', and the
+// aliases Python knows for it.
+fn lookup_enc(name: ref String) -> Result[Enc, Exc] {
+    let n = name.to_lowercase().replace("-", "_").replace(" ", "_");
+    let utf8 = ["utf_8", "utf8", "u8", "utf", "cp65001"];
+    let latin1 = ["latin_1", "latin1", "latin", "l1", "iso_8859_1", "iso8859_1", "8859", "cp819", "ibm819", "iso_ir_100", "csisolatin1"];
+    let ascii = ["ascii", "us_ascii", "us", "646", "cp367", "ibm367", "csascii", "iso646_us", "iso_ir_6", "ansi_x3.4_1968"];
+    for a in utf8 {
+        if n == a {
+            return Ok(Enc.Utf8);
+        }
+    }
+    for a in latin1 {
+        if n == a {
+            return Ok(Enc.Latin1);
+        }
+    }
+    for a in ascii {
+        if n == a {
+            return Ok(Enc.Ascii);
+        }
+    }
+    Err(exc("LookupError", f"unknown encoding: {name}"))
+}
+
+fn decode_error(codec: Str, first: i64, n: i64, reason: Str) -> Exc {
+    let what = if n == 1 {
+        f"byte 0x{hex_digits(first, 2)} in position 0"
+    } else {
+        f"bytes in position 0-{n - 1}"
+    };
+    exc("UnicodeDecodeError", f"'{codec}' codec can't decode {what}: {reason}")
+}
+
+// The bytes a second UTF-8 byte may take after the first.
+fn second_range(b: i64) -> (i64, i64) {
+    if b == 0xe0 {
+        (0xa0, 0xbf)
+    } else if b == 0xed {
+        (0x80, 0x9f)
+    } else if b == 0xf0 {
+        (0x90, 0xbf)
+    } else if b == 0xf4 {
+        (0x80, 0x8f)
+    } else {
+        (0x80, 0xbf)
+    }
+}
+
+struct Reader {
+    data: Vec[u8],
+    pos: i64,
+    enc: Enc,
+}
+
+impl Reader {
+    // StreamReader.read(1): the next character, None at the end. It reads
+    // a byte at a time until a character is whole, so a sequence cut off
+    // by the end of the file is dropped, and a bad byte fails with the
+    // bytes it has buffered, all from position 0.
+    fn read1(mut ref self) -> Result[Option[char], Exc] {
+        if self.pos >= self.data.len() {
+            return Ok(None);
+        }
+        let b = self.data[self.pos] as i64;
+        self.pos += 1;
+        match self.enc {
+            Enc.Latin1 => Ok(Some(char.try_from(b).unwrap_or('?'))),
+            Enc.Ascii => {
+                if b < 0x80 {
+                    Ok(Some(char.try_from(b).unwrap_or('?')))
+                } else {
+                    Err(decode_error("ascii", b, 1, "ordinal not in range(128)"))
+                }
+            }
+            Enc.Utf8 => self.utf8(b),
+        }
+    }
+
+    fn utf8(mut ref self, b: i64) -> Result[Option[char], Exc] {
+        if b < 0x80 {
+            return Ok(Some(char.try_from(b).unwrap_or('?')));
+        }
+        let need = if b >= 0xc2 and b <= 0xdf {
+            1
+        } else if b >= 0xe0 and b <= 0xef {
+            2
+        } else if b >= 0xf0 and b <= 0xf4 {
+            3
+        } else {
+            0
+        };
+        if need == 0 {
+            return Err(decode_error("utf-8", b, 1, "invalid start byte"));
+        }
+        let mut cp = b & (0x3f >> need);
+        let mut k = 0;
+        while k < need {
+            if self.pos >= self.data.len() {
+                return Ok(None);
+            }
+            let c = self.data[self.pos] as i64;
+            let (lo, hi) = if k == 0 { second_range(b) } else { (0x80, 0xbf) };
+            if c < lo or c > hi {
+                return Err(decode_error("utf-8", b, k + 1, "invalid continuation byte"));
+            }
+            self.pos += 1;
+            cp = (cp << 6) | (c & 0x3f);
+            k += 1;
+        }
+        Ok(Some(char.try_from(cp).unwrap_or('?')))
+    }
+}
+
+// The \uXXXX escapes jproperties writes for what is not printable ASCII,
+// a surrogate pair for a character past the BMP.
+fn escape_non_ascii(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        let n = c as i64;
+        if n >= 0x20 and n <= 0x7e {
+            out.push(c);
+        } else if n < 0x10000 {
+            out.push_str(f"\\u{hex_digits(n, 4)}");
+        } else {
+            let m = n - 0x10000;
+            out.push_str(f"\\u{hex_digits(0xd800 | ((m >> 10) & 0x3ff), 4)}");
+            out.push_str(f"\\u{hex_digits(0xdc00 | (m & 0x3ff), 4)}");
+        }
+    }
+    out
+}
+
+// The text as the stream writer encodes it with the
+// jproperties.jbackslashreplace handler: what the encoding cannot hold
+// becomes \uXXXX. Gives the text and its length in bytes.
+fn encode_out(text: ref String, enc: ref Enc) -> (String, i64) {
+    let limit = match enc {
+        Enc.Utf8 => return (text.clone(), text.len()),
+        Enc.Latin1 => 0x100,
+        Enc.Ascii => 0x80,
+    };
+    let mut out = String.new();
+    let mut n = 0;
+    for c in text.chars() {
+        if (c as i64) < limit {
+            out.push(c);
+            n += 1;
+        } else {
+            let e = escape_non_ascii(c.to_string());
+            n += e.len();
+            out.push_str(e);
+        }
+    }
+    (out, n)
+}
+
+// ------------------------------------------------------------ the parser
+//
+// jproperties' Properties: a lookahead of one character over the stream
+// reader, and the parse of comments, metadata comments, keys, values and
+// escapes, line by natural line.
+
+// The metadata of each key, in the order the keys got it.
+#[derive(Clone)]
+struct MetaMap {
+    keys: Vec[String],
+    maps: Vec[OMap],
+}
+
+#[derive(Clone)]
+struct Props {
+    escapes: bool,
+    vals: OMap,
+    meta: MetaMap,
+    // _key_order: the keys in the order they were read in
+    order: Vec[String],
+}
+
+fn props_new(escapes: bool) -> Props {
+    Props { escapes: escapes, vals: om_new(), meta: MetaMap { keys: Vec.new(), maps: Vec.new() }, order: Vec.new() }
+}
+
+impl Props {
+    fn meta_index(ref self, k: ref String) -> i64 {
+        for i in 0..self.meta.keys.len() {
+            if self.meta.keys[i] == *k {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn getmeta(ref self, k: ref String) -> OMap {
+        let i = self.meta_index(k);
+        if i < 0 { om_new() } else { self.meta.maps[i].clone() }
+    }
+
+    fn setmeta(mut ref self, k: ref String, m: ref OMap) {
+        let i = self.meta_index(k);
+        if i < 0 {
+            self.meta.keys.push(k.clone());
+            self.meta.maps.push(m.clone());
+        } else {
+            self.meta.maps[i] = m.clone();
+        }
+    }
+
+    // __delitem__
+    fn delete(mut ref self, k: ref String) -> Result[(), Exc] {
+        if not self.vals.has(k) {
+            return Err(exc("KeyError", "'Key not found'"));
+        }
+        self.vals.remove(k);
+        let i = self.meta_index(k);
+        if i >= 0 {
+            self.meta.keys.remove(i);
+            self.meta.maps.remove(i);
+        }
+        for j in 0..self.order.len() {
+            if self.order[j] == *k {
+                self.order.remove(j);
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+enum PErr {
+    Eof,
+    Fail(Exc),
+}
+
+fn parse_error(msg: ref String, line: i64) -> PErr {
+    PErr.Fail(exc("ParseError", f"Parse error in <unknown>:{line}: {msg}"))
+}
+
+// An EOFError the caller passes over.
+fn eof_ok(r: own Result[(), PErr]) -> Result[(), PErr] {
+    match r {
+        Err(PErr.Eof) => Ok(()),
+        other => other,
+    }
+}
+
+fn is_eol(c: char) -> bool {
+    c == '\r' or c == '\n'
+}
+
+fn is_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c as i64 == 12
+}
+
+fn is_any_ws(c: char) -> bool {
+    is_eol(c) or is_ws(c)
+}
+
+fn py_space(c: char) -> bool {
+    let n = c as i64;
+    (n >= 9 and n <= 13) or (n >= 0x1c and n <= 0x20) or c.is_whitespace()
+}
+
+fn hex_digit(c: char) -> i64 {
+    let n = c as i64;
+    if n >= 0x30 and n <= 0x39 {
+        n - 0x30
+    } else if n >= 0x61 and n <= 0x66 {
+        n - 0x61 + 10
+    } else if n >= 0x41 and n <= 0x46 {
+        n - 0x41 + 10
+    } else {
+        -1
+    }
+}
+
+// int(s, 16): blanks around it, a sign, a 0x prefix and single
+// underscores between the digits are all allowed.
+fn py_int16(s: ref String) -> Result[i64, PErr] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut a = 0;
+    let mut b = cs.len();
+    while a < b and py_space(cs[a]) {
+        a += 1;
+    }
+    while b > a and py_space(cs[b - 1]) {
+        b -= 1;
+    }
+    let mut neg = false;
+    if a < b and (cs[a] == '+' or cs[a] == '-') {
+        neg = cs[a] == '-';
+        a += 1;
+    }
+    let mut prefix = false;
+    if a + 1 < b and cs[a] == '0' and (cs[a + 1] == 'x' or cs[a + 1] == 'X') {
+        prefix = true;
+        a += 2;
+    }
+    let mut ok = true;
+    let mut v = 0;
+    let mut nd = 0;
+    while a < b {
+        if cs[a] == '_' {
+            if nd == 0 and not prefix {
+                ok = false;
+                break;
+            }
+            a += 1;
+            if a >= b {
+                ok = false;
+                break;
+            }
+        }
+        let d = hex_digit(cs[a]);
+        if d < 0 {
+            ok = false;
+            break;
+        }
+        v = v * 16 + d;
+        nd += 1;
+        a += 1;
+    }
+    if not ok or nd == 0 {
+        return Err(PErr.Fail(exc("ValueError", f"invalid literal for int() with base 16: {py_repr_str(s)}")));
+    }
+    Ok(if neg { -v } else { v })
+}
+
+// struct.pack("=I", cp).decode("utf-32"): a leading byte order mark is
+// taken for one and dropped, a surrogate is an error.
+fn utf32(cp: i64) -> Result[String, PErr] {
+    if cp < 0 {
+        return Err(PErr.Fail(exc("error", "argument out of range")));
+    }
+    if cp == 0xfeff {
+        return Ok(String.new());
+    }
+    if cp >= 0xd800 and cp <= 0xdfff {
+        return Err(PErr.Fail(exc("UnicodeDecodeError", "'utf-32-le' codec can't decode bytes in position 0-3: code point in surrogate code point range(0xd800, 0xe000)")));
+    }
+    Ok(char.try_from(cp).unwrap_or('?').to_string())
+}
+
+struct Loader {
+    rd: Reader,
+    look: Option[char],
+    line: i64,
+    metadoc: bool,
+    next_meta: OMap,
+    // the key of the last pair; "" stands for None too, both are false
+    prev_key: String,
+    p: Props,
+}
+
+impl Loader {
+    fn peek(mut ref self) -> Result[char, PErr] {
+        if let Some(c) = self.look {
+            return Ok(c);
+        }
+        match self.rd.read1() {
+            Ok(Some(c)) => {
+                self.look = Some(c);
+                Ok(c)
+            }
+            Ok(None) => Err(PErr.Eof),
+            Err(e) => Err(PErr.Fail(e)),
+        }
+    }
+
+    fn getc(mut ref self) -> Result[char, PErr] {
+        let c = self.peek()?;
+        self.look = None;
+        Ok(c)
+    }
+
+    fn handle_eol(mut ref self) -> Result[(), PErr] {
+        let c = self.peek()?;
+        if c == '\r' {
+            self.line += 1;
+            self.getc()?;
+            match self.peek() {
+                Ok(d) => {
+                    if d == '\n' {
+                        self.getc()?;
+                    }
+                }
+                Err(PErr.Eof) => {}
+                Err(e) => return Err(e),
+            }
+        } else if c == '\n' {
+            self.line += 1;
+            self.getc()?;
+        }
+        Ok(())
+    }
+
+    fn skip_whitespace(mut ref self, stop_at_eol: bool) -> Result[(), PErr] {
+        loop {
+            let c = self.peek()?;
+            if not is_any_ws(c) {
+                return Ok(());
+            }
+            if is_eol(c) {
+                if stop_at_eol {
+                    return Ok(());
+                }
+                self.handle_eol()?;
+            } else {
+                self.getc()?;
+            }
+        }
+    }
+
+    fn skip_natural_line(mut ref self) -> Result[String, PErr] {
+        let mut line = String.new();
+        loop {
+            match self.peek() {
+                Ok(c) => {
+                    if is_eol(c) {
+                        break;
+                    }
+                    line.push(c);
+                    self.look = None;
+                }
+                Err(PErr.Eof) => return Ok(line),
+                Err(e) => return Err(e),
+            }
+        }
+        eof_ok(self.handle_eol())?;
+        Ok(line)
+    }
+
+    fn parse_comment(mut ref self) -> Result[(), PErr] {
+        self.getc()?;
+        if self.peek()? != ':' {
+            let doc0 = self.skip_natural_line()?;
+            if self.metadoc and self.prev_key.len() > 0 {
+                let doc: String = if doc0.starts_with(" ") { doc0.chars().skip(1).collect() } else { doc0 };
+                let key = self.prev_key.clone();
+                let mut m = self.p.getmeta(key);
+                let old = m.get("_doc");
+                m.set("_doc", f"{old}{doc}\n");
+                self.p.setmeta(key, m);
+            }
+            return Ok(());
+        }
+        self.getc()?;
+        let key = self.parse_key(true)?;
+        let value = self.parse_value(true)?;
+        if key.len() == 0 {
+            return Err(parse_error("Empty key in metadata key-value pair", self.line));
+        }
+        self.next_meta.set(key, value);
+        Ok(())
+    }
+
+    fn handle_escape(mut ref self, allow_continuation: bool) -> Result[String, PErr] {
+        if self.peek()? == '\\' {
+            self.getc()?;
+        }
+        let esc = match self.peek() {
+            Ok(c) => c,
+            // a stray backslash at the end: dropped
+            Err(PErr.Eof) => return Ok(String.new()),
+            Err(e) => return Err(e),
+        };
+        if is_eol(esc) {
+            if allow_continuation {
+                eof_ok(self.continuation())?;
+            }
+            return Ok(String.new());
+        }
+        self.getc()?;
+        if esc == 'r' {
+            return Ok("\r".to_string());
+        }
+        if esc == 'n' {
+            return Ok("\n".to_string());
+        }
+        if esc == 't' {
+            return Ok("\t".to_string());
+        }
+        if esc == 'f' {
+            return Ok(char.try_from(12).unwrap_or('?').to_string());
+        }
+        if esc == 'u' {
+            let start = self.line;
+            return match self.unicode_escape(start) {
+                Ok(s) => Ok(s),
+                Err(PErr.Eof) => Err(parse_error("", start)),
+                Err(PErr.Fail(e)) => {
+                    // EOFError and ValueError (a decode error is one) become
+                    // a ParseError with their message
+                    if e.kind == "ValueError" or e.kind == "UnicodeDecodeError" {
+                        Err(parse_error(e.msg, start))
+                    } else {
+                        Err(PErr.Fail(e))
+                    }
+                }
+            };
+        }
+        // an unknown escape: the backslash is swallowed
+        Ok(esc.to_string())
+    }
+
+    fn continuation(mut ref self) -> Result[(), PErr] {
+        self.handle_eol()?;
+        self.skip_whitespace(true)
+    }
+
+    fn unicode_escape(mut ref self, start: i64) -> Result[String, PErr] {
+        let mut hex = String.new();
+        for _ in 0..4 {
+            hex.push(self.getc()?);
+        }
+        let mut cp = py_int16(hex)?;
+        if cp >= 0xd800 and cp <= 0xdbff {
+            let mut h2 = String.new();
+            let mut n = 0;
+            while n < 6 {
+                match self.getc() {
+                    Ok(c) => {
+                        h2.push(c);
+                        n += 1;
+                    }
+                    Err(PErr.Eof) => break,
+                    Err(e) => return Err(e),
+                }
+            }
+            if n != 6 or not h2.starts_with("\\u") {
+                return Err(parse_error("High surrogate unicode escape sequence not followed by another (low surrogate) unicode escape sequence.", start));
+            }
+            let rest: String = h2.chars().skip(2).collect();
+            let cp2 = py_int16(rest)?;
+            if not (cp2 >= 0xdc00 and cp2 <= 0xdfff) {
+                return Err(parse_error("Low surrogate unicode escape sequence expected after high surrogate escape sequence, but got a non-low-surrogate unicode escape sequence.", start));
+            }
+            cp = 0x10000 + ((cp & 0x3ff) << 10) + (cp2 & 0x3ff);
+        }
+        utf32(cp)
+    }
+
+    fn parse_key(mut ref self, single_line_only: bool) -> Result[String, PErr] {
+        self.skip_whitespace(single_line_only)?;
+        let mut key = String.new();
+        loop {
+            let c = match self.peek() {
+                Ok(c) => c,
+                Err(PErr.Eof) => break,
+                Err(e) => return Err(e),
+            };
+            if c == '\\' {
+                key.push_str(self.handle_escape(not single_line_only)?);
+                continue;
+            }
+            if is_any_ws(c) or c == ':' or c == '=' {
+                break;
+            }
+            key.push(c);
+            self.look = None;
+        }
+        Ok(key)
+    }
+
+    // The separator, a ':' or '=' with blanks around it, if there is one.
+    fn separator(mut ref self) -> Result[(), PErr] {
+        self.skip_whitespace(true)?;
+        let c = self.peek()?;
+        if c == ':' or c == '=' {
+            self.getc()?;
+        }
+        self.skip_whitespace(true)
+    }
+
+    fn parse_value(mut ref self, single_line_only: bool) -> Result[String, PErr] {
+        match self.separator() {
+            Ok(()) => {}
+            Err(PErr.Eof) => return Ok(String.new()),
+            Err(e) => return Err(e),
+        }
+        let mut value = String.new();
+        loop {
+            let c = match self.peek() {
+                Ok(c) => c,
+                Err(PErr.Eof) => break,
+                Err(e) => return Err(e),
+            };
+            if c == '\\' and self.p.escapes {
+                value.push_str(self.handle_escape(not single_line_only)?);
+                continue;
+            }
+            if is_eol(c) {
+                self.handle_eol()?;
+                break;
+            }
+            value.push(c);
+            self.look = None;
+        }
+        Ok(value)
+    }
+
+    fn first_char(mut ref self) -> Result[char, PErr] {
+        self.skip_whitespace(false)?;
+        self.peek()
+    }
+
+    fn key_value(mut ref self) -> Result[(String, String), PErr] {
+        let key = self.parse_key(false)?;
+        let value = self.parse_value(false)?;
+        Ok((key, value))
+    }
+
+    // False once there is nothing more to parse.
+    fn parse_logical_line(mut ref self) -> Result[bool, Exc] {
+        let c = match self.first_char() {
+            Ok(c) => c,
+            Err(PErr.Eof) => return Ok(false),
+            Err(PErr.Fail(e)) => return Err(e),
+        };
+        if c == '!' or c == '#' {
+            return match self.parse_comment() {
+                Ok(()) => Ok(true),
+                Err(PErr.Eof) => Ok(false),
+                Err(PErr.Fail(e)) => Err(e),
+            };
+        }
+        let (key, value) = match self.key_value() {
+            Ok(kv) => kv,
+            Err(PErr.Eof) => return Ok(false),
+            Err(PErr.Fail(e)) => return Err(e),
+        };
+        if not self.p.vals.has(key) {
+            self.p.order.push(key.clone());
+        }
+        self.p.vals.set(key, value);
+        if self.next_meta.len() > 0 {
+            let m = self.next_meta.clone();
+            self.p.setmeta(key, m);
+            self.next_meta = om_new();
+        }
+        self.prev_key = key;
+        Ok(true)
+    }
+}
+
+// Properties.load(): the properties it read, and the error that stopped it.
+fn load_props(data: own Vec[u8], enc: own Enc, escapes: bool, metadoc: bool) -> (Props, Option[Exc]) {
+    let mut ps = Loader {
+        rd: Reader { data: data, pos: 0, enc: enc },
+        look: None,
+        line: 1,
+        metadoc: metadoc,
+        next_meta: om_new(),
+        prev_key: String.new(),
+        p: props_new(escapes),
+    };
+    loop {
+        match ps.parse_logical_line() {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(e) => return (ps.p.clone(), Some(e)),
+        }
+    }
+    (ps.p.clone(), None)
+}
+
+// ------------------------------------------------------------ the writer
+//
+// Properties.store() and the _escape_str() it writes keys and values with.
+
+fn esc_str(raw: ref String, only_leading_spaces: bool, escape_non_printing: bool, line_breaks_only: bool) -> String {
+    let mut s = String.new();
+    for c in raw.chars() {
+        if c == '\r' {
+            s.push_str("\\r");
+        } else if c == '\n' {
+            s.push_str("\\n");
+        } else if c as i64 == 12 {
+            s.push_str("\\f");
+        } else if not line_breaks_only and (c == '#' or c == '!' or c == '=' or c == ':' or c == '\\') {
+            s.push('\\');
+            s.push(c);
+        } else if not line_breaks_only and c == '\t' {
+            s.push_str("\\t");
+        } else {
+            s.push(c);
+        }
+    }
+    // every space in a key, only a leading one in a value
+    if not only_leading_spaces {
+        s = s.replace(" ", "\\ ");
+    } else if s.starts_with(" ") {
+        s = f"\\{s}";
+    }
+    if escape_non_printing {
+        escape_non_ascii(s)
+    } else {
+        s
+    }
+}
+
+// The initial comments: line ends made \n, a '#' put before each line
+// that does not start with '#' or '!', and a ':' right after that escaped
+// so the line does not read as metadata.
+fn comment_text(c0: ref String) -> String {
+    let c1 = c0.replace("\r\n", "\n").replace("\r", "\n");
+    let cs: Vec[char] = c1.chars().collect();
+    let mut s: Vec[char] = Vec.new();
+    for i in 0..cs.len() {
+        s.push(cs[i]);
+        if cs[i] == '\n' and not (i + 1 < cs.len() and (cs[i + 1] == '#' or cs[i + 1] == '!')) {
+            s.push('#');
+        }
+    }
+    let mut out = String.new();
+    let mut i = 0;
+    while i < s.len() {
+        if s[i] == '\n' and i + 2 < s.len() and (s[i + 1] == '#' or s[i + 1] == '!') and s[i + 2] == ':' {
+            out.push('\n');
+            out.push(s[i + 1]);
+            out.push_str("\\:");
+            i += 3;
+        } else {
+            out.push(s[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn pad2(n: i64) -> String {
+    if n < 10 { f"0{n}" } else { f"{n}" }
+}
+
+// time.gmtime(), which the jobs stop at Saturday 2024-03-09 14:05:07.
+struct Tm {
+    year: i64,
+    mon: i64,
+    mday: i64,
+    hour: i64,
+    min: i64,
+    sec: i64,
+    wday: i64,
+}
+
+fn gmtime() -> Tm {
+    Tm { year: 2024, mon: 3, mday: 9, hour: 14, min: 5, sec: 7, wday: 5 }
+}
+
+fn timestamp_line() -> String {
+    let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let now = gmtime();
+    f"#{days[now.wday]} {months[now.mon - 1]} {pad2(now.mday)} {pad2(now.hour)}:{pad2(now.min)}:{pad2(now.sec)} UTC {now.year}"
+}
+
+// store(): the text written and its length in bytes.
+fn store(p: ref Props, initial_comments: ref Option[String], enc_name: ref String, strict: bool, strip_meta: bool, timestamp: bool) -> Result[(String, i64), Exc] {
+    let enc = lookup_enc(enc_name)?;
+    let escape_non_printing = strict and match enc {
+        Enc.Latin1 => true,
+        _ => false,
+    };
+    let mut text = String.new();
+    if let Some(c) = initial_comments {
+        text.push_str(f"#{comment_text(c)}\n");
+    }
+    if timestamp {
+        text.push_str(f"{timestamp_line()}\n");
+    }
+    // the keys in the order they were read, then the others sorted
+    let mut keys = p.order.clone();
+    let mut rest: Vec[String] = Vec.new();
+    for k in p.vals.keys {
+        if not p.order.contains(k) {
+            rest.push(k.clone());
+        }
+    }
+    rest.sort();
+    for k in rest {
+        keys.push(k.clone());
+    }
+    for key in keys {
+        if not p.vals.has(key) {
+            continue;
+        }
+        let m = p.getmeta(key);
+        if not strip_meta and m.len() > 0 {
+            let mut mkeys = m.keys.clone();
+            mkeys.sort();
+            for mk in mkeys {
+                if mk.starts_with("__") {
+                    continue;
+                }
+                text.push_str(f"#: {esc_str(mk, false, false, false)}={esc_str(m.get(mk), true, false, false)}\n");
+            }
+        }
+        let k = esc_str(key, false, escape_non_printing, false);
+        let v = esc_str(p.vals.get(key), true, escape_non_printing, not p.escapes);
+        text.push_str(f"{k}={v}\n");
+    }
+    Ok(encode_out(text, enc))
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+// CR shows as <CR> and other control characters as <xNN>, so
+// expected.out stays a plain LF text file.
+fn show(text: ref String) -> String {
+    let mut out = String.new();
+    for c in text.chars() {
+        let n = c as i64;
+        if c == '\r' {
+            out.push_str("<CR>");
+        } else if (n < 0x20 and c != '\t' and c != '\n') or n == 0x7f {
+            out.push_str(f"<x{hex_digits(n, 2)}>");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// The \r and \n a job's comments are written with in jobs.tsv.
+fn unesc(s: ref String) -> String {
+    s.replace("\\r", "\r").replace("\\n", "\n")
+}
+
+// s.split(sep, 1)
+fn split1(s: ref String, sep: Str) -> (String, String) {
+    let parts: Vec[String] = s.split(sep).map(|x| x.to_string()).collect();
+    let mut rest = String.new();
+    for i in 1..parts.len() {
+        if i > 1 {
+            rest.push_str(sep);
+        }
+        rest.push_str(parts[i]);
+    }
+    (parts[0].clone(), rest)
+}
+
+fn has(xs: ref Vec[String], s: Str) -> bool {
+    for x in xs {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn read_data(name: ref String) -> Vec[u8] {
+    match fs.read_bytes(f"data/{name}") {
+        Ok(b) => b,
+        Err(_) => Vec.new(),
+    }
+}
+
+fn load_file(name: ref String, enc_name: ref String, flags: ref Vec[String]) -> (Props, Option[Exc]) {
+    let escapes = not has(flags, "noescape");
+    match lookup_enc(enc_name) {
+        Ok(enc) => load_props(read_data(name), enc, escapes, has(flags, "metadoc")),
+        Err(e) => (props_new(escapes), Some(e)),
+    }
+}
+
+fn print_props(p: ref Props, out: mut ref String) {
+    for i in 0..p.vals.keys.len() {
+        let k = p.vals.keys[i].clone();
+        emit(mut out, show(f"{py_repr_str(k)} = {py_repr_str(p.vals.vals[i])}"));
+        let m = p.getmeta(k);
+        if m.len() > 0 {
+            emit(mut out, show(f"  meta {m.repr()}"));
+        }
+    }
+}
+
+fn tail(args: ref Vec[String], from: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for i in from..args.len() {
+        v.push(args[i].clone());
+    }
+    v
+}
+
+fn load_job(args: ref Vec[String], out: mut ref String) {
+    let (p, fail) = load_file(args[0], args[1], tail(args, 2));
+    if let Some(e) = fail {
+        emit(mut out, err_line(e));
+    }
+    emit(mut out, f"{p.vals.len()} properties");
+    print_props(p, mut out);
+}
+
+fn dump(p: ref Props, enc: ref String, strict: bool, strip_meta: bool, comments: ref Option[String], out: mut ref String) {
+    let (text, n) = match store(p, comments, enc, strict, strip_meta, false) {
+        Ok(r) => r,
+        Err(e) => {
+            emit(mut out, err_line(e));
+            (String.new(), 0)
+        }
+    };
+    emit(mut out, f"{n} bytes");
+    for line in text.split("\n") {
+        emit(mut out, f"| {show(line.to_string())}");
+    }
+}
+
+fn store_job(args: ref Vec[String], out: mut ref String) {
+    let flags = tail(args, 4);
+    let mut comments: Option[String] = None;
+    for fl in flags {
+        if fl.starts_with("comments=") {
+            let text: String = fl.chars().skip(9).collect();
+            comments = Some(unesc(text));
+        }
+    }
+    let (p, _) = load_file(args[0], args[1], flags);
+    dump(p, args[2], args[3] == "strict", not has(flags, "meta"), comments, mut out);
+}
+
+fn edit_op(p: mut ref Props, op: ref String) -> Result[(), Exc] {
+    let (kind, rest) = split1(op, ":");
+    if kind == "set" {
+        let (k, v) = split1(rest, "=");
+        p.vals.set(k, v);
+    } else if kind == "del" {
+        p.delete(rest)?;
+    } else {
+        let (k, pairs) = split1(rest, ":");
+        let mut m = om_new();
+        for pair in pairs.split(",") {
+            let (a, b) = split1(pair.to_string(), "=");
+            m.set(a, b);
+        }
+        p.setmeta(k, m);
+    }
+    Ok(())
+}
+
+fn edit_job(args: ref Vec[String], out: mut ref String) {
+    let no_flags: Vec[String] = Vec.new();
+    let (p0, _) = load_file(args[0], "utf-8", no_flags);
+    let mut p = p0;
+    for i in 1..args.len() {
+        if let Err(e) = edit_op(mut p, args[i]) {
+            emit(mut out, err_line(e));
+            break;
+        }
+    }
+    dump(p, "utf-8", false, false, None, mut out);
+}
+
+struct ToolRun {
+    stdout: String,
+    nbytes: i64,
+    stderr: String,
+    code: i64,
+}
+
+fn usage() -> String {
+    let mut e = String.new();
+    e.push_str("Loads a property file and dumps it to stdout, optionally converting between encodings.\n");
+    e.push_str("Escape sequence handling can also be disabled (it is enabled by default).\n\n");
+    e.push_str("Usage:\n");
+    e.push_str(" jproperties [-h] input_file [input_encoding [output_encoding [process_escapes]]]\n\n");
+    e.push_str("The input and output encodings default to `utf-8'. If `false' is given for the\n");
+    e.push_str("`process_escapes' parameter, then escape sequences in property values are taken\n");
+    e.push_str("literally, i. e. they are treated like normal characters. This will also cause\n");
+    e.push_str("the writer to try hard not to output any escape sequences in values and thus it\n");
+    e.push_str("will output everything literally, as long as this does not lead to invalid output.\n");
+    e
+}
+
+fn tool_fail(stderr: Str, code: i64) -> ToolRun {
+    ToolRun { stdout: String.new(), nbytes: 0, stderr: stderr.to_string(), code: code }
+}
+
+// jproperties.main(), run in data/ as `jproperties ARGS`.
+fn tool_main(argv: ref Vec[String]) -> ToolRun {
+    if argv.len() < 1 or argv[0] == "-h" {
+        return ToolRun { stdout: String.new(), nbytes: 0, stderr: usage(), code: 1 };
+    }
+    let in_enc = if argv.len() < 2 { "utf-8".to_string() } else { argv[1].clone() };
+    let out_enc = if argv.len() < 3 { "utf-8".to_string() } else { argv[2].clone() };
+    let escapes = argv.len() < 4 or argv[3].to_lowercase() != "false";
+    let data = match fs.read_bytes(f"data/{argv[0]}") {
+        Ok(b) => b,
+        Err(_) => {
+            return tool_fail(f"Error: Could not read input file: [Errno 2] No such file or directory: {py_repr_str(argv[0])}\n", 2);
+        }
+    };
+    let enc = match lookup_enc(in_enc) {
+        Ok(e) => e,
+        Err(e) => return tool_fail(f"Error: Could not read input file: {e.msg}\n", 2),
+    };
+    let (p, fail) = load_props(data, enc, escapes, false);
+    if let Some(e) = fail {
+        return tool_fail(f"Error: Could not read input file: {e.msg}\n", 2);
+    }
+    let word = if escapes { "True" } else { "False" };
+    let comments = Some(f"File generated by jproperties (escapes in values: {word})");
+    match store(p, comments, out_enc, false, true, true) {
+        Ok((text, n)) => ToolRun { stdout: text, nbytes: n, stderr: String.new(), code: 0 },
+        Err(e) => tool_fail(f"Error: Could not dump properties: {e.msg}\n", 3),
+    }
+}
+
+fn tool_job(args: ref Vec[String], out: mut ref String) {
+    let r = tool_main(args);
+    if r.nbytes > 0 {
+        emit(mut out, f"stdout {r.nbytes} bytes");
+        for line in r.stdout.split("\n") {
+            emit(mut out, f"| {show(line.to_string())}");
+        }
+    }
+    if r.stderr.len() > 0 {
+        let body: String = r.stderr.chars().take(r.stderr.chars().count() - 1).collect();
+        for line in body.split("\n") {
+            emit(mut out, f"! {line}");
+        }
+    }
+    emit(mut out, f"exit {r.code}");
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|x| x.to_string()).collect();
+        emit(mut out, show(f"== {job.join(" ")}"));
+        let args = tail(job, 1);
+        let kind = job[0].clone();
+        if kind == "load" {
+            load_job(args, mut out);
+        } else if kind == "store" {
+            store_job(args, mut out);
+        } else if kind == "edit" {
+            edit_job(args, mut out);
+        } else {
+            tool_job(args, mut out);
+        }
+    }
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# Spring Boot settings for the billing service\n");
+    t.push_str("! profiles are set by the deploy job\n");
+    t.push_str("\n");
+    t.push_str("spring.application.name=billing-service\n");
+    t.push_str("server.port = 8443\n");
+    t.push_str("server.servlet.context-path : /api\n");
+    t.push_str("spring.datasource.url=jdbc:postgresql://db.internal:5432/billing?sslmode=require\n");
+    t.push_str("spring.datasource.username billing\n");
+    t.push_str("spring.datasource.password=\n");
+    t.push_str("spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect\n");
+    t.push_str("management.endpoints.web.exposure.include=health,info,\\\n");
+    t.push_str("    prometheus,\\\n");
+    t.push_str("    metrics\n");
+    t.push_str("logging.pattern.console=%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n\n");
+    t.push_str("app.greeting=Grüße aus Köln\n");
+    t.push_str("app.windows-path=C:\\\\billing\\\\data\n");
+    t.push_str("app.regex=^\\\\d{3}-\\\\d{4}$\n");
+    t.push_str("app.key\\ with\\ spaces=spaced key\n");
+    t.push_str("app.equals\\=sign=value with = inside\n");
+    t.push_str("app.colon\\:key=value: with colon\n");
+    t.push_str("app.tab\\tkey=tab in key\n");
+    t.push_str("server.port=9443\n");
+    t.push_str("app.empty\n");
+    t.push_str("  app.indented   =   leading spaces are dropped\n");
+    t.push_str("app.trailing=trailing spaces kept   \n");
+    t.push_str("app.unicode=caf\\u00e9 \\u263a \\uD83D\\uDE00\n");
+    t.push_str("app.newline=first\\nsecond\\tthird\\rfourth\\fform\n");
+    t.push_str("app.literal-backslash=\\q\\z\n");
+    v.push(DataFile { path: "application.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("6e616d653d6f6b0a6261643dff0a");
+    v.push(DataFile { path: "badbyte.properties".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("a=ok\n");
+    t.push_str("b=\\u12g4\n");
+    v.push(DataFile { path: "broken/badunicode.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("#: =x\n");
+    t.push_str("key=value\n");
+    v.push(DataFile { path: "broken/emptymeta.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a=\\uD83D\\uZZZZ\n");
+    v.push(DataFile { path: "broken/highbad.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a=\\uD83D and more\n");
+    v.push(DataFile { path: "broken/highonly.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a=\\uD83D\\uD83D\n");
+    v.push(DataFile { path: "broken/highthenhigh.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("k\\uXYZ1=v\n");
+    v.push(DataFile { path: "broken/keyunicode.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a=\\uDE00\n");
+    v.push(DataFile { path: "broken/lowonly.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("a=\\u12");
+    v.push(DataFile { path: "broken/shortunicode.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("613d5c753030ff310a");
+    v.push(DataFile { path: "broken/udecode.properties".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("613d5c75443833445c754445ff0a");
+    v.push(DataFile { path: "broken/udecode2.properties".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("2020200a090c0a6b6579310976616c7565206166746572207461620a6b6579320c76616c756520616674657220666f72");
+    t.push_str("6d20666565640a6b6579333d0a6b6579340a3d76616c7565207769746820656d707479206b65790a3a616e6f74686572");
+    t.push_str("20656d707479206b65790a6d756c74693d6f6e65205c0a202074776f205c0a0a61667465723d626c616e6b206c696e65");
+    t.push_str("20656e6465642074686520636f6e74696e756174696f6e0a636f6e74696e7565645c0a20206b6579203d20636f6e7469");
+    t.push_str("6e756564206b65790a63726c663d6c696e65206f6e65205c0d0a2020206c696e652074776f0d0a63726f6e6c793d610d");
+    t.push_str("6e6578743d620d6475703d66697273740a6475703d7365636f6e640a686578717569726b733d5c75307834315c752034");
+    t.push_str("32205c75345f31615c752b3034615c7530585f350a626f6d3d615c7546454646625c7546464645630a6261636b736c61");
+    t.push_str("73682d656f663d76616c75655c");
+    v.push(DataFile { path: "edge.properties".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "empty.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=512m \\\n");
+    t.push_str("    -Dfile.encoding=UTF-8\n");
+    t.push_str("org.gradle.parallel=true\n");
+    t.push_str("org.gradle.caching=true\n");
+    t.push_str("android.useAndroidX=true\n");
+    t.push_str("kotlin.code.style=official\n");
+    v.push(DataFile { path: "gradle.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("load\tapplication.properties\tutf-8\n");
+    t.push_str("load\tmessages_de_utf8.properties\tutf-8\n");
+    t.push_str("load\tmessages_ja.properties\tutf-8\n");
+    t.push_str("load\tgradle.properties\tutf-8\n");
+    t.push_str("load\tlog4j.properties\tutf-8\n");
+    t.push_str("load\tmeta.properties\tutf-8\n");
+    t.push_str("load\tedge.properties\tutf-8\n");
+    t.push_str("load\tnoeol.properties\tutf-8\n");
+    t.push_str("load\tempty.properties\tutf-8\n");
+    t.push_str("load\ttruncated.properties\tutf-8\n");
+    t.push_str("load\tmessages_de.properties\tiso-8859-1\n");
+    t.push_str("load\tmessages_de.properties\tutf-8\n");
+    t.push_str("load\tmessages_de_utf8.properties\tiso-8859-1\n");
+    t.push_str("load\tbadbyte.properties\tutf-8\n");
+    t.push_str("load\tbadbyte.properties\tascii\n");
+    t.push_str("load\tapplication.properties\tutf-8\tnoescape\n");
+    t.push_str("load\tedge.properties\tutf-8\tnoescape\n");
+    t.push_str("load\tmeta.properties\tutf-8\tmetadoc\n");
+    t.push_str("load\tbroken/badunicode.properties\tutf-8\n");
+    t.push_str("load\tbroken/emptymeta.properties\tutf-8\n");
+    t.push_str("load\tbroken/highbad.properties\tutf-8\n");
+    t.push_str("load\tbroken/highonly.properties\tutf-8\n");
+    t.push_str("load\tbroken/highthenhigh.properties\tutf-8\n");
+    t.push_str("load\tbroken/keyunicode.properties\tutf-8\n");
+    t.push_str("load\tbroken/lowonly.properties\tutf-8\n");
+    t.push_str("load\tbroken/shortunicode.properties\tutf-8\n");
+    t.push_str("load\tbroken/udecode.properties\tutf-8\n");
+    t.push_str("load\tbroken/udecode2.properties\tutf-8\n");
+    t.push_str("store\tapplication.properties\tutf-8\tiso-8859-1\tstrict\n");
+    t.push_str("store\tapplication.properties\tutf-8\tutf-8\tloose\n");
+    t.push_str("store\tedge.properties\tutf-8\tiso-8859-1\tstrict\n");
+    t.push_str("store\tedge.properties\tutf-8\tutf-8\tloose\n");
+    t.push_str("store\tmeta.properties\tutf-8\tiso-8859-1\tstrict\n");
+    t.push_str("store\tmeta.properties\tutf-8\tutf-8\tloose\n");
+    t.push_str("store\tmessages_ja.properties\tutf-8\tiso-8859-1\tstrict\n");
+    t.push_str("store\tmessages_ja.properties\tutf-8\tutf-8\tloose\n");
+    t.push_str("store\tapplication.properties\tutf-8\tascii\tloose\n");
+    t.push_str("store\tapplication.properties\tutf-8\tiso-8859-1\tloose\n");
+    t.push_str("store\tapplication.properties\tutf-8\tutf-8\tloose\tnoescape\n");
+    t.push_str("store\tedge.properties\tutf-8\tutf-8\tstrict\tnoescape\n");
+    t.push_str("store\tmeta.properties\tutf-8\tutf-8\tloose\tmeta\n");
+    t.push_str("store\tmeta.properties\tutf-8\tutf-8\tloose\tmeta\tmetadoc\n");
+    t.push_str("store\tgradle.properties\tutf-8\tutf-8\tloose\tcomments=Built by CI\\r\\nDo not edit\\n#keep\\n:colon line\\r!bang\n");
+    t.push_str("store\tlog4j.properties\tutf-8\tlatin-1\tstrict\tcomments=Logging für Prod\n");
+    t.push_str("edit\tapplication.properties\tset:server.port=10443\tset:new.key=new value\tdel:app.empty\tset:app.empty=back\tset:  spaced=  two leading\tmeta:server.port:owner=ops,__runtime=hidden\n");
+    t.push_str("edit\tmeta.properties\tdel:feature.search.legacy\tdel:missing.key\n");
+    t.push_str("edit\tempty.properties\tset:z=last\tset:a=first\tset:m=middle\n");
+    t.push_str("tool\tapplication.properties\n");
+    t.push_str("tool\tmessages_de.properties\tiso-8859-1\tascii\n");
+    t.push_str("tool\tmessages_ja.properties\tutf-8\tiso-8859-1\n");
+    t.push_str("tool\tedge.properties\tutf-8\tutf-8\tfalse\n");
+    t.push_str("tool\tbroken/highonly.properties\n");
+    t.push_str("tool\tbadbyte.properties\n");
+    t.push_str("tool\tgradle.properties\tnope\n");
+    t.push_str("tool\tgradle.properties\tutf-8\tnope\n");
+    t.push_str("tool\tmissing.properties\n");
+    t.push_str("tool\t-h\n");
+    t.push_str("tool\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("log4j.rootLogger=INFO, stdout, R\n");
+    t.push_str("log4j.appender.stdout=org.apache.log4j.ConsoleAppender\n");
+    t.push_str("log4j.appender.stdout.layout=org.apache.log4j.PatternLayout\n");
+    t.push_str("log4j.appender.stdout.layout.ConversionPattern=%5p [%t] (%F:%L) - %m%n\n");
+    t.push_str("log4j.appender.R=org.apache.log4j.RollingFileAppender\n");
+    t.push_str("log4j.appender.R.File=/var/log/app/app.log\n");
+    t.push_str("log4j.appender.R.MaxFileSize=100KB\n");
+    t.push_str("log4j.appender.R.MaxBackupIndex=5\n");
+    t.push_str("log4j.logger.com.example.db=DEBUG\n");
+    v.push(DataFile { path: "log4j.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("232042656e75747a65726f626572666ce46368650a6772656574696e673d4772fcdf20476f74740a6661726577656c6c");
+    t.push_str("3d41756620576965646572736568656e2c20626973207370e4746572210a70726963653d50726569733a2031322c3530");
+    t.push_str("204555520a");
+    v.push(DataFile { path: "messages_de.properties".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("# Benutzeroberfläche\n");
+    t.push_str("greeting=Grüß Gott\n");
+    t.push_str("farewell=Auf Wiedersehen, bis später!\n");
+    t.push_str("price=Preis: 12,50 €\n");
+    v.push(DataFile { path: "messages_de_utf8.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("# native2ascii output\n");
+    t.push_str("greeting=\\u3053\\u3093\\u306b\\u3061\\u306f\n");
+    t.push_str("farewell=\\u3055\\u3088\\u3046\\u306a\\u3089\n");
+    t.push_str("title=\\u8a2d\\u5b9a\n");
+    v.push(DataFile { path: "messages_ja.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("#: owner=platform-team\n");
+    t.push_str("#: since=2.4\n");
+    t.push_str("feature.checkout.enabled=true\n");
+    t.push_str("# documentation for the checkout flag\n");
+    t.push_str("#   indented doc line\n");
+    t.push_str("feature.search.enabled=false\n");
+    t.push_str("#:deprecated=yes\n");
+    t.push_str("#: replacement=feature.search.v2\n");
+    t.push_str("feature.search.legacy=true\n");
+    t.push_str("! a bang comment after the legacy flag\n");
+    t.push_str("#: orphan=this metadata has no key after it\n");
+    v.push(DataFile { path: "meta.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("no.newline.at.end=yes");
+    v.push(DataFile { path: "noeol.properties".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("6e616d653d636166c3");
+    v.push(DataFile { path: "truncated.properties".to_string(), hex: true, body: t });
+}
