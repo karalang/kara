@@ -6971,3 +6971,33 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
     }
 }
+
+/// B-2026-10-20-31: a variant the checker typed at the `ref` parameter it is
+/// lent to (a bare `None` arm of an `if` or `match` passed straight to a
+/// call) is built as the value its destination holds, not as a borrow of a
+/// temporary written into a value slot.
+#[test]
+fn mir_variant_arm_lent_to_a_call_is_built_in_place() {
+    let src = r#"fn g(v: Option[String]) -> i64 { match v { None => 0, Some(s) => s.len() } }
+fn h(v: ref Option[String]) -> i64 { match v { None => 0, Some(s) => s.len() } }
+fn k(v: own Option[String]) -> i64 { match v { None => 0, Some(s) => s.len() } }
+fn opt(a: Str) -> Option[String] { Some(a.to_string()) }
+fn main() {
+    for a in ["NONE", "abc"] {
+        println(f"{g(if a == "NONE" { None } else { Some(a.to_string()) })}");
+        println(f"{h(if a == "NONE" { None } else { opt(a) })}");
+        println(f"{k(if a == "NONE" { None } else { opt(a) })}");
+        println(f"{g(match a { "NONE" => None, _ => opt(a) })}");
+    }
+}
+"#;
+    let want = "0\n0\n0\n0\n3\n3\n3\n3\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    let Some(exe) = cli_build(&dir, src, &[]) else {
+        return;
+    };
+    let run = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+}

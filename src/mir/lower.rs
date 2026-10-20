@@ -6071,6 +6071,15 @@ impl<'l, 'a> Bx<'l, 'a> {
             HK::MutRef(inner) => Some((inner, BorrowKind::Mut)),
             _ => None,
         };
+        // A constructor the checker typed at the parameter it is lent to
+        // (`g(if c { None } else { .. })` for `v: Option[String]`) builds
+        // the value itself when its destination holds one (B-2026-10-20-31).
+        let dt = self.place_type(&dest);
+        let lend = lend.filter(|_| matches!(self.tys().tcx().kind(dt), HK::Ref(_) | HK::MutRef(_)));
+        let t = match (lend, self.tys().tcx().kind(t)) {
+            (None, HK::Ref(inner) | HK::MutRef(inner)) => inner,
+            _ => t,
+        };
         let Some((inner, bk)) = lend else {
             let kind = self.adt_aggregate(t, idx);
             self.assign(dest, Rvalue::Aggregate(kind, ops));
