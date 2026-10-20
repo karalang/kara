@@ -2227,6 +2227,11 @@ impl<'a> EffectChecker<'a> {
                         self.declared_effects.insert(key, decl);
                         self.function_visibility.insert(key, method.is_pub);
                         self.function_spans.insert(key, method.span);
+                        // A method's group member is named `Type.method`, so
+                        // the allow is recorded under that key (B-2026-10-20-28).
+                        if fn_allows_mutual_recursion_note(&method.attributes) {
+                            self.mutual_recursion_allow.insert(key);
+                        }
                     }
                 }
                 Item::TraitDef(t) => {
@@ -2257,6 +2262,9 @@ impl<'a> EffectChecker<'a> {
                         // public-declaration verification.
                         self.function_visibility.insert(key, t.is_pub);
                         self.function_spans.insert(key, method.span);
+                        if fn_allows_mutual_recursion_note(&method.attributes) {
+                            self.mutual_recursion_allow.insert(key);
+                        }
                     }
                 }
                 _ => {}

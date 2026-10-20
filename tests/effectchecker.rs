@@ -1728,6 +1728,58 @@ fn g() {
     );
 }
 
+/// The same allow on an impl METHOD (B-2026-10-20-28). A method's group
+/// member is named `Type.method`, and the allow set was filled from free
+/// functions only, so two mutually recursive methods each carrying the
+/// attribute still printed the note that tells you to add it.
+#[test]
+fn mutual_recursion_note_suppressed_by_allow_on_a_method() {
+    let methods = |attr: &str| {
+        format!(
+            r#"
+struct P {{
+    n: i64,
+}}
+impl P {{
+    {attr}
+    fn x(mut ref self) -> i64 {{
+        if self.n == 0 {{
+            return 0;
+        }}
+        self.n -= 1;
+        self.y()
+    }}
+    fn y(mut ref self) -> i64 {{
+        self.x() + 1
+    }}
+}}
+"#
+        )
+    };
+    let notes = |source: &str| {
+        let result = effectcheck_all(source);
+        assert!(
+            !result.mutual_recursion_groups.is_empty(),
+            "the methods must form a detected group; got none"
+        );
+        result
+            .errors
+            .iter()
+            .filter(|e| e.kind == EffectErrorKind::MutualRecursionNote)
+            .count()
+    };
+    assert_eq!(
+        notes(&methods("")),
+        1,
+        "without the allow the group's note prints"
+    );
+    assert_eq!(
+        notes(&methods("#[allow(mutual_recursion_note)]")),
+        0,
+        "the allow on one method must suppress the group's note"
+    );
+}
+
 #[test]
 fn test_mutual_recursion_detected() {
     let source = r#"
