@@ -172,7 +172,7 @@ fn a_default_method_parameter_names_self_item() {
 trait It2 {
     type Item;
     fn nxt(mut ref self) -> Option[Self.Item];
-    fn fold2[B](mut ref self, init: own B, f: MutFn(own B, own Self.Item) -> B) -> B {
+    fn fold2[B](mut ref self, init: own B, f: own MutFn(own B, own Self.Item) -> B) -> B {
         let mut acc = init;
         loop {
             match self.nxt() {

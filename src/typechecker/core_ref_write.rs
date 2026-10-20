@@ -115,6 +115,13 @@ struct Walk<'t, 'a> {
     closure_writes: FxHashMap<usize, String>,
     /// The current function's `MutFn` parameters.
     mut_fn_params: FxHashSet<String>,
+    /// Its `MutFn` parameters held by a shared borrow (a bare or `ref`
+    /// one), with the edit that makes each `own` where there is one.
+    shared_mut_fn_params: FxHashMap<String, Option<FixIt>>,
+    /// Calls of a `MutFn` through a shared borrow (§9.6).
+    shared_mut_fn_calls: Vec<(Span, String, Option<FixIt>)>,
+    /// The scopes that hold a `for` pattern's bindings.
+    for_item_scopes: Vec<usize>,
     /// Locals bound to a closure literal that writes a capture, with the
     /// capture's name.
     mut_closure_locals: Vec<((usize, usize), String)>,
@@ -271,6 +278,9 @@ impl<'a> TypeChecker<'a> {
             closures: Vec::new(),
             closure_writes: FxHashMap::default(),
             mut_fn_params: FxHashSet::default(),
+            shared_mut_fn_params: FxHashMap::default(),
+            shared_mut_fn_calls: Vec::new(),
+            for_item_scopes: Vec::new(),
             mut_closure_locals: Vec::new(),
             moved_mut_fns: Vec::new(),
             kind_errors: Vec::new(),
@@ -327,11 +337,43 @@ impl<'a> TypeChecker<'a> {
                 .flat_map(|p| p.pattern.binding_names())
                 .collect();
             w.mut_fn_params.extend(mut_fns);
+            w.shared_mut_fn_params = f
+                .params
+                .iter()
+                .filter(|p| !p.is_own)
+                .filter_map(|p| {
+                    let fix = match &p.ty.kind {
+                        TypeKind::Ref(inner) if w.is_mut_fn(inner) => None,
+                        _ if crate::d5_params::on() && w.is_mut_fn(&p.ty) => {
+                            let escaping =
+                                w.tc.program
+                                    .escaping_fn_types
+                                    .contains(&SpanKey::from_span(&p.ty.span));
+                            (!escaping).then(|| FixIt {
+                                span: Span {
+                                    length: 0,
+                                    ..p.ty.span
+                                },
+                                replacement: "own ".to_string(),
+                            })
+                        }
+                        _ => return None,
+                    };
+                    Some((p, fix))
+                })
+                .flat_map(|(p, fix)| {
+                    p.pattern
+                        .binding_names()
+                        .into_iter()
+                        .map(move |n| (n, fix.clone()))
+                })
+                .collect();
             w.block(&f.body);
         }
         let mut conflicts = w.conflicts;
         let mut errors = w.errors;
         let kind_errors = w.kind_errors;
+        let shared_mut_fn_calls = w.shared_mut_fn_calls;
         let prefix_errors = w.prefix_errors;
         let once_calls = w.once_calls;
         let read_conflicts = w.read_conflicts;
@@ -349,6 +391,14 @@ impl<'a> TypeChecker<'a> {
         }
         for (span, message) in kind_errors {
             self.type_error(message, span, TypeErrorKind::FnKindMismatch);
+        }
+        for (span, message, fix) in shared_mut_fn_calls {
+            match fix {
+                Some(fix) => {
+                    self.type_error_with_fix_it(message, span, TypeErrorKind::FnKindMismatch, fix)
+                }
+                None => self.type_error(message, span, TypeErrorKind::FnKindMismatch),
+            }
         }
         for (span, message, fix) in prefix_errors {
             self.type_error_with_fix_it(message, span, TypeErrorKind::CapturePrefixRemoved, fix);
@@ -1001,6 +1051,7 @@ impl Walk<'_, '_> {
                 }
                 self.children(e);
                 self.check_fn_kinds(callee, args);
+                self.check_shared_mut_fn_call(callee);
                 return;
             }
             ExprKind::For {
@@ -1031,8 +1082,10 @@ impl Walk<'_, '_> {
                     self.borrowed.push(b);
                 }
                 self.scopes.push(Vec::new());
+                self.for_item_scopes.push(self.scopes.len() - 1);
                 self.bind(pattern, origin, fix);
                 self.block(body);
+                self.for_item_scopes.pop();
                 self.scopes.pop();
                 self.borrowed.truncate(before);
                 return;
@@ -1185,6 +1238,48 @@ impl Walk<'_, '_> {
                 Child::Block(b) => self.block(b),
             }
         }
+    }
+
+    /// Whether `name` is bound by the pattern of an enclosing bare `for`
+    /// over a collection.
+    fn is_for_item(&self, name: &str) -> bool {
+        matches!(self.origin_of(name), Origin::ForElem)
+            && self
+                .scopes
+                .iter()
+                .rposition(|s| s.iter().any(|(n, _, _)| n == name))
+                .is_some_and(|i| self.for_item_scopes.contains(&i))
+    }
+
+    /// §9.6: a `MutFn` is called only through a unique access: an owned
+    /// binding, an `own` parameter or a `mut ref`. A bare parameter is a
+    /// shared borrow (§4.1), as a `ref` one is, so calling either is an
+    /// error. The fix declares a bare one `own` (B-2026-10-19-49).
+    fn check_shared_mut_fn_call(&mut self, callee: &Expr) {
+        let ExprKind::Identifier(name) = &callee.kind else {
+            return;
+        };
+        let Some(fix) = self.shared_mut_fn_params.get(name).cloned() else {
+            return;
+        };
+        // A local of the same name shadows the parameter.
+        let innermost = self
+            .scopes
+            .iter()
+            .rposition(|s| s.iter().any(|(n, _, _)| n == name));
+        if innermost != Some(0) {
+            return;
+        }
+        self.shared_mut_fn_calls.push((
+            callee.span,
+            format!(
+                "`{name}` is a borrowed `MutFn`, so it cannot be called \
+                 (core-semantics.md §9.6): a `MutFn` is called only through an owned \
+                 binding, an `own` parameter or a `mut ref`. Declare the parameter \
+                 `{name}: own MutFn(...)`"
+            ),
+            fix,
+        ));
     }
 
     /// A `MutFn(...)` type, under any `ref`s.
@@ -1435,6 +1530,16 @@ impl Walk<'_, '_> {
                 op: UnaryOp::Deref,
                 operand,
             } => self.check_through(operand, target.span, "an assignment through it"),
+            // §5.9: the item of a bare `for` is a `ref` into the collection,
+            // so assigning it is a write through that `ref`, also when it is
+            // a `Copy` value that reads as one (§5.10). Accepted, it changed
+            // nothing in the collection (B-2026-10-19-45). A local bound from
+            // the item is its own binding, which an assignment rebinds.
+            ExprKind::Identifier(n) if self.is_for_item(n) => {
+                let message = self.read_only_message(target, "an assignment through it");
+                let fix = self.lookup(n).and_then(|b| b.2.clone());
+                self.errors.push((target.span, message, fix));
+            }
             _ => {}
         }
     }

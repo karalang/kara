@@ -2419,7 +2419,7 @@ fn writing_a_place_a_for_loop_iterates_is_an_error() {
 fn closure_kinds_follow_their_bodies() {
     accepted(
         "closure-kinds",
-        "fn twice(f: MutFn()) { f(); f(); }\n\
+        "fn twice(f: own MutFn()) { f(); f(); }\n\
          fn once(f: OnceFn() -> String) -> String { f() }\n\
          fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
          fn main() {\n\
@@ -10064,5 +10064,45 @@ fn a_returned_closure_is_callable_as_a_call_result() {
              let s = (pick(10))(4);\n\
              println(f\"{s}\");\n\
          }\n",
+    );
+}
+
+/// B-2026-10-19-45 (core-semantics §5.9): the item of a bare `for` is a
+/// `ref` into the collection, so assigning it is refused, also when it is a
+/// `Copy` value. A local bound from the item is its own binding and may be
+/// rebound.
+#[test]
+fn a_for_item_is_not_assignable_but_a_copy_of_it_is() {
+    let (dir, path) = fixture(
+        "for-item-write",
+        "fn main() {\n    let v: Vec[i64] = [1, 2];\n    for x in v { x += 1; }\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    assert!(
+        err.contains("an assignment through `x` cannot modify it"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    accepted(
+        "for-item-copy-rebound",
+        "fn main() {\n    let v: Vec[i64] = [3, 1];\n    let mut t = 0;\n    \
+         for x in v {\n        let mut largest = x;\n        largest = largest.max(2);\n        \
+         t += largest;\n    }\n    println(f\"{t}\");\n}\n",
+    );
+}
+
+/// B-2026-10-19-49 (core-semantics §9.6): a `MutFn` is called only through
+/// a unique access, and a bare parameter is a shared borrow (§4.1). The fix
+/// declares it `own`.
+#[test]
+fn a_borrowed_mut_fn_cannot_be_called() {
+    rejected_then_fixed_by(
+        "borrowed-mut-fn-call",
+        "fn call(f: MutFn()) { f(); }\n\
+         fn main() {\n    let mut n = 0;\n    call(|| { n += 1; });\n    println(f\"{n}\");\n}\n",
+        "is a borrowed `MutFn`, so it cannot be called",
+        "f: own MutFn()",
     );
 }
