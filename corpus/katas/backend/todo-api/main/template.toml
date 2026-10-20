@@ -1,0 +1,4 @@
+# The program serves a fixed port; the corpus binds port 0 so that entries
+# can run side by side, and the driver finds the port through BOUND_PORT.
+[replace]
+"127.0.0.1:8080" = "127.0.0.1:0"

@@ -1,0 +1,630 @@
+// runtime/stdlib/source/json.kara
+//
+// `Json.parse` and `Json.stringify` on the v2 pipeline (B-2026-10-20-39),
+// for the `Json` value tree runtime/stdlib/json.kara declares. The MIR
+// pipeline appends this file to a program that names `Json`
+// (`BAKED_SOURCES` in src/mir/lower.rs); its `impl Json` restates the baked
+// one's two `#[compiler_builtin]` methods, so the checker drops the baked
+// impl and both MIR backends run these bodies. The legacy pipeline keeps
+// the baked file, whose methods the legacy interpreter answers with
+// `serde_json`.
+//
+// The text is the one legacy writes and reads: `serde_json` built with
+// `preserve_order`. An object keeps its keys in order and a repeated key
+// keeps its first place with its last value; a number with no fraction or
+// exponent that fits an `i64` is `Json.Int`, any other is `Json.Number`
+// (`-0` is `Number(-0.0)`); a `Number` is written in the shortest form that
+// reads back to the same `f64` (`1.0`, `0.1`, `1e+21`, `1e-7`), and NaN or
+// an infinity as `null`. A `JsonError` names the line and the byte column
+// of the error and says what was wrong, as `serde_json` does
+// (`expected `:` at line 1 column 6`).
+
+/// A JSON value (the baked file's tree, restated so that the program's
+/// `Json` is this one and its `parse` resolves to the body below).
+pub enum Json {
+    Null,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec[Json]),
+    Object(Vec[(String, Json)]),
+    Int(i64),
+}
+
+/// Where and why text is not JSON: a 1-based line, the byte column, and
+/// the message with both.
+pub struct JsonError {
+    line: u32,
+    column: u32,
+    message: String,
+}
+
+impl Json {
+    /// The value `text` holds, or where and why it is not JSON.
+    fn parse(text: Str) -> Result[Json, JsonError] {
+        let mut r = JsonTextReader { chars: text.chars().collect(), pos: 0, depth: 0 };
+        let v = r.value()?;
+        match r.skip_ws() {
+            Some(_) => Err(r.peek_error("trailing characters")),
+            None => Ok(v),
+        }
+    }
+
+    /// The value as compact JSON text.
+    fn stringify(own self) -> String {
+        let mut out = String.new();
+        json_write(self, mut out);
+        out
+    }
+}
+
+/// Writes `j` to `out`.
+fn json_write(j: ref Json, out: mut ref String) {
+    match j {
+        Json.Null => out.push_str("null"),
+        Json.Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Json.Int(n) => out.push_str(f"{n}"),
+        Json.Number(x) => out.push_str(json_number_text(*x)),
+        Json.String(s) => json_write_str(s, out),
+        Json.Array(items) => {
+            out.push('[');
+            let mut i = 0;
+            while i < items.len() {
+                if i > 0 {
+                    out.push(',');
+                }
+                json_write(items[i], out);
+                i += 1;
+            }
+            out.push(']');
+        }
+        Json.Object(fields) => {
+            // A repeated key is written once, where it first appears, with
+            // the value of its last pair.
+            let mut last: Map[String, i64] = Map.new();
+            let mut i = 0;
+            while i < fields.len() {
+                last.insert(fields[i].0.clone(), i);
+                i += 1;
+            }
+            out.push('{');
+            let mut written: Set[String] = Set.new();
+            i = 0;
+            while i < fields.len() {
+                let key = ref fields[i].0;
+                if not written.contains(key) {
+                    if not written.is_empty() {
+                        out.push(',');
+                    }
+                    written.insert(key.clone());
+                    json_write_str(key, out);
+                    out.push(':');
+                    let at = last.get(key).unwrap_or(i);
+                    json_write(fields[at].1, out);
+                }
+                i += 1;
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// `s` as a JSON string: quotes, backslashes and control characters
+/// escaped, everything else as it is.
+fn json_write_str(s: ref String, out: mut ref String) {
+    let hex: Vec[char] = "0123456789abcdef".chars().collect();
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            _ if (c as u32) < 32 => {
+                out.push_str("\\u00");
+                out.push(hex[(c as u32 / 16) as i64]);
+                out.push(hex[(c as u32 % 16) as i64]);
+            }
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// `x` in the shortest form that reads back to it, laid out as `serde_json`
+/// lays it out: a whole number below 1e16 as `ddd.0`, a fraction as
+/// `d.ddd` or, down to 1e-5, `0.000ddd`, anything else as `d.ddde±x`.
+fn json_number_text(x: f64) -> String {
+    if x != x or x - x != 0.0 {
+        return "null";
+    }
+    // The shortest digits, from the default text (`1e-07`, `0.1`,
+    // `123456789.0`), and the power of ten of the first one.
+    let text = f"{x}";
+    let mut out = String.new();
+    let mut digits: Vec[char] = Vec.new();
+    let mut point: i64 = -1;
+    let mut exp: i64 = 0;
+    let mut neg_exp = false;
+    let mut in_exp = false;
+    let mut seen = 0;
+    for c in text.chars() {
+        if c == '-' and not in_exp {
+            out.push('-');
+        } else if c == 'e' or c == 'E' {
+            in_exp = true;
+        } else if in_exp {
+            if c == '-' {
+                neg_exp = true;
+            } else if c != '+' {
+                exp = exp * 10 + (c as i64 - '0' as i64);
+            }
+        } else if c == '.' {
+            point = seen;
+        } else {
+            digits.push(c);
+            seen += 1;
+        }
+    }
+    if neg_exp {
+        exp = -exp;
+    }
+    if point < 0 {
+        point = seen;
+    }
+    // Drop the leading and trailing zeros; `point` counts the digits
+    // before the decimal point.
+    let mut lo = 0;
+    while lo < digits.len() and digits[lo] == '0' {
+        lo += 1;
+    }
+    let mut hi = digits.len();
+    while hi > lo and digits[hi - 1] == '0' {
+        hi -= 1;
+    }
+    if lo == hi {
+        out.push_str("0.0");
+        return out;
+    }
+    let n = hi - lo;
+    // The decimal point sits after `kk` of the digits.
+    let kk = point - lo + exp;
+    if kk >= n and kk <= 16 {
+        let mut i = lo;
+        while i < hi {
+            out.push(digits[i]);
+            i += 1;
+        }
+        let mut z = n;
+        while z < kk {
+            out.push('0');
+            z += 1;
+        }
+        out.push_str(".0");
+    } else if kk > 0 and kk <= 16 {
+        let mut i = lo;
+        while i < hi {
+            if i - lo == kk {
+                out.push('.');
+            }
+            out.push(digits[i]);
+            i += 1;
+        }
+    } else if kk > -5 and kk <= 0 {
+        out.push_str("0.");
+        let mut z = kk;
+        while z < 0 {
+            out.push('0');
+            z += 1;
+        }
+        let mut i = lo;
+        while i < hi {
+            out.push(digits[i]);
+            i += 1;
+        }
+    } else {
+        out.push(digits[lo]);
+        if n > 1 {
+            out.push('.');
+            let mut i = lo + 1;
+            while i < hi {
+                out.push(digits[i]);
+                i += 1;
+            }
+        }
+        let e = kk - 1;
+        if e < 0 {
+            out.push_str(f"e{e}");
+        } else {
+            out.push_str(f"e+{e}");
+        }
+    }
+    out
+}
+
+/// Reads one JSON value from text, as `serde_json` does, with its errors.
+struct JsonTextReader {
+    chars: Vec[char],
+    pos: i64,
+    /// Arrays and objects open around the reader.
+    depth: i64,
+}
+
+impl JsonTextReader {
+    /// The line and byte column after the first `at` chars.
+    fn error_at(ref self, at: i64, msg: Str) -> JsonError {
+        let mut line = 1;
+        let mut column = 0;
+        let mut i = 0;
+        while i < at {
+            if self.chars[i] == '\n' {
+                line += 1;
+                column = 0;
+            } else {
+                column += self.chars[i].len_utf8();
+            }
+            i += 1;
+        }
+        JsonError {
+            line: line as u32,
+            column: column as u32,
+            message: f"{msg} at line {line} column {column}",
+        }
+    }
+
+    /// An error at what has been read.
+    fn error(ref self, msg: Str) -> JsonError {
+        self.error_at(self.pos, msg)
+    }
+
+    /// An error at the char about to be read, counting it.
+    fn peek_error(ref self, msg: Str) -> JsonError {
+        let at = if self.pos < self.chars.len() { self.pos + 1 } else { self.pos };
+        self.error_at(at, msg)
+    }
+
+    fn peek(ref self) -> Option[char] {
+        if self.pos < self.chars.len() {
+            Some(self.chars[self.pos])
+        } else {
+            None
+        }
+    }
+
+    fn next(mut ref self) -> Option[char] {
+        let c = self.peek();
+        if c.is_some() {
+            self.pos += 1;
+        }
+        c
+    }
+
+    /// Skips whitespace; the char after it.
+    fn skip_ws(mut ref self) -> Option[char] {
+        while self.pos < self.chars.len() {
+            let c = self.chars[self.pos];
+            if c != ' ' and c != '\n' and c != '\t' and c != '\r' {
+                return Some(c);
+            }
+            self.pos += 1;
+        }
+        None
+    }
+
+    fn value(mut ref self) -> Result[Json, JsonError] {
+        let Some(c) = self.skip_ws() else {
+            return Err(self.peek_error("EOF while parsing a value"));
+        };
+        match c {
+            'n' => {
+                self.pos += 1;
+                self.ident("ull")?;
+                Ok(Json.Null)
+            }
+            't' => {
+                self.pos += 1;
+                self.ident("rue")?;
+                Ok(Json.Bool(true))
+            }
+            'f' => {
+                self.pos += 1;
+                self.ident("alse")?;
+                Ok(Json.Bool(false))
+            }
+            '"' => {
+                self.pos += 1;
+                Ok(Json.String(self.string()?))
+            }
+            '[' => {
+                self.open()?;
+                let items = self.array()?;
+                self.depth -= 1;
+                Ok(Json.Array(items))
+            }
+            '{' => {
+                self.open()?;
+                let fields = self.object()?;
+                self.depth -= 1;
+                Ok(Json.Object(fields))
+            }
+            _ if c == '-' or (c >= '0' and c <= '9') => self.number(),
+            _ => Err(self.peek_error("expected value")),
+        }
+    }
+
+    /// Enters an array or object, at most 127 deep.
+    fn open(mut ref self) -> Result[(), JsonError] {
+        self.depth += 1;
+        if self.depth >= 128 {
+            return Err(self.peek_error("recursion limit exceeded"));
+        }
+        self.pos += 1;
+        Ok(())
+    }
+
+    /// The rest of `null`, `true` or `false`.
+    fn ident(mut ref self, rest: Str) -> Result[(), JsonError] {
+        for want in rest.chars() {
+            match self.next() {
+                None => return Err(self.error("EOF while parsing a value")),
+                Some(c) => {
+                    if c != want {
+                        return Err(self.error("expected ident"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn digit_next(ref self) -> bool {
+        match self.peek() {
+            Some(c) => c >= '0' and c <= '9',
+            None => false,
+        }
+    }
+
+    /// A number: `Int` when it has no fraction or exponent and fits.
+    fn number(mut ref self) -> Result[Json, JsonError] {
+        let start = self.pos;
+        if self.peek() == Some('-') {
+            self.pos += 1;
+        }
+        match self.next() {
+            None => return Err(self.error("EOF while parsing a value")),
+            Some('0') => {
+                if self.digit_next() {
+                    return Err(self.peek_error("invalid number"));
+                }
+            }
+            Some(c) => {
+                if c < '1' or c > '9' {
+                    return Err(self.error("invalid number"));
+                }
+                while self.digit_next() {
+                    self.pos += 1;
+                }
+            }
+        }
+        let mut whole = true;
+        if self.peek() == Some('.') {
+            whole = false;
+            self.pos += 1;
+            self.digits()?;
+        }
+        if self.peek() == Some('e') or self.peek() == Some('E') {
+            whole = false;
+            self.pos += 1;
+            if self.peek() == Some('+') or self.peek() == Some('-') {
+                self.pos += 1;
+            }
+            self.digits()?;
+        }
+        let mut text = String.new();
+        let mut i = start;
+        while i < self.pos {
+            text.push(self.chars[i]);
+            i += 1;
+        }
+        if whole and text != "-0" {
+            if let Ok(n) = i64.parse(text.as_str()) {
+                return Ok(Json.Int(n));
+            }
+        }
+        match f64.parse(text.as_str()) {
+            Ok(x) => {
+                if x - x != 0.0 {
+                    return Err(self.error("number out of range"));
+                }
+                Ok(Json.Number(x))
+            }
+            Err(_) => Err(self.error("invalid number")),
+        }
+    }
+
+    /// One or more digits, after a `.` or an exponent's `e`.
+    fn digits(mut ref self) -> Result[(), JsonError] {
+        match self.next() {
+            None => return Err(self.error("EOF while parsing a value")),
+            Some(c) => {
+                if c < '0' or c > '9' {
+                    return Err(self.error("invalid number"));
+                }
+            }
+        }
+        while self.digit_next() {
+            self.pos += 1;
+        }
+        Ok(())
+    }
+
+    /// A string's text, after its opening quote.
+    fn string(mut ref self) -> Result[String, JsonError] {
+        let mut out = String.new();
+        loop {
+            let Some(c) = self.next() else {
+                return Err(self.error("EOF while parsing a string"));
+            };
+            if c == '"' {
+                return Ok(out);
+            }
+            if c == '\\' {
+                let Some(e) = self.next() else {
+                    return Err(self.error("EOF while parsing a string"));
+                };
+                match e {
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    '/' => out.push('/'),
+                    'b' => out.push('\u{8}'),
+                    'f' => out.push('\u{c}'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    'u' => out.push(self.unicode_escape()?),
+                    _ => return Err(self.error("invalid escape")),
+                }
+            } else if (c as u32) < 32 {
+                return Err(self.error("control character (\\u0000-\\u001F) found while parsing a string"));
+            } else {
+                out.push(c);
+            }
+        }
+    }
+
+    /// The four hex digits of a `\u` escape.
+    fn hex4(mut ref self) -> Result[u32, JsonError] {
+        if self.pos + 4 > self.chars.len() {
+            self.pos = self.chars.len();
+            return Err(self.error("EOF while parsing a string"));
+        }
+        // All four are read before a bad one is reported, as `serde_json`
+        // reads them.
+        let mut n: u32 = 0;
+        let mut bad = false;
+        let mut k = 0;
+        while k < 4 {
+            let c = self.chars[self.pos];
+            self.pos += 1;
+            let d = if c >= '0' and c <= '9' {
+                c as u32 - '0' as u32
+            } else if c >= 'a' and c <= 'f' {
+                c as u32 - 'a' as u32 + 10
+            } else if c >= 'A' and c <= 'F' {
+                c as u32 - 'A' as u32 + 10
+            } else {
+                bad = true;
+                0
+            };
+            n = n * 16 + d;
+            k += 1;
+        }
+        if bad {
+            return Err(self.error("invalid escape"));
+        }
+        Ok(n)
+    }
+
+    /// The char a `\uXXXX` escape, or a surrogate pair of them, names.
+    fn unicode_escape(mut ref self) -> Result[char, JsonError] {
+        let n = self.hex4()?;
+        if n >= 0xDC00 and n <= 0xDFFF {
+            return Err(self.error("lone leading surrogate in hex escape"));
+        }
+        if n >= 0xD800 and n <= 0xDBFF {
+            if self.next() != Some('\\') or self.next() != Some('u') {
+                return Err(self.error("unexpected end of hex escape"));
+            }
+            let lo = self.hex4()?;
+            if lo < 0xDC00 or lo > 0xDFFF {
+                return Err(self.error("lone leading surrogate in hex escape"));
+            }
+            let c = 0x10000 + ((n - 0xD800) * 1024) + (lo - 0xDC00);
+            return match char.try_from(c) {
+                Ok(c) => Ok(c),
+                Err(_) => Err(self.error("invalid unicode code point")),
+            };
+        }
+        match char.try_from(n) {
+            Ok(c) => Ok(c),
+            Err(_) => Err(self.error("invalid unicode code point")),
+        }
+    }
+
+    /// An array's items, after its `[`.
+    fn array(mut ref self) -> Result[Vec[Json], JsonError] {
+        let mut items: Vec[Json] = Vec.new();
+        let mut first = true;
+        loop {
+            match self.skip_ws() {
+                Some(']') => {
+                    self.pos += 1;
+                    return Ok(items);
+                }
+                Some(',') if not first => {
+                    self.pos += 1;
+                    if self.skip_ws() == Some(']') {
+                        return Err(self.peek_error("trailing comma"));
+                    }
+                }
+                Some(_) => {
+                    if not first {
+                        return Err(self.peek_error("expected `,` or `]`"));
+                    }
+                    first = false;
+                }
+                None => return Err(self.peek_error("EOF while parsing a list")),
+            }
+            items.push(self.value()?);
+        }
+    }
+
+    /// An object's fields, after its `{`. A repeated key keeps its first
+    /// place and takes the later value.
+    fn object(mut ref self) -> Result[Vec[(String, Json)], JsonError] {
+        let mut fields: Vec[(String, Json)] = Vec.new();
+        let mut index: Map[String, i64] = Map.new();
+        let mut first = true;
+        loop {
+            match self.skip_ws() {
+                Some('}') => {
+                    self.pos += 1;
+                    return Ok(fields);
+                }
+                Some(',') if not first => {
+                    self.pos += 1;
+                }
+                Some(_) => {
+                    if not first {
+                        return Err(self.peek_error("expected `,` or `}`"));
+                    }
+                    first = false;
+                }
+                None => return Err(self.peek_error("EOF while parsing an object")),
+            }
+            match self.skip_ws() {
+                Some('"') => self.pos += 1,
+                Some('}') => return Err(self.peek_error("trailing comma")),
+                Some(_) => return Err(self.peek_error("key must be a string")),
+                None => return Err(self.peek_error("EOF while parsing a value")),
+            }
+            let key = self.string()?;
+            match self.skip_ws() {
+                Some(':') => self.pos += 1,
+                Some(_) => return Err(self.peek_error("expected `:`")),
+                None => return Err(self.peek_error("EOF while parsing an object")),
+            }
+            let v = self.value()?;
+            match index.get(key) {
+                Some(at) => fields[at].1 = v,
+                None => {
+                    index.insert(key.clone(), fields.len());
+                    fields.push((key, v));
+                }
+            }
+        }
+    }
+}

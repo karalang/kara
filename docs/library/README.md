@@ -10,6 +10,7 @@ This directory specifies the standard library's public API: its types, functions
 | [strings.md](strings.md) | `String` and `Str` methods, normalization, UTF-8 conversion, `CStr` and `CString` |
 | [path.md](path.md) | `std.path`: lexical path functions on `Str` |
 | [encoding.md](encoding.md) | `std.encoding`: Base64 and hex |
+| [json.md](json.md) | `Json` values: `parse` and `stringify` |
 | [io.md](io.md) | Standard streams, files, buffered I/O, TCP, process exit |
 | [regex.md](regex.md) | Regular expressions: `Regex`, `Match`, `Captures` |
 | [concurrency.md](concurrency.md) | Channels, `TaskGroup`, `Mutex`, atomics |

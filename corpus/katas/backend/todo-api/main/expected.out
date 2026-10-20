@@ -1,0 +1,83 @@
+=== connection 1 ===
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 155
+connection: close
+
+[{"id":1.0,"title":"Learn Kāra","completed":false},{"id":2.0,"title":"Write a kata","completed":true},{"id":3.0,"title":"Ship Slice 4","completed":false}]
+=== connection 2 ===
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 50
+connection: close
+
+{"id":2.0,"title":"Write a kata","completed":true}
+=== connection 3 ===
+HTTP/1.1 404 Not Found
+content-type: application/json
+content-length: 9
+connection: close
+
+not found
+=== connection 4 ===
+HTTP/1.1 201 Created
+content-type: application/json
+content-length: 55
+connection: close
+
+{"id":4.0,"title":"Drive the corpus","completed":false}
+=== connection 5 ===
+HTTP/1.1 400 Bad Request
+content-type: application/json
+content-length: 30
+connection: close
+
+missing or empty 'title' field
+=== connection 6 ===
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 48
+connection: close
+
+{"id":1.0,"title":"Learn Kara","completed":true}
+=== connection 7 ===
+HTTP/1.1 404 Not Found
+content-type: application/json
+content-length: 9
+connection: close
+
+not found
+=== connection 8 ===
+HTTP/1.1 204 No Content
+content-type: application/json
+content-length: 0
+connection: close
+
+=== connection 9 ===
+HTTP/1.1 404 Not Found
+content-type: application/json
+content-length: 9
+connection: close
+
+not found
+=== connection 10 ===
+HTTP/1.1 404 Not Found
+content-type: application/json
+content-length: 9
+connection: close
+
+not found
+=== connection 11 ===
+HTTP/1.1 405 Method Not Allowed
+content-type: application/json
+content-length: 18
+connection: close
+
+method not allowed
+=== connection 12 ===
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 157
+connection: close
+
+[{"id":1.0,"title":"Learn Kara","completed":true},{"id":2.0,"title":"Write a kata","completed":true},{"id":4.0,"title":"Drive the corpus","completed":false}]

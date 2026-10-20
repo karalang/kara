@@ -1,0 +1,39 @@
+# The CRUD walk the README describes, one request per connection: list,
+# read, a missing id, create (and one without a title), update, delete
+# twice, an unknown route, an unsupported method, and the final list.
+# State carries over from one connection to the next.
+[[connection]]
+send = "GET /todos HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+[[connection]]
+send = "GET /todos/2 HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+[[connection]]
+send = "GET /todos/99 HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+[[connection]]
+send = "POST /todos HTTP/1.1\r\nHost: h\r\nContent-Type: application/json\r\nContent-Length: 46\r\nConnection: close\r\n\r\n{\"title\":\"Drive the corpus\",\"completed\":false}"
+
+[[connection]]
+send = "POST /todos HTTP/1.1\r\nHost: h\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"completed\":true}"
+
+[[connection]]
+send = "PUT /todos/1 HTTP/1.1\r\nHost: h\r\nContent-Type: application/json\r\nContent-Length: 39\r\nConnection: close\r\n\r\n{\"title\":\"Learn Kara\",\"completed\":true}"
+
+[[connection]]
+send = "PUT /todos/42 HTTP/1.1\r\nHost: h\r\nContent-Type: application/json\r\nContent-Length: 35\r\nConnection: close\r\n\r\n{\"title\":\"nobody\",\"completed\":true}"
+
+[[connection]]
+send = "DELETE /todos/3 HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+[[connection]]
+send = "DELETE /todos/3 HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+[[connection]]
+send = "GET /elsewhere HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+[[connection]]
+send = "PATCH /todos/1 HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+[[connection]]
+send = "GET /todos HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"

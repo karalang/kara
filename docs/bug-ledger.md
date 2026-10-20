@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 605 |
 | double-free | 427 |
 | missing-feature | 304 |
-| codegen-gap | 278 |
+| codegen-gap | 279 |
 | false-positive | 256 |
 | other | 185 |
 | diagnostics | 183 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2979 |
-| interp | 1000 |
+| codegen | 2980 |
+| interp | 1001 |
 | typecheck | 521 |
 | ownership | 124 |
 | other | 122 |
@@ -175,6 +175,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
 | B-2026-10-20-37 | 2026-10-20 | interp+codegen | medium | The active span leaks across tasks on both v2 backends: while a task is suspended inside `with_span`, another task's log line is stamped with that span's id | — |
+| B-2026-10-20-39 | 2026-10-20 | interp+codegen | medium | The prelude's dynamic `Json` value passes `karac check` but neither v2 backend runs `Json.parse` or `j.stringify()`: `__mir-run` stops with "call of unknown function Json.stringify" and mir-llvm with "native `Json.stringify` is not lowered yet", so a JSON service such as corpus katas/backend/todo-api cannot run on v2 | — |
 
 ### Relocated
 

@@ -16101,7 +16101,18 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         ],
         &[],
     ),
+    (
+        // `Json.parse` / `stringify` in Kāra (B-2026-10-20-39); legacy
+        // keeps them `#[compiler_builtin]` in runtime/stdlib/json.kara. A
+        // program's own `Json` is not the library's.
+        JSON_SOURCE,
+        &["Json"],
+        &["Json"],
+    ),
 ];
+
+/// The v2 `Json.parse` and `Json.stringify`.
+const JSON_SOURCE: &str = include_str!("../../runtime/stdlib/source/json.kara");
 
 /// The v2 `std.process`, and the words that make a program one of its
 /// users.
@@ -16122,8 +16133,8 @@ const NET_WORDS: &[&str] = &[
     "UdpSocket",
 ];
 
-/// Whether `src` uses `std.process`, `std.net` or `std.regex` as the v2
-/// pipeline appends them, so that `karac check` reads the library the build
+/// Whether `src` uses `std.process`, `std.net`, `std.regex` or `Json` as
+/// the v2 pipeline appends them, so that `karac check` reads the library the build
 /// runs: the v2 surfaces (`Stdio.piped()`, `UdpSocket`, `Captures`) differ
 /// from the baked legacy ones the checker otherwise registers
 /// (B-2026-10-15-6, B-2026-10-15-18, B-2026-10-14-63).
@@ -16131,7 +16142,9 @@ pub fn uses_v2_library_module(src: &str) -> bool {
     let ours = declared_names(src);
     BAKED_SOURCES
         .iter()
-        .filter(|(text, _, _)| [PROCESS_SOURCE, NET_SOURCE, REGEX_SOURCE].contains(text))
+        .filter(|(text, _, _)| {
+            [PROCESS_SOURCE, NET_SOURCE, REGEX_SOURCE, JSON_SOURCE].contains(text)
+        })
         .any(|(text, words, owners)| {
             names_baked(src, &ours, words) && !defines_a_baked_type(&ours, text, owners)
         })

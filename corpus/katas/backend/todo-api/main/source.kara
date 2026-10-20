@@ -87,7 +87,7 @@ fn extract_title(j: own Json) -> String {
                 let entry: ref (String, Json) = ref fields[i];
                 if entry.0 == "title" {
                     match entry.1 {
-                        Json.String(s) => return s,
+                        Json.String(s) => return s.clone(),
                         _ => return "",
                     }
                 }
