@@ -28,7 +28,7 @@ use llvm_sys::prelude::*;
 use llvm_sys::{LLVMLinkage, LLVMTypeKind, LLVMVisibility};
 
 /// Instructions below which a module is one unit, and per further unit.
-const MIN_UNIT_INSTS: usize = 40_000;
+const MIN_UNIT_INSTS: usize = 15_000;
 /// An internal function at most this many instructions long is copied.
 const COPY_MAX_INSTS: usize = 40;
 /// At most this many units, whatever the machine.
