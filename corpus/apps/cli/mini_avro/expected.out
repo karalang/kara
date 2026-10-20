@@ -1,0 +1,2381 @@
+== schema schemas/user_signup.avsc
+json: {"type": "record", "name": "UserSignup", "namespace": "com.example.events", "fields": [{"type": {"type": "string", "logicalType": "uuid"}, "name": "id"}, {"type": "string", "name": "email"}, {"type": ["null", "string"], "name": "display_name", "default": null}, {"type": {"type": "enum", "default": "FREE", "name": "Plan", "namespace": "com.example.events", "symbols": ["FREE", "PRO", "TEAM"]}, "name": "plan"}, {"type": {"type": "long", "logicalType": "timestamp-millis"}, "name": "signed_up_at"}, {"type": ["null", {"type": "int", "logicalType": "date"}], "name": "birth_date", "default": null}, {"type": ["null", {"type": "record", "name": "Referrer", "namespace": "com.example.events", "fields": [{"type": "string", "name": "source"}, {"type": ["null", "string"], "name": "campaign", "default": null}]}], "name": "referrer", "default": null}, {"type": {"type": "array", "items": "string"}, "name": "tags", "default": []}, {"type": {"type": "map", "values": "string"}, "name": "attributes", "default": {}}, {"type": {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}, "name": "credit"}, {"type": ["null", {"type": "fixed", "name": "MD5", "namespace": "com.example.events", "size": 16}], "name": "avatar_md5", "default": null}], "doc": "Emitted once when an account is created."}
+canonical: {"name":"com.example.events.UserSignup","type":"record","fields":[{"name":"id","type":{"type":"string"}},{"name":"email","type":"string"},{"name":"display_name","type":["null","string"]},{"name":"plan","type":{"name":"com.example.events.Plan","type":"enum","symbols":["FREE","PRO","TEAM"]}},{"name":"signed_up_at","type":{"type":"long"}},{"name":"birth_date","type":["null",{"type":"int"}]},{"name":"referrer","type":["null",{"name":"com.example.events.Referrer","type":"record","fields":[{"name":"source","type":"string"},{"name":"campaign","type":["null","string"]}]}]},{"name":"tags","type":{"type":"array","items":"string"}},{"name":"attributes","type":{"type":"map","values":"string"}},{"name":"credit","type":{"type":"bytes"}},{"name":"avatar_md5","type":["null",{"name":"com.example.events.MD5","type":"fixed","size":16}]}]}
+crc64: 8dde31385ce05a3b
+md5: da241ba7db320da41708482e20b7c350
+sha256: e4ad8f92bb73060c3f5c50d04c030222f53ff8bb7525a6edcd020991389b686b
+== schema schemas/user_signup_v2.avsc
+json: {"type": "record", "name": "UserSignup", "namespace": "com.example.events", "fields": [{"type": {"type": "string", "logicalType": "uuid"}, "name": "id"}, {"type": "string", "name": "email"}, {"type": ["null", "string"], "name": "display_name", "default": null}, {"type": {"type": "enum", "name": "Plan", "namespace": "com.example.events", "symbols": ["FREE", "PRO", "TEAM", "ENTERPRISE"]}, "name": "plan"}, {"type": {"type": "long", "logicalType": "timestamp-millis"}, "name": "signed_up_at"}, {"type": "string", "name": "locale", "default": "en-US"}, {"type": "boolean", "name": "marketing_opt_in", "default": false}, {"type": {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}, "name": "credit"}]}
+canonical: {"name":"com.example.events.UserSignup","type":"record","fields":[{"name":"id","type":{"type":"string"}},{"name":"email","type":"string"},{"name":"display_name","type":["null","string"]},{"name":"plan","type":{"name":"com.example.events.Plan","type":"enum","symbols":["FREE","PRO","TEAM","ENTERPRISE"]}},{"name":"signed_up_at","type":{"type":"long"}},{"name":"locale","type":"string"},{"name":"marketing_opt_in","type":"boolean"},{"name":"credit","type":{"type":"bytes"}}]}
+crc64: 2c67c9689d763e5a
+md5: f82b4e201b1e78b77e619d24b8adf2e1
+sha256: da1fa8e70a0be0997780dc3c6d923af009e611c8dfe36218e45728c1f7edd9e3
+== schema schemas/order.avsc
+json: {"type": "record", "name": "Order", "namespace": "com.example.shop", "fields": [{"type": "long", "name": "order_id"}, {"type": {"type": "enum", "name": "Status", "namespace": "com.example.shop", "symbols": ["PLACED", "PAID", "SHIPPED", "CANCELLED"]}, "name": "status"}, {"type": {"type": "long", "logicalType": "timestamp-micros"}, "name": "placed_at"}, {"type": {"type": "record", "name": "Address", "namespace": "com.example.common", "fields": [{"type": "string", "name": "line1"}, {"type": "string", "name": "city"}, {"type": ["null", "string"], "name": "postcode"}, {"type": {"type": "fixed", "name": "CountryCode", "namespace": "com.example.common", "size": 2}, "name": "country"}]}, "name": "ship_to"}, {"type": ["null", "com.example.common.Address"], "name": "bill_to"}, {"type": {"type": "array", "items": {"type": "record", "name": "LineItem", "namespace": "com.example.shop", "fields": [{"type": "string", "name": "sku"}, {"type": "int", "name": "qty"}, {"type": {"type": "fixed", "logicalType": "decimal", "precision": 18, "scale": 4, "name": "Money", "namespace": "com.example.shop", "size": 8}, "name": "unit_price"}]}}, "name": "lines"}, {"type": ["null", "double"], "name": "discount"}, {"type": ["null", {"type": "int", "logicalType": "time-millis"}], "name": "delivery_window"}, {"type": {"type": "map", "values": ["string", "null"]}, "name": "notes"}]}
+canonical: {"name":"com.example.shop.Order","type":"record","fields":[{"name":"order_id","type":"long"},{"name":"status","type":{"name":"com.example.shop.Status","type":"enum","symbols":["PLACED","PAID","SHIPPED","CANCELLED"]}},{"name":"placed_at","type":{"type":"long"}},{"name":"ship_to","type":{"name":"com.example.common.Address","type":"record","fields":[{"name":"line1","type":"string"},{"name":"city","type":"string"},{"name":"postcode","type":["null","string"]},{"name":"country","type":{"name":"com.example.common.CountryCode","type":"fixed","size":2}}]}},{"name":"bill_to","type":["null","com.example.common.Address"]},{"name":"lines","type":{"type":"array","items":{"name":"com.example.shop.LineItem","type":"record","fields":[{"name":"sku","type":"string"},{"name":"qty","type":"int"},{"name":"unit_price","type":{"name":"com.example.shop.Money","type":"fixed","size":8}}]}}},{"name":"discount","type":["null","double"]},{"name":"delivery_window","type":["null",{"type":"int"}]},{"name":"notes","type":{"type":"map","values":["string","null"]}}]}
+crc64: f810760078ce4b2c
+md5: 48c249a9e705679829be7a68d78fe652
+sha256: 50684a6d8642df5c76fdebbe670ea52b9b8f936301e6da60668cb12ae8ccd4ee
+== schema schemas/weather.avsc
+json: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station", "order": "ignore"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}], "doc": "A weather reading."}
+canonical: {"name":"test.Weather","type":"record","fields":[{"name":"station","type":"string"},{"name":"time","type":"long"},{"name":"temp","type":"int"}]}
+crc64: cb7dac7ef74d569d
+md5: c43aa8dd51988ec54f49bf20e582479a
+sha256: 6423ca3f9fb4892640ba32dcfa9c599f1d18ba145742630acffadb7d9d661a89
+== schema schemas/weather_reader.avsc
+json: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "double", "name": "temp"}, {"type": "long", "name": "time"}, {"type": ["int", "null"], "name": "elevation_m", "default": 0}, {"type": "bytes", "name": "source", "default": "\u00ff\u00fe"}, {"type": {"type": "record", "name": "Sensor", "namespace": "test", "fields": [{"type": "string", "name": "model", "default": "WX-1"}, {"type": "boolean", "name": "calibrated", "default": true}]}, "name": "sensor", "default": {"model": "WX-9"}}]}
+canonical: {"name":"test.Weather","type":"record","fields":[{"name":"station","type":"string"},{"name":"temp","type":"double"},{"name":"time","type":"long"},{"name":"elevation_m","type":["int","null"]},{"name":"source","type":"bytes"},{"name":"sensor","type":{"name":"test.Sensor","type":"record","fields":[{"name":"model","type":"string"},{"name":"calibrated","type":"boolean"}]}}]}
+crc64: 895c7c3a178b64ca
+md5: 7c26b6aa04650f8e2e5f93a29dc5fb5b
+sha256: b631cbbc926e3993c99c8d776867234099130a4ea20050ed65d8ac846e88c60a
+== schema schemas/long_list.avsc
+json: {"type": "record", "aliases": ["LinkedLongs"], "name": "LongList", "fields": [{"type": "long", "name": "value"}, {"type": ["null", "LongList"], "name": "next"}]}
+canonical: {"name":"LongList","type":"record","fields":[{"name":"value","type":"long"},{"name":"next","type":["null","LongList"]}]}
+crc64: 92ce588390071d7c
+md5: 159af22380203819a1ef175334818629
+sha256: 981a7d7c9ca85e6118e2446eb24b1d18841a847486d0b9136ed6a5d66fe19c5a
+== schema schemas/metric_sample.avsc
+json: {"type": "record", "name": "Sample", "namespace": "io.example.metrics", "fields": [{"type": "string", "name": "name"}, {"type": {"type": "map", "values": "string"}, "name": "labels"}, {"type": ["long", "double"], "name": "value"}, {"type": {"type": "long", "logicalType": "timestamp-micros"}, "name": "ts"}, {"type": ["null", {"type": "enum", "name": "Kind", "namespace": "io.example.metrics", "symbols": ["COUNTER", "GAUGE", "HISTOGRAM"]}], "name": "kind"}, {"type": ["null", {"type": "array", "items": {"type": "record", "name": "Bucket", "namespace": "io.example.metrics", "fields": [{"type": "double", "name": "le"}, {"type": "long", "name": "count"}]}}], "name": "buckets"}]}
+canonical: {"name":"io.example.metrics.Sample","type":"record","fields":[{"name":"name","type":"string"},{"name":"labels","type":{"type":"map","values":"string"}},{"name":"value","type":["long","double"]},{"name":"ts","type":{"type":"long"}},{"name":"kind","type":["null",{"name":"io.example.metrics.Kind","type":"enum","symbols":["COUNTER","GAUGE","HISTOGRAM"]}]},{"name":"buckets","type":["null",{"type":"array","items":{"name":"io.example.metrics.Bucket","type":"record","fields":[{"name":"le","type":"double"},{"name":"count","type":"long"}]}}]}]}
+crc64: 411528006f91575c
+md5: 840c2a27d5fb42d6af3b94633092ed7f
+sha256: 4bc5fa01a39ceb136781e8c7a9864a7bc4df6f99f001ce091359437a1867ed2a
+== schema schemas/value_union.avsc
+json: ["null", "int", "long", "float", "double", "string", "boolean"]
+canonical: ["null","int","long","float","double","string","boolean"]
+crc64: a3edb8a76988bc63
+md5: 5d172a41a362b1699ccb5be49c053244
+sha256: b5915e24dcaf65cfb221955eef7d732c81e24107b63f54fbd9f0d7d331ef8098
+== schema schemas/interop.avsc
+json: {"type": "record", "name": "Interop", "namespace": "org.apache.avro", "fields": [{"type": "int", "name": "intField"}, {"type": "long", "name": "longField"}, {"type": "string", "name": "stringField"}, {"type": "boolean", "name": "boolField"}, {"type": "float", "name": "floatField"}, {"type": "double", "name": "doubleField"}, {"type": "bytes", "name": "bytesField"}, {"type": "null", "name": "nullField"}, {"type": {"type": "array", "items": "double"}, "name": "arrayField"}, {"type": {"type": "map", "values": {"type": "record", "name": "Foo", "namespace": "org.apache.avro", "fields": [{"type": "string", "name": "label"}]}}, "name": "mapField"}, {"type": ["boolean", "double", {"type": "array", "items": "bytes"}], "name": "unionField"}, {"type": {"type": "enum", "name": "Kind", "namespace": "org.apache.avro", "symbols": ["A", "B", "C"]}, "name": "enumField"}, {"type": {"type": "fixed", "name": "MD5", "namespace": "org.apache.avro", "size": 16}, "name": "fixedField"}, {"type": {"type": "record", "name": "Node", "namespace": "org.apache.avro", "fields": [{"type": "string", "name": "label"}, {"type": {"type": "array", "items": "org.apache.avro.Node"}, "name": "children"}]}, "name": "recordField"}]}
+canonical: {"name":"org.apache.avro.Interop","type":"record","fields":[{"name":"intField","type":"int"},{"name":"longField","type":"long"},{"name":"stringField","type":"string"},{"name":"boolField","type":"boolean"},{"name":"floatField","type":"float"},{"name":"doubleField","type":"double"},{"name":"bytesField","type":"bytes"},{"name":"nullField","type":"null"},{"name":"arrayField","type":{"type":"array","items":"double"}},{"name":"mapField","type":{"type":"map","values":{"name":"org.apache.avro.Foo","type":"record","fields":[{"name":"label","type":"string"}]}}},{"name":"unionField","type":["boolean","double",{"type":"array","items":"bytes"}]},{"name":"enumField","type":{"name":"org.apache.avro.Kind","type":"enum","symbols":["A","B","C"]}},{"name":"fixedField","type":{"name":"org.apache.avro.MD5","type":"fixed","size":16}},{"name":"recordField","type":{"name":"org.apache.avro.Node","type":"record","fields":[{"name":"label","type":"string"},{"name":"children","type":{"type":"array","items":"org.apache.avro.Node"}}]}}]}
+crc64: e82c0a93a6a0b5a4
+md5: 994fea1a1be7ff8603cbe40c3bc7e4ca
+sha256: cccfd6e3f917cf53b0f90c206342e6703b0d905071f724a1c1f85b731c74058d
+== schema schemas/HandshakeRequest.avsc
+json: {"type": "record", "name": "HandshakeRequest", "namespace": "org.apache.avro.ipc", "fields": [{"type": {"type": "fixed", "name": "MD5", "namespace": "org.apache.avro.ipc", "size": 16}, "name": "clientHash"}, {"type": ["null", "string"], "name": "clientProtocol"}, {"type": "org.apache.avro.ipc.MD5", "name": "serverHash"}, {"type": ["null", {"type": "map", "values": "bytes"}], "name": "meta"}]}
+canonical: {"name":"org.apache.avro.ipc.HandshakeRequest","type":"record","fields":[{"name":"clientHash","type":{"name":"org.apache.avro.ipc.MD5","type":"fixed","size":16}},{"name":"clientProtocol","type":["null","string"]},{"name":"serverHash","type":{"name":"org.apache.avro.ipc.MD5","type":"fixed","size":16}},{"name":"meta","type":["null",{"type":"map","values":"bytes"}]}]}
+crc64: 43818703b7b5d769
+md5: 16ded8b5027e80a17704c6565c0c3f1b
+sha256: 6c317314687da52a85c813a7f0c92298a60b79625b9acc072e4d9e4256a1d800
+== schema schemas/HandshakeResponse.avsc
+json: {"type": "record", "name": "HandshakeResponse", "namespace": "org.apache.avro.ipc", "fields": [{"type": {"type": "enum", "name": "HandshakeMatch", "namespace": "org.apache.avro.ipc", "symbols": ["BOTH", "CLIENT", "NONE"]}, "name": "match"}, {"type": ["null", "string"], "name": "serverProtocol"}, {"type": ["null", {"type": "fixed", "name": "MD5", "namespace": "org.apache.avro.ipc", "size": 16}], "name": "serverHash"}, {"type": ["null", {"type": "map", "values": "bytes"}], "name": "meta"}]}
+canonical: {"name":"org.apache.avro.ipc.HandshakeResponse","type":"record","fields":[{"name":"match","type":{"name":"org.apache.avro.ipc.HandshakeMatch","type":"enum","symbols":["BOTH","CLIENT","NONE"]}},{"name":"serverProtocol","type":["null","string"]},{"name":"serverHash","type":["null",{"name":"org.apache.avro.ipc.MD5","type":"fixed","size":16}]},{"name":"meta","type":["null",{"type":"map","values":"bytes"}]}]}
+crc64: 00feee01de4ea50e
+md5: afe529d01132daab7f4e2a6663e7a2f5
+sha256: a303cbbfe13958f880605d70c521a4b7be34d9265ac5a848f25916a67b11d889
+== schema schemas/bytes_decimal.avsc
+json: {"type": "bytes", "logicalType": "decimal", "precision": 4, "scale": 2}
+canonical: {"type":"bytes"}
+crc64: 2ed03894390068f9
+md5: 9cd716411bbc23ceadbf545e089a0e09
+sha256: 44db160ef62b8e6f59897f101a9b0bf327ce5cb8019ee9eedb5deb9a36e35945
+== schema schemas/plan_reader.avsc
+json: {"type": "enum", "name": "Plan", "namespace": "com.example.events", "symbols": ["FREE", "PRO"]}
+canonical: {"name":"com.example.events.Plan","type":"enum","symbols":["FREE","PRO"]}
+crc64: 7b473b1bfaa79c5c
+md5: 3067c9ae69612efba0c241e4475a7ae5
+sha256: eb231932ecab1e26bc1f80479d2fe2cd7a01b6c5e89e485a9bb64a77b35a3865
+== schema schemas/broken/bad_array_items.avsc
+error: SchemaParseException: Type property "{'type': 'array', 'items': {'type': 'rec'}}" not a valid Avro schema: Items schema ({'type': 'rec'}) not a valid Avro schema: Undefined type: rec (known names: dict_keys(['com.example.Batch']))
+== schema schemas/broken/bad_map_values.avsc
+error: SchemaParseException: Enum symbols must be a sequence of strings, but it is <class 'NoneType'>
+== schema schemas/broken/bad_order.avsc
+error: SchemaParseException: The order property up is not valid.
+== schema schemas/broken/decimal_too_precise.avsc
+warning: IgnoredLogicalType: Invalid decimal precision 6. Max is 4.
+json: {"type": "fixed", "logicalType": "decimal", "precision": 6, "scale": 2, "name": "Tiny", "size": 2}
+canonical: {"name":"Tiny","type":"fixed","size":2}
+crc64: 6be211efd0ba0dc1
+md5: 1295b6ca857ee9199e1b9a416353b619
+sha256: 4e8f6048c3f13a901264006c6891e0af7f2b525ef11dbd61d716bf9c9d681570
+== schema schemas/broken/duplicate_field.avsc
+error: SchemaParseException: Field name id already in use.
+== schema schemas/broken/empty_namespace_part.avsc
+error: InvalidName:  is not a valid Avro name because it does not match the pattern (?:^|\.)[A-Za-z_][A-Za-z0-9_]*$
+== schema schemas/broken/enum_bad_default.avsc
+error: InvalidDefault: Enum default 'BLUE' is not a valid member of symbols '['RED', 'GREEN']'
+== schema schemas/broken/enum_dup_symbol.avsc
+error: AvroException: Duplicate symbol: ['RED', 'RED']
+== schema schemas/broken/enum_symbol_number.avsc
+error: SchemaParseException: Enum symbols must be a sequence of strings, but one symbol is a <class 'int'>
+== schema schemas/broken/enum_symbol_space.avsc
+error: InvalidName: An enum symbol must be a valid schema name.
+== schema schemas/broken/enum_symbols_string.avsc
+error: InvalidName: An enum symbol must be a valid schema name.
+== schema schemas/broken/field_no_name.avsc
+error: SchemaParseException: Fields must have a non-empty name.
+== schema schemas/broken/field_no_type.avsc
+error: SchemaParseException: Type property "None" not a valid Avro schema: Could not make an Avro Schema object from None
+== schema schemas/broken/fields_not_list.avsc
+error: SchemaParseException: Fields property must be a list of Avro schemas.
+== schema schemas/broken/missing_size.avsc
+error: AvroException: Fixed Schema requires a valid positive integer for size property.
+== schema schemas/broken/name_list.avsc
+error: SchemaParseException: Name ['Tom', 'Jerry'] must be a string, but it is <class 'list'>.
+== schema schemas/broken/negative_size.avsc
+error: AvroException: Fixed Schema requires a valid positive integer for size property.
+== schema schemas/broken/no_fields.avsc
+error: SchemaParseException: Record schema requires a non-empty fields property.
+== schema schemas/broken/no_type.avsc
+error: SchemaParseException: No "type" property: {'name': 'Thing', 'fields': []}
+== schema schemas/broken/number_schema.avsc
+error: SchemaParseException: Could not make an Avro Schema object from 42
+== schema schemas/broken/reserved_name.avsc
+error: SchemaParseException: int is a reserved type name.
+== schema schemas/broken/space_in_name.avsc
+error: InvalidName:  spaceman is not a valid Avro name because it does not match the pattern (?:^|\.)[A-Za-z_][A-Za-z0-9_]*$
+== schema schemas/broken/top_level_ref.avsc
+error: SchemaParseException: Could not make an Avro Schema object from com.example.Event
+== schema schemas/broken/type_number.avsc
+error: SchemaParseException: Undefined type: 5
+== schema schemas/broken/type_panther.avsc
+error: SchemaParseException: Undefined type: panther
+== schema schemas/broken/undefined_ref.avsc
+error: SchemaParseException: Items schema (com.example.Missing) not a valid Avro schema: Could not make an Avro Schema object from com.example.Missing (known names: dict_keys([]))
+== schema schemas/broken/undefined_ref_union.avsc
+error: SchemaParseException: Type property "['null', 'User']" not a valid Avro schema: Union item must be a valid Avro schema: Could not make an Avro Schema object from User
+== schema schemas/broken/union_dup.avsc
+error: SchemaParseException: null type already in Union
+== schema schemas/broken/union_logical_dup.avsc
+error: SchemaParseException: long type already in Union
+== schema schemas/broken/union_nested.avsc
+error: SchemaParseException: Unions cannot contain other unions.
+== schema schemas/broken/unknown_type.avsc
+error: SchemaParseException: Type property "datetime" not a valid Avro schema: Could not make an Avro Schema object from datetime
+== schema schemas/broken/trailing_comma.avsc
+error: SchemaParseException: Error parsing JSON: {"type": "enum", "name": "E", "symbols": ["A", "B",]}
+, error = Illegal trailing comma before end of array: line 1 column 51 (char 50)
+== schema schemas/broken/single_quotes.avsc
+error: SchemaParseException: Error parsing JSON: {'type': 'string'}
+, error = Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+== schema schemas/broken/empty.avsc
+error: SchemaParseException: Error parsing JSON: , error = Expecting value: line 1 column 1 (char 0)
+== vectors
+[0] error: SchemaParseException: Could not make an Avro Schema object from True
+[1] error: SchemaParseException: Error parsing JSON: True, error = Expecting value: line 1 column 1 (char 0)
+[2] error: SchemaParseException: No "type" property: {'no_type': 'test'}
+[3] error: SchemaParseException: Undefined type: panther
+[4] 8a8f25cce724dd63
+  json: "null"
+  canonical: "null"
+[5] 64f7d4a478fc429f
+  json: "boolean"
+  canonical: "boolean"
+[6] c70345637248018f
+  json: "string"
+  canonical: "string"
+[7] 651920c3da16c04f
+  json: "bytes"
+  canonical: "bytes"
+[8] 8f5c393f1ad57572
+  json: "int"
+  canonical: "int"
+[9] b71df49344e154d0
+  json: "long"
+  canonical: "long"
+[10] 90d7a83ecb027c4d
+  json: "float"
+  canonical: "float"
+[11] 7e95ab32c035758e
+  json: "double"
+  canonical: "double"
+[12] 8a8f25cce724dd63
+  json: "null"
+  canonical: "null"
+[13] 64f7d4a478fc429f
+  json: "boolean"
+  canonical: "boolean"
+[14] c70345637248018f
+  json: "string"
+  canonical: "string"
+[15] 651920c3da16c04f
+  json: "bytes"
+  canonical: "bytes"
+[16] 8f5c393f1ad57572
+  json: "int"
+  canonical: "int"
+[17] b71df49344e154d0
+  json: "long"
+  canonical: "long"
+[18] 90d7a83ecb027c4d
+  json: "float"
+  canonical: "float"
+[19] 7e95ab32c035758e
+  json: "double"
+  canonical: "double"
+[20] 6869897b4049355b
+  json: {"type": "fixed", "name": "Test", "size": 1}
+  canonical: {"name":"Test","type":"fixed","size":1}
+[21] fadbd138e85bdf45
+  json: {"type": "fixed", "name": "MyFixed", "namespace": "org.apache.hadoop.avro", "size": 1}
+  canonical: {"name":"org.apache.hadoop.avro.MyFixed","type":"fixed","size":1}
+[22] 74c602f918bf4dcb
+  json: {"type": "fixed", "name": "NullNamespace", "size": 1}
+  canonical: {"name":"NullNamespace","type":"fixed","size":1}
+[23] 466a590f600628e3
+  json: {"type": "fixed", "name": "EmptyStringNamespace", "size": 1}
+  canonical: {"name":"EmptyStringNamespace","type":"fixed","size":1}
+[24] error: AvroException: Fixed Schema requires a valid positive integer for size property.
+[25] error: SchemaParseException: Name None must be a string, but it is <class 'NoneType'>.
+[26] error: InvalidName:  spaceman is not a valid Avro name because it does not match the pattern (?:^|\.)[A-Za-z_][A-Za-z0-9_]*$
+[27] 03a2f2c2e27f7a16
+  json: {"type": "enum", "name": "Test", "symbols": ["A", "B"]}
+  canonical: {"name":"Test","type":"enum","symbols":["A","B"]}
+[28] d63103762df1f3c5
+  json: {"type": "enum", "name": "AVRO2174", "symbols": ["nowhitespace"]}
+  canonical: {"name":"AVRO2174","type":"enum","symbols":["nowhitespace"]}
+[29] error: InvalidDefault: Enum default 'B' is not a valid member of symbols '['A']'
+[30] error: InvalidName: An enum symbol must be a valid schema name.
+[31] error: SchemaParseException: Name [0, 1, 1, 2, 3, 5, 8] must be a string, but it is <class 'list'>.
+[32] error: SchemaParseException: Name None must be a string, but it is <class 'NoneType'>.
+[33] error: AvroException: Duplicate symbol: ['AA', 'AA']
+[34] error: InvalidName: An enum symbol must be a valid schema name.
+[35] 715e2ea28bc91654
+  json: {"type": "array", "items": "long"}
+  canonical: {"type":"array","items":"long"}
+[36] 10d9ade1fa3a0387
+  json: {"type": "array", "items": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}
+  canonical: {"type":"array","items":{"name":"Test","type":"enum","symbols":["A","B"]}}
+[37] 6f74f4e409b1334e
+  json: {"type": "map", "values": "long"}
+  canonical: {"type":"map","values":"long"}
+[38] df2ab0626f6b812d
+  json: {"type": "map", "values": {"type": "enum", "name": "Test", "symbols": ["A", "B"]}}
+  canonical: {"type":"map","values":{"name":"Test","type":"enum","symbols":["A","B"]}}
+[39] 65a5be410d687566
+  json: ["string", "null", "long"]
+  canonical: ["string","null","long"]
+[40] error: SchemaParseException: null type already in Union
+[41] error: SchemaParseException: long type already in Union
+[42] error: SchemaParseException: array type already in Union
+[43] 7470061e96cb3390
+  json: {"type": "enum", "name": "record", "symbols": ["A", "B"]}
+  canonical: {"name":"record","type":"enum","symbols":["A","B"]}
+[44] e6ee0fb7a0320dbc
+  json: {"type": "record", "name": "record", "fields": [{"type": "long", "name": "f"}]}
+  canonical: {"name":"record","type":"record","fields":[{"name":"f","type":"long"}]}
+[45] error: SchemaParseException: int is a reserved type name.
+[46] 313991e01a17de4b
+  json: {"type": "enum", "name": "int", "namespace": "ns", "symbols": ["A", "B"]}
+  canonical: {"name":"ns.int","type":"enum","symbols":["A","B"]}
+[47] 313991e01a17de4b
+  json: {"type": "enum", "name": "int", "namespace": "ns", "symbols": ["A", "B"]}
+  canonical: {"name":"ns.int","type":"enum","symbols":["A","B"]}
+[48] 4bf823f650919026
+  json: {"type": "record", "name": "LinkedList", "fields": [{"type": "int", "name": "value"}, {"type": ["null", "LinkedList"], "name": "next"}]}
+  canonical: {"name":"LinkedList","type":"record","fields":[{"name":"value","type":"int"},{"name":"next","type":["null","LinkedList"]}]}
+[49] b4cfd439bdab5475
+  json: {"type": "record", "name": "record", "fields": [{"type": "int", "name": "value"}, {"type": ["null", "record"], "name": "next"}]}
+  canonical: {"name":"record","type":"record","fields":[{"name":"value","type":"int"},{"name":"next","type":["null","record"]}]}
+[50] a1b2f69cc2705706
+  json: {"type": "record", "name": "int", "namespace": "ns", "fields": [{"type": "ns.int", "name": "value"}, {"type": ["null", "ns.int"], "name": "next"}]}
+  canonical: {"name":"ns.int","type":"record","fields":[{"name":"value","type":"ns.int"},{"name":"next","type":["null","ns.int"]}]}
+[51] 8d834acbefa6069f
+  json: {"type": "record", "name": "Test", "namespace": "org.apache.avro.test", "fields": [{"type": {"type": "enum", "name": "NamedEnum", "namespace": "org.apache.avro.test", "symbols": ["one", "two"]}, "name": "thenamedenum"}, {"type": ["null", "org.apache.avro.test.NamedEnum"], "name": "unionwithreftoenum"}]}
+  canonical: {"name":"org.apache.avro.test.Test","type":"record","fields":[{"name":"thenamedenum","type":{"name":"org.apache.avro.test.NamedEnum","type":"enum","symbols":["one","two"]}},{"name":"unionwithreftoenum","type":["null","org.apache.avro.test.NamedEnum"]}]}
+[52] ed94e5f5e6eb588e
+  json: {"type": "record", "name": "Test", "fields": [{"type": "long", "name": "f"}]}
+  canonical: {"name":"Test","type":"record","fields":[{"name":"f","type":"long"}]}
+[53] 85ea9f5b1dbab0cc
+  json: {"type": "error", "name": "Test", "fields": [{"type": "long", "name": "f"}]}
+  canonical: {"name":"Test","type":"error","fields":[{"name":"f","type":"long"}]}
+[54] 52cba544c3e756b7
+  json: {"type": "record", "name": "Node", "fields": [{"type": "string", "name": "label"}, {"type": {"type": "array", "items": "Node"}, "name": "children"}]}
+  canonical: {"name":"Node","type":"record","fields":[{"name":"label","type":"string"},{"name":"children","type":{"type":"array","items":"Node"}}]}
+[55] 68d91a23eda0b306
+  json: {"type": "record", "name": "Lisp", "fields": [{"type": ["null", "string", {"type": "record", "name": "Cons", "fields": [{"type": "Lisp", "name": "car"}, {"type": "Lisp", "name": "cdr"}]}], "name": "value"}]}
+  canonical: {"name":"Lisp","type":"record","fields":[{"name":"value","type":["null","string",{"name":"Cons","type":"record","fields":[{"name":"car","type":"Lisp"},{"name":"cdr","type":"Lisp"}]}]}]}
+[56] 43818703b7b5d769
+  json: {"type": "record", "name": "HandshakeRequest", "namespace": "org.apache.avro.ipc", "fields": [{"type": {"type": "fixed", "name": "MD5", "namespace": "org.apache.avro.ipc", "size": 16}, "name": "clientHash"}, {"type": ["null", "string"], "name": "clientProtocol"}, {"type": "org.apache.avro.ipc.MD5", "name": "serverHash"}, {"type": ["null", {"type": "map", "values": "bytes"}], "name": "meta"}]}
+  canonical: {"name":"org.apache.avro.ipc.HandshakeRequest","type":"record","fields":[{"name":"clientHash","type":{"name":"org.apache.avro.ipc.MD5","type":"fixed","size":16}},{"name":"clientProtocol","type":["null","string"]},{"name":"serverHash","type":{"name":"org.apache.avro.ipc.MD5","type":"fixed","size":16}},{"name":"meta","type":["null",{"type":"map","values":"bytes"}]}]}
+[57] 00feee01de4ea50e
+  json: {"type": "record", "name": "HandshakeResponse", "namespace": "org.apache.avro.ipc", "fields": [{"type": {"type": "enum", "name": "HandshakeMatch", "namespace": "org.apache.avro.ipc", "symbols": ["BOTH", "CLIENT", "NONE"]}, "name": "match"}, {"type": ["null", "string"], "name": "serverProtocol"}, {"type": ["null", {"type": "fixed", "name": "MD5", "namespace": "org.apache.avro.ipc", "size": 16}], "name": "serverHash"}, {"type": ["null", {"type": "map", "values": "bytes"}], "name": "meta"}]}
+  canonical: {"name":"org.apache.avro.ipc.HandshakeResponse","type":"record","fields":[{"name":"match","type":{"name":"org.apache.avro.ipc.HandshakeMatch","type":"enum","symbols":["BOTH","CLIENT","NONE"]}},{"name":"serverProtocol","type":["null","string"]},{"name":"serverHash","type":["null",{"name":"org.apache.avro.ipc.MD5","type":"fixed","size":16}]},{"name":"meta","type":["null",{"type":"map","values":"bytes"}]}]}
+[58] e82c0a93a6a0b5a4
+  json: {"type": "record", "name": "Interop", "namespace": "org.apache.avro", "fields": [{"type": "int", "name": "intField"}, {"type": "long", "name": "longField"}, {"type": "string", "name": "stringField"}, {"type": "boolean", "name": "boolField"}, {"type": "float", "name": "floatField"}, {"type": "double", "name": "doubleField"}, {"type": "bytes", "name": "bytesField"}, {"type": "null", "name": "nullField"}, {"type": {"type": "array", "items": "double"}, "name": "arrayField"}, {"type": {"type": "map", "values": {"type": "record", "name": "Foo", "namespace": "org.apache.avro", "fields": [{"type": "string", "name": "label"}]}}, "name": "mapField"}, {"type": ["boolean", "double", {"type": "array", "items": "bytes"}], "name": "unionField"}, {"type": {"type": "enum", "name": "Kind", "namespace": "org.apache.avro", "symbols": ["A", "B", "C"]}, "name": "enumField"}, {"type": {"type": "fixed", "name": "MD5", "namespace": "org.apache.avro", "size": 16}, "name": "fixedField"}, {"type": {"type": "record", "name": "Node", "namespace": "org.apache.avro", "fields": [{"type": "string", "name": "label"}, {"type": {"type": "array", "items": "org.apache.avro.Node"}, "name": "children"}]}, "name": "recordField"}]}
+  canonical: {"name":"org.apache.avro.Interop","type":"record","fields":[{"name":"intField","type":"int"},{"name":"longField","type":"long"},{"name":"stringField","type":"string"},{"name":"boolField","type":"boolean"},{"name":"floatField","type":"float"},{"name":"doubleField","type":"double"},{"name":"bytesField","type":"bytes"},{"name":"nullField","type":"null"},{"name":"arrayField","type":{"type":"array","items":"double"}},{"name":"mapField","type":{"type":"map","values":{"name":"org.apache.avro.Foo","type":"record","fields":[{"name":"label","type":"string"}]}}},{"name":"unionField","type":["boolean","double",{"type":"array","items":"bytes"}]},{"name":"enumField","type":{"name":"org.apache.avro.Kind","type":"enum","symbols":["A","B","C"]}},{"name":"fixedField","type":{"name":"org.apache.avro.MD5","type":"fixed","size":16}},{"name":"recordField","type":{"name":"org.apache.avro.Node","type":"record","fields":[{"name":"label","type":"string"},{"name":"children","type":{"type":"array","items":"org.apache.avro.Node"}}]}}]}
+[59] 8d961b4e298a1844
+  json: {"type": "record", "name": "ipAddr", "fields": [{"type": [{"type": "fixed", "name": "IPv6", "size": 16}, {"type": "fixed", "name": "IPv4", "size": 4}], "name": "addr"}]}
+  canonical: {"name":"ipAddr","type":"record","fields":[{"name":"addr","type":[{"name":"IPv6","type":"fixed","size":16},{"name":"IPv4","type":"fixed","size":4}]}]}
+[60] error: SchemaParseException: Fields must have a non-empty name.
+[61] error: SchemaParseException: Type property "None" not a valid Avro schema: Could not make an Avro Schema object from None
+[62] error: SchemaParseException: Fields property must be a list of Avro schemas.
+[63] error: SchemaParseException: Name ['Tom', 'Jerry'] must be a string, but it is <class 'list'>.
+[64] 0e6660f02bcdc109
+  json: {"type": "record", "name": "TestDoc", "fields": [{"type": "string", "name": "name", "doc": "Doc String"}], "doc": "Doc string"}
+  canonical: {"name":"TestDoc","type":"record","fields":[{"name":"name","type":"string"}]}
+[65] 03a2f2c2e27f7a16
+  json: {"type": "enum", "name": "Test", "symbols": ["A", "B"], "doc": "Doc String"}
+  canonical: {"name":"Test","type":"enum","symbols":["A","B"]}
+[66] 17782df9b38af5e2
+  json: {"type": "fixed", "logicalType": "decimal", "precision": 4, "scale": 2, "name": "TestDecimal", "size": 10}
+  canonical: {"name":"TestDecimal","type":"fixed","size":10}
+[67] 2ed03894390068f9
+  json: {"type": "bytes", "logicalType": "decimal", "precision": 4, "scale": 2}
+  canonical: {"type":"bytes"}
+[68] error: AvroException: Fixed Schema requires a valid positive integer for size property.
+  warning: IgnoredLogicalType: Invalid decimal precision 2. Max is -6.
+[69] adbf9635b8c70971
+  json: {"type": "int", "logicalType": "date"}
+  canonical: {"type":"int"}
+[70] adbf9635b8c70971
+  json: {"type": "int", "logicalType": "time-millis"}
+  canonical: {"type":"int"}
+[71] a997e323d2cbf569
+  json: {"type": "long", "logicalType": "time-micros"}
+  canonical: {"type":"long"}
+[72] a997e323d2cbf569
+  json: {"type": "long", "logicalType": "timestamp-millis"}
+  canonical: {"type":"long"}
+[73] a997e323d2cbf569
+  json: {"type": "long", "logicalType": "timestamp-micros"}
+  canonical: {"type":"long"}
+[74] 2747ef38935b04c0
+  json: {"type": "string", "logicalType": "uuid"}
+  canonical: {"type":"string"}
+[75] 2747ef38935b04c0
+  warning: IgnoredLogicalType: Unknown unknown-logical-type, using string.
+  json: {"type": "string", "logicalType": "unknown-logical-type"}
+  canonical: {"type":"string"}
+[76] 2ed03894390068f9
+  warning: IgnoredLogicalType: Invalid decimal precision None. Must be a positive integer.
+  json: {"type": "bytes", "logicalType": "decimal", "scale": 0}
+  canonical: {"type":"bytes"}
+[77] 2ed03894390068f9
+  warning: IgnoredLogicalType: Invalid decimal precision 2.4. Must be a positive integer.
+  json: {"type": "bytes", "logicalType": "decimal", "precision": 2.4, "scale": 0}
+  canonical: {"type":"bytes"}
+[78] 2ed03894390068f9
+  warning: IgnoredLogicalType: Invalid decimal scale -2. Must be a non-negative integer.
+  json: {"type": "bytes", "logicalType": "decimal", "precision": 2, "scale": -2}
+  canonical: {"type":"bytes"}
+[79] 2ed03894390068f9
+  warning: IgnoredLogicalType: Invalid decimal precision -2. Must be a positive integer.
+  json: {"type": "bytes", "logicalType": "decimal", "precision": -2, "scale": 2}
+  canonical: {"type":"bytes"}
+[80] 2ed03894390068f9
+  warning: IgnoredLogicalType: Invalid decimal scale 3. Cannot be greater than precision 2.
+  json: {"type": "bytes", "logicalType": "decimal", "precision": 2, "scale": 3}
+  canonical: {"type":"bytes"}
+[81] e667e6dc94e4856c
+  warning: IgnoredLogicalType: Invalid decimal precision -10. Must be a positive integer.
+  json: {"type": "fixed", "logicalType": "decimal", "precision": -10, "scale": 2, "name": "TestIgnored", "size": 5}
+  canonical: {"name":"TestIgnored","type":"fixed","size":5}
+[82] e667e6dc94e4856c
+  warning: IgnoredLogicalType: Invalid decimal precision None. Must be a positive integer.
+  json: {"type": "fixed", "logicalType": "decimal", "scale": 2, "name": "TestIgnored", "size": 5}
+  canonical: {"name":"TestIgnored","type":"fixed","size":5}
+[83] 3f75eb1345e16d77
+  warning: IgnoredLogicalType: Invalid decimal scale 3. Cannot be greater than precision 2.
+  json: {"type": "fixed", "logicalType": "decimal", "precision": 2, "scale": 3, "name": "TestIgnored", "size": 2}
+  canonical: {"name":"TestIgnored","type":"fixed","size":2}
+[84] 19a8a887cff23c50
+  warning: IgnoredLogicalType: Invalid decimal precision 311. Max is 310.
+  json: {"type": "fixed", "logicalType": "decimal", "precision": 311, "name": "TestIgnored", "size": 129}
+  canonical: {"name":"TestIgnored","type":"fixed","size":129}
+[85] 5fcefd4d914c84df
+  warning: IgnoredLogicalType: Logical type decimal requires literal type bytes/fixed, not float.
+  json: {"type": "float", "logicalType": "decimal", "precision": 2, "scale": 0}
+  canonical: {"type":"float"}
+[86] adbf9635b8c70971
+  warning: IgnoredLogicalType: Unknown date1, using int.
+  json: {"type": "int", "logicalType": "date1"}
+  canonical: {"type":"int"}
+[87] a997e323d2cbf569
+  warning: IgnoredLogicalType: Logical type date requires literal type int, not long.
+  json: {"type": "long", "logicalType": "date"}
+  canonical: {"type":"long"}
+[88] adbf9635b8c70971
+  warning: IgnoredLogicalType: Unknown time-milis, using int.
+  json: {"type": "int", "logicalType": "time-milis"}
+  canonical: {"type":"int"}
+[89] a997e323d2cbf569
+  warning: IgnoredLogicalType: Logical type time-millis requires literal type int, not long.
+  json: {"type": "long", "logicalType": "time-millis"}
+  canonical: {"type":"long"}
+[90] a997e323d2cbf569
+  warning: IgnoredLogicalType: Unknown time-micro, using long.
+  json: {"type": "long", "logicalType": "time-micro"}
+  canonical: {"type":"long"}
+[91] adbf9635b8c70971
+  warning: IgnoredLogicalType: Logical type time-micros requires literal type long, not int.
+  json: {"type": "int", "logicalType": "time-micros"}
+  canonical: {"type":"int"}
+[92] a997e323d2cbf569
+  warning: IgnoredLogicalType: Unknown timestamp-milis, using long.
+  json: {"type": "long", "logicalType": "timestamp-milis"}
+  canonical: {"type":"long"}
+[93] adbf9635b8c70971
+  warning: IgnoredLogicalType: Logical type timestamp-millis requires literal type long, not int.
+  json: {"type": "int", "logicalType": "timestamp-millis"}
+  canonical: {"type":"int"}
+[94] a997e323d2cbf569
+  warning: IgnoredLogicalType: Unknown timestamp-micro, using long.
+  json: {"type": "long", "logicalType": "timestamp-micro"}
+  canonical: {"type":"long"}
+[95] adbf9635b8c70971
+  warning: IgnoredLogicalType: Logical type timestamp-micros requires literal type long, not int.
+  json: {"type": "int", "logicalType": "timestamp-micros"}
+  canonical: {"type":"int"}
+[96] 08828e0dabccd1aa
+  json: {"type": "record", "cp_string": "string", "cp_int": 1, "cp_array": [1, 2, 3, 4], "name": "TestRecord", "fields": [{"cp_object": {"a": 1, "b": 2}, "type": "string", "name": "f1"}, {"cp_null": null, "type": "long", "name": "f2"}]}
+  canonical: {"name":"TestRecord","type":"record","fields":[{"name":"f1","type":"string"},{"name":"f2","type":"long"}]}
+[97] 6f74f4e409b1334e
+  json: {"type": "map", "cp_boolean": true, "values": "long"}
+  canonical: {"type":"map","values":"long"}
+[98] 1aa5f534529fb001
+  json: {"type": "enum", "cp_float": 1.0, "name": "TestEnum", "symbols": ["one", "two", "three"]}
+  canonical: {"name":"TestEnum","type":"enum","symbols":["one","two","three"]}
+== encode schemas/user_signup.avsc datums/user_signup.jsonl
+[0] 4833663262386331652d366434612d346630652d396237612d3263356438653166346136621e616e61406578616d706c652e636f6d0206416e6102f6d6e1b1aa6802808a0102146e6577736c6574746572020e66616c6c2d323604086265746104657500021475746d5f6d656469756d0a656d61696c000409c4029e107d9d372bb6826bd81d3542a419d6
+  -> {'id': '3f2b8c1e-6d4a-4f0e-9b7a-2c5d8e1f4a6b', 'email': 'ana@example.com', 'display_name': 'Ana', 'plan': 'PRO', 'signed_up_at': datetime(2026-10-19T07:42:00.123000+00:00), 'birth_date': date(1994-03-08), 'referrer': {'source': 'newsletter', 'campaign': 'fall-26'}, 'tags': ['beta', 'eu'], 'attributes': {'utm_medium': 'email'}, 'credit': Decimal('25.00'), 'avatar_md5': b'\x9e\x10}\x9d7+\xb6\x82k\xd8\x1d5B\xa4\x19\xd6'}
+[1] 4861343831386531632d386535392d313165622d386463642d3032343261633133303030331c6c69406578616d706c652e6f72670000eed89fb0aa680000000002dd00
+  -> {'id': 'a4818e1c-8e59-11eb-8dcd-0242ac130003', 'email': 'li@example.org', 'display_name': None, 'plan': 'FREE', 'signed_up_at': datetime(2026-10-19T07:15:30.999000+00:00), 'birth_date': None, 'referrer': None, 'tags': [], 'attributes': {}, 'credit': Decimal('-0.35'), 'avatar_md5': None}
+[2] error: AvroTypeException: The datum "not-a-uuid" provided for "id" is not an example of the schema {
+  "type": "string",
+  "logicalType": "uuid"
+}
+[3] error: AvroTypeException: The datum "2026-10-19 07:42:00" provided for "signed_up_at" is not an example of the schema {
+  "type": "long",
+  "logicalType": "timestamp-millis"
+}
+[4] error: AvroTypeException: The datum "GOLD" provided for "plan" is not an example of the schema {
+  "type": "enum",
+  "default": "FREE",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO",
+    "TEAM"
+  ]
+}
+[5] error: AvroOutOfScaleException: The exponent of 0.125, -3, is too large for the schema scale of 2
+[6] error: AvroTypeException: The datum "{'id': '570feebe-2bbc-4937-98df-285944e1dbbd', 'email': 'x@example.com', 'plan': 'TEAM', 'signed_up_at': datetime.datetime(2026, 10, 19, 7, 42, tzinfo=datetime.timezone.utc), 'tags': [], 'attributes': {}, 'credit': Decimal('12345678.99'), 'nickname': 'extra'}" provided for "UserSignup" is not an example of the schema {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "name": "id"
+    },
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": [
+        "null",
+        "string"
+      ],
+      "name": "display_name",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "enum",
+        "default": "FREE",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO",
+          "TEAM"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "name": "signed_up_at"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "int",
+          "logicalType": "date"
+        }
+      ],
+      "name": "birth_date",
+      "default": null
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Referrer",
+          "namespace": "com.example.events",
+          "fields": [
+            {
+              "type": "string",
+              "name": "source"
+            },
+            {
+              "type": [
+                "null",
+                "string"
+              ],
+              "name": "campaign",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "name": "referrer",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "name": "tags",
+      "default": []
+    },
+    {
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "name": "attributes",
+      "default": {}
+    },
+    {
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 10,
+        "scale": 2
+      },
+      "name": "credit"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "fixed",
+          "name": "MD5",
+          "namespace": "com.example.events",
+          "size": 16
+        }
+      ],
+      "name": "avatar_md5",
+      "default": null
+    }
+  ],
+  "doc": "Emitted once when an account is created."
+}
+[7] error: AvroTypeException: The datum "7" provided for "tags" is not an example of the schema "string"
+[8] error: AvroTypeException: The datum "b'\x01\x02'" provided for "avatar_md5" is not an example of the schema [
+  "null",
+  {
+    "type": "fixed",
+    "name": "MD5",
+    "namespace": "com.example.events",
+    "size": 16
+  }
+]
+== encode schemas/order.avsc datums/order.jsonl
+[0] 828080808080802002feff929fc689af06224b65697a6572736772616368742031323312416d7374657264616d020e3130313520434a4e4c0004144b422d4552474f2d303102000000000016e2fc105553422d432d324d06ffffffffffffff830002333333333333c33f028089e431040867696674000679657308646f6f720200
+  -> {'order_id': 9007199254740993, 'status': 'PAID', 'placed_at': datetime(2026-10-18T23:59:59.999999+00:00), 'ship_to': {'line1': 'Keizersgracht 123', 'city': 'Amsterdam', 'postcode': '1015 CJ', 'country': b'NL'}, 'bill_to': None, 'lines': [{'sku': 'KB-ERGO-01', 'qty': 1, 'unit_price': Decimal('149.9900')}, {'sku': 'USB-C-2M', 'qty': 3, 'unit_price': Decimal('-0.0125')}], 'discount': 0.15, 'delivery_window': time(14:30:00), 'notes': {'gift': 'yes', 'door': None}}
+[1] 0104ffff9e80c5f5df6c1231204d61696e20537416537072696e676669656c640055530210504f20426f782037165368656c627976696c6c65020a3632353635555300000000
+  -> {'order_id': -1, 'status': 'SHIPPED', 'placed_at': datetime(1000-01-01T00:00:00+00:00), 'ship_to': {'line1': '1 Main St', 'city': 'Springfield', 'postcode': None, 'country': b'US'}, 'bill_to': {'line1': 'PO Box 7', 'city': 'Shelbyville', 'postcode': '62565', 'country': b'US'}, 'lines': [], 'discount': None, 'delivery_window': None, 'notes': {}}
+[2] error: AvroOutOfScaleException: The exponent of 1.23456, -5, is too large for the schema scale of 4
+[3] error: AvroTypeException: The datum "2147483648" provided for "qty" is not an example of the schema "int"
+== encode schemas/weather.avsc datums/weather.jsonl
+[0] 183031313939302d3939393939ffa390e8872400
+  -> {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+[1] 183031313939302d3939393939ff81fbd687242c
+  -> {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+[2] 183031313939302d3939393939ffa5aec2872415
+  -> {'station': '011990-99999', 'time': -619484400000, 'temp': -11}
+[3] 183031323635302d3939393939ffb7a28b9426de01
+  -> {'station': '012650-99999', 'time': -655531200000, 'temp': 111}
+[4] 183031323635302d3939393939ffdbd5f693269c01
+  -> {'station': '012650-99999', 'time': -655509600000, 'temp': 78}
+== encode schemas/long_list.avsc datums/long_list.jsonl
+[0] 020204020600
+  -> {'value': 1, 'next': {'value': 2, 'next': {'value': 3, 'next': None}}}
+[1] 0000
+  -> {'value': 0, 'next': None}
+== encode schemas/metric_sample.avsc datums/metrics.jsonl
+[0] 26687474705f72657175657374735f746f74616c040c6d6574686f640647455408636f646506323030000200000000000c9040828880e3948baf06020000
+  -> {'name': 'http_requests_total', 'labels': {'method': 'GET', 'code': '200'}, 'value': 1027.0, 'ts': datetime(2026-10-19T07:42:00.000001+00:00), 'kind': 'COUNTER', 'buckets': None}
+[1] 146e6f64655f6c6f6164310002e17a14ae47e1da3f808fa7f1948baf06020200
+  -> {'name': 'node_load1', 'labels': {}, 'value': 0.42, 'ts': datetime(2026-10-19T07:42:15+00:00), 'kind': 'GAUGE', 'buckets': None}
+[2] 287270635f6475726174696f6e5f7365636f6e6473020e736572766963650861757468000200000000000008408096ceff948baf06020402069a9999999999b93f50000000000000f03f68000000000000f07f6a00
+  -> {'name': 'rpc_duration_seconds', 'labels': {'service': 'auth'}, 'value': 3.0, 'ts': datetime(2026-10-19T07:42:30+00:00), 'kind': 'HISTOGRAM', 'buckets': [{'le': 0.1, 'count': 40}, {'le': 1.0, 'count': 52}, {'le': inf, 'count': 53}]}
+[3] 04757002066a6f62086e6f64650002000000000000f03f809df58d958baf060000
+  -> {'name': 'up', 'labels': {'job': 'node'}, 'value': 1.0, 'ts': datetime(2026-10-19T07:42:45+00:00), 'kind': None, 'buckets': None}
+== encode schemas/value_union.avsc datums/values.jsonl
+[0] 00
+  -> None
+[1] 080000000000000000
+  -> 0.0
+[2] 080000000000001c40
+  -> 7.0
+[3] 08000000000000e0c1
+  -> -2147483648.0
+[4] 08000000000000e041
+  -> 2147483648.0
+[5] 08000000000000e043
+  -> 9.223372036854776e+18
+[6] 08000000000000e043
+  -> 9.223372036854776e+18
+[7] 08000000000000f83f
+  -> 1.5
+[8] 080000000000000080
+  -> -0.0
+[9] 089c7500883ce4377e
+  -> 1e+300
+[10] 0a00
+  -> ''
+[11] 0a1468c3a96c6c6f20e29883
+  -> 'héllo ☃'
+[12] 0c01
+  -> True
+[13] 0c00
+  -> False
+[14] error: AvroTypeException: The datum "[1]" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[15] error: AvroTypeException: The datum "{'a': 1}" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[16] error: AvroTypeException: The datum "b'\x00\xff'" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[17] error: UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 0: surrogates not allowed
+== encode schemas/interop.avsc datums/interop.jsonl
+[0] 18a8d4c30e066865790100409a4400000000004893c00a313233343506000000000000144000000000000000000000000000002840000402610261066265650663656500020000000000002840043132333435363738393031323334353608626c6168020a696e6e65720000
+  -> {'intField': 12, 'longField': 15234324, 'stringField': 'hey', 'boolField': True, 'floatField': 1234.0, 'doubleField': -1234.0, 'bytesField': b'12345', 'nullField': None, 'arrayField': [5.0, 0.0, 12.0], 'mapField': {'a': {'label': 'a'}, 'bee': {'label': 'cee'}}, 'unionField': 12.0, 'enumField': 'C', 'fixedField': b'1234567890123456', 'recordField': {'label': 'blah', 'children': [{'label': 'inner', 'children': []}]}}
+[1] 02040000cdcccc3d9a9999999999b93f000000040402ff000000000000000000000000000000000000000000
+  -> {'intField': 1, 'longField': 2, 'stringField': '', 'boolField': False, 'floatField': 0.10000000149011612, 'doubleField': 0.1, 'bytesField': b'', 'nullField': None, 'arrayField': [], 'mapField': {}, 'unionField': [b'\xff', b''], 'enumField': 'A', 'fixedField': b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', 'recordField': {'label': '', 'children': []}}
+[2] 02040000ffff7f7f000000000000f87f0002000000000000f0ff000002000000000000000002000000000000000000000000000000000000
+  -> {'intField': 1, 'longField': 2, 'stringField': '', 'boolField': False, 'floatField': 3.4028234663852886e+38, 'doubleField': nan, 'bytesField': b'', 'nullField': None, 'arrayField': [-inf], 'mapField': {}, 'unionField': 0.0, 'enumField': 'B', 'fixedField': b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00', 'recordField': {'label': '', 'children': []}}
+== encode schemas/bytes_decimal.avsc datums/decimals.jsonl
+[0] 04013a
+  -> Decimal('3.14')
+[1] 04fec6
+  -> Decimal('-3.14')
+[2] 04270f
+  -> Decimal('99.99')
+[3] 02ff
+  -> Decimal('-0.01')
+[4] 0200
+  -> Decimal('0.00')
+[5] 020c
+  -> Decimal('0.12')
+[6] 020f
+  -> Decimal('0.15')
+[7] error: AvroOutOfScaleException: The exponent of 0.001, -3, is too large for the schema scale of 2
+[8] 04ff80
+  -> Decimal('-1.28')
+[9] 0431ff
+  -> Decimal('128.0')
+[10] 06ff8000
+  -> Decimal('-327.7')
+== resolve schemas/user_signup.avsc schemas/user_signup_v2.avsc datums/user_signup.jsonl
+[0] -> {'id': '3f2b8c1e-6d4a-4f0e-9b7a-2c5d8e1f4a6b', 'email': 'ana@example.com', 'display_name': 'Ana', 'plan': 'PRO', 'signed_up_at': datetime(2026-10-19T07:42:00.123000+00:00), 'credit': Decimal('25.00'), 'locale': 'en-US', 'marketing_opt_in': False}
+[1] -> {'id': 'a4818e1c-8e59-11eb-8dcd-0242ac130003', 'email': 'li@example.org', 'display_name': None, 'plan': 'FREE', 'signed_up_at': datetime(2026-10-19T07:15:30.999000+00:00), 'credit': Decimal('-0.35'), 'locale': 'en-US', 'marketing_opt_in': False}
+[2] write error: AvroTypeException: The datum "not-a-uuid" provided for "id" is not an example of the schema {
+  "type": "string",
+  "logicalType": "uuid"
+}
+[3] write error: AvroTypeException: The datum "2026-10-19 07:42:00" provided for "signed_up_at" is not an example of the schema {
+  "type": "long",
+  "logicalType": "timestamp-millis"
+}
+[4] write error: AvroTypeException: The datum "GOLD" provided for "plan" is not an example of the schema {
+  "type": "enum",
+  "default": "FREE",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO",
+    "TEAM"
+  ]
+}
+[5] write error: AvroOutOfScaleException: The exponent of 0.125, -3, is too large for the schema scale of 2
+[6] write error: AvroTypeException: The datum "{'id': '570feebe-2bbc-4937-98df-285944e1dbbd', 'email': 'x@example.com', 'plan': 'TEAM', 'signed_up_at': datetime.datetime(2026, 10, 19, 7, 42, tzinfo=datetime.timezone.utc), 'tags': [], 'attributes': {}, 'credit': Decimal('12345678.99'), 'nickname': 'extra'}" provided for "UserSignup" is not an example of the schema {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "name": "id"
+    },
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": [
+        "null",
+        "string"
+      ],
+      "name": "display_name",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "enum",
+        "default": "FREE",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO",
+          "TEAM"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "name": "signed_up_at"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "int",
+          "logicalType": "date"
+        }
+      ],
+      "name": "birth_date",
+      "default": null
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Referrer",
+          "namespace": "com.example.events",
+          "fields": [
+            {
+              "type": "string",
+              "name": "source"
+            },
+            {
+              "type": [
+                "null",
+                "string"
+              ],
+              "name": "campaign",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "name": "referrer",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "name": "tags",
+      "default": []
+    },
+    {
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "name": "attributes",
+      "default": {}
+    },
+    {
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 10,
+        "scale": 2
+      },
+      "name": "credit"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "fixed",
+          "name": "MD5",
+          "namespace": "com.example.events",
+          "size": 16
+        }
+      ],
+      "name": "avatar_md5",
+      "default": null
+    }
+  ],
+  "doc": "Emitted once when an account is created."
+}
+[7] write error: AvroTypeException: The datum "7" provided for "tags" is not an example of the schema "string"
+[8] write error: AvroTypeException: The datum "b'\x01\x02'" provided for "avatar_md5" is not an example of the schema [
+  "null",
+  {
+    "type": "fixed",
+    "name": "MD5",
+    "namespace": "com.example.events",
+    "size": 16
+  }
+]
+== resolve schemas/user_signup.avsc schemas/user_signup_v0.avsc datums/user_signup.jsonl
+[0] -> error: SchemaResolutionException: No default value for field region
+Writer's Schema: {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "name": "id"
+    },
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": [
+        "null",
+        "string"
+      ],
+      "name": "display_name",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "enum",
+        "default": "FREE",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO",
+          "TEAM"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "name": "signed_up_at"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "int",
+          "logicalType": "date"
+        }
+      ],
+      "name": "birth_date",
+      "default": null
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Referrer",
+          "namespace": "com.example.events",
+          "fields": [
+            {
+              "type": "string",
+              "name": "source"
+            },
+            {
+              "type": [
+                "null",
+                "string"
+              ],
+              "name": "campaign",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "name": "referrer",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "name": "tags",
+      "default": []
+    },
+    {
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "name": "attributes",
+      "default": {}
+    },
+    {
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 10,
+        "scale": 2
+      },
+      "name": "credit"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "fixed",
+          "name": "MD5",
+          "namespace": "com.example.events",
+          "size": 16
+        }
+      ],
+      "name": "avatar_md5",
+      "default": null
+    }
+  ],
+  "doc": "Emitted once when an account is created."
+}
+Reader's Schema: {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": {
+        "type": "enum",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": "string",
+      "name": "region"
+    }
+  ]
+}
+[1] -> error: SchemaResolutionException: No default value for field region
+Writer's Schema: {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "name": "id"
+    },
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": [
+        "null",
+        "string"
+      ],
+      "name": "display_name",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "enum",
+        "default": "FREE",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO",
+          "TEAM"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "name": "signed_up_at"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "int",
+          "logicalType": "date"
+        }
+      ],
+      "name": "birth_date",
+      "default": null
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Referrer",
+          "namespace": "com.example.events",
+          "fields": [
+            {
+              "type": "string",
+              "name": "source"
+            },
+            {
+              "type": [
+                "null",
+                "string"
+              ],
+              "name": "campaign",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "name": "referrer",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "name": "tags",
+      "default": []
+    },
+    {
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "name": "attributes",
+      "default": {}
+    },
+    {
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 10,
+        "scale": 2
+      },
+      "name": "credit"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "fixed",
+          "name": "MD5",
+          "namespace": "com.example.events",
+          "size": 16
+        }
+      ],
+      "name": "avatar_md5",
+      "default": null
+    }
+  ],
+  "doc": "Emitted once when an account is created."
+}
+Reader's Schema: {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": {
+        "type": "enum",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": "string",
+      "name": "region"
+    }
+  ]
+}
+[2] write error: AvroTypeException: The datum "not-a-uuid" provided for "id" is not an example of the schema {
+  "type": "string",
+  "logicalType": "uuid"
+}
+[3] write error: AvroTypeException: The datum "2026-10-19 07:42:00" provided for "signed_up_at" is not an example of the schema {
+  "type": "long",
+  "logicalType": "timestamp-millis"
+}
+[4] write error: AvroTypeException: The datum "GOLD" provided for "plan" is not an example of the schema {
+  "type": "enum",
+  "default": "FREE",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO",
+    "TEAM"
+  ]
+}
+[5] write error: AvroOutOfScaleException: The exponent of 0.125, -3, is too large for the schema scale of 2
+[6] write error: AvroTypeException: The datum "{'id': '570feebe-2bbc-4937-98df-285944e1dbbd', 'email': 'x@example.com', 'plan': 'TEAM', 'signed_up_at': datetime.datetime(2026, 10, 19, 7, 42, tzinfo=datetime.timezone.utc), 'tags': [], 'attributes': {}, 'credit': Decimal('12345678.99'), 'nickname': 'extra'}" provided for "UserSignup" is not an example of the schema {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "name": "id"
+    },
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": [
+        "null",
+        "string"
+      ],
+      "name": "display_name",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "enum",
+        "default": "FREE",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO",
+          "TEAM"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "name": "signed_up_at"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "int",
+          "logicalType": "date"
+        }
+      ],
+      "name": "birth_date",
+      "default": null
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Referrer",
+          "namespace": "com.example.events",
+          "fields": [
+            {
+              "type": "string",
+              "name": "source"
+            },
+            {
+              "type": [
+                "null",
+                "string"
+              ],
+              "name": "campaign",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "name": "referrer",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "name": "tags",
+      "default": []
+    },
+    {
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "name": "attributes",
+      "default": {}
+    },
+    {
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 10,
+        "scale": 2
+      },
+      "name": "credit"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "fixed",
+          "name": "MD5",
+          "namespace": "com.example.events",
+          "size": 16
+        }
+      ],
+      "name": "avatar_md5",
+      "default": null
+    }
+  ],
+  "doc": "Emitted once when an account is created."
+}
+[7] write error: AvroTypeException: The datum "7" provided for "tags" is not an example of the schema "string"
+[8] write error: AvroTypeException: The datum "b'\x01\x02'" provided for "avatar_md5" is not an example of the schema [
+  "null",
+  {
+    "type": "fixed",
+    "name": "MD5",
+    "namespace": "com.example.events",
+    "size": 16
+  }
+]
+== resolve schemas/weather.avsc schemas/weather_reader.avsc datums/weather.jsonl
+[0] -> {'station': '011990-99999', 'time': -619524000000, 'temp': 0, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+[1] -> {'station': '011990-99999', 'time': -619506000000, 'temp': 22, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+[2] -> {'station': '011990-99999', 'time': -619484400000, 'temp': -11, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+[3] -> {'station': '012650-99999', 'time': -655531200000, 'temp': 111, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+[4] -> {'station': '012650-99999', 'time': -655509600000, 'temp': 78, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+== resolve schemas/weather.avsc schemas/weather_float.avsc datums/weather_two.jsonl
+[0] -> error: InvalidDefaultException: (<avro.schema.PrimitiveSchema object>, 1)
+[1] -> error: InvalidDefaultException: (<avro.schema.PrimitiveSchema object>, 1)
+== resolve schemas/weather.avsc schemas/weather_strict.avsc datums/weather_two.jsonl
+[0] -> error: SchemaResolutionException: No default value for field dew_point
+Writer's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station",
+      "order": "ignore"
+    },
+    {
+      "type": "long",
+      "name": "time"
+    },
+    {
+      "type": "int",
+      "name": "temp"
+    }
+  ],
+  "doc": "A weather reading."
+}
+Reader's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station"
+    },
+    {
+      "type": "int",
+      "name": "dew_point"
+    }
+  ]
+}
+[1] -> error: SchemaResolutionException: No default value for field dew_point
+Writer's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station",
+      "order": "ignore"
+    },
+    {
+      "type": "long",
+      "name": "time"
+    },
+    {
+      "type": "int",
+      "name": "temp"
+    }
+  ],
+  "doc": "A weather reading."
+}
+Reader's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station"
+    },
+    {
+      "type": "int",
+      "name": "dew_point"
+    }
+  ]
+}
+== resolve schemas/weather.avsc schemas/weather_renamed.avsc datums/weather_two.jsonl
+[0] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station",
+      "order": "ignore"
+    },
+    {
+      "type": "long",
+      "name": "time"
+    },
+    {
+      "type": "int",
+      "name": "temp"
+    }
+  ],
+  "doc": "A weather reading."
+}
+Reader's Schema: {
+  "type": "record",
+  "aliases": [
+    "test.Weather"
+  ],
+  "name": "Reading",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station"
+    }
+  ]
+}
+[1] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station",
+      "order": "ignore"
+    },
+    {
+      "type": "long",
+      "name": "time"
+    },
+    {
+      "type": "int",
+      "name": "temp"
+    }
+  ],
+  "doc": "A weather reading."
+}
+Reader's Schema: {
+  "type": "record",
+  "aliases": [
+    "test.Weather"
+  ],
+  "name": "Reading",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station"
+    }
+  ]
+}
+== resolve schemas/value_union.avsc schemas/long_reader.avsc datums/values.jsonl
+[0] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[1] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[2] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[3] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[4] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[5] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[6] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[7] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[8] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[9] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[10] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[11] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[12] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[13] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: "long"
+[14] write error: AvroTypeException: The datum "[1]" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[15] write error: AvroTypeException: The datum "{'a': 1}" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[16] write error: AvroTypeException: The datum "b'\x00\xff'" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[17] write error: UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 0: surrogates not allowed
+== resolve schemas/value_union.avsc schemas/string_or_long.avsc datums/values.jsonl
+[0] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "null"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[1] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[2] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[3] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[4] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[5] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[6] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[7] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[8] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[9] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "double"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[10] -> ''
+[11] -> 'héllo ☃'
+[12] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "boolean"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[13] -> error: SchemaResolutionException: Schemas do not match.
+Writer's Schema: "boolean"
+Reader's Schema: [
+  "string",
+  "long"
+]
+[14] write error: AvroTypeException: The datum "[1]" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[15] write error: AvroTypeException: The datum "{'a': 1}" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[16] write error: AvroTypeException: The datum "b'\x00\xff'" provided for "None" is not an example of the schema [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+[17] write error: UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 0: surrogates not allowed
+== resolve schemas/bytes_decimal.avsc schemas/bytes_decimal_raw.avsc datums/decimals.jsonl
+[0] -> Decimal('3.14')
+[1] -> Decimal('-3.14')
+[2] -> Decimal('99.99')
+[3] -> Decimal('-0.01')
+[4] -> Decimal('0.00')
+[5] -> Decimal('0.12')
+[6] -> Decimal('0.15')
+[7] write error: AvroOutOfScaleException: The exponent of 0.001, -3, is too large for the schema scale of 2
+[8] -> Decimal('-1.28')
+[9] -> Decimal('128.0')
+[10] -> Decimal('-327.7')
+== decode schemas/plan_reader.avsc raw/plan_enterprise.bin
+error: SchemaResolutionException: Can't access enum index 3 for enum with 2 symbols
+Writer's Schema: {
+  "type": "enum",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO"
+  ]
+}
+Reader's Schema: {
+  "type": "enum",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO"
+  ]
+}
+== decode schemas/value_union.avsc raw/union_branch_9.bin
+error: SchemaResolutionException: Can't access branch index 9 for union with 7 branches
+Writer's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+Reader's Schema: [
+  "null",
+  "int",
+  "long",
+  "float",
+  "double",
+  "string",
+  "boolean"
+]
+== decode schemas/value_union.avsc raw/negative_length.bin
+error: InvalidAvroBinaryEncoding: Read 0 bytes, expected 1 bytes
+== decode schemas/plan_reader.avsc raw/enum_index_7.bin
+error: SchemaResolutionException: Can't access enum index 7 for enum with 2 symbols
+Writer's Schema: {
+  "type": "enum",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO"
+  ]
+}
+Reader's Schema: {
+  "type": "enum",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO"
+  ]
+}
+== decode schemas/value_union.avsc raw/truncated_string.bin
+error: InvalidAvroBinaryEncoding: Read 1 bytes, expected 52 bytes
+== decode schemas/bytes_decimal_raw.avsc raw/negative_length.bin
+error: InvalidAvroBinaryEncoding: Requested -1 bytes to read, expected positive integer.
+== decode schemas/long_reader.avsc raw/long_blocks.bin
+-> -2
+rest: 5 bytes
+== decode schemas/bytes_decimal.avsc raw/decimal_rounding.bin
+-> Decimal('123.4')
+rest: 0 bytes
+== read files/weather.avro
+codec: null
+meta: avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+  {'station': '011990-99999', 'time': -619484400000, 'temp': -11}
+  {'station': '012650-99999', 'time': -655531200000, 'temp': 111}
+  {'station': '012650-99999', 'time': -655509600000, 'temp': 78}
+records: 5
+== read files/weather-deflate.avro
+codec: deflate
+meta: avro.schema, avro.codec
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+  {'station': '011990-99999', 'time': -619484400000, 'temp': -11}
+  {'station': '012650-99999', 'time': -655531200000, 'temp': 111}
+  {'station': '012650-99999', 'time': -655509600000, 'temp': 78}
+records: 5
+== read files/weather-null-codec.avro
+codec: null
+meta: avro.schema, avro.codec, created.by
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+records: 2
+== read files/weather.avro schemas/weather_reader.avsc
+codec: null
+meta: avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+  {'station': '011990-99999', 'time': -619484400000, 'temp': -11, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+  {'station': '012650-99999', 'time': -655531200000, 'temp': 111, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+  {'station': '012650-99999', 'time': -655509600000, 'temp': 78, 'elevation_m': 0, 'source': b'\xc3\xbf\xc3\xbe', 'sensor': {'model': 'WX-9', 'calibrated': True}}
+records: 5
+== read files/weather-deflate.avro schemas/weather_strict.avsc
+codec: deflate
+meta: avro.schema, avro.codec
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+error: SchemaResolutionException: No default value for field dew_point
+Writer's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station"
+    },
+    {
+      "type": "long",
+      "name": "time"
+    },
+    {
+      "type": "int",
+      "name": "temp"
+    }
+  ]
+}
+Reader's Schema: {
+  "type": "record",
+  "name": "Weather",
+  "namespace": "test",
+  "fields": [
+    {
+      "type": "string",
+      "name": "station"
+    },
+    {
+      "type": "int",
+      "name": "dew_point"
+    }
+  ]
+}
+records: 0
+== read files/empty.avro
+codec: null
+meta: avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+records: 0
+== read files/empty-block.avro
+codec: null
+meta: avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+records: 1
+== read files/interop-deflate.avro
+codec: deflate
+meta: avro.schema, avro.codec
+schema: {"type": "record", "name": "Interop", "namespace": "org.apache.avro", "fields": [{"type": "int", "name": "intField"}, {"type": "long", "name": "longField"}, {"type": "string", "name": "stringField"}, {"type": "boolean", "name": "boolField"}, {"type": "float", "name": "floatField"}, {"type": "double", "name": "doubleField"}, {"type": "bytes", "name": "bytesField"}, {"type": "null", "name": "nullField"}, {"type": {"type": "array", "items": "double"}, "name": "arrayField"}, {"type": {"type": "map", "values": {"type": "record", "name": "Foo", "namespace": "org.apache.avro", "fields": [{"type": "string", "name": "label"}]}}, "name": "mapField"}, {"type": ["boolean", "double", {"type": "array", "items": "bytes"}], "name": "unionField"}, {"type": {"type": "enum", "name": "Kind", "namespace": "org.apache.avro", "symbols": ["A", "B", "C"]}, "name": "enumField"}, {"type": {"type": "fixed", "name": "MD5", "namespace": "org.apache.avro", "size": 16}, "name": "fixedField"}, {"type": {"type": "record", "name": "Node", "namespace": "org.apache.avro", "fields": [{"type": "string", "name": "label"}, {"type": {"type": "array", "items": "org.apache.avro.Node"}, "name": "children"}]}, "name": "recordField"}]}
+  {'intField': 12, 'longField': 15234324, 'stringField': 'hey', 'boolField': True, 'floatField': 1234.0, 'doubleField': -1234.0, 'bytesField': b'12312adf', 'nullField': None, 'arrayField': [5.0, 0.0, 12.0], 'mapField': {'a': {'label': 'a'}, 'bee': {'label': 'cee'}}, 'unionField': 12.0, 'enumField': 'C', 'fixedField': b'1019181716151413', 'recordField': {'label': 'blah', 'children': [{'label': 'inner', 'children': []}]}}
+records: 1
+== read files/broken/snappy.avro
+codec: snappy
+meta: avro.schema, avro.codec
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+error: UnsupportedCodec: Unsupported codec: snappy. (Is it installed?)
+records: 0
+== read files/broken/bad-magic.avro
+error: AvroException: Not an Avro data file: b'Obj\x02' doesn't match b'Obj\x01'.
+== read files/broken/not-avro.avro
+error: InvalidAvroBinaryEncoding: Requested -11 bytes to read, expected positive integer.
+== read files/broken/truncated.avro
+codec: null
+meta: avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+  {'station': '011990-99999', 'time': -619484400000, 'temp': -11}
+  {'station': '012650-99999', 'time': -655531200000, 'temp': 111}
+error: InvalidAvroBinaryEncoding: Read 6 bytes, expected 12 bytes
+records: 4
+== read files/broken/bad-sync.avro
+codec: null
+meta: avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+  {'station': '011990-99999', 'time': -619484400000, 'temp': -11}
+records: 3
+== read files/broken/count-too-high.avro
+codec: null
+meta: avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}]}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+error: InvalidAvroBinaryEncoding: Read 14 bytes, expected 3719 bytes
+records: 2
+== read files/broken/no-schema.avro
+error: DataFileException: Missing required schema metadata.
+== write schemas/weather.avsc datums/weather.jsonl
+bytes: 397 sha256: a160b232125cecfc5ab806d8fd5ad6f9e0a0150b4ae8ee664bbbe6e5bae40d20
+codec: null
+meta: avro.codec, avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station", "order": "ignore"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}], "doc": "A weather reading."}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+  {'station': '011990-99999', 'time': -619484400000, 'temp': -11}
+  {'station': '012650-99999', 'time': -655531200000, 'temp': 111}
+  {'station': '012650-99999', 'time': -655509600000, 'temp': 78}
+records: 5
+== write schemas/user_signup.avsc datums/user_signup.jsonl
+[2] error: AvroTypeException: The datum "not-a-uuid" provided for "id" is not an example of the schema {
+  "type": "string",
+  "logicalType": "uuid"
+}
+[3] error: AvroTypeException: The datum "2026-10-19 07:42:00" provided for "signed_up_at" is not an example of the schema {
+  "type": "long",
+  "logicalType": "timestamp-millis"
+}
+[4] error: AvroTypeException: The datum "GOLD" provided for "plan" is not an example of the schema {
+  "type": "enum",
+  "default": "FREE",
+  "name": "Plan",
+  "namespace": "com.example.events",
+  "symbols": [
+    "FREE",
+    "PRO",
+    "TEAM"
+  ]
+}
+[5] error: AvroOutOfScaleException: The exponent of 0.125, -3, is too large for the schema scale of 2
+[6] error: AvroTypeException: The datum "{'id': '570feebe-2bbc-4937-98df-285944e1dbbd', 'email': 'x@example.com', 'plan': 'TEAM', 'signed_up_at': datetime.datetime(2026, 10, 19, 7, 42, tzinfo=datetime.timezone.utc), 'tags': [], 'attributes': {}, 'credit': Decimal('12345678.99'), 'nickname': 'extra'}" provided for "UserSignup" is not an example of the schema {
+  "type": "record",
+  "name": "UserSignup",
+  "namespace": "com.example.events",
+  "fields": [
+    {
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "name": "id"
+    },
+    {
+      "type": "string",
+      "name": "email"
+    },
+    {
+      "type": [
+        "null",
+        "string"
+      ],
+      "name": "display_name",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "enum",
+        "default": "FREE",
+        "name": "Plan",
+        "namespace": "com.example.events",
+        "symbols": [
+          "FREE",
+          "PRO",
+          "TEAM"
+        ]
+      },
+      "name": "plan"
+    },
+    {
+      "type": {
+        "type": "long",
+        "logicalType": "timestamp-millis"
+      },
+      "name": "signed_up_at"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "int",
+          "logicalType": "date"
+        }
+      ],
+      "name": "birth_date",
+      "default": null
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "Referrer",
+          "namespace": "com.example.events",
+          "fields": [
+            {
+              "type": "string",
+              "name": "source"
+            },
+            {
+              "type": [
+                "null",
+                "string"
+              ],
+              "name": "campaign",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "name": "referrer",
+      "default": null
+    },
+    {
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "name": "tags",
+      "default": []
+    },
+    {
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "name": "attributes",
+      "default": {}
+    },
+    {
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 10,
+        "scale": 2
+      },
+      "name": "credit"
+    },
+    {
+      "type": [
+        "null",
+        {
+          "type": "fixed",
+          "name": "MD5",
+          "namespace": "com.example.events",
+          "size": 16
+        }
+      ],
+      "name": "avatar_md5",
+      "default": null
+    }
+  ],
+  "doc": "Emitted once when an account is created."
+}
+[7] error: AvroTypeException: The datum "7" provided for "tags" is not an example of the schema "string"
+[8] error: AvroTypeException: The datum "b'\x01\x02'" provided for "avatar_md5" is not an example of the schema [
+  "null",
+  {
+    "type": "fixed",
+    "name": "MD5",
+    "namespace": "com.example.events",
+    "size": 16
+  }
+]
+bytes: 1643 sha256: 4f065efab3bca7d70016ac33319c90a69dc398acff0a9f54a339b7e9c2f90574
+codec: null
+meta: avro.codec, avro.schema
+schema: {"type": "record", "name": "UserSignup", "namespace": "com.example.events", "fields": [{"type": {"type": "string", "logicalType": "uuid"}, "name": "id"}, {"type": "string", "name": "email"}, {"type": ["null", "string"], "name": "display_name", "default": null}, {"type": {"type": "enum", "default": "FREE", "name": "Plan", "namespace": "com.example.events", "symbols": ["FREE", "PRO", "TEAM"]}, "name": "plan"}, {"type": {"type": "long", "logicalType": "timestamp-millis"}, "name": "signed_up_at"}, {"type": ["null", {"type": "int", "logicalType": "date"}], "name": "birth_date", "default": null}, {"type": ["null", {"type": "record", "name": "Referrer", "namespace": "com.example.events", "fields": [{"type": "string", "name": "source"}, {"type": ["null", "string"], "name": "campaign", "default": null}]}], "name": "referrer", "default": null}, {"type": {"type": "array", "items": "string"}, "name": "tags", "default": []}, {"type": {"type": "map", "values": "string"}, "name": "attributes", "default": {}}, {"type": {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}, "name": "credit"}, {"type": ["null", {"type": "fixed", "name": "MD5", "namespace": "com.example.events", "size": 16}], "name": "avatar_md5", "default": null}], "doc": "Emitted once when an account is created."}
+  {'id': '3f2b8c1e-6d4a-4f0e-9b7a-2c5d8e1f4a6b', 'email': 'ana@example.com', 'display_name': 'Ana', 'plan': 'PRO', 'signed_up_at': datetime(2026-10-19T07:42:00.123000+00:00), 'birth_date': date(1994-03-08), 'referrer': {'source': 'newsletter', 'campaign': 'fall-26'}, 'tags': ['beta', 'eu'], 'attributes': {'utm_medium': 'email'}, 'credit': Decimal('25.00'), 'avatar_md5': b'\x9e\x10}\x9d7+\xb6\x82k\xd8\x1d5B\xa4\x19\xd6'}
+  {'id': 'a4818e1c-8e59-11eb-8dcd-0242ac130003', 'email': 'li@example.org', 'display_name': None, 'plan': 'FREE', 'signed_up_at': datetime(2026-10-19T07:15:30.999000+00:00), 'birth_date': None, 'referrer': None, 'tags': [], 'attributes': {}, 'credit': Decimal('-0.35'), 'avatar_md5': None}
+error: InvalidAvroBinaryEncoding: Requested -28 bytes to read, expected positive integer.
+records: 2
+== write schemas/long_list.avsc datums/long_list.jsonl
+bytes: 239 sha256: 13b0806e4771e9b2b2242257c4dc50b7a5f87a972b19cd70d4109ff4baa37e40
+codec: null
+meta: avro.codec, avro.schema
+schema: {"type": "record", "aliases": ["LinkedLongs"], "name": "LongList", "fields": [{"type": "long", "name": "value"}, {"type": ["null", "LongList"], "name": "next"}]}
+  {'value': 1, 'next': {'value': 2, 'next': {'value': 3, 'next': None}}}
+  {'value': 0, 'next': None}
+records: 2
+== cat data/files/weather.avro
+| {"station": "011990-99999", "time": -619524000000, "temp": 0}
+| {"station": "011990-99999", "time": -619506000000, "temp": 22}
+| {"station": "011990-99999", "time": -619484400000, "temp": -11}
+| {"station": "012650-99999", "time": -655531200000, "temp": 111}
+| {"station": "012650-99999", "time": -655509600000, "temp": 78}
+exit: 0
+== cat --format json-pretty data/files/weather-deflate.avro
+| {
+|     "station": "011990-99999",
+|     "temp": 0,
+|     "time": -619524000000
+| }
+| {
+|     "station": "011990-99999",
+|     "temp": 22,
+|     "time": -619506000000
+| }
+| {
+|     "station": "011990-99999",
+|     "temp": -11,
+|     "time": -619484400000
+| }
+| {
+|     "station": "012650-99999",
+|     "temp": 111,
+|     "time": -655531200000
+| }
+| {
+|     "station": "012650-99999",
+|     "temp": 78,
+|     "time": -655509600000
+| }
+exit: 0
+== cat --format csv --header data/files/weather.avro
+| station,temp,time\r
+| 011990-99999,0,-619524000000\r
+| 011990-99999,22,-619506000000\r
+| 011990-99999,-11,-619484400000\r
+| 012650-99999,111,-655531200000\r
+| 012650-99999,78,-655509600000\r
+exit: 0
+== cat -f csv --skip 1 --count 2 data/files/weather.avro data/files/weather-deflate.avro
+| 011990-99999,22,-619506000000\r
+| 011990-99999,-11,-619484400000\r
+| 011990-99999,22,-619506000000\r
+| 011990-99999,-11,-619484400000\r
+exit: 0
+== cat -f csv --fields temp, station data/files/weather.avro
+| 011990-99999,0\r
+| 011990-99999,22\r
+| 011990-99999,-11\r
+| 012650-99999,111\r
+| 012650-99999,78\r
+exit: 0
+== cat -f json-pretty --fields temp,nope -n 2 data/files/weather.avro
+| {
+|     "temp": 0
+| }
+| {
+|     "temp": 22
+| }
+exit: 0
+== cat --print-schema data/files/interop-deflate.avro
+| {
+|     "type": "record",
+|     "name": "Interop",
+|     "namespace": "org.apache.avro",
+|     "fields": [
+|         {
+|             "name": "intField",
+|             "type": "int"
+|         },
+|         {
+|             "name": "longField",
+|             "type": "long"
+|         },
+|         {
+|             "name": "stringField",
+|             "type": "string"
+|         },
+|         {
+|             "name": "boolField",
+|             "type": "boolean"
+|         },
+|         {
+|             "name": "floatField",
+|             "type": "float"
+|         },
+|         {
+|             "name": "doubleField",
+|             "type": "double"
+|         },
+|         {
+|             "name": "bytesField",
+|             "type": "bytes"
+|         },
+|         {
+|             "name": "nullField",
+|             "type": "null"
+|         },
+|         {
+|             "name": "arrayField",
+|             "type": {
+|                 "type": "array",
+|                 "items": "double"
+|             }
+|         },
+|         {
+|             "name": "mapField",
+|             "type": {
+|                 "type": "map",
+|                 "values": {
+|                     "type": "record",
+|                     "name": "Foo",
+|                     "fields": [
+|                         {
+|                             "name": "label",
+|                             "type": "string"
+|                         }
+|                     ]
+|                 }
+|             }
+|         },
+|         {
+|             "name": "unionField",
+|             "type": [
+|                 "boolean",
+|                 "double",
+|                 {
+|                     "type": "array",
+|                     "items": "bytes"
+|                 }
+|             ]
+|         },
+|         {
+|             "name": "enumField",
+|             "type": {
+|                 "type": "enum",
+|                 "name": "Kind",
+|                 "symbols": [
+|                     "A",
+|                     "B",
+|                     "C"
+|                 ]
+|             }
+|         },
+|         {
+|             "name": "fixedField",
+|             "type": {
+|                 "type": "fixed",
+|                 "name": "MD5",
+|                 "size": 16
+|             }
+|         },
+|         {
+|             "name": "recordField",
+|             "type": {
+|                 "type": "record",
+|                 "name": "Node",
+|                 "fields": [
+|                     {
+|                         "name": "label",
+|                         "type": "string"
+|                     },
+|                     {
+|                         "name": "children",
+|                         "type": {
+|                             "type": "array",
+|                             "items": "Node"
+|                         }
+|                     }
+|                 ]
+|             }
+|         }
+|     ]
+| }
+exit: 0
+== cat data/files/interop-deflate.avro
+error: TypeError: Object of type bytes is not JSON serializable
+== cat -f csv data/files/interop-deflate.avro
+| "[5.0, 0.0, 12.0]",True,b'12312adf',-1234.0,C,b'1019181716151413',1234.0,12,15234324,"{'a': {'label': 'a'}, 'bee': {'label': 'cee'}}",,"{'label': 'blah', 'children': [{'label': 'inner', 'children': []}]}",hey,12.0\r
+exit: 0
+== cat --header data/files/weather.avro
+error: UsageError: --header applies only to CSV format
+== cat -s 4 data/files/weather.avro data/files/empty.avro
+| {"station": "012650-99999", "time": -655509600000, "temp": 78}
+exit: 0
+== cat data/files/broken/bad-magic.avro
+error: AvroException: Not an Avro data file: b'Obj\x02' doesn't match b'Obj\x01'.
+== tool-write --schema data/schemas/weather.avsc data/datums/weather.jsonl
+error: UsageError: Can't guess input file type (not .json or .csv)
+bytes: 0 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== tool-write -s data/schemas/weather.avsc data/rows/weather.csv
+exit: 0
+bytes: 355 sha256: c943bad06442b2f1a4f62b8fc09fcd135120d75b12229de20d239441113a03df
+codec: null
+meta: avro.codec, avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station", "order": "ignore"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}], "doc": "A weather reading."}
+  {'station': '011990-99999', 'time': -619524000000, 'temp': 0}
+  {'station': '011990-99999', 'time': -619506000000, 'temp': 22}
+  {'station': '012650-99999', 'time': -655531200000, 'temp': 111}
+records: 3
+== tool-write -s data/schemas/weather.avsc -f json data/rows/weather.txt
+exit: 0
+bytes: 313 sha256: 50ba235c835c7f0462e71ad0b1cf87c16e997c874d54e7a8f6c38a45c5748f68
+codec: null
+meta: avro.codec, avro.schema
+schema: {"type": "record", "name": "Weather", "namespace": "test", "fields": [{"type": "string", "name": "station", "order": "ignore"}, {"type": "long", "name": "time"}, {"type": "int", "name": "temp"}], "doc": "A weather reading."}
+  {'station': '011990-99999', 'time': 1, 'temp': 2}
+  {'station': 'x', 'time': 3, 'temp': 4}
+records: 2
+== tool-write -s data/schemas/weather.avsc data/rows/weather.tsv
+error: UsageError: Can't guess input file type (not .json or .csv)
+bytes: 0 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== tool-write -s data/schemas/weather.avsc data/rows/weather-bad.csv
+error: ValueError: invalid literal for int() with base 10: 'cold'
+bytes: 0 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+== tool-write -s data/schemas/metric_sample.avsc -f json data/datums/metrics.jsonl
+error: AvroTypeException: The datum "{'$datetime': '2026-10-19T07:42:00.000001+00:00'}" provided for "ts" is not an example of the schema {
+  "type": "long",
+  "logicalType": "timestamp-micros"
+}
+bytes: 0 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

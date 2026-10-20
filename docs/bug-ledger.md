@@ -98,10 +98,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 293 |
 | codegen-gap | 277 |
-| false-positive | 250 |
+| false-positive | 251 |
 | other | 185 |
 | perf | 180 |
-| diagnostics | 175 |
+| diagnostics | 176 |
 | crash | 125 |
 | soundness | 123 |
 | use-after-free | 92 |
@@ -112,12 +112,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2969 |
 | interp | 987 |
-| typecheck | 505 |
+| typecheck | 506 |
 | ownership | 123 |
 | other | 121 |
 | cli | 81 |
 | runtime | 80 |
-| parser | 73 |
+| parser | 74 |
 | autopar | 59 |
 | resolver | 48 |
 | effect | 37 |
@@ -178,6 +178,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-2 | 2026-10-20 | parser+typecheck | low | `par struct` and `par enum` are still accepted although Amendment 6 renamed them `sync struct` and `sync enum`, and E0257 about a `sync struct` still calls it a `par struct` (the remainder of B-2026-10-19-50 once its `with _` half was fixed) | — |
 | B-2026-10-20-3 | 2026-10-20 | interp+codegen | low | The MIR backends accept assigning a bare `for` item (`for x in v { x += 1; }` over a `Vec[i64]`) and run it changing nothing; `karac check` refuses it since 6b623ebd27, so only programs run without check reach this | — |
 | B-2026-10-20-4 | 2026-10-20 | interp+codegen | low | The MIR backends accept calling a `MutFn` through a bare (borrowed) parameter, `fn call(f: MutFn()) { f(); }`; `karac check` refuses it since 6b623ebd27, so only programs run without check reach this | — |
+| B-2026-10-20-5 | 2026-10-20 | parser | medium | The `matches!(x, P)` diagnostic's machine-applicable fix rewrites it to `matches(x, P)`, a name that does not exist: `karac fix` applies it and the file then fails with "undefined name 'matches'" | — |
+| B-2026-10-20-6 | 2026-10-20 | typecheck | low | A `Vec` literal of string literals passed to a method whose slot is `Vec[Str]` is typed `Vec[String]`: `v.extend(vec!["c", "d"])` on a `Vec[Str]` is refused with "expected 'StringSlice', found 'String'" (sibling of B-2026-10-20-1) | — |
 
 ### Relocated
 
