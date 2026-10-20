@@ -1,0 +1,905 @@
+== spiders/books.cfg
+spiders/books.cfg:2 list.item = article.product_pod
+  tree: Selector[Class[Element[article].product_pod]]
+  canonical: article.product_pod  specificity: (0, 1, 1)
+  generic: descendant-or-self::article[@class and contains(concat(' ', normalize-space(@class), ' '), ' product_pod ')]
+  html: = generic
+  parsel: = html
+spiders/books.cfg:3 list.title = article.product_pod h3 > a::attr(title)
+  tree: Selector[CombinedSelector[CombinedSelector[Class[Element[article].product_pod] <followed> Element[h3]] > Element[a]]FunctionalPseudoElement[::attr(['title'])]]
+  canonical: article.product_pod   h3 > a::attr(title)  specificity: (0, 1, 4)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::article[@class and contains(concat(' ', normalize-space(@class), ' '), ' product_pod ')]/descendant-or-self::*/h3/a/@title
+spiders/books.cfg:4 list.link = h3 a::attr(href)
+  tree: Selector[CombinedSelector[Element[h3] <followed> Element[a]]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: h3   a::attr(href)  specificity: (0, 0, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::h3/descendant-or-self::*/a/@href
+spiders/books.cfg:5 list.price = .product_price .price_color::text
+  tree: Selector[CombinedSelector[Class[Element[*].product_price] <followed> Class[Element[*].price_color]]::text]
+  canonical: .product_price   .price_color::text  specificity: (0, 2, 1)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::*[@class and contains(concat(' ', normalize-space(@class), ' '), ' product_price ')]/descendant-or-self::*/*[@class and contains(concat(' ', normalize-space(@class), ' '), ' price_color ')]/text()
+spiders/books.cfg:6 list.stock = p.instock.availability::text
+  tree: Selector[Class[Class[Element[p].instock].availability]::text]
+  canonical: p.instock.availability::text  specificity: (0, 2, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::p[(@class and contains(concat(' ', normalize-space(@class), ' '), ' instock ')) and (@class and contains(concat(' ', normalize-space(@class), ' '), ' availability '))]/text()
+spiders/books.cfg:7 list.rating = p.star-rating::attr(class)
+  tree: Selector[Class[Element[p].star-rating]FunctionalPseudoElement[::attr(['class'])]]
+  canonical: p.star-rating::attr(class)  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::p[@class and contains(concat(' ', normalize-space(@class), ' '), ' star-rating ')]/@class
+spiders/books.cfg:8 list.next = li.next > a::attr(href)
+  tree: Selector[CombinedSelector[Class[Element[li].next] > Element[a]]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: li.next > a::attr(href)  specificity: (0, 1, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::li[@class and contains(concat(' ', normalize-space(@class), ' '), ' next ')]/a/@href
+spiders/books.cfg:9 detail.title = div.product_main > h1::text
+  tree: Selector[CombinedSelector[Class[Element[div].product_main] > Element[h1]]::text]
+  canonical: div.product_main > h1::text  specificity: (0, 1, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' product_main ')]/h1/text()
+spiders/books.cfg:10 detail.upc = table.table-striped tr:nth-child(1) > td::text
+  tree: Selector[CombinedSelector[CombinedSelector[Class[Element[table].table-striped] <followed> Function[Element[tr]:nth-child(['1'])]] > Element[td]]::text]
+  canonical: table.table-striped   tr:nth-child(1) > td::text  specificity: (0, 2, 4)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::table[@class and contains(concat(' ', normalize-space(@class), ' '), ' table-striped ')]/descendant-or-self::*/tr[count(preceding-sibling::*) = 0]/td/text()
+spiders/books.cfg:11 detail.desc = #product_description + p::text
+  tree: Selector[CombinedSelector[Hash[Element[*]#product_description] + Element[p]]::text]
+  canonical: #product_description + p::text  specificity: (1, 0, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::*[@id = 'product_description']/following-sibling::*[(name() = 'p') and (position() = 1)]/text()
+spiders/books.cfg:12 detail.crumbs = ul.breadcrumb li:not(.active) a::text
+  tree: Selector[CombinedSelector[CombinedSelector[Class[Element[ul].breadcrumb] <followed> Negation[Element[li]:not(Class[Element[*].active])]] <followed> Element[a]]::text]
+  canonical: ul.breadcrumb   li:not(.active)   a::text  specificity: (0, 2, 4)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::ul[@class and contains(concat(' ', normalize-space(@class), ' '), ' breadcrumb ')]/descendant-or-self::*/li[not(@class and contains(concat(' ', normalize-space(@class), ' '), ' active '))]/descendant-or-self::*/a/text()
+spiders/books.cfg:13 detail.image = #product_gallery img::attr(src)
+  tree: Selector[CombinedSelector[Hash[Element[*]#product_gallery] <followed> Element[img]]FunctionalPseudoElement[::attr(['src'])]]
+  canonical: #product_gallery   img::attr(src)  specificity: (1, 0, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::*[@id = 'product_gallery']/descendant-or-self::*/img/@src
+spiders/books.cfg:14 detail.all = div.product_main h1, div.product_main p.price_color
+  tree: Selector[CombinedSelector[Class[Element[div].product_main] <followed> Element[h1]]]
+  canonical: div.product_main   h1  specificity: (0, 1, 2)
+  tree: Selector[CombinedSelector[Class[Element[div].product_main] <followed> Class[Element[p].price_color]]]
+  canonical: div.product_main   p.price_color  specificity: (0, 2, 2)
+  generic: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' product_main ')]/descendant-or-self::*/h1 | descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' product_main ')]/descendant-or-self::*/p[@class and contains(concat(' ', normalize-space(@class), ' '), ' price_color ')]
+  html: = generic
+  parsel: = html
+== spiders/jobs.cfg
+spiders/jobs.cfg:2 card = li[data-job-id]
+  tree: Selector[Attrib[Element[li][data-job-id]]]
+  canonical: li[data-job-id]  specificity: (0, 1, 1)
+  generic: descendant-or-self::li[@data-job-id]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:3 remote = li[data-job-id]:has(> span.remote)
+  tree: Selector[Relation[Attrib[Element[li][data-job-id]]:has(Selector[Class[Element[span].remote]])]]
+  canonical: li[data-job-id]:has(span.remote)  specificity: (0, 2, 2)
+  generic: descendant-or-self::li[@data-job-id][./span][@class and contains(concat(' ', normalize-space(@class), ' '), ' remote ')]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:4 title = li[data-job-id] :is(h2, h3) > a::text
+  tree: Selector[CombinedSelector[CombinedSelector[Attrib[Element[li][data-job-id]] <followed> Matching[Element[*]:is(Element[h2], Element[h3])]] > Element[a]]::text]
+  canonical: li[data-job-id]   :is(h2, h3) > a::text  specificity: (0, 1, 4)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::li[@data-job-id]/descendant-or-self::*/*[(name() = 'h2') or (name() = 'h3')]/a/text()
+spiders/jobs.cfg:5 salary = [data-testid="salary"]::text
+  tree: Selector[Attrib[Element[*][data-testid = 'salary']]::text]
+  canonical: [data-testid='salary']::text  specificity: (0, 1, 1)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::*[@data-testid = 'salary']/text()
+spiders/jobs.cfg:6 posted = time[datetime]::attr(datetime)
+  tree: Selector[Attrib[Element[time][datetime]]FunctionalPseudoElement[::attr(['datetime'])]]
+  canonical: time[datetime]::attr(datetime)  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::time[@datetime]/@datetime
+spiders/jobs.cfg:7 english = div:lang(en) p
+  tree: Selector[CombinedSelector[Function[Element[div]:lang(['en'])] <followed> Element[p]]]
+  canonical: div:lang(en)   p  specificity: (0, 1, 2)
+  generic: descendant-or-self::div[lang('en')]/descendant-or-self::*/p
+  html: descendant-or-self::div[ancestor-or-self::*[@lang][1][starts-with(concat(translate(@lang, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '-'), 'en-')]]/descendant-or-self::*/p
+  parsel: = html
+spiders/jobs.cfg:8 french = article:lang("fr-CA")::text
+  tree: Selector[Function[Element[article]:lang(['fr-CA'])]::text]
+  canonical: article:lang('fr-CA')::text  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::article[ancestor-or-self::*[@lang][1][starts-with(concat(translate(@lang, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '-'), 'fr-ca-')]]/text()
+spiders/jobs.cfg:9 no.ads = li:not([data-sponsored]) a.job-link::attr(href)
+  tree: Selector[CombinedSelector[Negation[Element[li]:not(Attrib[Element[*][data-sponsored]])] <followed> Class[Element[a].job-link]]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: li:not([data-sponsored])   a.job-link::attr(href)  specificity: (0, 2, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::li[not(@data-sponsored)]/descendant-or-self::*/a[@class and contains(concat(' ', normalize-space(@class), ' '), ' job-link ')]/@href
+spiders/jobs.cfg:10 odd.rows = tr:nth-child(odd) td:first-of-type::text
+  tree: Selector[CombinedSelector[Function[Element[tr]:nth-child(['odd'])] <followed> Pseudo[Element[td]:first-of-type]]::text]
+  canonical: tr:nth-child(odd)   td:first-of-type::text  specificity: (0, 2, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::tr[count(preceding-sibling::*) mod 2 = 0]/descendant-or-self::*/td[count(preceding-sibling::td) = 0]/text()
+spiders/jobs.cfg:11 last = ul.results > li:last-child
+  tree: Selector[CombinedSelector[Class[Element[ul].results] > Pseudo[Element[li]:last-child]]]
+  canonical: ul.results > li:last-child  specificity: (0, 2, 2)
+  generic: descendant-or-self::ul[@class and contains(concat(' ', normalize-space(@class), ' '), ' results ')]/li[count(following-sibling::*) = 0]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:12 every3 = tbody tr:nth-child(3n+2)
+  tree: Selector[CombinedSelector[Element[tbody] <followed> Function[Element[tr]:nth-child(['3', 'n', '+2'])]]]
+  canonical: tbody   tr:nth-child(3n+2)  specificity: (0, 1, 2)
+  generic: descendant-or-self::tbody/descendant-or-self::*/tr[(count(preceding-sibling::*) >= 1) and ((count(preceding-sibling::*) +2) mod 3 = 0)]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:13 tail = tbody tr:nth-last-child(-n+3)
+  tree: Selector[CombinedSelector[Element[tbody] <followed> Function[Element[tr]:nth-last-child(['-n', '+3'])]]]
+  canonical: tbody   tr:nth-last-child(-n+3)  specificity: (0, 1, 2)
+  generic: descendant-or-self::tbody/descendant-or-self::*/tr[count(following-sibling::*) <= 2]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:14 first3 = ol > li:nth-child(-n + 3)
+  tree: Selector[CombinedSelector[Element[ol] > Function[Element[li]:nth-child(['-n', '+', '3'])]]]
+  canonical: ol > li:nth-child(-n+3)  specificity: (0, 1, 2)
+  generic: descendant-or-self::ol/li[count(preceding-sibling::*) <= 2]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:15 even = tr:nth-of-type(even)
+  tree: Selector[Function[Element[tr]:nth-of-type(['even'])]]
+  canonical: tr:nth-of-type(even)  specificity: (0, 1, 1)
+  generic: descendant-or-self::tr[(count(preceding-sibling::tr) +1) mod 2 = 0]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:16 fixed = tr:nth-child(0n+5)
+  tree: Selector[Function[Element[tr]:nth-child(['0', 'n', '+5'])]]
+  canonical: tr:nth-child(0n+5)  specificity: (0, 1, 1)
+  generic: descendant-or-self::tr[count(preceding-sibling::*) = 4]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:17 none = tr:nth-child(-2n-1)
+  tree: Selector[Function[Element[tr]:nth-child(['-2', 'n-1'])]]
+  canonical: tr:nth-child(-2n-1)  specificity: (0, 1, 1)
+  generic: descendant-or-self::tr[0]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:18 from4 = tr:nth-last-of-type(n+4)
+  tree: Selector[Function[Element[tr]:nth-last-of-type(['n', '+4'])]]
+  canonical: tr:nth-last-of-type(n+4)  specificity: (0, 1, 1)
+  generic: descendant-or-self::tr[count(following-sibling::tr) >= 3]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:19 loose = tr:nth-child( 2n - 1 )
+  tree: Selector[Function[Element[tr]:nth-child(['2', 'n', '-', '1'])]]
+  canonical: tr:nth-child(2n-1)  specificity: (0, 1, 1)
+  generic: descendant-or-self::tr[count(preceding-sibling::*) mod 2 = 0]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:20 step = tr:nth-child(-3n+8)
+  tree: Selector[Function[Element[tr]:nth-child(['-3', 'n', '+8'])]]
+  canonical: tr:nth-child(-3n+8)  specificity: (0, 1, 1)
+  generic: descendant-or-self::tr[(count(preceding-sibling::*) <= 7) and ((count(preceding-sibling::*) +2) mod -3 = 0)]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:21 company = div.company:has(img.logo)
+  tree: Selector[Relation[Class[Element[div].company]:has(Selector[Class[Element[img].logo]])]]
+  canonical: div.company:has(img.logo)  specificity: (0, 2, 2)
+  generic: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' company ')][descendant::img[@class and contains(concat(' ', normalize-space(@class), ' '), ' logo ')]][@class and contains(concat(' ', normalize-space(@class), ' '), ' company ')]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:22 next.job = h2.title:has(+ p)
+  tree: Selector[Relation[Class[Element[h2].title]:has(Selector[Element[p]])]]
+  canonical: h2.title:has(p)  specificity: (0, 1, 2)
+  generic: descendant-or-self::h2[(@class and contains(concat(' ', normalize-space(@class), ' '), ' title ')) and (following-sibling::*[(name() = 'p') and (position() = 1)])]
+  html: = generic
+  parsel: = html
+spiders/jobs.cfg:23 later = h2:has(~ footer)
+  tree: Selector[Relation[Element[h2]:has(Selector[Element[footer]])]]
+  canonical: h2:has(footer)  specificity: (0, 0, 2)
+  generic: descendant-or-self::h2[following-sibling::footer]
+  html: = generic
+  parsel: = html
+== spiders/quotes.cfg
+spiders/quotes.cfg:2 quote = div.quote
+  tree: Selector[Class[Element[div].quote]]
+  canonical: div.quote  specificity: (0, 1, 1)
+  generic: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' quote ')]
+  html: = generic
+  parsel: = html
+spiders/quotes.cfg:3 text = div.quote span.text::text
+  tree: Selector[CombinedSelector[Class[Element[div].quote] <followed> Class[Element[span].text]]::text]
+  canonical: div.quote   span.text::text  specificity: (0, 2, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' quote ')]/descendant-or-self::*/span[@class and contains(concat(' ', normalize-space(@class), ' '), ' text ')]/text()
+spiders/quotes.cfg:4 author = small.author::text
+  tree: Selector[Class[Element[small].author]::text]
+  canonical: small.author::text  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::small[@class and contains(concat(' ', normalize-space(@class), ' '), ' author ')]/text()
+spiders/quotes.cfg:5 tags = div.tags a.tag::text
+  tree: Selector[CombinedSelector[Class[Element[div].tags] <followed> Class[Element[a].tag]]::text]
+  canonical: div.tags   a.tag::text  specificity: (0, 2, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' tags ')]/descendant-or-self::*/a[@class and contains(concat(' ', normalize-space(@class), ' '), ' tag ')]/text()
+spiders/quotes.cfg:6 about = .quote span a[href*="/author/"]::attr(href)
+  tree: Selector[CombinedSelector[CombinedSelector[Class[Element[*].quote] <followed> Element[span]] <followed> Attrib[Element[a][href *= '/author/']]]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: .quote   span   a[href*='/author/']::attr(href)  specificity: (0, 2, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::*[@class and contains(concat(' ', normalize-space(@class), ' '), ' quote ')]/descendant-or-self::*/span/descendant-or-self::*/a[@href and contains(@href, '/author/')]/@href
+spiders/quotes.cfg:7 next = li.next a::attr("href")
+  tree: Selector[CombinedSelector[Class[Element[li].next] <followed> Element[a]]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: li.next   a::attr('href')  specificity: (0, 1, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::li[@class and contains(concat(' ', normalize-space(@class), ' '), ' next ')]/descendant-or-self::*/a/@href
+spiders/quotes.cfg:8 login.csrf = form input[name=csrf_token]::attr(value)
+  tree: Selector[CombinedSelector[Element[form] <followed> Attrib[Element[input][name = 'csrf_token']]]FunctionalPseudoElement[::attr(['value'])]]
+  canonical: form   input[name=csrf_token]::attr(value)  specificity: (0, 1, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::form/descendant-or-self::*/input[@name = 'csrf_token']/@value
+spiders/quotes.cfg:9 login.user = FORM INPUT[Name='username']
+  tree: Selector[CombinedSelector[Element[FORM] <followed> Attrib[Element[INPUT][Name = 'username']]]]
+  canonical: FORM   INPUT[Name='username']  specificity: (0, 1, 2)
+  generic: descendant-or-self::FORM/descendant-or-self::*/INPUT[@Name = 'username']
+  html: descendant-or-self::form/descendant-or-self::*/input[@name = 'username']
+  parsel: = html
+spiders/quotes.cfg:10 top.tags = div.tags-box span.tag-item > a.tag::TEXT
+  tree: Selector[CombinedSelector[CombinedSelector[Class[Element[div].tags-box] <followed> Class[Element[span].tag-item]] > Class[Element[a].tag]]::text]
+  canonical: div.tags-box   span.tag-item > a.tag::text  specificity: (0, 3, 4)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' tags-box ')]/descendant-or-self::*/span[@class and contains(concat(' ', normalize-space(@class), ' '), ' tag-item ')]/a[@class and contains(concat(' ', normalize-space(@class), ' '), ' tag ')]/text()
+== spiders/shop.cfg
+spiders/shop.cfg:2 price = span[itemprop=price]::attr(content)
+  tree: Selector[Attrib[Element[span][itemprop = 'price']]FunctionalPseudoElement[::attr(['content'])]]
+  canonical: span[itemprop=price]::attr(content)  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::span[@itemprop = 'price']/@content
+spiders/shop.cfg:3 sku = [itemprop~=sku]
+  tree: Selector[Attrib[Element[*][itemprop ~= 'sku']]]
+  canonical: [itemprop~=sku]  specificity: (0, 1, 0)
+  generic: descendant-or-self::*[@itemprop and contains(concat(' ', normalize-space(@itemprop), ' '), ' sku ')]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:4 alt.lang = link[hreflang|=en]::attr(href)
+  tree: Selector[Attrib[Element[link][hreflang |= 'en']]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: link[hreflang|=en]::attr(href)  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::link[@hreflang and (@hreflang = 'en' or starts-with(@hreflang, 'en-'))]/@href
+spiders/shop.cfg:5 pdfs = a[href$=".pdf"]::attr(href)
+  tree: Selector[Attrib[Element[a][href $= '.pdf']]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: a[href$='.pdf']::attr(href)  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::a[@href and substring(@href, string-length(@href)-3) = '.pdf']/@href
+spiders/shop.cfg:6 external = a[href^="http"]:not([href*="example.com"])::attr(href)
+  tree: Selector[Negation[Attrib[Element[a][href ^= 'http']]:not(Attrib[Element[*][href *= 'example.com']])]FunctionalPseudoElement[::attr(['href'])]]
+  canonical: a[href^='http']:not([href*='example.com'])::attr(href)  specificity: (0, 2, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::a[(@href and starts-with(@href, 'http')) and (not(@href and contains(@href, 'example.com')))]/@href
+spiders/shop.cfg:7 empty.cells = td:empty
+  tree: Selector[Pseudo[Element[td]:empty]]
+  canonical: td:empty  specificity: (0, 1, 1)
+  generic: descendant-or-self::td[not(*) and not(string-length())]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:8 picked = input:checked::attr(name)
+  tree: Selector[Pseudo[Element[input]:checked]FunctionalPseudoElement[::attr(['name'])]]
+  canonical: input:checked::attr(name)  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::input[(@selected and name(.) = 'option') or (@checked and (name(.) = 'input' or name(.) = 'command')and (@type = 'checkbox' or @type = 'radio'))]/@name
+spiders/shop.cfg:9 disabled = button:disabled
+  tree: Selector[Pseudo[Element[button]:disabled]]
+  canonical: button:disabled  specificity: (0, 1, 1)
+  generic: descendant-or-self::button[0]
+  html: descendant-or-self::button[
+        (
+            @disabled and
+            (
+                (name(.) = 'input' and @type != 'hidden') or
+                name(.) = 'button' or
+                name(.) = 'select' or
+                name(.) = 'textarea' or
+                name(.) = 'command' or
+                name(.) = 'fieldset' or
+                name(.) = 'optgroup' or
+                name(.) = 'option'
+            )
+        ) or (
+            (
+                (name(.) = 'input' and @type != 'hidden') or
+                name(.) = 'button' or
+                name(.) = 'select' or
+                name(.) = 'textarea'
+            )
+            and ancestor::fieldset[@disabled]
+        )
+        ]
+  parsel: = html
+spiders/shop.cfg:10 enabled = input:enabled
+  tree: Selector[Pseudo[Element[input]:enabled]]
+  canonical: input:enabled  specificity: (0, 1, 1)
+  generic: descendant-or-self::input[0]
+  html: descendant-or-self::input[
+        (
+            @href and (
+                name(.) = 'a' or
+                name(.) = 'link' or
+                name(.) = 'area'
+            )
+        ) or (
+            (
+                name(.) = 'command' or
+                name(.) = 'fieldset' or
+                name(.) = 'optgroup'
+            )
+            and not(@disabled)
+        ) or (
+            (
+                (name(.) = 'input' and @type != 'hidden') or
+                name(.) = 'button' or
+                name(.) = 'select' or
+                name(.) = 'textarea' or
+                name(.) = 'keygen'
+            )
+            and not (@disabled or ancestor::fieldset[@disabled])
+        ) or (
+            name(.) = 'option' and not(
+                @disabled or ancestor::optgroup[@disabled]
+            )
+        )
+        ]
+  parsel: = html
+spiders/shop.cfg:11 links = :link
+  tree: Selector[Pseudo[Element[*]:link]]
+  canonical: :link  specificity: (0, 1, 0)
+  generic: descendant-or-self::*[0]
+  html: descendant-or-self::*[@href and (name(.) = 'a' or name(.) = 'link' or name(.) = 'area')]
+  parsel: = html
+spiders/shop.cfg:12 visited = a:visited
+  tree: Selector[Pseudo[Element[a]:visited]]
+  canonical: a:visited  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[0]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:13 only = ul > li:only-child
+  tree: Selector[CombinedSelector[Element[ul] > Pseudo[Element[li]:only-child]]]
+  canonical: ul > li:only-child  specificity: (0, 1, 2)
+  generic: descendant-or-self::ul/li[count(parent::*/child::*) = 1]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:14 only.type = dl dt:only-of-type
+  tree: Selector[CombinedSelector[Element[dl] <followed> Pseudo[Element[dt]:only-of-type]]]
+  canonical: dl   dt:only-of-type  specificity: (0, 1, 2)
+  generic: descendant-or-self::dl/descendant-or-self::*/dt[count(parent::*/child::dt) = 1]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:15 siblings = h2 ~ p
+  tree: Selector[CombinedSelector[Element[h2] ~ Element[p]]]
+  canonical: h2 ~ p  specificity: (0, 0, 2)
+  generic: descendant-or-self::h2/following-sibling::p
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:16 apos = q[title='It\'s']
+  tree: Selector[Attrib[Element[q][title = "It's"]]]
+  canonical: q[title="It's"]  specificity: (0, 1, 1)
+  generic: descendant-or-self::q[@title = "It's"]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:17 total = td:contains("Total")::text
+  tree: Selector[Function[Element[td]:contains(['Total'])]::text]
+  canonical: td:contains('Total')::text  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::td[contains(., 'Total')]/text()
+spiders/shop.cfg:18 owner = td:contains("Joe's")
+  tree: Selector[Function[Element[td]:contains(["Joe's"])]]
+  canonical: td:contains("Joe's")  specificity: (0, 1, 1)
+  generic: descendant-or-self::td[contains(., "Joe's")]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:19 quote = td:contains('say "hi"')
+  tree: Selector[Function[Element[td]:contains(['say "hi"'])]]
+  canonical: td:contains('say "hi"')  specificity: (0, 1, 1)
+  generic: descendant-or-self::td[contains(., 'say "hi"')]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:20 mixed = td:contains('Joe\'s "best"')
+  tree: Selector[Function[Element[td]:contains(['Joe\'s "best"'])]]
+  canonical: td:contains('Joe\'s "best"')  specificity: (0, 1, 1)
+  generic: descendant-or-self::td[contains(., concat('Joe',"'",'s "best"'))]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:21 svg = svg|rect
+  tree: Selector[Element[svg|rect]]
+  canonical: svg|rect  specificity: (0, 0, 1)
+  generic: descendant-or-self::svg:rect
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:22 svg.any = svg|*
+  tree: Selector[Element[svg|*]]
+  canonical: svg|*  specificity: (0, 0, 0)
+  generic: descendant-or-self::svg:*
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:23 xlink = use[xlink|href]::attr(xlink:href)
+  error: SelectorSyntaxError: Expected an argument, got <DELIM ':' at 27>
+spiders/shop.cfg:24 any.ns = *|*
+  tree: Selector[Element[*]]
+  canonical: *  specificity: (0, 0, 0)
+  generic: descendant-or-self::*
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:25 no.ns = |div
+  tree: Selector[Element[div]]
+  canonical: div  specificity: (0, 0, 1)
+  generic: descendant-or-self::div
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:26 upper = DIV.Item > A[HREF]
+  tree: Selector[CombinedSelector[Class[Element[DIV].Item] > Attrib[Element[A][HREF]]]]
+  canonical: DIV.Item > A[HREF]  specificity: (0, 2, 2)
+  generic: descendant-or-self::DIV[@class and contains(concat(' ', normalize-space(@class), ' '), ' Item ')]/A[@HREF]
+  html: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' Item ')]/a[@href]
+  parsel: = html
+spiders/shop.cfg:27 nav = :where(nav, footer) a
+  tree: Selector[CombinedSelector[SpecificityAdjustment[Element[*]:where(Element[nav], Element[footer])] <followed> Element[a]]]
+  canonical: :where(nav, footer)   a  specificity: (0, 0, 1)
+  generic: descendant-or-self::*[(name() = 'nav') or (name() = 'footer')]/descendant-or-self::*/a
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:28 scope = :scope > div::text
+  tree: Selector[CombinedSelector[Pseudo[Element[*]:scope] > Element[div]]::text]
+  canonical: :scope > div::text  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::*[1]/div/text()
+spiders/shop.cfg:29 root = :root > body
+  tree: Selector[CombinedSelector[Pseudo[Element[*]:root] > Element[body]]]
+  canonical: :root > body  specificity: (0, 1, 1)
+  generic: descendant-or-self::*[not(parent::*)]/body
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:30 not.star = div:not(*)
+  tree: Selector[Negation[Element[div]:not(Element[*])]]
+  canonical: div:not(*)  specificity: (0, 0, 1)
+  generic: descendant-or-self::div[0]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:31 not.p = div:not(p)
+  tree: Selector[Negation[Element[div]:not(Element[p])]]
+  canonical: div:not(p)  specificity: (0, 0, 2)
+  generic: descendant-or-self::div[not(name() = 'p')]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:32 blank = a[title=""]
+  tree: Selector[Attrib[Element[a][title = '']]]
+  canonical: a[title='']  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[@title = '']
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:33 not.eq = a[rel!=nofollow]
+  tree: Selector[Attrib[Element[a][rel != 'nofollow']]]
+  canonical: a[rel!=nofollow]  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[not(@rel) or @rel != 'nofollow']
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:34 not.empty = a[rel!=""]
+  tree: Selector[Attrib[Element[a][rel != '']]]
+  canonical: a[rel!='']  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[@rel != '']
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:35 hyphen = a[class|=btn]
+  tree: Selector[Attrib[Element[a][class |= 'btn']]]
+  canonical: a[class|=btn]  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[@class and (@class = 'btn' or starts-with(@class, 'btn-'))]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:36 word.empty = a[class~=""]
+  tree: Selector[Attrib[Element[a][class ~= '']]]
+  canonical: a[class~='']  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[0]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:37 word.space = a[class~="a b"]
+  tree: Selector[Attrib[Element[a][class ~= 'a b']]]
+  canonical: a[class~='a b']  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[0]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:38 prefix.empty = a[href^=""]
+  tree: Selector[Attrib[Element[a][href ^= '']]]
+  canonical: a[href^='']  specificity: (0, 1, 1)
+  generic: descendant-or-self::a[0]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:39 attr.ns = [*|lang]
+  tree: Selector[Attrib[Element[*][lang]]]
+  canonical: [lang]  specificity: (0, 1, 0)
+  generic: descendant-or-self::*[@lang]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:40 escaped = #\31 23 > .\@media
+  tree: Selector[CombinedSelector[Hash[Element[*]#123] > Class[Element[*].@media]]]
+  canonical: #123 > .@media  specificity: (1, 1, 0)
+  generic: descendant-or-self::*[@id = '123']/*[@class and contains(concat(' ', normalize-space(@class), ' '), ' @media ')]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:41 unicode = p.caf\E9 ::text
+  tree: Selector[Class[Element[p].café]::text]
+  canonical: p.café::text  specificity: (0, 1, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: descendant-or-self::p[@class and contains(concat(' ', normalize-space(@class), ' '), ' café ')]/text()
+spiders/shop.cfg:42 japanese = 日本語 > span.名前
+  tree: Selector[CombinedSelector[Element[日本語] > Class[Element[span].名前]]]
+  canonical: 日本語 > span.名前  specificity: (0, 1, 2)
+  generic: descendant-or-self::*[name() = '日本語']/span[@class and contains(concat(' ', normalize-space(@class), ' '), ' 名前 ')]
+  html: = generic
+  parsel: = html
+spiders/shop.cfg:43 comment = ul /* the menu */ > li
+  error: SelectorSyntaxError: Expected selector, got <DELIM '>' at 18>
+== theme.css
+theme.css:2 html, body
+  tree: Selector[Element[html]]
+  canonical: html  specificity: (0, 0, 1)
+  tree: Selector[Element[body]]
+  canonical: body  specificity: (0, 0, 1)
+  generic: descendant-or-self::html | descendant-or-self::body
+  html: = generic
+  parsel: = html
+theme.css:6 .nav > li + li
+  tree: Selector[CombinedSelector[CombinedSelector[Class[Element[*].nav] > Element[li]] + Element[li]]]
+  canonical: .nav > li + li  specificity: (0, 1, 2)
+  generic: descendant-or-self::*[@class and contains(concat(' ', normalize-space(@class), ' '), ' nav ')]/li/following-sibling::*[(name() = 'li') and (position() = 1)]
+  html: = generic
+  parsel: = html
+theme.css:8 a:hover, a:focus-visible
+  tree: Selector[Pseudo[Element[a]:hover]]
+  canonical: a:hover  specificity: (0, 1, 1)
+  tree: Selector[Pseudo[Element[a]:focus-visible]]
+  canonical: a:focus-visible  specificity: (0, 1, 1)
+  generic: error ExpressionError: The pseudo-class :focus-visible is unknown
+  html: = generic
+  parsel: = html
+theme.css:12 .btn.btn-primary:not(.disabled):active
+  tree: Selector[Pseudo[Negation[Class[Class[Element[*].btn].btn-primary]:not(Class[Element[*].disabled])]:active]]
+  canonical: .btn.btn-primary:not(.disabled):active  specificity: (0, 4, 0)
+  generic: descendant-or-self::*[(((@class and contains(concat(' ', normalize-space(@class), ' '), ' btn ')) and (@class and contains(concat(' ', normalize-space(@class), ' '), ' btn-primary '))) and (not(@class and contains(concat(' ', normalize-space(@class), ' '), ' disabled ')))) and (0)]
+  html: = generic
+  parsel: = html
+theme.css:13 #main .card:nth-of-type(2n)
+  tree: Selector[CombinedSelector[Hash[Element[*]#main] <followed> Function[Class[Element[*].card]:nth-of-type(['2', 'n'])]]]
+  canonical: #main   .card:nth-of-type(2n)  specificity: (1, 2, 0)
+  generic: error ExpressionError: *:nth-of-type() is not implemented
+  html: = generic
+  parsel: = html
+theme.css:14 input[type="checkbox"]:checked + label::before
+  tree: Selector[CombinedSelector[Pseudo[Attrib[Element[input][type = 'checkbox']]:checked] + Element[label]]::before]
+  canonical: input[type='checkbox']:checked + label::before  specificity: (0, 2, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: The pseudo-element ::before is unknown
+theme.css:15 p::first-line
+  tree: Selector[Element[p]::first-line]
+  canonical: p::first-line  specificity: (0, 0, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: The pseudo-element ::first-line is unknown
+theme.css:16 ul li:first-child:after
+  tree: Selector[CombinedSelector[Element[ul] <followed> Pseudo[Element[li]:first-child]]::after]
+  canonical: ul   li:first-child::after  specificity: (0, 1, 3)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: The pseudo-element ::after is unknown
+theme.css:17 h1 ~ p:first-of-type
+  tree: Selector[CombinedSelector[Element[h1] ~ Pseudo[Element[p]:first-of-type]]]
+  canonical: h1 ~ p:first-of-type  specificity: (0, 1, 2)
+  generic: descendant-or-self::h1/following-sibling::p[count(preceding-sibling::p) = 0]
+  html: = generic
+  parsel: = html
+theme.css:18 *:nth-of-type(2)
+  tree: Selector[Function[Element[*]:nth-of-type(['2'])]]
+  canonical: :nth-of-type(2)  specificity: (0, 1, 0)
+  generic: error ExpressionError: *:nth-of-type() is not implemented
+  html: = generic
+  parsel: = html
+theme.css:19 table td:nth-child(even)
+  tree: Selector[CombinedSelector[Element[table] <followed> Function[Element[td]:nth-child(['even'])]]]
+  canonical: table   td:nth-child(even)  specificity: (0, 1, 2)
+  generic: descendant-or-self::table/descendant-or-self::*/td[(count(preceding-sibling::*) +1) mod 2 = 0]
+  html: = generic
+  parsel: = html
+theme.css:20 .grid > :is(.col, .cell):where(.wide)
+  tree: Selector[CombinedSelector[Class[Element[*].grid] > SpecificityAdjustment[Matching[Element[*]:is(Class[Element[*].col], Class[Element[*].cell])]:where(Class[Element[*].wide])]]]
+  canonical: .grid > :is(.col, .cell):where(.wide)  specificity: (0, 1, 0)
+  generic: descendant-or-self::*[@class and contains(concat(' ', normalize-space(@class), ' '), ' grid ')]/*[((@class and contains(concat(' ', normalize-space(@class), ' '), ' col ')) or (@class and contains(concat(' ', normalize-space(@class), ' '), ' cell '))) or (@class and contains(concat(' ', normalize-space(@class), ' '), ' wide '))]
+  html: = generic
+  parsel: = html
+theme.css:21 div:is(.alert)
+  tree: Selector[Matching[Element[div]:is(Class[Element[*].alert])]]
+  canonical: div:is(.alert)  specificity: (0, 1, 0)
+  generic: descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' alert ')]
+  html: = generic
+  parsel: = html
+theme.css:22 article:has(+ aside)
+  tree: Selector[Relation[Element[article]:has(Selector[Element[aside]])]]
+  canonical: article:has(aside)  specificity: (0, 0, 2)
+  generic: descendant-or-self::article[following-sibling::*[(name() = 'aside') and (position() = 1)]]
+  html: = generic
+  parsel: = html
+theme.css:23 section:has(~ footer)
+  tree: Selector[Relation[Element[section]:has(Selector[Element[footer]])]]
+  canonical: section:has(footer)  specificity: (0, 0, 2)
+  generic: descendant-or-self::section[following-sibling::footer]
+  html: = generic
+  parsel: = html
+theme.css:24 nav:has(a.active)
+  tree: Selector[Relation[Element[nav]:has(Selector[Class[Element[a].active]])]]
+  canonical: nav:has(a.active)  specificity: (0, 1, 2)
+  generic: descendant-or-self::nav[descendant::a[@class and contains(concat(' ', normalize-space(@class), ' '), ' active ')]]
+  html: = generic
+  parsel: = html
+theme.css:25 #app #sidebar ul.menu > li.item:hover a
+  tree: Selector[CombinedSelector[CombinedSelector[CombinedSelector[CombinedSelector[Hash[Element[*]#app] <followed> Hash[Element[*]#sidebar]] <followed> Class[Element[ul].menu]] > Pseudo[Class[Element[li].item]:hover]] <followed> Element[a]]]
+  canonical: #app   #sidebar   ul.menu > li.item:hover   a  specificity: (2, 3, 3)
+  generic: descendant-or-self::*[@id = 'app']/descendant-or-self::*/*[@id = 'sidebar']/descendant-or-self::*/ul[@class and contains(concat(' ', normalize-space(@class), ' '), ' menu ')]/li[(@class and contains(concat(' ', normalize-space(@class), ' '), ' item ')) and (0)]/descendant-or-self::*/a
+  html: = generic
+  parsel: = html
+theme.css:26 ::selection
+  tree: Selector[Element[*]::selection]
+  canonical: ::selection  specificity: (0, 0, 1)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: The pseudo-element ::selection is unknown
+theme.css:27 form :is(input, select, textarea):disabled
+  tree: Selector[CombinedSelector[Element[form] <followed> Pseudo[Matching[Element[*]:is(Element[input], Element[select], Element[textarea])]:disabled]]]
+  canonical: form   :is(input, select, textarea):disabled  specificity: (0, 1, 2)
+  generic: descendant-or-self::form/descendant-or-self::*/*[(((name() = 'input') or (name() = 'select')) or (name() = 'textarea')) and (0)]
+  html: descendant-or-self::form/descendant-or-self::*/*[(((name() = 'input') or (name() = 'select')) or (name() = 'textarea')) and (
+        (
+            @disabled and
+            (
+                (name(.) = 'input' and @type != 'hidden') or
+                name(.) = 'button' or
+                name(.) = 'select' or
+                name(.) = 'textarea' or
+                name(.) = 'command' or
+                name(.) = 'fieldset' or
+                name(.) = 'optgroup' or
+                name(.) = 'option'
+            )
+        ) or (
+            (
+                (name(.) = 'input' and @type != 'hidden') or
+                name(.) = 'button' or
+                name(.) = 'select' or
+                name(.) = 'textarea'
+            )
+            and ancestor::fieldset[@disabled]
+        )
+        )]
+  parsel: = html
+theme.css:28 *:first-of-type
+  tree: Selector[Pseudo[Element[*]:first-of-type]]
+  canonical: :first-of-type  specificity: (0, 1, 0)
+  generic: error ExpressionError: *:first-of-type is not implemented
+  html: = generic
+  parsel: = html
+theme.css:29 li:first_child
+  tree: Selector[Pseudo[Element[li]:first_child]]
+  canonical: li:first_child  specificity: (0, 1, 1)
+  generic: descendant-or-self::li[count(preceding-sibling::*) = 0]
+  html: = generic
+  parsel: = html
+== broken.txt
+broken.txt:1 div >
+  error: SelectorSyntaxError: Expected selector, got <EOF at 5>
+broken.txt:2 .
+  error: SelectorSyntaxError: Expected ident, got <EOF at 1>
+broken.txt:3 #
+  error: SelectorSyntaxError: Expected selector, got <DELIM '#' at 0>
+broken.txt:4 a[href
+  error: SelectorSyntaxError: Operator expected, got <EOF at 6>
+broken.txt:5 a[href=]
+  error: SelectorSyntaxError: Expected string or ident, got <DELIM ']' at 7>
+broken.txt:6 a[="x"]
+  error: SelectorSyntaxError: Expected ident or '*', got <DELIM '=' at 2>
+broken.txt:7 a[href~x]
+  error: SelectorSyntaxError: Operator expected, got <DELIM '~' at 6>
+broken.txt:8 a[*]
+  error: SelectorSyntaxError: Expected '|', got <DELIM ']' at 3>
+broken.txt:9 a[|href]
+  error: SelectorSyntaxError: Expected ident or '*', got <DELIM '|' at 2>
+broken.txt:10 a[x="y" i]
+  error: SelectorSyntaxError: Expected ']', got <IDENT 'i' at 8>
+broken.txt:11 div::text p
+  error: SelectorSyntaxError: Got pseudo-element ::text not at the end of a selector
+broken.txt:12 p::text::text
+  error: SelectorSyntaxError: Got pseudo-element ::text not at the end of a selector
+broken.txt:13 :not(:not(a))
+  error: SelectorSyntaxError: Got nested :not()
+broken.txt:14 p:not(::before)
+  error: SelectorSyntaxError: Got pseudo-element ::before inside :not() at 14
+broken.txt:15 :is(p::before)
+  error: SelectorSyntaxError: Got pseudo-element ::before inside function
+broken.txt:16 a:nth-child(foo)
+  tree: Selector[Function[Element[a]:nth-child(['foo'])]]
+  canonical: a:nth-child(foo)  specificity: (0, 1, 1)
+  generic: error ExpressionError: Invalid series: '[<IDENT 'foo' at 12>]'
+  html: = generic
+  parsel: = html
+broken.txt:17 a:nth-child("2")
+  tree: Selector[Function[Element[a]:nth-child(['2'])]]
+  canonical: a:nth-child('2')  specificity: (0, 1, 1)
+  generic: error ExpressionError: Invalid series: '[<STRING '2' at 12>]'
+  html: = generic
+  parsel: = html
+broken.txt:18 a:nth-child(1.5)
+  tree: Selector[Function[Element[a]:nth-child(['1.5'])]]
+  canonical: a:nth-child(1.5)  specificity: (0, 1, 1)
+  generic: error ExpressionError: Invalid series: '[<NUMBER '1.5' at 12>]'
+  html: = generic
+  parsel: = html
+broken.txt:19 li:nth-child(2N+1)
+  tree: Selector[Function[Element[li]:nth-child(['2', 'N', '+1'])]]
+  canonical: li:nth-child(2N+1)  specificity: (0, 1, 1)
+  generic: error ExpressionError: Invalid series: '[<NUMBER '2' at 13>, <IDENT 'N' at 14>, <NUMBER '+1' at 15>]'
+  html: = generic
+  parsel: = html
+broken.txt:20 "unclosed
+  error: SelectorSyntaxError: Unclosed string at 0
+broken.txt:21 a[title="bad\
+  error: SelectorSyntaxError: Invalid string at 8
+broken.txt:22 p:unknown-thing
+  tree: Selector[Pseudo[Element[p]:unknown-thing]]
+  canonical: p:unknown-thing  specificity: (0, 1, 1)
+  generic: error ExpressionError: The pseudo-class :unknown-thing is unknown
+  html: = generic
+  parsel: = html
+broken.txt:23 p:frobnicate(1)
+  tree: Selector[Function[Element[p]:frobnicate(['1'])]]
+  canonical: p:frobnicate(1)  specificity: (0, 1, 1)
+  generic: error ExpressionError: The pseudo-class :frobnicate() is unknown
+  html: = generic
+  parsel: = html
+broken.txt:24 :is(a,b)
+  error: SelectorSyntaxError: Expected selector, got <DELIM ')' at 7>
+broken.txt:25 :is(a
+  error: RuntimeError: generator raised StopIteration
+broken.txt:26 :has(a b)
+  error: SelectorSyntaxError: Expected an argument, got <S ' ' at 6>
+broken.txt:27 li:has(- a)
+  tree: Selector[Relation[Element[li]:has(Selector[Element[a]])]]
+  canonical: li:has(a)  specificity: (0, 0, 2)
+  generic: error KeyError: '-'
+  html: = generic
+  parsel: = html
+broken.txt:28 li:has(#x)
+  error: SelectorSyntaxError: Expected an argument, got <HASH 'x' at 7>
+broken.txt:29 a:contains(1)
+  tree: Selector[Function[Element[a]:contains(['1'])]]
+  canonical: a:contains(1)  specificity: (0, 1, 1)
+  generic: error ExpressionError: Expected a single string or ident for :contains(), got [<NUMBER '1' at 11>]
+  html: = generic
+  parsel: = html
+broken.txt:30 p:lang(en, fr)
+  error: SelectorSyntaxError: Expected an argument, got <DELIM ',' at 9>
+broken.txt:31 p:lang(en fr)
+  tree: Selector[Function[Element[p]:lang(['en', 'fr'])]]
+  canonical: p:lang(enfr)  specificity: (0, 1, 1)
+  generic: error ExpressionError: Expected a single string or ident for :lang(), got [<IDENT 'en' at 7>, <IDENT 'fr' at 10>]
+  html: = generic
+  parsel: = html
+broken.txt:32 div:scope
+  tree: Selector[Pseudo[Element[div]:scope]]
+  canonical: div:scope  specificity: (0, 1, 1)
+  generic: descendant-or-self::div[1]
+  html: = generic
+  parsel: = html
+broken.txt:33 a, :scope p
+  tree: Selector[Element[a]]
+  canonical: a  specificity: (0, 0, 1)
+  tree: Selector[CombinedSelector[Pseudo[Element[*]:scope] <followed> Element[p]]]
+  canonical: :scope   p  specificity: (0, 1, 1)
+  generic: descendant-or-self::a | descendant-or-self::*[1]/descendant-or-self::*/p
+  html: = generic
+  parsel: = html
+broken.txt:34 div ::attr(1)
+  tree: Selector[CombinedSelector[Element[div] <followed> Element[*]]FunctionalPseudoElement[::attr(['1'])]]
+  canonical: div   *::attr(1)  specificity: (0, 0, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: Expected a single string or ident for ::attr(), got [<NUMBER '1' at 11>]
+broken.txt:35 a::attr
+  tree: Selector[Element[a]::attr]
+  canonical: a::attr  specificity: (0, 0, 2)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: The pseudo-element ::attr is unknown
+broken.txt:36 a::attr(href, title)
+  error: SelectorSyntaxError: Expected an argument, got <DELIM ',' at 12>
+broken.txt:37 ::selection
+  tree: Selector[Element[*]::selection]
+  canonical: ::selection  specificity: (0, 0, 1)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: The pseudo-element ::selection is unknown
+broken.txt:38 ::foo(bar)
+  tree: Selector[Element[*]FunctionalPseudoElement[::foo(['bar'])]]
+  canonical: ::foo(bar)  specificity: (0, 0, 1)
+  generic: error ExpressionError: Pseudo-elements are not supported.
+  html: = generic
+  parsel: error ExpressionError: The functional pseudo-element ::foo() is unknown
+broken.txt:39 ,a
+  error: SelectorSyntaxError: Expected selector, got <DELIM ',' at 0>
+broken.txt:40 a,
+  error: SelectorSyntaxError: Expected selector, got <EOF at 2>
+broken.txt:41 a b ,, c
+  error: SelectorSyntaxError: Expected selector, got <DELIM ',' at 5>
+broken.txt:42 a:not(b c)
+  error: SelectorSyntaxError: Expected ')', got <S ' ' at 7>
+broken.txt:43 a:has()
+  error: SelectorSyntaxError: Expected selector, got <EOF at 0>
+broken.txt:44 :nth-child
+  tree: Selector[Pseudo[Element[*]:nth-child]]
+  canonical: :nth-child  specificity: (0, 1, 0)
+  generic: error ExpressionError: The pseudo-class :nth-child is unknown
+  html: = generic
+  parsel: = html
+broken.txt:45 p::text:hover
+  error: SelectorSyntaxError: Got pseudo-element ::text not at the end of a selector
+== summary
+spiders/books.cfg: 13 selectors, 0 parse errors, 0 translation errors
+spiders/jobs.cfg: 22 selectors, 0 parse errors, 0 translation errors
+spiders/quotes.cfg: 9 selectors, 0 parse errors, 0 translation errors
+spiders/shop.cfg: 42 selectors, 2 parse errors, 0 translation errors
+theme.css: 21 selectors, 0 parse errors, 8 translation errors
+broken.txt: 45 selectors, 29 parse errors, 14 translation errors
+== cascade (theme.css, by specificity)
+(0, 0, 1) html
+(0, 0, 1) body
+(0, 0, 1) ::selection
+(0, 0, 2) p::first-line
+(0, 0, 2) article:has(aside)
+(0, 0, 2) section:has(footer)
+(0, 1, 0) :nth-of-type(2)
+(0, 1, 0) .grid > :is(.col, .cell):where(.wide)
+(0, 1, 0) div:is(.alert)
+(0, 1, 0) :first-of-type
+(0, 1, 1) a:hover
+(0, 1, 1) a:focus-visible
+(0, 1, 1) li:first_child
+(0, 1, 2) .nav > li + li
+(0, 1, 2) h1 ~ p:first-of-type
+(0, 1, 2) table   td:nth-child(even)
+(0, 1, 2) nav:has(a.active)
+(0, 1, 2) form   :is(input, select, textarea):disabled
+(0, 1, 3) ul   li:first-child::after
+(0, 2, 3) input[type='checkbox']:checked + label::before
+(0, 4, 0) .btn.btn-primary:not(.disabled):active
+(1, 2, 0) #main   .card:nth-of-type(2n)
+(2, 3, 3) #app   #sidebar   ul.menu > li.item:hover   a

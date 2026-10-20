@@ -1,0 +1,2176 @@
+// mini_cssselect: a port of cssselect 1.2.0 (BSD, see LICENSE-cssselect),
+// the library that turns CSS selectors into XPath for lxml, Scrapy and
+// parsel, and of parsel's translator (BSD, see LICENSE-parsel), which adds
+// the ::text and ::attr() pseudo-elements Scrapy spiders use.
+//
+// - the tokenizer, with escapes, strings, numbers and comments, and the
+//   positions in its error messages;
+// - the parser: combinators, namespaces, ids, classes, attribute
+//   selectors, pseudo-classes and functions, :not(), :has(), :is() and
+//   :where(), pseudo-elements, and the parsed objects' repr(), canonical()
+//   and specificity();
+// - the XPath translators: GenericTranslator, HTMLTranslator (lower-case
+//   names, :checked, :link, :disabled, :enabled and :lang() for HTML) and
+//   parsel's HTMLTranslator, with xpath_literal and the an+b series of
+//   :nth-child() and friends.
+//
+// The run writes data/ (four spider configs, a stylesheet and a list of
+// broken selectors, from mk.py), then prints for each selector its parsed
+// tree, canonical form and specificity, and the XPath each translator
+// gives or the error it raises; then a summary and the stylesheet's
+// selectors in cascade order. expected.out is the output of oracle.py,
+// which does the same with cssselect and parsel themselves.
+
+// ---------------------------------------------------------------- errors
+
+#[derive(Clone)]
+struct PyErr {
+    kind: String,
+    msg: String,
+}
+
+fn py_err(kind: Str, msg: own String) -> PyErr {
+    PyErr { kind: kind.to_string(), msg: msg }
+}
+
+fn syntax_err(msg: own String) -> PyErr {
+    py_err("SelectorSyntaxError", msg)
+}
+
+fn expr_err(msg: own String) -> PyErr {
+    py_err("ExpressionError", msg)
+}
+
+fn err_text(e: ref PyErr) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ---------------------------------------------------------------- strings
+
+fn slice_chars(cs: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut s = String.new();
+    let mut i = lo;
+    while i < hi {
+        s.push(cs[i]);
+        i += 1;
+    }
+    s
+}
+
+fn char_count(s: ref String) -> i64 {
+    let mut n = 0;
+    for _c in s.chars() {
+        n += 1;
+    }
+    n
+}
+
+fn has_char(s: ref String, c: char) -> bool {
+    for d in s.chars() {
+        if d == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.lstrip("*")
+fn lstrip_star(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    while i < cs.len() and cs[i] == '*' {
+        i += 1;
+    }
+    slice_chars(cs, i, cs.len())
+}
+
+// Selector.canonical() and friends strip the stars only when there is
+// more than one character.
+fn strip_if_long(s: ref String) -> String {
+    if char_count(s) > 1 { lstrip_star(s) } else { s.clone() }
+}
+
+// cssselect's ascii_lower: only A-Z change
+fn ascii_lower(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c >= 'A' and c <= 'Z' {
+            out.push(char.try_from((c as u32) + 32).unwrap());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn replace_dash(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        out.push(if c == '-' { '_' } else { c });
+    }
+    out
+}
+
+fn hex2(n: i64) -> String {
+    let digits: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut s = String.new();
+    s.push(digits[n / 16]);
+    s.push(digits[n % 16]);
+    s
+}
+
+// repr() of a str
+fn py_repr(s: ref String) -> String {
+    let q = if has_char(s, '\'') and not has_char(s, '"') { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let o = c as i64;
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == q {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if o < 32 or o == 127 {
+            out.push_str("\\x");
+            out.push_str(hex2(o));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+// repr() of a list of str
+fn py_list_repr(items: ref Vec[String]) -> String {
+    let mut out = String.new();
+    out.push('[');
+    for i in 0..items.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(py_repr(items[i]));
+    }
+    out.push(']');
+    out
+}
+
+fn join_strs(items: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..items.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(items[i]);
+    }
+    out
+}
+
+fn is_ascii_letter(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_hex(c: char) -> bool {
+    is_digit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn hex_val(c: char) -> i64 {
+    if is_digit(c) {
+        (c as i64) - 48
+    } else if c >= 'a' and c <= 'f' {
+        (c as i64) - 87
+    } else {
+        (c as i64) - 55
+    }
+}
+
+// [ \t\r\n\f]
+fn is_css_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == '\u{c}'
+}
+
+// is_safe_name: ^[a-zA-Z_][a-zA-Z0-9_.-]*$
+fn is_safe_name(s: ref String) -> bool {
+    let mut first = true;
+    for c in s.chars() {
+        if first {
+            if not (is_ascii_letter(c) or c == '_') {
+                return false;
+            }
+            first = false;
+        } else if not (is_ascii_letter(c) or is_digit(c) or c == '_' or c == '.' or c == '-') {
+            return false;
+        }
+    }
+    not first
+}
+
+// is_non_whitespace: ^[^ \t\r\n\f]+$
+fn is_non_whitespace(s: ref String) -> bool {
+    let mut any = false;
+    for c in s.chars() {
+        if is_css_space(c) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
+// int(): an optional sign and decimal digits
+fn py_int(s: ref String) -> Option[i64] {
+    let cs: Vec[char] = s.chars().collect();
+    let mut i = 0;
+    let mut neg = false;
+    if i < cs.len() and (cs[i] == '+' or cs[i] == '-') {
+        neg = cs[i] == '-';
+        i += 1;
+    }
+    if i >= cs.len() {
+        return None;
+    }
+    let mut v = 0;
+    while i < cs.len() {
+        if not is_digit(cs[i]) {
+            return None;
+        }
+        v = v * 10 + ((cs[i] as i64) - 48);
+        i += 1;
+    }
+    Some(if neg { 0 - v } else { v })
+}
+
+// Python's % on ints: the sign of the divisor
+fn py_mod(a: i64, m: i64) -> i64 {
+    let r = a % m;
+    if r != 0 and ((r < 0) != (m < 0)) { r + m } else { r }
+}
+
+fn abs_i(a: i64) -> i64 {
+    if a < 0 { 0 - a } else { a }
+}
+
+// ---------------------------------------------------------------- tokens
+
+#[derive(Clone)]
+struct Tok {
+    kind: String,
+    value: String,
+    pos: i64,
+}
+
+fn tok(kind: Str, value: own String, pos: i64) -> Tok {
+    Tok { kind: kind.to_string(), value: value, pos: pos }
+}
+
+// Token.__repr__ (and str(), which is the same)
+fn tok_repr(t: ref Tok) -> String {
+    if t.kind == "EOF" { f"<EOF at {t.pos}>" } else { f"<{t.kind} '{t.value}' at {t.pos}>" }
+}
+
+fn tok_list_repr(ts: ref Vec[Tok]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for t in ts.iter() {
+        parts.push(tok_repr(t));
+    }
+    let mut out = String.new();
+    out.push('[');
+    out.push_str(join_strs(parts, ", "));
+    out.push(']');
+    out
+}
+
+fn tok_values(ts: ref Vec[Tok]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for t in ts.iter() {
+        out.push(t.value.clone());
+    }
+    out
+}
+
+// Token == ("DELIM", v)
+fn is_delim(t: ref Tok, v: Str) -> bool {
+    t.kind == "DELIM" and t.value == v
+}
+
+fn is_eof(t: ref Tok) -> bool {
+    t.kind == "EOF"
+}
+
+// Token.css(): strings come back as their repr()
+fn tok_css(t: ref Tok) -> String {
+    if t.kind == "STRING" { py_repr(t.value) } else { t.value.clone() }
+}
+
+fn tok_types(ts: ref Vec[Tok]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for t in ts.iter() {
+        out.push(t.kind.clone());
+    }
+    out
+}
+
+// argument_types() in (["STRING"], ["IDENT"])
+fn single_string_or_ident(ts: ref Vec[Tok]) -> bool {
+    ts.len() == 1 and (ts[0].kind == "STRING" or ts[0].kind == "IDENT")
+}
+
+// ---------------------------------------------------------------- escapes
+
+// The length of an escape at i (unicode_escape | \\[^\n\r\f0-9a-f]), or 0.
+fn escape_len(cs: ref Vec[char], i: i64) -> i64 {
+    if i >= cs.len() or cs[i] != '\\' {
+        return 0;
+    }
+    let mut j = i + 1;
+    while j < cs.len() and j - i - 1 < 6 and is_hex(cs[j]) {
+        j += 1;
+    }
+    if j > i + 1 {
+        if j + 1 < cs.len() and cs[j] == '\r' and cs[j + 1] == '\n' {
+            return j + 2 - i;
+        }
+        if j < cs.len() and is_css_space(cs[j]) {
+            return j + 1 - i;
+        }
+        return j - i;
+    }
+    if i + 1 < cs.len() {
+        let c = cs[i + 1];
+        if c != '\n' and c != '\r' and c != '\u{c}' {
+            return 2;
+        }
+    }
+    0
+}
+
+fn is_nmstart(cs: ref Vec[char], i: i64) -> i64 {
+    if i >= cs.len() {
+        return 0;
+    }
+    let c = cs[i];
+    if c == '_' or is_ascii_letter(c) or (c as i64) > 127 {
+        return 1;
+    }
+    escape_len(cs, i)
+}
+
+fn is_nmchar(cs: ref Vec[char], i: i64) -> i64 {
+    if i >= cs.len() {
+        return 0;
+    }
+    let c = cs[i];
+    if c == '_' or c == '-' or is_ascii_letter(c) or is_digit(c) or (c as i64) > 127 {
+        return 1;
+    }
+    escape_len(cs, i)
+}
+
+// _match_ident: -?nmstart nmchar*; the end, or -1
+fn match_ident(cs: ref Vec[char], pos: i64) -> i64 {
+    let mut i = pos;
+    if i < cs.len() and cs[i] == '-' {
+        i += 1;
+    }
+    let n = is_nmstart(cs, i);
+    if n == 0 {
+        return -1;
+    }
+    i += n;
+    loop {
+        let m = is_nmchar(cs, i);
+        if m == 0 {
+            return i;
+        }
+        i += m;
+    }
+}
+
+// _match_hash: #nmchar+
+fn match_hash(cs: ref Vec[char], pos: i64) -> i64 {
+    if cs[pos] != '#' {
+        return -1;
+    }
+    let mut i = pos + 1;
+    loop {
+        let m = is_nmchar(cs, i);
+        if m == 0 {
+            break;
+        }
+        i += m;
+    }
+    if i == pos + 1 { -1 } else { i }
+}
+
+// _match_number: [+-]?(?:[0-9]*\.[0-9]+|[0-9]+)
+fn match_number(cs: ref Vec[char], pos: i64) -> i64 {
+    let mut j = pos;
+    if cs[j] == '+' or cs[j] == '-' {
+        j += 1;
+    }
+    let mut k = j;
+    while k < cs.len() and is_digit(cs[k]) {
+        k += 1;
+    }
+    if k + 1 < cs.len() and cs[k] == '.' and is_digit(cs[k + 1]) {
+        k += 1;
+        while k < cs.len() and is_digit(cs[k]) {
+            k += 1;
+        }
+        return k;
+    }
+    if k > j { k } else { -1 }
+}
+
+// The end of the body of a string starting after its quote:
+// ([^\n\r\f\\q]|\\(?:\n|\r\n|\r|\f)|escape)*
+fn match_string_body(cs: ref Vec[char], from: i64, q: char) -> i64 {
+    let mut i = from;
+    while i < cs.len() {
+        let c = cs[i];
+        if c != '\n' and c != '\r' and c != '\u{c}' and c != '\\' and c != q {
+            i += 1;
+        } else if c == '\\' and i + 1 < cs.len() and (cs[i + 1] == '\n' or cs[i + 1] == '\r' or cs[i + 1] == '\u{c}') {
+            if cs[i + 1] == '\r' and i + 2 < cs.len() and cs[i + 2] == '\n' {
+                i += 3;
+            } else {
+                i += 2;
+            }
+        } else {
+            let n = escape_len(cs, i);
+            if n == 0 {
+                return i;
+            }
+            i += n;
+        }
+    }
+    i
+}
+
+// _sub_newline_escape("", s): \\(?:\n|\r\n|\r|\f) removed
+fn sub_newline_escape(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '\\' and i + 1 < cs.len() and (cs[i + 1] == '\n' or cs[i + 1] == '\r' or cs[i + 1] == '\u{c}') {
+            if cs[i + 1] == '\r' and i + 2 < cs.len() and cs[i + 2] == '\n' {
+                i += 3;
+            } else {
+                i += 2;
+            }
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// _sub_unicode_escape(_replace_unicode, s)
+fn sub_unicode_escape(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '\\' and i + 1 < cs.len() and is_hex(cs[i + 1]) {
+            let mut j = i + 1;
+            let mut v = 0;
+            while j < cs.len() and j - i - 1 < 6 and is_hex(cs[j]) {
+                v = v * 16 + hex_val(cs[j]);
+                j += 1;
+            }
+            if j + 1 < cs.len() and cs[j] == '\r' and cs[j + 1] == '\n' {
+                j += 2;
+            } else if j < cs.len() and is_css_space(cs[j]) {
+                j += 1;
+            }
+            if v > 0x10FFFF {
+                v = 0xFFFD;
+            }
+            match char.try_from(v as u32) {
+                Ok(ch) => out.push(ch),
+                Err(_) => out.push('\u{FFFD}'),
+            }
+            i = j;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+// _sub_simple_escape(_replace_simple, s): \\(.) becomes the character
+fn sub_simple_escape(s: ref String) -> String {
+    let cs: Vec[char] = s.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        if cs[i] == '\\' and i + 1 < cs.len() and cs[i + 1] != '\n' {
+            out.push(cs[i + 1]);
+            i += 2;
+        } else {
+            out.push(cs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn unescape(s: ref String) -> String {
+    sub_simple_escape(sub_unicode_escape(s))
+}
+
+// ---------------------------------------------------------------- tokenize
+
+// tokenize() is a generator: the tokens it yields before it raises, and
+// the error, if any.
+struct Tokens {
+    toks: Vec[Tok],
+    err: Option[PyErr],
+}
+
+fn tokenize(s: ref String) -> Tokens {
+    let cs: Vec[char] = s.chars().collect();
+    let n = cs.len();
+    let mut toks: Vec[Tok] = Vec.new();
+    let mut pos = 0;
+    while pos < n {
+        if is_css_space(cs[pos]) {
+            toks.push(tok("S", " ".to_string(), pos));
+            while pos < n and is_css_space(cs[pos]) {
+                pos += 1;
+            }
+            continue;
+        }
+        let e = match_ident(cs, pos);
+        if e >= 0 {
+            toks.push(tok("IDENT", unescape(slice_chars(cs, pos, e)), pos));
+            pos = e;
+            continue;
+        }
+        let h = match_hash(cs, pos);
+        if h >= 0 {
+            toks.push(tok("HASH", unescape(slice_chars(cs, pos + 1, h)), pos));
+            pos = h;
+            continue;
+        }
+        let q = cs[pos];
+        if q == '\'' or q == '"' {
+            let end = match_string_body(cs, pos + 1, q);
+            if end == n {
+                return Tokens { toks: toks, err: Some(syntax_err(f"Unclosed string at {pos}")) };
+            }
+            if cs[end] != q {
+                return Tokens { toks: toks, err: Some(syntax_err(f"Invalid string at {pos}")) };
+            }
+            let body = slice_chars(cs, pos + 1, end);
+            toks.push(tok("STRING", unescape(sub_newline_escape(body)), pos));
+            pos = end + 1;
+            continue;
+        }
+        let m = match_number(cs, pos);
+        if m >= 0 {
+            toks.push(tok("NUMBER", slice_chars(cs, pos, m), pos));
+            pos = m;
+            continue;
+        }
+        if cs[pos] == '/' and pos + 1 < n and cs[pos + 1] == '*' {
+            let mut k = pos + 2;
+            let mut found = -1;
+            while k + 1 < n {
+                if cs[k] == '*' and cs[k + 1] == '/' {
+                    found = k;
+                    break;
+                }
+                k += 1;
+            }
+            pos = if found < 0 { n } else { found + 2 };
+            continue;
+        }
+        let mut d = String.new();
+        d.push(cs[pos]);
+        toks.push(tok("DELIM", d, pos));
+        pos += 1;
+    }
+    toks.push(tok("EOF", String.new(), pos));
+    Tokens { toks: toks, err: None }
+}
+
+// ---------------------------------------------------------------- TokenStream
+
+struct Stream {
+    src: Tokens,
+    // how many tokens next_token() has taken from the generator
+    taken: i64,
+    used: Vec[Tok],
+    peeked: Option[Tok],
+}
+
+fn new_stream(css: ref String) -> Stream {
+    Stream { src: tokenize(css), taken: 0, used: Vec.new(), peeked: None }
+}
+
+impl Stream {
+    // the generator's __next__: a token, the error it raises, or
+    // StopIteration once it is done (which becomes a RuntimeError when it
+    // leaves the parse_selector_group generator)
+    fn next_token(mut ref self) -> Result[Tok, PyErr] {
+        if self.taken < self.src.toks.len() {
+            let t = self.src.toks[self.taken].clone();
+            self.taken += 1;
+            return Ok(t);
+        }
+        if self.taken == self.src.toks.len() {
+            self.taken += 1;
+            if let Some(e) = self.src.err.clone() {
+                return Err(e);
+            }
+        }
+        Err(py_err("RuntimeError", "generator raised StopIteration".to_string()))
+    }
+
+    fn next(mut ref self) -> Result[Tok, PyErr] {
+        match self.peeked.clone() {
+            Some(t) => {
+                self.peeked = None;
+                self.used.push(t.clone());
+                Ok(t)
+            }
+            None => {
+                let t = self.next_token()?;
+                self.used.push(t.clone());
+                Ok(t)
+            }
+        }
+    }
+
+    fn peek(mut ref self) -> Result[Tok, PyErr] {
+        match self.peeked.clone() {
+            Some(t) => Ok(t),
+            None => {
+                let t = self.next_token()?;
+                self.peeked = Some(t.clone());
+                Ok(t)
+            }
+        }
+    }
+
+    fn next_ident(mut ref self) -> Result[String, PyErr] {
+        let t = self.next()?;
+        if t.kind != "IDENT" {
+            return Err(syntax_err(f"Expected ident, got {tok_repr(t)}"));
+        }
+        Ok(t.value)
+    }
+
+    fn next_ident_or_star(mut ref self) -> Result[Option[String], PyErr] {
+        let t = self.next()?;
+        if t.kind == "IDENT" {
+            return Ok(Some(t.value));
+        }
+        if is_delim(t, "*") {
+            return Ok(None);
+        }
+        Err(syntax_err(f"Expected ident or '*', got {tok_repr(t)}"))
+    }
+
+    fn skip_whitespace(mut ref self) -> Result[(), PyErr] {
+        let t = self.peek()?;
+        if t.kind == "S" {
+            self.next()?;
+        }
+        Ok(())
+    }
+
+    fn used_len(ref self) -> i64 {
+        self.used.len()
+    }
+}
+
+// ---------------------------------------------------------------- parsed objects
+
+const K_ELEMENT: i64 = 0;
+const K_HASH: i64 = 1;
+const K_CLASS: i64 = 2;
+const K_FUNCTION: i64 = 3;
+const K_PSEUDO: i64 = 4;
+const K_ATTRIB: i64 = 5;
+const K_NEGATION: i64 = 6;
+const K_RELATION: i64 = 7;
+const K_MATCHING: i64 = 8;
+const K_ADJUST: i64 = 9;
+const K_COMBINED: i64 = 10;
+
+// One parsed object. `sel` is the selector it applies to (-1 for an
+// Element); `sub` is the subselector of a Negation or CombinedSelector,
+// or the Selector of a Relation.
+struct Node {
+    kind: i64,
+    sel: i64,
+    sub: i64,
+    // Element.namespace, Attrib.namespace
+    ns: Option[String],
+    // Element.element, Hash.id, Class.class_name, Function.name,
+    // Pseudo.ident, Attrib.attrib, the combinator of a CombinedSelector
+    // or a Relation
+    name: Option[String],
+    op: String,
+    value: Option[Tok],
+    args: Vec[Tok],
+    list: Vec[i64],
+}
+
+// A pseudo-element: kind 0 for none, 1 for an identifier, 2 for a
+// FunctionalPseudoElement
+#[derive(Clone)]
+struct Pe {
+    kind: i64,
+    name: String,
+    args: Vec[Tok],
+}
+
+fn no_pe() -> Pe {
+    Pe { kind: 0, name: String.new(), args: Vec.new() }
+}
+
+struct Sel {
+    tree: i64,
+    pe: Pe,
+}
+
+struct Ctx {
+    nodes: Vec[Node],
+    sels: Vec[Sel],
+}
+
+fn new_ctx() -> Ctx {
+    Ctx { nodes: Vec.new(), sels: Vec.new() }
+}
+
+fn blank(kind: i64, sel: i64) -> Node {
+    Node { kind: kind, sel: sel, sub: -1, ns: None, name: None, op: String.new(), value: None, args: Vec.new(), list: Vec.new() }
+}
+
+fn add(ctx: mut ref Ctx, n: own Node) -> i64 {
+    ctx.nodes.push(n);
+    ctx.nodes.len() - 1
+}
+
+fn add_named(ctx: mut ref Ctx, kind: i64, sel: i64, name: own String) -> i64 {
+    let mut n = blank(kind, sel);
+    n.name = Some(name);
+    add(mut ctx, n)
+}
+
+fn add_element(ctx: mut ref Ctx, ns: own Option[String], element: own Option[String]) -> i64 {
+    let mut n = blank(K_ELEMENT, -1);
+    n.ns = ns;
+    n.name = element;
+    add(mut ctx, n)
+}
+
+fn add_sel(ctx: mut ref Ctx, tree: i64, pe: own Pe) -> i64 {
+    let mut p = pe;
+    // Selector.__init__ lower-cases an identifier pseudo-element
+    if p.kind == 1 {
+        p.name = ascii_lower(p.name);
+    }
+    ctx.sels.push(Sel { tree: tree, pe: p });
+    ctx.sels.len() - 1
+}
+
+fn opt_str(s: ref Option[String]) -> String {
+    match s {
+        Some(v) => v.clone(),
+        None => "None".to_string(),
+    }
+}
+
+fn args_css(ts: ref Vec[Tok]) -> String {
+    let mut out = String.new();
+    for t in ts.iter() {
+        out.push_str(tok_css(t));
+    }
+    out
+}
+
+// FunctionalPseudoElement.__repr__
+fn fpe_repr(p: ref Pe) -> String {
+    f"FunctionalPseudoElement[::{p.name}({py_list_repr(tok_values(p.args))})]"
+}
+
+// "%s" % pseudo_element, before Selector lower-cases it
+fn pe_str(p: ref Pe) -> String {
+    if p.kind == 2 { fpe_repr(p) } else { p.name.clone() }
+}
+
+fn attrib_name(n: ref Node) -> String {
+    match n.ns.clone() {
+        Some(ns) => {
+            if ns.len() > 0 { f"{ns}|{opt_str(n.name)}" } else { opt_str(n.name) }
+        }
+        None => opt_str(n.name),
+    }
+}
+
+fn element_canonical(n: ref Node) -> String {
+    let mut el = match n.name.clone() {
+        Some(e) => e,
+        None => "*".to_string(),
+    };
+    if let Some(ns) = n.ns.clone() {
+        if ns.len() > 0 {
+            el = f"{ns}|{el}";
+        }
+    }
+    el
+}
+
+fn tree_repr(ctx: ref Ctx, i: i64) -> String {
+    let n = ref ctx.nodes[i];
+    let k = n.kind;
+    if k == K_ELEMENT {
+        return f"Element[{element_canonical(n)}]";
+    }
+    let s = if n.sel >= 0 { tree_repr(ctx, n.sel) } else { String.new() };
+    let name = opt_str(n.name);
+    if k == K_HASH {
+        f"Hash[{s}#{name}]"
+    } else if k == K_CLASS {
+        f"Class[{s}.{name}]"
+    } else if k == K_FUNCTION {
+        f"Function[{s}:{name}({py_list_repr(tok_values(n.args))})]"
+    } else if k == K_PSEUDO {
+        f"Pseudo[{s}:{name}]"
+    } else if k == K_ATTRIB {
+        let a = attrib_name(n);
+        match n.value.clone() {
+            None => f"Attrib[{s}[{a}]]",
+            Some(v) => f"Attrib[{s}[{a} {n.op} {py_repr(v.value)}]]",
+        }
+    } else if k == K_NEGATION {
+        f"Negation[{s}:not({tree_repr(ctx, n.sub)})]"
+    } else if k == K_RELATION {
+        f"Relation[{s}:has({sel_repr(ctx, n.sub)})]"
+    } else if k == K_MATCHING or k == K_ADJUST {
+        let mut parts: Vec[String] = Vec.new();
+        for j in n.list.iter() {
+            parts.push(tree_repr(ctx, *j));
+        }
+        let what = if k == K_MATCHING { "Matching" } else { "SpecificityAdjustment" };
+        let fname = if k == K_MATCHING { "is" } else { "where" };
+        f"{what}[{s}:{fname}({join_strs(parts, ", ")})]"
+    } else {
+        let comb = if name == " " { "<followed>".to_string() } else { name };
+        f"CombinedSelector[{s} {comb} {tree_repr(ctx, n.sub)}]"
+    }
+}
+
+fn sel_repr(ctx: ref Ctx, i: i64) -> String {
+    let s = ref ctx.sels[i];
+    let pe = if s.pe.kind == 2 {
+        fpe_repr(s.pe)
+    } else if s.pe.kind == 1 {
+        f"::{s.pe.name}"
+    } else {
+        String.new()
+    };
+    f"Selector[{tree_repr(ctx, s.tree)}{pe}]"
+}
+
+fn canonical(ctx: ref Ctx, i: i64) -> String {
+    let n = ref ctx.nodes[i];
+    let k = n.kind;
+    if k == K_ELEMENT {
+        return element_canonical(n);
+    }
+    let s = canonical(ctx, n.sel);
+    let name = opt_str(n.name);
+    if k == K_HASH {
+        f"{s}#{name}"
+    } else if k == K_CLASS {
+        f"{s}.{name}"
+    } else if k == K_FUNCTION {
+        f"{s}:{name}({args_css(n.args)})"
+    } else if k == K_PSEUDO {
+        f"{s}:{name}"
+    } else if k == K_ATTRIB {
+        let a = attrib_name(n);
+        let op = match n.value.clone() {
+            None => a,
+            Some(v) => f"{a}{n.op}{tok_css(v)}",
+        };
+        f"{s}[{op}]"
+    } else if k == K_NEGATION {
+        f"{s}:not({strip_if_long(canonical(ctx, n.sub))})"
+    } else if k == K_RELATION {
+        f"{s}:has({strip_if_long(sel_canonical(ctx, n.sub))})"
+    } else if k == K_MATCHING or k == K_ADJUST {
+        let mut parts: Vec[String] = Vec.new();
+        for j in n.list.iter() {
+            parts.push(lstrip_star(canonical(ctx, *j)));
+        }
+        let fname = if k == K_MATCHING { "is" } else { "where" };
+        f"{s}:{fname}({join_strs(parts, ", ")})"
+    } else {
+        f"{s} {name} {strip_if_long(canonical(ctx, n.sub))}"
+    }
+}
+
+fn sel_canonical(ctx: ref Ctx, i: i64) -> String {
+    let s = ref ctx.sels[i];
+    let pe = if s.pe.kind == 2 {
+        f"::{s.pe.name}({args_css(s.pe.args)})"
+    } else if s.pe.kind == 1 {
+        f"::{s.pe.name}"
+    } else {
+        String.new()
+    };
+    let res = f"{canonical(ctx, s.tree)}{pe}";
+    strip_if_long(res)
+}
+
+struct Spec {
+    a: i64,
+    b: i64,
+    c: i64,
+}
+
+fn spec(a: i64, b: i64, c: i64) -> Spec {
+    Spec { a: a, b: b, c: c }
+}
+
+fn spec_lt(x: ref Spec, y: ref Spec) -> bool {
+    if x.a != y.a {
+        return x.a < y.a;
+    }
+    if x.b != y.b {
+        return x.b < y.b;
+    }
+    x.c < y.c
+}
+
+fn spec_str(x: ref Spec) -> String {
+    f"({x.a}, {x.b}, {x.c})"
+}
+
+fn specificity(ctx: ref Ctx, i: i64) -> Spec {
+    let n = ref ctx.nodes[i];
+    let k = n.kind;
+    if k == K_ELEMENT {
+        return if n.name.is_some() { spec(0, 0, 1) } else { spec(0, 0, 0) };
+    }
+    if k == K_MATCHING {
+        // max() over the list; the selector it applies to does not count
+        let mut best = specificity(ctx, n.list[0]);
+        for j in 1..n.list.len() {
+            let s = specificity(ctx, n.list[j]);
+            if spec_lt(best, s) {
+                best = s;
+            }
+        }
+        return best;
+    }
+    if k == K_ADJUST {
+        return spec(0, 0, 0);
+    }
+    let s = specificity(ctx, n.sel);
+    if k == K_HASH {
+        spec(s.a + 1, s.b, s.c)
+    } else if k == K_NEGATION or k == K_COMBINED {
+        let t = specificity(ctx, n.sub);
+        spec(s.a + t.a, s.b + t.b, s.c + t.c)
+    } else if k == K_RELATION {
+        let t = sel_specificity(ctx, n.sub);
+        spec(s.a + t.a, s.b + t.b, s.c + t.c)
+    } else {
+        spec(s.a, s.b + 1, s.c)
+    }
+}
+
+fn sel_specificity(ctx: ref Ctx, i: i64) -> Spec {
+    let s = ref ctx.sels[i];
+    let t = specificity(ctx, s.tree);
+    if s.pe.kind != 0 { spec(t.a, t.b, t.c + 1) } else { t }
+}
+
+// ---------------------------------------------------------------- parser
+
+// parse(): a list of Selector indices
+fn parse(ctx: mut ref Ctx, css: ref String) -> Result[Vec[i64], PyErr] {
+    let mut st = new_stream(css);
+    parse_selector_group(mut ctx, mut st)
+}
+
+fn parse_selector_group(ctx: mut ref Ctx, st: mut ref Stream) -> Result[Vec[i64], PyErr] {
+    let mut out: Vec[i64] = Vec.new();
+    st.skip_whitespace()?;
+    loop {
+        let (tree, pe) = parse_selector(mut ctx, mut st)?;
+        out.push(add_sel(mut ctx, tree, pe));
+        let p = st.peek()?;
+        if is_delim(p, ",") {
+            st.next()?;
+            st.skip_whitespace()?;
+        } else {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn parse_selector(ctx: mut ref Ctx, st: mut ref Stream) -> Result[(i64, Pe), PyErr] {
+    let (first, first_pe) = parse_simple_selector(mut ctx, mut st, false)?;
+    let mut result = first;
+    let mut pe = first_pe;
+    loop {
+        st.skip_whitespace()?;
+        let p = st.peek()?;
+        if is_eof(p) or is_delim(p, ",") {
+            break;
+        }
+        if pe.kind != 0 {
+            return Err(syntax_err(f"Got pseudo-element ::{pe_str(pe)} not at the end of a selector"));
+        }
+        let mut combinator = " ".to_string();
+        if is_delim(p, "+") or is_delim(p, ">") or is_delim(p, "~") {
+            combinator = st.next()?.value;
+            st.skip_whitespace()?;
+        }
+        let (next_sel, next_pe) = parse_simple_selector(mut ctx, mut st, false)?;
+        let mut n = blank(K_COMBINED, result);
+        n.name = Some(combinator);
+        n.sub = next_sel;
+        result = add(mut ctx, n);
+        pe = next_pe;
+    }
+    Ok((result, pe))
+}
+
+fn parse_simple_selector(ctx: mut ref Ctx, st: mut ref Stream, inside_negation: bool) -> Result[(i64, Pe), PyErr] {
+    st.skip_whitespace()?;
+    let selector_start = st.used_len();
+    let peek = st.peek()?;
+    let mut namespace: Option[String] = None;
+    let mut element: Option[String] = None;
+    if peek.kind == "IDENT" or is_delim(peek, "*") {
+        if peek.kind == "IDENT" {
+            namespace = Some(st.next()?.value);
+        } else {
+            st.next()?;
+        }
+        let p2 = st.peek()?;
+        if is_delim(p2, "|") {
+            st.next()?;
+            element = st.next_ident_or_star()?;
+        } else {
+            element = namespace;
+            namespace = None;
+        }
+    }
+    let mut result = add_element(mut ctx, namespace, element);
+    let mut pe = no_pe();
+    loop {
+        let peek = st.peek()?;
+        if peek.kind == "S" or peek.kind == "EOF" or is_delim(peek, ",") or is_delim(peek, "+")
+            or is_delim(peek, ">") or is_delim(peek, "~") or (inside_negation and is_delim(peek, ")")) {
+            break;
+        }
+        if pe.kind != 0 {
+            return Err(syntax_err(f"Got pseudo-element ::{pe_str(pe)} not at the end of a selector"));
+        }
+        if peek.kind == "HASH" {
+            let v = st.next()?.value;
+            result = add_named(mut ctx, K_HASH, result, v);
+        } else if is_delim(peek, ".") {
+            st.next()?;
+            let v = st.next_ident()?;
+            result = add_named(mut ctx, K_CLASS, result, v);
+        } else if is_delim(peek, "|") {
+            st.next()?;
+            let v = st.next_ident()?;
+            result = add_element(mut ctx, None, Some(v));
+        } else if is_delim(peek, "[") {
+            st.next()?;
+            result = parse_attrib(mut ctx, result, mut st)?;
+        } else if is_delim(peek, ":") {
+            st.next()?;
+            let p2 = st.peek()?;
+            if is_delim(p2, ":") {
+                st.next()?;
+                let name = st.next_ident()?;
+                let p3 = st.peek()?;
+                if is_delim(p3, "(") {
+                    st.next()?;
+                    let args = parse_arguments(mut st)?;
+                    pe = Pe { kind: 2, name: ascii_lower(name), args: args };
+                } else {
+                    pe = Pe { kind: 1, name: name, args: Vec.new() };
+                }
+                continue;
+            }
+            let ident = st.next_ident()?;
+            let low = ident.to_lowercase();
+            if low == "first-line" or low == "first-letter" or low == "before" or low == "after" {
+                pe = Pe { kind: 1, name: ident, args: Vec.new() };
+                continue;
+            }
+            let p3 = st.peek()?;
+            if not is_delim(p3, "(") {
+                result = add_named(mut ctx, K_PSEUDO, result, ascii_lower(ident));
+                if tree_repr(ctx, result) == "Pseudo[Element[*]:scope]" {
+                    let u = st.used.len();
+                    let ok = u == 2
+                        or (u == 3 and st.used[0].kind == "S")
+                        or (u >= 3 and is_delim(st.used[u - 3], ","))
+                        or (u >= 4 and st.used[u - 3].kind == "S" and is_delim(st.used[u - 4], ","));
+                    if not ok {
+                        return Err(syntax_err("Got immediate child pseudo-element \":scope\" not at the start of a selector".to_string()));
+                    }
+                }
+                continue;
+            }
+            st.next()?;
+            st.skip_whitespace()?;
+            if low == "not" {
+                if inside_negation {
+                    return Err(syntax_err("Got nested :not()".to_string()));
+                }
+                let (argument, arg_pe) = parse_simple_selector(mut ctx, mut st, true)?;
+                let next = st.next()?;
+                if arg_pe.kind != 0 {
+                    return Err(syntax_err(f"Got pseudo-element ::{pe_str(arg_pe)} inside :not() at {next.pos}"));
+                }
+                if not is_delim(next, ")") {
+                    return Err(syntax_err(f"Expected ')', got {tok_repr(next)}"));
+                }
+                let mut n = blank(K_NEGATION, result);
+                n.sub = argument;
+                result = add(mut ctx, n);
+            } else if low == "has" {
+                let (comb, sub) = parse_relative_selector(mut ctx, mut st)?;
+                let mut n = blank(K_RELATION, result);
+                n.name = Some(comb);
+                n.sub = sub;
+                result = add(mut ctx, n);
+            } else if low == "matches" or low == "is" {
+                let list = parse_simple_selector_arguments(mut ctx, mut st)?;
+                let mut n = blank(K_MATCHING, result);
+                n.list = list;
+                result = add(mut ctx, n);
+            } else if low == "where" {
+                let list = parse_simple_selector_arguments(mut ctx, mut st)?;
+                let mut n = blank(K_ADJUST, result);
+                n.list = list;
+                result = add(mut ctx, n);
+            } else {
+                let args = parse_arguments(mut st)?;
+                let mut n = blank(K_FUNCTION, result);
+                n.name = Some(ascii_lower(ident));
+                n.args = args;
+                result = add(mut ctx, n);
+            }
+        } else {
+            return Err(syntax_err(f"Expected selector, got {tok_repr(peek)}"));
+        }
+    }
+    if st.used_len() == selector_start {
+        let p = st.peek()?;
+        return Err(syntax_err(f"Expected selector, got {tok_repr(p)}"));
+    }
+    Ok((result, pe))
+}
+
+fn parse_arguments(st: mut ref Stream) -> Result[Vec[Tok], PyErr] {
+    let mut args: Vec[Tok] = Vec.new();
+    loop {
+        st.skip_whitespace()?;
+        let next = st.next()?;
+        if next.kind == "IDENT" or next.kind == "STRING" or next.kind == "NUMBER" or is_delim(next, "+") or is_delim(next, "-") {
+            args.push(next);
+        } else if is_delim(next, ")") {
+            return Ok(args);
+        } else {
+            return Err(syntax_err(f"Expected an argument, got {tok_repr(next)}"));
+        }
+    }
+}
+
+// :has(): the combinator, and the Selector that parse() makes of the
+// values of the tokens up to the parenthesis
+fn parse_relative_selector(ctx: mut ref Ctx, st: mut ref Stream) -> Result[(String, i64), PyErr] {
+    st.skip_whitespace()?;
+    let mut subselector = String.new();
+    let mut next = st.next()?;
+    let mut combinator = " ".to_string();
+    if is_delim(next, "+") or is_delim(next, "-") or is_delim(next, ">") or is_delim(next, "~") {
+        combinator = next.value.clone();
+        st.skip_whitespace()?;
+        next = st.next()?;
+    }
+    loop {
+        if next.kind == "IDENT" or next.kind == "STRING" or next.kind == "NUMBER" or is_delim(next, ".") or is_delim(next, "*") {
+            subselector.push_str(next.value);
+        } else if is_delim(next, ")") {
+            let result = parse(mut ctx, subselector)?;
+            return Ok((combinator, result[0]));
+        } else {
+            return Err(syntax_err(f"Expected an argument, got {tok_repr(next)}"));
+        }
+        next = st.next()?;
+    }
+}
+
+fn parse_simple_selector_arguments(ctx: mut ref Ctx, st: mut ref Stream) -> Result[Vec[i64], PyErr] {
+    let mut args: Vec[i64] = Vec.new();
+    loop {
+        let (result, pe) = parse_simple_selector(mut ctx, mut st, true)?;
+        if pe.kind != 0 {
+            return Err(syntax_err(f"Got pseudo-element ::{pe_str(pe)} inside function"));
+        }
+        st.skip_whitespace()?;
+        let next = st.next()?;
+        if is_eof(next) or is_delim(next, ",") {
+            // cssselect takes one more token here
+            st.next()?;
+            st.skip_whitespace()?;
+            args.push(result);
+        } else if is_delim(next, ")") {
+            args.push(result);
+            break;
+        } else {
+            return Err(syntax_err(f"Expected an argument, got {tok_repr(next)}"));
+        }
+    }
+    Ok(args)
+}
+
+fn parse_attrib(ctx: mut ref Ctx, selector: i64, st: mut ref Stream) -> Result[i64, PyErr] {
+    st.skip_whitespace()?;
+    let mut attrib = st.next_ident_or_star()?;
+    let p = st.peek()?;
+    if attrib.is_none() and not is_delim(p, "|") {
+        return Err(syntax_err(f"Expected '|', got {tok_repr(p)}"));
+    }
+    let mut namespace: Option[String] = None;
+    let mut op = String.new();
+    if is_delim(p, "|") {
+        st.next()?;
+        let p2 = st.peek()?;
+        if is_delim(p2, "=") {
+            st.next()?;
+            op = "|=".to_string();
+        } else {
+            namespace = attrib;
+            attrib = Some(st.next_ident()?);
+        }
+    }
+    if op.len() == 0 {
+        st.skip_whitespace()?;
+        let next = st.next()?;
+        if is_delim(next, "]") {
+            let mut n = blank(K_ATTRIB, selector);
+            n.ns = namespace;
+            n.name = attrib;
+            n.op = "exists".to_string();
+            return Ok(add(mut ctx, n));
+        } else if is_delim(next, "=") {
+            op = "=".to_string();
+        } else if next.kind == "DELIM" and (next.value == "^" or next.value == "$" or next.value == "*" or next.value == "~" or next.value == "|" or next.value == "!") and is_delim(st.peek()?, "=") {
+            op = f"{next.value}=";
+            st.next()?;
+        } else {
+            return Err(syntax_err(f"Operator expected, got {tok_repr(next)}"));
+        }
+    }
+    st.skip_whitespace()?;
+    let value = st.next()?;
+    if value.kind != "IDENT" and value.kind != "STRING" {
+        return Err(syntax_err(f"Expected string or ident, got {tok_repr(value)}"));
+    }
+    st.skip_whitespace()?;
+    let next = st.next()?;
+    if not is_delim(next, "]") {
+        return Err(syntax_err(f"Expected ']', got {tok_repr(next)}"));
+    }
+    let mut n = blank(K_ATTRIB, selector);
+    n.ns = namespace;
+    n.name = attrib;
+    n.op = op;
+    n.value = Some(value);
+    Ok(add(mut ctx, n))
+}
+
+// parse_series: (a, b), or None for the ValueError
+fn parse_series(ts: ref Vec[Tok]) -> Option[(i64, i64)] {
+    for t in ts.iter() {
+        if t.kind == "STRING" {
+            return None;
+        }
+    }
+    let mut s = String.new();
+    for t in ts.iter() {
+        s.push_str(t.value);
+    }
+    let s = s.trim().to_string();
+    if s == "odd" {
+        return Some((2, 1));
+    }
+    if s == "even" {
+        return Some((2, 0));
+    }
+    if s == "n" {
+        return Some((1, 0));
+    }
+    let cs: Vec[char] = s.chars().collect();
+    let mut at = -1;
+    for i in 0..cs.len() {
+        if cs[i] == 'n' {
+            at = i;
+            break;
+        }
+    }
+    if at < 0 {
+        return match py_int(s) {
+            Some(b) => Some((0, b)),
+            None => None,
+        };
+    }
+    let a = slice_chars(cs, 0, at);
+    let b = slice_chars(cs, at + 1, cs.len());
+    let av = if a.len() == 0 {
+        1
+    } else if a == "-" or a == "+" {
+        py_int(f"{a}1")?
+    } else {
+        py_int(a)?
+    };
+    let bv = if b.len() == 0 { 0 } else { py_int(b)? };
+    Some((av, bv))
+}
+
+// HTMLTranslator's :checked, :disabled and :enabled, as cssselect writes them
+const HTML_CHECKED: Str = "(@selected and name(.) = 'option') or (@checked and (name(.) = 'input' or name(.) = 'command')and (@type = 'checkbox' or @type = 'radio'))";
+const HTML_DISABLED: Str = "\n        (\n            @disabled and\n            (\n                (name(.) = 'input' and @type != 'hidden') or\n                name(.) = 'button' or\n                name(.) = 'select' or\n                name(.) = 'textarea' or\n                name(.) = 'command' or\n                name(.) = 'fieldset' or\n                name(.) = 'optgroup' or\n                name(.) = 'option'\n            )\n        ) or (\n            (\n                (name(.) = 'input' and @type != 'hidden') or\n                name(.) = 'button' or\n                name(.) = 'select' or\n                name(.) = 'textarea'\n            )\n            and ancestor::fieldset[@disabled]\n        )\n        ";
+const HTML_ENABLED: Str = "\n        (\n            @href and (\n                name(.) = 'a' or\n                name(.) = 'link' or\n                name(.) = 'area'\n            )\n        ) or (\n            (\n                name(.) = 'command' or\n                name(.) = 'fieldset' or\n                name(.) = 'optgroup'\n            )\n            and not(@disabled)\n        ) or (\n            (\n                (name(.) = 'input' and @type != 'hidden') or\n                name(.) = 'button' or\n                name(.) = 'select' or\n                name(.) = 'textarea' or\n                name(.) = 'keygen'\n            )\n            and not (@disabled or ancestor::fieldset[@disabled])\n        ) or (\n            name(.) = 'option' and not(\n                @disabled or ancestor::optgroup[@disabled]\n            )\n        )\n        ";
+
+// ---------------------------------------------------------------- XPathExpr
+
+#[derive(Clone)]
+struct X {
+    path: String,
+    element: String,
+    condition: String,
+    // parsel's XPathExpr: ::text and ::attr()
+    textnode: bool,
+    attribute: Option[String],
+}
+
+fn xexpr(element: own String) -> X {
+    X { path: String.new(), element: element, condition: String.new(), textnode: false, attribute: None }
+}
+
+// XPathExpr.__str__, and parsel's on top of it
+fn x_str(x: ref X) -> String {
+    let mut path = f"{x.path}{x.element}";
+    if x.condition.len() > 0 {
+        path = f"{path}[{x.condition}]";
+    }
+    if x.textnode {
+        if path == "*" {
+            path = "text()".to_string();
+        } else if path.ends_with("::*/*") {
+            let cs: Vec[char] = path.chars().collect();
+            path = f"{slice_chars(cs, 0, cs.len() - 3)}text()";
+        } else {
+            path.push_str("/text()");
+        }
+    }
+    if let Some(a) = x.attribute.clone() {
+        if path.ends_with("::*/*") {
+            let cs: Vec[char] = path.chars().collect();
+            path = slice_chars(cs, 0, cs.len() - 2);
+        }
+        path = f"{path}/@{a}";
+    }
+    path
+}
+
+fn add_condition(x: mut ref X, condition: ref String, conj: Str) {
+    if x.condition.len() > 0 {
+        x.condition = f"({x.condition}) {conj} ({condition})";
+    } else {
+        x.condition = condition.clone();
+    }
+}
+
+fn add_cond(x: mut ref X, condition: Str) {
+    add_condition(mut x, condition.to_string(), "and");
+}
+
+fn add_name_test(x: mut ref X) {
+    if x.element == "*" {
+        return;
+    }
+    let c = f"name() = {xpath_literal(x.element)}";
+    add_condition(mut x, c, "and");
+    x.element = "*".to_string();
+}
+
+fn join(x: mut ref X, combiner: Str, other: ref X, closing: Str, has_inner_condition: bool) {
+    let mut path = f"{x_str(x)}{combiner}";
+    if other.path != "*/" {
+        path.push_str(other.path);
+    }
+    x.path = path;
+    if not has_inner_condition {
+        x.element = f"{other.element}{closing}";
+        x.condition = other.condition.clone();
+    } else {
+        let mut el = other.element.clone();
+        if other.condition.len() > 0 {
+            el = f"{el}[{other.condition}]";
+        }
+        el.push_str(closing);
+        x.element = el;
+    }
+    // parsel's join
+    x.textnode = other.textnode;
+    x.attribute = other.attribute.clone();
+}
+
+// GenericTranslator.xpath_literal
+fn xpath_literal(s: ref String) -> String {
+    if not has_char(s, '\'') {
+        return f"'{s}'";
+    }
+    if not has_char(s, '"') {
+        return f"\"{s}\"";
+    }
+    // concat() of the runs of quotes and the runs between them
+    let mut parts: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    let mut in_quotes = false;
+    for c in s.chars() {
+        let q = c == '\'';
+        if q != in_quotes and cur.len() > 0 {
+            parts.push(cur);
+            cur = String.new();
+        }
+        in_quotes = q;
+        cur.push(c);
+    }
+    if cur.len() > 0 {
+        parts.push(cur);
+    }
+    let mut out: Vec[String] = Vec.new();
+    for p in parts.iter() {
+        if has_char(p, '\'') {
+            out.push(f"\"{p}\"");
+        } else {
+            out.push(f"'{p}'");
+        }
+    }
+    f"concat({join_strs(out, ",")})"
+}
+
+// ---------------------------------------------------------------- translators
+
+struct Tr {
+    // HTMLTranslator (not xhtml): element and attribute names lower-cased,
+    // and its own :checked, :link, :disabled, :enabled and :lang()
+    html: bool,
+    // parsel's HTMLTranslator: ::text and ::attr()
+    parsel: bool,
+}
+
+fn css_to_xpath(tr: ref Tr, ctx: mut ref Ctx, css: ref String) -> Result[String, PyErr] {
+    let sels = parse(mut ctx, css)?;
+    let mut parts: Vec[String] = Vec.new();
+    for i in sels.iter() {
+        parts.push(selector_to_xpath(tr, ctx, *i)?);
+    }
+    Ok(join_strs(parts, " | "))
+}
+
+fn selector_to_xpath(tr: ref Tr, ctx: ref Ctx, i: i64) -> Result[String, PyErr] {
+    let s = ref ctx.sels[i];
+    let mut x = xpath(tr, ctx, s.tree)?;
+    if s.pe.kind != 0 {
+        x = xpath_pseudo_element(tr, x, s.pe)?;
+    }
+    Ok(f"descendant-or-self::{x_str(x)}")
+}
+
+fn xpath_pseudo_element(tr: ref Tr, x: own X, pe: ref Pe) -> Result[X, PyErr] {
+    if not tr.parsel {
+        return Err(expr_err("Pseudo-elements are not supported.".to_string()));
+    }
+    let mut out = x;
+    if pe.kind == 2 {
+        if replace_dash(pe.name) != "attr" {
+            return Err(expr_err(f"The functional pseudo-element ::{pe.name}() is unknown"));
+        }
+        if not single_string_or_ident(pe.args) {
+            return Err(expr_err(f"Expected a single string or ident for ::attr(), got {tok_list_repr(pe.args)}"));
+        }
+        out.textnode = false;
+        out.attribute = Some(pe.args[0].value.clone());
+    } else {
+        if replace_dash(pe.name) != "text" {
+            return Err(expr_err(f"The pseudo-element ::{pe.name} is unknown"));
+        }
+        out.textnode = true;
+        out.attribute = None;
+    }
+    Ok(out)
+}
+
+fn xpath(tr: ref Tr, ctx: ref Ctx, i: i64) -> Result[X, PyErr] {
+    let n = ref ctx.nodes[i];
+    let k = n.kind;
+    if k == K_ELEMENT {
+        return Ok(xpath_element(tr, n));
+    }
+    if k == K_COMBINED {
+        let mut left = xpath(tr, ctx, n.sel)?;
+        let right = xpath(tr, ctx, n.sub)?;
+        let comb = opt_str(n.name);
+        if comb == " " {
+            join(mut left, "/descendant-or-self::*/", right, "", false);
+        } else if comb == ">" {
+            join(mut left, "/", right, "", false);
+        } else if comb == "+" {
+            join(mut left, "/following-sibling::", right, "", false);
+            add_name_test(mut left);
+            add_cond(mut left, "position() = 1");
+        } else {
+            join(mut left, "/following-sibling::", right, "", false);
+        }
+        return Ok(left);
+    }
+    if k == K_NEGATION {
+        let mut x = xpath(tr, ctx, n.sel)?;
+        let mut sub = xpath(tr, ctx, n.sub)?;
+        add_name_test(mut sub);
+        if sub.condition.len() > 0 {
+            let c = f"not({sub.condition})";
+            add_condition(mut x, c, "and");
+        } else {
+            add_cond(mut x, "0");
+        }
+        return Ok(x);
+    }
+    if k == K_RELATION {
+        let mut x = xpath(tr, ctx, n.sel)?;
+        let right = xpath(tr, ctx, ctx.sels[n.sub].tree)?;
+        let comb = opt_str(n.name);
+        if comb == " " {
+            join(mut x, "[descendant::", right, "]", true);
+        } else if comb == ">" {
+            join(mut x, "[./", right, "]", false);
+        } else if comb == "+" {
+            let c = f"following-sibling::*[(name() = '{right.element}') and (position() = 1)]";
+            add_condition(mut x, c, "and");
+        } else if comb == "~" {
+            join(mut x, "[following-sibling::", right, "]", false);
+        } else {
+            // combinator_mapping has no "-"
+            return Err(py_err("KeyError", py_repr(comb)));
+        }
+        return Ok(x);
+    }
+    if k == K_MATCHING or k == K_ADJUST {
+        let mut x = xpath(tr, ctx, n.sel)?;
+        let mut exprs: Vec[X] = Vec.new();
+        for j in n.list.iter() {
+            exprs.push(xpath(tr, ctx, *j)?);
+        }
+        for e in exprs.iter() {
+            let mut e2 = e.clone();
+            add_name_test(mut e2);
+            if e2.condition.len() > 0 {
+                add_condition(mut x, e2.condition, "or");
+            }
+        }
+        return Ok(x);
+    }
+    if k == K_FUNCTION {
+        return xpath_function(tr, ctx, n);
+    }
+    if k == K_PSEUDO {
+        return xpath_pseudo(tr, ctx, n);
+    }
+    if k == K_ATTRIB {
+        return xpath_attrib(tr, ctx, n);
+    }
+    let mut x = xpath(tr, ctx, n.sel)?;
+    let name = opt_str(n.name);
+    if k == K_CLASS {
+        attrib_includes(mut x, "@class".to_string(), Some(name));
+    } else {
+        attrib_equals(mut x, "@id".to_string(), name);
+    }
+    Ok(x)
+}
+
+fn xpath_element(tr: ref Tr, n: ref Node) -> X {
+    let mut element = "*".to_string();
+    let mut safe = true;
+    if let Some(e) = n.name.clone() {
+        safe = is_safe_name(e);
+        element = if tr.html { e.to_lowercase() } else { e };
+    }
+    if let Some(ns) = n.ns.clone() {
+        if ns.len() > 0 {
+            element = f"{ns}:{element}";
+            safe = safe and is_safe_name(ns);
+        }
+    }
+    let mut x = xexpr(element);
+    if not safe {
+        add_name_test(mut x);
+    }
+    x
+}
+
+fn xpath_attrib(tr: ref Tr, ctx: ref Ctx, n: ref Node) -> Result[X, PyErr] {
+    let raw = opt_str(n.name);
+    let mut name = if tr.html { raw.to_lowercase() } else { raw };
+    let mut safe = is_safe_name(name);
+    if let Some(ns) = n.ns.clone() {
+        if ns.len() > 0 {
+            name = f"{ns}:{name}";
+            safe = safe and is_safe_name(ns);
+        }
+    }
+    let attrib = if safe { f"@{name}" } else { f"attribute::*[name() = {xpath_literal(name)}]" };
+    let value: Option[String] = match n.value.clone() {
+        Some(t) => Some(t.value),
+        None => None,
+    };
+    let mut x = xpath(tr, ctx, n.sel)?;
+    let v = match value.clone() {
+        Some(s) => s,
+        None => String.new(),
+    };
+    let op = n.op.clone();
+    if op == "exists" {
+        add_condition(mut x, attrib, "and");
+    } else if op == "=" {
+        attrib_equals(mut x, attrib, v);
+    } else if op == "!=" {
+        let lit = xpath_literal(v);
+        let c = if v.len() > 0 { f"not({attrib}) or {attrib} != {lit}" } else { f"{attrib} != {lit}" };
+        add_condition(mut x, c, "and");
+    } else if op == "~=" {
+        attrib_includes(mut x, attrib, value);
+    } else if op == "|=" {
+        let dashed = f"{v}-";
+        let c = f"{attrib} and ({attrib} = {xpath_literal(v)} or starts-with({attrib}, {xpath_literal(dashed)}))";
+        add_condition(mut x, c, "and");
+    } else if v.len() == 0 {
+        add_cond(mut x, "0");
+    } else if op == "^=" {
+        let c = f"{attrib} and starts-with({attrib}, {xpath_literal(v)})";
+        add_condition(mut x, c, "and");
+    } else if op == "$=" {
+        let c = f"{attrib} and substring({attrib}, string-length({attrib})-{char_count(v) - 1}) = {xpath_literal(v)}";
+        add_condition(mut x, c, "and");
+    } else {
+        let c = f"{attrib} and contains({attrib}, {xpath_literal(v)})";
+        add_condition(mut x, c, "and");
+    }
+    Ok(x)
+}
+
+fn attrib_equals(x: mut ref X, name: ref String, value: ref String) {
+    let c = f"{name} = {xpath_literal(value)}";
+    add_condition(mut x, c, "and");
+}
+
+fn attrib_includes(x: mut ref X, name: ref String, value: ref Option[String]) {
+    let v = match value.clone() {
+        Some(s) => s,
+        None => String.new(),
+    };
+    if v.len() > 0 and is_non_whitespace(v) {
+        let spaced = f" {v} ";
+        let c = f"{name} and contains(concat(' ', normalize-space({name}), ' '), {xpath_literal(spaced)})";
+        add_condition(mut x, c, "and");
+    } else {
+        add_cond(mut x, "0");
+    }
+}
+
+fn xpath_function(tr: ref Tr, ctx: ref Ctx, n: ref Node) -> Result[X, PyErr] {
+    let name = opt_str(n.name);
+    let m = replace_dash(name);
+    let known = m == "nth_child" or m == "nth_last_child" or m == "nth_of_type" or m == "nth_last_of_type"
+        or m == "contains" or m == "lang";
+    if not known {
+        return Err(expr_err(f"The pseudo-class :{name}() is unknown"));
+    }
+    let mut x = xpath(tr, ctx, n.sel)?;
+    if m == "nth_child" {
+        nth_child(mut x, n.args, false, true)?;
+    } else if m == "nth_last_child" {
+        nth_child(mut x, n.args, true, true)?;
+    } else if m == "nth_of_type" or m == "nth_last_of_type" {
+        if x.element == "*" {
+            return Err(expr_err("*:nth-of-type() is not implemented".to_string()));
+        }
+        nth_child(mut x, n.args, m == "nth_last_of_type", false)?;
+    } else {
+        if not single_string_or_ident(n.args) {
+            return Err(expr_err(f"Expected a single string or ident for :{m}(), got {tok_list_repr(n.args)}"));
+        }
+        let value = n.args[0].value.clone();
+        if m == "contains" {
+            let c = f"contains(., {xpath_literal(value)})";
+            add_condition(mut x, c, "and");
+        } else if tr.html {
+            let prefix = f"{value.to_lowercase()}-";
+            let c = f"ancestor-or-self::*[@lang][1][starts-with(concat(translate(@lang, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '-'), {xpath_literal(prefix)})]";
+            add_condition(mut x, c, "and");
+        } else {
+            let c = f"lang({xpath_literal(value)})";
+            add_condition(mut x, c, "and");
+        }
+    }
+    Ok(x)
+}
+
+fn nth_child(x: mut ref X, args: ref Vec[Tok], last: bool, add_name: bool) -> Result[(), PyErr] {
+    let (a, b) = match parse_series(args) {
+        Some(ab) => ab,
+        None => return Err(expr_err(f"Invalid series: '{tok_list_repr(args)}'")),
+    };
+    let b_min_1 = b - 1;
+    if a == 1 and b_min_1 <= 0 {
+        return Ok(());
+    }
+    if a < 0 and b_min_1 < 0 {
+        add_cond(mut x, "0");
+        return Ok(());
+    }
+    let nodetest = if add_name { "*".to_string() } else { x.element.clone() };
+    let siblings_count = if not last {
+        f"count(preceding-sibling::{nodetest})"
+    } else {
+        f"count(following-sibling::{nodetest})"
+    };
+    if a == 0 {
+        let c = f"{siblings_count} = {b_min_1}";
+        add_condition(mut x, c, "and");
+        return Ok(());
+    }
+    let mut expressions: Vec[String] = Vec.new();
+    if a > 0 {
+        if b_min_1 > 0 {
+            expressions.push(f"{siblings_count} >= {b_min_1}");
+        }
+    } else {
+        expressions.push(f"{siblings_count} <= {b_min_1}");
+    }
+    if abs_i(a) != 1 {
+        let mut left = siblings_count.clone();
+        let b_neg = py_mod(0 - b_min_1, abs_i(a));
+        if b_neg != 0 {
+            left = f"({left} +{b_neg})";
+        }
+        expressions.push(f"{left} mod {a} = 0");
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for e in expressions.iter() {
+        if expressions.len() > 1 {
+            parts.push(f"({e})");
+        } else {
+            parts.push(e.clone());
+        }
+    }
+    let c = join_strs(parts, " and ");
+    add_condition(mut x, c, "and");
+    Ok(())
+}
+
+fn xpath_pseudo(tr: ref Tr, ctx: ref Ctx, n: ref Node) -> Result[X, PyErr] {
+    let ident = opt_str(n.name);
+    let m = replace_dash(ident);
+    let never = m == "visited" or m == "hover" or m == "active" or m == "focus" or m == "target"
+        or (not tr.html and (m == "link" or m == "enabled" or m == "disabled" or m == "checked"));
+    let known = never or m == "root" or m == "scope" or m == "first_child" or m == "last_child"
+        or m == "first_of_type" or m == "last_of_type" or m == "only_child" or m == "only_of_type"
+        or m == "empty" or m == "link" or m == "enabled" or m == "disabled" or m == "checked";
+    if not known {
+        return Err(expr_err(f"The pseudo-class :{ident} is unknown"));
+    }
+    let mut x = xpath(tr, ctx, n.sel)?;
+    let el = x.element.clone();
+    if never {
+        add_cond(mut x, "0");
+    } else if m == "root" {
+        add_cond(mut x, "not(parent::*)");
+    } else if m == "scope" {
+        add_cond(mut x, "1");
+    } else if m == "first_child" {
+        add_cond(mut x, "count(preceding-sibling::*) = 0");
+    } else if m == "last_child" {
+        add_cond(mut x, "count(following-sibling::*) = 0");
+    } else if m == "first_of_type" {
+        if el == "*" {
+            return Err(expr_err("*:first-of-type is not implemented".to_string()));
+        }
+        let c = f"count(preceding-sibling::{el}) = 0";
+        add_condition(mut x, c, "and");
+    } else if m == "last_of_type" {
+        if el == "*" {
+            return Err(expr_err("*:last-of-type is not implemented".to_string()));
+        }
+        let c = f"count(following-sibling::{el}) = 0";
+        add_condition(mut x, c, "and");
+    } else if m == "only_child" {
+        add_cond(mut x, "count(parent::*/child::*) = 1");
+    } else if m == "only_of_type" {
+        if el == "*" {
+            return Err(expr_err("*:only-of-type is not implemented".to_string()));
+        }
+        let c = f"count(parent::*/child::{el}) = 1";
+        add_condition(mut x, c, "and");
+    } else if m == "empty" {
+        add_cond(mut x, "not(*) and not(string-length())");
+    } else if m == "checked" {
+        add_cond(mut x, HTML_CHECKED);
+    } else if m == "link" {
+        add_cond(mut x, "@href and (name(.) = 'a' or name(.) = 'link' or name(.) = 'area')");
+    } else if m == "disabled" {
+        add_cond(mut x, HTML_DISABLED);
+    } else {
+        add_cond(mut x, HTML_ENABLED);
+    }
+    Ok(x)
+}
+
+// ---------------------------------------------------------------- the run
+
+struct Item {
+    line: i64,
+    label: String,
+    css: String,
+}
+
+fn lines_of(text: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in text.chars() {
+        if c == '\n' {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// "name = selector" lines; # starts a comment
+fn spider_entries(text: ref String) -> Vec[Item] {
+    let mut out: Vec[Item] = Vec.new();
+    let ls = lines_of(text);
+    for i in 0..ls.len() {
+        let line = ls[i].clone();
+        if line.trim().len() == 0 or line.starts_with("#") {
+            continue;
+        }
+        let cs: Vec[char] = line.chars().collect();
+        let mut at = 0;
+        while at + 3 <= cs.len() and not (cs[at] == ' ' and cs[at + 1] == '=' and cs[at + 2] == ' ') {
+            at += 1;
+        }
+        let name = slice_chars(cs, 0, at);
+        let sel = slice_chars(cs, at + 3, cs.len());
+        out.push(Item { line: i + 1, label: f"{name} = {sel}", css: sel });
+    }
+    out
+}
+
+// The selectors of a stylesheet: the text before each "{", with the
+// lines before it that end in a comma; at-rules, comments on their own
+// line and declarations are skipped.
+fn css_entries(text: ref String) -> Vec[Item] {
+    let mut out: Vec[Item] = Vec.new();
+    let mut pending = String.new();
+    let mut start = 0;
+    let ls = lines_of(text);
+    for i in 0..ls.len() {
+        let s = ls[i].trim().to_string();
+        if s.len() == 0 or s == "}" or s.starts_with("@") {
+            continue;
+        }
+        if s.starts_with("/*") and s.ends_with("*/") {
+            continue;
+        }
+        if has_char(s, '{') {
+            if pending.len() == 0 {
+                start = i + 1;
+            }
+            let cs: Vec[char] = s.chars().collect();
+            let mut at = 0;
+            while cs[at] != '{' {
+                at += 1;
+            }
+            let sel = f"{pending}{slice_chars(cs, 0, at)}".trim().to_string();
+            pending = String.new();
+            out.push(Item { line: start, label: sel.clone(), css: sel });
+        } else if s.ends_with(",") {
+            if pending.len() == 0 {
+                start = i + 1;
+            }
+            pending.push_str(s);
+            pending.push(' ');
+        }
+    }
+    out
+}
+
+fn line_entries(text: ref String) -> Vec[Item] {
+    let mut out: Vec[Item] = Vec.new();
+    let ls = lines_of(text);
+    for i in 0..ls.len() {
+        if ls[i].len() > 0 {
+            out.push(Item { line: i + 1, label: ls[i].clone(), css: ls[i].clone() });
+        }
+    }
+    out
+}
+
+fn translate(tr: ref Tr, css: ref String) -> String {
+    let mut ctx = new_ctx();
+    match css_to_xpath(tr, mut ctx, css) {
+        Ok(x) => x,
+        Err(e) => f"error {err_text(e)}",
+    }
+}
+
+struct Ranked {
+    spec: Spec,
+    canon: String,
+}
+
+fn read_data(rel: ref String) -> Result[String, String] {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"cannot read {rel}: {e}"),
+    }
+}
+
+fn parent_dir(path: ref String) -> String {
+    let cs: Vec[char] = path.chars().collect();
+    let mut i = cs.len();
+    while i > 0 and cs[i - 1] != '/' {
+        i -= 1;
+    }
+    if i == 0 { String.new() } else { slice_chars(cs, 0, i - 1) }
+}
+
+fn write_data() -> Result[(), String] {
+    for (name, text) in data_files().into_iter() {
+        let path = f"data/{name}";
+        let dir = parent_dir(path);
+        if let Err(e) = fs.create_dir_all(dir.clone()) {
+            return Err(f"cannot create {dir}: {e}");
+        }
+        if let Err(e) = fs.write(path.clone(), text) {
+            return Err(f"cannot write {path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    let mut files: Vec[(String, Vec[Item])] = Vec.new();
+    let mut names = match fs.read_dir("data/spiders".to_string()) {
+        Ok(v) => v,
+        Err(e) => return Err(f"cannot list data/spiders: {e}"),
+    };
+    names.sort();
+    for name in names.iter() {
+        let rel = f"spiders/{name}";
+        let text = read_data(rel)?;
+        files.push((rel, spider_entries(text)));
+    }
+    files.push(("theme.css".to_string(), css_entries(read_data("theme.css".to_string())?)));
+    files.push(("broken.txt".to_string(), line_entries(read_data("broken.txt".to_string())?)));
+
+    let generic = Tr { html: false, parsel: false };
+    let html = Tr { html: true, parsel: false };
+    let parsel = Tr { html: true, parsel: true };
+    let mut summary: Vec[String] = Vec.new();
+    let mut cascade: Vec[Ranked] = Vec.new();
+    for (rel, entries) in files.iter() {
+        println(f"== {rel}");
+        let mut perrs = 0;
+        let mut terrs = 0;
+        for e in entries.iter() {
+            println(f"{rel}:{e.line} {e.label}");
+            let mut ctx = new_ctx();
+            let sels = match parse(mut ctx, e.css) {
+                Ok(v) => v,
+                Err(err) => {
+                    println(f"  error: {err_text(err)}");
+                    perrs += 1;
+                    continue;
+                }
+            };
+            for i in sels.iter() {
+                println(f"  tree: {sel_repr(ctx, *i)}");
+                let canon = sel_canonical(ctx, *i);
+                let sp = sel_specificity(ctx, *i);
+                println(f"  canonical: {canon}  specificity: {spec_str(sp)}");
+                if rel == "theme.css" {
+                    cascade.push(Ranked { spec: sp, canon: canon });
+                }
+            }
+            let g = translate(generic, e.css);
+            let h = translate(html, e.css);
+            let p = translate(parsel, e.css);
+            println(f"  generic: {g}");
+            if h == g {
+                println("  html: = generic");
+            } else {
+                println(f"  html: {h}");
+            }
+            if p == h {
+                println("  parsel: = html");
+            } else {
+                println(f"  parsel: {p}");
+            }
+            if p.starts_with("error ") {
+                terrs += 1;
+            }
+        }
+        summary.push(f"{rel}: {entries.len()} selectors, {perrs} parse errors, {terrs} translation errors");
+    }
+    println("== summary");
+    for s in summary.iter() {
+        println(s);
+    }
+    println("== cascade (theme.css, by specificity)");
+    // sorted() by specificity: a stable insertion sort
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..cascade.len() {
+        let mut at = order.len();
+        while at > 0 and spec_lt(cascade[i].spec, cascade[order[at - 1]].spec) {
+            at -= 1;
+        }
+        order.insert(at, i);
+    }
+    for i in order.iter() {
+        let r = ref cascade[*i];
+        println(f"{spec_str(r.spec)} {r.canon}");
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        println(f"error: {e}");
+    }
+}
+
+// ---------------------------------------------------------------- data
+// Generated by gen_kara.py.
+
+fn file_0_0(out: mut ref String) {
+    out.push_str("div >\u{a}.\u{a}#\u{a}a[href\u{a}a[href=]\u{a}a[=\"x\"]\u{a}a[href~x]\u{a}a[*]\u{a}a[|href]\u{a}a[x=\"y\" i]\u{a}div::text p\u{a}p::text::text\u{a}:not(:not(a))\u{a}p:not(::before)\u{a}:is(p::before)\u{a}a:nth-child(foo)\u{a}a:nth-child(\"2\")\u{a}a:nth-child(1.5)\u{a}li:nth-child(2N+1)\u{a}\"unclosed\u{a}a[title=\"bad\\\u{a}p:unknown-thing\u{a}p:frobnicate(1)\u{a}:is(a,b)\u{a}:is(a\u{a}:has(a b)\u{a}li:has(- a)\u{a}li:has(#x)\u{a}a:contains(1)\u{a}p:lang(en, fr)\u{a}p:lang(en fr)\u{a}div:scope\u{a}a, :scope p\u{a}div ::attr(1)\u{a}a::attr");
+    out.push_str("\u{a}a::attr(href, title)\u{a}::selection\u{a}::foo(bar)\u{a},a\u{a}a,\u{a}a b ,, c\u{a}a:not(b c)\u{a}a:has()\u{a}:nth-child\u{a}p::text:hover\u{a}");
+}
+
+fn file_0() -> String {
+    let mut out = String.new();
+    file_0_0(mut out);
+    out
+}
+
+fn file_1_0(out: mut ref String) {
+    out.push_str("# books.toscrape.com: catalogue and detail pages\u{a}list.item = article.product_pod\u{a}list.title = article.product_pod h3 > a::attr(title)\u{a}list.link = h3 a::attr(href)\u{a}list.price = .product_price .price_color::text\u{a}list.stock = p.instock.availability::text\u{a}list.rating = p.star-rating::attr(class)\u{a}list.next = li.next > a::attr(href)\u{a}detail.title = div.product_main > h1::text\u{a}detail.upc = table.table-str");
+    out.push_str("iped tr:nth-child(1) > td::text\u{a}detail.desc = #product_description + p::text\u{a}detail.crumbs = ul.breadcrumb li:not(.active) a::text\u{a}detail.image = #product_gallery img::attr(src)\u{a}detail.all = div.product_main h1, div.product_main p.price_color\u{a}");
+}
+
+fn file_1() -> String {
+    let mut out = String.new();
+    file_1_0(mut out);
+    out
+}
+
+fn file_2_0(out: mut ref String) {
+    out.push_str("# a job board with data attributes\u{a}card = li[data-job-id]\u{a}remote = li[data-job-id]:has(> span.remote)\u{a}title = li[data-job-id] :is(h2, h3) > a::text\u{a}salary = [data-testid=\"salary\"]::text\u{a}posted = time[datetime]::attr(datetime)\u{a}english = div:lang(en) p\u{a}french = article:lang(\"fr-CA\")::text\u{a}no.ads = li:not([data-sponsored]) a.job-link::attr(href)\u{a}odd.rows = tr:nth-child(odd) td:first-of-type::text\u{a}las");
+    out.push_str("t = ul.results > li:last-child\u{a}every3 = tbody tr:nth-child(3n+2)\u{a}tail = tbody tr:nth-last-child(-n+3)\u{a}first3 = ol > li:nth-child(-n + 3)\u{a}even = tr:nth-of-type(even)\u{a}fixed = tr:nth-child(0n+5)\u{a}none = tr:nth-child(-2n-1)\u{a}from4 = tr:nth-last-of-type(n+4)\u{a}loose = tr:nth-child( 2n - 1 )\u{a}step = tr:nth-child(-3n+8)\u{a}company = div.company:has(img.logo)\u{a}next.job = h2.title:has(+ p)\u{a}later = h2:has(~ footer)\u{a}");
+}
+
+fn file_2() -> String {
+    let mut out = String.new();
+    file_2_0(mut out);
+    out
+}
+
+fn file_3_0(out: mut ref String) {
+    out.push_str("# quotes.toscrape.com\u{a}quote = div.quote\u{a}text = div.quote span.text::text\u{a}author = small.author::text\u{a}tags = div.tags a.tag::text\u{a}about = .quote span a[href*=\"/author/\"]::attr(href)\u{a}next = li.next a::attr(\"href\")\u{a}login.csrf = form input[name=csrf_token]::attr(value)\u{a}login.user = FORM INPUT[Name='username']\u{a}top.tags = div.tags-box span.tag-item > a.tag::TEXT\u{a}");
+}
+
+fn file_3() -> String {
+    let mut out = String.new();
+    file_3_0(mut out);
+    out
+}
+
+fn file_4_0(out: mut ref String) {
+    out.push_str("# a shop with microdata\u{a}price = span[itemprop=price]::attr(content)\u{a}sku = [itemprop~=sku]\u{a}alt.lang = link[hreflang|=en]::attr(href)\u{a}pdfs = a[href$=\".pdf\"]::attr(href)\u{a}external = a[href^=\"http\"]:not([href*=\"example.com\"])::attr(href)\u{a}empty.cells = td:empty\u{a}picked = input:checked::attr(name)\u{a}disabled = button:disabled\u{a}enabled = input:enabled\u{a}links = :link\u{a}visited = a:visited\u{a}only = ul > li:only-chil");
+    out.push_str("d\u{a}only.type = dl dt:only-of-type\u{a}siblings = h2 ~ p\u{a}apos = q[title='It\\'s']\u{a}total = td:contains(\"Total\")::text\u{a}owner = td:contains(\"Joe's\")\u{a}quote = td:contains('say \"hi\"')\u{a}mixed = td:contains('Joe\\'s \"best\"')\u{a}svg = svg|rect\u{a}svg.any = svg|*\u{a}xlink = use[xlink|href]::attr(xlink:href)\u{a}any.ns = *|*\u{a}no.ns = |div\u{a}upper = DIV.Item > A[HREF]\u{a}nav = :where(nav, footer) a\u{a}scope = :scope > div::text\u{a}root = :roo");
+    out.push_str("t > body\u{a}not.star = div:not(*)\u{a}not.p = div:not(p)\u{a}blank = a[title=\"\"]\u{a}not.eq = a[rel!=nofollow]\u{a}not.empty = a[rel!=\"\"]\u{a}hyphen = a[class|=btn]\u{a}word.empty = a[class~=\"\"]\u{a}word.space = a[class~=\"a b\"]\u{a}prefix.empty = a[href^=\"\"]\u{a}attr.ns = [*|lang]\u{a}escaped = #\\31 23 > .\\@media\u{a}unicode = p.caf\\E9 ::text\u{a}japanese = 日本語 > span.名前\u{a}comment = ul /* the menu */ > li\u{a}");
+}
+
+fn file_4() -> String {
+    let mut out = String.new();
+    file_4_0(mut out);
+    out
+}
+
+fn file_5_0(out: mut ref String) {
+    out.push_str("/* site theme */\u{a}html, body {\u{a}  margin: 0;\u{a}}\u{a}@media (max-width: 600px) {\u{a}  .nav > li + li { display: none }\u{a}}\u{a}a:hover,\u{a}a:focus-visible {\u{a}  text-decoration: underline;\u{a}}\u{a}.btn.btn-primary:not(.disabled):active { color: white }\u{a}#main .card:nth-of-type(2n) { margin-left: 1em }\u{a}input[type=\"checkbox\"]:checked + label::before { content: \"x\" }\u{a}p::first-line { font-weight: bold }\u{a}ul li:first-child:after { ");
+    out.push_str("content: \"\" }\u{a}h1 ~ p:first-of-type { margin-top: 0 }\u{a}*:nth-of-type(2) { color: red }\u{a}table td:nth-child(even) { background: #eee }\u{a}.grid > :is(.col, .cell):where(.wide) { flex: 2 }\u{a}div:is(.alert) { padding: 4px }\u{a}article:has(+ aside) { width: 70% }\u{a}section:has(~ footer) { border: 0 }\u{a}nav:has(a.active) { font-weight: bold }\u{a}#app #sidebar ul.menu > li.item:hover a { color: blue }\u{a}::selection { backg");
+    out.push_str("round: yellow }\u{a}form :is(input, select, textarea):disabled { opacity: 0.5 }\u{a}*:first-of-type { color: green }\u{a}li:first_child { list-style: none }\u{a}");
+}
+
+fn file_5() -> String {
+    let mut out = String.new();
+    file_5_0(mut out);
+    out
+}
+
+// (path under data/, contents)
+fn data_files() -> Vec[(String, String)] {
+    let mut v: Vec[(String, String)] = Vec.new();
+    v.push(("broken.txt".to_string(), file_0()));
+    v.push(("spiders/books.cfg".to_string(), file_1()));
+    v.push(("spiders/jobs.cfg".to_string(), file_2()));
+    v.push(("spiders/quotes.cfg".to_string(), file_3()));
+    v.push(("spiders/shop.cfg".to_string(), file_4()));
+    v.push(("theme.css".to_string(), file_5()));
+    v
+}
