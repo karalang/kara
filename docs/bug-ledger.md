@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 291 |
 | codegen-gap | 277 |
 | false-positive | 250 |
-| other | 184 |
+| other | 185 |
 | perf | 180 |
 | diagnostics | 175 |
 | crash | 125 |
@@ -112,12 +112,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2967 |
 | interp | 985 |
-| typecheck | 504 |
+| typecheck | 505 |
 | ownership | 123 |
 | other | 121 |
 | cli | 81 |
 | runtime | 80 |
-| parser | 72 |
+| parser | 73 |
 | autopar | 59 |
 | resolver | 48 |
 | effect | 37 |
@@ -165,15 +165,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-36 | 2026-10-19 | ownership | low | `karac check` accepts copying a MutFn closure: `let mut f = || { n += 1; }; let mut g = f; f();` has no E0500, although a MutFn is never Copy; both MIR backends refuse it | — |
 | B-2026-10-19-37 | 2026-10-19 | ownership | medium | `karac check` refuses ref-returning methods §5.4 allows: `fn first(self|ref self) -> ref String { self.items[0] }` is E0515 and `m.get(k).unwrap_or("")` is E0509 'borrow-return form not yet supported'; the core pin ok_ref_self_wins fails check; both MIR backends run all of them | — |
 | B-2026-10-19-38 | 2026-10-19 | typecheck | low | `karac check` refuses calling a returned capturing closure directly as a call result, `(pick(10))(p(4))` ('a returned capturing closure can currently be CALLED in the function that binds it'); both MIR backends run it | — |
-| B-2026-10-19-40 | 2026-10-19 | effect | medium | `karac check` rejects a printing closure passed to a non-escaping `Fn` parameter with E0404 'argument 1 has effect writes(Stdout) not declared in slot [pure]', although a non-escaping parameter takes the argument's effects; both MIR backends run it | — |
-| B-2026-10-19-41 | 2026-10-19 | effect | medium | `karac check` forbids a panicking Drop body (E0417 'a `Drop` impl must be `panics`-free'), contradicting §7.11 and Amendment 7; both MIR backends run it and exit 101 | — |
 | B-2026-10-19-43 | 2026-10-19 | ownership+typecheck | medium | §5.7's 'where a view may not go' is not enforced: a view stored in a shared field, sent through a channel, or captured by a closure stored in a struct or a shared field is accepted by `karac check` and both MIR backends (when the origin outlives it); §5.8's instance check is also absent from check | — |
 | B-2026-10-19-44 | 2026-10-19 | interp+codegen | high | SOUNDNESS: `karac build --mir` and `__mir-llvm-run` accept a function that returns a struct holding a closure over a view of its own local (`let r = ref s; Holder { f: || r.len() }`), and the compiled program reads freed stack memory (prints 140590165209599); `__mir-run` stops at run time with 'dangling reference' | — |
 | B-2026-10-19-45 | 2026-10-19 | ownership+interp+codegen | medium | `for x in v { x += 1; }` over a `Vec[i64]` is accepted by `karac check` and both MIR backends and silently changes nothing (also with `let mut v`), although the item of `for x in c` is read-only | — |
 | B-2026-10-19-46 | 2026-10-19 | ownership+effect+interp+codegen | medium | SOUNDNESS: a plain `shared` handle enters `par` branches with no E_NOT_CROSS_TASK on `karac check` or either MIR backend, including a branch that counts it into an `own` parameter while a sibling writes its `mut` field | — |
 | B-2026-10-19-48 | 2026-10-19 | ownership+interp+codegen | medium | Disjoint field capture is not implemented: a closure reading `p.a` holds a borrow that blocks writing `p.b` (E0516) on `karac check` and the MIR borrow checker, for String and for Copy fields | — |
 | B-2026-10-19-49 | 2026-10-19 | typecheck+ownership | low | A MutFn is callable through a bare (borrowed) parameter: `fn call(f: MutFn()) { f(); }` is accepted by `karac check` and both MIR backends, although under D5 a bare parameter is a shared borrow | — |
-| B-2026-10-19-50 | 2026-10-19 | parser+typecheck | low | Removed spellings are still accepted: `par struct` (renamed `sync struct`) and the `with _` annotation compile and run on every surface, and diagnostics about a `sync struct` still call it a `par struct` | — |
 | B-2026-10-19-51 | 2026-10-19 | interp+codegen | medium | On both MIR backends an argument moved through a trait bound into an impl that borrows it drops at the end of the generic function, not at the end of the call's statement | — |
 | B-2026-10-19-52 | 2026-10-19 | interp+codegen | medium | On both MIR backends a `let ... else` initializer's temporaries drop after the else block runs instead of before it | — |
 | B-2026-10-19-53 | 2026-10-19 | interp+codegen | medium | On both MIR backends a nested index read `v[p(1)][p(0)]` evaluates the outer index `p(0)` before the inner one `p(1)`; the same place as an assignment target is evaluated in order | — |
@@ -187,6 +184,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-67 | 2026-10-19 | other | low | Atomic operations require a `MemoryOrdering` argument (B-2026-06-30-5, legacy era) although docs/library/concurrency.md and deferred.md say v1 atomics are SeqCst with no ordering argument: the IMPLEMENTATION is stale, not the doc (corrected 10-19 from 'the library doc is stale') | — |
 | B-2026-10-19-70 | 2026-10-19 | interp | medium | `karac __mir-run` copies a whole `Array` on each index or `len()`: a loop over `[0i64; 50000]` takes 25 s, against 0.95 s for `Vec.filled(50000, 0i64)` | — |
 | B-2026-10-20-1 | 2026-10-20 | typecheck | low | A tuple literal that holds a string literal, passed to a method or generic-function parameter whose type is a tuple with a `Str` slot, is still typed `(String, ...)`: `let mut v: Vec[(Str, Str)] = Vec.new(); v.push(("a", "b"));` is refused with "expected '(StringSlice, StringSlice)', found '(String, String)'" (remainder of B-2026-10-14-68) | — |
+| B-2026-10-20-2 | 2026-10-20 | parser+typecheck | low | `par struct` and `par enum` are still accepted although Amendment 6 renamed them `sync struct` and `sync enum`, and E0257 about a `sync struct` still calls it a `par struct` (the remainder of B-2026-10-19-50 once its `with _` half was fixed) | — |
 
 ### Relocated
 
@@ -4242,8 +4240,11 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-31 | interp+codegen | medium | When a user enum has a variant named `None` (enum V { None, Int(i64) }), a bare `None` passed to a `ref Option[T]` parameter lowers to `Option.Some {… | 9164527fff |
 | B-2026-10-19-33 | typecheck | low | `karac check` accepts `v.extend(rest)` where `rest` is a bare (borrowed) `Vec[T]` parameter, which the MIR builder then refuses ("cannot move a non-`… | bf39a5b5e3 |
 | B-2026-10-19-39 | effect | medium | `karac check` misses par-branch conflicts that the MIR effect pass reports: two printing branches (writes(Stdout)), two sends on one channel, calls t… | 818c6a56af |
+| B-2026-10-19-40 | effect | medium | `karac check` rejects a printing closure passed to a non-escaping `Fn` parameter with E0404 'argument 1 has effect writes(Stdout) not declared in slo… | ffb21df474 |
+| B-2026-10-19-41 | effect | medium | `karac check` forbids a panicking Drop body (E0417 'a `Drop` impl must be `panics`-free'), contradicting §7.11 and Amendment 7; both MIR backends run… | ffb21df474 |
 | B-2026-10-19-42 | typecheck | medium | A struct pattern over a `shared struct` is reported non-exhaustive (E0205 'pattern `_` not covered') by `karac check` and the MIR typecheck: `match h… | c17a708910 |
 | B-2026-10-19-47 | effect+interp+codegen | medium | Place conflicts between `par` branches are not detected on MIR: two comma-separated branches each pushing to one local `Vec` run on both MIR backends… | 818c6a56af |
+| B-2026-10-19-50 | parser+typecheck | low | Removed spellings are still accepted: `par struct` (renamed `sync struct`) and the `with _` annotation compile and run on every surface, and diagnost… | ffb21df474 |
 | B-2026-10-19-56 | interp | low | `__mir-run` reports a channel deadlock as a run error with exit 3 instead of a panic with exit 101 (`__mir-llvm-run` exits 101) | 39c49483ba |
 | B-2026-10-19-60 | parser | low | The empty-map literal `[:]` does not parse: `let mut m: Map[String, String] = [:];` is E0002 'Expected expression, found Colon' on every surface | 3818051dfc |
 | B-2026-10-19-62 | other | low | SPEC: §4.6 and §3.7/§5.1 disagree on `let s = h.name;` where `h` is a `shared` value: §4.6 puts `let` under its rules and says a plain binding of a p… | ead44c4e9c |
