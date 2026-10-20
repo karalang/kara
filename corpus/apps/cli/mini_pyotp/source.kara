@@ -1,0 +1,4006 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters property files hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or n == 0xfffe or n == 0xffff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+// ------------------------------------------------------------ int()
+//
+// Python's int() of a str, as parse_uri runs it on digits, period and
+// counter (from mini_sexpdata).
+
+// The non-ASCII characters str.isspace() is true for.
+fn uni_space(c: char) -> bool {
+    let n = c as i64;
+    n == 0x85 or n == 0xa0 or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029
+        or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+// The value of a Unicode decimal digit (category Nd), or -1. Each block
+// of ten digits starts at one of these zeros (Unicode 15.1, as Python
+// 3.13 has it).
+fn uni_digit(c: char) -> i64 {
+    let zeros: Vec[i64] = vec![
+        0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6,
+        0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xde6, 0xe50, 0xed0,
+        0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80,
+        0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900,
+        0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x11066,
+        0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0,
+        0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60,
+        0x16ac0, 0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140,
+        0x1e2f0, 0x1e4f0, 0x1e950, 0x1fbf0,
+    ];
+    let n = c as i64;
+    for z in zeros.iter() {
+        if n >= *z and n < *z + 10 {
+            return n - *z;
+        }
+    }
+    -1
+}
+
+fn is_ascii_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn ascii_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}'
+}
+
+// What float() and int() do first: Unicode white space becomes a space
+// and a Unicode decimal digit its ASCII digit; any other non-ASCII
+// character makes the text invalid. Then the white space at the ends is
+// stripped and underscores between digits removed.
+fn number_text(cs: ref Vec[char]) -> Option[Vec[char]] {
+    let mut t: Vec[char] = Vec.new();
+    for c in cs.iter() {
+        let n = *c as u32;
+        if n < 128 {
+            t.push(*c);
+        } else if uni_space(*c) {
+            t.push(' ');
+        } else if uni_digit(*c) >= 0 {
+            t.push(char.try_from(48 + uni_digit(*c) as u32).unwrap_or('?'));
+        } else {
+            return None;
+        }
+    }
+    let mut a = 0;
+    while a < t.len() and ascii_space(t[a]) {
+        a += 1;
+    }
+    let mut b = t.len();
+    while b > a and ascii_space(t[b - 1]) {
+        b -= 1;
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut prev = ' ';
+    for i in a..b {
+        let c = t[i];
+        if c == '_' {
+            if not is_ascii_digit(prev) {
+                return None;
+            }
+        } else {
+            if prev == '_' and not is_ascii_digit(c) {
+                return None;
+            }
+            out.push(c);
+        }
+        prev = c;
+    }
+    if prev == '_' {
+        return None;
+    }
+    Some(out)
+}
+
+// The digits of an int, with a '-' when it is below zero.
+fn norm_int(neg: bool, ds: ref Vec[char]) -> String {
+    let mut s = String.new();
+    let mut started = false;
+    for c in ds.iter() {
+        if *c != '0' {
+            started = true;
+        }
+        if started {
+            s.push(*c);
+        }
+    }
+    if not started {
+        return "0".to_string();
+    }
+    if neg { f"-{s}" } else { s }
+}
+
+// int() of a str; None where it raises ValueError.
+fn py_int(cs: ref Vec[char]) -> Option[String] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i == t.len() {
+        return None;
+    }
+    let mut ds: Vec[char] = Vec.new();
+    while i < t.len() {
+        if not is_ascii_digit(t[i]) {
+            return None;
+        }
+        ds.push(t[i]);
+        i += 1;
+    }
+    Some(norm_int(neg, ds))
+}
+// ------------------------------------------------------------ urllib.parse (from mini_urlparse)
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// A word character, as `\w` and `\b` see it.
+fn is_word(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c >= 128
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for i in 0..v.len() {
+        if v[i] == s {
+            return true;
+        }
+    }
+    false
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    py_repr_str(s.to_string())
+}
+
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+
+fn byte_at(s: Str, i: i64) -> u8 {
+    let b = to_bytes(s);
+    if i >= 0 and i < b.len() { b[i] } else { 0 }
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn spaces(n: i64) -> String {
+    let mut out = String.new();
+    for _ in 0..n {
+        out.push_str(" ");
+    }
+    out
+}
+
+
+// ------------------------------------------------------------ more text
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn rpartition(s: Str, c: u8) -> (String, bool, String) {
+    let i = rfind_byte(s, c);
+    if i < 0 {
+        return (String.new(), false, s.to_string());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+// The data files spell tabs, line ends and control characters as \t,
+// \n, \r and \xNN.
+fn unescape(line: Str) -> String {
+    let b = to_bytes(line);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' and i + 1 < b.len() {
+            let n = b[i + 1];
+            if n == b't' {
+                out.push(b'\t');
+                i += 2;
+                continue;
+            }
+            if n == b'n' {
+                out.push(b'\n');
+                i += 2;
+                continue;
+            }
+            if n == b'r' {
+                out.push(b'\r');
+                i += 2;
+                continue;
+            }
+            if n == b'\\' {
+                out.push(b'\\');
+                i += 2;
+                continue;
+            }
+            if n == b'x' and i + 3 < b.len() {
+                out.push(hex_val(b[i + 2]) * 16 + hex_val(b[i + 3]));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    from_bytes(out)
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+// becomes one U+FFFD, as CPython's decoder does it.
+fn utf8_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let mut need: i64 = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            }
+            if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            }
+            if c == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_str_bytes(mut out, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut ok = true;
+        for k in 0..need {
+            if j >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[j];
+            let (l, h) = if k == 0 { (lo, hi) } else { (0x80 as u8, 0xBF as u8) };
+            if d < l or d > h {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            for k in i..j {
+                out.push(b[k]);
+            }
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+// ------------------------------------------------------------ ipaddress
+
+// IPv4Address's parser: four decimal octets, no leading zeros.
+fn is_ipv4(s: Str) -> bool {
+    let parts = split_on(s, b'.');
+    if parts.len() != 4 {
+        return false;
+    }
+    for i in 0..parts.len() {
+        let b = to_bytes(parts[i]);
+        if b.len() == 0 or b.len() > 3 {
+            return false;
+        }
+        let mut n: i64 = 0;
+        for k in 0..b.len() {
+            if not is_digit(b[k]) {
+                return false;
+            }
+            n = n * 10 + (b[k] - b'0') as i64;
+        }
+        if n > 255 or (b.len() > 1 and b[0] == b'0') {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_hextet(s: Str) -> bool {
+    let b = to_bytes(s);
+    if b.len() == 0 or b.len() > 4 {
+        return false;
+    }
+    for k in 0..b.len() {
+        if not is_hex(b[k]) {
+            return false;
+        }
+    }
+    true
+}
+
+// IPv6Address's parser: at most one `::`, eight hextets in all, an IPv4
+// tail, and a `%scope`.
+fn is_ipv6(s: Str) -> bool {
+    let (addr, has_scope, scope) = partition(s, b'%');
+    if has_scope and (scope.len() == 0 or has_byte(scope, b'%')) {
+        return false;
+    }
+    let mut parts = split_on(addr, b':');
+    if parts.len() < 3 {
+        return false;
+    }
+    let last = parts[parts.len() - 1].clone();
+    if has_byte(last, b'.') {
+        if not is_ipv4(last) {
+            return false;
+        }
+        parts.pop();
+        parts.push("0".to_string());
+        parts.push("0".to_string());
+    }
+    if parts.len() > 9 {
+        return false;
+    }
+    let n = parts.len();
+    let mut skip: i64 = -1;
+    for i in 1..n - 1 {
+        if parts[i].len() == 0 {
+            if skip >= 0 {
+                return false;
+            }
+            skip = i;
+        }
+    }
+    let mut hi = n;
+    let mut lo: i64 = 0;
+    if skip >= 0 {
+        hi = skip;
+        lo = n - skip - 1;
+        if parts[0].len() == 0 {
+            hi -= 1;
+            if hi > 0 {
+                return false;
+            }
+        }
+        if parts[n - 1].len() == 0 {
+            lo -= 1;
+            if lo > 0 {
+                return false;
+            }
+        }
+        if 8 - (hi + lo) < 1 {
+            return false;
+        }
+    } else if n != 8 or parts[0].len() == 0 or parts[n - 1].len() == 0 {
+        return false;
+    }
+    for i in 0..hi {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    for i in n - lo..n {
+        if not is_hextet(parts[i]) {
+            return false;
+        }
+    }
+    true
+}
+
+// urllib.parse's _check_bracketed_host.
+fn check_bracketed_host(host: Str) -> Result[(), String] {
+    let b = to_bytes(host);
+    if b.len() > 0 and (b[0] == b'v' or b[0] == b'V') {
+        // \A[vV][a-fA-F0-9]+\..+\Z
+        let mut i: i64 = 1;
+        while i < b.len() and is_hex(b[i]) {
+            i += 1;
+        }
+        if i == 1 or i >= b.len() or b[i] != b'.' or i + 1 >= b.len() {
+            return Err("IPvFuture address is invalid".to_string());
+        }
+        return Ok(());
+    }
+    if is_ipv4(host) {
+        return Err("An IPv4 address cannot be in brackets".to_string());
+    }
+    if not is_ipv6(host) {
+        return Err(f"{py_repr(host)} does not appear to be an IPv4 or IPv6 address");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ split and parse
+
+fn uses_relative(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "imap", "wais", "file", "https", "shttp", "mms", "prospero", "rtsp", "rtsps", "rtspu", "sftp", "svn", "svn+ssh", "ws", "wss"], s)
+}
+
+fn uses_netloc(s: Str) -> bool {
+    contains_str(["", "ftp", "http", "gopher", "nntp", "telnet", "imap", "wais", "file", "mms", "https", "shttp", "snews", "prospero", "rtsp", "rtsps", "rtspu", "rsync", "svn", "svn+ssh", "sftp", "nfs", "git", "git+ssh", "ws", "wss", "itms-services"], s)
+}
+
+fn uses_params(s: Str) -> bool {
+    contains_str(["", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtsps", "rtspu", "sip", "sips", "mms", "sftp", "tel"], s)
+}
+
+fn is_scheme_char(c: u8) -> bool {
+    is_alnum(c) or c == b'+' or c == b'-' or c == b'.'
+}
+
+#[derive(Clone)]
+struct Split {
+    scheme: String,
+    netloc: String,
+    path: String,
+    query: String,
+    fragment: String,
+}
+
+#[derive(Clone)]
+struct Parsed {
+    scheme: String,
+    netloc: String,
+    path: String,
+    params: String,
+    query: String,
+    fragment: String,
+}
+
+impl Split {
+    fn repr(ref self) -> String {
+        f"SplitResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+
+    // _userinfo
+    fn username(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (user, _, _) = partition(userinfo, b':');
+        Some(user)
+    }
+
+    fn password(ref self) -> Option[String] {
+        let (userinfo, have_info, _) = rpartition(self.netloc, b'@');
+        if not have_info {
+            return None;
+        }
+        let (_, have_password, password) = partition(userinfo, b':');
+        if have_password { Some(password) } else { None }
+    }
+
+    // _hostinfo: the host and the port as written.
+    fn hostinfo(ref self) -> (String, Option[String]) {
+        let (_, _, hostinfo) = rpartition(self.netloc, b'@');
+        let (_, have_open_br, bracketed) = partition(hostinfo, b'[');
+        let mut host = String.new();
+        let mut port = String.new();
+        if have_open_br {
+            let (h, _, rest) = partition(bracketed, b']');
+            let (_, _, p) = partition(rest, b':');
+            host = h;
+            port = p;
+        } else {
+            let (h, _, p) = partition(hostinfo, b':');
+            host = h;
+            port = p;
+        }
+        if port.len() == 0 { (host, None) } else { (host, Some(port)) }
+    }
+
+    fn hostname(ref self) -> Option[String] {
+        let (host, _) = self.hostinfo();
+        if host.len() == 0 {
+            return None;
+        }
+        // a scope's zone keeps its case
+        let (h, percent, zone) = partition(host, b'%');
+        if percent { Some(f"{lower(h)}%{zone}") } else { Some(lower(h)) }
+    }
+
+    fn port(ref self) -> Result[Option[i64], String] {
+        let (_, port) = self.hostinfo();
+        let p = match port {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let b = to_bytes(p);
+        let mut n: i64 = 0;
+        for i in 0..b.len() {
+            if not is_digit(b[i]) {
+                return Err(f"Port could not be cast to integer value as {py_repr(p)}");
+            }
+            if n <= 1000000 {
+                n = n * 10 + (b[i] - b'0') as i64;
+            }
+        }
+        if n > 65535 {
+            return Err("Port out of range 0-65535".to_string());
+        }
+        Ok(Some(n))
+    }
+}
+
+impl Parsed {
+    fn repr(ref self) -> String {
+        f"ParseResult(scheme={py_repr(self.scheme)}, netloc={py_repr(self.netloc)}, path={py_repr(self.path)}, params={py_repr(self.params)}, query={py_repr(self.query)}, fragment={py_repr(self.fragment)})"
+    }
+}
+
+// _splitnetloc: the netloc runs to the first of / ? #.
+fn split_netloc(url: Str, start: i64) -> (String, String) {
+    let b = to_bytes(url);
+    let mut delim = b.len();
+    for i in start..b.len() {
+        if b[i] == b'/' or b[i] == b'?' or b[i] == b'#' {
+            delim = i;
+            break;
+        }
+    }
+    (byte_str(b, start, delim), byte_str(b, delim, b.len()))
+}
+
+fn check_bracketed_netloc(netloc: Str) -> Result[(), String] {
+    let (_, _, host_and_port) = rpartition(netloc, b'@');
+    let (before, have_open_br, bracketed) = partition(host_and_port, b'[');
+    if have_open_br {
+        if before.len() > 0 {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        let (host, _, port) = partition(bracketed, b']');
+        if port.len() > 0 and first_byte(port) != b':' {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        return check_bracketed_host(host);
+    }
+    let (host, _, _) = partition(host_and_port, b':');
+    check_bracketed_host(host)
+}
+
+fn urlsplit(url_in: Str, scheme_in: Str) -> Result[Split, String] {
+    // lstrip the C0 controls and space, then drop every tab and line end
+    let ub = to_bytes(url_in);
+    let mut st: i64 = 0;
+    while st < ub.len() and ub[st] <= 32 {
+        st += 1;
+    }
+    let mut kept: Vec[u8] = Vec.new();
+    for i in st..ub.len() {
+        let c = ub[i];
+        if c != b'\t' and c != b'\r' and c != b'\n' {
+            kept.push(c);
+        }
+    }
+    let mut url = from_bytes(kept);
+    let mut scheme = strip_scheme(scheme_in);
+    let mut netloc = String.new();
+    let mut query = String.new();
+    let mut fragment = String.new();
+    let i = find_byte(url, b':');
+    if i > 0 and is_alpha(first_byte(url)) {
+        let b = to_bytes(url);
+        let mut all = true;
+        for k in 0..i {
+            if not is_scheme_char(b[k]) {
+                all = false;
+                break;
+            }
+        }
+        if all {
+            scheme = lower(byte_str(b, 0, i));
+            url = byte_str(b, i + 1, b.len());
+        }
+    }
+    if starts_with(url, "//") {
+        let (n, rest) = split_netloc(url, 2);
+        netloc = n;
+        url = rest;
+        let open = has_byte(netloc, b'[');
+        let close = has_byte(netloc, b']');
+        if open != close {
+            return Err("Invalid IPv6 URL".to_string());
+        }
+        if open and close {
+            check_bracketed_netloc(netloc)?;
+        }
+    }
+    if has_byte(url, b'#') {
+        let (u, _, f) = partition(url, b'#');
+        url = u;
+        fragment = f;
+    }
+    if has_byte(url, b'?') {
+        let (u, _, q) = partition(url, b'?');
+        url = u;
+        query = q;
+    }
+    Ok(Split { scheme: scheme, netloc: netloc, path: url, query: query, fragment: fragment })
+}
+
+// The scheme argument: C0 controls and space stripped at both ends, tabs
+// and line ends dropped.
+fn strip_scheme(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut st: i64 = 0;
+    let mut en = b.len();
+    while st < en and b[st] <= 32 {
+        st += 1;
+    }
+    while en > st and b[en - 1] <= 32 {
+        en -= 1;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in st..en {
+        if b[i] != b'\t' and b[i] != b'\r' and b[i] != b'\n' {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+// _splitparams: the params follow the `;` in the last segment.
+fn split_params(url: Str) -> (String, String) {
+    let i = if has_byte(url, b'/') {
+        let b = to_bytes(url);
+        let mut at: i64 = -1;
+        for k in rfind_byte(url, b'/')..b.len() {
+            if b[k] == b';' {
+                at = k;
+                break;
+            }
+        }
+        if at < 0 {
+            return (url.to_string(), String.new());
+        }
+        at
+    } else {
+        find_byte(url, b';')
+    };
+    (slice(url, 0, i), slice_from(url, i + 1))
+}
+
+fn urlparse(url: Str, scheme: Str) -> Result[Parsed, String] {
+    let s = urlsplit(url, scheme)?;
+    let mut path = s.path.clone();
+    let mut params = String.new();
+    if uses_params(s.scheme) and has_byte(path, b';') {
+        let (p, a) = split_params(path);
+        path = p;
+        params = a;
+    }
+    Ok(Parsed { scheme: s.scheme, netloc: s.netloc, path: path, params: params, query: s.query, fragment: s.fragment })
+}
+
+fn urlunsplit(scheme: Str, netloc: Str, path: Str, query: Str, fragment: Str) -> String {
+    let mut url = path.to_string();
+    if netloc.len() > 0 {
+        if url.len() > 0 and first_byte(url) != b'/' {
+            url = f"/{url}";
+        }
+        url = f"//{netloc}{url}";
+    } else if starts_with(url, "//") {
+        url = f"//{url}";
+    } else if scheme.len() > 0 and uses_netloc(scheme) and (url.len() == 0 or first_byte(url) == b'/') {
+        url = f"//{url}";
+    }
+    if scheme.len() > 0 {
+        url = f"{scheme}:{url}";
+    }
+    if query.len() > 0 {
+        url = f"{url}?{query}";
+    }
+    if fragment.len() > 0 {
+        url = f"{url}#{fragment}";
+    }
+    url
+}
+
+fn unsplit(s: ref Split) -> String {
+    urlunsplit(s.scheme, s.netloc, s.path, s.query, s.fragment)
+}
+
+fn urlunparse(p: ref Parsed) -> String {
+    let path = if p.params.len() > 0 { f"{p.path};{p.params}" } else { p.path.clone() };
+    urlunsplit(p.scheme, p.netloc, path, p.query, p.fragment)
+}
+
+fn urljoin(base: Str, url: Str) -> Result[String, String] {
+    if base.len() == 0 {
+        return Ok(url.to_string());
+    }
+    if url.len() == 0 {
+        return Ok(base.to_string());
+    }
+    let b = urlparse(base, "")?;
+    let mut u = urlparse(url, b.scheme)?;
+    if u.scheme != b.scheme or not uses_relative(u.scheme) {
+        return Ok(url.to_string());
+    }
+    if uses_netloc(u.scheme) {
+        if u.netloc.len() > 0 {
+            return Ok(urlunparse(u));
+        }
+        u.netloc = b.netloc.clone();
+    }
+    if u.path.len() == 0 and u.params.len() == 0 {
+        u.path = b.path.clone();
+        u.params = b.params.clone();
+        if u.query.len() == 0 {
+            u.query = b.query.clone();
+        }
+        return Ok(urlunparse(u));
+    }
+    let mut base_parts = split_on(b.path, b'/');
+    if base_parts[base_parts.len() - 1].len() > 0 {
+        // the last segment is not a directory
+        base_parts.pop();
+    }
+    let mut segments: Vec[String] = Vec.new();
+    if first_byte(u.path) == b'/' {
+        segments = split_on(u.path, b'/');
+    } else {
+        let rel = split_on(u.path, b'/');
+        let mut all = base_parts.clone();
+        for i in 0..rel.len() {
+            all.push(rel[i].clone());
+        }
+        // drop the empty segments between the first and the last
+        for i in 0..all.len() {
+            if i == 0 or i == all.len() - 1 or all[i].len() > 0 {
+                segments.push(all[i].clone());
+            }
+        }
+    }
+    let mut resolved: Vec[String] = Vec.new();
+    for i in 0..segments.len() {
+        if segments[i] == ".." {
+            if resolved.len() > 0 {
+                resolved.pop();
+            }
+        } else if segments[i] != "." {
+            resolved.push(segments[i].clone());
+        }
+    }
+    let last = segments[segments.len() - 1].clone();
+    if last == "." or last == ".." {
+        resolved.push(String.new());
+    }
+    let joined = join(resolved, "/");
+    u.path = if joined.len() > 0 { joined } else { "/".to_string() };
+    Ok(urlunparse(u))
+}
+
+fn urldefrag(url: Str) -> Result[(String, String), String] {
+    if not has_byte(url, b'#') {
+        return Ok((url.to_string(), String.new()));
+    }
+    let mut p = urlparse(url, "")?;
+    let frag = p.fragment.clone();
+    p.fragment = String.new();
+    Ok((urlunparse(p), frag))
+}
+
+// ------------------------------------------------------------ quoting
+
+fn always_safe(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+// quote: every byte of the UTF-8 that is neither always safe nor in
+// `safe` becomes %XX.
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    let sb = to_bytes(safe);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        let mut ok = c < 128 and always_safe(c);
+        for k in 0..sb.len() {
+            if sb[k] < 128 and sb[k] == c {
+                ok = true;
+            }
+        }
+        if ok {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn quote_plus(s: Str, safe: Str) -> String {
+    if not has_byte(s, b' ') {
+        return quote(s, safe);
+    }
+    replace_byte(quote(s, f"{safe} "), b' ', "+")
+}
+
+// _unquote_impl on ASCII: %XX with two hex digits is a byte, anything
+// else stays as written.
+fn unquote_bytes(b: ref Vec[u8], from: i64, to: i64, out: mut ref Vec[u8]) {
+    let mut i = from;
+    while i < to {
+        if b[i] == b'%' and i + 2 < to and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push(hex_val(b[i + 1]) * 16 + hex_val(b[i + 2]));
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+}
+
+// unquote: the ASCII runs are unquoted and decoded as UTF-8 one run at a
+// time; the rest is kept as it is.
+fn unquote(s: Str) -> String {
+    if not has_byte(s, b'%') {
+        return s.to_string();
+    }
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let st = i;
+        if b[i] < 128 {
+            while i < b.len() and b[i] < 128 {
+                i += 1;
+            }
+            let mut run: Vec[u8] = Vec.new();
+            unquote_bytes(b, st, i, mut run);
+            push_str_bytes(mut out, utf8_replace(run));
+        } else {
+            while i < b.len() and b[i] >= 128 {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    from_bytes(out)
+}
+
+fn unquote_plus(s: Str) -> String {
+    unquote(replace_byte(s, b'+', " "))
+}
+
+// ------------------------------------------------------------ queries
+
+#[derive(Clone)]
+struct Pair {
+    name: String,
+    value: String,
+}
+
+fn parse_qsl(qs: Str, keep_blank: bool, strict: bool, sep: Str) -> Result[Vec[Pair], String] {
+    let mut r: Vec[Pair] = Vec.new();
+    if qs.len() == 0 {
+        return Ok(r);
+    }
+    let fields = split_on(qs, first_byte(sep));
+    for i in 0..fields.len() {
+        let nv = fields[i].clone();
+        if nv.len() == 0 and not strict {
+            continue;
+        }
+        let (name, has_eq, value) = partition(nv, b'=');
+        if not has_eq and strict {
+            return Err(f"bad query field: {py_repr(nv)}");
+        }
+        if value.len() > 0 or keep_blank {
+            r.push(Pair { name: unquote_plus(name), value: unquote_plus(value) });
+        }
+    }
+    Ok(r)
+}
+
+fn pairs_repr(v: ref Vec[Pair]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for i in 0..v.len() {
+        parts.push(f"({py_repr(v[i].name)}, {py_repr(v[i].value)})");
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+// parse_qs: the values of each name, the names in the order first seen.
+struct Multi {
+    names: Vec[String],
+    values: Vec[Vec[String]],
+}
+
+impl Multi {
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for i in 0..self.names.len() {
+            let mut vs: Vec[String] = Vec.new();
+            let list = self.values[i].clone();
+            for k in 0..list.len() {
+                vs.push(py_repr(list[k]));
+            }
+            parts.push(f"{py_repr(self.names[i])}: [{join(vs, ", ")}]");
+        }
+        f"{{{join(parts, ", ")}}}"
+    }
+}
+
+fn parse_qs(pairs: ref Vec[Pair]) -> Multi {
+    let mut m = Multi { names: Vec.new(), values: Vec.new() };
+    for i in 0..pairs.len() {
+        let mut at: i64 = -1;
+        for k in 0..m.names.len() {
+            if m.names[k] == pairs[i].name {
+                at = k;
+            }
+        }
+        if at < 0 {
+            m.names.push(pairs[i].name.clone());
+            m.values.push(Vec.new());
+            at = m.names.len() - 1;
+        }
+        m.values[at].push(pairs[i].value.clone());
+    }
+    m
+}
+
+// urlencode over pairs, with quote_plus or quote.
+fn urlencode(pairs: ref Vec[Pair], safe: Str, plus: bool) -> String {
+    let mut l: Vec[String] = Vec.new();
+    for i in 0..pairs.len() {
+        let k = if plus { quote_plus(pairs[i].name, safe) } else { quote(pairs[i].name, safe) };
+        let v = if plus { quote_plus(pairs[i].value, safe) } else { quote(pairs[i].value, safe) };
+        l.push(f"{k}={v}");
+    }
+    join(l, "&")
+}
+
+// urlencode(d, doseq=True): one name=value for each value in the lists.
+fn urlencode_multi(m: ref Multi) -> String {
+    let mut pairs: Vec[Pair] = Vec.new();
+    for i in 0..m.names.len() {
+        let list = m.values[i].clone();
+        for k in 0..list.len() {
+            pairs.push(Pair { name: m.names[i].clone(), value: list[k].clone() });
+        }
+    }
+    urlencode(pairs, "", true)
+}
+
+// ------------------------------------------------------------ the files
+
+// ------------------------------------------------------------ hashes and HMAC
+
+
+// The message padded to whole 64- or 128-byte blocks, with its bit
+// length in `lenbytes` bytes, big- or little-endian.
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+fn le32(b: ref Vec[u8], i: i64) -> u32 {
+    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+}
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+
+fn le64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    let mut k: i64 = 7;
+    while k >= 0 {
+        v = (v << 8) | (b[i + k] as u64);
+        k -= 1;
+    }
+    v
+}
+
+fn push_le32(out: mut ref Vec[u8], x: u32) {
+    for k in 0..4 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+    }
+}
+
+fn push_be32(out: mut ref Vec[u8], x: u32) {
+    let mut k: i64 = 3;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u32)) & 0xFFu32) as u8);
+        k -= 1;
+    }
+}
+
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+
+
+fn sha1(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    for x in [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32] {
+        h.push(x);
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..80 {
+            w[t] = (w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16]).rotate_left(1);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for t in 0..80 {
+            let mut f: u32 = 0;
+            let mut k: u32 = 0;
+            if t < 20 {
+                f = (b & c) | ((b ^ 0xFFFFFFFFu32) & d);
+                k = 0x5A827999u32;
+            } else if t < 40 {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1u32;
+            } else if t < 60 {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCu32;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6u32;
+            }
+            let tmp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[t]);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = tmp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for x in h {
+        push_be32(mut out, x);
+    }
+    out
+}
+
+const SHA256_K: Array[u32, 64] = [
+    0x428a2f98u32, 0x71374491u32, 0xb5c0fbcfu32, 0xe9b5dba5u32, 0x3956c25bu32, 0x59f111f1u32, 0x923f82a4u32, 0xab1c5ed5u32,
+    0xd807aa98u32, 0x12835b01u32, 0x243185beu32, 0x550c7dc3u32, 0x72be5d74u32, 0x80deb1feu32, 0x9bdc06a7u32, 0xc19bf174u32,
+    0xe49b69c1u32, 0xefbe4786u32, 0x0fc19dc6u32, 0x240ca1ccu32, 0x2de92c6fu32, 0x4a7484aau32, 0x5cb0a9dcu32, 0x76f988dau32,
+    0x983e5152u32, 0xa831c66du32, 0xb00327c8u32, 0xbf597fc7u32, 0xc6e00bf3u32, 0xd5a79147u32, 0x06ca6351u32, 0x14292967u32,
+    0x27b70a85u32, 0x2e1b2138u32, 0x4d2c6dfcu32, 0x53380d13u32, 0x650a7354u32, 0x766a0abbu32, 0x81c2c92eu32, 0x92722c85u32,
+    0xa2bfe8a1u32, 0xa81a664bu32, 0xc24b8b70u32, 0xc76c51a3u32, 0xd192e819u32, 0xd6990624u32, 0xf40e3585u32, 0x106aa070u32,
+    0x19a4c116u32, 0x1e376c08u32, 0x2748774cu32, 0x34b0bcb5u32, 0x391c0cb3u32, 0x4ed8aa4au32, 0x5b9cca4fu32, 0x682e6ff3u32,
+    0x748f82eeu32, 0x78a5636fu32, 0x84c87814u32, 0x8cc70208u32, 0x90befffau32, 0xa4506cebu32, 0xbef9a3f7u32, 0xc67178f2u32,
+];
+
+// SHA-256, or SHA-224 with its own initial values and a shorter result.
+fn sha256_family(msg: ref Vec[u8], is224: bool) -> Vec[u8] {
+    let m = md_pad(msg, 64, 8, true);
+    let mut h: Vec[u32] = Vec.new();
+    if is224 {
+        for x in [0xc1059ed8u32, 0x367cd507u32, 0x3070dd17u32, 0xf70e5939u32, 0xffc00b31u32, 0x68581511u32, 0x64f98fa7u32, 0xbefa4fa4u32] {
+            h.push(x);
+        }
+    } else {
+        for x in [0x6a09e667u32, 0xbb67ae85u32, 0x3c6ef372u32, 0xa54ff53au32, 0x510e527fu32, 0x9b05688cu32, 0x1f83d9abu32, 0x5be0cd19u32] {
+            h.push(x);
+        }
+    }
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..64 {
+        w.push(0u32);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be32(m, blk + 4 * t);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3u32);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10u32);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u32] = h.clone();
+        for t in 0..64 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFu32) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA256_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 64;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is224 { 7 } else { 8 };
+    for i in 0..n {
+        push_be32(mut out, h[i]);
+    }
+    out
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+const SHA384_IV: Array[u64, 8] = [
+    0xcbbb9d5dc1059ed8u64, 0x629a292a367cd507u64, 0x9159015a3070dd17u64, 0x152fecd8f70e5939u64,
+    0x67332667ffc00b31u64, 0x8eb44a8768581511u64, 0xdb0c2e0d64f98fa7u64, 0x47b5481dbefa4fa4u64,
+];
+
+// SHA-512, or SHA-384 with its own initial values and a shorter result.
+fn sha512_family(msg: ref Vec[u8], is384: bool) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(if is384 { SHA384_IV[i] } else { SHA512_IV[i] });
+    }
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        for t in 16..80 {
+            let s0 = w[t - 15].rotate_right(1) ^ w[t - 15].rotate_right(8) ^ (w[t - 15] >> 7u64);
+            let s1 = w[t - 2].rotate_right(19) ^ w[t - 2].rotate_right(61) ^ (w[t - 2] >> 6u64);
+            w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+        }
+        let mut v: Vec[u64] = h.clone();
+        for t in 0..80 {
+            let e = v[4];
+            let a = v[0];
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & v[5]) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & v[6]);
+            let t1 = v[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & v[1]) ^ (a & v[2]) ^ (v[1] & v[2]);
+            let t2 = s0.wrapping_add(maj);
+            v[7] = v[6];
+            v[6] = v[5];
+            v[5] = v[4];
+            v[4] = v[3].wrapping_add(t1);
+            v[3] = v[2];
+            v[2] = v[1];
+            v[1] = v[0];
+            v[0] = t1.wrapping_add(t2);
+        }
+        for i in 0..8 {
+            h[i] = h[i].wrapping_add(v[i]);
+        }
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let n = if is384 { 6 } else { 8 };
+    for i in 0..n {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+// ------------------------------------------------------------ HMAC (RFC 2104)
+
+// hashlib's digest for a name pyotp can be given.
+fn digest_of(name: Str, msg: ref Vec[u8]) -> Vec[u8] {
+    if name == "sha224" {
+        return sha256_family(msg, true);
+    }
+    if name == "sha256" {
+        return sha256_family(msg, false);
+    }
+    if name == "sha384" {
+        return sha512_family(msg, true);
+    }
+    if name == "sha512" {
+        return sha512_family(msg, false);
+    }
+    sha1(msg)
+}
+
+fn block_of(name: Str) -> i64 {
+    if name == "sha384" or name == "sha512" { 128 } else { 64 }
+}
+
+// hmac.new(key, msg, digest).digest()
+fn hmac(name: Str, key: ref Vec[u8], msg: ref Vec[u8]) -> Vec[u8] {
+    let block = block_of(name);
+    let mut k = if key.len() > block { digest_of(name, key) } else { key.clone() };
+    while k.len() < block {
+        k.push(0);
+    }
+    let mut inner: Vec[u8] = Vec.new();
+    let mut outer: Vec[u8] = Vec.new();
+    for i in 0..block {
+        inner.push(k[i] ^ 0x36);
+        outer.push(k[i] ^ 0x5c);
+    }
+    for b in msg.iter() {
+        inner.push(*b);
+    }
+    let ih = digest_of(name, inner);
+    for b in ih.iter() {
+        outer.push(*b);
+    }
+    digest_of(name, outer)
+}
+// ------------------------------------------------------------ errors
+
+// A Python exception: its type and str().
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn value_error(msg: Str) -> Exc {
+    exc("ValueError", msg.to_string())
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------ base32
+
+const B32_ALPHABET: Str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+fn b32encode(b: ref Vec[u8]) -> String {
+    let tab = to_bytes(B32_ALPHABET);
+    let leftover = b.len() % 5;
+    let mut s = b.clone();
+    if leftover > 0 {
+        for _ in 0..5 - leftover {
+            s.push(0);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < s.len() {
+        let mut c: i64 = 0;
+        for k in 0..5 {
+            c = (c << 8) | s[i + k] as i64;
+        }
+        let mut sh: i64 = 35;
+        while sh >= 0 {
+            out.push(tab[(c >> sh) & 31]);
+            sh -= 5;
+        }
+        i += 5;
+    }
+    let pad = if leftover == 1 { 6 } else if leftover == 2 { 4 } else if leftover == 3 { 3 } else if leftover == 4 { 1 } else { 0 };
+    for k in 0..pad {
+        let at = out.len() - 1 - k;
+        out[at] = b'=';
+    }
+    from_bytes(out)
+}
+
+// base64.b32decode(s, casefold=True) of a str.
+fn b32decode(text: ref String) -> Result[Vec[u8], Exc] {
+    for c in text.chars() {
+        if c as u32 >= 128 {
+            return Err(value_error("string argument should contain only ASCII characters"));
+        }
+    }
+    if text.len() % 8 != 0 {
+        return Err(exc("Error", "Incorrect padding".to_string()));
+    }
+    let mut s = to_bytes(upper(text));
+    let l = s.len();
+    while s.len() > 0 and s[s.len() - 1] == b'=' {
+        s.pop();
+    }
+    let padchars = l - s.len();
+    let tab = to_bytes(B32_ALPHABET);
+    let mut decoded: Vec[u8] = Vec.new();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() {
+        acc = 0;
+        let end = if i + 8 < s.len() { i + 8 } else { s.len() };
+        for k in i..end {
+            let mut v: i64 = -1;
+            for t in 0..tab.len() {
+                if tab[t] == s[k] {
+                    v = t;
+                }
+            }
+            if v < 0 {
+                return Err(exc("Error", "Non-base32 digit found".to_string()));
+            }
+            acc = (acc << 5) + v;
+        }
+        let mut sh: i64 = 32;
+        while sh >= 0 {
+            decoded.push(((acc >> sh) & 255) as u8);
+            sh -= 8;
+        }
+        i += 8;
+    }
+    if l % 8 != 0 or not (padchars == 0 or padchars == 1 or padchars == 3 or padchars == 4 or padchars == 6) {
+        return Err(exc("Error", "Incorrect padding".to_string()));
+    }
+    if padchars > 0 and decoded.len() > 0 {
+        acc = acc << (5 * padchars);
+        let leftover = (43 - 5 * padchars) / 8;
+        for _ in 0..5 {
+            decoded.pop();
+        }
+        let mut sh: i64 = 32;
+        for _ in 0..leftover {
+            decoded.push(((acc >> sh) & 255) as u8);
+            sh -= 8;
+        }
+    }
+    Ok(decoded)
+}
+
+fn hex_of(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b.iter() {
+        out.push_str(hex_digits(*x as i64, 2));
+    }
+    out
+}
+
+// ------------------------------------------------------------ NFKC equality
+
+// unicodedata.normalize("NFKC", s): two strings have the same NFKC form
+// exactly when they have the same NFKD form, so this is NFKD.
+fn nfkd(t: ref Map[char, String], s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        match t.get(c) {
+            Some(d) => out.push_str(d),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
+// utils.strings_equal
+fn strings_equal(t: ref Map[char, String], a: ref String, b: ref String) -> bool {
+    nfkd(t, a) == nfkd(t, b)
+}
+
+// ------------------------------------------------------------ times
+
+// datetime.fromtimestamp(t), datetime.fromisoformat(s) without an offset
+// (both read in UTC, as TZ=UTC has it), or one with an offset.
+enum When {
+    Stamp(i64),
+    Naive(i64),
+    Aware(i64, i64),
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+fn days_from_civil(y0: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y0 - 1 } else { y0 };
+    let era = floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+// The year of a time in seconds from the epoch.
+fn year_of(t: i64) -> i64 {
+    let z = floor_div(t, 86400) + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400;
+    if m <= 2 { y + 1 } else { y }
+}
+
+fn digits_at(cs: ref Vec[char], a: i64, n: i64) -> Option[i64] {
+    if a + n > cs.len() {
+        return None;
+    }
+    let mut v: i64 = 0;
+    for i in a..a + n {
+        if not is_ascii_digit(cs[i]) {
+            return None;
+        }
+        v = v * 10 + (cs[i] as i64 - 48);
+    }
+    Some(v)
+}
+
+// datetime.fromisoformat for YYYY-MM-DD[T ]HH:MM:SS[.ffffff][Z|+HH:MM].
+fn parse_iso(s: ref String) -> Option[When] {
+    let cs: Vec[char] = s.chars().collect();
+    let y = digits_at(cs, 0, 4)?;
+    let mo = digits_at(cs, 5, 2)?;
+    let d = digits_at(cs, 8, 2)?;
+    let h = digits_at(cs, 11, 2)?;
+    let mi = digits_at(cs, 14, 2)?;
+    let se = digits_at(cs, 17, 2)?;
+    let mut i = 19;
+    if i < cs.len() and cs[i] == '.' {
+        i += 1;
+        while i < cs.len() and is_ascii_digit(cs[i]) {
+            i += 1;
+        }
+    }
+    let local = days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + se;
+    if i >= cs.len() {
+        return Some(When.Naive(local));
+    }
+    if cs[i] == 'Z' {
+        return Some(When.Aware(local, 0));
+    }
+    let sign = if cs[i] == '-' { -1 } else { 1 };
+    let oh = digits_at(cs, i + 1, 2)?;
+    let om = digits_at(cs, i + 4, 2)?;
+    Some(When.Aware(local, sign * (oh * 3600 + om * 60)))
+}
+
+// What a job gives as a time: an int timestamp or an ISO date and time.
+fn when_of(text: ref String) -> When {
+    match py_int(text.chars().collect()) {
+        Some(d) => When.Stamp(i64.parse(d).unwrap_or(0)),
+        None => parse_iso(text).unwrap_or(When.Naive(0)),
+    }
+}
+
+// The seconds a time stands for, as int(dt.timestamp()) gives them.
+fn stamp_of(w: ref When) -> i64 {
+    match w {
+        When.Stamp(t) => *t,
+        When.Naive(t) => *t,
+        When.Aware(local, off) => *local - *off,
+    }
+}
+
+fn year_error(y: i64) -> Exc {
+    value_error(f"year {y} is out of range")
+}
+
+// TOTP.timecode, after at()'s fromtimestamp for an int: int(t / interval)
+// with Python's true division.
+fn timecode(w: ref When, interval: i64) -> Result[i64, Exc] {
+    let t = match w {
+        When.Stamp(t) => {
+            // fromtimestamp, and its look a day back for a fold
+            let y = year_of(*t);
+            if y < 1 or y > 9999 {
+                return Err(year_error(y));
+            }
+            let back = year_of(*t - 86400);
+            if back < 1 {
+                return Err(year_error(back));
+            }
+            *t
+        }
+        When.Naive(t) => *t,
+        When.Aware(local, off) => {
+            let utc = *local - *off;
+            let y = year_of(utc);
+            if y < 1 or y > 9999 {
+                return Err(exc("OverflowError", "date value out of range".to_string()));
+            }
+            if interval == 0 {
+                return Err(exc("ZeroDivisionError", "division by zero".to_string()));
+            }
+            utc
+        }
+    };
+    if interval == 0 {
+        return Err(exc("ZeroDivisionError", "float division by zero".to_string()));
+    }
+    let q = (t as f64) / (interval as f64);
+    Ok(q as i64)
+}
+
+// ------------------------------------------------------------ pyotp
+
+const HOTP: i64 = 0;
+const TOTP: i64 = 1;
+const STEAM: i64 = 2;
+const STEAM_CHARS: Str = "23456789BCDFGHJKMNPQRTVWXY";
+
+// An OTP object: HOTP, TOTP, or contrib.Steam (a TOTP).
+#[derive(Clone)]
+struct Otp {
+    kind: i64,
+    secret: String,
+    digits: i64,
+    digest: String,
+    name: String,
+    issuer: Option[String],
+    interval: i64,
+    initial_count: i128,
+}
+
+fn class_name(kind: i64) -> String {
+    if kind == HOTP {
+        "HOTP".to_string()
+    } else if kind == TOTP {
+        "TOTP".to_string()
+    } else {
+        "Steam".to_string()
+    }
+}
+
+// A keyword argument: its name, and an int, a str or a digest name.
+#[derive(Clone)]
+struct Kw {
+    key: String,
+    int: i128,
+    text: Option[String],
+}
+
+fn kw_int(key: Str, v: i128) -> Kw {
+    Kw { key: key.to_string(), int: v, text: None }
+}
+
+fn kw_str(key: Str, v: ref String) -> Kw {
+    Kw { key: key.to_string(), int: 0, text: Some(v.clone()) }
+}
+
+// d[key] = value: a key already there keeps its place.
+fn kw_set(kws: mut ref Vec[Kw], kw: own Kw) {
+    for i in 0..kws.len() {
+        if kws[i].key == kw.key {
+            kws[i] = kw;
+            return;
+        }
+    }
+    kws.push(kw);
+}
+
+fn kw_text(kw: ref Kw) -> String {
+    match kw.text {
+        Some(s) => s.clone(),
+        None => String.new(),
+    }
+}
+
+// Class(s, **kwargs), with the TypeError Python gives a keyword the class
+// does not take.
+fn new_otp(kind: i64, secret: ref String, kws: ref Vec[Kw]) -> Result[Otp, Exc] {
+    let allowed: Vec[Str] = if kind == HOTP {
+        vec!["digits", "digest", "name", "issuer", "initial_count"]
+    } else if kind == TOTP {
+        vec!["digits", "digest", "name", "issuer", "interval"]
+    } else {
+        vec!["name", "issuer", "interval", "digits"]
+    };
+    for kw in kws.iter() {
+        let mut ok = false;
+        for a in allowed.iter() {
+            if kw.key == *a {
+                ok = true;
+            }
+        }
+        if not ok {
+            return Err(exc("TypeError", f"{class_name(kind)}.__init__() got an unexpected keyword argument '{kw.key}'"));
+        }
+    }
+    let mut otp = Otp {
+        kind: kind,
+        secret: secret.clone(),
+        digits: 6,
+        digest: "sha1".to_string(),
+        name: String.new(),
+        issuer: None,
+        interval: 30,
+        initial_count: 0,
+    };
+    for kw in kws.iter() {
+        if kw.key == "digits" {
+            otp.digits = kw.int as i64;
+        } else if kw.key == "digest" {
+            otp.digest = kw_text(kw);
+        } else if kw.key == "name" {
+            otp.name = kw_text(kw);
+        } else if kw.key == "issuer" {
+            otp.issuer = kw.text.clone();
+        } else if kw.key == "interval" {
+            otp.interval = kw.int as i64;
+        } else {
+            otp.initial_count = kw.int;
+        }
+    }
+    if kind == STEAM {
+        // Steam passes digits=10 and no interval on to TOTP.__init__
+        otp.digits = 10;
+        otp.interval = 30;
+    }
+    if otp.digest == "md5" {
+        return Err(value_error("selected digest function must generate digest size greater than or equals to 18 bytes"));
+    }
+    if otp.digits > 10 {
+        return Err(value_error("digits must be no greater than 10"));
+    }
+    if otp.name.len() == 0 {
+        otp.name = "Secret".to_string();
+    }
+    Ok(otp)
+}
+
+fn pow10(n: i64) -> i64 {
+    let mut p: i64 = 1;
+    for _ in 0..n {
+        p *= 10;
+    }
+    p
+}
+
+// OTP.int_to_bytestring: big-endian, at least eight bytes.
+fn int_to_bytestring(v: i128) -> Vec[u8] {
+    let mut rev: Vec[u8] = Vec.new();
+    let mut i = v;
+    while i != 0 {
+        rev.push((i & 255) as u8);
+        i = i >> 8;
+    }
+    while rev.len() < 8 {
+        rev.push(0);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut k = rev.len() - 1;
+    while k >= 0 {
+        out.push(rev[k]);
+        k -= 1;
+    }
+    out
+}
+
+impl Otp {
+    // OTP.byte_secret
+    fn byte_secret(ref self) -> Result[Vec[u8], Exc] {
+        let mut s = self.secret.clone();
+        let missing = s.chars().count() % 8;
+        if missing != 0 {
+            for _ in 0..8 - missing {
+                s.push('=');
+            }
+        }
+        b32decode(s)
+    }
+
+    // OTP.generate_otp
+    fn hotp_value(ref self, input: i128) -> Result[String, Exc] {
+        if input < 0 {
+            return Err(value_error("input must be positive integer"));
+        }
+        let h = hmac(self.digest, self.byte_secret()?, int_to_bytestring(input));
+        let off = (h[h.len() - 1] & 15) as i64;
+        let code = (((h[off] & 0x7f) as i64) << 24) | ((h[off + 1] as i64) << 16) | ((h[off + 2] as i64) << 8) | (h[off + 3] as i64);
+        let s = f"{10000000000 + code % pow10(self.digits)}";
+        if self.digits == 0 {
+            return Ok(s);
+        }
+        let cs: Vec[char] = s.chars().collect();
+        let mut out = String.new();
+        for i in cs.len() - self.digits..cs.len() {
+            out.push(cs[i]);
+        }
+        Ok(out)
+    }
+
+    fn generate_otp(ref self, input: i128) -> Result[String, Exc] {
+        let code = self.hotp_value(input)?;
+        if self.kind != STEAM {
+            return Ok(code);
+        }
+        let chars: Vec[char] = STEAM_CHARS.chars().collect();
+        let mut n = i64.parse(code).unwrap_or(0);
+        let mut out = String.new();
+        for _ in 0..5 {
+            out.push(chars[n % 26]);
+            n = n / 26;
+        }
+        Ok(out)
+    }
+
+    // HOTP.at
+    fn at_count(ref self, count: i128) -> Result[String, Exc] {
+        self.generate_otp(self.initial_count + count)
+    }
+
+    // TOTP.at
+    fn at_time(ref self, w: ref When, offset: i64) -> Result[String, Exc] {
+        let tc = timecode(w, self.interval)?;
+        self.generate_otp((tc + offset) as i128)
+    }
+
+    fn verify_count(ref self, t: ref Map[char, String], otp: ref String, counter: i128) -> Result[bool, Exc] {
+        Ok(strings_equal(t, otp, self.at_count(counter)?))
+    }
+
+    fn verify_time(ref self, t: ref Map[char, String], otp: ref String, w: ref When, window: i64) -> Result[bool, Exc] {
+        if window != 0 {
+            let mut i = -window;
+            while i <= window {
+                if strings_equal(t, otp, self.at_time(w, i)?) {
+                    return Ok(true);
+                }
+                i += 1;
+            }
+            return Ok(false);
+        }
+        Ok(strings_equal(t, otp, self.at_time(w, 0)?))
+    }
+
+    // provisioning_uri(name, initial_count / issuer_name, **kwargs)
+    fn provisioning_uri(ref self, name: ref String, issuer_name: ref String, initial_count: i128, extra: ref Vec[Pair]) -> Result[String, Exc] {
+        let n = if name.len() > 0 { name.clone() } else { self.name.clone() };
+        let issuer = if issuer_name.len() > 0 { Some(issuer_name.clone()) } else { self.issuer.clone() };
+        let count: Option[i128] = if self.kind == HOTP {
+            Some(if initial_count != 0 { initial_count } else { self.initial_count })
+        } else {
+            None
+        };
+        let period: Option[i64] = if self.kind == HOTP { None } else { Some(self.interval) };
+        build_uri(self.secret, n, count, issuer, self.digest, self.digits, period, extra)
+    }
+
+    fn describe(ref self) -> String {
+        let extra = if self.kind == HOTP { f"initial_count={self.initial_count}" } else { f"interval={self.interval}" };
+        let issuer = match self.issuer {
+            Some(s) => py_repr_str(s),
+            None => "None".to_string(),
+        };
+        f"{class_name(self.kind)} name={py_repr_str(self.name)} issuer={issuer} digits={self.digits} digest={self.digest} {extra} secret={py_repr_str(self.secret)}"
+    }
+}
+
+// utils.build_uri
+fn build_uri(secret: ref String, name: ref String, initial_count: Option[i128], issuer: ref Option[String], algorithm: ref String,
+             digits: i64, period: Option[i64], extra: ref Vec[Pair]) -> Result[String, Exc] {
+    let mut args: Vec[Pair] = Vec.new();
+    args.push(Pair { name: "secret".to_string(), value: secret.clone() });
+    let mut label = quote(name, "/");
+    if let Some(i) = issuer {
+        label = f"{quote(i, "/")}:{label}";
+        args.push(Pair { name: "issuer".to_string(), value: i.clone() });
+    }
+    if let Some(c) = initial_count {
+        args.push(Pair { name: "counter".to_string(), value: f"{c}" });
+    }
+    if *algorithm != "sha1" {
+        args.push(Pair { name: "algorithm".to_string(), value: upper(algorithm) });
+    }
+    if digits != 6 {
+        args.push(Pair { name: "digits".to_string(), value: f"{digits}" });
+    }
+    if let Some(p) = period {
+        if p != 30 {
+            args.push(Pair { name: "period".to_string(), value: f"{p}" });
+        }
+    }
+    for p in extra.iter() {
+        if p.name == "image" {
+            let u = urlparse(p.value, "").unwrap_or(Parsed {
+                scheme: String.new(),
+                netloc: String.new(),
+                path: String.new(),
+                params: String.new(),
+                query: String.new(),
+                fragment: String.new(),
+            });
+            if u.scheme != "https" or u.netloc.len() == 0 or u.path.len() == 0 {
+                return Err(exc("ValueError", f"{u.repr()} is not a valid url"));
+            }
+        }
+        let mut found = false;
+        for a in args.iter_mut() {
+            if a.name == p.name {
+                a.value = p.value.clone();
+                found = true;
+            }
+        }
+        if not found {
+            args.push(p.clone());
+        }
+    }
+    let kind = if initial_count.is_some() { "hotp" } else { "totp" };
+    Ok(f"otpauth://{kind}/{label}?{urlencode(args, "", true).replace("+", "%20")}")
+}
+
+// int() of a URI parameter, with its ValueError.
+fn uri_int(v: ref String) -> Result[i128, Exc] {
+    match py_int(v.chars().collect()) {
+        Some(d) => Ok(i128.parse(d).unwrap_or(0)),
+        None => Err(value_error_s(f"invalid literal for int() with base 10: {py_repr_str(v)}")),
+    }
+}
+
+fn value_error_s(msg: own String) -> Exc {
+    exc("ValueError", msg)
+}
+
+// pyotp.parse_uri
+fn parse_uri(uri: ref String) -> Result[Otp, Exc] {
+    let mut secret = String.new();
+    let mut encoder: Option[String] = None;
+    let mut digits: Option[i128] = None;
+    let mut data: Vec[Kw] = Vec.new();
+    let p = match urlparse(uri, "") {
+        Ok(p) => p,
+        Err(e) => return Err(value_error_s(e)),
+    };
+    if p.scheme != "otpauth" {
+        return Err(value_error("Not an otpauth URI"));
+    }
+    let path: Vec[char] = p.path.chars().collect();
+    let mut rest = String.new();
+    for i in 1..path.len() {
+        rest.push(path[i]);
+    }
+    let (issuer, has_colon, account) = partition(rest, b':');
+    if not has_colon {
+        kw_set(mut data, kw_str("name", unquote(issuer)));
+    } else {
+        kw_set(mut data, kw_str("issuer", unquote(issuer)));
+        kw_set(mut data, kw_str("name", unquote(account)));
+    }
+    let pairs = parse_qsl(p.query, false, false, "&").unwrap_or(Vec.new());
+    for pr in pairs.iter() {
+        let key = pr.name.clone();
+        let value = pr.value.clone();
+        if key == "secret" {
+            secret = value;
+        } else if key == "issuer" {
+            for kw in data.iter() {
+                if kw.key == "issuer" {
+                    if let Some(old) = kw.text {
+                        if *old != value {
+                            return Err(value_error("If issuer is specified in both label and parameters, it should be equal."));
+                        }
+                    }
+                }
+            }
+            kw_set(mut data, kw_str("issuer", value));
+        } else if key == "algorithm" {
+            let d = if value == "SHA1" {
+                "sha1"
+            } else if value == "SHA256" {
+                "sha256"
+            } else if value == "SHA512" {
+                "sha512"
+            } else {
+                return Err(value_error("Invalid value for algorithm, must be SHA1, SHA256 or SHA512"));
+            };
+            kw_set(mut data, kw_str("digest", d.to_string()));
+        } else if key == "encoder" {
+            encoder = Some(value);
+        } else if key == "digits" {
+            let n = uri_int(value)?;
+            digits = Some(n);
+            kw_set(mut data, kw_int("digits", n));
+        } else if key == "period" {
+            kw_set(mut data, kw_int("interval", uri_int(value)?));
+        } else if key == "counter" {
+            kw_set(mut data, kw_int("initial_count", uri_int(value)?));
+        }
+    }
+    let steam = encoder == Some("steam".to_string());
+    if not steam {
+        if let Some(n) = digits {
+            if n != 6 and n != 7 and n != 8 {
+                return Err(value_error("Digits may only be 6, 7, or 8"));
+            }
+        }
+    }
+    if secret.len() == 0 {
+        return Err(value_error("No secret found in URI"));
+    }
+    if steam {
+        return new_otp(STEAM, secret, data);
+    }
+    if p.netloc == "totp" {
+        return new_otp(TOTP, secret, data);
+    }
+    if p.netloc == "hotp" {
+        return new_otp(HOTP, secret, data);
+    }
+    Err(value_error("Not a supported OTP type"))
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+// CR shows as <CR> and other control characters as <xNN>, so
+// expected.out stays a plain LF text file.
+fn show(text: ref String) -> String {
+    let mut out = String.new();
+    for c in text.chars() {
+        let n = c as i64;
+        if c == '\r' {
+            out.push_str("<CR>");
+        } else if (n < 0x20 and c != '\t' and c != '\n') or n == 0x7f {
+            out.push_str(f"<x{hex_digits(n, 2)}>");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+// ------------------------------------------------------------ the jobs
+
+// A job's key=value fields, in order.
+fn fields(args: ref Vec[String]) -> Vec[Pair] {
+    let mut out: Vec[Pair] = Vec.new();
+    for a in args.iter() {
+        let (k, _, v) = partition(a, b'=');
+        out.push(Pair { name: k, value: v });
+    }
+    out
+}
+
+fn field(fs: ref Vec[Pair], key: Str) -> Option[String] {
+    for p in fs.iter() {
+        if p.name == key {
+            return Some(p.value.clone());
+        }
+    }
+    None
+}
+
+fn field_or(fs: ref Vec[Pair], key: Str) -> String {
+    field(fs, key).unwrap_or(String.new())
+}
+
+fn int_of(s: ref String) -> i128 {
+    i128.parse(s.clone()).unwrap_or(0)
+}
+
+fn kind_of(name: ref String) -> i64 {
+    if *name == "hotp" {
+        HOTP
+    } else if *name == "totp" {
+        TOTP
+    } else {
+        STEAM
+    }
+}
+
+// The class's keyword arguments among a job's fields.
+fn make(kind: i64, fs: ref Vec[Pair]) -> Result[Otp, Exc] {
+    let skip: Vec[Str] = vec!["kind", "secret", "at", "otp", "counter", "for_time", "counter_offset", "valid_window"];
+    let mut kws: Vec[Kw] = Vec.new();
+    for p in fs.iter() {
+        let mut skipped = p.name.starts_with("p.");
+        for s in skip.iter() {
+            if p.name == *s {
+                skipped = true;
+            }
+        }
+        if skipped {
+            continue;
+        }
+        if p.name == "digits" or p.name == "interval" or p.name == "initial_count" {
+            kw_set(mut kws, Kw { key: p.name.clone(), int: int_of(p.value), text: None });
+        } else {
+            kw_set(mut kws, Kw { key: p.name.clone(), int: 0, text: Some(p.value.clone()) });
+        }
+    }
+    new_otp(kind, field_or(fs, "secret"), kws)
+}
+
+fn split_commas(s: ref String) -> Vec[String] {
+    split_on(s, b',')
+}
+
+fn first_code(otp: ref Otp) -> String {
+    if otp.kind == HOTP {
+        match otp.at_count(0) {
+            Ok(c) => f"at(0) = {c}",
+            Err(e) => err_line(e),
+        }
+    } else {
+        match otp.at_time(When.Stamp(1709993107), 0) {
+            Ok(c) => f"at(1709993107) = {c}",
+            Err(e) => err_line(e),
+        }
+    }
+}
+
+fn codes_job(kind: i64, args: ref Vec[String], out: mut ref String) {
+    let fs = fields(args);
+    let otp = match make(kind, fs) {
+        Ok(o) => o,
+        Err(e) => {
+            emit(mut out, err_line(e));
+            return;
+        }
+    };
+    let offset = int_of(field_or(fs, "counter_offset")) as i64;
+    for t in split_commas(field_or(fs, "at")).iter() {
+        let r = if kind == HOTP { otp.at_count(int_of(t)) } else { otp.at_time(when_of(t), offset) };
+        match r {
+            Ok(c) => emit(mut out, f"at({t}) = {c}"),
+            Err(e) => emit(mut out, f"at({t}): {err_line(e)}"),
+        }
+    }
+}
+
+fn verify_hotp_job(t: ref Map[char, String], args: ref Vec[String], out: mut ref String) {
+    let fs = fields(args);
+    let otp = make(HOTP, fs).unwrap_or(blank_otp());
+    let code = field_or(fs, "otp");
+    for c in split_commas(field_or(fs, "counter")).iter() {
+        match otp.verify_count(t, code, int_of(c)) {
+            Ok(ok) => emit(mut out, show(f"verify({py_repr_str(code)}, {c}) = {py_bool(ok)}")),
+            Err(e) => emit(mut out, show(f"verify({py_repr_str(code)}, {c}): {err_line(e)}")),
+        }
+    }
+}
+
+fn verify_totp_job(t: ref Map[char, String], args: ref Vec[String], out: mut ref String) {
+    let fs = fields(args);
+    let otp = make(TOTP, fs).unwrap_or(blank_otp());
+    let code = field_or(fs, "otp");
+    let window = int_of(field_or(fs, "valid_window")) as i64;
+    for w in split_commas(field_or(fs, "for_time")).iter() {
+        match otp.verify_time(t, code, when_of(w), window) {
+            Ok(ok) => emit(mut out, show(f"verify({py_repr_str(code)}, {w}) = {py_bool(ok)}")),
+            Err(e) => emit(mut out, show(f"verify({py_repr_str(code)}, {w}): {err_line(e)}")),
+        }
+    }
+}
+
+fn blank_otp() -> Otp {
+    Otp {
+        kind: TOTP,
+        secret: String.new(),
+        digits: 6,
+        digest: "sha1".to_string(),
+        name: "Secret".to_string(),
+        issuer: None,
+        interval: 30,
+        initial_count: 0,
+    }
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn parse_back(uri: ref String, out: mut ref String) {
+    match parse_uri(uri) {
+        Ok(back) => {
+            emit(mut out, f"  parsed: {back.describe()}");
+            emit(mut out, f"  {first_code(back)}");
+        }
+        Err(e) => emit(mut out, f"  parsed: {err_line(e)}"),
+    }
+}
+
+fn provision_job(args: ref Vec[String], out: mut ref String) {
+    let fs = fields(args);
+    let otp = match make(kind_of(field_or(fs, "kind")), fs) {
+        Ok(o) => o,
+        Err(e) => {
+            emit(mut out, err_line(e));
+            return;
+        }
+    };
+    let mut name = String.new();
+    let mut issuer = String.new();
+    let mut count: i128 = 0;
+    let mut extra: Vec[Pair] = Vec.new();
+    for p in fs.iter() {
+        if not p.name.starts_with("p.") {
+            continue;
+        }
+        let key = slice_from(p.name, 2);
+        if key == "name" {
+            name = p.value.clone();
+        } else if key == "issuer_name" {
+            issuer = p.value.clone();
+        } else if key == "initial_count" and otp.kind == HOTP {
+            count = int_of(p.value);
+        } else {
+            extra.push(Pair { name: key, value: p.value.clone() });
+        }
+    }
+    match otp.provisioning_uri(name, issuer, count, extra) {
+        Ok(uri) => {
+            emit(mut out, uri);
+            parse_back(uri, mut out);
+        }
+        Err(e) => emit(mut out, err_line(e)),
+    }
+}
+
+fn secret_job(args: ref Vec[String], out: mut ref String) {
+    let otp = new_otp(HOTP, args[0], Vec.new()).unwrap_or(blank_otp());
+    match otp.byte_secret() {
+        Ok(b) => emit(mut out, hex_of(b)),
+        Err(e) => emit(mut out, err_line(e)),
+    }
+}
+
+// random_base32 and random_hex: only their length checks are printed.
+fn random_job(args: ref Vec[String], out: mut ref String) {
+    let n = int_of(args[1]) as i64;
+    let least = if args[0] == "base32" { 32 } else { 40 };
+    if n < least or n < 32 {
+        emit(mut out, "error: ValueError: Secrets should be at least 160 bits");
+    } else {
+        emit(mut out, f"{n} characters");
+    }
+}
+
+fn uris_job(args: ref Vec[String], out: mut ref String) {
+    for line in lines_of(read_text(args[0])).iter() {
+        emit(mut out, show(line));
+        let otp = match parse_uri(line) {
+            Ok(o) => o,
+            Err(e) => {
+                emit(mut out, f"  {err_line(e)}");
+                continue;
+            }
+        };
+        emit(mut out, f"  {otp.describe()}");
+        emit(mut out, f"  {first_code(otp)}");
+        match otp.provisioning_uri(String.new(), String.new(), 0, Vec.new()) {
+            Ok(uri) => emit(mut out, f"  uri: {uri}"),
+            Err(e) => emit(mut out, f"  uri: {err_line(e)}"),
+        }
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+// "%-40s"
+fn pad_right(s: ref String, width: i64) -> String {
+    let mut out = s.clone();
+    let mut n = s.chars().count();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out
+}
+
+fn pad_left(s: ref String, width: i64) -> String {
+    let mut out = String.new();
+    let mut n = s.chars().count();
+    while n < width {
+        out.push(' ');
+        n += 1;
+    }
+    out.push_str(s);
+    out
+}
+
+fn py_mod(a: i64, b: i64) -> i64 {
+    let r = a % b;
+    if r != 0 and ((r < 0) != (b < 0)) { r + b } else { r }
+}
+
+struct Account {
+    issuer_key: String,
+    name_key: String,
+    otp: Otp,
+}
+
+fn authenticator_job(args: ref Vec[String], out: mut ref String) {
+    let w = when_of(args[1]);
+    let stamp = stamp_of(w);
+    let mut accounts: Vec[Account] = Vec.new();
+    for line in lines_of(read_text(args[0])).iter() {
+        if let Ok(otp) = parse_uri(line) {
+            let issuer = match otp.issuer.clone() {
+                Some(s) => s.to_lowercase(),
+                None => String.new(),
+            };
+            accounts.push(Account { issuer_key: issuer, name_key: otp.name.to_lowercase(), otp: otp });
+        }
+    }
+    accounts.sort_by(|a, b| account_cmp(a, b));
+    for a in accounts.iter() {
+        let otp = a.otp.clone();
+        let label = match otp.issuer.clone() {
+            Some(i) => f"{i} ({otp.name})",
+            None => otp.name.clone(),
+        };
+        if otp.kind == HOTP {
+            let code = match otp.at_count(0) {
+                Ok(c) => c,
+                Err(e) => err_line(e),
+            };
+            emit(mut out, f"{pad_right(label, 40)} {code}  counter {otp.initial_count}");
+            continue;
+        }
+        match otp.at_time(w, 0) {
+            Ok(code) => {
+                let left = otp.interval - py_mod(stamp, otp.interval);
+                let next = otp.at_time(w, 1).unwrap_or(String.new());
+                emit(mut out, f"{pad_right(label, 40)} {code}  {pad_left(f"{left}", 2)}s left, next {next}");
+            }
+            Err(e) => emit(mut out, f"{pad_right(label, 40)} {err_line(e)}"),
+        }
+    }
+}
+
+fn str_cmp(a: ref String, b: ref String) -> Ordering {
+    if a < b {
+        Ordering.Less
+    } else if a == b {
+        Ordering.Equal
+    } else {
+        Ordering.Greater
+    }
+}
+
+fn account_cmp(a: ref Account, b: ref Account) -> Ordering {
+    let c = str_cmp(a.issuer_key, b.issuer_key);
+    if c != Ordering.Equal {
+        return c;
+    }
+    str_cmp(a.name_key, b.name_key)
+}
+
+// A user's TOTP from users.tsv's "key=value ..." settings.
+fn user_otp(secret: ref String, opts: ref String) -> Otp {
+    let mut kws: Vec[Kw] = Vec.new();
+    for o in split_ws(opts).iter() {
+        let (k, _, v) = partition(o, b'=');
+        if k == "digest" {
+            kws.push(kw_str("digest", v));
+        } else {
+            kws.push(Kw { key: k, int: int_of(v), text: None });
+        }
+    }
+    new_otp(TOTP, secret, kws).unwrap_or(blank_otp())
+}
+
+struct User {
+    name: String,
+    otp: Otp,
+    last_step: i64,
+    fails: i64,
+    locked_until: i64,
+}
+
+fn login_job(t: ref Map[char, String], args: ref Vec[String], out: mut ref String) {
+    let mut users: Vec[User] = Vec.new();
+    for line in lines_of(read_text(args[0])).iter() {
+        let f = split_on(line, b'\t');
+        users.push(User { name: f[0].clone(), otp: user_otp(f[1], f[2]), last_step: -1, fails: 0, locked_until: 0 });
+    }
+    for line in lines_of(read_text(args[1])).iter() {
+        let f = split_on(line, b'\t');
+        let w = when_of(f[0]);
+        let now = stamp_of(w);
+        let head = show(f"{f[0]} {f[1]} {py_repr_str(f[2])}:");
+        let mut found: i64 = -1;
+        for i in 0..users.len() {
+            if users[i].name == f[1] {
+                found = i;
+            }
+        }
+        if found < 0 {
+            emit(mut out, f"{head} no such user");
+            continue;
+        }
+        if users[found].locked_until > now {
+            emit(mut out, f"{head} locked for {users[found].locked_until - now}s more");
+            continue;
+        }
+        let code = f[2].replace(" ", "").replace("-", "");
+        let step = timecode(w, users[found].otp.interval).unwrap_or(0);
+        let mut matched: Option[i64] = None;
+        for i in vec![-1, 0, 1] {
+            let c = users[found].otp.at_time(w, i).unwrap_or(String.new());
+            if strings_equal(t, code, c) {
+                matched = Some(step + i);
+                break;
+            }
+        }
+        match matched {
+            None => {
+                users[found].fails += 1;
+                if users[found].fails >= 3 {
+                    users[found].locked_until = now + 300;
+                    users[found].fails = 0;
+                    emit(mut out, f"{head} wrong code; locked for 300s");
+                } else {
+                    emit(mut out, f"{head} wrong code ({users[found].fails} of 3)");
+                }
+            }
+            Some(m) => {
+                if m <= users[found].last_step {
+                    emit(mut out, f"{head} replayed code from step {m}");
+                } else {
+                    users[found].last_step = m;
+                    users[found].fails = 0;
+                    let drift = m - step;
+                    let note = if drift == 0 { String.new() } else if drift > 0 { f" (drift +{drift})" } else { f" (drift {drift})" };
+                    emit(mut out, f"{head} accepted at step {m}{note}");
+                }
+            }
+        }
+    }
+}
+
+struct Token {
+    serial: String,
+    otp: Otp,
+    counter: i128,
+    pending: Option[i128],
+}
+
+// The first counter in [from, to) whose code is `code`.
+fn find_counter(t: ref Map[char, String], otp: ref Otp, code: ref String, from: i128, to: i128) -> Option[i128] {
+    let mut c = from;
+    while c < to {
+        if otp.verify_count(t, code, c).unwrap_or(false) {
+            return Some(c);
+        }
+        c += 1;
+    }
+    None
+}
+
+fn tokens_job(t: ref Map[char, String], args: ref Vec[String], out: mut ref String) {
+    let mut tokens: Vec[Token] = Vec.new();
+    for line in lines_of(read_text(args[0])).iter() {
+        let f = split_on(line, b'\t');
+        let otp = new_otp(HOTP, f[1], Vec.new()).unwrap_or(blank_otp());
+        tokens.push(Token { serial: f[0].clone(), otp: otp, counter: int_of(f[2]), pending: None });
+    }
+    for line in lines_of(read_text(args[1])).iter() {
+        let f = split_on(line, b'\t');
+        let code = f[1].clone();
+        let head = f"{f[0]} {code}:";
+        let mut at: i64 = -1;
+        for i in 0..tokens.len() {
+            if tokens[i].serial == f[0] {
+                at = i;
+            }
+        }
+        if at < 0 {
+            emit(mut out, f"{head} unknown token");
+            continue;
+        }
+        let counter = tokens[at].counter;
+        if let Some(c) = find_counter(t, tokens[at].otp, code, counter, counter + 10) {
+            tokens[at].counter = c + 1;
+            tokens[at].pending = None;
+            emit(mut out, f"{head} accepted at {c}, next {tokens[at].counter}");
+            continue;
+        }
+        if let Some(p) = tokens[at].pending {
+            if tokens[at].otp.verify_count(t, code, p + 1).unwrap_or(false) {
+                tokens[at].counter = p + 2;
+                tokens[at].pending = None;
+                emit(mut out, f"{head} resynchronised at {p + 1}, next {tokens[at].counter}");
+                continue;
+            }
+        }
+        tokens[at].pending = find_counter(t, tokens[at].otp, code, counter, counter + 100);
+        if tokens[at].pending.is_some() {
+            emit(mut out, f"{head} out of sync; press again");
+        } else {
+            emit(mut out, f"{head} rejected");
+        }
+    }
+}
+
+fn enrol_job(args: ref Vec[String], out: mut ref String) {
+    let w = when_of(args[1]);
+    for line in lines_of(read_text(args[0])).iter() {
+        let f = split_on(line, b'\t');
+        let email = f[0].clone();
+        let issuer = f[1].clone();
+        let secret = b32encode(sha1(to_bytes(email)));
+        let mut kws: Vec[Kw] = vec![kw_str("name", email)];
+        if issuer.len() > 0 {
+            kws.push(kw_str("issuer", issuer));
+        }
+        let otp = new_otp(TOTP, secret, kws).unwrap_or(blank_otp());
+        let mut extra: Vec[Pair] = Vec.new();
+        for e in split_ws(f[2]).iter() {
+            let (k, _, v) = partition(e, b'=');
+            extra.push(Pair { name: k, value: v });
+        }
+        let shown = if issuer.len() > 0 { issuer.clone() } else { "no issuer".to_string() };
+        emit(mut out, show(f"{email} ({shown}):"));
+        let uri = match otp.provisioning_uri(String.new(), String.new(), 0, extra) {
+            Ok(u) => u,
+            Err(e) => {
+                emit(mut out, f"  {err_line(e)}");
+                continue;
+            }
+        };
+        emit(mut out, f"  {uri}");
+        let back = parse_uri(uri).unwrap_or(blank_otp());
+        let same = back.secret == otp.secret and back.name == otp.name and back.issuer == otp.issuer;
+        let verdict = if same { "ok".to_string() } else { f"differs: {back.describe()}" };
+        let code = back.at_time(w, 0).unwrap_or(String.new());
+        emit(mut out, f"  round trip {verdict}, code {code}");
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let t = nfkd_table();
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())).iter() {
+        let job = split_on(line, b'\t');
+        emit(mut out, show(f"== {join(job, " ")}"));
+        let mut args: Vec[String] = Vec.new();
+        for i in 1..job.len() {
+            args.push(job[i].clone());
+        }
+        let kind = job[0].clone();
+        if kind == "hotp" or kind == "totp" or kind == "steam" {
+            codes_job(kind_of(kind), args, mut out);
+        } else if kind == "verify_hotp" {
+            verify_hotp_job(t, args, mut out);
+        } else if kind == "verify_totp" {
+            verify_totp_job(t, args, mut out);
+        } else if kind == "provision" {
+            provision_job(args, mut out);
+        } else if kind == "secret" {
+            secret_job(args, mut out);
+        } else if kind == "random" {
+            random_job(args, mut out);
+        } else if kind == "uris" {
+            uris_job(args, mut out);
+        } else if kind == "authenticator" {
+            authenticator_job(args, mut out);
+        } else if kind == "login" {
+            login_job(t, args, mut out);
+        } else if kind == "tokens" {
+            tokens_job(t, args, mut out);
+        } else {
+            enrol_job(args, mut out);
+        }
+    }
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("otpauth://totp/GitHub:octo-dev?secret=NNQXEYJNN52HALLEMVWW6LLLMV4S2MRQGI2A&issuer=GitHub\n");
+    t.push_str("otpauth://totp/Amazon%20Web%20Services:admin@example-corp?secret=KRSXG5CTMVRXEZLUKNSXG2LUMUYTEMZU&issuer=Amazon%20Web%20Services\n");
+    t.push_str("otpauth://totp/Google%3Adev%40example.org?secret=MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK&issuer=Google\n");
+    t.push_str("otpauth://totp/ACME%20Co:john.doe@email.com?secret=HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ&issuer=ACME%20Co&algorithm=SHA256&digits=8&period=60\n");
+    t.push_str("otpauth://hotp/YubiKey:slot2?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=42&issuer=YubiKey\n");
+    t.push_str("otpauth://totp/Steam:gamer_42?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Steam&encoder=steam\n");
+    t.push_str("otpauth://totp/Dropbox:sam%40example.net?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA%3D&algorithm=SHA512&digits=7\n");
+    t.push_str("otpauth://totp/home-server?secret=jbswy3dpehpk3pxp\n");
+    t.push_str("otpauth://totp/My%20Bank:sam?secret=GEZDGNBVGY3TQOJQ&issuer=My+Bank\n");
+    t.push_str("otpauth://totp/?secret=MFRGGZDFMZTWQ2LK&period=15\n");
+    t.push_str("otpauth://hotp/Legacy%20VPN:ops?secret=JBSWY3DPEHPK3PXP&counter=%207&digits=8\n");
+    t.push_str("otpauth://totp/Intranet:%C3%A9lodie?secret=JBSWY3DPEHPK3PXP&digits=%D9%A8&issuer=Intranet\n");
+    v.push(DataFile { path: "accounts.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("2024-03-09T14:05:07Z\talice\t935255\n");
+    t.push_str("2024-03-09T14:05:09Z\talice\t935255\n");
+    t.push_str("2024-03-09T14:05:40Z\talice\t935255\n");
+    t.push_str("2024-03-09T14:06:05Z\talice\t899310\n");
+    t.push_str("2024-03-09T14:06:10Z\tbob\t6270 6442\n");
+    t.push_str("2024-03-09T14:06:20Z\tbob\t12345678\n");
+    t.push_str("2024-03-09T14:06:21Z\tbob\t87654321\n");
+    t.push_str("2024-03-09T14:06:22Z\tbob\t11111111\n");
+    t.push_str("2024-03-09T14:06:30Z\tbob\t37346485\n");
+    t.push_str("2024-03-09T14:06:40Z\tcarol\t４９２７２１\n");
+    t.push_str("2024-03-09T14:07:10Z\tcarol\t747237\n");
+    t.push_str("2024-03-09T14:07:20Z\tcarol\t336139\n");
+    t.push_str("2024-03-09T14:08:20Z\tdave\t56232192\n");
+    t.push_str("2024-03-09T14:08:50Z\tdave\t1259-6086\n");
+    t.push_str("2024-03-09T14:09:10Z\terin\t٠٤٥٤٩٣\n");
+    t.push_str("2024-03-09T14:09:11Z\terin\t04549³\n");
+    t.push_str("2024-03-09T14:09:12Z\terin\t⓪45493\n");
+    t.push_str("2024-03-09T14:09:20Z\tmallory\t000000\n");
+    t.push_str("2024-03-09T14:10:00Z\terin\t141106\n");
+    t.push_str("2024-03-09T14:11:40Z\tbob\t22427828\n");
+    v.push(DataFile { path: "attempts.log".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("https://totp/GitHub:octo?secret=JBSWY3DPEHPK3PXP\n");
+    t.push_str("otpauth://TOTP/GitHub:octo?secret=JBSWY3DPEHPK3PXP\n");
+    t.push_str("otpauth://totp/GitHub:octo?secret=JBSWY3DPEHPK3PXP&issuer=GitLab\n");
+    t.push_str("otpauth://totp/GitHub:octo?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&issuer=GitLab\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=9\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=six\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=MD5\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=sha1\n");
+    t.push_str("otpauth://totp/x?issuer=Nobody\n");
+    t.push_str("otpauth://totp/x?secret=&issuer=Blank\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&counter=3\n");
+    t.push_str("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&period=60\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam&counter=3\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam&algorithm=SHA256&counter=1\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam&digits=9\n");
+    t.push_str("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=-5\n");
+    t.push_str("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=1_000\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=0\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=-30\n");
+    t.push_str("otpauth://totp/x?secret=jbsw%20y3dp%20ehpk%203pxp\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PX1\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPE\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEH\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP====\n");
+    t.push_str("otpauth://totp/x?secret=%C3%84BSWY3DPEHPK3PXP\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=10&encoder=steam\n");
+    t.push_str("otpauth://totp/a:b:c?secret=JBSWY3DPEHPK3PXP\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=6&digits=8\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=+45\n");
+    t.push_str("otpauth://totp/Caf%E9:x?secret=JBSWY3DPEHPK3PXP\n");
+    t.push_str("otpauth:totp?secret=JBSWY3DPEHPK3PXP\n");
+    t.push_str("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&secret=MFRGGZDFMZTWQ2LK&image=x\n");
+    v.push(DataFile { path: "broken-uris.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("new.hire@example.org\tExample Corp\t\n");
+    t.push_str("ops+oncall@example.org\tExample Corp: Ops\t\n");
+    t.push_str("jürgen@example.de\tBeispiel GmbH\t\n");
+    t.push_str("pat\t\timage=https://example.org/logo.png\n");
+    t.push_str("lee\tShop\timage=http://example.org/logo.png\n");
+    t.push_str("kim\tShop\timage=https://example.org\n");
+    t.push_str("sam/admin\tShop & Co\tcolor=green\n");
+    v.push(DataFile { path: "enrol.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tat=0,1,2,3,4,5,6,7,8,9\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tat=-1,0,4294967295,4294967296,18446744073709551615,18446744073709551616\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tinitial_count=10\tat=0,-10,-11\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigest=sha1\tdigits=8\tat=0,1,2\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigest=sha224\tdigits=8\tat=0,1,2\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigest=sha256\tdigits=8\tat=0,1,2\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigest=sha384\tdigits=8\tat=0,1,2\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigest=sha512\tdigits=8\tat=0,1,2\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigits=0\tat=0,1\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigits=1\tat=0,1\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigits=5\tat=0,1\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigits=9\tat=0,1\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigits=10\tat=0,1\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigits=11\tat=0,1\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigest=md5\tat=0\n");
+    t.push_str("hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tinterval=30\tat=0\n");
+    t.push_str("hotp\tsecret=\tat=0,1\n");
+    t.push_str("secret\tjbswy3dpehpk3pxp\n");
+    t.push_str("secret\tJBSW Y3DP EHPK 3PXP\n");
+    t.push_str("secret\tJBSWY3DPEHPK3PX0\n");
+    t.push_str("secret\tJBSWY3DPEHPK3PX8\n");
+    t.push_str("secret\tJBSWY3DPE\n");
+    t.push_str("secret\tJBSWY3DPEH\n");
+    t.push_str("secret\tJBSWY3DPEHP\n");
+    t.push_str("secret\tJBSWY3DPEHPK\n");
+    t.push_str("secret\tJBSWY3DPEHPK3\n");
+    t.push_str("secret\tJBSWY3DPEHPK3P\n");
+    t.push_str("secret\tJBSWY3DPEHPK3PX\n");
+    t.push_str("secret\tJBSWY3DPEHPK3PXP====\n");
+    t.push_str("secret\tJBSWY3DPEHPK3PXP========\n");
+    t.push_str("secret\tJBSWY3DP=HPK3PXP\n");
+    t.push_str("secret\tMFRGGZDFMZTWQ2LK=\n");
+    t.push_str("secret\tÄBSWY3DPEHPK3PXP\n");
+    t.push_str("secret\tjbswy3dpehpk3pxpjbswy3dp\n");
+    t.push_str("secret\tAAAAAAAA\n");
+    t.push_str("secret\t77777777\n");
+    t.push_str("secret\tMZXW6===\n");
+    t.push_str("secret\tMZXW6YQ=\n");
+    t.push_str("totp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\tdigits=8\tat=59,1111111109,1111111111,1234567890,2000000000,20000000000\n");
+    t.push_str("totp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA====\tdigest=sha256\tdigits=8\tat=59,1111111109,1111111111,1234567890,2000000000,20000000000\n");
+    t.push_str("totp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA=\tdigest=sha512\tdigits=8\tat=59,1111111109,1111111111,1234567890,2000000000,20000000000\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tat=0,1,29,30,-1,-29,-30,-31,-59,-60\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tat=253402300799,253402300800,-62135510400,-62135596800,-62135596801\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tat=2024-03-09T14:05:07Z,2024-03-09T14:05:07.999+05:30,2024-03-09 14:05:07,2024-03-09T14:05:29.999999,1969-12-31T23:59:59Z,1969-12-31T23:59:30-00:30\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tat=0001-01-01T00:30:00+01:00,9999-12-31T23:59:59-01:00,0001-01-01T00:00:00\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tcounter_offset=-1\tat=0,29,30,1709993107\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tcounter_offset=5\tat=1709993107\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tinterval=60\tat=59,60,-1,-60,-61\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tinterval=7\tat=1709993107\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tinterval=0\tat=10\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tinterval=-30\tat=0,-31,1709993107\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tinitial_count=3\tat=0\n");
+    t.push_str("totp\tsecret=JBSWY3DPEHPK3PXP\tdigits=11\tat=0\n");
+    t.push_str("steam\tsecret=JBSWY3DPEHPK3PXP\tat=0,30,1709993107,2000000000\n");
+    t.push_str("steam\tsecret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP\tdigits=9\tinterval=10\tat=1709993107\n");
+    t.push_str("steam\tsecret=JBSWY3DPEHPK3PXP\tdigest=sha256\tat=0\n");
+    t.push_str("verify_hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\totp=520489\tcounter=9,10,8\n");
+    t.push_str("verify_hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\totp=９６９４２９\tcounter=3\n");
+    t.push_str("verify_hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\totp=969429 \tcounter=3\n");
+    t.push_str("verify_hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\totp=0969429\tcounter=3\n");
+    t.push_str("verify_hotp\tsecret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\totp=x\tcounter=-1\n");
+    t.push_str("verify_totp\tsecret=JBSWY3DPEHPK3PXP\totp=285952\tvalid_window=0\tfor_time=1709993107,1709993137,1709993167,1709993077,1709993047\n");
+    t.push_str("verify_totp\tsecret=JBSWY3DPEHPK3PXP\totp=285952\tvalid_window=1\tfor_time=1709993107,1709993137,1709993167,1709993077,1709993047\n");
+    t.push_str("verify_totp\tsecret=JBSWY3DPEHPK3PXP\totp=285952\tvalid_window=2\tfor_time=1709993107,1709993137,1709993167,1709993077,1709993047\n");
+    t.push_str("verify_totp\tsecret=JBSWY3DPEHPK3PXP\totp=285952\tvalid_window=-1\tfor_time=1709993107,1709993137,1709993167,1709993077,1709993047\n");
+    t.push_str("verify_totp\tsecret=JBSWY3DPEHPK3PXP\totp=285952\tfor_time=2024-03-09T14:05:20Z,2024-03-09T19:35:20+05:30,2024-03-09T14:05:40Z\n");
+    t.push_str("verify_totp\tsecret=JBSWY3DPEHPK3PXP\totp=447969\tvalid_window=1\tfor_time=1709993107\n");
+    t.push_str("verify_totp\tsecret=JBSWY3DPEHPK3PXP\totp=００００００\tvalid_window=1\tfor_time=1709993107\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tname=alice@example.org\tissuer=Example Corp\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tdigest=sha256\tdigits=8\tinterval=60\tp.name=bob\tp.issuer_name=Acme\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tdigest=sha384\tname=x\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tdigest=sha224\tdigits=7\tinterval=30\tname=x\tissuer=a:b\n");
+    t.push_str("provision\tkind=hotp\tsecret=wrn3pqx5uqxqvnqr\tname=mark@percival\n");
+    t.push_str("provision\tkind=hotp\tsecret=wrn3pqx5uqxqvnqr\tname=mark@percival\tinitial_count=12\n");
+    t.push_str("provision\tkind=hotp\tsecret=wrn3pqx5uqxqvnqr\tname=mark@percival\tinitial_count=12\tp.initial_count=0\n");
+    t.push_str("provision\tkind=hotp\tsecret=wrn3pqx5uqxqvnqr\tinitial_count=12\tp.initial_count=3\tp.name=other\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tname=\tissuer=\tp.image=https://example.org/i.png\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tname=a b+c&d=e?f#g\tissuer=x y/z\tp.label=Ünïcode ✓\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tp.image=ftp://example.org/i.png\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tp.image=https://example.org\n");
+    t.push_str("provision\tkind=totp\tsecret=JBSWY3DPEHPK3PXP\tp.image=https:///i.png?x=1#f\n");
+    t.push_str("provision\tkind=steam\tsecret=JBSWY3DPEHPK3PXP\tname=gamer\tissuer=Steam\n");
+    t.push_str("random\tbase32\t16\n");
+    t.push_str("random\tbase32\t31\n");
+    t.push_str("random\thex\t39\n");
+    t.push_str("random\thex\t0\n");
+    t.push_str("uris\taccounts.txt\n");
+    t.push_str("uris\tbroken-uris.txt\n");
+    t.push_str("authenticator\taccounts.txt\t1709993107\n");
+    t.push_str("authenticator\taccounts.txt\t2024-03-09T14:05:59Z\n");
+    t.push_str("login\tusers.tsv\tattempts.log\n");
+    t.push_str("tokens\ttokens.tsv\tpresses.log\n");
+    t.push_str("enrol\tenrol.tsv\t1709993107\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("YK-0001\t755224\n");
+    t.push_str("YK-0001\t287082\n");
+    t.push_str("YK-0001\t287082\n");
+    t.push_str("YK-0001\t254676\n");
+    t.push_str("YK-0002\t542634\n");
+    t.push_str("YK-0002\t973682\n");
+    t.push_str("YK-0002\t155774\n");
+    t.push_str("YK-0003\t865438\n");
+    t.push_str("YK-0003\t312058\n");
+    t.push_str("YK-0003\t713385\n");
+    t.push_str("YK-0003\t123456\n");
+    t.push_str("YK-9999\t000000\n");
+    t.push_str("YK-0003\t547862\n");
+    t.push_str("YK-0003\t320030\n");
+    v.push(DataFile { path: "presses.log".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("YK-0001\tGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\t0\n");
+    t.push_str("YK-0002\tJBSWY3DPEHPK3PXP\t100\n");
+    t.push_str("YK-0003\tMFRGGZDFMZTWQ2LK\t5\n");
+    v.push(DataFile { path: "tokens.tsv".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("alice\tNNQXEYJNN52HALLEMVWW6LLLMV4S2MRQGI2A\t\n");
+    t.push_str("bob\tJBSWY3DPEHPK3PXP\tdigits=8\n");
+    t.push_str("carol\tHXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ\tdigest=sha256 interval=60\n");
+    t.push_str("dave\tGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA=\tdigest=sha512 digits=8\n");
+    t.push_str("erin\tMFRGGZDFMZTWQ2LK\t\n");
+    v.push(DataFile { path: "users.tsv".to_string(), hex: false, body: t });
+}
+
+// NFKD for the characters of tables.py's BLOCKS that it changes,
+// from Python's unicodedata.
+fn nfkd_table() -> Map[char, String] {
+    let mut m: Map[char, String] = Map.new();
+    nfkd_part_0(mut m);
+    nfkd_part_1(mut m);
+    nfkd_part_2(mut m);
+    nfkd_part_3(mut m);
+    nfkd_part_4(mut m);
+    nfkd_part_5(mut m);
+    m
+}
+
+fn nfkd_part_0(m: mut ref Map[char, String]) {
+    m.insert('\u{a0}', " ".to_string());
+    m.insert('\u{a8}', " \u{308}".to_string());
+    m.insert('\u{aa}', "a".to_string());
+    m.insert('\u{af}', " \u{304}".to_string());
+    m.insert('\u{b2}', "2".to_string());
+    m.insert('\u{b3}', "3".to_string());
+    m.insert('\u{b4}', " \u{301}".to_string());
+    m.insert('\u{b5}', "\u{3bc}".to_string());
+    m.insert('\u{b8}', " \u{327}".to_string());
+    m.insert('\u{b9}', "1".to_string());
+    m.insert('\u{ba}', "o".to_string());
+    m.insert('\u{bc}', "1\u{2044}4".to_string());
+    m.insert('\u{bd}', "1\u{2044}2".to_string());
+    m.insert('\u{be}', "3\u{2044}4".to_string());
+    m.insert('\u{c0}', "A\u{300}".to_string());
+    m.insert('\u{c1}', "A\u{301}".to_string());
+    m.insert('\u{c2}', "A\u{302}".to_string());
+    m.insert('\u{c3}', "A\u{303}".to_string());
+    m.insert('\u{c4}', "A\u{308}".to_string());
+    m.insert('\u{c5}', "A\u{30a}".to_string());
+    m.insert('\u{c7}', "C\u{327}".to_string());
+    m.insert('\u{c8}', "E\u{300}".to_string());
+    m.insert('\u{c9}', "E\u{301}".to_string());
+    m.insert('\u{ca}', "E\u{302}".to_string());
+    m.insert('\u{cb}', "E\u{308}".to_string());
+    m.insert('\u{cc}', "I\u{300}".to_string());
+    m.insert('\u{cd}', "I\u{301}".to_string());
+    m.insert('\u{ce}', "I\u{302}".to_string());
+    m.insert('\u{cf}', "I\u{308}".to_string());
+    m.insert('\u{d1}', "N\u{303}".to_string());
+    m.insert('\u{d2}', "O\u{300}".to_string());
+    m.insert('\u{d3}', "O\u{301}".to_string());
+    m.insert('\u{d4}', "O\u{302}".to_string());
+    m.insert('\u{d5}', "O\u{303}".to_string());
+    m.insert('\u{d6}', "O\u{308}".to_string());
+    m.insert('\u{d9}', "U\u{300}".to_string());
+    m.insert('\u{da}', "U\u{301}".to_string());
+    m.insert('\u{db}', "U\u{302}".to_string());
+    m.insert('\u{dc}', "U\u{308}".to_string());
+    m.insert('\u{dd}', "Y\u{301}".to_string());
+    m.insert('\u{e0}', "a\u{300}".to_string());
+    m.insert('\u{e1}', "a\u{301}".to_string());
+    m.insert('\u{e2}', "a\u{302}".to_string());
+    m.insert('\u{e3}', "a\u{303}".to_string());
+    m.insert('\u{e4}', "a\u{308}".to_string());
+    m.insert('\u{e5}', "a\u{30a}".to_string());
+    m.insert('\u{e7}', "c\u{327}".to_string());
+    m.insert('\u{e8}', "e\u{300}".to_string());
+    m.insert('\u{e9}', "e\u{301}".to_string());
+    m.insert('\u{ea}', "e\u{302}".to_string());
+    m.insert('\u{eb}', "e\u{308}".to_string());
+    m.insert('\u{ec}', "i\u{300}".to_string());
+    m.insert('\u{ed}', "i\u{301}".to_string());
+    m.insert('\u{ee}', "i\u{302}".to_string());
+    m.insert('\u{ef}', "i\u{308}".to_string());
+    m.insert('\u{f1}', "n\u{303}".to_string());
+    m.insert('\u{f2}', "o\u{300}".to_string());
+    m.insert('\u{f3}', "o\u{301}".to_string());
+    m.insert('\u{f4}', "o\u{302}".to_string());
+    m.insert('\u{f5}', "o\u{303}".to_string());
+    m.insert('\u{f6}', "o\u{308}".to_string());
+    m.insert('\u{f9}', "u\u{300}".to_string());
+    m.insert('\u{fa}', "u\u{301}".to_string());
+    m.insert('\u{fb}', "u\u{302}".to_string());
+    m.insert('\u{fc}', "u\u{308}".to_string());
+    m.insert('\u{fd}', "y\u{301}".to_string());
+    m.insert('\u{ff}', "y\u{308}".to_string());
+    m.insert('\u{100}', "A\u{304}".to_string());
+    m.insert('\u{101}', "a\u{304}".to_string());
+    m.insert('\u{102}', "A\u{306}".to_string());
+    m.insert('\u{103}', "a\u{306}".to_string());
+    m.insert('\u{104}', "A\u{328}".to_string());
+    m.insert('\u{105}', "a\u{328}".to_string());
+    m.insert('\u{106}', "C\u{301}".to_string());
+    m.insert('\u{107}', "c\u{301}".to_string());
+    m.insert('\u{108}', "C\u{302}".to_string());
+    m.insert('\u{109}', "c\u{302}".to_string());
+    m.insert('\u{10a}', "C\u{307}".to_string());
+    m.insert('\u{10b}', "c\u{307}".to_string());
+    m.insert('\u{10c}', "C\u{30c}".to_string());
+    m.insert('\u{10d}', "c\u{30c}".to_string());
+    m.insert('\u{10e}', "D\u{30c}".to_string());
+    m.insert('\u{10f}', "d\u{30c}".to_string());
+    m.insert('\u{112}', "E\u{304}".to_string());
+    m.insert('\u{113}', "e\u{304}".to_string());
+    m.insert('\u{114}', "E\u{306}".to_string());
+    m.insert('\u{115}', "e\u{306}".to_string());
+    m.insert('\u{116}', "E\u{307}".to_string());
+    m.insert('\u{117}', "e\u{307}".to_string());
+    m.insert('\u{118}', "E\u{328}".to_string());
+    m.insert('\u{119}', "e\u{328}".to_string());
+    m.insert('\u{11a}', "E\u{30c}".to_string());
+    m.insert('\u{11b}', "e\u{30c}".to_string());
+    m.insert('\u{11c}', "G\u{302}".to_string());
+    m.insert('\u{11d}', "g\u{302}".to_string());
+    m.insert('\u{11e}', "G\u{306}".to_string());
+    m.insert('\u{11f}', "g\u{306}".to_string());
+    m.insert('\u{120}', "G\u{307}".to_string());
+    m.insert('\u{121}', "g\u{307}".to_string());
+    m.insert('\u{122}', "G\u{327}".to_string());
+    m.insert('\u{123}', "g\u{327}".to_string());
+    m.insert('\u{124}', "H\u{302}".to_string());
+    m.insert('\u{125}', "h\u{302}".to_string());
+    m.insert('\u{128}', "I\u{303}".to_string());
+    m.insert('\u{129}', "i\u{303}".to_string());
+    m.insert('\u{12a}', "I\u{304}".to_string());
+    m.insert('\u{12b}', "i\u{304}".to_string());
+    m.insert('\u{12c}', "I\u{306}".to_string());
+    m.insert('\u{12d}', "i\u{306}".to_string());
+    m.insert('\u{12e}', "I\u{328}".to_string());
+    m.insert('\u{12f}', "i\u{328}".to_string());
+    m.insert('\u{130}', "I\u{307}".to_string());
+    m.insert('\u{132}', "IJ".to_string());
+    m.insert('\u{133}', "ij".to_string());
+    m.insert('\u{134}', "J\u{302}".to_string());
+    m.insert('\u{135}', "j\u{302}".to_string());
+    m.insert('\u{136}', "K\u{327}".to_string());
+    m.insert('\u{137}', "k\u{327}".to_string());
+    m.insert('\u{139}', "L\u{301}".to_string());
+    m.insert('\u{13a}', "l\u{301}".to_string());
+    m.insert('\u{13b}', "L\u{327}".to_string());
+    m.insert('\u{13c}', "l\u{327}".to_string());
+    m.insert('\u{13d}', "L\u{30c}".to_string());
+    m.insert('\u{13e}', "l\u{30c}".to_string());
+    m.insert('\u{13f}', "L\u{b7}".to_string());
+    m.insert('\u{140}', "l\u{b7}".to_string());
+    m.insert('\u{143}', "N\u{301}".to_string());
+    m.insert('\u{144}', "n\u{301}".to_string());
+    m.insert('\u{145}', "N\u{327}".to_string());
+    m.insert('\u{146}', "n\u{327}".to_string());
+    m.insert('\u{147}', "N\u{30c}".to_string());
+    m.insert('\u{148}', "n\u{30c}".to_string());
+    m.insert('\u{149}', "\u{2bc}n".to_string());
+    m.insert('\u{14c}', "O\u{304}".to_string());
+    m.insert('\u{14d}', "o\u{304}".to_string());
+    m.insert('\u{14e}', "O\u{306}".to_string());
+    m.insert('\u{14f}', "o\u{306}".to_string());
+    m.insert('\u{150}', "O\u{30b}".to_string());
+    m.insert('\u{151}', "o\u{30b}".to_string());
+    m.insert('\u{154}', "R\u{301}".to_string());
+    m.insert('\u{155}', "r\u{301}".to_string());
+    m.insert('\u{156}', "R\u{327}".to_string());
+    m.insert('\u{157}', "r\u{327}".to_string());
+    m.insert('\u{158}', "R\u{30c}".to_string());
+    m.insert('\u{159}', "r\u{30c}".to_string());
+    m.insert('\u{15a}', "S\u{301}".to_string());
+    m.insert('\u{15b}', "s\u{301}".to_string());
+    m.insert('\u{15c}', "S\u{302}".to_string());
+    m.insert('\u{15d}', "s\u{302}".to_string());
+    m.insert('\u{15e}', "S\u{327}".to_string());
+}
+
+fn nfkd_part_1(m: mut ref Map[char, String]) {
+    m.insert('\u{15f}', "s\u{327}".to_string());
+    m.insert('\u{160}', "S\u{30c}".to_string());
+    m.insert('\u{161}', "s\u{30c}".to_string());
+    m.insert('\u{162}', "T\u{327}".to_string());
+    m.insert('\u{163}', "t\u{327}".to_string());
+    m.insert('\u{164}', "T\u{30c}".to_string());
+    m.insert('\u{165}', "t\u{30c}".to_string());
+    m.insert('\u{168}', "U\u{303}".to_string());
+    m.insert('\u{169}', "u\u{303}".to_string());
+    m.insert('\u{16a}', "U\u{304}".to_string());
+    m.insert('\u{16b}', "u\u{304}".to_string());
+    m.insert('\u{16c}', "U\u{306}".to_string());
+    m.insert('\u{16d}', "u\u{306}".to_string());
+    m.insert('\u{16e}', "U\u{30a}".to_string());
+    m.insert('\u{16f}', "u\u{30a}".to_string());
+    m.insert('\u{170}', "U\u{30b}".to_string());
+    m.insert('\u{171}', "u\u{30b}".to_string());
+    m.insert('\u{172}', "U\u{328}".to_string());
+    m.insert('\u{173}', "u\u{328}".to_string());
+    m.insert('\u{174}', "W\u{302}".to_string());
+    m.insert('\u{175}', "w\u{302}".to_string());
+    m.insert('\u{176}', "Y\u{302}".to_string());
+    m.insert('\u{177}', "y\u{302}".to_string());
+    m.insert('\u{178}', "Y\u{308}".to_string());
+    m.insert('\u{179}', "Z\u{301}".to_string());
+    m.insert('\u{17a}', "z\u{301}".to_string());
+    m.insert('\u{17b}', "Z\u{307}".to_string());
+    m.insert('\u{17c}', "z\u{307}".to_string());
+    m.insert('\u{17d}', "Z\u{30c}".to_string());
+    m.insert('\u{17e}', "z\u{30c}".to_string());
+    m.insert('\u{17f}', "s".to_string());
+    m.insert('\u{1a0}', "O\u{31b}".to_string());
+    m.insert('\u{1a1}', "o\u{31b}".to_string());
+    m.insert('\u{1af}', "U\u{31b}".to_string());
+    m.insert('\u{1b0}', "u\u{31b}".to_string());
+    m.insert('\u{1c4}', "DZ\u{30c}".to_string());
+    m.insert('\u{1c5}', "Dz\u{30c}".to_string());
+    m.insert('\u{1c6}', "dz\u{30c}".to_string());
+    m.insert('\u{1c7}', "LJ".to_string());
+    m.insert('\u{1c8}', "Lj".to_string());
+    m.insert('\u{1c9}', "lj".to_string());
+    m.insert('\u{1ca}', "NJ".to_string());
+    m.insert('\u{1cb}', "Nj".to_string());
+    m.insert('\u{1cc}', "nj".to_string());
+    m.insert('\u{1cd}', "A\u{30c}".to_string());
+    m.insert('\u{1ce}', "a\u{30c}".to_string());
+    m.insert('\u{1cf}', "I\u{30c}".to_string());
+    m.insert('\u{1d0}', "i\u{30c}".to_string());
+    m.insert('\u{1d1}', "O\u{30c}".to_string());
+    m.insert('\u{1d2}', "o\u{30c}".to_string());
+    m.insert('\u{1d3}', "U\u{30c}".to_string());
+    m.insert('\u{1d4}', "u\u{30c}".to_string());
+    m.insert('\u{1d5}', "U\u{308}\u{304}".to_string());
+    m.insert('\u{1d6}', "u\u{308}\u{304}".to_string());
+    m.insert('\u{1d7}', "U\u{308}\u{301}".to_string());
+    m.insert('\u{1d8}', "u\u{308}\u{301}".to_string());
+    m.insert('\u{1d9}', "U\u{308}\u{30c}".to_string());
+    m.insert('\u{1da}', "u\u{308}\u{30c}".to_string());
+    m.insert('\u{1db}', "U\u{308}\u{300}".to_string());
+    m.insert('\u{1dc}', "u\u{308}\u{300}".to_string());
+    m.insert('\u{1de}', "A\u{308}\u{304}".to_string());
+    m.insert('\u{1df}', "a\u{308}\u{304}".to_string());
+    m.insert('\u{1e0}', "A\u{307}\u{304}".to_string());
+    m.insert('\u{1e1}', "a\u{307}\u{304}".to_string());
+    m.insert('\u{1e2}', "\u{c6}\u{304}".to_string());
+    m.insert('\u{1e3}', "\u{e6}\u{304}".to_string());
+    m.insert('\u{1e6}', "G\u{30c}".to_string());
+    m.insert('\u{1e7}', "g\u{30c}".to_string());
+    m.insert('\u{1e8}', "K\u{30c}".to_string());
+    m.insert('\u{1e9}', "k\u{30c}".to_string());
+    m.insert('\u{1ea}', "O\u{328}".to_string());
+    m.insert('\u{1eb}', "o\u{328}".to_string());
+    m.insert('\u{1ec}', "O\u{328}\u{304}".to_string());
+    m.insert('\u{1ed}', "o\u{328}\u{304}".to_string());
+    m.insert('\u{1ee}', "\u{1b7}\u{30c}".to_string());
+    m.insert('\u{1ef}', "\u{292}\u{30c}".to_string());
+    m.insert('\u{1f0}', "j\u{30c}".to_string());
+    m.insert('\u{1f1}', "DZ".to_string());
+    m.insert('\u{1f2}', "Dz".to_string());
+    m.insert('\u{1f3}', "dz".to_string());
+    m.insert('\u{1f4}', "G\u{301}".to_string());
+    m.insert('\u{1f5}', "g\u{301}".to_string());
+    m.insert('\u{1f8}', "N\u{300}".to_string());
+    m.insert('\u{1f9}', "n\u{300}".to_string());
+    m.insert('\u{1fa}', "A\u{30a}\u{301}".to_string());
+    m.insert('\u{1fb}', "a\u{30a}\u{301}".to_string());
+    m.insert('\u{1fc}', "\u{c6}\u{301}".to_string());
+    m.insert('\u{1fd}', "\u{e6}\u{301}".to_string());
+    m.insert('\u{1fe}', "\u{d8}\u{301}".to_string());
+    m.insert('\u{1ff}', "\u{f8}\u{301}".to_string());
+    m.insert('\u{200}', "A\u{30f}".to_string());
+    m.insert('\u{201}', "a\u{30f}".to_string());
+    m.insert('\u{202}', "A\u{311}".to_string());
+    m.insert('\u{203}', "a\u{311}".to_string());
+    m.insert('\u{204}', "E\u{30f}".to_string());
+    m.insert('\u{205}', "e\u{30f}".to_string());
+    m.insert('\u{206}', "E\u{311}".to_string());
+    m.insert('\u{207}', "e\u{311}".to_string());
+    m.insert('\u{208}', "I\u{30f}".to_string());
+    m.insert('\u{209}', "i\u{30f}".to_string());
+    m.insert('\u{20a}', "I\u{311}".to_string());
+    m.insert('\u{20b}', "i\u{311}".to_string());
+    m.insert('\u{20c}', "O\u{30f}".to_string());
+    m.insert('\u{20d}', "o\u{30f}".to_string());
+    m.insert('\u{20e}', "O\u{311}".to_string());
+    m.insert('\u{20f}', "o\u{311}".to_string());
+    m.insert('\u{210}', "R\u{30f}".to_string());
+    m.insert('\u{211}', "r\u{30f}".to_string());
+    m.insert('\u{212}', "R\u{311}".to_string());
+    m.insert('\u{213}', "r\u{311}".to_string());
+    m.insert('\u{214}', "U\u{30f}".to_string());
+    m.insert('\u{215}', "u\u{30f}".to_string());
+    m.insert('\u{216}', "U\u{311}".to_string());
+    m.insert('\u{217}', "u\u{311}".to_string());
+    m.insert('\u{218}', "S\u{326}".to_string());
+    m.insert('\u{219}', "s\u{326}".to_string());
+    m.insert('\u{21a}', "T\u{326}".to_string());
+    m.insert('\u{21b}', "t\u{326}".to_string());
+    m.insert('\u{21e}', "H\u{30c}".to_string());
+    m.insert('\u{21f}', "h\u{30c}".to_string());
+    m.insert('\u{226}', "A\u{307}".to_string());
+    m.insert('\u{227}', "a\u{307}".to_string());
+    m.insert('\u{228}', "E\u{327}".to_string());
+    m.insert('\u{229}', "e\u{327}".to_string());
+    m.insert('\u{22a}', "O\u{308}\u{304}".to_string());
+    m.insert('\u{22b}', "o\u{308}\u{304}".to_string());
+    m.insert('\u{22c}', "O\u{303}\u{304}".to_string());
+    m.insert('\u{22d}', "o\u{303}\u{304}".to_string());
+    m.insert('\u{22e}', "O\u{307}".to_string());
+    m.insert('\u{22f}', "o\u{307}".to_string());
+    m.insert('\u{230}', "O\u{307}\u{304}".to_string());
+    m.insert('\u{231}', "o\u{307}\u{304}".to_string());
+    m.insert('\u{232}', "Y\u{304}".to_string());
+    m.insert('\u{233}', "y\u{304}".to_string());
+    m.insert('\u{2000}', " ".to_string());
+    m.insert('\u{2001}', " ".to_string());
+    m.insert('\u{2002}', " ".to_string());
+    m.insert('\u{2003}', " ".to_string());
+    m.insert('\u{2004}', " ".to_string());
+    m.insert('\u{2005}', " ".to_string());
+    m.insert('\u{2006}', " ".to_string());
+    m.insert('\u{2007}', " ".to_string());
+    m.insert('\u{2008}', " ".to_string());
+    m.insert('\u{2009}', " ".to_string());
+    m.insert('\u{200a}', " ".to_string());
+    m.insert('\u{2011}', "\u{2010}".to_string());
+    m.insert('\u{2017}', " \u{333}".to_string());
+    m.insert('\u{2024}', ".".to_string());
+    m.insert('\u{2025}', "..".to_string());
+    m.insert('\u{2026}', "...".to_string());
+}
+
+fn nfkd_part_2(m: mut ref Map[char, String]) {
+    m.insert('\u{202f}', " ".to_string());
+    m.insert('\u{2033}', "\u{2032}\u{2032}".to_string());
+    m.insert('\u{2034}', "\u{2032}\u{2032}\u{2032}".to_string());
+    m.insert('\u{2036}', "\u{2035}\u{2035}".to_string());
+    m.insert('\u{2037}', "\u{2035}\u{2035}\u{2035}".to_string());
+    m.insert('\u{203c}', "!!".to_string());
+    m.insert('\u{203e}', " \u{305}".to_string());
+    m.insert('\u{2047}', "??".to_string());
+    m.insert('\u{2048}', "?!".to_string());
+    m.insert('\u{2049}', "!?".to_string());
+    m.insert('\u{2057}', "\u{2032}\u{2032}\u{2032}\u{2032}".to_string());
+    m.insert('\u{205f}', " ".to_string());
+    m.insert('\u{2070}', "0".to_string());
+    m.insert('\u{2071}', "i".to_string());
+    m.insert('\u{2074}', "4".to_string());
+    m.insert('\u{2075}', "5".to_string());
+    m.insert('\u{2076}', "6".to_string());
+    m.insert('\u{2077}', "7".to_string());
+    m.insert('\u{2078}', "8".to_string());
+    m.insert('\u{2079}', "9".to_string());
+    m.insert('\u{207a}', "+".to_string());
+    m.insert('\u{207b}', "\u{2212}".to_string());
+    m.insert('\u{207c}', "=".to_string());
+    m.insert('\u{207d}', "(".to_string());
+    m.insert('\u{207e}', ")".to_string());
+    m.insert('\u{207f}', "n".to_string());
+    m.insert('\u{2080}', "0".to_string());
+    m.insert('\u{2081}', "1".to_string());
+    m.insert('\u{2082}', "2".to_string());
+    m.insert('\u{2083}', "3".to_string());
+    m.insert('\u{2084}', "4".to_string());
+    m.insert('\u{2085}', "5".to_string());
+    m.insert('\u{2086}', "6".to_string());
+    m.insert('\u{2087}', "7".to_string());
+    m.insert('\u{2088}', "8".to_string());
+    m.insert('\u{2089}', "9".to_string());
+    m.insert('\u{208a}', "+".to_string());
+    m.insert('\u{208b}', "\u{2212}".to_string());
+    m.insert('\u{208c}', "=".to_string());
+    m.insert('\u{208d}', "(".to_string());
+    m.insert('\u{208e}', ")".to_string());
+    m.insert('\u{2090}', "a".to_string());
+    m.insert('\u{2091}', "e".to_string());
+    m.insert('\u{2092}', "o".to_string());
+    m.insert('\u{2093}', "x".to_string());
+    m.insert('\u{2094}', "\u{259}".to_string());
+    m.insert('\u{2095}', "h".to_string());
+    m.insert('\u{2096}', "k".to_string());
+    m.insert('\u{2097}', "l".to_string());
+    m.insert('\u{2098}', "m".to_string());
+    m.insert('\u{2099}', "n".to_string());
+    m.insert('\u{209a}', "p".to_string());
+    m.insert('\u{209b}', "s".to_string());
+    m.insert('\u{209c}', "t".to_string());
+    m.insert('\u{20a8}', "Rs".to_string());
+    m.insert('\u{2100}', "a/c".to_string());
+    m.insert('\u{2101}', "a/s".to_string());
+    m.insert('\u{2102}', "C".to_string());
+    m.insert('\u{2103}', "\u{b0}C".to_string());
+    m.insert('\u{2105}', "c/o".to_string());
+    m.insert('\u{2106}', "c/u".to_string());
+    m.insert('\u{2107}', "\u{190}".to_string());
+    m.insert('\u{2109}', "\u{b0}F".to_string());
+    m.insert('\u{210a}', "g".to_string());
+    m.insert('\u{210b}', "H".to_string());
+    m.insert('\u{210c}', "H".to_string());
+    m.insert('\u{210d}', "H".to_string());
+    m.insert('\u{210e}', "h".to_string());
+    m.insert('\u{210f}', "\u{127}".to_string());
+    m.insert('\u{2110}', "I".to_string());
+    m.insert('\u{2111}', "I".to_string());
+    m.insert('\u{2112}', "L".to_string());
+    m.insert('\u{2113}', "l".to_string());
+    m.insert('\u{2115}', "N".to_string());
+    m.insert('\u{2116}', "No".to_string());
+    m.insert('\u{2119}', "P".to_string());
+    m.insert('\u{211a}', "Q".to_string());
+    m.insert('\u{211b}', "R".to_string());
+    m.insert('\u{211c}', "R".to_string());
+    m.insert('\u{211d}', "R".to_string());
+    m.insert('\u{2120}', "SM".to_string());
+    m.insert('\u{2121}', "TEL".to_string());
+    m.insert('\u{2122}', "TM".to_string());
+    m.insert('\u{2124}', "Z".to_string());
+    m.insert('\u{2126}', "\u{3a9}".to_string());
+    m.insert('\u{2128}', "Z".to_string());
+    m.insert('\u{212a}', "K".to_string());
+    m.insert('\u{212b}', "A\u{30a}".to_string());
+    m.insert('\u{212c}', "B".to_string());
+    m.insert('\u{212d}', "C".to_string());
+    m.insert('\u{212f}', "e".to_string());
+    m.insert('\u{2130}', "E".to_string());
+    m.insert('\u{2131}', "F".to_string());
+    m.insert('\u{2133}', "M".to_string());
+    m.insert('\u{2134}', "o".to_string());
+    m.insert('\u{2135}', "\u{5d0}".to_string());
+    m.insert('\u{2136}', "\u{5d1}".to_string());
+    m.insert('\u{2137}', "\u{5d2}".to_string());
+    m.insert('\u{2138}', "\u{5d3}".to_string());
+    m.insert('\u{2139}', "i".to_string());
+    m.insert('\u{213b}', "FAX".to_string());
+    m.insert('\u{213c}', "\u{3c0}".to_string());
+    m.insert('\u{213d}', "\u{3b3}".to_string());
+    m.insert('\u{213e}', "\u{393}".to_string());
+    m.insert('\u{213f}', "\u{3a0}".to_string());
+    m.insert('\u{2140}', "\u{2211}".to_string());
+    m.insert('\u{2145}', "D".to_string());
+    m.insert('\u{2146}', "d".to_string());
+    m.insert('\u{2147}', "e".to_string());
+    m.insert('\u{2148}', "i".to_string());
+    m.insert('\u{2149}', "j".to_string());
+    m.insert('\u{2150}', "1\u{2044}7".to_string());
+    m.insert('\u{2151}', "1\u{2044}9".to_string());
+    m.insert('\u{2152}', "1\u{2044}10".to_string());
+    m.insert('\u{2153}', "1\u{2044}3".to_string());
+    m.insert('\u{2154}', "2\u{2044}3".to_string());
+    m.insert('\u{2155}', "1\u{2044}5".to_string());
+    m.insert('\u{2156}', "2\u{2044}5".to_string());
+    m.insert('\u{2157}', "3\u{2044}5".to_string());
+    m.insert('\u{2158}', "4\u{2044}5".to_string());
+    m.insert('\u{2159}', "1\u{2044}6".to_string());
+    m.insert('\u{215a}', "5\u{2044}6".to_string());
+    m.insert('\u{215b}', "1\u{2044}8".to_string());
+    m.insert('\u{215c}', "3\u{2044}8".to_string());
+    m.insert('\u{215d}', "5\u{2044}8".to_string());
+    m.insert('\u{215e}', "7\u{2044}8".to_string());
+    m.insert('\u{215f}', "1\u{2044}".to_string());
+    m.insert('\u{2160}', "I".to_string());
+    m.insert('\u{2161}', "II".to_string());
+    m.insert('\u{2162}', "III".to_string());
+    m.insert('\u{2163}', "IV".to_string());
+    m.insert('\u{2164}', "V".to_string());
+    m.insert('\u{2165}', "VI".to_string());
+    m.insert('\u{2166}', "VII".to_string());
+    m.insert('\u{2167}', "VIII".to_string());
+    m.insert('\u{2168}', "IX".to_string());
+    m.insert('\u{2169}', "X".to_string());
+    m.insert('\u{216a}', "XI".to_string());
+    m.insert('\u{216b}', "XII".to_string());
+    m.insert('\u{216c}', "L".to_string());
+    m.insert('\u{216d}', "C".to_string());
+    m.insert('\u{216e}', "D".to_string());
+    m.insert('\u{216f}', "M".to_string());
+    m.insert('\u{2170}', "i".to_string());
+    m.insert('\u{2171}', "ii".to_string());
+    m.insert('\u{2172}', "iii".to_string());
+    m.insert('\u{2173}', "iv".to_string());
+    m.insert('\u{2174}', "v".to_string());
+    m.insert('\u{2175}', "vi".to_string());
+    m.insert('\u{2176}', "vii".to_string());
+}
+
+fn nfkd_part_3(m: mut ref Map[char, String]) {
+    m.insert('\u{2177}', "viii".to_string());
+    m.insert('\u{2178}', "ix".to_string());
+    m.insert('\u{2179}', "x".to_string());
+    m.insert('\u{217a}', "xi".to_string());
+    m.insert('\u{217b}', "xii".to_string());
+    m.insert('\u{217c}', "l".to_string());
+    m.insert('\u{217d}', "c".to_string());
+    m.insert('\u{217e}', "d".to_string());
+    m.insert('\u{217f}', "m".to_string());
+    m.insert('\u{2189}', "0\u{2044}3".to_string());
+    m.insert('\u{2460}', "1".to_string());
+    m.insert('\u{2461}', "2".to_string());
+    m.insert('\u{2462}', "3".to_string());
+    m.insert('\u{2463}', "4".to_string());
+    m.insert('\u{2464}', "5".to_string());
+    m.insert('\u{2465}', "6".to_string());
+    m.insert('\u{2466}', "7".to_string());
+    m.insert('\u{2467}', "8".to_string());
+    m.insert('\u{2468}', "9".to_string());
+    m.insert('\u{2469}', "10".to_string());
+    m.insert('\u{246a}', "11".to_string());
+    m.insert('\u{246b}', "12".to_string());
+    m.insert('\u{246c}', "13".to_string());
+    m.insert('\u{246d}', "14".to_string());
+    m.insert('\u{246e}', "15".to_string());
+    m.insert('\u{246f}', "16".to_string());
+    m.insert('\u{2470}', "17".to_string());
+    m.insert('\u{2471}', "18".to_string());
+    m.insert('\u{2472}', "19".to_string());
+    m.insert('\u{2473}', "20".to_string());
+    m.insert('\u{2474}', "(1)".to_string());
+    m.insert('\u{2475}', "(2)".to_string());
+    m.insert('\u{2476}', "(3)".to_string());
+    m.insert('\u{2477}', "(4)".to_string());
+    m.insert('\u{2478}', "(5)".to_string());
+    m.insert('\u{2479}', "(6)".to_string());
+    m.insert('\u{247a}', "(7)".to_string());
+    m.insert('\u{247b}', "(8)".to_string());
+    m.insert('\u{247c}', "(9)".to_string());
+    m.insert('\u{247d}', "(10)".to_string());
+    m.insert('\u{247e}', "(11)".to_string());
+    m.insert('\u{247f}', "(12)".to_string());
+    m.insert('\u{2480}', "(13)".to_string());
+    m.insert('\u{2481}', "(14)".to_string());
+    m.insert('\u{2482}', "(15)".to_string());
+    m.insert('\u{2483}', "(16)".to_string());
+    m.insert('\u{2484}', "(17)".to_string());
+    m.insert('\u{2485}', "(18)".to_string());
+    m.insert('\u{2486}', "(19)".to_string());
+    m.insert('\u{2487}', "(20)".to_string());
+    m.insert('\u{2488}', "1.".to_string());
+    m.insert('\u{2489}', "2.".to_string());
+    m.insert('\u{248a}', "3.".to_string());
+    m.insert('\u{248b}', "4.".to_string());
+    m.insert('\u{248c}', "5.".to_string());
+    m.insert('\u{248d}', "6.".to_string());
+    m.insert('\u{248e}', "7.".to_string());
+    m.insert('\u{248f}', "8.".to_string());
+    m.insert('\u{2490}', "9.".to_string());
+    m.insert('\u{2491}', "10.".to_string());
+    m.insert('\u{2492}', "11.".to_string());
+    m.insert('\u{2493}', "12.".to_string());
+    m.insert('\u{2494}', "13.".to_string());
+    m.insert('\u{2495}', "14.".to_string());
+    m.insert('\u{2496}', "15.".to_string());
+    m.insert('\u{2497}', "16.".to_string());
+    m.insert('\u{2498}', "17.".to_string());
+    m.insert('\u{2499}', "18.".to_string());
+    m.insert('\u{249a}', "19.".to_string());
+    m.insert('\u{249b}', "20.".to_string());
+    m.insert('\u{249c}', "(a)".to_string());
+    m.insert('\u{249d}', "(b)".to_string());
+    m.insert('\u{249e}', "(c)".to_string());
+    m.insert('\u{249f}', "(d)".to_string());
+    m.insert('\u{24a0}', "(e)".to_string());
+    m.insert('\u{24a1}', "(f)".to_string());
+    m.insert('\u{24a2}', "(g)".to_string());
+    m.insert('\u{24a3}', "(h)".to_string());
+    m.insert('\u{24a4}', "(i)".to_string());
+    m.insert('\u{24a5}', "(j)".to_string());
+    m.insert('\u{24a6}', "(k)".to_string());
+    m.insert('\u{24a7}', "(l)".to_string());
+    m.insert('\u{24a8}', "(m)".to_string());
+    m.insert('\u{24a9}', "(n)".to_string());
+    m.insert('\u{24aa}', "(o)".to_string());
+    m.insert('\u{24ab}', "(p)".to_string());
+    m.insert('\u{24ac}', "(q)".to_string());
+    m.insert('\u{24ad}', "(r)".to_string());
+    m.insert('\u{24ae}', "(s)".to_string());
+    m.insert('\u{24af}', "(t)".to_string());
+    m.insert('\u{24b0}', "(u)".to_string());
+    m.insert('\u{24b1}', "(v)".to_string());
+    m.insert('\u{24b2}', "(w)".to_string());
+    m.insert('\u{24b3}', "(x)".to_string());
+    m.insert('\u{24b4}', "(y)".to_string());
+    m.insert('\u{24b5}', "(z)".to_string());
+    m.insert('\u{24b6}', "A".to_string());
+    m.insert('\u{24b7}', "B".to_string());
+    m.insert('\u{24b8}', "C".to_string());
+    m.insert('\u{24b9}', "D".to_string());
+    m.insert('\u{24ba}', "E".to_string());
+    m.insert('\u{24bb}', "F".to_string());
+    m.insert('\u{24bc}', "G".to_string());
+    m.insert('\u{24bd}', "H".to_string());
+    m.insert('\u{24be}', "I".to_string());
+    m.insert('\u{24bf}', "J".to_string());
+    m.insert('\u{24c0}', "K".to_string());
+    m.insert('\u{24c1}', "L".to_string());
+    m.insert('\u{24c2}', "M".to_string());
+    m.insert('\u{24c3}', "N".to_string());
+    m.insert('\u{24c4}', "O".to_string());
+    m.insert('\u{24c5}', "P".to_string());
+    m.insert('\u{24c6}', "Q".to_string());
+    m.insert('\u{24c7}', "R".to_string());
+    m.insert('\u{24c8}', "S".to_string());
+    m.insert('\u{24c9}', "T".to_string());
+    m.insert('\u{24ca}', "U".to_string());
+    m.insert('\u{24cb}', "V".to_string());
+    m.insert('\u{24cc}', "W".to_string());
+    m.insert('\u{24cd}', "X".to_string());
+    m.insert('\u{24ce}', "Y".to_string());
+    m.insert('\u{24cf}', "Z".to_string());
+    m.insert('\u{24d0}', "a".to_string());
+    m.insert('\u{24d1}', "b".to_string());
+    m.insert('\u{24d2}', "c".to_string());
+    m.insert('\u{24d3}', "d".to_string());
+    m.insert('\u{24d4}', "e".to_string());
+    m.insert('\u{24d5}', "f".to_string());
+    m.insert('\u{24d6}', "g".to_string());
+    m.insert('\u{24d7}', "h".to_string());
+    m.insert('\u{24d8}', "i".to_string());
+    m.insert('\u{24d9}', "j".to_string());
+    m.insert('\u{24da}', "k".to_string());
+    m.insert('\u{24db}', "l".to_string());
+    m.insert('\u{24dc}', "m".to_string());
+    m.insert('\u{24dd}', "n".to_string());
+    m.insert('\u{24de}', "o".to_string());
+    m.insert('\u{24df}', "p".to_string());
+    m.insert('\u{24e0}', "q".to_string());
+    m.insert('\u{24e1}', "r".to_string());
+    m.insert('\u{24e2}', "s".to_string());
+    m.insert('\u{24e3}', "t".to_string());
+    m.insert('\u{24e4}', "u".to_string());
+    m.insert('\u{24e5}', "v".to_string());
+    m.insert('\u{24e6}', "w".to_string());
+    m.insert('\u{24e7}', "x".to_string());
+    m.insert('\u{24e8}', "y".to_string());
+    m.insert('\u{24e9}', "z".to_string());
+    m.insert('\u{24ea}', "0".to_string());
+    m.insert('\u{ff01}', "!".to_string());
+}
+
+fn nfkd_part_4(m: mut ref Map[char, String]) {
+    m.insert('\u{ff02}', "\u{22}".to_string());
+    m.insert('\u{ff03}', "#".to_string());
+    m.insert('\u{ff04}', "$".to_string());
+    m.insert('\u{ff05}', "%".to_string());
+    m.insert('\u{ff06}', "&".to_string());
+    m.insert('\u{ff07}', "\u{27}".to_string());
+    m.insert('\u{ff08}', "(".to_string());
+    m.insert('\u{ff09}', ")".to_string());
+    m.insert('\u{ff0a}', "*".to_string());
+    m.insert('\u{ff0b}', "+".to_string());
+    m.insert('\u{ff0c}', ",".to_string());
+    m.insert('\u{ff0d}', "-".to_string());
+    m.insert('\u{ff0e}', ".".to_string());
+    m.insert('\u{ff0f}', "/".to_string());
+    m.insert('\u{ff10}', "0".to_string());
+    m.insert('\u{ff11}', "1".to_string());
+    m.insert('\u{ff12}', "2".to_string());
+    m.insert('\u{ff13}', "3".to_string());
+    m.insert('\u{ff14}', "4".to_string());
+    m.insert('\u{ff15}', "5".to_string());
+    m.insert('\u{ff16}', "6".to_string());
+    m.insert('\u{ff17}', "7".to_string());
+    m.insert('\u{ff18}', "8".to_string());
+    m.insert('\u{ff19}', "9".to_string());
+    m.insert('\u{ff1a}', ":".to_string());
+    m.insert('\u{ff1b}', ";".to_string());
+    m.insert('\u{ff1c}', "<".to_string());
+    m.insert('\u{ff1d}', "=".to_string());
+    m.insert('\u{ff1e}', ">".to_string());
+    m.insert('\u{ff1f}', "?".to_string());
+    m.insert('\u{ff20}', "@".to_string());
+    m.insert('\u{ff21}', "A".to_string());
+    m.insert('\u{ff22}', "B".to_string());
+    m.insert('\u{ff23}', "C".to_string());
+    m.insert('\u{ff24}', "D".to_string());
+    m.insert('\u{ff25}', "E".to_string());
+    m.insert('\u{ff26}', "F".to_string());
+    m.insert('\u{ff27}', "G".to_string());
+    m.insert('\u{ff28}', "H".to_string());
+    m.insert('\u{ff29}', "I".to_string());
+    m.insert('\u{ff2a}', "J".to_string());
+    m.insert('\u{ff2b}', "K".to_string());
+    m.insert('\u{ff2c}', "L".to_string());
+    m.insert('\u{ff2d}', "M".to_string());
+    m.insert('\u{ff2e}', "N".to_string());
+    m.insert('\u{ff2f}', "O".to_string());
+    m.insert('\u{ff30}', "P".to_string());
+    m.insert('\u{ff31}', "Q".to_string());
+    m.insert('\u{ff32}', "R".to_string());
+    m.insert('\u{ff33}', "S".to_string());
+    m.insert('\u{ff34}', "T".to_string());
+    m.insert('\u{ff35}', "U".to_string());
+    m.insert('\u{ff36}', "V".to_string());
+    m.insert('\u{ff37}', "W".to_string());
+    m.insert('\u{ff38}', "X".to_string());
+    m.insert('\u{ff39}', "Y".to_string());
+    m.insert('\u{ff3a}', "Z".to_string());
+    m.insert('\u{ff3b}', "[".to_string());
+    m.insert('\u{ff3c}', "\u{5c}".to_string());
+    m.insert('\u{ff3d}', "]".to_string());
+    m.insert('\u{ff3e}', "^".to_string());
+    m.insert('\u{ff3f}', "_".to_string());
+    m.insert('\u{ff40}', "`".to_string());
+    m.insert('\u{ff41}', "a".to_string());
+    m.insert('\u{ff42}', "b".to_string());
+    m.insert('\u{ff43}', "c".to_string());
+    m.insert('\u{ff44}', "d".to_string());
+    m.insert('\u{ff45}', "e".to_string());
+    m.insert('\u{ff46}', "f".to_string());
+    m.insert('\u{ff47}', "g".to_string());
+    m.insert('\u{ff48}', "h".to_string());
+    m.insert('\u{ff49}', "i".to_string());
+    m.insert('\u{ff4a}', "j".to_string());
+    m.insert('\u{ff4b}', "k".to_string());
+    m.insert('\u{ff4c}', "l".to_string());
+    m.insert('\u{ff4d}', "m".to_string());
+    m.insert('\u{ff4e}', "n".to_string());
+    m.insert('\u{ff4f}', "o".to_string());
+    m.insert('\u{ff50}', "p".to_string());
+    m.insert('\u{ff51}', "q".to_string());
+    m.insert('\u{ff52}', "r".to_string());
+    m.insert('\u{ff53}', "s".to_string());
+    m.insert('\u{ff54}', "t".to_string());
+    m.insert('\u{ff55}', "u".to_string());
+    m.insert('\u{ff56}', "v".to_string());
+    m.insert('\u{ff57}', "w".to_string());
+    m.insert('\u{ff58}', "x".to_string());
+    m.insert('\u{ff59}', "y".to_string());
+    m.insert('\u{ff5a}', "z".to_string());
+    m.insert('\u{ff5b}', "{".to_string());
+    m.insert('\u{ff5c}', "|".to_string());
+    m.insert('\u{ff5d}', "}".to_string());
+    m.insert('\u{ff5e}', "~".to_string());
+    m.insert('\u{ff5f}', "\u{2985}".to_string());
+    m.insert('\u{ff60}', "\u{2986}".to_string());
+    m.insert('\u{ff61}', "\u{3002}".to_string());
+    m.insert('\u{ff62}', "\u{300c}".to_string());
+    m.insert('\u{ff63}', "\u{300d}".to_string());
+    m.insert('\u{ff64}', "\u{3001}".to_string());
+    m.insert('\u{ff65}', "\u{30fb}".to_string());
+    m.insert('\u{ff66}', "\u{30f2}".to_string());
+    m.insert('\u{ff67}', "\u{30a1}".to_string());
+    m.insert('\u{ff68}', "\u{30a3}".to_string());
+    m.insert('\u{ff69}', "\u{30a5}".to_string());
+    m.insert('\u{ff6a}', "\u{30a7}".to_string());
+    m.insert('\u{ff6b}', "\u{30a9}".to_string());
+    m.insert('\u{ff6c}', "\u{30e3}".to_string());
+    m.insert('\u{ff6d}', "\u{30e5}".to_string());
+    m.insert('\u{ff6e}', "\u{30e7}".to_string());
+    m.insert('\u{ff6f}', "\u{30c3}".to_string());
+    m.insert('\u{ff70}', "\u{30fc}".to_string());
+    m.insert('\u{ff71}', "\u{30a2}".to_string());
+    m.insert('\u{ff72}', "\u{30a4}".to_string());
+    m.insert('\u{ff73}', "\u{30a6}".to_string());
+    m.insert('\u{ff74}', "\u{30a8}".to_string());
+    m.insert('\u{ff75}', "\u{30aa}".to_string());
+    m.insert('\u{ff76}', "\u{30ab}".to_string());
+    m.insert('\u{ff77}', "\u{30ad}".to_string());
+    m.insert('\u{ff78}', "\u{30af}".to_string());
+    m.insert('\u{ff79}', "\u{30b1}".to_string());
+    m.insert('\u{ff7a}', "\u{30b3}".to_string());
+    m.insert('\u{ff7b}', "\u{30b5}".to_string());
+    m.insert('\u{ff7c}', "\u{30b7}".to_string());
+    m.insert('\u{ff7d}', "\u{30b9}".to_string());
+    m.insert('\u{ff7e}', "\u{30bb}".to_string());
+    m.insert('\u{ff7f}', "\u{30bd}".to_string());
+    m.insert('\u{ff80}', "\u{30bf}".to_string());
+    m.insert('\u{ff81}', "\u{30c1}".to_string());
+    m.insert('\u{ff82}', "\u{30c4}".to_string());
+    m.insert('\u{ff83}', "\u{30c6}".to_string());
+    m.insert('\u{ff84}', "\u{30c8}".to_string());
+    m.insert('\u{ff85}', "\u{30ca}".to_string());
+    m.insert('\u{ff86}', "\u{30cb}".to_string());
+    m.insert('\u{ff87}', "\u{30cc}".to_string());
+    m.insert('\u{ff88}', "\u{30cd}".to_string());
+    m.insert('\u{ff89}', "\u{30ce}".to_string());
+    m.insert('\u{ff8a}', "\u{30cf}".to_string());
+    m.insert('\u{ff8b}', "\u{30d2}".to_string());
+    m.insert('\u{ff8c}', "\u{30d5}".to_string());
+    m.insert('\u{ff8d}', "\u{30d8}".to_string());
+    m.insert('\u{ff8e}', "\u{30db}".to_string());
+    m.insert('\u{ff8f}', "\u{30de}".to_string());
+    m.insert('\u{ff90}', "\u{30df}".to_string());
+    m.insert('\u{ff91}', "\u{30e0}".to_string());
+    m.insert('\u{ff92}', "\u{30e1}".to_string());
+    m.insert('\u{ff93}', "\u{30e2}".to_string());
+    m.insert('\u{ff94}', "\u{30e4}".to_string());
+    m.insert('\u{ff95}', "\u{30e6}".to_string());
+    m.insert('\u{ff96}', "\u{30e8}".to_string());
+    m.insert('\u{ff97}', "\u{30e9}".to_string());
+}
+
+fn nfkd_part_5(m: mut ref Map[char, String]) {
+    m.insert('\u{ff98}', "\u{30ea}".to_string());
+    m.insert('\u{ff99}', "\u{30eb}".to_string());
+    m.insert('\u{ff9a}', "\u{30ec}".to_string());
+    m.insert('\u{ff9b}', "\u{30ed}".to_string());
+    m.insert('\u{ff9c}', "\u{30ef}".to_string());
+    m.insert('\u{ff9d}', "\u{30f3}".to_string());
+    m.insert('\u{ff9e}', "\u{3099}".to_string());
+    m.insert('\u{ff9f}', "\u{309a}".to_string());
+    m.insert('\u{ffa0}', "\u{1160}".to_string());
+    m.insert('\u{ffa1}', "\u{1100}".to_string());
+    m.insert('\u{ffa2}', "\u{1101}".to_string());
+    m.insert('\u{ffa3}', "\u{11aa}".to_string());
+    m.insert('\u{ffa4}', "\u{1102}".to_string());
+    m.insert('\u{ffa5}', "\u{11ac}".to_string());
+    m.insert('\u{ffa6}', "\u{11ad}".to_string());
+    m.insert('\u{ffa7}', "\u{1103}".to_string());
+    m.insert('\u{ffa8}', "\u{1104}".to_string());
+    m.insert('\u{ffa9}', "\u{1105}".to_string());
+    m.insert('\u{ffaa}', "\u{11b0}".to_string());
+    m.insert('\u{ffab}', "\u{11b1}".to_string());
+    m.insert('\u{ffac}', "\u{11b2}".to_string());
+    m.insert('\u{ffad}', "\u{11b3}".to_string());
+    m.insert('\u{ffae}', "\u{11b4}".to_string());
+    m.insert('\u{ffaf}', "\u{11b5}".to_string());
+    m.insert('\u{ffb0}', "\u{111a}".to_string());
+    m.insert('\u{ffb1}', "\u{1106}".to_string());
+    m.insert('\u{ffb2}', "\u{1107}".to_string());
+    m.insert('\u{ffb3}', "\u{1108}".to_string());
+    m.insert('\u{ffb4}', "\u{1121}".to_string());
+    m.insert('\u{ffb5}', "\u{1109}".to_string());
+    m.insert('\u{ffb6}', "\u{110a}".to_string());
+    m.insert('\u{ffb7}', "\u{110b}".to_string());
+    m.insert('\u{ffb8}', "\u{110c}".to_string());
+    m.insert('\u{ffb9}', "\u{110d}".to_string());
+    m.insert('\u{ffba}', "\u{110e}".to_string());
+    m.insert('\u{ffbb}', "\u{110f}".to_string());
+    m.insert('\u{ffbc}', "\u{1110}".to_string());
+    m.insert('\u{ffbd}', "\u{1111}".to_string());
+    m.insert('\u{ffbe}', "\u{1112}".to_string());
+    m.insert('\u{ffc2}', "\u{1161}".to_string());
+    m.insert('\u{ffc3}', "\u{1162}".to_string());
+    m.insert('\u{ffc4}', "\u{1163}".to_string());
+    m.insert('\u{ffc5}', "\u{1164}".to_string());
+    m.insert('\u{ffc6}', "\u{1165}".to_string());
+    m.insert('\u{ffc7}', "\u{1166}".to_string());
+    m.insert('\u{ffca}', "\u{1167}".to_string());
+    m.insert('\u{ffcb}', "\u{1168}".to_string());
+    m.insert('\u{ffcc}', "\u{1169}".to_string());
+    m.insert('\u{ffcd}', "\u{116a}".to_string());
+    m.insert('\u{ffce}', "\u{116b}".to_string());
+    m.insert('\u{ffcf}', "\u{116c}".to_string());
+    m.insert('\u{ffd2}', "\u{116d}".to_string());
+    m.insert('\u{ffd3}', "\u{116e}".to_string());
+    m.insert('\u{ffd4}', "\u{116f}".to_string());
+    m.insert('\u{ffd5}', "\u{1170}".to_string());
+    m.insert('\u{ffd6}', "\u{1171}".to_string());
+    m.insert('\u{ffd7}', "\u{1172}".to_string());
+    m.insert('\u{ffda}', "\u{1173}".to_string());
+    m.insert('\u{ffdb}', "\u{1174}".to_string());
+    m.insert('\u{ffdc}', "\u{1175}".to_string());
+    m.insert('\u{ffe0}', "\u{a2}".to_string());
+    m.insert('\u{ffe1}', "\u{a3}".to_string());
+    m.insert('\u{ffe2}', "\u{ac}".to_string());
+    m.insert('\u{ffe3}', " \u{304}".to_string());
+    m.insert('\u{ffe4}', "\u{a6}".to_string());
+    m.insert('\u{ffe5}', "\u{a5}".to_string());
+    m.insert('\u{ffe6}', "\u{20a9}".to_string());
+    m.insert('\u{ffe8}', "\u{2502}".to_string());
+    m.insert('\u{ffe9}', "\u{2190}".to_string());
+    m.insert('\u{ffea}', "\u{2191}".to_string());
+    m.insert('\u{ffeb}', "\u{2192}".to_string());
+    m.insert('\u{ffec}', "\u{2193}".to_string());
+    m.insert('\u{ffed}', "\u{25a0}".to_string());
+    m.insert('\u{ffee}', "\u{25cb}".to_string());
+}

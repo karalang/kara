@@ -1,0 +1,524 @@
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ at=0,1,2,3,4,5,6,7,8,9
+at(0) = 755224
+at(1) = 287082
+at(2) = 359152
+at(3) = 969429
+at(4) = 338314
+at(5) = 254676
+at(6) = 287922
+at(7) = 162583
+at(8) = 399871
+at(9) = 520489
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ at=-1,0,4294967295,4294967296,18446744073709551615,18446744073709551616
+at(-1): error: ValueError: input must be positive integer
+at(0) = 755224
+at(4294967295) = 117190
+at(4294967296) = 999456
+at(18446744073709551615) = 094451
+at(18446744073709551616) = 762225
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ initial_count=10 at=0,-10,-11
+at(0) = 403154
+at(-10) = 755224
+at(-11): error: ValueError: input must be positive integer
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digest=sha1 digits=8 at=0,1,2
+at(0) = 84755224
+at(1) = 94287082
+at(2) = 37359152
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digest=sha224 digits=8 at=0,1,2
+at(0) = 42893239
+at(1) = 45812810
+at(2) = 52291286
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digest=sha256 digits=8 at=0,1,2
+at(0) = 74875740
+at(1) = 32247374
+at(2) = 66254785
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digest=sha384 digits=8 at=0,1,2
+at(0) = 60502125
+at(1) = 46080675
+at(2) = 87698930
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digest=sha512 digits=8 at=0,1,2
+at(0) = 04125165
+at(1) = 69342147
+at(2) = 71730102
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digits=0 at=0,1
+at(0) = 10000000000
+at(1) = 10000000000
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digits=1 at=0,1
+at(0) = 4
+at(1) = 2
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digits=5 at=0,1
+at(0) = 55224
+at(1) = 87082
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digits=9 at=0,1
+at(0) = 284755224
+at(1) = 094287082
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digits=10 at=0,1
+at(0) = 1284755224
+at(1) = 1094287082
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digits=11 at=0,1
+error: ValueError: digits must be no greater than 10
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digest=md5 at=0
+error: ValueError: selected digest function must generate digest size greater than or equals to 18 bytes
+== hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ interval=30 at=0
+error: TypeError: HOTP.__init__() got an unexpected keyword argument 'interval'
+== hotp secret= at=0,1
+at(0) = 328482
+at(1) = 812658
+== secret jbswy3dpehpk3pxp
+48656c6c6f21deadbeef
+== secret JBSW Y3DP EHPK 3PXP
+error: Error: Non-base32 digit found
+== secret JBSWY3DPEHPK3PX0
+error: Error: Non-base32 digit found
+== secret JBSWY3DPEHPK3PX8
+error: Error: Non-base32 digit found
+== secret JBSWY3DPE
+error: Error: Incorrect padding
+== secret JBSWY3DPEH
+48656c6c6f21
+== secret JBSWY3DPEHP
+error: Error: Incorrect padding
+== secret JBSWY3DPEHPK
+48656c6c6f21de
+== secret JBSWY3DPEHPK3
+48656c6c6f21dead
+== secret JBSWY3DPEHPK3P
+error: Error: Incorrect padding
+== secret JBSWY3DPEHPK3PX
+48656c6c6f21deadbe
+== secret JBSWY3DPEHPK3PXP====
+error: Error: Incorrect padding
+== secret JBSWY3DPEHPK3PXP========
+error: Error: Incorrect padding
+== secret JBSWY3DP=HPK3PXP
+error: Error: Non-base32 digit found
+== secret MFRGGZDFMZTWQ2LK=
+error: Error: Incorrect padding
+== secret ÄBSWY3DPEHPK3PXP
+error: ValueError: string argument should contain only ASCII characters
+== secret jbswy3dpehpk3pxpjbswy3dp
+48656c6c6f21deadbeef48656c6c6f
+== secret AAAAAAAA
+0000000000
+== secret 77777777
+ffffffffff
+== secret MZXW6===
+666f6f
+== secret MZXW6YQ=
+666f6f62
+== totp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ digits=8 at=59,1111111109,1111111111,1234567890,2000000000,20000000000
+at(59) = 94287082
+at(1111111109) = 07081804
+at(1111111111) = 14050471
+at(1234567890) = 89005924
+at(2000000000) = 69279037
+at(20000000000) = 65353130
+== totp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA==== digest=sha256 digits=8 at=59,1111111109,1111111111,1234567890,2000000000,20000000000
+at(59) = 46119246
+at(1111111109) = 68084774
+at(1111111111) = 67062674
+at(1234567890) = 91819424
+at(2000000000) = 90698825
+at(20000000000) = 77737706
+== totp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA= digest=sha512 digits=8 at=59,1111111109,1111111111,1234567890,2000000000,20000000000
+at(59) = 90693936
+at(1111111109) = 25091201
+at(1111111111) = 99943326
+at(1234567890) = 93441116
+at(2000000000) = 38618901
+at(20000000000) = 47863826
+== totp secret=JBSWY3DPEHPK3PXP at=0,1,29,30,-1,-29,-30,-31,-59,-60
+at(0) = 282760
+at(1) = 282760
+at(29) = 282760
+at(30) = 996554
+at(-1) = 282760
+at(-29) = 282760
+at(-30): error: ValueError: input must be positive integer
+at(-31): error: ValueError: input must be positive integer
+at(-59): error: ValueError: input must be positive integer
+at(-60): error: ValueError: input must be positive integer
+== totp secret=JBSWY3DPEHPK3PXP at=253402300799,253402300800,-62135510400,-62135596800,-62135596801
+at(253402300799) = 199015
+at(253402300800): error: ValueError: year 10000 is out of range
+at(-62135510400): error: ValueError: input must be positive integer
+at(-62135596800): error: ValueError: year 0 is out of range
+at(-62135596801): error: ValueError: year 0 is out of range
+== totp secret=JBSWY3DPEHPK3PXP at=2024-03-09T14:05:07Z,2024-03-09T14:05:07.999+05:30,2024-03-09 14:05:07,2024-03-09T14:05:29.999999,1969-12-31T23:59:59Z,1969-12-31T23:59:30-00:30
+at(2024-03-09T14:05:07Z) = 285952
+at(2024-03-09T14:05:07.999+05:30) = 797886
+at(2024-03-09 14:05:07) = 285952
+at(2024-03-09T14:05:29.999999) = 285952
+at(1969-12-31T23:59:59Z) = 282760
+at(1969-12-31T23:59:30-00:30) = 663767
+== totp secret=JBSWY3DPEHPK3PXP at=0001-01-01T00:30:00+01:00,9999-12-31T23:59:59-01:00,0001-01-01T00:00:00
+at(0001-01-01T00:30:00+01:00): error: OverflowError: date value out of range
+at(9999-12-31T23:59:59-01:00): error: OverflowError: date value out of range
+at(0001-01-01T00:00:00): error: ValueError: input must be positive integer
+== totp secret=JBSWY3DPEHPK3PXP counter_offset=-1 at=0,29,30,1709993107
+at(0): error: ValueError: input must be positive integer
+at(29): error: ValueError: input must be positive integer
+at(30) = 282760
+at(1709993107) = 447969
+== totp secret=JBSWY3DPEHPK3PXP counter_offset=5 at=1709993107
+at(1709993107) = 860296
+== totp secret=JBSWY3DPEHPK3PXP interval=60 at=59,60,-1,-60,-61
+at(59) = 282760
+at(60) = 996554
+at(-1) = 282760
+at(-60): error: ValueError: input must be positive integer
+at(-61): error: ValueError: input must be positive integer
+== totp secret=JBSWY3DPEHPK3PXP interval=7 at=1709993107
+at(1709993107) = 278739
+== totp secret=JBSWY3DPEHPK3PXP interval=0 at=10
+at(10): error: ZeroDivisionError: float division by zero
+== totp secret=JBSWY3DPEHPK3PXP interval=-30 at=0,-31,1709993107
+at(0) = 282760
+at(-31) = 996554
+at(1709993107): error: ValueError: input must be positive integer
+== totp secret=JBSWY3DPEHPK3PXP initial_count=3 at=0
+error: TypeError: TOTP.__init__() got an unexpected keyword argument 'initial_count'
+== totp secret=JBSWY3DPEHPK3PXP digits=11 at=0
+error: ValueError: digits must be no greater than 10
+== steam secret=JBSWY3DPEHPK3PXP at=0,30,1709993107,2000000000
+at(0) = VH8YJ
+at(30) = 2YXGV
+at(1709993107) = D3FB3
+at(2000000000) = HNCVQ
+== steam secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP digits=9 interval=10 at=1709993107
+at(1709993107) = WJJB5
+== steam secret=JBSWY3DPEHPK3PXP digest=sha256 at=0
+error: TypeError: Steam.__init__() got an unexpected keyword argument 'digest'
+== verify_hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ otp=520489 counter=9,10,8
+verify('520489', 9) = True
+verify('520489', 10) = False
+verify('520489', 8) = False
+== verify_hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ otp=９６９４２９ counter=3
+verify('９６９４２９', 3) = True
+== verify_hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ otp=969429  counter=3
+verify('969429 ', 3) = False
+== verify_hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ otp=0969429 counter=3
+verify('0969429', 3) = False
+== verify_hotp secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ otp=x counter=-1
+verify('x', -1): error: ValueError: input must be positive integer
+== verify_totp secret=JBSWY3DPEHPK3PXP otp=285952 valid_window=0 for_time=1709993107,1709993137,1709993167,1709993077,1709993047
+verify('285952', 1709993107) = True
+verify('285952', 1709993137) = False
+verify('285952', 1709993167) = False
+verify('285952', 1709993077) = False
+verify('285952', 1709993047) = False
+== verify_totp secret=JBSWY3DPEHPK3PXP otp=285952 valid_window=1 for_time=1709993107,1709993137,1709993167,1709993077,1709993047
+verify('285952', 1709993107) = True
+verify('285952', 1709993137) = True
+verify('285952', 1709993167) = False
+verify('285952', 1709993077) = True
+verify('285952', 1709993047) = False
+== verify_totp secret=JBSWY3DPEHPK3PXP otp=285952 valid_window=2 for_time=1709993107,1709993137,1709993167,1709993077,1709993047
+verify('285952', 1709993107) = True
+verify('285952', 1709993137) = True
+verify('285952', 1709993167) = True
+verify('285952', 1709993077) = True
+verify('285952', 1709993047) = True
+== verify_totp secret=JBSWY3DPEHPK3PXP otp=285952 valid_window=-1 for_time=1709993107,1709993137,1709993167,1709993077,1709993047
+verify('285952', 1709993107) = False
+verify('285952', 1709993137) = False
+verify('285952', 1709993167) = False
+verify('285952', 1709993077) = False
+verify('285952', 1709993047) = False
+== verify_totp secret=JBSWY3DPEHPK3PXP otp=285952 for_time=2024-03-09T14:05:20Z,2024-03-09T19:35:20+05:30,2024-03-09T14:05:40Z
+verify('285952', 2024-03-09T14:05:20Z) = True
+verify('285952', 2024-03-09T19:35:20+05:30) = True
+verify('285952', 2024-03-09T14:05:40Z) = False
+== verify_totp secret=JBSWY3DPEHPK3PXP otp=447969 valid_window=1 for_time=1709993107
+verify('447969', 1709993107) = True
+== verify_totp secret=JBSWY3DPEHPK3PXP otp=００００００ valid_window=1 for_time=1709993107
+verify('００００００', 1709993107) = False
+== provision kind=totp secret=JBSWY3DPEHPK3PXP
+otpauth://totp/Secret?secret=JBSWY3DPEHPK3PXP
+  parsed: TOTP name='Secret' issuer=None digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 285952
+== provision kind=totp secret=JBSWY3DPEHPK3PXP name=alice@example.org issuer=Example Corp
+otpauth://totp/Example%20Corp:alice%40example.org?secret=JBSWY3DPEHPK3PXP&issuer=Example%20Corp
+  parsed: TOTP name='alice@example.org' issuer='Example Corp' digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 285952
+== provision kind=totp secret=JBSWY3DPEHPK3PXP digest=sha256 digits=8 interval=60 p.name=bob p.issuer_name=Acme
+otpauth://totp/Acme:bob?secret=JBSWY3DPEHPK3PXP&issuer=Acme&algorithm=SHA256&digits=8&period=60
+  parsed: TOTP name='bob' issuer='Acme' digits=8 digest=sha256 interval=60 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 04719688
+== provision kind=totp secret=JBSWY3DPEHPK3PXP digest=sha384 name=x
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=SHA384
+  parsed: error: ValueError: Invalid value for algorithm, must be SHA1, SHA256 or SHA512
+== provision kind=totp secret=JBSWY3DPEHPK3PXP digest=sha224 digits=7 interval=30 name=x issuer=a:b
+otpauth://totp/a%3Ab:x?secret=JBSWY3DPEHPK3PXP&issuer=a%3Ab&algorithm=SHA224&digits=7
+  parsed: error: ValueError: Invalid value for algorithm, must be SHA1, SHA256 or SHA512
+== provision kind=hotp secret=wrn3pqx5uqxqvnqr name=mark@percival
+otpauth://hotp/mark%40percival?secret=wrn3pqx5uqxqvnqr&counter=0
+  parsed: HOTP name='mark@percival' issuer=None digits=6 digest=sha1 initial_count=0 secret='wrn3pqx5uqxqvnqr'
+  at(0) = 175342
+== provision kind=hotp secret=wrn3pqx5uqxqvnqr name=mark@percival initial_count=12
+otpauth://hotp/mark%40percival?secret=wrn3pqx5uqxqvnqr&counter=12
+  parsed: HOTP name='mark@percival' issuer=None digits=6 digest=sha1 initial_count=12 secret='wrn3pqx5uqxqvnqr'
+  at(0) = 253691
+== provision kind=hotp secret=wrn3pqx5uqxqvnqr name=mark@percival initial_count=12 p.initial_count=0
+otpauth://hotp/mark%40percival?secret=wrn3pqx5uqxqvnqr&counter=12
+  parsed: HOTP name='mark@percival' issuer=None digits=6 digest=sha1 initial_count=12 secret='wrn3pqx5uqxqvnqr'
+  at(0) = 253691
+== provision kind=hotp secret=wrn3pqx5uqxqvnqr initial_count=12 p.initial_count=3 p.name=other
+otpauth://hotp/other?secret=wrn3pqx5uqxqvnqr&counter=3
+  parsed: HOTP name='other' issuer=None digits=6 digest=sha1 initial_count=3 secret='wrn3pqx5uqxqvnqr'
+  at(0) = 334532
+== provision kind=totp secret=JBSWY3DPEHPK3PXP name= issuer= p.image=https://example.org/i.png
+otpauth://totp/:Secret?secret=JBSWY3DPEHPK3PXP&issuer=&image=https%3A%2F%2Fexample.org%2Fi.png
+  parsed: TOTP name='Secret' issuer='' digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 285952
+== provision kind=totp secret=JBSWY3DPEHPK3PXP name=a b+c&d=e?f#g issuer=x y/z p.label=Ünïcode ✓
+otpauth://totp/x%20y/z:a%20b%2Bc%26d%3De%3Ff%23g?secret=JBSWY3DPEHPK3PXP&issuer=x%20y%2Fz&label=%C3%9Cn%C3%AFcode%20%E2%9C%93
+  parsed: TOTP name='a b+c&d=e?f#g' issuer='x y/z' digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 285952
+== provision kind=totp secret=JBSWY3DPEHPK3PXP p.image=ftp://example.org/i.png
+error: ValueError: ParseResult(scheme='ftp', netloc='example.org', path='/i.png', params='', query='', fragment='') is not a valid url
+== provision kind=totp secret=JBSWY3DPEHPK3PXP p.image=https://example.org
+error: ValueError: ParseResult(scheme='https', netloc='example.org', path='', params='', query='', fragment='') is not a valid url
+== provision kind=totp secret=JBSWY3DPEHPK3PXP p.image=https:///i.png?x=1#f
+error: ValueError: ParseResult(scheme='https', netloc='', path='/i.png', params='', query='x=1', fragment='f') is not a valid url
+== provision kind=steam secret=JBSWY3DPEHPK3PXP name=gamer issuer=Steam
+otpauth://totp/Steam:gamer?secret=JBSWY3DPEHPK3PXP&issuer=Steam&digits=10
+  parsed: error: ValueError: Digits may only be 6, 7, or 8
+== random base32 16
+error: ValueError: Secrets should be at least 160 bits
+== random base32 31
+error: ValueError: Secrets should be at least 160 bits
+== random hex 39
+error: ValueError: Secrets should be at least 160 bits
+== random hex 0
+error: ValueError: Secrets should be at least 160 bits
+== uris accounts.txt
+otpauth://totp/GitHub:octo-dev?secret=NNQXEYJNN52HALLEMVWW6LLLMV4S2MRQGI2A&issuer=GitHub
+  TOTP name='octo-dev' issuer='GitHub' digits=6 digest=sha1 interval=30 secret='NNQXEYJNN52HALLEMVWW6LLLMV4S2MRQGI2A'
+  at(1709993107) = 935255
+  uri: otpauth://totp/GitHub:octo-dev?secret=NNQXEYJNN52HALLEMVWW6LLLMV4S2MRQGI2A&issuer=GitHub
+otpauth://totp/Amazon%20Web%20Services:admin@example-corp?secret=KRSXG5CTMVRXEZLUKNSXG2LUMUYTEMZU&issuer=Amazon%20Web%20Services
+  TOTP name='admin@example-corp' issuer='Amazon Web Services' digits=6 digest=sha1 interval=30 secret='KRSXG5CTMVRXEZLUKNSXG2LUMUYTEMZU'
+  at(1709993107) = 374316
+  uri: otpauth://totp/Amazon%20Web%20Services:admin%40example-corp?secret=KRSXG5CTMVRXEZLUKNSXG2LUMUYTEMZU&issuer=Amazon%20Web%20Services
+otpauth://totp/Google%3Adev%40example.org?secret=MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK&issuer=Google
+  TOTP name='Google:dev@example.org' issuer='Google' digits=6 digest=sha1 interval=30 secret='MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK'
+  at(1709993107) = 220938
+  uri: otpauth://totp/Google:Google%3Adev%40example.org?secret=MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK&issuer=Google
+otpauth://totp/ACME%20Co:john.doe@email.com?secret=HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ&issuer=ACME%20Co&algorithm=SHA256&digits=8&period=60
+  TOTP name='john.doe@email.com' issuer='ACME Co' digits=8 digest=sha256 interval=60 secret='HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ'
+  at(1709993107) = 92909964
+  uri: otpauth://totp/ACME%20Co:john.doe%40email.com?secret=HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ&issuer=ACME%20Co&algorithm=SHA256&digits=8&period=60
+otpauth://hotp/YubiKey:slot2?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=42&issuer=YubiKey
+  HOTP name='slot2' issuer='YubiKey' digits=6 digest=sha1 initial_count=42 secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+  at(0) = 435478
+  uri: otpauth://hotp/YubiKey:slot2?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=YubiKey&counter=42
+otpauth://totp/Steam:gamer_42?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Steam&encoder=steam
+  Steam name='gamer_42' issuer='Steam' digits=10 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'
+  at(1709993107) = WJJB5
+  uri: otpauth://totp/Steam:gamer_42?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Steam&digits=10
+otpauth://totp/Dropbox:sam%40example.net?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA%3D&algorithm=SHA512&digits=7
+  TOTP name='sam@example.net' issuer='Dropbox' digits=7 digest=sha512 interval=30 secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA='
+  at(1709993107) = 3336008
+  uri: otpauth://totp/Dropbox:sam%40example.net?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA%3D&issuer=Dropbox&algorithm=SHA512&digits=7
+otpauth://totp/home-server?secret=jbswy3dpehpk3pxp
+  TOTP name='home-server' issuer=None digits=6 digest=sha1 interval=30 secret='jbswy3dpehpk3pxp'
+  at(1709993107) = 285952
+  uri: otpauth://totp/home-server?secret=jbswy3dpehpk3pxp
+otpauth://totp/My%20Bank:sam?secret=GEZDGNBVGY3TQOJQ&issuer=My+Bank
+  TOTP name='sam' issuer='My Bank' digits=6 digest=sha1 interval=30 secret='GEZDGNBVGY3TQOJQ'
+  at(1709993107) = 108614
+  uri: otpauth://totp/My%20Bank:sam?secret=GEZDGNBVGY3TQOJQ&issuer=My%20Bank
+otpauth://totp/?secret=MFRGGZDFMZTWQ2LK&period=15
+  TOTP name='Secret' issuer=None digits=6 digest=sha1 interval=15 secret='MFRGGZDFMZTWQ2LK'
+  at(1709993107) = 030030
+  uri: otpauth://totp/Secret?secret=MFRGGZDFMZTWQ2LK&period=15
+otpauth://hotp/Legacy%20VPN:ops?secret=JBSWY3DPEHPK3PXP&counter=%207&digits=8
+  HOTP name='ops' issuer='Legacy VPN' digits=8 digest=sha1 initial_count=7 secret='JBSWY3DPEHPK3PXP'
+  at(0) = 34449891
+  uri: otpauth://hotp/Legacy%20VPN:ops?secret=JBSWY3DPEHPK3PXP&issuer=Legacy%20VPN&counter=7&digits=8
+otpauth://totp/Intranet:%C3%A9lodie?secret=JBSWY3DPEHPK3PXP&digits=%D9%A8&issuer=Intranet
+  TOTP name='élodie' issuer='Intranet' digits=8 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 35285952
+  uri: otpauth://totp/Intranet:%C3%A9lodie?secret=JBSWY3DPEHPK3PXP&issuer=Intranet&digits=8
+== uris broken-uris.txt
+https://totp/GitHub:octo?secret=JBSWY3DPEHPK3PXP
+  error: ValueError: Not an otpauth URI
+otpauth://TOTP/GitHub:octo?secret=JBSWY3DPEHPK3PXP
+  error: ValueError: Not a supported OTP type
+otpauth://totp/GitHub:octo?secret=JBSWY3DPEHPK3PXP&issuer=GitLab
+  error: ValueError: If issuer is specified in both label and parameters, it should be equal.
+otpauth://totp/GitHub:octo?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&issuer=GitLab
+  error: ValueError: If issuer is specified in both label and parameters, it should be equal.
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=9
+  error: ValueError: Digits may only be 6, 7, or 8
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=six
+  error: ValueError: invalid literal for int() with base 10: 'six'
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=MD5
+  error: ValueError: Invalid value for algorithm, must be SHA1, SHA256 or SHA512
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=sha1
+  error: ValueError: Invalid value for algorithm, must be SHA1, SHA256 or SHA512
+otpauth://totp/x?issuer=Nobody
+  error: ValueError: No secret found in URI
+otpauth://totp/x?secret=&issuer=Blank
+  error: ValueError: No secret found in URI
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&counter=3
+  error: TypeError: TOTP.__init__() got an unexpected keyword argument 'initial_count'
+otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&period=60
+  error: TypeError: HOTP.__init__() got an unexpected keyword argument 'interval'
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam&counter=3
+  error: TypeError: Steam.__init__() got an unexpected keyword argument 'initial_count'
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam&algorithm=SHA256&counter=1
+  error: TypeError: Steam.__init__() got an unexpected keyword argument 'digest'
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&encoder=steam&digits=9
+  Steam name='x' issuer=None digits=10 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = D3FB3
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=10
+otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=-5
+  HOTP name='x' issuer=None digits=6 digest=sha1 initial_count=-5 secret='JBSWY3DPEHPK3PXP'
+  error: ValueError: input must be positive integer
+  uri: otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=-5
+otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=1_000
+  HOTP name='x' issuer=None digits=6 digest=sha1 initial_count=1000 secret='JBSWY3DPEHPK3PXP'
+  at(0) = 120699
+  uri: otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=1000
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=0
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=0 secret='JBSWY3DPEHPK3PXP'
+  error: ZeroDivisionError: float division by zero
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=0
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=-30
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=-30 secret='JBSWY3DPEHPK3PXP'
+  error: ValueError: input must be positive integer
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=-30
+otpauth://totp/x?secret=jbsw%20y3dp%20ehpk%203pxp
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=30 secret='jbsw y3dp ehpk 3pxp'
+  error: Error: Non-base32 digit found
+  uri: otpauth://totp/x?secret=jbsw%20y3dp%20ehpk%203pxp
+otpauth://totp/x?secret=JBSWY3DPEHPK3PX1
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PX1'
+  error: Error: Non-base32 digit found
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PX1
+otpauth://totp/x?secret=JBSWY3DPE
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=30 secret='JBSWY3DPE'
+  error: Error: Incorrect padding
+  uri: otpauth://totp/x?secret=JBSWY3DPE
+otpauth://totp/x?secret=JBSWY3DPEH
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=30 secret='JBSWY3DPEH'
+  at(1709993107) = 952200
+  uri: otpauth://totp/x?secret=JBSWY3DPEH
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP====
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP===='
+  error: Error: Incorrect padding
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PXP%3D%3D%3D%3D
+otpauth://totp/x?secret=%C3%84BSWY3DPEHPK3PXP
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=30 secret='ÄBSWY3DPEHPK3PXP'
+  error: ValueError: string argument should contain only ASCII characters
+  uri: otpauth://totp/x?secret=%C3%84BSWY3DPEHPK3PXP
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=10&encoder=steam
+  Steam name='x' issuer=None digits=10 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = D3FB3
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=10
+otpauth://totp/a:b:c?secret=JBSWY3DPEHPK3PXP
+  TOTP name='b:c' issuer='a' digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 285952
+  uri: otpauth://totp/a:b%3Ac?secret=JBSWY3DPEHPK3PXP&issuer=a
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=6&digits=8
+  TOTP name='x' issuer=None digits=8 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 35285952
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=8
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=+45
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=45 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 240617
+  uri: otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=45
+otpauth://totp/Caf%E9:x?secret=JBSWY3DPEHPK3PXP
+  TOTP name='x' issuer='Caf�' digits=6 digest=sha1 interval=30 secret='JBSWY3DPEHPK3PXP'
+  at(1709993107) = 285952
+  uri: otpauth://totp/Caf%EF%BF%BD:x?secret=JBSWY3DPEHPK3PXP&issuer=Caf%EF%BF%BD
+otpauth:totp?secret=JBSWY3DPEHPK3PXP
+  error: ValueError: Not a supported OTP type
+otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&secret=MFRGGZDFMZTWQ2LK&image=x
+  TOTP name='x' issuer=None digits=6 digest=sha1 interval=30 secret='MFRGGZDFMZTWQ2LK'
+  at(1709993107) = 920889
+  uri: otpauth://totp/x?secret=MFRGGZDFMZTWQ2LK
+== authenticator accounts.txt 1709993107
+home-server                              285952  23s left, next 290128
+Secret                                   030030   8s left, next 231215
+ACME Co (john.doe@email.com)             92909964  53s left, next 50492721
+Amazon Web Services (admin@example-corp) 374316  23s left, next 410294
+Dropbox (sam@example.net)                3336008  23s left, next 2550457
+GitHub (octo-dev)                        935255  23s left, next 899310
+Google (Google:dev@example.org)          220938  23s left, next 806799
+Intranet (élodie)                        35285952  23s left, next 44290128
+Legacy VPN (ops)                         34449891  counter 7
+My Bank (sam)                            108614  23s left, next 369907
+Steam (gamer_42)                         WJJB5  23s left, next XJ96N
+YubiKey (slot2)                          435478  counter 42
+== authenticator accounts.txt 2024-03-09T14:05:59Z
+home-server                              290128   1s left, next 706442
+Secret                                   077106   1s left, next 377657
+ACME Co (john.doe@email.com)             92909964   1s left, next 50492721
+Amazon Web Services (admin@example-corp) 410294   1s left, next 970063
+Dropbox (sam@example.net)                2550457   1s left, next 1429263
+GitHub (octo-dev)                        899310   1s left, next 716493
+Google (Google:dev@example.org)          806799   1s left, next 900010
+Intranet (élodie)                        44290128   1s left, next 62706442
+Legacy VPN (ops)                         34449891  counter 7
+My Bank (sam)                            369907   1s left, next 035812
+Steam (gamer_42)                         XJ96N   1s left, next JG9YV
+YubiKey (slot2)                          435478  counter 42
+== login users.tsv attempts.log
+2024-03-09T14:05:07Z alice '935255': accepted at step 56999770
+2024-03-09T14:05:09Z alice '935255': replayed code from step 56999770
+2024-03-09T14:05:40Z alice '935255': replayed code from step 56999770
+2024-03-09T14:06:05Z alice '899310': accepted at step 56999771 (drift -1)
+2024-03-09T14:06:10Z bob '6270 6442': accepted at step 56999772
+2024-03-09T14:06:20Z bob '12345678': wrong code (1 of 3)
+2024-03-09T14:06:21Z bob '87654321': wrong code (2 of 3)
+2024-03-09T14:06:22Z bob '11111111': wrong code; locked for 300s
+2024-03-09T14:06:30Z bob '37346485': locked for 292s more
+2024-03-09T14:06:40Z carol '４９２７２１': accepted at step 28499886
+2024-03-09T14:07:10Z carol '747237': accepted at step 28499888 (drift +1)
+2024-03-09T14:07:20Z carol '336139': wrong code (1 of 3)
+2024-03-09T14:08:20Z dave '56232192': accepted at step 56999776
+2024-03-09T14:08:50Z dave '1259-6086': accepted at step 56999777
+2024-03-09T14:09:10Z erin '٠٤٥٤٩٣': wrong code (1 of 3)
+2024-03-09T14:09:11Z erin '04549³': accepted at step 56999778
+2024-03-09T14:09:12Z erin '⓪45493': replayed code from step 56999778
+2024-03-09T14:09:20Z mallory '000000': no such user
+2024-03-09T14:10:00Z erin '141106': accepted at step 56999780
+2024-03-09T14:11:40Z bob '22427828': accepted at step 56999783
+== tokens tokens.tsv presses.log
+YK-0001 755224: accepted at 0, next 1
+YK-0001 287082: accepted at 1, next 2
+YK-0001 287082: rejected
+YK-0001 254676: accepted at 5, next 6
+YK-0002 542634: out of sync; press again
+YK-0002 973682: resynchronised at 151, next 152
+YK-0002 155774: accepted at 152, next 153
+YK-0003 865438: out of sync; press again
+YK-0003 312058: out of sync; press again
+YK-0003 713385: rejected
+YK-0003 123456: rejected
+YK-9999 000000: unknown token
+YK-0003 547862: rejected
+YK-0003 320030: rejected
+== enrol enrol.tsv 1709993107
+new.hire@example.org (Example Corp):
+  otpauth://totp/Example%20Corp:new.hire%40example.org?secret=W34E5WEPTJBDUMID24OZOB5BEKXQ4Z56&issuer=Example%20Corp
+  round trip ok, code 006341
+ops+oncall@example.org (Example Corp: Ops):
+  otpauth://totp/Example%20Corp%3A%20Ops:ops%2Boncall%40example.org?secret=KHL4HBVDGC657NWXSQI7SO2HQG7WLAUU&issuer=Example%20Corp%3A%20Ops
+  round trip ok, code 163519
+jürgen@example.de (Beispiel GmbH):
+  otpauth://totp/Beispiel%20GmbH:j%C3%BCrgen%40example.de?secret=S2PI2S3ZHRI5HR5XRYNE4UE7WWJIGGQ3&issuer=Beispiel%20GmbH
+  round trip ok, code 344190
+pat (no issuer):
+  otpauth://totp/pat?secret=P77BXJAPEWCLS2MR33CEVRCP47UNNPDI&image=https%3A%2F%2Fexample.org%2Flogo.png
+  round trip ok, code 999221
+lee (Shop):
+  error: ValueError: ParseResult(scheme='http', netloc='example.org', path='/logo.png', params='', query='', fragment='') is not a valid url
+kim (Shop):
+  error: ValueError: ParseResult(scheme='https', netloc='example.org', path='', params='', query='', fragment='') is not a valid url
+sam/admin (Shop & Co):
+  otpauth://totp/Shop%20%26%20Co:sam/admin?secret=GMKCA6KOHDHVMX4EFQIOTV3XWJAJS4IU&issuer=Shop%20%26%20Co&color=green
+  round trip ok, code 652145
