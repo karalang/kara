@@ -333,6 +333,30 @@ pub fn borrow_errors(
                     }
                 }
             }
+            // A view stored where no borrow is kept, in an escaping
+            // closure or a `shared` value (§5.7, §9.3), would outlive
+            // what it views unchecked.
+            let unkept = if si < n {
+                cx.unkept_loans(&o, &block.statements[si].kind)
+            } else if let TerminatorKind::Call { args, .. } = &block.terminator.kind {
+                cx.unkept_call_loans(&o, args)
+            } else {
+                LoanSet::default()
+            };
+            for li in unkept.iter() {
+                let loan = &loans[li];
+                let text = format!(
+                        "{}: a view of {} is stored in an escaping closure or a `shared` value, where its borrow is not kept (borrow at {}); capture an owned copy instead (core semantics §5.7, §9.3) [E0509]",
+                        site(body, at, Some(loan.at)),
+                        show_place(body, tys, &loan.place),
+                        borrow_site(body, loan.at),
+                    );
+                errs.push(BorrowError {
+                    place: source_place(body, tys, &loan.place),
+                    loan_at: source_at(body, loan.at),
+                    ..BorrowError::new(text, "E0509", site_at(body, at, Some(loan.at)))
+                });
+            }
             if si < n {
                 cx.transfer(&mut o, &block.statements[si].kind, at);
             } else if let TerminatorKind::Return = block.terminator.kind {
@@ -767,6 +791,72 @@ impl Cx<'_> {
         }
     }
 
+    /// The loans an assignment's value holds that its destination cannot
+    /// keep: a value holding a borrow moved into a place whose local's
+    /// type holds none, which happens only where a closure escapes (a
+    /// function-typed field or element) or in a `shared` value.
+    fn unkept_loans(&self, o: &Origins, s: &StatementKind) -> LoanSet {
+        let mut val = LoanSet::default();
+        let StatementKind::Assign(dest, rv) = s else {
+            return val;
+        };
+        if dest.projection.contains(&ProjElem::Deref) {
+            return val;
+        }
+        match rv {
+            Rvalue::Use(op) | Rvalue::Cast(CastKind::Erase, op, _) => {
+                self.operand_origins(o, op, &mut val)
+            }
+            Rvalue::Aggregate(_, ops) => {
+                for op in ops {
+                    self.operand_origins(o, op, &mut val);
+                }
+            }
+            _ => return val,
+        }
+        if self.holds(dest) && self.holds(&Place::local(dest.local)) {
+            val = LoanSet::default();
+        }
+        val
+    }
+
+    /// The loans a call stores where they are not kept: a function value
+    /// holding a borrow passed with a `mut ref` whose pointee holds no
+    /// borrow but can hold that function type, as `v.push(f)` stores `f`
+    /// in a `Vec[Fn() -> i64]` (§9.3). A closure passed down, as to
+    /// `retain`, is not of a type its receiver holds, so is not stored.
+    fn unkept_call_loans(&self, o: &Origins, args: &[Operand]) -> LoanSet {
+        let mut val = LoanSet::default();
+        for (i, a) in args.iter().enumerate() {
+            let Some(p) = a.place().filter(|p| p.projection.is_empty()) else {
+                continue;
+            };
+            let Ok(pt) = place_ty(self.body, self.tys, p) else {
+                continue;
+            };
+            let TyKind::MutRef(t) = self.tys.kind(pt.ty) else {
+                continue;
+            };
+            if holds_borrow(self.tys, t) {
+                continue;
+            }
+            for (j, b) in args.iter().enumerate() {
+                let Some(q) = b.place().filter(|_| j != i) else {
+                    continue;
+                };
+                let Ok(qt) = place_ty(self.body, self.tys, q) else {
+                    continue;
+                };
+                if matches!(self.tys.kind(qt.ty), TyKind::Fn { .. })
+                    && contains_ty(self.tys, t, qt.ty)
+                {
+                    self.operand_origins(o, b, &mut val);
+                }
+            }
+        }
+        val
+    }
+
     fn transfer(&self, o: &mut Origins, s: &StatementKind, at: (usize, usize)) {
         let StatementKind::Assign(dest, rv) = s else {
             if let StatementKind::StorageDead(l) = s {
@@ -983,6 +1073,46 @@ fn holds_borrow(tys: &TyInterner, ty: Ty) -> bool {
         }
     }
     go(tys, ty, false, &mut Vec::new())
+}
+
+/// Whether a value of type `outer` can have a `inner` inside it: as
+/// itself, an element, a key or value, or a field.
+fn contains_ty(tys: &TyInterner, outer: Ty, inner: Ty) -> bool {
+    fn go(tys: &TyInterner, ty: Ty, inner: Ty, seen: &mut Vec<Ty>) -> bool {
+        if ty == inner {
+            return true;
+        }
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        match tys.kind(ty) {
+            TyKind::Tuple(ts) => ts.iter().any(|t| go(tys, *t, inner, seen)),
+            TyKind::Array(t, _) => go(tys, t, inner, seen),
+            TyKind::Intrinsic(
+                IntrinsicTy::Vec(e)
+                | IntrinsicTy::Set(e)
+                | IntrinsicTy::VecDeque(e)
+                | IntrinsicTy::SortedSet(e),
+            ) => go(tys, e, inner, seen),
+            TyKind::Intrinsic(IntrinsicTy::Map(k, v) | IntrinsicTy::SortedMap(k, v)) => {
+                go(tys, k, inner, seen) || go(tys, v, inner, seen)
+            }
+            TyKind::Adt(a) => {
+                let adt = tys.adt(a);
+                let is_enum = adt.is_enum;
+                let counts: Vec<usize> = adt.variants.iter().map(|v| v.fields.len()).collect();
+                counts.iter().enumerate().any(|(v, n)| {
+                    (0..*n as u32).any(|f| {
+                        tys.field_ty(ty, is_enum.then_some(v as u32), f)
+                            .is_some_and(|t| go(tys, t, inner, seen))
+                    })
+                })
+            }
+            _ => false,
+        }
+    }
+    go(tys, outer, inner, &mut Vec::new())
 }
 
 /// `TaskGroup` holds its tasks' closures outside its declared fields and
