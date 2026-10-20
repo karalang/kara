@@ -248,7 +248,7 @@ fn main() {
 }
 "#;
     let (i, _) = interp_run("deadlock", src);
-    assert!(!i.status.success());
+    assert_eq!(i.status.code(), Some(101));
     let err = String::from_utf8_lossy(&i.stderr);
     assert!(err.contains("deadlock: every task waits"), "{err}");
     let Some((out, _)) = build_and_run("deadlock", src) else {
@@ -483,4 +483,50 @@ fn main() {
 "#;
     let out = stdout_on_both("moved_sender", src);
     assert_eq!(out, "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 2\nclosed\n");
+}
+
+/// A deadlock is a panic (core semantics §10.1): a lone `recv` nothing can
+/// answer, and a second lock of a held `Mutex`, print the runtime's
+/// `error: deadlock:` line and exit 101 on both backends, after the output
+/// that came before (B-2026-10-19-56). The interpreter exited 3 with a run
+/// error.
+#[test]
+fn mir_a_deadlock_is_a_panic_on_both_backends() {
+    let recv = r#"
+fn main() {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = channel(1);
+    println("start");
+    let v = rx.recv();
+    println("unreached");
+}
+"#;
+    let lock = r#"
+import std.sync.{Mutex};
+fn main() {
+    let m = Mutex.new(1);
+    let a = m.lock();
+    println("start");
+    let b = m.lock();
+    println("unreached");
+}
+"#;
+    for (name, src, what) in [
+        ("deadlock-recv", recv, "error: deadlock: every task waits"),
+        // A second `lock` waits for the holder, which is this task, so it
+        // is the scheduler's every-task-waits deadlock on both backends.
+        ("deadlock-lock", lock, "error: deadlock: every task waits"),
+    ] {
+        let (i, _) = interp_run(name, src);
+        assert_eq!(i.status.code(), Some(101), "{name}");
+        assert_eq!(String::from_utf8_lossy(&i.stdout), "start\n", "{name}");
+        let err = String::from_utf8_lossy(&i.stderr);
+        assert!(err.starts_with(what), "{name}: {err}");
+        let Some((out, _)) = build_and_run(name, src) else {
+            continue;
+        };
+        assert_eq!(out.status.code(), Some(101), "{name}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "start\n", "{name}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.starts_with(what), "{name}: {err}");
+    }
 }

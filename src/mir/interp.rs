@@ -5242,7 +5242,7 @@ impl<'a> Interp<'a> {
                 self.held_locks.push(cell.clone());
                 Ok(Value::Ref(cell))
             }
-            ("acquire", Some(_)) => err("deadlock: lock of a mutex that is already held"),
+            ("acquire", Some(_)) => Err(self.deadlock("lock of a mutex that is already held")),
             (_, Some(i)) => {
                 self.held_locks.swap_remove(i);
                 Ok(Value::Unit)
@@ -8731,6 +8731,19 @@ impl<'a> Interp<'a> {
         s
     }
 
+    /// A deadlock is a panic (core semantics §10.1): the message the
+    /// compiled runtime prints, then exit 101 (B-2026-10-19-56).
+    fn deadlock(&mut self, what: &str) -> Stop {
+        if !self.abort_reported {
+            self.abort_reported = true;
+            self.write_out(true, &format!("error: deadlock: {what}\n"));
+        }
+        if self.trace {
+            self.events.push(Event::Abort(AbortReason::Panic));
+        }
+        Stop::Abort(AbortReason::Panic)
+    }
+
     #[inline(always)]
     fn tick_n(&mut self, n: u64) -> R<()> {
         self.steps += n;
@@ -10685,7 +10698,9 @@ impl<'a> Interp<'a> {
         let step = std::time::Duration::from_millis(1);
         let pause = match (nearest, io) {
             (None, false) => {
-                return err("deadlock: every task waits on a channel that no running task sends to or receives from");
+                return Err(self.deadlock(
+                    "every task waits on a channel that no running task sends to or receives from",
+                ));
             }
             (None, true) => step,
             (Some(at), io) => {
