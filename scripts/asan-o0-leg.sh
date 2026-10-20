@@ -96,8 +96,20 @@ REQUIRE_ARCHIVE="${KARAC_REQUIRE_RUNTIME_ARCHIVE:-1}"
 # The comparison is the archive's mtime against the COMMIT TIME of the last
 # change to `runtime/src`, not against file mtimes — a fresh clone stamps every
 # file at checkout, so file mtimes say nothing.
+#
+# The runtime is more than `runtime/src`: it compiles `src/http1.rs` and
+# `src/format_spec.rs` in through `#[path]`, so a change to one of those leaves
+# `git log -- runtime/src` empty while every archive built before it is stale.
+# Measured 2026-10-20: 8f20065004 changed header-name casing in src/http1.rs,
+# and an archive "fresh by runtime/src" ran the old casing. The paths are read
+# from the `#[path]` attributes themselves so a new one cannot be missed.
 if [[ "${KARAC_ALLOW_STALE_ARCHIVE:-0}" != "1" ]]; then
-  runtime_ct="$(git log -1 --format=%ct -- runtime/src 2>/dev/null || true)"
+  runtime_paths=(runtime/src)
+  while IFS= read -r inc; do
+    runtime_paths+=("$inc")
+  done < <(grep -rhoE '#\[path = "\.\./\.\./[^"]+"\]' runtime/src 2>/dev/null \
+             | sed -E 's|.*"\.\./\.\./([^"]+)".*|\1|' | sort -u)
+  runtime_ct="$(git log -1 --format=%ct -- "${runtime_paths[@]}" 2>/dev/null || true)"
   if [[ -z "$runtime_ct" ]]; then
     # A shallow clone (cloud containers, actions/checkout depth-1) may not carry
     # the commit that last touched runtime/src. Say so rather than pass quietly:
@@ -127,7 +139,7 @@ if [[ "${KARAC_ALLOW_STALE_ARCHIVE:-0}" != "1" ]]; then
     fi
     if [[ ${#stale_archives[@]} -gt 0 ]]; then
       echo "!! STALE RUNTIME ARCHIVE(S) — older than the last runtime/src change."
-      echo "   runtime/src last changed: $(git log -1 --format='%h %ci  %s' -- runtime/src)"
+      echo "   runtime/src last changed: $(git log -1 --format='%h %ci  %s' -- "${runtime_paths[@]}")"
       for a in "${stale_archives[@]}"; do
         printf '     %s  built %s\n' "$a" \
           "$(date -d "@$(stat -c %Y "$a" 2>/dev/null || stat -f %m "$a")" '+%Y-%m-%d %H:%M' 2>/dev/null \
@@ -142,7 +154,7 @@ if [[ "${KARAC_ALLOW_STALE_ARCHIVE:-0}" != "1" ]]; then
       echo "   cannot affect what these fixtures execute."
       exit 3
     fi
-    echo ">> archive freshness: OK — all present archives postdate runtime/src@$(git log -1 --format=%h -- runtime/src)"
+    echo ">> archive freshness: OK — all present archives postdate runtime/src@$(git log -1 --format=%h -- "${runtime_paths[@]}")"
   fi
 fi
 
