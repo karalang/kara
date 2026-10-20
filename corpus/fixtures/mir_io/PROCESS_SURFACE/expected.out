@@ -1,0 +1,15 @@
+redirect true x-y
+from file [x-y]
+first [abc]
+invalid input
+wait twice 0 0
+try after true
+read loop 10
+invalid utf8 [keep]
+stderr bytes 0 0
+wrote 5
+dropped stdin [hello] true
+wait closes stdin true
+env [k][]
+id positive true
+not found

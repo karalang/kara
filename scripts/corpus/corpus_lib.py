@@ -142,6 +142,8 @@ def render_template(src: str, template: dict, tmpd: Path, origin) -> str:
     each hole's value as its test fills it in; a value may name `{tmp}`, the
     run's own directory (for a file the program writes or reads), and
     `{origin_port}`, the port of the HTTP origin `[origin]` describes.
+    A template filled in by `str::replace` instead gives `[replace]`, each
+    word and its value, and has no holes.
     `[files]` are written into that directory first, and the contents of the
     files `show_files` names end the entry's stdout, each after a
     `=== file <name> ===` line, for a test that checks a file after the run."""
@@ -149,6 +151,12 @@ def render_template(src: str, template: dict, tmpd: Path, origin) -> str:
     holes = {k: str(v).format(**fills) for k, v in template.get("holes", {}).items()}
     for name, text in template.get("files", {}).items():
         (tmpd / name).write_text(text)
+    if "replace" in template:
+        # A raw-string template its test fills in with `str::replace`
+        # (`DIR`, `PORT`): its braces are Kara's own, so no holes.
+        for word, value in template["replace"].items():
+            src = src.replace(word, str(value).format(**fills))
+        return src
 
     def fill(m):
         if m.group(1) is None:

@@ -1,0 +1,3 @@
+# tests/mir_io.rs fills in DIR with its scratch directory.
+[replace]
+DIR = "{tmp}"
