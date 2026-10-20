@@ -1932,6 +1932,10 @@ fn main() {
 /// reports it, JSON names the lint for the Mend loop, `-A escaping_closure`
 /// opts an interp-only program out, and `run --interp` keeps executing — the
 /// interpreter supports the shape, and the gate is about codegen.
+///
+/// B-2026-10-19-38 — `karac check` answers for the v2 (MIR) backends, which
+/// run a returned capturing closure, so the lint surfaces are measured on the
+/// legacy `karac build` and `check` itself is pinned clean.
 #[test]
 fn test_escaping_closure_surfaces_at_check_time() {
     let tmp = std::env::temp_dir().join(format!(
@@ -1964,12 +1968,25 @@ fn main() {
 "#;
     std::fs::write(&path, src).unwrap();
     let file = path.to_str().unwrap();
+    let exe = tmp.join("rules_out");
+    let exe = exe.to_str().unwrap();
 
-    // 1. Text check REPORTS it, where it used to say "All checks passed."
+    // 0. B-2026-10-19-38: the v2 check is clean; every MIR surface runs this.
     let out = karac_bin().args(["check", file]).output().unwrap();
     assert!(
+        out.status.success(),
+        "the v2 check must accept a returned capturing closure; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // 1. The legacy build REPORTS it.
+    let out = karac_bin()
+        .args(["build", file, "-o", exe])
+        .output()
+        .unwrap();
+    assert!(
         !out.status.success(),
-        "check must fail on a program `build` refuses; stderr={}",
+        "the legacy build must refuse the shape; stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -1984,7 +2001,7 @@ fn main() {
 
     // 2. JSON carries it with the lint name, which is what the Mend loop reads.
     let out = karac_bin()
-        .args(["check", file, "--output=json"])
+        .args(["build", file, "-o", exe, "--output=json"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1997,14 +2014,14 @@ fn main() {
         "the JSON diagnostic must name the lint so `-A` is discoverable; stdout={stdout}",
     );
 
-    // 3. `-A` opts out of the CHECK gate (codegen's own gate stays the
-    //    backstop for an actual `build`).
+    // 3. `-A` opts out. Codegen itself still refuses the shape on the `llvm`
+    //    leg, so what is measured is that the LINT's diagnostic is gone.
     let out = karac_bin()
-        .args(["check", file, "-A", "escaping_closure"])
+        .args(["build", file, "-o", exe, "-A", "escaping_closure"])
         .output()
         .unwrap();
     assert!(
-        out.status.success(),
+        !String::from_utf8_lossy(&out.stderr).contains("error[escaping_closure]"),
         "-A escaping_closure must suppress; stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );

@@ -3030,8 +3030,21 @@ impl<'a> OwnershipChecker<'a> {
         );
         self.core_non_move_sources
             .extend(classification.core_borrowed_spans.iter().copied());
-        self.core_index_moves
-            .extend(classification.core_index_moves.iter().copied());
+        // v2 core §5.4: a function that returns a reference returns a borrow
+        // of the place its result names, so an element there is lent, not
+        // moved out of its collection (B-2026-10-19-37).
+        let lent = if core_rules() {
+            ref_return::core_returned_places(f)
+        } else {
+            HashSet::new()
+        };
+        self.core_index_moves.extend(
+            classification
+                .core_index_moves
+                .iter()
+                .filter(|s| !lent.contains(&SpanKey::from_span(s)))
+                .copied(),
+        );
         self.core_borrow_moves
             .extend(classification.core_borrow_moves.iter().copied());
         self.core_projection_consumes.extend(

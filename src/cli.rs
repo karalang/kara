@@ -1662,7 +1662,15 @@ impl Pipeline {
         // post-lower AST codegen compiles. `codegen_bound` gates it exactly
         // like the chained lint: the interpreter supports these shapes, so an
         // interp-bound pipeline stays quiet.
-        if let (true, Some(typed)) = (self.codegen_bound, self.typed.as_mut()) {
+        //
+        // B-2026-10-19-38 — the deferral is the LEGACY backend's, as for the
+        // chained lint above: both MIR backends run a returned capturing
+        // closure in every shape it lists (`(pick(10))(p(4))`, a closure
+        // stored in a struct, one returned from a branch), and core-semantics
+        // §9.3 allows them. So a strict-core check skips it.
+        if let (true, false, Some(typed)) =
+            (self.codegen_bound, self.strict_core, self.typed.as_mut())
+        {
             let (extra, deny) = crate::escaping_closure_lint::check_escaping_closures(
                 &self.parsed.program,
                 &self.lint_overrides,

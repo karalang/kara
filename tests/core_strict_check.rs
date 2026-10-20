@@ -10003,3 +10003,66 @@ fn check_follows_the_core_effect_defaults() {
         "the `with _` annotation is removed",
     );
 }
+
+/// B-2026-10-19-37 (core-semantics §5.3, §5.4): a method returning a
+/// reference lends the element its result names, and a method call's result
+/// borrows its receiver, so `self.items[0]`, `self.items.get(0).unwrap()`
+/// and `m.get(k).unwrap_or("")` may be returned. A receiver or default that
+/// owns its value is still a temporary that dies at the return.
+#[test]
+fn a_returned_reference_lends_its_element_and_traces_a_method_call() {
+    accepted(
+        "ref-return-lends",
+        "struct Bag { items: Vec[String], name: String }\n\
+         impl Bag {\n\
+             fn first(self) -> ref String { self.items[0] }\n\
+             fn pick(self, i: i64) -> ref String { if i > 0 { self.items[0] } else { self.name } }\n\
+             fn early(self) -> ref String { if self.items.len() == 0 { return self.name; } return self.items[0]; }\n\
+             fn got(self) -> ref String { self.items.get(0).unwrap_or(self.name) }\n\
+             fn or(self, d: String) -> ref String { self.items.get(0) ?? d }\n\
+         }\n\
+         fn name_or_empty(m: Map[String, String], k: String) -> ref String { m.get(k).unwrap_or(\"\") }\n\
+         fn main() {\n\
+             let b = Bag { items: [\"x\".to_string()], name: \"n\".to_string() };\n\
+             println(f\"{b.first()} {b.pick(0)} {b.early()} {b.got()} {b.or(\"d\".to_string())}\");\n\
+             let m: Map[String, String] = Map.new();\n\
+             println(name_or_empty(m, \"k\".to_string()));\n\
+         }\n",
+    );
+    for (tag, body) in [
+        ("temp-receiver", "mk().get(0).unwrap()"),
+        ("owned-local-receiver", "let v = mk(); v.get(0).unwrap()"),
+        (
+            "owned-default",
+            "let w = String.new(); self.items.get(0).unwrap_or(w)",
+        ),
+    ] {
+        let src = format!(
+            "struct Bag {{ items: Vec[String] }}\n\
+             fn mk() -> Vec[String] {{ [\"a\".to_string()] }}\n\
+             impl Bag {{ fn f(self) -> ref String {{ {body} }} }}\n\
+             fn main() {{ let b = Bag {{ items: [\"x\".to_string()] }}; println(b.f()); }}\n"
+        );
+        let (dir, path) = fixture(tag, &src);
+        let out = karac().arg("check").arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {err}");
+        assert!(err.contains("dangling reference"), "{tag}: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// B-2026-10-19-38 (core-semantics §9.3): a returned capturing closure may be
+/// called directly as a call result. The deferral the legacy backend needs
+/// does not apply to the strict check.
+#[test]
+fn a_returned_closure_is_callable_as_a_call_result() {
+    accepted(
+        "returned-closure-called",
+        "fn pick(x: i64) -> Fn(i64) -> i64 { |y| y + x }\n\
+         fn main() {\n\
+             let s = (pick(10))(4);\n\
+             println(f\"{s}\");\n\
+         }\n",
+    );
+}

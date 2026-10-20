@@ -177,12 +177,20 @@ impl<'a> super::OwnershipChecker<'a> {
                 // arm) — in lockstep with codegen, which lowers a top-level
                 // borrowed-struct tail/return by value.
                 self.classify_borrow_return_struct(e, &ref_params, &ref_locals)
+            } else if super::core_rules() {
+                self.core_return_shape(e, &ref_params, &ref_locals)
             } else {
                 classify_borrow_return(e, &ref_params, &ref_locals)
             };
             let Some(shape) = shape else {
                 continue;
             };
+            // A form only the legacy backend cannot lower yet is not an
+            // error under the core: the strict check does not speak for
+            // that backend (B-2026-10-19-37).
+            if super::core_rules() && shape == BorrowReturnShape::UnsupportedForm {
+                continue;
+            }
             let (message, suggestion) = match shape {
                 BorrowReturnShape::DanglingSource => (
                     "returned borrow does not originate from a `ref` parameter; its source is \
@@ -466,6 +474,93 @@ impl<'a> super::OwnershipChecker<'a> {
 
     /// Names of program-level functions whose declared return type is a
     /// borrow. Used to recognise ref-locals (`let x = ref_returning()`).
+    /// v2 core §5.3 and §5.4 (B-2026-10-19-37): a returned borrow traced
+    /// by its origins. A method's result borrows its receiver only, so a
+    /// method call is pinned when its receiver is; `unwrap_or` and `??` may
+    /// also yield their default, which a literal makes static data. A block
+    /// may have statements and the branches take the union of their arms.
+    /// Any other form is classified as the legacy check does.
+    fn core_return_shape(
+        &self,
+        e: &Expr,
+        ref_params: &HashSet<String>,
+        ref_locals: &HashSet<String>,
+    ) -> Option<BorrowReturnShape> {
+        match &e.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                let default = if method == "unwrap_or" && args.len() == 1 {
+                    self.core_origin_shape(&args[0].value, ref_params, ref_locals)
+                } else {
+                    None
+                };
+                combine_borrow_shapes(
+                    default,
+                    self.core_origin_shape(object, ref_params, ref_locals),
+                )
+            }
+            ExprKind::NilCoalesce { left, right } => combine_borrow_shapes(
+                self.core_origin_shape(right, ref_params, ref_locals),
+                self.core_origin_shape(left, ref_params, ref_locals),
+            ),
+            ExprKind::Block(b) => match &b.final_expr {
+                Some(t) => self.core_return_shape(t, ref_params, ref_locals),
+                None => Some(BorrowReturnShape::UnsupportedForm),
+            },
+            ExprKind::If {
+                then_block,
+                else_branch: Some(else_e),
+                ..
+            } => combine_borrow_shapes(
+                match &then_block.final_expr {
+                    Some(t) => self.core_return_shape(t, ref_params, ref_locals),
+                    None => Some(BorrowReturnShape::UnsupportedForm),
+                },
+                self.core_return_shape(else_e, ref_params, ref_locals),
+            ),
+            _ => classify_borrow_return(e, ref_params, ref_locals),
+        }
+    }
+
+    /// The shape of one origin of a returned borrow: a literal is static
+    /// data and a string literal's text is too, a place traces to its root,
+    /// a borrow handed on traces through, and a value that owns itself is a
+    /// temporary dropped at the return.
+    fn core_origin_shape(
+        &self,
+        e: &Expr,
+        ref_params: &HashSet<String>,
+        ref_locals: &HashSet<String>,
+    ) -> Option<BorrowReturnShape> {
+        if matches!(
+            e.kind,
+            ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::Bool(..)
+                | ExprKind::CharLit(..)
+                | ExprKind::ByteLit(..)
+                | ExprKind::StringLit(..)
+        ) {
+            return None;
+        }
+        if place_root(e).is_some() {
+            return ref_place_shape(e, ref_params, ref_locals);
+        }
+        let borrowed = self
+            .typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(&e.span))
+            .is_some_and(type_holds_ref);
+        if borrowed {
+            return self.core_return_shape(e, ref_params, ref_locals);
+        }
+        Some(BorrowReturnShape::DanglingSource)
+    }
+
     fn ref_returning_fn_names(&self) -> HashSet<String> {
         let mut names = HashSet::new();
         for item in &self.program.items {
@@ -1281,6 +1376,80 @@ fn collect_container_push_sources_in_expr<'e>(
 }
 
 /// Collect every `return e;` expression in the block tree.
+/// Whether a value of type `t` can hold a reference: a reference, a view
+/// (`StringSlice`, `Slice`) or an aggregate containing one.
+fn type_holds_ref(t: &Type) -> bool {
+    match t {
+        Type::Ref(_) | Type::MutRef(_) => true,
+        Type::Named { name, args } => {
+            matches!(name.as_str(), "StringSlice" | "Str" | "Slice")
+                || args.iter().any(type_holds_ref)
+        }
+        Type::Tuple(ts) => ts.iter().any(type_holds_ref),
+        _ => false,
+    }
+}
+
+/// v2 core §5.4 (B-2026-10-19-37): the places a `-> ref T` or
+/// `-> mut ref T` function's result names at its return sites. The result
+/// lends them, so none is a move out of its collection.
+pub(super) fn core_returned_places(f: &Function) -> HashSet<SpanKey> {
+    let mut out = HashSet::new();
+    let Some(ret) = &f.return_type else {
+        return out;
+    };
+    if !matches!(ret.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+        return out;
+    }
+    let mut returns: Vec<&Expr> = Vec::new();
+    collect_return_exprs_in_block(&f.body, &mut returns);
+    if let Some(tail) = &f.body.final_expr {
+        if !matches!(tail.kind, ExprKind::Return(_)) {
+            returns.push(tail);
+        }
+    }
+    for e in returns {
+        returned_places(e, &mut out);
+    }
+    out
+}
+
+fn returned_places(e: &Expr, out: &mut HashSet<SpanKey>) {
+    match &e.kind {
+        ExprKind::Index { .. } | ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+            out.insert(SpanKey::from_span(&e.span));
+        }
+        ExprKind::Block(b) => {
+            if let Some(t) = &b.final_expr {
+                returned_places(t, out);
+            }
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            if let Some(t) = &then_block.final_expr {
+                returned_places(t, out);
+            }
+            if let Some(eb) = else_branch {
+                returned_places(eb, out);
+            }
+        }
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                returned_places(&arm.body, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn collect_return_exprs_in_block<'e>(block: &'e Block, out: &mut Vec<&'e Expr>) {
     for stmt in &block.stmts {
         collect_return_exprs_in_stmt(stmt, out);
