@@ -314,6 +314,7 @@ fn init_body(body: &Body, table: &Table, name: &str) -> Body {
         phase: body.phase,
         span: body.span,
         par_regions: Vec::new(),
+        provided: Vec::new(),
         suspends: false,
         drop_flags: Vec::new(),
     }

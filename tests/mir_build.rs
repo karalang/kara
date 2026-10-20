@@ -6868,3 +6868,106 @@ fn main() {
         }
     }
 }
+
+/// B-2026-10-20-9: providers (core semantics §14). A call on a resource
+/// reaches the provider its `with_provider` or `providers` block binds,
+/// through every function on the way, each copied for the provider type it
+/// runs under; the provider drops when the binding ends.
+#[test]
+fn mir_providers_reach_the_bound_provider() {
+    let cases = [
+        (
+            r#"trait Counter { fn get(ref self) -> i64; fn bump(mut ref self); }
+effect resource Ctr: Counter;
+struct Mem { n: i64 }
+impl Counter for Mem {
+    fn get(ref self) -> i64 { self.n }
+    fn bump(mut ref self) { self.n = self.n + 1; }
+}
+impl Drop for Mem { fn drop(mut ref self) { println(f"drop {self.n}"); } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn twice() with writes(Ctr) { Ctr.bump(); Ctr.bump(); }
+fn main() {
+    let v = with_provider[Ctr](Mem { n: 5 }, || {
+        twice();
+        read()
+    });
+    println(f"got {v}");
+}
+"#,
+            "drop 7\ngot 7\n",
+        ),
+        (
+            r#"trait Name { fn name(ref self) -> String; }
+effect resource N: Name;
+struct A {}
+struct B {}
+impl Name for A { fn name(ref self) -> String { "a".to_string() } }
+impl Name for B { fn name(ref self) -> String { "b".to_string() } }
+fn show() with reads(N) { println(N.name()); }
+fn main() {
+    with_provider[N](A {}, || show());
+    with_provider[N](B {}, || show());
+}
+"#,
+            "a\nb\n",
+        ),
+        (
+            r#"trait Recorder { fn record(ref self, value: i64) -> i64; }
+struct ProvA {}
+impl Recorder for ProvA { fn record(ref self, value: i64) -> i64 { 100 + value } }
+struct ProvB {}
+impl Recorder for ProvB { fn record(ref self, value: i64) -> i64 { 200 + value } }
+effect resource Ra: Recorder;
+effect resource Rb: Recorder;
+fn both() -> i64 with reads(Ra) reads(Rb) { Ra.record(1) + Rb.record(2) }
+fn main() {
+    with_provider[Ra](ProvA {}, || {
+        with_provider[Rb](ProvB {}, || {
+            println(Ra.record(0));
+            println(both());
+        });
+    });
+}
+"#,
+            "100\n303\n",
+        ),
+        (
+            r#"trait Counter { fn get(ref self) -> i64; }
+effect resource Ctr: Counter;
+struct Mem { n: i64 }
+impl Counter for Mem { fn get(ref self) -> i64 { self.n } }
+fn read() -> i64 with reads(Ctr) { Ctr.get() }
+fn pick(early: bool) -> i64 {
+    providers { Ctr => Mem { n: 6 } } in {
+        if early { return 1; }
+        read()
+    }
+}
+fn main() { println(f"{pick(true)} {pick(false)}"); }
+"#,
+            "1 6\n",
+        ),
+        (
+            r#"struct FakeEnv {}
+impl EnvProvider for FakeEnv { fn args(ref self) -> Vec[String] { ["p", "x", "y"] } }
+fn count() -> i64 with reads(Env) { env.args().len() }
+fn main() {
+    println(count() >= 0);
+    with_provider[Env](FakeEnv {}, || println(count()));
+}
+"#,
+            "true\n3\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want, "__mir-run");
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}

@@ -99,6 +99,10 @@ pub struct Lowered {
     /// The receivers whose result borrows what the receiver's value
     /// borrows, not its place (§5.4; [`view_result`]).
     pub views: FxHashSet<String>,
+    /// For a program that binds a resource (core semantics §14), the
+    /// effects of the program as built, before provider specialisation
+    /// replaced its calls on resources: what `par_check` reports from.
+    pub effects: Option<crate::mir::effects::EffectReport>,
 }
 
 /// Lower every instance reachable from `main`.
@@ -236,6 +240,10 @@ fn lower_program_inner<'a>(
         builtin_mut_self: FxHashSet::default(),
         consts: FxHashMap::default(),
         resource_defaults: FxHashMap::default(),
+        resource_bounds: FxHashMap::default(),
+        trait_defs: FxHashMap::default(),
+        trait_impl_fns: FxHashMap::default(),
+        bound_resources: FxHashSet::default(),
         bindings: FxHashMap::default(),
         statics: FxHashMap::default(),
         static_queue: Vec::new(),
@@ -347,6 +355,7 @@ fn lower_program_inner<'a>(
         errors: lcx.errors,
         receivers,
         views,
+        effects: None,
     }
 }
 
@@ -572,6 +581,20 @@ struct Lcx<'a> {
     /// declares (`effect resource Env: EnvProvider = OsEnv {};`,
     /// core-semantics §14.7), by the resource's name.
     resource_defaults: FxHashMap<String, &'a Expr>,
+    /// The provider trait bounds of each resource the program declares
+    /// (`effect resource Db: Store;`, core semantics §14.1), by name.
+    resource_bounds: FxHashMap<String, Vec<String>>,
+    /// Every trait the program declares, by name.
+    trait_defs: FxHashMap<String, &'a ast::TraitDef>,
+    /// The methods of the first impl of each trait, which stand for the
+    /// trait's own when its declaration is not in the program (the
+    /// library's `EnvProvider` is the checker's, not the MIR library's).
+    trait_impl_fns: FxHashMap<String, Vec<&'a ast::Function>>,
+    /// The resources some `with_provider` or `providers` block binds: a
+    /// call on one of them goes through its provider (core semantics
+    /// §14.3), where a program-rooted resource no one binds keeps calling
+    /// its default directly (§14.7).
+    bound_resources: FxHashSet<String>,
     /// Every module `let` binding, by definition.
     bindings: FxHashMap<DefId, &'a ast::ModuleBinding>,
     /// The module bindings that live in a static: each one's index in
@@ -680,6 +703,17 @@ struct ClosureJob<'a> {
     ref_key: bool,
 }
 
+/// A method of a resource's bound (core semantics §14.2).
+struct BoundMethod<'a> {
+    name: &'a str,
+    /// The trait it comes from.
+    bound: String,
+    self_param: Option<ast::SelfParam>,
+    params: &'a [ast::Param],
+    /// It has a default body in the trait.
+    has_default: bool,
+}
+
 /// A variant as the checker records it: its name and named field types.
 type CheckedVariant = (String, Vec<(String, Type)>);
 
@@ -696,6 +730,59 @@ fn retype_const(o: Operand, t: Ty) -> Operand {
             kind: ConstKind::Scalar(v),
         }),
         o => o,
+    }
+}
+
+/// The resources a `with_provider[R](..)` or a `providers { R => .. }`
+/// block anywhere in `program` binds (core semantics §14.4, §14.8).
+fn bound_resources(program: &ast::Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
+    let mut scan = |b: &Block| {
+        crate::span_visitor::for_each_expr_in_block(b, &mut |e: &Expr| match &e.kind {
+            ExprKind::Call { callee, .. } => {
+                if let Some(r) = with_provider_resource(callee) {
+                    out.insert(r.to_string());
+                }
+            }
+            ExprKind::Providers { bindings, .. } => {
+                out.extend(bindings.iter().map(|b| b.resource.clone()));
+            }
+            _ => {}
+        });
+    };
+    for item in &program.items {
+        match item {
+            Item::Function(f) => scan(&f.body),
+            Item::ImplBlock(b) => {
+                for it in &b.items {
+                    if let ImplItem::Method(f) = it {
+                        scan(&f.body);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `R` when `callee` is `with_provider[R]`.
+fn with_provider_resource(callee: &Expr) -> Option<&str> {
+    let ExprKind::Index { object, index } = &callee.kind else {
+        return None;
+    };
+    let named = match &object.kind {
+        ExprKind::Identifier(n) => n == "with_provider",
+        ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
+        _ => false,
+    };
+    if !named {
+        return None;
+    }
+    match &index.kind {
+        ExprKind::Identifier(n) => Some(n),
+        ExprKind::Path { segments, .. } => segments.last().map(String::as_str),
+        _ => None,
     }
 }
 
@@ -745,6 +832,7 @@ impl<'a> Lcx<'a> {
         self.note_builtin_owns(program);
         let mut impl_ids = self.defs.module_impls.first().into_iter().flatten();
         let dispatch_names = crate::impl_dispatch::collect_impl_dispatch_names(program);
+        self.bound_resources = bound_resources(program);
         for item in &program.items {
             match item {
                 Item::Function(f) => {
@@ -781,8 +869,13 @@ impl<'a> Lcx<'a> {
                     if let Some(d) = &r.default {
                         self.resource_defaults.insert(r.name.clone(), d);
                     }
+                    self.resource_bounds.insert(
+                        r.name.clone(),
+                        r.provider_bounds.iter().map(|b| b.name.clone()).collect(),
+                    );
                 }
                 Item::TraitDef(t) => {
+                    self.trait_defs.insert(t.name.clone(), t);
                     for it in &t.items {
                         if let ast::TraitItem::Method(m) = it {
                             if m.self_is_own {
@@ -804,6 +897,17 @@ impl<'a> Lcx<'a> {
                     }
                 }
                 Item::ImplBlock(b) => {
+                    if let Some(t) = b.trait_name.as_ref().and_then(|t| t.segments.last()) {
+                        self.trait_impl_fns.entry(t.clone()).or_insert_with(|| {
+                            b.items
+                                .iter()
+                                .filter_map(|it| match it {
+                                    ImplItem::Method(f) => Some(&**f),
+                                    _ => None,
+                                })
+                                .collect()
+                        });
+                    }
                     let Some(&impl_id) = impl_ids.next() else {
                         continue;
                     };
@@ -2132,6 +2236,27 @@ impl<'l, 'a> Bx<'l, 'a> {
             ExprKind::FieldAccess { .. } => {
                 if let Some((t, _)) = self.int_limit_of(e) {
                     return Ok(t);
+                }
+            }
+            ExprKind::Providers { body, .. } if !self.lcx.node_types.contains_key(&e.id) => {
+                return match &body.final_expr {
+                    Some(x) => self.expr_ty(x),
+                    None => Ok(self.unit()),
+                };
+            }
+            // `with_provider[R](p, || body)` has the closure's value (core
+            // semantics §14.4), which the checker records only when it is
+            // fully known.
+            ExprKind::Call { callee, args } if with_provider_resource(callee).is_some() => {
+                if let Some(f) = args.get(1).filter(|_| args.len() == 2) {
+                    let ft = self.lcx.node_types.get(&f.value.id).copied();
+                    if let Some(HK::Fn { ret, .. }) = ft.map(|t| self.tys().tcx().kind(t)) {
+                        let a = self.args.clone();
+                        return match self.lcx.mir_ty(ret, &a) {
+                            Ok(t) => Ok(t),
+                            Err(err) => self.unsupported(e.span, &err),
+                        };
+                    }
                 }
             }
             _ if is_branching(e) => {
@@ -5504,6 +5629,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 Ok(())
             }
             ExprKind::Block(b) => self.block_into(b, dest),
+            ExprKind::Providers { bindings, body } => self.providers_into(bindings, body, dest),
             ExprKind::If {
                 condition,
                 then_block,
@@ -10437,6 +10563,19 @@ impl<'l, 'a> Bx<'l, 'a> {
             self.clone_into(Place::local(l), t, dest);
             return Ok(());
         }
+        // `with_provider[R](p, f)` and `R.m(args)` (core semantics §14).
+        if let Some(r) = with_provider_resource(callee) {
+            if self.lcx.resource_bounds.contains_key(r) {
+                return self.with_provider_call(e, r, args, dest);
+            }
+        }
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if let [r, m] = segments.as_slice() {
+                if self.resource_via_provider(r) {
+                    return self.resource_call(e, r, m, args, dest);
+                }
+            }
+        }
         // `UserId(7)`: a distinct type's constructor wraps its base, as
         // does the library's `ExitCode.from(code)`.
         let wraps = match &callee.kind {
@@ -10644,7 +10783,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 if self.lcx.variant(d).is_some()
                     || self.lcx.defs.table.get(d).kind == DefKind::Variant
                 {
-                    let t = self.expr_ty(e)?;
+                    let mut t = self.expr_ty(e)?;
+                    // A constructor whose enum the checker left a parameter
+                    // free in (`Ok(v)` closing a closure whose `?` fixes the
+                    // error type) takes its destination's type.
+                    let dt = self.place_type(&dest);
+                    let tcx = self.tys().tcx();
+                    if let (HK::Adt { def: a, .. }, HK::Adt { def: b, .. }) =
+                        (tcx.kind(t), tcx.kind(dt))
+                    {
+                        if a == b {
+                            t = dt;
+                        }
+                    }
                     // A constructor handed to a borrowed parameter builds
                     // the value it lends (`show(Ok(x))` for `ref Result`).
                     let ty = t;
@@ -12594,6 +12745,19 @@ impl<'l, 'a> Bx<'l, 'a> {
                 return self.raw_ptr_to(e, p.project(ProjElem::ConstIndex(0)), mutable, dest);
             }
         }
+        if let ExprKind::Identifier(r) = &object.kind {
+            if self.resource_via_provider(r)
+                && !matches!(self.lcx.res.get(&object.id), Some(Res::Local(_)))
+            {
+                return self.resource_call(e, r, method, args, dest);
+            }
+        }
+        if let Some(resource) = self
+            .ambient_module(object)
+            .filter(|r| self.resource_via_provider(r))
+        {
+            return self.resource_call(e, resource, method, args, dest);
+        }
         if let Some(resource) = self.ambient_module(object) {
             // `env.args()`, `clock.now()`, …: a call of the ambient
             // resource's library method, `Env.args`, or of its provider's.
@@ -13579,6 +13743,218 @@ impl<'l, 'a> Bx<'l, 'a> {
         })
     }
 
+    /// Whether a call on `r` goes through its provider (core semantics
+    /// §14.3): `r` is a resource with no default provider, or one with a
+    /// default that some `with_provider` overrides. A call on it stays a
+    /// placeholder until `providers::specialise`.
+    fn resource_via_provider(&self, r: &str) -> bool {
+        self.lcx.resource_bounds.contains_key(r)
+            && (!self.lcx.resource_defaults.contains_key(r) || self.lcx.bound_resources.contains(r))
+    }
+
+    /// The declaration of `m` in one of `r`'s bounds.
+    fn resource_method(&self, r: &str, m: &str) -> Option<BoundMethod<'a>> {
+        self.bound_methods(r).into_iter().find(|bm| bm.name == m)
+    }
+
+    /// The methods of `r`'s bounds, each with the trait it comes from.
+    fn bound_methods(&self, r: &str) -> Vec<BoundMethod<'a>> {
+        let mut out = Vec::new();
+        for t in self.lcx.resource_bounds.get(r).into_iter().flatten() {
+            if let Some(&def) = self.lcx.trait_defs.get(t) {
+                for it in &def.items {
+                    if let ast::TraitItem::Method(tm) = it {
+                        out.push(BoundMethod {
+                            name: &tm.name,
+                            bound: t.clone(),
+                            self_param: tm.self_param.clone(),
+                            params: &tm.params,
+                            has_default: tm.body.is_some(),
+                        });
+                    }
+                }
+            } else if let Some(fs) = self.lcx.trait_impl_fns.get(t) {
+                for f in fs {
+                    out.push(BoundMethod {
+                        name: &f.name,
+                        bound: t.clone(),
+                        self_param: f.self_param.clone(),
+                        params: &f.params,
+                        has_default: false,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// `r` in the program's table of resources (core semantics §14): its
+    /// bounds' methods, and its default provider if it has one.
+    fn ensure_resource(&mut self, r: &str) -> R<()> {
+        if self.lcx.program.resources.contains_key(r) {
+            return Ok(());
+        }
+        let mut decl = crate::mir::effects::ResourceDecl::default();
+        for bm in self.bound_methods(r) {
+            let writes = matches!(bm.self_param, Some(ast::SelfParam::MutRef));
+            decl.methods.insert(bm.name.to_string(), writes);
+        }
+        if let Some(&d) = self.lcx.resource_defaults.get(r) {
+            // The library's defaults keep their methods as natives, named
+            // as `provider_recv` names them.
+            let t = self.expr_ty(d)?;
+            let shown = self.tys().display(t);
+            let methods = decl
+                .methods
+                .keys()
+                .map(|m| (m.clone(), format!("{shown}.{m}")))
+                .collect();
+            decl.impls.insert(t, methods);
+            decl.default = Some(t);
+        }
+        self.lcx.program.resources.insert(r.to_string(), decl);
+        Ok(())
+    }
+
+    /// A `with_provider` binds `r` to a provider of type `t`: the instance
+    /// of each of `r`'s methods for `t`, which the calls on `r` reach after
+    /// specialisation.
+    fn bind_provider(&mut self, span: Span, r: &str, t: Ty) -> R<()> {
+        self.ensure_resource(r)?;
+        if self.lcx.program.resources[r].impls.contains_key(&t) {
+            return Ok(());
+        }
+        let mut methods = std::collections::BTreeMap::new();
+        for bm in self.bound_methods(r) {
+            match self.user_impl_method(t, &bm.bound, bm.name) {
+                Some((d, args)) => {
+                    let name = self.lcx.instance(d, args);
+                    methods.insert(bm.name.to_string(), name);
+                }
+                None if bm.has_default => {
+                    let shown = self.tys().display(t);
+                    return self.unsupported(
+                        span,
+                        &format!(
+                            "`{}`'s default `{}` for the provider `{shown}`",
+                            bm.bound, bm.name
+                        ),
+                    );
+                }
+                None => {}
+            }
+        }
+        if let Some(decl) = self.lcx.program.resources.get_mut(r) {
+            decl.impls.insert(t, methods);
+        }
+        Ok(())
+    }
+
+    /// `providers { R1 => e1, .. } in { body }` (core semantics §14.8):
+    /// each provider evaluated in order into a local that drops after the
+    /// body, and the body's blocks recorded as a region in which each `R`
+    /// is bound to its local, the first binding outermost.
+    fn providers_into(
+        &mut self,
+        bindings: &'a [ast::ProviderBinding],
+        body: &'a Block,
+        dest: Place,
+    ) -> R<()> {
+        self.push_scope();
+        let mut bound = Vec::new();
+        for b in bindings {
+            if !self.lcx.resource_bounds.contains_key(&b.resource) {
+                return self.unsupported(b.resource_span, "a provider for an undeclared resource");
+            }
+            let t = self.expr_ty(&b.value)?;
+            let l = self.scoped_temp(t);
+            self.expr_into(&b.value, Place::local(l))?;
+            self.bind_provider(b.resource_span, &b.resource, t)?;
+            bound.push((b.resource.clone(), l));
+        }
+        let start = self.b.new_block();
+        self.goto(start);
+        self.cur = start;
+        self.block_into(body, dest)?;
+        let end = self.b.new_block();
+        self.goto(end);
+        self.cur = end;
+        let blocks: Vec<BasicBlock> = (start.0..end.0).map(BasicBlock).collect();
+        // Inner before outer: the last binding is the innermost.
+        for (resource, local) in bound.into_iter().rev() {
+            self.b.provided.push(ProvidedRegion {
+                resource,
+                local,
+                blocks: blocks.clone(),
+            });
+        }
+        self.pop_scope()
+    }
+
+    /// `with_provider[R](p, f)` (core semantics §14.4), before provider
+    /// specialisation: `p`, then the closure, then a call of the
+    /// body-less `with_provider[R]`.
+    fn with_provider_call(
+        &mut self,
+        e: &'a Expr,
+        r: &str,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<()> {
+        let [p, f] = args else {
+            return self.unsupported(e.span, "a `with_provider` without a provider and a closure");
+        };
+        let pt = self.expr_ty(&p.value)?;
+        let pv = self.temp(pt);
+        self.expr_into(&p.value, Place::local(pv))?;
+        self.bind_provider(e.span, r, pt)?;
+        let fop = match &f.value.kind {
+            ExprKind::Closure { .. } => self.closure_value(&f.value)?.0,
+            _ => self.expr_operand(&f.value)?,
+        };
+        let ops = vec![Operand::Move(Place::local(pv)), fop];
+        self.call_native(&format!("with_provider[{r}]"), ops, dest);
+        Ok(())
+    }
+
+    /// `R.m(args)` on a resource reached through its provider (core
+    /// semantics §14.2), before provider specialisation: a call of the
+    /// body-less `R.m`, with no receiver.
+    fn resource_call(
+        &mut self,
+        e: &'a Expr,
+        r: &str,
+        m: &str,
+        args: &'a [CallArg],
+        dest: Place,
+    ) -> R<()> {
+        self.ensure_resource(r)?;
+        let Some(tm) = self.resource_method(r, m) else {
+            return self.unsupported(
+                e.span,
+                &format!("a call of `{r}.{m}`, which no bound of `{r}` declares,"),
+            );
+        };
+        if args.len() != tm.params.len() {
+            return self.unsupported(e.span, "a call that leaves out default arguments");
+        }
+        let mut ops = Vec::new();
+        for (a, p) in args.iter().zip(tm.params.iter()) {
+            let t = match self.lcx.node_types.get(&p.pattern.id) {
+                Some(&t) => match self.lcx.mir_ty(t, &[]) {
+                    Ok(t) => t,
+                    Err(err) => return self.unsupported(p.span, &err),
+                },
+                None => self.expr_ty(&a.value)?,
+            };
+            let pt = self.param_mode_ty(p, t);
+            ops.push(self.arg_pending(&a.value, pt)?);
+        }
+        let ops = self.finish_args(ops)?;
+        self.call_native(&format!("{r}.{m}"), ops, dest);
+        Ok(())
+    }
+
     /// The provider a call on the program-rooted resource `resource` goes
     /// to (core-semantics §14.7): the provider type's name and a borrow of
     /// the provider, the call's first argument. Outside any `with_provider`
@@ -14097,9 +14473,12 @@ impl<'l, 'a> Bx<'l, 'a> {
                 };
                 let variant =
                     def.is_some_and(|d| self.lcx.defs.table.get(d).kind == DefKind::Variant);
+                // `with_provider[R](p, f)` takes its provider by value (§14.4).
+                let binds = with_provider_resource(callee).is_some();
                 go(callee, false, out);
                 for (i, a) in args.iter().enumerate() {
-                    let owned = variant || def.is_some_and(|d| self.owned_param(d, i));
+                    let owned =
+                        variant || (binds && i == 0) || def.is_some_and(|d| self.owned_param(d, i));
                     go(&a.value, owned, out);
                 }
             }
@@ -15864,12 +16243,15 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
     // provider (core semantics §14.6, B-2026-10-20-7).
     let has_resources = !lowered.program.resources.is_empty();
     if (has_par || has_resources) && std::env::var("KARAC_MIR_EFFECTS").as_deref() != Ok("0") {
-        let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
-        if let Some((name, c)) = report
-            .par_conflicts
-            .iter()
-            .find_map(|(n, v)| v.first().map(|c| (n, c)))
-        {
+        let fresh;
+        let report = match &lowered.effects {
+            Some(r) => r,
+            None => {
+                fresh = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+                &fresh
+            }
+        };
+        if let Some((name, c)) = par_conflict(report) {
             return Err(format!(
                 "effects: in `{name}` at line {}, {}",
                 c.line,
@@ -15886,6 +16268,16 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The first conflicting `par` region `report` found, with its body.
+fn par_conflict(
+    report: &crate::mir::effects::EffectReport,
+) -> Option<(&String, &crate::mir::effects::ParConflict)> {
+    report
+        .par_conflicts
+        .iter()
+        .find_map(|(n, v)| v.first().map(|c| (n, c)))
 }
 
 /// The message for a call that needs `resource`'s provider where nothing
@@ -15938,7 +16330,10 @@ pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError
         return Vec::new();
     };
     let user_lines = src.lines().count();
-    let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+    let report = match lowered.effects {
+        Some(r) => r,
+        None => crate::mir::effects::analyze(&lowered.program, &lowered.tys),
+    };
     let mut out: Vec<((usize, usize), SourceEffectError, String)> = Vec::new();
     let mut add = |span: crate::token::Span, kind, text: String| {
         let at = (span.line, span.column);
@@ -17041,6 +17436,20 @@ fn finish_build(mut lowered: Lowered) -> Result<Lowered, String> {
     let presize = std::env::var("KARAC_MIR_PRESIZE").as_deref() != Ok("0");
     // `KARAC_MIR_CONCAT=0` copies every `String.add`'s left side (`concat`).
     let concat = std::env::var("KARAC_MIR_CONCAT").as_deref() != Ok("0");
+    // A program that binds a resource passes its providers explicitly
+    // (core semantics §14.3), decided by the effects of the program as
+    // built, which `par_check` reports from.
+    if !lowered.program.resources.is_empty() {
+        let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
+        if report.no_provider.is_empty() && par_conflict(&report).is_none() {
+            crate::mir::providers::specialise(
+                &mut lowered.program,
+                &lowered.tys,
+                &report.providers,
+            )?;
+        }
+        lowered.effects = Some(report);
+    }
     let coroutines = crate::mir::coroutine::coroutines(lowered.program.bodies.values());
     for body in lowered.program.bodies.values_mut() {
         if dump.as_deref() == Some("built") {

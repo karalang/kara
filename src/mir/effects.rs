@@ -1535,6 +1535,13 @@ impl<'p> Analysis<'p> {
         let mut out = Vec::new();
         for (i, bb) in body.blocks.iter().enumerate() {
             let block = BasicBlock(i as u32);
+            // A `providers` block supplies its resources to what runs in
+            // it (core semantics §14.8).
+            let provided = |n: &mut Needs| {
+                for p in body.provided.iter().filter(|p| p.blocks.contains(&block)) {
+                    n.remove(&p.resource);
+                }
+            };
             for st in &bb.statements {
                 if let StatementKind::Assign(dst, rv) = &st.kind {
                     let minus = supplied
@@ -1542,6 +1549,7 @@ impl<'p> Analysis<'p> {
                         .filter(|_| dst.projection.is_empty());
                     let mut n = Needs::new();
                     of(self.made_fn_values(rv), &mut n, minus);
+                    provided(&mut n);
                     if !n.is_empty() {
                         out.push((block, st.source_info.span, n));
                     }
@@ -1601,6 +1609,7 @@ impl<'p> Analysis<'p> {
                 }
                 _ => {}
             }
+            provided(&mut n);
             if !n.is_empty() {
                 out.push((block, bb.terminator.source_info.span, n));
             }

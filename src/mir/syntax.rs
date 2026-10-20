@@ -113,6 +113,15 @@ pub struct ParRegion {
     pub branches: Vec<Vec<BasicBlock>>,
 }
 
+/// A `providers { R => p } in { body }` block (core semantics §14.8): in
+/// `blocks`, `resource` is bound to the provider held in `local`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProvidedRegion {
+    pub resource: String,
+    pub local: Local,
+    pub blocks: Vec<BasicBlock>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
     pub instance: InstanceId,
@@ -125,6 +134,9 @@ pub struct Body {
     /// The `par` regions, outer before inner (a region nested in another's
     /// branch comes after it).
     pub par_regions: Vec<ParRegion>,
+    /// The `providers { .. } in { .. }` blocks, inner before outer. Only
+    /// provider specialisation reads them, and it empties them.
+    pub provided: Vec<ProvidedRegion>,
     /// The function declares `suspends`. With the calls to suspending
     /// callees, this decides which bodies the coroutine transform rewrites
     /// (`coroutine::coroutines`).

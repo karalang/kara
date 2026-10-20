@@ -27,6 +27,7 @@ pub mod place_ty;
 pub mod popcount;
 pub mod presize;
 pub mod pretty;
+pub mod providers;
 pub mod rc_borrow;
 pub mod rc_pairs;
 pub mod syntax;
