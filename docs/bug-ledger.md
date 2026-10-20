@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 427 |
 | missing-feature | 298 |
 | codegen-gap | 277 |
-| false-positive | 251 |
+| false-positive | 252 |
 | other | 185 |
 | perf | 180 |
 | diagnostics | 176 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 2970 |
 | interp | 989 |
-| typecheck | 508 |
+| typecheck | 509 |
 | ownership | 124 |
 | other | 121 |
 | runtime | 81 |
@@ -182,6 +182,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-9 | 2026-10-20 | interp | medium | Providers (§14.3, §14.4, §14.8) in the MIR builder and interpreter: hidden `ref P` / `mut ref P` parameters, specialisation of each function per provider type, `with_provider` owning and dropping `p`, `providers {} in {}` evaluate-then-nest, `#[with_provider]` on tests | — |
 | B-2026-10-20-10 | 2026-10-20 | codegen | medium | Providers on mir-llvm and `karac build --mir`: compile the specialised instances and hidden parameters §14.3 introduces, with ASAN-clean provider drops at `with_provider` exit | — |
 | B-2026-10-20-11 | 2026-10-20 | runtime | medium | Providers (§14.7): library traits and static default providers for `Env`, `Clock` and `RandomSource` (now bare `effect resource` declarations in runtime/stdlib/wasi.kara), so a program can override them; migrate the 18 corpus programs that override one to implement the trait | — |
+| B-2026-10-20-13 | 2026-10-20 | typecheck | medium | A generic `Fn(V) -> K` instantiated at V = i64 becomes `Fn(ref i64) -> K` and refuses `fn neg(x: i64)`, which the same type written as `Fn(i64) -> i64` accepts | — |
 
 ### Relocated
 
