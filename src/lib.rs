@@ -443,11 +443,15 @@ pub fn typecheck_with_lint_overrides_profile_and_library(
     resolve_result: &ResolveResult,
     overrides: crate::lints::CliLintOverrides,
     profile_config: impl Into<crate::manifest::ProfileConfig>,
+    pruned: Option<std::collections::HashMap<String, std::collections::HashSet<String>>>,
 ) -> TypeCheckResult {
-    let checker = TypeChecker::new(program, resolve_result)
+    let mut checker = TypeChecker::new(program, resolve_result)
         .with_cli_lint_overrides(overrides)
         .with_profile_config(profile_config)
         .library_methods_from_source();
+    if let Some(pruned) = pruned {
+        checker = checker.with_pruned_library_methods(pruned);
+    }
     checker.check()
 }
 

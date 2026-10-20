@@ -1933,6 +1933,7 @@ pub(super) fn run_multi_file_late_phases(
         gated_imports: Vec::new(),
         user_source: None,
         mir_program: None,
+        library_pruned: None,
     };
     pipeline.resolve();
     if pipeline.has_resolve_errors() {

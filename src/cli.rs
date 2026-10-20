@@ -1105,6 +1105,9 @@ struct Pipeline {
     /// The program as type-checked, before [`Self::lower`] rewrites its
     /// operators, for the MIR checks ([`Self::mir_borrow_errors`]).
     mir_program: Option<crate::ast::Program>,
+    /// The library methods [`crate::mir::library_prune`] removed from the
+    /// appended library, for the typechecker.
+    library_pruned: Option<crate::mir::library_prune::Pruned>,
 }
 
 impl Pipeline {
@@ -1135,6 +1138,7 @@ impl Pipeline {
             gated_imports: Vec::new(),
             user_source: None,
             mir_program: None,
+            library_pruned: None,
         }
     }
 
@@ -1163,6 +1167,18 @@ impl Pipeline {
         let (text, user_len) = crate::mir::lower::library_source(&src);
         self.user_source = Some(src.clone());
         self.parsed = crate::parse(&text);
+        // The library items the program cannot reach are dropped, as the
+        // build drops them (`library_prune`), so they are not checked
+        // (B-2026-10-19-21). `KARAC_CHECK_PRUNE=0` keeps them.
+        if std::env::var("KARAC_CHECK_PRUNE").as_deref() != Ok("0")
+            && crate::mir::library_prune::enabled()
+        {
+            self.library_pruned = Some(crate::mir::library_prune::prune(
+                &mut self.parsed.program,
+                &text,
+                user_len,
+            ));
+        }
         crate::mir::lower::mark_library_builtins(&mut self.parsed.program, user_len);
         library_closures_take_their_callers_effects(&mut self.parsed.program, user_len);
         if std::env::var("KARAC_CHECK_LIBRARY_BODIES").as_deref() != Ok("1") {
@@ -1493,6 +1509,7 @@ impl Pipeline {
                 self.resolved.as_ref().unwrap(),
                 self.lint_overrides.clone(),
                 profile_config,
+                self.library_pruned.clone(),
             )
         } else {
             crate::typecheck_with_lint_overrides_and_profile(
@@ -1631,6 +1648,7 @@ impl Pipeline {
                     &resolved,
                     self.lint_overrides.clone(),
                     profile_config,
+                    self.library_pruned.clone(),
                 )
             } else {
                 crate::typecheck_with_lint_overrides_and_profile(
@@ -2088,16 +2106,23 @@ impl Pipeline {
 
     /// Run all analysis phases (no execution).
     fn run_all_checks(&mut self) {
+        let mut t = std::time::Instant::now();
+        let t = &mut t;
         self.drop_library_diagnostics();
         self.resolve();
+        crate::mir::lower::phase_time("check resolve", t);
         self.drop_library_diagnostics();
         self.typecheck();
+        crate::mir::lower::phase_time("check typecheck", t);
         self.drop_library_diagnostics();
         self.lower();
+        crate::mir::lower::phase_time("check lower", t);
         self.drop_library_diagnostics();
         self.effectcheck();
+        crate::mir::lower::phase_time("check effects", t);
         self.drop_library_diagnostics();
         self.ownershipcheck();
+        crate::mir::lower::phase_time("check ownership+mir", t);
         self.drop_library_diagnostics();
         // No `concurrencycheck` here: the auto-par analysis reports no
         // diagnostics, and on a large program it was a third of check's time.
@@ -2107,6 +2132,7 @@ impl Pipeline {
         self.raii_check();
         self.simd_check();
         self.drop_library_diagnostics();
+        crate::mir::lower::phase_time("check rest", t);
     }
 
     /// Collect all errors across phases. Typecheck errors are included —
