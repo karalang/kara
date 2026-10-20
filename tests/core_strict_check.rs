@@ -2009,7 +2009,7 @@ fn derive_clone_reaches_through_option_and_payloads() {
          impl Drop for R { fn drop(mut ref self) { println(self.id) } }\n\
          enum E { A(R), B }\n\
          fn main() { let v = vec![E.A(R { id: 1, v: vec![1] })]; let e = v[0]; match e { E.A(r) => println(r.id), E.B => println(0) } }\n",
-        "cannot move out of an index expression",
+        "cannot move `v[0]` out of an index",
         "#[derive(Clone)]\nenum E",
         3,
     );
@@ -5461,6 +5461,79 @@ fn plain_assign_does_not_write_through_a_mut_ref() {
          }\n",
         "2 12\n",
     );
+}
+
+/// B-2026-10-19-36 (core-semantics §1.1): a closure that writes a capture is
+/// a MutFn, never Copy, so binding it to another name moves it. An `Fn`
+/// closure with Copy captures still copies.
+#[test]
+fn a_mut_fn_closure_moves_when_bound_to_another_name() {
+    rejected(
+        "mut-fn-not-copy",
+        "fn main() {\n\
+             let mut n = 0;\n\
+             let mut f = || { n += 1; };\n\
+             let mut g = f;\n\
+             f();\n\
+             g();\n\
+             println(f\"{n}\");\n\
+         }\n",
+        "use of moved value `f`: it writes a captured binding, so it is a MutFn",
+    );
+    accepted_and_runs(
+        "mut-fn-moved-then-used-through-new-name",
+        "fn main() {\n\
+             let mut n = 0;\n\
+             let mut f = || { n += 1; };\n\
+             let mut g = f;\n\
+             g();\n\
+             g();\n\
+             println(f\"{n}\");\n\
+         }\n",
+        "2\n",
+    );
+    accepted_and_runs(
+        "fn-closure-copies",
+        "fn main() {\n\
+             let k = 3;\n\
+             let f = |x: i64| x + k;\n\
+             let g = f;\n\
+             println(f\"{f(1)} {g(2)}\");\n\
+         }\n",
+        "4 5\n",
+    );
+}
+
+/// B-2026-10-19-61 (core-semantics §3.7): an index move reports the code the
+/// spec names, in JSON as well as in the text, and names the element as
+/// written.
+#[test]
+fn an_index_move_reports_e_index_move_non_copy() {
+    let (dir, path) = fixture(
+        "index-move-code",
+        "fn take(s: own String) { println(s); }\n\
+         fn main() {\n\
+             let v: Vec[String] = [\"a\".to_string()];\n\
+             take(v[0]);\n\
+         }\n",
+    );
+    let out = karac()
+        .arg("check")
+        .arg("--output=json")
+        .arg(&path)
+        .output()
+        .unwrap();
+    let json =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        json.contains("\"code\":\"E_INDEX_MOVE_NON_COPY\""),
+        "{json}"
+    );
+    assert!(
+        json.contains("cannot move `v[0]` out of an index"),
+        "{json}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// B-2026-10-19-42 (core-semantics §4.6): a struct pattern over a `shared

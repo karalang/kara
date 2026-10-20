@@ -118,6 +118,9 @@ struct Walk<'t, 'a> {
     /// Locals bound to a closure literal that writes a capture, with the
     /// capture's name.
     mut_closure_locals: Vec<((usize, usize), String)>,
+    /// MutFn locals a `let` has moved out of (§1.1: a `MutFn` is never
+    /// `Copy`), with the binding that took each one (B-2026-10-19-36).
+    moved_mut_fns: Vec<((usize, usize), String)>,
     /// Function-kind errors (§9.6).
     kind_errors: Vec<(Span, String)>,
     /// Removed capture prefixes, with the edit that deletes each (§9.6).
@@ -269,6 +272,7 @@ impl<'a> TypeChecker<'a> {
             closure_writes: FxHashMap::default(),
             mut_fn_params: FxHashSet::default(),
             mut_closure_locals: Vec::new(),
+            moved_mut_fns: Vec::new(),
             kind_errors: Vec::new(),
             prefix_errors: Vec::new(),
             once_calls: FxHashSet::default(),
@@ -315,6 +319,7 @@ impl<'a> TypeChecker<'a> {
             w.branches.clear();
             w.mut_fn_params.clear();
             w.mut_closure_locals.clear();
+            w.moved_mut_fns.clear();
             let mut_fns: Vec<String> = f
                 .params
                 .iter()
@@ -423,6 +428,7 @@ impl Walk<'_, '_> {
         self.scopes.pop();
         let depth = self.scopes.len();
         self.mut_closure_locals.retain(|((i, _), _)| *i < depth);
+        self.moved_mut_fns.retain(|((i, _), _)| *i < depth);
     }
 
     /// Bring `pattern`'s bindings into the innermost scope with `origin`;
@@ -839,6 +845,7 @@ impl Walk<'_, '_> {
                         }
                     }
                 }
+                self.note_mut_fn_move(pattern, value);
             }
             StmtKind::LetElse {
                 pattern,
@@ -884,7 +891,67 @@ impl Walk<'_, '_> {
         }
     }
 
+    /// `let g = f` with `f` a local bound to a closure that writes a capture:
+    /// a `MutFn` is never `Copy` (§1.1), so `f` moves into `g`, and `g` is a
+    /// `MutFn` too. Only a `let` in `f`'s own scope is counted, outside any
+    /// closure, so a move on one branch never reports a use on another.
+    fn note_mut_fn_move(&mut self, pattern: &Pattern, value: &Expr) {
+        let (ExprKind::Identifier(x), PatternKind::Binding(name)) = (&value.kind, &pattern.kind)
+        else {
+            return;
+        };
+        if !self.closures.is_empty() || name == x {
+            return;
+        }
+        let Root::Local(i, j) = self.root_of(x) else {
+            return;
+        };
+        let Some(n) = self
+            .mut_closure_locals
+            .iter()
+            .find(|(r, _)| *r == (i, j))
+            .map(|(_, n)| n.clone())
+        else {
+            return;
+        };
+        // The new binding is the last one in the innermost scope; `f` must
+        // live in that scope too.
+        let depth = self.scopes.len() - 1;
+        if i != depth {
+            return;
+        }
+        self.moved_mut_fns.push(((i, j), name.clone()));
+        if let Root::Local(gi, gj) = self.root_of(name) {
+            self.mut_closure_locals.push(((gi, gj), n));
+        }
+    }
+
+    /// A use of a `MutFn` local after a `let` moved it (B-2026-10-19-36).
+    fn check_moved_mut_fn_use(&mut self, e: &Expr) {
+        let ExprKind::Identifier(x) = &e.kind else {
+            return;
+        };
+        let Root::Local(i, j) = self.root_of(x) else {
+            return;
+        };
+        if self.scopes[i][j].0 != *x {
+            return;
+        }
+        if let Some(k) = self.moved_mut_fns.iter().position(|(r, _)| *r == (i, j)) {
+            let (_, into) = self.moved_mut_fns.remove(k);
+            self.kind_errors.push((
+                e.span,
+                format!(
+                    "use of moved value `{x}`: it writes a captured binding, so it is a \
+                     MutFn, and a MutFn is never Copy (core-semantics §1.1), so binding it \
+                     to `{into}` moved it. Call it through `{into}` from here on"
+                ),
+            ));
+        }
+    }
+
     fn expr(&mut self, e: &Expr) {
+        self.check_moved_mut_fn_use(e);
         if matches!(
             e.kind,
             ExprKind::Identifier(_)
