@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 604 |
 | double-free | 427 |
 | missing-feature | 298 |
-| codegen-gap | 277 |
+| codegen-gap | 278 |
 | false-positive | 253 |
 | other | 185 |
 | perf | 180 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2972 |
-| interp | 990 |
+| codegen | 2973 |
+| interp | 991 |
 | typecheck | 513 |
 | ownership | 124 |
 | other | 121 |
@@ -182,6 +182,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
 | B-2026-10-20-17 | 2026-10-20 | typecheck+interp+codegen | low | `karac check` accepts the statement form `par { let a = f(); let b = g(); }` with `a` and `b` used after the block, which core semantics §11.1 does not have (branches are comma-separated expressions); both MIR backends then refuse it in the move check because the bindings drop at the statement's `;` | — |
 | B-2026-10-20-18 | 2026-10-20 | typecheck | medium | `iter.fold(Vec.new(), |acc: Vec[i64], x| ...)` is refused (`expected 'Vec[?T1]', found 'Vec[i64]'`): the element type of a `Vec.new()` passed as fold's init is never solved from the closure's annotated accumulator or its result, nor from an annotated `let`; binding the init to a typed `let` first passes, and `String.new()` / `Option.None` inits pass | ../kara-katas/leetcode/801-900/809-expressive-words |
+| B-2026-10-20-19 | 2026-10-20 | interp+codegen | low | MIR builder: a function item stored in a generic struct's `Fn(V) -> K` field at V = i64 is erased twice, to `Fn(i64) -> i64` and then to `Fn(ref i64) -> i64`, and the validator refuses the second cast (`invalid MIR: Erase cast from Fn(i64) -> i64 to Fn(ref i64) -> i64`) | — |
 
 ### Relocated
 
