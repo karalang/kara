@@ -1,0 +1,511 @@
+== call mean 1,2,3,4,4
+  2.8
+== call mean 1,2,3,4
+  2.5
+== call mean 2,4,6
+  4
+== call mean 0.1,0.2,0.3
+  0.2
+== call mean 3,2.25,4.5,-0.5,0.25
+  1.9
+== call mean 1e50,1,-1e50,1e50,1,-1e50
+  0.3333333333333333
+== call mean -0.0
+  0.0
+== call mean -
+  error: StatisticsError: mean requires at least one data point
+== call mean 1,nan,3
+  nan
+== call mean inf,1,-inf
+  nan
+== call mean inf,2
+  inf
+== call mean 1000000000.1,1000000000.2,1000000000.3
+  1000000000.2
+== call fmean 3.5,4.0,5.25
+  4.25
+== call fmean 85,92,83,91 weights=0.20,0.20,0.30,0.30
+  87.6
+== call fmean 1,2,3 weights=1,1,2
+  2.25
+== call fmean -
+  error: StatisticsError: fmean requires at least one data point
+== call fmean 1,2 weights=1
+  error: StatisticsError: data and weights must be the same length
+== call fmean 1,2 weights=1,-1
+  error: StatisticsError: sum of weights must be non-zero
+== call fmean 1e308,1e308,-1e308
+  error: OverflowError: intermediate overflow in fsum
+== call fmean inf,-inf
+  error: ValueError: -inf + inf in fsum
+== call fmean nan,inf
+  nan
+== call fmean 0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1
+  0.1
+== call geometric_mean 54,24,36
+  36.000000000000014
+== call geometric_mean 1.5,2.5,4
+  2.4662120743304703
+== call geometric_mean 1,0,4
+  0.0
+== call geometric_mean 2,-1
+  error: StatisticsError: ('No negative inputs allowed', -1)
+== call geometric_mean 2,-1.5,3
+  error: StatisticsError: ('No negative inputs allowed', -1.5)
+== call geometric_mean -
+  error: StatisticsError: Must have a non-empty dataset
+== call geometric_mean nan,1
+  nan
+== call geometric_mean 0,inf
+  nan
+== call geometric_mean 2,inf
+  inf
+== call harmonic_mean 40,60
+  48.0
+== call harmonic_mean 40,60 weights=5,30
+  56.0
+== call harmonic_mean 2.5,3,10
+  3.6
+== call harmonic_mean 1,0,2
+  0
+== call harmonic_mean 1,-2,0
+  error: StatisticsError: harmonic mean does not support negative values
+== call harmonic_mean 5
+  5
+== call harmonic_mean -1
+  error: StatisticsError: harmonic mean does not support negative values
+== call harmonic_mean -
+  error: StatisticsError: harmonic_mean requires at least one data point
+== call harmonic_mean 1,2 weights=1
+  error: StatisticsError: Number of weights does not match data size
+== call harmonic_mean 1,2 weights=0,0
+  error: StatisticsError: Weighted sum must be positive
+== call harmonic_mean 1,2 weights=1,-1
+  error: StatisticsError: harmonic mean does not support negative values
+== call harmonic_mean 0,2 weights=0,1
+  2.0
+== call harmonic_mean 0.5 weights=2
+  0.5
+== call harmonic_mean 3,nan
+  nan
+== call harmonic_mean inf,inf
+  error: StatisticsError: Weighted sum must be positive
+== call median 1,3,5
+  3
+== call median 1,3,5,7
+  4.0
+== call median 1,2.5
+  1.75
+== call median -
+  error: StatisticsError: no median for empty data
+== call median_low 1,3,5,7
+  3
+== call median_high 1,3,5,7
+  5
+== call median_low red,blue,green,blue
+  'blue'
+== call median_high -
+  error: StatisticsError: no median for empty data
+== call median_grouped 52,52,53,54
+  52.5
+== call median_grouped 1,3,3,5,7
+  3.25
+== call median_grouped 1,2,2,3,4,4,4,4,4,5 interval=2
+  3.4
+== call median_grouped 25,35,35,45,45,45,55 interval=10
+  41.666666666666664
+== call median_grouped -
+  error: StatisticsError: no median for empty data
+== call mode 1,1,2,3,3,3,3,4
+  3
+== call mode red,blue,blue,red,green,red,red
+  'red'
+== call mode 1,1.0,2
+  1
+== call mode 1.0,1,2
+  1.0
+== call mode nan,nan,1
+  nan
+== call mode -
+  error: StatisticsError: no mode for empty data
+== call multimode a,a,b,b,b,b,c,c,d,d,d,d,e,e,f,f,f,f,g,g
+  ['b', 'd', 'f']
+== call multimode -
+  []
+== call multimode -0.0,0.0,1
+  [-0.0]
+== call multimode 3,1,2
+  [3, 1, 2]
+== call quantiles 105,129,87,86,111,111,89,81,108,92,110,100,75,105,103,109,76,119,99,91,103,129,106,101,84,111,74,87,86,103,103,106,86,111,75,87,102,121,111,88,89,101,106,95,103,107,101,81,109,104 n=10
+  [81.0, 86.2, 89.0, 99.4, 102.5, 103.6, 106.0, 109.8, 111.0]
+== call quantiles 105,129,87,86,111,111,89,81,108,92,110,100,75,105,103,109,76,119,99,91,103,129,106,101,84,111,74,87,86,103,103,106,86,111,75,87,102,121,111,88,89,101,106,95,103,107,101,81,109,104 n=10 method=inclusive
+  [81.0, 86.8, 89.0, 99.6, 102.5, 103.4, 106.0, 109.2, 111.0]
+== call quantiles 105,129,87,86,111,111,89,81,108,92,110,100,75,105,103,109,76,119,99,91,103,129,106,101,84,111,74,87,86,103,103,106,86,111,75,87,102,121,111,88,89,101,106,95,103,107,101,81,109,104
+  [87.0, 102.5, 108.25]
+== call quantiles 1,2 n=4
+  [0.75, 1.5, 2.25]
+== call quantiles 1,2 n=4 method=inclusive
+  [1.25, 1.5, 1.75]
+== call quantiles 5 n=4
+  [5, 5, 5]
+== call quantiles 5 n=1
+  []
+== call quantiles -
+  error: StatisticsError: must have at least one data point
+== call quantiles 1,2,3 n=0
+  error: StatisticsError: n must be at least 1
+== call quantiles 1,2,3 method=median
+  error: ValueError: Unknown method: 'median'
+== call quantiles 1.5,2.5,10 n=4
+  [1.5, 2.5, 10.0]
+== call quantiles 1,2,3,4,5 n=3 method=inclusive
+  [2.3333333333333335, 3.6666666666666665]
+== call variance 2.75,1.75,1.25,0.25,0.5,1.25,3.5
+  1.3720238095238095
+== call variance 2.75,1.75,1.25,0.25,0.5,1.25,3.5 xbar=1.6071428571428572
+  1.3720238095238095
+== call variance 1,2,3,4
+  1.6666666666666667
+== call variance 1,3,5,7
+  6.666666666666667
+== call variance 1
+  error: StatisticsError: variance requires at least two data points
+== call variance nan,1,2
+  nan
+== call variance inf,1
+  inf
+== call variance 1000000000.1,1000000000.2,1000000000.3
+  0.00999999284744509
+== call variance 1e-5,2e-5,4e-5
+  2.3333333333333335e-10
+== call pvariance 0.0,0.25,0.25,1.25,1.5,1.75,2.75,3.25
+  1.25
+== call pvariance 1,3
+  1
+== call pvariance 1,2,3 mu=2
+  0.6666666666666666
+== call pvariance 2,4 mu=3
+  1
+== call pvariance 1,2,4 mu=2.5
+  1.5833333333333333
+== call pvariance -
+  error: StatisticsError: pvariance requires at least one data point
+== call stdev 1.5,2.5,2.5,2.75,3.25,4.75
+  1.0810874155219827
+== call stdev 1,2,3,4
+  1.2909944487358056
+== call stdev 1,2,3,4 xbar=2
+  1.4142135623730951
+== call stdev nan,1,2
+  error: ValueError: inf or nan encountered in data
+== call stdev inf,1
+  error: ValueError: inf or nan encountered in data
+== call stdev 5
+  error: StatisticsError: stdev requires at least two data points
+== call stdev 0.1,0.1,0.1
+  0.0
+== call pstdev 1.5,2.5,2.5,2.75,3.25,4.75
+  0.986893273527251
+== call pstdev -
+  error: StatisticsError: pstdev requires at least one data point
+== call pstdev 7
+  0.0
+== call pstdev 1,2,4 mu=2.5
+  1.2583057392117916
+== call covariance 1,2,3,4,5,6,7,8,9 1,2,3,1,2,3,1,2,3
+  0.75
+== call covariance 1,2,3,4,5,6,7,8,9 9,8,7,6,5,4,3,2,1
+  -7.5
+== call covariance 1,2,3 1,2
+  error: StatisticsError: covariance requires that both inputs have same number of data points
+== call covariance 1 1
+  error: StatisticsError: covariance requires at least two data points
+== call covariance 0.5,1.5,nan 1,2,3
+  nan
+== call correlation 1,2,3,4,5,6,7,8,9 1,2,3,4,5,6,7,8,9
+  1.0
+== call correlation 1,2,3,4,5,6,7,8,9 9,8,7,6,5,4,3,2,1
+  -1.0
+== call correlation 1,2,3,4,5,6,7,8,9 1,2,3,1,2,3,1,2,3
+  0.31622776601683794
+== call correlation 1,2,3,4,5 1,4,9,16,25
+  0.9811049102515929
+== call correlation 1,2,3,4,5 1,4,9,16,25 method=ranked
+  1.0
+== call correlation 3,1,2,2,5,4 10,20,20,30,40,30 method=ranked
+  0.537373290623879
+== call correlation 1,2,3 5,5,5
+  error: StatisticsError: at least one of the inputs is constant
+== call correlation 1,2,3 1,2,3 method=kendall
+  error: ValueError: Unknown method: 'kendall'
+== call correlation 1,2 1
+  error: StatisticsError: correlation requires that both inputs have same number of data points
+== call correlation 1e200,2e200,3e200 1,2,4
+  0.0
+== call linear_regression 1,2,3,4,5,6,7,8,9,10 1,4,7,8,13,16,19,22,25,27
+  LinearRegression(slope=2.981818181818182, intercept=-2.200000000000003)
+== call linear_regression 1,2,3,4,5,6,7,8,9,10 3,5,10,12,14,18,20,25,26,29 proportional=1
+  LinearRegression(slope=2.942857142857143, intercept=0.0)
+== call linear_regression 1,2,3 2,4,6 proportional=1
+  LinearRegression(slope=2.0, intercept=0.0)
+== call linear_regression 1.5,2.5,3.5 2,4,6 proportional=1
+  LinearRegression(slope=1.6385542168674698, intercept=0.0)
+== call linear_regression 2,2,2 1,2,3
+  error: StatisticsError: x is constant
+== call linear_regression 0,0 1,2 proportional=1
+  error: StatisticsError: x is constant
+== call linear_regression 1 2
+  error: StatisticsError: linear regression requires at least two data points
+== call fsum 0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1
+  1.0
+== call fsum 1e-16,1,1e16
+  1.0000000000000002e+16
+== call fsum 1e100,1,-1e100,1e-100,1e50,-1,-1e50
+  1e-100
+== call fsum 1e308,1e308,-1e308
+  error: OverflowError: intermediate overflow in fsum
+== call fsum inf,-inf
+  error: ValueError: -inf + inf in fsum
+== call fsum nan,1
+  nan
+== call fsum 1,2,3
+  6.0
+== call fsum -
+  0.0
+== call sumprod 1,2,3 4,5,6
+  32
+== call sumprod 0.1,0.2 3,4
+  1.1
+== call sumprod 1,2.5,3 2,2,2
+  13.0
+== call sumprod 1,2 1
+  error: ValueError: Inputs are not the same length
+== call sumprod 1e200,1 1e200,1
+  inf
+== call sumprod nan,1 1,1
+  nan
+== call sumprod 0.1,0.2,0.3 0.1,0.2,-0.3
+  -0.03999999999999999
+== call sumprod - -
+  0
+== call hypot 3,4
+  5.0
+== call hypot 1,1,1,1
+  2.0
+== call hypot 0,0
+  0.0
+== call hypot -
+  0.0
+== call hypot -3
+  3.0
+== call hypot inf,nan
+  inf
+== call hypot nan,1
+  nan
+== call hypot 1e200,1e200
+  1.414213562373095e+200
+== call hypot 0.1,0.2,0.3
+  0.3741657386773941
+== normal 0,1 repr mean median mode stdev variance
+  repr: NormalDist(mu=0.0, sigma=1.0)
+  mean: 0.0
+  median: 0.0
+  mode: 0.0
+  stdev: 1.0
+  variance: 1.0
+== normal 0,1 pdf:0 pdf:1.5 pdf:-3
+  pdf:0: 0.3989422804014327
+  pdf:1.5: 0.12951759566589174
+  pdf:-3: 0.0044318484119380075
+== normal 0,1 inv_cdf:0.975 inv_cdf:0.5 inv_cdf:0.0001 inv_cdf:0.9 inv_cdf:1e-300 inv_cdf:0 inv_cdf:1
+  inv_cdf:0.975: 1.9599639845400536
+  inv_cdf:0.5: 0.0
+  inv_cdf:0.0001: -3.71901648545568
+  inv_cdf:0.9: 1.2815515655446008
+  inv_cdf:1e-300: -37.0470962993612
+  inv_cdf:0: error: StatisticsError: p must be in the range 0.0 < p < 1.0
+  inv_cdf:1: error: StatisticsError: p must be in the range 0.0 < p < 1.0
+== normal 0,1 quantiles:4 quantiles:10 quantiles:1
+  quantiles:4: [-0.6744897501960817, 0.0, 0.6744897501960817]
+  quantiles:10: [-1.2815515655446008, -0.8416212335729142, -0.5244005127080407, -0.2533471031357998, 0.0, 0.2533471031357998, 0.5244005127080407, 0.8416212335729144, 1.2815515655446008]
+  quantiles:1: []
+== normal 100,15 zscore:130 zscore:85.5 inv_cdf:0.25
+  zscore:130: 2.0
+  zscore:85.5: -0.9666666666666667
+  inv_cdf:0.25: 89.88265374705878
+== normal 100,15 add:5 add_nd:50,20 sub_nd:50,20 sub:7.5 rsub:10 mul:-2 div:4 div:0 neg
+  add:5: NormalDist(mu=105.0, sigma=15.0)
+  add_nd:50,20: NormalDist(mu=150.0, sigma=25.0)
+  sub_nd:50,20: NormalDist(mu=50.0, sigma=25.0)
+  sub:7.5: NormalDist(mu=92.5, sigma=15.0)
+  rsub:10: NormalDist(mu=-90.0, sigma=15.0)
+  mul:-2: NormalDist(mu=-200.0, sigma=30.0)
+  div:4: NormalDist(mu=25.0, sigma=3.75)
+  div:0: error: ZeroDivisionError: float division by zero
+  neg: NormalDist(mu=-100.0, sigma=15.0)
+== normal 100,15 eq:100,15 eq:100.0,15.0 eq:100,16
+  eq:100,15: True
+  eq:100.0,15.0: True
+  eq:100,16: False
+== normal 1,0 pdf:1 zscore:2 inv_cdf:0.5 variance
+  pdf:1: error: StatisticsError: pdf() not defined when sigma is zero
+  zscore:2: error: StatisticsError: zscore() not defined when sigma is zero
+  inv_cdf:0.5: 1.0
+  variance: 0.0
+== normal 1,-1 repr
+  error: StatisticsError: sigma must be non-negative
+== normal from=2.5,3.25,5.5,11.25,11.75 repr inv_cdf:0.8
+  repr: NormalDist(mu=6.85, sigma=4.389618434442793)
+  inv_cdf:0.8: 10.544396081710149
+== normal from=1 repr
+  error: StatisticsError: stdev requires at least two data points
+== normal from=1,2,nan repr
+  repr: NormalDist(mu=nan, sigma=nan)
+== normal from=1,2,inf repr
+  repr: NormalDist(mu=inf, sigma=nan)
+== normal from=4,4,4,4 repr pdf:4 zscore:4
+  repr: NormalDist(mu=4.0, sigma=0.0)
+  pdf:4: error: StatisticsError: pdf() not defined when sigma is zero
+  zscore:4: error: StatisticsError: zscore() not defined when sigma is zero
+== latency latency.csv
+line 43: /api/search has no number ('timeout')
+line 101: /api/login has no number ('timeout')
+line 155: /api/report has no number ('')
+/api/cart: 35 requests
+  mean 46.005714285714284, median 35.0, fastest 30.1, slowest 433
+  p50 35.0, p90 37.58, p95 116.75999999999999
+  stdev 67.36862571770658, normal fit NormalDist(mu=46.005714285714284, sigma=67.36862571770658)
+  outliers: 433
+/api/search: 43 requests
+  mean 163.51162790697674, median 163.8, fastest 120.0, slowest 208.0
+  p50 163.8, p90 197.6, p95 204.34
+  stdev 25.24281330353845, normal fit NormalDist(mu=163.51162790697674, sigma=25.24281330353845)
+  outliers: none
+/healthz: 36 requests
+  mean 3.2222222222222223, median 2.0, fastest 2, slowest 31
+  p50 2.0, p90 3.0, p95 7.2
+  stdev 4.787549991450212, normal fit NormalDist(mu=3.2222222222222223, sigma=4.787549991450212)
+  outliers: 31
+/api/login: 36 requests
+  mean 53.708333333333336, median 55.75, fastest 40, slowest 64.6
+  p50 55.75, p90 61.3, p95 63.239999999999995
+  stdev 8.00201313956146, normal fit NormalDist(mu=53.708333333333336, sigma=8.00201313956146)
+  outliers: none
+/api/export: 1 requests
+  mean 1830.5, median 1830.5, fastest 1830.5, slowest 1830.5
+  too few requests for a spread
+overall: 151 requests, fmean 82.92185430463577, median_high 42.5, p99 320.5
+== abtest ab.csv
+A: 59 visitors, 39 paid (661 per mille), mean 20.03830508474576, median 24.83, stdev 15.282374471642992
+  quartiles [0.0, 24.83, 32.88]
+B: 81 visitors, 50 paid (617 per mille), mean 21.11283950617284, median 27.84, stdev 17.245979693436375
+  quartiles [0.0, 27.84, 36.355000000000004]
+B - A: 1.074534421427078, standard error 2.762316051104213, Welch t 0.38899763877400695 with 132.716197726545 degrees of freedom
+95% interval (z 1.9599639845400536): -4.3395055526540816 to 6.488574395508238
+verdict: no clear winner yet
+paying visitors: NormalDist(mu=32.49887640449438, sigma=5.9701047726077805), quartiles [28.472101927773725, 32.49887640449438, 36.52565088121504]
+== capacity load.csv 250
+36 load steps, 62 to 936 rps
+covariance 22363.246904761905
+correlation 0.9029789917704208, ranked 0.9832689832689833
+fit: p99 = 0.3239409817161029 * rps + 15.851997114366753
+capacity at 250 ms: 722.8106849748239 rps
+through the origin: 0.34902227741050607 ms per rps, capacity 716.2866561264225 rps
+residuals: mean -1.1250259982868252e-14, stdev 40.50164088948003, worst 143.7392439993609 at 936 rps
+off the line from: 915, 936
+== capacity load.csv 30
+36 load steps, 62 to 936 rps
+covariance 22363.246904761905
+correlation 0.9029789917704208, ranked 0.9832689832689833
+fit: p99 = 0.3239409817161029 * rps + 15.851997114366753
+capacity at 30 ms: 43.67463113398954 rps
+through the origin: 0.34902227741050607 ms per rps, capacity 85.9543987351707 rps
+residuals: mean -1.1250259982868252e-14, stdev 40.50164088948003, worst 143.7392439993609 at 936 rps
+off the line from: 915, 936
+== survey survey.csv
+respondents: 90
+age: mean 49.53333333333333, median 51.5, by decade 52.0, quartiles [35.0, 51.5, 62.75]
+decade mode 65, low 55, high 55
+favourite colour: 'orange', all modes ['orange']
+colours in the middle: 'orange' and 'orange'
+commute: mean 16.215555555555557 km, median 16.1 km, quartiles [8.575, 16.1, 24.924999999999997]
+average speed 31.73200357549684 km/h by distance, 31.401200186778947 per commuter, 43.481499246265585 arithmetic
+raises: mean 4.868888888888889%, typical 4.817014253677132% (geometric mean 1.0481701425367713)
+raises: stdev 3.3032039075617683, pstdev 3.2848015141944757, variance 10.911156054931336
+age against commute: correlation -0.21785989958820118, ranked -0.20092423267009477
+== sensors sensors.csv
+line 2: s2 sent 'ERR'
+line 56: s2 sent 'ERR'
+line 77: s1 sent 'ERR'
+s1: 19 readings
+  mean 22.304947368421054
+  fmean 22.30494736842105
+  variance 2.662490608187136
+  stdev 1.6317140093126419
+  pvariance 2.522359523545708
+  pstdev 1.5881937928180263
+  geometric_mean 22.2477111634397
+  harmonic_mean 22.18993487760271
+  from_samples NormalDist(mu=22.304947368421054, sigma=1.6317140093126419)
+s3: 23 readings
+  mean 22.323260869565217
+  fmean 22.323260869565214
+  variance 2.1478242015810274
+  stdev 1.4655457009527295
+  pvariance 2.054440540642722
+  pstdev 1.433331971541388
+  geometric_mean 22.277305287286524
+  harmonic_mean 22.23149147701591
+  from_samples NormalDist(mu=22.323260869565217, sigma=1.4655457009527295)
+s4: 17 readings
+  mean nan
+  fmean error: ValueError: -inf + inf in fsum
+  variance nan
+  stdev error: ValueError: inf or nan encountered in data
+  pvariance nan
+  pstdev error: ValueError: inf or nan encountered in data
+  geometric_mean error: StatisticsError: ('No negative inputs allowed', -inf)
+  harmonic_mean error: StatisticsError: harmonic mean does not support negative values
+  from_samples NormalDist(mu=nan, sigma=nan)
+s2: 18 readings
+  mean nan
+  fmean nan
+  variance nan
+  stdev error: ValueError: inf or nan encountered in data
+  pvariance nan
+  pstdev error: ValueError: inf or nan encountered in data
+  geometric_mean nan
+  harmonic_mean nan
+  from_samples NormalDist(mu=nan, sigma=nan)
+s5: 1 readings
+  mean 21.5
+  fmean 21.5
+  variance error: StatisticsError: variance requires at least two data points
+  stdev error: StatisticsError: stdev requires at least two data points
+  pvariance 0.0
+  pstdev 0.0
+  geometric_mean 21.499999999999996
+  harmonic_mean 21.5
+  from_samples error: StatisticsError: stdev requires at least two data points
+s6: 3 readings
+  mean 3.333333333333333e+307
+  fmean error: OverflowError: intermediate overflow in fsum
+  variance error: OverflowError: integer division result too large for a float
+  stdev 1.1547005383792515e+308
+  pvariance error: OverflowError: integer division result too large for a float
+  pstdev 9.428090415820633e+307
+  geometric_mean error: StatisticsError: ('No negative inputs allowed', -1e+308)
+  harmonic_mean error: StatisticsError: harmonic mean does not support negative values
+  from_samples NormalDist(mu=3.333333333333333e+307, sigma=1.1547005383792515e+308)
+3 bad readings
+== growth growth.csv
+24 months, 2025-01 to 2026-12
+revenue: mean 17998.164583333335, median 19341.39, quartiles [12042.614999999998, 19341.39, 21262.190000000002]
+monthly growth: geometric 1.0390324664381259, arithmetic 1.041000003975259
+best month 2026-01 (1.136000008619905), worst 2025-04 (0.9509992018407756)
+year one fmean 13371.735, year two fmean 22624.594166666666
+growth fit NormalDist(mu=1.0410000039752587, sigma=0.06559933792547848), 90% band 0.9330986950629201 to 1.1489013128875971
+next month forecast 28275.346364050685
+growth deciles [0.9597997693233911, 0.9648001818495132, 0.9918001148202821, 1.00720013090771, 1.026999786330789, 1.0569998207077478, 1.1038001624080391, 1.1223996135141343, 1.127600242318928]
+== latency missing.csv
+error: FileNotFoundError: [Errno 2] No such file or directory: 'missing.csv'

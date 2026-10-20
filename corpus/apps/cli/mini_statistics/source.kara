@@ -1,0 +1,3166 @@
+// mini_statistics: Python 3.13's statistics module (with the math
+// functions it leans on: fsum, sumprod and hypot) ported to Kara, and
+// five programs built on it. mk.py writes data/ (embedded below), and
+// the jobs in data/jobs.tsv call the functions one by one and run the
+// programs. expected.out is what oracle.py prints with the real module.
+
+// ------------------------------------------------------------ text helpers
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let sep_s = (sep as char).to_string();
+    let mut out: Vec[String] = Vec.new();
+    for part in s.split(sep_s) {
+        out.push(part.to_string());
+    }
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+fn emit(out: mut ref String, line: ref String) {
+    out.push_str(line);
+    out.push_str("\n");
+}
+
+// repr() of a str with no quotes or escapes in it.
+fn repr_str(s: ref String) -> String {
+    f"'{s}'"
+}
+
+// repr() of a float.
+fn repr_f(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == 1.0 / 0.0 {
+        return "inf".to_string();
+    }
+    if x == -1.0 / 0.0 {
+        return "-inf".to_string();
+    }
+    f"{x}"
+}
+
+fn is_nan(x: f64) -> bool {
+    x != x
+}
+
+fn is_inf(x: f64) -> bool {
+    x == 1.0 / 0.0 or x == -1.0 / 0.0
+}
+
+fn is_finite(x: f64) -> bool {
+    not is_nan(x) and not is_inf(x)
+}
+
+fn fabs(x: f64) -> f64 {
+    if x < 0.0 { -x } else if x == 0.0 { 0.0 } else { x }
+}
+
+// ------------------------------------------------------------ exceptions
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: Str) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.to_string() }
+}
+
+fn stat_err(msg: Str) -> Exc {
+    exc("StatisticsError", msg)
+}
+
+fn show_exc(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+// ------------------------------------------------------------ Python numbers
+
+// A value as the jobs and the CSV files give it: an int, a float or (for
+// mode and the medians that only sort) a str.
+#[derive(Clone)]
+enum Num {
+    I(i64),
+    F(f64),
+    S(String),
+}
+
+fn is_int_text(t: ref String) -> bool {
+    let b = t.bytes().to_vec();
+    let start = if b.len() > 0 and b[0] == b'-' { 1 } else { 0 };
+    if start >= b.len() {
+        return false;
+    }
+    for i in start..b.len() {
+        if b[i] < b'0' or b[i] > b'9' {
+            return false;
+        }
+    }
+    true
+}
+
+// int(t), else float(t), else the str itself.
+fn token(t: ref String) -> Num {
+    if is_int_text(t) {
+        match i64.parse(t) {
+            Ok(v) => return Num.I(v),
+            Err(_) => {}
+        }
+    }
+    match f64.parse(t) {
+        Ok(v) => Num.F(v),
+        Err(_) => Num.S(t.clone()),
+    }
+}
+
+// float(t) for a reading
+fn float_text(t: ref String) -> Option[f64] {
+    match f64.parse(t) {
+        Ok(v) => Some(v),
+        Err(_) => None,
+    }
+}
+
+fn values(field: ref String) -> Vec[Num] {
+    let mut out: Vec[Num] = Vec.new();
+    if field == "-" {
+        return out;
+    }
+    for t in split_on(field, b',').iter() {
+        out.push(token(t));
+    }
+    out
+}
+
+fn repr_num(v: ref Num) -> String {
+    match v {
+        Num.I(i) => f"{i}",
+        Num.F(x) => repr_f(*x),
+        Num.S(s) => repr_str(s),
+    }
+}
+
+fn repr_list(v: ref Vec[Num]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v.iter() {
+        parts.push(repr_num(x));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn repr_floats(v: ref Vec[f64]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for x in v.iter() {
+        parts.push(repr_f(*x));
+    }
+    f"[{join(parts, ", ")}]"
+}
+
+fn type_name(v: ref Num) -> String {
+    match v {
+        Num.I(_) => "int".to_string(),
+        Num.F(_) => "float".to_string(),
+        Num.S(_) => "str".to_string(),
+    }
+}
+
+fn is_int(v: ref Num) -> bool {
+    match v {
+        Num.I(_) => true,
+        _ => false,
+    }
+}
+
+// float(x); a str never reaches it
+fn to_f(v: ref Num) -> f64 {
+    match v {
+        Num.I(i) => *i as f64,
+        Num.F(x) => *x,
+        Num.S(_) => 0.0 / 0.0,
+    }
+}
+
+fn floats(v: ref Vec[Num]) -> Vec[f64] {
+    let mut out: Vec[f64] = Vec.new();
+    for x in v.iter() {
+        out.push(to_f(x));
+    }
+    out
+}
+
+fn n_add(a: ref Num, b: ref Num) -> Num {
+    match (a, b) {
+        (Num.I(x), Num.I(y)) => Num.I(*x + *y),
+        _ => Num.F(to_f(a) + to_f(b)),
+    }
+}
+
+fn n_sub(a: ref Num, b: ref Num) -> Num {
+    match (a, b) {
+        (Num.I(x), Num.I(y)) => Num.I(*x - *y),
+        _ => Num.F(to_f(a) - to_f(b)),
+    }
+}
+
+fn n_mul(a: ref Num, b: ref Num) -> Num {
+    match (a, b) {
+        (Num.I(x), Num.I(y)) => Num.I(*x * *y),
+        _ => Num.F(to_f(a) * to_f(b)),
+    }
+}
+
+// a / b, Python's true division
+fn n_div(a: ref Num, b: ref Num) -> Result[Num, Exc] {
+    let d = to_f(b);
+    if d == 0.0 {
+        if is_int(a) and is_int(b) {
+            return Err(exc("ZeroDivisionError", "division by zero"));
+        }
+        return Err(exc("ZeroDivisionError", "float division by zero"));
+    }
+    Ok(Num.F(to_f(a) / d))
+}
+
+// a < b; strs compare with strs, numbers with numbers
+fn n_lt(a: ref Num, b: ref Num) -> bool {
+    match (a, b) {
+        (Num.I(x), Num.I(y)) => *x < *y,
+        (Num.S(x), Num.S(y)) => *x < *y,
+        _ => to_f(a) < to_f(b),
+    }
+}
+
+// a == b, as a dict key compares (two NaN objects never match)
+fn n_eq(a: ref Num, b: ref Num) -> bool {
+    match (a, b) {
+        (Num.I(x), Num.I(y)) => *x == *y,
+        (Num.S(x), Num.S(y)) => *x == *y,
+        (Num.S(_), _) => false,
+        (_, Num.S(_)) => false,
+        _ => to_f(a) == to_f(b),
+    }
+}
+
+// sorted(): a stable insertion sort, which gives the order Python's
+// stable sort does for data with no NaN in it.
+fn sorted_nums(v: ref Vec[Num]) -> Vec[Num] {
+    let mut out = v.clone();
+    for i in 1..out.len() {
+        let mut j = i;
+        while j > 0 and n_lt(out[j], out[j - 1]) {
+            out.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    out
+}
+// ------------------------------------------------------------ Python ints
+
+// An arbitrary-size int: a sign and base 2**30 limbs, least significant
+// first, with no zero limb on top (zero has no limbs). The exact sums
+// statistics keeps as Fractions are built from these.
+#[derive(Clone)]
+struct Big {
+    neg: bool,
+    d: Vec[i64],
+}
+
+const LIMB: i64 = 1073741824;
+const LIMB_BITS: i64 = 30;
+
+fn big_zero() -> Big {
+    Big { neg: false, d: Vec.new() }
+}
+
+fn trim(d: mut ref Vec[i64]) {
+    while d.len() > 0 and d[d.len() - 1] == 0 {
+        d.pop();
+    }
+}
+
+fn big_make(neg: bool, d: own Vec[i64]) -> Big {
+    let mut v = d;
+    trim(mut v);
+    let n = neg and v.len() > 0;
+    Big { neg: n, d: v }
+}
+
+// for |x| < 2**62
+fn big_from_i64(x: i64) -> Big {
+    let mut d: Vec[i64] = Vec.new();
+    let mut v = if x < 0 { -x } else { x };
+    while v > 0 {
+        d.push(v % LIMB);
+        v = v / LIMB;
+    }
+    Big { neg: x < 0, d: d }
+}
+
+fn big_from_u64(x: u64) -> Big {
+    let mut d: Vec[i64] = Vec.new();
+    let mut v = x;
+    while v > 0 {
+        d.push((v % 1073741824) as i64);
+        v = v / 1073741824;
+    }
+    Big { neg: false, d: d }
+}
+
+fn big_is_zero(a: ref Big) -> bool {
+    a.d.len() == 0
+}
+
+fn cmp_mag(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+fn big_cmp(a: ref Big, b: ref Big) -> i64 {
+    if a.neg != b.neg {
+        return if a.neg { -1 } else { 1 };
+    }
+    let c = cmp_mag(a.d, b.d);
+    if a.neg { -c } else { c }
+}
+
+fn add_mag(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut carry = 0;
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        let x = if i < a.len() { a[i] } else { 0 };
+        let y = if i < b.len() { b[i] } else { 0 };
+        let s = x + y + carry;
+        out.push(s % LIMB);
+        carry = s / LIMB;
+    }
+    if carry > 0 {
+        out.push(carry);
+    }
+    out
+}
+
+// a - b for |a| >= |b|
+fn sub_mag(a: ref Vec[i64], b: ref Vec[i64]) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    let mut borrow = 0;
+    for i in 0..a.len() {
+        let y = if i < b.len() { b[i] } else { 0 };
+        let mut s = a[i] - y - borrow;
+        if s < 0 {
+            s += LIMB;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        out.push(s);
+    }
+    trim(mut out);
+    out
+}
+
+fn big_add(a: ref Big, b: ref Big) -> Big {
+    if a.neg == b.neg {
+        return big_make(a.neg, add_mag(a.d, b.d));
+    }
+    let c = cmp_mag(a.d, b.d);
+    if c == 0 {
+        return big_zero();
+    }
+    if c > 0 {
+        big_make(a.neg, sub_mag(a.d, b.d))
+    } else {
+        big_make(b.neg, sub_mag(b.d, a.d))
+    }
+}
+
+fn big_neg(a: ref Big) -> Big {
+    big_make(not a.neg, a.d.clone())
+}
+
+fn big_sub(a: ref Big, b: ref Big) -> Big {
+    big_add(a, big_neg(b))
+}
+
+fn big_mul(a: ref Big, b: ref Big) -> Big {
+    if a.d.len() == 0 or b.d.len() == 0 {
+        return big_zero();
+    }
+    let mut out: Vec[i64] = Vec.filled(a.d.len() + b.d.len() + 1, 0);
+    for i in 0..a.d.len() {
+        let mut carry = 0;
+        for j in 0..b.d.len() {
+            let t = out[i + j] + a.d[i] * b.d[j] + carry;
+            out[i + j] = t % LIMB;
+            carry = t / LIMB;
+        }
+        let mut k = i + b.d.len();
+        while carry > 0 {
+            let t = out[k] + carry;
+            out[k] = t % LIMB;
+            carry = t / LIMB;
+            k += 1;
+        }
+    }
+    big_make(a.neg != b.neg, out)
+}
+
+fn big_mul_i(a: ref Big, m: i64) -> Big {
+    big_mul(a, big_from_i64(m))
+}
+
+fn big_bitlen(a: ref Big) -> i64 {
+    if a.d.len() == 0 {
+        return 0;
+    }
+    let mut top = a.d[a.d.len() - 1];
+    let mut bits = 0;
+    while top > 0 {
+        bits += 1;
+        top = top >> 1;
+    }
+    (a.d.len() - 1) * LIMB_BITS + bits
+}
+
+// a << k
+fn big_shl(a: ref Big, k: i64) -> Big {
+    if a.d.len() == 0 or k == 0 {
+        return a.clone();
+    }
+    let whole = k / LIMB_BITS;
+    let part = k % LIMB_BITS;
+    let mut out: Vec[i64] = Vec.filled(whole, 0);
+    let mut carry = 0;
+    for x in a.d.iter() {
+        let v = (*x << part) + carry;
+        out.push(v % LIMB);
+        carry = v / LIMB;
+    }
+    if carry > 0 {
+        out.push(carry);
+    }
+    big_make(a.neg, out)
+}
+
+// |a| >> k
+fn big_shr(a: ref Big, k: i64) -> Big {
+    let whole = k / LIMB_BITS;
+    let part = k % LIMB_BITS;
+    if whole >= a.d.len() {
+        return big_zero();
+    }
+    let mut out: Vec[i64] = Vec.new();
+    for i in whole..a.d.len() {
+        let hi = if i + 1 < a.d.len() { a.d[i + 1] } else { 0 };
+        let v = (a.d[i] >> part) | ((hi << (LIMB_BITS - part)) % LIMB);
+        out.push(v);
+    }
+    big_make(a.neg, out)
+}
+
+fn big_pow2(k: i64) -> Big {
+    big_shl(big_from_i64(1), k)
+}
+
+// |a| divmod |b| for b not zero: shift and subtract, a bit at a time
+fn big_divmod_mag(a: ref Big, b: ref Big) -> (Big, Big) {
+    let am = big_make(false, a.d.clone());
+    let bm = big_make(false, b.d.clone());
+    if cmp_mag(am.d, bm.d) < 0 {
+        return (big_zero(), am);
+    }
+    let s = big_bitlen(am) - big_bitlen(bm);
+    let mut r = am;
+    let mut step = big_shl(bm, s);
+    let mut q: Vec[i64] = Vec.filled(s / LIMB_BITS + 1, 0);
+    let mut i = s;
+    while i >= 0 {
+        if cmp_mag(r.d, step.d) >= 0 {
+            r = big_make(false, sub_mag(r.d, step.d));
+            q[i / LIMB_BITS] = q[i / LIMB_BITS] | (1 << (i % LIMB_BITS));
+        }
+        step = big_shr(step, 1);
+        i -= 1;
+    }
+    (big_make(false, q), r)
+}
+
+// math.isqrt(n) for n >= 0
+fn big_isqrt(n: ref Big) -> Big {
+    if big_is_zero(n) {
+        return big_zero();
+    }
+    let mut x = big_pow2((big_bitlen(n) + 1) / 2);
+    loop {
+        let (q, _) = big_divmod_mag(n, x);
+        let y = big_shr(big_add(x, q), 1);
+        if big_cmp(y, x) >= 0 {
+            return x;
+        }
+        x = y;
+    }
+}
+
+// the value as an f64, exactly, for |a| < 2**53
+fn big_small_f64(a: ref Big) -> f64 {
+    let mut v = 0.0;
+    let mut i = a.d.len() - 1;
+    while i >= 0 {
+        v = v * 1073741824.0 + a.d[i] as f64;
+        i -= 1;
+    }
+    if a.neg { -v } else { v }
+}
+
+// the value as an i64, for |a| < 2**62
+fn big_small_i64(a: ref Big) -> i64 {
+    let mut v = 0;
+    let mut i = a.d.len() - 1;
+    while i >= 0 {
+        v = v * LIMB + a.d[i];
+        i -= 1;
+    }
+    if a.neg { -v } else { v }
+}
+
+fn big_str(a: ref Big) -> String {
+    f"{big_small_i64(a)}"
+}
+// ------------------------------------------------------------ exact fractions
+
+// Every int and finite float is a dyadic fraction num / 2**e, so the
+// partial sums statistics keeps per denominator collapse into one.
+#[derive(Clone)]
+struct Dy {
+    num: Big,
+    e: i64,
+}
+
+// A Fraction, not necessarily in lowest terms; den > 0.
+#[derive(Clone)]
+struct Rat {
+    num: Big,
+    den: Big,
+}
+
+// What _sum and _ss hand back: an exact Fraction, or the float sum of
+// the NaNs and infinities when there were any.
+#[derive(Clone)]
+enum Val {
+    R(Rat),
+    Sp(f64),
+}
+
+fn dy_zero() -> Dy {
+    Dy { num: big_zero(), e: 0 }
+}
+
+// x.as_integer_ratio() for a finite float
+fn float_dy(x: f64) -> Dy {
+    let bits = x.to_bits();
+    let neg = (bits >> 63) == 1;
+    let ex = ((bits >> 52) & 0x7ff) as i64;
+    let mut m = bits & 0xfffffffffffff;
+    let mut p = ex - 1075;
+    if ex == 0 {
+        p = -1074;
+    } else {
+        m = m | 0x10000000000000;
+    }
+    let mut num = big_from_u64(m);
+    if neg {
+        num = big_neg(num);
+    }
+    if p >= 0 {
+        Dy { num: big_shl(num, p), e: 0 }
+    } else {
+        Dy { num: num, e: -p }
+    }
+}
+
+fn dy_add(a: ref Dy, b: ref Dy) -> Dy {
+    if a.e >= b.e {
+        Dy { num: big_add(a.num, big_shl(b.num, a.e - b.e)), e: a.e }
+    } else {
+        Dy { num: big_add(big_shl(a.num, b.e - a.e), b.num), e: b.e }
+    }
+}
+
+fn dy_sq(a: ref Dy) -> Dy {
+    Dy { num: big_mul(a.num, a.num), e: 2 * a.e }
+}
+
+fn dy_rat(a: ref Dy) -> Rat {
+    Rat { num: a.num.clone(), den: big_pow2(a.e) }
+}
+
+// r / k for a positive int k
+fn rat_div_i(r: ref Rat, k: i64) -> Rat {
+    Rat { num: r.num.clone(), den: big_mul_i(r.den, k) }
+}
+
+fn pow2f(k: i64) -> f64 {
+    if k >= -1022 {
+        (((k + 1023) as u64) << 52).bits_as_f64()
+    } else {
+        ((1 as u64) << ((k + 1074) as u64)).bits_as_f64()
+    }
+}
+
+// n / d correctly rounded to a float, the way int / int is: a quotient
+// of at least 55 bits, a sticky bit for the remainder, round half even.
+fn ratio_f64(n: ref Big, d: ref Big) -> Result[f64, Exc] {
+    if big_is_zero(n) {
+        return Ok(0.0);
+    }
+    let a = big_make(false, n.d.clone());
+    let k = big_bitlen(a) - big_bitlen(d);
+    let s = 55 - k;
+    let (q, r) = if s >= 0 {
+        big_divmod_mag(big_shl(a, s), d)
+    } else {
+        big_divmod_mag(a, big_shl(d, -s))
+    };
+    let sticky = not big_is_zero(r);
+    let mut drop = big_bitlen(q) - 53;
+    if drop < s - 1074 {
+        drop = s - 1074;
+    }
+    let mut keep = big_shr(q, drop);
+    let rest = big_sub(q, big_shl(keep, drop));
+    let half = big_pow2(drop - 1);
+    let c = big_cmp(rest, half);
+    let odd = keep.d.len() > 0 and keep.d[0] % 2 == 1;
+    if c > 0 or (c == 0 and (sticky or odd)) {
+        keep = big_add(keep, big_from_i64(1));
+    }
+    let e = drop - s;
+    if big_bitlen(keep) + e > 1024 {
+        return Err(exc("OverflowError", "integer division result too large for a float"));
+    }
+    let v = big_small_f64(keep) * pow2f(e);
+    Ok(if n.neg { -v } else { v })
+}
+
+fn rat_f64(r: ref Rat) -> Result[f64, Exc] {
+    ratio_f64(r.num, r.den)
+}
+
+// Python's a // b for b > 0
+fn floordiv(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if a % b != 0 and a < 0 { q - 1 } else { q }
+}
+
+// _integer_sqrt_of_frac_rto: isqrt(n / m) with round-to-odd
+fn isqrt_frac_rto(n: ref Big, m: ref Big) -> Big {
+    let (fl, _) = big_divmod_mag(n, m);
+    let a = big_isqrt(fl);
+    let back = big_mul(big_mul(a, a), m);
+    if big_cmp(back, n) != 0 and (a.d.len() == 0 or a.d[0] % 2 == 0) {
+        return big_add(a, big_from_i64(1));
+    }
+    a
+}
+
+// _float_sqrt_of_frac: sqrt(n / m) correctly rounded
+fn float_sqrt_of_frac(n: ref Big, m: ref Big) -> Result[f64, Exc] {
+    let q = floordiv(big_bitlen(n) - big_bitlen(m) - 109, 2);
+    if q >= 0 {
+        let num = big_shl(isqrt_frac_rto(n, big_shl(m, 2 * q)), q);
+        ratio_f64(num, big_from_i64(1))
+    } else {
+        let num = isqrt_frac_rto(big_shl(n, -2 * q), m);
+        ratio_f64(num, big_pow2(-q))
+    }
+}
+
+// _convert(value, T): an int when every input was an int and the value
+// is whole, a float otherwise
+fn convert(v: ref Val, all_int: bool) -> Result[Num, Exc] {
+    match v {
+        Val.Sp(x) => Ok(Num.F(*x)),
+        Val.R(r) => {
+            if all_int {
+                let (q, rem) = big_divmod_mag(r.num, r.den);
+                if big_is_zero(rem) {
+                    let iq = big_small_i64(q);
+                    return Ok(Num.I(if r.num.neg { -iq } else { iq }));
+                }
+            }
+            Ok(Num.F(rat_f64(r)?))
+        }
+    }
+}
+// ------------------------------------------------------------ math: fsum, sumprod, hypot
+
+// Shewchuk's exact partials, as math.fsum keeps them.
+fn fsum(xs: ref Vec[f64]) -> Result[f64, Exc] {
+    let mut p: Vec[f64] = Vec.new();
+    let mut special_sum = 0.0;
+    let mut inf_sum = 0.0;
+    let mut lo = 0.0;
+    for item in xs.iter() {
+        let mut x = *item;
+        let xsave = x;
+        let mut i = 0;
+        for j in 0..p.len() {
+            let mut y = p[j];
+            if fabs(x) < fabs(y) {
+                let t = x;
+                x = y;
+                y = t;
+            }
+            let hi = x + y;
+            let yr = hi - x;
+            lo = y - yr;
+            if lo != 0.0 {
+                p[i] = lo;
+                i += 1;
+            }
+            x = hi;
+        }
+        p.truncate(i);
+        if x != 0.0 {
+            if not is_finite(x) {
+                if is_finite(xsave) {
+                    return Err(exc("OverflowError", "intermediate overflow in fsum"));
+                }
+                if is_inf(xsave) {
+                    inf_sum += xsave;
+                }
+                special_sum += xsave;
+                p.truncate(0);
+            } else {
+                p.push(x);
+            }
+        }
+    }
+    if special_sum != 0.0 {
+        if is_nan(inf_sum) {
+            return Err(exc("ValueError", "-inf + inf in fsum"));
+        }
+        return Ok(special_sum);
+    }
+    let mut hi = 0.0;
+    let mut n = p.len();
+    if n > 0 {
+        n -= 1;
+        hi = p[n];
+        while n > 0 {
+            let x = hi;
+            n -= 1;
+            let y = p[n];
+            hi = x + y;
+            let yr = hi - x;
+            lo = y - yr;
+            if lo != 0.0 {
+                break;
+            }
+        }
+        // half-even rounding across partials
+        if n > 0 and ((lo < 0.0 and p[n - 1] < 0.0) or (lo > 0.0 and p[n - 1] > 0.0)) {
+            let y = lo * 2.0;
+            let x = hi + y;
+            let yr = x - hi;
+            if y == yr {
+                hi = x;
+            }
+        }
+    }
+    Ok(hi)
+}
+
+// Double- and triple-length arithmetic, for sumprod and hypot.
+struct Dl {
+    hi: f64,
+    lo: f64,
+}
+
+struct Tl {
+    hi: f64,
+    lo: f64,
+    tiny: f64,
+}
+
+fn dl_fast_sum(a: f64, b: f64) -> Dl {
+    let x = a + b;
+    let y = (a - x) + b;
+    Dl { hi: x, lo: y }
+}
+
+fn dl_sum(a: f64, b: f64) -> Dl {
+    let x = a + b;
+    let z = x - a;
+    let y = (a - (x - z)) + (b - z);
+    Dl { hi: x, lo: y }
+}
+
+fn dl_split(x: f64) -> Dl {
+    let t = x * 134217729.0;
+    let hi = t - (t - x);
+    Dl { hi: hi, lo: x - hi }
+}
+
+// Dekker's exact product: the same pair fma gives for ordinary magnitudes
+fn dl_mul(x: f64, y: f64) -> Dl {
+    let xx = dl_split(x);
+    let yy = dl_split(y);
+    let p = xx.hi * yy.hi;
+    let q = xx.hi * yy.lo + xx.lo * yy.hi;
+    let z = p + q;
+    let zz = p - z + q + xx.lo * yy.lo;
+    Dl { hi: z, lo: zz }
+}
+
+fn tl_fma(x: f64, y: f64, total: ref Tl) -> Tl {
+    let pr = dl_mul(x, y);
+    let sm = dl_sum(total.hi, pr.hi);
+    let r1 = dl_sum(total.lo, pr.lo);
+    let r2 = dl_sum(r1.hi, sm.lo);
+    Tl { hi: sm.hi, lo: r2.hi, tiny: total.tiny + r1.lo + r2.lo }
+}
+
+fn tl_to_d(total: ref Tl) -> f64 {
+    let last = dl_sum(total.lo, total.hi);
+    total.tiny + last.lo + last.hi
+}
+
+fn tl_zero() -> Tl {
+    Tl { hi: 0.0, lo: 0.0, tiny: 0.0 }
+}
+
+// math.sumprod: an exact int path while the pairs are ints, then a
+// triple-length float path while they are floats (or float and int),
+// then plain arithmetic for the rest.
+fn sumprod(p: ref Vec[Num], q: ref Vec[Num]) -> Result[Num, Exc] {
+    if p.len() != q.len() {
+        return Err(exc("ValueError", "Inputs are not the same length"));
+    }
+    let mut total = Num.I(0);
+    let mut int_on = true;
+    let mut int_used = false;
+    let mut int_total: i64 = 0;
+    let mut flt_on = true;
+    let mut flt_used = false;
+    let mut flt_total = tl_zero();
+    let mut i = 0;
+    loop {
+        let finished = i == p.len();
+        if int_on {
+            let mut taken = false;
+            if not finished {
+                match (p[i].clone(), q[i].clone()) {
+                    (Num.I(a), Num.I(b)) => {
+                        match a.checked_mul(b) {
+                            Some(prod) => match int_total.checked_add(prod) {
+                                Some(t) => {
+                                    int_total = t;
+                                    int_used = true;
+                                    taken = true;
+                                }
+                                None => {}
+                            },
+                            None => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if taken {
+                i += 1;
+                continue;
+            }
+            int_on = false;
+            if int_used {
+                total = n_add(total, Num.I(int_total));
+                int_used = false;
+            }
+        }
+        if flt_on {
+            let mut taken = false;
+            if not finished {
+                let pair = match (p[i].clone(), q[i].clone()) {
+                    (Num.F(a), Num.F(b)) => Some((a, b)),
+                    (Num.F(a), Num.I(b)) => Some((a, b as f64)),
+                    (Num.I(a), Num.F(b)) => Some((a as f64, b)),
+                    _ => None,
+                };
+                if let Some((a, b)) = pair {
+                    let nt = tl_fma(a, b, flt_total);
+                    if is_finite(nt.hi) {
+                        flt_total = nt;
+                        flt_used = true;
+                        taken = true;
+                    }
+                }
+            }
+            if taken {
+                i += 1;
+                continue;
+            }
+            flt_on = false;
+            if flt_used {
+                total = n_add(total, Num.F(tl_to_d(flt_total)));
+                flt_used = false;
+            }
+        }
+        if finished {
+            return Ok(total);
+        }
+        total = n_add(total, n_mul(p[i], q[i]));
+        i += 1;
+    }
+}
+
+fn sumprod_f(p: ref Vec[f64], q: ref Vec[f64]) -> f64 {
+    let mut a: Vec[Num] = Vec.new();
+    let mut b: Vec[Num] = Vec.new();
+    for x in p.iter() {
+        a.push(Num.F(*x));
+    }
+    for x in q.iter() {
+        b.push(Num.F(*x));
+    }
+    match sumprod(a, b) {
+        Ok(v) => to_f(v),
+        Err(_) => 0.0 / 0.0,
+    }
+}
+
+// frexp(x)'s exponent for a finite x > 0
+fn frexp_exp(x: f64) -> i64 {
+    let bits = x.to_bits();
+    let ex = ((bits >> 52) & 0x7ff) as i64;
+    if ex > 0 {
+        return ex - 1022;
+    }
+    let mut m = bits & 0xfffffffffffff;
+    let mut len = 0;
+    while m > 0 {
+        len += 1;
+        m = m >> 1;
+    }
+    len - 1074
+}
+
+// vector_norm: math.hypot's scaled, compensated sum of squares
+fn vector_norm(vec: ref Vec[f64], max: f64, found_nan: bool) -> f64 {
+    if is_inf(max) {
+        return max;
+    }
+    if found_nan {
+        return 0.0 / 0.0;
+    }
+    if max == 0.0 or vec.len() <= 1 {
+        return max;
+    }
+    let max_e = frexp_exp(max);
+    let dbl_min = pow2f(-1022);
+    if max_e < -1023 {
+        let mut v2: Vec[f64] = Vec.new();
+        for x in vec.iter() {
+            v2.push(*x / dbl_min);
+        }
+        return dbl_min * vector_norm(v2, max / dbl_min, found_nan);
+    }
+    let scale = pow2f(-max_e);
+    let mut csum = 1.0;
+    let mut frac1 = 0.0;
+    let mut frac2 = 0.0;
+    for v in vec.iter() {
+        let x = *v * scale;
+        let pr = dl_mul(x, x);
+        let sm = dl_fast_sum(csum, pr.hi);
+        csum = sm.hi;
+        frac1 += pr.lo;
+        frac2 += sm.lo;
+    }
+    let mut h = (csum - 1.0 + (frac1 + frac2)).sqrt();
+    let pr = dl_mul(-h, h);
+    let sm = dl_fast_sum(csum, pr.hi);
+    csum = sm.hi;
+    frac1 += pr.lo;
+    frac2 += sm.lo;
+    let x = csum - 1.0 + (frac1 + frac2);
+    h += x / (2.0 * h);
+    h / scale
+}
+
+fn hypot(xs: ref Vec[f64]) -> f64 {
+    let mut max = 0.0;
+    let mut found_nan = false;
+    let mut coords: Vec[f64] = Vec.new();
+    for v in xs.iter() {
+        let x = fabs(*v);
+        coords.push(x);
+        if is_nan(x) {
+            found_nan = true;
+        }
+        if x > max {
+            max = x;
+        }
+    }
+    vector_norm(coords, max, found_nan)
+}
+// ------------------------------------------------------------ statistics: helpers
+
+struct Summed {
+    all_int: bool,
+    total: Val,
+    count: i64,
+}
+
+// _sum: the exact sum as a Fraction (or the float sum of the NaNs and
+// infinities), whether every value was an int, and the count
+fn exact_sum(data: ref Vec[Num]) -> Result[Summed, Exc] {
+    let mut acc = dy_zero();
+    let mut special: Option[f64] = None;
+    let mut all_int = true;
+    let mut count = 0;
+    for x in data.iter() {
+        count += 1;
+        match x {
+            Num.I(i) => {
+                acc = dy_add(acc, Dy { num: big_from_i64(*i), e: 0 });
+            }
+            Num.F(f) => {
+                all_int = false;
+                if is_finite(*f) {
+                    acc = dy_add(acc, float_dy(*f));
+                } else {
+                    special = Some(match special {
+                        Some(s) => s + *f,
+                        None => *f,
+                    });
+                }
+            }
+            Num.S(_) => {
+                return Err(exc("TypeError", "can't convert type 'str' to numerator/denominator"));
+            }
+        }
+    }
+    let total = match special {
+        Some(s) => Val.Sp(s),
+        None => Val.R(dy_rat(acc)),
+    };
+    Ok(Summed { all_int: all_int, total: total, count: count })
+}
+
+fn val_div_i(v: ref Val, k: i64) -> Val {
+    match v {
+        Val.R(r) => Val.R(rat_div_i(r, k)),
+        Val.Sp(x) => Val.Sp(*x / k as f64),
+    }
+}
+
+struct Squares {
+    all_int: bool,
+    ssd: Val,
+    mean: Val,
+    count: i64,
+}
+
+// _ss: the exact sum of squared deviations, from the mean or from c
+fn sum_squares(data: ref Vec[Num], c: ref Option[Num]) -> Result[Squares, Exc] {
+    if let Some(cv) = c {
+        let mut terms: Vec[Num] = Vec.new();
+        for x in data.iter() {
+            let d = n_sub(x, cv);
+            terms.push(n_mul(d, d));
+        }
+        let s = exact_sum(terms)?;
+        return Ok(Squares { all_int: s.all_int, ssd: s.total, mean: Val.R(Rat { num: big_zero(), den: big_from_i64(1) }), count: s.count });
+    }
+    let mut sx = dy_zero();
+    let mut sxx = dy_zero();
+    let mut special: Option[f64] = None;
+    let mut all_int = true;
+    let mut count = 0;
+    for x in data.iter() {
+        count += 1;
+        let d = match x {
+            Num.I(i) => Dy { num: big_from_i64(*i), e: 0 },
+            Num.F(f) => {
+                all_int = false;
+                if not is_finite(*f) {
+                    special = Some(match special {
+                        Some(s) => s + *f,
+                        None => *f,
+                    });
+                    continue;
+                }
+                float_dy(*f)
+            }
+            Num.S(_) => {
+                return Err(exc("TypeError", "can't convert type 'str' to numerator/denominator"));
+            }
+        };
+        sx = dy_add(sx, d);
+        sxx = dy_add(sxx, dy_sq(d));
+    }
+    if count == 0 {
+        let zero = Val.R(Rat { num: big_zero(), den: big_from_i64(1) });
+        return Ok(Squares { all_int: all_int, ssd: zero.clone(), mean: zero, count: 0 });
+    }
+    if let Some(s) = special {
+        return Ok(Squares { all_int: all_int, ssd: Val.Sp(s), mean: Val.Sp(s), count: count });
+    }
+    // (count * sxx - sx * sx) / count over the common denominator 2**g
+    let g = if sxx.e > 2 * sx.e { sxx.e } else { 2 * sx.e };
+    let left = big_shl(big_mul_i(sxx.num, count), g - sxx.e);
+    let right = big_shl(big_mul(sx.num, sx.num), g - 2 * sx.e);
+    let ssd = Rat { num: big_sub(left, right), den: big_mul_i(big_pow2(g), count) };
+    let mean = Rat { num: sx.num.clone(), den: big_mul_i(big_pow2(sx.e), count) };
+    Ok(Squares { all_int: all_int, ssd: Val.R(ssd), mean: Val.R(mean), count: count })
+}
+
+fn sqrt_val(v: ref Val) -> Result[f64, Exc] {
+    match v {
+        Val.R(r) => float_sqrt_of_frac(r.num, r.den),
+        Val.Sp(_) => Err(exc("ValueError", "inf or nan encountered in data")),
+    }
+}
+
+// ------------------------------------------------------------ statistics: averages
+
+fn mean(data: ref Vec[Num]) -> Result[Num, Exc] {
+    let s = exact_sum(data)?;
+    if s.count < 1 {
+        return Err(stat_err("mean requires at least one data point"));
+    }
+    convert(val_div_i(s.total, s.count), s.all_int)
+}
+
+fn fmean(data: ref Vec[Num], weights: ref Option[Vec[Num]]) -> Result[Num, Exc] {
+    match weights {
+        None => {
+            let total = fsum(floats(data))?;
+            if data.len() == 0 {
+                return Err(stat_err("fmean requires at least one data point"));
+            }
+            Ok(Num.F(total / data.len() as f64))
+        }
+        Some(w) => {
+            let num = match sumprod(data, w) {
+                Ok(v) => v,
+                Err(_) => return Err(stat_err("data and weights must be the same length")),
+            };
+            let den = fsum(floats(w))?;
+            if den == 0.0 {
+                return Err(stat_err("sum of weights must be non-zero"));
+            }
+            n_div(num, Num.F(den))
+        }
+    }
+}
+
+fn geometric_mean(data: ref Vec[Num]) -> Result[Num, Exc] {
+    let mut logs: Vec[f64] = Vec.new();
+    let mut found_zero = false;
+    for x in data.iter() {
+        let v = to_f(x);
+        if v > 0.0 or is_nan(v) {
+            logs.push(v.ln());
+        } else if v == 0.0 {
+            found_zero = true;
+        } else {
+            return Err(stat_err(f"('No negative inputs allowed', {repr_num(x)})"));
+        }
+    }
+    let total = fsum(logs)?;
+    if data.len() == 0 {
+        return Err(stat_err("Must have a non-empty dataset"));
+    }
+    if is_nan(total) {
+        return Ok(Num.F(0.0 / 0.0));
+    }
+    if found_zero {
+        return Ok(Num.F(if total == 1.0 / 0.0 { 0.0 / 0.0 } else { 0.0 }));
+    }
+    Ok(Num.F((total / data.len() as f64).exp()))
+}
+
+fn harmonic_mean(data: ref Vec[Num], weights: ref Option[Vec[Num]]) -> Result[Num, Exc] {
+    let errmsg = "harmonic mean does not support negative values";
+    let n = data.len();
+    if n < 1 {
+        return Err(stat_err("harmonic_mean requires at least one data point"));
+    }
+    if n == 1 and weights.is_none() {
+        if to_f(data[0]) < 0.0 {
+            return Err(stat_err(errmsg));
+        }
+        return Ok(data[0].clone());
+    }
+    let mut ws: Vec[Num] = Vec.new();
+    let mut sum_weights = Val.R(Rat { num: big_from_i64(n), den: big_from_i64(1) });
+    match weights {
+        None => {
+            for _ in 0..n {
+                ws.push(Num.I(1));
+            }
+        }
+        Some(w) => {
+            if w.len() != n {
+                return Err(stat_err("Number of weights does not match data size"));
+            }
+            for x in w.iter() {
+                if to_f(x) < 0.0 {
+                    return Err(stat_err(errmsg));
+                }
+            }
+            sum_weights = exact_sum(w)?.total;
+            ws = w.clone();
+        }
+    }
+    let mut terms: Vec[Num] = Vec.new();
+    for i in 0..n {
+        if to_f(data[i]) < 0.0 {
+            return Err(stat_err(errmsg));
+        }
+        if to_f(ws[i]) != 0.0 {
+            match n_div(ws[i], data[i]) {
+                Ok(t) => terms.push(t),
+                Err(_) => return Ok(Num.I(0)),
+            }
+        } else {
+            terms.push(Num.I(0));
+        }
+    }
+    let s = exact_sum(terms)?;
+    let positive = match s.total {
+        Val.R(ref r) => not r.num.neg and not big_is_zero(r.num),
+        Val.Sp(x) => not (x <= 0.0),
+    };
+    if not positive {
+        return Err(stat_err("Weighted sum must be positive"));
+    }
+    match (sum_weights, s.total) {
+        (Val.R(sw), Val.R(t)) => {
+            let q = Rat { num: big_mul(sw.num, t.den), den: big_mul(sw.den, t.num) };
+            Ok(Num.F(rat_f64(q)?))
+        }
+        (Val.R(sw), Val.Sp(t)) => Ok(Num.F(rat_f64(sw)? / t)),
+        (Val.Sp(sw), Val.R(t)) => Ok(Num.F(sw / rat_f64(t)?)),
+        (Val.Sp(sw), Val.Sp(t)) => Ok(Num.F(sw / t)),
+    }
+}
+
+// ------------------------------------------------------------ statistics: position
+
+fn median(data: ref Vec[Num]) -> Result[Num, Exc] {
+    let d = sorted_nums(data);
+    let n = d.len();
+    if n == 0 {
+        return Err(stat_err("no median for empty data"));
+    }
+    if n % 2 == 1 {
+        return Ok(d[n / 2].clone());
+    }
+    n_div(n_add(d[n / 2 - 1], d[n / 2]), Num.I(2))
+}
+
+fn median_low(data: ref Vec[Num]) -> Result[Num, Exc] {
+    let d = sorted_nums(data);
+    let n = d.len();
+    if n == 0 {
+        return Err(stat_err("no median for empty data"));
+    }
+    if n % 2 == 1 {
+        Ok(d[n / 2].clone())
+    } else {
+        Ok(d[n / 2 - 1].clone())
+    }
+}
+
+fn median_high(data: ref Vec[Num]) -> Result[Num, Exc] {
+    let d = sorted_nums(data);
+    let n = d.len();
+    if n == 0 {
+        return Err(stat_err("no median for empty data"));
+    }
+    Ok(d[n / 2].clone())
+}
+
+fn median_grouped(data: ref Vec[Num], interval: ref Num) -> Result[Num, Exc] {
+    let d = sorted_nums(data);
+    let n = d.len();
+    if n == 0 {
+        return Err(stat_err("no median for empty data"));
+    }
+    let x = d[n / 2].clone();
+    let mut i = 0;
+    let mut j = 0;
+    for v in d.iter() {
+        if n_lt(v, x) {
+            i += 1;
+        }
+        if not n_lt(x, v) {
+            j += 1;
+        }
+    }
+    let width = to_f(interval);
+    let xf = to_f(x);
+    let lower = xf - width / 2.0;
+    let half = n as f64 / 2.0;
+    Ok(Num.F(lower + width * (half - i as f64) / (j - i) as f64))
+}
+
+// Counter(data) in first-seen order: the first key of each equal group
+fn counts(data: ref Vec[Num]) -> (Vec[Num], Vec[i64]) {
+    let mut keys: Vec[Num] = Vec.new();
+    let mut ns: Vec[i64] = Vec.new();
+    for x in data.iter() {
+        let mut found = false;
+        for k in 0..keys.len() {
+            if n_eq(keys[k], x) {
+                ns[k] += 1;
+                found = true;
+                break;
+            }
+        }
+        if not found {
+            keys.push(x.clone());
+            ns.push(1);
+        }
+    }
+    (keys, ns)
+}
+
+fn mode(data: ref Vec[Num]) -> Result[Num, Exc] {
+    let (keys, ns) = counts(data);
+    if keys.len() == 0 {
+        return Err(stat_err("no mode for empty data"));
+    }
+    let mut best = 0;
+    for k in 1..keys.len() {
+        if ns[k] > ns[best] {
+            best = k;
+        }
+    }
+    Ok(keys[best].clone())
+}
+
+fn multimode(data: ref Vec[Num]) -> Vec[Num] {
+    let (keys, ns) = counts(data);
+    let mut top = 0;
+    for c in ns.iter() {
+        if *c > top {
+            top = *c;
+        }
+    }
+    let mut out: Vec[Num] = Vec.new();
+    for k in 0..keys.len() {
+        if ns[k] == top {
+            out.push(keys[k].clone());
+        }
+    }
+    out
+}
+
+fn quantiles(data: ref Vec[Num], n: i64, method: ref String) -> Result[Vec[Num], Exc] {
+    if n < 1 {
+        return Err(stat_err("n must be at least 1"));
+    }
+    let d = sorted_nums(data);
+    let ld = d.len();
+    if ld < 2 {
+        if ld == 1 {
+            let mut out: Vec[Num] = Vec.new();
+            for _ in 0..n - 1 {
+                out.push(d[0].clone());
+            }
+            return Ok(out);
+        }
+        return Err(stat_err("must have at least one data point"));
+    }
+    let mut out: Vec[Num] = Vec.new();
+    if method == "inclusive" {
+        let m = ld - 1;
+        for i in 1..n {
+            let j = i * m / n;
+            let delta = i * m % n;
+            let s = n_add(n_mul(d[j], Num.I(n - delta)), n_mul(d[j + 1], Num.I(delta)));
+            out.push(n_div(s, Num.I(n))?);
+        }
+        return Ok(out);
+    }
+    if method == "exclusive" {
+        let m = ld + 1;
+        for i in 1..n {
+            let mut j = i * m / n;
+            j = if j < 1 { 1 } else if j > ld - 1 { ld - 1 } else { j };
+            let delta = i * m - j * n;
+            let s = n_add(n_mul(d[j - 1], Num.I(n - delta)), n_mul(d[j], Num.I(delta)));
+            out.push(n_div(s, Num.I(n))?);
+        }
+        return Ok(out);
+    }
+    Err(exc("ValueError", f"Unknown method: {repr_str(method)}"))
+}
+
+// ------------------------------------------------------------ statistics: spread
+
+fn variance(data: ref Vec[Num], xbar: ref Option[Num]) -> Result[Num, Exc] {
+    let s = sum_squares(data, xbar)?;
+    if s.count < 2 {
+        return Err(stat_err("variance requires at least two data points"));
+    }
+    convert(val_div_i(s.ssd, s.count - 1), s.all_int)
+}
+
+fn pvariance(data: ref Vec[Num], mu: ref Option[Num]) -> Result[Num, Exc] {
+    let s = sum_squares(data, mu)?;
+    if s.count < 1 {
+        return Err(stat_err("pvariance requires at least one data point"));
+    }
+    convert(val_div_i(s.ssd, s.count), s.all_int)
+}
+
+fn stdev(data: ref Vec[Num], xbar: ref Option[Num]) -> Result[Num, Exc] {
+    let s = sum_squares(data, xbar)?;
+    if s.count < 2 {
+        return Err(stat_err("stdev requires at least two data points"));
+    }
+    Ok(Num.F(sqrt_val(val_div_i(s.ssd, s.count - 1))?))
+}
+
+fn pstdev(data: ref Vec[Num], mu: ref Option[Num]) -> Result[Num, Exc] {
+    let s = sum_squares(data, mu)?;
+    if s.count < 1 {
+        return Err(stat_err("pstdev requires at least one data point"));
+    }
+    Ok(Num.F(sqrt_val(val_div_i(s.ssd, s.count))?))
+}
+
+// _mean_stdev, for NormalDist.from_samples
+fn mean_stdev(data: ref Vec[Num]) -> Result[(f64, f64), Exc] {
+    let s = sum_squares(data, None)?;
+    if s.count < 2 {
+        return Err(stat_err("stdev requires at least two data points"));
+    }
+    let mss = val_div_i(s.ssd, s.count - 1);
+    match (s.mean, mss) {
+        (Val.R(m), Val.R(r)) => Ok((rat_f64(m)?, float_sqrt_of_frac(r.num, r.den)?)),
+        (Val.Sp(m), _) => Ok((m, m / to_f_val(s.ssd))),
+        (Val.R(m), Val.Sp(_)) => Ok((rat_f64(m)?, 0.0 / 0.0)),
+    }
+}
+
+fn to_f_val(v: ref Val) -> f64 {
+    match v {
+        Val.Sp(x) => *x,
+        Val.R(r) => match rat_f64(r) {
+            Ok(x) => x,
+            Err(_) => 0.0 / 0.0,
+        },
+    }
+}
+
+// ------------------------------------------------------------ statistics: relations
+
+fn deviations(x: ref Vec[Num]) -> Result[Vec[Num], Exc] {
+    let bar = fsum(floats(x))? / x.len() as f64;
+    let mut out: Vec[Num] = Vec.new();
+    for v in x.iter() {
+        out.push(Num.F(to_f(v) - bar));
+    }
+    Ok(out)
+}
+
+fn covariance(x: ref Vec[Num], y: ref Vec[Num]) -> Result[Num, Exc] {
+    let n = x.len();
+    if y.len() != n {
+        return Err(stat_err("covariance requires that both inputs have same number of data points"));
+    }
+    if n < 2 {
+        return Err(stat_err("covariance requires at least two data points"));
+    }
+    let dx = deviations(x)?;
+    let dy = deviations(y)?;
+    n_div(sumprod(dx, dy)?, Num.I(n - 1))
+}
+
+// _rank with ties averaged, ranks counted from start
+fn rank(data: ref Vec[Num], start: f64) -> Vec[Num] {
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..data.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 and n_lt(data[order[j]], data[order[j - 1]]) {
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut result: Vec[Num] = Vec.filled(data.len(), Num.I(0));
+    let mut i = start - 1.0;
+    let mut g = 0;
+    while g < order.len() {
+        let mut end = g + 1;
+        while end < order.len() and n_eq(data[order[end]], data[order[g]]) {
+            end += 1;
+        }
+        let size = end - g;
+        let r = i + (size + 1) as f64 / 2.0;
+        for k in g..end {
+            result[order[k]] = Num.F(r);
+        }
+        i += size as f64;
+        g = end;
+    }
+    result
+}
+
+// _sqrtprod: sqrt(x * y) with a differential correction
+fn sqrtprod(x: f64, y: f64) -> f64 {
+    let h = (x * y).sqrt();
+    if not is_finite(h) {
+        if is_inf(h) and not is_inf(x) and not is_inf(y) {
+            let scale = pow2f(-512);
+            return sqrtprod(scale * x, scale * y) / scale;
+        }
+        return h;
+    }
+    if h == 0.0 {
+        if x != 0.0 and y != 0.0 {
+            let scale = pow2f(537);
+            return sqrtprod(scale * x, scale * y) / scale;
+        }
+        return h;
+    }
+    let d = sumprod_f(vec![x, h], vec![y, -h]);
+    h + d / (2.0 * h)
+}
+
+fn correlation(x: ref Vec[Num], y: ref Vec[Num], method: ref String) -> Result[Num, Exc] {
+    let n = x.len();
+    if y.len() != n {
+        return Err(stat_err("correlation requires that both inputs have same number of data points"));
+    }
+    if n < 2 {
+        return Err(stat_err("correlation requires at least two data points"));
+    }
+    if method != "linear" and method != "ranked" {
+        return Err(exc("ValueError", f"Unknown method: {repr_str(method)}"));
+    }
+    let (a, b) = if method == "ranked" {
+        let start = (n - 1) as f64 / -2.0;
+        (rank(x, start), rank(y, start))
+    } else {
+        (deviations(x)?, deviations(y)?)
+    };
+    let sxy = to_f(sumprod(a, b)?);
+    let sxx = to_f(sumprod(a, a)?);
+    let syy = to_f(sumprod(b, b)?);
+    let den = sqrtprod(sxx, syy);
+    if den == 0.0 {
+        return Err(stat_err("at least one of the inputs is constant"));
+    }
+    Ok(Num.F(sxy / den))
+}
+
+struct Fit {
+    slope: f64,
+    intercept: f64,
+}
+
+fn show_fit(f: ref Fit) -> String {
+    f"LinearRegression(slope={repr_f(f.slope)}, intercept={repr_f(f.intercept)})"
+}
+
+fn linear_regression(x: ref Vec[Num], y: ref Vec[Num], proportional: bool) -> Result[Fit, Exc] {
+    let n = x.len();
+    if y.len() != n {
+        return Err(stat_err("linear regression requires that both inputs have same number of data points"));
+    }
+    if n < 2 {
+        return Err(stat_err("linear regression requires at least two data points"));
+    }
+    let mut xbar = 0.0;
+    let mut ybar = 0.0;
+    let mut a = x.clone();
+    let mut b = y.clone();
+    if not proportional {
+        xbar = fsum(floats(x))? / n as f64;
+        ybar = fsum(floats(y))? / n as f64;
+        a = deviations(x)?;
+        b = deviations(y)?;
+    }
+    let sxy = to_f(sumprod(a, b)?) + 0.0;
+    let sxx = to_f(sumprod(a, a)?);
+    if sxx == 0.0 {
+        return Err(stat_err("x is constant"));
+    }
+    let slope = sxy / sxx;
+    let intercept = if proportional { 0.0 } else { ybar - slope * xbar };
+    Ok(Fit { slope: slope, intercept: intercept })
+}
+// ------------------------------------------------------------ NormalDist
+
+struct NormalDist {
+    mu: f64,
+    sigma: f64,
+}
+
+fn normal_dist(mu: f64, sigma: f64) -> Result[NormalDist, Exc] {
+    if sigma < 0.0 {
+        return Err(stat_err("sigma must be non-negative"));
+    }
+    Ok(NormalDist { mu: mu, sigma: sigma })
+}
+
+fn from_samples(data: ref Vec[Num]) -> Result[NormalDist, Exc] {
+    let (mu, sigma) = mean_stdev(data)?;
+    normal_dist(mu, sigma)
+}
+
+fn nd_repr(d: ref NormalDist) -> String {
+    f"NormalDist(mu={repr_f(d.mu)}, sigma={repr_f(d.sigma)})"
+}
+
+const TAU: f64 = 6.283185307179586;
+
+impl NormalDist {
+    fn variance(ref self) -> f64 {
+        self.sigma * self.sigma
+    }
+
+    fn pdf(ref self, x: f64) -> Result[f64, Exc] {
+        let variance = self.sigma * self.sigma;
+        if variance == 0.0 {
+            return Err(stat_err("pdf() not defined when sigma is zero"));
+        }
+        let diff = x - self.mu;
+        Ok((diff * diff / (-2.0 * variance)).exp() / (TAU * variance).sqrt())
+    }
+
+    fn inv_cdf(ref self, p: f64) -> Result[f64, Exc] {
+        if p <= 0.0 or p >= 1.0 {
+            return Err(stat_err("p must be in the range 0.0 < p < 1.0"));
+        }
+        Ok(normal_inv_cdf(p, self.mu, self.sigma))
+    }
+
+    fn quantiles(ref self, n: i64) -> Result[Vec[f64], Exc] {
+        let mut out: Vec[f64] = Vec.new();
+        for i in 1..n {
+            out.push(self.inv_cdf(i as f64 / n as f64)?);
+        }
+        Ok(out)
+    }
+
+    fn zscore(ref self, x: f64) -> Result[f64, Exc] {
+        if self.sigma == 0.0 {
+            return Err(stat_err("zscore() not defined when sigma is zero"));
+        }
+        Ok((x - self.mu) / self.sigma)
+    }
+}
+
+// Wichura's AS241, the rational approximation statistics uses
+fn normal_inv_cdf(p: f64, mu: f64, sigma: f64) -> f64 {
+    let q = p - 0.5;
+    if fabs(q) <= 0.425 {
+        let r = 0.180625 - q * q;
+        let num = (((((((2.5090809287301226727e+3 * r +
+                         3.3430575583588128105e+4) * r +
+                         6.7265770927008700853e+4) * r +
+                         4.5921953931549871457e+4) * r +
+                         1.3731693765509461125e+4) * r +
+                         1.9715909503065514427e+3) * r +
+                         1.3314166789178437745e+2) * r +
+                         3.3871328727963666080e+0) * q;
+        let den = (((((((5.2264952788528545610e+3 * r +
+                         2.8729085735721942674e+4) * r +
+                         3.9307895800092710610e+4) * r +
+                         2.1213794301586595867e+4) * r +
+                         5.3941960214247511077e+3) * r +
+                         6.8718700749205790830e+2) * r +
+                         4.2313330701600911252e+1) * r +
+                         1.0);
+        let x = num / den;
+        return mu + (x * sigma);
+    }
+    let mut r = if q <= 0.0 { p } else { 1.0 - p };
+    r = (-(r.ln())).sqrt();
+    let mut num = 0.0;
+    let mut den = 0.0;
+    if r <= 5.0 {
+        r = r - 1.6;
+        num = (((((((7.74545014278341407640e-4 * r +
+                     2.27238449892691845833e-2) * r +
+                     2.41780725177450611770e-1) * r +
+                     1.27045825245236838258e+0) * r +
+                     3.64784832476320460504e+0) * r +
+                     5.76949722146069140550e+0) * r +
+                     4.63033784615654529590e+0) * r +
+                     1.42343711074968357734e+0);
+        den = (((((((1.05075007164441684324e-9 * r +
+                     5.47593808499534494600e-4) * r +
+                     1.51986665636164571966e-2) * r +
+                     1.48103976427480074590e-1) * r +
+                     6.89767334985100004550e-1) * r +
+                     1.67638483018380384940e+0) * r +
+                     2.05319162663775882187e+0) * r +
+                     1.0);
+    } else {
+        r = r - 5.0;
+        num = (((((((2.01033439929228813265e-7 * r +
+                     2.71155556874348757815e-5) * r +
+                     1.24266094738807843860e-3) * r +
+                     2.65321895265761230930e-2) * r +
+                     2.96560571828504891230e-1) * r +
+                     1.78482653991729133580e+0) * r +
+                     5.46378491116411436990e+0) * r +
+                     6.65790464350110377720e+0);
+        den = (((((((2.04426310338993978564e-15 * r +
+                     1.42151175831644588870e-7) * r +
+                     1.84631831751005468180e-5) * r +
+                     7.86869131145613259100e-4) * r +
+                     1.48753612908506148525e-2) * r +
+                     1.36929880922735805310e-1) * r +
+                     5.99832206555887937690e-1) * r +
+                     1.0);
+    }
+    let mut x = num / den;
+    if q < 0.0 {
+        x = -x;
+    }
+    mu + (x * sigma)
+}
+// ------------------------------------------------------------ the programs
+
+struct Row {
+    lineno: i64,
+    cells: Vec[String],
+}
+
+fn read_csv(path: ref String) -> Result[Vec[Row], Exc] {
+    let text = match fs.read_to_string(f"data/{path}") {
+        Ok(s) => s,
+        Err(_) => return Err(exc("FileNotFoundError", f"[Errno 2] No such file or directory: {repr_str(path)}")),
+    };
+    let lines = split_on(text, b'\n');
+    let mut rows: Vec[Row] = Vec.new();
+    for i in 1..lines.len() {
+        if lines[i].len() > 0 {
+            rows.push(Row { lineno: i + 1, cells: split_on(lines[i], b',') });
+        }
+    }
+    Ok(rows)
+}
+
+fn number(text: ref String) -> Option[Num] {
+    match token(text) {
+        Num.S(_) => None,
+        v => Some(v),
+    }
+}
+
+fn num_of(text: ref String) -> Num {
+    match number(text) {
+        Some(v) => v,
+        None => Num.F(0.0 / 0.0),
+    }
+}
+
+fn smallest(xs: ref Vec[Num]) -> Num {
+    let mut best = xs[0].clone();
+    for x in xs.iter() {
+        if n_lt(x, best) {
+            best = x.clone();
+        }
+    }
+    best
+}
+
+fn largest(xs: ref Vec[Num]) -> Num {
+    let mut best = xs[0].clone();
+    for x in xs.iter() {
+        if n_lt(best, x) {
+            best = x.clone();
+        }
+    }
+    best
+}
+
+fn ffloats(xs: ref Vec[f64]) -> Vec[Num] {
+    let mut out: Vec[Num] = Vec.new();
+    for x in xs.iter() {
+        out.push(Num.F(*x));
+    }
+    out
+}
+
+// rows grouped by a key, in first-seen order
+struct Groups {
+    keys: Vec[String],
+    vals: Vec[Vec[Num]],
+}
+
+fn groups_new() -> Groups {
+    Groups { keys: Vec.new(), vals: Vec.new() }
+}
+
+impl Groups {
+    fn add(mut ref self, key: ref String, v: own Num) {
+        for i in 0..self.keys.len() {
+            if self.keys[i] == *key {
+                self.vals[i].push(v);
+                return;
+            }
+        }
+        self.keys.push(key.clone());
+        self.vals.push(vec![v]);
+    }
+}
+
+fn latency(path: ref String, out: mut ref String) -> Result[(), Exc] {
+    let mut groups = groups_new();
+    for row in read_csv(path)?.iter() {
+        match number(row.cells[1]) {
+            Some(v) => groups.add(row.cells[0], v),
+            None => emit(mut out, f"line {row.lineno}: {row.cells[0]} has no number ({repr_str(row.cells[1])})"),
+        }
+    }
+    let mut every: Vec[Num] = Vec.new();
+    for g in 0..groups.keys.len() {
+        let xs = groups.vals[g].clone();
+        for x in xs.iter() {
+            every.push(x.clone());
+        }
+        emit(mut out, f"{groups.keys[g]}: {xs.len()} requests");
+        emit(mut out, f"  mean {repr_num(mean(xs)?)}, median {repr_num(median(xs)?)}, fastest {repr_num(smallest(xs))}, slowest {repr_num(largest(xs))}");
+        if xs.len() < 2 {
+            emit(mut out, "  too few requests for a spread");
+            continue;
+        }
+        let q = quantiles(xs, 20, "exclusive")?;
+        emit(mut out, f"  p50 {repr_num(q[9])}, p90 {repr_num(q[17])}, p95 {repr_num(q[18])}");
+        let nd = from_samples(xs)?;
+        emit(mut out, f"  stdev {repr_num(stdev(xs, None)?)}, normal fit {nd_repr(nd)}");
+        let mut outliers: Vec[String] = Vec.new();
+        for x in xs.iter() {
+            if fabs(nd.zscore(to_f(x))?) > 2.5 {
+                outliers.push(repr_num(x));
+            }
+        }
+        let shown = if outliers.len() == 0 { "none".to_string() } else { join(outliers, ", ") };
+        emit(mut out, f"  outliers: {shown}");
+    }
+    let p = quantiles(every, 100, "inclusive")?;
+    emit(mut out, f"overall: {every.len()} requests, fmean {repr_num(fmean(every, None)?)}, median_high {repr_num(median_high(every)?)}, p99 {repr_num(p[98])}");
+    Ok(())
+}
+
+fn abtest(path: ref String, out: mut ref String) -> Result[(), Exc] {
+    let mut groups = groups_new();
+    for row in read_csv(path)?.iter() {
+        groups.add(row.cells[1], num_of(row.cells[2]));
+    }
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..groups.keys.len() {
+        order.push(i);
+    }
+    for i in 1..order.len() {
+        let mut j = i;
+        while j > 0 and groups.keys[order[j]] < groups.keys[order[j - 1]] {
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut a: Vec[Num] = Vec.new();
+    let mut b: Vec[Num] = Vec.new();
+    for k in order.iter() {
+        let xs = groups.vals[*k].clone();
+        let mut paid = 0;
+        for x in xs.iter() {
+            if to_f(x) != 0.0 {
+                paid += 1;
+            }
+        }
+        emit(mut out, f"{groups.keys[*k]}: {xs.len()} visitors, {paid} paid ({paid * 1000 / xs.len()} per mille), mean {repr_num(mean(xs)?)}, median {repr_num(median(xs)?)}, stdev {repr_num(stdev(xs, None)?)}");
+        emit(mut out, f"  quartiles {repr_list(quantiles(xs, 4, "exclusive")?)}");
+        if groups.keys[*k] == "A" {
+            a = xs;
+        } else if groups.keys[*k] == "B" {
+            b = xs;
+        }
+    }
+    let ma = mean(a)?;
+    let mb = mean(b)?;
+    let va = to_f(n_div(variance(a, None)?, Num.I(a.len()))?);
+    let vb = to_f(n_div(variance(b, None)?, Num.I(b.len()))?);
+    let se = (va + vb).sqrt();
+    let diff = to_f(n_sub(mb, ma));
+    let z = normal_dist(0.0, 1.0)?.inv_cdf(0.975)?;
+    let lo = diff - z * se;
+    let hi = diff + z * se;
+    let df = (va + vb) * (va + vb) / (va * va / (a.len() - 1) as f64 + vb * vb / (b.len() - 1) as f64);
+    emit(mut out, f"B - A: {repr_f(diff)}, standard error {repr_f(se)}, Welch t {repr_f(diff / se)} with {repr_f(df)} degrees of freedom");
+    emit(mut out, f"95% interval (z {repr_f(z)}): {repr_f(lo)} to {repr_f(hi)}");
+    if lo > 0.0 {
+        emit(mut out, "verdict: B earns more");
+    } else if hi < 0.0 {
+        emit(mut out, "verdict: A earns more");
+    } else {
+        emit(mut out, "verdict: no clear winner yet");
+    }
+    let mut paying: Vec[Num] = Vec.new();
+    for x in a.iter() {
+        if to_f(x) != 0.0 {
+            paying.push(x.clone());
+        }
+    }
+    for x in b.iter() {
+        if to_f(x) != 0.0 {
+            paying.push(x.clone());
+        }
+    }
+    let fit = from_samples(paying)?;
+    emit(mut out, f"paying visitors: {nd_repr(fit)}, quartiles {repr_floats(fit.quantiles(4)?)}");
+    Ok(())
+}
+
+fn capacity(path: ref String, slo: i64, out: mut ref String) -> Result[(), Exc] {
+    let mut xs: Vec[Num] = Vec.new();
+    let mut ys: Vec[Num] = Vec.new();
+    for row in read_csv(path)?.iter() {
+        xs.push(num_of(row.cells[0]));
+        ys.push(num_of(row.cells[1]));
+    }
+    emit(mut out, f"{xs.len()} load steps, {repr_num(xs[0])} to {repr_num(xs[xs.len() - 1])} rps");
+    emit(mut out, f"covariance {repr_num(covariance(xs, ys)?)}");
+    emit(mut out, f"correlation {repr_num(correlation(xs, ys, "linear")?)}, ranked {repr_num(correlation(xs, ys, "ranked")?)}");
+    let fit = linear_regression(xs, ys, false)?;
+    emit(mut out, f"fit: p99 = {repr_f(fit.slope)} * rps + {repr_f(fit.intercept)}");
+    let cap = (slo as f64 - fit.intercept) / fit.slope;
+    if cap > 0.0 {
+        emit(mut out, f"capacity at {slo} ms: {repr_f(cap)} rps");
+    } else {
+        emit(mut out, f"an SLO of {slo} ms is below the fit's floor of {repr_f(fit.intercept)} ms");
+    }
+    let prop = linear_regression(xs, ys, true)?;
+    emit(mut out, f"through the origin: {repr_f(prop.slope)} ms per rps, capacity {repr_f(slo as f64 / prop.slope)} rps");
+    let mut res: Vec[f64] = Vec.new();
+    for i in 0..xs.len() {
+        res.push(to_f(ys[i]) - (fit.slope * to_f(xs[i]) + fit.intercept));
+    }
+    let rn = ffloats(res);
+    let s = to_f(stdev(rn, None)?);
+    let mut worst = 0;
+    for i in 0..res.len() {
+        if res[i] > res[worst] {
+            worst = i;
+        }
+    }
+    emit(mut out, f"residuals: mean {repr_num(fmean(rn, None)?)}, stdev {repr_f(s)}, worst {repr_f(res[worst])} at {repr_num(xs[worst])} rps");
+    let mut knee: Vec[String] = Vec.new();
+    for i in 0..res.len() {
+        if res[i] > 2.0 * s {
+            knee.push(repr_num(xs[i]));
+        }
+    }
+    let shown = if knee.len() == 0 { "nowhere".to_string() } else { join(knee, ", ") };
+    emit(mut out, f"off the line from: {shown}");
+    Ok(())
+}
+
+fn survey(path: ref String, out: mut ref String) -> Result[(), Exc] {
+    let rows = read_csv(path)?;
+    let mut ages: Vec[Num] = Vec.new();
+    let mut colors: Vec[Num] = Vec.new();
+    let mut km: Vec[Num] = Vec.new();
+    let mut kmh: Vec[Num] = Vec.new();
+    let mut raises: Vec[Num] = Vec.new();
+    let mut mids: Vec[Num] = Vec.new();
+    for r in rows.iter() {
+        let age = num_of(r.cells[1]);
+        if let Num.I(a) = age {
+            mids.push(Num.I(a / 10 * 10 + 5));
+        }
+        ages.push(age);
+        colors.push(Num.S(r.cells[2].clone()));
+        km.push(num_of(r.cells[3]));
+        kmh.push(num_of(r.cells[4]));
+        raises.push(num_of(r.cells[5]));
+    }
+    emit(mut out, f"respondents: {rows.len()}");
+    emit(mut out, f"age: mean {repr_num(mean(ages)?)}, median {repr_num(median(ages)?)}, by decade {repr_num(median_grouped(mids, Num.I(10))?)}, quartiles {repr_list(quantiles(ages, 4, "inclusive")?)}");
+    emit(mut out, f"decade mode {repr_num(mode(mids)?)}, low {repr_num(median_low(mids)?)}, high {repr_num(median_high(mids)?)}");
+    emit(mut out, f"favourite colour: {repr_num(mode(colors)?)}, all modes {repr_list(multimode(colors))}");
+    emit(mut out, f"colours in the middle: {repr_num(median_low(colors)?)} and {repr_num(median_high(colors)?)}");
+    emit(mut out, f"commute: mean {repr_num(fmean(km, None)?)} km, median {repr_num(median(km)?)} km, quartiles {repr_list(quantiles(km, 4, "exclusive")?)}");
+    let w = Some(km.clone());
+    emit(mut out, f"average speed {repr_num(harmonic_mean(kmh, w)?)} km/h by distance, {repr_num(harmonic_mean(kmh, None)?)} per commuter, {repr_num(fmean(kmh, w)?)} arithmetic");
+    let mut factors: Vec[Num] = Vec.new();
+    for r in raises.iter() {
+        factors.push(Num.F(1.0 + to_f(r) / 100.0));
+    }
+    let g = to_f(geometric_mean(factors)?);
+    emit(mut out, f"raises: mean {repr_num(mean(raises)?)}%, typical {repr_f((g - 1.0) * 100.0)}% (geometric mean {repr_f(g)})");
+    emit(mut out, f"raises: stdev {repr_num(stdev(raises, None)?)}, pstdev {repr_num(pstdev(raises, None)?)}, variance {repr_num(variance(raises, None)?)}");
+    emit(mut out, f"age against commute: correlation {repr_num(correlation(ages, km, "linear")?)}, ranked {repr_num(correlation(ages, km, "ranked")?)}");
+    Ok(())
+}
+
+fn sensor_stat(name: Str, xs: ref Vec[Num]) -> Result[String, Exc] {
+    if name == "mean" {
+        return Ok(repr_num(mean(xs)?));
+    }
+    if name == "fmean" {
+        return Ok(repr_num(fmean(xs, None)?));
+    }
+    if name == "variance" {
+        return Ok(repr_num(variance(xs, None)?));
+    }
+    if name == "stdev" {
+        return Ok(repr_num(stdev(xs, None)?));
+    }
+    if name == "pvariance" {
+        return Ok(repr_num(pvariance(xs, None)?));
+    }
+    if name == "pstdev" {
+        return Ok(repr_num(pstdev(xs, None)?));
+    }
+    if name == "geometric_mean" {
+        return Ok(repr_num(geometric_mean(xs)?));
+    }
+    if name == "harmonic_mean" {
+        return Ok(repr_num(harmonic_mean(xs, None)?));
+    }
+    Ok(nd_repr(from_samples(xs)?))
+}
+
+fn sensors(path: ref String, out: mut ref String) -> Result[(), Exc] {
+    let mut groups = groups_new();
+    let mut bad = 0;
+    for row in read_csv(path)?.iter() {
+        match float_text(row.cells[1]) {
+            Some(v) => groups.add(row.cells[0], Num.F(v)),
+            None => {
+                emit(mut out, f"line {row.lineno}: {row.cells[0]} sent {repr_str(row.cells[1])}");
+                bad += 1;
+            }
+        }
+    }
+    let names = vec!["mean", "fmean", "variance", "stdev", "pvariance", "pstdev", "geometric_mean", "harmonic_mean", "from_samples"];
+    for g in 0..groups.keys.len() {
+        let xs = groups.vals[g].clone();
+        emit(mut out, f"{groups.keys[g]}: {xs.len()} readings");
+        for name in names.iter() {
+            match sensor_stat(*name, xs) {
+                Ok(s) => emit(mut out, f"  {name} {s}"),
+                Err(e) => emit(mut out, f"  {name} {show_exc(e)}"),
+            }
+        }
+    }
+    emit(mut out, f"{bad} bad readings");
+    Ok(())
+}
+
+fn growth(path: ref String, out: mut ref String) -> Result[(), Exc] {
+    let rows = read_csv(path)?;
+    let mut months: Vec[String] = Vec.new();
+    let mut revs: Vec[f64] = Vec.new();
+    for r in rows.iter() {
+        months.push(r.cells[0].clone());
+        revs.push(to_f(num_of(r.cells[1])));
+    }
+    let mut ratios: Vec[f64] = Vec.new();
+    for i in 1..revs.len() {
+        ratios.push(revs[i] / revs[i - 1]);
+    }
+    let rn = ffloats(ratios);
+    let revn = ffloats(revs);
+    let g = to_f(geometric_mean(rn)?);
+    emit(mut out, f"{revs.len()} months, {months[0]} to {months[months.len() - 1]}");
+    emit(mut out, f"revenue: mean {repr_num(mean(revn)?)}, median {repr_num(median(revn)?)}, quartiles {repr_list(quantiles(revn, 4, "inclusive")?)}");
+    emit(mut out, f"monthly growth: geometric {repr_f(g)}, arithmetic {repr_num(fmean(rn, None)?)}");
+    let mut best = 0;
+    let mut worst = 0;
+    for i in 0..ratios.len() {
+        if ratios[i] > ratios[best] {
+            best = i;
+        }
+        if ratios[i] < ratios[worst] {
+            worst = i;
+        }
+    }
+    emit(mut out, f"best month {months[best + 1]} ({repr_f(ratios[best])}), worst {months[worst + 1]} ({repr_f(ratios[worst])})");
+    let mut one: Vec[Num] = Vec.new();
+    let mut two: Vec[Num] = Vec.new();
+    for i in 0..revn.len() {
+        if i < 12 {
+            one.push(revn[i].clone());
+        } else {
+            two.push(revn[i].clone());
+        }
+    }
+    emit(mut out, f"year one fmean {repr_num(fmean(one, None)?)}, year two fmean {repr_num(fmean(two, None)?)}");
+    let nd = from_samples(rn)?;
+    emit(mut out, f"growth fit {nd_repr(nd)}, 90% band {repr_f(nd.inv_cdf(0.05)?)} to {repr_f(nd.inv_cdf(0.95)?)}");
+    emit(mut out, f"next month forecast {repr_f(revs[revs.len() - 1] * g)}");
+    emit(mut out, f"growth deciles {repr_list(quantiles(rn, 10, "exclusive")?)}");
+    Ok(())
+}
+// ------------------------------------------------------------ the jobs
+
+struct Call {
+    args: Vec[Vec[Num]],
+    weights: Option[Vec[Num]],
+    interval: Num,
+    n: i64,
+    method: Option[String],
+    xbar: Option[Num],
+    proportional: bool,
+}
+
+fn parse_call(fields: ref Vec[String]) -> Call {
+    let mut c = Call { args: Vec.new(), weights: None, interval: Num.F(1.0), n: 4, method: None, xbar: None, proportional: false };
+    for f in fields.iter() {
+        let eq = match f.find("=") {
+            Some(i) => i,
+            None => -1,
+        };
+        let key = if eq >= 0 { f.substring(0, eq).to_string() } else { "".to_string() };
+        let val = if eq >= 0 { f.substring(eq + 1, f.len()).to_string() } else { "".to_string() };
+        if key == "weights" {
+            c.weights = Some(values(val));
+        } else if key == "interval" {
+            c.interval = token(val);
+        } else if key == "n" {
+            c.n = match token(val) {
+                Num.I(i) => i,
+                _ => 0,
+            };
+        } else if key == "method" {
+            c.method = Some(val);
+        } else if key == "xbar" or key == "mu" {
+            c.xbar = Some(token(val));
+        } else if key == "proportional" {
+            c.proportional = val == "1";
+        } else {
+            c.args.push(values(f));
+        }
+    }
+    c
+}
+
+fn run_call(name: ref String, c: ref Call) -> Result[String, Exc] {
+    let x = c.args[0].clone();
+    let method = match c.method {
+        Some(ref m) => m.clone(),
+        None => if name == "quantiles" { "exclusive".to_string() } else { "linear".to_string() },
+    };
+    if name == "mean" {
+        return Ok(repr_num(mean(x)?));
+    }
+    if name == "fmean" {
+        return Ok(repr_num(fmean(x, c.weights)?));
+    }
+    if name == "geometric_mean" {
+        return Ok(repr_num(geometric_mean(x)?));
+    }
+    if name == "harmonic_mean" {
+        return Ok(repr_num(harmonic_mean(x, c.weights)?));
+    }
+    if name == "median" {
+        return Ok(repr_num(median(x)?));
+    }
+    if name == "median_low" {
+        return Ok(repr_num(median_low(x)?));
+    }
+    if name == "median_high" {
+        return Ok(repr_num(median_high(x)?));
+    }
+    if name == "median_grouped" {
+        return Ok(repr_num(median_grouped(x, c.interval)?));
+    }
+    if name == "mode" {
+        return Ok(repr_num(mode(x)?));
+    }
+    if name == "multimode" {
+        return Ok(repr_list(multimode(x)));
+    }
+    if name == "quantiles" {
+        return Ok(repr_list(quantiles(x, c.n, method)?));
+    }
+    if name == "variance" {
+        return Ok(repr_num(variance(x, c.xbar)?));
+    }
+    if name == "pvariance" {
+        return Ok(repr_num(pvariance(x, c.xbar)?));
+    }
+    if name == "stdev" {
+        return Ok(repr_num(stdev(x, c.xbar)?));
+    }
+    if name == "pstdev" {
+        return Ok(repr_num(pstdev(x, c.xbar)?));
+    }
+    if name == "fsum" {
+        return Ok(repr_f(fsum(floats(x))?));
+    }
+    if name == "hypot" {
+        return Ok(repr_f(hypot(floats(x))));
+    }
+    let y = c.args[1].clone();
+    if name == "covariance" {
+        return Ok(repr_num(covariance(x, y)?));
+    }
+    if name == "correlation" {
+        return Ok(repr_num(correlation(x, y, method)?));
+    }
+    if name == "linear_regression" {
+        return Ok(show_fit(linear_regression(x, y, c.proportional)?));
+    }
+    Ok(repr_num(sumprod(x, y)?))
+}
+
+fn call_job(job: ref Vec[String]) -> String {
+    let mut fields: Vec[String] = Vec.new();
+    for i in 1..job.len() {
+        fields.push(job[i].clone());
+    }
+    let c = parse_call(fields);
+    match run_call(job[0], c) {
+        Ok(s) => s,
+        Err(e) => show_exc(e),
+    }
+}
+
+fn bool_repr(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn op_arg(op: ref String) -> (String, String) {
+    match op.find(":") {
+        Some(i) => (op.substring(0, i).to_string(), op.substring(i + 1, op.len()).to_string()),
+        None => (op.clone(), "".to_string()),
+    }
+}
+
+fn normal_op(d: ref NormalDist, op: ref String) -> Result[String, Exc] {
+    let (name, arg) = op_arg(op);
+    if name == "repr" {
+        return Ok(nd_repr(d));
+    }
+    if name == "mean" or name == "median" or name == "mode" {
+        return Ok(repr_f(d.mu));
+    }
+    if name == "stdev" {
+        return Ok(repr_f(d.sigma));
+    }
+    if name == "variance" {
+        return Ok(repr_f(d.variance()));
+    }
+    let c = token(arg);
+    if name == "pdf" {
+        return Ok(repr_f(d.pdf(to_f(c))?));
+    }
+    if name == "inv_cdf" {
+        return Ok(repr_f(d.inv_cdf(to_f(c))?));
+    }
+    if name == "quantiles" {
+        let n = match c {
+            Num.I(i) => i,
+            _ => 0,
+        };
+        return Ok(repr_floats(d.quantiles(n)?));
+    }
+    if name == "zscore" {
+        return Ok(repr_f(d.zscore(to_f(c))?));
+    }
+    if name == "add_nd" or name == "sub_nd" or name == "eq" {
+        let v = values(arg);
+        let other = normal_dist(to_f(v[0]), to_f(v[1]))?;
+        if name == "eq" {
+            return Ok(bool_repr(d.mu == other.mu and d.sigma == other.sigma));
+        }
+        let mu = if name == "add_nd" { d.mu + other.mu } else { d.mu - other.mu };
+        return Ok(nd_repr(normal_dist(mu, hypot(vec![d.sigma, other.sigma]))?));
+    }
+    let cf = to_f(c);
+    if name == "add" {
+        return Ok(nd_repr(normal_dist(d.mu + cf, d.sigma)?));
+    }
+    if name == "sub" {
+        return Ok(nd_repr(normal_dist(d.mu - cf, d.sigma)?));
+    }
+    if name == "rsub" {
+        return Ok(nd_repr(normal_dist(-(d.mu - cf), d.sigma)?));
+    }
+    if name == "mul" {
+        return Ok(nd_repr(normal_dist(d.mu * cf, d.sigma * fabs(cf))?));
+    }
+    if name == "div" {
+        let mu = to_f(n_div(Num.F(d.mu), c)?);
+        return Ok(nd_repr(normal_dist(mu, d.sigma / fabs(cf))?));
+    }
+    Ok(nd_repr(normal_dist(-d.mu, d.sigma)?))
+}
+
+fn normal_job(job: ref Vec[String], out: mut ref String) {
+    let first = job[0].clone();
+    let made = if first.starts_with("from=") {
+        from_samples(values(first.substring(5, first.len()).to_string()))
+    } else {
+        let v = values(first);
+        normal_dist(to_f(v[0]), to_f(v[1]))
+    };
+    let d = match made {
+        Ok(d) => d,
+        Err(e) => {
+            emit(mut out, f"  {show_exc(e)}");
+            return;
+        }
+    };
+    for i in 1..job.len() {
+        match normal_op(d, job[i]) {
+            Ok(s) => emit(mut out, f"  {job[i]}: {s}"),
+            Err(e) => emit(mut out, f"  {job[i]}: {show_exc(e)}"),
+        }
+    }
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn write_data_files() -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all("data") {
+        return Err(f"cannot create data: {e}");
+    }
+    for file in data_files() {
+        if let Err(e) = fs.write(f"data/{file.path}", file.body.clone()) {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn run_job(kind: ref String, a: ref Vec[String], out: mut ref String) -> Result[(), Exc] {
+    if kind == "call" {
+        emit(mut out, f"  {call_job(a)}");
+    } else if kind == "normal" {
+        normal_job(a, mut out);
+    } else if kind == "latency" {
+        latency(a[0], mut out)?;
+    } else if kind == "abtest" {
+        abtest(a[0], mut out)?;
+    } else if kind == "capacity" {
+        let slo = match token(a[1]) {
+            Num.I(i) => i,
+            _ => 0,
+        };
+        capacity(a[0], slo, mut out)?;
+    } else if kind == "survey" {
+        survey(a[0], mut out)?;
+    } else if kind == "sensors" {
+        sensors(a[0], mut out)?;
+    } else if kind == "growth" {
+        growth(a[0], mut out)?;
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let text = match fs.read_to_string("data/jobs.tsv") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    };
+    let mut out = String.new();
+    for line in lines_of(text).iter() {
+        let job = split_on(line, b'\t');
+        emit(mut out, f"== {join(job, " ")}");
+        let mut rest: Vec[String] = Vec.new();
+        for i in 1..job.len() {
+            rest.push(job[i].clone());
+        }
+        if let Err(e) = run_job(job[0], rest, mut out) {
+            emit(mut out, show_exc(e));
+        }
+    }
+    print(out);
+}
+
+// The files under data/, in name order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("visitor,variant,revenue\n");
+    t.push_str("v0000,A,21.43\n");
+    t.push_str("v0001,A,24.83\n");
+    t.push_str("v0002,B,0\n");
+    t.push_str("v0003,A,26.75\n");
+    t.push_str("v0004,B,29.51\n");
+    t.push_str("v0005,B,42.84\n");
+    t.push_str("v0006,B,37.77\n");
+    t.push_str("v0007,B,0\n");
+    t.push_str("v0008,A,28.78\n");
+    t.push_str("v0009,A,0\n");
+    t.push_str("v0010,B,0\n");
+    t.push_str("v0011,B,0\n");
+    t.push_str("v0012,B,40.43\n");
+    t.push_str("v0013,A,32.56\n");
+    t.push_str("v0014,A,26.44\n");
+    t.push_str("v0015,A,0\n");
+    t.push_str("v0016,B,0\n");
+    t.push_str("v0017,B,27.03\n");
+    t.push_str("v0018,A,37.70\n");
+    t.push_str("v0019,A,32.88\n");
+    t.push_str("v0020,A,39.50\n");
+    t.push_str("v0021,B,38.89\n");
+    t.push_str("v0022,B,40.96\n");
+    t.push_str("v0023,B,42.23\n");
+    t.push_str("v0024,A,0\n");
+    t.push_str("v0025,B,38.77\n");
+    t.push_str("v0026,A,0\n");
+    t.push_str("v0027,B,33.12\n");
+    t.push_str("v0028,B,30.88\n");
+    t.push_str("v0029,B,0\n");
+    t.push_str("v0030,B,0\n");
+    t.push_str("v0031,A,0\n");
+    t.push_str("v0032,A,0\n");
+    t.push_str("v0033,B,0\n");
+    t.push_str("v0034,A,23.11\n");
+    t.push_str("v0035,B,27.85\n");
+    t.push_str("v0036,B,0\n");
+    t.push_str("v0037,B,33.91\n");
+    t.push_str("v0038,A,36.37\n");
+    t.push_str("v0039,A,26.21\n");
+    t.push_str("v0040,A,36.91\n");
+    t.push_str("v0041,A,0\n");
+    t.push_str("v0042,A,26.93\n");
+    t.push_str("v0043,B,34.10\n");
+    t.push_str("v0044,B,35.83\n");
+    t.push_str("v0045,B,36.64\n");
+    t.push_str("v0046,B,0\n");
+    t.push_str("v0047,B,0\n");
+    t.push_str("v0048,A,28.35\n");
+    t.push_str("v0049,B,0\n");
+    t.push_str("v0050,A,0\n");
+    t.push_str("v0051,B,27.39\n");
+    t.push_str("v0052,B,31.11\n");
+    t.push_str("v0053,A,0\n");
+    t.push_str("v0054,B,33.08\n");
+    t.push_str("v0055,B,34.91\n");
+    t.push_str("v0056,A,31.01\n");
+    t.push_str("v0057,B,0\n");
+    t.push_str("v0058,B,39.19\n");
+    t.push_str("v0059,B,0\n");
+    t.push_str("v0060,B,36.82\n");
+    t.push_str("v0061,B,27.84\n");
+    t.push_str("v0062,B,0\n");
+    t.push_str("v0063,B,32.56\n");
+    t.push_str("v0064,A,38.74\n");
+    t.push_str("v0065,A,0\n");
+    t.push_str("v0066,B,0\n");
+    t.push_str("v0067,A,0\n");
+    t.push_str("v0068,B,35.59\n");
+    t.push_str("v0069,A,22.66\n");
+    t.push_str("v0070,B,0\n");
+    t.push_str("v0071,B,40.11\n");
+    t.push_str("v0072,B,39.02\n");
+    t.push_str("v0073,A,27.21\n");
+    t.push_str("v0074,B,27.84\n");
+    t.push_str("v0075,A,20.86\n");
+    t.push_str("v0076,A,34.10\n");
+    t.push_str("v0077,A,0\n");
+    t.push_str("v0078,B,0\n");
+    t.push_str("v0079,B,31.17\n");
+    t.push_str("v0080,B,0\n");
+    t.push_str("v0081,A,24.76\n");
+    t.push_str("v0082,B,35.10\n");
+    t.push_str("v0083,A,0\n");
+    t.push_str("v0084,B,23.35\n");
+    t.push_str("v0085,B,31.80\n");
+    t.push_str("v0086,B,0\n");
+    t.push_str("v0087,B,38.66\n");
+    t.push_str("v0088,B,37.52\n");
+    t.push_str("v0089,B,31.54\n");
+    t.push_str("v0090,B,27.35\n");
+    t.push_str("v0091,B,37.18\n");
+    t.push_str("v0092,A,0\n");
+    t.push_str("v0093,B,24.61\n");
+    t.push_str("v0094,B,33.16\n");
+    t.push_str("v0095,A,30.10\n");
+    t.push_str("v0096,A,0\n");
+    t.push_str("v0097,A,24.21\n");
+    t.push_str("v0098,B,0\n");
+    t.push_str("v0099,B,0\n");
+    t.push_str("v0100,B,41.22\n");
+    t.push_str("v0101,B,41.91\n");
+    t.push_str("v0102,A,25.15\n");
+    t.push_str("v0103,B,0\n");
+    t.push_str("v0104,B,0\n");
+    t.push_str("v0105,A,0\n");
+    t.push_str("v0106,A,39.45\n");
+    t.push_str("v0107,A,32.07\n");
+    t.push_str("v0108,B,0\n");
+    t.push_str("v0109,B,0\n");
+    t.push_str("v0110,A,39.41\n");
+    t.push_str("v0111,A,23.54\n");
+    t.push_str("v0112,A,0\n");
+    t.push_str("v0113,B,39.85\n");
+    t.push_str("v0114,A,33.80\n");
+    t.push_str("v0115,A,21.31\n");
+    t.push_str("v0116,B,35.18\n");
+    t.push_str("v0117,B,28.88\n");
+    t.push_str("v0118,B,41.76\n");
+    t.push_str("v0119,A,32.43\n");
+    t.push_str("v0120,A,0\n");
+    t.push_str("v0121,A,0\n");
+    t.push_str("v0122,A,35.81\n");
+    t.push_str("v0123,B,0\n");
+    t.push_str("v0124,A,0\n");
+    t.push_str("v0125,B,0\n");
+    t.push_str("v0126,B,0\n");
+    t.push_str("v0127,B,0\n");
+    t.push_str("v0128,B,26.41\n");
+    t.push_str("v0129,B,0\n");
+    t.push_str("v0130,A,34.83\n");
+    t.push_str("v0131,B,26.55\n");
+    t.push_str("v0132,B,25.84\n");
+    t.push_str("v0133,B,38.81\n");
+    t.push_str("v0134,A,30.59\n");
+    t.push_str("v0135,A,20.19\n");
+    t.push_str("v0136,A,36.89\n");
+    t.push_str("v0137,A,36.52\n");
+    t.push_str("v0138,A,37.87\n");
+    t.push_str("v0139,B,36.07\n");
+    v.push(DataFile { path: "ab.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("month,revenue\n");
+    t.push_str("2025-01,11280.00\n");
+    t.push_str("2025-02,11516.88\n");
+    t.push_str("2025-03,11977.56\n");
+    t.push_str("2025-04,11390.65\n");
+    t.push_str("2025-05,11219.80\n");
+    t.push_str("2025-06,11747.13\n");
+    t.push_str("2025-07,12064.30\n");
+    t.push_str("2025-08,13560.27\n");
+    t.push_str("2025-09,15323.11\n");
+    t.push_str("2025-10,15246.49\n");
+    t.push_str("2025-11,16572.94\n");
+    t.push_str("2025-12,18561.69\n");
+    t.push_str("2026-01,21086.08\n");
+    t.push_str("2026-02,22604.27\n");
+    t.push_str("2026-03,21790.52\n");
+    t.push_str("2026-04,21006.06\n");
+    t.push_str("2026-05,20817.01\n");
+    t.push_str("2026-06,21025.18\n");
+    t.push_str("2026-07,20121.09\n");
+    t.push_str("2026-08,20181.46\n");
+    t.push_str("2026-09,22361.06\n");
+    t.push_str("2026-10,25089.10\n");
+    t.push_str("2026-11,28200.15\n");
+    t.push_str("2026-12,27213.15\n");
+    v.push(DataFile { path: "growth.csv".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("call\tmean\t1,2,3,4,4\n");
+    t.push_str("call\tmean\t1,2,3,4\n");
+    t.push_str("call\tmean\t2,4,6\n");
+    t.push_str("call\tmean\t0.1,0.2,0.3\n");
+    t.push_str("call\tmean\t3,2.25,4.5,-0.5,0.25\n");
+    t.push_str("call\tmean\t1e50,1,-1e50,1e50,1,-1e50\n");
+    t.push_str("call\tmean\t-0.0\n");
+    t.push_str("call\tmean\t-\n");
+    t.push_str("call\tmean\t1,nan,3\n");
+    t.push_str("call\tmean\tinf,1,-inf\n");
+    t.push_str("call\tmean\tinf,2\n");
+    t.push_str("call\tmean\t1000000000.1,1000000000.2,1000000000.3\n");
+    t.push_str("call\tfmean\t3.5,4.0,5.25\n");
+    t.push_str("call\tfmean\t85,92,83,91\tweights=0.20,0.20,0.30,0.30\n");
+    t.push_str("call\tfmean\t1,2,3\tweights=1,1,2\n");
+    t.push_str("call\tfmean\t-\n");
+    t.push_str("call\tfmean\t1,2\tweights=1\n");
+    t.push_str("call\tfmean\t1,2\tweights=1,-1\n");
+    t.push_str("call\tfmean\t1e308,1e308,-1e308\n");
+    t.push_str("call\tfmean\tinf,-inf\n");
+    t.push_str("call\tfmean\tnan,inf\n");
+    t.push_str("call\tfmean\t0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n");
+    t.push_str("call\tgeometric_mean\t54,24,36\n");
+    t.push_str("call\tgeometric_mean\t1.5,2.5,4\n");
+    t.push_str("call\tgeometric_mean\t1,0,4\n");
+    t.push_str("call\tgeometric_mean\t2,-1\n");
+    t.push_str("call\tgeometric_mean\t2,-1.5,3\n");
+    t.push_str("call\tgeometric_mean\t-\n");
+    t.push_str("call\tgeometric_mean\tnan,1\n");
+    t.push_str("call\tgeometric_mean\t0,inf\n");
+    t.push_str("call\tgeometric_mean\t2,inf\n");
+    t.push_str("call\tharmonic_mean\t40,60\n");
+    t.push_str("call\tharmonic_mean\t40,60\tweights=5,30\n");
+    t.push_str("call\tharmonic_mean\t2.5,3,10\n");
+    t.push_str("call\tharmonic_mean\t1,0,2\n");
+    t.push_str("call\tharmonic_mean\t1,-2,0\n");
+    t.push_str("call\tharmonic_mean\t5\n");
+    t.push_str("call\tharmonic_mean\t-1\n");
+    t.push_str("call\tharmonic_mean\t-\n");
+    t.push_str("call\tharmonic_mean\t1,2\tweights=1\n");
+    t.push_str("call\tharmonic_mean\t1,2\tweights=0,0\n");
+    t.push_str("call\tharmonic_mean\t1,2\tweights=1,-1\n");
+    t.push_str("call\tharmonic_mean\t0,2\tweights=0,1\n");
+    t.push_str("call\tharmonic_mean\t0.5\tweights=2\n");
+    t.push_str("call\tharmonic_mean\t3,nan\n");
+    t.push_str("call\tharmonic_mean\tinf,inf\n");
+    t.push_str("call\tmedian\t1,3,5\n");
+    t.push_str("call\tmedian\t1,3,5,7\n");
+    t.push_str("call\tmedian\t1,2.5\n");
+    t.push_str("call\tmedian\t-\n");
+    t.push_str("call\tmedian_low\t1,3,5,7\n");
+    t.push_str("call\tmedian_high\t1,3,5,7\n");
+    t.push_str("call\tmedian_low\tred,blue,green,blue\n");
+    t.push_str("call\tmedian_high\t-\n");
+    t.push_str("call\tmedian_grouped\t52,52,53,54\n");
+    t.push_str("call\tmedian_grouped\t1,3,3,5,7\n");
+    t.push_str("call\tmedian_grouped\t1,2,2,3,4,4,4,4,4,5\tinterval=2\n");
+    t.push_str("call\tmedian_grouped\t25,35,35,45,45,45,55\tinterval=10\n");
+    t.push_str("call\tmedian_grouped\t-\n");
+    t.push_str("call\tmode\t1,1,2,3,3,3,3,4\n");
+    t.push_str("call\tmode\tred,blue,blue,red,green,red,red\n");
+    t.push_str("call\tmode\t1,1.0,2\n");
+    t.push_str("call\tmode\t1.0,1,2\n");
+    t.push_str("call\tmode\tnan,nan,1\n");
+    t.push_str("call\tmode\t-\n");
+    t.push_str("call\tmultimode\ta,a,b,b,b,b,c,c,d,d,d,d,e,e,f,f,f,f,g,g\n");
+    t.push_str("call\tmultimode\t-\n");
+    t.push_str("call\tmultimode\t-0.0,0.0,1\n");
+    t.push_str("call\tmultimode\t3,1,2\n");
+    t.push_str("call\tquantiles\t105,129,87,86,111,111,89,81,108,92,110,100,75,105,103,109,76,119,99,91,103,129,106,101,84,111,74,87,86,103,103,106,86,111,75,87,102,121,111,88,89,101,106,95,103,107,101,81,109,104\tn=10\n");
+    t.push_str("call\tquantiles\t105,129,87,86,111,111,89,81,108,92,110,100,75,105,103,109,76,119,99,91,103,129,106,101,84,111,74,87,86,103,103,106,86,111,75,87,102,121,111,88,89,101,106,95,103,107,101,81,109,104\tn=10\tmethod=inclusive\n");
+    t.push_str("call\tquantiles\t105,129,87,86,111,111,89,81,108,92,110,100,75,105,103,109,76,119,99,91,103,129,106,101,84,111,74,87,86,103,103,106,86,111,75,87,102,121,111,88,89,101,106,95,103,107,101,81,109,104\n");
+    t.push_str("call\tquantiles\t1,2\tn=4\n");
+    t.push_str("call\tquantiles\t1,2\tn=4\tmethod=inclusive\n");
+    t.push_str("call\tquantiles\t5\tn=4\n");
+    t.push_str("call\tquantiles\t5\tn=1\n");
+    t.push_str("call\tquantiles\t-\n");
+    t.push_str("call\tquantiles\t1,2,3\tn=0\n");
+    t.push_str("call\tquantiles\t1,2,3\tmethod=median\n");
+    t.push_str("call\tquantiles\t1.5,2.5,10\tn=4\n");
+    t.push_str("call\tquantiles\t1,2,3,4,5\tn=3\tmethod=inclusive\n");
+    t.push_str("call\tvariance\t2.75,1.75,1.25,0.25,0.5,1.25,3.5\n");
+    t.push_str("call\tvariance\t2.75,1.75,1.25,0.25,0.5,1.25,3.5\txbar=1.6071428571428572\n");
+    t.push_str("call\tvariance\t1,2,3,4\n");
+    t.push_str("call\tvariance\t1,3,5,7\n");
+    t.push_str("call\tvariance\t1\n");
+    t.push_str("call\tvariance\tnan,1,2\n");
+    t.push_str("call\tvariance\tinf,1\n");
+    t.push_str("call\tvariance\t1000000000.1,1000000000.2,1000000000.3\n");
+    t.push_str("call\tvariance\t1e-5,2e-5,4e-5\n");
+    t.push_str("call\tpvariance\t0.0,0.25,0.25,1.25,1.5,1.75,2.75,3.25\n");
+    t.push_str("call\tpvariance\t1,3\n");
+    t.push_str("call\tpvariance\t1,2,3\tmu=2\n");
+    t.push_str("call\tpvariance\t2,4\tmu=3\n");
+    t.push_str("call\tpvariance\t1,2,4\tmu=2.5\n");
+    t.push_str("call\tpvariance\t-\n");
+    t.push_str("call\tstdev\t1.5,2.5,2.5,2.75,3.25,4.75\n");
+    t.push_str("call\tstdev\t1,2,3,4\n");
+    t.push_str("call\tstdev\t1,2,3,4\txbar=2\n");
+    t.push_str("call\tstdev\tnan,1,2\n");
+    t.push_str("call\tstdev\tinf,1\n");
+    t.push_str("call\tstdev\t5\n");
+    t.push_str("call\tstdev\t0.1,0.1,0.1\n");
+    t.push_str("call\tpstdev\t1.5,2.5,2.5,2.75,3.25,4.75\n");
+    t.push_str("call\tpstdev\t-\n");
+    t.push_str("call\tpstdev\t7\n");
+    t.push_str("call\tpstdev\t1,2,4\tmu=2.5\n");
+    t.push_str("call\tcovariance\t1,2,3,4,5,6,7,8,9\t1,2,3,1,2,3,1,2,3\n");
+    t.push_str("call\tcovariance\t1,2,3,4,5,6,7,8,9\t9,8,7,6,5,4,3,2,1\n");
+    t.push_str("call\tcovariance\t1,2,3\t1,2\n");
+    t.push_str("call\tcovariance\t1\t1\n");
+    t.push_str("call\tcovariance\t0.5,1.5,nan\t1,2,3\n");
+    t.push_str("call\tcorrelation\t1,2,3,4,5,6,7,8,9\t1,2,3,4,5,6,7,8,9\n");
+    t.push_str("call\tcorrelation\t1,2,3,4,5,6,7,8,9\t9,8,7,6,5,4,3,2,1\n");
+    t.push_str("call\tcorrelation\t1,2,3,4,5,6,7,8,9\t1,2,3,1,2,3,1,2,3\n");
+    t.push_str("call\tcorrelation\t1,2,3,4,5\t1,4,9,16,25\n");
+    t.push_str("call\tcorrelation\t1,2,3,4,5\t1,4,9,16,25\tmethod=ranked\n");
+    t.push_str("call\tcorrelation\t3,1,2,2,5,4\t10,20,20,30,40,30\tmethod=ranked\n");
+    t.push_str("call\tcorrelation\t1,2,3\t5,5,5\n");
+    t.push_str("call\tcorrelation\t1,2,3\t1,2,3\tmethod=kendall\n");
+    t.push_str("call\tcorrelation\t1,2\t1\n");
+    t.push_str("call\tcorrelation\t1e200,2e200,3e200\t1,2,4\n");
+    t.push_str("call\tlinear_regression\t1,2,3,4,5,6,7,8,9,10\t1,4,7,8,13,16,19,22,25,27\n");
+    t.push_str("call\tlinear_regression\t1,2,3,4,5,6,7,8,9,10\t3,5,10,12,14,18,20,25,26,29\tproportional=1\n");
+    t.push_str("call\tlinear_regression\t1,2,3\t2,4,6\tproportional=1\n");
+    t.push_str("call\tlinear_regression\t1.5,2.5,3.5\t2,4,6\tproportional=1\n");
+    t.push_str("call\tlinear_regression\t2,2,2\t1,2,3\n");
+    t.push_str("call\tlinear_regression\t0,0\t1,2\tproportional=1\n");
+    t.push_str("call\tlinear_regression\t1\t2\n");
+    t.push_str("call\tfsum\t0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1\n");
+    t.push_str("call\tfsum\t1e-16,1,1e16\n");
+    t.push_str("call\tfsum\t1e100,1,-1e100,1e-100,1e50,-1,-1e50\n");
+    t.push_str("call\tfsum\t1e308,1e308,-1e308\n");
+    t.push_str("call\tfsum\tinf,-inf\n");
+    t.push_str("call\tfsum\tnan,1\n");
+    t.push_str("call\tfsum\t1,2,3\n");
+    t.push_str("call\tfsum\t-\n");
+    t.push_str("call\tsumprod\t1,2,3\t4,5,6\n");
+    t.push_str("call\tsumprod\t0.1,0.2\t3,4\n");
+    t.push_str("call\tsumprod\t1,2.5,3\t2,2,2\n");
+    t.push_str("call\tsumprod\t1,2\t1\n");
+    t.push_str("call\tsumprod\t1e200,1\t1e200,1\n");
+    t.push_str("call\tsumprod\tnan,1\t1,1\n");
+    t.push_str("call\tsumprod\t0.1,0.2,0.3\t0.1,0.2,-0.3\n");
+    t.push_str("call\tsumprod\t-\t-\n");
+    t.push_str("call\thypot\t3,4\n");
+    t.push_str("call\thypot\t1,1,1,1\n");
+    t.push_str("call\thypot\t0,0\n");
+    t.push_str("call\thypot\t-\n");
+    t.push_str("call\thypot\t-3\n");
+    t.push_str("call\thypot\tinf,nan\n");
+    t.push_str("call\thypot\tnan,1\n");
+    t.push_str("call\thypot\t1e200,1e200\n");
+    t.push_str("call\thypot\t0.1,0.2,0.3\n");
+    t.push_str("normal\t0,1\trepr\tmean\tmedian\tmode\tstdev\tvariance\n");
+    t.push_str("normal\t0,1\tpdf:0\tpdf:1.5\tpdf:-3\n");
+    t.push_str("normal\t0,1\tinv_cdf:0.975\tinv_cdf:0.5\tinv_cdf:0.0001\tinv_cdf:0.9\tinv_cdf:1e-300\tinv_cdf:0\tinv_cdf:1\n");
+    t.push_str("normal\t0,1\tquantiles:4\tquantiles:10\tquantiles:1\n");
+    t.push_str("normal\t100,15\tzscore:130\tzscore:85.5\tinv_cdf:0.25\n");
+    t.push_str("normal\t100,15\tadd:5\tadd_nd:50,20\tsub_nd:50,20\tsub:7.5\trsub:10\tmul:-2\tdiv:4\tdiv:0\tneg\n");
+    t.push_str("normal\t100,15\teq:100,15\teq:100.0,15.0\teq:100,16\n");
+    t.push_str("normal\t1,0\tpdf:1\tzscore:2\tinv_cdf:0.5\tvariance\n");
+    t.push_str("normal\t1,-1\trepr\n");
+    t.push_str("normal\tfrom=2.5,3.25,5.5,11.25,11.75\trepr\tinv_cdf:0.8\n");
+    t.push_str("normal\tfrom=1\trepr\n");
+    t.push_str("normal\tfrom=1,2,nan\trepr\n");
+    t.push_str("normal\tfrom=1,2,inf\trepr\n");
+    t.push_str("normal\tfrom=4,4,4,4\trepr\tpdf:4\tzscore:4\n");
+    t.push_str("latency\tlatency.csv\n");
+    t.push_str("abtest\tab.csv\n");
+    t.push_str("capacity\tload.csv\t250\n");
+    t.push_str("capacity\tload.csv\t30\n");
+    t.push_str("survey\tsurvey.csv\n");
+    t.push_str("sensors\tsensors.csv\n");
+    t.push_str("growth\tgrowth.csv\n");
+    t.push_str("latency\tmissing.csv\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("endpoint,ms\n");
+    t.push_str("/api/cart,33.1\n");
+    t.push_str("/api/search,191.9\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,176.2\n");
+    t.push_str("/api/login,60.1\n");
+    t.push_str("/api/cart,31.8\n");
+    t.push_str("/api/login,59.5\n");
+    t.push_str("/api/login,41\n");
+    t.push_str("/api/search,173.9\n");
+    t.push_str("/api/login,40\n");
+    t.push_str("/api/login,41.0\n");
+    t.push_str("/api/login,45\n");
+    t.push_str("/api/login,55.4\n");
+    t.push_str("/api/cart,31.1\n");
+    t.push_str("/api/cart,34.3\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/search,120.0\n");
+    t.push_str("/api/cart,34\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/cart,32.1\n");
+    t.push_str("/api/login,53.5\n");
+    t.push_str("/api/search,179.9\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,141.7\n");
+    t.push_str("/api/cart,33\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,177.2\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/login,60.0\n");
+    t.push_str("/api/cart,36.1\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/cart,35.0\n");
+    t.push_str("/api/cart,36\n");
+    t.push_str("/api/search,154\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,205\n");
+    t.push_str("/api/login,55.5\n");
+    t.push_str("/api/search,143.4\n");
+    t.push_str("/api/search,179.8\n");
+    t.push_str("/api/search,timeout\n");
+    t.push_str("/api/search,136.9\n");
+    t.push_str("/api/search,167\n");
+    t.push_str("/api/login,60.7\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/cart,36.3\n");
+    t.push_str("/api/cart,36.8\n");
+    t.push_str("/api/login,59.9\n");
+    t.push_str("/api/search,181.1\n");
+    t.push_str("/api/search,178.6\n");
+    t.push_str("/api/login,40.7\n");
+    t.push_str("/api/login,53.8\n");
+    t.push_str("/healthz,31\n");
+    t.push_str("/api/login,56\n");
+    t.push_str("/api/search,160\n");
+    t.push_str("/api/cart,36.9\n");
+    t.push_str("/api/login,42.5\n");
+    t.push_str("/api/search,151.3\n");
+    t.push_str("/api/search,130.4\n");
+    t.push_str("/api/login,63\n");
+    t.push_str("/api/cart,30.1\n");
+    t.push_str("/api/login,58.4\n");
+    t.push_str("/api/cart,433\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,129\n");
+    t.push_str("/api/search,191.2\n");
+    t.push_str("/api/login,64.6\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/cart,37.5\n");
+    t.push_str("/api/search,199\n");
+    t.push_str("/api/cart,32.3\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,173\n");
+    t.push_str("/api/cart,35.0\n");
+    t.push_str("/api/login,43\n");
+    t.push_str("/api/login,54\n");
+    t.push_str("/api/login,59\n");
+    t.push_str("/api/search,176.7\n");
+    t.push_str("/api/cart,37.7\n");
+    t.push_str("/api/cart,34\n");
+    t.push_str("/api/search,126.8\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/search,143.9\n");
+    t.push_str("/api/search,190\n");
+    t.push_str("/api/search,142.6\n");
+    t.push_str("/api/cart,35.8\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,122.7\n");
+    t.push_str("/api/cart,37\n");
+    t.push_str("/api/search,162.5\n");
+    t.push_str("/api/search,190.2\n");
+    t.push_str("/api/login,61\n");
+    t.push_str("/api/cart,35.9\n");
+    t.push_str("/api/cart,34.3\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/login,61\n");
+    t.push_str("/api/login,42.8\n");
+    t.push_str("/api/login,timeout\n");
+    t.push_str("/api/cart,36\n");
+    t.push_str("/api/cart,33.8\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/search,123\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/search,142.3\n");
+    t.push_str("/api/cart,32\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/login,60.4\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,148.0\n");
+    t.push_str("/api/login,41.6\n");
+    t.push_str("/api/search,195.5\n");
+    t.push_str("/api/cart,35.4\n");
+    t.push_str("/api/login,60.4\n");
+    t.push_str("/api/cart,33\n");
+    t.push_str("/api/login,62.0\n");
+    t.push_str("/api/login,57.1\n");
+    t.push_str("/api/search,147.9\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/cart,32.9\n");
+    t.push_str("/api/search,151.8\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/search,208.0\n");
+    t.push_str("/api/search,173.6\n");
+    t.push_str("/api/login,53.8\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/login,60.8\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/cart,33.8\n");
+    t.push_str("/api/cart,36.0\n");
+    t.push_str("/api/login,43.4\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/search,163.8\n");
+    t.push_str("/api/cart,37.7\n");
+    t.push_str("/api/login,48.7\n");
+    t.push_str("/api/search,191.6\n");
+    t.push_str("/api/cart,33\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/search,131.6\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/search,201.7\n");
+    t.push_str("/api/search,156.3\n");
+    t.push_str("/api/login,52.9\n");
+    t.push_str("/healthz,3\n");
+    t.push_str("/api/cart,37.5\n");
+    t.push_str("/api/login,61.0\n");
+    t.push_str("/healthz,2\n");
+    t.push_str("/api/export,1830.5\n");
+    t.push_str("/api/report,\n");
+    v.push(DataFile { path: "latency.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("rps,p99_ms\n");
+    t.push_str("62,65.3\n");
+    t.push_str("89,74.2\n");
+    t.push_str("115,80.2\n");
+    t.push_str("144,96.1\n");
+    t.push_str("160,71.0\n");
+    t.push_str("190,78.3\n");
+    t.push_str("208,95.8\n");
+    t.push_str("238,112.7\n");
+    t.push_str("258,115.5\n");
+    t.push_str("277,107.2\n");
+    t.push_str("310,106.5\n");
+    t.push_str("333,105.1\n");
+    t.push_str("351,130.1\n");
+    t.push_str("376,119.4\n");
+    t.push_str("409,158.8\n");
+    t.push_str("435,135.2\n");
+    t.push_str("465,171.9\n");
+    t.push_str("490,143.2\n");
+    t.push_str("505,180.0\n");
+    t.push_str("525,173.3\n");
+    t.push_str("564,173.2\n");
+    t.push_str("585,166.2\n");
+    t.push_str("600,175.0\n");
+    t.push_str("639,192.8\n");
+    t.push_str("658,200.6\n");
+    t.push_str("687,209.3\n");
+    t.push_str("707,221.1\n");
+    t.push_str("735,214.3\n");
+    t.push_str("761,220.5\n");
+    t.push_str("776,219.2\n");
+    t.push_str("801,235.7\n");
+    t.push_str("839,254.8\n");
+    t.push_str("861,331.6\n");
+    t.push_str("887,350.3\n");
+    t.push_str("915,419.1\n");
+    t.push_str("936,462.8\n");
+    v.push(DataFile { path: "load.csv".to_string(), body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("sensor,reading\n");
+    t.push_str("s2,ERR\n");
+    t.push_str("s1,23.291\n");
+    t.push_str("s3,21.741\n");
+    t.push_str("s4,-inf\n");
+    t.push_str("s4,23.273\n");
+    t.push_str("s2,20.597\n");
+    t.push_str("s3,20.990\n");
+    t.push_str("s1,22.370\n");
+    t.push_str("s1,22.896\n");
+    t.push_str("s2,24.825\n");
+    t.push_str("s1,24.404\n");
+    t.push_str("s3,24.084\n");
+    t.push_str("s2,21.292\n");
+    t.push_str("s1,22.060\n");
+    t.push_str("s3,20.422\n");
+    t.push_str("s3,20.541\n");
+    t.push_str("s4,22.545\n");
+    t.push_str("s1,20.317\n");
+    t.push_str("s2,20.978\n");
+    t.push_str("s2,20.158\n");
+    t.push_str("s1,20.054\n");
+    t.push_str("s3,21.289\n");
+    t.push_str("s4,23.468\n");
+    t.push_str("s4,21.323\n");
+    t.push_str("s2,24.294\n");
+    t.push_str("s4,24.016\n");
+    t.push_str("s1,20.375\n");
+    t.push_str("s3,22.089\n");
+    t.push_str("s3,24.326\n");
+    t.push_str("s2,24.028\n");
+    t.push_str("s2,21.082\n");
+    t.push_str("s2,23.159\n");
+    t.push_str("s3,24.104\n");
+    t.push_str("s1,23.606\n");
+    t.push_str("s3,24.071\n");
+    t.push_str("s3,21.804\n");
+    t.push_str("s4,21.910\n");
+    t.push_str("s2,20.273\n");
+    t.push_str("s4,21.876\n");
+    t.push_str("s4,21.236\n");
+    t.push_str("s1,20.219\n");
+    t.push_str("s1,23.885\n");
+    t.push_str("s3,21.931\n");
+    t.push_str("s1,21.371\n");
+    t.push_str("s2,nan\n");
+    t.push_str("s3,22.616\n");
+    t.push_str("s2,21.519\n");
+    t.push_str("s1,24.235\n");
+    t.push_str("s3,24.500\n");
+    t.push_str("s4,20.451\n");
+    t.push_str("s3,23.772\n");
+    t.push_str("s3,24.246\n");
+    t.push_str("s1,20.278\n");
+    t.push_str("s2,nan\n");
+    t.push_str("s2,ERR\n");
+    t.push_str("s1,24.096\n");
+    t.push_str("s1,24.202\n");
+    t.push_str("s2,22.324\n");
+    t.push_str("s2,23.920\n");
+    t.push_str("s1,20.264\n");
+    t.push_str("s2,21.423\n");
+    t.push_str("s4,20.032\n");
+    t.push_str("s2,23.708\n");
+    t.push_str("s3,20.519\n");
+    t.push_str("s2,21.254\n");
+    t.push_str("s1,23.369\n");
+    t.push_str("s4,23.502\n");
+    t.push_str("s3,20.400\n");
+    t.push_str("s4,23.770\n");
+    t.push_str("s3,22.671\n");
+    t.push_str("s3,22.732\n");
+    t.push_str("s4,inf\n");
+    t.push_str("s4,23.698\n");
+    t.push_str("s3,20.207\n");
+    t.push_str("s4,24.398\n");
+    t.push_str("s1,ERR\n");
+    t.push_str("s1,22.502\n");
+    t.push_str("s3,22.926\n");
+    t.push_str("s3,21.454\n");
+    t.push_str("s4,23.294\n");
+    t.push_str("s5,21.5\n");
+    t.push_str("s6,1e308\n");
+    t.push_str("s6,1e308\n");
+    t.push_str("s6,-1e308\n");
+    v.push(DataFile { path: "sensors.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("respondent,age,color,commute_km,commute_kmh,raise_pct\n");
+    t.push_str("r000,30,orange,24.8,72,6.8\n");
+    t.push_str("r001,48,orange,1.9,41,2.7\n");
+    t.push_str("r002,73,black,25.5,77,0.4\n");
+    t.push_str("r003,61,orange,29.6,9,5.1\n");
+    t.push_str("r004,50,green,17.3,33,3.9\n");
+    t.push_str("r005,61,orange,26.9,13,3.3\n");
+    t.push_str("r006,32,blue,26.9,33,5.4\n");
+    t.push_str("r007,44,blue,14.7,23,3.4\n");
+    t.push_str("r008,65,orange,5.6,13,-1.0\n");
+    t.push_str("r009,35,orange,11.6,12,8.6\n");
+    t.push_str("r010,39,green,27.5,53,3.6\n");
+    t.push_str("r011,46,orange,10.9,70,5.1\n");
+    t.push_str("r012,51,purple,19.0,52,-0.1\n");
+    t.push_str("r013,34,blue,8.5,37,3.4\n");
+    t.push_str("r014,28,blue,28.6,63,8.8\n");
+    t.push_str("r015,58,black,8.6,27,9.0\n");
+    t.push_str("r016,72,red,29.7,63,7.2\n");
+    t.push_str("r017,31,red,28.4,73,6.1\n");
+    t.push_str("r018,60,purple,19.4,44,7.1\n");
+    t.push_str("r019,63,blue,23.9,14,1.4\n");
+    t.push_str("r020,71,purple,12.5,39,7.0\n");
+    t.push_str("r021,40,purple,18.6,24,7.3\n");
+    t.push_str("r022,66,black,2.8,59,1.2\n");
+    t.push_str("r023,31,blue,21.1,64,4.8\n");
+    t.push_str("r024,63,green,22.8,60,9.0\n");
+    t.push_str("r025,54,orange,11.4,39,8.5\n");
+    t.push_str("r026,30,red,26.7,70,6.7\n");
+    t.push_str("r027,42,blue,20.7,39,0.9\n");
+    t.push_str("r028,27,black,25.0,43,9.1\n");
+    t.push_str("r029,72,green,4.7,61,4.9\n");
+    t.push_str("r030,68,red,5.1,69,9.2\n");
+    t.push_str("r031,67,red,8.8,37,-0.9\n");
+    t.push_str("r032,39,black,30.2,19,-0.1\n");
+    t.push_str("r033,50,blue,8.9,64,3.7\n");
+    t.push_str("r034,52,red,26.2,68,7.4\n");
+    t.push_str("r035,27,red,21.4,16,3.3\n");
+    t.push_str("r036,53,orange,6.5,70,9.8\n");
+    t.push_str("r037,54,red,19.6,45,8.0\n");
+    t.push_str("r038,35,green,21.6,31,6.1\n");
+    t.push_str("r039,72,orange,27.9,50,-0.9\n");
+    t.push_str("r040,26,red,29.2,52,0.3\n");
+    t.push_str("r041,67,green,16.1,8,7.6\n");
+    t.push_str("r042,65,green,22.9,42,9.2\n");
+    t.push_str("r043,40,orange,16.1,57,6.8\n");
+    t.push_str("r044,32,orange,23.4,35,7.6\n");
+    t.push_str("r045,38,blue,27.9,67,1.7\n");
+    t.push_str("r046,59,purple,3.7,77,10.0\n");
+    t.push_str("r047,47,green,9.0,76,3.4\n");
+    t.push_str("r048,51,red,29.1,28,-0.6\n");
+    t.push_str("r049,65,green,26.1,60,5.0\n");
+    t.push_str("r050,57,red,6.5,67,6.5\n");
+    t.push_str("r051,33,black,17.8,35,6.2\n");
+    t.push_str("r052,49,purple,8.2,65,5.4\n");
+    t.push_str("r053,62,orange,16.6,50,-1.0\n");
+    t.push_str("r054,38,blue,30.1,47,1.1\n");
+    t.push_str("r055,34,red,21.6,31,-0.8\n");
+    t.push_str("r056,36,orange,13.6,12,5.1\n");
+    t.push_str("r057,57,black,9.1,17,-0.6\n");
+    t.push_str("r058,63,purple,8.9,72,7.6\n");
+    t.push_str("r059,64,green,29.4,44,1.4\n");
+    t.push_str("r060,44,purple,2.2,68,9.4\n");
+    t.push_str("r061,46,orange,14.7,18,10.0\n");
+    t.push_str("r062,67,orange,9.7,24,9.3\n");
+    t.push_str("r063,33,purple,28.6,47,2.5\n");
+    t.push_str("r064,55,blue,13.2,13,8.2\n");
+    t.push_str("r065,66,red,14.8,74,4.7\n");
+    t.push_str("r066,72,blue,3.3,29,6.1\n");
+    t.push_str("r067,64,black,24.9,51,7.0\n");
+    t.push_str("r068,56,orange,10.0,31,3.5\n");
+    t.push_str("r069,29,purple,19.8,60,2.0\n");
+    t.push_str("r070,73,purple,2.2,49,4.9\n");
+    t.push_str("r071,57,orange,9.5,41,0.0\n");
+    t.push_str("r072,63,red,4.1,21,6.8\n");
+    t.push_str("r073,49,green,19.1,29,9.0\n");
+    t.push_str("r074,57,orange,23.4,34,-0.8\n");
+    t.push_str("r075,57,green,1.5,39,3.6\n");
+    t.push_str("r076,27,black,15.5,52,-1.5\n");
+    t.push_str("r077,62,green,4.3,20,0.3\n");
+    t.push_str("r078,57,green,1.3,61,3.9\n");
+    t.push_str("r079,52,orange,18.4,30,3.7\n");
+    t.push_str("r080,30,black,26.9,40,7.3\n");
+    t.push_str("r081,27,red,2.2,20,7.6\n");
+    t.push_str("r082,31,orange,6.5,54,7.7\n");
+    t.push_str("r083,67,green,15.3,22,7.4\n");
+    t.push_str("r084,54,black,27.7,43,5.0\n");
+    t.push_str("r085,31,black,6.1,22,8.3\n");
+    t.push_str("r086,62,red,13.6,54,4.8\n");
+    t.push_str("r087,27,red,7.9,66,7.4\n");
+    t.push_str("r088,39,orange,6.8,33,7.5\n");
+    t.push_str("r089,27,blue,8.8,11,5.5\n");
+    v.push(DataFile { path: "survey.csv".to_string(), body: t });
+}
