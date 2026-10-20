@@ -1,7 +1,8 @@
-//! B-2026-10-19-44: a closure that escapes (stored in a struct field or a
+//! B-2026-10-19-44 and the MIR half of B-2026-10-19-43: a closure that escapes (stored in a struct field or a
 //! collection) holds no borrow, so a view it captures used to lose its
 //! loan there and the compiled closure read a freed local. The borrow
-//! checker now refuses the store (E0509, core semantics §5.7, §9.3); a
+//! checker now refuses the store (E0509, core semantics §5.7, §9.3), and
+//! a view stored in a `shared` field or sent through a channel too; a
 //! closure capturing an owned copy, a borrowing closure called locally
 //! and one passed down to `retain` still run.
 
@@ -27,6 +28,38 @@ fn mk() -> Vec[Fn() -> i64] {
     v
 }
 fn main() { let v = mk(); println(f"{(v[0])()}"); }
+"#;
+
+const INTO_SHARED: &str = r#"
+shared struct H { mut r: Option[ref String] }
+fn main() {
+    let s = "a".to_string();
+    let h = H { r: None };
+    let r = ref s;
+    h.r = Some(r);
+    println("x");
+}
+"#;
+
+const CLOSURE_INTO_SHARED: &str = r#"
+shared struct H { mut f: Option[Fn() -> i64] }
+fn main() {
+    let s = "abc".to_string();
+    let r = ref s;
+    let h = H { f: None };
+    h.f = Some(|| r.len());
+    println("x");
+}
+"#;
+
+const INTO_CHANNEL: &str = r#"
+fn main() {
+    let s = "a".to_string();
+    let (tx, rx): (Sender[ref String], Receiver[ref String]) = channel(1);
+    let r = ref s;
+    let _ = tx.send(r);
+    println("x");
+}
 "#;
 
 const OK: &str = r#"
@@ -74,6 +107,22 @@ fn a_view_captured_by_a_closure_pushed_into_a_vec_is_refused() {
     let err = refused(PUSHED);
     assert!(err.contains("[E0509]"), "{err}");
     assert!(err.starts_with("borrow check mk: 6:"), "{err}");
+}
+
+#[test]
+fn a_view_stored_in_a_shared_field_or_sent_through_a_channel_is_refused() {
+    for (src, line) in [
+        (INTO_SHARED, 7),
+        (CLOSURE_INTO_SHARED, 7),
+        (INTO_CHANNEL, 6),
+    ] {
+        let err = refused(src);
+        assert!(err.contains("[E0509]"), "{err}");
+        assert!(
+            err.starts_with(&format!("borrow check main: {line}:")),
+            "{err}"
+        );
+    }
 }
 
 #[test]

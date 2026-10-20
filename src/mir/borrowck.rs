@@ -338,15 +338,15 @@ pub fn borrow_errors(
             // what it views unchecked.
             let unkept = if si < n {
                 cx.unkept_loans(&o, &block.statements[si].kind)
-            } else if let TerminatorKind::Call { args, .. } = &block.terminator.kind {
-                cx.unkept_call_loans(&o, args)
+            } else if let TerminatorKind::Call { func, args, .. } = &block.terminator.kind {
+                cx.unkept_call_loans(&o, func, args)
             } else {
                 LoanSet::default()
             };
             for li in unkept.iter() {
                 let loan = &loans[li];
                 let text = format!(
-                        "{}: a view of {} is stored in an escaping closure or a `shared` value, where its borrow is not kept (borrow at {}); capture an owned copy instead (core semantics §5.7, §9.3) [E0509]",
+                        "{}: a view of {} is stored in an escaping closure, a `shared` value or a channel, where its borrow is not kept (borrow at {}); store an owned copy instead (core semantics §5.7, §9.3) [E0509]",
                         site(body, at, Some(loan.at)),
                         show_place(body, tys, &loan.place),
                         borrow_site(body, loan.at),
@@ -825,8 +825,23 @@ impl Cx<'_> {
     /// borrow but can hold that function type, as `v.push(f)` stores `f`
     /// in a `Vec[Fn() -> i64]` (§9.3). A closure passed down, as to
     /// `retain`, is not of a type its receiver holds, so is not stored.
-    fn unkept_call_loans(&self, o: &Origins, args: &[Operand]) -> LoanSet {
+    fn unkept_call_loans(&self, o: &Origins, func: &Operand, args: &[Operand]) -> LoanSet {
         let mut val = LoanSet::default();
+        // A view sent through a channel (§5.7) is kept by nothing.
+        if let Operand::Const(Const {
+            kind: ConstKind::FnDef(callee),
+            ..
+        }) = func
+        {
+            let n = &callee.name;
+            let channel = n.starts_with("Sender[") || n.starts_with("BoundedChannel[");
+            if channel && (n.ends_with(".send") || n.ends_with(".try_send")) {
+                for a in args.iter().skip(1) {
+                    self.operand_origins(o, a, &mut val);
+                }
+                return val;
+            }
+        }
         for (i, a) in args.iter().enumerate() {
             let Some(p) = a.place().filter(|p| p.projection.is_empty()) else {
                 continue;
