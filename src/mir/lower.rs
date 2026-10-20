@@ -4182,7 +4182,11 @@ impl<'l, 'a> Bx<'l, 'a> {
         match &e.kind {
             ExprKind::Index { object, index } => {
                 self.pre_index(object)?;
-                if !matches!(index.kind, ExprKind::Range { .. }) {
+                // An index already read (a place prepared before it is
+                // named) is not read again.
+                if !matches!(index.kind, ExprKind::Range { .. })
+                    && !self.pre_indices.contains_key(&index.id)
+                {
                     let idx = match self.index_operand(object, index)? {
                         // Read now: the value may assign the variable.
                         Operand::Copy(p) => {
@@ -4306,6 +4310,9 @@ impl<'l, 'a> Bx<'l, 'a> {
                 self.temp_place(e)
             }
             ExprKind::Index { object, index } => {
+                // The base's own indices are read before this one: `v[p(1)][p(0)]`
+                // reads `p(1)` first (core semantics §8.1; B-2026-10-19-53).
+                self.pre_index(object)?;
                 let idx = self.index_operand(object, index)?;
                 self.index_place(object, idx, e, mutable)
             }

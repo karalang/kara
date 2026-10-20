@@ -6112,3 +6112,48 @@ fn mir_interp_reads_an_array_local_in_place() {
     let took = start.elapsed();
     assert!(took.as_secs() < 30, "took {took:?}");
 }
+
+/// B-2026-10-19-53: a nested index read evaluates the base's index first,
+/// `v[p(1)][p(0)]` prints `p1 p0`, as the same place does as an assignment
+/// target (core semantics §8.1), on the interpreter and compiled alike.
+#[test]
+fn mir_nested_index_reads_left_to_right() {
+    let cases = [
+        (
+            r#"fn p(x: i64) -> i64 { println(f"p{x}"); x }
+fn main() {
+    let t = (p(1), p(2));
+    let a = [p(3), p(4)];
+    let v: Vec[Vec[i64]] = [[10, 20], [30, 40]];
+    let e = v[p(1)][p(0)];
+    println(f"{p(5)} {p(6)}");
+    println(f"{t.0} {a[1]} {e}");
+}
+"#,
+            "p1\np2\np3\np4\np1\np0\np5\np6\n5 6\n1 4 30\n",
+        ),
+        (
+            r#"fn p(x: i64) -> i64 { println(f"p{x}"); x }
+fn main() {
+    let mut w: Vec[Vec[i64]] = [[10, 20], [30, 40]];
+    w[p(1)][p(0)] = p(7);
+    w[p(0)][p(1)] += p(2);
+    let a: Array[Array[i64, 2], 2] = [[1, 2], [3, 4]];
+    let e = a[p(1)][p(0)] + w[p(1)][p(0)] + w[p(0)][p(1)];
+    println(f"{e}");
+}
+"#,
+            "p1\np0\np7\np0\np1\np2\np1\np0\np1\np0\np0\np1\n32\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want, "__mir-run");
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
