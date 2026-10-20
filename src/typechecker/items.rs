@@ -8337,14 +8337,19 @@ impl<'a> super::TypeChecker<'a> {
                 // §1.1: `ref T` is Copy, so `let u = x;` with `x` a `ref`
                 // (view) binding copies the reference and `u` is a `ref` too;
                 // only an owned annotation makes it a move.
-                let ref_copy = self.cli_lint_overrides.strict_core
+                // The MIR pipeline binds it the same way, so it reads it as
+                // a copy of the reference too (B-2026-10-20-24's `ref` arm
+                // bindings are views there).
+                let ref_copy = (self.cli_lint_overrides.strict_core
+                    || self.library_methods_from_source)
                     && ty.is_none()
                     && matches!(pattern.kind, PatternKind::Binding(_))
                     && (matches!(&value.kind, ExprKind::Identifier(n) if self.local_scope.is_view(n))
                         || self.core_map_get_view(value, true)
                         || self.core_map_get_view(value, false));
-                if !self.cli_lint_overrides.strict_core
-                    || (matches!(pattern.kind, PatternKind::Binding(_)) && !ref_copy)
+                if (!self.cli_lint_overrides.strict_core
+                    || matches!(pattern.kind, PatternKind::Binding(_)))
+                    && !ref_copy
                 {
                     self.core_let_ref_fix = self.cli_lint_overrides.strict_core
                         && ty.is_none()

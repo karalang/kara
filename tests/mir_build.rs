@@ -6786,3 +6786,35 @@ fn panic_handler_placement_and_signature_are_checked() {
         assert!(err.contains("E_PANIC_HANDLER"), "{src}\n{err}");
     }
 }
+
+/// A `let` copy of an explicit `ref` binding is a copy of the reference on
+/// the MIR pipeline, as in `karac check`: the part's `Drop` body runs once,
+/// with its owner (the follow-up to B-2026-10-20-24).
+#[test]
+fn mir_let_copy_of_a_ref_binding_is_a_ref() {
+    let src = r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}"); } }
+fn first(o: own Option[R]) -> i64 {
+    match o {
+        Some(ref r) => { let m = r; m.id + m.tag.len() }
+        None => 0,
+    }
+}
+fn main() {
+    println(f"{first(Some(R { id: 4, tag: "ab".to_string() }))}");
+    let t = (R { id: 7, tag: "x".to_string() }, 1);
+    let (ref a, _) = t;
+    let b = a;
+    println(f"{b.id}");
+}
+"#;
+    let want = "drop 4\n6\n7\ndrop 7\n";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want, "__mir-run");
+    let dir = Scratch::new();
+    let Some(exe) = cli_build(&dir, src, &[]) else {
+        return;
+    };
+    let run = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+}
