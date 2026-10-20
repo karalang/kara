@@ -2095,7 +2095,23 @@ pub extern "C" fn karac_mir_panic_set() {
 #[no_mangle]
 pub extern "C" fn karac_mir_exit(code: i32) -> ! {
     out_flush();
+    #[cfg(all(unix, feature = "net"))]
+    if code == 101 && linked_with_asan() {
+        // A panic runs no Drop (core semantics §10.2), so what it leaves
+        // allocated is not a leak; under `__mir-llvm-asan` leave without
+        // LeakSanitizer's exit check, which would report it (B-2026-10-20-38).
+        let _ = std::io::stdout().flush();
+        // SAFETY: ends the process; nothing runs after it.
+        unsafe { libc::_exit(code) }
+    }
     std::process::exit(code)
+}
+
+/// Whether AddressSanitizer is linked in, which `__mir-llvm-asan` does.
+#[cfg(all(unix, feature = "net"))]
+fn linked_with_asan() -> bool {
+    // SAFETY: a lookup of a NUL-terminated name in the loaded objects.
+    !unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"__asan_init".as_ptr()) }.is_null()
 }
 
 /// The program's `#[panic_handler]` thunk (`__karac_panic_thunk`), which
