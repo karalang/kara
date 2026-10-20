@@ -102,15 +102,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 185 |
 | perf | 180 |
 | diagnostics | 176 |
+| soundness | 125 |
 | crash | 125 |
-| soundness | 124 |
 | use-after-free | 92 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2970 |
+| codegen | 2971 |
 | interp | 989 |
 | typecheck | 509 |
 | ownership | 124 |
@@ -182,6 +182,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-10 | 2026-10-20 | codegen | medium | Providers on mir-llvm and `karac build --mir`: compile the specialised instances and hidden parameters §14.3 introduces, with ASAN-clean provider drops at `with_provider` exit | — |
 | B-2026-10-20-11 | 2026-10-20 | runtime | medium | Providers (§14.7): library traits and static default providers for `Env`, `Clock` and `RandomSource` (now bare `effect resource` declarations in runtime/stdlib/wasi.kara), so a program can override them; migrate the 18 corpus programs that override one to implement the trait | — |
 | B-2026-10-20-13 | 2026-10-20 | typecheck | medium | A generic `Fn(V) -> K` instantiated at V = i64 becomes `Fn(ref i64) -> K` and refuses `fn neg(x: i64)`, which the same type written as `Fn(i64) -> i64` accepts | — |
+| B-2026-10-20-14 | 2026-10-20 | codegen | low | mir-llvm takes no §6.2 borrow flag inside a coroutine's resume body, so a conflicting access through another handle while a coroutine holds a loan across a yield runs on mir-llvm and panics on mir-interp | — |
 
 ### Relocated
 
