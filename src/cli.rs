@@ -1970,18 +1970,29 @@ impl Pipeline {
         {
             return;
         }
-        for (at, text) in crate::mir::lower::source_par_conflicts(&src) {
+        // B-2026-10-20-7: and the calls in `main` that need a provider
+        // nothing supplies.
+        for (at, which, text) in crate::mir::lower::source_effect_errors(&src) {
             let Some(span) = source_span_at(&src, Some(at)) else {
                 continue;
             };
-            effects.errors.push(crate::effectchecker::EffectError {
-                message: format!(
-                    "{text} (core semantics §11.2: branches may run at once, so none \
-                     may write, move, mutably borrow or drop a place another uses, or \
-                     write a resource another uses)"
+            let (message, kind) = match which {
+                crate::mir::lower::SourceEffectError::Par => (
+                    format!(
+                        "{text} (core semantics §11.2: branches may run at once, so none \
+                         may write, move, mutably borrow or drop a place another uses, or \
+                         write a resource another uses)"
+                    ),
+                    crate::effectchecker::EffectErrorKind::ParBranchConflict,
                 ),
+                crate::mir::lower::SourceEffectError::NoProvider => {
+                    (text, crate::effectchecker::EffectErrorKind::NoProvider)
+                }
+            };
+            effects.errors.push(crate::effectchecker::EffectError {
+                message,
                 span,
-                kind: crate::effectchecker::EffectErrorKind::ParBranchConflict,
+                kind,
                 subtype_trace: None,
                 replacement: None,
             });

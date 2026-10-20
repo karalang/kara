@@ -735,6 +735,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0418",
         eff("ParBranchConflict", Some(DiagnosticClass::EffectConflict)),
     ),
+    // B-2026-10-20-7: `E_NO_PROVIDER` (core semantics §14.6). Unclassified
+    // for the reason `DropBodyMayPanic` is: no published class describes a
+    // call whose resource nothing binds.
+    ("E0419", eff("NoProvider", None)),
     (
         "L0001",
         eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
@@ -2277,6 +2281,7 @@ mod tests {
             ("E0416", E::NoEffectViolated),
             ("E0417", E::DropBodyMayPanic),
             ("E0418", E::ParBranchConflict),
+            ("E0419", E::NoProvider),
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),

@@ -395,6 +395,12 @@ pub enum EffectErrorKind {
     /// runs on a program its own rules pass, so that check refuses what the
     /// MIR backends refuse (B-2026-10-19-39, B-2026-10-19-47).
     ParBranchConflict,
+    /// A call needs the provider of a resource where nothing supplies it
+    /// (`E_NO_PROVIDER`, core semantics §14.6): found by the MIR effect
+    /// pass, which decides which functions take a hidden provider
+    /// parameter (B-2026-10-20-7). `main` takes none, so a resource it
+    /// reaches must be bound by a `with_provider` inside it.
+    NoProvider,
     /// Phase-10 target gate: a function reachable from the build's
     /// entry point requires a HOST resource the current compilation
     /// target does not provide (and no provider is bound on the call
@@ -549,6 +555,7 @@ pub(crate) fn class_for_effect_error_kind(
         | EffectErrorKind::ProfileViolation
         | EffectErrorKind::ImplExceedsTraitCeiling
         | EffectErrorKind::DropBodyMayPanic
+        | EffectErrorKind::NoProvider
         | EffectErrorKind::TraitDefaultExceedsCeiling
         | EffectErrorKind::EffectVariableConflict
         | EffectErrorKind::ProfileIncompatibleEffect

@@ -45,6 +45,10 @@ pub struct Program {
     /// The length of the program's own source, before the library text
     /// appended after it: a span at or past it is in the library.
     pub user_source_len: Option<usize>,
+    /// The resources a program can bind with `with_provider` (core
+    /// semantics §14), by name: what effect inference needs to decide
+    /// which functions take a hidden provider parameter.
+    pub resources: BTreeMap<String, super::effects::ResourceDecl>,
 }
 
 /// How a derived `Display` departs from the default.

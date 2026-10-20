@@ -210,6 +210,78 @@ pub struct EffectReport {
     pub sites: BTreeMap<String, Vec<Site>>,
     /// Per instance name: the `par` regions whose branches conflict.
     pub par_conflicts: BTreeMap<String, Vec<ParConflict>>,
+    /// Per instance name: the hidden provider parameters it takes (core
+    /// semantics §14.3), one per resource it reaches, `ref P` for
+    /// [`Access::Reads`] and `mut ref P` for [`Access::Writes`]. Instances
+    /// that reach no resource are absent.
+    pub providers: BTreeMap<String, BTreeMap<String, Access>>,
+    /// The calls in `main` or a test body that need a provider nothing
+    /// supplies (`E_NO_PROVIDER`, core semantics §14.6).
+    pub no_provider: Vec<NoProvider>,
+}
+
+/// A resource a program can bind with `with_provider[R](p, f)` (core
+/// semantics §14). Before provider specialisation the MIR builder emits a
+/// call on it, `R.m(args)`, as a `Call` of a body-less function named
+/// exactly `R.m` with no receiver among `args`, and `with_provider[R](p,
+/// f)` as a `Call` of a body-less function named `with_provider[R]`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResourceDecl {
+    /// Every method `R`'s bounds declare, `true` when its receiver is
+    /// `mut ref self`, so that calling it writes `R` (§14.2).
+    pub methods: BTreeMap<String, bool>,
+    /// The type of the static default provider of a program-rooted
+    /// resource (`Env`, `Clock`, `RandomSource`, §14.7); `None` for a
+    /// resource only `with_provider` can bind.
+    pub default: Option<Ty>,
+    /// For each provider type bound to `R` anywhere, and the default, the
+    /// instance name of each of its methods; those bodies are in the
+    /// program.
+    pub impls: BTreeMap<Ty, BTreeMap<String, String>>,
+}
+
+/// How a function uses the provider of a resource, which decides its
+/// hidden parameter's mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Access {
+    Reads,
+    Writes,
+}
+
+impl Access {
+    pub fn verb(self) -> Verb {
+        match self {
+            Access::Reads => Verb::Reads,
+            Access::Writes => Verb::Writes,
+        }
+    }
+}
+
+/// A call that needs the provider of `resource` where nothing supplies
+/// it: the terminator of `block`, or a statement in it that makes a
+/// closure using the resource.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoProvider {
+    pub instance: String,
+    pub block: BasicBlock,
+    /// The statement's or the terminator's.
+    pub span: crate::token::Span,
+    pub resource: String,
+}
+
+/// The resources a body needs a provider for, each with the stronger of
+/// the accesses that need it.
+type Needs = BTreeMap<String, Access>;
+
+fn need(n: &mut Needs, resource: &str, access: Access) {
+    let e = n.entry(resource.to_string()).or_insert(access);
+    *e = (*e).max(access);
+}
+
+fn need_all(n: &mut Needs, other: &Needs) {
+    for (r, a) in other {
+        need(n, r, *a);
+    }
 }
 
 /// Two branches of a `par` block, or two iterations of a `par for` body
@@ -279,6 +351,14 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
                     changed = true;
                 }
                 report.sites.insert(names[i].clone(), sites);
+                let mut needs = Needs::new();
+                for (_, _, n) in a.needs_sites(body, &report.providers) {
+                    need_all(&mut needs, &n);
+                }
+                if !needs.is_empty() && report.providers.get(names[i]) != Some(&needs) {
+                    report.providers.insert(names[i].clone(), needs);
+                    changed = true;
+                }
             }
             if !changed {
                 break;
@@ -293,6 +373,27 @@ pub fn analyze(program: &Program, tys: &TyInterner) -> EffectReport {
         let found = par_conflicts(body, &report.sites[*name], &origins[i]);
         if !found.is_empty() {
             report.par_conflicts.insert((*name).clone(), found);
+        }
+    }
+    // `main` takes no hidden parameter, so a provider it needs must come
+    // from a `with_provider` inside it, or be a program-rooted resource's
+    // default (core semantics §14.6, §14.7).
+    if let Some(main) = program.bodies.get("main") {
+        for (block, span, n) in a.needs_sites(main, &report.providers) {
+            for r in n.keys() {
+                if program
+                    .resources
+                    .get(r)
+                    .is_some_and(|d| d.default.is_none())
+                {
+                    report.no_provider.push(NoProvider {
+                        instance: "main".to_string(),
+                        block,
+                        span,
+                        resource: r.clone(),
+                    });
+                }
+            }
         }
     }
     report
@@ -1266,6 +1367,11 @@ impl<'p> Analysis<'p> {
                     if self.program.bodies.contains_key(&inst.name) {
                         out.push(inst.name.clone());
                     }
+                    // A call on a resource runs the method of every
+                    // provider bound to it.
+                    if let Some((_, _, impls)) = self.resource_call(&inst.name) {
+                        out.extend(impls);
+                    }
                     // A function value passed along may run in the callee.
                     for a in args {
                         out.extend(self.fn_value_bodies(body, a));
@@ -1278,6 +1384,213 @@ impl<'p> Analysis<'p> {
                     }
                 }
                 _ => {}
+            }
+            // A closure or function item made as a value captures the
+            // providers its body needs (core semantics §14.3).
+            for st in &bb.statements {
+                if let StatementKind::Assign(_, rv) = &st.kind {
+                    out.extend(self.made_fn_values(rv));
+                }
+            }
+        }
+        out
+    }
+
+    /// `name` as a call on a resource the program declares (`R.m`, core
+    /// semantics §14.2): the resource, whether the method reads or writes
+    /// it, and the method's instance for every provider bound to it.
+    fn resource_call(&self, name: &str) -> Option<(&'p String, Access, Vec<String>)> {
+        let (r, m) = name.split_once('.')?;
+        let (resource, decl) = self.program.resources.get_key_value(r)?;
+        let access = if *decl.methods.get(m)? {
+            Access::Writes
+        } else {
+            Access::Reads
+        };
+        let impls = decl
+            .impls
+            .values()
+            .filter_map(|ms| ms.get(m).cloned())
+            .collect();
+        Some((resource, access, impls))
+    }
+
+    /// The resource `name` binds when it is `with_provider[R]` (§14.4).
+    fn with_provider(&self, name: &str) -> Option<&'p String> {
+        let r = name.strip_prefix("with_provider[")?.strip_suffix(']')?;
+        self.program.resources.get_key_value(r).map(|(k, _)| k)
+    }
+
+    /// The bodies of the closures and function items `rv` makes as values.
+    fn made_fn_values(&self, rv: &Rvalue) -> Vec<String> {
+        let mut out = Vec::new();
+        let ops: &[Operand] = match rv {
+            Rvalue::Aggregate(kind, ops) => {
+                if let AggregateKind::Closure { ty } = kind {
+                    if let SK::Closure { def, .. } = self.tys.tcx().kind(*ty) {
+                        out.extend(self.bodies_of(def));
+                    }
+                }
+                ops
+            }
+            Rvalue::Use(o) | Rvalue::Cast(_, o, _) => std::slice::from_ref(o),
+            _ => &[],
+        };
+        for o in ops {
+            if let Operand::Const(Const {
+                kind: ConstKind::FnDef(f),
+                ..
+            }) = o
+            {
+                if self.program.bodies.contains_key(&f.name) {
+                    out.push(f.name.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// The instances of the body `def` names.
+    fn bodies_of(&self, def: DefId) -> Vec<String> {
+        self.program
+            .bodies
+            .values()
+            .filter(|b| b.instance.def == def)
+            .map(|b| b.instance.name.clone())
+            .collect()
+    }
+
+    /// The locals of `body` that hold the closure some `with_provider[R]`
+    /// call is given (through single-assignment moves and copies), each
+    /// with the `R` that call supplies to it.
+    fn supplied(&self, body: &Body) -> BTreeMap<u32, String> {
+        let defs = single_defs(body);
+        let mut out = BTreeMap::new();
+        for bb in &body.blocks {
+            let TerminatorKind::Call {
+                func:
+                    Operand::Const(Const {
+                        kind: ConstKind::FnDef(inst),
+                        ..
+                    }),
+                args,
+                ..
+            } = &bb.terminator.kind
+            else {
+                continue;
+            };
+            let (Some(r), Some(f)) = (
+                self.with_provider(&inst.name),
+                args.get(1).and_then(Operand::place),
+            ) else {
+                continue;
+            };
+            let mut at = f;
+            while at.projection.is_empty() && out.insert(at.local.0, r.clone()).is_none() {
+                match defs.get(&at.local.0) {
+                    Some(src) => at = src,
+                    None => break,
+                }
+            }
+        }
+        out
+    }
+
+    /// What each block of `body` needs a provider for, given the needs of
+    /// the bodies computed so far: its terminator's callee, a call on a
+    /// resource and the provider methods it runs, the closures and
+    /// function items its statements make as values (each captures the
+    /// providers its body needs, core semantics §14.3), function items
+    /// passed as arguments, and the `Drop` bodies its drops run. A
+    /// `with_provider[R]` call supplies `R` to its closure, so neither the
+    /// call nor the making of that closure needs `R`; a call through a
+    /// function value needs nothing (§14.6).
+    fn needs_sites(
+        &self,
+        body: &Body,
+        needs: &BTreeMap<String, Needs>,
+    ) -> Vec<(BasicBlock, crate::token::Span, Needs)> {
+        let supplied = self.supplied(body);
+        let of = |names: Vec<String>, n: &mut Needs, minus: Option<&String>| {
+            for b in names {
+                for (r, a) in needs.get(&b).into_iter().flatten() {
+                    if Some(r) != minus {
+                        need(n, r, *a);
+                    }
+                }
+            }
+        };
+        let mut out = Vec::new();
+        for (i, bb) in body.blocks.iter().enumerate() {
+            let block = BasicBlock(i as u32);
+            for st in &bb.statements {
+                if let StatementKind::Assign(dst, rv) = &st.kind {
+                    let minus = supplied
+                        .get(&dst.local.0)
+                        .filter(|_| dst.projection.is_empty());
+                    let mut n = Needs::new();
+                    of(self.made_fn_values(rv), &mut n, minus);
+                    if !n.is_empty() {
+                        out.push((block, st.source_info.span, n));
+                    }
+                }
+            }
+            let mut n = Needs::new();
+            match &bb.terminator.kind {
+                TerminatorKind::Call {
+                    func:
+                        Operand::Const(Const {
+                            kind: ConstKind::FnDef(inst),
+                            ..
+                        }),
+                    args,
+                    ..
+                } => {
+                    let binds = self.with_provider(&inst.name);
+                    if self.program.bodies.contains_key(&inst.name) {
+                        of(vec![inst.name.clone()], &mut n, None);
+                    } else if let Some((r, access, impls)) = self.resource_call(&inst.name) {
+                        need(&mut n, r, access);
+                        of(impls, &mut n, None);
+                    } else if let Some(r) = binds {
+                        if let Some(f) = args.get(1) {
+                            of(self.fn_value_bodies(body, f), &mut n, Some(r));
+                        }
+                        // The provider drops when the call returns (§14.4).
+                        if let Some(Ok(pt)) = args
+                            .first()
+                            .and_then(Operand::place)
+                            .map(|p| place_ty(body, self.tys, p))
+                        {
+                            let mut drops = Vec::new();
+                            self.drop_bodies(pt.ty, &mut Vec::new(), &mut drops);
+                            of(drops, &mut n, None);
+                        }
+                    }
+                    for (k, a) in args.iter().enumerate() {
+                        if binds.is_some() && k == 1 {
+                            continue;
+                        }
+                        if let Operand::Const(c) = a {
+                            of(
+                                self.made_fn_values(&Rvalue::Use(Operand::Const(c.clone()))),
+                                &mut n,
+                                None,
+                            );
+                        }
+                    }
+                }
+                TerminatorKind::Drop { place, .. } => {
+                    if let Ok(pt) = place_ty(body, self.tys, place) {
+                        let mut drops = Vec::new();
+                        self.drop_bodies(pt.ty, &mut Vec::new(), &mut drops);
+                        of(drops, &mut n, None);
+                    }
+                }
+                _ => {}
+            }
+            if !n.is_empty() {
+                out.push((block, bb.terminator.source_info.span, n));
             }
         }
         out
@@ -1302,12 +1615,7 @@ impl<'p> Analysis<'p> {
             SK::Closure { def, .. } | SK::FnDef { def, .. } => def,
             _ => return Vec::new(),
         };
-        self.program
-            .bodies
-            .values()
-            .filter(|b| b.instance.def == def)
-            .map(|b| b.instance.name.clone())
-            .collect()
+        self.bodies_of(def)
     }
 
     /// The `Drop` bodies dropping a value of type `ty` can run.
@@ -1427,6 +1735,31 @@ impl<'p> Analysis<'p> {
         if self.program.bodies.contains_key(&inst.name) {
             if let Some(callee) = summaries.get(&inst.name) {
                 eff.union(substitute(callee, &arg_key, &arg_fn));
+            }
+            return;
+        }
+        // A call on a resource reads or writes it as its method's receiver
+        // says (core semantics §14.2), and has the effects of the method of
+        // every provider bound to it.
+        if let Some((r, access, impls)) = self.resource_call(&inst.name) {
+            eff.add(Effect::new(access.verb(), r, Key::Any));
+            for m in impls {
+                if let Some(s) = summaries.get(&m) {
+                    eff.union(substitute(s, &|_| Key::Any, &|_| opaque()));
+                }
+            }
+            return;
+        }
+        // `with_provider[R](p, f)` has `f`'s effects but `R`'s, which the
+        // call supplies (§14.4), and drops `p` when it returns.
+        if let Some(r) = self.with_provider(&inst.name) {
+            let mut inner = self.fn_value_effects(body, defs, args.get(1), summaries);
+            inner.effects.retain(|e| e.class != *r);
+            eff.union(inner);
+            if let Some(p) = args.first().and_then(Operand::place) {
+                if let Ok(pt) = place_ty(body, self.tys, p) {
+                    self.drop_glue(pt.ty, Key::Any, summaries, &mut Vec::new(), eff);
+                }
             }
             return;
         }
@@ -2687,5 +3020,253 @@ fn main() {
 ",
         );
         assert_eq!(effects(&r, "esc"), vec!["allocates(Heap)".to_string()]);
+    }
+
+    /// Core semantics §14.3 and §14.6: which bodies take a hidden provider
+    /// parameter for `Clock`, read or write, through callees, mutual
+    /// recursion, closures and a provider method that prints; the
+    /// `with_provider` call supplies its closure, and the uses in `main`
+    /// that nothing supplies are `E_NO_PROVIDER`.
+    #[test]
+    fn effects_hidden_provider_parameters() {
+        let src = "
+struct Fake { t: i64 }
+struct Loud { t: i64 }
+
+fn Fake.now(_1: ref Fake) -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = const 1_i64;
+        return;
+    }
+}
+
+fn Loud.now(_1: ref Loud) -> i64 {
+    let mut _0: i64;
+    let _2: ();
+    bb0: {
+        _2 = println(const \"tick\") -> bb1;
+    }
+    bb1: {
+        _0 = const 2_i64;
+        return;
+    }
+}
+
+fn Fake.bump(_1: mut ref Fake) -> () {
+    let mut _0: ();
+    bb0: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn Loud.bump(_1: mut ref Loud) -> () {
+    let mut _0: ();
+    bb0: {
+        _0 = const ();
+        return;
+    }
+}
+
+fn read_it() -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = Clock.now() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn write_it() -> () {
+    let mut _0: ();
+    bb0: {
+        _0 = Clock.bump() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn relay() -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = read_it() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn both() -> () {
+    let mut _0: ();
+    let _1: i64;
+    bb0: {
+        _1 = relay() -> bb1;
+    }
+    bb1: {
+        _0 = write_it() -> bb2;
+    }
+    bb2: {
+        return;
+    }
+}
+
+fn ping(_1: i64) -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = pong(copy _1) -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn pong(_1: i64) -> i64 {
+    let mut _0: i64;
+    let _2: i64;
+    bb0: {
+        _2 = ping(copy _1) -> bb1;
+    }
+    bb1: {
+        _0 = read_it() -> bb2;
+    }
+    bb2: {
+        return;
+    }
+}
+
+fn pure() -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = const 3_i64;
+        return;
+    }
+}
+
+fn cl_read(_1: ()) -> i64 {
+    let mut _0: i64;
+    bb0: {
+        _0 = read_it() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn cl_both(_1: ()) -> () {
+    let mut _0: ();
+    bb0: {
+        _0 = both() -> bb1;
+    }
+    bb1: {
+        return;
+    }
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: Fake;
+    let _2: closure#14();
+    let _3: ();
+    let _4: closure#13();
+    let _5: i64;
+    bb0: {
+        _1 = Fake { const 1_i64 };
+        _2 = closure#14() [];
+        _3 = with_provider[Clock](move _1, move _2) -> bb1;
+    }
+    bb1: {
+        _4 = closure#13() [];
+        goto -> bb2;
+    }
+    bb2: {
+        _5 = relay() -> bb3;
+    }
+    bb3: {
+        _0 = const ();
+        return;
+    }
+}
+";
+        let (mut p, tys) = from_mir(src, &[]);
+        assert_eq!(p.bodies["cl_read"].instance.def, DefId(13));
+        assert_eq!(p.bodies["cl_both"].instance.def, DefId(14));
+        let ty = |body: &str, local: usize| p.bodies[body].locals[local].ty;
+        let fake = ty("main", 1);
+        let loud = {
+            let tcx = tys.tcx();
+            match tcx.kind(ty("Loud.now", 1)) {
+                SK::Ref(t) => t,
+                _ => unreachable!(),
+            }
+        };
+        let methods = |t: &str| {
+            BTreeMap::from([
+                ("now".to_string(), format!("{t}.now")),
+                ("bump".to_string(), format!("{t}.bump")),
+            ])
+        };
+        let mut decl = ResourceDecl {
+            methods: BTreeMap::from([("now".to_string(), false), ("bump".to_string(), true)]),
+            default: None,
+            impls: BTreeMap::from([(fake, methods("Fake")), (loud, methods("Loud"))]),
+        };
+        p.resources.insert("Clock".to_string(), decl.clone());
+        let r = analyze(&p, &tys);
+        let takes = |f: &str| -> Vec<String> {
+            r.providers
+                .get(f)
+                .map(|n| n.iter().map(|(r, a)| format!("{r} {a:?}")).collect())
+                .unwrap_or_default()
+        };
+        for (f, want) in [
+            ("read_it", vec!["Clock Reads"]),
+            ("write_it", vec!["Clock Writes"]),
+            ("relay", vec!["Clock Reads"]),
+            ("both", vec!["Clock Writes"]),
+            ("ping", vec!["Clock Reads"]),
+            ("pong", vec!["Clock Reads"]),
+            ("cl_read", vec!["Clock Reads"]),
+            ("cl_both", vec!["Clock Writes"]),
+            ("pure", vec![]),
+            ("Fake.now", vec![]),
+            // The closure `with_provider` is given needs no provider from
+            // `main`, but the one made outside it and the call do.
+            ("main", vec!["Clock Reads"]),
+        ] {
+            assert_eq!(takes(f), want, "{f}");
+        }
+        let sites: Vec<String> = r
+            .no_provider
+            .iter()
+            .map(|n| format!("{} {:?} {}", n.instance, n.block, n.resource))
+            .collect();
+        assert_eq!(
+            sites,
+            ["main BasicBlock(1) Clock", "main BasicBlock(2) Clock"]
+        );
+        // A call on the resource reads or writes it, and runs every bound
+        // provider's method: `Loud.now` prints.
+        assert!(effects(&r, "read_it").contains(&"reads(Clock)".to_string()));
+        assert!(effects(&r, "read_it").contains(&"writes(Stdout)".to_string()));
+        assert!(effects(&r, "write_it").contains(&"writes(Clock)".to_string()));
+        // `with_provider` supplies `Clock`, so its call has the closure's
+        // other effects but none on `Clock`.
+        let bb0 = r.sites["main"]
+            .iter()
+            .find(|s| s.block == BasicBlock(0))
+            .unwrap();
+        let shown = bb0.effects.display();
+        assert!(shown.iter().all(|e| !e.contains("Clock")), "{shown:?}");
+        assert!(shown.contains(&"writes(Stdout)".to_string()), "{shown:?}");
+        // A program-rooted resource has a default provider, so nothing is
+        // missing (§14.7); the hidden parameters stay as they were.
+        decl.default = Some(fake);
+        p.resources.insert("Clock".to_string(), decl);
+        let r2 = analyze(&p, &tys);
+        assert!(r2.no_provider.is_empty(), "{:?}", r2.no_provider);
+        assert_eq!(r2.providers, r.providers);
     }
 }

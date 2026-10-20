@@ -15500,7 +15500,10 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
         .bodies
         .values()
         .any(|b| !b.par_regions.is_empty());
-    if has_par && std::env::var("KARAC_MIR_EFFECTS").as_deref() != Ok("0") {
+    // A program with a resource to bind is checked for a call with no
+    // provider (core semantics §14.6, B-2026-10-20-7).
+    let has_resources = !lowered.program.resources.is_empty();
+    if (has_par || has_resources) && std::env::var("KARAC_MIR_EFFECTS").as_deref() != Ok("0") {
         let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
         if let Some((name, c)) = report
             .par_conflicts
@@ -15513,8 +15516,26 @@ pub fn par_check(lowered: &Lowered) -> Result<(), String> {
                 par_conflict_text(c)
             ));
         }
+        if let Some(n) = report.no_provider.first() {
+            return Err(format!(
+                "effects: in `{}` at line {}, {}",
+                n.instance,
+                n.span.line,
+                no_provider_text(&n.resource)
+            ));
+        }
     }
     Ok(())
+}
+
+/// The message for a call that needs `resource`'s provider where nothing
+/// supplies it (core semantics §14.6).
+pub fn no_provider_text(resource: &str) -> String {
+    format!(
+        "no provider for `{resource}`: this needs one and nothing supplies it, since `main` \
+         takes no hidden provider parameter (core semantics §14.6); run it inside \
+         `with_provider[{resource}](provider, || ...)`"
+    )
 }
 
 /// What conflicts in `c`, for a message: "branches 1 and 2 of the `par`
@@ -15532,13 +15553,25 @@ fn par_conflict_text(c: &crate::mir::effects::ParConflict) -> String {
     format!("{which} conflict: `{}` and `{}`", c.first.1, c.second.1)
 }
 
-/// `karac check`'s run of [`par_check`] (B-2026-10-19-39): the conflicting
-/// `par` regions of the program's own text, as the build finds them, each
-/// with the region's line and column and the message. A program with no `par` in its
-/// text, or one the builder stops on, gives none. `KARAC_MIR_EFFECTS=0`
-/// skips it, as it does for a run.
-pub fn source_par_conflicts(src: &str) -> Vec<((usize, usize), String)> {
-    if std::env::var("KARAC_MIR_EFFECTS").as_deref() == Ok("0") || !mentions_par(src) {
+/// Which rule a [`source_effect_errors`] finding breaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceEffectError {
+    /// Two branches of a `par` conflict (core semantics §11.2).
+    Par,
+    /// A call needs a provider nothing supplies (§14.6).
+    NoProvider,
+}
+
+/// `karac check`'s run of [`par_check`] (B-2026-10-19-39, B-2026-10-20-7):
+/// the conflicting `par` regions and the calls with no provider in the
+/// program's own text, as the build finds them, each with its line and
+/// column, its kind and the message. A program with neither `par` nor
+/// `effect resource` in its text, or one the builder stops on, gives none.
+/// `KARAC_MIR_EFFECTS=0` skips it, as it does for a run.
+pub fn source_effect_errors(src: &str) -> Vec<((usize, usize), SourceEffectError, String)> {
+    if std::env::var("KARAC_MIR_EFFECTS").as_deref() == Ok("0")
+        || !(mentions_par(src) || src.contains("effect resource"))
+    {
         return Vec::new();
     }
     let Ok(lowered) = build_source(src) else {
@@ -15546,17 +15579,33 @@ pub fn source_par_conflicts(src: &str) -> Vec<((usize, usize), String)> {
     };
     let user_lines = src.lines().count();
     let report = crate::mir::effects::analyze(&lowered.program, &lowered.tys);
-    let mut out: Vec<((usize, usize), String)> = Vec::new();
+    let mut out: Vec<((usize, usize), SourceEffectError, String)> = Vec::new();
+    let mut add = |span: crate::token::Span, kind, text: String| {
+        let at = (span.line, span.column);
+        if span.line == 0
+            || span.line > user_lines
+            || out.iter().any(|(a, k, _)| *a == at && *k == kind)
+        {
+            return;
+        }
+        out.push((at, kind, text));
+    };
     for (name, found) in &report.par_conflicts {
         let body = &lowered.program.bodies[name];
         for c in found {
-            let span = body.par_regions[c.region].span;
-            let at = (span.line, span.column);
-            if span.line == 0 || span.line > user_lines || out.iter().any(|(a, _)| *a == at) {
-                continue;
-            }
-            out.push((at, par_conflict_text(c)));
+            add(
+                body.par_regions[c.region].span,
+                SourceEffectError::Par,
+                par_conflict_text(c),
+            );
         }
+    }
+    for n in &report.no_provider {
+        add(
+            n.span,
+            SourceEffectError::NoProvider,
+            no_provider_text(&n.resource),
+        );
     }
     out.sort();
     out
