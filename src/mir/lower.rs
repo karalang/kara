@@ -260,6 +260,7 @@ fn lower_program_inner<'a>(
         closure_exprs: FxHashMap::default(),
         closure_queue: Vec::new(),
         fn_param_tys: FxHashMap::default(),
+        own_self_trait_methods: FxHashSet::default(),
     };
     lcx.index_functions(program);
     // Statics are initialized in declaration order, so they are numbered
@@ -611,6 +612,10 @@ struct Lcx<'a> {
     /// Instances whose function-typed parameters take a concrete closure
     /// or function type: by instance name, one entry per parameter.
     fn_param_tys: FxHashMap<String, Vec<Option<Ty>>>,
+    /// The trait methods declared `own self`, by trait and method name: a
+    /// generic call through one moves its receiver even into an impl that
+    /// borrows it (core semantics §4.7).
+    own_self_trait_methods: FxHashSet<(String, String)>,
 }
 
 /// An element position in a sequence a slice pattern matches.
@@ -753,6 +758,16 @@ impl<'a> Lcx<'a> {
                 Item::ConstDecl(c) => {
                     if let Some(d) = self.defs.lookup(0, &c.name) {
                         self.consts.insert(d, &c.value);
+                    }
+                }
+                Item::TraitDef(t) => {
+                    for it in &t.items {
+                        if let ast::TraitItem::Method(m) = it {
+                            if m.self_is_own {
+                                self.own_self_trait_methods
+                                    .insert((t.name.clone(), m.name.clone()));
+                            }
+                        }
                     }
                 }
                 // An immutable module `let` is evaluated where it is used,
@@ -11185,6 +11200,33 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// Whether `object.m()`, calling the impl method `d`, names a trait
+    /// method declared `own self` through a generic receiver.
+    fn moves_into_borrowing_impl(&self, object: &Expr, d: DefId) -> bool {
+        let generic = self
+            .lcx
+            .node_types
+            .get(&object.id)
+            .is_some_and(|&t| matches!(self.tys().tcx().kind(t), HK::Param(_)));
+        if !generic {
+            return false;
+        }
+        let segs = &self.lcx.defs.table.get(d).path.segments;
+        let n = segs.len();
+        let Some(tr) = segs
+            .get(n.wrapping_sub(2))
+            .and_then(|l| l.strip_prefix("impl "))
+            .and_then(|l| l.rsplit_once('#'))
+            .map(|(t, _)| t)
+        else {
+            return false;
+        };
+        let tr = tr.split('[').next().unwrap_or(tr);
+        self.lcx
+            .own_self_trait_methods
+            .contains(&(tr.to_string(), self.lcx.fns[&d].f.name.clone()))
+    }
+
     /// The receiver mode a body takes: under D5 a bare `self` of a
     /// non-`Copy` type borrows (core semantics §8), and `own self` is owned.
     fn self_mode(&self, f: &ast::Function, mode: SelfParam, t: Ty) -> SelfParam {
@@ -13109,6 +13151,18 @@ impl<'l, 'a> Bx<'l, 'a> {
                 // through its type, which is all the object is.
                 let recv = match mode {
                     _ if slice_recv.is_some() => slice_recv.map(PendingRecv::Ready),
+                    // Through a generic bound the trait's `own self` moves
+                    // the receiver, even into an impl that borrows it: the
+                    // moved value is the call's temporary, dropped at the
+                    // end of the statement (core semantics §4.7, §7.4).
+                    Some(SelfParam::Ref | SelfParam::MutRef)
+                        if self.moves_into_borrowing_impl(object, d) =>
+                    {
+                        let st = self.expr_ty(object)?;
+                        let mutable = mode == Some(SelfParam::MutRef);
+                        let l = self.temp_of(object, st)?;
+                        Some(PendingRecv::Borrow(Place::local(l), st, mutable))
+                    }
                     Some(SelfParam::Owned) => {
                         let st = self.expr_ty(object)?;
                         let (_, st) = self.strip_ty_full(st);
