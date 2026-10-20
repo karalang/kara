@@ -1,0 +1,1162 @@
+== jobs
+parse 'x = 1'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1))])
+  | x = 1
+parse 'a = b = c'
+  Module(body=[Assign(targets=[Name(id='a', ctx=Store()), Name(id='b', ctx=Store())], value=Name(id='c', ctx=Load()))])
+  | a = b = c
+parse 'x, = y'
+  Module(body=[Assign(targets=[Tuple(elts=[Name(id='x', ctx=Store())], ctx=Store())], value=Name(id='y', ctx=Load()))])
+  | x, = y
+parse 'a, *b = c'
+  Module(body=[Assign(targets=[Tuple(elts=[Name(id='a', ctx=Store()), Starred(value=Name(id='b', ctx=Store()), ctx=Store())], ctx=Store())], value=Name(id='c', ctx=Load()))])
+  | a, *b = c
+parse '*a, b = c'
+  Module(body=[Assign(targets=[Tuple(elts=[Starred(value=Name(id='a', ctx=Store()), ctx=Store()), Name(id='b', ctx=Store())], ctx=Store())], value=Name(id='c', ctx=Load()))])
+  | *a, b = c
+parse 'x @= y'
+  Module(body=[AugAssign(target=Name(id='x', ctx=Store()), op=MatMult(), value=Name(id='y', ctx=Load()))])
+  | x @= y
+parse 'x //= 2; y **= 3; z >>= 1'
+  Module(body=[AugAssign(target=Name(id='x', ctx=Store()), op=FloorDiv(), value=Constant(value=2)), AugAssign(target=Name(id='y', ctx=Store()), op=Pow(), value=Constant(value=3)), AugAssign(target=Name(id='z', ctx=Store()), op=RShift(), value=Constant(value=1))])
+  | x //= 2
+  | y **= 3
+  | z >>= 1
+parse 'x: int'
+  Module(body=[AnnAssign(target=Name(id='x', ctx=Store()), annotation=Name(id='int', ctx=Load()), simple=1)])
+  | x: int
+parse 'x: list[int] = []'
+  Module(body=[AnnAssign(target=Name(id='x', ctx=Store()), annotation=Subscript(value=Name(id='list', ctx=Load()), slice=Name(id='int', ctx=Load()), ctx=Load()), value=List(ctx=Load()), simple=1)])
+  | x: list[int] = []
+parse '(x): int = 1'
+  Module(body=[AnnAssign(target=Name(id='x', ctx=Store()), annotation=Name(id='int', ctx=Load()), value=Constant(value=1), simple=0)])
+  | (x): int = 1
+parse 'x.y: int'
+  Module(body=[AnnAssign(target=Attribute(value=Name(id='x', ctx=Load()), attr='y', ctx=Store()), annotation=Name(id='int', ctx=Load()), simple=0)])
+  | x.y: int
+parse 'del a[0], b.c, (d, e)'
+  Module(body=[Delete(targets=[Subscript(value=Name(id='a', ctx=Load()), slice=Constant(value=0), ctx=Del()), Attribute(value=Name(id='b', ctx=Load()), attr='c', ctx=Del()), Tuple(elts=[Name(id='d', ctx=Del()), Name(id='e', ctx=Del())], ctx=Del())])])
+  | del a[0], b.c, (d, e)
+parse 'pass; break; continue'
+  Module(body=[Pass(), Break(), Continue()])
+  | pass
+  | break
+  | continue
+parse 'return'
+  Module(body=[Return()])
+  | return
+parse 'return *a, b'
+  Module(body=[Return(value=Tuple(elts=[Starred(value=Name(id='a', ctx=Load()), ctx=Load()), Name(id='b', ctx=Load())], ctx=Load()))])
+  | return (*a, b)
+parse 'raise'
+  Module(body=[Raise()])
+  | raise
+parse 'raise E from c'
+  Module(body=[Raise(exc=Name(id='E', ctx=Load()), cause=Name(id='c', ctx=Load()))])
+  | raise E from c
+parse "assert x, 'm'"
+  Module(body=[Assert(test=Name(id='x', ctx=Load()), msg=Constant(value='m'))])
+  | assert x, 'm'
+parse 'global a, b'
+  Module(body=[Global(names=['a', 'b'])])
+  | global a, b
+parse 'nonlocal x'
+  Module(body=[Nonlocal(names=['x'])])
+  | nonlocal x
+parse 'import a.b.c as d, e'
+  Module(body=[Import(names=[alias(name='a.b.c', asname='d'), alias(name='e')])])
+  | import a.b.c as d, e
+parse 'from ... import x'
+  Module(body=[ImportFrom(names=[alias(name='x')], level=3)])
+  | from ... import x
+parse 'from .a.b import *'
+  Module(body=[ImportFrom(module='a.b', names=[alias(name='*')], level=1)])
+  | from .a.b import *
+parse 'from x import (a, b as c,)'
+  Module(body=[ImportFrom(module='x', names=[alias(name='a'), alias(name='b', asname='c')], level=0)])
+  | from x import a, b as c
+parse 'from . import mod'
+  Module(body=[ImportFrom(names=[alias(name='mod')], level=1)])
+  | from . import mod
+parse 'if a:\n    pass\nelif b:\n    pass\nelif c:\n    x\nelse:\n    y'
+  Module(body=[If(test=Name(id='a', ctx=Load()), body=[Pass()], orelse=[If(test=Name(id='b', ctx=Load()), body=[Pass()], orelse=[If(test=Name(id='c', ctx=Load()), body=[Expr(value=Name(id='x', ctx=Load()))], orelse=[Expr(value=Name(id='y', ctx=Load()))])])])])
+  | if a:
+  |     pass
+  | elif b:
+  |     pass
+  | elif c:
+  |     x
+  | else:
+  |     y
+parse 'if a:\n    pass\nelse:\n    if b:\n        pass'
+  Module(body=[If(test=Name(id='a', ctx=Load()), body=[Pass()], orelse=[If(test=Name(id='b', ctx=Load()), body=[Pass()])])])
+  | if a:
+  |     pass
+  | elif b:
+  |     pass
+parse 'while x:\n    break\nelse:\n    continue'
+  Module(body=[While(test=Name(id='x', ctx=Load()), body=[Break()], orelse=[Continue()])])
+  | while x:
+  |     break
+  | else:
+  |     continue
+parse 'for i, j in x: pass'
+  Module(body=[For(target=Tuple(elts=[Name(id='i', ctx=Store()), Name(id='j', ctx=Store())], ctx=Store()), iter=Name(id='x', ctx=Load()), body=[Pass()])])
+  | for i, j in x:
+  |     pass
+parse 'for x in *a, *b: pass'
+  Module(body=[For(target=Name(id='x', ctx=Store()), iter=Tuple(elts=[Starred(value=Name(id='a', ctx=Load()), ctx=Load()), Starred(value=Name(id='b', ctx=Load()), ctx=Load())], ctx=Load()), body=[Pass()])])
+  | for x in (*a, *b):
+  |     pass
+parse 'for (a, b) in c:\n    pass\nelse:\n    d'
+  Module(body=[For(target=Tuple(elts=[Name(id='a', ctx=Store()), Name(id='b', ctx=Store())], ctx=Store()), iter=Name(id='c', ctx=Load()), body=[Pass()], orelse=[Expr(value=Name(id='d', ctx=Load()))])])
+  | for a, b in c:
+  |     pass
+  | else:
+  |     d
+parse 'try:\n  pass\nexcept E as e:\n  pass\nexcept (A, B):\n  pass\nexcept:\n  raise\nelse:\n  pass\nfinally:\n  pass'
+  Module(body=[Try(body=[Pass()], handlers=[ExceptHandler(type=Name(id='E', ctx=Load()), name='e', body=[Pass()]), ExceptHandler(type=Tuple(elts=[Name(id='A', ctx=Load()), Name(id='B', ctx=Load())], ctx=Load()), body=[Pass()]), ExceptHandler(body=[Raise()])], orelse=[Pass()], finalbody=[Pass()])])
+  | try:
+  |     pass
+  | except E as e:
+  |     pass
+  | except (A, B):
+  |     pass
+  | except:
+  |     raise
+  | else:
+  |     pass
+  | finally:
+  |     pass
+parse 'try:\n  pass\nfinally:\n  pass'
+  Module(body=[Try(body=[Pass()], finalbody=[Pass()])])
+  | try:
+  |     pass
+  | finally:
+  |     pass
+parse 'try:\n  pass\nexcept* E: pass'
+  Module(body=[TryStar(body=[Pass()], handlers=[ExceptHandler(type=Name(id='E', ctx=Load()), body=[Pass()])])])
+  | try:
+  |     pass
+  | except* E:
+  |     pass
+parse 'with a as b, c: pass'
+  Module(body=[With(items=[withitem(context_expr=Name(id='a', ctx=Load()), optional_vars=Name(id='b', ctx=Store())), withitem(context_expr=Name(id='c', ctx=Load()))], body=[Pass()])])
+  | with a as b, c:
+  |     pass
+parse 'with (a as b, c as d): pass'
+  Module(body=[With(items=[withitem(context_expr=Name(id='a', ctx=Load()), optional_vars=Name(id='b', ctx=Store())), withitem(context_expr=Name(id='c', ctx=Load()), optional_vars=Name(id='d', ctx=Store()))], body=[Pass()])])
+  | with a as b, c as d:
+  |     pass
+parse 'with (a, b): pass'
+  Module(body=[With(items=[withitem(context_expr=Name(id='a', ctx=Load())), withitem(context_expr=Name(id='b', ctx=Load()))], body=[Pass()])])
+  | with a, b:
+  |     pass
+parse 'with (yield): pass'
+  Module(body=[With(items=[withitem(context_expr=Yield())], body=[Pass()])])
+  | with (yield):
+  |     pass
+parse 'with open(p) as f, lock:\n    data = f.read()'
+  Module(body=[With(items=[withitem(context_expr=Call(func=Name(id='open', ctx=Load()), args=[Name(id='p', ctx=Load())]), optional_vars=Name(id='f', ctx=Store())), withitem(context_expr=Name(id='lock', ctx=Load()))], body=[Assign(targets=[Name(id='data', ctx=Store())], value=Call(func=Attribute(value=Name(id='f', ctx=Load()), attr='read', ctx=Load())))])])
+  | with open(p) as f, lock:
+  |     data = f.read()
+parse 'def f(): pass'
+  Module(body=[FunctionDef(name='f', args=arguments(), body=[Pass()])])
+  | def f():
+  |     pass
+parse 'def f(a, /, b=2, *c, d, e=3, **g) -> int:\n    "doc"\n    return a'
+  Module(body=[FunctionDef(name='f', args=arguments(posonlyargs=[arg(arg='a')], args=[arg(arg='b')], vararg=arg(arg='c'), kwonlyargs=[arg(arg='d'), arg(arg='e')], kw_defaults=[None, Constant(value=3)], kwarg=arg(arg='g'), defaults=[Constant(value=2)]), body=[Expr(value=Constant(value='doc')), Return(value=Name(id='a', ctx=Load()))], returns=Name(id='int', ctx=Load()))])
+  | def f(a, /, b=2, *c, d, e=3, **g) -> int:
+  |     """doc"""
+  |     return a
+parse 'def f(a, b=1, /, c=2): pass'
+  Module(body=[FunctionDef(name='f', args=arguments(posonlyargs=[arg(arg='a'), arg(arg='b')], args=[arg(arg='c')], defaults=[Constant(value=1), Constant(value=2)]), body=[Pass()])])
+  | def f(a, b=1, /, c=2):
+  |     pass
+parse 'def f(*, a, b=1): pass'
+  Module(body=[FunctionDef(name='f', args=arguments(kwonlyargs=[arg(arg='a'), arg(arg='b')], kw_defaults=[None, Constant(value=1)]), body=[Pass()])])
+  | def f(*, a, b=1):
+  |     pass
+parse "def f(a: int = 0, *args: str, **kw: 'T') -> None: ..."
+  Module(body=[FunctionDef(name='f', args=arguments(args=[arg(arg='a', annotation=Name(id='int', ctx=Load()))], vararg=arg(arg='args', annotation=Name(id='str', ctx=Load())), kwarg=arg(arg='kw', annotation=Constant(value='T')), defaults=[Constant(value=0)]), body=[Expr(value=Constant(value=Ellipsis))], returns=Constant(value=None))])
+  | def f(a: int=0, *args: str, **kw: 'T') -> None:
+  |     ...
+parse '@d\n@e.f(1)\ndef g(): pass'
+  Module(body=[FunctionDef(name='g', args=arguments(), body=[Pass()], decorator_list=[Name(id='d', ctx=Load()), Call(func=Attribute(value=Name(id='e', ctx=Load()), attr='f', ctx=Load()), args=[Constant(value=1)])])])
+  | @d
+  | @e.f(1)
+  | def g():
+  |     pass
+parse '@property\ndef x(self): return self._x'
+  Module(body=[FunctionDef(name='x', args=arguments(args=[arg(arg='self')]), body=[Return(value=Attribute(value=Name(id='self', ctx=Load()), attr='_x', ctx=Load()))], decorator_list=[Name(id='property', ctx=Load())])])
+  | @property
+  | def x(self):
+  |     return self._x
+parse 'async def f():\n    async for x in y: pass\n    async with a: pass\n    await b\n    return [i async for i in z]'
+  Module(body=[AsyncFunctionDef(name='f', args=arguments(), body=[AsyncFor(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), body=[Pass()]), AsyncWith(items=[withitem(context_expr=Name(id='a', ctx=Load()))], body=[Pass()]), Expr(value=Await(value=Name(id='b', ctx=Load()))), Return(value=ListComp(elt=Name(id='i', ctx=Load()), generators=[comprehension(target=Name(id='i', ctx=Store()), iter=Name(id='z', ctx=Load()), is_async=1)]))])])
+  | async def f():
+  |     async for x in y:
+  |         pass
+  |     async with a:
+  |         pass
+  |     await b
+  |     return [i async for i in z]
+parse 'class C: pass'
+  Module(body=[ClassDef(name='C', body=[Pass()])])
+  | class C:
+  |     pass
+parse "class C(B, metaclass=M):\n    '''Doc.'''\n    x = 1\n\n    def m(self): pass"
+  Module(body=[ClassDef(name='C', bases=[Name(id='B', ctx=Load())], keywords=[keyword(arg='metaclass', value=Name(id='M', ctx=Load()))], body=[Expr(value=Constant(value='Doc.')), Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1)), FunctionDef(name='m', args=arguments(args=[arg(arg='self')]), body=[Pass()])])])
+  | class C(B, metaclass=M):
+  |     """Doc."""
+  |     x = 1
+  | 
+  |     def m(self):
+  |         pass
+parse 'class C(*bases, **kw): pass'
+  Module(body=[ClassDef(name='C', bases=[Starred(value=Name(id='bases', ctx=Load()), ctx=Load())], keywords=[keyword(value=Name(id='kw', ctx=Load()))], body=[Pass()])])
+  | class C(*bases, **kw):
+  |     pass
+parse '@dataclass\nclass P:\n    x: int\n    y: int = 0'
+  Module(body=[ClassDef(name='P', body=[AnnAssign(target=Name(id='x', ctx=Store()), annotation=Name(id='int', ctx=Load()), simple=1), AnnAssign(target=Name(id='y', ctx=Store()), annotation=Name(id='int', ctx=Load()), value=Constant(value=0), simple=1)], decorator_list=[Name(id='dataclass', ctx=Load())])])
+  | @dataclass
+  | class P:
+  |     x: int
+  |     y: int = 0
+parse 'def f():\n    yield\n    yield x\n    yield x, y\n    yield from z\n    x = yield'
+  Module(body=[FunctionDef(name='f', args=arguments(), body=[Expr(value=Yield()), Expr(value=Yield(value=Name(id='x', ctx=Load()))), Expr(value=Yield(value=Tuple(elts=[Name(id='x', ctx=Load()), Name(id='y', ctx=Load())], ctx=Load()))), Expr(value=YieldFrom(value=Name(id='z', ctx=Load()))), Assign(targets=[Name(id='x', ctx=Store())], value=Yield())])])
+  | def f():
+  |     yield
+  |     yield x
+  |     yield (x, y)
+  |     yield from z
+  |     x = (yield)
+parse 'x = (yield)'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Yield())])
+  | x = (yield)
+parse 'if x:\n    pass\n\n# comment\ny = 2  # trailing'
+  Module(body=[If(test=Name(id='x', ctx=Load()), body=[Pass()]), Assign(targets=[Name(id='y', ctx=Store())], value=Constant(value=2))])
+  | if x:
+  |     pass
+  | y = 2
+parse 'x = [\n    1,\n    2,  # two\n]'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=List(elts=[Constant(value=1), Constant(value=2)], ctx=Load()))])
+  | x = [1, 2]
+parse 'x = 1 + \\\n    2'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=BinOp(left=Constant(value=1), op=Add(), right=Constant(value=2)))])
+  | x = 1 + 2
+parse 'x = 1_000 + 0x_ff + 0o17 + 0b101 + 1e-3 + 2.5j + 1E5 + .5 + 5. + 0j'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=BinOp(left=BinOp(left=BinOp(left=BinOp(left=BinOp(left=BinOp(left=BinOp(left=BinOp(left=BinOp(left=Constant(value=1000), op=Add(), right=Constant(value=255)), op=Add(), right=Constant(value=15)), op=Add(), right=Constant(value=5)), op=Add(), right=Constant(value=0.001)), op=Add(), right=Constant(value=2.5j)), op=Add(), right=Constant(value=100000.0)), op=Add(), right=Constant(value=0.5)), op=Add(), right=Constant(value=5.0)), op=Add(), right=Constant(value=0j)))])
+  | x = 1000 + 255 + 15 + 5 + 0.001 + 2.5j + 100000.0 + 0.5 + 5.0 + 0j
+parse 'x = 10**100 + 0xffffffffffffffffffffffff + 18446744073709551616'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=BinOp(left=BinOp(left=BinOp(left=Constant(value=10), op=Pow(), right=Constant(value=100)), op=Add(), right=Constant(value=79228162514264337593543950335)), op=Add(), right=Constant(value=18446744073709551616)))])
+  | x = 10 ** 100 + 79228162514264337593543950335 + 18446744073709551616
+parse 'x = 1e400 + 1.5e-320 + 3.14159265358979323846 + 0.1 + 1e16 + 1e-05 + 123456789012345678.0'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=BinOp(left=BinOp(left=BinOp(left=BinOp(left=BinOp(left=BinOp(left=Constant(value=inf), op=Add(), right=Constant(value=1.5e-320)), op=Add(), right=Constant(value=3.141592653589793)), op=Add(), right=Constant(value=0.1)), op=Add(), right=Constant(value=1e+16)), op=Add(), right=Constant(value=1e-05)), op=Add(), right=Constant(value=1.2345678901234568e+17)))])
+  | x = 1e309 + 1.5e-320 + 3.141592653589793 + 0.1 + 1e+16 + 1e-05 + 1.2345678901234568e+17
+parse '...'
+  Module(body=[Expr(value=Constant(value=Ellipsis))])
+  | ...
+parse 'x[...]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Constant(value=Ellipsis), ctx=Load()))])
+  | x[...]
+parse 'True, False, None'
+  Module(body=[Expr(value=Tuple(elts=[Constant(value=True), Constant(value=False), Constant(value=None)], ctx=Load()))])
+  | (True, False, None)
+parse 'not a or b and c'
+  Module(body=[Expr(value=BoolOp(op=Or(), values=[UnaryOp(op=Not(), operand=Name(id='a', ctx=Load())), BoolOp(op=And(), values=[Name(id='b', ctx=Load()), Name(id='c', ctx=Load())])]))])
+  | not a or (b and c)
+parse 'a and b and c or d or e'
+  Module(body=[Expr(value=BoolOp(op=Or(), values=[BoolOp(op=And(), values=[Name(id='a', ctx=Load()), Name(id='b', ctx=Load()), Name(id='c', ctx=Load())]), Name(id='d', ctx=Load()), Name(id='e', ctx=Load())]))])
+  | a and b and c or d or e
+parse '(a or b) and c'
+  Module(body=[Expr(value=BoolOp(op=And(), values=[BoolOp(op=Or(), values=[Name(id='a', ctx=Load()), Name(id='b', ctx=Load())]), Name(id='c', ctx=Load())]))])
+  | (a or b) and c
+parse 'not not x'
+  Module(body=[Expr(value=UnaryOp(op=Not(), operand=UnaryOp(op=Not(), operand=Name(id='x', ctx=Load()))))])
+  | not not x
+parse '-x ** 2'
+  Module(body=[Expr(value=UnaryOp(op=USub(), operand=BinOp(left=Name(id='x', ctx=Load()), op=Pow(), right=Constant(value=2))))])
+  | -x ** 2
+parse '(-x) ** 2'
+  Module(body=[Expr(value=BinOp(left=UnaryOp(op=USub(), operand=Name(id='x', ctx=Load())), op=Pow(), right=Constant(value=2)))])
+  | (-x) ** 2
+parse 'a ** b ** c'
+  Module(body=[Expr(value=BinOp(left=Name(id='a', ctx=Load()), op=Pow(), right=BinOp(left=Name(id='b', ctx=Load()), op=Pow(), right=Name(id='c', ctx=Load()))))])
+  | a ** b ** c
+parse '(a ** b) ** c'
+  Module(body=[Expr(value=BinOp(left=BinOp(left=Name(id='a', ctx=Load()), op=Pow(), right=Name(id='b', ctx=Load())), op=Pow(), right=Name(id='c', ctx=Load())))])
+  | (a ** b) ** c
+parse 'a - b - c'
+  Module(body=[Expr(value=BinOp(left=BinOp(left=Name(id='a', ctx=Load()), op=Sub(), right=Name(id='b', ctx=Load())), op=Sub(), right=Name(id='c', ctx=Load())))])
+  | a - b - c
+parse 'a - (b - c)'
+  Module(body=[Expr(value=BinOp(left=Name(id='a', ctx=Load()), op=Sub(), right=BinOp(left=Name(id='b', ctx=Load()), op=Sub(), right=Name(id='c', ctx=Load()))))])
+  | a - (b - c)
+parse 'a * b + c * d'
+  Module(body=[Expr(value=BinOp(left=BinOp(left=Name(id='a', ctx=Load()), op=Mult(), right=Name(id='b', ctx=Load())), op=Add(), right=BinOp(left=Name(id='c', ctx=Load()), op=Mult(), right=Name(id='d', ctx=Load()))))])
+  | a * b + c * d
+parse '(a + b) * c'
+  Module(body=[Expr(value=BinOp(left=BinOp(left=Name(id='a', ctx=Load()), op=Add(), right=Name(id='b', ctx=Load())), op=Mult(), right=Name(id='c', ctx=Load())))])
+  | (a + b) * c
+parse 'a << b + c & d | e ^ f'
+  Module(body=[Expr(value=BinOp(left=BinOp(left=BinOp(left=Name(id='a', ctx=Load()), op=LShift(), right=BinOp(left=Name(id='b', ctx=Load()), op=Add(), right=Name(id='c', ctx=Load()))), op=BitAnd(), right=Name(id='d', ctx=Load())), op=BitOr(), right=BinOp(left=Name(id='e', ctx=Load()), op=BitXor(), right=Name(id='f', ctx=Load()))))])
+  | a << b + c & d | e ^ f
+parse '~a + -b * +c'
+  Module(body=[Expr(value=BinOp(left=UnaryOp(op=Invert(), operand=Name(id='a', ctx=Load())), op=Add(), right=BinOp(left=UnaryOp(op=USub(), operand=Name(id='b', ctx=Load())), op=Mult(), right=UnaryOp(op=UAdd(), operand=Name(id='c', ctx=Load())))))])
+  | ~a + -b * +c
+parse 'a @ b / c // d % e'
+  Module(body=[Expr(value=BinOp(left=BinOp(left=BinOp(left=BinOp(left=Name(id='a', ctx=Load()), op=MatMult(), right=Name(id='b', ctx=Load())), op=Div(), right=Name(id='c', ctx=Load())), op=FloorDiv(), right=Name(id='d', ctx=Load())), op=Mod(), right=Name(id='e', ctx=Load())))])
+  | a @ b / c // d % e
+parse 'a < b < c'
+  Module(body=[Expr(value=Compare(left=Name(id='a', ctx=Load()), ops=[Lt(), Lt()], comparators=[Name(id='b', ctx=Load()), Name(id='c', ctx=Load())]))])
+  | a < b < c
+parse 'a is not b, a not in b, a in b, a is b'
+  Module(body=[Expr(value=Tuple(elts=[Compare(left=Name(id='a', ctx=Load()), ops=[IsNot()], comparators=[Name(id='b', ctx=Load())]), Compare(left=Name(id='a', ctx=Load()), ops=[NotIn()], comparators=[Name(id='b', ctx=Load())]), Compare(left=Name(id='a', ctx=Load()), ops=[In()], comparators=[Name(id='b', ctx=Load())]), Compare(left=Name(id='a', ctx=Load()), ops=[Is()], comparators=[Name(id='b', ctx=Load())])], ctx=Load()))])
+  | (a is not b, a not in b, a in b, a is b)
+parse 'a == b != c <= d >= e > f'
+  Module(body=[Expr(value=Compare(left=Name(id='a', ctx=Load()), ops=[Eq(), NotEq(), LtE(), GtE(), Gt()], comparators=[Name(id='b', ctx=Load()), Name(id='c', ctx=Load()), Name(id='d', ctx=Load()), Name(id='e', ctx=Load()), Name(id='f', ctx=Load())]))])
+  | a == b != c <= d >= e > f
+parse '(a < b) < c'
+  Module(body=[Expr(value=Compare(left=Compare(left=Name(id='a', ctx=Load()), ops=[Lt()], comparators=[Name(id='b', ctx=Load())]), ops=[Lt()], comparators=[Name(id='c', ctx=Load())]))])
+  | (a < b) < c
+parse 'x if y else z'
+  Module(body=[Expr(value=IfExp(test=Name(id='y', ctx=Load()), body=Name(id='x', ctx=Load()), orelse=Name(id='z', ctx=Load())))])
+  | x if y else z
+parse 'a if b else c if d else e'
+  Module(body=[Expr(value=IfExp(test=Name(id='b', ctx=Load()), body=Name(id='a', ctx=Load()), orelse=IfExp(test=Name(id='d', ctx=Load()), body=Name(id='c', ctx=Load()), orelse=Name(id='e', ctx=Load()))))])
+  | a if b else c if d else e
+parse '(a if b else c) if d else e'
+  Module(body=[Expr(value=IfExp(test=Name(id='d', ctx=Load()), body=IfExp(test=Name(id='b', ctx=Load()), body=Name(id='a', ctx=Load()), orelse=Name(id='c', ctx=Load())), orelse=Name(id='e', ctx=Load())))])
+  | (a if b else c) if d else e
+parse 'lambda: 0'
+  Module(body=[Expr(value=Lambda(args=arguments(), body=Constant(value=0)))])
+  | lambda: 0
+parse 'lambda x, *y, z=1, **w: x'
+  Module(body=[Expr(value=Lambda(args=arguments(args=[arg(arg='x')], vararg=arg(arg='y'), kwonlyargs=[arg(arg='z')], kw_defaults=[Constant(value=1)], kwarg=arg(arg='w')), body=Name(id='x', ctx=Load())))])
+  | lambda x, *y, z=1, **w: x
+parse 'lambda x=1, /, y=2: (x, y)'
+  Module(body=[Expr(value=Lambda(args=arguments(posonlyargs=[arg(arg='x')], args=[arg(arg='y')], defaults=[Constant(value=1), Constant(value=2)]), body=Tuple(elts=[Name(id='x', ctx=Load()), Name(id='y', ctx=Load())], ctx=Load())))])
+  | lambda x=1, /, y=2: (x, y)
+parse 'lambda *, k: k'
+  Module(body=[Expr(value=Lambda(args=arguments(kwonlyargs=[arg(arg='k')], kw_defaults=[None]), body=Name(id='k', ctx=Load())))])
+  | lambda *, k: k
+parse 'f(lambda x: x + 1, key=lambda y: -y)'
+  Module(body=[Expr(value=Call(func=Name(id='f', ctx=Load()), args=[Lambda(args=arguments(args=[arg(arg='x')]), body=BinOp(left=Name(id='x', ctx=Load()), op=Add(), right=Constant(value=1)))], keywords=[keyword(arg='key', value=Lambda(args=arguments(args=[arg(arg='y')]), body=UnaryOp(op=USub(), operand=Name(id='y', ctx=Load()))))]))])
+  | f(lambda x: x + 1, key=lambda y: -y)
+parse 'x = [y := 1, y**2]'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=List(elts=[NamedExpr(target=Name(id='y', ctx=Store()), value=Constant(value=1)), BinOp(left=Name(id='y', ctx=Load()), op=Pow(), right=Constant(value=2))], ctx=Load()))])
+  | x = [(y := 1), y ** 2]
+parse 'if (n := len(a)) > 10: pass'
+  Module(body=[If(test=Compare(left=NamedExpr(target=Name(id='n', ctx=Store()), value=Call(func=Name(id='len', ctx=Load()), args=[Name(id='a', ctx=Load())])), ops=[Gt()], comparators=[Constant(value=10)]), body=[Pass()])])
+  | if (n := len(a)) > 10:
+  |     pass
+parse 'f(x := 1)'
+  Module(body=[Expr(value=Call(func=Name(id='f', ctx=Load()), args=[NamedExpr(target=Name(id='x', ctx=Store()), value=Constant(value=1))]))])
+  | f((x := 1))
+parse 'a.b.c(d)[e](f)'
+  Module(body=[Expr(value=Call(func=Subscript(value=Call(func=Attribute(value=Attribute(value=Name(id='a', ctx=Load()), attr='b', ctx=Load()), attr='c', ctx=Load()), args=[Name(id='d', ctx=Load())]), slice=Name(id='e', ctx=Load()), ctx=Load()), args=[Name(id='f', ctx=Load())]))])
+  | a.b.c(d)[e](f)
+parse 'f(a)(b)'
+  Module(body=[Expr(value=Call(func=Call(func=Name(id='f', ctx=Load()), args=[Name(id='a', ctx=Load())]), args=[Name(id='b', ctx=Load())]))])
+  | f(a)(b)
+parse 'f(a, *b, k=1, **c)'
+  Module(body=[Expr(value=Call(func=Name(id='f', ctx=Load()), args=[Name(id='a', ctx=Load()), Starred(value=Name(id='b', ctx=Load()), ctx=Load())], keywords=[keyword(arg='k', value=Constant(value=1)), keyword(value=Name(id='c', ctx=Load()))]))])
+  | f(a, *b, k=1, **c)
+parse 'f(*a, *b, **c, **d)'
+  Module(body=[Expr(value=Call(func=Name(id='f', ctx=Load()), args=[Starred(value=Name(id='a', ctx=Load()), ctx=Load()), Starred(value=Name(id='b', ctx=Load()), ctx=Load())], keywords=[keyword(value=Name(id='c', ctx=Load())), keyword(value=Name(id='d', ctx=Load()))]))])
+  | f(*a, *b, **c, **d)
+parse 'f(x for x in y)'
+  Module(body=[Expr(value=Call(func=Name(id='f', ctx=Load()), args=[GeneratorExp(elt=Name(id='x', ctx=Load()), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), is_async=0)])]))])
+  | f((x for x in y))
+parse 'f(a, b=1, *c)'
+  Module(body=[Expr(value=Call(func=Name(id='f', ctx=Load()), args=[Name(id='a', ctx=Load()), Starred(value=Name(id='c', ctx=Load()), ctx=Load())], keywords=[keyword(arg='b', value=Constant(value=1))]))])
+  | f(a, *c, b=1)
+parse "print(*a, sep='')"
+  Module(body=[Expr(value=Call(func=Name(id='print', ctx=Load()), args=[Starred(value=Name(id='a', ctx=Load()), ctx=Load())], keywords=[keyword(arg='sep', value=Constant(value=''))]))])
+  | print(*a, sep='')
+parse 'x[1:2, ::3]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Tuple(elts=[Slice(lower=Constant(value=1), upper=Constant(value=2)), Slice(step=Constant(value=3))], ctx=Load()), ctx=Load()))])
+  | x[1:2, ::3]
+parse 'x[a:b:c, d]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Tuple(elts=[Slice(lower=Name(id='a', ctx=Load()), upper=Name(id='b', ctx=Load()), step=Name(id='c', ctx=Load())), Name(id='d', ctx=Load())], ctx=Load()), ctx=Load()))])
+  | x[a:b:c, d]
+parse 'x[:]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Slice(), ctx=Load()))])
+  | x[:]
+parse 'x[::]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Slice(), ctx=Load()))])
+  | x[:]
+parse 'x[1:]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Slice(lower=Constant(value=1)), ctx=Load()))])
+  | x[1:]
+parse 'x[i, j]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Tuple(elts=[Name(id='i', ctx=Load()), Name(id='j', ctx=Load())], ctx=Load()), ctx=Load()))])
+  | x[i, j]
+parse 'x[(i, j)]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Tuple(elts=[Name(id='i', ctx=Load()), Name(id='j', ctx=Load())], ctx=Load()), ctx=Load()))])
+  | x[i, j]
+parse 'x[*a]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Tuple(elts=[Starred(value=Name(id='a', ctx=Load()), ctx=Load())], ctx=Load()), ctx=Load()))])
+  | x[*a,]
+parse 'x[()]'
+  Module(body=[Expr(value=Subscript(value=Name(id='x', ctx=Load()), slice=Tuple(ctx=Load()), ctx=Load()))])
+  | x[()]
+parse '3 .real'
+  Module(body=[Expr(value=Attribute(value=Constant(value=3), attr='real', ctx=Load()))])
+  | 3 .real
+parse '(3).real'
+  Module(body=[Expr(value=Attribute(value=Constant(value=3), attr='real', ctx=Load()))])
+  | 3 .real
+parse '1.5.real'
+  Module(body=[Expr(value=Attribute(value=Constant(value=1.5), attr='real', ctx=Load()))])
+  | 1.5.real
+parse "'a'.join(b)"
+  Module(body=[Expr(value=Call(func=Attribute(value=Constant(value='a'), attr='join', ctx=Load()), args=[Name(id='b', ctx=Load())]))])
+  | 'a'.join(b)
+parse '[*a, *b]'
+  Module(body=[Expr(value=List(elts=[Starred(value=Name(id='a', ctx=Load()), ctx=Load()), Starred(value=Name(id='b', ctx=Load()), ctx=Load())], ctx=Load()))])
+  | [*a, *b]
+parse '[]'
+  Module(body=[Expr(value=List(ctx=Load()))])
+  | []
+parse '[1, [2, [3]]]'
+  Module(body=[Expr(value=List(elts=[Constant(value=1), List(elts=[Constant(value=2), List(elts=[Constant(value=3)], ctx=Load())], ctx=Load())], ctx=Load()))])
+  | [1, [2, [3]]]
+parse "{**a, 'b': 1}"
+  Module(body=[Expr(value=Dict(keys=[None, Constant(value='b')], values=[Name(id='a', ctx=Load()), Constant(value=1)]))])
+  | {**a, 'b': 1}
+parse '{1, 2}'
+  Module(body=[Expr(value=Set(elts=[Constant(value=1), Constant(value=2)]))])
+  | {1, 2}
+parse '{1: 2, **{3: 4}}'
+  Module(body=[Expr(value=Dict(keys=[Constant(value=1), None], values=[Constant(value=2), Dict(keys=[Constant(value=3)], values=[Constant(value=4)])]))])
+  | {1: 2, **{3: 4}}
+parse '{}'
+  Module(body=[Expr(value=Dict())])
+  | {}
+parse '()'
+  Module(body=[Expr(value=Tuple(ctx=Load()))])
+  | ()
+parse '(1,)'
+  Module(body=[Expr(value=Tuple(elts=[Constant(value=1)], ctx=Load()))])
+  | (1,)
+parse '(1, 2)'
+  Module(body=[Expr(value=Tuple(elts=[Constant(value=1), Constant(value=2)], ctx=Load()))])
+  | (1, 2)
+parse '(x)'
+  Module(body=[Expr(value=Name(id='x', ctx=Load()))])
+  | x
+parse '((x, y), z)'
+  Module(body=[Expr(value=Tuple(elts=[Tuple(elts=[Name(id='x', ctx=Load()), Name(id='y', ctx=Load())], ctx=Load()), Name(id='z', ctx=Load())], ctx=Load()))])
+  | ((x, y), z)
+parse '[x for x in y]'
+  Module(body=[Expr(value=ListComp(elt=Name(id='x', ctx=Load()), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), is_async=0)]))])
+  | [x for x in y]
+parse '[x for x in y if x if not z for w in x]'
+  Module(body=[Expr(value=ListComp(elt=Name(id='x', ctx=Load()), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), ifs=[Name(id='x', ctx=Load()), UnaryOp(op=Not(), operand=Name(id='z', ctx=Load()))], is_async=0), comprehension(target=Name(id='w', ctx=Store()), iter=Name(id='x', ctx=Load()), is_async=0)]))])
+  | [x for x in y if x if not z for w in x]
+parse '{x for x in y}'
+  Module(body=[Expr(value=SetComp(elt=Name(id='x', ctx=Load()), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), is_async=0)]))])
+  | {x for x in y}
+parse '{k: v for k, v in d.items()}'
+  Module(body=[Expr(value=DictComp(key=Name(id='k', ctx=Load()), value=Name(id='v', ctx=Load()), generators=[comprehension(target=Tuple(elts=[Name(id='k', ctx=Store()), Name(id='v', ctx=Store())], ctx=Store()), iter=Call(func=Attribute(value=Name(id='d', ctx=Load()), attr='items', ctx=Load())), is_async=0)]))])
+  | {k: v for k, v in d.items()}
+parse '(x for x in y)'
+  Module(body=[Expr(value=GeneratorExp(elt=Name(id='x', ctx=Load()), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), is_async=0)]))])
+  | (x for x in y)
+parse '[(a, b) for a, b in c]'
+  Module(body=[Expr(value=ListComp(elt=Tuple(elts=[Name(id='a', ctx=Load()), Name(id='b', ctx=Load())], ctx=Load()), generators=[comprehension(target=Tuple(elts=[Name(id='a', ctx=Store()), Name(id='b', ctx=Store())], ctx=Store()), iter=Name(id='c', ctx=Load()), is_async=0)]))])
+  | [(a, b) for a, b in c]
+parse '[x async for x in y]'
+  Module(body=[Expr(value=ListComp(elt=Name(id='x', ctx=Load()), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), is_async=1)]))])
+  | [x async for x in y]
+parse '[await x for x in y]'
+  Module(body=[Expr(value=ListComp(elt=Await(value=Name(id='x', ctx=Load())), generators=[comprehension(target=Name(id='x', ctx=Store()), iter=Name(id='y', ctx=Load()), is_async=0)]))])
+  | [await x for x in y]
+parse '[i for i in (yield)]'
+  Module(body=[Expr(value=ListComp(elt=Name(id='i', ctx=Load()), generators=[comprehension(target=Name(id='i', ctx=Store()), iter=Yield(), is_async=0)]))])
+  | [i for i in (yield)]
+parse 'x = *a, *b'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Tuple(elts=[Starred(value=Name(id='a', ctx=Load()), ctx=Load()), Starred(value=Name(id='b', ctx=Load()), ctx=Load())], ctx=Load()))])
+  | x = (*a, *b)
+parse 'a, b = b, a'
+  Module(body=[Assign(targets=[Tuple(elts=[Name(id='a', ctx=Store()), Name(id='b', ctx=Store())], ctx=Store())], value=Tuple(elts=[Name(id='b', ctx=Load()), Name(id='a', ctx=Load())], ctx=Load()))])
+  | a, b = (b, a)
+parse 'x = yield from y'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=YieldFrom(value=Name(id='y', ctx=Load())))])
+  | x = (yield from y)
+parse "'a' 'b'"
+  Module(body=[Expr(value=Constant(value='ab'))])
+  | """ab"""
+parse "x = 'a' 'b'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='ab'))])
+  | x = 'ab'
+parse "b'a' b'b'"
+  Module(body=[Expr(value=Constant(value=b'ab'))])
+  | b'ab'
+parse "u'a' 'b'"
+  Module(body=[Expr(value=Constant(value='ab', kind='u'))])
+  | u"""ab"""
+parse "'a' u'b'"
+  Module(body=[Expr(value=Constant(value='ab'))])
+  | """ab"""
+parse "x = '''a\nb'''"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='a\nb'))])
+  | x = 'a\nb'
+parse "x = 'it''s'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='its'))])
+  | x = 'its'
+parse 'x = "it\'s"'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value="it's"))])
+  | x = "it's"
+parse 'x = \'say "hi"\''
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='say "hi"'))])
+  | x = 'say "hi"'
+parse 'x = \'both \\\' and "\''
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='both \' and "'))])
+  | x = 'both \' and "'
+parse "x = '\\x41\\101\\u00e9\\U0001F600\\n\\t\\0'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='AAé😀\n\t\x00'))])
+  | x = 'AAé😀\n\t\x00'
+parse 'x = r\'\\d+\\.\' + R"\\w"'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=BinOp(left=Constant(value='\\d+\\.'), op=Add(), right=Constant(value='\\w')))])
+  | x = '\\d+\\.' + '\\w'
+parse "x = b'\\x00\\xff' + rb'\\x'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=BinOp(left=Constant(value=b'\x00\xff'), op=Add(), right=Constant(value=b'\\x')))])
+  | x = b'\x00\xff' + b'\\x'
+parse "x = '\\\\'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='\\'))])
+  | x = '\\'
+parse "x = 'tab\\there'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='tab\there'))])
+  | x = 'tab\there'
+parse "x = 'line\\\nbreak'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='linebreak'))])
+  | x = 'linebreak'
+parse "x = 'é中'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='é中'))])
+  | x = 'é中'
+parse "x = '\\x7f\\x80\\xa0'"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='\x7f\x80\xa0'))])
+  | x = '\x7f\x80\xa0'
+parse 'x = \'\'\'one\ntwo\'\'\' + """three"""'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=BinOp(left=Constant(value='one\ntwo'), op=Add(), right=Constant(value='three')))])
+  | x = 'one\ntwo' + 'three'
+parse 'x = "ends with quote\'"'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value="ends with quote'"))])
+  | x = "ends with quote'"
+parse 'x = \'\'\'ends with \'"\'\'\''
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value='ends with \'"'))])
+  | x = 'ends with \'"'
+parse "f'{x}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1)]))])
+  | f'{x}'
+parse "f'a{b}c'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='a'), FormattedValue(value=Name(id='b', ctx=Load()), conversion=-1), Constant(value='c')]))])
+  | f'a{b}c'
+parse 'f"{x=}"'
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='x='), FormattedValue(value=Name(id='x', ctx=Load()), conversion=114)]))])
+  | f'x={x!r}'
+parse 'f"{x = !s:>3}"'
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='x = '), FormattedValue(value=Name(id='x', ctx=Load()), conversion=115, format_spec=JoinedStr(values=[Constant(value='>3')]))]))])
+  | f'x = {x!s:>3}'
+parse "f'{x!r}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=114)]))])
+  | f'{x!r}'
+parse "f'{x!a}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=97)]))])
+  | f'{x!a}'
+parse "f'{x:{y}}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[FormattedValue(value=Name(id='y', ctx=Load()), conversion=-1)]))]))])
+  | f'{x:{y}}'
+parse "f'{x:>{w}.{p}f}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[Constant(value='>'), FormattedValue(value=Name(id='w', ctx=Load()), conversion=-1), Constant(value='.'), FormattedValue(value=Name(id='p', ctx=Load()), conversion=-1), Constant(value='f')]))]))])
+  | f'{x:>{w}.{p}f}'
+parse "f'{x:%H:%M}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[Constant(value='%H:%M')]))]))])
+  | f'{x:%H:%M}'
+parse "f'{x:{{}}>3}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[FormattedValue(value=Dict(), conversion=-1), Constant(value='>3')]))]))])
+  | f'{x:{ {}}>3}'
+parse "f'a' 'b' f'{c}'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='ab'), FormattedValue(value=Name(id='c', ctx=Load()), conversion=-1)]))])
+  | f'ab{c}'
+parse "f'{x!r}' ''"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=114)]))])
+  | f'{x!r}'
+parse "''f'{x}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1)]))])
+  | f'{x}'
+parse "f''"
+  Module(body=[Expr(value=JoinedStr())])
+  | f''
+parse "f'{{x}}'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='{x}')]))])
+  | f'{{x}}'
+parse "f'{{'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='{')]))])
+  | f'{{'
+parse "f'{x}}}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1), Constant(value='}')]))])
+  | f'{x}}}'
+parse "f'{a}{b}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='a', ctx=Load()), conversion=-1), FormattedValue(value=Name(id='b', ctx=Load()), conversion=-1)]))])
+  | f'{a}{b}'
+parse 'f\'{"q"}\''
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Constant(value='q'), conversion=-1)]))])
+  | f"{'q'}"
+parse 'f"{\'q\'}"'
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Constant(value='q'), conversion=-1)]))])
+  | f"{'q'}"
+parse "f'{x}\\n'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1), Constant(value='\n')]))])
+  | f'{x}\n'
+parse "f'''{x}\n'''"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1), Constant(value='\n')]))])
+  | f'{x}\n'
+parse "f'{x:\\n}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[Constant(value='\n')]))]))])
+  | f'{x:\n}'
+parse "f'{ x }'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1)]))])
+  | f'{x}'
+parse "f'{x,y}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Tuple(elts=[Name(id='x', ctx=Load()), Name(id='y', ctx=Load())], ctx=Load()), conversion=-1)]))])
+  | f'{(x, y)}'
+parse "f'{(x, y)}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Tuple(elts=[Name(id='x', ctx=Load()), Name(id='y', ctx=Load())], ctx=Load()), conversion=-1)]))])
+  | f'{(x, y)}'
+parse "f'{ {1: 2}[1] }'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Subscript(value=Dict(keys=[Constant(value=1)], values=[Constant(value=2)]), slice=Constant(value=1), ctx=Load()), conversion=-1)]))])
+  | f'{ {1: 2}[1]}'
+parse "f'{x if y else z}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=IfExp(test=Name(id='y', ctx=Load()), body=Name(id='x', ctx=Load()), orelse=Name(id='z', ctx=Load())), conversion=-1)]))])
+  | f'{(x if y else z)}'
+parse "f'{lambda: 1}'"
+  ! SyntaxError: f-string: lambda expressions are not allowed without parentheses at 1,4
+parse "f'{(lambda: 1)()}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Call(func=Lambda(args=arguments(), body=Constant(value=1))), conversion=-1)]))])
+  | f'{(lambda: 1)()}'
+parse "f'{3.14:.2f} {n:,} {s!r:^10}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Constant(value=3.14), conversion=-1, format_spec=JoinedStr(values=[Constant(value='.2f')])), Constant(value=' '), FormattedValue(value=Name(id='n', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[Constant(value=',')])), Constant(value=' '), FormattedValue(value=Name(id='s', ctx=Load()), conversion=114, format_spec=JoinedStr(values=[Constant(value='^10')]))]))])
+  | f'{3.14:.2f} {n:,} {s!r:^10}'
+parse 'f\'{f"{x}"}\''
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1)]), conversion=-1)]))])
+  | f"{f'{x}'}"
+parse "rf'\\d{x}'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='\\d'), FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1)]))])
+  | f'\\d{x}'
+parse "f'{x}' f'{y}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1), FormattedValue(value=Name(id='y', ctx=Load()), conversion=-1)]))])
+  | f'{x}{y}'
+parse "f'quote \\' {x}'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value="quote ' "), FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1)]))])
+  | f"quote ' {x}"
+parse 'f\'"{x}"\''
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='"'), FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1), Constant(value='"')]))])
+  | f'"{x}"'
+parse "f'{x:{y:{z}}}'"
+  Module(body=[Expr(value=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[FormattedValue(value=Name(id='y', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[FormattedValue(value=Name(id='z', ctx=Load()), conversion=-1)]))]))]))])
+  | f'{x:{y:{z}}}'
+parse "print(f'{name}: {value!r:>{width}}')"
+  Module(body=[Expr(value=Call(func=Name(id='print', ctx=Load()), args=[JoinedStr(values=[FormattedValue(value=Name(id='name', ctx=Load()), conversion=-1), Constant(value=': '), FormattedValue(value=Name(id='value', ctx=Load()), conversion=114, format_spec=JoinedStr(values=[Constant(value='>'), FormattedValue(value=Name(id='width', ctx=Load()), conversion=-1)]))])]))])
+  | print(f'{name}: {value!r:>{width}}')
+parse "u'a' f'{b}'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='a', kind='u'), FormattedValue(value=Name(id='b', ctx=Load()), conversion=-1)]))])
+  | f'a{b}'
+parse "f'{x=!r:10}'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='x='), FormattedValue(value=Name(id='x', ctx=Load()), conversion=114, format_spec=JoinedStr(values=[Constant(value='10')]))]))])
+  | f'x={x!r:10}'
+parse "f'{x=:10}'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value='x='), FormattedValue(value=Name(id='x', ctx=Load()), conversion=-1, format_spec=JoinedStr(values=[Constant(value='10')]))]))])
+  | f'x={x:10}'
+parse "f'{ x = }'"
+  Module(body=[Expr(value=JoinedStr(values=[Constant(value=' x = '), FormattedValue(value=Name(id='x', ctx=Load()), conversion=114)]))])
+  | f' x = {x!r}'
+attrs 'x = 1'
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store(), lineno=1, col_offset=0, end_lineno=1, end_col_offset=1)], value=Constant(value=1, lineno=1, col_offset=4, end_lineno=1, end_col_offset=5), lineno=1, col_offset=0, end_lineno=1, end_col_offset=5)])
+attrs "x = 'é' + y"
+  Module(body=[Assign(targets=[Name(id='x', ctx=Store(), lineno=1, col_offset=0, end_lineno=1, end_col_offset=1)], value=BinOp(left=Constant(value='é', lineno=1, col_offset=4, end_lineno=1, end_col_offset=8), op=Add(), right=Name(id='y', ctx=Load(), lineno=1, col_offset=11, end_lineno=1, end_col_offset=12), lineno=1, col_offset=4, end_lineno=1, end_col_offset=12), lineno=1, col_offset=0, end_lineno=1, end_col_offset=12)])
+attrs 'if a:\n    b = [1,\n         2]'
+  Module(body=[If(test=Name(id='a', ctx=Load(), lineno=1, col_offset=3, end_lineno=1, end_col_offset=4), body=[Assign(targets=[Name(id='b', ctx=Store(), lineno=2, col_offset=4, end_lineno=2, end_col_offset=5)], value=List(elts=[Constant(value=1, lineno=2, col_offset=9, end_lineno=2, end_col_offset=10), Constant(value=2, lineno=3, col_offset=9, end_lineno=3, end_col_offset=10)], ctx=Load(), lineno=2, col_offset=8, end_lineno=3, end_col_offset=11), lineno=2, col_offset=4, end_lineno=3, end_col_offset=11)], lineno=1, col_offset=0, end_lineno=3, end_col_offset=11)])
+attrs "f'{x}' + f'a{y!r}'"
+  Module(body=[Expr(value=BinOp(left=JoinedStr(values=[FormattedValue(value=Name(id='x', ctx=Load(), lineno=1, col_offset=3, end_lineno=1, end_col_offset=4), conversion=-1, lineno=1, col_offset=2, end_lineno=1, end_col_offset=5)], lineno=1, col_offset=0, end_lineno=1, end_col_offset=6), op=Add(), right=JoinedStr(values=[Constant(value='a', lineno=1, col_offset=11, end_lineno=1, end_col_offset=12), FormattedValue(value=Name(id='y', ctx=Load(), lineno=1, col_offset=13, end_lineno=1, end_col_offset=14), conversion=114, lineno=1, col_offset=12, end_lineno=1, end_col_offset=17)], lineno=1, col_offset=9, end_lineno=1, end_col_offset=18), lineno=1, col_offset=0, end_lineno=1, end_col_offset=18), lineno=1, col_offset=0, end_lineno=1, end_col_offset=18)])
+attrs 'def f(a, *, b): return a'
+  Module(body=[FunctionDef(name='f', args=arguments(args=[arg(arg='a', lineno=1, col_offset=6, end_lineno=1, end_col_offset=7)], kwonlyargs=[arg(arg='b', lineno=1, col_offset=12, end_lineno=1, end_col_offset=13)], kw_defaults=[None]), body=[Return(value=Name(id='a', ctx=Load(), lineno=1, col_offset=23, end_lineno=1, end_col_offset=24), lineno=1, col_offset=16, end_lineno=1, end_col_offset=24)], lineno=1, col_offset=0, end_lineno=1, end_col_offset=24)])
+attrs 'class C:\n    @d\n    def m(self): pass'
+  Module(body=[ClassDef(name='C', body=[FunctionDef(name='m', args=arguments(args=[arg(arg='self', lineno=3, col_offset=10, end_lineno=3, end_col_offset=14)]), body=[Pass(lineno=3, col_offset=17, end_lineno=3, end_col_offset=21)], decorator_list=[Name(id='d', ctx=Load(), lineno=2, col_offset=5, end_lineno=2, end_col_offset=6)], lineno=3, col_offset=4, end_lineno=3, end_col_offset=21)], lineno=1, col_offset=0, end_lineno=3, end_col_offset=21)])
+parse 'x = (1, 2'
+  ! SyntaxError: '(' was never closed at 1,5
+parse 'f(a,\n  b'
+  ! SyntaxError: '(' was never closed at 1,2
+parse 'x = {1: 2'
+  ! SyntaxError: '{' was never closed at 1,5
+parse 'x = 1)'
+  ! SyntaxError: unmatched ')' at 1,6
+parse 'x = (1]'
+  ! SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' at 1,7
+parse 'x = (\n1]'
+  ! SyntaxError: closing parenthesis ']' does not match opening parenthesis '(' on line 1 at 2,2
+parse "x = 'abc"
+  ! SyntaxError: unterminated string literal (detected at line 1) at 1,5
+parse "x = '''abc"
+  ! SyntaxError: unterminated triple-quoted string literal (detected at line 1) at 1,5
+parse 'f"{a"'
+  ! SyntaxError: f-string: expecting '}' at 1,5
+parse 'x = 0777'
+  ! SyntaxError: leading zeros in decimal integer literals are not permitted; use an 0o prefix for octal integers at 1,5
+parse 'x = 1 +'
+  ! SyntaxError: invalid syntax at 1,8
+parse 'x = 1 2'
+  ! SyntaxError: invalid syntax at 1,7
+parse 'def f(:\n pass'
+  ! SyntaxError: invalid syntax at 1,7
+parse 'x =\n'
+  ! SyntaxError: invalid syntax at 1,4
+parse 'return return'
+  ! SyntaxError: invalid syntax at 1,8
+parse 'a b'
+  ! SyntaxError: invalid syntax at 1,3
+parse 'nonlocal'
+  ! SyntaxError: invalid syntax at 1,9
+parse 'for x in : pass'
+  ! SyntaxError: invalid syntax at 1,10
+parse 'import a.b as'
+  ! SyntaxError: invalid syntax at 1,14
+parse 'from . import *, a'
+  ! SyntaxError: invalid syntax at 1,16
+parse 'x = [i for i in]'
+  ! SyntaxError: invalid syntax at 1,16
+parse 'class C(x for x in y): pass'
+  ! SyntaxError: invalid syntax at 1,11
+parse 'x := 1'
+  ! SyntaxError: invalid syntax at 1,3
+parse 'if x\n  pass'
+  ! SyntaxError: expected ':' at 1,5
+parse 'while x\n  pass'
+  ! SyntaxError: expected ':' at 1,8
+parse 'def f()\n  pass'
+  ! SyntaxError: expected ':' at 1,8
+parse 'class C\n  pass'
+  ! SyntaxError: expected ':' at 1,8
+parse 'if x:\npass'
+  ! IndentationError: expected an indented block after 'if' statement on line 1 at 2,1
+parse 'def f():\nreturn'
+  ! IndentationError: expected an indented block after function definition on line 1 at 2,1
+parse 'for x in y:\n\nz'
+  ! IndentationError: expected an indented block after 'for' statement on line 1 at 3,1
+parse 'class C:\n    def m(self):\n    pass'
+  ! IndentationError: expected an indented block after function definition on line 2 at 3,5
+parse 'try:\nx'
+  ! IndentationError: expected an indented block after 'try' statement on line 1 at 2,1
+parse 'if a:\n  b\nelse:\nc'
+  ! IndentationError: expected an indented block after 'else' statement on line 3 at 4,1
+parse '    x = 1'
+  ! IndentationError: unexpected indent at 1,4
+parse 'x = 1\n  y = 2'
+  ! IndentationError: unexpected indent at 2,2
+parse 'if x:\n    a\n        b'
+  ! IndentationError: unexpected indent at 3,8
+parse 'if x:\n  pass\n else:\n  pass'
+  ! IndentationError: unindent does not match any outer indentation level at 3,7
+parse '1 = x'
+  ! SyntaxError: cannot assign to literal here. Maybe you meant '==' instead of '='? at 1,1
+parse 'f() = 1'
+  ! SyntaxError: cannot assign to function call here. Maybe you meant '==' instead of '='? at 1,1
+parse 'a + 1 = 2'
+  ! SyntaxError: cannot assign to expression here. Maybe you meant '==' instead of '='? at 1,1
+parse 'x.y + 1 = 2'
+  ! SyntaxError: cannot assign to expression here. Maybe you meant '==' instead of '='? at 1,1
+parse '[a, 1] = b'
+  ! SyntaxError: cannot assign to literal at 1,5
+parse 'for 1 in x: pass'
+  ! SyntaxError: cannot assign to literal at 1,5
+parse 'del f()'
+  ! SyntaxError: cannot delete function call at 1,5
+parse 'del a + b'
+  ! SyntaxError: cannot delete expression at 1,5
+parse 'True = 1'
+  ! SyntaxError: cannot assign to True at 1,1
+parse '(a, b) += 1'
+  ! SyntaxError: 'tuple' is an illegal expression for augmented assignment at 1,1
+parse 'f() += 1'
+  ! SyntaxError: 'function call' is an illegal expression for augmented assignment at 1,1
+parse 'f(k=1, a)'
+  ! SyntaxError: positional argument follows keyword argument at 1,9
+parse 'f(**k, a)'
+  ! SyntaxError: positional argument follows keyword argument unpacking at 1,9
+parse 'f(a for a in b, c)'
+  ! SyntaxError: Generator expression must be parenthesized at 1,3
+parse 'def f(a=1, b): pass'
+  ! SyntaxError: parameter without a default follows parameter with a default at 1,12
+parse 'lambda x=1, y: 0'
+  ! SyntaxError: parameter without a default follows parameter with a default at 1,13
+parse 'x = 1 if y'
+  ! SyntaxError: expected 'else' after 'if' expression at 1,5
+parse 'import'
+  ! SyntaxError: Expected one or more names after 'import' at 1,7
+eval '1'
+  1
+eval '-1'
+  -1
+eval '+2.5'
+  2.5
+eval '1+2j'
+  (1+2j)
+eval '-1-2j'
+  (-1-2j)
+eval '3j'
+  3j
+eval "'abc'"
+  'abc'
+eval "b'x\\x00'"
+  b'x\x00'
+eval "[1, 'two', (3, 4.0), None, True]"
+  [1, 'two', (3, 4.0), None, True]
+eval "{'a': 1, 'b': [2, 3], 'c': {'d': None}}"
+  {'a': 1, 'b': [2, 3], 'c': {'d': None}}
+eval '(1,)'
+  (1,)
+eval '()'
+  ()
+eval '{}'
+  {}
+eval 'set()'
+  set()
+eval '  [1, 2]'
+  [1, 2]
+eval "{'k': -0.5, 'j': 1e100, 'big': 123456789012345678901234567890}"
+  {'k': -0.5, 'j': 1e+100, 'big': 123456789012345678901234567890}
+eval "'multi' 'part'"
+  'multipart'
+eval '[1, 2,]'
+  [1, 2]
+eval '1 + 2'
+  ! ValueError: malformed node or string on line 1: <ast.BinOp object>
+eval 'x'
+  ! ValueError: malformed node or string on line 1: <ast.Name object>
+eval 'f(1)'
+  ! ValueError: malformed node or string on line 1: <ast.Call object>
+eval "-'a'"
+  ! ValueError: malformed node or string on line 1: <ast.Constant object>
+eval '{**a}'
+  ! ValueError: malformed node or string: None
+eval '[1, 2] + [3]'
+  ! ValueError: malformed node or string on line 1: <ast.List object>
+eval "(1, [2, (3, {'x': ()})])"
+  (1, [2, (3, {'x': ()})])
+== unparse data/project/shop/__init__.py
+| """A small shop: products, carts and prices."""
+| from .models import Product, Cart
+| from .pricing import total, apply_discount
+| __all__ = ['Product', 'Cart', 'total', 'apply_discount']
+| __version__ = '1.4.0'
+round trip: same
+== unparse data/project/shop/cli.py
+| """Command line: shop add SKU QTY, shop total."""
+| import argparse
+| import sys
+| import logging as log
+| from pathlib import Path
+| from . import models
+| from .pricing import total, split as split_amount
+| CATALOG = {'A1': models.Product('A1', 'Mug', 850, ('kitchen',)), 'B2': models.Product('B2', 'Tea', 1299)}
+| 
+| def parse_args(argv=None):
+|     p = argparse.ArgumentParser(prog='shop')
+|     sub = p.add_subparsers(dest='cmd', required=True)
+|     add = sub.add_parser('add')
+|     add.add_argument('sku')
+|     add.add_argument('qty', type=int, nargs='?', default=1)
+|     sub.add_parser('total')
+|     return p.parse_args(argv)
+| 
+| async def fetch_rates(session, url):
+|     async with session.get(url) as resp:
+|         async for chunk in resp.content:
+|             yield chunk
+| 
+| def main(argv=None) -> int:
+|     args = parse_args(argv)
+|     cart = models.Cart()
+|     while True:
+|         try:
+|             if args.cmd == 'add':
+|                 cart.add(CATALOG[args.sku], args.qty)
+|             break
+|         except KeyError as e:
+|             print(f'no such product: {e}', file=sys.stderr)
+|             return 1
+|         finally:
+|             log.debug('done')
+|     with open(Path('cart.txt'), 'w') as out, open('log', 'a'):
+|         for line in cart:
+|             out.write(f'{line.product.sku}\t{line.qty}\n')
+|     print(total(cart), *split_amount(total(cart), 3), sep=', ')
+|     return 0 if len(cart) else 2
+| if __name__ == '__main__':
+|     sys.exit(main())
+round trip: same
+== unparse data/project/shop/models.py
+| """The data the shop keeps."""
+| from __future__ import annotations
+| import dataclasses
+| from dataclasses import dataclass, field
+| from typing import Iterator, Optional
+| import json, os
+| 
+| @dataclass(frozen=True)
+| class Product:
+|     """A thing for sale.
+| 
+|     Prices are in cents, so sums stay exact.
+|     """
+|     sku: str
+|     name: str
+|     price: int
+|     tags: tuple[str, ...] = ()
+| 
+|     def label(self, *, currency: str='EUR') -> str:
+|         return f'{self.name} ({self.price / 100:.2f} {currency})'
+| 
+| @dataclass
+| class Line:
+|     product: Product
+|     qty: int = 1
+| 
+| class Cart:
+|     """Lines by SKU."""
+| 
+|     def __init__(self, owner: Optional[str]=None) -> None:
+|         self.owner = owner
+|         self._lines: dict[str, Line] = {}
+| 
+|     def add(self, product: Product, qty: int=1) -> None:
+|         if qty <= 0:
+|             raise ValueError(f'bad quantity {qty!r}')
+|         line = self._lines.get(product.sku)
+|         if line is None:
+|             self._lines[product.sku] = Line(product, qty)
+|         else:
+|             line.qty += qty
+| 
+|     def remove(self, sku: str) -> bool:
+|         return self._lines.pop(sku, None) is not None
+| 
+|     def __iter__(self) -> Iterator[Line]:
+|         yield from sorted(self._lines.values(), key=lambda l: l.product.sku)
+| 
+|     def __len__(self):
+|         return sum((l.qty for l in self._lines.values()))
+| 
+|     @property
+|     def empty(self) -> bool:
+|         return not self._lines
+round trip: same
+== unparse data/project/shop/pricing.py
+| """Totals, discounts and tax."""
+| import math
+| from decimal import Decimal, ROUND_HALF_UP
+| from .models import Cart, Line
+| TAX_RATES = {'standard': 0.21, 'reduced': 0.09, 'zero': 0.0}
+| BULK = [(100, 0.15), (50, 0.1), (10, 0.05)]
+| 
+| def line_price(line: Line) -> int:
+|     for threshold, rate in BULK:
+|         if line.qty >= threshold:
+|             return round(line.product.price * line.qty * (1 - rate))
+|     return line.product.price * line.qty
+| 
+| def total(cart: Cart, tax: str='standard') -> int:
+|     """The cart's total in cents, tax included."""
+|     try:
+|         rate = TAX_RATES[tax]
+|     except KeyError:
+|         raise ValueError(f'unknown tax class: {tax}') from None
+|     net = sum((line_price(l) for l in cart))
+|     return int(Decimal(net * (1 + rate)).quantize(Decimal(1), ROUND_HALF_UP))
+| 
+| def apply_discount(amount, code=None, *, codes=None):
+|     codes = codes or {}
+|     if not code:
+|         return amount
+|     elif code in codes and codes[code] > 0:
+|         pct = codes[code]
+|         return amount - amount * pct // 100
+|     elif code.startswith('FLAT') and code[4:].isdigit():
+|         return max(0, amount - int(code[4:]))
+|     else:
+|         return amount
+| 
+| def split(amount: int, ways: int) -> list[int]:
+|     base, extra = divmod(amount, ways)
+|     return [base + (1 if i < extra else 0) for i in range(ways)]
+round trip: same
+== unparse data/project/shop/util/__init__.py
+| 
+round trip: same
+== unparse data/project/shop/util/text.py
+| """Text helpers."""
+| import re
+| import unicodedata as ud
+| _WS = re.compile('\\s+')
+| 
+| def slug(s: str, sep='-') -> str:
+|     s = ud.normalize('NFKD', s).encode('ascii', 'ignore').decode()
+|     return sep.join((w for w in _WS.split(s.lower()) if w.isalnum()))
+| 
+| def wrap(text, width=70):
+|     words, line, out = (text.split(), [], [])
+|     for w in words:
+|         if line and len(' '.join(line + [w])) > width:
+|             out.append(' '.join(line))
+|             line = [w]
+|         else:
+|             line.append(w)
+|     if line:
+|         out.append(' '.join(line))
+|     return '\n'.join(out)
+| 
+| def ellipsis(s, n):
+|     return s if len(s) <= n else s[:n - 1] + '…'
+| 
+| def counts(words):
+|     seen = {}
+|     for w in words:
+|         seen[w] = seen.get(w, 0) + 1
+|     return {k: v for k, v in sorted(seen.items(), key=lambda kv: (-kv[1], kv[0])) if v > 1}
+round trip: same
+== outline
+data/project/shop/__init__.py: A small shop: products, carts and prices.
+data/project/shop/cli.py: Command line: shop add SKU QTY, shop total.
+  16:0 def parse_args(argv=None)
+  26:0 async def fetch_rates(session, url)
+  32:0 def main(argv=None) -> int
+data/project/shop/models.py: The data the shop keeps.
+  11:0 @dataclass(frozen=True) class Product  # A thing for sale.
+    22:4 def Product.label(self, *, currency: str='EUR') -> str
+  27:0 @dataclass class Line
+  32:0 class Cart  # Lines by SKU.
+    35:4 def Cart.__init__(self, owner: Optional[str]=None) -> None
+    39:4 def Cart.add(self, product: Product, qty: int=1) -> None
+    48:4 def Cart.remove(self, sku: str) -> bool
+    51:4 def Cart.__iter__(self) -> Iterator[Line]
+    54:4 def Cart.__len__(self)
+    58:4 @property def Cart.empty(self) -> bool
+data/project/shop/pricing.py: Totals, discounts and tax.
+  10:0 def line_price(line: Line) -> int
+  17:0 def total(cart: Cart, tax: str='standard') -> int  # The cart's total in cents, tax included.
+  27:0 def apply_discount(amount, code=None, *, codes=None)
+  40:0 def split(amount: int, ways: int) -> list[int]
+data/project/shop/util/__init__.py: -
+data/project/shop/util/text.py: Text helpers.
+  8:0 def slug(s: str, sep='-') -> str
+  13:0 def wrap(text, width=70)
+  26:0 def ellipsis(s, n)
+  30:0 def counts(words)
+== imports
+shop: shop.models, shop.pricing
+shop.cli: argparse, logging, pathlib, shop, shop.pricing, sys
+shop.models: __future__, dataclasses, json, os, typing
+shop.pricing: decimal, math, shop.models
+shop.util: 
+shop.util.text: re, unicodedata
+shop <- shop.cli
+shop.models <- shop, shop.pricing
+shop.pricing <- shop, shop.cli
+== unused imports
+data/project/shop/models.py:4:1: 'dataclasses' imported but unused
+data/project/shop/models.py:5:1: 'dataclasses.field' imported but unused
+data/project/shop/models.py:7:1: 'json' imported but unused
+data/project/shop/models.py:7:1: 'os' imported but unused
+data/project/shop/pricing.py:2:1: 'math' imported but unused
+== complexity
+B  7 data/project/shop/pricing.py:27 apply_discount
+B  6 data/project/shop/cli.py:32 main
+A  5 data/project/shop/util/text.py:13 wrap
+A  4 data/project/shop/util/text.py:30 counts
+A  3 data/project/shop/models.py:39 Cart.add
+A  3 data/project/shop/pricing.py:10 line_price
+A  3 data/project/shop/pricing.py:17 total
+A  3 data/project/shop/pricing.py:40 split
+A  3 data/project/shop/util/text.py:8 slug
+A  2 data/project/shop/cli.py:26 fetch_rates
+A  2 data/project/shop/models.py:54 Cart.__len__
+A  2 data/project/shop/util/text.py:26 ellipsis
+A  1 data/project/shop/cli.py:16 parse_args
+A  1 data/project/shop/models.py:22 Product.label
+A  1 data/project/shop/models.py:35 Cart.__init__
+A  1 data/project/shop/models.py:48 Cart.remove
+A  1 data/project/shop/models.py:51 Cart.__iter__
+A  1 data/project/shop/models.py:58 Cart.empty
+== node counts
+  301 Load
+  247 Name
+  112 Constant
+   71 Attribute
+   70 Call
+   53 Store
+   33 arg
+   26 alias
+   24 Assign
+   22 Expr
+   20 arguments
+   19 Return
+   17 FunctionDef
+   16 BinOp
+   16 Subscript
+   13 Tuple
+   12 Compare
+   11 keyword
+   10 If
+   10 ImportFrom
+    8 FormattedValue
+    8 Import
+    7 AnnAssign
+    6 Add
+    6 JoinedStr
+    6 List
+    6 Module
+    5 Dict
+    5 Mult
+    5 comprehension
+    4 BoolOp
+    4 For
+    4 Sub
+    3 And
+    3 ClassDef
+    3 GeneratorExp
+    3 Gt
+    3 IfExp
+    3 Slice
+    3 UnaryOp
+    3 withitem
+    2 Eq
+    2 ExceptHandler
+    2 Lambda
+    2 LtE
+    2 Not
+    2 Raise
+    2 Try
+    1 AsyncFor
+    1 AsyncFunctionDef
+    1 AsyncWith
+    1 AugAssign
+    1 Break
+    1 DictComp
+    1 Div
+    1 FloorDiv
+    1 GtE
+    1 In
+    1 Is
+    1 IsNot
+    1 ListComp
+    1 Lt
+    1 Or
+    1 Starred
+    1 USub
+    1 While
+    1 With
+    1 Yield
+    1 YieldFrom
