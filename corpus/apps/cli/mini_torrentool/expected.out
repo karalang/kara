@@ -1,0 +1,732 @@
+== bdecode - d3:cow3:moo4:spam4:eggse
+{'cow': 'moo', 'spam': 'eggs'}
+== bdecode - l4:spam4:eggsi-3ee
+['spam', 'eggs', -3]
+== bdecode - d4:spaml1:a1:bee
+{'spam': ['a', 'b']}
+== bdecode - i42e
+42
+== bdecode - i-0e
+0
+== bdecode - i 12 e
+12
+== bdecode - i1_000_000e
+1000000
+== bdecode - i+7e
+7
+== bdecode - ie
+0
+== bdecode - i12
+12
+== bdecode - i0x10e
+error: ValueError: invalid literal for int() with base 10: '0x10'
+== bdecode - i99999999999999999999999999e
+99999999999999999999999999
+== bdecode - 0:
+''
+== bdecode - 4:spa
+'spa'
+== bdecode - 3 :abc
+'abc'
+== bdecode - 12
+''
+== bdecode - le
+[]
+== bdecode - de
+{}
+== bdecode - 
+[]
+== bdecode - l
+<open list>
+== bdecode - d3:onei1e3:two
+[<open dict>, 'one', 1, 'two']
+== bdecode - ld1:ai1eel
+[<open list>, {'a': 1}, <open list>]
+== bdecode - e
+error: BencodeDecodingError: Unable to parse the rest of the data: "e"
+== bdecode - i1ee4:rest
+error: BencodeDecodingError: Unable to parse the rest of the data: "e4:rest"
+== bdecode - x
+error: BencodeDecodingError: Unable to interpret `x` char.
+== bdecode - 4:spam4:eggs
+['spam', 'eggs']
+== bdecode - d1:bi2e1:ai1e1:ai3ee
+{'a': 3, 'b': 2}
+== bdecode - d1:ai1e1:be
+{'a': 1}
+== bdecode - di2e3:twoi1e3:onee
+{1: 'one', 2: 'two'}
+== bdecode - di1e1:a1:bi2ee
+error: TypeError: '<' not supported between instances of 'str' and 'int'
+== bdecode - dl1:aei1ee
+error: TypeError: unhashable type: 'list'
+== bdecode - d1:ai1ei5ee
+{'a': 1}
+== bdecode - d1:z1:y1:a1:b1:m1:ne
+{'a': 'b', 'm': 'n', 'z': 'y'}
+== bdecode - 4:\xff\xfe\x00\x01
+b'\xff\xfe\x00\x01'
+== bdecode - 5:caf\xc3\xa9
+'café'
+== bdecode - 3:caf\xe9
+error: BencodeDecodingError: Unable to interpret `é` char.
+== bdecode pieces d6:pieces4:\x01\x02\xfe\xff4:name3:\xe9t\xe9e
+{'name': '�t�', 'pieces': b'\x01\x02\xfe\xff'}
+== bdecode pieces d6:pieces5:\xc3\xa9t\xc3\xa94:path2:\xff/e
+{'path': '�/', 'pieces': 'été'}
+== bdecode pieces l6:pieces2:\xed\xa0\x80e
+error: BencodeDecodingError: Unable to interpret `<x80>` char.
+== bdecode pieces d4:name4:\xf0\x9f\x98e
+[<open dict>, 'name', '�e']
+== bdecode pieces,name d4:name2:\xc0\xafe
+{'name': b'\xc0\xaf'}
+== bdecode - \xb23:abc
+error: ValueError: invalid literal for int() with base 10: '²3'
+== bdecode - i1\xa02e
+error: ValueError: invalid literal for int() with base 10: '1\xa02'
+== bdecode - d3:\xff\xfei1e3:abci2ee
+error: ValueError: invalid literal for int() with base 10: '1e3'
+== bdecode - i1e\x80tail
+error: BencodeDecodingError: Unable to interpret `<x80>` char.
+== read_string d4:name5:Caféi1e3:abce
+error: TypeError: '<' not supported between instances of 'int' and 'str'
+== read_string l5:日本語e
+error: BencodeDecodingError: Unable to interpret `¬` char.
+== read_string 3:日本語
+error: BencodeDecodingError: Unable to interpret `æ` char.
+== read_string i1e
+1
+== humanize 0
+0 B
+== humanize 1
+1.0 B
+== humanize 1023
+1023.0 B
+== humanize 1024
+1.0 KB
+== humanize 1536
+1.5 KB
+== humanize 10240
+10.0 KB
+== humanize 1048575
+1024.0 KB
+== humanize 1048576
+1.0 MB
+== humanize 1073741824
+1.0 GB
+== humanize 5368709120
+5.0 GB
+== humanize 1099511627776
+1.0 TB
+== humanize 1125899906842624
+1.0 PB
+== humanize 1152921504606846976
+1.0 EB
+== humanize 123456789
+117.74 MB
+== humanize 999999
+976.56 KB
+== humanize 6114656256
+5.69 GB
+== torrent library/LibreOffice_24.8.2_Linux_x86-64_deb.torrent
+  str: Torrent: LibreOffice_24.8.2_Linux_x86-64_deb
+  name: 'LibreOffice_24.8.2_Linux_x86-64_deb'
+  files: ['LibreOffice_24.8.2_Linux_x86-64_deb/DEBS/libreoffice24.8-base_24.8.2.1-1_amd64.deb' (2093416), 'LibreOffice_24.8.2_Linux_x86-64_deb/DEBS/libreoffice24.8-calc_24.8.2.1-1_amd64.deb' (10334932), 'LibreOffice_24.8.2_Linux_x86-64_deb/DEBS/libreoffice24.8-core_24.8.2.1-1_amd64.deb' (41562320), 'LibreOffice_24.8.2_Linux_x86-64_deb/DEBS/libreoffice24.8-writer_24.8.2.1-1_amd64.deb' (8890664), 'LibreOffice_24.8.2_Linux_x86-64_deb/DEBS/libobasis24.8-en-us_24.8.2.1-1_amd64.deb' (1048576), 'LibreOffice_24.8.2_Linux_x86-64_deb/readmes/README_en-US' (4096)]
+  total_size: 63934004
+  info_hash: '88f8151c34b14e6567c8b69562365c7c666682ff'
+  announce_urls: [['udp://tracker.documentfoundation.org:6969/announce']]
+  webseeds: ['https://download.documentfoundation.org/libreoffice/stable/24.8.2/deb/x86_64/', 'https://mirror.example.org/tdf/libreoffice/stable/24.8.2/deb/x86_64/']
+  httpseeds: []
+  comment: None
+  source: None
+  creation_date: 2024-10-08 14:00:00
+  created_by: 'Transmission/4.0.5 (a6fe2a64aa)'
+  private: False
+  magnet_link: magnet:?xt=urn:btih:88f8151c34b14e6567c8b69562365c7c666682ff
+  get_magnet(): magnet:?xt=urn:btih:88f8151c34b14e6567c8b69562365c7c666682ff&tr=udp%3A%2F%2Ftracker.documentfoundation.org%3A6969%2Fannounce&ws=https%3A%2F%2Fdownload.documentfoundation.org%2Flibreoffice%2Fstable%2F24.8.2%2Fdeb%2Fx86_64%2F&ws=https%3A%2F%2Fmirror.example.org%2Ftdf%2Flibreoffice%2Fstable%2F24.8.2%2Fdeb%2Fx86_64%2F
+  get_magnet(['ws']): magnet:?xt=urn:btih:88f8151c34b14e6567c8b69562365c7c666682ff&ws=https%3A%2F%2Fdownload.documentfoundation.org%2Flibreoffice%2Fstable%2F24.8.2%2Fdeb%2Fx86_64%2F&ws=https%3A%2F%2Fmirror.example.org%2Ftdf%2Flibreoffice%2Fstable%2F24.8.2%2Fdeb%2Fx86_64%2F
+== torrent library/The Quiet Tides - Harbour (2019) [FLAC].torrent
+  str: Torrent: The Quiet Tides - Harbour (2019) [FLAC]
+  name: 'The Quiet Tides - Harbour (2019) [FLAC]'
+  files: ['The Quiet Tides - Harbour (2019) [FLAC]/CD1/01 - Dawn Chorus.flac' (31000000), 'The Quiet Tides - Harbour (2019) [FLAC]/CD1/02 - Harbour Lights.flac' (32000003), 'The Quiet Tides - Harbour (2019) [FLAC]/CD1/03 - Night Ferry (feat. Mira).flac' (33000006), 'The Quiet Tides - Harbour (2019) [FLAC]/CD1/04 - Últimos días.flac' (34000009), 'The Quiet Tides - Harbour (2019) [FLAC]/cover.jpg' (184320), 'The Quiet Tides - Harbour (2019) [FLAC]/CD1/album.cue' (2048), 'The Quiet Tides - Harbour (2019) [FLAC]/CD1/.hidden/empty.log' (0)]
+  total_size: 130186386
+  info_hash: '36e9afc2fa4a08836e3b6e90dfb7e8ba206f3889'
+  announce_urls: [['udp://tracker.opentrackr.org:1337/announce']]
+  webseeds: []
+  httpseeds: []
+  comment: 'Released under CC BY-SA 4.0 — share freely'
+  source: None
+  creation_date: 2019-04-15 03:46:40
+  created_by: 'qBittorrent v4.6.4'
+  private: False
+  magnet_link: magnet:?xt=urn:btih:36e9afc2fa4a08836e3b6e90dfb7e8ba206f3889
+  get_magnet(): magnet:?xt=urn:btih:36e9afc2fa4a08836e3b6e90dfb7e8ba206f3889&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce
+  get_magnet(['ws']): magnet:?xt=urn:btih:36e9afc2fa4a08836e3b6e90dfb7e8ba206f3889
+== torrent library/alpine-mirror.torrent
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  name: 'alpine-standard-3.20.3-x86_64.iso'
+  files: ['alpine-standard-3.20.3-x86_64.iso' (216006656)]
+  total_size: 216006656
+  info_hash: '796cffb87b9c4598762fa5e4e505c401543a23f2'
+  announce_urls: [['https://tracker.mirror.example.net/announce?distro=alpine&arch=x86_64']]
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: None
+  creation_date: 2024-09-10 10:40:00
+  created_by: None
+  private: False
+  magnet_link: magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=https%3A%2F%2Ftracker.mirror.example.net%2Fannounce%3Fdistro%3Dalpine%26arch%3Dx86_64
+  get_magnet(['ws']): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2
+== torrent library/alpine-standard-3.20.3-x86_64.iso.torrent
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  name: 'alpine-standard-3.20.3-x86_64.iso'
+  files: ['alpine-standard-3.20.3-x86_64.iso' (216006656)]
+  total_size: 216006656
+  info_hash: '796cffb87b9c4598762fa5e4e505c401543a23f2'
+  announce_urls: [['http://torrent.alpinelinux.org:6969/announce'], ['udp://tracker.opentrackr.org:1337/announce', 'udp://open.demonii.com:1337/announce']]
+  webseeds: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'
+  httpseeds: []
+  comment: 'Alpine Linux 3.20.3 standard image'
+  source: None
+  creation_date: 2024-09-10 09:40:00
+  created_by: 'mktorrent 1.1'
+  private: False
+  magnet_link: magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=http%3A%2F%2Ftorrent.alpinelinux.org%3A6969%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+  get_magnet(['ws']): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+== torrent library/empty.torrent
+  str: Torrent: None
+  name: None
+  files: []
+  total_size: 0
+  info_hash: None
+  announce_urls: []
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: None
+  creation_date: None
+  created_by: None
+  private: False
+  magnet_link: error: TypeError: can only concatenate str (not "NoneType") to str
+  get_magnet(): error: TypeError: can only concatenate str (not "NoneType") to str
+  get_magnet(['ws']): error: TypeError: can only concatenate str (not "NoneType") to str
+== torrent library/error-page.torrent
+error: BencodeDecodingError: Unable to interpret `<` char.
+== torrent library/far-future.torrent
+  str: Torrent: y10k.txt
+  name: 'y10k.txt'
+  files: ['y10k.txt' (1)]
+  total_size: 1
+  info_hash: '2e5a114430cec2c305bdba032199a0358e8a22ac'
+  announce_urls: []
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: None
+  creation_date: error: ValueError: year 10000 is out of range
+  created_by: None
+  private: False
+  magnet_link: magnet:?xt=urn:btih:2e5a114430cec2c305bdba032199a0358e8a22ac
+  get_magnet(): magnet:?xt=urn:btih:2e5a114430cec2c305bdba032199a0358e8a22ac
+  get_magnet(['ws']): magnet:?xt=urn:btih:2e5a114430cec2c305bdba032199a0358e8a22ac
+== torrent library/info-list.torrent
+  str: error: AttributeError: 'list' object has no attribute 'get'
+  name: error: AttributeError: 'list' object has no attribute 'get'
+  files: error: TypeError: list indices must be integers or slices, not str
+  total_size: error: TypeError: list indices must be integers or slices, not str
+  info_hash: '418780297c5d357fd3efdec8abd0ac9465a23425'
+  announce_urls: [['udp://tracker.example.com:80']]
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: error: AttributeError: 'list' object has no attribute 'get'
+  creation_date: None
+  created_by: None
+  private: error: AttributeError: 'list' object has no attribute 'get'
+  magnet_link: magnet:?xt=urn:btih:418780297c5d357fd3efdec8abd0ac9465a23425
+  get_magnet(): magnet:?xt=urn:btih:418780297c5d357fd3efdec8abd0ac9465a23425&tr=udp%3A%2F%2Ftracker.example.com%3A80
+  get_magnet(['ws']): magnet:?xt=urn:btih:418780297c5d357fd3efdec8abd0ac9465a23425
+== torrent library/list.torrent
+  str: error: AttributeError: 'list' object has no attribute 'get'
+  name: error: AttributeError: 'list' object has no attribute 'get'
+  files: error: AttributeError: 'list' object has no attribute 'get'
+  total_size: error: AttributeError: 'list' object has no attribute 'get'
+  info_hash: error: AttributeError: 'list' object has no attribute 'get'
+  announce_urls: error: AttributeError: 'list' object has no attribute 'get'
+  webseeds: error: AttributeError: 'list' object has no attribute 'get'
+  httpseeds: error: AttributeError: 'list' object has no attribute 'get'
+  comment: error: AttributeError: 'list' object has no attribute 'get'
+  source: error: AttributeError: 'list' object has no attribute 'get'
+  creation_date: error: AttributeError: 'list' object has no attribute 'get'
+  created_by: error: AttributeError: 'list' object has no attribute 'get'
+  private: error: AttributeError: 'list' object has no attribute 'get'
+  magnet_link: error: AttributeError: 'list' object has no attribute 'get'
+  get_magnet(): error: AttributeError: 'list' object has no attribute 'get'
+  get_magnet(['ws']): error: AttributeError: 'list' object has no attribute 'get'
+== torrent library/nasa-apollo11-msn_archive.torrent
+  str: Torrent: nasa-apollo11-msn
+  name: 'nasa-apollo11-msn'
+  files: ['nasa-apollo11-msn/transcript.txt' (1203400), 'nasa-apollo11-msn/logo.png' (98000)]
+  total_size: 1301400
+  info_hash: '77160c3bad27c82a543bc46046ba220665770233'
+  announce_urls: [['http://bt1.archive.org:6969/announce'], ['http://bt2.archive.org:6969/announce']]
+  webseeds: 'https://archive.org/download/'
+  httpseeds: ['https://ia800300.us.archive.org/1/items/']
+  comment: 'This content hosted at the Internet Archive at https://archive.org/details/nasa-apollo11-msn'
+  source: None
+  creation_date: 2021-02-01 00:00:00
+  created_by: 'ia_make_torrent'
+  private: False
+  magnet_link: magnet:?xt=urn:btih:77160c3bad27c82a543bc46046ba220665770233
+  get_magnet(): magnet:?xt=urn:btih:77160c3bad27c82a543bc46046ba220665770233&tr=http%3A%2F%2Fbt1.archive.org%3A6969%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=a&ws=r&ws=c&ws=h&ws=i&ws=v&ws=e&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=d&ws=o&ws=w&ws=n&ws=l&ws=o&ws=a&ws=d&ws=%2F
+  get_magnet(['ws']): magnet:?xt=urn:btih:77160c3bad27c82a543bc46046ba220665770233&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=a&ws=r&ws=c&ws=h&ws=i&ws=v&ws=e&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=d&ws=o&ws=w&ws=n&ws=l&ws=o&ws=a&ws=d&ws=%2F
+== torrent library/natsu-sjis.torrent
+  str: Torrent: �ẴA���o��
+  name: '�ẴA���o��'
+  files: ['�ẴA���o��/��1�b.mkv' (367001856), '�ẴA���o��/readme.txt' (1024)]
+  total_size: 367002880
+  info_hash: '272b8e9f22ade6f86691d1b31b0fa8ea9aecb38d'
+  announce_urls: [['http://tracker.example.jp:6969/announce']]
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: None
+  creation_date: 2008-01-01 00:00:00
+  created_by: None
+  private: False
+  magnet_link: magnet:?xt=urn:btih:272b8e9f22ade6f86691d1b31b0fa8ea9aecb38d
+  get_magnet(): magnet:?xt=urn:btih:272b8e9f22ade6f86691d1b31b0fa8ea9aecb38d&tr=http%3A%2F%2Ftracker.example.jp%3A6969%2Fannounce
+  get_magnet(['ws']): magnet:?xt=urn:btih:272b8e9f22ade6f86691d1b31b0fa8ea9aecb38d
+== torrent library/no-info.torrent
+  str: Torrent: None
+  name: None
+  files: []
+  total_size: 0
+  info_hash: None
+  announce_urls: [['http://tracker.example.com/announce']]
+  webseeds: []
+  httpseeds: []
+  comment: 'info dict missing'
+  source: error: AttributeError: 'NoneType' object has no attribute 'get'
+  creation_date: None
+  created_by: None
+  private: False
+  magnet_link: error: TypeError: can only concatenate str (not "NoneType") to str
+  get_magnet(): error: TypeError: can only concatenate str (not "NoneType") to str
+  get_magnet(['ws']): error: TypeError: can only concatenate str (not "NoneType") to str
+== torrent library/no-length.torrent
+  str: Torrent: half-written
+  name: 'half-written'
+  files: error: KeyError: 'length'
+  total_size: error: KeyError: 'length'
+  info_hash: '4c2a66c832c47508b04c0e44fe95187f1d4e4100'
+  announce_urls: []
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: None
+  creation_date: None
+  created_by: None
+  private: False
+  magnet_link: magnet:?xt=urn:btih:4c2a66c832c47508b04c0e44fe95187f1d4e4100
+  get_magnet(): magnet:?xt=urn:btih:4c2a66c832c47508b04c0e44fe95187f1d4e4100
+  get_magnet(['ws']): magnet:?xt=urn:btih:4c2a66c832c47508b04c0e44fe95187f1d4e4100
+== torrent library/private-upload.torrent
+  str: Torrent: Field.Recordings.Vol.3.2024.WEB.FLAC
+  name: 'Field.Recordings.Vol.3.2024.WEB.FLAC'
+  files: ['Field.Recordings.Vol.3.2024.WEB.FLAC' (734003200)]
+  total_size: 734003200
+  info_hash: 'dd01ea9695f6eb3d60b5744db347cd89da994483'
+  announce_urls: [['https://tracker.example.org/PASSKEY/announce']]
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: 'RED'
+  creation_date: 2024-10-15 13:46:40
+  created_by: 'mkbrr/1.3.0'
+  private: 1
+  magnet_link: magnet:?xt=urn:btih:dd01ea9695f6eb3d60b5744db347cd89da994483
+  get_magnet(): magnet:?xt=urn:btih:dd01ea9695f6eb3d60b5744db347cd89da994483&tr=https%3A%2F%2Ftracker.example.org%2FPASSKEY%2Fannounce
+  get_magnet(['ws']): magnet:?xt=urn:btih:dd01ea9695f6eb3d60b5744db347cd89da994483
+== torrent library/string-date.torrent
+  str: Torrent: date-as-text.txt
+  name: 'date-as-text.txt'
+  files: ['date-as-text.txt' (10)]
+  total_size: 10
+  info_hash: '77465e51611cd16dd569510106c15bdfaefa5dbd'
+  announce_urls: []
+  webseeds: []
+  httpseeds: []
+  comment: None
+  source: None
+  creation_date: 2023-11-14 22:13:20
+  created_by: None
+  private: False
+  magnet_link: magnet:?xt=urn:btih:77465e51611cd16dd569510106c15bdfaefa5dbd
+  get_magnet(): magnet:?xt=urn:btih:77465e51611cd16dd569510106c15bdfaefa5dbd
+  get_magnet(['ws']): magnet:?xt=urn:btih:77465e51611cd16dd569510106c15bdfaefa5dbd
+== torrent library/truncated.torrent
+  str: error: AttributeError: 'list' object has no attribute 'get'
+  name: error: AttributeError: 'list' object has no attribute 'get'
+  files: error: AttributeError: 'list' object has no attribute 'get'
+  total_size: error: AttributeError: 'list' object has no attribute 'get'
+  info_hash: error: AttributeError: 'list' object has no attribute 'get'
+  announce_urls: error: AttributeError: 'list' object has no attribute 'get'
+  webseeds: error: AttributeError: 'list' object has no attribute 'get'
+  httpseeds: error: AttributeError: 'list' object has no attribute 'get'
+  comment: error: AttributeError: 'list' object has no attribute 'get'
+  source: error: AttributeError: 'list' object has no attribute 'get'
+  creation_date: error: AttributeError: 'list' object has no attribute 'get'
+  created_by: error: AttributeError: 'list' object has no attribute 'get'
+  private: error: AttributeError: 'list' object has no attribute 'get'
+  magnet_link: error: AttributeError: 'list' object has no attribute 'get'
+  get_magnet(): error: AttributeError: 'list' object has no attribute 'get'
+  get_magnet(['ws']): error: AttributeError: 'list' object has no attribute 'get'
+== recode library/LibreOffice_24.8.2_Linux_x86-64_deb.torrent
+same 1156 bytes
+== recode library/The Quiet Tides - Harbour (2019) [FLAC].torrent
+same 1927 bytes
+== recode library/alpine-mirror.torrent
+same 4338 bytes
+== recode library/alpine-standard-3.20.3-x86_64.iso.torrent
+same 4614 bytes
+== recode library/empty.torrent
+differs at byte 0 of 0 (now 10 bytes)
+  was: 
+  now: d4:infodee
+  sha1 now c1de70de8a169bd912abcb554393be1297d95427
+== recode library/error-page.torrent
+error: BencodeDecodingError: Unable to interpret `<` char.
+== recode library/far-future.torrent
+same 120 bytes
+== recode library/info-list.torrent
+same 64 bytes
+== recode library/list.torrent
+same 14 bytes
+== recode library/nasa-apollo11-msn_archive.torrent
+differs at byte 376 of 628 (now 628 bytes)
+  was: 1/items/e4:infod4:name17:nasa-apollo11-m
+  now: 1/items/e4:infod5:filesld6:lengthi120340
+  sha1 now 4c955ee67b71ca1ad1be196f78706a4de4f71ed8
+== recode library/natsu-sjis.torrent
+differs at byte 144 of 7309 (now 7328 bytes)
+  was: 67001856e4:pathl9:\x91\xe61\x98b.mkveed6:lengthi1
+  now: 67001856e4:pathl15:\xef\xbf\xbd\xef\xbf\xbd1\xef\xbf\xbdb.mkveed6:l
+  sha1 now 5c73d09107ddaa326122887f31c6f351506ed42f
+== recode library/no-info.torrent
+same 79 bytes
+== recode library/no-length.torrent
+same 89 bytes
+== recode library/private-upload.torrent
+same 3748 bytes
+== recode library/string-date.torrent
+same 129 bytes
+== recode library/truncated.torrent
+error: BencodeEncodingError: Unable to encode `<class 'function'>` <function Bencode.decode.<locals>.create_dict at 0x...>
+== info library/alpine-standard-3.20.3-x86_64.iso.torrent
+Name: alpine-standard-3.20.3-x86_64.iso
+Files:
+alpine-standard-3.20.3-x86_64.iso
+Hash: 796cffb87b9c4598762fa5e4e505c401543a23f2
+Size: 206.0 MB (216006656)
+Magnet: magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=http%3A%2F%2Ftorrent.alpinelinux.org%3A6969%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+== info library/The Quiet Tides - Harbour (2019) [FLAC].torrent
+Name: The Quiet Tides - Harbour (2019) [FLAC]
+Files:
+The Quiet Tides - Harbour (2019) [FLAC]/CD1/01 - Dawn Chorus.flac
+The Quiet Tides - Harbour (2019) [FLAC]/CD1/02 - Harbour Lights.flac
+The Quiet Tides - Harbour (2019) [FLAC]/CD1/03 - Night Ferry (feat. Mira).flac
+The Quiet Tides - Harbour (2019) [FLAC]/CD1/04 - Últimos días.flac
+The Quiet Tides - Harbour (2019) [FLAC]/cover.jpg
+The Quiet Tides - Harbour (2019) [FLAC]/CD1/album.cue
+The Quiet Tides - Harbour (2019) [FLAC]/CD1/.hidden/empty.log
+Hash: 36e9afc2fa4a08836e3b6e90dfb7e8ba206f3889
+Size: 124.16 MB (130186386)
+Magnet: magnet:?xt=urn:btih:36e9afc2fa4a08836e3b6e90dfb7e8ba206f3889&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce
+== info library/natsu-sjis.torrent
+Name: �ẴA���o��
+Files:
+�ẴA���o��/��1�b.mkv
+�ẴA���o��/readme.txt
+Hash: 272b8e9f22ade6f86691d1b31b0fa8ea9aecb38d
+Size: 350.0 MB (367002880)
+Magnet: magnet:?xt=urn:btih:272b8e9f22ade6f86691d1b31b0fa8ea9aecb38d&tr=http%3A%2F%2Ftracker.example.jp%3A6969%2Fannounce
+== info library/no-length.torrent
+error: KeyError: 'length'
+== edit library/alpine-standard-3.20.3-x86_64.iso.torrent announce=udp://tracker.example.com:80/announce
+  set announce=udp://tracker.example.com:80/announce
+  announce_urls: [['udp://tracker.example.com:80/announce']]
+  webseeds: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'
+  httpseeds: []
+  private: False
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  creation_date: 2024-09-10 09:40:00
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=udp%3A%2F%2Ftracker.example.com%3A80%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+  to_string: 4454 bytes, sha1 0d66c41348dfa82e07c3bf62fd6b736f40567358
+  decoded: {'announce': 'udp://tracker.example.com:80/announce', 'comment': 'Alpine Linux 3.20.3 standard image', 'created by': 'mktorrent 1.1', 'creation date': 1725961200, 'info': {'length': 216006656, 'name': 'alpine-standard-3.20.3-x86_64.iso', 'piece length': 1048576, 'pieces': <4120 bytes>}, 'url-list': 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'}
+== edit library/alpine-standard-3.20.3-x86_64.iso.torrent announce=[udp://a.example:1/announce]
+  set announce=[udp://a.example:1/announce]
+  announce_urls: [['udp://a.example:1/announce']]
+  webseeds: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'
+  httpseeds: []
+  private: False
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  creation_date: 2024-09-10 09:40:00
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=udp%3A%2F%2Fa.example%3A1%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+  to_string: 4443 bytes, sha1 4c1fe35c2e0032f7aa66308a2d65449bf168289b
+  decoded: {'announce': 'udp://a.example:1/announce', 'comment': 'Alpine Linux 3.20.3 standard image', 'created by': 'mktorrent 1.1', 'creation date': 1725961200, 'info': {'length': 216006656, 'name': 'alpine-standard-3.20.3-x86_64.iso', 'piece length': 1048576, 'pieces': <4120 bytes>}, 'url-list': 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'}
+== edit library/alpine-standard-3.20.3-x86_64.iso.torrent announce=[udp://a.example:1/announce,http://b.example/announce]
+  set announce=[udp://a.example:1/announce,http://b.example/announce]
+  announce_urls: [['udp://a.example:1/announce'], ['http://b.example/announce']]
+  webseeds: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'
+  httpseeds: []
+  private: False
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  creation_date: 2024-09-10 09:40:00
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=udp%3A%2F%2Fa.example%3A1%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+  to_string: 4522 bytes, sha1 108aad3eb980eb3d4ef93d4d3df14d86c0bc6ce5
+  decoded: {'announce': 'udp://a.example:1/announce', 'announce-list': [['udp://a.example:1/announce'], ['http://b.example/announce']], 'comment': 'Alpine Linux 3.20.3 standard image', 'created by': 'mktorrent 1.1', 'creation date': 1725961200, 'info': {'length': 216006656, 'name': 'alpine-standard-3.20.3-x86_64.iso', 'piece length': 1048576, 'pieces': <4120 bytes>}, 'url-list': 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'}
+== edit library/alpine-standard-3.20.3-x86_64.iso.torrent announce=[[udp://a.example:1/announce,udp://c.example:2/announce],[http://b.example/announce]]
+  set announce=[[udp://a.example:1/announce,udp://c.example:2/announce],[http://b.example/announce]]
+  announce_urls: [['udp://a.example:1/announce', 'udp://c.example:2/announce'], ['http://b.example/announce']]
+  webseeds: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'
+  httpseeds: []
+  private: False
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  creation_date: 2024-09-10 09:40:00
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=udp%3A%2F%2Fa.example%3A1%2Fannounce&tr=udp%3A%2F%2Fc.example%3A2%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+  to_string: 4582 bytes, sha1 2bd16a2052f4625ff253ad8753a1090add8cd986
+  decoded: {'announce': ['udp://a.example:1/announce', 'udp://c.example:2/announce'], 'announce-list': [['udp://a.example:1/announce', 'udp://c.example:2/announce'], ['http://b.example/announce']], 'comment': 'Alpine Linux 3.20.3 standard image', 'created by': 'mktorrent 1.1', 'creation date': 1725961200, 'info': {'length': 216006656, 'name': 'alpine-standard-3.20.3-x86_64.iso', 'piece length': 1048576, 'pieces': <4120 bytes>}, 'url-list': 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'}
+== edit library/alpine-standard-3.20.3-x86_64.iso.torrent announce=[]
+  set announce=[]
+  announce_urls: []
+  webseeds: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'
+  httpseeds: []
+  private: False
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  creation_date: 2024-09-10 09:40:00
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+  to_string: 4434 bytes, sha1 4ea6f061a1fde05adbe45d6d85faa113a18fa79b
+  decoded: {'announce': '', 'announce-list': [], 'comment': 'Alpine Linux 3.20.3 standard image', 'created by': 'mktorrent 1.1', 'creation date': 1725961200, 'info': {'length': 216006656, 'name': 'alpine-standard-3.20.3-x86_64.iso', 'piece length': 1048576, 'pieces': <4120 bytes>}, 'url-list': 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'}
+== edit library/alpine-standard-3.20.3-x86_64.iso.torrent announce=-
+  set announce=-
+  announce_urls: []
+  webseeds: 'https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/'
+  httpseeds: []
+  private: False
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  creation_date: 2024-09-10 09:40:00
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=d&ws=l&ws=-&ws=c&ws=d&ws=n&ws=.&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=l&ws=i&ws=n&ws=u&ws=x&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=a&ws=l&ws=p&ws=i&ws=n&ws=e&ws=%2F&ws=v&ws=3&ws=.&ws=2&ws=0&ws=%2F&ws=r&ws=e&ws=l&ws=e&ws=a&ws=s&ws=e&ws=s&ws=%2F&ws=x&ws=8&ws=6&ws=_&ws=6&ws=4&ws=%2F
+  to_string: error: BencodeEncodingError: Unable to encode `<class 'NoneType'>` None
+== edit library/alpine-standard-3.20.3-x86_64.iso.torrent webseeds=- comment=mirrored
+  set webseeds=-
+  set comment=mirrored
+  announce_urls: [['http://torrent.alpinelinux.org:6969/announce'], ['udp://tracker.opentrackr.org:1337/announce', 'udp://open.demonii.com:1337/announce']]
+  webseeds: []
+  httpseeds: []
+  private: False
+  str: Torrent: alpine-standard-3.20.3-x86_64.iso
+  creation_date: 2024-09-10 09:40:00
+  get_magnet(): magnet:?xt=urn:btih:796cffb87b9c4598762fa5e4e505c401543a23f2&tr=http%3A%2F%2Ftorrent.alpinelinux.org%3A6969%2Fannounce
+  to_string: 4514 bytes, sha1 192aab92e6b6cb06eaab1a4f8ac4f63631e80d76
+  decoded: {'announce': 'http://torrent.alpinelinux.org:6969/announce', 'announce-list': [['http://torrent.alpinelinux.org:6969/announce'], ['udp://tracker.opentrackr.org:1337/announce', 'udp://open.demonii.com:1337/announce']], 'comment': 'mirrored', 'created by': 'mktorrent 1.1', 'creation date': 1725961200, 'info': {'length': 216006656, 'name': 'alpine-standard-3.20.3-x86_64.iso', 'piece length': 1048576, 'pieces': <4120 bytes>}}
+== edit library/LibreOffice_24.8.2_Linux_x86-64_deb.torrent webseeds=https://cdn.example.com/lo/ httpseeds=[http://seed.example/a,http://seed.example/b]
+  set webseeds=https://cdn.example.com/lo/
+  set httpseeds=[http://seed.example/a,http://seed.example/b]
+  announce_urls: [['udp://tracker.documentfoundation.org:6969/announce']]
+  webseeds: ['https://cdn.example.com/lo/']
+  httpseeds: ['http://seed.example/a', 'http://seed.example/b']
+  private: False
+  str: Torrent: LibreOffice_24.8.2_Linux_x86-64_deb
+  creation_date: 2024-10-08 14:00:00
+  get_magnet(): magnet:?xt=urn:btih:88f8151c34b14e6567c8b69562365c7c666682ff&tr=udp%3A%2F%2Ftracker.documentfoundation.org%3A6969%2Fannounce&ws=https%3A%2F%2Fcdn.example.com%2Flo%2F
+  to_string: 1096 bytes, sha1 6b9d5341c12726e2e4b386fb43796e2eefc8ca80
+  decoded: {'announce': 'udp://tracker.documentfoundation.org:6969/announce', 'created by': 'Transmission/4.0.5 (a6fe2a64aa)', 'creation date': 1728396000, 'httpseeds': ['http://seed.example/a', 'http://seed.example/b'], 'info': {'files': [{'length': 2093416, 'path': ['DEBS', 'libreoffice24.8-base_24.8.2.1-1_amd64.deb']}, {'length': 10334932, 'path': ['DEBS', 'libreoffice24.8-calc_24.8.2.1-1_amd64.deb']}, {'length': 41562320, 'path': ['DEBS', 'libreoffice24.8-core_24.8.2.1-1_amd64.deb']}, {'length': 8890664, 'path': ['DEBS', 'libreoffice24.8-writer_24.8.2.1-1_amd64.deb']}, {'length': 1048576, 'path': ['DEBS', 'libobasis24.8-en-us_24.8.2.1-1_amd64.deb']}, {'length': 4096, 'path': ['readmes', 'README_en-US']}], 'name': 'LibreOffice_24.8.2_Linux_x86-64_deb', 'piece length': 4194304, 'pieces': <320 bytes>}, 'url-list': ['https://cdn.example.com/lo/']}
+== edit library/LibreOffice_24.8.2_Linux_x86-64_deb.torrent private=1 source=TDF
+  set private=1
+  set source=TDF
+  announce_urls: [['udp://tracker.documentfoundation.org:6969/announce']]
+  webseeds: ['https://download.documentfoundation.org/libreoffice/stable/24.8.2/deb/x86_64/', 'https://mirror.example.org/tdf/libreoffice/stable/24.8.2/deb/x86_64/']
+  httpseeds: []
+  private: 1
+  str: Torrent: LibreOffice_24.8.2_Linux_x86-64_deb
+  creation_date: 2024-10-08 14:00:00
+  get_magnet(): magnet:?xt=urn:btih:d447c1b197786dca33bb115d7c92b7f97bf92a81&tr=udp%3A%2F%2Ftracker.documentfoundation.org%3A6969%2Fannounce&ws=https%3A%2F%2Fdownload.documentfoundation.org%2Flibreoffice%2Fstable%2F24.8.2%2Fdeb%2Fx86_64%2F&ws=https%3A%2F%2Fmirror.example.org%2Ftdf%2Flibreoffice%2Fstable%2F24.8.2%2Fdeb%2Fx86_64%2F
+  to_string: 1181 bytes, sha1 7d9066cf3a7a4c6f7ee8de49b33ff92cb4c47013
+  decoded: {'announce': 'udp://tracker.documentfoundation.org:6969/announce', 'created by': 'Transmission/4.0.5 (a6fe2a64aa)', 'creation date': 1728396000, 'info': {'files': [{'length': 2093416, 'path': ['DEBS', 'libreoffice24.8-base_24.8.2.1-1_amd64.deb']}, {'length': 10334932, 'path': ['DEBS', 'libreoffice24.8-calc_24.8.2.1-1_amd64.deb']}, {'length': 41562320, 'path': ['DEBS', 'libreoffice24.8-core_24.8.2.1-1_amd64.deb']}, {'length': 8890664, 'path': ['DEBS', 'libreoffice24.8-writer_24.8.2.1-1_amd64.deb']}, {'length': 1048576, 'path': ['DEBS', 'libobasis24.8-en-us_24.8.2.1-1_amd64.deb']}, {'length': 4096, 'path': ['readmes', 'README_en-US']}], 'name': 'LibreOffice_24.8.2_Linux_x86-64_deb', 'piece length': 4194304, 'pieces': <320 bytes>, 'private': 1, 'source': 'TDF'}, 'url-list': ['https://download.documentfoundation.org/libreoffice/stable/24.8.2/deb/x86_64/', 'https://mirror.example.org/tdf/libreoffice/stable/24.8.2/deb/x86_64/']}
+== edit library/private-upload.torrent private=0 source=OPS announce=https://tracker.example.net/KEY/announce
+  set private=0
+  set source=OPS
+  set announce=https://tracker.example.net/KEY/announce
+  announce_urls: [['https://tracker.example.net/KEY/announce']]
+  webseeds: []
+  httpseeds: []
+  private: False
+  str: Torrent: Field.Recordings.Vol.3.2024.WEB.FLAC
+  creation_date: 2024-10-15 13:46:40
+  get_magnet(): magnet:?xt=urn:btih:088f668e59991fa98fdbb84c32b5e8af7a3f274e&tr=https%3A%2F%2Ftracker.example.net%2FKEY%2Fannounce
+  to_string: 3732 bytes, sha1 9a3a9e637dc77b85f5dbbac5f5fa62cddd2b8b68
+  decoded: {'announce': 'https://tracker.example.net/KEY/announce', 'created by': 'mkbrr/1.3.0', 'creation date': 1729000000, 'info': {'length': 734003200, 'name': 'Field.Recordings.Vol.3.2024.WEB.FLAC', 'piece length': 4194304, 'pieces': <3500 bytes>, 'source': 'OPS'}}
+== edit library/private-upload.torrent name=Field Recordings Vol 3 date=2024-10-20T08:30:00
+  set name=Field Recordings Vol 3
+  set date=2024-10-20T08:30:00
+  announce_urls: [['https://tracker.example.org/PASSKEY/announce']]
+  webseeds: []
+  httpseeds: []
+  private: 1
+  str: Torrent: Field Recordings Vol 3
+  creation_date: 2024-10-20 08:30:00
+  get_magnet(): magnet:?xt=urn:btih:e9ed1d19e9ebb07bb3cfab107dad4a863ae5c8ae&tr=https%3A%2F%2Ftracker.example.org%2FPASSKEY%2Fannounce
+  to_string: 3734 bytes, sha1 60b259e42d76308c5c2ba4ef0b0447bced2bfee1
+  decoded: {'announce': 'https://tracker.example.org/PASSKEY/announce', 'created by': 'mkbrr/1.3.0', 'creation date': 1729413000, 'info': {'length': 734003200, 'name': 'Field Recordings Vol 3', 'piece length': 4194304, 'pieces': <3500 bytes>, 'private': 1, 'source': 'RED'}}
+== edit library/no-info.torrent source=x
+  set source=x: error: KeyError: 'info'
+  announce_urls: [['http://tracker.example.com/announce']]
+  webseeds: []
+  httpseeds: []
+  private: False
+  str: Torrent: None
+  creation_date: None
+  get_magnet(): error: TypeError: can only concatenate str (not "NoneType") to str
+  to_string: 79 bytes, sha1 dc39ab4485eb7e9a7c2ce4fc4251a1777be9ac56
+  decoded: {'announce': 'http://tracker.example.com/announce', 'comment': 'info dict missing'}
+== edit library/no-info.torrent name=rescued
+  set name=rescued: error: KeyError: 'info'
+  announce_urls: [['http://tracker.example.com/announce']]
+  webseeds: []
+  httpseeds: []
+  private: False
+  str: Torrent: None
+  creation_date: None
+  get_magnet(): error: TypeError: can only concatenate str (not "NoneType") to str
+  to_string: 79 bytes, sha1 dc39ab4485eb7e9a7c2ce4fc4251a1777be9ac56
+  decoded: {'announce': 'http://tracker.example.com/announce', 'comment': 'info dict missing'}
+== edit library/empty.torrent name=new announce=udp://t.example:1/announce
+  set name=new
+  set announce=udp://t.example:1/announce
+  announce_urls: [['udp://t.example:1/announce']]
+  webseeds: []
+  httpseeds: []
+  private: False
+  str: Torrent: new
+  creation_date: None
+  get_magnet(): magnet:?xt=urn:btih:ab4fa9796bba20a2eea047ce58444f2af9036fab&tr=udp%3A%2F%2Ft.example%3A1%2Fannounce
+  to_string: 60 bytes, sha1 cdeb952536a9292080da7fe5d02055094d6e928a
+  decoded: {'announce': 'udp://t.example:1/announce', 'info': {'name': 'new'}}
+== edit library/nasa-apollo11-msn_archive.torrent date=1969-07-20T20:17:40 comment=Tranquility Base here
+  set date=1969-07-20T20:17:40
+  set comment=Tranquility Base here
+  announce_urls: [['http://bt1.archive.org:6969/announce'], ['http://bt2.archive.org:6969/announce']]
+  webseeds: 'https://archive.org/download/'
+  httpseeds: ['https://ia800300.us.archive.org/1/items/']
+  private: False
+  str: Torrent: nasa-apollo11-msn
+  creation_date: 1969-07-20 20:17:40
+  get_magnet(): magnet:?xt=urn:btih:77160c3bad27c82a543bc46046ba220665770233&tr=http%3A%2F%2Fbt1.archive.org%3A6969%2Fannounce&ws=h&ws=t&ws=t&ws=p&ws=s&ws=%3A&ws=%2F&ws=%2F&ws=a&ws=r&ws=c&ws=h&ws=i&ws=v&ws=e&ws=.&ws=o&ws=r&ws=g&ws=%2F&ws=d&ws=o&ws=w&ws=n&ws=l&ws=o&ws=a&ws=d&ws=%2F
+  to_string: 556 bytes, sha1 e15888d2b024bb2cc2c058a229e62759e5e72303
+  decoded: {'announce': 'http://bt1.archive.org:6969/announce', 'announce-list': [['http://bt1.archive.org:6969/announce'], ['http://bt2.archive.org:6969/announce']], 'comment': 'Tranquility Base here', 'created by': 'ia_make_torrent', 'creation date': -14182940, 'httpseeds': ['https://ia800300.us.archive.org/1/items/'], 'info': {'files': [{'length': 1203400, 'path': ['transcript.txt']}, {'length': 98000, 'path': ['logo.png']}], 'name': 'nasa-apollo11-msn', 'piece length': 524288, 'pieces': <60 bytes>}, 'url-list': 'https://archive.org/download/'}
+== edit library/natsu-sjis.torrent webseeds=[]
+  set webseeds=[]
+  announce_urls: [['http://tracker.example.jp:6969/announce']]
+  webseeds: []
+  httpseeds: []
+  private: False
+  str: Torrent: �ẴA���o��
+  creation_date: 2008-01-01 00:00:00
+  get_magnet(): magnet:?xt=urn:btih:272b8e9f22ade6f86691d1b31b0fa8ea9aecb38d&tr=http%3A%2F%2Ftracker.example.jp%3A6969%2Fannounce
+  to_string: 7340 bytes, sha1 8e6babb074c4527bb614e12047f12f254ffeb155
+  decoded: {'announce': 'http://tracker.example.jp:6969/announce', 'creation date': 1199145600, 'encoding': 'SHIFT_JIS', 'info': {'files': [{'length': 367001856, 'path': ['��1�b.mkv']}, {'length': 1024, 'path': ['readme.txt']}], 'name': '�ẴA���o��', 'name.utf-8': '夏のアルバム', 'piece length': 1048576, 'pieces': <7020 bytes>}, 'url-list': []}
+== create data/downloads/osm-monaco tracker=udp://tracker.opentrackr.org:1337/announce,udp://open.demonii.com:1337/announce comment=Monaco amenities, October 2024
+Creating torrent from data/downloads/osm-monaco ...
+Torrent file created: data/out/osm-monaco.torrent
+Torrent info hash: a7ee506d85634ad890881f04f1af656fcacbec61
+  515 bytes, sha1 a2229fa404b8df861985153f9feed18a4103fd61
+  {'announce': 'udp://tracker.opentrackr.org:1337/announce', 'announce-list': [['udp://tracker.opentrackr.org:1337/announce'], ['udp://open.demonii.com:1337/announce']], 'comment': 'Monaco amenities, October 2024', 'created by': 'torrentool/1.2.0', 'creation date': 1729425600, 'info': {'files': [{'length': 205, 'path': ['LICENSE.txt']}, {'length': 114, 'path': ['README.md']}, {'length': 20858, 'path': ['monaco-amenities.csv']}, {'length': 6827, 'path': ['tiles', 'index.txt']}], 'name': 'osm-monaco', 'piece length': 32768, 'pieces': b'4}\xbf\xedK\xbe\x82\xc11\xf7x+X\xfa\x9c\x02~\xd0s\xb8'}}
+== create data/src/release-notes.txt
+Creating torrent from data/src/release-notes.txt ...
+Torrent file created: data/out/release-notes_txt.torrent
+Torrent info hash: 08114f419626243c4367c8f0a45a79d47ab929e5
+  163 bytes, sha1 94a9467feec6a8454be38f054316fa8c614f2d88
+  {'created by': 'torrentool/1.2.0', 'creation date': 1729425600, 'info': {'length': 1995, 'name': 'release-notes.txt', 'piece length': 32768, 'pieces': b'\xfd\x82\x81\t\x0eSD\x80-\x8a]\x8a\xd2\xfba\x95\xc0\xa3\x02p'}}
+== create data/src/release-notes.txt tracker=http://tracker.example.com/announce
+Creating torrent from data/src/release-notes.txt ...
+Torrent file created: data/out/release-notes_txt.torrent
+Torrent info hash: 08114f419626243c4367c8f0a45a79d47ab929e5
+  211 bytes, sha1 eae823193ceb38d26b1cf2152ea42af843d9f4d8
+  {'announce': 'http://tracker.example.com/announce', 'created by': 'torrentool/1.2.0', 'creation date': 1729425600, 'info': {'length': 1995, 'name': 'release-notes.txt', 'piece length': 32768, 'pieces': b'\xfd\x82\x81\t\x0eSD\x80-\x8a]\x8a\xd2\xfba\x95\xc0\xa3\x02p'}}
+== create data/src/My Album v1.0 comment=demo
+Creating torrent from data/src/My Album v1.0 ...
+Torrent file created: data/out/My_Album_v1_0.torrent
+Torrent info hash: 9d504cb64a19199dcd234092c4ac8ecd4ae540a7
+  286 bytes, sha1 563b998bf0d196c5a7c05432a95fdb2ca87bf29e
+  {'comment': 'demo', 'created by': 'torrentool/1.2.0', 'creation date': 1729425600, 'info': {'files': [{'length': 6, 'path': ['01 Intro.txt']}, {'length': 301, 'path': ['02 Theme.txt']}, {'length': 21, 'path': ['notes', 'credits.txt']}], 'name': 'My Album v1.0', 'piece length': 32768, 'pieces': b'F\xe1C\xf0V\xc5\x80_\xf5\x18x\xda\xc7S:H\x8d.\xc5\x04'}}
+== create data/src/blank.txt
+Creating torrent from data/src/blank.txt ...
+error: TorrentError: Unable to create torrent for an empty file.
+== create data/src/only-empty
+Creating torrent from data/src/only-empty ...
+Torrent file created: data/out/only-empty.torrent
+Torrent info hash: b00383194ca00d1cb587e6a7d9840009d1ddaa54
+  130 bytes, sha1 f03342554d4fde425dfb839edb3b234baa0869b7
+  {'created by': 'torrentool/1.2.0', 'creation date': 1729425600, 'info': {'files': [], 'name': 'only-empty', 'piece length': 32768, 'pieces': ''}}
+== create data/src/site tracker=udp://a.example:1/announce,udp://b.example:2/announce,udp://c.example:3/announce
+Creating torrent from data/src/site ...
+Torrent file created: data/out/site.torrent
+Torrent info hash: bc8cd77f9e30100c8b8be61017ab0a62d441ee49
+  448 bytes, sha1 21ad3f88180e0cf936e993d73d305bd346cc95ad
+  {'announce': 'udp://a.example:1/announce', 'announce-list': [['udp://a.example:1/announce'], ['udp://b.example:2/announce'], ['udp://c.example:3/announce']], 'created by': 'torrentool/1.2.0', 'creation date': 1729425600, 'info': {'files': [{'length': 35, 'path': ['index.html']}, {'length': 24, 'path': ['robots.txt']}, {'length': 19, 'path': ['assets', 'app.css']}, {'length': 42, 'path': ['assets', 'img', 'logo.svg']}], 'name': 'site', 'piece length': 32768, 'pieces': b'+\x81f\x9e\xbbo\xc2f\xcb\xa0\x94\x85\x14\x8b\xc6\x99\x95\x99\xe3\x91'}}
+== library library
+LibreOffice_24.8.2_Linux_x86-64_deb
+  60.97 MB in 6 files, tracker.documentfoundation.org:6969, webseed 88f8151c34b1
+The Quiet Tides - Harbour (2019) [FLAC]
+  124.16 MB in 7 files, tracker.opentrackr.org:1337, 36e9afc2fa4a
+alpine-standard-3.20.3-x86_64.iso
+  206.0 MB in 1 file, tracker.mirror.example.net, 796cffb87b9c
+alpine-standard-3.20.3-x86_64.iso
+  206.0 MB in 1 file, torrent.alpinelinux.org:6969, webseed 796cffb87b9c
+  same content as alpine-mirror.torrent
+empty.torrent: no name, skipped
+error-page.torrent: error: BencodeDecodingError: Unable to interpret `<` char.
+y10k.txt
+  1.0 B in 1 file, no tracker, 2e5a114430ce
+info-list.torrent: error: AttributeError: 'list' object has no attribute 'get'
+list.torrent: error: AttributeError: 'list' object has no attribute 'get'
+nasa-apollo11-msn
+  1.24 MB in 2 files, bt1.archive.org:6969, webseed 77160c3bad27
+�ẴA���o��
+  350.0 MB in 2 files, tracker.example.jp:6969, 272b8e9f22ad
+no-info.torrent: no name, skipped
+no-length.torrent: error: KeyError: 'length'
+Field.Recordings.Vol.3.2024.WEB.FLAC
+  700.0 MB in 1 file, tracker.example.org, private dd01ea9695f6
+date-as-text.txt
+  10.0 B in 1 file, no tracker, 77465e51611c
+truncated.torrent: error: AttributeError: 'list' object has no attribute 'get'
+9 torrents, 1.61 GB (1728441193 bytes) in all, 8 distinct
+== verify check/osm-monaco.torrent downloads
+  osm-monaco/LICENSE.txt: ok
+  osm-monaco/README.md: ok
+  osm-monaco/monaco-amenities.csv: ok
+  osm-monaco/tiles/index.txt: ok
+  [#######]
+  7 of 7 pieces ok, 0 B left
+  complete: magnet:?xt=urn:btih:eade16ee1a4e4bdad5e26896a2aae811ed5a477a
+== verify check/osm-monaco.torrent partial
+  osm-monaco/LICENSE.txt: missing
+  osm-monaco/README.md: ok
+  osm-monaco/monaco-amenities.csv: 9000 of 20858 bytes
+  osm-monaco/tiles/index.txt: ok
+  [-#----x]
+  1 of 7 pieces ok, 23.35 KB left
+== verify check/release-notes.txt.torrent src
+  release-notes.txt: ok
+  [##]
+  2 of 2 pieces ok, 0 B left
+  complete: magnet:?xt=urn:btih:b528cf058f9f50d288fb42ae7a64011b23116647
+== verify check/release-notes.txt.torrent partial
+  release-notes.txt: ok
+  [x#]
+  1 of 2 pieces ok, 1.0 KB left
