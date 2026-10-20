@@ -1,5 +1,5 @@
 
-par struct Counter { v: Atomic[i64] }
+sync struct Counter { v: Atomic[i64] }
 impl Counter {
     fn get(ref self) -> i64 { self.v.load() }
     fn inc(ref self) {
