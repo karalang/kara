@@ -56,5 +56,5 @@ It matched on every backend. One spot is written around a gap:
 `*g != long` under `Some(ref g)` fails on MIR (B-2026-10-20-24). Floats
 have no `PI`, `TAU` or `E`, so the module defines its own; an unknown
 constant like `f64.PI` passes `karac check` and stops MIR lowering
-(B-2026-10-20-23). The struct-pattern shorthand `P { ref name }` does not
-parse (B-2026-10-20-25).
+(B-2026-10-20-23). The struct-pattern shorthand `P { ref name }` did not
+parse (B-2026-10-20-25, fixed in kara 4dd4f51777).

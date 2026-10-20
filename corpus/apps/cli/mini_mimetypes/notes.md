@@ -64,5 +64,6 @@ The quirks are kept. Some examples:
 
 It matched on every backend with no workaround in the port. One parser
 gap changed how the tables are declared: a Rust array type `[Str; 16]`
-gets only "Expected type, found LeftBracket", with no pointer to
-`Array[Str, 16]` (B-2026-10-20-27).
+got only "Expected type, found LeftBracket", with no pointer to
+`Array[Str, 16]` (B-2026-10-20-27). Since kara 340d9bec5b it carries a
+fix-it that `karac fix` applies.
