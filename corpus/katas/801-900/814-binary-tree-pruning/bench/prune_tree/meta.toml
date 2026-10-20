@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/814-binary-tree-pruning/bench/prune_tree.kara"
+dedup_of = []
+expect = "error:codegen"
+exit = 1
+tags = ["shared", "bench"]
+class = "e"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 1
+rules = []
+backends = []
+env = {}
+bucket = "timeout"
+classified_with = "f697e0284"
+extracted_src = "12bd68ee"
+model_rev = "583cfb0d"
+model_src = "12bd68ee"

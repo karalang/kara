@@ -1,0 +1,11 @@
+root = [1, null, 0, 0, 1] -> [1, null, 0, null, 1]
+root = [1, 0, 1, 0, 0, 0, 1] -> [1, null, 1, null, 1]
+root = [1, 1, 0, 1, 1, 0, 1, 0] -> [1, 1, 0, 1, 1, null, 1]
+root = [0] -> []
+root = [1] -> [1]
+root = [0, 0, 0, null, 0, 0] -> []
+root = [0, 0, 1, 0, null, null, 0] -> [0, null, 1]
+root = [0, null, 0, null, 0, null, 1] -> [0, null, 0, null, 0, null, 1]
+200 nodes, one in ten a 1 -> 56 kept, checksum 865239254
+a line of 200 nodes, a 1 at the bottom -> 200 kept, checksum 839524916
+300 random rounds of 1 to 30 nodes: 2482 kept, checksum 524177408

@@ -1,0 +1,102 @@
+// Benchmark for #814: Binary Tree Pruning -- the ★ arm (post-order
+// recursion).
+//
+// A subtree is kept exactly when it holds a 1. Prune both children first;
+// then the node itself goes when its value is 0 and nothing is left
+// under it, since then nothing in its subtree is a 1. O(n) time,
+// O(height) stack.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn prune_tree(root: Option[TreeNode]) -> Option[TreeNode] {
+    let Some(node) = root else {
+        return None;
+    };
+    node.left = prune_tree(node.left);
+    node.right = prune_tree(node.right);
+    if node.val == 0 and node.left.is_none() and node.right.is_none() {
+        None
+    } else {
+        Some(node)
+    }
+}
+
+// ---- benchmark --------------------------------------------------------
+
+// The tree rooted at node i of a shape: its values, and each node's left
+// and right child by index, -1 for none.
+fn build(vals: Vec[i64], left: Vec[i64], right: Vec[i64], i: i64) -> Option[TreeNode] {
+    if i < 0 {
+        return None;
+    }
+    let l = build(vals, left, right, left[i]);
+    let r = build(vals, left, right, right[i]);
+    Some(TreeNode { val: vals[i], left: l, right: r })
+}
+
+// Every value plus one, times its depth, the root at depth 1.
+fn weigh(root: Option[TreeNode], depth: i64) -> i64 {
+    match root {
+        Some(node) => (node.val + 1) * depth + weigh(node.left, depth + 1) + weigh(node.right, depth + 1),
+        None => 0,
+    }
+}
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn main() {
+    // 64 random trees of 200 nodes (LeetCode's largest), about one value
+    // in eight a 1, drawn once: each node after the first hangs from a
+    // free child place of an earlier node. Each round flips one value of
+    // the next tree, builds it, prunes it and weighs what is left.
+    let count = 64;
+    let n = 200;
+    let rounds = 300000;
+    let mut seed: i64 = 814;
+    let mut vals: Vec[Vec[i64]] = Vec.new();
+    let mut lefts: Vec[Vec[i64]] = Vec.new();
+    let mut rights: Vec[Vec[i64]] = Vec.new();
+    for _ in 0..count {
+        let mut v: Vec[i64] = Vec.new();
+        let mut l: Vec[i64] = Vec.new();
+        let mut r: Vec[i64] = Vec.new();
+        for _ in 0..n {
+            v.push(if next_random(mut seed) % 8 == 0 { 1 } else { 0 });
+            l.push(-1);
+            r.push(-1);
+        }
+        for i in 1..n {
+            loop {
+                let p = next_random(mut seed) % i;
+                if next_random(mut seed) % 2 == 0 {
+                    if l[p] < 0 {
+                        l[p] = i;
+                        break;
+                    }
+                } else if r[p] < 0 {
+                    r[p] = i;
+                    break;
+                }
+            }
+        }
+        vals.push(v);
+        lefts.push(l);
+        rights.push(r);
+    }
+    let mut checksum: i64 = 0;
+    for round in 0..rounds {
+        let g = round % count;
+        let i = next_random(mut seed) % n;
+        vals[g][i] = 1 - vals[g][i];
+        let root = prune_tree(build(vals[g], lefts[g], rights[g], 0));
+        checksum = (checksum * 31 + weigh(root, 1)) % 1000000007;
+    }
+    println(f"{rounds} rounds of {n} nodes: checksum {checksum}");
+}

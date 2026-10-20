@@ -1,0 +1,170 @@
+// LeetCode 814 — Binary Tree Pruning, a recursion that says what to keep.
+//
+// keep(node) prunes the node's subtree and says whether it holds a 1: a
+// child whose subtree holds none is cut off, and the node is worth
+// keeping when its value is 1 or either child was kept. The answer is
+// the root, or nothing when even the root is not worth keeping. O(n)
+// time, O(height) stack.
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn prune_tree(root: Option[TreeNode]) -> Option[TreeNode] {
+    match root {
+        Some(node) => if keep(node) { Some(node) } else { None },
+        None => None,
+    }
+}
+
+fn keep(node: TreeNode) -> bool {
+    let left = match node.left {
+        Some(child) => keep(child),
+        None => false,
+    };
+    let right = match node.right {
+        Some(child) => keep(child),
+        None => false,
+    };
+    if not left {
+        node.left = None;
+    }
+    if not right {
+        node.right = None;
+    }
+    node.val == 1 or left or right
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+// A tree from LeetCode's level order, `None` for a missing child.
+fn from_level_order(vals: Vec[Option[i64]]) -> Option[TreeNode] {
+    if vals.len() == 0 or vals[0].is_none() {
+        return None;
+    }
+    let root = TreeNode { val: vals[0].unwrap(), left: None, right: None };
+    let mut queue: VecDeque[TreeNode] = VecDeque.new();
+    queue.push_back(root);
+    let mut i = 1;
+    while i < vals.len() {
+        let node = queue.pop_front().unwrap();
+        if let Some(v) = vals[i] {
+            let child = TreeNode { val: v, left: None, right: None };
+            node.left = Some(child);
+            queue.push_back(child);
+        }
+        i += 1;
+        if i < vals.len() {
+            if let Some(v) = vals[i] {
+                let child = TreeNode { val: v, left: None, right: None };
+                node.right = Some(child);
+                queue.push_back(child);
+            }
+            i += 1;
+        }
+    }
+    Some(root)
+}
+
+// LeetCode's level order of a tree, "null" for a missing child, with the
+// trailing nulls dropped.
+fn to_level_order(root: Option[TreeNode]) -> String {
+    let mut out: Vec[String] = Vec.new();
+    let mut queue: VecDeque[Option[TreeNode]] = VecDeque.new();
+    queue.push_back(root);
+    while let Some(entry) = queue.pop_front() {
+        match entry {
+            Some(node) => {
+                out.push(f"{node.val}");
+                queue.push_back(node.left);
+                queue.push_back(node.right);
+            }
+            None => out.push("null".to_string()),
+        }
+    }
+    while out.len() > 0 and out[out.len() - 1] == "null" {
+        out.pop();
+    }
+    f"[{out.join(", ")}]"
+}
+
+fn show(vals: Vec[Option[i64]]) {
+    let before = to_level_order(from_level_order(vals));
+    println(f"root = {before} -> {to_level_order(prune_tree(from_level_order(vals)))}");
+}
+
+// A random tree of n nodes: each new node hangs from a random node with a
+// free side. A value is 1 one time in `ones`.
+fn random_tree(seed: mut ref i64, n: i64, ones: i64) -> Option[TreeNode] {
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for k in 0..n {
+        let v = if next_random(mut seed) % ones == 0 { 1 } else { 0 };
+        let node = TreeNode { val: v, left: None, right: None };
+        if k > 0 {
+            loop {
+                let parent = nodes[next_random(mut seed) % nodes.len()];
+                if next_random(mut seed) % 2 == 0 {
+                    if parent.left.is_none() {
+                        parent.left = Some(node);
+                        break;
+                    }
+                } else if parent.right.is_none() {
+                    parent.right = Some(node);
+                    break;
+                }
+            }
+        }
+        nodes.push(node);
+    }
+    if n == 0 { None } else { Some(nodes[0]) }
+}
+
+// The number of nodes and a checksum of the values in pre-order.
+fn summary(root: Option[TreeNode]) -> (i64, i64) {
+    match root {
+        None => (0, 7),
+        Some(node) => {
+            let (ln, lc) = summary(node.left);
+            let (rn, rc) = summary(node.right);
+            (1 + ln + rn, (lc * 31 + rc * 17 + node.val + 3) % 1000000007)
+        }
+    }
+}
+
+fn main() {
+    show(vec![Some(1), None, Some(0), Some(0), Some(1)]);
+    show(vec![Some(1), Some(0), Some(1), Some(0), Some(0), Some(0), Some(1)]);
+    show(vec![Some(1), Some(1), Some(0), Some(1), Some(1), Some(0), Some(1), Some(0)]);
+    show(vec![Some(0)]);
+    show(vec![Some(1)]);
+    show(vec![Some(0), Some(0), Some(0), None, Some(0), Some(0)]);
+    show(vec![Some(0), Some(0), Some(1), Some(0), None, None, Some(0)]);
+    show(vec![Some(0), None, Some(0), None, Some(0), None, Some(1)]);
+    // LeetCode's largest: 200 nodes, one in ten a 1; and 200 nodes in one
+    // line, the only 1 at the bottom.
+    let mut seed = 814;
+    let (n, check) = summary(prune_tree(random_tree(mut seed, 200, 10)));
+    println(f"200 nodes, one in ten a 1 -> {n} kept, checksum {check}");
+    let mut chain: Option[TreeNode] = Some(TreeNode { val: 1, left: None, right: None });
+    for k in 0..199 {
+        chain = Some(TreeNode { val: 0, left: if k % 2 == 0 { chain } else { None }, right: if k % 2 == 0 { None } else { chain } });
+    }
+    let (n, check) = summary(prune_tree(chain));
+    println(f"a line of 200 nodes, a 1 at the bottom -> {n} kept, checksum {check}");
+    let mut kept = 0;
+    let mut all = 0;
+    for r in 0..300 {
+        let size = 1 + next_random(mut seed) % 30;
+        let (n, check) = summary(prune_tree(random_tree(mut seed, size, 2 + r % 6)));
+        kept += n;
+        all = (all * 131 + check) % 1000000007;
+    }
+    println(f"300 random rounds of 1 to 30 nodes: {kept} kept, checksum {all}");
+}

@@ -1,0 +1,294 @@
+// LeetCode #814: differential -- the four arms against the statement.
+//
+// Copies of the four arms, sharing the ★ arm's TreeNode, held to four
+// properties on random trees, against the nodes whose subtree holds a 1.
+
+// ---- ★ arm ----------------------------------------------------------
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn prune_tree_star(root: Option[TreeNode]) -> Option[TreeNode] {
+    let Some(node) = root else {
+        return None;
+    };
+    node.left = prune_tree_star(node.left);
+    node.right = prune_tree_star(node.right);
+    if node.val == 0 and node.left.is_none() and node.right.is_none() {
+        None
+    } else {
+        Some(node)
+    }
+}
+
+// ---- keep arm -------------------------------------------------------
+
+fn prune_tree_keep(root: Option[TreeNode]) -> Option[TreeNode] {
+    match root {
+        Some(node) => if keep_keep(node) { Some(node) } else { None },
+        None => None,
+    }
+}
+
+fn keep_keep(node: TreeNode) -> bool {
+    let left = match node.left {
+        Some(child) => keep_keep(child),
+        None => false,
+    };
+    let right = match node.right {
+        Some(child) => keep_keep(child),
+        None => false,
+    };
+    if not left {
+        node.left = None;
+    }
+    if not right {
+        node.right = None;
+    }
+    node.val == 1 or left or right
+}
+
+// ---- stack arm ------------------------------------------------------
+
+fn prune_tree_stack(root: Option[TreeNode]) -> Option[TreeNode] {
+    let Some(top) = root else {
+        return None;
+    };
+    let mut stack: Vec[(TreeNode, bool)] = vec![(top, false)];
+    while let Some((node, children_done)) = stack.pop() {
+        if children_done {
+            if let Some(l) = node.left {
+                if is_empty_zero_stack(l) {
+                    node.left = None;
+                }
+            }
+            if let Some(r) = node.right {
+                if is_empty_zero_stack(r) {
+                    node.right = None;
+                }
+            }
+        } else {
+            stack.push((node, true));
+            if let Some(l) = node.left {
+                stack.push((l, false));
+            }
+            if let Some(r) = node.right {
+                stack.push((r, false));
+            }
+        }
+    }
+    if is_empty_zero_stack(top) { None } else { Some(top) }
+}
+
+// A leaf whose value is 0.
+fn is_empty_zero_stack(node: TreeNode) -> bool {
+    node.val == 0 and node.left.is_none() and node.right.is_none()
+}
+
+// ---- search arm -----------------------------------------------------
+
+fn prune_tree_search(root: Option[TreeNode]) -> Option[TreeNode] {
+    let Some(node) = root else {
+        return None;
+    };
+    if not has_one_search(Some(node)) {
+        return None;
+    }
+    node.left = prune_tree_search(node.left);
+    node.right = prune_tree_search(node.right);
+    Some(node)
+}
+
+// Whether the subtree holds a 1.
+fn has_one_search(root: Option[TreeNode]) -> bool {
+    match root {
+        None => false,
+        Some(node) => node.val == 1 or has_one_search(node.left) or has_one_search(node.right),
+    }
+}
+
+// ---- the definition -------------------------------------------------------
+
+// A tree as arrays: node 0 is the root, and node k hangs from an earlier
+// node, so every child has a larger index than its parent.
+struct Shape {
+    vals: Vec[i64],
+    left: Vec[i64],
+    right: Vec[i64],
+}
+
+// The statement: a node stays exactly when its subtree holds a 1. Children
+// come after parents, so one pass from the back finds every subtree's 1s.
+fn kept_by_definition(shape: Shape) -> Vec[bool] {
+    let n = shape.vals.len();
+    let mut has = Vec.filled(n, false);
+    let mut k = n - 1;
+    while k >= 0 {
+        has[k] = shape.vals[k] == 1
+            or (shape.left[k] >= 0 and has[shape.left[k]])
+            or (shape.right[k] >= 0 and has[shape.right[k]]);
+        k -= 1;
+    }
+    has
+}
+
+// Pre-order of the nodes that stay, "#" for a missing child; `mirror`
+// takes the right child first.
+fn expected(shape: Shape, kept: Vec[bool], k: i64, mirror: bool) -> String {
+    if k < 0 or not kept[k] {
+        return "#".to_string();
+    }
+    let (a, b) = if mirror { (shape.right[k], shape.left[k]) } else { (shape.left[k], shape.right[k]) };
+    f"{shape.vals[k]}({expected(shape, kept, a, mirror)},{expected(shape, kept, b, mirror)})"
+}
+
+// ---- the properties -------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn arm(which: i64, root: Option[TreeNode]) -> Option[TreeNode] {
+    if which == 0 {
+        prune_tree_star(root)
+    } else if which == 1 {
+        prune_tree_keep(root)
+    } else if which == 2 {
+        prune_tree_stack(root)
+    } else {
+        prune_tree_search(root)
+    }
+}
+
+// The shape as a fresh tree, mirrored if asked.
+fn build(shape: Shape, mirror: bool) -> Option[TreeNode] {
+    let n = shape.vals.len();
+    let mut nodes: Vec[TreeNode] = Vec.new();
+    for k in 0..n {
+        nodes.push(TreeNode { val: shape.vals[k], left: None, right: None });
+    }
+    for k in 0..n {
+        let node = nodes[k];
+        let (a, b) = if mirror { (shape.right[k], shape.left[k]) } else { (shape.left[k], shape.right[k]) };
+        if a >= 0 {
+            node.left = Some(nodes[a]);
+        }
+        if b >= 0 {
+            node.right = Some(nodes[b]);
+        }
+    }
+    Some(nodes[0])
+}
+
+fn serial(root: Option[TreeNode]) -> String {
+    match root {
+        None => "#".to_string(),
+        Some(node) => f"{node.val}({serial(node.left)},{serial(node.right)})",
+    }
+}
+
+// The number of 1s and of leaves with value 0 in a tree.
+fn counts(root: Option[TreeNode]) -> (i64, i64) {
+    match root {
+        None => (0, 0),
+        Some(node) => {
+            let (lo, lz) = counts(node.left);
+            let (ro, rz) = counts(node.right);
+            let leaf_zero = if node.val == 0 and node.left.is_none() and node.right.is_none() { 1 } else { 0 };
+            (lo + ro + node.val, lz + rz + leaf_zero)
+        }
+    }
+}
+
+fn main() {
+    let arms = 4;
+    let mut seed = 8140;
+    let mut checks = 0;
+    let mut fails = [0, 0, 0, 0];
+    let mut by_property = [0, 0, 0, 0];
+    let cases = 1600;
+    let mut emptied = 0;
+    for case in 0..cases {
+        // kind 0: a 1 one time in 2; kind 1: one time in 10, so that
+        // most subtrees go; kind 2: no 1 at all, or a single 1, so that
+        // the whole tree goes or one path stays; kind 3: a line, one
+        // child per node, with a 1 one time in 6.
+        let kind = case % 4;
+        let n = 1 + next_random(mut seed) % 25;
+        let single = if kind == 2 and next_random(mut seed) % 2 == 0 { next_random(mut seed) % n } else { -1 };
+        let mut vals: Vec[i64] = Vec.new();
+        let mut left = Vec.filled(n, -1);
+        let mut right = Vec.filled(n, -1);
+        for k in 0..n {
+            let one = if kind == 0 {
+                next_random(mut seed) % 2 == 0
+            } else if kind == 1 {
+                next_random(mut seed) % 10 == 0
+            } else if kind == 2 {
+                k == single
+            } else {
+                next_random(mut seed) % 6 == 0
+            };
+            vals.push(if one { 1 } else { 0 });
+            if k > 0 {
+                if kind == 3 {
+                    if next_random(mut seed) % 2 == 0 { left[k - 1] = k; } else { right[k - 1] = k; }
+                } else {
+                    loop {
+                        let p = next_random(mut seed) % k;
+                        if next_random(mut seed) % 2 == 0 {
+                            if left[p] < 0 {
+                                left[p] = k;
+                                break;
+                            }
+                        } else if right[p] < 0 {
+                            right[p] = k;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        let shape = Shape { vals: vals, left: left, right: right };
+        let kept = kept_by_definition(shape);
+        let want = expected(shape, kept, 0, false);
+        let want_mirrored = expected(shape, kept, 0, true);
+        if want == "#" {
+            emptied += 1;
+        }
+        let mut ones = 0;
+        for v in shape.vals.iter() {
+            ones += *v;
+        }
+        for which in 0..arms {
+            // 1: the statement's tree.
+            // 2: every 1 kept and no leaf of value 0 left.
+            // 3: pruning the pruned tree changes nothing.
+            // 4: the mirrored tree prunes to the mirror of the answer.
+            let pruned = arm(which, build(shape, false));
+            let got = serial(pruned);
+            let (kept_ones, leaf_zeros) = counts(pruned);
+            let ok = [
+                got == want,
+                kept_ones == ones and leaf_zeros == 0,
+                serial(arm(which, pruned)) == got,
+                serial(arm(which, build(shape, true))) == want_mirrored,
+            ];
+            for p in 0..4 {
+                checks += 1;
+                if not ok[p] {
+                    fails[which] += 1;
+                    by_property[p] += 1;
+                }
+            }
+        }
+    }
+    let total = fails[0] + fails[1] + fails[2] + fails[3];
+    println(f"{cases} cases ({emptied} pruned to nothing), {checks} checks over {arms} arms: {total} failures");
+    println(f"by arm: star {fails[0]}, keep {fails[1]}, stack {fails[2]}, search {fails[3]}");
+    println(f"by property: tree {by_property[0]}, ones {by_property[1]}, again {by_property[2]}, mirrored {by_property[3]}");
+}
