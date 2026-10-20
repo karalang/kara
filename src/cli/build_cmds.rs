@@ -1932,6 +1932,7 @@ pub(super) fn run_multi_file_late_phases(
         renames: Vec::new(),
         gated_imports: Vec::new(),
         user_source: None,
+        mir_program: None,
     };
     pipeline.resolve();
     if pipeline.has_resolve_errors() {

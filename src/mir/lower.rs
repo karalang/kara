@@ -16529,10 +16529,37 @@ fn build_renamed_source(src: &str) -> Result<Lowered, String> {
 /// reports only what its own rules find, as it did before.
 /// `KARAC_MIR_BORROWCK=0` skips the borrow check, as it does for a run.
 pub fn source_borrow_errors(src: &str) -> Vec<SourceBorrowError> {
-    let (_, renames) = rename_compiler_name_shadows(src);
-    let Ok(mut lowered) = lower_source_for_checks(src, true) else {
+    let Ok(lowered) = lower_source_for_checks(src, true) else {
         return Vec::new();
     };
+    borrow_errors_of(src, lowered)
+}
+
+/// [`source_borrow_errors`] for a program `karac check` has already parsed
+/// with the library (`library_source`, its bodies emptied by
+/// `library_bodies_unchecked`), resolved, type-checked and ownership-checked:
+/// only the lowering and the MIR checks run, so the program is not checked a
+/// second time (B-2026-10-19-21). `src` is the program's own text.
+/// `KARAC_CHECK_SHARED_FRONT=0` checks it again from its text instead.
+pub fn checked_borrow_errors(
+    src: &str,
+    program: &ast::Program,
+    r: &ResolveResult,
+    tc: &TypeCheckResult,
+    captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+) -> Vec<SourceBorrowError> {
+    if std::env::var("KARAC_CHECK_SHARED_FRONT").as_deref() == Ok("0") {
+        return source_borrow_errors(src);
+    }
+    let (text, user_len) = library_source(src);
+    let Ok(lowered) = lower_typed(program, &text, user_len, tc, r, captures, true) else {
+        return Vec::new();
+    };
+    borrow_errors_of(src, lowered)
+}
+
+fn borrow_errors_of(src: &str, mut lowered: Lowered) -> Vec<SourceBorrowError> {
+    let (_, renames) = rename_compiler_name_shadows(src);
     // The library follows the program's text, so its lines come after.
     let user_lines = src.lines().count();
     let in_program = |at: Option<(usize, usize)>| at.is_some_and(|(l, _)| l > 0 && l <= user_lines);
@@ -16740,23 +16767,49 @@ fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, Strin
         }
     }
     phase_time("comptime", &mut t);
-    let defs = ProgramDefs::build_for_program(&program);
-    let res = crate::node_res::node_res(&r, &defs, 0, None);
-    phase_time("defs+node_res", &mut t);
-    let hir = crate::typed_hir::build(&tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
-    phase_time("typed_hir", &mut t);
     let own = crate::ownershipcheck(&program, &tc);
     phase_time("ownershipcheck", &mut t);
-    let mut lowered = lower_program_inner(
+    lower_typed(
         &program,
         &src,
-        Some(user_len),
+        user_len,
         &tc,
+        &r,
+        &own.closure_captures,
+        check_only,
+    )
+}
+
+/// The back half of [`lower_source_for_checks`]: a program with the library,
+/// already resolved, type-checked and ownership-checked, lowered to MIR,
+/// with §3.7's forbidden moves refused. `karac check` hands it the program
+/// its own pipeline checked, so the program is not checked twice
+/// (B-2026-10-19-21).
+fn lower_typed(
+    program: &ast::Program,
+    src: &str,
+    user_len: usize,
+    tc: &TypeCheckResult,
+    r: &ResolveResult,
+    captures: &FxHashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    check_only: bool,
+) -> Result<Lowered, String> {
+    let mut t = std::time::Instant::now();
+    let defs = ProgramDefs::build_for_program(program);
+    let res = crate::node_res::node_res(r, &defs, 0, None);
+    phase_time("defs+node_res", &mut t);
+    let hir = crate::typed_hir::build(tc, &crate::typed_hir::ProgramHirDefs::new(&defs, 0, &res));
+    phase_time("typed_hir", &mut t);
+    let mut lowered = lower_program_inner(
+        program,
+        src,
+        Some(user_len),
+        tc,
         &defs,
         &res,
-        &r,
+        r,
         hir,
-        &own.closure_captures,
+        captures,
         check_only.then_some(user_len),
     );
     lowered.program.user_source_len = Some(user_len);

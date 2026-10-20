@@ -1102,6 +1102,9 @@ struct Pipeline {
     /// The program's own text, before [`Self::with_library`] appends the
     /// library, for the MIR borrow check ([`Self::mir_borrow_errors`]).
     user_source: Option<String>,
+    /// The program as type-checked, before [`Self::lower`] rewrites its
+    /// operators, for the MIR checks ([`Self::mir_borrow_errors`]).
+    mir_program: Option<crate::ast::Program>,
 }
 
 impl Pipeline {
@@ -1131,6 +1134,7 @@ impl Pipeline {
             renames: Vec::new(),
             gated_imports: Vec::new(),
             user_source: None,
+            mir_program: None,
         }
     }
 
@@ -1580,6 +1584,18 @@ impl Pipeline {
         if self.typed.is_none() {
             return;
         }
+        // The MIR checks lower the program as type-checked, before this pass
+        // rewrites its operators, so check keeps that copy for them
+        // (B-2026-10-19-21). A derive re-checks the program here, so its MIR
+        // checks start again from the text.
+        if self.strict_core
+            && self.library_len.is_some()
+            && std::env::var("KARAC_CHECK_SHARED_FRONT").as_deref() != Ok("0")
+            && std::env::var("KARAC_CHECK_MIR").as_deref() != Ok("0")
+            && !crate::comptime::has_derives_to_expand(&self.parsed.program)
+        {
+            self.mir_program = Some(self.parsed.program.clone());
+        }
         // `#[derive(X)]` expansion (B-2026-07-08-15 Layer 1): a derive SPLICES
         // new items (methods/impls) into the program. Those generated bodies
         // must be name-resolved and typechecked so codegen's span-keyed side-
@@ -1927,13 +1943,24 @@ impl Pipeline {
         if self.has_parse_errors() || resolve_failed {
             return;
         }
-        let Some(typed) = self.typed.as_mut() else {
+        let Some(typed) = self.typed.as_ref() else {
             return;
         };
         if !typed.errors.is_empty() {
             return;
         }
-        for e in crate::mir::lower::source_borrow_errors(&src) {
+        let found = match (&self.resolved, &self.ownership, &self.mir_program) {
+            (Some(r), Some(own), Some(program)) => crate::mir::lower::checked_borrow_errors(
+                &src,
+                program,
+                r,
+                typed,
+                &own.closure_captures,
+            ),
+            _ => crate::mir::lower::source_borrow_errors(&src),
+        };
+        let typed = self.typed.as_mut().unwrap();
+        for e in found {
             let e = e.error;
             let Some(span) = source_span_at(&src, e.at) else {
                 continue;
