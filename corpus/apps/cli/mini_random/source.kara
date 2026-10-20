@@ -1,0 +1,4070 @@
+// mini_random: Python 3.13's random module, ported from random.py and
+// the Mersenne Twister in Modules/_randommodule.c. A Random holds the
+// 624 words of MT19937 state, the index of the next word, and the second
+// normal deviate gauss() keeps for its next call.
+//
+// The port covers seeding from ints of any size, floats (through
+// Python's numeric hash), str and bytes (version 2 appends their SHA-512
+// digest; version 1 is the old string hash), getstate and setstate,
+// random(), getrandbits(), randbytes(), randrange() and randint() over
+// ints of any size, choice(), shuffle(), sample() with and without
+// counts, choices() with weights or cumulative weights, and every
+// distribution: uniform, triangular, normalvariate, gauss, lognormvariate,
+// expovariate, vonmisesvariate, gammavariate, betavariate, paretovariate,
+// weibullvariate and binomialvariate, whose BTRS path uses math.lgamma
+// (CPython's Lanczos form, ported). `python -m random` is here too, with
+// its argparse usage and errors.
+//
+// The run writes data/ first: data/jobs.tsv and the files the programs
+// read. Each job makes a fresh generator; each line is one call, printed
+// with its result or the exception it raises. The last jobs are
+// programs: a load-test traffic generator, A/B test bucketing, retry
+// backoff with jitter, reservoir sampling of a log, a Monte Carlo
+// project estimate, a tournament draw with a Secret Santa, a synthetic
+// test-data generator and a weather-sensor simulator.
+
+// ------------------------------------------------------------ text
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+fn lines_of(text: ref String) -> Vec[String] {
+    let mut v = split_on(text, '\n');
+    if v.len() > 0 and v[v.len() - 1].is_empty() {
+        v.pop();
+    }
+    v
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and (v[lo] == ' ' or v[lo] == '\t' or v[lo] == '\n' or v[lo] == '\r') {
+        lo += 1;
+    }
+    while hi > lo and (v[hi - 1] == ' ' or v[hi - 1] == '\t' or v[hi - 1] == '\n' or v[hi - 1] == '\r') {
+        hi -= 1;
+    }
+    v[lo..hi].iter().collect()
+}
+
+// str.split() with no argument: runs of whitespace, ends dropped.
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == ' ' or c == '\t' or c == '\n' or c == '\r' {
+            if not cur.is_empty() {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex_byte(b: u8) -> String {
+    let d = chars(HEX.to_string());
+    let mut out = String.new();
+    out.push(d[(b >> 4) as i64]);
+    out.push(d[(b & 15) as i64]);
+    out
+}
+
+fn hex_of(v: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for b in v.iter() {
+        out.push_str(hex_byte(*b));
+    }
+    out
+}
+
+fn hex_val(c: char) -> i64 {
+    let d = chars(HEX.to_string());
+    for i in 0..16 {
+        if d[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn unhex(s: ref String) -> Vec[u8] {
+    let v = chars(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < v.len() {
+        out.push((hex_val(v[i]) * 16 + hex_val(v[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+// ------------------------------------------------------------ Python reprs
+
+// repr() of a str: single quotes unless the text has one and no double.
+fn repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_bytes(v: ref Vec[u8]) -> String {
+    let mut out = "b'".to_string();
+    for b in v.iter() {
+        let x = *b;
+        if x == 39 or x == 92 {
+            out.push('\\');
+            out.push(x as char);
+        } else if x == 9 {
+            out.push_str("\\t");
+        } else if x == 10 {
+            out.push_str("\\n");
+        } else if x == 13 {
+            out.push_str("\\r");
+        } else if x >= 32 and x < 127 {
+            out.push(x as char);
+        } else {
+            out.push_str(f"\\x{hex_byte(x)}");
+        }
+    }
+    out.push('\'');
+    out
+}
+
+// repr() of a float.
+fn repr_f(x: f64) -> String {
+    if x != x {
+        return "nan".to_string();
+    }
+    if x == f64.INFINITY {
+        return "inf".to_string();
+    }
+    if x == f64.NEG_INFINITY {
+        return "-inf".to_string();
+    }
+    f"{x}"
+}
+
+fn repr_list(v: ref Vec[String]) -> String {
+    f"[{join(v, ", ")}]"
+}
+
+fn repr_strs(v: ref Vec[String]) -> String {
+    let r: Vec[String] = v.iter().map(|s| repr_str(s)).collect();
+    repr_list(r)
+}
+
+fn repr_floats(v: ref Vec[f64]) -> String {
+    let r: Vec[String] = v.iter().map(|x| repr_f(*x)).collect();
+    repr_list(r)
+}
+
+// ------------------------------------------------------------ errors
+
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: ref String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg.clone() }
+}
+
+fn value_error(msg: ref String) -> Exc {
+    exc("ValueError", msg)
+}
+
+fn type_error(msg: ref String) -> Exc {
+    exc("TypeError", msg)
+}
+
+fn show_exc(e: ref Exc) -> String {
+    f"{e.kind}: {e.msg}"
+}
+
+// ------------------------------------------------------------ math
+
+const PI: f64 = 3.141592653589793;
+const TWOPI: f64 = 6.283185307179586;
+const EULER: f64 = 2.718281828459045;
+
+fn fabs(x: f64) -> f64 {
+    if x < 0.0 { -x } else { x }
+}
+
+fn floor_i(x: f64) -> i64 {
+    x.floor() as i64
+}
+
+fn is_finite(x: f64) -> bool {
+    x == x and x != f64.INFINITY and x != f64.NEG_INFINITY
+}
+
+// Python's float % for a positive divisor: the result takes the
+// divisor's sign (math.fmod, then corrected), as float_rem does it.
+fn py_fmod(x: f64, y: f64) -> f64 {
+    let mut m = x % y;
+    if m != 0.0 {
+        if (y < 0.0) != (m < 0.0) {
+            m += y;
+        }
+    } else {
+        m = if y < 0.0 { -0.0 } else { 0.0 };
+    }
+    m
+}
+
+// math.lgamma: CPython's m_lgamma, Lanczos' approximation with g =
+// 6.0246..., the same coefficients and the same evaluation order.
+const LANCZOS_G: f64 = 6.024680040776729583740234375;
+const LANCZOS_G_MINUS_HALF: f64 = 5.524680040776729583740234375;
+
+fn lanczos_num(i: i64) -> f64 {
+    let c = [
+        23531376880.410759688572007674451636754734846804940,
+        42919803642.649098768957899047001988850926355848959,
+        35711959237.355668049440185451547166705960488635843,
+        17921034426.037209699919755754458931112671403265390,
+        6039542586.3520280050642916443072979210699388420708,
+        1439720407.3117216736632230727949123939715485786772,
+        248874557.86205415651146038641322942321632125127801,
+        31426415.585400194380614231628318205362874684987640,
+        2876370.6289353724412254090516208496135991145378768,
+        186056.26539522349504029498971604569928220784236328,
+        8071.6720023658162106380029022722506138218516325024,
+        210.82427775157934587250973392071336271166969580291,
+        2.5066282746310002701649081771338373386264310793408,
+    ];
+    c[i]
+}
+
+fn lanczos_den(i: i64) -> f64 {
+    let c = [
+        0.0, 39916800.0, 120543840.0, 150917976.0, 105258076.0, 45995730.0,
+        13339535.0, 2637558.0, 357423.0, 32670.0, 1925.0, 66.0, 1.0,
+    ];
+    c[i]
+}
+
+fn lanczos_sum(x: f64) -> f64 {
+    let mut num = 0.0;
+    let mut den = 0.0;
+    if x < 5.0 {
+        let mut i = 12;
+        while i >= 0 {
+            num = num * x + lanczos_num(i);
+            den = den * x + lanczos_den(i);
+            i -= 1;
+        }
+    } else {
+        for i in 0..13 {
+            num = num / x + lanczos_num(i);
+            den = den / x + lanczos_den(i);
+        }
+    }
+    num / den
+}
+
+// Only called with positive arguments here (binomialvariate's m + 1,
+// n - m + 1, k + 1 and n - k + 1).
+fn lgamma(x: f64) -> f64 {
+    if x == x.floor() and x <= 2.0 {
+        return 0.0;
+    }
+    let absx = fabs(x);
+    if absx < 1e-20 {
+        return -absx.ln();
+    }
+    let mut r = lanczos_sum(absx).ln() - LANCZOS_G;
+    r += (absx - 0.5) * ((absx + LANCZOS_G - 0.5).ln() - 1.0);
+    r
+}
+
+// _Py_HashDouble: the hash of a float, which seed() uses for one.
+const HASH_MODULUS: u64 = 2305843009213693951;
+
+fn hash_float(v: f64) -> i64 {
+    if v != v {
+        return 0;
+    }
+    if v == f64.INFINITY {
+        return 314159;
+    }
+    if v == f64.NEG_INFINITY {
+        return -314159;
+    }
+    // frexp: v = m * 2**e with 0.5 <= |m| < 1
+    let (m0, e0) = frexp(v);
+    let mut m = m0;
+    let mut e = e0;
+    let mut sign: i64 = 1;
+    if m < 0.0 {
+        sign = -1;
+        m = -m;
+    }
+    let mut x: u64 = 0;
+    while m != 0.0 {
+        x = ((x << 28u64) & HASH_MODULUS) | (x >> 33u64);
+        m *= 268435456.0;
+        e -= 28;
+        let y = m as u64;
+        m -= y as f64;
+        x += y;
+        if x >= HASH_MODULUS {
+            x -= HASH_MODULUS;
+        }
+    }
+    let ee = if e >= 0 { e % 61 } else { 60 - ((-1 - e) % 61) };
+    let eu = ee as u64;
+    x = ((x << eu) & HASH_MODULUS) | (x >> (61u64 - eu));
+    let mut h = (x as i64) * sign;
+    if h == -1 {
+        h = -2;
+    }
+    h
+}
+
+fn frexp(v: f64) -> (f64, i64) {
+    if v == 0.0 {
+        return (v, 0);
+    }
+    let mut x = v;
+    let mut adj = 0;
+    let mut bits = x.to_bits();
+    if (bits >> 52u64) & 2047u64 == 0 {
+        // subnormal: scale into the normal range first
+        x = x * 18014398509481984.0;
+        adj = -54;
+        bits = x.to_bits();
+    }
+    let exp = ((bits >> 52u64) & 2047u64) as i64;
+    let mbits = (bits & 0x800fffffffffffffu64) | (1022u64 << 52u64);
+    (mbits.bits_as_f64(), exp - 1022 + adj)
+}
+// ------------------------------------------------------------ SHA-512 (for str and bytes seeds)
+
+fn md_pad(msg: ref Vec[u8], block: i64, lenbytes: i64, big: bool) -> Vec[u8] {
+    let mut m = msg.clone();
+    let bits = msg.len() * 8;
+    m.push(0x80);
+    while m.len() % block != block - lenbytes {
+        m.push(0);
+    }
+    for k in 0..lenbytes {
+        let shift = if big { 8 * (lenbytes - 1 - k) } else { 8 * k };
+        let b = if shift >= 64 { 0 } else { (bits >> shift) & 0xFF };
+        m.push(b as u8);
+    }
+    m
+}
+
+
+fn be32(b: ref Vec[u8], i: i64) -> u32 {
+    ((b[i] as u32) << 24) | ((b[i + 1] as u32) << 16) | ((b[i + 2] as u32) << 8) | (b[i + 3] as u32)
+}
+
+fn be64(b: ref Vec[u8], i: i64) -> u64 {
+    let mut v: u64 = 0;
+    for k in 0..8 {
+        v = (v << 8) | (b[i + k] as u64);
+    }
+    v
+}
+fn push_be64(out: mut ref Vec[u8], x: u64) {
+    let mut k: i64 = 7;
+    while k >= 0 {
+        out.push(((x >> ((8 * k) as u64)) & 0xFFu64) as u8);
+        k -= 1;
+    }
+}
+
+const SHA512_K: Array[u64, 80] = [
+    0x428a2f98d728ae22u64, 0x7137449123ef65cdu64, 0xb5c0fbcfec4d3b2fu64, 0xe9b5dba58189dbbcu64,
+    0x3956c25bf348b538u64, 0x59f111f1b605d019u64, 0x923f82a4af194f9bu64, 0xab1c5ed5da6d8118u64,
+    0xd807aa98a3030242u64, 0x12835b0145706fbeu64, 0x243185be4ee4b28cu64, 0x550c7dc3d5ffb4e2u64,
+    0x72be5d74f27b896fu64, 0x80deb1fe3b1696b1u64, 0x9bdc06a725c71235u64, 0xc19bf174cf692694u64,
+    0xe49b69c19ef14ad2u64, 0xefbe4786384f25e3u64, 0x0fc19dc68b8cd5b5u64, 0x240ca1cc77ac9c65u64,
+    0x2de92c6f592b0275u64, 0x4a7484aa6ea6e483u64, 0x5cb0a9dcbd41fbd4u64, 0x76f988da831153b5u64,
+    0x983e5152ee66dfabu64, 0xa831c66d2db43210u64, 0xb00327c898fb213fu64, 0xbf597fc7beef0ee4u64,
+    0xc6e00bf33da88fc2u64, 0xd5a79147930aa725u64, 0x06ca6351e003826fu64, 0x142929670a0e6e70u64,
+    0x27b70a8546d22ffcu64, 0x2e1b21385c26c926u64, 0x4d2c6dfc5ac42aedu64, 0x53380d139d95b3dfu64,
+    0x650a73548baf63deu64, 0x766a0abb3c77b2a8u64, 0x81c2c92e47edaee6u64, 0x92722c851482353bu64,
+    0xa2bfe8a14cf10364u64, 0xa81a664bbc423001u64, 0xc24b8b70d0f89791u64, 0xc76c51a30654be30u64,
+    0xd192e819d6ef5218u64, 0xd69906245565a910u64, 0xf40e35855771202au64, 0x106aa07032bbd1b8u64,
+    0x19a4c116b8d2d0c8u64, 0x1e376c085141ab53u64, 0x2748774cdf8eeb99u64, 0x34b0bcb5e19b48a8u64,
+    0x391c0cb3c5c95a63u64, 0x4ed8aa4ae3418acbu64, 0x5b9cca4f7763e373u64, 0x682e6ff3d6b2b8a3u64,
+    0x748f82ee5defb2fcu64, 0x78a5636f43172f60u64, 0x84c87814a1f0ab72u64, 0x8cc702081a6439ecu64,
+    0x90befffa23631e28u64, 0xa4506cebde82bde9u64, 0xbef9a3f7b2c67915u64, 0xc67178f2e372532bu64,
+    0xca273eceea26619cu64, 0xd186b8c721c0c207u64, 0xeada7dd6cde0eb1eu64, 0xf57d4f7fee6ed178u64,
+    0x06f067aa72176fbau64, 0x0a637dc5a2c898a6u64, 0x113f9804bef90daeu64, 0x1b710b35131c471bu64,
+    0x28db77f523047d84u64, 0x32caab7b40c72493u64, 0x3c9ebe0a15c9bebcu64, 0x431d67c49c100d4cu64,
+    0x4cc5d4becb3e42b6u64, 0x597f299cfc657e2au64, 0x5fcb6fab3ad6faecu64, 0x6c44198c4a475817u64,
+];
+
+const SHA512_IV: Array[u64, 8] = [
+    0x6a09e667f3bcc908u64, 0xbb67ae8584caa73bu64, 0x3c6ef372fe94f82bu64, 0xa54ff53a5f1d36f1u64,
+    0x510e527fade682d1u64, 0x9b05688c2b3e6c1fu64, 0x1f83d9abfb41bd6bu64, 0x5be0cd19137e2179u64,
+];
+
+// SHA-512 (compress512 is further down).
+fn sha512(msg: ref Vec[u8]) -> Vec[u8] {
+    let m = md_pad(msg, 128, 16, true);
+    let mut h: Vec[u64] = Vec.new();
+    for i in 0..8 {
+        h.push(SHA512_IV[i]);
+    }
+    let mut w = blank80();
+    let mut blk: i64 = 0;
+    while blk < m.len() {
+        for t in 0..16 {
+            w[t] = be64(m, blk + 8 * t);
+        }
+        compress512(mut h, mut w);
+        blk += 128;
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..8 {
+        push_be64(mut out, h[i]);
+    }
+    out
+}
+
+fn compress512(h: mut ref Vec[u64], w: mut ref Vec[u64]) {
+    for t in 16..80 {
+        let x = w[t - 15];
+        let y = w[t - 2];
+        let s0 = ((x >> 1u64) | (x << 63u64)) ^ ((x >> 8u64) | (x << 56u64)) ^ (x >> 7u64);
+        let s1 = ((y >> 19u64) | (y << 45u64)) ^ ((y >> 61u64) | (y << 3u64)) ^ (y >> 6u64);
+        w[t] = w[t - 16].wrapping_add(s0).wrapping_add(w[t - 7]).wrapping_add(s1);
+    }
+    let mut a = h[0];
+    let mut b = h[1];
+    let mut c = h[2];
+    let mut d = h[3];
+    let mut e = h[4];
+    let mut f = h[5];
+    let mut g = h[6];
+    let mut hh = h[7];
+    for t in 0..80 {
+        let s1 = ((e >> 14u64) | (e << 50u64)) ^ ((e >> 18u64) | (e << 46u64)) ^ ((e >> 41u64) | (e << 23u64));
+        let ch = (e & f) ^ ((e ^ 0xFFFFFFFFFFFFFFFFu64) & g);
+        let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(SHA512_K[t]).wrapping_add(w[t]);
+        let s0 = ((a >> 28u64) | (a << 36u64)) ^ ((a >> 34u64) | (a << 30u64)) ^ ((a >> 39u64) | (a << 25u64));
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        hh = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    h[0] = h[0].wrapping_add(a);
+    h[1] = h[1].wrapping_add(b);
+    h[2] = h[2].wrapping_add(c);
+    h[3] = h[3].wrapping_add(d);
+    h[4] = h[4].wrapping_add(e);
+    h[5] = h[5].wrapping_add(f);
+    h[6] = h[6].wrapping_add(g);
+    h[7] = h[7].wrapping_add(hh);
+}
+
+fn blank80() -> Vec[u64] {
+    let mut w: Vec[u64] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u64);
+    }
+    w
+}
+// ------------------------------------------------------------ integers
+
+// A Python int: a sign and 32-bit digits, least significant first, with
+// no zero digit at the top (zero has no digits and is never negative).
+// The generator's words are 32 bits, so getrandbits() and the seed's key
+// are these digits as they are.
+#[derive(Clone)]
+struct Big {
+    neg: bool,
+    d: Vec[u64],
+}
+
+const LIMB: u64 = 4294967296;
+
+fn big_trim(d: mut ref Vec[u64]) {
+    while d.len() > 0 and d[d.len() - 1] == 0 {
+        d.pop();
+    }
+}
+
+fn big_make(neg: bool, d: own Vec[u64]) -> Big {
+    let mut v = d;
+    big_trim(mut v);
+    let n = neg and v.len() > 0;
+    Big { neg: n, d: v }
+}
+
+fn big_zero() -> Big {
+    Big { neg: false, d: Vec.new() }
+}
+
+fn big_u64(x: u64) -> Big {
+    let mut d: Vec[u64] = Vec.new();
+    d.push(x & 4294967295u64);
+    d.push(x >> 32u64);
+    big_make(false, d)
+}
+
+fn big(x: i64) -> Big {
+    if x < 0 {
+        // -(x + 1) + 1 keeps i64::MIN in range
+        let m = big_add_mag_small(big_u64((-(x + 1)) as u64).d, 1);
+        return big_make(true, m);
+    }
+    big_u64(x as u64)
+}
+
+fn big_is_zero(a: ref Big) -> bool {
+    a.d.len() == 0
+}
+
+fn cmp_mag(a: ref Vec[u64], b: ref Vec[u64]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+fn big_cmp(a: ref Big, b: ref Big) -> i64 {
+    if a.neg != b.neg {
+        return if a.neg { -1 } else { 1 };
+    }
+    let c = cmp_mag(a.d, b.d);
+    if a.neg { -c } else { c }
+}
+
+fn add_mag(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut carry: u64 = 0;
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        let x = if i < a.len() { a[i] } else { 0 };
+        let y = if i < b.len() { b[i] } else { 0 };
+        let s = x + y + carry;
+        out.push(s & 4294967295u64);
+        carry = s >> 32u64;
+    }
+    if carry > 0 {
+        out.push(carry);
+    }
+    out
+}
+
+fn big_add_mag_small(a: ref Vec[u64], x: u64) -> Vec[u64] {
+    let mut b: Vec[u64] = Vec.new();
+    b.push(x);
+    add_mag(a, b)
+}
+
+// a - b for |a| >= |b|
+fn sub_mag(a: ref Vec[u64], b: ref Vec[u64]) -> Vec[u64] {
+    let mut out: Vec[u64] = Vec.new();
+    let mut borrow: u64 = 0;
+    for i in 0..a.len() {
+        let y = if i < b.len() { b[i] } else { 0 };
+        let need = y + borrow;
+        if a[i] >= need {
+            out.push(a[i] - need);
+            borrow = 0;
+        } else {
+            out.push(a[i] + LIMB - need);
+            borrow = 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_add(a: ref Big, b: ref Big) -> Big {
+    if a.neg == b.neg {
+        return big_make(a.neg, add_mag(a.d, b.d));
+    }
+    let c = cmp_mag(a.d, b.d);
+    if c == 0 {
+        return big_zero();
+    }
+    if c > 0 {
+        big_make(a.neg, sub_mag(a.d, b.d))
+    } else {
+        big_make(b.neg, sub_mag(b.d, a.d))
+    }
+}
+
+fn big_neg(a: ref Big) -> Big {
+    big_make(not a.neg, a.d.clone())
+}
+
+fn big_sub(a: ref Big, b: ref Big) -> Big {
+    big_add(a, big_neg(b))
+}
+
+fn big_mul(a: ref Big, b: ref Big) -> Big {
+    if a.d.len() == 0 or b.d.len() == 0 {
+        return big_zero();
+    }
+    let mut out: Vec[u64] = Vec.filled(a.d.len() + b.d.len() + 1, 0u64);
+    for i in 0..a.d.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.d.len() {
+            // < 2**64: (2**32-1)**2 + 2 * (2**32-1)
+            let t = out[i + j] + a.d[i] * b.d[j] + carry;
+            out[i + j] = t & 4294967295u64;
+            carry = t >> 32u64;
+        }
+        let mut k = i + b.d.len();
+        while carry > 0 {
+            let t = out[k] + carry;
+            out[k] = t & 4294967295u64;
+            carry = t >> 32u64;
+            k += 1;
+        }
+    }
+    big_make(a.neg != b.neg, out)
+}
+
+// |a| divmod m for 0 < m < 2**32
+fn divmod_small(a: ref Vec[u64], m: u64) -> (Vec[u64], u64) {
+    let mut q: Vec[u64] = Vec.filled(a.len(), 0u64);
+    let mut r: u64 = 0;
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        let cur = (r << 32u64) | a[i];
+        q[i] = cur / m;
+        r = cur % m;
+        i -= 1;
+    }
+    big_trim(mut q);
+    (q, r)
+}
+
+// a // m with Python's floor rounding, for a nonzero m that fits in 32
+// bits (randrange's step).
+fn big_floordiv_small(a: ref Big, m: i64) -> Big {
+    let mneg = m < 0;
+    let mm = (if mneg { -m } else { m }) as u64;
+    let (q, r) = divmod_small(a.d, mm);
+    let mut res = big_make(a.neg != mneg, q);
+    if r != 0 and a.neg != mneg {
+        res = big_sub(res, big(1));
+    }
+    res
+}
+
+fn big_bit_length(a: ref Big) -> i64 {
+    if a.d.len() == 0 {
+        return 0;
+    }
+    let top = a.d[a.d.len() - 1];
+    let mut n = (a.d.len() - 1) * 32;
+    let mut t = top;
+    while t > 0 {
+        n += 1;
+        t = t >> 1u64;
+    }
+    n
+}
+
+fn big_fits_i64(a: ref Big) -> bool {
+    big_bit_length(a) <= 62
+}
+
+fn big_to_i64(a: ref Big) -> i64 {
+    let mut v: i64 = 0;
+    let mut i = a.d.len() - 1;
+    while i >= 0 {
+        v = v * 4294967296 + a.d[i] as i64;
+        i -= 1;
+    }
+    if a.neg { -v } else { v }
+}
+
+fn big_str(a: ref Big) -> String {
+    if a.d.len() == 0 {
+        return "0".to_string();
+    }
+    let mut parts: Vec[u64] = Vec.new();
+    let mut cur = a.d.clone();
+    while cur.len() > 0 {
+        let (q, r) = divmod_small(cur, 1000000000u64);
+        parts.push(r);
+        cur = q;
+    }
+    let mut s = if a.neg { "-".to_string() } else { String.new() };
+    let mut i = parts.len() - 1;
+    s.push_str(f"{parts[i]}");
+    i -= 1;
+    while i >= 0 {
+        s.push_str(f"{parts[i]:09}");
+        i -= 1;
+    }
+    s
+}
+
+// int(text) for the forms the jobs use: spaces around, an optional sign,
+// decimal digits with single underscores between them.
+fn big_parse(text: ref String) -> Option[Big] {
+    let v = chars(strip(text));
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    if i >= v.len() {
+        return None;
+    }
+    let mut d: Vec[u64] = Vec.new();
+    let mut prev_digit = false;
+    while i < v.len() {
+        let c = v[i];
+        if c == '_' {
+            if not prev_digit or i + 1 >= v.len() {
+                return None;
+            }
+            prev_digit = false;
+        } else if c >= '0' and c <= '9' {
+            // d = d * 10 + digit
+            let mut carry = (c as u64) - 48u64;
+            for k in 0..d.len() {
+                let t = d[k] * 10u64 + carry;
+                d[k] = t & 4294967295u64;
+                carry = t >> 32u64;
+            }
+            if carry > 0 {
+                d.push(carry);
+            }
+            prev_digit = true;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if not prev_digit {
+        return None;
+    }
+    Some(big_make(neg, d))
+}
+
+// int.from_bytes(b), big-endian and unsigned
+fn big_from_bytes_be(b: ref Vec[u8]) -> Big {
+    let mut d: Vec[u64] = Vec.new();
+    let mut end = b.len();
+    while end > 0 {
+        let start = if end >= 4 { end - 4 } else { 0 };
+        let mut w: u64 = 0;
+        for i in start..end {
+            w = (w << 8u64) | (b[i] as u64);
+        }
+        d.push(w);
+        end = start;
+    }
+    big_make(false, d)
+}
+// ------------------------------------------------------------ MT19937
+
+const MT_N: i64 = 624;
+const MT_M: i64 = 397;
+const MATRIX_A: u32 = 0x9908b0df;
+const UPPER_MASK: u32 = 0x80000000;
+const LOWER_MASK: u32 = 0x7fffffff;
+
+struct Random {
+    mt: Vec[u32],
+    index: i64,
+    gauss_next: Option[f64],
+}
+
+fn new_random() -> Random {
+    Random { mt: Vec.filled(MT_N, 0u32), index: MT_N, gauss_next: None }
+}
+
+fn init_genrand(r: mut ref Random, s: u32) {
+    r.mt[0] = s;
+    for i in 1..MT_N {
+        let p = r.mt[i - 1];
+        r.mt[i] = 1812433253u32.wrapping_mul(p ^ (p >> 30)).wrapping_add(i as u32);
+    }
+    r.index = MT_N;
+}
+
+fn init_by_array(r: mut ref Random, key: ref Vec[u32]) {
+    init_genrand(mut r, 19650218u32);
+    let mut i: i64 = 1;
+    let mut j: i64 = 0;
+    let mut k = if MT_N > key.len() { MT_N } else { key.len() };
+    while k > 0 {
+        let p = r.mt[i - 1];
+        r.mt[i] = (r.mt[i] ^ (p ^ (p >> 30)).wrapping_mul(1664525u32)).wrapping_add(key[j]).wrapping_add(j as u32);
+        i += 1;
+        j += 1;
+        if i >= MT_N {
+            r.mt[0] = r.mt[MT_N - 1];
+            i = 1;
+        }
+        if j >= key.len() {
+            j = 0;
+        }
+        k -= 1;
+    }
+    k = MT_N - 1;
+    while k > 0 {
+        let p = r.mt[i - 1];
+        r.mt[i] = (r.mt[i] ^ (p ^ (p >> 30)).wrapping_mul(1566083941u32)).wrapping_sub(i as u32);
+        i += 1;
+        if i >= MT_N {
+            r.mt[0] = r.mt[MT_N - 1];
+            i = 1;
+        }
+        k -= 1;
+    }
+    r.mt[0] = 0x80000000u32;
+}
+
+fn mag01(y: u32) -> u32 {
+    if y & 1 == 1 { MATRIX_A } else { 0 }
+}
+
+fn genrand_uint32(r: mut ref Random) -> u32 {
+    if r.index >= MT_N {
+        for kk in 0..(MT_N - MT_M) {
+            let y = (r.mt[kk] & UPPER_MASK) | (r.mt[kk + 1] & LOWER_MASK);
+            r.mt[kk] = r.mt[kk + MT_M] ^ (y >> 1) ^ mag01(y);
+        }
+        for kk in (MT_N - MT_M)..(MT_N - 1) {
+            let y = (r.mt[kk] & UPPER_MASK) | (r.mt[kk + 1] & LOWER_MASK);
+            r.mt[kk] = r.mt[kk + MT_M - MT_N] ^ (y >> 1) ^ mag01(y);
+        }
+        let y = (r.mt[MT_N - 1] & UPPER_MASK) | (r.mt[0] & LOWER_MASK);
+        r.mt[MT_N - 1] = r.mt[MT_M - 1] ^ (y >> 1) ^ mag01(y);
+        r.index = 0;
+    }
+    let mut y = r.mt[r.index];
+    r.index += 1;
+    y ^= y >> 11;
+    y ^= (y << 7) & 0x9d2c5680u32;
+    y ^= (y << 15) & 0xefc60000u32;
+    y ^= y >> 18;
+    y
+}
+
+// random(): 53 bits, from two words.
+fn random(r: mut ref Random) -> f64 {
+    let a = (genrand_uint32(mut r) >> 5) as f64;
+    let b = (genrand_uint32(mut r) >> 6) as f64;
+    (a * 67108864.0 + b) * (1.0 / 9007199254740992.0)
+}
+
+// The key random_seed() hands init_by_array: the number's 32-bit
+// digits, least significant first, and one zero word for zero.
+fn seed_key(n: ref Big) -> Vec[u32] {
+    let mut key: Vec[u32] = Vec.new();
+    for w in n.d.iter() {
+        key.push(*w as u32);
+    }
+    if key.len() == 0 {
+        key.push(0u32);
+    }
+    key
+}
+
+// What seed() was given.
+enum SeedArg {
+    Int(Big),
+    Float(f64),
+    Text(String),
+    Bytes(Vec[u8]),
+}
+
+fn seed(r: mut ref Random, a: ref SeedArg, version: i64) {
+    let n = match a {
+        SeedArg.Int(v) => big_make(false, v.d.clone()),
+        SeedArg.Float(x) => {
+            // the hash, cast to size_t
+            let h = hash_float(*x);
+            big_u64(h as u64)
+        }
+        SeedArg.Text(s) => {
+            if version == 1 {
+                version1_seed(s.bytes().to_vec())
+            } else {
+                text_seed(s.bytes().to_vec())
+            }
+        }
+        SeedArg.Bytes(b) => {
+            if version == 1 {
+                version1_seed(b)
+            } else {
+                text_seed(b)
+            }
+        }
+    };
+    init_by_array(mut r, seed_key(n));
+    r.gauss_next = None;
+}
+
+// version 2: int.from_bytes(a + sha512(a).digest())
+fn text_seed(b: ref Vec[u8]) -> Big {
+    let mut all = b.clone();
+    for x in sha512(b).iter() {
+        all.push(*x);
+    }
+    big_from_bytes_be(all)
+}
+
+// version 1, the hash Python 2 used for strings: over the code points
+// for a str and over latin-1 for bytes. Every code point of the jobs'
+// text is ASCII, so the UTF-8 bytes are the code points.
+fn version1_seed(b: ref Vec[u8]) -> Big {
+    let mask: u64 = 0xFFFFFFFFFFFFFFFFu64;
+    let mut x: u64 = if b.len() > 0 { (b[0] as u64) << 7u64 } else { 0 };
+    for c in b.iter() {
+        x = (1000003u64.wrapping_mul(x) ^ (*c as u64)) & mask;
+    }
+    x ^= b.len() as u64;
+    big_u64(x)
+}
+
+// getrandbits(k), k >= 0
+fn getrandbits(r: mut ref Random, k: i64) -> Big {
+    if k == 0 {
+        return big_zero();
+    }
+    if k <= 32 {
+        return big_u64((genrand_uint32(mut r) >> ((32 - k) as u32)) as u64);
+    }
+    let words = (k - 1) / 32 + 1;
+    let mut d: Vec[u64] = Vec.new();
+    let mut left = k;
+    for _ in 0..words {
+        let mut w = genrand_uint32(mut r);
+        if left < 32 {
+            w = w >> ((32 - left) as u32);
+        }
+        d.push(w as u64);
+        left -= 32;
+    }
+    big_make(false, d)
+}
+
+// The same, for k <= 62, as an i64.
+fn getrandbits_small(r: mut ref Random, k: i64) -> i64 {
+    if k == 0 {
+        return 0;
+    }
+    if k <= 32 {
+        return (genrand_uint32(mut r) >> ((32 - k) as u32)) as i64;
+    }
+    let lo = genrand_uint32(mut r) as i64;
+    let hi = (genrand_uint32(mut r) >> ((64 - k) as u32)) as i64;
+    lo | (hi << 32)
+}
+
+// randbytes(n): getrandbits(n * 8).to_bytes(n, 'little')
+fn randbytes(r: mut ref Random, n: i64) -> Vec[u8] {
+    let v = getrandbits(mut r, n * 8);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..n {
+        let w = i / 4;
+        let b = if w < v.d.len() { (v.d[w] >> ((8 * (i % 4)) as u64)) & 255u64 } else { 0 };
+        out.push(b as u8);
+    }
+    out
+}
+
+fn bit_length_i(n: i64) -> i64 {
+    let mut k = 0;
+    let mut t = n;
+    while t > 0 {
+        k += 1;
+        t = t >> 1;
+    }
+    k
+}
+
+// _randbelow_with_getrandbits(n), n > 0
+fn randbelow(r: mut ref Random, n: i64) -> i64 {
+    let k = bit_length_i(n);
+    let mut x = getrandbits_small(mut r, k);
+    while x >= n {
+        x = getrandbits_small(mut r, k);
+    }
+    x
+}
+
+fn randbelow_big(r: mut ref Random, n: ref Big) -> Big {
+    if big_fits_i64(n) {
+        return big(randbelow(mut r, big_to_i64(n)));
+    }
+    let k = big_bit_length(n);
+    let mut x = getrandbits(mut r, k);
+    while big_cmp(x, n) >= 0 {
+        x = getrandbits(mut r, k);
+    }
+    x
+}
+
+// getstate() and setstate()
+struct State {
+    version: i64,
+    words: Vec[u64],
+    gauss_next: Option[f64],
+}
+
+fn getstate(r: ref Random) -> State {
+    let mut w: Vec[u64] = Vec.new();
+    for x in r.mt.iter() {
+        w.push(*x as u64);
+    }
+    w.push(r.index as u64);
+    State { version: 3, words: w, gauss_next: r.gauss_next }
+}
+
+fn setstate(r: mut ref Random, st: ref State) -> Result[(), Exc] {
+    if st.version != 3 and st.version != 2 {
+        return Err(value_error(f"state with version {st.version} passed to Random.setstate() of version 3"));
+    }
+    // Random.setstate unpacks gauss_next before the C part checks the
+    // words, so a refused state still replaces it.
+    r.gauss_next = st.gauss_next;
+    let mut words = st.words.clone();
+    if st.version == 2 {
+        // x % 2**32 for each
+        for i in 0..words.len() {
+            words[i] = words[i] & 4294967295u64;
+        }
+    }
+    if words.len() != MT_N + 1 {
+        return Err(value_error("state vector is the wrong size"));
+    }
+    let index = words[MT_N] as i64;
+    if index < 0 or index > MT_N {
+        return Err(value_error("invalid state"));
+    }
+    r.index = index;
+    for i in 0..MT_N {
+        r.mt[i] = words[i] as u32;
+    }
+    Ok(())
+}
+// ------------------------------------------------------------ the Random methods
+
+// An argument as Python sees it: an int or a float.
+#[derive(Clone)]
+enum PyNum {
+    I(Big),
+    F(f64),
+}
+
+fn num_f(v: ref PyNum) -> f64 {
+    match v {
+        PyNum.I(b) => {
+            if big_fits_i64(b) {
+                big_to_i64(b) as f64
+            } else {
+                // only small ints reach the float code here
+                0.0
+            }
+        }
+        PyNum.F(x) => *x,
+    }
+}
+
+fn num_str(v: ref PyNum) -> String {
+    match v {
+        PyNum.I(b) => big_str(b),
+        PyNum.F(x) => repr_f(*x),
+    }
+}
+
+// operator.index()
+fn index_of(v: ref PyNum) -> Result[Big, Exc] {
+    match v {
+        PyNum.I(b) => Ok(b.clone()),
+        PyNum.F(_) => Err(type_error("'float' object cannot be interpreted as an integer")),
+    }
+}
+
+fn randrange(r: mut ref Random, start: ref PyNum, stop: ref Option[PyNum], step: ref Option[PyNum]) -> Result[Big, Exc] {
+    let istart = index_of(start)?;
+    let stop_v = match stop {
+        None => {
+            if step.is_some() {
+                return Err(type_error("Missing a non-None stop argument"));
+            }
+            if big_cmp(istart, big(0)) > 0 {
+                return Ok(randbelow_big(mut r, istart));
+            }
+            return Err(value_error("empty range for randrange()"));
+        }
+        Some(s) => s.clone(),
+    };
+    let istop = index_of(stop_v)?;
+    let width = big_sub(istop, istart);
+    let istep = match step {
+        None => big(1),
+        Some(s) => index_of(s)?,
+    };
+    if big_cmp(istep, big(1)) == 0 {
+        if big_cmp(width, big(0)) > 0 {
+            return Ok(big_add(istart, randbelow_big(mut r, width)));
+        }
+        return Err(value_error(f"empty range in randrange({num_str(start)}, {num_str(stop_v)})"));
+    }
+    let st = big_to_i64(istep);
+    let n = if st > 0 {
+        big_floordiv_small(big_add(width, big(st - 1)), st)
+    } else if st < 0 {
+        big_floordiv_small(big_add(width, big(st + 1)), st)
+    } else {
+        return Err(value_error("zero step for randrange()"));
+    };
+    if big_cmp(n, big(0)) <= 0 {
+        let sv = match step {
+            Some(s) => num_str(s),
+            None => "1".to_string(),
+        };
+        return Err(value_error(f"empty range in randrange({num_str(start)}, {num_str(stop_v)}, {sv})"));
+    }
+    Ok(big_add(istart, big_mul(istep, randbelow_big(mut r, n))))
+}
+
+fn randint(r: mut ref Random, a: ref PyNum, b: ref PyNum) -> Result[Big, Exc] {
+    let stop = match b {
+        PyNum.I(v) => PyNum.I(big_add(v, big(1))),
+        PyNum.F(x) => PyNum.F(*x + 1.0),
+    };
+    randrange(mut r, a, Some(stop), None)
+}
+
+fn choice(r: mut ref Random, seq: ref Vec[String]) -> Result[String, Exc] {
+    if seq.len() == 0 {
+        return Err(exc("IndexError", "Cannot choose from an empty sequence"));
+    }
+    Ok(seq[randbelow(mut r, seq.len())].clone())
+}
+
+fn shuffle(r: mut ref Random, x: mut ref Vec[String]) {
+    let mut i = x.len() - 1;
+    while i >= 1 {
+        let j = randbelow(mut r, i + 1);
+        let t = x[i].clone();
+        x[i] = x[j].clone();
+        x[j] = t;
+        i -= 1;
+    }
+}
+
+// sample(range(n), k): the indices sample() picks, in selection order,
+// by either of its two methods.
+fn sample_indices(r: mut ref Random, n: i64, k: i64) -> Result[Vec[i64], Exc] {
+    if not (0 <= k and k <= n) {
+        return Err(value_error("Sample larger than population or is negative"));
+    }
+    let mut result: Vec[i64] = Vec.new();
+    let mut setsize: i64 = 21;
+    if k > 5 {
+        let p = ((k * 3) as f64).ln() / (4.0).ln();
+        let e = p.ceil() as i64;
+        let mut q: i64 = 1;
+        for _ in 0..e {
+            q *= 4;
+        }
+        setsize += q;
+    }
+    if n <= setsize {
+        let mut pool: Vec[i64] = Vec.new();
+        for i in 0..n {
+            pool.push(i);
+        }
+        for i in 0..k {
+            let j = randbelow(mut r, n - i);
+            result.push(pool[j]);
+            pool[j] = pool[n - i - 1];
+        }
+    } else {
+        let mut selected: Set[i64] = Set.new();
+        for _ in 0..k {
+            let mut j = randbelow(mut r, n);
+            while selected.contains(j) {
+                j = randbelow(mut r, n);
+            }
+            selected.insert(j);
+            result.push(j);
+        }
+    }
+    Ok(result)
+}
+
+// bisect.bisect_right over ints
+fn bisect_i(a: ref Vec[i64], x: i64) -> i64 {
+    let mut lo = 0;
+    let mut hi = a.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if x < a[mid] {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+// bisect.bisect_right(a, x, lo, hi) over floats
+fn bisect_f(a: ref Vec[f64], x: f64, lo0: i64, hi0: i64) -> i64 {
+    let mut lo = lo0;
+    let mut hi = hi0;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if x < a[mid] {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+fn sample(r: mut ref Random, population: ref Vec[String], k: i64, counts: ref Option[Vec[i64]]) -> Result[Vec[String], Exc] {
+    let n = population.len();
+    match counts {
+        Some(cs) => {
+            let mut cum: Vec[i64] = Vec.new();
+            let mut acc = 0;
+            for c in cs.iter() {
+                acc += *c;
+                cum.push(acc);
+            }
+            if cum.len() != n {
+                return Err(value_error("The number of counts does not match the population"));
+            }
+            let total = match cum.pop() {
+                Some(t) => t,
+                None => 0,
+            };
+            if total < 0 {
+                return Err(value_error("Counts must be non-negative"));
+            }
+            let picks = sample_indices(mut r, total, k)?;
+            let mut out: Vec[String] = Vec.new();
+            for s in picks.iter() {
+                out.push(population[bisect_i(cum, *s)].clone());
+            }
+            Ok(out)
+        }
+        None => {
+            let picks = sample_indices(mut r, n, k)?;
+            let mut out: Vec[String] = Vec.new();
+            for j in picks.iter() {
+                out.push(population[*j].clone());
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn choices(r: mut ref Random, population: ref Vec[String], weights: ref Option[Vec[f64]], cum_weights: ref Option[Vec[f64]], k: i64) -> Result[Vec[String], Exc] {
+    let n = population.len();
+    let mut out: Vec[String] = Vec.new();
+    let cum = match cum_weights {
+        None => {
+            match weights {
+                None => {
+                    let nf = n as f64;
+                    for _ in 0..k {
+                        let i = floor_i(random(mut r) * nf);
+                        if i >= n {
+                            return Err(exc("IndexError", "list index out of range"));
+                        }
+                        out.push(population[i].clone());
+                    }
+                    return Ok(out);
+                }
+                Some(ws) => {
+                    let mut c: Vec[f64] = Vec.new();
+                    let mut acc = 0.0;
+                    for i in 0..ws.len() {
+                        acc = if i == 0 { ws[0] } else { acc + ws[i] };
+                        c.push(acc);
+                    }
+                    c
+                }
+            }
+        }
+        Some(cw) => {
+            if weights.is_some() {
+                return Err(type_error("Cannot specify both weights and cumulative weights"));
+            }
+            cw.clone()
+        }
+    };
+    if cum.len() != n {
+        return Err(value_error("The number of weights does not match the population"));
+    }
+    if n == 0 {
+        return Err(exc("IndexError", "list index out of range"));
+    }
+    let total = cum[n - 1] + 0.0;
+    if total <= 0.0 {
+        return Err(value_error("Total of weights must be greater than zero"));
+    }
+    if not is_finite(total) {
+        return Err(value_error("Total of weights must be finite"));
+    }
+    let hi = n - 1;
+    for _ in 0..k {
+        let i = bisect_f(cum, random(mut r) * total, 0, hi);
+        out.push(population[i].clone());
+    }
+    Ok(out)
+}
+
+// ------------------------------------------------------------ distributions
+
+fn zero_div() -> Exc {
+    exc("ZeroDivisionError", "float division by zero")
+}
+
+fn uniform(r: mut ref Random, a: f64, b: f64) -> f64 {
+    a + (b - a) * random(mut r)
+}
+
+// triangular(); None for mode means the midpoint. Given a mode with
+// high == low, the division fails and Python returns low as it was
+// passed, which is the None here.
+fn triangular(r: mut ref Random, low0: f64, high0: f64, mode: ref Option[f64]) -> Option[f64] {
+    let mut u = random(mut r);
+    let mut c = match mode {
+        None => 0.5,
+        Some(m) => {
+            if high0 - low0 == 0.0 {
+                return None;
+            }
+            (*m - low0) / (high0 - low0)
+        }
+    };
+    let mut low = low0;
+    let mut high = high0;
+    if u > c {
+        u = 1.0 - u;
+        c = 1.0 - c;
+        low = high0;
+        high = low0;
+    }
+    Some(low + (high - low) * (u * c).sqrt())
+}
+
+// 4 * exp(-0.5) / sqrt(2.0)
+fn nv_magic() -> f64 {
+    4.0 * (-0.5).exp() / (2.0).sqrt()
+}
+
+fn normalvariate(r: mut ref Random, mu: f64, sigma: f64) -> f64 {
+    let magic = nv_magic();
+    let mut z = 0.0;
+    loop {
+        let u1 = random(mut r);
+        let u2 = 1.0 - random(mut r);
+        z = magic * (u1 - 0.5) / u2;
+        let zz = z * z / 4.0;
+        if zz <= -u2.ln() {
+            break;
+        }
+    }
+    mu + z * sigma
+}
+
+fn gauss(r: mut ref Random, mu: f64, sigma: f64) -> f64 {
+    let held = r.gauss_next;
+    r.gauss_next = None;
+    let z = match held {
+        Some(z) => z,
+        None => {
+            let x2pi = random(mut r) * TWOPI;
+            let g2rad = (-2.0 * (1.0 - random(mut r)).ln()).sqrt();
+            r.gauss_next = Some(x2pi.sin() * g2rad);
+            x2pi.cos() * g2rad
+        }
+    };
+    mu + z * sigma
+}
+
+fn lognormvariate(r: mut ref Random, mu: f64, sigma: f64) -> f64 {
+    normalvariate(mut r, mu, sigma).exp()
+}
+
+fn expovariate(r: mut ref Random, lambd: f64) -> Result[f64, Exc] {
+    let u = random(mut r);
+    if lambd == 0.0 {
+        return Err(zero_div());
+    }
+    Ok(-(1.0 - u).ln() / lambd)
+}
+
+fn vonmisesvariate(r: mut ref Random, mu: f64, kappa: f64) -> f64 {
+    if kappa <= 1e-6 {
+        return TWOPI * random(mut r);
+    }
+    let s = 0.5 / kappa;
+    let rr = s + (1.0 + s * s).sqrt();
+    let mut z = 0.0;
+    loop {
+        let u1 = random(mut r);
+        z = (PI * u1).cos();
+        let d = z / (rr + z);
+        let u2 = random(mut r);
+        if u2 < 1.0 - d * d or u2 <= (1.0 - d) * d.exp() {
+            break;
+        }
+    }
+    let q = 1.0 / rr;
+    let f = (q + z) / (1.0 + q * z);
+    let u3 = random(mut r);
+    if u3 > 0.5 {
+        py_fmod(mu + f.acos(), TWOPI)
+    } else {
+        py_fmod(mu - f.acos(), TWOPI)
+    }
+}
+
+fn gammavariate(r: mut ref Random, alpha: f64, beta: f64) -> Result[f64, Exc] {
+    if alpha <= 0.0 or beta <= 0.0 {
+        return Err(value_error("gammavariate: alpha and beta must be > 0.0"));
+    }
+    if alpha > 1.0 {
+        let log4 = (4.0).ln();
+        let sg_magic = 1.0 + (4.5).ln();
+        let ainv = (2.0 * alpha - 1.0).sqrt();
+        let bbb = alpha - log4;
+        let ccc = alpha + ainv;
+        loop {
+            let u1 = random(mut r);
+            if not (1e-7 < u1 and u1 < 0.9999999) {
+                continue;
+            }
+            let u2 = 1.0 - random(mut r);
+            let v = (u1 / (1.0 - u1)).ln() / ainv;
+            let x = alpha * v.exp();
+            let z = u1 * u1 * u2;
+            let rr = bbb + ccc * v - x;
+            if rr + sg_magic - 4.5 * z >= 0.0 or rr >= z.ln() {
+                return Ok(x * beta);
+            }
+        }
+    }
+    if alpha == 1.0 {
+        return Ok(-(1.0 - random(mut r)).ln() * beta);
+    }
+    let mut x = 0.0;
+    loop {
+        let u = random(mut r);
+        let b = (EULER + alpha) / EULER;
+        let p = b * u;
+        if p <= 1.0 {
+            x = p.pow(1.0 / alpha);
+        } else {
+            x = -((b - p) / alpha).ln();
+        }
+        let u1 = random(mut r);
+        if p > 1.0 {
+            if u1 <= x.pow(alpha - 1.0) {
+                break;
+            }
+        } else if u1 <= (-x).exp() {
+            break;
+        }
+    }
+    Ok(x * beta)
+}
+
+fn betavariate(r: mut ref Random, alpha: f64, beta: f64) -> Result[f64, Exc] {
+    let y = gammavariate(mut r, alpha, 1.0)?;
+    if y != 0.0 {
+        let z = gammavariate(mut r, beta, 1.0)?;
+        return Ok(y / (y + z));
+    }
+    Ok(0.0)
+}
+
+fn paretovariate(r: mut ref Random, alpha: f64) -> Result[f64, Exc] {
+    let u = 1.0 - random(mut r);
+    if alpha == 0.0 {
+        return Err(zero_div());
+    }
+    Ok(u.pow(-1.0 / alpha))
+}
+
+fn weibullvariate(r: mut ref Random, alpha: f64, beta: f64) -> Result[f64, Exc] {
+    let u = 1.0 - random(mut r);
+    if beta == 0.0 {
+        return Err(zero_div());
+    }
+    Ok(alpha * (-u.ln()).pow(1.0 / beta))
+}
+
+fn binomialvariate(r: mut ref Random, n: i64, p: f64) -> Result[i64, Exc] {
+    if n < 0 {
+        return Err(value_error("n must be non-negative"));
+    }
+    if p <= 0.0 or p >= 1.0 {
+        if p == 0.0 {
+            return Ok(0);
+        }
+        if p == 1.0 {
+            return Ok(n);
+        }
+        return Err(value_error("p must be in the range 0.0 <= p <= 1.0"));
+    }
+    if n == 1 {
+        return Ok(if random(mut r) < p { 1 } else { 0 });
+    }
+    if p > 0.5 {
+        let k = binomialvariate(mut r, n, 1.0 - p)?;
+        return Ok(n - k);
+    }
+    let nf = n as f64;
+    if nf * p < 10.0 {
+        let mut x: i64 = 0;
+        let mut y: i64 = 0;
+        let c = (1.0 - p).log2();
+        if c == 0.0 {
+            return Ok(x);
+        }
+        loop {
+            let u = random(mut r);
+            if u == 0.0 {
+                // log2(0.0) raises ValueError, which the loop skips
+                continue;
+            }
+            y += floor_i(u.log2() / c) + 1;
+            if y > n {
+                return Ok(x);
+            }
+            x += 1;
+        }
+    }
+    // BTRS: Hormann's transformed rejection with squeeze
+    let mut setup_complete = false;
+    let spq = (nf * p * (1.0 - p)).sqrt();
+    let b = 1.15 + 2.53 * spq;
+    let a = -0.0873 + 0.0248 * b + 0.01 * p;
+    let c = nf * p + 0.5;
+    let vr = 0.92 - 4.2 / b;
+    let mut alpha = 0.0;
+    let mut lpq = 0.0;
+    let mut m: i64 = 0;
+    let mut h = 0.0;
+    loop {
+        let mut u = random(mut r);
+        u -= 0.5;
+        let us = 0.5 - fabs(u);
+        if us == 0.0 {
+            continue;
+        }
+        let k = floor_i((2.0 * a / us + b) * u + c);
+        if k < 0 or k > n {
+            continue;
+        }
+        let mut v = random(mut r);
+        if us >= 0.07 and v <= vr {
+            return Ok(k);
+        }
+        if not setup_complete {
+            alpha = (2.83 + 5.1 / b) * spq;
+            lpq = (p / (1.0 - p)).ln();
+            m = floor_i(((n + 1) as f64) * p);
+            h = lgamma((m + 1) as f64) + lgamma((n - m + 1) as f64);
+            setup_complete = true;
+        }
+        v *= alpha / (a / (us * us) + b);
+        if v.ln() <= h - lgamma((k + 1) as f64) - lgamma((n - k + 1) as f64) + ((k - m) as f64) * lpq {
+            return Ok(k);
+        }
+    }
+}
+// ------------------------------------------------------------ job arguments
+
+// An int, a float, or the text of anything else.
+fn parse_num(t: ref String) -> Option[PyNum] {
+    match big_parse(t) {
+        Some(b) => return Some(PyNum.I(b)),
+        None => {}
+    }
+    match py_float(t) {
+        Some(x) => Some(PyNum.F(x)),
+        None => None,
+    }
+}
+
+fn arg_num(t: ref String) -> PyNum {
+    match parse_num(t) {
+        Some(v) => v,
+        None => PyNum.F(0.0),
+    }
+}
+
+fn arg_int(t: ref String) -> i64 {
+    match big_parse(t) {
+        Some(b) => big_to_i64(b),
+        None => 0,
+    }
+}
+
+fn arg_f(t: ref String) -> f64 {
+    num_f(arg_num(t))
+}
+
+// float(text): Python's grammar, which allows spaces around, a sign,
+// underscores between digits, and inf, infinity and nan in any case.
+fn py_float(text: ref String) -> Option[f64] {
+    let s = strip(text);
+    let v = chars(s);
+    let mut i = 0;
+    let mut neg = false;
+    if i < v.len() and (v[i] == '+' or v[i] == '-') {
+        neg = v[i] == '-';
+        i += 1;
+    }
+    let rest: String = v[i..v.len()].iter().collect();
+    let low = rest.to_lowercase();
+    if low == "inf" or low == "infinity" {
+        return Some(if neg { f64.NEG_INFINITY } else { f64.INFINITY });
+    }
+    if low == "nan" {
+        return Some(f64.NAN);
+    }
+    // digits [. digits] [e [sign] digits], with _ only between digits
+    let w = chars(rest);
+    let mut clean = String.new();
+    let mut j = 0;
+    let mut mant_digits = 0;
+    let mut prev_digit = false;
+    let mut seen_dot = false;
+    while j < w.len() and (w[j] == '_' or w[j] == '.' or (w[j] >= '0' and w[j] <= '9')) {
+        let c = w[j];
+        if c == '_' {
+            if not prev_digit or j + 1 >= w.len() or not (w[j + 1] >= '0' and w[j + 1] <= '9') {
+                return None;
+            }
+            prev_digit = false;
+        } else if c == '.' {
+            if seen_dot {
+                return None;
+            }
+            seen_dot = true;
+            prev_digit = false;
+            clean.push(c);
+        } else {
+            mant_digits += 1;
+            prev_digit = true;
+            clean.push(c);
+        }
+        j += 1;
+    }
+    if mant_digits == 0 {
+        return None;
+    }
+    if j < w.len() and (w[j] == 'e' or w[j] == 'E') {
+        clean.push('e');
+        j += 1;
+        if j < w.len() and (w[j] == '+' or w[j] == '-') {
+            clean.push(w[j]);
+            j += 1;
+        }
+        let mut exp_digits = 0;
+        prev_digit = false;
+        while j < w.len() and (w[j] == '_' or (w[j] >= '0' and w[j] <= '9')) {
+            if w[j] == '_' {
+                if not prev_digit or j + 1 >= w.len() or not (w[j + 1] >= '0' and w[j + 1] <= '9') {
+                    return None;
+                }
+                prev_digit = false;
+            } else {
+                exp_digits += 1;
+                prev_digit = true;
+                clean.push(w[j]);
+            }
+            j += 1;
+        }
+        if exp_digits == 0 {
+            return None;
+        }
+    }
+    if j != w.len() {
+        return None;
+    }
+    let text2 = if clean.starts_with(".") { f"0{clean}" } else { clean };
+    match f64.parse(text2) {
+        Ok(x) => Some(if neg { -x } else { x }),
+        Err(_) => None,
+    }
+}
+
+fn arg_list(t: ref String) -> Vec[String] {
+    if t.is_empty() {
+        return Vec.new();
+    }
+    split_on(t, ',')
+}
+
+fn arg_ints(t: ref String) -> Vec[i64] {
+    arg_list(t).iter().map(|x| arg_int(x)).collect()
+}
+
+fn arg_floats(t: ref String) -> Vec[f64] {
+    arg_list(t).iter().map(|x| arg_f(x)).collect()
+}
+
+fn opt_floats(t: ref String) -> Option[Vec[f64]] {
+    if t == "-" { None } else { Some(arg_floats(t)) }
+}
+
+fn repr_arg(t: ref String) -> String {
+    if t == "-" {
+        return "None".to_string();
+    }
+    match parse_num(t) {
+        Some(v) => num_str(v),
+        None => repr_strs(arg_list(t)),
+    }
+}
+
+fn call_text(name: ref String, args: ref Vec[String]) -> String {
+    let r: Vec[String] = args.iter().map(|a| repr_arg(a)).collect();
+    f"{name}({join(r, ", ")})"
+}
+
+// ------------------------------------------------------------ operations
+
+fn seed_text(kind: ref String, val: ref String) -> String {
+    if kind == "int" or kind == "float" {
+        repr_arg(val)
+    } else if kind == "str" {
+        repr_str(val)
+    } else if kind == "bytes" {
+        repr_bytes(unhex(val))
+    } else {
+        repr_list(arg_list(val))
+    }
+}
+
+fn do_seed(r: mut ref Random, f: ref Vec[String]) -> String {
+    let kind = f[1].clone();
+    let val = if f.len() > 2 { f[2].clone() } else { String.new() };
+    let version = if f.len() > 3 { arg_int(f[3]) } else { 2 };
+    let vtext = if f.len() > 3 { f", version={version}" } else { String.new() };
+    let head = f"seed({seed_text(kind, val)}{vtext})";
+    let a = if kind == "int" {
+        match big_parse(val) {
+            Some(b) => SeedArg.Int(b),
+            None => SeedArg.Int(big_zero()),
+        }
+    } else if kind == "float" {
+        SeedArg.Float(arg_f(val))
+    } else if kind == "str" {
+        SeedArg.Text(val.clone())
+    } else if kind == "bytes" {
+        SeedArg.Bytes(unhex(val))
+    } else {
+        return f"{head} -> TypeError: The only supported seed types are:\nNone, int, float, str, bytes, and bytearray.";
+    };
+    seed(mut r, a, version);
+    f"{head} -> {random_head(r)}"
+}
+
+// The next random() a seed would give, without using it up: what the
+// jobs print to show where a seed leads.
+fn random_head(r: ref Random) -> String {
+    let mut copy = Random { mt: r.mt.clone(), index: r.index, gauss_next: r.gauss_next };
+    f"next random() {repr_f(random(mut copy))}"
+}
+
+fn int_result(v: Result[Big, Exc]) -> String {
+    match v {
+        Ok(b) => big_str(b),
+        Err(e) => show_exc(e),
+    }
+}
+
+fn str_result(v: Result[String, Exc]) -> String {
+    match v {
+        Ok(s) => repr_str(s),
+        Err(e) => show_exc(e),
+    }
+}
+
+fn list_result(v: Result[Vec[String], Exc]) -> String {
+    match v {
+        Ok(s) => repr_strs(s),
+        Err(e) => show_exc(e),
+    }
+}
+
+fn opt_num(f: ref Vec[String], i: i64) -> Option[PyNum] {
+    if i < f.len() and f[i] != "-" { Some(arg_num(f[i])) } else { None }
+}
+
+// The distributions take a count first: how many calls to make.
+fn dist(r: mut ref Random, name: ref String, a: ref Vec[String]) -> String {
+    let count = arg_int(a[0]);
+    let args = a[1..a.len()].to_vec();
+    let mut vals: Vec[String] = Vec.new();
+    for _ in 0..count {
+        let x: Result[String, Exc] = dist_once(mut r, name, args);
+        match x {
+            Ok(s) => vals.push(s),
+            Err(e) => return f"{call_text(name, args)} -> {show_exc(e)}",
+        }
+    }
+    f"{call_text(name, args)} x{count} = {repr_list(vals)}"
+}
+
+fn dist_once(r: mut ref Random, name: ref String, a: ref Vec[String]) -> Result[String, Exc] {
+    let p = |i: i64| { if i < a.len() { arg_f(a[i]) } else { 0.0 } };
+    if name == "uniform" {
+        return Ok(repr_f(uniform(mut r, arg_f(a[0]), arg_f(a[1]))));
+    }
+    if name == "triangular" {
+        let lo = if a.len() > 0 { arg_f(a[0]) } else { 0.0 };
+        let hi = if a.len() > 1 { arg_f(a[1]) } else { 1.0 };
+        let mode = if a.len() > 2 and a[2] != "-" { Some(arg_f(a[2])) } else { None };
+        return match triangular(mut r, lo, hi, mode) {
+            Some(x) => Ok(repr_f(x)),
+            None => Ok(repr_arg(a[0])),
+        };
+    }
+    if name == "normalvariate" {
+        return Ok(repr_f(normalvariate(mut r, p(0), p(1))));
+    }
+    if name == "gauss" {
+        return Ok(repr_f(gauss(mut r, p(0), p(1))));
+    }
+    if name == "lognormvariate" {
+        return Ok(repr_f(lognormvariate(mut r, p(0), p(1))));
+    }
+    if name == "expovariate" {
+        let l = if a.len() > 0 { arg_f(a[0]) } else { 1.0 };
+        return Ok(repr_f(expovariate(mut r, l)?));
+    }
+    if name == "vonmisesvariate" {
+        return Ok(repr_f(vonmisesvariate(mut r, p(0), p(1))));
+    }
+    if name == "gammavariate" {
+        return Ok(repr_f(gammavariate(mut r, p(0), p(1))?));
+    }
+    if name == "betavariate" {
+        return Ok(repr_f(betavariate(mut r, p(0), p(1))?));
+    }
+    if name == "paretovariate" {
+        return Ok(repr_f(paretovariate(mut r, p(0))?));
+    }
+    if name == "weibullvariate" {
+        return Ok(repr_f(weibullvariate(mut r, p(0), p(1))?));
+    }
+    if name == "binomialvariate" {
+        let n = if a.len() > 0 { arg_int(a[0]) } else { 1 };
+        let pp = if a.len() > 1 { arg_f(a[1]) } else { 0.5 };
+        return Ok(f"{binomialvariate(mut r, n, pp)?}");
+    }
+    Err(exc("AttributeError", f"'Random' object has no attribute '{name}'"))
+}
+
+fn state_line(r: ref Random) -> String {
+    let st = getstate(r);
+    let g = match st.gauss_next {
+        Some(x) => repr_f(x),
+        None => "None".to_string(),
+    };
+    f"getstate() = version {st.version}, {st.words.len()} words, index {st.words[MT_N]}, mt[0] {st.words[0]}, mt[623] {st.words[MT_N - 1]}, gauss_next {g}"
+}
+
+fn setstate_line(r: mut ref Random, st: ref State, what: ref String) -> String {
+    match setstate(mut r, st) {
+        Ok(_) => f"setstate({what}) -> {random_head(r)}",
+        Err(e) => f"setstate({what}) -> {show_exc(e)}",
+    }
+}
+
+fn run_op(r: mut ref Random, saved: mut ref Option[State], f: ref Vec[String]) -> String {
+    let op = f[0].clone();
+    let a = f[1..f.len()].to_vec();
+    if op == "seed" {
+        return do_seed(mut r, f);
+    }
+    if op == "random" {
+        let n = arg_int(a[0]);
+        let mut v: Vec[f64] = Vec.new();
+        for _ in 0..n {
+            v.push(random(mut r));
+        }
+        return f"random() x{n} = {repr_floats(v)}";
+    }
+    if op == "getrandbits" {
+        let k = arg_int(a[0]);
+        if k < 0 {
+            return f"getrandbits({k}) -> ValueError: number of bits must be non-negative";
+        }
+        return f"getrandbits({k}) = {big_str(getrandbits(mut r, k))}";
+    }
+    if op == "randbytes" {
+        let n = arg_int(a[0]);
+        if n < 0 {
+            return f"randbytes({n}) -> ValueError: number of bits must be non-negative";
+        }
+        return f"randbytes({n}) = {repr_bytes(randbytes(mut r, n))}";
+    }
+    if op == "randrange" {
+        let res = randrange(mut r, arg_num(a[0]), opt_num(a, 1), opt_num(a, 2));
+        return line(call_text(op, a), int_result(res));
+    }
+    if op == "randint" {
+        return line(call_text(op, a), int_result(randint(mut r, arg_num(a[0]), arg_num(a[1]))));
+    }
+    if op == "choice" {
+        return line(call_text(op, a), str_result(choice(mut r, arg_list(a[0]))));
+    }
+    if op == "shuffle" {
+        let mut v = arg_list(a[0]);
+        shuffle(mut r, mut v);
+        return f"shuffle({repr_strs(arg_list(a[0]))}) -> {repr_strs(v)}";
+    }
+    if op == "sample" {
+        let k = arg_int(a[1]);
+        let counts = if a.len() > 2 { Some(arg_ints(a[2])) } else { None };
+        if a[0].starts_with("range:") {
+            let n = arg_int(a[0][6..].to_string());
+            let res = match counts {
+                None => match sample_indices(mut r, n, k) {
+                    Ok(v) => repr_list(v.iter().map(|x| f"{x}").collect()),
+                    Err(e) => show_exc(e),
+                },
+                Some(_) => "unsupported".to_string(),
+            };
+            return line(f"sample(range(0, {n}), {k})", res);
+        }
+        let mut head = f"sample({repr_strs(arg_list(a[0]))}, {k}";
+        if a.len() > 2 {
+            head.push_str(f", counts={repr_list(arg_list(a[2]))}");
+        }
+        head.push(')');
+        return line(head, list_result(sample(mut r, arg_list(a[0]), k, counts)));
+    }
+    if op == "choices" {
+        let w = opt_floats(a[1]);
+        let cw = opt_floats(a[2]);
+        let k = arg_int(a[3]);
+        let mut head = f"choices({repr_strs(arg_list(a[0]))}";
+        if a[1] != "-" {
+            head.push_str(f", weights={repr_list(arg_list(a[1]))}");
+        }
+        if a[2] != "-" {
+            head.push_str(f", cum_weights={repr_list(arg_list(a[2]))}");
+        }
+        head.push_str(f", k={k})");
+        return line(head, list_result(choices(mut r, arg_list(a[0]), w, cw, k)));
+    }
+    if op == "state" {
+        return state_line(r);
+    }
+    if op == "save" {
+        *saved = Some(getstate(r));
+        return "state = getstate()".to_string();
+    }
+    if op == "restore" or op == "badstate" {
+        let mut st = match saved {
+            Some(s) => State { version: s.version, words: s.words.clone(), gauss_next: s.gauss_next },
+            None => return "no saved state".to_string(),
+        };
+        if op == "restore" {
+            return setstate_line(mut r, st, "state");
+        }
+        let what = a[0].clone();
+        let val = arg_int(a[1]);
+        let desc = if what == "index" {
+            st.words[MT_N] = val as u64;
+            f"state with index {val}"
+        } else if what == "version" {
+            st.version = val;
+            f"state with version {val}"
+        } else if what == "size" {
+            st.words.pop();
+            f"state with {st.words.len()} words"
+        } else {
+            st.gauss_next = Some(val as f64);
+            f"state with gauss_next {repr_f(val as f64)}"
+        };
+        return setstate_line(mut r, st, desc);
+    }
+    if op == "cli" {
+        return cli(mut r, a);
+    }
+    dist(mut r, op, a)
+}
+
+fn line(head: ref String, result: ref String) -> String {
+    if result.contains("Error: ") {
+        f"{head} -> {result}"
+    } else {
+        f"{head} = {result}"
+    }
+}
+
+// ------------------------------------------------------------ python -m random
+
+const USAGE: Str = "usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]";
+
+fn help_text() -> String {
+    let mut h = String.new();
+    h.push_str(USAGE);
+    h.push_str("\n\npositional arguments:\n");
+    h.push_str("  input                 if no options given, output depends on the input\n");
+    h.push_str("                            string or multiple: same as --choice\n");
+    h.push_str("                            integer: same as --integer\n");
+    h.push_str("                            float: same as --float\n");
+    h.push_str("\noptions:\n");
+    h.push_str("  -h, --help            show this help message and exit\n");
+    h.push_str("  -c, --choice CHOICE [CHOICE ...]\n");
+    h.push_str("                        print a random choice\n");
+    h.push_str("  -i, --integer N       print a random integer between 1 and N inclusive\n");
+    h.push_str("  -f, --float N         print a random floating-point number between 0 and N inclusive\n");
+    h
+}
+
+// The parsed command line.
+struct Cli {
+    choice: Option[Vec[String]],
+    integer: Option[Big],
+    float: Option[f64],
+    input: Vec[String],
+    help: bool,
+}
+
+fn is_negative_number(s: ref String) -> bool {
+    let v = chars(s);
+    if v.len() < 2 or v[0] != '-' {
+        return false;
+    }
+    // -\d+ or -\d*\.\d+
+    let mut i = 1;
+    while i < v.len() and v[i] >= '0' and v[i] <= '9' {
+        i += 1;
+    }
+    if i == v.len() {
+        return true;
+    }
+    if v[i] != '.' {
+        return false;
+    }
+    i += 1;
+    let start = i;
+    while i < v.len() and v[i] >= '0' and v[i] <= '9' {
+        i += 1;
+    }
+    i == v.len() and i > start
+}
+
+// Whether argparse reads this argument as an option string.
+fn is_option(s: ref String) -> bool {
+    if not s.starts_with("-") or s == "-" {
+        return false;
+    }
+    if is_negative_number(s) {
+        return false;
+    }
+    if s.contains(" ") and not s.starts_with("--") {
+        return false;
+    }
+    true
+}
+
+const LONG_OPTS: Str = "--help,--choice,--integer,--float,--test";
+
+// The option an argument names and its attached value, if any.
+fn resolve_option(s: ref String) -> Option[(String, Option[String])] {
+    let shorts = ["-h", "-c", "-i", "-f"];
+    let longs = split_on(LONG_OPTS.to_string(), ',');
+    if s.starts_with("--") {
+        let (name, val) = match s.find('=') {
+            Some(k) => (s[0..k].to_string(), Some(s[k + 1..].to_string())),
+            None => (s.clone(), None),
+        };
+        let mut hits: Vec[String] = Vec.new();
+        for l in longs.iter() {
+            if *l == name {
+                return Some((l.clone(), val));
+            }
+            if l.starts_with(name) {
+                hits.push(l.clone());
+            }
+        }
+        if hits.len() == 1 {
+            return Some((hits[0].clone(), val));
+        }
+        return None;
+    }
+    for sh in shorts {
+        if s == sh {
+            return Some((long_of(sh), None));
+        }
+    }
+    let head = s[0..2].to_string();
+    for sh in shorts {
+        if head == sh {
+            return Some((long_of(sh), Some(s[2..].to_string())));
+        }
+    }
+    None
+}
+
+fn long_of(short: Str) -> String {
+    if short == "-h" {
+        "--help".to_string()
+    } else if short == "-c" {
+        "--choice".to_string()
+    } else if short == "-i" {
+        "--integer".to_string()
+    } else {
+        "--float".to_string()
+    }
+}
+
+fn opt_label(long: ref String) -> String {
+    if long == "--test" {
+        return "--test".to_string();
+    }
+    f"{long[1..3]}/{long}"
+}
+
+fn parse_cli(argv: ref Vec[String]) -> Result[Cli, String] {
+    let mut c = Cli { choice: None, integer: None, float: None, input: Vec.new(), help: false };
+    let mut extras: Vec[String] = Vec.new();
+    let mut seen_group: Option[String] = None;
+    let mut input_taken = false;
+    let mut i = 0;
+    let mut after_dashes = false;
+    while i < argv.len() {
+        let a = argv[i].clone();
+        if not after_dashes and a == "--" {
+            after_dashes = true;
+            i += 1;
+            continue;
+        }
+        if after_dashes or not is_option(a) {
+            // a run of positionals: the first run fills input
+            let mut block: Vec[String] = Vec.new();
+            while i < argv.len() {
+                let b = argv[i].clone();
+                if not after_dashes and b == "--" {
+                    after_dashes = true;
+                    i += 1;
+                    continue;
+                }
+                if not after_dashes and is_option(b) {
+                    break;
+                }
+                block.push(b);
+                i += 1;
+            }
+            if not input_taken {
+                c.input = block;
+                input_taken = true;
+            } else {
+                for b in block.into_iter() {
+                    extras.push(b);
+                }
+            }
+            continue;
+        }
+        let (long, attached) = match resolve_option(a) {
+            Some(x) => x,
+            None => {
+                extras.push(a);
+                i += 1;
+                continue;
+            }
+        };
+        i += 1;
+        if long == "--help" {
+            c.help = true;
+            return Ok(c);
+        }
+        let label = opt_label(long);
+        // the values that follow
+        let mut vals: Vec[String] = Vec.new();
+        match attached {
+            Some(v) => vals.push(v),
+            None => {
+                if long == "--choice" {
+                    while i < argv.len() and argv[i] != "--" and not is_option(argv[i]) {
+                        vals.push(argv[i].clone());
+                        i += 1;
+                    }
+                } else if i < argv.len() and argv[i] != "--" and not is_option(argv[i]) {
+                    vals.push(argv[i].clone());
+                    i += 1;
+                }
+            }
+        }
+        // argparse counts the values, converts them, and only then
+        // checks the mutually exclusive group
+        if long == "--choice" {
+            if vals.len() == 0 {
+                return Err(f"argument {label}: expected at least one argument");
+            }
+        } else if vals.len() == 0 {
+            return Err(f"argument {label}: expected one argument");
+        }
+        let mut fval: Option[f64] = None;
+        let mut ival: Option[Big] = None;
+        if long == "--float" {
+            match py_float(vals[0]) {
+                Some(x) => fval = Some(x),
+                None => return Err(f"argument {label}: invalid float value: {repr_str(vals[0])}"),
+            }
+        } else if long != "--choice" {
+            match big_parse(vals[0]) {
+                Some(b) => ival = Some(b),
+                None => return Err(f"argument {label}: invalid int value: {repr_str(vals[0])}"),
+            }
+        }
+        match seen_group {
+            Some(ref g) => {
+                if g != long {
+                    return Err(f"argument {label}: not allowed with argument {opt_label(g)}");
+                }
+            }
+            None => {}
+        }
+        seen_group = Some(long.clone());
+        if long == "--choice" {
+            c.choice = Some(vals);
+        } else if long == "--float" {
+            c.float = fval;
+        } else if long == "--integer" {
+            c.integer = ival;
+        }
+    }
+    if extras.len() > 0 {
+        return Err(f"unrecognized arguments: {join(extras, " ")}");
+    }
+    Ok(c)
+}
+
+// main(): what print(main()) shows, or the error.
+fn cli_main(r: mut ref Random, c: ref Cli) -> Result[String, Exc] {
+    if c.help {
+        // print_help() writes the text and exits; no print() adds a line
+        let h = help_text();
+        return Ok(h[0..h.len() - 1].to_string());
+    }
+    match c.choice {
+        Some(ref v) => return choice(mut r, v),
+        None => {}
+    }
+    match c.integer {
+        Some(ref n) => return Ok(big_str(randint(mut r, PyNum.I(big(1)), PyNum.I(n.clone()))?)),
+        None => {}
+    }
+    match c.float {
+        Some(x) => return Ok(repr_f(uniform(mut r, 0.0, x))),
+        None => {}
+    }
+    if c.input.len() == 1 {
+        let val = c.input[0].clone();
+        match big_parse(val) {
+            Some(n) => {
+                match randint(mut r, PyNum.I(big(1)), PyNum.I(n)) {
+                    Ok(v) => return Ok(big_str(v)),
+                    Err(e) => {
+                        if e.kind != "ValueError" {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            None => {}
+        }
+        match py_float(val) {
+            Some(x) => return Ok(repr_f(uniform(mut r, 0.0, x))),
+            None => {}
+        }
+        return choice(mut r, split_ws(val));
+    }
+    if c.input.len() >= 2 {
+        return choice(mut r, c.input);
+    }
+    Ok(help_text())
+}
+
+fn cli(r: mut ref Random, argv: ref Vec[String]) -> String {
+    let mut shown: Vec[String] = Vec.new();
+    for a in argv.iter() {
+        if a.is_empty() or a.contains(" ") {
+            shown.push(repr_str(a));
+        } else {
+            shown.push(a.clone());
+        }
+    }
+    let head = f"$ python -m random {join(shown, " ")}";
+    let body = match parse_cli(argv) {
+        Err(msg) => f"{USAGE}\nrandom.py: error: {msg}\n[exit 2]",
+        Ok(c) => match cli_main(mut r, c) {
+            Ok(text) => text,
+            Err(e) => f"Traceback (most recent call last):\n{show_exc(e)}\n[exit 1]",
+        },
+    };
+    f"{strip(head)}\n{body}"
+}
+
+// ------------------------------------------------------------ the run
+
+fn run() -> Result[(), String] {
+    let text = match fs.read_to_string("data/jobs.tsv") {
+        Ok(t) => t,
+        Err(e) => return Err(f"OSError: {e}"),
+    };
+    let mut r = new_random();
+    let mut saved: Option[State] = None;
+    for l in lines_of(text) {
+        if l.is_empty() or l.starts_with("#") {
+            continue;
+        }
+        let f = split_on(l, '\t');
+        if f[0] == "job" {
+            println("");
+            println(f"== {f[1]}");
+            r = new_random();
+            seed(mut r, SeedArg.Int(big(0)), 2);
+            saved = None;
+            continue;
+        }
+        if f[0] == "program" {
+            let args = f[2..f.len()].to_vec();
+            match run_program(mut r, f[1], args) {
+                Ok(_) => {}
+                Err(e) => println(f"error: {e}"),
+            }
+            continue;
+        }
+        println(run_op(mut r, mut saved, f));
+    }
+    Ok(())
+}
+
+fn dirname(p: ref String) -> String {
+    match p.rfind("/") {
+        Some(k) => p[0..k].to_string(),
+        None => ".".to_string(),
+    }
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        match fs.create_dir_all(dirname(p)) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+        match fs.write(p.clone(), file.body.clone()) {
+            Ok(_) => {}
+            Err(e) => return Err(f"OSError: {e}"),
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// ------------------------------------------------------------ programs
+
+fn read_data(path: ref String) -> Result[String, String] {
+    match fs.read_to_string(f"data/{path}") {
+        Ok(t) => Ok(t),
+        Err(e) => Err(f"OSError: {e}"),
+    }
+}
+
+// key = value lines (with # comments), and the endpoint lines apart
+struct Conf {
+    keys: Vec[String],
+    vals: Vec[String],
+    endpoints: Vec[Vec[String]],
+}
+
+fn read_conf(path: ref String) -> Result[Conf, String] {
+    let text = read_data(path)?;
+    let mut c = Conf { keys: Vec.new(), vals: Vec.new(), endpoints: Vec.new() };
+    for raw in lines_of(text) {
+        let l = strip(split_on(raw, '#')[0]);
+        if l.is_empty() {
+            continue;
+        }
+        if l.starts_with("endpoint ") {
+            let w = split_ws(l);
+            c.endpoints.push(w[1..w.len()].to_vec());
+        } else {
+            match l.find('=') {
+                Some(k) => {
+                    c.keys.push(strip(l[0..k].to_string()));
+                    c.vals.push(strip(l[k + 1..].to_string()));
+                }
+                None => {}
+            }
+        }
+    }
+    Ok(c)
+}
+
+fn conf_get(c: ref Conf, key: Str) -> String {
+    for i in 0..c.keys.len() {
+        if c.keys[i] == key {
+            return c.vals[i].clone();
+        }
+    }
+    String.new()
+}
+
+fn conf_f(c: ref Conf, key: Str) -> f64 {
+    arg_f(conf_get(c, key))
+}
+
+fn conf_i(c: ref Conf, key: Str) -> i64 {
+    arg_int(conf_get(c, key))
+}
+
+fn sort_floats(v: ref Vec[f64]) -> Vec[f64] {
+    if v.len() <= 1 {
+        return v.clone();
+    }
+    let mid = v.len() / 2;
+    let a = sort_floats(v[0..mid].to_vec());
+    let b = sort_floats(v[mid..v.len()].to_vec());
+    let mut out: Vec[f64] = Vec.new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() and j < b.len() {
+        if b[j] < a[i] {
+            out.push(b[j]);
+            j += 1;
+        } else {
+            out.push(a[i]);
+            i += 1;
+        }
+    }
+    while i < a.len() {
+        out.push(a[i]);
+        i += 1;
+    }
+    while j < b.len() {
+        out.push(b[j]);
+        j += 1;
+    }
+    out
+}
+
+fn sum_f(v: ref Vec[f64]) -> f64 {
+    let mut s = 0.0;
+    for x in v.iter() {
+        s += *x;
+    }
+    s
+}
+
+// the nearest-rank percentile of sorted data
+fn rank(xs: ref Vec[f64], q: f64) -> f64 {
+    let k = (q * (xs.len() as f64)).ceil() as i64;
+    xs[(if k < 1 { 1 } else { k }) - 1]
+}
+
+fn pct(x: f64, places: i64) -> String {
+    if places == 0 {
+        f"{x * 100.0:.0}%"
+    } else {
+        f"{x * 100.0:.1}%"
+    }
+}
+
+fn run_program(r: mut ref Random, name: ref String, a: ref Vec[String]) -> Result[(), String] {
+    let _ = r;
+    if name == "loadgen" {
+        return loadgen(a[0]);
+    }
+    if name == "abtest" {
+        return abtest(a[0], a[1]);
+    }
+    if name == "backoff" {
+        return backoff(a[0]);
+    }
+    if name == "reservoir" {
+        return reservoir(a[0]);
+    }
+    if name == "montecarlo" {
+        return montecarlo(a[0]);
+    }
+    if name == "draw" {
+        return draw(a[0], a[1]);
+    }
+    if name == "synth" {
+        return synth(a[0]);
+    }
+    if name == "sensor" {
+        return sensor(a[0]);
+    }
+    Err(f"no program {name}")
+}
+
+fn seeded_text(s: ref String) -> Random {
+    let mut r = new_random();
+    seed(mut r, SeedArg.Text(s.clone()), 2);
+    r
+}
+
+fn seeded_int(n: i64) -> Random {
+    let mut r = new_random();
+    seed(mut r, SeedArg.Int(big(n)), 2);
+    r
+}
+
+fn first_of(v: Result[Vec[String], Exc]) -> String {
+    match v {
+        Ok(x) => x[0].clone(),
+        Err(e) => show_exc(e),
+    }
+}
+
+// ------------------------------------------------------------ load-test traffic generator
+
+fn loadgen(path: ref String) -> Result[(), String] {
+    let c = read_conf(path)?;
+    let seed_s = conf_get(c, "seed");
+    let mut r = seeded_text(seed_s);
+    let rate = conf_f(c, "rate");
+    let n = conf_i(c, "requests");
+    let er = conf_f(c, "error_rate");
+    let mut names: Vec[String] = Vec.new();
+    let mut weights: Vec[f64] = Vec.new();
+    let mut mus: Vec[f64] = Vec.new();
+    let mut sigmas: Vec[f64] = Vec.new();
+    for e in c.endpoints.iter() {
+        names.push(f"{e[0]} {e[1]}");
+        weights.push(arg_f(e[2]));
+        mus.push(arg_f(e[3]));
+        sigmas.push(arg_f(e[4]));
+    }
+    let mut lat: Vec[Vec[f64]] = Vec.new();
+    let mut errs: Vec[i64] = Vec.new();
+    for _ in 0..names.len() {
+        lat.push(Vec.new());
+        errs.push(0);
+    }
+    println(f"{path}: {n} requests at {repr_f(rate)} rps, seed {repr_str(seed_s)}");
+    let mut t = 0.0;
+    for i in 0..n {
+        t += match expovariate(mut r, rate) {
+            Ok(x) => x,
+            Err(_) => 0.0,
+        };
+        let ep = first_of(choices(mut r, names, Some(weights.clone()), None, 1));
+        let mut k = 0;
+        while names[k] != ep {
+            k += 1;
+        }
+        let ms = lognormvariate(mut r, mus[k], sigmas[k]);
+        let fail = random(mut r) < er;
+        let status = if fail { 503 } else { 200 };
+        lat[k].push(ms);
+        if fail {
+            errs[k] += 1;
+        }
+        if i < 6 {
+            println(f"  t={t:7.3}s  {pad_right(ep, 22)} {ms:7.1}ms  {status}");
+        }
+    }
+    println(f"  {pad_right("endpoint", 22)} {pad_left("count", 5)} {pad_left("errors", 6)} {pad_left("mean", 8)} {pad_left("p50", 8)} {pad_left("p95", 8)} {pad_left("p99", 8)} {pad_left("max", 8)}");
+    let mut total_err = 0;
+    for k in 0..names.len() {
+        total_err += errs[k];
+        let xs = sort_floats(lat[k]);
+        if xs.len() == 0 {
+            println(f"  {pad_right(names[k], 22)} {pad_left("0", 5)}");
+            continue;
+        }
+        let mean = sum_f(xs) / (xs.len() as f64);
+        println(f"  {pad_right(names[k], 22)} {pad_left(f"{xs.len()}", 5)} {pad_left(f"{errs[k]}", 6)} {mean:8.1} {rank(xs, 0.5):8.1} {rank(xs, 0.95):8.1} {rank(xs, 0.99):8.1} {xs[xs.len() - 1]:8.1}");
+    }
+    println(f"  ran {t:.2}s, {(n as f64) / t:.2} requests/s, {total_err} errors");
+    Ok(())
+}
+
+// ------------------------------------------------------------ A/B test bucketing
+
+fn abtest(conf_path: ref String, users_path: ref String) -> Result[(), String] {
+    let users = split_ws(read_data(users_path)?);
+    let mut names: Vec[String] = Vec.new();
+    let mut rolls: Vec[f64] = Vec.new();
+    let mut variants: Vec[Vec[String]] = Vec.new();
+    let mut weights: Vec[Vec[f64]] = Vec.new();
+    for l in lines_of(read_data(conf_path)?) {
+        if l.starts_with("#") or strip(l).is_empty() {
+            continue;
+        }
+        let w = split_ws(l);
+        names.push(w[0].clone());
+        rolls.push(arg_f(w[1]));
+        variants.push(split_on(w[2], ','));
+        weights.push(arg_floats(w[3]));
+    }
+    // got[e][u]: experiment e's variant for user u
+    let mut got: Vec[Vec[String]] = Vec.new();
+    for e in 0..names.len() {
+        let mut labels = variants[e].clone();
+        labels.push("off".to_string());
+        let mut counts: Vec[i64] = Vec.filled(labels.len(), 0);
+        let mut firsts: Vec[String] = Vec.new();
+        let mut row: Vec[String] = Vec.new();
+        for u in users.iter() {
+            let mut rr = seeded_text(f"{names[e]}:{u}");
+            let v = if random(mut rr) < rolls[e] {
+                first_of(choices(mut rr, variants[e], Some(weights[e].clone()), None, 1))
+            } else {
+                "off".to_string()
+            };
+            for i in 0..labels.len() {
+                if labels[i] == v {
+                    counts[i] += 1;
+                }
+            }
+            if firsts.len() < 6 {
+                firsts.push(f"{u}={v}");
+            }
+            row.push(v);
+        }
+        got.push(row);
+        let mut shares: Vec[String] = Vec.new();
+        for i in 0..labels.len() {
+            let share = (counts[i] as f64) / (users.len() as f64);
+            shares.push(f"{labels[i]} {counts[i]} ({pct(share, 1)})");
+        }
+        println(f"{names[e]}: rollout {pct(rolls[e], 0)} of {users.len()} users: {join(shares, ", ")}");
+        println(f"  {join(firsts, " ")}");
+    }
+    let mut both: Vec[String] = Vec.new();
+    for i in 0..users.len() {
+        if got[0][i] == "treatment" and got[2][i] == "on" {
+            both.push(users[i].clone());
+        }
+    }
+    println(f"in new-checkout treatment and dark-mode: {both.len()} {repr_strs(both)}");
+    let mut again = seeded_text(f"pricing-page:{users[3]}");
+    let abc = split_on("A,B,C".to_string(), ',');
+    let v = if random(mut again) < 1.0 {
+        first_of(choices(mut again, abc, Some(arg_floats("34,33,33".to_string())), None, 1))
+    } else {
+        "off".to_string()
+    };
+    let sticky = if v == got[1][3] { "True" } else { "False" };
+    println(f"{users[3]} again: {v} (sticky: {sticky})");
+    Ok(())
+}
+
+// ------------------------------------------------------------ retry backoff
+
+fn pow2(a: i64) -> f64 {
+    let mut p: i64 = 1;
+    for _ in 0..a {
+        p *= 2;
+    }
+    p as f64
+}
+
+fn min_f(a: f64, b: f64) -> f64 {
+    // Python's min(a, b) keeps a unless b is smaller
+    if b < a { b } else { a }
+}
+
+fn backoff(path: ref String) -> Result[(), String] {
+    let c = read_conf(path)?;
+    let mut r = seeded_int(conf_i(c, "seed"));
+    let base = conf_f(c, "base");
+    let cap = conf_f(c, "cap");
+    let attempts = conf_i(c, "attempts");
+    let clients = conf_i(c, "clients");
+    println(f"base {repr_f(base)}s, cap {repr_f(cap)}s, {attempts} attempts, {clients} clients");
+    let mut heads: Vec[String] = Vec.new();
+    for k in 0..clients {
+        heads.push(f"full#{k}");
+    }
+    println(f"  attempt   no jitter  {join(heads, "  ")}");
+    let mut full: Vec[Vec[f64]] = Vec.new();
+    for _ in 0..clients {
+        let mut s: Vec[f64] = Vec.new();
+        for a in 0..attempts {
+            s.push(uniform(mut r, 0.0, min_f(cap, base * pow2(a))));
+        }
+        full.push(s);
+    }
+    for a in 0..attempts {
+        let mut cells: Vec[String] = Vec.new();
+        for k in 0..clients {
+            cells.push(f"{full[k][a]:6.3}");
+        }
+        println(f"  {pad_left(f"{a}", 7)}   {min_f(cap, base * pow2(a)):9.3}  {join(cells, "  ")}");
+    }
+    let mut eq: Vec[Vec[f64]] = Vec.new();
+    for _ in 0..clients {
+        let mut s: Vec[f64] = Vec.new();
+        for a in 0..attempts {
+            let temp = min_f(cap, base * pow2(a));
+            s.push(temp / 2.0 + uniform(mut r, 0.0, temp / 2.0));
+        }
+        eq.push(s);
+    }
+    let mut dec: Vec[Vec[f64]] = Vec.new();
+    for _ in 0..clients {
+        let mut s: Vec[f64] = Vec.new();
+        let mut sleep = base;
+        for _ in 0..attempts {
+            sleep = min_f(cap, uniform(mut r, base, sleep * 3.0));
+            s.push(sleep);
+        }
+        dec.push(s);
+    }
+    let labels = ["full jitter", "equal jitter", "decorrelated"];
+    for li in 0..3 {
+        let sched = if li == 0 { full.clone() } else if li == 1 { eq.clone() } else { dec.clone() };
+        let mut totals: Vec[String] = Vec.new();
+        let mut lasts: Vec[String] = Vec.new();
+        for s in sched.iter() {
+            totals.push(f"{sum_f(s):.3}");
+            lasts.push(f"{s[s.len() - 1]:.3}");
+        }
+        println(f"  {pad_right(labels[li].to_string(), 13)} totals {join(totals, ", ")}  last {join(lasts, ", ")}");
+    }
+    let mut nojit = 0.0;
+    for a in 0..attempts {
+        nojit += min_f(cap, base * pow2(a));
+    }
+    println(f"  no jitter total {nojit:.3}: every client retries at the same instants");
+    Ok(())
+}
+
+// ------------------------------------------------------------ reservoir sampling
+
+fn reservoir(path: ref String) -> Result[(), String] {
+    let lines = lines_of(read_data(path)?);
+    let mut r = seeded_int(2024);
+    let k = 8;
+    let mut res_no: Vec[i64] = Vec.new();
+    let mut res: Vec[String] = Vec.new();
+    for i in 0..lines.len() {
+        if i < k {
+            res_no.push(i + 1);
+            res.push(lines[i].clone());
+        } else {
+            let j = randbelow(mut r, i + 1);
+            if j < k {
+                res_no[j] = i + 1;
+                res[j] = lines[i].clone();
+            }
+        }
+    }
+    println(f"{path}: {lines.len()} lines, a reservoir of {k}");
+    // sorted() of (line number, text) pairs: the numbers are distinct
+    let mut order: Vec[i64] = Vec.new();
+    for i in 0..k {
+        order.push(i);
+    }
+    for i in 1..k {
+        let mut j = i;
+        while j > 0 and res_no[order[j - 1]] > res_no[order[j]] {
+            let t = order[j];
+            order[j] = order[j - 1];
+            order[j - 1] = t;
+            j -= 1;
+        }
+    }
+    for i in order.iter() {
+        println(f"  {pad_left(f"{res_no[*i]}", 4)}  {res[*i]}");
+    }
+    let mut errors: Vec[String] = Vec.new();
+    for l in lines.iter() {
+        if l.contains(" ERROR ") {
+            errors.push(l.clone());
+        }
+    }
+    println(f"{errors.len()} ERROR lines, three for the incident review:");
+    match sample(mut r, errors, 3, None) {
+        Ok(v) => {
+            for l in v.iter() {
+                println(f"  {l}");
+            }
+        }
+        Err(e) => println(show_exc(e)),
+    }
+    let levels = split_on("DEBUG,INFO,WARN,ERROR".to_string(), ',');
+    let mut counts: Vec[f64] = Vec.new();
+    let mut shown: Vec[String] = Vec.new();
+    for lv in levels.iter() {
+        let mut n = 0;
+        for l in lines.iter() {
+            if l.contains(f" {lv} ") {
+                n += 1;
+            }
+        }
+        counts.push(n as f64);
+        shown.push(f"{repr_str(lv)}: {n}");
+    }
+    println(f"level counts {{{join(shown, ", ")}}}");
+    let drawn = match choices(mut r, levels, Some(counts), None, 10) {
+        Ok(v) => repr_strs(v),
+        Err(e) => show_exc(e),
+    };
+    println(f"levels drawn by weight: {drawn}");
+    let mut replay: Vec[String] = Vec.new();
+    for i in 1..11 {
+        replay.push(f"{i}");
+    }
+    shuffle(mut r, mut replay);
+    println(f"replay order for lines 1-10: {repr_list(replay)}");
+    Ok(())
+}
+
+// ------------------------------------------------------------ Monte Carlo estimate
+
+fn track_index(t: ref String) -> i64 {
+    if t == "A" {
+        0
+    } else if t == "B" {
+        1
+    } else {
+        2
+    }
+}
+
+fn montecarlo(path: ref String) -> Result[(), String] {
+    let all = lines_of(read_data(path)?);
+    let mut tracks: Vec[i64] = Vec.new();
+    let mut os: Vec[f64] = Vec.new();
+    let mut ms: Vec[f64] = Vec.new();
+    let mut ps: Vec[f64] = Vec.new();
+    for l in all[1..all.len()].iter() {
+        let f = split_on(l, ',');
+        tracks.push(track_index(f[1]));
+        os.push(arg_f(f[2]));
+        ms.push(arg_f(f[3]));
+        ps.push(arg_f(f[4]));
+    }
+    let mut r = seeded_text("roadmap-q3".to_string());
+    let trials = 2000;
+    let deadline = 40.0;
+    let mut tri: Vec[f64] = Vec.new();
+    let mut pert: Vec[f64] = Vec.new();
+    for _ in 0..trials {
+        for model in 0..2 {
+            let mut sums = [0.0, 0.0, 0.0];
+            for i in 0..os.len() {
+                let o = os[i];
+                let m = ms[i];
+                let p = ps[i];
+                let d = if model == 0 {
+                    match triangular(mut r, o, p, Some(m)) {
+                        Some(x) => x,
+                        None => o,
+                    }
+                } else {
+                    let al = 1.0 + 4.0 * (m - o) / (p - o);
+                    let be = 1.0 + 4.0 * (p - m) / (p - o);
+                    let b = match betavariate(mut r, al, be) {
+                        Ok(x) => x,
+                        Err(_) => 0.0,
+                    };
+                    o + (p - o) * b
+                };
+                sums[tracks[i]] += d;
+            }
+            let total = (if sums[0] > sums[1] { sums[0] } else { sums[1] }) + sums[2];
+            if model == 0 {
+                tri.push(total);
+            } else {
+                pert.push(total);
+            }
+        }
+    }
+    println(f"{path}: {os.len()} tasks, {trials} trials, deadline 40 days");
+    for model in 0..2 {
+        let label = if model == 0 { "triangular" } else { "PERT" };
+        let s = sort_floats(if model == 0 { tri.clone() } else { pert.clone() });
+        let mean = sum_f(s) / (s.len() as f64);
+        let mut ok = 0;
+        for x in s.iter() {
+            if *x <= deadline {
+                ok += 1;
+            }
+        }
+        let within = (ok as f64) / (s.len() as f64);
+        println(f"  {pad_right(label.to_string(), 10)} mean {mean:6.2}  P50 {rank(s, 0.5):6.2}  P80 {rank(s, 0.8):6.2}  P95 {rank(s, 0.95):6.2}  on time {pct(within, 1)}");
+    }
+    let mut mn = tri[0];
+    let mut mx = tri[0];
+    for x in tri.iter() {
+        if *x < mn {
+            mn = *x;
+        }
+        if *x > mx {
+            mx = *x;
+        }
+    }
+    let lo = mn.floor() as i64;
+    let hi = mx.ceil() as i64;
+    let width = ((hi - lo) as f64) / 10.0;
+    println(f"  triangular totals, {lo} to {hi} days:");
+    for b in 0..10 {
+        let a0 = (lo as f64) + (b as f64) * width;
+        let a1 = a0 + width;
+        let mut n = 0;
+        for x in tri.iter() {
+            if (a0 <= *x and *x < a1) or (b == 9 and *x == a1) {
+                n += 1;
+            }
+        }
+        let mut bar = String.new();
+        for _ in 0..(n / 10) {
+            bar.push('#');
+        }
+        println(f"  {a0:5.1}-{a1:5.1} {bar} {n}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ tournament draw and Secret Santa
+
+fn draw(players_path: ref String, office_path: ref String) -> Result[(), String] {
+    let mut pname: Vec[String] = Vec.new();
+    let mut pclub: Vec[String] = Vec.new();
+    for l in lines_of(read_data(players_path)?) {
+        let f = split_on(l, '|');
+        pname.push(f[0].clone());
+        pclub.push(f[1].clone());
+    }
+    let mut r = seeded_text("spring-cup-2026".to_string());
+    let mut order: Vec[String] = Vec.new();
+    for i in 0..pname.len() {
+        order.push(f"{i}");
+    }
+    shuffle(mut r, mut order);
+    let idx: Vec[i64] = order.iter().map(|s| arg_int(s)).collect();
+    let groups = chars("ABCD".to_string());
+    let mut clash = 0;
+    for g in 0..4 {
+        let mut names: Vec[String] = Vec.new();
+        let mut clubs: Set[String] = Set.new();
+        for i in (g * 4)..((g + 1) * 4) {
+            names.push(pname[idx[i]].clone());
+            clubs.insert(pclub[idx[i]].clone());
+        }
+        clash += 4 - clubs.len();
+        println(f"group {groups[g]}: {join(names, ", ")}");
+    }
+    println(f"groups with two players from one club: {clash}");
+    let seeds = match sample_indices(mut r, pname.len(), 4) {
+        Ok(v) => v,
+        Err(_) => Vec.new(),
+    };
+    let seeded: Vec[String] = seeds.iter().map(|i| pname[*i].clone()).collect();
+    println(f"seeded: {join(seeded, ", ")}");
+    let mut oname: Vec[String] = Vec.new();
+    let mut oteam: Vec[String] = Vec.new();
+    for l in lines_of(read_data(office_path)?) {
+        let f = split_on(l, '|');
+        oname.push(f[0].clone());
+        oteam.push(f[1].clone());
+    }
+    let mut rr = seeded_int(2026);
+    let mut tries = 0;
+    let mut gift: Vec[i64] = Vec.new();
+    loop {
+        tries += 1;
+        let mut g: Vec[String] = Vec.new();
+        for i in 0..oname.len() {
+            g.push(f"{i}");
+        }
+        shuffle(mut rr, mut g);
+        gift = g.iter().map(|s| arg_int(s)).collect();
+        let mut good = true;
+        for i in 0..oname.len() {
+            if gift[i] == i or oteam[gift[i]] == oteam[i] {
+                good = false;
+                break;
+            }
+        }
+        if good {
+            break;
+        }
+    }
+    println(f"Secret Santa after {tries} shuffles (nobody draws themselves or their own team):");
+    for i in 0..oname.len() {
+        println(f"  {pad_right(oname[i], 6)} -> {oname[gift[i]]}");
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ synthetic test data
+
+const MONTH_DAYS: Array[i64, 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+// date(2025, 1, 1) + timedelta(days=k), for k < 365
+fn day_2025(k: i64) -> String {
+    let mut d = k;
+    let mut m = 0;
+    while d >= MONTH_DAYS[m] {
+        d -= MONTH_DAYS[m];
+        m += 1;
+    }
+    f"2025-{m + 1:02}-{d + 1:02}"
+}
+
+fn small_int(v: Result[Big, Exc]) -> i64 {
+    match v {
+        Ok(b) => big_to_i64(b),
+        Err(_) => 0,
+    }
+}
+
+fn synth(path: ref String) -> Result[(), String] {
+    let mut keys: Vec[String] = Vec.new();
+    let mut vals: Vec[Vec[String]] = Vec.new();
+    for l in lines_of(read_data(path)?) {
+        match l.find(':') {
+            Some(k) => {
+                keys.push(l[0..k].to_string());
+                vals.push(split_ws(l[k + 2..].to_string()));
+            }
+            None => {}
+        }
+    }
+    let first = vals[0].clone();
+    let last = vals[1].clone();
+    let mut cities: Vec[String] = Vec.new();
+    let mut cweights: Vec[f64] = Vec.new();
+    for c in vals[2].iter() {
+        let f = split_on(c, ':');
+        cities.push(f[0].clone());
+        cweights.push(arg_f(f[1]));
+    }
+    let tags = vals[3].clone();
+    let plans = split_on("free,pro,team".to_string(), ',');
+    let mut plan_n: Vec[i64] = Vec.filled(3, 0);
+    let mut r = seeded_int(31337);
+    println("user_id,name,age,height_cm,city,signup,plan,logins,token,tags");
+    let mut age_sum = 0;
+    for _ in 0..15 {
+        let id = getrandbits_small(mut r, 48);
+        let mut uid = String.new();
+        let mut sh: i64 = 44;
+        while sh >= 0 {
+            uid.push(chars(HEX.to_string())[(id >> sh) & 15]);
+            sh -= 4;
+        }
+        let fname = match choice(mut r, first) {
+            Ok(s) => s,
+            Err(_) => String.new(),
+        };
+        let lname = match choice(mut r, last) {
+            Ok(s) => s,
+            Err(_) => String.new(),
+        };
+        let age = small_int(randint(mut r, PyNum.I(big(18)), PyNum.I(big(80))));
+        let h = gauss(mut r, 170.0, 9.0);
+        let city = first_of(choices(mut r, cities, Some(cweights.clone()), None, 1));
+        let signup = day_2025(randbelow(mut r, 365));
+        let plan = first_of(choices(mut r, plans, None, Some(arg_floats("70,92,100".to_string())), 1));
+        let logins = match binomialvariate(mut r, 30, 0.35) {
+            Ok(x) => x,
+            Err(_) => 0,
+        };
+        let token = hex_of(randbytes(mut r, 6));
+        let ntags = small_int(randint(mut r, PyNum.I(big(0)), PyNum.I(big(3))));
+        let picked = match sample(mut r, tags, ntags, None) {
+            Ok(v) => join(v, "|"),
+            Err(e) => show_exc(e),
+        };
+        age_sum += age;
+        for i in 0..3 {
+            if plans[i] == plan {
+                plan_n[i] += 1;
+            }
+        }
+        println(f"{uid},{fname} {lname},{age},{h:.1},{city},{signup},{plan},{logins},{token},{picked}");
+    }
+    println(f"mean age {(age_sum as f64) / 15.0:.2}, plans {{'free': {plan_n[0]}, 'pro': {plan_n[1]}, 'team': {plan_n[2]}}}");
+    Ok(())
+}
+
+// ------------------------------------------------------------ weather station
+
+// Python's float // for a positive divisor (float_floor_div)
+fn py_floordiv(vx: f64, wx: f64) -> f64 {
+    let mut m = vx % wx;
+    let mut div = (vx - m) / wx;
+    if m != 0.0 {
+        if (wx < 0.0) != (m < 0.0) {
+            m += wx;
+            div -= 1.0;
+        }
+    }
+    let _ = m;
+    if div != 0.0 {
+        let mut fd = div.floor();
+        if div - fd > 0.5 {
+            fd += 1.0;
+        }
+        fd
+    } else {
+        0.0
+    }
+}
+
+fn sensor(path: ref String) -> Result[(), String] {
+    let c = read_conf(path)?;
+    let seed_s = conf_get(c, "seed");
+    let mut r = new_random();
+    seed(mut r, SeedArg.Bytes(seed_s.bytes().to_vec()), 2);
+    let hours = conf_i(c, "hours");
+    let base = conf_f(c, "base_temp");
+    let swing = conf_f(c, "swing");
+    let rad_to_deg = 180.0 / PI;
+    let deg_to_rad = PI / 180.0;
+    println(f"station {seed_s}, {hours} hourly readings");
+    let mut temps: Vec[f64] = Vec.new();
+    let mut winds: Vec[f64] = Vec.new();
+    let mut dirs: Vec[f64] = Vec.new();
+    let mut rain = 0.0;
+    let mut lost = 0;
+    for h in 0..hours {
+        let t = base + swing * (2.0 * PI * ((h - 9) as f64) / 24.0).sin() + normalvariate(mut r, 0.0, 0.8);
+        let w = match weibullvariate(mut r, conf_f(c, "wind_scale"), conf_f(c, "wind_shape")) {
+            Ok(x) => x,
+            Err(_) => 0.0,
+        };
+        let d = vonmisesvariate(mut r, conf_f(c, "wind_dir") * deg_to_rad, conf_f(c, "wind_kappa")) * rad_to_deg;
+        let mm = if random(mut r) < conf_f(c, "rain_chance") {
+            match gammavariate(mut r, 0.6, 2.0) {
+                Ok(x) => x,
+                Err(_) => 0.0,
+            }
+        } else {
+            0.0
+        };
+        if random(mut r) < conf_f(c, "loss") {
+            lost += 1;
+            println(f"  {h:02}:00  --");
+            continue;
+        }
+        temps.push(t);
+        winds.push(w);
+        dirs.push(d);
+        rain += mm;
+        println(f"  {h:02}:00  {t:5.1}C  wind {w:4.1} m/s from {d:5.1}  rain {mm:4.1} mm");
+    }
+    let sectors = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    let mut count: Vec[i64] = Vec.filled(8, 0);
+    for d in dirs.iter() {
+        let s = py_floordiv(py_fmod(*d + 22.5, 360.0), 45.0) as i64;
+        count[s] += 1;
+    }
+    let mut best = 0;
+    for i in 1..8 {
+        if count[i] > count[best] {
+            best = i;
+        }
+    }
+    let mut tmin = temps[0];
+    let mut tmax = temps[0];
+    for x in temps.iter() {
+        if *x < tmin {
+            tmin = *x;
+        }
+        if *x > tmax {
+            tmax = *x;
+        }
+    }
+    let mean_wind = sum_f(winds) / (winds.len() as f64);
+    println(f"  min {tmin:.1}C max {tmax:.1}C, mean wind {mean_wind:.2} m/s, rain {rain:.1} mm, prevailing {sectors[best]}, {lost} readings lost");
+    let mut sizes: Vec[String] = Vec.new();
+    for _ in 0..8 {
+        let s = match paretovariate(mut r, 1.5) {
+            Ok(x) => x * 10.0,
+            Err(_) => 0.0,
+        };
+        sizes.push(f"{s:.1}");
+    }
+    println(f"  upload sizes (KB): {join(sizes, ", ")}");
+    let mut drift: Vec[String] = Vec.new();
+    for _ in 0..4 {
+        drift.push(f"{lognormvariate(mut r, 0.0, 0.05):.4}");
+    }
+    println(f"  clock drift factors: {join(drift, ", ")}");
+    Ok(())
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# name rollout variants weights\n");
+    t.push_str("new-checkout 0.25 control,treatment 50,50\n");
+    t.push_str("pricing-page 1.0 A,B,C 34,33,33\n");
+    t.push_str("dark-mode 0.10 on 1\n");
+    v.push(DataFile { path: "abtest/experiments.conf".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("u1000-ada\n");
+    t.push_str("u1037-bo\n");
+    t.push_str("u1074-chen\n");
+    t.push_str("u1111-dara\n");
+    t.push_str("u1148-eli\n");
+    t.push_str("u1185-fatima\n");
+    t.push_str("u1222-gus\n");
+    t.push_str("u1259-hana\n");
+    t.push_str("u1296-ivan\n");
+    t.push_str("u1333-jun\n");
+    t.push_str("u1370-kofi\n");
+    t.push_str("u1407-lena\n");
+    t.push_str("u1444-mo\n");
+    t.push_str("u1481-nia\n");
+    t.push_str("u1518-omar\n");
+    t.push_str("u1555-priya\n");
+    t.push_str("u1592-quinn\n");
+    t.push_str("u1629-ravi\n");
+    t.push_str("u1666-sara\n");
+    t.push_str("u1703-tomas\n");
+    t.push_str("u1740-ada\n");
+    t.push_str("u1777-bo\n");
+    t.push_str("u1814-chen\n");
+    t.push_str("u1851-dara\n");
+    t.push_str("u1888-eli\n");
+    t.push_str("u1925-fatima\n");
+    t.push_str("u1962-gus\n");
+    t.push_str("u1999-hana\n");
+    t.push_str("u2036-ivan\n");
+    t.push_str("u2073-jun\n");
+    t.push_str("u2110-kofi\n");
+    t.push_str("u2147-lena\n");
+    t.push_str("u2184-mo\n");
+    t.push_str("u2221-nia\n");
+    t.push_str("u2258-omar\n");
+    t.push_str("u2295-priya\n");
+    t.push_str("u2332-quinn\n");
+    t.push_str("u2369-ravi\n");
+    t.push_str("u2406-sara\n");
+    t.push_str("u2443-tomas\n");
+    t.push_str("u2480-ada\n");
+    t.push_str("u2517-bo\n");
+    t.push_str("u2554-chen\n");
+    t.push_str("u2591-dara\n");
+    t.push_str("u2628-eli\n");
+    t.push_str("u2665-fatima\n");
+    t.push_str("u2702-gus\n");
+    t.push_str("u2739-hana\n");
+    t.push_str("u2776-ivan\n");
+    t.push_str("u2813-jun\n");
+    t.push_str("u2850-kofi\n");
+    t.push_str("u2887-lena\n");
+    t.push_str("u2924-mo\n");
+    t.push_str("u2961-nia\n");
+    t.push_str("u2998-omar\n");
+    t.push_str("u3035-priya\n");
+    t.push_str("u3072-quinn\n");
+    t.push_str("u3109-ravi\n");
+    t.push_str("u3146-sara\n");
+    t.push_str("u3183-tomas\n");
+    t.push_str("u3220-ada\n");
+    t.push_str("u3257-bo\n");
+    t.push_str("u3294-chen\n");
+    t.push_str("u3331-dara\n");
+    t.push_str("u3368-eli\n");
+    t.push_str("u3405-fatima\n");
+    t.push_str("u3442-gus\n");
+    t.push_str("u3479-hana\n");
+    t.push_str("u3516-ivan\n");
+    t.push_str("u3553-jun\n");
+    t.push_str("u3590-kofi\n");
+    t.push_str("u3627-lena\n");
+    t.push_str("u3664-mo\n");
+    t.push_str("u3701-nia\n");
+    t.push_str("u3738-omar\n");
+    t.push_str("u3775-priya\n");
+    t.push_str("u3812-quinn\n");
+    t.push_str("u3849-ravi\n");
+    t.push_str("u3886-sara\n");
+    t.push_str("u3923-tomas\n");
+    t.push_str("u3960-ada\n");
+    t.push_str("u3997-bo\n");
+    t.push_str("u4034-chen\n");
+    t.push_str("u4071-dara\n");
+    t.push_str("u4108-eli\n");
+    t.push_str("u4145-fatima\n");
+    t.push_str("u4182-gus\n");
+    t.push_str("u4219-hana\n");
+    t.push_str("u4256-ivan\n");
+    t.push_str("u4293-jun\n");
+    t.push_str("u4330-kofi\n");
+    t.push_str("u4367-lena\n");
+    t.push_str("u4404-mo\n");
+    t.push_str("u4441-nia\n");
+    t.push_str("u4478-omar\n");
+    t.push_str("u4515-priya\n");
+    t.push_str("u4552-quinn\n");
+    t.push_str("u4589-ravi\n");
+    t.push_str("u4626-sara\n");
+    t.push_str("u4663-tomas\n");
+    t.push_str("u4700-ada\n");
+    t.push_str("u4737-bo\n");
+    t.push_str("u4774-chen\n");
+    t.push_str("u4811-dara\n");
+    t.push_str("u4848-eli\n");
+    t.push_str("u4885-fatima\n");
+    t.push_str("u4922-gus\n");
+    t.push_str("u4959-hana\n");
+    t.push_str("u4996-ivan\n");
+    t.push_str("u5033-jun\n");
+    t.push_str("u5070-kofi\n");
+    t.push_str("u5107-lena\n");
+    t.push_str("u5144-mo\n");
+    t.push_str("u5181-nia\n");
+    t.push_str("u5218-omar\n");
+    t.push_str("u5255-priya\n");
+    t.push_str("u5292-quinn\n");
+    t.push_str("u5329-ravi\n");
+    t.push_str("u5366-sara\n");
+    t.push_str("u5403-tomas\n");
+    v.push(DataFile { path: "abtest/users.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("seed = 7\n");
+    t.push_str("base = 0.1\n");
+    t.push_str("cap = 10.0\n");
+    t.push_str("attempts = 8\n");
+    t.push_str("clients = 3\n");
+    v.push(DataFile { path: "backoff/policy.conf".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("Alex|ops\n");
+    t.push_str("Bea|ops\n");
+    t.push_str("Cyrus|eng\n");
+    t.push_str("Dana|eng\n");
+    t.push_str("Emre|eng\n");
+    t.push_str("Fen|design\n");
+    t.push_str("Gita|design\n");
+    t.push_str("Hal|sales\n");
+    t.push_str("Ines|sales\n");
+    v.push(DataFile { path: "draw/office.txt".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("Aiko Tanaka|Kyoto FC\n");
+    t.push_str("Ben Okafor|Lagos United\n");
+    t.push_str("Carla Mendes|Porto Azul\n");
+    t.push_str("Dmitri Volkov|Neva Stars\n");
+    t.push_str("Eun-ji Park|Busan Waves\n");
+    t.push_str("Farid Haddad|Beirut Cedars\n");
+    t.push_str("Greta Lind|Malmo Blue\n");
+    t.push_str("Hugo Lefevre|Lyon Rouge\n");
+    t.push_str("Isla McKay|Leith Thistle\n");
+    t.push_str("Jonas Weber|Rhine Rovers\n");
+    t.push_str("Kavya Rao|Chennai Lions\n");
+    t.push_str("Luis Ortega|Andes FC\n");
+    t.push_str("Maya Cohen|Haifa Port\n");
+    t.push_str("Nils Berg|Bergen Fjord\n");
+    t.push_str("Olu Adeyemi|Lagos United\n");
+    t.push_str("Priya Nair|Chennai Lions\n");
+    v.push(DataFile { path: "draw/players.txt".to_string(), body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("job\tseeding from ints, floats, str and bytes\n");
+    t.push_str("seed\tint\t0\n");
+    t.push_str("seed\tint\t1\n");
+    t.push_str("seed\tint\t42\n");
+    t.push_str("seed\tint\t-42\n");
+    t.push_str("seed\tint\t4294967295\n");
+    t.push_str("seed\tint\t4294967296\n");
+    t.push_str("seed\tint\t123456789012345678901234567890\n");
+    t.push_str("seed\tint\t-99999999999999999999999999999999999999\n");
+    t.push_str("seed\tint\t2_026\n");
+    t.push_str("random\t3\n");
+    t.push_str("seed\tfloat\t3.5\n");
+    t.push_str("seed\tfloat\t-1.5\n");
+    t.push_str("seed\tfloat\t0.1\n");
+    t.push_str("seed\tfloat\t1e300\n");
+    t.push_str("seed\tfloat\t-0.0\n");
+    t.push_str("seed\tfloat\tinf\n");
+    t.push_str("seed\tfloat\t5e-324\n");
+    t.push_str("seed\tfloat\t2.0\n");
+    t.push_str("seed\tstr\thello\n");
+    t.push_str("seed\tstr\t\n");
+    t.push_str("seed\tstr\tcheckout-load-2026-10\n");
+    t.push_str("seed\tstr\ta much longer seed string than the others, over one block\n");
+    t.push_str("seed\tbytes\t\n");
+    t.push_str("seed\tbytes\t00\n");
+    t.push_str("seed\tbytes\tdeadbeef\n");
+    t.push_str("seed\tbytes\t73746174696f6e2d3037\n");
+    t.push_str("seed\tstr\thello\t1\n");
+    t.push_str("seed\tstr\t\t1\n");
+    t.push_str("seed\tbytes\t68656c6c6f\t1\n");
+    t.push_str("seed\tlist\t1,2\n");
+    t.push_str("random\t2\n");
+    t.push_str("job\trandom() and getrandbits()\n");
+    t.push_str("seed\tint\t2024\n");
+    t.push_str("random\t8\n");
+    t.push_str("getrandbits\t0\n");
+    t.push_str("getrandbits\t1\n");
+    t.push_str("getrandbits\t7\n");
+    t.push_str("getrandbits\t31\n");
+    t.push_str("getrandbits\t32\n");
+    t.push_str("getrandbits\t33\n");
+    t.push_str("getrandbits\t48\n");
+    t.push_str("getrandbits\t62\n");
+    t.push_str("getrandbits\t63\n");
+    t.push_str("getrandbits\t64\n");
+    t.push_str("getrandbits\t65\n");
+    t.push_str("getrandbits\t100\n");
+    t.push_str("getrandbits\t128\n");
+    t.push_str("getrandbits\t200\n");
+    t.push_str("getrandbits\t-1\n");
+    t.push_str("randbytes\t0\n");
+    t.push_str("randbytes\t1\n");
+    t.push_str("randbytes\t3\n");
+    t.push_str("randbytes\t4\n");
+    t.push_str("randbytes\t5\n");
+    t.push_str("randbytes\t8\n");
+    t.push_str("randbytes\t16\n");
+    t.push_str("randbytes\t-2\n");
+    t.push_str("job\trandrange() and randint()\n");
+    t.push_str("seed\tint\t7\n");
+    t.push_str("randrange\t10\n");
+    t.push_str("randrange\t1\t7\n");
+    t.push_str("randrange\t0\t100\t5\n");
+    t.push_str("randrange\t100\t0\t-7\n");
+    t.push_str("randrange\t-10\t10\n");
+    t.push_str("randrange\t0\t1\n");
+    t.push_str("randrange\t5\t5\n");
+    t.push_str("randrange\t5\n");
+    t.push_str("randrange\t0\n");
+    t.push_str("randrange\t-3\n");
+    t.push_str("randrange\t10\t1\n");
+    t.push_str("randrange\t0\t10\t0\n");
+    t.push_str("randrange\t0\t10\t-1\n");
+    t.push_str("randrange\t10\t-\t2\n");
+    t.push_str("randrange\t2.5\n");
+    t.push_str("randrange\t1\t2.5\n");
+    t.push_str("randrange\t1\t10\t1.5\n");
+    t.push_str("randrange\t1000000000000000000000000000000\n");
+    t.push_str("randrange\t-1000000000000\t1000000000000\n");
+    t.push_str("randrange\t0\t10000000000000000000000\t3\n");
+    t.push_str("randrange\t9223372036854775807\n");
+    t.push_str("randrange\t18446744073709551616\t18446744073709551626\n");
+    t.push_str("randrange\t1_000\n");
+    t.push_str("randint\t1\t6\n");
+    t.push_str("randint\t1\t6\n");
+    t.push_str("randint\t0\t0\n");
+    t.push_str("randint\t-5\t5\n");
+    t.push_str("randint\t6\t1\n");
+    t.push_str("randint\t1\t1e3\n");
+    t.push_str("randint\t1\t100000000000000000000\n");
+    t.push_str("job\tchoice(), shuffle() and sample()\n");
+    t.push_str("seed\tstr\tdeck\n");
+    t.push_str("choice\tred,green,blue\n");
+    t.push_str("choice\tsolo\n");
+    t.push_str("choice\t\n");
+    t.push_str("shuffle\ta,b,c,d,e,f,g,h\n");
+    t.push_str("shuffle\t\n");
+    t.push_str("shuffle\tx\n");
+    t.push_str("shuffle\tAS,2S,3S,4S,5S,6S,7S,8S,9S,TS,JS,QS,KS,AH,2H,3H,4H,5H,6H,7H,8H,9H,TH,JH,QH,KH,AD,2D,3D,4D,5D,6D,7D,8D,9D,TD,JD,QD,KD,AC,2C,3C,4C,5C,6C,7C,8C,9C,TC,JC,QC,KC\n");
+    t.push_str("sample\tred,green,blue,cyan,magenta\t3\n");
+    t.push_str("sample\tred,green,blue,cyan,magenta\t5\n");
+    t.push_str("sample\tred,green,blue,cyan,magenta\t0\n");
+    t.push_str("sample\tred,green,blue\t4\n");
+    t.push_str("sample\tred,green,blue\t-1\n");
+    t.push_str("sample\trange:100\t5\n");
+    t.push_str("sample\trange:10\t10\n");
+    t.push_str("sample\trange:1000000\t6\n");
+    t.push_str("sample\trange:30\t6\n");
+    t.push_str("sample\trange:30\t7\n");
+    t.push_str("sample\trange:60\t25\n");
+    t.push_str("sample\tAS,2S,3S,4S,5S,6S,7S,8S,9S,TS,JS,QS,KS,AH,2H,3H,4H,5H,6H,7H,8H,9H,TH,JH,QH,KH,AD,2D,3D,4D,5D,6D,7D,8D,9D,TD,JD,QD,KD,AC,2C,3C,4C,5C,6C,7C,8C,9C,TC,JC,QC,KC\t13\n");
+    t.push_str("sample\tred,blue\t5\t4,2\n");
+    t.push_str("sample\tred,blue\t6\t4,2\n");
+    t.push_str("sample\tred,blue\t7\t4,2\n");
+    t.push_str("sample\tred,blue,green\t2\t4,2\n");
+    t.push_str("sample\tred,blue\t1\t-1,0\n");
+    t.push_str("sample\ta,b,c\t3\t0,3,0\n");
+    t.push_str("job\tchoices()\n");
+    t.push_str("seed\tint\t99\n");
+    t.push_str("choices\theads,tails\t-\t-\t10\n");
+    t.push_str("choices\ta,b,c\t10,5,1\t-\t12\n");
+    t.push_str("choices\ta,b,c\t-\t10,15,16\t12\n");
+    t.push_str("choices\ta,b,c\t0.5,0.25,0.25\t-\t6\n");
+    t.push_str("choices\ta,b,c\t1,2\t-\t3\n");
+    t.push_str("choices\ta,b\t1,2\t1,3\t3\n");
+    t.push_str("choices\ta,b\t0,0\t-\t3\n");
+    t.push_str("choices\ta,b\t-1,0.5\t-\t3\n");
+    t.push_str("choices\ta,b\t1,inf\t-\t3\n");
+    t.push_str("choices\t\t-\t-\t1\n");
+    t.push_str("choices\t\t-\t-\t0\n");
+    t.push_str("choices\t\t\t-\t1\n");
+    t.push_str("choices\tx\t-\t-\t4\n");
+    t.push_str("choices\ta,b,c\t-\t-\t0\n");
+    t.push_str("job\tcontinuous distributions\n");
+    t.push_str("seed\tint\t12345\n");
+    t.push_str("uniform\t4\t1\t10\n");
+    t.push_str("uniform\t2\t10\t1\n");
+    t.push_str("uniform\t2\t2.5\t2.5\n");
+    t.push_str("triangular\t4\n");
+    t.push_str("triangular\t4\t0\t10\t2\n");
+    t.push_str("triangular\t4\t10\t0\t7\n");
+    t.push_str("triangular\t2\t3\t3\t3\n");
+    t.push_str("triangular\t2\t3\t3\n");
+    t.push_str("triangular\t2\t1\t5\t9\n");
+    t.push_str("normalvariate\t5\t0\t1\n");
+    t.push_str("normalvariate\t3\t100\t15\n");
+    t.push_str("gauss\t5\t0\t1\n");
+    t.push_str("gauss\t3\t170\t9\n");
+    t.push_str("lognormvariate\t4\t0\t0.5\n");
+    t.push_str("expovariate\t4\n");
+    t.push_str("expovariate\t4\t0.25\n");
+    t.push_str("expovariate\t2\t-2\n");
+    t.push_str("expovariate\t1\t0\n");
+    t.push_str("vonmisesvariate\t4\t0\t4\n");
+    t.push_str("vonmisesvariate\t3\t3.14\t0.5\n");
+    t.push_str("vonmisesvariate\t2\t1\t0\n");
+    t.push_str("vonmisesvariate\t3\t-10\t50\n");
+    t.push_str("paretovariate\t4\t3\n");
+    t.push_str("paretovariate\t1\t0\n");
+    t.push_str("weibullvariate\t4\t1\t1.5\n");
+    t.push_str("weibullvariate\t2\t2\t0\n");
+    t.push_str("job\tgamma, beta and binomial\n");
+    t.push_str("seed\tstr\tgamma\n");
+    t.push_str("gammavariate\t3\t0.01\t1\n");
+    t.push_str("gammavariate\t3\t0.1\t1\n");
+    t.push_str("gammavariate\t3\t0.5\t1\n");
+    t.push_str("gammavariate\t3\t0.9\t1\n");
+    t.push_str("gammavariate\t3\t1\t1\n");
+    t.push_str("gammavariate\t3\t2\t1\n");
+    t.push_str("gammavariate\t3\t20\t1\n");
+    t.push_str("gammavariate\t3\t200\t1\n");
+    t.push_str("gammavariate\t3\t2.5\t0.5\n");
+    t.push_str("gammavariate\t1\t0\t1\n");
+    t.push_str("gammavariate\t1\t1\t-1\n");
+    t.push_str("betavariate\t4\t3\t3\n");
+    t.push_str("betavariate\t3\t0.5\t0.5\n");
+    t.push_str("betavariate\t2\t1\t1\n");
+    t.push_str("betavariate\t1\t-1\t1\n");
+    t.push_str("binomialvariate\t4\t1\t0.5\n");
+    t.push_str("binomialvariate\t4\t1\t0.9\n");
+    t.push_str("binomialvariate\t4\t10\t0.5\n");
+    t.push_str("binomialvariate\t4\t15\t0.6\n");
+    t.push_str("binomialvariate\t4\t100\t0.75\n");
+    t.push_str("binomialvariate\t4\t100\t0.05\n");
+    t.push_str("binomialvariate\t4\t1000\t0.3\n");
+    t.push_str("binomialvariate\t4\t1000000\t0.001\n");
+    t.push_str("binomialvariate\t4\t50\t0.999\n");
+    t.push_str("binomialvariate\t4\t20\t0\n");
+    t.push_str("binomialvariate\t4\t20\t1\n");
+    t.push_str("binomialvariate\t4\t0\t0.5\n");
+    t.push_str("binomialvariate\t4\t-1\t0.5\n");
+    t.push_str("binomialvariate\t4\t5\t1.5\n");
+    t.push_str("binomialvariate\t4\t5\t-0.1\n");
+    t.push_str("binomialvariate\t4\t100000\t0.5\n");
+    t.push_str("binomialvariate\t4\t37\t0.27\n");
+    t.push_str("job\tgetstate() and setstate()\n");
+    t.push_str("seed\tint\t5\n");
+    t.push_str("state\n");
+    t.push_str("random\t2\n");
+    t.push_str("gauss\t1\t0\t1\n");
+    t.push_str("save\n");
+    t.push_str("state\n");
+    t.push_str("random\t3\n");
+    t.push_str("gauss\t1\t0\t1\n");
+    t.push_str("restore\n");
+    t.push_str("random\t3\n");
+    t.push_str("gauss\t1\t0\t1\n");
+    t.push_str("getrandbits\t640\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("getrandbits\t2000\n");
+    t.push_str("state\n");
+    t.push_str("restore\n");
+    t.push_str("state\n");
+    t.push_str("badstate\tindex\t625\n");
+    t.push_str("badstate\tindex\t624\n");
+    t.push_str("random\t1\n");
+    t.push_str("badstate\tindex\t0\n");
+    t.push_str("random\t1\n");
+    t.push_str("badstate\tversion\t2\n");
+    t.push_str("random\t1\n");
+    t.push_str("badstate\tversion\t4\n");
+    t.push_str("badstate\tsize\t0\n");
+    t.push_str("gauss\t1\t0\t1\n");
+    t.push_str("restore\n");
+    t.push_str("badstate\tgauss\t7\n");
+    t.push_str("gauss\t2\t0\t1\n");
+    t.push_str("seed\tint\t5\n");
+    t.push_str("gauss\t1\t0\t1\n");
+    t.push_str("job\tpython -m random\n");
+    t.push_str("seed\tint\t8675309\n");
+    t.push_str("cli\n");
+    t.push_str("cli\t-c\trock\tpaper\tscissors\n");
+    t.push_str("cli\t--choice\theads\ttails\n");
+    t.push_str("cli\t-i\t6\n");
+    t.push_str("cli\t--integer\t20\n");
+    t.push_str("cli\t--int\t100\n");
+    t.push_str("cli\t--integer=5\n");
+    t.push_str("cli\t-i5\n");
+    t.push_str("cli\t-f\t2.5\n");
+    t.push_str("cli\t--float\t1e3\n");
+    t.push_str("cli\t--f\t2\n");
+    t.push_str("cli\t-f\tnan\n");
+    t.push_str("cli\t-f\tinf\n");
+    t.push_str("cli\t6\n");
+    t.push_str("cli\t2.5\n");
+    t.push_str("cli\tpizza tacos ramen\n");
+    t.push_str("cli\tred\tgreen\tblue\n");
+    t.push_str("cli\t--\t-5\n");
+    t.push_str("cli\t-2.5\n");
+    t.push_str("cli\t0\n");
+    t.push_str("cli\t-i\t0\n");
+    t.push_str("cli\t-i\tx\n");
+    t.push_str("cli\t-i\t 7 \n");
+    t.push_str("cli\t-i\t1_000\n");
+    t.push_str("cli\t-i\t0x10\n");
+    t.push_str("cli\t-i\t3\t-c\ta\n");
+    t.push_str("cli\t-c\ta\t-f\t1\n");
+    t.push_str("cli\t-c\n");
+    t.push_str("cli\t-i\n");
+    t.push_str("cli\tx\t-i\n");
+    t.push_str("cli\t--bogus\n");
+    t.push_str("cli\t--bogus\ta\n");
+    t.push_str("cli\ta\t-i\t3\tb\n");
+    t.push_str("cli\ta\tb\t-c\tx\n");
+    t.push_str("cli\t-c\tx\ty\t--\tz\n");
+    t.push_str("cli\t-f\t1\t2\t3\n");
+    t.push_str("cli\t--test\t3x\n");
+    t.push_str("cli\t--ch\ta\tb\n");
+    t.push_str("cli\t   \n");
+    t.push_str("cli\t\n");
+    t.push_str("cli\t-h\n");
+    t.push_str("cli\t-i\t2\t-h\t--bogus\n");
+    t.push_str("cli\t-f\t-1\n");
+    t.push_str("cli\t-i\t4\t-i\t9\n");
+    t.push_str("job\tprogram: load-test traffic generator\n");
+    t.push_str("program\tloadgen\tloadgen/checkout.conf\n");
+    t.push_str("program\tloadgen\tloadgen/search.conf\n");
+    t.push_str("job\tprogram: A/B test bucketing\n");
+    t.push_str("program\tabtest\tabtest/experiments.conf\tabtest/users.txt\n");
+    t.push_str("job\tprogram: retry backoff with jitter\n");
+    t.push_str("program\tbackoff\tbackoff/policy.conf\n");
+    t.push_str("job\tprogram: reservoir sampling of a log\n");
+    t.push_str("program\treservoir\tlogs/app.log\n");
+    t.push_str("job\tprogram: Monte Carlo project estimate\n");
+    t.push_str("program\tmontecarlo\tproject/tasks.csv\n");
+    t.push_str("job\tprogram: tournament draw and Secret Santa\n");
+    t.push_str("program\tdraw\tdraw/players.txt\tdraw/office.txt\n");
+    t.push_str("job\tprogram: synthetic test data\n");
+    t.push_str("program\tsynth\tsynth/lists.txt\n");
+    t.push_str("job\tprogram: weather station simulator\n");
+    t.push_str("program\tsensor\tsensor/station.conf\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("# checkout service, Black Friday rehearsal\n");
+    t.push_str("seed = checkout-load-2026-10\n");
+    t.push_str("rate = 12.5\n");
+    t.push_str("requests = 300\n");
+    t.push_str("error_rate = 0.02\n");
+    t.push_str("endpoint GET /api/cart 5 3.2 0.35\n");
+    t.push_str("endpoint POST /api/cart/items 3 3.6 0.40\n");
+    t.push_str("endpoint GET /api/products 8 2.9 0.30\n");
+    t.push_str("endpoint POST /api/checkout 1 4.8 0.55\n");
+    t.push_str("endpoint GET /healthz 1 0.4 0.10\n");
+    v.push(DataFile { path: "loadgen/checkout.conf".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("# search, steady traffic\n");
+    t.push_str("seed = search-steady\n");
+    t.push_str("rate = 40\n");
+    t.push_str("requests = 200\n");
+    t.push_str("error_rate = 0.005\n");
+    t.push_str("endpoint GET /search 9 3.9 0.6\n");
+    t.push_str("endpoint GET /suggest 6 2.3 0.25\n");
+    v.push(DataFile { path: "loadgen/search.conf".to_string(), body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("2026-10-20T09:00:00Z DEBUG cache lookup /api/products hit=True\n");
+    t.push_str("2026-10-20T09:00:13Z DEBUG cache lookup /api/products hit=False\n");
+    t.push_str("2026-10-20T09:00:26Z INFO  request /login 200 515ms\n");
+    t.push_str("2026-10-20T09:00:39Z INFO  request /api/cart 200 545ms\n");
+    t.push_str("2026-10-20T09:00:52Z INFO  request /login 200 743ms\n");
+    t.push_str("2026-10-20T09:01:05Z WARN  slow request /api/cart 480ms\n");
+    t.push_str("2026-10-20T09:01:18Z INFO  request /healthz 200 147ms\n");
+    t.push_str("2026-10-20T09:01:31Z DEBUG cache lookup /healthz hit=False\n");
+    t.push_str("2026-10-20T09:01:44Z INFO  request /login 200 487ms\n");
+    t.push_str("2026-10-20T09:01:57Z INFO  request /healthz 200 820ms\n");
+    t.push_str("2026-10-20T09:02:10Z INFO  request /search 200 858ms\n");
+    t.push_str("2026-10-20T09:02:23Z WARN  slow request /healthz 1488ms\n");
+    t.push_str("2026-10-20T09:02:36Z INFO  request /api/checkout 200 22ms\n");
+    t.push_str("2026-10-20T09:02:49Z WARN  slow request /api/cart 1998ms\n");
+    t.push_str("2026-10-20T09:03:02Z INFO  request /api/products 200 723ms\n");
+    t.push_str("2026-10-20T09:03:15Z INFO  request /login 200 197ms\n");
+    t.push_str("2026-10-20T09:03:28Z INFO  request /healthz 200 250ms\n");
+    t.push_str("2026-10-20T09:03:41Z INFO  request /api/cart 200 353ms\n");
+    t.push_str("2026-10-20T09:03:54Z INFO  request /api/checkout 200 222ms\n");
+    t.push_str("2026-10-20T09:04:07Z INFO  request /healthz 200 775ms\n");
+    t.push_str("2026-10-20T09:04:20Z INFO  request /api/cart 200 206ms\n");
+    t.push_str("2026-10-20T09:04:33Z WARN  slow request /healthz 1659ms\n");
+    t.push_str("2026-10-20T09:04:46Z DEBUG cache lookup /search hit=True\n");
+    t.push_str("2026-10-20T09:04:59Z INFO  request /api/products 200 851ms\n");
+    t.push_str("2026-10-20T09:05:12Z ERROR upstream timeout /search after 30000ms\n");
+    t.push_str("2026-10-20T09:05:25Z ERROR upstream timeout /login after 30000ms\n");
+    t.push_str("2026-10-20T09:05:38Z INFO  request /search 200 714ms\n");
+    t.push_str("2026-10-20T09:05:51Z WARN  slow request /api/cart 1761ms\n");
+    t.push_str("2026-10-20T09:06:04Z INFO  request /healthz 200 569ms\n");
+    t.push_str("2026-10-20T09:06:17Z WARN  slow request /healthz 492ms\n");
+    t.push_str("2026-10-20T09:06:30Z INFO  request /healthz 200 505ms\n");
+    t.push_str("2026-10-20T09:06:43Z DEBUG cache lookup /healthz hit=False\n");
+    t.push_str("2026-10-20T09:06:56Z DEBUG cache lookup /healthz hit=True\n");
+    t.push_str("2026-10-20T09:07:09Z INFO  request /api/products 200 818ms\n");
+    t.push_str("2026-10-20T09:07:22Z INFO  request /healthz 200 180ms\n");
+    t.push_str("2026-10-20T09:07:35Z WARN  slow request /login 72ms\n");
+    t.push_str("2026-10-20T09:07:48Z INFO  request /api/checkout 200 633ms\n");
+    t.push_str("2026-10-20T09:08:01Z WARN  slow request /api/products 2616ms\n");
+    t.push_str("2026-10-20T09:08:14Z INFO  request /healthz 200 753ms\n");
+    t.push_str("2026-10-20T09:08:27Z DEBUG cache lookup /login hit=False\n");
+    t.push_str("2026-10-20T09:08:40Z INFO  request /api/cart 200 739ms\n");
+    t.push_str("2026-10-20T09:08:53Z ERROR upstream timeout /healthz after 30000ms\n");
+    t.push_str("2026-10-20T09:09:06Z WARN  slow request /api/products 1323ms\n");
+    t.push_str("2026-10-20T09:09:19Z INFO  request /healthz 200 210ms\n");
+    t.push_str("2026-10-20T09:09:32Z DEBUG cache lookup /login hit=True\n");
+    t.push_str("2026-10-20T09:09:45Z INFO  request /healthz 200 136ms\n");
+    t.push_str("2026-10-20T09:09:58Z DEBUG cache lookup /search hit=True\n");
+    t.push_str("2026-10-20T09:10:11Z INFO  request /api/checkout 200 743ms\n");
+    t.push_str("2026-10-20T09:10:24Z INFO  request /api/products 200 635ms\n");
+    t.push_str("2026-10-20T09:10:37Z INFO  request /api/checkout 200 645ms\n");
+    t.push_str("2026-10-20T09:10:50Z WARN  slow request /api/cart 1368ms\n");
+    t.push_str("2026-10-20T09:11:03Z INFO  request /login 200 329ms\n");
+    t.push_str("2026-10-20T09:11:16Z INFO  request /api/checkout 200 46ms\n");
+    t.push_str("2026-10-20T09:11:29Z INFO  request /api/products 200 441ms\n");
+    t.push_str("2026-10-20T09:11:42Z DEBUG cache lookup /search hit=True\n");
+    t.push_str("2026-10-20T09:11:55Z INFO  request /healthz 200 96ms\n");
+    t.push_str("2026-10-20T09:12:08Z DEBUG cache lookup /api/products hit=True\n");
+    t.push_str("2026-10-20T09:12:21Z DEBUG cache lookup /login hit=False\n");
+    t.push_str("2026-10-20T09:12:34Z INFO  request /api/cart 200 566ms\n");
+    t.push_str("2026-10-20T09:12:47Z WARN  slow request /search 147ms\n");
+    t.push_str("2026-10-20T09:13:00Z DEBUG cache lookup /search hit=True\n");
+    t.push_str("2026-10-20T09:13:13Z WARN  slow request /api/cart 1095ms\n");
+    t.push_str("2026-10-20T09:13:26Z INFO  request /healthz 200 663ms\n");
+    t.push_str("2026-10-20T09:13:39Z DEBUG cache lookup /login hit=False\n");
+    t.push_str("2026-10-20T09:13:52Z DEBUG cache lookup /api/checkout hit=True\n");
+    t.push_str("2026-10-20T09:14:05Z ERROR upstream timeout /api/products after 30000ms\n");
+    t.push_str("2026-10-20T09:14:18Z INFO  request /healthz 200 639ms\n");
+    t.push_str("2026-10-20T09:14:31Z INFO  request /api/cart 200 585ms\n");
+    t.push_str("2026-10-20T09:14:44Z INFO  request /login 200 643ms\n");
+    t.push_str("2026-10-20T09:14:57Z INFO  request /api/products 200 67ms\n");
+    t.push_str("2026-10-20T09:15:10Z INFO  request /api/products 200 399ms\n");
+    t.push_str("2026-10-20T09:15:23Z INFO  request /healthz 200 76ms\n");
+    t.push_str("2026-10-20T09:15:36Z DEBUG cache lookup /api/cart hit=True\n");
+    t.push_str("2026-10-20T09:15:49Z INFO  request /api/checkout 200 140ms\n");
+    t.push_str("2026-10-20T09:16:02Z WARN  slow request /api/checkout 2109ms\n");
+    t.push_str("2026-10-20T09:16:15Z INFO  request /login 200 148ms\n");
+    t.push_str("2026-10-20T09:16:28Z INFO  request /login 200 463ms\n");
+    t.push_str("2026-10-20T09:16:41Z INFO  request /api/cart 200 777ms\n");
+    t.push_str("2026-10-20T09:16:54Z INFO  request /healthz 200 773ms\n");
+    t.push_str("2026-10-20T09:17:07Z INFO  request /api/products 200 835ms\n");
+    t.push_str("2026-10-20T09:17:20Z DEBUG cache lookup /api/cart hit=True\n");
+    t.push_str("2026-10-20T09:17:33Z ERROR upstream timeout /api/checkout after 30000ms\n");
+    t.push_str("2026-10-20T09:17:46Z INFO  request /api/checkout 200 168ms\n");
+    t.push_str("2026-10-20T09:17:59Z INFO  request /api/cart 200 574ms\n");
+    t.push_str("2026-10-20T09:18:12Z INFO  request /api/products 200 624ms\n");
+    t.push_str("2026-10-20T09:18:25Z WARN  slow request /api/products 1449ms\n");
+    t.push_str("2026-10-20T09:18:38Z INFO  request /api/checkout 200 820ms\n");
+    t.push_str("2026-10-20T09:18:51Z INFO  request /login 200 864ms\n");
+    t.push_str("2026-10-20T09:19:04Z DEBUG cache lookup /healthz hit=True\n");
+    t.push_str("2026-10-20T09:19:17Z DEBUG cache lookup /search hit=False\n");
+    t.push_str("2026-10-20T09:19:30Z WARN  slow request /api/checkout 2010ms\n");
+    t.push_str("2026-10-20T09:19:43Z INFO  request /api/cart 200 410ms\n");
+    t.push_str("2026-10-20T09:19:56Z INFO  request /healthz 200 653ms\n");
+    t.push_str("2026-10-20T09:20:09Z INFO  request /api/cart 200 850ms\n");
+    t.push_str("2026-10-20T09:20:22Z INFO  request /search 200 237ms\n");
+    t.push_str("2026-10-20T09:20:35Z INFO  request /healthz 200 519ms\n");
+    t.push_str("2026-10-20T09:20:48Z DEBUG cache lookup /search hit=True\n");
+    t.push_str("2026-10-20T09:21:01Z ERROR upstream timeout /login after 30000ms\n");
+    t.push_str("2026-10-20T09:21:14Z INFO  request /login 200 133ms\n");
+    t.push_str("2026-10-20T09:21:27Z WARN  slow request /api/cart 2130ms\n");
+    t.push_str("2026-10-20T09:21:40Z DEBUG cache lookup /search hit=True\n");
+    t.push_str("2026-10-20T09:21:53Z WARN  slow request /search 2127ms\n");
+    t.push_str("2026-10-20T09:22:06Z INFO  request /api/products 200 447ms\n");
+    t.push_str("2026-10-20T09:22:19Z INFO  request /api/checkout 200 852ms\n");
+    t.push_str("2026-10-20T09:22:32Z DEBUG cache lookup /login hit=True\n");
+    t.push_str("2026-10-20T09:22:45Z ERROR upstream timeout /api/checkout after 30000ms\n");
+    t.push_str("2026-10-20T09:22:58Z WARN  slow request /api/checkout 561ms\n");
+    t.push_str("2026-10-20T09:23:11Z WARN  slow request /api/cart 1284ms\n");
+    t.push_str("2026-10-20T09:23:24Z INFO  request /api/cart 200 280ms\n");
+    t.push_str("2026-10-20T09:23:37Z WARN  slow request /api/cart 819ms\n");
+    t.push_str("2026-10-20T09:23:50Z DEBUG cache lookup /api/cart hit=True\n");
+    t.push_str("2026-10-20T09:24:03Z DEBUG cache lookup /api/checkout hit=False\n");
+    t.push_str("2026-10-20T09:24:16Z DEBUG cache lookup /healthz hit=True\n");
+    t.push_str("2026-10-20T09:24:29Z INFO  request /api/cart 200 878ms\n");
+    t.push_str("2026-10-20T09:24:42Z INFO  request /search 200 412ms\n");
+    t.push_str("2026-10-20T09:24:55Z WARN  slow request /login 1458ms\n");
+    t.push_str("2026-10-20T09:25:08Z INFO  request /api/checkout 200 698ms\n");
+    t.push_str("2026-10-20T09:25:21Z INFO  request /search 200 353ms\n");
+    t.push_str("2026-10-20T09:25:34Z INFO  request /healthz 200 613ms\n");
+    t.push_str("2026-10-20T09:25:47Z INFO  request /healthz 200 23ms\n");
+    t.push_str("2026-10-20T09:26:00Z INFO  request /api/cart 200 782ms\n");
+    t.push_str("2026-10-20T09:26:13Z ERROR upstream timeout /api/checkout after 30000ms\n");
+    t.push_str("2026-10-20T09:26:26Z INFO  request /api/cart 200 748ms\n");
+    t.push_str("2026-10-20T09:26:39Z INFO  request /api/products 200 882ms\n");
+    t.push_str("2026-10-20T09:26:52Z INFO  request /healthz 200 60ms\n");
+    t.push_str("2026-10-20T09:27:05Z INFO  request /api/cart 200 677ms\n");
+    t.push_str("2026-10-20T09:27:18Z DEBUG cache lookup /login hit=True\n");
+    t.push_str("2026-10-20T09:27:31Z DEBUG cache lookup /api/products hit=False\n");
+    t.push_str("2026-10-20T09:27:44Z ERROR upstream timeout /healthz after 30000ms\n");
+    t.push_str("2026-10-20T09:27:57Z INFO  request /api/cart 200 333ms\n");
+    t.push_str("2026-10-20T09:28:10Z WARN  slow request /api/products 1950ms\n");
+    t.push_str("2026-10-20T09:28:23Z INFO  request /api/products 200 21ms\n");
+    t.push_str("2026-10-20T09:28:36Z DEBUG cache lookup /api/checkout hit=True\n");
+    t.push_str("2026-10-20T09:28:49Z WARN  slow request /api/products 1017ms\n");
+    t.push_str("2026-10-20T09:29:02Z INFO  request /search 200 106ms\n");
+    t.push_str("2026-10-20T09:29:15Z DEBUG cache lookup /search hit=False\n");
+    t.push_str("2026-10-20T09:29:28Z DEBUG cache lookup /api/cart hit=True\n");
+    t.push_str("2026-10-20T09:29:41Z ERROR upstream timeout /login after 30000ms\n");
+    t.push_str("2026-10-20T09:29:54Z INFO  request /api/cart 200 699ms\n");
+    t.push_str("2026-10-20T09:30:07Z WARN  slow request /search 2229ms\n");
+    t.push_str("2026-10-20T09:30:20Z INFO  request /search 200 744ms\n");
+    t.push_str("2026-10-20T09:30:33Z WARN  slow request /api/checkout 888ms\n");
+    t.push_str("2026-10-20T09:30:46Z INFO  request /api/checkout 200 506ms\n");
+    t.push_str("2026-10-20T09:30:59Z DEBUG cache lookup /api/products hit=False\n");
+    t.push_str("2026-10-20T09:31:12Z ERROR upstream timeout /login after 30000ms\n");
+    t.push_str("2026-10-20T09:31:25Z ERROR upstream timeout /search after 30000ms\n");
+    t.push_str("2026-10-20T09:31:38Z INFO  request /search 200 98ms\n");
+    t.push_str("2026-10-20T09:31:51Z WARN  slow request /api/checkout 1695ms\n");
+    t.push_str("2026-10-20T09:32:04Z DEBUG cache lookup /healthz hit=True\n");
+    t.push_str("2026-10-20T09:32:17Z INFO  request /login 200 370ms\n");
+    t.push_str("2026-10-20T09:32:30Z INFO  request /search 200 78ms\n");
+    t.push_str("2026-10-20T09:32:43Z INFO  request /login 200 221ms\n");
+    t.push_str("2026-10-20T09:32:56Z INFO  request /login 200 888ms\n");
+    t.push_str("2026-10-20T09:33:09Z DEBUG cache lookup /api/checkout hit=False\n");
+    t.push_str("2026-10-20T09:33:22Z INFO  request /api/products 200 825ms\n");
+    t.push_str("2026-10-20T09:33:35Z WARN  slow request /api/products 972ms\n");
+    t.push_str("2026-10-20T09:33:48Z INFO  request /api/products 200 602ms\n");
+    t.push_str("2026-10-20T09:34:01Z INFO  request /login 200 608ms\n");
+    t.push_str("2026-10-20T09:34:14Z DEBUG cache lookup /healthz hit=True\n");
+    t.push_str("2026-10-20T09:34:27Z INFO  request /healthz 200 123ms\n");
+    t.push_str("2026-10-20T09:34:40Z DEBUG cache lookup /api/cart hit=True\n");
+    t.push_str("2026-10-20T09:34:53Z INFO  request /api/checkout 200 630ms\n");
+    t.push_str("2026-10-20T09:35:06Z WARN  slow request /api/products 942ms\n");
+    t.push_str("2026-10-20T09:35:19Z INFO  request /api/checkout 200 644ms\n");
+    t.push_str("2026-10-20T09:35:32Z INFO  request /login 200 385ms\n");
+    t.push_str("2026-10-20T09:35:45Z INFO  request /api/products 200 407ms\n");
+    t.push_str("2026-10-20T09:35:58Z INFO  request /api/checkout 200 289ms\n");
+    t.push_str("2026-10-20T09:36:11Z INFO  request /api/checkout 200 188ms\n");
+    t.push_str("2026-10-20T09:36:24Z DEBUG cache lookup /healthz hit=True\n");
+    t.push_str("2026-10-20T09:36:37Z DEBUG cache lookup /login hit=False\n");
+    t.push_str("2026-10-20T09:36:50Z WARN  slow request /login 990ms\n");
+    t.push_str("2026-10-20T09:37:03Z INFO  request /api/checkout 200 358ms\n");
+    t.push_str("2026-10-20T09:37:16Z INFO  request /login 200 64ms\n");
+    t.push_str("2026-10-20T09:37:29Z INFO  request /api/products 200 770ms\n");
+    t.push_str("2026-10-20T09:37:42Z INFO  request /login 200 471ms\n");
+    t.push_str("2026-10-20T09:37:55Z DEBUG cache lookup /search hit=False\n");
+    t.push_str("2026-10-20T09:38:08Z ERROR upstream timeout /api/products after 30000ms\n");
+    t.push_str("2026-10-20T09:38:21Z INFO  request /login 200 163ms\n");
+    t.push_str("2026-10-20T09:38:34Z INFO  request /search 200 652ms\n");
+    t.push_str("2026-10-20T09:38:47Z INFO  request /login 200 319ms\n");
+    t.push_str("2026-10-20T09:39:00Z INFO  request /search 200 303ms\n");
+    t.push_str("2026-10-20T09:39:13Z INFO  request /search 200 418ms\n");
+    t.push_str("2026-10-20T09:39:26Z INFO  request /search 200 566ms\n");
+    t.push_str("2026-10-20T09:39:39Z INFO  request /api/checkout 200 734ms\n");
+    t.push_str("2026-10-20T09:39:52Z ERROR upstream timeout /healthz after 30000ms\n");
+    t.push_str("2026-10-20T09:40:05Z DEBUG cache lookup /healthz hit=False\n");
+    t.push_str("2026-10-20T09:40:18Z WARN  slow request /login 291ms\n");
+    t.push_str("2026-10-20T09:40:31Z INFO  request /api/checkout 200 694ms\n");
+    t.push_str("2026-10-20T09:40:44Z INFO  request /healthz 200 594ms\n");
+    t.push_str("2026-10-20T09:40:57Z WARN  slow request /api/products 2667ms\n");
+    t.push_str("2026-10-20T09:41:10Z INFO  request /api/cart 200 80ms\n");
+    t.push_str("2026-10-20T09:41:23Z INFO  request /login 200 700ms\n");
+    t.push_str("2026-10-20T09:41:36Z DEBUG cache lookup /login hit=True\n");
+    t.push_str("2026-10-20T09:41:49Z ERROR upstream timeout /api/checkout after 30000ms\n");
+    t.push_str("2026-10-20T09:42:02Z INFO  request /api/cart 200 249ms\n");
+    t.push_str("2026-10-20T09:42:15Z INFO  request /search 200 522ms\n");
+    t.push_str("2026-10-20T09:42:28Z INFO  request /search 200 418ms\n");
+    t.push_str("2026-10-20T09:42:41Z WARN  slow request /search 1626ms\n");
+    t.push_str("2026-10-20T09:42:54Z INFO  request /api/cart 200 86ms\n");
+    t.push_str("2026-10-20T09:43:07Z DEBUG cache lookup /login hit=False\n");
+    t.push_str("2026-10-20T09:43:20Z ERROR upstream timeout /login after 30000ms\n");
+    t.push_str("2026-10-20T09:43:33Z DEBUG cache lookup /search hit=False\n");
+    t.push_str("2026-10-20T09:43:46Z WARN  slow request /login 1524ms\n");
+    t.push_str("2026-10-20T09:43:59Z WARN  slow request /login 1413ms\n");
+    t.push_str("2026-10-20T09:44:12Z INFO  request /healthz 200 674ms\n");
+    t.push_str("2026-10-20T09:44:25Z INFO  request /api/products 200 467ms\n");
+    t.push_str("2026-10-20T09:44:38Z DEBUG cache lookup /api/products hit=True\n");
+    t.push_str("2026-10-20T09:44:51Z DEBUG cache lookup /healthz hit=False\n");
+    t.push_str("2026-10-20T09:45:04Z DEBUG cache lookup /api/checkout hit=True\n");
+    t.push_str("2026-10-20T09:45:17Z DEBUG cache lookup /api/products hit=False\n");
+    t.push_str("2026-10-20T09:45:30Z WARN  slow request /api/checkout 1596ms\n");
+    t.push_str("2026-10-20T09:45:43Z WARN  slow request /search 2340ms\n");
+    t.push_str("2026-10-20T09:45:56Z DEBUG cache lookup /healthz hit=True\n");
+    t.push_str("2026-10-20T09:46:09Z INFO  request /api/products 200 768ms\n");
+    t.push_str("2026-10-20T09:46:22Z DEBUG cache lookup /api/products hit=True\n");
+    t.push_str("2026-10-20T09:46:35Z INFO  request /api/cart 200 242ms\n");
+    t.push_str("2026-10-20T09:46:48Z ERROR upstream timeout /api/checkout after 30000ms\n");
+    t.push_str("2026-10-20T09:47:01Z INFO  request /healthz 200 441ms\n");
+    t.push_str("2026-10-20T09:47:14Z WARN  slow request /login 1047ms\n");
+    t.push_str("2026-10-20T09:47:27Z INFO  request /api/products 200 483ms\n");
+    v.push(DataFile { path: "logs/app.log".to_string(), body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("task,track,optimistic,likely,pessimistic\n");
+    t.push_str("API design,A,2,3,6\n");
+    t.push_str("Database schema,A,3,5,10\n");
+    t.push_str("Payment integration,A,5,8,20\n");
+    t.push_str("Frontend shell,B,4,6,9\n");
+    t.push_str("Checkout UI,B,5,7,14\n");
+    t.push_str("Accessibility pass,B,1,2,5\n");
+    t.push_str("Load testing,final,2,3,7\n");
+    t.push_str("Security review,final,1,3,8\n");
+    t.push_str("Launch,final,1,1,2\n");
+    v.push(DataFile { path: "project/tasks.csv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("seed = station-07\n");
+    t.push_str("hours = 24\n");
+    t.push_str("base_temp = 12.0\n");
+    t.push_str("swing = 6.0\n");
+    t.push_str("wind_scale = 6.0\n");
+    t.push_str("wind_shape = 2.0\n");
+    t.push_str("wind_dir = 250\n");
+    t.push_str("wind_kappa = 2.5\n");
+    t.push_str("rain_chance = 0.3\n");
+    t.push_str("loss = 0.05\n");
+    v.push(DataFile { path: "sensor/station.conf".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("first: Olivia Liam Emma Noah Ava Mateo Sofia Kenji Amara Lucas Zara Diego Mei Arjun Nora\n");
+    t.push_str("last: Smith Garcia Nguyen Okoro Muller Rossi Kim Patel Silva Cohen Ivanova Haddad\n");
+    t.push_str("city: Lisbon:5 Toronto:4 Nairobi:3 Osaka:3 Austin:2 Reykjavik:1\n");
+    t.push_str("tag: beta newsletter vip mobile churn-risk referral\n");
+    v.push(DataFile { path: "synth/lists.txt".to_string(), body: t });
+}

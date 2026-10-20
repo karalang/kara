@@ -1,0 +1,558 @@
+
+== seeding from ints, floats, str and bytes
+seed(0) -> next random() 0.8444218515250481
+seed(1) -> next random() 0.13436424411240122
+seed(42) -> next random() 0.6394267984578837
+seed(-42) -> next random() 0.6394267984578837
+seed(4294967295) -> next random() 0.6353574441341173
+seed(4294967296) -> next random() 0.11299430095636409
+seed(123456789012345678901234567890) -> next random() 0.7275084571578186
+seed(-99999999999999999999999999999999999999) -> next random() 0.0979841519572765
+seed(2026) -> next random() 0.11911988496396309
+random() x3 = [0.11911988496396309, 0.5025157552312506, 0.511822712773071]
+seed(3.5) -> next random() 0.3039190124834461
+seed(-1.5) -> next random() 0.7101153317194698
+seed(0.1) -> next random() 0.8062579873336703
+seed(1e+300) -> next random() 0.2614143642581235
+seed(-0.0) -> next random() 0.8444218515250481
+seed(inf) -> next random() 0.19236379321481523
+seed(5e-324) -> next random() 0.4787190331584651
+seed(2.0) -> next random() 0.9560342718892494
+seed('hello') -> next random() 0.3537754404730722
+seed('') -> next random() 0.9602256525641875
+seed('checkout-load-2026-10') -> next random() 0.016502843950065627
+seed('a much longer seed string than the others, over one block') -> next random() 0.49452935676431575
+seed(b'') -> next random() 0.9602256525641875
+seed(b'\x00') -> next random() 0.761237843064138
+seed(b'\xde\xad\xbe\xef') -> next random() 0.6610154587690201
+seed(b'station-07') -> next random() 0.5496557836846091
+seed('hello', version=1) -> next random() 0.8180391270568783
+seed('', version=1) -> next random() 0.8444218515250481
+seed(b'hello', version=1) -> next random() 0.8180391270568783
+seed([1, 2]) -> TypeError: The only supported seed types are:
+None, int, float, str, bytes, and bytearray.
+random() x2 = [0.8180391270568783, 0.4954944300274843]
+
+== random() and getrandbits()
+seed(2024) -> next random() 0.47009071843107064
+random() x8 = [0.47009071843107064, 0.7282642914232076, 0.3037513583913575, 0.8872982690000151, 0.41008858946872573, 0.7166143935816427, 0.26522113780066725, 0.24516664919367304]
+getrandbits(0) = 0
+getrandbits(1) = 1
+getrandbits(7) = 94
+getrandbits(31) = 1070094067
+getrandbits(32) = 1521158711
+getrandbits(33) = 6081124358
+getrandbits(48) = 173292171193398
+getrandbits(62) = 1005933923849963376
+getrandbits(63) = 5015963465898872443
+getrandbits(64) = 6091827293200401176
+getrandbits(65) = 19824201351180856139
+getrandbits(100) = 306383508952463812506123329399
+getrandbits(128) = 159433591160464201170143949905594475396
+getrandbits(200) = 854617178415688403598400323692789274146626010238945559262936
+getrandbits(-1) -> ValueError: number of bits must be non-negative
+randbytes(0) = b''
+randbytes(1) = b'6'
+randbytes(3) = b'\xee\x11\xde'
+randbytes(4) = b'\x83\xf6ri'
+randbytes(5) = b'"\xed\xac\xfa\x0e'
+randbytes(8) = b'\x1c\xe0K\xc5\xcb8uY'
+randbytes(16) = b'\x80\x97\xf0\xa0\xe0_\xa4j\x1a\x00Dw\xa2}\xca\x1f'
+randbytes(-2) -> ValueError: number of bits must be non-negative
+
+== randrange() and randint()
+seed(7) -> next random() 0.32383276483316237
+randrange(10) = 5
+randrange(1, 7) = 2
+randrange(0, 100, 5) = 60
+randrange(100, 0, -7) = 30
+randrange(-10, 10) = -9
+randrange(0, 1) = 0
+randrange(5, 5) -> ValueError: empty range in randrange(5, 5)
+randrange(5) = 4
+randrange(0) -> ValueError: empty range for randrange()
+randrange(-3) -> ValueError: empty range for randrange()
+randrange(10, 1) -> ValueError: empty range in randrange(10, 1)
+randrange(0, 10, 0) -> ValueError: zero step for randrange()
+randrange(0, 10, -1) -> ValueError: empty range in randrange(0, 10, -1)
+randrange(10, None, 2) -> TypeError: Missing a non-None stop argument
+randrange(2.5) -> TypeError: 'float' object cannot be interpreted as an integer
+randrange(1, 2.5) -> TypeError: 'float' object cannot be interpreted as an integer
+randrange(1, 10, 1.5) -> TypeError: 'float' object cannot be interpreted as an integer
+randrange(1000000000000000000000000000000) = 46173223350539896994877990929
+randrange(-1000000000000, 1000000000000) = 116303678868
+randrange(0, 10000000000000000000000, 3) = 1219560127586860491108
+randrange(9223372036854775807) = 3856957380441106266
+randrange(18446744073709551616, 18446744073709551626) = 18446744073709551617
+randrange(1000) = 246
+randint(1, 6) = 1
+randint(1, 6) = 5
+randint(0, 0) = 0
+randint(-5, 5) = -5
+randint(6, 1) -> ValueError: empty range in randrange(6, 2)
+randint(1, 1000.0) -> TypeError: 'float' object cannot be interpreted as an integer
+randint(1, 100000000000000000000) = 10430779633273967792
+
+== choice(), shuffle() and sample()
+seed('deck') -> next random() 0.34663308033173434
+choice(['red', 'green', 'blue']) = 'green'
+choice(['solo']) = 'solo'
+choice([]) -> IndexError: Cannot choose from an empty sequence
+shuffle(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) -> ['c', 'f', 'g', 'd', 'a', 'b', 'h', 'e']
+shuffle([]) -> []
+shuffle(['x']) -> ['x']
+shuffle(['AS', '2S', '3S', '4S', '5S', '6S', '7S', '8S', '9S', 'TS', 'JS', 'QS', 'KS', 'AH', '2H', '3H', '4H', '5H', '6H', '7H', '8H', '9H', 'TH', 'JH', 'QH', 'KH', 'AD', '2D', '3D', '4D', '5D', '6D', '7D', '8D', '9D', 'TD', 'JD', 'QD', 'KD', 'AC', '2C', '3C', '4C', '5C', '6C', '7C', '8C', '9C', 'TC', 'JC', 'QC', 'KC']) -> ['AD', 'KC', 'JC', '2D', '6C', '9S', '7C', 'KS', 'AC', '6H', 'TC', '3H', '5D', '2C', 'JD', '9C', 'AH', 'TH', 'TS', '9H', '8C', '2H', '3C', '3D', '4C', '3S', '2S', 'JS', '4S', 'JH', '8H', '5H', '5S', '8D', '7D', 'KH', '7H', '4D', 'QD', '6S', 'AS', 'KD', '9D', '5C', '8S', 'QS', '4H', 'QH', '7S', '6D', 'QC', 'TD']
+sample(['red', 'green', 'blue', 'cyan', 'magenta'], 3) = ['blue', 'red', 'green']
+sample(['red', 'green', 'blue', 'cyan', 'magenta'], 5) = ['cyan', 'green', 'red', 'blue', 'magenta']
+sample(['red', 'green', 'blue', 'cyan', 'magenta'], 0) = []
+sample(['red', 'green', 'blue'], 4) -> ValueError: Sample larger than population or is negative
+sample(['red', 'green', 'blue'], -1) -> ValueError: Sample larger than population or is negative
+sample(range(0, 100), 5) = [56, 99, 19, 32, 83]
+sample(range(0, 10), 10) = [8, 3, 5, 2, 4, 9, 6, 0, 7, 1]
+sample(range(0, 1000000), 6) = [168166, 380407, 492934, 872072, 529533, 476268]
+sample(range(0, 30), 6) = [4, 17, 27, 20, 23, 6]
+sample(range(0, 30), 7) = [26, 11, 2, 0, 29, 6, 24]
+sample(range(0, 60), 25) = [7, 45, 25, 33, 43, 56, 55, 59, 2, 30, 48, 36, 20, 47, 53, 8, 34, 58, 44, 24, 17, 13, 22, 41, 14]
+sample(['AS', '2S', '3S', '4S', '5S', '6S', '7S', '8S', '9S', 'TS', 'JS', 'QS', 'KS', 'AH', '2H', '3H', '4H', '5H', '6H', '7H', '8H', '9H', 'TH', 'JH', 'QH', 'KH', 'AD', '2D', '3D', '4D', '5D', '6D', '7D', '8D', '9D', 'TD', 'JD', 'QD', 'KD', 'AC', '2C', '3C', '4C', '5C', '6C', '7C', '8C', '9C', 'TC', 'JC', 'QC', 'KC'], 13) = ['JS', '8S', '4D', '2C', '9H', '9C', '7C', '5C', 'QS', '2S', '6D', '4H', '8H']
+sample(['red', 'blue'], 5, counts=[4, 2]) = ['red', 'blue', 'red', 'red', 'red']
+sample(['red', 'blue'], 6, counts=[4, 2]) = ['blue', 'red', 'red', 'red', 'blue', 'red']
+sample(['red', 'blue'], 7, counts=[4, 2]) -> ValueError: Sample larger than population or is negative
+sample(['red', 'blue', 'green'], 2, counts=[4, 2]) -> ValueError: The number of counts does not match the population
+sample(['red', 'blue'], 1, counts=[-1, 0]) -> ValueError: Counts must be non-negative
+sample(['a', 'b', 'c'], 3, counts=[0, 3, 0]) = ['b', 'b', 'b']
+
+== choices()
+seed(99) -> next random() 0.40397807494366633
+choices(['heads', 'tails'], k=10) = ['heads', 'heads', 'heads', 'heads', 'tails', 'heads', 'heads', 'tails', 'tails', 'tails']
+choices(['a', 'b', 'c'], weights=[10, 5, 1], k=12) = ['a', 'a', 'a', 'a', 'b', 'a', 'a', 'b', 'a', 'b', 'b', 'a']
+choices(['a', 'b', 'c'], cum_weights=[10, 15, 16], k=12) = ['c', 'a', 'b', 'a', 'a', 'a', 'a', 'a', 'c', 'a', 'a', 'b']
+choices(['a', 'b', 'c'], weights=[0.5, 0.25, 0.25], k=6) = ['b', 'c', 'a', 'a', 'c', 'a']
+choices(['a', 'b', 'c'], weights=[1, 2], k=3) -> ValueError: The number of weights does not match the population
+choices(['a', 'b'], weights=[1, 2], cum_weights=[1, 3], k=3) -> TypeError: Cannot specify both weights and cumulative weights
+choices(['a', 'b'], weights=[0, 0], k=3) -> ValueError: Total of weights must be greater than zero
+choices(['a', 'b'], weights=[-1, 0.5], k=3) -> ValueError: Total of weights must be greater than zero
+choices(['a', 'b'], weights=[1, inf], k=3) -> ValueError: Total of weights must be finite
+choices([], k=1) -> IndexError: list index out of range
+choices([], k=0) = []
+choices([], weights=[], k=1) -> IndexError: list index out of range
+choices(['x'], k=4) = ['x', 'x', 'x', 'x']
+choices(['a', 'b', 'c'], k=0) = []
+
+== continuous distributions
+seed(12345) -> next random() 0.41661987254534116
+uniform(1, 10) x4 = [4.749578852908071, 1.0915225251136151, 8.426858583283689, 3.687758696796335]
+uniform(10, 1) x2 = [6.684294794603719, 8.257047858594332]
+uniform(2.5, 2.5) x2 = [2.5, 2.5]
+triangular() x4 = [0.2492658062024655, 0.4652613609628012, 0.5320675732949484, 0.29524867546166217]
+triangular(0, 10, 2) x4 = [4.021512469323564, 2.816136896274255, 8.16838399438198, 1.3512520037116327]
+triangular(10, 0, 7) x4 = [1.2227838361997174, 6.414954597988121, 5.892751838682618, 7.891828975650771]
+triangular(3, 3, 3) x2 = [3, 3]
+triangular(3, 3) x2 = [3.0, 3.0]
+triangular(1, 5, 9) x2 = [4.296144523034975, 6.564120656865367]
+normalvariate(0, 1) x5 = [-0.6117720708515887, -1.2809487881253205, 0.5085410173095732, -0.9628328979965217, 2.0506727290322826]
+normalvariate(100, 15) x3 = [110.29476813928221, 112.25501078834425, 117.46120743787881]
+gauss(0, 1) x5 = [0.5229547362809192, 1.2259440628933354, -2.507718101725651, -0.2886528881374804, 0.5785386443592951]
+gauss(170, 9) x3 = [171.39070283654945, 186.91144417639615, 168.21816513942588]
+lognormvariate(0, 0.5) x4 = [0.6776388052713171, 1.0406263773590372, 0.8529842990491363, 1.2178048331736209]
+expovariate() x4 = [5.2221438172200285, 2.5328771142288726, 1.5550864421364923, 1.4801914578525548]
+expovariate(0.25) x4 = [1.8338961269676524, 4.541596901815578, 5.729500082193764, 2.621681523232597]
+expovariate(-2) x2 = [-0.031749555783910643, -0.49188872900427344]
+expovariate(0) -> ZeroDivisionError: float division by zero
+vonmisesvariate(0, 4) x4 = [0.6824745424496882, 0.1631648067616345, 5.70335958128663, 0.13090652813534912]
+vonmisesvariate(3.14, 0.5) x3 = [1.9394717387583027, 4.272498887761551, 5.339945710232094]
+vonmisesvariate(1, 0) x2 = [2.5518410844447375, 4.966564454555862]
+vonmisesvariate(-10, 50) x3 = [2.509552508987502, 2.4856130150385276, 2.3105952625662116]
+paretovariate(3) x4 = [1.1944898836284175, 1.4805676537593608, 1.1399637170692192, 1.0236442084385617]
+paretovariate(0) -> ZeroDivisionError: float division by zero
+weibullvariate(1, 1.5) x4 = [0.36110260839749525, 0.9806016460492146, 0.37048852315274083, 0.27607233286241845]
+weibullvariate(2, 0) -> ZeroDivisionError: float division by zero
+
+== gamma, beta and binomial
+seed('gamma') -> next random() 0.68615254828827
+gammavariate(0.01, 1) x3 = [6.332029258246891e-17, 2.764162629385931e-08, 1.3752766144318618e-23]
+gammavariate(0.1, 1) x3 = [0.007661590273198608, 0.05655899696882197, 5.735557326456655e-12]
+gammavariate(0.5, 1) x3 = [0.006946835264823584, 0.8017276611520902, 0.6730912921747405]
+gammavariate(0.9, 1) x3 = [2.766649637151178, 0.10175497006299844, 3.683344412073766]
+gammavariate(1, 1) x3 = [0.9566558423192052, 0.6180001998471424, 0.9718194292057734]
+gammavariate(2, 1) x3 = [4.262798173881553, 3.9951557715200137, 2.0690262798293273]
+gammavariate(20, 1) x3 = [18.348842057343983, 21.001774955910463, 16.354948864613764]
+gammavariate(200, 1) x3 = [203.18771054744425, 203.3217955780147, 208.06176059424706]
+gammavariate(2.5, 0.5) x3 = [0.9833982048889827, 2.8437384659451754, 1.0393957640999065]
+gammavariate(0, 1) -> ValueError: gammavariate: alpha and beta must be > 0.0
+gammavariate(1, -1) -> ValueError: gammavariate: alpha and beta must be > 0.0
+betavariate(3, 3) x4 = [0.40481375640807316, 0.5889781245295067, 0.6778061260226165, 0.5308776061352662]
+betavariate(0.5, 0.5) x3 = [0.07302238352234124, 0.38849539105691616, 0.83249705723167]
+betavariate(1, 1) x2 = [0.20595977126492881, 0.7036193055452041]
+betavariate(-1, 1) -> ValueError: gammavariate: alpha and beta must be > 0.0
+binomialvariate(1, 0.5) x4 = [1, 1, 0, 0]
+binomialvariate(1, 0.9) x4 = [1, 1, 1, 1]
+binomialvariate(10, 0.5) x4 = [6, 3, 4, 6]
+binomialvariate(15, 0.6) x4 = [5, 8, 10, 6]
+binomialvariate(100, 0.75) x4 = [74, 70, 75, 78]
+binomialvariate(100, 0.05) x4 = [3, 4, 2, 6]
+binomialvariate(1000, 0.3) x4 = [330, 300, 302, 305]
+binomialvariate(1000000, 0.001) x4 = [1069, 1020, 1049, 1028]
+binomialvariate(50, 0.999) x4 = [49, 50, 50, 50]
+binomialvariate(20, 0) x4 = [0, 0, 0, 0]
+binomialvariate(20, 1) x4 = [20, 20, 20, 20]
+binomialvariate(0, 0.5) x4 = [0, 0, 0, 0]
+binomialvariate(-1, 0.5) -> ValueError: n must be non-negative
+binomialvariate(5, 1.5) -> ValueError: p must be in the range 0.0 <= p <= 1.0
+binomialvariate(5, -0.1) -> ValueError: p must be in the range 0.0 <= p <= 1.0
+binomialvariate(100000, 0.5) x4 = [49989, 50006, 49766, 49727]
+binomialvariate(37, 0.27) x4 = [11, 8, 9, 11]
+
+== getstate() and setstate()
+seed(5) -> next random() 0.6229016948897019
+getstate() = version 3, 625 words, index 624, mt[0] 2147483648, mt[623] 957143377, gauss_next None
+random() x2 = [0.6229016948897019, 0.7417869892607294]
+gauss(0, 1) x1 = [0.6694689143859696]
+state = getstate()
+getstate() = version 3, 625 words, index 8, mt[0] 800844005, mt[623] 2402479847, gauss_next -2.293910094631911
+random() x3 = [0.7398985747399307, 0.922324996665417, 0.029005228283614737]
+gauss(0, 1) x1 = [-2.293910094631911]
+setstate(state) -> next random() 0.7398985747399307
+random() x3 = [0.7398985747399307, 0.922324996665417, 0.029005228283614737]
+gauss(0, 1) x1 = [-2.293910094631911]
+getrandbits(640) = 3335982281025079949149720327155237256184584154463308927725474852402433420358415983327932113550090204086657414488735238613631348439902384303101287617596135194133331054126245065543557845261421531
+getrandbits(2000) = 388198624313975120692306402664082038236862596760715602836711823626832963084103269739734273702065072156247687585223587143827341417206202032248075578588022173314540290729640827733928253941309104443265832204397294596572209634840074587889855627325235746417103161461076917284470903885222098755076210276938063360092458169674871655846997458374125641300195864347439650544082846716206273561036658163252278302520743015513982010419342097907117455813358625786791015316418354967735102061545977225966940323673699006872793707512809917925699613312381435000107540289490707029779084439373849228002877481505373294402210
+getrandbits(2000) = 89667487341768349609631348246084510646985906769257950041306289987213667559655198340467043427630300881358434227989815091194547805074068849953749449779199082149637373927178508390641378844866477151467275836167909563634844558921590601968379753853274403635761664313891218317174232962499211239644197223342969766116362602103282055561354329024775284368563806392982422106168858281609417463580062592636263816773498526553759975529029200765546714643193930790237552658850104528452558115958851590588164006903811584078179597687788428481545415564979536273325819112055382894281810760448859714676125784396137664089297814
+getrandbits(2000) = 56668633857549012416286799662090379428219325951650886773380765448284965860413161211320289378197341661912615459318464898651076434210422573576552238140532519604676531278529318052320200703760755294019267598798771249899247117671675262879133269970440819812163535706416491750117580587317060744164651967679436811231789538010911246740911038808274645419457096197185814043261508647351065939558640359847328928089267239907210227430385150963431682390335821994994047679267714880777118446192573945651578720302243044513597220220506613006209336292627275099900317593484273620535717585641976469070713735550830105909988401
+getrandbits(2000) = 62929920096184342766390524163487207959246092158037051658747546611050699687849162371664604291007628027553743009466504281075833689773923724355232533071305981766885084402680438296147617351370259040343468465105585048959748595594430923197007599658249709253514029751060320392811897935102024796543222056586378106477650509875910248346312519629697094579932169924108630315541570541594920289043832666127242902855474411552619529321251588871167264836509641042343270261599441935870051506890913204747407969212111122410666875402136662700722223674635418854381308633335566599973720501985665735562809388912358068423830235
+getrandbits(2000) = 99876600584636847713079111545623820378356569844030469858902192790180263470847645797666664489706686983529777739010751601389726582162890028717130545607097992001087424041144402326838115161915949997169450290428236376747535211009639721908958311506696961780909655955498853267783314043756615341209243603049578100975598050143861236897911129044626510831341040437364998923833755120845505441359934003105430324845489452890211963671514060668158315933211066851306349084621915196849428585359548929949523829133736574064680994498416879711989896572477804517381417323182398629222668626090684953386754487268570087413321669
+getrandbits(2000) = 19029625500698115481769203105219936347709144763117858801002799672717315855810620183008137722339276694206109972780071596689571906075684491588274557670460200709608011757383791616327829032986618649580076816677556949387442059249831793773133861691666616109621989654285736484876091335602849265341379635006785335400467251722723089456593344564782128850140531085197059413423727560956515093914497242628722464960774196985797212949577872903243693859984732147553294970513858045009556018449754278307399152630302324676197833848903091161514603935091761769521747949792226855707353356596130105925608003118121890421528479
+getrandbits(2000) = 16316341986633369645155706159233610506948239359399314748591117536820973359446107762417065645760933392231031866928793095280187793550442692220539200886837271866764833480711692676547453479801686571718166625010983490043489870293271753537411469617247050464623243895044642844955904164547449557185064787735828611458582137140257497194849569152278670892809979604850028770449284056762648038090848364763438515084549448884495592315650127843169447383076653383458166714701611224409517237907872382878500638193261164098395191759344383362156749705332353039970207913272500877145803623773423792852575524458216527633338619
+getrandbits(2000) = 16450921709235607550281387752215406530334226437581311941480982277306198815183372240352823395870813848744349708832686098606056064159641815665711640601096726893320701808918051984791093960431401127923454549870853161489278394702261506518186118291942900835857016513070919486619483492566987112339581448484458449710185563494642355264245749545590573294839833617186365558858115522584291473501808257437957746455846041684768215277019273119369157179116196983374195287449424414023264825900825602824727328210508585284533607811910667703216032502237999296063008293162012765452765447068581008671467321679504588266434460
+getrandbits(2000) = 85538122479302238468726681019530265158526343988039597787591737773322225594177498365053728751697629519968376820905294279223385949977641175438307968808409464724000147253083328152153668867468340496043311498878689388664673811818994225072851282329485188570922460411642268319326905537762694009121571675631827302484177235294769397962090212142460469218636517429165673801321330797680542402180285194929074156580933942871504557694215355891889468183228253972004686449484980077449109952883563386693376020660867606464879561226078388196023227064238440118071401208389067854582600473287135373233177416965308464982685023
+getrandbits(2000) = 102033859644590154704032094084508974397532624400602944624053243656683851915718786166847829726428889057628532463513494812084193308642010650100115475823031658639769127804429081608956936429147176593482225695095336034581761829577307868335562449939986140092642657157248747040001973026767390560527565730010233745612322788919809873613825269564260895184625337143596880180937284427979047348969681814390087428152518428550859984667801208656726146387660403877200538458924632416681405914811866539588625385652320747281002707814233431215253677906862064467313272023890246839431221539448741996754599393249841713062152838
+getstate() = version 3, 625 words, index 40, mt[0] 2572814772, mt[623] 702042831, gauss_next None
+setstate(state) -> next random() 0.7398985747399307
+getstate() = version 3, 625 words, index 8, mt[0] 800844005, mt[623] 2402479847, gauss_next -2.293910094631911
+setstate(state with index 625) -> ValueError: invalid state
+setstate(state with index 624) -> next random() 0.708181216964631
+random() x1 = [0.708181216964631]
+setstate(state with index 0) -> next random() 0.6229016948897019
+random() x1 = [0.6229016948897019]
+setstate(state with version 2) -> next random() 0.7398985747399307
+random() x1 = [0.7398985747399307]
+setstate(state with version 4) -> ValueError: state with version 4 passed to Random.setstate() of version 3
+setstate(state with 624 words) -> ValueError: state vector is the wrong size
+gauss(0, 1) x1 = [-2.293910094631911]
+setstate(state) -> next random() 0.7398985747399307
+setstate(state with gauss_next 7.0) -> next random() 0.7398985747399307
+gauss(0, 1) x2 = [7.0, -0.1433838383004689]
+seed(5) -> next random() 0.6229016948897019
+gauss(0, 1) x1 = [-1.1788417512306717]
+
+== python -m random
+seed(8675309) -> next random() 0.40224696110279223
+$ python -m random
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+
+positional arguments:
+  input                 if no options given, output depends on the input
+                            string or multiple: same as --choice
+                            integer: same as --integer
+                            float: same as --float
+
+options:
+  -h, --help            show this help message and exit
+  -c, --choice CHOICE [CHOICE ...]
+                        print a random choice
+  -i, --integer N       print a random integer between 1 and N inclusive
+  -f, --float N         print a random floating-point number between 0 and N inclusive
+
+$ python -m random -c rock paper scissors
+paper
+$ python -m random --choice heads tails
+heads
+$ python -m random -i 6
+5
+$ python -m random --integer 20
+17
+$ python -m random --int 100
+36
+$ python -m random --integer=5
+2
+$ python -m random -i5
+3
+$ python -m random -f 2.5
+0.2278856745949287
+$ python -m random --float 1e3
+12.479535411529795
+$ python -m random --f 2
+1.7960995658619388
+$ python -m random -f nan
+nan
+$ python -m random -f inf
+inf
+$ python -m random 6
+1
+$ python -m random 2.5
+2.4095259091001733
+$ python -m random 'pizza tacos ramen'
+tacos
+$ python -m random red green blue
+blue
+$ python -m random -- -5
+-4.828441362623365
+$ python -m random -2.5
+-1.7386498925948932
+$ python -m random 0
+0.0
+$ python -m random -i 0
+Traceback (most recent call last):
+ValueError: empty range in randrange(1, 1)
+[exit 1]
+$ python -m random -i x
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument -i/--integer: invalid int value: 'x'
+[exit 2]
+$ python -m random -i ' 7 '
+2
+$ python -m random -i 1_000
+285
+$ python -m random -i 0x10
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument -i/--integer: invalid int value: '0x10'
+[exit 2]
+$ python -m random -i 3 -c a
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument -c/--choice: not allowed with argument -i/--integer
+[exit 2]
+$ python -m random -c a -f 1
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument -f/--float: not allowed with argument -c/--choice
+[exit 2]
+$ python -m random -c
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument -c/--choice: expected at least one argument
+[exit 2]
+$ python -m random -i
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument -i/--integer: expected one argument
+[exit 2]
+$ python -m random x -i
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument -i/--integer: expected one argument
+[exit 2]
+$ python -m random --bogus
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: unrecognized arguments: --bogus
+[exit 2]
+$ python -m random --bogus a
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: unrecognized arguments: --bogus
+[exit 2]
+$ python -m random a -i 3 b
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: unrecognized arguments: b
+[exit 2]
+$ python -m random a b -c x
+x
+$ python -m random -c x y -- z
+x
+$ python -m random -f 1 2 3
+0.23720547482319754
+$ python -m random --test 3x
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+random.py: error: argument --test: invalid int value: '3x'
+[exit 2]
+$ python -m random --ch a b
+b
+$ python -m random '   '
+Traceback (most recent call last):
+IndexError: Cannot choose from an empty sequence
+[exit 1]
+$ python -m random ''
+Traceback (most recent call last):
+IndexError: Cannot choose from an empty sequence
+[exit 1]
+$ python -m random -h
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+
+positional arguments:
+  input                 if no options given, output depends on the input
+                            string or multiple: same as --choice
+                            integer: same as --integer
+                            float: same as --float
+
+options:
+  -h, --help            show this help message and exit
+  -c, --choice CHOICE [CHOICE ...]
+                        print a random choice
+  -i, --integer N       print a random integer between 1 and N inclusive
+  -f, --float N         print a random floating-point number between 0 and N inclusive
+$ python -m random -i 2 -h --bogus
+usage: random.py [-h] [-c CHOICE [CHOICE ...] | -i N | -f N] [input ...]
+
+positional arguments:
+  input                 if no options given, output depends on the input
+                            string or multiple: same as --choice
+                            integer: same as --integer
+                            float: same as --float
+
+options:
+  -h, --help            show this help message and exit
+  -c, --choice CHOICE [CHOICE ...]
+                        print a random choice
+  -i, --integer N       print a random integer between 1 and N inclusive
+  -f, --float N         print a random floating-point number between 0 and N inclusive
+$ python -m random -f -1
+-0.9430492359692841
+$ python -m random -i 4 -i 9
+3
+
+== program: load-test traffic generator
+loadgen/checkout.conf: 300 requests at 12.5 rps, seed 'checkout-load-2026-10'
+  t=  0.001s  GET /api/cart             20.3ms  200
+  t=  0.023s  POST /api/cart/items      55.1ms  503
+  t=  0.076s  POST /api/cart/items      84.4ms  200
+  t=  0.375s  POST /api/cart/items      40.2ms  200
+  t=  0.433s  GET /api/products         22.0ms  200
+  t=  0.462s  GET /api/cart             31.0ms  200
+  endpoint               count errors     mean      p50      p95      p99      max
+  GET /api/cart             83      0     26.2     25.3     41.6     50.4     50.4
+  POST /api/cart/items      53      2     44.9     42.7     84.4    152.7    152.7
+  GET /api/products        144      2     18.9     18.4     28.9     35.1     38.8
+  POST /api/checkout        12      0    116.5     73.1    255.4    255.4    255.4
+  GET /healthz               8      2      1.4      1.4      1.6      1.6      1.6
+  ran 23.42s, 12.81 requests/s, 6 errors
+loadgen/search.conf: 200 requests at 40.0 rps, seed 'search-steady'
+  t=  0.015s  GET /search               90.9ms  200
+  t=  0.027s  GET /search               68.3ms  200
+  t=  0.048s  GET /suggest               4.3ms  200
+  t=  0.070s  GET /search               53.1ms  200
+  t=  0.085s  GET /search               41.7ms  200
+  t=  0.091s  GET /search               92.8ms  200
+  endpoint               count errors     mean      p50      p95      p99      max
+  GET /search              123      0     56.7     47.0    139.1    164.5    219.5
+  GET /suggest              77      0     10.4      9.5     16.4     24.8     24.8
+  ran 5.06s, 39.55 requests/s, 0 errors
+
+== program: A/B test bucketing
+new-checkout: rollout 25% of 120 users: control 17 (14.2%), treatment 17 (14.2%), off 86 (71.7%)
+  u1000-ada=off u1037-bo=control u1074-chen=treatment u1111-dara=treatment u1148-eli=off u1185-fatima=control
+pricing-page: rollout 100% of 120 users: A 48 (40.0%), B 37 (30.8%), C 35 (29.2%), off 0 (0.0%)
+  u1000-ada=B u1037-bo=C u1074-chen=C u1111-dara=B u1148-eli=A u1185-fatima=C
+dark-mode: rollout 10% of 120 users: on 12 (10.0%), off 108 (90.0%)
+  u1000-ada=off u1037-bo=on u1074-chen=off u1111-dara=off u1148-eli=off u1185-fatima=off
+in new-checkout treatment and dark-mode: 2 ['u2147-lena', 'u4367-lena']
+u1111-dara again: B (sticky: True)
+
+== program: retry backoff with jitter
+base 0.1s, cap 10.0s, 8 attempts, 3 clients
+  attempt   no jitter  full#0  full#1  full#2
+        0       0.100   0.032   0.004   0.063
+        1       0.200   0.030   0.087   0.190
+        2       0.400   0.260   0.028   0.231
+        3       0.800   0.058   0.073   0.317
+        4       1.600   0.857   0.679   1.562
+        5       3.200   1.170   2.646   0.149
+        6       6.400   0.371   0.792   5.494
+        7      10.000   5.074   2.232   2.896
+  full jitter   totals 7.854, 6.541, 10.902  last 5.074, 2.232, 2.896
+  equal jitter  totals 16.739, 16.640, 19.012  last 6.862, 7.928, 9.376
+  decorrelated  totals 5.209, 23.246, 19.542  last 1.012, 10.000, 3.049
+  no jitter total 22.700: every client retries at the same instants
+
+== program: reservoir sampling of a log
+logs/app.log: 220 lines, a reservoir of 8
+     6  2026-10-20T09:01:05Z WARN  slow request /api/cart 480ms
+    12  2026-10-20T09:02:23Z WARN  slow request /healthz 1488ms
+    23  2026-10-20T09:04:46Z DEBUG cache lookup /search hit=True
+    58  2026-10-20T09:12:21Z DEBUG cache lookup /login hit=False
+    62  2026-10-20T09:13:13Z WARN  slow request /api/cart 1095ms
+   171  2026-10-20T09:36:50Z WARN  slow request /login 990ms
+   212  2026-10-20T09:45:43Z WARN  slow request /search 2340ms
+   216  2026-10-20T09:46:35Z INFO  request /api/cart 200 242ms
+17 ERROR lines, three for the incident review:
+  2026-10-20T09:39:52Z ERROR upstream timeout /healthz after 30000ms
+  2026-10-20T09:05:25Z ERROR upstream timeout /login after 30000ms
+  2026-10-20T09:14:05Z ERROR upstream timeout /api/products after 30000ms
+level counts {'DEBUG': 48, 'INFO': 118, 'WARN': 37, 'ERROR': 17}
+levels drawn by weight: ['INFO', 'INFO', 'INFO', 'DEBUG', 'INFO', 'INFO', 'INFO', 'WARN', 'WARN', 'INFO']
+replay order for lines 1-10: [6, 10, 5, 8, 1, 9, 7, 2, 4, 3]
+
+== program: Monte Carlo project estimate
+project/tasks.csv: 9 tasks, 2000 trials, deadline 40 days
+  triangular mean  30.56  P50  30.21  P80  33.72  P95  37.23  on time 99.2%
+  PERT       mean  27.07  P50  26.84  P80  29.47  P95  32.29  on time 100.0%
+  triangular totals, 21 to 45 days:
+   21.0- 23.4 ## 26
+   23.4- 25.8 ############## 147
+   25.8- 28.2 ######################################## 408
+   28.2- 30.6 ################################################# 499
+   30.6- 33.0 ######################################### 412
+   33.0- 35.4 ############################# 292
+   35.4- 37.8 ############### 151
+   37.8- 40.2 ##### 52
+   40.2- 42.6 # 11
+   42.6- 45.0  2
+
+== program: tournament draw and Secret Santa
+group A: Ben Okafor, Hugo Lefevre, Jonas Weber, Luis Ortega
+group B: Eun-ji Park, Maya Cohen, Isla McKay, Olu Adeyemi
+group C: Dmitri Volkov, Greta Lind, Priya Nair, Kavya Rao
+group D: Carla Mendes, Nils Berg, Farid Haddad, Aiko Tanaka
+groups with two players from one club: 1
+seeded: Aiko Tanaka, Farid Haddad, Kavya Rao, Isla McKay
+Secret Santa after 37 shuffles (nobody draws themselves or their own team):
+  Alex   -> Cyrus
+  Bea    -> Dana
+  Cyrus  -> Ines
+  Dana   -> Bea
+  Emre   -> Fen
+  Fen    -> Hal
+  Gita   -> Alex
+  Hal    -> Gita
+  Ines   -> Emre
+
+== program: synthetic test data
+user_id,name,age,height_cm,city,signup,plan,logins,token,tags
+811dae1305ce,Emma Muller,78,165.0,Lisbon,2025-02-24,free,9,ff4ebd01ab14,churn-risk|mobile
+a15eafaf35a5,Emma Smith,62,166.6,Lisbon,2025-04-02,free,9,6a67732996cd,vip|beta
+dce3f84bc1f8,Diego Kim,29,172.6,Osaka,2025-02-09,free,6,a66caff6ade6,mobile
+c508e2c8de26,Olivia Nguyen,59,161.9,Lisbon,2025-01-02,free,8,92dc200af33b,referral|vip
+e13e2b607b66,Amara Cohen,75,162.4,Lisbon,2025-09-15,pro,13,2b6c5b3759eb,churn-risk|beta|vip
+76909bd57437,Olivia Silva,46,173.5,Osaka,2025-06-01,pro,7,8082c6bc0952,beta|newsletter
+a62fd295eead,Diego Smith,35,171.3,Lisbon,2025-05-17,free,7,eaf90413afe5,mobile
+af60204b3384,Noah Garcia,73,168.1,Nairobi,2025-11-24,pro,9,52caeb672f48,referral|churn-risk
+861517c5d1e8,Sofia Smith,80,158.8,Reykjavik,2025-10-13,free,15,86131b95e2a7,
+110cb24a2be3,Mateo Garcia,77,164.7,Lisbon,2025-02-15,free,10,05ce6b1e2c63,vip
+419fdd24511c,Ava Garcia,75,177.7,Lisbon,2025-03-06,free,8,b023bd585370,churn-risk
+8ea3a54cbc3c,Liam Silva,32,164.9,Nairobi,2025-07-21,free,12,b7faf6500745,churn-risk
+137605318cb8,Noah Cohen,49,176.6,Osaka,2025-08-03,free,12,c882f177d776,mobile
+d14b33d7e52e,Nora Ivanova,36,183.0,Nairobi,2025-09-25,pro,8,7844c804be27,churn-risk|beta|referral
+b891313293bc,Sofia Smith,55,183.6,Nairobi,2025-03-11,free,10,fcb5dfa6bcb8,
+mean age 57.40, plans {'free': 11, 'pro': 4, 'team': 0}
+
+== program: weather station simulator
+station station-07, 24 hourly readings
+  00:00    7.9C  wind  6.7 m/s from 234.7  rain  0.7 mm
+  01:00    5.8C  wind  7.6 m/s from 327.2  rain  0.0 mm
+  02:00    7.3C  wind  8.8 m/s from 222.4  rain  0.0 mm
+  03:00    5.9C  wind  3.9 m/s from 213.1  rain  0.0 mm
+  04:00  --
+  05:00    5.0C  wind  2.8 m/s from 278.1  rain  0.8 mm
+  06:00    7.0C  wind  3.5 m/s from 211.4  rain  0.0 mm
+  07:00    9.0C  wind  3.3 m/s from 191.7  rain  0.0 mm
+  08:00   10.3C  wind  8.2 m/s from 257.6  rain  0.0 mm
+  09:00   11.5C  wind  1.4 m/s from 262.4  rain  0.0 mm
+  10:00   13.2C  wind  3.7 m/s from 264.3  rain  0.0 mm
+  11:00   15.1C  wind  8.8 m/s from 267.2  rain  0.0 mm
+  12:00   16.0C  wind  0.6 m/s from 208.3  rain  0.0 mm
+  13:00   17.7C  wind  4.5 m/s from 253.2  rain  0.0 mm
+  14:00   18.3C  wind  0.6 m/s from 284.8  rain  0.0 mm
+  15:00   17.6C  wind  6.3 m/s from 293.1  rain  0.0 mm
+  16:00   17.9C  wind  6.3 m/s from 275.3  rain  0.0 mm
+  17:00   17.6C  wind  0.6 m/s from 217.1  rain  0.0 mm
+  18:00   16.2C  wind  1.4 m/s from 287.5  rain  0.0 mm
+  19:00   12.9C  wind  1.3 m/s from 199.1  rain  0.0 mm
+  20:00   12.7C  wind  2.6 m/s from 263.1  rain  0.0 mm
+  21:00   11.4C  wind  7.0 m/s from 237.9  rain  0.0 mm
+  22:00   10.5C  wind  7.4 m/s from 277.5  rain  0.0 mm
+  23:00   10.4C  wind  2.0 m/s from 272.9  rain  0.0 mm
+  min 5.0C max 18.3C, mean wind 4.32 m/s, rain 1.5 mm, prevailing W, 1 readings lost
+  upload sizes (KB): 23.1, 10.1, 20.5, 25.9, 11.2, 55.6, 11.3, 22.3
+  clock drift factors: 0.9726, 1.0126, 0.9320, 0.9213
