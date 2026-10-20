@@ -441,6 +441,21 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     let resolved_elem = resolve_type_var_top(&elem, &self.env.substitutions);
                     let resolved_src = resolve_type_var_top(&src, &self.env.substitutions);
+                    // A literal of string literals takes `Str` from the
+                    // receiver's element (B-2026-10-20-6).
+                    let as_vec = |t: &Type| Type::Named {
+                        name: "Vec".into(),
+                        args: vec![t.clone()],
+                    };
+                    if resolved_elem != resolved_src
+                        && self.retype_literal(
+                            &as_vec(&resolved_elem),
+                            &arg_inner,
+                            args[0].value.span,
+                        )
+                    {
+                        return Some(Type::Unit);
+                    }
                     self.check_assignable(&resolved_elem, &resolved_src, args[0].value.span);
                     return Some(Type::Unit);
                 }

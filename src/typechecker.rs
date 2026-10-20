@@ -3058,6 +3058,10 @@ pub struct TypeChecker<'a> {
     /// elements' spans, so a slot that wants a tuple with a `Str` in it can
     /// still take a literal there as a `Str`.
     pub(super) tuple_literal_spans: FxHashMap<SpanKey, (crate::ids::NodeId, Vec<Span>)>,
+    /// B-2026-10-20-6 — the same for `Vec` and `Set` literals (`vec![..]`,
+    /// `Vec[..]`, a bare `[..]`), with the collection's name.
+    pub(super) collection_literal_spans:
+        FxHashMap<SpanKey, (crate::ids::NodeId, &'static str, Vec<Span>)>,
     pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
     /// B-2026-08-26-21 — index expressions whose read produces a FRESH
     /// value rather than an alias of a stored element: a range slice
@@ -3496,6 +3500,7 @@ impl<'a> TypeChecker<'a> {
             weak_elem_store_sites: FxHashSet::default(),
             string_literal_spans: FxHashMap::default(),
             tuple_literal_spans: FxHashMap::default(),
+            collection_literal_spans: FxHashMap::default(),
             weak_elem_read_sites: FxHashSet::default(),
             index_read_is_fresh_value: FxHashSet::default(),
             call_type_subs_mangle: FxHashMap::default(),
@@ -6102,44 +6107,78 @@ impl<'a> TypeChecker<'a> {
     /// a generic argument): each string literal under a `Str` slot is a
     /// `Str`, as a bare one is. Taken only when every other element already
     /// has its slot's type, so nothing else is accepted that was not before.
-    fn retype_tuple_literal(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
-        let Type::Tuple(fs) = found else {
-            return false;
-        };
+    /// A tuple or collection literal synthesised with a string literal
+    /// where its slot wants a `Str` view takes the slot's type, its literals
+    /// with it, nested literals included (B-2026-10-20-1, B-2026-10-20-6).
+    /// Any other difference leaves it as it is.
+    fn retype_literal(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         let want = inference::resolve_type_var_top(expected, &self.env.substitutions);
         let want = match want {
             Type::Ref(inner) => *inner,
             t => t,
         };
-        let Type::Tuple(es) = &want else {
-            return false;
+        let key = SpanKey::from_span(&span);
+        // The element types each side gives the literal's parts, one per part.
+        let (id, pairs) = match (found, &want) {
+            (Type::Tuple(fs), Type::Tuple(es)) => {
+                let Some((id, elems)) = self.tuple_literal_spans.get(&key).cloned() else {
+                    return false;
+                };
+                if es.len() != fs.len() || elems.len() != fs.len() {
+                    return false;
+                }
+                let pairs: Vec<(Type, Type, Span)> = es
+                    .iter()
+                    .zip(fs)
+                    .zip(elems)
+                    .map(|((e, f), at)| (e.clone(), f.clone(), at))
+                    .collect();
+                (id, pairs)
+            }
+            (
+                Type::Named {
+                    name: fname,
+                    args: fa,
+                },
+                Type::Named {
+                    name: ename,
+                    args: ea,
+                },
+            ) if fname == ename && fa.len() == 1 && ea.len() == 1 => {
+                let Some((id, kind, elems)) = self.collection_literal_spans.get(&key).cloned()
+                else {
+                    return false;
+                };
+                if kind != fname.as_str() {
+                    return false;
+                }
+                let pairs = elems
+                    .into_iter()
+                    .map(|at| (ea[0].clone(), fa[0].clone(), at))
+                    .collect();
+                (id, pairs)
+            }
+            _ => return false,
         };
-        let Some((id, elems)) = self
-            .tuple_literal_spans
-            .get(&SpanKey::from_span(&span))
-            .cloned()
-        else {
-            return false;
-        };
-        if es.len() != fs.len() || elems.len() != fs.len() {
-            return false;
-        }
         let mut retype = Vec::new();
-        for ((e, f), at) in es.iter().zip(fs).zip(&elems) {
-            let e = inference::resolve_type_var_top(e, &self.env.substitutions);
-            if &e == f {
+        for (e, f, at) in pairs {
+            let e = inference::resolve_type_var_top(&e, &self.env.substitutions);
+            if e == f {
                 continue;
             }
-            let key = SpanKey::from_span(at);
-            match (f, &e) {
+            let key = SpanKey::from_span(&at);
+            match (&f, &e) {
                 (Type::Str, view) if exprs::is_str_view(view) => {
                     let Some(lit) = self.string_literal_spans.get(&key).copied() else {
                         return false;
                     };
-                    retype.push((*at, lit, e.clone()));
+                    retype.push((at, lit, e.clone()));
                 }
-                (Type::Tuple(_), Type::Tuple(_)) if self.tuple_literal_spans.contains_key(&key) => {
-                    if !self.retype_tuple_literal(&e, f, *at) {
+                (Type::Tuple(_), Type::Tuple(_)) | (Type::Named { .. }, Type::Named { .. })
+                    if self.tuple_literal_spans.contains_key(&key)
+                        || self.collection_literal_spans.contains_key(&key) =>
+                {
+                    if !self.retype_literal(&e, &f, at) {
                         return false;
                     }
                 }
@@ -6153,6 +6192,75 @@ impl<'a> TypeChecker<'a> {
         self.record_expr_type(&span, &want);
         self.record_node_type(id, &want);
         true
+    }
+
+    /// core-semantics.md §5.10 and §4.1: a parameter of a `Copy` type
+    /// reads the same whether it is lent or copied, so `Fn(ref i64) -> i64`
+    /// and `Fn(i64) -> i64` are the same function type. A generic `Fn(V)`
+    /// borrows its bare `V` (D5), so at `V = i64` it is `Fn(ref i64)`, and a
+    /// `fn neg(x: i64)` serves it (B-2026-10-20-13).
+    fn copy_params_agree(&self, expected: &Type, found: &Type) -> bool {
+        let resolve = |t: &Type| {
+            inference::resolve_type_vars(
+                t,
+                &self.env.substitutions,
+                &std::collections::HashMap::new(),
+                &self.env.const_substitutions,
+                &std::collections::HashMap::new(),
+            )
+        };
+        let (mut want, mut have) = (resolve(expected), resolve(found));
+        if let (Type::Ref(w), Type::Ref(h)) = (&want, &have) {
+            (want, have) = (w.as_ref().clone(), h.as_ref().clone());
+        }
+        let (Some((wp, wr, w_once)), Some((hp, hr, h_once))) = (fn_parts(&want), fn_parts(&have))
+        else {
+            return false;
+        };
+        if wp.len() != hp.len() {
+            return false;
+        }
+        // Each pair where one side lends a `Copy` value the other copies
+        // compares the value types.
+        let mut read = false;
+        let (mut wp2, mut hp2) = (Vec::new(), Vec::new());
+        for (w, h) in wp.iter().zip(hp) {
+            match (w, h) {
+                (Type::Ref(x), h)
+                    if !matches!(h, Type::Ref(_)) && self.is_copy_type_during_check(h) =>
+                {
+                    read = true;
+                    wp2.push(x.as_ref().clone());
+                    hp2.push(h.clone());
+                }
+                (w, Type::Ref(x))
+                    if !matches!(w, Type::Ref(_)) && self.is_copy_type_during_check(w) =>
+                {
+                    read = true;
+                    wp2.push(w.clone());
+                    hp2.push(x.as_ref().clone());
+                }
+                _ => {
+                    wp2.push(w.clone());
+                    hp2.push(h.clone());
+                }
+            }
+        }
+        let rebuild = |params: Vec<Type>, ret: &Type, once: bool| {
+            let return_type = Box::new(ret.clone());
+            if once {
+                Type::OnceFunction {
+                    params,
+                    return_type,
+                }
+            } else {
+                Type::Function {
+                    params,
+                    return_type,
+                }
+            }
+        };
+        read && types::is_subtype(&rebuild(wp2, wr, w_once), &rebuild(hp2, hr, h_once))
     }
 
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
@@ -6180,7 +6288,10 @@ impl<'a> TypeChecker<'a> {
                 return true;
             }
         }
-        if self.retype_tuple_literal(expected, found, span) {
+        if self.retype_literal(expected, found, span) {
+            return true;
+        }
+        if self.copy_params_agree(expected, found) {
             return true;
         }
         // B-2026-10-01-53 — a `match` arm handing back a binding whose type
@@ -7479,5 +7590,20 @@ pub(crate) fn refine_node_types_from_wholes(
         if names_foreign_param(part_ty, scope(*part_frame)) && same_head(part_ty, &projected) {
             *part_ty = projected;
         }
+    }
+}
+
+/// A function type's parameters, return type and whether it is `OnceFn`.
+fn fn_parts(t: &Type) -> Option<(&[Type], &Type, bool)> {
+    match t {
+        Type::Function {
+            params,
+            return_type,
+        } => Some((params, return_type, false)),
+        Type::OnceFunction {
+            params,
+            return_type,
+        } => Some((params, return_type, true)),
+        _ => None,
     }
 }

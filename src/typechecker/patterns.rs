@@ -3909,6 +3909,20 @@ impl<'a> super::TypeChecker<'a> {
     /// is assignable to the first, after string literals beside a `Str`
     /// view take the view (`vec![("one", AB), ("two", "cd")]` with `AB: Str`,
     /// B-2026-10-14-68).
+    /// B-2026-10-20-6: a `Vec` or `Set` literal typed by synthesis, so a
+    /// later check may type its string literals as `Str`.
+    pub(super) fn record_collection_literal(
+        &mut self,
+        expr: &Expr,
+        kind: &'static str,
+        items: &[Expr],
+    ) {
+        self.collection_literal_spans.insert(
+            crate::resolver::SpanKey::from_span(&expr.span),
+            (expr.id, kind, items.iter().map(|e| e.span).collect()),
+        );
+    }
+
     pub(super) fn infer_collection_elements(&mut self, elements: &[Expr]) -> Type {
         let mut tys: Vec<Type> = vec![self.infer_expr(&elements[0])];
         for e in &elements[1..] {

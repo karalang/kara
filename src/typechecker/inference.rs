@@ -920,7 +920,7 @@ pub(super) fn unify_types(
         ) if xp.len() == yp.len() => {
             xp.iter()
                 .zip(yp.iter())
-                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
+                .all(|(x, y)| unify_fn_param(x, y, substitutions, const_substitutions))
                 && unify_types(xr, yr, substitutions, const_substitutions)
         }
         (
@@ -935,7 +935,7 @@ pub(super) fn unify_types(
         ) if xp.len() == yp.len() => {
             xp.iter()
                 .zip(yp.iter())
-                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
+                .all(|(x, y)| unify_fn_param(x, y, substitutions, const_substitutions))
                 && unify_types(xr, yr, substitutions, const_substitutions)
         }
         // `Fn → OnceFn` cross arm — propagates type-var substitutions
@@ -972,13 +972,42 @@ pub(super) fn unify_types(
         ) if xp.len() == yp.len() => {
             xp.iter()
                 .zip(yp.iter())
-                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
+                .all(|(x, y)| unify_fn_param(x, y, substitutions, const_substitutions))
                 && unify_types(xr, yr, substitutions, const_substitutions)
         }
         // Terminal / cross-shape cases handled by the existing
         // structural compatibility check (covers integer-coercion,
         // never, slice/vec coercions, etc).
         _ => types_compatible(&a, &b),
+    }
+}
+
+/// One parameter of two function types. core-semantics.md §5.10 and §4.1:
+/// a lent `Copy` value reads as the value, so a `ref ?V` parameter against
+/// an `i64` one binds `?V = i64`; `check_assignable` then accepts the pair
+/// (`copy_params_agree`). Scalars and tuples of them only, since nothing
+/// here can see a user type's `Copy` impl (B-2026-10-20-13).
+fn unify_fn_param(
+    x: &Type,
+    y: &Type,
+    substitutions: &mut FxHashMap<TypeVarId, Type>,
+    const_substitutions: &mut FxHashMap<ConstVarId, ConstArg>,
+) -> bool {
+    if unify_types(x, y, substitutions, const_substitutions) {
+        return true;
+    }
+    fn scalar(t: &Type) -> bool {
+        match t {
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => true,
+            Type::Tuple(ts) => !ts.is_empty() && ts.iter().all(scalar),
+            _ => false,
+        }
+    }
+    match (x, y) {
+        (Type::Ref(inner), other) | (other, Type::Ref(inner)) if scalar(other) => {
+            unify_types(inner, other, substitutions, const_substitutions)
+        }
+        _ => false,
     }
 }
 

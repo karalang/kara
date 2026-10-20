@@ -10277,3 +10277,78 @@ fn the_tls_server_and_websocket_wait_for_m4a() {
          fn main() { let w = WebSocket.accept(2); println(f\"{w.n}\"); }\n",
     );
 }
+
+/// B-2026-10-20-6: a `Vec` literal of string literals takes `Str` from the
+/// slot it is handed to, as a tuple literal does (B-2026-10-20-1): `extend`
+/// on a `Vec[Str]`, a generic method's `Vec[T]` at `T = Str`, a `Vec[Str]`
+/// parameter, and tuples inside the literal. A `String` value is still not a
+/// `Str`.
+#[test]
+fn a_vec_literal_takes_str_from_its_slot() {
+    accepted_and_runs(
+        "vec-literal-str-slot",
+        "struct Bag[T] { items: Vec[T] }\n\
+         impl[T] Bag[T] {\n\
+             fn add_all(mut ref self, xs: own Vec[T]) { self.items.extend(xs); }\n\
+         }\n\
+         fn total(v: Vec[Str]) -> i64 { v.len() }\n\
+         fn main() {\n\
+             let v: Vec[Str] = vec![\"a\", \"b\"];\n\
+             let mut w = v;\n\
+             w.extend(vec![\"c\", \"d\"]);\n\
+             w.extend(Vec[\"e\"]);\n\
+             let mut b: Bag[Str] = Bag { items: Vec.new() };\n\
+             b.add_all(vec![\"x\", \"y\"]);\n\
+             let mut p: Vec[(Str, i64)] = Vec.new();\n\
+             p.extend(vec![(\"q\", 1)]);\n\
+             p.extend([(\"r\", 2)]);\n\
+             println(f\"{w.len()} {w[4]} {b.items[1]} {total(vec![\"f\"])} {p[1].0}\");\n\
+         }\n",
+        "5 e y 1 r\n",
+    );
+    let (dir, path) = fixture(
+        "vec-literal-string-value",
+        "fn main() {\n    let s = \"x\".to_string();\n    \
+         let mut v: Vec[Str] = Vec.new();\n    v.extend(vec![s]);\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-10-20-13 (core-semantics.md §5.10, §4.1): a parameter of a `Copy`
+/// type reads the same lent or copied, so `Fn(ref i64) -> i64` and
+/// `Fn(i64) -> i64` are one function type. A generic `Fn(V)` borrows its
+/// bare `V`, and at `V = i64` a `fn neg(x: i64)` serves it. An owned
+/// `String` parameter is not a borrowed one, so that pairing is still
+/// refused.
+#[test]
+fn a_copy_parameter_is_the_same_lent_or_copied_in_a_function_type() {
+    accepted_and_runs(
+        "fn-copy-param",
+        "#[derive(Copy, Clone)]\n\
+         struct P { x: i64, y: i64 }\n\
+         fn neg(x: i64) -> i64 { -x }\n\
+         fn px(p: P) -> i64 { p.x * 10 + p.y }\n\
+         fn twice(x: ref i64) -> i64 { *x * 2 }\n\
+         fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+         fn apply_r(f: Fn(ref i64) -> i64, x: i64) -> i64 { f(x) }\n\
+         fn apply_g[V, K](f: Fn(V) -> K, x: V) -> K { f(x) }\n\
+         fn main() {\n\
+             let g: Fn(ref i64) -> i64 = neg;\n\
+             println(f\"{apply_g(neg, 4)} {apply_g(px, P { x: 1, y: 2 })} {apply(twice, 5)} {apply_r(neg, 6)} {g(7)}\");\n\
+         }\n",
+        "-4 12 10 -6 -7\n",
+    );
+    let (dir, path) = fixture(
+        "fn-owned-string-param",
+        "fn take(s: own String) -> i64 { s.len() }\n\
+         fn apply_g[V, K](f: Fn(V) -> K, x: V) -> K { f(x) }\n\
+         fn main() {\n    println(f\"{apply_g(take, \"ab\".to_string())}\");\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "check must reject: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

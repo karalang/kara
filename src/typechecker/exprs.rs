@@ -9789,6 +9789,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 } else {
                     let first_ty = self.infer_collection_elements(elements);
+                    self.record_collection_literal(expr, "Vec", elements);
                     Type::Named {
                         name: "Vec".to_string(),
                         args: vec![first_ty],
@@ -9828,6 +9829,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     "Vec" => {
                         let first_ty = self.infer_collection_elements(items);
+                        self.record_collection_literal(expr, "Vec", items);
                         Type::Named {
                             name: "Vec".to_string(),
                             args: vec![first_ty],
@@ -9835,6 +9837,7 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     "Set" => {
                         let first_ty = self.infer_collection_elements(items);
+                        self.record_collection_literal(expr, "Set", items);
                         Type::Named {
                             name: "Set".to_string(),
                             args: vec![first_ty],
