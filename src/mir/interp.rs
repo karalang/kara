@@ -3080,6 +3080,7 @@ impl<'a> Interp<'a> {
         let Value::Erased { body: name, env } = f else {
             return err(format!("call through {f:?}, which is not a function value"));
         };
+        let args = self.read_lent_args(&name, args, env.is_some())?;
         let Some((slot, env_ty)) = env else {
             return self.call(&name, args);
         };
@@ -3124,6 +3125,29 @@ impl<'a> Interp<'a> {
             self.free_slot(slot);
         }
         Ok(ret)
+    }
+
+    /// The arguments of a call through an erased value, each lent one
+    /// that the body takes by value read out of its reference: a function
+    /// type whose `Copy` parameter is lent (`Fn(ref i64)`, a generic
+    /// `Fn(V)` at `V = i64`) holds a body that takes it as a copy
+    /// (core-semantics.md §5.10; codegen's thunk, B-2026-10-20-19).
+    fn read_lent_args(&mut self, name: &str, mut args: Vec<Value>, env: bool) -> R<Vec<Value>> {
+        let program: &'a Program = self.program;
+        let Some(body) = program.bodies.get(name) else {
+            return Ok(args);
+        };
+        for (arg, l) in args.iter_mut().zip(body.args().skip(usize::from(env))) {
+            let lent = matches!(arg, Value::Ref(_))
+                && !matches!(
+                    self.tys.kind(body.local(l).ty),
+                    TyKind::Ref(_) | TyKind::MutRef(_) | TyKind::RawPtr { .. }
+                );
+            if let (true, Value::Ref(a)) = (lent, &*arg) {
+                *arg = self.slot(a)?;
+            }
+        }
+        Ok(args)
     }
 
     /// Drops what is left of a held closure's environment.

@@ -6410,3 +6410,97 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
     }
 }
+
+/// B-2026-10-20-19: a function item or closure stored in a generic `Fn(V) -> K` field at a `Copy` `V` is erased once, to the field's type, and the interpreter reads the lent argument out for a body that takes it by value.
+#[test]
+fn mir_function_into_a_lent_fn_field_erases_once() {
+    let cases = [
+        (
+            r#"struct Keyed[V, K] { key: Fn(V) -> K }
+fn neg(x: i64) -> i64 { -x }
+fn main() { let k = Keyed { key: neg }; println(f"{(k.key)(7)}"); }
+"#,
+            "-7\n",
+        ),
+        (
+            r#"fn bump(out: mut ref Vec[i64], xs: ref Vec[i64]) {
+    xs.iter().for_each(|x| out.push(*x + 1));
+}
+struct Keyed[V, K] { key: Fn(V) -> K }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    bump(mut v, vec![1, 2]);
+    println(f"{v.len()} {v[1]}");
+    let k = Keyed { key: |x: i64| x * 2 };
+    println(f"{(k.key)(21)}");
+}
+"#,
+            "2 3\n42\n",
+        ),
+        (
+            r#"fn apply_g[V, K](f: Fn(V) -> K, x: V) -> K { f(x) }
+fn neg(x: i64) -> i64 { -x }
+fn main() {
+    println(f"{apply_g(neg, 4)}");
+    println(f"{apply_g(|x: i64| x * 2, 5)}");
+    let g: Fn(ref i64) -> i64 = neg;
+    println(f"{g(3)}");
+}
+"#,
+            "-4\n10\n-3\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want, "__mir-run");
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
+
+/// B-2026-10-20-21: a closure capturing a `ref` binding (a parameter, a `let .. = ref ..`, a `for` item) holds that reference, so `*key` in its body reads through it once.
+#[test]
+fn mir_closure_derefs_a_captured_reference() {
+    let cases = [
+        (
+            r#"fn has(v: ref Vec[(String, i64)], key: ref String) -> bool {
+    v.iter().any(|t| t.0 == *key)
+}
+fn main() {
+    let v = vec![("a".to_string(), 1), ("b".to_string(), 2)];
+    println(f"{has(v, "b".to_string())} {has(v, "c".to_string())}");
+}
+"#,
+            "true false\n",
+        ),
+        (
+            r#"fn main() {
+    let k = "b".to_string();
+    let key = ref k;
+    let v = vec!["a".to_string(), "b".to_string()];
+    println(f"{v.iter().any(|t| *t == *key)}");
+    let pending = vec![("a".to_string(), 1), ("c".to_string(), 3)];
+    let names = vec!["c".to_string(), "z".to_string()];
+    for s in names.iter() {
+        println(f"{pending.iter().any(|t| t.0 == *s)}");
+    }
+}
+"#,
+            "true\ntrue\nfalse\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want, "__mir-run");
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}

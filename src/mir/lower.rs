@@ -661,6 +661,10 @@ struct ClosureJob<'a> {
     /// For each capture, the field of the symbol's struct it borrows when
     /// the closure captures fields apart (core semantics §9.1).
     fields: Vec<Option<String>>,
+    /// For each capture, whether the binding is itself a reference: the
+    /// field holds that reference (a borrow of a borrow is the borrow), so
+    /// the body names the field rather than what it points to.
+    lent: Vec<bool>,
     env: EnvMode,
     ty: Ty,
     /// Its parameters borrow what the caller passes: a closure handed to
@@ -4985,6 +4989,16 @@ impl<'l, 'a> Bx<'l, 'a> {
                     self.expr_into(e, Place::local(l))?;
                     return Ok(Operand::Move(Place::local(l)));
                 }
+            }
+            // A function item or closure the checker typed as one function
+            // type, going to a slot of another (a generic `Fn(V)` field at a
+            // `Copy` `V` lends its argument), is erased once, straight to the
+            // slot's type: an erase from one `Fn` to another is a copy
+            // (B-2026-10-20-19).
+            if matches!(tcx.kind(et), HK::Fn { .. }) && matches!(tcx.kind(want), HK::Fn { .. }) {
+                let l = self.temp(want);
+                self.expr_into(e, Place::local(l))?;
+                return Ok(Operand::Move(Place::local(l)));
             }
         }
         let op = self.expr_operand(e)?;
@@ -14241,6 +14255,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             .unwrap_or_default();
         let mut caps = Vec::new();
         let mut fields = Vec::new();
+        let mut lent = Vec::new();
         let mut ops = Vec::new();
         // Whether the body writes a capture, which then needs the
         // environment lent mutably even when the capture was moved in.
@@ -14338,6 +14353,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                         self.assign(r, Rvalue::Ref(kind, place.field(idx, ft)));
                         caps.push((sym, cm, rt));
                         fields.push(Some(name));
+                        lent.push(false);
                         ops.push(Operand::Move(Place::local(r)));
                     }
                     continue;
@@ -14360,6 +14376,10 @@ impl<'l, 'a> Bx<'l, 'a> {
             };
             caps.push((sym, cm, ft));
             fields.push(None);
+            lent.push(
+                cm != CapMode::Value
+                    && matches!(self.tys().tcx().kind(t), HK::Ref(_) | HK::MutRef(_)),
+            );
             ops.push(op);
         }
         let env = if (once || !moved.is_empty())
@@ -14407,6 +14427,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             args: self.args.clone(),
             caps,
             fields,
+            lent,
             env,
             ty,
             ref_params,
@@ -14441,8 +14462,8 @@ impl<'l, 'a> Bx<'l, 'a> {
         for (k, &(sym, cm, ft)) in job.caps.iter().enumerate() {
             let p = base.field(k as u32, ft);
             let p = match cm {
-                CapMode::Value => p,
-                CapMode::Ref | CapMode::Mut => p.project(ProjElem::Deref),
+                CapMode::Ref | CapMode::Mut if !job.lent[k] => p.project(ProjElem::Deref),
+                _ => p,
             };
             match &job.fields[k] {
                 Some(name) => {
