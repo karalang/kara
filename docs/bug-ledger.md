@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 278 |
 | false-positive | 256 |
 | other | 185 |
-| diagnostics | 182 |
+| diagnostics | 183 |
 | perf | 180 |
 | crash | 126 |
 | soundness | 125 |
@@ -115,8 +115,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 521 |
 | ownership | 124 |
 | other | 122 |
+| cli | 82 |
 | runtime | 81 |
-| cli | 81 |
 | parser | 76 |
 | autopar | 59 |
 | resolver | 48 |
@@ -175,6 +175,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-33 | 2026-10-20 | typecheck | low | A `flat_map` closure that returns a collection (`|x| pairs(*x)` returning `Vec[i64]`) gets E0200 listing all 29 `Iterator` implementors and no `.into_iter()` hint, then a second E0236 at the same span; design.md promises the `.into_iter()` suggestion for the `for` case only, but the fix here is the same one call | — |
 | B-2026-10-20-34 | 2026-10-20 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's `Copy` parameter or local by `ref`, so `(0..n).flat_map(|i| (i + 1..n).map(|j| i * 10 + j))` is refused (E0509 'the result borrows `i`', or E0516 for a local) by `karac check` and by MIR borrowck; core-semantics.md §9.1 ('a place that dies first is moved in') and §9.3 (a returned closure escapes and captures by move) both make the capture a copy, and Kāra has no `move` to ask for one | — |
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
+| B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
 
 ### Relocated
 
