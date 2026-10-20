@@ -1,0 +1,1359 @@
+// mini_filecmp: Python 3.13's filecmp module, ported from
+// Lib/filecmp.py: cmp() with its stat-signature shortcut and its cache,
+// cmpfiles(), and dircmp with every attribute, its three reports and its
+// ignore and hide lists, plus the `python -m filecmp [-r]` demo with the
+// getopt rules it runs under.
+//
+// The run builds work/ first from the tree descriptions in
+// data/trees/: files with set modification times, directories and
+// symbolic links, one of them dangling. The last jobs are programs on
+// top of filecmp: a deploy drift check between a release build and the
+// copy on a server, a nightly backup check that shows what a shallow
+// compare misses, and a mirror sync that plans and applies the changes
+// and then checks the trees again.
+
+// ------------------------------------------------------------ text
+
+fn split_on(s: ref String, sep: char) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if c == sep {
+            out.push(cur);
+            cur = String.new();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
+}
+
+// str.split(sep, 1)
+fn split_once(s: ref String, sep: char) -> Option[(String, String)] {
+    let v = chars(s);
+    for i in 0..v.len() {
+        if v[i] == sep {
+            return Some((slice(v, 0, i), slice(v, i + 1, v.len())));
+        }
+    }
+    None
+}
+
+fn join(parts: ref Vec[String], sep: ref String) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+fn chars(s: ref String) -> Vec[char] {
+    s.chars().collect()
+}
+
+fn slice(v: ref Vec[char], lo: i64, hi: i64) -> String {
+    let mut out = String.new();
+    let mut i = lo;
+    while i < hi {
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn has_char(s: ref String, c: char) -> bool {
+    for d in s.chars() {
+        if d == c {
+            return true;
+        }
+    }
+    false
+}
+
+// str.find(c, start); -1 when absent
+fn find_from(v: ref Vec[char], c: char, start: i64) -> i64 {
+    let mut i = start;
+    while i < v.len() {
+        if v[i] == c {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn rfind_char(v: ref Vec[char], c: char) -> i64 {
+    let mut i = v.len() - 1;
+    while i >= 0 {
+        if v[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+// The characters str.split() and str.strip() treat as whitespace.
+fn is_py_space(c: char) -> bool {
+    let n = c as u32;
+    (n >= 9 and n <= 13) or (n >= 28 and n <= 32) or n == 0x85 or n == 0xa0 or n == 0x1680
+        or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029 or n == 0x202f
+        or n == 0x205f or n == 0x3000
+}
+
+fn split_ws(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    let mut cur = String.new();
+    for c in s.chars() {
+        if is_py_space(c) {
+            if not cur.is_empty() {
+                out.push(cur);
+                cur = String.new();
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if not cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn strip(s: ref String) -> String {
+    let v = chars(s);
+    let mut lo = 0;
+    let mut hi = v.len();
+    while lo < hi and is_py_space(v[lo]) {
+        lo += 1;
+    }
+    while hi > lo and is_py_space(v[hi - 1]) {
+        hi -= 1;
+    }
+    slice(v, lo, hi)
+}
+
+fn pad_left(s: ref String, n: i64) -> String {
+    let mut out = String.new();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out.push_str(s);
+    out
+}
+
+fn pad_right(s: ref String, n: i64) -> String {
+    let mut out = s.clone();
+    let w = s.chars().count();
+    for _ in w..n {
+        out.push(' ');
+    }
+    out
+}
+
+fn lower(s: ref String) -> String {
+    s.to_lowercase()
+}
+
+const HEX: Str = "0123456789abcdef";
+
+fn hex2(n: u32) -> String {
+    let d = chars(HEX.to_string());
+    let mut out = String.new();
+    out.push(d[((n >> 4) & 15) as i64]);
+    out.push(d[(n & 15) as i64]);
+    out
+}
+
+fn hex_val(c: char) -> i64 {
+    let d = chars(HEX.to_string());
+    let l = lower(f"{c}");
+    let lc = chars(l)[0];
+    for i in 0..16 {
+        if d[i] == lc {
+            return i;
+        }
+    }
+    -1
+}
+
+fn is_hex_digit(c: char) -> bool {
+    (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+}
+
+fn is_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn is_ascii_alpha(c: char) -> bool {
+    (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')
+}
+
+// ------------------------------------------------------------ Python reprs
+
+fn repr_str(s: ref String) -> String {
+    let q = if has_char(s, '\'') and not has_char(s, '"') { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        let n = c as u32;
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if n < 32 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+            out.push_str(f"\\x{hex2(n)}");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    out
+}
+
+fn repr_opt(s: ref Option[String]) -> String {
+    match s {
+        Some(t) => repr_str(t),
+        None => "None".to_string(),
+    }
+}
+
+fn repr_pair(t: ref (Option[String], Option[String])) -> String {
+    f"({repr_opt(t.0)}, {repr_opt(t.1)})"
+}
+
+fn repr_strs(v: ref Vec[String]) -> String {
+    let r: Vec[String] = v.iter().map(|s| repr_str(s)).collect();
+    f"[{join(r, ", ")}]"
+}
+
+fn opt_or(s: ref Option[String], d: Str) -> String {
+    match s {
+        Some(t) => t.clone(),
+        None => d.to_string(),
+    }
+}
+
+
+// ------------------------------------------------------------ the file system
+
+// Every path the jobs name is relative to work/, the way the oracle
+// runs after os.chdir("work").
+const WORK: Str = "work/";
+
+fn wp(p: ref String) -> String {
+    f"{WORK}{p}"
+}
+
+fn join_path(a: ref String, x: ref String) -> String {
+    if a.ends_with("/") { f"{a}{x}" } else { f"{a}/{x}" }
+}
+
+// An OSError as Python prints it.
+fn os_err(e: ref IoError, path: ref String) -> String {
+    match e {
+        IoError.NotFound => f"FileNotFoundError: [Errno 2] No such file or directory: {repr_str(path)}",
+        IoError.PermissionDenied => f"PermissionError: [Errno 13] Permission denied: {repr_str(path)}",
+        IoError.Other(m) => {
+            if m.contains("Not a directory") {
+                f"NotADirectoryError: [Errno 20] Not a directory: {repr_str(path)}"
+            } else {
+                f"OSError: {m}: {repr_str(path)}"
+            }
+        }
+        _ => f"OSError: {repr_str(path)}",
+    }
+}
+
+const S_IFREG: i64 = 0o100000;
+const S_IFDIR: i64 = 0o040000;
+const S_IFOTHER: i64 = 0o010000;
+
+// os.stat(path): follows symbolic links.
+fn stat(p: ref String) -> Result[Sig, String] {
+    match fs.metadata(wp(p)) {
+        Ok(m) => {
+            let kind = if m.is_file { S_IFREG } else if m.is_dir { S_IFDIR } else { S_IFOTHER };
+            Ok(Sig { kind: kind, size: m.len, mtime: m.modified_ms })
+        }
+        Err(e) => Err(os_err(e, p)),
+    }
+}
+
+fn is_dir(p: ref String) -> bool {
+    match stat(p) {
+        Ok(s) => s.kind == S_IFDIR,
+        Err(_) => false,
+    }
+}
+
+fn listdir(p: ref String) -> Result[Vec[String], String] {
+    match fs.read_dir(wp(p)) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(os_err(e, p)),
+    }
+}
+
+// ------------------------------------------------------------ cmp
+
+// _sig(): the file type, size and modification time.
+#[derive(Clone, PartialEq)]
+struct Sig {
+    kind: i64,
+    size: i64,
+    mtime: i64,
+}
+
+struct CacheEntry {
+    f1: String,
+    f2: String,
+    s1: Sig,
+    s2: Sig,
+    outcome: bool,
+}
+
+struct Filecmp {
+    cache: Vec[CacheEntry],
+}
+
+impl Filecmp {
+    fn new() -> Filecmp {
+        Filecmp { cache: Vec.new() }
+    }
+
+    fn clear_cache(mut ref self) {
+        self.cache.clear();
+    }
+
+    fn lookup(ref self, f1: ref String, f2: ref String, s1: ref Sig, s2: ref Sig) -> Option[bool] {
+        for e in self.cache.iter() {
+            if e.f1 == *f1 and e.f2 == *f2 and e.s1 == *s1 and e.s2 == *s2 {
+                return Some(e.outcome);
+            }
+        }
+        None
+    }
+
+    // cmp(f1, f2, shallow): True when the files are taken to be the same.
+    fn cmp(mut ref self, f1: ref String, f2: ref String, shallow: bool) -> Result[bool, String] {
+        let s1 = stat(f1)?;
+        let s2 = stat(f2)?;
+        if s1.kind != S_IFREG or s2.kind != S_IFREG {
+            return Ok(false);
+        }
+        if shallow and s1 == s2 {
+            return Ok(true);
+        }
+        if s1.size != s2.size {
+            return Ok(false);
+        }
+        match self.lookup(f1, f2, s1, s2) {
+            Some(o) => Ok(o),
+            None => {
+                let outcome = do_cmp(f1, f2)?;
+                if self.cache.len() > 100 {
+                    self.clear_cache();
+                }
+                self.cache.push(CacheEntry { f1: f1.clone(), f2: f2.clone(), s1: s1, s2: s2, outcome: outcome });
+                Ok(outcome)
+            }
+        }
+    }
+
+    // _cmp(): 0 for equal, 1 for different, 2 when it cannot compare.
+    fn cmp_code(mut ref self, a: ref String, b: ref String, shallow: bool) -> i64 {
+        match self.cmp(a, b, shallow) {
+            Ok(true) => 0,
+            Ok(false) => 1,
+            Err(_) => 2,
+        }
+    }
+
+    // cmpfiles(a, b, common, shallow)
+    fn cmpfiles(mut ref self, a: ref String, b: ref String, common: ref Vec[String], shallow: bool) -> (Vec[String], Vec[String], Vec[String]) {
+        let mut same: Vec[String] = Vec.new();
+        let mut diff: Vec[String] = Vec.new();
+        let mut funny: Vec[String] = Vec.new();
+        for x in common.iter() {
+            let code = self.cmp_code(join_path(a, x), join_path(b, x), shallow);
+            if code == 0 {
+                same.push(x.clone());
+            } else if code == 1 {
+                diff.push(x.clone());
+            } else {
+                funny.push(x.clone());
+            }
+        }
+        (same, diff, funny)
+    }
+}
+
+fn do_cmp(f1: ref String, f2: ref String) -> Result[bool, String] {
+    let b1 = match fs.read_bytes(wp(f1)) {
+        Ok(b) => b,
+        Err(e) => return Err(os_err(e, f1)),
+    };
+    let b2 = match fs.read_bytes(wp(f2)) {
+        Ok(b) => b,
+        Err(e) => return Err(os_err(e, f2)),
+    };
+    Ok(b1 == b2)
+}
+
+// ------------------------------------------------------------ dircmp
+
+fn default_ignores() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for s in ["RCS", "CVS", "tags", ".git", ".hg", ".bzr", "_darcs", "__pycache__"] {
+        v.push(s.to_string());
+    }
+    v
+}
+
+fn default_hide() -> Vec[String] {
+    vec![".".to_string(), "..".to_string()]
+}
+
+struct Dircmp {
+    left: String,
+    right: String,
+    ignore: Vec[String],
+    hide: Vec[String],
+    shallow: bool,
+    done: bool,
+    left_list: Vec[String],
+    right_list: Vec[String],
+    common: Vec[String],
+    left_only: Vec[String],
+    right_only: Vec[String],
+    common_dirs: Vec[String],
+    common_files: Vec[String],
+    common_funny: Vec[String],
+    same_files: Vec[String],
+    diff_files: Vec[String],
+    funny_files: Vec[String],
+}
+
+fn contains(v: ref Vec[String], s: ref String) -> bool {
+    for x in v.iter() {
+        if *x == *s {
+            return true;
+        }
+    }
+    false
+}
+
+// _filter(): the names not in skip.
+fn filter_out(names: ref Vec[String], skip: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for n in names.iter() {
+        if not contains(skip, n) {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
+fn dircmp(a: ref String, b: ref String, ignore: own Option[Vec[String]], hide: own Option[Vec[String]], shallow: bool) -> Dircmp {
+    Dircmp {
+        left: a.clone(),
+        right: b.clone(),
+        ignore: match ignore {
+            Some(v) => v,
+            None => default_ignores(),
+        },
+        hide: match hide {
+            Some(v) => v,
+            None => default_hide(),
+        },
+        shallow: shallow,
+        done: false,
+        left_list: Vec.new(),
+        right_list: Vec.new(),
+        common: Vec.new(),
+        left_only: Vec.new(),
+        right_only: Vec.new(),
+        common_dirs: Vec.new(),
+        common_files: Vec.new(),
+        common_funny: Vec.new(),
+        same_files: Vec.new(),
+        diff_files: Vec.new(),
+        funny_files: Vec.new(),
+    }
+}
+
+impl Dircmp {
+    // phase0 to phase3, run the first time any attribute is read.
+    fn compute(mut ref self, fc: mut ref Filecmp) -> Result[(), String] {
+        if self.done {
+            return Ok(());
+        }
+        // phase0
+        let mut skip = self.hide.clone();
+        for x in self.ignore.iter() {
+            skip.push(x.clone());
+        }
+        let mut ll = filter_out(listdir(self.left)?, skip);
+        let mut rl = filter_out(listdir(self.right)?, skip);
+        ll.sort();
+        rl.sort();
+        // phase1
+        let mut common: Vec[String] = Vec.new();
+        let mut left_only: Vec[String] = Vec.new();
+        let mut right_only: Vec[String] = Vec.new();
+        for x in ll.iter() {
+            if contains(rl, x) {
+                common.push(x.clone());
+            } else {
+                left_only.push(x.clone());
+            }
+        }
+        for x in rl.iter() {
+            if not contains(ll, x) {
+                right_only.push(x.clone());
+            }
+        }
+        // phase2
+        let mut dirs: Vec[String] = Vec.new();
+        let mut files: Vec[String] = Vec.new();
+        let mut funny: Vec[String] = Vec.new();
+        for x in common.iter() {
+            let a = stat(join_path(self.left, x));
+            let b = stat(join_path(self.right, x));
+            match (a, b) {
+                (Ok(sa), Ok(sb)) => {
+                    if sa.kind != sb.kind {
+                        funny.push(x.clone());
+                    } else if sa.kind == S_IFDIR {
+                        dirs.push(x.clone());
+                    } else if sa.kind == S_IFREG {
+                        files.push(x.clone());
+                    } else {
+                        funny.push(x.clone());
+                    }
+                }
+                _ => funny.push(x.clone()),
+            }
+        }
+        // phase3
+        let (same, diff, fun) = fc.cmpfiles(self.left, self.right, files, self.shallow);
+        self.left_list = ll;
+        self.right_list = rl;
+        self.common = common;
+        self.left_only = left_only;
+        self.right_only = right_only;
+        self.common_dirs = dirs;
+        self.common_files = files;
+        self.common_funny = funny;
+        self.same_files = same;
+        self.diff_files = diff;
+        self.funny_files = fun;
+        self.done = true;
+        Ok(())
+    }
+
+    // phase4: a dircmp for each common subdirectory, inheriting ignore
+    // and hide.
+    fn subdirs(ref self) -> Vec[(String, Dircmp)] {
+        let mut out: Vec[(String, Dircmp)] = Vec.new();
+        for x in self.common_dirs.iter() {
+            out.push((x.clone(), dircmp(join_path(self.left, x), join_path(self.right, x), Some(self.ignore.clone()), Some(self.hide.clone()), self.shallow)));
+        }
+        out
+    }
+
+    fn report(mut ref self, fc: mut ref Filecmp) -> Result[(), String] {
+        println(f"diff {self.left} {self.right}");
+        self.compute(mut fc)?;
+        if not self.left_only.is_empty() {
+            self.left_only.sort();
+            println(f"Only in {self.left} : {repr_strs(self.left_only)}");
+        }
+        if not self.right_only.is_empty() {
+            self.right_only.sort();
+            println(f"Only in {self.right} : {repr_strs(self.right_only)}");
+        }
+        if not self.same_files.is_empty() {
+            self.same_files.sort();
+            println(f"Identical files : {repr_strs(self.same_files)}");
+        }
+        if not self.diff_files.is_empty() {
+            self.diff_files.sort();
+            println(f"Differing files : {repr_strs(self.diff_files)}");
+        }
+        if not self.funny_files.is_empty() {
+            self.funny_files.sort();
+            println(f"Trouble with common files : {repr_strs(self.funny_files)}");
+        }
+        if not self.common_dirs.is_empty() {
+            self.common_dirs.sort();
+            println(f"Common subdirectories : {repr_strs(self.common_dirs)}");
+        }
+        if not self.common_funny.is_empty() {
+            self.common_funny.sort();
+            println(f"Common funny cases : {repr_strs(self.common_funny)}");
+        }
+        Ok(())
+    }
+
+    fn report_partial_closure(mut ref self, fc: mut ref Filecmp) -> Result[(), String] {
+        self.report(mut fc)?;
+        for (_, sd) in self.subdirs().into_iter() {
+            println("");
+            let mut d = sd;
+            d.report(mut fc)?;
+        }
+        Ok(())
+    }
+
+    fn report_full_closure(mut ref self, fc: mut ref Filecmp) -> Result[(), String] {
+        self.report(mut fc)?;
+        for (_, sd) in self.subdirs().into_iter() {
+            println("");
+            let mut d = sd;
+            d.report_full_closure(mut fc)?;
+        }
+        Ok(())
+    }
+}
+
+// ------------------------------------------------------------ getopt
+
+// getopt.getopt(args, "r") with no long options.
+fn getopt_r(argv: ref Vec[String]) -> Result[(Vec[(String, String)], Vec[String]), String] {
+    let mut opts: Vec[(String, String)] = Vec.new();
+    let mut i = 0;
+    while i < argv.len() and argv[i].starts_with("-") and argv[i] != "-" {
+        if argv[i] == "--" {
+            i += 1;
+            break;
+        }
+        let v = chars(argv[i]);
+        if argv[i].starts_with("--") {
+            let mut name = slice(v, 2, v.len());
+            let eq = find_from(chars(name), '=', 0);
+            if eq >= 0 {
+                name = slice(chars(name), 0, eq);
+            }
+            return Err(f"option --{name} not recognized");
+        }
+        for k in 1..v.len() {
+            if v[k] == 'r' {
+                opts.push(("-r".to_string(), String.new()));
+            } else {
+                return Err(f"option -{v[k]} not recognized");
+            }
+        }
+        i += 1;
+    }
+    let mut args: Vec[String] = Vec.new();
+    while i < argv.len() {
+        args.push(argv[i].clone());
+        i += 1;
+    }
+    Ok((opts, args))
+}
+
+// ------------------------------------------------------------ building work/
+
+fn unesc(s: ref String) -> String {
+    let v = chars(s);
+    let mut out = String.new();
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == '\\' and i + 1 < v.len() {
+            let c = v[i + 1];
+            if c == 'n' {
+                out.push('\n');
+            } else if c == 't' {
+                out.push('\t');
+            } else {
+                out.push(c);
+            }
+            i += 2;
+            continue;
+        }
+        out.push(v[i]);
+        i += 1;
+    }
+    out
+}
+
+fn write_file(p: ref String, body: ref String, mtime: i64) -> Result[(), String] {
+    if let Err(e) = fs.write(wp(p), body.clone()) {
+        return Err(os_err(e, p));
+    }
+    if let Err(e) = fs.set_modified(wp(p), mtime * 1000) {
+        return Err(os_err(e, p));
+    }
+    Ok(())
+}
+
+fn read_text(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path) {
+        Ok(t) => Ok(t),
+        Err(e) => Err(os_err(e, path.to_string())),
+    }
+}
+
+fn build(name: ref String) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(wp(name)) {
+        return Err(os_err(e, name));
+    }
+    let text = read_text(f"data/trees/{name}.tsv")?;
+    let mut lines = split_on(text, '\n');
+    lines.pop();
+    for line in lines.iter() {
+        if line.is_empty() {
+            continue;
+        }
+        let f = split_on(line, '\t');
+        let p = join_path(name, f[1]);
+        if f[0] == "d" {
+            if let Err(e) = fs.create_dir_all(wp(p)) {
+                return Err(os_err(e, p));
+            }
+        } else if f[0] == "f" {
+            write_file(p, unesc(f[3]), i64.parse(f[2]).unwrap_or(0))?;
+        } else {
+            if let Err(e) = fs.symlink(f[3], wp(p)) {
+                return Err(os_err(e, p));
+            }
+        }
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------ the jobs
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+// "-" means the default (None), "" an empty list
+fn names(field: ref String) -> Option[Vec[String]] {
+    if field == "-" {
+        return None;
+    }
+    if field.is_empty() {
+        return Some(Vec.new());
+    }
+    Some(split_on(field, ','))
+}
+
+fn repr_names(n: ref Option[Vec[String]]) -> String {
+    match n {
+        Some(v) => repr_strs(v),
+        None => "None".to_string(),
+    }
+}
+
+fn show_triple(t: ref (Vec[String], Vec[String], Vec[String])) -> String {
+    f"({repr_strs(t.0)}, {repr_strs(t.1)}, {repr_strs(t.2)})"
+}
+
+fn attrs(d: mut ref Dircmp, fc: mut ref Filecmp) -> Result[(), String] {
+    d.compute(mut fc)?;
+    println(f"  left_list: {repr_strs(d.left_list)}");
+    println(f"  right_list: {repr_strs(d.right_list)}");
+    println(f"  common: {repr_strs(d.common)}");
+    println(f"  left_only: {repr_strs(d.left_only)}");
+    println(f"  right_only: {repr_strs(d.right_only)}");
+    println(f"  common_dirs: {repr_strs(d.common_dirs)}");
+    println(f"  common_files: {repr_strs(d.common_files)}");
+    println(f"  common_funny: {repr_strs(d.common_funny)}");
+    println(f"  same_files: {repr_strs(d.same_files)}");
+    println(f"  diff_files: {repr_strs(d.diff_files)}");
+    println(f"  funny_files: {repr_strs(d.funny_files)}");
+    let subs: Vec[String] = d.subdirs().iter().map(|s| s.0.clone()).collect();
+    println(f"  subdirs: {repr_strs(subs)}");
+    Ok(())
+}
+
+fn demo(line: ref String, fc: mut ref Filecmp) -> Result[(), String] {
+    let argv = split_on(line, ' ');
+    let (opts, args) = match getopt_r(argv) {
+        Ok(r) => r,
+        Err(m) => return Err(f"GetoptError: {m}"),
+    };
+    if args.len() != 2 {
+        return Err("GetoptError: need exactly two args".to_string());
+    }
+    let mut dd = dircmp(args[0], args[1], None, None, true);
+    let mut rec = false;
+    for o in opts.iter() {
+        if o.0 == "-r" and o.1.is_empty() {
+            rec = true;
+        }
+    }
+    if rec { dd.report_full_closure(mut fc) } else { dd.report(mut fc) }
+}
+
+fn run_op(f: ref Vec[String], fc: mut ref Filecmp) -> Result[(), String] {
+    let op = f[0].clone();
+    if op == "cmp" {
+        let sh = f[3] == "shallow";
+        let r = fc.cmp(f[1], f[2], sh)?;
+        println(f"cmp({repr_str(f[1])}, {repr_str(f[2])}, shallow={py_bool(sh)}) = {py_bool(r)}");
+    } else if op == "write" {
+        write_file(f[1], unesc(f[2]), i64.parse(f[3]).unwrap_or(0))?;
+        println(f"wrote {f[1]} (mtime {f[3]})");
+    } else if op == "clear_cache" {
+        fc.clear_cache();
+        println("clear_cache()");
+    } else if op == "cmpfiles" {
+        let common = if f[3].is_empty() { Vec.new() } else { split_on(f[3], ',') };
+        let sh = f[4] == "shallow";
+        let r = fc.cmpfiles(f[1], f[2], common, sh);
+        println(f"cmpfiles({repr_str(f[1])}, {repr_str(f[2])}, {repr_strs(common)}, shallow={py_bool(sh)}) = {show_triple(r)}");
+    } else if op == "attrs" or op == "report" or op == "partial" or op == "full" {
+        let ig = names(f[3]);
+        let hi = names(f[4]);
+        println(f"{op} {f[1]} {f[2]} ignore={repr_names(ig)} hide={repr_names(hi)} {f[5]}:");
+        let mut d = dircmp(f[1], f[2], ig, hi, f[5] == "shallow");
+        if op == "attrs" {
+            attrs(mut d, mut fc)?;
+        } else if op == "report" {
+            d.report(mut fc)?;
+        } else if op == "partial" {
+            d.report_partial_closure(mut fc)?;
+        } else {
+            d.report_full_closure(mut fc)?;
+        }
+    } else if op == "demo" {
+        println(f"$ python -m filecmp {f[1]}");
+        demo(f[1], mut fc)?;
+    } else {
+        println(f"bad op {op}");
+    }
+    Ok(())
+}
+
+fn run_job(name: ref String, lines: ref Vec[String], fc: mut ref Filecmp) {
+    println(f"== {name}");
+    for line in lines.iter() {
+        let f = split_on(line, '\t');
+        if let Err(e) = run_op(f, mut fc) {
+            println(f" -> {e}");
+        }
+    }
+}
+
+// ------------------------------------------------------------ the run
+
+fn run() -> Result[(), String] {
+    let mut fc = Filecmp.new();
+    let text = read_text("data/jobs.tsv")?;
+    let mut jobs = split_on(text, '\n');
+    jobs.pop();
+    let mut i = 0;
+    while i < jobs.len() and jobs[i].starts_with("build\t") {
+        build(split_on(jobs[i], '\t')[1])?;
+        i += 1;
+    }
+    while i < jobs.len() {
+        let f = split_on(jobs[i], '\t');
+        if f[0] == "job" {
+            let mut body: Vec[String] = Vec.new();
+            i += 1;
+            while i < jobs.len() {
+                let head = split_on(jobs[i], '\t')[0].clone();
+                if head == "job" or head == "program" {
+                    break;
+                }
+                body.push(jobs[i].clone());
+                i += 1;
+            }
+            run_job(f[1], body, mut fc);
+            continue;
+        }
+        if f[0] == "program" {
+            run_program(f[1], mut fc)?;
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+fn dirname(p: ref String) -> String {
+    let v = chars(p);
+    let i = rfind_char(v, '/');
+    if i < 0 { ".".to_string() } else { slice(v, 0, i) }
+}
+
+fn write_data() -> Result[(), String] {
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        match fs.create_dir_all(dirname(p)) {
+            Ok(_) => {}
+            Err(e) => return Err(os_err(e, p)),
+        }
+        match fs.write(p.clone(), file.body.clone()) {
+            Ok(_) => {}
+            Err(e) => return Err(os_err(e, p)),
+        }
+    }
+    Ok(())
+}
+
+struct DataFile {
+    path: String,
+    body: String,
+}
+
+fn main() {
+    if let Err(e) = write_data() {
+        eprintln(e);
+        return;
+    }
+    if fs.exists("work") {
+        if let Err(e) = fs.remove_dir_all("work") {
+            eprintln(os_err(e, "work".to_string()));
+            return;
+        }
+    }
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+
+// ------------------------------------------------------------ programs
+
+struct Change {
+    sign: String,
+    path: String,
+    kind: String,
+}
+
+fn kind_of(p: ref String) -> String {
+    if is_dir(p) { "dir".to_string() } else { "file".to_string() }
+}
+
+fn walk(d: mut ref Dircmp, prefix: ref String, out: mut ref Vec[Change], fc: mut ref Filecmp) -> Result[(), String] {
+    d.compute(mut fc)?;
+    for x in d.left_only.iter() {
+        out.push(Change { sign: "+".to_string(), path: f"{prefix}{x}", kind: kind_of(join_path(d.left, x)) });
+    }
+    for x in d.right_only.iter() {
+        out.push(Change { sign: "-".to_string(), path: f"{prefix}{x}", kind: kind_of(join_path(d.right, x)) });
+    }
+    for x in d.diff_files.iter() {
+        out.push(Change { sign: "~".to_string(), path: f"{prefix}{x}", kind: "file".to_string() });
+    }
+    for x in d.common_funny.iter() {
+        out.push(Change { sign: "!".to_string(), path: f"{prefix}{x}", kind: "?".to_string() });
+    }
+    for x in d.funny_files.iter() {
+        out.push(Change { sign: "!".to_string(), path: f"{prefix}{x}", kind: "?".to_string() });
+    }
+    for (x, sd) in d.subdirs().into_iter() {
+        let mut s = sd;
+        walk(mut s, f"{prefix}{x}/", mut out, mut fc)?;
+    }
+    Ok(())
+}
+
+fn what(sign: ref String) -> String {
+    if sign == "+" {
+        "missing on the server".to_string()
+    } else if sign == "-" {
+        "only on the server".to_string()
+    } else if sign == "~" {
+        "differs".to_string()
+    } else {
+        "cannot be compared".to_string()
+    }
+}
+
+fn count(out: ref Vec[Change], sign: Str) -> i64 {
+    let mut n = 0;
+    for c in out.iter() {
+        if c.sign == sign {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn prog_drift(fc: mut ref Filecmp) -> Result[(), String] {
+    println("== program: deploy drift");
+    let mut d = dircmp("release".to_string(), "deployed".to_string(), None, None, false);
+    let mut out: Vec[Change] = Vec.new();
+    walk(mut d, String.new(), mut out, mut fc)?;
+    for c in out.iter() {
+        println(f"  {c.sign} {c.path} ({c.kind}, {what(c.sign)})");
+    }
+    let need = if out.is_empty() { "no" } else { "yes" };
+    println(f"  {count(out, "+")} missing, {count(out, "-")} extra, {count(out, "~")} changed, {count(out, "!")} problems; deploy needed: {need}");
+    let mut sh = dircmp("release".to_string(), "deployed".to_string(), None, None, true);
+    let mut s_out: Vec[Change] = Vec.new();
+    walk(mut sh, String.new(), mut s_out, mut fc)?;
+    let mut missed: Vec[String] = Vec.new();
+    for c in out.iter() {
+        let mut found = false;
+        for s in s_out.iter() {
+            if s.sign == c.sign and s.path == c.path and s.kind == c.kind {
+                found = true;
+            }
+        }
+        if not found {
+            missed.push(c.path.clone());
+        }
+    }
+    println(f"  a shallow check would miss: {repr_strs(missed)}");
+    Ok(())
+}
+
+fn union_sorted(a: ref Vec[String], b: ref Vec[String]) -> Vec[String] {
+    let mut out = a.clone();
+    for x in b.iter() {
+        if not contains(out, x) {
+            out.push(x.clone());
+        }
+    }
+    out.sort();
+    out
+}
+
+fn prog_backups(fc: mut ref Filecmp) -> Result[(), String] {
+    println("== program: nightly backup check");
+    let days = vec!["backup-mon".to_string(), "backup-tue".to_string(), "backup-wed".to_string()];
+    for i in 0..(days.len() - 1) {
+        let a = days[i].clone();
+        let b = days[i + 1].clone();
+        let all = union_sorted(listdir(a)?, listdir(b)?);
+        let sh = fc.cmpfiles(a, b, all, true);
+        let dp = fc.cmpfiles(a, b, all, false);
+        println(f"  {a} -> {b}: {all.len()} names");
+        println(f"    shallow: same {repr_strs(sh.0)}, changed {repr_strs(sh.1)}, missing {repr_strs(sh.2)}");
+        println(f"    deep:    same {repr_strs(dp.0)}, changed {repr_strs(dp.1)}, missing {repr_strs(dp.2)}");
+        let mut missed: Vec[String] = Vec.new();
+        for x in sh.0.iter() {
+            if contains(dp.1, x) {
+                missed.push(x.clone());
+            }
+        }
+        println(f"    changed but missed by the shallow check: {repr_strs(missed)}");
+    }
+    Ok(())
+}
+
+fn plan(d: mut ref Dircmp, prefix: ref String, steps: mut ref Vec[(String, String)], fc: mut ref Filecmp) -> Result[(), String] {
+    d.compute(mut fc)?;
+    for x in d.left_only.iter() {
+        let op = if is_dir(join_path(d.left, x)) { "copytree" } else { "copy" };
+        steps.push((op.to_string(), f"{prefix}{x}"));
+    }
+    for x in d.diff_files.iter() {
+        steps.push(("update".to_string(), f"{prefix}{x}"));
+    }
+    for x in d.right_only.iter() {
+        let op = if is_dir(join_path(d.right, x)) { "rmtree" } else { "remove" };
+        steps.push((op.to_string(), f"{prefix}{x}"));
+    }
+    for (x, sd) in d.subdirs().into_iter() {
+        let mut s = sd;
+        plan(mut s, f"{prefix}{x}/", mut steps, mut fc)?;
+    }
+    Ok(())
+}
+
+// shutil.copy2: the bytes, then the modification time.
+fn copy2(s: ref String, m: ref String) -> Result[(), String] {
+    let st = stat(s)?;
+    if let Err(e) = fs.copy(wp(s), wp(m)) {
+        return Err(os_err(e, s));
+    }
+    if let Err(e) = fs.set_modified(wp(m), st.mtime) {
+        return Err(os_err(e, m));
+    }
+    Ok(())
+}
+
+fn copytree(s: ref String, m: ref String) -> Result[(), String] {
+    if let Err(e) = fs.create_dir_all(wp(m)) {
+        return Err(os_err(e, m));
+    }
+    for x in listdir(s)?.iter() {
+        let sx = join_path(s, x);
+        let mx = join_path(m, x);
+        if is_dir(sx) {
+            copytree(sx, mx)?;
+        } else {
+            copy2(sx, mx)?;
+        }
+    }
+    Ok(())
+}
+
+fn same_tree(d: mut ref Dircmp, fc: mut ref Filecmp) -> Result[bool, String] {
+    d.compute(mut fc)?;
+    if not d.left_only.is_empty() or not d.right_only.is_empty() or not d.diff_files.is_empty()
+        or not d.funny_files.is_empty() or not d.common_funny.is_empty() {
+        return Ok(false);
+    }
+    for (_, sd) in d.subdirs().into_iter() {
+        let mut s = sd;
+        if not same_tree(mut s, mut fc)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn prog_sync(fc: mut ref Filecmp) -> Result[(), String] {
+    println("== program: mirror sync");
+    let mut steps: Vec[(String, String)] = Vec.new();
+    let mut d = dircmp("src".to_string(), "mirror".to_string(), None, None, false);
+    plan(mut d, String.new(), mut steps, mut fc)?;
+    for st in steps.iter() {
+        let (op, path) = st.clone();
+        println(f"  {op} {path}");
+        let s = join_path("src".to_string(), path);
+        let m = join_path("mirror".to_string(), path);
+        if op == "copytree" {
+            copytree(s, m)?;
+        } else if op == "copy" or op == "update" {
+            copy2(s, m)?;
+        } else if op == "rmtree" {
+            if let Err(e) = fs.remove_dir_all(wp(m)) {
+                return Err(os_err(e, m));
+            }
+        } else {
+            if let Err(e) = fs.remove_file(wp(m)) {
+                return Err(os_err(e, m));
+            }
+        }
+    }
+    println(f"  {steps.len()} steps");
+    fc.clear_cache();
+    let mut r = dircmp("src".to_string(), "mirror".to_string(), None, None, true);
+    r.report_full_closure(mut fc)?;
+    let mut chk = dircmp("src".to_string(), "mirror".to_string(), None, None, false);
+    println(f"  in sync: {py_bool(same_tree(mut chk, mut fc)?)}");
+    Ok(())
+}
+
+fn run_program(name: ref String, fc: mut ref Filecmp) -> Result[(), String] {
+    if name == "drift" {
+        prog_drift(mut fc)
+    } else if name == "backups" {
+        prog_backups(mut fc)
+    } else {
+        prog_sync(mut fc)
+    }
+}
+
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("build\trelease\n");
+    t.push_str("build\tdeployed\n");
+    t.push_str("build\tsrc\n");
+    t.push_str("build\tmirror\n");
+    t.push_str("build\tbackup-mon\n");
+    t.push_str("build\tbackup-tue\n");
+    t.push_str("build\tbackup-wed\n");
+    t.push_str("build\tempty1\n");
+    t.push_str("build\tempty2\n");
+    t.push_str("job\tcmp on single files\n");
+    t.push_str("cmp\trelease/index.html\tdeployed/index.html\tshallow\n");
+    t.push_str("cmp\trelease/about.html\tdeployed/about.html\tshallow\n");
+    t.push_str("cmp\trelease/style.css\tdeployed/style.css\tshallow\n");
+    t.push_str("cmp\trelease/style.css\tdeployed/style.css\tdeep\n");
+    t.push_str("cmp\trelease/app.js\tdeployed/app.js\tshallow\n");
+    t.push_str("cmp\trelease/version.txt\tdeployed/version.txt\tshallow\n");
+    t.push_str("cmp\trelease/build-id\tdeployed/build-id\tshallow\n");
+    t.push_str("cmp\trelease/build-id\tdeployed/build-id\tdeep\n");
+    t.push_str("cmp\trelease/changelog.txt\tdeployed/changelog.txt\tshallow\n");
+    t.push_str("cmp\trelease/latest\tdeployed/latest\tshallow\n");
+    t.push_str("cmp\trelease/latest\tdeployed/latest\tdeep\n");
+    t.push_str("cmp\trelease/img\tdeployed/img\tshallow\n");
+    t.push_str("cmp\trelease/assets\tdeployed/assets\tshallow\n");
+    t.push_str("cmp\trelease/dangling\tdeployed/dangling\tshallow\n");
+    t.push_str("cmp\trelease/nope.html\tdeployed/index.html\tshallow\n");
+    t.push_str("cmp\trelease/index.html\trelease/index.html\tdeep\n");
+    t.push_str("cmp\trelease/sitemap.xml\tdeployed/sitemap.xml\tshallow\n");
+    t.push_str("job\tthe stat cache\n");
+    t.push_str("cmp\tbackup-mon/users.sql\tbackup-tue/users.sql\tdeep\n");
+    t.push_str("write\tbackup-tue/users.sql\tINSERT INTO users VALUES (1,'eve');\\n\t1760000000\n");
+    t.push_str("cmp\tbackup-mon/users.sql\tbackup-tue/users.sql\tdeep\n");
+    t.push_str("clear_cache\n");
+    t.push_str("cmp\tbackup-mon/users.sql\tbackup-tue/users.sql\tdeep\n");
+    t.push_str("write\tbackup-tue/users.sql\tINSERT INTO users VALUES (1,'ann');\\n\t1760000005\n");
+    t.push_str("cmp\tbackup-mon/users.sql\tbackup-tue/users.sql\tshallow\n");
+    t.push_str("cmp\tbackup-mon/users.sql\tbackup-tue/users.sql\tdeep\n");
+    t.push_str("write\tbackup-tue/users.sql\tINSERT INTO users VALUES (1,'ann');\\n\t1760000000\n");
+    t.push_str("cmp\tbackup-mon/users.sql\tbackup-tue/users.sql\tshallow\n");
+    t.push_str("job\tcmpfiles\n");
+    t.push_str("cmpfiles\trelease\tdeployed\tindex.html,style.css,app.js,img,latest,dangling,nope,café.html\tshallow\n");
+    t.push_str("cmpfiles\trelease\tdeployed\tindex.html,style.css,build-id,sitemap.xml\tdeep\n");
+    t.push_str("cmpfiles\tbackup-mon\tbackup-wed\tusers.sql,orders.sql,audit.log,payments.sql\tshallow\n");
+    t.push_str("cmpfiles\tbackup-mon\tbackup-tue\t\tshallow\n");
+    t.push_str("job\tdircmp attributes\n");
+    t.push_str("attrs\trelease\tdeployed\t-\t-\tshallow\n");
+    t.push_str("attrs\trelease/api\tdeployed/api\t-\t-\tdeep\n");
+    t.push_str("attrs\trelease\tdeployed\tCVS\t.,..,latest,dangling\tshallow\n");
+    t.push_str("attrs\tempty1\tempty2\t-\t-\tshallow\n");
+    t.push_str("attrs\tempty1\tempty2\t\t-\tshallow\n");
+    t.push_str("job\treports\n");
+    t.push_str("report\trelease\tdeployed\t-\t-\tshallow\n");
+    t.push_str("report\trelease\tdeployed\t-\t-\tdeep\n");
+    t.push_str("partial\trelease\tdeployed\t-\t-\tshallow\n");
+    t.push_str("full\trelease\tdeployed\t-\t-\tdeep\n");
+    t.push_str("full\tsrc\tmirror\t-\t-\tshallow\n");
+    t.push_str("report\tempty1\tempty2\t-\t-\tshallow\n");
+    t.push_str("report\tbackup-mon\tbackup-mon\t-\t-\tshallow\n");
+    t.push_str("report\trelease\tno-such-dir\t-\t-\tshallow\n");
+    t.push_str("report\trelease/index.html\tdeployed\t-\t-\tshallow\n");
+    t.push_str("job\tpython -m filecmp\n");
+    t.push_str("demo\trelease/api deployed/api\n");
+    t.push_str("demo\t-r release/api deployed/api\n");
+    t.push_str("demo\trelease/api\n");
+    t.push_str("demo\t-x release deployed\n");
+    t.push_str("demo\t-r -r backup-mon backup-wed\n");
+    t.push_str("demo\t--recursive release deployed\n");
+    t.push_str("demo\tbackup-mon backup-wed -r\n");
+    t.push_str("program\tdrift\n");
+    t.push_str("program\tbackups\n");
+    t.push_str("program\tsync\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("f\tusers.sql\t1760000000\tINSERT INTO users VALUES (1,'ann');\\n\n");
+    t.push_str("f\torders.sql\t1760000000\tINSERT INTO orders VALUES (1,1,9.99);\\n\n");
+    t.push_str("f\taudit.log\t1760000000\tmon\\n\n");
+    v.push(DataFile { path: "trees/backup-mon.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("f\tusers.sql\t1760000000\tINSERT INTO users VALUES (1,'ann');\\n\n");
+    t.push_str("f\torders.sql\t1760086400\tINSERT INTO orders VALUES (1,1,9.99);\\n\n");
+    t.push_str("f\taudit.log\t1760000000\ttue\\n\n");
+    v.push(DataFile { path: "trees/backup-tue.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("f\tusers.sql\t1760000000\tINSERT INTO users VALUES (1,'bob');\\n\n");
+    t.push_str("f\torders.sql\t1760172800\tINSERT INTO orders VALUES (1,1,9.99);\\n\n");
+    t.push_str("f\taudit.log\t1760172800\twed\\n\n");
+    t.push_str("f\tpayments.sql\t1760000000\tINSERT INTO payments VALUES (1);\\n\n");
+    v.push(DataFile { path: "trees/backup-wed.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("f\tindex.html\t1760000000\t<!doctype html>\\n<title>Docs</title>\\n<h1>Welcome</h1>\\n\n");
+    t.push_str("f\tabout.html\t1760003600\t<h1>About</h1>\\n\n");
+    t.push_str("f\tstyle.css\t1760000000\tbody { font-family: sans-serif; }\\nh1 { color: #444; }\\n\n");
+    t.push_str("f\tapp.js\t1760000000\tconsole.log('v1.4.1');\\n\n");
+    t.push_str("f\trobots.txt\t1760000000\tUser-agent: *\\nAllow: /\\n\n");
+    t.push_str("f\tsitemap.xml\t1760000000\t<urlset>\\n  <url>/index.html</url>\\n</urlset>\\n\n");
+    t.push_str("f\tchangelog.txt\t1760000000\t1.4.1: new theme\\n\n");
+    t.push_str("f\tversion.txt\t1760000000\t1.4.1\\n\n");
+    t.push_str("f\tbuild-id\t1760000000\tabc999\\n\n");
+    t.push_str("d\timg\t0\t\n");
+    t.push_str("f\timg/logo.svg\t1760000000\t<svg>logo</svg>\\n\n");
+    t.push_str("f\timg/banner.png\t1760000000\tPNG-banner-v1\\n\n");
+    t.push_str("f\timg/old-logo.svg\t1760000000\t<svg>old</svg>\\n\n");
+    t.push_str("d\tapi\t0\t\n");
+    t.push_str("f\tapi/index.html\t1760000000\t<h1>API</h1>\\n\n");
+    t.push_str("d\tapi/v1\t0\t\n");
+    t.push_str("f\tapi/v1/users.html\t1760000000\t<h1>Users</h1>\\n\n");
+    t.push_str("f\tapi/v1/orders.html\t1760000000\t<h1>Orders, v1.3</h1>\\n\n");
+    t.push_str("f\tapi/v1/legacy.html\t1760000000\t<h1>Legacy</h1>\\n\n");
+    t.push_str("d\tsearch\t0\t\n");
+    t.push_str("f\tsearch/index.json\t1760000000\t{\"terms\": 398}\\n\n");
+    t.push_str("d\tassets\t0\t\n");
+    t.push_str("f\tassets/x.txt\t1760000000\tx\\n\n");
+    t.push_str("d\t.git\t0\t\n");
+    t.push_str("f\t.git/HEAD\t1760000000\tref: refs/heads/prod\\n\n");
+    t.push_str("f\ttags\t1760000000\tother\\n\n");
+    t.push_str("f\tcafé.html\t1760000000\t<h1>Café</h1>\\n\n");
+    t.push_str("f\tlatest\t1760000000\t<!doctype html>\\n<title>Docs</title>\\n<h1>Welcome</h1>\\n\n");
+    t.push_str("l\tdangling\t0\tmissing-target.html\n");
+    t.push_str("f\terror.log\t1760000000\tGET /x 500\\n\n");
+    t.push_str("d\tuploads\t0\t\n");
+    t.push_str("f\tuploads/avatar-1.png\t1760000000\tavatar\\n\n");
+    t.push_str("l\tfonts\t0\t../release/fonts\n");
+    v.push(DataFile { path: "trees/deployed.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("\n");
+    v.push(DataFile { path: "trees/empty1.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("d\tCVS\t0\t\n");
+    t.push_str("f\tCVS/Root\t1760000000\tx\\n\n");
+    t.push_str("d\tRCS\t0\t\n");
+    v.push(DataFile { path: "trees/empty2.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("f\tREADME.md\t1760000000\t# Tool\\n\\nUsage: tool run\\n\n");
+    t.push_str("f\tsetup.cfg\t1760000000\t[metadata]\\nname = tool\\nversion = 1.9\\n\n");
+    t.push_str("d\ttool\t0\t\n");
+    t.push_str("f\ttool/__init__.py\t1760000000\t__version__ = '1.9'\\n\n");
+    t.push_str("f\ttool/cli.py\t1759913600\tdef main():\\n    print('run')\\n\n");
+    t.push_str("f\ttool/old.py\t1760000000\t# removed in 2.0\\n\n");
+    t.push_str("d\ttool/plugins\t0\t\n");
+    t.push_str("f\ttool/plugins/csv.py\t1760000000\tNAME = 'csv'\\n\n");
+    t.push_str("f\ttool/plugins/xml.py\t1760000000\tNAME = 'xml'\\n\n");
+    t.push_str("d\tbuild\t0\t\n");
+    t.push_str("f\tbuild/tool.whl\t1760000000\twheel\\n\n");
+    t.push_str("d\tbuild/lib\t0\t\n");
+    t.push_str("f\tbuild/lib/cli.py\t1760000000\told\\n\n");
+    v.push(DataFile { path: "trees/mirror.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("f\tindex.html\t1760000000\t<!doctype html>\\n<title>Docs</title>\\n<h1>Welcome</h1>\\n\n");
+    t.push_str("f\tabout.html\t1760000000\t<h1>About</h1>\\n\n");
+    t.push_str("f\tstyle.css\t1760000000\tbody { font-family: sans-serif; }\\nh1 { color: #333; }\\n\n");
+    t.push_str("f\tapp.js\t1760000000\tconsole.log('v1.4.2');\\n\n");
+    t.push_str("f\trobots.txt\t1760000000\tUser-agent: *\\nAllow: /\\n\n");
+    t.push_str("f\tsitemap.xml\t1760000060\t<urlset>\\n  <url>/index.html</url>\\n</urlset>\\n\n");
+    t.push_str("f\tchangelog.txt\t1760000000\t1.4.2: fix search\\n1.4.1: new theme\\n\n");
+    t.push_str("f\tversion.txt\t1760000000\t1.4.2\\n\n");
+    t.push_str("f\tbuild-id\t1760000000\tabc123\\n\n");
+    t.push_str("d\timg\t0\t\n");
+    t.push_str("f\timg/logo.svg\t1760000000\t<svg>logo</svg>\\n\n");
+    t.push_str("f\timg/banner.png\t1760000000\tPNG-banner-v2\\n\n");
+    t.push_str("d\tapi\t0\t\n");
+    t.push_str("f\tapi/index.html\t1760000000\t<h1>API</h1>\\n\n");
+    t.push_str("d\tapi/v1\t0\t\n");
+    t.push_str("f\tapi/v1/users.html\t1760000000\t<h1>Users</h1>\\n\n");
+    t.push_str("f\tapi/v1/orders.html\t1760000000\t<h1>Orders, v1.4</h1>\\n\n");
+    t.push_str("d\tsearch\t0\t\n");
+    t.push_str("f\tsearch/index.json\t1760000000\t{\"terms\": 412}\\n\n");
+    t.push_str("f\tassets\t1760000000\tthis is a file here\\n\n");
+    t.push_str("d\t.git\t0\t\n");
+    t.push_str("f\t.git/HEAD\t1760000000\tref: refs/heads/main\\n\n");
+    t.push_str("d\t__pycache__\t0\t\n");
+    t.push_str("f\t__pycache__/build.cpython-313.pyc\t1760000000\tbytecode\\n\n");
+    t.push_str("f\ttags\t1760000000\tindex.html\\t1\\n\n");
+    t.push_str("f\tcafé.html\t1760000000\t<h1>Café</h1>\\n\n");
+    t.push_str("l\tlatest\t0\tindex.html\n");
+    t.push_str("l\tdangling\t0\tmissing-target.html\n");
+    t.push_str("d\tfonts\t0\t\n");
+    t.push_str("f\tfonts/inter.woff2\t1760000000\tfont-bytes\\n\n");
+    v.push(DataFile { path: "trees/release.tsv".to_string(), body: t });
+    let mut t = String.new();
+    t.push_str("f\tREADME.md\t1760000000\t# Tool\\n\\nUsage: tool run\\n\n");
+    t.push_str("f\tsetup.cfg\t1760000000\t[metadata]\\nname = tool\\nversion = 2.0\\n\n");
+    t.push_str("f\tLICENSE\t1760000000\tMIT License\\n\n");
+    t.push_str("d\ttool\t0\t\n");
+    t.push_str("f\ttool/__init__.py\t1760000000\t__version__ = '2.0'\\n\n");
+    t.push_str("f\ttool/cli.py\t1760000000\tdef main():\\n    print('run')\\n\n");
+    t.push_str("f\ttool/util.py\t1760000000\tdef clamp(x, lo, hi):\\n    return max(lo, min(x, hi))\\n\n");
+    t.push_str("d\ttool/plugins\t0\t\n");
+    t.push_str("f\ttool/plugins/csv.py\t1760000000\tNAME = 'csv'\\n\n");
+    t.push_str("f\ttool/plugins/json.py\t1760000000\tNAME = 'json'\\n\n");
+    t.push_str("d\tdocs\t0\t\n");
+    t.push_str("f\tdocs/index.md\t1760000000\t# Docs\\n\n");
+    t.push_str("d\ttests\t0\t\n");
+    t.push_str("f\ttests/test_cli.py\t1760000000\tdef test_main():\\n    pass\\n\n");
+    v.push(DataFile { path: "trees/src.tsv".to_string(), body: t });
+}

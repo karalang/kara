@@ -1,0 +1,272 @@
+== cmp on single files
+cmp('release/index.html', 'deployed/index.html', shallow=True) = True
+cmp('release/about.html', 'deployed/about.html', shallow=True) = True
+cmp('release/style.css', 'deployed/style.css', shallow=True) = True
+cmp('release/style.css', 'deployed/style.css', shallow=False) = False
+cmp('release/app.js', 'deployed/app.js', shallow=True) = True
+cmp('release/version.txt', 'deployed/version.txt', shallow=True) = True
+cmp('release/build-id', 'deployed/build-id', shallow=True) = True
+cmp('release/build-id', 'deployed/build-id', shallow=False) = False
+cmp('release/changelog.txt', 'deployed/changelog.txt', shallow=True) = False
+cmp('release/latest', 'deployed/latest', shallow=True) = True
+cmp('release/latest', 'deployed/latest', shallow=False) = True
+cmp('release/img', 'deployed/img', shallow=True) = False
+cmp('release/assets', 'deployed/assets', shallow=True) = False
+ -> FileNotFoundError: [Errno 2] No such file or directory: 'release/dangling'
+ -> FileNotFoundError: [Errno 2] No such file or directory: 'release/nope.html'
+cmp('release/index.html', 'release/index.html', shallow=False) = True
+cmp('release/sitemap.xml', 'deployed/sitemap.xml', shallow=True) = True
+== the stat cache
+cmp('backup-mon/users.sql', 'backup-tue/users.sql', shallow=False) = True
+wrote backup-tue/users.sql (mtime 1760000000)
+cmp('backup-mon/users.sql', 'backup-tue/users.sql', shallow=False) = True
+clear_cache()
+cmp('backup-mon/users.sql', 'backup-tue/users.sql', shallow=False) = False
+wrote backup-tue/users.sql (mtime 1760000005)
+cmp('backup-mon/users.sql', 'backup-tue/users.sql', shallow=True) = True
+cmp('backup-mon/users.sql', 'backup-tue/users.sql', shallow=False) = True
+wrote backup-tue/users.sql (mtime 1760000000)
+cmp('backup-mon/users.sql', 'backup-tue/users.sql', shallow=True) = True
+== cmpfiles
+cmpfiles('release', 'deployed', ['index.html', 'style.css', 'app.js', 'img', 'latest', 'dangling', 'nope', 'café.html'], shallow=True) = (['index.html', 'style.css', 'app.js', 'latest', 'café.html'], ['img'], ['dangling', 'nope'])
+cmpfiles('release', 'deployed', ['index.html', 'style.css', 'build-id', 'sitemap.xml'], shallow=False) = (['index.html', 'sitemap.xml'], ['style.css', 'build-id'], [])
+cmpfiles('backup-mon', 'backup-wed', ['users.sql', 'orders.sql', 'audit.log', 'payments.sql'], shallow=True) = (['users.sql', 'orders.sql'], ['audit.log'], ['payments.sql'])
+cmpfiles('backup-mon', 'backup-tue', [], shallow=True) = ([], [], [])
+== dircmp attributes
+attrs release deployed ignore=None hide=None shallow:
+  left_list: ['about.html', 'api', 'app.js', 'assets', 'build-id', 'café.html', 'changelog.txt', 'dangling', 'fonts', 'img', 'index.html', 'latest', 'robots.txt', 'search', 'sitemap.xml', 'style.css', 'version.txt']
+  right_list: ['about.html', 'api', 'app.js', 'assets', 'build-id', 'café.html', 'changelog.txt', 'dangling', 'error.log', 'fonts', 'img', 'index.html', 'latest', 'robots.txt', 'search', 'sitemap.xml', 'style.css', 'uploads', 'version.txt']
+  common: ['about.html', 'api', 'app.js', 'assets', 'build-id', 'café.html', 'changelog.txt', 'dangling', 'fonts', 'img', 'index.html', 'latest', 'robots.txt', 'search', 'sitemap.xml', 'style.css', 'version.txt']
+  left_only: []
+  right_only: ['error.log', 'uploads']
+  common_dirs: ['api', 'fonts', 'img', 'search']
+  common_files: ['about.html', 'app.js', 'build-id', 'café.html', 'changelog.txt', 'index.html', 'latest', 'robots.txt', 'sitemap.xml', 'style.css', 'version.txt']
+  common_funny: ['assets', 'dangling']
+  same_files: ['about.html', 'app.js', 'build-id', 'café.html', 'index.html', 'latest', 'robots.txt', 'sitemap.xml', 'style.css', 'version.txt']
+  diff_files: ['changelog.txt']
+  funny_files: []
+  subdirs: ['api', 'fonts', 'img', 'search']
+attrs release/api deployed/api ignore=None hide=None deep:
+  left_list: ['index.html', 'v1']
+  right_list: ['index.html', 'v1']
+  common: ['index.html', 'v1']
+  left_only: []
+  right_only: []
+  common_dirs: ['v1']
+  common_files: ['index.html']
+  common_funny: []
+  same_files: ['index.html']
+  diff_files: []
+  funny_files: []
+  subdirs: ['v1']
+attrs release deployed ignore=['CVS'] hide=['.', '..', 'latest', 'dangling'] shallow:
+  left_list: ['.git', '__pycache__', 'about.html', 'api', 'app.js', 'assets', 'build-id', 'café.html', 'changelog.txt', 'fonts', 'img', 'index.html', 'robots.txt', 'search', 'sitemap.xml', 'style.css', 'tags', 'version.txt']
+  right_list: ['.git', 'about.html', 'api', 'app.js', 'assets', 'build-id', 'café.html', 'changelog.txt', 'error.log', 'fonts', 'img', 'index.html', 'robots.txt', 'search', 'sitemap.xml', 'style.css', 'tags', 'uploads', 'version.txt']
+  common: ['.git', 'about.html', 'api', 'app.js', 'assets', 'build-id', 'café.html', 'changelog.txt', 'fonts', 'img', 'index.html', 'robots.txt', 'search', 'sitemap.xml', 'style.css', 'tags', 'version.txt']
+  left_only: ['__pycache__']
+  right_only: ['error.log', 'uploads']
+  common_dirs: ['.git', 'api', 'fonts', 'img', 'search']
+  common_files: ['about.html', 'app.js', 'build-id', 'café.html', 'changelog.txt', 'index.html', 'robots.txt', 'sitemap.xml', 'style.css', 'tags', 'version.txt']
+  common_funny: ['assets']
+  same_files: ['about.html', 'app.js', 'build-id', 'café.html', 'index.html', 'robots.txt', 'sitemap.xml', 'style.css', 'version.txt']
+  diff_files: ['changelog.txt', 'tags']
+  funny_files: []
+  subdirs: ['.git', 'api', 'fonts', 'img', 'search']
+attrs empty1 empty2 ignore=None hide=None shallow:
+  left_list: []
+  right_list: []
+  common: []
+  left_only: []
+  right_only: []
+  common_dirs: []
+  common_files: []
+  common_funny: []
+  same_files: []
+  diff_files: []
+  funny_files: []
+  subdirs: []
+attrs empty1 empty2 ignore=[] hide=None shallow:
+  left_list: []
+  right_list: ['CVS', 'RCS']
+  common: []
+  left_only: []
+  right_only: ['CVS', 'RCS']
+  common_dirs: []
+  common_files: []
+  common_funny: []
+  same_files: []
+  diff_files: []
+  funny_files: []
+  subdirs: []
+== reports
+report release deployed ignore=None hide=None shallow:
+diff release deployed
+Only in deployed : ['error.log', 'uploads']
+Identical files : ['about.html', 'app.js', 'build-id', 'café.html', 'index.html', 'latest', 'robots.txt', 'sitemap.xml', 'style.css', 'version.txt']
+Differing files : ['changelog.txt']
+Common subdirectories : ['api', 'fonts', 'img', 'search']
+Common funny cases : ['assets', 'dangling']
+report release deployed ignore=None hide=None deep:
+diff release deployed
+Only in deployed : ['error.log', 'uploads']
+Identical files : ['about.html', 'café.html', 'index.html', 'latest', 'robots.txt', 'sitemap.xml']
+Differing files : ['app.js', 'build-id', 'changelog.txt', 'style.css', 'version.txt']
+Common subdirectories : ['api', 'fonts', 'img', 'search']
+Common funny cases : ['assets', 'dangling']
+partial release deployed ignore=None hide=None shallow:
+diff release deployed
+Only in deployed : ['error.log', 'uploads']
+Identical files : ['about.html', 'app.js', 'build-id', 'café.html', 'index.html', 'latest', 'robots.txt', 'sitemap.xml', 'style.css', 'version.txt']
+Differing files : ['changelog.txt']
+Common subdirectories : ['api', 'fonts', 'img', 'search']
+Common funny cases : ['assets', 'dangling']
+
+diff release/api deployed/api
+Identical files : ['index.html']
+Common subdirectories : ['v1']
+
+diff release/fonts deployed/fonts
+Identical files : ['inter.woff2']
+
+diff release/img deployed/img
+Only in deployed/img : ['old-logo.svg']
+Identical files : ['banner.png', 'logo.svg']
+
+diff release/search deployed/search
+Identical files : ['index.json']
+full release deployed ignore=None hide=None deep:
+diff release deployed
+Only in deployed : ['error.log', 'uploads']
+Identical files : ['about.html', 'café.html', 'index.html', 'latest', 'robots.txt', 'sitemap.xml']
+Differing files : ['app.js', 'build-id', 'changelog.txt', 'style.css', 'version.txt']
+Common subdirectories : ['api', 'fonts', 'img', 'search']
+Common funny cases : ['assets', 'dangling']
+
+diff release/api deployed/api
+Identical files : ['index.html']
+Common subdirectories : ['v1']
+
+diff release/api/v1 deployed/api/v1
+Only in deployed/api/v1 : ['legacy.html']
+Identical files : ['users.html']
+Differing files : ['orders.html']
+
+diff release/fonts deployed/fonts
+Identical files : ['inter.woff2']
+
+diff release/img deployed/img
+Only in deployed/img : ['old-logo.svg']
+Identical files : ['logo.svg']
+Differing files : ['banner.png']
+
+diff release/search deployed/search
+Differing files : ['index.json']
+full src mirror ignore=None hide=None shallow:
+diff src mirror
+Only in src : ['LICENSE', 'docs', 'tests']
+Only in mirror : ['build']
+Identical files : ['README.md', 'setup.cfg']
+Common subdirectories : ['tool']
+
+diff src/tool mirror/tool
+Only in src/tool : ['util.py']
+Only in mirror/tool : ['old.py']
+Identical files : ['__init__.py', 'cli.py']
+Common subdirectories : ['plugins']
+
+diff src/tool/plugins mirror/tool/plugins
+Only in src/tool/plugins : ['json.py']
+Only in mirror/tool/plugins : ['xml.py']
+Identical files : ['csv.py']
+report empty1 empty2 ignore=None hide=None shallow:
+diff empty1 empty2
+report backup-mon backup-mon ignore=None hide=None shallow:
+diff backup-mon backup-mon
+Identical files : ['audit.log', 'orders.sql', 'users.sql']
+report release no-such-dir ignore=None hide=None shallow:
+diff release no-such-dir
+ -> FileNotFoundError: [Errno 2] No such file or directory: 'no-such-dir'
+report release/index.html deployed ignore=None hide=None shallow:
+diff release/index.html deployed
+ -> NotADirectoryError: [Errno 20] Not a directory: 'release/index.html'
+== python -m filecmp
+$ python -m filecmp release/api deployed/api
+diff release/api deployed/api
+Identical files : ['index.html']
+Common subdirectories : ['v1']
+$ python -m filecmp -r release/api deployed/api
+diff release/api deployed/api
+Identical files : ['index.html']
+Common subdirectories : ['v1']
+
+diff release/api/v1 deployed/api/v1
+Only in deployed/api/v1 : ['legacy.html']
+Identical files : ['orders.html', 'users.html']
+$ python -m filecmp release/api
+ -> GetoptError: need exactly two args
+$ python -m filecmp -x release deployed
+ -> GetoptError: option -x not recognized
+$ python -m filecmp -r -r backup-mon backup-wed
+diff backup-mon backup-wed
+Only in backup-wed : ['payments.sql']
+Identical files : ['orders.sql', 'users.sql']
+Differing files : ['audit.log']
+$ python -m filecmp --recursive release deployed
+ -> GetoptError: option --recursive not recognized
+$ python -m filecmp backup-mon backup-wed -r
+ -> GetoptError: need exactly two args
+== program: deploy drift
+  - error.log (file, only on the server)
+  - uploads (dir, only on the server)
+  ~ app.js (file, differs)
+  ~ build-id (file, differs)
+  ~ changelog.txt (file, differs)
+  ~ style.css (file, differs)
+  ~ version.txt (file, differs)
+  ! assets (?, cannot be compared)
+  ! dangling (?, cannot be compared)
+  - api/v1/legacy.html (file, only on the server)
+  ~ api/v1/orders.html (file, differs)
+  - img/old-logo.svg (file, only on the server)
+  ~ img/banner.png (file, differs)
+  ~ search/index.json (file, differs)
+  0 missing, 4 extra, 8 changed, 2 problems; deploy needed: yes
+  a shallow check would miss: ['app.js', 'build-id', 'style.css', 'version.txt', 'api/v1/orders.html', 'img/banner.png', 'search/index.json']
+== program: nightly backup check
+  backup-mon -> backup-tue: 3 names
+    shallow: same ['audit.log', 'orders.sql', 'users.sql'], changed [], missing []
+    deep:    same ['orders.sql'], changed ['audit.log', 'users.sql'], missing []
+    changed but missed by the shallow check: ['audit.log', 'users.sql']
+  backup-tue -> backup-wed: 4 names
+    shallow: same ['orders.sql', 'users.sql'], changed ['audit.log'], missing ['payments.sql']
+    deep:    same ['orders.sql'], changed ['audit.log', 'users.sql'], missing ['payments.sql']
+    changed but missed by the shallow check: ['users.sql']
+== program: mirror sync
+  copy LICENSE
+  copytree docs
+  copytree tests
+  update setup.cfg
+  rmtree build
+  copy tool/util.py
+  update tool/__init__.py
+  remove tool/old.py
+  copy tool/plugins/json.py
+  remove tool/plugins/xml.py
+  10 steps
+diff src mirror
+Identical files : ['LICENSE', 'README.md', 'setup.cfg']
+Common subdirectories : ['docs', 'tests', 'tool']
+
+diff src/docs mirror/docs
+Identical files : ['index.md']
+
+diff src/tests mirror/tests
+Identical files : ['test_cli.py']
+
+diff src/tool mirror/tool
+Identical files : ['__init__.py', 'cli.py', 'util.py']
+Common subdirectories : ['plugins']
+
+diff src/tool/plugins mirror/tool/plugins
+Identical files : ['csv.py', 'json.py']
+  in sync: True
