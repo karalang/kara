@@ -96,9 +96,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 609 |
 | leak | 604 |
 | double-free | 427 |
-| missing-feature | 303 |
+| missing-feature | 304 |
 | codegen-gap | 278 |
-| false-positive | 255 |
+| false-positive | 256 |
 | other | 185 |
 | diagnostics | 182 |
 | perf | 180 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 2977 |
-| interp | 997 |
-| typecheck | 519 |
+| interp | 999 |
+| typecheck | 521 |
 | ownership | 124 |
 | other | 122 |
 | runtime | 81 |
@@ -176,6 +176,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-31 | 2026-10-20 | other | high | MIR: an if-expression whose arm is a bare `None` of a drop type (`Option[String]`), passed DIRECTLY as a call argument, reaches the callee uninitialized ('discriminant of a value that is not an initialized enum'); the same value bound with `let` first, or an `Option[i64]`, works | — |
 | B-2026-10-20-32 | 2026-10-20 | typecheck+interp | medium | `IntoIterator` is not the spec's trait: the prelude's (runtime/stdlib/into_iterator.kara, CR-202) has `type Item; type IntoIter;` and no `into_iter` method, where design.md § Iteration gives `type Item; fn into_iter(own self) -> impl Iterator[Item = Self.Item]`. A spec-shaped impl is refused, a `C: IntoIterator` bound cannot call `.into_iter()`, and `v.extend(x)` on a user `IntoIterator` type passes check but the MIR builder refuses it | — |
 | B-2026-10-20-33 | 2026-10-20 | typecheck | low | A `flat_map` closure that returns a collection (`|x| pairs(*x)` returning `Vec[i64]`) gets E0200 listing all 29 `Iterator` implementors and no `.into_iter()` hint, then a second E0236 at the same span; design.md promises the `.into_iter()` suggestion for the `for` case only, but the fix here is the same one call | — |
+| B-2026-10-20-34 | 2026-10-20 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's `Copy` parameter or local by `ref`, so `(0..n).flat_map(|i| (i + 1..n).map(|j| i * 10 + j))` is refused (E0509 'the result borrows `i`', or E0516 for a local) by `karac check` and by MIR borrowck; core-semantics.md §9.1 ('a place that dies first is moved in') and §9.3 (a returned closure escapes and captures by move) both make the capture a copy, and Kāra has no `move` to ask for one | — |
+| B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 
 ### Relocated
 
