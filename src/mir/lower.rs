@@ -658,6 +658,9 @@ struct ClosureJob<'a> {
     args: Vec<Ty>,
     /// Captured symbol, how, and the environment field's type.
     caps: Vec<(SymbolId, CapMode, Ty)>,
+    /// For each capture, the field of the symbol's struct it borrows when
+    /// the closure captures fields apart (core semantics §9.1).
+    fields: Vec<Option<String>>,
     env: EnvMode,
     ty: Ty,
     /// Its parameters borrow what the caller passes: a closure handed to
@@ -1930,6 +1933,9 @@ struct Bx<'l, 'a> {
     name: String,
     /// In a closure body: where each captured symbol lives.
     captured: FxHashMap<SymbolId, Place>,
+    /// A closure body's captures of single fields of an outer struct
+    /// binding, by symbol and field (core semantics §9.1).
+    captured_fields: FxHashMap<(SymbolId, String), Place>,
     /// Closures created in this body so far, for their names.
     closure_count: u32,
     /// The next closure literal lowered goes to a library call, so its
@@ -2003,6 +2009,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             errors: Vec::new(),
             name,
             captured: FxHashMap::default(),
+            captured_fields: FxHashMap::default(),
             closure_count: 0,
             closure_ref_params: false,
             copy_views: FxHashMap::default(),
@@ -4316,6 +4323,11 @@ impl<'l, 'a> Bx<'l, 'a> {
                     _ => self.unsupported(e.span, "`self` here"),
                 },
             },
+            ExprKind::FieldAccess { object, field }
+                if self.captured_field(object, field).is_some() =>
+            {
+                Ok(self.captured_field(object, field).expect("checked"))
+            }
             ExprKind::FieldAccess { object, field } => {
                 // A field of a `shared` value is written through any
                 // handle to it (core-semantics §5.9), so the handle is
@@ -13886,6 +13898,55 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
     }
 
+    /// The fields of `t`, a struct, that `body` reads `sym` through, when
+    /// every use of `sym` there is such a field access and `body` makes no
+    /// closure of its own.
+    fn disjoint_fields(&self, body: &Expr, sym: SymbolId, t: Ty) -> Option<Vec<(String, u32, Ty)>> {
+        let (adt, _) = self.tys().tcx().adt_of(t)?;
+        if adt.is_enum || matches!(self.tys().tcx().kind(t), HK::Shared { .. }) {
+            return None;
+        }
+        let res = &self.lcx.res;
+        let is_sym = |x: &Expr| {
+            matches!(x.kind, ExprKind::Identifier(_))
+                && matches!(res.get(&x.id), Some(Res::Local(s)) if *s == sym)
+        };
+        let (mut names, mut objects, mut uses, mut nested) =
+            (Vec::new(), Vec::new(), Vec::new(), false);
+        crate::span_visitor::for_each_expr(body, &mut |x| match &x.kind {
+            ExprKind::FieldAccess { object, field } if is_sym(object) => {
+                objects.push(object.id);
+                if !names.contains(field) {
+                    names.push(field.clone());
+                }
+            }
+            ExprKind::Closure { .. } => nested = true,
+            _ if is_sym(x) => uses.push(x.id),
+            _ => {}
+        });
+        if nested || uses.is_empty() || uses.iter().any(|u| !objects.contains(u)) {
+            return None;
+        }
+        names
+            .into_iter()
+            .map(|n| self.field_of(t, None, &n).map(|(i, ft)| (n, i, ft)))
+            .collect()
+    }
+
+    /// The capture of `object.field` when a closure captured that field of
+    /// an outer binding apart (`disjoint_fields`).
+    fn captured_field(&self, object: &Expr, field: &str) -> Option<Place> {
+        if self.captured_fields.is_empty() || !matches!(object.kind, ExprKind::Identifier(_)) {
+            return None;
+        }
+        let Some(Res::Local(sym)) = self.lcx.res.get(&object.id) else {
+            return None;
+        };
+        self.captured_fields
+            .get(&(*sym, field.to_string()))
+            .cloned()
+    }
+
     /// The symbols a closure body reads from its surroundings, in the order
     /// they first appear (core semantics §9.4).
     fn closure_captures(&self, body: &Expr) -> Vec<SymbolId> {
@@ -14179,6 +14240,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             .cloned()
             .unwrap_or_default();
         let mut caps = Vec::new();
+        let mut fields = Vec::new();
         let mut ops = Vec::new();
         // Whether the body writes a capture, which then needs the
         // environment lent mutably even when the capture was moved in.
@@ -14259,6 +14321,28 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
                 _ => CapMode::Ref,
             };
+            // A struct binding the body uses only through its fields is
+            // captured field by field, so the rest of it stays usable
+            // outside the closure (core semantics §9.1).
+            if cm != CapMode::Value && self.locals.contains_key(&sym) {
+                if let Some(names) = self.disjoint_fields(body, sym, t) {
+                    for (name, idx, ft) in names {
+                        let mutable = cm == CapMode::Mut;
+                        let rt = self.tys().tcx().reference(ft, mutable);
+                        let r = self.temp(rt);
+                        let kind = if mutable {
+                            BorrowKind::Mut
+                        } else {
+                            BorrowKind::Shared
+                        };
+                        self.assign(r, Rvalue::Ref(kind, place.field(idx, ft)));
+                        caps.push((sym, cm, rt));
+                        fields.push(Some(name));
+                        ops.push(Operand::Move(Place::local(r)));
+                    }
+                    continue;
+                }
+            }
             let (ft, op) = match cm {
                 CapMode::Value => (t, self.use_place(place, t)),
                 CapMode::Ref | CapMode::Mut => {
@@ -14275,6 +14359,7 @@ impl<'l, 'a> Bx<'l, 'a> {
                 }
             };
             caps.push((sym, cm, ft));
+            fields.push(None);
             ops.push(op);
         }
         let env = if (once || !moved.is_empty())
@@ -14321,6 +14406,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             expr: e,
             args: self.args.clone(),
             caps,
+            fields,
             env,
             ty,
             ref_params,
@@ -14358,7 +14444,14 @@ impl<'l, 'a> Bx<'l, 'a> {
                 CapMode::Value => p,
                 CapMode::Ref | CapMode::Mut => p.project(ProjElem::Deref),
             };
-            self.captured.insert(sym, p);
+            match &job.fields[k] {
+                Some(name) => {
+                    self.captured_fields.insert((sym, name.clone()), p);
+                }
+                None => {
+                    self.captured.insert(sym, p);
+                }
+            }
         }
         // The arguments come first (`_2..`); a borrowed one binds its name
         // after all of them are declared.
