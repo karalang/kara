@@ -189,7 +189,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-19-66 | 2026-10-19 | other | low | PINS: two existing core pins no longer test their rule as written: corpus/core/err_par_conflict has no comma between its par branches, so under Amendment 6 it is one branch and the MIR backends correctly run it; review ok_closure_kinds declares `f: MutFn()` bare, which D5 + §9.6 make uncallable | — |
 | B-2026-10-19-67 | 2026-10-19 | other | low | Atomic operations require a `MemoryOrdering` argument (B-2026-06-30-5, legacy era) although docs/library/concurrency.md and deferred.md say v1 atomics are SeqCst with no ordering argument: the IMPLEMENTATION is stale, not the doc (corrected 10-19 from 'the library doc is stale') | — |
 | B-2026-10-19-70 | 2026-10-19 | interp | medium | `karac __mir-run` copies a whole `Array` on each index or `len()`: a loop over `[0i64; 50000]` takes 25 s, against 0.95 s for `Vec.filled(50000, 0i64)` | — |
-| B-2026-10-19-71 | 2026-10-19 | typecheck | medium | `cmp` and `partial_cmp` on an `i128` or `u128` are refused ("no method 'cmp' on type 'u128'"), and a 128-bit value does not meet an `Ord`, `Eq` or `Add` bound, because the checker registers the builtin operator and comparison impls only for the widths up to 64 bits | — |
 
 ### Relocated
 
@@ -4252,6 +4251,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-19-65 | other | low | SPEC: §4.3 says a shared type's methods take a borrowed `self` only, and §7.11 makes `Drop` `fn drop(mut ref self)`, without stating that `impl Drop`… | ead44c4e9c |
 | B-2026-10-19-68 | interp+codegen | high | Calling a closure through a `mut ref MutFn()` parameter is broken on both MIR backends: a temporary closure argument `twice(mut \|\| { n += 1; })` runs… | 59eea721e4 |
 | B-2026-10-19-69 | cli | high | `karac fmt` and every fix-it that renders an expression drop the parentheses an operand needs: `(a + 1) * b` is written `a + 1 * b`, a different prog… | e41316d49f |
+| B-2026-10-19-71 | typecheck | medium | `cmp` and `partial_cmp` on an `i128` or `u128` are refused ("no method 'cmp' on type 'u128'"), and a 128-bit value does not meet an `Ord`, `Eq` or `A… | da5f25cf67 |
 
 </details>
 
