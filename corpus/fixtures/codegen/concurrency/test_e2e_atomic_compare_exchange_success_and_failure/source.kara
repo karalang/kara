@@ -2,9 +2,9 @@
 par struct Cell { v: Atomic[i64] }
 impl Cell {
     fn cas(ref self, old: i64, new: i64) -> Result[i64, i64] {
-        self.v.compare_exchange(old, new, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst)
+        self.v.compare_exchange(old, new)
     }
-    fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
+    fn get(ref self) -> i64 { self.v.load() }
 }
 fn report(r: own Result[i64, i64]) {
     match r {

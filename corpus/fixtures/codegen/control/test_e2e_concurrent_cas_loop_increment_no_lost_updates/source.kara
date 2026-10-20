@@ -1,12 +1,12 @@
 
 par struct Counter { v: Atomic[i64] }
 impl Counter {
-    fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
+    fn get(ref self) -> i64 { self.v.load() }
     fn inc(ref self) {
         let mut done = false;
         while not done {
-            let cur = self.v.load(MemoryOrdering.SeqCst);
-            match self.v.compare_exchange(cur, cur + 1, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {
+            let cur = self.v.load();
+            match self.v.compare_exchange(cur, cur + 1) {
                 Ok(_) => { done = true; }
                 Err(_) => { }
             }

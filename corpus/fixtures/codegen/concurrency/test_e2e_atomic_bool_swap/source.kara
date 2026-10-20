@@ -1,8 +1,8 @@
 
 par struct Latch { flag: Atomic[bool] }
 impl Latch {
-    fn take(ref self) -> bool { self.flag.swap(true, MemoryOrdering.SeqCst) }
-    fn get(ref self) -> bool { self.flag.load(MemoryOrdering.SeqCst) }
+    fn take(ref self) -> bool { self.flag.swap(true) }
+    fn get(ref self) -> bool { self.flag.load() }
 }
 fn main() {
     let l = Latch { flag: Atomic.new(false) };

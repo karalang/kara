@@ -5931,6 +5931,35 @@ fn main() {
 }
 
 #[test]
+fn mir_atomics_take_no_ordering() {
+    // B-2026-10-19-67: every atomic operation is sequentially consistent and
+    // takes no ordering; the deprecated trailing `MemoryOrdering` still runs.
+    const SRC: &str = r#"par struct Counter { count: Atomic[i64] }
+fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    bump(c);
+    c.count.fetch_add(4);
+    let old = c.count.swap(9);
+    let hit = c.count.compare_exchange(9, 11);
+    let miss = c.count.compare_exchange(9, 12);
+    c.count.fetch_sub(1, MemoryOrdering.Relaxed);
+    let f = Atomic.new(false);
+    let was = f.swap(true);
+    println(f"{old} {c.count.load()} {hit.is_ok()} {miss.is_err()} {was} {f.load(MemoryOrdering.Acquire)}");
+}
+"#;
+    let want = "5 10 true true false true\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
+#[test]
 fn mir_a_closure_through_a_mut_ref_function_parameter_keeps_its_writes() {
     // B-2026-10-19-68: a `mut ref MutFn()` parameter is specialised to the
     // closure it is handed, which it takes by the reference its body wants.

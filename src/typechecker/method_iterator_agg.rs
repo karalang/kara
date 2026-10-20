@@ -29,7 +29,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::types::{iterator_item_type_for, Type};
-use super::TypeErrorKind;
+use super::{FixIt, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
     /// Type an iterator, collection-aggregation or atomic method call.
@@ -330,8 +330,8 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `Atomic[T].compare_exchange(old, new, success, failure) -> Result[T, T]`
-        // (deferred.md § Atomic Operations, line 311). Special-cased because its
+        // `Atomic[T].compare_exchange(current, new) -> Result[T, T]`
+        // (docs/library/concurrency.md § Atomics). Special-cased because its
         // Result-shaped return must be visible to the typechecker so the caller
         // can `match` / `.is_ok()` on the outcome. The other atomic methods
         // (`load` / `store` / `fetch_*` / `swap`) are codegen-only and fall
@@ -355,29 +355,40 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(inner) = inner {
-                if args.len() != 4 {
-                    self.type_error(
+                // The frozen legacy pipeline keeps the old rule: two
+                // orderings are required.
+                let v2 = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+                if args.len() != 4 && !(v2 && args.len() == 2) {
+                    let message = if v2 {
+                        format!(
+                            "Atomic.compare_exchange expects (current, new) — 2 arguments, \
+                             found {}",
+                            args.len()
+                        )
+                    } else {
                         format!(
                             "Atomic.compare_exchange expects (old, new, success: MemoryOrdering, \
                              failure: MemoryOrdering) — 4 arguments, found {}",
                             args.len()
-                        ),
-                        *span,
-                        TypeErrorKind::WrongNumberOfArgs,
-                    );
+                        )
+                    };
+                    self.type_error(message, *span, TypeErrorKind::WrongNumberOfArgs);
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }
                 } else {
-                    // old / new must be assignable to the atomic's inner type T;
-                    // the two ordering args are inferred for recording (their
-                    // `MemoryOrdering.X` shape is validated at codegen).
+                    // `current` / `new` must be assignable to the atomic's
+                    // inner type T. Two trailing orderings are the
+                    // deprecated form (B-2026-10-19-67).
                     let old_ty = self.infer_expr(&args[0].value);
                     self.check_assignable(&inner, &old_ty, args[0].value.span);
                     let new_ty = self.infer_expr(&args[1].value);
                     self.check_assignable(&inner, &new_ty, args[1].value.span);
-                    self.infer_expr(&args[2].value);
-                    self.infer_expr(&args[3].value);
+                    if args.len() == 4 {
+                        self.infer_expr(&args[2].value);
+                        self.infer_expr(&args[3].value);
+                        self.warn_atomic_ordering(method, args, 2, span);
+                    }
                 }
                 let result_ty = Type::Named {
                     name: "Result".to_string(),
@@ -388,26 +399,21 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `Atomic[T]` load / store / read-modify-write ops — each takes an
-        // explicit `MemoryOrdering` argument and has NO implicit-ordering
-        // overload (deferred.md § Atomic Operations, lines 339–345):
-        //   `load(ord) -> T`, `store(val, ord)`, and the RMW family
-        //   `fetch_add` / `fetch_sub` / `fetch_and` / `fetch_or` /
-        //   `fetch_xor` / `swap` — all `(val, ord) -> T`.
+        // `Atomic[T]` load / store / read-modify-write ops, each sequentially
+        // consistent with no ordering argument (docs/library/concurrency.md §
+        // Atomics; B-2026-10-19-67): `load() -> T`, `store(val)`, and the RMW
+        // family `fetch_add` / `fetch_sub` / `fetch_and` / `fetch_or` /
+        // `fetch_xor` / `swap`, all `(val) -> T`. A trailing `MemoryOrdering`
+        // is the deprecated form, warned with a fix that deletes it.
         // Without this arm these fell through to the silent `Type::Error`
-        // catch-all below: arity went unchecked, so the implicit-ordering form
-        // (`c.fetch_add(1)`) passed typecheck and ran fine under the
-        // interpreter (which ignores the ordering) while codegen rejected it —
-        // a run/build divergence (B-2026-06-30-5). Requiring the ordering here,
-        // with a run-fatal `AtomicMissingOrdering`, makes `run` and `build`
-        // agree: both reject the implicit form. Modeling the real return type
+        // catch-all below and arity went unchecked (B-2026-06-30-5); a wrong
+        // count is a run-fatal `AtomicMissingOrdering`. Modeling the real return type
         // (`T` for load/RMW, `Unit` for store) also replaces the
         // universally-assignable `Type::Error` with the correct type. The
         // receiver gate (`Atomic[T]`, possibly behind a borrow) leaves the
         // same-named Vec/Slice `swap(i, j)` method untouched — it falls through
-        // to its own handling below. `compare_exchange` (4 args, `Result`-typed)
-        // is handled separately above. The ordering arg's `MemoryOrdering.X`
-        // shape is validated at codegen.
+        // to its own handling below. `compare_exchange` (`Result`-typed) is
+        // handled separately above.
         if matches!(
             method,
             "load"
@@ -432,40 +438,55 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(inner) = inner {
-                // `load` takes (ordering); `store` and every RMW op take
-                // (value, ordering). Both forms require the trailing ordering.
-                let want = if method == "load" { 1 } else { 2 };
-                if args.len() != want {
-                    let shape = if method == "load" {
-                        "(ordering: MemoryOrdering)"
-                    } else {
-                        "(value, ordering: MemoryOrdering)"
-                    };
-                    self.type_error(
+                // `load` takes nothing, `store` and every RMW op a value;
+                // every operation is sequentially consistent
+                // (docs/library/concurrency.md § Atomics). One more,
+                // trailing `MemoryOrdering` argument is the deprecated form
+                // (B-2026-10-19-67).
+                // The frozen legacy pipeline keeps the old rule: the
+                // ordering is required.
+                let v2 = self.cli_lint_overrides.strict_core || self.library_methods_from_source;
+                let want = if method == "load" { 0 } else { 1 };
+                if args.len() != want + 1 && !(v2 && args.len() == want) {
+                    let message = if v2 {
+                        let shape = if method == "load" { "()" } else { "(value)" };
                         format!(
-                            "Atomic.{method} takes {shape} — {want} argument{}; every atomic \
-                             operation requires an explicit MemoryOrdering (there is no \
-                             implicit-ordering form), found {}",
+                            "Atomic.{method} takes {shape} — {want} argument{}, found {}; \
+                             every atomic operation is sequentially consistent",
                             if want == 1 { "" } else { "s" },
                             args.len()
-                        ),
-                        *span,
-                        TypeErrorKind::AtomicMissingOrdering,
-                    );
+                        )
+                    } else {
+                        let shape = if method == "load" {
+                            "(ordering: MemoryOrdering)"
+                        } else {
+                            "(value, ordering: MemoryOrdering)"
+                        };
+                        format!(
+                            "Atomic.{method} takes {shape} — {} argument{}; every atomic \
+                             operation requires an explicit MemoryOrdering (there is no \
+                             implicit-ordering form), found {}",
+                            want + 1,
+                            if want == 0 { "" } else { "s" },
+                            args.len()
+                        )
+                    };
+                    self.type_error(message, *span, TypeErrorKind::AtomicMissingOrdering);
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }
-                } else if method == "load" {
-                    // The single argument is the ordering — inferred for
-                    // recording; its `MemoryOrdering.X` shape is a codegen check.
-                    self.infer_expr(&args[0].value);
                 } else {
                     // store / RMW: the leading value must be assignable to the
-                    // atomic's inner type `T`; the trailing ordering is inferred.
-                    // (`swap` accepts any `T`, including `Atomic[bool]`.)
-                    let val_ty = self.infer_expr(&args[0].value);
-                    self.check_assignable(&inner, &val_ty, args[0].value.span);
-                    self.infer_expr(&args[1].value);
+                    // atomic's inner type `T`. (`swap` accepts any `T`,
+                    // including `Atomic[bool]`.)
+                    if want == 1 {
+                        let val_ty = self.infer_expr(&args[0].value);
+                        self.check_assignable(&inner, &val_ty, args[0].value.span);
+                    }
+                    if args.len() > want {
+                        self.infer_expr(&args[want].value);
+                        self.warn_atomic_ordering(method, args, want, span);
+                    }
                 }
                 let ret = if method == "store" { Type::Unit } else { inner };
                 self.record_expr_type(span, &ret);
@@ -473,5 +494,46 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         None
+    }
+
+    /// The deprecated trailing `MemoryOrdering` arguments of an `Atomic`
+    /// operation, from `args[keep]` on: every operation is sequentially
+    /// consistent (docs/library/concurrency.md § Atomics), so `karac fix`
+    /// deletes them. Any ordering only strengthens to `SeqCst`, so the fix
+    /// cannot change what a program may observe (B-2026-10-19-67).
+    fn warn_atomic_ordering(&mut self, method: &str, args: &[CallArg], keep: usize, span: &Span) {
+        if !(self.cli_lint_overrides.strict_core || self.library_methods_from_source) {
+            return;
+        }
+        let (Some(first), Some(last)) = (args.get(keep), args.last()) else {
+            return;
+        };
+        // From the end of the last kept argument (its `, ` included), or
+        // from the first ordering when nothing is kept.
+        let from = match keep.checked_sub(1).map(|i| &args[i]) {
+            Some(kept) => kept.value.span.offset + kept.value.span.length,
+            None => first.value.span.offset,
+        };
+        let to = last.value.span.offset + last.value.span.length;
+        let fix_it = Some(FixIt {
+            span: Span {
+                line: first.value.span.line,
+                column: first.value.span.column,
+                offset: from,
+                length: to.saturating_sub(from),
+            },
+            replacement: String::new(),
+        });
+        self.type_lint_warning_with_fix(
+            format!(
+                "use of deprecated form `Atomic.{method}(.., MemoryOrdering)`: every atomic \
+                 operation is sequentially consistent and takes no ordering — suppress with \
+                 `#[allow(deprecated)]` on the enclosing item"
+            ),
+            *span,
+            TypeErrorKind::Deprecated,
+            "deprecated",
+            fix_it,
+        );
     }
 }

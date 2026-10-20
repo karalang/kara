@@ -1,7 +1,7 @@
 
 shared struct Counter { count: Atomic[i64] }
 impl Counter {
-    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+    fn get(ref self) -> i64 { self.count.load() }
 }
 fn main() {
     let c = Counter { count: Atomic.new(99) };

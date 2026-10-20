@@ -30,9 +30,9 @@ fn main() {
         let bytes: Vec[u8] = Vec.from_slice(buf[0..48]);
         let path = request_path(bytes);
         if path.len() >= 40 {
-            let _ = counters.n.fetch_add(1, MemoryOrdering.Relaxed);
+            let _ = counters.n.fetch_add(1);
         }
         i = i + 1;
     }
-    println(counters.n.load(MemoryOrdering.Relaxed));
+    println(counters.n.load());
 }

@@ -1,9 +1,9 @@
 
 par struct Counter { count: Atomic[i64] }
 impl Counter {
-    fn inc(ref self) -> i64 { self.count.fetch_add(1, MemoryOrdering.SeqCst) }
-    fn dec(ref self) -> i64 { self.count.fetch_sub(1, MemoryOrdering.SeqCst) }
-    fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
+    fn inc(ref self) -> i64 { self.count.fetch_add(1) }
+    fn dec(ref self) -> i64 { self.count.fetch_sub(1) }
+    fn get(ref self) -> i64 { self.count.load() }
 }
 fn main() {
     let c = Counter { count: Atomic.new(0) };

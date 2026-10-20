@@ -1,7 +1,7 @@
 
 par struct Gate { v: Atomic[i64] }
 impl Gate {
-    fn is_open(ref self) -> bool { self.v.load(MemoryOrdering.SeqCst) == 1 }
+    fn is_open(ref self) -> bool { self.v.load() == 1 }
 }
 
 fn fast_err(v: i64) -> Result[i64, i64] { Err(v) }

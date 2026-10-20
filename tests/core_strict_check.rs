@@ -9868,6 +9868,58 @@ fn get_mut_takes_the_keys_view() {
     );
 }
 
+/// B-2026-10-19-67: an atomic operation takes no ordering. The old trailing
+/// `MemoryOrdering` argument is a deprecated form, still accepted, that
+/// `karac fix` deletes; `#[allow(deprecated)]` silences it, and a call with
+/// the wrong number of arguments is still refused.
+#[test]
+fn an_atomic_ordering_argument_is_deprecated_and_fixed() {
+    accepted(
+        "atomic-no-ordering",
+        "fn main() {\n    let c = Atomic.new(0);\n    c.fetch_add(5);\n    c.store(7);\n    let old = c.swap(9);\n    let r = c.compare_exchange(9, 11);\n    println(f\"{old} {c.load()} {r.is_ok()}\");\n}\n",
+    );
+    let (dir, path) = fixture(
+        "atomic-ordering-deprecated",
+        "fn main() {\n    let c = Atomic.new(0);\n    c.fetch_add(5, MemoryOrdering.Relaxed);\n    let r = c.compare_exchange(5, 6, MemoryOrdering.AcqRel, MemoryOrdering.Acquire);\n    println(f\"{c.load(MemoryOrdering.Acquire)} {r.is_ok()}\");\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    for m in ["fetch_add", "compare_exchange", "load"] {
+        assert!(
+            err.contains(&format!(
+                "use of deprecated form `Atomic.{m}(.., MemoryOrdering)`"
+            )),
+            "{m}: {err}"
+        );
+    }
+    karac().arg("fix").arg(&path).output().unwrap();
+    let fixed = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        fixed.contains("c.fetch_add(5);")
+            && fixed.contains("c.compare_exchange(5, 6);")
+            && fixed.contains("{c.load()}"),
+        "{fixed}"
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && !err.contains("deprecated"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let (dir, path) = fixture(
+        "atomic-ordering-allowed",
+        "#[allow(deprecated)]\nfn main() {\n    let c = Atomic.new(0);\n    c.store(1, MemoryOrdering.Release);\n    println(c.load());\n}\n",
+    );
+    let out = karac().arg("check").arg(&path).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && !err.contains("deprecated"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+    rejected(
+        "atomic-too-many-arguments",
+        "fn main() {\n    let c = Atomic.new(0);\n    c.store(1, MemoryOrdering.Release, 2);\n}\n",
+        "Atomic.store takes (value) — 1 argument",
+    );
+}
+
 /// B-2026-10-19-39, B-2026-10-19-47: `karac check` refuses the `par`
 /// conflicts the MIR effect pass refuses a run for (core semantics §11.2):
 /// two printing branches, two sends on one channel, and two iterations of a
