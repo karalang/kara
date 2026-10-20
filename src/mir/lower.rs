@@ -1902,6 +1902,21 @@ struct LoopCx {
     dest: Option<Place>,
 }
 
+/// Where a `?` in a `par` branch goes: [`Bx::par_try`].
+#[derive(Clone, Copy)]
+struct ParTry {
+    /// The scope depth the branch starts at.
+    depth: usize,
+    /// Where the block continues once this branch has failed: the copy of
+    /// the next branch that runs after a failure.
+    skip: BasicBlock,
+    /// The function's return value the block fails with.
+    pending: Local,
+    /// An earlier branch already failed, so this error is dropped: the
+    /// source-earliest error is the block's.
+    discard: bool,
+}
+
 struct Bx<'l, 'a> {
     lcx: &'l mut Lcx<'a>,
     b: BodyBuilder,
@@ -1951,6 +1966,11 @@ struct Bx<'l, 'a> {
     /// The `par for` whose body is lowered next: its body, the `Vec` local
     /// that collects the bodies' values, and that `Vec`'s type.
     par_acc: Option<(*const Block, Local, Ty, usize)>,
+    /// The `par` branches being lowered, innermost last: a `?` in one
+    /// records its error and leaves the branch, not the function, so the
+    /// other branches still run (core semantics §11.7). `None` while a
+    /// `par for` body is lowered, where `?` still returns.
+    par_try: Vec<Option<ParTry>>,
     /// Each `old(e)` of this function's `ensures` clauses: `e`'s value,
     /// taken on entry.
     old_vals: FxHashMap<NodeId, Local>,
@@ -1995,6 +2015,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             assigned_caps: Default::default(),
             ty_hints: FxHashMap::default(),
             par_acc: None,
+            par_try: Vec::new(),
             old_vals: FxHashMap::default(),
             ensures: &[],
             impl_target: None,
@@ -7651,12 +7672,55 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// Ends the branch begun at `entry`, recording its blocks in `region`,
     /// and continues in a fresh block.
     fn branch_end(&mut self, region: usize, entry: BasicBlock) {
-        let end = self.b.block_count() as u32;
-        let blocks = (entry.0..end).map(BasicBlock).collect();
-        self.b.par_regions[region].branches.push(blocks);
         let after = self.b.new_block();
+        self.branch_end_at(region, entry, after);
+    }
+
+    /// [`Self::branch_end`], continuing at `after`, a block opened before
+    /// the branch so it is not one of the branch's.
+    fn branch_end_at(&mut self, region: usize, entry: BasicBlock, after: BasicBlock) {
+        let end = self.b.block_count() as u32;
+        let blocks = (entry.0..end)
+            .filter(|&i| i != after.0)
+            .map(BasicBlock)
+            .collect();
+        self.b.par_regions[region].branches.push(blocks);
         self.goto(after);
         self.cur = after;
+    }
+
+    /// Leaves with the error `value` for `ret`: from the function, or, in a
+    /// `par` branch, from the branch into its error slot.
+    fn error_exit(&mut self, ret: Place, value: Rvalue) -> R<()> {
+        match self.par_try.last().copied().flatten() {
+            Some(slot) if slot.discard => {
+                let t = self.b.local_ty(slot.pending);
+                let l = self.temp(t);
+                self.assign(l, value);
+                let next = self.b.new_block();
+                self.goto_with(
+                    TerminatorKind::Drop {
+                        place: Place::local(l),
+                        target: next,
+                        unwind: UnwindAction::Abort,
+                    },
+                    next,
+                );
+                self.exit_to(slot.depth, true)?;
+                self.diverge(TerminatorKind::Goto { target: slot.skip });
+                Ok(())
+            }
+            Some(slot) => {
+                self.assign(Place::local(slot.pending), value);
+                self.exit_to(slot.depth, true)?;
+                self.diverge(TerminatorKind::Goto { target: slot.skip });
+                Ok(())
+            }
+            None => {
+                self.assign(ret, value);
+                self.return_exit()
+            }
+        }
     }
 
     /// `par { a, b }`: each expression is a branch and the value is the
@@ -7665,6 +7729,11 @@ impl<'l, 'a> Bx<'l, 'a> {
     /// running them in source order is one of the allowed schedules.
     fn par_block(&mut self, e: &'a Expr, b: &'a Block, dest: Place) -> R<()> {
         let region = self.open_par_region(ParKind::Block, e.span);
+        // Only a function that returns a `Result` or `Option` has a `?`.
+        let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
+        if self.error_variant(ret_ty).is_some() {
+            return self.par_block_fallible(region, b, dest);
+        }
         if b.stmts.is_empty() {
             if let Some(ExprKind::Tuple(es)) = b.final_expr.as_deref().map(|x| &x.kind) {
                 if !es.is_empty() {
@@ -7697,6 +7766,121 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
             None => self.assign(dest, Rvalue::Use(unit_const(self.unit()))),
         }
+        Ok(())
+    }
+
+    /// A `par` block whose branches may use `?`. A failing branch does not
+    /// cancel the others: every branch runs, and the block then fails with
+    /// the source-earliest error (core semantics §11.7; B-2026-10-19-54).
+    ///
+    /// Each branch is lowered twice: once on the path where no branch has
+    /// failed yet, whose values the block's result reads, and once on the
+    /// path after a failure, whose values are dropped and whose errors are
+    /// dropped too. So the result is never read where a branch failed.
+    fn par_block_fallible(&mut self, region: usize, b: &'a Block, dest: Place) -> R<()> {
+        enum Branch<'e> {
+            Stmt(&'e Stmt),
+            Expr(&'e Expr),
+        }
+        let tuple = match b.final_expr.as_deref().map(|x| &x.kind) {
+            Some(ExprKind::Tuple(es)) if b.stmts.is_empty() && !es.is_empty() => Some(es),
+            _ => None,
+        };
+        let branches: Vec<Branch<'a>> = match tuple {
+            Some(es) => es.iter().map(Branch::Expr).collect(),
+            None => {
+                self.note_escaping_lets(b);
+                b.stmts
+                    .iter()
+                    .map(Branch::Stmt)
+                    .chain(b.final_expr.as_deref().map(Branch::Expr))
+                    .collect()
+            }
+        };
+        let ret_ty = self.b.local_ty(Local::RETURN_PLACE);
+        let pending = self.temp(ret_ty);
+        self.schedule(ScopeEntry::Drop(Place::local(pending)));
+        // `after[j]`: the copy of branch `j` that runs after a failure;
+        // `after[n]` fails the block.
+        let after: Vec<BasicBlock> = (0..=branches.len()).map(|_| self.b.new_block()).collect();
+        let depth = self.scopes.len();
+        let mut ops = Vec::new();
+        for (j, br) in branches.iter().enumerate() {
+            // The branch's error goes to a slot of its own, which only it
+            // writes, and moves to `pending` outside the branch.
+            let own = self.temp(ret_ty);
+            self.schedule(ScopeEntry::Drop(Place::local(own)));
+            let failed = self.b.new_block();
+            let here = self.cur;
+            self.cur = failed;
+            self.assign(pending, Rvalue::Use(Operand::Move(Place::local(own))));
+            self.goto(after[j + 1]);
+            self.cur = here;
+            let entry = self.branch_begin();
+            self.par_try.push(Some(ParTry {
+                depth,
+                skip: failed,
+                pending: own,
+                discard: false,
+            }));
+            let r = match br {
+                Branch::Stmt(s) => self.stmt(s),
+                Branch::Expr(x) if tuple.is_some() => self.expr_operand(x).map(|op| ops.push(op)),
+                Branch::Expr(x) => {
+                    self.push_scope();
+                    let r = self.expr_into(x, dest.clone());
+                    r.and_then(|()| self.pop_scope())
+                }
+            };
+            self.par_try.pop();
+            r?;
+            let next = self.b.new_block();
+            self.branch_end_at(region, entry, next);
+        }
+        match tuple {
+            Some(_) => self.assign(dest, Rvalue::Aggregate(AggregateKind::Tuple, ops)),
+            None if b.final_expr.is_none() => {
+                self.assign(dest, Rvalue::Use(unit_const(self.unit())))
+            }
+            None => {}
+        }
+        let done = self.b.new_block();
+        self.goto(done);
+        // The path after a failure: the later branches run for their
+        // effects, and their values and errors are dropped. Their bindings
+        // are not the ones the code after the block names.
+        let saved = self.locals.clone();
+        for (j, br) in branches.iter().enumerate().skip(1) {
+            self.cur = after[j];
+            self.par_try.push(Some(ParTry {
+                depth,
+                skip: after[j + 1],
+                pending,
+                discard: true,
+            }));
+            let r = match br {
+                Branch::Stmt(s) => self.stmt(s),
+                Branch::Expr(x) => {
+                    self.push_scope();
+                    let t = self.expr_ty(x)?;
+                    let l = self.temp(t);
+                    let r = self.expr_into(x, Place::local(l));
+                    self.schedule(ScopeEntry::Drop(Place::local(l)));
+                    r.and_then(|()| self.pop_scope())
+                }
+            };
+            self.par_try.pop();
+            r?;
+            self.goto(after[j + 1]);
+        }
+        self.locals = saved;
+        // No branch fails before the first one runs.
+        self.cur = after[0];
+        self.diverge(TerminatorKind::Unreachable);
+        self.cur = after[branches.len()];
+        let ret = Place::local(Local::RETURN_PLACE);
+        self.error_exit(ret, Rvalue::Use(Operand::Move(Place::local(pending))))?;
+        self.cur = done;
         Ok(())
     }
 
@@ -7759,7 +7943,9 @@ impl<'l, 'a> Bx<'l, 'a> {
             .replace((body as *const Block, acc, vt, region));
         let t = self.unit();
         let unit = self.temp(t);
+        self.par_try.push(None);
         let r = self.for_range(e, label, pattern, iterable, body, Place::local(unit));
+        self.par_try.pop();
         self.par_acc = saved;
         r?;
         self.assign(dest, Rvalue::Use(Operand::Move(Place::local(acc))));
@@ -8872,8 +9058,7 @@ impl<'l, 'a> Bx<'l, 'a> {
             }
         }
         let kind = self.adt_aggregate(ret_ty, ret_err);
-        self.assign(ret, Rvalue::Aggregate(kind, ops));
-        self.return_exit()?;
+        self.error_exit(ret, Rvalue::Aggregate(kind, ops))?;
         // Success path: move the payload out.
         self.cur = ok_bb;
         let Some(pt) = self.tys().tcx().field_ty(it, Some(ok), 0) else {

@@ -6253,3 +6253,104 @@ fn main() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
     }
 }
+
+/// B-2026-10-19-54: a `?` that fails in one `par` branch cancels no other
+/// branch; every branch runs and the block fails with the source-earliest
+/// error (core semantics §11.7). Nested blocks, `String` errors dropped by a
+/// later failing branch, and `Option`, on the interpreter and compiled alike.
+#[test]
+fn mir_question_in_a_par_branch_runs_the_other_branches() {
+    let cases = [
+        (
+            r#"enum E { Bad(i64) }
+fn fail(n: i64) -> Result[i64, E] { Err(E.Bad(n)) }
+fn work() -> Result[i64, E] {
+    println("work done");
+    Ok(7)
+}
+fn one() -> Result[i64, E] {
+    let (x, y) = par { fail(1)?, work()? };
+    Ok(x + y)
+}
+fn two() -> Result[i64, E] {
+    let (x, y) = par { fail(1)?, fail(2)? };
+    Ok(x + y)
+}
+fn show(r: Result[i64, E]) {
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(E.Bad(n)) => println(f"err {n}"),
+    }
+}
+fn main() {
+    show(one());
+    show(two());
+}
+"#,
+            "work done\nerr 1\nerr 1\n",
+        ),
+        (
+            r#"fn fail(n: i64) -> Result[String, String] { Err(f"e{n}") }
+fn work(n: i64) -> Result[String, String] {
+    Ok(f"v{n}")
+}
+fn one() -> Result[String, String] {
+    let (x, y, z) = par { work(1)?, fail(2)?, fail(3)? };
+    Ok(f"{x}{y}{z}")
+}
+fn nested() -> Result[String, String] {
+    let (x, y) = par {
+        {
+            let (a, b) = par { fail(4)?, work(5)? };
+            f"{a}{b}"
+        },
+        work(6)?,
+    };
+    Ok(f"{x}{y}")
+}
+fn fine() -> Result[String, String] {
+    let (x, y) = par { work(9)?, work(10)? };
+    Ok(f"{x}{y}")
+}
+fn show(r: Result[String, String]) {
+    match r {
+        Ok(v) => println(f"ok {v}"),
+        Err(e) => println(f"err {e}"),
+    }
+}
+fn main() {
+    show(one());
+    show(nested());
+    show(fine());
+}
+"#,
+            "err e2\nerr e4\nok v9v10\n",
+        ),
+        (
+            r#"fn none(n: i64) -> Option[i64] { if n > 0 { None } else { Some(n) } }
+fn some(n: i64) -> Option[i64] {
+    println(f"some {n}");
+    Some(n)
+}
+fn h(k: i64) -> Option[i64] {
+    let (a, b) = par { none(k)?, some(5)? };
+    Some(a + b)
+}
+fn main() {
+    println(f"{h(1)} {h(0)}");
+}
+"#,
+            "some 5\nsome 5\nNone Some(5)\n",
+        ),
+    ];
+    for (src, want) in cases {
+        let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+        assert_eq!(interp.output, want, "__mir-run");
+        let dir = Scratch::new();
+        let Some(exe) = cli_build(&dir, src, &[]) else {
+            continue;
+        };
+        let run = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), want, "compiled");
+    }
+}
