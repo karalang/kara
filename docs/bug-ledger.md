@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 750 |
+| miscompile | 751 |
 | run-vs-build | 609 |
 | leak | 604 |
 | double-free | 427 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 2977 |
-| interp | 999 |
+| codegen | 2978 |
+| interp | 1000 |
 | typecheck | 521 |
 | ownership | 124 |
 | other | 122 |
@@ -169,13 +169,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-16 | 2026-10-20 | typecheck | low | A catch-all match arm that hands on a borrowed parameter (`match r { ... other => other }`) gets a bare TYPE_MISMATCH with no fix-it, where `return r` gets the `own` fix-it | — |
 | B-2026-10-20-20 | 2026-10-20 | typecheck+interp+codegen | low | Floats have no `is_nan`, `is_infinite`, `is_finite` or `is_sign_negative`, so data-cleaning code has to write `x != x` and compare against `1.0 / 0.0` | — |
 | B-2026-10-20-22 | 2026-10-20 | typecheck | low | `String.find` takes a `char` (design.md's own example is `s.find(' ')`), but `rfind`, `contains` and `starts_with` refuse one (CORRECTION 2026-10-20: `rfind` too, so `s.rfind('/')` fails while `s.find('/')` works) with a type error, and `split` refuses one with a fix-it to the string literal; so `"02468".contains(c)`, the usual digit or class test, has to be written `contains(f"{c}")` | — |
-| B-2026-10-20-26 | 2026-10-20 | interp+codegen | medium | A suspending closure passed to a function value is refused on both v2 backends: `with_span(s, || { serve_one(listener); })`, where `serve_one` awaits `accept`, stops at coroutine lowering with "main.c0 suspends and is used as a function value; calling a coroutine through a function value is not supported yet" | — |
 | B-2026-10-20-31 | 2026-10-20 | other | high | MIR: an if-expression whose arm is a bare `None` of a drop type (`Option[String]`), passed DIRECTLY as a call argument, reaches the callee uninitialized ('discriminant of a value that is not an initialized enum'); the same value bound with `let` first, or an `Option[i64]`, works | — |
 | B-2026-10-20-32 | 2026-10-20 | typecheck+interp | medium | `IntoIterator` is not the spec's trait: the prelude's (runtime/stdlib/into_iterator.kara, CR-202) has `type Item; type IntoIter;` and no `into_iter` method, where design.md § Iteration gives `type Item; fn into_iter(own self) -> impl Iterator[Item = Self.Item]`. A spec-shaped impl is refused, a `C: IntoIterator` bound cannot call `.into_iter()`, and `v.extend(x)` on a user `IntoIterator` type passes check but the MIR builder refuses it | — |
 | B-2026-10-20-33 | 2026-10-20 | typecheck | low | A `flat_map` closure that returns a collection (`|x| pairs(*x)` returning `Vec[i64]`) gets E0200 listing all 29 `Iterator` implementors and no `.into_iter()` hint, then a second E0236 at the same span; design.md promises the `.into_iter()` suggestion for the `for` case only, but the fix here is the same one call | — |
 | B-2026-10-20-34 | 2026-10-20 | typecheck+interp | medium | A closure returned inside its enclosing closure's result captures that closure's `Copy` parameter or local by `ref`, so `(0..n).flat_map(|i| (i + 1..n).map(|j| i * 10 + j))` is refused (E0509 'the result borrows `i`', or E0516 for a local) by `karac check` and by MIR borrowck; core-semantics.md §9.1 ('a place that dies first is moved in') and §9.3 (a returned closure escapes and captures by move) both make the capture a copy, and Kāra has no `move` to ask for one | — |
 | B-2026-10-20-35 | 2026-10-20 | typecheck+interp | medium | A free function returning `impl Iterator[Item = i64]` cannot be used: `flat_map(|i| adder(i))` is refused by `karac check` ('expected U, found impl Iterator[Item = i64]'), and `adder(1).collect()` passes check but the MIR builder refuses it ('the method call .collect with no resolved callee is not lowered yet') | — |
 | B-2026-10-20-36 | 2026-10-20 | cli | low | karac fix skips the `.clone()` for a match arm whose body is a block ("applying it would not parse; please report it") while the same run also fixes the arm's inner tails | — |
+| B-2026-10-20-37 | 2026-10-20 | interp+codegen | medium | The active span leaks across tasks on both v2 backends: while a task is suspended inside `with_span`, another task's log line is stamped with that span's id | — |
 
 ### Relocated
 
@@ -4284,6 +4284,7 @@ registered in the callee's prologue, not by-value struct params in general. | v2
 | B-2026-10-20-23 | typecheck | medium | An unknown associated constant on a primitive (`f64.PI`, `f64.FOO`, `i64.PI`, `u8.MAXX`) passes `karac check`, then `__mir-run` and `build --mir` sto… | 02a249ca7c |
 | B-2026-10-20-24 | interp+codegen | medium | MIR binds an explicit `ref name` pattern over an owned scrutinee BY VALUE, so `Some(ref g) => *g != long` (Option[String]) and `let (ref a, ref b) =… | d9bd46cacb |
 | B-2026-10-20-25 | parser | low | The struct-pattern field shorthand `P { ref name, ref n }` does not parse ("'ref' is a reserved keyword and cannot be used as an identifier"), though… | 4dd4f51777 |
+| B-2026-10-20-26 | interp+codegen | medium | A suspending closure passed to a function value is refused on both v2 backends: `with_span(s, \|\| { serve_one(listener); })`, where `serve_one` awaits… | f697e02848 |
 | B-2026-10-20-27 | parser | low | A Rust array type `[Str; 16]` / `[i64; 3]` gets only "Expected type, found LeftBracket" with no pointer to Kāra's `Array[Str, 16]`, though the parser… | 340d9bec5b |
 | B-2026-10-20-28 | effect | low | `#[allow(mutual_recursion_note)]` silences the mutual-recursion note on free functions but not on impl methods: two mutually recursive methods each c… | e2bd1bb71a |
 | B-2026-10-20-29 | interp | medium | MIR interpreter: `Response.bytes()` on a client response whose body is not UTF-8 returns the bytes of its lossy text (each bad byte as U+FFFD, 8 byte… | 51f0e57b3a |
