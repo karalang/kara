@@ -133,6 +133,22 @@ const KNOWN_BROKEN_FILES: &[(&str, &str)] = &[
          (docs/spikes/windows-iocp-scale-investigation.md); legacy `build` \
          still accepts it, and ws_echo_spawn.kara is the TaskGroup form.",
     ),
+    (
+        "std_net/ws_echo.kara",
+        "typecheck: `WebSocket` waits for the services track (M4a, \
+         E_DEFERRED_M4A, B-2026-10-20-8); `karac check` refuses it until then.",
+    ),
+    (
+        "std_net/ws_echo_spawn.kara",
+        "typecheck: `WebSocket` waits for the services track (M4a, \
+         E_DEFERRED_M4A, B-2026-10-20-8); `karac check` refuses it until then.",
+    ),
+    (
+        "std_net/https_hello.kara",
+        "typecheck: `Server.serve_tls` waits for the services track (M4a, \
+         E_DEFERRED_M4A, B-2026-10-20-8); the TLS server is refused by \
+         `karac check` until then.",
+    ),
 ];
 
 fn is_excluded(rel: &Path) -> bool {

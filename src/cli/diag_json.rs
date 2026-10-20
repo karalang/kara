@@ -1826,6 +1826,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::FnKindMismatch => "E0518",
                 crate::typechecker::TypeErrorKind::CapturePrefixRemoved => "E0519",
                 crate::typechecker::TypeErrorKind::RemovedInCore => "E0520",
+                crate::typechecker::TypeErrorKind::DeferredToM4a => "E_DEFERRED_M4A",
                 crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
                 // core-semantics.md §3.7 names this one (B-2026-10-19-61).
                 crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E_INDEX_MOVE_NON_COPY",

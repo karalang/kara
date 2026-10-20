@@ -828,6 +828,12 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0520",
         ty("RemovedInCore", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // B-2026-10-20-8: the TLS server and WebSocket keep their services-track
+    // (M4a) placement.
+    (
+        "E_DEFERRED_M4A",
+        ty("DeferredToM4a", Some(DiagnosticClass::TypeMismatch)),
+    ),
     // ── provider escape ─────────────────────────────────────────
     ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────

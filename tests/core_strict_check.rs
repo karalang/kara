@@ -10238,3 +10238,42 @@ fn a_tuple_literal_takes_str_from_its_slot() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-10-20-8 (review/PLAN_AMENDMENT_2026-10-19.md, "TLS and
+/// WebSocket"): the TLS server and WebSocket keep their M4a placement, so
+/// `karac check` refuses their entry points with a code naming M4a. The TLS
+/// client (`TlsStream.connect`) and a program's own `WebSocket` type are not
+/// refused.
+#[test]
+fn the_tls_server_and_websocket_wait_for_m4a() {
+    for (tag, call) in [
+        (
+            "m4a-websocket-accept",
+            "let l = TcpListener.bind(\"127.0.0.1:0\").unwrap();\n    let _w = WebSocket.accept(l);",
+        ),
+        (
+            "m4a-tls-listener",
+            "let _l = TlsListener.bind_tls(\"127.0.0.1:0\", \"c\", \"k\");",
+        ),
+    ] {
+        let (dir, path) = fixture(tag, &format!("fn main() {{\n    {call}\n}}\n"));
+        let out = karac()
+            .arg("check")
+            .arg("--output=json")
+            .arg(&path)
+            .output()
+            .unwrap();
+        let json = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{tag}: check must reject: {json}");
+        assert!(json.contains("\"code\":\"E_DEFERRED_M4A\""), "{tag}: {json}");
+        assert!(json.contains("services track (M4a"), "{tag}: {json}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    accepted(
+        "m4a-own-websocket-type",
+        "struct WebSocket { n: i64 }\n\
+         impl WebSocket { fn accept(n: i64) -> WebSocket { WebSocket { n: n } } }\n\
+         fn main() { let w = WebSocket.accept(2); println(f\"{w.n}\"); }\n",
+    );
+}

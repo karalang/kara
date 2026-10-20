@@ -132,6 +132,8 @@ struct Walk<'t, 'a> {
     kind_errors: Vec<(Span, String)>,
     /// Removed capture prefixes, with the edit that deletes each (§9.6).
     prefix_errors: Vec<(Span, String, FixIt)>,
+    /// Calls into a library surface placed in M4a (B-2026-10-20-8).
+    m4a_calls: Vec<(Span, String)>,
     /// Calls of removed library functions (§11.7).
     removed_calls: Vec<(Span, String)>,
     /// Offsets of plain pattern bindings some write goes through.
@@ -287,6 +289,7 @@ impl<'a> TypeChecker<'a> {
             prefix_errors: Vec::new(),
             once_calls: FxHashSet::default(),
             removed_calls: Vec::new(),
+            m4a_calls: Vec::new(),
             written_pattern_bindings: FxHashSet::default(),
         };
         for f in fns.into_iter().filter(|f| !f.stdlib_origin) {
@@ -378,6 +381,7 @@ impl<'a> TypeChecker<'a> {
         let once_calls = w.once_calls;
         let read_conflicts = w.read_conflicts;
         let removed_calls = w.removed_calls;
+        let m4a_calls = w.m4a_calls;
         // A binding the fix makes `ref` that its arm writes through must be
         // `mut ref` instead (B-2026-10-18-28).
         let written = w.written_pattern_bindings;
@@ -388,6 +392,9 @@ impl<'a> TypeChecker<'a> {
         }
         for (span, message) in removed_calls {
             self.type_error(message, span, TypeErrorKind::RemovedInCore);
+        }
+        for (span, message) in m4a_calls {
+            self.type_error(message, span, TypeErrorKind::DeferredToM4a);
         }
         for (span, message) in kind_errors {
             self.type_error(message, span, TypeErrorKind::FnKindMismatch);
@@ -1021,6 +1028,13 @@ impl Walk<'_, '_> {
                 return;
             }
             ExprKind::MethodCall { object, method, .. }
+                if matches!(&object.kind, ExprKind::Identifier(ty)
+                    if self.check_m4a_call(e, ty, method)) => {}
+            ExprKind::Call { callee, .. }
+                if matches!(&callee.kind, ExprKind::Path { segments, .. }
+                    if segments.len() == 2 && self.check_m4a_call(e, &segments[0], &segments[1])) =>
+                {}
+            ExprKind::MethodCall { object, method, .. }
                 if self.method_writes_receiver(e, object, method) =>
             {
                 let action = match (&object.kind, place_root(object)) {
@@ -1238,6 +1252,42 @@ impl Walk<'_, '_> {
                 Child::Block(b) => self.block(b),
             }
         }
+    }
+
+    /// B-2026-10-20-8: the TLS server (`Server.serve_tls`, `TlsListener`)
+    /// and WebSocket (`Server.serve_ws`, `Server.serve_ws_tls`, `WebSocket`)
+    /// keep their services-track (M4a) placement (docs/library/io.md), and
+    /// the v2 backends do not run them, so the check refuses each entry
+    /// point rather than let a program reach an internal MIR error. The TLS
+    /// client (`TlsStream.connect`) is not one. Records the call and returns
+    /// false, so the walk goes on as for any other call.
+    fn check_m4a_call(&mut self, call: &Expr, ty: &str, method: &str) -> bool {
+        let what = match (ty, method) {
+            ("Server", "serve_tls") => "the TLS server",
+            ("Server", "serve_ws" | "serve_ws_tls") => "WebSocket",
+            ("TlsListener", _) => "the TLS server",
+            ("WebSocket", _) => "WebSocket",
+            _ => return false,
+        };
+        // A local of that name, or a program's own type, is not the library's.
+        if self.lookup(ty).is_some()
+            || self.tc.program.items.iter().any(|it| match it {
+                Item::StructDef(s) => !s.stdlib_origin && s.name == *ty,
+                Item::EnumDef(e) => !e.stdlib_origin && e.name == *ty,
+                _ => false,
+            })
+        {
+            return false;
+        }
+        self.m4a_calls.push((
+            call.span,
+            format!(
+                "`{ty}.{method}` is not available yet: {what} comes with the services \
+                 track (M4a, docs/library/io.md), and until then `karac check` refuses \
+                 it. Plain TCP (`std.net`) and the HTTPS client are available now"
+            ),
+        ));
+        false
     }
 
     /// Whether `name` is bound by the pattern of an enclosing bare `for`
