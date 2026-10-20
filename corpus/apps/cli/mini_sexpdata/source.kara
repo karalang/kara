@@ -1,0 +1,2171 @@
+// ------------------------------------------------------------ Python str helpers
+
+fn hex_digits(n: i64, width: i64) -> String {
+    let d: Vec[char] = "0123456789abcdef".chars().collect();
+    let mut out = String.new();
+    let mut k = width;
+    while k > 0 {
+        k -= 1;
+        out.push(d[(n >> (4 * k)) & 15]);
+    }
+    out
+}
+
+// str.isprintable(), for the characters property files hold.
+fn py_printable(c: char) -> bool {
+    let n = c as i64;
+    if n < 0x20 or (n >= 0x7f and n <= 0xa0) or n == 0xad {
+        return false;
+    }
+    if n == 0x1680 or (n >= 0x2000 and n <= 0x200f) or (n >= 0x2028 and n <= 0x202f) {
+        return false;
+    }
+    if (n >= 0x205f and n <= 0x206f) or n == 0x3000 or n == 0xfeff or n == 0xfffe or n == 0xffff or (n >= 0xfff9 and n <= 0xfffb) {
+        return false;
+    }
+    not (n >= 0xe000 and n <= 0xf8ff)
+}
+
+// repr() of a str.
+fn py_repr_str(s: ref String) -> String {
+    let q = if s.contains("'") and not s.contains("\"") { '"' } else { '\'' };
+    let mut out = String.new();
+    out.push(q);
+    for c in s.chars() {
+        if c == q or c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_printable(c) {
+            out.push(c);
+        } else {
+            let n = c as i64;
+            if n < 0x100 {
+                out.push_str(f"\\x{hex_digits(n, 2)}");
+            } else if n < 0x10000 {
+                out.push_str(f"\\u{hex_digits(n, 4)}");
+            } else {
+                out.push_str(f"\\U{hex_digits(n, 8)}");
+            }
+        }
+    }
+    out.push(q);
+    out
+}
+// ------------------------------------------------------------ Python numbers
+//
+// int() and float() of an atom, as the parser tries them.
+
+fn ascii_lower(c: char) -> char {
+    if c >= 'A' and c <= 'Z' {
+        char.try_from((c as u32) + 32).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+// The non-ASCII characters str.isspace() is true for.
+fn uni_space(c: char) -> bool {
+    let n = c as i64;
+    n == 0x85 or n == 0xa0 or n == 0x1680 or (n >= 0x2000 and n <= 0x200a) or n == 0x2028 or n == 0x2029
+        or n == 0x202f or n == 0x205f or n == 0x3000
+}
+
+// The value of a Unicode decimal digit (category Nd), or -1. Each block
+// of ten digits starts at one of these zeros (Unicode 15.1, as Python
+// 3.13 has it).
+fn uni_digit(c: char) -> i64 {
+    let zeros: Vec[i64] = vec![
+        0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6,
+        0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xde6, 0xe50, 0xed0,
+        0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80,
+        0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900,
+        0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x11066,
+        0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0,
+        0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60,
+        0x16ac0, 0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140,
+        0x1e2f0, 0x1e4f0, 0x1e950, 0x1fbf0,
+    ];
+    let n = c as i64;
+    for z in zeros.iter() {
+        if n >= *z and n < *z + 10 {
+            return n - *z;
+        }
+    }
+    -1
+}
+
+// repr() of a float.
+fn float_repr(x: f64) -> String {
+    if x != x {
+        "nan".to_string()
+    } else if x == f64.INFINITY {
+        "inf".to_string()
+    } else if x == -f64.INFINITY {
+        "-inf".to_string()
+    } else {
+        f"{x}"
+    }
+}
+
+// ------------------------------------------------------------ big integers
+
+// Magnitudes as 32-bit limbs, least significant first, with no high
+// zero limbs (zero is the empty vector).
+fn big_trim(a: mut ref Vec[u32]) {
+    while a.len() > 0 and a[a.len() - 1] == 0 {
+        a.pop();
+    }
+}
+
+fn big_mul_add(a: mut ref Vec[u32], m: u64, add: u64) {
+    let mut carry = add;
+    for i in 0..a.len() {
+        let t = (a[i] as u64) * m + carry;
+        a[i] = (t & 4294967295) as u32;
+        carry = t >> 32;
+    }
+    while carry > 0 {
+        a.push((carry & 4294967295) as u32);
+        carry = carry >> 32;
+    }
+}
+
+fn big_from_digits(ds: ref Vec[u8]) -> Vec[u32] {
+    let mut a: Vec[u32] = Vec.new();
+    for d in ds.iter() {
+        big_mul_add(mut a, 10, *d as u64);
+    }
+    big_trim(mut a);
+    a
+}
+
+fn big_pow10(n: i64) -> Vec[u32] {
+    let mut a: Vec[u32] = [1];
+    let mut k = n;
+    while k >= 9 {
+        big_mul_add(mut a, 1000000000, 0);
+        k -= 9;
+    }
+    while k > 0 {
+        big_mul_add(mut a, 10, 0);
+        k -= 1;
+    }
+    a
+}
+
+fn big_mul(a: ref Vec[u32], b: ref Vec[u32]) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let mut carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (a[i] as u64) * (b[j] as u64) + (out[i + j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_bitlen(a: ref Vec[u32]) -> i64 {
+    if a.len() == 0 {
+        return 0;
+    }
+    let mut top = a[a.len() - 1];
+    let mut n: i64 = 0;
+    while top > 0 {
+        n += 1;
+        top = top >> 1;
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn big_shl(a: ref Vec[u32], bits: i64) -> Vec[u32] {
+    let mut out: Vec[u32] = Vec.new();
+    for _ in 0..(bits / 32) {
+        out.push(0);
+    }
+    let s = bits % 32;
+    let mut carry: u64 = 0;
+    for i in 0..a.len() {
+        let t = ((a[i] as u64) << s) | carry;
+        out.push((t & 4294967295) as u32);
+        carry = t >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    big_trim(mut out);
+    out
+}
+
+fn big_shr1(a: mut ref Vec[u32]) {
+    let mut i = 0;
+    while i < a.len() {
+        let hi: u32 = if i + 1 < a.len() { a[i + 1] & 1 } else { 0 };
+        a[i] = (a[i] >> 1) | (hi << 31);
+        i += 1;
+    }
+    big_trim(mut a);
+}
+
+fn big_cmp(a: ref Vec[u32], b: ref Vec[u32]) -> i64 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let mut i = a.len() - 1;
+    while i >= 0 {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i -= 1;
+    }
+    0
+}
+
+// a -= b, where a >= b.
+fn big_sub(a: mut ref Vec[u32], b: ref Vec[u32]) {
+    let mut borrow: i64 = 0;
+    for i in 0..a.len() {
+        let bv: i64 = if i < b.len() { b[i] as i64 } else { 0 };
+        let mut t = (a[i] as i64) - bv - borrow;
+        if t < 0 {
+            t += 4294967296;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        a[i] = t as u32;
+    }
+    big_trim(mut a);
+}
+
+// ------------------------------------------------------------ decimal to float
+
+// The f64 nearest to digits * 10**exp10, ties to even, as CPython's
+// float() gives it. digits holds the digit values without leading zeros.
+fn decimal_to_f64(digits: ref Vec[u8], exp10: i64, neg: bool) -> f64 {
+    let mut ds = digits.clone();
+    let mut e10 = exp10;
+    while ds.len() > 0 and ds[ds.len() - 1] == 0 {
+        ds.pop();
+        e10 += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    if ds.len() == 0 {
+        return sign * 0.0;
+    }
+    let n = ds.len();
+    if n + e10 > 310 {
+        return sign * f64.INFINITY;
+    }
+    if n + e10 < -330 {
+        return sign * 0.0;
+    }
+    // The digits and the power of ten are exact, so one operation
+    // rounds correctly.
+    if n <= 15 and e10 >= -22 and e10 <= 22 {
+        let mut m: f64 = 0.0;
+        for d in ds.iter() {
+            m = m * 10.0 + (*d as f64);
+        }
+        let mut p: f64 = 1.0;
+        let mut k = if e10 < 0 { -e10 } else { e10 };
+        while k > 0 {
+            p *= 10.0;
+            k -= 1;
+        }
+        return sign * (if e10 < 0 { m / p } else { m * p });
+    }
+    let mut num = big_from_digits(ds);
+    let mut den: Vec[u32] = [1];
+    if e10 >= 0 {
+        num = big_mul(num, big_pow10(e10));
+    } else {
+        den = big_pow10(-e10);
+    }
+    // q = floor(num * 2**s / den) with 54 bits: the 53 of the result
+    // and one to round on.
+    let mut s = 54 - (big_bitlen(num) - big_bitlen(den));
+    if s > 1075 {
+        s = 1075;
+    }
+    let mut q: u64 = 0;
+    let mut rem: Vec[u32] = Vec.new();
+    let mut tries = 0;
+    while tries < 2 {
+        let mut n2 = if s > 0 { big_shl(num, s) } else { num.clone() };
+        let d2 = if s < 0 { big_shl(den, -s) } else { den.clone() };
+        let mut dd = big_shl(d2, 55);
+        q = 0;
+        let mut bit = 55;
+        while bit >= 0 {
+            if big_cmp(n2, dd) >= 0 {
+                big_sub(mut n2, dd);
+                q = q | ((1 as u64) << bit);
+            }
+            big_shr1(mut dd);
+            bit -= 1;
+        }
+        rem = n2;
+        if q >= ((1 as u64) << 54) and s < 1075 {
+            s -= 1;
+            tries += 1;
+            continue;
+        }
+        if q < ((1 as u64) << 53) and s < 1075 {
+            s += 1;
+            tries += 1;
+            continue;
+        }
+        break;
+    }
+    let mut mant = q >> 1;
+    let round = (q & 1) == 1;
+    let sticky = rem.len() > 0;
+    if round and (sticky or (mant & 1) == 1) {
+        mant += 1;
+    }
+    // The value is mant * 2**(1 - s).
+    let mut e2 = 1 - s;
+    if mant == ((1 as u64) << 53) {
+        mant = mant >> 1;
+        e2 += 1;
+    }
+    let bits: u64 = if mant < ((1 as u64) << 52) {
+        // Subnormal: s is 1075 and the exponent field is zero.
+        mant
+    } else {
+        let biased = e2 + 1075;
+        if biased >= 2047 {
+            return sign * f64.INFINITY;
+        }
+        ((biased as u64) << 52) | (mant & (((1 as u64) << 52) - 1))
+    };
+    sign * bits.bits_as_f64()
+}
+
+// ------------------------------------------------------------ float() and int()
+
+fn is_ascii_digit(c: char) -> bool {
+    c >= '0' and c <= '9'
+}
+
+fn ascii_space(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}'
+}
+
+// What float() and int() do first: Unicode white space becomes a space
+// and a Unicode decimal digit its ASCII digit; any other non-ASCII
+// character makes the text invalid. Then the white space at the ends is
+// stripped and underscores between digits removed.
+fn number_text(cs: ref Vec[char]) -> Option[Vec[char]] {
+    let mut t: Vec[char] = Vec.new();
+    for c in cs.iter() {
+        let n = *c as u32;
+        if n < 128 {
+            t.push(*c);
+        } else if uni_space(*c) {
+            t.push(' ');
+        } else if uni_digit(*c) >= 0 {
+            t.push(char.try_from(48 + uni_digit(*c) as u32).unwrap_or('?'));
+        } else {
+            return None;
+        }
+    }
+    let mut a = 0;
+    while a < t.len() and ascii_space(t[a]) {
+        a += 1;
+    }
+    let mut b = t.len();
+    while b > a and ascii_space(t[b - 1]) {
+        b -= 1;
+    }
+    let mut out: Vec[char] = Vec.new();
+    let mut prev = ' ';
+    for i in a..b {
+        let c = t[i];
+        if c == '_' {
+            if not is_ascii_digit(prev) {
+                return None;
+            }
+        } else {
+            if prev == '_' and not is_ascii_digit(c) {
+                return None;
+            }
+            out.push(c);
+        }
+        prev = c;
+    }
+    if prev == '_' {
+        return None;
+    }
+    Some(out)
+}
+
+fn lower_word(cs: ref Vec[char], from: i64) -> String {
+    let mut s = String.new();
+    for i in from..cs.len() {
+        s.push(ascii_lower(cs[i]));
+    }
+    s
+}
+
+// float() of a str; None where it raises ValueError.
+fn py_float(cs: ref Vec[char]) -> Option[f64] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    let sign: f64 = if neg { -1.0 } else { 1.0 };
+    let w = lower_word(t, i);
+    if w == "inf" or w == "infinity" {
+        return Some(sign * f64.INFINITY);
+    }
+    if w == "nan" {
+        return Some(f64.INFINITY - f64.INFINITY);
+    }
+    let mut digits: Vec[u8] = Vec.new();
+    let mut seen = false;
+    let mut exp10: i64 = 0;
+    while i < t.len() and is_ascii_digit(t[i]) {
+        seen = true;
+        let d = ((t[i] as u32) - 48) as u8;
+        if digits.len() > 0 or d != 0 {
+            digits.push(d);
+        }
+        i += 1;
+    }
+    if i < t.len() and t[i] == '.' {
+        i += 1;
+        while i < t.len() and is_ascii_digit(t[i]) {
+            seen = true;
+            let d = ((t[i] as u32) - 48) as u8;
+            if digits.len() > 0 or d != 0 {
+                digits.push(d);
+            }
+            exp10 -= 1;
+            i += 1;
+        }
+    }
+    if not seen {
+        return None;
+    }
+    if i < t.len() and (t[i] == 'e' or t[i] == 'E') {
+        i += 1;
+        let mut eneg = false;
+        if i < t.len() and (t[i] == '+' or t[i] == '-') {
+            eneg = t[i] == '-';
+            i += 1;
+        }
+        let st = i;
+        let mut e: i64 = 0;
+        while i < t.len() and is_ascii_digit(t[i]) {
+            if e < 100000000 {
+                e = e * 10 + ((t[i] as u32) - 48) as i64;
+            }
+            i += 1;
+        }
+        if i == st {
+            return None;
+        }
+        exp10 += if eneg { -e } else { e };
+    }
+    if i != t.len() {
+        return None;
+    }
+    Some(decimal_to_f64(digits, exp10, neg))
+}
+
+// The digits of an int, with a '-' when it is below zero.
+fn norm_int(neg: bool, ds: ref Vec[char]) -> String {
+    let mut s = String.new();
+    let mut started = false;
+    for c in ds.iter() {
+        if *c != '0' {
+            started = true;
+        }
+        if started {
+            s.push(*c);
+        }
+    }
+    if not started {
+        return "0".to_string();
+    }
+    if neg { f"-{s}" } else { s }
+}
+
+// int() of a str; None where it raises ValueError.
+fn py_int(cs: ref Vec[char]) -> Option[String] {
+    let t = number_text(cs)?;
+    let mut i = 0;
+    let mut neg = false;
+    if i < t.len() and (t[i] == '+' or t[i] == '-') {
+        neg = t[i] == '-';
+        i += 1;
+    }
+    if i == t.len() {
+        return None;
+    }
+    let mut ds: Vec[char] = Vec.new();
+    while i < t.len() {
+        if not is_ascii_digit(t[i]) {
+            return None;
+        }
+        ds.push(t[i]);
+        i += 1;
+    }
+    Some(norm_int(neg, ds))
+}
+// ------------------------------------------------------------ values
+//
+// The Python values sexpdata reads and writes. A list is a Python list
+// (parenthesised in an s-expression), Brk is Brackets, Quo is Quoted
+// (always one element), and Nil and Dict only come from JSON.
+
+#[derive(Clone)]
+enum V {
+    Nil,
+    Bool(bool),
+    Int(String),
+    Float(f64),
+    Str(String),
+    SStr(String),
+    Sym(String),
+    List(Vec[V]),
+    Brk(Vec[V]),
+    Quo(Vec[V]),
+    Dict(Vec[(String, V)]),
+}
+
+// A Python exception: its type and str().
+struct Exc {
+    kind: String,
+    msg: String,
+}
+
+fn exc(kind: Str, msg: own String) -> Exc {
+    Exc { kind: kind.to_string(), msg: msg }
+}
+
+fn sym(s: Str) -> V {
+    V.Sym(s.to_string())
+}
+
+fn is_sym(v: ref V, name: Str) -> bool {
+    match v {
+        V.Sym(s) => s == name,
+        _ => false,
+    }
+}
+
+fn str_of(cs: ref Vec[char], a: i64, b: i64) -> String {
+    let mut s = String.new();
+    for i in a..b {
+        s.push(cs[i]);
+    }
+    s
+}
+
+fn repr_list(xs: ref Vec[V]) -> String {
+    let mut out = "[".to_string();
+    for i in 0..xs.len() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(repr(xs[i]));
+    }
+    out.push_str("]");
+    out
+}
+
+// repr() of a value.
+fn repr(v: ref V) -> String {
+    match v {
+        V.Nil => "None".to_string(),
+        V.Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+        V.Int(d) => d.clone(),
+        V.Float(x) => float_repr(*x),
+        V.Str(s) => py_repr_str(s),
+        V.SStr(s) => f"String({py_repr_str(s)})",
+        V.Sym(s) => f"Symbol({py_repr_str(s)})",
+        V.List(xs) => repr_list(xs),
+        V.Brk(xs) => f"Brackets(I={repr_list(xs)})",
+        V.Quo(xs) => f"Quoted({repr(xs[0])})",
+        V.Dict(ps) => {
+            let mut out = "{".to_string();
+            for i in 0..ps.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(f"{py_repr_str(ps[i].0)}: {repr(ps[i].1)}");
+            }
+            out.push_str("}");
+            out
+        }
+    }
+}
+
+// str() of a value, as "%s" formats it.
+fn py_str(v: ref V) -> String {
+    match v {
+        V.Str(s) => s.clone(),
+        V.SStr(s) => s.clone(),
+        V.Sym(s) => s.clone(),
+        _ => repr(v),
+    }
+}
+
+// car() and cdr(), sexpdata's "very lazy" ones: cdr of a dotted pair is
+// the value after the dot.
+fn car(v: ref V) -> V {
+    match v {
+        V.List(xs) => xs[0].clone(),
+        _ => V.Nil,
+    }
+}
+
+fn rest_of(xs: ref Vec[V], from: i64) -> Vec[V] {
+    let mut out: Vec[V] = Vec.new();
+    for i in from..xs.len() {
+        out.push(xs[i].clone());
+    }
+    out
+}
+
+fn cdr(v: ref V) -> V {
+    match v {
+        V.List(xs) => {
+            if xs.len() > 2 and is_sym(xs[1], ".") {
+                xs[2].clone()
+            } else {
+                V.List(rest_of(xs, 1))
+            }
+        }
+        _ => V.Nil,
+    }
+}
+
+fn items(v: ref V) -> Vec[V] {
+    match v {
+        V.List(xs) => xs.clone(),
+        V.Brk(xs) => xs.clone(),
+        _ => Vec.new(),
+    }
+}
+
+fn at(v: ref V, i: i64) -> V {
+    items(v)[i].clone()
+}
+
+// ------------------------------------------------------------ the parser
+
+fn is_ws(c: char) -> bool {
+    c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\u{b}' or c == '\u{c}'
+}
+
+fn closer_of(c: char) -> char {
+    if c == '(' { ')' } else { ']' }
+}
+
+// String.unquote: an escape it does not know keeps its backslash.
+fn str_unquote(c: char) -> String {
+    if c == '\\' {
+        "\\".to_string()
+    } else if c == '"' {
+        "\"".to_string()
+    } else if c == 'b' {
+        "\u{8}".to_string()
+    } else if c == 'f' {
+        "\u{c}".to_string()
+    } else if c == 'n' {
+        "\n".to_string()
+    } else if c == 'r' {
+        "\r".to_string()
+    } else if c == 't' {
+        "\t".to_string()
+    } else {
+        f"\\{c}"
+    }
+}
+
+fn sym_specials() -> Vec[char] {
+    "\\'`\"()[] ,?;#".chars().collect()
+}
+
+// Symbol.unquote
+fn sym_unquote(c: char) -> String {
+    for s in sym_specials().iter() {
+        if *s == c {
+            return c.to_string();
+        }
+    }
+    f"\\{c}"
+}
+
+fn expect_closing(got: Option[char], expect: char) -> Exc {
+    let g = match got {
+        Some(c) => py_repr_str(c.to_string()),
+        None => "None".to_string(),
+    };
+    exc("ExpectClosingBracket", f"Not enough closing brackets. Expected {py_repr_str(expect.to_string())} to be the last letter in the sexp. Got: {g}")
+}
+
+fn index_error() -> Exc {
+    exc("IndexError", "string index out of range".to_string())
+}
+
+// Parser's options: nil and true are tokens, false is a token or None,
+// and string_to is 0 (keep str), 1 (Symbol) or 2 (String).
+struct Loader {
+    s: Vec[char],
+    nil: String,
+    truev: String,
+    falsev: Option[String],
+    string_to: i64,
+    lc: char,
+}
+
+fn new_loader(text: ref String) -> Loader {
+    Loader {
+        s: text.chars().collect(),
+        nil: "nil".to_string(),
+        truev: "t".to_string(),
+        falsev: None,
+        string_to: 0,
+        lc: ';',
+    }
+}
+
+impl Loader {
+    fn parse_str(ref self, start: i64) -> Result[(i64, String), Exc] {
+        let mut i = start;
+        let mut out = String.new();
+        loop {
+            i += 1;
+            let mut end = i;
+            while end < self.s.len() and self.s[end] != '"' and self.s[end] != '\\' {
+                end += 1;
+            }
+            if end >= self.s.len() {
+                return Err(exc("AttributeError", "'NoneType' object has no attribute 'start'".to_string()));
+            }
+            out.push_str(str_of(self.s, i, end));
+            if self.s[end] == '"' {
+                i = end + 1;
+                break;
+            }
+            i = end + 1;
+            if i >= self.s.len() {
+                return Err(index_error());
+            }
+            out.push_str(str_unquote(self.s[i]));
+        }
+        Ok((i, out))
+    }
+
+    fn atom_end(ref self, c: char) -> bool {
+        is_ws(c) or c == '(' or c == ')' or c == '[' or c == ']' or c == '"' or c == self.lc
+    }
+
+    fn parse_atom(ref self, start: i64) -> Result[(i64, V), Exc] {
+        let mut i = start;
+        let mut out = String.new();
+        loop {
+            let mut end = i;
+            while end < self.s.len() and self.s[end] != '\\' and not self.atom_end(self.s[end]) {
+                end += 1;
+            }
+            if end >= self.s.len() {
+                out.push_str(str_of(self.s, i, self.s.len()));
+                i = self.s.len();
+                break;
+            }
+            out.push_str(str_of(self.s, i, end));
+            if self.s[end] != '\\' {
+                i = end;
+                break;
+            }
+            i = end + 1;
+            if i >= self.s.len() {
+                return Err(index_error());
+            }
+            out.push_str(sym_unquote(self.s[i]));
+            i += 1;
+        }
+        Ok((i, self.atom(out)))
+    }
+
+    fn atom(ref self, token: own String) -> V {
+        if token == self.nil {
+            return V.List(Vec.new());
+        }
+        if token == self.truev {
+            return V.Bool(true);
+        }
+        if let Some(f) = self.falsev {
+            if token == *f {
+                return V.Bool(false);
+            }
+        }
+        let cs: Vec[char] = token.chars().collect();
+        if let Some(d) = py_int(cs) {
+            return V.Int(d);
+        }
+        if let Some(x) = py_float(cs) {
+            return V.Float(x);
+        }
+        V.Sym(token)
+    }
+
+    fn parse_sexp(ref self, start: i64) -> Result[(i64, Vec[V]), Exc] {
+        let mut i = start;
+        let mut sexp: Vec[V] = Vec.new();
+        while i < self.s.len() {
+            let c = self.s[i];
+            if c == '"' {
+                let (j, text) = self.parse_str(i)?;
+                i = j;
+                sexp.push(if self.string_to == 1 {
+                    V.Sym(text)
+                } else if self.string_to == 2 {
+                    V.SStr(text)
+                } else {
+                    V.Str(text)
+                });
+            } else if is_ws(c) {
+                i += 1;
+            } else if c == '(' or c == '[' {
+                let close = closer_of(c);
+                let (j, sub) = self.parse_sexp(i + 1)?;
+                i = j;
+                sexp.push(if c == '(' { V.List(sub) } else { V.Brk(sub) });
+                let nc: Option[char] = if i < self.s.len() { Some(self.s[i]) } else { None };
+                if nc != Some(close) {
+                    return Err(expect_closing(nc, close));
+                }
+                i += 1;
+            } else if c == ')' or c == ']' {
+                break;
+            } else if c == '\'' {
+                let (j, sub) = self.parse_sexp(i + 1)?;
+                if sub.len() == 0 {
+                    return Err(exc("ExpectSExp", f"No s-exp is found after an apostrophe at position {i}"));
+                }
+                i = j;
+                sexp.push(V.Quo(vec![sub[0].clone()]));
+                for k in 1..sub.len() {
+                    sexp.push(sub[k].clone());
+                }
+            } else if c == self.lc {
+                let mut k = i;
+                while k < self.s.len() and self.s[k] != '\n' {
+                    k += 1;
+                }
+                if k >= self.s.len() {
+                    i = self.s.len();
+                    break;
+                }
+                i = k + 1;
+            } else {
+                let (j, a) = self.parse_atom(i)?;
+                i = j;
+                sexp.push(a);
+            }
+        }
+        Ok((i, sexp))
+    }
+
+    fn parse(ref self) -> Result[Vec[V], Exc] {
+        let (i, sexp) = self.parse_sexp(0)?;
+        if i < self.s.len() {
+            let rest = str_of(self.s, i, self.s.len());
+            return Err(exc("ExpectNothing", f"Too many closing brackets. Expected no character left in the sexp. Got: {py_repr_str(rest)}"));
+        }
+        Ok(sexp)
+    }
+}
+
+// loads(): exactly one s-expression, or AssertionError.
+fn loads(l: ref Loader) -> Result[V, Exc] {
+    let all = l.parse()?;
+    if all.len() != 1 {
+        return Err(exc("AssertionError", String.new()));
+    }
+    Ok(all[0].clone())
+}
+
+// ------------------------------------------------------------ tosexp
+
+struct DumpOpts {
+    pretty: bool,
+    indent: String,
+    str_as: String,
+    true_as: String,
+    false_as: String,
+    none_as: String,
+}
+
+fn default_dump() -> DumpOpts {
+    DumpOpts {
+        pretty: false,
+        indent: "  ".to_string(),
+        str_as: "string".to_string(),
+        true_as: "t".to_string(),
+        false_as: "()".to_string(),
+        none_as: "()".to_string(),
+    }
+}
+
+fn quote_str(s: ref String) -> String {
+    let mut out = String.new();
+    for c in s.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c == '"' {
+            out.push_str("\\\"");
+        } else if c == '\u{8}' {
+            out.push_str("\\b");
+        } else if c == '\u{c}' {
+            out.push_str("\\f");
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn quote_sym(s: ref String) -> String {
+    let specials = sym_specials();
+    let mut out = String.new();
+    for c in s.chars() {
+        let mut special = false;
+        for x in specials.iter() {
+            if *x == c {
+                special = true;
+            }
+        }
+        if special {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+// Where str.splitlines() ends a line.
+fn line_break(c: char) -> bool {
+    let n = c as i64;
+    c == '\n' or c == '\r' or n == 0xb or n == 0xc or (n >= 0x1c and n <= 0x1e) or n == 0x85 or n == 0x2028 or n == 0x2029
+}
+
+// "".join(indent + line for line in text.splitlines(True))
+fn indent_lines(text: ref String, indent: ref String) -> String {
+    let cs: Vec[char] = text.chars().collect();
+    let mut out = String.new();
+    let mut i = 0;
+    while i < cs.len() {
+        out.push_str(indent);
+        while i < cs.len() and not line_break(cs[i]) {
+            out.push(cs[i]);
+            i += 1;
+        }
+        if i < cs.len() {
+            if cs[i] == '\r' and i + 1 < cs.len() and cs[i + 1] == '\n' {
+                out.push_str("\r\n");
+                i += 2;
+            } else {
+                out.push(cs[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+// The values whose tosexp is one of the overloads a pretty-printed
+// Delimiters breaks lines for: lists, dicts and Delimiters.
+fn breaks(v: ref V) -> bool {
+    match v {
+        V.List(_) => true,
+        V.Brk(_) => true,
+        V.Dict(_) => true,
+        _ => false,
+    }
+}
+
+fn delimiters(opener: Str, closer: Str, xs: ref Vec[V], o: ref DumpOpts) -> Result[String, Exc] {
+    let mut brk = false;
+    for x in xs.iter() {
+        if breaks(x) {
+            brk = true;
+        }
+    }
+    let pretty = o.pretty and brk;
+    let sep = if pretty { "\n" } else { " " };
+    let mut exprs = String.new();
+    for i in 0..xs.len() {
+        if i > 0 {
+            exprs.push_str(sep);
+        }
+        exprs.push_str(tosexp(xs[i], o)?);
+    }
+    if pretty {
+        Ok(f"{opener}\n{indent_lines(exprs, o.indent)}\n{closer}")
+    } else {
+        Ok(f"{opener}{exprs}{closer}")
+    }
+}
+
+fn tosexp(v: ref V, o: ref DumpOpts) -> Result[String, Exc] {
+    match v {
+        V.Nil => Ok(o.none_as.clone()),
+        V.Bool(b) => Ok(if *b { o.true_as.clone() } else { o.false_as.clone() }),
+        V.Int(d) => Ok(d.clone()),
+        V.Float(x) => Ok(float_repr(*x)),
+        V.Str(s) => {
+            if o.str_as == "symbol" {
+                Ok(s.clone())
+            } else if o.str_as == "string" {
+                Ok(f"\"{quote_str(s)}\"")
+            } else {
+                Err(exc("ValueError", f"str_as={py_repr_str(o.str_as)} is not valid"))
+            }
+        }
+        V.SStr(s) => Ok(f"\"{quote_str(s)}\""),
+        V.Sym(s) => Ok(quote_sym(s)),
+        V.List(xs) => delimiters("(", ")", xs, o),
+        V.Brk(xs) => delimiters("[", "]", xs, o),
+        V.Quo(xs) => Ok(f"'{tosexp(xs[0], o)?}"),
+        V.Dict(ps) => {
+            let mut plist: Vec[V] = Vec.new();
+            for p in ps.iter() {
+                plist.push(V.Sym(f":{p.0}"));
+                plist.push(p.1.clone());
+            }
+            delimiters("(", ")", plist, o)
+        }
+    }
+}
+
+fn dumps(v: ref V) -> String {
+    match tosexp(v, default_dump()) {
+        Ok(s) => s,
+        Err(e) => e.msg,
+    }
+}
+// ------------------------------------------------------------ JSON in
+//
+// json.loads for the dump jobs' values: objects become dicts, arrays
+// lists, null None.
+
+struct JsonIn {
+    s: Vec[char],
+    i: i64,
+}
+
+impl JsonIn {
+    fn skip(mut ref self) {
+        while self.i < self.s.len() and is_ws(self.s[self.i]) {
+            self.i += 1;
+        }
+    }
+
+    fn word(mut ref self, w: Str) -> bool {
+        let cs: Vec[char] = w.chars().collect();
+        if self.i + cs.len() > self.s.len() {
+            return false;
+        }
+        for k in 0..cs.len() {
+            if self.s[self.i + k] != cs[k] {
+                return false;
+            }
+        }
+        self.i += cs.len();
+        true
+    }
+
+    fn string(mut ref self) -> String {
+        let mut out = String.new();
+        self.i += 1;
+        while self.i < self.s.len() and self.s[self.i] != '"' {
+            let c = self.s[self.i];
+            if c == '\\' {
+                self.i += 1;
+                let e = self.s[self.i];
+                if e == 'n' {
+                    out.push('\n');
+                } else if e == 't' {
+                    out.push('\t');
+                } else if e == 'r' {
+                    out.push('\r');
+                } else if e == 'b' {
+                    out.push('\u{8}');
+                } else if e == 'f' {
+                    out.push('\u{c}');
+                } else if e == 'u' {
+                    let mut n: u32 = 0;
+                    for k in 1..5 {
+                        n = n * 16 + hex_val(self.s[self.i + k] as u32 as u8) as u32;
+                    }
+                    out.push(char.try_from(n).unwrap_or('?'));
+                    self.i += 4;
+                } else {
+                    out.push(e);
+                }
+            } else {
+                out.push(c);
+            }
+            self.i += 1;
+        }
+        self.i += 1;
+        out
+    }
+
+    fn value(mut ref self) -> V {
+        self.skip();
+        let c = self.s[self.i];
+        if c == '{' {
+            self.i += 1;
+            let mut ps: Vec[(String, V)] = Vec.new();
+            self.skip();
+            if self.s[self.i] == '}' {
+                self.i += 1;
+                return V.Dict(ps);
+            }
+            loop {
+                self.skip();
+                let k = self.string();
+                self.skip();
+                self.i += 1;
+                let v = self.value();
+                ps.push((k, v));
+                self.skip();
+                let d = self.s[self.i];
+                self.i += 1;
+                if d == '}' {
+                    break;
+                }
+            }
+            return V.Dict(ps);
+        }
+        if c == '[' {
+            self.i += 1;
+            let mut xs: Vec[V] = Vec.new();
+            self.skip();
+            if self.s[self.i] == ']' {
+                self.i += 1;
+                return V.List(xs);
+            }
+            loop {
+                xs.push(self.value());
+                self.skip();
+                let d = self.s[self.i];
+                self.i += 1;
+                if d == ']' {
+                    break;
+                }
+            }
+            return V.List(xs);
+        }
+        if c == '"' {
+            return V.Str(self.string());
+        }
+        if self.word("null") {
+            return V.Nil;
+        }
+        if self.word("true") {
+            return V.Bool(true);
+        }
+        if self.word("false") {
+            return V.Bool(false);
+        }
+        let st = self.i;
+        let mut float = false;
+        while self.i < self.s.len() and num_char(self.s[self.i]) {
+            if self.s[self.i] == '.' or self.s[self.i] == 'e' or self.s[self.i] == 'E' {
+                float = true;
+            }
+            self.i += 1;
+        }
+        let num: Vec[char] = rest_chars(self.s, st, self.i);
+        if float {
+            V.Float(py_float(num).unwrap_or(0.0))
+        } else {
+            V.Int(py_int(num).unwrap_or("0".to_string()))
+        }
+    }
+}
+
+fn rest_chars(cs: ref Vec[char], a: i64, b: i64) -> Vec[char] {
+    let mut out: Vec[char] = Vec.new();
+    for i in a..b {
+        out.push(cs[i]);
+    }
+    out
+}
+
+fn json_loads(text: ref String) -> V {
+    let mut p = JsonIn { s: text.chars().collect(), i: 0 };
+    p.value()
+}
+
+fn num_char(c: char) -> bool {
+    (c >= '0' and c <= '9') or c == '+' or c == '-' or c == '.' or c == 'e' or c == 'E'
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+// CR shows as <CR> and other control characters as <xNN>, so
+// expected.out stays a plain LF text file.
+fn show(text: ref String) -> String {
+    let mut out = String.new();
+    for c in text.chars() {
+        let n = c as i64;
+        if c == '\r' {
+            out.push_str("<CR>");
+        } else if (n < 0x20 and c != '\t' and c != '\n') or n == 0x7f {
+            out.push_str(f"<x{hex_digits(n, 2)}>");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+// What ${VAR} in a KiCad library table expands to.
+fn kicad_env() -> Vec[(String, String)] {
+    vec![
+        ("KICAD8_FOOTPRINT_DIR".to_string(), "/usr/share/kicad/footprints".to_string()),
+        ("KIPRJMOD".to_string(), "/home/dev/usb-power".to_string()),
+    ]
+}
+
+fn err_line(e: ref Exc) -> String {
+    f"error: {e.kind}: {e.msg}"
+}
+
+// A job's keyword arguments, for parse() and for dumps(); `\t` in a
+// value is a tab.
+fn options(args: ref Vec[String], l: mut ref Loader, o: mut ref DumpOpts) {
+    for k in 1..args.len() {
+        let a = args[k].clone();
+        if a == "pretty_print" {
+            o.pretty = true;
+            continue;
+        }
+        let eq = a.find("=").unwrap_or(0);
+        let key = a[0..eq].to_string();
+        let v = a[eq + 1..].to_string().replace("\\t", "\t");
+        if key == "nil" {
+            l.nil = v;
+        } else if key == "true" {
+            l.truev = v;
+        } else if key == "false" {
+            l.falsev = Some(v);
+        } else if key == "string_to" {
+            l.string_to = if v == "Symbol" { 1 } else { 2 };
+        } else if key == "line_comment" {
+            l.lc = v.chars().next().unwrap_or(';');
+        } else if key == "indent_as" {
+            o.indent = v;
+        } else if key == "str_as" {
+            o.str_as = v;
+        } else if key == "true_as" {
+            o.true_as = v;
+        } else if key == "false_as" {
+            o.false_as = v;
+        } else if key == "none_as" {
+            o.none_as = v;
+        }
+    }
+}
+
+fn loader_for(args: ref Vec[String]) -> Loader {
+    let mut l = new_loader(read_text(args[0]));
+    let mut o = default_dump();
+    options(args, mut l, mut o);
+    l
+}
+
+fn dump_for(args: ref Vec[String]) -> DumpOpts {
+    let mut l = new_loader("".to_string());
+    let mut o = default_dump();
+    options(args, mut l, mut o);
+    o
+}
+
+fn parse_all(name: ref String) -> Vec[V] {
+    new_loader(read_text(name)).parse().unwrap_or(Vec.new())
+}
+
+fn parse_job(args: ref Vec[String], out: mut ref String) {
+    match loader_for(args).parse() {
+        Ok(xs) => {
+            emit(mut out, f"{xs.len()} items");
+            for i in 0..xs.len() {
+                emit(mut out, show(f"[{i}] {repr(xs[i])}"));
+            }
+        }
+        Err(e) => emit(mut out, err_line(e)),
+    }
+}
+
+fn loads_job(args: ref Vec[String], out: mut ref String) {
+    match loads(new_loader(read_text(args[0]))) {
+        Ok(v) => emit(mut out, show(repr(v))),
+        Err(e) => emit(mut out, err_line(e)),
+    }
+}
+
+fn roundtrip_job(args: ref Vec[String], out: mut ref String) {
+    let o = dump_for(args);
+    for x in parse_all(args[0]).iter() {
+        match tosexp(x, o) {
+            Ok(s) => emit(mut out, show(s)),
+            Err(e) => emit(mut out, err_line(e)),
+        }
+    }
+}
+
+fn dumps_job(args: ref Vec[String], out: mut ref String) {
+    let v = json_loads(read_text(args[0]));
+    match tosexp(v, dump_for(args)) {
+        Ok(s) => emit(mut out, show(s)),
+        Err(e) => emit(mut out, err_line(e)),
+    }
+}
+
+fn carcdr_job(args: ref Vec[String], out: mut ref String) {
+    for top in parse_all(args[0]).iter() {
+        let xs = if args[0].starts_with("emacs") { items(cdr(top)) } else { items(top) };
+        for x in xs.iter() {
+            emit(mut out, show(f"car {repr(car(x))}"));
+            emit(mut out, show(f"cdr {repr(cdr(x))}"));
+        }
+    }
+}
+
+// ------------------------------------------------------------ programs over the trees
+
+fn items_named(tree: ref V, name: Str) -> Vec[V] {
+    let mut found: Vec[V] = Vec.new();
+    for x in items(tree).iter() {
+        if let V.List(xs) = x {
+            if xs.len() > 0 and is_sym(xs[0], name) {
+                found.push(x.clone());
+            }
+        }
+    }
+    found
+}
+
+fn first(tree: ref V, name: Str) -> Option[V] {
+    let found = items_named(tree, name);
+    if found.len() > 0 { Some(found[0].clone()) } else { None }
+}
+
+// first(tree, name)[i], for a name the tree is known to have.
+fn field(tree: ref V, name: Str, i: i64) -> V {
+    match first(tree, name) {
+        Some(x) => at(x, i),
+        None => V.Nil,
+    }
+}
+
+fn s_field(tree: ref V, name: Str, i: i64) -> String {
+    py_str(field(tree, name, i))
+}
+
+fn join_str(xs: ref Vec[V], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..xs.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(py_str(xs[i]));
+    }
+    out
+}
+
+// dict.get on a dict built from pairs, the last value for a key winning.
+fn lookup(ps: ref Vec[(String, String)], k: Str) -> Option[String] {
+    let mut found: Option[String] = None;
+    for p in ps.iter() {
+        if p.0 == k {
+            found = Some(p.1.clone());
+        }
+    }
+    found
+}
+
+fn bom_job(args: ref Vec[String], out: mut ref String) {
+    let sch = loads(new_loader(read_text(args[0]))).unwrap_or(V.Nil);
+    let tb = first(sch, "title_block").unwrap_or(V.Nil);
+    emit(mut out, f"{s_field(tb, "title", 1)} rev {s_field(tb, "rev", 1)} ({s_field(tb, "date", 1)})");
+    let mut groups: Vec[(String, String, String, Vec[String])] = Vec.new();
+    for sym in items_named(sch, "symbol").iter() {
+        if first(sym, "lib_id").is_none() {
+            continue;
+        }
+        let mut props: Vec[(String, String)] = Vec.new();
+        for p in items_named(sym, "property").iter() {
+            props.push((py_str(at(p, 1)), py_str(at(p, 2))));
+        }
+        let reference = lookup(props, "Reference");
+        if not is_sym(field(sym, "in_bom", 1), "yes") {
+            let r = match reference {
+                Some(r) => r.clone(),
+                None => "None".to_string(),
+            };
+            emit(mut out, f"skip {r} (not in BOM)");
+            continue;
+        }
+        let r = reference.unwrap_or(String.new());
+        let value = lookup(props, "Value").unwrap_or(String.new());
+        let footprint = lookup(props, "Footprint").unwrap_or(String.new());
+        let lib = s_field(sym, "lib_id", 1);
+        let mut placed = false;
+        for g in groups.iter_mut() {
+            if g.0 == value and g.1 == footprint and g.2 == lib {
+                g.3.push(r.clone());
+                placed = true;
+            }
+        }
+        if not placed {
+            groups.push((value, footprint, lib, vec![r.clone()]));
+        }
+        if let Some(d) = lookup(props, "Description") {
+            emit(mut out, f"note {r}: {d}");
+        }
+    }
+    groups.sort_by(|a, b| group_cmp(a, b));
+    for g in groups.iter() {
+        let mut refs = g.3.clone();
+        refs.sort();
+        emit(mut out, f"{refs.len()} x {refs.join(",")}  {g.0}  {g.1}  [{g.2}]");
+    }
+    let wires = items_named(sch, "wire");
+    let pts = first(wires[0], "pts").unwrap_or(V.Nil);
+    emit(mut out, f"{wires.len()} wire(s); first runs {dumps(V.List(rest_of(items(pts), 1)))}");
+}
+
+fn libs_job(args: ref Vec[String], out: mut ref String) {
+    let table = loads(new_loader(read_text(args[0]))).unwrap_or(V.Nil);
+    emit(mut out, f"version {s_field(table, "version", 1)}");
+    for lib in items_named(table, "lib").iter() {
+        let mut uri = s_field(lib, "uri", 1);
+        for kv in kicad_env().iter() {
+            uri = uri.replace(f"${{{kv.0}}}", kv.1);
+        }
+        let state = if first(lib, "disabled").is_some() { "disabled" } else { "enabled" };
+        emit(mut out, f"{s_field(lib, "name", 1)}: {uri} ({s_field(lib, "type", 1)}, {state}) {dumps(field(lib, "descr", 1))}");
+    }
+}
+
+fn deps_job(args: ref Vec[String], out: mut ref String) {
+    for stanza in parse_all(args[0]).iter() {
+        let kind = car(stanza);
+        let rest = V.List(rest_of(items(stanza), 1));
+        let n = items(rest).len();
+        if is_sym(kind, "library") {
+            emit(mut out, f"library {s_field(rest, "name", 1)} ({s_field(rest, "public_name", 1)})");
+            let libs = first(rest, "libraries").unwrap_or(V.Nil);
+            emit(mut out, f"  libraries: {join_str(items(cdr(libs)), " ")}");
+            let pre = first(rest, "preprocess").unwrap_or(V.Nil);
+            let pps = first(pre, "pps").unwrap_or(V.Nil);
+            emit(mut out, f"  ppx: {join_str(items(cdr(pps)), " ")}");
+            let flags = first(rest, "flags").unwrap_or(V.Nil);
+            emit(mut out, f"  flags: {dumps(cdr(flags))}");
+        } else if is_sym(kind, "package") {
+            emit(mut out, f"package {s_field(rest, "name", 1)}: {s_field(rest, "synopsis", 1)}");
+            let depends = first(rest, "depends").unwrap_or(V.Nil);
+            for dep in items(cdr(depends)).iter() {
+                emit(mut out, f"  depends {py_str(car(dep))} {dumps(cdr(dep))}");
+            }
+        } else if n == 1 and not is_list(at(rest, 0)) {
+            emit(mut out, f"{py_str(kind)} = {dumps(at(rest, 0))}");
+        } else {
+            emit(mut out, f"{py_str(kind)} {dumps(rest)}");
+        }
+    }
+}
+
+// The dotted numbers of a package version.
+fn dotted(v: ref V) -> String {
+    join_str(items(v), ".")
+}
+
+fn packages_job(args: ref Vec[String], out: mut ref String) {
+    let contents = loads(new_loader(read_text(args[0]))).unwrap_or(V.Nil);
+    emit(mut out, f"archive format {py_str(car(contents))}");
+    for entry in items(cdr(contents)).iter() {
+        let name = car(entry);
+        let desc = items(cdr(entry));
+        let mut deps: Vec[String] = Vec.new();
+        for r in items(desc[1]).iter() {
+            deps.push(f"{py_str(car(r))} {dotted(at(r, 1))}");
+        }
+        let mut extras: Vec[(V, V)] = Vec.new();
+        for e in items(desc[4]).iter() {
+            extras.push((car(e), cdr(e)));
+        }
+        emit(mut out, f"{py_str(name)} {dotted(desc[0])} [{py_str(desc[3])}] {py_str(desc[2])}");
+        let needs = if deps.len() > 0 { deps.join(", ") } else { "-".to_string() };
+        emit(mut out, f"  needs: {needs}");
+        let mut url = "None".to_string();
+        let mut keywords: Option[V] = None;
+        for x in extras.iter() {
+            if is_sym(x.0, ":url") {
+                url = py_str(x.1);
+            }
+            if is_sym(x.0, ":keywords") {
+                keywords = Some(x.1.clone());
+            }
+        }
+        emit(mut out, f"  url: {url}");
+        if let Some(k) = keywords {
+            emit(mut out, f"  keywords: {dumps(k)}");
+        }
+    }
+}
+
+fn customs_job(args: ref Vec[String], out: mut ref String) {
+    for form in parse_all(args[0]).iter() {
+        emit(mut out, f"{py_str(car(form))}:");
+        for q in items(cdr(form)).iter() {
+            if let V.Quo(xs) = q {
+                let setting = xs[0].clone();
+                emit(mut out, f"  {py_str(car(setting))} = {dumps(at(setting, 1))}");
+            }
+        }
+    }
+}
+
+fn smt_job(args: ref Vec[String], out: mut ref String) {
+    for cmd in parse_all(args[0]).iter() {
+        let head = car(cmd);
+        if is_sym(head, "declare-fun") {
+            emit(mut out, f"declare {py_str(at(cmd, 1))} : {dumps(at(cmd, 2))} -> {py_str(at(cmd, 3))}");
+        } else if is_sym(head, "assert") {
+            let mut o = default_dump();
+            o.pretty = true;
+            let text = match tosexp(at(cmd, 1), o) {
+                Ok(s) => s,
+                Err(e) => e.msg,
+            };
+            emit(mut out, f"assert {text.replace("\n", " ")}");
+        } else {
+            emit(mut out, f"{py_str(head)} {dumps(V.List(rest_of(items(cmd), 1)))}");
+        }
+    }
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|x| x.to_string()).collect();
+        emit(mut out, show(f"== {job.join(" ")}"));
+        let args = rest_strings(job);
+        let kind = job[0].clone();
+        if kind == "parse" {
+            parse_job(args, mut out);
+        } else if kind == "loads" {
+            loads_job(args, mut out);
+        } else if kind == "roundtrip" {
+            roundtrip_job(args, mut out);
+        } else if kind == "dumps" {
+            dumps_job(args, mut out);
+        } else if kind == "carcdr" {
+            carcdr_job(args, mut out);
+        } else if kind == "bom" {
+            bom_job(args, mut out);
+        } else if kind == "libs" {
+            libs_job(args, mut out);
+        } else if kind == "deps" {
+            deps_job(args, mut out);
+        } else if kind == "packages" {
+            packages_job(args, mut out);
+        } else if kind == "customs" {
+            customs_job(args, mut out);
+        } else {
+            smt_job(args, mut out);
+        }
+    }
+    print(out);
+}
+
+fn rest_strings(xs: ref Vec[String]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for i in 1..xs.len() {
+        out.push(xs[i].clone());
+    }
+    out
+}
+
+fn is_list(v: ref V) -> bool {
+    match v {
+        V.List(_) => true,
+        _ => false,
+    }
+}
+
+fn str_cmp(a: ref String, b: ref String) -> Ordering {
+    if a < b {
+        Ordering.Less
+    } else if a == b {
+        Ordering.Equal
+    } else {
+        Ordering.Greater
+    }
+}
+
+// Python's order of (value, footprint, lib_id) tuples.
+fn group_cmp(a: ref (String, String, String, Vec[String]), b: ref (String, String, String, Vec[String])) -> Ordering {
+    let c = str_cmp(a.0, b.0);
+    if c != Ordering.Equal {
+        return c;
+    }
+    let d = str_cmp(a.1, b.1);
+    if d != Ordering.Equal {
+        return d;
+    }
+    str_cmp(a.2, b.2)
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("(a b))");
+    v.push(DataFile { path: "broken/extra-close.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(a b]");
+    v.push(DataFile { path: "broken/mismatch.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[a (b c])");
+    v.push(DataFile { path: "broken/mismatch2.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("' ; nothing quoted\n");
+    v.push(DataFile { path: "broken/quote-comment.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(a ')");
+    v.push(DataFile { path: "broken/quote-end.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("'");
+    v.push(DataFile { path: "broken/quote-eof.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(")");
+    v.push(DataFile { path: "broken/stray-close.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"ends with a backslash\\");
+    v.push(DataFile { path: "broken/string-backslash.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(\"never closed");
+    v.push(DataFile { path: "broken/string-open.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("abc\\");
+    v.push(DataFile { path: "broken/symbol-backslash.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(a) (b)");
+    v.push(DataFile { path: "broken/two-top.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1 2");
+    v.push(DataFile { path: "broken/unclosed-bracket.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(a (b c)");
+    v.push(DataFile { path: "broken/unclosed.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(a\"b\"c(d)e[f]g)");
+    v.push(DataFile { path: "corner/adjacent.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(nil t f nilly tt () (nil))");
+    v.push(DataFile { path: "corner/atoms.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1 (2 [3 4]) []] () [] (())");
+    v.push(DataFile { path: "corner/brackets.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(x) ; no newline after this");
+    v.push(DataFile { path: "corner/comment-eof.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("; leading comment\n");
+    t.push_str("(a ; trailing\n");
+    t.push_str(" b ;; another\n");
+    t.push_str(" c) ; last\n");
+    t.push_str("(d)");
+    v.push(DataFile { path: "corner/comments.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(((((((((((deep)))))))))))");
+    v.push(DataFile { path: "corner/deep.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("((a . 1) (b . (2 3)) (c 4) (d . e . f) (. g) (h .) (i))");
+    v.push(DataFile { path: "corner/dotted.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "corner/empty.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(42 -7 +3 007 1_000 1__0 _1 1_ 0x10 1e3 1E-2 .5 5. -.5e+1 inf -inf +Infinity nan NaN 1e400 123456789012345678901234567890 1.5e 1.2.3 ٣٤ ١_٢ 12   34 -0 -0.0 1/2)");
+    v.push(DataFile { path: "corner/numbers.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(";; nothing here\n");
+    v.push(DataFile { path: "corner/only-comment.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("('a '(1 2) '[x] ''b (f 'x y) ('a b c) '\"s\" '; comment after quote\n");
+    t.push_str(" z)");
+    v.push(DataFile { path: "corner/quotes.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(\"plain\" \"tab\\there\" \"line\\nbreak\" \"quote \\\" inside\" \"back\\\\slash\" \"bell\\a and \\q\" \"\" \"multi\n");
+    t.push_str("line\" \"café ☃\" \"sem;colon\" \"paren(\")");
+    v.push(DataFile { path: "corner/strings.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(foo-bar :keyword &rest a.b . \\(x\\) with\\ space \\#hash ok? q\\?uery \\,comma back\\\\slash #t #f #:kw sym\\q 1+ <= été)");
+    v.push(DataFile { path: "corner/symbols.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(a b c d)");
+    v.push(DataFile { path: "corner/unicode-ws.sexp".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0920280b610c620d630d0a206420290a0a");
+    v.push(DataFile { path: "corner/whitespace.sexp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("(lang dune 3.11)\n");
+    t.push_str("(name kara)\n");
+    t.push_str("(generate_opam_files true)\n");
+    t.push_str("(source (github karalang/kara-ocaml))\n");
+    t.push_str("(license BSD-2-Clause)\n");
+    t.push_str("(authors \"Kara contributors\")\n");
+    t.push_str("(package\n");
+    t.push_str(" (name kara)\n");
+    t.push_str(" (synopsis \"Tools for the Kara language\")\n");
+    t.push_str(" (depends\n");
+    t.push_str("  (ocaml (>= 4.14))\n");
+    t.push_str("  (menhir (>= 20230608))\n");
+    t.push_str("  (ppx_deriving :with-test)))\n");
+    v.push(DataFile { path: "dune/dune-project".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("; build rules for the parser library\n");
+    t.push_str("(library\n");
+    t.push_str(" (name kara_parse)\n");
+    t.push_str(" (public_name kara.parse)\n");
+    t.push_str(" (libraries str unix\n");
+    t.push_str("  ; menhir runtime for the generated parser\n");
+    t.push_str("  menhirLib)\n");
+    t.push_str(" (preprocess\n");
+    t.push_str("  (pps ppx_deriving.show ppx_sexp_conv))\n");
+    t.push_str(" (flags\n");
+    t.push_str("  (:standard -w +a-4-40-42-44 -strict-sequence)))\n");
+    t.push_str("\n");
+    t.push_str("(menhir\n");
+    t.push_str(" (modules grammar)\n");
+    t.push_str(" (flags --explain --table))\n");
+    t.push_str("\n");
+    t.push_str("(ocamllex lexer)\n");
+    v.push(DataFile { path: "dune/lib/dune".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(1\n");
+    t.push_str(" (magit .\n");
+    t.push_str("        [(20240301 1458)\n");
+    t.push_str("         ((emacs (25 1)) (compat (29 1 4 4)) (dash (2 19 1)) (transient (0 5 0)) (with-editor (3 3 2)))\n");
+    t.push_str("         \"A Git porcelain inside Emacs.\" tar\n");
+    t.push_str("         ((:commit . \"fe0c8a2b\") (:url . \"https://github.com/magit/magit\") (:keywords \"git\" \"tools\" \"vc\"))])\n");
+    t.push_str(" (dash .\n");
+    t.push_str("       [(20240103 1301)\n");
+    t.push_str("        ((emacs (24)))\n");
+    t.push_str("        \"A modern list library for Emacs\" tar\n");
+    t.push_str("        ((:url . \"https://github.com/magnars/dash.el\") (:keywords \"extensions\" \"lisp\"))])\n");
+    t.push_str(" (rainbow-delimiters .\n");
+    t.push_str("                     [(20210515 1254)\n");
+    t.push_str("                      nil\n");
+    t.push_str("                      \"Highlight brackets according to their depth\" single\n");
+    t.push_str("                      ((:url . \"https://github.com/Fanael/rainbow-delimiters\") (:keywords \"faces\" \"convenience\" \"lisp\" \"tools\"))]))\n");
+    v.push(DataFile { path: "emacs/archive-contents".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(";;; custom.el --- written by Emacs's Customize\n");
+    t.push_str("(custom-set-variables\n");
+    t.push_str(" ;; custom-set-variables was added by Custom.\n");
+    t.push_str(" ;; If you edit it by hand, you could mess it up, so be careful.\n");
+    t.push_str(" '(column-number-mode t)\n");
+    t.push_str(" '(fill-column 80)\n");
+    t.push_str(" '(indent-tabs-mode nil)\n");
+    t.push_str(" '(package-selected-packages '(magit dash rainbow-delimiters))\n");
+    t.push_str(" '(tab-width 4)\n");
+    t.push_str(" '(user-mail-address \"dev@example.org\"))\n");
+    t.push_str("(custom-set-faces\n");
+    t.push_str(" '(default ((t (:family \"Iosevka\" :height 120)))))\n");
+    v.push(DataFile { path: "emacs/custom.el".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str(";; manifest.scm\n");
+    t.push_str("(specifications->manifest\n");
+    t.push_str(" (list \"emacs\" \"git\" \"guile@3.0.9\" \"python-sexpdata\"))\n");
+    t.push_str("(define %load-hook #t)\n");
+    t.push_str("(define-public answer #x2A)\n");
+    v.push(DataFile { path: "guix/manifest.scm".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("parse\tkicad/power.kicad_sch\n");
+    t.push_str("parse\tkicad/fp-lib-table\n");
+    t.push_str("parse\tdune/lib/dune\n");
+    t.push_str("parse\tdune/dune-project\n");
+    t.push_str("parse\temacs/archive-contents\n");
+    t.push_str("parse\temacs/custom.el\n");
+    t.push_str("parse\tsmt/query.smt2\n");
+    t.push_str("parse\tguix/manifest.scm\n");
+    t.push_str("parse\tcorner/adjacent.sexp\n");
+    t.push_str("parse\tcorner/atoms.sexp\n");
+    t.push_str("parse\tcorner/brackets.sexp\n");
+    t.push_str("parse\tcorner/comment-eof.sexp\n");
+    t.push_str("parse\tcorner/comments.sexp\n");
+    t.push_str("parse\tcorner/deep.sexp\n");
+    t.push_str("parse\tcorner/dotted.sexp\n");
+    t.push_str("parse\tcorner/empty.sexp\n");
+    t.push_str("parse\tcorner/numbers.sexp\n");
+    t.push_str("parse\tcorner/only-comment.sexp\n");
+    t.push_str("parse\tcorner/quotes.sexp\n");
+    t.push_str("parse\tcorner/strings.sexp\n");
+    t.push_str("parse\tcorner/symbols.sexp\n");
+    t.push_str("parse\tcorner/unicode-ws.sexp\n");
+    t.push_str("parse\tcorner/whitespace.sexp\n");
+    t.push_str("parse\tbroken/extra-close.sexp\n");
+    t.push_str("parse\tbroken/mismatch.sexp\n");
+    t.push_str("parse\tbroken/mismatch2.sexp\n");
+    t.push_str("parse\tbroken/quote-comment.sexp\n");
+    t.push_str("parse\tbroken/quote-end.sexp\n");
+    t.push_str("parse\tbroken/quote-eof.sexp\n");
+    t.push_str("parse\tbroken/stray-close.sexp\n");
+    t.push_str("parse\tbroken/string-backslash.sexp\n");
+    t.push_str("parse\tbroken/string-open.sexp\n");
+    t.push_str("parse\tbroken/symbol-backslash.sexp\n");
+    t.push_str("parse\tbroken/two-top.sexp\n");
+    t.push_str("parse\tbroken/unclosed-bracket.sexp\n");
+    t.push_str("parse\tbroken/unclosed.sexp\n");
+    t.push_str("loads\tkicad/power.kicad_sch\n");
+    t.push_str("loads\temacs/archive-contents\n");
+    t.push_str("loads\tcorner/brackets.sexp\n");
+    t.push_str("loads\tcorner/numbers.sexp\n");
+    t.push_str("loads\tbroken/two-top.sexp\n");
+    t.push_str("loads\tcorner/empty.sexp\n");
+    t.push_str("parse\tguix/manifest.scm\tnil=()\ttrue=#t\tfalse=#f\n");
+    t.push_str("parse\tcorner/atoms.sexp\tnil=\ttrue=tt\tfalse=f\n");
+    t.push_str("parse\tcorner/atoms.sexp\ttrue=nil\n");
+    t.push_str("parse\tcorner/strings.sexp\tstring_to=Symbol\n");
+    t.push_str("parse\tcorner/strings.sexp\tstring_to=String\n");
+    t.push_str("parse\tcorner/comments.sexp\tline_comment=#\n");
+    t.push_str("parse\tguix/manifest.scm\tline_comment=#\n");
+    t.push_str("roundtrip\tkicad/power.kicad_sch\n");
+    t.push_str("roundtrip\tkicad/fp-lib-table\n");
+    t.push_str("roundtrip\tdune/lib/dune\n");
+    t.push_str("roundtrip\tdune/dune-project\n");
+    t.push_str("roundtrip\temacs/archive-contents\n");
+    t.push_str("roundtrip\temacs/custom.el\n");
+    t.push_str("roundtrip\tsmt/query.smt2\n");
+    t.push_str("roundtrip\tguix/manifest.scm\n");
+    t.push_str("roundtrip\tcorner/numbers.sexp\n");
+    t.push_str("roundtrip\tcorner/strings.sexp\n");
+    t.push_str("roundtrip\tcorner/symbols.sexp\n");
+    t.push_str("roundtrip\tcorner/quotes.sexp\n");
+    t.push_str("roundtrip\tcorner/brackets.sexp\n");
+    t.push_str("roundtrip\tcorner/dotted.sexp\n");
+    t.push_str("roundtrip\tcorner/deep.sexp\n");
+    t.push_str("roundtrip\tcorner/atoms.sexp\n");
+    t.push_str("roundtrip\tdune/lib/dune\tpretty_print\n");
+    t.push_str("roundtrip\temacs/archive-contents\tpretty_print\tindent_as=\\t\n");
+    t.push_str("roundtrip\tcorner/deep.sexp\tpretty_print\tindent_as=.\n");
+    t.push_str("roundtrip\tcorner/brackets.sexp\tpretty_print\n");
+    t.push_str("roundtrip\tcorner/quotes.sexp\tpretty_print\n");
+    t.push_str("roundtrip\tcorner/strings.sexp\tstr_as=symbol\n");
+    t.push_str("roundtrip\tcorner/atoms.sexp\ttrue_as=#t\tfalse_as=#f\tnone_as=nil\n");
+    t.push_str("dumps\tvalues/config.json\n");
+    t.push_str("dumps\tvalues/empty-dict.json\n");
+    t.push_str("dumps\tvalues/empty-list.json\n");
+    t.push_str("dumps\tvalues/float.json\n");
+    t.push_str("dumps\tvalues/list.json\n");
+    t.push_str("dumps\tvalues/number.json\n");
+    t.push_str("dumps\tvalues/string.json\n");
+    t.push_str("dumps\tvalues/config.json\tstr_as=symbol\n");
+    t.push_str("dumps\tvalues/config.json\tpretty_print\n");
+    t.push_str("dumps\tvalues/list.json\tpretty_print\tindent_as=    \n");
+    t.push_str("dumps\tvalues/list.json\tfalse_as=nil\ttrue_as=T\tnone_as=NIL\n");
+    t.push_str("dumps\tvalues/list.json\tstr_as=keyword\n");
+    t.push_str("dumps\tvalues/list.json\ttuple_as=array\n");
+    t.push_str("dumps\tvalues/config.json\ttuple_as=vector\n");
+    t.push_str("carcdr\tcorner/dotted.sexp\n");
+    t.push_str("carcdr\temacs/archive-contents\n");
+    t.push_str("bom\tkicad/power.kicad_sch\n");
+    t.push_str("libs\tkicad/fp-lib-table\n");
+    t.push_str("deps\tdune/lib/dune\n");
+    t.push_str("deps\tdune/dune-project\n");
+    t.push_str("packages\temacs/archive-contents\n");
+    t.push_str("customs\temacs/custom.el\n");
+    t.push_str("smt\tsmt/query.smt2\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("(fp_lib_table\n");
+    t.push_str("  (version 7)\n");
+    t.push_str("  (lib (name \"Connector_USB\")(type \"KiCad\")(uri \"${KICAD8_FOOTPRINT_DIR}/Connector_USB.pretty\")(options \"\")(descr \"USB connectors\"))\n");
+    t.push_str("  (lib (name \"Resistor_SMD\")(type \"KiCad\")(uri \"${KICAD8_FOOTPRINT_DIR}/Resistor_SMD.pretty\")(options \"\")(descr \"Resistor SMD footprints\"))\n");
+    t.push_str("  (lib (name \"project\")(type \"KiCad\")(uri \"${KIPRJMOD}/footprints/project.pretty\")(options \"\")(descr \"Footprints made for this board\") (disabled))\n");
+    t.push_str(")\n");
+    v.push(DataFile { path: "kicad/fp-lib-table".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("(kicad_sch\n");
+    t.push_str("\t(version 20231120)\n");
+    t.push_str("\t(generator \"eeschema\")\n");
+    t.push_str("\t(generator_version \"8.0\")\n");
+    t.push_str("\t(uuid \"8c4a2b1e-1d3f-4c55-9a77-0b6c1f2e3d4a\")\n");
+    t.push_str("\t(paper \"A4\")\n");
+    t.push_str("\t(title_block\n");
+    t.push_str("\t\t(title \"USB-C power input\")\n");
+    t.push_str("\t\t(date \"2024-03-09\")\n");
+    t.push_str("\t\t(rev \"B\")\n");
+    t.push_str("\t\t(company \"Example Labs\")\n");
+    t.push_str("\t)\n");
+    t.push_str("\t(lib_symbols\n");
+    t.push_str("\t\t(symbol \"Device:R\"\n");
+    t.push_str("\t\t\t(pin_numbers hide)\n");
+    t.push_str("\t\t\t(pin_names\n");
+    t.push_str("\t\t\t\t(offset 0)\n");
+    t.push_str("\t\t\t)\n");
+    t.push_str("\t\t\t(exclude_from_sim no)\n");
+    t.push_str("\t\t\t(in_bom yes)\n");
+    t.push_str("\t\t\t(on_board yes)\n");
+    t.push_str("\t\t\t(property \"Reference\" \"R\"\n");
+    t.push_str("\t\t\t\t(at 2.032 0 90)\n");
+    t.push_str("\t\t\t\t(effects\n");
+    t.push_str("\t\t\t\t\t(font\n");
+    t.push_str("\t\t\t\t\t\t(size 1.27 1.27)\n");
+    t.push_str("\t\t\t\t\t)\n");
+    t.push_str("\t\t\t\t)\n");
+    t.push_str("\t\t\t)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t)\n");
+    t.push_str("\t(symbol\n");
+    t.push_str("\t\t(lib_id \"Device:R\")\n");
+    t.push_str("\t\t(at 120.65 76.2 0)\n");
+    t.push_str("\t\t(unit 1)\n");
+    t.push_str("\t\t(in_bom yes)\n");
+    t.push_str("\t\t(on_board yes)\n");
+    t.push_str("\t\t(uuid \"3f1e7c2a-0000-4000-8000-000000000001\")\n");
+    t.push_str("\t\t(property \"Reference\" \"R1\"\n");
+    t.push_str("\t\t\t(at 123.19 74.93 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Value\" \"5.1k\"\n");
+    t.push_str("\t\t\t(at 123.19 77.47 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Footprint\" \"Resistor_SMD:R_0603_1608Metric\"\n");
+    t.push_str("\t\t\t(at 118.872 76.2 90)\n");
+    t.push_str("\t\t\t(effects\n");
+    t.push_str("\t\t\t\t(font\n");
+    t.push_str("\t\t\t\t\t(size 1.27 1.27)\n");
+    t.push_str("\t\t\t\t)\n");
+    t.push_str("\t\t\t\t(hide yes)\n");
+    t.push_str("\t\t\t)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t)\n");
+    t.push_str("\t(symbol\n");
+    t.push_str("\t\t(lib_id \"Device:R\")\n");
+    t.push_str("\t\t(at 130.81 76.2 0)\n");
+    t.push_str("\t\t(unit 1)\n");
+    t.push_str("\t\t(in_bom yes)\n");
+    t.push_str("\t\t(on_board yes)\n");
+    t.push_str("\t\t(property \"Reference\" \"R2\"\n");
+    t.push_str("\t\t\t(at 133.35 74.93 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Value\" \"5.1k\"\n");
+    t.push_str("\t\t\t(at 133.35 77.47 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Footprint\" \"Resistor_SMD:R_0603_1608Metric\"\n");
+    t.push_str("\t\t\t(at 129.032 76.2 90)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t)\n");
+    t.push_str("\t(symbol\n");
+    t.push_str("\t\t(lib_id \"Device:C\")\n");
+    t.push_str("\t\t(at 101.6 88.9 0)\n");
+    t.push_str("\t\t(unit 1)\n");
+    t.push_str("\t\t(in_bom yes)\n");
+    t.push_str("\t\t(on_board yes)\n");
+    t.push_str("\t\t(property \"Reference\" \"C1\"\n");
+    t.push_str("\t\t\t(at 104.14 87.63 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Value\" \"10u\"\n");
+    t.push_str("\t\t\t(at 104.14 90.17 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Footprint\" \"Capacitor_SMD:C_0805_2012Metric\"\n");
+    t.push_str("\t\t\t(at 102.5652 92.71 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Description\" \"Bulk cap, X5R \\\"16V\\\" rated\"\n");
+    t.push_str("\t\t\t(at 101.6 88.9 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t)\n");
+    t.push_str("\t(symbol\n");
+    t.push_str("\t\t(lib_id \"power:GND\")\n");
+    t.push_str("\t\t(at 101.6 95.25 0)\n");
+    t.push_str("\t\t(unit 1)\n");
+    t.push_str("\t\t(in_bom no)\n");
+    t.push_str("\t\t(on_board yes)\n");
+    t.push_str("\t\t(property \"Reference\" \"#PWR01\"\n");
+    t.push_str("\t\t\t(at 101.6 101.6 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(property \"Value\" \"GND\"\n");
+    t.push_str("\t\t\t(at 101.6 99.06 0)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t)\n");
+    t.push_str("\t(wire\n");
+    t.push_str("\t\t(pts\n");
+    t.push_str("\t\t\t(xy 101.6 85.09) (xy 101.6 76.2)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t\t(stroke\n");
+    t.push_str("\t\t\t(width 0)\n");
+    t.push_str("\t\t\t(type default)\n");
+    t.push_str("\t\t)\n");
+    t.push_str("\t)\n");
+    t.push_str(")\n");
+    v.push(DataFile { path: "kicad/power.kicad_sch".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("; is there an x with 0 < x < 10 and 2x = 7?\n");
+    t.push_str("(set-logic QF_LIA)\n");
+    t.push_str("(declare-fun x () Int)\n");
+    t.push_str("(assert (and (> x 0) (< x 10)))\n");
+    t.push_str("(assert (= (* 2 x) 7))\n");
+    t.push_str("(check-sat)\n");
+    t.push_str("(get-model)\n");
+    v.push(DataFile { path: "smt/query.smt2".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{\"name\": \"kara\", \"version\": [1, 2, 0], \"debug\": false, \"tags\": [\"a b\", \"c\\\"d\"], \"ratio\": 0.25, \"nested\": {\"x\": null, \"y\": true}}");
+    v.push(DataFile { path: "values/config.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("{}");
+    v.push(DataFile { path: "values/empty-dict.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[]");
+    v.push(DataFile { path: "values/empty-list.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("1e-07");
+    v.push(DataFile { path: "values/float.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("[1, \"two\", 3.0, null, true, [], [[]], [\"deep\", [\"er\"]]]");
+    v.push(DataFile { path: "values/list.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("12345678901234567890");
+    v.push(DataFile { path: "values/number.json".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("\"line one\\nline \\\"two\\\"\\tend\\\\\"");
+    v.push(DataFile { path: "values/string.json".to_string(), hex: false, body: t });
+}

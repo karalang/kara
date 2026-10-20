@@ -1,0 +1,491 @@
+== parse kicad/power.kicad_sch
+1 items
+[0] [Symbol('kicad_sch'), [Symbol('version'), 20231120], [Symbol('generator'), 'eeschema'], [Symbol('generator_version'), '8.0'], [Symbol('uuid'), '8c4a2b1e-1d3f-4c55-9a77-0b6c1f2e3d4a'], [Symbol('paper'), 'A4'], [Symbol('title_block'), [Symbol('title'), 'USB-C power input'], [Symbol('date'), '2024-03-09'], [Symbol('rev'), 'B'], [Symbol('company'), 'Example Labs']], [Symbol('lib_symbols'), [Symbol('symbol'), 'Device:R', [Symbol('pin_numbers'), Symbol('hide')], [Symbol('pin_names'), [Symbol('offset'), 0]], [Symbol('exclude_from_sim'), Symbol('no')], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', 'R', [Symbol('at'), 2.032, 0, 90], [Symbol('effects'), [Symbol('font'), [Symbol('size'), 1.27, 1.27]]]]]], [Symbol('symbol'), [Symbol('lib_id'), 'Device:R'], [Symbol('at'), 120.65, 76.2, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('uuid'), '3f1e7c2a-0000-4000-8000-000000000001'], [Symbol('property'), 'Reference', 'R1', [Symbol('at'), 123.19, 74.93, 0]], [Symbol('property'), 'Value', '5.1k', [Symbol('at'), 123.19, 77.47, 0]], [Symbol('property'), 'Footprint', 'Resistor_SMD:R_0603_1608Metric', [Symbol('at'), 118.872, 76.2, 90], [Symbol('effects'), [Symbol('font'), [Symbol('size'), 1.27, 1.27]], [Symbol('hide'), Symbol('yes')]]]], [Symbol('symbol'), [Symbol('lib_id'), 'Device:R'], [Symbol('at'), 130.81, 76.2, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', 'R2', [Symbol('at'), 133.35, 74.93, 0]], [Symbol('property'), 'Value', '5.1k', [Symbol('at'), 133.35, 77.47, 0]], [Symbol('property'), 'Footprint', 'Resistor_SMD:R_0603_1608Metric', [Symbol('at'), 129.032, 76.2, 90]]], [Symbol('symbol'), [Symbol('lib_id'), 'Device:C'], [Symbol('at'), 101.6, 88.9, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', 'C1', [Symbol('at'), 104.14, 87.63, 0]], [Symbol('property'), 'Value', '10u', [Symbol('at'), 104.14, 90.17, 0]], [Symbol('property'), 'Footprint', 'Capacitor_SMD:C_0805_2012Metric', [Symbol('at'), 102.5652, 92.71, 0]], [Symbol('property'), 'Description', 'Bulk cap, X5R "16V" rated', [Symbol('at'), 101.6, 88.9, 0]]], [Symbol('symbol'), [Symbol('lib_id'), 'power:GND'], [Symbol('at'), 101.6, 95.25, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('no')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', '#PWR01', [Symbol('at'), 101.6, 101.6, 0]], [Symbol('property'), 'Value', 'GND', [Symbol('at'), 101.6, 99.06, 0]]], [Symbol('wire'), [Symbol('pts'), [Symbol('xy'), 101.6, 85.09], [Symbol('xy'), 101.6, 76.2]], [Symbol('stroke'), [Symbol('width'), 0], [Symbol('type'), Symbol('default')]]]]
+== parse kicad/fp-lib-table
+1 items
+[0] [Symbol('fp_lib_table'), [Symbol('version'), 7], [Symbol('lib'), [Symbol('name'), 'Connector_USB'], [Symbol('type'), 'KiCad'], [Symbol('uri'), '${KICAD8_FOOTPRINT_DIR}/Connector_USB.pretty'], [Symbol('options'), ''], [Symbol('descr'), 'USB connectors']], [Symbol('lib'), [Symbol('name'), 'Resistor_SMD'], [Symbol('type'), 'KiCad'], [Symbol('uri'), '${KICAD8_FOOTPRINT_DIR}/Resistor_SMD.pretty'], [Symbol('options'), ''], [Symbol('descr'), 'Resistor SMD footprints']], [Symbol('lib'), [Symbol('name'), 'project'], [Symbol('type'), 'KiCad'], [Symbol('uri'), '${KIPRJMOD}/footprints/project.pretty'], [Symbol('options'), ''], [Symbol('descr'), 'Footprints made for this board'], [Symbol('disabled')]]]
+== parse dune/lib/dune
+3 items
+[0] [Symbol('library'), [Symbol('name'), Symbol('kara_parse')], [Symbol('public_name'), Symbol('kara.parse')], [Symbol('libraries'), Symbol('str'), Symbol('unix'), Symbol('menhirLib')], [Symbol('preprocess'), [Symbol('pps'), Symbol('ppx_deriving.show'), Symbol('ppx_sexp_conv')]], [Symbol('flags'), [Symbol(':standard'), Symbol('-w'), Symbol('+a-4-40-42-44'), Symbol('-strict-sequence')]]]
+[1] [Symbol('menhir'), [Symbol('modules'), Symbol('grammar')], [Symbol('flags'), Symbol('--explain'), Symbol('--table')]]
+[2] [Symbol('ocamllex'), Symbol('lexer')]
+== parse dune/dune-project
+7 items
+[0] [Symbol('lang'), Symbol('dune'), 3.11]
+[1] [Symbol('name'), Symbol('kara')]
+[2] [Symbol('generate_opam_files'), Symbol('true')]
+[3] [Symbol('source'), [Symbol('github'), Symbol('karalang/kara-ocaml')]]
+[4] [Symbol('license'), Symbol('BSD-2-Clause')]
+[5] [Symbol('authors'), 'Kara contributors']
+[6] [Symbol('package'), [Symbol('name'), Symbol('kara')], [Symbol('synopsis'), 'Tools for the Kara language'], [Symbol('depends'), [Symbol('ocaml'), [Symbol('>='), 4.14]], [Symbol('menhir'), [Symbol('>='), 20230608]], [Symbol('ppx_deriving'), Symbol(':with-test')]]]
+== parse emacs/archive-contents
+1 items
+[0] [1, [Symbol('magit'), Symbol('.'), Brackets(I=[[20240301, 1458], [[Symbol('emacs'), [25, 1]], [Symbol('compat'), [29, 1, 4, 4]], [Symbol('dash'), [2, 19, 1]], [Symbol('transient'), [0, 5, 0]], [Symbol('with-editor'), [3, 3, 2]]], 'A Git porcelain inside Emacs.', Symbol('tar'), [[Symbol(':commit'), Symbol('.'), 'fe0c8a2b'], [Symbol(':url'), Symbol('.'), 'https://github.com/magit/magit'], [Symbol(':keywords'), 'git', 'tools', 'vc']]])], [Symbol('dash'), Symbol('.'), Brackets(I=[[20240103, 1301], [[Symbol('emacs'), [24]]], 'A modern list library for Emacs', Symbol('tar'), [[Symbol(':url'), Symbol('.'), 'https://github.com/magnars/dash.el'], [Symbol(':keywords'), 'extensions', 'lisp']]])], [Symbol('rainbow-delimiters'), Symbol('.'), Brackets(I=[[20210515, 1254], [], 'Highlight brackets according to their depth', Symbol('single'), [[Symbol(':url'), Symbol('.'), 'https://github.com/Fanael/rainbow-delimiters'], [Symbol(':keywords'), 'faces', 'convenience', 'lisp', 'tools']]])]]
+== parse emacs/custom.el
+2 items
+[0] [Symbol('custom-set-variables'), Quoted([Symbol('column-number-mode'), True]), Quoted([Symbol('fill-column'), 80]), Quoted([Symbol('indent-tabs-mode'), []]), Quoted([Symbol('package-selected-packages'), Quoted([Symbol('magit'), Symbol('dash'), Symbol('rainbow-delimiters')])]), Quoted([Symbol('tab-width'), 4]), Quoted([Symbol('user-mail-address'), 'dev@example.org'])]
+[1] [Symbol('custom-set-faces'), Quoted([Symbol('default'), [[True, [Symbol(':family'), 'Iosevka', Symbol(':height'), 120]]]])]
+== parse smt/query.smt2
+6 items
+[0] [Symbol('set-logic'), Symbol('QF_LIA')]
+[1] [Symbol('declare-fun'), Symbol('x'), [], Symbol('Int')]
+[2] [Symbol('assert'), [Symbol('and'), [Symbol('>'), Symbol('x'), 0], [Symbol('<'), Symbol('x'), 10]]]
+[3] [Symbol('assert'), [Symbol('='), [Symbol('*'), 2, Symbol('x')], 7]]
+[4] [Symbol('check-sat')]
+[5] [Symbol('get-model')]
+== parse guix/manifest.scm
+3 items
+[0] [Symbol('specifications->manifest'), [Symbol('list'), 'emacs', 'git', 'guile@3.0.9', 'python-sexpdata']]
+[1] [Symbol('define'), Symbol('%load-hook'), Symbol('#t')]
+[2] [Symbol('define-public'), Symbol('answer'), Symbol('#x2A')]
+== parse corner/adjacent.sexp
+1 items
+[0] [Symbol('a'), 'b', Symbol('c'), [Symbol('d')], Symbol('e'), Brackets(I=[Symbol('f')]), Symbol('g')]
+== parse corner/atoms.sexp
+1 items
+[0] [[], True, Symbol('f'), Symbol('nilly'), Symbol('tt'), [], [[]]]
+== parse corner/brackets.sexp
+4 items
+[0] Brackets(I=[1, [2, Brackets(I=[3, 4])], Brackets(I=[])])
+[1] []
+[2] Brackets(I=[])
+[3] [[]]
+== parse corner/comment-eof.sexp
+1 items
+[0] [Symbol('x')]
+== parse corner/comments.sexp
+2 items
+[0] [Symbol('a'), Symbol('b'), Symbol('c')]
+[1] [Symbol('d')]
+== parse corner/deep.sexp
+1 items
+[0] [[[[[[[[[[[Symbol('deep')]]]]]]]]]]]
+== parse corner/dotted.sexp
+1 items
+[0] [[Symbol('a'), Symbol('.'), 1], [Symbol('b'), Symbol('.'), [2, 3]], [Symbol('c'), 4], [Symbol('d'), Symbol('.'), Symbol('e'), Symbol('.'), Symbol('f')], [Symbol('.'), Symbol('g')], [Symbol('h'), Symbol('.')], [Symbol('i')]]
+== parse corner/empty.sexp
+0 items
+== parse corner/numbers.sexp
+1 items
+[0] [42, -7, 3, 7, 1000, Symbol('1__0'), Symbol('_1'), Symbol('1_'), Symbol('0x10'), 1000.0, 0.01, 0.5, 5.0, -5.0, inf, -inf, inf, nan, nan, inf, 123456789012345678901234567890, Symbol('1.5e'), Symbol('1.2.3'), 34, 12, 12, 34, 0, -0.0, Symbol('1/2')]
+== parse corner/only-comment.sexp
+0 items
+== parse corner/quotes.sexp
+1 items
+[0] [Quoted(Symbol('a')), Quoted([1, 2]), Quoted(Brackets(I=[Symbol('x')])), Quoted(Quoted(Symbol('b'))), [Symbol('f'), Quoted(Symbol('x')), Symbol('y')], [Quoted(Symbol('a')), Symbol('b'), Symbol('c')], Quoted('s'), Quoted(Symbol('z'))]
+== parse corner/strings.sexp
+1 items
+[0] ['plain', 'tab\there', 'line\nbreak', 'quote " inside', 'back\\slash', 'bell\\a and \\q', '', 'multi\nline', 'café ☃', 'sem;colon', 'paren(']
+== parse corner/symbols.sexp
+1 items
+[0] [Symbol('foo-bar'), Symbol(':keyword'), Symbol('&rest'), Symbol('a.b'), Symbol('.'), Symbol('(x)'), Symbol('with space'), Symbol('#hash'), Symbol('ok?'), Symbol('q?uery'), Symbol(',comma'), Symbol('back\\slash'), Symbol('#t'), Symbol('#f'), Symbol('#:kw'), Symbol('sym\\q'), Symbol('1+'), Symbol('<='), Symbol('été')]
+== parse corner/unicode-ws.sexp
+1 items
+[0] [Symbol('a\xa0b'), Symbol('c\u2003d')]
+== parse corner/whitespace.sexp
+1 items
+[0] [Symbol('a'), Symbol('b'), Symbol('c'), Symbol('d')]
+== parse broken/extra-close.sexp
+error: ExpectNothing: Too many closing brackets. Expected no character left in the sexp. Got: ')'
+== parse broken/mismatch.sexp
+error: ExpectClosingBracket: Not enough closing brackets. Expected ')' to be the last letter in the sexp. Got: ']'
+== parse broken/mismatch2.sexp
+error: ExpectClosingBracket: Not enough closing brackets. Expected ')' to be the last letter in the sexp. Got: ']'
+== parse broken/quote-comment.sexp
+error: ExpectSExp: No s-exp is found after an apostrophe at position 0
+== parse broken/quote-end.sexp
+error: ExpectSExp: No s-exp is found after an apostrophe at position 3
+== parse broken/quote-eof.sexp
+error: ExpectSExp: No s-exp is found after an apostrophe at position 0
+== parse broken/stray-close.sexp
+error: ExpectNothing: Too many closing brackets. Expected no character left in the sexp. Got: ')'
+== parse broken/string-backslash.sexp
+error: IndexError: string index out of range
+== parse broken/string-open.sexp
+error: AttributeError: 'NoneType' object has no attribute 'start'
+== parse broken/symbol-backslash.sexp
+error: IndexError: string index out of range
+== parse broken/two-top.sexp
+2 items
+[0] [Symbol('a')]
+[1] [Symbol('b')]
+== parse broken/unclosed-bracket.sexp
+error: ExpectClosingBracket: Not enough closing brackets. Expected ']' to be the last letter in the sexp. Got: None
+== parse broken/unclosed.sexp
+error: ExpectClosingBracket: Not enough closing brackets. Expected ')' to be the last letter in the sexp. Got: None
+== loads kicad/power.kicad_sch
+[Symbol('kicad_sch'), [Symbol('version'), 20231120], [Symbol('generator'), 'eeschema'], [Symbol('generator_version'), '8.0'], [Symbol('uuid'), '8c4a2b1e-1d3f-4c55-9a77-0b6c1f2e3d4a'], [Symbol('paper'), 'A4'], [Symbol('title_block'), [Symbol('title'), 'USB-C power input'], [Symbol('date'), '2024-03-09'], [Symbol('rev'), 'B'], [Symbol('company'), 'Example Labs']], [Symbol('lib_symbols'), [Symbol('symbol'), 'Device:R', [Symbol('pin_numbers'), Symbol('hide')], [Symbol('pin_names'), [Symbol('offset'), 0]], [Symbol('exclude_from_sim'), Symbol('no')], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', 'R', [Symbol('at'), 2.032, 0, 90], [Symbol('effects'), [Symbol('font'), [Symbol('size'), 1.27, 1.27]]]]]], [Symbol('symbol'), [Symbol('lib_id'), 'Device:R'], [Symbol('at'), 120.65, 76.2, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('uuid'), '3f1e7c2a-0000-4000-8000-000000000001'], [Symbol('property'), 'Reference', 'R1', [Symbol('at'), 123.19, 74.93, 0]], [Symbol('property'), 'Value', '5.1k', [Symbol('at'), 123.19, 77.47, 0]], [Symbol('property'), 'Footprint', 'Resistor_SMD:R_0603_1608Metric', [Symbol('at'), 118.872, 76.2, 90], [Symbol('effects'), [Symbol('font'), [Symbol('size'), 1.27, 1.27]], [Symbol('hide'), Symbol('yes')]]]], [Symbol('symbol'), [Symbol('lib_id'), 'Device:R'], [Symbol('at'), 130.81, 76.2, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', 'R2', [Symbol('at'), 133.35, 74.93, 0]], [Symbol('property'), 'Value', '5.1k', [Symbol('at'), 133.35, 77.47, 0]], [Symbol('property'), 'Footprint', 'Resistor_SMD:R_0603_1608Metric', [Symbol('at'), 129.032, 76.2, 90]]], [Symbol('symbol'), [Symbol('lib_id'), 'Device:C'], [Symbol('at'), 101.6, 88.9, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('yes')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', 'C1', [Symbol('at'), 104.14, 87.63, 0]], [Symbol('property'), 'Value', '10u', [Symbol('at'), 104.14, 90.17, 0]], [Symbol('property'), 'Footprint', 'Capacitor_SMD:C_0805_2012Metric', [Symbol('at'), 102.5652, 92.71, 0]], [Symbol('property'), 'Description', 'Bulk cap, X5R "16V" rated', [Symbol('at'), 101.6, 88.9, 0]]], [Symbol('symbol'), [Symbol('lib_id'), 'power:GND'], [Symbol('at'), 101.6, 95.25, 0], [Symbol('unit'), 1], [Symbol('in_bom'), Symbol('no')], [Symbol('on_board'), Symbol('yes')], [Symbol('property'), 'Reference', '#PWR01', [Symbol('at'), 101.6, 101.6, 0]], [Symbol('property'), 'Value', 'GND', [Symbol('at'), 101.6, 99.06, 0]]], [Symbol('wire'), [Symbol('pts'), [Symbol('xy'), 101.6, 85.09], [Symbol('xy'), 101.6, 76.2]], [Symbol('stroke'), [Symbol('width'), 0], [Symbol('type'), Symbol('default')]]]]
+== loads emacs/archive-contents
+[1, [Symbol('magit'), Symbol('.'), Brackets(I=[[20240301, 1458], [[Symbol('emacs'), [25, 1]], [Symbol('compat'), [29, 1, 4, 4]], [Symbol('dash'), [2, 19, 1]], [Symbol('transient'), [0, 5, 0]], [Symbol('with-editor'), [3, 3, 2]]], 'A Git porcelain inside Emacs.', Symbol('tar'), [[Symbol(':commit'), Symbol('.'), 'fe0c8a2b'], [Symbol(':url'), Symbol('.'), 'https://github.com/magit/magit'], [Symbol(':keywords'), 'git', 'tools', 'vc']]])], [Symbol('dash'), Symbol('.'), Brackets(I=[[20240103, 1301], [[Symbol('emacs'), [24]]], 'A modern list library for Emacs', Symbol('tar'), [[Symbol(':url'), Symbol('.'), 'https://github.com/magnars/dash.el'], [Symbol(':keywords'), 'extensions', 'lisp']]])], [Symbol('rainbow-delimiters'), Symbol('.'), Brackets(I=[[20210515, 1254], [], 'Highlight brackets according to their depth', Symbol('single'), [[Symbol(':url'), Symbol('.'), 'https://github.com/Fanael/rainbow-delimiters'], [Symbol(':keywords'), 'faces', 'convenience', 'lisp', 'tools']]])]]
+== loads corner/brackets.sexp
+error: AssertionError: 
+== loads corner/numbers.sexp
+[42, -7, 3, 7, 1000, Symbol('1__0'), Symbol('_1'), Symbol('1_'), Symbol('0x10'), 1000.0, 0.01, 0.5, 5.0, -5.0, inf, -inf, inf, nan, nan, inf, 123456789012345678901234567890, Symbol('1.5e'), Symbol('1.2.3'), 34, 12, 12, 34, 0, -0.0, Symbol('1/2')]
+== loads broken/two-top.sexp
+error: AssertionError: 
+== loads corner/empty.sexp
+error: AssertionError: 
+== parse guix/manifest.scm nil=() true=#t false=#f
+3 items
+[0] [Symbol('specifications->manifest'), [Symbol('list'), 'emacs', 'git', 'guile@3.0.9', 'python-sexpdata']]
+[1] [Symbol('define'), Symbol('%load-hook'), True]
+[2] [Symbol('define-public'), Symbol('answer'), Symbol('#x2A')]
+== parse corner/atoms.sexp nil= true=tt false=f
+1 items
+[0] [Symbol('nil'), Symbol('t'), False, Symbol('nilly'), True, [], [Symbol('nil')]]
+== parse corner/atoms.sexp true=nil
+1 items
+[0] [[], Symbol('t'), Symbol('f'), Symbol('nilly'), Symbol('tt'), [], [[]]]
+== parse corner/strings.sexp string_to=Symbol
+1 items
+[0] [Symbol('plain'), Symbol('tab\there'), Symbol('line\nbreak'), Symbol('quote " inside'), Symbol('back\\slash'), Symbol('bell\\a and \\q'), Symbol(''), Symbol('multi\nline'), Symbol('café ☃'), Symbol('sem;colon'), Symbol('paren(')]
+== parse corner/strings.sexp string_to=String
+1 items
+[0] [String('plain'), String('tab\there'), String('line\nbreak'), String('quote " inside'), String('back\\slash'), String('bell\\a and \\q'), String(''), String('multi\nline'), String('café ☃'), String('sem;colon'), String('paren(')]
+== parse corner/comments.sexp line_comment=#
+7 items
+[0] Symbol(';')
+[1] Symbol('leading')
+[2] Symbol('comment')
+[3] [Symbol('a'), Symbol(';'), Symbol('trailing'), Symbol('b'), Symbol(';;'), Symbol('another'), Symbol('c')]
+[4] Symbol(';')
+[5] Symbol('last')
+[6] [Symbol('d')]
+== parse guix/manifest.scm line_comment=#
+error: ExpectClosingBracket: Not enough closing brackets. Expected ')' to be the last letter in the sexp. Got: None
+== roundtrip kicad/power.kicad_sch
+(kicad_sch (version 20231120) (generator "eeschema") (generator_version "8.0") (uuid "8c4a2b1e-1d3f-4c55-9a77-0b6c1f2e3d4a") (paper "A4") (title_block (title "USB-C power input") (date "2024-03-09") (rev "B") (company "Example Labs")) (lib_symbols (symbol "Device:R" (pin_numbers hide) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes) (property "Reference" "R" (at 2.032 0 90) (effects (font (size 1.27 1.27)))))) (symbol (lib_id "Device:R") (at 120.65 76.2 0) (unit 1) (in_bom yes) (on_board yes) (uuid "3f1e7c2a-0000-4000-8000-000000000001") (property "Reference" "R1" (at 123.19 74.93 0)) (property "Value" "5.1k" (at 123.19 77.47 0)) (property "Footprint" "Resistor_SMD:R_0603_1608Metric" (at 118.872 76.2 90) (effects (font (size 1.27 1.27)) (hide yes)))) (symbol (lib_id "Device:R") (at 130.81 76.2 0) (unit 1) (in_bom yes) (on_board yes) (property "Reference" "R2" (at 133.35 74.93 0)) (property "Value" "5.1k" (at 133.35 77.47 0)) (property "Footprint" "Resistor_SMD:R_0603_1608Metric" (at 129.032 76.2 90))) (symbol (lib_id "Device:C") (at 101.6 88.9 0) (unit 1) (in_bom yes) (on_board yes) (property "Reference" "C1" (at 104.14 87.63 0)) (property "Value" "10u" (at 104.14 90.17 0)) (property "Footprint" "Capacitor_SMD:C_0805_2012Metric" (at 102.5652 92.71 0)) (property "Description" "Bulk cap, X5R \"16V\" rated" (at 101.6 88.9 0))) (symbol (lib_id "power:GND") (at 101.6 95.25 0) (unit 1) (in_bom no) (on_board yes) (property "Reference" "#PWR01" (at 101.6 101.6 0)) (property "Value" "GND" (at 101.6 99.06 0))) (wire (pts (xy 101.6 85.09) (xy 101.6 76.2)) (stroke (width 0) (type default))))
+== roundtrip kicad/fp-lib-table
+(fp_lib_table (version 7) (lib (name "Connector_USB") (type "KiCad") (uri "${KICAD8_FOOTPRINT_DIR}/Connector_USB.pretty") (options "") (descr "USB connectors")) (lib (name "Resistor_SMD") (type "KiCad") (uri "${KICAD8_FOOTPRINT_DIR}/Resistor_SMD.pretty") (options "") (descr "Resistor SMD footprints")) (lib (name "project") (type "KiCad") (uri "${KIPRJMOD}/footprints/project.pretty") (options "") (descr "Footprints made for this board") (disabled)))
+== roundtrip dune/lib/dune
+(library (name kara_parse) (public_name kara.parse) (libraries str unix menhirLib) (preprocess (pps ppx_deriving.show ppx_sexp_conv)) (flags (:standard -w +a-4-40-42-44 -strict-sequence)))
+(menhir (modules grammar) (flags --explain --table))
+(ocamllex lexer)
+== roundtrip dune/dune-project
+(lang dune 3.11)
+(name kara)
+(generate_opam_files true)
+(source (github karalang/kara-ocaml))
+(license BSD-2-Clause)
+(authors "Kara contributors")
+(package (name kara) (synopsis "Tools for the Kara language") (depends (ocaml (>= 4.14)) (menhir (>= 20230608)) (ppx_deriving :with-test)))
+== roundtrip emacs/archive-contents
+(1 (magit . [(20240301 1458) ((emacs (25 1)) (compat (29 1 4 4)) (dash (2 19 1)) (transient (0 5 0)) (with-editor (3 3 2))) "A Git porcelain inside Emacs." tar ((:commit . "fe0c8a2b") (:url . "https://github.com/magit/magit") (:keywords "git" "tools" "vc"))]) (dash . [(20240103 1301) ((emacs (24))) "A modern list library for Emacs" tar ((:url . "https://github.com/magnars/dash.el") (:keywords "extensions" "lisp"))]) (rainbow-delimiters . [(20210515 1254) () "Highlight brackets according to their depth" single ((:url . "https://github.com/Fanael/rainbow-delimiters") (:keywords "faces" "convenience" "lisp" "tools"))]))
+== roundtrip emacs/custom.el
+(custom-set-variables '(column-number-mode t) '(fill-column 80) '(indent-tabs-mode ()) '(package-selected-packages '(magit dash rainbow-delimiters)) '(tab-width 4) '(user-mail-address "dev@example.org"))
+(custom-set-faces '(default ((t (:family "Iosevka" :height 120)))))
+== roundtrip smt/query.smt2
+(set-logic QF_LIA)
+(declare-fun x () Int)
+(assert (and (> x 0) (< x 10)))
+(assert (= (* 2 x) 7))
+(check-sat)
+(get-model)
+== roundtrip guix/manifest.scm
+(specifications->manifest (list "emacs" "git" "guile@3.0.9" "python-sexpdata"))
+(define %load-hook \#t)
+(define-public answer \#x2A)
+== roundtrip corner/numbers.sexp
+(42 -7 3 7 1000 1__0 _1 1_ 0x10 1000.0 0.01 0.5 5.0 -5.0 inf -inf inf nan nan inf 123456789012345678901234567890 1.5e 1.2.3 34 12 12 34 0 -0.0 1/2)
+== roundtrip corner/strings.sexp
+("plain" "tab\there" "line\nbreak" "quote \" inside" "back\\slash" "bell\\a and \\q" "" "multi\nline" "café ☃" "sem;colon" "paren(")
+== roundtrip corner/symbols.sexp
+(foo-bar :keyword &rest a.b . \(x\) with\ space \#hash ok\? q\?uery \,comma back\\slash \#t \#f \#:kw sym\\q 1+ <= été)
+== roundtrip corner/quotes.sexp
+('a '(1 2) '[x] ''b (f 'x y) ('a b c) '"s" 'z)
+== roundtrip corner/brackets.sexp
+[1 (2 [3 4]) []]
+()
+[]
+(())
+== roundtrip corner/dotted.sexp
+((a . 1) (b . (2 3)) (c 4) (d . e . f) (. g) (h .) (i))
+== roundtrip corner/deep.sexp
+(((((((((((deep)))))))))))
+== roundtrip corner/atoms.sexp
+(() t f nilly tt () (()))
+== roundtrip dune/lib/dune pretty_print
+(
+  library
+  (name kara_parse)
+  (public_name kara.parse)
+  (libraries str unix menhirLib)
+  (
+    preprocess
+    (pps ppx_deriving.show ppx_sexp_conv)
+  )
+  (
+    flags
+    (:standard -w +a-4-40-42-44 -strict-sequence)
+  )
+)
+(
+  menhir
+  (modules grammar)
+  (flags --explain --table)
+)
+(ocamllex lexer)
+== roundtrip emacs/archive-contents pretty_print indent_as=\t
+(
+	1
+	(
+		magit
+		.
+		[
+			(20240301 1458)
+			(
+				(
+					emacs
+					(25 1)
+				)
+				(
+					compat
+					(29 1 4 4)
+				)
+				(
+					dash
+					(2 19 1)
+				)
+				(
+					transient
+					(0 5 0)
+				)
+				(
+					with-editor
+					(3 3 2)
+				)
+			)
+			"A Git porcelain inside Emacs."
+			tar
+			(
+				(:commit . "fe0c8a2b")
+				(:url . "https://github.com/magit/magit")
+				(:keywords "git" "tools" "vc")
+			)
+		]
+	)
+	(
+		dash
+		.
+		[
+			(20240103 1301)
+			(
+				(
+					emacs
+					(24)
+				)
+			)
+			"A modern list library for Emacs"
+			tar
+			(
+				(:url . "https://github.com/magnars/dash.el")
+				(:keywords "extensions" "lisp")
+			)
+		]
+	)
+	(
+		rainbow-delimiters
+		.
+		[
+			(20210515 1254)
+			()
+			"Highlight brackets according to their depth"
+			single
+			(
+				(:url . "https://github.com/Fanael/rainbow-delimiters")
+				(:keywords "faces" "convenience" "lisp" "tools")
+			)
+		]
+	)
+)
+== roundtrip corner/deep.sexp pretty_print indent_as=.
+(
+.(
+..(
+...(
+....(
+.....(
+......(
+.......(
+........(
+.........(
+..........(deep)
+.........)
+........)
+.......)
+......)
+.....)
+....)
+...)
+..)
+.)
+)
+== roundtrip corner/brackets.sexp pretty_print
+[
+  1
+  (
+    2
+    [3 4]
+  )
+  []
+]
+()
+[]
+(
+  ()
+)
+== roundtrip corner/quotes.sexp pretty_print
+(
+  'a
+  '(1 2)
+  '[x]
+  ''b
+  (f 'x y)
+  ('a b c)
+  '"s"
+  'z
+)
+== roundtrip corner/strings.sexp str_as=symbol
+(plain tab	here line
+break quote " inside back\slash bell\a and \q  multi
+line café ☃ sem;colon paren()
+== roundtrip corner/atoms.sexp true_as=#t false_as=#f none_as=nil
+(() #t f nilly tt () (()))
+== dumps values/config.json
+(:name "kara" :version (1 2 0) :debug () :tags ("a b" "c\"d") :ratio 0.25 :nested (:x () :y t))
+== dumps values/empty-dict.json
+()
+== dumps values/empty-list.json
+()
+== dumps values/float.json
+1e-07
+== dumps values/list.json
+(1 "two" 3.0 () t () (()) ("deep" ("er")))
+== dumps values/number.json
+12345678901234567890
+== dumps values/string.json
+"line one\nline \"two\"\tend\\"
+== dumps values/config.json str_as=symbol
+(:name kara :version (1 2 0) :debug () :tags (a b c"d) :ratio 0.25 :nested (:x () :y t))
+== dumps values/config.json pretty_print
+(
+  :name
+  "kara"
+  :version
+  (1 2 0)
+  :debug
+  ()
+  :tags
+  ("a b" "c\"d")
+  :ratio
+  0.25
+  :nested
+  (:x () :y t)
+)
+== dumps values/list.json pretty_print indent_as=    
+(
+    1
+    "two"
+    3.0
+    ()
+    t
+    ()
+    (
+        ()
+    )
+    (
+        "deep"
+        ("er")
+    )
+)
+== dumps values/list.json false_as=nil true_as=T none_as=NIL
+(1 "two" 3.0 NIL T () (()) ("deep" ("er")))
+== dumps values/list.json str_as=keyword
+error: ValueError: str_as='keyword' is not valid
+== dumps values/list.json tuple_as=array
+(1 "two" 3.0 () t () (()) ("deep" ("er")))
+== dumps values/config.json tuple_as=vector
+(:name "kara" :version (1 2 0) :debug () :tags ("a b" "c\"d") :ratio 0.25 :nested (:x () :y t))
+== carcdr corner/dotted.sexp
+car Symbol('a')
+cdr 1
+car Symbol('b')
+cdr [2, 3]
+car Symbol('c')
+cdr [4]
+car Symbol('d')
+cdr Symbol('e')
+car Symbol('.')
+cdr [Symbol('g')]
+car Symbol('h')
+cdr [Symbol('.')]
+car Symbol('i')
+cdr []
+== carcdr emacs/archive-contents
+car Symbol('magit')
+cdr Brackets(I=[[20240301, 1458], [[Symbol('emacs'), [25, 1]], [Symbol('compat'), [29, 1, 4, 4]], [Symbol('dash'), [2, 19, 1]], [Symbol('transient'), [0, 5, 0]], [Symbol('with-editor'), [3, 3, 2]]], 'A Git porcelain inside Emacs.', Symbol('tar'), [[Symbol(':commit'), Symbol('.'), 'fe0c8a2b'], [Symbol(':url'), Symbol('.'), 'https://github.com/magit/magit'], [Symbol(':keywords'), 'git', 'tools', 'vc']]])
+car Symbol('dash')
+cdr Brackets(I=[[20240103, 1301], [[Symbol('emacs'), [24]]], 'A modern list library for Emacs', Symbol('tar'), [[Symbol(':url'), Symbol('.'), 'https://github.com/magnars/dash.el'], [Symbol(':keywords'), 'extensions', 'lisp']]])
+car Symbol('rainbow-delimiters')
+cdr Brackets(I=[[20210515, 1254], [], 'Highlight brackets according to their depth', Symbol('single'), [[Symbol(':url'), Symbol('.'), 'https://github.com/Fanael/rainbow-delimiters'], [Symbol(':keywords'), 'faces', 'convenience', 'lisp', 'tools']]])
+== bom kicad/power.kicad_sch
+USB-C power input rev B (2024-03-09)
+note C1: Bulk cap, X5R "16V" rated
+skip #PWR01 (not in BOM)
+1 x C1  10u  Capacitor_SMD:C_0805_2012Metric  [Device:C]
+2 x R1,R2  5.1k  Resistor_SMD:R_0603_1608Metric  [Device:R]
+1 wire(s); first runs ((xy 101.6 85.09) (xy 101.6 76.2))
+== libs kicad/fp-lib-table
+version 7
+Connector_USB: /usr/share/kicad/footprints/Connector_USB.pretty (KiCad, enabled) "USB connectors"
+Resistor_SMD: /usr/share/kicad/footprints/Resistor_SMD.pretty (KiCad, enabled) "Resistor SMD footprints"
+project: /home/dev/usb-power/footprints/project.pretty (KiCad, disabled) "Footprints made for this board"
+== deps dune/lib/dune
+library kara_parse (kara.parse)
+  libraries: str unix menhirLib
+  ppx: ppx_deriving.show ppx_sexp_conv
+  flags: ((:standard -w +a-4-40-42-44 -strict-sequence))
+menhir ((modules grammar) (flags --explain --table))
+ocamllex = lexer
+== deps dune/dune-project
+lang (dune 3.11)
+name = kara
+generate_opam_files = true
+source ((github karalang/kara-ocaml))
+license = BSD-2-Clause
+authors = "Kara contributors"
+package kara: Tools for the Kara language
+  depends ocaml ((>= 4.14))
+  depends menhir ((>= 20230608))
+  depends ppx_deriving (:with-test)
+== packages emacs/archive-contents
+archive format 1
+magit 20240301.1458 [tar] A Git porcelain inside Emacs.
+  needs: emacs 25.1, compat 29.1.4.4, dash 2.19.1, transient 0.5.0, with-editor 3.3.2
+  url: https://github.com/magit/magit
+  keywords: ("git" "tools" "vc")
+dash 20240103.1301 [tar] A modern list library for Emacs
+  needs: emacs 24
+  url: https://github.com/magnars/dash.el
+  keywords: ("extensions" "lisp")
+rainbow-delimiters 20210515.1254 [single] Highlight brackets according to their depth
+  needs: -
+  url: https://github.com/Fanael/rainbow-delimiters
+  keywords: ("faces" "convenience" "lisp" "tools")
+== customs emacs/custom.el
+custom-set-variables:
+  column-number-mode = t
+  fill-column = 80
+  indent-tabs-mode = ()
+  package-selected-packages = '(magit dash rainbow-delimiters)
+  tab-width = 4
+  user-mail-address = "dev@example.org"
+custom-set-faces:
+  default = ((t (:family "Iosevka" :height 120)))
+== smt smt/query.smt2
+set-logic (QF_LIA)
+declare x : () -> Int
+assert (   and   (> x 0)   (< x 10) )
+assert (   =   (* 2 x)   7 )
+check-sat ()
+get-model ()
