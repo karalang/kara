@@ -3668,7 +3668,7 @@ fn main() {
 // The receiver shape covers both the Identifier form (`a.load(...)`) for
 // top-level `let a = Atomic.new(v)` bindings and the FieldAccess form
 // (`c.count.load(...)`) emitted by `karac migrate --atomic` against
-// `shared struct` → `par struct` conversions.
+// `shared struct` → `sync struct` conversions.
 
 #[test]
 fn test_e2e_atomic_new_and_load_seqcst() {
@@ -3964,8 +3964,8 @@ fn e2e_tracing_par_branch_inherits_active_span() {
     );
 }
 
-// ── Phase 6 `par struct` slice C: always-Arc codegen ─────────
-// A `par struct` / `par enum` reuses the entire shared-struct codegen
+// ── Phase 6 `sync struct` slice C: always-Arc codegen ─────────
+// A `sync struct` / `sync enum` reuses the entire shared-struct codegen
 // (same `{ i64 refcount, … }` heap layout, malloc, field access, method
 // dispatch, drop). The ONLY difference is that the refcount header is
 // mutated atomically (`atomicrmw`, via emit_arc_inc / emit_arc_dec)
@@ -3978,7 +3978,7 @@ fn test_ir_par_struct_rc_inc_is_atomic() {
     // `add i64 %rc` a `shared struct` emits.
     let ir = ir_for(
         r#"
-par struct Obj { data: i64 }
+sync struct Obj { data: i64 }
 fn copy_par() {
     let a = Obj { data: 10 };
     let b = a;
@@ -3988,21 +3988,21 @@ fn copy_par() {
     );
     assert!(
         ir.contains("atomicrmw add"),
-        "par struct copy must emit an atomic refcount increment (atomicrmw add); got IR:\n{ir}"
+        "sync struct copy must emit an atomic refcount increment (atomicrmw add); got IR:\n{ir}"
     );
     assert!(
             !ir.contains("add i64 %rc"),
-            "par struct refcount inc must NOT use the non-atomic `add i64 %rc` shared path; got IR:\n{ir}"
+            "sync struct refcount inc must NOT use the non-atomic `add i64 %rc` shared path; got IR:\n{ir}"
         );
 }
 
 #[test]
 fn test_ir_par_struct_rc_dec_is_atomic_and_frees() {
     // Scope exit decrements the refcount and conditionally frees. For a
-    // `par struct` the decrement must be an `atomicrmw sub`.
+    // `sync struct` the decrement must be an `atomicrmw sub`.
     let ir = ir_for(
         r#"
-par struct Token { id: i64 }
+sync struct Token { id: i64 }
 fn use_token() {
     let t = Token { id: 1 };
     let _x = t.id;
@@ -4011,11 +4011,11 @@ fn use_token() {
     );
     assert!(
             ir.contains("atomicrmw sub"),
-            "par struct scope exit must emit an atomic refcount decrement (atomicrmw sub); got IR:\n{ir}"
+            "sync struct scope exit must emit an atomic refcount decrement (atomicrmw sub); got IR:\n{ir}"
         );
     assert!(
         ir.contains("@free"),
-        "par struct scope exit must conditionally free the heap allocation; got IR:\n{ir}"
+        "sync struct scope exit must conditionally free the heap allocation; got IR:\n{ir}"
     );
 }
 
@@ -4047,7 +4047,7 @@ fn copy_shared() {
 fn test_e2e_par_struct_basic() {
     let out = run_program(
         r#"
-par struct Counter { val: i64 }
+sync struct Counter { val: i64 }
 fn main() {
     let c = Counter { val: 42 };
     println(c.val);
@@ -4062,7 +4062,7 @@ fn main() {
 #[test]
 fn test_e2e_par_struct_with_atomic_field_constructs() {
     // `Atomic.new` in general (struct-field-init) position lets a
-    // concurrent `par struct` with an `Atomic` field be constructed —
+    // concurrent `sync struct` with an `Atomic` field be constructed —
     // `Atomic[T]` is a transparent wrapper, so the field lowers to its
     // inner value. (Atomic-method dispatch on a shared/par field receiver
     // is a separate pre-existing gap; here we read a sibling plain field
@@ -4070,7 +4070,7 @@ fn test_e2e_par_struct_with_atomic_field_constructs() {
     // present.)
     let out = run_program(
         r#"
-par struct Counter { count: Atomic[i64], label: i64 }
+sync struct Counter { count: Atomic[i64], label: i64 }
 fn label_of(c: Counter) -> i64 { c.label }
 fn main() {
     let c = Counter { count: Atomic.new(0), label: 7 };
@@ -4085,14 +4085,14 @@ fn main() {
 
 #[test]
 fn test_e2e_par_struct_atomic_field_set_get() {
-    // The canonical concurrent shape: a `par struct` with an `Atomic`
+    // The canonical concurrent shape: a `sync struct` with an `Atomic`
     // field, mutated + read via atomic store/load on a `ref self` method.
     // Exercises atomic method dispatch on a par-struct FIELD receiver
     // (resolve_atomic_storage's shared/par branch — GEP idx+1 into the
     // heap layout). Round-trips 10 -> 42.
     let out = run_program(
         r#"
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 impl Counter {
     fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
     fn set(ref self, v: i64) { self.count.store(v, MemoryOrdering.SeqCst) }
@@ -4115,7 +4115,7 @@ fn main() {
 fn test_ir_atomic_fetch_add_emits_atomicrmw() {
     let ir = ir_for(
         r#"
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 impl Counter { fn inc(ref self) -> i64 { self.count.fetch_add(1, MemoryOrdering.SeqCst) } }
 fn main() { let c = Counter { count: Atomic.new(0) }; let _ = c.inc(); }
 "#,
@@ -4131,7 +4131,7 @@ fn test_e2e_atomic_fetch_add_sub_returns_old_and_accumulates() {
     // fetch_add / fetch_sub return the PREVIOUS value and mutate in place.
     let out = run_program(
         r#"
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 impl Counter {
     fn inc(ref self) -> i64 { self.count.fetch_add(1, MemoryOrdering.SeqCst) }
     fn dec(ref self) -> i64 { self.count.fetch_sub(1, MemoryOrdering.SeqCst) }
@@ -4159,7 +4159,7 @@ fn test_ir_atomic_swap_and_bitwise_emit_correct_atomicrmw() {
     // single `atomicrmw` opcode (xchg / and / or / xor).
     let ir = ir_for(
         r#"
-par struct B { v: Atomic[i64] }
+sync struct B { v: Atomic[i64] }
 impl B {
     fn a(ref self) -> i64 { self.v.fetch_and(6, MemoryOrdering.SeqCst) }
     fn o(ref self) -> i64 { self.v.fetch_or(1, MemoryOrdering.SeqCst) }
@@ -4188,7 +4188,7 @@ fn test_e2e_atomic_bitwise_and_swap_semantics() {
     // apply the bitwise / exchange op in place.
     let out = run_program(
         r#"
-par struct Flags { bits: Atomic[i64] }
+sync struct Flags { bits: Atomic[i64] }
 impl Flags {
     fn set_or(ref self, m: i64) -> i64 { self.bits.fetch_or(m, MemoryOrdering.SeqCst) }
     fn clear_and(ref self, m: i64) -> i64 { self.bits.fetch_and(m, MemoryOrdering.SeqCst) }
@@ -4219,7 +4219,7 @@ fn test_e2e_atomic_bool_swap() {
     // incoming i1 widened, returned old i8 truncated). A take-once latch.
     let out = run_program(
         r#"
-par struct Latch { flag: Atomic[bool] }
+sync struct Latch { flag: Atomic[bool] }
 impl Latch {
     fn take(ref self) -> bool { self.flag.swap(true, MemoryOrdering.SeqCst) }
     fn get(ref self) -> bool { self.flag.load(MemoryOrdering.SeqCst) }
@@ -4241,7 +4241,7 @@ fn main() {
 fn test_ir_atomic_compare_exchange_emits_cmpxchg() {
     let ir = ir_for(
         r#"
-par struct C { v: Atomic[i64] }
+sync struct C { v: Atomic[i64] }
 impl C {
     fn cas(ref self) -> Result[i64, i64] {
         self.v.compare_exchange(0, 5, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst)
@@ -4262,7 +4262,7 @@ fn test_e2e_atomic_compare_exchange_success_and_failure() {
     // Err(actual) and leaves the slot unchanged when it does not.
     let out = run_program(
         r#"
-par struct Cell { v: Atomic[i64] }
+sync struct Cell { v: Atomic[i64] }
 impl Cell {
     fn cas(ref self, old: i64, new: i64) -> Result[i64, i64] {
         self.v.compare_exchange(old, new, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst)
@@ -4361,12 +4361,12 @@ fn main() {
 
 #[test]
 fn test_e2e_lock_par_struct_mutex_field_sequential() {
-    // Slice 2: `lock self.total` — locking a `Mutex` FIELD of a par struct
+    // Slice 2: `lock self.total` — locking a `Mutex` FIELD of a sync struct
     // (a place expression, not just a bare binding). The field is stored
     // inline in the Arc heap aggregate; the lock GEPs to it and spins.
     let out = run_program(
         r#"
-par struct Counter { total: Mutex[i64] }
+sync struct Counter { total: Mutex[i64] }
 impl Counter {
     fn add(ref self, n: i64) { lock self.total t { t = t + n; } }
     fn get(ref self) -> i64 { lock self.total t { t } }
@@ -4387,12 +4387,12 @@ fn main() {
 #[test]
 fn test_e2e_concurrent_par_struct_mutex_field_counter() {
     // The canonical par-struct concurrent-mutation pattern: a `Mutex` field
-    // locked from two `par {}` branches. The par struct passes by value
+    // locked from two `par {}` branches. The sync struct passes by value
     // (Arc-shared), each branch `lock self.total`s and increments — the
     // spinlock serializes, so 2×50_000 → exactly 100_000, no lost updates.
     let out = run_program(
         r#"
-par struct Counter { total: Mutex[i64] }
+sync struct Counter { total: Mutex[i64] }
 impl Counter {
     fn inc(ref self) { lock self.total t { t = t + 1; } }
     fn get(ref self) -> i64 { lock self.total t { t } }
@@ -4419,12 +4419,12 @@ fn main() {
 #[test]
 fn test_e2e_concurrent_atomic_counter_no_lost_updates() {
     // The headline lock-free-counter shape: two sibling `par {}` branches
-    // each fetch_add 50_000 times on the SAME par struct's Atomic field.
+    // each fetch_add 50_000 times on the SAME sync struct's Atomic field.
     // Atomicity guarantees exactly 100_000 — a non-atomic load+store would
     // lose updates under contention and print < 100_000.
     let out = run_program(
         r#"
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 impl Counter {
     fn inc(ref self) { let _ = self.count.fetch_add(1, MemoryOrdering.SeqCst); }
     fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
@@ -4475,12 +4475,12 @@ fn main() {
 
 #[test]
 fn test_e2e_par_struct_atomic_field_read_across_par_block() {
-    // Concurrent read: the same par struct's Atomic field is read from two
+    // Concurrent read: the same sync struct's Atomic field is read from two
     // sibling par branches, then after the join. Atomic load on the heap
     // field slot, clean exit (no race on the refcount or the field).
     let out = run_program(
         r#"
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 impl Counter {
     fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }
 }
@@ -4506,7 +4506,7 @@ fn test_e2e_par_struct_passed_to_fn_and_aliased() {
     // whole atomic-refcount lifecycle in one binary.
     let out = run_program(
         r#"
-par struct Data { x: i64 }
+sync struct Data { x: i64 }
 fn read(d: Data) -> i64 { d.x }
 fn main() {
     let a = Data { x: 100 };
@@ -4524,14 +4524,14 @@ fn main() {
 
 #[test]
 fn test_e2e_recursive_par_struct_drops_inner_handles() {
-    // A `par struct` holding an inner `par` handle (`Option[Node]`). On
+    // A `sync struct` holding an inner `par` handle (`Option[Node]`). On
     // drop, the synthesized `__karac_rc_drop_Node` walk decrements the
     // inner handle — routed through the by-type dispatcher so a `par`
     // inner is decremented ATOMICALLY (it could still be live in another
     // task). Must construct, print, and exit cleanly (no double-free).
     let out = run_program(
         r#"
-par struct Node { val: i64, next: Option[Node] }
+sync struct Node { val: i64, next: Option[Node] }
 fn main() {
     let leaf = Node { val: 2, next: Option.None };
     let head = Node { val: 1, next: Option.Some(leaf) };
@@ -4546,13 +4546,13 @@ fn main() {
 
 #[test]
 fn test_e2e_par_enum_tuple_variant() {
-    // `par enum` reuses the shared-enum heap layout; only its refcount is
+    // `sync enum` reuses the shared-enum heap layout; only its refcount is
     // atomic. Mirrors test_e2e_shared_enum_tuple_variant (bare variant
     // names — the qualified `Enum.Variant(..)` form is a pre-existing
     // construction gap shared by all enum kinds).
     let out = run_program(
         r#"
-par enum Value { Num(i64), Nothing }
+sync enum Value { Num(i64), Nothing }
 fn extract(v: Value) -> i64 {
     match v {
         Num(n) => n,
@@ -4572,10 +4572,10 @@ fn main() {
 
 #[test]
 fn test_ir_par_enum_rc_is_atomic() {
-    // A `par enum`'s refcount header must also be mutated atomically.
+    // A `sync enum`'s refcount header must also be mutated atomically.
     let ir = ir_for(
         r#"
-par enum Value { Num(i64), Nothing }
+sync enum Value { Num(i64), Nothing }
 fn make() {
     let a = Num(10);
     let b = a;
@@ -4586,19 +4586,19 @@ fn make() {
     );
     assert!(
         ir.contains("atomicrmw"),
-        "par enum must emit atomic refcount ops; got IR:\n{ir}"
+        "sync enum must emit atomic refcount ops; got IR:\n{ir}"
     );
 }
 
 #[test]
 fn test_e2e_par_struct_across_par_block() {
-    // The reason `par struct` exists: the same value used from two
+    // The reason `sync struct` exists: the same value used from two
     // sibling `par {}` branches (each pass atomically bumps the count),
     // then read after the join. Must produce correct output and exit 0
     // (clean atomic refcount → no double-free / leak crash).
     let out = run_program(
         r#"
-par struct Counter { val: i64 }
+sync struct Counter { val: i64 }
 fn read(c: Counter) -> i64 { c.val }
 fn main() {
     let c = Counter { val: 7 };

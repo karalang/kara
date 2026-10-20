@@ -1896,7 +1896,7 @@ impl<'a> super::TypeChecker<'a> {
         // concurrency primitive, recognized in **general expression position**
         // (struct-field-init, local `let`, call args), not just module-binding
         // init (`module_binding_call_is_special_form`). This is what lets the
-        // canonical concurrent `par struct Counter { count: Atomic[i64] }` be
+        // canonical concurrent `sync struct Counter { count: Atomic[i64] }` be
         // *constructed*: `Counter { count: Atomic.new(0) }`. There is no
         // `impl Atomic[T] { fn new }` in stdlib (atomic.kara bakes only the
         // type shape), so without this arm the call falls through to the

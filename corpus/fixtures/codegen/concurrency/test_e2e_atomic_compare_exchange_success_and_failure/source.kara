@@ -1,5 +1,5 @@
 
-par struct Cell { v: Atomic[i64] }
+sync struct Cell { v: Atomic[i64] }
 impl Cell {
     fn cas(ref self, old: i64, new: i64) -> Result[i64, i64] {
         self.v.compare_exchange(old, new)

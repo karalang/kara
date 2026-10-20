@@ -990,7 +990,7 @@ pub fn safe_elidable_ref_params(
 // ────────────────────────────────────────────────────────────────────────
 
 /// Every type name that can (transitively) hold a `shared`/`par` handle: the
-/// shared/par struct+enum names themselves, plus any struct/enum with a field
+/// shared/sync struct+enum names themselves, plus any struct/enum with a field
 /// or variant whose declared type mentions a member of the set (fixpoint).
 /// Drives 5b (an owned param of such a type is a potential alias of the
 /// borrowed graph) and the field classification below.

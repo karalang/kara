@@ -660,7 +660,7 @@ pub enum Value {
     /// outside the par case it fixes. Same rationale applies to `Mutex`.
     Atomic(Arc<Mutex<Value>>),
     /// Mutex[T] runtime value. `Arc<Mutex<...>>` (not `Box`) for the same
-    /// reason as `Atomic` above: a par struct's `Mutex` field is genuinely
+    /// reason as `Atomic` above: a sync struct's `Mutex` field is genuinely
     /// shared across `par {}` branches (which run on real OS threads), and a
     /// `lock` block holds the *real* lock for the duration of its body, so
     /// concurrent branches serialise instead of racing on a single-threaded

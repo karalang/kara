@@ -157,7 +157,7 @@ def format_diagnostics_for_llm(envelope: dict) -> str:
                 f"offset={r['offset']} length={r['length']} text={r['text']!r}"
             )
         for r in d.get("fix_diff", []):
-            # Multi-edit repairs (a rename touching use sites, a `par struct`
+            # Multi-edit repairs (a rename touching use sites, a `sync struct`
             # migration, a brace wrap). Same shape per edit; the set applies
             # together or not at all.
             lines.append(
@@ -172,7 +172,7 @@ def format_diagnostics_for_llm(envelope: dict) -> str:
 def has_machine_applicable_fixes(envelope: dict) -> bool:
     # `fix_diff` counts too. It is the channel a repair lands in when it cannot
     # be one range-replacement — a rename that also touches use sites, the
-    # `par struct` migration, the brace wrap for a bare assignment `match` arm
+    # `sync struct` migration, the brace wrap for a bare assignment `match` arm
     # body. `karac fix` has always applied those; this predicate is what
     # decides whether the loop CALLS `karac fix` at all, so reading only
     # `replacement` meant a file whose sole defect was multi-edit-fixable went

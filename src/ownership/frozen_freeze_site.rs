@@ -42,7 +42,7 @@
 //! handle. A plain struct has no refcount and is copied by value; a scalar has
 //! neither. On those, the mode is not merely useless — it is a claim about a
 //! representation the value does not have, and accepting it would let programs
-//! be written against a meaning that never held. A `par struct` is refused for
+//! be written against a meaning that never held. A `sync struct` is refused for
 //! the opposite reason: it is *already* safe to share across branches (atomic
 //! RC by construction), so `frozen` would be a no-op dressed as a guarantee.
 //!
@@ -78,7 +78,7 @@ enum Refusal {
     /// Not a `shared` type — a plain struct, an enum, a scalar, a generic
     /// parameter, or a name this pass could not resolve.
     NotShared,
-    /// A `par struct`: already atomic, already shareable, nothing to freeze.
+    /// A `sync struct`: already atomic, already shareable, nothing to freeze.
     AlreadyPar,
     /// A `shared` type with a `mut` field somewhere in its reachable closure.
     /// Stage 1 has no per-instance immutability check to justify freezing it.

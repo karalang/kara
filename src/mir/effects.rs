@@ -2987,7 +2987,7 @@ fn main() {
             e.starts_with("effects: in `main` at line 2, branches 1 and 2 of the `par` conflict"),
             "{e}"
         );
-        let atomic = "par struct Counter { count: Atomic[i64] }
+        let atomic = "sync struct Counter { count: Atomic[i64] }
 fn bump(c: ref Counter) { let _ = c.count.fetch_add(1, MemoryOrdering.Relaxed); }
 fn main() {
     let c = Counter { count: Atomic.new(0) };

@@ -1,5 +1,5 @@
 
-par struct Counter { val: i64 }
+sync struct Counter { val: i64 }
 fn read(c: Counter) -> i64 { c.val }
 fn main() {
     let c = Counter { val: 7 };

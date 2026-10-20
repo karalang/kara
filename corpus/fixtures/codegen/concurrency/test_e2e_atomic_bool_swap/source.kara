@@ -1,5 +1,5 @@
 
-par struct Latch { flag: Atomic[bool] }
+sync struct Latch { flag: Atomic[bool] }
 impl Latch {
     fn take(ref self) -> bool { self.flag.swap(true) }
     fn get(ref self) -> bool { self.flag.load() }

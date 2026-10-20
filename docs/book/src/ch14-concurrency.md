@@ -28,7 +28,7 @@ When you want to be explicit about parallelism:
 A `par` block runs each of its branches concurrently and waits for all of them before control falls through. It's structured concurrency — no dangling tasks, no fire-and-forget. Each branch is an independent statement; they share data through a concurrency-safe type rather than by writing the same plain variable:
 
 ```kara,run
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 
 fn bump(counter: ref Counter) {
     let _ = counter.count.fetch_add(1, MemoryOrdering.Relaxed);
@@ -45,7 +45,7 @@ fn main() {
 }
 ```
 
-`par struct` marks a type as safe to share across branches; its `Atomic[T]` field carries the shared state. The effect system enforces this: if a `par` branch tried to write an ordinary `let mut` shared by a sibling, the compiler would reject it and tell you to reach for `Atomic`, `Mutex`, or a `par struct`. No data races slip through.
+`sync struct` marks a type as safe to share across branches; its `Atomic[T]` field carries the shared state. The effect system enforces this: if a `par` branch tried to write an ordinary `let mut` shared by a sibling, the compiler would reject it and tell you to reach for `Atomic`, `Mutex`, or a `sync struct`. No data races slip through.
 
 ## TaskGroup for dynamic fan-out
 

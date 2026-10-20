@@ -17,7 +17,7 @@
 //!
 //! - **`shared struct S { ... }`** (any S) — `Rc`-rooted reachability
 //!   means a sibling task can observe a partially-cleaned-up handle
-//!   if drop fires under cancellation. Fix-it: `par struct S`.
+//!   if drop fires under cancellation. Fix-it: `sync struct S`.
 //! - **`shared enum E { ... }`** (any E) — symmetric.
 //! - **`Rc[T]`** — single-task RC, not atomic. Fix-it: `Arc[T]`.
 //! - **`OnceCell[T]`** — single-task once-init. Fix-it: `OnceLock[T]`.
@@ -91,7 +91,7 @@ pub struct CrossTaskUnsafePath {
 pub enum CrossTaskUnsafeFixIt {
     /// `Rc[T]` → `Arc[T]`.
     RcToArc,
-    /// `shared struct X` / `shared enum X` → `par struct X` / `par enum X`.
+    /// `shared struct X` / `shared enum X` → `sync struct X` / `sync enum X`.
     SharedToPar,
     /// `OnceCell[T]` → `OnceLock[T]`.
     OnceCellToLock,
@@ -169,7 +169,7 @@ fn walk<S1: BuildHasher, S2: BuildHasher>(
     // Immediate-hit checks — these are the v1 unsafe set's leaf shapes.
     match ty {
         Type::Shared(name) => {
-            // `par struct` / `par enum` values lower to `Type::Shared` too (both
+            // `sync struct` / `sync enum` values lower to `Type::Shared` too (both
             // are reference-semantics handle types — see Slice A's lowering),
             // but a `par` type is cross-task-safe BY DEFINITION: always Arc,
             // every `mut` field is `Atomic[T]` / `Mutex[T]`, immutable fields

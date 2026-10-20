@@ -2457,22 +2457,22 @@ fn test_non_shared_struct_is_not_shared() {
     }
 }
 
-// ── 2.4b: `par struct` / `par enum` parse to real definitions ────
-// `par struct` / `par enum` are concurrent shared-type definitions
+// ── 2.4b: `sync struct` / `sync enum` parse to real definitions ────
+// `sync struct` / `sync enum` are concurrent shared-type definitions
 // (design.md § Part 5b). The parser sets `is_par` (mutually exclusive with
 // `is_shared`) and threads the `par` keyword span into `kind_keyword_span`,
 // mirroring the `shared` arm. Field-constraint / `mut self` validation runs
-// in the typechecker, not here (see tests/typechecker.rs § par struct).
+// in the typechecker, not here (see tests/typechecker.rs § sync struct).
 
 #[test]
 fn test_par_struct_parses_with_is_par_flag() {
-    let prog = parse_ok("par struct Counter { count: Atomic[i64] }");
+    let prog = parse_ok("sync struct Counter { count: Atomic[i64] }");
     if let Item::StructDef(s) = &prog.items[0] {
         assert_eq!(s.name, "Counter");
-        assert!(s.is_par, "`par struct` must set is_par");
+        assert!(s.is_par, "`sync struct` must set is_par");
         assert!(
             !s.is_shared,
-            "`par struct` is not `shared` (mutually exclusive)"
+            "`sync struct` is not `shared` (mutually exclusive)"
         );
         assert!(
             s.kind_keyword_span.is_some(),
@@ -2485,10 +2485,10 @@ fn test_par_struct_parses_with_is_par_flag() {
 
 #[test]
 fn test_par_enum_parses_with_is_par_flag() {
-    let prog = parse_ok("par enum State { Idle, Running(i64) }");
+    let prog = parse_ok("sync enum State { Idle, Running(i64) }");
     if let Item::EnumDef(e) = &prog.items[0] {
         assert_eq!(e.name, "State");
-        assert!(e.is_par, "`par enum` must set is_par");
+        assert!(e.is_par, "`sync enum` must set is_par");
         assert!(!e.is_shared);
         assert_eq!(e.variants.len(), 2);
     } else {
@@ -2498,8 +2498,8 @@ fn test_par_enum_parses_with_is_par_flag() {
 
 #[test]
 fn test_pub_par_struct_parses_with_visibility() {
-    // Visibility flows through — `pub par struct` sets both flags.
-    let prog = parse_ok("pub par struct Counter { count: Atomic[i64] }");
+    // Visibility flows through — `pub sync struct` sets both flags.
+    let prog = parse_ok("pub sync struct Counter { count: Atomic[i64] }");
     if let Item::StructDef(s) = &prog.items[0] {
         assert!(s.is_pub, "`pub` must survive");
         assert!(s.is_par);
@@ -2528,8 +2528,8 @@ fn test_plain_and_shared_structs_are_not_par() {
 
 #[test]
 fn test_par_struct_round_trips_through_formatter() {
-    // Phase 6 `par struct` slice D: the formatter must re-emit the keyword.
-    // Before the fix, `karac fmt` silently dropped it, turning a `par struct`
+    // Phase 6 `sync struct` slice D: the formatter must re-emit the keyword.
+    // Before the fix, `karac fmt` silently dropped it, turning a `sync struct`
     // into a plain `struct` (a semantics-changing rewrite). The keyword is
     // now spelled `sync`, and the formatter writes that spelling.
     let src = "sync struct Counter {\n    name: String,\n    count: Atomic[i64],\n}\n";
@@ -2539,8 +2539,11 @@ fn test_par_struct_round_trips_through_formatter() {
         formatted, src,
         "sync struct round-trip mismatch:\n{formatted}"
     );
-    let old = parse_ok(&src.replacen("sync", "par", 1));
-    assert_eq!(karac::formatter::format_program(&old), src);
+    // The old `par` spelling is an error now (Amendment 6), but it still
+    // parses to the same definition, which the formatter writes as `sync`.
+    let old = karac::parse(&src.replacen("sync", "par", 1));
+    assert_eq!(old.errors.len(), 1, "{:?}", old.errors);
+    assert_eq!(karac::formatter::format_program(&old.program), src);
 }
 
 #[test]
@@ -16293,13 +16296,26 @@ fn formatter_parenthesizes_a_return_type_that_has_its_own_with() {
 }
 
 /// Design review 2026-10-07 (amendment 6): `sync struct` / `sync enum` name
-/// the cross-task sharing tier; the older `par` spelling still parses, and
-/// the formatter writes `sync`.
+/// the cross-task sharing tier. The older `par` spelling still parses into
+/// the same definition, but as an error whose fix rewrites `par` to `sync`
+/// (B-2026-10-20-2), and the formatter writes `sync`.
 #[test]
 fn sync_struct_and_enum_are_the_cross_task_types() {
     let src = "sync struct Counter { hits: Atomic[u64] }\nsync enum Job { A, B }\npar struct Old { n: Atomic[u64] }\n";
     let r = parse(src);
-    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+    assert!(
+        r.errors[0]
+            .message
+            .contains("`par struct` is now `sync struct`"),
+        "{:?}",
+        r.errors
+    );
+    let at = src.find("par struct").unwrap();
+    let fixes: Vec<_> = r.fix_edits.values().collect();
+    assert_eq!(fixes.len(), 1, "{fixes:?}");
+    assert_eq!((fixes[0].offset, fixes[0].length), (at, 3));
+    assert_eq!(fixes[0].replacement, "sync");
     let mut seen = 0;
     for item in &r.program.items {
         match item {

@@ -1,5 +1,5 @@
 
-par struct B { v: Atomic[i64] }
+sync struct B { v: Atomic[i64] }
 impl B {
     fn a(ref self) -> i64 { self.v.fetch_and(6) }
     fn o(ref self) -> i64 { self.v.fetch_or(1) }

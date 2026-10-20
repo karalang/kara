@@ -7,7 +7,7 @@ shared enum SMono { P(R2), Q }
 shared enum Sdd { P(R2), Q }
 impl Drop for Sdd { fn drop(mut ref self) { println("  dSdd") } }
 shared enum Sz { P(Z), Q }
-par enum PMono { P(R2), Q }
+sync enum PMono { P(R2), Q }
 enum H3 { P(SMono), Q }
 enum Hd { P(Sdd), Q }
 enum Hz { P(Sz), Q }

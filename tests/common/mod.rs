@@ -218,7 +218,7 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // `karac check` rejects a shared/plain struct binding reachable
     // from two par branches by design (design.md § 8183,
     // E_CONCURRENT_SHARED_STRUCT / ConcurrentPlainStruct with its
-    // `par struct` migration fix_diff); these tests pin the tolerated
+    // `sync struct` migration fix_diff); these tests pin the tolerated
     // build's runtime atomicity / par-branch IR shape.
     "test_e2e_arc_binding_runtime_correctness",
     "asan_par_block_arc_promoted_no_double_free",

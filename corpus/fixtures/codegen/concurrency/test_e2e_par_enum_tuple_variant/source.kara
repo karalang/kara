@@ -1,5 +1,5 @@
 
-par enum Value { Num(i64), Nothing }
+sync enum Value { Num(i64), Nothing }
 fn extract(v: Value) -> i64 {
     match v {
         Num(n) => n,

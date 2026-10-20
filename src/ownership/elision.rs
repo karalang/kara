@@ -15,7 +15,7 @@
 //!
 //! - born from a `shared struct` literal bound by a plain
 //!   `let <name> = S { ... };`
-//! - `S` is `shared struct` (not `par struct` — those cross tasks by
+//! - `S` is `shared struct` (not `sync struct` — those cross tasks by
 //!   design) with **all-primitive fields** (no heap-owning or shared
 //!   fields, so the elided free needs no field walk and nothing the
 //!   recursive drop would have dec'd is skipped)

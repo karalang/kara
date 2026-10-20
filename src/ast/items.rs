@@ -436,11 +436,11 @@ pub struct StructDef {
     pub is_pub: bool,
     pub is_private: bool,
     pub is_shared: bool,
-    /// `par struct` — concurrent shared type (always Arc; every `mut` field
+    /// `sync struct` — concurrent shared type (always Arc; every `mut` field
     /// constrained to `Atomic[T]` / `Mutex[T]`; cross-task-safe by definition).
     /// Mutually exclusive with `is_shared` (a type is plain, `shared`, or `par`,
     /// never two at once — the parser only ever sets one). See design.md
-    /// § "Part 5b: Concurrent Shared Types (`par struct`)". `kind_keyword_span`
+    /// § "Part 5b: Concurrent Shared Types (`sync struct`)". `kind_keyword_span`
     /// points at the `par` keyword when this is set.
     pub is_par: bool,
     /// Span of the `struct` keyword token itself (always present).
@@ -569,10 +569,10 @@ pub struct EnumDef {
     pub is_pub: bool,
     pub is_private: bool,
     pub is_shared: bool,
-    /// `par enum` — concurrent shared enum (always Arc; every `mut` variant
+    /// `sync enum` — concurrent shared enum (always Arc; every `mut` variant
     /// field constrained to `Atomic[T]` / `Mutex[T]`; cross-task-safe by
     /// definition). Mutually exclusive with `is_shared`. See design.md
-    /// § "Part 5b: Concurrent Shared Types (`par struct`)".
+    /// § "Part 5b: Concurrent Shared Types (`sync struct`)".
     pub is_par: bool,
     pub name: String,
     pub generic_params: Option<GenericParams>,

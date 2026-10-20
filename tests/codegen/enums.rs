@@ -1516,7 +1516,7 @@ shared enum SMono { P(R2), Q }
 shared enum Sdd { P(R2), Q }
 impl Drop for Sdd { fn drop(mut ref self) { println("  dSdd") } }
 shared enum Sz { P(Z), Q }
-par enum PMono { P(R2), Q }
+sync enum PMono { P(R2), Q }
 enum H3 { P(SMono), Q }
 enum Hd { P(Sdd), Q }
 enum Hz { P(Sz), Q }
@@ -1849,7 +1849,7 @@ fn e2e_shared_enum_unit_variant_runs_its_drop_body() {
         r#"shared enum U { Ua, Ub }
 impl Drop for U { fn drop(mut ref self) { println(f"  dU") } }
 shared enum V { Va, Vb }
-par enum W { Wa, Wb }
+sync enum W { Wa, Wb }
 impl Drop for W { fn drop(mut ref self) { println(f"  dW") } }
 enum Plain { Pa, Pb }
 impl Drop for Plain { fn drop(mut ref self) { println(f"  dP") } }
@@ -2116,7 +2116,7 @@ fn e2e_generic_enum_shared_payload_is_rc_released() {
     let Some(out) = run_program(
         r#"shared struct Sh { n: i64 }
 impl Drop for Sh { fn drop(mut ref self) { println(f"  dSh{self.n}") } }
-par struct Pa { n: i64 }
+sync struct Pa { n: i64 }
 impl Drop for Pa { fn drop(mut ref self) { println(f"  dPa{self.n}") } }
 struct Pl { n: i64 }
 impl Drop for Pl { fn drop(mut ref self) { println(f"  dPl{self.n}") } }

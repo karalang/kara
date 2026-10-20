@@ -1003,7 +1003,7 @@ pub struct PlaygroundDiagnostic {
     ///
     /// Empty for a diagnostic with no fix — most of them. A non-empty vector
     /// is the WHOLE fix: multi-edit migrations (a rename touching use sites,
-    /// the `par struct` migration's keyword insert plus per-field `Mutex[T]`
+    /// the `sync struct` migration's keyword insert plus per-field `Mutex[T]`
     /// wraps) arrive as several entries that must be applied together, which
     /// is why this is a `Vec` rather than an `Option`. Applying a subset can
     /// leave a half-renamed program behind.
@@ -1242,7 +1242,7 @@ fn run_static_checks(
     let ownership = ownershipcheck(&parsed.program, &typed);
     for e in &ownership.errors {
         let mut fixes: Vec<SourceFix> = e.replacement.as_deref().map(fix_of).into_iter().collect();
-        // The `par struct` / `ConcurrentSharedStruct` migrations carry their
+        // The `sync struct` / `ConcurrentSharedStruct` migrations carry their
         // whole fix here (keyword insert + per-mut-field `Mutex[T]` wraps),
         // never in `replacement`.
         if let Some(diff) = ownership

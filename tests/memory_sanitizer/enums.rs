@@ -7341,7 +7341,7 @@ fn main() { let z = Et.A(Inner.X(3)); println("ok"); }
     //     and the RC machinery is the same; a fix keyed on `shared` alone
     //     would leave this one leaking.
     assert_clean_asan_run(
-        r#"par struct Pa { n: i64 }
+        r#"sync struct Pa { n: i64 }
 enum Et { A(Pa), B }
 fn main() { let z = Et.A(Pa { n: 3 }); println("ok"); }
 "#,
@@ -7450,7 +7450,7 @@ fn main() { let z = passt(mket(3)); println("ok"); }
     //      `shared_types` is populated, so it was already getting `None`
     //      and must be byte-identical.
     assert_clean_asan_run(
-        r#"par struct Pa { n: i64 }
+        r#"sync struct Pa { n: i64 }
 fn main() {
     let (tx, rx): (Sender[Pa], Receiver[Pa]) = Channel.new();
     let s = Pa { n: 7 };
@@ -7644,7 +7644,7 @@ fn main() {
     //      the same; a fix keyed on the `shared` spelling alone leaves this
     //      one leaking.
     assert_clean_asan_run(
-        r#"par struct Pa { n: i64 }
+        r#"sync struct Pa { n: i64 }
 enum Box2[T] { V(T), N }
 fn main() { let z: Box2[Pa] = Box2.V(Pa { n: 3 }); println("ok"); }
 "#,
@@ -9249,7 +9249,7 @@ fn asan_shared_enum_nameless_aggregate_payload_box_is_freed() {
     // The Arc path. Same layout, different release function — this is the
     // cell the first cut of the fix left leaking.
     let par = format!(
-        "par enum Sh {{ S(Array[String, 2]), N }}\n\
+        "sync enum Sh {{ S(Array[String, 2]), N }}\n\
              fn main() {{\n\
              \x20   let a: Array[String, 2] = {STRS};\n\
              \x20   {{ let s = Sh.S(a); println(f\"one\"); }}\n\
@@ -9847,7 +9847,7 @@ fn asan_shared_enum_payload_body_runs_once_before_the_memory_walk() {
 fn asan_shared_enum_unit_variant_frees_its_rc_shell() {
     const DECLS: &str = "shared enum U { Ua, Ub, Uc }\n\
              impl Drop for U { fn drop(mut ref self) { println(f\"dU\") } }\n\
-             par enum W { Wa, Wb }\n\
+             sync enum W { Wa, Wb }\n\
              impl Drop for W { fn drop(mut ref self) { println(f\"dW\") } }\n\
              fn tag(u: ref U) -> i64 { match u { U.Ua => { return 1 } U.Ub => { return 0 } U.Uc => { return 2 } } }\n";
 

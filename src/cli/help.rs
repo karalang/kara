@@ -80,7 +80,7 @@ COMMANDS:
                       `did you mean` corrections) to a .kara file. Use
                       --dry-run to preview without writing.
     migrate shared-to-par <Type> [<file>]
-                      Preemptively migrate a `shared struct` to `par struct`.
+                      Preemptively migrate a `shared struct` to `sync struct`.
                       Rewrites the type definition (keyword rename, `mut `
                       strip, `Mutex[T]` wrap on every mut field) and every
                       consumer site (assigns, compound-assigns, reads, and
@@ -572,9 +572,9 @@ USAGE:
     karac migrate shared-to-par <Type> [<file.kara>] [--apply] [--force] [--no-atomic]
 
 DETAILS:
-    Rewrites a `shared struct <Type>` definition to `par struct <Type>`,
+    Rewrites a `shared struct <Type>` definition to `sync struct <Type>`,
     wrapping each bare `mut` field in an atomic wrapper:
-      - Keyword rename:    `shared struct Foo` → `par struct Foo`
+      - Keyword rename:    `shared struct Foo` → `sync struct Foo`
       - Mut keyword strip: `mut field: T`     → `field: T`
       - Field type wrap:   `field: T`         → `field: Atomic[T]` / `Mutex[T]`
     Same edit emitter the `E_CONCURRENT_SHARED_STRUCT` fix-diff path

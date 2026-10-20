@@ -3335,7 +3335,7 @@ fn main() with panics {
 fn asan_relay_request_parse_atomic_soak_no_leak() {
     assert_clean_asan_run(
         r#"
-par struct Counters {
+sync struct Counters {
     n: Atomic[i64],
 }
 fn request_path(bytes: Vec[u8]) -> String {

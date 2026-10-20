@@ -1371,7 +1371,7 @@ pub(crate) fn pascal_to_snake(s: &str) -> String {
 
 /// True when `ty` is a concurrency primitive (`Atomic[T]` / `Mutex[T]`) — a
 /// field of this type provides interior mutability without the `mut` keyword,
-/// so it must be stored in a `RwLock` cell on a shared/par struct so writes
+/// so it must be stored in a `RwLock` cell on a shared/sync struct so writes
 /// (`.fetch_add` / `.store` / `lock`) persist through the shared `Arc`.
 fn is_interior_mutable_field_type(ty: &TypeExpr) -> bool {
     matches!(
@@ -3491,16 +3491,16 @@ impl<'a> Interpreter<'a> {
             }
         }
         if let Some(def) = self.find_struct_def(&name) {
-            // `par struct` is reference-semantic like `shared struct` (both are
+            // `sync struct` is reference-semantic like `shared struct` (both are
             // RC/Arc-backed in codegen), so it must be a `SharedStruct` in the
-            // interpreter too — otherwise a par struct is value-copied per
+            // interpreter too — otherwise a sync struct is value-copied per
             // `ref self` call and field mutations never reach the caller.
             if def.is_shared || def.is_par {
                 // A field is interior-mutable (stored in a `RwLock` cell so
                 // writes persist through the shared `Arc`) if it is declared
                 // `mut`, OR its type is a concurrency primitive `Atomic[T]` /
                 // `Mutex[T]` — those provide interior mutability WITHOUT the
-                // `mut` keyword (a `par struct`'s `count: Atomic[i64]` field is
+                // `mut` keyword (a `sync struct`'s `count: Atomic[i64]` field is
                 // mutated via `.fetch_add` / `lock`, not direct assignment).
                 let mut_field_names: HashSet<String> = def
                     .fields

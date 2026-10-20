@@ -15,7 +15,7 @@
 // differ only in task-safety:
 //
 //   * `OnceLock[T]` is cross-task safe (the `Arc<Mutex<…>>` analogue).
-//     It is permitted at module scope, as a `par struct`/`par enum`
+//     It is permitted at module scope, as a `sync struct`/`sync enum`
 //     field, and may cross a `par {}` / `spawn` / channel boundary.
 //   * `OnceCell[T]` is single-task only (the `Rc<RefCell<…>>`
 //     analogue). It is rejected at module scope

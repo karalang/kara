@@ -10046,7 +10046,7 @@ fn asan_a_freshtemp_boxed_payload_binding_the_arm_moves_on_has_one_owner() {
     //      did not cause and cannot fix.
 }
 
-/// B-2026-09-15-10 — a `shared enum` (or `par enum`) whose variant payload
+/// B-2026-09-15-10 — a `shared enum` (or `sync enum`) whose variant payload
 /// is a NAMELESS AGGREGATE heap-boxes that payload, and until this fix
 /// nothing ever freed the box.
 ///
@@ -10091,7 +10091,7 @@ fn asan_a_freshtemp_boxed_payload_binding_the_arm_moves_on_has_one_owner() {
 ///     two handles, `let s2 = s1`            48 → 0   (ONE free, not two)
 ///     two boxing variants A and B           72 → 0   (48 + 24, one per arm)
 ///     nested Array[Array[String, 2], 2]     96 → 0
-///     `par enum`, named local, Arc path     48 → 0
+///     `sync enum`, named local, Arc path     48 → 0
 ///
 /// THE RC CELLS ARE A GATE ON `scripts/asan-o0-leg.sh`, NOT ON THE DEFAULT
 /// `--features llvm` LEG, and that is measured rather than assumed. On the
@@ -10105,7 +10105,7 @@ fn asan_a_freshtemp_boxed_payload_binding_the_arm_moves_on_has_one_owner() {
 /// The two-handles cell is what pins the PLACEMENT: the box is one per
 /// construction, so a per-binding registration would have double-freed it
 /// where this leaks. The `par` cell is what forced the second call site —
-/// a `par enum` is registered in `shared_types` and boxes identically
+/// a `sync enum` is registered in `shared_types` and boxes identically
 /// (`EnumLayout`'s `is_shared` is `e.is_shared || e.is_par`) but releases
 /// through `emit_arc_dec`, so the `emit_rc_dec_guarded`-only patch left
 /// every `par` spelling leaking. Delete either call and this reddens.

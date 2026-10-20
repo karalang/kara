@@ -25,9 +25,9 @@
 //!   ownership move into exactly one branch is not an error.
 //! - **`E_CONCURRENT_PLAIN_STRUCT`** — plain (non-shared) `struct`
 //!   binding. Per design.md § Compiler-assisted migration from plain
-//!   `struct` to `par struct`: silent promotion is rejected (the field
+//!   `struct` to `sync struct`: silent promotion is rejected (the field
 //!   constraints differ structurally), so the compiler emits the
-//!   structured error and the programmer migrates to `par struct`.
+//!   structured error and the programmer migrates to `sync struct`.
 //!
 //! Both diagnostics carry the same `fix_diff` envelope: per-`mut`-field
 //! `Mutex[T]` wrap edits derivable from each `StructField.ty.span` —
@@ -36,7 +36,7 @@
 //! `OwnershipChecker.error_fix_diffs` keyed by the diagnostic's primary
 //! `SpanKey`, surfaced via `OwnershipCheckResult.error_fix_diffs`.
 //!
-//! Keyword rename (`shared struct` / `struct` → `par struct`) and the
+//! Keyword rename (`shared struct` / `struct` → `sync struct`) and the
 //! `mut ` keyword stripping live in suggestion prose until the parser
 //! exposes keyword spans on `StructDef`. Lock-block insertion at write
 //! sites and Rc→Arc clone-semantics notes are sibling follow-ups.
@@ -164,7 +164,7 @@ struct TrackedBinding {
     ///
     /// Empty for a `Plain` binding: this relaxation is about refcount
     /// atomicity, and `E_CONCURRENT_PLAIN_STRUCT` fires for an unrelated
-    /// reason (the `par struct` migration is structural, not RC-driven).
+    /// reason (the `sync struct` migration is structural, not RC-driven).
     readonly_scalar_fields: HashSet<String>,
     /// B-2026-08-01-33 mechanism 2 — when `Some`, the set of `shared` type
     /// names transitively reachable from `type_name` (itself included), ALL of
@@ -184,7 +184,7 @@ struct TrackedBinding {
     ///
     /// `None` — the common case — when any reachable type has a `mut` field.
     /// Atomic RC would fix only the HEADER; a `mut` payload written from two
-    /// branches is still a data race, which is precisely why `par struct`
+    /// branches is still a data race, which is precisely why `sync struct`
     /// forces `Atomic[T]` / `Mutex[T]` on its mutable fields. Distinguishing a
     /// write to a branch-LOCAL instance from one to the shared value needs
     /// instance-level escape analysis (mechanism 1), not a type-level check.
@@ -810,9 +810,9 @@ impl<'a> super::OwnershipChecker<'a> {
 
     /// Return `Shared` for `shared struct` / `shared enum`, `Plain` for
     /// non-shared `struct`, `None` for anything else (plain enum,
-    /// union, primitive, generic param, `par struct` / `par enum`, …).
+    /// union, primitive, generic param, `sync struct` / `sync enum`, …).
     ///
-    /// `par struct` / `par enum` return `None` — they are **cross-task-safe by
+    /// `sync struct` / `sync enum` return `None` — they are **cross-task-safe by
     /// definition** (always Arc; every `mut` field is `Atomic[T]` / `Mutex[T]`,
     /// enforced at the definition site by Slice A). The whole point of `par`
     /// types is that they cross `par {}` / `spawn` / `TaskGroup` boundaries
@@ -833,7 +833,7 @@ impl<'a> super::OwnershipChecker<'a> {
         // ordinary structs in `struct_info`, so WITHOUT this early exemption
         // the plain-`struct` arm below mis-classifies them as `Plain` and the
         // sanctioned pattern is rejected at `karac check`. Same `None`-means-
-        // exempt contract as the `par struct` / `par enum` arms below.
+        // exempt contract as the `sync struct` / `sync enum` arms below.
         if matches!(name, "Atomic" | "Mutex" | "RwLock" | "Arc") {
             return None;
         }
@@ -873,7 +873,7 @@ impl<'a> super::OwnershipChecker<'a> {
     ///    `Mutex[T]`). An immutable field cannot be written by ANY branch, so
     ///    admitting concurrent readers cannot introduce a payload race and the
     ///    walk needs no write-position tracking. This is the same guarantee
-    ///    `par struct` gives ("immutable fields are freely readable across
+    ///    `sync struct` gives ("immutable fields are freely readable across
     ///    tasks") applied to the `shared` tier.
     /// 2. **Scalar** — `is_copy_type_basic`, deliberately NARROWER than
     ///    `is_copy_type`: no `ref`/tuple/array/SIMD arms. Reading a scalar
@@ -2343,7 +2343,7 @@ fn build_concurrent_struct_error(
         };
     }
     // B-2026-08-01-33 — an IMMUTABLE type gets a one-keyword answer, not the
-    // full migration. `par struct` with immutable fields shares lock-free
+    // full migration. `sync struct` with immutable fields shares lock-free
     // across tasks with no annotation at the use site, so telling such an
     // author to "wrap each mut field in Mutex[T]" is advice for a program they
     // did not write: there are no mut fields to wrap, and the migration is a
@@ -2467,7 +2467,7 @@ pub(crate) fn build_fix_diff_edits_with_field_kinds(
     };
     let mut edits = Vec::new();
     // (1) Keyword rewrite — drives the `shared struct`/`struct` →
-    // `par struct` half of the migration.
+    // `sync struct` half of the migration.
     match kind {
         BindingKind::Shared => {
             if let Some(kw) = &struct_def.kind_keyword_span {
@@ -3104,7 +3104,7 @@ fn collect_par_body_spans_in_expr(expr: &Expr, out: &mut Vec<(usize, usize)>) {
 /// `Assign` / `CompoundAssign` cases; **L205** extends the walker to
 /// also wrap mutating *method-call* writes (`c.field.push(x)`,
 /// `c.field.clear()`, etc.) so the migration spec's step 3 (design.md
-/// § Compiler-assisted migration from `shared struct` to `par struct`)
+/// § Compiler-assisted migration from `shared struct` to `sync struct`)
 /// covers the canonical Vec/Map/Set/String mutation idioms.
 ///
 /// **Detection scope** (v1 + L205):

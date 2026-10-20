@@ -2939,7 +2939,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => None,
                     };
                     // B-2026-08-08-19: `shared_types` as well as `struct_types`.
-                    // `declare_structs` routes a `shared struct` / `par struct`
+                    // `declare_structs` routes a `shared struct` / `sync struct`
                     // into `shared_types` and an ordinary one into
                     // `struct_types` — the two are EXCLUSIVE, so a
                     // `struct_types`-only test silently answers "not a user

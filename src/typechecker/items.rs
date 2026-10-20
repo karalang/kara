@@ -3058,7 +3058,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_self_type = saved_self;
     }
 
-    /// `par struct` / `par enum` definition-site field-constraint check
+    /// `sync struct` / `sync enum` definition-site field-constraint check
     /// (design.md § "Part 5b: Concurrent Shared Types" > Field constraints).
     ///
     /// A `par` type enforces concurrent safety structurally: immutable fields
@@ -3068,12 +3068,12 @@ impl<'a> super::TypeChecker<'a> {
     /// error here, at the definition site, unconditionally — the guarantee
     /// does not depend on any usage site or parallel-region boundary.
     ///
-    /// `kind` is `"struct"` / `"enum"`; for `par enum` this runs once per
+    /// `kind` is `"struct"` / `"enum"`; for `sync enum` this runs once per
     /// struct-shaped variant. Plain / `shared` types are skipped by the
     /// caller (it only invokes this for `is_par` definitions).
     fn check_par_field_constraints(&mut self, kind: &str, type_name: &str, fields: &[StructField]) {
         for f in fields {
-            // `OnceCell[T]` is single-task; a `par struct`/`par enum` is
+            // `OnceCell[T]` is single-task; a `sync struct`/`sync enum` is
             // visible to every task, so a field whose type mentions
             // `OnceCell` anywhere in its tree breaks the structural
             // safety guarantee. Reject it (`OnceLock[T]` is the
@@ -3086,8 +3086,8 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "error[E_ONCE_CELL_IN_PAR_TYPE]: field `{field}` of \
-                         `par {kind} {type_name}` has type `{ty}`, but `OnceCell[T]` \
-                         is single-task; fields of a `par {kind}` are visible to \
+                         `sync {kind} {type_name}` has type `{ty}`, but `OnceCell[T]` \
+                         is single-task; fields of a `sync {kind}` are visible to \
                          every task and must use the cross-task-safe `OnceLock[T]` \
                          instead. Replace `OnceCell` with `OnceLock` in the field \
                          type",
@@ -3107,8 +3107,8 @@ impl<'a> super::TypeChecker<'a> {
             let span = f.mut_keyword_span.unwrap_or(f.ty.span);
             self.type_error(
                 format!(
-                    "`mut` field `{field}` of `par {kind} {type_name}` must be \
-                     `Atomic[T]` or `Mutex[T]`: a `par {kind}`'s concurrent-safety \
+                    "`mut` field `{field}` of `sync {kind} {type_name}` must be \
+                     `Atomic[T]` or `Mutex[T]`: a `sync {kind}`'s concurrent-safety \
                      guarantee is structural, so plain mutable fields are not \
                      permitted. Wrap the field type in `Atomic[...]` for lock-free \
                      access or `Mutex[...]` for locked compound mutation, or drop \
@@ -4144,7 +4144,7 @@ impl<'a> super::TypeChecker<'a> {
             .map(|(name, decl)| (name.clone(), decl.bounds.clone()))
             .collect();
 
-        // `par struct` / `par enum` methods may not declare a `mut ref self`
+        // `sync struct` / `sync enum` methods may not declare a `mut ref self`
         // receiver (design.md § Part 5b > "`ref self` receivers only"): `par`
         // values are always Arc with potential multiple holders, so the
         // exclusive mutable borrow `mut ref self` is never available.
@@ -5570,7 +5570,7 @@ impl<'a> super::TypeChecker<'a> {
     /// that an alias may outlive?", and `par` is exactly as refcounted as
     /// `shared` (the two flags are mutually exclusive spellings of the same
     /// storage, Arc rather than Rc). Measured: the use-after-free below
-    /// reproduces byte-for-byte on `par struct`.
+    /// reproduces byte-for-byte on `sync struct`.
     fn name_is_rc_backed_decl(&self, name: &str) -> bool {
         self.env
             .structs

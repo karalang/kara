@@ -170,7 +170,7 @@ pub(super) fn cmd_fix(filename: &str, dry_run: bool) {
             // Multi-edit `fix_diff` envelopes (B-2026-07-06-4). The
             // `ConcurrentSharedStruct` / `ConcurrentPlainStruct`
             // diagnostics carry a full machine-applicable migration
-            // (`par struct` keyword insert + per-mut-field `Mutex[T]`
+            // (`sync struct` keyword insert + per-mut-field `Mutex[T]`
             // wraps) in `error_fix_diffs`, keyed by the diagnostic's
             // primary span. `collect_diagnostics` already emits these as
             // a top-level `"fix_diff":[...]` array to JSON, but until now

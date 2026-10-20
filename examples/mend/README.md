@@ -131,7 +131,7 @@ evidence of working infrastructure but not a compelling cast. See
 pair exercising the effect checker's `par`-conflict path: the LLM
 increments a shared module-level counter from inside a `par { }`
 block, the compiler rejects it with `E0408`, and the LLM lifts the
-counter into an `Atomic[i64]` (`par struct`) — clean build, parallelism
+counter into an `Atomic[i64]` (`sync struct`) — clean build, parallelism
 preserved. Both canned iterations and `solution.kara` are verified
 against the in-tree `karac` (iter 0 → `E0408` only; iter 1 → clean).
 Ships a Go comparator (`go_buggy.go`) alongside the Python one: both

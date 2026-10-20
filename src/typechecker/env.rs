@@ -32,7 +32,7 @@ pub struct StructInfo {
     /// overrides, which are indistinguishable from `int*` at the Kāra type.
     pub field_attrs: std::collections::HashMap<String, Vec<String>>,
     /// Field names that may be *reassigned* through a shared handle on a
-    /// `shared`/`par struct` — those declared `mut` or whose type is an
+    /// `shared`/`sync struct` — those declared `mut` or whose type is an
     /// interior-mutable concurrency primitive (`Atomic[T]` / `Mutex[T]`).
     /// Populated by `shared_struct_mut_field_names`; empty for non-shared
     /// structs (the `SharedFieldNotMut` assignment gate only consults it when
@@ -43,7 +43,7 @@ pub struct StructInfo {
     pub derived_traits: HashSet<String>,
     pub no_rc: bool,
     pub is_shared: bool,
-    /// `par struct` — concurrent shared type (always Arc; every `mut` field is
+    /// `sync struct` — concurrent shared type (always Arc; every `mut` field is
     /// `Atomic[T]` / `Mutex[T]`; cross-task-safe by definition). Mutually
     /// exclusive with `is_shared`. Copied from `StructDef.is_par`. Read by the
     /// definition-site field-constraint check, the `mut self` receiver check,
@@ -81,7 +81,7 @@ pub struct EnumInfo {
     pub variants: Vec<(String, VariantTypeInfo)>,
     pub derived_traits: HashSet<String>,
     pub is_shared: bool,
-    /// `par enum` — concurrent shared enum. See [`StructInfo::is_par`].
+    /// `sync enum` — concurrent shared enum. See [`StructInfo::is_par`].
     /// Mutually exclusive with `is_shared`; copied from `EnumDef.is_par`.
     pub is_par: bool,
     /// See [`StructInfo::must_use_message`]. Same role on enum

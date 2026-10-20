@@ -2651,7 +2651,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(free_bb);
         // B-2026-09-15-10 — the atomic twin of the payload-box free in
-        // `emit_rc_dec_guarded`. A `par enum` is registered in
+        // `emit_rc_dec_guarded`. A `sync enum` is registered in
         // `shared_types` exactly like a `shared enum` and boxes its
         // nameless-aggregate payload the same way, but it releases through
         // THIS function, so without the call here the box leaks for every
@@ -2684,7 +2684,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(done_bb);
     }
 
-    /// True when `heap_type` is the heap layout of a `par struct` / `par enum`
+    /// True when `heap_type` is the heap layout of a `sync struct` / `sync enum`
     /// (always Arc, registered in `shared_types` with `is_par = true`). Its
     /// refcount header must be mutated atomically because `par` values cross
     /// task boundaries. Looked up by heap-type identity — each registered
@@ -2782,7 +2782,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Dispatch an inc on `name`'s refcount. The atomic path (`emit_arc_inc`)
-    /// fires when the type is a `par struct` / `par enum` (always Arc) OR the
+    /// fires when the type is a `sync struct` / `sync enum` (always Arc) OR the
     /// binding was Arc-promoted by the ownership pass (`arc_fallback_fns` for
     /// the current function); plain non-atomic otherwise.
     pub(super) fn emit_refcount_inc(

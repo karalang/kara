@@ -147,8 +147,8 @@ fn soft_words_still_start_their_constructs() {
     for (src, construct) in [
         ("union Bits { i: i64, f: f64 }", "UnionDef("),
         ("marker trait Tag;", "MarkerTrait("),
-        ("par struct Counter { mut n: Atomic[i64] }", "is_par: true"),
-        ("par enum Msg { Ping, Data(i64) }", "is_par: true"),
+        ("sync struct Counter { mut n: Atomic[i64] }", "is_par: true"),
+        ("sync enum Msg { Ping, Data(i64) }", "is_par: true"),
         ("shared struct Node { parent: Option[weak Node] }", "Weak("),
         ("fn main() { let a = 1; par { let x = a; } }", "Par("),
         ("fn main() { seq { let z = 3; } }", "Seq("),

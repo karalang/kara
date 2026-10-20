@@ -198,7 +198,7 @@ fn test_atomic_fetch_add_load_explicit_agrees_with_codegen() {
     // and the codegen E2E `test_e2e_atomic_fetch_add_load_explicit` in
     // par_codegen.rs — both must print `3`, pinning run/build agreement on the
     // fetch_add + load pair the arity bug split (B-2026-06-30-5).
-    let src = "par struct Counter { count: Atomic[i64] }\n\
+    let src = "sync struct Counter { count: Atomic[i64] }\n\
          fn bump(c: ref Counter) { let _ = c.count.fetch_add(1, MemoryOrdering.Relaxed); }\n\
          fn main() {\n\
              let c = Counter { count: Atomic.new(0) };\n\
@@ -218,7 +218,7 @@ fn test_atomic_implicit_ordering_rejected_by_interpreter() {
     // (fields.rs) and slips past typecheck — this receiver shape is exactly
     // the one the guard in the interpreter's atomic arms exists to catch, so
     // `karac run` still rejects rather than silently accepting the count.
-    let src = "par struct Counter { count: Atomic[i64] }\n\
+    let src = "sync struct Counter { count: Atomic[i64] }\n\
          fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }\n\
          fn main() {\n\
              let c = Counter { count: Atomic.new(0) };\n\
@@ -287,7 +287,7 @@ fn test_free_spawn_join_agrees_with_codegen() {
 
 // ── par-shared Atomic: concurrent read-modify-write (regression) ──
 //
-// `Value::Atomic` is `Arc<Mutex<Value>>`, so a par struct's Atomic field is
+// `Value::Atomic` is `Arc<Mutex<Value>>`, so a sync struct's Atomic field is
 // genuinely shared across `par {}` branches (which run on real OS threads via
 // `thread::scope`) and every `fetch_*` / `compare_exchange` is a real
 // read-modify-write under lock. Before that, `Atomic` was a `Box<Value>`
@@ -302,7 +302,7 @@ fn test_free_spawn_join_agrees_with_codegen() {
 
 #[test]
 fn test_par_shared_atomic_counter_no_lost_updates() {
-    let src = "par struct Counter { count: Atomic[i64] }\n\
+    let src = "sync struct Counter { count: Atomic[i64] }\n\
          impl Counter {\n\
              fn inc(ref self) { let _ = self.count.fetch_add(1, MemoryOrdering.SeqCst); }\n\
              fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }\n\
@@ -330,7 +330,7 @@ fn test_par_shared_atomic_counter_no_lost_updates() {
 fn test_par_shared_atomic_reaches_after_par_statement() {
     // The torn-read panic / lost-update path also manifested as the statement
     // *after* the par block never executing. Assert the trailing print lands.
-    let src = "par struct Counter { count: Atomic[i64] }\n\
+    let src = "sync struct Counter { count: Atomic[i64] }\n\
          impl Counter {\n\
              fn inc(ref self) { let _ = self.count.fetch_add(1, MemoryOrdering.SeqCst); }\n\
              fn get(ref self) -> i64 { self.count.load(MemoryOrdering.SeqCst) }\n\
@@ -353,7 +353,7 @@ fn test_par_shared_atomic_reaches_after_par_statement() {
 // ── par-shared Mutex: lock-block serialisation (regression) ──
 //
 // Sibling of the Atomic fix above. `Value::Mutex` is `Arc<Mutex<Value>>` and a
-// `lock` block holds the *real* lock for its whole body, so a par struct's
+// `lock` block holds the *real* lock for its whole body, so a sync struct's
 // Mutex field locked from two `par {}` branches serialises instead of racing.
 // Before that, `Value::Mutex` was a single-threaded `Box<Value>` copied on
 // read and written back, so concurrent branches lost updates / produced empty
@@ -362,7 +362,7 @@ fn test_par_shared_atomic_reaches_after_par_statement() {
 
 #[test]
 fn test_par_shared_mutex_counter_no_lost_updates() {
-    let src = "par struct Counter { total: Mutex[i64] }\n\
+    let src = "sync struct Counter { total: Mutex[i64] }\n\
          impl Counter {\n\
              fn inc(ref self) { lock self.total t { t = t + 1; } }\n\
              fn get(ref self) -> i64 { lock self.total t { t } }\n\
@@ -944,14 +944,14 @@ fn test_dbg_json_in_par_emits_numeric_task_id() {
 }
 
 // ── par-struct field mutation persists through `ref self` ────────
-// Regression: a par struct must be reference-semantic in the interpreter
+// Regression: a sync struct must be reference-semantic in the interpreter
 // (SharedStruct, not a value-copy), and its `Atomic` / `Mutex` fields must
 // be interior-mutable cells so `.fetch_add` / `lock` writes through a
 // `ref self` method reach the caller. Was silently returning 0.
 
 #[test]
 fn par_struct_atomic_field_mutation_persists() {
-    let out = run("par struct C { n: Atomic[i64] }
+    let out = run("sync struct C { n: Atomic[i64] }
          impl C {
              fn add(ref self, v: i64) { let _ = self.n.fetch_add(v, MemoryOrdering.SeqCst); }
              fn get(ref self) -> i64 { self.n.load(MemoryOrdering.SeqCst) }
@@ -962,7 +962,7 @@ fn par_struct_atomic_field_mutation_persists() {
 
 #[test]
 fn par_struct_atomic_store_through_field_persists() {
-    let out = run("par struct C { n: Atomic[i64] }
+    let out = run("sync struct C { n: Atomic[i64] }
          impl C {
              fn set(ref self, v: i64) { self.n.store(v, MemoryOrdering.SeqCst); }
              fn get(ref self) -> i64 { self.n.load(MemoryOrdering.SeqCst) }
@@ -974,7 +974,7 @@ fn par_struct_atomic_store_through_field_persists() {
 #[test]
 fn par_struct_mutex_field_mutation_persists() {
     let out = run(
-        "par struct Counter { total: Mutex[i64] }
+        "sync struct Counter { total: Mutex[i64] }
          impl Counter {
              fn add(ref self, n: i64) { lock self.total t { t = t + n; } }
              fn get(ref self) -> i64 { lock self.total t { t } }

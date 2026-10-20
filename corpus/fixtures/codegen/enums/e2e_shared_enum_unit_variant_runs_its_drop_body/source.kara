@@ -1,7 +1,7 @@
 shared enum U { Ua, Ub }
 impl Drop for U { fn drop(mut ref self) { println(f"  dU") } }
 shared enum V { Va, Vb }
-par enum W { Wa, Wb }
+sync enum W { Wa, Wb }
 impl Drop for W { fn drop(mut ref self) { println(f"  dW") } }
 enum Plain { Pa, Pb }
 impl Drop for Plain { fn drop(mut ref self) { println(f"  dP") } }

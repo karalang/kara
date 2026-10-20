@@ -129,7 +129,8 @@ impl super::Parser {
                 }
             }
             // `sync struct` / `sync enum` (spelled `par struct` / `par enum`
-            // before design review 2026-10-07; both parse) — the design's mechanism for
+            // before Amendment 6, which still parses, as an error with a fix)
+            // — the design's mechanism for
             // *intentional* concurrent struct sharing (always Arc; every `mut`
             // field constrained to `Atomic[T]` / `Mutex[T]`; cross-task-safe by
             // definition per design.md § "Part 5b: Concurrent Shared Types").
@@ -151,6 +152,35 @@ impl super::Parser {
                     )) =>
             {
                 let par_kw_span = self.current_span();
+                let keyword = name.clone();
+                // Amendment 6 renamed `par struct` / `par enum` to `sync
+                // struct` / `sync enum`, since `par` names the fork-join
+                // constructs. The old spelling still parses, so the rest of
+                // the program is checked, with a `karac fix` to `sync`.
+                if keyword == "par"
+                    && matches!(self.peek_token_ref_at(1), Token::Struct | Token::Enum)
+                {
+                    let kind = if matches!(self.peek_token_ref_at(1), Token::Struct) {
+                        "struct"
+                    } else {
+                        "enum"
+                    };
+                    self.error_at(
+                        &format!(
+                            "`par {kind}` is now `sync {kind}` (Amendment 6): `par` names the \
+                             fork-join constructs; write `sync {kind}`"
+                        ),
+                        par_kw_span,
+                    );
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&par_kw_span),
+                        crate::resolver::TextEdit {
+                            offset: par_kw_span.offset,
+                            length: par_kw_span.length,
+                            replacement: "sync".to_string(),
+                        },
+                    );
+                }
                 self.advance(); // consume `sync` / `par`
                 match self.peek_token_ref() {
                     Token::Struct => Some(Item::StructDef(self.parse_struct_def(
@@ -165,7 +195,7 @@ impl super::Parser {
                         self.parse_enum_def(attributes, is_pub, is_private, false, true)?,
                     )),
                     _ => {
-                        self.error("Expected 'struct' or 'enum' after 'par'");
+                        self.error(&format!("Expected 'struct' or 'enum' after '{keyword}'"));
                         None
                     }
                 }

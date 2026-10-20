@@ -773,7 +773,7 @@ pub enum OwnershipErrorKind {
     /// `src/ownership/frozen_escape.rs` for why the rule is a whitelist.
     FrozenParamEscapes,
     /// A `frozen` parameter names a type that may not be frozen
-    /// (B-2026-08-01-33 mechanism 3): not a `shared` type, a `par struct`
+    /// (B-2026-08-01-33 mechanism 3): not a `shared` type, a `sync struct`
     /// (already atomic, nothing to freeze), or a `shared` type with a `mut`
     /// field somewhere in its reachable closure. See
     /// `src/ownership/frozen_freeze_site.rs` for why stage 1's form of the
@@ -829,14 +829,14 @@ pub enum OwnershipErrorKind {
     /// parallel_region ≠ ∅` AND the allocation is reachable from more
     /// than one concurrent branch is a compile error. `shared struct`
     /// carries hidden per-field RC borrow flags and is single-task only;
-    /// concurrent access needs `par struct` (`Atomic[T]` / `Mutex[T]`
+    /// concurrent access needs `sync struct` (`Atomic[T]` / `Mutex[T]`
     /// field constraints enforced at the definition site). The
     /// diagnostic primary span is the binding's second-branch use; the
     /// `consume_span` slot carries the first-branch use as a secondary
     /// span. The suggestion text spells out the four-step migration
     /// (rename keyword, wrap mut fields, add lock blocks, Rc→Arc clone
     /// semantics) from design.md § Compiler-assisted migration from
-    /// `shared struct` to `par struct`.
+    /// `shared struct` to `sync struct`.
     ConcurrentSharedStruct {
         type_name: String,
         binding: String,
@@ -844,7 +844,7 @@ pub enum OwnershipErrorKind {
     /// Phase-7 line 197 sibling (E_CONCURRENT_PLAIN_STRUCT) — a plain
     /// (non-shared, non-par) `struct` binding is referenced from two or
     /// more concurrent branches of a `par {}` block. Per design.md §
-    /// Compiler-assisted migration from plain `struct` to `par struct`:
+    /// Compiler-assisted migration from plain `struct` to `sync struct`:
     /// silent promotion is rejected (the field constraints differ
     /// structurally — bare fields vs. `Atomic[T]` / `Mutex[T]` only), so
     /// the compiler emits a structured error with a machine-applicable
@@ -1197,7 +1197,7 @@ pub struct OwnershipCheckResult {
     /// `Mutex[T]` wrap edits derivable from each `StructField.ty.span`
     /// (two pure-insertion edits per field: `Mutex[` prefix + `]`
     /// suffix around the field's type). The keyword rename
-    /// (`shared struct`/`struct` → `par struct`) and the `mut ` keyword
+    /// (`shared struct`/`struct` → `sync struct`) and the `mut ` keyword
     /// stripping live in the suggestion prose until the parser exposes
     /// keyword spans on `StructDef` (sibling follow-up). Indexed via a
     /// sibling map keyed by `SpanKey::from_span(&err.span)` rather than
@@ -1549,7 +1549,7 @@ pub(crate) fn is_copy_type_in_scope(
                 ((info.is_shared || info.is_par) && !info.generic_params.is_empty())
                     || info.derived_traits.contains("Copy")
             } else if let Some(info) = tc.enum_info.get(name) {
-                // B-2026-10-02-59 — a `shared enum` / `par enum` is the same
+                // B-2026-10-02-59 — a `shared enum` / `sync enum` is the same
                 // reference-counted handle as the `shared struct` arm above;
                 // it only reaches here as `Type::Named` because lowering
                 // turns STRUCT names alone into `Type::Shared`.

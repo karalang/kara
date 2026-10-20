@@ -531,7 +531,7 @@ impl<'a> super::TypeChecker<'a> {
                 if self.user_clone_method_exists(name, args) {
                     return None;
                 }
-                // B-2026-10-02-59 — a `shared enum` / `par enum` clones as a
+                // B-2026-10-02-59 — a `shared enum` / `sync enum` clones as a
                 // refcount bump, like the `Type::Shared` arm above (which only
                 // ever sees STRUCT names: lowering leaves enums `Named`).
                 if self
@@ -1292,7 +1292,7 @@ impl<'a> super::TypeChecker<'a> {
                 // `par` counts as a pointer form exactly like `shared`.
                 // design.md § Type Kinds: `shared` and `par` are the two
                 // reference-semantics tiers — single-task RC and cross-task
-                // respectively — so a `par enum` payload is the same single
+                // respectively — so a `sync enum` payload is the same single
                 // pointer word a `shared enum` payload is. Omitting it made the
                 // two rules contradict each other: this check told you to mark
                 // the inner enum `shared`, while E_NOT_CROSS_TASK told you

@@ -1,5 +1,5 @@
 
-par struct Data { x: i64 }
+sync struct Data { x: i64 }
 fn read(d: Data) -> i64 { d.x }
 fn main() {
     let a = Data { x: 100 };

@@ -10794,7 +10794,7 @@ fn test_query_cost_summary_no_perf_note_for_shared_without_mut() {
     // Negative-1: a `shared struct` with zero `mut` fields must NOT trigger
     // the Tier 2 perf note. The migration hint is predictive of *future*
     // concurrent-access cost, which depends on a `mut` field being present
-    // — without one the borrow-flag and `par struct` migration framing both
+    // — without one the borrow-flag and `sync struct` migration framing both
     // collapse, so the note has nothing to predict.
     let src = "shared struct ReadOnly {\n    a: i64,\n    b: i64,\n}\nfn main() {}\n";
     let path = std::env::temp_dir().join(format!(
@@ -10826,7 +10826,7 @@ fn test_query_cost_summary_no_perf_note_for_plain_struct_with_mut() {
     // Negative-2: a plain (non-`shared`) struct with `mut` fields must NOT
     // trigger the Tier 2 perf note. The diagnostic is gated on
     // `kind == Shared` because it predicts the cost of a future
-    // `shared struct` → `par struct` migration; a plain struct has no such
+    // `shared struct` → `sync struct` migration; a plain struct has no such
     // future, and `mut` on a plain-struct field is a parser-level shape that
     // doesn't pay a borrow-flag cost in the first place.
     let src = "struct Plain {\n    mut x: i64,\n    mut y: i64,\n}\nfn main() {}\n";
@@ -11661,7 +11661,7 @@ fn test_fix_applies_concurrent_plain_struct_migration() {
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct State"),
-        "expected `par struct` migration, got: {rewritten}"
+        "expected `sync struct` migration, got: {rewritten}"
     );
     assert!(
         rewritten.contains("count: Mutex[i64]"),
@@ -17948,7 +17948,7 @@ fn test_migrate_apply_rewrites_file() {
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
         rewritten.contains("sync struct Counter"),
-        "expected `par struct Counter` post-migrate; got: {rewritten}",
+        "expected `sync struct Counter` post-migrate; got: {rewritten}",
     );
     assert!(
         rewritten.contains("count: Mutex[i64]"),
@@ -18764,7 +18764,7 @@ fn test_migrate_project_mode_apply_rewrites_all_files() {
     // Type-def file post-rewrite.
     assert!(
         counter_after.contains("sync struct Counter"),
-        "counter.kara should have `par struct Counter`; got: {counter_after}",
+        "counter.kara should have `sync struct Counter`; got: {counter_after}",
     );
     assert!(
         counter_after.contains("count: Mutex[i64]"),
@@ -34882,7 +34882,7 @@ fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
 }
 
 /// B-2026-08-24-2, second half: a shared struct nested inside another shape,
-/// and a `par struct` handle.
+/// and a `sync struct` handle.
 ///
 /// The renderer is reached through `emit_display_fn_for_type_expr`, the same
 /// recursive dispatcher every element and field type goes through, so a shared
@@ -34892,7 +34892,7 @@ fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
 /// neither, which is what made the old struct arm assert; the shared check has
 /// to come first.
 ///
-/// `par struct` shares the shared-struct layout (design.md § Part 5b "Always
+/// `sync struct` shares the shared-struct layout (design.md § Part 5b "Always
 /// Arc" — same map, `is_par` only selects atomic refcount ops), so it renders
 /// through the same arm. It is here because "same layout, different refcount"
 /// is exactly the kind of claim that is true until it isn't.
@@ -34905,7 +34905,7 @@ fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
 fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
     let tmp = scratch_project("dbg-shared-struct-nested");
     let src = "shared struct P { x: i64, tag: String }\n\
-               par struct C { a: i64, b: String }\n\
+               sync struct C { a: i64, b: String }\n\
                fn main() {\n\
                \x20   let v = [P { x: 1, tag: \"a\\\"q\" }, P { x: 2, tag: \"b\" }];\n\
                \x20   dbg(v);\n\
@@ -34926,7 +34926,7 @@ fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
     assert_eq!(
         String::from_utf8_lossy(&interp.stderr),
         want,
-        "interpreter: shared struct as a Vec element, and a par struct"
+        "interpreter: shared struct as a Vec element, and a sync struct"
     );
 
     let built = karac_bin()

@@ -2560,7 +2560,7 @@ fn main() {
     fn test_e2e_atomic_fetch_add_load_explicit() {
         let out = run_program(
             r#"
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 fn bump(c: ref Counter) { let _ = c.count.fetch_add(1, MemoryOrdering.Relaxed); }
 fn main() {
     let c = Counter { count: Atomic.new(0) };
@@ -2649,7 +2649,7 @@ fn main() {
     fn test_atomic_implicit_ordering_rejected_by_codegen() {
         use karac::codegen::compile_to_object;
         let src = r#"
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }
 fn main() {
     let c = Counter { count: Atomic.new(0) };
@@ -4343,7 +4343,7 @@ fn main() {
     fn test_e2e_par_block_result_source_order_earliest_branch_wins() {
         let out = run_program(
             r#"
-par struct Gate { v: Atomic[i64] }
+sync struct Gate { v: Atomic[i64] }
 impl Gate {
     fn open(ref self) { self.v.store(1, MemoryOrdering.SeqCst) }
     fn is_open(ref self) -> bool { self.v.load(MemoryOrdering.SeqCst) == 1 }
@@ -4414,7 +4414,7 @@ fn main() {
     fn test_e2e_par_block_cancelled_branch_err_not_recorded() {
         let out = run_program(
             r#"
-par struct Gate { v: Atomic[i64] }
+sync struct Gate { v: Atomic[i64] }
 impl Gate {
     fn is_open(ref self) -> bool { self.v.load(MemoryOrdering.SeqCst) == 1 }
 }
@@ -12251,7 +12251,7 @@ fn main() {
     /// back — for `let x = f(..)` with no annotation — to the callee's declared
     /// return type when that names a known user struct. The test for "known
     /// user struct" was `struct_types` alone, but `declare_structs` routes a
-    /// `shared struct` / `par struct` into `shared_types` and an ordinary one
+    /// `shared struct` / `sync struct` into `shared_types` and an ordinary one
     /// into `struct_types`, EXCLUSIVELY. So every shared type answered "not a
     /// user struct", crossed the join with no `var_type_names` entry, and lost
     /// its receiver identity: `codegen: no handler for method 'total' on

@@ -278,7 +278,7 @@ pub(super) fn extract_must_use_message(attributes: &[Attribute]) -> Option<Strin
         .map(|a| a.string_arg().unwrap_or_default().to_string())
 }
 
-/// The set of field names of a `shared struct` / `par struct` that may be
+/// The set of field names of a `shared struct` / `sync struct` that may be
 /// *reassigned* (`s.field = v`) through a shared handle. A field is
 /// reassignable iff it is declared `mut`, OR its type is a concurrency
 /// primitive (`Atomic[T]` / `Mutex[T]`) that provides interior mutability
@@ -297,7 +297,7 @@ pub(super) fn shared_struct_mut_field_names(fields: &[StructField]) -> HashSet<S
 }
 
 /// True when `ty` denotes a concurrency primitive (`Atomic[T]` / `Mutex[T]`),
-/// whose interior mutability lets a non-`mut` field of a shared/par struct
+/// whose interior mutability lets a non-`mut` field of a shared/sync struct
 /// still be written. The typechecker-side twin of the interpreter's
 /// `is_interior_mutable_field_type`; kept here (not imported from the
 /// interpreter) to respect the phase-layering invariant — the interpreter is
@@ -979,28 +979,28 @@ pub enum TypeErrorKind {
     /// `#[allow(derive_clone_allocates)]`; the fix-it suggests a manual
     /// `try_clone`. See design.md § Fallible Allocation API and OOM Handling.
     DeriveCloneAllocates,
-    /// A `mut` field of a `par struct` / `par enum` is declared with a type
-    /// other than `Atomic[T]` or `Mutex[T]`. `par struct` enforces concurrent
+    /// A `mut` field of a `sync struct` / `sync enum` is declared with a type
+    /// other than `Atomic[T]` or `Mutex[T]`. `sync struct` enforces concurrent
     /// safety structurally at the definition site: immutable fields are freely
     /// readable across tasks, but every `mut` field must be a concurrency
     /// primitive (`Atomic[T]` for lock-free, `Mutex[T]` for locked compound
     /// mutation). A bare `mut val: i64` is rejected. See design.md § Part 5b:
-    /// Concurrent Shared Types (`par struct`) > Field constraints. (Phase 6
-    /// `par struct` slice A.)
+    /// Concurrent Shared Types (`sync struct`) > Field constraints. (Phase 6
+    /// `sync struct` slice A.)
     ParFieldNotConcurrent,
-    /// A method on a `par struct` / `par enum` declares a `mut self` receiver.
+    /// A method on a `sync struct` / `sync enum` declares a `mut self` receiver.
     /// `par` values are always Arc-allocated and may have multiple holders, so
     /// exclusive ownership (`mut self`) is never available — only `ref self`
     /// (and consuming `self`) are permitted. Exclusive mutation goes through
     /// `lock` blocks on `Mutex[T]` fields. See design.md § Part 5b > `ref self`
-    /// receivers only. (Phase 6 `par struct` slice A.)
+    /// receivers only. (Phase 6 `sync struct` slice A.)
     ParMutSelfReceiver,
     /// The target of a `lock IDENT [IDENT] { … }` is not a `Mutex[T]` binding.
     /// `lock` requires a `Mutex[T]` value (design.md § Standalone `Mutex[T]`
     /// values). (Phase 6 `Mutex`.)
     LockTargetNotMutex,
     /// Reassignment (`s.field = v`) of a field that is NOT declared `mut` on a
-    /// `shared struct` / `par struct`. Shared/par values are reference-semantic
+    /// `shared struct` / `sync struct`. Shared/par values are reference-semantic
     /// (RC/Arc), aliasable through many handles, so per-field `mut` is the
     /// declared write-permission: an immutable field may only be set in the
     /// constructing literal, never reassigned. Mirrors the interpreter's
@@ -1343,7 +1343,7 @@ impl TypeErrorKind {
     /// no `Value::Iterator[Value::Int]` lowering either, and it reaches the
     /// very same `unreachable!`.
     /// And `TypeErrorKind::SharedFieldNotMut`: reassigning a non-`mut` field
-    /// of a `shared`/`par struct` is a statically-decidable write-permission
+    /// of a `shared`/`sync struct` is a statically-decidable write-permission
     /// violation the interpreter only catches via a defense-in-depth *runtime*
     /// guard (`write_shared_struct_field`) that explicitly notes "the
     /// typechecker already rejects this". Keeping it run-fatal makes `run`

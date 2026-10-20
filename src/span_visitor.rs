@@ -43,7 +43,7 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
                 s.where_clause.as_ref(),
                 visit,
             );
-            // The keyword spans the `par struct` migration's machine-applicable
+            // The keyword spans the `sync struct` migration's machine-applicable
             // edits are built from (`ownership/concurrent_shared.rs`). Missing
             // them here left them at file-local offsets under the multi-module
             // rebase in `module.rs`, so the migration's edits for every module
@@ -1364,7 +1364,7 @@ fn walk_item_mut(item: &mut Item, visit: &mut impl MutVisitor) {
                 s.where_clause.as_mut(),
                 visit,
             );
-            // See the read-only arm: these three feed the `par struct`
+            // See the read-only arm: these three feed the `sync struct`
             // migration's edits and must move with the rest.
             visit.span(&mut s.struct_keyword_span);
             if let Some(k) = &mut s.kind_keyword_span {

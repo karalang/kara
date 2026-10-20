@@ -705,7 +705,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             // Intercept shared / par structs — bare struct name `S` lowers to
             // Type::Shared(S) when `S` was declared as `shared struct S` or
-            // `par struct S` (both are reference-semantics handle types; see
+            // `sync struct S` (both are reference-semantics handle types; see
             // the construction-site twin in `fields.rs` and design.md § Part 5b).
             // Plain structs continue through Type::Named, and so does a
             // generic shared struct, which needs its arguments

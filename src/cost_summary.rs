@@ -257,7 +257,7 @@ pub fn build(scope: &str, program: &Program, ownership: &OwnershipCheckResult) -
 
 /// Build the canonical message body for a `perf[shared-struct-mut-field]`
 /// note. Mirrors the prose in design.md § Compiler-assisted migration from
-/// `shared struct` to `par struct` (and § Performance Diagnostics).
+/// `shared struct` to `sync struct` (and § Performance Diagnostics).
 fn shared_struct_mut_field_note(name: &str, mut_fields: &[&str], span: &Span) -> PerfNote {
     let field_list = mut_fields
         .iter()
@@ -266,7 +266,7 @@ fn shared_struct_mut_field_note(name: &str, mut_fields: &[&str], span: &Span) ->
         .join(", ");
     let message = format!(
         "`shared struct {name}` has mut field{plural} ({field_list}); if a future caller \
-         needs concurrent access, the migration to `par struct` is structural — consider \
+         needs concurrent access, the migration to `sync struct` is structural — consider \
          defining as `sync struct` from the start.",
         plural = if mut_fields.len() == 1 { "" } else { "s" },
     );

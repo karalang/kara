@@ -14,7 +14,7 @@
 // to an upstream tier by prefix (/api → API tier, /static → asset tier, else
 // → app tier), then forwards and streams the response back.
 //
-// Slice 5 — live metrics across concurrent handlers. A `par struct Metrics`
+// Slice 5 — live metrics across concurrent handlers. A `sync struct Metrics`
 // (the cross-task-safe shared form) holds `Atomic[i64]` counters; every
 // spawned handler records its routed tier into the SAME shared struct via
 // lock-free `fetch_add`, and the accept loop reports the totals periodically.
@@ -36,10 +36,10 @@
 // and watch the `[metrics] total=… api=… static=… app=…` lines.
 
 // Per-tier request counters, shared lock-free across every connection handler.
-// `par struct` is the cross-task-safe shared form (a plain `shared struct`
+// `sync struct` is the cross-task-safe shared form (a plain `shared struct`
 // can't cross a `tg.spawn` boundary — E_NOT_CROSS_TASK); its `Atomic[i64]`
 // fields make concurrent `fetch_add` from many handlers race-free.
-par struct Metrics {
+sync struct Metrics {
     total: Atomic[i64],
     api: Atomic[i64],
     assets: Atomic[i64],
@@ -96,7 +96,7 @@ fn upstream_for(tier: i64) -> String {
 
 // Service one connection: peek the request line, classify + record the tier,
 // connect to it, forward the bytes already read, and stream the response back.
-// `metrics` is the shared `par struct` — `record` fetch_adds the counters.
+// `metrics` is the shared `sync struct` — `record` fetch_adds the counters.
 fn handle(client: own TcpStream, metrics: Metrics) {
     let mut buf: Array[u8, 4096] = [0u8; 4096];
     match client.read(mut buf) {

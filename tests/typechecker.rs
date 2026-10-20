@@ -30201,7 +30201,7 @@ fn test_module_binding_immutable_read_at_use_site_does_not_fire_mutability_check
 // `OnceCell[T]` is single-task; `OnceLock[T]` is its cross-task-safe
 // sibling with the identical method surface. Three structural rules
 // reject `OnceCell` where it would become visible to more than one task:
-// (a) module scope, (b) `par struct`/`par enum` fields, (c) crossing a
+// (a) module scope, (b) `sync struct`/`sync enum` fields, (c) crossing a
 // `par {}` / spawn / channel boundary (the last reuses the pre-existing
 // cross-task escape pass). Each rejection points at the `OnceLock` swap.
 
@@ -30239,7 +30239,7 @@ fn test_oncelock_at_module_scope_ok() {
 
 #[test]
 fn test_oncecell_par_struct_field_rejected() {
-    let errs = typecheck_errors("par struct Service { cell: OnceCell[i64] }");
+    let errs = typecheck_errors("sync struct Service { cell: OnceCell[i64] }");
     assert!(
         errs.iter().any(
             |e| e.message.contains("E_ONCE_CELL_IN_PAR_TYPE") && e.message.contains("OnceLock")
@@ -30251,10 +30251,10 @@ fn test_oncecell_par_struct_field_rejected() {
 
 #[test]
 fn test_oncelock_par_struct_field_ok() {
-    // `OnceLock[T]` as an immutable `par struct` field is fine — it is
+    // `OnceLock[T]` as an immutable `sync struct` field is fine — it is
     // cross-task safe and immutable fields are freely readable across
     // tasks.
-    typecheck_ok("par struct Service { cell: OnceLock[i64] }\nfn main() {}");
+    typecheck_ok("sync struct Service { cell: OnceLock[i64] }\nfn main() {}");
 }
 
 #[test]
@@ -31013,11 +31013,11 @@ fn spawn_capturing_shared_struct_rejected_with_par_fix_it() {
 
 #[test]
 fn spawn_capturing_par_struct_accepted() {
-    // Phase 6 `par struct` slice B: a `par struct` is cross-task-safe by
+    // Phase 6 `sync struct` slice B: a `sync struct` is cross-task-safe by
     // definition, so capturing it in a spawn closure is accepted — the same
     // shape that is rejected for a `shared struct` above.
     let result = typecheck_ok(
-        "par struct Cache { value: i64 }
+        "sync struct Cache { value: i64 }
          impl Cache { fn get(ref self) -> i64 { self.value } }
          fn main() {
              let c: Cache = Cache { value: 0 };
@@ -31030,7 +31030,7 @@ fn spawn_capturing_par_struct_accepted() {
             .errors
             .iter()
             .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture),
-        "par struct capture in spawn must not fire CrossTaskUnsafeCapture; got: {:?}",
+        "sync struct capture in spawn must not fire CrossTaskUnsafeCapture; got: {:?}",
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
@@ -31039,7 +31039,7 @@ fn spawn_capturing_par_struct_accepted() {
 fn taskgroup_spawn_capturing_par_struct_accepted() {
     // Same acceptance, via the TaskGroup.spawn method-dispatch path.
     let result = typecheck_ok(
-        "par struct Cache { value: i64 }
+        "sync struct Cache { value: i64 }
          impl Cache { fn get(ref self) -> i64 { self.value } }
          fn main() {
              let c: Cache = Cache { value: 0 };
@@ -31052,7 +31052,7 @@ fn taskgroup_spawn_capturing_par_struct_accepted() {
             .errors
             .iter()
             .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture),
-        "par struct capture in TaskGroup.spawn must not fire CrossTaskUnsafeCapture; got: {:?}",
+        "sync struct capture in TaskGroup.spawn must not fire CrossTaskUnsafeCapture; got: {:?}",
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
@@ -31538,11 +31538,11 @@ fn shared_struct_satisfies_a_trait_bound() {
 
 #[test]
 fn par_struct_satisfies_a_trait_bound() {
-    // Twin of the above: `par struct` shares the `Type::Shared` carrier,
+    // Twin of the above: `sync struct` shares the `Type::Shared` carrier,
     // so it was equally unable to satisfy a bound.
     typecheck_ok(
         "trait Doer { fn go(ref self) -> i64; }
-         par struct ParS { a: i64 }
+         sync struct ParS { a: i64 }
          impl Doer for ParS { fn go(ref self) -> i64 { 3 } }
          fn run[T: Doer](p: ref T) -> i64 { p.go() }
          fn main() { let s = ParS { a: 1 }; println(run(s)); }",
@@ -31582,7 +31582,7 @@ fn with_provider_par_struct_provider_accepted() {
     typecheck_ok(
         "trait DbProvider { fn query(ref self, n: i64) -> i64; }
          effect resource UserDB: DbProvider;
-         par struct ParDB { data: i64 }
+         sync struct ParDB { data: i64 }
          impl DbProvider for ParDB { fn query(ref self, n: i64) -> i64 { self.data + n } }
          fn main() {
              with_provider[UserDB](ParDB { data: 100 }, || {
@@ -31623,12 +31623,12 @@ fn providers_block_rejects_provider_missing_declared_trait() {
 #[test]
 fn providers_block_accepts_provider_implementing_declared_trait() {
     // Companion to the above — the check must not fire on a conforming
-    // provider, including a `par struct` one (B-2026-08-19-14 again, on
+    // provider, including a `sync struct` one (B-2026-08-19-14 again, on
     // the block surface).
     typecheck_ok(
         "trait DbProvider { fn query(ref self, n: i64) -> i64; }
          effect resource UserDB: DbProvider;
-         par struct ParDB { data: i64 }
+         sync struct ParDB { data: i64 }
          impl DbProvider for ParDB { fn query(ref self, n: i64) -> i64 { self.data + n } }
          fn main() {
              providers { UserDB => ParDB { data: 100 } } in {
@@ -32858,8 +32858,8 @@ fn test_contract_ref_self_in_ensures_accepted() {
     );
 }
 
-// ── Phase 6 `par struct` slice A: definition-site guarantee ──────
-// `par struct` / `par enum` (design.md § Part 5b: Concurrent Shared Types).
+// ── Phase 6 `sync struct` slice A: definition-site guarantee ──────
+// `sync struct` / `sync enum` (design.md § Part 5b: Concurrent Shared Types).
 // Slice A is the typechecker landing: every `mut` field must be `Atomic[T]`
 // or `Mutex[T]` (bare `mut` rejected at the definition site), and methods
 // may not declare a `mut ref self` receiver (par values are always Arc with
@@ -32871,7 +32871,7 @@ fn par_struct_immutable_and_atomic_fields_accepted() {
     // readable across tasks) + an `Atomic` field (lock-free interior mutation,
     // no `mut` keyword needed).
     typecheck_ok(
-        "par struct Counter {
+        "sync struct Counter {
              name: String,
              count: Atomic[i64],
          }",
@@ -32882,7 +32882,7 @@ fn par_struct_immutable_and_atomic_fields_accepted() {
 fn par_struct_mut_atomic_and_mut_mutex_fields_accepted() {
     // A `mut` field is permitted as long as it is a concurrency primitive.
     typecheck_ok(
-        "par struct Counter {
+        "sync struct Counter {
              mut count: Atomic[i64],
              mut state: Mutex[i64],
          }",
@@ -32891,7 +32891,7 @@ fn par_struct_mut_atomic_and_mut_mutex_fields_accepted() {
 
 #[test]
 fn par_struct_bare_mut_field_rejected() {
-    let errors = typecheck_errors("par struct Bad { mut val: i64 }");
+    let errors = typecheck_errors("sync struct Bad { mut val: i64 }");
     assert!(
         errors
             .iter()
@@ -32905,12 +32905,12 @@ fn par_struct_bare_mut_field_rejected() {
 #[test]
 fn par_struct_plain_immutable_field_accepted() {
     // Immutable fields are unrestricted — only `mut` fields are constrained.
-    typecheck_ok("par struct Config { retries: i64, host: String }");
+    typecheck_ok("sync struct Config { retries: i64, host: String }");
 }
 
-// ── Shared/par struct field-reassignment write-permission gate ──
+// ── Shared/sync struct field-reassignment write-permission gate ──
 // (B-2026-06-30-3) A field that is NOT declared `mut` on a reference-semantic
-// `shared struct` / `par struct` may only be set in the constructing literal,
+// `shared struct` / `sync struct` may only be set in the constructing literal,
 // never reassigned through the shared handle. Promotes the interpreter's
 // runtime `write_shared_struct_field` guard to a compile error so `karac run`,
 // `karac check`, and `karac build` all reject — closing the divergence where
@@ -32966,9 +32966,9 @@ fn shared_struct_atomic_field_reassign_accepted() {
 
 #[test]
 fn par_struct_non_mut_field_reassign_rejected() {
-    // The same gate covers `par struct` (also reference-semantic, Arc-backed).
+    // The same gate covers `sync struct` (also reference-semantic, Arc-backed).
     let errors = typecheck_errors(
-        "par struct Config { retries: i64, count: Atomic[i64] }\n\
+        "sync struct Config { retries: i64, count: Atomic[i64] }\n\
          fn main() {\n\
          \x20   let cfg = Config { retries: 3, count: Atomic.new(0i64) };\n\
          \x20   cfg.retries = 4;\n\
@@ -33353,7 +33353,7 @@ fn mut_ref_non_numeric_scalar_arithmetic_still_errors() {
 #[test]
 fn par_enum_atomic_and_mutex_variant_fields_accepted() {
     typecheck_ok(
-        "par enum WorkItem {
+        "sync enum WorkItem {
              Task { payload: Mutex[i64] },
              Control { cmd: Atomic[u32] },
              Poison,
@@ -33363,13 +33363,13 @@ fn par_enum_atomic_and_mutex_variant_fields_accepted() {
 
 #[test]
 fn par_enum_bare_mut_variant_field_rejected() {
-    let errors = typecheck_errors("par enum Bad { Task { mut payload: i64 } }");
+    let errors = typecheck_errors("sync enum Bad { Task { mut payload: i64 } }");
     assert!(
         errors
             .iter()
             .any(|e| e.kind == TypeErrorKind::ParFieldNotConcurrent
                 && e.message.contains("`payload`")
-                && e.message.contains("par enum")),
+                && e.message.contains("sync enum")),
         "expected ParFieldNotConcurrent for bare `mut payload` variant field, got: {errors:?}"
     );
 }
@@ -33377,7 +33377,7 @@ fn par_enum_bare_mut_variant_field_rejected() {
 #[test]
 fn par_struct_mut_ref_self_receiver_rejected() {
     let errors = typecheck_errors(
-        "par struct Counter { count: Atomic[i64] }
+        "sync struct Counter { count: Atomic[i64] }
          impl Counter {
              fn reset(mut ref self) { }
          }",
@@ -33397,7 +33397,7 @@ fn par_struct_ref_self_and_consuming_self_receivers_accepted() {
     // `ref self` (shared read) and consuming `self` (drop one Arc handle) are
     // both legal — only the exclusive `mut ref self` borrow is rejected.
     typecheck_ok(
-        "par struct Counter { count: Atomic[i64] }
+        "sync struct Counter { count: Atomic[i64] }
          impl Counter {
              fn get(ref self) -> i64 { 0 }
              fn into_name(self) -> i64 { 0 }
@@ -33428,14 +33428,14 @@ fn shared_struct_mut_ref_self_receiver_still_accepted() {
 // ── `Atomic.new` in general expression position ──────────────────
 // `Atomic.new(v)` is recognized as a constructor in general expression
 // position (struct-field-init, local let), not just module-binding init,
-// so a concurrent `par struct` with an `Atomic` field can be constructed.
+// so a concurrent `sync struct` with an `Atomic` field can be constructed.
 // `Atomic[T]` is a transparent wrapper; codegen lowers `Atomic.new(v)` to
 // `v`. (Mutex.new is intentionally NOT recognized here — no codegen yet.)
 
 #[test]
 fn atomic_new_in_par_struct_field_init_accepted() {
     typecheck_ok(
-        "par struct Counter { count: Atomic[i64] }
+        "sync struct Counter { count: Atomic[i64] }
          fn main() {
              let _c = Counter { count: Atomic.new(0) };
          }",
@@ -33457,10 +33457,10 @@ fn atomic_new_in_local_let_infers_atomic_of_arg_type() {
 #[test]
 fn mutex_new_in_general_position_accepted() {
     // `Mutex.new` now has codegen (the `lock`-block slice), so it is a
-    // general-position constructor like `Atomic.new` — a `par struct` with a
+    // general-position constructor like `Atomic.new` — a `sync struct` with a
     // `Mutex` field is constructible. (Was rejected before the lock slice.)
     typecheck_ok(
-        "par struct S { m: Mutex[i64] }
+        "sync struct S { m: Mutex[i64] }
          fn main() {
              let _s = S { m: Mutex.new(0) };
          }",
@@ -33542,7 +33542,7 @@ fn lock_on_borrowed_mutex_param_accepted() {
     // through the reference). The inner `T` is unwrapped through the borrow,
     // so `x = x + 1` typechecks against i64. (Concurrent use of a standalone
     // Mutex across `par {}` is governed separately by the ownership checker —
-    // the idiomatic concurrent path is a `par struct` Mutex field.)
+    // the idiomatic concurrent path is a `sync struct` Mutex field.)
     typecheck_ok(
         "fn bump(m: mut ref Mutex[i64]) { lock m x { x = x + 1; } }
          fn main() { let mut m = Mutex.new(0); bump(mut m); }",
@@ -33555,7 +33555,7 @@ fn lock_on_par_struct_mutex_field_with_alias_accepted() {
     // struct (a place expression). Requires an alias (the field has no name to
     // shadow); `s` is the inner `T`.
     typecheck_ok(
-        "par struct C { state: Mutex[i64] }
+        "sync struct C { state: Mutex[i64] }
          impl C {
              fn bump(ref self) { lock self.state s { s = s + 1; } }
          }",
@@ -33566,7 +33566,7 @@ fn lock_on_par_struct_mutex_field_with_alias_accepted() {
 fn lock_on_field_without_alias_rejected() {
     // A field place has no name to shadow, so an alias is required.
     let errors = typecheck_errors(
-        "par struct C { state: Mutex[i64] }
+        "sync struct C { state: Mutex[i64] }
          impl C {
              fn bump(ref self) { lock self.state { } }
          }",
@@ -33589,7 +33589,7 @@ fn compare_exchange_returns_result_of_inner_type() {
     // The result must `match` as Result[i64, i64] — a non-Result return would
     // make the Ok/Err arms a non-exhaustive / wrong-type error.
     typecheck_ok(
-        "par struct C { v: Atomic[i64] }
+        "sync struct C { v: Atomic[i64] }
          impl C {
              fn cas(ref self) -> i64 {
                  match self.v.compare_exchange(0, 1, MemoryOrdering.SeqCst, MemoryOrdering.SeqCst) {
@@ -41708,7 +41708,7 @@ fn weak_field_store_rejects_unrelated_type() {
 }
 
 /// B-2026-07-28-13 sibling surface. A plain `shared struct`'s refcount is a
-/// non-atomic load/add/store — only a `par struct` / `par enum` gets
+/// non-atomic load/add/store — only a `sync struct` / `sync enum` gets
 /// `atomicrmw` — so a plain shared value reachable from two concurrently
 /// running tasks races on its refcount: a lost increment frees the object while
 /// another task still holds it, surfacing as an intermittent SIGSEGV whose rate
@@ -42192,9 +42192,9 @@ fn enum_payload_push_does_not_change_integer_coercion() {
     );
 }
 
-// ── par enum satisfies the nesting rule ─────────────────────────
+// ── sync enum satisfies the nesting rule ─────────────────────────
 
-/// A `par enum` payload is a single pointer word exactly as a `shared enum`
+/// A `sync enum` payload is a single pointer word exactly as a `shared enum`
 /// payload is — design.md § Type Kinds makes `shared` and `par` the two
 /// reference-semantics tiers, single-task RC and cross-task respectively. The
 /// nesting check counted only `shared`, so the two rules contradicted each
@@ -42204,7 +42204,7 @@ fn enum_payload_push_does_not_change_integer_coercion() {
 #[test]
 fn par_enum_payload_satisfies_the_enum_nesting_rule() {
     typecheck_ok(
-        "par enum Value { Int(i64), Null } \
+        "sync enum Value { Int(i64), Null } \
          enum Query { Delete { table: String, value: Value } } \
          fn main() { let _ = Query.Delete { table: \"t\".to_string(), value: Value.Null }; }",
     );
@@ -51622,7 +51622,7 @@ fn main() { let h = Holder { s: "x".to_string() }; println(f"{need_copy(h)}"); }
 /// points at the box, so `h2.a.tag` is a read of freed memory — valgrind
 /// reports `Invalid read of size 2 ... inside a block of size 66 free'd`, on
 /// both compiled backends and under `--interp`, and byte-for-byte the same for
-/// `par struct`. This is the rule Rust enforces for `Rc<T>`: clone out of it or
+/// `sync struct`. This is the rule Rust enforces for `Rc<T>`: clone out of it or
 /// borrow into it, never take ownership of a part.
 ///
 /// WHY THE SITE SET DIFFERS FROM `E_INDEX_MOVE_NON_COPY`'s, deliberately. That
@@ -51642,7 +51642,7 @@ fn main() { let h = Holder { s: "x".to_string() }; println(f"{need_copy(h)}"); }
 fn shared_field_move_rejected_and_borrow_and_copy_shapes_permitted() {
     const PRELUDE: &str = "struct R { s: String }\n\
          shared struct Sh { r: R, n: i64, s: String, v: Vec[i64] }\n\
-         par struct Pa { r: R, n: i64 }\n\
+         sync struct Pa { r: R, n: i64 }\n\
          struct Plain { r: R, n: i64 }\n\
          shared struct Inner { k: i64 }\n\
          shared struct Holder { i: Inner, n: i64 }\n\

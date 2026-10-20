@@ -1,5 +1,5 @@
 
-par struct Gate { v: Atomic[i64] }
+sync struct Gate { v: Atomic[i64] }
 impl Gate {
     fn open(ref self) { self.v.store(1) }
     fn is_open(ref self) -> bool { self.v.load() == 1 }

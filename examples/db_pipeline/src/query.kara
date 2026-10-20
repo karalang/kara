@@ -10,7 +10,7 @@
 //   For this example we keep the AST flat (no nesting) to sidestep the issue.
 
 #[derive(Clone, Eq)]
-pub par enum Value {
+pub sync enum Value {
     Int(i64),
     Text(String),
     Null,

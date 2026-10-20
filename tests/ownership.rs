@@ -7526,7 +7526,7 @@ fn test_concurrent_shared_enum_fires() {
 // Plain (non-shared) struct binding referenced from two or more
 // concurrent branches of a `par {}` block. Same detection mechanism
 // as the shared case, different migration target (`struct` → `par
-// struct` rather than `shared struct` → `par struct`).
+// struct` rather than `shared struct` → `sync struct`).
 
 #[test]
 fn test_concurrent_plain_struct_fires_on_two_branch_use() {
@@ -7582,7 +7582,7 @@ fn test_concurrent_plain_struct_fires_on_two_branch_use() {
 /// borrow mode, and `Vec`/`Map`/`Set` are declared as structs in the baked
 /// stdlib (`runtime/stdlib/vec.kara`) so they are struct-typed bindings. What
 /// was wrong is only the SUGGESTION, which prescribed a migration no author can
-/// perform: "rename `struct Vec` to `par struct Vec`" names a declaration that
+/// perform: "rename `struct Vec` to `sync struct Vec`" names a declaration that
 /// does not exist in their program, and every numbered step after it followed
 /// from that rename.
 ///
@@ -7986,7 +7986,7 @@ fn test_l201a_shared_keyword_rename_targets_shared_token() {
 fn test_l201a_plain_keyword_insert_targets_struct_token() {
     // Plain struct: insert `par ` immediately before the `struct`
     // token. Verify the edit is a pure insertion (length=0) at the
-    // exact offset of `struct`, so applying it produces `par struct
+    // exact offset of `struct`, so applying it produces `sync struct
     // State { ... }`.
     let src = "struct State { id: i64 }\n\
                fn use_a(s: State) { }\n\
@@ -8717,7 +8717,7 @@ fn test_concurrent_plain_struct_fires_via_inline_closure() {
 // branches is rejected (`E_CONCURRENT_PLAIN_STRUCT` / `…SHARED_STRUCT`),
 // *regardless of borrow mode* — even two shared `ref` reads. design.md
 // § 9476's "multiple sibling tasks may simultaneously hold `ref T`"
-// describes a more permissive model whose enabling type, `par struct`, is
+// describes a more permissive model whose enabling type, `sync struct`, is
 // not implemented at v1 (a leading `par` at item scope is currently
 // dropped — see the parser-gap tracker entry). So the "two readers
 // accepted" rows of the slice-6 matrix are gated on that work and are NOT
@@ -8796,8 +8796,8 @@ fn par_primitive_used_in_both_branches_accepted() {
     );
 }
 
-// ── Phase 6 `par struct` slice B: concurrency exemption ──────────
-// `par struct` / `par enum` are cross-task-safe by definition (design.md
+// ── Phase 6 `sync struct` slice B: concurrency exemption ──────────
+// `sync struct` / `sync enum` are cross-task-safe by definition (design.md
 // § Part 5b > "Crossing parallel region boundaries"): a `par` binding
 // reachable from 2+ sibling `par {}` branches is NOT an E_CONCURRENT_*
 // error, in contrast to plain / `shared` structs.
@@ -8984,15 +8984,15 @@ fn plain_struct_with_shared_field_stays_rejected_even_readonly() {
 
 #[test]
 fn par_struct_multiple_sibling_ref_readers_accepted() {
-    // Phase 6 `par struct` slice D — design.md § 9476: "multiple sibling
+    // Phase 6 `sync struct` slice D — design.md § 9476: "multiple sibling
     // tasks may simultaneously hold `ref T`". This permissive concurrent-read
-    // model was "unreachable" at v1 because `par struct` didn't exist; now it
+    // model was "unreachable" at v1 because `sync struct` didn't exist; now it
     // does, and Slice B's exemption delivers it — two sibling `ref` readers of
-    // the SAME `par struct` binding are accepted (the same shape is rejected
+    // the SAME `sync struct` binding are accepted (the same shape is rejected
     // for `shared` / plain structs by the stricter § 8506 rule). This pins the
     // design.md reconciliation note: the § 9476 allowance is live for `par`.
     let result = ownership_ok(
-        "par struct Counter { val: i64 }\n\
+        "sync struct Counter { val: i64 }\n\
          fn read_a(c: ref Counter) -> i64 { c.val }\n\
          fn read_b(c: ref Counter) -> i64 { c.val }\n\
          fn main() {\n\
@@ -9009,7 +9009,7 @@ fn par_struct_multiple_sibling_ref_readers_accepted() {
             OwnershipErrorKind::ConcurrentSharedStruct { .. }
                 | OwnershipErrorKind::ConcurrentPlainStruct { .. }
         )),
-        "two sibling `ref` readers of a par struct must be accepted (§ 9476); got: {:?}",
+        "two sibling `ref` readers of a sync struct must be accepted (§ 9476); got: {:?}",
         result.errors
     );
 }
@@ -9018,9 +9018,9 @@ fn par_struct_multiple_sibling_ref_readers_accepted() {
 fn par_struct_reachable_from_two_branches_accepted() {
     // The exact shape that fires E_CONCURRENT_SHARED_STRUCT for a `shared
     // struct` (see test_concurrent_shared_struct_fires_on_two_branch_use)
-    // must be silent for a `par struct`.
+    // must be silent for a `sync struct`.
     let result = ownership_ok(
-        "par struct Counter { val: i64 }\n\
+        "sync struct Counter { val: i64 }\n\
          fn use_a(c: Counter) -> i64 { c.val }\n\
          fn use_b(c: Counter) -> i64 { c.val }\n\
          fn main() {\n\
@@ -9037,7 +9037,7 @@ fn par_struct_reachable_from_two_branches_accepted() {
             OwnershipErrorKind::ConcurrentSharedStruct { .. }
                 | OwnershipErrorKind::ConcurrentPlainStruct { .. }
         )),
-        "par struct reachable from two branches must not fire E_CONCURRENT_*; got: {:?}",
+        "sync struct reachable from two branches must not fire E_CONCURRENT_*; got: {:?}",
         result.errors
     );
 }
@@ -9049,7 +9049,7 @@ fn par_enum_reachable_from_two_branches_accepted() {
     // (clone-on-pass reference semantics for enums is a separate, pre-existing
     // gap; this test exercises the *classification* exemption Slice B changes).
     let result = ownership_ok(
-        "par enum Msg { Ping, Pong }\n\
+        "sync enum Msg { Ping, Pong }\n\
          fn use_a(m: ref Msg) { }\n\
          fn use_b(m: ref Msg) { }\n\
          fn main() {\n\
@@ -9066,7 +9066,7 @@ fn par_enum_reachable_from_two_branches_accepted() {
             OwnershipErrorKind::ConcurrentSharedStruct { .. }
                 | OwnershipErrorKind::ConcurrentPlainStruct { .. }
         )),
-        "par enum reachable from two branches must not fire E_CONCURRENT_*; got: {:?}",
+        "sync enum reachable from two branches must not fire E_CONCURRENT_*; got: {:?}",
         result.errors
     );
 }
@@ -10897,7 +10897,7 @@ fn test_write_through_shared_handle_needs_no_mut() {
 
 // ── Cross-task sharing of a plain `shared struct` is rejected (B-2026-07-28-13)
 // A `shared struct`'s refcount is a plain non-atomic load/add/store; only a
-// `par struct` / `par enum` (or an Arc-promoted binding) gets `atomicrmw`. So a
+// `sync struct` / `sync enum` (or an Arc-promoted binding) gets `atomicrmw`. So a
 // plain shared value reachable from two concurrently-running tasks is a data
 // race on its refcount — a lost increment frees the object while another task
 // still holds it, which shows up as an intermittent SIGSEGV whose rate rises
@@ -11013,7 +11013,7 @@ fn local_owned_param_callee_still_reports_the_move() {
 /// B-2026-08-01-33 — the diagnostic must tell an IMMUTABLE type's author the
 /// cheap answer, not the heavy one.
 ///
-/// `par struct` with immutable fields shares lock-free across tasks with no
+/// `sync struct` with immutable fields shares lock-free across tasks with no
 /// annotation, and `karac fix` performs the whole migration as a one-keyword
 /// rename. Telling such an author to "wrap each mut field in `Mutex[T]`" is
 /// advice for a program they did not write — there are no mut fields.
@@ -11565,8 +11565,8 @@ fn frozen_self_receiver_is_subject_to_the_freeze_site_check() {
             "requires a `shared` type",
         ),
         (
-            "a `par struct`",
-            "par struct Q { v: i64 }\nimpl Q { fn m(frozen self) -> i64 { self.v } }",
+            "a `sync struct`",
+            "sync struct Q { v: i64 }\nimpl Q { fn m(frozen self) -> i64 { self.v } }",
             "so `frozen` adds nothing",
         ),
         // B-2026-08-01-33 stage 3b step 2 REPLACED the `mut`-bearing rows here.
@@ -11732,8 +11732,8 @@ fn freeze_statement_is_subject_to_the_freeze_site_check() {
             "requires a `shared` type",
         ),
         (
-            "a `par struct`",
-            "par struct Q { v: i64 }\n\
+            "a `sync struct`",
+            "sync struct Q { v: i64 }\n\
              fn f() -> i64 { let q = Q { v: 1 }; let g = freeze q; g.v }",
             "so `frozen` adds nothing",
         ),
@@ -12264,7 +12264,7 @@ fn frozen_multi_branch_par_capture_is_admitted_but_only_when_frozen() {
 #[test]
 fn frozen_freeze_site_refuses_types_that_cannot_be_frozen() {
     let prelude = "struct Plain { val: i64 }\n\
-                   par struct P { val: i64 }\n\
+                   sync struct P { val: i64 }\n\
                    shared struct M { val: i64, mut count: i64 }\n\
                    shared struct Outer { inner: Inner }\n\
                    shared struct Inner { val: i64, mut bump: i64 }\n";
@@ -12280,7 +12280,7 @@ fn frozen_freeze_site_refuses_types_that_cannot_be_frozen() {
             "requires a `shared` type",
         ),
         (
-            "`par struct` is already atomically shareable",
+            "`sync struct` is already atomically shareable",
             "fn f(x: frozen P) -> i64 { 0 }",
             "so `frozen` adds nothing",
         ),
@@ -12797,7 +12797,7 @@ fn a_frozen_container_store_is_refused_inside_a_closure() {
 /// read as ONE binding reachable from both and were refused. Renaming one
 /// identifier was the entire fix, which is what made it a false positive rather
 /// than a conservative refusal — and the diagnostic meanwhile prescribed a
-/// structural `shared struct` → `par struct` migration, with a machine-
+/// structural `shared struct` → `sync struct` migration, with a machine-
 /// applicable `fix_diff`, for a program that has no sharing at all.
 ///
 /// The REJECT rows are the load-bearing half. Suppressing a use that is really

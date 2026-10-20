@@ -6008,7 +6008,7 @@ fn main() {
 fn mir_atomics_take_no_ordering() {
     // B-2026-10-19-67: every atomic operation is sequentially consistent and
     // takes no ordering; the deprecated trailing `MemoryOrdering` still runs.
-    const SRC: &str = r#"par struct Counter { count: Atomic[i64] }
+    const SRC: &str = r#"sync struct Counter { count: Atomic[i64] }
 fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }
 fn main() {
     let c = Counter { count: Atomic.new(0) };

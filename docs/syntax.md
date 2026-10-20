@@ -133,7 +133,7 @@ resource  verb  group  stable  transparent   // effect declarations
 reads  writes  sends  receives  allocates  panics  blocks  suspends
              // effect verbs — inside a `with` clause or effect declaration
 seq  par     // `seq { ... }` / `par { ... }` — before `{`; `par for` / `par(limit: n) for`
-sync         // `sync struct` / `sync enum` (older spelling: `par struct` / `par enum`)
+sync         // `sync struct` / `sync enum` (`par struct` / `par enum` before Amendment 6, now an error with a fix to `sync`)
 layout       // `layout NAME ...`; `group` inside a layout block
 alias  independent   // resource-aliasing declarations, followed by a name
 ```

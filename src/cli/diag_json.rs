@@ -1759,11 +1759,11 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // predicate uses a construct outside the allowed
                 // constraint language (design.md § Refinement Types).
                 crate::typechecker::TypeErrorKind::InvalidRefinementPredicate => "E0256",
-                // Phase 6 `par struct` slice A — a `mut` field of a
-                // `par struct` / `par enum` is not `Atomic[T]` / `Mutex[T]`
+                // Phase 6 `sync struct` slice A — a `mut` field of a
+                // `sync struct` / `sync enum` is not `Atomic[T]` / `Mutex[T]`
                 // (design.md § Part 5b > Field constraints).
                 crate::typechecker::TypeErrorKind::ParFieldNotConcurrent => "E0257",
-                // Phase 6 `par struct` slice A — a `par struct` / `par enum`
+                // Phase 6 `sync struct` slice A — a `sync struct` / `sync enum`
                 // method declares a `mut self` receiver; only `ref self` (and
                 // consuming `self`) are permitted because `par` values are
                 // always Arc with potential multiple holders (design.md
@@ -1834,7 +1834,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",
                 crate::typechecker::TypeErrorKind::OptionalChainNotOption => "E0277",
                 // B-2026-06-30-3 — reassignment of a non-`mut` field on a
-                // `shared struct` / `par struct` (design.md § Shared Types).
+                // `shared struct` / `sync struct` (design.md § Shared Types).
                 crate::typechecker::TypeErrorKind::SharedFieldNotMut => "E0269",
                 // An `Atomic[T]` op (`load`/`store`/`fetch_*`/`swap`) called
                 // without its required explicit `MemoryOrdering` argument

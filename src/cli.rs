@@ -587,7 +587,7 @@ pub enum Command {
     Catalog {
         file: String,
     },
-    /// Preemptive `shared struct` → `par struct` migration tool. Phase-7
+    /// Preemptive `shared struct` → `sync struct` migration tool. Phase-7
     /// L215a foundation slice — covers the type-definition rewrite
     /// (keyword rename + `mut ` strip + `Mutex[T]` wrap), dry-run /
     /// `--apply` modes, and the workspace dirty-check guard. Consumer-
@@ -596,10 +596,10 @@ pub enum Command {
     /// follow-up L215b entry; the v1 surface produces a starting-point
     /// diff and leaves consumer migration as the documented hand-finish
     /// step (matches `design.md § Compiler-assisted migration from
-    /// `shared struct` to `par struct`` — "manual at the review step").
+    /// `shared struct` to `sync struct`` — "manual at the review step").
     Migrate {
         /// The type name to migrate. Currently only `shared struct` →
-        /// `par struct` is in scope (the `shared-to-par <Type>` form
+        /// `sync struct` is in scope (the `shared-to-par <Type>` form
         /// in the spec); the kind-discriminator argument is fixed by
         /// the subcommand shape rather than a separate flag.
         type_name: String,
@@ -2777,7 +2777,7 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // this loop printed only `message`, while the sibling notes loop
             // below prints `help:`. So every carefully-written migration
             // suggestion — including E_CONCURRENT_SHARED_STRUCT's, which is the
-            // one place the `par struct` answer is spelled out — was visible
+            // one place the `sync struct` answer is spelled out — was visible
             // only to a reader of the compiler source. Print it, in the same
             // `help:` shape the notes loop uses.
             let mut block = with_snippet(

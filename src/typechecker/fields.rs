@@ -313,10 +313,10 @@ impl<'a> super::TypeChecker<'a> {
                     if !is_pub {
                         self.check_cross_module_field_access(&type_name, field, span);
                     }
-                    // Shared/par struct write-permission gate. When this field
+                    // Shared/sync struct write-permission gate. When this field
                     // access is the immediate LHS of an assignment (`is_lhs`,
                     // captured at entry and reset for nested reads above), a
-                    // non-`mut` field of a `shared`/`par struct` cannot be
+                    // non-`mut` field of a `shared`/`sync struct` cannot be
                     // reassigned — an immutable field may only be set in the
                     // constructing literal. Promotes the interpreter's
                     // defense-in-depth `write_shared_struct_field` runtime guard
@@ -1360,7 +1360,7 @@ impl<'a> super::TypeChecker<'a> {
         // receiver type. Sub-item 2's `lower_path_type` intercept handles
         // the annotation side; this is its construction-site twin.
         //
-        // `par struct` literals lower to `Type::Shared` for the same reason:
+        // `sync struct` literals lower to `Type::Shared` for the same reason:
         // both `shared` and `par` are reference-semantics handle types (no
         // exclusive ownership — passing clones the handle). The Rc-vs-Arc and
         // cross-task distinctions are made via `StructInfo.is_par` in later

@@ -62,7 +62,7 @@ The fix lifts the counter into a concurrency primitive and **keeps the
 parallelism**:
 
 ```
-par struct Counter { count: Atomic[i64] }
+sync struct Counter { count: Atomic[i64] }
 // counter.count.fetch_add(1, MemoryOrdering.Relaxed) inside each branch
 ```
 

@@ -98,7 +98,7 @@ fn immutable_shared_graph_is_admitted_across_branches() {
 
 /// The promotion is only sound because the payload is immutable. Atomic RC
 /// fixes the HEADER; a `mut` field written from two branches is still a data
-/// race, which is exactly why `par struct` forces `Atomic[T]`/`Mutex[T]` on
+/// race, which is exactly why `sync struct` forces `Atomic[T]`/`Mutex[T]` on
 /// its mutable fields. Both of these must keep firing.
 #[test]
 fn shared_struct_with_a_mut_field_is_still_rejected() {

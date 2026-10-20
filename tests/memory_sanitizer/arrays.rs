@@ -7166,7 +7166,7 @@ fn main() {
     // interior. Temp, named, and the escaping-named regime in one program.
     assert_clean_asan_run(
         r#"
-par enum Pr { S(Array[String, 2]), N }
+sync enum Pr { S(Array[String, 2]), N }
 fn mkp(t: String) -> Array[String, 2] { return [f"p-{t}-aaaaaaaaaaaaaaaaaaaa", f"p-{t}-bbbbbbbbbbbbbbbbbbbb"]; }
 fn main() {
     { let s = Pr.S(mkp("t")); match s { Pr.S(x) => { println(f"par-temp:{x[0]}"); } Pr.N => { println("e"); } } }

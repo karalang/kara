@@ -2976,7 +2976,7 @@ impl Parser {
             return Item.ErrItem(SpanNode { span: self.current_span() });
         }
         // Contextual item keywords: `union NAME`, `sync struct` / `sync enum`
-        // (or the older `par struct` / `par enum`).
+        // (or the older `sync struct` / `sync enum`).
         // Each is a keyword only when the next token fits. (`use` is gone:
         // it reaches the error arm below, as the seed rejects it.)
         let w = self.word_at(0);

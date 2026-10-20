@@ -1,4 +1,4 @@
-par struct Pa { n: i64 }
+sync struct Pa { n: i64 }
 fn main() {
     let (tx, rx): (Sender[Pa], Receiver[Pa]) = Channel.new();
     let s = Pa { n: 7 };

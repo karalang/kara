@@ -1,5 +1,5 @@
 
-par struct Counters {
+sync struct Counters {
     n: Atomic[i64],
 }
 fn request_path(bytes: own Vec[u8]) -> String {

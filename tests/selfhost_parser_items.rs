@@ -73,7 +73,7 @@ const CORPUS: &[&str] = &[
     "struct Mutable { mut count: i64 }",
     "struct Mixed { pub mut head: i64, tail: Vec[i64] }",
     "shared struct Node { value: i64, next: Option[Node] }",
-    "par struct Counter { mut hits: Atomic[i64] }",
+    "sync struct Counter { mut hits: Atomic[i64] }",
     "struct Trailing { a: i64, b: bool, }",
     "struct Refs { left: ref i64, owner: Box[String] }",
     // `union` definitions — v1 FFI unions: non-generic, brace-bodied, named
@@ -91,7 +91,7 @@ const CORPUS: &[&str] = &[
     "enum Mixed2 { Unit, Pair(i64, bool), Named { x: i64, y: i64 } }",
     "pub enum Opt { Some(i64), None }",
     "shared enum Tree { Leaf(i64), Branch(Tree, Tree) }",
-    "par enum Msg { Ping, Data(Vec[u8]) }",
+    "sync enum Msg { Ping, Data(Vec[u8]) }",
     "enum One { Only }",
     "enum WithTrailing { A, B, }",
     // `fn` definitions (no generics / effects / contracts). Bodies stay within

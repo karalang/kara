@@ -5251,7 +5251,7 @@ fn test_e2e_concurrent_cas_loop_increment_no_lost_updates() {
     // freshly-observed value, so no update is ever lost.
     let out = run_program(
         r#"
-par struct Counter { v: Atomic[i64] }
+sync struct Counter { v: Atomic[i64] }
 impl Counter {
     fn get(ref self) -> i64 { self.v.load(MemoryOrdering.SeqCst) }
     fn inc(ref self) {

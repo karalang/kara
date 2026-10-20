@@ -710,7 +710,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 field,
             } => {
                 // `shared`/`par` struct field receiver — e.g. `self.count.load(..)`
-                // on a `par struct Counter { count: Atomic[i64] }`. These live in
+                // on a `sync struct Counter { count: Atomic[i64] }`. These live in
                 // `shared_types` (heap layout `{ i64 refcount, fields... }`), NOT
                 // `struct_types`, so the plain path below would error with "no LLVM
                 // type". Reuse the proven shared field-read deref: `compile_expr(inner)`
@@ -742,7 +742,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .get_field_type_at_index((idx + 1) as u32)
                                 .ok_or_else(|| {
                                     format!(
-                                        "codegen: shared/par struct '{}' field {} out of range",
+                                        "codegen: shared/sync struct '{}' field {} out of range",
                                         type_name, idx
                                     )
                                 })?;

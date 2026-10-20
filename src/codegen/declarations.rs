@@ -792,8 +792,8 @@ impl<'ctx> super::Codegen<'ctx> {
             let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
 
             if s.is_shared || s.is_par {
-                // Shared / par struct: identical heap layout
-                // `{ i64 refcount, field0, field1, … }`. A `par struct`
+                // Shared / sync struct: identical heap layout
+                // `{ i64 refcount, field0, field1, … }`. A `sync struct`
                 // (always Arc) registers here too — the only difference is
                 // that its refcount header is mutated atomically; every
                 // other path (layout, field access, method dispatch, drop)
@@ -810,7 +810,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // user-field base shifts (handled by `shared_gep_layout`).
                 // Non-par only: the two-word header + `karac_weak_*` primitives
                 // are NON-atomic. Atomic weak siblings for `par` (Arc) types are
-                // a deferred slice, so a `par struct` never gets the weak header
+                // a deferred slice, so a `sync struct` never gets the weak header
                 // here (a `weak <par T>` target is rejected upstream until then);
                 // this keeps the atomic `emit_arc_dec` free path untouched.
                 let has_weak_header =
@@ -3895,8 +3895,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
 
                 if e.is_shared || e.is_par {
-                    // Shared / par enum: identical heap layout
-                    // `{ i64 refcount, i64 tag, i64 w0, … }`. A `par enum`
+                    // Shared / sync enum: identical heap layout
+                    // `{ i64 refcount, i64 tag, i64 w0, … }`. A `sync enum`
                     // (always Arc) registers here too; only its refcount ops
                     // are atomic (see `SharedTypeInfo::is_par`).
                     let mut heap_fields: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // refcount
@@ -3950,7 +3950,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Always register in enum_layouts for tag/variant resolution.
                 // `is_shared` here means "reference-semantic heap pointer"
                 // (the read sites use it to choose pointer handling over inline
-                // values + the refcount cleanup path); a `par enum` is also a
+                // values + the refcount cleanup path); a `sync enum` is also a
                 // heap pointer, so it sets the same flag. The Rc-vs-Arc atomic
                 // distinction is made separately via `shared_types`'s `is_par`.
                 self.type_decls.enum_layouts.insert(

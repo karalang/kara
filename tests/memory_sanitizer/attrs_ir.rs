@@ -2178,7 +2178,7 @@ fn main() {
 ///   K the arm passes it to a free fn        28 -> 0
 ///   M struct-shaped variant, arm reads      30 -> 0
 ///   N a guard, then the arm reads           35 -> 0
-///   P `par enum`, the Arc release path      30 -> 0
+///   P `sync enum`, the Arc release path      30 -> 0
 ///   Q an arm reading ONE SCALAR ELEMENT     26 -> 0   (see below)
 ///
 ///   MUST STAY DECLINED -- clean on BOTH arms:
@@ -2253,7 +2253,7 @@ fn asan_shared_enum_inline_tuple_payload_has_an_owner() {
 shared enum Sh { S((String, i64)), N }
 shared enum St { S { a: (String, i64) }, N }
 shared enum Sc { S((i64, i64)), N }
-par enum Pr { S((String, i64)), N }
+sync enum Pr { S((String, i64)), N }
 
 fn mkA(t: String) -> (String, i64) { return (f"A-{t}-a", 7); }
 fn mkB(t: String) -> (String, i64) { return (f"B-{t}-aa", 7); }

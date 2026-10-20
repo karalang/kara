@@ -100,8 +100,8 @@ pub(crate) struct SliceSource<'ctx> {
 
 // ── Shared type (RC) layout ────────────────────────────────────
 
-/// Metadata for a `shared struct` / `shared enum` (RC) or a `par struct` /
-/// `par enum` (Arc) — both are heap-allocated reference-semantic types with an
+/// Metadata for a `shared struct` / `shared enum` (RC) or a `sync struct` /
+/// `sync enum` (Arc) — both are heap-allocated reference-semantic types with an
 /// identical `{ i64 refcount, … }` layout. The single distinction is whether
 /// the refcount header is mutated atomically (`par`/Arc) or not (`shared`/Rc);
 /// see `is_par` below.
@@ -116,7 +116,7 @@ pub(crate) struct SharedTypeInfo<'ctx> {
     pub(crate) field_names: Vec<String>,
     /// true if this is a shared enum (vs shared struct).
     pub(crate) is_enum: bool,
-    /// `par struct` / `par enum` (always Arc) rather than `shared struct` /
+    /// `sync struct` / `sync enum` (always Arc) rather than `shared struct` /
     /// `shared enum` (Rc). When set, every refcount increment / decrement on
     /// this type's header is emitted as an `atomicrmw` (via `emit_arc_inc` /
     /// `emit_arc_dec`) instead of a plain load/add/store — the values cross

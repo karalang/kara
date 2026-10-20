@@ -5263,7 +5263,7 @@ fn test_e2e_shared_holder_runs_its_field_drop_bodies() {
              fn mk(n: i64) -> R { return R { id: n, tag: f\"t{n}\" }; }\n";
     // Reverse declaration order (design.md § Drop ordering), then `mid`.
     const EXPECT: &str = "dR109/t109\ndR9/t9\nmid\n";
-    for kw in ["struct", "shared struct", "par struct"] {
+    for kw in ["struct", "shared struct", "sync struct"] {
         assert_eq!(
             run_program(&format!(
                 "{BODY}{kw} Sh {{ a: R, b: R }}\n\

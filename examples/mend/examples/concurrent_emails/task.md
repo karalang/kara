@@ -25,7 +25,7 @@ mutable binding; the value must be a concurrency primitive
 (`Atomic[T]` / `Mutex[T]`) or per-task state.
 
 The LLM reads the `E0408` message, lifts the counter into a
-`par struct Counter { count: Atomic[i64] }`, and the build goes clean —
+`sync struct Counter { count: Atomic[i64] }`, and the build goes clean —
 *with the parallelism preserved*. The compiler didn't force the
 programmer back to sequential code; it forced the counter to be
 race-free.

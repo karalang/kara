@@ -276,7 +276,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// base-2 layout nothing exercises yet.
     ///
     /// Everything else in the shared family renders: `shared struct` /
-    /// `par struct` handles as of B-2026-08-24-2 (including self-referential
+    /// `sync struct` handles as of B-2026-08-24-2 (including self-referential
     /// `Option[shared]` fields), `shared enum` handles as of B-2026-08-24-6,
     /// and SELF-REFERENTIAL shared enums as of B-2026-08-24-9. Nested positions
     /// are walked too, so `Vec[Sh]` and `Option[Sh]` refuse at the point of the
@@ -378,7 +378,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(head) = p.segments.last().map(String::as_str) else {
             return false;
         };
-        // B-2026-08-24-2 — a `shared struct` / `par struct` handle owns a
+        // B-2026-08-24-2 — a `shared struct` / `sync struct` handle owns a
         // refcount, so it needs the copy exactly as a Vec or String does. It is
         // not in the builtin list below because that list is spelled by NAME
         // and a shared type's name is the user's; asking `shared_types` is what

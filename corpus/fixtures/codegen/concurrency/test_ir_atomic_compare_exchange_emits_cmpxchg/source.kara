@@ -1,5 +1,5 @@
 
-par struct C { v: Atomic[i64] }
+sync struct C { v: Atomic[i64] }
 impl C {
     fn cas(ref self) -> Result[i64, i64] {
         self.v.compare_exchange(0, 5)

@@ -87,7 +87,7 @@ recordable demo headlines.
 
 `concurrent_emails` behaves like `user_lookup` under **live** Claude:
 the model already knows shared-mutable-state-under-concurrency
-discipline from its priors, so it reaches for `par struct Counter {
+discipline from its priors, so it reaches for `sync struct Counter {
 count: Atomic[i64] }` on the first attempt and never writes the naive
 shared-counter that triggers `E0408`. A live run was done (it converged
 in 3 iterations — but on Kāra *syntax* friction: comma-separated effect
