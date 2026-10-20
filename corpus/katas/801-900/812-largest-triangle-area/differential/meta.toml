@@ -1,0 +1,17 @@
+source = "kara-katas/leetcode/801-900/812-largest-triangle-area/differential.kara"
+dedup_of = []
+expect = "stdout"
+exit = 0
+tags = ["closure", "differential"]
+class = "a"
+expected_from = "legacy-run"
+legacy_backend = "legacy-build"
+legacy_exit = 0
+rules = []
+backends = []
+env = {}
+bucket = "a"
+classified_with = "3bd56f659"
+extracted_src = "fd88790a"
+model_rev = "583cfb0d"
+model_src = "fd88790a"

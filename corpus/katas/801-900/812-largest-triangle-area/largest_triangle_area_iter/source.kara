@@ -1,0 +1,76 @@
+// LeetCode 812 — Largest Triangle Area, nested iterator maxima.
+//
+// For each first corner i, the best triangle is the best over second
+// corners j of the best over third corners k, each a `map` over a range
+// and its `max`. O(n^3).
+fn largest_triangle_area(points: Vec[(i64, i64)]) -> f64 {
+    let n = points.len();
+    let best = (0..n)
+        .map(|i| {
+            (i + 1..n)
+                .map(|j| (j + 1..n).map(|k| twice_area(points[i], points[j], points[k])).max().unwrap_or(0))
+                .max()
+                .unwrap_or(0)
+        })
+        .max()
+        .unwrap_or(0);
+    best as f64 / 2.0
+}
+
+// Twice the area of the triangle abc.
+fn twice_area(a: (i64, i64), b: (i64, i64), c: (i64, i64)) -> i64 {
+    ((b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)).abs()
+}
+
+// ---- test harness ---------------------------------------------------------
+
+fn next_random(seed: mut ref i64) -> i64 {
+    *seed = (*seed * 1103515245 + 12345) % 2147483648;
+    *seed / 65536
+}
+
+fn show(points: Vec[(i64, i64)]) {
+    println(f"points = {points} -> {largest_triangle_area(points)}");
+}
+
+// `n` distinct points with coordinates from -r to r.
+fn random_points(seed: mut ref i64, n: i64, r: i64) -> Vec[(i64, i64)] {
+    let side = 2 * r + 1;
+    let mut taken = Vec.filled(side * side, false);
+    let mut points: Vec[(i64, i64)] = Vec.new();
+    while points.len() < n {
+        let x = next_random(mut seed) % side;
+        let y = next_random(mut seed) % side;
+        if not taken[x * side + y] {
+            taken[x * side + y] = true;
+            points.push((x - r, y - r));
+        }
+    }
+    points
+}
+
+fn main() {
+    show(vec![(0, 0), (0, 1), (1, 0), (0, 2), (2, 0)]);
+    show(vec![(1, 0), (0, 0), (0, 1)]);
+    show(vec![(0, 0), (1, 1), (2, 2)]);
+    show(vec![(-50, -50), (50, -50), (50, 50), (-50, 50)]);
+    show(vec![(0, 0), (3, 1), (1, 3), (2, 2), (1, 1)]);
+    show(vec![(-50, 0), (50, 1), (0, -50), (1, 49), (0, 0)]);
+    // LeetCode's largest: 50 points on the whole board, and 50 on a line.
+    let mut seed = 812;
+    show(random_points(mut seed, 50, 50));
+    let mut line: Vec[(i64, i64)] = Vec.new();
+    for i in 0..50 {
+        line.push((2 * i - 49, 49 - 2 * i));
+    }
+    println(f"50 points on a line -> {largest_triangle_area(line)}");
+    let mut total = 0.0;
+    let mut check = 0;
+    for r in 0..300 {
+        let n = 3 + next_random(mut seed) % 20;
+        let area = largest_triangle_area(random_points(mut seed, n, 2 + r % 9));
+        total += area;
+        check = (check * 131 + (area * 2.0) as i64 + r) % 1000000007;
+    }
+    println(f"300 random rounds of 3 to 22 points: total area {total}, checksum {check}");
+}
