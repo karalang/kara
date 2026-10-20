@@ -1,7 +1,11 @@
 
-effect resource Display;
+trait DisplaySink {}
+
+effect resource Display: DisplaySink;
 
 struct HtmlBuilder { buf: String }
+
+impl DisplaySink for HtmlBuilder {}
 
 fn render() with writes(Display) {
 }

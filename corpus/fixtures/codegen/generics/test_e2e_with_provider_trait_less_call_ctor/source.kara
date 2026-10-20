@@ -1,7 +1,8 @@
 
-effect resource AuditLog;
+trait Audit { fn count(self) -> i64; }
+effect resource AuditLog: Audit;
 struct FakeLog { n: i64 }
-impl FakeLog { fn count(self) -> i64 { self.n } }
+impl Audit for FakeLog { fn count(self) -> i64 { self.n } }
 fn make_log() -> FakeLog { FakeLog { n: 9 } }
 fn tally() -> i64 reads(AuditLog) { AuditLog.count() }
 fn main() reads(AuditLog) {

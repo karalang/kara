@@ -1,7 +1,11 @@
 
-effect resource AuditLog;
+trait Audit {
+    fn count(self) -> i64;
+    fn bump(self) -> i64;
+}
+effect resource AuditLog: Audit;
 struct FakeLog { n: i64 }
-impl FakeLog {
+impl Audit for FakeLog {
     fn count(self) -> i64 { self.n }
     fn bump(self) -> i64 { self.n + 7 }
 }

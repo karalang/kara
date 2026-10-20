@@ -1,8 +1,11 @@
 
 shared struct ListNode { val: i64, mut next: Option[ListNode] }
-effect resource Store;
+trait KvStore {
+    fn lookup(self, k: i64) -> Option[ListNode];
+}
+effect resource Store: KvStore;
 struct FakeStore { n: i64 }
-impl FakeStore {
+impl KvStore for FakeStore {
     fn lookup(self, k: i64) -> Option[ListNode] {
         if k == 1 {
             return Some(ListNode { val: self.n, next: None });

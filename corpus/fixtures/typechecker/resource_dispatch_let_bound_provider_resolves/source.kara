@@ -1,7 +1,10 @@
 
-effect resource Store;
+trait KvStore {
+    fn lookup(self, k: i64) -> Option[i64];
+}
+effect resource Store: KvStore;
 struct FakeStore { n: i64 }
-impl FakeStore {
+impl KvStore for FakeStore {
     fn lookup(self, k: i64) -> Option[i64] { Some(self.n) }
 }
 fn probe() reads(Store) {
