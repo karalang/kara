@@ -1136,6 +1136,18 @@ fn native_effects(base: &str, method: &str) -> Option<Vec<(Verb, &'static str, O
         ("Stdout", "println" | "print" | "flush") => vec![(Writes, "Stdout", None), HEAP],
         ("Stderr", "println" | "print" | "flush") => vec![(Writes, "Stderr", None), HEAP],
         ("format", "") | (_, "to_string") => vec![HEAP],
+        // The default providers' methods (core-semantics §14.7) are the
+        // ambient resources' natives with a receiver first, a fresh value
+        // that keys nothing.
+        ("OsEnv" | "OsClock" | "OsRandom", _) => {
+            let resource = match base {
+                "OsEnv" => "Env",
+                "OsClock" => "Clock",
+                _ => "RandomSource",
+            };
+            let effects = native_effects(resource, method)?;
+            return Some(effects.into_iter().map(|(v, r, _)| (v, r, None)).collect());
+        }
         ("Env", "args" | "var") => vec![(Reads, "Env", None), HEAP],
         ("Env", "set" | "remove") => vec![(Writes, "Env", None), HEAP],
         ("Clock", "now" | "monotonic_ns" | "wall_ns") => vec![(Reads, "Clock", None)],

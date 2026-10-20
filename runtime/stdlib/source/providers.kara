@@ -40,7 +40,7 @@ struct OsRandom {}
 
 impl RandomProvider for OsRandom {
     #[compiler_builtin]
-    fn next_u64(self) -> u64 { 0 }
+    fn next_u64(mut ref self) -> u64 { 0 }
 }
 
 effect resource Env: EnvProvider = OsEnv {};

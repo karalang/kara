@@ -1,6 +1,6 @@
 
 struct FakeRng { v: i64 }
-impl RandomProvider for FakeRng { fn next_u64(self) -> u64 { self.v as u64 } }
+impl RandomProvider for FakeRng { fn next_u64(mut ref self) -> u64 { self.v as u64 } }
 fn draw() -> i64 reads(RandomSource) { rand.next_u64() as i64 }
 fn main() reads(RandomSource) {
     with_provider[RandomSource](FakeRng { v: 777 }, || {

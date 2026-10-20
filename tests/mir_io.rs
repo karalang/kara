@@ -1909,3 +1909,51 @@ fn https_client_matches_on_both_backends() {
         assert_eq!(run(&mut Command::new(&exe)), want);
     }
 }
+
+/// A call on a program-rooted resource outside any `with_provider` goes to
+/// its default provider (core-semantics §14.7): `Env.var` and `env.var` are
+/// `OsEnv.var` on a fresh `OsEnv {}`, and so on, with the ambient output.
+const DEFAULT_PATH: &str = r#"
+fn main() {
+    match env.var("KARA_DEFINITELY_UNSET_XYZ") {
+        Ok(s) => println(s),
+        Err(_) => println("unset"),
+    }
+    Env.set("KARA_MIR_IO_DEFAULT_PATH", "set");
+    match Env.var("KARA_MIR_IO_DEFAULT_PATH") {
+        Ok(s) => println(s),
+        Err(_) => println("lost"),
+    }
+    println(env.args().len());
+    println(Clock.wall_ns() > 0);
+    println(clock.monotonic_ns() >= 0);
+    println(rand.next_u64() != RandomSource.next_u64());
+}
+"#;
+
+#[test]
+fn program_rooted_resource_calls_go_to_the_default_provider() {
+    let dir = Scratch::new("default_path");
+    let (interp, built) = interp_and_build(dir.path(), DEFAULT_PATH);
+    assert_eq!(interp, "unset\nset\n1\ntrue\ntrue\ntrue\n");
+    if let Some(built) = built {
+        assert_eq!(built, interp);
+    }
+    // The calls are the providers' methods, not the resources' own.
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .args(["__mir-run", dir.path().join("main.kara").to_str().unwrap()])
+        .env("KARAC_MIR_DUMP", "built")
+        .output()
+        .unwrap();
+    let mir = String::from_utf8_lossy(&out.stderr);
+    for call in [
+        "OsEnv.var(",
+        "OsEnv.set(",
+        "OsEnv.args(",
+        "OsClock.wall_ns(",
+        "OsClock.monotonic_ns(",
+        "OsRandom.next_u64(",
+    ] {
+        assert!(mir.contains(call), "no {call} in the MIR:\n{mir}");
+    }
+}

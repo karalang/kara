@@ -235,6 +235,7 @@ fn lower_program_inner<'a>(
         builtin_owns: FxHashMap::default(),
         builtin_mut_self: FxHashSet::default(),
         consts: FxHashMap::default(),
+        resource_defaults: FxHashMap::default(),
         bindings: FxHashMap::default(),
         statics: FxHashMap::default(),
         static_queue: Vec::new(),
@@ -562,6 +563,10 @@ struct Lcx<'a> {
     /// Module-level constants and immutable `let` bindings, by
     /// definition, with their initializers.
     consts: FxHashMap<DefId, &'a Expr>,
+    /// The default provider of each program-rooted resource the program
+    /// declares (`effect resource Env: EnvProvider = OsEnv {};`,
+    /// core-semantics §14.7), by the resource's name.
+    resource_defaults: FxHashMap<String, &'a Expr>,
     /// Every module `let` binding, by definition.
     bindings: FxHashMap<DefId, &'a ast::ModuleBinding>,
     /// The module bindings that live in a static: each one's index in
@@ -758,6 +763,11 @@ impl<'a> Lcx<'a> {
                 Item::ConstDecl(c) => {
                     if let Some(d) = self.defs.lookup(0, &c.name) {
                         self.consts.insert(d, &c.value);
+                    }
+                }
+                Item::EffectResource(r) => {
+                    if let Some(d) = &r.default {
+                        self.resource_defaults.insert(r.name.clone(), d);
                     }
                 }
                 Item::TraitDef(t) => {
@@ -10538,6 +10548,17 @@ impl<'l, 'a> Bx<'l, 'a> {
                         let by_ref = !moves && !self.is_copy(t);
                         ops.push(self.lib_arg(&a.value, by_ref)?);
                     }
+                    // `Env.var(name)` on a program-rooted resource: its
+                    // provider's method, the provider first (§14.7).
+                    let owner = self.lcx.def_owner(d);
+                    let mut name = name;
+                    if let Some(owner) = owner.filter(|_| inst_args.is_empty()) {
+                        if let Some((provider, recv)) = self.provider_recv(&owner)? {
+                            ops.insert(0, recv);
+                            let method = self.lcx.def_name(d);
+                            name = format!("{provider}.{method}");
+                        }
+                    }
                     self.call_native(&name, ops, dest);
                     return Ok(());
                 };
@@ -12354,15 +12375,22 @@ impl<'l, 'a> Bx<'l, 'a> {
         }
         if let Some(resource) = self.ambient_module(object) {
             // `env.args()`, `clock.now()`, …: a call of the ambient
-            // resource's library method, `Env.args`. Copy arguments go by
-            // value, the rest by reference.
+            // resource's library method, `Env.args`, or of its provider's.
+            // Copy arguments go by value, the rest by reference.
             let mut ops = Vec::new();
             for a in args {
                 let t = self.expr_ty(&a.value)?;
                 let by_ref = !self.is_copy(t);
                 ops.push(self.lib_arg(&a.value, by_ref)?);
             }
-            self.call_native(&format!("{resource}.{method}"), ops, dest);
+            let name = match self.provider_recv(resource)? {
+                Some((provider, recv)) => {
+                    ops.insert(0, recv);
+                    format!("{provider}.{method}")
+                }
+                None => format!("{resource}.{method}"),
+            };
+            self.call_native(&name, ops, dest);
             return Ok(());
         }
         if let Some(owner) = self.primitive_owner(object) {
@@ -13328,6 +13356,29 @@ impl<'l, 'a> Bx<'l, 'a> {
             "cpu" => "Cpu",
             _ => return None,
         })
+    }
+
+    /// The provider a call on the program-rooted resource `resource` goes
+    /// to (core-semantics §14.7): the provider type's name and a borrow of
+    /// the provider, the call's first argument. Outside any `with_provider`
+    /// that is the resource's default, a fresh value of the declaration's
+    /// constant expression. `None` for a resource the program declares no
+    /// default for, whose calls keep the resource's own natives.
+    fn provider_recv(&mut self, resource: &str) -> R<Option<(String, Operand)>> {
+        let Some(&d) = self.lcx.resource_defaults.get(resource) else {
+            return Ok(None);
+        };
+        let t = self.expr_ty(d)?;
+        let v = self.temp(t);
+        self.expr_into(d, Place::local(v))?;
+        let rt = self.tys().tcx().reference(t, true);
+        let r = self.temp(rt);
+        self.assign(
+            Place::local(r),
+            Rvalue::Ref(BorrowKind::Mut, Place::local(v)),
+        );
+        let provider = self.tys().display(t);
+        Ok(Some((provider, Operand::Move(Place::local(r)))))
     }
 
     /// A reference to the receiver, unless it already is one.
@@ -15671,7 +15722,17 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
         // B-2026-10-20-11). Legacy keeps its ambient `Env` / `Clock` /
         // `RandomSource`.
         include_str!("../../runtime/stdlib/source/providers.kara"),
+        // A call on one of the resources (`Env.var`, `env.args()`) goes to
+        // its default provider, and a `with_provider` names its trait.
         &[
+            "Env.",
+            "env.",
+            "Clock.",
+            "clock.",
+            "RandomSource.",
+            "rand.",
+            "with_provider",
+            "providers",
             "OsEnv",
             "OsClock",
             "OsRandom",
@@ -15679,7 +15740,16 @@ const BAKED_SOURCES: &[(&str, &[&str], &[&str])] = &[
             "ClockProvider",
             "RandomProvider",
         ],
-        &["OsEnv", "OsClock", "OsRandom"],
+        // A program's own `Env` (a Lua interpreter's environment) shadows
+        // the resource, whose calls then keep the resource's own natives.
+        &[
+            "OsEnv",
+            "OsClock",
+            "OsRandom",
+            "Env",
+            "Clock",
+            "RandomSource",
+        ],
     ),
     (
         // The v2 `std.regex` (B-2026-10-14-63); legacy keeps

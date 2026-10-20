@@ -370,7 +370,10 @@ trait ClockProvider {
 }
 
 trait RandomProvider {
-    fn next_u64(self) -> u64 {
+    // A draw advances the source, so it takes the provider by `mut ref`
+    // (core-semantics §14.7): two draws keep their order, and a seeded or
+    // counting fake can keep its state.
+    fn next_u64(mut ref self) -> u64 {
         panic("RandomSource.next_u64 called on a provider that does not implement it")
     }
 }

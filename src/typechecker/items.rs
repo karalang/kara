@@ -3351,6 +3351,11 @@ impl<'a> super::TypeChecker<'a> {
     /// Reuses `WrongNumberOfArgs` rather than minting a kind for one shape;
     /// the message carries the specificity.
     fn check_effect_resource_bounds(&mut self, r: &crate::ast::EffectResourceDecl) {
+        // The default provider (§14.7) is typed like any expression, so a
+        // call that falls back to it can be lowered.
+        if let Some(d) = &r.default {
+            self.infer_expr(d);
+        }
         self.check_effect_resource_bound_overlap(r);
         for bound in &r.provider_bounds {
             self.check_effect_resource_trait_arity(r, bound);

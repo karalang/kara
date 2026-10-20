@@ -52,10 +52,10 @@ fn timed(work: Fn()) -> Duration {
 
 | Function | Effects | Returns |
 |---|---|---|
-| `std.random.next_u64()` | `reads(RandomSource)` | 64 random bits |
-| `std.uuid.v4()` | `reads(RandomSource)` | A random (version 4) UUID, as a `String` in its 36-character lowercase form (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`) |
+| `std.random.next_u64()` | `writes(RandomSource)` | 64 random bits |
+| `std.uuid.v4()` | `writes(RandomSource)` | A random (version 4) UUID, as a `String` in its 36-character lowercase form (`xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`) |
 
-Cryptographic nonces also read `RandomSource`. A pseudo-random generator seeded from a constant is not `reads(RandomSource)`: it is deterministic, and its state is an ordinary value passed as an argument.
+A draw advances the source, so it writes `RandomSource`: two draws keep their order, and two `par` branches that both draw conflict. Cryptographic nonces draw too. A pseudo-random generator seeded from a constant does not touch `RandomSource`: it is deterministic, and its state is an ordinary value passed as an argument.
 
 ## `Env`
 
@@ -96,7 +96,7 @@ trait ClockProvider {
 }
 
 trait RandomProvider {
-    fn next_u64(self) -> u64
+    fn next_u64(mut ref self) -> u64
 }
 ```
 
