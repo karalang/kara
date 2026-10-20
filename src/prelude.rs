@@ -1248,6 +1248,35 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
     ),
 ];
 
+/// Whether a library source (the prelude's or a gated module's) declares
+/// `effect resource {name}`. Those resources are the library's to give a
+/// provider trait; until it does, binding one is not the user's error
+/// (core-semantics.md §14.1, B-2026-10-20-8).
+pub fn library_declares_resource(name: &str) -> bool {
+    static NAMES: LazyLock<std::collections::HashSet<String>> = LazyLock::new(|| {
+        let mut names = std::collections::HashSet::new();
+        let sources = STDLIB_SOURCES
+            .iter()
+            .map(|(_, s)| *s)
+            .chain(GATED_STDLIB_SOURCES.iter().map(|(_, s)| *s));
+        for src in sources {
+            for line in src.lines() {
+                if let Some(rest) = line.trim_start().strip_prefix("effect resource ") {
+                    let n: String = rest
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !n.is_empty() {
+                        names.insert(n);
+                    }
+                }
+            }
+        }
+        names
+    });
+    NAMES.contains(name)
+}
+
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
 /// access and cached for the lifetime of the process. The vector preserves
 /// the source order from `STDLIB_SOURCES`, so callers that need

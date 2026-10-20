@@ -19,7 +19,14 @@ talking to a concrete HTML buffer or DOM. It has no idea which target it is
 running on — and no `#[target(...)]` attribute:
 
 ```kara
-effect resource Sink;
+// The calls a component may make on `Sink` are the methods of its provider
+// trait (core-semantics.md §14.2); each target's provider implements it.
+trait Render {
+    fn heading(mut ref self, title: String);
+    fn count(mut ref self, n: i64);
+    fn parity(mut ref self, p: i64);
+}
+effect resource Sink: Render;
 
 // Target-agnostic: compiles unchanged for the server and the client.
 pub fn render_counter(count: i64) with writes(Sink) {
@@ -39,7 +46,7 @@ server, `Sink` becomes HTML:
 
 ```kara
 struct StringSink {}
-impl StringSink {
+impl Render for StringSink {
     fn heading(mut ref self, title: String) { print(f"<h1>{title}</h1>"); }
     fn count(mut ref self, n: i64) { print(f"<output id=\"count\">{n}</output>"); }
     fn parity(mut ref self, p: i64) {
@@ -59,7 +66,7 @@ host fn dom_set_count(value: i64) with writes(Dom);
 host fn dom_set_parity(value: i64) with writes(Dom);
 
 struct DomSink {}
-impl DomSink {
+impl Render for DomSink {
     fn heading(mut ref self, title: String) {}  // already in the SSR'd DOM
     fn count(mut ref self, n: i64) with writes(Dom) { dom_set_count(n); }
     fn parity(mut ref self, p: i64) with writes(Dom) { dom_set_parity(p); }

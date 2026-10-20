@@ -9383,7 +9383,8 @@ fn an_unknown_method_on_a_resource_is_an_error() {
     println("ran");
 }
 "#,
-        "no method 'bogus_op' on resource 'Clock'",
+        // Through its bound since B-2026-10-20-8 (core-semantics.md §14.2).
+        "no bound of `Clock` declares `bogus_op`",
     );
     rejected(
         "resource-module-unknown-method",
@@ -10375,4 +10376,96 @@ fn main() {
         "generic-shared-field: {err}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-10-20-8 (core-semantics.md §14.1, §14.2, §14.7): a call on a
+/// resource goes through its bounds, which are its interface. A resource with
+/// no bound has none to call and cannot be bound; a method no bound declares
+/// is an error even when the provider type has it; an `own self` method
+/// cannot be called through a resource; a fake for `Env` implements
+/// `EnvProvider` and states only the methods it uses; and until M4a only the
+/// library declares a resource's default.
+#[test]
+fn a_resource_is_called_through_its_bounds() {
+    accepted(
+        "provider-through-bound",
+        "trait Log { fn count(self) -> i64; fn bump(mut ref self) -> i64; }\n\
+         effect resource AuditLog: Log;\n\
+         struct FakeLog { n: i64 }\n\
+         impl Log for FakeLog {\n\
+             fn count(self) -> i64 { self.n }\n\
+             fn bump(mut ref self) -> i64 { self.n += 1; self.n }\n\
+         }\n\
+         fn tally() -> i64 { AuditLog.count() + AuditLog.bump() }\n\
+         fn main() { with_provider[AuditLog](FakeLog { n: 1 }, || { println(tally()); }); }\n",
+    );
+    accepted(
+        "provider-env-fake",
+        "struct FakeEnv {}\n\
+         impl EnvProvider for FakeEnv {\n\
+             fn var(self, name: Str) -> Result[String, VarError] { Ok(\"mocked\") }\n\
+         }\n\
+         fn main() {\n\
+             with_provider[Env](FakeEnv {}, || {\n\
+                 match Env.var(\"X\") { Ok(v) => println(v), Err(_) => println(\"unset\") }\n\
+             });\n\
+         }\n",
+    );
+    rejected(
+        "provider-boundless",
+        "effect resource AuditLog;\n\
+         struct FakeLog { n: i64 }\n\
+         impl FakeLog { fn count(self) -> i64 { self.n } }\n\
+         fn tally() -> i64 { AuditLog.count() }\n\
+         fn main() { with_provider[AuditLog](FakeLog { n: 1 }, || { println(tally()); }); }\n",
+        "`effect resource AuditLog;` declares no provider trait, so it cannot be bound",
+    );
+    rejected(
+        "provider-boundless-call",
+        "effect resource AuditLog;\n\
+         fn tally() -> i64 { AuditLog.count() }\n\
+         fn main() { println(tally()); }\n",
+        "so `AuditLog.count` has no method to call",
+    );
+    rejected(
+        "provider-method-not-in-bound",
+        "trait Log { fn count(self) -> i64; }\n\
+         effect resource AuditLog: Log;\n\
+         struct FakeLog { n: i64 }\n\
+         impl Log for FakeLog { fn count(self) -> i64 { self.n } }\n\
+         impl FakeLog { fn extra(self) -> i64 { 2 } }\n\
+         fn tally() -> i64 { AuditLog.extra() }\n\
+         fn main() { with_provider[AuditLog](FakeLog { n: 1 }, || { println(tally()); }); }\n",
+        "no bound of `AuditLog` declares `extra`",
+    );
+    rejected(
+        "provider-own-self",
+        "trait Log { fn take(own self) -> i64; }\n\
+         effect resource AuditLog: Log;\n\
+         struct FakeLog { n: i64 }\n\
+         impl Log for FakeLog { fn take(own self) -> i64 { self.n } }\n\
+         fn tally() -> i64 { AuditLog.take() }\n\
+         fn main() { with_provider[AuditLog](FakeLog { n: 1 }, || { println(tally()); }); }\n",
+        "`Log.take` takes `own self`",
+    );
+    rejected(
+        "provider-env-inherent-fake",
+        "struct FakeEnv {}\n\
+         impl FakeEnv { fn var(self, name: Str) -> Result[String, VarError] { Ok(\"mocked\") } }\n\
+         fn main() {\n\
+             with_provider[Env](FakeEnv {}, || {\n\
+                 match Env.var(\"X\") { Ok(v) => println(v), Err(_) => println(\"unset\") }\n\
+             });\n\
+         }\n",
+        "does not implement `EnvProvider`",
+    );
+    rejected(
+        "provider-user-default",
+        "trait Log { fn count(self) -> i64; }\n\
+         struct RealLog {}\n\
+         impl Log for RealLog { fn count(self) -> i64 { 0 } }\n\
+         effect resource AuditLog: Log = RealLog {};\n\
+         fn main() { println(AuditLog.count()); }\n",
+        "until the services track (M4a) only the library declares one",
+    );
 }

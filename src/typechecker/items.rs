@@ -3350,11 +3350,32 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// Reuses `WrongNumberOfArgs` rather than minting a kind for one shape;
     /// the message carries the specificity.
+    /// core-semantics.md §14.7 (B-2026-10-20-8): a resource with a default
+    /// is program-rooted, and until M4a only the library declares one.
+    fn check_resource_default(&mut self, r: &crate::ast::EffectResourceDecl, default: &Expr) {
+        let library = self.program.library_start.unwrap_or(usize::MAX);
+        if r.span.offset >= library {
+            return;
+        }
+        self.type_error(
+            format!(
+                "`effect resource {} = ...;` declares a default provider, which makes `{}` \
+                 program-rooted; until the services track (M4a) only the library declares \
+                 one (core-semantics.md §14.7). Drop the default and bind a provider with \
+                 `with_provider[{}](p, || ...)`",
+                r.name, r.name, r.name
+            ),
+            default.span,
+            TypeErrorKind::DeferredToM4a,
+        );
+    }
+
     fn check_effect_resource_bounds(&mut self, r: &crate::ast::EffectResourceDecl) {
         // The default provider (§14.7) is typed like any expression, so a
         // call that falls back to it can be lowered.
         if let Some(d) = &r.default {
             self.infer_expr(d);
+            self.check_resource_default(r, d);
         }
         self.check_effect_resource_bound_overlap(r);
         for bound in &r.provider_bounds {

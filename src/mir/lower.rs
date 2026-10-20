@@ -16815,6 +16815,7 @@ fn lower_source_for_checks(src: &str, check_only: bool) -> Result<Lowered, Strin
         Default::default()
     };
     mark_library_builtins(&mut program, user_len);
+    program.library_start = Some(user_len);
     // `karac check` reports only the program's own errors, so the library is
     // checked against its signatures, as check's own pipeline checks it, and
     // its bodies are not lowered (B-2026-10-19-21).

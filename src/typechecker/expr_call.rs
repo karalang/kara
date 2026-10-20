@@ -605,10 +605,41 @@ impl<'a> super::TypeChecker<'a> {
         provider_ty: &Type,
         span: &Span,
     ) {
-        let Some(bounds) = self.user_effect_resources.get(resource).cloned() else {
-            return;
+        let core = self.cli_lint_overrides.strict_core;
+        let bounds = match self.user_effect_resources.get(resource).cloned() {
+            Some(b) => b,
+            // core-semantics.md §14.7: a fake for a program-rooted resource
+            // implements the library's provider trait, whose methods all
+            // have default bodies, so it states only those it uses.
+            None if core => match crate::typechecker::library_provider_trait(resource) {
+                Some(t) => vec![crate::ast::ProviderBound {
+                    name: t.to_string(),
+                    args: None,
+                    name_span: *span,
+                }],
+                None => return,
+            },
+            None => return,
         };
         if bounds.is_empty() {
+            // §14.1: a resource with no bound is annotation-only. Legacy
+            // dispatches it through a representative impl; the core has no
+            // interface to call through. A library resource with no trait
+            // yet (`std.web`'s `Display`) is the library's gap, not the
+            // program's.
+            if core && !crate::prelude::library_declares_resource(resource) {
+                self.type_error(
+                    format!(
+                        "`effect resource {resource};` declares no provider trait, so it \
+                         cannot be bound with `with_provider` (core-semantics.md §14.1): \
+                         declare the trait its providers implement, \
+                         `effect resource {resource}: SomeTrait;`, and implement it for \
+                         the provider"
+                    ),
+                    *span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                );
+            }
             return;
         }
         // An unresolved or already-broken provider type produced its own

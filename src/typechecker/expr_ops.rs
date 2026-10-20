@@ -1361,6 +1361,11 @@ impl<'a> super::TypeChecker<'a> {
             // visible override) keep the pre-existing permissive
             // fallthrough so nothing that typechecked before is rejected.
             if let Some(bounds) = self.user_effect_resources.get(type_name).cloned() {
+                if self.cli_lint_overrides.strict_core
+                    && !self.core_resource_call_ok(type_name, &bounds, member, span)
+                {
+                    return Type::Error;
+                }
                 if let Some((params, return_type)) =
                     self.resource_dispatch_signature(type_name, &bounds, member)
                 {
@@ -1513,6 +1518,60 @@ impl<'a> super::TypeChecker<'a> {
     /// representative is authoritative. `None` when the signature
     /// can't be resolved — callers fall through to the pre-existing
     /// permissive path.
+    /// core-semantics.md §14.2 (B-2026-10-20-8): `R.m(..)` calls a method
+    /// one of `R`'s bounds declares, whatever a provider type in some binding
+    /// has, since the bound is the interface. A resource with no bound has
+    /// none to call (§14.1), and an `own self` method cannot be called
+    /// through a resource, whose provider is lent. Reports and returns false
+    /// otherwise.
+    fn core_resource_call_ok(
+        &mut self,
+        resource: &str,
+        bounds: &[crate::ast::ProviderBound],
+        member: &str,
+        span: &Span,
+    ) -> bool {
+        // A library resource with no trait yet is the library's gap.
+        if bounds.is_empty() && crate::prelude::library_declares_resource(resource) {
+            return true;
+        }
+        let message = if bounds.is_empty() {
+            format!(
+                "`effect resource {resource};` declares no provider trait, so `{resource}.{member}` \
+                 has no method to call (core-semantics.md §14.1, §14.2): declare the trait \
+                 its providers implement, `effect resource {resource}: SomeTrait;`, with \
+                 `{member}` in it"
+            )
+        } else {
+            let owner = bounds
+                .iter()
+                .find_map(|b| self.find_trait_method(&b.name, member).map(|m| (b, m)));
+            match owner {
+                None => {
+                    let names = bounds
+                        .iter()
+                        .map(|b| format!("`{}`", b.name))
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    format!(
+                        "no bound of `{resource}` declares `{member}`: {resource}'s methods are \
+                         those of {names}, whatever a provider type has (core-semantics.md \
+                         §14.2). Add `{member}` to the trait"
+                    )
+                }
+                Some((b, m)) if m.self_is_own => format!(
+                    "`{}.{member}` takes `own self`, and a provider is lent to the code that \
+                     uses `{resource}`, never given (core-semantics.md §14.2): declare it \
+                     with `self` or `mut ref self`",
+                    b.name
+                ),
+                Some(_) => return true,
+            }
+        };
+        self.type_error(message, *span, TypeErrorKind::NoMethodFound);
+        false
+    }
+
     fn resource_dispatch_signature(
         &mut self,
         resource: &str,

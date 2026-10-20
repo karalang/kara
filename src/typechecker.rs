@@ -7607,3 +7607,14 @@ fn fn_parts(t: &Type) -> Option<(&[Type], &Type, bool)> {
         _ => None,
     }
 }
+
+/// The library's provider trait for a program-rooted resource
+/// (core-semantics.md §14.7).
+pub(crate) fn library_provider_trait(resource: &str) -> Option<&'static str> {
+    match resource {
+        "Env" => Some("EnvProvider"),
+        "Clock" => Some("ClockProvider"),
+        "RandomSource" => Some("RandomProvider"),
+        _ => None,
+    }
+}

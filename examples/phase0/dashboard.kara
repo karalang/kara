@@ -13,22 +13,27 @@
 // `examples/db_pipeline` is the runnable counterpart — same shape, with an
 // `InMemoryDb` provider and a `with_provider` binding.
 
-// Declared WITHOUT a provider trait, which is the bare `effect resource R;`
-// form. These three previously read `: DatabaseProvider` — a trait this file
-// never defined and the resolver never checked (B-2026-07-29-17, fixed
-// 2026-07-29; the declaration is now validated).
-//
-// Writing the contract out is not the smaller fix it looks like. A provider
-// trait IS consulted for call typing once it exists, and these three resources
-// return different row types (`Profile`, `Vec[Order]`, `Vec[Notification]`),
-// so it needs an associated `type Row` plus a concrete `impl` per resource to
-// bind it — at which point this file has become `examples/db_pipeline`, which
-// already demonstrates exactly that with an `InMemoryDb` and a `with_provider`
-// binding. This file's subject is the effect ANALYSIS below, so it declares
-// the resources and stops there.
-effect resource UserDB;
-effect resource OrderDB;
-effect resource NotifDB;
+// Each resource names the trait its providers implement: a call on a
+// resource goes through its bounds (core-semantics.md §14.1, §14.2), so
+// `UserDB.query_one(...)` is typed by `UserStore.query_one`. One trait per
+// resource, because the three return different row types (`Profile`,
+// `Vec[Order]`, `Vec[Notification]`). `examples/db_pipeline` is the version
+// with a provider bound to them.
+trait UserStore {
+    fn query_one(self, sql: String, id: u64) -> Result[Profile, DbError];
+}
+
+trait OrderStore {
+    fn query(self, sql: String, id: u64) -> Result[Vec[Order], DbError];
+}
+
+trait NotifStore {
+    fn query(self, sql: String, id: u64) -> Result[Vec[Notification], DbError];
+}
+
+effect resource UserDB: UserStore;
+effect resource OrderDB: OrderStore;
+effect resource NotifDB: NotifStore;
 
 // The error type the three fetches share. Defined locally because this file
 // is a single-file demo: `examples/db_pipeline` declares the same vocabulary
