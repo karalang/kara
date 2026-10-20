@@ -1,0 +1,1201 @@
+# headers
+list 'a, b, c'
+  ['a', 'b', 'c'] -> 'a, b, c'
+list 'token, "quoted value", "with, comma"'
+  ['token', 'quoted value', 'with, comma'] -> 'token, "quoted value", "with, comma"'
+list '  spaced  ,  out , , ,last '
+  ['spaced', 'out', '', '', 'last'] -> 'spaced, out, "", "", last'
+list '"esc\\"aped", "back\\\\slash", plain"quote'
+  ['esc"aped', 'back\\slash', 'plain"quote'] -> '"esc\\"aped", "back\\\\slash", "plain\\"quote"'
+list 'foo="bar, baz", qux'
+  ['foo="bar, baz"', 'qux'] -> '"foo=\\"bar, baz\\"", qux'
+list '"unterminated, still going'
+  ['"unterminated, still going'] -> '"\\"unterminated, still going"'
+list ''
+  [] -> ''
+list ',,,'
+  ['', '', ''] -> '"", "", ""'
+list 'a, "", b'
+  ['a', '', 'b'] -> 'a, "", b'
+list '"x" , "y"z, w"v"'
+  ['x', '"y"z', 'w"v"'] -> 'x, "\\"y\\"z", "w\\"v\\""'
+dict 'a=b, c=d'
+  {'a': 'b', 'c': 'd'} -> 'a=b, c=d'
+dict 'realm="Login Required", charset=UTF-8'
+  {'realm': 'Login Required', 'charset': 'UTF-8'} -> 'realm="Login Required", charset=UTF-8'
+dict 'key, other=1, =nokey, empty='
+  {'key': None, 'other': '1', 'empty': ''} -> 'key, other=1, empty=""'
+dict "title*=UTF-8''%E2%82%AC%20rates, plain=x"
+  {'title': '€ rates', 'plain': 'x'} -> 'title="€ rates", plain=x'
+dict "title*=iso-8859-1'en'%A3%20pound"
+  {'title': '£ pound'} -> 'title="£ pound"'
+dict "title*=bogus''%41%42"
+  {'title': '%41%42'} -> 'title=%41%42'
+dict 'name*=noquotes'
+  {'name': 'noquotes'} -> 'name=noquotes'
+dict 'a="1", a="2", b=3'
+  {'a': '2', 'b': '3'} -> 'a=2, b=3'
+dict 'q="quoted \\"inner\\" text"'
+  {'q': 'quoted "inner" text'} -> 'q="quoted \\"inner\\" text"'
+dict 'x = 1 , y= "2" ,z =3'
+  {'x': '1', 'y': '2', 'z': '3'} -> 'x=1, y=2, z=3'
+dict 'max-age=0, no-cache, no-store, must-revalidate'
+  {'max-age': '0', 'no-cache': None, 'no-store': None, 'must-revalidate': None} -> 'max-age=0, no-cache, no-store, must-revalidate'
+dict 'username="Mufasa", realm="testrealm@host.com", nonce="dcd98b7102dd2f0e8b11d0f600bfb0c093", uri="/dir/index.html", qop=auth, nc=00000001, cnonce="0a4f113b"'
+  {'username': 'Mufasa', 'realm': 'testrealm@host.com', 'nonce': 'dcd98b7102dd2f0e8b11d0f600bfb0c093', 'uri': '/dir/index.html', 'qop': 'auth', 'nc': '00000001', 'cnonce': '0a4f113b'} -> 'username=Mufasa, realm="testrealm@host.com", nonce=dcd98b7102dd2f0e8b11d0f600bfb0c093, uri="/dir/index.html", qop=auth, nc=00000001, cnonce=0a4f113b'
+options 'text/html; charset=UTF-8'
+  ('text/html', {'charset': 'UTF-8'}) -> 'text/html; charset=UTF-8'
+options ''
+  ('', {}) -> ''
+options 'text/plain'
+  ('text/plain', {}) -> 'text/plain'
+options 'multipart/form-data; boundary="----WebKitFormBoundary7MA4YWxkTrZu0gW"'
+  ('multipart/form-data', {'boundary': '----WebKitFormBoundary7MA4YWxkTrZu0gW'}) -> 'multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW'
+options 'attachment; filename="report 2024.pdf"; size=1024'
+  ('attachment', {'filename': 'report 2024.pdf', 'size': '1024'}) -> 'attachment; filename="report 2024.pdf"; size=1024'
+options "attachment; filename*=UTF-8''na%C3%AFve%20file.txt"
+  ('attachment', {'filename': 'naïve file.txt'}) -> 'attachment; filename="naïve file.txt"'
+options 'attachment; filename*=utf-8\'en\'%E2%82%AC%20rates.csv; filename="EURO rates.csv"'
+  ('attachment', {'filename': 'EURO rates.csv'}) -> 'attachment; filename="EURO rates.csv"'
+options 'form-data; name*0="long"; name*1="-part"; name*2="-name"'
+  ('form-data', {'name': 'long-part-name'}) -> 'form-data; name=long-part-name'
+options 'form-data; title*0*=us-ascii\'en\'This%20is%20even%20more%20; title*1*=%2A%2A%2Afun%2A%2A%2A%20; title*2="isn\'t it!"'
+  ('form-data', {'title': "This is even more ***fun*** isn't it!"}) -> 'form-data; title="This is even more ***fun*** isn\'t it!"'
+options 'text/html; Charset="utf-8"; LEVEL=1'
+  ('text/html', {'charset': 'utf-8', 'level': '1'}) -> 'text/html; charset=utf-8; level=1'
+options 'text/html; charset'
+  ('text/html', {}) -> 'text/html'
+options 'text/html; =value; key=; ok=1'
+  ('text/html', {'ok': '1'}) -> 'text/html; ok=1'
+options 'text/html; "quoted"=x; next=y'
+  ('text/html', {'next': 'y'}) -> 'text/html; next=y'
+options 'form-data; name="a\\"b"; filename="c\\\\d.txt"'
+  ('form-data', {'name': 'a"b', 'filename': 'c\\d.txt'}) -> 'form-data; name="a\\"b"; filename="c\\\\d.txt"'
+options 'form-data; name="html%22quote"'
+  ('form-data', {'name': 'html"quote'}) -> 'form-data; name="html\\"quote"'
+options '  text/css  ;  charset = utf-8  '
+  ('text/css', {}) -> 'text/css'
+options 'application/json;;;charset=utf-8'
+  ('application/json', {'charset': 'utf-8'}) -> 'application/json; charset=utf-8'
+options 'text/plain; a="semi;colon"; b=2'
+  ('text/plain', {'a': 'semi;colon', 'b': '2'}) -> 'text/plain; a="semi;colon"; b=2'
+options 'text/plain; a="unterminated; b=2'
+  ('text/plain', {'b': '2'}) -> 'text/plain; b=2'
+options "image/png; name*=bogus''x%20y"
+  ('image/png', {'name': 'x%20y'}) -> 'image/png; name=x%20y'
+options 'message/external-body; access-type=URL; URL*0="ftp://"; URL*1="cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar"'
+  ('message/external-body', {'access-type': 'URL', 'url': 'ftp://cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar'}) -> 'message/external-body; access-type=URL; url="ftp://cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar"'
+options "text/plain; x*=''%41"
+  ('text/plain', {'x': '%41'}) -> 'text/plain; x=%41'
+accept 'gzip, deflate, br'
+  Accept([('gzip', 1), ('deflate', 1), ('br', 1)])
+  header='gzip,deflate,br' best='gzip' provided=True
+  'gzip': quality=1 in=True find=0
+  'br': quality=1 in=True find=2
+  'identity': quality=0 in=False find=-1
+  'compress': quality=0 in=False find=-1
+  best_match='gzip' with default='gzip'
+accept 'gzip;q=1.0, identity; q=0.5, *;q=0'
+  Accept([('gzip', 1.0), ('identity', 0.5), ('*', 0.0)])
+  header='gzip,identity;q=0.5,*;q=0.0' best='gzip' provided=True
+  'gzip': quality=1.0 in=True find=0
+  'identity': quality=0.5 in=True find=1
+  'br': quality=0.0 in=True find=2
+  best_match='gzip' with default='gzip'
+accept 'br;q=0.9, gzip;q=0.9, *;q=0.1'
+  Accept([('br', 0.9), ('gzip', 0.9), ('*', 0.1)])
+  header='br;q=0.9,gzip;q=0.9,*;q=0.1' best='br' provided=True
+  'zstd': quality=0.1 in=True find=2
+  'gzip': quality=0.9 in=True find=1
+  'br': quality=0.9 in=True find=0
+  best_match='gzip' with default='gzip'
+accept 'deflate;q=2, gzip;q=-1, br;q=abc, identity;q=0.001, x;q=1.50'
+  Accept([('identity', 0.001)])
+  header='identity;q=0.001' best='identity' provided=True
+  'deflate': quality=0 in=False find=-1
+  'identity': quality=0.001 in=True find=0
+  best_match='identity' with default='identity'
+accept ''
+  Accept([])
+  header='' best=None provided=False
+  'gzip': quality=0 in=False find=-1
+  best_match=None with default='fallback'
+accept '*'
+  Accept([('*', 1)])
+  header='*' best='*' provided=True
+  'anything': quality=1 in=True find=0
+  'else': quality=1 in=True find=0
+  best_match='anything' with default='anything'
+mime 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+  MIMEAccept([('text/html', 1), ('application/xhtml+xml', 1), ('image/avif', 1), ('image/webp', 1), ('application/xml', 0.9), ('*/*', 0.8)])
+  header='text/html,application/xhtml+xml,image/avif,image/webp,application/xml;q=0.9,*/*;q=0.8' best='text/html' provided=True
+  'text/html': quality=1 in=True find=0
+  'application/json': quality=0.8 in=True find=5
+  'image/png': quality=0.8 in=True find=5
+  'text/plain': quality=0.8 in=True find=5
+  best_match='text/html' with default='text/html'
+  html=True xhtml=True json=True
+mime 'application/json, text/plain;q=0.5'
+  MIMEAccept([('application/json', 1), ('text/plain', 0.5)])
+  header='application/json,text/plain;q=0.5' best='application/json' provided=True
+  'text/html': quality=0 in=False find=-1
+  'text/plain': quality=0.5 in=True find=1
+  'application/json': quality=1 in=True find=0
+  best_match='application/json' with default='application/json'
+  html=False xhtml=False json=True
+mime 'text/*;q=0.3, text/html;q=0.7, text/html;level=1, text/html;level=2;q=0.4, */*;q=0.5'
+  MIMEAccept([('text/html; level=1', 1), ('text/html; level=2', 0.4), ('text/html', 0.7), ('text/*', 0.3), ('*/*', 0.5)])
+  header='text/html; level=1,text/html; level=2;q=0.4,text/html;q=0.7,text/*;q=0.3,*/*;q=0.5' best='text/html; level=1' provided=True
+  'text/html': quality=0.7 in=True find=2
+  'text/html;level=1': quality=1 in=True find=0
+  'text/html;level=2': quality=0.4 in=True find=1
+  'text/plain': quality=0.3 in=True find=3
+  'image/jpeg': quality=0.5 in=True find=4
+  'text/html;level=3': quality=0.3 in=True find=3
+  best_match='text/html;level=1' with default='text/html;level=1'
+  html=True xhtml=True json=True
+mime 'image/*'
+  MIMEAccept([('image/*', 1)])
+  header='image/*' best='image/*' provided=True
+  'image/png': quality=1 in=True find=0
+  'image/svg+xml': quality=1 in=True find=0
+  'text/plain': quality=0 in=False find=-1
+  best_match='image/png' with default='image/png'
+  html=False xhtml=False json=False
+mime '*/*'
+  MIMEAccept([('*/*', 1)])
+  header='*/*' best='*/*' provided=True
+  'application/json': quality=1 in=True find=0
+  'text/html': quality=1 in=True find=0
+  best_match='application/json' with default='application/json'
+  html=True xhtml=True json=True
+mime 'text/plain; format=flowed; charset=utf-8'
+  MIMEAccept([('text/plain; format=flowed; charset=utf-8', 1)])
+  header='text/plain; format=flowed; charset=utf-8' best='text/plain; format=flowed; charset=utf-8' provided=True
+  'text/plain;charset=utf-8;format=flowed': quality=1 in=True find=0
+  'text/plain': quality=0 in=False find=-1
+  'text/plain;format=fixed': quality=0 in=False find=-1
+  best_match='text/plain;charset=utf-8;format=flowed' with default='text/plain;charset=utf-8;format=flowed'
+  html=False xhtml=False json=False
+mime 'bogus, */html, application/json;q=0.0'
+  MIMEAccept([('application/json', 0.0), ('bogus', 1), ('*/html', 1)])
+  header='application/json;q=0.0,bogus,*/html' best='application/json' provided=True
+  'application/json': quality=0.0 in=True find=0
+  'text/html': quality=0 in=False find=-1
+  best_match=None with default='fallback'
+  html=False xhtml=False json=True
+mime 'text/html'
+  MIMEAccept([('text/html', 1)])
+  header='text/html' best='text/html' provided=True
+  'texthtml': ! ValueError: invalid mimetype 'texthtml'
+  best_match ! ValueError: invalid mimetype 'texthtml'
+  html=True xhtml=False json=False
+mime 'text/html'
+  MIMEAccept([('text/html', 1)])
+  header='text/html' best='text/html' provided=True
+  '*/html': ! ValueError: invalid mimetype '*/html'
+  best_match ! ValueError: invalid mimetype '*/html'
+  html=True xhtml=False json=False
+mime 'application/vnd.api+json;q=0.9, application/json'
+  MIMEAccept([('application/json', 1), ('application/vnd.api+json', 0.9)])
+  header='application/json,application/vnd.api+json;q=0.9' best='application/json' provided=True
+  'application/vnd.api+json': quality=0.9 in=True find=1
+  'application/json': quality=1 in=True find=0
+  '*/*': quality=1 in=True find=0
+  best_match='application/json' with default='application/json'
+  html=False xhtml=False json=True
+mime ''
+  MIMEAccept([])
+  header='' best=None provided=False
+  'text/html': quality=0 in=False find=-1
+  best_match=None with default='fallback'
+  html=False xhtml=False json=False
+lang 'da, en-gb;q=0.8, en;q=0.7'
+  LanguageAccept([('da', 1), ('en-gb', 0.8), ('en', 0.7)])
+  header='da,en-gb;q=0.8,en;q=0.7' best='da' provided=True
+  'en-US': quality=0 in=False find=-1
+  'en-GB': quality=0.8 in=True find=1
+  'da': quality=1 in=True find=0
+  'fr': quality=0 in=False find=-1
+  best_match='da' with default='da'
+lang 'de-CH, de;q=0.9, *;q=0.5'
+  LanguageAccept([('de-CH', 1), ('de', 0.9), ('*', 0.5)])
+  header='de-CH,de;q=0.9,*;q=0.5' best='de-CH' provided=True
+  'fr': quality=0.5 in=True find=2
+  'de-DE': quality=0.5 in=True find=2
+  'en': quality=0.5 in=True find=2
+  best_match='fr' with default='fr'
+lang 'en-US'
+  LanguageAccept([('en-US', 1)])
+  header='en-US' best='en-US' provided=True
+  'en': quality=0 in=False find=-1
+  'de': quality=0 in=False find=-1
+  best_match='en' with default='en'
+lang 'en'
+  LanguageAccept([('en', 1)])
+  header='en' best='en' provided=True
+  'en-US': quality=0 in=False find=-1
+  'en-GB': quality=0 in=False find=-1
+  best_match='en-US' with default='en-US'
+lang 'zh-Hant-TW, zh;q=0.8'
+  LanguageAccept([('zh-Hant-TW', 1), ('zh', 0.8)])
+  header='zh-Hant-TW,zh;q=0.8' best='zh-Hant-TW' provided=True
+  'zh-TW': quality=0 in=False find=-1
+  'zh-Hans': quality=0 in=False find=-1
+  'zh-Hant-TW': quality=1 in=True find=0
+  best_match='zh-Hant-TW' with default='zh-Hant-TW'
+lang 'pt_BR, pt;q=0.5'
+  LanguageAccept([('pt_BR', 1), ('pt', 0.5)])
+  header='pt_BR,pt;q=0.5' best='pt_BR' provided=True
+  'pt-br': quality=1 in=True find=0
+  'es': quality=0 in=False find=-1
+  best_match='pt-br' with default='pt-br'
+lang 'fr-CA;q=0.9, es'
+  LanguageAccept([('es', 1), ('fr-CA', 0.9)])
+  header='es,fr-CA;q=0.9' best='es' provided=True
+  'de': quality=0 in=False find=-1
+  'it': quality=0 in=False find=-1
+  best_match=None with default='fallback'
+lang ''
+  LanguageAccept([])
+  header='' best=None provided=False
+  'en': quality=0 in=False find=-1
+  'de': quality=0 in=False find=-1
+  best_match=None with default='fallback'
+lang '*'
+  LanguageAccept([('*', 1)])
+  header='*' best='*' provided=True
+  'ja': quality=1 in=True find=0
+  'ko': quality=1 in=True find=0
+  best_match='ja' with default='ja'
+charset 'iso-8859-5, unicode-1-1;q=0.8'
+  CharsetAccept([('iso-8859-5', 1), ('unicode-1-1', 0.8)])
+  header='iso-8859-5,unicode-1-1;q=0.8' best='iso-8859-5' provided=True
+  'utf-8': quality=0 in=False find=-1
+  'iso-8859-5': quality=1 in=True find=0
+  best_match='iso-8859-5' with default='iso-8859-5'
+charset 'UTF8, Latin-1;q=0.5, *;q=0.1'
+  CharsetAccept([('UTF8', 1), ('Latin-1', 0.5), ('*', 0.1)])
+  header='UTF8,Latin-1;q=0.5,*;q=0.1' best='UTF8' provided=True
+  'utf-8': quality=1 in=True find=0
+  'iso-8859-1': quality=0.5 in=True find=1
+  'ascii': quality=0.1 in=True find=2
+  'cp1252': quality=0.1 in=True find=2
+  best_match='utf-8' with default='utf-8'
+charset 'us-ascii;q=0.7, windows-1252'
+  CharsetAccept([('windows-1252', 1), ('us-ascii', 0.7)])
+  header='windows-1252,us-ascii;q=0.7' best='windows-1252' provided=True
+  'ascii': quality=0.7 in=True find=1
+  'cp1252': quality=1 in=True find=0
+  'latin9': quality=0 in=False find=-1
+  best_match='cp1252' with default='cp1252'
+charset 'x-made-up, Shift_JIS;q=0.2'
+  CharsetAccept([('x-made-up', 1), ('Shift_JIS', 0.2)])
+  header='x-made-up,Shift_JIS;q=0.2' best='x-made-up' provided=True
+  'sjis': quality=0.2 in=True find=1
+  'X-MADE-UP': quality=1 in=True find=0
+  'koi8-r': quality=0 in=False find=-1
+  best_match='X-MADE-UP' with default='X-MADE-UP'
+charset 'utf 8, utf_16;q=0.4'
+  CharsetAccept([('utf 8', 1), ('utf_16', 0.4)])
+  header='utf 8,utf_16;q=0.4' best='utf 8' provided=True
+  'UTF-8': quality=1 in=True find=0
+  'utf16': quality=0.4 in=True find=1
+  'UTF-16LE': quality=0 in=False find=-1
+  best_match='UTF-8' with default='UTF-8'
+cc 'max-age=3600, no-cache'
+  <RequestCacheControl max-age='3600' no-cache=None> provided=True
+  no_cache=True no_store=False max_age=3600 max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header='max-age=3600, no-cache'
+cc 'no-store'
+  <RequestCacheControl no-store=None> provided=True
+  no_cache=False no_store=True max_age=None max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header='no-store'
+cc 'max-stale, min-fresh=60, only-if-cached'
+  <RequestCacheControl max-stale=None min-fresh='60' only-if-cached=None> provided=True
+  no_cache=False no_store=False max_age=None max_stale=True min_fresh=60 no_transform=False only_if_cached=True stale_if_error=None
+  header='max-stale, min-fresh=60, only-if-cached'
+cc 'max-stale=120, no-transform'
+  <RequestCacheControl max-stale='120' no-transform=None> provided=True
+  no_cache=False no_store=False max_age=None max_stale=120 min_fresh=None no_transform=True only_if_cached=False stale_if_error=None
+  header='max-stale=120, no-transform'
+cc 'max-age=, max-age=abc'
+  <RequestCacheControl max-age='abc'> provided=True
+  no_cache=False no_store=False max_age=None max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header='max-age=abc'
+cc 'max-age=+30, stale-if-error=1_000'
+  <RequestCacheControl max-age='+30' stale-if-error='1_000'> provided=True
+  no_cache=False no_store=False max_age=30 max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=1000
+  header='max-age=+30, stale-if-error=1_000'
+cc 'max-age="42", private="Set-Cookie", community="UCI"'
+  <RequestCacheControl community='UCI' max-age='42' private='Set-Cookie'> provided=True
+  no_cache=False no_store=False max_age=42 max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header='max-age=42, private=Set-Cookie, community=UCI'
+cc 'no-cache="set-cookie, set-cookie2", must-revalidate'
+  <RequestCacheControl must-revalidate=None no-cache='set-cookie, set-cookie2'> provided=True
+  no_cache=True no_store=False max_age=None max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header='no-cache="set-cookie, set-cookie2", must-revalidate'
+cc ''
+  <RequestCacheControl > provided=True
+  no_cache=False no_store=False max_age=None max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header=''
+cc 'MAX-AGE=10, Max-Age=20'
+  <RequestCacheControl MAX-AGE='10' Max-Age='20'> provided=True
+  no_cache=False no_store=False max_age=None max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header='MAX-AGE=10, Max-Age=20'
+cc 'max-age= -5'
+  <RequestCacheControl max-age='-5'> provided=True
+  no_cache=False no_store=False max_age=-5 max_stale=None min_fresh=None no_transform=False only_if_cached=False stale_if_error=None
+  header='max-age=-5'
+rcc 'public, max-age=31536000, immutable'
+  <ResponseCacheControl immutable=None max-age='31536000' public=None> provided=True
+  no_cache=None public=True private=None must_revalidate=False proxy_revalidate=False s_maxage=None immutable=True must_understand=False stale_while_revalidate=None max_age=31536000 no_store=False no_transform=False stale_if_error=None
+  header='public, max-age=31536000, immutable'
+  changed='public, max-age=120, immutable, no-cache'
+rcc 'private, no-cache, must-revalidate, proxy-revalidate'
+  <ResponseCacheControl must-revalidate=None no-cache=None private=None proxy-revalidate=None> provided=True
+  no_cache=True public=False private=True must_revalidate=True proxy_revalidate=True s_maxage=None immutable=False must_understand=False stale_while_revalidate=None max_age=None no_store=False no_transform=False stale_if_error=None
+  header='private, no-cache, must-revalidate, proxy-revalidate'
+  changed='no-cache, must-revalidate, proxy-revalidate, max-age=120, public'
+rcc 'no-cache="Set-Cookie", private=x, s-maxage=600'
+  <ResponseCacheControl no-cache='Set-Cookie' private='x' s-maxage='600'> provided=True
+  no_cache='Set-Cookie' public=False private='x' must_revalidate=False proxy_revalidate=False s_maxage=600 immutable=False must_understand=False stale_while_revalidate=None max_age=None no_store=False no_transform=False stale_if_error=None
+  header='no-cache=Set-Cookie, private=x, s-maxage=600'
+  changed='no-cache, max-age=120, public'
+rcc 's-maxage=abc, stale-while-revalidate=30, must-understand, no-store'
+  <ResponseCacheControl must-understand=None no-store=None s-maxage='abc' stale-while-revalidate='30'> provided=True
+  no_cache=None public=False private=None must_revalidate=False proxy_revalidate=False s_maxage=None immutable=False must_understand=True stale_while_revalidate=30 max_age=None no_store=True no_transform=False stale_if_error=None
+  header='s-maxage=abc, stale-while-revalidate=30, must-understand, no-store'
+  changed='stale-while-revalidate=30, must-understand, no-store, max-age=120, no-cache, public'
+rcc 'max-age=0'
+  <ResponseCacheControl max-age='0'> provided=True
+  no_cache=None public=False private=None must_revalidate=False proxy_revalidate=False s_maxage=None immutable=False must_understand=False stale_while_revalidate=None max_age=0 no_store=False no_transform=False stale_if_error=None
+  header='max-age=0'
+  changed='max-age=120, no-cache, public'
+csp "default-src 'self'; img-src *; media-src media1.com media2.com; script-src userscripts.example.com"
+  <ContentSecurityPolicy default-src="'self'" img-src='*' media-src='media1.com media2.com' script-src='userscripts.example.com'>
+  default_src="'self'" script_src='userscripts.example.com' report_uri=None
+  header="default-src 'self'; img-src *; media-src media1.com media2.com; script-src userscripts.example.com"
+csp "default-src 'none';script-src 'self' 'unsafe-inline';; report-uri /csp-report ;upgrade-insecure-requests"
+  <ContentSecurityPolicy default-src="'none'" report-uri='/csp-report' script-src="'self' 'unsafe-inline'">
+  default_src="'none'" script_src="'self' 'unsafe-inline'" report_uri='/csp-report'
+  header="default-src 'none'; script-src 'self' 'unsafe-inline'; report-uri /csp-report"
+csp "  frame-ancestors   'none'  ;  default-src 'self' ; default-src https:"
+  <ContentSecurityPolicy default-src='https:' frame-ancestors="'none'">
+  default_src='https:' script_src=None report_uri=None
+  header="frame-ancestors 'none'; default-src https:"
+set 'token, "quoted value"'
+  HeaderSet(['token', 'quoted value']) len=2 header='token, "quoted value"'
+  'token' in=True find('origin')=-1
+  after='"quoted value", X-New'
+set 'Accept-Encoding, accept-encoding, Origin, User-Agent'
+  HeaderSet(['Accept-Encoding', 'accept-encoding', 'Origin', 'User-Agent']) len=3 header='Accept-Encoding, accept-encoding, Origin, User-Agent'
+  'token' in=False find('origin')=2
+  after='Accept-Encoding, accept-encoding, Origin, User-Agent, X-New'
+set ''
+  HeaderSet([]) len=0 header=''
+  'token' in=False find('origin')=-1
+  after='X-New'
+set 'GET, HEAD, "PO\\"ST"'
+  HeaderSet(['GET', 'HEAD', 'PO"ST']) len=3 header='GET, HEAD, "PO\\"ST"'
+  'token' in=False find('origin')=-1
+  after='GET, HEAD, "PO\\"ST", X-New'
+range 'bytes=0-499'
+  units='bytes' ranges=[(0, 500)] header='bytes=0-499'
+  1000: for_length=(0, 500) content_range='bytes 0-499/1000' made='bytes 0-499/1000'
+  300: for_length=(0, 300) content_range='bytes 0-299/300' made='bytes 0-299/300'
+  0: for_length=None content_range=None made=None
+range 'bytes=500-999'
+  units='bytes' ranges=[(500, 1000)] header='bytes=500-999'
+  1000: for_length=(500, 1000) content_range='bytes 500-999/1000' made='bytes 500-999/1000'
+  700: for_length=(500, 700) content_range='bytes 500-699/700' made='bytes 500-699/700'
+  500: for_length=None content_range=None made=None
+range 'bytes=-500'
+  units='bytes' ranges=[(-500, None)] header='bytes=-500'
+  1000: for_length=(500, 1000) content_range='bytes 500-999/1000' made='bytes 500-999/1000'
+  200: for_length=None content_range=None made=None
+range 'bytes=9500-'
+  units='bytes' ranges=[(9500, None)] header='bytes=9500-'
+  10000: for_length=(9500, 10000) content_range='bytes 9500-9999/10000' made='bytes 9500-9999/10000'
+  9000: for_length=None content_range=None made=None
+range 'bytes=0-0,-1'
+  units='bytes' ranges=[(0, 1), (-1, None)] header='bytes=0-0,-1'
+  10: for_length=None content_range=None made=None
+range 'bytes=0-99, 100-199'
+  units='bytes' ranges=[(0, 100), (100, 200)] header='bytes=0-99,100-199'
+  1000: for_length=None content_range=None made=None
+range 'Bytes = 10-20'
+  units='bytes' ranges=[(10, 21)] header='bytes=10-20'
+  100: for_length=(10, 21) content_range='bytes 10-20/100' made='bytes 10-20/100'
+range 'items=0-9'
+  units='items' ranges=[(0, 10)] header='items=0-9'
+  100: for_length=None content_range=None made=None
+range 'bytes=5-1'
+  None
+range 'bytes=1-2,0-3'
+  None
+range 'bytes=-5,10-20'
+  None
+range 'bytes=abc-def'
+  None
+range 'bytes=+1-2'
+  None
+range 'bytes='
+  None
+range 'bytes'
+  None
+range 'bytes=0-'
+  units='bytes' ranges=[(0, None)] header='bytes=0-'
+  0: for_length=None content_range=None made=None
+  5: for_length=(0, 5) content_range='bytes 0-4/5' made='bytes 0-4/5'
+range 'bytes=-0'
+  units='bytes' ranges=[(0, None)] header='bytes=0-'
+  10: for_length=(0, 10) content_range='bytes 0-9/10' made='bytes 0-9/10'
+range 'bytes= 2 - 5 '
+  units='bytes' ranges=[(2, 6)] header='bytes=2-5'
+  10: for_length=(2, 6) content_range='bytes 2-5/10' made='bytes 2-5/10'
+range 'bytes=0-4,5-9,10-14'
+  units='bytes' ranges=[(0, 5), (5, 10), (10, 15)] header='bytes=0-4,5-9,10-14'
+  20: for_length=None content_range=None made=None
+crange 'bytes 0-499/1234'
+  units='bytes' start=0 stop=500 length=1234 header='bytes 0-499/1234' bool=True
+crange 'bytes 500-1233/1234'
+  units='bytes' start=500 stop=1234 length=1234 header='bytes 500-1233/1234' bool=True
+crange 'bytes */1234'
+  units='bytes' start=None stop=None length=1234 header='bytes */1234' bool=True
+crange 'bytes */*'
+  units='bytes' start=None stop=None length=None header='bytes */*' bool=True
+crange 'bytes 0-499/*'
+  units='bytes' start=0 stop=500 length=None header='bytes 0-499/*' bool=True
+crange 'bytes 499-0/1234'
+  None
+crange 'bytes 0-1234/1234'
+  units='bytes' start=0 stop=1235 length=1234 header='bytes 0-1234/1234' bool=True
+crange 'bytes 10-20'
+  None
+crange 'bytes'
+  None
+crange 'bytes x-y/10'
+  None
+crange 'items 0-9/100'
+  units='items' start=0 stop=10 length=100 header='items 0-9/100' bool=True
+crange '  bytes   21010-47021/47022  '
+  units='bytes' start=21010 stop=47022 length=47022 header='bytes 21010-47021/47022' bool=True
+crange 'bytes 0-+5/10'
+  None
+ifrange '"abc123"'
+  etag='abc123' date=None header='"abc123"'
+ifrange 'W/"weak-one"'
+  etag='weak-one' date=None header='"weak-one"'
+ifrange 'Sun, 06 Nov 1994 08:49:37 GMT'
+  etag=None date=1994-11-06T08:49:37+00:00 header='Sun, 06 Nov 1994 08:49:37 GMT'
+ifrange 'Tue, 15 Nov 1994 12:45:26 +0100'
+  etag=None date=1994-11-15T12:45:26+01:00 header='Tue, 15 Nov 1994 11:45:26 GMT'
+ifrange 'not a date and not quoted'
+  etag='not a date and not quoted' date=None header='"not a date and not quoted"'
+ifrange ''
+  etag=None date=None header=''
+etags '"xyzzy"'
+  header='"xyzzy"' bool=True len=1 star=False
+  'xyzzy': contains=True weak=True raw=True is_weak=False
+  '"xyzzy"': contains=False weak=False raw=True is_weak=False
+  'W/"xyzzy"': contains=False weak=False raw=True is_weak=False
+  'other': contains=False weak=False raw=False is_weak=False
+etags '"xyzzy", "r2d2xxxx", "c3piozzzz"'
+  header='"c3piozzzz", "r2d2xxxx", "xyzzy"' bool=True len=3 star=False
+  'r2d2xxxx': contains=True weak=True raw=True is_weak=False
+  'c3piozzzz': contains=True weak=True raw=True is_weak=False
+  'xyzzy': contains=True weak=True raw=True is_weak=False
+etags 'W/"xyzzy", W/"r2d2xxxx", "c3piozzzz"'
+  header='"c3piozzzz", W/"r2d2xxxx", W/"xyzzy"' bool=True len=1 star=False
+  'xyzzy': contains=False weak=True raw=False is_weak=True
+  'W/"xyzzy"': contains=False weak=False raw=True is_weak=False
+  '"xyzzy"': contains=False weak=False raw=False is_weak=False
+  'c3piozzzz': contains=True weak=True raw=True is_weak=False
+etags '*'
+  header='*' bool=True len=0 star=True
+  'anything': contains=True weak=True raw=True is_weak=False
+  'W/"x"': contains=True weak=True raw=True is_weak=False
+etags '"a",W/"b" , "c",w/"d"'
+  header='"c", "a", W/"d", W/"b"' bool=True len=2 star=False
+  'a': contains=True weak=True raw=True is_weak=False
+  'b': contains=False weak=True raw=False is_weak=True
+  'c': contains=True weak=True raw=True is_weak=False
+  'd': contains=False weak=True raw=False is_weak=True
+etags 'unquoted, "q", W/raw'
+  header='"q", "unquoted", W/"raw"' bool=True len=2 star=False
+  'unquoted': contains=True weak=True raw=True is_weak=False
+  'q': contains=True weak=True raw=True is_weak=False
+  'raw': contains=False weak=True raw=False is_weak=True
+etags '"one", *'
+  header='*' bool=True len=0 star=True
+  'zzz': contains=True weak=True raw=True is_weak=False
+etags '"", W/""'
+  header='"None", W/"None"' bool=True len=1 star=False
+  '""': contains=False weak=False raw=False is_weak=False
+  'x': contains=False weak=False raw=False is_weak=False
+etags '"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"'
+  header='"alpha", "beta", "theta", "iota", "zeta", "eta", "gamma", "delta", "epsilon"' bool=True len=9 star=False
+  'eta': contains=True weak=True raw=True is_weak=False
+  'kappa': contains=False weak=False raw=False is_weak=False
+etags ''
+  header='' bool=False len=0 star=False
+  'x': contains=False weak=False raw=False is_weak=False
+date 'Sun, 06 Nov 1994 08:49:37 GMT'
+  1994-11-06T08:49:37+00:00 -> 'Sun, 06 Nov 1994 08:49:37 GMT'
+date 'Sunday, 06-Nov-94 08:49:37 GMT'
+  1994-11-06T08:49:37+00:00 -> 'Sun, 06 Nov 1994 08:49:37 GMT'
+date 'Sun Nov  6 08:49:37 1994'
+  1994-11-06T08:49:37+00:00 -> 'Sun, 06 Nov 1994 08:49:37 GMT'
+date 'Tue, 15 Nov 1994 12:45:26 +0100'
+  1994-11-15T12:45:26+01:00 -> 'Tue, 15 Nov 1994 11:45:26 GMT'
+date 'Tue, 15 Nov 1994 12:45:26 -0530'
+  1994-11-15T12:45:26-05:30 -> 'Tue, 15 Nov 1994 18:15:26 GMT'
+date 'Wed, 21 Oct 2015 07:28:00 EST'
+  2015-10-21T07:28:00-05:00 -> 'Wed, 21 Oct 2015 12:28:00 GMT'
+date 'Wed, 21 Oct 2015 07:28:00 PDT'
+  2015-10-21T07:28:00-07:00 -> 'Wed, 21 Oct 2015 14:28:00 GMT'
+date '21 Oct 2015 07:28 GMT'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Wed, 21 Oct 2015 07:28:00'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Wed, 21 Oct 2015 07:28:00 -0000'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Wed, 21 Oct 2015 07:28:00 XYZ'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Thu, 01 Jan 1970 00:00:00 GMT'
+  1970-01-01T00:00:00+00:00 -> 'Thu, 01 Jan 1970 00:00:00 GMT'
+date 'Mon, 29 Feb 2016 23:59:59 GMT'
+  2016-02-29T23:59:59+00:00 -> 'Mon, 29 Feb 2016 23:59:59 GMT'
+date 'Tue, 29 Feb 2015 10:00:00 GMT'
+  None -> None
+date 'Wed, 21 Oct 2015 25:28:00 GMT'
+  None -> None
+date 'Wed, 21 Oct 15 07:28:00 GMT'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Fri, 31 Dec 99 23:59:59 GMT'
+  1999-12-31T23:59:59+00:00 -> 'Fri, 31 Dec 1999 23:59:59 GMT'
+date 'Fri, 31 Dec 68 23:59:59 GMT'
+  2068-12-31T23:59:59+00:00 -> 'Mon, 31 Dec 2068 23:59:59 GMT'
+date 'Wed, 21 October 2015 07:28:00 GMT'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Wed, 21 Foo 2015 07:28:00 GMT'
+  None -> None
+date 'Oct 21 2015 07:28:00 GMT'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Wed,21 Oct 2015 07:28:00 GMT'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date '21 Oct 2015 07.28.00 GMT'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'Wed, 21 Oct 2015 07:28:60 GMT'
+  None -> None
+date 'Wed, 21 Oct 2015, 07:28:00 GMT'
+  2015-10-21T07:28:00+00:00 -> 'Wed, 21 Oct 2015 07:28:00 GMT'
+date 'garbage'
+  None -> None
+date '   '
+  None -> None
+date ''
+  None -> None
+date 'NONE'
+  None -> None
+date 'Sat, 01 Jan 0000 00:00:00 GMT'
+  2000-01-01T00:00:00+00:00 -> 'Sat, 01 Jan 2000 00:00:00 GMT'
+date 'Fri, 31 Dec 9999 23:59:59 GMT'
+  9999-12-31T23:59:59+00:00 -> 'Fri, 31 Dec 9999 23:59:59 GMT'
+date 'Tue, 15 Nov 1994 12:45:26 +2500'
+  None -> None
+age '0'
+  0 -> '0'
+age '3600'
+  3600 -> '3600'
+age '-1'
+  None
+age '12.5'
+  None
+age 'abc'
+  None
+age ''
+  None
+age '86400'
+  86400 -> '86400'
+age ' 42 '
+  42 -> '42'
+age '1_000'
+  1000 -> '1000'
+age '+7'
+  7 -> '7'
+cookie 'session=abc123; theme=dark'
+  MultiDict([('session', 'abc123'), ('theme', 'dark')])
+cookie 'a=1; b=2; a=3'
+  MultiDict([('a', '1'), ('a', '3'), ('b', '2')])
+cookie 'quoted="hello world"; esc="a\\"b"; oct="\\303\\251t\\303\\251"'
+  MultiDict([('quoted', 'hello world'), ('esc', 'a"b'), ('oct', 'été')])
+cookie '  spaced = value ;  other=x  ;'
+  MultiDict([('spaced', 'value'), ('other', 'x')])
+cookie 'novalue; =onlyvalue; k='
+  MultiDict([('novalue', ''), ('k', '')])
+cookie 'mixed=café; utf8=üñï'
+  MultiDict([('mixed', 'café'), ('utf8', 'üñï')])
+cookie 'semi="a;b"; after=1'
+  MultiDict([('semi', 'a;b'), ('after', '1')])
+cookie ''
+  MultiDict([])
+cookie 'trail="unterminated; next=2'
+  MultiDict([('trail', '"unterminated'), ('next', '2')])
+cookie 'x="\\q\\\\"'
+  MultiDict([('x', 'q\\')])
+quote 'simple'
+  'simple' '"simple"' 'simple'
+quote 'with space'
+  '"with space"' '"with space"' 'with space'
+quote ''
+  '""' '""' ''
+quote 'has"quote'
+  '"has\\"quote"' '"has\\"quote"' 'has"quote'
+quote 'back\\slash'
+  '"back\\\\slash"' '"back\\\\slash"' 'back\\slash'
+quote "token!#$%&'*+-.^_`|~09"
+  "token!#$%&'*+-.^_`|~09" '"token!#$%&\'*+-.^_`|~09"' "token!#$%&'*+-.^_`|~09"
+quote 'comma,semi;'
+  '"comma,semi;"' '"comma,semi;"' 'comma,semi;'
+quote '"already quoted"'
+  '"\\"already quoted\\""' '"\\"already quoted\\""' 'already quoted'
+quote '"esc\\"aped\\\\"'
+  '"\\"esc\\\\\\"aped\\\\\\\\\\""' '"\\"esc\\\\\\"aped\\\\\\\\\\""' 'esc"aped\\'
+quote '"'
+  '"\\""' '"\\""' '"'
+quote 'café'
+  '"café"' '"café"' 'café'
+etag 'abc'
+  unquote=('abc', False) quote='"abc"' 'W/"abc"'
+etag 'W/"abc"'
+  unquote=('abc', True) quote=! ValueError: invalid etag
+etag '"abc"'
+  unquote=('abc', False) quote=! ValueError: invalid etag
+etag 'w/"lower"'
+  unquote=('lower', True) quote=! ValueError: invalid etag
+etag '  "spaced"  '
+  unquote=('spaced', False) quote=! ValueError: invalid etag
+etag 'W/'
+  unquote=('', True) quote='"W/"' 'W/"W/"'
+etag 'bad"tag'
+  unquote=('bad"tag', False) quote=! ValueError: invalid etag
+etag ''
+  unquote=(None, None) quote='""' 'W/""'
+etag '"'
+  unquote=('', False) quote=! ValueError: invalid etag
+etag 'W/x'
+  unquote=('x', True) quote='"W/x"' 'W/"W/x"'
+strip 'Content-Type, Content-Length, ETag, Expires, Content-Location, X-Custom, Allow, last-modified'
+  entity -> ['ETag', 'Expires', 'Content-Location', 'X-Custom']
+  entity(allow) -> ['ETag', 'X-Custom', 'Allow']
+  hop -> ['Content-Type', 'Content-Length', 'ETag', 'Expires', 'Content-Location', 'X-Custom', 'Allow', 'last-modified']
+strip 'Connection, Keep-Alive, Upgrade, TE, X-Forwarded-For, Transfer-Encoding, Trailer, Proxy-Authorization, Content-Type'
+  entity -> ['Connection', 'Keep-Alive', 'Upgrade', 'TE', 'X-Forwarded-For', 'Transfer-Encoding', 'Trailer', 'Proxy-Authorization']
+  entity(allow) -> ['Connection', 'Keep-Alive', 'Upgrade', 'TE', 'X-Forwarded-For', 'Transfer-Encoding', 'Trailer', 'Proxy-Authorization']
+  hop -> ['X-Forwarded-For', 'Content-Type']
+# cookies
+set_cookie 'sid' 'a3fWa' {'max_age': 3600, 'expires': 1445412480, 'path': '/', 'secure': True, 'httponly': True}
+  'sid=a3fWa; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Max-Age=3600; Secure; HttpOnly; Path=/'
+set_cookie 'theme' 'dark mode' {'path': '/settings'}
+  'theme="dark mode"; Path=/settings'
+set_cookie 'prefs' '{"a":1,"b":[2,3]}' {}
+  'prefs="{\\"a\\":1\\054\\"b\\":[2\\0543]}"; Path=/'
+set_cookie 'lang' 'fr-CA' {'path': '/docs/user guide/', 'domain': '.Docs.Example.com:8443', 'samesite': 'lax'}
+  'lang=fr-CA; Domain=Docs.Example.com; Path=/docs/user%20guide/; SameSite=Lax'
+set_cookie 'track' 'x,y;z' {'expires': 0, 'samesite': 'STRICT'}
+  'track="x\\054y\\073z"; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Strict'
+set_cookie 't2' 'café \\ "q"' {'samesite': 'none', 'partitioned': True}
+  't2="caf\\303\\251 \\\\ \\"q\\""; Secure; Path=/; SameSite=None; Partitioned'
+set_cookie 't3' '' {'path': None}
+  't3='
+set_cookie 't4' 'ok' {'samesite': 'bogus'}
+  ! ValueError: SameSite must be 'Strict', 'Lax', or 'None'.
+set_cookie 't5' 'tab\there' {'max_age': 0, 'sync_expires': False}
+  't5="tab\\011here"; Max-Age=0; Path=/'
+set_cookie 'naïve' '1' {}
+  'naÃ¯ve=1; Path=/'
+set_cookie 't6' '\x1a\x7f' {'path': '/a;b?c=d#e%20f'}
+  't6="\x1a\\177"; Path=/a%3Bb%3Fc=d%23e%20f'
+set_cookie 'big' 'xxxxxxxxxxxxxxxxxxxx...(4090 chars)' {}
+  'big=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'...'xxxxxxxxxxxxxxxxxxxxxx; Path=/' (4102 chars)
+  warning: The 'big' cookie is too large: the value was 4090 bytes but the header required 12 extra bytes. The final size was 4102 bytes but the limit is 4093 bytes. Browsers may silently ignore cookies larger than this.
+set_cookie 't7' 'v' {'expires': 'Wed, 09 Jun 2021 10:18:14 GMT', 'max_age': 10}
+  't7=v; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=10; Path=/'
+set_cookie 't8' 'v' {'domain': 'localhost'}
+  't8=v; Domain=localhost; Path=/'
+set_cookie 't9' 'v' {'max_age': 120, 'expires': 253402300799}
+  't9=v; Expires=Fri, 31 Dec 9999 23:59:59 GMT; Max-Age=120; Path=/'
+# requests
+== 000
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 144
+| '<!doctype html><html lang="en"><body><p>Welcome to the user guide. Start with installation, then configure your first project.</p></body></html>'
+== 001
+> GET /guide
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: de
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "fde15b56a63ddb0b50f15477fed797d3089af557"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 118
+| 'Willkommen im Benutzerhandbuch. Beginnen Sie mit der Installation, dann konfigurieren Sie Ihr erstes Projekt. Grüße!'
+== 002
+> GET /guide
+< 200 OK
+< Content-Type: application/json; charset=utf-8
+< Content-Language: pt-BR
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "cb8dd070b72553844f0100684506f4585abb163b"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 121
+| '{"lang": "pt-BR", "text": "Bem-vindo ao guia. Comece pela instala\\u00e7\\u00e3o e depois configure seu primeiro projeto."}'
+== 003
+> GET /guide
+< 200 OK
+< Content-Type: application/json; charset=utf-8
+< Content-Language: fr-CA
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "f6c818b08ac3c68be194f63fb8f48f09c1b38aeb"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 142
+| '{"lang": "fr-CA", "text": "Bienvenue dans le guide. Commencez par l\'installation, puis configurez votre premier projet. \\u00c0 bient\\u00f4t!"}'
+== 004
+> GET /guide
+< 406 Not Acceptable
+< Content-Type: text/plain; charset=utf-8
+| 'Not Acceptable. Offered: text/html, text/plain, application/json'
+== 005
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 144
+| '<!doctype html><html lang="en"><body><p>Welcome to the user guide. Start with installation, then configure your first project.</p></body></html>'
+== 006
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: pt-BR
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "9ca3d8b8341ec09a723475d9ead3cf410d1145ba"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 145
+| '<!doctype html><html lang="pt-BR"><body><p>Bem-vindo ao guia. Comece pela instalação e depois configure seu primeiro projeto.</p></body></html>'
+== 007
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: de
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "6470a9be4c8a0131ffaff158a991ffea61089ea4"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 176
+| '<!doctype html><html lang="de"><body><p>Willkommen im Benutzerhandbuch. Beginnen Sie mit der Installation, dann konfigurieren Sie Ihr erstes Projekt. Grüße!</p></body></html>'
+== 008
+> GET /guide
+< 406 Not Acceptable
+< Content-Type: text/plain; charset=utf-8
+| 'Not Acceptable. Charset: iso-8859-1'
+== 009
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 144
+| '<!doctype html><html lang="en"><body><p>Welcome to the user guide. Start with installation, then configure your first project.</p></body></html>'
+== 010
+> HEAD /guide
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "7fc96af753f29e0a53f69c709de95f5641736f15"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 86
+== 011
+> GET /guide
+< 304 Not Modified
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Cache-Control: public, max-age=600
+== 012
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 144
+| '<!doctype html><html lang="en"><body><p>Welcome to the user guide. Start with installation, then configure your first project.</p></body></html>'
+== 013
+> GET /guide
+< 304 Not Modified
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Cache-Control: public, max-age=600
+== 014
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 144
+| '<!doctype html><html lang="en"><body><p>Welcome to the user guide. Start with installation, then configure your first project.</p></body></html>'
+== 015
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 144
+| '<!doctype html><html lang="en"><body><p>Welcome to the user guide. Start with installation, then configure your first project.</p></body></html>'
+== 016
+> GET /guide
+< 200 OK
+< Content-Type: text/html; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "e8c3508b97a47db90db18e2064f95e70ee736b7e"
+< Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 144
+| '<!doctype html><html lang="en"><body><p>Welcome to the user guide. Start with installation, then configure your first project.</p></body></html>'
+== 017
+> GET /changelog
+< 206 Partial Content
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 100
+< Accept-Ranges: bytes
+< Content-Range: bytes 0-99/2152
+| 'v1.0.0 - fixed issue #100, improved startup by 0 ms\nv1.1.0 - fixed issue #107, improved startup by 3'
+== 018
+> GET /changelog
+< 206 Partial Content
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 120
+< Accept-Ranges: bytes
+< Content-Range: bytes 2032-2151/2152
+| 'by 111 ms\nv1.38.0 - fixed issue #366, improved startup by 114 ms\nv1.39.0 - fixed issue #373, improved startup by 117 ms\n'
+== 019
+> GET /changelog
+< 206 Partial Content
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 152
+< Accept-Ranges: bytes
+< Content-Range: bytes 2000-2151/2152
+| 'ed issue #359, improved startup by 111 ms\nv1.38.0 - fixed issue #366, improved startup by 114 ms\nv1.39.0 - fixed issue #373, improved startup by 117 ms\n'
+== 020
+> GET /changelog
+< 416 Requested Range Not Satisfiable
+< Content-Type: text/plain; charset=utf-8
+< Content-Range: bytes */2152
+| 'Requested Range Not Satisfiable'
+== 021
+> GET /changelog
+< 416 Requested Range Not Satisfiable
+< Content-Type: text/plain; charset=utf-8
+< Content-Range: bytes */2152
+| 'Requested Range Not Satisfiable'
+== 022
+> GET /changelog
+< 416 Requested Range Not Satisfiable
+< Content-Type: text/plain; charset=utf-8
+< Content-Range: bytes */2152
+| 'Requested Range Not Satisfiable'
+== 023
+> GET /changelog
+< 416 Requested Range Not Satisfiable
+< Content-Type: text/plain; charset=utf-8
+< Content-Range: bytes */2152
+| 'Requested Range Not Satisfiable'
+== 024
+> HEAD /changelog
+< 206 Partial Content
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 10
+< Accept-Ranges: bytes
+< Content-Range: bytes 10-19/2152
+== 025
+> GET /changelog
+< 206 Partial Content
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 10
+< Accept-Ranges: bytes
+< Content-Range: bytes 0-9/2152
+| 'v1.0.0 - f'
+== 026
+> GET /changelog
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 2152
+< Accept-Ranges: bytes
+| 'v1.0.0 - fixed issue #100, improved startup by 0 ms\nv1.1.0 - fixed issue #107, improved startup by 3 ms\nv1.2.0 - fixed issue #114, improved startup by 6 ms\nv1.3.0 - fixed issue #121, improved startup by 9 ms\nv1.4.0 - fixed issue #128, improved startup by 12 ms\nv1.5.0 - fixed issue #135, improved startup by 15 ms\nv1.6.0 - fixed issue #142, improved startup by 18 ms\nv1.7.0 - fixed issue #149, improved startup by 21 ms\nv1.8.0 - fixed issue #156, improved startup by 24 ms\nv1.9.0 - fixed issue #163, improved startup by 27 ms\nv1.10.0 - fixed issue #170, improved startup by 30 ms\nv1.11.0 - fixed issue #177, improved startup by 33 ms\nv1.12.0 - fixed issue #184, improved startup by 36 ms\nv1.13.0 - fixed issue #191, improved startup by 39 ms\nv1.14.0 - fixed issue #198, improved startup by 42 ms\nv1.15.0 - fixed issue #205, improved startup by 45 ms\nv1.16.0 - fixed issue #212, improved startup by 48 ms\nv1.17.0 - fixed issue #219, improved startup by 51 ms\nv1.18.0 - fixed issue #226, improved startup by 54 ms\nv1.19.0 - fixed issue #233, improved startup by 57 ms\nv1.20.0 - fixed issue #240, improved startup by 60 ms\nv1.21.0 - fixed issue #247, improved startup by 63 ms\nv1.22.0 - fixed issue #254, improved startup by 66 ms\nv1.23.0 - fixed issue #261, improved startup by 69 ms\nv1.24.0 - fixed issue #268, improved startup by 72 ms\nv1.25.0 - fixed issue #275, improved startup by 75 ms\nv1.26.0 - fixed issue #282, improved startup by 78 ms\nv1.27.0 - fixed issue #289, improved startup by 81 ms\nv1.28.0 - fixed issue #296, improved startup by 84 ms\nv1.29.0 - fixed issue #303, improved startup by 87 ms\nv1.30.0 - fixed issue #310, improved startup by 90 ms\nv1.31.0 - fixed issue #317, improved startup by 93 ms\nv1.32.0 - fixed issue #324, improved startup by 96 ms\nv1.33.0 - fixed issue #331, improved startup by 99 ms\nv1.34.0 - fixed issue #338, improved startup by 102 ms\nv1.35.0 - fixed issue #345, improved startup by 105 ms\nv1.36.0 - fixed issue #352, improved startup by 108 ms\nv1.37.0 - fixed issue #359, improved startup by 111 ms\nv1.38.0 - fixed issue #366, improved startup by 114 ms\nv1.39.0 - fixed issue #373, improved startup by 117 ms\n'
+== 027
+> GET /changelog
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 2152
+< Accept-Ranges: bytes
+| 'v1.0.0 - fixed issue #100, improved startup by 0 ms\nv1.1.0 - fixed issue #107, improved startup by 3 ms\nv1.2.0 - fixed issue #114, improved startup by 6 ms\nv1.3.0 - fixed issue #121, improved startup by 9 ms\nv1.4.0 - fixed issue #128, improved startup by 12 ms\nv1.5.0 - fixed issue #135, improved startup by 15 ms\nv1.6.0 - fixed issue #142, improved startup by 18 ms\nv1.7.0 - fixed issue #149, improved startup by 21 ms\nv1.8.0 - fixed issue #156, improved startup by 24 ms\nv1.9.0 - fixed issue #163, improved startup by 27 ms\nv1.10.0 - fixed issue #170, improved startup by 30 ms\nv1.11.0 - fixed issue #177, improved startup by 33 ms\nv1.12.0 - fixed issue #184, improved startup by 36 ms\nv1.13.0 - fixed issue #191, improved startup by 39 ms\nv1.14.0 - fixed issue #198, improved startup by 42 ms\nv1.15.0 - fixed issue #205, improved startup by 45 ms\nv1.16.0 - fixed issue #212, improved startup by 48 ms\nv1.17.0 - fixed issue #219, improved startup by 51 ms\nv1.18.0 - fixed issue #226, improved startup by 54 ms\nv1.19.0 - fixed issue #233, improved startup by 57 ms\nv1.20.0 - fixed issue #240, improved startup by 60 ms\nv1.21.0 - fixed issue #247, improved startup by 63 ms\nv1.22.0 - fixed issue #254, improved startup by 66 ms\nv1.23.0 - fixed issue #261, improved startup by 69 ms\nv1.24.0 - fixed issue #268, improved startup by 72 ms\nv1.25.0 - fixed issue #275, improved startup by 75 ms\nv1.26.0 - fixed issue #282, improved startup by 78 ms\nv1.27.0 - fixed issue #289, improved startup by 81 ms\nv1.28.0 - fixed issue #296, improved startup by 84 ms\nv1.29.0 - fixed issue #303, improved startup by 87 ms\nv1.30.0 - fixed issue #310, improved startup by 90 ms\nv1.31.0 - fixed issue #317, improved startup by 93 ms\nv1.32.0 - fixed issue #324, improved startup by 96 ms\nv1.33.0 - fixed issue #331, improved startup by 99 ms\nv1.34.0 - fixed issue #338, improved startup by 102 ms\nv1.35.0 - fixed issue #345, improved startup by 105 ms\nv1.36.0 - fixed issue #352, improved startup by 108 ms\nv1.37.0 - fixed issue #359, improved startup by 111 ms\nv1.38.0 - fixed issue #366, improved startup by 114 ms\nv1.39.0 - fixed issue #373, improved startup by 117 ms\n'
+== 028
+> GET /changelog
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< ETag: "551903fe9312417ef345272f35d51422cf525288"
+< Last-Modified: Tue, 14 Nov 2023 22:13:20 GMT
+< Cache-Control: public, max-age=60, must-revalidate
+< Content-Length: 2152
+< Accept-Ranges: bytes
+| 'v1.0.0 - fixed issue #100, improved startup by 0 ms\nv1.1.0 - fixed issue #107, improved startup by 3 ms\nv1.2.0 - fixed issue #114, improved startup by 6 ms\nv1.3.0 - fixed issue #121, improved startup by 9 ms\nv1.4.0 - fixed issue #128, improved startup by 12 ms\nv1.5.0 - fixed issue #135, improved startup by 15 ms\nv1.6.0 - fixed issue #142, improved startup by 18 ms\nv1.7.0 - fixed issue #149, improved startup by 21 ms\nv1.8.0 - fixed issue #156, improved startup by 24 ms\nv1.9.0 - fixed issue #163, improved startup by 27 ms\nv1.10.0 - fixed issue #170, improved startup by 30 ms\nv1.11.0 - fixed issue #177, improved startup by 33 ms\nv1.12.0 - fixed issue #184, improved startup by 36 ms\nv1.13.0 - fixed issue #191, improved startup by 39 ms\nv1.14.0 - fixed issue #198, improved startup by 42 ms\nv1.15.0 - fixed issue #205, improved startup by 45 ms\nv1.16.0 - fixed issue #212, improved startup by 48 ms\nv1.17.0 - fixed issue #219, improved startup by 51 ms\nv1.18.0 - fixed issue #226, improved startup by 54 ms\nv1.19.0 - fixed issue #233, improved startup by 57 ms\nv1.20.0 - fixed issue #240, improved startup by 60 ms\nv1.21.0 - fixed issue #247, improved startup by 63 ms\nv1.22.0 - fixed issue #254, improved startup by 66 ms\nv1.23.0 - fixed issue #261, improved startup by 69 ms\nv1.24.0 - fixed issue #268, improved startup by 72 ms\nv1.25.0 - fixed issue #275, improved startup by 75 ms\nv1.26.0 - fixed issue #282, improved startup by 78 ms\nv1.27.0 - fixed issue #289, improved startup by 81 ms\nv1.28.0 - fixed issue #296, improved startup by 84 ms\nv1.29.0 - fixed issue #303, improved startup by 87 ms\nv1.30.0 - fixed issue #310, improved startup by 90 ms\nv1.31.0 - fixed issue #317, improved startup by 93 ms\nv1.32.0 - fixed issue #324, improved startup by 96 ms\nv1.33.0 - fixed issue #331, improved startup by 99 ms\nv1.34.0 - fixed issue #338, improved startup by 102 ms\nv1.35.0 - fixed issue #345, improved startup by 105 ms\nv1.36.0 - fixed issue #352, improved startup by 108 ms\nv1.37.0 - fixed issue #359, improved startup by 111 ms\nv1.38.0 - fixed issue #366, improved startup by 114 ms\nv1.39.0 - fixed issue #373, improved startup by 117 ms\n'
+== 029
+> GET /logo.svg
+< 200 OK
+< Content-Type: image/svg+xml
+< Content-Language: en
+< ETag: "601eb54bd92a921f96ad692ec32135fdeb7d45df"
+< Last-Modified: Sun, 13 Sep 2020 12:26:40 GMT
+< Cache-Control: public, max-age=31536000, immutable
+< Content-Length: 113
+| '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="#36c"/></svg>'
+== 030
+> GET /logo.svg
+< 200 OK
+< Content-Type: image/svg+xml
+< Content-Language: en
+< ETag: "601eb54bd92a921f96ad692ec32135fdeb7d45df"
+< Last-Modified: Sun, 13 Sep 2020 12:26:40 GMT
+< Cache-Control: public, max-age=31536000, immutable
+< Content-Length: 113
+| '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="#36c"/></svg>'
+== 031
+> GET /logo.svg
+< 304 Not Modified
+< ETag: "601eb54bd92a921f96ad692ec32135fdeb7d45df"
+< Cache-Control: public, max-age=31536000, immutable
+== 032
+> GET /logo.svg
+< 412 Precondition Failed
+< Content-Type: image/svg+xml
+< Content-Language: en
+< ETag: "601eb54bd92a921f96ad692ec32135fdeb7d45df"
+< Last-Modified: Sun, 13 Sep 2020 12:26:40 GMT
+< Cache-Control: public, max-age=31536000, immutable
+< Content-Length: 113
+| '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="#36c"/></svg>'
+== 033
+> GET /logo.svg
+< 412 Precondition Failed
+< Content-Type: image/svg+xml
+< Content-Language: en
+< ETag: "601eb54bd92a921f96ad692ec32135fdeb7d45df"
+< Last-Modified: Sun, 13 Sep 2020 12:26:40 GMT
+< Cache-Control: public, max-age=31536000, immutable
+< Content-Length: 113
+| '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="#36c"/></svg>'
+== 034
+> GET /status
+< 200 OK
+< Content-Type: application/json; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "c6baa3ca1bedac6886aa078bc27c9a96511ff679"
+< Last-Modified: Tue, 14 Nov 2023 22:21:40 GMT
+< Cache-Control: no-store
+< Content-Length: 48
+| '{"status": "all systems operational", "docs": 4}'
+== 035
+> GET /status
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "bb8db96bc059d6ad649b7fc79eca9c58a5e0fc2e"
+< Last-Modified: Tue, 14 Nov 2023 22:21:40 GMT
+< Cache-Control: no-store
+< Content-Length: 23
+| 'all systems operational'
+== 036
+> GET /missing
+< 404 Not Found
+< Content-Type: text/plain; charset=utf-8
+| 'Not Found'
+== 037
+> DELETE /guide
+< 405 Method Not Allowed
+< Allow: GET, HEAD, PUT
+< Content-Type: text/plain; charset=utf-8
+| 'Method Not Allowed'
+== 038
+> OPTIONS /changelog
+< 204 No Content
+< Allow: GET, HEAD, PUT
+== 039
+> PUT /guide
+< 412 Precondition Failed
+< ETag: "7fc96af753f29e0a53f69c709de95f5641736f15"
+| 'Precondition Failed'
+== 040
+> PUT /guide
+< 204 No Content
+< ETag: "1b8c17ff0df87bbcd8383b9f6b1cb24bbc4f5415"
+< Last-Modified: Wed, 21 Oct 2015 07:44:40 GMT
+== 041
+> GET /guide
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: en
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "1b8c17ff0df87bbcd8383b9f6b1cb24bbc4f5415"
+< Last-Modified: Wed, 21 Oct 2015 07:44:40 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 35
+| 'Updated guide text, second edition.'
+== 042
+> PUT /guide
+< 400 Bad Request
+< Content-Type: text/plain; charset=utf-8
+| 'language not offered: it'
+== 043
+> PUT /guide
+< 412 Precondition Failed
+< Last-Modified: Wed, 21 Oct 2015 07:44:40 GMT
+| 'Precondition Failed'
+== 044
+> GET /guide
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Content-Language: de
+< Vary: Accept, accept, Accept-Language, Cookie
+< ETag: "fde15b56a63ddb0b50f15477fed797d3089af557"
+< Last-Modified: Wed, 21 Oct 2015 07:44:40 GMT
+< Cache-Control: public, max-age=600
+< Content-Length: 118
+| 'Willkommen im Benutzerhandbuch. Beginnen Sie mit der Installation, dann konfigurieren Sie Ihr erstes Projekt. Grüße!'
+== 045
+> GET /prefs?lang=fr-CA
+< 204 No Content
+< Set-Cookie: lang=fr-CA; Max-Age=31536000; HttpOnly; Path=/; SameSite=Lax
+< Vary: Cookie
+== 046
+> GET /prefs?lang=klingon
+< 400 Bad Request
+< Content-Type: text/plain; charset=utf-8
+| 'unknown language: klingon'
+== 047
+> GET /prefs?lang=de&remember=0
+< 204 No Content
+< Set-Cookie: lang=de; HttpOnly; Path=/; SameSite=Lax
+< Vary: Cookie
+== 048
+> GET /whoami
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+| "session='uäser 42' all=['uäser 42', 'second'] lang='de' count=3"
+== 049
+> GET /whoami
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+| 'session=None all=[] lang=None count=0'
+== 050
+> GET /proxy/upstream
+< 200 OK
+< Content-Type: text/plain
+< X-Upstream: 1
+< Content-Length: 5
+| 'forwarded: Host=docs.example.com'
+== 051
+> GET /negotiate
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Vary: Accept, Accept-Encoding, Accept-Language
+| "html=True xhtml=True json=True\ntype='text/html'\nencoding='br' from 'br,gzip;q=0.5'\nlanguage='en'"
+== 052
+> GET /negotiate
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Vary: Accept, Accept-Encoding, Accept-Language
+| "html=True xhtml=False json=False\ntype='text/html'\nencoding=None from 'identity;q=0.0'\nlanguage='en'"
+== 053
+> GET /negotiate
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Vary: Accept, Accept-Encoding, Accept-Language
+| "html=False xhtml=False json=False\ntype=None\nencoding=None from '*;q=0.0'\nlanguage='en'"
+== 054
+> GET /cache-check
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Cache-Control: no-store, max-age=0, private=Authorization
+| "<RequestCacheControl max-age='0' max-stale='30' no-transform=None>\nno_cache=False\nno_store=False\nmax_age=0\nmax_stale=30\nmin_fresh=None\nno_transform=True\nonly_if_cached=False\nstale_if_error=None"
+== 055
+> GET /cache-check
+< 200 OK
+< Content-Type: text/plain; charset=utf-8
+< Cache-Control: no-store, max-age=0, private=Authorization
+| "<RequestCacheControl min-fresh='5' only-if-cached=None stale-if-error='abc'>\nno_cache=False\nno_store=False\nmax_age=None\nmax_stale=None\nmin_fresh=5\nno_transform=False\nonly_if_cached=True\nstale_if_error=None"
+== 056
+> GET /csp
+< 200 OK
+< Content-Security-Policy: script-src https://cdn.example.com 'nonce-r4nd0m'; img-src 'self' data:; default-src 'none'
+| '<ContentSecurityPolicy default-src="\'none\'" img-src="\'self\' data:" script-src="https://cdn.example.com \'nonce-r4nd0m\'">'

@@ -1,0 +1,4703 @@
+// mini_werkzeug_http: the HTTP header toolkit of Werkzeug 3.1.3 (BSD), the
+// library under Flask, ported from `werkzeug/http.py`, `sansio/http.py`
+// and the header datastructures:
+// - quote_header_value, parse_list_header, parse_dict_header and
+//   parse_options_header with RFC 2231 charsets and continuations;
+// - Accept, MIMEAccept, LanguageAccept and CharsetAccept: the sort by
+//   specificity and quality, quality(), best_match() with the language
+//   fallbacks, and codec names as the codec registry gives them;
+// - Cache-Control for requests and responses with every property,
+//   Content-Security-Policy, HeaderSet, Range, Content-Range, If-Range,
+//   ETags (two frozensets, joined in Python's set order: SipHash-1-3 with
+//   a zero key under PYTHONHASHSEED=0, and CPython's probing);
+// - parse_date over email.utils' _parsedate_tz, http_date, parse_age;
+// - parse_cookie as _cookie_re.findall matches it, and dump_cookie;
+// - is_resource_modified, and make_conditional's ranges, 304 and 412.
+//
+// The program writes data/ (header values, Set-Cookie jobs, four
+// documents and 57 HTTP requests), prints what each parser makes of each
+// value, then runs a docs server with content negotiation, conditional
+// requests, byte ranges, cookies and a proxy over the requests.
+// expected.out is the output of oracle.py, which calls Werkzeug itself.
+// ------------------------------------------------------------ bytes and text, from mini_urlparse and mini_cookies
+
+fn byte_str(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut v: Vec[u8] = Vec.new();
+    for i in from..to {
+        v.push(b[i]);
+    }
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn to_bytes(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+fn from_bytes(v: Vec[u8]) -> String {
+    String.from_utf8(v).unwrap_or("?".to_string())
+}
+
+fn is_digit(c: u8) -> bool {
+    c >= b'0' and c <= b'9'
+}
+
+fn is_alpha(c: u8) -> bool {
+    (c >= b'a' and c <= b'z') or (c >= b'A' and c <= b'Z')
+}
+
+fn is_alnum(c: u8) -> bool {
+    is_digit(c) or is_alpha(c)
+}
+
+// White space, as `\s` and str.strip see it.
+fn is_ws(c: u8) -> bool {
+    c == b' ' or c == b'\t' or c == b'\n' or c == b'\r' or c == 11 or c == 12 or (c >= 28 and c <= 31)
+}
+
+fn lower_byte(c: u8) -> u8 {
+    if c >= b'A' and c <= b'Z' { c + 32 } else { c }
+}
+
+fn lower(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        out.push(lower_byte(b[i]));
+    }
+    from_bytes(out)
+}
+
+fn strip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    let mut j = b.len();
+    while i < j and is_ws(b[i]) {
+        i += 1;
+    }
+    while j > i and is_ws(b[j - 1]) {
+        j -= 1;
+    }
+    byte_str(b, i, j)
+}
+
+fn split_ws(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        while i < b.len() and is_ws(b[i]) {
+            i += 1;
+        }
+        let st = i;
+        while i < b.len() and not is_ws(b[i]) {
+            i += 1;
+        }
+        if i > st {
+            out.push(byte_str(b, st, i));
+        }
+    }
+    out
+}
+
+fn split_on(s: Str, sep: u8) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    for i in 0..b.len() {
+        if b[i] == sep {
+            out.push(byte_str(b, st, i));
+            st = i + 1;
+        }
+    }
+    out.push(byte_str(b, st, b.len()));
+    out
+}
+
+fn join(parts: ref Vec[String], sep: Str) -> String {
+    let mut out = String.new();
+    for i in 0..parts.len() {
+        if i > 0 {
+            out.push_str(sep);
+        }
+        out.push_str(parts[i]);
+    }
+    out
+}
+
+// The lines of a file, without their newlines.
+fn lines_of(text: Str) -> Vec[String] {
+    let mut v = split_on(text, b'\n');
+    if v.len() > 0 and v[v.len() - 1].len() == 0 {
+        v.pop();
+    }
+    v
+}
+
+// A stable sort of strings.
+fn sort_strings(v: own Vec[String]) -> Vec[String] {
+    let mut v = v;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and v[j - 1] > v[j] {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    v
+}
+
+// Python's repr of a str.
+fn py_repr(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut has_single = false;
+    let mut has_double = false;
+    for i in 0..b.len() {
+        if b[i] == b'\'' {
+            has_single = true;
+        }
+        if b[i] == b'"' {
+            has_double = true;
+        }
+    }
+    let q: u8 = if has_single and not has_double { b'"' } else { b'\'' };
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    out.push(q);
+    let mut skip = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if skip {
+            skip = false;
+            continue;
+        }
+        // U+0080 to U+00A0 and U+00AD are not printable either
+        let next: u8 = if i + 1 < b.len() { b[i + 1] } else { 0 };
+        if c == 0xC2 and next >= 0x80 and (next <= 0xA0 or next == 0xAD) {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(next / 16) as i64]);
+            out.push(hex[(next % 16) as i64]);
+            skip = true;
+        } else if c == q or c == b'\\' {
+            out.push(b'\\');
+            out.push(c);
+        } else if c == b'\n' {
+            out.push(b'\\');
+            out.push(b'n');
+        } else if c == b'\r' {
+            out.push(b'\\');
+            out.push(b'r');
+        } else if c == b'\t' {
+            out.push(b'\\');
+            out.push(b't');
+        } else if c < 32 or c == 127 {
+            out.push(b'\\');
+            out.push(b'x');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(q);
+    from_bytes(out)
+}
+
+fn upper(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        out.push(if c >= b'a' and c <= b'z' { c - 32 } else { c });
+    }
+    from_bytes(out)
+}
+
+// Whether `pat` occurs in `b` at `i`.
+fn starts_at(b: ref Vec[u8], i: i64, pat: Str) -> bool {
+    let p = to_bytes(pat);
+    if i < 0 or i + p.len() > b.len() {
+        return false;
+    }
+    for k in 0..p.len() {
+        if b[i + k] != p[k] {
+            return false;
+        }
+    }
+    true
+}
+
+fn starts_with(s: Str, pat: Str) -> bool {
+    starts_at(to_bytes(s), 0, pat)
+}
+
+fn find_str(s: Str, pat: Str) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() + 1 {
+        if starts_at(b, i, pat) {
+            return i;
+        }
+    }
+    -1
+}
+
+fn slice_from(s: Str, i: i64) -> String {
+    let b = to_bytes(s);
+    byte_str(b, i, b.len())
+}
+
+fn is_hex(c: u8) -> bool {
+    is_digit(c) or (c >= b'a' and c <= b'f') or (c >= b'A' and c <= b'F')
+}
+
+fn hex_val(c: u8) -> u8 {
+    if is_digit(c) {
+        c - b'0'
+    } else if c >= b'a' and c <= b'f' {
+        c - b'a' + 10
+    } else {
+        c - b'A' + 10
+    }
+}
+
+fn find_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        if b[i] == c {
+            return i;
+        }
+    }
+    -1
+}
+
+fn rfind_byte(s: Str, c: u8) -> i64 {
+    let b = to_bytes(s);
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == c {
+            return i;
+        }
+        i -= 1;
+    }
+    -1
+}
+
+fn has_byte(s: Str, c: u8) -> bool {
+    find_byte(s, c) >= 0
+}
+
+fn slice(s: Str, from: i64, to: i64) -> String {
+    byte_str(to_bytes(s), from, to)
+}
+
+// str.partition and str.rpartition on one byte: (before, found, after).
+fn partition(s: Str, c: u8) -> (String, bool, String) {
+    let i = find_byte(s, c);
+    if i < 0 {
+        return (s.to_string(), false, String.new());
+    }
+    (slice(s, 0, i), true, slice_from(s, i + 1))
+}
+
+fn replace_byte(s: Str, c: u8, with: Str) -> String {
+    let b = to_bytes(s);
+    let w = to_bytes(with);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == c {
+            for k in 0..w.len() {
+                out.push(w[k]);
+            }
+        } else {
+            out.push(b[i]);
+        }
+    }
+    from_bytes(out)
+}
+
+fn opt_repr(v: ref Option[String]) -> String {
+    match v {
+        Some(s) => py_repr(s),
+        None => "None".to_string(),
+    }
+}
+
+fn push_str_bytes(out: mut ref Vec[u8], s: Str) {
+    let b = to_bytes(s);
+    for i in 0..b.len() {
+        out.push(b[i]);
+    }
+}
+
+// bytes.decode('utf-8', 'replace'): each maximal ill-formed subpart
+// becomes one U+FFFD, as CPython's decoder does it.
+fn utf8_replace(b: ref Vec[u8]) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let mut need: i64 = 0;
+        let mut lo: u8 = 0x80;
+        let mut hi: u8 = 0xBF;
+        if c >= 0xC2 and c <= 0xDF {
+            need = 1;
+        } else if c >= 0xE0 and c <= 0xEF {
+            need = 2;
+            if c == 0xE0 {
+                lo = 0xA0;
+            }
+            if c == 0xED {
+                hi = 0x9F;
+            }
+        } else if c >= 0xF0 and c <= 0xF4 {
+            need = 3;
+            if c == 0xF0 {
+                lo = 0x90;
+            }
+            if c == 0xF4 {
+                hi = 0x8F;
+            }
+        }
+        if need == 0 {
+            push_str_bytes(mut out, "\u{FFFD}");
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let mut ok = true;
+        for k in 0..need {
+            if j >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[j];
+            let (l, h) = if k == 0 { (lo, hi) } else { (0x80 as u8, 0xBF as u8) };
+            if d < l or d > h {
+                ok = false;
+                break;
+            }
+            j += 1;
+        }
+        if ok {
+            for k in i..j {
+                out.push(b[k]);
+            }
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+        i = j;
+    }
+    from_bytes(out)
+}
+
+fn always_safe(c: u8) -> bool {
+    is_alnum(c) or c == b'_' or c == b'.' or c == b'-' or c == b'~'
+}
+
+// quote: every byte of the UTF-8 that is neither always safe nor in
+// `safe` becomes %XX.
+fn quote(s: Str, safe: Str) -> String {
+    let b = to_bytes(s);
+    let sb = to_bytes(safe);
+    let hex = to_bytes("0123456789ABCDEF");
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        let mut ok = c < 128 and always_safe(c);
+        for k in 0..sb.len() {
+            if sb[k] < 128 and sb[k] == c {
+                ok = true;
+            }
+        }
+        if ok {
+            out.push(c);
+        } else {
+            out.push(b'%');
+            out.push(hex[(c / 16) as i64]);
+            out.push(hex[(c % 16) as i64]);
+        }
+    }
+    from_bytes(out)
+}
+
+// _unquote_impl on ASCII: %XX with two hex digits is a byte, anything
+// else stays as written.
+fn unquote_bytes(b: ref Vec[u8], from: i64, to: i64, out: mut ref Vec[u8]) {
+    let mut i = from;
+    while i < to {
+        if b[i] == b'%' and i + 2 < to and is_hex(b[i + 1]) and is_hex(b[i + 2]) {
+            out.push(hex_val(b[i + 1]) * 16 + hex_val(b[i + 2]));
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+}
+
+fn py_int(s: Str) -> Option[i64] {
+    let b = to_bytes(strip(s));
+    let mut i: i64 = 0;
+    let mut neg = false;
+    if i < b.len() and (b[i] == b'+' or b[i] == b'-') {
+        neg = b[i] == b'-';
+        i += 1;
+    }
+    if i >= b.len() {
+        return None;
+    }
+    let mut n: i64 = 0;
+    let mut prev_digit = false;
+    while i < b.len() {
+        let c = b[i];
+        if is_digit(c) {
+            n = n * 10 + (c - b'0') as i64;
+            prev_digit = true;
+        } else if c == b'_' and prev_digit and i + 1 < b.len() and is_digit(b[i + 1]) {
+            prev_digit = false;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    if neg { Some(-n) } else { Some(n) }
+}
+
+// The code points of a string.
+fn code_points(s: Str) -> Vec[i64] {
+    let b = to_bytes(s);
+    let mut out: Vec[i64] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(c);
+            i += 1;
+        } else if c < 0xE0 {
+            out.push(((c & 0x1F) << 6) | (b[i + 1] as i64 & 0x3F));
+            i += 2;
+        } else if c < 0xF0 {
+            out.push(((c & 0x0F) << 12) | ((b[i + 1] as i64 & 0x3F) << 6) | (b[i + 2] as i64 & 0x3F));
+            i += 3;
+        } else {
+            out.push(((c & 0x07) << 18) | ((b[i + 1] as i64 & 0x3F) << 12) | ((b[i + 2] as i64 & 0x3F) << 6) | (b[i + 3] as i64 & 0x3F));
+            i += 4;
+        }
+    }
+    out
+}
+
+fn push_code_point(out: mut ref Vec[u8], cp: i64) {
+    if cp < 0x80 {
+        out.push(cp as u8);
+    } else if cp < 0x800 {
+        out.push(((cp >> 6) | 0xC0) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else if cp < 0x10000 {
+        out.push(((cp >> 12) | 0xE0) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    } else {
+        out.push(((cp >> 18) | 0xF0) as u8);
+        out.push((((cp >> 12) & 0x3F) | 0x80) as u8);
+        out.push((((cp >> 6) & 0x3F) | 0x80) as u8);
+        out.push(((cp & 0x3F) | 0x80) as u8);
+    }
+}
+
+fn first_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[0] } else { 0 }
+}
+// ------------------------------------------------------------ set order
+
+// ETags keeps its tags in two frozensets, and to_header joins them in the
+// sets' slot order. Under PYTHONHASHSEED=0 a str hashes with SipHash-1-3
+// and an all-zero key.
+fn sip_round(v: mut ref Vec[u64]) {
+    v[0] = v[0].wrapping_add(v[1]);
+    v[1] = v[1].rotate_left(13) ^ v[0];
+    v[0] = v[0].rotate_left(32);
+    v[2] = v[2].wrapping_add(v[3]);
+    v[3] = v[3].rotate_left(16) ^ v[2];
+    v[0] = v[0].wrapping_add(v[3]);
+    v[3] = v[3].rotate_left(21) ^ v[0];
+    v[2] = v[2].wrapping_add(v[1]);
+    v[1] = v[1].rotate_left(17) ^ v[2];
+    v[2] = v[2].rotate_left(32);
+}
+
+fn str_hash(s: Str) -> u64 {
+    let b = to_bytes(s);
+    let n = b.len();
+    if n == 0 {
+        return 0;
+    }
+    let mut v: Vec[u64] = vec![0x736f6d6570736575, 0x646f72616e646f6d, 0x6c7967656e657261, 0x7465646279746573];
+    let mut i: i64 = 0;
+    while i + 8 <= n {
+        let mut m: u64 = 0;
+        for k in 0..8 {
+            m = m | ((b[i + k] as u64) << (8 * k) as u64);
+        }
+        v[3] = v[3] ^ m;
+        sip_round(mut v);
+        v[0] = v[0] ^ m;
+        i += 8;
+    }
+    let mut last: u64 = ((n & 0xff) as u64) << 56;
+    let mut k: i64 = 0;
+    while i + k < n {
+        last = last | ((b[i + k] as u64) << (8 * k) as u64);
+        k += 1;
+    }
+    v[3] = v[3] ^ last;
+    sip_round(mut v);
+    v[0] = v[0] ^ last;
+    v[2] = v[2] ^ 0xff;
+    sip_round(mut v);
+    sip_round(mut v);
+    sip_round(mut v);
+    let h = v[0] ^ v[1] ^ v[2] ^ v[3];
+    // -1 is the error return, so a hash of -1 becomes -2
+    if h == 0xffffffffffffffff { 0xfffffffffffffffe } else { h }
+}
+
+// parse_etags can put None in a set (for `""`); it stands in the table as
+// this key, and hashes as None does since Python 3.12.
+fn none_key() -> String {
+    "\u{0}None".to_string()
+}
+
+fn py_hash(key: Str) -> u64 {
+    if key == none_key() { 4238894112 } else { str_hash(key) }
+}
+
+// set_insert_clean / set_add_entry over a table with no dummies: nine
+// linear probes when they fit, then the perturbed jump.
+fn set_insert(table: mut ref Vec[String], used: mut ref Vec[bool], key: Str) -> bool {
+    let mask = (table.len() - 1) as u64;
+    let h = py_hash(key);
+    let mut perturb = h;
+    let mut i = h & mask;
+    loop {
+        let at = i as i64;
+        if not used[at] {
+            table[at] = key.to_string();
+            used[at] = true;
+            return true;
+        }
+        if table[at] == key {
+            return false;
+        }
+        if i + 9 <= mask {
+            for j in 1..10 {
+                let a = at + j;
+                if not used[a] {
+                    table[a] = key.to_string();
+                    used[a] = true;
+                    return true;
+                }
+                if table[a] == key {
+                    return false;
+                }
+            }
+        }
+        perturb = perturb >> 5;
+        i = (i.wrapping_mul(5).wrapping_add(1).wrapping_add(perturb)) & mask;
+    }
+}
+
+// The iteration order of a set built by adding `items` in order.
+fn set_order(items: ref Vec[String]) -> Vec[String] {
+    let mut size = 8;
+    let mut table: Vec[String] = Vec.new();
+    let mut used: Vec[bool] = Vec.new();
+    for _ in 0..size {
+        table.push(String.new());
+        used.push(false);
+    }
+    let mut fill = 0;
+    for key in items.iter() {
+        if set_insert(mut table, mut used, key) {
+            fill += 1;
+            if fill * 5 >= (size - 1) * 3 {
+                let mut ns = 8;
+                while ns <= fill * 4 {
+                    ns = ns * 2;
+                }
+                let mut old: Vec[String] = Vec.new();
+                for k in 0..size {
+                    if used[k] {
+                        old.push(table[k].clone());
+                    }
+                }
+                size = ns;
+                table = Vec.new();
+                used = Vec.new();
+                for _ in 0..size {
+                    table.push(String.new());
+                    used.push(false);
+                }
+                for o in old.iter() {
+                    set_insert(mut table, mut used, o);
+                }
+            }
+        }
+    }
+    let mut out: Vec[String] = Vec.new();
+    for k in 0..size {
+        if used[k] {
+            out.push(table[k].clone());
+        }
+    }
+    out
+}
+// ------------------------------------------------------------ werkzeug.http: quoting and lists
+
+// A dict of str to str or None, in insertion order: assigning to a key
+// that is already there keeps its place.
+#[derive(Clone)]
+struct DictItem {
+    key: String,
+    value: Option[String],
+}
+
+fn dict_find(d: ref Vec[DictItem], key: Str) -> i64 {
+    for i in 0..d.len() {
+        if d[i].key == key {
+            return i;
+        }
+    }
+    -1
+}
+
+fn dict_set(d: mut ref Vec[DictItem], key: Str, value: own Option[String]) {
+    let at = dict_find(d, key);
+    if at >= 0 {
+        d[at].value = value;
+    } else {
+        d.push(DictItem { key: key.to_string(), value: value });
+    }
+}
+
+fn dict_get(d: ref Vec[DictItem], key: Str) -> Option[String] {
+    let at = dict_find(d, key);
+    if at >= 0 { d[at].value.clone() } else { None }
+}
+
+fn dict_pop(d: mut ref Vec[DictItem], key: Str) {
+    let at = dict_find(d, key);
+    if at >= 0 {
+        d.remove(at);
+    }
+}
+
+fn dict_repr(d: ref Vec[DictItem]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for e in d.iter() {
+        parts.push(f"{py_repr(e.key)}: {opt_repr(e.value)}");
+    }
+    "{" + join(parts, ", ") + "}"
+}
+
+// " ".join(f"{k}={v!r}" for k, v in sorted(self.items()))
+fn sorted_items_repr(d: ref Vec[DictItem]) -> String {
+    let mut keys: Vec[String] = Vec.new();
+    for e in d.iter() {
+        keys.push(e.key.clone());
+    }
+    keys = sort_strings(keys);
+    let mut parts: Vec[String] = Vec.new();
+    for k in keys.iter() {
+        parts.push(f"{k}={opt_repr(dict_get(d, k))}");
+    }
+    join(parts, " ")
+}
+
+fn str_list_repr(v: ref Vec[String]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for s in v.iter() {
+        parts.push(py_repr(s));
+    }
+    "[" + join(parts, ", ") + "]"
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn is_token_char(c: u8) -> bool {
+    is_alnum(c) or has_byte("!#$%&'*+-.^_`|~", c)
+}
+
+// The characters of a parameter token, `[\w!#$%&'*+\-.^`|~]` under re.ASCII.
+fn is_param_char(c: u8) -> bool {
+    is_alnum(c) or has_byte("_!#$%&'*+-.^`|~", c)
+}
+
+// The same without the single quote: an RFC 2231 charset or language.
+fn is_charset_char(c: u8) -> bool {
+    c != b'\'' and is_param_char(c)
+}
+
+fn quote_header_value(value: Str, allow_token: bool) -> String {
+    if value.len() == 0 {
+        return "\"\"".to_string();
+    }
+    if allow_token {
+        let b = to_bytes(value);
+        let mut all = true;
+        for i in 0..b.len() {
+            if not is_token_char(b[i]) {
+                all = false;
+            }
+        }
+        if all {
+            return value.to_string();
+        }
+    }
+    let escaped = replace_byte(replace_byte(value, b'\\', "\\\\"), b'"', "\\\"");
+    f"\"{escaped}\""
+}
+
+// str.replace of a two-byte needle, left to right.
+fn replace2(s: Str, a: Str, with: Str) -> String {
+    let b = to_bytes(s);
+    let p = to_bytes(a);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if starts_at(b, i, a) {
+            push_str_bytes(mut out, with);
+            i += p.len();
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    from_bytes(out)
+}
+
+fn unquote_header_value(value: Str) -> String {
+    let b = to_bytes(value);
+    if b.len() >= 2 and b[0] == b'"' and b[b.len() - 1] == b'"' {
+        let inner = slice(value, 1, b.len() - 1);
+        return replace2(replace2(inner, "\\\\", "\\"), "\\\"", "\"");
+    }
+    value.to_string()
+}
+
+fn dump_options_header(header: ref Option[String], options: ref Vec[DictItem]) -> String {
+    let mut segments: Vec[String] = Vec.new();
+    if let Some(h) = header {
+        segments.push(h.clone());
+    }
+    for e in options.iter() {
+        match e.value {
+            None => {},
+            Some(v) => {
+                if e.key.ends_with("*") {
+                    segments.push(f"{e.key}={v}");
+                } else {
+                    segments.push(f"{e.key}={quote_header_value(v, true)}");
+                }
+            },
+        }
+    }
+    join(segments, "; ")
+}
+
+fn dump_header_dict(d: ref Vec[DictItem]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    for e in d.iter() {
+        match e.value {
+            None => items.push(e.key.clone()),
+            Some(v) => {
+                if e.key.ends_with("*") {
+                    items.push(f"{e.key}={v}");
+                } else {
+                    items.push(f"{e.key}={quote_header_value(v, true)}");
+                }
+            },
+        }
+    }
+    join(items, ", ")
+}
+
+fn dump_header_list(v: ref Vec[String]) -> String {
+    let mut items: Vec[String] = Vec.new();
+    for s in v.iter() {
+        items.push(quote_header_value(s, true));
+    }
+    join(items, ", ")
+}
+
+// urllib.request.parse_http_list: commas split, except inside a quoted
+// string, where a backslash escapes the next character.
+fn parse_http_list(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut res: Vec[String] = Vec.new();
+    let mut part: Vec[u8] = Vec.new();
+    let mut escape = false;
+    let mut quote = false;
+    for i in 0..b.len() {
+        let cur = b[i];
+        if escape {
+            part.push(cur);
+            escape = false;
+            continue;
+        }
+        if quote {
+            if cur == b'\\' {
+                escape = true;
+                continue;
+            } else if cur == b'"' {
+                quote = false;
+            }
+            part.push(cur);
+            continue;
+        }
+        if cur == b',' {
+            res.push(from_bytes(part));
+            part = Vec.new();
+            continue;
+        }
+        if cur == b'"' {
+            quote = true;
+        }
+        part.push(cur);
+    }
+    if part.len() > 0 {
+        res.push(from_bytes(part));
+    }
+    let mut out: Vec[String] = Vec.new();
+    for p in res.iter() {
+        out.push(strip(p));
+    }
+    out
+}
+
+fn is_quoted(s: Str) -> bool {
+    let b = to_bytes(s);
+    b.len() >= 2 and b[0] == b'"' and b[b.len() - 1] == b'"'
+}
+
+fn parse_list_header(value: Str) -> Vec[String] {
+    let mut result: Vec[String] = Vec.new();
+    for item in parse_http_list(value).iter() {
+        if is_quoted(item) {
+            result.push(slice(item, 1, item.len() - 1));
+        } else {
+            result.push(item.clone());
+        }
+    }
+    result
+}
+
+// _charset_value_re.match: charset'language'value, where the value is
+// the run of token characters that follows (anything after it is dropped).
+fn charset_value(v: Str) -> Option[(String, String)] {
+    let b = to_bytes(v);
+    let mut i: i64 = 0;
+    while i < b.len() and is_charset_char(b[i]) {
+        i += 1;
+    }
+    if i >= b.len() or b[i] != b'\'' {
+        return None;
+    }
+    let charset = slice(v, 0, i);
+    i += 1;
+    while i < b.len() and is_charset_char(b[i]) {
+        i += 1;
+    }
+    if i >= b.len() or b[i] != b'\'' {
+        return None;
+    }
+    i += 1;
+    let st = i;
+    while i < b.len() and is_param_char(b[i]) {
+        i += 1;
+    }
+    if i == st {
+        return None;
+    }
+    Some((charset, slice(v, st, i)))
+}
+
+fn is_safe_encoding(e: Str) -> bool {
+    e == "ascii" or e == "us-ascii" or e == "utf-8" or e == "iso-8859-1"
+}
+
+// unquote(value, encoding=enc), errors='replace': the %XX runs become
+// bytes, decoded as UTF-8, Latin-1 or ASCII.
+fn decode_as(b: ref Vec[u8], enc: Str) -> String {
+    if enc == "utf-8" {
+        return utf8_replace(b);
+    }
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if c < 0x80 {
+            out.push(c);
+        } else if enc == "iso-8859-1" {
+            push_code_point(mut out, c as i64);
+        } else {
+            push_str_bytes(mut out, "\u{FFFD}");
+        }
+    }
+    from_bytes(out)
+}
+
+fn unquote_enc(s: Str, enc: Str) -> String {
+    if not has_byte(s, b'%') {
+        return s.to_string();
+    }
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i < b.len() {
+        let st = i;
+        if b[i] < 128 {
+            while i < b.len() and b[i] < 128 {
+                i += 1;
+            }
+            let mut run: Vec[u8] = Vec.new();
+            unquote_bytes(b, st, i, mut run);
+            push_str_bytes(mut out, decode_as(run, enc));
+        } else {
+            while i < b.len() and b[i] >= 128 {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    from_bytes(out)
+}
+
+fn parse_dict_header(value: Str) -> Vec[DictItem] {
+    let mut result: Vec[DictItem] = Vec.new();
+    for item in parse_list_header(value).iter() {
+        let (k, has_value, v) = partition(item, b'=');
+        let mut key = strip(k);
+        if key.len() == 0 {
+            continue;
+        }
+        if not has_value {
+            dict_set(mut result, key, None);
+            continue;
+        }
+        let mut value = strip(v);
+        if key.ends_with("*") {
+            key = slice(key, 0, key.len() - 1);
+            let mut encoding: Option[String] = None;
+            if let Some((cs, rest)) = charset_value(value) {
+                encoding = Some(lower(cs));
+                value = rest;
+            }
+            if let Some(e) = encoding {
+                if is_safe_encoding(e) {
+                    value = unquote_enc(value, e);
+                }
+            }
+        }
+        if is_quoted(value) {
+            value = slice(value, 1, value.len() - 1);
+        }
+        dict_set(mut result, key, Some(value));
+    }
+    result
+}
+
+// ------------------------------------------------------------ parse_options_header
+
+fn lstrip(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i < b.len() and is_ws(b[i]) {
+        i += 1;
+    }
+    slice_from(s, i)
+}
+
+// _continuation_re.search(pk): `\*(\d+)$`, the start of the match or -1.
+fn continuation_at(pk: Str) -> i64 {
+    let b = to_bytes(pk);
+    let star = rfind_byte(pk, b'*');
+    if star < 0 or star + 1 >= b.len() {
+        return -1;
+    }
+    for i in star + 1..b.len() {
+        if not is_digit(b[i]) {
+            return -1;
+        }
+    }
+    star
+}
+
+#[derive(Clone)]
+struct Part {
+    key: String,
+    value: String,
+}
+
+fn parse_options_header(value_in: ref Option[String]) -> (String, Vec[DictItem]) {
+    let text = match value_in {
+        None => return (String.new(), Vec.new()),
+        Some(t) => t.clone(),
+    };
+    let (v, _, r) = partition(text, b';');
+    let value = strip(v);
+    let mut rest = strip(r);
+    if value.len() == 0 or rest.len() == 0 {
+        return (value, Vec.new());
+    }
+    let mut parts: Vec[Part] = Vec.new();
+    loop {
+        // _parameter_key_re.match(rest)
+        let b = to_bytes(rest);
+        let mut i: i64 = 0;
+        while i < b.len() and is_param_char(b[i]) {
+            i += 1;
+        }
+        if i > 0 and i < b.len() and b[i] == b'=' {
+            let pk = lower(slice(rest, 0, i));
+            rest = slice_from(rest, i + 1);
+            let rb = to_bytes(rest);
+            let mut j: i64 = 0;
+            while j < rb.len() and is_param_char(rb[j]) {
+                j += 1;
+            }
+            if j > 0 {
+                parts.push(Part { key: pk, value: slice(rest, 0, j) });
+            } else if rb.len() > 0 and rb[0] == b'"' {
+                let mut pos: i64 = 1;
+                while pos < rb.len() {
+                    if rb[pos] == b'\\' and pos + 1 < rb.len() and (rb[pos + 1] == b'\\' or rb[pos + 1] == b'"') {
+                        pos += 2;
+                    } else if rb[pos] == b'"' {
+                        parts.push(Part { key: pk.clone(), value: slice(rest, 0, pos + 1) });
+                        rest = slice_from(rest, pos + 1);
+                        break;
+                    } else {
+                        pos += 1;
+                    }
+                }
+            }
+        }
+        let end = find_byte(rest, b';');
+        if end == -1 {
+            break;
+        }
+        rest = lstrip(slice_from(rest, end + 1));
+    }
+    let mut options: Vec[DictItem] = Vec.new();
+    let mut encoding: Option[String] = None;
+    let mut continued: Option[String] = None;
+    for p in parts.iter() {
+        let mut pk = p.key.clone();
+        let mut pv = p.value.clone();
+        if pk.ends_with("*") {
+            pk = slice(pk, 0, pk.len() - 1);
+            if let Some((cs, v)) = charset_value(pv) {
+                encoding = Some(lower(cs));
+                pv = v;
+            }
+            let empty = match ref encoding {
+                None => true,
+                Some(e) => e.len() == 0,
+            };
+            if empty {
+                encoding = continued.clone();
+            }
+            if let Some(e) = encoding.clone() {
+                if is_safe_encoding(e) {
+                    continued = Some(e.clone());
+                    pv = unquote_enc(pv, e);
+                }
+            }
+        }
+        let pb = to_bytes(pv);
+        if pb.len() > 0 and pb[0] == b'"' and pb[pb.len() - 1] == b'"' {
+            let inner = if pb.len() >= 2 { slice(pv, 1, pb.len() - 1) } else { String.new() };
+            pv = replace2(replace2(replace2(inner, "\\\\", "\\"), "\\\"", "\""), "%22", "\"");
+        }
+        let at = continuation_at(pk);
+        if at >= 0 {
+            let base = slice(pk, 0, at);
+            let before = match dict_get(options, base) {
+                Some(s) => s,
+                None => String.new(),
+            };
+            dict_set(mut options, base, Some(before + pv));
+        } else {
+            dict_set(mut options, pk, Some(pv));
+        }
+    }
+    (value, options)
+}
+
+fn options_repr(value: Str, options: ref Vec[DictItem]) -> String {
+    f"({py_repr(value)}, {dict_repr(options)})"
+}
+// ------------------------------------------------------------ Accept headers
+
+// A quality is the int 1 when the item has no q, else the float it gave;
+// repr and str tell them apart ("1" and "1.0").
+#[derive(Clone)]
+struct Q {
+    is_float: bool,
+    i: i64,
+    f: f64,
+}
+
+fn q_int(i: i64) -> Q {
+    Q { is_float: false, i: i, f: 0.0 }
+}
+
+fn q_float(f: f64) -> Q {
+    Q { is_float: true, i: 0, f: f }
+}
+
+fn q_val(q: ref Q) -> f64 {
+    if q.is_float { q.f } else { q.i as f64 }
+}
+
+fn q_str(q: ref Q) -> String {
+    if q.is_float { f"{q.f}" } else { f"{q.i}" }
+}
+
+#[derive(Clone)]
+struct AItem {
+    value: String,
+    q: Q,
+}
+
+// Accept and the three subclasses, told apart by `kind`.
+const A_PLAIN: i64 = 0;
+const A_MIME: i64 = 1;
+const A_LANG: i64 = 2;
+const A_CHARSET: i64 = 3;
+
+struct Accept {
+    kind: i64,
+    items: Vec[AItem],
+    provided: bool,
+}
+
+fn class_name(kind: i64) -> String {
+    let n = if kind == A_MIME {
+        "MIMEAccept"
+    } else if kind == A_LANG {
+        "LanguageAccept"
+    } else if kind == A_CHARSET {
+        "CharsetAccept"
+    } else {
+        "Accept"
+    };
+    n.to_string()
+}
+
+// _mime_split_re.split: on "/" or on `\s*;\s*`.
+fn mime_split(value: Str) -> Vec[String] {
+    let b = to_bytes(value);
+    let mut out: Vec[String] = Vec.new();
+    let mut st: i64 = 0;
+    let mut i: i64 = 0;
+    while i < b.len() {
+        if b[i] == b'/' {
+            out.push(slice(value, st, i));
+            i += 1;
+            st = i;
+            continue;
+        }
+        if is_ws(b[i]) or b[i] == b';' {
+            let mut j = i;
+            while j < b.len() and is_ws(b[j]) {
+                j += 1;
+            }
+            if j < b.len() and b[j] == b';' {
+                j += 1;
+                while j < b.len() and is_ws(b[j]) {
+                    j += 1;
+                }
+                out.push(slice(value, st, i));
+                i = j;
+                st = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push(slice(value, st, b.len()));
+    out
+}
+
+// _specificity, a tuple of bools as 1 and 0.
+fn specificity(kind: i64, value: Str) -> Vec[i64] {
+    let mut out: Vec[i64] = Vec.new();
+    if kind == A_MIME {
+        for part in mime_split(value).iter() {
+            out.push(if part == "*" { 0 } else { 1 });
+        }
+    } else {
+        out.push(if value == "*" { 0 } else { 1 });
+    }
+    out
+}
+
+// Tuple comparison: -1, 0 or 1.
+fn cmp_spec(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut i: i64 = 0;
+    while i < a.len() and i < b.len() {
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+        i += 1;
+    }
+    if a.len() == b.len() { 0 } else if a.len() < b.len() { -1 } else { 1 }
+}
+
+fn item_greater(kind: i64, a: ref AItem, b: ref AItem) -> bool {
+    let c = cmp_spec(specificity(kind, a.value), specificity(kind, b.value));
+    if c != 0 {
+        return c > 0;
+    }
+    q_val(a.q) > q_val(b.q)
+}
+
+// sorted(values, key=(specificity, quality), reverse=True), which keeps
+// equal items in their order.
+fn new_accept(kind: i64, values: own Vec[AItem]) -> Accept {
+    let mut v = values;
+    for i in 1..v.len() {
+        let mut j = i;
+        while j > 0 and item_greater(kind, v[j], v[j - 1]) {
+            v.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    Accept { kind: kind, items: v, provided: true }
+}
+
+fn empty_accept(kind: i64) -> Accept {
+    Accept { kind: kind, items: Vec.new(), provided: false }
+}
+
+// codecs.lookup(name).name for the codecs the docs server meets, from
+// encodings.aliases: the module an alias names, then the codec's name.
+fn codec_module(alias: Str) -> String {
+    let table: Vec[(Str, Str)] = vec![
+        ("cp65001", "utf_8"), ("u8", "utf_8"), ("utf", "utf_8"), ("utf8", "utf_8"), ("utf8_ucs2", "utf_8"), ("utf8_ucs4", "utf_8"),
+        ("8859", "latin_1"), ("cp819", "latin_1"), ("csisolatin1", "latin_1"), ("ibm819", "latin_1"), ("iso8859", "latin_1"),
+        ("iso8859_1", "latin_1"), ("iso_8859_1", "latin_1"), ("iso_8859_1_1987", "latin_1"), ("iso_ir_100", "latin_1"),
+        ("l1", "latin_1"), ("latin", "latin_1"), ("latin1", "latin_1"),
+        ("646", "ascii"), ("ansi_x3.4_1968", "ascii"), ("ansi_x3.4_1986", "ascii"), ("ansi_x3_4_1968", "ascii"), ("cp367", "ascii"),
+        ("csascii", "ascii"), ("ibm367", "ascii"), ("iso646_us", "ascii"), ("iso_646.irv_1991", "ascii"), ("iso_ir_6", "ascii"),
+        ("us", "ascii"), ("us_ascii", "ascii"),
+        ("1252", "cp1252"), ("windows_1252", "cp1252"),
+        ("iso_8859_15", "iso8859_15"), ("l9", "iso8859_15"), ("latin9", "iso8859_15"),
+        ("csisolatincyrillic", "iso8859_5"), ("cyrillic", "iso8859_5"), ("iso_8859_5", "iso8859_5"), ("iso_8859_5_1988", "iso8859_5"),
+        ("iso_ir_144", "iso8859_5"),
+        ("u16", "utf_16"), ("utf16", "utf_16"), ("unicodelittleunmarked", "utf_16_le"), ("utf_16le", "utf_16_le"),
+        ("unicodebigunmarked", "utf_16_be"), ("utf_16be", "utf_16_be"),
+        ("cskoi8r", "koi8_r"),
+        ("csshiftjis", "shift_jis"), ("s_jis", "shift_jis"), ("shiftjis", "shift_jis"), ("sjis", "shift_jis"), ("x_mac_japanese", "shift_jis"),
+    ];
+    for (a, m) in table.iter() {
+        if a == alias {
+            return m.to_string();
+        }
+    }
+    String.new()
+}
+
+fn codec_name(module: Str) -> Option[String] {
+    let table: Vec[(Str, Str)] = vec![
+        ("utf_8", "utf-8"), ("latin_1", "iso8859-1"), ("ascii", "ascii"), ("cp1252", "cp1252"), ("iso8859_15", "iso8859-15"),
+        ("iso8859_5", "iso8859-5"), ("utf_16", "utf-16"), ("utf_16_le", "utf-16-le"), ("utf_16_be", "utf-16-be"),
+        ("koi8_r", "koi8-r"), ("shift_jis", "shift_jis"),
+    ];
+    for (m, n) in table.iter() {
+        if m == module {
+            return Some(n.to_string());
+        }
+    }
+    None
+}
+
+// encodings.normalize_encoding after the registry lower-cases the name:
+// runs of anything but letters, digits and dots become one underscore.
+fn normalize_encoding(name: Str) -> String {
+    let b = to_bytes(lower(name));
+    let mut out: Vec[u8] = Vec.new();
+    let mut punct = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if is_alnum(c) or c == b'.' {
+            if punct and out.len() > 0 {
+                out.push(b'_');
+            }
+            out.push(c);
+            punct = false;
+        } else {
+            punct = true;
+        }
+    }
+    from_bytes(out)
+}
+
+fn charset_normalize(name: Str) -> String {
+    let norm = normalize_encoding(name);
+    let mut module = codec_module(norm);
+    if module.len() == 0 {
+        module = codec_module(replace_byte(norm, b'.', "_"));
+    }
+    let mut found = if module.len() > 0 { codec_name(module) } else { None };
+    if found.is_none() and not has_byte(norm, b'.') {
+        found = codec_name(norm);
+    }
+    match found {
+        Some(n) => n,
+        None => lower(name),
+    }
+}
+
+fn split_lang(value: Str) -> Vec[String] {
+    let b = to_bytes(lower(value));
+    let mut out: Vec[String] = Vec.new();
+    let mut part: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        if b[i] == b'_' or b[i] == b'-' {
+            out.push(from_bytes(part));
+            part = Vec.new();
+        } else {
+            part.push(b[i]);
+        }
+    }
+    out.push(from_bytes(part));
+    out
+}
+
+// The primary subtag: re.split(r"[_-]", tag, 1)[0].
+fn primary_tag(tag: Str) -> String {
+    let b = to_bytes(tag);
+    for i in 0..b.len() {
+        if b[i] == b'_' or b[i] == b'-' {
+            return slice(tag, 0, i);
+        }
+    }
+    tag.to_string()
+}
+
+fn sorted_params(parts: ref Vec[String]) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    for i in 2..parts.len() {
+        v.push(parts[i].clone());
+    }
+    sort_strings(v)
+}
+
+// MIMEAccept._value_matches: the value comes from the application and
+// raises when it is not a mimetype; the item comes from the client.
+fn mime_matches(value: Str, item: Str) -> Result[bool, String] {
+    if not has_byte(item, b'/') {
+        return Ok(false);
+    }
+    if not has_byte(value, b'/') {
+        return Err(f"invalid mimetype {py_repr(value)}");
+    }
+    let nv = mime_split(lower(value));
+    let vparams = sorted_params(nv);
+    if nv[0] == "*" and nv[1] != "*" {
+        return Err(f"invalid mimetype {py_repr(value)}");
+    }
+    let ni = mime_split(lower(item));
+    let iparams = sorted_params(ni);
+    if ni[0] == "*" and ni[1] != "*" {
+        return Ok(false);
+    }
+    if (ni[0] == "*" and ni[1] == "*") or (nv[0] == "*" and nv[1] == "*") {
+        return Ok(true);
+    }
+    Ok(ni[0] == nv[0] and (ni[1] == "*" or nv[1] == "*" or (ni[1] == nv[1] and iparams == vparams)))
+}
+
+fn value_matches(kind: i64, value: Str, item: Str) -> Result[bool, String] {
+    if kind == A_MIME {
+        return mime_matches(value, item);
+    }
+    if item == "*" {
+        return Ok(true);
+    }
+    if kind == A_LANG {
+        return Ok(split_lang(value) == split_lang(item));
+    }
+    if kind == A_CHARSET {
+        return Ok(charset_normalize(value) == charset_normalize(item));
+    }
+    Ok(lower(item) == lower(value))
+}
+
+impl Accept {
+    fn find(ref self, key: Str) -> Result[i64, String] {
+        for i in 0..self.items.len() {
+            if value_matches(self.kind, key, self.items[i].value)? {
+                return Ok(i);
+            }
+        }
+        Ok(-1)
+    }
+
+    fn quality(ref self, key: Str) -> Result[Q, String] {
+        let at = self.find(key)?;
+        if at >= 0 { Ok(self.items[at].q.clone()) } else { Ok(q_int(0)) }
+    }
+
+    fn contains(ref self, key: Str) -> Result[bool, String] {
+        Ok(self.find(key)? >= 0)
+    }
+
+    fn has(ref self, key: Str) -> bool {
+        self.contains(key).unwrap_or(false)
+    }
+
+    fn to_header(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for it in self.items.iter() {
+            if q_val(it.q) != 1.0 {
+                parts.push(f"{it.value};q={q_str(it.q)}");
+            } else {
+                parts.push(it.value.clone());
+            }
+        }
+        join(parts, ",")
+    }
+
+    fn repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for it in self.items.iter() {
+            parts.push(f"({py_repr(it.value)}, {q_str(it.q)})");
+        }
+        f"{class_name(self.kind)}([{join(parts, ", ")}])"
+    }
+
+    fn best(ref self) -> Option[String] {
+        if self.items.len() > 0 { Some(self.items[0].value.clone()) } else { None }
+    }
+
+    // Accept.best_match
+    fn base_best_match(ref self, matches: ref Vec[String]) -> Result[Option[String], String] {
+        let mut result: Option[String] = None;
+        let mut best_quality: f64 = -1.0;
+        let mut best_spec: Vec[i64] = vec![-1];
+        for server_item in matches.iter() {
+            let at = self.find(server_item)?;
+            if at < 0 {
+                continue;
+            }
+            let client = self.items[at].clone();
+            let q = q_val(client.q);
+            let spec = specificity(self.kind, client.value);
+            if q <= 0.0 or q < best_quality {
+                continue;
+            }
+            if q > best_quality or cmp_spec(spec, best_spec) > 0 {
+                result = Some(server_item.clone());
+                best_quality = q;
+                best_spec = spec;
+            }
+        }
+        Ok(result)
+    }
+
+    fn best_match(ref self, matches: ref Vec[String], default: ref Option[String]) -> Result[Option[String], String] {
+        let found = self.base_best_match(matches)?;
+        if found.is_some() or self.kind != A_LANG {
+            return Ok(if found.is_some() { found } else { default.clone() });
+        }
+        // LanguageAccept: primary tags of the accepted values, then of
+        // the match values.
+        let mut prim: Vec[AItem] = Vec.new();
+        for it in self.items.iter() {
+            prim.push(AItem { value: primary_tag(it.value), q: it.q.clone() });
+        }
+        let fallback = new_accept(A_PLAIN, prim);
+        let second = fallback.base_best_match(matches)?;
+        if second.is_some() {
+            return Ok(second);
+        }
+        let mut fm: Vec[String] = Vec.new();
+        for m in matches.iter() {
+            fm.push(primary_tag(m));
+        }
+        match self.base_best_match(fm)? {
+            Some(r) => {
+                for m in matches.iter() {
+                    if m.starts_with(r) {
+                        return Ok(Some(m.clone()));
+                    }
+                }
+                Ok(None)
+            },
+            None => Ok(default.clone()),
+        }
+    }
+}
+
+fn is_q_value(s: Str) -> bool {
+    // _q_value_re.fullmatch: -?\d+(\.\d+)?
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    if i < b.len() and b[i] == b'-' {
+        i += 1;
+    }
+    let st = i;
+    while i < b.len() and is_digit(b[i]) {
+        i += 1;
+    }
+    if i == st {
+        return false;
+    }
+    if i < b.len() and b[i] == b'.' {
+        i += 1;
+        let fs = i;
+        while i < b.len() and is_digit(b[i]) {
+            i += 1;
+        }
+        if i == fs {
+            return false;
+        }
+    }
+    i == b.len()
+}
+
+fn parse_accept_header(value: ref Option[String], kind: i64) -> Accept {
+    let text = match value {
+        None => return empty_accept(kind),
+        Some(t) => t.clone(),
+    };
+    if text.len() == 0 {
+        return empty_accept(kind);
+    }
+    let mut result: Vec[AItem] = Vec.new();
+    for raw in parse_list_header(text).iter() {
+        let (item, options) = parse_options_header(Some(raw.clone()));
+        let mut opts = options;
+        let mut q = q_int(1);
+        let qi = dict_find(opts, "q");
+        if qi >= 0 {
+            let q_text = strip(opts[qi].value.clone().unwrap_or(String.new()));
+            opts.remove(qi);
+            if not is_q_value(q_text) {
+                continue;
+            }
+            let f = match f64.parse(q_text) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+            if f < 0.0 or f > 1.0 {
+                continue;
+            }
+            q = q_float(f);
+        }
+        let shown = if opts.len() > 0 { dump_options_header(Some(item.clone()), opts) } else { item };
+        result.push(AItem { value: shown, q: q });
+    }
+    new_accept(kind, result)
+}
+// ------------------------------------------------------------ Cache-Control
+
+// What a cache_control_property returns: None, True/False, an int, or
+// the str.
+const V_NONE: i64 = 0;
+const V_BOOL: i64 = 1;
+const V_INT: i64 = 2;
+const V_STR: i64 = 3;
+
+struct PropValue {
+    t: i64,
+    b: bool,
+    i: i64,
+    s: String,
+}
+
+fn pv_none() -> PropValue {
+    PropValue { t: V_NONE, b: false, i: 0, s: String.new() }
+}
+
+fn pv_bool(b: bool) -> PropValue {
+    PropValue { t: V_BOOL, b: b, i: 0, s: String.new() }
+}
+
+fn pv_repr(v: ref PropValue) -> String {
+    if v.t == V_BOOL {
+        py_bool(v.b)
+    } else if v.t == V_INT {
+        f"{v.i}"
+    } else if v.t == V_STR {
+        py_repr(v.s)
+    } else {
+        "None".to_string()
+    }
+}
+
+// How a property reads its key: a bool, or a value of type int or str
+// with what to give when the key has no value.
+const P_BOOL: i64 = 0;
+const P_INT: i64 = 1;
+const P_STR: i64 = 2;
+
+struct Prop {
+    name: Str,
+    key: Str,
+    kind: i64,
+    empty_true: bool,
+}
+
+fn request_props() -> Vec[Prop] {
+    vec![
+        Prop { name: "no_cache", key: "no-cache", kind: P_BOOL, empty_true: false },
+        Prop { name: "no_store", key: "no-store", kind: P_BOOL, empty_true: false },
+        Prop { name: "max_age", key: "max-age", kind: P_INT, empty_true: false },
+        Prop { name: "max_stale", key: "max-stale", kind: P_INT, empty_true: true },
+        Prop { name: "min_fresh", key: "min-fresh", kind: P_INT, empty_true: false },
+        Prop { name: "no_transform", key: "no-transform", kind: P_BOOL, empty_true: false },
+        Prop { name: "only_if_cached", key: "only-if-cached", kind: P_BOOL, empty_true: false },
+        Prop { name: "stale_if_error", key: "stale-if-error", kind: P_INT, empty_true: false },
+    ]
+}
+
+fn response_props() -> Vec[Prop] {
+    vec![
+        Prop { name: "no_cache", key: "no-cache", kind: P_STR, empty_true: true },
+        Prop { name: "public", key: "public", kind: P_BOOL, empty_true: false },
+        Prop { name: "private", key: "private", kind: P_STR, empty_true: true },
+        Prop { name: "must_revalidate", key: "must-revalidate", kind: P_BOOL, empty_true: false },
+        Prop { name: "proxy_revalidate", key: "proxy-revalidate", kind: P_BOOL, empty_true: false },
+        Prop { name: "s_maxage", key: "s-maxage", kind: P_INT, empty_true: false },
+        Prop { name: "immutable", key: "immutable", kind: P_BOOL, empty_true: false },
+        Prop { name: "must_understand", key: "must-understand", kind: P_BOOL, empty_true: false },
+        Prop { name: "stale_while_revalidate", key: "stale-while-revalidate", kind: P_INT, empty_true: false },
+        Prop { name: "max_age", key: "max-age", kind: P_INT, empty_true: false },
+        Prop { name: "no_store", key: "no-store", kind: P_BOOL, empty_true: false },
+        Prop { name: "no_transform", key: "no-transform", kind: P_BOOL, empty_true: false },
+        Prop { name: "stale_if_error", key: "stale-if-error", kind: P_INT, empty_true: false },
+    ]
+}
+
+// _CacheControl._get_cache_value
+fn cache_get(d: ref Vec[DictItem], p: ref Prop) -> PropValue {
+    let at = dict_find(d, p.key);
+    if p.kind == P_BOOL {
+        return pv_bool(at >= 0);
+    }
+    if at < 0 {
+        return pv_none();
+    }
+    match d[at].value {
+        None => if p.empty_true { pv_bool(true) } else { pv_none() },
+        Some(v) => {
+            if p.kind == P_INT {
+                match py_int(v) {
+                    Some(n) => PropValue { t: V_INT, b: false, i: n, s: String.new() },
+                    None => pv_none(),
+                }
+            } else {
+                PropValue { t: V_STR, b: false, i: 0, s: v.clone() }
+            }
+        },
+    }
+}
+
+fn cache_prop(d: ref Vec[DictItem], props: ref Vec[Prop], name: Str) -> PropValue {
+    for p in props.iter() {
+        if p.name == name {
+            return cache_get(d, p);
+        }
+    }
+    pv_none()
+}
+
+fn props_line(d: ref Vec[DictItem], props: ref Vec[Prop]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for p in props.iter() {
+        parts.push(f"{p.name}={pv_repr(cache_get(d, p))}");
+    }
+    join(parts, " ")
+}
+
+// _set_cache_value for the setter calls the programs make: a bool sets or
+// pops, None and False pop, True sets with no value, anything else is
+// stored as its str.
+fn cache_set_flag(d: mut ref Vec[DictItem], key: Str, on: bool) {
+    if on {
+        dict_set(mut d, key, None);
+    } else {
+        dict_pop(mut d, key);
+    }
+}
+
+fn cache_set_value(d: mut ref Vec[DictItem], key: Str, value: Str) {
+    dict_set(mut d, key, Some(value.to_string()));
+}
+
+fn cache_repr(cls: Str, d: ref Vec[DictItem]) -> String {
+    f"<{cls} {sorted_items_repr(d)}>"
+}
+
+fn parse_cache_control_header(value: ref Option[String]) -> Vec[DictItem] {
+    match value {
+        None => Vec.new(),
+        Some(v) => if v.len() == 0 { Vec.new() } else { parse_dict_header(v) },
+    }
+}
+
+// ------------------------------------------------------------ Content-Security-Policy
+
+fn parse_csp_header(value: ref Option[String]) -> Vec[DictItem] {
+    let mut items: Vec[DictItem] = Vec.new();
+    let text = match value {
+        None => return items,
+        Some(t) => t.clone(),
+    };
+    for raw in split_on(text, b';').iter() {
+        let policy = strip(raw);
+        if has_byte(policy, b' ') {
+            let (directive, _, rest) = partition(strip(policy), b' ');
+            dict_set(mut items, strip(directive), Some(strip(rest)));
+        }
+    }
+    items
+}
+
+fn dump_csp_header(d: ref Vec[DictItem]) -> String {
+    let mut parts: Vec[String] = Vec.new();
+    for e in d.iter() {
+        parts.push(f"{e.key} {e.value.clone().unwrap_or(String.new())}");
+    }
+    join(parts, "; ")
+}
+
+// ------------------------------------------------------------ HeaderSet
+
+struct HeaderSet {
+    headers: Vec[String],
+    set: Vec[String],
+}
+
+fn header_set(items: ref Vec[String]) -> HeaderSet {
+    let mut hs = HeaderSet { headers: Vec.new(), set: Vec.new() };
+    for h in items.iter() {
+        hs.headers.push(h.clone());
+        let k = lower(h);
+        if not contains_str(hs.set, k) {
+            hs.set.push(k);
+        }
+    }
+    hs
+}
+
+fn contains_str(v: ref Vec[String], s: Str) -> bool {
+    for x in v.iter() {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+impl HeaderSet {
+    fn has(ref self, header: Str) -> bool {
+        contains_str(self.set, lower(header))
+    }
+
+    fn add(mut ref self, header: Str) {
+        let k = lower(header);
+        if not contains_str(self.set, k) {
+            self.headers.push(header.to_string());
+            self.set.push(k);
+        }
+    }
+
+    // remove() as werkzeug writes it: the list entry is found by comparing
+    // its lower-cased form with `header` as given.
+    fn discard(mut ref self, header: Str) {
+        let k = lower(header);
+        let mut at: i64 = -1;
+        for i in 0..self.set.len() {
+            if self.set[i] == k {
+                at = i;
+            }
+        }
+        if at < 0 {
+            return;
+        }
+        self.set.remove(at);
+        for i in 0..self.headers.len() {
+            if lower(self.headers[i]) == header {
+                self.headers.remove(i);
+                break;
+            }
+        }
+    }
+
+    fn find(ref self, header: Str) -> i64 {
+        let k = lower(header);
+        for i in 0..self.headers.len() {
+            if lower(self.headers[i]) == k {
+                return i;
+            }
+        }
+        -1
+    }
+
+    fn to_header(ref self) -> String {
+        dump_header_list(self.headers)
+    }
+}
+
+fn parse_set_header(value: ref Option[String]) -> HeaderSet {
+    match value {
+        None => header_set(Vec.new()),
+        Some(v) => header_set(parse_list_header(v)),
+    }
+}
+
+// ------------------------------------------------------------ Range and Content-Range
+
+// _plain_int: ASCII digits with an optional minus, around white space.
+fn plain_int(s: Str) -> Option[i64] {
+    let t = strip(s);
+    let b = to_bytes(t);
+    let mut i: i64 = 0;
+    if i < b.len() and b[i] == b'-' {
+        i += 1;
+    }
+    if i == b.len() {
+        return None;
+    }
+    for k in i..b.len() {
+        if not is_digit(b[k]) {
+            return None;
+        }
+    }
+    py_int(t)
+}
+
+#[derive(Clone)]
+struct ByteSpan {
+    start: i64,
+    end: Option[i64],
+}
+
+struct Range {
+    units: String,
+    ranges: Vec[ByteSpan],
+}
+
+fn split_once(s: Str, c: u8) -> (String, String) {
+    let (a, _, b) = partition(s, c);
+    (a, b)
+}
+
+fn parse_range_header(value: ref Option[String]) -> Option[Range] {
+    let text = match value {
+        None => return None,
+        Some(t) => t.clone(),
+    };
+    if text.len() == 0 or not has_byte(text, b'=') {
+        return None;
+    }
+    let mut ranges: Vec[ByteSpan] = Vec.new();
+    let mut last_end: i64 = 0;
+    let (u, rng) = split_once(text, b'=');
+    let units = lower(strip(u));
+    for raw in split_on(rng, b',').iter() {
+        let item = strip(raw);
+        if not has_byte(item, b'-') {
+            return None;
+        }
+        if item.starts_with("-") {
+            if last_end < 0 {
+                return None;
+            }
+            let begin = plain_int(item)?;
+            ranges.push(ByteSpan { start: begin, end: None });
+            last_end = -1;
+        } else {
+            let (bs, es) = split_once(item, b'-');
+            let begin = plain_int(strip(bs))?;
+            let end_str = strip(es);
+            if begin < last_end or last_end < 0 {
+                return None;
+            }
+            if end_str.len() > 0 {
+                let end = plain_int(end_str)? + 1;
+                if begin >= end {
+                    return None;
+                }
+                ranges.push(ByteSpan { start: begin, end: Some(end) });
+                last_end = end;
+            } else {
+                ranges.push(ByteSpan { start: begin, end: None });
+                last_end = -1;
+            }
+        }
+    }
+    Some(Range { units: units, ranges: ranges })
+}
+
+fn is_byte_range_valid(start: Option[i64], stop: Option[i64], length: Option[i64]) -> bool {
+    if start.is_none() != stop.is_none() {
+        return false;
+    }
+    match (start, stop, length) {
+        (None, _, None) => true,
+        (None, _, Some(n)) => n >= 0,
+        (Some(a), Some(b), None) => 0 <= a and a < b,
+        (Some(a), Some(b), Some(n)) => if a >= b { false } else { 0 <= a and a < n },
+        _ => false,
+    }
+}
+
+impl Range {
+    fn range_for_length(ref self, length: i64) -> Option[(i64, i64)] {
+        if self.units != "bytes" or self.ranges.len() != 1 {
+            return None;
+        }
+        let mut start = self.ranges[0].start;
+        let end = match self.ranges[0].end {
+            Some(e) => e,
+            None => {
+                if start < 0 {
+                    start += length;
+                }
+                length
+            },
+        };
+        if is_byte_range_valid(Some(start), Some(end), Some(length)) {
+            Some((start, if end < length { end } else { length }))
+        } else {
+            None
+        }
+    }
+
+    fn to_header(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for r in self.ranges.iter() {
+            match r.end {
+                None => parts.push(if r.start >= 0 { f"{r.start}-" } else { f"{r.start}" }),
+                Some(e) => parts.push(f"{r.start}-{e - 1}"),
+            }
+        }
+        f"{self.units}={join(parts, ",")}"
+    }
+
+    fn to_content_range_header(ref self, length: i64) -> Option[String] {
+        match self.range_for_length(length) {
+            Some((a, b)) => Some(f"{self.units} {a}-{b - 1}/{length}"),
+            None => None,
+        }
+    }
+
+    fn ranges_repr(ref self) -> String {
+        let mut parts: Vec[String] = Vec.new();
+        for r in self.ranges.iter() {
+            let e = match r.end {
+                Some(x) => f"{x}",
+                None => "None".to_string(),
+            };
+            parts.push(f"({r.start}, {e})");
+        }
+        "[" + join(parts, ", ") + "]"
+    }
+}
+
+struct ContentRange {
+    units: Option[String],
+    start: Option[i64],
+    stop: Option[i64],
+    length: Option[i64],
+}
+
+fn opt_int_repr(v: ref Option[i64]) -> String {
+    match v {
+        Some(x) => f"{x}",
+        None => "None".to_string(),
+    }
+}
+
+impl ContentRange {
+    fn to_header(ref self) -> String {
+        let units = match self.units {
+            None => return String.new(),
+            Some(u) => u.clone(),
+        };
+        let length = match self.length {
+            None => "*".to_string(),
+            Some(n) => f"{n}",
+        };
+        match (self.start, self.stop) {
+            (Some(a), Some(b)) => f"{units} {a}-{b - 1}/{length}",
+            _ => f"{units} */{length}",
+        }
+    }
+}
+
+// str.split(None, 1)
+fn split_ws_once(s: Str) -> Vec[String] {
+    let b = to_bytes(s);
+    let mut i: i64 = 0;
+    while i < b.len() and is_ws(b[i]) {
+        i += 1;
+    }
+    let st = i;
+    while i < b.len() and not is_ws(b[i]) {
+        i += 1;
+    }
+    let mut out: Vec[String] = Vec.new();
+    if i > st {
+        out.push(slice(s, st, i));
+    }
+    while i < b.len() and is_ws(b[i]) {
+        i += 1;
+    }
+    if i < b.len() {
+        out.push(slice_from(s, i));
+    }
+    out
+}
+
+fn parse_content_range_header(value: ref Option[String]) -> Option[ContentRange] {
+    let text = match value {
+        None => return None,
+        Some(t) => t.clone(),
+    };
+    let parts = split_ws_once(strip(text));
+    if parts.len() != 2 {
+        return None;
+    }
+    let units = parts[0].clone();
+    let rangedef = parts[1].clone();
+    if not has_byte(rangedef, b'/') {
+        return None;
+    }
+    let (rng, length_str) = split_once(rangedef, b'/');
+    let length = if length_str == "*" { None } else { Some(plain_int(length_str)?) };
+    if rng == "*" {
+        if not is_byte_range_valid(None, None, length) {
+            return None;
+        }
+        return Some(ContentRange { units: Some(units), start: None, stop: None, length: length });
+    }
+    if not has_byte(rng, b'-') {
+        return None;
+    }
+    let (a, b) = split_once(rng, b'-');
+    let start = plain_int(a)?;
+    let stop = plain_int(b)? + 1;
+    if is_byte_range_valid(Some(start), Some(stop), length) {
+        return Some(ContentRange { units: Some(units), start: Some(start), stop: Some(stop), length: length });
+    }
+    None
+}
+
+// ------------------------------------------------------------ ETags
+
+fn quote_etag(etag: Str, weak: bool) -> Result[String, String] {
+    if has_byte(etag, b'"') {
+        return Err("invalid etag".to_string());
+    }
+    Ok(if weak { f"W/\"{etag}\"" } else { f"\"{etag}\"" })
+}
+
+// unquote_etag: None for an empty value, else the tag and whether it is
+// weak.
+fn unquote_etag(etag: ref Option[String]) -> Option[(String, bool)] {
+    let text = match etag {
+        None => return None,
+        Some(t) => t.clone(),
+    };
+    if text.len() == 0 {
+        return None;
+    }
+    let mut e = strip(text);
+    let mut weak = false;
+    if e.starts_with("W/") or e.starts_with("w/") {
+        weak = true;
+        e = slice_from(e, 2);
+    }
+    let b = to_bytes(e);
+    if b.len() > 0 and b[0] == b'"' and b[b.len() - 1] == b'"' {
+        e = if b.len() >= 2 { slice(e, 1, b.len() - 1) } else { String.new() };
+    }
+    Some((e, weak))
+}
+
+struct ETags {
+    strong: Vec[String],
+    weak: Vec[String],
+    star: bool,
+}
+
+// The tail of _etag_re, `(?:\s*,\s*|$)`, at `x`: where the match ends.
+fn etag_tail(b: ref Vec[u8], x: i64) -> i64 {
+    let mut j = x;
+    while j < b.len() and is_ws(b[j]) {
+        j += 1;
+    }
+    if j < b.len() and b[j] == b',' {
+        j += 1;
+        while j < b.len() and is_ws(b[j]) {
+            j += 1;
+        }
+        return j;
+    }
+    if x == b.len() { x } else { -1 }
+}
+
+fn parse_etags(value: ref Option[String]) -> ETags {
+    let text = match value {
+        None => String.new(),
+        Some(t) => t.clone(),
+    };
+    let mut strong: Vec[String] = Vec.new();
+    let mut weak: Vec[String] = Vec.new();
+    let b = to_bytes(text);
+    let mut pos: i64 = 0;
+    while pos < b.len() {
+        // ([Ww]/)?(?:"(.*?)"|(.*?))(?:\s*,\s*|$)
+        let is_weak = pos + 1 < b.len() and (b[pos] == b'W' or b[pos] == b'w') and b[pos + 1] == b'/';
+        let p = if is_weak { pos + 2 } else { pos };
+        let mut tag: Option[String] = None;
+        let mut raw_star = false;
+        let mut end: i64 = -1;
+        if p < b.len() and b[p] == b'"' {
+            let mut q = p + 1;
+            while q < b.len() {
+                if b[q] == b'"' {
+                    let t = etag_tail(b, q + 1);
+                    if t >= 0 {
+                        let inner = byte_str(b, p + 1, q);
+                        // an empty quoted tag leaves `raw` as None
+                        tag = if inner.len() > 0 { Some(inner) } else { None };
+                        end = t;
+                        break;
+                    }
+                }
+                q += 1;
+            }
+        }
+        if end < 0 {
+            let mut k = p;
+            while etag_tail(b, k) < 0 {
+                k += 1;
+            }
+            let raw = byte_str(b, p, k);
+            raw_star = raw == "*";
+            tag = Some(raw);
+            end = etag_tail(b, k);
+        }
+        if raw_star {
+            return ETags { strong: Vec.new(), weak: Vec.new(), star: true };
+        }
+        let t = match tag {
+            Some(s) => s,
+            None => none_key(),
+        };
+        if is_weak {
+            weak.push(t);
+        } else {
+            strong.push(t);
+        }
+        pos = end;
+    }
+    ETags { strong: set_order(strong), weak: set_order(weak), star: false }
+}
+
+fn tag_text(t: Str) -> String {
+    if t == none_key() { "None".to_string() } else { t.to_string() }
+}
+
+impl ETags {
+    fn is_weak(ref self, etag: Str) -> bool {
+        contains_str(self.weak, etag)
+    }
+
+    fn is_strong(ref self, etag: Str) -> bool {
+        contains_str(self.strong, etag)
+    }
+
+    fn contains(ref self, etag: Str) -> bool {
+        self.star or self.is_strong(etag)
+    }
+
+    fn contains_weak(ref self, etag: Str) -> bool {
+        self.is_weak(etag) or self.contains(etag)
+    }
+
+    fn contains_raw(ref self, etag: Str) -> bool {
+        match unquote_etag(Some(etag.to_string())) {
+            Some((e, weak)) => if weak { self.contains_weak(e) } else { self.contains(e) },
+            None => self.contains(none_key()),
+        }
+    }
+
+    fn truthy(ref self) -> bool {
+        self.star or self.strong.len() > 0 or self.weak.len() > 0
+    }
+
+    fn to_header(ref self) -> String {
+        if self.star {
+            return "*".to_string();
+        }
+        let mut parts: Vec[String] = Vec.new();
+        for s in self.strong.iter() {
+            parts.push(f"\"{tag_text(s)}\"");
+        }
+        for w in self.weak.iter() {
+            parts.push(f"W/\"{tag_text(w)}\"");
+        }
+        join(parts, ", ")
+    }
+}
+// ------------------------------------------------------------ dates: email.utils as werkzeug calls it
+
+// An aware datetime: its wall-clock fields and its UTC offset in seconds.
+#[derive(Clone)]
+struct Dt {
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    offset: i64,
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    let days: Vec[i64] = vec![31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if m == 2 and is_leap(y) { 29 } else { days[m - 1] }
+}
+
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    if (a % b != 0) and ((a < 0) != (b < 0)) { q - 1 } else { q }
+}
+
+// Days from 1970-01-01 to a proleptic Gregorian date.
+fn days_from_civil(y_in: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y_in - 1 } else { y_in };
+    let era = floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(z_in: i64) -> (i64, i64, i64) {
+    let z = z_in + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn utc_seconds(d: ref Dt) -> i64 {
+    days_from_civil(d.year, d.month, d.day) * 86400 + d.hour * 3600 + d.minute * 60 + d.second - d.offset
+}
+
+fn pad(n: i64, width: i64) -> String {
+    let mut s = f"{n}";
+    while s.len() < width {
+        s = "0" + s;
+    }
+    s
+}
+
+fn dt_isoformat(d: ref Dt) -> String {
+    let sign = if d.offset < 0 { "-" } else { "+" };
+    let off = if d.offset < 0 { -d.offset } else { d.offset };
+    let mut tz = f"{sign}{pad(off / 3600, 2)}:{pad((off / 60) % 60, 2)}";
+    if off % 60 != 0 {
+        tz = tz + ":" + pad(off % 60, 2);
+    }
+    f"{pad(d.year, 4)}-{pad(d.month, 2)}-{pad(d.day, 2)}T{pad(d.hour, 2)}:{pad(d.minute, 2)}:{pad(d.second, 2)}{tz}"
+}
+
+fn day_names() -> Vec[Str] {
+    vec!["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+}
+
+fn month_abbrs() -> Vec[Str] {
+    vec!["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+}
+
+// email.utils.formatdate(ts, usegmt=True), and format_datetime of an
+// aware datetime once it is moved to UTC.
+fn http_date_ts(ts: i64) -> String {
+    let days = floor_div(ts, 86400);
+    let rem = ts - days * 86400;
+    let (y, m, d) = civil_from_days(days);
+    let wd = ((days % 7) + 7 + 3) % 7;
+    let mon = month_abbrs()[m - 1];
+    f"{day_names()[wd]}, {pad(d, 2)} {mon} {pad(y, 4)} {pad(rem / 3600, 2)}:{pad((rem / 60) % 60, 2)}:{pad(rem % 60, 2)} GMT"
+}
+
+fn http_date(d: ref Dt) -> String {
+    http_date_ts(utc_seconds(d))
+}
+
+fn month_names() -> Vec[Str] {
+    vec!["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+         "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+}
+
+fn month_index(s: Str) -> i64 {
+    let names = month_names();
+    for i in 0..names.len() {
+        if names[i] == s {
+            return i;
+        }
+    }
+    -1
+}
+
+fn is_day_name(s: Str) -> bool {
+    let v: Vec[Str] = vec!["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    for d in v.iter() {
+        if d == s {
+            return true;
+        }
+    }
+    false
+}
+
+fn zone_offset(tz: Str) -> Option[i64] {
+    let zones: Vec[(Str, i64)] = vec![
+        ("UT", 0), ("UTC", 0), ("GMT", 0), ("Z", 0), ("AST", -400), ("ADT", -300), ("EST", -500), ("EDT", -400),
+        ("CST", -600), ("CDT", -500), ("MST", -700), ("MDT", -600), ("PST", -800), ("PDT", -700),
+    ];
+    for (z, o) in zones.iter() {
+        if z == tz {
+            return Some(o);
+        }
+    }
+    None
+}
+
+fn last_byte(s: Str) -> u8 {
+    let b = to_bytes(s);
+    if b.len() > 0 { b[b.len() - 1] } else { 0 }
+}
+
+fn drop_last(s: Str) -> String {
+    slice(s, 0, s.len() - 1)
+}
+
+// email._parseaddr._parsedate_tz: the fields, and the zone offset in
+// seconds (None for -0000 and for zones it cannot read).
+struct Parsed {
+    f: Vec[i64],
+    tz: Option[i64],
+}
+
+fn parsedate_tz(data_in: Str) -> Option[Parsed] {
+    if data_in.len() == 0 {
+        return None;
+    }
+    let mut data = split_ws(data_in);
+    if data.len() == 0 {
+        return None;
+    }
+    if data[0].ends_with(",") or is_day_name(lower(data[0])) {
+        data.remove(0);
+    } else {
+        let i = rfind_byte(data[0], b',');
+        if i >= 0 {
+            data[0] = slice_from(data[0], i + 1);
+        }
+    }
+    if data.len() == 3 {
+        let stuff = split_on(data[0], b'-');
+        if stuff.len() == 3 {
+            let mut nd = stuff;
+            nd.push(data[1].clone());
+            nd.push(data[2].clone());
+            data = nd;
+        }
+    }
+    if data.len() == 4 {
+        let s = data[3].clone();
+        let mut i = find_byte(s, b'+');
+        if i == -1 {
+            i = find_byte(s, b'-');
+        }
+        if i > 0 {
+            data[3] = slice(s, 0, i);
+            data.push(slice_from(s, i));
+        } else {
+            data.push(String.new());
+        }
+    }
+    if data.len() < 5 {
+        return None;
+    }
+    let mut dd = data[0].clone();
+    let mut mm = data[1].clone();
+    let mut yy = data[2].clone();
+    let mut tm = data[3].clone();
+    let mut tz = data[4].clone();
+    if dd.len() == 0 or mm.len() == 0 or yy.len() == 0 {
+        return None;
+    }
+    mm = lower(mm);
+    if month_index(mm) < 0 {
+        let t = lower(dd);
+        dd = mm;
+        mm = t;
+        if month_index(mm) < 0 {
+            return None;
+        }
+    }
+    let mut mon = month_index(mm) + 1;
+    if mon > 12 {
+        mon -= 12;
+    }
+    if last_byte(dd) == b',' {
+        dd = drop_last(dd);
+    }
+    if find_byte(yy, b':') > 0 {
+        let t = yy;
+        yy = tm;
+        tm = t;
+    }
+    if last_byte(yy) == b',' {
+        yy = drop_last(yy);
+        if yy.len() == 0 {
+            return None;
+        }
+    }
+    if not is_digit(first_byte(yy)) {
+        let t = yy;
+        yy = tz;
+        tz = t;
+    }
+    if last_byte(tm) == b',' {
+        tm = drop_last(tm);
+    }
+    let mut parts = split_on(tm, b':');
+    let mut tss = "0".to_string();
+    if parts.len() == 2 {
+        // seconds default to 0
+    } else if parts.len() == 3 {
+        tss = parts[2].clone();
+    } else if parts.len() == 1 and has_byte(parts[0], b'.') {
+        parts = split_on(parts[0], b'.');
+        if parts.len() == 3 {
+            tss = parts[2].clone();
+        } else if parts.len() != 2 {
+            return None;
+        }
+    } else {
+        return None;
+    }
+    let mut year = py_int(yy)?;
+    let day = py_int(dd)?;
+    let hour = py_int(parts[0])?;
+    let minute = py_int(parts[1])?;
+    let second = py_int(tss)?;
+    if year < 100 {
+        year += if year > 68 { 1900 } else { 2000 };
+    }
+    let utz = upper(tz);
+    let mut offset: Option[i64] = zone_offset(utz);
+    if offset.is_none() {
+        offset = py_int(utz);
+        if offset == Some(0) and utz.starts_with("-") {
+            offset = None;
+        }
+    }
+    let secs = match offset {
+        None => None,
+        Some(0) => Some(0),
+        Some(o) => {
+            let (sign, a) = if o < 0 { (-1, -o) } else { (1, o) };
+            Some(sign * ((a / 100) * 3600 + (a % 100) * 60))
+        },
+    };
+    Some(Parsed { f: vec![year, mon, day, hour, minute, second], tz: secs })
+}
+
+// werkzeug.http.parse_date: parsedate_to_datetime, None where it raises,
+// and UTC for a date with no zone.
+fn parse_date(value: ref Option[String]) -> Option[Dt] {
+    let text = match value {
+        None => return None,
+        Some(t) => t.clone(),
+    };
+    let p = parsedate_tz(text)?;
+    let f = p.f;
+    if f[0] < 1 or f[0] > 9999 or f[1] < 1 or f[1] > 12 or f[2] < 1 or f[2] > days_in_month(f[0], f[1]) {
+        return None;
+    }
+    if f[3] < 0 or f[3] > 23 or f[4] < 0 or f[4] > 59 or f[5] < 0 or f[5] > 59 {
+        return None;
+    }
+    let off = match p.tz {
+        None => 0,
+        Some(o) => o,
+    };
+    if off <= -86400 or off >= 86400 {
+        return None;
+    }
+    Some(Dt { year: f[0], month: f[1], day: f[2], hour: f[3], minute: f[4], second: f[5], offset: off })
+}
+
+fn dt_repr(d: ref Option[Dt]) -> String {
+    match d {
+        Some(x) => dt_isoformat(x),
+        None => "None".to_string(),
+    }
+}
+
+// parse_age: a count of seconds as int() reads it, never negative.
+fn parse_age(value: Str) -> Option[i64] {
+    if value.len() == 0 {
+        return None;
+    }
+    let n = py_int(value)?;
+    if n < 0 { None } else { Some(n) }
+}
+// ------------------------------------------------------------ cookies
+
+#[derive(Clone)]
+struct Kv {
+    key: String,
+    value: String,
+}
+
+// MultiDict's repr: items(multi=True), each key's values together, keys
+// in the order they first came.
+fn multidict_repr(pairs: ref Vec[Kv]) -> String {
+    let mut keys: Vec[String] = Vec.new();
+    for p in pairs.iter() {
+        if not contains_str(keys, p.key) {
+            keys.push(p.key.clone());
+        }
+    }
+    let mut parts: Vec[String] = Vec.new();
+    for k in keys.iter() {
+        for p in pairs.iter() {
+            if p.key == k {
+                parts.push(f"({py_repr(p.key)}, {py_repr(p.value)})");
+            }
+        }
+    }
+    "MultiDict([" + join(parts, ", ") + "])"
+}
+
+fn multidict_get(pairs: ref Vec[Kv], key: Str) -> Option[String] {
+    for p in pairs.iter() {
+        if p.key == key {
+            return Some(p.value.clone());
+        }
+    }
+    None
+}
+
+fn multidict_getlist(pairs: ref Vec[Kv], key: Str) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for p in pairs.iter() {
+        if p.key == key {
+            out.push(p.value.clone());
+        }
+    }
+    out
+}
+
+// Where `\s*;\s*` ends when it matches at `x`, else -1.
+fn semi_tail(b: ref Vec[u8], x: i64) -> i64 {
+    let mut j = x;
+    while j < b.len() and is_ws(b[j]) {
+        j += 1;
+    }
+    if j < b.len() and b[j] == b';' {
+        j += 1;
+        while j < b.len() and is_ws(b[j]) {
+            j += 1;
+        }
+        return j;
+    }
+    -1
+}
+
+// _cookie_unslash_re.sub over the bytes between the quotes: \ooo (first
+// digit 0-3) is that byte, a backslash before anything else but a line
+// end is dropped.
+fn cookie_unslash(b: ref Vec[u8], from: i64, to: i64) -> String {
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = from;
+    while i < to {
+        let c = b[i];
+        if c == b'\\' and i + 3 < to + 1 and b[i + 1] >= b'0' and b[i + 1] <= b'3' and is_octal(b[i + 2]) and is_octal(b[i + 3]) {
+            out.push((b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0'));
+            i += 4;
+        } else if c == b'\\' and i + 1 < to and b[i + 1] != b'\n' {
+            out.push(b[i + 1]);
+            i += 2;
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    utf8_replace(out)
+}
+
+fn is_octal(c: u8) -> bool {
+    c >= b'0' and c <= b'7'
+}
+
+// werkzeug.sansio.http.parse_cookie, following _cookie_re.findall.
+fn parse_cookie(value: ref Option[String]) -> Vec[Kv] {
+    let mut out: Vec[Kv] = Vec.new();
+    let text = match value {
+        None => return out,
+        Some(t) => t.clone(),
+    };
+    if text.len() == 0 {
+        return out;
+    }
+    let b = to_bytes(text + ";");
+    let mut pos: i64 = 0;
+    while pos < b.len() {
+        // ([^=;]*)
+        let mut i = pos;
+        while i < b.len() and b[i] != b'=' and b[i] != b';' {
+            i += 1;
+        }
+        let ck = byte_str(b, pos, i);
+        let mut cv = String.new();
+        let mut end: i64 = -1;
+        if b[i] == b'=' {
+            // \s*=\s* then a quoted string or the shortest run before \s*;\s*
+            let mut j = i + 1;
+            while j < b.len() and is_ws(b[j]) {
+                j += 1;
+            }
+            if j < b.len() and b[j] == b'"' {
+                let mut k = j + 1;
+                let mut closed: i64 = -1;
+                while k < b.len() {
+                    if b[k] == b'\\' and k + 1 < b.len() and b[k + 1] != b'\n' {
+                        k += 2;
+                    } else if b[k] == b'"' {
+                        closed = k;
+                        break;
+                    } else if b[k] == b'\\' {
+                        break;
+                    } else {
+                        k += 1;
+                    }
+                }
+                if closed >= 0 {
+                    let t = semi_tail(b, closed + 1);
+                    if t >= 0 {
+                        cv = byte_str(b, j, closed + 1);
+                        end = t;
+                    }
+                }
+            }
+            if end < 0 {
+                let mut k = j;
+                while semi_tail(b, k) < 0 {
+                    k += 1;
+                }
+                cv = byte_str(b, j, k);
+                end = semi_tail(b, k);
+            }
+        } else {
+            end = semi_tail(b, i);
+        }
+        pos = end;
+        let key = strip(ck);
+        let mut val = strip(cv);
+        if key.len() == 0 {
+            continue;
+        }
+        let vb = to_bytes(val);
+        if vb.len() >= 2 and vb[0] == b'"' and vb[vb.len() - 1] == b'"' {
+            val = cookie_unslash(vb, 1, vb.len() - 1);
+        }
+        out.push(Kv { key: key, value: val });
+    }
+    out
+}
+
+// _cookie_no_quote_re under re.A.
+fn cookie_plain(c: u8) -> bool {
+    is_alnum(c) or has_byte("_!#$%&'()*+-./:<=>?@[]^`{|}~", c)
+}
+
+// Latin-1 decoding of UTF-8 bytes, as dump_cookie sends a key.
+fn latin1_mojibake(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        push_code_point(mut out, b[i] as i64);
+    }
+    from_bytes(out)
+}
+
+fn title_case(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    let mut prev_cased = false;
+    for i in 0..b.len() {
+        let c = b[i];
+        if is_alpha(c) {
+            out.push(if prev_cased { lower_byte(c) } else if c >= b'a' { c - 32 } else { c });
+            prev_cased = true;
+        } else {
+            out.push(c);
+            prev_cased = false;
+        }
+    }
+    from_bytes(out)
+}
+
+struct CookieArgs {
+    key: String,
+    value: String,
+    max_age: Option[i64],
+    expires: Option[String],
+    path: Option[String],
+    domain: Option[String],
+    secure: bool,
+    httponly: bool,
+    samesite: Option[String],
+    partitioned: bool,
+}
+
+fn cookie_args(key: Str, value: Str) -> CookieArgs {
+    CookieArgs {
+        key: key.to_string(),
+        value: value.to_string(),
+        max_age: None,
+        expires: None,
+        path: Some("/".to_string()),
+        domain: None,
+        secure: false,
+        httponly: false,
+        samesite: None,
+        partitioned: false,
+    }
+}
+
+fn char_len(s: Str) -> i64 {
+    code_points(s).len()
+}
+
+// dump_cookie, with the size warning it would give as a second value.
+fn dump_cookie(a: ref CookieArgs) -> Result[(String, Option[String]), String] {
+    let path = match a.path {
+        Some(p) => Some(quote(p, "%!$&'()*+,/:=@")),
+        None => None,
+    };
+    let mut domain: Option[String] = None;
+    if let Some(d) = a.domain {
+        if d.len() > 0 {
+            let (host, _, _) = partition(d, b':');
+            let hb = to_bytes(host);
+            let mut i: i64 = 0;
+            while i < hb.len() and hb[i] == b'.' {
+                i += 1;
+            }
+            domain = Some(slice_from(host, i));
+        }
+    }
+    let mut samesite: Option[String] = None;
+    if let Some(s) = a.samesite {
+        let t = title_case(s);
+        if t != "Strict" and t != "Lax" and t != "None" {
+            return Err("SameSite must be 'Strict', 'Lax', or 'None'.".to_string());
+        }
+        samesite = Some(t);
+    }
+    let secure = a.secure or a.partitioned;
+    let vb = to_bytes(a.value);
+    let mut plain = true;
+    for i in 0..vb.len() {
+        if not cookie_plain(vb[i]) {
+            plain = false;
+        }
+    }
+    let mut value = a.value.clone();
+    if not plain {
+        let mut out: Vec[u8] = Vec.new();
+        out.push(b'"');
+        for i in 0..vb.len() {
+            let c = vb[i];
+            if c == b'"' {
+                push_str_bytes(mut out, "\\\"");
+            } else if c == b'\\' {
+                push_str_bytes(mut out, "\\\\");
+            } else if c <= 0x19 or c == b',' or c == b';' or c >= 0x7f {
+                out.push(b'\\');
+                out.push(b'0' + c / 64);
+                out.push(b'0' + (c / 8) % 8);
+                out.push(b'0' + c % 8);
+            } else {
+                out.push(c);
+            }
+        }
+        out.push(b'"');
+        value = from_bytes(out);
+    }
+    let mut buf: Vec[String] = vec![f"{latin1_mojibake(a.key)}={value}"];
+    if let Some(d) = domain {
+        buf.push(f"Domain={d}");
+    }
+    if let Some(e) = a.expires {
+        buf.push(f"Expires={e}");
+    }
+    if let Some(m) = a.max_age {
+        buf.push(f"Max-Age={m}");
+    }
+    if secure {
+        buf.push("Secure".to_string());
+    }
+    if a.httponly {
+        buf.push("HttpOnly".to_string());
+    }
+    if let Some(p) = path {
+        buf.push(f"Path={p}");
+    }
+    if let Some(s) = samesite {
+        buf.push(f"SameSite={s}");
+    }
+    if a.partitioned {
+        buf.push("Partitioned".to_string());
+    }
+    let rv = join(buf, "; ");
+    let size = char_len(rv);
+    let mut warning: Option[String] = None;
+    if size > 4093 {
+        let vs = char_len(value);
+        warning = Some(f"The '{a.key}' cookie is too large: the value was {vs} bytes but the header required {size - vs} extra bytes. The final size was {size} bytes but the limit is 4093 bytes. Browsers may silently ignore cookies larger than this.");
+    }
+    Ok((rv, warning))
+}
+// ------------------------------------------------------------ SHA-1, from mini_git (generate_etag)
+
+fn rotl(x: u32, n: u32) -> u32 {
+    (x << n) | (x >> (32u32 - n))
+}
+
+fn sha1(data: Slice[u8]) -> String {
+    let mut msg: Vec[u8] = Vec.new();
+    for b in data {
+        msg.push(b);
+    }
+    let bit_len: u64 = (data.len() as u64) * 8u64;
+    msg.push(0x80u8);
+    while msg.len() % 64 != 56 {
+        msg.push(0u8);
+    }
+    let mut s = 56u64;
+    loop {
+        msg.push(((bit_len >> s) & 0xffu64) as u8);
+        if s == 0u64 {
+            break;
+        }
+        s = s - 8u64;
+    }
+    let mut h: Vec[u32] = vec![0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32];
+    let mut w: Vec[u32] = Vec.new();
+    for _ in 0..80 {
+        w.push(0u32);
+    }
+    let mut chunk = 0;
+    while chunk < msg.len() {
+        for i in 0..16 {
+            let at = chunk + i * 4;
+            w[i] = ((msg[at] as u32) << 24u32) | ((msg[at + 1] as u32) << 16u32)
+                | ((msg[at + 2] as u32) << 8u32) | (msg[at + 3] as u32);
+        }
+        for i in 16..80 {
+            w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1u32);
+        }
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        for i in 0..80 {
+            let (f, k) = if i < 20 {
+                ((b & c) | ((~b) & d), 0x5A827999u32)
+            } else if i < 40 {
+                (b ^ c ^ d, 0x6ED9EBA1u32)
+            } else if i < 60 {
+                ((b & c) | (b & d) | (c & d), 0x8F1BBCDCu32)
+            } else {
+                (b ^ c ^ d, 0xCA62C1D6u32)
+            };
+            let t = rotl(a, 5u32).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(w[i]);
+            e = d;
+            d = c;
+            c = rotl(b, 30u32);
+            b = a;
+            a = t;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        chunk = chunk + 64;
+    }
+    let mut out = String.new();
+    for x in h.iter() {
+        out.push_str(f"{x:08x}");
+    }
+    out
+}
+// ------------------------------------------------------------ the docs server
+
+struct Doc {
+    path: String,
+    mtime: i64,
+    langs: Vec[String],
+    types: Vec[String],
+    cache: String,
+    texts: Vec[String],
+}
+
+struct App {
+    docs: Vec[Doc],
+    all_langs: Vec[String],
+}
+
+struct Req {
+    method: String,
+    path: String,
+    query: String,
+    headers: Vec[Kv],
+    body: String,
+}
+
+struct Resp {
+    status: i64,
+    headers: Vec[Kv],
+    body: String,
+}
+
+fn kv(k: Str, v: Str) -> Kv {
+    Kv { key: k.to_string(), value: v.to_string() }
+}
+
+fn text_resp(status: i64, body: Str) -> Resp {
+    Resp { status: status, headers: vec![kv("Content-Type", "text/plain; charset=utf-8")], body: body.to_string() }
+}
+
+// The WSGI environ key of a header: HTTP_ and the name upper-cased with
+// dashes as underscores. A later header with the same key wins.
+fn env_key(name: Str) -> String {
+    replace_byte(upper(name), b'-', "_")
+}
+
+fn req_get(r: ref Req, name: Str) -> Option[String] {
+    let k = env_key(name);
+    let mut found: Option[String] = None;
+    for h in r.headers.iter() {
+        if env_key(h.key) == k {
+            found = Some(h.value.clone());
+        }
+    }
+    found
+}
+
+fn query_get(q: Str, key: Str) -> Option[String] {
+    for part in split_on(q, b'&').iter() {
+        let (k, _, v) = partition(part, b'=');
+        if k == key {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn html_escape(s: Str) -> String {
+    let b = to_bytes(s);
+    let mut out: Vec[u8] = Vec.new();
+    for i in 0..b.len() {
+        let c = b[i];
+        if c == b'&' {
+            push_str_bytes(mut out, "&amp;");
+        } else if c == b'<' {
+            push_str_bytes(mut out, "&lt;");
+        } else if c == b'>' {
+            push_str_bytes(mut out, "&gt;");
+        } else if c == b'"' {
+            push_str_bytes(mut out, "&#34;");
+        } else if c == b'\'' {
+            push_str_bytes(mut out, "&#39;");
+        } else {
+            out.push(c);
+        }
+    }
+    from_bytes(out)
+}
+
+fn hex4(n: i64) -> String {
+    let hex = to_bytes("0123456789abcdef");
+    let mut out: Vec[u8] = Vec.new();
+    let mut shift: i64 = 12;
+    while shift >= 0 {
+        out.push(hex[(n >> shift) & 15]);
+        shift -= 4;
+    }
+    from_bytes(out)
+}
+
+// json.dumps of a str with ensure_ascii.
+fn json_str(s: Str) -> String {
+    let mut out = "\"".to_string();
+    for c in code_points(s).iter() {
+        if c == 34 {
+            out.push_str("\\\"");
+        } else if c == 92 {
+            out.push_str("\\\\");
+        } else if c == 10 {
+            out.push_str("\\n");
+        } else if c == 13 {
+            out.push_str("\\r");
+        } else if c == 9 {
+            out.push_str("\\t");
+        } else if c == 8 {
+            out.push_str("\\b");
+        } else if c == 12 {
+            out.push_str("\\f");
+        } else if c < 32 or c > 126 {
+            if c > 0xFFFF {
+                let v = c - 0x10000;
+                out.push_str(f"\\u{hex4(0xD800 | (v >> 10))}\\u{hex4(0xDC00 | (v & 0x3FF))}");
+            } else {
+                out.push_str(f"\\u{hex4(c)}");
+            }
+        } else {
+            let mut one: Vec[u8] = Vec.new();
+            one.push(c as u8);
+            out.push_str(from_bytes(one));
+        }
+    }
+    out.push_str("\"");
+    out
+}
+
+fn render(app: ref App, path: Str, lang: Str, typ: Str, text: Str) -> String {
+    if typ == "text/html" {
+        return f"<!doctype html><html lang=\"{lang}\"><body><p>{html_escape(text)}</p></body></html>";
+    }
+    if typ == "application/json" {
+        if path == "/status" {
+            return f"{{\"status\": {json_str(text)}, \"docs\": {app.docs.len()}}}";
+        }
+        return f"{{\"lang\": {json_str(lang)}, \"text\": {json_str(text)}}}";
+    }
+    text.to_string()
+}
+
+fn lang_index(d: ref Doc, lang: Str) -> i64 {
+    for i in 0..d.langs.len() {
+        if d.langs[i] == lang {
+            return i;
+        }
+    }
+    -1
+}
+
+fn etag_of(text: Str) -> String {
+    sha1(to_bytes(text))
+}
+
+fn quoted_etag(text: Str) -> String {
+    quote_etag(etag_of(text), false).unwrap_or(String.new())
+}
+
+fn header_value(hs: ref Vec[Kv], key: Str) -> Option[String] {
+    for h in hs.iter() {
+        if h.key == key {
+            return Some(h.value.clone());
+        }
+    }
+    None
+}
+
+fn is_entity_header(name: Str) -> bool {
+    let v: Vec[Str] = vec!["allow", "content-encoding", "content-language", "content-length", "content-location",
+                           "content-md5", "content-range", "content-type", "expires", "last-modified"];
+    let k = lower(name);
+    for e in v.iter() {
+        if e == k {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_hop_by_hop_header(name: Str) -> bool {
+    let v: Vec[Str] = vec!["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
+                           "transfer-encoding", "upgrade"];
+    let k = lower(name);
+    for e in v.iter() {
+        if e == k {
+            return true;
+        }
+    }
+    false
+}
+
+fn remove_entity_headers(hs: ref Vec[Kv], allowed: ref Vec[String]) -> Vec[Kv] {
+    let mut out: Vec[Kv] = Vec.new();
+    for h in hs.iter() {
+        if not is_entity_header(h.key) or contains_str(allowed, lower(h.key)) {
+            out.push(h.clone());
+        }
+    }
+    out
+}
+
+fn default_allowed() -> Vec[String] {
+    vec!["expires".to_string(), "content-location".to_string()]
+}
+
+fn remove_hop_by_hop_headers(hs: ref Vec[Kv]) -> Vec[Kv] {
+    let mut out: Vec[Kv] = Vec.new();
+    for h in hs.iter() {
+        if not is_hop_by_hop_header(h.key) {
+            out.push(h.clone());
+        }
+    }
+    out
+}
+
+// werkzeug.sansio.http.is_resource_modified, on the request's headers
+// and the response's ETag and Last-Modified header values.
+fn is_resource_modified(r: ref Req, etag: Str, last_modified: Str, ignore_if_range: bool) -> bool {
+    let mut unmodified = false;
+    let lm = parse_date(Some(last_modified.to_string()));
+    let mut if_range_date: Option[Dt] = None;
+    let mut if_range_etag: Option[String] = None;
+    let mut have_if_range = false;
+    if not ignore_if_range and req_get(r, "Range").is_some() {
+        have_if_range = true;
+        let v = req_get(r, "If-Range");
+        let text = v.clone().unwrap_or(String.new());
+        if text.len() > 0 {
+            if_range_date = parse_date(v.clone());
+            if if_range_date.is_none() {
+                if let Some((e, _)) = unquote_etag(v) {
+                    if_range_etag = Some(e);
+                }
+            }
+        }
+    }
+    let modified_since = if if_range_date.is_some() { if_range_date } else { parse_date(req_get(r, "If-Modified-Since")) };
+    if let Some(ms) = modified_since {
+        if let Some(l) = lm {
+            if utc_seconds(l) <= utc_seconds(ms) {
+                unmodified = true;
+            }
+        }
+    }
+    if etag.len() > 0 {
+        let tag = match unquote_etag(Some(etag.to_string())) {
+            Some((t, _)) => t,
+            None => String.new(),
+        };
+        if have_if_range and if_range_etag.is_some() {
+            unmodified = parse_etags(if_range_etag).contains(tag);
+        } else {
+            let inm = parse_etags(req_get(r, "If-None-Match"));
+            if inm.truthy() {
+                unmodified = inm.contains_weak(tag);
+            }
+            let im = parse_etags(req_get(r, "If-Match"));
+            if im.truthy() {
+                unmodified = not im.is_strong(tag);
+            }
+        }
+    }
+    not unmodified
+}
+
+fn load_app() -> Result[App, String] {
+    let mut docs: Vec[Doc] = Vec.new();
+    let mut all: Vec[String] = Vec.new();
+    for line in lines_of(read("data/docs.txt")?).iter() {
+        let f = split_on(line, b'|');
+        let name = slice_from(f[0], 1);
+        let langs = split_on(f[2], b',');
+        let mut texts: Vec[String] = Vec.new();
+        for lang in langs.iter() {
+            texts.push(read(f"data/docs/{name}.{lang}.txt")?);
+            if not contains_str(all, lang) {
+                all.push(lang.clone());
+            }
+        }
+        docs.push(Doc {
+            path: f[0].clone(),
+            mtime: py_int(f[1]).unwrap_or(0),
+            langs: langs,
+            types: split_on(f[3], b','),
+            cache: f[4].clone(),
+            texts: texts,
+        });
+    }
+    Ok(App { docs: docs, all_langs: all })
+}
+
+fn serve_prefs(app: ref App, r: ref Req) -> Resp {
+    let lang = query_get(r.query, "lang");
+    let l = lang.clone().unwrap_or(String.new());
+    if lang.is_none() or not contains_str(app.all_langs, l) {
+        return text_resp(400, f"unknown language: {l}");
+    }
+    let remember = query_get(r.query, "remember") != Some("0".to_string());
+    let mut a = cookie_args("lang", l);
+    if remember {
+        a.max_age = Some(31536000);
+    }
+    a.httponly = true;
+    a.samesite = Some("lax".to_string());
+    let c = match dump_cookie(a) {
+        Ok((c, _)) => c,
+        Err(e) => e,
+    };
+    Resp { status: 204, headers: vec![kv("Set-Cookie", c), kv("Vary", header_set(vec!["Cookie".to_string()]).to_header())], body: String.new() }
+}
+
+fn serve_whoami(r: ref Req) -> Resp {
+    let c = parse_cookie(req_get(r, "Cookie"));
+    let text = f"session={opt_repr(multidict_get(c, "session"))} all={str_list_repr(multidict_getlist(c, "session"))} lang={opt_repr(multidict_get(c, "lang"))} count={c.len()}";
+    text_resp(200, text)
+}
+
+fn serve_proxy(r: ref Req) -> Resp {
+    let mut named: Vec[String] = Vec.new();
+    for n in parse_list_header(req_get(r, "Connection").unwrap_or(String.new())).iter() {
+        named.push(lower(n));
+    }
+    let mut forward: Vec[Kv] = Vec.new();
+    for h in remove_hop_by_hop_headers(r.headers).iter() {
+        if not contains_str(named, lower(h.key)) {
+            forward.push(h.clone());
+        }
+    }
+    let upstream = vec![kv("Content-Type", "text/plain"), kv("Connection", "close"), kv("Keep-Alive", "timeout=5"),
+                        kv("Transfer-Encoding", "chunked"), kv("X-Upstream", "1"), kv("Upgrade", "h2c"),
+                        kv("Trailer", "Expires"), kv("Content-Length", "5")];
+    let mut shown: Vec[String] = Vec.new();
+    for h in forward.iter() {
+        shown.push(f"{h.key}={h.value}");
+    }
+    Resp { status: 200, headers: remove_hop_by_hop_headers(upstream), body: "forwarded: " + join(shown, ", ") }
+}
+
+fn strs(v: ref Vec[Str]) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for s in v.iter() {
+        out.push(s.to_string());
+    }
+    out
+}
+
+fn opt_result_repr(r: ref Result[Option[String], String]) -> String {
+    match r {
+        Ok(v) => opt_repr(v),
+        Err(e) => f"! ValueError: {e}",
+    }
+}
+
+fn mime_flags(m: ref Accept) -> String {
+    let html = m.has("text/html");
+    let xhtml = m.has("application/xhtml+xml") or m.has("application/xml");
+    f"html={py_bool(html or xhtml)} xhtml={py_bool(xhtml)} json={py_bool(m.has("application/json"))}"
+}
+
+fn serve_negotiate(r: ref Req) -> Resp {
+    let m = parse_accept_header(req_get(r, "Accept"), A_MIME);
+    let e = parse_accept_header(req_get(r, "Accept-Encoding"), A_PLAIN);
+    let lang = parse_accept_header(req_get(r, "Accept-Language"), A_LANG);
+    let lines = vec![
+        mime_flags(m),
+        f"type={opt_result_repr(m.best_match(strs(vec!["text/html", "application/json"]), None))}",
+        f"encoding={opt_result_repr(e.best_match(strs(vec!["br", "gzip", "identity"]), None))} from {py_repr(e.to_header())}",
+        f"language={opt_result_repr(lang.best_match(strs(vec!["en-US", "en", "de"]), Some("en".to_string())))}",
+    ];
+    Resp {
+        status: 200,
+        headers: vec![kv("Content-Type", "text/plain; charset=utf-8"), kv("Vary", "Accept, Accept-Encoding, Accept-Language")],
+        body: join(lines, "\n"),
+    }
+}
+
+fn serve_cache_check(r: ref Req) -> Resp {
+    let c = parse_cache_control_header(req_get(r, "Cache-Control"));
+    let mut lines = vec![cache_repr("RequestCacheControl", c)];
+    for p in request_props().iter() {
+        lines.push(f"{p.name}={pv_repr(cache_get(c, p))}");
+    }
+    let mut rc: Vec[DictItem] = Vec.new();
+    cache_set_flag(mut rc, "no-store", true);
+    cache_set_value(mut rc, "max-age", "0");
+    cache_set_value(mut rc, "private", "Authorization");
+    Resp {
+        status: 200,
+        headers: vec![kv("Content-Type", "text/plain; charset=utf-8"), kv("Cache-Control", dump_header_dict(rc))],
+        body: join(lines, "\n"),
+    }
+}
+
+fn serve_csp(r: ref Req) -> Resp {
+    let mut c = parse_csp_header(req_get(r, "Content-Security-Policy-Report-Only"));
+    dict_set(mut c, "img-src", Some("'self' data:".to_string()));
+    let script = dict_get(c, "script-src").unwrap_or(String.new());
+    dict_set(mut c, "script-src", Some(script + " 'nonce-r4nd0m'"));
+    dict_pop(mut c, "report-uri");
+    dict_pop(mut c, "default-src");
+    dict_set(mut c, "default-src", Some("'none'".to_string()));
+    Resp {
+        status: 200,
+        headers: vec![kv("Content-Security-Policy", dump_csp_header(c))],
+        body: cache_repr("ContentSecurityPolicy", c),
+    }
+}
+
+fn serve_put(app: mut ref App, at: i64, r: ref Req) -> Resp {
+    let lang = req_get(r, "Content-Language").unwrap_or(String.new());
+    let li = lang_index(app.docs[at], lang);
+    if li < 0 {
+        return text_resp(400, f"language not offered: {lang}");
+    }
+    let etag = etag_of(app.docs[at].texts[li]);
+    let im = parse_etags(req_get(r, "If-Match"));
+    if im.truthy() and not im.contains(etag) {
+        return Resp { status: 412, headers: vec![kv("ETag", quote_etag(etag, false).unwrap_or(String.new()))], body: "Precondition Failed".to_string() };
+    }
+    let ius = parse_date(req_get(r, "If-Unmodified-Since"));
+    let lm = app.docs[at].mtime;
+    if let Some(d) = ius {
+        if lm > utc_seconds(d) {
+            return Resp { status: 412, headers: vec![kv("Last-Modified", http_date_ts(lm))], body: "Precondition Failed".to_string() };
+        }
+    }
+    app.docs[at].texts[li] = r.body.clone();
+    app.docs[at].mtime += 1000;
+    Resp {
+        status: 204,
+        headers: vec![kv("ETag", quoted_etag(app.docs[at].texts[li])), kv("Last-Modified", http_date_ts(app.docs[at].mtime))],
+        body: String.new(),
+    }
+}
+
+fn serve_get(app: ref App, at: i64, r: ref Req) -> Resp {
+    let doc = ref app.docs[at];
+    let cookies = parse_cookie(req_get(r, "Cookie"));
+    let mut lang = multidict_get(cookies, "lang").unwrap_or(String.new());
+    if lang_index(doc, lang) < 0 {
+        let la = parse_accept_header(req_get(r, "Accept-Language"), A_LANG);
+        lang = match la.best_match(doc.langs, Some(doc.langs[0].clone())) {
+            Ok(Some(l)) => l,
+            _ => doc.langs[0].clone(),
+        };
+    }
+    let acc = parse_accept_header(req_get(r, "Accept"), A_MIME);
+    let typ = if acc.items.len() > 0 {
+        match acc.best_match(doc.types, None) {
+            Ok(Some(t)) => t,
+            _ => return text_resp(406, "Not Acceptable. Offered: " + join(doc.types, ", ")),
+        }
+    } else {
+        doc.types[0].clone()
+    };
+    let cs = parse_accept_header(req_get(r, "Accept-Charset"), A_CHARSET);
+    if cs.items.len() > 0 {
+        let ok = match cs.best_match(vec!["utf-8".to_string()], None) {
+            Ok(Some(_)) => true,
+            _ => false,
+        };
+        if not ok {
+            return text_resp(406, f"Not Acceptable. Charset: {cs.to_header()}");
+        }
+    }
+    let li = lang_index(doc, lang);
+    let mut body = render(app, doc.path, lang, typ, doc.texts[li]);
+    let mut out: Vec[Kv] = Vec.new();
+    let ctype = if typ.starts_with("text/") or typ == "application/json" {
+        let mut o: Vec[DictItem] = Vec.new();
+        dict_set(mut o, "charset", Some("utf-8".to_string()));
+        dump_options_header(Some(typ.clone()), o)
+    } else {
+        typ.clone()
+    };
+    out.push(kv("Content-Type", ctype));
+    out.push(kv("Content-Language", lang));
+    if doc.langs.len() > 1 or doc.types.len() > 1 {
+        out.push(kv("Vary", header_set(strs(vec!["Accept", "accept", "Accept-Language", "Cookie"])).to_header()));
+    }
+    let etag_h = quoted_etag(body);
+    let lm_h = http_date_ts(doc.mtime);
+    out.push(kv("ETag", etag_h));
+    out.push(kv("Last-Modified", lm_h));
+    out.push(kv("Cache-Control", dump_header_dict(parse_cache_control_header(Some(doc.cache.clone())))));
+
+    let req_cc = parse_cache_control_header(req_get(r, "Cache-Control"));
+    let no_cache = dict_find(req_cc, "no-cache") >= 0;
+    if no_cache or parse_set_header(req_get(r, "Pragma")).has("no-cache") {
+        out.push(kv("Content-Length", f"{body.len()}"));
+        return Resp { status: 200, headers: out, body: body };
+    }
+    let mut status = 200;
+    let accept_ranges = doc.path == "/changelog";
+    let range = req_get(r, "Range");
+    let mut is206 = false;
+    let processable = (req_get(r, "If-Range").is_none() or not is_resource_modified(r, etag_h, lm_h, false)) and range.is_some();
+    if accept_ranges and body.len() != 0 and processable {
+        let n = body.len();
+        let parsed = parse_range_header(range);
+        let rt = match parsed {
+            Some(p) => match (p.range_for_length(n), p.to_content_range_header(n)) {
+                (Some(t), Some(crh)) => Some((t, crh)),
+                _ => None,
+            },
+            None => None,
+        };
+        match rt {
+            None => {
+                return Resp {
+                    status: 416,
+                    headers: vec![kv("Content-Type", "text/plain; charset=utf-8"), kv("Content-Range", f"bytes */{n}")],
+                    body: "Requested Range Not Satisfiable".to_string(),
+                };
+            },
+            Some(((a, b), crh)) => {
+                out.push(kv("Content-Length", f"{b - a}"));
+                out.push(kv("Accept-Ranges", "bytes"));
+                out.push(kv("Content-Range", crh));
+                body = slice(body, a, b);
+                status = 206;
+                is206 = true;
+            },
+        }
+    }
+    if not is206 and not is_resource_modified(r, etag_h, lm_h, true) {
+        status = if parse_etags(req_get(r, "If-Match")).truthy() { 412 } else { 304 };
+    }
+    if header_value(out, "Content-Length").is_none() {
+        out.push(kv("Content-Length", f"{body.len()}"));
+    }
+    if accept_ranges and not is206 {
+        out.push(kv("Accept-Ranges", "bytes"));
+    }
+    if status == 304 {
+        out = remove_entity_headers(out, default_allowed());
+        body = String.new();
+    }
+    Resp { status: status, headers: out, body: body }
+}
+
+fn serve(app: mut ref App, r: ref Req) -> Resp {
+    if r.path == "/prefs" {
+        return serve_prefs(app, r);
+    }
+    if r.path == "/whoami" {
+        return serve_whoami(r);
+    }
+    if r.path == "/proxy/upstream" {
+        return serve_proxy(r);
+    }
+    if r.path == "/negotiate" {
+        return serve_negotiate(r);
+    }
+    if r.path == "/cache-check" {
+        return serve_cache_check(r);
+    }
+    if r.path == "/csp" {
+        return serve_csp(r);
+    }
+    let mut at: i64 = -1;
+    for i in 0..app.docs.len() {
+        if app.docs[i].path == r.path {
+            at = i;
+        }
+    }
+    if at < 0 {
+        return text_resp(404, "Not Found");
+    }
+    let allowed = if r.path == "/status" { strs(vec!["GET", "HEAD"]) } else { strs(vec!["GET", "HEAD", "PUT"]) };
+    if r.method == "OPTIONS" {
+        return Resp { status: 204, headers: vec![kv("Allow", dump_header_list(allowed))], body: String.new() };
+    }
+    if not contains_str(allowed, r.method) {
+        return Resp {
+            status: 405,
+            headers: vec![kv("Allow", dump_header_list(allowed)), kv("Content-Type", "text/plain; charset=utf-8")],
+            body: "Method Not Allowed".to_string(),
+        };
+    }
+    if r.method == "PUT" {
+        return serve_put(mut app, at, r);
+    }
+    serve_get(app, at, r)
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn from_hex(h: Str) -> String {
+    let b = to_bytes(h);
+    let mut out: Vec[u8] = Vec.new();
+    let mut i: i64 = 0;
+    while i + 1 < b.len() {
+        out.push(hex_val(b[i]) * 16 + hex_val(b[i + 1]));
+        i += 2;
+    }
+    from_bytes(out)
+}
+
+fn write_data() -> Result[(), String] {
+    if fs.create_dir_all("data/requests".to_string()).is_err() or fs.create_dir_all("data/docs".to_string()).is_err() {
+        return Err("cannot create data/".to_string());
+    }
+    for file in data_files() {
+        let p = f"data/{file.path}";
+        let body = if file.hex { from_hex(file.body) } else { file.body.clone() };
+        if fs.write(p.clone(), body).is_err() {
+            return Err(f"cannot write {p}");
+        }
+    }
+    Ok(())
+}
+
+fn read(path: Str) -> Result[String, String] {
+    match fs.read_to_string(path.to_string()) {
+        Ok(t) => Ok(t),
+        Err(_) => Err(f"cannot read {path}"),
+    }
+}
+
+fn opt(s: Str) -> Option[String] {
+    Some(s.to_string())
+}
+
+fn show_accept(kind: i64, value: Str, extra: Str) {
+    let a = parse_accept_header(opt(value), kind);
+    println(f"  {a.repr()}");
+    println(f"  header={py_repr(a.to_header())} best={opt_repr(a.best())} provided={py_bool(a.provided)}");
+    let matches = split_on(extra, b',');
+    for m in matches.iter() {
+        match (a.quality(m), a.contains(m), a.find(m)) {
+            (Ok(q), Ok(c), Ok(f)) => println(f"  {py_repr(m)}: quality={q_str(q)} in={py_bool(c)} find={f}"),
+            (Err(e), _, _) => println(f"  {py_repr(m)}: ! ValueError: {e}"),
+            (_, Err(e), _) => println(f"  {py_repr(m)}: ! ValueError: {e}"),
+            (_, _, Err(e)) => println(f"  {py_repr(m)}: ! ValueError: {e}"),
+        }
+    }
+    match (a.best_match(matches, None), a.best_match(matches, opt("fallback"))) {
+        (Ok(x), Ok(y)) => println(f"  best_match={opt_repr(x)} with default={opt_repr(y)}"),
+        (Err(e), _) => println(f"  best_match ! ValueError: {e}"),
+        (_, Err(e)) => println(f"  best_match ! ValueError: {e}"),
+    }
+    if kind == A_MIME {
+        println(f"  {mime_flags(a)}");
+    }
+}
+
+fn names_repr(hs: ref Vec[Kv]) -> String {
+    let mut v: Vec[String] = Vec.new();
+    for h in hs.iter() {
+        v.push(h.key.clone());
+    }
+    str_list_repr(v)
+}
+
+fn opt_str_repr(v: ref Option[String]) -> String {
+    opt_repr(v)
+}
+
+fn show_header(kind: Str, value: Str, extra: Str) {
+    println(f"{kind} {py_repr(value)}");
+    if kind == "list" {
+        let r = parse_list_header(value);
+        println(f"  {str_list_repr(r)} -> {py_repr(dump_header_list(r))}");
+    } else if kind == "dict" {
+        let r = parse_dict_header(value);
+        println(f"  {dict_repr(r)} -> {py_repr(dump_header_dict(r))}");
+    } else if kind == "options" {
+        let (v, o) = parse_options_header(opt(value));
+        println(f"  {options_repr(v, o)} -> {py_repr(dump_options_header(Some(v.clone()), o))}");
+    } else if kind == "accept" {
+        show_accept(A_PLAIN, value, extra);
+    } else if kind == "mime" {
+        show_accept(A_MIME, value, extra);
+    } else if kind == "lang" {
+        show_accept(A_LANG, value, extra);
+    } else if kind == "charset" {
+        show_accept(A_CHARSET, value, extra);
+    } else if kind == "cc" or kind == "rcc" {
+        let mut c = parse_cache_control_header(opt(value));
+        let cls = if kind == "rcc" { "ResponseCacheControl" } else { "RequestCacheControl" };
+        let props = if kind == "rcc" { response_props() } else { request_props() };
+        println(f"  {cache_repr(cls, c)} provided=True");
+        println(f"  {props_line(c, props)}");
+        println(f"  header={py_repr(dump_header_dict(c))}");
+        if kind == "rcc" {
+            cache_set_value(mut c, "max-age", "120");
+            cache_set_flag(mut c, "no-cache", true);
+            cache_set_flag(mut c, "private", false);
+            cache_set_flag(mut c, "public", true);
+            cache_set_flag(mut c, "s-maxage", false);
+            println(f"  changed={py_repr(dump_header_dict(c))}");
+        }
+    } else if kind == "csp" {
+        let c = parse_csp_header(opt(value));
+        println(f"  {cache_repr("ContentSecurityPolicy", c)}");
+        println(f"  default_src={opt_repr(dict_get(c, "default-src"))} script_src={opt_repr(dict_get(c, "script-src"))} report_uri={opt_repr(dict_get(c, "report-uri"))}");
+        println(f"  header={py_repr(dump_csp_header(c))}");
+    } else if kind == "set" {
+        let mut s = parse_set_header(opt(value));
+        println(f"  HeaderSet({str_list_repr(s.headers)}) len={s.set.len()} header={py_repr(s.to_header())}");
+        println(f"  'token' in={py_bool(s.has("token"))} find('origin')={s.find("origin")}");
+        s.add("X-New");
+        s.discard("User-Agent");
+        s.discard("token");
+        println(f"  after={py_repr(s.to_header())}");
+    } else if kind == "range" {
+        match parse_range_header(opt(value)) {
+            None => println("  None"),
+            Some(r) => {
+                println(f"  units={py_repr(r.units)} ranges={r.ranges_repr()} header={py_repr(r.to_header())}");
+                for ln in split_on(extra, b',').iter() {
+                    let n = py_int(ln).unwrap_or(0);
+                    let fl = match r.range_for_length(n) {
+                        Some((a, b)) => f"({a}, {b})",
+                        None => "None".to_string(),
+                    };
+                    let made = match r.range_for_length(n) {
+                        Some((a, b)) => {
+                            let cr = ContentRange { units: Some(r.units.clone()), start: Some(a), stop: Some(b), length: Some(n) };
+                            py_repr(cr.to_header())
+                        },
+                        None => "None".to_string(),
+                    };
+                    println(f"  {n}: for_length={fl} content_range={opt_repr(r.to_content_range_header(n))} made={made}");
+                }
+            },
+        }
+    } else if kind == "crange" {
+        match parse_content_range_header(opt(value)) {
+            None => println("  None"),
+            Some(r) => println(f"  units={opt_repr(r.units)} start={opt_int_repr(r.start)} stop={opt_int_repr(r.stop)} length={opt_int_repr(r.length)} header={py_repr(r.to_header())} bool={py_bool(r.units.is_some())}"),
+        }
+    } else if kind == "ifrange" {
+        let mut etag: Option[String] = None;
+        let mut date: Option[Dt] = None;
+        if value.len() > 0 {
+            date = parse_date(opt(value));
+            if date.is_none() {
+                if let Some((e, _)) = unquote_etag(opt(value)) {
+                    etag = Some(e);
+                }
+            }
+        }
+        let header = match ref date {
+            Some(d) => http_date(d),
+            None => match ref etag {
+                Some(e) => quote_etag(e, false).unwrap_or(String.new()),
+                None => String.new(),
+            },
+        };
+        println(f"  etag={opt_repr(etag)} date={dt_repr(date)} header={py_repr(header)}");
+    } else if kind == "etags" {
+        let e = parse_etags(opt(value));
+        println(f"  header={py_repr(e.to_header())} bool={py_bool(e.truthy())} len={e.strong.len()} star={py_bool(e.star)}");
+        for p in split_on(extra, b',').iter() {
+            println(f"  {py_repr(p)}: contains={py_bool(e.contains(p))} weak={py_bool(e.contains_weak(p))} raw={py_bool(e.contains_raw(p))} is_weak={py_bool(e.is_weak(p))}");
+        }
+    } else if kind == "date" {
+        // B-2026-10-20-31: bound first; passed inline the None arm arrives uninitialized.
+        let arg: Option[String] = if value == "NONE" { None } else { opt(value) };
+        let d = parse_date(arg);
+        let h = match ref d {
+            Some(x) => py_repr(http_date(x)),
+            None => "None".to_string(),
+        };
+        println(f"  {dt_repr(d)} -> {h}");
+    } else if kind == "age" {
+        match parse_age(value) {
+            None => println("  None"),
+            Some(n) => println(f"  {n} -> {py_repr(f"{n}")}"),
+        }
+    } else if kind == "cookie" {
+        println(f"  {multidict_repr(parse_cookie(opt(value)))}");
+    } else if kind == "quote" {
+        println(f"  {py_repr(quote_header_value(value, true))} {py_repr(quote_header_value(value, false))} {py_repr(unquote_header_value(value))}");
+    } else if kind == "etag" {
+        let u = match unquote_etag(opt(value)) {
+            Some((e, w)) => f"({py_repr(e)}, {py_bool(w)})",
+            None => "(None, None)".to_string(),
+        };
+        let q = match (quote_etag(value, false), quote_etag(value, true)) {
+            (Ok(a), Ok(b)) => f"{py_repr(a)} {py_repr(b)}",
+            (Err(e), _) => f"! ValueError: {e}",
+            (_, Err(e)) => f"! ValueError: {e}",
+        };
+        println(f"  unquote={u} quote={q}");
+    } else if kind == "strip" {
+        let mut hs: Vec[Kv] = Vec.new();
+        for n in split_on(value, b',').iter() {
+            hs.push(kv(strip(n), "v"));
+        }
+        println(f"  entity -> {names_repr(remove_entity_headers(hs, default_allowed()))}");
+        println(f"  entity(allow) -> {names_repr(remove_entity_headers(hs, vec!["allow".to_string()]))}");
+        println(f"  hop -> {names_repr(remove_hop_by_hop_headers(hs))}");
+    }
+}
+
+fn show_cookie(line: Str) {
+    let mut a = cookie_args("", "");
+    let mut kw: Vec[String] = Vec.new();
+    for field in split_on(line, b'|').iter() {
+        let (k, _, v) = partition(field, b'=');
+        if k == "k" {
+            a.key = v;
+        } else if k == "v" {
+            a.value = v;
+        } else if k == "max_age" {
+            let n = py_int(v).unwrap_or(0);
+            a.max_age = Some(n);
+            kw.push(f"'max_age': {n}");
+        } else if k == "expires" {
+            match plain_int(v) {
+                Some(n) => {
+                    a.expires = Some(http_date_ts(n));
+                    kw.push(f"'expires': {n}");
+                },
+                None => {
+                    a.expires = Some(v.clone());
+                    kw.push(f"'expires': {py_repr(v)}");
+                },
+            }
+        } else if k == "path" {
+            a.path = Some(v.clone());
+            kw.push(f"'path': {py_repr(v)}");
+        } else if k == "nopath" {
+            a.path = None;
+            kw.push("'path': None".to_string());
+        } else if k == "domain" {
+            a.domain = Some(v.clone());
+            kw.push(f"'domain': {py_repr(v)}");
+        } else if k == "samesite" {
+            a.samesite = Some(v.clone());
+            kw.push(f"'samesite': {py_repr(v)}");
+        } else if k == "nosync" {
+            kw.push("'sync_expires': False".to_string());
+        } else if k == "secure" {
+            a.secure = true;
+            kw.push("'secure': True".to_string());
+        } else if k == "httponly" {
+            a.httponly = true;
+            kw.push("'httponly': True".to_string());
+        } else if k == "partitioned" {
+            a.partitioned = true;
+            kw.push("'partitioned': True".to_string());
+        }
+    }
+    let cps = code_points(a.value);
+    let shown = if cps.len() <= 40 {
+        a.value.clone()
+    } else {
+        let mut b: Vec[u8] = Vec.new();
+        for i in 0..20 {
+            push_code_point(mut b, cps[i]);
+        }
+        from_bytes(b) + f"...({cps.len()} chars)"
+    };
+    println(f"set_cookie {py_repr(a.key)} {py_repr(shown)} {{{join(kw, ", ")}}}");
+    match dump_cookie(a) {
+        Err(e) => println(f"  ! ValueError: {e}"),
+        Ok((out, warning)) => {
+            let ob = to_bytes(out);
+            if char_len(out) > 200 {
+                println(f"  {py_repr(byte_str(ob, 0, 60))}...{py_repr(byte_str(ob, ob.len() - 30, ob.len()))} ({char_len(out)} chars)");
+            } else {
+                println(f"  {py_repr(out)}");
+            }
+            if let Some(w) = warning {
+                println(f"  warning: {w}");
+            }
+        },
+    }
+}
+
+fn status_phrase(code: i64) -> String {
+    let table: Vec[(i64, Str)] = vec![
+        (200, "OK"), (204, "No Content"), (206, "Partial Content"), (304, "Not Modified"), (400, "Bad Request"),
+        (404, "Not Found"), (405, "Method Not Allowed"), (406, "Not Acceptable"), (412, "Precondition Failed"),
+        (416, "Requested Range Not Satisfiable"),
+    ];
+    for (c, p) in table.iter() {
+        if c == code {
+            return p.to_string();
+        }
+    }
+    "Unknown".to_string()
+}
+
+fn parse_request(raw: Str) -> Req {
+    let at = find_str(raw, "\r\n\r\n");
+    let head = slice(raw, 0, at);
+    let body = slice_from(raw, at + 4);
+    let lines = split_on(head, b'\r');
+    let first = split_on(lines[0], b' ');
+    let mut headers: Vec[Kv] = Vec.new();
+    for k in 1..lines.len() {
+        // each line after the first starts with the \n of the \r\n
+        let line = slice_from(lines[k], 1);
+        let (key, _, value) = partition(line, b':');
+        headers.push(Kv { key: key, value: strip(value) });
+    }
+    let (path, _, query) = partition(first[1], b'?');
+    Req { method: first[0].clone(), path: path, query: query, headers: headers, body: body }
+}
+
+fn run() -> Result[(), String] {
+    write_data()?;
+    println("# headers");
+    for line in lines_of(read("data/headers.txt")?).iter() {
+        let parts = split_on(line, b'\t');
+        let extra = if parts.len() > 2 { parts[2].clone() } else { String.new() };
+        show_header(parts[0], parts[1], extra);
+    }
+    println("# cookies");
+    for line in lines_of(read("data/cookies.txt")?).iter() {
+        show_cookie(line);
+    }
+    println("# requests");
+    let mut app = load_app()?;
+    let mut names = match fs.read_dir("data/requests".to_string()) {
+        Ok(v) => v,
+        Err(_) => return Err("cannot list data/requests".to_string()),
+    };
+    names = sort_strings(names);
+    for name in names.iter() {
+        let r = parse_request(read(f"data/requests/{name}")?);
+        println(f"== {slice(name, 0, name.len() - 5)}");
+        let target = if r.query.len() > 0 { f"{r.path}?{r.query}" } else { r.path.clone() };
+        println(f"> {r.method} {target}");
+        let resp = serve(mut app, r);
+        println(f"< {resp.status} {status_phrase(resp.status)}");
+        for h in resp.headers.iter() {
+            println(f"< {h.key}: {h.value}");
+        }
+        if resp.body.len() > 0 and r.method != "HEAD" {
+            println(f"| {py_repr(resp.body)}");
+        }
+    }
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln(e);
+    }
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("6b3d7369647c763d61336657617c6d61785f6167653d333630307c657870697265733d313434353431323438307c7061");
+    t.push_str("74683d2f7c7365637572657c687474706f6e6c790a6b3d7468656d657c763d6461726b206d6f64657c706174683d2f73");
+    t.push_str("657474696e67730a6b3d70726566737c763d7b2261223a312c2262223a5b322c335d7d0a6b3d6c616e677c763d66722d");
+    t.push_str("43417c706174683d2f646f63732f757365722067756964652f7c646f6d61696e3d2e446f63732e4578616d706c652e63");
+    t.push_str("6f6d3a383434337c73616d65736974653d6c61780a6b3d747261636b7c763d782c793b7a7c657870697265733d307c73");
+    t.push_str("616d65736974653d5354524943540a6b3d74327c763d636166c3a9205c202271227c73616d65736974653d6e6f6e657c");
+    t.push_str("706172746974696f6e65640a6b3d74337c763d7c6e6f706174680a6b3d74347c763d6f6b7c73616d65736974653d626f");
+    t.push_str("6775730a6b3d74357c763d74616209686572657c6d61785f6167653d307c6e6f73796e630a6b3d6e61c3af76657c763d");
+    t.push_str("310a6b3d74367c763d1a7f7c706174683d2f613b623f633d642365253230660a6b3d6269677c763d7878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878");
+    t.push_str("78780a6b3d74377c763d767c657870697265733d5765642c203039204a756e20323032312031303a31383a313420474d");
+    t.push_str("547c6d61785f6167653d31300a6b3d74387c763d767c646f6d61696e3d6c6f63616c686f73740a6b3d74397c763d767c");
+    t.push_str("6d61785f6167653d3132307c657870697265733d3235333430323330303739390a");
+    v.push(DataFile { path: "cookies.txt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("/guide|1445412480|en,de,fr-CA,pt-BR|text/html,text/plain,application/json|public, max-age=600\n");
+    t.push_str("/changelog|1700000000|en|text/plain|public, max-age=60, must-revalidate\n");
+    t.push_str("/logo.svg|1600000000|en|image/svg+xml|public, max-age=31536000, immutable\n");
+    t.push_str("/status|1700000500|en|application/json,text/plain|no-store\n");
+    v.push(DataFile { path: "docs.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("v1.0.0 - fixed issue #100, improved startup by 0 ms\n");
+    t.push_str("v1.1.0 - fixed issue #107, improved startup by 3 ms\n");
+    t.push_str("v1.2.0 - fixed issue #114, improved startup by 6 ms\n");
+    t.push_str("v1.3.0 - fixed issue #121, improved startup by 9 ms\n");
+    t.push_str("v1.4.0 - fixed issue #128, improved startup by 12 ms\n");
+    t.push_str("v1.5.0 - fixed issue #135, improved startup by 15 ms\n");
+    t.push_str("v1.6.0 - fixed issue #142, improved startup by 18 ms\n");
+    t.push_str("v1.7.0 - fixed issue #149, improved startup by 21 ms\n");
+    t.push_str("v1.8.0 - fixed issue #156, improved startup by 24 ms\n");
+    t.push_str("v1.9.0 - fixed issue #163, improved startup by 27 ms\n");
+    t.push_str("v1.10.0 - fixed issue #170, improved startup by 30 ms\n");
+    t.push_str("v1.11.0 - fixed issue #177, improved startup by 33 ms\n");
+    t.push_str("v1.12.0 - fixed issue #184, improved startup by 36 ms\n");
+    t.push_str("v1.13.0 - fixed issue #191, improved startup by 39 ms\n");
+    t.push_str("v1.14.0 - fixed issue #198, improved startup by 42 ms\n");
+    t.push_str("v1.15.0 - fixed issue #205, improved startup by 45 ms\n");
+    t.push_str("v1.16.0 - fixed issue #212, improved startup by 48 ms\n");
+    t.push_str("v1.17.0 - fixed issue #219, improved startup by 51 ms\n");
+    t.push_str("v1.18.0 - fixed issue #226, improved startup by 54 ms\n");
+    t.push_str("v1.19.0 - fixed issue #233, improved startup by 57 ms\n");
+    t.push_str("v1.20.0 - fixed issue #240, improved startup by 60 ms\n");
+    t.push_str("v1.21.0 - fixed issue #247, improved startup by 63 ms\n");
+    t.push_str("v1.22.0 - fixed issue #254, improved startup by 66 ms\n");
+    t.push_str("v1.23.0 - fixed issue #261, improved startup by 69 ms\n");
+    t.push_str("v1.24.0 - fixed issue #268, improved startup by 72 ms\n");
+    t.push_str("v1.25.0 - fixed issue #275, improved startup by 75 ms\n");
+    t.push_str("v1.26.0 - fixed issue #282, improved startup by 78 ms\n");
+    t.push_str("v1.27.0 - fixed issue #289, improved startup by 81 ms\n");
+    t.push_str("v1.28.0 - fixed issue #296, improved startup by 84 ms\n");
+    t.push_str("v1.29.0 - fixed issue #303, improved startup by 87 ms\n");
+    t.push_str("v1.30.0 - fixed issue #310, improved startup by 90 ms\n");
+    t.push_str("v1.31.0 - fixed issue #317, improved startup by 93 ms\n");
+    t.push_str("v1.32.0 - fixed issue #324, improved startup by 96 ms\n");
+    t.push_str("v1.33.0 - fixed issue #331, improved startup by 99 ms\n");
+    t.push_str("v1.34.0 - fixed issue #338, improved startup by 102 ms\n");
+    t.push_str("v1.35.0 - fixed issue #345, improved startup by 105 ms\n");
+    t.push_str("v1.36.0 - fixed issue #352, improved startup by 108 ms\n");
+    t.push_str("v1.37.0 - fixed issue #359, improved startup by 111 ms\n");
+    t.push_str("v1.38.0 - fixed issue #366, improved startup by 114 ms\n");
+    t.push_str("v1.39.0 - fixed issue #373, improved startup by 117 ms\n");
+    v.push(DataFile { path: "docs/changelog.en.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Willkommen im Benutzerhandbuch. Beginnen Sie mit der Installation, dann konfigurieren Sie Ihr erstes Projekt. Grüße!");
+    v.push(DataFile { path: "docs/guide.de.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Welcome to the user guide. Start with installation, then configure your first project.");
+    v.push(DataFile { path: "docs/guide.en.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Bienvenue dans le guide. Commencez par l'installation, puis configurez votre premier projet. À bientôt!");
+    v.push(DataFile { path: "docs/guide.fr-CA.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("Bem-vindo ao guia. Comece pela instalação e depois configure seu primeiro projeto.");
+    v.push(DataFile { path: "docs/guide.pt-BR.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><circle cx=\"32\" cy=\"32\" r=\"30\" fill=\"#36c\"/></svg>");
+    v.push(DataFile { path: "docs/logo.svg.en.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("all systems operational");
+    v.push(DataFile { path: "docs/status.en.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("list\ta, b, c\n");
+    t.push_str("list\ttoken, \"quoted value\", \"with, comma\"\n");
+    t.push_str("list\t  spaced  ,  out , , ,last \n");
+    t.push_str("list\t\"esc\\\"aped\", \"back\\\\slash\", plain\"quote\n");
+    t.push_str("list\tfoo=\"bar, baz\", qux\n");
+    t.push_str("list\t\"unterminated, still going\n");
+    t.push_str("list\t\n");
+    t.push_str("list\t,,,\n");
+    t.push_str("list\ta, \"\", b\n");
+    t.push_str("list\t\"x\" , \"y\"z, w\"v\"\n");
+    t.push_str("dict\ta=b, c=d\n");
+    t.push_str("dict\trealm=\"Login Required\", charset=UTF-8\n");
+    t.push_str("dict\tkey, other=1, =nokey, empty=\n");
+    t.push_str("dict\ttitle*=UTF-8''%E2%82%AC%20rates, plain=x\n");
+    t.push_str("dict\ttitle*=iso-8859-1'en'%A3%20pound\n");
+    t.push_str("dict\ttitle*=bogus''%41%42\n");
+    t.push_str("dict\tname*=noquotes\n");
+    t.push_str("dict\ta=\"1\", a=\"2\", b=3\n");
+    t.push_str("dict\tq=\"quoted \\\"inner\\\" text\"\n");
+    t.push_str("dict\tx = 1 , y= \"2\" ,z =3\n");
+    t.push_str("dict\tmax-age=0, no-cache, no-store, must-revalidate\n");
+    t.push_str("dict\tusername=\"Mufasa\", realm=\"testrealm@host.com\", nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\", uri=\"/dir/index.html\", qop=auth, nc=00000001, cnonce=\"0a4f113b\"\n");
+    t.push_str("options\ttext/html; charset=UTF-8\n");
+    t.push_str("options\t\n");
+    t.push_str("options\ttext/plain\n");
+    t.push_str("options\tmultipart/form-data; boundary=\"----WebKitFormBoundary7MA4YWxkTrZu0gW\"\n");
+    t.push_str("options\tattachment; filename=\"report 2024.pdf\"; size=1024\n");
+    t.push_str("options\tattachment; filename*=UTF-8''na%C3%AFve%20file.txt\n");
+    t.push_str("options\tattachment; filename*=utf-8'en'%E2%82%AC%20rates.csv; filename=\"EURO rates.csv\"\n");
+    t.push_str("options\tform-data; name*0=\"long\"; name*1=\"-part\"; name*2=\"-name\"\n");
+    t.push_str("options\tform-data; title*0*=us-ascii'en'This%20is%20even%20more%20; title*1*=%2A%2A%2Afun%2A%2A%2A%20; title*2=\"isn't it!\"\n");
+    t.push_str("options\ttext/html; Charset=\"utf-8\"; LEVEL=1\n");
+    t.push_str("options\ttext/html; charset\n");
+    t.push_str("options\ttext/html; =value; key=; ok=1\n");
+    t.push_str("options\ttext/html; \"quoted\"=x; next=y\n");
+    t.push_str("options\tform-data; name=\"a\\\"b\"; filename=\"c\\\\d.txt\"\n");
+    t.push_str("options\tform-data; name=\"html%22quote\"\n");
+    t.push_str("options\t  text/css  ;  charset = utf-8  \n");
+    t.push_str("options\tapplication/json;;;charset=utf-8\n");
+    t.push_str("options\ttext/plain; a=\"semi;colon\"; b=2\n");
+    t.push_str("options\ttext/plain; a=\"unterminated; b=2\n");
+    t.push_str("options\timage/png; name*=bogus''x%20y\n");
+    t.push_str("options\tmessage/external-body; access-type=URL; URL*0=\"ftp://\"; URL*1=\"cs.utk.edu/pub/moore/bulk-mailer/bulk-mailer.tar\"\n");
+    t.push_str("options\ttext/plain; x*=''%41\n");
+    t.push_str("accept\tgzip, deflate, br\tgzip,br,identity,compress\n");
+    t.push_str("accept\tgzip;q=1.0, identity; q=0.5, *;q=0\tgzip,identity,br\n");
+    t.push_str("accept\tbr;q=0.9, gzip;q=0.9, *;q=0.1\tzstd,gzip,br\n");
+    t.push_str("accept\tdeflate;q=2, gzip;q=-1, br;q=abc, identity;q=0.001, x;q=1.50\tdeflate,identity\n");
+    t.push_str("accept\t\tgzip\n");
+    t.push_str("accept\t*\tanything,else\n");
+    t.push_str("mime\ttext/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\ttext/html,application/json,image/png,text/plain\n");
+    t.push_str("mime\tapplication/json, text/plain;q=0.5\ttext/html,text/plain,application/json\n");
+    t.push_str("mime\ttext/*;q=0.3, text/html;q=0.7, text/html;level=1, text/html;level=2;q=0.4, */*;q=0.5\ttext/html,text/html;level=1,text/html;level=2,text/plain,image/jpeg,text/html;level=3\n");
+    t.push_str("mime\timage/*\timage/png,image/svg+xml,text/plain\n");
+    t.push_str("mime\t*/*\tapplication/json,text/html\n");
+    t.push_str("mime\ttext/plain; format=flowed; charset=utf-8\ttext/plain;charset=utf-8;format=flowed,text/plain,text/plain;format=fixed\n");
+    t.push_str("mime\tbogus, */html, application/json;q=0.0\tapplication/json,text/html\n");
+    t.push_str("mime\ttext/html\ttexthtml\n");
+    t.push_str("mime\ttext/html\t*/html\n");
+    t.push_str("mime\tapplication/vnd.api+json;q=0.9, application/json\tapplication/vnd.api+json,application/json,*/*\n");
+    t.push_str("mime\t\ttext/html\n");
+    t.push_str("lang\tda, en-gb;q=0.8, en;q=0.7\ten-US,en-GB,da,fr\n");
+    t.push_str("lang\tde-CH, de;q=0.9, *;q=0.5\tfr,de-DE,en\n");
+    t.push_str("lang\ten-US\ten,de\n");
+    t.push_str("lang\ten\ten-US,en-GB\n");
+    t.push_str("lang\tzh-Hant-TW, zh;q=0.8\tzh-TW,zh-Hans,zh-Hant-TW\n");
+    t.push_str("lang\tpt_BR, pt;q=0.5\tpt-br,es\n");
+    t.push_str("lang\tfr-CA;q=0.9, es\tde,it\n");
+    t.push_str("lang\t\ten,de\n");
+    t.push_str("lang\t*\tja,ko\n");
+    t.push_str("charset\tiso-8859-5, unicode-1-1;q=0.8\tutf-8,iso-8859-5\n");
+    t.push_str("charset\tUTF8, Latin-1;q=0.5, *;q=0.1\tutf-8,iso-8859-1,ascii,cp1252\n");
+    t.push_str("charset\tus-ascii;q=0.7, windows-1252\tascii,cp1252,latin9\n");
+    t.push_str("charset\tx-made-up, Shift_JIS;q=0.2\tsjis,X-MADE-UP,koi8-r\n");
+    t.push_str("charset\tutf 8, utf_16;q=0.4\tUTF-8,utf16,UTF-16LE\n");
+    t.push_str("cc\tmax-age=3600, no-cache\n");
+    t.push_str("cc\tno-store\n");
+    t.push_str("cc\tmax-stale, min-fresh=60, only-if-cached\n");
+    t.push_str("cc\tmax-stale=120, no-transform\n");
+    t.push_str("cc\tmax-age=, max-age=abc\n");
+    t.push_str("cc\tmax-age=+30, stale-if-error=1_000\n");
+    t.push_str("cc\tmax-age=\"42\", private=\"Set-Cookie\", community=\"UCI\"\n");
+    t.push_str("cc\tno-cache=\"set-cookie, set-cookie2\", must-revalidate\n");
+    t.push_str("cc\t\n");
+    t.push_str("cc\tMAX-AGE=10, Max-Age=20\n");
+    t.push_str("cc\tmax-age= -5\n");
+    t.push_str("rcc\tpublic, max-age=31536000, immutable\n");
+    t.push_str("rcc\tprivate, no-cache, must-revalidate, proxy-revalidate\n");
+    t.push_str("rcc\tno-cache=\"Set-Cookie\", private=x, s-maxage=600\n");
+    t.push_str("rcc\ts-maxage=abc, stale-while-revalidate=30, must-understand, no-store\n");
+    t.push_str("rcc\tmax-age=0\n");
+    t.push_str("csp\tdefault-src 'self'; img-src *; media-src media1.com media2.com; script-src userscripts.example.com\n");
+    t.push_str("csp\tdefault-src 'none';script-src 'self' 'unsafe-inline';; report-uri /csp-report ;upgrade-insecure-requests\n");
+    t.push_str("csp\t  frame-ancestors   'none'  ;  default-src 'self' ; default-src https:\n");
+    t.push_str("set\ttoken, \"quoted value\"\n");
+    t.push_str("set\tAccept-Encoding, accept-encoding, Origin, User-Agent\n");
+    t.push_str("set\t\n");
+    t.push_str("set\tGET, HEAD, \"PO\\\"ST\"\n");
+    t.push_str("range\tbytes=0-499\t1000,300,0\n");
+    t.push_str("range\tbytes=500-999\t1000,700,500\n");
+    t.push_str("range\tbytes=-500\t1000,200\n");
+    t.push_str("range\tbytes=9500-\t10000,9000\n");
+    t.push_str("range\tbytes=0-0,-1\t10\n");
+    t.push_str("range\tbytes=0-99, 100-199\t1000\n");
+    t.push_str("range\tBytes = 10-20\t100\n");
+    t.push_str("range\titems=0-9\t100\n");
+    t.push_str("range\tbytes=5-1\t10\n");
+    t.push_str("range\tbytes=1-2,0-3\t10\n");
+    t.push_str("range\tbytes=-5,10-20\t100\n");
+    t.push_str("range\tbytes=abc-def\t10\n");
+    t.push_str("range\tbytes=+1-2\t10\n");
+    t.push_str("range\tbytes=\t10\n");
+    t.push_str("range\tbytes\t10\n");
+    t.push_str("range\tbytes=0-\t0,5\n");
+    t.push_str("range\tbytes=-0\t10\n");
+    t.push_str("range\tbytes= 2 - 5 \t10\n");
+    t.push_str("range\tbytes=0-4,5-9,10-14\t20\n");
+    t.push_str("crange\tbytes 0-499/1234\n");
+    t.push_str("crange\tbytes 500-1233/1234\n");
+    t.push_str("crange\tbytes */1234\n");
+    t.push_str("crange\tbytes */*\n");
+    t.push_str("crange\tbytes 0-499/*\n");
+    t.push_str("crange\tbytes 499-0/1234\n");
+    t.push_str("crange\tbytes 0-1234/1234\n");
+    t.push_str("crange\tbytes 10-20\n");
+    t.push_str("crange\tbytes\n");
+    t.push_str("crange\tbytes x-y/10\n");
+    t.push_str("crange\titems 0-9/100\n");
+    t.push_str("crange\t  bytes   21010-47021/47022  \n");
+    t.push_str("crange\tbytes 0-+5/10\n");
+    t.push_str("ifrange\t\"abc123\"\n");
+    t.push_str("ifrange\tW/\"weak-one\"\n");
+    t.push_str("ifrange\tSun, 06 Nov 1994 08:49:37 GMT\n");
+    t.push_str("ifrange\tTue, 15 Nov 1994 12:45:26 +0100\n");
+    t.push_str("ifrange\tnot a date and not quoted\n");
+    t.push_str("ifrange\t\n");
+    t.push_str("etags\t\"xyzzy\"\txyzzy,\"xyzzy\",W/\"xyzzy\",other\n");
+    t.push_str("etags\t\"xyzzy\", \"r2d2xxxx\", \"c3piozzzz\"\tr2d2xxxx,c3piozzzz,xyzzy\n");
+    t.push_str("etags\tW/\"xyzzy\", W/\"r2d2xxxx\", \"c3piozzzz\"\txyzzy,W/\"xyzzy\",\"xyzzy\",c3piozzzz\n");
+    t.push_str("etags\t*\tanything,W/\"x\"\n");
+    t.push_str("etags\t\"a\",W/\"b\" , \"c\",w/\"d\"\ta,b,c,d\n");
+    t.push_str("etags\tunquoted, \"q\", W/raw\tunquoted,q,raw\n");
+    t.push_str("etags\t\"one\", *\tzzz\n");
+    t.push_str("etags\t\"\", W/\"\"\t\"\",x\n");
+    t.push_str("etags\t\"alpha\", \"beta\", \"gamma\", \"delta\", \"epsilon\", \"zeta\", \"eta\", \"theta\", \"iota\"\teta,kappa\n");
+    t.push_str("etags\t\tx\n");
+    t.push_str("date\tSun, 06 Nov 1994 08:49:37 GMT\n");
+    t.push_str("date\tSunday, 06-Nov-94 08:49:37 GMT\n");
+    t.push_str("date\tSun Nov  6 08:49:37 1994\n");
+    t.push_str("date\tTue, 15 Nov 1994 12:45:26 +0100\n");
+    t.push_str("date\tTue, 15 Nov 1994 12:45:26 -0530\n");
+    t.push_str("date\tWed, 21 Oct 2015 07:28:00 EST\n");
+    t.push_str("date\tWed, 21 Oct 2015 07:28:00 PDT\n");
+    t.push_str("date\t21 Oct 2015 07:28 GMT\n");
+    t.push_str("date\tWed, 21 Oct 2015 07:28:00\n");
+    t.push_str("date\tWed, 21 Oct 2015 07:28:00 -0000\n");
+    t.push_str("date\tWed, 21 Oct 2015 07:28:00 XYZ\n");
+    t.push_str("date\tThu, 01 Jan 1970 00:00:00 GMT\n");
+    t.push_str("date\tMon, 29 Feb 2016 23:59:59 GMT\n");
+    t.push_str("date\tTue, 29 Feb 2015 10:00:00 GMT\n");
+    t.push_str("date\tWed, 21 Oct 2015 25:28:00 GMT\n");
+    t.push_str("date\tWed, 21 Oct 15 07:28:00 GMT\n");
+    t.push_str("date\tFri, 31 Dec 99 23:59:59 GMT\n");
+    t.push_str("date\tFri, 31 Dec 68 23:59:59 GMT\n");
+    t.push_str("date\tWed, 21 October 2015 07:28:00 GMT\n");
+    t.push_str("date\tWed, 21 Foo 2015 07:28:00 GMT\n");
+    t.push_str("date\tOct 21 2015 07:28:00 GMT\n");
+    t.push_str("date\tWed,21 Oct 2015 07:28:00 GMT\n");
+    t.push_str("date\t21 Oct 2015 07.28.00 GMT\n");
+    t.push_str("date\tWed, 21 Oct 2015 07:28:60 GMT\n");
+    t.push_str("date\tWed, 21 Oct 2015, 07:28:00 GMT\n");
+    t.push_str("date\tgarbage\n");
+    t.push_str("date\t   \n");
+    t.push_str("date\t\n");
+    t.push_str("date\tNONE\n");
+    t.push_str("date\tSat, 01 Jan 0000 00:00:00 GMT\n");
+    t.push_str("date\tFri, 31 Dec 9999 23:59:59 GMT\n");
+    t.push_str("date\tTue, 15 Nov 1994 12:45:26 +2500\n");
+    t.push_str("age\t0\n");
+    t.push_str("age\t3600\n");
+    t.push_str("age\t-1\n");
+    t.push_str("age\t12.5\n");
+    t.push_str("age\tabc\n");
+    t.push_str("age\t\n");
+    t.push_str("age\t86400\n");
+    t.push_str("age\t 42 \n");
+    t.push_str("age\t1_000\n");
+    t.push_str("age\t+7\n");
+    t.push_str("cookie\tsession=abc123; theme=dark\n");
+    t.push_str("cookie\ta=1; b=2; a=3\n");
+    t.push_str("cookie\tquoted=\"hello world\"; esc=\"a\\\"b\"; oct=\"\\303\\251t\\303\\251\"\n");
+    t.push_str("cookie\t  spaced = value ;  other=x  ;\n");
+    t.push_str("cookie\tnovalue; =onlyvalue; k=\n");
+    t.push_str("cookie\tmixed=café; utf8=üñï\n");
+    t.push_str("cookie\tsemi=\"a;b\"; after=1\n");
+    t.push_str("cookie\t\n");
+    t.push_str("cookie\ttrail=\"unterminated; next=2\n");
+    t.push_str("cookie\tx=\"\\q\\\\\"\n");
+    t.push_str("quote\tsimple\n");
+    t.push_str("quote\twith space\n");
+    t.push_str("quote\t\n");
+    t.push_str("quote\thas\"quote\n");
+    t.push_str("quote\tback\\slash\n");
+    t.push_str("quote\ttoken!#$%&'*+-.^_`|~09\n");
+    t.push_str("quote\tcomma,semi;\n");
+    t.push_str("quote\t\"already quoted\"\n");
+    t.push_str("quote\t\"esc\\\"aped\\\\\"\n");
+    t.push_str("quote\t\"\n");
+    t.push_str("quote\tcafé\n");
+    t.push_str("etag\tabc\n");
+    t.push_str("etag\tW/\"abc\"\n");
+    t.push_str("etag\t\"abc\"\n");
+    t.push_str("etag\tw/\"lower\"\n");
+    t.push_str("etag\t  \"spaced\"  \n");
+    t.push_str("etag\tW/\n");
+    t.push_str("etag\tbad\"tag\n");
+    t.push_str("etag\t\n");
+    t.push_str("etag\t\"\n");
+    t.push_str("etag\tW/x\n");
+    t.push_str("strip\tContent-Type, Content-Length, ETag, Expires, Content-Location, X-Custom, Allow, last-modified\n");
+    t.push_str("strip\tConnection, Keep-Alive, Upgrade, TE, X-Forwarded-For, Transfer-Encoding, Trailer, Proxy-Authorization, Content-Type\n");
+    v.push(DataFile { path: "headers.txt".to_string(), hex: false, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/000.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/plain\r\n");
+    t.push_str("Accept-Language: de-DE,de;q=0.9,en;q=0.8\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/001.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: application/json\r\n");
+    t.push_str("Accept-Language: pt\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/002.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/html;q=0.1, application/json;q=0.2\r\n");
+    t.push_str("Accept-Language: fr-FR, fr;q=0.9\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/003.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: image/png\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/004.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/*\r\n");
+    t.push_str("Accept-Language: es, *;q=0.1\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/005.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept-Language: de\r\n");
+    t.push_str("Cookie: lang=pt-BR; session=s1\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/006.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept-Language: de\r\n");
+    t.push_str("Cookie: lang=xx; session=s1\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/007.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept-Charset: iso-8859-1\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/008.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept-Charset: UTF8;q=0.5, *;q=0.1\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/009.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("HEAD /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/plain\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/010.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Modified-Since: Wed, 21 Oct 2015 07:28:00 GMT\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/011.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Modified-Since: Wed, 21 Oct 2015 07:27:59 GMT\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/012.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Modified-Since: Wednesday, 21-Oct-15 09:28:00 +0200\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/013.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Modified-Since: Wed, 21 Oct 2015 07:28:00 GMT\r\n");
+    t.push_str("Cache-Control: no-cache\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/014.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Modified-Since: Wed, 21 Oct 2015 07:28:00 GMT\r\n");
+    t.push_str("Pragma: no-cache\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/015.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Modified-Since: not a date\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/016.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=0-99\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/017.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=-120\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/018.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=2000-\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/019.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=99999-\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/020.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=0-9,20-29\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/021.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: lines=1-2\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/022.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=5-1\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/023.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("HEAD /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=10-19\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/024.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=0-9\r\n");
+    t.push_str("If-Range: Tue, 14 Nov 2023 22:13:20 GMT\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/025.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=0-9\r\n");
+    t.push_str("If-Range: Tue, 14 Nov 2023 22:13:19 GMT\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/026.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Range: bytes=0-9\r\n");
+    t.push_str("If-Range: \"stale-etag\"\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/027.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Range: Tue, 14 Nov 2023 22:13:20 GMT\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/028.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /logo.svg HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/029.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /logo.svg HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-None-Match: \"nope\", W/\"also-nope\"\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/030.http".to_string(), hex: false, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("GET /logo.svg HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-None-Match: *\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/031.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /logo.svg HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Match: \"nope\"\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/032.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /logo.svg HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("If-Match: *\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/033.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /status HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/034.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /status HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/plain\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/035.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /missing HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/036.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("DELETE /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/037.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("OPTIONS /changelog HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/038.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Content-Language: en\r\n");
+    t.push_str("If-Match: \"wrong\"\r\n");
+    t.push_str("\r\n");
+    t.push_str("Updated guide text.");
+    v.push(DataFile { path: "requests/039.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Content-Language: en\r\n");
+    t.push_str("\r\n");
+    t.push_str("Updated guide text, second edition.");
+    v.push(DataFile { path: "requests/040.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/plain\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/041.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Content-Language: it\r\n");
+    t.push_str("\r\n");
+    t.push_str("Benvenuti.");
+    v.push(DataFile { path: "requests/042.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("PUT /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Content-Language: de\r\n");
+    t.push_str("If-Unmodified-Since: Wed, 21 Oct 2015 07:28:00 GMT\r\n");
+    t.push_str("\r\n");
+    t.push_str("Neu.");
+    v.push(DataFile { path: "requests/043.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /guide HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/plain\r\n");
+    t.push_str("Accept-Language: de\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/044.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /prefs?lang=fr-CA HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/045.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /prefs?lang=klingon HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/046.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /prefs?lang=de&remember=0 HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/047.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /whoami HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Cookie: session=\"u\\303\\244ser 42\"; lang=de; session=second\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/048.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /whoami HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/049.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /proxy/upstream HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Connection: keep-alive, X-Trace\r\n");
+    t.push_str("Keep-Alive: timeout=5\r\n");
+    t.push_str("X-Trace: abc\r\n");
+    t.push_str("TE: trailers\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/050.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /negotiate HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: application/xhtml+xml;q=0.9, text/html;q=0.9, */*;q=0.1\r\n");
+    t.push_str("Accept-Encoding: gzip;q=0.5, br\r\n");
+    t.push_str("Accept-Language: en-GB\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/051.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /negotiate HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: text/html\r\n");
+    t.push_str("Accept-Encoding: identity;q=0\r\n");
+    t.push_str("Accept-Language: \r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/052.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /negotiate HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Accept: bad\r\n");
+    t.push_str("Accept-Encoding: *;q=0\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/053.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /cache-check HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Cache-Control: max-age=0, max-stale=30, no-transform\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/054.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /cache-check HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Cache-Control: only-if-cached, min-fresh=5, stale-if-error=abc\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/055.http".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("GET /csp HTTP/1.1\r\n");
+    t.push_str("Host: docs.example.com\r\n");
+    t.push_str("Content-Security-Policy-Report-Only: default-src 'self'; script-src https://cdn.example.com; report-uri /r\r\n");
+    t.push_str("\r\n");
+    v.push(DataFile { path: "requests/056.http".to_string(), hex: false, body: t });
+}
