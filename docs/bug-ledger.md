@@ -102,16 +102,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 185 |
 | perf | 180 |
 | diagnostics | 178 |
+| crash | 126 |
 | soundness | 125 |
-| crash | 125 |
 | use-after-free | 92 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 2974 |
-| interp | 992 |
+| codegen | 2975 |
+| interp | 993 |
 | typecheck | 514 |
 | ownership | 124 |
 | other | 121 |
@@ -182,6 +182,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-10-20-18 | 2026-10-20 | typecheck | medium | `iter.fold(Vec.new(), |acc: Vec[i64], x| ...)` is refused (`expected 'Vec[?T1]', found 'Vec[i64]'`): the element type of a `Vec.new()` passed as fold's init is never solved from the closure's annotated accumulator or its result, nor from an annotated `let`; binding the init to a typed `let` first passes, and `String.new()` / `Option.None` inits pass | ../kara-katas/leetcode/801-900/809-expressive-words |
 | B-2026-10-20-19 | 2026-10-20 | interp+codegen | low | MIR builder: a function item stored in a generic struct's `Fn(V) -> K` field at V = i64 is erased twice, to `Fn(i64) -> i64` and then to `Fn(ref i64) -> i64`, and the validator refuses the second cast (`invalid MIR: Erase cast from Fn(i64) -> i64 to Fn(ref i64) -> i64`) | — |
 | B-2026-10-20-20 | 2026-10-20 | typecheck+interp+codegen | low | Floats have no `is_nan`, `is_infinite`, `is_finite` or `is_sign_negative`, so data-cleaning code has to write `x != x` and compare against `1.0 / 0.0` | — |
+| B-2026-10-20-21 | 2026-10-20 | interp+codegen | medium | MIR builder: `*key` inside a closure, where `key` is a captured `ref String` (a parameter or a `for` item), passes `karac check` but fails MIR validation with "deref of non-reference String", so `v.iter().any(|t| t.0 == *key)` cannot run on v2 | — |
 
 ### Relocated
 
