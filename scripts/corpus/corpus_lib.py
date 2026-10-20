@@ -116,15 +116,21 @@ def run_program(entry: Path, backend: str, karac: str, timeout: float, env_extra
         finally:
             if origin is not None:
                 origin.stop()
-        stdout = r.stdout
-        if origin is not None and origin.record:
-            stdout += b"=== origin ===\n" + origin.transcript()
-        # Files whose contents its test checks after the run.
-        for name in (template or {}).get("show_files", []):
-            f = tmpd / name
-            stdout += f"=== file {name} ===\n".encode() + (f.read_bytes() if f.exists() else b"(missing)\n")
+        stdout = template_stdout(r.stdout, template, tmpd, origin)
     return {"status": "ran", "exit": r.returncode, "stdout": stdout, "stderr": r.stderr,
             "secs": time.monotonic() - start}
+
+
+def template_stdout(stdout: bytes, template, tmpd: Path, origin) -> bytes:
+    """A template entry's stdout as its expected.out holds it: the program's
+    own, then what the origin recorded, then the files `show_files` names."""
+    if origin is not None and origin.record:
+        stdout += b"=== origin ===\n" + origin.transcript()
+    # Files whose contents its test checks after the run.
+    for name in (template or {}).get("show_files", []):
+        f = tmpd / name
+        stdout += f"=== file {name} ===\n".encode() + (f.read_bytes() if f.exists() else b"(missing)\n")
+    return stdout
 
 
 # A `{{`, a `}}` or a `{name}` hole of a Rust `format!` template.

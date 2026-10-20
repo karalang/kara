@@ -60,7 +60,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from corpus_lib import ROOT, entries, execute, read_toml, write_toml  # noqa: E402
+from corpus_lib import (ROOT, Origin, entries, execute, read_toml, render_template,  # noqa: E402
+                        template_stdout, write_toml)
 
 PASSING = {"a", "b", "c"}
 # expected.out that states the spec rather than a legacy record: a core pin,
@@ -224,8 +225,22 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
     env = dict(os.environ)
     env.update({"KARAC_HASH_SEED": str(args.seed), **{k: str(v) for k, v in meta.get("env", {}).items()}})
     driver = read_toml(entry / "driver.toml") or None
+    # A `format!` template entry runs filled in, as `run.py` runs it, with its
+    # files and its origin, and is judged on the same stdout.
+    template = read_toml(entry / "template.toml") or None
+    origin = Origin(template["origin"]) if template and "origin" in template else None
+    try:
+        return classify_in(entry, args, rev, meta, out, src, expect, env, driver, template, origin)
+    finally:
+        if origin is not None:
+            origin.stop()
+
+
+def classify_in(entry, args, rev, meta, out, src, expect, env, driver, template, origin):
     with tempfile.TemporaryDirectory(prefix="classify-") as tmp:
         d = Path(tmp)
+        if template is not None:
+            src = render_template(src, template, d, origin)
         (d / "source.kara").write_text(src)
         errs = check_errors(args.karac, d, env, args.timeout)
         fixed, legacy_interp = None, None
@@ -264,6 +279,8 @@ def classify(entry: Path, corpus: Path, args, rev: str, sha: str) -> dict:
             if fixed == src:
                 return {**out, "class": "e", "bucket": "b-fix-noop:" + codes[0]}
         r = mir_run(args.karac, d, env, args.timeout, driver)
+        if r is not None and template is not None:
+            r.stdout = template_stdout(r.stdout, template, d, origin)
     res = {**out, "fixed": fixed}
     if r is None:
         return {**res, "class": "e", "bucket": "timeout"}
