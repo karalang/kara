@@ -6558,3 +6558,84 @@ fn main() {
         assert!(!exe.exists(), "{tag}: no executable is written");
     }
 }
+
+/// Twelve integer methods at 128 bits on both MIR backends, and
+/// `swap_bytes`, `reverse_bits` and `next_power_of_two` at every width,
+/// with a `u128` past `i128::MAX` read as unsigned (B-2026-10-19-27).
+/// The values are checked against Rust's own methods.
+#[test]
+fn mir_integer_methods_run_at_128_bits() {
+    let src = r#"
+fn main() {
+    let a: i128 = -170141183460469231731687303715884105728;
+    let b: i128 = -5;
+    println(b.clamp(-3, 7));
+    println(a.clamp(-10, 10));
+    println(b.leading_zeros());
+    println(b.trailing_zeros());
+    println(a.count_ones());
+    println(b.count_zeros());
+    println(b.pow(3));
+    println(b.to_f64());
+    println(b.swap_bytes());
+    println(b.reverse_bits());
+    let bb = b.to_ne_bytes();
+    println(bb[0]);
+    println(bb[15]);
+    let m: u128 = 340282366920938463463374607431768211455u128;
+    println(m.to_f64());
+    println(m.count_ones());
+    println(m.leading_zeros());
+    let h: u128 = 170141183460469231731687303715884105728u128;
+    println(h.is_power_of_two());
+    println(h.next_power_of_two());
+    let k: u128 = 170141183460469231731687303715884105727;
+    println(k.next_power_of_two());
+    let one: u128 = 1;
+    println(one.next_power_of_two());
+    let s: i32 = -2;
+    println(s.swap_bytes());
+    println(s.reverse_bits());
+    let c: u8 = 0x81;
+    println(c.swap_bytes());
+    println(c.reverse_bits());
+    let t: u16 = 0x1234;
+    println(t.swap_bytes());
+    let two: u128 = 2;
+    println(two.pow(127));
+}
+"#;
+    let want = "-3
+-10
+0
+0
+1
+1
+-125
+-5.0
+-5316911983139663491615228241121378305
+-42535295865117307932921825928971026433
+251
+255
+3.402823669209385e+38
+128
+0
+true
+170141183460469231731687303715884105728
+170141183460469231731687303715884105728
+1
+-16777217
+2147483647
+129
+129
+13330
+170141183460469231731687303715884105728
+";
+    let interp = karac::mir::lower::run_source(src).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(src, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}

@@ -2132,7 +2132,8 @@ impl<'a> Interp<'a> {
                 | "checked_add" | "checked_sub" | "checked_mul" | "saturating_add"
                 | "saturating_sub" | "saturating_mul" | "clamp" | "overflowing_add"
                 | "overflowing_sub" | "overflowing_mul" | "to_ne_bytes" | "to_le_bytes"
-                | "to_be_bytes" | "rotate_left" | "rotate_right",
+                | "to_be_bytes" | "rotate_left" | "rotate_right" | "swap_bytes" | "reverse_bits"
+                | "next_power_of_two",
             ) if int_width(t).is_some() => self.int_method(name, t, method, &args, ret),
             // B-2026-10-19-11: the families' div / rem / neg / shl / shr / pow.
             (t, m) if int_width(t).is_some() && is_overflow_family_op(m) => {
@@ -2275,6 +2276,17 @@ impl<'a> Interp<'a> {
                 // A `u128` is held as its bits, so it is compared with the
                 // sign bit flipped, and the pick flipped back
                 // (B-2026-10-19-22).
+                // Unsigned only (the checker's rule), so read as its bits:
+                // `2^127` held as `i128::MIN` is a power of two
+                // (B-2026-10-19-27).
+                if method == "is_power_of_two" {
+                    if let (Some((bits, _)), Some(Value::Int(n))) =
+                        (int_width(ty_name), args.first())
+                    {
+                        let x = at_width(*n, bits, false) as u128;
+                        return Ok(Value::Bool(x.is_power_of_two()));
+                    }
+                }
                 if ty_name == "u128" && matches!(method, "min" | "max" | "clamp") {
                     let flip = |v: Value| match v {
                         Value::Int(n) => Value::Int(n ^ i128::MIN),
@@ -2285,8 +2297,15 @@ impl<'a> Interp<'a> {
                 }
                 self.scalar_method(name, method, &args, ret)
             }
+            // An unsigned value is read as one, so a `u128` past `i128::MAX`
+            // (held as its bits) is not negative (B-2026-10-19-27).
             (t, "to_f64" | "to_f32") if int_width(t).is_some() => match args.as_slice() {
-                [Value::Int(n)] => Ok(narrow_float(Value::Float(*n as f64), self.tys.kind(ret))),
+                [Value::Int(n)] => {
+                    let (bits, signed) = int_width(t).unwrap_or((64, true));
+                    let v = at_width(*n, bits, signed);
+                    let f = if signed { v as f64 } else { v as u128 as f64 };
+                    Ok(narrow_float(Value::Float(f), self.tys.kind(ret)))
+                }
                 _ => err(format!("{name} takes an integer")),
             },
             // IEEE-754 reinterpretation, as legacy's: `to_bits` is the f64
@@ -7659,6 +7678,37 @@ impl<'a> Interp<'a> {
             }
             ("count_zeros", [a]) => Ok(Value::Int((bits - raw(*a).count_ones()) as i128)),
             ("count_ones", [a]) => Ok(Value::Int(raw(*a).count_ones() as i128)),
+            // The width's bytes or bits reversed, read back at the type's
+            // sign (B-2026-10-19-27).
+            ("swap_bytes" | "reverse_bits", [a]) => {
+                let x = raw(*a);
+                let r = if method == "swap_bytes" {
+                    x.swap_bytes()
+                } else {
+                    x.reverse_bits()
+                } >> (128 - bits);
+                Ok(Value::Int(at_width(r as i128, bits, signed)))
+            }
+            // Unsigned only (the checker's rule): the smallest power of two
+            // at or above the value, `1` for `0`, an overflow past the width.
+            ("next_power_of_two", [a]) => {
+                let x = raw(*a);
+                let p = if x <= 1 {
+                    Some(1u128)
+                } else {
+                    let shift = 128 - (x - 1).leading_zeros();
+                    (shift < bits).then(|| 1u128 << shift)
+                };
+                match p {
+                    Some(p) => Ok(Value::Int(p as i128)),
+                    None => {
+                        if self.trace {
+                            self.events.push(Event::Abort(AbortReason::Overflow));
+                        }
+                        Err(Stop::Abort(AbortReason::Overflow))
+                    }
+                }
+            }
             ("abs_diff", [a, b]) => Ok(Value::Int((a - b).abs())),
             ("rotate_left" | "rotate_right", [a, _]) => {
                 let x = raw(*a);

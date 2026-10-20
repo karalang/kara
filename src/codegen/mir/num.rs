@@ -1231,13 +1231,72 @@ impl<'ctx> Cx<'ctx, '_> {
             self.store_int_as(dest, v, false)?;
             return Ok(Some(()));
         }
-        if it.bits() > 64 {
+        // The rest run at 128 bits too, but for these four, whose lowering
+        // is 64-bit (B-2026-10-19-27).
+        if it.bits() > 64
+            && matches!(
+                method,
+                "rem_euclid" | "div_euclid" | "bits_as_f64" | "bits_as_f32"
+            )
+        {
             return Ok(None);
         }
         let x = self.operand_scalar(&args[0])?.into_int_value();
         let xt = x.get_type();
         let f = self.llcx.bool_type().const_zero();
         match (method, &args[1..]) {
+            // The width's bytes or bits reversed (B-2026-10-19-27).
+            ("swap_bytes" | "reverse_bits", []) => {
+                let v = if method == "reverse_bits" {
+                    self.int_intrinsic("bitreverse", &[x.into()], xt)?
+                } else if it.bits() > 8 {
+                    self.int_intrinsic("bswap", &[x.into()], xt)?
+                } else {
+                    x
+                };
+                self.store_int_as(dest, v, it.signed())?;
+            }
+            // Unsigned only (the checker's rule): `1` for `0` and `1`, else
+            // `1 << (bits - ctlz(x - 1))`, an overflow when that is the width.
+            ("next_power_of_two", []) => {
+                let one = xt.const_int(1, false);
+                let b = &self.builder;
+                let small = b
+                    .build_int_compare(IntPredicate::ULE, x, one, "")
+                    .map_err(e)?;
+                let xm1 = b.build_int_sub(x, one, "").map_err(e)?;
+                let lz = self.int_intrinsic("ctlz", &[xm1.into(), f.into()], xt)?;
+                let b = &self.builder;
+                let top = b
+                    .build_int_compare(IntPredicate::EQ, lz, xt.const_zero(), "")
+                    .map_err(e)?;
+                let not_small = b.build_not(small, "").map_err(e)?;
+                let over = b.build_and(top, not_small, "").map_err(e)?;
+                let fine = b.build_not(over, "").map_err(e)?;
+                self.abort_unless(fine, "integer overflow")?;
+                let b = &self.builder;
+                let w = xt.const_int(u64::from(it.bits()), false);
+                let sh = b.build_int_sub(w, lz, "").map_err(e)?;
+                // A shift by the width is poison; that lane is either
+                // `small` or has aborted, so any in-range amount does.
+                let sh = b
+                    .build_select(top, xt.const_zero(), sh, "")
+                    .map_err(e)?
+                    .into_int_value();
+                let p = b.build_left_shift(one, sh, "").map_err(e)?;
+                let v = b
+                    .build_select(small, one, p, "")
+                    .map_err(e)?
+                    .into_int_value();
+                self.store_int_as(dest, v, false)?;
+            }
+            ("pow", [y]) if it.bits() > 64 => {
+                let n = self.operand_scalar(y)?.into_int_value();
+                let (v, o) = self.int_pow_overflowing(x, n, it.signed())?;
+                let fine = self.builder.build_not(o, "").map_err(e)?;
+                self.abort_unless(fine, "integer overflow")?;
+                self.store_int_as(dest, v, it.signed())?;
+            }
             ("to_f64" | "to_f32", []) => {
                 let dty = self.place_type(dest)?;
                 let ft = self.llvm_ty(dty)?.into_float_type();
