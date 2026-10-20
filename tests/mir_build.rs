@@ -5894,6 +5894,42 @@ fn main() {
     }
 }
 
+/// `cmp`, `partial_cmp` and the operator traits are registered for `i128`
+/// and `u128` as for the other widths, so a 128-bit value calls `cmp` and
+/// meets an `Ord` or `Add` bound, with a `u128` past `i128::MAX` ordered
+/// unsigned (B-2026-10-19-71).
+#[test]
+fn mir_i128_u128_have_the_integer_traits() {
+    const SRC: &str = r#"fn o(x: Ordering) -> Str {
+    match x { Ordering.Less => "lt", Ordering.Equal => "eq", Ordering.Greater => "gt" }
+}
+fn biggest[T: Ord + Copy](a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+fn total[T: Add[Output = T] + Copy](a: T, b: T) -> T {
+    a + b
+}
+fn main() {
+    let a: u128 = 1u128 << 127;
+    let b: u128 = 5;
+    let c: i128 = -3;
+    println(f"{o(a.cmp(b))} {o(c.cmp(2))} {a.partial_cmp(b).is_some()} {o(b.cmp(b))}");
+    println(f"{biggest(a, b)} {biggest(c, 7)} {total(a, b)} {total(c, -4)}");
+    let mut v: Vec[u128] = vec![b, a, 1];
+    v.sort_by(|x, y| x.cmp(y));
+    println(f"{v[0]} {v[2]}");
+}
+"#;
+    let want = "gt lt true eq\n170141183460469231731687303715884105728 7 170141183460469231731687303715884105733 -7\n1 170141183460469231731687303715884105728\n";
+    let interp = karac::mir::lower::run_source(SRC).expect("MIR interpreter");
+    assert_eq!(interp.output, want);
+    for opt in [0, 2] {
+        if let Some(out) = build_and_run(SRC, opt) {
+            assert_eq!(out, want, "at -O{opt}");
+        }
+    }
+}
+
 #[test]
 fn mir_a_closure_through_a_mut_ref_function_parameter_keeps_its_writes() {
     // B-2026-10-19-68: a `mut ref MutFn()` parameter is specialised to the

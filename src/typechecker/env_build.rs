@@ -1781,11 +1781,14 @@ impl<'a> super::TypeChecker<'a> {
             where_clause: None,
         };
 
+        // Every width, 128 bits included: a `u128` calls `cmp` and meets an
+        // `Ord` or `Add` bound as an `i64` does (B-2026-10-19-71).
         let signed_ints: &[(&str, Type)] = &[
             ("i8", Type::Int(IntSize::I8)),
             ("i16", Type::Int(IntSize::I16)),
             ("i32", Type::Int(IntSize::I32)),
             ("i64", Type::Int(IntSize::I64)),
+            ("i128", Type::Int(IntSize::I128)),
             ("isize", Type::Int(IntSize::Isize)),
         ];
         let unsigned_ints: &[(&str, Type)] = &[
@@ -1793,6 +1796,7 @@ impl<'a> super::TypeChecker<'a> {
             ("u16", Type::UInt(UIntSize::U16)),
             ("u32", Type::UInt(UIntSize::U32)),
             ("u64", Type::UInt(UIntSize::U64)),
+            ("u128", Type::UInt(UIntSize::U128)),
             ("usize", Type::UInt(UIntSize::Usize)),
         ];
         let floats: &[(&str, Type)] = &[
