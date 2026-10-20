@@ -1,0 +1,2454 @@
+// ------------------------------------------------------------ bytes
+//
+// The pieces of Python's bytes that filetype's matchers lean on.
+
+// buf[a:b], clamped the way a slice is.
+fn slice(buf: ref Vec[u8], a: i64, b: i64) -> Vec[u8] {
+    let n = buf.len();
+    let lo = if a > n { n } else { a };
+    let hi = if b > n { n } else { b };
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = lo;
+    while i < hi {
+        out.push(buf[i]);
+        i += 1;
+    }
+    out
+}
+
+fn tail_from(buf: ref Vec[u8], a: i64) -> Vec[u8] {
+    slice(buf, a, buf.len())
+}
+
+fn bytes_eq(a: ref Vec[u8], b: ref Vec[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+// buf[a:b] == want
+fn slice_is(buf: ref Vec[u8], a: i64, b: i64, want: ref Vec[u8]) -> bool {
+    bytes_eq(slice(buf, a, b), want)
+}
+
+// buf[:len(want)] == want
+fn starts(buf: ref Vec[u8], want: ref Vec[u8]) -> bool {
+    slice_is(buf, 0, want.len(), want)
+}
+
+// buf.find(sub, start, end): the first index of sub that fits in
+// buf[start:end], or -1.
+fn find_in(buf: ref Vec[u8], sub: ref Vec[u8], start: i64, end0: i64) -> i64 {
+    let end = if end0 > buf.len() { buf.len() } else { end0 };
+    let mut i = start;
+    while i + sub.len() <= end {
+        let mut k = 0;
+        while k < sub.len() and buf[i + k] == sub[k] {
+            k += 1;
+        }
+        if k == sub.len() {
+            return i;
+        }
+        i += 1;
+    }
+    -1
+}
+
+fn contains(buf: ref Vec[u8], sub: ref Vec[u8]) -> bool {
+    find_in(buf, sub, 0, buf.len()) >= 0
+}
+
+// bytes(s, "ascii")
+fn ascii(s: Str) -> Vec[u8] {
+    s.bytes().to_vec()
+}
+
+// int.from_bytes(b, "big")
+fn be_int(b: ref Vec[u8]) -> i64 {
+    let mut v = 0;
+    for x in b {
+        v = v * 256 + (*x as i64);
+    }
+    v
+}
+
+// struct.unpack("<L", b)
+fn le32(b: ref Vec[u8]) -> i64 {
+    (b[0] as i64) | ((b[1] as i64) << 8) | ((b[2] as i64) << 16) | ((b[3] as i64) << 24)
+}
+
+// The bytes a second UTF-8 byte may take after the first.
+fn second_range(b: i64) -> (i64, i64) {
+    if b == 0xe0 {
+        (0xa0, 0xbf)
+    } else if b == 0xed {
+        (0x80, 0x9f)
+    } else if b == 0xf0 {
+        (0x90, 0xbf)
+    } else if b == 0xf4 {
+        (0x80, 0x8f)
+    } else {
+        (0x80, 0xbf)
+    }
+}
+
+// b.decode(errors="ignore"): UTF-8, each bad sequence dropped as Python
+// drops it, the lead byte and the good bytes after it together.
+fn decode_ignore(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i] as i64;
+        if c < 0x80 {
+            out.push(char.try_from(c).unwrap_or('?'));
+            i += 1;
+            continue;
+        }
+        let need = if c >= 0xc2 and c <= 0xdf {
+            1
+        } else if c >= 0xe0 and c <= 0xef {
+            2
+        } else if c >= 0xf0 and c <= 0xf4 {
+            3
+        } else {
+            0
+        };
+        if need == 0 {
+            i += 1;
+            continue;
+        }
+        let mut cp = c & (0x3f >> need);
+        let mut k = 0;
+        let mut ok = true;
+        while k < need {
+            if i + 1 + k >= b.len() {
+                ok = false;
+                break;
+            }
+            let d = b[i + 1 + k] as i64;
+            let (lo, hi) = if k == 0 { second_range(c) } else { (0x80, 0xbf) };
+            if d < lo or d > hi {
+                ok = false;
+                break;
+            }
+            cp = (cp << 6) | (d & 0x3f);
+            k += 1;
+        }
+        if ok {
+            out.push(char.try_from(cp).unwrap_or('?'));
+            i += need + 1;
+        } else {
+            i += k + 1;
+        }
+    }
+    out
+}
+
+// b.decode("ascii", errors="ignore")
+fn ascii_ignore(b: ref Vec[u8]) -> String {
+    let mut out = String.new();
+    for x in b {
+        if *x < 0x80 {
+            out.push(char.try_from(*x as i64).unwrap_or('?'));
+        }
+    }
+    out
+}
+
+// ------------------------------------------------------------ the matchers
+//
+// filetype/types/: one matcher per kind, as the package writes them, in
+// the order the package tries them.
+
+enum M {
+    Dwg, Xcf, Jpeg, Jpx, Apng, Png, Gif, Webp, Tiff, Cr2, Bmp, Jxr, Psd, Ico, Heic, ImgDcm, Avif,
+    Aac, Midi, Mp3, M4a, Ogg, Flac, Wav, Amr, Aiff,
+    M3gp, Mp4, M4v, Mkv, Mov, Avi, Wmv, Mpeg, Webm, Flv,
+    Woff, Woff2, Ttf, Otf,
+    Doc, Docx, Odt, Xls, Xlsx, Ods, Ppt, Pptx, Odp,
+    Br, Rpm, ArcDcm, Epub, Zip, Tar, Rar, Gz, Bz2, SevenZ, Pdf, Exe, Swf, Rtf, Nes, Crx, Cab, Eot, Ps,
+    Xz, Sqlite, Deb, Ar, Z, Lzop, Lz, Elf, Lz4, Zstd,
+    Wasm,
+    // the matcher the jobs add with add_type
+    Csv,
+}
+
+#[derive(Clone)]
+struct Kind {
+    // the matcher's class name
+    name: String,
+    mime: String,
+    ext: String,
+    m: M,
+}
+
+fn kind(m: own M, name: Str, ext: Str, mime: Str) -> Kind {
+    Kind { name: name.to_string(), mime: mime.to_string(), ext: ext.to_string(), m: m }
+}
+
+fn image_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    v.push(kind(M.Dwg, "Dwg", "dwg", "image/vnd.dwg"));
+    v.push(kind(M.Xcf, "Xcf", "xcf", "image/x-xcf"));
+    v.push(kind(M.Jpeg, "Jpeg", "jpg", "image/jpeg"));
+    v.push(kind(M.Jpx, "Jpx", "jpx", "image/jpx"));
+    v.push(kind(M.Apng, "Apng", "apng", "image/apng"));
+    v.push(kind(M.Png, "Png", "png", "image/png"));
+    v.push(kind(M.Gif, "Gif", "gif", "image/gif"));
+    v.push(kind(M.Webp, "Webp", "webp", "image/webp"));
+    v.push(kind(M.Tiff, "Tiff", "tif", "image/tiff"));
+    v.push(kind(M.Cr2, "Cr2", "cr2", "image/x-canon-cr2"));
+    v.push(kind(M.Bmp, "Bmp", "bmp", "image/bmp"));
+    v.push(kind(M.Jxr, "Jxr", "jxr", "image/vnd.ms-photo"));
+    v.push(kind(M.Psd, "Psd", "psd", "image/vnd.adobe.photoshop"));
+    v.push(kind(M.Ico, "Ico", "ico", "image/x-icon"));
+    v.push(kind(M.Heic, "Heic", "heic", "image/heic"));
+    v.push(kind(M.ImgDcm, "Dcm", "dcm", "application/dicom"));
+    v.push(kind(M.Avif, "Avif", "avif", "image/avif"));
+    v
+}
+
+fn audio_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    v.push(kind(M.Aac, "Aac", "aac", "audio/aac"));
+    v.push(kind(M.Midi, "Midi", "midi", "audio/midi"));
+    v.push(kind(M.Mp3, "Mp3", "mp3", "audio/mpeg"));
+    v.push(kind(M.M4a, "M4a", "m4a", "audio/mp4"));
+    v.push(kind(M.Ogg, "Ogg", "ogg", "audio/ogg"));
+    v.push(kind(M.Flac, "Flac", "flac", "audio/x-flac"));
+    v.push(kind(M.Wav, "Wav", "wav", "audio/x-wav"));
+    v.push(kind(M.Amr, "Amr", "amr", "audio/amr"));
+    v.push(kind(M.Aiff, "Aiff", "aiff", "audio/x-aiff"));
+    v
+}
+
+fn video_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    v.push(kind(M.M3gp, "M3gp", "3gp", "video/3gpp"));
+    v.push(kind(M.Mp4, "Mp4", "mp4", "video/mp4"));
+    v.push(kind(M.M4v, "M4v", "m4v", "video/x-m4v"));
+    v.push(kind(M.Mkv, "Mkv", "mkv", "video/x-matroska"));
+    v.push(kind(M.Mov, "Mov", "mov", "video/quicktime"));
+    v.push(kind(M.Avi, "Avi", "avi", "video/x-msvideo"));
+    v.push(kind(M.Wmv, "Wmv", "wmv", "video/x-ms-wmv"));
+    v.push(kind(M.Mpeg, "Mpeg", "mpg", "video/mpeg"));
+    v.push(kind(M.Webm, "Webm", "webm", "video/webm"));
+    v.push(kind(M.Flv, "Flv", "flv", "video/x-flv"));
+    v
+}
+
+fn font_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    v.push(kind(M.Woff, "Woff", "woff", "application/font-woff"));
+    v.push(kind(M.Woff2, "Woff2", "woff2", "application/font-woff"));
+    v.push(kind(M.Ttf, "Ttf", "ttf", "application/font-sfnt"));
+    v.push(kind(M.Otf, "Otf", "otf", "application/font-sfnt"));
+    v
+}
+
+fn document_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    v.push(kind(M.Doc, "Doc", "doc", "application/msword"));
+    v.push(kind(M.Docx, "Docx", "docx", MIME_DOCX));
+    v.push(kind(M.Odt, "Odt", "odt", "application/vnd.oasis.opendocument.text"));
+    v.push(kind(M.Xls, "Xls", "xls", "application/vnd.ms-excel"));
+    v.push(kind(M.Xlsx, "Xlsx", "xlsx", MIME_XLSX));
+    v.push(kind(M.Ods, "Ods", "ods", "application/vnd.oasis.opendocument.spreadsheet"));
+    v.push(kind(M.Ppt, "Ppt", "ppt", "application/vnd.ms-powerpoint"));
+    v.push(kind(M.Pptx, "Pptx", "pptx", MIME_PPTX));
+    v.push(kind(M.Odp, "Odp", "odp", "application/vnd.oasis.opendocument.presentation"));
+    v
+}
+
+fn archive_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    v.push(kind(M.Br, "Br", "br", "application/x-brotli"));
+    v.push(kind(M.Rpm, "Rpm", "rpm", "application/x-rpm"));
+    v.push(kind(M.ArcDcm, "Dcm", "dcm", "application/dicom"));
+    v.push(kind(M.Epub, "Epub", "epub", "application/epub+zip"));
+    v.push(kind(M.Zip, "Zip", "zip", "application/zip"));
+    v.push(kind(M.Tar, "Tar", "tar", "application/x-tar"));
+    v.push(kind(M.Rar, "Rar", "rar", "application/x-rar-compressed"));
+    v.push(kind(M.Gz, "Gz", "gz", "application/gzip"));
+    v.push(kind(M.Bz2, "Bz2", "bz2", "application/x-bzip2"));
+    v.push(kind(M.SevenZ, "SevenZ", "7z", "application/x-7z-compressed"));
+    v.push(kind(M.Pdf, "Pdf", "pdf", "application/pdf"));
+    v.push(kind(M.Exe, "Exe", "exe", "application/x-msdownload"));
+    v.push(kind(M.Swf, "Swf", "swf", "application/x-shockwave-flash"));
+    v.push(kind(M.Rtf, "Rtf", "rtf", "application/rtf"));
+    v.push(kind(M.Nes, "Nes", "nes", "application/x-nintendo-nes-rom"));
+    v.push(kind(M.Crx, "Crx", "crx", "application/x-google-chrome-extension"));
+    v.push(kind(M.Cab, "Cab", "cab", "application/vnd.ms-cab-compressed"));
+    v.push(kind(M.Eot, "Eot", "eot", "application/octet-stream"));
+    v.push(kind(M.Ps, "Ps", "ps", "application/postscript"));
+    v.push(kind(M.Xz, "Xz", "xz", "application/x-xz"));
+    v.push(kind(M.Sqlite, "Sqlite", "sqlite", "application/x-sqlite3"));
+    v.push(kind(M.Deb, "Deb", "deb", "application/x-deb"));
+    v.push(kind(M.Ar, "Ar", "ar", "application/x-unix-archive"));
+    v.push(kind(M.Z, "Z", "Z", "application/x-compress"));
+    v.push(kind(M.Lzop, "Lzop", "lzo", "application/x-lzop"));
+    v.push(kind(M.Lz, "Lz", "lz", "application/x-lzip"));
+    v.push(kind(M.Elf, "Elf", "elf", "application/x-executable"));
+    v.push(kind(M.Lz4, "Lz4", "lz4", "application/x-lz4"));
+    v.push(kind(M.Zstd, "Zstd", "zst", "application/zstd"));
+    v
+}
+
+fn application_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    v.push(kind(M.Wasm, "Wasm", "wasm", "application/wasm"));
+    v
+}
+
+const MIME_DOCX: Str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const MIME_XLSX: Str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const MIME_PPTX: Str = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+// TYPES: images, audio, video, fonts, documents, archives, applications.
+fn all_types() -> Vec[Kind] {
+    let mut v: Vec[Kind] = Vec.new();
+    for part in [image_types(), audio_types(), video_types(), font_types(), document_types(), archive_types(), application_types()] {
+        for k in part {
+            v.push(k.clone());
+        }
+    }
+    v
+}
+
+// buf[off:off+len(want)] == want, for want given in hex.
+fn at_is(buf: ref Vec[u8], off: i64, want: Str) -> bool {
+    let w = unhex(want.to_string());
+    slice_is(buf, off, off + w.len(), w)
+}
+
+fn cat(a: own Vec[u8], b: ref Vec[u8]) -> Vec[u8] {
+    let mut v = a;
+    for x in b {
+        v.push(*x);
+    }
+    v
+}
+
+fn b(buf: ref Vec[u8], i: i64) -> i64 {
+    buf[i] as i64
+}
+
+// --- ISO-BMFF (isobmff.py)
+
+fn is_isobmff(buf: ref Vec[u8]) -> bool {
+    if buf.len() < 16 or not slice_is(buf, 4, 8, ascii("ftyp")) {
+        return false;
+    }
+    buf.len() >= be_int(slice(buf, 0, 4))
+}
+
+// The major brand and the compatible brands of the ftyp box.
+fn get_ftyp(buf: ref Vec[u8]) -> (String, Vec[String]) {
+    let ftyp_len = be_int(slice(buf, 0, 4));
+    let major = decode_ignore(slice(buf, 8, 12));
+    let mut brands: Vec[String] = Vec.new();
+    let mut i = 16;
+    while i < ftyp_len {
+        brands.push(decode_ignore(slice(buf, i, i + 4)));
+        i += 4;
+    }
+    (major, brands)
+}
+
+fn has_str(xs: ref Vec[String], s: Str) -> bool {
+    for x in xs {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+// Heic and Avif: the brand itself, or a mif1/msf1 file that lists it.
+fn heif_brand(buf: ref Vec[u8], brand: Str) -> bool {
+    if not is_isobmff(buf) {
+        return false;
+    }
+    let (major, brands) = get_ftyp(buf);
+    if major == brand {
+        return true;
+    }
+    (major == "mif1" or major == "msf1") and has_str(brands, brand)
+}
+
+fn mp4_match(buf: ref Vec[u8]) -> bool {
+    if not is_isobmff(buf) {
+        return false;
+    }
+    let (major, brands) = get_ftyp(buf);
+    for brand in brands {
+        if brand == "mp41" or brand == "mp42" or brand == "isom" {
+            return true;
+        }
+    }
+    major == "mp41" or major == "mp42" or major == "isom"
+}
+
+fn mov_match(buf: ref Vec[u8]) -> bool {
+    if not is_isobmff(buf) {
+        return false;
+    }
+    let (major, _) = get_ftyp(buf);
+    major == "qt  "
+}
+
+fn apng_match(buf: ref Vec[u8]) -> bool {
+    if buf.len() > 8 and at_is(buf, 0, "89504e470d0a1a0a") {
+        let mut i = 8;
+        while buf.len() > i {
+            let data_length = be_int(slice(buf, i, i + 4));
+            i += 4;
+            let chunk_type = ascii_ignore(slice(buf, i, i + 4));
+            i += 4;
+            // acTL comes before IDAT in an APNG; IEND ends the PNG
+            if chunk_type == "IDAT" or chunk_type == "IEND" {
+                return false;
+            } else if chunk_type == "acTL" {
+                return true;
+            }
+            // skip the data and the CRC
+            i += data_length + 4;
+        }
+    }
+    false
+}
+
+// --- the zipped documents (document.py)
+
+// The first "PK\x03\x04" in buf[start:start+range], or -1.
+fn search_signature(buf: ref Vec[u8], start: i64, range: i64) -> i64 {
+    let end0 = start + range;
+    let end = if end0 > buf.len() { buf.len() } else { end0 };
+    if start >= end {
+        return -1;
+    }
+    find_in(buf, unhex("504b0304"), start, end)
+}
+
+fn compare_bytes(buf: ref Vec[u8], sub: ref Vec[u8], off: i64) -> bool {
+    if off + sub.len() > buf.len() {
+        return false;
+    }
+    slice_is(buf, off, off + sub.len(), sub)
+}
+
+// match_filename(): None when the entry is none of the three, else
+// whether it is the one this matcher is for.
+fn match_filename(buf: ref Vec[u8], off: i64, mime: ref String) -> Option[bool] {
+    if compare_bytes(buf, ascii("word/"), off) {
+        return Some(*mime == MIME_DOCX);
+    }
+    if compare_bytes(buf, ascii("ppt/"), off) {
+        return Some(*mime == MIME_PPTX);
+    }
+    if compare_bytes(buf, ascii("xl/"), off) {
+        return Some(*mime == MIME_XLSX);
+    }
+    None
+}
+
+fn office_open_xml(buf: ref Vec[u8], mime: ref String) -> bool {
+    if search_signature(buf, 0, 6000) != 0 {
+        return false;
+    }
+    if match_filename(buf, 0x1e, mime) == Some(true) {
+        return true;
+    }
+    if not compare_bytes(buf, ascii("[Content_Types].xml"), 0x1e) and not compare_bytes(buf, ascii("_rels/.rels"), 0x1e) and not compare_bytes(buf, ascii("docProps"), 0x1e) {
+        return false;
+    }
+    // the next files: LibreOffice puts word/ fourth
+    let mut idx = 0;
+    for _ in 0..4 {
+        idx = search_signature(buf, idx + 4, 6000);
+        if idx == -1 {
+            return false;
+        }
+        // a False only moves on to the next file
+        if match_filename(buf, idx + 30, mime) == Some(true) {
+            return true;
+        }
+    }
+    false
+}
+
+fn open_document(buf: ref Vec[u8], mime: ref String) -> bool {
+    if search_signature(buf, 0, 6000) != 0 {
+        return false;
+    }
+    if not compare_bytes(buf, ascii("mimetype"), 0x1e) {
+        return false;
+    }
+    compare_bytes(buf, mime.bytes().to_vec(), 0x26)
+}
+
+const OLE: Str = "d0cf11e0a1b11ae1";
+
+fn doc_match(buf: ref Vec[u8]) -> bool {
+    if buf.len() > 515 and at_is(buf, 0, OLE) {
+        if slice_is(buf, 512, 516, unhex("eca5c100")) {
+            return true;
+        }
+        let mut sig = unhex("000a000000");
+        sig.extend(ascii("MSWordDoc"));
+        sig.extend(unhex("0010000000"));
+        sig.extend(ascii("Word.Document.8"));
+        sig.extend(unhex("00f439b271"));
+        if buf.len() > 2142 and contains(slice(buf, 2075, 2142), sig) {
+            return true;
+        }
+    }
+    false
+}
+
+fn xls_match(buf: ref Vec[u8]) -> bool {
+    if buf.len() > 520 and at_is(buf, 0, OLE) {
+        if slice_is(buf, 512, 516, unhex("fdffffff")) and (b(buf, 518) == 0x00 or b(buf, 518) == 0x02) {
+            return true;
+        }
+        if slice_is(buf, 512, 520, unhex("0908100000060500")) {
+            return true;
+        }
+        let mut sig = unhex("e20000005c0070000400");
+        sig.extend(unhex("00"));
+        sig.extend(ascii("Calc"));
+        if buf.len() > 2095 and contains(slice(buf, 1568, 2095), sig) {
+            return true;
+        }
+    }
+    false
+}
+
+fn ppt_match(buf: ref Vec[u8]) -> bool {
+    if buf.len() > 524 and at_is(buf, 0, OLE) {
+        if slice_is(buf, 512, 516, unhex("a0461df0")) or slice_is(buf, 512, 516, unhex("006e1ef0")) or slice_is(buf, 512, 516, unhex("0f00e803")) {
+            return true;
+        }
+        if slice_is(buf, 512, 516, unhex("fdffffff")) and slice_is(buf, 522, 524, unhex("0000")) {
+            return true;
+        }
+        let mut sig = unhex("00b929e811000000");
+        sig.extend(ascii("MS PowerPoint 97"));
+        if buf.len() > 2096 and slice_is(buf, 2072, 2096, sig) {
+            return true;
+        }
+    }
+    false
+}
+
+// --- the rest of the archives (archive.py)
+
+fn pdf_match(buf0: ref Vec[u8]) -> bool {
+    // a UTF-8 byte order mark is skipped
+    let buf = if buf0.len() > 3 and at_is(buf0, 0, "efbbbf") { tail_from(buf0, 3) } else { buf0.clone() };
+    buf.len() > 3 and at_is(buf, 0, "25504446")
+}
+
+fn eot_match(buf: ref Vec[u8]) -> bool {
+    buf.len() > 35 and at_is(buf, 34, "4c50") and (at_is(buf, 8, "020001") or at_is(buf, 8, "010000") or at_is(buf, 8, "020002"))
+}
+
+fn zstd_match(buf: ref Vec[u8]) -> bool {
+    // a Zstandard frame
+    if buf.len() > 3 and b(buf, 0) >= 0x22 and b(buf, 0) <= 0x28 and at_is(buf, 1, "b52ffd") {
+        return true;
+    }
+    // or skippable frames before one
+    if buf.len() < 8 {
+        return false;
+    }
+    let magic = le32(slice(buf, 0, 4)) & 0xfffffff0;
+    if magic == 0x184d2a50 {
+        let user_data_len = le32(slice(buf, 4, 8));
+        if buf.len() < 8 + user_data_len {
+            return false;
+        }
+        return zstd_match(tail_from(buf, 8 + user_data_len));
+    }
+    false
+}
+
+// Csv, the jobs' own matcher: a first line of printable ASCII with a
+// comma in it.
+fn csv_match(buf: ref Vec[u8]) -> bool {
+    let mut comma = false;
+    for x in buf {
+        if *x == b'\n' {
+            break;
+        }
+        if *x < 0x20 or *x >= 0x7f {
+            return false;
+        }
+        if *x == b',' {
+            comma = true;
+        }
+    }
+    comma
+}
+
+fn tiff_head(buf: ref Vec[u8]) -> bool {
+    at_is(buf, 0, "49492a00") or at_is(buf, 0, "4d4d002a")
+}
+
+fn woff_tail(buf: ref Vec[u8]) -> bool {
+    at_is(buf, 4, "00010000") or at_is(buf, 4, "4f54544f") or at_is(buf, 4, "74727565")
+}
+
+fn matches(k: ref Kind, buf: ref Vec[u8]) -> bool {
+    let n = buf.len();
+    match k.m {
+        M.Dwg => at_is(buf, 0, "41433130"),
+        M.Xcf => slice_is(buf, 0, 10, unhex("67696d70207863662076")),
+        M.Jpeg => n > 2 and at_is(buf, 0, "ffd8ff"),
+        M.Jpx => n > 50 and at_is(buf, 0, "0000000c") and slice_is(buf, 16, 24, ascii("ftypjp2 ")),
+        M.Apng => apng_match(buf),
+        M.Png => n > 3 and at_is(buf, 0, "89504e47"),
+        M.Gif => n > 2 and at_is(buf, 0, "474946"),
+        M.Webp => n > 13 and at_is(buf, 0, "52494646") and at_is(buf, 8, "574542505650"),
+        M.Tiff => n > 9 and tiff_head(buf) and not (b(buf, 8) == 0x43 and b(buf, 9) == 0x52),
+        M.Cr2 => n > 9 and tiff_head(buf) and b(buf, 8) == 0x43 and b(buf, 9) == 0x52,
+        M.Bmp => n > 1 and at_is(buf, 0, "424d"),
+        M.Jxr => n > 2 and at_is(buf, 0, "4949bc"),
+        M.Psd => n > 3 and at_is(buf, 0, "38425053"),
+        M.Ico => n > 3 and at_is(buf, 0, "00000100"),
+        M.Heic => heif_brand(buf, "heic"),
+        M.ImgDcm => n > 132 and at_is(buf, 128, "4449434d"),
+        M.Avif => heif_brand(buf, "avif"),
+        M.Aac => at_is(buf, 0, "fff1") or at_is(buf, 0, "fff9"),
+        M.Midi => n > 3 and at_is(buf, 0, "4d546864"),
+        M.Mp3 => n > 2 and (at_is(buf, 0, "494433") or at_is(buf, 0, "fff2") or at_is(buf, 0, "fff3") or at_is(buf, 0, "fffb")),
+        M.M4a => n > 10 and (at_is(buf, 4, "667479704d3441") or at_is(buf, 0, "4d344120")),
+        M.Ogg => n > 3 and at_is(buf, 0, "4f676753"),
+        M.Flac => n > 3 and at_is(buf, 0, "664c6143"),
+        M.Wav => n > 11 and at_is(buf, 0, "52494646") and at_is(buf, 8, "57415645"),
+        M.Amr => n > 11 and at_is(buf, 0, "2321414d520a"),
+        M.Aiff => n > 11 and at_is(buf, 0, "464f524d") and at_is(buf, 8, "41494646"),
+        M.M3gp => at_is(buf, 0, "66747970336770"),
+        M.Mp4 => mp4_match(buf),
+        M.M4v => n > 10 and at_is(buf, 0, "0000001c667479704d3456"),
+        M.Mkv => at_is(buf, 0, "1a45dfa3") and contains(buf, cat(unhex("428288"), ascii("matroska"))),
+        M.Mov => mov_match(buf),
+        M.Avi => n > 11 and at_is(buf, 0, "52494646") and at_is(buf, 8, "41564920"),
+        M.Wmv => n > 9 and at_is(buf, 0, "3026b2758e66cf11a6d9"),
+        M.Mpeg => n > 3 and at_is(buf, 0, "000001") and b(buf, 3) >= 0xb0 and b(buf, 3) <= 0xbf,
+        M.Webm => at_is(buf, 0, "1a45dfa3") and contains(buf, cat(unhex("428284"), ascii("webm"))),
+        M.Flv => n > 3 and at_is(buf, 0, "464c5601"),
+        M.Woff => n > 7 and at_is(buf, 0, "774f4646") and woff_tail(buf),
+        M.Woff2 => n > 7 and at_is(buf, 0, "774f4632") and woff_tail(buf),
+        M.Ttf => n > 4 and at_is(buf, 0, "0001000000"),
+        M.Otf => n > 4 and at_is(buf, 0, "4f54544f00"),
+        M.Doc => doc_match(buf),
+        M.Docx => office_open_xml(buf, k.mime),
+        M.Odt => open_document(buf, k.mime),
+        M.Xls => xls_match(buf),
+        M.Xlsx => office_open_xml(buf, k.mime),
+        M.Ods => open_document(buf, k.mime),
+        M.Ppt => ppt_match(buf),
+        M.Pptx => office_open_xml(buf, k.mime),
+        M.Odp => open_document(buf, k.mime),
+        M.Br => at_is(buf, 0, "ceb2cf81"),
+        M.Rpm => at_is(buf, 0, "edabeedb"),
+        // buf[128:131] is three bytes and is compared with four
+        M.ArcDcm => slice_is(buf, 128, 131, unhex("4449434d")),
+        M.Epub => n > 57 and at_is(buf, 0, "504b0304") and slice_is(buf, 30, 58, ascii("mimetypeapplication/epub+zip")),
+        M.Zip => n > 3 and at_is(buf, 0, "504b") and (b(buf, 2) == 3 or b(buf, 2) == 5 or b(buf, 2) == 7) and (b(buf, 3) == 4 or b(buf, 3) == 6 or b(buf, 3) == 8),
+        M.Tar => n > 261 and at_is(buf, 257, "7573746172"),
+        M.Rar => n > 6 and at_is(buf, 0, "526172211a07") and (b(buf, 6) == 0 or b(buf, 6) == 1),
+        M.Gz => n > 2 and at_is(buf, 0, "1f8b08"),
+        M.Bz2 => n > 2 and at_is(buf, 0, "425a68"),
+        M.SevenZ => n > 5 and at_is(buf, 0, "377abcaf271c"),
+        M.Pdf => pdf_match(buf),
+        M.Exe => n > 1 and at_is(buf, 0, "4d5a"),
+        M.Swf => n > 2 and (b(buf, 0) == 0x43 or b(buf, 0) == 0x46) and at_is(buf, 1, "5753"),
+        M.Rtf => n > 4 and at_is(buf, 0, "7b5c727466"),
+        M.Nes => n > 3 and at_is(buf, 0, "4e45531a"),
+        M.Crx => n > 3 and at_is(buf, 0, "43723234"),
+        M.Cab => n > 3 and (at_is(buf, 0, "4d534346") or at_is(buf, 0, "49536328")),
+        M.Eot => eot_match(buf),
+        M.Ps => n > 1 and at_is(buf, 0, "2521"),
+        M.Xz => n > 5 and at_is(buf, 0, "fd377a585a00"),
+        M.Sqlite => n > 3 and at_is(buf, 0, "53514c69"),
+        M.Deb => n > 20 and slice_is(buf, 0, 21, ascii("!<arch>\ndebian-binary")),
+        M.Ar => n > 6 and slice_is(buf, 0, 7, ascii("!<arch>")),
+        M.Z => n > 1 and (at_is(buf, 0, "1fa0") or at_is(buf, 0, "1f9d")),
+        M.Lzop => n > 7 and at_is(buf, 0, "894c5a4f000d0a1a"),
+        M.Lz => n > 3 and at_is(buf, 0, "4c5a4950"),
+        M.Elf => n > 52 and at_is(buf, 0, "7f454c46"),
+        M.Lz4 => n > 3 and at_is(buf, 0, "04224d18"),
+        M.Zstd => zstd_match(buf),
+        M.Wasm => at_is(buf, 0, "0061736d01000000"),
+        M.Csv => csv_match(buf),
+    }
+}
+
+// ------------------------------------------------------------ the API
+//
+// filetype.py, match.py and helpers.py: guess over every matcher or over
+// one family, the lookups by MIME type and extension, and add_type.
+
+// The first 8192 bytes, the signature filetype looks at.
+const SIGNATURE_BYTES: i64 = 8192;
+
+fn signature(data: ref Vec[u8]) -> Vec[u8] {
+    slice(data, 0, SIGNATURE_BYTES)
+}
+
+// get_signature_bytes(): a file under data/.
+fn file_bytes(path: ref String) -> Vec[u8] {
+    match fs.read_bytes(f"data/{path}") {
+        Ok(b) => signature(b),
+        Err(_) => Vec.new(),
+    }
+}
+
+// filetype.types, the list add_type inserts into; match() and the
+// helpers read the same list.
+struct Registry {
+    types: Vec[Kind],
+}
+
+fn match_in(matchers: ref Vec[Kind], buf: ref Vec[u8]) -> Option[Kind] {
+    for k in matchers {
+        if matches(k, buf) {
+            return Some(k.clone());
+        }
+    }
+    None
+}
+
+// get_type(mime, ext): the first kind with that extension or that MIME
+// type.
+fn get_type(reg: ref Registry, mime: ref Option[String], ext: ref Option[String]) -> Option[Kind] {
+    for k in reg.types {
+        let by_ext = match ext {
+            Some(e) => k.ext == *e,
+            None => false,
+        };
+        let by_mime = match mime {
+            Some(m) => k.mime == *m,
+            None => false,
+        };
+        if by_ext or by_mime {
+            return Some(k.clone());
+        }
+    }
+    None
+}
+
+fn is_extension_supported(reg: ref Registry, ext: ref String) -> bool {
+    for k in reg.types {
+        if k.ext == *ext {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_mime_supported(reg: ref Registry, mime: ref String) -> bool {
+    for k in reg.types {
+        if k.mime == *mime {
+            return true;
+        }
+    }
+    false
+}
+
+// What add_type is handed: a Type matcher, or some other object.
+enum Instance {
+    Matcher(Kind),
+    Object,
+}
+
+fn add_type(reg: mut ref Registry, inst: own Instance) -> Result[(), String] {
+    match inst {
+        Instance.Matcher(k) => {
+            reg.types.insert(0, k);
+            Ok(())
+        }
+        Instance.Object => Err("instance must inherit from filetype.types.Type".to_string()),
+    }
+}
+
+// ------------------------------------------------------------ the command
+//
+// filetype/__main__.py: `filetype -f FILE...` with argparse's handling of
+// -h, -f/--file (nargs='+') and -v/--version, long-option prefixes, and
+// its errors.
+
+const USAGE: Str = "usage: filetype [-h] [-f FILE [FILE ...]] [-v]";
+
+fn help_text() -> String {
+    let mut h = String.new();
+    h.push_str(f"{USAGE}\n\n");
+    h.push_str("Determine type of FILEs.\n\n");
+    h.push_str("options:\n");
+    h.push_str("  -h, --help            show this help message and exit\n");
+    h.push_str("  -f, --file FILE [FILE ...]\n");
+    h.push_str("  -v, --version         output version information and exit\n");
+    h
+}
+
+struct Run {
+    out: String,
+    err: String,
+    code: i64,
+}
+
+fn run_error(msg: ref String) -> Run {
+    Run { out: String.new(), err: f"{USAGE}\nfiletype: error: {msg}\n", code: 2 }
+}
+
+// Which option an argument names ("h", "f", "v"; "?" for an option the
+// parser does not know, "" for a plain argument) and the value written
+// into it, as in --file=x or -fx.
+fn classify(a: ref String) -> (String, Option[String]) {
+    let cs: Vec[char] = a.chars().collect();
+    if cs.len() > 2 and cs[0] == '-' and cs[1] == '-' {
+        let mut name = String.new();
+        let mut value: Option[String] = None;
+        let mut i = 0;
+        while i < cs.len() {
+            if cs[i] == '=' {
+                let rest: String = cs[i + 1..].iter().collect();
+                value = Some(rest);
+                break;
+            }
+            name.push(cs[i]);
+            i += 1;
+        }
+        let longs = ["--help", "--file", "--version"];
+        let shorts = ["h", "f", "v"];
+        for j in 0..3 {
+            if name == longs[j] {
+                return (shorts[j].to_string(), value);
+            }
+        }
+        // a unique prefix of a long option names it
+        let mut found = -1;
+        let mut count = 0;
+        for j in 0..3 {
+            if longs[j].starts_with(name) {
+                found = j;
+                count += 1;
+            }
+        }
+        if count == 1 {
+            return (shorts[found].to_string(), value);
+        }
+        return ("?".to_string(), None);
+    }
+    if cs.len() > 1 and cs[0] == '-' {
+        let c = cs[1];
+        if c == 'h' or c == 'f' or c == 'v' {
+            let rest: String = cs[2..].iter().collect();
+            return (c.to_string(), if rest.len() > 0 { Some(rest) } else { None });
+        }
+        return ("?".to_string(), None);
+    }
+    (String.new(), None)
+}
+
+fn describe(reg: ref Registry, path: ref String) -> String {
+    match match_in(reg.types, file_bytes(path)) {
+        Some(k) => f"{path}: {k.ext} ({k.mime})\n",
+        None => f"{path}: File type determination failure.\n",
+    }
+}
+
+// main(), run in data/ as `filetype ARGS`.
+fn cli_main(reg: ref Registry, argv: ref Vec[String]) -> Run {
+    let mut files: Option[Vec[String]] = None;
+    let mut extras: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < argv.len() {
+        let a = argv[i].clone();
+        i += 1;
+        let (opt, attached) = classify(a);
+        if opt == "" or opt == "?" {
+            extras.push(a);
+        } else if opt == "h" {
+            return Run { out: help_text(), err: String.new(), code: 0 };
+        } else if opt == "v" {
+            return Run { out: "filetype 1.2.0\n".to_string(), err: String.new(), code: 0 };
+        } else {
+            let mut vals: Vec[String] = Vec.new();
+            match attached {
+                Some(v) => vals.push(v),
+                None => {
+                    // nargs='+': every argument up to the next option
+                    while i < argv.len() and not argv[i].starts_with("-") {
+                        vals.push(argv[i].clone());
+                        i += 1;
+                    }
+                }
+            }
+            if vals.len() == 0 {
+                return run_error("argument -f/--file: expected at least one argument");
+            }
+            files = Some(vals);
+        }
+    }
+    if extras.len() > 0 {
+        return run_error(f"unrecognized arguments: {extras.join(" ")}");
+    }
+    if argv.len() < 1 {
+        return Run { out: help_text(), err: String.new(), code: 1 };
+    }
+    let mut out = String.new();
+    if let Some(fs_) = files {
+        for p in fs_ {
+            out.push_str(describe(reg, p));
+        }
+    }
+    Run { out: out, err: String.new(), code: 0 }
+}
+// ------------------------------------------------------------ the jobs
+
+struct DataFile {
+    path: String,
+    hex: bool,
+    body: String,
+}
+
+fn make_parent(path: ref String) -> Result[(), String] {
+    let parts: Vec[Str] = path.split("/").collect();
+    let mut dir = "data".to_string();
+    let mut k = 0;
+    while k + 1 < parts.len() {
+        dir = f"{dir}/{parts[k]}";
+        k += 1;
+    }
+    if let Err(e) = fs.create_dir_all(dir.clone()) {
+        return Err(f"cannot create {dir}: {e}");
+    }
+    Ok(())
+}
+
+fn write_data_files() -> Result[(), String] {
+    for file in data_files() {
+        make_parent(file.path)?;
+        let written = if file.hex {
+            fs.write_bytes(f"data/{file.path}", unhex(file.body))
+        } else {
+            fs.write(f"data/{file.path}", file.body.clone())
+        };
+        if let Err(e) = written {
+            return Err(f"cannot write {file.path}: {e}");
+        }
+    }
+    Ok(())
+}
+
+fn read_text(rel: ref String) -> String {
+    match fs.read_to_string(f"data/{rel}") {
+        Ok(s) => s,
+        Err(_) => "".to_string(),
+    }
+}
+
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c - b'0') as i64
+    } else if c >= b'a' and c <= b'f' {
+        (c - b'a') as i64 + 10
+    } else {
+        (c - b'A') as i64 + 10
+    }
+}
+// bytes.fromhex: pairs of hex digits, spaces between them allowed.
+fn unhex(s: ref String) -> Vec[u8] {
+    let mut digits: Vec[u8] = Vec.new();
+    for c in s.bytes() {
+        if c != b' ' {
+            digits.push(c);
+        }
+    }
+    let mut out: Vec[u8] = Vec.new();
+    let mut i = 0;
+    while i + 1 < digits.len() {
+        out.push((hex_val(digits[i]) * 16 + hex_val(digits[i + 1])) as u8);
+        i += 2;
+    }
+    out
+}
+
+fn emit(out: mut ref String, s: ref String) {
+    out.push_str(s);
+    out.push_str("\n");
+}
+
+fn lines_of(s: ref String) -> Vec[String] {
+    let mut out: Vec[String] = Vec.new();
+    for l in s.split("\n") {
+        out.push(l.to_string());
+    }
+    if out.len() > 0 and out[out.len() - 1] == "" {
+        out.pop();
+    }
+    out
+}
+
+fn kind_str(k: ref Option[Kind]) -> String {
+    match k {
+        Some(k) => f"{k.ext} ({k.mime})",
+        None => "None".to_string(),
+    }
+}
+
+fn ext_of(k: ref Option[Kind]) -> String {
+    match k {
+        Some(k) => k.ext.clone(),
+        None => "-".to_string(),
+    }
+}
+
+// guess, guess_mime, guess_extension, each family's match and the is_*
+// helpers, over one input.
+fn report(reg: ref Registry, buf: ref Vec[u8], out: mut ref String) {
+    let k = match_in(reg.types, buf);
+    emit(mut out, f"guess: {kind_str(k)}");
+    let (mime, ext) = match k {
+        Some(x) => (x.mime.clone(), x.ext.clone()),
+        None => ("None".to_string(), "None".to_string()),
+    };
+    emit(mut out, f"mime: {mime}, extension: {ext}");
+    let image = match_in(image_types(), buf);
+    let audio = match_in(audio_types(), buf);
+    let video = match_in(video_types(), buf);
+    let font = match_in(font_types(), buf);
+    let document = match_in(document_types(), buf);
+    let archive = match_in(archive_types(), buf);
+    let application = match_in(application_types(), buf);
+    emit(mut out, f"image={ext_of(image)} audio={ext_of(audio)} video={ext_of(video)} font={ext_of(font)} document={ext_of(document)} archive={ext_of(archive)} application={ext_of(application)}");
+    let mut flags: Vec[String] = Vec.new();
+    let names = ["is_image", "is_audio", "is_video", "is_font", "is_document", "is_archive"];
+    let found = [image.is_some(), audio.is_some(), video.is_some(), font.is_some(), document.is_some(), archive.is_some()];
+    for i in 0..6 {
+        if found[i] {
+            flags.push(names[i].to_string());
+        }
+    }
+    let shown = if flags.len() > 0 { flags.join(" ") } else { "-".to_string() };
+    emit(mut out, f"flags: {shown}");
+}
+
+fn head_job(reg: ref Registry, args: ref Vec[String], out: mut ref String) {
+    let n = match i64.parse(args[1]) {
+        Ok(n) => n,
+        Err(_) => 0,
+    };
+    let data = match fs.read_bytes(f"data/{args[0]}") {
+        Ok(b) => b,
+        Err(_) => Vec.new(),
+    };
+    report(reg, signature(slice(data, 0, n)), mut out);
+}
+
+fn get_type_job(reg: ref Registry, args: ref Vec[String], out: mut ref String) {
+    let mut mime: Option[String] = None;
+    let mut ext: Option[String] = None;
+    for a in args {
+        if a.starts_with("mime=") {
+            let v: String = a.chars().skip(5).collect();
+            mime = Some(v);
+        } else if a.starts_with("ext=") {
+            let v: String = a.chars().skip(4).collect();
+            ext = Some(v);
+        }
+    }
+    emit(mut out, kind_str(get_type(reg, mime, ext)));
+}
+
+fn py_bool(b: bool) -> String {
+    if b { "True".to_string() } else { "False".to_string() }
+}
+
+fn cli_job(reg: ref Registry, args: ref Vec[String], out: mut ref String) {
+    let r = cli_main(reg, args);
+    for line in lines_of(r.out) {
+        emit(mut out, f"| {line}");
+    }
+    for line in lines_of(r.err) {
+        emit(mut out, f"! {line}");
+    }
+    emit(mut out, f"exit {r.code}");
+}
+
+fn csv_kind() -> Kind {
+    kind(M.Csv, "Csv", "csv", "text/csv")
+}
+
+fn main() {
+    if let Err(e) = write_data_files() {
+        eprintln(e);
+        return;
+    }
+    let mut reg = Registry { types: all_types() };
+    let mut out = String.new();
+    for line in lines_of(read_text("jobs.tsv".to_string())) {
+        let job: Vec[String] = line.split("\t").map(|x| x.to_string()).collect();
+        emit(mut out, f"== {job.join(" ")}");
+        let mut args: Vec[String] = Vec.new();
+        for i in 1..job.len() {
+            args.push(job[i].clone());
+        }
+        let op = job[0].clone();
+        if op == "guess" {
+            report(reg, file_bytes(args[0]), mut out);
+        } else if op == "head" {
+            head_job(reg, args, mut out);
+        } else if op == "get_type" {
+            get_type_job(reg, args, mut out);
+        } else if op == "supported" {
+            let yes = if args[0] == "ext" { is_extension_supported(reg, args[1]) } else { is_mime_supported(reg, args[1]) };
+            emit(mut out, py_bool(yes));
+        } else if op == "types" {
+            emit(mut out, f"{reg.types.len()} types");
+            for k in reg.types {
+                emit(mut out, f"{k.name} {k.ext} {k.mime}");
+            }
+        } else if op == "cli" {
+            cli_job(reg, args, mut out);
+        } else if op == "custom" {
+            let _ = add_type(mut reg, Instance.Matcher(csv_kind()));
+            emit(mut out, f"{reg.types.len()} types, first {reg.types[0].ext}");
+            report(reg, file_bytes(args[0]), mut out);
+        } else {
+            if let Err(e) = add_type(mut reg, Instance.Object) {
+                emit(mut out, f"error: TypeError: {e}");
+            }
+            emit(mut out, f"{reg.types.len()} types");
+        }
+    }
+    print(out);
+}
+// The files under data/, in path order.
+fn data_files() -> Vec[DataFile] {
+    let mut v: Vec[DataFile] = Vec.new();
+    data_part_0(mut v);
+    data_part_1(mut v);
+    data_part_2(mut v);
+    data_part_3(mut v);
+    data_part_4(mut v);
+    data_part_5(mut v);
+    data_part_6(mut v);
+    data_part_7(mut v);
+    v
+}
+
+fn data_part_0(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("504b030414000000000000000000a95266cd1700000017000000140000004d4554412d494e462f4d414e49464553542e");
+    t.push_str("4d464d616e69666573742d56657273696f6e3a20312e300d0a504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/app.jar".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("53514c69746520666f726d61742033001000010100402020000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000");
+    v.push(DataFile { path: "archive/app.sqlite".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("6e6f7465732e747874000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000003030303036343400303030313735300030303031373530003030303030303030303232003134353732353435");
+    t.push_str("363233003030373733360020300000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000075737461720030300000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000072656d656d62657220746865206d696c");
+    t.push_str("6b0a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000");
+    v.push(DataFile { path: "archive/backup.tar".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("efbbbf255044462d312e340a");
+    v.push(DataFile { path: "archive/bom.pdf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000006f61ab2c1400000014000000080000006d696d65747970656170706c69636174696f");
+    t.push_str("6e2f657075622b7a6970504b03041400000000000000000054995f930c0000000c000000160000004d4554412d494e46");
+    t.push_str("2f636f6e7461696e65722e786d6c3c636f6e7461696e65722f3e504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/book.epub".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ceb2cf810000000000");
+    v.push(DataFile { path: "archive/data.br".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4c5a4950010c00000000000000000000");
+    v.push(DataFile { path: "archive/data.lz".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("fd377a585a000004e6d6b446");
+    v.push(DataFile { path: "archive/data.xz".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("28b52ffd240529000068656c6c6f");
+    v.push(DataFile { path: "archive/data.zst".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4d53434600000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/drivers.cab".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("425a68393141592653590000000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/dump.bz2".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/empty.zip".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("43723234030000000000000000000000");
+    v.push(DataFile { path: "archive/ext.crx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("894c5a4f000d0a1a0a104020a0");
+    v.push(DataFile { path: "archive/fast.lzo".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("04224d186440a70000000000000000");
+    v.push(DataFile { path: "archive/frames.lz4".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4e45531a020101000000000000000000");
+    v.push(DataFile { path: "archive/game.nes".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4657530a300000000000000000000000");
+    v.push(DataFile { path: "archive/game.swf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("213c617263683e0a2f202020202020202020202020202020302020202020202020202020302020202020302020202020");
+    t.push_str("302020202020202034202020202020202020600a00000000");
+    v.push(DataFile { path: "archive/libm.a".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1f8b08000000000000034b4c4a0600c241243503000000");
+    v.push(DataFile { path: "archive/logs.gz".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("255044462d312e370a25e2e3cfd30a312030206f626a0a3c3c202f54797065202f436174616c6f67203e3e0a656e646f");
+    t.push_str("626a0a");
+    v.push(DataFile { path: "archive/manual.pdf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Times;}}\\f0 Hello}\n");
+    v.push(DataFile { path: "archive/memo.rtf".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("0061736d0100000001070160027f7f017f");
+    v.push(DataFile { path: "archive/module.wasm".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("526172211a0701003392b5e50a010506");
+    v.push(DataFile { path: "archive/new.rar".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1fa000000000");
+    v.push(DataFile { path: "archive/old-lzh.Z".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1f9d90616263");
+    v.push(DataFile { path: "archive/old.Z".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("526172211a0700cf907300000d00");
+    v.push(DataFile { path: "archive/old.rar".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("377abcaf271c0004000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/photos.7z".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("edabeedb0300000000010000000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/pkg.rpm".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("%!PS-Adobe-3.0\n");
+    t.push_str("%%Title: report\n");
+    v.push(DataFile { path: "archive/print.ps".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("7f454c4602010100000000000000000002003e0001000000001040000000000040000000000000000000000000000000");
+    t.push_str("00000000400038000100400000000000");
+    v.push(DataFile { path: "archive/server".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4953632800000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/setup.cab".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4d5a90000300000004000000ffff00000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000");
+    v.push(DataFile { path: "archive/setup.exe".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000001f871b600d0000000d0000000a000000696e6465782e68746d6c3c68746d6c3e3c2f");
+    t.push_str("68746d6c3e504b030414000000000000000000597187e20600000006000000090000007374796c652e637373626f6479");
+    t.push_str("7b7d504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/site.zip".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("5f2a4d18640000006d657461");
+    v.push(DataFile { path: "archive/skip-long.zst".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("502a4d18040000006d657461");
+    v.push(DataFile { path: "archive/skip-only.zst".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("532a4d18040000006d65746128b52ffd240529000068656c6c6f");
+    v.push(DataFile { path: "archive/skip.zst".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b07080000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "archive/spanned.zip".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("7f454c46010101000000000000000000");
+    v.push(DataFile { path: "archive/tiny-elf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("!<arch>\n");
+    t.push_str("debian-binary   1700000000  0     0     100644  4         `\n");
+    t.push_str("2.0\n");
+    v.push(DataFile { path: "archive/tool.deb".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("4357530a300000000000000000000000");
+    v.push(DataFile { path: "archive/zgame.swf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("524946462400000057415645666d74201000000001000100401f0000803e0000020010006461746100000000");
+    v.push(DataFile { path: "audio/beep.wav".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("fffb9044000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "audio/frame.mp3".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4d3441200000000000000000000000000000000000000000");
+    v.push(DataFile { path: "audio/legacy.m4a".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("464f524d0000002e41494646434f4d4d00000012000000000000000000000000000000000000");
+    v.push(DataFile { path: "audio/loop.aiff".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("664c61430000002210001000100010001000100010001000100010001000100010001000100010001000");
+    v.push(DataFile { path: "audio/master.flac".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("2321414d520a3c48f51f966679e1");
+    v.push(DataFile { path: "audio/note.amr".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("49443304000000000023544954320000000700000350696c6f7400fffb904400000000000000000000000000000000");
+    v.push(DataFile { path: "audio/podcast.mp3".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4d546864000000060001000201e04d54726b0000000400ff2f00");
+    v.push(DataFile { path: "audio/song.mid".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("fff15080021ffc00000000000000000000000000000000");
+    v.push(DataFile { path: "audio/stream.aac".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4f676753000200000000000000000102030400000000000000000000011e01766f72626973");
+    v.push(DataFile { path: "audio/track.ogg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001c667479704d344120000000004d3441206d70343269736f6d0000000866726565");
+    v.push(DataFile { path: "audio/voice.m4a".to_string(), hex: true, body: t });
+}
+
+fn data_part_1(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000009081000000605000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000");
+    v.push(DataFile { path: "doc/biff.xls".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000008c80aed63f0000003f000000130000005b436f6e74656e745f54797065735d2e786d");
+    t.push_str("6c3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d3822207374616e64616c6f6e65");
+    t.push_str("3d22796573223f3e3c54797065732f3e504b03041400000000000000000061725a9e25000000250000000b0000005f72");
+    t.push_str("656c732f2e72656c733c3f786d6c2076657273696f6e3d22312e30223f3e3c52656c6174696f6e73686970732f3e504b");
+    t.push_str("030414000000000000000000ce9e98130b0000000b0000000f000000786c2f776f726b626f6f6b2e786d6c3c776f726b");
+    t.push_str("626f6f6b2f3e504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/budget.xlsx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000e20000005c00700004000043616c630000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/calc.xls".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000008c80aed63f0000003f000000130000005b436f6e74656e745f54797065735d2e786d");
+    t.push_str("6c3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d3822207374616e64616c6f6e65");
+    t.push_str("3d22796573223f3e3c54797065732f3e504b03041400000000000000000061725a9e25000000250000000b0000005f72");
+    t.push_str("656c732f2e72656c733c3f786d6c2076657273696f6e3d22312e30223f3e3c52656c6174696f6e73686970732f3e504b");
+    t.push_str("03041400000000000000000093d5351c0400000004000000140000007070742f70726573656e746174696f6e2e786d6c");
+    t.push_str("3c702f3e504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/deck.pptx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000008c80aed63f0000003f000000130000005b436f6e74656e745f54797065735d2e786d");
+    t.push_str("6c3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d3822207374616e64616c6f6e65");
+    t.push_str("3d22796573223f3e3c54797065732f3e504b03041400000000000000000061725a9e25000000250000000b0000005f72");
+    t.push_str("656c732f2e72656c733c3f786d6c2076657273696f6e3d22312e30223f3e3c52656c6174696f6e73686970732f3e504b");
+    t.push_str("030414000000000000000000e1b7ec0c050000000500000011000000646f6350726f70732f636f72652e786d6c3c6370");
+    t.push_str("2f3e504b030414000000000000000000d41cd101040000000400000010000000646f6350726f70732f6170702e786d6c");
+    t.push_str("3c612f3e504b0304140000000000000000006c4dc20f040000000400000013000000637573746f6d586d6c2f6974656d");
+    t.push_str("312e786d6c3c692f3e504b03041400000000000000000016c37a19040000000400000011000000776f72642f646f6375");
+    t.push_str("6d656e742e786d6c3c772f3e504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/deep.docx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000009f032ec42b0000002b000000080000006d696d65747970656170706c69636174696f");
+    t.push_str("6e2f766e642e6f617369732e6f70656e646f63756d656e742e6772617068696373504b0304140000000000000000003b");
+    t.push_str("61dc3109000000090000000b000000636f6e74656e742e786d6c3c6f66666963652f3e504b0506000000000000000000");
+    t.push_str("000000000000000000");
+    v.push(DataFile { path: "doc/drawing.odg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("0000000000000000000000000000000000000000000000000000000000000000fdffffff000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000");
+    v.push(DataFile { path: "doc/ledger.xls".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000000a0000004d53576f7264446f630010000000576f72642e446f63756d656e74");
+    t.push_str("2e3800f439b2710000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/legacy.doc".to_string(), hex: true, body: t });
+}
+
+fn data_part_2(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("0000000000000000000000000000000000000000000000000000000000000000eca5c100000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000");
+    v.push(DataFile { path: "doc/letter.doc".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b03041400000000000000000061725a9e25000000250000000b0000005f72656c732f2e72656c733c3f786d6c2076");
+    t.push_str("657273696f6e3d22312e30223f3e3c52656c6174696f6e73686970732f3e504b030414000000000000000000e1b7ec0c");
+    t.push_str("050000000500000011000000646f6350726f70732f636f72652e786d6c3c63702f3e504b030414000000000000000000");
+    t.push_str("d41cd101040000000400000010000000646f6350726f70732f6170702e786d6c3c612f3e504b03041400000000000000");
+    t.push_str("00008c80aed63f0000003f000000130000005b436f6e74656e745f54797065735d2e786d6c3c3f786d6c207665727369");
+    t.push_str("6f6e3d22312e302220656e636f64696e673d225554462d3822207374616e64616c6f6e653d22796573223f3e3c547970");
+    t.push_str("65732f3e504b030414000000000000000000dd5a860d0d0000000d00000011000000776f72642f646f63756d656e742e");
+    t.push_str("786d6c3c773a646f63756d656e742f3e504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/libre.docx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000005ec6320c2700000027000000080000006d696d65747970656170706c69636174696f");
+    t.push_str("6e2f766e642e6f617369732e6f70656e646f63756d656e742e74657874504b0304140000000000000000003b61dc3109");
+    t.push_str("000000090000000b000000636f6e74656e742e786d6c3c6f66666963652f3e504b050600000000000000000000000000");
+    t.push_str("0000000000");
+    v.push(DataFile { path: "doc/notes.odt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000b929e8110000004d5320506f776572506f696e7420393700000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/pp97.ppt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000008c80aed63f0000003f000000130000005b436f6e74656e745f54797065735d2e786d");
+    t.push_str("6c3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d3822207374616e64616c6f6e65");
+    t.push_str("3d22796573223f3e3c54797065732f3e504b03041400000000000000000061725a9e25000000250000000b0000005f72");
+    t.push_str("656c732f2e72656c733c3f786d6c2076657273696f6e3d22312e30223f3e3c52656c6174696f6e73686970732f3e504b");
+    t.push_str("030414000000000000000000dd5a860d0d0000000d00000011000000776f72642f646f63756d656e742e786d6c3c773a");
+    t.push_str("646f63756d656e742f3e504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "doc/report.docx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b030414000000000000000000856c398a2e0000002e000000080000006d696d65747970656170706c69636174696f");
+    t.push_str("6e2f766e642e6f617369732e6f70656e646f63756d656e742e7370726561647368656574504b03041400000000000000");
+    t.push_str("00003b61dc3109000000090000000b000000636f6e74656e742e786d6c3c6f66666963652f3e504b0506000000000000");
+    t.push_str("000000000000000000000000");
+    v.push(DataFile { path: "doc/sheet.ods".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000");
+    v.push(DataFile { path: "doc/short.doc".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b0304140000000000000000003326aca82f0000002f000000080000006d696d65747970656170706c69636174696f");
+    t.push_str("6e2f766e642e6f617369732e6f70656e646f63756d656e742e70726573656e746174696f6e504b030414000000000000");
+    t.push_str("0000003b61dc3109000000090000000b000000636f6e74656e742e786d6c3c6f66666963652f3e504b05060000000000");
+    t.push_str("00000000000000000000000000");
+    v.push(DataFile { path: "doc/slides.odp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("0000000000000000000000000000000000000000000000000000000000000000fdffffff000005000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000");
+    v.push(DataFile { path: "doc/storage.msi".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("d0cf11e0a1b11ae100000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("0000000000000000000000000000000000000000000000000000000000000000a0461df0000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000");
+    v.push(DataFile { path: "doc/talk.ppt".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("504b030414000000000000000000dd5a860d0d0000000d00000011000000776f72642f646f63756d656e742e786d6c3c");
+    t.push_str("773a646f63756d656e742f3e504b0304140000000000000000008c80aed63f0000003f000000130000005b436f6e7465");
+    t.push_str("6e745f54797065735d2e786d6c3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38");
+    t.push_str("22207374616e64616c6f6e653d22796573223f3e3c54797065732f3e504b050600000000000000000000000000000000");
+    t.push_str("0000");
+    v.push(DataFile { path: "doc/word-first.docx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001466747970ff617669000000006d696631000000106d6574610000000000000000");
+    v.push(DataFile { path: "edge/bad-brand.avif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("BMW service report: brakes replaced\n");
+    v.push(DataFile { path: "edge/bmw.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("id,name\n");
+    t.push_str("1,PK\n");
+    v.push(DataFile { path: "edge/csv.csv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000000000000000000000000000000000004449434d");
+    v.push(DataFile { path: "edge/dicom-short.dcm".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    v.push(DataFile { path: "edge/empty".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("000000000000000002000200000000000000000000000000000000000000000000004c5000000000");
+    v.push(DataFile { path: "edge/eot-like.bin".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("GIFT list for the team\n");
+    v.push(DataFile { path: "edge/gifts.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("00000018667479706176ff69000000006d80696661766966000000106d6574610000000000000000");
+    v.push(DataFile { path: "edge/ignored-brand.avif".to_string(), hex: true, body: t });
+}
+
+fn data_part_3(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("1a45dfa3ecececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececec4282886d");
+    t.push_str("6174726f736b61");
+    v.push(DataFile { path: "edge/late-matroska.mkv".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("474000100000b00d");
+    v.push(DataFile { path: "edge/mpeg-ts.ts".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("000001b31600f015ffffe018");
+    v.push(DataFile { path: "edge/mpeg-video.m2v".to_string(), hex: true, body: t });
+}
+
+fn data_part_4(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("1a45dfa3ecececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececececececececec");
+    t.push_str("ecececececececececececececececececececececececececececececececececececececececececec4282886d6174");
+    t.push_str("726f736b61");
+    v.push(DataFile { path: "edge/near-matroska.mkv".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("Meeting notes, 2024-03-09\n");
+    t.push_str("- ship the release\n");
+    v.push(DataFile { path: "edge/notes.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("00000016667479706d703432000000006d703431c3a90000000000000000");
+    v.push(DataFile { path: "edge/odd-box.mp4".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89");
+    v.push(DataFile { path: "edge/one-byte".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("%!important: read me first\n");
+    v.push(DataFile { path: "edge/postscript-ish.txt".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("524946460c00000041434f4e616e696824000000");
+    v.push(DataFile { path: "edge/riff-other.ani".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("#!/bin/sh\n");
+    t.push_str("echo hello\n");
+    v.push(DataFile { path: "edge/script.sh".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("000000406674797069736f6d0000020069736f6d69736f32");
+    v.push(DataFile { path: "edge/short-box.mp4".to_string(), hex: true, body: t });
+}
+
+fn data_part_5(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000007573746172");
+    v.push(DataFile { path: "edge/tar-short.tar".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00010000");
+    v.push(DataFile { path: "edge/ttf-empty.ttf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00000018667479706d69663100000000c3a9686568656963000000106d6574610000000000000000");
+    v.push(DataFile { path: "edge/utf8-brand.heic".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("6a756e6b504b0304140000000000000000008c80aed63f0000003f000000130000005b436f6e74656e745f5479706573");
+    t.push_str("5d2e786d6c3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d3822207374616e6461");
+    t.push_str("6c6f6e653d22796573223f3e3c54797065732f3e504b03041400000000000000000016c37a1904000000040000001100");
+    t.push_str("0000776f72642f646f63756d656e742e786d6c3c772f3e504b0506000000000000000000000000000000000000");
+    v.push(DataFile { path: "edge/zip-late.docx".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("774f464600010000000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "font/body.woff".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("774f46320001000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "font/body.woff2".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4f54544f000b00800003003000000000000000000000000000000000");
+    v.push(DataFile { path: "font/display.otf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("840300002003000001000200000000000000000000000000000000000000000000004c50000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000");
+    v.push(DataFile { path: "font/legacy.eot".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00010000000f00800003007000000000000000000000000000000000");
+    v.push(DataFile { path: "font/mono.ttf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("49492a0010000000435202000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "image/IMG_0001.CR2".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("000000186674797068656963000000006d69663168656963000000186d65746100000000000000000000000000000000");
+    v.push(DataFile { path: "image/IMG_2042.HEIC".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("5249464616000000574542505650384c0a0000002f000000000000000000");
+    v.push(DataFile { path: "image/banner.webp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00000018667479706d696631000000006d69663168656963000000186d65746100000000000000000000000000000000");
+    v.push(DataFile { path: "image/burst.heif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("ffd8ffe000104a46494600010100004800480000ffdb004300000102030405060708090a0b0c0d0e0f10111213141516");
+    t.push_str("1718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f");
+    v.push(DataFile { path: "image/camera.jpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("67696d7020786366207630313100000000100000001000000010000000100000001000000010");
+    v.push(DataFile { path: "image/drawing.xcf".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00000100010010100000010020006804000016000000");
+    v.push(DataFile { path: "image/favicon.ico".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("414331303332000000000006000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "image/floor.dwg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001c667479706176696600000000617669666d6966316d696166000000186d657461000000000000000000000000");
+    t.push_str("00000000");
+    v.push(DataFile { path: "image/hero.avif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("424d460000000000000036000000280000000100000001000000010018000000000010000000130b0000130b00000000");
+    t.push_str("00000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "image/icon.bmp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000040806000000a9f19e7e0000000c49444154789c6360a01c00");
+    t.push_str("0000440001d7e348fd000000086163544c0000000800000000b93d8bd10000000049454e44ae426082");
+    v.push(DataFile { path: "image/late-actl.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("3842505300010000000000000003000000100000001000080003");
+    v.push(DataFile { path: "image/layers.psd".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("47494638396110001000800000ffffff00000021f90401000000002c00000000100010000002024401003b");
+    v.push(DataFile { path: "image/logo.gif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000000c6a5020200d0a870a00000014667479706a703220000000006a703220000000266a7032680000000000000000");
+    t.push_str("00000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "image/map.jp2".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4949bc0108000000000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "image/photo.jxr".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000040806000000a9f19e7e0000000c49444154789c6360a01c00");
+    t.push_str("0000440001d7e348fd0000000049454e44ae426082");
+    v.push(DataFile { path: "image/photo.png".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("4d4d002a0000000800000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "image/scan-be.tif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    t.push_str("00000000000000000000000000000000000000000000000000000000000000004449434d02000000554c0400c4000000");
+    v.push(DataFile { path: "image/scan.dcm".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("49492a000800000000000000000000000000000000000000000000000000");
+    v.push(DataFile { path: "image/scan.tif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001c667479706d736631000000006d7366316176697361766966000000186d657461000000000000000000000000");
+    t.push_str("00000000");
+    v.push(DataFile { path: "image/seq.avif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000040806000000a9f19e7e000000086163544c00000008000000");
+    t.push_str("00b93d8bd10000000c49444154789c6360a01c000000440001d7e348fd0000000049454e44ae426082");
+    v.push(DataFile { path: "image/spinner.apng".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00000018667479706d696631000000006d6966316d696166000000186d65746100000000000000000000000000000000");
+    v.push(DataFile { path: "image/still.heif".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("89504e470d0a1a0a0000000d4948445200000004000000040806000000a9f19e7e0000000d74455874536f6674776172");
+    t.push_str("650047494d506d9b11fc00000000e963544c611f313c000000086163544c0000000200000000f38d93700000000c4944");
+    t.push_str("4154789c6360a01c000000440001d7e348fd0000000049454e44ae426082");
+    v.push(DataFile { path: "image/text-chunk.apng".to_string(), hex: true, body: t });
+}
+
+fn data_part_6(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("guess\tarchive/app.jar\n");
+    t.push_str("guess\tarchive/app.sqlite\n");
+    t.push_str("guess\tarchive/backup.tar\n");
+    t.push_str("guess\tarchive/bom.pdf\n");
+    t.push_str("guess\tarchive/book.epub\n");
+    t.push_str("guess\tarchive/data.br\n");
+    t.push_str("guess\tarchive/data.lz\n");
+    t.push_str("guess\tarchive/data.xz\n");
+    t.push_str("guess\tarchive/data.zst\n");
+    t.push_str("guess\tarchive/drivers.cab\n");
+    t.push_str("guess\tarchive/dump.bz2\n");
+    t.push_str("guess\tarchive/empty.zip\n");
+    t.push_str("guess\tarchive/ext.crx\n");
+    t.push_str("guess\tarchive/fast.lzo\n");
+    t.push_str("guess\tarchive/frames.lz4\n");
+    t.push_str("guess\tarchive/game.nes\n");
+    t.push_str("guess\tarchive/game.swf\n");
+    t.push_str("guess\tarchive/libm.a\n");
+    t.push_str("guess\tarchive/logs.gz\n");
+    t.push_str("guess\tarchive/manual.pdf\n");
+    t.push_str("guess\tarchive/memo.rtf\n");
+    t.push_str("guess\tarchive/module.wasm\n");
+    t.push_str("guess\tarchive/new.rar\n");
+    t.push_str("guess\tarchive/old-lzh.Z\n");
+    t.push_str("guess\tarchive/old.Z\n");
+    t.push_str("guess\tarchive/old.rar\n");
+    t.push_str("guess\tarchive/photos.7z\n");
+    t.push_str("guess\tarchive/pkg.rpm\n");
+    t.push_str("guess\tarchive/print.ps\n");
+    t.push_str("guess\tarchive/server\n");
+    t.push_str("guess\tarchive/setup.cab\n");
+    t.push_str("guess\tarchive/setup.exe\n");
+    t.push_str("guess\tarchive/site.zip\n");
+    t.push_str("guess\tarchive/skip-long.zst\n");
+    t.push_str("guess\tarchive/skip-only.zst\n");
+    t.push_str("guess\tarchive/skip.zst\n");
+    t.push_str("guess\tarchive/spanned.zip\n");
+    t.push_str("guess\tarchive/tiny-elf\n");
+    t.push_str("guess\tarchive/tool.deb\n");
+    t.push_str("guess\tarchive/zgame.swf\n");
+    t.push_str("guess\taudio/beep.wav\n");
+    t.push_str("guess\taudio/frame.mp3\n");
+    t.push_str("guess\taudio/legacy.m4a\n");
+    t.push_str("guess\taudio/loop.aiff\n");
+    t.push_str("guess\taudio/master.flac\n");
+    t.push_str("guess\taudio/note.amr\n");
+    t.push_str("guess\taudio/podcast.mp3\n");
+    t.push_str("guess\taudio/song.mid\n");
+    t.push_str("guess\taudio/stream.aac\n");
+    t.push_str("guess\taudio/track.ogg\n");
+    t.push_str("guess\taudio/voice.m4a\n");
+    t.push_str("guess\tdoc/biff.xls\n");
+    t.push_str("guess\tdoc/budget.xlsx\n");
+    t.push_str("guess\tdoc/calc.xls\n");
+    t.push_str("guess\tdoc/deck.pptx\n");
+    t.push_str("guess\tdoc/deep.docx\n");
+    t.push_str("guess\tdoc/drawing.odg\n");
+    t.push_str("guess\tdoc/ledger.xls\n");
+    t.push_str("guess\tdoc/legacy.doc\n");
+    t.push_str("guess\tdoc/letter.doc\n");
+    t.push_str("guess\tdoc/libre.docx\n");
+    t.push_str("guess\tdoc/notes.odt\n");
+    t.push_str("guess\tdoc/pp97.ppt\n");
+    t.push_str("guess\tdoc/report.docx\n");
+    t.push_str("guess\tdoc/sheet.ods\n");
+    t.push_str("guess\tdoc/short.doc\n");
+    t.push_str("guess\tdoc/slides.odp\n");
+    t.push_str("guess\tdoc/storage.msi\n");
+    t.push_str("guess\tdoc/talk.ppt\n");
+    t.push_str("guess\tdoc/word-first.docx\n");
+    t.push_str("guess\tedge/bad-brand.avif\n");
+    t.push_str("guess\tedge/bmw.txt\n");
+    t.push_str("guess\tedge/csv.csv\n");
+    t.push_str("guess\tedge/dicom-short.dcm\n");
+    t.push_str("guess\tedge/empty\n");
+    t.push_str("guess\tedge/eot-like.bin\n");
+    t.push_str("guess\tedge/gifts.txt\n");
+    t.push_str("guess\tedge/ignored-brand.avif\n");
+    t.push_str("guess\tedge/late-matroska.mkv\n");
+    t.push_str("guess\tedge/mpeg-ts.ts\n");
+    t.push_str("guess\tedge/mpeg-video.m2v\n");
+    t.push_str("guess\tedge/near-matroska.mkv\n");
+    t.push_str("guess\tedge/notes.txt\n");
+    t.push_str("guess\tedge/odd-box.mp4\n");
+    t.push_str("guess\tedge/one-byte\n");
+    t.push_str("guess\tedge/postscript-ish.txt\n");
+    t.push_str("guess\tedge/riff-other.ani\n");
+    t.push_str("guess\tedge/script.sh\n");
+    t.push_str("guess\tedge/short-box.mp4\n");
+    t.push_str("guess\tedge/tar-short.tar\n");
+    t.push_str("guess\tedge/ttf-empty.ttf\n");
+    t.push_str("guess\tedge/utf8-brand.heic\n");
+    t.push_str("guess\tedge/zip-late.docx\n");
+    t.push_str("guess\tfont/body.woff\n");
+    t.push_str("guess\tfont/body.woff2\n");
+    t.push_str("guess\tfont/display.otf\n");
+    t.push_str("guess\tfont/legacy.eot\n");
+    t.push_str("guess\tfont/mono.ttf\n");
+    t.push_str("guess\timage/IMG_0001.CR2\n");
+    t.push_str("guess\timage/IMG_2042.HEIC\n");
+    t.push_str("guess\timage/banner.webp\n");
+    t.push_str("guess\timage/burst.heif\n");
+    t.push_str("guess\timage/camera.jpg\n");
+    t.push_str("guess\timage/drawing.xcf\n");
+    t.push_str("guess\timage/favicon.ico\n");
+    t.push_str("guess\timage/floor.dwg\n");
+    t.push_str("guess\timage/hero.avif\n");
+    t.push_str("guess\timage/icon.bmp\n");
+    t.push_str("guess\timage/late-actl.png\n");
+    t.push_str("guess\timage/layers.psd\n");
+    t.push_str("guess\timage/logo.gif\n");
+    t.push_str("guess\timage/map.jp2\n");
+    t.push_str("guess\timage/photo.jxr\n");
+    t.push_str("guess\timage/photo.png\n");
+    t.push_str("guess\timage/scan-be.tif\n");
+    t.push_str("guess\timage/scan.dcm\n");
+    t.push_str("guess\timage/scan.tif\n");
+    t.push_str("guess\timage/seq.avif\n");
+    t.push_str("guess\timage/spinner.apng\n");
+    t.push_str("guess\timage/still.heif\n");
+    t.push_str("guess\timage/text-chunk.apng\n");
+    t.push_str("guess\tvideo/cam.avi\n");
+    t.push_str("guess\tvideo/clip.mp4\n");
+    t.push_str("guess\tvideo/dash.mp4\n");
+    t.push_str("guess\tvideo/dvd.mpg\n");
+    t.push_str("guess\tvideo/home.mov\n");
+    t.push_str("guess\tvideo/meeting.wmv\n");
+    t.push_str("guess\tvideo/movie.mkv\n");
+    t.push_str("guess\tvideo/old.3gp\n");
+    t.push_str("guess\tvideo/phone.3gp\n");
+    t.push_str("guess\tvideo/screen.mp4\n");
+    t.push_str("guess\tvideo/stream.flv\n");
+    t.push_str("guess\tvideo/talk.webm\n");
+    t.push_str("guess\tvideo/trailer.m4v\n");
+    t.push_str("head\timage/photo.png\t4\n");
+    t.push_str("head\timage/photo.png\t3\n");
+    t.push_str("head\timage/spinner.apng\t40\n");
+    t.push_str("head\timage/spinner.apng\t45\n");
+    t.push_str("head\tvideo/clip.mp4\t31\n");
+    t.push_str("head\tvideo/clip.mp4\t32\n");
+    t.push_str("head\tdoc/report.docx\t120\n");
+    t.push_str("head\tarchive/server\t53\n");
+    t.push_str("head\tarchive/server\t52\n");
+    t.push_str("head\tarchive/skip.zst\t12\n");
+    t.push_str("head\tarchive/skip.zst\t16\n");
+    t.push_str("get_type\tmime=image/png\n");
+    t.push_str("get_type\text=mkv\n");
+    t.push_str("get_type\text=woff2\n");
+    t.push_str("get_type\tmime=application/font-woff\n");
+    t.push_str("get_type\tmime=application/font-sfnt\n");
+    t.push_str("get_type\tmime=application/dicom\n");
+    t.push_str("get_type\text=dcm\n");
+    t.push_str("get_type\tmime=image/png\text=zip\n");
+    t.push_str("get_type\text=jpeg\n");
+    t.push_str("get_type\text=Z\n");
+    t.push_str("get_type\text=z\n");
+    t.push_str("get_type\n");
+    t.push_str("supported\text\tpng\n");
+    t.push_str("supported\text\tPNG\n");
+    t.push_str("supported\text\tjpeg\n");
+    t.push_str("supported\text\telf\n");
+    t.push_str("supported\tmime\timage/jpeg\n");
+    t.push_str("supported\tmime\timage/svg+xml\n");
+    t.push_str("supported\tmime\tapplication/octet-stream\n");
+    t.push_str("types\n");
+    t.push_str("cli\t-f\timage/photo.png\tdoc/report.docx\tedge/notes.txt\tedge/empty\n");
+    t.push_str("cli\t--file\taudio/podcast.mp3\n");
+    t.push_str("cli\t--file=video/movie.mkv\n");
+    t.push_str("cli\t-farchive/logs.gz\n");
+    t.push_str("cli\t--fi\tfont/body.woff2\tfont/mono.ttf\n");
+    t.push_str("cli\t-f\timage/logo.gif\t-f\timage/banner.webp\n");
+    t.push_str("cli\t-f\timage/logo.gif\t-v\n");
+    t.push_str("cli\t-v\n");
+    t.push_str("cli\t--version\n");
+    t.push_str("cli\t--vers\n");
+    t.push_str("cli\t-h\n");
+    t.push_str("cli\t--help\n");
+    t.push_str("cli\n");
+    t.push_str("cli\t-f\n");
+    t.push_str("cli\t-f\t-v\n");
+    t.push_str("cli\timage/photo.png\n");
+    t.push_str("cli\t-f\timage/photo.png\t-x\n");
+    t.push_str("cli\t-f\timage/photo.png\textra\t--nope\n");
+    t.push_str("custom\tedge/csv.csv\n");
+    t.push_str("custom\tedge/notes.txt\n");
+    t.push_str("custom-bad\n");
+    t.push_str("guess\tedge/csv.csv\n");
+    t.push_str("guess\timage/photo.png\n");
+    v.push(DataFile { path: "jobs.tsv".to_string(), hex: false, body: t });
+    let mut t = String.new();
+    t.push_str("5249464610000000415649204c495354000000046864726c");
+    v.push(DataFile { path: "video/cam.avi".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("000000206674797069736f6d0000020069736f6d69736f32617663316d7034310000000866726565");
+    v.push(DataFile { path: "video/clip.mp4".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001866747970646173680000000069736f366d7034310000000866726565");
+    v.push(DataFile { path: "video/dash.mp4".to_string(), hex: true, body: t });
+}
+
+fn data_part_7(v: mut ref Vec[DataFile]) {
+    let mut t = String.new();
+    t.push_str("000001ba4400040004010189c3f800000000000000000000000000000000");
+    v.push(DataFile { path: "video/dvd.mpg".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00000014667479707174202020050300717420200000000877696465");
+    v.push(DataFile { path: "video/home.mov".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("3026b2758e66cf11a6d900aa0062ce6c00000000000000000000000000000000");
+    v.push(DataFile { path: "video/meeting.wmv".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1a45dfa3a34286810142f7810142f2810442f381084282886d6174726f736b6142878104428581021853806701000000");
+    t.push_str("00001000");
+    v.push(DataFile { path: "video/movie.mkv".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001866747970336770350000000033677035336770340000000866726565");
+    v.push(DataFile { path: "video/old.3gp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001866747970336770340000020069736f6d336770340000000866726565");
+    v.push(DataFile { path: "video/phone.3gp".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("00000018667479706d703432000000006d7034326d7034310000000866726565");
+    v.push(DataFile { path: "video/screen.mp4".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("464c5601050000000900000000");
+    v.push(DataFile { path: "video/stream.flv".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("1a45dfa39f4286810142f7810142f2810442f381084282847765626d4287810442858102185380670100000000001000");
+    v.push(DataFile { path: "video/talk.webm".to_string(), hex: true, body: t });
+    let mut t = String.new();
+    t.push_str("0000001c667479704d345620000000014d3456204d3441206d70343269736f6d0000000000000000");
+    v.push(DataFile { path: "video/trailer.m4v".to_string(), hex: true, body: t });
+}

@@ -1,0 +1,953 @@
+== guess archive/app.jar
+guess: zip (application/zip)
+mime: application/zip, extension: zip
+image=- audio=- video=- font=- document=- archive=zip application=-
+flags: is_archive
+== guess archive/app.sqlite
+guess: sqlite (application/x-sqlite3)
+mime: application/x-sqlite3, extension: sqlite
+image=- audio=- video=- font=- document=- archive=sqlite application=-
+flags: is_archive
+== guess archive/backup.tar
+guess: tar (application/x-tar)
+mime: application/x-tar, extension: tar
+image=- audio=- video=- font=- document=- archive=tar application=-
+flags: is_archive
+== guess archive/bom.pdf
+guess: pdf (application/pdf)
+mime: application/pdf, extension: pdf
+image=- audio=- video=- font=- document=- archive=pdf application=-
+flags: is_archive
+== guess archive/book.epub
+guess: epub (application/epub+zip)
+mime: application/epub+zip, extension: epub
+image=- audio=- video=- font=- document=- archive=epub application=-
+flags: is_archive
+== guess archive/data.br
+guess: br (application/x-brotli)
+mime: application/x-brotli, extension: br
+image=- audio=- video=- font=- document=- archive=br application=-
+flags: is_archive
+== guess archive/data.lz
+guess: lz (application/x-lzip)
+mime: application/x-lzip, extension: lz
+image=- audio=- video=- font=- document=- archive=lz application=-
+flags: is_archive
+== guess archive/data.xz
+guess: xz (application/x-xz)
+mime: application/x-xz, extension: xz
+image=- audio=- video=- font=- document=- archive=xz application=-
+flags: is_archive
+== guess archive/data.zst
+guess: zst (application/zstd)
+mime: application/zstd, extension: zst
+image=- audio=- video=- font=- document=- archive=zst application=-
+flags: is_archive
+== guess archive/drivers.cab
+guess: cab (application/vnd.ms-cab-compressed)
+mime: application/vnd.ms-cab-compressed, extension: cab
+image=- audio=- video=- font=- document=- archive=cab application=-
+flags: is_archive
+== guess archive/dump.bz2
+guess: bz2 (application/x-bzip2)
+mime: application/x-bzip2, extension: bz2
+image=- audio=- video=- font=- document=- archive=bz2 application=-
+flags: is_archive
+== guess archive/empty.zip
+guess: zip (application/zip)
+mime: application/zip, extension: zip
+image=- audio=- video=- font=- document=- archive=zip application=-
+flags: is_archive
+== guess archive/ext.crx
+guess: crx (application/x-google-chrome-extension)
+mime: application/x-google-chrome-extension, extension: crx
+image=- audio=- video=- font=- document=- archive=crx application=-
+flags: is_archive
+== guess archive/fast.lzo
+guess: lzo (application/x-lzop)
+mime: application/x-lzop, extension: lzo
+image=- audio=- video=- font=- document=- archive=lzo application=-
+flags: is_archive
+== guess archive/frames.lz4
+guess: lz4 (application/x-lz4)
+mime: application/x-lz4, extension: lz4
+image=- audio=- video=- font=- document=- archive=lz4 application=-
+flags: is_archive
+== guess archive/game.nes
+guess: nes (application/x-nintendo-nes-rom)
+mime: application/x-nintendo-nes-rom, extension: nes
+image=- audio=- video=- font=- document=- archive=nes application=-
+flags: is_archive
+== guess archive/game.swf
+guess: swf (application/x-shockwave-flash)
+mime: application/x-shockwave-flash, extension: swf
+image=- audio=- video=- font=- document=- archive=swf application=-
+flags: is_archive
+== guess archive/libm.a
+guess: ar (application/x-unix-archive)
+mime: application/x-unix-archive, extension: ar
+image=- audio=- video=- font=- document=- archive=ar application=-
+flags: is_archive
+== guess archive/logs.gz
+guess: gz (application/gzip)
+mime: application/gzip, extension: gz
+image=- audio=- video=- font=- document=- archive=gz application=-
+flags: is_archive
+== guess archive/manual.pdf
+guess: pdf (application/pdf)
+mime: application/pdf, extension: pdf
+image=- audio=- video=- font=- document=- archive=pdf application=-
+flags: is_archive
+== guess archive/memo.rtf
+guess: rtf (application/rtf)
+mime: application/rtf, extension: rtf
+image=- audio=- video=- font=- document=- archive=rtf application=-
+flags: is_archive
+== guess archive/module.wasm
+guess: wasm (application/wasm)
+mime: application/wasm, extension: wasm
+image=- audio=- video=- font=- document=- archive=- application=wasm
+flags: -
+== guess archive/new.rar
+guess: rar (application/x-rar-compressed)
+mime: application/x-rar-compressed, extension: rar
+image=- audio=- video=- font=- document=- archive=rar application=-
+flags: is_archive
+== guess archive/old-lzh.Z
+guess: Z (application/x-compress)
+mime: application/x-compress, extension: Z
+image=- audio=- video=- font=- document=- archive=Z application=-
+flags: is_archive
+== guess archive/old.Z
+guess: Z (application/x-compress)
+mime: application/x-compress, extension: Z
+image=- audio=- video=- font=- document=- archive=Z application=-
+flags: is_archive
+== guess archive/old.rar
+guess: rar (application/x-rar-compressed)
+mime: application/x-rar-compressed, extension: rar
+image=- audio=- video=- font=- document=- archive=rar application=-
+flags: is_archive
+== guess archive/photos.7z
+guess: 7z (application/x-7z-compressed)
+mime: application/x-7z-compressed, extension: 7z
+image=- audio=- video=- font=- document=- archive=7z application=-
+flags: is_archive
+== guess archive/pkg.rpm
+guess: rpm (application/x-rpm)
+mime: application/x-rpm, extension: rpm
+image=- audio=- video=- font=- document=- archive=rpm application=-
+flags: is_archive
+== guess archive/print.ps
+guess: ps (application/postscript)
+mime: application/postscript, extension: ps
+image=- audio=- video=- font=- document=- archive=ps application=-
+flags: is_archive
+== guess archive/server
+guess: elf (application/x-executable)
+mime: application/x-executable, extension: elf
+image=- audio=- video=- font=- document=- archive=elf application=-
+flags: is_archive
+== guess archive/setup.cab
+guess: cab (application/vnd.ms-cab-compressed)
+mime: application/vnd.ms-cab-compressed, extension: cab
+image=- audio=- video=- font=- document=- archive=cab application=-
+flags: is_archive
+== guess archive/setup.exe
+guess: exe (application/x-msdownload)
+mime: application/x-msdownload, extension: exe
+image=- audio=- video=- font=- document=- archive=exe application=-
+flags: is_archive
+== guess archive/site.zip
+guess: zip (application/zip)
+mime: application/zip, extension: zip
+image=- audio=- video=- font=- document=- archive=zip application=-
+flags: is_archive
+== guess archive/skip-long.zst
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess archive/skip-only.zst
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess archive/skip.zst
+guess: zst (application/zstd)
+mime: application/zstd, extension: zst
+image=- audio=- video=- font=- document=- archive=zst application=-
+flags: is_archive
+== guess archive/spanned.zip
+guess: zip (application/zip)
+mime: application/zip, extension: zip
+image=- audio=- video=- font=- document=- archive=zip application=-
+flags: is_archive
+== guess archive/tiny-elf
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess archive/tool.deb
+guess: deb (application/x-deb)
+mime: application/x-deb, extension: deb
+image=- audio=- video=- font=- document=- archive=deb application=-
+flags: is_archive
+== guess archive/zgame.swf
+guess: swf (application/x-shockwave-flash)
+mime: application/x-shockwave-flash, extension: swf
+image=- audio=- video=- font=- document=- archive=swf application=-
+flags: is_archive
+== guess audio/beep.wav
+guess: wav (audio/x-wav)
+mime: audio/x-wav, extension: wav
+image=- audio=wav video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/frame.mp3
+guess: mp3 (audio/mpeg)
+mime: audio/mpeg, extension: mp3
+image=- audio=mp3 video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/legacy.m4a
+guess: m4a (audio/mp4)
+mime: audio/mp4, extension: m4a
+image=- audio=m4a video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/loop.aiff
+guess: aiff (audio/x-aiff)
+mime: audio/x-aiff, extension: aiff
+image=- audio=aiff video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/master.flac
+guess: flac (audio/x-flac)
+mime: audio/x-flac, extension: flac
+image=- audio=flac video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/note.amr
+guess: amr (audio/amr)
+mime: audio/amr, extension: amr
+image=- audio=amr video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/podcast.mp3
+guess: mp3 (audio/mpeg)
+mime: audio/mpeg, extension: mp3
+image=- audio=mp3 video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/song.mid
+guess: midi (audio/midi)
+mime: audio/midi, extension: midi
+image=- audio=midi video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/stream.aac
+guess: aac (audio/aac)
+mime: audio/aac, extension: aac
+image=- audio=aac video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/track.ogg
+guess: ogg (audio/ogg)
+mime: audio/ogg, extension: ogg
+image=- audio=ogg video=- font=- document=- archive=- application=-
+flags: is_audio
+== guess audio/voice.m4a
+guess: m4a (audio/mp4)
+mime: audio/mp4, extension: m4a
+image=- audio=m4a video=mp4 font=- document=- archive=- application=-
+flags: is_audio is_video
+== guess doc/biff.xls
+guess: xls (application/vnd.ms-excel)
+mime: application/vnd.ms-excel, extension: xls
+image=- audio=- video=- font=- document=xls archive=- application=-
+flags: is_document
+== guess doc/budget.xlsx
+guess: xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+mime: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, extension: xlsx
+image=- audio=- video=- font=- document=xlsx archive=zip application=-
+flags: is_document is_archive
+== guess doc/calc.xls
+guess: xls (application/vnd.ms-excel)
+mime: application/vnd.ms-excel, extension: xls
+image=- audio=- video=- font=- document=xls archive=- application=-
+flags: is_document
+== guess doc/deck.pptx
+guess: pptx (application/vnd.openxmlformats-officedocument.presentationml.presentation)
+mime: application/vnd.openxmlformats-officedocument.presentationml.presentation, extension: pptx
+image=- audio=- video=- font=- document=pptx archive=zip application=-
+flags: is_document is_archive
+== guess doc/deep.docx
+guess: zip (application/zip)
+mime: application/zip, extension: zip
+image=- audio=- video=- font=- document=- archive=zip application=-
+flags: is_archive
+== guess doc/drawing.odg
+guess: zip (application/zip)
+mime: application/zip, extension: zip
+image=- audio=- video=- font=- document=- archive=zip application=-
+flags: is_archive
+== guess doc/ledger.xls
+guess: xls (application/vnd.ms-excel)
+mime: application/vnd.ms-excel, extension: xls
+image=- audio=- video=- font=- document=xls archive=- application=-
+flags: is_document
+== guess doc/legacy.doc
+guess: doc (application/msword)
+mime: application/msword, extension: doc
+image=- audio=- video=- font=- document=doc archive=- application=-
+flags: is_document
+== guess doc/letter.doc
+guess: doc (application/msword)
+mime: application/msword, extension: doc
+image=- audio=- video=- font=- document=doc archive=- application=-
+flags: is_document
+== guess doc/libre.docx
+guess: docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document, extension: docx
+image=- audio=- video=- font=- document=docx archive=zip application=-
+flags: is_document is_archive
+== guess doc/notes.odt
+guess: odt (application/vnd.oasis.opendocument.text)
+mime: application/vnd.oasis.opendocument.text, extension: odt
+image=- audio=- video=- font=- document=odt archive=zip application=-
+flags: is_document is_archive
+== guess doc/pp97.ppt
+guess: ppt (application/vnd.ms-powerpoint)
+mime: application/vnd.ms-powerpoint, extension: ppt
+image=- audio=- video=- font=- document=ppt archive=- application=-
+flags: is_document
+== guess doc/report.docx
+guess: docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document, extension: docx
+image=- audio=- video=- font=- document=docx archive=zip application=-
+flags: is_document is_archive
+== guess doc/sheet.ods
+guess: ods (application/vnd.oasis.opendocument.spreadsheet)
+mime: application/vnd.oasis.opendocument.spreadsheet, extension: ods
+image=- audio=- video=- font=- document=ods archive=zip application=-
+flags: is_document is_archive
+== guess doc/short.doc
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess doc/slides.odp
+guess: odp (application/vnd.oasis.opendocument.presentation)
+mime: application/vnd.oasis.opendocument.presentation, extension: odp
+image=- audio=- video=- font=- document=odp archive=zip application=-
+flags: is_document is_archive
+== guess doc/storage.msi
+guess: ppt (application/vnd.ms-powerpoint)
+mime: application/vnd.ms-powerpoint, extension: ppt
+image=- audio=- video=- font=- document=ppt archive=- application=-
+flags: is_document
+== guess doc/talk.ppt
+guess: ppt (application/vnd.ms-powerpoint)
+mime: application/vnd.ms-powerpoint, extension: ppt
+image=- audio=- video=- font=- document=ppt archive=- application=-
+flags: is_document
+== guess doc/word-first.docx
+guess: docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+mime: application/vnd.openxmlformats-officedocument.wordprocessingml.document, extension: docx
+image=- audio=- video=- font=- document=docx archive=zip application=-
+flags: is_document is_archive
+== guess edge/bad-brand.avif
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/bmw.txt
+guess: bmp (image/bmp)
+mime: image/bmp, extension: bmp
+image=bmp audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess edge/csv.csv
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/dicom-short.dcm
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/empty
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/eot-like.bin
+guess: eot (application/octet-stream)
+mime: application/octet-stream, extension: eot
+image=- audio=- video=- font=- document=- archive=eot application=-
+flags: is_archive
+== guess edge/gifts.txt
+guess: gif (image/gif)
+mime: image/gif, extension: gif
+image=gif audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess edge/ignored-brand.avif
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/late-matroska.mkv
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/mpeg-ts.ts
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/mpeg-video.m2v
+guess: mpg (video/mpeg)
+mime: video/mpeg, extension: mpg
+image=- audio=- video=mpg font=- document=- archive=- application=-
+flags: is_video
+== guess edge/near-matroska.mkv
+guess: mkv (video/x-matroska)
+mime: video/x-matroska, extension: mkv
+image=- audio=- video=mkv font=- document=- archive=- application=-
+flags: is_video
+== guess edge/notes.txt
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/odd-box.mp4
+guess: mp4 (video/mp4)
+mime: video/mp4, extension: mp4
+image=- audio=- video=mp4 font=- document=- archive=- application=-
+flags: is_video
+== guess edge/one-byte
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/postscript-ish.txt
+guess: ps (application/postscript)
+mime: application/postscript, extension: ps
+image=- audio=- video=- font=- document=- archive=ps application=-
+flags: is_archive
+== guess edge/riff-other.ani
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/script.sh
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/short-box.mp4
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/tar-short.tar
+guess: tar (application/x-tar)
+mime: application/x-tar, extension: tar
+image=- audio=- video=- font=- document=- archive=tar application=-
+flags: is_archive
+== guess edge/ttf-empty.ttf
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess edge/utf8-brand.heic
+guess: heic (image/heic)
+mime: image/heic, extension: heic
+image=heic audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess edge/zip-late.docx
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess font/body.woff
+guess: woff (application/font-woff)
+mime: application/font-woff, extension: woff
+image=- audio=- video=- font=woff document=- archive=- application=-
+flags: is_font
+== guess font/body.woff2
+guess: woff2 (application/font-woff)
+mime: application/font-woff, extension: woff2
+image=- audio=- video=- font=woff2 document=- archive=- application=-
+flags: is_font
+== guess font/display.otf
+guess: otf (application/font-sfnt)
+mime: application/font-sfnt, extension: otf
+image=- audio=- video=- font=otf document=- archive=- application=-
+flags: is_font
+== guess font/legacy.eot
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess font/mono.ttf
+guess: ttf (application/font-sfnt)
+mime: application/font-sfnt, extension: ttf
+image=- audio=- video=- font=ttf document=- archive=- application=-
+flags: is_font
+== guess image/IMG_0001.CR2
+guess: cr2 (image/x-canon-cr2)
+mime: image/x-canon-cr2, extension: cr2
+image=cr2 audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/IMG_2042.HEIC
+guess: heic (image/heic)
+mime: image/heic, extension: heic
+image=heic audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/banner.webp
+guess: webp (image/webp)
+mime: image/webp, extension: webp
+image=webp audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/burst.heif
+guess: heic (image/heic)
+mime: image/heic, extension: heic
+image=heic audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/camera.jpg
+guess: jpg (image/jpeg)
+mime: image/jpeg, extension: jpg
+image=jpg audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/drawing.xcf
+guess: xcf (image/x-xcf)
+mime: image/x-xcf, extension: xcf
+image=xcf audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/favicon.ico
+guess: ico (image/x-icon)
+mime: image/x-icon, extension: ico
+image=ico audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/floor.dwg
+guess: dwg (image/vnd.dwg)
+mime: image/vnd.dwg, extension: dwg
+image=dwg audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/hero.avif
+guess: avif (image/avif)
+mime: image/avif, extension: avif
+image=avif audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/icon.bmp
+guess: bmp (image/bmp)
+mime: image/bmp, extension: bmp
+image=bmp audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/late-actl.png
+guess: png (image/png)
+mime: image/png, extension: png
+image=png audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/layers.psd
+guess: psd (image/vnd.adobe.photoshop)
+mime: image/vnd.adobe.photoshop, extension: psd
+image=psd audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/logo.gif
+guess: gif (image/gif)
+mime: image/gif, extension: gif
+image=gif audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/map.jp2
+guess: jpx (image/jpx)
+mime: image/jpx, extension: jpx
+image=jpx audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/photo.jxr
+guess: jxr (image/vnd.ms-photo)
+mime: image/vnd.ms-photo, extension: jxr
+image=jxr audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/photo.png
+guess: png (image/png)
+mime: image/png, extension: png
+image=png audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/scan-be.tif
+guess: tif (image/tiff)
+mime: image/tiff, extension: tif
+image=tif audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/scan.dcm
+guess: dcm (application/dicom)
+mime: application/dicom, extension: dcm
+image=dcm audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/scan.tif
+guess: tif (image/tiff)
+mime: image/tiff, extension: tif
+image=tif audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/seq.avif
+guess: avif (image/avif)
+mime: image/avif, extension: avif
+image=avif audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/spinner.apng
+guess: apng (image/apng)
+mime: image/apng, extension: apng
+image=apng audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess image/still.heif
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess image/text-chunk.apng
+guess: apng (image/apng)
+mime: image/apng, extension: apng
+image=apng audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== guess video/cam.avi
+guess: avi (video/x-msvideo)
+mime: video/x-msvideo, extension: avi
+image=- audio=- video=avi font=- document=- archive=- application=-
+flags: is_video
+== guess video/clip.mp4
+guess: mp4 (video/mp4)
+mime: video/mp4, extension: mp4
+image=- audio=- video=mp4 font=- document=- archive=- application=-
+flags: is_video
+== guess video/dash.mp4
+guess: mp4 (video/mp4)
+mime: video/mp4, extension: mp4
+image=- audio=- video=mp4 font=- document=- archive=- application=-
+flags: is_video
+== guess video/dvd.mpg
+guess: mpg (video/mpeg)
+mime: video/mpeg, extension: mpg
+image=- audio=- video=mpg font=- document=- archive=- application=-
+flags: is_video
+== guess video/home.mov
+guess: mov (video/quicktime)
+mime: video/quicktime, extension: mov
+image=- audio=- video=mov font=- document=- archive=- application=-
+flags: is_video
+== guess video/meeting.wmv
+guess: wmv (video/x-ms-wmv)
+mime: video/x-ms-wmv, extension: wmv
+image=- audio=- video=wmv font=- document=- archive=- application=-
+flags: is_video
+== guess video/movie.mkv
+guess: mkv (video/x-matroska)
+mime: video/x-matroska, extension: mkv
+image=- audio=- video=mkv font=- document=- archive=- application=-
+flags: is_video
+== guess video/old.3gp
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess video/phone.3gp
+guess: mp4 (video/mp4)
+mime: video/mp4, extension: mp4
+image=- audio=- video=mp4 font=- document=- archive=- application=-
+flags: is_video
+== guess video/screen.mp4
+guess: mp4 (video/mp4)
+mime: video/mp4, extension: mp4
+image=- audio=- video=mp4 font=- document=- archive=- application=-
+flags: is_video
+== guess video/stream.flv
+guess: flv (video/x-flv)
+mime: video/x-flv, extension: flv
+image=- audio=- video=flv font=- document=- archive=- application=-
+flags: is_video
+== guess video/talk.webm
+guess: webm (video/webm)
+mime: video/webm, extension: webm
+image=- audio=- video=webm font=- document=- archive=- application=-
+flags: is_video
+== guess video/trailer.m4v
+guess: mp4 (video/mp4)
+mime: video/mp4, extension: mp4
+image=- audio=- video=mp4 font=- document=- archive=- application=-
+flags: is_video
+== head image/photo.png 4
+guess: png (image/png)
+mime: image/png, extension: png
+image=png audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== head image/photo.png 3
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== head image/spinner.apng 40
+guess: png (image/png)
+mime: image/png, extension: png
+image=png audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== head image/spinner.apng 45
+guess: apng (image/apng)
+mime: image/apng, extension: apng
+image=apng audio=- video=- font=- document=- archive=- application=-
+flags: is_image
+== head video/clip.mp4 31
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== head video/clip.mp4 32
+guess: mp4 (video/mp4)
+mime: video/mp4, extension: mp4
+image=- audio=- video=mp4 font=- document=- archive=- application=-
+flags: is_video
+== head doc/report.docx 120
+guess: zip (application/zip)
+mime: application/zip, extension: zip
+image=- audio=- video=- font=- document=- archive=zip application=-
+flags: is_archive
+== head archive/server 53
+guess: elf (application/x-executable)
+mime: application/x-executable, extension: elf
+image=- audio=- video=- font=- document=- archive=elf application=-
+flags: is_archive
+== head archive/server 52
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== head archive/skip.zst 12
+guess: None
+mime: None, extension: None
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== head archive/skip.zst 16
+guess: zst (application/zstd)
+mime: application/zstd, extension: zst
+image=- audio=- video=- font=- document=- archive=zst application=-
+flags: is_archive
+== get_type mime=image/png
+png (image/png)
+== get_type ext=mkv
+mkv (video/x-matroska)
+== get_type ext=woff2
+woff2 (application/font-woff)
+== get_type mime=application/font-woff
+woff (application/font-woff)
+== get_type mime=application/font-sfnt
+ttf (application/font-sfnt)
+== get_type mime=application/dicom
+dcm (application/dicom)
+== get_type ext=dcm
+dcm (application/dicom)
+== get_type mime=image/png ext=zip
+png (image/png)
+== get_type ext=jpeg
+None
+== get_type ext=Z
+Z (application/x-compress)
+== get_type ext=z
+None
+== get_type
+None
+== supported ext png
+True
+== supported ext PNG
+False
+== supported ext jpeg
+False
+== supported ext elf
+True
+== supported mime image/jpeg
+True
+== supported mime image/svg+xml
+False
+== supported mime application/octet-stream
+True
+== types
+79 types
+Dwg dwg image/vnd.dwg
+Xcf xcf image/x-xcf
+Jpeg jpg image/jpeg
+Jpx jpx image/jpx
+Apng apng image/apng
+Png png image/png
+Gif gif image/gif
+Webp webp image/webp
+Tiff tif image/tiff
+Cr2 cr2 image/x-canon-cr2
+Bmp bmp image/bmp
+Jxr jxr image/vnd.ms-photo
+Psd psd image/vnd.adobe.photoshop
+Ico ico image/x-icon
+Heic heic image/heic
+Dcm dcm application/dicom
+Avif avif image/avif
+Aac aac audio/aac
+Midi midi audio/midi
+Mp3 mp3 audio/mpeg
+M4a m4a audio/mp4
+Ogg ogg audio/ogg
+Flac flac audio/x-flac
+Wav wav audio/x-wav
+Amr amr audio/amr
+Aiff aiff audio/x-aiff
+M3gp 3gp video/3gpp
+Mp4 mp4 video/mp4
+M4v m4v video/x-m4v
+Mkv mkv video/x-matroska
+Mov mov video/quicktime
+Avi avi video/x-msvideo
+Wmv wmv video/x-ms-wmv
+Mpeg mpg video/mpeg
+Webm webm video/webm
+Flv flv video/x-flv
+Woff woff application/font-woff
+Woff2 woff2 application/font-woff
+Ttf ttf application/font-sfnt
+Otf otf application/font-sfnt
+Doc doc application/msword
+Docx docx application/vnd.openxmlformats-officedocument.wordprocessingml.document
+Odt odt application/vnd.oasis.opendocument.text
+Xls xls application/vnd.ms-excel
+Xlsx xlsx application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+Ods ods application/vnd.oasis.opendocument.spreadsheet
+Ppt ppt application/vnd.ms-powerpoint
+Pptx pptx application/vnd.openxmlformats-officedocument.presentationml.presentation
+Odp odp application/vnd.oasis.opendocument.presentation
+Br br application/x-brotli
+Rpm rpm application/x-rpm
+Dcm dcm application/dicom
+Epub epub application/epub+zip
+Zip zip application/zip
+Tar tar application/x-tar
+Rar rar application/x-rar-compressed
+Gz gz application/gzip
+Bz2 bz2 application/x-bzip2
+SevenZ 7z application/x-7z-compressed
+Pdf pdf application/pdf
+Exe exe application/x-msdownload
+Swf swf application/x-shockwave-flash
+Rtf rtf application/rtf
+Nes nes application/x-nintendo-nes-rom
+Crx crx application/x-google-chrome-extension
+Cab cab application/vnd.ms-cab-compressed
+Eot eot application/octet-stream
+Ps ps application/postscript
+Xz xz application/x-xz
+Sqlite sqlite application/x-sqlite3
+Deb deb application/x-deb
+Ar ar application/x-unix-archive
+Z Z application/x-compress
+Lzop lzo application/x-lzop
+Lz lz application/x-lzip
+Elf elf application/x-executable
+Lz4 lz4 application/x-lz4
+Zstd zst application/zstd
+Wasm wasm application/wasm
+== cli -f image/photo.png doc/report.docx edge/notes.txt edge/empty
+| image/photo.png: png (image/png)
+| doc/report.docx: docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+| edge/notes.txt: File type determination failure.
+| edge/empty: File type determination failure.
+exit 0
+== cli --file audio/podcast.mp3
+| audio/podcast.mp3: mp3 (audio/mpeg)
+exit 0
+== cli --file=video/movie.mkv
+| video/movie.mkv: mkv (video/x-matroska)
+exit 0
+== cli -farchive/logs.gz
+| archive/logs.gz: gz (application/gzip)
+exit 0
+== cli --fi font/body.woff2 font/mono.ttf
+| font/body.woff2: woff2 (application/font-woff)
+| font/mono.ttf: ttf (application/font-sfnt)
+exit 0
+== cli -f image/logo.gif -f image/banner.webp
+| image/banner.webp: webp (image/webp)
+exit 0
+== cli -f image/logo.gif -v
+| filetype 1.2.0
+exit 0
+== cli -v
+| filetype 1.2.0
+exit 0
+== cli --version
+| filetype 1.2.0
+exit 0
+== cli --vers
+| filetype 1.2.0
+exit 0
+== cli -h
+| usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+| 
+| Determine type of FILEs.
+| 
+| options:
+|   -h, --help            show this help message and exit
+|   -f, --file FILE [FILE ...]
+|   -v, --version         output version information and exit
+exit 0
+== cli --help
+| usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+| 
+| Determine type of FILEs.
+| 
+| options:
+|   -h, --help            show this help message and exit
+|   -f, --file FILE [FILE ...]
+|   -v, --version         output version information and exit
+exit 0
+== cli
+| usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+| 
+| Determine type of FILEs.
+| 
+| options:
+|   -h, --help            show this help message and exit
+|   -f, --file FILE [FILE ...]
+|   -v, --version         output version information and exit
+exit 1
+== cli -f
+! usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+! filetype: error: argument -f/--file: expected at least one argument
+exit 2
+== cli -f -v
+! usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+! filetype: error: argument -f/--file: expected at least one argument
+exit 2
+== cli image/photo.png
+! usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+! filetype: error: unrecognized arguments: image/photo.png
+exit 2
+== cli -f image/photo.png -x
+! usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+! filetype: error: unrecognized arguments: -x
+exit 2
+== cli -f image/photo.png extra --nope
+! usage: filetype [-h] [-f FILE [FILE ...]] [-v]
+! filetype: error: unrecognized arguments: --nope
+exit 2
+== custom edge/csv.csv
+80 types, first csv
+guess: csv (text/csv)
+mime: text/csv, extension: csv
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== custom edge/notes.txt
+81 types, first csv
+guess: csv (text/csv)
+mime: text/csv, extension: csv
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== custom-bad
+error: TypeError: instance must inherit from filetype.types.Type
+81 types
+== guess edge/csv.csv
+guess: csv (text/csv)
+mime: text/csv, extension: csv
+image=- audio=- video=- font=- document=- archive=- application=-
+flags: -
+== guess image/photo.png
+guess: png (image/png)
+mime: image/png, extension: png
+image=png audio=- video=- font=- document=- archive=- application=-
+flags: is_image
